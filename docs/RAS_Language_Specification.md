@@ -1,11 +1,17 @@
-# RAS 言語仕様書（Draft v0.2）
+# RAS 言語仕様書（Draft v0.3）
+
+> v0.2 からの変更
+> * 実装言語を Rust に確定（§7.2）
+> * Mac 版 Excel は対象外と確定（§1）
+> * Excel を起動せずに `.xlsm` 等へ直接書き込むオフライン書き込みを初版から対応（§14.9）
+> * Range ⇔ 2次元配列の添字を 0 始まりに統一（§9）
 
 > v0.1 からの主な追加・変更
 > * §7 ツールチェインを「シングルバイナリ `ras` ＋ 薄い VS Code 拡張」構成に変更
 > * §2 型マッピングを性能重視に変更（型が確定する変数は `Variant` ではなく具体型で出力）
 > * §4 ラムダ式を「インライン展開を第一とし、クラス生成はエスケープ時のみ」に変更
 > * §5 `finally` / `using` / `throw` と、1プロシージャ内での複数 `try` の変換規則を追加
-> * 新設: §8 最適化（`inline`・自動展開）、§9 Range ⇔ 2次元配列の自動一括変換、§10 アプリケーション状態制御、§11 `declare`（32/64bit 両対応）、§12 ボイラープレート自動生成、§13 VBA 罠の自動回避、§14 Excel ライブ同期、§15 プロジェクト構成、§16 未決事項
+> * 新設: §8 最適化（`inline`・自動展開）、§9 Range ⇔ 2次元配列の自動一括変換、§10 アプリケーション状態制御、§11 `declare`（32/64bit 両対応）、§12 ボイラープレート自動生成、§13 VBA 罠の自動回避、§14 Excel 同期（ライブ／オフライン）、§15 プロジェクト構成、§16 未決事項
 
 ---
 
@@ -16,6 +22,7 @@
 * **静的検証の委譲:** 厳密な型チェックや制約の検証はRAS側（コンパイラ兼LSP）が担う。
 * **ボイラープレートゼロ:** VBA で「毎回書くべき定型コード」「知らないと踏む罠の回避コード」は、ユーザーが書かずともコンパイラが自動で挿入する（§12, §13）。
 * **速度はコンパイラの責務:** VBA は関数呼び出し・COM 呼び出し（セルアクセス）・`Variant` 演算・遅延バインディングが遅い。RAS ではユーザーが素直に書いたコードを、コンパイラがインライン展開・一括転送・具体型化によって高速な VBA に変換する（§8, §9）。
+* **対象環境:** Windows 版 Excel（Office 2007 以降、32bit / 64bit）。**Mac 版 Excel は対象外**とする（Mac 固有の `#If Mac` 分岐・`Lib` パス・AppleScript 連携等は生成しない）。
 * **出力 VBA は読める状態を保つ:** 生成コードは人間がデバッグ可能であること。各ステートメントには元の RAS ソース位置を辿れるソースマップを持つ（§14.8）。
 
 ---
@@ -232,7 +239,8 @@ On Error GoTo 0
 │  → emitter(.bas/.cls/ドキュメントモジュール)│
 │  LSP サーバ / watch / sync クライアント  │
 └──────────────┬──────────────────────────┘
-               │ 共有メモリ(MMF) + COM 通知 (§14)
+               │ 共有メモリ(MMF) + COM 通知 (§14.1〜14.8)
+               │ ※ブックが閉じている場合は .xlsm を直接読み書き (§14.9)
 ┌──────────────▼──────────────────────────┐
 │ Excel  ─ RASBridge.xlam（同期用アドイン）│
 │        ─ 対象ブック（.xlsm）              │
@@ -241,12 +249,13 @@ On Error GoTo 0
 
 ### 7.2 実装言語
 
-* **推奨: Rust。** 理由:
+* **Rust で実装する（確定）。** 理由:
   * 依存ランタイムなしのシングルバイナリを容易に作れる（Windows x64 / arm64、CI 用に Linux / macOS も同一ソースでビルド）。
   * 同期機能で必要な Win32 API（`CreateFileMappingW`, イベントオブジェクト）と COM（ROT 経由の Excel 取得、`IDispatch` 呼び出し）を `windows` クレートで直接扱える。
   * インクリメンタル解析を前提とした LSP の応答性能。
-* **パーサー:** 手書きの再帰下降パーサー（エラー回復と LSP 用の位置情報・部分木再利用を重視）。v0.1 の Chevrotain 案は「TypeScript 実装＋`bun build --compile` でシングルバイナリ化」する場合の代替案として残す（§16）。
-* Excel 同期機能（§14）は Windows 版のみ有効。他 OS ではビルド・チェック・LSP のみ動作する。
+* **パーサー:** 手書きの再帰下降パーサー（エラー回復と LSP 用の位置情報・部分木再利用を重視）。v0.1 の Chevrotain 案は採用しない。
+* **主要クレート（想定）:** `windows`（Win32 / COM）、`tower-lsp` または `lsp-server`（LSP）、`zip`（OPC コンテナ）、`cfb`（複合ファイル）、`notify`（ファイル監視）、`encoding_rs`（コードページ変換）。
+* **プラットフォーム:** 配布対象は Windows（x64 / arm64）。ライブ同期（§14.1〜14.8）は Windows 専用。ビルド・チェック・LSP・オフライン書き込み（§14.9）は Excel にも Win32 にも依存しないため、CI 用に Linux でも動作させる。
 
 ### 7.3 CLI
 
@@ -257,7 +266,8 @@ On Error GoTo 0
 | `ras build [--release]` | VBA ファイルを `build/` に出力。`--release` で最適化レベル既定 `-O2` |
 | `ras watch` | 変更監視しながらインクリメンタルビルド＋ライブ同期 |
 | `ras sync [--pull]` | 1回だけ Excel と同期（`--pull` は Excel → ローカル方向） |
-| `ras pack <book.xlsm>` | Excel を不可視で起動し、ブックへ書き込んで保存（ブックが閉じている場合） |
+| `ras pack [<book>]` | Excel を起動せず、ブックファイル内の VBA プロジェクトを直接書き換える（§14.9）。`--via-excel` で不可視の Excel 経由の書き込みに切り替え |
+| `ras unpack [<book>]` | Excel を起動せず、ブックファイルから VBA ソースを `vba/` に取り出す（§14.9） |
 | `ras lsp --stdio` | LSP サーバとして起動（VS Code 拡張から呼ばれる） |
 | `ras setup` | 「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」設定（ユーザー同意の上でレジストリ `AccessVBOM` を設定）と RASBridge のインストール |
 | `ras typegen <TypeLib>` | COM タイプライブラリから RAS 型定義（`.d.ras`）を生成 |
@@ -372,10 +382,10 @@ for (let r = 2; r <= last; r++) {
 **出力VBAコード:**
 ```vba
     If last >= 2 Then
-        ReDim ras_buf1(1 To last - 1, 1 To 5)
+        ReDim ras_buf1(0 To last - 2, 0 To 4)
         For r = 2 To last
             For c = 1 To 5
-                ras_buf1(r - 1, c) = r * c
+                ras_buf1(r - 2, c - 1) = r * c
             Next c
         Next r
         ws.Range(ws.Cells(2, 1), ws.Cells(last, 5)).Value = ras_buf1
@@ -397,12 +407,20 @@ for (let r = 2; r <= last; r++) {
     If last >= 2 Then
         ras_src1 = RAS_Read2D(ws.Range(ws.Cells(2, 1), ws.Cells(last, 1)))
         For r = 2 To last
-            sum = sum + ras_src1(r - 1, 1)
+            sum = sum + ras_src1(r - 2, 0)
         Next r
     End If
 ```
 
-`RAS_Read2D` は「単一セルの Range の `.Value` は配列ではなくスカラーを返す」VBA の罠を吸収し、常に 1 始まりの2次元配列を返す。
+`RAS_Read2D` は「単一セルの Range の `.Value` は配列ではなくスカラーを返す」VBA の罠を吸収し、常に **0 始まり**の2次元配列を返す。
+
+### 9.2.1 添字規則（0 始まり）
+
+* RAS の配列はすべて 0 始まり（§13.3）であり、Range 由来の2次元配列も例外としない。自動変換（§9.1, §9.2）・明示 API（§9.4）とも、RAS コードから見える添字は `[行 - 先頭行][列 - 先頭列]` の 0 始まりとする。
+* **ゼロコピーでの再基底化:** `Range.Value` が返す配列は 1 始まりである。要素をコピーし直すと大きな範囲で無視できないコストになるため、`RAS_Read2D` は配列本体をコピーせず、`SAFEARRAY` 記述子の `rgsabound[].lLbound` を直接 0 に書き換える（`RtlMoveMemory` 使用。`Variant` 内の `SAFEARRAY*` の取得、記述子内オフセットの 32bit / 64bit 差は §11 の規則で両方出力する）。
+  * 書き換えは、`cLocks = 0`・`cDims = 2`・`fFeatures` に `FADF_STATIC` / `FADF_FIXEDSIZE` が立っていない場合に限る。条件を満たさない場合は要素コピーにフォールバックする。
+  * 書き込み方向は、`Range.Value` への代入が下限 0 の配列をそのまま受け付けるため、変換不要。
+* **単一行・単一列:** 1 列の Range も2次元配列（`n × 1`）として扱う。1 次元配列が欲しい場合は `range.toColumn()` / `range.toRow()` を使う（こちらはコピーを伴う）。
 
 ### 9.3 変換の適用条件
 
@@ -421,8 +439,8 @@ for (let r = 2; r <= last; r++) {
 * `@bulk` をループに付けると、条件 4〜6 の一部（副作用解析で保守的に不可と判断されたもの）をユーザーの責任で無視して変換する。条件 5 を満たさない場合は、事前に `.Formula` で既存内容を読み込んでから書き戻す方式を使う。
 * `@nobulk` で変換を抑止する。
 * 明示 API も提供する:
-  * `range.toArray(): any[][]` — 常に2次元配列（0始まりに正規化するか 1始まりのままかは §16 未決事項）
-  * `range.fromArray(arr)` — 配列サイズに合わせて Range をリサイズして一括代入
+  * `range.toArray(): any[][]` — 常に 0 始まりの2次元配列（§9.2.1）
+  * `range.fromArray(arr)` — 配列サイズに合わせて Range をリサイズして一括代入（配列の下限は問わない）
   * `sheet.usedTable(): any[][]` — 使用範囲を一括取得
 
 ---
@@ -664,7 +682,7 @@ RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化�
 
 ---
 
-## 14. Excel とのライブ同期
+## 14. Excel との同期（ライブ同期／オフライン書き込み）
 
 ### 14.1 目的と方針
 
@@ -681,7 +699,7 @@ RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化�
 
 1. `ras.toml` の `workbook` に指定されたブック（フルパス）を、COM の ROT（Running Object Table）から実行中の Excel インスタンスを列挙して探す。複数インスタンスにも対応する。
 2. 見つかった場合、共有メモリ `Local\RAS.<workspaceId>`（`workspaceId` はブックのフルパスとランダムなセッショントークンから生成）を作成し、COM 経由で `Application.Run "RASBridge.xlam!RAS_Connect", <名前>, <トークン>` を呼ぶ。
-3. ブックが開かれていない場合: `ras watch` は待機し、ブックが開かれた時点で接続する（RASBridge の `Application.WorkbookOpen` イベントから通知）。`ras pack` は不可視の Excel を起動して書き込み・保存する。
+3. ブックが開かれていない場合: `ras watch` は待機し、ブックが開かれた時点で接続する（RASBridge の `Application.WorkbookOpen` イベントから通知）。`ras pack` はファイルへ直接書き込む（§14.9）。
 
 ### 14.4 共有メモリのレイアウト
 
@@ -729,9 +747,45 @@ Offset  Size  内容
 * `--erl` オプション（デバッグビルド既定）で生成 VBA に行番号を付与し、実行時エラーの `Erl` から RAS ソース位置を復元して表示する。
 * VS Code 拡張の「生成 VBA を表示」では、カーソル位置に対応する VBA 行をハイライトする。
 
-### 14.9 オフライン書き込み（将来）
+### 14.9 オフライン書き込み（Excel 非起動）
 
-Excel を起動せず `.xlsm` 内の `vbaProject.bin`（MS-OVBA 形式）を直接書き換える機能は、ソース圧縮・P-code キャッシュの無効化の扱いが必要なため v0.2 では対象外とする（§16）。
+Excel を起動せず、ブックファイル内の VBA プロジェクトを ras が直接読み書きする。初版から対応する。CI でのビルド・配布物の生成、Excel が無い環境での作業、ブックを閉じている間の反映に使う。
+
+#### 14.9.1 対象ファイル
+
+| 形式 | 対応 |
+|---|---|
+| `.xlsm` / `.xltm` / `.xlam` | 対応（OPC zip 内の `xl/vbaProject.bin`） |
+| `.xlsb` | 対応（同上） |
+| `.xlsx` | `ras pack` 時に `.xlsm` へ変換して出力（`--convert`）。元ファイルは書き換えない |
+| `.xls`（BIFF8） | 対象外 |
+
+#### 14.9.2 ファイル構造と書き込み手順
+
+`vbaProject.bin` は複合ファイル（CFB）で、[MS-OVBA] に従い以下を書き換える。
+
+1. **`VBA/<モジュール>` ストリーム:** モジュールソースを target のコードページ（§13.7）でエンコードし、MS-OVBA の圧縮形式で格納する。P-code（パフォーマンスキャッシュ）は書き込まず、ストリームはソースのみとする（`MODULEOFFSET = 0`）。
+2. **`VBA/_VBA_PROJECT` ストリーム:** パフォーマンスキャッシュ無しを示す最小形（7 バイトヘッダ、Version = `0xFFFF`）に置き換える。これにより Office は次回オープン時にソースから再コンパイルし、ビルド番号の異なる Office 間（32bit / 64bit 含む）でも P-code 不整合が起きない。
+3. **`VBA/dir` ストリーム（圧縮）:** `PROJECTCODEPAGE`、モジュールレコード（名前・Unicode 名・ストリーム名・種別・`MODULEOFFSET`・`MODULEPRIVATE` 等）を、追加・削除・名前変更に合わせて再生成する。
+4. **`PROJECT` ストリーム:** `Module=` / `Class=` / `Document=` / `BaseClass=` 行と `[Workspace]` セクションを再生成する。`ID`・`CMG` / `DPB` / `GC`（保護情報）・`HelpFile` 等の既存値は保持する。
+5. **`PROJECTwm` ストリーム:** モジュール名の MBCS / Unicode 対応表を再生成する。
+6. **クラス属性:** `VB_PredeclaredId` 等の `Attribute` 行はソース先頭に含めて格納する（ライブ同期で `Import` が必要だった制約はオフラインでは無い）。
+7. **ドキュメントモジュール:** `ThisWorkbook` とシートモジュールは、`xl/workbook.xml` の `workbookPr/@codeName` と各シートの `sheetPr/@codeName` に対応するもののみ書き換える（RAS 管理領域 `'--- RAS BEGIN/END ---` の扱いは §14.6 と同じ）。RAS のソースに存在するがブックに無いシートのコード名はエラーとする（シートの新規作成は行わない）。
+8. **ユーザーフォーム・その他のストレージ:** 非管理のフォーム（デザイナストレージ）は `vba/` の `.frm` / `.frx` から再構成する。変更が無いストレージはバイト単位でそのまま保持する。
+9. **OPC パッケージ:** `vbaProject.bin` のパート・リレーション・`[Content_Types].xml`（`application/vnd.ms-office.vbaProject`、ブック本体の content type を macroEnabled 版に）を整合させる。それ以外のパートは zip エントリを再圧縮せずそのままコピーする。
+
+#### 14.9.3 安全性
+
+* **原子的な書き込み:** 同じディレクトリの一時ファイルに書き出し、検証（後述）後に置き換える。置き換え前のファイルを `build/backup/` に保持する（世代数は `ras.toml` で指定）。
+* **ロック検出:** 対象ブックが Excel で開かれている（ファイルがロックされている、または ROT に存在する）場合はオフライン書き込みを行わず、ライブ同期（§14.1〜14.8）に切り替える。`--force-offline` は用意しない。
+* **書き込み後の検証:** 書き出した `vbaProject.bin` を ras 自身で再度読み込み、全モジュールのソースが一致することを確認する。
+* **デジタル署名:** VBA プロジェクトが署名されている場合、書き換えで署名は無効になる。ras は警告を出したうえで署名パート（`vbaProjectSignature*.bin`）を削除する。`ras.toml` の `pack.sign` で署名用証明書を指定した場合は再署名する。
+* **パスワード保護されたプロジェクト:** 保護（`DPB`）されている場合は書き込み・読み出しともエラーとする。
+
+#### 14.9.4 オフライン読み出し（`ras unpack`）
+
+* `VBA/<モジュール>` ストリームのソース部分を展開し、コードページから UTF-8 に変換して取り出す。非管理モジュール・フォームは `vba/` に、RAS 管理モジュールはドリフト検出（§14.7 と同じ `RAS-GENERATED hash`）にのみ使う。
+* ソース部分が P-code と一致しない「VBA stomping」状態のファイルを検出した場合は警告する（ソース側を正とする）。
 
 ---
 
@@ -765,6 +819,10 @@ opt-level = 1           # 0: 展開なし / 1: ループ内自動展開 / 2: 積
 inline-threshold = 40
 erl = true              # 行番号付与
 
+[pack]
+backup-generations = 5
+# sign = "cert:CurrentUser/My/<thumbprint>"   # 再署名に使う証明書
+
 [sync]
 enabled = true
 compileCheck = true
@@ -781,10 +839,13 @@ pull-unmanaged = true
 
 ## 16. 未決事項
 
-1. **実装言語の最終決定:** Rust（推奨）か、TypeScript + Chevrotain + `bun build --compile` か。後者は v0.1 の資産と TS エコシステム（TextMate 文法・テスト）を活かせるが、COM・共有メモリを FFI 経由で扱う必要がある。
-2. **`range.toArray()` の添字:** VBA と同じ 1 始まりを保つか、RAS の配列規則に合わせて 0 始まりに正規化するか（正規化はコピーコストが発生する）。
-3. **`number` の既定マッピング:** `Double` 固定か、整数のみで使われる変数を `Long` に自動narrowingする範囲をどこまで広げるか。
-4. **非同期・`DoEvents`:** 長時間ループでの `DoEvents` 自動挿入（UI 応答性）と、その間のイベント再入の扱い。
-5. **オフライン書き込み（§14.9）** の対応時期。
-6. **Mac 版 Excel 対応:** `declare` の `#If Mac` 分岐、同期機能（共有メモリ・COM が無い）の代替手段。
-7. **Access / Word 等の他ホスト対応**の範囲。
+1. **`number` の既定マッピング:** `Double` 固定か、整数のみで使われる変数を `Long` に自動narrowingする範囲をどこまで広げるか。
+2. **非同期・`DoEvents`:** 長時間ループでの `DoEvents` 自動挿入（UI 応答性）と、その間のイベント再入の扱い。
+3. **Access / Word 等の他ホスト対応**の範囲。
+
+### 決定済み（v0.3）
+
+* 実装言語は Rust（§7.2）。
+* Mac 版 Excel は対象外（§1）。
+* オフライン書き込みは初版から対応（§14.9）。
+* Range 由来の2次元配列は 0 始まり、ゼロコピーで再基底化（§9.2.1）。
