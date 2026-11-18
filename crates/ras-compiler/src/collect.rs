@@ -78,6 +78,10 @@ struct Collector {
     var_decls: Vec<(VarId, Rc<ast::VarDecl>)>,
     struct_decls: Vec<(StructId, Rc<ast::StructDecl>)>,
     alias_decls: Vec<(ModuleId, Rc<ast::TypeAlias>)>,
+    /// Namespace currently being declared, and the namespace of each function / variable.
+    cur_ns: Option<String>,
+    fn_ns: HashMap<FnId, String>,
+    var_ns: HashMap<VarId, String>,
 }
 
 enum ClassAst {
@@ -104,6 +108,9 @@ pub fn collect(inputs: Vec<SourceInput>, config: Config) -> Program {
         var_decls: Vec::new(),
         struct_decls: Vec::new(),
         alias_decls: Vec::new(),
+        cur_ns: None,
+        fn_ns: HashMap::new(),
+        var_ns: HashMap::new(),
     };
     for input in inputs {
         c.add_module(input);
@@ -117,6 +124,7 @@ pub fn collect(inputs: Vec<SourceInput>, config: Config) -> Program {
         c.resolve_imports(m);
     }
     c.resolve_signatures();
+    c.prog.cur_namespace = None;
     c.prog
 }
 
@@ -246,7 +254,11 @@ impl Collector {
                 other => self.declare_item(m, &target, other, is_typedef),
             }
         }
-        if has_exec && !is_typedef {
+        let has_decls = ast.items.iter().any(|i| matches!(i, Item::Fn(_) | Item::Class(_) | Item::Interface(_)));
+        let only_vars = !has_decls
+            && ast.items.iter().any(|i| matches!(i, Item::Var(v) if v.init.is_some() && !v.declared))
+            && !ast.items.iter().any(|i| matches!(i, Item::Var(v) if v.exported));
+        if (has_exec || only_vars) && !is_typedef {
             // Script style: top-level statements become `Public Sub Main()`.
             let span = main_stmts.first().map(|s| s.span).unwrap_or_default();
             let decl = ast::FnDecl {
@@ -321,6 +333,9 @@ impl Collector {
         });
         self.prog.modules[m].fns.push(id);
         self.fn_decls.push((id, class));
+        if let Some(ns) = &self.cur_ns {
+            self.fn_ns.insert(id, ns.clone());
+        }
         id
     }
 
@@ -343,6 +358,9 @@ impl Collector {
         });
         self.prog.modules[m].vars.push(id);
         self.var_decls.push((id, Rc::new(v.clone())));
+        if let Some(ns) = &self.cur_ns {
+            self.var_ns.insert(id, ns.clone());
+        }
         if v.kind == ast::VarKind::Using {
             self.err(m, v.span, "E0104", "`using` は関数の中でのみ使えます");
         }
@@ -516,6 +534,7 @@ impl Collector {
                 }
                 let inner = Target::Namespace(ns.name.text.clone());
                 self.prog.namespaces.entry(ns.name.text.clone()).or_default();
+                let saved = self.cur_ns.replace(ns.name.text.clone());
                 for it in &ns.items {
                     match it {
                         Item::Var(v) => self.declare_var(m, &inner, v, true),
@@ -523,6 +542,7 @@ impl Collector {
                         other => self.declare_item(m, &inner, other, true),
                     }
                 }
+                self.cur_ns = saved;
             }
             Item::Import(_) | Item::Var(_) | Item::Stmt(_) => {}
         }
@@ -712,8 +732,10 @@ impl Collector {
         for (id, class) in std::mem::take(&mut self.fn_decls) {
             self.resolve_fn(id, class);
         }
+        self.prog.cur_namespace = None;
         for (id, decl) in std::mem::take(&mut self.var_decls) {
             let m = self.prog.vars[id].module;
+            self.prog.cur_namespace = self.var_ns.get(&id).cloned();
             if let Some(t) = &decl.ty {
                 self.prog.vars[id].ty = resolve_type(&mut self.prog, m, &[], t);
             } else if self.prog.vars[id].declared {
@@ -759,6 +781,7 @@ impl Collector {
 
     fn resolve_class(&mut self, id: ClassId, ast: &ClassAst) {
         let m = self.prog.classes[id].module;
+        self.prog.cur_namespace = self.prog.classes[id].namespace.clone();
         match ast {
             ClassAst::Class(c) => {
                 let tps = self.type_params(m, &[], &c.type_params);
@@ -840,6 +863,7 @@ impl Collector {
 
     fn resolve_fn(&mut self, id: FnId, class: Option<ClassId>) {
         let m = self.prog.fns[id].module;
+        self.prog.cur_namespace = self.fn_ns.get(&id).cloned();
         let decl = self.prog.fns[id].decl.clone().unwrap();
         let outer: Vec<TypeParamDef> = class.map(|c| self.prog.classes[c].type_params.clone()).unwrap_or_default();
         let own = self.type_params(m, &outer, &decl.type_params);
@@ -1085,7 +1109,13 @@ fn resolve_type_inner(prog: &Program, m: ModuleId, tps: &[TypeParamDef], t: &Typ
                     }
                     _ => {}
                 }
-                prog.modules[m].scope.get(name).or_else(|| prog.globals.get(name)).cloned()
+                let in_ns = prog
+                    .cur_namespace
+                    .as_ref()
+                    .and_then(|ns| prog.namespaces.get(ns))
+                    .and_then(|n| n.get(name))
+                    .filter(|s| matches!(s, Sym::Class(_) | Sym::Enum(_) | Sym::Struct(_) | Sym::Alias(_)));
+                in_ns.or_else(|| prog.modules[m].scope.get(name)).or_else(|| prog.globals.get(name)).cloned()
             } else if path.len() == 2 {
                 let (ns, name) = (path[0].text.as_str(), path[1].text.as_str());
                 match prog.modules[m].scope.get(ns) {

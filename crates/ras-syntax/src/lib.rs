@@ -2,10 +2,12 @@
 //! lossless `rowan` tree (CST), and an owned AST lowered from it.
 
 pub mod ast;
+mod format;
 mod kind;
 mod lower;
 mod parser;
 
+pub use format::format;
 pub use kind::{lex, RasLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, Token};
 pub use lower::{doc_comment, string_value, unescape};
 pub use parser::SyntaxError;

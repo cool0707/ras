@@ -45,8 +45,9 @@ impl VExpr {
         VExpr::Member(Box::new(self), name.into())
     }
 
+    /// Array element / default-member access; literal indices are printed bare.
     pub fn index(self, args: Vec<VExpr>) -> VExpr {
-        VExpr::Call(Box::new(self), args)
+        VExpr::Call(Box::new(self), args.into_iter().map(VExpr::bare_index).collect())
     }
 
     pub fn not(self) -> VExpr {
@@ -63,11 +64,19 @@ impl VExpr {
         matches!(self, VExpr::Lit(s) if s == text)
     }
 
-    /// If this is an integer literal such as `5&`, returns its value.
+    /// If this is an integer literal such as `5&` (or a bare `5`), returns its value.
     pub fn as_long(&self) -> Option<i64> {
         match self {
-            VExpr::Lit(s) => s.strip_suffix('&').and_then(|d| d.parse().ok()),
+            VExpr::Lit(s) => s.strip_suffix('&').unwrap_or(s).parse().ok(),
             _ => None,
+        }
+    }
+
+    /// Array bounds and indices are printed without the `&` suffix (`arr(0)`, `ReDim a(0 To 2)`).
+    pub fn bare_index(self) -> VExpr {
+        match self.as_long() {
+            Some(v) => VExpr::Lit(v.to_string()),
+            None => self,
         }
     }
 
@@ -414,9 +423,9 @@ impl Printer<'_> {
                 self.stmt_line(indent, "End If", false);
             }
             VStmt::For { var, from, to, step, body } => {
-                let mut head = format!("For {var} = {} To {}", from.print(), to.print());
+                let mut head = format!("For {var} = {} To {}", from.clone().bare_index().print(), to.clone().bare_index().print());
                 if let Some(st) = step {
-                    let _ = write!(head, " Step {}", st.print());
+                    let _ = write!(head, " Step {}", st.clone().bare_index().print());
                 }
                 self.stmt_line(indent, &head, true);
                 self.block(indent + 1, body);
@@ -458,7 +467,7 @@ impl Printer<'_> {
             VStmt::GoTo(l) => self.stmt_line(indent, &format!("GoTo {l}"), true),
             VStmt::Exit(what) => self.stmt_line(indent, &format!("Exit {what}"), true),
             VStmt::ReDim { preserve, target, dims } => {
-                let d = dims.iter().map(|(lo, hi)| format!("{} To {}", lo.print(), hi.print())).collect::<Vec<_>>().join(", ");
+                let d = dims.iter().map(|(lo, hi)| format!("{} To {}", lo.clone().bare_index().print(), hi.clone().bare_index().print())).collect::<Vec<_>>().join(", ");
                 let p = if *preserve { "Preserve " } else { "" };
                 self.stmt_line(indent, &format!("ReDim {p}{}({d})", target.print()), true);
             }

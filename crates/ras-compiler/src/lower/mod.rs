@@ -17,6 +17,7 @@ use crate::config::Config;
 use crate::diag::{Diagnostic, Severity};
 use crate::model::*;
 use crate::names;
+use crate::vba::name as vname;
 use crate::vba::*;
 
 pub struct Lowered {
@@ -51,7 +52,7 @@ pub(crate) enum RetMode {
     /// Assign to the procedure name, then `Exit` (or jump to the exit label).
     Proc,
     /// Inlined body / fused lambda block: assign to `var`, jump to `label` unless in tail position.
-    Inline { var: Option<String>, label: String, used: bool, tries_base: usize },
+    Inline { var: Option<String>, ty: Type, label: String, used: bool, tries_base: usize },
 }
 
 #[derive(Clone, PartialEq)]
@@ -127,6 +128,10 @@ pub(crate) struct ProcCtx {
     /// Receiver to prepend to auto-qualified `Cells` / `Range` (spec §13.4).
     pub qualifier: Option<VExpr>,
     pub bulk: HashMap<ExprId, bulk::BulkSlot>,
+    /// `frames.len()` of the code the bulk slots belong to.
+    pub bulk_depth: usize,
+    /// No yield points while lowering a bulk-transfer loop (spec §10.4.3).
+    pub suppress_yield: bool,
     /// Arrays in capacity-doubling mode: VBA array name → (length var, capacity var).
     pub push_caps: HashMap<String, (String, String)>,
     pub inline_stack: Vec<FnId>,
@@ -134,6 +139,8 @@ pub(crate) struct ProcCtx {
     /// True while lowering the body of a closure class (`Invoke`).
     pub in_closure: bool,
     pub yield_plan: Option<std::rc::Rc<HashSet<u32>>>,
+    /// Top-level variables of a script module that became locals of `Main`.
+    pub demoted: HashMap<VarId, String>,
 }
 
 pub(crate) struct Lowerer<'p> {
@@ -505,7 +512,7 @@ impl<'p> Lowerer<'p> {
         }
     }
 
-    fn is_demoted(&self, v: VarId) -> bool {
+    pub(crate) fn is_demoted(&self, v: VarId) -> bool {
         let d = &self.prog.vars[v];
         self.prog.modules[d.module].main_fn.is_some() && !d.used_outside_main && !d.exported && !d.declared
     }
@@ -1016,7 +1023,7 @@ impl<'p> Lowerer<'p> {
             if flags != 0 {
                 args.push(long(flags));
             }
-            prologue.push(if_then(call("RAS_Enter", args).not(), vec![VStmt::Exit(exit_kw)]));
+            prologue.push(VStmt::Raw(format!("If Not {} Then Exit {exit_kw}", call("RAS_Enter", args).print())));
         }
         if self.pc.uses_handler {
             prologue.push(VStmt::Raw("On Error GoTo RAS_Handler".into()));
@@ -1053,7 +1060,7 @@ impl<'p> Lowerer<'p> {
             let arms = std::mem::take(&mut self.pc.handler_arms);
             if !arms.is_empty() {
                 let cases = arms.into_iter().map(|(id, body)| (vec![long(id as i64)], body)).collect();
-                self.emit(VStmt::Select { expr: name("ras_tryId"), cases, els: None });
+                self.emit(VStmt::Select { expr: vname("ras_tryId"), cases, els: None });
             }
             if entry {
                 // Outermost entry: restore application state and report; nested: propagate to the caller.
@@ -1062,7 +1069,7 @@ impl<'p> Lowerer<'p> {
                 if let Some(h) = &def.attrs.on_error {
                     fail_args.push(lit(format!("\"{}\"", h.replace('"', ""))));
                 }
-                self.emit(if_then(call("RAS_Fail", fail_args), vec![VStmt::Raw(format!("Resume {exit_label}"))]));
+                self.emit(VStmt::Raw(format!("If {} Then Resume {exit_label}", call("RAS_Fail", fail_args).print())));
             }
             for s in epilogue {
                 self.emit(s);
@@ -1147,7 +1154,7 @@ impl<'p> Lowerer<'p> {
                     params: vec![],
                     ret: Some("Variant".into()),
                     locals: vec![],
-                    body: vec![assign(name(fname.clone()), name(format!("f_{fname}")))],
+                    body: vec![assign(vname(fname.clone()), vname(format!("f_{fname}")))],
                     leading_comments: vec![],
                     attributes: vec![],
                     source: None,
@@ -1159,7 +1166,7 @@ impl<'p> Lowerer<'p> {
                     params: vec![VParam { name: "ras_v".into(), byref: false, ty: "Variant".into(), is_array: false, optional_default: None }],
                     ret: None,
                     locals: vec![],
-                    body: vec![assign(name(format!("f_{fname}")), name("ras_v"))],
+                    body: vec![assign(vname(format!("f_{fname}")), vname("ras_v"))],
                     leading_comments: vec![],
                     attributes: vec![],
                     source: None,
@@ -1247,14 +1254,14 @@ impl<'p> Lowerer<'p> {
         if let Some(ctor) = def.ctor {
             if let Some(p) = self.build_proc(ctor, env.clone(), Some((c, targs.to_vec())), "RAS_Init".into(), true) {
                 factory_params = p.params.clone();
-                factory_args = p.params.iter().map(|x| name(x.name.clone())).collect();
+                factory_args = p.params.iter().map(|x| vname(x.name.clone())).collect();
                 self.out[ci].procs.push(p);
             }
         }
         let fname = format!("New_{name}");
-        let mut body = vec![set(name(fname.clone()), lit(format!("New {name}")))];
+        let mut body = vec![set(vname(fname.clone()), lit(format!("New {name}")))];
         if def.ctor.is_some() {
-            body.push(VStmt::Call { target: name(fname.clone()).member("RAS_Init"), args: factory_args });
+            body.push(VStmt::Call { target: vname(fname.clone()).member("RAS_Init"), args: factory_args });
         }
         self.out[mi].procs.push(VProc {
             kind: ProcKind::Function,
@@ -1277,14 +1284,14 @@ impl<'p> Lowerer<'p> {
             for &m in &idef.methods {
                 let mname = names::member_ident(&prog.fns[m].name);
                 let mut p = self.signature_stub(m, &ienv, format!("{iname}_{mname}"), false);
-                let args: Vec<VExpr> = p.params.iter().map(|x| name(x.name.clone())).collect();
+                let args: Vec<VExpr> = p.params.iter().map(|x| vname(x.name.clone())).collect();
                 let target = lit("Me").member(mname);
                 let ret = prog.fns[m].ret_ty().subst(&ienv);
                 p.body = if ret == Type::Void {
                     vec![VStmt::Call { target, args }]
                 } else {
                     let value = if args.is_empty() { target } else { target.index(args) };
-                    vec![VStmt::Assign { target: name(p.name.clone()), value, set: ret.is_object() }]
+                    vec![VStmt::Assign { target: vname(p.name.clone()), value, set: ret.is_object() }]
                 };
                 self.out[ci].procs.push(p);
             }
@@ -1302,7 +1309,7 @@ impl<'p> Lowerer<'p> {
                     params: vec![],
                     ret: Some(ty.clone()),
                     locals: vec![],
-                    body: vec![VStmt::Assign { target: name(pname.clone()), value: me.clone(), set: obj }],
+                    body: vec![VStmt::Assign { target: vname(pname.clone()), value: me.clone(), set: obj }],
                     leading_comments: vec![],
                     attributes: vec![],
                     source: None,
@@ -1315,7 +1322,7 @@ impl<'p> Lowerer<'p> {
                         params: vec![VParam { name: "ras_v".into(), byref: false, ty, is_array: false, optional_default: None }],
                         ret: None,
                         locals: vec![],
-                        body: vec![VStmt::Assign { target: me, value: name("ras_v"), set: obj }],
+                        body: vec![VStmt::Assign { target: me, value: vname("ras_v"), set: obj }],
                         leading_comments: vec![],
                         attributes: vec![],
                         source: None,
@@ -1431,7 +1438,7 @@ impl<'p> Lowerer<'p> {
                 for (i, (h, reentrant)) in handlers.iter().enumerate() {
                     let d = &prog.fns[*h];
                     let target = VExpr::Name(prog.modules[d.module].vba_name.clone()).member(names::member_ident(&d.name));
-                    let args: Vec<VExpr> = sig.iter().take(d.params.len()).map(|p| name(p.0)).collect();
+                    let args: Vec<VExpr> = sig.iter().take(d.params.len()).map(|p| vname(p.0)).collect();
                     let call = VStmt::Call { target, args };
                     if *reentrant {
                         calls.push(call);
@@ -1439,7 +1446,7 @@ impl<'p> Lowerer<'p> {
                         // Re-entrancy guard: ignore events raised by the handler itself (spec §12.2).
                         let flag = format!("ras_busy{}", i + 1);
                         locals.push(flag.clone());
-                        calls.push(if_then(name(flag.clone()).not(), vec![assign(name(flag.clone()), lit("True")), call, assign(name(flag), lit("False"))]));
+                        calls.push(if_then(vname(flag.clone()).not(), vec![assign(vname(flag.clone()), lit("True")), call, assign(vname(flag), lit("False"))]));
                     }
                 }
                 let proc_name = format!("{}_{ev}", if is_wb { "Workbook" } else { "Worksheet" });
@@ -1452,13 +1459,13 @@ impl<'p> Lowerer<'p> {
                     for flag in &locals {
                         body.push(VStmt::Raw(format!("Static {flag} As Boolean")));
                     }
-                    body.push(VStmt::Raw("On Error GoTo RAS_Fail".into()));
+                    body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
                     body.push(call_stmt("RAS_EnsureInit", vec![]));
                     body.extend(calls);
                     body.push(VStmt::Exit("Sub"));
-                    body.push(VStmt::Label("RAS_Fail".into()));
+                    body.push(VStmt::Label("RAS_OnError".into()));
                     for flag in &locals {
-                        body.push(assign(name(flag.clone()), lit("False")));
+                        body.push(assign(vname(flag.clone()), lit("False")));
                     }
                     body.push(call_stmt("RAS_EventError", vec![lit(format!("\"{doc}.{ev}\"")), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
                 }
@@ -1469,10 +1476,10 @@ impl<'p> Lowerer<'p> {
         if needs_init {
             let ri = self.vmodule("RAS_Glue", VModuleKind::Standard);
             self.out[ri].private_module = true;
-            let mut body = vec![VStmt::Raw("On Error GoTo RAS_Fail".into()), call_stmt("RAS_EnsureInit", vec![])];
+            let mut body = vec![VStmt::Raw("On Error GoTo RAS_OnError".into()), call_stmt("RAS_EnsureInit", vec![])];
             body.extend(deferred_open);
             body.push(VStmt::Exit("Sub"));
-            body.push(VStmt::Label("RAS_Fail".into()));
+            body.push(VStmt::Label("RAS_OnError".into()));
             body.push(call_stmt("RAS_EventError", vec![lit("\"Workbook.Open\""), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
             let simple = |name: &str, body: Vec<VStmt>| VProc { kind: ProcKind::Sub, public: true, name: name.into(), params: vec![], ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None };
             self.out[ri].procs.push(simple("RAS_DeferredInit", body));
@@ -1488,7 +1495,7 @@ impl<'p> Lowerer<'p> {
         let mut body: Vec<VStmt> = Vec::new();
         for c in std::mem::take(&mut self.init_calls) {
             let (m, p) = c.split_once('.').unwrap();
-            body.push(VStmt::Call { target: name(m).member(p), args: vec![] });
+            body.push(VStmt::Call { target: vname(m).member(p), args: vec![] });
         }
         if body.is_empty() && self.out[ri].procs.is_empty() {
             // Nothing to initialise: the runtime gets an empty stub only if something refers to it.

@@ -1339,7 +1339,8 @@ impl Checker<'_> {
             Some(Sym::Var(v)) => {
                 let ty = self.var_type(v, e.span);
                 let owner = self.prog.vars[v].module;
-                let in_own_main = self.fx.is_toplevel && owner == self.module && self.current_lambda().is_none();
+                // Constants may also be read from arrow functions (they are copied when a closure is created).
+                let in_own_main = self.fx.is_toplevel && owner == self.module && (self.current_lambda().is_none() || self.prog.vars[v].is_const);
                 if !in_own_main {
                     self.prog.vars[v].used_outside_main = true;
                 }

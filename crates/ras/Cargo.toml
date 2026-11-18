@@ -12,3 +12,10 @@ name = "ras"
 path = "src/main.rs"
 
 [dependencies]
+ras-syntax.workspace = true
+ras-compiler.workspace = true
+ras-ovba.workspace = true
+ras-lsp.workspace = true
+clap.workspace = true
+encoding_rs.workspace = true
+notify.workspace = true

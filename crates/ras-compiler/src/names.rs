@@ -2,16 +2,14 @@
 
 /// VBA keywords and statements that can never be used as identifiers.
 const RESERVED: &[&str] = &[
-    "access", "addressof", "alias", "and", "any", "append", "as", "attribute", "base", "binary", "boolean", "byref", "byte", "byval",
-    "call", "case", "cbool", "cbyte", "ccur", "cdate", "cdbl", "cdec", "cint", "clng", "clnglng", "clngptr", "close", "compare",
-    "const", "csng", "cstr", "currency", "cvar", "cverr", "date", "debug", "decimal", "declare", "defbool", "defbyte", "defcur",
+    "addressof", "and", "any", "as", "attribute", "boolean", "byref", "byte", "byval",
+    "call", "case", "cbool", "cbyte", "ccur", "cdate", "cdbl", "cdec", "cint", "clng", "clnglng", "clngptr", "close", "const", "csng", "cstr", "currency", "cvar", "cverr", "date", "debug", "decimal", "declare", "defbool", "defbyte", "defcur",
     "defdate", "defdbl", "defint", "deflng", "defobj", "defsng", "defstr", "defvar", "dim", "do", "doevents", "double", "each",
-    "else", "elseif", "empty", "end", "endif", "enum", "eqv", "erase", "error", "event", "exit", "explicit", "false", "for",
+    "else", "elseif", "empty", "end", "endif", "enum", "eqv", "erase", "error", "event", "exit", "false", "for",
     "friend", "function", "get", "global", "gosub", "goto", "if", "imp", "implements", "in", "input", "integer", "is", "lbound",
-    "len", "let", "lib", "like", "line", "lock", "long", "longlong", "longptr", "loop", "lset", "me", "mid", "mod", "module",
-    "new", "next", "not", "nothing", "null", "object", "on", "open", "option", "optional", "or", "output", "paramarray",
-    "preserve", "print", "private", "property", "ptrsafe", "public", "put", "raiseevent", "random", "read", "redim", "rem",
-    "resume", "return", "rset", "seek", "select", "set", "shared", "single", "spc", "static", "step", "stop", "string", "sub",
+    "len", "let", "like", "lock", "long", "longlong", "longptr", "loop", "lset", "me", "mid", "mod", "new", "next", "not", "nothing", "null", "object", "on", "open", "option", "optional", "or", "paramarray",
+    "preserve", "print", "private", "property", "ptrsafe", "public", "put", "raiseevent", "redim", "rem",
+    "resume", "return", "rset", "seek", "select", "set", "shared", "single", "spc", "static", "stop", "string", "sub",
     "tab", "then", "to", "true", "type", "typeof", "ubound", "unlock", "until", "variant", "wend", "while", "with",
     "withevents", "write", "xor",
 ];
@@ -31,7 +29,7 @@ const BUILTIN: &[&str] = &[
     "collection", "dictionary", "evaluate", "run", "union", "intersect", "calculate", "delete", "insert", "copy", "paste",
     "find", "sort", "clear", "add", "remove", "exists", "keys", "items", "quit", "wait", "version", "path", "cursor", "names",
     "windows", "charts", "shapes", "hyperlinks", "comments", "top", "color", "size", "bold", "italic", "number", "source",
-    "description", "raise", "print", "assert", "kill", "mkdir", "rmdir", "filecopy", "filelen", "freefile", "beep", "command",
+    "description", "error", "raise", "print", "assert", "kill", "mkdir", "rmdir", "filecopy", "filelen", "freefile", "beep", "command",
     "choose", "switch", "partition", "rgb", "qbcolor", "strptr", "objptr", "varptr", "main",
 ];
 

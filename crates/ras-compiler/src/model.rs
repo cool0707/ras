@@ -69,6 +69,12 @@ pub struct FuncType {
     pub ret: Type,
 }
 
+impl Default for Type {
+    fn default() -> Self {
+        Type::Void
+    }
+}
+
 impl Type {
     pub fn array(elem: Type) -> Type {
         Type::Array(Box::new(elem))
@@ -613,6 +619,9 @@ pub struct Program {
     pub diagnostics: Vec<Diagnostic>,
     pub opt_notes: Vec<(ModuleId, OptNote)>,
     pub config: crate::config::Config,
+    /// Host namespace whose declarations are being resolved (unqualified type names look there first).
+    #[doc(hidden)]
+    pub cur_namespace: Option<String>,
 }
 
 impl Program {
