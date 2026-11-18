@@ -140,6 +140,19 @@ impl<'p> Lowerer<'p> {
         }
     }
 
+    /// A small function that the loop will inline and that makes no calls of its own.
+    fn expands_harmlessly(&self, f: FnId) -> bool {
+        let d = &self.prog.fns[f];
+        self.opt >= 1
+            && matches!(d.kind, FnKind::Free)
+            && d.decl.as_ref().is_some_and(|x| x.body.is_some())
+            && d.inline != ast::InlineMode::NoInline
+            && d.inline_blockers.is_empty()
+            && d.calls.is_empty()
+            && !self.pc.inline_stack.contains(&f)
+            && (d.inline == ast::InlineMode::Inline || d.cost <= self.cfg.inline_threshold())
+    }
+
     /// Analyses loop `s`; returns a plan when every condition of spec §9.3 holds.
     pub(crate) fn bulk_plan(&mut self, s: &Stmt) -> Option<BulkPlan> {
         if self.opt == 0 {
@@ -243,11 +256,12 @@ impl<'p> Lowerer<'p> {
                             other_use = true;
                         }
                     }
-                    ExprKind::Call { .. } if !cells_calls.contains(&e.id) => {
-                        if !matches!(info.calls.get(&e.id).map(|c| &c.target), Some(CallTarget::Intrinsic(_))) {
-                            unknown_call = true;
-                        }
-                    }
+                    ExprKind::Call { .. } if !cells_calls.contains(&e.id) => match info.calls.get(&e.id).map(|c| &c.target) {
+                        Some(CallTarget::Intrinsic(_)) => {}
+                        // Calls that will be expanded in place and call nothing themselves cannot touch the sheet.
+                        Some(CallTarget::Fn(f) | CallTarget::Ext(f)) if self.expands_harmlessly(*f) => {}
+                        _ => unknown_call = true,
+                    },
                     ExprKind::New { .. } => unknown_call = true,
                     _ => {}
                 }

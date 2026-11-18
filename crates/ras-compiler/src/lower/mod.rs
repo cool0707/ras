@@ -983,6 +983,10 @@ impl<'p> Lowerer<'p> {
             frame.locals.insert(p.local, Binding::Var(pname.clone()));
             params.push(VParam { name: pname, byref, ty, is_array, optional_default });
         }
+        if matches!(def.kind, FnKind::ModInit) {
+            // A dummy parameter keeps the initializer out of Excel's macro list.
+            params.push(VParam { name: "ras_dummy".into(), byref: false, ty: "Long".into(), is_array: false, optional_default: Some("0&".into()) });
+        }
         // `Optional` parameters must be trailing in VBA.
         let mut seen_required = false;
         for p in params.iter_mut().rev() {

@@ -164,7 +164,6 @@ pub fn global_fn(name: &str) -> Option<Intr> {
     Some(match name {
         "parseInt" => ParseInt,
         "parseFloat" => ParseFloat,
-        "String" => ToStr,
         "fastMode" => FastMode,
         "suspendScreen" => SuspendScreen,
         "resumeScreen" => ResumeScreen,

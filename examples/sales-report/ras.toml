@@ -1,0 +1,12 @@
+[project]
+name = "SalesReport"
+# workbook = "SalesReport.xlsm"   # `ras pack` の対象ブック（シートのコード名もここから読み取る）
+
+[target]
+host = "excel"
+vba6 = true
+codepage = 932
+
+[build]
+opt-level = 1
+erl = true

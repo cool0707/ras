@@ -52,6 +52,8 @@ ras unpack                                # ブック内の手書き VBA を vba
 ras fmt                                   # 整形
 ```
 
+サンプルプロジェクトは [examples/sales-report](examples/sales-report) にあります（`ras --project examples/sales-report build`）。
+
 `ras pack` はブックが Excel で開かれていると書き込みません（閉じてから実行してください）。
 置き換え前のブックは `build/backup/` に保存されます。
 
@@ -116,3 +118,4 @@ cd editors/vscode && npm ci && npm test && npm run package
 | `crates/ras-lsp` | 言語サーバ |
 | `crates/ras` | CLI |
 | `editors/vscode` | VS Code 拡張 |
+| `examples/sales-report` | サンプルプロジェクト |

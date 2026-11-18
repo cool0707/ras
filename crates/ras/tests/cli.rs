@@ -103,3 +103,28 @@ fn fmt_check_and_unimplemented_commands() {
     assert!(!ok && out.contains("未実装"), "{out}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn bundled_example_project_builds() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sales-report");
+    let out_dir = temp_dir("example");
+    // Work on a copy so that the repository stays clean.
+    for sub in ["src", "types"] {
+        std::fs::create_dir_all(out_dir.join(sub)).unwrap();
+        for entry in std::fs::read_dir(example.join(sub)).unwrap() {
+            let entry = entry.unwrap();
+            std::fs::copy(entry.path(), out_dir.join(sub).join(entry.file_name())).unwrap();
+        }
+    }
+    std::fs::copy(example.join("ras.toml"), out_dir.join("ras.toml")).unwrap();
+    let (ok, out) = ras(&out_dir, &["build"]);
+    assert!(ok, "{out}");
+    let bytes = std::fs::read(out_dir.join("build/Report.bas")).unwrap();
+    let (text, _, _) = encoding_rs::SHIFT_JIS.decode(&bytes);
+    // read loop → one Range read; formula loop → one Range write; the inline helper is expanded
+    assert!(text.contains("RAS_Read2D(ws.Range(ws.Cells(2, 3), ws.Cells(last, 4)))"), "{text}");
+    assert!(text.contains(".Formula = ras_buf"), "{text}");
+    assert!(text.contains("' @inline nonNegative"), "{text}");
+    assert!(out_dir.join("build/Sheet1.doccls").is_file());
+    let _ = std::fs::remove_dir_all(&out_dir);
+}

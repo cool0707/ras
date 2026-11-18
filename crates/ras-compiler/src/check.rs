@@ -279,7 +279,7 @@ impl Checker<'_> {
         let hint = if from.is_numeric() && to.is_numeric() {
             format!("（縮小変換です。`as {}` で明示的に変換してください）", self.show(to))
         } else if matches!(to, Type::Str) && (from.is_numeric() || matches!(from, Type::Bool | Type::Date)) {
-            "（`.toString()` か `String(x)` で文字列に変換してください）".to_string()
+            "（`.toString()` かテンプレート文字列 `${x}` で文字列に変換してください）".to_string()
         } else {
             String::new()
         };
