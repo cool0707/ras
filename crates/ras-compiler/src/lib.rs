@@ -4,7 +4,7 @@
 //! sources ──collect──▶ Program ──check──▶ typed Program ──lower──▶ VBA modules ──emit──▶ files
 //! ```
 
-#![allow(clippy::too_many_arguments, clippy::type_complexity, clippy::wrong_self_convention, clippy::should_implement_trait, clippy::field_reassign_with_default)]
+#![allow(clippy::too_many_arguments, clippy::type_complexity, clippy::wrong_self_convention, clippy::should_implement_trait, clippy::field_reassign_with_default, clippy::needless_range_loop)]
 
 pub mod astutil;
 pub mod check;
@@ -16,6 +16,7 @@ pub mod intrinsics;
 mod lower;
 pub mod model;
 pub mod names;
+pub mod query;
 pub mod runtime;
 pub mod vba;
 

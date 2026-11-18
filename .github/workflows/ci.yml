@@ -25,11 +25,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      # The toolchain version is pinned in rust-toolchain.toml (so that clippy is reproducible).
       - name: Install Rust
-        run: |
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup default stable
+        run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test --workspace --locked
@@ -77,11 +76,10 @@ jobs:
             target: aarch64-apple-darwin
             exe: ras
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Rust
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup show active-toolchain || rustup toolchain install
           rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
@@ -95,7 +93,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" dist/
           cp LICENSE README.md dist/
       # Downloadable from the run's summary page ("Artifacts").
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ras-${{ matrix.name }}
           path: dist/
@@ -108,8 +106,8 @@ jobs:
       run:
         working-directory: editors/vscode
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -117,7 +115,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run package
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ras-vscode
           path: editors/vscode/*.vsix
