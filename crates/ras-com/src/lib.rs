@@ -180,7 +180,10 @@ fn to_variant(env: Env, value: JsUnknown) -> Result<Var> {
         }
         ValueType::String => {
             let s = unsafe { value.cast::<JsString>() }.into_utf16()?;
-            let b = BSTR::from_wide(s.as_slice());
+            // The UTF-16 buffer napi hands out ends with a terminator that is not part of the string.
+            let units = s.as_slice();
+            let units = units.strip_suffix(&[0]).unwrap_or(units);
+            let b = BSTR::from_wide(units);
             Var::with(VT_BSTR, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.bstrVal = ManuallyDrop::new(b) })
         }
         ValueType::Object => {
