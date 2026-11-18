@@ -1,4 +1,8 @@
-# RAS 言語仕様書（Draft v0.3）
+# RAS 言語仕様書（Draft v0.4）
+
+> v0.3 からの変更
+> * `number` 型を廃止し、数値型を C# 風の `short` / `int` / `long` / `float` / `double` に変更（§2.1〜2.3）
+> * C# 風の拡張メソッドを追加（§3.2）
 
 > v0.2 からの変更
 > * 実装言語を Rust に確定（§7.2）
@@ -30,13 +34,24 @@
 ## 2. 型システムと変数宣言
 
 * **変数・定数宣言:** `let`（再代入可能）および `const`（再代入不可）を使用する。
-* **基本データ型とVBA型の対応（v0.2で変更）:**
+
+### 2.1 基本データ型とVBA型の対応（v0.4で変更）
+
+TypeScript の `number` 型は存在しない（`number` と書いた場合は「`int` または `double` を使う」旨のエラー）。数値型は C# の名前に揃える。
+
+| RAS 型 | VBA 型 | サイズ | 備考 |
+|---|---|---|---|
+| `byte` | `Byte` | 8bit 符号なし | |
+| `short` | `Integer` | 16bit | |
+| `int` | `Long` | 32bit | 整数リテラルの既定型 |
+| `long` | `LongLong` | 64bit | 64bit Office 専用。32bit を含むターゲットでは `#If Win64` ガード外での使用をエラー（§11.3） |
+| `float` | `Single` | 32bit 浮動小数点 | |
+| `double` | `Double` | 64bit 浮動小数点 | 小数リテラルの既定型 |
+| `currency` | `Currency` | 64bit 固定小数点 | |
+| `decimal` | `Variant`（`CDec`） | 96bit | VBA に `Decimal` 型の変数宣言は無いため `Variant` に格納 |
 
 | RAS 型 | VBA 型 | 備考 |
 |---|---|---|
-| `number` | `Double` | 数値リテラルの既定型 |
-| `int` | `Long` | 32bit 整数。`Integer`(16bit) は出力しない |
-| `i64` | `LongLong` | 64bit Office 専用。32bit ターゲットを含むビルドでは使用時にエラー |
 | `ptr` | `LongPtr`（VBA7）/ `Long`（VBA6） | ポインタ・ハンドル。§11 参照 |
 | `currency` | `Currency` | |
 | `date` | `Date` | |
@@ -49,9 +64,34 @@
 | RAS の `class` | 生成クラス名 | |
 | `T[]` | `T()` の動的配列 | §13 の配列規則参照 |
 
+### 2.2 数値リテラル
+
+| 書き方 | 型 | VBA 出力 |
+|---|---|---|
+| `123` | `int`（`int` に収まらない場合は `long`） | `123&` |
+| `123L` | `long` | `123^` |
+| `1.5`, `1e3`, `2d` | `double` | `1.5#` |
+| `1.5f` | `float` | `1.5!` |
+| `1.5m` | `decimal` | `CDec("1.5")` |
+| `0xFF` | `int` | `&HFF&` |
+
+* VBA の整数リテラルは値が小さいと `Integer` 型になり、`300 * 200` が `Integer` 演算で溢れる。RAS は**数値リテラルに常に型サフィックスを付けて出力**し、この罠を回避する。
+* `short` / `byte` 型の変数への代入は、定数がその型の範囲内であれば暗黙に許可する（C# と同じ）。
+
+### 2.3 数値演算と型変換
+
+C# の規則に従う。
+
+* **二項演算の型:** 両辺の型を次の順で「大きい方」に揃えて演算する: `int` < `long` < `float` < `double`（`currency`, `decimal` は混在時に明示キャストを要求）。`byte` / `short` 同士の演算は `int` に昇格する（VBA の `Integer * Integer` が `Integer` のまま溢れる罠を、`CLng` を挿入して回避する）。
+* **整数同士の `/`:** 整数除算（0 方向への切り捨て）。VBA の `\` に変換する（オペランドが整数型なので VBA の丸めは発生しない）。実数除算にしたい場合は片方を `double` にする。
+* **`%`:** 整数同士なら VBA の `Mod`（符号は被除数に従い、C# と一致）、実数を含む場合はランタイム `RAS_FMod`。
+* **オーバーフロー:** 整数演算の溢れは実行時エラー（VBA のエラー 6）。定数式の溢れはコンパイルエラー（C# の `checked` 相当）。
+* **暗黙の型変換:** 拡大変換（`byte`→`short`→`int`→`long`、`int`→`double`、`float`→`double` 等）のみ暗黙に許可する。縮小変換は `x as int` で明示する（TS の `as` 構文を流用）。
+* **実数→整数の変換は切り捨て:** VBA の `CLng` は銀行丸めのため、`x as int` は `CLng(Fix(x))` に変換して C# と同じ 0 方向切り捨てにする。丸めたい場合は `Math.round(x)`。
+
 * **具体型出力の原則:** 型が静的に確定する変数・引数・戻り値は具体型で宣言する（`Variant` は約2倍以上遅いケースがあるため）。型が `any` の箇所のみ `Variant` を使う。
 * **`Set` の自動解決:** オブジェクト型の代入には型情報から `Set` を自動付与する。`any` 型への代入で右辺の型が静的に決まらない場合は、ランタイムヘルパ `RAS_Assign`（`IsObject` で分岐）を使用する。
-* **型推論:** `let x = 1` は `number`、`let i = 0` がループカウンタとしてのみ使われる場合は `int` に推論する（整数リテラルのみで初期化・加減算のみ・配列添字として使われる、のいずれも満たす場合）。
+* **型推論:** 初期化式の型をそのまま使う（`let x = 1` は `int`、`let y = 1.5` は `double`）。
 
 ---
 
@@ -64,11 +104,11 @@ VBAのデフォルトが `ByRef` であることに起因する事故を防ぐ�
 * **戻り値:** `return expr;` は `関数名 = expr` ＋ `Exit Function` に変換する（末尾の `return` では `Exit` を省略）。オブジェクト型の戻り値は `Set 関数名 = expr`。
 * **`void` 関数:** `Sub` として出力する。
 
-### コード変換例
+### 3.1 コード変換例
 
 **RASコード:**
 ```typescript
-function calculate(x: number, byref outResult: number): boolean {
+function calculate(x: double, byref outResult: double): boolean {
     outResult = x * 2;
     return true;
 }
@@ -77,10 +117,81 @@ function calculate(x: number, byref outResult: number): boolean {
 **出力VBAコード:**
 ```vba
 Private Function calculate(ByVal x As Double, ByRef outResult As Double) As Boolean
-    outResult = x * 2
+    outResult = x * 2&
     calculate = True
 End Function
 ```
+
+### 3.2 拡張メソッド
+
+C# の拡張メソッドと同様に、既存の型（プリミティブ型・配列・Excel 等の COM 型・RAS のクラス）にメソッドを後付けし、`x.method()` の形で呼べるようにする。
+
+#### 3.2.1 構文
+
+TypeScript の `this` パラメータ構文を流用する。第1引数を `this: 型` と書いた関数が拡張メソッドになる（TS 由来のエディタ資産でそのままハイライトされる）。
+
+```typescript
+// strutil.ras
+export function isBlank(this: string): boolean {
+    return this.trim().length == 0;
+}
+
+export function padLeft(this: string, width: int, ch: string = " "): string {
+    return this.length >= width ? this : ch.repeat(width - this.length) + this;
+}
+
+// excelutil.ras
+export function lastRow(this: Excel.Worksheet, col: int = 1): int {
+    return this.Cells(this.Rows.Count, col).End(xlUp).Row;
+}
+
+export function sum(this: double[]): double {
+    let t = 0.0;
+    for (const v of this) t += v;
+    return t;
+}
+```
+
+* 本体中の `this` は受け取ったオブジェクト（レシーバ）を指す。
+* `byref this: T` と書くと、レシーバを参照渡しにできる（例: `function inc(byref this: int) { this++; }` → `counter.inc()`）。この場合レシーバは左辺値でなければならず、リテラルや式を渡すとエラー（§6 ルール5と同じ）。
+* ジェネリクス: `function first<T>(this: T[]): T` のように型パラメータを使える（VBA 出力は具体型ごとに単相化、または `Variant` 版1本。§16）。
+
+#### 3.2.2 呼び出し側
+
+```typescript
+import { isBlank, padLeft } from "./strutil";
+import * as xl from "./excelutil";   // 名前空間インポートでもモジュール内の拡張メソッドがすべて有効になる
+
+if (!name.isBlank()) {
+    code = id.padLeft(6, "0");
+}
+const last = Sheet1.lastRow();
+```
+
+**出力VBAコード:**
+```vba
+    If Not StrUtil.isBlank(name) Then
+        code = StrUtil.padLeft(id, 6&, "0")
+    End If
+    last = ExcelUtil.lastRow(Sheet1, 1&)
+```
+
+* 拡張メソッドの呼び出しは、定義モジュールで修飾した通常の関数呼び出し（レシーバを第1引数）に変換する。実行時コストは通常の関数呼び出しと同じで、§8 のインライン展開・ループ内自動展開の対象にもなる（`inline function f(this: T)` も可）。
+* レシーバ式は他の引数より先に、1回だけ評価する。
+
+#### 3.2.3 解決規則
+
+1. **型のメンバが優先:** レシーバの型（COM 型ライブラリ・RAS クラス）に同名のメソッド/プロパティがあれば、そちらを呼ぶ（C# と同じ）。拡張メソッド側には「型のメンバに隠されて呼ばれない」警告を出す。
+2. **スコープ:** 同じモジュールで定義された拡張メソッドと、`import` したモジュールの `export` された拡張メソッドが候補になる。
+3. **適合性:** レシーバの静的型が `this` の型と一致、または暗黙変換（§2.3 の拡大変換、配列要素型の一致、クラスの継承・インターフェイス実装）で適合するもの。
+4. **最も具体的な候補を選ぶ:** 複数の候補が適合する場合、変換が少ないものを選ぶ。決まらない場合は曖昧エラー。
+5. **`any` / `object` 型のレシーバ:** 静的型が不明なため拡張メソッドは解決しない（遅延バインディングのメンバ呼び出しになる）。同名の拡張メソッドがスコープにある場合は「拡張メソッドは使われない」警告を出す。
+6. **`null` レシーバ:** オブジェクト型のレシーバが `Nothing` でも呼び出しは行われる（C# と同じ）。拡張メソッド内で `this == null` を判定できる。
+
+#### 3.2.4 標準ライブラリ
+
+* `map` / `filter` / `forEach` / `reduce` 等の配列メソッド、文字列メソッド（`trim`, `padLeft`, `startsWith` 等）、Range 用の `toArray` / `fromArray`（§9.4）は、標準ライブラリの拡張メソッドとして定義する。ユーザー定義の拡張メソッドと同じ仕組みで解決され、§4 のループ融合はこれらに対するコンパイラ組み込みの最適化として行う。
+* 標準ライブラリの拡張メソッドは暗黙にインポートされる。ユーザー定義の同名・同シグネチャの拡張メソッドがスコープにある場合はユーザー定義が優先する（警告を出す）。
 
 ---
 
@@ -88,7 +199,7 @@ End Function
 
 無名関数の用途は配列・コレクションの操作（`map`, `filter`, `forEach`, `reduce`, `some`, `every`, `find`, `findIndex`, `sort` 等）に特化する。
 
-* **構文:** アロー関数 `(x) => x * 2` または `(x: number) => { return x * 2; }`。
+* **構文:** アロー関数 `(x) => x * 2` または `(x: double) => { return x * 2; }`。
 * **キャプチャ制約（重要）:**
   * 無名関数内で参照できる外部スコープの変数は**イミュータブル（`const` または読み取り専用変数）のみ**。
   * 無名関数内での外部変数の書き換えはコンパイルエラー。
@@ -115,14 +226,14 @@ let result = arr.map(x => x * base);
 **出力VBAコード:**
 ```vba
 Public Sub Main()
-    Dim base As Double
-    Dim arr() As Double
-    Dim result() As Double
+    Dim base As Long
+    Dim arr() As Long
+    Dim result() As Long
     Dim ras_i1 As Long
 
-    base = 10
+    base = 10&
     ReDim arr(0 To 2)
-    arr(0) = 1#: arr(1) = 2#: arr(2) = 3#
+    arr(0) = 1&: arr(1) = 2&: arr(2) = 3&
     If RAS_Len(arr) > 0 Then
         ReDim result(0 To UBound(arr))
         For ras_i1 = 0 To UBound(arr)
@@ -139,13 +250,13 @@ End Sub
 **RASコード:**
 ```typescript
 const base = 10;
-const f = (x: number) => x * base;
+const f = (x: double) => x * base;
 let result = applyAll(arr, f);
 ```
 
 **出力VBAコード (`RAS_Lambda_001.cls`):**
 ```vba
-Public Captured_base As Double
+Public Captured_base As Long
 
 Public Function Invoke(ByVal x As Variant) As Variant
     Invoke = x * Me.Captured_base
@@ -162,7 +273,7 @@ TypeScriptの `try ... catch ... finally` をベースとしつつ、VBAの `On 
 
 `catch (e)` は `On Error GoTo` のラベルジャンプに変換し、エラー発生時点で `try` ブロックを中断する。
 
-* `e` は `RAS_Error` 型（`number`, `description`, `source`, `rasFile`, `rasLine` を持つ）。catch 突入時に `Err` の内容をコピーする。
+* `e` は `RAS_Error` 型（`code`, `description`, `source`, `rasFile`, `rasLine` を持つ）。catch 突入時に `Err` の内容をコピーする。
 * **ハンドラの正しい脱出（罠回避）:** VBAではエラーハンドラ内から `Resume` せずに処理を続けると「ハンドラ実行中」状態が残り、以後のエラーが捕捉されない。コンパイラは catch 本体の実行後、必ず `Resume RAS_EndTry_N` でハンドラ状態を解除してから後続処理へ合流させる。
 * **1プロシージャ内の複数 `try`・ネスト:** VBAはプロシージャ内で有効なハンドラが1つしかないため、プロシージャ共通のハンドラ `RAS_Handler:` を1つ生成し、現在の try 識別子 `ras_tryId` を `Select Case` で振り分ける。内側 try を抜けた時点で外側の try 識別子に戻す。
 * **`throw`:** `throw new Error("msg")` は `Err.Raise vbObjectError + 513, <ソース>, "msg"`。`throw e;`（再送出）は保存した番号・説明で `Err.Raise` する。
@@ -296,7 +407,7 @@ VBA は関数呼び出しのオーバーヘッドが大きい（特に引数が 
 ### 8.1 `inline` キーワード（明示的インライン）
 
 ```typescript
-inline function clamp(v: number, lo: number, hi: number): number {
+inline function clamp(v: double, lo: double, hi: double): double {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 ```
@@ -512,7 +623,7 @@ declare module "user32" {
 }
 declare module "kernel32" {
     function Sleep(dwMilliseconds: int): void;
-    function GetTickCount64(): i64;   // 64bit 専用 → §11.3
+    function GetTickCount64(): long;  // 64bit 専用 → §11.3
 }
 ```
 
@@ -522,9 +633,11 @@ declare module "kernel32" {
 |---|---|---|---|
 | `ptr` | `ByVal x As LongPtr` | `ByVal x As Long` | ハンドル・ポインタ |
 | `int` | `ByVal x As Long` | 同左 | |
-| `i16` | `ByVal x As Integer` | 同左 | |
+| `short` | `ByVal x As Integer` | 同左 | |
 | `byte` | `ByVal x As Byte` | 同左 | |
-| `i64` | `ByVal x As LongLong` | 使用不可 | |
+| `long` | `ByVal x As LongLong` | 使用不可 | |
+| `float` | `ByVal x As Single` | 同左 | |
+| `double` | `ByVal x As Double` | 同左 | |
 | `wstr` | `ByVal x As LongPtr` | `ByVal x As Long` | 呼び出し側で自動的に `StrPtr(s)` を渡す（W 版 API 用） |
 | `astr` | `ByVal x As String` | 同左 | ANSI 文字列（A 版 API 用） |
 | `byref T` | `ByRef x As T` | 同左 | 出力引数・構造体 |
@@ -543,7 +656,7 @@ Private Declare Function GetWindowText Lib "user32" Alias "GetWindowTextW" (ByVa
 #End If
 ```
 
-* `i64` を含む宣言は `#If Win64 Then` 内にのみ出力し、32bit 環境で呼ばれた場合は実行時エラー（または `@fallback` で指定した代替実装）にする。リンターは `if (Platform.is64bit)` ガードの外で呼んでいれば警告する。
+* `long` を含む宣言は `#If Win64 Then` 内にのみ出力し、32bit 環境で呼ばれた場合は実行時エラー（または `@fallback` で指定した代替実装）にする。リンターは `if (Platform.is64bit)` ガードの外で呼んでいれば警告する。
 * ユーザーコード中の `ptr` 型変数の `Dim` も、VBA6 互換を有効にしている場合は `#If VBA7` で `LongPtr` / `Long` を出し分ける。
 * `ras.toml` の `target.vba6 = false` で VBA6 用の出力を省略できる（既定は `true`）。
 * 構造体（`declare struct`）は 64bit でのアラインメント差を考慮し、ポインタサイズに依存する `LenB` 等の計算をコンパイル時に両方用意する。
@@ -631,11 +744,11 @@ RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化�
 
 * **`And` / `Or` は短絡評価しない:** `&&` / `||` はネストした `If` と一時変数に変換する。
 * **`IIf` は両辺を評価する:** 三項演算子は `If` 文に変換し `IIf` は使わない。
-* **整数リテラルのオーバーフロー:** `60000 * 60000` は VBA で `Long` 演算となり溢れる。`number` 文脈の整数リテラルには `#` サフィックス（`60000#`）を付与する。
-* **`True = -1`:** `Number(b)` 等の boolean の数値化は `-CLng(b)` に変換して `1` / `0` にする（JS 互換）。
-* **`Mod` は実数を丸めてから計算する:** `%` はオペランドが `int` なら `Mod`、それ以外はランタイム `RAS_FMod`。
-* **`Round` は銀行丸め:** `Math.round` は JS 互換（+∞ 方向への四捨五入）のランタイム関数に変換する。`Math.bankersRound` で VBA 準拠も選べる。
-* **`/` と `\`:** `/` は常に実数除算。整数除算は `Math.trunc(a / b)` または `int` 同士の `idiv(a, b)` を `\` に変換する。
+* **整数リテラルの型:** VBA は小さい整数リテラルを `Integer` とみなすため `300 * 200` が溢れる。数値リテラルには常に型サフィックスを付与する（§2.2）。`short` 同士の演算は `int` に昇格させる（§2.3）。
+* **`True = -1`:** `b as int` 等の boolean の数値化は `-CLng(b)` に変換して `1` / `0` にする（C# の `b ? 1 : 0` と同じ値）。
+* **`Mod` は実数を丸めてから計算する:** `%` はオペランドが整数型なら `Mod`、それ以外はランタイム `RAS_FMod`（§2.3）。
+* **`Round` は銀行丸め:** `Math.round` は 0 から遠い方向への四捨五入（`MidpointRounding.AwayFromZero` 相当）のランタイム関数に変換する。`Math.bankersRound` で VBA 準拠（偶数丸め）も選べる。
+* **`/` と `\`:** 整数同士の `/` は `\`、それ以外は `/` に変換する（§2.3）。VBA の `\` は実数オペランドを銀行丸めしてから割るため、実数を含む整数除算は出力しない。
 * **`==` / `===`:** オブジェクトなら `Is`、それ以外は `=`。`null` / `undefined` との比較はオブジェクト型なら `Is Nothing`、`any` なら `RAS_IsNullish`（`IsEmpty`, `IsNull`, `Is Nothing` を判定）。
 * **既定メンバの暗黙呼び出し:** `rng` を値として使う場合も `.Value` を明示出力する。
 
@@ -839,9 +952,9 @@ pull-unmanaged = true
 
 ## 16. 未決事項
 
-1. **`number` の既定マッピング:** `Double` 固定か、整数のみで使われる変数を `Long` に自動narrowingする範囲をどこまで広げるか。
-2. **非同期・`DoEvents`:** 長時間ループでの `DoEvents` 自動挿入（UI 応答性）と、その間のイベント再入の扱い。
-3. **Access / Word 等の他ホスト対応**の範囲。
+1. **非同期・`DoEvents`:** 長時間ループでの `DoEvents` 自動挿入（UI 応答性）と、その間のイベント再入の扱い。
+2. **Access / Word 等の他ホスト対応**の範囲。
+3. **ジェネリクスの出力方式:** 型引数ごとに単相化して具体型の関数を複数出力するか（高速・コード量増）、`Variant` 版1本にするか（§3.2.1）。
 
 ### 決定済み（v0.3）
 
@@ -849,3 +962,8 @@ pull-unmanaged = true
 * Mac 版 Excel は対象外（§1）。
 * オフライン書き込みは初版から対応（§14.9）。
 * Range 由来の2次元配列は 0 始まり、ゼロコピーで再基底化（§9.2.1）。
+
+### 決定済み（v0.4）
+
+* 数値型は C# 風（`short` / `int` / `long` / `float` / `double`）。`number` は廃止（§2）。
+* C# 風の拡張メソッドに対応（§3.2）。
