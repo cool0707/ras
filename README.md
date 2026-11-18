@@ -30,8 +30,8 @@ export function lastRow(this: Excel.Worksheet, col: int = 1): int {
 
 | 成果物 | 内容 |
 |---|---|
-| `ras-windows-x64` | `ras.exe`（Windows x64） |
-| `ras-windows-arm64` | `ras.exe`（Windows arm64） |
+| `ras-windows-x64` | `ras.exe` と `ras_com.node`（Windows x64） |
+| `ras-windows-arm64` | `ras.exe` と `ras_com.node`（Windows arm64） |
 | `ras-linux-x64` | `ras`（Linux x64。ビルド・チェック・オフライン書き込み用） |
 | `ras-macos-arm64` | `ras`（macOS arm64。同上） |
 | `ras-vscode` | VS Code 拡張（`.vsix`） |
@@ -50,6 +50,7 @@ ras pack                                  # Excel を起動せず、Book.xlsm �
 ras watch                                 # 変更を監視して再ビルド（ブックが閉じていれば pack も行う）
 ras unpack                                # ブック内の手書き VBA を vba/ に取り出す
 ras fmt                                   # 整形
+ras build --target js                     # デバッグ実行用の JavaScript を build/debug/ に出力
 ```
 
 サンプルプロジェクトは [examples/sales-report](examples/sales-report) にあります（`ras --project examples/sales-report build`）。
@@ -57,9 +58,27 @@ ras fmt                                   # 整形
 `ras pack` はブックが Excel で開かれていると書き込みません（閉じてから実行してください）。
 置き換え前のブックは `build/backup/` に保存されます。
 
+## デバッグ
+
+VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイントを置き、F5（または「RAS: デバッグを開始」）で実行します。
+ステップ実行、変数・ウォッチ式の確認、例外での停止が使えます。
+
+仕組みは VBA のデバッグではありません。プログラムを JavaScript に変換して VS Code 同梱のランタイムで動かし、Excel の操作だけを実際の Excel に対して行います（仕様 §14.10）。
+
+- Excel の操作には Windows と Excel が必要です。接続には拡張に同梱の `ras_com.node` を使います。Excel を使わない処理だけなら、どの OS でもデバッグできます。
+- 対象のブック（`ras.toml` の `workbook`）が Excel で開かれていればそこに接続し、開かれていなければ開きます。
+- 実行できるのは引数なしの関数とトップレベルの文です。`@on` のイベントハンドラや UDF のように Excel から呼ばれる関数は起動できません。
+- VBA ビルドの最適化（一括転送・インライン展開など）は通らないため、実行タイミングや速度は実機と異なります。`long` / `currency` / `decimal` の精度、未対応の VBA 標準関数など、実機との違いは仕様 §14.10.5 にまとめています。
+
+`launch.json` で関数を固定することもできます。
+
+```json
+{ "type": "ras", "request": "launch", "name": "RAS: rebuildReport", "entry": "Report.rebuildReport" }
+```
+
 | コマンド | 状態 |
 |---|---|
-| `init` / `check` / `build` / `watch` / `pack` / `unpack` / `fmt` / `lsp --stdio` | 実装済み |
+| `init` / `check` / `build` / `build --target js` / `watch` / `pack` / `unpack` / `fmt` / `lsp --stdio` | 実装済み |
 | `sync` / `setup` / `typegen` / `pack --via-excel` | 未実装（実行するとその旨を表示して終了） |
 
 ## 実装状況
@@ -83,6 +102,7 @@ ras fmt                                   # 整形
 | §13 VBA の罠の回避 | 一部 | `Collection` ラッパ、`Range.Find` ラッパ、文字列で指定される名前の存在確認、一時変数の再利用は未実装 |
 | §14.1〜14.8 ライブ同期（RASBridge） | **未実装** | ドリフト検出用ハッシュ、ソースマップ、`Erl` 行番号は実装済み |
 | §14.9 オフライン書き込み・読み出し | 実装済み | 新規ユーザーフォームの作成と再署名は未実装。`vba/` の非管理モジュールをブックへ書き戻す処理は未実装（取り出しのみ） |
+| §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | Excel への接続（`ras_com.node`）は Windows + Excel の実機では未検証。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。`super` 呼び出しを伴う継承は対象外 |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱。`ras typegen` と `vba:` インポートは未実装 |
 | §16.1 JSDoc | 実装済み | 生成 VBA へのコメント・`VB_Description` 出力、`@param` 名の検査 |
 | §16.2 IntelliSense（LSP） | 一部 | 診断・補完・ホバー・定義へ移動・シンボル一覧・整形・CodeLens・「生成 VBA を表示」は実装。パラメーター情報・参照検索・名前変更・インレイヒント・セマンティックトークン・コードアクション・未インポート候補は未実装 |

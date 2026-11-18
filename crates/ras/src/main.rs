@@ -31,8 +31,14 @@ enum Command {
     },
     /// 型チェック・リントのみ行う
     Check,
-    /// VBA ファイルを build/ に出力する
-    Build(BuildArgs),
+    /// VBA ファイルを build/ に出力する（--target js でデバッグ用の JavaScript を build/debug/ に出力する）
+    Build {
+        #[command(flatten)]
+        build: BuildArgs,
+        /// 出力形式（vba: VBA モジュール / js: デバッグ実行用の JavaScript とソースマップ）
+        #[arg(long, value_enum, default_value_t = Target::Vba)]
+        target: Target,
+    },
     /// 変更を監視して再ビルドする（ブックが閉じていればオフライン書き込みも行う）
     Watch(BuildArgs),
     /// Excel を起動せず、ブックファイル内の VBA プロジェクトを直接書き換える
@@ -81,6 +87,12 @@ enum Command {
     Setup,
     /// COM タイプライブラリから型定義（.d.ras）を生成する（未実装）
     Typegen { typelib: String },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
+enum Target {
+    Vba,
+    Js,
 }
 
 #[derive(clap::Args, Clone, Default)]
@@ -244,6 +256,37 @@ fn cmd_build(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
     let Some((prog, out)) = compile(root, args, None)? else { return Ok(ExitCode::from(1)) };
     let dir = write_build(root, &prog, &out)?;
     println!("{} 個のモジュールを {} に出力しました", out.files.len(), dir.display());
+    Ok(ExitCode::SUCCESS)
+}
+
+/// `ras build --target js`: the debug build (spec §14.10). Runs the program as written,
+/// so the optimisation options of the VBA build do not apply.
+fn cmd_build_js(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
+    let prog = analyze(root, args, None)?;
+    let errors = report(&prog, &prog.diagnostics, false);
+    if errors > 0 {
+        eprintln!("{errors} 件のエラーがあります");
+        return Ok(ExitCode::from(1));
+    }
+    let out = ras_compiler::build_js(&prog, "../../");
+    let errors = report(&prog, &out.diagnostics, false);
+    if errors > 0 {
+        eprintln!("{errors} 件のエラーがあります");
+        return Ok(ExitCode::from(1));
+    }
+    let dir = root.join("build").join("debug");
+    // Stale modules would still be loaded by source-map discovery: start from an empty directory.
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    for f in &out.files {
+        let path = dir.join(&f.rel_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::write(&path, &f.text).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    println!("デバッグ用の JavaScript を {} に出力しました（実行できる関数: {}）", dir.display(), if out.entries.is_empty() { "なし".to_string() } else { out.entries.join(", ") });
     Ok(ExitCode::SUCCESS)
 }
 
@@ -539,7 +582,8 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!("問題は見つかりませんでした");
             Ok(ExitCode::SUCCESS)
         }
-        Command::Build(args) => cmd_build(&find_root(project)?, args),
+        Command::Build { build, target: Target::Vba } => cmd_build(&find_root(project)?, build),
+        Command::Build { build, target: Target::Js } => cmd_build_js(&find_root(project)?, build),
         Command::Watch(args) => cmd_watch(&find_root(project)?, args),
         Command::Pack { book, build, convert, output, overwrite, via_excel } => {
             if *via_excel {

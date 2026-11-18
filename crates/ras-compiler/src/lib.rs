@@ -13,6 +13,7 @@ pub mod config;
 pub mod diag;
 pub mod emit;
 pub mod intrinsics;
+pub mod js;
 mod lower;
 pub mod model;
 pub mod names;
@@ -26,6 +27,7 @@ pub use collect::SourceInput;
 pub use config::Config;
 pub use diag::{Diagnostic, Severity};
 pub use emit::OutputFile;
+pub use js::{build_js, JsFile, JsOutput};
 pub use model::{ModuleId, ModuleKind, OptNote, Program};
 
 /// Type definitions and library modules bundled with the compiler (spec §15.3).

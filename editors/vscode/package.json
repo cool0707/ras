@@ -1,7 +1,7 @@
 {
   "name": "ras-vscode",
   "displayName": "RAS (Better VBA)",
-  "description": "RAS（TypeScript ライクな構文から VBA へトランスパイルする言語）の言語サポート。シンタックスハイライトと、ras 言語サーバー（ras lsp）への接続を提供します。",
+  "description": "RAS（TypeScript ライクな構文から VBA へトランスパイルする言語）の言語サポート。シンタックスハイライト、ras 言語サーバー（ras lsp）への接続、ブレークポイントを使ったデバッグ実行を提供します。",
   "version": "0.1.0",
   "publisher": "cool0707",
   "license": "MIT",
@@ -31,15 +31,19 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onLanguage:ras",
-    "workspaceContains:ras.toml"
+    "workspaceContains:ras.toml",
+    "onDebugResolve:ras",
+    "onDebugInitialConfigurations"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "信頼されていないワークスペースではシンタックスハイライトのみ有効です。言語サーバー（ras lsp）はワークスペースを信頼するまで起動しません。",
+      "description": "信頼されていないワークスペースではシンタックスハイライトのみ有効です。言語サーバー（ras lsp）とデバッグ実行はワークスペースを信頼するまで使えません。",
       "restrictedConfigurations": [
         "ras.path",
-        "ras.server.extraArgs"
+        "ras.server.extraArgs",
+        "ras.debug.runtimeExecutable",
+        "ras.debug.comAddon"
       ]
     }
   },
@@ -116,6 +120,18 @@
           "default": "off",
           "scope": "window",
           "markdownDescription": "VS Code と言語サーバーの間の LSP 通信を「出力」パネル（RAS Language Server）に記録します。"
+        },
+        "ras.debug.runtimeExecutable": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "デバッグ実行に使う Node.js のパス。空の場合は VS Code に同梱のランタイムを使います（Node.js のインストールは不要です）。"
+        },
+        "ras.debug.comAddon": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "デバッグ実行時に Excel へ接続するアドオン（`ras_com.node`）のパス。空の場合は拡張機能に同梱のもの、無ければ `ras` 実行ファイルと同じフォルダーのものを使います。"
         }
       }
     },
@@ -145,6 +161,12 @@
         "command": "ras.restartServer",
         "title": "言語サーバーを再起動",
         "category": "RAS"
+      },
+      {
+        "command": "ras.debug.start",
+        "title": "デバッグを開始",
+        "category": "RAS",
+        "icon": "$(debug-alt)"
       }
     ],
     "menus": {
@@ -159,6 +181,11 @@
           "command": "ras.client.showGeneratedVba",
           "when": "editorLangId == ras",
           "group": "navigation"
+        },
+        {
+          "command": "ras.debug.start",
+          "when": "editorLangId == ras && !inDebugMode",
+          "group": "navigation"
         }
       ],
       "editor/context": [
@@ -168,7 +195,71 @@
           "group": "navigation@90"
         }
       ]
-    }
+    },
+    "breakpoints": [
+      {
+        "language": "ras"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "ras",
+        "label": "RAS",
+        "languages": [
+          "ras"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "entry": {
+                "type": "string",
+                "markdownDescription": "実行する関数。`モジュール名.関数名`（例: `Report.rebuildReport`）または関数名のみ。省略すると起動時に選びます。"
+              },
+              "project": {
+                "type": "string",
+                "markdownDescription": "`ras.toml` のあるフォルダー。省略時はワークスペースフォルダー。"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": false,
+                "markdownDescription": "プログラムの先頭で停止します。"
+              },
+              "runtimeExecutable": {
+                "type": "string",
+                "markdownDescription": "プログラムを実行する Node.js のパス。省略時は VS Code に同梱のランタイムを使います。"
+              },
+              "comAddon": {
+                "type": "string",
+                "markdownDescription": "Excel に接続するアドオン（`ras_com.node`）のパス。省略時は拡張機能に同梱のものを使います。"
+              },
+              "mockHost": {
+                "type": "string",
+                "markdownDescription": "Excel の代わりに使う JavaScript モジュールのパス（Excel の無い環境でのテスト用）。"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "ras",
+            "request": "launch",
+            "name": "RAS: デバッグ"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "RAS: 関数をデバッグ",
+            "description": "RAS の関数を VS Code 上でデバッグ実行します（Excel の操作は実際の Excel に対して行われます）。",
+            "body": {
+              "type": "ras",
+              "request": "launch",
+              "name": "RAS: ${1:rebuildReport}",
+              "entry": "${1:rebuildReport}"
+            }
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
     "check-types": "tsc --noEmit -p .",

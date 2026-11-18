@@ -1,0 +1,8 @@
+export function clamp(v: int, lo: int, hi: int): int {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+export class Counter {
+    private n: int = 0;
+    inc(): void { this.n++; }
+    get value(): int { return this.n; }
+}
