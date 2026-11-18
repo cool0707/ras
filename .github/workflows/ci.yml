@@ -86,12 +86,29 @@ jobs:
           key: ${{ matrix.target }}
       - name: Build
         run: cargo build --release --locked -p ras --target ${{ matrix.target }}
+      # The COM addon of the debug run time (spec §14.10); Windows only.
+      - name: Build ras_com addon
+        if: startsWith(matrix.name, 'windows-')
+        run: cargo build --release --locked -p ras-com --target ${{ matrix.target }}
       - name: Collect files
         shell: bash
         run: |
           mkdir dist
           cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" dist/
           cp LICENSE README.md dist/
+          if [ -f "target/${{ matrix.target }}/release/ras_com.dll" ]; then
+            cp "target/${{ matrix.target }}/release/ras_com.dll" dist/ras_com.node
+          fi
+      # Drives real COM objects (Scripting.Dictionary, WScript.Shell) through the addon.
+      - name: Smoke-test ras_com
+        if: matrix.name == 'windows-x64'
+        shell: bash
+        run: |
+          set +e
+          node crates/ras-com/tests/smoke.js dist/ras_com.node
+          code=$?
+          printf 'exit code: %d (0x%X)\n' "$code" "$code"
+          exit "$code"
       # Downloadable from the run's summary page ("Artifacts").
       - uses: actions/upload-artifact@v5
         with:
@@ -102,11 +119,26 @@ jobs:
   vscode:
     name: VS Code extension
     runs-on: ubuntu-latest
+    # The .vsix ships the ras_com addon for both Windows architectures.
+    needs: build
     defaults:
       run:
         working-directory: editors/vscode
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: ras-windows-x64
+          path: ${{ runner.temp }}/windows-x64
+      - uses: actions/download-artifact@v5
+        with:
+          name: ras-windows-arm64
+          path: ${{ runner.temp }}/windows-arm64
+      - name: Add the ras_com addon
+        run: |
+          mkdir -p bin/win32-x64 bin/win32-arm64
+          cp "$RUNNER_TEMP/windows-x64/ras_com.node" bin/win32-x64/
+          cp "$RUNNER_TEMP/windows-arm64/ras_com.node" bin/win32-arm64/
       - uses: actions/setup-node@v5
         with:
           node-version: 22

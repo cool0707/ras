@@ -1004,6 +1004,7 @@ Offset  Size  内容
 * 生成 VBA の各文と RAS ソース位置の対応を `build/*.rasmap` に保存する。
 * `--erl` オプション（デバッグビルド既定）で生成 VBA に行番号を付与し、実行時エラーの `Erl` から RAS ソース位置を復元して表示する。
 * VS Code 拡張の「生成 VBA を表示」では、カーソル位置に対応する VBA 行をハイライトする。
+* ブレークポイントを使ったデバッグは、VBA ではなく JavaScript ランタイム上で行う（§14.10）。
 
 ### 14.9 オフライン書き込み（Excel 非起動）
 
@@ -1047,6 +1048,56 @@ Excel を起動せず、ブックファイル内の VBA プロジェクトを ra
 
 ---
 
+### 14.10 デバッグ実行（JavaScript ランタイム）
+
+VS Code 上でブレークポイント・ステップ実行・変数の確認を行うための、VBA とは別の実行経路。RAS のソースを JavaScript に変換して Node.js 上で動かし、Excel の操作が必要な箇所だけを COM 経由で実際の Excel に対して行う。
+
+#### 14.10.1 方針
+
+* **デバッガは自作しない:** 出力は CommonJS モジュールと Source Map（v3）であり、デバッガ本体は VS Code 組み込みの JavaScript デバッガ（js-debug）をそのまま使う。
+* **書いたとおりに動かす:** インライン展開・ループ融合・一括転送・`DoEvents` 自動挿入（§8〜§10.4）は適用しない。RAS の 1 文が JavaScript の 1 文に対応し、ローカル変数名もそのまま残る。
+* **VBA ビルドの代わりではない:** 意味論は VBA ビルドに合わせるが（§14.10.4）、実行タイミング・最適化後の挙動・Excel 起点の呼び出しは再現しない（§14.10.5）。実機で起きたエラーの位置は従来どおり `Erl` とソースマップ（§14.8）で特定する。
+
+#### 14.10.2 出力（`ras build --target js`）
+
+`build/debug/` に次のファイルを出力する（ビルドのたびに作り直す）。
+
+| ファイル | 内容 |
+|---|---|
+| `<モジュール>.js` / `<モジュール>.js.map` | モジュールごとの JavaScript と Source Map。マッピングは文単位で、`sources` は `.ras` ファイルへの相対パス |
+| `ras-runtime.js` | ランタイム（`$rt`）。数値変換・オーバーフロー検査・文字列関数・エラーオブジェクト・VBA 標準関数・Excel へのアクセス |
+| `ras-main.js` | ランチャー。`node --enable-source-maps build/debug/ras-main.js <モジュール名.関数名>` で実行する（`--list` で実行可能な関数を JSON で出力） |
+| `ras-debug.json` | 実行可能な関数の一覧（VS Code 拡張が読む） |
+
+実行できるのは、引数なしで呼べるトップレベル関数と `Main`（トップレベルの文）。実行前にモジュール初期化と `@init` 関数を一度だけ実行する（VBA の `RAS_EnsureInit` と同じ）。
+
+#### 14.10.3 Excel との接続
+
+* ランタイムは Node アドオン `ras_com.node`（`crates/ras-com`、Windows 専用）を介して `IDispatch` を遅延バインディングで呼び出す。生成コードは `$rt.get(obj, "Value")` / `$rt.put(...)` / `$rt.call(obj, "Cells", [r, 3])` のように、プロパティ取得・設定・メソッド呼び出しを明示的に区別して呼ぶ。
+* 接続先は §14.3 と同じ規則で決める: `ras.toml` の `workbook` を ROT から探し、開いている Excel インスタンスに接続する。開かれていなければ起動中の Excel（無ければ新しく起動した Excel）で開く。`workbook` が未指定ならアクティブブックを使う。
+* `ThisWorkbook` はそのブック、シートのコード名（`Sheet1` など）は `CodeName` が一致するシート、その他のグローバル（`ActiveSheet`、`Range(...)` など）は `Application` のメンバーとして解決する。
+* Excel がセル編集中・モーダルダイアログ表示中で呼び出しを拒否した場合（`RPC_E_CALL_REJECTED` 等）は、最大 60 秒までバックオフしながら再試行する。
+* 値の対応: `Empty` / `Null` / `Nothing` → `null`、日付 → 日付オブジェクト（シリアル値を保持）、セルのエラー値 → エラー値オブジェクト、`Range.Value` の 2 次元配列 → 0 始まりの行配列。
+* VS Code 拡張は VS Code に同梱のランタイムを Node モード（`ELECTRON_RUN_AS_NODE`）で起動して使うため、Node.js を別途インストールする必要はない。組み込みデバッガの `launch` はこの環境変数を取り除いてしまうので、拡張がプロセスを起動し、デバッガは `attach` で接続する。
+
+#### 14.10.4 VBA ビルドと合わせている意味論
+
+* 整数演算のオーバーフロー（エラー 6）、ゼロ除算（エラー 11）、配列の範囲外アクセス（エラー 9）は実行時エラーになる。整数の除算・`as` による変換はゼロ方向への切り捨て。
+* `any`（`Variant`）から型付き変数への代入は変換する（空セル → `0` / `""`、数値文字列 → 数値、変換できなければエラー 13、整数への変換は銀行丸め）。
+* 配列と `struct` は値型（代入でコピー、関数には参照渡し）。`byref` 引数は呼び出し元の変数を書き換える。
+* 実数の文字列化は有効 15 桁（`0.1 + 0.2` は `0.3`）。`Math.round` は四捨五入、`trim` は半角空白のみ除去。
+* `try { } catch { resume; }` は文ごとにエラーを無視して次の文へ進む。`catch (e)` の `e` は `code` / `description` / `source` / `rasFile` / `rasLine` を持つ。
+* `@fast` と `fastMode` / `suspend*` / `status` は実際の `Application` の状態を変更し、終了時（異常終了を含む）に元へ戻す。
+
+#### 14.10.5 再現しないもの・制限
+
+* **Excel 起点の呼び出し:** `@on` のイベントハンドラ、`@udf`、リボンコールバック、ユーザーフォーム、手書き VBA から RAS 関数を呼ぶ経路は起動できない（RAS から手書き VBA を呼ぶのは `Application.Run` 経由で可能）。
+* **数値型の精度:** `long`・`currency`・`decimal` は倍精度浮動小数点数で表現する（`long` は 2^53 を超えると不正確、`decimal` の `0.1m + 0.2m == 0.3m` は成り立たない）。`float` は倍精度のまま計算する。
+* **VBA 標準関数:** よく使うもの（文字列・変換・日付・数学・`MsgBox`・`CreateObject`・`Format` の代表的な書式など）は JavaScript で実装している。未対応の関数は呼び出した時点でエラーになる。`Format` の未対応の書式は Excel の `TEXT` 関数に委譲する。ロケール依存の表記（日付の既定書式など）は VBA と一致しないことがある。
+* **`declare`（DLL 関数）:** `kernel32` の `Sleep` / `GetTickCount` / `GetTickCount64` / `GetCurrentProcessId` / `QueryPerformanceCounter` / `QueryPerformanceFrequency` のみ代替実装がある。それ以外は警告 `W1410` を出し、呼び出した時点でエラーになる。
+* **速度:** Excel へのアクセスはプロセス間 COM 呼び出しになるため、セルを 1 つずつ読み書きするループは VBA ビルドより大幅に遅い。
+* **実行中の Excel:** マクロ実行中の状態ではないため、停止中も実行中もユーザーが Excel を操作できる。
+
 ## 15. プロジェクト構成
 
 ### 15.1 ディレクトリ
@@ -1058,6 +1109,7 @@ myproject/
   vba/            非管理の VBA モジュール・ユーザーフォーム（双方向同期）
   types/          追加の型定義（*.d.ras）
   build/          生成物（.bas / .cls / .rasmap）
+  build/debug/    デバッグ実行用の JavaScript とソースマップ（§14.10）
 ```
 
 ### 15.2 `ras.toml`

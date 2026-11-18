@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { registerCommands } from "./commands";
+import { registerDebugging } from "./debug";
 import { GeneratedVbaView } from "./generatedVba";
 import { RasServer } from "./server";
 import { SyncStatusBar } from "./statusBar";
@@ -7,6 +8,8 @@ import { SyncStatusBar } from "./statusBar";
 // The extension is deliberately thin (spec §7.4): it contributes the grammar,
 // starts `ras lsp --stdio`, forwards four commands to it and mirrors the sync
 // status it reports. All language intelligence lives in the server.
+// Debugging (spec §14.10) builds with `ras build --target js` and hands the
+// resulting Node process to VS Code's built-in JavaScript debugger.
 
 let server: RasServer | undefined;
 
@@ -25,6 +28,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		rasServer.onDidChangeState((state) => statusBar.setServerState(state)),
 		rasServer.onDidReceiveSyncStatus((params) => statusBar.setSyncStatus(params)),
 		registerCommands(rasServer, vbaView),
+		registerDebugging(context),
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (event.affectsConfiguration("ras.path") || event.affectsConfiguration("ras.server.extraArgs")) {
 				void rasServer.restart();

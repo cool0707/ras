@@ -1,0 +1,18 @@
+swap 2 1
+copy 3 99 6
+map 6-4 2
+sort 1,2,3
+div 3 3.5 -3 1 1024
+str x=0.3 y=1.5 z=true n=1E+20
+class 12.566 2 true cool 5
+struct 3 4
+map 1 0 true 2 ab
+caught 11 0 で除算しました。
+caught 1234 boom
+finally
+overflow 6
+oob 9
+resume 2
+counter 2 10 0
+loop 7 ABC hi! 3 el 00x
+conv 3 -3 3 -3 42 1

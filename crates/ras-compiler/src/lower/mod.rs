@@ -4,7 +4,7 @@
 //! document-module code for event handlers and the generated init glue.
 
 mod bulk;
-mod expr;
+pub(crate) mod expr;
 mod fusion;
 mod stmt;
 

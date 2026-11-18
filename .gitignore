@@ -5,3 +5,5 @@ editors/vscode/dist
 editors/vscode/*.vsix
 *.snap.new
 .DS_Store
+editors/vscode/bin
+/examples/*/build
