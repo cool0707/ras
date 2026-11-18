@@ -1,0 +1,44 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ras-syntax",
+    "crates/ras-compiler",
+    "crates/ras-ovba",
+    "crates/ras-lsp",
+    "crates/ras",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/cool0707/ras"
+rust-version = "1.85"
+
+[workspace.dependencies]
+ras-syntax = { path = "crates/ras-syntax" }
+ras-compiler = { path = "crates/ras-compiler" }
+ras-ovba = { path = "crates/ras-ovba" }
+ras-lsp = { path = "crates/ras-lsp" }
+
+logos = "0.16"
+rowan = "0.16"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+notify = "8"
+encoding_rs = "0.8"
+crc32fast = "1"
+proptest = "1"
+lsp-server = "0.7"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+cfb = "0.10"
+ovba = "0.7"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "abort"

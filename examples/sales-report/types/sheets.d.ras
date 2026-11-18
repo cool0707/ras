@@ -1,0 +1,5 @@
+// ブックを指定しない場合のシートのコード名の宣言。
+// ras.toml の project.workbook を指定すれば、コード名はブックから読み取られるため不要。
+
+/** 売上データのシート。 */
+declare const Sheet1: Excel.Worksheet;

@@ -1,0 +1,196 @@
+{
+  "name": "ras-vscode",
+  "displayName": "RAS (Better VBA)",
+  "description": "RAS（TypeScript ライクな構文から VBA へトランスパイルする言語）の言語サポート。シンタックスハイライトと、ras 言語サーバー（ras lsp）への接続を提供します。",
+  "version": "0.1.0",
+  "publisher": "cool0707",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cool0707/ras.git",
+    "directory": "editors/vscode"
+  },
+  "homepage": "https://github.com/cool0707/ras/tree/main/editors/vscode",
+  "bugs": {
+    "url": "https://github.com/cool0707/ras/issues"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "ras",
+    "vba",
+    "excel",
+    "macro",
+    "transpiler"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:ras",
+    "workspaceContains:ras.toml"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "信頼されていないワークスペースではシンタックスハイライトのみ有効です。言語サーバー（ras lsp）はワークスペースを信頼するまで起動しません。",
+      "restrictedConfigurations": [
+        "ras.path",
+        "ras.server.extraArgs"
+      ]
+    }
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "ras",
+        "aliases": [
+          "RAS"
+        ],
+        "extensions": [
+          ".ras"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ras",
+        "scopeName": "source.ras",
+        "path": "./syntaxes/ras.tmLanguage.json",
+        "unbalancedBracketScopes": [
+          "keyword.operator.relational",
+          "storage.type.function.arrow",
+          "keyword.operator.bitwise.shift",
+          "meta.brace.angle",
+          "punctuation.definition.tag",
+          "keyword.operator.assignment.compound.bitwise.ras"
+        ],
+        "tokenTypes": {
+          "punctuation.definition.template-expression": "other",
+          "entity.name.type.instance.jsdoc": "other",
+          "entity.name.function.tagged-template": "other",
+          "meta.import string.quoted": "other",
+          "variable.other.jsdoc": "other"
+        }
+      }
+    ],
+    "configurationDefaults": {
+      "[ras]": {
+        "editor.semanticHighlighting.enabled": true
+      }
+    },
+    "configuration": {
+      "title": "RAS",
+      "properties": {
+        "ras.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "`ras` 実行ファイルのパス。空の場合は環境変数 `PATH` から `ras`（Windows では `ras.exe`）を検索します。変更すると言語サーバーを再起動します。"
+        },
+        "ras.server.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine-overridable",
+          "markdownDescription": "言語サーバーの起動時に `ras lsp --stdio` の後ろへ追加する引数。変更すると言語サーバーを再起動します。"
+        },
+        "ras.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "enumDescriptions": [
+            "記録しない",
+            "メッセージの種類のみ記録する",
+            "メッセージの内容まで記録する"
+          ],
+          "default": "off",
+          "scope": "window",
+          "markdownDescription": "VS Code と言語サーバーの間の LSP 通信を「出力」パネル（RAS Language Server）に記録します。"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "ras.client.showGeneratedVba",
+        "title": "生成 VBA を表示",
+        "category": "RAS",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "ras.client.syncNow",
+        "title": "今すぐ同期",
+        "category": "RAS"
+      },
+      {
+        "command": "ras.client.openInExcel",
+        "title": "Excel で開く",
+        "category": "RAS"
+      },
+      {
+        "command": "ras.client.runMacro",
+        "title": "マクロを実行",
+        "category": "RAS"
+      },
+      {
+        "command": "ras.restartServer",
+        "title": "言語サーバーを再起動",
+        "category": "RAS"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "ras.client.showGeneratedVba",
+          "when": "editorLangId == ras"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "ras.client.showGeneratedVba",
+          "when": "editorLangId == ras",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "ras.client.showGeneratedVba",
+          "when": "editorLangId == ras",
+          "group": "navigation@90"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit -p .",
+    "bundle": "node esbuild.mjs",
+    "compile": "npm run check-types && npm run bundle",
+    "watch": "node esbuild.mjs --watch",
+    "build:grammar": "node scripts/build-grammar.mjs",
+    "test": "node --test-reporter=spec test/grammar.test.mjs",
+    "vscode:prepublish": "npm run check-types && node esbuild.mjs --production",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "~1.90.0",
+    "@vscode/vsce": "^4.1.1",
+    "esbuild": "^0.28.2",
+    "plist": "^5.1.1",
+    "typescript": "^7.0.2",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
+  }
+}

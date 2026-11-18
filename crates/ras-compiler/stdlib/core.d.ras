@@ -1,0 +1,21 @@
+// RAS のコンパイラ組み込み型。
+
+/**
+ * `catch (e)` で受け取るエラー情報。
+ *
+ * `throw new Error("...")` で作成し、`throw e;` で再送出できる。
+ */
+interface RAS_Error {
+    /** エラー番号（VBA の `Err.Number`）。 */
+    code: int;
+    /** エラーの説明（VBA の `Err.Description`）。 */
+    description: string;
+    /** `description` と同じ。 */
+    readonly message: string;
+    /** エラーの発生元（VBA の `Err.Source`）。 */
+    source: string;
+    /** エラーが発生した RAS ソースファイル。 */
+    rasFile: string;
+    /** エラーが発生した RAS ソースの行番号（行番号付与が無効な場合は 0）。 */
+    rasLine: int;
+}

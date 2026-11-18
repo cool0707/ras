@@ -1,0 +1,12 @@
+# Contents of the .vsix: everything is excluded, then the shipped files are
+# listed explicitly. esbuild bundles the npm dependencies into
+# dist/extension.js, so node_modules is never packaged.
+**
+
+!package.json
+!README.md
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!language-configuration.json
+!syntaxes/ras.tmLanguage.json
+!dist/extension.js

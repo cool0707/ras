@@ -1,0 +1,5588 @@
+// Excel オブジェクト モデルの型定義（RAS 同梱・抜粋）。
+//
+// 方針:
+//   - 型は Excel のタイプ ライブラリに合わせる。Variant は `any`、Object は `object`、
+//     Long は `int`、Single は `float`。タイプ ライブラリより厳密な型は付けない。
+//   - VBA で「引数を取れるプロパティ」（Cells / Range / Offset / Address など）はメソッド構文で宣言する。
+//     引数がすべて省略可能で戻り値が void でないものは、括弧なし（`ws.Cells`）でも使える。
+//   - 既定メンバー（Item）は呼び出しシグネチャ `(index: any): T` で表す。
+//   - Variant を返すが戻り値に意味がない操作系メソッド（Select / Copy / Clear など）は void とする。
+//   - JSDoc の要約は独自に書いたもの。詳細は @see の Microsoft リファレンスを参照。
+//   - 列挙定数の値はタイプ ライブラリの実値。定数名は VBA と同じく修飾なしで参照できる。
+
+declare namespace Excel {
+    // ---------------------------------------------------------------------
+    // アプリケーション / ブック / シート
+    // ---------------------------------------------------------------------
+
+    /**
+     * Excel アプリケーション全体を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.application(object)
+     */
+    interface Application {
+        /**
+         * 画面の再描画を行うかどうか。`false` にするとマクロが速くなる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.screenupdating
+         */
+        ScreenUpdating: boolean;
+
+        /**
+         * イベントを発生させるかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.enableevents
+         */
+        EnableEvents: boolean;
+
+        /**
+         * 再計算モード（自動 / 手動）。開いているブックがないと設定に失敗する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.calculation
+         */
+        Calculation: XlCalculation;
+
+        /**
+         * 確認メッセージや警告を表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.displayalerts
+         */
+        DisplayAlerts: boolean;
+
+        /**
+         * ステータス バーの文字列。`false` を代入すると Excel の既定表示に戻る。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.statusbar
+         */
+        StatusBar: any;
+
+        /**
+         * ステータス バーを表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.displaystatusbar
+         */
+        DisplayStatusBar: boolean;
+
+        /**
+         * マウス ポインターの形。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.cursor
+         */
+        Cursor: XlMousePointer;
+
+        /**
+         * キーボードとマウスからの入力を受け付けるかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.interactive
+         */
+        Interactive: boolean;
+
+        /**
+         * マクロ実行中の Esc / Ctrl+Break の扱い。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.enablecancelkey
+         */
+        EnableCancelKey: XlEnableCancelKey;
+
+        /**
+         * 切り取り / コピー モードの状態。解除するには 0（VBA の `False`）を代入する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.cutcopymode
+         */
+        CutCopyMode: XlCutCopyMode;
+
+        /**
+         * タイトル バーに表示する名前。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.caption
+         */
+        Caption: string;
+
+        /**
+         * Excel のバージョン番号（"16.0" など）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.version
+         */
+        readonly Version: string;
+
+        /**
+         * OS の名前とバージョン。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.operatingsystem
+         */
+        readonly OperatingSystem: string;
+
+        /**
+         * 現在のユーザー名。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.username
+         */
+        UserName: string;
+
+        /**
+         * Excel のメイン ウィンドウのハンドル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.hwnd
+         */
+        readonly Hwnd: int;
+
+        /**
+         * アクティブなブック。ブックが開いていなければ Nothing。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.activeworkbook
+         */
+        readonly ActiveWorkbook: Workbook;
+
+        /**
+         * アクティブなシート（ワークシートまたはグラフ シート）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.activesheet
+         */
+        readonly ActiveSheet: object;
+
+        /**
+         * アクティブなセル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.activecell
+         */
+        readonly ActiveCell: Range;
+
+        /**
+         * アクティブなウィンドウ。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.activewindow
+         */
+        readonly ActiveWindow: Window;
+
+        /**
+         * アクティブなグラフ。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.activechart
+         */
+        readonly ActiveChart: Chart;
+
+        /**
+         * 現在選択されているオブジェクト（セル範囲なら Range）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.selection
+         */
+        readonly Selection: object;
+
+        /**
+         * 実行中のマクロが入っているブック。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.thisworkbook
+         */
+        readonly ThisWorkbook: Workbook;
+
+        /**
+         * ユーザー定義関数を呼び出しているセル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.thiscell
+         */
+        readonly ThisCell: Range;
+
+        /**
+         * 開いているすべてのブックのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.workbooks
+         */
+        readonly Workbooks: Workbooks;
+
+        /**
+         * アクティブ ブックのすべてのワークシート。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.worksheets
+         */
+        readonly Worksheets: Sheets;
+
+        /**
+         * アクティブ ブックのすべてのシート（グラフ シートを含む）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.sheets
+         */
+        readonly Sheets: Sheets;
+
+        /**
+         * アクティブ ブックのすべてのグラフ シート。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.charts
+         */
+        readonly Charts: Sheets;
+
+        /**
+         * すべてのウィンドウのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.windows
+         */
+        readonly Windows: Windows;
+
+        /**
+         * アクティブ ブックの名前定義のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.names
+         */
+        readonly Names: Names;
+
+        /**
+         * ワークシート関数を VBA から呼び出すためのオブジェクト。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.worksheetfunction
+         */
+        readonly WorksheetFunction: WorksheetFunction;
+
+        /**
+         * アクティブ シート上のセルまたはセル範囲を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.range
+         */
+        Range(cell1: any, cell2?: any): Range;
+
+        /**
+         * アクティブ シートのセルを返す。引数なしなら全セル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.cells
+         */
+        Cells(row?: any, col?: any): Range;
+
+        /**
+         * アクティブ シートの行を返す。引数なしなら全行。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.rows
+         */
+        Rows(index?: any): Range;
+
+        /**
+         * アクティブ シートの列を返す。引数なしなら全列。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.columns
+         */
+        Columns(index?: any): Range;
+
+        /**
+         * 複数のセル範囲を 1 つにまとめた範囲を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.union
+         */
+        Union(arg1: Range, arg2: Range, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): Range;
+
+        /**
+         * 複数のセル範囲の共通部分を返す。重なりがなければ Nothing。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.intersect
+         */
+        Intersect(arg1: Range, arg2: Range, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): Range;
+
+        /**
+         * 名前や数式の文字列を評価して、オブジェクトまたは値にする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.evaluate
+         */
+        Evaluate(name: any): any;
+
+        /**
+         * マクロまたは関数を名前で呼び出す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.run
+         */
+        Run(macro: any, arg1?: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): any;
+
+        /**
+         * 指定した時刻にプロシージャを実行するよう予約する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.ontime
+         */
+        OnTime(earliestTime: any, procedure: string, latestTime?: any, schedule?: any): void;
+
+        /**
+         * キー操作にプロシージャを割り当てる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.onkey
+         */
+        OnKey(key: string, procedure?: any): void;
+
+        /**
+         * 指定した時刻までマクロを一時停止する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.wait
+         */
+        Wait(time: any): boolean;
+
+        /**
+         * 開いているすべてのブックを再計算する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.calculate
+         */
+        Calculate(): void;
+
+        /**
+         * 開いているすべてのブックを強制的に完全再計算する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.calculatefull
+         */
+        CalculateFull(): void;
+
+        /**
+         * 依存関係を作り直してから完全再計算する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.calculatefullrebuild
+         */
+        CalculateFullRebuild(): void;
+
+        /**
+         * 入力ダイアログを表示する。`type` で受け取る値の種類（数値・セル範囲など）を指定できる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.inputbox
+         */
+        InputBox(prompt: string, title?: any, defaultValue?: any, left?: any, top?: any, helpFile?: any, helpContextId?: any, type?: any): any;
+
+        /**
+         * [ファイルを開く] ダイアログを表示してパスを返す（キャンセル時は False）。ファイルは開かない。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.getopenfilename
+         */
+        GetOpenFilename(fileFilter?: any, filterIndex?: any, title?: any, buttonText?: any, multiSelect?: any): any;
+
+        /**
+         * [名前を付けて保存] ダイアログを表示してパスを返す（キャンセル時は False）。保存はしない。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.getsaveasfilename
+         */
+        GetSaveAsFilename(initialFilename?: any, fileFilter?: any, filterIndex?: any, title?: any, buttonText?: any): any;
+
+        /**
+         * ファイル / フォルダー選択ダイアログのオブジェクトを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.filedialog
+         */
+        FileDialog(fileDialogType: Office.MsoFileDialogType): Office.FileDialog;
+
+        /**
+         * 指定したセル範囲またはプロシージャへ移動して選択する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.goto
+         */
+        Goto(reference?: any, scroll?: any): void;
+
+        /**
+         * Excel を終了する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.quit
+         */
+        Quit(): void;
+
+        /**
+         * ユーザー定義関数を揮発性（再計算のたびに評価）にする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.volatile
+         */
+        Volatile(volatile?: any): void;
+
+        /**
+         * マクロの呼び出し元の情報（セルから呼ばれた関数なら Range）を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.caller
+         */
+        Caller(index?: any): any;
+
+        /**
+         * 国や地域の設定（区切り文字など）を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.international
+         */
+        International(index?: any): any;
+
+        /**
+         * パスの区切り文字。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.pathseparator
+         */
+        readonly PathSeparator: string;
+
+        /**
+         * 小数点の記号。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.decimalseparator
+         */
+        DecimalSeparator: string;
+
+        /**
+         * 桁区切りの記号。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.thousandsseparator
+         */
+        ThousandsSeparator: string;
+
+        /**
+         * ワークシート関数 MATCH を呼び出す。見つからないときは実行時エラーではなくエラー値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.match
+         */
+        Match(arg1: any, arg2: any, arg3?: any): any;
+
+        /**
+         * ワークシート関数 INDEX を呼び出す。失敗時はエラー値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.index
+         */
+        Index(arg1: any, arg2: any, arg3?: any, arg4?: any): any;
+
+        /**
+         * ワークシート関数 VLOOKUP を呼び出す。見つからないときはエラー値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.vlookup
+         */
+        VLookup(arg1: any, arg2: any, arg3: any, arg4?: any): any;
+
+        /**
+         * 配列の行と列を入れ替える。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.transpose
+         */
+        Transpose(arg1: any): any;
+
+        /**
+         * 数式の参照形式（A1 / R1C1、相対 / 絶対）を変換する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.convertformula
+         */
+        ConvertFormula(formula: any, fromReferenceStyle: XlReferenceStyle, toReferenceStyle?: any, toAbsolute?: any, relativeTo?: any): any;
+
+        /**
+         * コマンド バーのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.commandbars
+         */
+        readonly CommandBars: object;
+
+        /**
+         * VBA エディターのオブジェクト モデル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.vbe
+         */
+        readonly VBE: object;
+
+        /**
+         * アドインのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.addins
+         */
+        readonly AddIns: object;
+
+        /**
+         * COM アドインのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.comaddins
+         */
+        readonly COMAddIns: object;
+
+        /**
+         * 数式の参照形式（A1 / R1C1）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.referencestyle
+         */
+        ReferenceStyle: XlReferenceStyle;
+
+        /**
+         * Excel が操作を受け付けられる状態かどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.ready
+         */
+        readonly Ready: boolean;
+
+        /**
+         * 計算の進行状態。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.calculationstate
+         */
+        readonly CalculationState: XlCalculationState;
+
+        /**
+         * 計算エンジンのバージョン番号。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.calculationversion
+         */
+        readonly CalculationVersion: int;
+
+        /**
+         * Enter キーを押したあとにアクティブ セルを移動するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.moveafterreturn
+         */
+        MoveAfterReturn: boolean;
+
+        /**
+         * Enter キーを押したあとの移動方向。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.moveafterreturndirection
+         */
+        MoveAfterReturnDirection: XlDirection;
+
+        /**
+         * 行や列の挿入・削除をアニメーション表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.enableanimations
+         */
+        EnableAnimations: boolean;
+
+        /**
+         * プリンターとの通信を行うかどうか。`false` にすると PageSetup の設定が速くなる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.printcommunication
+         */
+        PrintCommunication: boolean;
+
+        /**
+         * ブックを開くときにリンクの更新を確認するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.asktoupdatelinks
+         */
+        AskToUpdateLinks: boolean;
+
+        /**
+         * プログラムからファイルを開くときのマクロ セキュリティ。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.automationsecurity
+         */
+        AutomationSecurity: Office.MsoAutomationSecurity;
+
+        /**
+         * 全画面表示かどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.displayfullscreen
+         */
+        DisplayFullScreen: boolean;
+
+        /**
+         * メイン ウィンドウの状態（最大化 / 最小化 / 標準）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.windowstate
+         */
+        WindowState: XlWindowState;
+
+        /**
+         * メイン ウィンドウの幅（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.width
+         */
+        Width: double;
+
+        /**
+         * メイン ウィンドウの高さ（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.height
+         */
+        Height: double;
+
+        /**
+         * メイン ウィンドウ左端の位置（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.left
+         */
+        Left: double;
+
+        /**
+         * メイン ウィンドウ上端の位置（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.top
+         */
+        Top: double;
+
+        /**
+         * Excel のウィンドウを表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.visible
+         */
+        Visible: boolean;
+
+        /**
+         * アクティブなアプリケーションへキー操作を送る。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.sendkeys
+         */
+        SendKeys(keys: any, wait?: any): void;
+
+        /**
+         * 直前のユーザー操作を取り消す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.undo
+         */
+        Undo(): void;
+
+        /**
+         * 直前のユーザー操作を繰り返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.application.repeat
+         */
+        Repeat(): void;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: Application;
+        readonly Name: string;
+        readonly Build: int;
+        readonly Path: string;
+        readonly StartupPath: string;
+        readonly TemplatesPath: string;
+        readonly LibraryPath: string;
+        readonly UserLibraryPath: string;
+        DefaultFilePath: string;
+        readonly OrganizationName: string;
+        readonly ProductCode: string;
+        ActivePrinter: string;
+        CalculationInterruptKey: XlCalculationInterruptKey;
+        CalculateBeforeSave: boolean;
+        Iteration: boolean;
+        MaxIterations: int;
+        MaxChange: double;
+        DisplayFormulaBar: boolean;
+        DisplayScrollBars: boolean;
+        readonly UsableWidth: double;
+        readonly UsableHeight: double;
+        UserControl: boolean;
+        UseSystemSeparators: boolean;
+        SheetsInNewWorkbook: int;
+        StandardFont: string;
+        StandardFontSize: double;
+        CellDragAndDrop: boolean;
+        CopyObjectsWithCells: boolean;
+        EditDirectlyInCell: boolean;
+        EnableAutoComplete: boolean;
+        readonly Dialogs: object;
+        readonly RecentFiles: object;
+        CalculateUntilAsyncQueriesDone(): void;
+        ExecuteExcel4Macro(str: string): any;
+        CentimetersToPoints(centimeters: double): double;
+        InchesToPoints(inches: double): double;
+        CheckSpelling(word: string, customDictionary?: any, ignoreUppercase?: any): boolean;
+        GetPhonetic(text?: any): string;
+        AddCustomList(listArray: any, byRow?: any): void;
+        DeleteCustomList(listNum: int): void;
+        OnRepeat(text: string, procedure: string): void;
+        OnUndo(text: string, procedure: string): void;
+    }
+
+    /**
+     * 開いているすべてのブックのコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.workbooks
+     */
+    interface Workbooks {
+        /**
+         * インデックスまたはブック名でブックを返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbooks.item
+         */
+        (index: any): Workbook;
+
+        /**
+         * インデックスまたはブック名でブックを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbooks.item
+         */
+        Item(index: any): Workbook;
+
+        /**
+         * 開いているブックの数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbooks.count
+         */
+        readonly Count: int;
+
+        /**
+         * 新しいブックを作成する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbooks.add
+         */
+        Add(template?: any): Workbook;
+
+        /**
+         * ブックを開く。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbooks.open
+         */
+        Open(filename: string, updateLinks?: any, readOnly?: any, format?: any, password?: any, writeResPassword?: any, ignoreReadOnlyRecommended?: any, origin?: any, delimiter?: any, editable?: any, notify?: any, converter?: any, addToMru?: any, local?: any, corruptLoad?: any): Workbook;
+
+        /**
+         * テキスト ファイルを区切り方を指定して新しいブックとして開く。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbooks.opentext
+         */
+        OpenText(filename: string, origin?: any, startRow?: any, dataType?: any, textQualifier?: XlTextQualifier, consecutiveDelimiter?: any, tab?: any, semicolon?: any, comma?: any, space?: any, other?: any, otherChar?: any, fieldInfo?: any, textVisualLayout?: any, decimalSeparator?: any, thousandsSeparator?: any, trailingMinusNumbers?: any, local?: any): void;
+
+        /**
+         * XML データ ファイルを開く。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbooks.openxml
+         */
+        OpenXML(filename: string, stylesheets?: any, loadOption?: any): Workbook;
+
+        /**
+         * 開いているすべてのブックを閉じる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbooks.close
+         */
+        Close(): void;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * Excel のブックを表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.workbook
+     */
+    interface Workbook {
+        /**
+         * ブックのファイル名（パスなし）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.name
+         */
+        readonly Name: string;
+
+        /**
+         * パスを含む完全なファイル名。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.fullname
+         */
+        readonly FullName: string;
+
+        /**
+         * ブックがあるフォルダーのパス。未保存なら空文字列。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.path
+         */
+        readonly Path: string;
+
+        /**
+         * 最後の保存以降に変更がなければ `true`。`true` を代入すると変更なし扱いになる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.saved
+         */
+        Saved: boolean;
+
+        /**
+         * 読み取り専用で開いているかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.readonly
+         */
+        readonly ReadOnly: boolean;
+
+        /**
+         * ブック内のすべてのワークシート。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.worksheets
+         */
+        readonly Worksheets: Sheets;
+
+        /**
+         * ブック内のすべてのシート（グラフ シートを含む）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.sheets
+         */
+        readonly Sheets: Sheets;
+
+        /**
+         * ブックの名前定義のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.names
+         */
+        readonly Names: Names;
+
+        /**
+         * ブックを表示しているウィンドウのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.windows
+         */
+        readonly Windows: Windows;
+
+        /**
+         * ブックでアクティブなシート。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.activesheet
+         */
+        readonly ActiveSheet: object;
+
+        /**
+         * ブックを上書き保存する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.save
+         */
+        Save(): void;
+
+        /**
+         * 別名または別形式で保存する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.saveas
+         */
+        SaveAs(filename?: any, fileFormat?: any, password?: any, writeResPassword?: any, readOnlyRecommended?: any, createBackup?: any, accessMode?: XlSaveAsAccessMode, conflictResolution?: any, addToMru?: any, textCodepage?: any, textVisualLayout?: any, local?: any): void;
+
+        /**
+         * 開いているブックはそのままに、コピーをファイルへ保存する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.savecopyas
+         */
+        SaveCopyAs(filename: any): void;
+
+        /**
+         * ブックを閉じる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.close
+         */
+        Close(saveChanges?: any, filename?: any, routeWorkbook?: any): void;
+
+        /**
+         * ブックをアクティブにする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.activate(method)
+         */
+        Activate(): void;
+
+        /**
+         * ブックの構成やウィンドウを保護する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.protect
+         */
+        Protect(password?: any, structure?: any, windows?: any): void;
+
+        /**
+         * ブックの保護を解除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.unprotect
+         */
+        Unprotect(password?: any): void;
+
+        /**
+         * 外部データ範囲とピボットテーブルをすべて更新する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.refreshall
+         */
+        RefreshAll(): void;
+
+        /**
+         * ブックのファイル形式。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.fileformat
+         */
+        readonly FileFormat: XlFileFormat;
+
+        /**
+         * VBA プロジェクトを持っているかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.hasvbproject
+         */
+        readonly HasVBProject: boolean;
+
+        /**
+         * ブックの VBA プロジェクト（VBIDE.VBProject）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.vbproject
+         */
+        readonly VBProject: object;
+
+        /**
+         * 組み込みのドキュメント プロパティ（作成者・タイトルなど）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.builtindocumentproperties
+         */
+        readonly BuiltinDocumentProperties: object;
+
+        /**
+         * ユーザー設定のドキュメント プロパティ。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.customdocumentproperties
+         */
+        readonly CustomDocumentProperties: object;
+
+        /**
+         * ブックが属する Application オブジェクト。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.application
+         */
+        readonly Application: Application;
+
+        /**
+         * 親オブジェクト。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.parent
+         */
+        readonly Parent: object;
+
+        /**
+         * ブック モジュールのコード名（既定は ThisWorkbook）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.codename
+         */
+        readonly CodeName: string;
+
+        /**
+         * 1904 年から計算する日付システムを使うかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.date1904
+         */
+        Date1904: boolean;
+
+        /**
+         * PDF または XPS 形式で出力する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.exportasfixedformat
+         */
+        ExportAsFixedFormat(type: XlFixedFormatType, filename?: any, quality?: any, includeDocProperties?: any, ignorePrintAreas?: any, from?: any, to?: any, openAfterPublish?: any, fixedFormatExtClassPtr?: any): void;
+
+        /**
+         * ブックを印刷する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.printout
+         */
+        PrintOut(from?: any, to?: any, copies?: any, preview?: any, activePrinter?: any, printToFile?: any, collate?: any, prToFileName?: any, ignorePrintAreas?: any): void;
+
+        /**
+         * 外部データ接続のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.connections
+         */
+        readonly Connections: object;
+
+        /**
+         * Power Query のクエリのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.workbook.queries
+         */
+        readonly Queries: object;
+
+        // その他のメンバー
+        readonly ActiveChart: Chart;
+        readonly Charts: Sheets;
+        readonly Styles: object;
+        readonly HasPassword: boolean;
+        Password: string;
+        readonly ProtectStructure: boolean;
+        readonly ProtectWindows: boolean;
+        readonly ReadOnlyRecommended: boolean;
+        readonly MultiUserEditing: boolean;
+        IsAddin: boolean;
+        UpdateLinks: XlUpdateLinks;
+        PrecisionAsDisplayed: boolean;
+        CheckCompatibility: boolean;
+        readonly WriteReserved: boolean;
+        AutoSaveOn: boolean;
+        Colors(index?: any): any;
+        NewWindow(): Window;
+        PrintPreview(enableChanges?: any): void;
+        ChangeFileAccess(mode: XlFileAccess, writePassword?: any, notify?: any): void;
+        ChangeLink(name: string, newName: string, type?: XlLinkType): void;
+        BreakLink(name: string, type: XlLinkType): void;
+        LinkSources(type?: any): any;
+        UpdateLink(name?: any, type?: any): void;
+        RunAutoMacros(which: XlRunAutoMacro): void;
+        FollowHyperlink(address: string, subAddress?: any, newWindow?: any, addHistory?: any, extraInfo?: any, method?: any, headerInfo?: any): void;
+        DeleteNumberFormat(numberFormat: string): void;
+        ResetColors(): void;
+    }
+
+    /**
+     * ブック内のシート（ワークシート / グラフ シート）のコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.sheets
+     */
+    interface Sheets {
+        /**
+         * インデックスまたはシート名でシートを返す（既定メンバー）。戻り値は Object 型。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sheets.item
+         */
+        (index: any): object;
+
+        /**
+         * インデックスまたはシート名でシートを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sheets.item
+         */
+        Item(index: any): object;
+
+        /**
+         * シートの数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sheets.count
+         */
+        readonly Count: int;
+
+        /**
+         * 新しいシートを追加してアクティブにする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sheets.add
+         */
+        Add(before?: any, after?: any, count?: any, type?: any): object;
+
+        /**
+         * シートをコピーする。位置を省略すると新しいブックに作られる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sheets.copy
+         */
+        Copy(before?: any, after?: any): void;
+
+        /**
+         * シートを移動する。位置を省略すると新しいブックに移る。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sheets.move
+         */
+        Move(before?: any, after?: any): void;
+
+        /**
+         * シートを削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sheets.delete
+         */
+        Delete(): void;
+
+        /**
+         * シートを選択する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sheets.select
+         */
+        Select(replace?: any): void;
+
+        /**
+         * シートを印刷する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sheets.printout
+         */
+        PrintOut(from?: any, to?: any, copies?: any, preview?: any, activePrinter?: any, printToFile?: any, collate?: any, prToFileName?: any, ignorePrintAreas?: any): void;
+
+        /**
+         * シートを表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sheets.visible
+         */
+        Visible: any;
+
+        // その他のメンバー
+        PrintPreview(enableChanges?: any): void;
+        FillAcrossSheets(range: Range, type?: XlFillWith): void;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * ワークシートを表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.worksheet
+     */
+    interface Worksheet {
+        /**
+         * シート名（シート見出しに表示される名前）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.name
+         */
+        Name: string;
+
+        /**
+         * シート モジュールのコード名。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.codename
+         */
+        readonly CodeName: string;
+
+        /**
+         * シートの並び順での位置（1 始まり）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.index
+         */
+        readonly Index: int;
+
+        /**
+         * シートの表示状態（表示 / 非表示 / ユーザーが再表示できない非表示）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.visible
+         */
+        Visible: XlSheetVisibility;
+
+        /**
+         * シート上のセルを返す。引数なしなら全セル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.cells
+         */
+        Cells(row?: any, col?: any): Range;
+
+        /**
+         * セルまたはセル範囲を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.range
+         */
+        Range(cell1: any, cell2?: any): Range;
+
+        /**
+         * シートの行を返す。引数なしなら全行。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.rows
+         */
+        Rows(index?: any): Range;
+
+        /**
+         * シートの列を返す。引数なしなら全列。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.columns
+         */
+        Columns(index?: any): Range;
+
+        /**
+         * 使用されているセル範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.usedrange
+         */
+        readonly UsedRange: Range;
+
+        /**
+         * シートをアクティブにする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.activate(method)
+         */
+        Activate(): void;
+
+        /**
+         * シートを選択する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.select
+         */
+        Select(replace?: any): void;
+
+        /**
+         * シートをコピーする。位置を省略すると新しいブックに作られる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.copy
+         */
+        Copy(before?: any, after?: any): void;
+
+        /**
+         * シートを移動する。位置を省略すると新しいブックに移る。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.move
+         */
+        Move(before?: any, after?: any): void;
+
+        /**
+         * シートを削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.delete
+         */
+        Delete(): void;
+
+        /**
+         * シートを保護する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.protect
+         */
+        Protect(password?: any, drawingObjects?: any, contents?: any, scenarios?: any, userInterfaceOnly?: any, allowFormattingCells?: any, allowFormattingColumns?: any, allowFormattingRows?: any, allowInsertingColumns?: any, allowInsertingRows?: any, allowInsertingHyperlinks?: any, allowDeletingColumns?: any, allowDeletingRows?: any, allowSorting?: any, allowFiltering?: any, allowUsingPivotTables?: any): void;
+
+        /**
+         * シートの保護を解除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.unprotect
+         */
+        Unprotect(password?: any): void;
+
+        /**
+         * シートの内容が保護されているかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.protectcontents
+         */
+        readonly ProtectContents: boolean;
+
+        /**
+         * このシートだけを再計算する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.calculate(method)
+         */
+        Calculate(): void;
+
+        /**
+         * クリップボードの内容をシートに貼り付ける。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.paste
+         */
+        Paste(destination?: any, link?: any): void;
+
+        /**
+         * クリップボードの内容を形式を指定して貼り付ける。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.pastespecial
+         */
+        PasteSpecial(format?: any, link?: any, displayAsIcon?: any, iconFileName?: any, iconIndex?: any, iconLabel?: any, noHTMLFormatting?: any): void;
+
+        /**
+         * シート上の図形のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.shapes
+         */
+        readonly Shapes: Shapes;
+
+        /**
+         * シート上のテーブルのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.listobjects
+         */
+        readonly ListObjects: ListObjects;
+
+        /**
+         * 埋め込みグラフを 1 つ、または全体のコレクションを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.chartobjects
+         */
+        ChartObjects(index?: any): object;
+
+        /**
+         * シート レベルの名前定義のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.names
+         */
+        readonly Names: Names;
+
+        /**
+         * シート上のハイパーリンクのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.hyperlinks
+         */
+        readonly Hyperlinks: Hyperlinks;
+
+        /**
+         * シート上のコメント（メモ）のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.comments
+         */
+        readonly Comments: object;
+
+        /**
+         * ページ設定。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.pagesetup
+         */
+        readonly PageSetup: PageSetup;
+
+        /**
+         * オートフィルターの設定。フィルターがなければ Nothing。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.autofilter
+         */
+        readonly AutoFilter: AutoFilter;
+
+        /**
+         * オートフィルターの矢印が表示されているかどうか。`false` を代入するとフィルターを解除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.autofiltermode
+         */
+        AutoFilterMode: boolean;
+
+        /**
+         * フィルターで絞り込まれた状態かどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.filtermode
+         */
+        readonly FilterMode: boolean;
+
+        /**
+         * フィルターによる絞り込みを解除してすべての行を表示する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.showalldata
+         */
+        ShowAllData(): void;
+
+        /**
+         * シート見出し（色など）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.tab
+         */
+        readonly Tab: object;
+
+        /**
+         * 親オブジェクト（通常はブック）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.parent
+         */
+        readonly Parent: object;
+
+        /**
+         * シートが属する Application オブジェクト。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.application
+         */
+        readonly Application: Application;
+
+        /**
+         * 名前や数式の文字列を、このシートを基準に評価する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.evaluate
+         */
+        Evaluate(name: any): any;
+
+        /**
+         * シートを印刷する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.printout
+         */
+        PrintOut(from?: any, to?: any, copies?: any, preview?: any, activePrinter?: any, printToFile?: any, collate?: any, prToFileName?: any, ignorePrintAreas?: any): void;
+
+        /**
+         * PDF または XPS 形式で出力する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.exportasfixedformat
+         */
+        ExportAsFixedFormat(type: XlFixedFormatType, filename?: any, quality?: any, includeDocProperties?: any, ignorePrintAreas?: any, from?: any, to?: any, openAfterPublish?: any, fixedFormatExtClassPtr?: any): void;
+
+        /**
+         * このシートを自動再計算の対象にするかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.enablecalculation
+         */
+        EnableCalculation: boolean;
+
+        /**
+         * 列の標準の幅。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.standardwidth
+         */
+        StandardWidth: double;
+
+        /**
+         * 次のシート。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.next
+         */
+        readonly Next: object;
+
+        /**
+         * 前のシート。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.previous
+         */
+        readonly Previous: object;
+
+        /**
+         * シートの並べ替え設定。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.sort
+         */
+        readonly Sort: Sort;
+
+        // その他のメンバー
+        readonly Type: XlSheetType;
+        readonly StandardHeight: double;
+        readonly CircularReference: Range;
+        readonly ProtectionMode: boolean;
+        readonly ProtectDrawingObjects: boolean;
+        readonly ProtectScenarios: boolean;
+        readonly Outline: object;
+        readonly QueryTables: object;
+        readonly HPageBreaks: object;
+        readonly VPageBreaks: object;
+        ScrollArea: string;
+        DisplayPageBreaks: boolean;
+        EnableSelection: XlEnableSelection;
+        EnableAutoFilter: boolean;
+        EnableOutlining: boolean;
+        EnablePivotTable: boolean;
+        PivotTables(index?: any): object;
+        OLEObjects(index?: any): object;
+        PrintPreview(enableChanges?: any): void;
+        SaveAs(filename: string, fileFormat?: any, password?: any, writeResPassword?: any, readOnlyRecommended?: any, createBackup?: any, addToMru?: any, textCodepage?: any, textVisualLayout?: any, local?: any): void;
+        SetBackgroundPicture(filename: string): void;
+        ResetAllPageBreaks(): void;
+        CheckSpelling(customDictionary?: any, ignoreUppercase?: any, alwaysSuggest?: any, spellLang?: any): void;
+    }
+
+    // ---------------------------------------------------------------------
+    // セル範囲と書式
+    // ---------------------------------------------------------------------
+
+    /**
+     * セル、行、列、または複数セルからなる範囲を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.range(object)
+     */
+    interface Range {
+        /**
+         * 既定メンバー（Item）。`rng(1, 2)` の形で、範囲の左上を基準にしたセルを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.item
+         */
+        (row: any, col?: any): Range;
+
+        /**
+         * 範囲の左上を基準にした位置のセルを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.item
+         */
+        Item(rowIndex: any, columnIndex?: any): Range;
+
+        /**
+         * セルの値。複数セルの範囲では 2 次元配列（1 始まり）を読み書きする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.value
+         */
+        Value: any;
+
+        /**
+         * 通貨型・日付型に変換しない生の値。日付はシリアル値（Double）になる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.value2
+         */
+        Value2: any;
+
+        /**
+         * A1 形式の数式。数式でないセルでは値そのもの。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.formula
+         */
+        Formula: any;
+
+        /**
+         * R1C1 形式の数式。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.formular1c1
+         */
+        FormulaR1C1: any;
+
+        /**
+         * 動的配列に対応した A1 形式の数式。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.formula2
+         */
+        Formula2: any;
+
+        /**
+         * セルに表示されている文字列（書式適用後）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.text
+         */
+        readonly Text: any;
+
+        /**
+         * 範囲の参照を文字列で返す（既定は `$A$1` 形式）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.address
+         */
+        Address(rowAbsolute?: any, columnAbsolute?: any, referenceStyle?: XlReferenceStyle, external?: any, relativeTo?: any): string;
+
+        /**
+         * 範囲の先頭行の行番号。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.row
+         */
+        readonly Row: int;
+
+        /**
+         * 範囲の先頭列の列番号。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.column
+         */
+        readonly Column: int;
+
+        /**
+         * 範囲内の行を返す。引数なしなら行の集まりとしての範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.rows
+         */
+        Rows(index?: any): Range;
+
+        /**
+         * 範囲内の列を返す。引数なしなら列の集まりとしての範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.columns
+         */
+        Columns(index?: any): Range;
+
+        /**
+         * セル（または行・列）の数。Long の上限を超えるとエラーになる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.count
+         */
+        readonly Count: int;
+
+        /**
+         * セルの数。シート全体のような大きな範囲でも数えられる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.countlarge
+         */
+        readonly CountLarge: any;
+
+        /**
+         * 範囲内のセルを返す。引数なしなら範囲そのもの。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.cells
+         */
+        Cells(row?: any, col?: any): Range;
+
+        /**
+         * 指定した行数・列数だけずらした範囲を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.offset
+         */
+        Offset(rowOffset?: any, columnOffset?: any): Range;
+
+        /**
+         * 左上を固定したまま、行数・列数を変えた範囲を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.resize
+         */
+        Resize(rowSize?: any, columnSize?: any): Range;
+
+        /**
+         * データが連続する領域の端のセルを返す（Ctrl+方向キーに相当）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.end
+         */
+        End(direction: XlDirection): Range;
+
+        /**
+         * 範囲を含む行全体。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.entirerow
+         */
+        readonly EntireRow: Range;
+
+        /**
+         * 範囲を含む列全体。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.entirecolumn
+         */
+        readonly EntireColumn: Range;
+
+        /**
+         * 空白行と空白列で囲まれた、データの連続する領域。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.currentregion
+         */
+        readonly CurrentRegion: Range;
+
+        /**
+         * 複数選択された範囲の各領域のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.areas
+         */
+        readonly Areas: object;
+
+        /**
+         * 範囲があるワークシート。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.worksheet
+         */
+        readonly Worksheet: Worksheet;
+
+        /**
+         * 親オブジェクト（通常はワークシート）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.parent
+         */
+        readonly Parent: object;
+
+        /**
+         * 範囲が属する Application オブジェクト。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.application
+         */
+        readonly Application: Application;
+
+        /**
+         * フォントの書式。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.font
+         */
+        readonly Font: Font;
+
+        /**
+         * 塗りつぶしの書式。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.interior
+         */
+        readonly Interior: Interior;
+
+        /**
+         * 罫線のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.borders
+         */
+        readonly Borders: Borders;
+
+        /**
+         * 表示形式（書式記号は英語版の表記）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.numberformat
+         */
+        NumberFormat: any;
+
+        /**
+         * 表示形式（書式記号は実行環境の言語の表記）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.numberformatlocal
+         */
+        NumberFormatLocal: any;
+
+        /**
+         * 横方向の配置。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.horizontalalignment
+         */
+        HorizontalAlignment: any;
+
+        /**
+         * 縦方向の配置。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.verticalalignment
+         */
+        VerticalAlignment: any;
+
+        /**
+         * セル内で折り返して全体を表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.wraptext
+         */
+        WrapText: any;
+
+        /**
+         * 結合セルを含むかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.mergecells
+         */
+        MergeCells: any;
+
+        /**
+         * 指定したセルを含む結合範囲。結合されていなければそのセル自身。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.mergearea
+         */
+        readonly MergeArea: Range;
+
+        /**
+         * セルを結合する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.merge
+         */
+        Merge(across?: any): void;
+
+        /**
+         * セルの結合を解除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.unmerge
+         */
+        UnMerge(): void;
+
+        /**
+         * 列の幅（標準フォントの文字数単位）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.columnwidth
+         */
+        ColumnWidth: any;
+
+        /**
+         * 行の高さ（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.rowheight
+         */
+        RowHeight: any;
+
+        /**
+         * 範囲の高さ（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.height
+         */
+        readonly Height: any;
+
+        /**
+         * 範囲の幅（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.width
+         */
+        readonly Width: any;
+
+        /**
+         * シート左端から範囲の左端までの距離（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.left
+         */
+        readonly Left: any;
+
+        /**
+         * シート上端から範囲の上端までの距離（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.top
+         */
+        readonly Top: any;
+
+        /**
+         * 行または列が非表示かどうか。行全体・列全体の範囲に対して使う。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.hidden
+         */
+        Hidden: any;
+
+        /**
+         * セルがロックされているかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.locked
+         */
+        Locked: any;
+
+        /**
+         * 数式が入っているかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.hasformula
+         */
+        readonly HasFormula: any;
+
+        /**
+         * 範囲に付けられた名前（Name オブジェクト）。文字列を代入すると名前を定義する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.name
+         */
+        Name: any;
+
+        /**
+         * セルに付いているコメント（メモ）。なければ Nothing。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.comment
+         */
+        readonly Comment: Comment;
+
+        /**
+         * 入力規則。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.validation
+         */
+        readonly Validation: Validation;
+
+        /**
+         * 範囲内のハイパーリンクのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.hyperlinks
+         */
+        readonly Hyperlinks: Hyperlinks;
+
+        /**
+         * 範囲が属するテーブル。テーブル外なら Nothing。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.listobject
+         */
+        readonly ListObject: ListObject;
+
+        /**
+         * 条件に一致する最初のセルを返す。見つからなければ Nothing。検索設定は次回に持ち越される。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.find
+         */
+        Find(what: any, after?: any, lookIn?: any, lookAt?: any, searchOrder?: any, searchDirection?: XlSearchDirection, matchCase?: any, matchByte?: any, searchFormat?: any): Range;
+
+        /**
+         * Find と同じ条件で次のセルを検索する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.findnext
+         */
+        FindNext(after?: any): Range;
+
+        /**
+         * Find と同じ条件で前のセルを検索する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.findprevious
+         */
+        FindPrevious(after?: any): Range;
+
+        /**
+         * 範囲内の文字列を置換する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.replace
+         */
+        Replace(what: any, replacement: any, lookAt?: any, searchOrder?: any, matchCase?: any, matchByte?: any, searchFormat?: any, replaceFormat?: any, formulaVersion?: any): boolean;
+
+        /**
+         * 範囲をコピーする。貼り付け先を省略するとクリップボードへコピーする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.copy
+         */
+        Copy(destination?: any): void;
+
+        /**
+         * 範囲を切り取る。貼り付け先を省略するとクリップボードへ切り取る。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.cut
+         */
+        Cut(destination?: any): void;
+
+        /**
+         * クリップボードの内容を、貼り付ける要素（値・書式など）を指定して貼り付ける。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.pastespecial
+         */
+        PasteSpecial(paste?: XlPasteType, operation?: XlPasteSpecialOperation, skipBlanks?: any, transpose?: any): void;
+
+        /**
+         * 値・数式・書式をすべて消去する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.clear
+         */
+        Clear(): void;
+
+        /**
+         * 値と数式だけを消去する（書式は残る）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.clearcontents
+         */
+        ClearContents(): void;
+
+        /**
+         * 書式だけを消去する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.clearformats
+         */
+        ClearFormats(): void;
+
+        /**
+         * コメント（メモ）を消去する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.clearcomments
+         */
+        ClearComments(): void;
+
+        /**
+         * セルを削除して詰める。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.delete
+         */
+        Delete(shift?: any): void;
+
+        /**
+         * 空白セルを挿入して既存のセルをずらす。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.insert
+         */
+        Insert(shift?: any, copyOrigin?: any): void;
+
+        /**
+         * 範囲を選択する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.select
+         */
+        Select(): void;
+
+        /**
+         * セルをアクティブにする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.activate
+         */
+        Activate(): void;
+
+        /**
+         * 内容に合わせて列幅または行の高さを自動調整する。行全体・列全体の範囲に対して使う。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.autofit
+         */
+        AutoFit(): void;
+
+        /**
+         * オートフィルを実行する。`destination` は元の範囲を含む必要がある。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.autofill
+         */
+        AutoFill(destination: Range, type?: XlAutoFillType): void;
+
+        /**
+         * オートフィルターで絞り込む。引数をすべて省略するとフィルターの矢印を切り替える。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.autofilter
+         */
+        AutoFilter(field?: any, criteria1?: any, operator?: XlAutoFilterOperator, criteria2?: any, visibleDropDown?: any): void;
+
+        /**
+         * 範囲を並べ替える（キーは 3 つまで）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.sort
+         */
+        Sort(key1?: any, order1?: XlSortOrder, key2?: any, type?: any, order2?: XlSortOrder, key3?: any, order3?: XlSortOrder, header?: XlYesNoGuess, orderCustom?: any, matchCase?: any, orientation?: XlSortOrientation, sortMethod?: XlSortMethod, dataOption1?: XlSortDataOption, dataOption2?: XlSortDataOption, dataOption3?: XlSortDataOption): void;
+
+        /**
+         * 重複する行を削除する。`columns` には比較する列番号の配列を渡す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.removeduplicates
+         */
+        RemoveDuplicates(columns?: any, header?: XlYesNoGuess): void;
+
+        /**
+         * 空白セル・可視セル・定数セルなど、種類に一致するセルを返す。該当がないと実行時エラーになる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.specialcells
+         */
+        SpecialCells(type: XlCellType, value?: any): Range;
+
+        /**
+         * 範囲の先頭行の内容を下方向へコピーする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.filldown
+         */
+        FillDown(): void;
+
+        /**
+         * 範囲の先頭列の内容を右方向へコピーする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.fillright
+         */
+        FillRight(): void;
+
+        /**
+         * 1 列の文字列を区切って複数の列に分割する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.texttocolumns
+         */
+        TextToColumns(destination?: any, dataType?: XlTextParsingType, textQualifier?: XlTextQualifier, consecutiveDelimiter?: any, tab?: any, semicolon?: any, comma?: any, space?: any, other?: any, otherChar?: any, fieldInfo?: any, decimalSeparator?: any, thousandsSeparator?: any, trailingMinusNumbers?: any): void;
+
+        /**
+         * この範囲だけを再計算する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.calculate
+         */
+        Calculate(): void;
+
+        /**
+         * セルにコメント（メモ）を追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.addcomment
+         */
+        AddComment(text?: any): Comment;
+
+        /**
+         * セル内の文字列の一部を表す Characters を返す（文字単位の書式設定用）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.characters
+         */
+        Characters(start?: any, length?: any): Characters;
+
+        /**
+         * 範囲の外周に罫線を引く。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.borderaround
+         */
+        BorderAround(lineStyle?: any, weight?: XlBorderWeight, colorIndex?: XlColorIndex, color?: any, themeColor?: any): void;
+
+        /**
+         * この範囲を基準にした相対参照でセル範囲を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.range
+         */
+        Range(cell1: any, cell2?: any): Range;
+
+        // その他のメンバー
+        AddressLocal(rowAbsolute?: any, columnAbsolute?: any, referenceStyle?: XlReferenceStyle, external?: any, relativeTo?: any): string;
+        FormulaLocal: any;
+        FormulaR1C1Local: any;
+        FormulaArray: any;
+        FormulaHidden: any;
+        readonly HasArray: any;
+        readonly CurrentArray: Range;
+        IndentLevel: any;
+        Orientation: any;
+        ShrinkToFit: any;
+        AddIndent: any;
+        Style: any;
+        ID: string;
+        PageBreak: int;
+        OutlineLevel: any;
+        ShowDetail: any;
+        UseStandardHeight: any;
+        UseStandardWidth: any;
+        readonly PrefixCharacter: any;
+        readonly Next: Range;
+        readonly Previous: Range;
+        readonly Dependents: Range;
+        readonly DirectDependents: Range;
+        readonly Precedents: Range;
+        readonly DirectPrecedents: Range;
+        readonly FormatConditions: FormatConditions;
+        readonly DisplayFormat: object;
+        readonly PivotTable: object;
+        readonly QueryTable: object;
+        ClearNotes(): void;
+        ClearOutline(): void;
+        ClearHyperlinks(): void;
+        FillUp(): void;
+        FillLeft(): void;
+        Justify(): void;
+        Show(): void;
+        Dirty(): void;
+        ColumnDifferences(comparison: any): Range;
+        RowDifferences(comparison: any): Range;
+        CopyFromRecordset(data: object, maxRows?: any, maxColumns?: any): int;
+        CopyPicture(appearance?: XlPictureAppearance, format?: XlCopyPictureFormat): void;
+        NoteText(text?: any, start?: any, length?: any): string;
+        Group(start?: any, end?: any, by?: any, periods?: any): void;
+        Ungroup(): void;
+        Subtotal(groupBy: int, func: XlConsolidationFunction, totalList: any, replace?: any, pageBreaks?: any, summaryBelowData?: XlSummaryRow): void;
+        RemoveSubtotal(): void;
+        AdvancedFilter(action: XlFilterAction, criteriaRange?: any, copyToRange?: any, unique?: any): void;
+        PrintOut(from?: any, to?: any, copies?: any, preview?: any, activePrinter?: any, printToFile?: any, collate?: any, prToFileName?: any): void;
+        PrintPreview(enableChanges?: any): void;
+        ExportAsFixedFormat(type: XlFixedFormatType, filename?: any, quality?: any, includeDocProperties?: any, ignorePrintAreas?: any, from?: any, to?: any, openAfterPublish?: any, fixedFormatExtClassPtr?: any): void;
+        CheckSpelling(customDictionary?: any, ignoreUppercase?: any, alwaysSuggest?: any, spellLang?: any): any;
+    }
+
+    /**
+     * 文字の書式（フォント名・サイズ・色など）を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.font(object)
+     */
+    interface Font {
+        /**
+         * フォント名。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.name
+         */
+        Name: any;
+
+        /**
+         * フォント サイズ（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.size
+         */
+        Size: any;
+
+        /**
+         * 太字かどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.bold
+         */
+        Bold: any;
+
+        /**
+         * 斜体かどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.italic
+         */
+        Italic: any;
+
+        /**
+         * 下線の種類。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.underline
+         */
+        Underline: any;
+
+        /**
+         * 取り消し線を付けるかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.strikethrough
+         */
+        Strikethrough: any;
+
+        /**
+         * 文字色（RGB 値）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.color
+         */
+        Color: any;
+
+        /**
+         * 文字色（カラー パレットのインデックス）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.colorindex
+         */
+        ColorIndex: any;
+
+        /**
+         * テーマの配色での文字色。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.themecolor
+         */
+        ThemeColor: any;
+
+        /**
+         * 色の明るさの調整（-1 ～ 1）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.tintandshade
+         */
+        TintAndShade: any;
+
+        /**
+         * フォント スタイルの名前（"太字 斜体" など）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.font.fontstyle
+         */
+        FontStyle: any;
+
+        // その他のメンバー
+        Subscript: any;
+        Superscript: any;
+        Background: any;
+        ThemeFont: XlThemeFont;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * セルや図形の塗りつぶしを表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.interior(object)
+     */
+    interface Interior {
+        /**
+         * 塗りつぶしの色（RGB 値）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.interior.color
+         */
+        Color: any;
+
+        /**
+         * 塗りつぶしの色（カラー パレットのインデックス）。`xlColorIndexNone` で塗りつぶしなし。
+         * @see https://learn.microsoft.com/office/vba/api/excel.interior.colorindex
+         */
+        ColorIndex: any;
+
+        /**
+         * 塗りつぶしのパターン。
+         * @see https://learn.microsoft.com/office/vba/api/excel.interior.pattern
+         */
+        Pattern: any;
+
+        /**
+         * パターンの色（RGB 値）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.interior.patterncolor
+         */
+        PatternColor: any;
+
+        /**
+         * パターンの色（カラー パレットのインデックス）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.interior.patterncolorindex
+         */
+        PatternColorIndex: any;
+
+        /**
+         * テーマの配色での塗りつぶし色。
+         * @see https://learn.microsoft.com/office/vba/api/excel.interior.themecolor
+         */
+        ThemeColor: any;
+
+        /**
+         * 色の明るさの調整（-1 ～ 1）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.interior.tintandshade
+         */
+        TintAndShade: any;
+
+        // その他のメンバー
+        PatternThemeColor: any;
+        PatternTintAndShade: any;
+        InvertIfNegative: any;
+        readonly Gradient: object;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * セル範囲の罫線（上下左右・内側・斜め）のコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.borders
+     */
+    interface Borders {
+        /**
+         * 位置を指定して罫線を返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.borders.item
+         */
+        (index: XlBordersIndex): Border;
+
+        /**
+         * 位置を指定して罫線を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.borders.item
+         */
+        Item(index: XlBordersIndex): Border;
+
+        /**
+         * 罫線の数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.borders.count
+         */
+        readonly Count: int;
+
+        /**
+         * すべての罫線の色（RGB 値）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.borders.color
+         */
+        Color: any;
+
+        /**
+         * すべての罫線の色（カラー パレットのインデックス）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.borders.colorindex
+         */
+        ColorIndex: any;
+
+        /**
+         * すべての罫線の線種。
+         * @see https://learn.microsoft.com/office/vba/api/excel.borders.linestyle
+         */
+        LineStyle: any;
+
+        /**
+         * すべての罫線の太さ。
+         * @see https://learn.microsoft.com/office/vba/api/excel.borders.weight
+         */
+        Weight: any;
+
+        // その他のメンバー
+        Value: any;
+        ThemeColor: any;
+        TintAndShade: any;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * 1 本の罫線を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.border(object)
+     */
+    interface Border {
+        /**
+         * 罫線の色（RGB 値）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.border.color
+         */
+        Color: any;
+
+        /**
+         * 罫線の色（カラー パレットのインデックス）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.border.colorindex
+         */
+        ColorIndex: any;
+
+        /**
+         * 罫線の線種。`xlLineStyleNone` で罫線なし。
+         * @see https://learn.microsoft.com/office/vba/api/excel.border.linestyle
+         */
+        LineStyle: any;
+
+        /**
+         * 罫線の太さ。
+         * @see https://learn.microsoft.com/office/vba/api/excel.border.weight
+         */
+        Weight: any;
+
+        // その他のメンバー
+        ThemeColor: any;
+        TintAndShade: any;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * セルや図形内の文字列の一部を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.characters
+     */
+    interface Characters {
+        /**
+         * 対象部分の文字列。
+         * @see https://learn.microsoft.com/office/vba/api/excel.characters.text
+         */
+        Text: string;
+
+        /**
+         * 文字数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.characters.count
+         */
+        readonly Count: int;
+
+        /**
+         * 対象部分のフォント書式。
+         * @see https://learn.microsoft.com/office/vba/api/excel.characters.font
+         */
+        readonly Font: Font;
+
+        /**
+         * 対象部分の文字列を挿入した文字列で置き換える。
+         * @see https://learn.microsoft.com/office/vba/api/excel.characters.insert
+         */
+        Insert(str: string): void;
+
+        /**
+         * 対象部分の文字を削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.characters.delete
+         */
+        Delete(): void;
+
+        // その他のメンバー
+        Caption: string;
+        PhoneticCharacters: string;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * セルのコメント（メモ）を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.comment
+     */
+    interface Comment {
+        /**
+         * コメントの文字列を取得または設定する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.comment.text
+         */
+        Text(text?: any, start?: any, overwrite?: any): string;
+
+        /**
+         * コメントの作成者。
+         * @see https://learn.microsoft.com/office/vba/api/excel.comment.author
+         */
+        readonly Author: string;
+
+        /**
+         * コメントの枠を表す図形。
+         * @see https://learn.microsoft.com/office/vba/api/excel.comment.shape
+         */
+        readonly Shape: Shape;
+
+        /**
+         * コメントを常に表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.comment.visible
+         */
+        Visible: boolean;
+
+        /**
+         * コメントを削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.comment.delete
+         */
+        Delete(): void;
+
+        // その他のメンバー
+        Next(): Comment;
+        Previous(): Comment;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * シートまたは範囲内のハイパーリンクのコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.hyperlinks
+     */
+    interface Hyperlinks {
+        /**
+         * インデックスでハイパーリンクを返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlinks.item
+         */
+        (index: any): Hyperlink;
+
+        /**
+         * インデックスでハイパーリンクを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlinks.item
+         */
+        Item(index: any): Hyperlink;
+
+        /**
+         * ハイパーリンクの数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlinks.count
+         */
+        readonly Count: int;
+
+        /**
+         * セル範囲または図形にハイパーリンクを追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlinks.add
+         */
+        Add(anchor: object, address: string, subAddress?: any, screenTip?: any, textToDisplay?: any): object;
+
+        /**
+         * コレクション内のハイパーリンクをすべて削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlinks.delete
+         */
+        Delete(): void;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * ハイパーリンクを表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.hyperlink
+     */
+    interface Hyperlink {
+        /**
+         * リンク先のアドレス（URL やファイル パス）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlink.address
+         */
+        Address: string;
+
+        /**
+         * リンク先内の位置（セル参照やブックマーク）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlink.subaddress
+         */
+        SubAddress: string;
+
+        /**
+         * セルに表示する文字列。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlink.texttodisplay
+         */
+        TextToDisplay: string;
+
+        /**
+         * マウスを重ねたときに表示するヒント。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlink.screentip
+         */
+        ScreenTip: string;
+
+        /**
+         * リンクが設定されているセル範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlink.range
+         */
+        readonly Range: Range;
+
+        /**
+         * リンク先を開く。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlink.follow
+         */
+        Follow(newWindow?: any, addHistory?: any, extraInfo?: any, method?: any, headerInfo?: any): void;
+
+        /**
+         * ハイパーリンクを削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.hyperlink.delete
+         */
+        Delete(): void;
+
+        // その他のメンバー
+        EmailSubject: string;
+        readonly Name: string;
+        readonly Shape: Shape;
+        readonly Type: int;
+        AddToFavorites(): void;
+        CreateNewDocument(filename: string, editNow: boolean, overwrite: boolean): void;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * セル範囲の入力規則を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.validation
+     */
+    interface Validation {
+        /**
+         * 入力規則を追加する。既に規則がある場合は先に Delete する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.validation.add
+         */
+        Add(type: XlDVType, alertStyle?: any, operator?: any, formula1?: any, formula2?: any): void;
+
+        /**
+         * 既存の入力規則を変更する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.validation.modify
+         */
+        Modify(type?: any, alertStyle?: any, operator?: any, formula1?: any, formula2?: any): void;
+
+        /**
+         * 入力規則を削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.validation.delete
+         */
+        Delete(): void;
+
+        /**
+         * 入力規則の種類（XlDVType の値）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.validation.type
+         */
+        readonly Type: int;
+
+        /**
+         * 条件の 1 つ目の値または数式。
+         * @see https://learn.microsoft.com/office/vba/api/excel.validation.formula1
+         */
+        readonly Formula1: string;
+
+        /**
+         * 条件の 2 つ目の値または数式。
+         * @see https://learn.microsoft.com/office/vba/api/excel.validation.formula2
+         */
+        readonly Formula2: string;
+
+        /**
+         * 空白を許可するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.validation.ignoreblank
+         */
+        IgnoreBlank: boolean;
+
+        /**
+         * リスト形式でドロップダウンを表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.validation.incelldropdown
+         */
+        InCellDropdown: boolean;
+
+        /**
+         * 入力時メッセージの本文。
+         * @see https://learn.microsoft.com/office/vba/api/excel.validation.inputmessage
+         */
+        InputMessage: string;
+
+        /**
+         * エラー メッセージの本文。
+         * @see https://learn.microsoft.com/office/vba/api/excel.validation.errormessage
+         */
+        ErrorMessage: string;
+
+        // その他のメンバー
+        readonly AlertStyle: int;
+        readonly Operator: int;
+        readonly Value: boolean;
+        ShowInput: boolean;
+        ShowError: boolean;
+        InputTitle: string;
+        ErrorTitle: string;
+        IMEMode: int;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * 名前定義（名前付き範囲）のコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.names
+     */
+    interface Names {
+        /**
+         * インデックスまたは名前で Name を返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.names.item
+         */
+        (index: any, indexLocal?: any, refersTo?: any): Name;
+
+        /**
+         * インデックスまたは名前で Name を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.names.item
+         */
+        Item(index?: any, indexLocal?: any, refersTo?: any): Name;
+
+        /**
+         * 名前定義の数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.names.count
+         */
+        readonly Count: int;
+
+        /**
+         * 名前を定義する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.names.add
+         */
+        Add(name?: any, refersTo?: any, visible?: any, macroType?: any, shortcutKey?: any, category?: any, nameLocal?: any, refersToLocal?: any, categoryLocal?: any, refersToR1C1?: any, refersToR1C1Local?: any): Name;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * 名前定義（名前付き範囲）を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.name
+     */
+    interface Name {
+        /**
+         * 定義された名前。
+         * @see https://learn.microsoft.com/office/vba/api/excel.name.name
+         */
+        Name: string;
+
+        /**
+         * 参照先を表す数式（`=Sheet1!$A$1` の形式）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.name.refersto
+         */
+        RefersTo: any;
+
+        /**
+         * 参照先のセル範囲。参照先が範囲でなければ実行時エラーになる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.name.referstorange
+         */
+        readonly RefersToRange: Range;
+
+        /**
+         * 名前の管理に表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.name.visible
+         */
+        Visible: boolean;
+
+        /**
+         * 名前定義を削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.name.delete
+         */
+        Delete(): void;
+
+        // その他のメンバー
+        NameLocal: string;
+        RefersToLocal: any;
+        RefersToR1C1: any;
+        RefersToR1C1Local: any;
+        Value: string;
+        Comment: string;
+        readonly Index: int;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    // ---------------------------------------------------------------------
+    // ウィンドウ
+    // ---------------------------------------------------------------------
+
+    /**
+     * ウィンドウのコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.windows
+     */
+    interface Windows {
+        /**
+         * インデックスまたはキャプションでウィンドウを返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.windows.item
+         */
+        (index: any): Window;
+
+        /**
+         * インデックスまたはキャプションでウィンドウを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.windows.item
+         */
+        Item(index: any): Window;
+
+        /**
+         * ウィンドウの数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.windows.count
+         */
+        readonly Count: int;
+
+        /**
+         * ウィンドウを整列する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.windows.arrange
+         */
+        Arrange(arrangeStyle?: XlArrangeStyle, activeWorkbook?: any, syncHorizontal?: any, syncVertical?: any): void;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * ブックを表示するウィンドウを表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.window
+     */
+    interface Window {
+        /**
+         * ウィンドウをアクティブにする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.activate
+         */
+        Activate(): void;
+
+        /**
+         * ウィンドウを閉じる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.close
+         */
+        Close(saveChanges?: any, filename?: any, routeWorkbook?: any): boolean;
+
+        /**
+         * ウィンドウのタイトル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.caption
+         */
+        Caption: any;
+
+        /**
+         * ウィンドウの状態（最大化 / 最小化 / 標準）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.windowstate
+         */
+        WindowState: XlWindowState;
+
+        /**
+         * ウィンドウを表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.visible
+         */
+        Visible: boolean;
+
+        /**
+         * ウィンドウ枠を固定するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.freezepanes
+         */
+        FreezePanes: boolean;
+
+        /**
+         * 表示倍率（パーセント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.zoom
+         */
+        Zoom: any;
+
+        /**
+         * 枠線（目盛線）を表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.displaygridlines
+         */
+        DisplayGridlines: boolean;
+
+        /**
+         * 行番号と列番号を表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.displayheadings
+         */
+        DisplayHeadings: boolean;
+
+        /**
+         * 値の代わりに数式を表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.displayformulas
+         */
+        DisplayFormulas: boolean;
+
+        /**
+         * ゼロ値を表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.displayzeros
+         */
+        DisplayZeros: boolean;
+
+        /**
+         * ウィンドウの左上に表示する行の番号。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.scrollrow
+         */
+        ScrollRow: int;
+
+        /**
+         * ウィンドウの左上に表示する列の番号。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.scrollcolumn
+         */
+        ScrollColumn: int;
+
+        /**
+         * ウィンドウに見えているセル範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.visiblerange
+         */
+        readonly VisibleRange: Range;
+
+        /**
+         * ウィンドウでアクティブなセル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.activecell
+         */
+        readonly ActiveCell: Range;
+
+        /**
+         * ウィンドウでアクティブなシート。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.activesheet
+         */
+        readonly ActiveSheet: object;
+
+        /**
+         * ウィンドウで選択されているシート。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.selectedsheets
+         */
+        readonly SelectedSheets: Sheets;
+
+        /**
+         * ウィンドウで選択されているオブジェクト。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.selection
+         */
+        readonly Selection: object;
+
+        /**
+         * 表示モード（標準 / 改ページ プレビュー / ページ レイアウト）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.view
+         */
+        View: XlWindowView;
+
+        // その他のメンバー
+        readonly RangeSelection: Range;
+        readonly ActiveChart: Chart;
+        readonly Index: int;
+        readonly WindowNumber: int;
+        readonly Type: XlWindowType;
+        readonly Hwnd: int;
+        Width: double;
+        Height: double;
+        Left: double;
+        Top: double;
+        readonly UsableWidth: double;
+        readonly UsableHeight: double;
+        Split: boolean;
+        SplitRow: int;
+        SplitColumn: int;
+        SplitHorizontal: double;
+        SplitVertical: double;
+        TabRatio: double;
+        GridlineColor: int;
+        GridlineColorIndex: XlColorIndex;
+        DisplayHorizontalScrollBar: boolean;
+        DisplayVerticalScrollBar: boolean;
+        DisplayWorkbookTabs: boolean;
+        DisplayOutline: boolean;
+        EnableResize: boolean;
+        ActivateNext(): void;
+        ActivatePrevious(): void;
+        NewWindow(): Window;
+        LargeScroll(down?: any, up?: any, toRight?: any, toLeft?: any): void;
+        SmallScroll(down?: any, up?: any, toRight?: any, toLeft?: any): void;
+        ScrollIntoView(left: int, top: int, width: int, height: int, start?: any): void;
+        PointsToScreenPixelsX(points: int): int;
+        PointsToScreenPixelsY(points: int): int;
+        RangeFromPoint(x: int, y: int): object;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    // ---------------------------------------------------------------------
+    // テーブル（ListObject）
+    // ---------------------------------------------------------------------
+
+    /**
+     * ワークシート上のテーブルのコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.listobjects
+     */
+    interface ListObjects {
+        /**
+         * インデックスまたはテーブル名でテーブルを返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobjects.item
+         */
+        (index: any): ListObject;
+
+        /**
+         * インデックスまたはテーブル名でテーブルを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobjects.item
+         */
+        Item(index: any): ListObject;
+
+        /**
+         * テーブルの数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobjects.count
+         */
+        readonly Count: int;
+
+        /**
+         * セル範囲などからテーブルを作成する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobjects.add
+         */
+        Add(sourceType?: XlListObjectSourceType, source?: any, linkSource?: any, xlListObjectHasHeaders?: XlYesNoGuess, destination?: any, tableStyleName?: any): ListObject;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * ワークシート上のテーブルを表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.listobject
+     */
+    interface ListObject {
+        /**
+         * テーブル名。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.name
+         */
+        Name: string;
+
+        /**
+         * 見出し行と集計行を含むテーブル全体の範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.range
+         */
+        readonly Range: Range;
+
+        /**
+         * データ部分の範囲。データ行がなければ Nothing。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.databodyrange
+         */
+        readonly DataBodyRange: Range;
+
+        /**
+         * 見出し行の範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.headerrowrange
+         */
+        readonly HeaderRowRange: Range;
+
+        /**
+         * 集計行の範囲。集計行が非表示なら Nothing。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.totalsrowrange
+         */
+        readonly TotalsRowRange: Range;
+
+        /**
+         * テーブルの列のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.listcolumns
+         */
+        readonly ListColumns: ListColumns;
+
+        /**
+         * テーブルの行のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.listrows
+         */
+        readonly ListRows: ListRows;
+
+        /**
+         * 見出し行を表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.showheaders
+         */
+        ShowHeaders: boolean;
+
+        /**
+         * 集計行を表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.showtotals
+         */
+        ShowTotals: boolean;
+
+        /**
+         * オートフィルターを表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.showautofilter
+         */
+        ShowAutoFilter: boolean;
+
+        /**
+         * テーブルに適用するスタイル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.tablestyle
+         */
+        TableStyle: any;
+
+        /**
+         * テーブルのオートフィルター。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.autofilter
+         */
+        readonly AutoFilter: AutoFilter;
+
+        /**
+         * テーブルの並べ替え設定。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.sort
+         */
+        readonly Sort: Sort;
+
+        /**
+         * テーブルの範囲を変更する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.resize
+         */
+        Resize(range: Range): void;
+
+        /**
+         * テーブルを通常のセル範囲に戻す（データは残る）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.unlist
+         */
+        Unlist(): void;
+
+        /**
+         * テーブルをデータごと削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.delete
+         */
+        Delete(): void;
+
+        /**
+         * 外部データ ソースからテーブルを更新する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listobject.refresh
+         */
+        Refresh(): void;
+
+        // その他のメンバー
+        DisplayName: string;
+        Comment: string;
+        readonly Active: boolean;
+        readonly SourceType: XlListObjectSourceType;
+        readonly InsertRowRange: Range;
+        readonly QueryTable: object;
+        ShowAutoFilterDropDown: boolean;
+        ShowTableStyleFirstColumn: boolean;
+        ShowTableStyleLastColumn: boolean;
+        ShowTableStyleRowStripes: boolean;
+        ShowTableStyleColumnStripes: boolean;
+        Unlink(): void;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * テーブルの列のコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.listcolumns
+     */
+    interface ListColumns {
+        /**
+         * インデックスまたは列見出しで列を返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumns.item
+         */
+        (index: any): ListColumn;
+
+        /**
+         * インデックスまたは列見出しで列を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumns.item
+         */
+        Item(index: any): ListColumn;
+
+        /**
+         * 列の数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumns.count
+         */
+        readonly Count: int;
+
+        /**
+         * テーブルに列を追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumns.add
+         */
+        Add(position?: any): ListColumn;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * テーブルの 1 列を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.listcolumn
+     */
+    interface ListColumn {
+        /**
+         * 列見出しの文字列。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumn.name
+         */
+        Name: string;
+
+        /**
+         * テーブル内での列の位置（1 始まり）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumn.index
+         */
+        readonly Index: int;
+
+        /**
+         * 見出しを含む列全体の範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumn.range
+         */
+        readonly Range: Range;
+
+        /**
+         * 列のデータ部分の範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumn.databodyrange
+         */
+        readonly DataBodyRange: Range;
+
+        /**
+         * 集計行のセル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumn.total
+         */
+        readonly Total: Range;
+
+        /**
+         * 集計行での集計方法。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumn.totalscalculation
+         */
+        TotalsCalculation: XlTotalsCalculation;
+
+        /**
+         * 列を削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listcolumn.delete
+         */
+        Delete(): void;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * テーブルの行のコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.listrows
+     */
+    interface ListRows {
+        /**
+         * インデックスで行を返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listrows.item
+         */
+        (index: any): ListRow;
+
+        /**
+         * インデックスで行を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listrows.item
+         */
+        Item(index: any): ListRow;
+
+        /**
+         * データ行の数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listrows.count
+         */
+        readonly Count: int;
+
+        /**
+         * テーブルに行を追加する。位置を省略すると末尾に追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listrows.add
+         */
+        Add(position?: any, alwaysInsert?: any): ListRow;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * テーブルの 1 行を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.listrow
+     */
+    interface ListRow {
+        /**
+         * テーブル内での行の位置（1 始まり）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listrow.index
+         */
+        readonly Index: int;
+
+        /**
+         * 行の範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listrow.range
+         */
+        readonly Range: Range;
+
+        /**
+         * 行を削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.listrow.delete
+         */
+        Delete(): void;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    // ---------------------------------------------------------------------
+    // 図形 / グラフ
+    // ---------------------------------------------------------------------
+
+    /**
+     * シート上の図形のコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.shapes
+     */
+    interface Shapes {
+        /**
+         * インデックスまたは名前で図形を返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.item
+         */
+        (index: any): Shape;
+
+        /**
+         * インデックスまたは名前で図形を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.item
+         */
+        Item(index: any): Shape;
+
+        /**
+         * 図形の数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.count
+         */
+        readonly Count: int;
+
+        /**
+         * オートシェイプを追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.addshape
+         */
+        AddShape(type: Office.MsoAutoShapeType, left: float, top: float, width: float, height: float): Shape;
+
+        /**
+         * 画像ファイルから図を追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.addpicture
+         */
+        AddPicture(filename: string, linkToFile: Office.MsoTriState, saveWithDocument: Office.MsoTriState, left: float, top: float, width: float, height: float): Shape;
+
+        /**
+         * テキスト ボックスを追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.addtextbox
+         */
+        AddTextbox(orientation: Office.MsoTextOrientation, left: float, top: float, width: float, height: float): Shape;
+
+        /**
+         * 直線を追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.addline
+         */
+        AddLine(beginX: float, beginY: float, endX: float, endY: float): Shape;
+
+        /**
+         * グラフを追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.addchart2
+         */
+        AddChart2(style?: any, xlChartType?: any, left?: any, top?: any, width?: any, height?: any, newLayout?: any): Shape;
+
+        /**
+         * フォーム コントロール（ボタンなど）を追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.addformcontrol
+         */
+        AddFormControl(type: XlFormControl, left: int, top: int, width: int, height: int): Shape;
+
+        /**
+         * すべての図形を選択する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.selectall
+         */
+        SelectAll(): void;
+
+        /**
+         * 複数の図形をまとめた ShapeRange を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shapes.range
+         */
+        Range(index: any): object;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * シート上の図形（オートシェイプ・図・グラフなど）を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.shape
+     */
+    interface Shape {
+        /**
+         * 図形の名前。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.name
+         */
+        Name: string;
+
+        /**
+         * 左端の位置（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.left
+         */
+        Left: float;
+
+        /**
+         * 上端の位置（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.top
+         */
+        Top: float;
+
+        /**
+         * 幅（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.width
+         */
+        Width: float;
+
+        /**
+         * 高さ（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.height
+         */
+        Height: float;
+
+        /**
+         * 図形を表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.visible
+         */
+        Visible: Office.MsoTriState;
+
+        /**
+         * 図形の種類。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.type
+         */
+        readonly Type: Office.MsoShapeType;
+
+        /**
+         * 図形の左上隅があるセル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.topleftcell
+         */
+        readonly TopLeftCell: Range;
+
+        /**
+         * 図形の右下隅があるセル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.bottomrightcell
+         */
+        readonly BottomRightCell: Range;
+
+        /**
+         * セルの移動やサイズ変更に図形を追従させる方法。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.placement
+         */
+        Placement: XlPlacement;
+
+        /**
+         * 図形をクリックしたときに実行するマクロ名。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.onaction
+         */
+        OnAction: string;
+
+        /**
+         * 図形内のテキスト枠。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.textframe
+         */
+        readonly TextFrame: object;
+
+        /**
+         * 図形に含まれるグラフ。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.chart
+         */
+        readonly Chart: Chart;
+
+        /**
+         * 図形を削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.delete
+         */
+        Delete(): void;
+
+        /**
+         * 図形を選択する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.select
+         */
+        Select(replace?: any): void;
+
+        /**
+         * 図形をクリップボードへコピーする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.copy
+         */
+        Copy(): void;
+
+        /**
+         * 図形を複製する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.shape.duplicate
+         */
+        Duplicate(): Shape;
+
+        // その他のメンバー
+        Rotation: float;
+        AutoShapeType: Office.MsoAutoShapeType;
+        AlternativeText: string;
+        Title: string;
+        Locked: boolean;
+        LockAspectRatio: Office.MsoTriState;
+        readonly HasChart: Office.MsoTriState;
+        readonly ZOrderPosition: int;
+        readonly ID: int;
+        readonly TextFrame2: object;
+        readonly Fill: object;
+        readonly Line: object;
+        readonly Hyperlink: Hyperlink;
+        readonly ControlFormat: object;
+        readonly OLEFormat: object;
+        readonly GroupItems: object;
+        Cut(): void;
+        CopyPicture(appearance?: any, format?: any): void;
+        ScaleWidth(factor: float, relativeToOriginalSize: Office.MsoTriState, scale?: any): void;
+        ScaleHeight(factor: float, relativeToOriginalSize: Office.MsoTriState, scale?: any): void;
+        IncrementLeft(increment: float): void;
+        IncrementTop(increment: float): void;
+        IncrementRotation(increment: float): void;
+        ZOrder(zOrderCmd: Office.MsoZOrderCmd): void;
+        Ungroup(): object;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * シート上の埋め込みグラフのコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.chartobjects
+     */
+    interface ChartObjects {
+        /**
+         * インデックスまたは名前で埋め込みグラフを返す（既定メンバー）。戻り値は Object 型。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobjects.item
+         */
+        (index: any): object;
+
+        /**
+         * インデックスまたは名前で埋め込みグラフを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobjects.item
+         */
+        Item(index: any): object;
+
+        /**
+         * 埋め込みグラフの数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobjects.count
+         */
+        readonly Count: int;
+
+        /**
+         * 位置とサイズ（ポイント）を指定して埋め込みグラフを追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobjects.add
+         */
+        Add(left: double, top: double, width: double, height: double): ChartObject;
+
+        /**
+         * コレクション内の埋め込みグラフをすべて削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobjects.delete
+         */
+        Delete(): void;
+
+        // その他のメンバー
+        Select(replace?: any): void;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * シートに埋め込まれたグラフの入れ物を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.chartobject
+     */
+    interface ChartObject {
+        /**
+         * 埋め込みグラフの名前。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobject.name
+         */
+        Name: string;
+
+        /**
+         * 中に入っているグラフ本体。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobject.chart
+         */
+        readonly Chart: Chart;
+
+        /**
+         * 左端の位置（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobject.left
+         */
+        Left: double;
+
+        /**
+         * 上端の位置（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobject.top
+         */
+        Top: double;
+
+        /**
+         * 幅（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobject.width
+         */
+        Width: double;
+
+        /**
+         * 高さ（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobject.height
+         */
+        Height: double;
+
+        /**
+         * 表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobject.visible
+         */
+        Visible: boolean;
+
+        /**
+         * 埋め込みグラフをアクティブにする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobject.activate
+         */
+        Activate(): void;
+
+        /**
+         * 埋め込みグラフを削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobject.delete
+         */
+        Delete(): void;
+
+        /**
+         * 埋め込みグラフを選択する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chartobject.select
+         */
+        Select(replace?: any): void;
+
+        // その他のメンバー
+        readonly TopLeftCell: Range;
+        readonly BottomRightCell: Range;
+        readonly Index: int;
+        readonly ZOrder: int;
+        Placement: any;
+        Locked: boolean;
+        PrintObject: boolean;
+        RoundedCorners: boolean;
+        Shadow: boolean;
+        ProtectChartObject: boolean;
+        readonly ShapeRange: object;
+        Copy(): void;
+        Cut(): void;
+        CopyPicture(appearance?: XlPictureAppearance, format?: XlCopyPictureFormat): void;
+        Duplicate(): object;
+        BringToFront(): void;
+        SendToBack(): void;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * グラフ（グラフ シートまたは埋め込みグラフの中身）を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.chart(object)
+     */
+    interface Chart {
+        /**
+         * グラフの種類。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.charttype
+         */
+        ChartType: XlChartType;
+
+        /**
+         * グラフの元データの範囲を設定する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.setsourcedata
+         */
+        SetSourceData(source: Range, plotBy?: any): void;
+
+        /**
+         * グラフ タイトルを表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.hastitle
+         */
+        HasTitle: boolean;
+
+        /**
+         * グラフ タイトル。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.charttitle
+         */
+        readonly ChartTitle: object;
+
+        /**
+         * 凡例を表示するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.haslegend
+         */
+        HasLegend: boolean;
+
+        /**
+         * 凡例。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.legend
+         */
+        readonly Legend: object;
+
+        /**
+         * データ系列を 1 つ、または全体のコレクションを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.seriescollection
+         */
+        SeriesCollection(index?: any): object;
+
+        /**
+         * 軸を 1 つ、または全体のコレクションを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.axes
+         */
+        Axes(type?: any, axisGroup?: XlAxisGroup): object;
+
+        /**
+         * グラフを画像ファイルとして書き出す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.export
+         */
+        Export(filename: string, filterName?: any, interactive?: any): boolean;
+
+        /**
+         * グラフを削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.delete
+         */
+        Delete(): void;
+
+        /**
+         * グラフの名前。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.name
+         */
+        Name: string;
+
+        /**
+         * 系列を行と列のどちらから取るか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.chart.plotby
+         */
+        PlotBy: XlRowCol;
+
+        // その他のメンバー
+        ChartStyle: any;
+        DisplayBlanksAs: XlDisplayBlanksAs;
+        PlotVisibleOnly: boolean;
+        HasDataTable: boolean;
+        Visible: XlSheetVisibility;
+        readonly ChartArea: object;
+        readonly PlotArea: object;
+        readonly DataTable: object;
+        readonly Index: int;
+        readonly CodeName: string;
+        readonly PageSetup: PageSetup;
+        readonly Shapes: Shapes;
+        readonly ProtectContents: boolean;
+        Activate(): void;
+        Select(replace?: any): void;
+        Copy(before?: any, after?: any): void;
+        Move(before?: any, after?: any): void;
+        CopyPicture(appearance?: XlPictureAppearance, format?: XlCopyPictureFormat, size?: XlPictureAppearance): void;
+        Paste(type?: any): void;
+        Refresh(): void;
+        Location(where: XlChartLocation, name?: any): Chart;
+        ApplyLayout(layout: int, chartType?: any): void;
+        ApplyChartTemplate(filename: string): void;
+        SaveChartTemplate(filename: string): void;
+        ClearToMatchStyle(): void;
+        ChartObjects(index?: any): object;
+        ChartGroups(index?: any): object;
+        FullSeriesCollection(index?: any): object;
+        Evaluate(name: any): any;
+        Protect(password?: any, drawingObjects?: any, contents?: any, scenarios?: any, userInterfaceOnly?: any): void;
+        Unprotect(password?: any): void;
+        PrintOut(from?: any, to?: any, copies?: any, preview?: any, activePrinter?: any, printToFile?: any, collate?: any, prToFileName?: any, ignorePrintAreas?: any): void;
+        PrintPreview(enableChanges?: any): void;
+        ExportAsFixedFormat(type: XlFixedFormatType, filename?: any, quality?: any, includeDocProperties?: any, ignorePrintAreas?: any, from?: any, to?: any, openAfterPublish?: any, fixedFormatExtClassPtr?: any): void;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    // ---------------------------------------------------------------------
+    // ページ設定 / フィルター / 並べ替え / 条件付き書式
+    // ---------------------------------------------------------------------
+
+    /**
+     * 印刷時のページ設定を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup
+     */
+    interface PageSetup {
+        /**
+         * 用紙の向き。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.orientation
+         */
+        Orientation: XlPageOrientation;
+
+        /**
+         * 用紙サイズ。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.papersize
+         */
+        PaperSize: XlPaperSize;
+
+        /**
+         * 印刷範囲（A1 形式の文字列）。空文字列でシート全体。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.printarea
+         */
+        PrintArea: string;
+
+        /**
+         * 各ページの上端に繰り返し印刷する行。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.printtitlerows
+         */
+        PrintTitleRows: string;
+
+        /**
+         * 各ページの左端に繰り返し印刷する列。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.printtitlecolumns
+         */
+        PrintTitleColumns: string;
+
+        /**
+         * 拡大縮小率（パーセント）。`false` にすると FitToPages の指定が有効になる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.zoom
+         */
+        Zoom: any;
+
+        /**
+         * 横方向に収めるページ数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.fittopageswide
+         */
+        FitToPagesWide: any;
+
+        /**
+         * 縦方向に収めるページ数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.fittopagestall
+         */
+        FitToPagesTall: any;
+
+        /**
+         * 左余白（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.leftmargin
+         */
+        LeftMargin: double;
+
+        /**
+         * 右余白（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.rightmargin
+         */
+        RightMargin: double;
+
+        /**
+         * 上余白（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.topmargin
+         */
+        TopMargin: double;
+
+        /**
+         * 下余白（ポイント）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.bottommargin
+         */
+        BottomMargin: double;
+
+        /**
+         * ページの左右中央に配置するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.centerhorizontally
+         */
+        CenterHorizontally: boolean;
+
+        /**
+         * ページの上下中央に配置するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.centervertically
+         */
+        CenterVertically: boolean;
+
+        /**
+         * ヘッダー中央部の文字列。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.centerheader
+         */
+        CenterHeader: string;
+
+        /**
+         * フッター中央部の文字列。
+         * @see https://learn.microsoft.com/office/vba/api/excel.pagesetup.centerfooter
+         */
+        CenterFooter: string;
+
+        // その他のメンバー
+        HeaderMargin: double;
+        FooterMargin: double;
+        LeftHeader: string;
+        RightHeader: string;
+        LeftFooter: string;
+        RightFooter: string;
+        PrintGridlines: boolean;
+        PrintHeadings: boolean;
+        BlackAndWhite: boolean;
+        Draft: boolean;
+        Order: XlOrder;
+        FirstPageNumber: int;
+        PrintComments: XlPrintLocation;
+        PrintErrors: XlPrintErrors;
+        OddAndEvenPagesHeaderFooter: boolean;
+        DifferentFirstPageHeaderFooter: boolean;
+        ScaleWithDocHeaderFooter: boolean;
+        AlignMarginsHeaderFooter: boolean;
+        PrintQuality(index?: any): any;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * ワークシートまたはテーブルのオートフィルターを表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.autofilter
+     */
+    interface AutoFilter {
+        /**
+         * フィルターが適用されている範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.autofilter.range
+         */
+        readonly Range: Range;
+
+        /**
+         * 各列のフィルター条件のコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.autofilter.filters
+         */
+        readonly Filters: object;
+
+        /**
+         * 絞り込まれた状態かどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.autofilter.filtermode
+         */
+        readonly FilterMode: boolean;
+
+        /**
+         * フィルター範囲の並べ替え設定。
+         * @see https://learn.microsoft.com/office/vba/api/excel.autofilter.sort
+         */
+        readonly Sort: Sort;
+
+        /**
+         * 現在の条件でフィルターを掛け直す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.autofilter.applyfilter
+         */
+        ApplyFilter(): void;
+
+        /**
+         * 絞り込みを解除してすべての行を表示する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.autofilter.showalldata
+         */
+        ShowAllData(): void;
+
+        // その他のメンバー
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * シート・テーブル・オートフィルターの並べ替え設定を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.sort
+     */
+    interface Sort {
+        /**
+         * 並べ替えキーのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sort.sortfields
+         */
+        readonly SortFields: SortFields;
+
+        /**
+         * 並べ替える範囲を設定する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sort.setrange
+         */
+        SetRange(rng: Range): void;
+
+        /**
+         * 先頭行を見出しとして扱うかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sort.header
+         */
+        Header: XlYesNoGuess;
+
+        /**
+         * 大文字と小文字を区別するかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sort.matchcase
+         */
+        MatchCase: boolean;
+
+        /**
+         * 並べ替えの方向（行単位 / 列単位）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sort.orientation
+         */
+        Orientation: XlSortOrientation;
+
+        /**
+         * 設定した内容で並べ替えを実行する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sort.apply
+         */
+        Apply(): void;
+
+        // その他のメンバー
+        SortMethod: XlSortMethod;
+        readonly Rng: Range;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * 並べ替えキーのコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/excel.sortfields
+     */
+    interface SortFields {
+        /**
+         * インデックスで並べ替えキーを返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sortfields.item
+         */
+        (index: any): SortField;
+
+        /**
+         * インデックスで並べ替えキーを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sortfields.item
+         */
+        Item(index: any): SortField;
+
+        /**
+         * 並べ替えキーの数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sortfields.count
+         */
+        readonly Count: int;
+
+        /**
+         * 並べ替えキーを追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sortfields.add
+         */
+        Add(key: Range, sortOn?: any, order?: any, customOrder?: any, dataOption?: any): SortField;
+
+        /**
+         * すべての並べ替えキーを削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sortfields.clear
+         */
+        Clear(): void;
+
+        // その他のメンバー
+        Add2(key: Range, sortOn?: any, order?: any, customOrder?: any, dataOption?: any, subField?: any): SortField;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * 並べ替えキー 1 つ分の設定を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.sortfield
+     */
+    interface SortField {
+        /**
+         * キーとなるセル範囲。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sortfield.key
+         */
+        readonly Key: Range;
+
+        /**
+         * 並べ替えの基準（値 / セルの色 / フォントの色 / アイコン）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sortfield.sorton
+         */
+        SortOn: XlSortOn;
+
+        /**
+         * 並べ替えの順序。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sortfield.order
+         */
+        Order: XlSortOrder;
+
+        /**
+         * ユーザー設定リストによる並び順。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sortfield.customorder
+         */
+        CustomOrder: any;
+
+        /**
+         * 数値に見える文字列の扱い。
+         * @see https://learn.microsoft.com/office/vba/api/excel.sortfield.dataoption
+         */
+        DataOption: XlSortDataOption;
+
+        // その他のメンバー
+        Priority: int;
+        readonly SortOnValue: object;
+        Delete(): void;
+        ModifyKey(key: Range): void;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    /**
+     * セル範囲の条件付き書式のコレクション（各要素は Object 型）。
+     * @see https://learn.microsoft.com/office/vba/api/excel.formatconditions
+     */
+    interface FormatConditions {
+        /**
+         * インデックスで条件付き書式を返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.formatconditions.item
+         */
+        (index: any): object;
+
+        /**
+         * インデックスで条件付き書式を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.formatconditions.item
+         */
+        Item(index: any): object;
+
+        /**
+         * 条件付き書式の数。
+         * @see https://learn.microsoft.com/office/vba/api/excel.formatconditions.count
+         */
+        readonly Count: int;
+
+        /**
+         * 条件付き書式を追加する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.formatconditions.add
+         */
+        Add(type: XlFormatConditionType, operator?: any, formula1?: any, formula2?: any): object;
+
+        /**
+         * 範囲の条件付き書式をすべて削除する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.formatconditions.delete
+         */
+        Delete(): void;
+
+        // その他のメンバー
+        AddColorScale(colorScaleType: int): object;
+        AddDatabar(): object;
+        AddIconSetCondition(): object;
+        AddTop10(): object;
+        AddAboveAverage(): object;
+        AddUniqueValues(): object;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    // ---------------------------------------------------------------------
+    // ワークシート関数
+    // ---------------------------------------------------------------------
+
+    /**
+     * VBA から呼び出せるワークシート関数の入れ物。失敗すると実行時エラーになる。
+     * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction
+     */
+    interface WorksheetFunction {
+        /**
+         * 合計を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.sum
+         */
+        Sum(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 平均を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.average
+         */
+        Average(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 数値が入っているセルの個数を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.count
+         */
+        Count(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 空白でないセルの個数を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.counta
+         */
+        CountA(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 条件に一致するセルの個数を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.countif
+         */
+        CountIf(arg1: Range, arg2: any): double;
+
+        /**
+         * 複数の条件すべてに一致するセルの個数を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.countifs
+         */
+        CountIfs(arg1: Range, arg2: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 条件に一致するセルの合計を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.sumif
+         */
+        SumIf(arg1: Range, arg2: any, arg3?: any): double;
+
+        /**
+         * 複数の条件すべてに一致するセルの合計を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.sumifs
+         */
+        SumIfs(arg1: Range, arg2: Range, arg3: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 最大値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.max
+         */
+        Max(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 最小値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.min
+         */
+        Min(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 検索値が範囲内の何番目にあるかを返す。見つからないと実行時エラーになる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.match
+         */
+        Match(arg1: any, arg2: any, arg3?: any): double;
+
+        /**
+         * 範囲または配列から、行番号と列番号で指定した要素を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.index
+         */
+        Index(arg1: any, arg2: double, arg3?: any, arg4?: any): any;
+
+        /**
+         * 範囲の左端列を縦方向に検索し、同じ行の指定列の値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.vlookup
+         */
+        VLookup(arg1: any, arg2: any, arg3: any, arg4?: any): any;
+
+        /**
+         * 範囲の上端行を横方向に検索し、同じ列の指定行の値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.hlookup
+         */
+        HLookup(arg1: any, arg2: any, arg3: any, arg4?: any): any;
+
+        /**
+         * 検索範囲から値を探し、対応する戻り範囲の値を返す（新しい Excel のみ）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction
+         */
+        XLookup(arg1: any, arg2: any, arg3: any, arg4?: any, arg5?: any, arg6?: any): any;
+
+        /**
+         * 指定した桁数に四捨五入する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.round
+         */
+        Round(arg1: double, arg2: double): double;
+
+        /**
+         * 指定した桁数に切り上げる（0 から遠い方向）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.roundup
+         */
+        RoundUp(arg1: double, arg2: double): double;
+
+        /**
+         * 指定した桁数に切り捨てる（0 に近い方向）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.rounddown
+         */
+        RoundDown(arg1: double, arg2: double): double;
+
+        /**
+         * 前後の空白を除き、単語間の連続する空白を 1 つにまとめる。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.trim
+         */
+        Trim(arg1: string): string;
+
+        /**
+         * 値を表示形式に従って文字列に変換する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.text
+         */
+        Text(arg1: any, arg2: string): string;
+
+        /**
+         * 配列の行と列を入れ替える。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.transpose
+         */
+        Transpose(arg1: any): any;
+
+        /**
+         * 第 1 引数がエラー値なら第 2 引数を、そうでなければ第 1 引数を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.iferror
+         */
+        IfError(arg1: any, arg2: any): any;
+
+        /**
+         * 大きい方から数えて k 番目の値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.large
+         */
+        Large(arg1: any, arg2: double): double;
+
+        /**
+         * 小さい方から数えて k 番目の値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.small
+         */
+        Small(arg1: any, arg2: double): double;
+
+        /**
+         * 中央値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.median
+         */
+        Median(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 標本にもとづく標準偏差を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.stdev
+         */
+        StDev(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 標本にもとづく分散を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.var
+         */
+        Var(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 数値が範囲内で何番目の大きさかを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.rank
+         */
+        Rank(arg1: double, arg2: Range, arg3?: any): double;
+
+        /**
+         * 基準値の倍数のうち、0 に近い方向へ切り捨てた値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.floor
+         */
+        Floor(arg1: double, arg2: double): double;
+
+        /**
+         * 基準値の倍数のうち、0 から遠い方向へ切り上げた値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.ceiling
+         */
+        Ceiling(arg1: double, arg2: double): double;
+
+        /**
+         * べき乗を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.power
+         */
+        Power(arg1: double, arg2: double): double;
+
+        /**
+         * 積を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.product
+         */
+        Product(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 配列の対応する要素どうしを掛けて、その合計を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.sumproduct
+         */
+        SumProduct(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+
+        /**
+         * 開始日から指定月数だけ前後した月の末日（シリアル値）を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.eomonth
+         */
+        EoMonth(arg1: any, arg2: any): double;
+
+        /**
+         * 開始日から指定月数だけ前後した日付（シリアル値）を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.edate
+         */
+        EDate(arg1: any, arg2: any): double;
+
+        /**
+         * 2 つの日付の間の稼働日数を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.networkdays
+         */
+        NetworkDays(arg1: any, arg2: any, arg3?: any): double;
+
+        /**
+         * 開始日から指定した稼働日数だけ前後した日付（シリアル値）を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.workday
+         */
+        WorkDay(arg1: any, arg2: any, arg3?: any): double;
+
+        /**
+         * 日付がその年の第何週かを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.weeknum
+         */
+        WeekNum(arg1: any, arg2?: any): double;
+
+        /**
+         * 文字列内で検索文字列が最初に現れる位置を返す（大文字と小文字を区別する）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.find
+         */
+        Find(arg1: string, arg2: string, arg3?: any): double;
+
+        /**
+         * 文字列内で検索文字列が最初に現れる位置を返す（大文字と小文字を区別せず、ワイルドカードを使える）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.search
+         */
+        Search(arg1: string, arg2: string, arg3?: any): double;
+
+        /**
+         * 文字列中の指定した部分文字列を別の文字列に置き換える。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.substitute
+         */
+        Substitute(arg1: string, arg2: string, arg3: string, arg4?: any): string;
+
+        /**
+         * 文字列を指定回数だけ繰り返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.rept
+         */
+        Rept(arg1: string, arg2: double): string;
+
+        /**
+         * 各単語の先頭を大文字、残りを小文字にする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.proper
+         */
+        Proper(arg1: string): string;
+
+        /**
+         * 印刷できない制御文字を取り除く。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.clean
+         */
+        Clean(arg1: string): string;
+
+        /**
+         * 全角の英数カナを半角にする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.asc
+         */
+        Asc(arg1: string): string;
+
+        /**
+         * 半角の英数カナを全角にする。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.dbcs
+         */
+        Dbcs(arg1: string): string;
+
+        /**
+         * セルのふりがなを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.phonetic
+         */
+        Phonetic(arg1: Range): string;
+
+        /**
+         * 行または列を検索し、別の行または列の同じ位置の値を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.lookup
+         */
+        Lookup(arg1: any, arg2: any, arg3?: any): any;
+
+        /**
+         * インデックスに対応する値を引数リストから選んで返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.choose
+         */
+        Choose(arg1: any, arg2: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): any;
+
+        /**
+         * すべての引数が真なら `true` を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.and
+         */
+        And(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): boolean;
+
+        /**
+         * いずれかの引数が真なら `true` を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.or
+         */
+        Or(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): boolean;
+
+        /**
+         * 値が数値かどうかを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.isnumber
+         */
+        IsNumber(arg1: any): boolean;
+
+        /**
+         * 値が文字列かどうかを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.istext
+         */
+        IsText(arg1: any): boolean;
+
+        /**
+         * 値がエラー値かどうかを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.iserror
+         */
+        IsError(arg1: any): boolean;
+
+        /**
+         * 値が #N/A かどうかを返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.isna
+         */
+        IsNA(arg1: any): boolean;
+
+        /**
+         * 円周率を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.pi
+         */
+        Pi(): double;
+
+        /**
+         * 度をラジアンに変換する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.radians
+         */
+        Radians(arg1: double): double;
+
+        /**
+         * ラジアンを度に変換する。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.degrees
+         */
+        Degrees(arg1: double): double;
+
+        /**
+         * 自然対数を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.ln
+         */
+        Ln(arg1: double): double;
+
+        /**
+         * 指定した底の対数を返す（底を省略すると 10）。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.log
+         */
+        Log(arg1: double, arg2?: any): double;
+
+        /**
+         * 常用対数を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.log10
+         */
+        Log10(arg1: double): double;
+
+        /**
+         * 階乗を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.fact
+         */
+        Fact(arg1: double): double;
+
+        /**
+         * 組み合わせの数を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.combin
+         */
+        Combin(arg1: double, arg2: double): double;
+
+        /**
+         * 割り算の商の整数部分を返す。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.quotient
+         */
+        Quotient(arg1: any, arg2: any): double;
+
+        /**
+         * 指定した値の倍数に丸める。
+         * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.mround
+         */
+        MRound(arg1: any, arg2: any): double;
+
+        // その他のメンバー
+        XMatch(arg1: any, arg2: any, arg3?: any, arg4?: any): double;
+        CountBlank(arg1: Range): double;
+        AverageIf(arg1: Range, arg2: any, arg3?: any): double;
+        AverageIfs(arg1: Range, arg2: Range, arg3: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+        IfNa(arg1: any, arg2: any): any;
+        Mode(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+        StDevP(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+        VarP(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+        StDev_S(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+        StDev_P(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+        Var_S(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+        Var_P(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+        Rank_Eq(arg1: double, arg2: Range, arg3?: any): double;
+        Percentile(arg1: any, arg2: double): double;
+        Quartile(arg1: any, arg2: double): double;
+        Subtotal(arg1: double, arg2: Range, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+        SumSq(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
+        Even(arg1: double): double;
+        Odd(arg1: double): double;
+        RandBetween(arg1: any, arg2: any): double;
+        Weekday(arg1: any, arg2?: any): double;
+        Days360(arg1: any, arg2: any, arg3?: any): double;
+        Replace(arg1: string, arg2: double, arg3: double, arg4: string): string;
+        Fixed(arg1: double, arg2?: any, arg3?: any): string;
+        TextJoin(arg1: any, arg2: any, arg3: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): string;
+        Concat(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): string;
+        IsNonText(arg1: any): boolean;
+        IsErr(arg1: any): boolean;
+        IsLogical(arg1: any): boolean;
+        IsEven(arg1: any): boolean;
+        IsOdd(arg1: any): boolean;
+        IsFormula(arg1: Range): boolean;
+        Frequency(arg1: any, arg2: any): any;
+        MMult(arg1: any, arg2: any): any;
+        MInverse(arg1: any): any;
+        Unique(arg1: any, arg2?: any, arg3?: any): any;
+        Filter(arg1: any, arg2: any, arg3?: any): any;
+        Sort(arg1: any, arg2?: any, arg3?: any, arg4?: any): any;
+        readonly Application: Application;
+        readonly Parent: object;
+    }
+
+    // ---------------------------------------------------------------------
+    // 列挙型（値はタイプ ライブラリの実値）
+    // ---------------------------------------------------------------------
+
+    /**
+     * 特定の列挙型に属さない汎用の定数（xlNone / xlCenter / xlAutomatic など）。
+     * @see https://learn.microsoft.com/office/vba/api/excel.constants
+     */
+    enum Constants {
+        xl3DBar = -4099,
+        xl3DEffects1 = 13,
+        xl3DEffects2 = 14,
+        xl3DSurface = -4103,
+        xlAbove = 0,
+        xlAccounting1 = 4,
+        xlAccounting2 = 5,
+        xlAccounting4 = 17,
+        xlAdd = 2,
+        xlAll = -4104,
+        xlAccounting3 = 6,
+        xlAllExceptBorders = 7,
+        xlAutomatic = -4105,
+        xlBar = 2,
+        xlBelow = 1,
+        xlBidi = -5000,
+        xlBidiCalendar = 3,
+        xlBoth = 1,
+        xlBottom = -4107,
+        xlCascade = 7,
+        xlCenter = -4108,
+        xlCenterAcrossSelection = 7,
+        xlChart4 = 2,
+        xlChartSeries = 17,
+        xlChartShort = 6,
+        xlChartTitles = 18,
+        xlChecker = 9,
+        xlCircle = 8,
+        xlClassic1 = 1,
+        xlClassic2 = 2,
+        xlClassic3 = 3,
+        xlClosed = 3,
+        xlColor1 = 7,
+        xlColor2 = 8,
+        xlColor3 = 9,
+        xlColumn = 3,
+        xlCombination = -4111,
+        xlComplete = 4,
+        xlConstants = 2,
+        xlContents = 2,
+        xlContext = -5002,
+        xlCorner = 2,
+        xlCrissCross = 16,
+        xlCross = 4,
+        xlCustom = -4114,
+        xlDebugCodePane = 13,
+        xlDefaultAutoFormat = -1,
+        xlDesktop = 9,
+        xlDiamond = 2,
+        xlDirect = 1,
+        xlDistributed = -4117,
+        xlDivide = 5,
+        xlDoubleAccounting = 5,
+        xlDoubleClosed = 5,
+        xlDoubleOpen = 4,
+        xlDoubleQuote = 1,
+        xlDrawingObject = 14,
+        xlEntireChart = 20,
+        xlExcelMenus = 1,
+        xlExtended = 3,
+        xlFill = 5,
+        xlFirst = 0,
+        xlFixedValue = 1,
+        xlFloating = 5,
+        xlFormats = -4122,
+        xlFormula = 5,
+        xlFullScript = 1,
+        xlGeneral = 1,
+        xlGray16 = 17,
+        xlGray25 = -4124,
+        xlGray50 = -4125,
+        xlGray75 = -4126,
+        xlGray8 = 18,
+        xlGregorian = 2,
+        xlGrid = 15,
+        xlGridline = 22,
+        xlHigh = -4127,
+        xlHindiNumerals = 3,
+        xlIcons = 1,
+        xlImmediatePane = 12,
+        xlInside = 2,
+        xlInteger = 2,
+        xlJustify = -4130,
+        xlLast = 1,
+        xlLastCell = 11,
+        xlLatin = -5001,
+        xlLeft = -4131,
+        xlLeftToRight = 2,
+        xlLightDown = 13,
+        xlLightHorizontal = 11,
+        xlLightUp = 14,
+        xlLightVertical = 12,
+        xlList1 = 10,
+        xlList2 = 11,
+        xlList3 = 12,
+        xlLocalFormat1 = 15,
+        xlLocalFormat2 = 16,
+        xlLogicalCursor = 1,
+        xlLong = 3,
+        xlLotusHelp = 2,
+        xlLow = -4134,
+        xlLTR = -5003,
+        xlMacrosheetCell = 7,
+        xlManual = -4135,
+        xlMaximum = 2,
+        xlMinimum = 4,
+        xlMinusValues = 3,
+        xlMixed = 2,
+        xlMixedAuthorizedScript = 4,
+        xlMixedScript = 3,
+        xlModule = -4141,
+        xlMultiply = 4,
+        xlNarrow = 1,
+        xlNextToAxis = 4,
+        xlNoDocuments = 3,
+        xlNone = -4142,
+        xlNotes = -4144,
+        xlOff = -4146,
+        xlOn = 1,
+        xlOpaque = 3,
+        xlOpen = 2,
+        xlOutside = 3,
+        xlPartial = 3,
+        xlPartialScript = 2,
+        xlPercent = 2,
+        xlPlus = 9,
+        xlPlusValues = 2,
+        xlReference = 4,
+        xlRight = -4152,
+        xlRTL = -5004,
+        xlScale = 3,
+        xlSemiautomatic = 2,
+        xlSemiGray75 = 10,
+        xlShort = 1,
+        xlShowLabel = 4,
+        xlShowLabelAndPercent = 5,
+        xlShowPercent = 3,
+        xlShowValue = 2,
+        xlSimple = -4154,
+        xlSingle = 2,
+        xlSingleAccounting = 4,
+        xlSingleQuote = 2,
+        xlSolid = 1,
+        xlSquare = 1,
+        xlStar = 5,
+        xlStError = 4,
+        xlStrict = 2,
+        xlSubtract = 3,
+        xlSystem = 1,
+        xlTextBox = 16,
+        xlTiled = 1,
+        xlTitleBar = 8,
+        xlToolbar = 1,
+        xlToolbarButton = 2,
+        xlTop = -4160,
+        xlTopToBottom = 1,
+        xlTransparent = 2,
+        xlTriangle = 3,
+        xlVeryHidden = 2,
+        xlVisible = 12,
+        xlVisualCursor = 2,
+        xlWatchPane = 11,
+        xlWide = 3,
+        xlWorkbookTab = 6,
+        xlWorksheet4 = 1,
+        xlWorksheetCell = 3,
+        xlWorksheetShort = 5
+    }
+
+    /**
+     * 移動や検索の方向を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xldirection
+     */
+    enum XlDirection {
+        xlDown = -4121,
+        xlToLeft = -4159,
+        xlToRight = -4161,
+        xlUp = -4162
+    }
+
+    /**
+     * 再計算モードを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcalculation
+     */
+    enum XlCalculation {
+        xlCalculationAutomatic = -4105,
+        xlCalculationManual = -4135,
+        xlCalculationSemiautomatic = 2
+    }
+
+    /**
+     * 計算の進行状態を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcalculationstate
+     */
+    enum XlCalculationState {
+        xlCalculating = 1,
+        xlDone = 0,
+        xlPending = 2
+    }
+
+    /**
+     * 計算を中断できるキーを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcalculationinterruptkey
+     */
+    enum XlCalculationInterruptKey {
+        xlAnyKey = 2,
+        xlEscKey = 1,
+        xlNoKey = 0
+    }
+
+    /**
+     * セルの内容全体と一致させるか、一部と一致させるかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xllookat
+     */
+    enum XlLookAt {
+        xlPart = 2,
+        xlWhole = 1
+    }
+
+    /**
+     * 検索対象（数式 / 値 / コメント）を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlfindlookin
+     */
+    enum XlFindLookIn {
+        xlComments = -4144,
+        xlCommentsThreaded = -4184,
+        xlFormulas = -4123,
+        xlValues = -4163
+    }
+
+    /**
+     * 検索を行方向に進めるか列方向に進めるかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsearchorder
+     */
+    enum XlSearchOrder {
+        xlByColumns = 2,
+        xlByRows = 1
+    }
+
+    /**
+     * 次を検索するか前を検索するかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsearchdirection
+     */
+    enum XlSearchDirection {
+        xlNext = 1,
+        xlPrevious = 2
+    }
+
+    /**
+     * 形式を選択して貼り付けるときに貼り付ける要素を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlpastetype
+     */
+    enum XlPasteType {
+        xlPasteAll = -4104,
+        xlPasteAllExceptBorders = 7,
+        xlPasteAllMergingConditionalFormats = 14,
+        xlPasteAllUsingSourceTheme = 13,
+        xlPasteColumnWidths = 8,
+        xlPasteComments = -4144,
+        xlPasteFormats = -4122,
+        xlPasteFormulas = -4123,
+        xlPasteFormulasAndNumberFormats = 11,
+        xlPasteValidation = 6,
+        xlPasteValues = -4163,
+        xlPasteValuesAndNumberFormats = 12
+    }
+
+    /**
+     * 貼り付けるときに貼り付け先の値と行う演算を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlpastespecialoperation
+     */
+    enum XlPasteSpecialOperation {
+        xlPasteSpecialOperationAdd = 2,
+        xlPasteSpecialOperationDivide = 5,
+        xlPasteSpecialOperationMultiply = 4,
+        xlPasteSpecialOperationNone = -4142,
+        xlPasteSpecialOperationSubtract = 3
+    }
+
+    /**
+     * シートの表示状態を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsheetvisibility
+     */
+    enum XlSheetVisibility {
+        xlSheetHidden = 0,
+        xlSheetVeryHidden = 2,
+        xlSheetVisible = -1
+    }
+
+    /**
+     * シートの種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsheettype
+     */
+    enum XlSheetType {
+        xlChart = -4109,
+        xlDialogSheet = -4116,
+        xlExcel4IntlMacroSheet = 4,
+        xlExcel4MacroSheet = 3,
+        xlWorksheet = -4167
+    }
+
+    /**
+     * ブックを保存するときのファイル形式を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlfileformat
+     */
+    enum XlFileFormat {
+        xlAddIn = 18,
+        xlAddIn8 = 18,
+        xlCSV = 6,
+        xlCSVMac = 22,
+        xlCSVMSDOS = 24,
+        xlCSVUTF8 = 62,
+        xlCSVWindows = 23,
+        xlCurrentPlatformText = -4158,
+        xlDBF2 = 7,
+        xlDBF3 = 8,
+        xlDBF4 = 11,
+        xlDIF = 9,
+        xlExcel12 = 50,
+        xlExcel2 = 16,
+        xlExcel2FarEast = 27,
+        xlExcel3 = 29,
+        xlExcel4 = 33,
+        xlExcel4Workbook = 35,
+        xlExcel5 = 39,
+        xlExcel7 = 39,
+        xlExcel8 = 56,
+        xlExcel9795 = 43,
+        xlHtml = 44,
+        xlIntlAddIn = 26,
+        xlIntlMacro = 25,
+        xlOpenDocumentSpreadsheet = 60,
+        xlOpenXMLAddIn = 55,
+        xlOpenXMLTemplate = 54,
+        xlOpenXMLTemplateMacroEnabled = 53,
+        xlOpenXMLWorkbook = 51,
+        xlOpenXMLWorkbookMacroEnabled = 52,
+        xlSYLK = 2,
+        xlTemplate = 17,
+        xlTemplate8 = 17,
+        xlTextMac = 19,
+        xlTextMSDOS = 21,
+        xlTextPrinter = 36,
+        xlTextWindows = 20,
+        xlUnicodeText = 42,
+        xlWebArchive = 45,
+        xlWJ2WD1 = 14,
+        xlWJ3 = 40,
+        xlWJ3FJ3 = 41,
+        xlWK1 = 5,
+        xlWK1ALL = 31,
+        xlWK1FMT = 30,
+        xlWK3 = 15,
+        xlWK3FM3 = 32,
+        xlWK4 = 38,
+        xlWKS = 4,
+        xlWorkbookDefault = 51,
+        xlWorkbookNormal = -4143,
+        xlWorks2FarEast = 28,
+        xlWQ1 = 34,
+        xlXMLSpreadsheet = 46
+    }
+
+    /**
+     * SpecialCells で取り出すセルの種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcelltype
+     */
+    enum XlCellType {
+        xlCellTypeAllFormatConditions = -4172,
+        xlCellTypeAllValidation = -4174,
+        xlCellTypeBlanks = 4,
+        xlCellTypeComments = -4144,
+        xlCellTypeConstants = 2,
+        xlCellTypeFormulas = -4123,
+        xlCellTypeLastCell = 11,
+        xlCellTypeSameFormatConditions = -4173,
+        xlCellTypeSameValidation = -4175,
+        xlCellTypeVisible = 12
+    }
+
+    /**
+     * SpecialCells で定数または数式のセルを取り出すときの値の種類を指定する（加算して組み合わせられる）。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlspecialcellsvalue
+     */
+    enum XlSpecialCellsValue {
+        xlErrors = 16,
+        xlLogical = 4,
+        xlNumbers = 1,
+        xlTextValues = 2
+    }
+
+    /**
+     * 横方向の配置を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlhalign
+     */
+    enum XlHAlign {
+        xlHAlignCenter = -4108,
+        xlHAlignCenterAcrossSelection = 7,
+        xlHAlignDistributed = -4117,
+        xlHAlignFill = 5,
+        xlHAlignGeneral = 1,
+        xlHAlignJustify = -4130,
+        xlHAlignLeft = -4131,
+        xlHAlignRight = -4152
+    }
+
+    /**
+     * 縦方向の配置を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlvalign
+     */
+    enum XlVAlign {
+        xlVAlignBottom = -4107,
+        xlVAlignCenter = -4108,
+        xlVAlignDistributed = -4117,
+        xlVAlignJustify = -4130,
+        xlVAlignTop = -4160
+    }
+
+    /**
+     * 罫線の位置を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlbordersindex
+     */
+    enum XlBordersIndex {
+        xlDiagonalDown = 5,
+        xlDiagonalUp = 6,
+        xlEdgeBottom = 9,
+        xlEdgeLeft = 7,
+        xlEdgeRight = 10,
+        xlEdgeTop = 8,
+        xlInsideHorizontal = 12,
+        xlInsideVertical = 11
+    }
+
+    /**
+     * 罫線の線種を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xllinestyle
+     */
+    enum XlLineStyle {
+        xlContinuous = 1,
+        xlDash = -4115,
+        xlDashDot = 4,
+        xlDashDotDot = 5,
+        xlDot = -4118,
+        xlDouble = -4119,
+        xlLineStyleNone = -4142,
+        xlSlantDashDot = 13
+    }
+
+    /**
+     * 罫線の太さを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlborderweight
+     */
+    enum XlBorderWeight {
+        xlHairline = 1,
+        xlMedium = -4138,
+        xlThick = 4,
+        xlThin = 2
+    }
+
+    /**
+     * 並べ替えの順序（昇順 / 降順）を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsortorder
+     */
+    enum XlSortOrder {
+        xlAscending = 1,
+        xlDescending = 2
+    }
+
+    /**
+     * 並べ替えの基準にする要素を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsorton
+     */
+    enum XlSortOn {
+        xlSortOnCellColor = 1,
+        xlSortOnFontColor = 2,
+        xlSortOnIcon = 3,
+        xlSortOnValues = 0
+    }
+
+    /**
+     * 並べ替えの方向を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsortorientation
+     */
+    enum XlSortOrientation {
+        xlSortColumns = 1,
+        xlSortRows = 2
+    }
+
+    /**
+     * 日本語や中国語の並べ替え方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsortmethod
+     */
+    enum XlSortMethod {
+        xlPinYin = 1,
+        xlStroke = 2
+    }
+
+    /**
+     * 数値に見える文字列を並べ替えでどう扱うかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsortdataoption
+     */
+    enum XlSortDataOption {
+        xlSortNormal = 0,
+        xlSortTextAsNumbers = 1
+    }
+
+    /**
+     * 先頭行が見出しかどうかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlyesnoguess
+     */
+    enum XlYesNoGuess {
+        xlGuess = 0,
+        xlNo = 2,
+        xlYes = 1
+    }
+
+    /**
+     * セルを削除したあとに詰める方向を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xldeleteshiftdirection
+     */
+    enum XlDeleteShiftDirection {
+        xlShiftToLeft = -4159,
+        xlShiftUp = -4162
+    }
+
+    /**
+     * セルを挿入するときに既存のセルをずらす方向を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlinsertshiftdirection
+     */
+    enum XlInsertShiftDirection {
+        xlShiftDown = -4121,
+        xlShiftToRight = -4161
+    }
+
+    /**
+     * 挿入したセルの書式をどちら側からコピーするかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlinsertformatorigin
+     */
+    enum XlInsertFormatOrigin {
+        xlFormatFromLeftOrAbove = 0,
+        xlFormatFromRightOrBelow = 1
+    }
+
+    /**
+     * マクロ実行中の中断キーの扱いを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlenablecancelkey
+     */
+    enum XlEnableCancelKey {
+        xlDisabled = 0,
+        xlErrorHandler = 2,
+        xlInterrupt = 1
+    }
+
+    /**
+     * マウス ポインターの形を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlmousepointer
+     */
+    enum XlMousePointer {
+        xlDefault = -4143,
+        xlIBeam = 3,
+        xlNorthwestArrow = 1,
+        xlWait = 2
+    }
+
+    /**
+     * ウィンドウの状態を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlwindowstate
+     */
+    enum XlWindowState {
+        xlMaximized = -4137,
+        xlMinimized = -4140,
+        xlNormal = -4143
+    }
+
+    /**
+     * ウィンドウの表示モードを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlwindowview
+     */
+    enum XlWindowView {
+        xlNormalView = 1,
+        xlPageBreakPreview = 2,
+        xlPageLayoutView = 3
+    }
+
+    /**
+     * ウィンドウの種類を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlwindowtype
+     */
+    enum XlWindowType {
+        xlChartAsWindow = 5,
+        xlChartInPlace = 4,
+        xlClipboard = 3,
+        xlInfo = -4129,
+        xlWorkbook = 1
+    }
+
+    /**
+     * ウィンドウの整列方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlarrangestyle
+     */
+    enum XlArrangeStyle {
+        xlArrangeStyleCascade = 7,
+        xlArrangeStyleHorizontal = -4128,
+        xlArrangeStyleTiled = 1,
+        xlArrangeStyleVertical = -4166
+    }
+
+    /**
+     * オートフィルの方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlautofilltype
+     */
+    enum XlAutoFillType {
+        xlFillCopy = 1,
+        xlFillDays = 5,
+        xlFillDefault = 0,
+        xlFillFormats = 3,
+        xlFillMonths = 7,
+        xlFillSeries = 2,
+        xlFillValues = 4,
+        xlFillWeekdays = 6,
+        xlFillYears = 8,
+        xlGrowthTrend = 10,
+        xlLinearTrend = 9,
+        xlFlashFill = 11
+    }
+
+    /**
+     * オートフィルターで 2 つの条件を結ぶ演算子や、フィルターの種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlautofilteroperator
+     */
+    enum XlAutoFilterOperator {
+        xlAnd = 1,
+        xlBottom10Items = 4,
+        xlBottom10Percent = 6,
+        xlFilterCellColor = 8,
+        xlFilterDynamic = 11,
+        xlFilterFontColor = 9,
+        xlFilterIcon = 10,
+        xlFilterValues = 7,
+        xlOr = 2,
+        xlTop10Items = 3,
+        xlTop10Percent = 5
+    }
+
+    /**
+     * 塗りつぶしのパターンを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlpattern
+     */
+    enum XlPattern {
+        xlPatternAutomatic = -4105,
+        xlPatternChecker = 9,
+        xlPatternCrissCross = 16,
+        xlPatternDown = -4121,
+        xlPatternGray16 = 17,
+        xlPatternGray25 = -4124,
+        xlPatternGray50 = -4125,
+        xlPatternGray75 = -4126,
+        xlPatternGray8 = 18,
+        xlPatternGrid = 15,
+        xlPatternHorizontal = -4128,
+        xlPatternLightDown = 13,
+        xlPatternLightHorizontal = 11,
+        xlPatternLightUp = 14,
+        xlPatternLightVertical = 12,
+        xlPatternNone = -4142,
+        xlPatternSemiGray75 = 10,
+        xlPatternSolid = 1,
+        xlPatternUp = -4162,
+        xlPatternVertical = -4166
+    }
+
+    /**
+     * カラー パレットのインデックスの特別な値（自動 / なし）を表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcolorindex
+     */
+    enum XlColorIndex {
+        xlColorIndexAutomatic = -4105,
+        xlColorIndexNone = -4142
+    }
+
+    /**
+     * 下線の種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlunderlinestyle
+     */
+    enum XlUnderlineStyle {
+        xlUnderlineStyleDouble = -4119,
+        xlUnderlineStyleDoubleAccounting = 5,
+        xlUnderlineStyleNone = -4142,
+        xlUnderlineStyleSingle = 2,
+        xlUnderlineStyleSingleAccounting = 4
+    }
+
+    /**
+     * セル参照の形式を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlreferencestyle
+     */
+    enum XlReferenceStyle {
+        xlA1 = 1,
+        xlR1C1 = -4150
+    }
+
+    /**
+     * 数式を変換するときの参照の種類（絶対 / 相対）を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlreferencetype
+     */
+    enum XlReferenceType {
+        xlAbsolute = 1,
+        xlAbsRowRelColumn = 2,
+        xlRelative = 4,
+        xlRelRowAbsColumn = 3
+    }
+
+    /**
+     * ブックを保存するときの共有モードを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsaveasaccessmode
+     */
+    enum XlSaveAsAccessMode {
+        xlExclusive = 3,
+        xlNoChange = 1,
+        xlShared = 2
+    }
+
+    /**
+     * ブックを閉じるときに変更を保存するかどうかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsaveaction
+     */
+    enum XlSaveAction {
+        xlDoNotSaveChanges = 2,
+        xlSaveChanges = 1
+    }
+
+    /**
+     * ブックのアクセス モードを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlfileaccess
+     */
+    enum XlFileAccess {
+        xlReadOnly = 3,
+        xlReadWrite = 2
+    }
+
+    /**
+     * ブックを開くときのリンクの更新方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlupdatelinks
+     */
+    enum XlUpdateLinks {
+        xlUpdateLinksAlways = 3,
+        xlUpdateLinksNever = 2,
+        xlUpdateLinksUserSetting = 1
+    }
+
+    /**
+     * ブックを開くときの修復方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcorruptload
+     */
+    enum XlCorruptLoad {
+        xlExtractData = 2,
+        xlNormalLoad = 0,
+        xlRepairFile = 1
+    }
+
+    /**
+     * リンクの種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xllinktype
+     */
+    enum XlLinkType {
+        xlLinkTypeExcelLinks = 1,
+        xlLinkTypeOLELinks = 2
+    }
+
+    /**
+     * 実行する自動マクロの種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlrunautomacro
+     */
+    enum XlRunAutoMacro {
+        xlAutoActivate = 3,
+        xlAutoClose = 2,
+        xlAutoDeactivate = 4,
+        xlAutoOpen = 1
+    }
+
+    /**
+     * Range.Value で取得するデータの形式を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlrangevaluedatatype
+     */
+    enum XlRangeValueDataType {
+        xlRangeValueDefault = 10,
+        xlRangeValueMSPersistXML = 12,
+        xlRangeValueXMLSpreadsheet = 11
+    }
+
+    /**
+     * 切り取りモードかコピー モードかを表す。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcutcopymode
+     */
+    enum XlCutCopyMode {
+        xlCopy = 1,
+        xlCut = 2
+    }
+
+    /**
+     * 出力する固定レイアウト形式（PDF / XPS）を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlfixedformattype
+     */
+    enum XlFixedFormatType {
+        xlTypePDF = 0,
+        xlTypeXPS = 1
+    }
+
+    /**
+     * PDF / XPS 出力の品質を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlfixedformatquality
+     */
+    enum XlFixedFormatQuality {
+        xlQualityMinimum = 1,
+        xlQualityStandard = 0
+    }
+
+    /**
+     * 用紙の向きを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlpageorientation
+     */
+    enum XlPageOrientation {
+        xlLandscape = 2,
+        xlPortrait = 1
+    }
+
+    /**
+     * 用紙サイズを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlpapersize
+     */
+    enum XlPaperSize {
+        xlPaper10x14 = 16,
+        xlPaper11x17 = 17,
+        xlPaperA3 = 8,
+        xlPaperA4 = 9,
+        xlPaperA4Small = 10,
+        xlPaperA5 = 11,
+        xlPaperB4 = 12,
+        xlPaperB5 = 13,
+        xlPaperCsheet = 24,
+        xlPaperDsheet = 25,
+        xlPaperEnvelope10 = 20,
+        xlPaperEnvelope11 = 21,
+        xlPaperEnvelope12 = 22,
+        xlPaperEnvelope14 = 23,
+        xlPaperEnvelope9 = 19,
+        xlPaperEnvelopeB4 = 33,
+        xlPaperEnvelopeB5 = 34,
+        xlPaperEnvelopeB6 = 35,
+        xlPaperEnvelopeC3 = 29,
+        xlPaperEnvelopeC4 = 30,
+        xlPaperEnvelopeC5 = 28,
+        xlPaperEnvelopeC6 = 31,
+        xlPaperEnvelopeC65 = 32,
+        xlPaperEnvelopeDL = 27,
+        xlPaperEnvelopeItaly = 36,
+        xlPaperEnvelopeMonarch = 37,
+        xlPaperEnvelopePersonal = 38,
+        xlPaperEsheet = 26,
+        xlPaperExecutive = 7,
+        xlPaperFanfoldLegalGerman = 41,
+        xlPaperFanfoldStdGerman = 40,
+        xlPaperFanfoldUS = 39,
+        xlPaperFolio = 14,
+        xlPaperLedger = 4,
+        xlPaperLegal = 5,
+        xlPaperLetter = 1,
+        xlPaperLetterSmall = 2,
+        xlPaperNote = 18,
+        xlPaperQuarto = 15,
+        xlPaperStatement = 6,
+        xlPaperTabloid = 3,
+        xlPaperUser = 256
+    }
+
+    /**
+     * 複数ページに分かれるときのページの順序を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlorder
+     */
+    enum XlOrder {
+        xlDownThenOver = 1,
+        xlOverThenDown = 2
+    }
+
+    /**
+     * コメントの印刷位置を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlprintlocation
+     */
+    enum XlPrintLocation {
+        xlPrintInPlace = 16,
+        xlPrintNoComments = -4142,
+        xlPrintSheetEnd = 1
+    }
+
+    /**
+     * エラー値の印刷方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlprinterrors
+     */
+    enum XlPrintErrors {
+        xlPrintErrorsBlank = 1,
+        xlPrintErrorsDash = 2,
+        xlPrintErrorsDisplayed = 0,
+        xlPrintErrorsNA = 3
+    }
+
+    /**
+     * テーブルのデータ ソースの種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xllistobjectsourcetype
+     */
+    enum XlListObjectSourceType {
+        xlSrcExternal = 0,
+        xlSrcModel = 4,
+        xlSrcQuery = 3,
+        xlSrcRange = 1,
+        xlSrcXml = 2
+    }
+
+    /**
+     * テーブルの集計行での集計方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xltotalscalculation
+     */
+    enum XlTotalsCalculation {
+        xlTotalsCalculationAverage = 2,
+        xlTotalsCalculationCount = 3,
+        xlTotalsCalculationCountNums = 4,
+        xlTotalsCalculationCustom = 9,
+        xlTotalsCalculationMax = 6,
+        xlTotalsCalculationMin = 5,
+        xlTotalsCalculationNone = 0,
+        xlTotalsCalculationStdDev = 7,
+        xlTotalsCalculationSum = 1,
+        xlTotalsCalculationVar = 8
+    }
+
+    /**
+     * 入力規則の種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xldvtype
+     */
+    enum XlDVType {
+        xlValidateCustom = 7,
+        xlValidateDate = 4,
+        xlValidateDecimal = 2,
+        xlValidateInputOnly = 0,
+        xlValidateList = 3,
+        xlValidateTextLength = 6,
+        xlValidateTime = 5,
+        xlValidateWholeNumber = 1
+    }
+
+    /**
+     * 入力規則のエラー メッセージのスタイルを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xldvalertstyle
+     */
+    enum XlDVAlertStyle {
+        xlValidAlertInformation = 3,
+        xlValidAlertStop = 1,
+        xlValidAlertWarning = 2
+    }
+
+    /**
+     * 条件付き書式の種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlformatconditiontype
+     */
+    enum XlFormatConditionType {
+        xlAboveAverageCondition = 12,
+        xlBlanksCondition = 10,
+        xlCellValue = 1,
+        xlColorScale = 3,
+        xlDataBar = 4,
+        xlErrorsCondition = 16,
+        xlExpression = 2,
+        xlIconSet = 6,
+        xlNoBlanksCondition = 13,
+        xlNoErrorsCondition = 17,
+        xlTextString = 9,
+        xlTimePeriod = 11,
+        xlTop10 = 5,
+        xlUniqueValues = 8
+    }
+
+    /**
+     * 条件付き書式や入力規則の比較演算子を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlformatconditionoperator
+     */
+    enum XlFormatConditionOperator {
+        xlBetween = 1,
+        xlEqual = 3,
+        xlGreater = 5,
+        xlGreaterEqual = 7,
+        xlLess = 6,
+        xlLessEqual = 8,
+        xlNotBetween = 2,
+        xlNotEqual = 4
+    }
+
+    /**
+     * テキストを列に分割する方法（区切り文字 / 固定幅）を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xltextparsingtype
+     */
+    enum XlTextParsingType {
+        xlDelimited = 1,
+        xlFixedWidth = 2
+    }
+
+    /**
+     * 文字列の引用符を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xltextqualifier
+     */
+    enum XlTextQualifier {
+        xlTextQualifierDoubleQuote = 1,
+        xlTextQualifierNone = -4142,
+        xlTextQualifierSingleQuote = 2
+    }
+
+    /**
+     * テキストを取り込むときの列のデータ形式を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcolumndatatype
+     */
+    enum XlColumnDataType {
+        xlDMYFormat = 4,
+        xlDYMFormat = 7,
+        xlEMDFormat = 10,
+        xlGeneralFormat = 1,
+        xlMDYFormat = 3,
+        xlMYDFormat = 6,
+        xlSkipColumn = 9,
+        xlTextFormat = 2,
+        xlYDMFormat = 8,
+        xlYMDFormat = 5
+    }
+
+    /**
+     * 小計や統合で使う集計方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlconsolidationfunction
+     */
+    enum XlConsolidationFunction {
+        xlAverage = -4106,
+        xlCount = -4112,
+        xlCountNums = -4113,
+        xlDistinctCount = 11,
+        xlMax = -4136,
+        xlMin = -4139,
+        xlProduct = -4149,
+        xlStDev = -4155,
+        xlStDevP = -4156,
+        xlSum = -4157,
+        xlUnknown = 1000,
+        xlVar = -4164,
+        xlVarP = -4165
+    }
+
+    /**
+     * 小計行をデータの上下どちらに置くかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlsummaryrow
+     */
+    enum XlSummaryRow {
+        xlSummaryAbove = 0,
+        xlSummaryBelow = 1
+    }
+
+    /**
+     * フィルター オプションで、抽出結果を同じ場所に表示するか別の場所にコピーするかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlfilteraction
+     */
+    enum XlFilterAction {
+        xlFilterCopy = 2,
+        xlFilterInPlace = 1
+    }
+
+    /**
+     * 複数シートへコピーする要素を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlfillwith
+     */
+    enum XlFillWith {
+        xlFillWithAll = -4104,
+        xlFillWithContents = 2,
+        xlFillWithFormats = -4122
+    }
+
+    /**
+     * 保護されたシートで選択できるセルを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlenableselection
+     */
+    enum XlEnableSelection {
+        xlNoRestrictions = 0,
+        xlNoSelection = -4142,
+        xlUnlockedCells = 1
+    }
+
+    /**
+     * 図形をセルの移動やサイズ変更にどう追従させるかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlplacement
+     */
+    enum XlPlacement {
+        xlFreeFloating = 3,
+        xlMove = 2,
+        xlMoveAndSize = 1
+    }
+
+    /**
+     * フォーム コントロールの種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlformcontrol
+     */
+    enum XlFormControl {
+        xlButtonControl = 0,
+        xlCheckBox = 1,
+        xlDropDown = 2,
+        xlEditBox = 3,
+        xlGroupBox = 4,
+        xlLabel = 5,
+        xlListBox = 6,
+        xlOptionButton = 7,
+        xlScrollBar = 8,
+        xlSpinner = 9
+    }
+
+    /**
+     * 図としてコピーするときの見た目（画面表示 / 印刷時）を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlpictureappearance
+     */
+    enum XlPictureAppearance {
+        xlPrinter = 2,
+        xlScreen = 1
+    }
+
+    /**
+     * 図としてコピーするときの画像形式を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcopypictureformat
+     */
+    enum XlCopyPictureFormat {
+        xlBitmap = 2,
+        xlPicture = -4147
+    }
+
+    /**
+     * グラフの種類を指定する（よく使うもののみ）。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcharttype
+     */
+    enum XlChartType {
+        xlColumnClustered = 51,
+        xlColumnStacked = 52,
+        xlColumnStacked100 = 53,
+        xl3DColumnClustered = 54,
+        xl3DColumnStacked = 55,
+        xl3DColumnStacked100 = 56,
+        xl3DColumn = -4100,
+        xlBarClustered = 57,
+        xlBarStacked = 58,
+        xlBarStacked100 = 59,
+        xl3DBarClustered = 60,
+        xl3DBarStacked = 61,
+        xl3DBarStacked100 = 62,
+        xlLine = 4,
+        xlLineStacked = 63,
+        xlLineStacked100 = 64,
+        xlLineMarkers = 65,
+        xlLineMarkersStacked = 66,
+        xlLineMarkersStacked100 = 67,
+        xl3DLine = -4101,
+        xlPie = 5,
+        xlPieExploded = 69,
+        xl3DPie = -4102,
+        xl3DPieExploded = 70,
+        xlPieOfPie = 68,
+        xlBarOfPie = 71,
+        xlDoughnut = -4120,
+        xlDoughnutExploded = 80,
+        xlXYScatter = -4169,
+        xlXYScatterLines = 74,
+        xlXYScatterLinesNoMarkers = 75,
+        xlXYScatterSmooth = 72,
+        xlXYScatterSmoothNoMarkers = 73,
+        xlArea = 1,
+        xlAreaStacked = 76,
+        xlAreaStacked100 = 77,
+        xl3DArea = -4098,
+        xl3DAreaStacked = 78,
+        xl3DAreaStacked100 = 79,
+        xlBubble = 15,
+        xlBubble3DEffect = 87,
+        xlRadar = -4151,
+        xlRadarMarkers = 81,
+        xlRadarFilled = 82,
+        xlSurface = 83,
+        xlSurfaceWireframe = 84,
+        xlSurfaceTopView = 85,
+        xlSurfaceTopViewWireframe = 86,
+        xlStockHLC = 88,
+        xlStockOHLC = 89,
+        xlStockVHLC = 90,
+        xlStockVOHLC = 91,
+        xlTreemap = 117,
+        xlHistogram = 118,
+        xlWaterfall = 119,
+        xlSunburst = 120,
+        xlBoxwhisker = 121,
+        xlPareto = 122,
+        xlFunnel = 123
+    }
+
+    /**
+     * グラフの移動先を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlchartlocation
+     */
+    enum XlChartLocation {
+        xlLocationAsNewSheet = 1,
+        xlLocationAsObject = 2,
+        xlLocationAutomatic = 3
+    }
+
+    /**
+     * データ系列を行と列のどちらから取るかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlrowcol
+     */
+    enum XlRowCol {
+        xlColumns = 2,
+        xlRows = 1
+    }
+
+    /**
+     * グラフの軸の種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlaxistype
+     */
+    enum XlAxisType {
+        xlCategory = 1,
+        xlSeriesAxis = 3,
+        xlValue = 2
+    }
+
+    /**
+     * グラフの軸のグループ（主軸 / 第 2 軸）を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlaxisgroup
+     */
+    enum XlAxisGroup {
+        xlPrimary = 1,
+        xlSecondary = 2
+    }
+
+    /**
+     * 凡例の位置を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xllegendposition
+     */
+    enum XlLegendPosition {
+        xlLegendPositionBottom = -4107,
+        xlLegendPositionCorner = 2,
+        xlLegendPositionCustom = -4161,
+        xlLegendPositionLeft = -4131,
+        xlLegendPositionRight = -4152,
+        xlLegendPositionTop = -4160
+    }
+
+    /**
+     * グラフで空白セルをどう描くかを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xldisplayblanksas
+     */
+    enum XlDisplayBlanksAs {
+        xlInterpolated = 3,
+        xlNotPlotted = 1,
+        xlZero = 2
+    }
+
+    /**
+     * セルのエラー値に対応するエラー番号。`CVErr` に渡してエラー値を作る。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlcverror
+     */
+    enum XlCVError {
+        xlErrDiv0 = 2007,
+        xlErrNA = 2042,
+        xlErrName = 2029,
+        xlErrNull = 2000,
+        xlErrNum = 2036,
+        xlErrRef = 2023,
+        xlErrValue = 2015,
+        xlErrSpill = 2045
+    }
+
+    /**
+     * テーマの配色の色を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlthemecolor
+     */
+    enum XlThemeColor {
+        xlThemeColorAccent1 = 5,
+        xlThemeColorAccent2 = 6,
+        xlThemeColorAccent3 = 7,
+        xlThemeColorAccent4 = 8,
+        xlThemeColorAccent5 = 9,
+        xlThemeColorAccent6 = 10,
+        xlThemeColorDark1 = 1,
+        xlThemeColorDark2 = 3,
+        xlThemeColorFollowedHyperlink = 12,
+        xlThemeColorHyperlink = 11,
+        xlThemeColorLight1 = 2,
+        xlThemeColorLight2 = 4
+    }
+
+    /**
+     * テーマのフォントを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlthemefont
+     */
+    enum XlThemeFont {
+        xlThemeFontMajor = 1,
+        xlThemeFontMinor = 2,
+        xlThemeFontNone = 0
+    }
+
+    /**
+     * Application.International で取得する国や地域の設定項目を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/excel.xlapplicationinternational
+     */
+    enum XlApplicationInternational {
+        xl24HourClock = 33,
+        xl4DigitYears = 43,
+        xlAlternateArraySeparator = 16,
+        xlColumnSeparator = 14,
+        xlCountryCode = 1,
+        xlCountrySetting = 2,
+        xlCurrencyBefore = 37,
+        xlCurrencyCode = 25,
+        xlCurrencyDigits = 27,
+        xlCurrencyLeadingZeros = 40,
+        xlCurrencyMinusSign = 38,
+        xlCurrencyNegative = 28,
+        xlCurrencySpaceBefore = 36,
+        xlCurrencyTrailingZeros = 39,
+        xlDateOrder = 32,
+        xlDateSeparator = 17,
+        xlDayCode = 21,
+        xlDayLeadingZero = 42,
+        xlDecimalSeparator = 3,
+        xlGeneralFormatName = 26,
+        xlHourCode = 22,
+        xlLeftBrace = 12,
+        xlLeftBracket = 10,
+        xlListSeparator = 5,
+        xlLowerCaseColumnLetter = 9,
+        xlLowerCaseRowLetter = 8,
+        xlMDY = 44,
+        xlMetric = 35,
+        xlMinuteCode = 23,
+        xlMonthCode = 20,
+        xlMonthLeadingZero = 41,
+        xlMonthNameChars = 30,
+        xlNoncurrencyDigits = 29,
+        xlNonEnglishFunctions = 34,
+        xlRightBrace = 13,
+        xlRightBracket = 11,
+        xlRowSeparator = 15,
+        xlSecondCode = 24,
+        xlThousandsSeparator = 4,
+        xlTimeLeadingZero = 45,
+        xlTimeSeparator = 18,
+        xlUpperCaseColumnLetter = 7,
+        xlUpperCaseRowLetter = 6,
+        xlWeekdayNameChars = 31,
+        xlYearCode = 19
+    }
+}
+
+// ---------------------------------------------------------------------
+// 修飾なしで使えるグローバル（VBA の Excel グローバルと同じ）
+// ---------------------------------------------------------------------
+
+/**
+ * Excel アプリケーション本体。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application(object)
+ */
+declare const Application: Excel.Application;
+
+/**
+ * 実行中のマクロが入っているブック。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.thisworkbook
+ */
+declare const ThisWorkbook: Excel.Workbook;
+
+/**
+ * アクティブなブック。ブックが開いていなければ Nothing。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.activeworkbook
+ */
+declare const ActiveWorkbook: Excel.Workbook;
+
+/**
+ * アクティブなシート（ワークシートまたはグラフ シート）。Object 型。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.activesheet
+ */
+declare const ActiveSheet: object;
+
+/**
+ * アクティブなセル。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.activecell
+ */
+declare const ActiveCell: Excel.Range;
+
+/**
+ * アクティブなウィンドウ。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.activewindow
+ */
+declare const ActiveWindow: Excel.Window;
+
+/**
+ * 現在選択されているオブジェクト。Object 型。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.selection
+ */
+declare const Selection: object;
+
+/**
+ * 開いているすべてのブックのコレクション。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.workbooks
+ */
+declare const Workbooks: Excel.Workbooks;
+
+/**
+ * アクティブ ブックのすべてのワークシート。`Worksheets("名前")` の結果は Object 型。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.worksheets
+ */
+declare const Worksheets: Excel.Sheets;
+
+/**
+ * アクティブ ブックのすべてのシート（グラフ シートを含む）。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.sheets
+ */
+declare const Sheets: Excel.Sheets;
+
+/**
+ * アクティブ ブックの名前定義のコレクション。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.names
+ */
+declare const Names: Excel.Names;
+
+/**
+ * すべてのウィンドウのコレクション。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.windows
+ */
+declare const Windows: Excel.Windows;
+
+/**
+ * ワークシート関数を VBA から呼び出すためのオブジェクト。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.worksheetfunction
+ */
+declare const WorksheetFunction: Excel.WorksheetFunction;
+
+/**
+ * アクティブ シート上のセルまたはセル範囲を返す。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.range
+ */
+declare function Range(cell1: any, cell2?: any): Excel.Range;
+
+/**
+ * アクティブ シートのセルを返す。引数なしなら全セル。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.cells
+ */
+declare function Cells(row?: any, col?: any): Excel.Range;
+
+/**
+ * アクティブ シートの行を返す。引数なしなら全行。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.rows
+ */
+declare function Rows(index?: any): Excel.Range;
+
+/**
+ * アクティブ シートの列を返す。引数なしなら全列。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.columns
+ */
+declare function Columns(index?: any): Excel.Range;
+
+/**
+ * 複数のセル範囲を 1 つにまとめた範囲を返す。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.union
+ */
+declare function Union(arg1: Excel.Range, arg2: Excel.Range, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): Excel.Range;
+
+/**
+ * 複数のセル範囲の共通部分を返す。重なりがなければ Nothing。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.intersect
+ */
+declare function Intersect(arg1: Excel.Range, arg2: Excel.Range, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): Excel.Range;
+
+/**
+ * 名前や数式の文字列を評価して、オブジェクトまたは値にする。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.evaluate
+ */
+declare function Evaluate(name: any): any;
+
+/**
+ * マクロまたは関数を名前で呼び出す。
+ * @see https://learn.microsoft.com/office/vba/api/excel.application.run
+ */
+declare function Run(macro: any, arg1?: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): any;

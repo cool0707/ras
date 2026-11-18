@@ -1,0 +1,409 @@
+// Office 共通ライブラリの型定義（RAS 同梱・抜粋）。
+//
+// Excel のコードからよく使う部分だけを収録する:
+//   - ファイル / フォルダー選択ダイアログ（FileDialog）
+//   - リボンのコールバックで受け取る IRibbonUI / IRibbonControl
+//   - Excel の図形・セキュリティ関連メンバーが参照する Mso* 列挙型
+// CommandBars は収録していない。Excel 側（`Application.CommandBars`）では `object` 型として公開する。
+// JSDoc の要約は独自に書いたもの。詳細は @see の Microsoft リファレンスを参照。
+
+declare namespace Office {
+    /**
+     * ファイルやフォルダーを選択する標準ダイアログを表す。`Application.FileDialog` で取得する。
+     * @see https://learn.microsoft.com/office/vba/api/office.filedialog
+     */
+    interface FileDialog {
+        /**
+         * ダイアログを表示する。操作ボタンが押されたら -1、キャンセルされたら 0 を返す。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.show
+         */
+        Show(): int;
+
+        /**
+         * [開く] / [名前を付けて保存] ダイアログで、選択されたファイルに対する操作を実行する。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.execute
+         */
+        Execute(): void;
+
+        /**
+         * ユーザーが選択したパスのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.selecteditems
+         */
+        readonly SelectedItems: FileDialogSelectedItems;
+
+        /**
+         * ファイルの種類のフィルターのコレクション。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.filters
+         */
+        readonly Filters: FileDialogFilters;
+
+        /**
+         * 最初に選択しておくフィルターの番号（1 始まり）。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.filterindex
+         */
+        FilterIndex: int;
+
+        /**
+         * ダイアログのタイトル。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.title
+         */
+        Title: string;
+
+        /**
+         * 操作ボタンに表示する文字列。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.buttonname
+         */
+        ButtonName: string;
+
+        /**
+         * 複数のファイルを選択できるようにするかどうか。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.allowmultiselect
+         */
+        AllowMultiSelect: boolean;
+
+        /**
+         * 最初に表示するフォルダーまたはファイル名。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.initialfilename
+         */
+        InitialFileName: string;
+
+        /**
+         * ファイル一覧の最初の表示方法。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.initialview
+         */
+        InitialView: MsoFileDialogView;
+
+        /**
+         * ダイアログの種類。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialog.dialogtype
+         */
+        readonly DialogType: MsoFileDialogType;
+
+        // その他のメンバー
+        readonly Item: string;
+        readonly Application: object;
+        readonly Parent: object;
+    }
+
+    /**
+     * FileDialog で選択されたパスのコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/office.filedialogselecteditems
+     */
+    interface FileDialogSelectedItems {
+        /**
+         * インデックス（1 始まり）で選択されたパスを返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogselecteditems.item
+         */
+        (index: int): string;
+
+        /**
+         * インデックス（1 始まり）で選択されたパスを返す。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogselecteditems.item
+         */
+        Item(index: int): string;
+
+        /**
+         * 選択されたパスの数。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogselecteditems.count
+         */
+        readonly Count: int;
+
+        // その他のメンバー
+        readonly Application: object;
+        readonly Parent: object;
+    }
+
+    /**
+     * FileDialog のファイルの種類フィルターのコレクション。
+     * @see https://learn.microsoft.com/office/vba/api/office.filedialogfilters
+     */
+    interface FileDialogFilters {
+        /**
+         * インデックス（1 始まり）でフィルターを返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogfilters.item
+         */
+        (index: int): FileDialogFilter;
+
+        /**
+         * インデックス（1 始まり）でフィルターを返す。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogfilters.item
+         */
+        Item(index: int): FileDialogFilter;
+
+        /**
+         * フィルターの数。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogfilters.count
+         */
+        readonly Count: int;
+
+        /**
+         * フィルターを追加する。拡張子は "*.xlsx; *.xlsm" の形式で指定する。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogfilters.add
+         */
+        Add(description: string, extensions: string, position?: any): FileDialogFilter;
+
+        /**
+         * すべてのフィルターを削除する。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogfilters.clear
+         */
+        Clear(): void;
+
+        /**
+         * フィルターを 1 つ削除する。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogfilters.delete
+         */
+        Delete(filter?: any): void;
+
+        // その他のメンバー
+        readonly Application: object;
+        readonly Parent: object;
+    }
+
+    /**
+     * FileDialog のファイルの種類フィルター 1 つを表す。
+     * @see https://learn.microsoft.com/office/vba/api/office.filedialogfilter
+     */
+    interface FileDialogFilter {
+        /**
+         * フィルターの説明文。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogfilter.description
+         */
+        readonly Description: string;
+
+        /**
+         * 対象の拡張子（"*.xlsx; *.xlsm" の形式）。
+         * @see https://learn.microsoft.com/office/vba/api/office.filedialogfilter.extensions
+         */
+        readonly Extensions: string;
+
+        // その他のメンバー
+        readonly Application: object;
+        readonly Parent: object;
+    }
+
+    /**
+     * リボン UI を表す。リボン XML の onLoad コールバックで受け取り、表示の更新に使う。
+     * @see https://learn.microsoft.com/office/vba/api/office.iribbonui
+     */
+    interface IRibbonUI {
+        /**
+         * カスタム リボン全体のコールバックを再評価させる。
+         * @see https://learn.microsoft.com/office/vba/api/office.iribbonui.invalidate
+         */
+        Invalidate(): void;
+
+        /**
+         * 指定した ID のコントロールだけを再評価させる。
+         * @see https://learn.microsoft.com/office/vba/api/office.iribbonui.invalidatecontrol
+         */
+        InvalidateControl(controlId: string): void;
+
+        /**
+         * 指定した ID の組み込みコントロールを再評価させる。
+         * @see https://learn.microsoft.com/office/vba/api/office.iribbonui.invalidatecontrolmso
+         */
+        InvalidateControlMso(controlId: string): void;
+
+        /**
+         * 指定した ID のカスタム タブをアクティブにする。
+         * @see https://learn.microsoft.com/office/vba/api/office.iribbonui.activatetab
+         */
+        ActivateTab(controlId: string): void;
+
+        /**
+         * 指定した ID の組み込みタブをアクティブにする。
+         * @see https://learn.microsoft.com/office/vba/api/office.iribbonui.activatetabmso
+         */
+        ActivateTabMso(controlId: string): void;
+
+        /**
+         * 名前空間付きの ID で指定したカスタム タブをアクティブにする。
+         * @see https://learn.microsoft.com/office/vba/api/office.iribbonui.activatetabq
+         */
+        ActivateTabQ(controlId: string, namespace: string): void;
+    }
+
+    /**
+     * リボンのコールバックに渡される、操作されたコントロールを表す。
+     * @see https://learn.microsoft.com/office/vba/api/office.iribboncontrol
+     */
+    interface IRibbonControl {
+        /**
+         * リボン XML で指定したコントロールの ID。
+         * @see https://learn.microsoft.com/office/vba/api/office.iribboncontrol.id
+         */
+        readonly Id: string;
+
+        /**
+         * リボン XML で指定した tag 属性の値。
+         * @see https://learn.microsoft.com/office/vba/api/office.iribboncontrol.tag
+         */
+        readonly Tag: string;
+
+        /**
+         * コントロールがあるウィンドウを表すオブジェクト。
+         * @see https://learn.microsoft.com/office/vba/api/office.iribboncontrol.context
+         */
+        readonly Context: object;
+    }
+
+    // ---------------------------------------------------------------------
+    // 列挙型（値はタイプ ライブラリの実値）
+    // ---------------------------------------------------------------------
+
+    /**
+     * FileDialog の種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/office.msofiledialogtype
+     */
+    enum MsoFileDialogType {
+        msoFileDialogFilePicker = 3,
+        msoFileDialogFolderPicker = 4,
+        msoFileDialogOpen = 1,
+        msoFileDialogSaveAs = 2
+    }
+
+    /**
+     * FileDialog のファイル一覧の表示方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/office.msofiledialogview
+     */
+    enum MsoFileDialogView {
+        msoFileDialogViewDetails = 2,
+        msoFileDialogViewLargeIcons = 6,
+        msoFileDialogViewList = 1,
+        msoFileDialogViewPreview = 4,
+        msoFileDialogViewProperties = 3,
+        msoFileDialogViewSmallIcons = 7,
+        msoFileDialogViewThumbnail = 5,
+        msoFileDialogViewTiles = 9,
+        msoFileDialogViewWebView = 8
+    }
+
+    /**
+     * 真 / 偽に加えて「混在」などを表せる 3 状態の値。
+     * @see https://learn.microsoft.com/office/vba/api/office.msotristate
+     */
+    enum MsoTriState {
+        msoCTrue = 1,
+        msoFalse = 0,
+        msoTriStateMixed = -2,
+        msoTriStateToggle = -3,
+        msoTrue = -1
+    }
+
+    /**
+     * プログラムからファイルを開くときのマクロ セキュリティを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/office.msoautomationsecurity
+     */
+    enum MsoAutomationSecurity {
+        msoAutomationSecurityByUI = 2,
+        msoAutomationSecurityForceDisable = 3,
+        msoAutomationSecurityLow = 1
+    }
+
+    /**
+     * 図形の種類を表す。
+     * @see https://learn.microsoft.com/office/vba/api/office.msoshapetype
+     */
+    enum MsoShapeType {
+        mso3DModel = 30,
+        msoAutoShape = 1,
+        msoCallout = 2,
+        msoCanvas = 20,
+        msoChart = 3,
+        msoComment = 4,
+        msoContentApp = 27,
+        msoDiagram = 21,
+        msoEmbeddedOLEObject = 7,
+        msoFormControl = 8,
+        msoFreeform = 5,
+        msoGraphic = 28,
+        msoGroup = 6,
+        msoIgxGraphic = 24,
+        msoInk = 22,
+        msoInkComment = 23,
+        msoLine = 9,
+        msoLinked3DModel = 31,
+        msoLinkedGraphic = 29,
+        msoLinkedOLEObject = 10,
+        msoLinkedPicture = 11,
+        msoMedia = 16,
+        msoOLEControlObject = 12,
+        msoPicture = 13,
+        msoPlaceholder = 14,
+        msoScriptAnchor = 18,
+        msoShapeTypeMixed = -2,
+        msoSlicer = 25,
+        msoTable = 19,
+        msoTextBox = 17,
+        msoTextEffect = 15,
+        msoWebVideo = 26
+    }
+
+    /**
+     * オートシェイプの形を指定する（よく使うもののみ）。
+     * @see https://learn.microsoft.com/office/vba/api/office.msoautoshapetype
+     */
+    enum MsoAutoShapeType {
+        msoShapeRectangle = 1,
+        msoShapeRoundedRectangle = 5,
+        msoShapeOval = 9,
+        msoShapeDiamond = 4,
+        msoShapeIsoscelesTriangle = 7,
+        msoShapeRightTriangle = 8,
+        msoShapeParallelogram = 2,
+        msoShapeTrapezoid = 3,
+        msoShapeHexagon = 10,
+        msoShapeOctagon = 6,
+        msoShapeCross = 11,
+        msoShapeRegularPentagon = 12,
+        msoShapeRightArrow = 33,
+        msoShapeLeftArrow = 34,
+        msoShapeUpArrow = 35,
+        msoShapeDownArrow = 36,
+        msoShapeLeftRightArrow = 37,
+        msoShapeUpDownArrow = 38,
+        msoShape5pointStar = 92,
+        msoShapeHeart = 21,
+        msoShapeCloud = 179,
+        msoShapeDonut = 18,
+        msoShapeCube = 14,
+        msoShapeCan = 13,
+        msoShapeRectangularCallout = 105,
+        msoShapeRoundedRectangularCallout = 106,
+        msoShapeOvalCallout = 107,
+        msoShapeCloudCallout = 108,
+        msoShapeFlowchartProcess = 61,
+        msoShapeFlowchartDecision = 63,
+        msoShapeFlowchartTerminator = 69,
+        msoShapeFlowchartData = 64,
+        msoShapeFlowchartConnector = 73,
+        msoShapeMixed = -2
+    }
+
+    /**
+     * 図形内の文字列の向きを指定する。
+     * @see https://learn.microsoft.com/office/vba/api/office.msotextorientation
+     */
+    enum MsoTextOrientation {
+        msoTextOrientationDownward = 3,
+        msoTextOrientationHorizontal = 1,
+        msoTextOrientationHorizontalRotatedFarEast = 6,
+        msoTextOrientationMixed = -2,
+        msoTextOrientationUpward = 2,
+        msoTextOrientationVertical = 5,
+        msoTextOrientationVerticalFarEast = 4
+    }
+
+    /**
+     * 図形の重なり順の移動方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/api/office.msozordercmd
+     */
+    enum MsoZOrderCmd {
+        msoBringForward = 2,
+        msoBringInFrontOfText = 4,
+        msoBringToFront = 0,
+        msoSendBackward = 3,
+        msoSendBehindText = 5,
+        msoSendToBack = 1
+    }
+}

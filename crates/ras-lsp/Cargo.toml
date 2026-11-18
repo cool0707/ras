@@ -1,0 +1,15 @@
+[package]
+name = "ras-lsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Language server for RAS"
+
+[dependencies]
+ras-syntax.workspace = true
+ras-compiler.workspace = true
+ras-ovba.workspace = true
+lsp-server.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,1242 @@
+// VBA 標準ライブラリの型定義（RAS 同梱）。
+//
+// 方針:
+//   - 型・列挙型は名前空間 `VBA` に、関数・定数・`Err` / `Debug` はトップレベルに宣言する。
+//   - VBA には多重定義がないため、関数は 1 つのシグネチャで宣言し、省略可能な引数に `?` を付ける。
+//   - ParamArray を取る関数（Array / Choose / Switch / CallByName / Debug.Print）は、
+//     省略可能な `any` 引数を並べて宣言する。
+//   - 文字列を返す関数（Left / Mid / Trim など）は `$` 付きの版と同じく `string` を返すものとして宣言する。
+//   - VBA の Integer を返す関数は、`CInt` を除き `int` として宣言する。
+//   - JSDoc の要約は独自に書いたもの。詳細は @see の Microsoft リファレンスを参照。
+
+declare namespace VBA {
+    /**
+     * 直前に発生した実行時エラーの情報を保持する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/err-object
+     */
+    interface ErrObject {
+        /**
+         * エラー番号。0 ならエラーなし。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/number-property-visual-basic-for-applications
+         */
+        Number: int;
+
+        /**
+         * エラーの説明。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/description-property-visual-basic-for-applications
+         */
+        Description: string;
+
+        /**
+         * エラーを発生させたオブジェクトまたはアプリケーションの名前。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/source-property-visual-basic-for-applications
+         */
+        Source: string;
+
+        /**
+         * エラーに対応するヘルプ ファイルのパス。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/helpfile-property
+         */
+        HelpFile: string;
+
+        /**
+         * ヘルプ ファイル内のトピックのコンテキスト ID。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/helpcontext-property-visual-basic-for-applications
+         */
+        HelpContext: int;
+
+        /**
+         * 直前の DLL 呼び出しで設定されたシステム エラー コード。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/lastdllerror-property
+         */
+        readonly LastDllError: int;
+
+        /**
+         * 実行時エラーを発生させる。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/raise-method
+         */
+        Raise(number: int, source?: any, description?: any, helpFile?: any, helpContext?: any): void;
+
+        /**
+         * エラー情報をすべて消去する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/clear-method-visual-basic-for-applications
+         */
+        Clear(): void;
+    }
+
+    /**
+     * 順序付きの項目の集まり。インデックスは 1 始まりで、キー文字列でも参照できる。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/collection-object
+     */
+    interface Collection {
+        /**
+         * インデックスまたはキーで項目を返す（既定メンバー）。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/item-method-visual-basic-for-applications
+         */
+        (index: any): any;
+
+        /**
+         * インデックスまたはキーで項目を返す。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/item-method-visual-basic-for-applications
+         */
+        Item(index: any): any;
+
+        /**
+         * 項目の数。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/count-property-visual-basic-for-applications
+         */
+        Count(): int;
+
+        /**
+         * 項目を追加する。`before` / `after` で挿入位置を指定できる。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/add-method-visual-basic-for-applications
+         */
+        Add(item: any, key?: any, before?: any, after?: any): void;
+
+        /**
+         * インデックスまたはキーで項目を削除する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/remove-method-visual-basic-for-applications
+         */
+        Remove(index: any): void;
+    }
+
+    /**
+     * イミディエイト ウィンドウへの出力とアサーションを行う。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/debug-object
+     */
+    interface DebugObject {
+        /**
+         * イミディエイト ウィンドウに値を出力する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/print-method
+         */
+        Print(arg1?: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any): void;
+
+        /**
+         * 条件が偽のとき、開発中の実行を中断する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/assert-method
+         */
+        Assert(cond: boolean): void;
+    }
+
+    // ---------------------------------------------------------------------
+    // 列挙型
+    // ---------------------------------------------------------------------
+
+    /**
+     * MsgBox に表示するボタン・アイコン・既定ボタンなどを指定する（加算して組み合わせる）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/msgbox-constants
+     */
+    enum VbMsgBoxStyle {
+        vbOKOnly = 0,
+        vbOKCancel = 1,
+        vbAbortRetryIgnore = 2,
+        vbYesNoCancel = 3,
+        vbYesNo = 4,
+        vbRetryCancel = 5,
+        vbCritical = 16,
+        vbQuestion = 32,
+        vbExclamation = 48,
+        vbInformation = 64,
+        vbDefaultButton1 = 0,
+        vbDefaultButton2 = 256,
+        vbDefaultButton3 = 512,
+        vbDefaultButton4 = 768,
+        vbApplicationModal = 0,
+        vbSystemModal = 4096,
+        vbMsgBoxHelpButton = 16384,
+        vbMsgBoxSetForeground = 65536,
+        vbMsgBoxRight = 524288,
+        vbMsgBoxRtlReading = 1048576
+    }
+
+    /**
+     * MsgBox で押されたボタンを表す。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/msgbox-constants
+     */
+    enum VbMsgBoxResult {
+        vbOK = 1,
+        vbCancel = 2,
+        vbAbort = 3,
+        vbRetry = 4,
+        vbIgnore = 5,
+        vbYes = 6,
+        vbNo = 7
+    }
+
+    /**
+     * 文字列比較の方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/comparison-constants
+     */
+    enum VbCompareMethod {
+        vbBinaryCompare = 0,
+        vbTextCompare = 1,
+        vbDatabaseCompare = 2
+    }
+
+    /**
+     * VarType が返すデータ型の種類を表す。
+     * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/vartype-constants
+     */
+    enum VbVarType {
+        vbEmpty = 0,
+        vbNull = 1,
+        vbInteger = 2,
+        vbLong = 3,
+        vbSingle = 4,
+        vbDouble = 5,
+        vbCurrency = 6,
+        vbDate = 7,
+        vbString = 8,
+        vbObject = 9,
+        vbError = 10,
+        vbBoolean = 11,
+        vbVariant = 12,
+        vbDataObject = 13,
+        vbDecimal = 14,
+        vbByte = 17,
+        vbLongLong = 20,
+        vbUserDefinedType = 36,
+        vbArray = 8192
+    }
+
+    /**
+     * 曜日、または週の最初の曜日を指定する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/date-constants
+     */
+    enum VbDayOfWeek {
+        vbUseSystemDayOfWeek = 0,
+        vbSunday = 1,
+        vbMonday = 2,
+        vbTuesday = 3,
+        vbWednesday = 4,
+        vbThursday = 5,
+        vbFriday = 6,
+        vbSaturday = 7
+    }
+
+    /**
+     * 年の第 1 週の決め方を指定する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/date-constants
+     */
+    enum VbFirstWeekOfYear {
+        vbUseSystem = 0,
+        vbFirstJan1 = 1,
+        vbFirstFourDays = 2,
+        vbFirstFullWeek = 3
+    }
+
+    /**
+     * StrConv で行う文字種の変換を指定する（加算して組み合わせられる）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/strconv-constants
+     */
+    enum VbStrConv {
+        vbUpperCase = 1,
+        vbLowerCase = 2,
+        vbProperCase = 3,
+        vbWide = 4,
+        vbNarrow = 8,
+        vbKatakana = 16,
+        vbHiragana = 32,
+        vbUnicode = 64,
+        vbFromUnicode = 128
+    }
+
+    /**
+     * ファイルやフォルダーの属性を表す（加算して組み合わせる）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/dir-getattr-and-setattr-constants
+     */
+    enum VbFileAttribute {
+        vbNormal = 0,
+        vbReadOnly = 1,
+        vbHidden = 2,
+        vbSystem = 4,
+        vbVolume = 8,
+        vbDirectory = 16,
+        vbArchive = 32,
+        vbAlias = 64
+    }
+
+    /**
+     * Shell で起動するプログラムのウィンドウの表示方法を指定する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/shell-constants
+     */
+    enum VbAppWinStyle {
+        vbHide = 0,
+        vbNormalFocus = 1,
+        vbMinimizedFocus = 2,
+        vbMaximizedFocus = 3,
+        vbNormalNoFocus = 4,
+        vbMinimizedNoFocus = 6
+    }
+
+    /**
+     * CallByName で呼び出すプロシージャの種類を指定する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/calltype-constants
+     */
+    enum VbCallType {
+        VbMethod = 1,
+        VbGet = 2,
+        VbLet = 4,
+        VbSet = 8
+    }
+
+    /**
+     * FormatDateTime の書式を指定する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/date-format-constants
+     */
+    enum VbDateTimeFormat {
+        vbGeneralDate = 0,
+        vbLongDate = 1,
+        vbShortDate = 2,
+        vbLongTime = 3,
+        vbShortTime = 4
+    }
+
+    /**
+     * 真 / 偽 / 既定値の 3 状態を表す。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/tristate-constants
+     */
+    enum VbTriState {
+        vbUseDefault = -2,
+        vbTrue = -1,
+        vbFalse = 0
+    }
+
+    /**
+     * 基本色の RGB 値。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/color-constants
+     */
+    enum ColorConstants {
+        vbBlack = 0,
+        vbRed = 255,
+        vbGreen = 65280,
+        vbYellow = 65535,
+        vbBlue = 16711680,
+        vbMagenta = 16711935,
+        vbCyan = 16776960,
+        vbWhite = 16777215
+    }
+
+    /**
+     * 使用する暦を指定する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/calendar-constants
+     */
+    enum VbCalendar {
+        vbCalGreg = 0,
+        vbCalHijri = 1
+    }
+}
+
+// ---------------------------------------------------------------------
+// グローバル オブジェクトと定数
+// ---------------------------------------------------------------------
+
+/**
+ * 直前に発生した実行時エラーの情報。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/err-object
+ */
+declare const Err: VBA.ErrObject;
+
+/**
+ * イミディエイト ウィンドウへの出力（`Debug.Print`）とアサーション。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/debug-object
+ */
+declare const Debug: VBA.DebugObject;
+
+/**
+ * 復帰と改行（CR + LF）。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbCrLf: string;
+
+/**
+ * 復帰文字（CR）。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbCr: string;
+
+/**
+ * 改行文字（LF）。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbLf: string;
+
+/**
+ * タブ文字。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbTab: string;
+
+/**
+ * 値が 0 の文字列ポインター。空文字列 "" とは異なり、DLL 関数に NULL を渡すときに使う。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbNullString: string;
+
+/**
+ * 文字コード 0 の文字。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbNullChar: string;
+
+/**
+ * 実行環境に応じた改行文字（Windows では CR + LF）。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbNewLine: string;
+
+/**
+ * バックスペース文字。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbBack: string;
+
+/**
+ * フォーム フィード文字。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbFormFeed: string;
+
+/**
+ * 垂直タブ文字。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbVerticalTab: string;
+
+/**
+ * ユーザー定義エラー番号の基準値（-2147221504）。独自のエラー番号はこれに加算して作る。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/miscellaneous-constants
+ */
+declare const vbObjectError: int;
+
+// ---------------------------------------------------------------------
+// 対話 / 実行環境
+// ---------------------------------------------------------------------
+
+/**
+ * メッセージ ボックスを表示し、押されたボタンを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/msgbox-function
+ */
+declare function MsgBox(prompt: any, buttons?: VBA.VbMsgBoxStyle, title?: any, helpFile?: any, context?: any): VBA.VbMsgBoxResult;
+
+/**
+ * 入力ダイアログを表示し、入力された文字列を返す。キャンセル時は空文字列。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/inputbox-function
+ */
+declare function InputBox(prompt: any, title?: any, defaultValue?: any, xPos?: any, yPos?: any, helpFile?: any, context?: any): string;
+
+/**
+ * ProgID を指定して COM オブジェクトを生成する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/createobject-function
+ */
+declare function CreateObject(className: string, serverName?: string): object;
+
+/**
+ * ファイルから、または実行中のインスタンスから COM オブジェクトを取得する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getobject-function
+ */
+declare function GetObject(pathName?: any, className?: any): object;
+
+/**
+ * プログラムを起動し、そのタスク ID を返す。終了は待たない。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/shell-function
+ */
+declare function Shell(pathName: any, windowStyle?: VBA.VbAppWinStyle): double;
+
+/**
+ * 環境変数の値を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/environ-function
+ */
+declare function Environ(expression: any): string;
+
+/**
+ * アプリケーション起動時のコマンド ラインの引数部分を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/command-function
+ */
+declare function Command(): string;
+
+/**
+ * OS に制御を渡して、溜まっているイベントを処理させる。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/doevents-function
+ */
+declare function DoEvents(): int;
+
+/**
+ * 午前 0 時からの経過秒数を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/timer-function
+ */
+declare function Timer(): float;
+
+/**
+ * ビープ音を鳴らす。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/beep-statement
+ */
+declare function Beep(): void;
+
+/**
+ * 指定したタイトルのアプリケーション ウィンドウをアクティブにする。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/appactivate-statement
+ */
+declare function AppActivate(title: any, wait?: any): void;
+
+/**
+ * アクティブなウィンドウへキー操作を送る。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/sendkeys-statement
+ */
+declare function SendKeys(str: string, wait?: any): void;
+
+/**
+ * レジストリのアプリケーション用領域に設定値を保存する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/savesetting-statement
+ */
+declare function SaveSetting(appName: string, section: string, key: string, setting: string): void;
+
+/**
+ * レジストリのアプリケーション用領域から設定値を読み出す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getsetting-function
+ */
+declare function GetSetting(appName: string, section: string, key: string, defaultValue?: any): string;
+
+/**
+ * レジストリのアプリケーション用領域からセクションまたはキーを削除する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/deletesetting-statement
+ */
+declare function DeleteSetting(appName: string, section?: any, key?: any): void;
+
+/**
+ * オブジェクトのプロパティやメソッドを、名前の文字列で指定して呼び出す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/callbyname-function
+ */
+declare function CallByName(obj: object, procName: string, callType: VBA.VbCallType, arg1?: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any): any;
+
+/**
+ * 条件が真なら 2 番目、偽なら 3 番目の引数を返す。両方の引数が常に評価される。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/iif-function
+ */
+declare function IIf(expression: any, truePart: any, falsePart: any): any;
+
+/**
+ * インデックス（1 始まり）に対応する引数を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/choose-function
+ */
+declare function Choose(index: float, choice1?: any, choice2?: any, choice3?: any, choice4?: any, choice5?: any, choice6?: any, choice7?: any, choice8?: any, choice9?: any, choice10?: any): any;
+
+/**
+ * 「条件, 値」の組を順に調べ、最初に真になった条件に対応する値を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/switch-function
+ */
+declare function Switch(arg1?: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): any;
+
+// ---------------------------------------------------------------------
+// 型の判定 / 配列
+// ---------------------------------------------------------------------
+
+/**
+ * 数値として評価できるかどうかを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isnumeric-function
+ */
+declare function IsNumeric(expression: any): boolean;
+
+/**
+ * 日付として評価できるかどうかを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isdate-function
+ */
+declare function IsDate(expression: any): boolean;
+
+/**
+ * Variant が未初期化（Empty）かどうかを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isempty-function
+ */
+declare function IsEmpty(expression: any): boolean;
+
+/**
+ * 値が Null かどうかを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isnull-function
+ */
+declare function IsNull(expression: any): boolean;
+
+/**
+ * オブジェクトを参照しているかどうかを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isobject-function
+ */
+declare function IsObject(expression: any): boolean;
+
+/**
+ * 配列かどうかを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isarray-function
+ */
+declare function IsArray(varName: any): boolean;
+
+/**
+ * エラー値かどうかを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/iserror-function
+ */
+declare function IsError(expression: any): boolean;
+
+/**
+ * 省略可能な Variant 引数が省略されたかどうかを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/ismissing-function
+ */
+declare function IsMissing(argName: any): boolean;
+
+/**
+ * 変数の型名を文字列で返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/typename-function
+ */
+declare function TypeName(varName: any): string;
+
+/**
+ * 変数のデータ型を表す値を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/vartype-function
+ */
+declare function VarType(varName: any): VBA.VbVarType;
+
+/**
+ * 引数を要素とする Variant 配列を作る。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/array-function
+ */
+declare function Array(arg1?: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): any;
+
+/**
+ * 配列の指定した次元の最小の添字を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/lbound-function
+ */
+declare function LBound(arr: any, dimension?: int): int;
+
+/**
+ * 配列の指定した次元の最大の添字を返す。空の配列では実行時エラーになる。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/ubound-function
+ */
+declare function UBound(arr: any, dimension?: int): int;
+
+// ---------------------------------------------------------------------
+// 文字列
+// ---------------------------------------------------------------------
+
+/**
+ * 文字列の文字数、または変数の格納に必要なバイト数を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/len-function
+ */
+declare function Len(s: any): int;
+
+/**
+ * 文字列のバイト数を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/len-function
+ */
+declare function LenB(s: any): int;
+
+/**
+ * 文字列の左端から指定した文字数を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/left-function
+ */
+declare function Left(s: string, length: int): string;
+
+/**
+ * 文字列の右端から指定した文字数を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/right-function
+ */
+declare function Right(s: string, length: int): string;
+
+/**
+ * 文字列の指定位置（1 始まり）から指定した文字数を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/mid-function
+ */
+declare function Mid(s: string, start: int, length?: int): string;
+
+/**
+ * 文字列 `string1` の中で `string2` が最初に現れる位置（1 始まり、なければ 0）を返す。
+ * VBA では先頭の `start` を省略できるが、この宣言は (start, string1, string2, compare) の順の 1 形式のみ。
+ * コンパイラは 4 つの引数をすべて出力する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/instr-function
+ */
+declare function InStr(start: any, string1?: any, string2?: any, compare?: VBA.VbCompareMethod): int;
+
+/**
+ * 文字列の末尾側から検索し、見つかった位置（1 始まり、なければ 0）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/instrrev-function
+ */
+declare function InStrRev(stringCheck: string, stringMatch: string, start?: int, compare?: VBA.VbCompareMethod): int;
+
+/**
+ * 文字列中の部分文字列を別の文字列に置き換える。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/replace-function
+ */
+declare function Replace(expression: string, find: string, replace: string, start?: int, count?: int, compare?: VBA.VbCompareMethod): string;
+
+/**
+ * 前後の空白を取り除く。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/ltrim-rtrim-and-trim-functions
+ */
+declare function Trim(s: string): string;
+
+/**
+ * 先頭の空白を取り除く。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/ltrim-rtrim-and-trim-functions
+ */
+declare function LTrim(s: string): string;
+
+/**
+ * 末尾の空白を取り除く。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/ltrim-rtrim-and-trim-functions
+ */
+declare function RTrim(s: string): string;
+
+/**
+ * 大文字に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/ucase-function
+ */
+declare function UCase(s: string): string;
+
+/**
+ * 小文字に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/lcase-function
+ */
+declare function LCase(s: string): string;
+
+/**
+ * 2 つの文字列を比較し、-1 / 0 / 1 を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/strcomp-function
+ */
+declare function StrComp(string1: any, string2: any, compare?: VBA.VbCompareMethod): int;
+
+/**
+ * 文字種（大文字 / 小文字、全角 / 半角、ひらがな / カタカナ、Unicode）を変換する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/strconv-function
+ */
+declare function StrConv(str: any, conversion: VBA.VbStrConv, localeId?: int): any;
+
+/**
+ * 文字の並びを逆順にした文字列を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/strreverse-function
+ */
+declare function StrReverse(expression: string): string;
+
+/**
+ * 指定した数の空白からなる文字列を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/space-function
+ */
+declare function Space(number: int): string;
+
+/**
+ * 指定した文字を指定回数だけ繰り返した文字列を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/string-function
+ */
+declare function String(number: int, character: any): string;
+
+/**
+ * 区切り文字で分割した文字列の配列（0 始まり）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/split-function
+ */
+declare function Split(expression: string, delimiter?: any, limit?: int, compare?: VBA.VbCompareMethod): string[];
+
+/**
+ * 配列の要素を区切り文字でつないだ文字列を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/join-function
+ */
+declare function Join(sourceArray: any, delimiter?: any): string;
+
+/**
+ * 文字列配列から、指定した文字列を含む（または含まない）要素だけを取り出す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/filter-function
+ */
+declare function Filter(sourceArray: any, match: string, include?: boolean, compare?: VBA.VbCompareMethod): string[];
+
+/**
+ * 先頭文字の文字コード（ANSI / シフト JIS）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/asc-function
+ */
+declare function Asc(s: string): int;
+
+/**
+ * 先頭文字の Unicode コードを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/asc-function
+ */
+declare function AscW(s: string): int;
+
+/**
+ * 文字コード（ANSI / シフト JIS）に対応する文字を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/chr-function
+ */
+declare function Chr(charCode: int): string;
+
+/**
+ * Unicode コードに対応する文字を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/chr-function
+ */
+declare function ChrW(charCode: int): string;
+
+/**
+ * 数値を 16 進表記の文字列にする。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/hex-function
+ */
+declare function Hex(number: any): string;
+
+/**
+ * 数値を 8 進表記の文字列にする。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/oct-function
+ */
+declare function Oct(number: any): string;
+
+/**
+ * 数値を文字列にする。正の数の先頭には符号用の空白が付く。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/str-function
+ */
+declare function Str(number: any): string;
+
+/**
+ * 文字列の先頭にある数字部分を数値にする。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/val-function
+ */
+declare function Val(s: string): double;
+
+/**
+ * 値を書式指定に従って文字列にする。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/format-function-visual-basic-for-applications
+ */
+declare function Format(expression: any, format?: any, firstDayOfWeek?: VBA.VbDayOfWeek, firstWeekOfYear?: VBA.VbFirstWeekOfYear): string;
+
+/**
+ * 数値を、桁区切りや小数点以下の桁数を指定して文字列にする。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/formatnumber-function
+ */
+declare function FormatNumber(expression: any, numDigitsAfterDecimal?: int, includeLeadingDigit?: VBA.VbTriState, useParensForNegativeNumbers?: VBA.VbTriState, groupDigits?: VBA.VbTriState): string;
+
+/**
+ * 数値を通貨形式の文字列にする。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/formatcurrency-function
+ */
+declare function FormatCurrency(expression: any, numDigitsAfterDecimal?: int, includeLeadingDigit?: VBA.VbTriState, useParensForNegativeNumbers?: VBA.VbTriState, groupDigits?: VBA.VbTriState): string;
+
+/**
+ * 数値をパーセント形式の文字列にする。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/formatpercent-function
+ */
+declare function FormatPercent(expression: any, numDigitsAfterDecimal?: int, includeLeadingDigit?: VBA.VbTriState, useParensForNegativeNumbers?: VBA.VbTriState, groupDigits?: VBA.VbTriState): string;
+
+/**
+ * 日付や時刻を、定義済みの書式で文字列にする。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/formatdatetime-function
+ */
+declare function FormatDateTime(expression: any, namedFormat?: VBA.VbDateTimeFormat): string;
+
+// ---------------------------------------------------------------------
+// 型変換
+// ---------------------------------------------------------------------
+
+/**
+ * String に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CStr(expression: any): string;
+
+/**
+ * Long（RAS の `int`）に変換する。小数部は偶数丸めされる。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CLng(expression: any): int;
+
+/**
+ * Integer（RAS の `short`）に変換する。小数部は偶数丸めされる。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CInt(expression: any): short;
+
+/**
+ * Double に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CDbl(expression: any): double;
+
+/**
+ * Single（RAS の `float`）に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CSng(expression: any): float;
+
+/**
+ * Boolean に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CBool(expression: any): boolean;
+
+/**
+ * Date に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CDate(expression: any): date;
+
+/**
+ * Currency に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CCur(expression: any): currency;
+
+/**
+ * Decimal に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CDec(expression: any): decimal;
+
+/**
+ * Byte に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CByte(expression: any): byte;
+
+/**
+ * Variant に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CVar(expression: any): any;
+
+/**
+ * LongLong（RAS の `long`）に変換する。64bit 版 Office のみ。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CLngLng(expression: any): long;
+
+/**
+ * LongPtr（RAS の `ptr`）に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/concepts/getting-started/type-conversion-functions
+ */
+declare function CLngPtr(expression: any): ptr;
+
+/**
+ * 指定したエラー番号を持つエラー値（Variant）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/cverr-function
+ */
+declare function CVErr(expression: any): any;
+
+// ---------------------------------------------------------------------
+// 数値
+// ---------------------------------------------------------------------
+
+/**
+ * 絶対値を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/abs-function
+ */
+declare function Abs(number: any): any;
+
+/**
+ * 符号を -1 / 0 / 1 で返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/sgn-function
+ */
+declare function Sgn(number: any): int;
+
+/**
+ * 平方根を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/sqr-function
+ */
+declare function Sqr(number: double): double;
+
+/**
+ * 小数部を取り除いた整数部分を返す。負の数ではより小さい整数になる。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/int-fix-functions
+ */
+declare function Int(number: any): any;
+
+/**
+ * 小数部を取り除いた整数部分を返す。負の数では 0 に近い整数になる。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/int-fix-functions
+ */
+declare function Fix(number: any): any;
+
+/**
+ * 指定した小数桁数に丸める。端数がちょうど 5 のときは偶数側に丸める（銀行丸め）。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/round-function
+ */
+declare function Round(number: any, numDigitsAfterDecimal?: int): any;
+
+/**
+ * e のべき乗を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/exp-function
+ */
+declare function Exp(number: double): double;
+
+/**
+ * 自然対数を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/log-function
+ */
+declare function Log(number: double): double;
+
+/**
+ * サイン（正弦）を返す。角度はラジアン。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/sin-function
+ */
+declare function Sin(number: double): double;
+
+/**
+ * コサイン（余弦）を返す。角度はラジアン。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/cos-function
+ */
+declare function Cos(number: double): double;
+
+/**
+ * タンジェント（正接）を返す。角度はラジアン。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/tan-function
+ */
+declare function Tan(number: double): double;
+
+/**
+ * アークタンジェント（逆正接）をラジアンで返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/atn-function
+ */
+declare function Atn(number: double): double;
+
+/**
+ * 0 以上 1 未満の乱数を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/rnd-function
+ */
+declare function Rnd(number?: any): float;
+
+/**
+ * 乱数ジェネレーターを初期化する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/randomize-statement
+ */
+declare function Randomize(number?: any): void;
+
+/**
+ * 赤・緑・青の各成分（0 ～ 255）から RGB 値を作る。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/rgb-function
+ */
+declare function RGB(red: int, green: int, blue: int): int;
+
+/**
+ * 色番号（0 ～ 15）に対応する RGB 値を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/qbcolor-function
+ */
+declare function QBColor(color: int): int;
+
+// ---------------------------------------------------------------------
+// 日付と時刻
+// ---------------------------------------------------------------------
+
+/**
+ * 現在の日付と時刻を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/now-function
+ */
+declare function Now(): date;
+
+/**
+ * 現在の日付を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/date-function
+ */
+declare function Date(): date;
+
+/**
+ * 現在の時刻を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/time-function
+ */
+declare function Time(): date;
+
+/**
+ * 年・月・日から日付を作る。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/dateserial-function
+ */
+declare function DateSerial(year: int, month: int, day: int): date;
+
+/**
+ * 時・分・秒から時刻を作る。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/timeserial-function
+ */
+declare function TimeSerial(hour: int, minute: int, second: int): date;
+
+/**
+ * 日付を表す文字列を日付に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/datevalue-function
+ */
+declare function DateValue(dateString: string): date;
+
+/**
+ * 時刻を表す文字列を時刻に変換する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/timevalue-function
+ */
+declare function TimeValue(timeString: string): date;
+
+/**
+ * 日付に、指定した単位の時間間隔を加えた日付を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/dateadd-function
+ */
+declare function DateAdd(interval: string, number: double, dateValue: any): date;
+
+/**
+ * 2 つの日付の間隔を、指定した単位で数えて返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/datediff-function
+ */
+declare function DateDiff(interval: string, date1: any, date2: any, firstDayOfWeek?: VBA.VbDayOfWeek, firstWeekOfYear?: VBA.VbFirstWeekOfYear): int;
+
+/**
+ * 日付から、指定した単位（年・四半期・週など）の値を取り出す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/datepart-function
+ */
+declare function DatePart(interval: string, dateValue: any, firstDayOfWeek?: VBA.VbDayOfWeek, firstWeekOfYear?: VBA.VbFirstWeekOfYear): int;
+
+/**
+ * 日付の年を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/year-function
+ */
+declare function Year(dateValue: any): int;
+
+/**
+ * 日付の月（1 ～ 12）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/month-function
+ */
+declare function Month(dateValue: any): int;
+
+/**
+ * 日付の日（1 ～ 31）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/day-function
+ */
+declare function Day(dateValue: any): int;
+
+/**
+ * 時刻の時（0 ～ 23）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/hour-function
+ */
+declare function Hour(timeValue: any): int;
+
+/**
+ * 時刻の分（0 ～ 59）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/minute-function
+ */
+declare function Minute(timeValue: any): int;
+
+/**
+ * 時刻の秒（0 ～ 59）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/second-function
+ */
+declare function Second(timeValue: any): int;
+
+/**
+ * 日付の曜日を番号（既定では日曜が 1）で返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/weekday-function
+ */
+declare function Weekday(dateValue: any, firstDayOfWeek?: VBA.VbDayOfWeek): int;
+
+/**
+ * 曜日番号に対応する曜日名を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/weekdayname-function
+ */
+declare function WeekdayName(weekday: int, abbreviate?: boolean, firstDayOfWeek?: VBA.VbDayOfWeek): string;
+
+/**
+ * 月番号に対応する月名を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/monthname-function
+ */
+declare function MonthName(month: int, abbreviate?: boolean): string;
+
+// ---------------------------------------------------------------------
+// ファイルとフォルダー
+// ---------------------------------------------------------------------
+
+/**
+ * パターンや属性に一致するファイル名を返す。引数なしで呼ぶと次の一致を返し、なくなると空文字列を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/dir-function
+ */
+declare function Dir(pathName?: any, attributes?: VBA.VbFileAttribute): string;
+
+/**
+ * ファイルを削除する。ワイルドカードを使える。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/kill-statement
+ */
+declare function Kill(pathName: any): void;
+
+/**
+ * ファイルをコピーする。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/filecopy-statement
+ */
+declare function FileCopy(source: string, destination: string): void;
+
+/**
+ * ファイルのサイズ（バイト）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/filelen-function
+ */
+declare function FileLen(pathName: string): int;
+
+/**
+ * ファイルの作成日時または最終更新日時を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/filedatetime-function
+ */
+declare function FileDateTime(pathName: string): date;
+
+/**
+ * ファイルやフォルダーの属性を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getattr-function
+ */
+declare function GetAttr(pathName: string): VBA.VbFileAttribute;
+
+/**
+ * ファイルの属性を設定する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/setattr-statement
+ */
+declare function SetAttr(pathName: string, attributes: VBA.VbFileAttribute): void;
+
+/**
+ * フォルダーを作成する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/mkdir-statement
+ */
+declare function MkDir(path: string): void;
+
+/**
+ * 空のフォルダーを削除する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/rmdir-statement
+ */
+declare function RmDir(path: string): void;
+
+/**
+ * カレント フォルダーを変更する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/chdir-statement
+ */
+declare function ChDir(path: string): void;
+
+/**
+ * カレント ドライブを変更する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/chdrive-statement
+ */
+declare function ChDrive(drive: string): void;
+
+/**
+ * カレント フォルダーのパスを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/curdir-function
+ */
+declare function CurDir(drive?: any): string;
+
+/**
+ * 次に使用できるファイル番号を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/freefile-function
+ */
+declare function FreeFile(rangeNumber?: any): int;
+
+/**
+ * 開いているファイルの終端に達したかどうかを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/eof-function
+ */
+declare function EOF(fileNumber: int): boolean;
+
+/**
+ * 開いているファイルのサイズ（バイト）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/lof-function
+ */
+declare function LOF(fileNumber: int): int;
+
+// ---------------------------------------------------------------------
+// ポインター
+// ---------------------------------------------------------------------
+
+/**
+ * オブジェクトのインターフェイス ポインターを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/longptr-data-type
+ */
+declare function ObjPtr(obj: any): ptr;
+
+/**
+ * 文字列バッファー（BSTR）のアドレスを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/longptr-data-type
+ */
+declare function StrPtr(s: string): ptr;
+
+/**
+ * 変数のアドレスを返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/longptr-data-type
+ */
+declare function VarPtr(v: any): ptr;

@@ -1,0 +1,13 @@
+/**
+ * 指定列の最終行を返す。
+ * @param col 列番号（1 始まり）
+ * @returns 最終行の行番号
+ */
+export function lastRow(this: Excel.Worksheet, col: int = 1): int {
+    return this.Cells(this.Rows.Count, col).End(xlUp).Row;
+}
+
+/** 空白だけの文字列なら true。 */
+export function isBlank(this: string): boolean {
+    return this.trim().length == 0;
+}

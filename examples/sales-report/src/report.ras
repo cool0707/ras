@@ -1,0 +1,52 @@
+import { lastRow, isBlank } from "./sheetutil";
+
+/** 税率。 */
+const TAX_RATE = 0.1;
+
+/** 金額を 0 以上に丸める。ループの中では呼び出し元に展開される。 */
+inline function nonNegative(v: double): double {
+    return v < 0 ? 0 : v;
+}
+
+/**
+ * C 列（単価）と D 列（数量）から E 列（税込金額）を計算する。
+ *
+ * セルを 1 つずつ読み書きするように書いているが、
+ * 生成される VBA は Range と配列の一括転送になる。
+ */
+@fast
+export function rebuildReport() {
+    const ws = Sheet1;
+    const last = ws.lastRow();
+    let total = 0.0;
+    for (let r = 2; r <= last; r++) {
+        const price: double = ws.Cells(r, 3).Value;
+        const qty: double = ws.Cells(r, 4).Value;
+        total += nonNegative(price * qty);
+    }
+    for (let r = 2; r <= last; r++) {
+        ws.Cells(r, 5).Formula = `=ROUND(C${r}*D${r}*${1 + TAX_RATE},0)`;
+    }
+    status(`合計: ${total.toFixed(0)} 円`);
+}
+
+/** A 列の顧客名のうち、空でないものを重複なく数える。 */
+export function countCustomers(): int {
+    const names = Sheet1.Range("A2:A1000").toColumn();
+    const seen = new Map<string, boolean>();
+    for (const n of names) {
+        const name = `${n}`;
+        if (!name.isBlank()) seen.set(name, true);
+    }
+    return seen.size;
+}
+
+/** データが変更されたら、ステータスバーに知らせる。 */
+@on("Sheet1.Change")
+function onDataChanged(target: Excel.Range) {
+    try {
+        status(`${target.Address} が変更されました`);
+    } catch (e) {
+        console.log(e.description);
+    }
+}

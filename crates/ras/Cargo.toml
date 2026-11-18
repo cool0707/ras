@@ -1,0 +1,25 @@
+[package]
+name = "ras"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "RAS: a TypeScript-like language that transpiles to VBA"
+
+[[bin]]
+name = "ras"
+path = "src/main.rs"
+
+[dependencies]
+ras-syntax.workspace = true
+ras-compiler.workspace = true
+ras-ovba.workspace = true
+ras-lsp.workspace = true
+clap.workspace = true
+encoding_rs.workspace = true
+notify.workspace = true
+
+[dev-dependencies]
+ras-ovba.workspace = true
+encoding_rs.workspace = true

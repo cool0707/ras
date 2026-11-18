@@ -1,0 +1,35 @@
+// 頻出する Win32 API（仕様 §11.3）。`import { Sleep } from "win32";` で使う。
+// 実際に使われた宣言だけが出力される。
+
+declare module "kernel32" {
+    /** 指定したミリ秒だけ現在のスレッドを停止する。 */
+    export function Sleep(dwMilliseconds: int): void;
+    /** システム起動からの経過ミリ秒（約 49.7 日で折り返す）。 */
+    export function GetTickCount(): int;
+    /** システム起動からの経過ミリ秒（64bit。64bit Office 専用）。 */
+    export function GetTickCount64(): long;
+    /** 現在のプロセス ID。 */
+    export function GetCurrentProcessId(): int;
+    /** メモリブロックをコピーする（RtlMoveMemory）。 */
+    @alias("RtlMoveMemory")
+    export function CopyMemory(byref destination: any, byref source: any, length: ptr): void;
+    /** 高分解能カウンタの現在値。 */
+    export function QueryPerformanceCounter(byref lpPerformanceCount: currency): int;
+    /** 高分解能カウンタの周波数。 */
+    export function QueryPerformanceFrequency(byref lpFrequency: currency): int;
+}
+
+declare module "user32" {
+    /** 最前面のウィンドウのハンドル。 */
+    export function GetForegroundWindow(): ptr;
+    /** ウィンドウのタイトルを取得する。 */
+    @alias("GetWindowTextW")
+    export function GetWindowText(hWnd: ptr, lpString: wstr, nMaxCount: int): int;
+    /** クラス名・ウィンドウ名からウィンドウを探す。 */
+    @alias("FindWindowW")
+    export function FindWindow(lpClassName: wstr, lpWindowName: wstr): ptr;
+    /** ウィンドウを最前面にする。 */
+    export function SetForegroundWindow(hWnd: ptr): int;
+    /** キーの状態を取得する。 */
+    export function GetAsyncKeyState(vKey: int): short;
+}

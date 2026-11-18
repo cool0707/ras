@@ -1,0 +1,1166 @@
+//! Declaration collection: parses every source file, allocates definitions,
+//! resolves imports and signatures. Function bodies are checked in `check.rs`.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use ras_syntax::ast::{self, ExprKind, InlineMode, Item, PassMode, Span, TypeRef, Visibility};
+
+use crate::config::Config;
+use crate::diag::{Diagnostic, Severity};
+use crate::model::*;
+
+pub struct SourceInput {
+    pub path: PathBuf,
+    pub rel_path: String,
+    /// Import key (`strutil`, `sub/util`, `win32`).
+    pub key: String,
+    pub kind: ModuleKind,
+    pub text: String,
+}
+
+/// Converts a file stem to a VBA module name (`str_util` → `StrUtil`, `report` → `Report`).
+pub fn vba_module_name(key: &str) -> String {
+    let stem = key.rsplit('/').next().unwrap_or(key);
+    let mut out = String::new();
+    let mut upper = true;
+    for c in stem.chars() {
+        if c == '_' || c == '-' || c == '.' || c == ' ' {
+            upper = true;
+            continue;
+        }
+        if upper {
+            out.extend(c.to_uppercase());
+            upper = false;
+        } else {
+            out.push(c);
+        }
+    }
+    if out.is_empty() || out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        out.insert_str(0, "Mod");
+    }
+    out.chars().take(31).collect()
+}
+
+/// Evaluates a constant integer expression (enum values, array sizes).
+pub fn const_int(e: &ast::Expr) -> Option<i128> {
+    match &e.kind {
+        ExprKind::Int { value, .. } => Some(*value),
+        ExprKind::Paren(inner) => const_int(inner),
+        ExprKind::Unary { op: ast::UnaryOp::Neg, operand } => const_int(operand).map(|v| -v),
+        ExprKind::Unary { op: ast::UnaryOp::Plus, operand } => const_int(operand),
+        ExprKind::Unary { op: ast::UnaryOp::BitNot, operand } => const_int(operand).map(|v| !v),
+        ExprKind::Binary { op, lhs, rhs } => {
+            let (a, b) = (const_int(lhs)?, const_int(rhs)?);
+            match op {
+                ast::BinaryOp::Add => a.checked_add(b),
+                ast::BinaryOp::Sub => a.checked_sub(b),
+                ast::BinaryOp::Mul => a.checked_mul(b),
+                ast::BinaryOp::Div if b != 0 => Some(a / b),
+                ast::BinaryOp::Rem if b != 0 => Some(a % b),
+                ast::BinaryOp::BitOr => Some(a | b),
+                ast::BinaryOp::BitAnd => Some(a & b),
+                ast::BinaryOp::BitXor => Some(a ^ b),
+                ast::BinaryOp::Shl if (0..64).contains(&b) => Some(a << b),
+                ast::BinaryOp::Shr if (0..64).contains(&b) => Some(a >> b),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+struct Collector {
+    prog: Program,
+    fn_decls: Vec<(FnId, Option<ClassId>)>,
+    class_decls: Vec<(ClassId, ClassAst)>,
+    var_decls: Vec<(VarId, Rc<ast::VarDecl>)>,
+    struct_decls: Vec<(StructId, Rc<ast::StructDecl>)>,
+    alias_decls: Vec<(ModuleId, Rc<ast::TypeAlias>)>,
+    /// Namespace currently being declared, and the namespace of each function / variable.
+    cur_ns: Option<String>,
+    fn_ns: HashMap<FnId, String>,
+    var_ns: HashMap<VarId, String>,
+}
+
+enum ClassAst {
+    Class(Rc<ast::ClassDecl>),
+    Interface(Rc<ast::InterfaceDecl>),
+}
+
+/// Where a top-level name of a module is registered.
+#[derive(Clone)]
+enum Target {
+    /// Module scope (user / std modules).
+    Module(ModuleId),
+    /// Global scope (top level of a `.d.ras` file).
+    Global,
+    /// Host namespace (`declare namespace Excel { ... }`).
+    Namespace(String),
+}
+
+pub fn collect(inputs: Vec<SourceInput>, config: Config) -> Program {
+    let mut c = Collector {
+        prog: Program { config, ..Default::default() },
+        fn_decls: Vec::new(),
+        class_decls: Vec::new(),
+        var_decls: Vec::new(),
+        struct_decls: Vec::new(),
+        alias_decls: Vec::new(),
+        cur_ns: None,
+        fn_ns: HashMap::new(),
+        var_ns: HashMap::new(),
+    };
+    for input in inputs {
+        c.add_module(input);
+    }
+    c.check_module_names();
+    for m in 0..c.prog.modules.len() {
+        c.declare_module_items(m);
+    }
+    c.add_sheet_code_names();
+    for m in 0..c.prog.modules.len() {
+        c.resolve_imports(m);
+    }
+    c.resolve_signatures();
+    c.prog.cur_namespace = None;
+    c.prog
+}
+
+impl Collector {
+    fn err(&mut self, module: ModuleId, span: Span, code: &'static str, message: impl Into<String>) {
+        self.prog.diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code,
+            message: message.into(),
+            module: Some(module),
+            span,
+        });
+    }
+
+    fn warn(&mut self, module: ModuleId, span: Span, code: &'static str, message: impl Into<String>) {
+        self.prog.diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            code,
+            message: message.into(),
+            module: Some(module),
+            span,
+        });
+    }
+
+    fn add_module(&mut self, input: SourceInput) {
+        let id = self.prog.modules.len();
+        let parse = ras_syntax::parse(&input.text);
+        for e in &parse.errors {
+            self.prog.diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "E0001",
+                message: e.message.clone(),
+                module: Some(id),
+                span: e.range,
+            });
+        }
+        let line_starts = line_starts(&input.text);
+        let mut info = TypeInfo::default();
+        info.expr_types = vec![Type::Error; parse.ast.expr_count as usize];
+        self.prog.modules.push(ModuleData {
+            id,
+            path: input.path,
+            rel_path: input.rel_path,
+            vba_name: vba_module_name(&input.key),
+            key: input.key,
+            kind: input.kind,
+            text: Rc::from(input.text),
+            ast: Rc::new(parse.ast),
+            scope: HashMap::new(),
+            exports: HashMap::new(),
+            ext_methods: Vec::new(),
+            info,
+            main_fn: None,
+            init_fn: None,
+            fns: Vec::new(),
+            classes: Vec::new(),
+            enums: Vec::new(),
+            structs: Vec::new(),
+            vars: Vec::new(),
+            imports: Vec::new(),
+            line_starts,
+        });
+    }
+
+    fn check_module_names(&mut self) {
+        let mut seen: HashMap<String, ModuleId> = HashMap::new();
+        for m in 0..self.prog.modules.len() {
+            if self.prog.modules[m].kind == ModuleKind::TypeDef {
+                continue;
+            }
+            let lower = self.prog.modules[m].vba_name.to_lowercase();
+            if let Some(&other) = seen.get(&lower) {
+                let msg = format!(
+                    "VBA モジュール名 `{}` が `{}` と重複します（VBA のモジュール名は大文字小文字を区別せず、プロジェクト内で一意である必要があります）",
+                    self.prog.modules[m].vba_name, self.prog.modules[other].rel_path
+                );
+                self.err(m, Span::default(), "E0102", msg);
+            } else {
+                seen.insert(lower, m);
+            }
+        }
+    }
+
+    fn register(&mut self, module: ModuleId, target: &Target, name: &ast::Ident, sym: Sym, exported: bool) {
+        if name.text.is_empty() {
+            return;
+        }
+        let dup = match target {
+            Target::Module(m) => {
+                let md = &mut self.prog.modules[*m];
+                let dup = md.scope.insert(name.text.clone(), sym.clone()).is_some();
+                if exported {
+                    md.exports.insert(name.text.clone(), sym);
+                }
+                dup
+            }
+            Target::Global => self.prog.globals.insert(name.text.clone(), sym).is_some(),
+            Target::Namespace(ns) => {
+                self.prog.namespaces.entry(ns.clone()).or_default().insert(name.text.clone(), sym).is_some()
+            }
+        };
+        if dup {
+            self.err(module, name.span, "E0101", format!("`{}` は既に宣言されています", name.text));
+        }
+    }
+
+    fn declare_module_items(&mut self, m: ModuleId) {
+        let ast = self.prog.modules[m].ast.clone();
+        let is_typedef = self.prog.modules[m].kind == ModuleKind::TypeDef;
+        let target = if is_typedef { Target::Global } else { Target::Module(m) };
+        let mut main_stmts: Vec<ast::Stmt> = Vec::new();
+        let mut has_exec = false;
+        for item in &ast.items {
+            match item {
+                Item::Stmt(s) => {
+                    if !matches!(s.kind, ast::StmtKind::Empty | ast::StmtKind::Error) {
+                        has_exec = true;
+                    }
+                    main_stmts.push(s.clone());
+                }
+                Item::Var(v) => {
+                    self.declare_var(m, &target, v, is_typedef);
+                    if !is_typedef {
+                        main_stmts.push(ast::Stmt { kind: ast::StmtKind::Var(v.clone()), span: v.span });
+                    }
+                }
+                other => self.declare_item(m, &target, other, is_typedef),
+            }
+        }
+        let has_decls = ast.items.iter().any(|i| matches!(i, Item::Fn(_) | Item::Class(_) | Item::Interface(_)));
+        let only_vars = !has_decls
+            && ast.items.iter().any(|i| matches!(i, Item::Var(v) if v.init.is_some() && !v.declared))
+            && !ast.items.iter().any(|i| matches!(i, Item::Var(v) if v.exported));
+        if (has_exec || only_vars) && !is_typedef {
+            // Script style: top-level statements become `Public Sub Main()`.
+            let span = main_stmts.first().map(|s| s.span).unwrap_or_default();
+            let decl = ast::FnDecl {
+                decorators: Vec::new(),
+                doc: None,
+                exported: true,
+                declared: false,
+                inline: InlineMode::Default,
+                name: ast::Ident { text: "Main".into(), span: Span::empty(span.start()) },
+                type_params: Vec::new(),
+                params: Vec::new(),
+                ret: None,
+                body: Some(ast::Block { stmts: main_stmts, span }),
+                span,
+            };
+            let name = decl.name.clone();
+            let id = self.alloc_fn(m, Rc::new(decl), FnKind::Main, None, Visibility::Public);
+            self.prog.fns[id].ret = Some(Type::Void);
+            self.prog.modules[m].main_fn = Some(id);
+            if self.prog.modules[m].scope.contains_key("Main") {
+                self.err(m, span, "E0103", "トップレベルの文は `Main` という Sub にまとめられますが、`Main` は既に宣言されています");
+            } else {
+                self.register(m, &target, &name, Sym::Fn(id), true);
+            }
+        } else if !is_typedef && main_stmts.iter().any(|s| matches!(&s.kind, ast::StmtKind::Var(v) if v.init.is_some() && !v.declared)) {
+            // Top-level variables with initializers: run them once from the module initializer.
+            let span = main_stmts.first().map(|s| s.span).unwrap_or_default();
+            let decl = ast::FnDecl {
+                decorators: Vec::new(),
+                doc: None,
+                exported: false,
+                declared: false,
+                inline: InlineMode::NoInline,
+                name: ast::Ident { text: "RAS_ModInit".into(), span: Span::empty(span.start()) },
+                type_params: Vec::new(),
+                params: Vec::new(),
+                ret: None,
+                body: Some(ast::Block { stmts: main_stmts, span }),
+                span,
+            };
+            let id = self.alloc_fn(m, Rc::new(decl), FnKind::ModInit, None, Visibility::Public);
+            self.prog.fns[id].ret = Some(Type::Void);
+            self.prog.modules[m].init_fn = Some(id);
+        }
+    }
+
+    fn alloc_fn(&mut self, m: ModuleId, decl: Rc<ast::FnDecl>, kind: FnKind, class: Option<ClassId>, vis: Visibility) -> FnId {
+        let id = self.prog.fns.len();
+        self.prog.fns.push(FnDef {
+            id,
+            module: m,
+            name: decl.name.text.clone(),
+            kind,
+            exported: decl.exported,
+            vis,
+            inline: decl.inline,
+            type_params: Vec::new(),
+            params: Vec::new(),
+            is_extension: decl.params.first().is_some_and(|p| p.is_this),
+            ret: None,
+            attrs: FnAttrs::default(),
+            doc: decl.doc.clone(),
+            name_span: decl.name.span,
+            decl: Some(decl),
+            locals: Vec::new(),
+            calls: Vec::new(),
+            var_refs: Vec::new(),
+            checked: false,
+            has_loops: false,
+            inline_blockers: Vec::new(),
+            cost: 0,
+        });
+        self.prog.modules[m].fns.push(id);
+        self.fn_decls.push((id, class));
+        if let Some(ns) = &self.cur_ns {
+            self.fn_ns.insert(id, ns.clone());
+        }
+        id
+    }
+
+    fn declare_var(&mut self, m: ModuleId, target: &Target, v: &ast::VarDecl, is_typedef: bool) {
+        let id = self.prog.vars.len();
+        self.prog.vars.push(VarDef {
+            id,
+            module: m,
+            name: v.name.text.clone(),
+            ty: Type::Error,
+            is_const: v.kind == ast::VarKind::Const,
+            exported: v.exported,
+            declared: v.declared || is_typedef,
+            init: v.init.clone().map(Rc::new),
+            const_value: None,
+            doc: v.doc.clone(),
+            name_span: v.name.span,
+            used_outside_main: false,
+            reassigned: false,
+        });
+        self.prog.modules[m].vars.push(id);
+        self.var_decls.push((id, Rc::new(v.clone())));
+        if let Some(ns) = &self.cur_ns {
+            self.var_ns.insert(id, ns.clone());
+        }
+        if v.kind == ast::VarKind::Using {
+            self.err(m, v.span, "E0104", "`using` は関数の中でのみ使えます");
+        }
+        self.register(m, target, &v.name, Sym::Var(id), v.exported);
+    }
+
+    fn declare_item(&mut self, m: ModuleId, target: &Target, item: &Item, is_typedef: bool) {
+        match item {
+            Item::Fn(f) => {
+                let kind = if is_typedef || f.declared { FnKind::Host { class: None } } else { FnKind::Free };
+                if f.body.is_none() && !(is_typedef || f.declared) {
+                    self.err(m, f.name.span, "E0105", "関数の本体がありません");
+                }
+                let id = self.alloc_fn(m, Rc::new(f.clone()), kind, None, Visibility::Public);
+                self.register(m, target, &f.name, Sym::Fn(id), f.exported);
+            }
+            Item::Class(c) => {
+                let id = self.alloc_class(m, &c.name, if is_typedef || c.declared { ClassKind::Host } else { ClassKind::Class }, c.exported, c.doc.clone(), target);
+                self.prog.classes[id].predeclared = c.decorators.iter().any(|d| d.name.text == "predeclared");
+                for d in &c.decorators {
+                    if d.name.text != "predeclared" {
+                        self.warn(m, d.span, "W0110", format!("不明なクラスデコレータ `@{}` は無視されます", d.name.text));
+                    }
+                }
+                for member in &c.members {
+                    match member {
+                        ast::ClassMember::Method(md) => {
+                            let kind = FnKind::Method { class: id, is_static: md.is_static };
+                            let f = self.alloc_fn(m, Rc::new(md.func.clone()), kind, Some(id), md.vis);
+                            self.prog.classes[id].methods.push(f);
+                        }
+                        ast::ClassMember::Ctor(f) => {
+                            let fid = self.alloc_fn(m, Rc::new(f.clone()), FnKind::Ctor { class: id }, Some(id), Visibility::Public);
+                            if self.prog.classes[id].ctor.is_some() {
+                                self.err(m, f.name.span, "E0106", "コンストラクタは 1 つだけ宣言できます");
+                            }
+                            self.prog.classes[id].ctor = Some(fid);
+                        }
+                        ast::ClassMember::Accessor(a) => {
+                            let kind = match a.kind {
+                                ast::AccessorKind::Get => FnKind::Getter { class: id, is_static: a.is_static },
+                                ast::AccessorKind::Set => FnKind::Setter { class: id, is_static: a.is_static },
+                            };
+                            let f = self.alloc_fn(m, Rc::new(a.func.clone()), kind, Some(id), a.vis);
+                            self.prog.classes[id].methods.push(f);
+                        }
+                        ast::ClassMember::Field(_) => {}
+                    }
+                }
+                self.class_decls.push((id, ClassAst::Class(Rc::new(c.clone()))));
+                self.register(m, target, &c.name, Sym::Class(id), c.exported);
+            }
+            Item::Interface(i) => {
+                let host = is_typedef || i.declared;
+                let id = self.alloc_class(m, &i.name, if host { ClassKind::Host } else { ClassKind::Interface }, i.exported, i.doc.clone(), target);
+                for member in &i.members {
+                    match member {
+                        ast::InterfaceMember::Method(f) => {
+                            let kind = if host { FnKind::Host { class: Some(id) } } else { FnKind::Abstract { class: id } };
+                            let fid = self.alloc_fn(m, Rc::new(f.clone()), kind, Some(id), Visibility::Public);
+                            if f.name.text.is_empty() {
+                                self.prog.classes[id].call_sig = Some(fid);
+                            } else {
+                                self.prog.classes[id].methods.push(fid);
+                            }
+                        }
+                        ast::InterfaceMember::Index { param, ty, span } => {
+                            // `[index: K]: V` is sugar for the call signature `(index: K): V`.
+                            let decl = ast::FnDecl {
+                                decorators: Vec::new(),
+                                doc: None,
+                                exported: false,
+                                declared: true,
+                                inline: InlineMode::Default,
+                                name: ast::Ident { text: String::new(), span: *span },
+                                type_params: Vec::new(),
+                                params: vec![param.clone()],
+                                ret: Some(ty.clone()),
+                                body: None,
+                                span: *span,
+                            };
+                            let kind = if host { FnKind::Host { class: Some(id) } } else { FnKind::Abstract { class: id } };
+                            let fid = self.alloc_fn(m, Rc::new(decl), kind, Some(id), Visibility::Public);
+                            self.prog.classes[id].call_sig = Some(fid);
+                        }
+                        ast::InterfaceMember::Prop(_) => {}
+                    }
+                }
+                self.class_decls.push((id, ClassAst::Interface(Rc::new(i.clone()))));
+                self.register(m, target, &i.name, Sym::Class(id), i.exported);
+            }
+            Item::Enum(e) => {
+                let id = self.prog.enums.len();
+                let host = is_typedef || e.declared;
+                let mut members = Vec::new();
+                let mut next: i64 = 0;
+                for mem in &e.members {
+                    let value = match &mem.value {
+                        Some(expr) => match const_int(expr).and_then(|v| i64::try_from(v).ok()) {
+                            Some(v) if i32::try_from(v).is_ok() => v,
+                            Some(_) => {
+                                self.err(m, expr.span, "E0107", "列挙値は int（32bit）の範囲に収まる必要があります");
+                                0
+                            }
+                            None => {
+                                self.err(m, expr.span, "E0107", "列挙値は整数の定数式である必要があります");
+                                next
+                            }
+                        },
+                        None => next,
+                    };
+                    next = value.wrapping_add(1);
+                    members.push(EnumMemberDef { name: mem.name.text.clone(), value, doc: mem.doc.clone(), span: mem.name.span });
+                }
+                self.prog.enums.push(EnumDef {
+                    id,
+                    module: m,
+                    name: e.name.text.clone(),
+                    host,
+                    exported: e.exported,
+                    members,
+                    doc: e.doc.clone(),
+                    name_span: e.name.span,
+                });
+                self.prog.modules[m].enums.push(id);
+                self.register(m, target, &e.name, Sym::Enum(id), e.exported);
+                if host {
+                    // Host enum constants are visible by bare name, as in VBA (`xlUp`).
+                    for (i, mem) in e.members.iter().enumerate() {
+                        if self.prog.globals.insert(mem.name.text.clone(), Sym::EnumMember(id, i)).is_some() {
+                            self.err(m, mem.name.span, "E0101", format!("`{}` は既に宣言されています", mem.name.text));
+                        }
+                    }
+                }
+            }
+            Item::Struct(s) => {
+                let id = self.prog.structs.len();
+                self.prog.structs.push(StructDef {
+                    id,
+                    module: m,
+                    name: s.name.text.clone(),
+                    fields: Vec::new(),
+                    doc: s.doc.clone(),
+                    name_span: s.name.span,
+                });
+                self.prog.modules[m].structs.push(id);
+                self.struct_decls.push((id, Rc::new(s.clone())));
+                self.register(m, target, &s.name, Sym::Struct(id), s.exported);
+            }
+            Item::TypeAlias(a) => {
+                if !a.type_params.is_empty() {
+                    self.err(m, a.name.span, "E0108", "ジェネリックな型エイリアスには対応していません");
+                }
+                self.register(m, target, &a.name, Sym::Alias(Type::Error), a.exported);
+                self.alias_decls.push((m, Rc::new(a.clone())));
+            }
+            Item::DeclareModule(d) => {
+                for f in &d.functions {
+                    let alias = f.decorators.iter().find(|x| x.name.text == "alias").and_then(|x| match x.args.first().map(|a| &a.kind) {
+                        Some(ExprKind::Str(s)) => Some(s.clone()),
+                        _ => None,
+                    });
+                    let id = self.alloc_fn(m, Rc::new(f.clone()), FnKind::Declare { lib: d.lib.clone(), alias }, None, Visibility::Public);
+                    self.register(m, target, &f.name, Sym::Fn(id), f.exported);
+                }
+            }
+            Item::Namespace(ns) => {
+                if !is_typedef {
+                    self.err(m, ns.name.span, "E0109", "`namespace` は型定義ファイル（.d.ras）でのみ使えます");
+                    return;
+                }
+                let inner = Target::Namespace(ns.name.text.clone());
+                self.prog.namespaces.entry(ns.name.text.clone()).or_default();
+                let saved = self.cur_ns.replace(ns.name.text.clone());
+                for it in &ns.items {
+                    match it {
+                        Item::Var(v) => self.declare_var(m, &inner, v, true),
+                        Item::Stmt(_) | Item::Import(_) => {}
+                        other => self.declare_item(m, &inner, other, true),
+                    }
+                }
+                self.cur_ns = saved;
+            }
+            Item::Import(_) | Item::Var(_) | Item::Stmt(_) => {}
+        }
+    }
+
+    fn alloc_class(&mut self, m: ModuleId, name: &ast::Ident, kind: ClassKind, exported: bool, doc: Option<String>, target: &Target) -> ClassId {
+        let id = self.prog.classes.len();
+        self.prog.classes.push(ClassDef {
+            id,
+            module: m,
+            name: name.text.clone(),
+            kind,
+            namespace: match target {
+                Target::Namespace(ns) => Some(ns.clone()),
+                _ => None,
+            },
+            exported,
+            type_params: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
+            fields: Vec::new(),
+            methods: Vec::new(),
+            ctor: None,
+            call_sig: None,
+            predeclared: false,
+            doc,
+            name_span: name.span,
+        });
+        self.prog.modules[m].classes.push(id);
+        id
+    }
+
+    fn add_sheet_code_names(&mut self) {
+        let Some(Sym::Class(ws)) = self.prog.namespaces.get("Excel").and_then(|ns| ns.get("Worksheet")).cloned() else { return };
+        let module = self.prog.classes[ws].module;
+        for name in self.prog.config.sheet_code_names.clone() {
+            if self.prog.globals.contains_key(&name) {
+                continue;
+            }
+            let id = self.prog.vars.len();
+            self.prog.vars.push(VarDef {
+                id,
+                module,
+                name: name.clone(),
+                ty: Type::Class(ws, Vec::new()),
+                is_const: true,
+                exported: false,
+                declared: true,
+                init: None,
+                const_value: None,
+                doc: Some("ブックのシート（コード名）。".into()),
+                name_span: Span::default(),
+                used_outside_main: false,
+                reassigned: false,
+            });
+            self.prog.globals.insert(name, Sym::Var(id));
+        }
+    }
+
+    fn resolve_imports(&mut self, m: ModuleId) {
+        if self.prog.modules[m].kind == ModuleKind::TypeDef {
+            return;
+        }
+        let ast = self.prog.modules[m].ast.clone();
+        // Extension methods declared in the module itself are always in scope.
+        let own: Vec<FnId> = self.prog.modules[m].fns.iter().copied().filter(|&f| self.prog.fns[f].is_extension).collect();
+        self.prog.modules[m].ext_methods.extend(own);
+        for item in &ast.items {
+            let Item::Import(imp) = item else { continue };
+            let target = if let Some(rest) = imp.source.strip_prefix("vba:") {
+                self.err(m, imp.source_span, "E0120", format!("`vba:{rest}`（非管理 VBA モジュールの参照）にはまだ対応していません"));
+                continue;
+            } else if imp.source.starts_with('.') {
+                let base = self.prog.modules[m].key.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+                let mut parts: Vec<&str> = if base.is_empty() { Vec::new() } else { base.split('/').collect() };
+                for seg in imp.source.split('/') {
+                    match seg {
+                        "." | "" => {}
+                        ".." => {
+                            parts.pop();
+                        }
+                        s => parts.push(s),
+                    }
+                }
+                let key = parts.join("/");
+                let key = key.strip_suffix(".ras").unwrap_or(&key).to_string();
+                self.prog.modules.iter().position(|x| x.kind == ModuleKind::User && x.key == key)
+            } else {
+                self.prog.modules.iter().position(|x| x.kind == ModuleKind::Std && x.key == imp.source)
+            };
+            let Some(t) = target else {
+                self.err(m, imp.source_span, "E0121", format!("モジュール `{}` が見つかりません", imp.source));
+                continue;
+            };
+            if t == m {
+                self.err(m, imp.source_span, "E0122", "自分自身はインポートできません");
+                continue;
+            }
+            if !self.prog.modules[m].imports.contains(&t) {
+                self.prog.modules[m].imports.push(t);
+            }
+            if let Some(ns) = &imp.namespace {
+                let exts: Vec<FnId> = self.prog.modules[t]
+                    .exports
+                    .values()
+                    .filter_map(|s| match s {
+                        Sym::Fn(f) if self.prog.fns[*f].is_extension => Some(*f),
+                        _ => None,
+                    })
+                    .collect();
+                for f in exts {
+                    if !self.prog.modules[m].ext_methods.contains(&f) {
+                        self.prog.modules[m].ext_methods.push(f);
+                    }
+                }
+                self.register(m, &Target::Module(m), ns, Sym::Module(t), false);
+            }
+            for n in &imp.names {
+                match self.prog.modules[t].exports.get(&n.name.text).cloned() {
+                    Some(sym) => {
+                        if let Sym::Fn(f) = &sym {
+                            if self.prog.fns[*f].is_extension && !self.prog.modules[m].ext_methods.contains(f) {
+                                self.prog.modules[m].ext_methods.push(*f);
+                            }
+                        }
+                        let local = n.alias.as_ref().unwrap_or(&n.name);
+                        self.register(m, &Target::Module(m), local, sym, false);
+                    }
+                    None => {
+                        let hint = if self.prog.modules[t].scope.contains_key(&n.name.text) { "（`export` されていません）" } else { "" };
+                        self.err(m, n.name.span, "E0123", format!("モジュール `{}` に `{}` はありません{hint}", imp.source, n.name.text));
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ signatures
+
+    fn resolve_signatures(&mut self) {
+        // Aliases first (in declaration order), then everything else.
+        for (m, a) in std::mem::take(&mut self.alias_decls) {
+            let ty = resolve_type(&mut self.prog, m, &[], &a.ty);
+            let md = &mut self.prog.modules[m];
+            md.scope.insert(a.name.text.clone(), Sym::Alias(ty.clone()));
+            if a.exported {
+                md.exports.insert(a.name.text.clone(), Sym::Alias(ty));
+            }
+        }
+        // Re-bind imported aliases (they were copied before being resolved).
+        for m in 0..self.prog.modules.len() {
+            let ast = self.prog.modules[m].ast.clone();
+            for item in &ast.items {
+                let Item::Import(imp) = item else { continue };
+                for n in &imp.names {
+                    let local = n.alias.as_ref().unwrap_or(&n.name).text.clone();
+                    if let Some(Sym::Alias(_)) = self.prog.modules[m].scope.get(&local) {
+                        let resolved = self.prog.modules[m].imports.iter().find_map(|&t| match self.prog.modules[t].exports.get(&n.name.text) {
+                            Some(Sym::Alias(ty)) => Some(ty.clone()),
+                            _ => None,
+                        });
+                        if let Some(ty) = resolved {
+                            self.prog.modules[m].scope.insert(local, Sym::Alias(ty));
+                        }
+                    }
+                }
+            }
+        }
+        for (id, ast) in std::mem::take(&mut self.class_decls) {
+            self.resolve_class(id, &ast);
+        }
+        for (id, decl) in std::mem::take(&mut self.struct_decls) {
+            let m = self.prog.structs[id].module;
+            let mut fields = Vec::new();
+            for f in &decl.fields {
+                let ty = match &f.ty {
+                    Some(t) => resolve_type(&mut self.prog, m, &[], t),
+                    None => {
+                        self.err(m, f.span, "E0130", "構造体のフィールドには型注釈が必要です");
+                        Type::Error
+                    }
+                };
+                fields.push((f.name.text.clone(), ty));
+            }
+            self.prog.structs[id].fields = fields;
+        }
+        for (id, class) in std::mem::take(&mut self.fn_decls) {
+            self.resolve_fn(id, class);
+        }
+        self.prog.cur_namespace = None;
+        for (id, decl) in std::mem::take(&mut self.var_decls) {
+            let m = self.prog.vars[id].module;
+            self.prog.cur_namespace = self.var_ns.get(&id).cloned();
+            if let Some(t) = &decl.ty {
+                self.prog.vars[id].ty = resolve_type(&mut self.prog, m, &[], t);
+            } else if self.prog.vars[id].declared {
+                self.err(m, decl.name.span, "E0131", "`declare` された変数には型注釈が必要です");
+            } else if decl.init.is_none() {
+                self.err(m, decl.name.span, "E0132", "型注釈か初期化式が必要です");
+            } else {
+                // Inferred from the initializer by the checker.
+                self.prog.vars[id].ty = Type::Void;
+            }
+            if decl.kind == ast::VarKind::Const && decl.init.is_none() && !self.prog.vars[id].declared {
+                self.err(m, decl.name.span, "E0133", "`const` には初期化式が必要です");
+            }
+        }
+    }
+
+    fn type_params(&mut self, m: ModuleId, outer: &[TypeParamDef], tps: &[ast::TypeParam]) -> Vec<TypeParamDef> {
+        let mut out: Vec<TypeParamDef> = Vec::new();
+        for tp in tps {
+            let constraint = match &tp.constraint {
+                None => Constraint::None,
+                Some(TypeRef::Named { path, args, .. }) if path.len() == 1 && args.is_empty() => match path[0].text.as_str() {
+                    "Comparable" => Constraint::Comparable,
+                    "Numeric" => Constraint::Numeric,
+                    "ObjectType" => Constraint::ObjectType,
+                    _ => {
+                        let scope: Vec<TypeParamDef> = outer.iter().chain(out.iter()).cloned().collect();
+                        Constraint::Type(resolve_type(&mut self.prog, m, &scope, tp.constraint.as_ref().unwrap()))
+                    }
+                },
+                Some(t) => {
+                    let scope: Vec<TypeParamDef> = outer.iter().chain(out.iter()).cloned().collect();
+                    Constraint::Type(resolve_type(&mut self.prog, m, &scope, t))
+                }
+            };
+            if outer.iter().chain(out.iter()).any(|p| p.name == tp.name.text) {
+                self.err(m, tp.name.span, "E0101", format!("型パラメータ `{}` は既に宣言されています", tp.name.text));
+            }
+            out.push(TypeParamDef { name: tp.name.text.clone(), constraint });
+        }
+        out
+    }
+
+    fn resolve_class(&mut self, id: ClassId, ast: &ClassAst) {
+        let m = self.prog.classes[id].module;
+        self.prog.cur_namespace = self.prog.classes[id].namespace.clone();
+        match ast {
+            ClassAst::Class(c) => {
+                let tps = self.type_params(m, &[], &c.type_params);
+                self.prog.classes[id].type_params = tps.clone();
+                if let Some(ext) = &c.extends {
+                    self.err(m, ext.span(), "E0140", "クラスの継承（`extends`）にはまだ対応していません。インターフェイス（`implements`）か委譲を使ってください");
+                }
+                let mut implements = Vec::new();
+                for t in &c.implements {
+                    let ty = resolve_type(&mut self.prog, m, &tps, t);
+                    match &ty {
+                        Type::Class(i, _) if self.prog.classes[*i].kind != ClassKind::Class => implements.push(ty),
+                        Type::Error => {}
+                        _ => self.err(m, t.span(), "E0141", "`implements` にはインターフェイスを指定してください"),
+                    }
+                }
+                self.prog.classes[id].implements = implements;
+                let mut fields = Vec::new();
+                for member in &c.members {
+                    let ast::ClassMember::Field(f) = member else { continue };
+                    let ty = match &f.ty {
+                        Some(t) => resolve_type(&mut self.prog, m, &tps, t),
+                        // Inferred from the initializer by the checker.
+                        None if f.init.is_some() => Type::Void,
+                        None => {
+                            self.err(m, f.name.span, "E0132", "型注釈か初期化式が必要です");
+                            Type::Error
+                        }
+                    };
+                    if fields.iter().any(|x: &FieldDef| x.name == f.name.text) {
+                        self.err(m, f.name.span, "E0101", format!("`{}` は既に宣言されています", f.name.text));
+                    }
+                    fields.push(FieldDef {
+                        name: f.name.text.clone(),
+                        ty,
+                        vis: f.vis,
+                        is_static: f.is_static,
+                        readonly: f.readonly,
+                        init: f.init.clone().map(Rc::new),
+                        doc: f.doc.clone(),
+                        span: f.name.span,
+                    });
+                }
+                self.prog.classes[id].fields = fields;
+            }
+            ClassAst::Interface(i) => {
+                let tps = self.type_params(m, &[], &i.type_params);
+                self.prog.classes[id].type_params = tps.clone();
+                let mut extends = Vec::new();
+                for t in &i.extends {
+                    let ty = resolve_type(&mut self.prog, m, &tps, t);
+                    if matches!(ty, Type::Class(..)) {
+                        extends.push(ty);
+                    }
+                }
+                self.prog.classes[id].extends = extends;
+                let mut fields = Vec::new();
+                for member in &i.members {
+                    let ast::InterfaceMember::Prop(p) = member else { continue };
+                    let ty = match &p.ty {
+                        Some(t) => resolve_type(&mut self.prog, m, &tps, t),
+                        None => Type::Any,
+                    };
+                    fields.push(FieldDef {
+                        name: p.name.text.clone(),
+                        ty,
+                        vis: Visibility::Public,
+                        is_static: false,
+                        readonly: p.readonly,
+                        init: None,
+                        doc: p.doc.clone(),
+                        span: p.name.span,
+                    });
+                }
+                self.prog.classes[id].fields = fields;
+            }
+        }
+    }
+
+    fn resolve_fn(&mut self, id: FnId, class: Option<ClassId>) {
+        let m = self.prog.fns[id].module;
+        self.prog.cur_namespace = self.fn_ns.get(&id).cloned();
+        let decl = self.prog.fns[id].decl.clone().unwrap();
+        let outer: Vec<TypeParamDef> = class.map(|c| self.prog.classes[c].type_params.clone()).unwrap_or_default();
+        let own = self.type_params(m, &outer, &decl.type_params);
+        let scope: Vec<TypeParamDef> = outer.iter().chain(own.iter()).cloned().collect();
+        let kind = self.prog.fns[id].kind.clone();
+        let is_host = matches!(kind, FnKind::Host { .. } | FnKind::Declare { .. });
+        let mut params = Vec::new();
+        let mut locals = Vec::new();
+        for (i, p) in decl.params.iter().enumerate() {
+            let ty = match &p.ty {
+                Some(t) => resolve_type(&mut self.prog, m, &scope, t),
+                None if is_host => Type::Any,
+                None => {
+                    self.err(m, p.name.span, "E0150", format!("引数 `{}` には型注釈が必要です", p.name.text));
+                    Type::Error
+                }
+            };
+            if p.is_this && i != 0 {
+                self.err(m, p.name.span, "E0151", "`this` は第1引数にのみ書けます");
+            }
+            if p.is_this && class.is_some() {
+                self.err(m, p.name.span, "E0151", "クラスのメソッドには `this` 引数を書けません");
+            }
+            if p.rest {
+                self.err(m, p.span, "E0152", "可変長引数（`...`）には対応していません");
+            }
+            // VBA can only pass arrays by reference (spec §2.4 example).
+            let byref = p.mode == PassMode::ByRef;
+            locals.push(LocalDef {
+                name: p.name.text.clone(),
+                ty: ty.clone(),
+                kind: if p.is_this { LocalKind::This } else { LocalKind::Param },
+                byref,
+                reassigned: false,
+                captured: false,
+                span: p.name.span,
+                used: false,
+            });
+            params.push(ParamDef {
+                name: p.name.text.clone(),
+                ty,
+                mode: p.mode,
+                optional: p.optional,
+                default: p.default.clone().map(Rc::new),
+                rest: p.rest,
+                span: p.name.span,
+                local: i,
+            });
+        }
+        let mut seen_optional = false;
+        for (p, a) in params.iter().zip(decl.params.iter()) {
+            let opt = p.optional || p.default.is_some();
+            if seen_optional && !opt {
+                self.err(m, a.name.span, "E0153", "省略可能な引数の後に必須の引数は置けません");
+            }
+            seen_optional |= opt;
+            if opt && p.mode == PassMode::ByRef && !is_host {
+                self.err(m, a.name.span, "E0154", "`byref` 引数は省略可能にできません");
+            }
+        }
+        let ret = match (&decl.ret, &kind) {
+            (Some(t), _) => Some(resolve_type(&mut self.prog, m, &scope, t)),
+            (None, FnKind::Ctor { .. } | FnKind::Setter { .. } | FnKind::Main | FnKind::ModInit) => Some(Type::Void),
+            (None, FnKind::Host { .. } | FnKind::Declare { .. } | FnKind::Abstract { .. }) => Some(Type::Void),
+            // Inferred from the body.
+            (None, _) => None,
+        };
+        let attrs = self.fn_attrs(m, &decl, &kind);
+        let f = &mut self.prog.fns[id];
+        f.type_params = own;
+        f.params = params;
+        f.locals = locals;
+        f.ret = ret;
+        f.attrs = attrs;
+        if matches!(kind, FnKind::Getter { .. }) && !decl.params.is_empty() {
+            self.err(m, decl.name.span, "E0155", "getter は引数を取れません");
+        }
+        if matches!(kind, FnKind::Setter { .. }) && decl.params.len() != 1 {
+            self.err(m, decl.name.span, "E0155", "setter の引数は 1 つです");
+        }
+    }
+
+    fn fn_attrs(&mut self, m: ModuleId, decl: &ast::FnDecl, kind: &FnKind) -> FnAttrs {
+        let mut a = FnAttrs::default();
+        for d in &decl.decorators {
+            let str_arg = |i: usize| match d.args.get(i).map(|e| &e.peel().kind) {
+                Some(ExprKind::Str(s)) => Some(s.clone()),
+                Some(ExprKind::Name(n)) => Some(n.text.clone()),
+                _ => None,
+            };
+            match d.name.text.as_str() {
+                "macro" => a.macro_entry = true,
+                "init" => a.init = true,
+                "udf" => a.udf = true,
+                "fast" => a.fast = true,
+                "silent" => a.silent = true,
+                "reentrant" => a.reentrant = true,
+                "nocancel" => a.nocancel = true,
+                "nodoevents" => a.nodoevents = true,
+                "doevents" => a.doevents = true,
+                "ribbon" => a.ribbon = true,
+                "alias" => {
+                    if !matches!(kind, FnKind::Declare { .. }) {
+                        self.err(m, d.span, "E0160", "`@alias` は `declare module` 内の関数にのみ使えます");
+                    }
+                }
+                "onError" => match str_arg(0) {
+                    Some(s) => a.on_error = Some(s),
+                    None => self.err(m, d.span, "E0160", "`@onError(handler)` にはハンドラ関数名を指定してください"),
+                },
+                "fallback" => match str_arg(0) {
+                    Some(s) => a.fallback = Some(s),
+                    None => self.err(m, d.span, "E0160", "`@fallback(fn)` には代替関数名を指定してください"),
+                },
+                "on" => {
+                    let Some(spec) = str_arg(0) else {
+                        self.err(m, d.span, "E0161", "`@on(\"対象.イベント\")` の形式で指定してください");
+                        continue;
+                    };
+                    let Some((target, event)) = spec.split_once('.') else {
+                        self.err(m, d.span, "E0161", format!("`@on(\"{spec}\")`: `対象.イベント`（例: `Workbook.Open`, `Sheet1.Change`）の形式で指定してください"));
+                        continue;
+                    };
+                    let mut reentrant = false;
+                    if let Some(ExprKind::Object(props)) = d.args.get(1).map(|e| &e.kind) {
+                        for p in props {
+                            match (p.key.text.as_str(), &p.value.kind) {
+                                ("reentrant", ExprKind::Bool(b)) => reentrant = *b,
+                                _ => self.warn(m, p.key.span, "W0110", format!("`@on` の不明なオプション `{}` は無視されます", p.key.text)),
+                            }
+                        }
+                    }
+                    a.on_events.push(OnEvent { target: target.to_string(), event: event.to_string(), reentrant, span: d.span });
+                }
+                other => self.warn(m, d.span, "W0110", format!("不明なデコレータ `@{other}` は無視されます")),
+            }
+        }
+        if (a.macro_entry || !a.on_events.is_empty() || a.init) && !decl.type_params.is_empty() {
+            self.err(m, decl.name.span, "E0162", "ジェネリック関数はマクロ入口・`@on`・`@init` の対象にできません。具体型の関数で包んでください");
+        }
+        a
+    }
+}
+
+/// Resolves a syntactic type to a semantic type, reporting errors.
+pub fn resolve_type(prog: &mut Program, m: ModuleId, type_params: &[TypeParamDef], t: &TypeRef) -> Type {
+    let mut errors: Vec<(Span, String)> = Vec::new();
+    let ty = resolve_type_inner(prog, m, type_params, t, &mut errors);
+    for (span, message) in errors {
+        prog.diagnostics.push(Diagnostic { severity: Severity::Error, code: "E0170", message, module: Some(m), span });
+    }
+    ty
+}
+
+fn primitive(name: &str) -> Option<Type> {
+    Some(match name {
+        "byte" => Type::Byte,
+        "short" => Type::Short,
+        "int" => Type::Int,
+        "long" => Type::Long,
+        "float" => Type::Float,
+        "double" => Type::Double,
+        "currency" => Type::Currency,
+        "decimal" => Type::Decimal,
+        "ptr" => Type::Ptr,
+        "date" => Type::Date,
+        "string" => Type::Str,
+        "boolean" => Type::Bool,
+        "any" => Type::Any,
+        "object" => Type::Object,
+        "void" => Type::Void,
+        "wstr" => Type::WStr,
+        "astr" => Type::AStr,
+        "null" | "undefined" => Type::Null,
+        _ => return None,
+    })
+}
+
+pub const PRIMITIVE_NAMES: &[&str] = &[
+    "byte", "short", "int", "long", "float", "double", "currency", "decimal", "ptr", "date", "string", "boolean", "any",
+    "object", "void",
+];
+
+fn resolve_type_inner(prog: &Program, m: ModuleId, tps: &[TypeParamDef], t: &TypeRef, errors: &mut Vec<(Span, String)>) -> Type {
+    match t {
+        TypeRef::Error { .. } => Type::Error,
+        TypeRef::Array { elem, .. } => Type::Array(Box::new(resolve_type_inner(prog, m, tps, elem, errors))),
+        TypeRef::Nullable { inner, span } => {
+            let ty = resolve_type_inner(prog, m, tps, inner, errors);
+            if !(ty.is_object() || matches!(ty, Type::Any | Type::Error | Type::Param(_))) {
+                errors.push((*span, format!("`{} | null` は使えません。`null` を持てるのはオブジェクト型と `any` のみです", prog.show(&ty))));
+            }
+            ty
+        }
+        TypeRef::Fn { params, ret, .. } => {
+            let ps = params
+                .iter()
+                .map(|p| match &p.ty {
+                    Some(t) => resolve_type_inner(prog, m, tps, t, errors),
+                    None => {
+                        errors.push((p.span, "関数型の引数には型注釈が必要です".into()));
+                        Type::Error
+                    }
+                })
+                .collect();
+            Type::Func(Box::new(FuncType { params: ps, ret: resolve_type_inner(prog, m, tps, ret, errors) }))
+        }
+        TypeRef::Named { path, args, span } => {
+            let resolved: Vec<Type> = args.iter().map(|a| resolve_type_inner(prog, m, tps, a, errors)).collect();
+            let sym = if path.len() == 1 {
+                let name = path[0].text.as_str();
+                if let Some(p) = primitive(name) {
+                    if !resolved.is_empty() {
+                        errors.push((*span, format!("`{name}` は型引数を取りません")));
+                    }
+                    return p;
+                }
+                if tps.iter().any(|p| p.name == name) {
+                    return Type::Param(name.to_string());
+                }
+                match name {
+                    "number" => {
+                        errors.push((*span, "`number` 型はありません。`int` または `double` を使ってください".into()));
+                        return Type::Error;
+                    }
+                    "Array" => {
+                        if resolved.len() != 1 {
+                            errors.push((*span, "`Array<T>` の型引数は 1 つです".into()));
+                            return Type::Error;
+                        }
+                        return Type::Array(Box::new(resolved[0].clone()));
+                    }
+                    "Map" => {
+                        if resolved.len() != 2 {
+                            errors.push((*span, "`Map<K, V>` の型引数は 2 つです".into()));
+                            return Type::Error;
+                        }
+                        return Type::Map(Box::new(resolved[0].clone()), Box::new(resolved[1].clone()));
+                    }
+                    "Comparable" | "Numeric" | "ObjectType" => {
+                        errors.push((*span, format!("`{name}` は型パラメータの制約（`T extends {name}`）としてのみ使えます")));
+                        return Type::Error;
+                    }
+                    _ => {}
+                }
+                let in_ns = prog
+                    .cur_namespace
+                    .as_ref()
+                    .and_then(|ns| prog.namespaces.get(ns))
+                    .and_then(|n| n.get(name))
+                    .filter(|s| matches!(s, Sym::Class(_) | Sym::Enum(_) | Sym::Struct(_) | Sym::Alias(_)));
+                in_ns.or_else(|| prog.modules[m].scope.get(name)).or_else(|| prog.globals.get(name)).cloned()
+            } else if path.len() == 2 {
+                let (ns, name) = (path[0].text.as_str(), path[1].text.as_str());
+                match prog.modules[m].scope.get(ns) {
+                    Some(Sym::Module(t)) => prog.modules[*t].exports.get(name).cloned(),
+                    _ => prog.namespaces.get(ns).and_then(|n| n.get(name)).cloned(),
+                }
+            } else {
+                None
+            };
+            let display = path.iter().map(|p| p.text.as_str()).collect::<Vec<_>>().join(".");
+            match sym {
+                Some(Sym::Class(c)) => {
+                    let expected = prog.classes[c].type_params.len();
+                    if resolved.len() != expected {
+                        errors.push((*span, format!("`{display}` の型引数は {expected} 個です（{} 個指定されています）", resolved.len())));
+                        return Type::Error;
+                    }
+                    Type::Class(c, resolved)
+                }
+                Some(Sym::Enum(e)) => Type::Enum(e),
+                Some(Sym::Struct(s)) => Type::Struct(s),
+                Some(Sym::Alias(t)) => t,
+                Some(_) => {
+                    errors.push((*span, format!("`{display}` は型ではありません")));
+                    Type::Error
+                }
+                None => {
+                    errors.push((*span, format!("型 `{display}` が見つかりません")));
+                    Type::Error
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn module_names() {
+        assert_eq!(vba_module_name("strutil"), "Strutil");
+        assert_eq!(vba_module_name("str_util"), "StrUtil");
+        assert_eq!(vba_module_name("sub/excel-util"), "ExcelUtil");
+        assert_eq!(vba_module_name("StrUtil"), "StrUtil");
+        assert_eq!(vba_module_name("1st"), "Mod1st");
+    }
+}
