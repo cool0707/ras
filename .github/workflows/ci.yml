@@ -102,7 +102,13 @@ jobs:
       # Drives real COM objects (Scripting.Dictionary, WScript.Shell) through the addon.
       - name: Smoke-test ras_com
         if: matrix.name == 'windows-x64'
-        run: node crates/ras-com/tests/smoke.js dist/ras_com.node
+        shell: bash
+        run: |
+          set +e
+          node crates/ras-com/tests/smoke.js dist/ras_com.node
+          code=$?
+          printf 'exit code: %d (0x%X)\n' "$code" "$code"
+          exit "$code"
       # Downloadable from the run's summary page ("Artifacts").
       - uses: actions/upload-artifact@v5
         with:

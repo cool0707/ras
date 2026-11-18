@@ -123,6 +123,7 @@ fn init_com() {
 // ---------------------------------------------------------------------------- variants
 
 /// An owned `VARIANT`.
+#[repr(transparent)]
 struct Var(VARIANT);
 
 impl Var {
@@ -371,12 +372,14 @@ fn dispid(disp: &IDispatch, name: &str) -> Result<i32> {
 }
 
 /// `Invoke` with the arguments in call order. Retries while Excel rejects the call because it is busy.
-fn invoke(disp: &IDispatch, id: i32, name: &str, flags: DISPATCH_FLAGS, args: Vec<Var>, put: bool) -> Result<Var> {
-    // Arguments are passed last to first.
-    let mut rg: Vec<VARIANT> = args.iter().rev().map(|a| unsafe { std::ptr::read(&a.0) }).collect();
+fn invoke(disp: &IDispatch, id: i32, name: &str, flags: DISPATCH_FLAGS, mut args: Vec<Var>, put: bool) -> Result<Var> {
+    // Arguments are passed last to first. The callee may convert them in place, so the vector
+    // handed to it is the one and only owner of the values (`Var` is a transparent VARIANT).
+    args.reverse();
+    let mut rg = args;
     let mut named = DISPID_PROPERTYPUT;
     let params = DISPPARAMS {
-        rgvarg: if rg.is_empty() { std::ptr::null_mut() } else { rg.as_mut_ptr() },
+        rgvarg: if rg.is_empty() { std::ptr::null_mut() } else { rg.as_mut_ptr() as *mut VARIANT },
         rgdispidNamedArgs: if put { &mut named } else { std::ptr::null_mut() },
         cArgs: rg.len() as u32,
         cNamedArgs: if put { 1 } else { 0 },
@@ -421,9 +424,7 @@ fn invoke(disp: &IDispatch, id: i32, name: &str, flags: DISPATCH_FLAGS, args: Ve
             }
         }
     };
-    // `rg` holds bitwise copies owned by `args`.
-    rg.clear();
-    drop(args);
+    drop(rg);
     outcome
 }
 
