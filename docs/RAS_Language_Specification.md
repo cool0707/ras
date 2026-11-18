@@ -1,4 +1,8 @@
-# RAS 言語仕様書（Draft v0.4）
+# RAS 言語仕様書（Draft v0.5）
+
+> v0.4 からの変更
+> * 長時間ループへの `DoEvents` 自動挿入（間引き付き）を追加（§10.4）。それに伴い、マクロの再入防止と Esc キーでの中断を追加（§12.4）
+> * 対象ホストを Excel に限定（Access / Word は当面サポートしない）（§1）
 
 > v0.3 からの変更
 > * `number` 型を廃止し、数値型を C# 風の `short` / `int` / `long` / `float` / `double` に変更（§2.1〜2.3）
@@ -26,7 +30,7 @@
 * **静的検証の委譲:** 厳密な型チェックや制約の検証はRAS側（コンパイラ兼LSP）が担う。
 * **ボイラープレートゼロ:** VBA で「毎回書くべき定型コード」「知らないと踏む罠の回避コード」は、ユーザーが書かずともコンパイラが自動で挿入する（§12, §13）。
 * **速度はコンパイラの責務:** VBA は関数呼び出し・COM 呼び出し（セルアクセス）・`Variant` 演算・遅延バインディングが遅い。RAS ではユーザーが素直に書いたコードを、コンパイラがインライン展開・一括転送・具体型化によって高速な VBA に変換する（§8, §9）。
-* **対象環境:** Windows 版 Excel（Office 2007 以降、32bit / 64bit）。**Mac 版 Excel は対象外**とする（Mac 固有の `#If Mac` 分岐・`Lib` パス・AppleScript 連携等は生成しない）。
+* **対象環境:** Windows 版 Excel（Office 2007 以降、32bit / 64bit）。**Access / Word 等の他の Office ホストは当面サポートしない。Mac 版 Excel は対象外**とする（Mac 固有の `#If Mac` 分岐・`Lib` パス・AppleScript 連携等は生成しない）。
 * **出力 VBA は読める状態を保つ:** 生成コードは人間がデバッグ可能であること。各ステートメントには元の RAS ソース位置を辿れるソースマップを持つ（§14.8）。
 
 ---
@@ -565,7 +569,7 @@ for (let r = 2; r <= last; r++) {
 | RAS | 内容 |
 |---|---|
 | `using _ = fastMode();` | 画面更新・イベント・自動計算・警告表示・ステータスバーの表示を停止し、スコープを抜けると（エラー時も）元の状態に戻す |
-| `using _ = fastMode({ calc: false });` | 個別に除外指定可（`screen`, `events`, `calc`, `alerts`, `statusBar`, `cursor`） |
+| `using _ = fastMode({ calc: false });` | 個別に除外指定可（`screen`, `events`, `calc`, `alerts`, `statusBar`, `cursor`）。`interactive: false` はユーザー入力の遮断を追加する（既定は遮断しない。§10.4.5） |
 | `@fast export function f() {...}` | 関数全体に `fastMode()` を適用するデコレータ |
 | `suspendScreen()` / `resumeScreen()` | `ScreenUpdating` |
 | `suspendEvents()` / `resumeEvents()` | `EnableEvents` |
@@ -608,6 +612,85 @@ End Sub
 ```
 
 ---
+
+### 10.4 `DoEvents` の自動挿入
+
+長時間ループの間に Excel が「応答なし」になるのを防ぎ、Esc キーで中断できるようにするため、コンパイラが**止まりそうな箇所に `DoEvents` を間引いて自動挿入**する。ユーザーは `DoEvents` を書かなくてよい。
+
+#### 10.4.1 挿入箇所
+
+ループの末尾（次の繰り返しへ戻る直前）に挿入する。対象は次のいずれかに当たるループ。
+
+* `while` / `do-while` / 無限ループ（`for (;;)`）
+* 回数が実行時まで決まらない `for` / `for-of`
+* 回数がコンパイル時に分かり、かつ閾値以上（既定 10,000 回）の `for`
+* 本体に COM 呼び出し、ファイル I/O、またはループを含む関数呼び出しを含むループ
+
+ネストしたループの扱い:
+
+* 原則として最も内側の対象ループに入れる。
+* ただし最も内側のループの回数が定数で小さい場合（`for (let c = 0; c < 5; c++)` など）は、1つ外側のループに入れる。
+* 1つのループの入れ子に入れるのは1か所だけとする。
+
+ループ以外では、標準ライブラリの `sleep(ms)` / `waitUntil(...)` が待機を短く分割し、その間で `DoEvents` を呼ぶ。
+
+#### 10.4.2 間引き
+
+`DoEvents` は1回の呼び出しが重いため、2段階で間引く。
+
+1. **カウンタ判定（ループ内に展開する）:** 1回の加算とビット演算だけの判定。`RAS_Yield` の呼び出しは N 回に1回に抑える。
+2. **時間・入力判定（`RAS_Yield` 内）:**
+   * 前回の `DoEvents` から一定時間（既定 100ms）が経ったとき、または `GetInputState()` が保留中の入力（マウス・キー）を報告したときだけ `DoEvents` を呼ぶ。
+   * `RAS_Yield` は前回の呼び出しからの経過時間を見て N を自動調整する。概ね 10ms ごとに呼ばれるよう、N は 2 のべき乗の範囲で増減させる。
+
+**出力VBAコード（ループ側）:**
+```vba
+    Do While ras_cond1
+        ' ... 本体 ...
+        ras_y1 = ras_y1 + 1&
+        If (ras_y1 And ras_yieldMask) = 0& Then RAS_Yield
+    Loop
+```
+
+**出力VBAコード（ランタイム側、概略）:**
+```vba
+Public Sub RAS_Yield()
+    Dim now_ As Double
+    now_ = RAS_TickMs()                ' GetTickCount の 49.7 日の折り返しを補正した値
+    RAS_AdjustYieldMask now_           ' 前回呼び出しからの間隔で ras_yieldMask を増減
+    If GetInputState() <> 0 Or now_ - ras_lastYield >= RAS_YIELD_MS Then
+        ras_lastYield = now_
+        DoEvents
+    End If
+End Sub
+```
+
+* `GetTickCount` は `Long` で返るため、そのまま引き算すると折り返し時にオーバーフロー（エラー 6）になる。ランタイムは `double` に変換し、折り返しを補正して扱う。
+* `GetInputState` / `GetTickCount` の `Declare` は §11 の規則で 32bit / 64bit 両方を出力する。
+
+#### 10.4.3 挿入しない箇所
+
+* **ワークシート関数（UDF、`@udf`）と、そこから呼ばれうる関数:** セルの計算中に `DoEvents` を呼ぶと、再計算の不整合や異常終了を招くため。呼び出しグラフで判定する。
+* **イベントハンドラ（`@on`）と、そこから呼ばれうる関数:** イベント処理中の再入を防ぐため。`@doevents` を付ければ挿入する。
+* **`@init`、クラスの `Class_Terminate`**
+* **§9 の一括転送に変換したループ:** 変換後は配列操作だけになり十分速い場合が多いため。回数が閾値以上なら §10.4.1 の規則で挿入する。
+
+#### 10.4.4 明示的な制御
+
+* `@nodoevents`: 関数・ループに付けて挿入を抑止する。
+* `@doevents`: 関数・ループに付けて挿入を強制する。
+* `yieldNow()`: その場で `RAS_Yield` を呼ぶ。
+* `ras.toml` の `[doevents]` で全体の有効・無効、間隔、回数閾値を設定する（§15.2）。
+* LSP は、挿入した箇所を CodeLens で表示する。
+
+#### 10.4.5 `DoEvents` 中の再入と中断
+
+`DoEvents` の間はユーザー操作やイベントが処理されるため、ランタイムは次の対策を自動で行う。
+
+* **マクロの再入防止:** 実行中フラグ `RAS_Busy` を持つ。実行中にボタンやリボンから別のマクロ入口（§12.4）が呼ばれた場合は、実行せずステータスバーに「処理中です」と表示する。`@reentrant` を付けたマクロは除く。
+* **イベント:** `fastMode` の `events` で停止していればイベントは発生しない。停止していない場合、`DoEvents` 中に発生したイベントのハンドラは通常どおり実行する。ただし、自身が実行中のハンドラへの再入は §12.2 の再入防止で無視する。
+* **Esc キーでの中断:** マクロ入口で `Application.EnableCancelKey = xlErrorHandler` を設定する。`DoEvents` 中に Esc が押されるとエラー 18 として最上位ハンドラに届き、アプリケーション状態を復元して「ユーザーにより中断されました」と表示して終了する。`using` / `finally` は中断時も実行する。`@nocancel` で中断を無効にできる。
+* **セル編集モードとの競合:** `DoEvents` 中にユーザーがセル編集を始めると、その後のシート操作が失敗しうる。`fastMode({ interactive: false })`（`Application.Interactive = False`）を指定すると、ユーザー入力を受け付けず、再描画と「応答なし」の回避だけを行う。
 
 ## 11. `declare`（外部 DLL 関数）の 32bit / 64bit 両対応
 
@@ -721,6 +804,7 @@ RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化�
 ユーザーから直接呼ばれうる関数（マクロ入口）には自動的に以下を付与する。
 
 * `RAS_EnsureInit` 呼び出し
+* 再入防止（`RAS_Busy`、§10.4.5）と `Application.EnableCancelKey = xlErrorHandler` の設定
 * 最上位エラーハンドラ: アプリケーション状態の復元（§10.2）→ RAS ソース位置付きのエラーダイアログ表示（`@silent` で抑止、`@onError(handler)` で差し替え）
 
 ### 12.5 リボン参照の復元
@@ -923,7 +1007,7 @@ name = "SalesReport"
 workbook = "C:/work/SalesReport.xlsm"
 
 [target]
-host = "excel"          # 将来: "access", "word"
+host = "excel"          # 現状 "excel" のみ
 vba6 = true             # VBA6(32bit Office 2007以前)用の Declare も出力
 codepage = 932
 
@@ -935,6 +1019,11 @@ erl = true              # 行番号付与
 [pack]
 backup-generations = 5
 # sign = "cert:CurrentUser/My/<thumbprint>"   # 再署名に使う証明書
+
+[doevents]
+enabled = true
+interval-ms = 100       # DoEvents を呼ぶ最短間隔
+loop-threshold = 10000  # 回数が定数のループで挿入対象とする最小回数
 
 [sync]
 enabled = true
@@ -952,9 +1041,7 @@ pull-unmanaged = true
 
 ## 16. 未決事項
 
-1. **非同期・`DoEvents`:** 長時間ループでの `DoEvents` 自動挿入（UI 応答性）と、その間のイベント再入の扱い。
-2. **Access / Word 等の他ホスト対応**の範囲。
-3. **ジェネリクスの出力方式:** 型引数ごとに単相化して具体型の関数を複数出力するか（高速・コード量増）、`Variant` 版1本にするか（§3.2.1）。
+1. **ジェネリクスの出力方式:** 型引数ごとに単相化して具体型の関数を複数出力するか（高速・コード量増）、`Variant` 版1本にするか（§3.2.1）。
 
 ### 決定済み（v0.3）
 
@@ -967,3 +1054,8 @@ pull-unmanaged = true
 
 * 数値型は C# 風（`short` / `int` / `long` / `float` / `double`）。`number` は廃止（§2）。
 * C# 風の拡張メソッドに対応（§3.2）。
+
+### 決定済み（v0.5）
+
+* 長時間ループには、間引き付きで `DoEvents` を自動挿入する（§10.4）。
+* Access / Word は当面サポートしない（§1）。
