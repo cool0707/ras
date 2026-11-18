@@ -1,0 +1,15 @@
+[package]
+name = "ras-syntax"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Lexer, lossless parser and AST for the RAS language"
+
+[dependencies]
+logos.workspace = true
+rowan.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
