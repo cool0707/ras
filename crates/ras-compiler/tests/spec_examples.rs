@@ -656,3 +656,9 @@ fn drift_hash_round_trips() {
     assert_eq!(ras_compiler::emit::has_drifted(&f.stream_text()), Some(false));
     assert_eq!(ras_compiler::emit::has_drifted(&f.stream_text().replace("f = 1&", "f = 2&")), Some(true));
 }
+
+#[test]
+fn spec_2_4_unbounded_generic_recursion_is_an_error() {
+    let src = "function grow<T>(x: T, n: int): int {\n    if (n <= 0) return 0;\n    const xs: T[] = [x];\n    return grow(xs, n - 1);\n}\nexport function run(): int { return grow(1, 3); }\n";
+    assert!(error_codes_build(&[("m", src)]).contains(&"E0602"));
+}

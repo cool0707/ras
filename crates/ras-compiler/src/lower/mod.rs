@@ -167,6 +167,7 @@ pub(crate) struct Lowerer<'p> {
     init_calls: Vec<String>,
     macros: Vec<String>,
     instance_counts: HashMap<FnId, usize>,
+    reported_3d: bool,
 }
 
 /// Workbook / worksheet event signatures: (name, VBA type, by reference).
@@ -225,6 +226,7 @@ pub fn lower(prog: &Program) -> Lowered {
         init_calls: Vec::new(),
         macros: Vec::new(),
         instance_counts: HashMap::new(),
+        reported_3d: false,
     };
     lw.run();
     Lowered { modules: lw.out, diagnostics: lw.diags, notes: lw.notes, macros: lw.macros }
@@ -581,6 +583,11 @@ impl<'p> Lowerer<'p> {
         match t {
             Type::Array(_) => {
                 let elem = t.elem().unwrap().clone();
+                if elem.is_array() && !self.reported_3d {
+                    self.reported_3d = true;
+                    let m = self.src_module();
+                    self.diag(Severity::Error, m, Span::default(), "E0603", "3 次元以上の配列には対応していません（`T[][]` までです）");
+                }
                 // Arrays of `any` live in a plain Variant so that Range data is never copied (spec §9.2.1).
                 if matches!(elem, Type::Any | Type::Error | Type::Null | Type::Decimal) {
                     ("Variant".into(), false)
@@ -624,14 +631,8 @@ impl<'p> Lowerer<'p> {
     /// Name fragment used in mangled generic names (spec §2.4.1).
     fn mangle_one(&mut self, t: &Type) -> String {
         match t {
-            Type::Array(_) => {
-                let (base, arr) = self.vtype(t);
-                if arr {
-                    format!("{base}Arr")
-                } else {
-                    "VariantArr".into()
-                }
-            }
+            // Structural, so that `T = int[]` and `T = int[][]` get different implementations.
+            Type::Array(inner) => format!("{}Arr", self.mangle_one(inner)),
             other => self.vscalar(other),
         }
     }
@@ -700,9 +701,19 @@ impl<'p> Lowerer<'p> {
         let name = if targs.is_empty() { base } else { Self::shorten(format!("{base}__{mangled}"), 255) };
         self.fn_insts.insert((f, mangled), name.clone());
         if matches!(def.kind, FnKind::Free) {
-            self.fn_queue.push((f, targs.to_vec()));
-            if def.is_generic() {
-                *self.instance_counts.entry(f).or_default() += 1;
+            let count = {
+                let c = self.instance_counts.entry(f).or_default();
+                if def.is_generic() {
+                    *c += 1;
+                }
+                *c
+            };
+            // A recursion whose type arguments keep growing (`f<T>` calling `f<T[]>`) never ends (spec §2.4.1).
+            if count == 257 {
+                self.diag(Severity::Error, def.module, def.name_span, "E0602", format!("ジェネリック関数 `{}` の展開が終わりません（呼び出しのたびに型引数が大きくなる再帰は使えません）", def.name));
+            }
+            if count <= 256 {
+                self.fn_queue.push((f, targs.to_vec()));
             }
         }
         name
