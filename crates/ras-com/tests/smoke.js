@@ -38,10 +38,14 @@ assert.deepEqual(dict.call("Keys", []), ["a", "b", "when", "flag", "nothing"]);
 assert.deepEqual(dict.enumerate(), ["a", "b", "when", "flag", "nothing"]);
 step("arrays in");
 // Arrays go in as SAFEARRAYs and come back 0-based.
-dict.put("Item", ["grid"], [[1, "x"], [2, "y"]]);
-assert.deepEqual(dict.call("Item", ["grid"]), [[1, "x"], [2, "y"]]);
 dict.put("Item", ["list"], [1, 2, 3]);
+step("1-D array stored");
 assert.deepEqual(dict.call("Item", ["list"]), [1, 2, 3]);
+step("1-D array read back");
+dict.put("Item", ["grid"], [[1, "x"], [2, "y"]]);
+step("2-D array stored");
+assert.deepEqual(dict.call("Item", ["grid"]), [[1, "x"], [2, "y"]]);
+step("2-D array read back");
 step("object identity");
 // Object references round-trip and compare by identity.
 const inner = com.createObject("Scripting.Dictionary");
