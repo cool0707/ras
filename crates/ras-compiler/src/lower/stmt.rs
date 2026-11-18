@@ -361,7 +361,7 @@ impl<'p> Lowerer<'p> {
                         matches!(i, Intr::ArrPush | Intr::ArrPop | Intr::ArrSort | Intr::ArrReverse | Intr::ArrClear)
                             && matches!(&callee.peel().kind, ExprKind::Member { object, .. } if is_local(object))
                     }
-                    Some(CallTarget::Dynamic | CallTarget::Closure | CallTarget::DefaultMember(_)) => args.iter().any(|a| is_local(a)),
+                    Some(CallTarget::Dynamic | CallTarget::Closure | CallTarget::DefaultMember(_)) => args.iter().any(&is_local),
                     _ => false,
                 };
                 byref_arg
@@ -370,13 +370,6 @@ impl<'p> Lowerer<'p> {
         })
     }
 
-    fn has_unknown_calls(&self, s: &Stmt) -> bool {
-        let info = self.info();
-        any_expr(s, &mut |e| match &e.kind {
-            ExprKind::Call { .. } | ExprKind::New { .. } => !matches!(info.calls.get(&e.id).map(|c| &c.target), Some(CallTarget::Intrinsic(_))),
-            _ => false,
-        })
-    }
 
     /// Is `e` guaranteed to keep its value while `body` runs?
     pub(crate) fn is_invariant(&self, e: &Expr, body: &Stmt) -> bool {
@@ -1070,9 +1063,6 @@ impl<'p> Lowerer<'p> {
         self.exit_through(base, Some(l));
     }
 
-    pub(crate) fn has_unknown_calls_in(&self, s: &Stmt) -> bool {
-        self.has_unknown_calls(s)
-    }
 }
 
 /// Builds `If c Then ... ElseIf ... Else ... End If`, folding `else { if ... }` chains.

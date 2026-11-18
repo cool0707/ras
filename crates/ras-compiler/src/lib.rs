@@ -4,6 +4,8 @@
 //! sources ──collect──▶ Program ──check──▶ typed Program ──lower──▶ VBA modules ──emit──▶ files
 //! ```
 
+#![allow(clippy::too_many_arguments, clippy::type_complexity, clippy::wrong_self_convention, clippy::should_implement_trait, clippy::field_reassign_with_default)]
+
 pub mod astutil;
 pub mod check;
 pub mod collect;

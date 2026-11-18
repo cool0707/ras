@@ -336,6 +336,8 @@ pub struct PrintOptions {
     pub erl: bool,
     /// Emit `Attribute` lines (file / offline output). Live sync omits them (spec §16.1.3).
     pub attributes: bool,
+    /// Also target VBA6: declarations using `LongPtr` are emitted for both (spec §11.3).
+    pub vba6: bool,
 }
 
 pub struct Printed {
@@ -525,7 +527,20 @@ impl Printer<'_> {
         if let Some(r) = &p.ret {
             let _ = write!(head, " As {r}");
         }
-        self.raw_line(&head);
+        // `LongLong` only exists in 64-bit Office: the whole procedure is conditional.
+        let win64_only = head.contains("LongLong");
+        if win64_only {
+            self.raw_line("#If Win64 Then");
+        }
+        if self.opts.vba6 && head.contains("LongPtr") {
+            self.raw_line("#If VBA7 Then");
+            self.raw_line(&head);
+            self.raw_line("#Else");
+            self.raw_line(&head.replace("LongPtr", "Long"));
+            self.raw_line("#End If");
+        } else {
+            self.raw_line(&head);
+        }
         if self.opts.attributes {
             for a in &p.attributes {
                 self.raw_line(a);
@@ -533,7 +548,19 @@ impl Printer<'_> {
         }
         for (name, ty, is_array) in &p.locals {
             let arr = if *is_array { "()" } else { "" };
-            self.raw_line(&format!("    Dim {name}{arr} As {ty}"));
+            if self.opts.vba6 && ty == "LongPtr" {
+                self.raw_line("    #If VBA7 Then");
+                self.raw_line(&format!("        Dim {name}{arr} As LongPtr"));
+                self.raw_line("    #Else");
+                self.raw_line(&format!("        Dim {name}{arr} As Long"));
+                self.raw_line("    #End If");
+            } else if ty == "LongLong" && !win64_only {
+                self.raw_line("    #If Win64 Then");
+                self.raw_line(&format!("        Dim {name}{arr} As LongLong"));
+                self.raw_line("    #End If");
+            } else {
+                self.raw_line(&format!("    Dim {name}{arr} As {ty}"));
+            }
         }
         if !p.locals.is_empty() && !p.body.is_empty() {
             self.raw_line("");
@@ -544,6 +571,9 @@ impl Printer<'_> {
         self.block(1, &p.body);
         self.cur_pos = None;
         self.raw_line(&format!("End {end_kw}"));
+        if win64_only {
+            self.raw_line("#End If");
+        }
     }
 }
 
@@ -651,7 +681,7 @@ mod tests {
 
     #[test]
     fn call_statement_avoids_paren_trap() {
-        let opts = PrintOptions { erl: false, attributes: true };
+        let opts = PrintOptions { erl: false, attributes: true, vba6: true };
         let mut m = VModule::new("M", VModuleKind::Standard);
         m.procs.push(VProc {
             kind: ProcKind::Sub,

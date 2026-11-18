@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Clippy
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # Spec §17.3: the workbook written by `ras pack` is checked with an independent parser (oletools).
+      - name: Validate packed workbook with olevba
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet oletools
+          mkdir "$RUNNER_TEMP/sample" && cd "$RUNNER_TEMP/sample"
+          RAS="$GITHUB_WORKSPACE/target/debug/ras"
+          "$RAS" init . --workbook Book.xlsm
+          "$RAS" pack
+          "$RUNNER_TEMP/venv/bin/olevba" Book.xlsm > olevba.txt
+          grep -q "VBA MACRO Main.bas" olevba.txt
+          grep -q "VBA MACRO ThisWorkbook.cls" olevba.txt
+          grep -q "Public Sub hello()" olevba.txt
+          echo "olevba read the generated VBA project:"
+          grep "VBA MACRO" olevba.txt
+
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: ras.exe
+          - name: windows-arm64
+            os: windows-latest
+            target: aarch64-pc-windows-msvc
+            exe: ras.exe
+          - name: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            exe: ras
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            exe: ras
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p ras --target ${{ matrix.target }}
+      - name: Collect files
+        shell: bash
+        run: |
+          mkdir dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" dist/
+          cp LICENSE README.md dist/
+      # Downloadable from the run's summary page ("Artifacts").
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ras-${{ matrix.name }}
+          path: dist/
+          if-no-files-found: error
+
+  vscode:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ras-vscode
+          path: editors/vscode/*.vsix
+          if-no-files-found: error

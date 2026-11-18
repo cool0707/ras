@@ -126,9 +126,6 @@ impl Checker<'_> {
         self.info().res.insert(id, res);
     }
 
-    fn is_typedef_module(&self, m: ModuleId) -> bool {
-        self.prog.modules[m].kind == ModuleKind::TypeDef
-    }
 
     // ------------------------------------------------------------------ type relations
 
@@ -392,11 +389,10 @@ impl Checker<'_> {
         for (i, p) in decl.params.iter().enumerate() {
             if p.is_this {
                 self.fx.this_local = Some(i);
-            } else if !p.name.text.is_empty() {
-                if self.fx.scopes[0].names.insert(p.name.text.clone(), i).is_some() {
+            } else if !p.name.text.is_empty()
+                && self.fx.scopes[0].names.insert(p.name.text.clone(), i).is_some() {
                     self.err(p.name.span, "E0101", format!("引数 `{}` が重複しています", p.name.text));
                 }
-            }
             let offset = u32::from(p.name.span.start());
             self.info().decl_locals.insert(offset, i);
         }
@@ -1824,12 +1820,11 @@ impl Checker<'_> {
                 Type::Str
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
-                if !self.is_numeric(a) || !self.is_numeric(b) {
-                    if !(matches!(a, Type::Date) || matches!(b, Type::Date)) {
+                if (!self.is_numeric(a) || !self.is_numeric(b))
+                    && !(matches!(a, Type::Date) || matches!(b, Type::Date)) {
                         self.err(span, "E0387", format!("演算子 `{}` は `{}` と `{}` には使えません", op.symbol(), self.show(a), self.show(b)));
                         return Type::Error;
                     }
-                }
                 if op == BinaryOp::Sub && *a == Type::Date && *b == Type::Date {
                     return Type::Double;
                 }

@@ -50,7 +50,7 @@ pub fn valid_ident(name: &str) -> String {
     }
     let first = out.chars().next().unwrap();
     if first == '_' || first.is_ascii_digit() {
-        out.insert_str(0, "u");
+        out.insert(0, 'u');
     }
     if out.chars().count() > 200 {
         out = out.chars().take(200).collect();

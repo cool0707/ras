@@ -138,7 +138,6 @@ pub(crate) struct ProcCtx {
     pub stmt_count: usize,
     /// True while lowering the body of a closure class (`Invoke`).
     pub in_closure: bool,
-    pub yield_plan: Option<std::rc::Rc<HashSet<u32>>>,
     /// Top-level variables of a script module that became locals of `Main`.
     pub demoted: HashMap<VarId, String>,
 }
@@ -1086,8 +1085,9 @@ impl<'p> Lowerer<'p> {
         let (leading_comments, summary) = Self::doc_lines(&def.doc);
         let mut attributes = Vec::new();
         if let (true, Some(s)) = (public, summary) {
-            let text: String = s.chars().filter(|c| !c.is_control()).take(240).collect();
-            if self.encodable(&text) {
+            // Characters outside the target code page cannot appear in an Attribute line.
+            let text: String = s.chars().filter(|c| !c.is_control() && self.encodable(c.encode_utf8(&mut [0; 4]))).take(240).collect();
+            if !text.trim().is_empty() {
                 attributes.push(format!("Attribute {name}.VB_Description = \"{}\"", text.replace('"', "\"\"")));
             }
         }
@@ -1378,7 +1378,7 @@ impl<'p> Lowerer<'p> {
             for ev in &f.attrs.on_events {
                 let key = (ev.target.clone(), ev.event.clone());
                 let is_wb = ev.target == "Workbook" || ev.target == "ThisWorkbook";
-                if !is_wb && !self.cfg.sheet_code_names.iter().any(|s| *s == ev.target) && !prog.globals.contains_key(&ev.target) {
+                if !is_wb && !self.cfg.sheet_code_names.contains(&ev.target) && !prog.globals.contains_key(&ev.target) {
                     self.diag(Severity::Error, f.module, ev.span, "E0610", format!("`@on(\"{}.{}\")`: シートのコード名 `{}` が見つかりません", ev.target, ev.event, ev.target));
                     continue;
                 }
@@ -1440,7 +1440,7 @@ impl<'p> Lowerer<'p> {
                     let target = VExpr::Name(prog.modules[d.module].vba_name.clone()).member(names::member_ident(&d.name));
                     let args: Vec<VExpr> = sig.iter().take(d.params.len()).map(|p| vname(p.0)).collect();
                     let call = VStmt::Call { target, args };
-                    if *reentrant {
+                    if *reentrant || (is_wb && ev == "Open") {
                         calls.push(call);
                     } else {
                         // Re-entrancy guard: ignore events raised by the handler itself (spec §12.2).

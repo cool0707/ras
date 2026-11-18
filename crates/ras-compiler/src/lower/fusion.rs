@@ -18,7 +18,8 @@ use crate::vba::*;
 /// A callback: either an arrow function literal (expanded in place) or a closure object.
 enum Callback<'a> {
     Arrow(&'a Expr, &'a ast::ArrowFn),
-    Obj(VExpr),
+    /// Closure object and the number of parameters it declares.
+    Obj(VExpr, usize),
 }
 
 struct Stage<'a> {
@@ -67,8 +68,12 @@ impl<'p> Lowerer<'p> {
             ExprKind::Arrow(a) => Callback::Arrow(arg.peel(), a),
             _ => {
                 // A function-typed value: evaluate the closure once, call `Invoke` per element.
+                let arity = match self.ty(arg) {
+                    Type::Func(f) => f.params.len(),
+                    _ => usize::MAX,
+                };
                 let v = self.expr(arg);
-                Callback::Obj(self.spill(v, &Type::Object))
+                Callback::Obj(self.spill(v, &Type::Object), arity)
             }
         }
     }
@@ -76,9 +81,10 @@ impl<'p> Lowerer<'p> {
     /// Expands one callback application. Returns its value (`Empty` when `want` is false).
     fn apply_cb(&mut self, cb: &Callback, vals: Vec<(VExpr, Type)>, want: bool) -> VExpr {
         match cb {
-            Callback::Obj(o) => {
+            Callback::Obj(o, arity) => {
                 let target = o.clone().member("Invoke");
-                let args: Vec<VExpr> = vals.into_iter().map(|v| v.0).collect();
+                // A late-bound call with extra arguments fails at run time.
+                let args: Vec<VExpr> = vals.into_iter().take(*arity).map(|v| v.0).collect();
                 if want {
                     target.index(args)
                 } else {

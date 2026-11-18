@@ -235,7 +235,7 @@ pub fn has_drifted(code: &str) -> Option<bool> {
 
 pub fn finalize(prog: &Program, lowered: &Lowered, opts: &EmitOptions) -> (Vec<OutputFile>, Vec<Diagnostic>) {
     let cfg = &prog.config;
-    let popts = PrintOptions { erl: opts.erl, attributes: opts.attributes };
+    let popts = PrintOptions { erl: opts.erl, attributes: opts.attributes, vba6: cfg.target.vba6 };
     let mut diags = Vec::new();
     let mut files = Vec::new();
     let mut used: HashSet<String> = HashSet::new();

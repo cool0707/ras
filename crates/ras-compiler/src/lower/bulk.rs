@@ -184,7 +184,7 @@ impl<'p> Lowerer<'p> {
         };
         let mut loops = vec![LoopInfo { local: outer.local, name: &outer.decl.unwrap().name.text, from: outer.from, bound: outer.bound, inclusive: outer.op == BinaryOp::Le }];
         let mut unconditional: HashSet<ExprId> = HashSet::new();
-        let mut collect_direct = |stmts: &[Stmt], set: &mut HashSet<ExprId>| {
+        let collect_direct = |stmts: &[Stmt], set: &mut HashSet<ExprId>| {
             for st in stmts {
                 if let StmtKind::Expr(e) = &st.kind {
                     if let ExprKind::Assign { op: None, target, .. } = &e.peel().kind {
@@ -356,7 +356,7 @@ impl<'p> Lowerer<'p> {
             let idxs = &by_key[key];
             let first = &accesses[idxs[0]];
             let sheet = self.expr(first.sheet_expr);
-            let mut range = |lw: &mut Self, p: &AxisPlan, base: Option<&Expr>| -> (VExpr, VExpr) {
+            let range = |lw: &mut Self, p: &AxisPlan, base: Option<&Expr>| -> (VExpr, VExpr) {
                 match &p.axis {
                     Axis::Var(l) => {
                         let (_, from, last) = &var_names[l];

@@ -21,7 +21,8 @@ pub(crate) fn double_lit(f: f64) -> String {
         return format!("{f:.0}#");
     }
     let s = format!("{f}");
-    if s.contains('e') || s.len() > 17 {
+    let a = f.abs();
+    if s.contains('e') || (a != 0.0 && !(1e-5..1e15).contains(&a)) {
         // An exponent form is a Double by itself.
         let e = format!("{f:E}");
         match e.split_once('E') {
@@ -437,7 +438,7 @@ impl<'p> Lowerer<'p> {
                 }
             }
             ExprKind::IncDec { inc, prefix, operand } => {
-                let (t, ty) = self.lvalue(operand);
+                let (t, ty) = self.lvalue_ex(operand, true);
                 let one = self.one_for(&ty);
                 let next = bin(if *inc { "+" } else { "-" }, t.clone(), one);
                 if *prefix {
@@ -637,6 +638,12 @@ impl<'p> Lowerer<'p> {
 
     /// Lowers an assignment target to a VBA l-value plus its type.
     pub(crate) fn lvalue(&mut self, e: &Expr) -> (VExpr, Type) {
+        self.lvalue_ex(e, false)
+    }
+
+    /// `stable`: the target is read and written (`a[i()] += 1`), so indices and receivers
+    /// with side effects are evaluated once into temporaries.
+    pub(crate) fn lvalue_ex(&mut self, e: &Expr, stable: bool) -> (VExpr, Type) {
         let ty = self.ty(e);
         if let Some(slot) = self.bulk_slot(e.peel()) {
             return (slot, Type::Any);
@@ -648,24 +655,24 @@ impl<'p> Lowerer<'p> {
                 if ot.is_array() {
                     if let ExprKind::Index { object: base, index: row } = &object.peel().kind {
                         if self.ty(base).dims() == 2 {
-                            let (b, _) = self.lvalue(base);
+                            let (b, _) = self.lvalue_ex(base, stable);
                             let r = self.expr(row);
-                            let r = self.spill(r, &Type::Int);
+                            let r = if stable { self.spill(r, &Type::Int) } else { r };
                             let c = self.expr(index);
-                            let c = self.spill(c, &Type::Int);
+                            let c = if stable { self.spill(c, &Type::Int) } else { c };
                             return (b.index(vec![r, c]), ty);
                         }
                     }
-                    let (b, _) = self.lvalue(object);
+                    let (b, _) = self.lvalue_ex(object, stable);
                     let i = self.expr(index);
-                    let i = self.spill(i, &Type::Int);
+                    let i = if stable { self.spill(i, &Type::Int) } else { i };
                     b.index(vec![i])
                 } else {
                     let o = self.expr(object);
-                    let o = self.spill(o, &ot);
+                    let o = if stable { self.spill(o, &ot) } else { o };
                     let it = self.ty(index);
                     let i = self.expr(index);
-                    let i = self.spill(i, &it);
+                    let i = if stable { self.spill(i, &it) } else { i };
                     o.index(vec![i])
                 }
             }
@@ -679,7 +686,7 @@ impl<'p> Lowerer<'p> {
                         } else {
                             let ot = self.ty(object);
                             let o = self.expr(object);
-                            Some(self.spill_object(o, &ot))
+                            Some(if stable { self.spill_object(o, &ot) } else { o })
                         };
                         self.field_target(c, idx, &ty, o)
                     }
@@ -687,7 +694,7 @@ impl<'p> Lowerer<'p> {
                     _ => {
                         let ot = self.ty(object);
                         let o = self.expr(object);
-                        let o = self.spill_object(o, &ot);
+                        let o = if stable { self.spill_object(o, &ot) } else { o };
                         if o.is_lit("Me") {
                             VExpr::Name(names::member_ident(&name.text))
                         } else {
@@ -859,7 +866,7 @@ impl<'p> Lowerer<'p> {
             self.emit(assign(slot.clone(), v));
             return slot;
         }
-        let (t, tty) = self.lvalue(target);
+        let (t, tty) = self.lvalue_ex(target, op.is_some());
         match op {
             None => self.expr_into(value, &t, &tty),
             Some(op) => {
@@ -884,7 +891,10 @@ impl<'p> Lowerer<'p> {
                 let (eb, _) = self.capture(|lw| lw.expr_into(els, target, ty));
                 self.emit(flatten_if(c, tb, eb));
             }
-            ExprKind::Array(_) | ExprKind::New { .. } | ExprKind::Call { .. } if self.ty(inner).is_array() && matches!(target, VExpr::Name(_)) => {
+            // (`f(i) = x` inside function `f` would be a recursive call, so the return variable is excluded)
+            ExprKind::Array(_) | ExprKind::New { .. } | ExprKind::Call { .. }
+                if self.ty(inner).is_array() && matches!(target, VExpr::Name(n) if *n != self.pc.proc_name || self.pc.rets.len() > 1) =>
+            {
                 if !self.array_into(inner, target, ty) {
                     let v = self.expr(inner);
                     let vt = self.ty(inner);
@@ -977,7 +987,7 @@ impl<'p> Lowerer<'p> {
                 self.assign_expr(*op, target, value);
             }
             ExprKind::IncDec { inc, operand, .. } => {
-                let (t, ty) = self.lvalue(operand);
+                let (t, ty) = self.lvalue_ex(operand, true);
                 let one = self.one_for(&ty);
                 self.emit(assign(t.clone(), bin(if *inc { "+" } else { "-" }, t, one)));
             }
@@ -1071,7 +1081,7 @@ impl<'p> Lowerer<'p> {
         if !explicit && !(in_loop && self.opt >= 1) && !(self.opt >= 2 && def.cost <= 10) {
             return false;
         }
-        let mut refuse = |lw: &mut Self, why: &str| {
+        let refuse = |lw: &mut Self, why: &str| {
             if explicit || in_loop {
                 lw.note(span, false, "inline", format!("`{}` はインライン展開されません: {why}", def.name));
             }
@@ -1267,6 +1277,7 @@ impl<'p> Lowerer<'p> {
             CallTarget::Host(f) => {
                 let def = &self.prog.fns[f];
                 let mut fname = def.name.clone();
+                let outer_qualifier = self.pc.qualifier.clone();
                 let target = match (recv, &def.kind) {
                     (Some(r), FnKind::Host { class: Some(_) }) => {
                         let rt = self.ty(r);
@@ -1290,9 +1301,8 @@ impl<'p> Lowerer<'p> {
                         }
                     }
                 };
-                let saved_q = self.pc.qualifier.clone();
                 let argv = self.call_args(f, 0, args, &[]);
-                self.pc.qualifier = saved_q.filter(|_| false);
+                self.pc.qualifier = outer_qualifier;
                 self.finish_call(target, argv, want, true)
             }
             CallTarget::DefaultMember(_) => {
@@ -1491,7 +1501,13 @@ impl<'p> Lowerer<'p> {
                 let ops = self.operands(&all);
                 let start = self.spill(ops[1].clone(), &Type::Int);
                 match ops.get(2) {
-                    Some(end) => call("Mid$", vec![ops[0].clone(), start.clone().plus(1), bin("-", end.clone(), start)]),
+                    Some(end) => {
+                        let len = match start.as_long() {
+                            Some(k) => end.clone().plus(-k),
+                            None => bin("-", end.clone(), start.clone()),
+                        };
+                        call("Mid$", vec![ops[0].clone(), start.plus(1), len])
+                    }
                     None => call("Mid$", vec![ops[0].clone(), start.plus(1)]),
                 }
             }

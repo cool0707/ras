@@ -19,3 +19,7 @@ ras-lsp.workspace = true
 clap.workspace = true
 encoding_rs.workspace = true
 notify.workspace = true
+
+[dev-dependencies]
+ras-ovba.workspace = true
+encoding_rs.workspace = true

@@ -17,9 +17,11 @@ pub type VarId = usize;
 pub type LocalId = usize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub enum Type {
     /// Poison type: produced after an error, compatible with everything.
     Error,
+    #[default]
     Void,
     /// The type of `null` / `undefined`.
     Null,
@@ -69,11 +71,6 @@ pub struct FuncType {
     pub ret: Type,
 }
 
-impl Default for Type {
-    fn default() -> Self {
-        Type::Void
-    }
-}
 
 impl Type {
     pub fn array(elem: Type) -> Type {
