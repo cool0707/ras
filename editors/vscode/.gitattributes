@@ -1,0 +1,6 @@
+# The grammar test compares generated files byte for byte, so keep LF line
+# endings on every platform (including Windows checkouts with core.autocrlf).
+* text=auto eol=lf
+# Unmodified upstream snapshot: never normalise it (its SHA-256 is recorded in
+# THIRD_PARTY_NOTICES.md).
+third_party/** -text

@@ -1,0 +1,145 @@
+// Sample for the grammar test. The code is taken from the code blocks of
+// docs/RAS_Language_Specification.md; the section is noted above each block.
+// test/grammar.test.mjs looks lines up by their text, so keep lines unique.
+
+// §3.1 byref / byval
+function calculate(x: double, byref outResult: double): boolean {
+    outResult = x * 2;
+    return true;
+}
+function inc(byref this: int) { this++; }
+function scale(byval factor: float, byref target: double): void { target = target * factor; }
+
+// §3.2 extension methods
+export function padLeft(this: string, width: int, ch: string = " "): string {
+    return this.length >= width ? this : ch.repeat(width - this.length) + this;
+}
+
+// §8.1 inline / noinline
+inline function clamp(v: double, lo: double, hi: double): double {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+export inline function half(n: int): int { return n / 2; }
+noinline function slowPath(count: long): void { }
+
+// §5.2 resume, §10.1 resumeScreen()
+function activate(): void {
+    try {
+        let ws = Worksheets("NonExistent");
+        ws.Activate();
+    } catch {
+        resume;
+    }
+    resumeScreen();
+}
+
+// §5.3 / §10.1 using
+function rebuild(): void {
+    using _ = fastMode();
+    using guard = fastMode({ calc: false });
+}
+
+// §2.1 / §11.2 primitive types
+let tByte: byte;
+let tShort: short;
+let tInt: int;
+let tLong: long;
+let tFloat: float;
+let tDouble: double;
+let tCurrency: currency;
+let tDecimal: decimal;
+let tPtr: ptr;
+let tDate: date;
+let tString: string;
+let tBoolean: boolean;
+let tAny: any;
+let tObject: object;
+let tWstr: wstr;
+let tAstr: astr;
+let tNumber: number;
+let tRange: Excel.Range;
+const narrowed = total as int;
+const stack = new Stack<Excel.Range>();
+
+// §2.2 numeric literals
+const nInt = 123;
+const nLong = 123L;
+const nBig = 10L;
+const nDouble = 1.5;
+const nExp = 1e3;
+const nDoubleSuffix = 2d;
+const nFloat = 1.5f;
+const nDecimal = 1.5m;
+const nHex = 0xFF;
+const nHexLong = 0xFFL;
+const nSum = 300 * 200 + 0.25f;
+
+// §10.3 / §12.2 decorators on functions
+@fast
+export function rebuildReport() {
+    status(`処理中 ${nInt}%`);
+}
+
+@on("Workbook.Open")
+export function setup() { }
+
+@on("Sheet1.Change", { reentrant: true })
+function onSheet1Change(target: Excel.Range) { }
+
+@macro
+function runReport(): void { }
+
+@fast export function sameLine() { }
+
+// §9.4 / §10.4.4 decorators on loops
+function fill(ws: Excel.Worksheet, last: int): void {
+    @bulk
+    for (let r = 2; r <= last; r++) {
+        ws.Cells(r, 1).Value = r * 2;
+    }
+    @nodoevents
+    while (pending()) {
+        step();
+    }
+    @nobulk for (const v of values) { total += v; }
+}
+
+// §11.1 declare module
+declare module "user32" {
+    function GetForegroundWindow(): ptr;
+    @alias("GetWindowTextW")
+    function GetWindowText(hWnd: ptr, lpString: wstr, nMaxCount: int): int;
+}
+declare module "kernel32" {
+    function Sleep(dwMilliseconds: int): void;
+    function GetTickCount64(): long;  // 64bit only
+}
+
+// §11.3 declare struct
+declare struct RECT {
+    left: int;
+    top: int;
+    right: int;
+    bottom: int;
+}
+
+// §2.4 generics
+export function maxOf<T extends Comparable>(this: T[]): T {
+    let m = this[0];
+    for (const v of this) if (v > m) m = v;
+    return m;
+}
+
+// §16.1 documentation comments
+/**
+ * 指定列の最終行を返す。
+ * @param col 列番号（1 始まり）
+ * @returns 最終行の行番号
+ */
+export function lastRow(this: Excel.Worksheet, col: int = 1): int {
+    return this.Cells(this.Rows.Count, col).End(xlUp).Row;
+}
+
+// §4 lambdas
+const doubled = arr.map(x => x * base);
+const adder = (byref acc: double, x: double) => { acc += x; };

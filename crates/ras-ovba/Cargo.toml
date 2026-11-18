@@ -1,0 +1,18 @@
+[package]
+name = "ras-ovba"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Offline reader/writer for the VBA project (vbaProject.bin) inside Excel workbooks"
+
+[dependencies]
+cfb = { workspace = true }
+zip = { workspace = true }
+encoding_rs = { workspace = true }
+crc32fast = { workspace = true }
+
+[dev-dependencies]
+ovba = { workspace = true }
+proptest = { workspace = true }
