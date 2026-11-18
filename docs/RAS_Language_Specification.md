@@ -1,4 +1,9 @@
-# RAS 言語仕様書（Draft v0.6）
+# RAS 言語仕様書（Draft v0.7）
+
+> v0.6 からの変更
+> * エディタ支援（IntelliSense: メンバー一覧・クイック情報・パラメーター情報等）とドキュメントコメント（JSDoc 形式）を追加（§16）
+> * 参考実装と採用ライブラリを選定（§17）。§7.2 の「主要クレート（想定）」を §17 に置き換え
+> * 未決事項を §18 に移動
 
 > v0.5 からの変更
 > * ジェネリクスを追加。プロジェクト内で実際に使われる型引数ごとに、別の関数・クラスとして出力する（§2.4）
@@ -424,7 +429,7 @@ On Error GoTo 0
   * 同期機能で必要な Win32 API（`CreateFileMappingW`, イベントオブジェクト）と COM（ROT 経由の Excel 取得、`IDispatch` 呼び出し）を `windows` クレートで直接扱える。
   * インクリメンタル解析を前提とした LSP の応答性能。
 * **パーサー:** 手書きの再帰下降パーサー（エラー回復と LSP 用の位置情報・部分木再利用を重視）。v0.1 の Chevrotain 案は採用しない。
-* **主要クレート（想定）:** `windows`（Win32 / COM）、`tower-lsp` または `lsp-server`（LSP）、`zip`（OPC コンテナ）、`cfb`（複合ファイル）、`notify`（ファイル監視）、`encoding_rs`（コードページ変換）。
+* **採用ライブラリと参考実装:** §17 を参照。
 * **プラットフォーム:** 配布対象は Windows（x64 / arm64）。ライブ同期（§14.1〜14.8）は Windows 専用。ビルド・チェック・LSP・オフライン書き込み（§14.9）は Excel にも Win32 にも依存しないため、CI 用に Linux でも動作させる。
 
 ### 7.3 CLI
@@ -448,6 +453,7 @@ On Error GoTo 0
 * `ras.path` 設定（未設定時は PATH から検索）でバイナリを起動し、LSP クライアントとして接続するのみ。
 * コマンドはすべて LSP の `workspace/executeCommand` に委譲: 「生成 VBA を表示」「今すぐ同期」「Excel で開く」「マクロを実行」。
 * ステータスバーに同期状態（接続先ブック・未同期件数・ドリフト警告）を表示。
+* IntelliSense（メンバー一覧・クイック情報・パラメーター情報等）はすべて LSP サーバ側（`ras lsp`）が提供し、拡張側は独自実装を持たない（§16）。
 
 ### 7.5 出力構成（ビルド成果物）
 
@@ -1094,7 +1100,180 @@ pull-unmanaged = true
 
 ---
 
-## 16. 未決事項
+## 16. エディタ支援（IntelliSense）とドキュメントコメント
+
+### 16.1 ドキュメントコメント（JSDoc 形式）
+
+ドキュメントコメントは JSDoc 形式（`/** ... */`）とする。
+
+```typescript
+/**
+ * 指定列の最終行を返す。
+ *
+ * 空の列では `1` を返す。
+ * @param col 列番号（1 始まり。Excel の列番号に合わせる）
+ * @returns 最終行の行番号
+ * @example
+ * const last = Sheet1.lastRow(2);
+ * @see {@link firstEmptyRow}
+ */
+export function lastRow(this: Excel.Worksheet, col: int = 1): int { ... }
+```
+
+#### 16.1.1 対象
+
+関数・拡張メソッド・クラス・クラスメンバー・インターフェイス・`const` / `let`（モジュールレベル）・`declare` の外部関数・型定義（`.d.ras`）の宣言の直前に書いた `/** */` を、その宣言のドキュメントとして扱う。
+
+#### 16.1.2 対応タグ
+
+| タグ | 用途 |
+|---|---|
+| （本文） | 概要。1 段落目を要約として補完一覧に、全文をクイック情報に表示する。Markdown を使用可 |
+| `@param 名前 説明` | 引数の説明。パラメーター情報で該当引数の説明として表示する |
+| `@returns 説明` | 戻り値の説明 |
+| `@template T 説明` | ジェネリクスの型パラメータの説明（§2.4） |
+| `@throws 説明` | 送出しうるエラー |
+| `@example` | 使用例（コードブロックとして表示） |
+| `@remarks` | 補足 |
+| `@deprecated 説明` | 非推奨。使用箇所に取り消し線と警告を表示する |
+| `@see` / `{@link 名前}` | 関連項目へのリンク。`{@link}` はクイック情報内で定義へジャンプできるリンクになる |
+| `@since` | 追加されたバージョン |
+
+* JSDoc の型注釈（`@param {string} x` の `{string}`）は無視する。型はコード上の型注釈を正とする。
+* `@param` の名前が実際の引数名と一致しない場合は警告する。
+* `export` された宣言にドキュメントコメントが無い場合の警告は既定で無効（`ras.toml` の `[lint] require-docs = true` で有効化）。
+
+#### 16.1.3 VBA への出力
+
+* 関数・クラスのドキュメントコメントの要約は、生成 VBA の宣言の直前に `'` コメントとして出力する（コードページで表せない文字は §13.7 の規則で変換）。
+* `Public` なプロシージャには `Attribute <名前>.VB_Description = "<要約>"` を出力し、VBE のオブジェクト ブラウザーにも説明が出るようにする。ただし、ライブ同期（§14.6）の `AddFromString` は `Attribute` 行を受け付けないため、ライブ同期では出力しない。`Import` 経由とオフライン書き込み（§14.9）では出力する。
+* 通常のコメント（`//`, `/* */`）は、ソースマップで対応が取れる位置に `'` コメントとして出力する（`ras.toml` の `[build] keep-comments`、既定 `true`）。
+
+### 16.2 IntelliSense 機能
+
+VS Code の IntelliSense に相当する機能を、LSP の標準機能として `ras lsp` が提供する。
+
+| 機能 | LSP メソッド | 内容 |
+|---|---|---|
+| メンバー一覧（補完） | `textDocument/completion`, `completionItem/resolve` | `.` の後に、レシーバの型のメンバー（RAS クラス、Excel 等の COM 型、配列・文字列の組み込みメンバー）と適用できる拡張メソッドを表示する。`.` 以外の位置では、スコープ内の変数・関数・型・キーワード・スニペットを表示する |
+| クイック情報（ホバー） | `textDocument/hover` | RAS 構文のシグネチャ、JSDoc（要約・引数・戻り値・例）、推論された型を表示する |
+| パラメーター情報 | `textDocument/signatureHelp` | `(` と `,` で起動し、シグネチャと現在の引数をハイライトし、その引数の `@param` の説明を表示する |
+| 定義へ移動 / 型定義へ移動 | `textDocument/definition`, `typeDefinition` | ジェネリクスや拡張メソッドも元の定義へ移動する |
+| 参照の検索 | `textDocument/references` | |
+| 名前の変更 | `textDocument/rename`, `prepareRename` | 変更後の名前が大文字小文字違いの衝突（§13.6）や VBA 予約語に当たる場合は拒否する |
+| シンボル一覧 | `textDocument/documentSymbol`, `workspace/symbol` | アウトライン表示、シンボル検索 |
+| インレイヒント | `textDocument/inlayHint` | 推論された型、推論されたジェネリクスの型引数、呼び出し側の `byref` 引数（`byref` と表示） |
+| セマンティックトークン | `textDocument/semanticTokens` | TextMate 文法で区別できない `byref` 引数・拡張メソッド・COM メンバー等を色分けする |
+| 診断 | `textDocument/publishDiagnostics` | §6 のリンタールール、同期時のコンパイルエラー（§14.6） |
+| コードアクション | `textDocument/codeAction` | クイックフィックス（未インポートの関数・拡張メソッドの `import` 追加、`byref` 引数へのリテラル渡しを一時変数に置き換える、縮小変換に `as` を追加する等） |
+| CodeLens | `textDocument/codeLens` | 最適化の適用状況（インライン展開・一括転送・ループ融合・`DoEvents` 挿入）、「生成 VBA を表示」 |
+| フォーマット | `textDocument/formatting`, `rangeFormatting` | `ras fmt` と同じ |
+| 折りたたみ | `textDocument/foldingRange` | |
+
+#### 16.2.1 メンバー一覧の詳細
+
+* **並び順:** 型のメンバーを先に、拡張メソッドを後に表示する。拡張メソッドにはアイコンと `(拡張)` の表示を付ける。
+* **未インポートの候補:** プロジェクト内のまだインポートしていないモジュールの `export` された関数・拡張メソッドも候補に出し、確定時に `import` 文を自動で追加する。
+* **`any` / `object` 型:** 静的型が無いため、メンバー一覧は表示しない（遅延バインディングになる旨をヒントで示す）。
+* **列挙型の定数:** `xlUp` 等の COM 列挙型の定数は、期待される型が列挙型の引数位置で優先的に表示する。
+* **ドキュメントの遅延読み込み:** 一覧の段階では名前と型だけを返し、JSDoc の本文は `completionItem/resolve` で返す。
+
+#### 16.2.2 クイック情報の詳細
+
+* 関数: RAS 構文のシグネチャ、JSDoc、`inline` か、自動展開の対象になったか。
+* 変数: 推論された型。出力される VBA の型（例: `int` → `Long`）も併記する。
+* 拡張メソッドの呼び出し: 定義モジュールと、出力される VBA の呼び出し形（例: `StrUtil.isBlank(name)`）。
+* ジェネリクス: 推論された型引数と、出力される実装名（例: `maxOf__Long`）。
+* COM 型のメンバー: 型ライブラリのヘルプ文字列と、Microsoft のリファレンスへのリンク（`@see`）。
+
+#### 16.2.3 Excel 等の型定義
+
+* 同梱する Excel / Office / VBA 標準の型定義（`.d.ras`、§15.3）には JSDoc を付ける。JSDoc の内容は、`ras typegen` でタイプライブラリのヘルプ文字列とメンバーの引数名を取り込み、Microsoft のリファレンスページへの `@see` リンクを付けて生成する。リファレンス本文は同梱しない（ライセンス上の理由）。
+* `ras typegen` で生成した ADODB 等の型定義にも同じ規則を適用する。
+
+#### 16.2.4 応答性能
+
+* 入力中の不完全なコードでも補完できるよう、パーサーはエラー回復を行い、構文木（ロスレス CST）を常に作る（§17.1）。
+* 解析はインクリメンタル計算（§17.1 の `salsa`）で、変更されたファイルと依存先だけを再計算する。
+* 目標: 10 万行のプロジェクトで、補完・ホバー・パラメーター情報の応答 50ms 以内（目標値）。
+* 最適化（§8〜§10）は IntelliSense の応答経路では実行しない。CodeLens 用の最適化結果はバックグラウンドで計算し、完了後に更新する。
+
+---
+
+## 17. 参考実装・採用ライブラリ
+
+選定方針: 単一の静的バイナリにまとめられること、ライセンスが MIT / Apache-2.0 等の寛容なものであること、メンテナンスが継続していること。GPL の実装は設計の参考にとどめ、コードは流用しない。各ライブラリのバージョン・ライセンスは導入時に確認する。
+
+### 17.1 コンパイラ本体（Rust）
+
+| 用途 | 採用 | 理由・備考 |
+|---|---|---|
+| 字句解析 | `logos` | 高速な字句解析器の生成 |
+| 構文木 | `rowan` | rust-analyzer のロスレス CST。空白・コメントを保持するため、フォーマッタ・LSP・JSDoc の取得に向く |
+| インクリメンタル計算 | `salsa` | rust-analyzer で使われるクエリベースの増分計算。LSP の応答性能（§16.2.4）の基盤 |
+| 構文解析 | 手書きの再帰下降 | 参考: `oxc_parser`（Rust 製の高速な TS パーサー。TS 文法の扱い）、Biome の JS/TS パーサー（`rowan` 系 CST 上でのエラー回復）、rust-analyzer のパーサー（イベント方式でのツリー構築）。RAS は `byref` / `inline` 等の独自構文を持つため、既存の TS パーサーの流用はしない |
+| 位置情報の変換 | `line-index` | rust-analyzer 由来。LSP の UTF-16 位置とのバイト位置の相互変換 |
+| JSDoc の解析 | 自作 | 参考: oxc の JSDoc 解析の実装 |
+| フォーマッタ | 自作（中間表現＋プリンタ方式） | 参考: Biome の `biome_formatter`、Prettier の設計 |
+| CLI のエラー表示 | `annotate-snippets` | rustc と同じ形式のソース付きエラー表示 |
+| CLI 引数 | `clap` | |
+| 設定ファイル | `toml`, `serde` | `ras.toml` |
+| ファイル監視 | `notify`, `notify-debouncer-full` | `ras watch` |
+| 並列化 | `rayon` | モジュール単位の並列コード生成 |
+| コードページ変換 | `encoding_rs` | CP932（Windows-31J 相当の `Shift_JIS`）等への変換と、表現できない文字の検出（§13.7） |
+| CRC32 | `crc32fast` | Bridge 側の `RtlComputeCrc32` と同じ CRC-32 で、内容ハッシュを照合する（§14.6） |
+| テスト | `insta`（スナップショット）、`proptest`、`cargo-fuzz` | RAS → VBA 出力のスナップショットテスト、パーサーのファジング |
+
+### 17.2 LSP
+
+| 用途 | 採用 | 理由・備考 |
+|---|---|---|
+| LSP の通信層 | `lsp-server` + `lsp-types` | rust-analyzer の同期型の LSP 基盤。`salsa` と組み合わせたスレッド設計を自前で制御できる |
+| 代替案 | `tower-lsp-server` | 非同期（tokio）の高レベルフレームワーク（元の `tower-lsp` のコミュニティフォーク）。`lsp-server` で実装負担が大きすぎた場合の代替 |
+
+### 17.3 オフライン書き込み（§14.9）
+
+Rust で `vbaProject.bin` を**書き込める**ライブラリは見当たらない（`ovba` は読み取り専用）ため、書き込み側は自作する。
+
+| 用途 | 採用・参考 | 備考 |
+|---|---|---|
+| OPC（zip）の読み書き | `zip` | 変更しないエントリは再圧縮せず raw コピーする |
+| 複合ファイル（CFB）の読み書き | `cfb` | `vbaProject.bin` のストレージ・ストリーム操作 |
+| MS-OVBA 圧縮・展開 | 自作 | 参考: Kavod.Vba.Compression（C#, MIT）、NetOfficeFw/VbaCompression（C#）、Beakerboy/MS-OVBA-Compression（Python） |
+| `vbaProject.bin` の生成手順 | 自作 | 参考: Beakerboy/vbaProject-Compiler（Python。ソースから `vbaProject.bin` を生成）、NetOfficeFw/vbamc（C#。`vbaProject.bin` を生成するコンパイラ） |
+| 読み取り・テストの検証用 | `ovba`（Rust, 読み取り専用） | 書き出した `vbaProject.bin` を別実装で読み直す相互検証に使う（§14.9.3）。`calamine` の VBA 読み取り部も参考 |
+| 検証ツール | oletools（`olevba`, Python） | CI で出力ファイルを解析し、ソース・`dir` ストリームの整合を確認する |
+| OPC のパート構成 | 参考: XlsxWriter の `add_vba_project` | `[Content_Types].xml` とリレーションの書き方 |
+| 仕様 | [MS-OVBA], [MS-CFB], [MS-VBAL] | 一次資料。実装はこれを正とする |
+
+### 17.4 Windows 連携（ライブ同期 §14.1〜14.8、`ras typegen`）
+
+| 用途 | 採用・参考 | 備考 |
+|---|---|---|
+| Win32 API・COM | `windows` | 共有メモリ（`CreateFileMappingW`）、ROT（`GetRunningObjectTable`）、`IDispatch`、`ITypeLib` / `ITypeInfo`（`ras typegen`） |
+| `IDispatch` の呼び出し | 自作の薄いラッパー | `windows` クレートは低レベル API のみのため、名前による呼び出し（`GetIDsOfNames` → `Invoke`）と `VARIANT` 変換を自作する |
+| VBE の操作・同期方式 | 参考: Ariawase の `vbac.wsf`（VBA のエクスポート/インポート）、Rubberduck（C#, GPL-3） | Rubberduck は GPL のため設計の参考のみ |
+
+### 17.5 言語設計・静的解析の参考
+
+| 参考 | 用途 |
+|---|---|
+| [MS-VBAL]（VBA 言語仕様） | 出力 VBA の意味論（評価順序、型変換、既定メンバー等）の一次資料 |
+| Rubberduck のインスペクション一覧 | VBA の罠（§13）とリンタールールの網羅性の確認（設計の参考のみ） |
+| twinBASIC | VBA 互換言語の拡張（ジェネリクス等）の設計の参考（商用。参考のみ） |
+| TypeScript / C# の言語仕様 | 構文（TS）と数値型・拡張メソッド・ジェネリクスの意味論（C#） |
+
+### 17.6 VS Code 拡張
+
+| 用途 | 採用 | 備考 |
+|---|---|---|
+| LSP クライアント | `vscode-languageclient` | `ras lsp --stdio` を起動するのみ（§7.4） |
+| TextMate 文法 | microsoft/TypeScript-TmLanguage を元に派生 | `byref` / `byval` / `inline` / `noinline` / `resume` と数値リテラルのサフィックスを追加 |
+| バンドル・パッケージ | `esbuild`, `@vscode/vsce` | |
+
+---
+
+## 18. 未決事項
 
 現時点でなし。
 
