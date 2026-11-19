@@ -34,6 +34,16 @@ pub enum OvbaError {
     /// The request itself is inconsistent (bad module name, removal of a
     /// document module, ...).
     InvalidRequest(String),
+    /// The generated code for a document module defines a procedure that
+    /// the hand-written part of that module defines as well. The VBE would
+    /// refuse the module with "Ambiguous name detected" when the workbook
+    /// is opened. Nothing is written.
+    DuplicateProcedure {
+        /// Code name of the document module.
+        module: String,
+        /// Name of the procedure, as written in the hand-written part.
+        procedure: String,
+    },
 }
 
 impl fmt::Display for OvbaError {
@@ -56,6 +66,10 @@ impl fmt::Display for OvbaError {
             OvbaError::Verify(m) => write!(f, "verification after writing failed: {m}"),
             OvbaError::Encoding(m) => write!(f, "code page error: {m}"),
             OvbaError::InvalidRequest(m) => write!(f, "invalid request: {m}"),
+            OvbaError::DuplicateProcedure { module, procedure } => write!(
+                f,
+                "the document module `{module}` already has a hand-written procedure `{procedure}`; the generated code defines it too (VBA: ambiguous name)"
+            ),
         }
     }
 }

@@ -466,6 +466,18 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
                 }
             },
         };
+        // What the generated code defines must not exist in the hand-written
+        // part as well: the VBE reports that only when the workbook is opened
+        // ("Ambiguous name detected"), and the whole project stops compiling.
+        let hand_written = source::procedure_names(&source::merge_managed_region(&current, ""));
+        for generated in source::procedure_names(&code.managed_code) {
+            if let Some(clash) = hand_written.iter().find(|name| same_name(name, &generated)) {
+                return Err(OvbaError::DuplicateProcedure {
+                    module: code_name.clone(),
+                    procedure: clash.clone(),
+                });
+            }
+        }
         upsert.push(VbaModule {
             name: code_name.clone(),
             kind: ModuleKind::Document,
@@ -765,6 +777,39 @@ mod tests {
             vba::write_project_bin(Some(&bin), &[], &ProjectEdit::default()),
             Err(OvbaError::Protected)
         ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn generated_event_handler_must_not_duplicate_a_hand_written_one() {
+        let dir = scratch_dir("dup");
+        let book = dir.join("book.xlsm");
+        fs::write(&book, crate::create_workbook(crate::BookKind::Xlsm, &["Sheet1"])).unwrap();
+        let hand = "Private Sub workbook_open()\r\n    MsgBox \"hi\"\r\nEnd Sub\r\n";
+        pack(&PackRequest {
+            book: book.clone(),
+            modules: vec![VbaModule { name: "ThisWorkbook".into(), kind: ModuleKind::Document, source: hand.into() }],
+            ..PackRequest::default()
+        })
+        .unwrap();
+        let before = fs::read(&book).unwrap();
+        let generated = |code: &str| PackRequest {
+            book: book.clone(),
+            document_code: vec![crate::DocumentCode { code_name: "ThisWorkbook".into(), managed_code: code.into() }],
+            ..PackRequest::default()
+        };
+        match pack(&generated("Private Sub Workbook_Open()\r\nEnd Sub\r\n")) {
+            Err(OvbaError::DuplicateProcedure { module, procedure }) => {
+                assert_eq!((module.as_str(), procedure.as_str()), ("ThisWorkbook", "workbook_open"));
+            }
+            other => panic!("expected a duplicate procedure, got {other:?}"),
+        }
+        assert_eq!(fs::read(&book).unwrap(), before, "nothing was written");
+        // Another event is fine, and replacing the generated region is not a clash with itself.
+        let activate = "Private Sub Workbook_Activate()\r\nEnd Sub\r\n";
+        pack(&generated(activate)).unwrap();
+        let report = pack(&generated(activate)).unwrap();
+        assert_eq!(report.unchanged, ["ThisWorkbook", "Sheet1"]);
         let _ = fs::remove_dir_all(&dir);
     }
 

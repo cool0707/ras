@@ -5,6 +5,9 @@
 //
 // Environment: RAS_COM_ADDON = path of the `ras_com` addon (Excel access),
 //              RAS_MOCK_HOST = path of a module that stands in for Excel (tests).
+//              RAS_DIALOGS   = what to do when Excel shows a dialog while a call waits for it:
+//                              notify (default; report it and bring it to the front),
+//                              dismiss (answer it with its cancelling button; unattended runs), off.
 "use strict";
 const path = require("path");
 const $rt = require("./ras-runtime.js");
@@ -29,6 +32,7 @@ function main(argv) {
         manifest,
         root: path.resolve(__dirname, /*@ROOT@*/),
         addon: process.env.RAS_COM_ADDON || null,
+        dialogs: process.env.RAS_DIALOGS || null,
         mock: process.env.RAS_MOCK_HOST ? path.resolve(process.env.RAS_MOCK_HOST) : null,
     });
     for (const m of modules) require(m);

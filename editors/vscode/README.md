@@ -51,6 +51,7 @@
 | `entry` | 実行する関数（`モジュール名.関数名` または関数名のみ）。省略すると起動時に選びます。 |
 | `project` | `ras.toml` のあるフォルダー。省略時はワークスペースフォルダー。 |
 | `stopOnEntry` | プログラムの先頭で停止します。 |
+| `dialogs` | プログラムが Excel の応答を待っている間に Excel がダイアログを出したときの扱い。`notify`（既定。内容を通知してダイアログを前面に出す）/ `dismiss`（通知したうえでキャンセルに相当するボタンで閉じる。VBA の実行時エラーは「終了」）/ `off`。 |
 | `runtimeExecutable` / `comAddon` / `mockHost` | 実行に使う Node.js、Excel 接続用アドオン、Excel の代役モジュールを差し替えます（通常は不要）。 |
 
 デバッグは VBA 上ではなく、プログラムを JavaScript に変換して VS Code 同梱のランタイムで実行します。Excel の操作は、同梱のアドオン（`ras_com.node`、Windows 専用）を通じて実際の Excel に対して行われます。
@@ -69,6 +70,7 @@
 | `ras.trace.server` | `"off"` | VS Code と言語サーバーの間の通信を「出力」パネルの「RAS Language Server」に記録します（`off` / `messages` / `verbose`）。 |
 | `ras.debug.runtimeExecutable` | `""` | デバッグ実行に使う Node.js のパス。空の場合は VS Code 同梱のランタイムを使います。 |
 | `ras.debug.comAddon` | `""` | Excel 接続用アドオン（`ras_com.node`）のパス。空の場合は拡張機能に同梱のもの、無ければ `ras` と同じフォルダーのものを使います。 |
+| `ras.debug.dialogs` | `notify` | Excel がダイアログを出して応答を待っているときの扱い（`notify` / `dismiss` / `off`）。`launch.json` の `dialogs` で構成ごとに上書きできます。 |
 
 RAS ファイルでは、言語サーバーによるセマンティックハイライト（`editor.semanticHighlighting.enabled`）を既定で有効にしています。
 

@@ -56,6 +56,7 @@ ras build --target js                     # デバッグ実行用の JavaScript 
 サンプルプロジェクトは [examples/sales-report](examples/sales-report) にあります（`ras --project examples/sales-report build`）。
 
 `ras pack` はブックが Excel で開かれていると書き込みません（閉じてから実行してください）。
+ブックに RAS が生成したものではない同名のモジュールがある場合や、手書きのイベントプロシージャ（`Workbook_Open` など）と生成コードの名前が重なる場合も、書き込まずにエラーにします（前者は `--overwrite` で置き換えられます）。
 置き換え前のブックは `build/backup/` に保存されます。
 
 ## デバッグ
@@ -67,6 +68,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 
 - Excel の操作には Windows と Excel が必要です。接続には拡張に同梱の `ras_com.node` を使います。Excel を使わない処理だけなら、どの OS でもデバッグできます。
 - 対象のブック（`ras.toml` の `workbook`）が Excel で開かれていればそこに接続し、開かれていなければ開きます。
+- プログラムが Excel の応答を待っている間に Excel がダイアログ（手書き VBA の実行時エラー・コンパイル エラー・`MsgBox`、Excel 自身の確認）を出すと、その内容を VS Code に通知し、ダイアログを前面に出します。`launch.json` の `"dialogs": "dismiss"` を指定すると、キャンセルに相当するボタンで自動的に閉じます（仕様 §14.10.6）。
 - 実行できるのは引数なしの関数とトップレベルの文です。`@on` のイベントハンドラや UDF のように Excel から呼ばれる関数は起動できません。
 - VBA ビルドの最適化（一括転送・インライン展開など）は通らないため、実行タイミングや速度は実機と異なります。`long` / `currency` / `decimal` の精度、未対応の VBA 標準関数など、実機との違いは仕様 §14.10.5 にまとめています。
 
@@ -102,7 +104,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §13 VBA の罠の回避 | 一部 | `Collection` ラッパ、`Range.Find` ラッパ、文字列で指定される名前の存在確認、一時変数の再利用は未実装 |
 | §14.1〜14.8 ライブ同期（RASBridge） | **未実装** | ドリフト検出用ハッシュ、ソースマップ、`Erl` 行番号は実装済み |
 | §14.9 オフライン書き込み・読み出し | 実装済み | 新規ユーザーフォームの作成と再署名は未実装。`vba/` の非管理モジュールをブックへ書き戻す処理は未実装（取り出しのみ） |
-| §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | Excel への接続（`ras_com.node`）は Excel 2021（64bit）の実機で確認済み。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。`super` 呼び出しを伴う継承は対象外 |
+| §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | Excel への接続（`ras_com.node`）は Excel 2021（64bit）の実機で確認済み。ダイアログの監視（§14.10.6）は Excel の無い Windows 上の CI でメッセージ ボックスを相手に確認しており、Excel の実機では未確認。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。`super` 呼び出しを伴う継承は対象外 |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱。`ras typegen` と `vba:` インポートは未実装 |
 | §16.1 JSDoc | 実装済み | 生成 VBA へのコメント・`VB_Description` 出力、`@param` 名の検査 |
 | §16.2 IntelliSense（LSP） | 一部 | 診断・補完・ホバー・定義へ移動・シンボル一覧・整形・CodeLens・「生成 VBA を表示」は実装。パラメーター情報・参照検索・名前変更・インレイヒント・セマンティックトークン・コードアクション・未インポート候補は未実装 |
@@ -122,6 +124,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
   - `RAS_Runtime.bas` の Win32 API・`SAFEARRAY` を扱う部分（`RAS_Rebase` のその場での下限書き換え、`RAS_Yield` の間引き、`sleep` / `waitUntil`）、Range ⇔ 配列の一括転送、`@on` のイベント、アプリケーション状態の復元
   - Excel が保存したブック（コンパイル済みの p-code 入り）への再 `pack`、開いているブックへの書き込み拒否、`unpack`
   - デバッグ実行（`ras_com.node`）が開いているブックに接続し、VBA ビルドと同じ結果・エラー番号になること
+- デバッグ実行のダイアログ監視は、Excel / VBE の実際のダイアログ（実行時エラー、コンパイル エラー、Office 独自のダイアログ）では未検証です。判定規則は [xlflow](https://github.com/harumiWeb/xlflow) が実機で確立したもの（ボタンをコントロール ID とアクセスキーで識別する、実行時エラーは「終了」で閉じる、など）に合わせています。
 - 32bit Office では未検証です（`RAS_Rebase` の 32bit 側のオフセットなど）。
 - VS Code 拡張はパッケージ化と文法テストまで確認済みで、実機の VS Code 上では動かしていません。
 

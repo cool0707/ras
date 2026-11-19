@@ -497,7 +497,12 @@ function configure(options) {
     if (options.addon) {
         com = require(options.addon);
     }
+    if (options.dialogs && !DIALOG_MODES.includes(String(options.dialogs).toLowerCase())) {
+        console.error(`[ras] ダイアログの扱い \`${options.dialogs}\` は指定できません（${DIALOG_MODES.join(" / ")}）。notify として扱います`);
+        config.dialogs = "notify";
+    }
 }
+const DIALOG_MODES = ["notify", "dismiss", "off"];
 
 function isCom(v) {
     return com !== null && v instanceof com.ComObject;
@@ -557,6 +562,7 @@ function connect() {
         if (file) book = com.findWorkbook(file);
         if (book) {
             app = book.get("Application", []);
+            watchDialogs();
             return;
         }
         try {
@@ -565,13 +571,49 @@ function connect() {
             app = com.createObject("Excel.Application");
             app.put("Visible", [], true);
         }
+        // Before the workbook is opened: opening is what asks about links, read-only copies and macros.
+        watchDialogs();
         if (file) {
-            book = app.get("Workbooks", []).call("Open", [file]);
+            book = openBook(file);
         } else {
             book = app.get("ActiveWorkbook", []);
             if (book === null) throw new RasError("Excel でブックが開かれていません。ras.toml の project.workbook にブックを指定するか、対象のブックを開いてください", 424, "RAS");
         }
     });
+}
+
+/**
+ * Has the addon watch the Excel process for dialogs while a call is waiting for it (spec §14.10.6):
+ * a run-time error of hand-written VBA, a compile error, a confirmation of Excel itself.
+ */
+function watchDialogs() {
+    if (typeof com.watchDialogs !== "function") return; // an addon from before the watcher
+    try {
+        const pid = com.processOfWindow(app.get("Hwnd", []));
+        if (pid) com.watchDialogs(pid, String(config.dialogs || "notify").toLowerCase());
+    } catch {
+        // Watching is an aid; the program runs without it.
+    }
+}
+
+/**
+ * The project's workbook in `app`. The Running Object Table does not list every open workbook
+ * (add-ins, and files in a OneDrive / SharePoint folder appear under their URL), and opening
+ * a second workbook of the same name fails with a dialog, so the name is looked up first.
+ */
+function openBook(file) {
+    const books = app.get("Workbooks", []);
+    let open = null;
+    try {
+        open = books.call("Item", [require("path").basename(file)]);
+    } catch {
+        open = null;
+    }
+    if (open === null) return books.call("Open", [file]);
+    const full = String(open.get("FullName", []));
+    const norm = (p) => p.replace(/\//g, "\\").toLowerCase();
+    if (norm(full) === norm(file) || /^https?:\/\//i.test(full)) return open;
+    throw new RasError(`Excel で同じ名前の別のブック（${full}）が開かれているため、${file} を開けません。どちらかを閉じてから実行してください`, 1004, "RAS");
 }
 
 function application() {

@@ -79,6 +79,52 @@ fn init_build_pack_unpack_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// What only the VBE would report, or what would lose hand-written code, is refused before anything is written.
+#[test]
+fn pack_refuses_to_clobber_hand_written_code() {
+    let dir = temp_dir("handwritten");
+    let (ok, out) = ras(&dir, &["init", ".", "--workbook", "Book.xlsm"]);
+    assert!(ok, "{out}");
+    let book = dir.join("Book.xlsm");
+    // A workbook that already has a hand-written module `Main` and a hand-written `Workbook_Open`.
+    ras_ovba::pack(&ras_ovba::PackRequest {
+        book: book.clone(),
+        codepage: 932,
+        modules: vec![
+            ras_ovba::VbaModule { name: "MAIN".into(), kind: ras_ovba::ModuleKind::Standard, source: "Option Explicit\r\nSub Legacy()\r\nEnd Sub\r\n".into() },
+            ras_ovba::VbaModule { name: "ThisWorkbook".into(), kind: ras_ovba::ModuleKind::Document, source: "Private Sub Workbook_Open()\r\nEnd Sub\r\n".into() },
+        ],
+        ..Default::default()
+    })
+    .unwrap();
+    let before = std::fs::read(&book).unwrap();
+
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(!ok && out.contains("同名のモジュール") && out.contains("MAIN") && out.contains("--overwrite"), "{out}");
+    assert_eq!(std::fs::read(&book).unwrap(), before, "nothing may be written");
+
+    // The generated `Workbook_Open` (from `@init`) would be a second definition next to the hand-written one.
+    std::fs::rename(dir.join("src/main.ras"), dir.join("src/app.ras")).unwrap();
+    std::fs::write(dir.join("src/setup.ras"), "@init\nfunction prepare() {\n    status(\"ready\");\n}\n").unwrap();
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(!ok && out.contains("ThisWorkbook") && out.contains("Workbook_Open") && out.contains("名前が重なります"), "{out}");
+    assert_eq!(std::fs::read(&book).unwrap(), before, "nothing may be written");
+
+    // A leftover owner file is named in the message.
+    std::fs::write(dir.join("~$Book.xlsm"), b"").unwrap();
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(!ok && out.contains("Excel で開かれている") && out.contains("~$Book.xlsm") && out.contains("削除"), "{out}");
+    std::fs::remove_file(dir.join("~$Book.xlsm")).unwrap();
+
+    // With --overwrite the module is replaced (the previous workbook is kept in build/backup/).
+    std::fs::remove_file(dir.join("src/setup.ras")).unwrap();
+    std::fs::rename(dir.join("src/app.ras"), dir.join("src/main.ras")).unwrap();
+    let (ok, out) = ras(&dir, &["pack", "--overwrite"]);
+    assert!(ok, "{out}");
+    assert!(std::fs::read_dir(dir.join("build/backup")).unwrap().count() >= 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn errors_are_reported_with_source_position() {
     let dir = temp_dir("errors");

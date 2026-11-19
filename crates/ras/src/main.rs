@@ -337,6 +337,22 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
             }
         }
     }
+    // A module of the same name that RAS did not generate is hand-written code: replacing it silently would lose it.
+    let hand_written: Vec<String> = existing
+        .project
+        .iter()
+        .flat_map(|project| &project.modules)
+        .filter(|m| matches!(m.kind, ras_ovba::ModuleKind::Standard | ras_ovba::ModuleKind::Class | ras_ovba::ModuleKind::Form))
+        .filter(|m| ras_compiler::emit::has_drifted(&m.source).is_none() && has_code(&m.source))
+        .filter(|m| generated.iter().any(|g| g.to_lowercase() == m.name.to_lowercase()))
+        .map(|m| m.name.clone())
+        .collect();
+    if !hand_written.is_empty() && !p.overwrite {
+        return Err(format!(
+            "ブックには RAS が生成したものではない同名のモジュールがあります: {}\n  このまま書き込むと手書きのコードが失われます。`ras unpack` で vba/ に取り出してモジュール名を変えるか、RAS 側のファイル名を変えてください。置き換えてよい場合は --overwrite を付けてください",
+            hand_written.join(", ")
+        ));
+    }
     if !drifted.is_empty() && !p.overwrite {
         return Err(format!(
             "次の RAS 管理モジュールが VBE 上で編集されています（ドリフト）: {}\n  RAS の出力で上書きするには --overwrite を付けてください。VBE 側の内容は `ras unpack` で build/drift/ に保存できます",
@@ -379,10 +395,29 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
             Ok(ExitCode::SUCCESS)
         }
         Err(ras_ovba::OvbaError::Locked) => Err(format!(
-            "{} は Excel で開かれているため、オフライン書き込みはできません。ブックを閉じてから再実行してください（開いたままの反映にはライブ同期が必要ですが、この版では未実装です）",
+            "{} は Excel で開かれているため、オフライン書き込みはできません。ブックを閉じてから再実行してください（開いたままの反映にはライブ同期が必要ですが、この版では未実装です）{}",
+            book.display(),
+            stale_owner_hint(&book)
+        )),
+        Err(ras_ovba::OvbaError::DuplicateProcedure { module, procedure }) => Err(format!(
+            "{}: ドキュメントモジュール `{module}` には手書きの `{procedure}` があり、RAS が生成するプロシージャと名前が重なります（このまま書き込むと、ブックを開いたときに VBE が「名前が適切ではありません」のコンパイル エラーを出します）\n  手書き側の処理を RAS の `@on` ハンドラへ移すか、手書きのプロシージャを削除してください",
             book.display()
         )),
         Err(e) => Err(format!("{}: {e}", book.display())),
+    }
+}
+
+/// Whether a module holds anything besides its `Attribute` header, `Option` statements and blank lines.
+fn has_code(source: &str) -> bool {
+    source.lines().map(str::trim).any(|l| !l.is_empty() && !l.starts_with("Attribute ") && !l.starts_with("VERSION ") && !l.to_ascii_lowercase().starts_with("option "))
+}
+
+/// Excel leaves its owner file (`~$Book.xlsm`) behind when it crashes; the workbook then looks open for ever.
+fn stale_owner_hint(book: &Path) -> String {
+    let owner = book.file_name().and_then(|n| n.to_str()).map(|n| book.with_file_name(format!("~${n}")));
+    match owner {
+        Some(owner) if owner.exists() => format!("\n  Excel で開いていないのにこのエラーになる場合は、Excel の異常終了で残った {} を削除してください", owner.display()),
+        _ => String::new(),
     }
 }
 
