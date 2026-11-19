@@ -195,6 +195,23 @@ fn source_maps_lead_back_to_ras_lines() {
 }
 
 #[test]
+fn uncaught_errors_show_only_ras_frames() {
+    let src = "function f(z: int): int {\n    return 10 / z;\n}\nfunction g(): int {\n    return f(0);\n}\nexport function run() {\n    g();\n}\n";
+    let files = [("m", src)];
+    let (_, out) = compile(&files);
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("uncaught", &files, &out);
+    let (_, stderr, ok) = p.run("run", None);
+    assert!(!ok);
+    let frames: Vec<&str> = stderr.lines().filter(|l| l.trim_start().starts_with("at ")).collect();
+    assert_eq!(frames, ["    at f (src/m.ras:2:5)", "    at g (src/m.ras:5:5)", "    at run (src/m.ras:8:5) {"], "{stderr}");
+    assert!(stderr.contains("rasFile: 'src/m.ras'") && stderr.contains("rasLine: 2"), "{stderr}");
+    assert!(!stderr.contains("ras-runtime.js") && !stderr.contains("node:internal"), "{stderr}");
+}
+
+#[test]
 fn modules_in_subdirectories_and_import_cycles() {
     let a = "import { pong } from \"./util/b\";\nexport let hits = 0;\nexport function ping(n: int): int {\n    hits++;\n    return n <= 0 ? 0 : pong(n - 1) + 1;\n}\nexport function run() {\n    console.log(ping(5), hits);\n}\n";
     let b = "import { ping } from \"../a\";\nexport function pong(n: int): int {\n    return n <= 0 ? 0 : ping(n - 1) + 1;\n}\n";
