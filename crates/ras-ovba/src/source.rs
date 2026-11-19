@@ -342,6 +342,35 @@ pub fn merge_managed_region(existing_source: &str, managed_code: &str) -> String
     out
 }
 
+/// Names of the procedures declared in `code` (`Sub`, `Function`,
+/// `Property`), in order of appearance. Comments are not looked into; a
+/// declaration whose name sits on a continuation line is not found.
+pub(crate) fn procedure_names(code: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in split_lines(code) {
+        let mut words = line.split_whitespace().peekable();
+        while words.peek().is_some_and(|w| {
+            ["public", "private", "friend", "static"].iter().any(|m| w.eq_ignore_ascii_case(m))
+        }) {
+            words.next();
+        }
+        let Some(keyword) = words.next() else { continue };
+        if keyword.eq_ignore_ascii_case("property") {
+            let accessor = words.next().unwrap_or("");
+            if !["get", "let", "set"].iter().any(|a| accessor.eq_ignore_ascii_case(a)) {
+                continue;
+            }
+        } else if !keyword.eq_ignore_ascii_case("sub") && !keyword.eq_ignore_ascii_case("function") {
+            continue;
+        }
+        let name = words.next().unwrap_or("").split('(').next().unwrap_or("");
+        if !name.is_empty() {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
 /// Returns the code inside the RAS-managed region (without the marker
 /// lines and without a trailing line terminator), or `None` when the source
 /// has no complete region.
@@ -357,6 +386,12 @@ pub fn extract_managed_region(source: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn procedures_are_found() {
+        let code = "Option Explicit\r\n' Sub Commented()\r\nPrivate Sub Workbook_Open()\r\nEnd Sub\r\n  public static function F(x) As Long\r\nEnd Function\r\nFriend Property Get P() As Long\r\nEnd Property\r\nProperty Let P(v As Long)\r\nEnd Property\r\nSub NoParens\r\nExit Sub\r\nDim Subtotal As Long\r\n";
+        assert_eq!(procedure_names(code), ["Workbook_Open", "F", "P", "P", "NoParens"]);
+    }
 
     #[test]
     fn newline_normalisation() {
