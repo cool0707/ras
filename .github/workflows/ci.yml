@@ -110,7 +110,7 @@ jobs:
           printf 'exit code: %d (0x%X)\n' "$code" "$code"
           exit "$code"
       # Downloadable from the run's summary page ("Artifacts").
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: ras-${{ matrix.name }}
           path: dist/
@@ -126,11 +126,11 @@ jobs:
         working-directory: editors/vscode
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v7
         with:
           name: ras-windows-x64
           path: ${{ runner.temp }}/windows-x64
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v7
         with:
           name: ras-windows-arm64
           path: ${{ runner.temp }}/windows-arm64
@@ -147,7 +147,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run package
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: ras-vscode
           path: editors/vscode/*.vsix
