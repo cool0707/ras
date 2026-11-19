@@ -35,6 +35,18 @@
 ## デバッグ
 
 `.ras` ファイルにブレークポイントを置いて F5 を押すと、プロジェクトをビルドし、実行する関数を選んでデバッグを開始します。
+関数の上に表示される CodeLens からも、その関数を直接起動できます。
+
+```
+▶ Excelで実行 | ⚙ デバッグ実行
+export function rebuildReport() {
+```
+
+- **Excelで実行**（Windows のみ）: ブックへ同期してから、Excel 本体でマクロとして実行します（`RAS: マクロを実行` と同じ。ブックを Excel で開いている必要があります）。マクロとして公開される関数（引数なし・戻り値なしで `export` された関数、`@macro` の関数、トップレベルの文）に表示されます。
+- **デバッグ実行**: その関数を指定してデバッグを開始します（F5 と同じ。関数を選ぶ手順が省けます）。引数なしの関数とトップレベルの文に表示されます。
+
+CodeLens は設定 `ras.codeLens.run` で非表示にできます。
+
 `launch.json` を使う場合は、構成の種類に `ras` を指定します。
 
 ```json
@@ -68,6 +80,7 @@
 | `ras.path` | `""` | `ras` 実行ファイルのパス。空の場合は `PATH` から `ras`（Windows では `ras.exe`）を検索します。相対パスは最初のワークスペースフォルダーを基準に解決し、先頭の `~` はホームディレクトリに展開します。変更すると言語サーバーを再起動します。 |
 | `ras.server.extraArgs` | `[]` | 言語サーバーの起動時に `ras lsp --stdio` の後ろへ追加する引数。変更すると言語サーバーを再起動します。 |
 | `ras.trace.server` | `"off"` | VS Code と言語サーバーの間の通信を「出力」パネルの「RAS Language Server」に記録します（`off` / `messages` / `verbose`）。 |
+| `ras.codeLens.run` | `true` | 単独で起動できる関数の上に「Excelで実行」（Windows のみ）と「デバッグ実行」の CodeLens を表示します。 |
 | `ras.debug.runtimeExecutable` | `""` | デバッグ実行に使う Node.js のパス。空の場合は VS Code 同梱のランタイムを使います。 |
 | `ras.debug.comAddon` | `""` | Excel 接続用アドオン（`ras_com.node`）のパス。空の場合は拡張機能に同梱のもの、無ければ `ras` と同じフォルダーのものを使います。 |
 | `ras.debug.dialogs` | `notify` | Excel がダイアログを出して応答を待っているときの扱い（`notify` / `dismiss` / `off`）。`launch.json` の `dialogs` で構成ごとに上書きできます。 |

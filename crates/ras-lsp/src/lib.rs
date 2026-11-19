@@ -154,6 +154,31 @@ impl Server {
         json!({ "start": { "line": sl, "character": sc }, "end": { "line": el, "character": ec } })
     }
 
+    /// "Run in Excel" / "Debug" above each function that can be started on its own. The
+    /// commands are the VS Code extension's: `ras.client.runMacro` runs the macro in the
+    /// workbook open in Excel (live sync, Windows only), `ras.debug.start` debugs the
+    /// function with the JavaScript run time (spec §14.10).
+    fn run_lenses(prog: &Program, m: ModuleId, uri: &str) -> Vec<Value> {
+        let md = &prog.modules[m];
+        let mut lenses = Vec::new();
+        for &f in &md.fns {
+            let d = &prog.fns[f];
+            let Some(decl) = d.decl.as_ref().filter(|x| x.body.is_some()) else { continue };
+            if !d.is_debug_entry() {
+                continue;
+            }
+            // Above the declaration with its decorators (the first statement for top-level code).
+            let range = Self::range(prog, m, ras_syntax::TextRange::empty(decl.span.start()));
+            if cfg!(windows) && d.is_macro_entry() {
+                let name = format!("{}.{}", md.vba_name, ras_compiler::names::member_ident(&d.name));
+                lenses.push(json!({ "range": range, "command": { "title": "$(play) Excelで実行", "tooltip": format!("{name} を Excel で実行します（ブックへ同期してから実行）"), "command": "ras.client.runMacro", "arguments": [name] } }));
+            }
+            let entry = format!("{}.{}", md.vba_name, d.name);
+            lenses.push(json!({ "range": range, "command": { "title": "$(debug-alt) デバッグ実行", "tooltip": format!("{entry} をデバッグ実行します"), "command": "ras.debug.start", "arguments": [{ "entry": entry, "uri": uri }] } }));
+        }
+        lenses
+    }
+
     fn publish_diagnostics(&mut self, conn: &Connection) -> Res<()> {
         let Some(prog) = &self.prog else { return Ok(()) };
         let mut by_uri: HashMap<String, Vec<Value>> = HashMap::new();
@@ -258,13 +283,14 @@ impl Server {
             }
             "textDocument/codeLens" => {
                 let Some(m) = p["textDocument"]["uri"].as_str().and_then(uri_to_path).and_then(|path| self.module_for(&path)) else { return json!([]) };
-                let lenses: Vec<Value> = self
-                    .build
-                    .iter()
-                    .flat_map(|b| b.notes.iter())
-                    .filter(|(nm, note)| *nm == m && note.applied)
-                    .map(|(_, note)| json!({ "range": Self::range(prog, m, note.span), "command": { "title": note.message, "command": "" } }))
-                    .collect();
+                let mut lenses = Self::run_lenses(prog, m, p["textDocument"]["uri"].as_str().unwrap_or(""));
+                lenses.extend(
+                    self.build
+                        .iter()
+                        .flat_map(|b| b.notes.iter())
+                        .filter(|(nm, note)| *nm == m && note.applied)
+                        .map(|(_, note)| json!({ "range": Self::range(prog, m, note.span), "command": { "title": note.message, "command": "" } })),
+                );
                 Value::Array(lenses)
             }
             "textDocument/codeAction" => {
@@ -450,7 +476,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("ras.toml"), "[project]\nname = \"T\"\n").unwrap();
         let file = dir.join("src").join("main.ras");
-        let good = "/** 2 倍にする。 */\nexport function twice(x: int): int {\n    return x * 2;\n}\n\nexport function run() {\n    const words = [\"a\"];\n    msgBox(words.join(\",\") + twice(2));\n}\n";
+        let good = "/** 2 倍にする。 */\nexport function twice(x: int): int {\n    return x * 2;\n}\n\nexport function run() {\n    const words = [\"a\"];\n    msgBox(words.join(\",\") + twice(2));\n}\n\n/** 後で実行する。 */\n@fast\nexport function later() {\n}\n";
         std::fs::write(&file, good).unwrap();
         let uri = path_to_uri(&file);
 
@@ -531,7 +557,7 @@ mod tests {
         };
         assert!(saw_error, "the type error must have been published");
         let names: Vec<&str> = symbols.as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap()).collect();
-        assert_eq!(names, vec!["twice", "run"]);
+        assert_eq!(names, vec!["twice", "run", "later"]);
 
         // generated VBA for the cursor position, and the macro list
         let vba = request("workspace/executeCommand", json!({ "command": "ras.showGeneratedVba", "arguments": [{ "textDocument": { "uri": uri }, "position": { "line": 2, "character": 4 } }] }));
@@ -539,7 +565,27 @@ mod tests {
         let line = vba["line"].as_i64().unwrap();
         assert!(vba["text"].as_str().unwrap().lines().nth(line as usize).unwrap().contains("twice = x * 2&"), "{vba}");
         let macros = request("workspace/executeCommand", json!({ "command": "ras.listMacros", "arguments": [] }));
-        assert_eq!(macros, json!(["Main.run"]));
+        assert_eq!(macros, json!(["Main.run", "Main.later"]));
+
+        // run / debug lenses above the functions that can be started on their own
+        let lenses = request("textDocument/codeLens", json!({ "textDocument": { "uri": uri } }));
+        let runs: Vec<(u64, String, Value)> = lenses
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| l["command"]["command"] != "")
+            .map(|l| (l["range"]["start"]["line"].as_u64().unwrap(), l["command"]["command"].as_str().unwrap().to_string(), l["command"]["arguments"][0].clone()))
+            .collect();
+        let mut expected = vec![];
+        if cfg!(windows) {
+            expected.push((5, "ras.client.runMacro".to_string(), json!("Main.run")));
+        }
+        expected.push((5, "ras.debug.start".to_string(), json!({ "entry": "Main.run", "uri": uri })));
+        if cfg!(windows) {
+            expected.push((11, "ras.client.runMacro".to_string(), json!("Main.later")));
+        }
+        expected.push((11, "ras.debug.start".to_string(), json!({ "entry": "Main.later", "uri": uri })));
+        assert_eq!(runs, expected, "twice takes an argument, so it gets no lens; later's sits on its decorator: {lenses}");
         let sync = request("workspace/executeCommand", json!({ "command": "ras.syncNow", "arguments": [] }));
         assert_eq!(sync["ok"], false);
 

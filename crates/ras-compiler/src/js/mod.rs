@@ -380,17 +380,6 @@ impl<'p> Gen<'p> {
 
     // ------------------------------------------------------------------ module
 
-    fn is_macro_entry(f: &FnDef) -> bool {
-        if f.is_generic() || !f.attrs.on_events.is_empty() || f.attrs.init || f.attrs.udf {
-            return false;
-        }
-        match f.kind {
-            FnKind::Main => true,
-            FnKind::Free => f.attrs.macro_entry || (f.exported && f.params.is_empty() && f.ret_ty() == Type::Void),
-            _ => false,
-        }
-    }
-
     fn emit_module(&mut self) {
         let prog = self.prog;
         let md = &prog.modules[self.module];
@@ -453,9 +442,9 @@ impl<'p> Gen<'p> {
             for ev in &d.attrs.on_events {
                 events.push(format!("{{ target: {}, event: {}, fn: {} }}", js_str(&ev.target), js_str(&ev.event), js_ident(&d.name)));
             }
-            if d.required_params() == 0 && !d.is_extension && !d.is_generic() && d.attrs.on_events.is_empty() {
+            if d.is_debug_entry() {
                 self.entries.push(d.name.clone());
-                if Self::is_macro_entry(d) {
+                if d.is_macro_entry() {
                     self.macros.push(d.name.clone());
                 }
             }

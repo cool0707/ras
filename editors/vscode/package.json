@@ -121,6 +121,12 @@
           "scope": "window",
           "markdownDescription": "VS Code と言語サーバーの間の LSP 通信を「出力」パネル（RAS Language Server）に記録します。"
         },
+        "ras.codeLens.run": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "単独で起動できる関数の上に「Excelで実行」（Windows のみ）と「デバッグ実行」の CodeLens を表示します。"
+        },
         "ras.debug.runtimeExecutable": {
           "type": "string",
           "default": "",

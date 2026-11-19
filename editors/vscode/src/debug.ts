@@ -57,9 +57,18 @@ export function registerDebugging(context: vscode.ExtensionContext): vscode.Disp
 				child.kill();
 			}
 		}),
-		vscode.commands.registerCommand("ras.debug.start", async () => {
-			const folder = projectFolder(undefined);
-			await vscode.debug.startDebugging(folder, { type: DEBUG_TYPE, request: "launch", name: "RAS: デバッグ" });
+		// The debug lens above a function passes `{ entry, uri }`; the palette and the title bar pass nothing.
+		vscode.commands.registerCommand("ras.debug.start", async (arg?: unknown) => {
+			const { entry, uri } = startArgument(arg);
+			const folder = (uri && vscode.workspace.getWorkspaceFolder(uri)) ?? projectFolder(undefined);
+			const config: RasDebugConfiguration = { type: DEBUG_TYPE, request: "launch", name: entry ? `RAS: ${entry}` : "RAS: デバッグ" };
+			if (entry) {
+				config.entry = entry;
+			}
+			if (uri?.scheme === "file") {
+				config.project = path.dirname(uri.fsPath);
+			}
+			await vscode.debug.startDebugging(folder, config);
 		}),
 		new vscode.Disposable(() => {
 			for (const child of running.values()) {
@@ -69,6 +78,17 @@ export function registerDebugging(context: vscode.ExtensionContext): vscode.Disp
 			output?.dispose();
 		}),
 	);
+}
+
+function startArgument(arg: unknown): { entry?: string; uri?: vscode.Uri } {
+	if (typeof arg !== "object" || arg === null) {
+		return {};
+	}
+	const { entry, uri } = arg as { entry?: unknown; uri?: unknown };
+	return {
+		entry: typeof entry === "string" && entry !== "" ? entry : undefined,
+		uri: uri instanceof vscode.Uri ? uri : typeof uri === "string" && uri !== "" ? vscode.Uri.parse(uri) : undefined,
+	};
 }
 
 function projectFolder(folder: vscode.WorkspaceFolder | undefined): vscode.WorkspaceFolder | undefined {

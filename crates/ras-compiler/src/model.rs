@@ -336,6 +336,24 @@ impl FnDef {
     pub fn required_params(&self) -> usize {
         self.params.iter().filter(|p| !p.optional && p.default.is_none() && !p.rest).count()
     }
+
+    /// A macro of the workbook: shown in Excel's macro dialog and runnable with `Application.Run`.
+    pub fn is_macro_entry(&self) -> bool {
+        if self.is_generic() || !self.attrs.on_events.is_empty() || self.attrs.init || self.attrs.udf {
+            return false;
+        }
+        match self.kind {
+            FnKind::Main => true,
+            FnKind::Free => self.attrs.macro_entry || (self.exported && self.params.is_empty() && self.ret_ty() == Type::Void),
+            _ => false,
+        }
+    }
+
+    /// A function the debugger can start (spec §14.10): one without required arguments that
+    /// Excel does not call by itself. Only meaningful for functions with a body.
+    pub fn is_debug_entry(&self) -> bool {
+        matches!(self.kind, FnKind::Free | FnKind::Main) && self.required_params() == 0 && !self.is_extension && !self.is_generic() && self.attrs.on_events.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
