@@ -11,3 +11,7 @@
 !syntaxes/ras.tmLanguage.json
 !dist/extension.js
 !bin/**/ras_com.node
+!dist/webview/userFormDesigner.js
+!dist/webview/userFormDesigner.css
+!dist/webview/codicon.ttf
+!schemas/userform.schema.json

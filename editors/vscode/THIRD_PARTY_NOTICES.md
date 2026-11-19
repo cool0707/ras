@@ -101,7 +101,7 @@ SOFTWARE.
 
 ---
 
-## 3. npm packages bundled into `dist/extension.js`
+## 3. npm packages bundled into `dist/extension.js` and `dist/webview/`
 
 `esbuild` bundles the following packages, unmodified, into `dist/extension.js`. The exact versions are recorded in `package-lock.json`. The build (`esbuild.mjs`) fails if a bundled package has no `### <package>` section below.
 
@@ -237,6 +237,62 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+### preact
+
+<https://github.com/preactjs/preact> — MIT License. Bundled into `dist/webview/userFormDesigner.js` (the UserForm Designer webview).
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2015-present Jason Miller
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+### @vscode/codicons
+
+<https://github.com/microsoft/vscode-codicons> — `dist/codicon.css` and the icon font `dist/codicon.ttf` are bundled into `dist/webview/` (the UserForm Designer webview), unmodified. The icon font is licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0, <https://creativecommons.org/licenses/by/4.0/legalcode>), © Microsoft Corporation; the source code is licensed under the MIT License:
+
+```
+MIT License
+
+Copyright (c) Microsoft Corporation.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE
 ```
 
 ---
@@ -486,4 +542,49 @@ MIT License
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE
+```
+
+---
+
+## 5. xlflow (harumiWeb/xlflow) — UserForm Designer
+
+The UserForm Designer (`src/userForm/` and `webview/userFormDesigner/`, bundled into `dist/extension.js` and `dist/webview/`) is ported from the VS Code extension and the Go UserForm packages of xlflow.
+
+| | |
+|---|---|
+| Upstream project | <https://github.com/harumiWeb/xlflow> |
+| Upstream files | `editors/vscode/webview/userFormDesigner/**`, `editors/vscode/src/userFormEditor/{protocol,model,toolbox,geometry,collections,productivity,propertyEditorStrings}.ts`, and the semantics of `internal/vba/userforms/spec/**` and `internal/vba/userforms/events/catalogue.json` |
+| Upstream version | commit `2085f49` (`main` branch, 2026-11-19) |
+| Licence | MIT |
+
+### Modifications
+
+1. The webview components and the shared TypeScript modules are copied with their import paths changed (`src/userFormEditor/` → `src/userForm/`), the user-interface strings translated into Japanese, and `return undefined` added where the stricter RAS `tsconfig.json` requires it.
+2. xlflow applies Designer edits, validation and Property Grid metadata in its Go language server. RAS re-implements them in TypeScript (`src/userForm/{contract,spec,engine,events,jsonSource}.ts`) for JSON FormSpecs only; YAML sources, picture asset import and the deferred-draft/checkpoint document model are not ported.
+3. The host side (`src/userForm/provider.ts`) is rewritten as a `CustomTextEditorProvider` over the FormSpec JSON document; the event catalogue (`src/userForm/eventCatalogue.json`) is copied unmodified.
+
+### Licence
+
+```
+MIT License
+
+Copyright (c) 2026 harumiWeb
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
