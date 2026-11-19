@@ -330,10 +330,11 @@ impl<'p> Gen<'p> {
         let obj_is_ns = matches!(obj_ty, Type::Ns(_));
         let dot = if optional { "?." } else { "." };
         match res {
-            Some(Res::Field(c, _)) => {
+            Some(Res::Field(c, idx)) => {
                 if self.prog.classes[c].kind == ClassKind::Host {
                     let o = self.expr(object);
-                    self.host_get(o, member, optional)
+                    let prog = self.prog;
+                    self.host_get(o, prog.classes[c].fields[idx].vba_name(), optional)
                 } else if obj_is_ns {
                     format!("{}.{member}", self.class_ref(c))
                 } else {
@@ -354,7 +355,8 @@ impl<'p> Gen<'p> {
             Some(Res::Property { get: Some(g), .. }) if obj_is_ns => self.fn_ref(g),
             Some(Res::Method(f)) if matches!(self.prog.fns[f].kind, FnKind::Host { .. }) => {
                 let o = self.expr(object);
-                self.host_get(o, member, optional)
+                let prog = self.prog;
+                self.host_get(o, prog.fns[f].vba_name(), optional)
             }
             _ => {
                 let o = self.expr(object);
@@ -414,7 +416,7 @@ impl<'p> Gen<'p> {
                 let res = self.info().res.get(&inner.id).cloned();
                 let obj_ty = self.ty(object);
                 match res {
-                    Some(Res::Field(c, _)) if self.prog.classes[c].kind == ClassKind::Host => Place::Host { obj: self.expr(object), name: name.text.clone() },
+                    Some(Res::Field(c, idx)) if self.prog.classes[c].kind == ClassKind::Host => Place::Host { obj: self.expr(object), name: self.prog.classes[c].fields[idx].vba_name().to_string() },
                     Some(Res::Field(c, _)) if matches!(obj_ty, Type::Ns(_)) => Place::Native(format!("{}.{}", self.class_ref(c), name.text)),
                     Some(Res::Global(v)) => Place::Native(self.global_ref(v)),
                     Some(Res::Field(..)) | Some(Res::Property { .. }) => Place::Native(format!("{}.{}", self.expr(object), name.text)),
@@ -651,7 +653,7 @@ impl<'p> Gen<'p> {
             vals.pop();
         }
         let argv = vals.join(", ");
-        let name = js_str(&def.name);
+        let name = js_str(def.vba_name());
         if let Some(o) = recv {
             return format!("$rt.call({o}, {name}, [{argv}])");
         }
@@ -659,7 +661,7 @@ impl<'p> Gen<'p> {
             return format!("$rt.call({q}, {name}, [{argv}])");
         }
         match prog.modules[def.module].key.as_str() {
-            "vba.d" => format!("$rt.vba.{}({argv})", def.name),
+            "vba.d" => format!("$rt.vba.{}({argv})", def.vba_name()),
             "excel.d" | "office.d" => format!("$rt.call($rt.global(\"Application\"), {name}, [{argv}])"),
             // Declared in the project's own type definitions: a procedure of the workbook.
             _ => format!("$rt.runMacro({name}, [{argv}])"),
@@ -714,7 +716,7 @@ impl<'p> Gen<'p> {
                 let o = self.expr(r);
                 // `ws.Range(Cells(1, 1), Cells(2, 2))`: the inner references follow the receiver (spec §13.4).
                 let info = self.info();
-                let qualifies = self.prog.fns[f].name == "Range" && args.iter().any(|a| crate::astutil::any_expr_in(a, &mut |x| info.auto_qualified.contains(&x.id)));
+                let qualifies = self.prog.fns[f].vba_name() == "Range" && args.iter().any(|a| crate::astutil::any_expr_in(a, &mut |x| info.auto_qualified.contains(&x.id)));
                 if qualifies {
                     let q = self.tmp("q");
                     let outer = self.qualifier.replace(q.clone());
@@ -810,6 +812,11 @@ impl<'p> Gen<'p> {
             Some(r) if !matches!(recv_ty, Type::Ns(_)) => self.expr(r),
             _ => String::new(),
         };
+        // Array-style methods of a host collection work on a copy of its members (spec §4.4).
+        let (r, recv_ty) = match self.prog.collection_elem(&recv_ty) {
+            Some(elem) if matches!(intr, ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind | ArrFindIndex | CollToArray) => (format!("Array.from($rt.iter({r}))"), Type::array(elem)),
+            _ => (r, recv_ty),
+        };
         let a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
         let argv = a.join(", ");
         let arg = |i: usize, default: &str| a.get(i).cloned().unwrap_or_else(|| default.to_string());
@@ -829,6 +836,7 @@ impl<'p> Gen<'p> {
                 let z = self.zero(&elem);
                 format!("$rt.pop({r}, {z})")
             }
+            CollToArray => r,
             ArrMap => format!("{r}.map({argv})"),
             ArrFilter => format!("{r}.filter({argv})"),
             ArrForEach => format!("{r}.forEach({argv})"),

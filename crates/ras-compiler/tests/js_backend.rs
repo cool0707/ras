@@ -105,36 +105,45 @@ export function rebuildReport() {
     const last = ws.lastRow();
     let total = 0.0;
     for (let r = 2; r <= last; r++) {
-        const price: double = ws.Cells(r, 3).Value;
-        const qty: double = ws.Cells(r, 4).Value;
+        const price: double = ws.cells(r, 3).value;
+        const qty: double = ws.cells(r, 4).value;
         total += price * qty;
     }
     for (let r = 2; r <= last; r++) {
-        ws.Cells(r, 5).Formula = `=ROUND(C${r}*D${r}*${1 + TAX_RATE},0)`;
+        ws.cells(r, 5).formula = `=ROUND(C${r}*D${r}*${1 + TAX_RATE},0)`;
     }
     status(`合計: ${total.toFixed(0)} 円`);
 }
 
 export function countCustomers(): int {
-    const names = Sheet1.Range("A2:A1000").toColumn();
+    const names = Sheet1.range("A2:A1000").toColumn();
     const seen = new Map<string, boolean>();
     for (const n of names) {
         const name = `${n}`;
         if (name.trim().length > 0) seen.set(name, true);
     }
-    console.log(`customers=${seen.size} sheet=${Sheet1.Name}`);
+    console.log(`customers=${seen.size} sheet=${Sheet1.name}`);
     return seen.size;
+}
+
+export function listSheets() {
+    const visible = worksheets.filter(ws => ws.visible == xlSheetVisible).map(ws => ws.name);
+    worksheets.forEach((ws, i) => { if (i == 2) console.log(i, ws.name); });
+    const hidden = worksheets.find(ws => ws.visible != xlSheetVisible);
+    // A late-bound member is found whatever its casing, as in VBA.
+    const first: any = worksheets.toArray()[0];
+    console.log(visible.join(","), hidden.name, worksheets.count, worksheets.some(ws => ws.name == "Summary"), first.name);
 }
 "#;
 
-const SHEETUTIL: &str = "export function lastRow(this: Excel.Worksheet, col: int = 1): int {\n    return this.Cells(this.Rows.Count, col).End(xlUp).Row;\n}\n";
+const SHEETUTIL: &str = "export function lastRow(this: Excel.Worksheet, col: int = 1): int {\n    return this.cells(this.rows.count, col).end(xlUp).row;\n}\n";
 
 #[test]
 fn host_access_goes_through_the_run_time() {
     let files = [("report", REPORT), ("sheetutil", SHEETUTIL)];
     let (_, out) = compile(&files);
     // Macro entries first, then every other function that can be started without arguments.
-    assert_eq!(out.entries, vec!["Report.rebuildReport", "Report.countCustomers"]);
+    assert_eq!(out.entries, vec!["Report.rebuildReport", "Report.listSheets", "Report.countCustomers"]);
     let js = &out.files.iter().find(|f| f.rel_path == "report.js").unwrap().text;
     assert!(js.contains("$rt.cnum($rt.get($rt.call(ws, \"Cells\", [r, 3]), \"Value\"))"), "{js}");
     assert!(js.contains("$rt.put($rt.call(ws, \"Cells\", [r, 5]), \"Formula\","), "{js}");
@@ -152,6 +161,11 @@ fn host_access_goes_through_the_run_time() {
     let (stdout, stderr, ok) = p.run("countCustomers", Some(&mock));
     assert!(ok, "{stderr}");
     assert!(stdout.starts_with("customers=2 sheet=Data\n"), "{stdout}");
+    // Array-style methods of a host collection (spec §4.4).
+    assert!(js.contains("Array.from($rt.iter($rt.global(\"Worksheets\"))).filter("), "{js}");
+    let (stdout, stderr, ok) = p.run("listSheets", Some(&mock));
+    assert!(ok, "{stderr}");
+    assert!(stdout.starts_with("2 Summary\nData,Summary Hidden 3 true Data\n"), "{stdout}");
     // Without Excel, the first host access fails with an explanation and a RAS source position.
     let (_, stderr, ok) = p.run("Report.rebuildReport", None);
     assert!(!ok);

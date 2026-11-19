@@ -40,6 +40,33 @@ const BUILTIN: &[&str] = &[
 /// opening the book without a prompt the procedures that use the class just cannot be run.
 const DISPATCH_MEMBERS: &[&str] = &["addref", "getidsofnames", "gettypeinfo", "gettypeinfocount", "invoke", "queryinterface", "release"];
 
+/// RAS keywords: a host global whose camelCase form is one of them keeps its VBA spelling (`Switch`).
+const RAS_KEYWORDS: &[&str] = &[
+    "let", "const", "function", "return", "if", "else", "for", "while", "do", "break", "continue", "switch", "case", "default", "try",
+    "catch", "finally", "throw", "new", "class", "extends", "interface", "enum", "import", "export", "this", "super", "null",
+    "undefined", "true", "false", "void", "typeof", "instanceof", "in", "var", "byref", "byval", "inline", "noinline", "resume",
+];
+
+pub fn is_ras_keyword(name: &str) -> bool {
+    RAS_KEYWORDS.contains(&name)
+}
+
+/// The JavaScript-style (camelCase) spelling of a host member or global, which the type
+/// libraries spell in PascalCase: `Value` → `value`, `ScreenUpdating` → `screenUpdating`.
+/// A leading run of capitals is one word, up to the capital that starts the next word:
+/// `VBProject` → `vbProject`, `RGB` → `rgb`, `UBound` → `uBound`, `FormulaR1C1` → `formulaR1C1`.
+/// Names that do not start with a capital letter (`xlUp`, `_NewEnum`) are returned unchanged.
+pub fn js_name(host: &str) -> String {
+    let chars: Vec<char> = host.chars().collect();
+    let run = chars.iter().take_while(|c| c.is_ascii_uppercase()).count();
+    if run == 0 {
+        return host.to_string();
+    }
+    // `VBProject`: the last capital of the run belongs to the next word when a lowercase letter follows.
+    let lower = if run > 1 && chars.get(run).is_some_and(|c| c.is_ascii_lowercase()) { run - 1 } else { run };
+    chars.iter().enumerate().map(|(i, c)| if i < lower { c.to_ascii_lowercase() } else { *c }).collect()
+}
+
 pub fn is_reserved(name: &str) -> bool {
     RESERVED.binary_search(&name.to_ascii_lowercase().as_str()).is_ok()
 }
@@ -95,6 +122,27 @@ mod tests {
         let mut sorted = RESERVED.to_vec();
         sorted.sort_unstable();
         assert_eq!(sorted, RESERVED, "RESERVED must stay sorted for binary search");
+    }
+
+    #[test]
+    fn js_names() {
+        for (host, js) in [
+            ("Value", "value"),
+            ("ScreenUpdating", "screenUpdating"),
+            ("VBProject", "vbProject"),
+            ("RGB", "rgb"),
+            ("UBound", "uBound"),
+            ("CStr", "cStr"),
+            ("FormulaR1C1", "formulaR1C1"),
+            ("OLEObjects", "oleObjects"),
+            ("ID", "id"),
+            ("A1", "a1"),
+            ("xlUp", "xlUp"),
+            ("_NewEnum", "_NewEnum"),
+            ("message", "message"),
+        ] {
+            assert_eq!(js_name(host), js, "{host}");
+        }
     }
 
     #[test]

@@ -31,7 +31,11 @@ const Sheet1 = {
     Rows: { Count: 1048576 },
     Range: () => ({ Columns: () => ({ Value: Array.from({ length: 6 }, (_, i) => [cell(i + 2, 1).Value]) }) }),
 };
-module.exports = { globals: { Application, Sheet1 } };
+const sheetList = [Sheet1, { $typeName: "Worksheet", Name: "Hidden", Visible: 0 }, { $typeName: "Worksheet", Name: "Summary", Visible: -1 }];
+Sheet1.Visible = -1;
+// A collection as `For Each` sees it: a default member and `Count`.
+const Worksheets = { Count: sheetList.length, Item: (i) => sheetList[i - 1] };
+module.exports = { globals: { Application, Sheet1, Worksheets } };
 process.on("exit", () => {
     console.log(`E2=${cell(2, 5).Formula}`);
     console.log(`E5=${cell(5, 5).Formula}`);

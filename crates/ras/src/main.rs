@@ -30,7 +30,11 @@ enum Command {
         workbook: Option<String>,
     },
     /// 型チェック・リントのみ行う
-    Check,
+    Check {
+        /// 機械的に直せる警告（Excel / VBA のメンバー名の大文字小文字など）をソースに書き戻す
+        #[arg(long)]
+        fix: bool,
+    },
     /// VBA ファイルを build/ に出力する（--target js でデバッグ用の JavaScript を build/debug/ に出力する）
     Build {
         #[command(flatten)]
@@ -159,6 +163,31 @@ fn analyze(root: &Path, args: &BuildArgs, book: Option<&Path>) -> Result<Program
         }
     }
     Ok(ras_compiler::analyze(sources, cfg))
+}
+
+/// Writes the mechanical corrections of `prog` back to the user's source files. Returns how many were applied.
+fn apply_fixes(prog: &Program) -> Result<usize, String> {
+    let mut count = 0;
+    for md in prog.modules.iter().filter(|m| m.kind == ModuleKind::User) {
+        let fixes: Vec<&ras_compiler::Fix> = prog.fixes.iter().filter(|f| f.module == md.id).collect();
+        if fixes.is_empty() {
+            continue;
+        }
+        let fixed = ras_compiler::apply_fixes(&md.text, &fixes);
+        if fixed == *md.text {
+            continue;
+        }
+        // The same place can be reported more than once (a generic function checked per instantiation).
+        let mut places: Vec<u32> = fixes.iter().map(|f| u32::from(f.span.start())).collect();
+        places.sort_unstable();
+        places.dedup();
+        count += places.len();
+        // `load_project` drops a byte-order mark: keep the one the file has.
+        let had_bom = std::fs::read(&md.path).is_ok_and(|b| b.starts_with(&[0xEF, 0xBB, 0xBF]));
+        let out = if had_bom { format!("\u{feff}{fixed}") } else { fixed };
+        std::fs::write(&md.path, out).map_err(|e| format!("{}: {e}", md.path.display()))?;
+    }
+    Ok(count)
 }
 
 /// Prints diagnostics (with the offending source line) and returns the number of errors.
@@ -490,10 +519,10 @@ fn cmd_init(dir: &Path, workbook: Option<&str>) -> Result<ExitCode, String> {
         None => "# workbook = \"Book.xlsm\"    # `ras pack` / 同期の対象ブック".to_string(),
     };
     let toml = format!(
-        "[project]\nname = \"{name}\"\n{wb_line}\n\n[target]\nhost = \"excel\"\nvba6 = true             # VBA6（32bit Office 2007 以前）用の Declare も出力\ncodepage = 932\n\n[build]\nopt-level = 1           # 0: 展開なし / 1: ループ内自動展開 / 2: 積極的\nerl = true              # 行番号付与（エラー位置を RAS のソース行で表示）\n\n[pack]\nbackup-generations = 5\n\n[doevents]\nenabled = true\ninterval-ms = 100\nloop-threshold = 10000\n"
+        "[project]\nname = \"{name}\"\n{wb_line}\n\n[target]\nhost = \"excel\"\nvba6 = true             # VBA6（32bit Office 2007 以前）用の Declare も出力\ncodepage = 932\n\n[build]\nopt-level = 1           # 0: 展開なし / 1: ループ内自動展開 / 2: 積極的\nerl = true              # 行番号付与（エラー位置を RAS のソース行で表示）\n\n[pack]\nbackup-generations = 5\n\n[doEvents]\nenabled = true\ninterval-ms = 100\nloop-threshold = 10000\n"
     );
     std::fs::write(&toml_path, toml).map_err(|e| e.to_string())?;
-    let main = "/**\n * サンプルのマクロ。Excel の「マクロ」ダイアログから `hello` を実行できる。\n */\nexport function hello() {\n    const names = [\"RAS\", \"VBA\"];\n    const greeting = names.map(n => `Hello, ${n}!`).join(\"\\n\");\n    MsgBox(greeting);\n}\n";
+    let main = "/**\n * サンプルのマクロ。Excel の「マクロ」ダイアログから `hello` を実行できる。\n */\nexport function hello() {\n    const names = [\"RAS\", \"VBA\"];\n    const greeting = names.map(n => `Hello, ${n}!`).join(\"\\n\");\n    msgBox(greeting);\n}\n";
     let main_path = dir.join("src").join("main.ras");
     if !main_path.exists() {
         std::fs::write(&main_path, main).map_err(|e| e.to_string())?;
@@ -604,9 +633,16 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
     let project = cli.project.as_deref();
     match &cli.command {
         Command::Init { dir, workbook } => cmd_init(dir, workbook.as_deref()),
-        Command::Check => {
+        Command::Check { fix } => {
             let root = find_root(project)?;
-            let prog = analyze(&root, &BuildArgs::default(), None)?;
+            let mut prog = analyze(&root, &BuildArgs::default(), None)?;
+            if *fix {
+                let fixed = apply_fixes(&prog)?;
+                if fixed > 0 {
+                    println!("{fixed} 箇所を修正しました");
+                    prog = analyze(&root, &BuildArgs::default(), None)?;
+                }
+            }
             let errors = report(&prog, &prog.diagnostics, true);
             if errors > 0 {
                 eprintln!("{errors} 件のエラーがあります");

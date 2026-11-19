@@ -187,9 +187,21 @@ fn describe_res(prog: &Program, m: ModuleId, offset: u32, res: &Res, ty: &Type) 
         }
         Res::Global(v) => {
             let d = &prog.vars[*v];
-            code_block(&with_vba(prog, &format!("{} {}", if d.is_const { "const" } else { "let" }, d.name), &d.ty), d.doc.as_deref())
+            let head = format!("{} {}", if d.is_const { "const" } else { "let" }, d.name);
+            match &d.host_name {
+                // A host global: the VBA line shows its spelling there instead of the type.
+                Some(host) => code_block(&format!("{head}: {}\n// VBA: {host}", prog.show(&d.ty)), d.doc.as_deref()),
+                None => code_block(&with_vba(prog, &head, &d.ty), d.doc.as_deref()),
+            }
         }
-        Res::Fn(f) | Res::Method(f) => code_block(&signature(prog, *f), prog.fns[*f].doc.as_deref()),
+        Res::Fn(f) | Res::Method(f) => {
+            let d = &prog.fns[*f];
+            match (&d.host_name, d.kind.clone()) {
+                (Some(host), FnKind::Host { class: Some(c) }) => code_block(&format!("{}\n// VBA: {}.{host}", signature(prog, *f), prog.classes[c].name), d.doc.as_deref()),
+                (Some(host), _) => code_block(&format!("{}\n// VBA: {host}", signature(prog, *f)), d.doc.as_deref()),
+                _ => code_block(&signature(prog, *f), d.doc.as_deref()),
+            }
+        }
         Res::ExtMethod(f) => {
             let d = &prog.fns[*f];
             let md = &prog.modules[d.module];
@@ -201,7 +213,11 @@ fn describe_res(prog: &Program, m: ModuleId, offset: u32, res: &Res, ty: &Type) 
         }
         Res::Field(c, i) => {
             let fl = &prog.classes[*c].fields[*i];
-            code_block(&with_vba(prog, &format!("(プロパティ) {}.{}", prog.class_display(*c), fl.name), ty), fl.doc.as_deref())
+            let head = format!("(プロパティ) {}.{}", prog.class_display(*c), fl.name);
+            match &fl.host_name {
+                Some(host) => code_block(&format!("{head}: {}\n// VBA: {}.{host}", prog.show(ty), prog.classes[*c].name), fl.doc.as_deref()),
+                None => code_block(&with_vba(prog, &head, ty), fl.doc.as_deref()),
+            }
         }
         Res::Class(c) => {
             let d = &prog.classes[*c];
@@ -359,6 +375,14 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
                     "Range" => builtin(&["toArray", "fromArray", "toColumn", "toRow"], &mut out),
                     "Worksheet" => builtin(&["usedTable"], &mut out),
                     _ => {}
+                }
+            }
+            // Array-style methods of a collection; a member of the type with the same name wins (`range.find`).
+            if prog.collection_elem(ty).is_some() {
+                for n in intrinsics::COLLECTION_MEMBERS {
+                    if !out.iter().any(|o| o.label == *n) {
+                        out.push(item(n, kind::METHOD, "(組み込み・コレクション)", None, 0));
+                    }
                 }
             }
         }

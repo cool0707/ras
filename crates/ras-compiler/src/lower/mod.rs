@@ -757,7 +757,7 @@ impl<'p> Lowerer<'p> {
             FnKind::Method { class, is_static: true } | FnKind::Getter { class, is_static: true } | FnKind::Setter { class, is_static: true } => {
                 format!("{}_{}", names::member_ident(&self.prog.classes[*class].name), def.name)
             }
-            FnKind::Host { .. } => def.name.clone(),
+            FnKind::Host { .. } => def.vba_name().to_string(),
             _ => names::member_ident(&def.name),
         };
         if let FnKind::Declare { .. } = def.kind {
@@ -812,7 +812,7 @@ impl<'p> Lowerer<'p> {
     pub(crate) fn var_ref(&mut self, v: VarId) -> VExpr {
         let d = &self.prog.vars[v];
         if d.declared {
-            return VExpr::Name(d.name.clone());
+            return VExpr::Name(d.vba_name().to_string());
         }
         let name = names::member_ident(&d.name);
         let same_module = d.module == self.pc.emit_module && !self.pc.in_class && !self.pc.in_closure;
@@ -933,10 +933,22 @@ impl<'p> Lowerer<'p> {
     }
 
     /// Name for a user local in the current frame (`ras_inl{N}_{name}` inside inlined bodies).
+    /// VBA identifier of a local variable or parameter. Besides the reserved and well-known names,
+    /// the name of any bundled host global is avoided: a local `workbooks` would shadow `Workbooks`,
+    /// and the VBE would rewrite the casing of every use of it (spec §13.6).
+    pub(crate) fn local_ident(&self, name: &str) -> String {
+        let base = names::local_ident(name);
+        if base == name && self.prog.host_global_names.contains_key(&name.to_lowercase()) {
+            format!("{base}_")
+        } else {
+            base
+        }
+    }
+
     pub(crate) fn local_name(&mut self, name: &str, t: &Type) -> String {
         let base = match self.frame().inl {
             Some(n) => format!("ras_inl{n}_{}", names::valid_ident(name)),
-            None => names::local_ident(name),
+            None => self.local_ident(name),
         };
         self.declare(&base, t)
     }
@@ -1043,7 +1055,7 @@ impl<'p> Lowerer<'p> {
         let mut params = Vec::new();
         for p in &def.params {
             let pty = p.ty.subst(&frame.env);
-            let base = if def.locals[p.local].kind == LocalKind::This { "this_".to_string() } else { names::local_ident(&p.name) };
+            let base = if def.locals[p.local].kind == LocalKind::This { "this_".to_string() } else { self.local_ident(&p.name) };
             let pname = self.unique(&base);
             let (ty, is_array) = self.vtype(&pty);
             let byref = p.mode == PassMode::ByRef || is_array || matches!(pty, Type::Struct(_));
@@ -1441,7 +1453,7 @@ impl<'p> Lowerer<'p> {
             let pty = p.ty.subst(env);
             let (ty, is_array) = self.vtype(&pty);
             let byref = p.mode == PassMode::ByRef || is_array;
-            params.push(VParam { name: names::local_ident(&p.name), byref, ty, is_array, optional_default: None });
+            params.push(VParam { name: self.local_ident(&p.name), byref, ty, is_array, optional_default: None });
         }
         let ret_ty = def.ret_ty().subst(env);
         let (rt, rarr) = self.vtype(&ret_ty);
@@ -1454,6 +1466,14 @@ impl<'p> Lowerer<'p> {
     pub(crate) fn field_target(&mut self, c: ClassId, idx: usize, fty: &Type, object: Option<VExpr>) -> VExpr {
         let def = &self.prog.classes[c];
         let fld = &def.fields[idx];
+        if def.kind == ClassKind::Host {
+            // A property of a host object keeps the type library's spelling, reserved word or not (`ws.Type`).
+            let fname = fld.vba_name().to_string();
+            return match object {
+                Some(o) => o.member(fname),
+                None => VExpr::Name(fname),
+            };
+        }
         let fname = names::member_ident(&fld.name);
         if fld.is_static {
             let sname = format!("{}_{}", names::member_ident(&def.name), fld.name);

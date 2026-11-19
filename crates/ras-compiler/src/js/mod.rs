@@ -356,7 +356,7 @@ impl<'p> Gen<'p> {
     pub(crate) fn global_ref(&mut self, v: VarId) -> String {
         let d = &self.prog.vars[v];
         if d.declared {
-            return if self.prog.modules[d.module].key == "vba.d" { format!("$rt.vba.{}", d.name) } else { format!("$rt.global({})", js_str(&d.name)) };
+            return if self.prog.modules[d.module].key == "vba.d" { format!("$rt.vba.{}", d.vba_name()) } else { format!("$rt.global({})", js_str(d.vba_name())) };
         }
         self.module_member(d.module, &js_ident(&d.name))
     }

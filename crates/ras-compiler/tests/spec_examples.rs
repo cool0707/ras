@@ -47,7 +47,8 @@ fn bundled_type_definitions_are_clean() {
     assert!(problems.is_empty(), "{problems:#?}");
     assert!(prog.namespaces["Excel"].contains_key("Range"));
     assert!(prog.globals.contains_key("xlUp"));
-    assert!(prog.globals.contains_key("MsgBox"));
+    // Members and globals of the bundled definitions are seen in camelCase (spec §15.3.1).
+    assert!(prog.globals.contains_key("msgBox") && !prog.globals.contains_key("MsgBox"));
 }
 
 #[test]
@@ -73,7 +74,7 @@ export function padLeft(this: string, width: int, ch: string = " "): string {
 
 const EXCELUTIL: &str = r#"
 export function lastRow(this: Excel.Worksheet, col: int = 1): int {
-    return this.Cells(this.Rows.Count, col).End(xlUp).Row;
+    return this.cells(this.rows.count, col).end(xlUp).row;
 }
 
 export function sum(this: double[]): double {
@@ -129,8 +130,8 @@ function demo(ints: int[], names: string[]): string {
     const a = ints.maxOf();
     const b = names.maxOf();
     const s = new Stack<Excel.Range>();
-    s.push(Sheet1.Cells(1, 1));
-    return b + a + s.pop().Address;
+    s.push(Sheet1.cells(1, 1));
+    return b + a + s.pop().address;
 }
 "#;
     let (_, out) = compile(&[("gen", src)]);
@@ -207,11 +208,11 @@ function demo(arr: double[]): double[] {
 
 #[test]
 fn spec_5_2_resume_block() {
-    let src = "function ignore() {\n    try {\n        let ws = Worksheets(\"NonExistent\");\n        ws.Activate();\n    } catch {\n        resume;\n    }\n}\n";
+    let src = "function ignore() {\n    try {\n        let ws = worksheets(\"NonExistent\");\n        ws.activate();\n    } catch {\n        resume;\n    }\n}\n";
     let (_, out) = compile(&[("m", src)]);
     assert_contains(
         &code(&out, "M"),
-        "Private Sub ignore()\n    Dim ws As Object\n\n    On Error Resume Next\n    Set ws = Worksheets(\"NonExistent\")\n    ws.Activate\n    On Error GoTo 0\nEnd Sub\n",
+        "Private Sub ignore()\n    Dim ws As Worksheet\n\n    On Error Resume Next\n    Set ws = Worksheets(\"NonExistent\")\n    ws.Activate\n    On Error GoTo 0\nEnd Sub\n",
     );
     assert_eq!(error_codes(&[("m", "function f() { try { g(); } catch { g(); resume; } }\nfunction g() {}\n")]), vec!["E0350"]);
     assert_eq!(error_codes(&[("m", "function f() { resume; }\n")]), vec!["E0350"]);
@@ -324,7 +325,7 @@ export function fill(last: int) {
     const ws = Sheet1;
     for (let r = 2; r <= last; r++) {
         for (let c = 1; c <= 5; c++) {
-            ws.Cells(r, c).Value = r * c;
+            ws.cells(r, c).value = r * c;
         }
     }
 }
@@ -332,14 +333,14 @@ export function sumColumn(last: int): double {
     const ws = Sheet1;
     let sum = 0.0;
     for (let r = 2; r <= last; r++) {
-        sum += ws.Cells(r, 1).Value;
+        sum += ws.cells(r, 1).value;
     }
     return sum;
 }
 export function conditional(last: int) {
     const ws = Sheet1;
     for (let r = 2; r <= last; r++) {
-        if (r % 2 == 0) ws.Cells(r, 1).Value = r;
+        if (r % 2 == 0) ws.cells(r, 1).value = r;
     }
 }
 "#;
@@ -459,7 +460,7 @@ function prepare() { cache.set("a", 1); }
 export function setup() { status("ready"); }
 
 @on("Sheet1.Change")
-function onSheet1Change(target: Excel.Range) { target.Interior.Color = 255; }
+function onSheet1Change(target: Excel.Range) { target.interior.color = 255; }
 "#;
     let (_, out) = compile(&[("report", src)]);
     let sheet = code(&out, "Sheet1");
@@ -563,7 +564,7 @@ fn lint_rules_of_section_6() {
     assert_eq!(error_codes(&[("m", "function f(d: double): int { return d; }\n")]), vec!["E0301"]);
     assert_eq!(error_codes(&[("m", "const big = 300000 * 200000;\nfunction f() {}\n")]), vec!["E0397"]);
     // 9 / 10: unqualified Range and .Select are reported but do not block the build
-    let (prog, out) = compile(&[("m", "export function f() { Range(\"A1\").Select(); }\n")]);
+    let (prog, out) = compile(&[("m", "export function f() { range(\"A1\").select(); }\n")]);
     let codes: Vec<&str> = prog.diagnostics.iter().map(|d| d.code).collect();
     assert!(codes.contains(&"W0401") && codes.contains(&"I0402"), "{codes:?}");
     assert!(!out.files.is_empty());
@@ -571,7 +572,7 @@ fn lint_rules_of_section_6() {
 
 #[test]
 fn spec_13_4_cells_inside_range_are_qualified() {
-    let (prog, out) = compile(&[("m", "function f(ws: Excel.Worksheet): Excel.Range {\n    return ws.Range(Cells(1, 1), Cells(2, 2));\n}\n")]);
+    let (prog, out) = compile(&[("m", "function f(ws: Excel.Worksheet): Excel.Range {\n    return ws.range(cells(1, 1), cells(2, 2));\n}\n")]);
     assert_contains(&code(&out, "M"), "    Set f = ws.Range(ws.Cells(1&, 1&), ws.Cells(2&, 2&))\n");
     assert!(!prog.diagnostics.iter().any(|d| d.code == "W0401"));
 }
@@ -766,4 +767,103 @@ fn spec_2_5_structs_cannot_leave_typed_code() {
     // A lambda that becomes a class cannot take a struct.
     let src = format!("{POINT}export function f(p: Point): int {{\n    const g = (v: Point) => v.x;\n    return g(p);\n}}\n");
     assert!(error_codes_build(&[("m", &src)]).contains(&"E0395"));
+}
+
+#[test]
+fn spec_15_3_1_host_names_are_camel_case() {
+    let src = r#"
+export function touch(ws: Excel.Worksheet): string {
+    const range = ws.range("A1");
+    range.interior.color = rgb(255, 0, 0);
+    range.delete();
+    activeSheet.cells(1, 1).value2 = 1;
+    debug.print(uBound(split("a,b", ",")), Switch(true, 1));
+    return application.name + ws.name;
+}
+"#;
+    let mut cfg = config();
+    cfg.doevents.enabled = false;
+    let (prog, out) = compile_with(&[("m", src)], cfg);
+    // The qualified-reference lint (rule 9) still fires for `activeSheet`; nothing complains about the spelling.
+    let codes: Vec<&str> = prog.diagnostics.iter().filter(|d| d.severity <= Severity::Warning).map(|d| d.code).collect();
+    assert_eq!(codes, vec!["W0401"]);
+    let m = code(&out, "M");
+    // The generated VBA carries the type library's spelling; a local named like a host global is renamed.
+    assert_contains(&m, "    Dim range_ As Range\n");
+    assert_contains(&m, "    Set range_ = ws.Range(\"A1\")\n    range_.Interior.Color = RGB(255&, 0&, 0&)\n");
+    assert_contains(&m, "    range_.Delete");
+    // Late-bound members (`activeSheet` is an Object) are spelled like the bundled definitions too.
+    assert_contains(&m, "    ActiveSheet.Cells(1&, 1&).Value2 = 1&\n");
+    // `switch` is a keyword, so that global keeps its VBA name.
+    assert_contains(&m, "    Debug.Print UBound(Split(\"a,b\", \",\")), Switch(True, 1&)\n");
+    assert_contains(&m, "    touch = Application.Name & ws.Name\n");
+
+    // The type library's spelling is still understood (VBA is not case-sensitive), with a warning and a fix.
+    let old = "export function f(ws: Excel.Worksheet) {\n    ws.Cells(1, 1).Value = Application.Name;\n    MsgBox(\"x\");\n}\n";
+    let (prog, out) = compile(&[("m", old)]);
+    let warned: Vec<&str> = prog.diagnostics.iter().filter(|d| d.code == "W0304").map(|d| d.message.split('`').nth(3).unwrap()).collect();
+    assert_eq!(warned, vec!["cells", "value", "application", "name", "msgBox"]);
+    assert_contains(&code(&out, "M"), "    ws.Cells(1&, 1&).Value = Application.Name\n    MsgBox \"x\"\n");
+    let fixes: Vec<&ras_compiler::Fix> = prog.fixes.iter().collect();
+    assert_eq!(
+        ras_compiler::apply_fixes(old, &fixes),
+        "export function f(ws: Excel.Worksheet) {\n    ws.cells(1, 1).value = application.name;\n    msgBox(\"x\");\n}\n"
+    );
+
+    // Names the project declares itself (sheet code names, `types/*.d.ras`) are used as written.
+    let decl = "declare const Summary: Excel.Worksheet;\ndeclare function LegacyMacro(n: int): void;\n";
+    let (prog, out) = compile(&[("sheets.d", decl), ("m", "export function f() {\n    LegacyMacro(Summary.index + Sheet1.index);\n}\n")]);
+    assert!(prog.diagnostics.iter().all(|d| d.code != "W0304"));
+    assert_contains(&code(&out, "M"), "    LegacyMacro Summary.Index + Sheet1.Index\n");
+}
+
+#[test]
+fn spec_4_4_collections_have_array_methods() {
+    let src = r#"
+export function visibleNames(): string[] {
+    const names = worksheets.filter(ws => ws.visible == xlSheetVisible).map(ws => ws.name);
+    return names;
+}
+
+export function stamp() {
+    worksheets.forEach((ws, i) => { ws.cells(1, 1).value = i; });
+}
+
+export function lookup(book: Excel.Workbook): Excel.Worksheet {
+    const n = book.worksheets.findIndex(ws => ws.name == "Data");
+    const any = workbooks.some(wb => wb.readOnly);
+    const total = Sheet1.range("A1:A3").reduce((acc, c) => acc + c.row, 0);
+    const all = book.worksheets.toArray();
+    return n + total + all.length > 0 && any ? null : worksheets.find(ws => ws.name == "Data");
+}
+"#;
+    let mut cfg = config();
+    cfg.doevents.enabled = false;
+    let (prog, out) = compile_with(&[("m", src)], cfg);
+    let problems: Vec<String> = prog.diagnostics.iter().filter(|d| d.severity <= Severity::Warning).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+    let m = code(&out, "M");
+    // `filter` + `map` are one `For Each` loop; the members of `worksheets` are typed as `Worksheet`.
+    assert_contains(&m, "    Dim ras_e As Worksheet\n");
+    assert_contains(
+        &m,
+        "    ras_n = 0&\n    If Worksheets.Count > 0& Then\n        ReDim names_(0 To Worksheets.Count - 1&)\n        For Each ras_e In Worksheets\n            If ras_e.Visible = xlSheetVisible Then\n                names_(ras_n) = ras_e.Name\n                ras_n = ras_n + 1&\n            End If\n        Next ras_e\n    End If\n    If ras_n = 0& Then\n        Erase names_\n    ElseIf ras_n <= UBound(names_) Then\n        ReDim Preserve names_(0 To ras_n - 1&)\n    End If\n",
+    );
+    // The index is counted only when the callback takes it.
+    assert_contains(&m, "    ras_i = 0&\n    For Each ras_e In Worksheets\n        ras_e.Cells(1&, 1&).Value = ras_i\n        ras_i = ras_i + 1&\n    Next ras_e\n");
+    // A collection that is not a plain name is evaluated once.
+    assert_contains(&m, "    Set ras_t1 = book.Worksheets\n    ras_t2 = -1&\n    ras_i = 0&\n    For Each ras_e In ras_t1\n        If ras_e.Name = \"Data\" Then\n            ras_t2 = ras_i\n            Exit For\n        End If\n        ras_i = ras_i + 1&\n    Next ras_e\n    n = ras_t2\n");
+    assert_contains(&m, "    ras_t3 = False\n    For Each ras_e_2 In Workbooks\n        If ras_e_2.ReadOnly Then\n            ras_t3 = True\n            Exit For\n        End If\n    Next ras_e_2\n");
+    assert_contains(&m, "    Set ras_t4 = Sheet1.Range(\"A1:A3\")\n    ras_t5 = 0&\n    For Each ras_e_3 In ras_t4\n        ras_t5 = ras_t5 + ras_e_3.Row\n    Next ras_e_3\n");
+    // `toArray()` copies the members into an array.
+    assert_contains(&m, "    If ras_t6.Count > 0& Then\n        ReDim all(0 To ras_t6.Count - 1&)\n        ras_n = 0&\n        For Each ras_e_4 In ras_t6\n            Set all(ras_n) = ras_e_4\n            ras_n = ras_n + 1&\n        Next ras_e_4\n    Else\n        Erase all\n    End If\n");
+    // `find` yields `Nothing` when no member matches.
+    assert_contains(&m, "        Set ras_t7 = Nothing\n        For Each ras_e_5 In Worksheets\n            If ras_e_5.Name = \"Data\" Then\n                Set ras_t7 = ras_e_5\n                Exit For\n            End If\n        Next ras_e_5\n");
+
+    // A member of the type wins over the array-style method of the same name (`Range.Find`).
+    let (_, out) = compile(&[("m", "export function f(r: Excel.Range): Excel.Range {\n    return r.find(\"x\");\n}\n")]);
+    assert_contains(&code(&out, "M"), "    Set f = r.Find(\"x\")\n");
+    // A host object without a default member and `Count` is not a collection.
+    let (prog, _) = compile(&[("m", "export function f(ws: Excel.Worksheet) {\n    ws.toArray();\n}\n")]);
+    assert!(prog.diagnostics.iter().any(|d| d.code == "W0301"), "late binding is reported");
 }

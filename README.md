@@ -12,14 +12,21 @@ export function rebuildReport() {
     const ws = Sheet1;
     const last = ws.lastRow();
     for (let r = 2; r <= last; r++) {
-        ws.Cells(r, 3).Value = r * 2;      // ループごと Range ⇔ 配列の一括転送に変換される
+        ws.cells(r, 3).value = r * 2;      // ループごと Range ⇔ 配列の一括転送に変換される
     }
 }
 
 export function lastRow(this: Excel.Worksheet, col: int = 1): int {
-    return this.Cells(this.Rows.Count, col).End(xlUp).Row;
+    return this.cells(this.rows.count, col).end(xlUp).row;
+}
+
+// コレクションは配列と同じように扱える（For Each のループに展開される）
+export function visibleSheetNames(): string[] {
+    return worksheets.filter(ws => ws.visible == xlSheetVisible).map(ws => ws.name);
 }
 ```
+
+Excel / VBA のメンバーとグローバルは、JavaScript の命名規則（camelCase）で書きます（`ws.cells(r, 1).value`、`msgBox(...)`）。生成される VBA には本来の綴り（`ws.Cells(r, 1).Value`）が出力されます。VBA の綴りのままでも動きますが警告になり、`ras check --fix` で一括して書き換えられます（仕様 §15.3.1）。
 
 ## ダウンロード
 
@@ -45,6 +52,7 @@ VS Code 拡張は「拡張機能」ビューの `…` → 「VSIX からのイ�
 ras init myproject --workbook Book.xlsm   # ras.toml・src/main.ras・空のマクロ有効ブックを作成
 cd myproject
 ras check                                 # 型チェックとリント
+ras check --fix                           # 機械的に直せる警告（VBA の綴りの名前など）をソースに書き戻す
 ras build                                 # build/ に .bas / .cls / .rasmap を出力
 ras pack                                  # Excel を起動せず、Book.xlsm の VBA プロジェクトへ直接書き込む
 ras watch                                 # 変更を監視して再ビルド（ブックが閉じていれば pack も行う）
@@ -92,9 +100,9 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §2 型・数値リテラル・型変換 | 実装済み | `long` を `#If Win64` の外で使った場合のエラーは未実装（宣言の条件付き出力のみ） |
 | §2.4 ジェネリクス | 実装済み | 関数・拡張メソッド・クラス。クラス内のジェネリックメソッドは未対応（エラー） |
 | §3 関数・`byref`・拡張メソッド | 実装済み | |
-| §4 ラムダ（ループ融合・クロージャクラス） | 実装済み | `map` / `filter` / `forEach` / `reduce` / `some` / `every` / `find` / `findIndex`。配列・文字列メソッドは仕様 §3.2.4 の「標準ライブラリの拡張メソッド」ではなくコンパイラ組み込みとして実装 |
+| §4 ラムダ（ループ融合・クロージャクラス） | 実装済み | `map` / `filter` / `forEach` / `reduce` / `some` / `every` / `find` / `findIndex`。ホストのコレクション（`worksheets` など、§4.4）でも同じメソッドと `toArray()` を使える。`filter` の後段のコールバックが受け取る通し番号は、絞り込み後ではなく元の並びでの番号になる（JavaScript・デバッグ実行と異なる）。配列・文字列メソッドは仕様 §3.2.4 の「標準ライブラリの拡張メソッド」ではなくコンパイラ組み込みとして実装 |
 | §5 `try` / `catch` / `finally` / `using` / `throw` | 実装済み | catch 本体はハンドラ内ではなく `Resume` 後のラベルで実行する（同一プロシージャ内の外側 `try` へ再送出を届けるため） |
-| §6 リンター | 一部 | ルール 1〜6・8〜10 は実装。7（予約語のリネーム）は自動リネームのみで警告なし、11 は変換のみで通知なし |
+| §6 リンター | 一部 | ルール 1〜6・8〜10・14 は実装。7（予約語のリネーム）は自動リネームのみで警告なし、11 は変換のみで通知なし |
 | §7 CLI・VS Code 拡張 | 一部 | 上の表のとおり |
 | §8 インライン展開・ループ最適化 | 一部 | `inline`、ループ内自動展開、評価順序の保存、`For...Next` 化、`$` 付き関数は実装。ループ不変式の巻き上げ（上限式以外）・`With` 化・文字列バッファは未実装 |
 | §9 Range ⇔ 配列の一括転送 | 実装済み | `@bulk` の「既存内容を読んでから書き戻す」方式は未実装（条件 5 を満たさないループは変換しない） |
@@ -105,9 +113,9 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §14.1〜14.8 ライブ同期（RASBridge） | **未実装** | ドリフト検出用ハッシュ、ソースマップ、`Erl` 行番号は実装済み |
 | §14.9 オフライン書き込み・読み出し | 実装済み | 新規ユーザーフォームの作成と再署名は未実装。`vba/` の非管理モジュールをブックへ書き戻す処理は未実装（取り出しのみ） |
 | §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | Excel への接続（`ras_com.node`）は Excel 2021（64bit）の実機で確認済み。ダイアログの監視（§14.10.6）は Excel の無い Windows 上の CI でメッセージ ボックスを相手に確認しており、Excel の実機では未確認。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。`super` 呼び出しを伴う継承は対象外 |
-| §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱。`ras typegen` と `vba:` インポートは未実装 |
+| §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱し、メンバーとグローバルを camelCase で参照する（§15.3.1）。`ras typegen` と `vba:` インポートは未実装 |
 | §16.1 JSDoc | 実装済み | 生成 VBA へのコメント・`VB_Description` 出力、`@param` 名の検査 |
-| §16.2 IntelliSense（LSP） | 一部 | 診断・補完・ホバー・定義へ移動・シンボル一覧・整形・CodeLens・「生成 VBA を表示」は実装。パラメーター情報・参照検索・名前変更・インレイヒント・セマンティックトークン・コードアクション・未インポート候補は未実装 |
+| §16.2 IntelliSense（LSP） | 一部 | 診断・補完・ホバー・定義へ移動・シンボル一覧・整形・CodeLens・「生成 VBA を表示」と、VBA の綴りの名前を直すクイックフィックスは実装。パラメーター情報・参照検索・名前変更・インレイヒント・セマンティックトークン・その他のコードアクション・未インポート候補は未実装 |
 | §17 採用ライブラリ | 一部 | `salsa`（増分計算。現状は変更のたびに全体を再解析）・`line-index`・`annotate-snippets`・`rayon`・`insta`・`lsp-types`・`windows` は未使用 |
 
 仕様の例と出力が異なる点:

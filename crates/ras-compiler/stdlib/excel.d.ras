@@ -2,10 +2,15 @@
 //
 // 方針:
 //   - 型は Excel のタイプ ライブラリに合わせる。Variant は `any`、Object は `object`、
-//     Long は `int`、Single は `float`。タイプ ライブラリより厳密な型は付けない。
+//     Long は `int`、Single は `float`。タイプ ライブラリより厳密な型は付けない（`Sheets<T>` を除く）。
 //   - VBA で「引数を取れるプロパティ」（Cells / Range / Offset / Address など）はメソッド構文で宣言する。
 //     引数がすべて省略可能で戻り値が void でないものは、括弧なし（`ws.Cells`）でも使える。
 //   - 既定メンバー（Item）は呼び出しシグネチャ `(index: any): T` で表す。
+//   - 名前はタイプ ライブラリの綴り（PascalCase）で書く。RAS のソースからは、メンバーとグローバルが
+//     camelCase（`Cells` → `cells`、`ScreenUpdating` → `screenUpdating`）で見える（仕様 §15.3.1）。
+//     生成される VBA にはここに書いた綴りが出力される。
+//   - `Sheets<T>` の `T` は要素の型。`Worksheets` はタイプ ライブラリ上は Object を返すが、
+//     ワークシートしか含まないため `Sheets<Worksheet>` とする。`T` を省略すると `object`。
 //   - Variant を返すが戻り値に意味がない操作系メソッド（Select / Copy / Clear など）は void とする。
 //   - JSDoc の要約は独自に書いたもの。詳細は @see の Microsoft リファレンスを参照。
 //   - 列挙定数の値はタイプ ライブラリの実値。定数名は VBA と同じく修飾なしで参照できる。
@@ -168,7 +173,7 @@ declare namespace Excel {
          * アクティブ ブックのすべてのワークシート。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.worksheets
          */
-        readonly Worksheets: Sheets;
+        readonly Worksheets: Sheets<Worksheet>;
 
         /**
          * アクティブ ブックのすべてのシート（グラフ シートを含む）。
@@ -180,7 +185,7 @@ declare namespace Excel {
          * アクティブ ブックのすべてのグラフ シート。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.charts
          */
-        readonly Charts: Sheets;
+        readonly Charts: Sheets<Chart>;
 
         /**
          * すべてのウィンドウのコレクション。
@@ -673,7 +678,7 @@ declare namespace Excel {
          * ブック内のすべてのワークシート。
          * @see https://learn.microsoft.com/office/vba/api/excel.workbook.worksheets
          */
-        readonly Worksheets: Sheets;
+        readonly Worksheets: Sheets<Worksheet>;
 
         /**
          * ブック内のすべてのシート（グラフ シートを含む）。
@@ -827,7 +832,7 @@ declare namespace Excel {
 
         // その他のメンバー
         readonly ActiveChart: Chart;
-        readonly Charts: Sheets;
+        readonly Charts: Sheets<Chart>;
         readonly Styles: object;
         readonly HasPassword: boolean;
         Password: string;
@@ -859,18 +864,18 @@ declare namespace Excel {
      * ブック内のシート（ワークシート / グラフ シート）のコレクション。
      * @see https://learn.microsoft.com/office/vba/api/excel.sheets
      */
-    interface Sheets {
+    interface Sheets<T> {
         /**
-         * インデックスまたはシート名でシートを返す（既定メンバー）。戻り値は Object 型。
+         * インデックスまたはシート名でシートを返す（既定メンバー）。
          * @see https://learn.microsoft.com/office/vba/api/excel.sheets.item
          */
-        (index: any): object;
+        (index: any): T;
 
         /**
          * インデックスまたはシート名でシートを返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.sheets.item
          */
-        Item(index: any): object;
+        Item(index: any): T;
 
         /**
          * シートの数。
@@ -882,7 +887,7 @@ declare namespace Excel {
          * 新しいシートを追加してアクティブにする。
          * @see https://learn.microsoft.com/office/vba/api/excel.sheets.add
          */
-        Add(before?: any, after?: any, count?: any, type?: any): object;
+        Add(before?: any, after?: any, count?: any, type?: any): T;
 
         /**
          * シートをコピーする。位置を省略すると新しいブックに作られる。
@@ -5510,10 +5515,10 @@ declare const Selection: object;
 declare const Workbooks: Excel.Workbooks;
 
 /**
- * アクティブ ブックのすべてのワークシート。`Worksheets("名前")` の結果は Object 型。
+ * アクティブ ブックのすべてのワークシート。
  * @see https://learn.microsoft.com/office/vba/api/excel.application.worksheets
  */
-declare const Worksheets: Excel.Sheets;
+declare const Worksheets: Excel.Sheets<Excel.Worksheet>;
 
 /**
  * アクティブ ブックのすべてのシート（グラフ シートを含む）。
