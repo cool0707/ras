@@ -67,7 +67,7 @@ impl<'p> Lowerer<'p> {
         match &arg.peel().kind {
             ExprKind::Arrow(a) => Callback::Arrow(arg.peel(), a),
             _ => {
-                // A function-typed value: evaluate the closure once, call `Invoke` per element.
+                // A function-typed value: evaluate the closure once, call `Apply` per element.
                 let arity = match self.ty(arg) {
                     Type::Func(f) => f.params.len(),
                     _ => usize::MAX,
@@ -82,7 +82,7 @@ impl<'p> Lowerer<'p> {
     fn apply_cb(&mut self, cb: &Callback, vals: Vec<(VExpr, Type)>, want: bool) -> VExpr {
         match cb {
             Callback::Obj(o, arity) => {
-                let target = o.clone().member("Invoke");
+                let target = o.clone().member("Apply");
                 // A late-bound call with extra arguments fails at run time.
                 let args: Vec<VExpr> = vals.into_iter().take(*arity).map(|v| v.0).collect();
                 if want {
@@ -392,7 +392,7 @@ impl<'p> Lowerer<'p> {
         }
     }
 
-    /// A lambda that escapes becomes a class module with an `Invoke` method (spec §4.3).
+    /// A lambda that escapes becomes a class module with an `Apply` method (spec §4.3).
     pub(crate) fn closure_value(&mut self, e: &Expr, arrow: &ast::ArrowFn) -> VExpr {
         let info = self.info();
         self.lambda_n += 1;
@@ -455,11 +455,11 @@ impl<'p> Lowerer<'p> {
         self.pc.emit_module = saved.emit_module;
         self.pc.in_closure = true;
         self.pc.exit_kw = "Function";
-        self.pc.proc_name = "Invoke".into();
+        self.pc.proc_name = "Apply".into();
         self.pc.ret_ty = ret_ty.clone();
         self.pc.display_name = saved.display_name.clone();
         self.pc.blocks.push(Vec::new());
-        self.pc.names.insert("invoke".into());
+        self.pc.names.insert("apply".into());
         let mut frame = Frame { module: outer.module, fn_id: outer.fn_id, env: outer.env.clone(), locals: HashMap::new(), this: body_uses_this.then(|| lit("Me").member("Captured_Me")), inl: None };
         for (l, field, _, _) in &caps {
             self.pc.names.insert(field.to_lowercase());
@@ -484,7 +484,7 @@ impl<'p> Lowerer<'p> {
                 } else {
                     let bt = self.ty(b);
                     let v = self.expr(b);
-                    self.store(&name("Invoke"), &ret_ty, v, &bt);
+                    self.store(&name("Apply"), &ret_ty, v, &bt);
                 }
             }
             ArrowBody::Block(b) => {
@@ -515,7 +515,7 @@ impl<'p> Lowerer<'p> {
         if body_uses_this {
             self.out[ci].decls.push("Public Captured_Me As Object".into());
         }
-        self.out[ci].procs.push(VProc { kind: ProcKind::Function, public: true, name: "Invoke".into(), params: vparams, ret: Some("Variant".into()), locals, body, leading_comments: vec![], attributes: vec![], source: Some(0) });
+        self.out[ci].procs.push(VProc { kind: ProcKind::Function, public: true, name: "Apply".into(), params: vparams, ret: Some("Variant".into()), locals, body, leading_comments: vec![], attributes: vec![], source: Some(0) });
 
         let t = VExpr::Name(self.temp(&Type::Object));
         self.emit(set(t.clone(), lit(format!("New {cname}"))));

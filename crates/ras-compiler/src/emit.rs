@@ -213,7 +213,7 @@ fn finish(m: &VModule, code: String, mappings: Vec<Mapping>, codepage: u16, diag
         }
     }
     let body: String = lines.iter().map(|l| format!("{l}\r\n")).collect();
-    let hash = crc32fast::hash(body.as_bytes());
+    let hash = drift_hash(&body);
     let code = if m.kind == VModuleKind::Document { body } else { format!("' RAS-GENERATED hash={hash:08X}\r\n{body}") };
     let full_text = format!("{}{}", file_header(m), code);
     OutputFile { name: m.name.clone(), kind: m.kind.clone(), file_name: file_name(m), code, full_text, sources: m.sources.clone(), mappings: new_mappings, hash }
@@ -230,7 +230,59 @@ pub fn recorded_hash(code: &str) -> Option<u32> {
 pub fn has_drifted(code: &str) -> Option<bool> {
     let recorded = recorded_hash(code)?;
     let normalized: String = code.replace("\r\n", "\n").lines().skip_while(|l| !l.starts_with("' RAS-GENERATED")).skip(1).map(|l| format!("{l}\r\n")).collect();
-    Some(crc32fast::hash(normalized.as_bytes()) != recorded)
+    Some(drift_hash(&normalized) != recorded)
+}
+
+/// Hash of module code that ignores what the VBE rewrites by itself when a book is saved:
+/// the casing of identifiers (unified across the project, e.g. `Err.Source` -> `Err.source`
+/// once a class declares `source`) and the spelling of numeric literals (`0.1#` -> `0.1`,
+/// `1.0E+20` -> `1E+20`). String literals and comments are hashed as written.
+fn drift_hash(code: &str) -> u32 {
+    let mut out = String::with_capacity(code.len());
+    for line in code.split("\r\n") {
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        let mut in_string = false;
+        while i < chars.len() {
+            let c = chars[i];
+            if in_string {
+                out.push(c);
+                in_string = c != '"';
+                i += 1;
+            } else if c == '"' {
+                out.push(c);
+                in_string = true;
+                i += 1;
+            } else if c == '\'' {
+                out.extend(&chars[i..]);
+                break;
+            } else if c.is_ascii_digit() && !(i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_')) {
+                let start = i;
+                while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
+                    i += 1;
+                }
+                if i < chars.len() && matches!(chars[i], 'E' | 'e' | 'D' | 'd') && chars.get(i + 1).is_some_and(|n| n.is_ascii_digit() || *n == '+' || *n == '-') {
+                    i += 2;
+                    while i < chars.len() && chars[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                }
+                let text: String = chars[start..i].iter().collect::<String>().replace(['D', 'd'], "E");
+                if i < chars.len() && matches!(chars[i], '#' | '!' | '@' | '&' | '%' | '^') {
+                    i += 1;
+                }
+                match text.parse::<f64>() {
+                    Ok(v) => out.push_str(&v.to_string()),
+                    Err(_) => out.push_str(&text),
+                }
+            } else {
+                out.push(c.to_ascii_lowercase());
+                i += 1;
+            }
+        }
+        out.push('\n');
+    }
+    crc32fast::hash(out.as_bytes())
 }
 
 pub fn finalize(prog: &Program, lowered: &Lowered, opts: &EmitOptions) -> (Vec<OutputFile>, Vec<Diagnostic>) {
@@ -299,9 +351,22 @@ mod tests {
     #[test]
     fn drift_detection() {
         let body = "Option Explicit\r\nSub A()\r\nEnd Sub\r\n";
-        let code = format!("' RAS-GENERATED hash={:08X}\r\n{body}", crc32fast::hash(body.as_bytes()));
+        let code = format!("' RAS-GENERATED hash={:08X}\r\n{body}", drift_hash(body));
         assert_eq!(has_drifted(&code), Some(false));
         assert_eq!(has_drifted(&code.replace("Sub A", "Sub B")), Some(true));
         assert_eq!(has_drifted("Sub A()\r\nEnd Sub\r\n"), None);
+    }
+
+    #[test]
+    fn drift_ignores_what_the_vbe_rewrites_on_save() {
+        // Generated text, and the same code as Excel stores it after a save without edits.
+        let body = "Private Const R As Double = 0.1#\r\nSub A()\r\n    Err.Raise Err.Number, Err.Source, \"Msg\"\r\n    x = RAS_NumStr(0.1# + 0.2#) & RAS_NumStr(1.0E+20) & 7# & (v And &H3FFFFFFF)\r\nEnd Sub\r\n";
+        let saved = "Private Const R As Double = 0.1\r\nSub A()\r\n    Err.Raise Err.Number, Err.source, \"Msg\"\r\n    x = RAS_NumStr(0.1 + 0.2) & RAS_NumStr(1E+20) & 7# & (v And &H3FFFFFFF)\r\nEnd Sub\r\n";
+        let code = format!("' RAS-GENERATED hash={:08X}\r\n{saved}", drift_hash(body));
+        assert_eq!(has_drifted(&code), Some(false));
+        // Real edits are still found: values, string contents, comments.
+        assert_eq!(has_drifted(&code.replace("0.1\r\n", "0.2\r\n")), Some(true));
+        assert_eq!(has_drifted(&code.replace("\"Msg\"", "\"msg\"")), Some(true));
+        assert_eq!(has_drifted(&code.replace("Sub A()\r\n", "Sub A() ' note\r\n")), Some(true));
     }
 }

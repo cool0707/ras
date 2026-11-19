@@ -142,10 +142,15 @@ fn workbook_path(root: &Path, cfg: &Config, explicit: Option<&Path>) -> Option<P
 }
 
 /// Loads and analyses the project. Sheet code names come from the workbook when it can be read.
+/// `book` is a path already resolved with [`workbook_path`]; without it the project's workbook is used.
 fn analyze(root: &Path, args: &BuildArgs, book: Option<&Path>) -> Result<Program, String> {
     let (mut cfg, sources) = ras_compiler::load_project(root)?;
     cfg.opt_override = args.opt.or(if args.release { Some(cfg.build.opt_level.max(2)) } else { None });
-    if let Some(book) = workbook_path(root, &cfg, book) {
+    let book = match book {
+        Some(b) => Some(b.to_path_buf()),
+        None => workbook_path(root, &cfg, None),
+    };
+    if let Some(book) = book {
         if book.is_file() {
             match ras_ovba::workbook_code_names(&book) {
                 Ok(names) => cfg.sheet_code_names = names.sheets.into_iter().map(|s| s.code_name).collect(),

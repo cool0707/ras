@@ -217,6 +217,7 @@ fn module_kind(
     match source::attribute_value(source_text, "VB_Base") {
         // A designer's base is `0{clsid}{clsid}`; a document's is `0{clsid}`.
         Some(base) if base.matches('{').count() >= 2 => ModuleKind::Form,
+        Some(base) if base.eq_ignore_ascii_case(source::VB_BASE_CLASS) => ModuleKind::Class,
         Some(_) => ModuleKind::Document,
         None => {
             if find_child(tree, &[], &record.stream_name, true).is_some() {

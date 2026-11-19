@@ -197,10 +197,10 @@ function demo(arr: double[]): double[] {
     let (prog, out) = compile(&[("m", src)]);
     let cls = code(&out, "RAS_Lambda_001");
     assert_contains(&cls, "Public Captured_base As Long\n");
-    assert_contains(&cls, "Public Function Invoke(ByVal x As Variant) As Variant\n    Invoke = x * Me.Captured_base\nEnd Function\n");
+    assert_contains(&cls, "Public Function Apply(ByVal x As Variant) As Variant\n    Apply = x * Me.Captured_base\nEnd Function\n");
     let m = code(&out, "M");
     assert_contains(&m, "    Set ras_t1 = New RAS_Lambda_001\n    ras_t1.Captured_base = base\n");
-    assert_contains(&m, "f.Invoke(arr(ras_i))");
+    assert_contains(&m, "f.Apply(arr(ras_i))");
     // The user is told that this lambda is slow.
     assert!(prog.diagnostics.iter().chain(out.diagnostics.iter()).any(|d| d.code == "I0641"));
 }
@@ -600,21 +600,22 @@ export function demo(): double {
     let mut cfg = config();
     cfg.doevents.enabled = false;
     let (_, out) = compile_with(&[("shapes", src)], cfg);
-    let cls = code(&out, "Circle");
+    // `Circle` is a VBA keyword (a syntax error as a type name), so the class becomes `Circle_`.
+    let cls = code(&out, "Circle_");
     assert_contains(&cls, "Implements Shape\n");
     assert_contains(&cls, "Public radius As Double\n");
     assert_contains(&cls, "Private Sub Class_Initialize()\n    radius = 1#\nEnd Sub\n");
-    assert_contains(&cls, "Public Sub RAS_Init(ByVal r As Double)\n    radius = r\n    Shapes.Circle_count = Shapes.Circle_count + 1&\nEnd Sub\n");
+    assert_contains(&cls, "Public Sub RAS_Init(ByVal r As Double)\n    radius = r\n    Shapes.Circle__count = Shapes.Circle__count + 1&\nEnd Sub\n");
     assert_contains(&cls, "Public Property Get diameter() As Double\n    diameter = radius * 2&\nEnd Property\n");
     assert_contains(&cls, "Private Function Shape_area() As Double\n    Shape_area = Me.area\nEnd Function\n");
     let iface = code(&out, "Shape");
     assert_contains(&iface, "Public Function area() As Double\nEnd Function\n");
     let m = code(&out, "Shapes");
     assert_contains(&m, "Private Enum Color\n    Color_Red = 0\n    Color_Green = 5\n    Color_Blue = 6\nEnd Enum\n");
-    assert_contains(&m, "Public Circle_count As Long\n");
-    assert_contains(&m, "Public Function New_Circle(ByVal r As Double) As Circle\n    Set New_Circle = New Circle\n    New_Circle.RAS_Init r\nEnd Function\n");
-    assert_contains(&m, "Public Function Circle_made() As Long\n    Circle_made = Shapes.Circle_count\nEnd Function\n");
-    assert_contains(&m, "    demo = total + c.diameter + Shapes.Circle_made() + 6&\n");
+    assert_contains(&m, "Public Circle__count As Long\n");
+    assert_contains(&m, "Public Function New_Circle_(ByVal r As Double) As Circle_\n    Set New_Circle_ = New Circle_\n    New_Circle_.RAS_Init r\nEnd Function\n");
+    assert_contains(&m, "Public Function Circle__made() As Long\n    Circle__made = Shapes.Circle__count\nEnd Function\n");
+    assert_contains(&m, "    demo = total + c.diameter + Shapes.Circle__made() + 6&\n");
     // Missing interface members are reported.
     assert_eq!(error_codes(&[("m", "interface A { run(): void; }\nclass B implements A {}\n")]), vec!["E0340"]);
 }

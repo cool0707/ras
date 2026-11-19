@@ -633,7 +633,27 @@ impl<'p> Lowerer<'p> {
 
     fn map_get(&mut self, d: VExpr, k: VExpr, vty: &Type) -> VExpr {
         // `d(k)` would silently add a missing key.
-        call(if vty.is_object() { "RAS_MapGetObj" } else { "RAS_MapGet" }, vec![d, k])
+        if vty.is_object() {
+            return call("RAS_MapGetObj", vec![d, k]);
+        }
+        let v = call("RAS_MapGet", vec![d, k]);
+        // A missing key yields the zero value of the value type, not Empty (`CStr(Empty)` is "", not "0").
+        let conv = match vty {
+            Type::Int | Type::Enum(_) => "CLng",
+            Type::Short => "CInt",
+            Type::Byte => "CByte",
+            Type::Long => "CLngLng",
+            Type::Double => "CDbl",
+            Type::Float => "CSng",
+            Type::Currency => "CCur",
+            Type::Decimal => "CDec",
+            Type::Date => "CDate",
+            Type::Ptr => "CLngPtr",
+            Type::Bool => "CBool",
+            Type::Str => "CStr",
+            _ => return v,
+        };
+        call(conv, vec![v])
     }
 
     /// Lowers an assignment target to a VBA l-value plus its type.
@@ -1315,7 +1335,7 @@ impl<'p> Lowerer<'p> {
                 let o = self.expr(callee);
                 let refs: Vec<&Expr> = args.iter().collect();
                 let argv = self.operands(&refs);
-                self.finish_call(o.member("Invoke"), argv, want, false)
+                self.finish_call(o.member("Apply"), argv, want, false)
             }
             CallTarget::Dynamic | CallTarget::Ctor(_) => {
                 let target = match &c.kind {

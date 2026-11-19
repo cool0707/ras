@@ -51,6 +51,9 @@ fn init_build_pack_unpack_round_trip() {
     let (ok, out) = ras(&dir, &["pack"]);
     assert!(ok, "{out}");
     assert!(out.contains("作成 0 / 更新 0 / 削除 0"), "second pack must be a no-op: {out}");
+    // A relative `--project`: the sheet code names are still read from the workbook.
+    let (ok, out) = ras(dir.parent().unwrap(), &["--project", dir.file_name().unwrap().to_str().unwrap(), "pack"]);
+    assert!(ok && out.contains("作成 0 / 更新 0 / 削除 0"), "{out}");
 
     // Read the workbook back with the offline reader.
     let book = ras_ovba::unpack(&dir.join("Book.xlsm")).unwrap();

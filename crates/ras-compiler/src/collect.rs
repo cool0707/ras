@@ -40,7 +40,13 @@ pub fn vba_module_name(key: &str) -> String {
     if out.is_empty() || out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
         out.insert_str(0, "Mod");
     }
-    out.chars().take(31).collect()
+    let out: String = out.chars().take(31).collect();
+    // `circle.ras` must not become a module named `Circle` (a syntax error wherever it is referenced).
+    if crate::names::is_reserved(&out) {
+        format!("{out}_")
+    } else {
+        out
+    }
 }
 
 /// Evaluates a constant integer expression (enum values, array sizes).

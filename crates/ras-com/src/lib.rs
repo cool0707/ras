@@ -87,20 +87,25 @@ fn com_error(number: i32, source: &str, description: &str) -> Error {
     Error::new(Status::GenericFailure, format!("RASCOM{{\"number\":{number},\"source\":{},\"description\":{}}}", json_string(source), json_string(description)))
 }
 
-/// VBA error number of a failed call that did not raise an exception of its own.
-fn hresult_error(hr: HRESULT, what: &str) -> Error {
-    let number = match hr.0 {
+/// The VBA error number VBA reports for a standard dispatch HRESULT; other values unchanged.
+fn vba_number(hr: i32) -> i32 {
+    match hr {
         DISP_E_UNKNOWNNAME | DISP_E_MEMBERNOTFOUND => 438,
         DISP_E_TYPEMISMATCH => 13,
         DISP_E_OVERFLOW => 6,
         DISP_E_BADINDEX => 9,
         DISP_E_BADPARAMCOUNT => 450,
         DISP_E_PARAMNOTFOUND => 448,
-        RPC_E_CALL_REJECTED | RPC_E_SERVERCALL_RETRYLATER => {
-            return com_error(hr.0, "RAS", "Excel が応答しません（セルの編集中か、ダイアログが開いています）。Excel 側の操作を終えてからもう一度実行してください");
-        }
         other => other,
-    };
+    }
+}
+
+/// VBA error number of a failed call that did not raise an exception of its own.
+fn hresult_error(hr: HRESULT, what: &str) -> Error {
+    if hr.0 == RPC_E_CALL_REJECTED || hr.0 == RPC_E_SERVERCALL_RETRYLATER {
+        return com_error(hr.0, "RAS", "Excel が応答しません（セルの編集中か、ダイアログが開いています）。Excel 側の操作を終えてからもう一度実行してください");
+    }
+    let number = vba_number(hr.0);
     let detail = hr.message();
     com_error(number, "", &if what.is_empty() { detail } else { format!("{what}: {detail}") })
 }
@@ -409,13 +414,14 @@ fn invoke(disp: &IDispatch, id: i32, name: &str, flags: DISPATCH_FLAGS, mut args
                         let source = ManuallyDrop::take(&mut ex.bstrSource).to_string();
                         let description = ManuallyDrop::take(&mut ex.bstrDescription).to_string();
                         drop(ManuallyDrop::take(&mut ex.bstrHelpFile));
-                        // Automation errors of FACILITY_CONTROL carry the VBA error number in the low word.
+                        // Automation errors of FACILITY_CONTROL carry the VBA error number in the low word;
+                        // a dispatch HRESULT (e.g. `Worksheets("missing")` -> DISP_E_BADINDEX) maps as in VBA.
                         let number = if ex.wCode != 0 {
                             ex.wCode as i32
                         } else if (ex.scode as u32) & 0xFFFF_0000 == 0x800A_0000 {
                             ex.scode & 0xFFFF
                         } else {
-                            ex.scode
+                            vba_number(ex.scode)
                         };
                         break Err(com_error(number, &source, &description));
                     }

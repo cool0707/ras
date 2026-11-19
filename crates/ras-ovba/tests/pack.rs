@@ -20,7 +20,7 @@ const CT_XLAM: &str = "application/vnd.ms-excel.addin.macroEnabled.main+xml";
 const REL_VBA: &str = "http://schemas.microsoft.com/office/2006/relationships/vbaProject";
 
 const JP_SOURCE: &str = "Option Explicit\r\n\r\n' 売上を集計する\r\nPublic Function 合計(ByVal 範囲 As Range) As Double\r\n    合計 = WorksheetFunction.Sum(範囲) ' ｶﾅ も OK\r\nEnd Function\r\n";
-const CLASS_SOURCE: &str = "Attribute VB_Name = \"Counter\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = False\r\nOption Explicit\r\nPrivate n As Long\r\nPublic Sub Inc()\r\n    n = n + 1\r\nEnd Sub\r\n";
+const CLASS_SOURCE: &str = "Attribute VB_Name = \"Counter\"\r\nAttribute VB_Base = \"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = False\r\nAttribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = False\r\nOption Explicit\r\nPrivate n As Long\r\nPublic Sub Inc()\r\n    n = n + 1\r\nEnd Sub\r\n";
 
 fn doc_header(name: &str, class_id: &str) -> String {
     format!("Attribute VB_Name = \"{name}\"\r\nAttribute VB_Base = \"0{{{class_id}-0000-0000-C000-000000000046}}\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = True\r\nAttribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = True\r\n")
