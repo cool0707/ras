@@ -360,17 +360,6 @@ impl<'p> Lowerer<'p> {
         i
     }
 
-    fn is_macro_entry(&self, f: &FnDef) -> bool {
-        if f.is_generic() || !f.attrs.on_events.is_empty() || f.attrs.init || f.attrs.udf {
-            return false;
-        }
-        match f.kind {
-            FnKind::Main => true,
-            FnKind::Free => f.attrs.macro_entry || (f.exported && f.params.is_empty() && f.ret_ty() == Type::Void),
-            _ => false,
-        }
-    }
-
     fn emit_module(&mut self, m: ModuleId) {
         let prog = self.prog;
         let md = &prog.modules[m];
@@ -1023,7 +1012,7 @@ impl<'p> Lowerer<'p> {
             self.fn_procs.entry(f).or_default().push((mi, name));
             self.out[mi].procs.push(p);
         }
-        if self.is_macro_entry(def) {
+        if def.is_macro_entry() {
             self.macros.push(format!("{}.{}", prog.modules[def.module].vba_name, names::member_ident(&def.name)));
         }
     }
@@ -1094,7 +1083,7 @@ impl<'p> Lowerer<'p> {
             (_, Type::Void) => (ProcKind::Sub, "Sub"),
             _ => (ProcKind::Function, "Function"),
         };
-        let entry = self.is_macro_entry(def);
+        let entry = def.is_macro_entry();
         let fast = def.attrs.fast;
         self.pc.exit_kw = exit_kw;
         self.pc.proc_name = name.clone();

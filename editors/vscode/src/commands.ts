@@ -33,7 +33,8 @@ export function registerCommands(server: RasServer, vbaView: GeneratedVbaView): 
 			const result = await withProgress("RAS: Excel で開いています…", () => server.execute(SERVER_COMMANDS.openInExcel));
 			showResult(result, "Excel で開きました。", "Excel で開けませんでした。");
 		}),
-		command("ras.client.runMacro", "マクロを実行", () => runMacro(server)),
+		// The run lens above a function passes its macro name (`Module.Proc`).
+		command("ras.client.runMacro", "マクロを実行", (name) => runMacro(server, typeof name === "string" ? name : undefined)),
 		command("ras.restartServer", "言語サーバーを再起動", async () => {
 			if (!vscode.workspace.isTrusted) {
 				void vscode.window.showInformationMessage("RAS 言語サーバーは、ワークスペースを信頼すると起動します。");
@@ -89,19 +90,25 @@ function driftedModules(result: unknown): string[] {
 	return Array.isArray(drifted.drifted) ? drifted.drifted.filter((name): name is string => typeof name === "string") : [];
 }
 
-async function runMacro(server: RasServer): Promise<void> {
-	const listed = await server.execute(SERVER_COMMANDS.listMacros);
-	const macros = Array.isArray(listed) ? listed.filter((name): name is string => typeof name === "string") : [];
-	if (macros.length === 0) {
-		void vscode.window.showInformationMessage("実行できるマクロがありません。");
-		return;
-	}
-	const macro = await vscode.window.showQuickPick(macros, { title: "RAS: マクロを実行", placeHolder: "実行するマクロを選択してください" });
+async function runMacro(server: RasServer, name: string | undefined): Promise<void> {
+	// The macro runs from the saved sources, which the server syncs to the workbook first.
+	await vscode.workspace.saveAll(false);
+	const macro = name ?? (await pickMacro(server));
 	if (macro === undefined) {
 		return;
 	}
 	const result = await withProgress(`RAS: ${macro} を実行しています…`, () => server.execute(SERVER_COMMANDS.runMacro, [macro]));
 	showResult(result, `${macro} を実行しました。`, `${macro} の実行に失敗しました。`);
+}
+
+async function pickMacro(server: RasServer): Promise<string | undefined> {
+	const listed = await server.execute(SERVER_COMMANDS.listMacros);
+	const macros = Array.isArray(listed) ? listed.filter((name): name is string => typeof name === "string") : [];
+	if (macros.length === 0) {
+		void vscode.window.showInformationMessage("実行できるマクロがありません。");
+		return undefined;
+	}
+	return vscode.window.showQuickPick(macros, { title: "RAS: マクロを実行", placeHolder: "実行するマクロを選択してください" });
 }
 
 /** The RAS editor a command applies to: the one a menu was invoked on, else the active one. */

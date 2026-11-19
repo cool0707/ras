@@ -8,6 +8,9 @@ export type ServerState = "stopped" | "starting" | "running";
 /** Server → client notification that drives the status bar. */
 const SYNC_STATUS_NOTIFICATION = "ras/syncStatus";
 
+/** Commands of the run / debug lenses the server puts above functions that can be started. */
+const RUN_LENS_COMMANDS = new Set(["ras.client.runMacro", "ras.debug.start"]);
+
 /** Thrown by {@link RasServer.execute} when there is no server to talk to. */
 export class ServerNotRunningError extends Error {
 	constructor() {
@@ -129,6 +132,16 @@ export class RasServer implements vscode.Disposable {
 			documentSelector: [{ language: "ras" }],
 			synchronize: { fileEvents: this.watchers },
 			outputChannel: this.output,
+			middleware: {
+				// The run / debug lenses above functions can be turned off with `ras.codeLens.run`.
+				provideCodeLenses: async (document, token, next) => {
+					const lenses = await next(document, token);
+					if (lenses && !vscode.workspace.getConfiguration("ras", document).get<boolean>("codeLens.run", true)) {
+						return lenses.filter((lens) => !RUN_LENS_COMMANDS.has(lens.command?.command ?? ""));
+					}
+					return lenses;
+				},
+			},
 			// A failed start is reported once, below, with a way to fix `ras.path`.
 			initializationFailedHandler: () => false,
 			errorHandler: {
