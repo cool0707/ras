@@ -31,6 +31,65 @@ class RasError extends Error {
         this.rasFile = "";
         this.rasLine = 0;
         Object.defineProperty(this, "message", { get: () => this.description, configurable: true });
+        settle(this);
+    }
+}
+
+// Runtime frames are dropped from RAS stack traces, so leave room for the RAS ones.
+if (Error.stackTraceLimit < 50) Error.stackTraceLimit = 50;
+
+/** Path of a source file relative to the project root (`src/main.ras`), when it is inside it. */
+function projectPath(file) {
+    const path = require("path");
+    const abs = String(file).replace(/^file:\/\//, "");
+    const rel = path.relative(path.resolve(config.root), abs);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return abs;
+    return rel.split(path.sep).join("/");
+}
+
+/**
+ * Keeps only the RAS frames of a stack trace (no runtime, launcher or Node.js internals),
+ * with paths relative to the project root.
+ */
+function rasStack(stack) {
+    const lines = String(stack).split("\n");
+    const first = lines.findIndex((l) => /^\s+at /.test(l));
+    if (first < 0) return stack;
+    let frames = lines.slice(first).filter((l) => /\.ras:\d+:\d+\)?$/.test(l));
+    // Without source maps the frames name the generated .js files: drop only the run time's.
+    if (!frames.length) frames = lines.slice(first).filter((l) => !/ras-runtime\.js:|ras-main\.js:|\(node:|at node:/.test(l));
+    if (!frames.length) return stack;
+    const rel = frames.map((l) => l.replace(/((?:file:\/\/)?(?:[A-Za-z]:)?[^\s():]+\.(?:ras|js))(?=:\d+:\d+\)?$)/, (f) => projectPath(f)));
+    return [...lines.slice(0, first), ...rel].join("\n");
+}
+
+/** Gives `err` the stack trace (and so the source position) of the error `from` it replaces. */
+function adoptStack(err, from) {
+    const stack = String((from && from.stack) || "");
+    const at = stack.search(/\n\s+at /);
+    if (at < 0) return;
+    err.rasFile = "";
+    err.rasLine = 0;
+    err.stack = `RasError: ${err.message}${stack.slice(at)}`;
+    settle(err);
+}
+
+/** Fills in the RAS source position of an error and tidies its stack trace. */
+function settle(err) {
+    try {
+        const stack = err.stack;
+        if (!err.rasLine) {
+            const pos = locate(stack);
+            if (pos) {
+                err.rasFile = projectPath(pos.file);
+                err.rasLine = pos.line;
+            }
+        }
+        if (typeof stack === "string") {
+            Object.defineProperty(err, "stack", { value: rasStack(stack), writable: true, configurable: true });
+        }
+    } catch {
+        // best effort only
     }
 }
 
@@ -71,6 +130,7 @@ function locate(stack) {
 /** Converts whatever was thrown into the error object a RAS `catch (e)` sees. */
 function caught(e) {
     let err;
+    e = comError(e);
     if (e instanceof RasError) {
         err = e;
     } else if (e instanceof RangeError && /call stack/i.test(e.message)) {
@@ -79,16 +139,11 @@ function caught(e) {
         err = new RasError(MESSAGES[91], 91, "RAS");
     } else if (e instanceof Error) {
         err = new RasError(e.message, 51, "RAS");
-        err.stack = e.stack;
+        err.rasFile = "";
+        err.rasLine = 0;
+        adoptStack(err, e);
     } else {
         err = new RasError(String(e), 51, "RAS");
-    }
-    if (!err.rasLine) {
-        const pos = locate(err.stack);
-        if (pos) {
-            err.rasFile = pos.file;
-            err.rasLine = pos.line;
-        }
     }
     return err;
 }
@@ -514,7 +569,9 @@ function comError(e) {
     if (at < 0) return e;
     try {
         const info = JSON.parse(text.slice(at + 6));
-        return new RasError(info.description || MESSAGES[info.number] || "オートメーション エラーです。", info.number, info.source || "");
+        const err = new RasError(info.description || MESSAGES[info.number] || "オートメーション エラーです。", info.number, info.source || config.manifest.project || "RAS");
+        adoptStack(err, e);
+        return err;
     } catch {
         return e;
     }
@@ -1354,6 +1411,12 @@ function findEntry(entry) {
 }
 /** Runs an entry point (`Module.proc`, or just `proc` when it is unambiguous). */
 function run(entry) {
+    // Report an error that escapes the entry point with its RAS frames only. The debugger
+    // still stops on it as an uncaught exception before this runs.
+    process.on("uncaughtException", (e) => {
+        console.error(require("util").inspect(caught(e)));
+        process.exitCode = 1;
+    });
     const f = findEntry(entry);
     ensureInit();
     return f();
