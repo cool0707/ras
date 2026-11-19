@@ -508,7 +508,9 @@ impl Collector {
                     id,
                     module: m,
                     name: s.name.text.clone(),
+                    kind: StructKind::Named,
                     fields: Vec::new(),
+                    optional: s.fields.iter().map(|f| f.optional).collect(),
                     doc: s.doc.clone(),
                     name_span: s.name.span,
                 });
@@ -1053,10 +1055,47 @@ pub const PRIMITIVE_NAMES: &[&str] = &[
     "object", "void",
 ];
 
-fn resolve_type_inner(prog: &Program, m: ModuleId, tps: &[TypeParamDef], t: &TypeRef, errors: &mut Vec<(Span, String)>) -> Type {
+fn resolve_type_inner(prog: &mut Program, m: ModuleId, tps: &[TypeParamDef], t: &TypeRef, errors: &mut Vec<(Span, String)>) -> Type {
     match t {
         TypeRef::Error { .. } => Type::Error,
-        TypeRef::Array { elem, .. } => Type::Array(Box::new(resolve_type_inner(prog, m, tps, elem, errors))),
+        TypeRef::Array { elem, span } => {
+            let inner = resolve_type_inner(prog, m, tps, elem, errors);
+            if inner.is_array() && inner.has_struct() {
+                errors.push((*span, "構造体の 2 次元配列には対応していません。1 次元配列（`T[]`）を使ってください".into()));
+                return Type::Error;
+            }
+            Type::Array(Box::new(inner))
+        }
+        TypeRef::Tuple { elems, span } => {
+            let tys: Vec<Type> = elems.iter().map(|e| resolve_type_inner(prog, m, tps, e, errors)).collect();
+            if tys.len() < 2 {
+                errors.push((*span, "タプル型には 2 つ以上の要素が必要です（`[int, string]`）".into()));
+                return Type::Error;
+            }
+            anon_struct(prog, m, StructKind::Tuple, tys.into_iter().enumerate().map(|(i, t)| (format!("item{i}"), t, false)).collect(), *span, errors)
+        }
+        TypeRef::Object { fields, span } => {
+            let mut out: Vec<(String, Type, bool)> = Vec::new();
+            for f in fields {
+                let ty = match &f.ty {
+                    Some(t) => resolve_type_inner(prog, m, tps, t, errors),
+                    None => {
+                        errors.push((f.span, "フィールドには型注釈が必要です".into()));
+                        Type::Error
+                    }
+                };
+                if out.iter().any(|o| o.0.eq_ignore_ascii_case(&f.name.text)) {
+                    errors.push((f.name.span, format!("フィールド `{}` が重複しています", f.name.text)));
+                    continue;
+                }
+                out.push((f.name.text.clone(), ty, f.optional));
+            }
+            if out.is_empty() {
+                errors.push((*span, "フィールドのないオブジェクト型は使えません".into()));
+                return Type::Error;
+            }
+            anon_struct(prog, m, StructKind::Object, out, *span, errors)
+        }
         TypeRef::Nullable { inner, span } => {
             let ty = resolve_type_inner(prog, m, tps, inner, errors);
             if !(ty.is_object() || matches!(ty, Type::Any | Type::Error | Type::Param(_))) {
@@ -1075,7 +1114,8 @@ fn resolve_type_inner(prog: &Program, m: ModuleId, tps: &[TypeParamDef], t: &Typ
                     }
                 })
                 .collect();
-            Type::Func(Box::new(FuncType { params: ps, ret: resolve_type_inner(prog, m, tps, ret, errors) }))
+            let ret = resolve_type_inner(prog, m, tps, ret, errors);
+            Type::Func(Box::new(FuncType { params: ps, ret }))
         }
         TypeRef::Named { path, args, span } => {
             let resolved: Vec<Type> = args.iter().map(|a| resolve_type_inner(prog, m, tps, a, errors)).collect();
@@ -1107,6 +1147,15 @@ fn resolve_type_inner(prog: &Program, m: ModuleId, tps: &[TypeParamDef], t: &Typ
                             errors.push((*span, "`Map<K, V>` の型引数は 2 つです".into()));
                             return Type::Error;
                         }
+                        if resolved[1].is_array() && resolved[1].has_struct() {
+                            errors.push((*span, "構造体の配列は `Map` の値にできません".into()));
+                            return Type::Error;
+                        }
+                        // Structs cannot live in a Dictionary (a Variant): such a map is a generated
+                        // class that keeps the values in a struct array and maps keys to indices.
+                        if let (Type::Struct(_), Some(c)) = (&resolved[1], struct_map_class(prog)) {
+                            return Type::Class(c, resolved);
+                        }
                         return Type::Map(Box::new(resolved[0].clone()), Box::new(resolved[1].clone()));
                     }
                     "Comparable" | "Numeric" | "ObjectType" => {
@@ -1121,7 +1170,7 @@ fn resolve_type_inner(prog: &Program, m: ModuleId, tps: &[TypeParamDef], t: &Typ
                     .and_then(|ns| prog.namespaces.get(ns))
                     .and_then(|n| n.get(name))
                     .filter(|s| matches!(s, Sym::Class(_) | Sym::Enum(_) | Sym::Struct(_) | Sym::Alias(_)));
-                in_ns.or_else(|| prog.modules[m].scope.get(name)).or_else(|| prog.globals.get(name)).cloned()
+                in_ns.cloned().or_else(|| prog.modules[m].scope.get(name).cloned()).or_else(|| prog.globals.get(name).cloned())
             } else if path.len() == 2 {
                 let (ns, name) = (path[0].text.as_str(), path[1].text.as_str());
                 match prog.modules[m].scope.get(ns) {
@@ -1155,6 +1204,32 @@ fn resolve_type_inner(prog: &Program, m: ModuleId, tps: &[TypeParamDef], t: &Typ
             }
         }
     }
+}
+
+/// The bundled class that implements `Map<K, V>` for struct values.
+pub fn struct_map_class(prog: &Program) -> Option<ClassId> {
+    let m = prog.module_by_key(STRUCT_MAP_MODULE)?;
+    match prog.modules[m].exports.get("RAS_StructMap") {
+        Some(Sym::Class(c)) => Some(*c),
+        _ => None,
+    }
+}
+
+pub const STRUCT_MAP_MODULE: &str = "ras_collections";
+
+fn anon_struct(prog: &mut Program, m: ModuleId, kind: StructKind, fields: Vec<(String, Type, bool)>, span: Span, errors: &mut Vec<(Span, String)>) -> Type {
+    if fields.iter().any(|f| f.1.is_error()) {
+        return Type::Error;
+    }
+    if fields.iter().any(|f| f.1.contains_param()) {
+        errors.push((span, "型パラメータを含むタプル・オブジェクト型は使えません。`struct` を宣言するか、具体的な型で書いてください".into()));
+        return Type::Error;
+    }
+    if let Some(bad) = fields.iter().find(|f| matches!(f.1, Type::Void | Type::Null | Type::Ns(_))) {
+        errors.push((span, format!("`{}` はフィールドの型にできません", prog.show(&bad.1))));
+        return Type::Error;
+    }
+    Type::Struct(prog.intern_struct(m, kind, fields))
 }
 
 #[cfg(test)]

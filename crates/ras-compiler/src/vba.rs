@@ -270,6 +270,8 @@ pub struct VParam {
 pub struct VProc {
     pub kind: ProcKind,
     pub public: bool,
+    /// `Friend` instead of `Public` (class members whose signature mentions a `Type`).
+    pub friend: bool,
     pub name: String,
     pub params: Vec<VParam>,
     /// Return type declaration (`As Long`, `As Long()`), without the `As`.
@@ -522,7 +524,7 @@ impl Printer<'_> {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let vis = if p.public { "Public" } else { "Private" };
+        let vis = if p.friend { "Friend" } else if p.public { "Public" } else { "Private" };
         let mut head = format!("{vis} {kw} {}({params})", p.name);
         if let Some(r) = &p.ret {
             let _ = write!(head, " As {r}");
@@ -686,6 +688,7 @@ mod tests {
         m.procs.push(VProc {
             kind: ProcKind::Sub,
             public: true,
+            friend: false,
             name: "T".into(),
             params: vec![],
             ret: None,

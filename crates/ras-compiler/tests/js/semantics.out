@@ -16,3 +16,5 @@ resume 2
 counter 2 10 0
 loop 7 ABC hi! 3 el 00x
 conv 3 -3 3 -3 42 1
+struct2 6 4 5 3 2 434 n 2 2 1 t1
+structmap 2 false 9 0 bc 2 t3

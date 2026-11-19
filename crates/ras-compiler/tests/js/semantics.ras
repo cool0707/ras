@@ -9,6 +9,21 @@ class Circle implements Shape {
     get radius(): double { return this.r; }
 }
 struct Point { x: int; y: int; }
+struct Pt { x: int; y: int; tag?: string; }
+
+function mkPt(x: int, y: int): Pt {
+    return { x, y };
+}
+
+function divmod(a: int, b: int): [int, int] {
+    return [a / b, a % b];
+}
+
+function sumX(ps: Pt[]): int {
+    let s = 0;
+    for (const p of ps) s += p.x;
+    return s;
+}
 
 function swap(byref a: int, byref b: int) {
     const t = a;
@@ -96,4 +111,25 @@ export function run() {
     }
     console.log("loop", i, "abc".toUpperCase(), "  hi ".trim() + "!", "a,b,c".split(",").length, "hello".substring(1, 3), "x".padStart(3, "0"));
     console.log("conv", 3.7 as int, (-3.7) as int, Math.round(2.5), Math.round(-2.5), parseInt("42px"), (5 > 3) as int);
+    let pts: Pt[] = [];
+    for (let k = 1; k <= 3; k++) pts.push({ x: k, y: k * 10, tag: "t" + k.toString() });
+    const { x: px, y: py } = mkPt(4, 5);
+    const [dq, dr] = divmod(17, 5);
+    let acc = 0;
+    for (const { x, y } of pts) acc += x * y;
+    for (const p of pts) {
+        let c = p;
+        c.x = 100;
+        acc += c.x - p.x;
+    }
+    const anon = { name: "n", n: 2 };
+    let sw: Pt = { x: 1, y: 2 };
+    sw = { x: sw.y, y: sw.x };
+    const pm = new Map<string, Pt>();
+    pm.set("a", pts[0]);
+    pm.set("b", { x: 9, y: 8 });
+    pm.delete("a");
+    pm.set("c", pts[2]);
+    console.log("struct2", sumX(pts), px, py, dq, dr, acc, anon.name, anon.n, sw.x, sw.y, pts[0].tag);
+    console.log("structmap", pm.size, pm.has("a"), pm.get("b").x, pm.get("zz").y, pm.keys().join(""), pm.values().length, pm.get("c").tag);
 }

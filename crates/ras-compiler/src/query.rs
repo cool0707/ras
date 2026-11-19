@@ -232,7 +232,7 @@ pub fn hover(prog: &Program, m: ModuleId, offset: u32) -> Option<Hover> {
     }
     if let Some(f) = fn_at(prog, m, offset) {
         for l in &prog.fns[f].locals {
-            if l.span.contains_inclusive(offset.into()) && !l.span.is_empty() {
+            if l.span.contains_inclusive(offset.into()) && !l.span.is_empty() && !l.name.starts_with("ras$") {
                 return Some(Hover { span: l.span, markdown: code_block(&with_vba(prog, &l.name, &l.ty), None) });
             }
         }
@@ -362,6 +362,14 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
                 }
             }
         }
+        Type::Struct(s) => {
+            let d = &prog.structs[*s];
+            if d.kind != StructKind::Tuple {
+                for (name, fty) in &d.fields {
+                    out.push(item(name, kind::FIELD, prog.show(fty), None, 0));
+                }
+            }
+        }
         Type::Array(_) if ty.dims() == 2 => builtin(&["length", "rows", "cols"], &mut out),
         Type::Array(_) => builtin(intrinsics::ARRAY_MEMBERS, &mut out),
         Type::Str => builtin(intrinsics::STRING_MEMBERS, &mut out),
@@ -449,12 +457,15 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
     let mut out = Vec::new();
     if let Some(f) = fn_at(prog, m, offset as u32) {
         for l in &prog.fns[f].locals {
-            if !l.name.is_empty() && u32::from(l.span.start()) < offset as u32 && !out.iter().any(|o: &Completion| o.label == l.name) && l.kind != LocalKind::This {
+            if !l.name.is_empty() && !l.name.starts_with("ras$") && u32::from(l.span.start()) < offset as u32 && !out.iter().any(|o: &Completion| o.label == l.name) && l.kind != LocalKind::This {
                 out.push(item(&l.name, kind::VARIABLE, prog.show(&l.ty), None, 0));
             }
         }
     }
     for (n, s) in &md.scope {
+        if n.starts_with("ras$") {
+            continue;
+        }
         out.extend(sym_item(prog, n, s, 1));
     }
     for (n, s) in &prog.globals {

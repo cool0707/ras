@@ -663,3 +663,107 @@ fn spec_2_4_unbounded_generic_recursion_is_an_error() {
     let src = "function grow<T>(x: T, n: int): int {\n    if (n <= 0) return 0;\n    const xs: T[] = [x];\n    return grow(xs, n - 1);\n}\nexport function run(): int { return grow(1, 3); }\n";
     assert!(error_codes_build(&[("m", src)]).contains(&"E0602"));
 }
+
+const POINT: &str = "struct Point { x: int; y: int; name?: string; }\n";
+
+#[test]
+fn spec_2_5_struct_literals_are_written_in_place() {
+    let src = format!(
+        "{POINT}function make(x: int, y: int): Point {{\n    return {{ x, y }};\n}}\nexport function run(): int {{\n    let p: Point = {{ x: 1, y: 2, name: \"a\" }};\n    p = {{ x: p.y, y: p.x }};\n    const o = {{ count: 1, label: \"two\" }};\n    const o2 = {{ label: \"x\", count: 2 }};\n    return make(p.x, o.count + o2.count).y;\n}}\n"
+    );
+    let (_, out) = compile(&[("geo", &src)]);
+    let m = code(&out, "Geo");
+    assert_contains(&m, "Public Type Point\n    x As Long\n    y As Long\n    name As String\nEnd Type\n");
+    // `return { ... }` fills the return value; omitted fields of a fresh value need no reset.
+    assert_contains(&m, "Private Function make(ByVal x As Long, ByVal y As Long) As Point\n    make.x = x\n    make.y = y\nEnd Function\n");
+    assert_contains(&m, "    p.x = 1&\n    p.y = 2&\n    p.name = \"a\"\n");
+    // The right-hand side reads the target: built in a temporary, then copied.
+    assert_contains(&m, "    ras_t1.x = p.y\n    ras_t1.y = p.x\n    p = ras_t1\n");
+    // Anonymous object types are identified by their fields, whatever the order.
+    assert_contains(&m, "Public Type RAS_Obj1\n    count As Long\n    label As String\nEnd Type\n");
+    assert!(!m.contains("RAS_Obj2"));
+    assert_contains(&m, "    o2.label = \"x\"\n    o2.count = 2&\n");
+}
+
+#[test]
+fn spec_2_5_tuples_and_destructuring() {
+    let src = format!(
+        "{POINT}function make(x: int, y: int): Point {{\n    return {{ x, y }};\n}}\nfunction divmod(a: int, b: int): [int, int] {{\n    return [a / b, a % b];\n}}\nexport function run(xs: int[]): int {{\n    const {{ x, y: py }} = make(1, 2);\n    const [q, r] = divmod(17, 5);\n    const [first, , third] = xs;\n    const t = divmod(1, 2);\n    return x + py + q + r + first + third + t[1];\n}}\n"
+    );
+    let (_, out) = compile(&[("m", &src)]);
+    let m = code(&out, "M");
+    assert_contains(&m, "Public Type RAS_Tup1\n    item0 As Long\n    item1 As Long\nEnd Type\n");
+    assert_contains(&m, "Private Function divmod(ByVal a As Long, ByVal b As Long) As RAS_Tup1\n    divmod.item0 = a \\ b\n    divmod.item1 = a Mod b\nEnd Function\n");
+    assert_contains(&m, "    ras_d1 = make(1&, 2&)\n    x = ras_d1.x\n    py = ras_d1.y\n");
+    assert_contains(&m, "    ras_d2 = divmod(17&, 5&)\n    q = ras_d2.item0\n    r = ras_d2.item1\n");
+    // A plain variable on the right is read directly; holes skip an element.
+    assert_contains(&m, "    first = xs(0)\n    third = xs(2)\n");
+    assert_contains(&m, "t.item1");
+}
+
+#[test]
+fn spec_2_5_struct_arrays() {
+    let src = format!(
+        "{POINT}export function run(n: int): int {{\n    let ps: Point[] = [];\n    for (let i = 0; i < n; i++) {{\n        ps.push({{ x: i, y: i * 2 }});\n    }}\n    let total = 0;\n    for (const p of ps) total += p.x + p.y;\n    for (const {{ x, y }} of ps) total += x * y;\n    for (const p of ps) {{\n        let c = p;\n        c.x = 0;\n        total += c.y;\n    }}\n    return total + ps.length;\n}}\n"
+    );
+    let mut cfg = config();
+    cfg.doevents.enabled = false;
+    let (prog, out) = compile_with(&[("m", &src)], cfg);
+    assert!(!prog.diagnostics.iter().any(|d| d.is_error()), "{:?}", prog.diagnostics);
+    let m = code(&out, "M");
+    // The literal is built in the array element.
+    assert_contains(&m, "        ps(ras_len_ps).x = i\n        ps(ras_len_ps).y = i * 2&\n        ps(ras_len_ps).name = vbNullString\n        ras_len_ps = ras_len_ps + 1&\n");
+    // Field reads go to the element: no copy into the loop variable.
+    assert_contains(&m, "    For ras_i = 0 To RAS_Len_Point(ps) - 1&\n        total = total + (ps(ras_i).x + ps(ras_i).y)\n    Next ras_i\n");
+    assert_contains(&m, "        x = ps(ras_i_2).x\n        y = ps(ras_i_2).y\n        total = total + x * y\n");
+    // The variable is used as a whole: it stays a copy.
+    assert_contains(&m, "        p = ps(ras_i_3)\n        c = p\n        c.x = 0&\n");
+    // An array of structs cannot be passed to the run time as a Variant.
+    assert!(!m.contains("RAS_Len("));
+    assert_contains(&m, "Public Function RAS_Len_Point(ByRef arr() As Point) As Long\n    On Error Resume Next\n    RAS_Len_Point = UBound(arr) - LBound(arr) + 1&\nEnd Function\n");
+}
+
+#[test]
+fn spec_2_5_map_of_structs_becomes_a_class() {
+    let src = format!(
+        "{POINT}class Holder {{\n    private pos: Point;\n    constructor(p: Point) {{ this.pos = p; }}\n    where(): Point {{ return this.pos; }}\n}}\nexport function run(): int {{\n    const pm = new Map<string, Point>();\n    pm.set(\"a\", {{ x: 1, y: 2 }});\n    const h = new Holder(pm.get(\"a\"));\n    const plain = new Map<string, int>();\n    plain.set(\"k\", 1);\n    return h.where().x + pm.size + plain.size;\n}}\n"
+    );
+    let (_, out) = compile(&[("m", &src)]);
+    let m = code(&out, "M");
+    assert_contains(&m, "    Dim pm As RAS_StructMap__String_Point\n");
+    assert_contains(&m, "    Set pm = RasCollections.New_RAS_StructMap__String_Point()\n    ras_t1.x = 1&\n    ras_t1.y = 2&\n    pm.set_ \"a\", ras_t1\n");
+    // Other maps stay dictionaries.
+    assert_contains(&m, "    Set plain = CreateObject(\"Scripting.Dictionary\")\n");
+    let class = code(&out, "RAS_StructMap__String_Point");
+    assert_contains(&class, "Private slots() As Point\n");
+    // Members whose signature mentions a `Type` cannot be Public in a class module.
+    assert_contains(&class, "Friend Function get_(ByVal key As String) As Point\n");
+    assert_contains(&class, "Friend Sub set_(ByVal key As String, ByRef value_ As Point)\n");
+    assert_contains(&class, "Public Function has(ByVal key As String) As Boolean\n");
+    let holder = code(&out, "Holder");
+    assert_contains(&holder, "Private pos As Point\n");
+    assert_contains(&holder, "Friend Function where() As Point\n");
+    assert_contains(&holder, "Friend Sub RAS_Init(ByRef p As Point)\n");
+    // Locals of user code are not renamed because of the members of the bundled class.
+    let (_, out) = compile(&[("m", "export function f(values: int[]): int {\n    const keys = values.length;\n    return keys;\n}\n")]);
+    assert_contains(&code(&out, "M"), "Public Function f(ByRef values() As Long) As Long\n");
+}
+
+#[test]
+fn spec_2_5_structs_cannot_leave_typed_code() {
+    let errs = |body: &str| error_codes(&[("m", &format!("{POINT}{body}"))]);
+    assert_eq!(errs("export function f() {\n    const p: Point = { x: 1 };\n}\n"), vec!["E0392"]);
+    assert_eq!(errs("export function f() {\n    const p: Point = { x: 1, y: 2, z: 3 };\n}\n"), vec!["E0202"]);
+    assert_eq!(errs("export function f(p: Point) {\n    const a: any = p;\n}\n"), vec!["E0301"]);
+    assert_eq!(errs("export function f(p: Point) {\n    console.log(p);\n}\n"), vec!["E0301"]);
+    assert_eq!(errs("export function f(p: Point) {\n    const o = { x: 1, y: 2 };\n    const q: Point = o;\n}\n"), vec!["E0301"]);
+    assert_eq!(errs("export function f(ps: Point[], p: Point): int {\n    return ps.indexOf(p);\n}\n"), vec!["E0393"]);
+    assert_eq!(errs("class C { pos: Point; }\n"), vec!["E0394"]);
+    assert_eq!(errs("interface I { where(): Point; }\n"), vec!["E0394"]);
+    assert_eq!(errs("export function f(m: Map<string, Point>) {\n    m.get(\"a\").x = 1;\n}\n"), vec!["E0325"]);
+    assert_eq!(errs("export function f(): int {\n    const t: [int, string] = [1, \"a\"];\n    return t[2];\n}\n"), vec!["E0389"]);
+    assert_eq!(errs("export function f(): int {\n    const { nope } = { a: 1 };\n    return nope;\n}\n"), vec!["E0202"]);
+    // A lambda that becomes a class cannot take a struct.
+    let src = format!("{POINT}export function f(p: Point): int {{\n    const g = (v: Point) => v.x;\n    return g(p);\n}}\n");
+    assert!(error_codes_build(&[("m", &src)]).contains(&"E0395"));
+}

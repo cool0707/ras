@@ -189,7 +189,7 @@ impl<'p> Lowerer<'p> {
     }
 
     /// True when the callback / source expressions refer to the VBA variable `dest`.
-    fn ast_mentions(&self, e: &Expr, dest: &str) -> bool {
+    pub(crate) fn ast_mentions(&self, e: &Expr, dest: &str) -> bool {
         let info = self.info();
         any_expr_in(e, &mut |x| match (&x.kind, info.res.get(&x.id)) {
             (ExprKind::Name(_), Some(Res::Local(l))) => match self.frame().locals.get(l) {
@@ -232,7 +232,7 @@ impl<'p> Lowerer<'p> {
                     VStmt::For { var: idx, from: long(0), to: ub, step: None, body },
                 ];
                 let (clear, _) = self.capture(|lw| lw.clear_array(&out, ty));
-                let non_empty = bin(">", call("RAS_Len", vec![src]), long(0));
+                let non_empty = bin(">", self.len_of(src, &src_ty), long(0));
                 match counter {
                     None => self.emit(if_else(non_empty, filled, clear)),
                     Some(k) => {
@@ -260,7 +260,8 @@ impl<'p> Lowerer<'p> {
                 let aliased = mentions(&src, &dest_name);
                 let out = if aliased { VExpr::Name(self.temp(ty)) } else { dest.clone() };
                 let n = VExpr::Name(self.temp(&Type::Int));
-                self.emit(assign(n.clone(), call("RAS_Len", vec![src.clone()])));
+                let len = self.len_of(src.clone(), ty);
+                self.emit(assign(n.clone(), len));
                 let start = VExpr::Name(self.temp(&Type::Int));
                 let count = VExpr::Name(self.temp(&Type::Int));
                 let a = match args.first() {
@@ -300,8 +301,9 @@ impl<'p> Lowerer<'p> {
                 let out = if aliased { VExpr::Name(self.temp(ty)) } else { dest.clone() };
                 let na = VExpr::Name(self.temp(&Type::Int));
                 let nb = VExpr::Name(self.temp(&Type::Int));
-                self.emit(assign(na.clone(), call("RAS_Len", vec![a.clone()])));
-                self.emit(assign(nb.clone(), call("RAS_Len", vec![b.clone()])));
+                let (la, lb) = (self.len_of(a.clone(), ty), self.len_of(b.clone(), ty));
+                self.emit(assign(na.clone(), la));
+                self.emit(assign(nb.clone(), lb));
                 let idx = self.declare_raw("ras_i", "Long", false);
                 let (copy_a, _) = self.capture(|lw| lw.store(&out.clone().index(vec![name(idx.clone())]), &elem_ty, a.index(vec![name(idx.clone())]), &elem_ty));
                 let (copy_b, _) = self.capture(|lw| lw.store(&out.clone().index(vec![bin("+", na.clone(), name(idx.clone()))]), &elem_ty, b.index(vec![name(idx.clone())]), &elem_ty));
@@ -383,7 +385,8 @@ impl<'p> Lowerer<'p> {
         self.pc.loop_depth += 1;
         let (body, _) = self.capture(|lw| lw.run_stages(&stages, &cbs, 0, src.clone().index(vec![name(idx.clone())]), src_elem, &idx, &term));
         self.pc.loop_depth -= 1;
-        self.emit(VStmt::For { var: idx, from: long(0), to: call("RAS_Len", vec![src]).plus(-1), step: None, body });
+        let len = self.len_of(src, &src_ty);
+        self.emit(VStmt::For { var: idx, from: long(0), to: len.plus(-1), step: None, body });
         self.note(e.span, true, "fusion", "コールバックをループに展開しました");
         if want {
             Some(result.unwrap_or_else(|| lit("Empty")))
@@ -417,6 +420,15 @@ impl<'p> Lowerer<'p> {
                 field.push('_');
             }
             caps.push((l, field, self.local_ty(l), self.local_expr(l)));
+        }
+        // The closure is a class module called through `Object`: a `Type` cannot cross that boundary.
+        let param_struct = params.iter().any(|&l| self.local_ty(l).has_struct());
+        if param_struct || ret_ty.has_struct() || caps.iter().any(|c| c.2.has_struct()) {
+            self.err(
+                e.span,
+                "E0395",
+                "変数に入れる・引数として渡すアロー関数では、構造体を引数・戻り値にしたり外側の構造体変数を参照したりできません（クラスに変換されるためです）。配列メソッドの引数に直接書くか、通常の関数にしてください",
+            );
         }
         // Constants of a script's `Main` that became locals are copied into the closure as well.
         let mut demoted_caps: Vec<(VarId, String, Type, VExpr)> = Vec::new();
@@ -515,7 +527,7 @@ impl<'p> Lowerer<'p> {
         if body_uses_this {
             self.out[ci].decls.push("Public Captured_Me As Object".into());
         }
-        self.out[ci].procs.push(VProc { kind: ProcKind::Function, public: true, name: "Apply".into(), params: vparams, ret: Some("Variant".into()), locals, body, leading_comments: vec![], attributes: vec![], source: Some(0) });
+        self.out[ci].procs.push(VProc { kind: ProcKind::Function, public: true, friend: false, name: "Apply".into(), params: vparams, ret: Some("Variant".into()), locals, body, leading_comments: vec![], attributes: vec![], source: Some(0) });
 
         let t = VExpr::Name(self.temp(&Type::Object));
         self.emit(set(t.clone(), lit(format!("New {cname}"))));

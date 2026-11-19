@@ -122,6 +122,10 @@ pub enum TypeRef {
     Fn { params: Vec<Param>, ret: Box<TypeRef>, span: Span },
     /// `T | null` / `T | undefined`
     Nullable { inner: Box<TypeRef>, span: Span },
+    /// `[A, B]` — a tuple: an anonymous struct with positional fields.
+    Tuple { elems: Vec<TypeRef>, span: Span },
+    /// `{ a: A; b: B }` — an anonymous struct.
+    Object { fields: Vec<PropSig>, span: Span },
     Error { span: Span },
 }
 
@@ -132,6 +136,8 @@ impl TypeRef {
             | TypeRef::Array { span, .. }
             | TypeRef::Fn { span, .. }
             | TypeRef::Nullable { span, .. }
+            | TypeRef::Tuple { span, .. }
+            | TypeRef::Object { span, .. }
             | TypeRef::Error { span } => *span,
         }
     }

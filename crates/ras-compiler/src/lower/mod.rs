@@ -138,6 +138,9 @@ pub(crate) struct ProcCtx {
     pub stmt_count: usize,
     /// True while lowering the body of a closure class (`Apply`).
     pub in_closure: bool,
+    /// Variable being initialised by its declaration, when the declaration runs only once
+    /// (omitted fields of a struct literal need no reset then).
+    pub fresh_target: Option<String>,
     /// Top-level variables of a script module that became locals of `Main`.
     pub demoted: HashMap<VarId, String>,
 }
@@ -153,6 +156,8 @@ pub(crate) struct Lowerer<'p> {
     class_insts: HashMap<(ClassId, String), String>,
     class_queue: Vec<(ClassId, Vec<Type>)>,
     used_declares: HashSet<FnId>,
+    /// Structs whose arrays are measured (`RAS_Len_<Struct>` helpers to generate).
+    pub(crate) struct_len_used: std::collections::BTreeSet<StructId>,
     pub lambda_n: u32,
     pub diags: Vec<Diagnostic>,
     pub notes: Vec<(ModuleId, OptNote)>,
@@ -213,6 +218,7 @@ pub fn lower(prog: &Program) -> Lowered {
         class_insts: HashMap::new(),
         class_queue: Vec::new(),
         used_declares: HashSet::new(),
+        struct_len_used: Default::default(),
         lambda_n: 0,
         diags: Vec::new(),
         notes: Vec::new(),
@@ -261,6 +267,11 @@ impl<'p> Lowerer<'p> {
             }
             self.global_names.insert(m.vba_name.to_lowercase());
             for &f in &m.fns {
+                // Members of bundled classes (`keys`, `values`, `size` …) are not module-level names.
+                let member = matches!(prog.fns[f].kind, FnKind::Method { .. } | FnKind::Getter { .. } | FnKind::Setter { .. } | FnKind::Ctor { .. });
+                if m.kind == ModuleKind::Std && member {
+                    continue;
+                }
                 self.global_names.insert(prog.fns[f].name.to_lowercase());
             }
             for &v in &m.vars {
@@ -300,6 +311,7 @@ impl<'p> Lowerer<'p> {
                 break;
             }
         }
+        self.emit_struct_helpers();
         self.emit_std_declares();
         self.emit_events();
         self.emit_module_vars();
@@ -378,9 +390,33 @@ impl<'p> Lowerer<'p> {
             s.push_str("End Enum");
             self.out[mi].decls.push(s);
         }
+        // A `Type` must be declared before the types that contain it ("forward reference" error).
+        let mut order: Vec<StructId> = Vec::new();
+        fn visit(prog: &Program, home: &[StructId], s: StructId, order: &mut Vec<StructId>, depth: usize) {
+            if order.contains(&s) || !home.contains(&s) || depth > 64 {
+                return;
+            }
+            for (_, fty) in &prog.structs[s].fields {
+                let inner = match fty {
+                    Type::Array(_) => fty.elem(),
+                    other => Some(other),
+                };
+                if let Some(Type::Struct(d)) = inner {
+                    if *d != s {
+                        visit(prog, home, *d, order, depth + 1);
+                    }
+                }
+            }
+            if !order.contains(&s) {
+                order.push(s);
+            }
+        }
         for &sid in &md.structs {
+            visit(prog, &md.structs, sid, &mut order, 0);
+        }
+        for sid in order {
             let d = &prog.structs[sid];
-            let mut s = format!("Public Type {}\n", names::member_ident(&d.name));
+            let mut s = format!("Public Type {}\n", self.struct_name(sid));
             for (fname, fty) in &d.fields {
                 let (t, arr) = self.vtype(fty);
                 s.push_str(&format!("    {}{} As {t}\n", names::member_ident(fname), if arr { "()" } else { "" }));
@@ -452,7 +488,7 @@ impl<'p> Lowerer<'p> {
                         };
                         let byref = p.mode == PassMode::ByRef || arr || matches!(p.ty, Type::Struct(_));
                         let ty = match &p.ty {
-                            Type::Struct(s) => names::member_ident(&prog.structs[*s].name),
+                            Type::Struct(s) => self.struct_name(*s),
                             _ => ty,
                         };
                         format!("{} {}{} As {ty}", if byref { "ByRef" } else { "ByVal" }, names::member_ident(&p.name), if arr { "()" } else { "" })
@@ -494,6 +530,33 @@ impl<'p> Lowerer<'p> {
             s.push_str("\n#End If");
         }
         s
+    }
+
+    /// `RAS_Len_<Struct>(arr)`: length of an array of structs (0 when unallocated).
+    fn emit_struct_helpers(&mut self) {
+        for s in self.struct_len_used.clone() {
+            let d = &self.prog.structs[s];
+            let tname = self.struct_name(s);
+            let fname = format!("RAS_Len_{tname}");
+            let mi = self.std_vmodule(d.module);
+            let arr = || vname("arr");
+            self.out[mi].procs.push(VProc {
+                kind: ProcKind::Function,
+                public: true,
+                friend: false,
+                name: fname.clone(),
+                params: vec![VParam { name: "arr".into(), byref: true, ty: tname, is_array: true, optional_default: None }],
+                ret: Some("Long".into()),
+                locals: vec![],
+                body: vec![
+                    VStmt::Raw("On Error Resume Next".into()),
+                    assign(vname(fname), bin("+", bin("-", call("UBound", vec![arr()]), call("LBound", vec![arr()])), long(1))),
+                ],
+                leading_comments: vec![],
+                attributes: vec![],
+                source: None,
+            });
+        }
     }
 
     fn emit_std_declares(&mut self) {
@@ -623,8 +686,21 @@ impl<'p> Lowerer<'p> {
                     "Long".into()
                 }
             }
-            Type::Struct(s) => names::member_ident(&self.prog.structs[*s].name),
+            Type::Struct(s) => self.struct_name(*s),
             _ => "Variant".into(),
+        }
+    }
+
+    /// Name of the VBA `Type` of a struct. A `Public Type` is visible in the whole project, so
+    /// structs of different modules that share a name get the module name appended (all but the first).
+    pub(crate) fn struct_name(&self, s: StructId) -> String {
+        let d = &self.prog.structs[s];
+        let base = names::member_ident(&d.name);
+        let first = self.prog.structs.iter().find(|o| o.name.eq_ignore_ascii_case(&d.name)).map(|o| o.id);
+        if first == Some(s) {
+            base
+        } else {
+            format!("{base}_{}", self.prog.modules[d.module].vba_name)
         }
     }
 
@@ -961,6 +1037,7 @@ impl<'p> Lowerer<'p> {
             }
         }
         let ret_ty = def.ret_ty().subst(&env);
+        let env_copy = env.clone();
         let is_instance = matches!(def.kind, FnKind::Method { is_static: false, .. } | FnKind::Getter { is_static: false, .. } | FnKind::Setter { is_static: false, .. } | FnKind::Ctor { .. });
         let mut frame = Frame { module: def.module, fn_id: Some(f), env, locals: HashMap::new(), this: is_instance.then(|| lit("Me")), inl: None };
         let mut params = Vec::new();
@@ -1111,7 +1188,9 @@ impl<'p> Lowerer<'p> {
             ProcKind::Function | ProcKind::PropertyGet => Some(if rarr { format!("{rt}()") } else { rt }),
             _ => None,
         };
-        Some(VProc { kind, public, name, params, ret, locals, body: body_stmts, leading_comments, attributes, source: Some(0) })
+        // A class module cannot expose a `Type` of a standard module through a public member.
+        let friend = class.is_some() && public && (ret_ty.has_struct() || def.params.iter().any(|p| p.ty.subst(&env_copy).has_struct()));
+        Some(VProc { kind, public, friend, name, params, ret, locals, body: body_stmts, leading_comments, attributes, source: Some(0) })
     }
 
     // ------------------------------------------------------------------ classes
@@ -1165,6 +1244,7 @@ impl<'p> Lowerer<'p> {
                 self.out[ci].procs.push(VProc {
                     kind: ProcKind::PropertyGet,
                     public: true,
+                    friend: false,
                     name: fname.clone(),
                     params: vec![],
                     ret: Some("Variant".into()),
@@ -1177,6 +1257,7 @@ impl<'p> Lowerer<'p> {
                 self.out[ci].procs.push(VProc {
                     kind: ProcKind::PropertyLet,
                     public: true,
+                    friend: false,
                     name: fname.clone(),
                     params: vec![VParam { name: "ras_v".into(), byref: false, ty: "Variant".into(), is_array: false, optional_default: None }],
                     ret: None,
@@ -1222,6 +1303,7 @@ impl<'p> Lowerer<'p> {
                 self.out[mi].procs.push(VProc {
                     kind: ProcKind::Sub,
                     public: true,
+                    friend: false,
                     name: pname.clone(),
                     params: vec![VParam { name: "ras_dummy".into(), byref: false, ty: "Long".into(), is_array: false, optional_default: Some("0&".into()) }],
                     ret: None,
@@ -1236,6 +1318,7 @@ impl<'p> Lowerer<'p> {
                 self.out[ci].procs.push(VProc {
                     kind: ProcKind::Sub,
                     public: false,
+                    friend: false,
                     name: "Class_Initialize".into(),
                     params: vec![],
                     ret: None,
@@ -1281,6 +1364,7 @@ impl<'p> Lowerer<'p> {
         self.out[mi].procs.push(VProc {
             kind: ProcKind::Function,
             public: true,
+            friend: false,
             name: fname,
             params: factory_params,
             ret: Some(name.clone()),
@@ -1320,6 +1404,7 @@ impl<'p> Lowerer<'p> {
                 self.out[ci].procs.push(VProc {
                     kind: ProcKind::PropertyGet,
                     public: false,
+                    friend: false,
                     name: pname.clone(),
                     params: vec![],
                     ret: Some(ty.clone()),
@@ -1333,6 +1418,7 @@ impl<'p> Lowerer<'p> {
                     self.out[ci].procs.push(VProc {
                         kind: if obj { ProcKind::PropertySet } else { ProcKind::PropertyLet },
                         public: false,
+                        friend: false,
                         name: pname,
                         params: vec![VParam { name: "ras_v".into(), byref: false, ty, is_array: false, optional_default: None }],
                         ret: None,
@@ -1361,7 +1447,7 @@ impl<'p> Lowerer<'p> {
         let (rt, rarr) = self.vtype(&ret_ty);
         let (kind, ret) = if ret_ty == Type::Void { (ProcKind::Sub, None) } else { (ProcKind::Function, Some(if rarr { format!("{rt}()") } else { rt })) };
         let (leading_comments, _) = Self::doc_lines(&def.doc);
-        VProc { kind, public, name, params, ret, locals: vec![], body: vec![], leading_comments, attributes: vec![], source: None }
+        VProc { kind, public, friend: false, name, params, ret, locals: vec![], body: vec![], leading_comments, attributes: vec![], source: None }
     }
 
     /// Assignment target for a field of class `c` (`obj.field`, bare `field` inside the class, or the static variable).
@@ -1485,7 +1571,7 @@ impl<'p> Lowerer<'p> {
                     body.push(call_stmt("RAS_EventError", vec![lit(format!("\"{doc}.{ev}\"")), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
                 }
                 let params = sig.iter().map(|p| VParam { name: p.0.into(), byref: p.2, ty: p.1.into(), is_array: false, optional_default: None }).collect();
-                self.out[di].procs.push(VProc { kind: ProcKind::Sub, public: false, name: proc_name, params, ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None });
+                self.out[di].procs.push(VProc { kind: ProcKind::Sub, public: false, friend: false, name: proc_name, params, ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None });
             }
         }
         if needs_init {
@@ -1496,7 +1582,7 @@ impl<'p> Lowerer<'p> {
             body.push(VStmt::Exit("Sub"));
             body.push(VStmt::Label("RAS_OnError".into()));
             body.push(call_stmt("RAS_EventError", vec![lit("\"Workbook.Open\""), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
-            let simple = |name: &str, body: Vec<VStmt>| VProc { kind: ProcKind::Sub, public: true, name: name.into(), params: vec![], ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None };
+            let simple = |name: &str, body: Vec<VStmt>| VProc { kind: ProcKind::Sub, public: true, friend: false, name: name.into(), params: vec![], ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None };
             self.out[ri].procs.push(simple("RAS_DeferredInit", body));
             // spec §12.3 path 2
             self.out[ri].procs.push(simple("Auto_Open", vec![call_stmt("RAS_EnsureInit", vec![])]));
@@ -1525,7 +1611,7 @@ impl<'p> Lowerer<'p> {
         }
         self.out[ri].procs.insert(
             0,
-            VProc { kind: ProcKind::Sub, public: true, name: "RAS_InitAll".into(), params: vec![VParam { name: "ras_dummy".into(), byref: false, ty: "Long".into(), is_array: false, optional_default: Some("0&".into()) }], ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None },
+            VProc { kind: ProcKind::Sub, public: true, friend: false, name: "RAS_InitAll".into(), params: vec![VParam { name: "ras_dummy".into(), byref: false, ty: "Long".into(), is_array: false, optional_default: Some("0&".into()) }], ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None },
         );
     }
 }

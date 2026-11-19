@@ -119,7 +119,24 @@ impl<'p> Gen<'p> {
         match &e.kind {
             ExprKind::Error => "undefined".into(),
             ExprKind::Super => "super".into(),
-            ExprKind::Object(_) => "null".into(),
+            ExprKind::Object(props) => match self.ty(e) {
+                Type::Struct(sid) => {
+                    let fields = self.prog.structs[sid].fields.clone();
+                    let vals: Vec<String> = props
+                        .iter()
+                        .filter_map(|p| fields.iter().find(|f| f.0 == p.key.text).map(|f| (p, f.1.clone())))
+                        .map(|(p, fty)| format!("{}: {}", p.key.text, self.coerce_store(&p.value, &fty)))
+                        .collect();
+                    format!("Object.assign(new {}(), {{ {} }})", self.struct_ref(sid), vals.join(", "))
+                }
+                _ => "null".into(),
+            },
+            ExprKind::Array(items) if matches!(self.ty(e), Type::Struct(_)) => {
+                let Type::Struct(sid) = self.ty(e) else { unreachable!() };
+                let fields = self.prog.structs[sid].fields.clone();
+                let vals: Vec<String> = items.iter().zip(fields.iter()).map(|(it, f)| format!("{}: {}", f.0, self.coerce_store(it, &f.1))).collect();
+                format!("Object.assign(new {}(), {{ {} }})", self.struct_ref(sid), vals.join(", "))
+            }
             ExprKind::Int { value, .. } => value.to_string(),
             ExprKind::Float { text, .. } => match text.parse::<f64>() {
                 Ok(f) if f.is_finite() => format!("{f:?}"),
@@ -361,6 +378,9 @@ impl<'p> Gen<'p> {
     fn index_expr(&mut self, object: &Expr, index: &Expr) -> String {
         let ot = self.ty(object);
         let o = self.expr(object);
+        if let (Type::Struct(_), ExprKind::Int { value, .. }) = (&ot, &index.peel().kind) {
+            return format!("{o}.item{value}");
+        }
         let i = self.expr(index);
         match &ot {
             // An index outside the array is a run-time error in VBA, not `undefined`.
@@ -380,6 +400,9 @@ impl<'p> Gen<'p> {
             ExprKind::Index { object, index } => {
                 let ot = self.ty(object);
                 let o = self.expr(object);
+                if let (Type::Struct(_), ExprKind::Int { value, .. }) = (&ot, &index.peel().kind) {
+                    return Place::Native(format!("{o}.item{value}"));
+                }
                 let i = self.expr(index);
                 match &ot {
                     Type::Array(_) => Place::Native(format!("{o}[$rt.ix({o}, {i})]")),
@@ -735,7 +758,7 @@ impl<'p> Gen<'p> {
             if path.len() == 1 {
                 match path[0].text.as_str() {
                     "Error" => return format!("$rt.makeError({})", self.plain_args(args)),
-                    "Map" => return "new Map()".into(),
+                    "Map" if matches!(self.ty(e), Type::Map(..)) => return "new Map()".into(),
                     "Array" => {
                         let elem = self.ty(e).elem_of();
                         let z = self.zero(&elem);
@@ -756,7 +779,23 @@ impl<'p> Gen<'p> {
                     Some(ctor) => self.ras_args(ctor, 0, args).join(", "),
                     None => String::new(),
                 };
-                format!("new {}({argv})", self.class_ref(c))
+                let created = format!("new {}({argv})", self.class_ref(c));
+                let targs = match self.ty(e) {
+                    Type::Class(_, a) => a,
+                    _ => Vec::new(),
+                };
+                let zeros: Vec<String> = def
+                    .type_params
+                    .iter()
+                    .zip(targs.iter())
+                    .filter(|(_, t)| matches!(t, Type::Struct(_)))
+                    .map(|(p, t)| format!("{}: () => {}", js_ident(&p.name), self.zero(t)))
+                    .collect();
+                if zeros.is_empty() {
+                    created
+                } else {
+                    format!("Object.assign({created}, {{ $zero: {{ {} }} }})", zeros.join(", "))
+                }
             }
             _ => "null".into(),
         }

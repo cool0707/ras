@@ -302,6 +302,12 @@ impl<'p> Lowerer<'p> {
     pub(crate) fn reset_var(&mut self, target: &VExpr, ty: &Type) {
         if ty.is_array() {
             self.clear_array(target, ty);
+        } else if let Type::Struct(s) = ty {
+            // A `Type` has no literal default: reset field by field.
+            let def = &self.prog.structs[*s];
+            for (fname, fty) in &def.fields {
+                self.reset_var(&target.clone().member(names::member_ident(fname)), fty);
+            }
         } else if let Some(d) = self.default_value(ty) {
             if ty.is_object() {
                 self.emit(set(target.clone(), d));
@@ -382,7 +388,23 @@ impl<'p> Lowerer<'p> {
             return slot;
         }
         match &e.kind {
-            ExprKind::Error | ExprKind::Super | ExprKind::Object(_) => lit("Empty"),
+            ExprKind::Error | ExprKind::Super => lit("Empty"),
+            ExprKind::Object(_) => match self.ty(e) {
+                ty @ Type::Struct(_) => {
+                    let t = VExpr::Name(self.temp(&ty));
+                    let once = self.runs_once();
+                    self.struct_lit_fill(e, &t, once);
+                    t
+                }
+                _ => lit("Empty"),
+            },
+            ExprKind::Array(_) if matches!(self.ty(e), Type::Struct(_)) => {
+                let ty = self.ty(e);
+                let t = VExpr::Name(self.temp(&ty));
+                let once = self.runs_once();
+                self.struct_lit_fill(e, &t, once);
+                t
+            }
             ExprKind::Int { value, hex, .. } => int_lit(*value, &self.ty(e), *hex),
             ExprKind::Float { text, suffix } => match suffix {
                 NumSuffix::F => {
@@ -615,6 +637,10 @@ impl<'p> Lowerer<'p> {
                 let (s, i) = (it.next().unwrap(), it.next().unwrap());
                 call("Mid$", vec![s, i.plus(1), long(1)])
             }
+            Type::Struct(_) => {
+                let b = self.expr(object);
+                b.member(tuple_field(index))
+            }
             Type::Map(_, v) => {
                 let ops = self.operands(&[object, index]);
                 let mut it = ops.into_iter();
@@ -687,6 +713,9 @@ impl<'p> Lowerer<'p> {
                     let i = self.expr(index);
                     let i = if stable { self.spill(i, &Type::Int) } else { i };
                     b.index(vec![i])
+                } else if matches!(ot, Type::Struct(_)) {
+                    let (b, _) = self.lvalue_ex(object, stable);
+                    b.member(tuple_field(index))
                 } else {
                     let o = self.expr(object);
                     let o = if stable { self.spill(o, &ot) } else { o };
@@ -911,6 +940,7 @@ impl<'p> Lowerer<'p> {
                 let (eb, _) = self.capture(|lw| lw.expr_into(els, target, ty));
                 self.emit(flatten_if(c, tb, eb));
             }
+            ExprKind::Object(_) | ExprKind::Array(_) if matches!(self.ty(inner), Type::Struct(_)) => self.struct_lit_into(inner, target),
             // (`f(i) = x` inside function `f` would be a recursive call, so the return variable is excluded)
             ExprKind::Array(_) | ExprKind::New { .. } | ExprKind::Call { .. }
                 if self.ty(inner).is_array() && matches!(target, VExpr::Name(n) if *n != self.pc.proc_name || self.pc.rets.len() > 1) =>
@@ -927,6 +957,83 @@ impl<'p> Lowerer<'p> {
                 self.store(target, ty, v, &vt);
             }
         }
+    }
+
+    /// Builds a struct literal (`{ a: 1 }`, tuple `[1, "x"]`) in `target`, field by field.
+    /// The fields are written straight into `target` when the values cannot observe it;
+    /// otherwise into a temporary that is copied afterwards.
+    pub(crate) fn struct_lit_into(&mut self, e: &Expr, target: &VExpr) {
+        fn root(v: &VExpr) -> Option<&str> {
+            match v {
+                VExpr::Name(n) => Some(n),
+                VExpr::Member(o, _) => root(o),
+                VExpr::Call(f, _) => root(f),
+                _ => None,
+            }
+        }
+        let values: Vec<&Expr> = match &e.kind {
+            ExprKind::Object(props) => props.iter().map(|p| &p.value).collect(),
+            ExprKind::Array(items) => items.iter().collect(),
+            _ => Vec::new(),
+        };
+        let direct = match root(target) {
+            // The return variable cannot be read back (`f.x` on the right would be a call).
+            Some(r) if *r == self.pc.proc_name && matches!(target, VExpr::Name(_)) => self.pc.rets.len() == 1,
+            Some(r) => self.pc.locals.iter().any(|l| l.0 == r) && !values.iter().any(|v| self.ast_mentions(v, r)) && !target_index_mentions(target, r),
+            None => false,
+        };
+        if direct {
+            let fresh = match target {
+                VExpr::Name(n) => (*n == self.pc.proc_name && self.pc.rets.len() == 1) || self.pc.fresh_target.as_deref() == Some(n.as_str()),
+                _ => false,
+            };
+            self.pc.fresh_target = None;
+            self.struct_lit_fill(e, target, fresh);
+        } else {
+            self.pc.fresh_target = None;
+            let ty = self.ty(e);
+            let t = VExpr::Name(self.temp(&ty));
+            let once = self.runs_once();
+            self.struct_lit_fill(e, &t, once);
+            self.emit(assign(target.clone(), t));
+        }
+    }
+
+    /// The code being lowered runs at most once per call of the procedure.
+    fn runs_once(&self) -> bool {
+        self.pc.loop_depth == 0 && self.frame().inl.is_none()
+    }
+
+    /// Assigns every field of the struct literal `e` to `target.field` (omitted fields are reset).
+    /// `fresh`: `target` still has its zero value.
+    pub(crate) fn struct_lit_fill(&mut self, e: &Expr, target: &VExpr, fresh: bool) {
+        let Type::Struct(s) = self.ty(e) else { return };
+        let def = &self.prog.structs[s];
+        let parts: Vec<(usize, &Expr)> = match &e.kind {
+            ExprKind::Object(props) => props.iter().filter_map(|p| def.fields.iter().position(|f| f.0 == p.key.text).map(|i| (i, &p.value))).collect(),
+            ExprKind::Array(items) => items.iter().enumerate().take(def.fields.len()).collect(),
+            _ => Vec::new(),
+        };
+        // Source order, so that side effects happen as written.
+        for (i, v) in &parts {
+            let (fname, fty) = &def.fields[*i];
+            self.expr_into(v, &target.clone().member(names::member_ident(fname)), fty);
+        }
+        for (i, (fname, fty)) in def.fields.iter().enumerate() {
+            if !fresh && !parts.iter().any(|p| p.0 == i) {
+                self.reset_var(&target.clone().member(names::member_ident(fname)), fty);
+            }
+        }
+    }
+
+    /// `RAS_Len(arr)`. An array of structs cannot be passed as a Variant: it is measured by
+    /// a helper generated next to the struct's `Type`.
+    pub(crate) fn len_of(&mut self, arr: VExpr, ty: &Type) -> VExpr {
+        if let Some(Type::Struct(s)) = ty.elem() {
+            self.struct_len_used.insert(*s);
+            return call(format!("RAS_Len_{}", self.struct_name(*s)), vec![arr]);
+        }
+        call("RAS_Len", vec![arr])
     }
 
     fn array_value(&mut self, e: &Expr) -> VExpr {
@@ -1362,7 +1469,7 @@ impl<'p> Lowerer<'p> {
                         let argv = self.operands(&refs);
                         return call("RAS_MakeError", argv);
                     }
-                    "Map" => return call("CreateObject", vec![lit("\"Scripting.Dictionary\"")]),
+                    "Map" if matches!(self.ty(e), Type::Map(..)) => return call("CreateObject", vec![lit("\"Scripting.Dictionary\"")]),
                     "Array" => return self.array_value(e),
                     _ => {}
                 }
@@ -1422,7 +1529,7 @@ impl<'p> Lowerer<'p> {
                 let a = self.expr(recv?);
                 match self.pc.push_caps.get(&a.print()) {
                     Some((len, _)) => name(len.clone()),
-                    None => call("RAS_Len", vec![a]),
+                    None => self.len_of(a, &recv_ty),
                 }
             }
             ArrRows => call("RAS_Len", vec![self.expr(recv?)]),
@@ -1434,6 +1541,20 @@ impl<'p> Lowerer<'p> {
                 let (arr, _) = self.lvalue(r);
                 let elem_ty = recv_ty.elem().cloned().unwrap_or(Type::Any);
                 let vt = self.ty(&args[0]);
+                let is_struct_lit = matches!(vt, Type::Struct(_)) && matches!(args[0].peel().kind, ExprKind::Object(_) | ExprKind::Array(_));
+                if let (true, Some((len, cap))) = (is_struct_lit, self.pc.push_caps.get(&arr.print()).cloned()) {
+                    // The literal is built in place: no temporary and no copy of the struct.
+                    self.emit(if_then(
+                        bin(">=", name(len.clone()), name(cap.clone())),
+                        vec![
+                            assign(name(cap.clone()), bin("+", bin("*", name(cap.clone()), long(2)), long(8))),
+                            VStmt::ReDim { preserve: true, target: arr.clone(), dims: vec![(long(0), name(cap).plus(-1))] },
+                        ],
+                    ));
+                    self.struct_lit_into(args[0].peel(), &arr.index(vec![name(len.clone())]));
+                    self.emit(assign(name(len.clone()), name(len).plus(1)));
+                    return None;
+                }
                 let v = self.expr(&args[0]);
                 if let Some((len, cap)) = self.pc.push_caps.get(&arr.print()).cloned() {
                     // Capacity doubling instead of `ReDim Preserve` per element (spec §13.3).
@@ -1449,7 +1570,8 @@ impl<'p> Lowerer<'p> {
                 } else {
                     let v = self.spill(v, &vt);
                     let n = VExpr::Name(self.temp(&Type::Int));
-                    self.emit(assign(n.clone(), call("RAS_Len", vec![arr.clone()])));
+                    let len = self.len_of(arr.clone(), &recv_ty);
+                    self.emit(assign(n.clone(), len));
                     self.emit(VStmt::ReDim { preserve: true, target: arr.clone(), dims: vec![(long(0), n.clone())] });
                     self.store(&arr.index(vec![n]), &elem_ty, v, &vt);
                     if self.pc.loop_depth > 0 {
@@ -1463,7 +1585,8 @@ impl<'p> Lowerer<'p> {
                 let elem_ty = recv_ty.elem().cloned().unwrap_or(Type::Any);
                 let n = VExpr::Name(self.temp(&Type::Int));
                 let out = VExpr::Name(self.temp(&elem_ty));
-                self.emit(assign(n.clone(), call("RAS_Len", vec![arr.clone()]).plus(-1)));
+                let len = self.len_of(arr.clone(), &recv_ty);
+                self.emit(assign(n.clone(), len.plus(-1)));
                 self.reset_var(&out, &elem_ty);
                 let (mut body, _) = self.capture(|lw| lw.store(&out, &elem_ty, arr.clone().index(vec![n.clone()]), &elem_ty));
                 let (clear, _) = self.capture(|lw| lw.clear_array(&arr, &recv_ty));
@@ -1765,6 +1888,23 @@ impl<'p> Lowerer<'p> {
             // Value not needed: nothing to emit for pure intrinsics.
             None
         }
+    }
+}
+
+/// VBA field name of a tuple element (`t[1]` → `item1`).
+pub(crate) fn tuple_field(index: &Expr) -> String {
+    match &index.peel().kind {
+        ExprKind::Int { value, .. } => format!("item{value}"),
+        _ => "item0".into(),
+    }
+}
+
+/// True when an index inside the assignment target `v` (`a(i).f`) mentions `name`.
+fn target_index_mentions(v: &VExpr, name: &str) -> bool {
+    match v {
+        VExpr::Member(o, _) => target_index_mentions(o, name),
+        VExpr::Call(f, args) => target_index_mentions(f, name) || args.iter().any(|a| mentions(a, name)),
+        _ => false,
     }
 }
 

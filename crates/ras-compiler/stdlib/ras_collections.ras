@@ -1,0 +1,88 @@
+// コンパイラが内部で使うコレクション。
+// `Map<K, V>` の `V` が構造体のとき、型は自動的に `RAS_StructMap<K, V>` に置き換わる。
+// 構造体は `Scripting.Dictionary`（Variant）に入れられないため、値を構造体の配列に並べ、
+// Dictionary にはキーから配列の添字への対応だけを持たせる。
+
+/**
+ * 値が構造体の `Map<K, V>`。
+ *
+ * 値は 1 本の構造体配列に連続して置かれ、キーから添字を引いて参照する。
+ */
+export class RAS_StructMap<K, V> {
+    private slotOf: Map<K, int> = new Map<K, int>();
+    private slots: V[] = [];
+    private freeSlots: int[] = [];
+    private usedCount: int = 0;
+
+    /** 登録されている要素数。 */
+    get size(): int {
+        return this.slotOf.size;
+    }
+
+    /** キーが登録されているか。 */
+    has(key: K): boolean {
+        return this.slotOf.has(key);
+    }
+
+    /** キーの値（コピー）。登録されていなければ、全フィールドが既定値の構造体。 */
+    get(key: K): V {
+        let v: V;
+        if (this.slotOf.has(key)) {
+            v = this.slots[this.slotOf.get(key)];
+        }
+        return v;
+    }
+
+    /** キーに値を登録する（既にあれば置き換える）。 */
+    set(key: K, value: V): void {
+        if (this.slotOf.has(key)) {
+            this.slots[this.slotOf.get(key)] = value;
+            return;
+        }
+        let slot = this.usedCount;
+        if (this.freeSlots.length > 0) {
+            slot = this.freeSlots.pop();
+        } else {
+            if (slot >= this.slots.length) {
+                const grown = new Array<V>(slot * 2 + 8);
+                for (let i = 0; i < slot; i++) {
+                    grown[i] = this.slots[i];
+                }
+                this.slots = grown;
+            }
+            this.usedCount = slot + 1;
+        }
+        this.slots[slot] = value;
+        this.slotOf.set(key, slot);
+    }
+
+    /** キーを削除する。 */
+    delete(key: K): void {
+        if (this.slotOf.has(key)) {
+            this.freeSlots.push(this.slotOf.get(key));
+            this.slotOf.delete(key);
+        }
+    }
+
+    /** 登録順のキー。 */
+    keys(): K[] {
+        return this.slotOf.keys();
+    }
+
+    /** 登録順の値（コピー）。 */
+    values(): V[] {
+        let out: V[] = [];
+        for (const k of this.slotOf.keys()) {
+            out.push(this.slots[this.slotOf.get(k)]);
+        }
+        return out;
+    }
+
+    /** すべて削除する。 */
+    clear(): void {
+        this.slotOf.clear();
+        this.slots = [];
+        this.freeSlots = [];
+        this.usedCount = 0;
+    }
+}
