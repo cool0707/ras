@@ -208,3 +208,87 @@ fn check_fix_rewrites_vba_spellings() {
     let text = String::from_utf8_lossy(&std::fs::read(dir.join("build/Main.bas")).unwrap()).to_string();
     assert!(text.contains("ws.Cells(1&, 1&).Value = Application.Name") && text.contains("MsgBox \""), "{text}");
 }
+
+/// `ras form new` / `ras form check` and writing forms with `ras pack` (spec §14.11).
+#[test]
+fn forms_are_created_checked_and_packed() {
+    let dir = temp_dir("forms");
+    let (ok, out) = ras(&dir, &["init", ".", "--workbook", "Book.xlsm"]);
+    assert!(ok, "{out}");
+    let (ok, out) = ras(&dir, &["form", "new", "frmInput"]);
+    assert!(ok, "{out}");
+    let spec_path = dir.join("forms/frmInput.form.json");
+    let spec: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&spec_path).unwrap()).unwrap();
+    assert_eq!(spec["kind"], "ras.userform");
+    assert_eq!(spec["form"]["width"], 240.0);
+    assert_eq!(std::fs::read_to_string(dir.join("forms/frmInput.bas")).unwrap(), "");
+    let (ok, out) = ras(&dir, &["form", "new", "frmInput"]);
+    assert!(!ok && out.contains("既に存在します"), "{out}");
+    let (ok, out) = ras(&dir, &["form", "new", "1bad"]);
+    assert!(!ok, "{out}");
+
+    // Validation errors point into the file.
+    let mut broken = spec.clone();
+    broken["controls"] = serde_json::json!([{ "id": "a", "name": "txtA", "type": "TextBox", "colour": 1 }]);
+    std::fs::write(&spec_path, serde_json::to_string_pretty(&broken).unwrap()).unwrap();
+    let (ok, out) = ras(&dir, &["form", "check"]);
+    assert!(!ok && out.contains("error[UFV001]") && out.contains("forms/frmInput.form.json:"), "{out}");
+    let (ok, out) = ras(&dir, &["check"]);
+    assert!(!ok && out.contains("UFV001"), "{out}");
+    let (ok, out) = ras(&dir, &["build"]);
+    assert!(!ok && out.contains("UFV001"), "{out}");
+
+    let mut good = spec.clone();
+    good["form"]["caption"] = "入力".into();
+    good["controls"] = serde_json::json!([
+        { "id": "name", "name": "txtName", "type": "TextBox", "left": 12, "top": 12 },
+        { "id": "ok", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 12, "top": 40 }
+    ]);
+    std::fs::write(&spec_path, serde_json::to_string_pretty(&good).unwrap()).unwrap();
+    std::fs::write(dir.join("forms/frmInput.bas"), "Private Sub btnOK_Click()\n    Unload Me\nEnd Sub\n").unwrap();
+    let (ok, out) = ras(&dir, &["form", "check"]);
+    assert!(ok, "{out}");
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok, "{out}");
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok && out.contains("作成 0 / 更新 0 / 削除 0"), "second pack must be a no-op: {out}");
+
+    let book = ras_ovba::unpack(&dir.join("Book.xlsm")).unwrap();
+    let project = book.project.expect("VBA project");
+    let form = project.modules.iter().find(|m| m.name == "frmInput").expect("form module");
+    assert_eq!(form.kind, ras_ovba::ModuleKind::Form);
+    assert!(form.source.contains("' RAS-FORM forms/frmInput.form.json\r\nPrivate Sub btnOK_Click()\r\n"), "{}", form.source);
+
+    // Changing the design updates the form; unpack leaves generated forms alone.
+    good["form"]["width"] = 300.into();
+    std::fs::write(&spec_path, serde_json::to_string_pretty(&good).unwrap()).unwrap();
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok && out.contains("更新 1"), "{out}");
+    let (ok, out) = ras(&dir, &["unpack"]);
+    assert!(ok, "{out}");
+    assert!(!dir.join("vba/frmInput.frm").exists());
+
+    // A form of the same name made in the VBE is not replaced without --overwrite.
+    let other = temp_dir("forms-handmade");
+    let (ok, out) = ras(&other, &["init", ".", "--workbook", "Book.xlsm"]);
+    assert!(ok, "{out}");
+    let mut hand_made = ras_form::FormSpec::new_form("frmInput");
+    hand_made.form.caption = Some("VBE".into());
+    let designer = ras_form::compile(&hand_made, 932).unwrap();
+    ras_ovba::pack(&ras_ovba::PackRequest {
+        book: other.join("Book.xlsm"),
+        codepage: 932,
+        forms: vec![ras_ovba::UserForm { name: "frmInput".into(), code: "Sub Old()\r\nEnd Sub\r\n".into(), streams: designer.streams, storages: designer.storages }],
+        ..Default::default()
+    })
+    .unwrap();
+    std::fs::create_dir_all(other.join("forms")).unwrap();
+    std::fs::copy(&spec_path, other.join("forms/frmInput.form.json")).unwrap();
+    let (ok, out) = ras(&other, &["pack"]);
+    assert!(!ok && out.contains("frmInput") && out.contains("--overwrite"), "{out}");
+    let (ok, out) = ras(&other, &["pack", "--overwrite"]);
+    assert!(ok, "{out}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&other);
+}

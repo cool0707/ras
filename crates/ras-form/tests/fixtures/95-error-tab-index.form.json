@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "ErrTab" },
+  "controls": [ { "id": "t", "name": "ts", "type": "TabStrip", "selectedIndex": 2, "tabs": [ { "name": "a" }, { "name": "A" } ] } ]
+}

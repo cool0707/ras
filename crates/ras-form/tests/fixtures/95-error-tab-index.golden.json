@@ -1,0 +1,3 @@
+{
+  "error": "controls[0].tabs[1].name duplicates tab name \"a\" from an earlier tab in this TabStrip."
+}

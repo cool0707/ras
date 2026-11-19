@@ -491,6 +491,7 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
         remove: req.remove_modules.clone(),
         codepage: Some(req.codepage),
         project_name: req.project_name.clone(),
+        forms: req.forms.clone(),
     };
     let built = vba::build_project(loaded_project, &documents.ensure, &edit)?;
 
@@ -503,6 +504,7 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
                 if old.kind == module.kind
                     && old.name == module.name
                     && source::sources_equivalent(&old.source, &module.source)
+                    && !built.changed_designers.iter().any(|n| same_name(n, &module.name))
                 {
                     report.unchanged.push(module.name.clone());
                 } else {

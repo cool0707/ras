@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "ErrDup" },
+  "controls": [
+    { "id": "a", "name": "txtA", "type": "TextBox" },
+    { "id": "b", "name": "TXTA", "type": "Label" }
+  ]
+}

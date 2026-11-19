@@ -1225,7 +1225,7 @@ Excel を起動せず、ブックファイル内の VBA プロジェクトを ra
 5. **`PROJECTwm` ストリーム:** モジュール名の MBCS / Unicode 対応表を再生成する。
 6. **クラス属性:** `VB_PredeclaredId` 等の `Attribute` 行はソース先頭に含めて格納する（ライブ同期で `Import` が必要だった制約はオフラインでは無い）。
 7. **ドキュメントモジュール:** `ThisWorkbook` とシートモジュールは、`xl/workbook.xml` の `workbookPr/@codeName` と各シートの `sheetPr/@codeName` に対応するもののみ書き換える（RAS 管理領域 `'--- RAS BEGIN/END ---` の扱いは §14.6 と同じ）。RAS のソースに存在するがブックに無いシートのコード名はエラーとする（シートの新規作成は行わない）。
-8. **ユーザーフォーム・その他のストレージ:** 非管理のフォーム（デザイナストレージ）は `vba/` の `.frm` / `.frx` から再構成する。変更が無いストレージはバイト単位でそのまま保持する。
+8. **ユーザーフォーム・その他のストレージ:** 非管理のフォーム（デザイナストレージ）は `vba/` の `.frm` / `.frx` から再構成する。`forms/` のフォームは FormSpec からデザイナストレージを生成して書き込む（§14.11）。変更が無いストレージはバイト単位でそのまま保持する。
 9. **OPC パッケージ:** `vbaProject.bin` のパート・リレーション・`[Content_Types].xml`（`application/vnd.ms-office.vbaProject`、ブック本体の content type を macroEnabled 版に）を整合させる。それ以外のパートは zip エントリを再圧縮せずそのままコピーする。
 
 #### 14.9.3 安全性
@@ -1336,6 +1336,64 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 
 ボタンは `BM_CLICK` で押し、閉じなければ `WM_COMMAND` の通知で再試行する（最大 3 回）。値を入力して続行するような応答（`InputBox` への入力など）は行わない。ダイアログを閉じた結果、元の呼び出しはエラー（キャンセルされた操作のエラー 1004 など）で戻ることがある。
 
+### 14.11 ユーザーフォーム（`forms/`）
+
+ユーザーフォームのデザイン（コントロールの配置とプロパティ）をテキストで管理し、Excel を起動せずにブックへ書き込む。デザインの形式と生成処理は [xlflow](https://github.com/harumiWeb/xlflow)（MIT License, Copyright (c) 2026 harumiWeb）の FormSpec と、その純 Go 実装のコンパイラを移植したもの（`crates/ras-form`）。
+
+#### 14.11.1 ファイル
+
+| ファイル | 内容 |
+|---|---|
+| `forms/<Name>.form.json` | デザイン。xlflow の FormSpec（schemaVersion 1）の JSON 形式。ファイル名は `form.name` と一致させる |
+| `forms/<Name>.bas` | コードビハインド。コードペインに表示される内容だけを UTF-8 で書く（`Attribute` 行・`VERSION` 行は書かない）。無ければ空として扱う |
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "frmInput", "caption": "入力", "width": 240, "height": 180 },
+  "controls": [
+    { "id": "name", "name": "txtName", "type": "TextBox", "left": 12, "top": 12, "width": 150, "height": 18 },
+    { "id": "ok", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 12, "top": 40 }
+  ]
+}
+```
+
+* `kind` は `ras.userform`（`ras form new` が書く値）または `xlflow.userform`。xlflow の JSON 形式の FormSpec はそのまま使える（YAML 形式は対象外）。
+* 座標・サイズはポイント単位で、親コンテナー基準。`form.width` / `form.height` はクライアント領域（MS-OFORMS の `DisplayedSize`）。
+* `controls` は平らな配列で、入れ子は `parentId` で表す。コンテナーは `Frame`・`MultiPage`（子は `Page` のみ）・`Page`（親は `MultiPage` のみ）。`TabStrip` のタブは `tabs` 配列に書く。
+* 組み込みのコントロール: `Label`・`TextBox`・`ComboBox`・`ListBox`・`CommandButton`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`・`Image`・`Frame`・`MultiPage`・`Page`・`TabStrip`。
+* 共通のプロパティ（`left` / `top` / `width` / `height` / `tabIndex` / `zIndex` / `enabled` / `visible`）、種類ごとのプロパティ（`caption` / `text` / `value` / `selectedIndex` / `tabs` など）、見た目（`font` / `foreColor` / `backColor` / `textAlign` / `borderStyle` / `pictureAlignment` / `pictureSizeMode`）の詳細と適用できるコントロールは xlflow の [UserForm Specification](https://harumiweb.github.io/xlflow/reference/userform-spec) に従う。色は `{ "kind": "rgb", "value": "#203040" }`、`{ "kind": "system", "value": "buttonFace" }`、`{ "kind": "ole", "value": "0x8000000F" }` の形で書く。
+* 検査結果のコード（`UFY001`、`UFV001`〜`UFV021`）は xlflow と同じ意味を持つ。メッセージは日本語。
+
+#### 14.11.2 コマンド
+
+| コマンド | 動作 |
+|---|---|
+| `ras form new <Name>` | `forms/<Name>.form.json`（240×180、caption = 名前、コントロールなし）と空の `forms/<Name>.bas` を作る。既にあれば何もしない |
+| `ras form check` | すべてのフォームを検査し、ブックへの書き込みと同じ生成まで行う。エラーがあれば終了コード 1 |
+| `ras check` / `ras build` | RAS ソースと合わせてフォームも検査する（`ras build` はフォームを `build/` に出力しない） |
+| `ras pack` | RAS 管理モジュールと合わせて、すべてのフォーム（デザイナストレージとコードモジュール）をブックに書き込む |
+| `ras watch` | `forms/` の変更も監視する（ブックが閉じていれば `ras pack` と同じ書き込みを行う） |
+
+#### 14.11.3 書き込み（`ras pack`）
+
+1. デザイナストレージ（`<Name>/f`・`o`・`\x01CompObj`・`\x03VBFrame`、コンテナーごとの `i<ID>/` サブストレージ、`MultiPage` の `x`）を FormSpec から一から生成する。生成結果は xlflow の生成結果とバイト単位で一致する（`crates/ras-form/tests/golden.rs`）。
+2. コードモジュール `VBA/<Name>` を作る。新しいフォームには `VB_Base = "0{GUID}{GUID}"`（新しい 2 つの GUID）を含むフォーム用の属性ヘッダーを付け、既存のフォームはヘッダーを保持してコードだけを置き換える。コードの先頭行は `' RAS-FORM forms/<Name>.form.json` とし、RAS が生成したフォームの目印にする。
+3. `PROJECT` ストリームに `BaseClass=<Name>` 行を加え、Microsoft Forms 2.0 Object Library（`MSForms`）の参照が無ければ `dir` ストリームに追加する。
+4. 同名のフォームが既にあれば、デザイナストレージを丸ごと置き換える。デザインもコードも変わっていなければ「変更なし」として扱う。
+5. 次の場合はエラーとし、何も書き込まない: RAS モジュールと同じ名前、フォームではない同名のモジュールがある、目印の無い（VBE で作った）同名のフォームがある（`--overwrite` で置き換えを許可する）。
+
+`ras unpack` は、目印のあるフォームを `vba/` に取り出さない。
+
+#### 14.11.4 制限
+
+* ライブ同期（`ras sync`、ブックを開いたままの `ras watch`）ではフォームを反映しない（警告を表示する）。ブックを閉じて `ras pack` を使う。
+* ブック内の既存のフォーム（VBE で作ったもの）を FormSpec に取り出す機能（xlflow の `form snapshot` / file pull に相当）は未実装。
+* `Image` の画像の埋め込み（`picture.path`）、`ComboBox` / `ListBox` の `list` / `selectedIndex`、カスタム ActiveX コントロールは生成できない（エラーになる）。リストの項目は `UserForm_Initialize` などで設定する。
+* VBE でフォームのデザインやコードを編集しても `forms/` には反映されず、次の `ras pack` で `forms/` の内容に置き換わる（ドリフト検出は行わない）。
+
 ## 15. プロジェクト構成
 
 ### 15.1 ディレクトリ
@@ -1345,6 +1403,7 @@ myproject/
   ras.toml
   src/            *.ras（RAS 管理モジュール）
   vba/            非管理の VBA モジュール・ユーザーフォーム（双方向同期）
+  forms/          ユーザーフォームのデザイン（*.form.json）とコードビハインド（*.bas）（§14.11）
   types/          追加の型定義（*.d.ras）
   build/          生成物（.bas / .cls / .rasmap）
   build/debug/    デバッグ実行用の JavaScript とソースマップ（§14.10）
@@ -1552,7 +1611,8 @@ Rust で `vbaProject.bin` を**書き込める**ライブラリは見当たら�
 | 読み取り・テストの検証用 | `ovba`（Rust, 読み取り専用） | 書き出した `vbaProject.bin` を別実装で読み直す相互検証に使う（§14.9.3）。`calamine` の VBA 読み取り部も参考 |
 | 検証ツール | oletools（`olevba`, Python） | CI で出力ファイルを解析し、ソース・`dir` ストリームの整合を確認する |
 | OPC のパート構成 | 参考: XlsxWriter の `add_vba_project` | `[Content_Types].xml` とリレーションの書き方 |
-| 仕様 | [MS-OVBA], [MS-CFB], [MS-VBAL] | 一次資料。実装はこれを正とする |
+| ユーザーフォームの生成（§14.11） | xlflow（Go, MIT）の `internal/vba/userforms` を移植 | FormSpec・検査・MS-OFORMS デザイナストレージの生成。テストは xlflow の出力とのバイト比較 |
+| 仕様 | [MS-OVBA], [MS-CFB], [MS-VBAL], [MS-OFORMS] | 一次資料。実装はこれを正とする |
 
 ### 17.4 Windows 連携（ライブ同期 §14.1〜14.8、`ras typegen`）
 

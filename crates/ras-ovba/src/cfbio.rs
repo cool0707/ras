@@ -23,15 +23,17 @@ pub(crate) struct Node {
     pub meta: Option<cfb::Entry>,
     /// Creation and modification time (FILETIME) of a storage.
     pub times: (u64, u64),
+    /// CLSID (wire byte order) of a new storage that has no `meta`.
+    pub clsid: Option<[u8; 16]>,
 }
 
 impl Node {
     pub(crate) fn stream(path: Vec<String>, data: Vec<u8>) -> Node {
-        Node { path, data: Some(data), meta: None, times: (0, 0) }
+        Node { path, data: Some(data), meta: None, times: (0, 0), clsid: None }
     }
 
     pub(crate) fn storage(path: Vec<String>) -> Node {
-        Node { path, data: None, meta: None, times: (0, 0) }
+        Node { path, data: None, meta: None, times: (0, 0), clsid: None }
     }
 
     pub(crate) fn is_storage(&self) -> bool {
@@ -105,10 +107,10 @@ pub(crate) fn read_tree(bytes: &[u8]) -> Result<Tree, OvbaError> {
         if entry.is_stream() {
             let mut data = Vec::with_capacity(entry.len() as usize);
             file.open_stream(entry.path()).map_err(cfb_err)?.read_to_end(&mut data).map_err(cfb_err)?;
-            tree.nodes.push(Node { path: chain, data: Some(data), meta: Some(entry), times: (0, 0) });
+            tree.nodes.push(Node { path: chain, data: Some(data), meta: Some(entry), times: (0, 0), clsid: None });
         } else {
             let times = raw_times.get(&chain).copied().unwrap_or((0, 0));
-            tree.nodes.push(Node { path: chain, data: None, meta: Some(entry), times });
+            tree.nodes.push(Node { path: chain, data: None, meta: Some(entry), times, clsid: None });
         }
     }
     Ok(tree)
@@ -187,6 +189,8 @@ pub(crate) fn write_tree(tree: &Tree) -> Result<Vec<u8>, OvbaError> {
                     file.create_storage(&path).map_err(cfb_err)?;
                     if let Some(meta) = &node.meta {
                         file.set_storage_clsid(&path, *meta.clsid()).map_err(cfb_err)?;
+                    } else if let Some(clsid) = node.clsid.filter(|c| *c != [0; 16]) {
+                        file.set_storage_clsid(&path, uuid::Uuid::from_bytes_le(clsid)).map_err(cfb_err)?;
                     }
                     pending.push(node.path.clone());
                 }

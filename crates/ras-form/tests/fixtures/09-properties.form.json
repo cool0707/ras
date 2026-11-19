@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "Bags", "caption": "Bags" },
+  "controls": [
+    { "id": "o1", "name": "optRed", "type": "OptionButton", "caption": "Red", "properties": { "groupName": "Colors", "tag": "red", "controlTipText": "Pick red" } },
+    { "id": "t1", "name": "txtLimited", "type": "TextBox", "top": 30, "properties": { "maxLength": 10, "backColor": 16777215, "borderStyle": 1 } },
+    { "id": "l1", "name": "lblTagged", "type": "Label", "caption": "x", "top": 60, "properties": { "tag": "日本語タグ", "foreColor": 255 } },
+    { "id": "i1", "name": "imgBag", "type": "Image", "top": 90, "properties": { "pictureAlignment": 4, "pictureSizeMode": 1 } }
+  ]
+}

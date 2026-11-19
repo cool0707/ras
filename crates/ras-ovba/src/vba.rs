@@ -327,8 +327,12 @@ fn now_as_version() -> u32 {
 ///   module text; missing `Attribute` header lines are added (see the crate
 ///   documentation). A new `ModuleKind::Document` module must be listed in
 ///   `documents` ([`OvbaError::UnknownCodeName`] otherwise) and a new
-///   `ModuleKind::Form` cannot be created ([`OvbaError::UnsupportedFormat`]);
-///   the code of an existing form can be replaced.
+///   `ModuleKind::Form` cannot be created this way
+///   ([`OvbaError::UnsupportedFormat`]); the code of an existing form can be
+///   replaced.
+/// * `edit.forms` creates user forms or replaces the code and the designer
+///   storage of existing ones (see [`crate::UserForm`]); the `MSForms`
+///   reference is added when it is missing.
 /// * `edit.remove` deletes standard and class modules; unknown names are
 ///   ignored, document modules and forms are refused.
 ///
@@ -366,6 +370,9 @@ pub(crate) struct BuiltProject {
     /// Modules that received trailing blank lines because their last chunk
     /// could not be stored otherwise (see [`compress_source`]).
     pub padded: Vec<String>,
+    /// User forms whose designer storage differs from the previous one
+    /// (or is new).
+    pub changed_designers: Vec<String>,
 }
 
 pub(crate) fn build_project(
@@ -549,6 +556,76 @@ pub(crate) fn build_project(
         }
     }
 
+    // ---- user forms ----------------------------------------------------------
+    let mut designer_names: Vec<String> = Vec::new();
+    for form in &edit.forms {
+        validate_module_name(&form.name)?;
+        if ["VBA", "PROJECT", "PROJECTWM"].contains(&form.name.to_ascii_uppercase().as_str()) {
+            return Err(OvbaError::InvalidRequest(format!("`{}` is reserved and cannot name a user form", form.name)));
+        }
+        if designer_names.iter().any(|n| same_name(n, &form.name))
+            || edit.upsert.iter().any(|m| same_name(&m.name, &form.name))
+            || edit.remove.iter().any(|n| same_name(n, &form.name))
+        {
+            return Err(OvbaError::InvalidRequest(format!("user form `{}` is listed more than once", form.name)));
+        }
+        let body = source::normalize_newlines(&form.code);
+        if body.split("\r\n").any(|line| line.trim_start().starts_with("Attribute VB_")) {
+            return Err(OvbaError::InvalidRequest(format!(
+                "the code of user form `{}` must not contain `Attribute VB_` lines",
+                form.name
+            )));
+        }
+        let body = if body.is_empty() || body.ends_with("\r\n") { body } else { body + "\r\n" };
+        validate_designer(form)?;
+        let what = format!("source of module `{}`", form.name);
+        match modules.iter().position(|m| same_name(&m.name, &form.name)) {
+            Some(index) => {
+                if modules[index].kind != ModuleKind::Form {
+                    return Err(OvbaError::InvalidRequest(format!(
+                        "module `{}` is a {:?} module, not a user form",
+                        form.name, modules[index].kind
+                    )));
+                }
+                let text = source::prepare_module_source(
+                    ModuleKind::Form,
+                    &form.name,
+                    &body,
+                    previous_source[index].as_deref(),
+                    "",
+                );
+                let module = &mut modules[index];
+                module.name = form.name.clone();
+                module.bytes = codepage::encode(cp, &text, &what)?;
+            }
+            None => {
+                let storage_taken = loaded.is_some_and(|p| {
+                    p.tree.nodes.iter().any(|n| !n.path.is_empty() && same_name(&n.path[0], &form.name))
+                });
+                if storage_taken {
+                    return Err(OvbaError::InvalidRequest(format!(
+                        "the project already has a storage named `{}`",
+                        form.name
+                    )));
+                }
+                let text = user_form_header(&form.name) + &body;
+                modules.push(PlannedModule {
+                    name: form.name.clone(),
+                    kind: ModuleKind::Form,
+                    stream: form.name.clone(),
+                    bytes: codepage::encode(cp, &text, &what)?,
+                    docstring: String::new(),
+                    help_context: 0,
+                    procedural: false,
+                    readonly: false,
+                    private: false,
+                });
+                previous_source.push(None);
+            }
+        }
+        designer_names.push(form.name.clone());
+    }
+
     // Stream names must be unique within the VBA storage.
     for (i, module) in modules.iter().enumerate() {
         if modules[..i].iter().any(|m| m.stream.to_uppercase() == module.stream.to_uppercase()) {
@@ -579,7 +656,7 @@ pub(crate) fn build_project(
             private: m.private,
         })
         .collect();
-    let (dir_stream, references) = match loaded {
+    let (mut dir_stream, mut references) = match loaded {
         Some(project) => {
             let mut d = project.dir.clone();
             let references = if cp == d.codepage {
@@ -617,6 +694,12 @@ pub(crate) fn build_project(
             (d, raw)
         }
     };
+    if !edit.forms.is_empty() && !has_msforms_reference(&dir_stream.references) {
+        let addition = msforms_reference();
+        references.extend(dir::serialize_references(&addition, cp, cp)?);
+        dir_stream.references.extend(addition);
+        dir_stream.references_raw = references.clone();
+    }
     let dir_bytes = dir_stream.serialize(&references)?;
     let dir_compressed = compression::compress(&dir_bytes);
     if !compression::is_lossless(&dir_bytes, &dir_compressed) {
@@ -653,6 +736,9 @@ pub(crate) fn build_project(
             if top && !node.is_storage() && (upper == "PROJECT" || upper == "PROJECTWM") {
                 continue;
             }
+            if designer_names.iter().any(|n| same_name(n, &node.path[0])) {
+                continue;
+            }
             if in_vba
                 && (upper == "DIR"
                     || upper == "_VBA_PROJECT"
@@ -679,6 +765,23 @@ pub(crate) fn build_project(
     }
     if !tree.nodes.iter().any(|n| n.is_storage() && n.path.len() == 1 && n.path[0] == vba) {
         tree.nodes.push(Node::storage(vec![vba.clone()]));
+    }
+    let mut changed_designers = Vec::new();
+    for form in &edit.forms {
+        let mut new_nodes = Vec::new();
+        for (path, clsid) in &form.storages {
+            let mut node = Node::storage(designer_path(&form.name, path));
+            node.clsid = Some(*clsid);
+            new_nodes.push(node);
+        }
+        for (path, data) in &form.streams {
+            new_nodes.push(Node::stream(designer_path(&form.name, path), data.clone()));
+        }
+        let old = loaded.map(|p| designer_snapshot(p.tree.nodes.iter(), &form.name)).unwrap_or_default();
+        if old != designer_snapshot(new_nodes.iter(), &form.name) {
+            changed_designers.push(form.name.clone());
+        }
+        tree.nodes.extend(new_nodes);
     }
     tree.nodes.push(Node::stream(vec!["PROJECT".to_string()], project_bytes));
     tree.nodes.push(Node::stream(vec!["PROJECTwm".to_string()], project_wm));
@@ -720,7 +823,106 @@ pub(crate) fn build_project(
     if check.dir.codepage != cp || check.protection.is_protected() {
         return Err(OvbaError::Verify("project properties did not read back as written".into()));
     }
-    Ok(BuiltProject { bytes, modules: built_modules, padded })
+    Ok(BuiltProject { bytes, modules: built_modules, padded, changed_designers })
+}
+
+/// LIBID prefix of the Microsoft Forms 2.0 Object Library.
+const MSFORMS_LIBID_PREFIX: &str = "*\\G{0D452EE1-E08F-101A-852E-02608C4D0BB4}#";
+/// Its GUID in wire byte order (`OriginalTypeLib` of a control reference).
+const MSFORMS_GUID_WIRE: [u8; 16] =
+    [0xE1, 0x2E, 0x45, 0x0D, 0x8F, 0xE0, 0x1A, 0x10, 0x85, 0x2E, 0x02, 0x60, 0x8C, 0x4D, 0x0B, 0xB4];
+
+fn has_msforms_reference(parts: &[dir::ReferencePart]) -> bool {
+    parts.iter().any(|part| match part {
+        dir::ReferencePart::Registered { libid, .. } => {
+            String::from_utf8_lossy(libid).to_ascii_uppercase().starts_with(MSFORMS_LIBID_PREFIX)
+        }
+        dir::ReferencePart::Control { original_type_lib, .. } => *original_type_lib == MSFORMS_GUID_WIRE,
+        _ => false,
+    })
+}
+
+/// The `MSForms` reference Excel adds with the first user form.
+fn msforms_reference() -> Vec<dir::ReferencePart> {
+    let name = "MSForms";
+    let libid = "*\\G{0D452EE1-E08F-101A-852E-02608C4D0BB4}#2.0#0#C:\\Windows\\System32\\FM20.DLL#Microsoft Forms 2.0 Object Library";
+    vec![
+        dir::ReferencePart::Name { name: name.as_bytes().to_vec(), unicode: Some(codepage::utf16le(name)) },
+        dir::ReferencePart::Registered { libid: libid.as_bytes().to_vec(), reserved1: 0, reserved2: 0 },
+    ]
+}
+
+/// Attribute header of a new user form module with a fresh component
+/// identity (`VB_Base = "0{guid}{guid}"`).
+fn user_form_header(name: &str) -> String {
+    let guid = || crate::crypto::new_guid().trim_matches(|c| c == '{' || c == '}').to_string();
+    let (first, mut second) = (guid(), guid());
+    while second == first {
+        second = guid();
+    }
+    [
+        format!("Attribute VB_Name = \"{name}\""),
+        format!("Attribute VB_Base = \"0{{{first}}}{{{second}}}\""),
+        "Attribute VB_GlobalNameSpace = False".to_string(),
+        "Attribute VB_Creatable = False".to_string(),
+        "Attribute VB_PredeclaredId = True".to_string(),
+        "Attribute VB_Exposed = False".to_string(),
+        "Attribute VB_TemplateDerived = False".to_string(),
+        "Attribute VB_Customizable = False".to_string(),
+    ]
+    .join("\r\n")
+        + "\r\n"
+}
+
+fn designer_path(form: &str, relative: &str) -> Vec<String> {
+    let mut path = vec![form.to_string()];
+    path.extend(relative.split('/').filter(|s| !s.is_empty()).map(str::to_string));
+    path
+}
+
+/// Checks that a designer storage is complete and well formed.
+fn validate_designer(form: &crate::UserForm) -> Result<(), OvbaError> {
+    let bad = |what: String| Err(OvbaError::InvalidRequest(format!("designer of user form `{}`: {what}", form.name)));
+    if !form.storages.contains_key("") {
+        return bad("the form storage itself is missing".into());
+    }
+    for name in ["f", "o", "\u{1}CompObj", "\u{3}VBFrame"] {
+        if !form.streams.contains_key(name) {
+            return bad(format!("the stream `{}` is missing", name.escape_debug()));
+        }
+    }
+    for path in form.storages.keys().chain(form.streams.keys()) {
+        if path.split('/').any(|s| s.is_empty() || s.encode_utf16().count() > 31) && !path.is_empty() {
+            return bad(format!("invalid path `{}`", path.escape_debug()));
+        }
+        let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+        if !path.is_empty() && !form.storages.contains_key(parent) {
+            return bad(format!("`{}` has no parent storage", path.escape_debug()));
+        }
+    }
+    if form.streams.keys().any(|k| form.storages.contains_key(k)) {
+        return bad("a path is both a stream and a storage".into());
+    }
+    Ok(())
+}
+
+type DesignerEntry = (Vec<String>, Option<Vec<u8>>, [u8; 16]);
+
+/// What a designer storage consists of, for change detection.
+fn designer_snapshot<'a>(nodes: impl Iterator<Item = &'a Node>, form: &str) -> Vec<DesignerEntry> {
+    let mut entries: Vec<DesignerEntry> = nodes
+        .filter(|n| !n.path.is_empty() && same_name(&n.path[0], form))
+        .map(|n| {
+            let clsid = match &n.meta {
+                Some(meta) => meta.clsid().to_bytes_le(),
+                None => n.clsid.unwrap_or_default(),
+            };
+            let path = n.path.iter().map(|s| s.to_uppercase()).collect();
+            (path, n.data.clone(), if n.is_storage() { clsid } else { [0; 16] })
+        })
+        .collect();
+    entries.sort();
+    entries
 }
 
 /// Checks that `actual` (read back from a written project) is exactly

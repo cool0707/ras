@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "HiddenPage", "width": 300, "height": 200 },
+  "controls": [
+    { "id": "mp", "name": "mpMain", "type": "MultiPage", "width": 290, "height": 190, "selectedIndex": 0, "tabIndex": 2 },
+    { "id": "p0", "parentId": "mp", "name": "pgA", "type": "Page", "zIndex": 1 },
+    { "id": "p1", "parentId": "mp", "name": "pgB", "type": "Page", "zIndex": 0, "visible": false, "caption": "B" },
+    { "id": "t", "parentId": "p0", "name": "tsInner", "type": "TabStrip", "tabs": [ { "name": "x" } ], "selectedIndex": 0 },
+    { "id": "img", "parentId": "p1", "name": "imgClear", "type": "Image", "picture": { "remove": true } }
+  ]
+}

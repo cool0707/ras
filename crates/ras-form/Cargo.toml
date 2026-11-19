@@ -1,0 +1,16 @@
+[package]
+name = "ras-form"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "UserForm specifications (forms/*.form.json): validation and generation of the MS-OFORMS designer storage (ported from xlflow)"
+
+[dependencies]
+ras-ovba = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+cfb = { workspace = true }

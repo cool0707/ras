@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "coordinateSystem": "points",
+  "form": { "name": "ZOrder", "caption": "" },
+  "controls": [
+    { "id": "a", "name": "btnA", "type": "CommandButton", "zIndex": 2 },
+    { "id": "b", "name": "btnB", "type": "CommandButton", "zIndex": 0, "left": 80 },
+    { "id": "c", "name": "btnC", "type": "CommandButton", "zIndex": 1, "left": 160, "tabIndex": 7 }
+  ]
+}

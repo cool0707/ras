@@ -4,6 +4,7 @@ members = [
     "crates/ras-syntax",
     "crates/ras-compiler",
     "crates/ras-ovba",
+    "crates/ras-form",
     "crates/ras-sync",
     "crates/ras-lsp",
     "crates/ras",
@@ -21,6 +22,7 @@ rust-version = "1.85"
 ras-syntax = { path = "crates/ras-syntax" }
 ras-compiler = { path = "crates/ras-compiler" }
 ras-ovba = { path = "crates/ras-ovba" }
+ras-form = { path = "crates/ras-form" }
 ras-sync = { path = "crates/ras-sync" }
 ras-lsp = { path = "crates/ras-lsp" }
 
@@ -38,6 +40,7 @@ lsp-server = "0.7"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 cfb = "0.10"
 ovba = "0.7"
+uuid = "1"
 
 [profile.release]
 opt-level = 3

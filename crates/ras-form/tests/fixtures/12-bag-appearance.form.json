@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "BagLooks"
+  },
+  "controls": [
+    {
+      "id": "l",
+      "name": "lblBag",
+      "type": "Label",
+      "properties": {
+        "font": {
+          "name": "MS Gothic",
+          "size": 12,
+          "underline": true
+        },
+        "foreColor": 2147483656,
+        "textAlign": 2,
+        "borderStyle": 1
+      }
+    },
+    {
+      "id": "c",
+      "name": "cmbBoth",
+      "type": "ComboBox",
+      "text": "x",
+      "value": "x",
+      "top": 30,
+      "properties": {
+        "accelerator": "C"
+      }
+    },
+    {
+      "id": "s",
+      "name": "scrH",
+      "type": "ScrollBar",
+      "top": 60,
+      "properties": {
+        "backColor": 4278190080
+      }
+    },
+    {
+      "id": "f",
+      "name": "fraBag",
+      "type": "Frame",
+      "top": 90,
+      "properties": {
+        "backColor": 12632256,
+        "caption": "Bag"
+      }
+    }
+  ]
+}

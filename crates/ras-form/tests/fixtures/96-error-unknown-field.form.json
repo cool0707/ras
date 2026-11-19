@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "ErrField", "build": {} },
+  "controls": [ { "id": "t", "name": "txt", "type": "TextBox", "caption": "no", "colour": 1 } ]
+}

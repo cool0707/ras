@@ -47,9 +47,12 @@
 //!
 //! # Scope
 //!
-//! Creating *new* user forms and re-signing are not implemented, `.xls`
-//! (BIFF8) is not supported, and binary (`.xlsb`) workbook and sheet parts
-//! are only read, never rewritten.
+//! User forms can be created, or their designer storage replaced, from a
+//! complete designer storage generated elsewhere ([`UserForm`], e.g. by the
+//! `ras-form` crate); existing designer storages are never decoded or
+//! patched. Re-signing is not implemented, `.xls` (BIFF8) is not supported,
+//! and binary (`.xlsb`) workbook and sheet parts are only read, never
+//! rewritten.
 
 #![forbid(unsafe_code)]
 
@@ -75,6 +78,13 @@ pub use pack::{pack, unpack};
 pub use source::{extract_managed_region, merge_managed_region, procedure_names, RAS_BEGIN_MARKER, RAS_END_MARKER};
 pub use vba::{read_project_bin, write_project_bin};
 pub use workbook::{create_workbook, BookKind};
+
+/// Encodes `text` in a Windows code page (as used for module source and
+/// designer properties). A character the code page cannot represent is an
+/// [`OvbaError::Encoding`] error.
+pub fn encode_text(codepage: u16, text: &str) -> Result<Vec<u8>, OvbaError> {
+    codepage::encode(codepage, text, "text")
+}
 
 use std::path::PathBuf;
 
@@ -124,6 +134,27 @@ pub struct VbaProjectInfo {
     pub stomped_modules: Vec<String>,
 }
 
+/// A user form to create, or whose code and designer storage to replace.
+///
+/// The designer storage is written as given (it is not validated beyond its
+/// paths); the code module gets the standard form header. A new form gets a
+/// fresh `VB_Base` component identity, an existing form keeps its header.
+/// Writing a form adds the reference to the Microsoft Forms 2.0 Object
+/// Library (`MSForms`) when the project does not have it yet.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UserForm {
+    /// Name of the form (module name and name of the designer storage).
+    pub name: String,
+    /// Code pane text of the form, without `Attribute` lines.
+    pub code: String,
+    /// Designer streams, keyed by their path relative to the form storage
+    /// (`"f"`, `"o"`, `"\u{1}CompObj"`, `"\u{3}VBFrame"`, `"i01/f"`, ...).
+    pub streams: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Storages below (and including, as `""`) the form storage with their
+    /// CLSID in wire byte order.
+    pub storages: std::collections::BTreeMap<String, [u8; 16]>,
+}
+
 /// Changes to apply with [`write_project_bin`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectEdit {
@@ -140,6 +171,8 @@ pub struct ProjectEdit {
     /// New project name; `None` keeps the existing one (`VBAProject` for a
     /// new project).
     pub project_name: Option<String>,
+    /// User forms to create or replace (code and designer storage).
+    pub forms: Vec<UserForm>,
 }
 
 /// A document module that must exist in the project.
@@ -211,6 +244,8 @@ pub struct PackRequest {
     pub document_code: Vec<DocumentCode>,
     /// Standard or class modules to delete.
     pub remove_modules: Vec<String>,
+    /// User forms to create or replace (see [`UserForm`]).
+    pub forms: Vec<UserForm>,
     /// Directory that receives a copy of the file that is about to be
     /// replaced; `None` disables backups.
     pub backup_dir: Option<PathBuf>,
@@ -231,6 +266,7 @@ impl Default for PackRequest {
             modules: Vec::new(),
             document_code: Vec::new(),
             remove_modules: Vec::new(),
+            forms: Vec::new(),
             backup_dir: None,
             backup_generations: 0,
         }

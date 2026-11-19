@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "ErrPage" },
+  "controls": [
+    { "id": "m", "name": "mp", "type": "MultiPage" },
+    { "id": "p", "parentId": "m", "name": "pg", "type": "Page", "left": 3 }
+  ]
+}
