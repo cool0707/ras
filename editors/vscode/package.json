@@ -125,7 +125,7 @@
           "type": "boolean",
           "default": true,
           "scope": "resource",
-          "markdownDescription": "単独で起動できる関数の上に「Excel で実行」（Windows のみ）と「デバッグ」の CodeLens を表示します。"
+          "markdownDescription": "単独で起動できる関数の上に「Excelで実行」（Windows のみ）と「デバッグ実行」の CodeLens を表示します。"
         },
         "ras.debug.runtimeExecutable": {
           "type": "string",

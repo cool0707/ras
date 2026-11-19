@@ -171,10 +171,10 @@ impl Server {
             let range = Self::range(prog, m, ras_syntax::TextRange::empty(decl.span.start()));
             if cfg!(windows) && d.is_macro_entry() {
                 let name = format!("{}.{}", md.vba_name, ras_compiler::names::member_ident(&d.name));
-                lenses.push(json!({ "range": range, "command": { "title": "$(play) Excel で実行", "tooltip": format!("{name} を Excel で実行します（ブックへ同期してから実行）"), "command": "ras.client.runMacro", "arguments": [name] } }));
+                lenses.push(json!({ "range": range, "command": { "title": "$(play) Excelで実行", "tooltip": format!("{name} を Excel で実行します（ブックへ同期してから実行）"), "command": "ras.client.runMacro", "arguments": [name] } }));
             }
             let entry = format!("{}.{}", md.vba_name, d.name);
-            lenses.push(json!({ "range": range, "command": { "title": "$(debug-alt) デバッグ", "tooltip": format!("{entry} をデバッグ実行します"), "command": "ras.debug.start", "arguments": [{ "entry": entry, "uri": uri }] } }));
+            lenses.push(json!({ "range": range, "command": { "title": "$(debug-alt) デバッグ実行", "tooltip": format!("{entry} をデバッグ実行します"), "command": "ras.debug.start", "arguments": [{ "entry": entry, "uri": uri }] } }));
         }
         lenses
     }
