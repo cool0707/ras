@@ -237,17 +237,20 @@ mod tests {
     fn calls_a_real_object() {
         init_com();
         let prog_id = wide("Scripting.Dictionary");
-        let dict = unsafe {
+        let create = || unsafe {
             let clsid = CLSIDFromProgID(PCWSTR(prog_id.as_ptr())).unwrap();
             Obj(CoCreateInstance::<_, IDispatch>(&clsid, None, CLSCTX_INPROC_SERVER).unwrap())
         };
+        let empty = create();
+        empty.put("CompareMode", Arg::Int(1)).unwrap();
+        assert_eq!(empty.get("CompareMode", &[]).unwrap().int(), Some(1));
+        let dict = create();
         dict.call("Add", &[Arg::Str("名前"), Arg::Str("値 ①")]).unwrap();
         dict.call("Add", &[Arg::Str("n"), Arg::Int(42)]).unwrap();
         assert_eq!(dict.get("Count", &[]).unwrap().int(), Some(2));
         assert_eq!(dict.get("Item", &[Arg::Str("名前")]).unwrap().string(), "値 ①");
         assert_eq!(dict.get("Item", &[Arg::Str("n")]).unwrap().int(), Some(42));
         assert_eq!(dict.call("Exists", &[Arg::Str("n")]).unwrap().int(), Some(-1));
-        assert!(dict.put("CompareMode", Arg::Int(0)).is_err(), "not allowed once the dictionary has items");
         let missing = dict.call("NoSuchMember", &[]).err().unwrap();
         assert!(!missing.is_busy() && missing.description.contains("NoSuchMember"), "{missing:?}");
         assert!(dict.call("Remove", &[Arg::Str("missing key")]).is_err());
