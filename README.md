@@ -89,7 +89,8 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | コマンド | 状態 |
 |---|---|
 | `init` / `check` / `build` / `build --target js` / `watch` / `pack` / `unpack` / `fmt` / `lsp --stdio` | 実装済み |
-| `sync` / `setup` / `typegen` / `pack --via-excel` | 未実装（実行するとその旨を表示して終了） |
+| `sync` | 実装済み（Windows のみ。Excel で開いているブックへ反映する。`--pull` は未実装） |
+| `setup` / `typegen` / `pack --via-excel` | 未実装（実行するとその旨を表示して終了） |
 
 ## 実装状況
 
@@ -110,7 +111,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §11 `declare`（32/64bit） | 一部 | `declare struct` のアラインメント計算と `@fallback` は未実装 |
 | §12 ボイラープレート・イベント・`@init`・マクロ入口 | 一部 | リボン（`@ribbon`、§12.5）は未実装 |
 | §13 VBA の罠の回避 | 一部 | `Collection` ラッパ、`Range.Find` ラッパ、文字列で指定される名前の存在確認、一時変数の再利用は未実装 |
-| §14.1〜14.8 ライブ同期（RASBridge） | **未実装** | ドリフト検出用ハッシュ、ソースマップ、`Erl` 行番号は実装済み |
+| §14.1〜14.8 ライブ同期 | 一部 | Excel で開いているブックへ、保存のたびに反映する（`ras sync`、`ras watch`、VS Code の言語サーバー。Windows のみ）。ras が COM 経由で VBE のコードモジュールを直接書き換える方式で、共有メモリと RASBridge.xlam（§14.2、§14.4、§14.5）は使わない。適用規則（§14.6）のうち差分適用・ドキュメントモジュールの管理領域・属性付きクラスの `Import`・失敗時の巻き戻し・実行中／中断モード中の保留と、ドリフト検出（§14.7）は実装。適用後のコンパイル確認（`sync.compileCheck`）、Excel → ローカル方向（`--pull`、非管理モジュールの双方向同期）、既存クラスの属性変更、`ras setup` は未実装 |
 | §14.9 オフライン書き込み・読み出し | 実装済み | 新規ユーザーフォームの作成と再署名は未実装。`vba/` の非管理モジュールをブックへ書き戻す処理は未実装（取り出しのみ） |
 | §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | Excel への接続（`ras_com.node`）は Excel 2021（64bit）の実機で確認済み。ダイアログの監視（§14.10.6）は Excel の無い Windows 上の CI でメッセージ ボックスを相手に確認しており、Excel の実機では未確認。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。`super` 呼び出しを伴う継承は対象外 |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱し、メンバーとグローバルを camelCase で参照する（§15.3.1）。`ras typegen` と `vba:` インポートは未実装 |

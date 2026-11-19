@@ -4,6 +4,7 @@ members = [
     "crates/ras-syntax",
     "crates/ras-compiler",
     "crates/ras-ovba",
+    "crates/ras-sync",
     "crates/ras-lsp",
     "crates/ras",
     "crates/ras-com",
@@ -20,6 +21,7 @@ rust-version = "1.85"
 ras-syntax = { path = "crates/ras-syntax" }
 ras-compiler = { path = "crates/ras-compiler" }
 ras-ovba = { path = "crates/ras-ovba" }
+ras-sync = { path = "crates/ras-sync" }
 ras-lsp = { path = "crates/ras-lsp" }
 
 logos = "0.16"

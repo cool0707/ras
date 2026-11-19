@@ -148,8 +148,16 @@ fn fmt_check_and_unimplemented_commands() {
     assert_eq!(std::fs::read_to_string(dir.join("src/main.ras")).unwrap(), "export function f() {\n    msgBox(\"x\");\n}\n");
     assert!(ras(&dir, &["fmt", "--check"]).0);
     // Commands that need live sync say so instead of pretending to work.
-    let (ok, out) = ras(&dir, &["sync"]);
+    let (ok, out) = ras(&dir, &["sync", "--pull"]);
     assert!(!ok && out.contains("未実装"), "{out}");
+    // Live sync needs the workbook open in Excel (and Windows): without it the command says what to do instead.
+    let (ok, out) = ras(&dir, &["sync"]);
+    assert!(!ok && out.contains("project.workbook"), "{out}");
+    let book = temp_dir("sync-closed");
+    assert!(ras(&book, &["init", ".", "--workbook", "Book.xlsm"]).0);
+    let (ok, out) = ras(&book, &["sync"]);
+    assert!(!ok && out.contains("ras pack"), "{out}");
+    let _ = std::fs::remove_dir_all(&book);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

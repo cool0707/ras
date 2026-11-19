@@ -28,10 +28,7 @@ export function registerCommands(server: RasServer, vbaView: GeneratedVbaView): 
 
 	return vscode.Disposable.from(
 		command("ras.client.showGeneratedVba", "生成 VBA を表示", (resource) => showGeneratedVba(server, vbaView, resource)),
-		command("ras.client.syncNow", "今すぐ同期", async () => {
-			const result = await withProgress("RAS: 同期しています…", () => server.execute(SERVER_COMMANDS.syncNow));
-			showResult(result, "同期しました。", "同期に失敗しました。");
-		}),
+		command("ras.client.syncNow", "今すぐ同期", () => syncNow(server)),
 		command("ras.client.openInExcel", "Excel で開く", async () => {
 			const result = await withProgress("RAS: Excel で開いています…", () => server.execute(SERVER_COMMANDS.openInExcel));
 			showResult(result, "Excel で開きました。", "Excel で開けませんでした。");
@@ -64,6 +61,32 @@ async function showGeneratedVba(server: RasServer, vbaView: GeneratedVbaView, re
 		throw new Error("言語サーバーから想定外の応答が返されました。");
 	}
 	await vbaView.show(editor.document.uri, result);
+}
+
+async function syncNow(server: RasServer): Promise<void> {
+	const result = await withProgress("RAS: 同期しています…", () => server.execute(SERVER_COMMANDS.syncNow));
+	const drifted = driftedModules(result);
+	if (drifted.length === 0) {
+		showResult(result, "同期しました。", "同期に失敗しました。");
+		return;
+	}
+	// Modules edited in the VBE are left alone until the user decides (spec §14.7).
+	const overwrite = "RAS で上書き";
+	const choice = await vscode.window.showWarningMessage(
+		`RAS: 次のモジュールは Excel（VBE）側で編集されているため、上書きしていません: ${drifted.join(", ")}`,
+		overwrite,
+	);
+	if (choice !== overwrite) {
+		return;
+	}
+	const forced = await withProgress("RAS: 同期しています…", () => server.execute(SERVER_COMMANDS.syncNow, [{ overwrite: true }]));
+	showResult(forced, "同期しました。", "同期に失敗しました。");
+}
+
+/** Names in the `drifted` list of a sync result. */
+function driftedModules(result: unknown): string[] {
+	const drifted = (typeof result === "object" && result !== null ? result : {}) as { drifted?: unknown };
+	return Array.isArray(drifted.drifted) ? drifted.drifted.filter((name): name is string => typeof name === "string") : [];
 }
 
 async function runMacro(server: RasServer): Promise<void> {

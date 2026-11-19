@@ -852,6 +852,7 @@ dependencies = [
  "ras-compiler",
  "ras-lsp",
  "ras-ovba",
+ "ras-sync",
  "ras-syntax",
 ]
 
@@ -884,6 +885,7 @@ dependencies = [
  "lsp-server",
  "ras-compiler",
  "ras-ovba",
+ "ras-sync",
  "ras-syntax",
  "serde_json",
 ]
@@ -898,6 +900,15 @@ dependencies = [
  "ovba",
  "proptest",
  "zip",
+]
+
+[[package]]
+name = "ras-sync"
+version = "0.1.0"
+dependencies = [
+ "ras-compiler",
+ "ras-ovba",
+ "windows",
 ]
 
 [[package]]

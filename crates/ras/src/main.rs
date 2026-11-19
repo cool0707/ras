@@ -43,7 +43,7 @@ enum Command {
         #[arg(long, value_enum, default_value_t = Target::Vba)]
         target: Target,
     },
-    /// 変更を監視して再ビルドする（ブックが閉じていればオフライン書き込みも行う）
+    /// 変更を監視して再ビルドする（ブックが Excel で開いていればライブ同期、閉じていればオフライン書き込みを行う）
     Watch(BuildArgs),
     /// Excel を起動せず、ブックファイル内の VBA プロジェクトを直接書き換える
     Pack {
@@ -82,8 +82,14 @@ enum Command {
         #[arg(long)]
         stdio: bool,
     },
-    /// 1回だけ Excel と同期する（ライブ同期。未実装）
+    /// Excel で開いているブックの VBA プロジェクトへ、1回だけ反映する（ライブ同期。Windows のみ）
     Sync {
+        #[command(flatten)]
+        build: BuildArgs,
+        /// VBE 上で編集された RAS 管理モジュール（ドリフト）と、同名の手書きモジュールを上書きする
+        #[arg(long)]
+        overwrite: bool,
+        /// Excel → ローカル方向に同期する（未実装）
         #[arg(long)]
         pull: bool,
     },
@@ -245,13 +251,18 @@ fn encode(text: &str, codepage: u16) -> Vec<u8> {
 
 /// Compiles the project; `None` when there were errors.
 fn compile(root: &Path, args: &BuildArgs, book: Option<&Path>) -> Result<Option<(Program, BuildOutput)>, String> {
+    compile_with(root, args, book, false)
+}
+
+/// `no_attributes`: for code that goes through `CodeModule.AddFromString`, which rejects `Attribute` lines (spec §16.1.3).
+fn compile_with(root: &Path, args: &BuildArgs, book: Option<&Path>, no_attributes: bool) -> Result<Option<(Program, BuildOutput)>, String> {
     let prog = analyze(root, args, book)?;
     let errors = report(&prog, &prog.diagnostics, false);
     if errors > 0 {
         eprintln!("{errors} 件のエラーがあります");
         return Ok(None);
     }
-    let out = ras_compiler::build(&prog, &BuildOptions { release: args.release, erl: args.erl, no_attributes: false });
+    let out = ras_compiler::build(&prog, &BuildOptions { release: args.release, erl: args.erl, no_attributes });
     let errors = report(&prog, &out.diagnostics, false);
     if errors > 0 {
         eprintln!("{errors} 件のエラーがあります");
@@ -424,7 +435,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
             Ok(ExitCode::SUCCESS)
         }
         Err(ras_ovba::OvbaError::Locked) => Err(format!(
-            "{} は Excel で開かれているため、オフライン書き込みはできません。ブックを閉じてから再実行してください（開いたままの反映にはライブ同期が必要ですが、この版では未実装です）{}",
+            "{} は Excel で開かれているため、オフライン書き込みはできません。開いたまま反映するには `ras sync` を使ってください（Windows のみ）。または、ブックを閉じてから再実行してください{}",
             book.display(),
             stale_owner_hint(&book)
         )),
@@ -433,6 +444,42 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
             book.display()
         )),
         Err(e) => Err(format!("{}: {e}", book.display())),
+    }
+}
+
+/// `ras sync`: writes the generated VBA into the workbook that is open in Excel (spec §14.1–14.8).
+///
+/// `Ok(None)` when no Excel has the workbook open, or on a platform without Excel: the caller decides what to do then.
+fn live_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<Option<ExitCode>, String> {
+    let (cfg, _) = ras_compiler::load_project(root)?;
+    let Some(book) = workbook_path(root, &cfg, None) else {
+        return Err("同期先のブックが指定されていません。ras.toml の project.workbook で指定してください".into());
+    };
+    let mut session = ras_sync::Session::new(&book);
+    match session.connect() {
+        Ok(()) => {}
+        Err(ras_sync::SyncError::NotOpen(_) | ras_sync::SyncError::Unsupported) => return Ok(None),
+        Err(e) => return Err(e.to_string()),
+    }
+    let Some((prog, out)) = compile_with(root, args, Some(&book), true)? else { return Ok(Some(ExitCode::from(1))) };
+    write_build(root, &prog, &out)?;
+    let rep = session.apply(&out.files, &ras_sync::SyncOptions { overwrite }).map_err(|e| e.to_string())?;
+    println!("{} に同期しました（{}）", book.display(), rep.summary());
+    if rep.drifted.is_empty() {
+        return Ok(Some(ExitCode::SUCCESS));
+    }
+    eprintln!(
+        "warning: 次の RAS 管理モジュールは VBE 上で編集されているため、上書きしていません（ドリフト）: {}\n  RAS の出力で上書きするには `ras sync --overwrite` を実行してください",
+        rep.drifted.join(", ")
+    );
+    Ok(Some(ExitCode::from(1)))
+}
+
+fn cmd_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<ExitCode, String> {
+    match live_sync(root, args, overwrite)? {
+        Some(code) => Ok(code),
+        None if cfg!(windows) => Err("ブックが Excel で開かれていません。Excel で開いてから再実行するか、`ras pack` でファイルへ直接書き込んでください".into()),
+        None => Err(format!("{}。`ras pack` でファイルへ直接書き込めます", ras_sync::SyncError::Unsupported)),
     }
 }
 
@@ -596,8 +643,12 @@ fn cmd_watch(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
         };
         let has_book = workbook_path(root, &cfg, None).is_some_and(|b| b.is_file());
         let result = if has_book && cfg.sync.enabled {
-            // The workbook is updated directly while it is closed (spec §14.9); live sync is not implemented.
-            cmd_pack(root, args, &PackArgs { book: None, convert: false, output: None, overwrite: false })
+            // Open in Excel: live sync. Closed: the file is updated directly (spec §14.9).
+            match live_sync(root, args, false) {
+                Ok(Some(code)) => Ok(code),
+                Ok(None) => cmd_pack(root, args, &PackArgs { book: None, convert: false, output: None, overwrite: false }),
+                Err(e) => Err(e),
+            }
         } else {
             cmd_build(root, args)
         };
@@ -673,8 +724,12 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             ras_lsp::run_stdio().map_err(|e| e.to_string())?;
             Ok(ExitCode::SUCCESS)
         }
-        Command::Sync { .. } => unimplemented_cmd("ras sync", "ブックを閉じた状態で `ras pack` を使うと、Excel を起動せずに VBA プロジェクトへ反映できます。"),
-        Command::Setup => unimplemented_cmd("ras setup", "ライブ同期（RASBridge）が未実装のため、設定するものがありません。"),
+        Command::Sync { pull: true, .. } => unimplemented_cmd("ras sync --pull", "ブックを閉じた状態で `ras unpack` を使うと、VBA ソースを vba/ に取り出せます。"),
+        Command::Sync { build, overwrite, pull: false } => cmd_sync(&find_root(project)?, build, *overwrite),
+        Command::Setup => unimplemented_cmd(
+            "ras setup",
+            "ライブ同期に RASBridge は不要です。Excel の［トラスト センター］→［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」を有効にしてください。",
+        ),
         Command::Typegen { .. } => unimplemented_cmd("ras typegen", "同梱の Excel / VBA / Office の型定義は使えます。その他の COM ライブラリは types/*.d.ras に手書きしてください。"),
     }
 }

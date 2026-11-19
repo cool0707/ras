@@ -345,7 +345,7 @@ pub fn merge_managed_region(existing_source: &str, managed_code: &str) -> String
 /// Names of the procedures declared in `code` (`Sub`, `Function`,
 /// `Property`), in order of appearance. Comments are not looked into; a
 /// declaration whose name sits on a continuation line is not found.
-pub(crate) fn procedure_names(code: &str) -> Vec<String> {
+pub fn procedure_names(code: &str) -> Vec<String> {
     let mut names = Vec::new();
     for line in split_lines(code) {
         let mut words = line.split_whitespace().peekable();
