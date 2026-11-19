@@ -91,5 +91,27 @@ const shell = $rt.vba.CreateObject("WScript.Shell");
 assert.equal($rt.call(shell, "ExpandEnvironmentStrings", ["%OS%"]), "Windows_NT");
 assert.equal($rt.typeIs(shell, $rt.typeName(shell)), true);
 
+step("dialog watcher");
+// A call that does not return because a dialog is waiting for an answer: WScript.Shell is an
+// in-process object, so its message box belongs to this very process. The watcher, on its own
+// thread, has to find the box while the call is stuck and press the cancelling button.
+// (The 20 s are the box's own timeout: without the watcher `Popup` returns -1 then.)
+assert.equal(com.processOfWindow(0), 0);
+assert.deepEqual(com.openDialogs(process.pid), []);
+assert.throws(() => com.watchDialogs(process.pid, "sometimes"));
+com.watchDialogs(process.pid, "dismiss");
+const VB_OK_CANCEL = 1;
+const ID_OK = 1;
+const ID_CANCEL = 2;
+assert.equal(shell.call("Popup", ["ras_com smoke test: OK / Cancel", 20, "ras_com", VB_OK_CANCEL]), ID_CANCEL);
+step("dialog with a single answer");
+assert.equal(shell.call("Popup", ["ras_com smoke test: OK only", 20, "ras_com", 0]), ID_OK);
+step("dialog that is a real choice");
+// Yes / No has no cancelling answer: it is reported but left alone, and times out by itself.
+const VB_YES_NO = 4;
+assert.equal(shell.call("Popup", ["ras_com smoke test: Yes / No", 2, "ras_com", VB_YES_NO]), -1);
+com.watchDialogs(0, "off");
+assert.equal(shell.call("Popup", ["ras_com smoke test: not watched", 1, "ras_com", VB_OK_CANCEL]), -1);
+
 step("done");
 console.log("ras_com smoke test passed");

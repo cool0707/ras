@@ -132,6 +132,17 @@
           "default": "",
           "scope": "machine-overridable",
           "markdownDescription": "デバッグ実行時に Excel へ接続するアドオン（`ras_com.node`）のパス。空の場合は拡張機能に同梱のもの、無ければ `ras` 実行ファイルと同じフォルダーのものを使います。"
+        },
+        "ras.debug.dialogs": {
+          "type": "string",
+          "enum": ["notify", "dismiss", "off"],
+          "default": "notify",
+          "markdownEnumDescriptions": [
+            "ダイアログの内容を通知し、ダイアログを前面に出します。応答は Excel 側で行います。",
+            "ダイアログの内容を通知し、キャンセルに相当するボタンで閉じます（VBA の実行時エラーは「終了」）。人が見ていない実行向けです。",
+            "ダイアログを監視しません。"
+          ],
+          "markdownDescription": "デバッグ実行中、プログラムが Excel の応答を待っている間に Excel がダイアログ（手書き VBA の実行時エラー・コンパイル エラー・確認メッセージなど）を表示したときの扱い。`launch.json` の `dialogs` で構成ごとに上書きできます。"
         }
       }
     },
@@ -235,6 +246,17 @@
               "mockHost": {
                 "type": "string",
                 "markdownDescription": "Excel の代わりに使う JavaScript モジュールのパス（Excel の無い環境でのテスト用）。"
+              },
+              "dialogs": {
+                "type": "string",
+                "enum": ["notify", "dismiss", "off"],
+                "default": "notify",
+                "markdownEnumDescriptions": [
+                  "ダイアログの内容を通知し、ダイアログを前面に出します。応答は Excel 側で行います。",
+                  "ダイアログの内容を通知し、キャンセルに相当するボタンで閉じます（VBA の実行時エラーは「終了」）。人が見ていない実行向けです。",
+                  "ダイアログを監視しません。"
+                ],
+                "markdownDescription": "プログラムが Excel の応答を待っている間に、Excel がダイアログ（手書き VBA の実行時エラー・コンパイル エラー・確認メッセージなど）を表示したときの扱い。"
               }
             }
           }

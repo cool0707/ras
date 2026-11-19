@@ -27,6 +27,8 @@ interface RasDebugConfiguration extends vscode.DebugConfiguration {
 	comAddon?: string;
 	/** Module that stands in for Excel (for tests on machines without Excel). */
 	mockHost?: string;
+	/** What to do when Excel shows a dialog while the program waits for it. */
+	dialogs?: "notify" | "dismiss" | "off";
 	stopOnEntry?: boolean;
 }
 
@@ -161,6 +163,10 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 		if (config.mockHost) {
 			env.RAS_MOCK_HOST = path.resolve(root, config.mockHost);
 		}
+		const dialogs = config.dialogs || setting("debug.dialogs");
+		if (dialogs) {
+			env.RAS_DIALOGS = dialogs;
+		}
 		const runtime = config.runtimeExecutable || setting("debug.runtimeExecutable") || process.execPath;
 		const main = path.join(debugDir, "ras-main.js");
 		const out = channel();
@@ -169,7 +175,11 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 		if (config.noDebug) {
 			const child = cp.spawn(runtime, ["--enable-source-maps", main, entry], { cwd: root, env });
 			child.stdout.on("data", (data: Buffer) => out.append(data.toString()));
-			child.stderr.on("data", (data: Buffer) => out.append(data.toString()));
+			child.stderr.on("data", (data: Buffer) => {
+				const text = data.toString();
+				out.append(text);
+				text.split(/\r?\n/).forEach(notifyDialog);
+			});
 			child.on("exit", (code) => out.appendLine(`（終了コード ${code ?? "?"}）`));
 			out.show(true);
 			return undefined;
@@ -260,6 +270,23 @@ function comAddon(context: vscode.ExtensionContext, config: RasDebugConfiguratio
 	return candidates.find((file) => fs.existsSync(file));
 }
 
+/**
+ * The run time reports a dialog of Excel that the program is waiting for (spec §14.10.6) on
+ * a line of its own. Excel is behind the editor at that moment, so the line becomes a notification.
+ */
+function notifyDialog(line: string): void {
+	const match = /^\[ras\] (Excel .*)$/.exec(line);
+	if (match === null) {
+		return;
+	}
+	const message = `RAS: ${match[1]}`;
+	if (/閉じました/.test(match[1])) {
+		void vscode.window.showInformationMessage(message);
+	} else {
+		void vscode.window.showWarningMessage(message);
+	}
+}
+
 const INSPECTOR_NOISE = /^(Debugger listening on |For help, see: |Debugger attached\.|Waiting for the debugger to disconnect)/;
 
 /** Waits for the inspector to announce its port; afterwards forwards what the process writes. */
@@ -291,6 +318,7 @@ function inspectorPort(child: cp.ChildProcess, out: vscode.OutputChannel): Promi
 				} else if (!INSPECTOR_NOISE.test(line)) {
 					// Uncaught errors are printed here when the program ends with one.
 					out.appendLine(line);
+					notifyDialog(line);
 					if (found) {
 						vscode.debug.activeDebugConsole.appendLine(line);
 					}

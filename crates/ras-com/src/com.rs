@@ -1,6 +1,6 @@
-//! `ras_com`: the Node addon through which the RAS debug run time (spec §14.10) drives Excel.
+//! The late-binding COM bridge of the addon.
 //!
-//! It is a thin late-binding bridge: property get / put, method call, default member and
+//! It is a thin bridge: property get / put, method call, default member and
 //! `For Each` on an `IDispatch`, plus the lookups needed to find the running Excel.
 //! Everything else (type conversions with RAS semantics, error objects, application state)
 //! lives in the JavaScript run time.
@@ -20,9 +20,6 @@
 //! | `{ $t: "nothing" }`             | `Nothing`                                |
 //!
 //! Errors are thrown with a message of the form `RASCOM{"number":…,"source":…,"description":…}`.
-//!
-//! The addon only exists on Windows; on other platforms the crate builds to an empty library.
-#![cfg(windows)]
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
@@ -59,6 +56,8 @@ const DISP_E_BADPARAMCOUNT: i32 = 0x8002_000E_u32 as i32;
 const RPC_E_CALL_REJECTED: i32 = 0x8001_0001_u32 as i32;
 const RPC_E_SERVERCALL_RETRYLATER: i32 = 0x8001_010A_u32 as i32;
 const RPC_E_CHANGED_MODE: i32 = 0x8001_0106_u32 as i32;
+/// The server process is gone: `RPC_E_DISCONNECTED`, `RPC_S_SERVER_UNAVAILABLE`, `RPC_S_CALL_FAILED`, `CO_E_OBJNOTCONNECTED`.
+const SERVER_GONE: [i32; 4] = [0x8001_0108_u32 as i32, 0x8007_06BA_u32 as i32, 0x8007_06BE_u32 as i32, 0x8004_01FD_u32 as i32];
 /// How long a call waits while Excel is busy (cell being edited, modal dialog) before it fails.
 const BUSY_TIMEOUT_MS: u64 = 60_000;
 
@@ -103,7 +102,14 @@ fn vba_number(hr: i32) -> i32 {
 /// VBA error number of a failed call that did not raise an exception of its own.
 fn hresult_error(hr: HRESULT, what: &str) -> Error {
     if hr.0 == RPC_E_CALL_REJECTED || hr.0 == RPC_E_SERVERCALL_RETRYLATER {
-        return com_error(hr.0, "RAS", "Excel が応答しません（セルの編集中か、ダイアログが開いています）。Excel 側の操作を終えてからもう一度実行してください");
+        let mut message = String::from("Excel が応答しません（セルの編集中か、ダイアログが開いています）。Excel 側の操作を終えてからもう一度実行してください");
+        if let Some(dialogs) = crate::watch::open_dialog_summary() {
+            message.push_str(&format!("。開いているダイアログ: {dialogs}"));
+        }
+        return com_error(hr.0, "RAS", &message);
+    }
+    if SERVER_GONE.contains(&hr.0) {
+        return com_error(hr.0, "RAS", "Excel との接続が切れました（Excel が終了したか、応答しなくなって強制終了されました）。デバッグをやり直してください");
     }
     let number = vba_number(hr.0);
     let detail = hr.message();
@@ -391,6 +397,8 @@ fn invoke(disp: &IDispatch, id: i32, name: &str, flags: DISPATCH_FLAGS, mut args
     };
     let started = std::time::Instant::now();
     let mut delay = 20u64;
+    // From here until the call returns, the dialog watcher looks for what Excel is waiting for.
+    let outstanding = crate::watch::CallGuard::new();
     let outcome = loop {
         let mut result = Var::empty();
         let mut ex = EXCEPINFO::default();
@@ -402,6 +410,7 @@ fn invoke(disp: &IDispatch, id: i32, name: &str, flags: DISPATCH_FLAGS, mut args
                 let hr = e.code();
                 let busy = hr.0 == RPC_E_CALL_REJECTED || hr.0 == RPC_E_SERVERCALL_RETRYLATER;
                 if busy && (started.elapsed().as_millis() as u64) < BUSY_TIMEOUT_MS {
+                    outstanding.rejected();
                     std::thread::sleep(std::time::Duration::from_millis(delay));
                     delay = (delay * 2).min(500);
                     continue;
@@ -430,6 +439,7 @@ fn invoke(disp: &IDispatch, id: i32, name: &str, flags: DISPATCH_FLAGS, mut args
             }
         }
     };
+    drop(outstanding);
     drop(rg);
     outcome
 }
@@ -568,6 +578,8 @@ pub fn create_object(prog_id: String) -> Result<ComObject> {
 pub fn get_object(path: String) -> Result<ComObject> {
     init_com();
     let w = wide(&path);
+    // Opening the file can make its application ask questions (links, read-only, macros).
+    let _outstanding = crate::watch::CallGuard::new();
     let ptr: IDispatch = unsafe { CoGetObject(PCWSTR(w.as_ptr()), None) }.map_err(|e| hresult_error(e.code(), &path))?;
     Ok(ComObject { ptr })
 }
