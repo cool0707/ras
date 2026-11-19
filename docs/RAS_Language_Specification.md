@@ -410,6 +410,7 @@ const last = Sheet1.lastRow();
 ラムダ式は次の優先順位で変換する。
 
 1. **ループ融合（既定）:** 配列メソッドの引数にラムダ式が**直接リテラルで**書かれている場合、クラスを生成せず、呼び出し元にループとして直接展開する。`arr.filter(...).map(...)` のようなチェーンは1本のループに融合する。
+   * コールバックが受け取る添字は、JavaScript と同じく「そのメソッドを呼んだ配列の中での位置」である。融合しても変わらない。`filter` の後段（`arr.filter(f).map((x, i) => ...)` の `i`、`arr.filter(f).findIndex(g)` の結果）は、絞り込みを通った要素の中での位置になる。後段が添字を使うときだけ、`filter` ごとに通過した要素を数える。
 2. **クロージャクラス（エスケープ時のみ）:** ラムダが変数に代入される・関数の引数として渡される・戻り値になる等、呼び出し位置で本体を特定できない場合のみ、従来通りクラスモジュール（`RAS_Lambda_001.cls`）を生成する。
    * キャプチャされた定数はパブリックフィールドとし、生成時にワンタイムコピーする。
    * 評価メソッド名は `Apply`。ランタイム（`RAS_Runtime.bas`）から遅延バインディングで呼び出す。`Invoke` は `IDispatch` のメンバー名と衝突し、クラスモジュールではコンパイル エラー（「このメンバー識別子は既にオブジェクト モジュールの中に存在しています」）になるため使えない。
@@ -475,7 +476,7 @@ const data = thisWorkbook.worksheets.find(ws => ws.name == "Data");   // 見つ�
 ```
 
 * **対象:** 既定メンバー（`(index: any): T`）と `count` を持つホスト型。`for...of` で列挙できるものと同じで、要素の型は既定メンバーの戻り値の型 `T` になる。
-* **使えるメソッド:** `map` / `filter` / `forEach` / `reduce` / `some` / `every` / `find` / `findIndex` と、メンバーを配列に写す `toArray()`。コールバックの第 2 引数は 0 始まりの通し番号。
+* **使えるメソッド:** `map` / `filter` / `forEach` / `reduce` / `some` / `every` / `find` / `findIndex` と、メンバーを配列に写す `toArray()`。コールバックの第 2 引数は 0 始まりの通し番号（`filter` の後段では、絞り込みを通ったメンバーの中での番号。§4.1）。
 * **結果は配列:** `map` / `filter` / `toArray` の結果は `T[]`（コレクションではない）。以降は配列のメソッド（`length` / `join` / `sort` / `slice` など）をそのまま使える。
 * **型のメンバーが優先:** ホスト型に同名のメンバーがあれば、そちらが使われる（`range.find(...)` は Excel の `Range.Find`、`range.sort(...)` は `Range.Sort`）。
 * **要素の型:** `worksheets` / `book.worksheets` は `Excel.Sheets<Excel.Worksheet>`、`charts` は `Excel.Sheets<Excel.Chart>` で、コールバックの引数にシートのメンバーが補完される。グラフ シートも含む `sheets` は `Excel.Sheets`（要素は `object`）で、メンバーは遅延バインディングになる。

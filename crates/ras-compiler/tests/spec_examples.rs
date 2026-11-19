@@ -867,3 +867,46 @@ export function lookup(book: Excel.Workbook): Excel.Worksheet {
     let (prog, _) = compile(&[("m", "export function f(ws: Excel.Worksheet) {\n    ws.toArray();\n}\n")]);
     assert!(prog.diagnostics.iter().any(|d| d.code == "W0301"), "late binding is reported");
 }
+
+#[test]
+fn spec_4_1_index_after_filter_counts_the_elements_that_passed() {
+    let src = r#"
+export function tagged(a: int[]): int[] {
+    const r = a.filter(x => x > 1).map((x, i) => x * 10 + i);
+    return r;
+}
+
+export function position(a: int[]): int {
+    return a.filter((x, i) => i > 0).filter((x, i) => i != 1).map((x, i) => x + i).findIndex(x => x > 5);
+}
+
+export function weighted(a: int[]): int {
+    return a.filter(x => x > 1).reduce((acc, x, i) => acc + x * i, 0);
+}
+
+export function plain(a: int[]): int {
+    return a.filter(x => x > 1).reduce((acc, x) => acc + x, 0);
+}
+
+export function sheets(): string[] {
+    const r = worksheets.filter(ws => ws.visible == xlSheetVisible).map((ws, i) => `${i}:${ws.name}`);
+    return r;
+}
+"#;
+    let mut cfg = config();
+    cfg.doevents.enabled = false;
+    let (_, out) = compile_with(&[("m", src)], cfg);
+    let m = code(&out, "M");
+    // The callback of `map` receives the position in the filtered array: the output counter.
+    assert_contains(&m, "        For ras_i = 0 To UBound(a)\n            If a(ras_i) > 1& Then\n                r(ras_n) = a(ras_i) * 10& + ras_n\n                ras_n = ras_n + 1&\n            End If\n        Next ras_i\n");
+    // Each `filter` counts what it lets through; `findIndex` answers in terms of the last one.
+    assert_contains(
+        &m,
+        "    ras_t1 = -1&\n    ras_k = 0&\n    ras_k_2 = 0&\n    For ras_i = 0 To RAS_Len(a) - 1&\n        If ras_i > 0& Then\n            If ras_k <> 1& Then\n                x = a(ras_i) + ras_k_2\n                If x > 5& Then\n                    ras_t1 = ras_k_2\n                    Exit For\n                End If\n                ras_k_2 = ras_k_2 + 1&\n            End If\n            ras_k = ras_k + 1&\n        End If\n    Next ras_i\n",
+    );
+    assert_contains(&m, "    ras_k = 0&\n    For ras_i = 0 To RAS_Len(a) - 1&\n        If a(ras_i) > 1& Then\n            ras_t1 = ras_t1 + a(ras_i) * ras_k\n            ras_k = ras_k + 1&\n        End If\n    Next ras_i\n");
+    // Nothing is counted when no callback asks for the index.
+    assert_contains(&m, "    ras_t1 = 0&\n    For ras_i = 0 To RAS_Len(a) - 1&\n        If a(ras_i) > 1& Then\n            ras_t1 = ras_t1 + a(ras_i)\n        End If\n    Next ras_i\n");
+    // The same holds for a collection, which then needs no counter for the source position.
+    assert_contains(&m, "        For Each ras_e In Worksheets\n            If ras_e.Visible = xlSheetVisible Then\n                r(ras_n) = CStr(ras_n) & \":\" & ras_e.Name\n                ras_n = ras_n + 1&\n            End If\n        Next ras_e\n");
+}

@@ -127,7 +127,8 @@ export function countCustomers(): int {
 }
 
 export function listSheets() {
-    const visible = worksheets.filter(ws => ws.visible == xlSheetVisible).map(ws => ws.name);
+    // After `filter`, the index counts the members that passed (the hidden sheet is skipped).
+    const visible = worksheets.filter(ws => ws.visible == xlSheetVisible).map((ws, i) => `${i}:${ws.name}`);
     worksheets.forEach((ws, i) => { if (i == 2) console.log(i, ws.name); });
     const hidden = worksheets.find(ws => ws.visible != xlSheetVisible);
     // A late-bound member is found whatever its casing, as in VBA.
@@ -165,7 +166,7 @@ fn host_access_goes_through_the_run_time() {
     assert!(js.contains("Array.from($rt.iter($rt.global(\"Worksheets\"))).filter("), "{js}");
     let (stdout, stderr, ok) = p.run("listSheets", Some(&mock));
     assert!(ok, "{stderr}");
-    assert!(stdout.starts_with("2 Summary\nData,Summary Hidden 3 true Data\n"), "{stdout}");
+    assert!(stdout.starts_with("2 Summary\n0:Data,1:Summary Hidden 3 true Data\n"), "{stdout}");
     // Without Excel, the first host access fails with an explanation and a RAS source position.
     let (_, stderr, ok) = p.run("Report.rebuildReport", None);
     assert!(!ok);
