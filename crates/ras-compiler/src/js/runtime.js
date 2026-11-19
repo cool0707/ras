@@ -644,9 +644,20 @@ const EXCEL_GLOBALS = new Set(["ActiveWorkbook", "ActiveSheet", "ActiveCell", "A
 function isCallable(v) {
     return typeof v === "function" && !/^class\s/.test(Function.prototype.toString.call(v));
 }
+/** The key of `o` that VBA would find for `name`: member names are not case-sensitive there. */
+function memberKey(o, name) {
+    if (name in Object(o)) return name;
+    const lower = String(name).toLowerCase();
+    for (let p = Object(o); p && p !== Object.prototype; p = Object.getPrototypeOf(p)) {
+        const hit = Object.getOwnPropertyNames(p).find((k) => k.toLowerCase() === lower);
+        if (hit !== undefined) return hit;
+    }
+    return name;
+}
 function jsMember(o, name) {
-    const v = o[name];
-    if (v === undefined && !(name in Object(o))) raise(438, name);
+    const key = memberKey(o, name);
+    const v = o[key];
+    if (v === undefined && !(key in Object(o))) raise(438, name);
     return v;
 }
 
@@ -664,7 +675,7 @@ function getOpt(o, name) {
 function put(o, name, v) {
     if (o == null) raise(91, name);
     if (isCom(o)) comTry(() => o.put(name, [], toCom(v)));
-    else o[name] = v;
+    else o[memberKey(o, name)] = v;
     return v;
 }
 /** Method call (or property read with arguments, as VBA does not distinguish them). */

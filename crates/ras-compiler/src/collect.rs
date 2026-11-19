@@ -131,6 +131,19 @@ pub fn collect(inputs: Vec<SourceInput>, config: Config) -> Program {
     }
     c.resolve_signatures();
     c.prog.cur_namespace = None;
+    for m in 0..c.prog.modules.len() {
+        if !c.is_bundled_typedef(m) {
+            continue;
+        }
+        for &cid in &c.prog.modules[m].classes.clone() {
+            let def = &c.prog.classes[cid];
+            let mut spelled: Vec<String> = def.fields.iter().map(|f| f.vba_name().to_string()).collect();
+            spelled.extend(def.methods.iter().map(|&f| c.prog.fns[f].vba_name().to_string()));
+            for s in spelled {
+                c.prog.host_member_spelling.entry(s.to_lowercase()).or_insert(s);
+            }
+        }
+    }
     c.prog
 }
 
@@ -311,12 +324,46 @@ impl Collector {
         }
     }
 
+    /// The bundled type definitions are written with the type libraries' spelling (`Cells`).
+    fn is_bundled_typedef(&self, m: ModuleId) -> bool {
+        let md = &self.prog.modules[m];
+        md.kind == ModuleKind::TypeDef && md.rel_path.starts_with("<stdlib>/")
+    }
+
+    /// RAS name of a host member / global declared as `name` in module `m`, and the
+    /// type-library spelling to emit when the two differ (spec §15.3.1).
+    fn host_names(&self, m: ModuleId, name: &str, global: bool) -> (String, Option<String>) {
+        if !self.is_bundled_typedef(m) {
+            return (name.to_string(), None);
+        }
+        let js = crate::names::js_name(name);
+        // A global cannot be spelled like a keyword (`Switch`); a member can (`range.delete()`).
+        if js == name || (global && crate::names::is_ras_keyword(&js)) {
+            return (name.to_string(), None);
+        }
+        (js, Some(name.to_string()))
+    }
+
+    /// `name` as it is registered in a scope: with the RAS spelling.
+    fn host_ident(&mut self, m: ModuleId, target: &Target, name: &ast::Ident) -> ast::Ident {
+        let (js, _) = self.host_names(m, &name.text, true);
+        if matches!(target, Target::Global) && self.is_bundled_typedef(m) {
+            self.prog.host_global_names.insert(name.text.to_lowercase(), js.clone());
+        }
+        ast::Ident { text: js, span: name.span }
+    }
+
     fn alloc_fn(&mut self, m: ModuleId, decl: Rc<ast::FnDecl>, kind: FnKind, class: Option<ClassId>, vis: Visibility) -> FnId {
         let id = self.prog.fns.len();
+        let (name, host_name) = match kind {
+            FnKind::Host { class } => self.host_names(m, &decl.name.text, class.is_none()),
+            _ => (decl.name.text.clone(), None),
+        };
         self.prog.fns.push(FnDef {
             id,
             module: m,
-            name: decl.name.text.clone(),
+            name,
+            host_name,
             kind,
             exported: decl.exported,
             vis,
@@ -347,10 +394,12 @@ impl Collector {
 
     fn declare_var(&mut self, m: ModuleId, target: &Target, v: &ast::VarDecl, is_typedef: bool) {
         let id = self.prog.vars.len();
+        let (name, host_name) = if v.declared || is_typedef { self.host_names(m, &v.name.text, true) } else { (v.name.text.clone(), None) };
         self.prog.vars.push(VarDef {
             id,
             module: m,
-            name: v.name.text.clone(),
+            name,
+            host_name,
             ty: Type::Error,
             is_const: v.kind == ast::VarKind::Const,
             exported: v.exported,
@@ -370,7 +419,8 @@ impl Collector {
         if v.kind == ast::VarKind::Using {
             self.err(m, v.span, "E0104", "`using` は関数の中でのみ使えます");
         }
-        self.register(m, target, &v.name, Sym::Var(id), v.exported);
+        let reg_name = self.host_ident(m, target, &v.name);
+        self.register(m, target, &reg_name, Sym::Var(id), v.exported);
     }
 
     fn declare_item(&mut self, m: ModuleId, target: &Target, item: &Item, is_typedef: bool) {
@@ -381,7 +431,8 @@ impl Collector {
                     self.err(m, f.name.span, "E0105", "関数の本体がありません");
                 }
                 let id = self.alloc_fn(m, Rc::new(f.clone()), kind, None, Visibility::Public);
-                self.register(m, target, &f.name, Sym::Fn(id), f.exported);
+                let reg_name = self.host_ident(m, target, &f.name);
+                self.register(m, target, &reg_name, Sym::Fn(id), f.exported);
             }
             Item::Class(c) => {
                 let id = self.alloc_class(m, &c.name, if is_typedef || c.declared { ClassKind::Host } else { ClassKind::Class }, c.exported, c.doc.clone(), target);
@@ -595,6 +646,7 @@ impl Collector {
                 id,
                 module,
                 name: name.clone(),
+                host_name: None,
                 ty: Type::Class(ws, Vec::new()),
                 is_const: true,
                 exported: false,
@@ -691,6 +743,15 @@ impl Collector {
     // ------------------------------------------------------------------ signatures
 
     fn resolve_signatures(&mut self) {
+        // The number of type parameters of every class is known before any type is resolved,
+        // so that a declaration can refer to a generic type declared after it.
+        for (id, ast) in &self.class_decls {
+            let tps = match ast {
+                ClassAst::Class(c) => &c.type_params,
+                ClassAst::Interface(i) => &i.type_params,
+            };
+            self.prog.classes[*id].type_params = tps.iter().map(|tp| TypeParamDef { name: tp.name.text.clone(), constraint: Constraint::None }).collect();
+        }
         // Aliases first (in declaration order), then everything else.
         for (m, a) in std::mem::take(&mut self.alias_decls) {
             let ty = resolve_type(&mut self.prog, m, &[], &a.ty);
@@ -824,6 +885,7 @@ impl Collector {
                     }
                     fields.push(FieldDef {
                         name: f.name.text.clone(),
+                        host_name: None,
                         ty,
                         vis: f.vis,
                         is_static: f.is_static,
@@ -853,8 +915,10 @@ impl Collector {
                         Some(t) => resolve_type(&mut self.prog, m, &tps, t),
                         None => Type::Any,
                     };
+                    let (name, host_name) = self.host_names(m, &p.name.text, false);
                     fields.push(FieldDef {
-                        name: p.name.text.clone(),
+                        name,
+                        host_name,
                         ty,
                         vis: Visibility::Public,
                         is_static: false,
@@ -1118,7 +1182,7 @@ fn resolve_type_inner(prog: &mut Program, m: ModuleId, tps: &[TypeParamDef], t: 
             Type::Func(Box::new(FuncType { params: ps, ret }))
         }
         TypeRef::Named { path, args, span } => {
-            let resolved: Vec<Type> = args.iter().map(|a| resolve_type_inner(prog, m, tps, a, errors)).collect();
+            let mut resolved: Vec<Type> = args.iter().map(|a| resolve_type_inner(prog, m, tps, a, errors)).collect();
             let sym = if path.len() == 1 {
                 let name = path[0].text.as_str();
                 if let Some(p) = primitive(name) {
@@ -1184,6 +1248,10 @@ fn resolve_type_inner(prog: &mut Program, m: ModuleId, tps: &[TypeParamDef], t: 
             match sym {
                 Some(Sym::Class(c)) => {
                     let expected = prog.classes[c].type_params.len();
+                    // A host collection without its element type (`Excel.Sheets`) holds objects.
+                    if resolved.is_empty() && prog.classes[c].kind == ClassKind::Host {
+                        resolved = vec![Type::Object; expected];
+                    }
                     if resolved.len() != expected {
                         errors.push((*span, format!("`{display}` の型引数は {expected} 個です（{} 個指定されています）", resolved.len())));
                         return Type::Error;

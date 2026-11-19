@@ -25,7 +25,7 @@ fn init_build_pack_unpack_round_trip() {
 
     std::fs::write(
         dir.join("src/report.ras"),
-        "/** 日本語の説明。 */\n@fast\nexport function fill() {\n    const ws = Sheet1;\n    for (let r = 1; r <= 10; r++) {\n        ws.Cells(r, 1).Value = r * 2;\n    }\n}\n\n@on(\"Sheet1.Change\")\nfunction changed(target: Excel.Range) {\n    status(\"変更: \" + target.Address);\n}\n",
+        "/** 日本語の説明。 */\n@fast\nexport function fill() {\n    const ws = Sheet1;\n    for (let r = 1; r <= 10; r++) {\n        ws.cells(r, 1).value = r * 2;\n    }\n}\n\n@on(\"Sheet1.Change\")\nfunction changed(target: Excel.Range) {\n    status(\"変更: \" + target.address);\n}\n",
     )
     .unwrap();
 
@@ -141,11 +141,11 @@ fn errors_are_reported_with_source_position() {
 fn fmt_check_and_unimplemented_commands() {
     let dir = temp_dir("fmt");
     assert!(ras(&dir, &["init", "."]).0);
-    std::fs::write(dir.join("src/main.ras"), "export function f() {\nMsgBox(\"x\");\n}\n").unwrap();
+    std::fs::write(dir.join("src/main.ras"), "export function f() {\nmsgBox(\"x\");\n}\n").unwrap();
     let (ok, _) = ras(&dir, &["fmt", "--check"]);
     assert!(!ok);
     assert!(ras(&dir, &["fmt"]).0);
-    assert_eq!(std::fs::read_to_string(dir.join("src/main.ras")).unwrap(), "export function f() {\n    MsgBox(\"x\");\n}\n");
+    assert_eq!(std::fs::read_to_string(dir.join("src/main.ras")).unwrap(), "export function f() {\n    msgBox(\"x\");\n}\n");
     assert!(ras(&dir, &["fmt", "--check"]).0);
     // Commands that need live sync say so instead of pretending to work.
     let (ok, out) = ras(&dir, &["sync"]);
@@ -176,4 +176,27 @@ fn bundled_example_project_builds() {
     assert!(text.contains("' @inline nonNegative"), "{text}");
     assert!(out_dir.join("build/Sheet1.doccls").is_file());
     let _ = std::fs::remove_dir_all(&out_dir);
+}
+
+#[test]
+fn check_fix_rewrites_vba_spellings() {
+    let dir = temp_dir("fix");
+    assert!(ras(&dir, &["init", "."]).0);
+    // Written the way VBA spells it, in a file with a byte-order mark.
+    let old = "\u{feff}export function f(ws: Excel.Worksheet) {\n    ws.Cells(1, 1).Value = Application.Name;\n    MsgBox(\"済\");\n}\n";
+    std::fs::write(dir.join("src/main.ras"), old).unwrap();
+    let (ok, out) = ras(&dir, &["check"]);
+    assert!(ok && out.contains("warning[W0304]") && out.contains("`cells`"), "{out}");
+    assert_eq!(std::fs::read_to_string(dir.join("src/main.ras")).unwrap(), old, "`check` alone changes nothing");
+    let (ok, out) = ras(&dir, &["check", "--fix"]);
+    assert!(ok && out.contains("5 箇所を修正しました") && !out.contains("W0304"), "{out}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("src/main.ras")).unwrap(),
+        "\u{feff}export function f(ws: Excel.Worksheet) {\n    ws.cells(1, 1).value = application.name;\n    msgBox(\"済\");\n}\n"
+    );
+    // The generated VBA is the same either way.
+    assert!(ras(&dir, &["build"]).0);
+    // (the module is written in the project's code page, not UTF-8)
+    let text = String::from_utf8_lossy(&std::fs::read(dir.join("build/Main.bas")).unwrap()).to_string();
+    assert!(text.contains("ws.Cells(1&, 1&).Value = Application.Name") && text.contains("MsgBox \""), "{text}");
 }

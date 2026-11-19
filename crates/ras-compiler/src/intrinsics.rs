@@ -14,6 +14,8 @@ intrinsics! {
     // arrays
     ArrLength, ArrRows, ArrCols, ArrPush, ArrPop, ArrMap, ArrFilter, ArrForEach, ArrReduce, ArrSome, ArrEvery,
     ArrFind, ArrFindIndex, ArrIndexOf, ArrIncludes, ArrJoin, ArrSlice, ArrSort, ArrReverse, ArrConcat, ArrClear,
+    // host collections (spec §4.4)
+    CollToArray,
     // strings
     StrLength, StrTrim, StrTrimStart, StrTrimEnd, StrUpper, StrLower, StrSubstring, StrSubstr, StrSlice,
     StrIndexOf, StrLastIndexOf, StrIncludes, StrStartsWith, StrEndsWith, StrPadStart, StrPadEnd, StrRepeat,
@@ -73,6 +75,26 @@ pub const ARRAY_MEMBERS: &[&str] = &[
     "length", "push", "pop", "map", "filter", "forEach", "reduce", "some", "every", "find", "findIndex", "indexOf",
     "includes", "join", "slice", "sort", "reverse", "concat", "clear",
 ];
+
+/// Array-style members of a host collection (`worksheets.filter(...)`, spec §4.4).
+/// The collection is enumerated once, in order; the result of `map` / `filter` is an array.
+pub fn collection_member(name: &str) -> Option<Intr> {
+    use Intr::*;
+    Some(match name {
+        "map" => ArrMap,
+        "filter" => ArrFilter,
+        "forEach" => ArrForEach,
+        "reduce" => ArrReduce,
+        "some" => ArrSome,
+        "every" => ArrEvery,
+        "find" => ArrFind,
+        "findIndex" => ArrFindIndex,
+        "toArray" => CollToArray,
+        _ => return None,
+    })
+}
+
+pub const COLLECTION_MEMBERS: &[&str] = &["map", "filter", "forEach", "reduce", "some", "every", "find", "findIndex", "toArray"];
 
 pub fn string_member(name: &str) -> Option<Intr> {
     use Intr::*;

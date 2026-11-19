@@ -551,9 +551,9 @@ impl<'p> Lowerer<'p> {
             },
             Some(Res::Fn(f)) => {
                 // Host function read like a property (`Now`, `Cells`).
-                let n = VExpr::Name(self.prog.fns[*f].name.clone());
+                let n = VExpr::Name(self.prog.fns[*f].vba_name().to_string());
                 match (&self.pc.qualifier, self.info().auto_qualified.contains(&e.id)) {
-                    (Some(q), true) => q.clone().member(self.prog.fns[*f].name.clone()),
+                    (Some(q), true) => q.clone().member(self.prog.fns[*f].vba_name().to_string()),
                     _ => n,
                 }
             }
@@ -586,7 +586,7 @@ impl<'p> Lowerer<'p> {
             Some(Res::Global(v)) => self.var_ref(v),
             Some(Res::EnumMember(en, i)) => self.enum_value(en, i),
             Some(Res::Intrinsic(i)) => self.intrinsic(e, i, Some(object), &[], true).unwrap_or_else(|| lit("Empty")),
-            Some(Res::Fn(f)) => VExpr::Name(self.prog.fns[f].name.clone()),
+            Some(Res::Fn(f)) => VExpr::Name(self.prog.fns[f].vba_name().to_string()),
             Some(Res::Property { get: Some(g), .. }) if obj_is_ns => {
                 // static getter
                 let callee = self.static_callee(g);
@@ -594,7 +594,7 @@ impl<'p> Lowerer<'p> {
             }
             Some(Res::Method(f)) => {
                 let o = self.expr(object);
-                o.member(self.prog.fns[f].name.clone())
+                o.member(self.prog.fns[f].vba_name().to_string())
             }
             _ => {
                 let o = self.expr(object);
@@ -603,10 +603,25 @@ impl<'p> Lowerer<'p> {
                     // Private members cannot be reached through `Me.`.
                     VExpr::Name(names::member_ident(member))
                 } else {
-                    o.member(names::member_ident(member))
+                    o.member(self.late_member_name(object, member).unwrap_or_else(|| names::member_ident(member)))
                 }
             }
         }
+    }
+
+    /// A member reached by late binding (`activeSheet.cells`): when a bundled host interface has a
+    /// member of that name, it is written with the type library's spelling (`Cells`). VBA finds it
+    /// either way; this keeps the VBE from showing two spellings of one name.
+    fn late_member_name(&self, object: &Expr, written: &str) -> Option<String> {
+        let late = match self.ty(object) {
+            Type::Any | Type::Object => true,
+            Type::Class(c, _) => self.prog.classes[c].kind == ClassKind::Host,
+            _ => false,
+        };
+        if !late {
+            return None;
+        }
+        self.prog.host_member_spelling.get(&written.to_lowercase()).cloned()
     }
 
     fn static_callee(&mut self, f: FnId) -> VExpr {
@@ -747,7 +762,7 @@ impl<'p> Lowerer<'p> {
                         if o.is_lit("Me") {
                             VExpr::Name(names::member_ident(&name.text))
                         } else {
-                            o.member(names::member_ident(&name.text))
+                            o.member(self.late_member_name(object, &name.text).unwrap_or_else(|| names::member_ident(&name.text)))
                         }
                     }
                 }
@@ -1403,7 +1418,7 @@ impl<'p> Lowerer<'p> {
             }
             CallTarget::Host(f) => {
                 let def = &self.prog.fns[f];
-                let mut fname = def.name.clone();
+                let mut fname = def.vba_name().to_string();
                 let outer_qualifier = self.pc.qualifier.clone();
                 let target = match (recv, &def.kind) {
                     (Some(r), FnKind::Host { class: Some(_) }) => {
@@ -1448,7 +1463,7 @@ impl<'p> Lowerer<'p> {
                 let target = match &c.kind {
                     ExprKind::Member { object, name, .. } => {
                         let o = self.expr(object);
-                        o.member(name.text.clone())
+                        o.member(self.late_member_name(object, &name.text).unwrap_or_else(|| name.text.clone()))
                     }
                     _ => self.expr(callee),
                 };
@@ -1510,7 +1525,7 @@ impl<'p> Lowerer<'p> {
         use Intr::*;
         let recv_ty = recv.map(|r| self.ty(r)).unwrap_or(Type::Error);
         // Array-producing and callback-taking members are expanded as loops.
-        if matches!(intr, ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind | ArrFindIndex | ArrSlice | ArrConcat | MapKeys | MapValues) {
+        if matches!(intr, ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind | ArrFindIndex | ArrSlice | ArrConcat | MapKeys | MapValues | CollToArray) {
             let r = recv?;
             let ty = self.ty(e);
             if ty.is_array() {
@@ -1880,7 +1895,7 @@ impl<'p> Lowerer<'p> {
                 }
                 call("RAS_Match", ops)
             }
-            ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind | ArrFindIndex | ArrSlice | ArrConcat | MapKeys | MapValues => unreachable!(),
+            ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind | ArrFindIndex | ArrSlice | ArrConcat | MapKeys | MapValues | CollToArray => unreachable!(),
         };
         if want {
             Some(v)

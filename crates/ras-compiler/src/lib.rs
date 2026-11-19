@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 
 pub use collect::SourceInput;
 pub use config::Config;
-pub use diag::{Diagnostic, Severity};
+pub use diag::{apply_fixes, Diagnostic, Fix, Severity};
 pub use emit::OutputFile;
 pub use js::{build_js, JsFile, JsOutput};
 pub use model::{ModuleId, ModuleKind, OptNote, Program};

@@ -20,19 +20,19 @@ export function rebuildReport() {
     const last = ws.lastRow();
     let total = 0.0;
     for (let r = 2; r <= last; r++) {
-        const price: double = ws.Cells(r, 3).Value;
-        const qty: double = ws.Cells(r, 4).Value;
+        const price: double = ws.cells(r, 3).value;
+        const qty: double = ws.cells(r, 4).value;
         total += nonNegative(price * qty);
     }
     for (let r = 2; r <= last; r++) {
-        ws.Cells(r, 5).Formula = `=ROUND(C${r}*D${r}*${1 + TAX_RATE},0)`;
+        ws.cells(r, 5).formula = `=ROUND(C${r}*D${r}*${1 + TAX_RATE},0)`;
     }
     status(`合計: ${total.toFixed(0)} 円`);
 }
 
 /** A 列の顧客名のうち、空でないものを重複なく数える。 */
 export function countCustomers(): int {
-    const names = Sheet1.Range("A2:A1000").toColumn();
+    const names = Sheet1.range("A2:A1000").toColumn();
     const seen = new Map<string, boolean>();
     for (const n of names) {
         const name = `${n}`;
@@ -45,7 +45,7 @@ export function countCustomers(): int {
 @on("Sheet1.Change")
 function onDataChanged(target: Excel.Range) {
     try {
-        status(`${target.Address} が変更されました`);
+        status(`${target.address} が変更されました`);
     } catch (e) {
         console.log(e.description);
     }

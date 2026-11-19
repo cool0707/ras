@@ -85,21 +85,25 @@ impl<'p> Lowerer<'p> {
     }
 
     /// `X.Cells(row, col).Prop` → (sheet expr, row, col, prop)
-    fn cell_access<'a>(&self, e: &'a Expr) -> Option<(&'a Expr, &'a Expr, &'a Expr, &'a str)> {
+    fn cell_access<'a>(&self, e: &'a Expr) -> Option<(&'a Expr, &'a Expr, &'a Expr, &'p str)> {
         let info = self.info();
-        let ExprKind::Member { object, name, .. } = &e.kind else { return None };
-        if !PROPS.contains(&name.text.as_str()) {
+        let ExprKind::Member { object, .. } = &e.kind else { return None };
+        // The property by its type-library name (`value` in the source is `Value`).
+        let Some(Res::Field(fc, fi)) = info.res.get(&e.id) else { return None };
+        let prog: &'p Program = self.prog;
+        let prop = prog.classes[*fc].fields[*fi].vba_name();
+        if prog.classes[*fc].kind != ClassKind::Host || !PROPS.contains(&prop) {
             return None;
         }
         let ExprKind::Call { callee, args, .. } = &object.peel().kind else { return None };
         let Some(CallTarget::Host(f)) = info.calls.get(&object.peel().id).map(|c| &c.target) else { return None };
         let def = &self.prog.fns[*f];
         let FnKind::Host { class: Some(c) } = def.kind else { return None };
-        if def.name != "Cells" || self.prog.classes[c].name != "Worksheet" || args.len() != 2 {
+        if def.vba_name() != "Cells" || self.prog.classes[c].name != "Worksheet" || args.len() != 2 {
             return None;
         }
         let ExprKind::Member { object: sheet, .. } = &callee.peel().kind else { return None };
-        Some((sheet, &args[0], &args[1], name.text.as_str()))
+        Some((sheet, &args[0], &args[1], prop))
     }
 
     fn affine<'a>(&self, e: &'a Expr, loops: &[LoopInfo], whole: &Stmt) -> Option<(Axis, i64, Option<&'a Expr>)> {

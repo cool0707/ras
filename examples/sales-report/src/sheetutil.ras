@@ -4,7 +4,7 @@
  * @returns 最終行の行番号
  */
 export function lastRow(this: Excel.Worksheet, col: int = 1): int {
-    return this.Cells(this.Rows.Count, col).End(xlUp).Row;
+    return this.cells(this.rows.count, col).end(xlUp).row;
 }
 
 /** 空白だけの文字列なら true。 */

@@ -150,6 +150,8 @@ impl Checker<'_> {
             (Enum(_), Int | Long | Double | Float) => true,
             (Byte | Short | Int, Enum(_)) => true,
             (Str, WStr | AStr) => true,
+            // The element type of a host collection (`Excel.Sheets<T>`) is a typing aid: the COM interface is the same.
+            (Class(a, _), Class(b, _)) if a == b && self.prog.classes[*a].kind == ClassKind::Host => true,
             (Class(a, aa), Class(b, bb)) => (a == b && aa == bb) || (a != b && self.prog.class_conforms(*a, *b)),
             (Class(..) | Map(..) | Func(_), Object) => true,
             (Object, Class(..) | Map(..) | Func(_)) => true,
@@ -1476,7 +1478,8 @@ impl Checker<'_> {
                     self.fx.var_refs.push(v);
                 }
                 if self.prog.vars[v].declared {
-                    self.lint_host_global(e, &id.text);
+                    let host = self.prog.vars[v].vba_name().to_string();
+                    self.lint_host_global(e, &host, &id.text);
                 }
                 self.set_res(e.id, Res::Global(v));
                 Access::Value(ty)
@@ -1484,7 +1487,8 @@ impl Checker<'_> {
             Some(Sym::Fn(f)) => {
                 self.set_res(e.id, Res::Fn(f));
                 if matches!(self.prog.fns[f].kind, FnKind::Host { .. }) {
-                    self.lint_host_global(e, &id.text);
+                    let host = self.prog.fns[f].vba_name().to_string();
+                    self.lint_host_global(e, &host, &id.text);
                 }
                 Access::Func { f, env: HashMap::new(), recv: Recv::None }
             }
@@ -1525,6 +1529,13 @@ impl Checker<'_> {
                     self.set_res(e.id, Res::Intrinsic(i));
                     return Access::Intrinsic(i);
                 }
+                // VBA does not distinguish case: `Cells` is the bundled `cells`.
+                if let Some(js) = self.prog.host_global_names.get(&id.text.to_lowercase()).cloned() {
+                    if js != id.text && self.lookup_sym(&js).is_some_and(|s| self.is_host_sym(&s)) {
+                        self.warn_host_case(id, &js);
+                        return self.name_access(e, &Ident { text: js, span: id.span });
+                    }
+                }
                 if id.text == "Error" {
                     self.err(e.span, "E0201", "`Error` は `throw new Error(\"...\")` の形で使ってください");
                 } else if !id.text.is_empty() {
@@ -1535,17 +1546,51 @@ impl Checker<'_> {
         }
     }
 
-    /// Lint rules 9 and 10 of spec §6.
-    fn lint_host_global(&mut self, e: &Expr, name: &str) {
+    fn is_host_sym(&self, s: &Sym) -> bool {
+        match s {
+            Sym::Var(v) => self.prog.vars[*v].declared,
+            Sym::Fn(f) => matches!(self.prog.fns[*f].kind, FnKind::Host { .. }),
+            _ => false,
+        }
+    }
+
+    /// A bundled host name written with another casing (usually the type library's `Cells`).
+    fn warn_host_case(&mut self, written: &Ident, js: &str) {
+        self.warn(written.span, "W0304", format!("`{}` は RAS では `{js}` と書きます（Excel / VBA のメンバーは camelCase で参照します）", written.text));
+        self.prog.fixes.push(crate::diag::Fix { module: self.module, span: written.span, replacement: js.to_string(), code: "W0304" });
+    }
+
+    /// The RAS name of the member of host class `c` that VBA would find for `name` (ignoring case).
+    fn host_member_ci(&self, c: ClassId, name: &str) -> Option<String> {
+        let def = &self.prog.classes[c];
+        if def.kind != ClassKind::Host {
+            return None;
+        }
+        let hit = |n: &str, host: &str| n.eq_ignore_ascii_case(name) || host.eq_ignore_ascii_case(name);
+        if let Some(f) = def.fields.iter().find(|f| hit(&f.name, f.vba_name())) {
+            return Some(f.name.clone());
+        }
+        if let Some(&m) = def.methods.iter().find(|&&m| hit(&self.prog.fns[m].name, self.prog.fns[m].vba_name())) {
+            return Some(self.prog.fns[m].name.clone());
+        }
+        def.extends.iter().find_map(|b| match b {
+            Type::Class(b, _) => self.host_member_ci(*b, name),
+            _ => None,
+        })
+    }
+
+    /// Lint rules 9 and 10 of spec §6. `name` is the type library's spelling, `shown` the one in the source.
+    fn lint_host_global(&mut self, e: &Expr, name: &str, shown: &str) {
+        let shown = self.prog.host_global_names.get(&shown.to_lowercase()).cloned().unwrap_or_else(|| shown.to_string());
         match name {
             "Range" | "Cells" | "Rows" | "Columns" | "ActiveSheet" | "ActiveCell" | "ActiveWorkbook" => {
                 if self.fx.qualify_depth > 0 && matches!(name, "Range" | "Cells") {
                     self.info().auto_qualified.insert(e.id);
                 } else {
-                    self.warn(e.span, "W0401", format!("修飾されていない `{name}` はアクティブなシート／ブックに依存します。`ws.{name}` のようにシートを明示してください"));
+                    self.warn(e.span, "W0401", format!("修飾されていない `{shown}` はアクティブなシート／ブックに依存します。`ws.{shown}` のようにシートを明示してください"));
                 }
             }
-            "Selection" => self.diag(Severity::Info, e.span, "I0402", "`Selection` への依存は遅く不安定です。対象の Range を直接操作してください"),
+            "Selection" => self.diag(Severity::Info, e.span, "I0402", format!("`{shown}` への依存は遅く不安定です。対象の Range を直接操作してください")),
             _ => {}
         }
     }
@@ -1699,6 +1744,11 @@ impl Checker<'_> {
                         Access::Value(self.prog.vars[v].ty.clone())
                     }
                     _ => {
+                        let js = crate::names::js_name(&name.text);
+                        if js != name.text && matches!(self.prog.namespaces.get(ns).and_then(|n| n.get(&js)), Some(Sym::Fn(_) | Sym::Var(_))) {
+                            self.warn_host_case(name, &js);
+                            return self.member_access(e, object, ot, &Ident { text: js, span: name.span });
+                        }
                         self.err(name.span, "E0202", format!("名前空間 `{ns}` に `{}` はありません", name.text));
                         Access::Error
                     }
@@ -1744,6 +1794,17 @@ impl Checker<'_> {
                 if let Some(i) = intrinsics::host_member(self.prog, ot, &name.text) {
                     self.set_res(e.id, Res::Intrinsic(i));
                     return Access::Intrinsic(i);
+                }
+                // Array-style methods of host collections (spec §4.4).
+                if self.prog.collection_elem(ot).is_some() {
+                    if let Some(i) = intrinsics::collection_member(&name.text) {
+                        self.set_res(e.id, Res::Intrinsic(i));
+                        return Access::Intrinsic(i);
+                    }
+                }
+                if let Some(js) = self.host_member_ci(*c, &name.text).filter(|js| *js != name.text) {
+                    self.warn_host_case(name, &js);
+                    return self.member_access(e, object, ot, &Ident { text: js, span: name.span });
                 }
                 let def = &self.prog.classes[*c];
                 if def.kind == ClassKind::Host {
@@ -2174,7 +2235,8 @@ impl Checker<'_> {
             Access::Intrinsic(i) => {
                 self.info().calls.insert(e.id, CallInfo { target: CallTarget::Intrinsic(i), type_args: Vec::new() });
                 let (robj, rty) = match &recv {
-                    Some((o, t)) => (Some(*o), Some(t.clone())),
+                    // A host collection is seen as an array of its members.
+                    Some((o, t)) => (Some(*o), Some(self.prog.collection_elem(t).map(Type::array).unwrap_or_else(|| t.clone()))),
                     None => (None, None),
                 };
                 self.intrinsic_call(e, i, robj, rty.as_ref(), args, expect)
@@ -2187,7 +2249,7 @@ impl Checker<'_> {
                     (_, Recv::Instance) => CallTarget::Method(f),
                     _ => CallTarget::Fn(f),
                 };
-                let qualify = matches!(&def_kind, FnKind::Host { class: Some(_) }) && self.prog.fns[f].name == "Range";
+                let qualify = matches!(&def_kind, FnKind::Host { class: Some(_) }) && self.prog.fns[f].vba_name() == "Range";
                 if qualify {
                     self.fx.qualify_depth += 1;
                 }
@@ -2264,7 +2326,9 @@ impl Checker<'_> {
     /// Lint rule 10: `.Select` / `.Activate`.
     fn lint_member_call(&mut self, callee: &Expr) {
         if let ExprKind::Member { name, .. } = &callee.kind {
-            if matches!(name.text.as_str(), "Select" | "Activate") && matches!(self.info().res.get(&callee.id), Some(Res::Method(_))) {
+            let Some(Res::Method(m)) = self.info().res.get(&callee.id).cloned() else { return };
+            let host = self.prog.fns[m].vba_name().to_string();
+            if matches!(host.as_str(), "Select" | "Activate") {
                 self.diag(Severity::Info, name.span, "I0402", format!("`.{}` は遅く不安定です。対象のオブジェクトを直接操作してください", name.text));
             }
         }
@@ -2656,6 +2720,10 @@ impl Checker<'_> {
         }
         match intr {
             ArrLength | ArrRows | ArrCols | StrLength | MapSize => Type::Int,
+            CollToArray => {
+                self.arg_count(call, args, 0, 0);
+                arr()
+            }
             ArrPush => {
                 if self.arg_count(call, args, 1, 1) {
                     self.arg(args, 0, &elem);

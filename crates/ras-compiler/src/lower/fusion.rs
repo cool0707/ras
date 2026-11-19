@@ -37,6 +37,50 @@ enum Terminal<'a> {
     Find { out: VExpr, ty: Type, cb: &'a Callback<'a>, index: bool },
 }
 
+/// Which counter each callback of a fused chain receives as its index. As in JavaScript, that is
+/// the position in the array the method is called on: after a `filter`, positions count the
+/// elements that passed it, not the elements of the source.
+struct IndexPlan {
+    /// Something reads the position in the source.
+    source: bool,
+    /// Per stage, for a `filter` whose result is indexed by a later callback: the counter of the
+    /// elements that passed, and whether the filter itself advances it (`Collect` advances its own).
+    passed: Vec<Option<(String, bool)>>,
+}
+
+impl Callback<'_> {
+    /// Does the callback take the parameter at `pos` (the element index)?
+    fn takes(&self, pos: usize) -> bool {
+        match self {
+            Callback::Arrow(_, a) => a.params.len() > pos,
+            Callback::Obj(_, arity) => *arity > pos,
+        }
+    }
+}
+
+enum Source {
+    Array { src: VExpr, ty: Type },
+    /// Host collection, the `For Each` control variable and the type of its members.
+    Coll { coll: VExpr, item: String, elem_ty: Type },
+}
+
+impl Source {
+    fn mentions(&self, name: &str) -> bool {
+        match self {
+            Source::Array { src, .. } => mentions(src, name),
+            Source::Coll { coll, .. } => mentions(coll, name),
+        }
+    }
+
+    /// Index of the last element (`UBound(a)` / `coll.Count - 1`).
+    fn upper(&self) -> VExpr {
+        match self {
+            Source::Array { src, .. } => call("UBound", vec![src.clone()]),
+            Source::Coll { coll, .. } => coll.clone().member("Count").plus(-1),
+        }
+    }
+}
+
 fn simple_elem(v: &VExpr) -> bool {
     match v {
         VExpr::Lit(_) | VExpr::Name(_) => true,
@@ -61,6 +105,133 @@ impl<'p> Lowerer<'p> {
         }
         stages.reverse();
         (stages, cur)
+    }
+
+    /// What a fused loop runs over: an array (`For i = 0 To UBound(a)`) or a host collection
+    /// such as `worksheets` (`For Each`, spec §4.4).
+    fn fusion_source(&mut self, source: &Expr) -> Source {
+        let ty = self.ty(source);
+        match self.prog.collection_elem(&ty) {
+            Some(elem_ty) if !ty.is_array() => {
+                let c = self.expr(source);
+                let coll = self.spill_collection(c, &ty);
+                // The control variable of `For Each` must be a Variant or an object.
+                let item = if elem_ty.is_object() { self.declare("ras_e", &elem_ty) } else { self.declare_raw("ras_v", "Variant", false) };
+                Source::Coll { coll, item, elem_ty }
+            }
+            _ => Source::Array { src: self.stable_array(source), ty },
+        }
+    }
+
+    /// A collection expression that is evaluated several times (`.Count`, `For Each`): a global
+    /// such as `Worksheets` is used as it is, anything else is evaluated once.
+    fn spill_collection(&mut self, c: VExpr, ty: &Type) -> VExpr {
+        if matches!(c, VExpr::Name(_)) {
+            c
+        } else {
+            self.spill(c, ty)
+        }
+    }
+
+    /// Decides the index counters of a chain. `term_reads` tells whether the terminal reads the index
+    /// of the array it runs on; `collect` is the output counter of a filtering `map` / `filter` chain,
+    /// which is at the same time the position after the last `filter`.
+    fn plan_indexes(&mut self, stages: &[Stage], cbs: &[Callback], term_reads: bool, collect: Option<&str>) -> IndexPlan {
+        // Segment 0 is the source; every `filter` starts a new segment.
+        let mut reads = vec![false];
+        for (st, cb) in stages.iter().zip(cbs) {
+            *reads.last_mut().unwrap() |= cb.takes(1);
+            if st.is_filter {
+                reads.push(false);
+            }
+        }
+        *reads.last_mut().unwrap() |= term_reads;
+        let last_filter = stages.iter().rposition(|s| s.is_filter);
+        let mut passed = Vec::with_capacity(stages.len());
+        let mut segment = 0;
+        for (i, st) in stages.iter().enumerate() {
+            if !st.is_filter {
+                passed.push(None);
+                continue;
+            }
+            segment += 1;
+            passed.push(match collect {
+                Some(k) if last_filter == Some(i) => Some((k.to_string(), false)),
+                _ if reads[segment] => {
+                    let k = self.declare_raw("ras_k", "Long", false);
+                    self.emit(assign(name(k.clone()), long(0)));
+                    Some((k, true))
+                }
+                _ => None,
+            });
+        }
+        IndexPlan { source: reads[0], passed }
+    }
+
+    /// The loop counter. A `For Each` loop only counts when something reads the index.
+    fn fusion_index(&mut self, source: &Source, needed: bool) -> String {
+        if needed || matches!(source, Source::Array { .. }) {
+            self.declare_raw("ras_i", "Long", false)
+        } else {
+            String::new()
+        }
+    }
+
+    /// Emits the loop over `source`: `body` receives the current element and its type. `idx` counts from 0
+    /// (empty: a `For Each` loop that does not count).
+    fn fused_loop(&mut self, source: &Source, idx: &str, body: impl FnOnce(&mut Self, VExpr, Type)) {
+        self.pc.loop_depth += 1;
+        match source {
+            Source::Array { src, ty } => {
+                let elem_ty = ty.elem().cloned().unwrap_or(Type::Any);
+                let (b, _) = self.capture(|lw| body(lw, src.clone().index(vec![name(idx)]), elem_ty));
+                self.pc.loop_depth -= 1;
+                let len = self.len_of(src.clone(), ty);
+                self.emit(VStmt::For { var: idx.to_string(), from: long(0), to: len.plus(-1), step: None, body: b });
+            }
+            Source::Coll { coll, item, elem_ty } => {
+                let (mut b, _) = self.capture(|lw| {
+                    if elem_ty.is_object() || *elem_ty == Type::Any {
+                        body(lw, name(item.clone()), elem_ty.clone());
+                    } else {
+                        // A value element (`FileDialogSelectedItems`) arrives in a Variant.
+                        let typed = VExpr::Name(lw.temp(elem_ty));
+                        lw.store(&typed, elem_ty, name(item.clone()), &Type::Any);
+                        body(lw, typed, elem_ty.clone());
+                    }
+                });
+                self.pc.loop_depth -= 1;
+                if !idx.is_empty() {
+                    b.push(assign(name(idx), name(idx).plus(1)));
+                    self.emit(assign(name(idx), long(0)));
+                }
+                self.emit(VStmt::ForEach { var: item.clone(), coll: coll.clone(), body: b });
+            }
+        }
+    }
+
+    /// Copies the members of the host collection `coll` into the array `dest`, in `For Each` order.
+    fn collection_into(&mut self, coll: &Expr, dest: &VExpr, arr_ty: &Type) {
+        let elem_ty = arr_ty.elem().cloned().unwrap_or(Type::Any);
+        let coll_ty = self.ty(coll);
+        let c = self.expr(coll);
+        let c = self.spill_collection(c, &coll_ty);
+        let k = self.declare_raw("ras_n", "Long", false);
+        // The control variable of `For Each` must be a Variant or an object.
+        let (item, item_ty) = if elem_ty.is_object() { (self.declare("ras_e", &elem_ty), elem_ty.clone()) } else { (self.declare_raw("ras_v", "Variant", false), Type::Any) };
+        let (mut body, _) = self.capture(|lw| lw.store(&dest.clone().index(vec![name(k.clone())]), &elem_ty, name(item.clone()), &item_ty));
+        body.push(assign(name(k.clone()), name(k.clone()).plus(1)));
+        let (clear, _) = self.capture(|lw| lw.clear_array(dest, arr_ty));
+        let count = c.clone().member("Count");
+        self.emit(if_else(
+            bin(">", count.clone(), long(0)),
+            vec![
+                VStmt::ReDim { preserve: false, target: dest.clone(), dims: vec![(long(0), count.plus(-1))] },
+                assign(name(k), long(0)),
+                VStmt::ForEach { var: item, coll: c, body },
+            ],
+            clear,
+        ));
     }
 
     fn prepare_cb<'a>(&mut self, arg: &'a Expr) -> Callback<'a> {
@@ -137,17 +308,26 @@ impl<'p> Lowerer<'p> {
         }
     }
 
-    fn run_stages(&mut self, stages: &[Stage], cbs: &[Callback], i: usize, cur: VExpr, cur_ty: Type, idx: &str, term: &Terminal) {
+    /// Runs stage `i` and what follows on the element `cur`. `idx` is the position of `cur` in the
+    /// array stage `i` works on (the source, or the result of the preceding `filter`).
+    #[allow(clippy::too_many_arguments)]
+    fn run_stages(&mut self, stages: &[Stage], cbs: &[Callback], i: usize, cur: VExpr, cur_ty: Type, idx: &str, plan: &IndexPlan, term: &Terminal) {
         let ix = || (name(idx), Type::Int);
         if i < stages.len() {
             let st = &stages[i];
             if st.is_filter {
                 let c = self.apply_cb(&cbs[i], vec![(cur.clone(), cur_ty.clone()), ix()], true);
-                let (body, _) = self.capture(|lw| lw.run_stages(stages, cbs, i + 1, cur, cur_ty, idx, term));
+                // What follows sees the position among the elements that passed.
+                let passed = plan.passed[i].as_ref();
+                let inner = passed.map_or(idx, |p| p.0.as_str());
+                let (mut body, _) = self.capture(|lw| lw.run_stages(stages, cbs, i + 1, cur, cur_ty, inner, plan, term));
+                if let Some((k, true)) = passed {
+                    body.push(assign(name(k.clone()), name(k.clone()).plus(1)));
+                }
                 self.emit(if_then(c, body));
             } else {
                 let v = self.apply_cb(&cbs[i], vec![(cur, cur_ty), ix()], true);
-                self.run_stages(stages, cbs, i + 1, v, st.out_ty.clone(), idx, term);
+                self.run_stages(stages, cbs, i + 1, v, st.out_ty.clone(), idx, plan, term);
             }
             return;
         }
@@ -210,29 +390,39 @@ impl<'p> Lowerer<'p> {
                 let (mut stages, source) = self.collect_chain(recv);
                 let Some(arg) = args.first() else { return false };
                 stages.push(Stage { is_filter: intr == Intr::ArrFilter, arg, out_ty: elem_ty.clone() });
-                let src_ty = self.ty(source);
-                let src = self.stable_array(source);
-                let aliased = mentions(&src, &dest_name) || stages.iter().any(|s| self.ast_mentions(s.arg, &dest_name));
+                let src = self.fusion_source(source);
+                let aliased = src.mentions(&dest_name) || stages.iter().any(|s| self.ast_mentions(s.arg, &dest_name));
                 let out = if aliased { VExpr::Name(self.temp(ty)) } else { dest.clone() };
                 let cbs: Vec<Callback> = stages.iter().map(|s| self.prepare_cb(s.arg)).collect();
                 let has_filter = stages.iter().any(|s| s.is_filter);
-                let idx = self.declare_raw("ras_i", "Long", false);
                 let counter = has_filter.then(|| self.declare_raw("ras_n", "Long", false));
                 if let Some(k) = &counter {
                     self.emit(assign(name(k.clone()), long(0)));
                 }
+                // Without a filter the output is written at the position of the source.
+                let plan = self.plan_indexes(&stages, &cbs, !has_filter, counter.as_deref());
+                let idx = self.fusion_index(&src, plan.source);
                 let term = Terminal::Collect { out: out.clone(), counter: counter.clone(), elem_ty };
-                let src_elem = src_ty.elem().cloned().unwrap_or(Type::Any);
-                self.pc.loop_depth += 1;
-                let (body, _) = self.capture(|lw| lw.run_stages(&stages, &cbs, 0, src.clone().index(vec![name(idx.clone())]), src_elem, &idx, &term));
-                self.pc.loop_depth -= 1;
-                let ub = call("UBound", vec![src.clone()]);
-                let filled = vec![
-                    VStmt::ReDim { preserve: false, target: out.clone(), dims: vec![(long(0), ub.clone())] },
-                    VStmt::For { var: idx, from: long(0), to: ub, step: None, body },
-                ];
+                let ub = src.upper();
+                let (filled, _) = self.capture(|lw| {
+                    lw.emit(VStmt::ReDim { preserve: false, target: out.clone(), dims: vec![(long(0), ub.clone())] });
+                    match &src {
+                        // The length is known to be positive here: `UBound` needs no guard.
+                        Source::Array { src: a, ty: aty } => {
+                            let elem = aty.elem().cloned().unwrap_or(Type::Any);
+                            lw.pc.loop_depth += 1;
+                            let (body, _) = lw.capture(|lw| lw.run_stages(&stages, &cbs, 0, a.clone().index(vec![name(idx.clone())]), elem, &idx, &plan, &term));
+                            lw.pc.loop_depth -= 1;
+                            lw.emit(VStmt::For { var: idx.clone(), from: long(0), to: ub.clone(), step: None, body });
+                        }
+                        Source::Coll { .. } => lw.fused_loop(&src, &idx, |lw, cur, cur_ty| lw.run_stages(&stages, &cbs, 0, cur, cur_ty, &idx, &plan, &term)),
+                    }
+                });
                 let (clear, _) = self.capture(|lw| lw.clear_array(&out, ty));
-                let non_empty = bin(">", self.len_of(src, &src_ty), long(0));
+                let non_empty = match &src {
+                    Source::Array { src: a, ty: aty } => bin(">", self.len_of(a.clone(), aty), long(0)),
+                    Source::Coll { coll, .. } => bin(">", coll.clone().member("Count"), long(0)),
+                };
                 match counter {
                     None => self.emit(if_else(non_empty, filled, clear)),
                     Some(k) => {
@@ -253,6 +443,10 @@ impl<'p> Lowerer<'p> {
                     self.emit(assign(dest.clone(), out));
                 }
                 self.note(e.span, true, "fusion", format!("配列メソッドの連鎖（{} 段）を 1 本のループに融合しました", stages.len()));
+                true
+            }
+            Intr::CollToArray => {
+                self.collection_into(recv, dest, ty);
                 true
             }
             Intr::ArrSlice => {
@@ -350,8 +544,7 @@ impl<'p> Lowerer<'p> {
     /// `forEach` / `reduce` / `some` / `every` / `find` / `findIndex`, fused with preceding `map` / `filter` stages.
     pub(crate) fn scalar_fusion(&mut self, e: &Expr, intr: Intr, recv: &Expr, args: &[Expr], want: bool) -> Option<VExpr> {
         let (stages, source) = self.collect_chain(recv);
-        let src_ty = self.ty(source);
-        let src = self.stable_array(source);
+        let src = self.fusion_source(source);
         let cbs: Vec<Callback> = stages.iter().map(|s| self.prepare_cb(s.arg)).collect();
         let cb = self.prepare_cb(args.first()?);
         let result_ty = self.ty(e);
@@ -380,13 +573,10 @@ impl<'p> Lowerer<'p> {
             }
             _ => return None,
         };
-        let idx = self.declare_raw("ras_i", "Long", false);
-        let src_elem = src_ty.elem().cloned().unwrap_or(Type::Any);
-        self.pc.loop_depth += 1;
-        let (body, _) = self.capture(|lw| lw.run_stages(&stages, &cbs, 0, src.clone().index(vec![name(idx.clone())]), src_elem, &idx, &term));
-        self.pc.loop_depth -= 1;
-        let len = self.len_of(src, &src_ty);
-        self.emit(VStmt::For { var: idx, from: long(0), to: len.plus(-1), step: None, body });
+        let term_reads = intr == Intr::ArrFindIndex || cb.takes(if intr == Intr::ArrReduce { 2 } else { 1 });
+        let plan = self.plan_indexes(&stages, &cbs, term_reads, None);
+        let idx = self.fusion_index(&src, plan.source);
+        self.fused_loop(&src, &idx, |lw, cur, cur_ty| lw.run_stages(&stages, &cbs, 0, cur, cur_ty, &idx, &plan, &term));
         self.note(e.span, true, "fusion", "コールバックをループに展開しました");
         if want {
             Some(result.unwrap_or_else(|| lit("Empty")))
@@ -483,7 +673,7 @@ impl<'p> Lowerer<'p> {
         }
         let mut vparams = Vec::new();
         for (i, &l) in params.iter().enumerate() {
-            let n = self.unique(&names::local_ident(&arrow.params[i].name.text));
+            let n = self.unique(&self.local_ident(&arrow.params[i].name.text));
             frame.locals.insert(l, Binding::Var(n.clone()));
             vparams.push(VParam { name: n, byref: false, ty: "Variant".into(), is_array: false, optional_default: None });
         }

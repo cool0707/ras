@@ -289,7 +289,10 @@ pub struct LocalDef {
 pub struct FnDef {
     pub id: FnId,
     pub module: ModuleId,
+    /// Name in RAS source. For members and globals of the bundled type definitions this is
+    /// the camelCase spelling (`cells`); `host_name` keeps the type library's (`Cells`).
     pub name: String,
+    pub host_name: Option<String>,
     pub kind: FnKind,
     pub exported: bool,
     pub vis: Visibility,
@@ -321,6 +324,11 @@ impl FnDef {
         self.ret.clone().unwrap_or(Type::Void)
     }
 
+    /// The name to emit: the type library's spelling for host functions.
+    pub fn vba_name(&self) -> &str {
+        self.host_name.as_deref().unwrap_or(&self.name)
+    }
+
     pub fn is_generic(&self) -> bool {
         !self.type_params.is_empty()
     }
@@ -340,7 +348,9 @@ pub enum ClassKind {
 
 #[derive(Clone, Debug)]
 pub struct FieldDef {
+    /// Name in RAS source (camelCase for the bundled type definitions, see `FnDef::name`).
     pub name: String,
+    pub host_name: Option<String>,
     pub ty: Type,
     pub vis: Visibility,
     pub is_static: bool,
@@ -348,6 +358,12 @@ pub struct FieldDef {
     pub init: Option<Rc<ast::Expr>>,
     pub doc: Option<String>,
     pub span: Span,
+}
+
+impl FieldDef {
+    pub fn vba_name(&self) -> &str {
+        self.host_name.as_deref().unwrap_or(&self.name)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -429,7 +445,9 @@ pub enum ConstVal {
 pub struct VarDef {
     pub id: VarId,
     pub module: ModuleId,
+    /// Name in RAS source (camelCase for the bundled host globals, see `FnDef::name`).
     pub name: String,
+    pub host_name: Option<String>,
     pub ty: Type,
     pub is_const: bool,
     pub exported: bool,
@@ -443,6 +461,12 @@ pub struct VarDef {
     /// Referenced from a function other than the module's `Main`.
     pub used_outside_main: bool,
     pub reassigned: bool,
+}
+
+impl VarDef {
+    pub fn vba_name(&self) -> &str {
+        self.host_name.as_deref().unwrap_or(&self.name)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -636,7 +660,15 @@ pub struct Program {
     pub namespaces: HashMap<String, HashMap<String, Sym>>,
     /// Names visible everywhere (host globals, host enum members).
     pub globals: HashMap<String, Sym>,
+    /// Lower-cased type-library spelling of every bundled host global → its RAS name
+    /// (`cells` → `cells`, `msgbox` → `msgBox`). Finds a name written in another casing.
+    pub host_global_names: HashMap<String, String>,
+    /// Lower-cased name of every member of the bundled host interfaces → the type library's
+    /// spelling. Used to emit a late-bound member (`activeSheet.cells`) the way VBA writes it.
+    pub host_member_spelling: HashMap<String, String>,
     pub diagnostics: Vec<Diagnostic>,
+    /// Corrections that can be applied mechanically (`ras check --fix`).
+    pub fixes: Vec<crate::diag::Fix>,
     pub opt_notes: Vec<(ModuleId, OptNote)>,
     pub config: crate::config::Config,
     /// Host namespace whose declarations are being resolved (unqualified type names look there first).
@@ -788,6 +820,19 @@ impl Program {
         }
         let c = &self.classes[class];
         c.extends.iter().chain(c.implements.iter()).any(|t| matches!(t, Type::Class(b, _) if self.class_conforms(*b, target)))
+    }
+
+    /// Element type of a host collection: a host interface with a default member
+    /// (`(index: any): T`) and a `Count` property, which is what `For Each` enumerates.
+    pub fn collection_elem(&self, t: &Type) -> Option<Type> {
+        let Type::Class(c, args) = t else { return None };
+        let def = &self.classes[*c];
+        if def.kind != ClassKind::Host {
+            return None;
+        }
+        let sig = def.call_sig?;
+        self.find_field(*c, "count").or_else(|| self.find_field(*c, "Count"))?;
+        Some(self.fns[sig].ret_ty().subst(&self.class_env(*c, args)))
     }
 
     /// Type-parameter substitution environment for a class instantiation.

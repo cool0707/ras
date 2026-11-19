@@ -261,6 +261,27 @@ impl Server {
                     .collect();
                 Value::Array(lenses)
             }
+            "textDocument/codeAction" => {
+                // Quick fixes for the diagnostics that can be corrected mechanically (`cells` for `Cells`).
+                let Some(uri) = p["textDocument"]["uri"].as_str() else { return json!([]) };
+                let Some(m) = uri_to_path(uri).and_then(|path| self.module_for(&path)) else { return json!([]) };
+                let md = &prog.modules[m];
+                let pos = |v: &Value| md.offset_of(v["line"].as_u64().unwrap_or(0) as u32, v["character"].as_u64().unwrap_or(0) as u32);
+                let (from, to) = (pos(&p["range"]["start"]), pos(&p["range"]["end"]));
+                let mut seen = HashSet::new();
+                let fixes: Vec<&ras_compiler::Fix> = prog.fixes.iter().filter(|f| f.module == m && seen.insert(u32::from(f.span.start()))).collect();
+                let edit = |f: &ras_compiler::Fix| json!({ "range": Self::range(prog, m, f.span), "newText": f.replacement });
+                let mut actions: Vec<Value> = fixes
+                    .iter()
+                    .filter(|f| u32::from(f.span.start()) <= to && from <= u32::from(f.span.end()))
+                    .map(|f| json!({ "title": format!("`{}` に修正", f.replacement), "kind": "quickfix", "isPreferred": true, "edit": { "changes": { uri: [edit(f)] } } }))
+                    .collect();
+                if !actions.is_empty() && fixes.len() > 1 {
+                    let all: Vec<Value> = fixes.iter().map(|f| edit(f)).collect();
+                    actions.push(json!({ "title": format!("このファイルの同種の警告をすべて修正（{} 箇所）", all.len()), "kind": "quickfix", "edit": { "changes": { uri: all } } }));
+                }
+                Value::Array(actions)
+            }
             "workspace/executeCommand" => self.execute_command(prog, p),
             _ => Value::Null,
         }
@@ -314,6 +335,7 @@ pub fn run(conn: &Connection) -> Res<()> {
                 "definitionProvider": true,
                 "documentSymbolProvider": true,
                 "documentFormattingProvider": true,
+                "codeActionProvider": { "codeActionKinds": ["quickfix"] },
                 "codeLensProvider": { "resolveProvider": false },
                 "executeCommandProvider": { "commands": COMMANDS },
             },
@@ -398,7 +420,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("src")).unwrap();
         std::fs::write(dir.join("ras.toml"), "[project]\nname = \"T\"\n").unwrap();
         let file = dir.join("src").join("main.ras");
-        let good = "/** 2 倍にする。 */\nexport function twice(x: int): int {\n    return x * 2;\n}\n\nexport function run() {\n    const words = [\"a\"];\n    MsgBox(words.join(\",\") + twice(2));\n}\n";
+        let good = "/** 2 倍にする。 */\nexport function twice(x: int): int {\n    return x * 2;\n}\n\nexport function run() {\n    const words = [\"a\"];\n    msgBox(words.join(\",\") + twice(2));\n}\n";
         std::fs::write(&file, good).unwrap();
         let uri = path_to_uri(&file);
 
@@ -431,11 +453,26 @@ mod tests {
         assert_eq!(def["range"]["start"]["line"], 1);
 
         // member completion after `words.` while typing (the buffer has a syntax error)
-        let broken = good.replace("MsgBox(words.join(\",\") + twice(2));", "words.");
+        let broken = good.replace("msgBox(words.join(\",\") + twice(2));", "words.");
         send(Message::Notification(Notification::new("textDocument/didOpen".into(), json!({ "textDocument": { "uri": uri, "languageId": "ras", "version": 1, "text": broken } }))));
         let comp = request("textDocument/completion", json!({ "textDocument": { "uri": uri }, "position": { "line": 7, "character": 10 } }));
         let labels: Vec<&str> = comp["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
-        assert!(labels.contains(&"map") && labels.contains(&"length") && !labels.contains(&"MsgBox"), "{labels:?}");
+        assert!(labels.contains(&"map") && labels.contains(&"length") && !labels.contains(&"msgBox"), "{labels:?}");
+
+        // host members are completed in camelCase; a collection also offers the array-style methods
+        let host = good.replace("msgBox(words.join(\",\") + twice(2));", "worksheets.");
+        send(Message::Notification(Notification::new("textDocument/didChange".into(), json!({ "textDocument": { "uri": uri, "version": 2 }, "contentChanges": [{ "text": host }] }))));
+        let comp = request("textDocument/completion", json!({ "textDocument": { "uri": uri }, "position": { "line": 7, "character": 15 } }));
+        let labels: Vec<&str> = comp["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap()).collect();
+        assert!(labels.contains(&"count") && labels.contains(&"filter") && !labels.contains(&"Count"), "{labels:?}");
+
+        // the type library's spelling is accepted with a warning and a quick fix
+        let cased = good.replace("msgBox(", "MsgBox(");
+        send(Message::Notification(Notification::new("textDocument/didChange".into(), json!({ "textDocument": { "uri": uri, "version": 2 }, "contentChanges": [{ "text": cased }] }))));
+        let actions = request("textDocument/codeAction", json!({ "textDocument": { "uri": uri }, "range": { "start": { "line": 7, "character": 5 }, "end": { "line": 7, "character": 5 } }, "context": { "diagnostics": [] } }));
+        assert_eq!(actions[0]["edit"]["changes"][&uri][0]["newText"], "msgBox", "{actions}");
+        let hover = request("textDocument/hover", json!({ "textDocument": { "uri": uri }, "position": { "line": 7, "character": 5 } }));
+        assert!(hover["contents"]["value"].as_str().unwrap().contains("function msgBox(") && hover["contents"]["value"].as_str().unwrap().contains("// VBA: MsgBox"), "{hover}");
 
         // diagnostics follow the edits: an error appears and is cleared again
         let with_error = good.replace("return x * 2;", "return \"s\";");

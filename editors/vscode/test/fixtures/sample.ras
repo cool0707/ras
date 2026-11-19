@@ -25,8 +25,8 @@ noinline function slowPath(count: long): void { }
 // §5.2 resume, §10.1 resumeScreen()
 function activate(): void {
     try {
-        let ws = Worksheets("NonExistent");
-        ws.Activate();
+        let ws = worksheets("NonExistent");
+        ws.activate();
     } catch {
         resume;
     }
@@ -95,7 +95,7 @@ function runReport(): void { }
 function fill(ws: Excel.Worksheet, last: int): void {
     @bulk
     for (let r = 2; r <= last; r++) {
-        ws.Cells(r, 1).Value = r * 2;
+        ws.cells(r, 1).value = r * 2;
     }
     @nodoevents
     while (pending()) {
@@ -137,7 +137,7 @@ export function maxOf<T extends Comparable>(this: T[]): T {
  * @returns 最終行の行番号
  */
 export function lastRow(this: Excel.Worksheet, col: int = 1): int {
-    return this.Cells(this.Rows.Count, col).End(xlUp).Row;
+    return this.cells(this.rows.count, col).end(xlUp).row;
 }
 
 // §4 lambdas

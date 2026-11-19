@@ -1,4 +1,9 @@
-# RAS 言語仕様書（Draft v0.8）
+# RAS 言語仕様書（Draft v0.9）
+
+> v0.8 からの変更
+> * Excel / VBA / Office のメンバーとグローバルは、JavaScript の命名規則（camelCase）で参照する（`ws.cells(r, 1).value`、`msgBox(...)`）。生成する VBA にはタイプ ライブラリの綴りを出力する（§15.3.1）
+> * `worksheets` などのホストのコレクションで、配列と同じ `filter` / `map` / `forEach` 等を使える（§4.4）
+> * `ras check --fix` とエディタのクイックフィックスで、VBA の綴りで書かれた名前を書き換える（§7.3、§16.2）
 
 > v0.7 からの変更
 > * 構造体（`struct`）をデータの入れ物の基本とし、オブジェクトリテラル・無名のオブジェクト型・タプル・分割代入を追加（§2.5）
@@ -338,7 +343,7 @@ export function padLeft(this: string, width: int, ch: string = " "): string {
 
 // excelutil.ras
 export function lastRow(this: Excel.Worksheet, col: int = 1): int {
-    return this.Cells(this.Rows.Count, col).End(xlUp).Row;
+    return this.cells(this.rows.count, col).end(xlUp).row;
 }
 
 export function sum(this: double[]): double {
@@ -405,6 +410,7 @@ const last = Sheet1.lastRow();
 ラムダ式は次の優先順位で変換する。
 
 1. **ループ融合（既定）:** 配列メソッドの引数にラムダ式が**直接リテラルで**書かれている場合、クラスを生成せず、呼び出し元にループとして直接展開する。`arr.filter(...).map(...)` のようなチェーンは1本のループに融合する。
+   * コールバックが受け取る添字は、JavaScript と同じく「そのメソッドを呼んだ配列の中での位置」である。融合しても変わらない。`filter` の後段（`arr.filter(f).map((x, i) => ...)` の `i`、`arr.filter(f).findIndex(g)` の結果）は、絞り込みを通った要素の中での位置になる。後段が添字を使うときだけ、`filter` ごとに通過した要素を数える。
 2. **クロージャクラス（エスケープ時のみ）:** ラムダが変数に代入される・関数の引数として渡される・戻り値になる等、呼び出し位置で本体を特定できない場合のみ、従来通りクラスモジュール（`RAS_Lambda_001.cls`）を生成する。
    * キャプチャされた定数はパブリックフィールドとし、生成時にワンタイムコピーする。
    * 評価メソッド名は `Apply`。ランタイム（`RAS_Runtime.bas`）から遅延バインディングで呼び出す。`Invoke` は `IDispatch` のメンバー名と衝突し、クラスモジュールではコンパイル エラー（「このメンバー識別子は既にオブジェクト モジュールの中に存在しています」）になるため使えない。
@@ -459,6 +465,52 @@ Public Function Apply(ByVal x As Variant) As Variant
 End Function
 ```
 
+### 4.4 ホストのコレクション（v0.9で追加）
+
+`worksheets` / `workbooks` / `ws.shapes` / `Excel.Range` などのホスト（COM）のコレクションでも、配列と同じ書き方でメンバーを処理できる。
+
+```typescript
+const names = worksheets.filter(ws => ws.visible == xlSheetVisible).map(ws => ws.name);
+worksheets.forEach((ws, i) => { ws.cells(1, 1).value = i; });
+const data = thisWorkbook.worksheets.find(ws => ws.name == "Data");   // 見つからなければ null
+```
+
+* **対象:** 既定メンバー（`(index: any): T`）と `count` を持つホスト型。`for...of` で列挙できるものと同じで、要素の型は既定メンバーの戻り値の型 `T` になる。
+* **使えるメソッド:** `map` / `filter` / `forEach` / `reduce` / `some` / `every` / `find` / `findIndex` と、メンバーを配列に写す `toArray()`。コールバックの第 2 引数は 0 始まりの通し番号（`filter` の後段では、絞り込みを通ったメンバーの中での番号。§4.1）。
+* **結果は配列:** `map` / `filter` / `toArray` の結果は `T[]`（コレクションではない）。以降は配列のメソッド（`length` / `join` / `sort` / `slice` など）をそのまま使える。
+* **型のメンバーが優先:** ホスト型に同名のメンバーがあれば、そちらが使われる（`range.find(...)` は Excel の `Range.Find`、`range.sort(...)` は `Range.Sort`）。
+* **要素の型:** `worksheets` / `book.worksheets` は `Excel.Sheets<Excel.Worksheet>`、`charts` は `Excel.Sheets<Excel.Chart>` で、コールバックの引数にシートのメンバーが補完される。グラフ シートも含む `sheets` は `Excel.Sheets`（要素は `object`）で、メンバーは遅延バインディングになる。
+* **トランスパイル仕様:** §4.1 のループ融合を `For Each` に対して行う。配列は作らない（`map` / `filter` / `toArray` の結果を除く）。プロパティの連鎖で得たコレクション（`book.worksheets`）は一度だけ評価する。通し番号は、コールバックが受け取るときだけ数える。
+* **列挙中の変更:** `For Each` で直接列挙するため、コールバックの中で列挙中のコレクションを変更（シートの追加・削除など）してはならない。変更する場合は `toArray()` で写してから処理する（`worksheets.toArray().forEach(ws => ws.delete())`）。
+
+**RASコード:**
+```typescript
+const names = worksheets.filter(ws => ws.visible == xlSheetVisible).map(ws => ws.name);
+```
+
+**出力VBAコード:**
+```vba
+Dim names_() As String
+Dim ras_e As Worksheet
+Dim ras_n As Long
+
+ras_n = 0&
+If Worksheets.Count > 0& Then
+    ReDim names_(0 To Worksheets.Count - 1&)
+    For Each ras_e In Worksheets
+        If ras_e.Visible = xlSheetVisible Then
+            names_(ras_n) = ras_e.Name
+            ras_n = ras_n + 1&
+        End If
+    Next ras_e
+End If
+If ras_n = 0& Then
+    Erase names_
+ElseIf ras_n <= UBound(names_) Then
+    ReDim Preserve names_(0 To ras_n - 1&)
+End If
+```
+
 ---
 
 ## 5. エラーハンドリング
@@ -484,8 +536,8 @@ TypeScriptの `try ... catch ... finally` をベースとしつつ、VBAの `On 
 **RASコード:**
 ```typescript
 try {
-    let ws = Worksheets("NonExistent");
-    ws.Activate();
+    let ws = worksheets("NonExistent");
+    ws.activate();
 } catch {
     resume;
 }
@@ -519,11 +571,12 @@ On Error GoTo 0
 6. **（追加）大文字小文字のみ異なる識別子の衝突:** VBA は大文字小文字を区別せず、VBE が全モジュールの識別子の大小を書き換えるため、`foo` と `Foo` の共存はエラー（§13.6）。
 7. **（追加）VBA 予約語・組み込み名との衝突:** 自動リネームする旨の警告（§13.6）。
 8. **（追加）`inline` 関数の再帰・展開不能:** 直接・間接再帰の `inline` 関数はエラー。
-9. **（追加）非修飾の `Range` / `Cells` / `ActiveSheet` 依存:** 警告（§13.4）。
-10. **（追加）`.Select` / `.Activate` / `Selection` の使用:** 情報（性能・安定性）。
+9. **（追加）非修飾の `range` / `cells` / `activeSheet` 依存:** 警告（§13.4）。
+10. **（追加）`.select()` / `.activate()` / `selection` の使用:** 情報（性能・安定性）。
 11. **（追加）コードページで表現できない文字:** 自動エスケープした旨の情報（§13.7）。
 12. **（追加）VBA の構造制限超過の予測:** プロシージャ 64KB 制限、行継続 24 個制限等（§13.8）。
 13. **（追加）最適化の可視化:** インライン展開・一括転送・ループ融合が適用された／適用できなかった箇所を Hint と CodeLens で示す（理由付き）。
+14. **（v0.9で追加）ホストの名前の綴り:** Excel / VBA / Office のメンバー・グローバルを VBA の綴り（`ws.Cells`、`MsgBox`）で書くと警告（`W0304`）。意味は変わらず、`ras check --fix` とクイックフィックスで camelCase に書き換えられる（§15.3.1）。
 
 ---
 
@@ -569,7 +622,7 @@ On Error GoTo 0
 | コマンド | 内容 |
 |---|---|
 | `ras init` | `ras.toml` と雛形を生成 |
-| `ras check` | 型チェック・リントのみ |
+| `ras check [--fix]` | 型チェック・リントのみ。`--fix` は機械的に直せる警告（§6 ルール 14）をソースに書き戻してから検査する |
 | `ras build [--release]` | VBA ファイルを `build/` に出力。`--release` で最適化レベル既定 `-O2` |
 | `ras watch` | 変更監視しながらインクリメンタルビルド＋ライブ同期 |
 | `ras sync [--pull]` | 1回だけ Excel と同期（`--pull` は Excel → ローカル方向） |
@@ -664,7 +717,7 @@ for (let i = 0; i < n; i++) {
 ### 8.5 その他のループ最適化
 
 * **`for` の `For...Next` 化:** `for (let i = a; i < b; i++)` は、`i` と `b` が本体で変更されず、ステップが定数の場合に `For i = a To b - 1` へ変換する（VBA の `For` は上限を1回だけ評価するため、JS の毎回評価と意味が一致する条件を検証する）。満たさない場合は `Do While` に変換する。
-* **ループ不変式の巻き上げ:** `arr.length`, `obj.Count`, 同一オブジェクトのプロパティチェーン（`ws.Range("A1").Font` 等）でループ内で不変と判定できるものはループ前に一時変数へ退避する。COM オブジェクトのプロパティは「ループ内でそのオブジェクトに書き込み・メソッド呼び出し・不明な関数呼び出しがない」場合のみ不変とみなす。
+* **ループ不変式の巻き上げ:** `arr.length`, `obj.count`, 同一オブジェクトのプロパティチェーン（`ws.range("A1").font` 等）でループ内で不変と判定できるものはループ前に一時変数へ退避する。COM オブジェクトのプロパティは「ループ内でそのオブジェクトに書き込み・メソッド呼び出し・不明な関数呼び出しがない」場合のみ不変とみなす。
 * **`With` ブロック化:** 同一オブジェクト式への連続したメンバアクセスは `With` に変換する。
 * **文字列連結:** ループ内での `s += ...` は、ランタイムの文字列バッファ（`Space$` で確保した領域に `Mid$` で書き込む方式）に自動変換する（`-O2`）。
 * **`$` 付き関数:** `Left`, `Mid`, `Trim` 等は `String` 型を返す `$` 版（`Left$` 等）を出力する。
@@ -682,7 +735,7 @@ for (let i = 0; i < n; i++) {
 const ws = Sheet1;
 for (let r = 2; r <= last; r++) {
     for (let c = 1; c <= 5; c++) {
-        ws.Cells(r, c).Value = r * c;
+        ws.cells(r, c).value = r * c;
     }
 }
 ```
@@ -706,7 +759,7 @@ for (let r = 2; r <= last; r++) {
 ```typescript
 let sum = 0;
 for (let r = 2; r <= last; r++) {
-    sum += ws.Cells(r, 1).Value;
+    sum += ws.cells(r, 1).value;
 }
 ```
 
@@ -736,7 +789,7 @@ for (let r = 2; r <= last; r++) {
 
 1. **対象シート式がループ内で不変**（`const` 変数、コード名、またはループ外で確定したオブジェクト）。
 2. **添字が誘導変数の一次式**（`r + k`, `c - k` の形。`k` はループ不変）で、ループ範囲から矩形領域が静的に（ループ開始前に）確定する。
-3. **アクセスするプロパティが `Value` / `Value2` / `Formula` / `FormulaR1C1` のいずれか**で、変換前後で同じプロパティを使う（`.Value` を `.Value2` に勝手に変えない。日付・通貨の値が変わるため）。
+3. **アクセスするプロパティが `value` / `value2` / `formula` / `formulaR1C1` のいずれか**で、変換前後で同じプロパティを使う（`.Value` を `.Value2` に勝手に変えない。日付・通貨の値が変わるため）。
 4. **ループ内で同じシートに対する他の操作がない**: 書式変更・`Select`・行列の挿入削除・他のセルアクセス・シートに触れうる不明な関数呼び出し（展開できなかった呼び出し、`Application.Run`、COM メソッド呼び出し）がない。
 5. **書き込みの場合、矩形内の全セルに無条件で書き込む**（条件付き書き込み・`continue`・`break` がない）。部分的な書き込みを一括化すると、書き込まないセルの数式が値で上書きされるため。
 6. **書き込み領域を同じループ内で読み戻していない**（読み戻しは配列参照に置換できる場合のみ許可）。
@@ -1042,8 +1095,8 @@ RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化�
 
 ### 13.4 シート・Range の参照
 
-* **非修飾の `Cells` / `Range`:** `ws.Range(Cells(1, 1), Cells(2, 2))` の内側 `Cells` は ActiveSheet を指してエラーになる。RAS では `ws.Range(...)` の引数内の非修飾 `Cells` / `Range` を `ws` で自動修飾する。それ以外の非修飾使用は警告。
-* **シートの参照:** 名前文字列（`Worksheets("Sheet1")`）よりコード名を推奨し、コード名は型付きで補完される。
+* **非修飾の `cells` / `range`:** VBA の `ws.Range(Cells(1, 1), Cells(2, 2))` の内側 `Cells` は ActiveSheet を指してエラーになる。RAS では `ws.range(...)` の引数内の非修飾 `cells` / `range` を `ws` で自動修飾する。それ以外の非修飾使用は警告。
+* **シートの参照:** 名前文字列（`worksheets("Sheet1")`）よりコード名を推奨し、コード名は型付きで補完される。`worksheets(...)` の結果は `Excel.Worksheet` として扱う（タイプ ライブラリ上は `Object`。§4.4）。
 
 ### 13.5 制御構文
 
@@ -1053,7 +1106,8 @@ RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化�
 
 ### 13.6 識別子
 
-* **大文字小文字の非区別:** VBA は大小を区別せず、VBE が宣言時の大小で全モジュールを書き換える（`Value` を変数名にすると `.value` が全部書き換わる等）。RAS は大小のみ異なる識別子をエラーにする。また VBA 組み込みメンバ名（`Value`, `Name`, `Count`, `Item` 等）とローカル変数名が衝突する場合は自動リネームする（`value` → `value_`）。
+* **大文字小文字の非区別:** VBA は大小を区別せず、VBE が宣言時の大小で全モジュールを書き換える（`Value` を変数名にすると `.value` が全部書き換わる等）。RAS は大小のみ異なる識別子をエラーにする。また VBA 組み込みメンバ名（`Value`, `Name`, `Count`, `Item` 等）や同梱の型定義のグローバル（`Range`, `Workbooks`, `Left` 等）とローカル変数名が衝突する場合は自動リネームする（`value` → `value_`、`const range = ws.range("A1")` → `range_`）。
+* **ホストの名前の綴り:** RAS のソースでは camelCase（`ws.cells`）、生成する VBA ではタイプ ライブラリの綴り（`ws.Cells`）を使う（§15.3.1）。
 * **予約語・組み込み関数名との衝突:** `Date`, `Name`, `Type`, `Error`, `Len` 等と同名の識別子は自動リネームする。
 * **公開名の衝突:** 複数モジュールで同名の `Public` 関数がある場合、呼び出しを常に `モジュール名.関数名` で修飾して出力する。
 * **文字列で指定される名前:** `Application.Run "name"`, `OnTime`, リボンコールバック、`@on` で生成されるハンドラ名は、存在確認を行い、リネーム・インライン除去の対象外にする。
@@ -1220,7 +1274,7 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 * ランタイムは Node アドオン `ras_com.node`（`crates/ras-com`、Windows 専用）を介して `IDispatch` を遅延バインディングで呼び出す。生成コードは `$rt.get(obj, "Value")` / `$rt.put(...)` / `$rt.call(obj, "Cells", [r, 3])` のように、プロパティ取得・設定・メソッド呼び出しを明示的に区別して呼ぶ。
 * 接続先は §14.3 と同じ規則で決める: `ras.toml` の `workbook` を ROT から探し、開いている Excel インスタンスに接続する。開かれていなければ起動中の Excel（無ければ新しく起動した Excel）で開く。`workbook` が未指定ならアクティブブックを使う。
 * ROT に載らない開き方がある（アドインとして読み込まれた `.xlam`、OneDrive / SharePoint の同期フォルダーにあり `FullName` が URL になるブック）。そのため `Workbooks.Open` の前に、接続した Excel の `Workbooks(<ファイル名>)` を直接引き、同じブック（フルパスが一致、または `FullName` が URL）ならそれを使う。同名の別のブックが開いている場合は、Excel のダイアログを待たずにエラーにする。
-* `ThisWorkbook` はそのブック、シートのコード名（`Sheet1` など）は `CodeName` が一致するシート、その他のグローバル（`ActiveSheet`、`Range(...)` など）は `Application` のメンバーとして解決する。
+* `ThisWorkbook` はそのブック、シートのコード名（`Sheet1` など）は `CodeName` が一致するシート、その他のグローバル（`activeSheet`、`range(...)` など）は `Application` のメンバーとして解決する。メンバーはタイプ ライブラリの綴りで呼び出す（COM の名前解決は大文字小文字を区別しない）。
 * Excel がセル編集中・モーダルダイアログ表示中で呼び出しを拒否した場合（`RPC_E_CALL_REJECTED` 等）は、最大 60 秒までバックオフしながら再試行する。待っている間の通知は §14.10.6。
 * Excel のプロセスが無くなった場合（`RPC_S_SERVER_UNAVAILABLE` / `RPC_E_DISCONNECTED` 等）は、接続が切れた旨のエラーにする。
 * 値の対応: `Empty` / `Null` / `Nothing` → `null`、日付 → 日付オブジェクト（シリアル値を保持）、セルのエラー値 → エラー値オブジェクト、`Range.Value` の 2 次元配列 → 0 始まりの行配列。
@@ -1332,6 +1386,24 @@ pull-unmanaged = true
 * Excel オブジェクトモデル（`Excel.Range`, `Excel.Worksheet` 等）と Office・VBA 標準関数の型定義を同梱する。
 * その他の COM ライブラリ（ADODB 等）は `ras typegen` でタイプライブラリから生成する。生成した型を使ったコードは既定で遅延バインディング（`Object` + `CreateObject`）で出力し、参照設定への依存を避ける（`@earlyBinding` で事前バインディングに切り替え）。
 
+#### 15.3.1 名前の綴り（v0.9で追加）
+
+Excel / VBA / Office のタイプ ライブラリは、メンバー名を PascalCase（`Cells`、`ScreenUpdating`）で定義している。RAS のソースでは、JavaScript の命名規則に合わせて次のように参照する。補完・クイック情報・診断メッセージもこの綴りで表示する。
+
+| 対象 | RAS での綴り | 例 |
+|---|---|---|
+| プロパティ・メソッド | camelCase | `ws.cells(r, 1).value`、`application.screenUpdating`、`range.interior.color` |
+| グローバルのオブジェクト・関数 | camelCase | `application`、`thisWorkbook`、`activeSheet`、`worksheets`、`msgBox(...)`、`left(s, 1)`、`debug.print(...)`、`err.number` |
+| 型（インターフェイス・列挙型）・名前空間 | PascalCase のまま | `Excel.Worksheet`、`XlCalculation`、`VBA.ErrObject` |
+| 列挙型の定数 | タイプ ライブラリのまま | `xlUp`、`vbCrLf`、`msoTrue` |
+
+* **変換規則:** 先頭の大文字の並びを 1 語として小文字にする。次の語が続く場合、その語の頭文字は大文字のまま残す。`Value` → `value`、`VBProject` → `vbProject`、`RGB` → `rgb`、`UBound` → `uBound`、`CStr` → `cStr`、`FormulaR1C1` → `formulaR1C1`。
+* **キーワードと重なるグローバル:** 変換後の名前が RAS のキーワードになるグローバルは、VBA の綴りのまま使う（`Switch(...)`）。メンバーは `.` の後に書くためキーワードと重なってよい（`range.delete()`、`ws.select()`）。
+* **生成する VBA:** タイプ ライブラリの綴りで出力する（`ws.Cells(r, 1).Value`）。型のない値（`any` / `object`）のメンバーも、同梱の型定義に同じ名前のメンバーがあればその綴りで出力する（`activeSheet.cells(1, 1)` → `ActiveSheet.Cells(1, 1)`）。
+* **VBA の綴りで書いた場合:** VBA は大文字小文字を区別しないため、`ws.Cells(r, 1).Value` と書いても同じメンバーとして解決する。ただし警告（`W0304`）を出す。`ras check --fix` とエディタのクイックフィックスが camelCase に書き換える。
+* **プロジェクトが宣言した名前はそのまま:** シートのコード名（`Sheet1`）と `types/*.d.ras` で宣言した名前は、書かれたとおりに参照し、そのまま出力する。変換するのは同梱の型定義の名前だけである。
+* **同梱の型定義の書き方:** `.d.ras` 自体はタイプ ライブラリの綴りで書く（`ras typegen` の出力と同じ形）。コレクションの要素の型は、型引数で表す（`interface Sheets<T>`）。型引数を省略したホスト型（`Excel.Sheets`）の要素は `object` になる。
+
 ---
 
 ## 16. エディタ支援（IntelliSense）とドキュメントコメント
@@ -1389,7 +1461,7 @@ VS Code の IntelliSense に相当する機能を、LSP の標準機能として
 
 | 機能 | LSP メソッド | 内容 |
 |---|---|---|
-| メンバー一覧（補完） | `textDocument/completion`, `completionItem/resolve` | `.` の後に、レシーバの型のメンバー（RAS クラス、Excel 等の COM 型、配列・文字列の組み込みメンバー）と適用できる拡張メソッドを表示する。`.` 以外の位置では、スコープ内の変数・関数・型・キーワード・スニペットを表示する |
+| メンバー一覧（補完） | `textDocument/completion`, `completionItem/resolve` | `.` の後に、レシーバの型のメンバー（RAS クラス、Excel 等の COM 型、配列・文字列の組み込みメンバー、コレクションの配列メソッド（§4.4））と適用できる拡張メソッドを表示する。COM 型のメンバーとグローバルは camelCase で表示する（§15.3.1）。`.` 以外の位置では、スコープ内の変数・関数・型・キーワード・スニペットを表示する |
 | クイック情報（ホバー） | `textDocument/hover` | RAS 構文のシグネチャ、JSDoc（要約・引数・戻り値・例）、推論された型を表示する |
 | パラメーター情報 | `textDocument/signatureHelp` | `(` と `,` で起動し、シグネチャと現在の引数をハイライトし、その引数の `@param` の説明を表示する |
 | 定義へ移動 / 型定義へ移動 | `textDocument/definition`, `typeDefinition` | ジェネリクスや拡張メソッドも元の定義へ移動する |
@@ -1399,7 +1471,7 @@ VS Code の IntelliSense に相当する機能を、LSP の標準機能として
 | インレイヒント | `textDocument/inlayHint` | 推論された型、推論されたジェネリクスの型引数、呼び出し側の `byref` 引数（`byref` と表示） |
 | セマンティックトークン | `textDocument/semanticTokens` | TextMate 文法で区別できない `byref` 引数・拡張メソッド・COM メンバー等を色分けする |
 | 診断 | `textDocument/publishDiagnostics` | §6 のリンタールール、同期時のコンパイルエラー（§14.6） |
-| コードアクション | `textDocument/codeAction` | クイックフィックス（未インポートの関数・拡張メソッドの `import` 追加、`byref` 引数へのリテラル渡しを一時変数に置き換える、縮小変換に `as` を追加する等） |
+| コードアクション | `textDocument/codeAction` | クイックフィックス（VBA の綴りで書かれたホストの名前を camelCase に直す（§15.3.1。その箇所だけ／ファイル内すべて）、未インポートの関数・拡張メソッドの `import` 追加、`byref` 引数へのリテラル渡しを一時変数に置き換える、縮小変換に `as` を追加する等） |
 | CodeLens | `textDocument/codeLens` | 最適化の適用状況（インライン展開・一括転送・ループ融合・`DoEvents` 挿入）、「生成 VBA を表示」 |
 | フォーマット | `textDocument/formatting`, `rangeFormatting` | `ras fmt` と同じ |
 | 折りたたみ | `textDocument/foldingRange` | |
@@ -1418,7 +1490,7 @@ VS Code の IntelliSense に相当する機能を、LSP の標準機能として
 * 変数: 推論された型。出力される VBA の型（例: `int` → `Long`）も併記する。
 * 拡張メソッドの呼び出し: 定義モジュールと、出力される VBA の呼び出し形（例: `StrUtil.isBlank(name)`）。
 * ジェネリクス: 推論された型引数と、出力される実装名（例: `maxOf__Long`）。
-* COM 型のメンバー: 型ライブラリのヘルプ文字列と、Microsoft のリファレンスへのリンク（`@see`）。
+* COM 型のメンバー: 型ライブラリのヘルプ文字列と、Microsoft のリファレンスへのリンク（`@see`）。VBA での綴り（例: `// VBA: Worksheet.Cells`）も併記する。
 
 #### 16.2.3 Excel 等の型定義
 
@@ -1535,3 +1607,8 @@ Rust で `vbaProject.bin` を**書き込める**ライブラリは見当たら�
 ### 決定済み（v0.8）
 
 * データの入れ物は `Type` に変換する構造体を基本とする。オブジェクトリテラル・タプル・分割代入は構造体の構文として提供し、値が構造体の `Map` はコンパイラがクラスに置き換える（§2.5）。
+
+### 決定済み（v0.9）
+
+* Excel / VBA / Office のメンバーとグローバルは camelCase で参照し、生成する VBA にはタイプ ライブラリの綴りを出力する。VBA の綴りも受け付けるが警告とし、自動で書き換えられるようにする（§15.3.1）。
+* ホストのコレクションの配列メソッドは `For Each` に展開し、結果は配列で返す（§4.4）。
