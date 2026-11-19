@@ -230,6 +230,8 @@ impl<'p> Gen<'p> {
             (format!("$rt.iter({it})"), Type::Any)
         };
         let converted = self.coerce("$item".into(), &elem_ty, &var_ty);
+        // The loop variable of a struct array is a copy of the element (a value type).
+        let converted = if matches!(var_ty, Type::Struct(_)) { format!("$rt.clone({converted})") } else { converted };
         if converted == "$item" {
             self.wm(s.span, format!("{label}for ({kw} {var} of {coll}) {{"));
         } else {

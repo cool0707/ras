@@ -49,7 +49,9 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
     let mut macros = Vec::new();
     let mut others = Vec::new();
     for m in 0..prog.modules.len() {
-        if prog.modules[m].kind != ModuleKind::User {
+        // Bundled library modules with code of their own (the struct map) run as RAS code too.
+        let std_code = prog.modules[m].kind == ModuleKind::Std && !prog.modules[m].classes.is_empty();
+        if prog.modules[m].kind != ModuleKind::User && !std_code {
             continue;
         }
         let mut g = Gen::new(prog, m);
@@ -368,6 +370,9 @@ impl<'p> Gen<'p> {
             Type::Date => "$rt.date(0)".into(),
             Type::Array(_) => "[]".into(),
             Type::Struct(s) => format!("new {}()", self.struct_ref(*s)),
+            // Type arguments are erased; an instance of a generic class created with a struct
+            // argument carries the constructors of its zero values (see `new_expr`).
+            Type::Param(n) => format!("(this?.$zero?.{}?.() ?? null)", js_ident(n)),
             Type::Void | Type::Ns(_) => "undefined".into(),
             _ => "null".into(),
         }

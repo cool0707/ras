@@ -37,6 +37,7 @@ const STDLIB: &[(&str, ModuleKind, &str)] = &[
     ("excel.d", ModuleKind::TypeDef, include_str!("../stdlib/excel.d.ras")),
     ("office.d", ModuleKind::TypeDef, include_str!("../stdlib/office.d.ras")),
     ("win32", ModuleKind::Std, include_str!("../stdlib/win32.ras")),
+    (collect::STRUCT_MAP_MODULE, ModuleKind::Std, include_str!("../stdlib/ras_collections.ras")),
 ];
 
 fn stdlib_inputs() -> Vec<SourceInput> {

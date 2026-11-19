@@ -138,6 +138,15 @@ impl Type {
         }
     }
 
+    /// A struct, or an array of structs: values that cannot be stored in a `Variant`.
+    pub fn has_struct(&self) -> bool {
+        match self {
+            Type::Struct(_) => true,
+            Type::Array(t) => t.has_struct(),
+            _ => false,
+        }
+    }
+
     pub fn is_value(&self) -> bool {
         !matches!(self, Type::Ns(_) | Type::Void)
     }
@@ -384,12 +393,26 @@ pub struct EnumMemberDef {
     pub span: Span,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StructKind {
+    /// `struct Name { ... }`
+    Named,
+    /// Anonymous `{ a: A; b: B }`: identified by its fields (stored sorted by name).
+    Object,
+    /// `[A, B]`: fields `item0`, `item1`, …
+    Tuple,
+}
+
 #[derive(Clone, Debug)]
 pub struct StructDef {
     pub id: StructId,
     pub module: ModuleId,
+    /// Name of the VBA `Type` (generated for anonymous structs).
     pub name: String,
+    pub kind: StructKind,
     pub fields: Vec<(String, Type)>,
+    /// Per field: declared with `?` (may be omitted in a literal).
+    pub optional: Vec<bool>,
     pub doc: Option<String>,
     pub name_span: Span,
 }
@@ -670,7 +693,17 @@ impl Program {
                 s
             }
             Type::Enum(id) => self.enums[*id].name.clone(),
-            Type::Struct(id) => self.structs[*id].name.clone(),
+            Type::Struct(id) => {
+                let d = &self.structs[*id];
+                match d.kind {
+                    StructKind::Named => d.name.clone(),
+                    StructKind::Tuple => format!("[{}]", d.fields.iter().map(|f| self.show(&f.1)).collect::<Vec<_>>().join(", ")),
+                    StructKind::Object => {
+                        let fs: Vec<String> = d.fields.iter().zip(&d.optional).map(|(f, o)| format!("{}{}: {}", f.0, if *o { "?" } else { "" }, self.show(&f.1))).collect();
+                        format!("{{ {} }}", fs.join("; "))
+                    }
+                }
+            }
             Type::Map(k, v) => format!("Map<{}, {}>", self.show(k), self.show(v)),
             Type::Func(f) => {
                 let ps = f.params.iter().enumerate().map(|(i, p)| format!("a{}: {}", i + 1, self.show(p))).collect::<Vec<_>>();
@@ -683,6 +716,37 @@ impl Program {
             Type::Ns(NsRef::Enum(e)) => format!("enum {}", self.enums[*e].name),
             Type::Ns(NsRef::Builtin(n)) => (*n).to_string(),
         }
+    }
+
+    /// The anonymous struct with these fields (created in module `m` on first use).
+    /// Object types ignore the order of their fields; tuples do not.
+    pub fn intern_struct(&mut self, m: ModuleId, kind: StructKind, mut fields: Vec<(String, Type, bool)>) -> StructId {
+        if kind == StructKind::Object {
+            fields.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+        let found = self.structs.iter().position(|d| {
+            d.kind == kind && d.fields.len() == fields.len() && d.fields.iter().zip(&d.optional).zip(&fields).all(|((f, o), g)| f.0 == g.0 && f.1 == g.1 && *o == g.2)
+        });
+        if let Some(id) = found {
+            return id;
+        }
+        let id = self.structs.len();
+        let n = self.structs.iter().filter(|d| d.kind == kind).count() + 1;
+        let name = format!("{}{n}", if kind == StructKind::Tuple { "RAS_Tup" } else { "RAS_Obj" });
+        // Generated code needs a standard module to hold the `Type`: a user module.
+        let home = if self.modules[m].kind == ModuleKind::User { m } else { self.modules.iter().position(|x| x.kind == ModuleKind::User).unwrap_or(m) };
+        self.structs.push(StructDef {
+            id,
+            module: home,
+            name,
+            kind,
+            optional: fields.iter().map(|f| f.2).collect(),
+            fields: fields.into_iter().map(|f| (f.0, f.1)).collect(),
+            doc: None,
+            name_span: Span::default(),
+        });
+        self.modules[home].structs.push(id);
+        id
     }
 
     /// Finds a member (field index or method) of a class, searching base interfaces.

@@ -244,6 +244,8 @@ impl<'a> Parser<'a> {
                     n = self.skip_type_args(n)?;
                 }
             }
+            // tuple `[A, B]` / object type `{ a: A; b: B }`
+            L_BRACK | L_BRACE => n = self.skip_balanced(n)?,
             _ => return None,
         }
         while self.nth(n) == L_BRACK && self.nth(n + 1) == R_BRACK {
@@ -885,7 +887,11 @@ impl<'a> Parser<'a> {
         loop {
             let before = self.spos;
             self.start(VAR_DECLARATOR);
-            self.name();
+            if matches!(self.nth(0), L_BRACE | L_BRACK) {
+                self.pattern();
+            } else {
+                self.name();
+            }
             self.eat(BANG);
             if self.eat(COLON) {
                 self.ty();
@@ -901,6 +907,42 @@ impl<'a> Parser<'a> {
         if with_semi {
             self.semi();
         }
+        self.finish();
+    }
+
+    /// Destructuring pattern of a declaration: `{ a, b: alias }` or `[a, , c]`.
+    fn pattern(&mut self) {
+        let object = self.at(L_BRACE);
+        let close = if object { R_BRACE } else { R_BRACK };
+        self.start(if object { OBJECT_PATTERN } else { ARRAY_PATTERN });
+        self.bump();
+        while !self.at(close) && !self.at(EOF) {
+            let before = self.spos;
+            self.start(PATTERN_ELEM);
+            if self.at(COMMA) && !object {
+                // hole: `[a, , c]`
+            } else if self.nth_is_name(0) {
+                if object && self.nth(1) == COLON {
+                    self.member_name();
+                    self.bump();
+                }
+                if self.at(IDENT) {
+                    self.name();
+                } else {
+                    self.error("変数名が必要です（分割代入の入れ子・既定値・`...` には対応していません）");
+                }
+            } else {
+                self.error("変数名が必要です（分割代入の入れ子・既定値・`...` には対応していません）");
+            }
+            self.finish();
+            if !self.eat(COMMA) {
+                break;
+            }
+            if self.spos == before {
+                break;
+            }
+        }
+        self.expect(close, if object { "`}`" } else { "`]`" });
         self.finish();
     }
 
@@ -959,6 +1001,41 @@ impl<'a> Parser<'a> {
                 if self.at(LT) {
                     self.type_args();
                 }
+                self.finish();
+            }
+            L_BRACK => {
+                self.start(TUPLE_TYPE);
+                self.bump();
+                while !self.at(R_BRACK) && !self.at(EOF) {
+                    let before = self.spos;
+                    self.ty();
+                    if !self.eat(COMMA) || self.spos == before {
+                        break;
+                    }
+                }
+                self.expect(R_BRACK, "`]`");
+                self.finish();
+            }
+            L_BRACE => {
+                self.start(OBJECT_TYPE);
+                self.bump();
+                while !self.at(R_BRACE) && !self.at(EOF) {
+                    if self.eat(SEMI) || self.eat(COMMA) {
+                        continue;
+                    }
+                    if !self.nth_is_name(0) {
+                        self.error("フィールド名が必要です");
+                        break;
+                    }
+                    self.start(PROP_SIG);
+                    self.member_name();
+                    self.eat(QUESTION);
+                    if self.eat(COLON) {
+                        self.ty();
+                    }
+                    self.finish();
+                }
+                self.expect(R_BRACE, "`}`");
                 self.finish();
             }
             _ => self.error("型が必要です"),
@@ -1136,8 +1213,12 @@ impl<'a> Parser<'a> {
     fn for_stmt(&mut self, k: usize) {
         // `for (let x of xs)` / `for (const x: T of xs)` / `for (let k in obj)`
         let mut is_of = false;
-        if self.nth(k + 1) == L_PAREN && matches!(self.nth(k + 2), LET_KW | CONST_KW | VAR_KW) && self.nth(k + 3) == IDENT {
-            let after_name = k + 4;
+        let binding_end = match self.nth(k + 3) {
+            IDENT => Some(k + 4),
+            L_BRACE | L_BRACK => self.skip_balanced(k + 3),
+            _ => None,
+        };
+        if let (true, Some(after_name)) = (self.nth(k + 1) == L_PAREN && matches!(self.nth(k + 2), LET_KW | CONST_KW | VAR_KW), binding_end) {
             let is_iter_kw = |p: &Self, n: usize| p.nth_word(n, "of") || p.nth(n) == IN_KW;
             if is_iter_kw(self, after_name) {
                 is_of = true;
@@ -1153,7 +1234,11 @@ impl<'a> Parser<'a> {
             self.bump(); // for
             self.bump(); // (
             self.bump(); // let / const
-            self.name();
+            if matches!(self.nth(0), L_BRACE | L_BRACK) {
+                self.pattern();
+            } else {
+                self.name();
+            }
             if self.eat(COLON) {
                 self.ty();
             }

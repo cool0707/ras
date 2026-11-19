@@ -91,6 +91,7 @@ pub fn check(prog: &mut Program) {
     }
     for c in 0..ck.prog.classes.len() {
         ck.check_implements(c);
+        ck.check_struct_members(c);
     }
     ck.lints();
 }
@@ -137,6 +138,8 @@ impl Checker<'_> {
         match (from, to) {
             (Error, _) | (_, Error) => true,
             (Void, _) | (_, Void) | (Ns(_), _) | (_, Ns(_)) => false,
+            // Structs (and arrays of them) cannot be stored in a Variant.
+            (f, Any) | (Any, f) if f.has_struct() => false,
             (_, Any) | (Any, _) => true,
             (Null, t) => t.is_object() || matches!(t, Param(p) if self.constraint_of(p) == Constraint::ObjectType),
             (Byte, Short | Int | Long | Float | Double | Currency | Decimal) => true,
@@ -280,6 +283,10 @@ impl Checker<'_> {
             format!("（縮小変換です。`as {}` で明示的に変換してください）", self.show(to))
         } else if matches!(to, Type::Str) && (from.is_numeric() || matches!(from, Type::Bool | Type::Date)) {
             "（`.toString()` かテンプレート文字列 `${x}` で文字列に変換してください）".to_string()
+        } else if from.has_struct() && matches!(to, Type::Any | Type::Object) {
+            "（構造体は `any` に入れられません。フィールドを個別に渡すか、参照が必要なら `class` を使ってください）".to_string()
+        } else if matches!((from, to), (Type::Struct(_), Type::Struct(_))) {
+            "（別の構造体型です。リテラルなら `const p: T = { ... }` のように型注釈を付け、そうでなければフィールドを個別に代入してください）".to_string()
         } else {
             String::new()
         };
@@ -492,6 +499,37 @@ impl Checker<'_> {
                 }
             }
             self.fx = FnCtx::default();
+        }
+    }
+
+    /// VBA class modules cannot expose a `Type` from a standard module: struct-typed
+    /// fields must be private, and interfaces cannot mention structs at all.
+    fn check_struct_members(&mut self, c: ClassId) {
+        let class = self.prog.classes[c].clone();
+        self.module = class.module;
+        match class.kind {
+            ClassKind::Class => {
+                for f in &class.fields {
+                    if f.ty.has_struct() && f.vis == ast::Visibility::Public && !f.is_static {
+                        self.err(f.span, "E0394", format!("構造体型のフィールド `{}` は `private` にしてください（VBA のクラスは構造体のフィールドを公開できません。メソッドで受け渡してください）", f.name));
+                    }
+                }
+            }
+            ClassKind::Interface => {
+                for &m in &class.methods {
+                    let d = &self.prog.fns[m];
+                    if d.params.iter().any(|p| p.ty.has_struct()) || d.ret_ty().has_struct() {
+                        let (span, name) = (d.name_span, d.name.clone());
+                        self.err(span, "E0394", format!("インターフェイスのメソッド `{name}` の引数・戻り値に構造体は使えません（VBA の制限です）"));
+                    }
+                }
+                for f in &class.fields {
+                    if f.ty.has_struct() {
+                        self.err(f.span, "E0394", format!("インターフェイスのフィールド `{}` に構造体は使えません（VBA の制限です）", f.name));
+                    }
+                }
+            }
+            ClassKind::Host => {}
         }
     }
 
@@ -1072,6 +1110,21 @@ impl Checker<'_> {
                 Type::Error
             }
             ExprKind::Paren(inner) | ExprKind::NonNull(inner) => self.expr(inner, expect),
+            ExprKind::Array(items) if matches!(expect, Some(Type::Struct(s)) if self.prog.structs[*s].kind == StructKind::Tuple) => {
+                let Some(Type::Struct(s)) = expect else { unreachable!() };
+                let fields = self.prog.structs[*s].fields.clone();
+                if items.len() != fields.len() {
+                    self.err(e.span, "E0392", format!("`{}` には {} 個の要素が必要です（{} 個あります）", self.show(&Type::Struct(*s)), fields.len(), items.len()));
+                }
+                for (i, it) in items.iter().enumerate() {
+                    let want = fields.get(i).map(|f| f.1.clone());
+                    let t = self.value(it, want.as_ref());
+                    if let Some(w) = &want {
+                        self.coerce(it, &t, w);
+                    }
+                }
+                Type::Struct(*s)
+            }
             ExprKind::Array(items) => {
                 let elem_expect = match expect {
                     Some(Type::Array(el)) if !matches!(**el, Type::Array(_)) => Some((**el).clone()),
@@ -1109,10 +1162,7 @@ impl Checker<'_> {
                     Some(t) => Type::array(t),
                 }
             }
-            ExprKind::Object(_) => {
-                self.err(e.span, "E0386", "オブジェクトリテラルは `fastMode({ ... })` などのオプション引数としてのみ使えます。データの入れ物には `class` か `Map<K, V>` を使ってください");
-                Type::Error
-            }
+            ExprKind::Object(props) => self.struct_literal(e, props, expect),
             ExprKind::Arrow(arrow) => self.arrow(e, arrow, expect),
             ExprKind::Unary { op, operand } => {
                 let t = self.value(operand, None);
@@ -1245,6 +1295,22 @@ impl Checker<'_> {
                         self.coerce(index, &it, k);
                         (**v).clone()
                     }
+                    Type::Struct(s) if self.prog.structs[*s].kind == StructKind::Tuple => {
+                        self.value(index, Some(&Type::Int));
+                        let fields = &self.prog.structs[*s].fields;
+                        match &index.peel().kind {
+                            ExprKind::Int { value, .. } if (*value as usize) < fields.len() && *value >= 0 => fields[*value as usize].1.clone(),
+                            ExprKind::Int { .. } => {
+                                let (n, shown) = (fields.len(), self.show(&ot));
+                                self.err(index.span, "E0389", format!("`{shown}` の要素は {n} 個です"));
+                                Type::Error
+                            }
+                            _ => {
+                                self.err(index.span, "E0389", "タプルの添字は整数リテラル（`t[0]`）で書いてください");
+                                Type::Error
+                            }
+                        }
+                    }
                     Type::Class(c, args) if self.prog.classes[*c].call_sig.is_some() => {
                         let sig = self.prog.classes[*c].call_sig.unwrap();
                         let env = self.prog.class_env(*c, args);
@@ -1288,6 +1354,72 @@ impl Checker<'_> {
                     self.err(ty.span(), "E0391", "`instanceof` の右辺はクラスかインターフェイスである必要があります");
                 }
                 Type::Bool
+            }
+        }
+    }
+
+    /// `{ a: 1, b: "x" }`: a value of the expected struct type, or of the anonymous
+    /// struct with these fields when nothing more specific is expected.
+    fn struct_literal(&mut self, e: &Expr, props: &[ast::ObjectProp], expect: Option<&Type>) -> Type {
+        let mut ok = true;
+        for (i, p) in props.iter().enumerate() {
+            if props[..i].iter().any(|q| q.key.text.eq_ignore_ascii_case(&p.key.text)) {
+                self.err(p.key.span, "E0392", format!("フィールド `{}` が重複しています", p.key.text));
+                ok = false;
+            }
+        }
+        if props.is_empty() {
+            self.err(e.span, "E0392", "空のオブジェクトリテラルは使えません");
+            return Type::Error;
+        }
+        let target = match expect {
+            Some(Type::Struct(s)) if self.prog.structs[*s].kind != StructKind::Tuple => Some(*s),
+            _ => None,
+        };
+        match target {
+            Some(s) => {
+                let def = self.prog.structs[s].clone();
+                for p in props {
+                    match def.fields.iter().find(|f| f.0 == p.key.text) {
+                        Some((_, fty)) => {
+                            let t = self.value(&p.value, Some(fty));
+                            self.coerce(&p.value, &t, fty);
+                        }
+                        None => {
+                            self.value(&p.value, None);
+                            self.err(p.key.span, "E0202", format!("`{}` にフィールド `{}` はありません", self.show(&Type::Struct(s)), p.key.text));
+                        }
+                    }
+                }
+                let missing: Vec<String> =
+                    def.fields.iter().zip(&def.optional).filter(|(f, opt)| !**opt && !props.iter().any(|p| p.key.text == f.0)).map(|(f, _)| format!("`{}`", f.0)).collect();
+                if !missing.is_empty() {
+                    self.err(e.span, "E0392", format!("フィールド {} がありません（省略できるのは `name?: T` と宣言したフィールドだけです）", missing.join("、")));
+                }
+                Type::Struct(s)
+            }
+            None => {
+                let mut fields = Vec::new();
+                for p in props {
+                    let t = self.value(&p.value, None);
+                    match &t {
+                        Type::Null => {
+                            self.err(p.value.span, "E0392", "`null` のフィールドの型を決められません。`struct` を宣言して型注釈を付けてください");
+                            ok = false;
+                        }
+                        Type::Error => ok = false,
+                        t if t.contains_param() => {
+                            self.err(p.value.span, "E0392", "型パラメータを含む値は無名のオブジェクトにできません。`struct` を宣言してください");
+                            ok = false;
+                        }
+                        _ => {}
+                    }
+                    fields.push((p.key.text.clone(), t, false));
+                }
+                if !ok {
+                    return Type::Error;
+                }
+                Type::Struct(self.prog.intern_struct(self.module, StructKind::Object, fields))
             }
         }
     }
@@ -1738,7 +1870,20 @@ impl Checker<'_> {
                     _ => self.err(target.span, "E0325", "`this` に代入するには `byref this: T` と宣言してください"),
                 }
             }
-            ExprKind::Member { name, .. } => {
+            ExprKind::Member { name, object, .. } => {
+                // A struct returned by a call is a copy: writing to its field would be lost.
+                let mut root: &Expr = object.peel();
+                let mut through_struct = matches!(self.info().ty(root.id), Type::Struct(_));
+                while let ExprKind::Member { object: o, .. } = &root.kind {
+                    if !matches!(self.info().ty(o.id), Type::Struct(_)) {
+                        break;
+                    }
+                    root = o.peel();
+                    through_struct = true;
+                }
+                if through_struct && matches!(root.kind, ExprKind::Call { .. }) {
+                    self.err(target.span, "E0325", "関数やメソッドが返した構造体はコピーなので、フィールドに代入しても元は変わりません。変数に受けて書き換え、必要なら設定し直してください");
+                }
                 let res = self.info().res.get(&inner.id).cloned();
                 match res {
                     Some(Res::Field(c, i)) => {
@@ -2357,6 +2502,12 @@ impl Checker<'_> {
                         if !(k.is_numeric() || matches!(k, Type::Str | Type::Any | Type::Date | Type::Error | Type::Param(_))) {
                             self.err(targs[0].span(), "E0408", "`Map` のキーには数値・文字列・日付のいずれかを使ってください");
                         }
+                        // A map of structs is an instance of the bundled class (see `resolve_type`).
+                        if let (Type::Struct(_), Some(c)) = (&v, crate::collect::struct_map_class(self.prog)) {
+                            let targs = vec![k, v];
+                            self.info().calls.insert(e.id, CallInfo { target: CallTarget::Ctor(c), type_args: targs.clone() });
+                            return Type::Class(c, targs);
+                        }
                         return Type::Map(Box::new(k), Box::new(v));
                     }
                     _ => {}
@@ -2484,6 +2635,19 @@ impl Checker<'_> {
         let _ = expect;
         let elem = recv.and_then(|t| t.elem().cloned()).unwrap_or(Type::Error);
         let arr = || Type::array(elem.clone());
+        if recv.is_some_and(|t| t.is_array()) && elem.has_struct() {
+            // These go through run-time helpers that take the array as a Variant.
+            if matches!(intr, ArrIndexOf | ArrIncludes | ArrJoin | ArrSort | ArrReverse) {
+                self.err(call.span, "E0393", "構造体の配列では `indexOf` / `includes` / `join` / `sort` / `reverse` を使えません。ループか `findIndex` などのコールバック付きメソッドを使ってください");
+                for a in args {
+                    self.expr(a, None);
+                }
+                return Type::Error;
+            }
+            if intr.takes_lambda() && args.first().is_some_and(|a| !is_lambda(a)) {
+                self.err(args[0].span, "E0393", "構造体の配列のコールバックには、アロー関数を直接書いてください（変数に入れた関数は使えません）");
+            }
+        }
         // Mutating array methods need an assignable receiver.
         if matches!(intr, ArrPush | ArrPop | ArrSort | ArrReverse | ArrClear) {
             if let Some(r) = recv_expr {
@@ -2806,7 +2970,10 @@ impl Checker<'_> {
             }
             ConsoleLog => {
                 for a in args {
-                    self.value(a, None);
+                    let t = self.value(a, None);
+                    if t.has_struct() {
+                        self.err(a.span, "E0301", format!("`{}` はそのまま出力できません。フィールドを個別に渡してください", self.show(&t)));
+                    }
                 }
                 Type::Void
             }

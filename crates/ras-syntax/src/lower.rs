@@ -11,6 +11,8 @@ pub(crate) struct Lower {
     /// Offset added to every span (non-zero while lowering a template fragment).
     base: u32,
     pub(crate) errors: Vec<SyntaxError>,
+    /// Counter for the hidden variables of destructuring patterns.
+    pattern_n: u32,
 }
 
 fn sig_tokens(n: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
@@ -120,7 +122,7 @@ pub fn unescape(s: &str) -> String {
 
 impl Lower {
     pub(crate) fn new() -> Self {
-        Lower { next_id: 0, base: 0, errors: Vec::new() }
+        Lower { next_id: 0, base: 0, errors: Vec::new(), pattern_n: 0 }
     }
 
     fn span(&self, r: TextRange) -> Span {
@@ -482,16 +484,61 @@ impl Lower {
         let doc = doc_comment(n);
         let mut out = Vec::new();
         for d in n.children().filter(|c| c.kind() == VAR_DECLARATOR) {
-            out.push(VarDecl {
-                doc: doc.clone(),
-                kind,
-                exported,
-                declared,
-                name: self.name_or_missing(&d),
-                ty: d.children().find(|c| c.kind().is_type()).map(|t| self.ty(&t)),
-                init: d.children().find(|c| c.kind().is_expr()).map(|e| self.expr(&e)),
-                span: self.nspan(&d),
-            });
+            let ty = d.children().find(|c| c.kind().is_type()).map(|t| self.ty(&t));
+            let init = d.children().find(|c| c.kind().is_expr()).map(|e| self.expr(&e));
+            let span = self.nspan(&d);
+            if let Some(pat) = d.children().find(|c| matches!(c.kind(), OBJECT_PATTERN | ARRAY_PATTERN)) {
+                if kind == VarKind::Using || declared {
+                    self.err(self.nspan(&pat), "ここでは分割代入を使えません");
+                }
+                let Some(init) = init else {
+                    self.err(self.nspan(&pat), "分割代入には初期化式が必要です");
+                    continue;
+                };
+                // `const { a, b } = e;` → `const t = e; const a = t.a; const b = t.b;`
+                // (a plain variable on the right is read directly, without the temporary).
+                let source = match (&init.peel().kind, &ty) {
+                    (ExprKind::Name(id), None) => id.clone(),
+                    _ => {
+                        let tmp = self.pattern_temp(&pat);
+                        out.push(VarDecl { doc: None, kind: VarKind::Const, exported: false, declared: false, name: tmp.clone(), ty, init: Some(init), span });
+                        tmp
+                    }
+                };
+                for (name, init) in self.pattern_bindings(&pat, &source) {
+                    out.push(VarDecl { doc: doc.clone(), kind, exported, declared: false, name, ty: None, init: Some(init), span });
+                }
+                continue;
+            }
+            out.push(VarDecl { doc: doc.clone(), kind, exported, declared, name: self.name_or_missing(&d), ty, init, span });
+        }
+        out
+    }
+
+    /// Hidden variable that holds the value being destructured. Its span is the opening
+    /// bracket of the pattern, which no real identifier can share.
+    fn pattern_temp(&mut self, pat: &SyntaxNode) -> Ident {
+        self.pattern_n += 1;
+        let start = self.nspan(pat).start();
+        Ident { text: format!("ras$d{}", self.pattern_n), span: TextRange::at(start, TextSize::from(1)) }
+    }
+
+    /// The variables a pattern declares, each with the expression that reads it from `source`.
+    fn pattern_bindings(&mut self, pat: &SyntaxNode, source: &Ident) -> Vec<(Ident, Expr)> {
+        let object = pat.kind() == OBJECT_PATTERN;
+        let mut out = Vec::new();
+        for (i, el) in pat.children().filter(|c| c.kind() == PATTERN_ELEM).enumerate() {
+            let names: Vec<Ident> = el.children().filter(|c| c.kind() == NAME).filter_map(|c| sig_tokens(&c).next()).map(|t| self.ident_tok(&t)).collect();
+            let (Some(key), Some(binding)) = (names.first(), names.last()) else { continue };
+            let span = self.nspan(&el);
+            let object_expr = Box::new(Expr { id: self.id(), kind: ExprKind::Name(Ident { text: source.text.clone(), span }), span });
+            let kind = if object {
+                ExprKind::Member { object: object_expr, name: Ident { text: key.text.clone(), span: key.span }, optional: false }
+            } else {
+                let index = Box::new(Expr { id: self.id(), kind: ExprKind::Int { value: i as i128, suffix: NumSuffix::None, hex: false }, span });
+                ExprKind::Index { object: object_expr, index }
+            };
+            out.push((binding.clone(), Expr { id: self.id(), kind, span }));
         }
         out
     }
@@ -525,6 +572,8 @@ impl Lower {
                 TypeRef::Fn { params, ret: Box::new(self.first_type(n)), span }
             }
             PAREN_TYPE => self.first_type(n),
+            TUPLE_TYPE => TypeRef::Tuple { elems: n.children().filter(|c| c.kind().is_type()).map(|t| self.ty(&t)).collect(), span },
+            OBJECT_TYPE => TypeRef::Object { fields: n.children().filter(|c| c.kind() == PROP_SIG).map(|c| self.prop_sig(&c)).collect(), span },
             UNION_TYPE => {
                 let mut nullable = false;
                 let mut rest = Vec::new();
@@ -633,14 +682,33 @@ impl Lower {
                 let update = child(n, FOR_UPDATE).map(|c| self.exprs(&c)).unwrap_or_default();
                 StmtKind::For { decorators: self.decorators(n), init, cond, update, body: Box::new(self.body_stmt(n, 0)) }
             }
-            FOR_OF_STMT => StmtKind::ForOf {
-                decorators: self.decorators(n),
-                kind: if has_tok(n, CONST_KW) { VarKind::Const } else { VarKind::Let },
-                name: self.name_or_missing(n),
-                ty: n.children().find(|c| c.kind().is_type()).map(|t| self.ty(&t)),
-                iter: self.first_expr(n),
-                body: Box::new(self.body_stmt(n, 0)),
-            },
+            FOR_OF_STMT => {
+                let var_kind = if has_tok(n, CONST_KW) { VarKind::Const } else { VarKind::Let };
+                let ty = n.children().find(|c| c.kind().is_type()).map(|t| self.ty(&t));
+                let iter = self.first_expr(n);
+                let mut body = self.body_stmt(n, 0);
+                let name = match n.children().find(|c| matches!(c.kind(), OBJECT_PATTERN | ARRAY_PATTERN)) {
+                    // `for (const { a, b } of xs) body` → `for (const t of xs) { const a = t.a; const b = t.b; body }`
+                    Some(pat) => {
+                        let tmp = self.pattern_temp(&pat);
+                        let pspan = self.nspan(&pat);
+                        let mut stmts: Vec<Stmt> = self
+                            .pattern_bindings(&pat, &tmp)
+                            .into_iter()
+                            .map(|(name, init)| Stmt {
+                                kind: StmtKind::Var(VarDecl { doc: None, kind: var_kind, exported: false, declared: false, name, ty: None, init: Some(init), span: pspan }),
+                                span: pspan,
+                            })
+                            .collect();
+                        let bspan = body.span;
+                        stmts.push(body);
+                        body = Stmt { kind: StmtKind::Block(Block { stmts, span: bspan }), span: bspan };
+                        tmp
+                    }
+                    None => self.name_or_missing(n),
+                };
+                StmtKind::ForOf { decorators: self.decorators(n), kind: var_kind, name, ty, iter, body: Box::new(body) }
+            }
             WHILE_STMT => StmtKind::While {
                 decorators: self.decorators(n),
                 cond: self.first_expr(n),

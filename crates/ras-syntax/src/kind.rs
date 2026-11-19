@@ -257,6 +257,9 @@ pub enum SyntaxKind {
     NAMESPACE_DECL,
     VAR_DECL,
     VAR_DECLARATOR,
+    OBJECT_PATTERN,
+    ARRAY_PATTERN,
+    PATTERN_ELEM,
     // statements
     BLOCK,
     EXPR_STMT,
@@ -309,6 +312,8 @@ pub enum SyntaxKind {
     FN_TYPE,
     PAREN_TYPE,
     UNION_TYPE,
+    TUPLE_TYPE,
+    OBJECT_TYPE,
 
     #[doc(hidden)]
     __LAST,
@@ -352,7 +357,7 @@ impl SyntaxKind {
     }
 
     pub fn is_type(self) -> bool {
-        matches!(self, NAMED_TYPE | ARRAY_TYPE | FN_TYPE | PAREN_TYPE | UNION_TYPE)
+        matches!(self, NAMED_TYPE | ARRAY_TYPE | FN_TYPE | PAREN_TYPE | UNION_TYPE | TUPLE_TYPE | OBJECT_TYPE)
     }
 
     pub fn is_stmt(self) -> bool {

@@ -217,7 +217,12 @@ impl<'p> Lowerer<'p> {
         let n = self.local_name(&v.name.text, &ty);
         self.bind(local, Binding::Var(n.clone()));
         match &v.init {
-            Some(init) => self.expr_into(init, &VExpr::Name(n), &ty),
+            Some(init) => {
+                // Runs once per call: the variable still has its zero value.
+                self.pc.fresh_target = (self.pc.loop_depth == 0 && self.frame().inl.is_none()).then(|| n.clone());
+                self.expr_into(init, &VExpr::Name(n), &ty);
+                self.pc.fresh_target = None;
+            }
             // `Dim` runs once per procedure: re-initialise explicitly where the declaration can run again (spec §13.1).
             None if self.pc.loop_depth > 0 || self.frame().inl.is_some() => self.reset_var(&VExpr::Name(n), &ty),
             None => {}
@@ -555,18 +560,30 @@ impl<'p> Lowerer<'p> {
             _ => None,
         };
         if iter_ty.is_array() && map_iter.is_none() {
+            let elem_ty = iter_ty.elem().cloned().unwrap_or(Type::Any);
+            // A struct element that the body only reads field by field is not copied into the
+            // loop variable: `p.x` becomes `ps(i).x`.
+            let alias = self.opt > 0 && matches!(elem_ty, Type::Struct(_)) && var_ty == elem_ty && self.can_alias_element(local, iter, body);
             let src = self.stable_array(iter);
             let idx = self.declare_raw("ras_i", "Long", false);
-            let n = self.local_name(&var_name.text, &var_ty);
-            self.bind(local, Binding::Var(n.clone()));
+            let n = if alias {
+                self.bind(local, Binding::Expr(src.clone().index(vec![name(idx.clone())])));
+                None
+            } else {
+                let n = self.local_name(&var_name.text, &var_ty);
+                self.bind(local, Binding::Var(n.clone()));
+                Some(n)
+            };
             self.enter_loop(LoopKind::For, label);
             let (mut b, _) = self.capture(|lw| {
-                let elem_ty = iter_ty.elem().cloned().unwrap_or(Type::Any);
-                lw.store(&VExpr::Name(n.clone()), &var_ty, src.clone().index(vec![name(idx.clone())]), &elem_ty);
+                if let Some(n) = &n {
+                    lw.store(&VExpr::Name(n.clone()), &var_ty, src.clone().index(vec![name(idx.clone())]), &elem_ty);
+                }
             });
             b.extend(self.loop_body(body));
             b.extend(self.yield_point(s));
-            self.emit(VStmt::For { var: idx, from: long(0), to: call("RAS_Len", vec![src]).plus(-1), step: None, body: b });
+            let len = self.len_of(src, &iter_ty);
+            self.emit(VStmt::For { var: idx, from: long(0), to: len.plus(-1), step: None, body: b });
             self.leave_loop();
             self.finish_push_plan(caps);
             return;
@@ -595,6 +612,100 @@ impl<'p> Lowerer<'p> {
         self.emit(VStmt::ForEach { var: control, coll, body: b });
         self.leave_loop();
         self.finish_push_plan(caps);
+    }
+
+    /// Can the `for...of` variable `local` stand for the array element itself instead of a copy?
+    /// Yes when the body only reads its fields (`p.x`, never `p` as a whole, never a write) and
+    /// nothing in the body can change the array: the array is a local the body does not mention,
+    /// or a temporary.
+    fn can_alias_element(&self, local: LocalId, iter: &Expr, body: &Stmt) -> bool {
+        let info = self.info();
+        let is_var = |e: &Expr| matches!((&e.peel().kind, info.res.get(&e.peel().id)), (ExprKind::Name(_), Some(Res::Local(l))) if *l == local);
+        // Occurrences of the variable that are the object of a field read.
+        let mut field_reads: HashSet<ast::ExprId> = HashSet::new();
+        let mut written = false;
+        crate::astutil::walk_stmt(body, &mut |_| true, &mut |e| {
+            match &e.kind {
+                ExprKind::Member { object, .. } if is_var(object) => {
+                    field_reads.insert(object.peel().id);
+                }
+                ExprKind::Assign { target, .. } | ExprKind::IncDec { operand: target, .. } => {
+                    // `p.x = 1`, `p.a.b++`, `p.items[0] = 1`
+                    if is_var(chain_root(target)) {
+                        written = true;
+                    }
+                }
+                ExprKind::Arrow(_) => written = true,
+                ExprKind::Call { callee, args, .. } => {
+                    // A field handed to something that may change it (`inc(p.x)` with a byref
+                    // parameter, `p.items.push(1)`) would change the element instead of the copy.
+                    let rooted = |e: &Expr| is_var(chain_root(e));
+                    let target = info.calls.get(&e.id).map(|c| &c.target);
+                    let recv = match &callee.peel().kind {
+                        ExprKind::Member { object, .. } => Some(&**object),
+                        _ => None,
+                    };
+                    match target {
+                        Some(CallTarget::Intrinsic(i)) => {
+                            if matches!(i, Intr::ArrPush | Intr::ArrPop | Intr::ArrSort | Intr::ArrReverse | Intr::ArrClear) && recv.is_some_and(rooted) {
+                                written = true;
+                            }
+                        }
+                        Some(CallTarget::Fn(f) | CallTarget::Method(f) | CallTarget::Ext(f) | CallTarget::Host(f)) => {
+                            let def = &self.prog.fns[*f];
+                            let skip = usize::from(matches!(target, Some(CallTarget::Ext(_))));
+                            let by_ref = |p: Option<&ParamDef>| p.is_none_or(|p| p.mode == ast::PassMode::ByRef || p.ty.is_array() || matches!(p.ty, Type::Struct(_) | Type::Param(_)));
+                            if skip == 1 && recv.is_some_and(rooted) && by_ref(def.params.first()) {
+                                written = true;
+                            }
+                            if args.iter().enumerate().any(|(i, a)| rooted(a) && by_ref(def.params.get(i + skip))) {
+                                written = true;
+                            }
+                        }
+                        _ => {
+                            if args.iter().any(rooted) {
+                                written = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            true
+        });
+        if written {
+            return false;
+        }
+        let bare_use = any_expr(body, &mut |e| matches!(e.kind, ExprKind::Name(_)) && is_var(e) && !field_reads.contains(&e.id));
+        if bare_use {
+            return false;
+        }
+        match self.local_of(iter) {
+            Some(arr) => {
+                let Some(def) = self.frame().fn_id.and_then(|f| self.prog.fns[f].locals.get(arr)) else { return false };
+                let untouched = !any_expr(body, &mut |e| matches!(e.kind, ExprKind::Name(_)) && self.local_of(e) == Some(arr));
+                if def.captured || !untouched || !matches!(self.frame().locals.get(&arr), Some(Binding::Var(_))) {
+                    return false;
+                }
+                match def.kind {
+                    LocalKind::Let | LocalKind::Const => true,
+                    // A parameter shares the caller's array, which could also be reachable under
+                    // another name: the body must then not call out or write to any element.
+                    LocalKind::Param => !any_expr(body, &mut |e| match &e.kind {
+                        ExprKind::New { .. } => true,
+                        ExprKind::Call { .. } => !matches!(
+                            info.calls.get(&e.id).map(|c| &c.target),
+                            Some(CallTarget::Intrinsic(i)) if !matches!(i, Intr::ArrPush | Intr::ArrPop | Intr::ArrSort | Intr::ArrReverse | Intr::ArrClear)
+                        ),
+                        ExprKind::Assign { target, .. } | ExprKind::IncDec { operand: target, .. } => self.local_of(target).is_none(),
+                        _ => false,
+                    }),
+                    _ => false,
+                }
+            }
+            // Anything that is not a variable or field is evaluated into a temporary array.
+            None => !matches!(&iter.peel().kind, ExprKind::Name(_) | ExprKind::This | ExprKind::Member { .. }),
+        }
     }
 
     // ------------------------------------------------------------------ push capacity doubling (spec §13.3)
@@ -658,7 +769,8 @@ impl<'p> Lowerer<'p> {
             let ty = self.local_ty(l);
             let len = self.declare_raw(&format!("ras_len_{arr}"), "Long", false);
             let cap = self.declare_raw(&format!("ras_cap_{arr}"), "Long", false);
-            self.emit(assign(name(len.clone()), call("RAS_Len", vec![name(arr.clone())])));
+            let cur = self.len_of(name(arr.clone()), &ty);
+            self.emit(assign(name(len.clone()), cur));
             self.emit(assign(name(cap.clone()), name(len.clone())));
             self.pc.push_caps.insert(arr.clone(), (len.clone(), cap.clone()));
             out.push((arr, len, cap, ty));
@@ -1066,6 +1178,15 @@ impl<'p> Lowerer<'p> {
 }
 
 /// Builds `If c Then ... ElseIf ... Else ... End If`, folding `else { if ... }` chains.
+/// The variable (or other expression) a member / index chain starts from: `p` of `p.a[0].b`.
+fn chain_root(e: &Expr) -> &Expr {
+    let mut t = e.peel();
+    while let ExprKind::Member { object, .. } | ExprKind::Index { object, .. } = &t.kind {
+        t = object.peel();
+    }
+    t
+}
+
 pub(crate) fn flatten_if(cond: VExpr, then: Vec<VStmt>, mut els: Vec<VStmt>) -> VStmt {
     let significant: Vec<usize> = els.iter().enumerate().filter(|(_, s)| !matches!(s, VStmt::Pos(_))).map(|(i, _)| i).collect();
     if significant.len() == 1 {
