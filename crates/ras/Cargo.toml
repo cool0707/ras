@@ -15,6 +15,7 @@ path = "src/main.rs"
 ras-syntax.workspace = true
 ras-compiler.workspace = true
 ras-ovba.workspace = true
+ras-form.workspace = true
 ras-lsp.workspace = true
 ras-sync.workspace = true
 clap.workspace = true
@@ -23,4 +24,6 @@ notify.workspace = true
 
 [dev-dependencies]
 ras-ovba.workspace = true
+ras-form.workspace = true
+serde_json.workspace = true
 encoding_rs.workspace = true

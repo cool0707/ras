@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "ErrList" },
+  "controls": [ { "id": "c", "name": "cmb", "type": "ComboBox", "list": ["a", "b"] } ]
+}

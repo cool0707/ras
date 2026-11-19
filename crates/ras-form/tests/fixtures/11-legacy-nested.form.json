@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "kind": "xlflow.userform",
+  "basis": "designer",
+  "form": {
+    "name": "Nested",
+    "observed": {
+      "width": 250,
+      "height": 200
+    }
+  },
+  "controls": [
+    {
+      "name": "Frame1",
+      "type": "Frame",
+      "controls": [
+        {
+          "name": "Option1",
+          "type": "OptionButton",
+          "top": 20,
+          "id": "o1"
+        },
+        {
+          "name": "Option2",
+          "type": "OptionButton",
+          "top": 40,
+          "value": "true",
+          "id": "o2"
+        }
+      ],
+      "id": "frame1"
+    },
+    {
+      "name": "Label1",
+      "id": "label1",
+      "type": "Label",
+      "left": 160
+    }
+  ],
+  "warnings": [
+    {
+      "code": "snapshot_note",
+      "message": "captured from Excel"
+    }
+  ]
+}

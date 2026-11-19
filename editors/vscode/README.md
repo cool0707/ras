@@ -18,6 +18,7 @@
 - 言語サーバーによる IntelliSense 一式（`ras.toml` を含むワークスペース、または `.ras` ファイルを開くと自動的に起動します）
 - ステータスバーへの同期状態の表示
 - ブレークポイントを使ったデバッグ実行（ステップ実行、変数・ウォッチ式、例外での停止）
+- ユーザーフォーム デザイナー（`forms/*.form.json` をビジュアルに編集）
 
 ## コマンド
 
@@ -31,6 +32,9 @@
 | `RAS: マクロを実行` | マクロの一覧から選び、同期してから Excel 上で実行します。 |
 | `RAS: 言語サーバーを再起動` | 言語サーバーを再起動します。 |
 | `RAS: デバッグを開始` | 関数を選んでデバッグ実行します（F5 と同じ）。エディターのタイトルバーからも実行できます。 |
+| `RAS: 新しいユーザーフォーム` | `forms/<名前>.form.json` と空のコードビハインド `forms/<名前>.bas` を作成し、デザイナーで開きます。エクスプローラーのフォルダーの右クリックメニューからも実行できます。 |
+| `RAS: デザイナーで開く` | テキストエディターで開いている FormSpec をデザイナーで開きます。 |
+| `RAS: JSON を開く` | デザイナーで開いている FormSpec を JSON のテキストエディターで横に開きます。 |
 
 ## デバッグ
 
@@ -111,6 +115,31 @@ RAS ファイルでは、言語サーバーによるセマンティックハイ�
 | 警告アイコンと数字（背景が警告色） | ドリフト警告です。Excel（VBE）側で編集された RAS 管理モジュールがあります。 |
 | `RAS: 停止中` | 言語サーバーが起動していません。 |
 
+## ユーザーフォーム デザイナー
+
+ユーザーフォームのデザインは、プロジェクト直下の `forms/<名前>.form.json`（FormSpec。[xlflow](https://github.com/harumiWeb/xlflow) の FormSpec v1 と同じ形式の JSON）に、イベント処理などのコードは `forms/<名前>.bas`（コードペインの内容そのもの。`Attribute` 行は不要）に書きます。`forms/` 直下の `*.form.json` は既定でデザイナーで開きます（テキストで編集したいときは［JSON を開く］か「エディターを再度開く…」）。デザイナーは [xlflow](https://github.com/harumiWeb/xlflow) の UserForm Designer を移植したものです。
+
+```json
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "OrderForm", "caption": "注文", "width": 240, "height": 180 },
+  "controls": [
+    { "id": "ok", "name": "OkButton", "type": "CommandButton", "caption": "OK", "left": 160, "top": 144, "width": 72, "height": 24 }
+  ]
+}
+```
+
+- **配置と編集**: ツールボックスで種類を選んでフォーム（または Frame・表示中のページ）をクリックすると配置します。ドラッグで移動、8 つのハンドルでサイズ変更、フォームの右端・下端でフォームのサイズ変更ができます。矢印キーで 1pt、Shift+矢印キーで 10pt 移動します。グリッドの表示・スナップ、ズーム（50〜200%）はフッターで切り替えます。Frame やページへドラッグすると親が変わります。
+- **選択と整列**: Ctrl / Shift+クリックや範囲選択で同じ親のコントロールを複数選択し、ツールバーから左右・上下の整列、等間隔の配置、サイズを揃える、重なり順の変更ができます。切り取り・コピー・貼り付け・複製（Ctrl+X / C / V / D）と削除（Delete）にも対応します。子を持つコンテナーを削除するときは確認します。
+- **プロパティ**: 右のペインの［プロパティ］で名前・Caption・位置とサイズ・Enabled などを編集します。Font と ForeColor / BackColor は専用のダイアログで編集できます。［構造］では重なったコントロールや非表示のコントロールも名前で選べ、［タブ順］では TabIndex をまとめて設定できます。MultiPage のページと TabStrip のタブは、選択したときに表示される一覧で追加・削除・並べ替えができます。
+- **イベント**: コントロールやフォームの背景をダブルクリックすると、既定のイベント（CommandButton なら `Click`、TextBox なら `Change`、フォームなら `UserForm_Click`）のハンドラーを `forms/<名前>.bas` に開きます。無ければ空のハンドラーを追加します。右クリックの［イベントを開く…］で他のイベントも選べます。
+- **問題**: 下部の［問題］パネルに FormSpec の検証結果（重複した ID、存在しない親、種類に合わないプロパティなど）を表示し、選ぶとその項目を JSON 上で表示します。新しい検証エラーを生む編集は反映しません。
+- **元に戻す・保存**: デザイナーでの操作はすべて JSON ドキュメントの編集になるため、VS Code の元に戻す / やり直し・保存・自動保存がそのまま使えます。JSON をテキストエディターで編集すると、デザイナーにもすぐに反映されます。
+
+Image コントロールの画像の取り込み（ファイルの選択）には対応していません。画像は JSON の `picture.path` に、プロジェクトからの相対パスで BMP / JPEG ファイルを指定してください。YAML 形式の FormSpec は扱いません。
+
 ## 制限モード（信頼されていないワークスペース）
 
 信頼されていないワークスペースでは、シンタックスハイライトのみが有効です。言語サーバーは、ワークスペースを信頼した時点で起動します。
@@ -120,12 +149,12 @@ RAS ファイルでは、言語サーバーによるセマンティックハイ�
 ```sh
 npm ci
 npm run compile   # 型チェック（tsc --noEmit）と esbuild によるバンドル
-npm test          # TextMate 文法のテスト
+npm test          # TextMate 文法とユーザーフォーム デザイナーのテスト
 npm run package   # ras-vscode-<version>.vsix を作成
 ```
 
-Node.js 22 以降が必要です。`syntaxes/ras.tmLanguage.json` は `scripts/build-grammar.mjs` が生成するファイルです。直接編集せず、スクリプトを変更して `npm run build:grammar` を実行してください。
+Node.js 22 以降が必要です。`syntaxes/ras.tmLanguage.json` は `scripts/build-grammar.mjs` が生成するファイルです。デザイナーの画面（`webview/userFormDesigner/`）は esbuild で `dist/webview/` にバンドルされます。直接編集せず、スクリプトを変更して `npm run build:grammar` を実行してください。
 
 ## ライセンス
 
-MIT License。この拡張機能が含む第三者の著作物（TypeScript の TextMate 文法など）については `THIRD_PARTY_NOTICES.md` を参照してください。
+MIT License。この拡張機能が含む第三者の著作物（TypeScript の TextMate 文法、xlflow のユーザーフォーム デザイナーなど）については `THIRD_PARTY_NOTICES.md` を参照してください。

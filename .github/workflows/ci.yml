@@ -44,11 +44,15 @@ jobs:
           mkdir "$RUNNER_TEMP/sample" && cd "$RUNNER_TEMP/sample"
           RAS="$GITHUB_WORKSPACE/target/debug/ras"
           "$RAS" init . --workbook Book.xlsm
+          "$RAS" form new frmSample
+          printf '{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"frmSample"},"controls":[{"id":"t","name":"txtSample","type":"TextBox","text":"sample text"}]}' > forms/frmSample.form.json
           "$RAS" pack
           "$RUNNER_TEMP/venv/bin/olevba" Book.xlsm > olevba.txt
           grep -q "VBA MACRO Main.bas" olevba.txt
           grep -q "VBA MACRO ThisWorkbook.cls" olevba.txt
           grep -q "Public Sub hello()" olevba.txt
+          grep -q "VBA MACRO frmSample.frm" olevba.txt
+          grep -q "VBA FORM Variable \"b'txtSample'\"" olevba.txt
           echo "olevba read the generated VBA project:"
           grep "VBA MACRO" olevba.txt
 

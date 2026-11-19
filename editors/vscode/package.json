@@ -1,7 +1,7 @@
 {
   "name": "ras-vscode",
   "displayName": "RAS (Better VBA)",
-  "description": "RAS（TypeScript ライクな構文から VBA へトランスパイルする言語）の言語サポート。シンタックスハイライト、ras 言語サーバー（ras lsp）への接続、ブレークポイントを使ったデバッグ実行を提供します。",
+  "description": "RAS（TypeScript ライクな構文から VBA へトランスパイルする言語）の言語サポート。シンタックスハイライト、ras 言語サーバー（ras lsp）への接続、ブレークポイントを使ったデバッグ実行、ユーザーフォーム デザイナーを提供します。",
   "version": "0.1.0",
   "publisher": "cool0707",
   "license": "MIT",
@@ -33,7 +33,9 @@
     "onLanguage:ras",
     "workspaceContains:ras.toml",
     "onDebugResolve:ras",
-    "onDebugInitialConfigurations"
+    "onDebugInitialConfigurations",
+    "onCustomEditor:ras.userFormDesigner",
+    "onCommand:ras.userForm.new"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -141,7 +143,11 @@
         },
         "ras.debug.dialogs": {
           "type": "string",
-          "enum": ["notify", "dismiss", "off"],
+          "enum": [
+            "notify",
+            "dismiss",
+            "off"
+          ],
           "default": "notify",
           "markdownEnumDescriptions": [
             "ダイアログの内容を通知し、ダイアログを前面に出します。応答は Excel 側で行います。",
@@ -184,6 +190,24 @@
         "title": "デバッグを開始",
         "category": "RAS",
         "icon": "$(debug-alt)"
+      },
+      {
+        "command": "ras.userForm.new",
+        "title": "新しいユーザーフォーム",
+        "category": "RAS",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ras.userForm.openDesigner",
+        "title": "デザイナーで開く",
+        "category": "RAS",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "ras.userForm.openSource",
+        "title": "JSON を開く",
+        "category": "RAS",
+        "icon": "$(json)"
       }
     ],
     "menus": {
@@ -191,6 +215,14 @@
         {
           "command": "ras.client.showGeneratedVba",
           "when": "editorLangId == ras"
+        },
+        {
+          "command": "ras.userForm.openDesigner",
+          "when": "resourceFilename =~ /\\.form\\.json$/ && activeCustomEditorId != ras.userFormDesigner"
+        },
+        {
+          "command": "ras.userForm.openSource",
+          "when": "activeCustomEditorId == ras.userFormDesigner"
         }
       ],
       "editor/title": [
@@ -203,6 +235,16 @@
           "command": "ras.debug.start",
           "when": "editorLangId == ras && !inDebugMode",
           "group": "navigation"
+        },
+        {
+          "command": "ras.userForm.openDesigner",
+          "when": "resourceFilename =~ /\\.form\\.json$/ && activeCustomEditorId != ras.userFormDesigner",
+          "group": "navigation"
+        },
+        {
+          "command": "ras.userForm.openSource",
+          "when": "activeCustomEditorId == ras.userFormDesigner",
+          "group": "navigation"
         }
       ],
       "editor/context": [
@@ -210,6 +252,23 @@
           "command": "ras.client.showGeneratedVba",
           "when": "editorLangId == ras",
           "group": "navigation@90"
+        },
+        {
+          "command": "ras.userForm.openDesigner",
+          "when": "resourceFilename =~ /\\.form\\.json$/",
+          "group": "navigation@91"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "ras.userForm.openDesigner",
+          "when": "resourceFilename =~ /\\.form\\.json$/",
+          "group": "navigation@20"
+        },
+        {
+          "command": "ras.userForm.new",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@21"
         }
       ]
     },
@@ -255,7 +314,11 @@
               },
               "dialogs": {
                 "type": "string",
-                "enum": ["notify", "dismiss", "off"],
+                "enum": [
+                  "notify",
+                  "dismiss",
+                  "off"
+                ],
                 "default": "notify",
                 "markdownEnumDescriptions": [
                   "ダイアログの内容を通知し、ダイアログを前面に出します。応答は Excel 側で行います。",
@@ -287,19 +350,41 @@
           }
         ]
       }
+    ],
+    "customEditors": [
+      {
+        "viewType": "ras.userFormDesigner",
+        "displayName": "RAS ユーザーフォーム デザイナー",
+        "selector": [
+          {
+            "filenamePattern": "**/forms/*.form.json"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": [
+          "**/forms/*.form.json"
+        ],
+        "url": "./schemas/userform.schema.json"
+      }
     ]
   },
   "scripts": {
-    "check-types": "tsc --noEmit -p .",
+    "check-types": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.webview.json",
     "bundle": "node esbuild.mjs",
     "compile": "npm run check-types && npm run bundle",
     "watch": "node esbuild.mjs --watch",
     "build:grammar": "node scripts/build-grammar.mjs",
-    "test": "node --test-reporter=spec test/grammar.test.mjs",
+    "test": "node --test-reporter=spec test/grammar.test.mjs && node scripts/test-userform.mjs",
     "vscode:prepublish": "npm run check-types && node esbuild.mjs --production",
     "package": "vsce package --no-dependencies"
   },
   "dependencies": {
+    "@vscode/codicons": "^0.0.46-24",
+    "preact": "^10.29.8",
     "vscode-languageclient": "9.0.1"
   },
   "devDependencies": {

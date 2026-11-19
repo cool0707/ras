@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "DefaultsForm" },
+  "controls": [
+    { "id": "l", "name": "Label1", "type": "Label" },
+    { "id": "t", "name": "TextBox1", "type": "TextBox" }
+  ]
+}

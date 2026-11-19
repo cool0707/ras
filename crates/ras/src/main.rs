@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+
+mod forms;
 use ras_compiler::vba::VModuleKind;
 use ras_compiler::{BuildOptions, BuildOutput, Config, Diagnostic, ModuleKind, Program, Severity};
 
@@ -77,6 +79,11 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
+    /// ユーザーフォーム（forms/<Name>.form.json と forms/<Name>.bas）を扱う
+    Form {
+        #[command(subcommand)]
+        action: FormCommand,
+    },
     /// LSP サーバとして起動する（VS Code 拡張から呼ばれる）
     Lsp {
         #[arg(long)]
@@ -97,6 +104,17 @@ enum Command {
     Setup,
     /// COM タイプライブラリから型定義（.d.ras）を生成する（未実装）
     Typegen { typelib: String },
+}
+
+#[derive(Subcommand)]
+enum FormCommand {
+    /// 新しいユーザーフォームの雛形（forms/<Name>.form.json と空の forms/<Name>.bas）を作る
+    New {
+        /// フォーム名（VBA の識別子）
+        name: String,
+    },
+    /// forms/ のユーザーフォームを検査する（ブックへの書き込みと同じ生成まで行う）
+    Check,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +317,9 @@ fn write_build(root: &Path, prog: &Program, out: &BuildOutput) -> Result<PathBuf
 
 fn cmd_build(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
     let Some((prog, out)) = compile(root, args, None)? else { return Ok(ExitCode::from(1)) };
+    if load_forms(root, prog.config.target.codepage)?.is_none() {
+        return Ok(ExitCode::from(1));
+    }
     let dir = write_build(root, &prog, &out)?;
     println!("{} 個のモジュールを {} に出力しました", out.files.len(), dir.display());
     Ok(ExitCode::SUCCESS)
@@ -335,6 +356,21 @@ fn cmd_build_js(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Loads, validates and generates the forms of `forms/`; `None` (after printing the problems) when there are errors.
+fn load_forms(root: &Path, codepage: u16) -> Result<Option<Vec<ras_ovba::UserForm>>, String> {
+    let loaded = forms::load(root)?;
+    let errors = forms::report(&loaded);
+    if errors > 0 {
+        eprintln!("ユーザーフォームに {errors} 件のエラーがあります");
+        return Ok(None);
+    }
+    let compiled = forms::compile(&loaded, codepage)?;
+    if compiled.is_none() {
+        eprintln!("ユーザーフォームを生成できませんでした");
+    }
+    Ok(compiled)
+}
+
 fn to_ovba_kind(k: &VModuleKind) -> ras_ovba::ModuleKind {
     match k {
         VModuleKind::Standard => ras_ovba::ModuleKind::Standard,
@@ -360,6 +396,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     }
     let Some((prog, out)) = compile(root, args, Some(&book))? else { return Ok(ExitCode::from(1)) };
     write_build(root, &prog, &out)?;
+    let Some(user_forms) = load_forms(root, prog.config.target.codepage)? else { return Ok(ExitCode::from(1)) };
 
     // Modules that RAS generated earlier but that no longer exist are removed; hand-edited ones are reported (spec §14.7).
     let existing = ras_ovba::unpack(&book).map_err(|e| format!("{}: {e}", book.display()))?;
@@ -399,6 +436,26 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
             drifted.join(", ")
         ));
     }
+    // Forms: a name used by a RAS module, a module of another kind, or a form made in the VBE is not replaced silently.
+    let mut hand_made_forms = Vec::new();
+    for form in &user_forms {
+        if generated.iter().any(|g| g.eq_ignore_ascii_case(&form.name)) {
+            return Err(format!("ユーザーフォーム `{}` と同じ名前の RAS モジュールがあります。どちらかの名前を変えてください", form.name));
+        }
+        let Some(m) = existing.project.iter().flat_map(|project| &project.modules).find(|m| m.name.eq_ignore_ascii_case(&form.name)) else { continue };
+        if m.kind != ras_ovba::ModuleKind::Form {
+            return Err(format!("ブックには `{}` という名前のフォームではないモジュールがあります。フォーム名を変えてください", m.name));
+        }
+        if !forms::is_generated(&m.source) {
+            hand_made_forms.push(m.name.clone());
+        }
+    }
+    if !hand_made_forms.is_empty() && !p.overwrite {
+        return Err(format!(
+            "ブックには forms/ から生成したものではない同名のユーザーフォームがあります: {}\n  このまま書き込むと VBE で作ったフォームとそのコードが失われます。フォーム名を変えるか、置き換えてよい場合は --overwrite を付けてください",
+            hand_made_forms.join(", ")
+        ));
+    }
     let mut modules = Vec::new();
     let mut document_code = Vec::new();
     for f in &out.files {
@@ -416,6 +473,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         modules,
         document_code,
         remove_modules: remove,
+        forms: user_forms,
         backup_dir: Some(root.join("build").join("backup")),
         backup_generations: prog.config.pack.backup_generations,
     };
@@ -463,6 +521,10 @@ fn live_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<Option<Ex
     }
     let Some((prog, out)) = compile_with(root, args, Some(&book), true)? else { return Ok(Some(ExitCode::from(1))) };
     write_build(root, &prog, &out)?;
+    let form_count = forms::load(root)?.len();
+    if form_count > 0 {
+        eprintln!("warning: forms/ のユーザーフォーム（{form_count} 個）はライブ同期では反映しません。ブックを閉じて `ras pack` を実行すると書き込まれます");
+    }
     let rep = session.apply(&out.files, &ras_sync::SyncOptions { overwrite }).map_err(|e| e.to_string())?;
     println!("{} に同期しました（{}）", book.display(), rep.summary());
     if rep.drifted.is_empty() {
@@ -525,6 +587,7 @@ fn cmd_unpack(root: &Path, book: Option<&Path>) -> Result<ExitCode, String> {
                 eprintln!("warning: RAS 管理モジュール `{}` は VBE 上で編集されています。VBE 側の内容を build/drift/{}.vba に保存しました", m.name, m.name);
                 drifted += 1;
             }
+            None if m.kind == ras_ovba::ModuleKind::Form && forms::is_generated(&m.source) => managed += 1,
             None => {
                 let ext = match m.kind {
                     ras_ovba::ModuleKind::Standard => "bas",
@@ -630,7 +693,7 @@ fn cmd_watch(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
         }
     })
     .map_err(|e| e.to_string())?;
-    for sub in ["src", "types", "ras.toml"] {
+    for sub in ["src", "types", "forms", "ras.toml"] {
         let p = root.join(sub);
         if p.exists() {
             watcher.watch(&p, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
@@ -673,7 +736,7 @@ fn cmd_watch(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
 }
 
 fn is_source_event(ev: &notify::Event) -> bool {
-    !matches!(ev.kind, notify::EventKind::Access(_)) && ev.paths.iter().any(|p| p.extension().is_some_and(|e| e == "ras" || e == "toml"))
+    !matches!(ev.kind, notify::EventKind::Access(_)) && ev.paths.iter().any(|p| p.extension().is_some_and(|e| e == "ras" || e == "toml" || e == "json" || e == "bas"))
 }
 
 fn unimplemented_cmd(what: &str, detail: &str) -> Result<ExitCode, String> {
@@ -694,7 +757,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     prog = analyze(&root, &BuildArgs::default(), None)?;
                 }
             }
-            let errors = report(&prog, &prog.diagnostics, true);
+            let errors = report(&prog, &prog.diagnostics, true) + forms::check(&root, prog.config.target.codepage)?;
             if errors > 0 {
                 eprintln!("{errors} 件のエラーがあります");
                 return Ok(ExitCode::from(1));
@@ -720,6 +783,24 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Unpack { book } => cmd_unpack(&find_root(project)?, book.as_deref()),
         Command::Fmt { files, check } => cmd_fmt(project, files, *check),
+        Command::Form { action: FormCommand::New { name } } => {
+            let root = find_root(project)?;
+            let (spec, code) = forms::new_form(&root, name)?;
+            println!("{} と {} を作成しました", spec.display(), code.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Form { action: FormCommand::Check } => {
+            let root = find_root(project)?;
+            let (cfg, _) = ras_compiler::load_project(&root)?;
+            let count = forms::load(&root)?.len();
+            let errors = forms::check(&root, cfg.target.codepage)?;
+            if errors > 0 {
+                eprintln!("{errors} 件のエラーがあります");
+                return Ok(ExitCode::from(1));
+            }
+            println!("ユーザーフォーム {count} 個に問題は見つかりませんでした");
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Lsp { .. } => {
             ras_lsp::run_stdio().map_err(|e| e.to_string())?;
             Ok(ExitCode::SUCCESS)

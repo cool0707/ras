@@ -1,4 +1,5 @@
-// Bundles src/extension.ts and its npm dependencies into dist/extension.js.
+// Bundles src/extension.ts and its npm dependencies into dist/extension.js, and the
+// UserForm Designer webview (webview/userFormDesigner) into dist/webview/.
 //
 //   node esbuild.mjs               development build (source map, not minified)
 //   node esbuild.mjs --production  minified build used by `vsce package`
@@ -59,15 +60,36 @@ const context = await esbuild.context({
 	plugins: [checkNotices],
 });
 
+// The UserForm Designer runs in a webview: a browser bundle with its own CSS
+// and the codicon font, loaded under a strict content security policy.
+const webview = await esbuild.context({
+	entryPoints: { userFormDesigner: "webview/userFormDesigner/App.tsx" },
+	outdir: "dist/webview",
+	bundle: true,
+	format: "iife",
+	platform: "browser",
+	target: "es2022",
+	jsx: "automatic",
+	jsxImportSource: "preact",
+	loader: { ".ttf": "file" },
+	assetNames: "[name]",
+	minify: production,
+	sourcemap: !production,
+	sourcesContent: false,
+	metafile: true,
+	logLevel: "info",
+	plugins: [checkNotices],
+});
+
 if (watch) {
-	await context.watch();
+	await Promise.all([context.watch(), webview.watch()]);
 } else {
 	try {
-		await context.rebuild();
+		await Promise.all([context.rebuild(), webview.rebuild()]);
 	} catch {
 		// esbuild has already printed the errors.
 		process.exitCode = 1;
 	} finally {
-		await context.dispose();
+		await Promise.all([context.dispose(), webview.dispose()]);
 	}
 }

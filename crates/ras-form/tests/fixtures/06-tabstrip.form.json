@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "Tabs", "caption": "Tabs" },
+  "controls": [
+    { "id": "nav", "name": "tsNav", "type": "TabStrip", "selectedIndex": 1, "left": 0, "top": 0,
+      "tabs": [
+        { "name": "Details", "caption": "Details", "controlTipText": "Show details", "tag": "section-details", "accelerator": "D", "enabled": true, "visible": true },
+        { "name": "History", "enabled": false },
+        { "name": "Hidden", "caption": "Hidden", "visible": false }
+      ] },
+    { "id": "plain", "name": "tsPlain", "type": "TabStrip", "left": 0, "top": 60, "tabs": [ { "name": "One" }, { "name": "Two" } ] },
+    { "id": "none", "name": "tsNone", "type": "TabStrip", "left": 0, "top": 120, "tabs": [] },
+    { "id": "omitted", "name": "tsOmitted", "type": "TabStrip", "left": 0, "top": 160, "height": 20 }
+  ]
+}

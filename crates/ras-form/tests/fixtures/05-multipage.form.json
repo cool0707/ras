@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "Pages", "caption": "Pages", "width": 320, "height": 260 },
+  "controls": [
+    { "id": "steps", "name": "mpSteps", "type": "MultiPage", "selectedIndex": 1, "left": 6, "top": 6, "width": 300, "height": 200 },
+    { "id": "p1", "parentId": "steps", "name": "pgIdentity", "type": "Page", "caption": "Identity", "accelerator": "I", "controlTipText": "Who" },
+    { "id": "p2", "parentId": "steps", "name": "pgAddress", "type": "Page", "caption": "Address", "tag": "addr" },
+    { "id": "p3", "parentId": "steps", "name": "pgDisabled", "type": "Page", "enabled": false },
+    { "id": "email", "parentId": "p1", "name": "txtEmail", "type": "TextBox", "left": 6, "top": 6 },
+    { "id": "frm", "parentId": "p2", "name": "fraAddr", "type": "Frame", "caption": "Addr", "left": 6, "top": 6, "width": 200, "height": 100 },
+    { "id": "zip", "parentId": "frm", "name": "txtZip", "type": "TextBox", "left": 6, "top": 6 },
+    { "id": "empty", "name": "mpEmpty", "type": "MultiPage", "left": 6, "top": 210, "width": 100, "height": 40, "enabled": false }
+  ]
+}

@@ -850,10 +850,12 @@ dependencies = [
  "encoding_rs",
  "notify",
  "ras-compiler",
+ "ras-form",
  "ras-lsp",
  "ras-ovba",
  "ras-sync",
  "ras-syntax",
+ "serde_json",
 ]
 
 [[package]]
@@ -879,6 +881,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ras-form"
+version = "0.1.0"
+dependencies = [
+ "cfb",
+ "ras-ovba",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ras-lsp"
 version = "0.1.0"
 dependencies = [
@@ -899,6 +911,7 @@ dependencies = [
  "encoding_rs",
  "ovba",
  "proptest",
+ "uuid",
  "zip",
 ]
 

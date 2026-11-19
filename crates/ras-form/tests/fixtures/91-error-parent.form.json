@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "ErrParent" },
+  "controls": [
+    { "id": "a", "name": "txtA", "type": "TextBox" },
+    { "id": "b", "parentId": "a", "name": "txtB", "type": "TextBox" },
+    { "id": "c", "parentId": "missing", "name": "txtC", "type": "TextBox" }
+  ]
+}

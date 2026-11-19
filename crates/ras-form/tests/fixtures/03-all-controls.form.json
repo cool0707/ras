@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "AllControls", "caption": "All controls", "width": 400.5, "height": 320 },
+  "controls": [
+    { "id": "lbl", "name": "lblTitle", "type": "Label", "caption": "Title", "left": 6, "top": 6, "width": 120, "height": 18 },
+    { "id": "txt", "name": "txtName", "type": "TextBox", "text": "hello", "left": 6, "top": 30, "width": 150, "height": 18, "tabIndex": 3 },
+    { "id": "cmb", "name": "cmbKind", "type": "ComboBox", "value": "A", "left": 6, "top": 54 },
+    { "id": "lst", "name": "lstItems", "type": "ListBox", "left": 6, "top": 78, "width": 100.25, "height": 60 },
+    { "id": "btn", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 300, "top": 280, "width": 80, "height": 26, "enabled": false },
+    { "id": "chk", "name": "chkFlag", "type": "CheckBox", "caption": "Flag", "value": true, "left": 160, "top": 6 },
+    { "id": "opt", "name": "optA", "type": "OptionButton", "caption": "A", "value": false, "left": 160, "top": 30, "visible": false },
+    { "id": "tgl", "name": "tglMode", "type": "ToggleButton", "caption": "Mode", "value": 1, "left": 160, "top": 54 },
+    { "id": "spn", "name": "spnCount", "type": "SpinButton", "value": 5, "left": 240, "top": 6 },
+    { "id": "scr", "name": "scrPos", "type": "ScrollBar", "value": 42, "left": 240, "top": 50, "width": 140 },
+    { "id": "img", "name": "imgLogo", "type": "Image", "left": 300, "top": 100, "width": 64, "height": 64 }
+  ]
+}

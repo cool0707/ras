@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "frm入力", "caption": "顧客情報の入力 \"引用\"", "width": 260, "height": 200 },
+  "controls": [
+    { "id": "l", "name": "lbl氏名", "type": "Label", "caption": "氏名：" },
+    { "id": "t", "name": "txt氏名", "type": "TextBox", "text": "山田 太郎", "top": 20 },
+    { "id": "f", "name": "fra住所", "type": "Frame", "caption": "住所", "top": 50 },
+    { "id": "ts", "name": "tsタブ", "type": "TabStrip", "top": 150, "tabs": [ { "name": "一覧", "caption": "一覧表示", "controlTipText": "ヒント" } ] },
+    { "id": "mp", "name": "mpページ", "type": "MultiPage", "left": 150, "width": 100, "height": 100 },
+    { "id": "pg", "parentId": "mp", "name": "pg基本", "type": "Page", "caption": "基本" }
+  ]
+}

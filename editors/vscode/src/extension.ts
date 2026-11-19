@@ -4,6 +4,8 @@ import { registerDebugging } from "./debug";
 import { GeneratedVbaView } from "./generatedVba";
 import { RasServer } from "./server";
 import { SyncStatusBar } from "./statusBar";
+import { registerUserFormCommands } from "./userForm/commands";
+import { UserFormDesignerProvider } from "./userForm/provider";
 
 // The extension is deliberately thin (spec §7.4): it contributes the grammar,
 // starts `ras lsp --stdio`, forwards four commands to it and mirrors the sync
@@ -29,6 +31,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		rasServer.onDidReceiveSyncStatus((params) => statusBar.setSyncStatus(params)),
 		registerCommands(rasServer, vbaView),
 		registerDebugging(context),
+		UserFormDesignerProvider.register(context),
+		registerUserFormCommands(),
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (event.affectsConfiguration("ras.path") || event.affectsConfiguration("ras.server.extraArgs")) {
 				void rasServer.restart();

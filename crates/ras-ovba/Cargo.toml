@@ -12,6 +12,7 @@ cfb = { workspace = true }
 zip = { workspace = true }
 encoding_rs = { workspace = true }
 crc32fast = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 ovba = { workspace = true }

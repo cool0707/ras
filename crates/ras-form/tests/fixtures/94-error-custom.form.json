@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "ErrCustom" },
+  "controls": [ { "id": "x", "name": "cal", "type": "Calendar", "progId": "MSCAL.Calendar.7" } ]
+}

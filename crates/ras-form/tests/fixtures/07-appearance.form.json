@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "Looks", "caption": "Looks", "width": 300, "height": 300,
+    "font": { "name": "Tahoma", "size": 9, "bold": false, "charset": 128 },
+    "foreColor": { "kind": "rgb", "value": "#203040" },
+    "backColor": { "kind": "system", "value": "buttonFace" },
+    "borderStyle": 1
+  },
+  "controls": [
+    { "id": "l", "name": "lblBold", "type": "Label", "caption": "Bold", "font": { "name": "Meiryo UI", "size": 10.5, "bold": true }, "textAlign": 2, "borderStyle": 1, "foreColor": { "kind": "ole", "value": "0x000000FF" } },
+    { "id": "t", "name": "txtItalic", "type": "TextBox", "font": { "italic": true, "underline": true, "strikeThrough": false }, "textAlign": 3, "backColor": { "kind": "rgb", "value": "#FFFFE0" } },
+    { "id": "b", "name": "btnColor", "type": "CommandButton", "caption": "Go", "foreColor": { "kind": "system", "value": "highlightText" }, "backColor": { "kind": "system", "value": "highlight" }, "font": { "size": 12 } },
+    { "id": "f", "name": "fraLook", "type": "Frame", "caption": "F", "top": 100, "font": { "name": "Arial", "size": 8, "italic": true }, "backColor": { "kind": "rgb", "value": "#E0E0E0" }, "borderStyle": 1, "foreColor": { "kind": "rgb", "value": "#000080" } },
+    { "id": "m", "name": "mpLook", "type": "MultiPage", "top": 200, "height": 90, "font": { "bold": true }, "backColor": { "kind": "rgb", "value": "#C0FFC0" }, "foreColor": { "kind": "rgb", "value": "#102030" } },
+    { "id": "mp1", "parentId": "m", "name": "Page1", "type": "Page", "caption": "Page1" },
+    { "id": "i", "name": "imgLook", "type": "Image", "left": 200, "pictureAlignment": 2, "pictureSizeMode": 3, "borderStyle": 0, "backColor": { "kind": "rgb", "value": "#FFFFFF" } },
+    { "id": "s", "name": "spnLook", "type": "SpinButton", "left": 260, "foreColor": { "kind": "rgb", "value": "#FF0000" } },
+    { "id": "ts", "name": "tsLook", "type": "TabStrip", "left": 150, "top": 100, "width": 140, "font": { "size": 11 }, "backColor": { "kind": "rgb", "value": "#ABCDEF" }, "tabs": [ { "name": "T1" } ] },
+    { "id": "c", "name": "chkLook", "type": "CheckBox", "caption": "C", "left": 150, "top": 160, "textAlign": 1, "font": { "charset": 0 } }
+  ]
+}

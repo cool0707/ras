@@ -1,0 +1,433 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RAS UserForm FormSpec v1",
+  "description": "forms/<Name>.form.json — ユーザーフォームのデザイン（xlflow FormSpec v1 の JSON 形式）",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "kind",
+    "basis",
+    "form",
+    "controls"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "kind": {
+      "enum": [
+        "ras.userform",
+        "xlflow.userform"
+      ]
+    },
+    "basis": {
+      "const": "designer"
+    },
+    "coordinateSystem": {
+      "enum": [
+        "points",
+        "parent-relative"
+      ]
+    },
+    "form": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "VBA の UserForm コンポーネント名"
+        },
+        "caption": {
+          "type": "string"
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0,
+          "description": "クライアント領域の幅（ポイント）"
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0,
+          "description": "クライアント領域の高さ（ポイント）"
+        },
+        "font": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "フォント（指定しない項目は既存の値を保持）",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "size": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 3276.75
+            },
+            "bold": {
+              "type": "boolean"
+            },
+            "italic": {
+              "type": "boolean"
+            },
+            "underline": {
+              "type": "boolean"
+            },
+            "strikeThrough": {
+              "type": "boolean"
+            },
+            "charset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            }
+          }
+        },
+        "foreColor": {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "rgb",
+                "system",
+                "ole"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+            }
+          }
+        },
+        "backColor": {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "rgb",
+                "system",
+                "ole"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+            }
+          }
+        },
+        "borderStyle": {
+          "enum": [
+            0,
+            1
+          ]
+        },
+        "observed": {
+          "type": "object",
+          "description": "Excel から取り込んだ観測値（スナップショット専用）"
+        }
+      }
+    },
+    "controls": {
+      "type": "array",
+      "description": "フラットなコントロールの一覧（入れ子は parentId で表す）",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "parentId から参照される安定した ID"
+          },
+          "name": {
+            "type": "string",
+            "description": "VBA のコントロール名"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Label",
+                  "TextBox",
+                  "ComboBox",
+                  "ListBox",
+                  "CommandButton",
+                  "CheckBox",
+                  "OptionButton",
+                  "ToggleButton",
+                  "SpinButton",
+                  "ScrollBar",
+                  "Image",
+                  "Frame",
+                  "MultiPage",
+                  "Page",
+                  "TabStrip"
+                ]
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "progId": {
+            "type": "string"
+          },
+          "parentId": {
+            "type": "string"
+          },
+          "zIndex": {
+            "type": "integer"
+          },
+          "left": {
+            "type": "number"
+          },
+          "top": {
+            "type": "number"
+          },
+          "width": {
+            "type": "number"
+          },
+          "height": {
+            "type": "number"
+          },
+          "tabIndex": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "caption": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "value": {},
+          "list": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "selectedIndex": {
+            "type": "integer",
+            "minimum": -1
+          },
+          "controlTipText": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "accelerator": {
+            "type": "string"
+          },
+          "tabs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "caption": {
+                  "type": "string"
+                },
+                "controlTipText": {
+                  "type": "string"
+                },
+                "tag": {
+                  "type": "string"
+                },
+                "accelerator": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "visible": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "font": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "フォント（指定しない項目は既存の値を保持）",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "size": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 3276.75
+              },
+              "bold": {
+                "type": "boolean"
+              },
+              "italic": {
+                "type": "boolean"
+              },
+              "underline": {
+                "type": "boolean"
+              },
+              "strikeThrough": {
+                "type": "boolean"
+              },
+              "charset": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              }
+            }
+          },
+          "foreColor": {
+            "type": "object",
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "rgb",
+                  "system",
+                  "ole"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+              }
+            }
+          },
+          "backColor": {
+            "type": "object",
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "rgb",
+                  "system",
+                  "ole"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+              }
+            }
+          },
+          "textAlign": {
+            "enum": [
+              1,
+              2,
+              3
+            ]
+          },
+          "borderStyle": {
+            "enum": [
+              0,
+              1
+            ]
+          },
+          "picture": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "remove"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "remove": {
+                    "const": true
+                  }
+                }
+              }
+            ]
+          },
+          "pictureAlignment": {
+            "enum": [
+              0,
+              1,
+              2,
+              3,
+              4
+            ]
+          },
+          "pictureSizeMode": {
+            "enum": [
+              0,
+              1,
+              3
+            ]
+          },
+          "observed": {
+            "type": "object"
+          },
+          "properties": {
+            "type": "object"
+          },
+          "unsupported": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "controls": {
+            "type": "array",
+            "description": "旧形式の入れ子（parentId を使ったフラットな形式を推奨）"
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "MinimalForm", "caption": "MinimalForm", "width": 240, "height": 180 },
+  "controls": []
+}

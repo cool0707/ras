@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "Frames", "caption": "Frames", "width": 300, "height": 240 },
+  "controls": [
+    { "id": "outer", "name": "fraOuter", "type": "Frame", "caption": "Outer", "left": 6, "top": 6, "width": 280, "height": 200 },
+    { "id": "inner", "parentId": "outer", "name": "fraInner", "type": "Frame", "caption": "Inner", "left": 10, "top": 20, "width": 200, "height": 120, "enabled": false },
+    { "id": "a", "parentId": "inner", "name": "txtA", "type": "TextBox", "left": 6, "top": 6 },
+    { "id": "b", "parentId": "inner", "name": "lblB", "type": "Label", "caption": "B", "left": 6, "top": 30, "zIndex": 0 },
+    { "id": "c", "parentId": "outer", "name": "btnC", "type": "CommandButton", "caption": "C", "left": 10, "top": 150 },
+    { "id": "d", "name": "btnRoot", "type": "CommandButton", "caption": "Root", "left": 200, "top": 210, "tabIndex": 0 }
+  ]
+}
