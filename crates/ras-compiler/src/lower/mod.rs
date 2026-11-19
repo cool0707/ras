@@ -136,7 +136,7 @@ pub(crate) struct ProcCtx {
     pub push_caps: HashMap<String, (String, String)>,
     pub inline_stack: Vec<FnId>,
     pub stmt_count: usize,
-    /// True while lowering the body of a closure class (`Invoke`).
+    /// True while lowering the body of a closure class (`Apply`).
     pub in_closure: bool,
     /// Top-level variables of a script module that became locals of `Main`.
     pub demoted: HashMap<VarId, String>,

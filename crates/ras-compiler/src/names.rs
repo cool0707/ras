@@ -1,15 +1,17 @@
 //! VBA identifier rules: reserved words, built-in names and sanitising (spec §13.6).
 
 /// VBA keywords and statements that can never be used as identifiers.
+/// `Circle`, `PSet` and `Scale` (graphics methods with their own syntax) are a syntax error
+/// as a type or variable name in Excel's VBA, although the language reference does not list them.
 const RESERVED: &[&str] = &[
     "addressof", "and", "any", "as", "attribute", "boolean", "byref", "byte", "byval",
-    "call", "case", "cbool", "cbyte", "ccur", "cdate", "cdbl", "cdec", "cint", "clng", "clnglng", "clngptr", "close", "const", "csng", "cstr", "currency", "cvar", "cverr", "date", "debug", "decimal", "declare", "defbool", "defbyte", "defcur",
+    "call", "case", "cbool", "cbyte", "ccur", "cdate", "cdbl", "cdec", "cint", "circle", "clng", "clnglng", "clngptr", "close", "const", "csng", "cstr", "currency", "cvar", "cverr", "date", "debug", "decimal", "declare", "defbool", "defbyte", "defcur",
     "defdate", "defdbl", "defint", "deflng", "defobj", "defsng", "defstr", "defvar", "dim", "do", "doevents", "double", "each",
     "else", "elseif", "empty", "end", "endif", "enum", "eqv", "erase", "error", "event", "exit", "false", "for",
     "friend", "function", "get", "global", "gosub", "goto", "if", "imp", "implements", "in", "input", "integer", "is", "lbound",
     "len", "let", "like", "lock", "long", "longlong", "longptr", "loop", "lset", "me", "mid", "mod", "new", "next", "not", "nothing", "null", "object", "on", "open", "option", "optional", "or", "paramarray",
-    "preserve", "print", "private", "property", "ptrsafe", "public", "put", "raiseevent", "redim", "rem",
-    "resume", "return", "rset", "seek", "select", "set", "shared", "single", "spc", "static", "stop", "string", "sub",
+    "preserve", "print", "private", "property", "pset", "ptrsafe", "public", "put", "raiseevent", "redim", "rem",
+    "resume", "return", "rset", "scale", "seek", "select", "set", "shared", "single", "spc", "static", "stop", "string", "sub",
     "tab", "then", "to", "true", "type", "typeof", "ubound", "unlock", "until", "variant", "wend", "while", "with",
     "withevents", "write", "xor",
 ];
@@ -32,6 +34,11 @@ const BUILTIN: &[&str] = &[
     "description", "error", "raise", "print", "assert", "kill", "mkdir", "rmdir", "filecopy", "filelen", "freefile", "beep", "command",
     "choose", "switch", "partition", "rgb", "qbcolor", "strptr", "objptr", "varptr", "main",
 ];
+
+/// Members of `IUnknown` / `IDispatch`. A class module that declares one of them does not
+/// compile ("このメンバー識別子は既にオブジェクト モジュールの中に存在しています"), and with Excel
+/// opening the book without a prompt the procedures that use the class just cannot be run.
+const DISPATCH_MEMBERS: &[&str] = &["addref", "getidsofnames", "gettypeinfo", "gettypeinfocount", "invoke", "queryinterface", "release"];
 
 pub fn is_reserved(name: &str) -> bool {
     RESERVED.binary_search(&name.to_ascii_lowercase().as_str()).is_ok()
@@ -59,10 +66,10 @@ pub fn valid_ident(name: &str) -> String {
 }
 
 /// Identifier for a procedure / member / module-level name.
-/// Reserved words get a trailing underscore; casing is kept.
+/// Reserved words and `IDispatch` member names get a trailing underscore; casing is kept.
 pub fn member_ident(name: &str) -> String {
     let base = valid_ident(name);
-    if is_reserved(&base) {
+    if is_reserved(&base) || DISPATCH_MEMBERS.contains(&base.to_ascii_lowercase().as_str()) {
         format!("{base}_")
     } else {
         base
@@ -99,6 +106,9 @@ mod tests {
         assert_eq!(local_ident("$x"), "u_x");
         assert_eq!(member_ident("count"), "count");
         assert_eq!(member_ident("type"), "type_");
+        assert_eq!(member_ident("Circle"), "Circle_");
+        assert_eq!(member_ident("release"), "release_");
+        assert_eq!(local_ident("release"), "release");
         assert_eq!(member_ident("isBlank"), "isBlank");
     }
 }

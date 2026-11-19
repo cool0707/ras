@@ -15,6 +15,9 @@ pub(crate) const VB_BASE_WORKBOOK: &str = "\"0{00020819-0000-0000-C000-000000000
 pub(crate) const VB_BASE_WORKSHEET: &str = "\"0{00020820-0000-0000-C000-000000000046}\"";
 /// `VB_Base` of a chart sheet document module.
 pub(crate) const VB_BASE_CHART: &str = "\"0{00020821-0000-0000-C000-000000000046}\"";
+/// `VB_Base` of a class module. Excel reports "Invalid procedure call or
+/// argument" for the whole project when a class module stream lacks it.
+pub(crate) const VB_BASE_CLASS: &str = "\"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\"";
 
 /// Converts every line terminator (CR LF, LF, CR) to CR LF and makes sure
 /// non-empty text ends with one.
@@ -152,10 +155,13 @@ fn required_attributes(kind: ModuleKind, doc_base: &str) -> Vec<(&'static str, S
         ModuleKind::Standard => vec![("VB_Name", String::new())],
         ModuleKind::Class => vec![
             ("VB_Name", String::new()),
+            ("VB_Base", f(VB_BASE_CLASS)),
             ("VB_GlobalNameSpace", f("False")),
             ("VB_Creatable", f("False")),
             ("VB_PredeclaredId", f("False")),
             ("VB_Exposed", f("False")),
+            ("VB_TemplateDerived", f("False")),
+            ("VB_Customizable", f("False")),
         ],
         ModuleKind::Document => vec![
             ("VB_Name", String::new()),
@@ -381,10 +387,12 @@ mod tests {
 
     #[test]
     fn class_module_defaults() {
+        let base = "Attribute VB_Base = \"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\"\r\n";
+        let tail = "Attribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = False\r\n";
         let s = prepare_module_source(ModuleKind::Class, "C", "Public X As Long\n", None, "");
         assert_eq!(
             s,
-            "Attribute VB_Name = \"C\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\nPublic X As Long\r\n"
+            format!("Attribute VB_Name = \"C\"\r\n{base}Attribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\n{tail}Public X As Long\r\n")
         );
         // Given values win; missing ones are filled in.
         let s = prepare_module_source(
@@ -396,11 +404,14 @@ mod tests {
         );
         assert_eq!(
             s,
-            "Attribute VB_Name = \"C\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = False\r\nAttribute VB_Description = \"x\"\r\nOption Explicit\r\n"
+            format!("Attribute VB_Name = \"C\"\r\n{base}Attribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = False\r\n{tail}Attribute VB_Description = \"x\"\r\nOption Explicit\r\n")
         );
+        // The header of an exported .cls has no VB_Base: it is completed in Excel's order.
+        let exported = "Attribute VB_Name = \"C\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\nOption Explicit\r\n";
+        assert_eq!(prepare_module_source(ModuleKind::Class, "C", exported, None, ""), format!("Attribute VB_Name = \"C\"\r\n{base}Attribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\n{tail}Option Explicit\r\n"));
         // A complete header is kept verbatim (order included).
-        let full = "Attribute VB_Name = \"C\"\r\nAttribute VB_Exposed = True\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nOption Explicit\r\n";
-        assert_eq!(prepare_module_source(ModuleKind::Class, "C", full, None, ""), full);
+        let full = format!("Attribute VB_Name = \"C\"\r\nAttribute VB_Exposed = True\r\n{base}Attribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\n{tail}Option Explicit\r\n");
+        assert_eq!(prepare_module_source(ModuleKind::Class, "C", &full, None, ""), full);
     }
 
     #[test]
@@ -408,7 +419,7 @@ mod tests {
         let cls = "VERSION 1.0 CLASS\r\nBEGIN\r\n  MultiUse = -1  'True\r\nEND\r\nAttribute VB_Name = \"C\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\nOption Explicit\r\n";
         let s = prepare_module_source(ModuleKind::Class, "C", cls, None, "");
         assert!(s.starts_with("Attribute VB_Name = \"C\"\r\n"));
-        assert!(s.ends_with("Attribute VB_Exposed = False\r\nOption Explicit\r\n"));
+        assert!(s.ends_with("Attribute VB_Customizable = False\r\nOption Explicit\r\n"));
         assert!(!s.contains("VERSION"));
 
         let frm = "VERSION 5.00\r\nBegin {C62A69F0-16DC-11CE-9E98-00AA00574A4F} F \r\n   Caption = \"F\"\r\n   OleObjectBlob = \"F.frx\":0000\r\nEnd\r\nAttribute VB_Name = \"F\"\r\nSub X()\r\nEnd Sub\r\n";

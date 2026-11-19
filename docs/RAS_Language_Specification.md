@@ -275,7 +275,7 @@ const last = Sheet1.lastRow();
 1. **ループ融合（既定）:** 配列メソッドの引数にラムダ式が**直接リテラルで**書かれている場合、クラスを生成せず、呼び出し元にループとして直接展開する。`arr.filter(...).map(...)` のようなチェーンは1本のループに融合する。
 2. **クロージャクラス（エスケープ時のみ）:** ラムダが変数に代入される・関数の引数として渡される・戻り値になる等、呼び出し位置で本体を特定できない場合のみ、従来通りクラスモジュール（`RAS_Lambda_001.cls`）を生成する。
    * キャプチャされた定数はパブリックフィールドとし、生成時にワンタイムコピーする。
-   * 評価メソッド名は `Invoke`。ランタイム（`RAS_Runtime.bas`）から遅延バインディングで呼び出す。
+   * 評価メソッド名は `Apply`。ランタイム（`RAS_Runtime.bas`）から遅延バインディングで呼び出す。`Invoke` は `IDispatch` のメンバー名と衝突し、クラスモジュールではコンパイル エラー（「このメンバー識別子は既にオブジェクト モジュールの中に存在しています」）になるため使えない。
    * リンターは「このラムダはクラスに変換されるため遅い」旨のヒント（Information）を出す。
 
 ### 4.2 コード変換例（ループ融合）
@@ -322,8 +322,8 @@ let result = applyAll(arr, f);
 ```vba
 Public Captured_base As Long
 
-Public Function Invoke(ByVal x As Variant) As Variant
-    Invoke = x * Me.Captured_base
+Public Function Apply(ByVal x As Variant) As Variant
+    Apply = x * Me.Captured_base
 End Function
 ```
 

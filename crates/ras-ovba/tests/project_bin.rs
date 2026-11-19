@@ -183,7 +183,7 @@ fn new_project_reads_back() {
     );
     assert_eq!(
         source_of(&info, "Greeter"),
-        "Attribute VB_Name = \"Greeter\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\nOption Explicit\r\nPublic Name As String\r\n"
+        "Attribute VB_Name = \"Greeter\"\r\nAttribute VB_Base = \"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\nAttribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = False\r\nOption Explicit\r\nPublic Name As String\r\n"
     );
 }
 
@@ -331,9 +331,10 @@ fn source_is_normalised_on_write() {
     assert_eq!(info.codepage, 1252);
     assert_eq!(source_of(&info, "Lf"), "Attribute VB_Name = \"Lf\"\r\nSub A()\r\nEnd Sub\r\n");
     assert_eq!(source_of(&info, "Cr"), "Attribute VB_Name = \"Cr\"\r\nSub B()\r\nEnd Sub\r\n");
+    // An exported .cls has no VB_Base; the stored header is completed the way Excel writes it.
     assert_eq!(
         source_of(&info, "Exported"),
-        "Attribute VB_Name = \"Exported\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = False\r\nOption Explicit\r\n"
+        "Attribute VB_Name = \"Exported\"\r\nAttribute VB_Base = \"0{FCFB3D2A-A0FA-1068-A738-08002B3371B5}\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = False\r\nAttribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = False\r\nOption Explicit\r\n"
     );
 }
 

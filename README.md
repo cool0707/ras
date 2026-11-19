@@ -102,7 +102,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §13 VBA の罠の回避 | 一部 | `Collection` ラッパ、`Range.Find` ラッパ、文字列で指定される名前の存在確認、一時変数の再利用は未実装 |
 | §14.1〜14.8 ライブ同期（RASBridge） | **未実装** | ドリフト検出用ハッシュ、ソースマップ、`Erl` 行番号は実装済み |
 | §14.9 オフライン書き込み・読み出し | 実装済み | 新規ユーザーフォームの作成と再署名は未実装。`vba/` の非管理モジュールをブックへ書き戻す処理は未実装（取り出しのみ） |
-| §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | Excel への接続（`ras_com.node`）は Windows + Excel の実機では未検証。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。`super` 呼び出しを伴う継承は対象外 |
+| §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | Excel への接続（`ras_com.node`）は Excel 2021（64bit）の実機で確認済み。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。`super` 呼び出しを伴う継承は対象外 |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱。`ras typegen` と `vba:` インポートは未実装 |
 | §16.1 JSDoc | 実装済み | 生成 VBA へのコメント・`VB_Description` 出力、`@param` 名の検査 |
 | §16.2 IntelliSense（LSP） | 一部 | 診断・補完・ホバー・定義へ移動・シンボル一覧・整形・CodeLens・「生成 VBA を表示」は実装。パラメーター情報・参照検索・名前変更・インレイヒント・セマンティックトークン・コードアクション・未インポート候補は未実装 |
@@ -117,7 +117,12 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 
 - 自動テスト: `cargo test --workspace`（構文、型チェック、仕様書のコード例と生成 VBA の照合、CLI の一連の流れ、LSP のセッション、`vbaProject.bin` の読み書き）。
 - `ras pack` が出力したブックは、別実装の `ovba` クレートと oletools（`olevba`）で読み直して確認しています（CI でも実行）。
-- **実機の Excel では未検証です。** この開発環境にも CI にも Excel が無いため、生成した VBA を実際に実行したこと、`ras pack` で書き込んだブックを Excel で開いたことはありません。特に `RAS_Runtime.bas` のうち Win32 API や `SAFEARRAY` を直接扱う部分（`RAS_Rebase`、`RAS_Yield`）は、実機での確認が必要です。
+- 実機の Excel（Windows 11、Excel 2021 64bit）で次を確認しています（CI には Excel が無いため手動）:
+  - `ras pack` で書き込んだブックを開いてマクロを実行できること。`crates/ras-compiler/tests/js/semantics.ras` の VBA ビルドの出力が `semantics.out` と一致すること
+  - `RAS_Runtime.bas` の Win32 API・`SAFEARRAY` を扱う部分（`RAS_Rebase` のその場での下限書き換え、`RAS_Yield` の間引き、`sleep` / `waitUntil`）、Range ⇔ 配列の一括転送、`@on` のイベント、アプリケーション状態の復元
+  - Excel が保存したブック（コンパイル済みの p-code 入り）への再 `pack`、開いているブックへの書き込み拒否、`unpack`
+  - デバッグ実行（`ras_com.node`）が開いているブックに接続し、VBA ビルドと同じ結果・エラー番号になること
+- 32bit Office では未検証です（`RAS_Rebase` の 32bit 側のオフセットなど）。
 - VS Code 拡張はパッケージ化と文法テストまで確認済みで、実機の VS Code 上では動かしていません。
 
 ## 開発

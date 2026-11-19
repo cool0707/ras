@@ -321,10 +321,10 @@ Private Sub RAS_QSortBy(ByRef arr As Variant, ByVal lo As Long, ByVal hi As Long
         p = arr((lo + hi) \ 2&)
     End If
     Do While i <= j
-        Do While cmp.Invoke(arr(i), p) < 0
+        Do While cmp.Apply(arr(i), p) < 0
             i = i + 1&
         Loop
-        Do While cmp.Invoke(arr(j), p) > 0
+        Do While cmp.Apply(arr(j), p) > 0
             j = j - 1&
         Loop
         If i <= j Then
@@ -414,7 +414,7 @@ Public Function RAS_WaitUntil(ByVal cond As Object, Optional ByVal timeoutMs As 
     Dim deadline As Double
     deadline = RAS_TickMs() + timeoutMs
     Do
-        If cond.Invoke() Then
+        If cond.Apply() Then
             RAS_WaitUntil = True
             Exit Function
         End If
