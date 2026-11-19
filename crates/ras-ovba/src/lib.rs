@@ -72,7 +72,7 @@ mod xml;
 pub use error::OvbaError;
 pub use opc::workbook_code_names;
 pub use pack::{pack, unpack};
-pub use source::{extract_managed_region, merge_managed_region, RAS_BEGIN_MARKER, RAS_END_MARKER};
+pub use source::{extract_managed_region, merge_managed_region, procedure_names, RAS_BEGIN_MARKER, RAS_END_MARKER};
 pub use vba::{read_project_bin, write_project_bin};
 pub use workbook::{create_workbook, BookKind};
 

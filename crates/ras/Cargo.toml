@@ -16,6 +16,7 @@ ras-syntax.workspace = true
 ras-compiler.workspace = true
 ras-ovba.workspace = true
 ras-lsp.workspace = true
+ras-sync.workspace = true
 clap.workspace = true
 encoding_rs.workspace = true
 notify.workspace = true

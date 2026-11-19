@@ -13,6 +13,8 @@ use ras_compiler::model::ModuleKind;
 use ras_compiler::{query, BuildOptions, BuildOutput, Config, Diagnostic, ModuleId, Program, Severity, SourceInput};
 use serde_json::{json, Value};
 
+mod sync;
+
 type Res<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 const COMMANDS: &[&str] = &["ras.showGeneratedVba", "ras.syncNow", "ras.openInExcel", "ras.runMacro", "ras.listMacros"];
@@ -68,6 +70,17 @@ fn same_file(a: &Path, b: &Path) -> bool {
     a == b || norm(a) == norm(b) || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y)
 }
 
+/// The project on disk, with the sheet code names of its workbook when the file can be read.
+fn load_project(root: &Path) -> Result<(Config, Vec<SourceInput>), String> {
+    let (mut config, sources) = ras_compiler::load_project(root)?;
+    if let Some(book) = config.project.workbook.as_ref().map(|w| root.join(w)).filter(|b| b.is_file()) {
+        if let Ok(names) = ras_ovba::workbook_code_names(&book) {
+            config.sheet_code_names = names.sheets.into_iter().map(|s| s.code_name).collect();
+        }
+    }
+    Ok((config, sources))
+}
+
 struct Server {
     root: Option<PathBuf>,
     /// Unsaved editor contents: path → (uri as sent by the client, text).
@@ -95,17 +108,10 @@ impl Server {
 
     /// Re-analyses the project with the open buffers overlaid.
     fn analyze(&mut self) {
-        let (mut config, mut sources) = match self.root.as_ref().map(|r| ras_compiler::load_project(r)) {
+        let (config, mut sources) = match self.root.as_ref().map(|r| load_project(r)) {
             Some(Ok(x)) => x,
             _ => (Config::default(), Vec::new()),
         };
-        if let Some(root) = &self.root {
-            if let Some(book) = config.project.workbook.as_ref().map(|w| root.join(w)).filter(|b| b.is_file()) {
-                if let Ok(names) = ras_ovba::workbook_code_names(&book) {
-                    config.sheet_code_names = names.sheets.into_iter().map(|s| s.code_name).collect();
-                }
-            }
-        }
         for (path, (_, text)) in &self.open {
             match sources.iter_mut().find(|s| same_file(&s.path, path)) {
                 Some(s) => s.text = text.clone(),
@@ -287,6 +293,21 @@ impl Server {
         }
     }
 
+    /// The commands that talk to Excel are carried out by the sync thread, which answers the request itself.
+    fn sync_job(req: &Request) -> Option<sync::Job> {
+        if req.method != "workspace/executeCommand" {
+            return None;
+        }
+        let args = &req.params["arguments"];
+        let id = req.id.clone();
+        match req.params["command"].as_str()? {
+            "ras.syncNow" => Some(sync::Job::Sync { id, overwrite: args[0]["overwrite"].as_bool().unwrap_or(false) }),
+            "ras.openInExcel" => Some(sync::Job::Open { id }),
+            "ras.runMacro" => Some(sync::Job::Run { id, name: args[0].as_str()?.to_string() }),
+            _ => None,
+        }
+    }
+
     fn execute_command(&self, prog: &Program, p: &Value) -> Value {
         let args = &p["arguments"];
         match p["command"].as_str().unwrap_or("") {
@@ -299,10 +320,6 @@ impl Server {
                 json!({ "moduleName": file.name, "text": file.code, "line": line })
             }
             "ras.listMacros" => json!(self.build.as_ref().map(|b| b.macros.clone()).unwrap_or_default()),
-            "ras.syncNow" | "ras.openInExcel" | "ras.runMacro" => json!({
-                "ok": false,
-                "message": "Excel とのライブ同期はこの版では未実装です。ブックを閉じた状態で `ras pack` を実行すると、VBA プロジェクトへ直接書き込めます。"
-            }),
             _ => Value::Null,
         }
     }
@@ -345,17 +362,23 @@ pub fn run(conn: &Connection) -> Res<()> {
     let mut server = Server { root, open: HashMap::new(), prog: None, build: None, published: HashSet::new() };
     server.analyze();
     server.publish_diagnostics(conn)?;
-    let workbook = server.prog.as_ref().and_then(|p| p.config.project.workbook.clone());
-    conn.sender.send(Message::Notification(Notification::new(
-        "ras/syncStatus".into(),
-        json!({ "connected": false, "workbook": workbook, "pending": 0, "drift": 0, "message": "ライブ同期は未実装です（`ras pack` でオフライン書き込みができます）" }),
-    )))?;
+    let sender = conn.sender.clone();
+    let jobs = sync::spawn(Box::new(move |m| {
+        let _ = sender.send(m);
+    }));
+    if let Some(root) = server.root.clone().filter(|r| r.join("ras.toml").is_file()) {
+        let _ = jobs.send(sync::Job::Root(root));
+    }
 
     for msg in &conn.receiver {
         match msg {
             Message::Request(req) => {
                 if conn.handle_shutdown(&req)? {
                     return Ok(());
+                }
+                if let Some(job) = Server::sync_job(&req) {
+                    let _ = jobs.send(job);
+                    continue;
                 }
                 let result = server.handle_request(&req);
                 respond(conn, req.id, result)?;
@@ -366,7 +389,11 @@ pub fn run(conn: &Connection) -> Res<()> {
                 let changed = match n.method.as_str() {
                     "textDocument/didOpen" => match (doc_path, p["textDocument"]["uri"].as_str(), p["textDocument"]["text"].as_str()) {
                         (Some(path), Some(uri), Some(text)) => {
+                            let before = server.root.clone();
                             server.find_root(&path);
+                            if let Some(root) = server.root.clone().filter(|r| Some(r) != before.as_ref()) {
+                                let _ = jobs.send(sync::Job::Root(root));
+                            }
                             server.open.insert(path, (uri.to_string(), text.to_string()));
                             true
                         }
@@ -385,7 +412,10 @@ pub fn run(conn: &Connection) -> Res<()> {
                         }
                         true
                     }
-                    "textDocument/didSave" | "workspace/didChangeWatchedFiles" => true,
+                    "textDocument/didSave" | "workspace/didChangeWatchedFiles" => {
+                        let _ = jobs.send(sync::Job::Saved);
+                        true
+                    }
                     _ => false,
                 };
                 if changed {
@@ -520,6 +550,47 @@ mod tests {
         assert_eq!(edits[0]["newText"].as_str().unwrap(), good);
 
         request("shutdown", Value::Null);
+        send(Message::Notification(Notification::new("exit".into(), Value::Null)));
+        handle.join().unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without the workbook open in Excel the sync thread reports "not connected" and the commands say why.
+    #[test]
+    fn reports_sync_status_when_the_workbook_is_not_open() {
+        let dir = std::env::temp_dir().join(format!("ras-lsp-sync-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("ras.toml"), "[project]\nname = \"T\"\nworkbook = \"Book.xlsm\"\n").unwrap();
+        std::fs::write(dir.join("src").join("main.ras"), "export function run() {\n}\n").unwrap();
+
+        let (server_conn, client) = Connection::memory();
+        let handle = std::thread::spawn(move || run(&server_conn).map_err(|e| e.to_string()));
+        let send = |m: Message| client.sender.send(m).unwrap();
+        let mut status = None;
+        let mut wait_for = |id: i32| loop {
+            match client.receiver.recv_timeout(std::time::Duration::from_secs(30)).unwrap() {
+                Message::Response(r) if r.id == id.into() => return r.result.unwrap_or(Value::Null),
+                Message::Notification(n) if n.method == "ras/syncStatus" => status = Some(n.params),
+                _ => {}
+            }
+        };
+        send(Message::Request(Request { id: 1.into(), method: "initialize".into(), params: json!({ "rootUri": path_to_uri(&dir), "capabilities": {} }) }));
+        wait_for(1);
+        send(Message::Notification(Notification::new("initialized".into(), json!({}))));
+        send(Message::Notification(Notification::new("textDocument/didSave".into(), json!({ "textDocument": { "uri": path_to_uri(&dir.join("src").join("main.ras")) } }))));
+        send(Message::Request(Request { id: 2.into(), method: "workspace/executeCommand".into(), params: json!({ "command": "ras.syncNow", "arguments": [] }) }));
+        let sync = wait_for(2);
+        assert_eq!(sync["ok"], false, "{sync}");
+        assert!(sync["message"].as_str().is_some_and(|m| !m.is_empty()), "{sync}");
+        send(Message::Request(Request { id: 3.into(), method: "workspace/executeCommand".into(), params: json!({ "command": "ras.runMacro", "arguments": ["Main.run"] }) }));
+        assert_eq!(wait_for(3)["ok"], false);
+        send(Message::Request(Request { id: 4.into(), method: "shutdown".into(), params: Value::Null }));
+        wait_for(4);
+        let status = status.expect("a ras/syncStatus notification");
+        assert_eq!(status["connected"], false, "{status}");
+        assert_eq!(status["pending"], 0, "{status}");
+        assert!(status["workbook"].as_str().is_some_and(|w| w.ends_with("Book.xlsm")), "{status}");
         send(Message::Notification(Notification::new("exit".into(), Value::Null)));
         handle.join().unwrap().unwrap();
         let _ = std::fs::remove_dir_all(&dir);

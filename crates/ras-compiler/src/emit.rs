@@ -233,6 +233,16 @@ pub fn has_drifted(code: &str) -> Option<bool> {
     Some(drift_hash(&normalized) != recorded)
 }
 
+/// True when two code-pane texts are the same code, ignoring line terminators, trailing blank
+/// lines and what the VBE rewrites by itself (see [`drift_hash`]).
+pub fn same_code(a: &str, b: &str) -> bool {
+    fn normalized(code: &str) -> String {
+        let text = code.replace("\r\n", "\n").replace('\r', "\n");
+        text.trim_end_matches('\n').split('\n').map(|l| format!("{l}\r\n")).collect()
+    }
+    a == b || drift_hash(&normalized(a)) == drift_hash(&normalized(b))
+}
+
 /// Hash of module code that ignores what the VBE rewrites by itself when a book is saved:
 /// the casing of identifiers (unified across the project, e.g. `Err.Source` -> `Err.source`
 /// once a class declares `source`) and the spelling of numeric literals (`0.1#` -> `0.1`,
@@ -355,6 +365,13 @@ mod tests {
         assert_eq!(has_drifted(&code), Some(false));
         assert_eq!(has_drifted(&code.replace("Sub A", "Sub B")), Some(true));
         assert_eq!(has_drifted("Sub A()\r\nEnd Sub\r\n"), None);
+    }
+
+    #[test]
+    fn same_code_ignores_line_ends_and_vbe_rewrites() {
+        assert!(same_code("Sub A()\r\n    x = 0.1#\r\nEnd Sub\r\n", "Sub A()\n    X = 0.1\nEnd Sub"));
+        assert!(same_code("", "\r\n"));
+        assert!(!same_code("Sub A()\r\nEnd Sub\r\n", "Sub B()\r\nEnd Sub\r\n"));
     }
 
     #[test]
