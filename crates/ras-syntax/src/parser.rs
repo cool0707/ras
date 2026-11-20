@@ -1533,7 +1533,18 @@ impl<'a> Parser<'a> {
                 self.error("スプレッド引数には対応していません");
                 self.bump();
             }
-            self.expr();
+            if self.nth_is_name(0) && self.nth(1) == COLON {
+                // Named argument `name: value` (spec §3.3).
+                self.start(NAMED_ARG);
+                self.start(NAME);
+                self.bump();
+                self.finish();
+                self.bump(); // :
+                self.expr();
+                self.finish();
+            } else {
+                self.expr();
+            }
             if !self.eat(COMMA) || self.spos == before {
                 break;
             }

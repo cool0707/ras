@@ -419,6 +419,9 @@ pub enum ExprKind {
     As { expr: Box<Expr>, ty: TypeRef },
     InstanceOf { expr: Box<Expr>, ty: TypeRef },
     NonNull(Box<Expr>),
+    /// `name: value` — only directly inside the argument list of a call or `new` (spec §3.3).
+    /// `hole` is a spare id for the `undefined` that fills each skipped parameter.
+    NamedArg { name: Ident, value: Box<Expr>, hole: ExprId },
     Error,
 }
 

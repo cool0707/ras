@@ -208,7 +208,9 @@ impl<'p> Gen<'p> {
                 format!("({c} ? {t} : {f})")
             }
             ExprKind::Call { .. } => self.call(e),
-            ExprKind::New { ty, args } => self.new_expr(e, ty, args),
+            ExprKind::New { ty, args } => self.new_expr(e, ty, self.info().call_args(e.id, args)),
+            // Reordered into the call's arguments by the checker (spec §3.3).
+            ExprKind::NamedArg { value, .. } => self.expr(value),
             ExprKind::Member { object, name, optional } => self.member_expr(e, object, &name.text, *optional),
             ExprKind::Index { object, index } => self.index_expr(object, index),
             ExprKind::As { expr, .. } => {
@@ -670,6 +672,7 @@ impl<'p> Gen<'p> {
 
     pub(crate) fn call(&mut self, e: &Expr) -> String {
         let ExprKind::Call { callee, args, .. } = &e.kind else { return "undefined".into() };
+        let args = self.info().call_args(e.id, args);
         let Some(ci) = self.info().calls.get(&e.id) else { return "undefined".into() };
         let c = callee.peel();
         let recv = match &c.kind {

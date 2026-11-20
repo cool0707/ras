@@ -10,6 +10,8 @@ class Circle implements Shape {
 }
 struct Point { x: int; y: int; }
 struct Pt { x: int; y: int; tag?: string; }
+function label(a: int, b: int = 2, c: string = "x"): string { return `${a}/${b}/${c}`; }
+function bump(byref n: int, by: int = 1): void { n += by; }
 
 function mkPt(x: int, y: int): Pt {
     return { x, y };
@@ -132,4 +134,7 @@ export function run() {
     pm.set("c", pts[2]);
     console.log("struct2", sumX(pts), px, py, dq, dr, acc, anon.name, anon.n, sw.x, sw.y, pts[0].tag);
     console.log("structmap", pm.size, pm.has("a"), pm.get("b").x, pm.get("zz").y, pm.keys().join(""), pm.values().length, pm.get("c").tag);
+    let k = 1;
+    bump(by: 5, n: k);
+    console.log("named", label(a: 123, c: "あいう"), label(1, c: "z"), label(c: "q", b: 7, a: 0), new Circle(r: 1).radius, k);
 }

@@ -573,11 +573,20 @@ pub struct TypeInfo {
     pub decl_globals: HashMap<u32, VarId>,
     /// Unqualified `Cells` / `Range` calls inside `ws.Range(...)` that get the receiver prepended (spec §13.4).
     pub auto_qualified: std::collections::HashSet<ExprId>,
+    /// Calls with named arguments (spec §3.3) → their arguments in parameter order. A skipped
+    /// parameter is an `undefined` expression; the values keep their ids.
+    pub positional_args: HashMap<ExprId, Rc<[ast::Expr]>>,
 }
 
 impl TypeInfo {
     pub fn ty(&self, id: ExprId) -> Type {
         self.expr_types.get(id as usize).cloned().unwrap_or(Type::Error)
+    }
+
+    /// The arguments of call (or `new`) `call` in parameter order: `args` unless named
+    /// arguments were reordered (spec §3.3).
+    pub fn call_args<'a>(&'a self, call: ExprId, args: &'a [ast::Expr]) -> &'a [ast::Expr] {
+        self.positional_args.get(&call).map(|v| &v[..]).unwrap_or(args)
     }
 }
 

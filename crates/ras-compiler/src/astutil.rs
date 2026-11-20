@@ -88,7 +88,7 @@ pub fn walk_expr<'a>(e: &'a Expr, fs: &mut dyn FnMut(&'a Stmt) -> bool, fe: &mut
                 }
             }
         }
-        ExprKind::Paren(x) | ExprKind::NonNull(x) => walk_expr(x, fs, fe),
+        ExprKind::Paren(x) | ExprKind::NonNull(x) | ExprKind::NamedArg { value: x, .. } => walk_expr(x, fs, fe),
         ExprKind::Array(items) => {
             for i in items {
                 walk_expr(i, fs, fe);

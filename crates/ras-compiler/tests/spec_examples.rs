@@ -112,6 +112,63 @@ function demo(name: string, id: string): int {
 }
 
 #[test]
+fn spec_3_3_named_arguments() {
+    let src = r#"
+function label(a: int, b: int = 2, c: string = "x"): string { return `${a}${b}${c}`; }
+function bump(byref n: int, by: int = 1): void { n += by; }
+class Box {
+    w: int; h: int;
+    constructor(w: int, h: int = 1) { this.w = w; this.h = h; }
+    resize(dw: int, dh: int = 0): void { this.w += dw; this.h += dh; }
+}
+export function lastRow(this: Excel.Worksheet, col: int = 1, base: int = 0): int {
+    return this.cells(this.rows.count, col).end(xlUp).row + base;
+}
+export function demo() {
+    const s1 = label(a: 123, c: "abc");
+    const s2 = label(1, c: "z");
+    let k = 0;
+    bump(by: 3, n: k);
+    const bx = new Box(h: 2, w: 1);
+    bx.resize(dh: 5, dw: 2);
+    const n = Sheet1.lastRow(base: 5);
+    const r = Sheet1.range("A:A").find("x", lookAt: xlWhole, matchCase: true);
+    msgBox("hi", title: "t");
+}
+"#;
+    let mut cfg = config();
+    cfg.opt_override = Some(0);
+    let (_, out) = compile_with(&[("main", src)], cfg);
+    let m = code(&out, "Main");
+    // Skipped parameters of RAS functions get their defaults; host members get an empty slot.
+    assert_contains(&m, "    s1 = label(123&, 2&, \"abc\")\n    s2 = label(1&, 2&, \"z\")\n");
+    assert_contains(&m, "    bump k, 3&\n");
+    assert_contains(&m, "    Set bx = Main.New_Box(1&, 2&)\n    bx.resize 2&, 5&\n");
+    assert_contains(&m, "    n = lastRow(Sheet1, 1&, 5&)\n");
+    assert_contains(&m, "    Set r = Sheet1.Range(\"A:A\").Find(\"x\",,, xlWhole,,, True)\n");
+    assert_contains(&m, "    MsgBox \"hi\",, \"t\"\n");
+
+    let decl = "function f(a: int, b: int = 2, c: string = \"x\"): string { return c; }\nfunction g(): void {}\n";
+    let cases: &[(&str, &str)] = &[
+        ("f(a: 1, d: 2);", "E0412"),
+        ("f(a: 1, A: 2);", "E0412"),
+        ("f(a: 1, 2);", "E0413"),
+        ("f(1, a: 2);", "E0413"),
+        ("f(c: \"q\");", "E0414"),
+        ("g(x: 1);", "E0412"),
+        ("const h = (x: int) => x; h(x: 1);", "E0411"),
+        ("const o: any = null; o.foo(a: 1);", "E0411"),
+        ("const xs = [1]; xs.push(value: 2);", "E0411"),
+        ("f(a: \"s\");", "E0301"),
+    ];
+    for (body, want) in cases {
+        let text = format!("{decl}export function t() {{ {body} }}\n");
+        let codes = error_codes(&[("main", &text)]);
+        assert!(codes.contains(want), "{body}: expected {want}, got {codes:?}");
+    }
+}
+
+#[test]
 fn spec_2_4_generics_are_monomorphized() {
     let src = r#"
 export function maxOf<T extends Comparable>(this: T[]): T {
