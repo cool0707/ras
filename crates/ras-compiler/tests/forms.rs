@@ -407,7 +407,8 @@ fn common_form_code_converts() {
 /// The example of spec §14.11.2 compiles.
 #[test]
 fn spec_example_compiles() {
-    let text = include_str!("../../../docs/RAS_Language_Specification.md");
+    // A checkout on Windows may have CR LF line ends.
+    let text = include_str!("../../../docs/RAS_Language_Specification.md").replace("\r\n", "\n");
     let start = text.find("// forms/frmInput.ras\n").unwrap();
     let example = &text[start..start + text[start..].find("```").unwrap()];
     let (diags, files) = compile(example, &[("main", "export function run() {\n    frmInput.show();\n    msgBox(frmInput.enteredName());\n}\n")]);
