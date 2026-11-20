@@ -3,6 +3,7 @@
 // decides everything else (values, focus, closing), so the panel keeps no state of its own.
 import "./formRunner.css";
 import { contentInsets, oleToCss, px } from "../../src/formRunner/protocol";
+import { columnLayout, textColumnIndex } from "../../src/userForm/listItems";
 import type { ControlSnapshot, ControlState, FontState, FormState, PanelMessage, UserAction } from "../../src/formRunner/protocol";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -169,8 +170,17 @@ function create(c: ControlSnapshot): View {
 			datalist.id = listId;
 			// The drop button of MSForms, drawn over the field (clicks go through to it).
 			const symbol = el("span", "combo-chevron", el("span", "combo-arrow", root));
+			let shownList: string[] = [];
 			view.update = (s, enabled) => {
-				const list = (s.list ?? []).map((row) => row.join("  "));
+				// The drop-down shows the columns of ColumnCount; the field holds the TextColumn.
+				const rows = s.list ?? [];
+				const widths = columnLayout(s.state.ColumnCount, s.state.ColumnWidths, num(s.state.Width), Math.max(1, ...rows.map((r) => r.length)));
+				const shown = textColumnIndex(s.state.TextColumn, widths);
+				// Columns 0 wide are hidden, in the drop-down as in the field.
+				const list = rows.map((row, i) =>
+					widths.length > 1 ? row.slice(0, widths.length).filter((_, n) => widths[n] > 0).join("  ") : shown < 0 ? String(i) : (row[shown] ?? ""),
+				);
+				shownList = list;
 				const dropDownList = num(s.state.Style) === 2;
 				const button = num(s.state.ShowDropButtonWhen, 2);
 				root.classList.toggle("drop-never", button === 0);
@@ -203,7 +213,7 @@ function create(c: ControlSnapshot): View {
 						field.addEventListener("input", (e) => {
 							// Picking from the list replaces the whole text.
 							const picked = (e as InputEvent).inputType === "insertReplacementText" || (e as InputEvent).inputType === undefined;
-							const index = picked ? (state?.controls.find((x) => x.name === name)?.list ?? []).findIndex((row) => row.join("  ") === field.value || row[0] === field.value) : -1;
+							const index = picked ? shownList.indexOf(field.value) : -1;
 							if (index >= 0) send({ t: "select", control: name, index });
 							else sendInput(name, field.value);
 						});
@@ -220,23 +230,85 @@ function create(c: ControlSnapshot): View {
 			break;
 		}
 		case "ListBox": {
-			const select = el("select", "field", root);
-			focusable(view, select, name);
-			select.addEventListener("change", () => {
-				const options = [...select.options];
-				if (select.multiple) send({ t: "select", control: name, index: select.selectedIndex, selected: options.map((o) => o.selected) });
-				else send({ t: "select", control: name, index: select.selectedIndex });
+			// Drawn here rather than by a <select>, which has no columns: the rows of the items
+			// in the columns of ColumnCount / ColumnWidths, under a row of headings (ColumnHeads).
+			const box = el("div", "field listbox", root);
+			box.tabIndex = 0;
+			box.setAttribute("role", "listbox");
+			focusable(view, box, name);
+			let current: ControlSnapshot = c;
+			let enabled = true;
+			let anchor = -1;
+			const choose = (index: number, e?: MouseEvent | KeyboardEvent) => {
+				if (!enabled || index < 0 || index >= (current.list ?? []).length) return;
+				const mode = num(current.state.MultiSelect);
+				if (mode === 0) return send({ t: "select", control: name, index });
+				const selected = (current.list ?? []).map((_, i) => !!current.selected?.[i]);
+				if (mode === 1 || e?.ctrlKey || e?.metaKey) {
+					// Multi: a click turns an item on or off; Extended with Ctrl the same.
+					selected[index] = !selected[index];
+					anchor = index;
+				} else if (e?.shiftKey && anchor >= 0) {
+					selected.forEach((_, i) => (selected[i] = i >= Math.min(anchor, index) && i <= Math.max(anchor, index)));
+				} else {
+					selected.forEach((_, i) => (selected[i] = i === index));
+					anchor = index;
+				}
+				send({ t: "select", control: name, index, selected });
+			};
+			box.addEventListener("click", (e) => {
+				const row = (e.target as HTMLElement).closest<HTMLElement>(".lb-row");
+				if (row) choose(Number(row.dataset.index), e);
 			});
-			view.update = (s, enabled) => {
-				const list = (s.list ?? []).map((row) => row.join("  "));
-				select.multiple = num(s.state.MultiSelect) !== 0;
-				select.size = Math.max(2, list.length);
-				fillOptions(select, list);
-				const selected = s.selected ?? [];
-				[...select.options].forEach((o, i) => (o.selected = !!selected[i]));
-				if (!select.multiple && !selected.some(Boolean)) select.selectedIndex = -1;
-				select.disabled = !enabled || bool(s.state.Locked);
-				colors(select, s.state);
+			box.addEventListener("keydown", (e) => {
+				const count = (current.list ?? []).length;
+				const at = current.listIndex ?? -1;
+				const next = e.key === "ArrowDown" ? Math.min(count - 1, at + 1) : e.key === "ArrowUp" ? Math.max(0, at - 1) : e.key === "Home" ? 0 : e.key === "End" ? count - 1 : undefined;
+				if (next !== undefined) {
+					e.preventDefault();
+					if (num(current.state.MultiSelect) === 0) choose(next, e);
+					else send({ t: "select", control: name, index: next, selected: (current.list ?? []).map((_, i) => !!current.selected?.[i]) });
+				} else if (e.key === " " && num(current.state.MultiSelect) !== 0) {
+					e.preventDefault();
+					choose(at, e);
+				}
+			});
+			let drawn = "";
+			view.update = (s, on) => {
+				current = s;
+				enabled = on && !bool(s.state.Locked);
+				const rows = s.list ?? [];
+				const optionBox = num(s.state.ListStyle) === 1 ? (num(s.state.MultiSelect) !== 0 ? "check" : "option") : "";
+				const widths = columnLayout(s.state.ColumnCount, s.state.ColumnWidths, Math.max(0, num(s.state.Width) - 4), Math.max(1, ...rows.map((r) => r.length)));
+				const cells = widths.length > 1 || bool(s.state.ColumnHeads);
+				const key = JSON.stringify([rows, widths, cells, optionBox, bool(s.state.ColumnHeads)]);
+				if (key !== drawn) {
+					drawn = key;
+					while (box.firstChild) box.firstChild.remove();
+					const line = (row: string[], node: HTMLElement) => {
+						if (!cells) return void (el("span", "lb-text", node).textContent = row[0] ?? "");
+						widths.forEach((w, i) => {
+							const cell = el("span", "lb-cell", node);
+							cell.style.width = px(w);
+							cell.textContent = row[i] ?? "";
+						});
+					};
+					if (bool(s.state.ColumnHeads)) line([], el("div", "lb-heads", box));
+					rows.forEach((row, index) => {
+						const node = el("div", "lb-row", box);
+						node.dataset.index = String(index);
+						node.setAttribute("role", "option");
+						if (optionBox) el("span", `lb-box ${optionBox}`, node);
+						line(row, node);
+					});
+				}
+				[...box.querySelectorAll<HTMLElement>(".lb-row")].forEach((node, index) => {
+					node.classList.toggle("selected", !!s.selected?.[index]);
+					node.classList.toggle("current", index === s.listIndex);
+					node.setAttribute("aria-selected", String(!!s.selected?.[index]));
+				});
+				box.classList.toggle("disabled", !on);
+				colors(box, s.state);
 			};
 			break;
 		}

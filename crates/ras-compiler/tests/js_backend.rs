@@ -289,7 +289,7 @@ fn forms_run_with_a_host() {
     let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_forms.js")));
     assert!(ok, "{stderr}");
     let expected = "\
-show frmInput modal=true \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox chkMaybe:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton btnOK:CommandButton btnBoom:CommandButton
+show frmInput modal=true \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox chkMaybe:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton lstStaff:ListBox btnOK:CommandButton btnBoom:CommandButton
 draw txtName= seq=undefined
 focus txtName
 draw txtName=NG seq=1
@@ -318,10 +318,10 @@ focus btnBoom
 QueryClose mode=0
 focus btnBoom
 hide
-YAMADA/予約:1/3/false/3/1
+YAMADA/予約:1/3/false/3/1/002:佐藤:山田
 QueryClose mode=1
 Terminate
-show frmInput modal=false \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox chkMaybe:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton btnOK:CommandButton btnBoom:CommandButton
+show frmInput modal=false \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox chkMaybe:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton lstStaff:ListBox btnOK:CommandButton btnBoom:CommandButton
 draw txtName= seq=undefined
 focus txtName
 end 入力 1

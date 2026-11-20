@@ -7,7 +7,7 @@
 
 import type { PropertyDescriptor } from "./protocol";
 
-export type ValueType = "string" | "number" | "integer" | "boolean" | "any" | "stringArray" | "object" | "objectArray";
+export type ValueType = "string" | "number" | "integer" | "boolean" | "any" | "stringArray" | "listItems" | "object" | "objectArray";
 export type SupportLevel = "supported" | "best-effort" | "observed-only" | "snapshot-only" | "custom/unchecked";
 
 export interface PropertyContract {
@@ -143,7 +143,7 @@ const typed = (...entries: string[]) => {
 };
 const listControl = (): Record<string, PropertyContract> => ({
 	...typed("text", "Displayed text.", "value", "Current control value."),
-	list: { ...p("stringArray", false, "supported", "List items; generated code in UserForm_Initialize fills the list.", true), editor: "list" },
+	list: { ...p("listItems", false, "supported", "List items (a string, or an array of the strings of its columns); generated code in UserForm_Initialize fills the list.", true), editor: "list" },
 	selectedIndex: p("integer", false, "supported", "Zero-based selected item of list, or -1 for none; set by generated code in UserForm_Initialize.", true),
 });
 
@@ -207,6 +207,11 @@ export const scalarProperties: Scalar[] = [
 	["listRows", ["ComboBox"], integer("Rows shown in the drop-down list.", 0, 32767)],
 	["listWidth", ["ComboBox"], pointsUpTo("Width of the drop-down list in points; 0 for the control's width.", 72000)],
 	["multiSelect", ["ListBox"], choice("Selection: Single, Multi, Extended.", [0, 1, 2]), ["Single", "Multi", "Extended"]],
+	["columnCount", ["ComboBox", "ListBox"], integer("Columns shown; -1 for all the columns of the items.", -1, 32767)],
+	["columnWidths", ["ComboBox", "ListBox"], p("string", false, "supported", "Width of each column, separated by ; (\"72 pt;;1 in\"); an empty entry is worked out.", true)],
+	["boundColumn", ["ComboBox", "ListBox"], integer("Column that gives Value (1 for the first); 0 for the row number.", 0, 32767)],
+	["textColumn", ["ComboBox", "ListBox"], integer("Column that gives Text (1 for the first); -1 for the first that is wider than 0, 0 for the row number.", -1, 32767)],
+	["columnHeads", ["ComboBox", "ListBox"], flag("A row of column headings above the items.")],
 	["tripleState", ["CheckBox", "OptionButton", "ToggleButton"], flag("A click also gives Null (not for an OptionButton).")],
 	["groupName", ["OptionButton"], p("string", false, "supported", "Option buttons of the same group exclude each other.", true)],
 	["specialEffect", ["TextBox", "ComboBox", "ListBox", "Label", "Image", "Frame"], choice("3D look of the edge.", effects), effectLabels],

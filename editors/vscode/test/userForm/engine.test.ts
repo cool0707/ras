@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { applyOperations, copyControls } from "../../src/userForm/engine";
 import { bodyIndent, eventsForType, eventTarget, findHandler, findVbaHandler, handlerText, jsName, rasParams, vbaBodyIndent, vbaHandlerText } from "../../src/userForm/events";
 import { formatJson, minimalEdit } from "../../src/userForm/jsonSource";
-import { listToText, textToList } from "../../src/userForm/listItems";
+import { columnLayout, itemColumns, listToText, parseColumnWidths, textColumnIndex, textToList } from "../../src/userForm/listItems";
 import { designerDocument, toggleState } from "../../src/userForm/model";
 import { isWebviewMessage } from "../../src/userForm/protocol";
 import type { SemanticOperation } from "../../src/userForm/protocol";
@@ -287,6 +287,41 @@ describe("FormSpec editing", () => {
 		assert.equal(textToList(""), null);
 		assert.equal(textToList("\n\n"), null);
 		assert.deepEqual(textToList(listToText(["x", "y"])), ["x", "y"]);
+		// The columns of an item are separated by tabs (as Excel copies a range).
+		assert.equal(listToText([["001", "山田"], "002", ["003", ""]]), "001\t山田\n002\n003\t");
+		assert.deepEqual(textToList("001\t山田\n002\n003\t"), [["001", "山田"], "002", ["003", ""]]);
+		assert.equal(listToText([["a", 1]]), "");
+	});
+
+	it("lays out the columns of a list as MSForms does", () => {
+		assert.deepEqual(parseColumnWidths("72 pt;;1 in;2.54cm;-1;x"), [72, undefined, 72, 72, undefined, undefined]);
+		assert.deepEqual(parseColumnWidths(""), []);
+		// One column takes the whole width; the open columns share what is left (72pt each at least).
+		assert.deepEqual(columnLayout(undefined, undefined, 120, 3), [120]);
+		assert.deepEqual(columnLayout(3, "30;60", 200, 3), [30, 60, 110]);
+		assert.deepEqual(columnLayout(3, "30", 100, 3), [30, 72, 72]);
+		assert.deepEqual(columnLayout(-1, "", 150, 2), [75, 75]);
+		// TextColumn: -1 the first column wider than 0, 0 the row number, n the n-th.
+		assert.equal(textColumnIndex(-1, [0, 72]), 1);
+		assert.equal(textColumnIndex(undefined, [72, 72]), 0);
+		assert.equal(textColumnIndex(0, [72]), -1);
+		assert.equal(textColumnIndex(2, [72, 72]), 1);
+		assert.deepEqual(itemColumns("a"), ["a"]);
+	});
+
+	it("edits a list of several columns", () => {
+		let text = form([{ id: "lb", name: "List1", type: "ListBox", left: 8, top: 8, width: 120, height: 60 }]);
+		const set = (field: string, value: unknown): SemanticOperation => ({ type: "setControlProperty", controlId: "lb", field, value });
+		text = apply(text, set("list", [["1", "a"], "2"]), set("columnCount", 2), set("columnWidths", "36 pt;"), set("boundColumn", 2), set("textColumn", 1), set("columnHeads", true));
+		const lb = control(text, "lb");
+		assert.deepEqual([lb.list, lb.columnCount, lb.columnWidths, lb.boundColumn, lb.columnHeads], [[["1", "a"], "2"], 2, "36 pt;", 2, true]);
+		rejects(text, [set("list", [["1", 2]])], "UFE003");
+		rejects(text, [set("columnWidths", "wide")], "UFV021");
+		rejects(text, [set("list", [["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]])], "UFV021");
+		rejects(text, [set("columnCount", -2)]);
+		const edit = (operation: unknown) => isWebviewMessage({ type: "edit", requestId: 1, version: 1, operations: [operation] });
+		assert.equal(edit({ type: "setControlProperty", controlId: "lb", field: "list", value: [["a", "b"], "c"] }), true);
+		assert.equal(edit({ type: "setControlProperty", controlId: "lb", field: "list", value: [["a", 1]] }), false);
 	});
 
 	it("accepts list and picture edits from the webview", () => {
@@ -467,7 +502,7 @@ describe("FormSpec validation and metadata", () => {
 		const descriptor = (id: string, field: string) => grid.controls[id].descriptors.find((d) => d.field === field);
 		assert.deepEqual(descriptor("img", "picture")?.children?.map((d) => d.field), ["path", "remove"]);
 		assert.deepEqual(grid.controls.img.values.picture, { present: true, value: { path: "logo.bmp" } });
-		assert.deepEqual([descriptor("lb", "list")?.valueType, descriptor("lb", "list")?.editor], ["stringArray", "list"]);
+		assert.deepEqual([descriptor("lb", "list")?.valueType, descriptor("lb", "list")?.editor], ["listItems", "list"]);
 		assert.deepEqual(grid.controls.lb.values.list.value, ["a", "b"]);
 		assert.equal(descriptor("lb", "selectedIndex")?.valueType, "integer");
 		assert.deepEqual(grid.form.descriptors.map((d) => d.field), ["backColor", "borderStyle", "caption", "font", "foreColor", "height", "name", "width"]);

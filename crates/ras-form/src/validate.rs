@@ -85,6 +85,9 @@ fn matches_type(value: &Value, value_type: ValueType) -> bool {
         (ValueType::Integer, v) => is_integer(v),
         (ValueType::Boolean, v) => v.is_boolean(),
         (ValueType::StringArray, Value::Array(items)) => items.iter().all(Value::is_string),
+        (ValueType::ListItems, Value::Array(items)) => items.iter().all(|item| {
+            item.is_string() || item.as_array().is_some_and(|row| row.iter().all(Value::is_string))
+        }),
         (ValueType::Object, v) => v.is_object(),
         (ValueType::ObjectArray, Value::Array(items)) => items.iter().all(Value::is_object),
         _ => false,
@@ -1284,6 +1287,16 @@ fn validate_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
         ));
     }
     if is("ComboBox") || is("ListBox") {
+        // AddItem and List(row, column) fill at most 10 columns of a list
+        // that is not bound to cells.
+        for (index, item) in control.list.iter().flatten().enumerate() {
+            if !(1..=10).contains(&item.columns().len()) {
+                issues.push(appearance_issue(
+                    &format!("{path}.list[{index}]"),
+                    "list の項目の列は 1〜10 個にしてください。".into(),
+                ));
+            }
+        }
         // The selection is set by generated code after the items were
         // added: it has to name one of them (or none, -1).
         if let Some(index) = control.selected_index {

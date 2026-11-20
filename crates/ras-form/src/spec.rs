@@ -136,9 +136,10 @@ pub struct FormSpecControl {
     #[allow(missing_docs)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible: Option<bool>,
-    /// ComboBox / ListBox items (observed only; not generated).
+    /// ComboBox / ListBox items, filled by generated code (`codebehind`): a
+    /// string per item, or the strings of the columns of an item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub list: Option<Vec<String>>,
+    pub list: Option<Vec<FormSpecListItem>>,
     /// TabStrip tabs; `None` = unspecified, `Some([])` = no tabs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tabs: Option<Vec<FormSpecTab>>,
@@ -195,6 +196,32 @@ impl FormSpecControl {
             .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .map(|(_, v)| v)
             .filter(|v| !v.is_null())
+    }
+}
+
+/// One item of a ComboBox / ListBox: its text, or the texts of its columns.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FormSpecListItem {
+    /// An item of one column.
+    Text(String),
+    /// The columns of an item, from the first.
+    Row(Vec<String>),
+}
+
+impl FormSpecListItem {
+    /// The texts of the item's columns.
+    pub fn columns(&self) -> &[String] {
+        match self {
+            FormSpecListItem::Text(text) => std::slice::from_ref(text),
+            FormSpecListItem::Row(row) => row,
+        }
+    }
+}
+
+impl From<&str> for FormSpecListItem {
+    fn from(text: &str) -> Self {
+        FormSpecListItem::Text(text.to_string())
     }
 }
 

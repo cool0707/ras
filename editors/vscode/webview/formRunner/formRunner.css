@@ -243,6 +243,100 @@ body {
 	border-top-color: var(--ms-shadow);
 }
 
+/* ListBox: rows of items, in columns under a row of headings. */
+.ctl .listbox {
+	overflow: auto;
+	padding: 1px;
+	cursor: default;
+	user-select: none;
+}
+
+.ctl .listbox.disabled {
+	color: var(--ms-shadow);
+}
+
+.ctl .lb-row,
+.ctl .lb-heads {
+	display: flex;
+	align-items: center;
+	min-height: 1.25em;
+	white-space: pre;
+}
+
+.ctl .lb-row.selected {
+	background: var(--ms-select);
+	color: #fff;
+}
+
+.ctl .listbox:focus-visible .lb-row.current {
+	outline: 1px dotted var(--ms-text);
+	outline-offset: -1px;
+}
+
+.ctl .lb-text,
+.ctl .lb-cell {
+	flex: none;
+	box-sizing: border-box;
+	overflow: hidden;
+	padding-right: 3px;
+}
+
+.ctl .lb-heads {
+	border-bottom: 1px solid var(--ms-shadow);
+}
+
+.ctl .lb-heads .lb-cell {
+	min-height: 1.25em;
+	border-right: 1px solid var(--ms-shadow);
+	background: var(--ms-face);
+}
+
+/* ListStyle Option: a box before each item marks it, instead of the highlight. */
+.ctl .lb-box {
+	flex: none;
+	position: relative;
+	box-sizing: border-box;
+	width: 11px;
+	height: 11px;
+	margin-right: 3px;
+	border: 1px solid;
+	border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+	background: var(--ms-window);
+}
+
+.ctl .lb-box.option {
+	border-radius: 50%;
+}
+
+.ctl .listbox:has(.lb-box) .lb-row.selected {
+	background: none;
+	color: inherit;
+}
+
+.ctl .lb-row.selected .lb-box.check::after {
+	content: "";
+	position: absolute;
+	left: 2px;
+	top: 0;
+	width: 3px;
+	height: 6px;
+	border: solid var(--ms-text);
+	border-width: 0 2px 2px 0;
+	transform: rotate(40deg);
+}
+
+.ctl .lb-row.selected .lb-box.option::after {
+	content: "";
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	width: 3px;
+	height: 3px;
+	border-radius: 50%;
+	background: var(--ms-text);
+	transform: translate(-50%, -50%);
+}
+
 .ctl select.field option:checked {
 	background: var(--ms-select) linear-gradient(var(--ms-select), var(--ms-select));
 	color: #fff;

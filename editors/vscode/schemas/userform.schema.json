@@ -219,12 +219,26 @@
           "text": {
             "type": "string"
           },
-          "value": {},
+          "value": {
+            "description": "値。CheckBox / OptionButton / ToggleButton は true / false（\"True\" / \"False\"、0 / 1 / -1 も可）か、どちらでもない状態の \"Null\""
+          },
           "list": {
             "type": "array",
-            "description": "ComboBox / ListBox の項目。フォームの初期化時（UserForm_Initialize）に生成コードが設定します",
+            "description": "ComboBox / ListBox の項目。フォームの初期化時（UserForm_Initialize）に生成コードが設定します。複数の列を持つ項目は、列ごとの文字列の配列（1〜10 列）で書きます",
             "items": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "maxItems": 10
+                }
+              ]
             }
           },
           "selectedIndex": {
@@ -425,6 +439,44 @@
               2
             ],
             "description": "ListBox の選択方法。0: Single、1: Multi、2: Extended"
+          },
+          "columnCount": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 32767,
+            "description": "ComboBox / ListBox の表示する列の数（-1 は項目のすべての列）"
+          },
+          "columnWidths": {
+            "type": "string",
+            "description": "ComboBox / ListBox の各列の幅を ; で区切ったもの（\"72 pt;;1 in\"）。単位は pt（省略時）・in・cm。空の欄と -1 は自動"
+          },
+          "boundColumn": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32767,
+            "description": "Value にする列（1 から数える）。0 は行の番号"
+          },
+          "textColumn": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 32767,
+            "description": "Text にする列（1 から数える）。-1 は幅が 0 でない最初の列、0 は行の番号"
+          },
+          "columnHeads": {
+            "type": "boolean",
+            "description": "項目の上に列見出しの行を表示する"
+          },
+          "rowSource": {
+            "type": "string",
+            "description": "ComboBox / ListBox の項目を読み込むセル範囲（\"Sheet1!A2:B10\"）。list と同時には書けません"
+          },
+          "controlSource": {
+            "type": "string",
+            "description": "値を連動させるセル（\"Sheet1!B2\"）。フォームの読み込み時にセルの値を表示し、変更をセルに書き込みます"
+          },
+          "tripleState": {
+            "type": "boolean",
+            "description": "CheckBox / ToggleButton をクリックで Null（どちらでもない状態）にもできるようにする（OptionButton では効きません）"
           },
           "listStyle": {
             "enum": [

@@ -71,9 +71,9 @@ module.exports = function install(rt) {
             case "TextBox":
                 return Object.assign(d, { Text: "", Locked: false, MaxLength: 0, MultiLine: false, PasswordChar: "", TextAlign: 1, WordWrap: true, BackColor: WINDOW, ForeColor: WINDOW_TEXT, SelStart: 0, SelLength: 0, EnterKeyBehavior: false, ScrollBars: 0, AutoSize: false, BackStyle: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 2, TabKeyBehavior: false, IMEMode: 0, AutoTab: false, AutoWordSelect: true, DragBehavior: 0, EnterFieldBehavior: 0, HideSelection: true, IntegralHeight: true, SelectionMargin: true });
             case "ComboBox":
-                return Object.assign(d, { Text: "", Locked: false, Style: 0, MatchRequired: false, MatchEntry: 1, ShowDropButtonWhen: 2, ListStyle: 0, ColumnCount: 1, BoundColumn: 1, TextColumn: -1, ListRows: 8, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", MaxLength: 0, TextAlign: 1, DropButtonStyle: 1, ListWidth: 0, AutoSize: false, BackStyle: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 2, IMEMode: 0, AutoTab: false, AutoWordSelect: true, DragBehavior: 0, EnterFieldBehavior: 0, HideSelection: true, SelectionMargin: true });
+                return Object.assign(d, { Text: "", Locked: false, Style: 0, MatchRequired: false, MatchEntry: 1, ShowDropButtonWhen: 2, ListStyle: 0, ColumnCount: 1, ColumnWidths: "", ColumnHeads: false, BoundColumn: 1, TextColumn: -1, ListRows: 8, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", MaxLength: 0, TextAlign: 1, DropButtonStyle: 1, ListWidth: 0, AutoSize: false, BackStyle: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 2, IMEMode: 0, AutoTab: false, AutoWordSelect: true, DragBehavior: 0, EnterFieldBehavior: 0, HideSelection: true, SelectionMargin: true });
             case "ListBox":
-                return Object.assign(d, { Locked: false, MultiSelect: 0, MatchEntry: 0, ColumnCount: 1, BoundColumn: 1, TextColumn: -1, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", TopIndex: 0, ListStyle: 0, TextAlign: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 2, IMEMode: 0, IntegralHeight: true });
+                return Object.assign(d, { Locked: false, MultiSelect: 0, MatchEntry: 0, ColumnCount: 1, ColumnWidths: "", ColumnHeads: false, BoundColumn: 1, TextColumn: -1, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", TopIndex: 0, ListStyle: 0, TextAlign: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 2, IMEMode: 0, IntegralHeight: true });
             case "CommandButton":
                 return Object.assign(d, { Caption: "", Default: false, Cancel: false, Accelerator: "", TakeFocusOnClick: true, WordWrap: false, Locked: false, AutoSize: false, BackStyle: 1 });
             case "CheckBox":
@@ -245,7 +245,8 @@ module.exports = function install(rt) {
             for (const [key, name] of [["textAlign", "TextAlign"], ["borderStyle", "BorderStyle"], ["pictureAlignment", "PictureAlignment"], ["pictureSizeMode", "PictureSizeMode"]]) if (typeof spec[key] === "number" && name in s) s[name] = spec[key];
             const kind = this.$kind;
             if (LISTS.has(kind)) {
-                this.$list = (spec.list || []).map((x) => [rt.cstr(x)]);
+                // An item is a string, or the strings of its columns.
+                this.$list = (spec.list || []).map((x) => (Array.isArray(x) ? x.map((c) => rt.cstr(c)) : [rt.cstr(x)]));
                 if (this.$s.RowSource) this.$rowSource(this.$s.RowSource);
                 const i = typeof spec.selectedIndex === "number" ? spec.selectedIndex : -1;
                 this.$index = i >= 0 && i < this.$list.length ? i : -1;
@@ -442,15 +443,25 @@ module.exports = function install(rt) {
         }
 
         // Lists.
+        /** Text of item `i`: TextColumn n is the n-th column, 0 the row number, -1 the first column wider than 0. */
         $text(i) {
             const row = this.$list[i] || [];
-            const col = this.$s.TextColumn === -1 ? 0 : Math.max(0, rt.toInt(this.$s.TextColumn) - 1);
+            const n = rt.toInt(this.$s.TextColumn);
+            if (n === 0) return rt.cstr(i);
+            let col = n - 1;
+            if (n < 0) {
+                // Widths of ColumnWidths: an empty entry (worked out) counts as wider than 0.
+                const widths = String(this.$s.ColumnWidths || "").split(";");
+                col = Math.max(0, widths.findIndex((w) => !/^\s*0+(\.0*)?\s*(pt|in|cm)?\s*$/i.test(w)));
+            }
             return rt.cstr(row[col] ?? row[0] ?? "");
         }
+        /** Value of item `i`: BoundColumn n is the n-th column, 0 the row number. */
         $bound(i) {
             const row = this.$list[i] || [];
-            const col = Math.max(0, rt.toInt(this.$s.BoundColumn) - 1);
-            const v = row[col];
+            const n = rt.toInt(this.$s.BoundColumn);
+            if (n === 0) return i;
+            const v = row[n - 1];
             return v === undefined ? null : v;
         }
         $selectIndex(i) {

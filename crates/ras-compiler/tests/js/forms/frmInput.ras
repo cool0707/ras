@@ -56,5 +56,5 @@ function bye() {
 }
 
 export function summary(): string {
-    return `${this.txtName.text}/${this.cboKind.text}:${this.cboKind.listIndex}/${this.cboKind.listCount}/${this.chkAgree.value}/${this.spnQty.value}/${opened}`;
+    return `${this.txtName.text}/${this.cboKind.text}:${this.cboKind.listIndex}/${this.cboKind.listCount}/${this.chkAgree.value}/${this.spnQty.value}/${opened}/${this.lstStaff.value}:${this.lstStaff.text}:${this.lstStaff.list(0, 1)}`;
 }

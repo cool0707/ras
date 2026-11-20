@@ -38,7 +38,7 @@ export interface PictureValue {
   path?: string;
   remove?: true;
 }
-export type PropertyValue = ScalarValue | FontValue | ColorValue | PictureValue | string[];
+export type PropertyValue = ScalarValue | FontValue | ColorValue | PictureValue | string[] | (string | string[])[];
 export interface AppearanceProperties {
   font?: FontValue | null;
   foreColor?: ColorValue | null;
@@ -53,7 +53,7 @@ export interface AppearanceProperties {
 }
 export interface PropertyDescriptor {
   field: string;
-  valueType: "string" | "number" | "integer" | "boolean" | "any" | "object" | "stringArray";
+  valueType: "string" | "number" | "integer" | "boolean" | "any" | "object" | "stringArray" | "listItems";
   required: boolean;
   nullable: boolean;
   allowedValues?: string[];
@@ -106,7 +106,8 @@ export interface SpecControl extends AppearanceProperties {
   selectedIndex?: number;
   enabled?: boolean;
   visible?: boolean;
-  list?: string[];
+  /** ComboBox / ListBox items: a string, or the strings of an item's columns. */
+  list?: (string | string[])[];
   tabs?: SpecTab[];
   /** ComboBox: 0 DropDownCombo, 2 DropDownList. TabStrip / MultiPage: 0 tabs, 1 buttons, 2 none. */
   style?: number | null;
@@ -139,6 +140,11 @@ export interface SpecControl extends AppearanceProperties {
   default?: boolean | null;
   /** ComboBox / ListBox: the cells the items come from. */
   rowSource?: string | null;
+  /** ComboBox / ListBox: columns shown (-1 all), their widths ("72 pt;;1 in"), the column of Text. */
+  columnCount?: number | null;
+  columnWidths?: string | null;
+  textColumn?: number | null;
+  columnHeads?: boolean | null;
   observed?: Partial<Omit<SpecControl, "observed">>;
 }
 
@@ -269,7 +275,7 @@ export const designerStrings = {
   propertyTabIndex: "TabIndex",
   propertySelectedIndex: "SelectedIndex",
   propertyList: "List",
-  listHelp: "1 行に 1 項目を入力します。空にすると list を削除します。",
+  listHelp: "1 行に 1 項目を入力します。複数の列はタブ（Tab キー。Excel からの貼り付けも可）で区切ります。空にすると list を削除します。",
   pictureNone: "画像なし",
   propertyEnabled: "Enabled",
   propertyVisible: "Visible",
@@ -812,7 +818,11 @@ export function isPropertyOperation(value: unknown): value is PropertyOperation 
       (control &&
         op.field === "list" &&
         Array.isArray(op.value) &&
-        op.value.every((item) => typeof item === "string")))
+        op.value.every(
+          (item) =>
+            typeof item === "string" ||
+            (Array.isArray(item) && item.every((column) => typeof column === "string")),
+        )))
   );
 }
 

@@ -50,7 +50,10 @@ pub use snapshot::project;
 pub use snapshot::{
     snapshot, Snapshot, SnapshotError, SnapshotPicture, SnapshotWarning, PLACEHOLDER_TYPE,
 };
-pub use spec::{FormSpec, FormSpecColor, FormSpecControl, FormSpecFont, FormSpecForm, FormSpecTab};
+pub use spec::{
+    FormSpec, FormSpecColor, FormSpecControl, FormSpecFont, FormSpecForm, FormSpecListItem,
+    FormSpecTab,
+};
 pub use validate::{Issue, Severity};
 
 /// Result of [`parse`].

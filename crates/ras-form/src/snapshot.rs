@@ -225,6 +225,13 @@ fn has_unprojected_text_properties(record: Option<&Record>) -> bool {
         || !record.tail.is_empty()
 }
 
+/// The widths of the columns of a ComboBox / ListBox (the `MorphDataColumnInfo` array that
+/// follows the record), when that is all there is after the record.
+fn column_widths(record: &Record) -> Option<Vec<i32>> {
+    let count = record.value("cColumnInfo").unwrap_or(0).max(0) as usize;
+    scalars::decode_column_infos(&record.tail, count)
+}
+
 /// Record contents that are not among `projected`.
 fn unsupported_record_properties(record: &Record, projected: &[&str]) -> Vec<String> {
     let done = |name: &str| projected.contains(&name);
@@ -253,7 +260,7 @@ fn unsupported_record_properties(record: &Record, projected: &[&str]) -> Vec<Str
     if has_unprojected_text_properties(record.text_props.as_deref()) {
         out.push("textProps".into());
     }
-    if !record.tail.is_empty() {
+    if !record.tail.is_empty() && !(done("cColumnInfo") && column_widths(record).is_some()) {
         out.push("opaqueRecordTail".into());
     }
     out
@@ -339,6 +346,9 @@ fn unsupported_control_properties(control: &Control, control_type: &str) -> Vec<
             }
             if let Store::Flag(flag, _) = p.store {
                 projected.push(flag);
+            }
+            if let Store::Columns = p.store {
+                projected.push("cColumnInfo");
             }
         }
         // MS-OFORMS: a ListBox always has both scroll bars.
@@ -479,6 +489,14 @@ fn project_scalars(source: &Control, control_type: &str, record: &Record, target
             Store::SiteText(field) => {
                 if let Some(text) = source.site.strings.get(field).filter(|t| !t.is_empty()) {
                     target.scalars.insert(p.name.into(), Value::from(text.as_str()));
+                }
+                continue;
+            }
+            Store::Columns => {
+                if let Some(widths) = column_widths(record).filter(|w| !w.is_empty()) {
+                    target
+                        .scalars
+                        .insert(p.name.into(), Value::from(scalars::format_column_widths(&widths)));
                 }
                 continue;
             }

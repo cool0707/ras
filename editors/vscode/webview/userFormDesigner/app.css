@@ -353,6 +353,24 @@ header {
   background: var(--ms-select);
   color: #fff;
 }
+/* Columns of an item, and the row of headings (ColumnHeads) above the items. */
+.list-cell {
+  display: inline-block;
+  box-sizing: border-box;
+  overflow: hidden;
+  vertical-align: top;
+  padding-right: 3px;
+  white-space: pre;
+}
+.list-heads {
+  min-height: 1.2em;
+  border-bottom: 1px solid var(--ms-shadow);
+}
+.list-heads .list-cell {
+  min-height: 1.2em;
+  border-right: 1px solid var(--ms-shadow);
+  background: var(--ms-face);
+}
 /* ListStyle Option: the item is marked by its box, not highlighted. */
 .list-item.with-box {
   display: flex;

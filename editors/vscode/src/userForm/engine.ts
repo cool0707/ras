@@ -233,6 +233,11 @@ function checkValue(field: string, contract: PropertyContract, value: unknown) {
 			if (child.required && !Object.hasOwn(value as JsonObject, name)) fail("UFE003", `${field}.${name} は必須です。`);
 		return;
 	}
+	if (contract.valueType === "listItems") {
+		const item = (v: unknown) => typeof v === "string" || (Array.isArray(v) && v.every((column) => typeof column === "string"));
+		if (!Array.isArray(value) || !value.every(item)) fail("UFE003", `${field} には文字列か、文字列の配列（各列）の配列を指定します。`);
+		return;
+	}
 	if (contract.valueType === "stringArray") {
 		if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) fail("UFE003", `${field} には文字列の配列を指定します。`);
 		return;

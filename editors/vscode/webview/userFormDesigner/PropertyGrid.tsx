@@ -64,6 +64,11 @@ const categories = {
     "groupName",
     "maxLength",
     "multiSelect",
+    "columnCount",
+    "columnWidths",
+    "boundColumn",
+    "textColumn",
+    "columnHeads",
     "matchEntry",
     "matchRequired",
     "showDropButtonWhen",
@@ -152,7 +157,7 @@ function PropertyRow({ descriptor, ...props }: Props & { descriptor: PropertyDes
   const draftKey = JSON.stringify([props.draftId ?? controlId ?? null, descriptor.field]);
   const source = target.values[descriptor.field];
   // A list of strings is edited as text, one item per line.
-  const isList = descriptor.valueType === "stringArray";
+  const isList = descriptor.valueType === "stringArray" || descriptor.valueType === "listItems";
   // The Value of a CheckBox, OptionButton or ToggleButton: True, False or Null.
   const isToggle = descriptor.editor === "toggle";
   const fromSource = (): Draft => {
@@ -330,6 +335,20 @@ function PropertyRow({ descriptor, ...props }: Props & { descriptor: PropertyDes
             onBlur={commit}
             onKeyDown={(event) => {
               if (event.isComposing) return;
+              // Tab separates the columns of an item (Shift+Tab still leaves the field).
+              if (
+                event.key === "Tab" &&
+                !event.shiftKey &&
+                !event.ctrlKey &&
+                !event.altKey &&
+                !event.metaKey
+              ) {
+                event.preventDefault();
+                const field = event.currentTarget;
+                field.setRangeText("\t", field.selectionStart, field.selectionEnd, "end");
+                change(field.value);
+                return;
+              }
               if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
                 event.preventDefault();
                 commit();

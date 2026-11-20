@@ -618,3 +618,44 @@ fn controls_are_bound_to_cells() {
         assert!(ras_form::parse(&text).has_errors(), "{bad}");
     }
 }
+
+#[test]
+fn columns_of_a_list_go_round() {
+    let text = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F"},"controls":[
+        {"id":"l","name":"lst","type":"ListBox","columnCount":3,"columnWidths":"36;;1 in","boundColumn":2,"textColumn":3,"columnHeads":true,"list":[["a","b","c"]]},
+        {"id":"c","name":"cbo","type":"ComboBox","top":80,"columnCount":-1,"columnWidths":"0 pt;72 pt","boundColumn":0}]}"#;
+    let parsed = ras_form::parse(text);
+    assert!(!parsed.has_errors(), "{:?}", parsed.issues);
+    let designer = ras_form::compile(parsed.spec.as_ref().unwrap(), 932).unwrap();
+    let snapshot = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap();
+    let (lst, cbo) = (&snapshot.spec.controls[0], &snapshot.spec.controls[1]);
+    let values = |c: &ras_form::FormSpecControl, names: &[&str]| -> Vec<Value> {
+        names.iter().map(|n| c.scalar(n).cloned().unwrap_or(Value::Null)).collect()
+    };
+    let names = ["columnCount", "columnWidths", "boundColumn", "textColumn", "columnHeads"];
+    assert_eq!(
+        values(lst, &names),
+        [Value::from(3), Value::from("36 pt;;72 pt"), Value::from(2), Value::from(3), Value::from(true)]
+    );
+    assert_eq!(
+        values(cbo, &names),
+        [Value::from(-1), Value::from("0 pt;72 pt"), Value::from(0), Value::Null, Value::Null]
+    );
+    for control in [lst, cbo] {
+        assert_eq!(control.unsupported, None, "{}", control.name);
+    }
+    // Neither the items nor the columns change the design of a list without them.
+    let bare = ras_form::parse(
+        r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F"},"controls":[{"id":"l","name":"lst","type":"ListBox","list":["a"]}]}"#,
+    );
+    let bare = ras_form::compile(bare.spec.as_ref().unwrap(), 932).unwrap();
+    let again = ras_form::snapshot("F", &bare.streams, &bare.storages, 932).unwrap();
+    assert!(names.iter().all(|n| again.spec.controls[0].scalar(n).is_none()));
+
+    for bad in [r#""columnWidths":"x""#, r#""columnWidths":"-5""#, r#""columnCount":-2"#, r#""textColumn":-2"#] {
+        let text = format!(
+            r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{{"id":"l","name":"lst","type":"ListBox",{bad}}}]}}"#
+        );
+        assert!(ras_form::parse(&text).has_errors(), "{bad}");
+    }
+}

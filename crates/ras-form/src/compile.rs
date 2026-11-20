@@ -584,6 +584,12 @@ fn control_definition(
                     put(format!("Site{field}"), PValue::Str(text.into()));
                 }
             }
+            Store::Columns => {
+                let text = value.as_str().unwrap_or("");
+                if !text.trim().is_empty() {
+                    put("ColumnWidths".into(), PValue::Str(text.into()));
+                }
+            }
         }
     }
     // A drop-down list cannot be typed into (Editable off).

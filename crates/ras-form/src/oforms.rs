@@ -1310,6 +1310,16 @@ impl Generation {
                     }
                 })?;
             }
+            if let Some(PValue::Str(text)) = control.properties.get("ColumnWidths") {
+                // The widths go to the MorphDataColumnInfo array after the TextProps.
+                let widths = crate::scalars::parse_column_widths(text).map_err(|e| {
+                    PersistError::Invalid(format!("コントロール {:?}: columnWidths: {e}", control.name))
+                })?;
+                if !widths.is_empty() {
+                    record.set_int("cColumnInfo", widths.len() as i64)?;
+                    record.tail = crate::scalars::encode_column_infos(&widths);
+                }
+            }
             record.encode()?;
             let mut child = None;
             if container {
@@ -1434,7 +1444,7 @@ impl Generation {
 fn skipped_property(name: &str, class: u16) -> bool {
     matches!(
         name,
-        "Tag" | "ControlTipText" | "Accelerator" | "MultiPageEnabled"
+        "Tag" | "ControlTipText" | "Accelerator" | "MultiPageEnabled" | "ColumnWidths"
     ) || name.starts_with("Site")
         || (class == 7 && (name == "Caption" || name == "BooleanProperties"))
         // Held by the hidden TabStrip of a MultiPage.

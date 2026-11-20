@@ -153,7 +153,7 @@ export function previewDocument(spec: ParsedSpec): PreviewDocument {
 			for (const key of ["left", "top", "width", "height"] as const) if (!num(copy[key])) delete copy[key];
 			for (const key of ["foreColor", "backColor"] as const) if (copy[key] !== undefined && colorError(copy[key])) delete copy[key];
 			if (copy.font !== undefined && !isObject(copy.font)) delete copy.font;
-			if (copy.list !== undefined && !(Array.isArray(copy.list) && copy.list.every((item) => typeof item === "string"))) delete copy.list;
+			if (copy.list !== undefined && !valueMatchesType(copy.list, "listItems")) delete copy.list;
 			return copy;
 		}),
 	};
@@ -206,6 +206,8 @@ function valueMatchesType(value: unknown, type: ValueType): boolean {
 			return typeof value === "boolean";
 		case "stringArray":
 			return Array.isArray(value) && value.every((item) => typeof item === "string");
+		case "listItems":
+			return Array.isArray(value) && value.every((item) => typeof item === "string" || (Array.isArray(item) && item.every((column) => typeof column === "string")));
 		case "object":
 			return isObject(value);
 		case "objectArray":
@@ -220,6 +222,7 @@ const typeLabel: Record<ValueType, string> = {
 	boolean: "真偽値",
 	any: "任意の値",
 	stringArray: "文字列の配列",
+	listItems: "文字列か、文字列の配列（各列）の配列",
 	object: "オブジェクト",
 	objectArray: "オブジェクトの配列",
 };
@@ -458,6 +461,14 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 		}
 		if (typeof control.passwordChar === "string" && control.passwordChar.length > 1)
 			issues.push(issue("UFV021", "error", "passwordChar は 1 文字にしてください。", `${path}.passwordChar`));
+		// AddItem and List(row, column) fill at most 10 columns of a list not bound to cells.
+		if (Array.isArray(control.list))
+			control.list.forEach((item, index) => {
+				if (Array.isArray(item) && (item.length < 1 || item.length > 10))
+					issues.push(issue("UFV021", "error", "list の項目の列は 1〜10 個にしてください。", `${path}.list[${index}]`));
+			});
+		if (typeof control.columnWidths === "string" && control.columnWidths.trim() && !/^\s*(-1|[\d.]+\s*(pt|in|cm)?)?\s*(;\s*(-1|[\d.]+\s*(pt|in|cm)?)?\s*)*$/i.test(control.columnWidths))
+			issues.push(issue("UFV021", "error", "columnWidths は ; で区切った幅（pt、in、cm の単位を付けられます）にしてください。", `${path}.columnWidths`));
 		// MSForms refuses AddItem on a list that comes from cells.
 		if (typeof control.rowSource === "string" && control.rowSource && Array.isArray(control.list) && control.list.length > 0)
 			issues.push(issue("UFV021", "error", "rowSource を指定したコントロールには list を書けません（項目はセル範囲から読み込まれます）。", `${path}.list`));

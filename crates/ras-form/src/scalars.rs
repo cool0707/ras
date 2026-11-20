@@ -30,6 +30,8 @@ pub(crate) enum Kind {
     Color,
     /// A string.
     Text,
+    /// `ColumnWidths`: widths separated by `;` (see [`parse_column_widths`]).
+    Widths,
 }
 
 /// Where a property is stored.
@@ -53,6 +55,8 @@ pub(crate) enum Store {
     Text(&'static str),
     /// A string of the control's site (`ControlSource`, `RowSource`).
     SiteText(&'static str),
+    /// The `MorphDataColumnInfo` array after the record (`cColumnInfo` entries).
+    Columns,
 }
 
 /// One property.
@@ -71,6 +75,7 @@ pub(crate) struct Scalar {
 }
 
 const EDITS: &[&str] = &["TextBox", "ComboBox"];
+const LISTS: &[&str] = &["ComboBox", "ListBox"];
 const FOCUSABLE: &[&str] = &[
     "TextBox",
     "ComboBox",
@@ -118,8 +123,8 @@ const fn s(
     }
 }
 
-use Kind::{Bool, Char, Color, Enum, Int, Points, Text};
-use Store::{Bit, Bits, Field, Flag, Himetric, Site, SiteText, Thumb};
+use Kind::{Bool, Char, Color, Enum, Int, Points, Text, Widths};
+use Store::{Bit, Bits, Columns, Field, Flag, Himetric, Site, SiteText, Thumb};
 
 /// Every plain property. A name can appear more than once for different types.
 pub(crate) static SCALARS: &[Scalar] = &[
@@ -155,6 +160,12 @@ pub(crate) static SCALARS: &[Scalar] = &[
     s("listRows", &["ComboBox"], Int(0, i16::MAX as i64), Field("ListRows"), 8, None),
     s("listWidth", &["ComboBox"], Points(TAB_SIZE * 10.0), Himetric("ListWidth"), 0, None),
     s("multiSelect", &["ListBox"], Enum(&[0, 1, 2]), Field("MultiSelect"), 0, None),
+    // The columns of the items (`list` gives an item's columns as an array).
+    s("columnCount", LISTS, Int(-1, i16::MAX as i64), Field("ColumnCount"), 1, None),
+    s("columnWidths", LISTS, Widths, Columns, 0, None),
+    s("boundColumn", LISTS, Int(0, i16::MAX as i64), Field("BoundColumn"), 1, None),
+    s("textColumn", LISTS, Int(-1, i16::MAX as i64), Field("TextColumn"), -1, None),
+    s("columnHeads", LISTS, Bool, Bit(10, false), 0, None),
     // The toggles keep TripleState in the field of MultiSelect (fmMultiSelectMulti for True),
     // as Excel writes it; [MS-OFORMS] names no place for it.
     s("tripleState", &["CheckBox", "OptionButton", "ToggleButton"], Bool, Field("MultiSelect"), 0, None),
@@ -343,6 +354,11 @@ pub(crate) fn to_raw(p: &Scalar, value: &Value) -> Result<i64, String> {
             value.as_str().ok_or(format!("{name} は文字列にしてください"))?;
             0
         }
+        Kind::Widths => {
+            let text = value.as_str().ok_or(format!("{name} は文字列にしてください"))?;
+            parse_column_widths(text).map_err(|e| format!("{name}: {e}"))?;
+            0
+        }
     };
     Ok(match p.store {
         // ComboBox Style is its DisplayStyle: combo (3) or drop-down list (7).
@@ -382,6 +398,95 @@ pub(crate) fn from_raw(p: &Scalar, raw: i64) -> Value {
         }
         _ => Value::from(raw),
     }
+}
+
+/// `ColumnWidths` (`"72 pt;;1 in"`) → the width of each column in HIMETRIC; -1 for a
+/// column whose width the control works out (an empty entry or -1). A width is in points
+/// unless it ends with `pt`, `in` or `cm`. An empty text gives no columns.
+pub(crate) fn parse_column_widths(text: &str) -> Result<Vec<i32>, String> {
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let entries: Vec<&str> = text.split(';').collect();
+    if entries.len() > i16::MAX as usize {
+        return Err("列が多すぎます".into());
+    }
+    entries
+        .into_iter()
+        .map(|entry| {
+            let entry = entry.trim().to_lowercase();
+            if entry.is_empty() {
+                return Ok(-1);
+            }
+            let (number, per_unit) = [("pt", 2540.0 / 72.0), ("in", 2540.0), ("cm", 1000.0)]
+                .into_iter()
+                .find_map(|(unit, scale)| entry.strip_suffix(unit).map(|n| (n.trim(), scale)))
+                .unwrap_or((entry.as_str(), 2540.0 / 72.0));
+            let value: f64 = number
+                .parse()
+                .map_err(|_| format!("幅 {entry:?} は数値（pt、in、cm の単位を付けられます）にしてください"))?;
+            if value == -1.0 {
+                return Ok(-1);
+            }
+            let himetric = (value * per_unit).round();
+            if !value.is_finite() || value < 0.0 || himetric > (TAB_SIZE * 10.0 * 2540.0 / 72.0) {
+                return Err(format!("幅 {entry:?} は 0〜{} pt にしてください", TAB_SIZE * 10.0));
+            }
+            Ok(himetric as i32)
+        })
+        .collect()
+}
+
+/// The widths of the columns (HIMETRIC, -1 worked out) as `ColumnWidths` shows them in points.
+pub(crate) fn format_column_widths(widths: &[i32]) -> String {
+    widths
+        .iter()
+        .map(|w| {
+            if *w < 0 {
+                return String::new();
+            }
+            let points = (*w as f64 * 72.0 / 2540.0 * 100.0).round() / 100.0;
+            format!("{points} pt")
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// The `MorphDataColumnInfo` records of `widths`: the width of a column is stored only
+/// when it is not -1, the file-format default.
+pub(crate) fn encode_column_infos(widths: &[i32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(widths.len() * 12);
+    for width in widths {
+        if *width < 0 {
+            out.extend_from_slice(&[0, 2, 4, 0, 0, 0, 0, 0]);
+        } else {
+            out.extend_from_slice(&[0, 2, 8, 0, 1, 0, 0, 0]);
+            out.extend_from_slice(&width.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// The widths in `count` `MorphDataColumnInfo` records that make up `raw` exactly.
+pub(crate) fn decode_column_infos(raw: &[u8], count: usize) -> Option<Vec<i32>> {
+    let mut widths = Vec::with_capacity(count);
+    let mut at = 0;
+    for _ in 0..count {
+        let header = raw.get(at..at + 8)?;
+        if header[0] != 0 || header[1] != 2 {
+            return None;
+        }
+        let cb = u16::from_le_bytes([header[2], header[3]]) as usize;
+        let mask = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+        let width = match (mask, cb) {
+            (0, 4) => -1,
+            (1, 8) => i32::from_le_bytes(raw.get(at + 8..at + 12)?.try_into().ok()?),
+            _ => return None,
+        };
+        widths.push(width);
+        at += 4 + cb;
+    }
+    (at == raw.len()).then_some(widths)
 }
 
 /// A bit (or bits) of `VariousPropertyBits` with the stored value of `p` put in.
@@ -435,6 +540,7 @@ mod tests {
             Kind::Char => Value::from("*"),
             Kind::Color => serde_json::json!({ "kind": "rgb", "value": "#123456" }),
             Kind::Text => Value::from("group1"),
+            Kind::Widths => Value::from("72;;36 pt"),
         }
     }
 
@@ -459,6 +565,10 @@ mod tests {
                 });
                 if p.store.is_text() {
                     assert_eq!(back, &value);
+                } else if matches!(p.kind, Kind::Widths) {
+                    let widths = |v: &Value| parse_column_widths(v.as_str().unwrap()).unwrap();
+                    assert_eq!(widths(back), widths(&value), "{control_type}.{}", p.name);
+                    assert_eq!(widths(back), [2540, -1, 1270]);
                 } else {
                     assert_eq!(to_raw(p, back), to_raw(p, &value), "{control_type}.{}", p.name);
                 }

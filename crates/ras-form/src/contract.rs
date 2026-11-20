@@ -15,6 +15,8 @@ pub enum ValueType {
     Boolean,
     Any,
     StringArray,
+    /// List items: strings, or arrays of strings (the columns of an item).
+    ListItems,
     Object,
     ObjectArray,
 }
@@ -29,6 +31,7 @@ impl ValueType {
             ValueType::Boolean => "真偽値",
             ValueType::Any => "任意の値",
             ValueType::StringArray => "文字列の配列",
+            ValueType::ListItems => "文字列か、文字列の配列（各列）の配列",
             ValueType::Object => "オブジェクト",
             ValueType::ObjectArray => "オブジェクトの配列",
         }
@@ -384,7 +387,7 @@ pub fn type_properties(name: &str) -> Option<Props> {
             ("value", any()),
             // Not part of the designer storage: filled by generated code
             // when the form loads.
-            ("list", p(T::StringArray, false, Supported)),
+            ("list", p(T::ListItems, false, Supported)),
             ("selectedIndex", p(T::Integer, false, Supported)),
         ],
         "CheckBox" | "OptionButton" | "ToggleButton" => vec![("caption", s()), ("value", any())],
@@ -452,7 +455,7 @@ pub fn type_properties(name: &str) -> Option<Props> {
             Kind::Bool => p(T::Boolean, false, Supported),
             Kind::Enum(_) | Kind::Int(..) => p(T::Integer, false, Supported),
             Kind::Points(_) => p(T::Number, false, Supported),
-            Kind::Char | Kind::Text => s(),
+            Kind::Char | Kind::Text | Kind::Widths => s(),
             Kind::Color => color(),
         };
         props.push((scalar.name, prop));

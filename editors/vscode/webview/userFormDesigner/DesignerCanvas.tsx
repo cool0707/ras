@@ -3,6 +3,7 @@
 import type { DesignerControl, DesignerDocument } from "../../src/userForm/protocol";
 import { pointsToPixels } from "../../src/userForm/model";
 import { pixelsToPoints, toggleState } from "../../src/userForm/model";
+import { columnLayout, itemColumns, textColumnIndex } from "../../src/userForm/listItems";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { displayPages } from "../../src/userForm/collections";
 import type { ActivePages } from "../../src/userForm/collections";
@@ -135,13 +136,28 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "combobox": {
       // Without an authored text or value, the selected list item is what the form shows.
       const authored = control.text || (control.value == null ? "" : String(control.value));
+      // The selected item shows its TextColumn.
+      const rows = (control.list ?? []).map(itemColumns);
+      const columns = columnLayout(
+        control.columnCount,
+        control.columnWidths,
+        control.width,
+        Math.max(1, ...rows.map((row) => row.length)),
+      );
+      const shownColumn = textColumnIndex(control.textColumn, columns);
+      const selectedRow = rows[control.selectedIndex ?? -1];
+      const selectedText = selectedRow
+        ? shownColumn < 0
+          ? String(control.selectedIndex)
+          : (selectedRow[shownColumn] ?? "")
+        : "";
       // The drop button shows always (what Excel gives a new ComboBox), never, or only
       // with the focus, which a control on the design surface never has.
       const button = (control.showDropButtonWhen ?? 2) === 2;
       return (
         <>
           <span class="combo-text">
-            {authored || (control.list?.[control.selectedIndex ?? -1] ?? "")}
+            {authored || selectedText}
           </span>
           {button && (
             <span class="combo-arrow" aria-hidden="true">
@@ -165,9 +181,29 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
             <div class="list-source">{control.rowSource}</div>
           </span>
         );
+      // Several columns (or headings) are laid out by ColumnCount and ColumnWidths.
+      const rows = (control.list ?? []).map(itemColumns);
+      const columns = columnLayout(
+        control.columnCount,
+        control.columnWidths,
+        Math.max(0, control.width - 4),
+        Math.max(1, ...rows.map((row) => row.length)),
+      );
+      const cells = columns.length > 1 || control.columnHeads === true;
+      const line = (row: string[]) =>
+        cells
+          ? columns.map((width, column) => (
+              <span class="list-cell" style={{ width: px(width) }}>
+                {row[column] ?? ""}
+              </span>
+            ))
+          : row[0];
       return (
         <span class="list-items">
-          {(control.list ?? []).map((item, index) => {
+          {control.columnHeads === true && (
+            <div class="list-item list-heads">{line([])}</div>
+          )}
+          {rows.map((row, index) => {
             const selected = index === control.selectedIndex;
             return (
               <div
@@ -180,7 +216,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
                     aria-hidden="true"
                   />
                 )}
-                {item}
+                {line(row)}
               </div>
             );
           })}
