@@ -617,9 +617,10 @@ button:disabled {
   align-items: stretch;
   overflow: hidden;
 }
-.toolbox-pane,
 .toolbox-pane {
   overflow: auto;
+  min-height: 0;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
   border-right: 1px solid var(--vscode-panel-border);
 }
 .toolbox {
@@ -1093,10 +1094,34 @@ body.vscode-high-contrast-light button {
   border-color: var(--vscode-contrastBorder);
 }
 @media (max-width: 899px) {
+  /* The toolbox collapses to an icon strip that keeps its own column, so it
+     never covers the form; labels stay available as tooltips and names. */
   .designer-workspace {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: 38px minmax(0, 1fr);
   }
-  .toolbox-pane,
+  .toolbox {
+    padding: 4px 3px;
+  }
+  .toolbox h2,
+  .toolbox-group h3,
+  .toolbox-label,
+  .toolbox .notice {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .toolbox-group {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid var(--vscode-panel-border);
+  }
+  .toolbox button {
+    justify-content: center;
+    padding: 6px 0;
+  }
   .properties-pane {
     display: none;
     position: absolute;
@@ -1105,15 +1130,14 @@ body.vscode-high-contrast-light button {
     z-index: 100010;
     box-shadow: 0 3px 10px #0006;
   }
-  .show-toolbox .toolbox-pane {
-    display: block;
-    left: 0;
-    width: 160px;
-  }
   .show-properties .properties-pane {
     display: flex;
     right: 0;
     width: min(300px, 100%);
+  }
+  /* Room to scroll the form out from under the properties overlay. */
+  .show-properties .designer-canvas {
+    padding-right: min(300px, 100vw);
   }
   .pane-toggle,
   .pane-close {

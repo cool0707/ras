@@ -93,7 +93,7 @@ export function App() {
   const [snapping, setSnapping] = useState(false);
   const [clipboardAvailable, setClipboardAvailable] = useState(false);
   const [rightTab, setRightTab] = useState<"properties" | "structure" | "tabOrder">("properties");
-  const [mobilePane, setMobilePane] = useState<"toolbox" | "properties">();
+  const [mobilePane, setMobilePane] = useState<"properties">();
   const [revealId, setRevealId] = useState<string>();
   const canvasScroll = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number }>();
@@ -837,14 +837,6 @@ export function App() {
             }}
           >
             <div class="toolbox-pane" id="designer-toolbox">
-              <button
-                class="pane-close"
-                type="button"
-                aria-label={strings.closePane}
-                onClick={closePane}
-              >
-                <Icon name="close" />
-              </button>
               <Toolbox
                 parentEditable={parentEditable}
                 pageEditable={pageEditable}
@@ -854,7 +846,6 @@ export function App() {
                 strings={strings}
                 onSelect={(next) => {
                   setTool(next);
-                  setMobilePane(undefined);
                   window.document
                     .querySelector<HTMLElement>(".designer-viewport")
                     ?.focus({ preventScroll: true });
@@ -877,17 +868,6 @@ export function App() {
                     <Icon name={action} />
                   </button>
                 ))}
-                <button
-                  class="pane-toggle"
-                  data-pane="toolbox"
-                  type="button"
-                  aria-expanded={mobilePane === "toolbox"}
-                  aria-controls="designer-toolbox"
-                  onClick={() => setMobilePane(mobilePane === "toolbox" ? undefined : "toolbox")}
-                >
-                  <Icon name="tools" />
-                  {strings.toolbox}
-                </button>
                 {document && (productivityEditable || document.eventEditable === true) && (
                   <ProductivityToolbar
                     document={document}
