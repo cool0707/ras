@@ -85,9 +85,29 @@
         }
       }
     ],
+    "semanticTokenModifiers": [
+      {
+        "id": "byref",
+        "description": "参照渡し（byref）の引数"
+      },
+      {
+        "id": "extension",
+        "description": "拡張メソッド"
+      }
+    ],
     "configurationDefaults": {
       "[ras]": {
         "editor.semanticHighlighting.enabled": true
+      },
+      "editor.semanticTokenColorCustomizations": {
+        "rules": {
+          "*.byref:ras": {
+            "underline": true
+          },
+          "*.deprecated:ras": {
+            "strikethrough": true
+          }
+        }
       }
     },
     "configuration": {

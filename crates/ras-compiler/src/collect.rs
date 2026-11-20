@@ -788,23 +788,8 @@ impl Collector {
             let target = if let Some(rest) = imp.source.strip_prefix("vba:") {
                 self.err(m, imp.source_span, "E0120", format!("`vba:{rest}`（非管理 VBA モジュールの参照）にはまだ対応していません"));
                 continue;
-            } else if imp.source.starts_with('.') {
-                let base = self.prog.modules[m].key.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
-                let mut parts: Vec<&str> = if base.is_empty() { Vec::new() } else { base.split('/').collect() };
-                for seg in imp.source.split('/') {
-                    match seg {
-                        "." | "" => {}
-                        ".." => {
-                            parts.pop();
-                        }
-                        s => parts.push(s),
-                    }
-                }
-                let key = parts.join("/");
-                let key = key.strip_suffix(".ras").unwrap_or(&key).to_string();
-                self.prog.modules.iter().position(|x| x.kind == ModuleKind::User && x.key == key)
             } else {
-                self.prog.modules.iter().position(|x| x.kind == ModuleKind::Std && x.key == imp.source)
+                import_target(&self.prog, m, &imp.source)
             };
             let Some(t) = target else {
                 self.err(m, imp.source_span, "E0121", format!("モジュール `{}` が見つかりません", imp.source));
@@ -1397,6 +1382,31 @@ fn resolve_type_inner(prog: &mut Program, m: ModuleId, tps: &[TypeParamDef], t: 
             }
         }
     }
+}
+
+/// The module an `import ... from "<source>"` in module `m` names: a project module for a
+/// relative path (`./util`, `../lib/str`), a bundled library module otherwise.
+pub fn import_target(prog: &Program, m: ModuleId, source: &str) -> Option<ModuleId> {
+    if source.starts_with("vba:") {
+        return None;
+    }
+    if !source.starts_with('.') {
+        return prog.modules.iter().position(|x| x.kind == ModuleKind::Std && x.key == source);
+    }
+    let base = prog.modules[m].key.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
+    let mut parts: Vec<&str> = if base.is_empty() { Vec::new() } else { base.split('/').collect() };
+    for seg in source.split('/') {
+        match seg {
+            "." | "" => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    let key = parts.join("/");
+    let key = key.strip_suffix(".ras").unwrap_or(&key);
+    prog.modules.iter().position(|x| x.kind == ModuleKind::User && x.key == key)
 }
 
 /// The bundled class that implements `Map<K, V>` for struct values.

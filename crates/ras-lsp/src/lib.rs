@@ -8,9 +8,9 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
-use lsp_server::{Connection, Message, Notification, Request, RequestId, Response};
+use lsp_server::{Connection, ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError};
 use ras_compiler::model::ModuleKind;
-use ras_compiler::{query, BuildOptions, BuildOutput, Config, Diagnostic, ModuleId, Program, Severity, SourceInput};
+use ras_compiler::{hints, query, refs, BuildOptions, BuildOutput, Config, Diagnostic, ModuleId, Program, Severity, SourceInput};
 use serde_json::{json, Value};
 
 mod sync;
@@ -242,7 +242,45 @@ impl Server {
         Some((m, md.offset_of(line, ch)))
     }
 
-    fn handle_request(&mut self, req: &Request) -> Value {
+    /// Location (`{ uri, range }`) of a span, or `None` inside the bundled library.
+    fn location(&self, prog: &Program, m: ModuleId, span: ras_syntax::TextRange) -> Option<Value> {
+        if prog.modules[m].path.starts_with("<stdlib>") {
+            return None;
+        }
+        Some(json!({ "uri": self.uri_for(prog, m), "range": Self::range(prog, m, span) }))
+    }
+
+    /// The module of a request's `textDocument`.
+    fn doc_module(&self, p: &Value) -> Option<ModuleId> {
+        p["textDocument"]["uri"].as_str().and_then(uri_to_path).and_then(|path| self.module_for(&path))
+    }
+
+    /// Requests that can fail with a message for the user (rename).
+    fn handle_request(&mut self, req: &Request) -> Result<Value, String> {
+        let p = &req.params;
+        let Some(prog) = &self.prog else { return Ok(Value::Null) };
+        match req.method.as_str() {
+            "textDocument/prepareRename" => {
+                let Some((m, off)) = self.locate(p) else { return Ok(Value::Null) };
+                let (span, name) = refs::prepare_rename(prog, m, off)?;
+                Ok(json!({ "range": Self::range(prog, m, span), "placeholder": name }))
+            }
+            "textDocument/rename" => {
+                let Some((m, off)) = self.locate(p) else { return Ok(Value::Null) };
+                let new = p["newName"].as_str().unwrap_or("").trim();
+                let edits = refs::rename(prog, m, off, new)?;
+                let mut changes: serde_json::Map<String, Value> = serde_json::Map::new();
+                for e in edits {
+                    let edit = json!({ "range": Self::range(prog, e.module, e.span), "newText": e.text });
+                    changes.entry(self.uri_for(prog, e.module)).or_insert_with(|| json!([])).as_array_mut().unwrap().push(edit);
+                }
+                Ok(json!({ "changes": changes }))
+            }
+            _ => Ok(self.handle(req)),
+        }
+    }
+
+    fn handle(&mut self, req: &Request) -> Value {
         let p = &req.params;
         let Some(prog) = &self.prog else { return Value::Null };
         match req.method.as_str() {
@@ -272,6 +310,9 @@ impl Server {
                         if let Some(t) = c.filter {
                             v["filterText"] = json!(t);
                         }
+                        if let Some((span, text)) = c.import {
+                            v["additionalTextEdits"] = json!([{ "range": Self::range(prog, m, span), "newText": text }]);
+                        }
                         v
                     })
                     .collect();
@@ -283,6 +324,99 @@ impl Server {
                     Some((tm, span)) if !prog.modules[tm].path.starts_with("<stdlib>") => json!({ "uri": self.uri_for(prog, tm), "range": Self::range(prog, tm, span) }),
                     _ => Value::Null,
                 }
+            }
+            "textDocument/typeDefinition" => {
+                let Some((m, off)) = self.locate(p) else { return Value::Null };
+                query::type_definition(prog, m, off).and_then(|(tm, span)| self.location(prog, tm, span)).unwrap_or(Value::Null)
+            }
+            "textDocument/references" => {
+                let Some((m, off)) = self.locate(p) else { return json!([]) };
+                let with_decl = p["context"]["includeDeclaration"].as_bool().unwrap_or(true);
+                let locations: Vec<Value> = refs::references(prog, m, off).iter().filter(|r| with_decl || !r.decl).filter_map(|r| self.location(prog, r.module, r.span)).collect();
+                Value::Array(locations)
+            }
+            "textDocument/documentHighlight" => {
+                let Some((m, off)) = self.locate(p) else { return json!([]) };
+                let highlights: Vec<Value> = refs::references(prog, m, off)
+                    .iter()
+                    .filter(|r| r.module == m)
+                    // DocumentHighlightKind: 2 = Read, 3 = Write.
+                    .map(|r| json!({ "range": Self::range(prog, m, r.span), "kind": if r.decl || r.write { 3 } else { 2 } }))
+                    .collect();
+                Value::Array(highlights)
+            }
+            "textDocument/signatureHelp" => {
+                let Some((m, off)) = self.locate(p) else { return Value::Null };
+                let Some(h) = query::signature_help(prog, m, off) else { return Value::Null };
+                let params: Vec<Value> = h
+                    .params
+                    .iter()
+                    .map(|((s, e), doc)| {
+                        let mut v = json!({ "label": [s, e] });
+                        if let Some(d) = doc {
+                            v["documentation"] = json!({ "kind": "markdown", "value": d });
+                        }
+                        v
+                    })
+                    .collect();
+                // Outside the parameters: none is highlighted.
+                let active = h.active.unwrap_or(params.len() as u32);
+                let mut sig = json!({ "label": h.label, "parameters": params, "activeParameter": active });
+                if let Some(d) = h.doc {
+                    sig["documentation"] = json!({ "kind": "markdown", "value": d });
+                }
+                json!({ "signatures": [sig], "activeSignature": 0, "activeParameter": active })
+            }
+            "workspace/symbol" => {
+                let q = p["query"].as_str().unwrap_or("");
+                let list: Vec<Value> = query::workspace_symbols(prog, q)
+                    .into_iter()
+                    .take(1000)
+                    .filter_map(|(m, s, container)| {
+                        let mut v = json!({ "name": s.name, "kind": s.kind, "location": self.location(prog, m, s.name_span)? });
+                        if let Some(c) = container {
+                            v["containerName"] = json!(c);
+                        }
+                        Some(v)
+                    })
+                    .collect();
+                Value::Array(list)
+            }
+            "textDocument/inlayHint" => {
+                let Some(m) = self.doc_module(p) else { return json!([]) };
+                let md = &prog.modules[m];
+                let pos = |v: &Value| md.offset_of(v["line"].as_u64().unwrap_or(0) as u32, v["character"].as_u64().unwrap_or(0) as u32);
+                let (from, to) = (pos(&p["range"]["start"]), pos(&p["range"]["end"]));
+                let list: Vec<Value> = hints::inlay_hints(prog, m, from, to)
+                    .into_iter()
+                    .map(|h| {
+                        let (line, character) = md.line_col_utf16(h.offset);
+                        let mut v = json!({ "position": { "line": line, "character": character }, "label": h.label, "kind": h.kind, "paddingLeft": h.pad_left, "paddingRight": h.pad_right });
+                        if let Some(t) = h.tooltip {
+                            v["tooltip"] = json!(t);
+                        }
+                        v
+                    })
+                    .collect();
+                Value::Array(list)
+            }
+            "textDocument/semanticTokens/full" => {
+                let Some(m) = self.doc_module(p) else { return Value::Null };
+                json!({ "data": hints::semantic_tokens(prog, m) })
+            }
+            "textDocument/foldingRange" => {
+                let Some(m) = self.doc_module(p) else { return json!([]) };
+                let list: Vec<Value> = hints::folding_ranges(prog, m)
+                    .into_iter()
+                    .map(|f| {
+                        let mut v = json!({ "startLine": f.start, "endLine": f.end });
+                        if let Some(k) = f.kind {
+                            v["kind"] = json!(k);
+                        }
+                        v
+                    })
+                    .collect();
+                Value::Array(list)
             }
             "textDocument/documentSymbol" => {
                 let Some(m) = p["textDocument"]["uri"].as_str().and_then(uri_to_path).and_then(|path| self.module_for(&path)) else { return json!([]) };
@@ -336,6 +470,11 @@ impl Server {
                 if !actions.is_empty() && fixes.len() > 1 {
                     let all: Vec<Value> = fixes.iter().map(|f| edit(f)).collect();
                     actions.push(json!({ "title": format!("このファイルの同種の警告をすべて修正（{} 箇所）", all.len()), "kind": "quickfix", "edit": { "changes": { uri: all } } }));
+                }
+                // Names used without their `import`.
+                for fix in query::import_fixes(prog, m, from, to) {
+                    let edit = json!({ "range": Self::range(prog, m, fix.span), "newText": fix.text });
+                    actions.push(json!({ "title": fix.title, "kind": "quickfix", "edit": { "changes": { uri: [edit] } } }));
                 }
                 Value::Array(actions)
             }
@@ -402,7 +541,16 @@ pub fn run(conn: &Connection) -> Res<()> {
                 "hoverProvider": true,
                 "completionProvider": { "triggerCharacters": [".", "(", ","] },
                 "definitionProvider": true,
+                "typeDefinitionProvider": true,
+                "referencesProvider": true,
+                "documentHighlightProvider": true,
+                "renameProvider": { "prepareProvider": true },
+                "signatureHelpProvider": { "triggerCharacters": ["(", ","], "retriggerCharacters": [")"] },
                 "documentSymbolProvider": true,
+                "workspaceSymbolProvider": true,
+                "inlayHintProvider": true,
+                "semanticTokensProvider": { "legend": { "tokenTypes": hints::TOKEN_TYPES, "tokenModifiers": hints::TOKEN_MODIFIERS }, "full": true },
+                "foldingRangeProvider": true,
                 "documentFormattingProvider": true,
                 "codeActionProvider": { "codeActionKinds": ["quickfix"] },
                 "codeLensProvider": { "resolveProvider": false },
@@ -432,8 +580,13 @@ pub fn run(conn: &Connection) -> Res<()> {
                     let _ = jobs.send(job);
                     continue;
                 }
-                let result = server.handle_request(&req);
-                respond(conn, req.id, result)?;
+                match server.handle_request(&req) {
+                    Ok(result) => respond(conn, req.id, result)?,
+                    Err(message) => {
+                        let error = ResponseError { code: ErrorCode::RequestFailed as i32, message, data: None };
+                        conn.sender.send(Message::Response(Response { id: req.id, result: None, error: Some(error) }))?;
+                    }
+                }
             }
             Message::Notification(n) => {
                 let p = &n.params;
@@ -710,6 +863,117 @@ mod tests {
         assert!(labels.iter().any(|l| l == "title:") && !labels.iter().any(|l| l == "prompt:"), "{labels:?}");
         let (labels, _) = complete("ws.range(\"A:A\").find(\"x\", ", Some(","));
         assert!(labels.iter().any(|l| l == "lookAt:") && !labels.iter().any(|l| l == "what:"), "{labels:?}");
+
+        request("shutdown", Value::Null);
+        send(Message::Notification(Notification::new("exit".into(), Value::Null)));
+        handle.join().unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// References, highlights, rename, parameter information and the other navigation requests (spec §16.2).
+    #[test]
+    fn finds_references_and_renames() {
+        let dir = std::env::temp_dir().join(format!("ras-lsp-refs-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("ras.toml"), "[project]\nname = \"T\"\n").unwrap();
+        let util_file = dir.join("src").join("util.ras");
+        let main_file = dir.join("src").join("main.ras");
+        let util = "/**\n * 2 倍にする。\n * @param x 元の値\n */\nexport function twice(x: int, byref out: int): int {\n    out = x * 2;\n    return out;\n}\n\nexport class Point {\n    x: double = 0;\n}\n";
+        let main = "import { twice, Point } from \"./util\";\n\nexport function run() {\n    let r = 0;\n    const a = twice(1, r);\n    const p: Point = new Point();\n    msgBox(twice(a, r) + p.x);\n}\n";
+        std::fs::write(&util_file, util).unwrap();
+        std::fs::write(&main_file, main).unwrap();
+        let (util_uri, main_uri) = (path_to_uri(&util_file), path_to_uri(&main_file));
+
+        let (server_conn, client) = Connection::memory();
+        let handle = std::thread::spawn(move || run(&server_conn).map_err(|e| e.to_string()));
+        let send = |m: Message| client.sender.send(m).unwrap();
+        let next_id = std::cell::Cell::new(0);
+        let call = |method: &str, params: Value| -> Response {
+            next_id.set(next_id.get() + 1);
+            let id = next_id.get();
+            send(Message::Request(Request { id: id.into(), method: method.into(), params }));
+            loop {
+                match client.receiver.recv_timeout(std::time::Duration::from_secs(30)).unwrap() {
+                    Message::Response(r) if r.id == id.into() => return r,
+                    _ => {}
+                }
+            }
+        };
+        let request = |method: &str, params: Value| -> Value { call(method, params).result.unwrap_or(Value::Null) };
+        let at = |uri: &str, line: u32, character: u32| json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character } });
+        let caps = request("initialize", json!({ "rootUri": path_to_uri(&dir), "capabilities": {} }));
+        for cap in ["referencesProvider", "documentHighlightProvider", "renameProvider", "signatureHelpProvider", "typeDefinitionProvider", "workspaceSymbolProvider", "inlayHintProvider", "semanticTokensProvider", "foldingRangeProvider"] {
+            assert!(!caps["capabilities"][cap].is_null(), "{cap}: {caps}");
+        }
+        send(Message::Notification(Notification::new("initialized".into(), json!({}))));
+        send(Message::Notification(Notification::new("textDocument/didOpen".into(), json!({ "textDocument": { "uri": main_uri, "languageId": "ras", "version": 1, "text": main } }))));
+
+        // references of `twice` from a call in main.ras: the declaration, the import and two calls
+        let refs = request("textDocument/references", json!({ "textDocument": { "uri": main_uri }, "position": { "line": 4, "character": 15 }, "context": { "includeDeclaration": true } }));
+        let found: Vec<(String, u64)> = refs.as_array().unwrap().iter().map(|r| (r["uri"].as_str().unwrap().to_string(), r["range"]["start"]["line"].as_u64().unwrap())).collect();
+        assert_eq!(found, vec![(main_uri.clone(), 0), (main_uri.clone(), 4), (main_uri.clone(), 6), (util_uri.clone(), 4)], "{refs}");
+        let refs = request("textDocument/references", json!({ "textDocument": { "uri": main_uri }, "position": { "line": 4, "character": 15 }, "context": { "includeDeclaration": false } }));
+        assert_eq!(refs.as_array().unwrap().len(), 3);
+
+        // highlights of `r` in run: the declaration and the byref uses
+        let hl = request("textDocument/documentHighlight", at(&main_uri, 3, 8));
+        let kinds: Vec<u64> = hl.as_array().unwrap().iter().map(|h| h["kind"].as_u64().unwrap()).collect();
+        assert_eq!(kinds, vec![3, 2, 2], "{hl}");
+
+        // rename `twice` across both files
+        let prep = request("textDocument/prepareRename", at(&main_uri, 6, 12));
+        assert_eq!(prep["placeholder"], "twice", "{prep}");
+        let edit = request("textDocument/rename", json!({ "textDocument": { "uri": main_uri }, "position": { "line": 6, "character": 12 }, "newName": "doubled" }));
+        assert_eq!(edit["changes"][&main_uri].as_array().unwrap().len(), 3, "{edit}");
+        assert_eq!(edit["changes"][&util_uri].as_array().unwrap().len(), 1, "{edit}");
+        assert_eq!(edit["changes"][&util_uri][0]["newText"], "doubled");
+        // a rename the server refuses comes back as an error with the reason
+        let refused = call("textDocument/rename", json!({ "textDocument": { "uri": main_uri }, "position": { "line": 6, "character": 12 }, "newName": "Dim" }));
+        let error = refused.error.expect("an error");
+        assert!(error.message.contains("予約語"), "{}", error.message);
+        let refused = call("textDocument/prepareRename", at(&main_uri, 6, 6));
+        assert!(refused.error.is_some(), "msgBox is declared in the type definitions");
+
+        // parameter information inside `twice(a, |`
+        let help = request("textDocument/signatureHelp", at(&main_uri, 6, 20));
+        assert_eq!(help["signatures"][0]["label"], "twice(x: int, byref out: int): int", "{help}");
+        assert_eq!(help["activeParameter"], 1, "{help}");
+        assert!(help["signatures"][0]["documentation"]["value"].as_str().unwrap().contains("2 倍にする。"), "{help}");
+        assert_eq!(help["signatures"][0]["parameters"][0]["label"], json!([6, 12]));
+        assert_eq!(help["signatures"][0]["parameters"][0]["documentation"]["value"], "元の値");
+
+        // type definition of `p` goes to class Point
+        let def = request("textDocument/typeDefinition", at(&main_uri, 6, 25));
+        assert_eq!(def["uri"], util_uri, "{def}");
+        assert_eq!(def["range"]["start"]["line"], 9);
+
+        // workspace symbols
+        let syms = request("workspace/symbol", json!({ "query": "twi" }));
+        assert_eq!(syms.as_array().unwrap().len(), 1, "{syms}");
+        assert_eq!(syms[0]["name"], "twice");
+
+        // inlay hints: the inferred type of `a` and `byref` at both calls
+        let hints = request("textDocument/inlayHint", json!({ "textDocument": { "uri": main_uri }, "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 8, "character": 0 } } }));
+        let labels: Vec<&str> = hints.as_array().unwrap().iter().map(|h| h["label"].as_str().unwrap()).collect();
+        assert_eq!(labels, vec![": int", ": int", "byref", "byref"], "{hints}");
+
+        // a name of another module that is not imported: a quick fix and a completion add the import
+        let unimported = "export function run() {\n    const q = new Point();\n    tw\n}\n";
+        send(Message::Notification(Notification::new("textDocument/didChange".into(), json!({ "textDocument": { "uri": main_uri, "version": 2 }, "contentChanges": [{ "text": unimported }] }))));
+        let actions = request("textDocument/codeAction", json!({ "textDocument": { "uri": main_uri }, "range": { "start": { "line": 1, "character": 20 }, "end": { "line": 1, "character": 20 } }, "context": { "diagnostics": [] } }));
+        assert_eq!(actions[0]["title"], "\"./util\" から `Point` をインポート", "{actions}");
+        assert_eq!(actions[0]["edit"]["changes"][&main_uri][0]["newText"], "import { Point } from \"./util\";\n");
+        let comp = request("textDocument/completion", at(&main_uri, 2, 6));
+        let item = comp["items"].as_array().unwrap().iter().find(|i| i["label"] == "twice").expect("twice is offered");
+        assert_eq!(item["additionalTextEdits"][0]["newText"], "import { twice } from \"./util\";\n", "{item}");
+        send(Message::Notification(Notification::new("textDocument/didChange".into(), json!({ "textDocument": { "uri": main_uri, "version": 3 }, "contentChanges": [{ "text": main }] }))));
+
+        // semantic tokens and folding ranges
+        let toks = request("textDocument/semanticTokens/full", json!({ "textDocument": { "uri": main_uri } }));
+        assert!(toks["data"].as_array().is_some_and(|d| !d.is_empty() && d.len() % 5 == 0), "{toks}");
+        let folds = request("textDocument/foldingRange", json!({ "textDocument": { "uri": main_uri } }));
+        assert!(folds.as_array().unwrap().iter().any(|f| f["startLine"] == 2 && f["endLine"] == 6), "{folds}");
 
         request("shutdown", Value::Null);
         send(Message::Notification(Notification::new("exit".into(), Value::Null)));
