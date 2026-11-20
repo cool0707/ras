@@ -176,6 +176,21 @@ pub(crate) struct Lowerer<'p> {
 }
 
 /// Workbook / worksheet event signatures: (name, VBA type, by reference).
+/// Events of the workbook and of a sheet that `@on` handles (spec §12.2), as `event_params` names them.
+const WORKBOOK_EVENTS: &[&str] = &[
+    "Open", "Activate", "Deactivate", "AddinInstall", "AddinUninstall", "AfterXmlExport", "BeforeClose", "BeforeSave", "AfterSave", "BeforePrint",
+    "NewSheet", "SheetActivate", "SheetDeactivate", "SheetCalculate", "SheetChange", "SheetSelectionChange", "SheetBeforeDoubleClick",
+    "SheetBeforeRightClick", "SheetFollowHyperlink", "WindowActivate", "WindowDeactivate", "WindowResize",
+];
+const SHEET_EVENTS: &[&str] = &["Activate", "Deactivate", "Calculate", "Change", "SelectionChange", "BeforeDoubleClick", "BeforeRightClick", "FollowHyperlink", "BeforeDelete"];
+
+/// The event `event` (any case) of the workbook or of a sheet, spelled as `@on` takes it;
+/// `None` when `@on` does not handle it.
+pub(crate) fn document_event(target_is_workbook: bool, event: &str) -> Option<&'static str> {
+    let events = if target_is_workbook { WORKBOOK_EVENTS } else { SHEET_EVENTS };
+    events.iter().copied().find(|e| e.eq_ignore_ascii_case(event)).filter(|e| event_params(target_is_workbook, e).is_some())
+}
+
 fn event_params(target_is_workbook: bool, event: &str) -> Option<Vec<(&'static str, &'static str, bool)>> {
     let p = |n, t, r| (n, t, r);
     Some(if target_is_workbook {

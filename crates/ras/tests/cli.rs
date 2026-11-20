@@ -85,6 +85,10 @@ fn pack_refuses_to_clobber_hand_written_code() {
     let dir = temp_dir("handwritten");
     let (ok, out) = ras(&dir, &["init", ".", "--workbook", "Book.xlsm"]);
     assert!(ok, "{out}");
+    // Without the take-over of hand-written code (see `hand_written_vba_is_taken_over`).
+    let mut toml = std::fs::read_to_string(dir.join("ras.toml")).unwrap();
+    toml.push_str("\n[sync]\npull-unmanaged = false\n");
+    std::fs::write(dir.join("ras.toml"), toml).unwrap();
     let book = dir.join("Book.xlsm");
     // A workbook that already has a hand-written module `Main` and a hand-written `Workbook_Open`.
     ras_ovba::pack(&ras_ovba::PackRequest {
@@ -122,6 +126,86 @@ fn pack_refuses_to_clobber_hand_written_code() {
     let (ok, out) = ras(&dir, &["pack", "--overwrite"]);
     assert!(ok, "{out}");
     assert!(std::fs::read_dir(dir.join("build/backup")).unwrap().count() >= 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The hand-written VBA of a workbook — standard modules, the code of sheets and of
+/// `ThisWorkbook`, forms made in the VBE — is converted to RAS and taken over (spec §14.7.1).
+#[test]
+fn hand_written_vba_is_taken_over() {
+    let dir = temp_dir("takeover");
+    let (ok, out) = ras(&dir, &["init", ".", "--workbook", "Book.xlsm"]);
+    assert!(ok, "{out}");
+    std::fs::remove_file(dir.join("src/main.ras")).unwrap();
+    let book = dir.join("Book.xlsm");
+    let mut spec = ras_form::FormSpec::new_form("frmHello");
+    spec.form.caption = Some("こんにちは".into());
+    let designer = ras_form::compile(&spec, 932).unwrap();
+    ras_ovba::pack(&ras_ovba::PackRequest {
+        book: book.clone(),
+        codepage: 932,
+        modules: vec![
+            ras_ovba::VbaModule {
+                name: "mod_Util".into(),
+                kind: ras_ovba::ModuleKind::Standard,
+                source: "Attribute VB_Name = \"mod_Util\"\r\nOption Explicit\r\nPublic Function Twice(ByVal n As Long) As Long\r\n    Twice = n * 2\r\nEnd Function\r\n".into(),
+            },
+            ras_ovba::VbaModule {
+                name: "Module1".into(),
+                kind: ras_ovba::ModuleKind::Standard,
+                source: "Attribute VB_Name = \"Module1\"\r\nSub Hello()\r\n    MsgBox mod_Util.Twice(21)\r\n    frmHello.Show\r\nEnd Sub\r\nSub Jump()\r\n    GoTo Done\r\nDone:\r\nEnd Sub\r\n".into(),
+            },
+            ras_ovba::VbaModule {
+                name: "Sheet1".into(),
+                kind: ras_ovba::ModuleKind::Document,
+                source: "Option Explicit\r\nPrivate Sub Worksheet_Change(ByVal Target As Range)\r\n    Range(\"B1\").Value = Twice(Target.Value)\r\nEnd Sub\r\n".into(),
+            },
+        ],
+        forms: vec![ras_ovba::UserForm { name: "frmHello".into(), code: "Private Sub UserForm_Click()\r\n    Me.Hide\r\nEnd Sub\r\n".into(), streams: designer.streams, storages: designer.storages }],
+        ..Default::default()
+    })
+    .unwrap();
+
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok, "{out}");
+    for file in ["src/mod_Util.ras", "src/Module1.ras", "src/Sheet1Events.ras", "forms/frmHello.form.json", "forms/frmHello.ras", "vba/mod_Util.bas", "vba/Module1.bas", "vba/Sheet1.cls", "vba/frmHello.frm"] {
+        assert!(dir.join(file).is_file(), "{file} missing: {out}");
+    }
+    assert!(out.contains("src/Module1.ras") && out.contains("TODO(VBA)") && out.contains("`Module1` は置き換えずに"), "{out}");
+    let read = |file: &str| std::fs::read_to_string(dir.join(file)).unwrap();
+    // Taken over: the marker line became a comment, the hand-written code is gone from the workbook.
+    for file in ["src/mod_Util.ras", "src/Sheet1Events.ras", "forms/frmHello.ras"] {
+        assert!(!read(file).contains("RAS-IMPORTED") && read(file).starts_with("// ブックの VBA（"), "{file}: {}", read(file));
+    }
+    assert!(read("src/Sheet1Events.ras").contains("@on(\"Sheet1.Change\")"), "{}", read("src/Sheet1Events.ras"));
+    assert!(read("src/Sheet1Events.ras").contains("import { Twice } from \"./mod_Util\";"), "{}", read("src/Sheet1Events.ras"));
+    // Pending: `Module1` has a TODO, the workbook keeps it.
+    let module1 = read("src/Module1.ras");
+    assert!(module1.starts_with("// RAS-IMPORTED Module1 ") && module1.contains("// TODO(VBA):"), "{module1}");
+    assert!(module1.contains("import * as ModUtil from \"./mod_Util\";") && module1.contains("ModUtil.Twice(21)"), "{module1}");
+
+    let source_of = |name: &str| {
+        let project = ras_ovba::unpack(&book).unwrap().project.unwrap();
+        project.modules.iter().find(|m| m.name == name).map(|m| m.source.clone())
+    };
+    assert!(source_of("mod_Util").is_none(), "replaced by ModUtil");
+    assert!(source_of("ModUtil").unwrap().contains("' RAS-GENERATED"));
+    assert!(source_of("Module1").unwrap().contains("GoTo Done"), "pending: kept as it was");
+    let sheet = source_of("Sheet1").unwrap();
+    assert!(sheet.contains("'--- RAS BEGIN ---") && !sheet.contains("Range(\"B1\")") && sheet.contains("Option Explicit"), "{sheet}");
+    let form = ras_ovba::unpack_user_forms(&book).unwrap().into_iter().find(|f| f.name == "frmHello").unwrap();
+    assert!(ras_ovba::is_generated_form(&form.code), "{}", form.code);
+
+    // The TODO is fixed: the next pack replaces `Module1`.
+    let fixed: String = module1.lines().filter(|l| !l.trim_start().starts_with("//")).map(|l| format!("{l}\n")).collect();
+    std::fs::write(dir.join("src/Module1.ras"), format!("{}\n{fixed}", module1.lines().next().unwrap())).unwrap();
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok, "{out}");
+    assert!(source_of("Module1").unwrap().contains("' RAS-GENERATED"), "{out}");
+    assert!(!read("src/Module1.ras").contains("RAS-IMPORTED"));
+    // Nothing more to take over.
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok && !out.contains("取り込みました") && out.contains("作成 0 / 更新 0 / 削除 0"), "{out}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

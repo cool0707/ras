@@ -342,8 +342,9 @@ fn document_plan(layout: &BookLayout) -> DocumentPlan {
 ///   of the workbook, a `Form` module when the form already exists).
 /// * `document_code` is merged into the RAS-managed region of the document
 ///   module with that code name ([`merge_managed_region`](crate::merge_managed_region));
-///   hand-written code outside the markers is preserved. A code name the
-///   workbook does not have is an [`OvbaError::UnknownCodeName`].
+///   hand-written code outside the markers is preserved, except in the
+///   modules `replace_hand_written` names. A code name the workbook does
+///   not have is an [`OvbaError::UnknownCodeName`].
 /// * `remove_modules` are deleted.
 /// * A workbook without a VBA project gets one (document modules for the
 ///   workbook and every sheet included), together with the relationship,
@@ -435,13 +436,20 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
         }
         upsert.push(module.clone());
     }
-    for (index, code) in req.document_code.iter().enumerate() {
+    // Hand-written code that goes from a document module the RAS code does not write to.
+    let mut document_code = req.document_code.clone();
+    for code_name in &req.replace_hand_written {
+        if !document_code.iter().any(|c| same_name(&c.code_name, code_name)) {
+            document_code.push(crate::DocumentCode { code_name: code_name.clone(), managed_code: String::new() });
+        }
+    }
+    for (index, code) in document_code.iter().enumerate() {
         let Some((code_name, what, base)) =
             documents.known.iter().find(|(name, _, _)| same_name(name, &code.code_name))
         else {
             return Err(OvbaError::UnknownCodeName(code.code_name.clone()));
         };
-        if req.document_code[..index].iter().any(|c| same_name(&c.code_name, &code.code_name))
+        if document_code[..index].iter().any(|c| same_name(&c.code_name, &code.code_name))
             || req.modules.iter().any(|m| same_name(&m.name, &code.code_name))
         {
             return Err(OvbaError::InvalidRequest(format!(
@@ -465,6 +473,11 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
                     )));
                 }
             },
+        };
+        let current = if req.replace_hand_written.iter().any(|n| same_name(n, code_name)) {
+            source::strip_hand_written(&current)
+        } else {
+            current
         };
         // What the generated code defines must not exist in the hand-written
         // part as well: the VBE reports that only when the workbook is opened

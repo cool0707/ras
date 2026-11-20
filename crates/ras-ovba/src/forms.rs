@@ -1,6 +1,7 @@
 //! User forms as they are stored in a project: handing out the designer
-//! storages of an existing project, and writing a form as the `.frm` /
-//! `.frx` pair that `VBComponents.Import` of the VBA editor reads.
+//! storages of an existing project, writing a form as the `.frm` / `.frx`
+//! pair that `VBComponents.Import` of the VBA editor reads, and reading the
+//! pair that `VBComponent.Export` writes.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -244,4 +245,86 @@ pub fn export_user_form(form: &UserForm, codepage: u16) -> Result<FormFiles, Ovb
     frx.extend_from_slice(&((client_height + client_top + client_left) as i32).to_le_bytes());
     frx.extend_from_slice(&compound);
     Ok(FormFiles { frm, frx })
+}
+
+/// Reads a user form from the `.frm` / `.frx` pair the VBA editor writes
+/// (`VBComponent.Export`), into the layout of [`UserForm`] that
+/// [`read_user_forms`] hands out: the designer block of the `.frm` becomes
+/// the `VBFrame` stream (stored in `codepage`), the compound file of the
+/// `.frx` the other streams and storages. The code is what follows the
+/// `Attribute` lines. `frm` is the text of the `.frm` file, already decoded
+/// from the ANSI code page it was written in.
+pub fn import_user_form(frm: &str, frx: &[u8], codepage: u16) -> Result<UserForm, OvbaError> {
+    let bad = |what: &str| OvbaError::Format(format!("exported user form: {what}"));
+    let text = frm.replace("\r\n", "\n");
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() < 3
+        || !lines[0].trim_start().to_ascii_uppercase().starts_with("VERSION")
+        || !lines[1].trim_start().to_ascii_lowercase().starts_with("begin ")
+    {
+        return Err(bad("the .frm file does not start with a designer block"));
+    }
+    // The end of the designer block (nested `Begin` / `BeginProperty` blocks are skipped).
+    let mut depth = 0usize;
+    let mut end = None;
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        let word = line.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        match word.as_str() {
+            "begin" | "beginproperty" => depth += 1,
+            "end" | "endproperty" => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end) = end else { return Err(bad("the designer block of the .frm file has no End")) };
+    let name = lines[1].split_whitespace().nth(2).unwrap_or("").to_string();
+    let mut frame = String::new();
+    for line in &lines[..=end] {
+        if line.trim_start().to_ascii_lowercase().starts_with("oleobjectblob") {
+            continue;
+        }
+        frame.push_str(line);
+        frame.push_str("\r\n");
+    }
+    let mut rest = lines[end + 1..].iter().peekable();
+    let mut form_name = name;
+    while let Some(line) = rest.next_if(|l| l.starts_with("Attribute ")) {
+        if let Some(value) = line.strip_prefix("Attribute VB_Name = ") {
+            form_name = value.trim().trim_matches('"').to_string();
+        }
+    }
+    let code: String = rest.map(|l| format!("{l}\n")).collect();
+
+    if frx.len() < 24 || &frx[..2] != b"LB" {
+        return Err(bad("the .frx file does not start with its header"));
+    }
+    let length = u32::from_le_bytes([frx[4], frx[5], frx[6], frx[7]]) as usize;
+    let compound = frx.get(24..24 + length).unwrap_or(&frx[24..]);
+    let tree = cfbio::read_tree(compound)?;
+    let mut form = UserForm { name: form_name, code, ..UserForm::default() };
+    let clsid_of = |meta: &Option<cfb::Entry>| meta.as_ref().map(|m| m.clsid().to_bytes_le()).unwrap_or_default();
+    form.storages.insert(String::new(), clsid_of(&tree.root_meta));
+    for node in &tree.nodes {
+        let relative = node.path.join("/");
+        match &node.data {
+            Some(data) => {
+                form.streams.insert(relative, data.clone());
+            }
+            None => {
+                form.storages.insert(relative, clsid_of(&node.meta));
+            }
+        }
+    }
+    for name in ["f", "o"] {
+        if !form.streams.contains_key(name) {
+            return Err(bad("the .frx file has no designer streams"));
+        }
+    }
+    form.streams.insert("\u{3}VBFrame".into(), codepage::encode(codepage, &frame, "VBFrame")?);
+    Ok(form)
 }

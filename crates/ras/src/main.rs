@@ -404,18 +404,33 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     if !book.is_file() {
         return Err(format!("{} が見つかりません（`ras init --workbook` で空のブックを作成できます）", book.display()));
     }
+    // The hand-written VBA of the workbook is taken over into the project first (spec §14.7.1).
+    let prepared = if cfg.sync.pull_unmanaged && p.output.is_none() && !is_open_in_excel(&book) { take_over_offline(root, &book, cfg.target.codepage)? } else { ras_sync::Prepared::default() };
+    report_take_over(&prepared);
     let Some((prog, out)) = compile(root, args, Some(&book))? else { return Ok(ExitCode::from(1)) };
     write_build(root, &prog, &out)?;
     let Some(user_forms) = load_forms(root, prog.config.target.codepage, &out)? else { return Ok(ExitCode::from(1)) };
+    let opts = ras_sync::options(&prepared, p.overwrite);
+    let pending = |name: &str| opts.pending.iter().any(|(c, g)| c.eq_ignore_ascii_case(name) || g.eq_ignore_ascii_case(name));
+    let adopted = |name: &str| opts.adopt.iter().any(|n| n.eq_ignore_ascii_case(name));
+    // What a pending take-over generates is not written yet.
+    let user_forms: Vec<ras_ovba::UserForm> = user_forms.into_iter().filter(|f| !pending(&f.name)).collect();
+    let files: Vec<&ras_compiler::OutputFile> = out.files.iter().filter(|f| !pending(&f.name)).collect();
 
     // Modules that RAS generated earlier but that no longer exist are removed; hand-edited ones are reported (spec §14.7).
     let existing = ras_ovba::unpack(&book).map_err(|e| format!("{}: {e}", book.display()))?;
-    let generated: HashSet<&str> = out.files.iter().filter(|f| f.kind != VModuleKind::Form).map(|f| f.name.as_str()).collect();
+    let generated: HashSet<&str> = files.iter().filter(|f| f.kind != VModuleKind::Form).map(|f| f.name.as_str()).collect();
     let mut remove = Vec::new();
     let mut drifted = Vec::new();
     if let Some(project) = &existing.project {
         for m in &project.modules {
-            let Some(is_drifted) = ras_compiler::emit::has_drifted(&m.source) else { continue };
+            let Some(is_drifted) = ras_compiler::emit::has_drifted(&m.source) else {
+                // Taken over into a RAS module of another name (`mod_Main` → `ModMain`).
+                if m.kind == ras_ovba::ModuleKind::Standard && adopted(&m.name) && !generated.iter().any(|g| g.eq_ignore_ascii_case(&m.name)) {
+                    remove.push(m.name.clone());
+                }
+                continue;
+            };
             if is_drifted {
                 drifted.push(m.name.clone());
             }
@@ -430,7 +445,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         .iter()
         .flat_map(|project| &project.modules)
         .filter(|m| matches!(m.kind, ras_ovba::ModuleKind::Standard | ras_ovba::ModuleKind::Class | ras_ovba::ModuleKind::Form))
-        .filter(|m| ras_compiler::emit::has_drifted(&m.source).is_none() && has_code(&m.source))
+        .filter(|m| ras_compiler::emit::has_drifted(&m.source).is_none() && has_code(&m.source) && !adopted(&m.name))
         .filter(|m| generated.iter().any(|g| g.to_lowercase() == m.name.to_lowercase()))
         .map(|m| m.name.clone())
         .collect();
@@ -456,7 +471,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         if m.kind != ras_ovba::ModuleKind::Form {
             return Err(format!("ブックには `{}` という名前のフォームではないモジュールがあります。フォーム名を変えてください", m.name));
         }
-        if !ras_ovba::is_generated_form(&m.source) {
+        if !ras_ovba::is_generated_form(&m.source) && !adopted(&m.name) {
             hand_made_forms.push(m.name.clone());
         }
     }
@@ -468,7 +483,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     }
     let mut modules = Vec::new();
     let mut document_code = Vec::new();
-    for f in &out.files {
+    for f in files {
         match f.kind {
             // Written with the form's designer (`user_forms`).
             VModuleKind::Form => {}
@@ -484,6 +499,8 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         project_name: None,
         modules,
         document_code,
+        // Document modules whose hand-written code was taken over.
+        replace_hand_written: prepared.adopt.iter().filter(|(_, kind)| matches!(kind, ras_form::import::ImportKind::Document { .. })).map(|(name, _)| name.clone()).collect(),
         remove_modules: remove,
         forms: user_forms,
         backup_dir: Some(root.join("build").join("backup")),
@@ -491,6 +508,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     };
     match ras_ovba::pack(&req) {
         Ok(rep) => {
+            ras_form::import::finish(&prepared)?;
             for w in &rep.warnings {
                 eprintln!("warning: {w}");
             }
@@ -531,11 +549,15 @@ fn live_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<Option<Ex
         Err(ras_sync::SyncError::NotOpen(_) | ras_sync::SyncError::Unsupported) => return Ok(None),
         Err(e) => return Err(e.to_string()),
     }
+    // The hand-written VBA of the workbook is taken over into the project first (spec §14.7.1).
+    let prepared = if cfg.sync.pull_unmanaged { session.take_over(root, cfg.target.codepage).map_err(|e| e.to_string())? } else { ras_sync::Prepared::default() };
+    report_take_over(&prepared);
     let Some((prog, out)) = compile_with(root, args, Some(&book), true)? else { return Ok(Some(ExitCode::from(1))) };
     write_build(root, &prog, &out)?;
     let codepage = prog.config.target.codepage;
     let Some(user_forms) = load_forms(root, codepage, &out)? else { return Ok(Some(ExitCode::from(1))) };
-    let rep = session.apply(&out.files, ras_sync::Forms { forms: &user_forms, codepage }, &ras_sync::SyncOptions { overwrite }).map_err(|e| e.to_string())?;
+    let rep = session.apply(&out.files, ras_sync::Forms { forms: &user_forms, codepage }, &ras_sync::options(&prepared, overwrite)).map_err(|e| e.to_string())?;
+    ras_form::import::finish(&prepared)?;
     println!("{} に同期しました（{}）", book.display(), rep.summary());
     if rep.drifted.is_empty() {
         return Ok(Some(ExitCode::SUCCESS));
@@ -553,6 +575,35 @@ fn cmd_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<ExitCode, 
         None if cfg!(windows) => Err("ブックが Excel で開かれていません。Excel で開いてから再実行するか、`ras pack` でファイルへ直接書き込んでください".into()),
         None => Err(format!("{}。`ras pack` でファイルへ直接書き込めます", ras_sync::SyncError::Unsupported)),
     }
+}
+
+/// Takes over the hand-written VBA of the workbook file `book` into the project (spec §14.7.1),
+/// as the live sync does with the open workbook.
+fn take_over_offline(root: &Path, book: &Path, codepage: u16) -> Result<ras_sync::Prepared, String> {
+    let at = |e: ras_ovba::OvbaError| format!("{}: {e}", book.display());
+    let unpacked = ras_ovba::unpack(book).map_err(at)?;
+    let Some(project) = unpacked.project else { return Ok(ras_sync::Prepared::default()) };
+    let modules: Vec<ras_form::import::BookModule> = project.modules.iter().map(|m| ras_form::import::BookModule { name: m.name.clone(), kind: m.kind, code: m.source.clone() }).collect();
+    let mut forms: Option<Vec<ras_ovba::UserForm>> = None;
+    let mut form = |name: &str| -> Result<ras_ovba::UserForm, String> {
+        if forms.is_none() {
+            forms = Some(ras_ovba::unpack_user_forms(book).map_err(at)?);
+        }
+        forms.iter().flatten().find(|f| f.name.eq_ignore_ascii_case(name)).cloned().ok_or_else(|| format!("{} にフォーム `{name}` のデザイナがありません", book.display()))
+    };
+    ras_form::import::prepare(root, ras_form::import::Book { modules: &modules, workbook_code_name: &unpacked.code_names.workbook, form: &mut form }, codepage)
+}
+
+/// Prints what was taken over from the workbook and what waits for the user.
+fn report_take_over(prepared: &ras_sync::Prepared) {
+    for line in prepared.messages() {
+        eprintln!("{line}");
+    }
+}
+
+/// Whether Excel has the workbook open (its owner file `~$Book.xlsm` exists).
+fn is_open_in_excel(book: &Path) -> bool {
+    book.file_name().and_then(|n| n.to_str()).is_some_and(|n| book.with_file_name(format!("~${n}")).exists())
 }
 
 /// Whether a module holds anything besides its `Attribute` header, `Option` statements and blank lines.

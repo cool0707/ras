@@ -12,7 +12,7 @@ use std::time::Duration;
 use lsp_server::{Message, Notification, RequestId, Response};
 use ras_compiler::emit::OutputFile;
 use ras_compiler::{BuildOptions, Config};
-use ras_sync::{Forms, Report, Session, SyncError, SyncOptions};
+use ras_sync::{Forms, Prepared, Report, Session, SyncError};
 use serde_json::{json, Value};
 
 /// How often the thread looks whether the workbook was opened or closed, and retries a sync Excel was too busy for.
@@ -38,7 +38,7 @@ pub fn spawn(send: Send) -> Sender<Job> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()
         .name("ras-sync".into())
-        .spawn(move || Worker { send, root: None, session: None, connected: false, pending: 0, drift: 0, retry: false, message: None, last_status: None, last_warning: None }.run(rx))
+        .spawn(move || Worker { send, root: None, session: None, connected: false, pending: 0, drift: 0, retry: false, message: None, last_status: None, last_warning: None, last_take_over: None }.run(rx))
         .expect("the sync thread starts");
     tx
 }
@@ -72,6 +72,8 @@ struct Worker {
     message: Option<String>,
     last_status: Option<Value>,
     last_warning: Option<String>,
+    /// The last notification about a take-over: what could not be taken over is said once.
+    last_take_over: Option<String>,
 }
 
 fn read_config(root: &Path) -> Result<Config, String> {
@@ -118,7 +120,29 @@ fn describe(report: &Report) -> String {
     if !report.drifted.is_empty() {
         text.push_str(&format!("。VBE 上で編集されたため上書きしていないモジュール: {}", report.drifted.join(", ")));
     }
+    if !report.pending.is_empty() {
+        text.push_str(&format!("。取り込んだファイルに `// TODO(VBA):` の行が残っているため置き換えていないもの: {}", report.pending.join(", ")));
+    }
     text
+}
+
+/// A short account of what a take-over wrote into the project, for a notification.
+fn describe_take_over(prepared: &Prepared) -> Option<(i32, String)> {
+    if prepared.imported.is_empty() && prepared.skipped.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if !prepared.imported.is_empty() {
+        let items: Vec<String> = prepared.imported.iter().map(|i| format!("{} → {}", i.name, i.path)).collect();
+        parts.push(format!("ブックの VBA を RAS に変換して取り込みました（{}）。元の VBA は vba/ に保存しています", items.join("、")));
+    }
+    let todos: Vec<String> = prepared.imported.iter().filter(|i| !i.todos.is_empty()).map(|i| format!("{}（{} 行）", i.path, i.todos.len())).collect();
+    if !todos.is_empty() {
+        parts.push(format!("変換できなかった行が `// TODO(VBA):` として残っています: {}。直すまでブックの元のコードは置き換えません", todos.join("、")));
+    }
+    parts.extend(prepared.skipped.iter().cloned());
+    let level = if todos.is_empty() && prepared.skipped.is_empty() { 3 } else { 2 };
+    Some((level, format!("RAS: {}", parts.join("。"))))
 }
 
 impl Worker {
@@ -213,9 +237,15 @@ impl Worker {
             let connected = self.session()?.connect();
             self.connected = connected.is_ok();
             connected.map_err(Failure::Sync)?;
+            // The hand-written VBA of the workbook is taken over into the project first (spec §14.7.1).
+            let config = read_config(&root).map_err(Failure::Build)?;
+            let prepared = if config.sync.pull_unmanaged { self.session()?.take_over(&root, config.target.codepage).map_err(Failure::Sync)? } else { Prepared::default() };
+            self.announce(&prepared);
             let built = compile(&root).map_err(Failure::Build)?;
             let forms = Forms { forms: &built.forms, codepage: built.codepage };
-            self.session()?.apply(&built.files, forms, &SyncOptions { overwrite }).map_err(Failure::Sync)
+            let report = self.session()?.apply(&built.files, forms, &ras_sync::options(&prepared, overwrite)).map_err(Failure::Sync)?;
+            ras_form::import::finish(&prepared).map_err(Failure::Build)?;
+            Ok(report)
         })();
         self.retry = matches!(result, Err(Failure::Sync(SyncError::Busy(_))));
         match &result {
@@ -230,6 +260,18 @@ impl Worker {
             }
         }
         result
+    }
+
+    /// Tells the user what a take-over wrote into the project (the files appear in the editor).
+    fn announce(&mut self, prepared: &Prepared) {
+        // Only when something was written or could not be: what is pending is in the result of every sync.
+        let Some((level, message)) = describe_take_over(prepared) else { return };
+        if prepared.imported.is_empty() && self.last_take_over.as_ref() == Some(&message) {
+            return;
+        }
+        self.last_take_over = Some(message.clone());
+        (self.send)(Message::Notification(Notification::new("window/showMessage".into(), json!({ "type": level, "message": message }))));
+        (self.send)(Message::Notification(Notification::new("window/logMessage".into(), json!({ "type": 3, "message": prepared.messages().join("\n") }))));
     }
 
     /// A sync nobody asked for: after a save, when the workbook was opened, or as a retry.
