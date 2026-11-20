@@ -823,11 +823,13 @@ function iter(o) {
     return raise(438);
 }
 
-function typeName(v) {
+/** VBA's `TypeName`. `num`: the name of a number when the static type has only one numeric type. */
+function typeName(v, num) {
     switch (typeof v) {
         case "string":
             return "String";
         case "number":
+            if (num) return num;
             return Number.isInteger(v) && Math.abs(v) <= 2147483647 ? "Long" : "Double";
         case "boolean":
             return "Boolean";

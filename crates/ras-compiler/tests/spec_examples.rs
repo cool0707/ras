@@ -841,15 +841,16 @@ export function touch(ws: Excel.Worksheet): string {
     let mut cfg = config();
     cfg.doevents.enabled = false;
     let (prog, out) = compile_with(&[("m", src)], cfg);
-    // The qualified-reference lint (rule 9) still fires for `activeSheet`; nothing complains about the spelling.
+    // The qualified-reference lint (rule 9) still fires for `activeSheet`, and `cells` is not a member of a
+    // chart sheet (`activeSheet` is `Excel.Worksheet | Excel.Chart`, spec §2.6.5); nothing complains about the spelling.
     let codes: Vec<&str> = prog.diagnostics.iter().filter(|d| d.severity <= Severity::Warning).map(|d| d.code).collect();
-    assert_eq!(codes, vec!["W0401"]);
+    assert_eq!(codes, vec!["W0401", "W0305"]);
     let m = code(&out, "M");
     // The generated VBA carries the type library's spelling; a local named like a host global is renamed.
     assert_contains(&m, "    Dim range_ As Range\n");
     assert_contains(&m, "    Set range_ = ws.Range(\"A1\")\n    range_.Interior.Color = RGB(255&, 0&, 0&)\n");
     assert_contains(&m, "    range_.Delete");
-    // Late-bound members (`activeSheet` is an Object) are spelled like the bundled definitions too.
+    // Late-bound members (`activeSheet` is stored in an Object) are spelled like the bundled definitions too.
     assert_contains(&m, "    ActiveSheet.Cells(1&, 1&).Value2 = 1&\n");
     // `switch` is a keyword, so that global keeps its VBA name.
     assert_contains(&m, "    Debug.Print UBound(Split(\"a,b\", \",\")), Switch(True, 1&)\n");

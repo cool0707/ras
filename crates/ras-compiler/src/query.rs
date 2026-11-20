@@ -105,6 +105,8 @@ pub(crate) fn vba_type(t: &Type) -> Option<&'static str> {
         Type::Str => "String",
         Type::Bool => "Boolean",
         Type::Object | Type::Map(..) | Type::Func(_) => "Object",
+        Type::Union(_) if t.is_object() => "Object",
+        Type::Union(_) => "Variant",
         _ => return None,
     })
 }
@@ -185,7 +187,12 @@ fn describe_res(prog: &Program, m: ModuleId, offset: u32, res: &Res, ty: &Type) 
                 LocalKind::Param | LocalKind::LambdaParam | LocalKind::This => "(引数)",
                 _ => "let",
             };
-            code_block(&with_vba(prog, &format!("{kw} {}", d.name), ty), None)
+            // A narrowed local (spec §2.6.4) is still stored in its declared type.
+            let head = format!("{kw} {}", d.name);
+            match vba_type(&d.ty) {
+                Some(v) if *ty != d.ty => code_block(&format!("{head}: {}\n// VBA: {v}（宣言は `{}`。ここでは型が絞り込まれています）", prog.show(ty), prog.show(&d.ty)), None),
+                _ => code_block(&with_vba(prog, &head, ty), None),
+            }
         }
         Res::Global(v) => {
             let d = &prog.vars[*v];
@@ -376,6 +383,13 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
         }
     };
     match ty {
+        // The members every member type of the union has.
+        Type::Union(ms) => {
+            let mut lists = ms.iter().map(|t| members_of(prog, m, t));
+            let first = lists.next().unwrap_or_default();
+            let rest: Vec<Vec<Completion>> = lists.collect();
+            out = first.into_iter().filter(|c| rest.iter().all(|l| l.iter().any(|o| o.label == c.label))).collect();
+        }
         Type::Class(c, _) => {
             class_members(prog, *c, false, &mut out);
             let d = &prog.classes[*c];

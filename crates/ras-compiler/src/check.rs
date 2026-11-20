@@ -49,6 +49,23 @@ struct FnCtx {
     /// Inside the arguments of `ws.Range(...)`: unqualified `Cells` / `Range` are auto-qualified.
     qualify_depth: usize,
     in_field_init: bool,
+    /// Locals whose type is narrowed by `instanceof` / `typeof` here (innermost last).
+    narrowed: Vec<(LocalId, Type)>,
+    /// `x instanceof T` → the resolved `T`.
+    instanceof_types: HashMap<ExprId, Type>,
+    /// Method of a union-typed receiver (callee member expression) → the methods of the other members.
+    union_calls: HashMap<ExprId, Vec<(FnId, HashMap<String, Type>)>>,
+    /// Property of a union-typed receiver → (every member's is writable, the type they share).
+    union_props: HashMap<ExprId, (bool, Option<Type>)>,
+}
+
+/// Narrowed types of locals that hold when a condition is true (or false).
+type Facts = Vec<(LocalId, Type)>;
+
+/// A member found on one member type of a union.
+enum UnionMember {
+    Value { res: Res, ty: Type, writable: bool, owner: ClassId, public: bool },
+    Method { f: FnId, env: HashMap<String, Type>, owner: ClassId, public: bool },
 }
 
 pub(crate) struct Checker<'a> {
@@ -153,6 +170,10 @@ impl Checker<'_> {
             // Structs (and arrays of them) cannot be stored in a Variant.
             (f, Any) | (Any, f) if f.has_struct() => false,
             (_, Any) | (Any, _) => true,
+            // `A | B` fits where each of its members fits; a value fits a union when it fits one of the members.
+            (Union(fs), _) => fs.iter().all(|f| self.assignable(f, to)),
+            (Null, Union(ts)) => ts.iter().any(|t| t.is_object()),
+            (_, Union(ts)) => ts.iter().any(|t| self.assignable(from, t)),
             (Null, t) => t.is_object() || matches!(t, Param(p) if self.constraint_of(p) == Constraint::ObjectType),
             (Byte, Short | Int | Long | Float | Double | Currency | Decimal) => true,
             (Short, Int | Long | Float | Double | Currency | Decimal) => true,
@@ -278,7 +299,7 @@ impl Checker<'_> {
 
     /// Reports an error unless a value of type `from` (expression `e`) can be stored into `to`.
     fn coerce(&mut self, e: &Expr, from: &Type, to: &Type) {
-        if self.assignable(from, to) {
+        if self.assignable(from, to) || self.implicit_narrowing(e.span, from, to) {
             return;
         }
         // Integer constants may be stored into narrower integer types when they fit (spec §2.2).
@@ -307,6 +328,27 @@ impl Checker<'_> {
         self.err(e.span, "E0301", format!("型 `{}` を `{}` に代入できません{hint}", self.show(from), self.show(to)));
     }
 
+    /// A union stored where only some of its members fit (`const ws: Excel.Worksheet = activeSheet`):
+    /// allowed like VBA's `Set ws = ActiveSheet`, which checks at run time, with a warning (spec §2.6.2).
+    fn implicit_narrowing(&mut self, span: Span, from: &Type, to: &Type) -> bool {
+        let Some(ms) = from.union_members() else { return false };
+        if to.has_struct() || matches!(to, Type::Void | Type::Ns(_)) {
+            return false;
+        }
+        let rest: Vec<String> = ms.iter().filter(|m| !self.assignable(m, to)).map(|m| self.show(m)).collect();
+        if rest.len() == ms.len() {
+            return false;
+        }
+        let what = if to.is_object() { "実行時エラー（型が一致しません）になります" } else { "VBA の暗黙の型変換になり、変換できなければ実行時エラーになります" };
+        let (shown_from, shown_to) = (self.show(from), self.show(to));
+        self.warn(
+            span,
+            "W0306",
+            format!("`{shown_from}` を `{shown_to}` として扱います。値が `{}` のときは{what}（`instanceof` / `typeof` で絞り込むか、`as {shown_to}` で変換してください）", rest.join("` / `")),
+        );
+        true
+    }
+
     fn unify_branches(&mut self, span: Span, a: &Type, b: &Type) -> Type {
         if self.assignable(b, a) && *a != Type::Null {
             a.clone()
@@ -315,7 +357,13 @@ impl Checker<'_> {
         } else if let Some(p) = self.promote(a, b) {
             p
         } else {
-            self.err(span, "E0302", format!("型が一致しません: `{}` と `{}`", self.show(a), self.show(b)));
+            let unionable = |t: &Type| t.is_value() && !t.has_struct() && !t.contains_param() && !matches!(t, Type::Null | Type::WStr | Type::AStr);
+            let hint = if unionable(a) && unionable(b) {
+                format!("（どちらの型も受けるには `{}` のようにユニオン型の型注釈を付けてください）", self.show(&Type::union([a.clone(), b.clone()])))
+            } else {
+                String::new()
+            };
+            self.err(span, "E0302", format!("型が一致しません: `{}` と `{}`{hint}", self.show(a), self.show(b)));
             Type::Error
         }
     }
@@ -426,9 +474,7 @@ impl Checker<'_> {
                 self.coerce(d, &t, &pt);
             }
         }
-        for s in &body.stmts {
-            self.stmt(s);
-        }
+        self.stmts(&body.stmts);
         self.pop_scope();
 
         let ret = match &def.ret {
@@ -595,11 +641,210 @@ impl Checker<'_> {
 
     fn block(&mut self, b: &ast::Block) {
         self.push_scope();
-        for s in &b.stmts {
-            self.stmt(s);
-        }
+        self.stmts(&b.stmts);
         self.pop_scope();
     }
+
+    /// A statement list. After `if (!(x instanceof T)) return;` the rest of the list sees `x` as `T`.
+    fn stmts(&mut self, stmts: &[Stmt]) {
+        let mark = self.fx.narrowed.len();
+        for (i, s) in stmts.iter().enumerate() {
+            self.stmt(s);
+            if let StmtKind::If { cond, then, els } = &s.kind {
+                let then_exits = stmt_exits(then);
+                let else_exits = els.as_ref().is_some_and(|e| stmt_exits(e));
+                if then_exits != else_exits {
+                    let (t, f) = self.guard_facts(cond, &Vec::new());
+                    let facts = if then_exits { f } else { t };
+                    let rest = &stmts[i + 1..];
+                    let facts = self.stable_facts(facts, &mut |name| rest.iter().any(|r| assigns_in_stmt(r, name)));
+                    self.fx.narrowed.extend(facts);
+                }
+            }
+        }
+        self.fx.narrowed.truncate(mark);
+    }
+
+    /// Runs `f` with `facts` in effect (those whose local `region` does not assign).
+    fn with_facts<R>(&mut self, facts: Facts, assigned: &mut dyn FnMut(&str) -> bool, f: impl FnOnce(&mut Self) -> R) -> R {
+        let facts = self.stable_facts(facts, assigned);
+        let mark = self.fx.narrowed.len();
+        self.fx.narrowed.extend(facts);
+        let r = f(self);
+        self.fx.narrowed.truncate(mark);
+        r
+    }
+
+    /// Drops the facts about locals that are assigned in the region they would apply to.
+    fn stable_facts(&self, facts: Facts, assigned: &mut dyn FnMut(&str) -> bool) -> Facts {
+        facts.into_iter().filter(|(l, _)| !assigned(&self.fx.locals[*l].name)).collect()
+    }
+
+    // ------------------------------------------------------------------ narrowing (spec §2.6.4)
+
+    /// The current type of a local: its declared type unless narrowed here.
+    fn local_ty(&self, l: LocalId) -> Type {
+        self.fx.narrowed.iter().rev().find(|(x, _)| *x == l).map(|(_, t)| t.clone()).unwrap_or_else(|| self.fx.locals[l].ty.clone())
+    }
+
+    fn fact_ty(&self, env: &Facts, l: LocalId) -> Type {
+        env.iter().rev().find(|(x, _)| *x == l).map(|(_, t)| t.clone()).unwrap_or_else(|| self.local_ty(l))
+    }
+
+    /// A local variable or parameter that a type guard can narrow.
+    fn guarded_local(&self, e: &Expr) -> Option<LocalId> {
+        let inner = e.peel();
+        if !matches!(inner.kind, ExprKind::Name(_)) {
+            return None;
+        }
+        match self.prog.modules[self.module].info.res.get(&inner.id) {
+            Some(Res::Local(l)) if self.fx.locals.get(*l).is_some_and(|d| d.kind != LocalKind::This) => Some(*l),
+            _ => None,
+        }
+    }
+
+    /// What `cond` being true / false tells about the types of locals (`env`: facts already known).
+    fn guard_facts(&self, cond: &Expr, env: &Facts) -> (Facts, Facts) {
+        let none = || (Vec::new(), Vec::new());
+        match &cond.kind {
+            ExprKind::Paren(inner) => self.guard_facts(inner, env),
+            ExprKind::Unary { op: UnaryOp::Not, operand } => {
+                let (t, f) = self.guard_facts(operand, env);
+                (f, t)
+            }
+            ExprKind::Binary { op: BinaryOp::And, lhs, rhs } => {
+                let (ta, _) = self.guard_facts(lhs, env);
+                let env2: Facts = env.iter().cloned().chain(ta.iter().cloned()).collect();
+                let (tb, _) = self.guard_facts(rhs, &env2);
+                (ta.into_iter().chain(tb).collect(), Vec::new())
+            }
+            ExprKind::Binary { op: BinaryOp::Or, lhs, rhs } => {
+                let (ta, fa) = self.guard_facts(lhs, env);
+                let env2: Facts = env.iter().cloned().chain(fa.iter().cloned()).collect();
+                let (tb, fb) = self.guard_facts(rhs, &env2);
+                // True when `lhs` is true, or when `lhs` is false and `rhs` is true.
+                let mut locals: Vec<LocalId> = Vec::new();
+                for (l, _) in ta.iter().chain(tb.iter()) {
+                    if !locals.contains(l) {
+                        locals.push(*l);
+                    }
+                }
+                let t = locals
+                    .into_iter()
+                    .map(|l| {
+                        let a = ta.iter().rev().find(|(x, _)| *x == l).map(|(_, t)| t.clone()).unwrap_or_else(|| self.fact_ty(env, l));
+                        let b = tb.iter().rev().find(|(x, _)| *x == l).map(|(_, t)| t.clone()).unwrap_or_else(|| self.fact_ty(&env2, l));
+                        (l, Type::union([a, b]))
+                    })
+                    .collect();
+                (t, fa.into_iter().chain(fb).collect())
+            }
+            ExprKind::InstanceOf { expr, .. } => {
+                let (Some(l), Some(target)) = (self.guarded_local(expr), self.fx.instanceof_types.get(&cond.id)) else { return none() };
+                if !matches!(target, Type::Class(..)) {
+                    return none();
+                }
+                let cur = self.fact_ty(env, l);
+                let t = vec![(l, self.narrow_to(&cur, target))];
+                let f = self.narrow_away(&cur, |m| self.is_subtype(m, target)).map(|ty| vec![(l, ty)]).unwrap_or_default();
+                (t, f)
+            }
+            ExprKind::Binary { op: op @ (BinaryOp::Eq | BinaryOp::Ne), lhs, rhs } => {
+                let guard = |a: &Expr, b: &Expr| match (&a.peel().kind, &b.peel().kind) {
+                    (ExprKind::Unary { op: UnaryOp::TypeOf, operand }, ExprKind::Str(name)) => self.guarded_local(operand).map(|l| (l, name.clone())),
+                    _ => None,
+                };
+                let Some((l, name)) = guard(lhs, rhs).or_else(|| guard(rhs, lhs)) else { return none() };
+                let cur = self.fact_ty(env, l);
+                let t = self.narrow_typeof(&cur, &name).map(|ty| vec![(l, ty)]).unwrap_or_default();
+                let f = self.narrow_away(&cur, |m| self.type_name_of(m).is_some_and(|n| n.eq_ignore_ascii_case(&name))).map(|ty| vec![(l, ty)]).unwrap_or_default();
+                if *op == BinaryOp::Eq {
+                    (t, f)
+                } else {
+                    (f, t)
+                }
+            }
+            _ => none(),
+        }
+    }
+
+    /// `a` is always an instance of `b`.
+    fn is_subtype(&self, a: &Type, b: &Type) -> bool {
+        match (a, b) {
+            (_, Type::Object) => a.is_object(),
+            (Type::Class(x, xa), Type::Class(y, ya)) => {
+                if x == y {
+                    xa == ya || self.prog.classes[*x].kind == ClassKind::Host
+                } else {
+                    self.prog.class_conforms(*x, *y)
+                }
+            }
+            _ => a == b,
+        }
+    }
+
+    /// The type of a value of type `cur` for which `instanceof target` is true.
+    fn narrow_to(&self, cur: &Type, target: &Type) -> Type {
+        let members: Vec<Type> = match cur {
+            Type::Union(ms) => ms.clone(),
+            t => vec![t.clone()],
+        };
+        let mut kept = Vec::new();
+        for m in members {
+            if self.is_subtype(&m, target) {
+                kept.push(m);
+            } else if self.is_subtype(target, &m) || matches!(m, Type::Any) {
+                kept.push(target.clone());
+            }
+        }
+        if kept.is_empty() {
+            target.clone()
+        } else {
+            Type::union(kept)
+        }
+    }
+
+    /// A union without the members for which `drop` holds (`None` unless something is dropped and something remains).
+    fn narrow_away(&self, cur: &Type, drop: impl Fn(&Type) -> bool) -> Option<Type> {
+        let ms = cur.union_members()?;
+        let rest: Vec<Type> = ms.iter().filter(|m| !drop(m)).cloned().collect();
+        (rest.len() < ms.len() && !rest.is_empty()).then(|| Type::union(rest))
+    }
+
+    /// `typeof x == "String"`: the members of `cur` whose values have that `TypeName`.
+    fn narrow_typeof(&self, cur: &Type, name: &str) -> Option<Type> {
+        match cur {
+            Type::Union(ms) => {
+                let kept: Vec<Type> = ms.iter().filter(|m| self.type_name_of(m).is_some_and(|n| n.eq_ignore_ascii_case(name))).cloned().collect();
+                (!kept.is_empty()).then(|| Type::union(kept))
+            }
+            Type::Any => type_of_type_name(name),
+            _ => None,
+        }
+    }
+
+    /// What VBA's `TypeName` (RAS `typeof`) returns for a value of type `t`, when it is fixed.
+    fn type_name_of(&self, t: &Type) -> Option<String> {
+        Some(match t {
+            // Only a host type's name is fixed: a RAS class may be renamed in VBA (`Circle` → `Circle_`).
+            Type::Class(c, _) if self.prog.classes[*c].kind == ClassKind::Host => self.prog.classes[*c].name.clone(),
+            Type::Class(..) => return None,
+            Type::Map(..) => "Dictionary".into(),
+            Type::Enum(_) => "Long".into(),
+            Type::Decimal => "Decimal".into(),
+            // `TypeName` of an array: the element type and `()` (`"Variant()"`, `"String()"`).
+            Type::Array(e) if !e.is_array() => {
+                let elem = match &**e {
+                    Type::Any | Type::Decimal | Type::Error | Type::Union(_) => "Variant".to_string(),
+                    Type::Object | Type::Map(..) | Type::Func(_) => "Object".to_string(),
+                    other => self.type_name_of(other)?,
+                };
+                format!("{elem}()")
+            }
+            other => crate::query::vba_type(other).filter(|n| !matches!(*n, "Variant" | "Object" | "LongPtr"))?.to_string(),
+        })
+    }
+
 
     fn scoped_stmt(&mut self, s: &Stmt) {
         match &s.kind {
@@ -642,9 +887,10 @@ impl Checker<'_> {
             StmtKind::Block(b) => self.block(b),
             StmtKind::If { cond, then, els } => {
                 self.cond(cond);
-                self.scoped_stmt(then);
+                let (t, f) = self.guard_facts(cond, &Vec::new());
+                self.with_facts(t, &mut |n| assigns_in_stmt(then, n), |ck| ck.scoped_stmt(then));
                 if let Some(e) = els {
-                    self.scoped_stmt(e);
+                    self.with_facts(f, &mut |n| assigns_in_stmt(e, n), |ck| ck.scoped_stmt(e));
                 }
             }
             StmtKind::For { decorators, init, cond, update, body } => {
@@ -660,8 +906,9 @@ impl Checker<'_> {
                 for u in update {
                     self.expr(u, None);
                 }
+                let facts = cond.as_ref().map(|c| self.guard_facts(c, &Vec::new()).0).unwrap_or_default();
                 self.fx.loops.push(None);
-                self.scoped_stmt(body);
+                self.with_facts(facts, &mut |n| assigns_in_stmt(body, n) || update.iter().any(|u| assigns_in_expr(u, n)), |ck| ck.scoped_stmt(body));
                 self.fx.loops.pop();
                 self.pop_scope();
             }
@@ -695,7 +942,7 @@ impl Checker<'_> {
                     Some(t) => {
                         let tps = self.fx.type_params.clone();
                         let declared = resolve_type(self.prog, self.module, &tps, t);
-                        if !self.assignable(&elem, &declared) {
+                        if !self.assignable(&elem, &declared) && !self.implicit_narrowing(t.span(), &elem, &declared) {
                             self.err(t.span(), "E0301", format!("要素の型 `{}` を `{}` に代入できません", self.show(&elem), self.show(&declared)));
                         }
                         declared
@@ -714,8 +961,9 @@ impl Checker<'_> {
                 self.loop_decorators(decorators);
                 self.fx.has_loops = true;
                 self.cond(cond);
+                let (t, _) = self.guard_facts(cond, &Vec::new());
                 self.fx.loops.push(None);
-                self.scoped_stmt(body);
+                self.with_facts(t, &mut |n| assigns_in_stmt(body, n), |ck| ck.scoped_stmt(body));
                 self.fx.loops.pop();
             }
             StmtKind::DoWhile { decorators, body, cond } => {
@@ -746,9 +994,7 @@ impl Checker<'_> {
                         }
                     }
                     self.push_scope();
-                    for st in &c.body {
-                        self.stmt(st);
-                    }
+                    self.stmts(&c.body);
                     self.pop_scope();
                 }
                 self.fx.switch_depth -= 1;
@@ -774,9 +1020,7 @@ impl Checker<'_> {
                             let ty = self.error_type();
                             self.declare_local(p, ty, LocalKind::Catch);
                         }
-                        for st in &c.body.stmts {
-                            self.stmt(st);
-                        }
+                        self.stmts(&c.body.stmts);
                         self.pop_scope();
                     }
                 }
@@ -1025,6 +1269,13 @@ impl Checker<'_> {
         if a.is_error() || b.is_error() || *a == Any || *b == Any {
             return true;
         }
+        // A union equals a value when one of its members can; ordering needs every member to be ordered.
+        if let Some(ms) = a.union_members() {
+            return if equality { ms.iter().any(|m| self.comparable(m, b, true)) } else { ms.iter().all(|m| self.comparable(m, b, false)) };
+        }
+        if let Some(ms) = b.union_members() {
+            return if equality { ms.iter().any(|m| self.comparable(a, m, true)) } else { ms.iter().all(|m| self.comparable(a, m, false)) };
+        }
         if a.is_numeric() && b.is_numeric() {
             return true;
         }
@@ -1246,8 +1497,9 @@ impl Checker<'_> {
             }
             ExprKind::Ternary { cond, then, els } => {
                 self.cond(cond);
-                let a = self.value(then, expect);
-                let b = self.value(els, expect.or(Some(&a)));
+                let (t, f) = self.guard_facts(cond, &Vec::new());
+                let a = self.with_facts(t, &mut |n| assigns_in_expr(then, n), |ck| ck.value(then, expect));
+                let b = self.with_facts(f, &mut |n| assigns_in_expr(els, n), |ck| ck.value(els, expect.or(Some(&a))));
                 match expect {
                     Some(want) if self.assignable(&a, want) && self.assignable(&b, want) && *want != Type::Any => want.clone(),
                     _ => self.unify_branches(e.span, &a, &b),
@@ -1270,8 +1522,10 @@ impl Checker<'_> {
                     Access::Func { f, env, recv } => {
                         let def = &self.prog.fns[f];
                         let host = matches!(def.kind, FnKind::Host { .. });
-                        if host && def.required_params() == 0 && def.ret_ty() != Type::Void && recv != Recv::Extension {
-                            def.ret_ty().subst(&env)
+                        let union_ok = self.fx.union_calls.get(&e.id).is_none_or(|o| o.iter().all(|(g, _)| self.prog.fns[*g].required_params() == 0));
+                        if host && def.required_params() == 0 && def.ret_ty() != Type::Void && recv != Recv::Extension && union_ok {
+                            let ret = def.ret_ty().subst(&env);
+                            self.union_call_ret(e.id, ret)
                         } else {
                             self.err(name.span, "E0382", format!("メソッド `{}` は呼び出して使ってください（`()` が必要です）", name.text));
                             Type::Error
@@ -1368,7 +1622,8 @@ impl Checker<'_> {
                 let from = self.value(expr, None);
                 let tps = self.fx.type_params.clone();
                 let target = resolve_type(self.prog, self.module, &tps, ty);
-                if !(from.is_object() || matches!(from, Type::Any | Type::Error)) {
+                self.fx.instanceof_types.insert(e.id, target.clone());
+                if !(from.is_object() || from.is_mixed_union() || matches!(from, Type::Any | Type::Error)) {
                     self.err(expr.span, "E0391", "`instanceof` の左辺はオブジェクトである必要があります");
                 }
                 if !matches!(target, Type::Class(..) | Type::Error) {
@@ -1446,6 +1701,9 @@ impl Checker<'_> {
     }
 
     fn stringifiable(&self, t: &Type) -> bool {
+        if let Some(ms) = t.union_members() {
+            return ms.iter().all(|m| self.stringifiable(m));
+        }
         t.is_numeric() || matches!(t, Type::Str | Type::Bool | Type::Date | Type::Any | Type::Error | Type::Param(_))
     }
 
@@ -1453,6 +1711,12 @@ impl Checker<'_> {
         use Type::*;
         if self.assignable(from, to) || self.assignable(to, from) {
             return true;
+        }
+        if let Some(fs) = from.union_members() {
+            return fs.iter().any(|f| self.castable(f, to));
+        }
+        if let Some(ts) = to.union_members() {
+            return ts.iter().any(|t| self.castable(from, t));
         }
         match (from, to) {
             (a, b) if a.is_numeric() && b.is_numeric() => true,
@@ -1482,7 +1746,7 @@ impl Checker<'_> {
                 self.capture(local, &crossed, e.span);
             }
             self.set_res(e.id, Res::Local(local));
-            return Access::Value(self.fx.locals[local].ty.clone());
+            return Access::Value(self.local_ty(local));
         }
         match self.lookup_sym(&id.text) {
             Some(Sym::Var(v)) => {
@@ -1843,6 +2107,7 @@ impl Checker<'_> {
                     Access::Error
                 }
             }
+            Type::Union(members) => self.union_member_access(e, object, ot, members, name),
             Type::Struct(s) => match self.prog.structs[*s].fields.iter().find(|f| f.0 == name.text).map(|f| f.1.clone()) {
                 Some(ty) => {
                     self.set_res(e.id, Res::Dynamic);
@@ -1910,6 +2175,215 @@ impl Checker<'_> {
         }
     }
 
+    /// Instance member `name` of a class (or host interface), without reporting anything.
+    fn lookup_instance_member(&mut self, c: ClassId, targs: &[Type], name: &str) -> Option<UnionMember> {
+        let env = self.prog.class_env(c, targs);
+        if let Some((owner, idx)) = self.prog.find_field(c, name) {
+            let field = &self.prog.classes[owner].fields[idx];
+            if !field.is_static {
+                let ty = if field.ty == Type::Void { Type::Error } else { field.ty.subst(&env) };
+                return Some(UnionMember::Value { res: Res::Field(owner, idx), ty, writable: !field.readonly, owner, public: field.vis == Visibility::Public });
+            }
+        }
+        let mut getter = None;
+        let mut setter = None;
+        for m in self.prog.find_methods(c, name) {
+            let def = &self.prog.fns[m];
+            let public = def.vis == Visibility::Public;
+            match def.kind {
+                FnKind::Getter { is_static: false, .. } => getter = Some(m),
+                FnKind::Setter { is_static: false, .. } => setter = Some(m),
+                FnKind::Method { is_static: true, .. } | FnKind::Getter { .. } | FnKind::Setter { .. } => {}
+                _ => return Some(UnionMember::Method { f: m, env, owner: c, public }),
+            }
+        }
+        let f = getter.or(setter)?;
+        let public = self.prog.fns[f].vis == Visibility::Public;
+        let ty = match (getter, setter) {
+            (Some(g), _) => self.fn_ret(g, Span::default()).subst(&env),
+            (None, Some(st)) => self.prog.fns[st].params.first().map(|p| p.ty.subst(&env)).unwrap_or(Type::Error),
+            _ => Type::Error,
+        };
+        Some(UnionMember::Value { res: Res::Property { get: getter, set: setter }, ty, writable: setter.is_some(), owner: c, public })
+    }
+
+    /// `x.name` where `x` is a union: a member that every member type has (spec §2.6.3).
+    fn union_member_access(&mut self, e: &Expr, object: &Expr, ot: &Type, members: &[Type], name: &Ident) -> Access {
+        let shown = self.show(ot);
+        let classes: Vec<(ClassId, Vec<Type>)> = members
+            .iter()
+            .filter_map(|m| match m {
+                Type::Class(c, args) => Some((*c, args.clone())),
+                _ => None,
+            })
+            .collect();
+        if classes.len() != members.len() {
+            if let Some(a) = self.ext_access(e, ot, name) {
+                return a;
+            }
+            self.err(name.span, "E0202", format!("ユニオン型 `{shown}` のメンバー `{}` は参照できません。`instanceof` / `typeof` で型を絞り込んでください", name.text));
+            return Access::Error;
+        }
+        let mut found = Vec::new();
+        let mut missing = Vec::new();
+        for (c, targs) in &classes {
+            match self.lookup_instance_member(*c, targs, &name.text) {
+                Some(m) => found.push(m),
+                None => missing.push(*c),
+            }
+        }
+        if !missing.is_empty() {
+            if let Some(a) = self.ext_access(e, ot, name) {
+                return a;
+            }
+            // VBA spelling of a host member (`s.Name`).
+            let js = classes.iter().find_map(|(c, _)| self.host_member_ci(*c, &name.text)).filter(|js| *js != name.text);
+            if let Some(js) = js {
+                self.warn_host_case(name, &js);
+                return self.member_access(e, object, ot, &Ident { text: js, span: name.span });
+            }
+            let names: Vec<String> = missing.iter().map(|c| self.prog.class_display(*c)).collect();
+            let hosts_only = missing.iter().all(|c| {
+                let d = &self.prog.classes[*c];
+                d.kind == ClassKind::Host && !self.prog.modules[d.module].form.as_ref().is_some_and(|f| f.class == Some(*c))
+            });
+            if hosts_only && found.is_empty() {
+                self.warn(name.span, "W0301", format!("`{}` の型定義に `{}` はありません。遅延バインディングとして扱います", names.join("` / `"), name.text));
+                self.set_res(e.id, Res::Dynamic);
+                return Access::Dynamic;
+            }
+            if hosts_only {
+                // `activeSheet.cells(1, 1)`: typed by the members that have it, called by late binding.
+                self.warn(
+                    name.span,
+                    "W0305",
+                    format!("`{}` は `{}` にないため、値が `{}` のときは実行時エラーになります（ユニオン型 `{shown}` のうち一部の型のメンバーです。`instanceof` で型を絞り込んでください）", name.text, names.join("` / `"), names.join("` / `")),
+                );
+            } else {
+                self.err(
+                name.span,
+                "E0202",
+                    format!("`{}` に `{}` はありません（ユニオン型 `{shown}` では、すべての型に共通するメンバーだけを参照できます。`instanceof` で型を絞り込んでください）", names.join("` / `"), name.text),
+                );
+                return Access::Error;
+            }
+        }
+        for m in &found {
+            let (owner, public) = match m {
+                UnionMember::Value { owner, public, .. } | UnionMember::Method { owner, public, .. } => (*owner, *public),
+            };
+            if !public && self.fx.class != Some(owner) {
+                self.err(name.span, "E0392", format!("`{}` は private なのでクラスの外からは参照できません", name.text));
+                return Access::Error;
+            }
+        }
+        if found.iter().all(|m| matches!(m, UnionMember::Value { .. })) {
+            let mut res = None;
+            let mut tys = Vec::new();
+            let mut writable = true;
+            for m in found {
+                if let UnionMember::Value { res: r, ty, writable: w, .. } = m {
+                    res.get_or_insert(r);
+                    tys.push(ty);
+                    writable &= w;
+                }
+            }
+            let same = tys.windows(2).all(|w| w[0] == w[1]).then(|| tys[0].clone());
+            let ty = match &same {
+                Some(t) => t.clone(),
+                None if tys.iter().any(|t| matches!(t, Type::Void | Type::Ns(_)) || t.has_struct()) => {
+                    self.err(name.span, "E0202", format!("`{}` の型が型ごとに異なるため、ユニオン型 `{shown}` からは参照できません", name.text));
+                    return Access::Error;
+                }
+                None => Type::union(tys),
+            };
+            self.set_res(e.id, res.unwrap());
+            self.fx.union_props.insert(e.id, (writable, same));
+            return Access::Value(ty);
+        }
+        if found.iter().all(|m| matches!(m, UnionMember::Method { .. })) {
+            let mut methods: Vec<(FnId, HashMap<String, Type>)> = found
+                .into_iter()
+                .filter_map(|m| match m {
+                    UnionMember::Method { f, env, .. } => Some((f, env)),
+                    _ => None,
+                })
+                .collect();
+            if methods.iter().any(|(f, _)| !self.prog.fns[*f].type_params.is_empty()) {
+                self.err(name.span, "E0202", format!("ジェネリックなメソッド `{}` はユニオン型 `{shown}` からは呼び出せません。`instanceof` で型を絞り込んでください", name.text));
+                return Access::Error;
+            }
+            // The signature with the fewest parameters checks the call; the others are compared with it.
+            let primary = methods.iter().enumerate().min_by_key(|(_, (f, _))| self.prog.fns[*f].params.len()).map(|(i, _)| i).unwrap_or(0);
+            let (f, env) = methods.remove(primary);
+            self.set_res(e.id, Res::Method(f));
+            self.fx.union_calls.insert(e.id, methods);
+            return Access::Func { f, env, recv: Recv::Instance };
+        }
+        self.err(name.span, "E0202", format!("`{}` は型によってプロパティとメソッドが異なるため、ユニオン型 `{shown}` からは参照できません", name.text));
+        Access::Error
+    }
+
+    /// Return type of a method reached through a union (the union of the members' return types).
+    fn union_call_ret(&self, callee: ExprId, ret: Type) -> Type {
+        let Some(others) = self.fx.union_calls.get(&callee) else { return ret };
+        let mut rets = vec![ret];
+        rets.extend(others.iter().map(|(g, env)| self.prog.fns[*g].ret_ty().subst(env)));
+        if rets.contains(&Type::Void) {
+            Type::Void
+        } else {
+            Type::union(rets)
+        }
+    }
+
+    /// Arguments of a call through a union-typed receiver, against the methods of the other members.
+    fn check_union_call(&mut self, call: &Expr, callee: &Expr, name: &str, named: bool, args: &[Expr]) {
+        let Some(others) = self.fx.union_calls.get(&callee.id).cloned() else { return };
+        let primary = match self.info().res.get(&callee.id) {
+            Some(Res::Method(f)) => Some(*f),
+            _ => None,
+        };
+        for (g, env) in others {
+            let d = self.prog.fns[g].clone();
+            let owner = match d.kind {
+                FnKind::Method { class, .. } | FnKind::Abstract { class } | FnKind::Host { class: Some(class) } => self.prog.class_display(class),
+                _ => d.name.clone(),
+            };
+            let rest = d.params.last().is_some_and(|p| p.rest);
+            let (min, max) = (d.required_params(), d.params.len());
+            if args.len() < min || (args.len() > max && !rest) {
+                let count = if rest { format!("{min} 個以上") } else if min == max { format!("{min} 個") } else { format!("{min}〜{max} 個") };
+                self.err(call.span, "E0402", format!("`{owner}.{name}` の引数は {count}です（ユニオン型のすべての型で呼び出せる必要があります）"));
+                continue;
+            }
+            if named {
+                if let Some(p) = primary {
+                    let pp = &self.prog.fns[p].params;
+                    let same = (0..args.len()).all(|i| match (pp.get(i), d.params.get(i)) {
+                        (Some(a), Some(b)) => a.name.eq_ignore_ascii_case(&b.name),
+                        _ => false,
+                    });
+                    if !same {
+                        self.err(call.span, "E0411", format!("`{owner}.{name}` とは引数の名前・順序が異なるため、名前付き引数は使えません"));
+                        continue;
+                    }
+                }
+            }
+            for (i, a) in args.iter().enumerate() {
+                if matches!(a.kind, ExprKind::Undefined) {
+                    continue;
+                }
+                let Some(p) = d.params.get(i).or(if rest { d.params.last() } else { None }) else { continue };
+                let want = if p.rest && i + 1 >= d.params.len() { p.ty.elem().cloned().unwrap_or(Type::Any).subst(&env) } else { p.ty.subst(&env) };
+                let at = self.info().ty(a.id);
+                let ok = if p.mode == PassMode::ByRef { at == want || want == Type::Any || at.is_error() } else { self.assignable(&at, &want) };
+                if !ok {
+                    self.err(a.span, "E0301", format!("`{owner}.{name}` の引数 `{}` には `{}` 型が必要です（`{}` は渡せません）", p.name, self.show(&want), self.show(&at)));
+                }
+            }
+        }
+    }
+
     /// Checks an assignment target and returns its type.
     fn lvalue(&mut self, target: &Expr) -> Type {
         let t = self.expr(target, None);
@@ -1970,6 +2444,14 @@ impl Checker<'_> {
                 if through_struct && matches!(root.kind, ExprKind::Call { .. }) {
                     self.err(target.span, "E0325", "関数やメソッドが返した構造体はコピーなので、フィールドに代入しても元は変わりません。変数に受けて書き換え、必要なら設定し直してください");
                 }
+                if let Some((writable, same)) = self.fx.union_props.get(&inner.id).cloned() {
+                    if !writable {
+                        self.err(name.span, "E0323", format!("`{}` はユニオン型のいずれかの型で読み取り専用です", name.text));
+                    } else if same.is_none() {
+                        self.err(name.span, "E0325", format!("`{}` の型がユニオン型の型ごとに異なるため代入できません。`instanceof` で型を絞り込んでください", name.text));
+                    }
+                    return t;
+                }
                 let res = self.info().res.get(&inner.id).cloned();
                 match res {
                     Some(Res::Field(c, i)) => {
@@ -2014,7 +2496,9 @@ impl Checker<'_> {
         match op {
             BinaryOp::And | BinaryOp::Or => {
                 self.cond(lhs);
-                self.cond(rhs);
+                let (t, f) = self.guard_facts(lhs, &Vec::new());
+                let facts = if op == BinaryOp::And { t } else { f };
+                self.with_facts(facts, &mut |n| assigns_in_expr(rhs, n), |ck| ck.cond(rhs));
                 Type::Bool
             }
             BinaryOp::Coalesce => {
@@ -2033,9 +2517,31 @@ impl Checker<'_> {
             _ => {
                 let a = self.value(lhs, None);
                 let b = self.value(rhs, None);
+                if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+                    self.lint_typeof_name(lhs, rhs);
+                }
                 self.binary_types(e.span, op, &a, &b, lhs, rhs)
             }
         }
+    }
+
+    /// `typeof x == "string"`: RAS's `typeof` is VBA's `TypeName` (`"String"`, `"Long"`, `"Worksheet"` ...).
+    fn lint_typeof_name(&mut self, lhs: &Expr, rhs: &Expr) {
+        let (lit, other) = match (&lhs.peel().kind, &rhs.peel().kind) {
+            (ExprKind::Unary { op: UnaryOp::TypeOf, .. }, ExprKind::Str(s)) => (rhs, s),
+            (ExprKind::Str(s), ExprKind::Unary { op: UnaryOp::TypeOf, .. }) => (lhs, s),
+            _ => return,
+        };
+        let hint = match other.as_str() {
+            "string" => "\"String\"",
+            "number" => "\"Long\" / \"Double\" など",
+            "boolean" => "\"Boolean\"",
+            "object" => "\"Object\" かクラス名（`instanceof` を使うと型が絞り込まれます）",
+            "undefined" => "\"Empty\"",
+            "function" | "bigint" | "symbol" => "VBA の型名",
+            _ => return,
+        };
+        self.warn(lit.span, "W0312", format!("`typeof` は VBA の `TypeName` と同じ型名を返すため、`\"{other}\"` とは一致しません。{hint} と比較してください"));
     }
 
     fn binary_types(&mut self, span: Span, op: BinaryOp, a: &Type, b: &Type, lhs: &Expr, rhs: &Expr) -> Type {
@@ -2210,6 +2716,7 @@ impl Checker<'_> {
     // ------------------------------------------------------------------ calls
 
     fn call(&mut self, e: &Expr, callee: &Expr, type_args: &[ast::TypeRef], args: &[Expr], expect: Option<&Type>) -> Type {
+        let orig_args = args;
         let c = callee.peel();
         let (access, recv): (Access, Option<(&Expr, Type)>) = match &c.kind {
             ExprKind::Name(id) => {
@@ -2308,6 +2815,17 @@ impl Checker<'_> {
                 }
                 let recv_arg = if rk == Recv::Extension { recv } else { None };
                 let (ret, targs) = self.check_fn_call(e, f, env, recv_arg, type_args, args);
+                let ret = if self.fx.union_calls.contains_key(&c.id) {
+                    let name = match &c.kind {
+                        ExprKind::Member { name, .. } => name.text.clone(),
+                        _ => String::new(),
+                    };
+                    let named = !std::ptr::eq(args.as_ptr(), orig_args.as_ptr());
+                    self.check_union_call(e, c, &name, named, args);
+                    self.union_call_ret(c.id, ret)
+                } else {
+                    ret
+                };
                 if qualify {
                     self.fx.qualify_depth -= 1;
                 }
@@ -2541,6 +3059,13 @@ impl Checker<'_> {
         if !is_lvalue {
             self.err(a.span, "E0406", format!("{what} にはリテラルや式ではなく変数を渡してください（参照渡しです）"));
             return;
+        }
+        if let Some(l) = self.guarded_local(a) {
+            if self.local_ty(l) != self.fx.locals[l].ty {
+                let name = self.fx.locals[l].name.clone();
+                self.err(a.span, "E0415", format!("型が絞り込まれている `{name}` は {what} に渡せません（参照渡しで書き換えられると絞り込みが成り立たなくなります）。別の変数に代入して渡してください"));
+                return;
+            }
         }
         if at != want && !at.is_error() && !want.is_error() && *want != Type::Any {
             self.err(a.span, "E0407", format!("{what} には `{}` 型の変数が必要です（`{}` は渡せません。参照渡しでは型が完全に一致している必要があります）", self.show(want), self.show(at)));
@@ -3466,6 +3991,63 @@ fn stmt_returns(s: &Stmt) -> bool {
         StmtKind::Labeled { body, .. } => stmt_returns(body),
         _ => false,
     }
+}
+
+/// Control never reaches the statement after `s`.
+fn stmt_exits(s: &Stmt) -> bool {
+    match &s.kind {
+        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break(_) | StmtKind::Continue(_) => true,
+        StmtKind::Block(b) => b.stmts.iter().any(stmt_exits),
+        StmtKind::If { then, els: Some(els), .. } => stmt_exits(then) && stmt_exits(els),
+        _ => stmt_returns(s),
+    }
+}
+
+/// `target` (of an assignment) writes the variable `name`.
+fn assigns_target(target: &Expr, name: &str) -> bool {
+    match &target.peel().kind {
+        ExprKind::Name(id) => id.text == name,
+        ExprKind::Array(items) => items.iter().any(|i| assigns_target(i, name)),
+        _ => false,
+    }
+}
+
+/// `e` contains an assignment to the variable `name`.
+fn assigns_in_expr(e: &Expr, name: &str) -> bool {
+    crate::astutil::any_expr_in(e, &mut |x| match &x.kind {
+        ExprKind::Assign { target, .. } => assigns_target(target, name),
+        ExprKind::IncDec { operand, .. } => assigns_target(operand, name),
+        _ => false,
+    })
+}
+
+fn assigns_in_stmt(s: &Stmt, name: &str) -> bool {
+    crate::astutil::any_expr(s, &mut |x| match &x.kind {
+        ExprKind::Assign { target, .. } => assigns_target(target, name),
+        ExprKind::IncDec { operand, .. } => assigns_target(operand, name),
+        _ => false,
+    })
+}
+
+/// The type whose values `TypeName` reports as `name` (`"String"` → `string`, `"Variant()"` → `any[]`).
+fn type_of_type_name(name: &str) -> Option<Type> {
+    if let Some(elem) = name.strip_suffix("()") {
+        return Some(Type::array(if elem == "Variant" { Type::Any } else { type_of_type_name(elem)? }));
+    }
+    Some(match name {
+        "String" => Type::Str,
+        "Boolean" => Type::Bool,
+        "Byte" => Type::Byte,
+        "Integer" => Type::Short,
+        "Long" => Type::Int,
+        "LongLong" => Type::Long,
+        "Single" => Type::Float,
+        "Double" => Type::Double,
+        "Currency" => Type::Currency,
+        "Decimal" => Type::Decimal,
+        "Date" => Type::Date,
+        _ => return None,
+    })
 }
 
 fn contains_break(s: &Stmt) -> bool {

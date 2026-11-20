@@ -71,6 +71,65 @@ Public Function RAS_IsNullish(ByRef v As Variant) As Boolean
         RAS_IsNullish = IsEmpty(v) Or IsNull(v)
     End If
 End Function
+'@@ proc RAS_UnionEq
+' `==` on a union value (spec 2.6): values of different kinds are not equal (VBA would convert or raise).
+Public Function RAS_UnionEq(ByRef a As Variant, ByRef b As Variant) As Boolean
+    If IsObject(a) Or IsObject(b) Then
+        If IsObject(a) And IsObject(b) Then RAS_UnionEq = (a Is b)
+        Exit Function
+    End If
+    If IsArray(a) Or IsArray(b) Then Exit Function
+    If RAS_ValueKind(a) <> RAS_ValueKind(b) Then Exit Function
+    If IsNull(a) Or IsEmpty(a) Then
+        RAS_UnionEq = True
+    Else
+        RAS_UnionEq = (a = b)
+    End If
+End Function
+'@@ proc RAS_ValueKind
+' 0 number, 1 string, 2 boolean, 3 date, 4 empty / null.
+Public Function RAS_ValueKind(ByRef v As Variant) As Long
+    Select Case VarType(v)
+    Case vbString
+        RAS_ValueKind = 1&
+    Case vbBoolean
+        RAS_ValueKind = 2&
+    Case vbDate
+        RAS_ValueKind = 3&
+    Case vbEmpty, vbNull
+        RAS_ValueKind = 4&
+    Case Else
+        RAS_ValueKind = 0&
+    End Select
+End Function
+'@@ proc RAS_Rebase1
+' A 1-based 1-D array from Excel (GetOpenFilename with MultiSelect) as a 0-based one, like every
+' RAS array; any other value is returned as it is (spec 2.6.5).
+Public Function RAS_Rebase1(ByRef v As Variant) As Variant
+    Dim out() As Variant
+    Dim i As Long
+    Dim lb As Long
+    If IsObject(v) Then
+        Set RAS_Rebase1 = v
+        Exit Function
+    End If
+    If IsArray(v) Then
+        lb = LBound(v)
+        If lb <> 0& Then
+            If UBound(v) < lb Then
+                RAS_Rebase1 = Array()
+                Exit Function
+            End If
+            ReDim out(0 To UBound(v) - lb)
+            For i = lb To UBound(v)
+                out(i - lb) = v(i)
+            Next i
+            RAS_Rebase1 = out
+            Exit Function
+        End If
+    End If
+    RAS_Rebase1 = v
+End Function
 '@@ proc RAS_Assign
 ' Assignment when it is only known at run time whether the value is an object (spec 2.3).
 Public Sub RAS_Assign(ByRef target As Variant, ByRef source As Variant)

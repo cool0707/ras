@@ -848,7 +848,43 @@ impl Collector {
                 ClassAst::Class(c) => &c.type_params,
                 ClassAst::Interface(i) => &i.type_params,
             };
-            self.prog.classes[*id].type_params = tps.iter().map(|tp| TypeParamDef { name: tp.name.text.clone(), constraint: Constraint::None }).collect();
+            self.prog.classes[*id].type_params = tps.iter().map(|tp| TypeParamDef { name: tp.name.text.clone(), constraint: Constraint::None, default: None }).collect();
+        }
+        // Then the defaults of their type parameters (`interface Sheets<T = Worksheet | Chart>`),
+        // so that a type written without arguments gets them wherever it is declared.
+        let decls: Vec<(ClassId, Vec<ast::TypeParam>)> = self
+            .class_decls
+            .iter()
+            .map(|(id, ast)| {
+                (
+                    *id,
+                    match ast {
+                        ClassAst::Class(c) => c.type_params.clone(),
+                        ClassAst::Interface(i) => i.type_params.clone(),
+                    },
+                )
+            })
+            .filter(|(_, tps)| tps.iter().any(|tp| tp.default.is_some()))
+            .collect();
+        for (id, tps) in decls {
+            let m = self.prog.classes[id].module;
+            self.prog.cur_namespace = self.prog.classes[id].namespace.clone();
+            let mut seen_default = false;
+            for (i, tp) in tps.iter().enumerate() {
+                match &tp.default {
+                    Some(t) => {
+                        seen_default = true;
+                        let scope = self.prog.classes[id].type_params[..i].to_vec();
+                        let ty = resolve_type(&mut self.prog, m, &scope, t);
+                        self.prog.classes[id].type_params[i].default = Some(ty);
+                    }
+                    None if seen_default => {
+                        self.err(m, tp.name.span, "E0171", format!("既定の型引数を持つ型パラメータの後の `{}` にも既定の型引数が必要です", tp.name.text));
+                    }
+                    None => {}
+                }
+            }
+            self.prog.cur_namespace = None;
         }
         // Aliases first (in declaration order), then everything else.
         for (m, a) in std::mem::take(&mut self.alias_decls) {
@@ -919,6 +955,16 @@ impl Collector {
         }
     }
 
+    /// The type parameters of a class or interface, keeping the defaults resolved beforehand.
+    fn class_type_params(&mut self, id: ClassId, m: ModuleId, tps: &[ast::TypeParam]) -> Vec<TypeParamDef> {
+        let mut out = self.type_params(m, &[], tps);
+        for (i, p) in out.iter_mut().enumerate() {
+            p.default = self.prog.classes[id].type_params.get(i).and_then(|d| d.default.clone());
+        }
+        self.prog.classes[id].type_params = out.clone();
+        out
+    }
+
     fn type_params(&mut self, m: ModuleId, outer: &[TypeParamDef], tps: &[ast::TypeParam]) -> Vec<TypeParamDef> {
         let mut out: Vec<TypeParamDef> = Vec::new();
         for tp in tps {
@@ -941,7 +987,7 @@ impl Collector {
             if outer.iter().chain(out.iter()).any(|p| p.name == tp.name.text) {
                 self.err(m, tp.name.span, "E0101", format!("型パラメータ `{}` は既に宣言されています", tp.name.text));
             }
-            out.push(TypeParamDef { name: tp.name.text.clone(), constraint });
+            out.push(TypeParamDef { name: tp.name.text.clone(), constraint, default: None });
         }
         out
     }
@@ -951,8 +997,7 @@ impl Collector {
         self.prog.cur_namespace = self.prog.classes[id].namespace.clone();
         match ast {
             ClassAst::Class(c) => {
-                let tps = self.type_params(m, &[], &c.type_params);
-                self.prog.classes[id].type_params = tps.clone();
+                let tps = self.class_type_params(id, m, &c.type_params);
                 if let Some(ext) = &c.extends {
                     self.err(m, ext.span(), "E0140", "クラスの継承（`extends`）にはまだ対応していません。インターフェイス（`implements`）か委譲を使ってください");
                 }
@@ -996,8 +1041,7 @@ impl Collector {
                 self.prog.classes[id].fields = fields;
             }
             ClassAst::Interface(i) => {
-                let tps = self.type_params(m, &[], &i.type_params);
-                self.prog.classes[id].type_params = tps.clone();
+                let tps = self.class_type_params(id, m, &i.type_params);
                 let mut extends = Vec::new();
                 for t in &i.extends {
                     let ty = resolve_type(&mut self.prog, m, &tps, t);
@@ -1037,6 +1081,9 @@ impl Collector {
         let decl = self.prog.fns[id].decl.clone().unwrap();
         let outer: Vec<TypeParamDef> = class.map(|c| self.prog.classes[c].type_params.clone()).unwrap_or_default();
         let own = self.type_params(m, &outer, &decl.type_params);
+        for tp in decl.type_params.iter().filter(|tp| tp.default.is_some()) {
+            self.err(m, tp.name.span, "E0171", "既定の型引数はクラスとインターフェイスの型パラメータにだけ書けます（関数の型引数は引数の型から推論されます）");
+        }
         let scope: Vec<TypeParamDef> = outer.iter().chain(own.iter()).cloned().collect();
         let kind = self.prog.fns[id].kind.clone();
         let is_host = matches!(kind, FnKind::Host { .. } | FnKind::Declare { .. });
@@ -1277,6 +1324,31 @@ fn resolve_type_inner(prog: &mut Program, m: ModuleId, tps: &[TypeParamDef], t: 
             }
             ty
         }
+        TypeRef::Union { elems, nullable, span } => {
+            let mut members = Vec::new();
+            for el in elems {
+                let ty = resolve_type_inner(prog, m, tps, el, errors);
+                let shown = prog.show(&ty);
+                let bad = match &ty {
+                    Type::Void => Some("`void` はユニオン型に含められません".to_string()),
+                    Type::Ns(_) => Some(format!("`{shown}` は型ではありません")),
+                    Type::Param(_) => Some(format!("型パラメータ `{shown}` はユニオン型に含められません")),
+                    Type::WStr | Type::AStr => Some(format!("`{shown}` は `declare` の引数にだけ使えます")),
+                    t if t.has_struct() => Some(format!("構造体 `{shown}` はユニオン型に含められません（ユニオン型の値は Variant / Object に格納されます）")),
+                    _ => None,
+                };
+                if let Some(msg) = bad {
+                    errors.push((el.span(), msg));
+                    return Type::Error;
+                }
+                members.push(ty);
+            }
+            let ty = Type::union(members);
+            if *nullable && !(ty.is_object() || ty.is_mixed_union() || matches!(ty, Type::Any | Type::Error)) {
+                errors.push((*span, format!("`{} | null` は使えません。`null` を持てるのはオブジェクト型を含む型と `any` のみです", prog.show(&ty))));
+            }
+            ty
+        }
         TypeRef::Fn { params, ret, .. } => {
             let ps = params
                 .iter()
@@ -1358,6 +1430,13 @@ fn resolve_type_inner(prog: &mut Program, m: ModuleId, tps: &[TypeParamDef], t: 
             match sym {
                 Some(Sym::Class(c)) => {
                     let expected = prog.classes[c].type_params.len();
+                    // Omitted trailing type arguments take their defaults (`interface Sheets<T = Worksheet | Chart>`).
+                    if resolved.len() < expected {
+                        let defaults: Vec<Option<Type>> = prog.classes[c].type_params[resolved.len()..].iter().map(|p| p.default.clone()).collect();
+                        if defaults.iter().all(|d| d.is_some()) {
+                            resolved.extend(defaults.into_iter().flatten());
+                        }
+                    }
                     // A host collection without its element type (`Excel.Sheets`) holds objects.
                     if resolved.is_empty() && prog.classes[c].kind == ClassKind::Host {
                         resolved = vec![Type::Object; expected];

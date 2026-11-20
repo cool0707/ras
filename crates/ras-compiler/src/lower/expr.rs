@@ -190,7 +190,7 @@ impl<'p> Lowerer<'p> {
     }
 
     fn null_for(&mut self, ty: &Type) -> VExpr {
-        if ty.is_object() {
+        if ty.is_object() || ty.is_mixed_union() {
             lit("Nothing")
         } else {
             self.default_value(ty).unwrap_or_else(|| lit("Empty"))
@@ -252,7 +252,7 @@ impl<'p> Lowerer<'p> {
     /// How a value of type `vty` is assigned to a target of type `tty`.
     pub(crate) fn store(&mut self, target: &VExpr, tty: &Type, value: VExpr, vty: &Type) {
         if *vty == Type::Null {
-            if tty.is_object() {
+            if tty.is_object() || tty.is_mixed_union() {
                 self.emit(set(target.clone(), lit("Nothing")));
             } else if let Some(d) = self.default_value(tty) {
                 self.emit(assign(target.clone(), d));
@@ -267,9 +267,12 @@ impl<'p> Lowerer<'p> {
             self.emit(assign(target.clone(), call("CDec", vec![value])));
             return;
         }
+        // A value stored in a union keeps the member type it is converted to (`int` into `string | double`
+        // becomes a Double), so that `typeof` sees that member (spec §2.6.2).
+        let value = self.to_union_member(value, vty, tty);
         let v_obj = vty.is_object();
-        let v_dyn = matches!(vty, Type::Any | Type::Error | Type::Param(_));
-        let t_dyn = matches!(tty, Type::Any | Type::Error | Type::Param(_));
+        let v_dyn = vty.is_dynamic();
+        let t_dyn = tty.is_dynamic();
         if v_obj || (v_dyn && tty.is_object()) {
             self.emit(set(target.clone(), value));
         } else if v_dyn && t_dyn {
@@ -288,6 +291,33 @@ impl<'p> Lowerer<'p> {
             }
         } else {
             self.emit(assign(target.clone(), value));
+        }
+    }
+
+    /// Converts a value that is not one of the members of the value union `tty` to the member it widens to.
+    pub(crate) fn to_union_member(&mut self, v: VExpr, vty: &Type, tty: &Type) -> VExpr {
+        let Some(ms) = tty.union_members() else { return v };
+        if vty.union_members().is_some() || vty.is_dynamic() || vty.is_object() || ms.contains(vty) || !tty.is_value_union() {
+            return v;
+        }
+        let widened = |m: &Type| {
+            matches!(
+                (vty, m),
+                (Type::Byte, Type::Short | Type::Int | Type::Long | Type::Float | Type::Double | Type::Currency | Type::Decimal)
+                    | (Type::Short, Type::Int | Type::Long | Type::Float | Type::Double | Type::Currency | Type::Decimal)
+                    | (Type::Int | Type::Enum(_), Type::Long | Type::Float | Type::Double | Type::Currency | Type::Decimal | Type::Ptr)
+                    | (Type::Long, Type::Float | Type::Double | Type::Decimal)
+                    | (Type::Float, Type::Double)
+                    | (Type::Byte | Type::Short, Type::Enum(_))
+                    | (Type::Enum(_), Type::Int)
+            )
+        };
+        match ms.iter().find(|m| widened(m)) {
+            Some(m) => {
+                let m = m.clone();
+                self.convert(v, vty, &m)
+            }
+            None => v,
         }
     }
 
@@ -616,7 +646,7 @@ impl<'p> Lowerer<'p> {
     /// either way; this keeps the VBE from showing two spellings of one name.
     fn late_member_name(&self, object: &Expr, written: &str) -> Option<String> {
         let late = match self.ty(object) {
-            Type::Any | Type::Object => true,
+            Type::Any | Type::Object | Type::Union(_) => true,
             Type::Class(c, _) => self.prog.classes[c].kind == ClassKind::Host,
             _ => false,
         };
@@ -840,8 +870,8 @@ impl<'p> Lowerer<'p> {
                     && self.is_safe_operand(lhs)
                     && self.is_safe_operand(rhs)
                     && !self.ty(lhs).is_object()
-                    && !matches!(self.ty(lhs), Type::Any)
-                    && !matches!(self.ty(rhs), Type::Any)
+                    && !matches!(self.ty(lhs), Type::Any | Type::Union(_))
+                    && !matches!(self.ty(rhs), Type::Any | Type::Union(_))
             }
             _ => false,
         }
@@ -885,7 +915,7 @@ impl<'p> Lowerer<'p> {
                     let v = self.expr(other);
                     if oty.is_object() {
                         bin("Is", v, lit("Nothing"))
-                    } else if matches!(oty, Type::Any | Type::Error | Type::Param(_)) {
+                    } else if oty.is_dynamic() {
                         call("RAS_IsNullish", vec![v])
                     } else {
                         lit("False")
@@ -894,8 +924,11 @@ impl<'p> Lowerer<'p> {
                     let ops = self.operands(&[lhs, rhs]);
                     let mut it = ops.into_iter();
                     let (l, r) = (it.next().unwrap(), it.next().unwrap());
+                    // A union may hold a value of another kind: such values are not equal (spec §2.6.2).
+                    if lt.is_value_union() || rt.is_value_union() {
+                        call("RAS_UnionEq", vec![l, r])
                     // Objects compare by identity (spec §13.2).
-                    if lt.is_object() || rt.is_object() {
+                    } else if lt.is_object() || rt.is_object() {
                         bin("Is", l, r)
                     } else {
                         bin("=", l, r)
@@ -1179,7 +1212,7 @@ impl<'p> Lowerer<'p> {
                 Some(a) => {
                     let v = vals.next().unwrap_or(VExpr::Missing);
                     let at = self.ty(a);
-                    let v = if at == Type::Null { self.null_for(&pty) } else { v };
+                    let v = if at == Type::Null { self.null_for(&pty) } else { self.to_union_member(v, &at, &pty) };
                     // W-API strings are passed as pointers (spec §11.2).
                     out.push(if pty == Type::WStr { call("StrPtr", vec![v]) } else { v });
                 }
@@ -1421,6 +1454,8 @@ impl<'p> Lowerer<'p> {
             }
             CallTarget::Host(f) => {
                 let def = &self.prog.fns[f];
+                // An array in a host result (`getOpenFilename(..., true)`) is 1-based: RAS arrays are 0-based.
+                let rebase = matches!(def.ret_ty(), Type::Union(ms) if ms.iter().any(|m| m.is_array()));
                 let mut fname = def.vba_name().to_string();
                 let outer_qualifier = self.pc.qualifier.clone();
                 let target = match (recv, &def.kind) {
@@ -1448,7 +1483,12 @@ impl<'p> Lowerer<'p> {
                 };
                 let argv = self.call_args(f, 0, args, &[]);
                 self.pc.qualifier = outer_qualifier;
-                self.finish_call(target, argv, want, true)
+                let r = self.finish_call(target, argv, want, true);
+                if rebase {
+                    r.map(|v| call("RAS_Rebase1", vec![v]))
+                } else {
+                    r
+                }
             }
             CallTarget::DefaultMember(_) => {
                 let o = self.expr(callee);

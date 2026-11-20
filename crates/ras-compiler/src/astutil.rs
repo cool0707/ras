@@ -520,7 +520,7 @@ fn visit_type<'a>(t: &'a TypeRef, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>)
             visit_type(ret, v, tps);
         }
         TypeRef::Nullable { inner, .. } => visit_type(inner, v, tps),
-        TypeRef::Tuple { elems, .. } => {
+        TypeRef::Tuple { elems, .. } | TypeRef::Union { elems, .. } => {
             for e in elems {
                 visit_type(e, v, tps);
             }

@@ -693,6 +693,8 @@ impl<'p> Lowerer<'p> {
             Type::Str | Type::AStr => "String".into(),
             Type::Bool => "Boolean".into(),
             Type::Object | Type::Map(..) | Type::Func(_) => "Object".into(),
+            // A union of object types lives in an `Object`, any other union in a `Variant` (spec §2.6.1).
+            Type::Union(_) if t.is_object() => "Object".into(),
             Type::Class(c, args) => self.class_name(*c, args),
             Type::Enum(e) => {
                 let d = &self.prog.enums[*e];
@@ -860,6 +862,8 @@ impl<'p> Lowerer<'p> {
             Type::Bool => lit("False"),
             Type::Any | Type::Decimal | Type::Error | Type::Null | Type::Param(_) => lit("Empty"),
             Type::Object | Type::Class(..) | Type::Map(..) | Type::Func(_) => lit("Nothing"),
+            Type::Union(_) if t.is_object() => lit("Nothing"),
+            Type::Union(_) => lit("Empty"),
             Type::Array(_) if self.vtype(t) == ("Variant".to_string(), false) => lit("Empty"),
             _ => return None,
         })

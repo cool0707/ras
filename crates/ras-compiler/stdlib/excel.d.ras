@@ -2,7 +2,9 @@
 //
 // 方針:
 //   - 型は Excel のタイプ ライブラリに合わせる。Variant は `any`、Object は `object`、
-//     Long は `int`、Single は `float`。タイプ ライブラリより厳密な型は付けない（`Sheets<T>` を除く）。
+//     Long は `int`、Single は `float`。タイプ ライブラリより厳密な型は付けない。ただし、`Sheets<T>` と、
+//     Object / Variant を返すが実際の値の型が決まっているもの（`ActiveSheet` は `Worksheet | Chart` など）は
+//     ユニオン型で表す（仕様 §2.6.5）。
 //   - VBA で「引数を取れるプロパティ」（Cells / Range / Offset / Address など）はメソッド構文で宣言する。
 //     引数がすべて省略可能で戻り値が void でないものは、括弧なし（`ws.Cells`）でも使える。
 //   - 既定メンバー（Item）は呼び出しシグネチャ `(index: any): T` で表す。
@@ -10,7 +12,8 @@
 //     camelCase（`Cells` → `cells`、`ScreenUpdating` → `screenUpdating`）で見える（仕様 §15.3.1）。
 //     生成される VBA にはここに書いた綴りが出力される。
 //   - `Sheets<T>` の `T` は要素の型。`Worksheets` はタイプ ライブラリ上は Object を返すが、
-//     ワークシートしか含まないため `Sheets<Worksheet>` とする。`T` を省略すると `object`。
+//     ワークシートしか含まないため `Sheets<Worksheet>` とする。`T` を省略すると `Worksheet | Chart`
+//     （Excel 4.0 マクロシートは `Worksheet` として現れる。ダイアログシートは宣言していない）。
 //   - Variant を返すが戻り値に意味がない操作系メソッド（Select / Copy / Clear など）は void とする。
 //   - JSDoc の要約は独自に書いたもの。詳細は @see の Microsoft リファレンスを参照。
 //   - 列挙定数の値はタイプ ライブラリの実値。定数名は VBA と同じく修飾なしで参照できる。
@@ -51,9 +54,10 @@ declare namespace Excel {
 
         /**
          * ステータス バーの文字列。`false` を代入すると Excel の既定表示に戻る。
+         * Excel が表示を管理しているときは `false` を返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.statusbar
          */
-        StatusBar: any;
+        StatusBar: string | boolean;
 
         /**
          * ステータス バーを表示するかどうか。
@@ -122,10 +126,10 @@ declare namespace Excel {
         readonly ActiveWorkbook: Workbook;
 
         /**
-         * アクティブなシート（ワークシートまたはグラフ シート）。
+         * アクティブなシート（ワークシートまたはグラフ シート）。ブックが開いていなければ Nothing。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.activesheet
          */
-        readonly ActiveSheet: object;
+        readonly ActiveSheet: Worksheet | Chart;
 
         /**
          * アクティブなセル。
@@ -296,16 +300,18 @@ declare namespace Excel {
         InputBox(prompt: string, title?: any, defaultValue?: any, left?: any, top?: any, helpFile?: any, helpContextId?: any, type?: any): any;
 
         /**
-         * [ファイルを開く] ダイアログを表示してパスを返す（キャンセル時は False）。ファイルは開かない。
+         * [ファイルを開く] ダイアログを表示してパスを返す（キャンセル時は `false`）。ファイルは開かない。
+         * `multiSelect` に `true` を渡すと、選んだパスの配列（`typeof` は `"Variant()"`）を返す。Excel が返す配列は
+         * 1 始まりだが、RAS の他の配列と同じく 0 始まりに直して返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.getopenfilename
          */
-        GetOpenFilename(fileFilter?: any, filterIndex?: any, title?: any, buttonText?: any, multiSelect?: any): any;
+        GetOpenFilename(fileFilter?: any, filterIndex?: any, title?: any, buttonText?: any, multiSelect?: any): string | boolean | any[];
 
         /**
-         * [名前を付けて保存] ダイアログを表示してパスを返す（キャンセル時は False）。保存はしない。
+         * [名前を付けて保存] ダイアログを表示してパスを返す（キャンセル時は `false`）。保存はしない。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.getsaveasfilename
          */
-        GetSaveAsFilename(initialFilename?: any, fileFilter?: any, filterIndex?: any, title?: any, buttonText?: any): any;
+        GetSaveAsFilename(initialFilename?: any, fileFilter?: any, filterIndex?: any, title?: any, buttonText?: any): string | boolean;
 
         /**
          * ファイル / フォルダー選択ダイアログのオブジェクトを返す。
@@ -702,7 +708,7 @@ declare namespace Excel {
          * ブックでアクティブなシート。
          * @see https://learn.microsoft.com/office/vba/api/excel.workbook.activesheet
          */
-        readonly ActiveSheet: object;
+        readonly ActiveSheet: Worksheet | Chart;
 
         /**
          * ブックを上書き保存する。
@@ -864,7 +870,7 @@ declare namespace Excel {
      * ブック内のシート（ワークシート / グラフ シート）のコレクション。
      * @see https://learn.microsoft.com/office/vba/api/excel.sheets
      */
-    interface Sheets<T> {
+    interface Sheets<T = Worksheet | Chart> {
         /**
          * インデックスまたはシート名でシートを返す（既定メンバー）。
          * @see https://learn.microsoft.com/office/vba/api/excel.sheets.item
@@ -1172,16 +1178,16 @@ declare namespace Excel {
         StandardWidth: double;
 
         /**
-         * 次のシート。
+         * 次のシート。最後のシートでは Nothing。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.next
          */
-        readonly Next: object;
+        readonly Next: Worksheet | Chart;
 
         /**
-         * 前のシート。
+         * 前のシート。最初のシートでは Nothing。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.previous
          */
-        readonly Previous: object;
+        readonly Previous: Worksheet | Chart;
 
         /**
          * シートの並べ替え設定。
@@ -2329,7 +2335,7 @@ declare namespace Excel {
         Comment: string;
         readonly Index: int;
         readonly Application: Application;
-        readonly Parent: object;
+        readonly Parent: Workbook | Worksheet;
     }
 
     // ---------------------------------------------------------------------
@@ -2469,7 +2475,7 @@ declare namespace Excel {
          * ウィンドウでアクティブなシート。
          * @see https://learn.microsoft.com/office/vba/api/excel.window.activesheet
          */
-        readonly ActiveSheet: object;
+        readonly ActiveSheet: Worksheet | Chart;
 
         /**
          * ウィンドウで選択されているシート。
@@ -2523,7 +2529,11 @@ declare namespace Excel {
         ScrollIntoView(left: int, top: int, width: int, height: int, start?: any): void;
         PointsToScreenPixelsX(points: int): int;
         PointsToScreenPixelsY(points: int): int;
-        RangeFromPoint(x: int, y: int): object;
+        /**
+         * 画面上の座標にある図形またはセル範囲。どちらもなければ Nothing。
+         * @see https://learn.microsoft.com/office/vba/api/excel.window.rangefrompoint
+         */
+        RangeFromPoint(x: int, y: int): Range | Shape;
         readonly Application: Application;
         readonly Parent: object;
     }
@@ -2915,7 +2925,7 @@ declare namespace Excel {
 
         // その他のメンバー
         readonly Application: Application;
-        readonly Parent: object;
+        readonly Parent: Worksheet | Chart;
     }
 
     /**
@@ -3052,7 +3062,7 @@ declare namespace Excel {
         ZOrder(zOrderCmd: Office.MsoZOrderCmd): void;
         Ungroup(): object;
         readonly Application: Application;
-        readonly Parent: object;
+        readonly Parent: Worksheet | Chart;
     }
 
     /**
@@ -3093,7 +3103,7 @@ declare namespace Excel {
         // その他のメンバー
         Select(replace?: any): void;
         readonly Application: Application;
-        readonly Parent: object;
+        readonly Parent: Worksheet | Chart;
     }
 
     /**
@@ -3180,7 +3190,7 @@ declare namespace Excel {
         BringToFront(): void;
         SendToBack(): void;
         readonly Application: Application;
-        readonly Parent: object;
+        readonly Parent: Worksheet | Chart;
     }
 
     /**
@@ -3296,7 +3306,7 @@ declare namespace Excel {
         PrintPreview(enableChanges?: any): void;
         ExportAsFixedFormat(type: XlFixedFormatType, filename?: any, quality?: any, includeDocProperties?: any, ignorePrintAreas?: any, from?: any, to?: any, openAfterPublish?: any, fixedFormatExtClassPtr?: any): void;
         readonly Application: Application;
-        readonly Parent: object;
+        readonly Parent: Workbook | ChartObject;
     }
 
     // ---------------------------------------------------------------------
@@ -3425,7 +3435,7 @@ declare namespace Excel {
         AlignMarginsHeaderFooter: boolean;
         PrintQuality(index?: any): any;
         readonly Application: Application;
-        readonly Parent: object;
+        readonly Parent: Worksheet | Chart;
     }
 
     /**
@@ -5485,10 +5495,10 @@ declare const ThisWorkbook: Excel.Workbook;
 declare const ActiveWorkbook: Excel.Workbook;
 
 /**
- * アクティブなシート（ワークシートまたはグラフ シート）。Object 型。
+ * アクティブなシート（ワークシートまたはグラフ シート）。ブックが開いていなければ Nothing。
  * @see https://learn.microsoft.com/office/vba/api/excel.application.activesheet
  */
-declare const ActiveSheet: object;
+declare const ActiveSheet: Excel.Worksheet | Excel.Chart;
 
 /**
  * アクティブなセル。
