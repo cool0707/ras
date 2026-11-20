@@ -526,6 +526,9 @@ pub(crate) struct Font {
     pub underline: Option<bool>,
     pub strike_through: Option<bool>,
     pub charset: Option<i64>,
+    pub pitch_and_family: Option<i64>,
+    /// Whether the weight is stored (Bold is false without it).
+    pub weight_stored: bool,
 }
 
 /// `ReadTextFont`: omitted members stay omitted.
@@ -535,6 +538,8 @@ pub(crate) fn text_font(record: Option<&Record>) -> Option<Font> {
         name: record.text("FontName").map(str::to_string),
         size: record.value("FontHeight").map(|v| v as f64 / 20.0),
         charset: record.value("FontCharSet"),
+        pitch_and_family: record.value("FontPitchAndFamily"),
+        weight_stored: record.value("FontWeight").is_some(),
         ..Font::default()
     };
     if let Some(effects) = record.value("FontEffects") {
@@ -583,6 +588,8 @@ pub(crate) fn level_font(level: &Level) -> std::result::Result<Option<Font>, ()>
                 italic: Some(flags & 2 != 0),
                 underline: Some(flags & 4 != 0),
                 strike_through: Some(flags & 8 != 0),
+                pitch_and_family: None,
+                weight_stored: true,
             }))
         }
         GUID_TEXT_PROPS => match parse_record(&raw[16..], &TEXT_PROPS, raw.len() - 16) {

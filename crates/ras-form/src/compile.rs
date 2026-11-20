@@ -855,6 +855,7 @@ fn font_edit(font: &FormSpecFont) -> FontEdit {
         underline: font.underline,
         strike_through: font.strike_through,
         charset: font.charset,
+        pitch_and_family: font.pitch_and_family,
     }
 }
 

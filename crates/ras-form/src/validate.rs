@@ -890,11 +890,11 @@ fn validate_font(font: Option<&FormSpecFont>, path: &str) -> Vec<Issue> {
             ));
         }
     }
-    if let Some(charset) = font.charset {
-        if !(0..=255).contains(&charset) {
+    for (name, value) in [("charset", font.charset), ("pitchAndFamily", font.pitch_and_family)] {
+        if value.is_some_and(|v| !(0..=255).contains(&v)) {
             issues.push(appearance_issue(
-                &format!("{path}.charset"),
-                "charset は 0〜255 の整数にしてください。".into(),
+                &format!("{path}.{name}"),
+                format!("{name} は 0〜255 の整数にしてください。"),
             ));
         }
     }

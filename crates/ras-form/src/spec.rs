@@ -297,6 +297,10 @@ pub struct FormSpecFont {
     /// Windows charset number (0–255).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub charset: Option<i64>,
+    /// `lfPitchAndFamily` of the font (0–255), as the VBA editor stores it for a control it
+    /// makes (2, variable pitch). RAS only; not written when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch_and_family: Option<i64>,
 }
 
 /// A color: `{kind: "rgb", value: "#RRGGBB"}`, `{kind: "system", value:

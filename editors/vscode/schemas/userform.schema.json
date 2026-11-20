@@ -81,6 +81,12 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 255
+            },
+            "pitchAndFamily": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "フォントの lfPitchAndFamily（VBE が作ったコントロールでは 2）。取り込んだ値を保つためのもので、省略時は書き込みません"
             }
           }
         },
@@ -552,6 +558,12 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 255
+              },
+              "pitchAndFamily": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255,
+                "description": "フォントの lfPitchAndFamily（VBE が作ったコントロールでは 2）。取り込んだ値を保つためのもので、省略時は書き込みません"
               }
             }
           },

@@ -216,6 +216,29 @@ fn is_default_boolean_properties(control_type: &str, value: i64) -> bool {
     }
 }
 
+/// Whether generation writes the TextProps of a pulled control back as they are: a font
+/// whose pitch `snapshot` carries over, and for a disabled control the effects Excel stores
+/// for its grayed text (which generation writes too).
+fn text_props_carried(record: &Record, control_type: &str, enabled: bool) -> bool {
+    let known = 1u64 | 1 << 1 | 1 << 2 | 1 << 4 | 1 << 5 | 1 << 6 | 1 << 7;
+    let effects = record.value("FontEffects").unwrap_or(0) & !15;
+    let grayed = !enabled
+        && scalars::class_of(control_type)
+            .is_some_and(|class| crate::oforms::DISABLED_TEXT_CLASSES.contains(&class));
+    // The alignment goes round as textAlign; a CommandButton has none, and Excel stores the
+    // centred caption it always has.
+    let align = match record.value("ParagraphAlign") {
+        None => true,
+        Some(_) if has_property(control_type, "textAlign") => true,
+        Some(value) => control_type == "CommandButton" && value == 3,
+    };
+    record.mask & !known == 0
+        && align
+        && record.value("FontWeight").is_none_or(|w| w == 400 || w == 700)
+        && (effects == 0 || (grayed && effects == crate::oforms::DISABLED_TEXT_EFFECTS))
+        && record.tail.is_empty()
+}
+
 fn has_unprojected_text_properties(record: Option<&Record>) -> bool {
     let Some(record) = record else {
         return false;
@@ -391,6 +414,8 @@ fn spec_font(font: Option<reader::Font>) -> Option<FormSpecFont> {
         underline: font.underline,
         strike_through: font.strike_through,
         charset: font.charset,
+        // xlflow's projection has no pitch; `snapshot` adds it (carry_over).
+        pitch_and_family: None,
     })
 }
 
@@ -687,6 +712,23 @@ impl Projection {
         }
         if !bag.is_empty() {
             control.properties = Some(bag);
+        }
+        // The pitch of the font (the VBA editor stores 2 for the controls it makes).
+        if let (Ok(Some(font)), Some(target)) = (control_font(source), control.font.as_mut()) {
+            target.pitch_and_family = font.pitch_and_family;
+            // No weight stored is not Bold, and is written back as none.
+            if !font.weight_stored && target.bold == Some(false) {
+                target.bold = None;
+            }
+        }
+        let enabled = control.enabled != Some(false);
+        if source
+            .record
+            .as_ref()
+            .and_then(|r| r.text_props.as_deref())
+            .is_some_and(|t| text_props_carried(t, &control_type, enabled))
+        {
+            take("textProps");
         }
         if source.level.as_ref().is_some_and(|l| l.record.sizes.get("LogicalSize") == Some(&(0, 0))) {
             // An empty scroll area is what generation writes for a Frame, MultiPage or Page.
@@ -1003,6 +1045,12 @@ fn snapshot_with(
     }
     if extras {
         project_form_scalars(record, &lines, &mut spec.form);
+        if let (Ok(Some(font)), Some(target)) = (reader::level_font(&form.root), spec.form.font.as_mut()) {
+            target.pitch_and_family = font.pitch_and_family;
+            if !font.weight_stored && target.bold == Some(false) {
+                target.bold = None;
+            }
+        }
     }
     if let Some((width, height)) = record.sizes.get("DisplayedSize") {
         spec.form.width = Some(points(*width));
@@ -1115,4 +1163,85 @@ pub fn project(
     storages: &BTreeMap<String, [u8; 16]>,
 ) -> Result<Snapshot, SnapshotError> {
     snapshot_with(name, streams, storages, None)
+}
+
+#[cfg(test)]
+mod text_props_tests {
+    use std::collections::BTreeMap;
+
+    use crate::reader::{self, Control};
+
+    /// The mask, values and strings of a TextProps record.
+    type Font = (u64, Vec<(String, i64)>, Vec<(String, String)>);
+
+    /// The TextProps of every control (by name) of a designer storage.
+    fn fonts(streams: &BTreeMap<String, Vec<u8>>, storages: &BTreeMap<String, [u8; 16]>) -> BTreeMap<String, Font> {
+        fn walk(controls: &[Control], out: &mut BTreeMap<String, Font>) {
+            for c in controls {
+                if let Some(t) = c.record.as_ref().and_then(|r| r.text_props.as_deref()) {
+                    let mut values: Vec<_> = t.values.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+                    values.sort();
+                    let mut strings: Vec<_> = t.strings.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+                    strings.sort();
+                    out.insert(c.name.clone(), (t.mask, values, strings));
+                }
+                walk(&c.children, out);
+                if let Some(multipage) = &c.multipage {
+                    let mut hidden = BTreeMap::new();
+                    walk(std::slice::from_ref(&*multipage.hidden), &mut hidden);
+                    if let Some(font) = hidden.into_values().next() {
+                        out.insert(format!("{}/tabs", c.name), font);
+                    }
+                    walk(&multipage.pages, out);
+                }
+            }
+        }
+        let form = reader::read_form(streams, storages).unwrap();
+        let mut out = BTreeMap::new();
+        walk(&form.controls, &mut out);
+        out
+    }
+
+    #[test]
+    fn the_fonts_of_excel_controls_are_written_back_as_excel_stores_them() {
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
+        let mut forms = Vec::new();
+        for (label, name) in [
+            ("disabled", "MutationForm"),
+            ("generation", "GenerationBaseline"),
+            ("mutation", "MutationForm"),
+            ("multipage", "MultiTopologyForm"),
+            ("multipage-disabled", "MultiTopologyForm"),
+            ("typed", "TypedProperties"),
+        ] {
+            let bin = std::fs::read(data.join(format!("{label}.bin"))).unwrap();
+            let form = ras_ovba::read_user_forms(&bin).unwrap().into_iter().find(|f| f.name == name).unwrap();
+            forms.push((label.to_string(), form.streams, form.storages));
+        }
+        let dir = data.join("triple-state");
+        let streams = [("f", "f"), ("o", "o"), ("\u{1}CompObj", "CompObj"), ("\u{3}VBFrame", "VBFrame")]
+            .into_iter()
+            .map(|(s, f)| (s.to_string(), std::fs::read(dir.join(f)).unwrap()))
+            .collect();
+        forms.push(("triple-state".into(), streams, BTreeMap::from([(String::new(), [0u8; 16])])));
+        for (label, streams, storages) in forms {
+            let snapshot = super::snapshot("F", &streams, &storages, 932).unwrap();
+            for control in &snapshot.spec.controls {
+                let unsupported = control.unsupported.clone().unwrap_or_default();
+                assert!(!unsupported.contains(&"textProps".to_string()), "{label}: {}: {unsupported:?}", control.name);
+            }
+            let designer = crate::compile(&snapshot.spec, 932).unwrap();
+            let (before, after) = (fonts(&streams, &storages), fonts(&designer.streams, &designer.storages));
+            assert!(!before.is_empty());
+            for (name, font) in &before {
+                let mut font = font.clone();
+                if snapshot.spec.controls.iter().any(|c| &c.name == name && c.control_type == "CommandButton") {
+                    // A CommandButton's caption is centred whether or not the alignment is stored.
+                    font.0 &= !(1 << 6);
+                    font.1.retain(|(k, _)| k != "ParagraphAlign");
+                }
+                assert_eq!(after.get(name), Some(&font), "{label}: {name}");
+            }
+        }
+    }
 }

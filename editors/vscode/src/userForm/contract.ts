@@ -66,6 +66,8 @@ const font: PropertyContract = {
 		name: p("string", false, "supported", "Font family name.", true),
 		size: { ...p("number", false, "supported", "Font size in points, greater than zero.", true), minimum: 0, maximum: 3276.75, exclusiveMinimum: true },
 		charset: { ...p("integer", false, "supported", "Windows charset number; unlisted values remain valid.", true, []), minimum: 0, maximum: 255 },
+		// Kept as pulled (the VBA editor stores 2, variable pitch); not offered by the font editor.
+		pitchAndFamily: { ...p("integer", false, "supported", "lfPitchAndFamily of the font, as the VBA editor stored it.", false), minimum: 0, maximum: 255 },
 	},
 };
 const color: PropertyContract = {
@@ -496,6 +498,7 @@ export function propertyDescriptor(field: string, contract: PropertyContract): P
 		descriptor.suggestions = descriptor.allowedValues.map((value, index) => ({ value, label: names[index] }));
 	if (contract.children) {
 		descriptor.children = Object.keys(contract.children)
+			.filter((name) => contract.children![name].authoring)
 			.sort()
 			.map((name) => {
 				const child = propertyDescriptor(name, contract.children![name]);

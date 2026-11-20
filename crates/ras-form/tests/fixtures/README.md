@@ -43,6 +43,15 @@ of a ListBox), and RAS writes the same. The `o` streams of
 `03-all-controls.golden.json` and `12-bag-appearance.golden.json` differ
 from xlflow's output by these fields only.
 
+Excel also keeps the text of a disabled Label, TextBox, CommandButton,
+ComboBox, CheckBox or OptionButton grayed in its font: the TextProps hold
+`FontEffects` `0x40002000` (`CFE_DISABLED | CFE_AUTOCOLOR`, as
+`../data/disabled.bin` shows; not for a ListBox or TabStrip). RAS does the
+same for a ToggleButton, which the data does not have. xlflow
+writes no font effects; RAS writes these, so the disabled `btnOK` of
+`03-all-controls.golden.json` has them (its record in `o` is 4 bytes
+longer, and so is its `ObjectStreamSize` in `f`).
+
 ## Projects saved by Excel (`../data`)
 
 `../data/<label>.bin` are `xl/vbaProject.bin` files of workbooks saved by

@@ -121,6 +121,7 @@ fn font() -> Prop {
         ("underline", p(T::Boolean, false, Supported)),
         ("strikeThrough", p(T::Boolean, false, Supported)),
         ("charset", p(T::Integer, false, Supported)),
+        ("pitchAndFamily", p(T::Integer, false, Supported)),
     ]);
     font
 }

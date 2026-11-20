@@ -43,6 +43,13 @@ pub(crate) const MAX_NESTING_DEPTH: usize = 64;
 const MAX_SITES_PER_FORM: i64 = 65_535;
 const FORM_MASK_FONT: u64 = 1 << 20;
 
+/// The font effects of the text of a disabled control as Excel stores them: `CFE_DISABLED`
+/// and `CFE_AUTOCOLOR` (the RichEdit `CHARFORMAT` flags that TextProps uses).
+pub(crate) const DISABLED_TEXT_EFFECTS: i64 = 0x4000_2000;
+/// The classes Excel stores them for: Label, TextBox, CommandButton, ComboBox, CheckBox,
+/// OptionButton and ToggleButton (not a ListBox or TabStrip).
+pub(crate) const DISABLED_TEXT_CLASSES: &[u16] = &[17, 21, 23, 25, 26, 27, 28];
+
 // ---------------------------------------------------------------------------
 // Record layouts (specs.go)
 
@@ -1361,6 +1368,15 @@ impl Generation {
                     }
                 })?;
             }
+            if let (Some(text_props), Some(PValue::Int(bits))) =
+                (record.text_props.as_mut(), control.properties.get("VariousPropertyBits"))
+            {
+                if bits & 2 == 0 && DISABLED_TEXT_CLASSES.contains(&control.class) {
+                    // A disabled control: Excel keeps its text grayed in the font effects.
+                    let effects = text_props.values.get("FontEffects").copied().unwrap_or(0);
+                    text_props.set_int("FontEffects", effects | DISABLED_TEXT_EFFECTS)?;
+                }
+            }
             if let Some(PValue::Str(text)) = control.properties.get("ColumnWidths") {
                 // The widths go to the MorphDataColumnInfo array after the TextProps.
                 let widths = crate::scalars::parse_column_widths(text).map_err(|e| {
@@ -1515,6 +1531,7 @@ pub(crate) struct FontEdit {
     pub underline: Option<bool>,
     pub strike_through: Option<bool>,
     pub charset: Option<i64>,
+    pub pitch_and_family: Option<i64>,
 }
 
 impl FontEdit {
@@ -1554,6 +1571,12 @@ fn edit_text_font(record: &mut Record, font: &FontEdit) -> Result<()> {
             return invalid("charset は 0〜255 にしてください");
         }
         record.set_int("FontCharSet", charset)?;
+    }
+    if let Some(pitch) = font.pitch_and_family {
+        if !(0..=255).contains(&pitch) {
+            return invalid("pitchAndFamily は 0〜255 にしてください");
+        }
+        record.set_int("FontPitchAndFamily", pitch)?;
     }
     for (bit, value) in [font.bold, font.italic, font.underline, font.strike_through]
         .into_iter()

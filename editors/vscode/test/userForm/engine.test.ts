@@ -136,6 +136,19 @@ describe("FormSpec editing", () => {
 		assert.deepEqual(labels("t1", "specialEffect"), ["Flat", "Raised", "Sunken", "Etched", "Bump"]);
 	});
 
+	it("keeps the pitch of a pulled font through font edits", () => {
+		const pulled = { ...label, font: { name: "MS UI Gothic", size: 9, charset: 128, pitchAndFamily: 2 } };
+		let text = form([pulled]);
+		assert.deepEqual(problems((parseSpec(text) as any).spec).filter((p: any) => p.severity === "error"), []);
+		text = apply(text, { type: "setControlProperty", controlId: "l1", field: "font", value: { size: 12 } });
+		assert.deepEqual(control(text, "l1").font, { name: "MS UI Gothic", size: 12, charset: 128, pitchAndFamily: 2 });
+		// The font editor does not offer it.
+		const grid = propertyGrid((parseSpec(text) as any).spec);
+		const font = grid.controls.l1.descriptors.find((d) => d.field === "font");
+		assert.ok(font?.children?.some((c) => c.field === "charset") && !font.children.some((c) => c.field === "pitchAndFamily"));
+		rejects(text, [{ type: "setControlProperty", controlId: "l1", field: "font", value: { pitchAndFamily: 300 } }], "UFV021");
+	});
+
 	it("edits TripleState and a Null value of the toggles", () => {
 		const controls = [
 			{ id: "k1", name: "Check1", type: "CheckBox", left: 8, top: 8, width: 72, height: 18 },
