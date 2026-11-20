@@ -71,9 +71,51 @@ body {
 
 .form-client {
 	position: relative;
+	box-sizing: border-box;
 	overflow: hidden;
 	font-family: "MS UI Gothic", "Yu Gothic UI", "Meiryo UI", "Segoe UI", sans-serif;
 	font-size: 9pt;
+}
+
+.form-surface {
+	position: relative;
+}
+
+/* BorderStyle Single, and SpecialEffect, of the form itself. */
+.form-client.bordered {
+	border: 1px solid var(--border-color, var(--ms-text));
+}
+
+.form-client[data-effect="1"] {
+	box-shadow:
+		inset 1px 1px 0 var(--ms-highlight),
+		inset -1px -1px 0 var(--ms-dark),
+		inset 2px 2px 0 var(--ms-light),
+		inset -2px -2px 0 var(--ms-shadow);
+}
+
+.form-client[data-effect="2"] {
+	box-shadow:
+		inset 1px 1px 0 var(--ms-shadow),
+		inset -1px -1px 0 var(--ms-highlight),
+		inset 2px 2px 0 var(--ms-dark),
+		inset -2px -2px 0 var(--ms-light);
+}
+
+.form-client[data-effect="3"] {
+	box-shadow:
+		inset 1px 1px 0 var(--ms-shadow),
+		inset -1px -1px 0 var(--ms-highlight),
+		inset 2px 2px 0 var(--ms-highlight),
+		inset -2px -2px 0 var(--ms-shadow);
+}
+
+.form-client[data-effect="6"] {
+	box-shadow:
+		inset 1px 1px 0 var(--ms-highlight),
+		inset -1px -1px 0 var(--ms-shadow),
+		inset 2px 2px 0 var(--ms-shadow),
+		inset -2px -2px 0 var(--ms-highlight);
 }
 
 .note {

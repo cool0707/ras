@@ -2,7 +2,7 @@
 // process reports (through the extension) and reports what the user does; the form's code
 // decides everything else (values, focus, closing), so the panel keeps no state of its own.
 import "./formRunner.css";
-import { contentInsets, oleToCss, px } from "../../src/formRunner/protocol";
+import { contentInsets, cursorOf, oleToCss, px } from "../../src/formRunner/protocol";
 import { columnLayout, textColumnIndex } from "../../src/userForm/listItems";
 import type { ControlSnapshot, ControlState, FontState, FormState, PanelMessage, UserAction } from "../../src/formRunner/protocol";
 
@@ -32,11 +32,14 @@ closeButton.title = "閉じる";
 closeButton.textContent = "✕";
 closeButton.addEventListener("click", () => send({ t: "close" }));
 const client = el("div", "form-client", frame);
+// The controls, at the form's Zoom, over its scroll area (ScrollWidth / ScrollHeight).
+const surface = el("div", "form-surface", client);
+const onForm = (target: EventTarget | null) => target === client || target === surface;
 client.addEventListener("click", (e) => {
-	if (e.target === client) send({ t: "click" });
+	if (onForm(e.target)) send({ t: "click" });
 });
 client.addEventListener("dblclick", (e) => {
-	if (e.target === client) send({ t: "dblclick" });
+	if (onForm(e.target)) send({ t: "dblclick" });
 });
 const banners = el("div", "banners", app);
 const note = el("div", "note", app);
@@ -67,6 +70,8 @@ interface View {
 }
 
 let state: FormState | undefined;
+/** The scroll position last taken from the state (the user scrolls freely in between). */
+let scrolled = "";
 const views = new Map<string, View>();
 /**
  * Inputs sent per control. While the form's code has not seen the last one, the text the
@@ -482,6 +487,7 @@ function look(root: HTMLElement, s: ControlState, type: string): void {
 	const border = oleToCss(s.BorderColor);
 	if (border) root.style.setProperty("--border-color", border);
 	else root.style.removeProperty("--border-color");
+	root.style.cursor = cursorOf(s.MousePointer);
 	if (type === "MultiPage" || type === "TabStrip") {
 		for (const n of [0, 1, 2]) root.classList.toggle(`tab-style-${n}`, num(s.Style) === n);
 		for (const n of [1, 2, 3]) root.classList.toggle(`tab-orient-${n}`, num(s.TabOrientation) === n);
@@ -506,6 +512,26 @@ function render(next: FormState, focus: string | undefined): void {
 	colors(client, form);
 	fontCss(client, form.Font as FontState | undefined);
 	frame.classList.toggle("disabled", form.Enabled === false);
+	// BorderStyle / BorderColor and SpecialEffect draw the edge of the client area.
+	client.classList.toggle("bordered", num(form.BorderStyle) === 1);
+	client.style.setProperty("--border-color", oleToCss(form.BorderColor) ?? "");
+	client.dataset.effect = String(num(form.SpecialEffect));
+	client.style.cursor = cursorOf(form.MousePointer);
+	// Zoom scales the controls; the scroll bars (ScrollBars, KeepScrollBarsVisible) scroll
+	// the area of ScrollWidth × ScrollHeight (0: the form's size).
+	const zoom = Math.min(400, Math.max(10, num(form.Zoom, 100))) / 100;
+	surface.style.zoom = String(zoom);
+	surface.style.width = px(Math.max(num(form.ScrollWidth), num(form.Width) / zoom));
+	surface.style.height = px(Math.max(num(form.ScrollHeight), num(form.Height) / zoom));
+	const bars = num(form.ScrollBars);
+	const keep = num(form.KeepScrollBarsVisible, 3);
+	client.style.overflowX = bars & 1 ? (keep & 1 ? "scroll" : "auto") : "hidden";
+	client.style.overflowY = bars & 2 ? (keep & 2 ? "scroll" : "auto") : "hidden";
+	const scrollTo = { left: (num(form.ScrollLeft) * 96 * zoom) / 72, top: (num(form.ScrollTop) * 96 * zoom) / 72 };
+	if (scrolled !== `${scrollTo.left},${scrollTo.top}`) {
+		scrolled = `${scrollTo.left},${scrollTo.top}`;
+		client.scrollTo(scrollTo);
+	}
 
 	const byName = new Map(next.controls.map((c) => [c.name.toLowerCase(), c]));
 	for (const [key, view] of views) {
@@ -533,7 +559,7 @@ function render(next: FormState, focus: string | undefined): void {
 	for (const c of next.controls) {
 		const view = views.get(c.name.toLowerCase()) as View;
 		const parent = c.parent ? views.get(c.parent.toLowerCase()) : undefined;
-		const home = parent?.content ?? client;
+		const home = parent?.content ?? surface;
 		if (view.root.parentElement !== home) home.appendChild(view.root);
 		const s = c.state;
 		if (c.type === "Page") {

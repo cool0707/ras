@@ -147,6 +147,8 @@ export function previewDocument(spec: ParsedSpec): PreviewDocument {
 			foreColor: pick(form.foreColor, (v) => colorError(v) === undefined),
 			backColor: pick(form.backColor, (v) => colorError(v) === undefined),
 			borderStyle: pick<number>(form.borderStyle, num),
+			borderColor: pick(form.borderColor, (v) => colorError(v) === undefined),
+			specialEffect: pick<number>(form.specialEffect, num),
 		},
 		controls: spec.records.map(({ control }) => {
 			const copy = { ...control };
@@ -700,6 +702,9 @@ export function validateSpec(root: JsonObject): ValidationIssue[] {
 		if (isObject(form.observed)) issues.push(...validateObject(form.observed, formObservedProperties, "form.observed"));
 		issues.push(...validateFormDimensions(form));
 		issues.push(...validateTyped(form, "form", formProperties));
+		// The Tag of the designer block: [MS-OVBA] allows 130 characters in quotes, on one line.
+		if (typeof form.tag === "string" && (/[\u0000-\u001f\u007f]/.test(form.tag) || [...form.tag].length > 130))
+			issues.push(issue("UFV021", "error", "tag は制御文字を含まない 130 文字以内の文字列にしてください。", "form.tag"));
 	}
 	if (root.controls !== undefined) {
 		const [refs, controlIssues] = validateControls(root.controls, "controls", "");

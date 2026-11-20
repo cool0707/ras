@@ -174,7 +174,7 @@ pub fn document_properties() -> Props {
 
 /// Fields of `form`.
 pub fn form_properties() -> Props {
-    vec![
+    let mut props = vec![
         ("name", p(T::String, true, Supported)),
         ("caption", p(T::String, false, Supported)),
         ("width", p(T::Number, false, Supported)),
@@ -184,7 +184,24 @@ pub fn form_properties() -> Props {
         ("foreColor", color()),
         ("backColor", color()),
         ("borderStyle", border_style()),
-    ]
+    ];
+    // The plain properties of the form (scalars.rs checks their values).
+    for scalar in crate::scalars::FORM_SCALARS {
+        props.push((scalar.name, scalar_prop(scalar)));
+    }
+    props
+}
+
+/// The contract of a plain property (scalars.rs checks its value).
+fn scalar_prop(scalar: &crate::scalars::Scalar) -> Prop {
+    use crate::scalars::Kind;
+    match scalar.kind {
+        Kind::Bool => p(T::Boolean, false, Supported),
+        Kind::Enum(_) | Kind::Int(..) => p(T::Integer, false, Supported),
+        Kind::Points(_) => p(T::Number, false, Supported),
+        Kind::Char | Kind::Text | Kind::Widths => p(T::String, false, Supported),
+        Kind::Color => color(),
+    }
 }
 
 /// Fields of `form.observed`.
@@ -450,15 +467,7 @@ pub fn type_properties(name: &str) -> Option<Props> {
         if props.iter().any(|(k, _)| *k == scalar.name) {
             continue;
         }
-        use crate::scalars::Kind;
-        let prop = match scalar.kind {
-            Kind::Bool => p(T::Boolean, false, Supported),
-            Kind::Enum(_) | Kind::Int(..) => p(T::Integer, false, Supported),
-            Kind::Points(_) => p(T::Number, false, Supported),
-            Kind::Char | Kind::Text | Kind::Widths => s(),
-            Kind::Color => color(),
-        };
-        props.push((scalar.name, prop));
+        props.push((scalar.name, scalar_prop(scalar)));
     }
     Some(props)
 }

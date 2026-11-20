@@ -19,7 +19,9 @@ use crate::oforms::{default_various_property_bits, Tab};
 use crate::picture::{self, Picture};
 use crate::reader::{self, Control, Level, ReadError, Record};
 use crate::scalars::{self, Store};
-use crate::spec::{self, FormSpec, FormSpecColor, FormSpecControl, FormSpecFont, FormSpecTab};
+use crate::spec::{
+    self, FormSpec, FormSpecColor, FormSpecControl, FormSpecFont, FormSpecForm, FormSpecTab,
+};
 
 /// `type` of a control the FormSpec cannot express (snapshot only).
 pub const PLACEHOLDER_TYPE: &str = "Control";
@@ -857,21 +859,93 @@ impl Projection {
     }
 }
 
-/// The `Caption` property of the designer block in the `VBFrame` stream.
-fn frame_caption(streams: &BTreeMap<String, Vec<u8>>, codepage: u16) -> Option<String> {
-    let frame = streams
+/// The properties of the designer block in the `VBFrame` stream: name and value as
+/// written, without the comment the VBA editor puts after some (`StartUpPosition = 1 'CenterOwner`).
+fn frame_lines(streams: &BTreeMap<String, Vec<u8>>, codepage: u16) -> Vec<(String, String)> {
+    let Some((_, frame)) = streams
         .iter()
-        .find(|(path, _)| path.eq_ignore_ascii_case("\u{3}VBFrame"))?
-        .1;
-    let text = ras_ovba::decode_text(codepage, frame).ok()?;
-    text.lines().find_map(|line| {
-        let (key, value) = line.split_once('=')?;
-        if !key.trim().eq_ignore_ascii_case("Caption") {
-            return None;
-        }
-        let value = value.trim().strip_prefix('"')?.strip_suffix('"')?;
-        Some(value.replace("\"\"", "\""))
-    })
+        .find(|(path, _)| path.eq_ignore_ascii_case("\u{3}VBFrame"))
+    else {
+        return Vec::new();
+    };
+    let Ok(text) = ras_ovba::decode_text(codepage, frame) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            // The comment starts at the first quote outside a string.
+            let mut quoted = false;
+            let end = value
+                .char_indices()
+                .find(|(_, c)| {
+                    if *c == '"' {
+                        quoted = !quoted;
+                    }
+                    *c == '\'' && !quoted
+                })
+                .map_or(value.len(), |(i, _)| i);
+            Some((key.trim().to_string(), value[..end].trim().to_string()))
+        })
+        .collect()
+}
+
+/// The `Caption` property of the designer block in the `VBFrame` stream.
+fn frame_caption(lines: &[(String, String)]) -> Option<String> {
+    let (_, value) = lines.iter().find(|(key, _)| key.eq_ignore_ascii_case("Caption"))?;
+    let value = value.strip_prefix('"')?.strip_suffix('"')?;
+    Some(value.replace("\"\"", "\""))
+}
+
+/// The plain properties of the form (`FORM_SCALARS`) that differ from a new form's.
+fn project_form_scalars(record: &Record, lines: &[(String, String)], form: &mut FormSpecForm) {
+    for p in scalars::FORM_SCALARS {
+        let fresh = p.fresh.unwrap_or(p.omitted);
+        let value = match p.store {
+            Store::Frame(key) => {
+                // A line the block does not have stays unknown (generation writes its default).
+                let Some((_, text)) = lines.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)) else {
+                    continue;
+                };
+                let Some(value) = scalars::frame_value(p, text) else {
+                    continue;
+                };
+                let default = match p.kind {
+                    scalars::Kind::Bool => Value::from(fresh != 0),
+                    scalars::Kind::Text => Value::from(""),
+                    _ => Value::from(fresh),
+                };
+                if value == default {
+                    continue;
+                }
+                value
+            }
+            Store::Field(name) => {
+                let raw = record.value(name).unwrap_or(p.omitted);
+                if raw == fresh {
+                    continue;
+                }
+                scalars::from_raw(p, raw)
+            }
+            Store::FieldBits(name, ..) => {
+                let raw = scalars::get_field_bits(record.value(name).unwrap_or(p.omitted), p);
+                if raw == scalars::get_field_bits(fresh, p) {
+                    continue;
+                }
+                scalars::from_raw(p, raw)
+            }
+            Store::Extent(name, index) => {
+                let size = record.sizes.get(name).copied();
+                let raw = size.map_or(p.omitted, |(w, h)| i64::from(if index == 0 { w } else { h }));
+                if raw == fresh {
+                    continue;
+                }
+                scalars::from_raw(p, raw)
+            }
+            _ => continue,
+        };
+        form.scalars.insert(p.name.into(), value);
+    }
 }
 
 fn snapshot_with(
@@ -898,10 +972,14 @@ fn snapshot_with(
     spec.form.fore_color = record.value("ForeColor").map(color);
     spec.form.border_style = record.value("BorderStyle");
     spec.form.caption = record.text("Caption").map(str::to_string);
-    if let (None, Some(codepage)) = (&spec.form.caption, codepage) {
+    let lines = codepage.map(|codepage| frame_lines(streams, codepage)).unwrap_or_default();
+    if let (None, Some(_)) = (&spec.form.caption, codepage) {
         // Without a caption in the form record the form shows the one of
         // its designer block; without that one, none.
-        spec.form.caption = Some(frame_caption(streams, codepage).unwrap_or_default());
+        spec.form.caption = Some(frame_caption(&lines).unwrap_or_default());
+    }
+    if extras {
+        project_form_scalars(record, &lines, &mut spec.form);
     }
     if let Some((width, height)) = record.sizes.get("DisplayedSize") {
         spec.form.width = Some(points(*width));
@@ -920,14 +998,27 @@ fn snapshot_with(
     if is_default_boolean_properties("Form", record.value("BooleanProperties").unwrap_or(0)) {
         projected.push("BooleanProperties");
     }
+    if extras {
+        // The plain properties of the form; of BooleanProperties only Enabled (and the
+        // design-extender flag, which generation leaves out) is known.
+        for p in scalars::FORM_SCALARS {
+            match p.store {
+                Store::Field(name) | Store::Extent(name, _) => projected.push(name),
+                Store::FieldBits("BooleanProperties", ..) => {
+                    if record.value("BooleanProperties").unwrap_or(4) & !(4 | 0x4000) == 0 {
+                        projected.push("BooleanProperties");
+                    }
+                }
+                Store::FieldBits(name, ..) => projected.push(name),
+                _ => {}
+            }
+        }
+    }
     let mut unsupported = unsupported_record_properties(record, &projected);
     unsupported.extend(unsupported_level_properties(Some(&form.root)));
     unsupported.sort();
     unsupported.dedup();
-    if extras && record.sizes.get("LogicalSize") == Some(&(0, 0)) {
-        // An empty scroll area is what generation writes.
-        unsupported.retain(|u| u != "logicalSize");
-    }
+
     if !unsupported.is_empty() {
         projection
             .warnings

@@ -53,7 +53,7 @@ const categories = {
     "orientation",
     "controlTipText",
   ],
-  layout: ["left", "top", "width", "height"],
+  layout: ["left", "top", "width", "height", "zoom", "scrollBars", "keepScrollBarsVisible", "scrollWidth", "scrollHeight", "scrollLeft", "scrollTop"],
   behavior: [
     "enabled",
     "visible",
@@ -85,6 +85,8 @@ const categories = {
     "tripleState",
     "controlSource",
     "rowSource",
+    "startUpPosition",
+    "showModal",
   ],
   navigation: ["tabIndex", "tabStop", "selectedIndex", "accelerator", "cycle"],
   advanced: [],

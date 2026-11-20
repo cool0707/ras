@@ -499,6 +499,8 @@ pub(crate) enum PValue {
     Bool(bool),
     /// An encoded `StdPicture` (see [`crate::picture::encode`]).
     Picture(Vec<u8>),
+    /// A size or position (HIMETRIC): `LogicalSize`, `ScrollPosition`.
+    Pair(i32, i32),
 }
 
 #[derive(Clone)]
@@ -543,6 +545,14 @@ impl Record {
                 self.mask &= !(1u64 << bit);
                 self.values.remove(flag);
             }
+            return Ok(());
+        }
+        if let PValue::Pair(width, height) = value {
+            let Some(extra) = self.spec.extra.iter().find(|x| x.name == name) else {
+                return unsupported(format!("プロパティ {name}"));
+            };
+            self.mask |= 1u64 << extra.bit;
+            self.sizes.insert(extra.name, (*width, *height));
             return Ok(());
         }
         let Some(field) = self.spec.data.iter().find(|f| f.name == name) else {
@@ -850,6 +860,11 @@ pub(crate) struct Definition {
     pub caption: String,
     pub size: (i32, i32),
     pub controls: Vec<ControlDefinition>,
+    /// Fields of the form's own record (`Zoom`, `LogicalSize` ...).
+    pub properties: BTreeMap<String, PValue>,
+    /// Lines of the designer block besides Caption and the size (`ShowModal`, `Tag` ...), with
+    /// their value as written; StartUpPosition is 1 unless given.
+    pub frame: Vec<(&'static str, String)>,
 }
 
 #[derive(Clone)]
@@ -940,21 +955,55 @@ fn twips(himetric: i32) -> i64 {
     (himetric as f64 * 1440.0 / 2540.0).round() as i64
 }
 
+/// The designer properties of [MS-OVBA] 2.3.5.1, in the order they have to be written.
+const DESIGNER_PROPERTIES: &[&str] = &[
+    "Caption",
+    "ClientHeight",
+    "ClientLeft",
+    "ClientTop",
+    "ClientWidth",
+    "Enabled",
+    "HelpContextID",
+    "RightToLeft",
+    "ShowModal",
+    "StartUpPosition",
+    "Tag",
+    "TypeInfoVer",
+    "Visible",
+    "WhatsThisButton",
+    "WhatsThisHelp",
+];
+
 fn generated_vbframe(
     name: &str,
     caption: &str,
     size: (i32, i32),
+    frame: &[(&'static str, String)],
     codepage: u16,
 ) -> Result<Vec<u8>> {
     if caption.chars().any(char::is_control) {
         return invalid("フォームの caption に制御文字は使えません");
     }
-    let text = format!(
-        "VERSION 5.00\r\nBegin {{C62A69F0-16DC-11CE-9E98-00AA00574A4F}} {name}\r\n   Caption = \"{}\"\r\n   ClientHeight = {}\r\n   ClientWidth = {}\r\n   StartUpPosition = 1\r\nEnd\r\n",
-        caption.replace('"', "\"\""),
-        twips(size.1),
-        twips(size.0)
-    );
+    let mut lines: Vec<(&str, String)> = vec![
+        ("Caption", format!("\"{}\"", caption.replace('"', "\"\""))),
+        ("ClientHeight", twips(size.1).to_string()),
+        ("ClientWidth", twips(size.0).to_string()),
+    ];
+    if !frame.iter().any(|(key, _)| *key == "StartUpPosition") {
+        lines.push(("StartUpPosition", "1".into()));
+    }
+    for (key, value) in frame {
+        if value.chars().any(char::is_control) {
+            return invalid(format!("フォームの {key} に制御文字は使えません"));
+        }
+        lines.push((key, value.clone()));
+    }
+    lines.sort_by_key(|(key, _)| DESIGNER_PROPERTIES.iter().position(|k| k == key));
+    let mut text = format!("VERSION 5.00\r\nBegin {{C62A69F0-16DC-11CE-9E98-00AA00574A4F}} {name}\r\n");
+    for (key, value) in lines {
+        text.push_str(&format!("   {key} = {value}\r\n"));
+    }
+    text.push_str("End\r\n");
     ras_ovba::encode_text(codepage, &text).map_err(|e| PersistError::Invalid(e.to_string()))
 }
 
@@ -1078,7 +1127,7 @@ pub(crate) fn new_form(input: &Definition, codepage: u16) -> Result<Form> {
     if input.size.0 < 0 || input.size.1 < 0 || input.controls.len() > i16::MAX as usize + 1 {
         return invalid("サイズまたはコントロール数が不正です");
     }
-    let vbframe = generated_vbframe(&input.name, &input.caption, input.size, codepage)?;
+    let vbframe = generated_vbframe(&input.name, &input.caption, input.size, &input.frame, codepage)?;
     let mut g = Generation {
         levels: Vec::new(),
         names: Default::default(),
@@ -1088,7 +1137,7 @@ pub(crate) fn new_form(input: &Definition, codepage: u16) -> Result<Form> {
         String::new(),
         &input.caption,
         input.size,
-        &BTreeMap::new(),
+        &input.properties,
         input.controls.clone(),
         0,
         0,

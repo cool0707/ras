@@ -722,11 +722,14 @@ module.exports = function install(rt) {
             this.$s = {
                 Name: name, Caption: f.caption ?? name, Width: f.width ?? 240, Height: f.height ?? 180, Left: 0, Top: 0, StartUpPosition: 1, Enabled: true, Tag: "", ShowModal: true,
                 BackColor: oleColor(f.backColor, BUTTON_FACE), ForeColor: oleColor(f.foreColor, BUTTON_TEXT), BorderColor: BUTTON_TEXT, BorderStyle: f.borderStyle ?? 0,
-                Zoom: 100, ScrollBars: 0, ScrollWidth: 0, ScrollHeight: 0, ScrollLeft: 0, ScrollTop: 0,
+                Zoom: 100, ScrollBars: 0, KeepScrollBarsVisible: 3, ScrollWidth: 0, ScrollHeight: 0, ScrollLeft: 0, ScrollTop: 0,
+                SpecialEffect: 0, Cycle: 0, MousePointer: 0, DrawBuffer: 32000, HelpContextID: 0, RightToLeft: false, WhatsThisButton: false, WhatsThisHelp: false,
             };
-            for (const [k, v] of Object.entries(f.properties || {})) {
+            // The form's plain properties (form.showModal ...), and the legacy property bag.
+            const plain = Object.entries(f).filter(([k, v]) => !["name", "caption", "width", "height", "font", "foreColor", "backColor", "borderStyle", "observed", "properties", "picture", "mouseIcon"].includes(k) && v !== null && (typeof v !== "object" || k.toLowerCase().endsWith("color")));
+            for (const [k, v] of [...Object.entries(f.properties || {}), ...plain]) {
                 const key = Object.keys(this.$s).find((n) => n.toLowerCase() === k.toLowerCase());
-                if (key) this.$s[key] = typeof this.$s[key] === "boolean" ? rt.cbool(v) : typeof this.$s[key] === "number" ? rt.cnum(v) : rt.cstr(v);
+                if (key) this.$s[key] = key.endsWith("Color") ? oleColor(v, this.$s[key]) : typeof this.$s[key] === "boolean" ? rt.cbool(v) : typeof this.$s[key] === "number" ? rt.cnum(v) : rt.cstr(v);
             }
             this.$font = new Font(this, f.font);
             // Controls, with their containers (`parentId` is the id of the container in the spec).
@@ -1025,7 +1028,7 @@ module.exports = function install(rt) {
             if (this.$entry.instance === this) this.$entry.instance = null;
         }
     }
-    for (const name of ["Caption", "Width", "Height", "Left", "Top", "StartUpPosition", "Enabled", "Tag", "BackColor", "ForeColor", "BorderColor", "BorderStyle", "ShowModal", "Zoom", "ScrollBars", "ScrollWidth", "ScrollHeight", "ScrollLeft", "ScrollTop", "SpecialEffect", "KeepScrollBarsVisible", "PictureSizeMode", "MousePointer"]) {
+    for (const name of ["Caption", "Width", "Height", "Left", "Top", "StartUpPosition", "Enabled", "Tag", "BackColor", "ForeColor", "BorderColor", "BorderStyle", "ShowModal", "Zoom", "ScrollBars", "ScrollWidth", "ScrollHeight", "ScrollLeft", "ScrollTop", "SpecialEffect", "KeepScrollBarsVisible", "PictureSizeMode", "MousePointer", "Cycle", "DrawBuffer", "HelpContextID", "RightToLeft", "WhatsThisButton", "WhatsThisHelp"]) {
         Object.defineProperty(UserForm.prototype, name, {
             get() {
                 return this.$s[name] ?? 0;

@@ -1350,7 +1350,7 @@ export function DesignerCanvas({
           </div>
           <div class="form-client-area">
             <div
-              class={`form ${borderClass(document)} ${showGrid ? "show-grid" : ""} ${selectedId === undefined ? "form-selected" : ""}`}
+              class={`form ${borderClass(document)} ${typeof document.specialEffect === "number" ? `effect-${document.specialEffect}` : ""} ${showGrid ? "show-grid" : ""} ${selectedId === undefined ? "form-selected" : ""}`}
               data-container-id=""
               style={{
                 ...appearanceStyle(document),

@@ -920,6 +920,24 @@ fn validate_typed_form(form: &FormSpecForm) -> Vec<Issue> {
             "borderStyle は 0 か 1 にしてください。".into(),
         ));
     }
+    // The plain properties of the form (scalars.rs).
+    for (name, value) in &form.scalars {
+        let Some(p) = scalars::form_scalar(name).filter(|_| !value.is_null()) else {
+            continue;
+        };
+        let field = format!("form.{name}");
+        if let Err(message) = scalars::to_raw(p, value) {
+            issues.push(appearance_issue(&field, format!("{message}。")));
+        } else if let (scalars::Store::Frame(_), Some(text)) = (p.store, value.as_str()) {
+            // A line of the designer block: [MS-OVBA] allows 130 characters in quotes.
+            if text.chars().any(char::is_control) || text.chars().count() > 130 {
+                issues.push(appearance_issue(
+                    &field,
+                    format!("{name} は制御文字を含まない 130 文字以内の文字列にしてください。"),
+                ));
+            }
+        }
+    }
     issues
 }
 

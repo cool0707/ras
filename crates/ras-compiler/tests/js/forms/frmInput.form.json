@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "ras.userform",
-  "form": { "name": "frmInput", "caption": "入力", "width": 240, "height": 180 },
+  "form": { "name": "frmInput", "caption": "入力", "width": 240, "height": 180, "tag": "入力用", "zoom": 120 },
   "controls": [
     { "id": "name", "name": "txtName", "type": "TextBox", "left": 12, "top": 12, "width": 120, "height": 18 },
     { "id": "kind", "name": "cboKind", "type": "ComboBox", "left": 12, "top": 36, "list": ["通常", "お急ぎ"], "selectedIndex": 0 },

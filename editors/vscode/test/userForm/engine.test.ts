@@ -172,6 +172,18 @@ describe("FormSpec editing", () => {
 		rejects(text, [set("b1", "list", ["a", "b"])], "UFV021");
 	});
 
+	it("edits the properties of the form itself", () => {
+		let text = form([label]);
+		const set = (field: string, value: unknown): SemanticOperation => ({ type: "setFormProperty", field, value });
+		text = apply(text, set("startUpPosition", 0), set("showModal", false), set("tag", "メモ"), set("zoom", 150), set("scrollBars", 3));
+		const f = json(text).form;
+		assert.deepEqual([f.startUpPosition, f.showModal, f.tag, f.zoom, f.scrollBars], [0, false, "メモ", 150, 3]);
+		rejects(text, [set("zoom", 5)], "UFV021");
+		rejects(text, [set("startUpPosition", 4)], "UFE003");
+		rejects(text, [set("tag", "a\nb")], "UFV021");
+		rejects(text, [set("mousePointer", 4)], "UFE003");
+	});
+
 	it("raises a TextBox to the height its font needs, but only where the edit touched", () => {
 		const low = { id: "t0", name: "Untouched", type: "TextBox", left: 8, top: 60, width: 120, height: 12 };
 		let text = form([{ id: "t1", name: "TextBox1", type: "TextBox", left: 8, top: 8, width: 120, height: 18 }, low]);
@@ -505,7 +517,14 @@ describe("FormSpec validation and metadata", () => {
 		assert.deepEqual([descriptor("lb", "list")?.valueType, descriptor("lb", "list")?.editor], ["listItems", "list"]);
 		assert.deepEqual(grid.controls.lb.values.list.value, ["a", "b"]);
 		assert.equal(descriptor("lb", "selectedIndex")?.valueType, "integer");
-		assert.deepEqual(grid.form.descriptors.map((d) => d.field), ["backColor", "borderStyle", "caption", "font", "foreColor", "height", "name", "width"]);
+		assert.deepEqual(grid.form.descriptors.map((d) => d.field), [
+			"backColor", "borderColor", "borderStyle", "caption", "cycle", "drawBuffer", "enabled", "font", "foreColor", "height", "helpContextId",
+			"keepScrollBarsVisible", "mousePointer", "name", "rightToLeft", "scrollBars", "scrollHeight", "scrollLeft", "scrollTop", "scrollWidth",
+			"showModal", "specialEffect", "startUpPosition", "tag", "whatsThisButton", "whatsThisHelp", "width", "zoom",
+		]);
+		const formField = (field: string) => grid.form.descriptors.find((d) => d.field === field);
+		assert.deepEqual(formField("startUpPosition")?.suggestions?.map((s) => s.label), ["Manual", "CenterOwner", "CenterScreen", "WindowsDefault"]);
+		assert.deepEqual(formField("mousePointer")?.allowedValues?.slice(0, 5), ["0", "1", "2", "3", "6"]);
 		assert.equal(grid.controls.l1.values.caption.value, "Label1");
 		assert.equal(grid.controls.l1.values.font.present, false);
 	});

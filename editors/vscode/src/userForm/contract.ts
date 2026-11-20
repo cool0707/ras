@@ -160,6 +160,8 @@ const toggleControl = (caption: string, value: string): Record<string, PropertyC
 type Scalar = [name: string, types: string[], contract: PropertyContract, labels?: string[]];
 const EDITS = ["TextBox", "ComboBox"];
 const FOCUSABLE = ["TextBox", "ComboBox", "ListBox", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar", "MultiPage", "TabStrip"];
+/** The form itself: the plain properties of `form`. */
+const FORM = ["UserForm"];
 const BOUND = ["TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar"];
 const flag = (description: string) => p("boolean", false, "supported", description, true);
 const choice = (description: string, values: number[]) =>
@@ -176,7 +178,10 @@ const pointsUpTo = (description: string, maximum: number): PropertyContract => (
 });
 const effects = [0, 1, 2, 3, 6];
 const effectLabels = ["Flat", "Raised", "Sunken", "Etched", "Bump"];
-const pointers = [...Array(16).keys()];
+// fmMousePointer: 4 and 5 are not values of it.
+const pointers = [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+const pointerLabels = ["Default", "Arrow", "Cross", "IBeam", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "HourGlass", "NoDrop", "AppStarting", "Help", "SizeAll"];
+const scrollBarLabels = ["None", "Horizontal", "Vertical", "Both"];
 const int32 = [-2147483648, 2147483647] as const;
 export const scalarProperties: Scalar[] = [
 	["locked", ["TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton", "CommandButton"], flag("The value cannot be changed by the user.")],
@@ -218,7 +223,7 @@ export const scalarProperties: Scalar[] = [
 	["specialEffect", ["CheckBox", "OptionButton"], choice("3D look of the box.", [0, 2]), ["Flat", "Sunken"]],
 	["borderColor", ["TextBox", "ComboBox", "ListBox", "Label", "Image", "Frame"], { ...color, description: "Color of a Single border." }],
 	["cycle", ["Frame"], choice("Tab from the last control: to the next form's controls, or back to this frame's first.", [0, 2]), ["AllForms", "CurrentForm"]],
-	["mousePointer", ["Label", "TextBox", "ComboBox", "ListBox", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar", "Image", "Frame", "TabStrip"], choice("Mouse pointer over the control.", pointers), ["Default", "Arrow", "Cross", "IBeam", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "HourGlass", "NoDrop", "AppStarting", "Help", "SizeAll", "SizeAll", "Hand"]],
+	["mousePointer", ["Label", "TextBox", "ComboBox", "ListBox", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar", "Image", "Frame", "TabStrip"], choice("Mouse pointer over the control.", pointers), pointerLabels],
 	["default", ["CommandButton"], flag("Enter clicks this button.")],
 	["cancel", ["CommandButton"], flag("Esc clicks this button.")],
 	["takeFocusOnClick", ["CommandButton"], flag("Clicking moves the focus to the button.")],
@@ -237,6 +242,27 @@ export const scalarProperties: Scalar[] = [
 	["multiRow", ["TabStrip", "MultiPage"], flag("Tabs in several rows.")],
 	["tabFixedWidth", ["TabStrip", "MultiPage"], pointsUpTo("Width of every tab in points; 0 for each tab's own.", 7200)],
 	["tabFixedHeight", ["TabStrip", "MultiPage"], pointsUpTo("Height of the tabs in points; 0 for the font's.", 7200)],
+	// The form itself: its designer block (VBFrame) and its own record.
+	["startUpPosition", FORM, choice("Where the form first shows: Manual, CenterOwner, CenterScreen, WindowsDefault.", [0, 1, 2, 3]), ["Manual", "CenterOwner", "CenterScreen", "WindowsDefault"]],
+	["showModal", FORM, flag("Show waits until the form is closed (omitted: True).")],
+	["tag", FORM, p("string", false, "supported", "Opaque metadata associated with the form (130 characters at most).", true)],
+	["helpContextId", FORM, integer("Help topic of the form.", ...int32)],
+	["rightToLeft", FORM, flag("Right-to-left reading order.")],
+	["whatsThisButton", FORM, flag("A What's This button in the title bar.")],
+	["whatsThisHelp", FORM, flag("Help through What's This.")],
+	["enabled", FORM, flag("The form responds to the user.")],
+	["borderColor", FORM, { ...color, description: "Color of a Single border." }],
+	["cycle", FORM, choice("Tab from the last control of a Frame or Page: to the next, or back to its first.", [0, 2]), ["AllForms", "CurrentForm"]],
+	["mousePointer", FORM, choice("Mouse pointer over the form.", pointers), pointerLabels],
+	["specialEffect", FORM, choice("3D look of the edge.", effects), effectLabels],
+	["zoom", FORM, integer("Percentage the controls are shown at.", 10, 400)],
+	["drawBuffer", FORM, integer("Pixels of the off-screen buffer (32000 for a new form).", 16000, 1048576)],
+	["scrollBars", FORM, choice("Scroll bars of the form.", [0, 1, 2, 3]), scrollBarLabels],
+	["keepScrollBarsVisible", FORM, choice("Scroll bars shown even when there is nothing to scroll (omitted: Both).", [0, 1, 2, 3]), scrollBarLabels],
+	["scrollWidth", FORM, pointsUpTo("Width of the scroll area in points; 0 for the form's.", 1000000)],
+	["scrollHeight", FORM, pointsUpTo("Height of the scroll area in points; 0 for the form's.", 1000000)],
+	["scrollLeft", FORM, pointsUpTo("How far the form is scrolled to the right, in points.", 1000000)],
+	["scrollTop", FORM, pointsUpTo("How far the form is scrolled down, in points.", 1000000)],
 ];
 const control = (type: string, canContainChildren: boolean, properties: Record<string, PropertyContract>): ControlContract => ({
 	type,
@@ -306,6 +332,8 @@ function buildControls(): Record<string, ControlContract> {
 }
 
 export const controlContracts = buildControls();
+for (const [name, types, scalar, valueLabels] of scalarProperties)
+	if (types.includes("UserForm")) formProperties[name] = valueLabels ? { ...scalar, valueLabels } : scalar;
 
 export function lookupControlContract(type: unknown): ControlContract | undefined {
 	return typeof type === "string" ? controlContracts[type.trim().toLowerCase()] : undefined;

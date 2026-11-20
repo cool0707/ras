@@ -169,7 +169,36 @@ header {
   font: var(--ms-font);
 }
 .form.border-single {
-  box-shadow: inset 0 0 0 1px var(--ms-frame);
+  box-shadow: inset 0 0 0 1px var(--border-color, var(--ms-text));
+}
+/* SpecialEffect of the form itself: a 2px edge inside the client area. */
+.form.effect-1 {
+  box-shadow:
+    inset 1px 1px 0 var(--ms-highlight),
+    inset -1px -1px 0 var(--ms-dark),
+    inset 2px 2px 0 var(--ms-light),
+    inset -2px -2px 0 var(--ms-shadow);
+}
+.form.effect-2 {
+  box-shadow:
+    inset 1px 1px 0 var(--ms-shadow),
+    inset -1px -1px 0 var(--ms-highlight),
+    inset 2px 2px 0 var(--ms-dark),
+    inset -2px -2px 0 var(--ms-light);
+}
+.form.effect-3 {
+  box-shadow:
+    inset 1px 1px 0 var(--ms-shadow),
+    inset -1px -1px 0 var(--ms-highlight),
+    inset 2px 2px 0 var(--ms-highlight),
+    inset -2px -2px 0 var(--ms-shadow);
+}
+.form.effect-6 {
+  box-shadow:
+    inset 1px 1px 0 var(--ms-highlight),
+    inset -1px -1px 0 var(--ms-shadow),
+    inset 2px 2px 0 var(--ms-shadow),
+    inset -2px -2px 0 var(--ms-highlight);
 }
 .form-client-area {
   position: relative;

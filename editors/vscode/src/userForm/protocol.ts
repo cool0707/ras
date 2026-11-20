@@ -149,6 +149,9 @@ export interface SpecControl extends AppearanceProperties {
 }
 
 export interface FormDimensions extends AppearanceProperties {
+  /** The form's edge: the color of a Single border, and 0 flat, 1 raised, 2 sunken, 3 etched, 6 bump. */
+  borderColor?: ColorValue | null;
+  specialEffect?: number | null;
   caption?: string | null;
   width?: number | null;
   height?: number | null;
@@ -216,6 +219,8 @@ export interface DesignerControl extends Omit<SpecControl, "observed"> {
 }
 
 export interface DesignerDocument extends AppearanceProperties {
+  borderColor?: ColorValue | null;
+  specialEffect?: number | null;
   name: string;
   caption: string;
   width: number;

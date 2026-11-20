@@ -114,6 +114,26 @@ export function oleToCss(value: unknown): string | undefined {
 	return `#${hex(n & 255)}${hex((n >>> 8) & 255)}${hex((n >>> 16) & 255)}`;
 }
 
+/** The CSS cursor of an fmMousePointer ("" for Default: the control's own). */
+export function cursorOf(pointer: unknown): string {
+	const cursors: Record<number, string> = {
+		1: "default",
+		2: "crosshair",
+		3: "text",
+		6: "nesw-resize",
+		7: "ns-resize",
+		8: "nwse-resize",
+		9: "ew-resize",
+		10: "n-resize",
+		11: "wait",
+		12: "no-drop",
+		13: "progress",
+		14: "help",
+		15: "move",
+	};
+	return typeof pointer === "number" ? (cursors[pointer] ?? "") : "";
+}
+
 /** Points (the unit of MSForms) → CSS pixels. */
 export function px(points: unknown): string {
 	const n = typeof points === "number" && Number.isFinite(points) ? points : 0;

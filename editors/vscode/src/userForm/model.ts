@@ -24,6 +24,8 @@ export function designerDocument(
     foreColor: form.foreColor,
     backColor: form.backColor,
     borderStyle: form.borderStyle,
+    borderColor: form.borderColor,
+    specialEffect: form.specialEffect,
     name: form.name,
     caption: form.caption ?? form.name,
     width: width ?? 240,

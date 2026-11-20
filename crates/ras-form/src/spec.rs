@@ -66,6 +66,23 @@ pub struct FormSpecForm {
     /// Snapshot-only observations (never authoring input).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed: Option<Value>,
+    /// The plain properties of the form (`startUpPosition`, `showModal`,
+    /// `specialEffect`, `zoom` ...), by FormSpec name, with the values of the
+    /// VBA properties of the same name. Other fields are kept here as well, so
+    /// that validation can report them.
+    #[serde(flatten)]
+    pub scalars: Map<String, Value>,
+}
+
+impl FormSpecForm {
+    /// The plain property `name` (`showModal` ...), if written.
+    pub fn scalar(&self, name: &str) -> Option<&Value> {
+        self.scalars
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v)
+            .filter(|v| !v.is_null())
+    }
 }
 
 /// One control.

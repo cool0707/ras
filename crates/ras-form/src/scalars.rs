@@ -57,6 +57,12 @@ pub(crate) enum Store {
     SiteText(&'static str),
     /// The `MorphDataColumnInfo` array after the record (`cColumnInfo` entries).
     Columns,
+    /// A property of the form's designer block (the `VBFrame` stream, [MS-OVBA] 2.3.5).
+    Frame(&'static str),
+    /// Bits of a record field from this position and of this width.
+    FieldBits(&'static str, u8, u8),
+    /// The width (0) or height (1) of a record's size or position, in HIMETRIC.
+    Extent(&'static str, u8),
 }
 
 /// One property.
@@ -75,6 +81,10 @@ pub(crate) struct Scalar {
 }
 
 const EDITS: &[&str] = &["TextBox", "ComboBox"];
+/// The form itself (`FORM_SCALARS`).
+const FORM: &[&str] = &["UserForm"];
+/// The largest scroll area of a form, in points (HIMETRIC that fits an `i32`).
+const SCROLL_SIZE: f64 = 1_000_000.0;
 const LISTS: &[&str] = &["ComboBox", "ListBox"];
 const FOCUSABLE: &[&str] = &[
     "TextBox",
@@ -100,7 +110,8 @@ const BOUND: &[&str] = &[
     "SpinButton",
     "ScrollBar",
 ];
-const POINTERS: &[i64] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+/// fmMousePointer: 4 and 5 are not values of it ([MS-OFORMS] 2.5.x).
+const POINTERS: &[i64] = &[0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const EFFECTS: &[i64] = &[0, 1, 2, 3, 6];
 /// 254000 HIMETRIC, the most a tab can be.
 const TAB_SIZE: f64 = 7200.0;
@@ -124,7 +135,7 @@ const fn s(
 }
 
 use Kind::{Bool, Char, Color, Enum, Int, Points, Text, Widths};
-use Store::{Bit, Bits, Columns, Field, Flag, Himetric, Site, SiteText, Thumb};
+use Store::{Bit, Bits, Columns, Extent, Field, FieldBits, Flag, Frame, Himetric, Site, SiteText, Thumb};
 
 /// Every plain property. A name can appear more than once for different types.
 pub(crate) static SCALARS: &[Scalar] = &[
@@ -203,6 +214,84 @@ pub(crate) static SCALARS: &[Scalar] = &[
     s("tabFixedWidth", &["TabStrip", "MultiPage"], Points(TAB_SIZE), Himetric("TabFixedWidth"), 0, None),
     s("tabFixedHeight", &["TabStrip", "MultiPage"], Points(TAB_SIZE), Himetric("TabFixedHeight"), 0, None),
 ];
+
+/// The plain properties of the form itself: those of its designer block (`VBFrame`) and
+/// those of its own record (the `f` stream). `omitted` is the value the form has without
+/// the line or the field; `fresh` what generation writes for a new form.
+pub(crate) static FORM_SCALARS: &[Scalar] = &[
+    s("startUpPosition", FORM, Enum(&[0, 1, 2, 3]), Frame("StartUpPosition"), 0, Some(1)),
+    s("showModal", FORM, Bool, Frame("ShowModal"), 1, None),
+    s("tag", FORM, Text, Frame("Tag"), 0, None),
+    s("helpContextId", FORM, Int(i32::MIN as i64, i32::MAX as i64), Frame("HelpContextID"), 0, None),
+    s("rightToLeft", FORM, Bool, Frame("RightToLeft"), 0, None),
+    s("whatsThisButton", FORM, Bool, Frame("WhatsThisButton"), 0, None),
+    s("whatsThisHelp", FORM, Bool, Frame("WhatsThisHelp"), 0, None),
+    s("enabled", FORM, Bool, FieldBits("BooleanProperties", 2, 1), 4, None),
+    s("borderColor", FORM, Color, Field("BorderColor"), 0x8000_0012, None),
+    s("cycle", FORM, Enum(&[0, 2]), Field("Cycle"), 0, None),
+    s("mousePointer", FORM, Enum(POINTERS), Field("MousePointer"), 0, None),
+    s("specialEffect", FORM, Enum(EFFECTS), Field("SpecialEffect"), 0, None),
+    s("zoom", FORM, Int(10, 400), Field("Zoom"), 100, None),
+    // MS-OFORMS states no default for DrawBuffer: every form stores it.
+    s("drawBuffer", FORM, Int(16000, 1_048_576), Field("DrawBuffer"), 32000, None),
+    s("scrollBars", FORM, Enum(&[0, 1, 2, 3]), FieldBits("ScrollBars", 0, 2), 0x0c, None),
+    s("keepScrollBarsVisible", FORM, Enum(&[0, 1, 2, 3]), FieldBits("ScrollBars", 2, 2), 0x0c, None),
+    // 0 is the size of the form; omitted, the scroll area is 4000 × 3000 HIMETRIC.
+    s("scrollWidth", FORM, Points(SCROLL_SIZE), Extent("LogicalSize", 0), 4000, Some(0)),
+    s("scrollHeight", FORM, Points(SCROLL_SIZE), Extent("LogicalSize", 1), 3000, Some(0)),
+    s("scrollLeft", FORM, Points(SCROLL_SIZE), Extent("ScrollPosition", 0), 0, None),
+    s("scrollTop", FORM, Points(SCROLL_SIZE), Extent("ScrollPosition", 1), 0, None),
+];
+
+/// `value` with `raw` put in the bits of a [`Store::FieldBits`] property.
+pub(crate) fn put_field_bits(value: i64, p: &Scalar, raw: i64) -> i64 {
+    match p.store {
+        Store::FieldBits(_, at, width) => {
+            let mask = ((1i64 << width) - 1) << at;
+            (value & !mask) | ((raw << at) & mask)
+        }
+        _ => value,
+    }
+}
+
+/// The value of a [`Store::FieldBits`] property in the field's `value`.
+pub(crate) fn get_field_bits(value: i64, p: &Scalar) -> i64 {
+    match p.store {
+        Store::FieldBits(_, at, width) => (value >> at) & ((1 << width) - 1),
+        _ => 0,
+    }
+}
+
+/// A form property as its line of the designer block shows it: a VBABOOL ("0" / "-1"),
+/// a number, or a quoted string.
+pub(crate) fn frame_text(p: &Scalar, value: &Value, raw: i64) -> String {
+    match p.kind {
+        Kind::Bool => if raw != 0 { "-1" } else { "0" }.to_string(),
+        Kind::Text => format!("\"{}\"", value.as_str().unwrap_or("").replace('"', "\"\"")),
+        _ => raw.to_string(),
+    }
+}
+
+/// The FormSpec value of a line of the designer block, if it can be read.
+pub(crate) fn frame_value(p: &Scalar, text: &str) -> Option<Value> {
+    match p.kind {
+        Kind::Bool => match text.trim() {
+            "0" => Some(Value::from(false)),
+            "-1" | "1" => Some(Value::from(true)),
+            _ => None,
+        },
+        Kind::Text => {
+            let inner = text.trim().strip_prefix('"')?.strip_suffix('"')?;
+            Some(Value::from(inner.replace("\"\"", "\"")))
+        }
+        _ => text.trim().parse::<i64>().ok().map(Value::from),
+    }
+}
+
+/// The form's plain property `name`.
+pub(crate) fn form_scalar(name: &str) -> Option<&'static Scalar> {
+    FORM_SCALARS.iter().find(|p| p.name.eq_ignore_ascii_case(name.trim()))
+}
 
 /// The record fields of a MultiPage's properties that its hidden TabStrip holds.
 pub(crate) const TAB_STRIP_FIELDS: &[&str] = &[

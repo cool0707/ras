@@ -659,3 +659,54 @@ fn columns_of_a_list_go_round() {
         assert!(ras_form::parse(&text).has_errors(), "{bad}");
     }
 }
+
+#[test]
+fn properties_of_the_form_go_round() {
+    let form = r##""startUpPosition":2,"showModal":false,"tag":"メモ \"1\"","helpContextId":5,"rightToLeft":true,
+        "whatsThisButton":true,"whatsThisHelp":true,"enabled":false,"borderColor":{"kind":"rgb","value":"#102030"},
+        "cycle":2,"mousePointer":6,"specialEffect":1,"zoom":150,"drawBuffer":64000,"scrollBars":3,
+        "keepScrollBarsVisible":0,"scrollWidth":400,"scrollHeight":300,"scrollLeft":10,"scrollTop":20"##;
+    let text = format!(
+        r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F","caption":"C",{form}}},"controls":[]}}"#
+    );
+    let parsed = ras_form::parse(&text);
+    assert!(!parsed.has_errors(), "{:?}", parsed.issues);
+    let spec = parsed.spec.unwrap();
+    let designer = ras_form::compile(&spec, 932).unwrap();
+    // The designer block in the order of [MS-OVBA], booleans as VBABOOL.
+    let block = ras_ovba::decode_text(932, &designer.streams["\u{3}VBFrame"]).unwrap();
+    let keys: Vec<&str> = block.lines().filter_map(|l| l.split_once(" = ").map(|(k, _)| k.trim())).collect();
+    assert_eq!(
+        keys,
+        ["Caption", "ClientHeight", "ClientWidth", "Enabled", "HelpContextID", "RightToLeft", "ShowModal", "StartUpPosition", "Tag", "WhatsThisButton", "WhatsThisHelp"]
+    );
+    assert!(block.contains("   ShowModal = 0\r\n   StartUpPosition = 2\r\n   Tag = \"メモ \"\"1\"\"\"\r\n"), "{block}");
+    let snapshot = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap();
+    let back = &snapshot.spec.form.scalars;
+    assert_eq!(back.keys().collect::<Vec<_>>(), spec.form.scalars.keys().collect::<Vec<_>>());
+    for (name, value) in &spec.form.scalars {
+        match (value.as_f64(), back[name].as_f64()) {
+            // Lengths are stored in HIMETRIC.
+            (Some(a), Some(b)) => assert!((a - b).abs() < 0.02, "{name}: {b}, expected {a}"),
+            _ => assert_eq!(&back[name], value, "{name}"),
+        }
+    }
+    assert!(snapshot.warnings.is_empty(), "{:?}", snapshot.warnings);
+
+    // A new form, and one the VBA editor made, have none of them.
+    let plain = ras_form::parse(r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F"},"controls":[]}"#);
+    let plain = ras_form::compile(plain.spec.as_ref().unwrap(), 932).unwrap();
+    let again = ras_form::snapshot("F", &plain.streams, &plain.storages, 932).unwrap();
+    assert!(again.spec.form.scalars.is_empty(), "{:?}", again.spec.form.scalars);
+    let (streams, storages) = triple_state_form();
+    let excel = ras_form::snapshot("UserForm1", &streams, &storages, 932).unwrap();
+    assert!(excel.spec.form.scalars.is_empty(), "{:?}", excel.spec.form.scalars);
+    assert!(!excel.warnings.iter().any(|w| w.control.is_empty()), "{:?}", excel.warnings);
+
+    for bad in [r#""zoom":5"#, r#""startUpPosition":4"#, r#""tag":"a\nb""#, r#""mousePointer":4"#, r#""showModal":0"#] {
+        let text = format!(
+            r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F",{bad}}},"controls":[]}}"#
+        );
+        assert!(ras_form::parse(&text).has_errors(), "{bad}");
+    }
+}

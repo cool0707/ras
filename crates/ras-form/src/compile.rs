@@ -590,6 +590,8 @@ fn control_definition(
                     put("ColumnWidths".into(), PValue::Str(text.into()));
                 }
             }
+            // The form's own (FORM_SCALARS).
+            Store::Frame(_) | Store::FieldBits(..) | Store::Extent(..) => {}
         }
     }
     // A drop-down list cannot be typed into (Editable off).
@@ -768,6 +770,58 @@ fn promote_legacy_appearance(control: &mut FormSpecControl) {
             _ => {}
         }
     }
+}
+
+/// The plain properties of the form (`FORM_SCALARS`): fields of its record, and lines of
+/// its designer block.
+#[allow(clippy::type_complexity)]
+fn form_properties(
+    form: &crate::spec::FormSpecForm,
+) -> Result<(BTreeMap<String, PValue>, Vec<(&'static str, String)>), CompileError> {
+    let mut properties = BTreeMap::new();
+    let mut frame = Vec::new();
+    let mut fields: BTreeMap<&'static str, i64> = BTreeMap::new();
+    let mut extents: BTreeMap<&'static str, (i32, i32)> = BTreeMap::new();
+    for p in scalars::FORM_SCALARS {
+        let Some(value) = form.scalar(p.name) else {
+            continue;
+        };
+        let field = format!("form.{}", p.name);
+        let raw = scalars::to_raw(p, value).map_err(|e| fail(INVALID, "", &field, e))?;
+        match p.store {
+            Store::Frame(key) => frame.push((key, scalars::frame_text(p, value, raw))),
+            Store::Field(name) => {
+                properties.insert(name.to_string(), PValue::Int(raw));
+            }
+            Store::FieldBits(name, ..) => {
+                let current = fields.entry(name).or_insert(p.omitted);
+                *current = scalars::put_field_bits(*current, p, raw);
+            }
+            Store::Extent(name, index) => {
+                let size = extents.entry(name).or_insert_with(|| {
+                    // What generation writes for a new form: no scroll area, not scrolled.
+                    (0, 0)
+                });
+                if index == 0 {
+                    size.0 = raw as i32;
+                } else {
+                    size.1 = raw as i32;
+                }
+            }
+            _ => {}
+        }
+    }
+    for (name, value) in fields {
+        properties.insert(name.to_string(), PValue::Int(value));
+    }
+    for (name, (width, height)) in extents {
+        properties.insert(name.to_string(), PValue::Pair(width, height));
+    }
+    // A disabled form: its record, and the designer block as the VBA editor writes it.
+    if properties.get("BooleanProperties").is_some_and(|v| *v == PValue::Int(0)) {
+        frame.push(("Enabled", "0".into()));
+    }
+    Ok((properties, frame))
 }
 
 fn font_edit(font: &FormSpecFont) -> FontEdit {
@@ -954,11 +1008,14 @@ pub(crate) fn compile_new(
         Ok(result)
     }
     let controls = build("", 0, &children, &original_index, root)?;
+    let (properties, frame) = form_properties(&spec.form)?;
     let definition = Definition {
         name: form_name.clone(),
         caption,
         size: root_size,
         controls,
+        properties,
+        frame,
     };
     let mut form = oforms::new_form(&definition, codepage).map_err(|e| {
         let mut error = from_persist(e);

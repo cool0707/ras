@@ -135,6 +135,151 @@
         "observed": {
           "type": "object",
           "description": "Excel から取り込んだ観測値（スナップショット専用）"
+        },
+        "startUpPosition": {
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "description": "フォームを最初に表示する位置。0: Manual、1: CenterOwner（省略時）、2: CenterScreen、3: WindowsDefault"
+        },
+        "showModal": {
+          "type": "boolean",
+          "description": "Show がフォームを閉じるまで戻らない（省略時は true）"
+        },
+        "tag": {
+          "type": "string",
+          "maxLength": 130,
+          "description": "フォームに付ける任意の文字列（130 文字まで）"
+        },
+        "helpContextId": {
+          "type": "integer",
+          "description": "ヘルプのトピック"
+        },
+        "rightToLeft": {
+          "type": "boolean",
+          "description": "右から左に読む"
+        },
+        "whatsThisButton": {
+          "type": "boolean",
+          "description": "タイトル バーに［?］ボタンを表示する"
+        },
+        "whatsThisHelp": {
+          "type": "boolean",
+          "description": "［?］によるヘルプを使う"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "フォームを操作できる"
+        },
+        "borderColor": {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "rgb",
+                "system",
+                "ole"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+            }
+          }
+        },
+        "cycle": {
+          "enum": [
+            0,
+            2
+          ],
+          "description": "Frame / Page の最後のコントロールからの Tab の移り先。0: AllForms、2: CurrentForm"
+        },
+        "mousePointer": {
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15
+          ],
+          "description": "フォームの上のマウス ポインター"
+        },
+        "specialEffect": {
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            6
+          ],
+          "description": "フォームの縁の立体感。0: Flat、1: Raised、2: Sunken、3: Etched、6: Bump"
+        },
+        "zoom": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 400,
+          "description": "コントロールを表示する倍率（%）"
+        },
+        "drawBuffer": {
+          "type": "integer",
+          "minimum": 16000,
+          "maximum": 1048576,
+          "description": "描画用のバッファーの大きさ（ピクセル。新しいフォームは 32000）"
+        },
+        "scrollBars": {
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "description": "スクロール バー。0: None、1: Horizontal、2: Vertical、3: Both"
+        },
+        "keepScrollBarsVisible": {
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "description": "スクロールが要らなくても表示するスクロール バー（省略時は 3: Both）"
+        },
+        "scrollWidth": {
+          "type": "number",
+          "minimum": 0,
+          "description": "スクロール領域の幅（ポイント。0 はフォームの幅）"
+        },
+        "scrollHeight": {
+          "type": "number",
+          "minimum": 0,
+          "description": "スクロール領域の高さ（ポイント。0 はフォームの高さ）"
+        },
+        "scrollLeft": {
+          "type": "number",
+          "minimum": 0,
+          "description": "横方向のスクロール位置（ポイント）"
+        },
+        "scrollTop": {
+          "type": "number",
+          "minimum": 0,
+          "description": "縦方向のスクロール位置（ポイント）"
         }
       }
     },
@@ -683,8 +828,6 @@
               1,
               2,
               3,
-              4,
-              5,
               6,
               7,
               8,
