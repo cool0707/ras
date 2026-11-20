@@ -729,6 +729,7 @@ mod tests {
         let sync = wait_for(2);
         assert_eq!(sync["ok"], false, "{sync}");
         assert!(sync["message"].as_str().is_some_and(|m| !m.is_empty()), "{sync}");
+        assert_eq!(sync["offline"], true, "no Excel has the workbook: the editor writes to the file instead: {sync}");
         send(Message::Request(Request { id: 3.into(), method: "workspace/executeCommand".into(), params: json!({ "command": "ras.runMacro", "arguments": ["Main.run"] }) }));
         assert_eq!(wait_for(3)["ok"], false);
         send(Message::Request(Request { id: 4.into(), method: "shutdown".into(), params: Value::Null }));

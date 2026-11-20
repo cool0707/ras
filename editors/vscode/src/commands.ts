@@ -1,8 +1,11 @@
+import * as cp from "node:child_process";
 import * as vscode from "vscode";
 import { isGeneratedVba } from "./generatedVba";
 import type { GeneratedVbaView } from "./generatedVba";
 import { errorMessage, ServerNotRunningError } from "./server";
 import type { RasServer } from "./server";
+import { findServerExecutable } from "./serverPath";
+import { projectRoot } from "./userForm/commands";
 
 // Every command only forwards to the server through `workspace/executeCommand`
 // (spec §7.4). vscode-languageclient registers the commands a server declares
@@ -65,7 +68,13 @@ async function showGeneratedVba(server: RasServer, vbaView: GeneratedVbaView, re
 }
 
 async function syncNow(server: RasServer): Promise<void> {
+	await vscode.workspace.saveAll(false);
 	const result = await withProgress("RAS: 同期しています…", () => server.execute(SERVER_COMMANDS.syncNow));
+	if (isOffline(result)) {
+		// No Excel has the workbook open: write to the workbook file instead (spec §14.9, `ras pack`).
+		await packOffline();
+		return;
+	}
 	const drifted = driftedModules(result);
 	if (drifted.length === 0) {
 		showResult(result, "同期しました。", "同期に失敗しました。");
@@ -82,6 +91,54 @@ async function syncNow(server: RasServer): Promise<void> {
 	}
 	const forced = await withProgress("RAS: 同期しています…", () => server.execute(SERVER_COMMANDS.syncNow, [{ overwrite: true }]));
 	showResult(forced, "同期しました。", "同期に失敗しました。");
+}
+
+/** The sync failed only because no Excel has the workbook open. */
+function isOffline(result: unknown): boolean {
+	return typeof result === "object" && result !== null && (result as { offline?: unknown }).offline === true;
+}
+
+let packOutput: vscode.OutputChannel | undefined;
+
+/** Runs `ras pack`: writes the generated VBA and the user forms straight into the workbook file. */
+async function packOffline(overwrite = false): Promise<void> {
+	const root = await projectRoot(undefined, "書き込むプロジェクトを選んでください");
+	if (!root) {
+		void vscode.window.showErrorMessage("ras.toml のあるフォルダーを開いてください。");
+		return;
+	}
+	const exe = findServerExecutable((vscode.workspace.getConfiguration("ras").get<string>("path") ?? "").trim(), root);
+	if (exe === undefined) {
+		throw new Error("ras 実行ファイルが見つかりません。設定 ras.path を確認してください。");
+	}
+	const args = ["--project", root, "pack", ...(overwrite ? ["--overwrite"] : [])];
+	const output = (packOutput ??= vscode.window.createOutputChannel("RAS"));
+	output.appendLine(`> ras ${args.join(" ")}`);
+	const run = await withProgress("RAS: ブックファイルへ書き込んでいます…", () =>
+		new Promise<{ ok: boolean; stdout: string; stderr: string }>((resolve) =>
+			cp.execFile(exe, args, { cwd: root, windowsHide: true }, (error, stdout, stderr) => resolve({ ok: !error, stdout, stderr })),
+		),
+	);
+	for (const text of [run.stdout, run.stderr]) {
+		if (text.trim() !== "") output.appendLine(text.trimEnd());
+	}
+	if (run.ok) {
+		const line = run.stdout.trim().split(/\r?\n/).pop();
+		void vscode.window.showInformationMessage(`RAS: ${line || "ブックファイルへ書き込みました。"}（Excel は未接続のため、オフラインで書き込みました）`);
+		return;
+	}
+	// Errors are on stderr as `error: …`; build errors come with their diagnostics.
+	const errorLine = run.stderr.split(/\r?\n/).find((l) => l.startsWith("error:"))?.slice("error:".length).trim();
+	const message = errorLine || "ブックファイルへの書き込みに失敗しました（ビルド エラーがあります）。";
+	const overwriteAction = "RAS で上書き";
+	const showOutput = "出力を表示";
+	const actions = !overwrite && run.stderr.includes("--overwrite") ? [overwriteAction, showOutput] : [showOutput];
+	const choice = await vscode.window.showErrorMessage(`RAS: ${message}`, ...actions);
+	if (choice === overwriteAction) {
+		await packOffline(true);
+	} else if (choice === showOutput) {
+		output.show(true);
+	}
 }
 
 /** Names in the `drifted` list of a sync result. */
