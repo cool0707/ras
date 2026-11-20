@@ -1345,7 +1345,7 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 #### 14.10.3 Excel との接続
 
 * ランタイムは Node アドオン `ras_com.node`（`crates/ras-com`、Windows 専用）を介して `IDispatch` を遅延バインディングで呼び出す。生成コードは `$rt.get(obj, "Value")` / `$rt.put(...)` / `$rt.call(obj, "Cells", [r, 3])` のように、プロパティ取得・設定・メソッド呼び出しを明示的に区別して呼ぶ。
-* 接続先は §14.3 と同じ規則で決める: `ras.toml` の `workbook` を ROT から探し、開いている Excel インスタンスに接続する。開かれていなければ起動中の Excel（無ければ新しく起動した Excel）で開く。`workbook` が未指定ならアクティブブックを使う。
+* 接続先は §14.3 と同じ規則で決める: `ras.toml` の `workbook` を ROT から探し、開いている Excel インスタンスに接続する。開かれていなければ起動中の Excel で開く。Excel が起動していなければ、ブックをダブルクリックと同じ方法（`ShellExecute`）で開き、ROT に現れるまで最大 60 秒待つ。`CreateObject("Excel.Application")` で起動したオートメーション用の Excel は使わない（VBA プロジェクトへのアクセスなどが通常の起動と異なり、実行後に残ったインスタンスでは同期や「Excelで実行」ができなくなるため）。`workbook` が未指定ならアクティブブックを使う。
 * ROT に載らない開き方がある（アドインとして読み込まれた `.xlam`、OneDrive / SharePoint の同期フォルダーにあり `FullName` が URL になるブック）。そのため `Workbooks.Open` の前に、接続した Excel の `Workbooks(<ファイル名>)` を直接引き、同じブック（フルパスが一致、または `FullName` が URL）ならそれを使う。同名の別のブックが開いている場合は、Excel のダイアログを待たずにエラーにする。
 * `ThisWorkbook` はそのブック、シートのコード名（`Sheet1` など）は `CodeName` が一致するシート、その他のグローバル（`activeSheet`、`range(...)` など）は `Application` のメンバーとして解決する。メンバーはタイプ ライブラリの綴りで呼び出す（COM の名前解決は大文字小文字を区別しない）。
 * Excel がセル編集中・モーダルダイアログ表示中で呼び出しを拒否した場合（`RPC_E_CALL_REJECTED` 等）は、最大 60 秒までバックオフしながら再試行する。待っている間の通知は §14.10.6。

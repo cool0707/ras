@@ -584,6 +584,24 @@ pub fn get_object(path: String) -> Result<ComObject> {
     Ok(ComObject { ptr })
 }
 
+/// Opens a file the way a double click does (`ShellExecute` with the verb `open`). Excel then
+/// starts as the user's own instance, not as an automation server: an Excel that
+/// `CreateObject` started differs from one the user started (add-ins, macro security, access
+/// to the VBA project), and the instance stays after the debug run for sync and "Run in Excel".
+#[napi]
+pub fn shell_open(path: String) -> Result<()> {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    init_com();
+    let file = wide(&path);
+    let verb = wide("open");
+    let instance = unsafe { ShellExecuteW(None, PCWSTR(verb.as_ptr()), PCWSTR(file.as_ptr()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+    if instance.0 as usize <= 32 {
+        return Err(com_error(429, "RAS", &format!("{path} を開けませんでした（Excel がインストールされているか確認してください）")));
+    }
+    Ok(())
+}
+
 fn same_path(a: &str, b: &str) -> bool {
     let norm = |s: &str| s.replace('/', "\\").to_lowercase();
     norm(a) == norm(b)
