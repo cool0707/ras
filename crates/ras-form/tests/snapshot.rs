@@ -417,12 +417,14 @@ fn list_properties_go_round_and_default_to_what_excel_writes() {
            {"id":"l","name":"lst","type":"ListBox","top":30,"multiSelect":2,"listStyle":1,"matchEntry":2}"#,
     );
     let (combo, list) = (&set[0], &set[1]);
+    let values = |c: &ras_form::FormSpecControl, names: &[&str]| -> Vec<Value> {
+        names.iter().map(|n| c.scalar(n).cloned().unwrap_or(Value::Null)).collect()
+    };
     assert_eq!(
-        (combo.style, combo.list_style, combo.match_entry, combo.show_drop_button_when, combo.list_rows),
-        (Some(2), Some(1), Some(0), Some(1), Some(4))
+        values(combo, &["style", "listStyle", "matchEntry", "showDropButtonWhen", "listRows"]),
+        [2, 1, 0, 1, 4].map(Value::from)
     );
-    assert_eq!((list.multi_select, list.list_style, list.match_entry), (Some(2), Some(1), Some(2)));
-    assert_eq!(combo.control_type, "ComboBox");
+    assert_eq!(values(list, &["multiSelect", "listStyle", "matchEntry"]), [2, 1, 2].map(Value::from));
 
     // Each belongs to its control type only.
     for bad in [

@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde_json::{Map, Value};
 
 use crate::contract::{self, lookup, Prop, Props, Support, ValueType};
+use crate::scalars;
 use crate::spec::{
     FormSpec, FormSpecColor, FormSpecControl, FormSpecFont, FormSpecForm, FormSpecTab, KIND,
     XLFLOW_KIND,
@@ -945,16 +946,54 @@ fn typed_fields(control: &FormSpecControl) -> Vec<(&'static str, Option<Value>)>
             control.picture_size_mode.map(Value::from),
         ),
         ("textAlign", control.text_align.map(Value::from)),
-        ("style", control.style.map(Value::from)),
-        ("multiSelect", control.multi_select.map(Value::from)),
-        ("listStyle", control.list_style.map(Value::from)),
-        ("matchEntry", control.match_entry.map(Value::from)),
-        (
-            "showDropButtonWhen",
-            control.show_drop_button_when.map(Value::from),
-        ),
-        ("listRows", control.list_rows.map(Value::from)),
     ]
+}
+
+/// The plain properties (scalars.rs) of a control: values of the right kind,
+/// the same as a property-bag entry of the same name, and `value` of a
+/// SpinButton / ScrollBar between `min` and `max`.
+fn validate_scalars(control: &FormSpecControl, path: &str) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    let builtin = contract::control_type(&control.control_type).is_some()
+        && (control.prog_id.is_empty()
+            || prog_id_matches_type(&control.control_type, &control.prog_id));
+    for (name, value) in &control.scalars {
+        if value.is_null() || !builtin {
+            continue;
+        }
+        let field = format!("{path}.{name}");
+        let Some(p) = scalars::find(&control.control_type, name) else {
+            continue;
+        };
+        if let Err(message) = scalars::to_raw(p, value) {
+            issues.push(appearance_issue(&field, format!("{message}。")));
+        }
+        if let Some(legacy) = control.properties.as_ref().and_then(|bag| lookup_raw(bag, name)) {
+            if !legacy_equal(name, value, legacy) {
+                issues.push(appearance_issue(
+                    &field,
+                    "型付きのプロパティと properties の値が食い違っています。".into(),
+                ));
+            }
+        }
+    }
+    if builtin && matches!(control.control_type.as_str(), "SpinButton" | "ScrollBar") {
+        let bound = |name: &str| {
+            let p = scalars::find(&control.control_type, name).expect("min / max");
+            control.scalar(name).and_then(Value::as_i64).unwrap_or(p.omitted)
+        };
+        let (min, max) = (bound("min"), bound("max"));
+        let (lo, hi) = (min.min(max), min.max(max));
+        if let Some(v) = control.value.as_ref().and_then(Value::as_i64) {
+            if v < lo || v > hi {
+                issues.push(appearance_issue(
+                    &format!("{path}.value"),
+                    format!("value は min と max の間（{lo}〜{hi}）にしてください。"),
+                ));
+            }
+        }
+    }
+    issues
 }
 
 fn color_json(color: &FormSpecColor) -> Value {
@@ -967,7 +1006,7 @@ fn prog_id_matches_type(control_type: &str, prog_id: &str) -> bool {
 }
 
 fn legacy_equal(name: &str, typed: &Value, legacy: &Value) -> bool {
-    if name == "foreColor" || name == "backColor" {
+    if name == "foreColor" || name == "backColor" || name == "borderColor" {
         if let Ok(color) = serde_json::from_value::<FormSpecColor>(typed.clone()) {
             let ole = color.ole();
             let n = legacy.as_f64();
@@ -1019,12 +1058,6 @@ fn validate_typed_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
             issues.push(appearance_issue(
                 &field,
                 "値がプロパティの選択肢の範囲外です。".into(),
-            ));
-        }
-        if name == "listRows" && !value.as_i64().is_some_and(|n| (0..=i16::MAX as i64).contains(&n)) {
-            issues.push(appearance_issue(
-                &field,
-                "listRows は 0〜32767 の整数にしてください。".into(),
             ));
         }
         if name == "foreColor" || name == "backColor" {
@@ -1100,7 +1133,10 @@ fn minimum_edit_height(control: &FormSpecControl) -> Option<f64> {
         return None;
     }
     let bag = control.properties.as_ref();
-    if bag.and_then(|b| lookup_raw(b, "multiLine")).and_then(Value::as_bool) == Some(true) {
+    let multi_line = control
+        .scalar("multiLine")
+        .or_else(|| bag.and_then(|b| lookup_raw(b, "multiLine")));
+    if multi_line.and_then(Value::as_bool) == Some(true) {
         return None;
     }
     let bag_font = bag
@@ -1145,6 +1181,7 @@ fn minimum_edit_height(control: &FormSpecControl) -> Option<f64> {
 
 fn validate_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
     let mut issues = validate_typed_control(control, path);
+    issues.extend(validate_scalars(control, path));
     if let (Some(minimum), Some(height)) = (minimum_edit_height(control), control.height) {
         if height < minimum {
             issues.push(issue(

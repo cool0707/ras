@@ -133,9 +133,6 @@
         "tabIndex": 2,
         "enabled": true,
         "visible": true,
-        "unsupported": [
-          "variousPropertyBits"
-        ],
         "matchEntry": 2,
         "showDropButtonWhen": 0
       },
@@ -293,10 +290,7 @@
         "height": 35.00787401574803,
         "tabIndex": 8,
         "enabled": true,
-        "visible": true,
-        "unsupported": [
-          "orientation"
-        ]
+        "visible": true
       },
       {
         "foreColor": {
@@ -318,10 +312,7 @@
         "height": 35.00787401574803,
         "tabIndex": 9,
         "enabled": true,
-        "visible": true,
-        "unsupported": [
-          "orientation"
-        ]
+        "visible": true
       },
       {
         "backColor": {
@@ -379,8 +370,7 @@
         "enabled": true,
         "visible": true,
         "unsupported": [
-          "logicalSize",
-          "specialEffect"
+          "logicalSize"
         ]
       },
       {
@@ -520,21 +510,6 @@
       {
         "code": "unsupported_properties",
         "message": "Unsupported form Designer properties were preserved only in the binary model: logicalSize."
-      },
-      {
-        "code": "unsupported_properties",
-        "message": "Unsupported Designer properties were preserved only in the binary model: variousPropertyBits.",
-        "control": "ComboBoxTyped"
-      },
-      {
-        "code": "unsupported_properties",
-        "message": "Unsupported Designer properties were preserved only in the binary model: orientation.",
-        "control": "SpinButtonTyped"
-      },
-      {
-        "code": "unsupported_properties",
-        "message": "Unsupported Designer properties were preserved only in the binary model: orientation.",
-        "control": "ScrollBarTyped"
       },
       {
         "code": "unsupported_properties",

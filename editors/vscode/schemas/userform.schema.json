@@ -413,9 +413,10 @@
           "style": {
             "enum": [
               0,
+              1,
               2
             ],
-            "description": "ComboBox のスタイル。0: DropDownCombo（入力できる）、2: DropDownList（一覧から選ぶだけ）"
+            "description": "ComboBox のスタイル（0: DropDownCombo、2: DropDownList）、または TabStrip / MultiPage のスタイル（0: Tabs、1: Buttons、2: None）"
           },
           "multiSelect": {
             "enum": [
@@ -453,6 +454,280 @@
             "minimum": 0,
             "maximum": 32767,
             "description": "ComboBox のドロップダウンに表示する行数。省略時は 8"
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "ユーザーが値を変えられない（TextBox・ComboBox・ListBox・CheckBox・OptionButton・ToggleButton・CommandButton）"
+          },
+          "backStyle": {
+            "enum": [
+              0,
+              1
+            ],
+            "description": "背景。0: Transparent、1: Opaque"
+          },
+          "integralHeight": {
+            "type": "boolean",
+            "description": "行の途中で切れないように高さを合わせる（TextBox・ListBox）"
+          },
+          "matchRequired": {
+            "type": "boolean",
+            "description": "ComboBox の文字列が一覧の項目と一致しなければならない"
+          },
+          "alignment": {
+            "enum": [
+              0,
+              1
+            ],
+            "description": "CheckBox / OptionButton のキャプションの位置。0: Left、1: Right"
+          },
+          "imeMode": {
+            "enum": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10
+            ],
+            "description": "IME モード。0: NoControl、1: On、2: Off、3: Disable、4: Hiragana、5: Katakana、6: KatakanaHalf、7: AlphaFull、8: Alpha、9: HangulFull、10: Hangul"
+          },
+          "dragBehavior": {
+            "enum": [
+              0,
+              1
+            ],
+            "description": "文字列のドラッグ アンド ドロップ。0: Disabled、1: Enabled"
+          },
+          "enterKeyBehavior": {
+            "type": "boolean",
+            "description": "TextBox で Enter キーが改行になる"
+          },
+          "enterFieldBehavior": {
+            "enum": [
+              0,
+              1
+            ],
+            "description": "入ったときの選択。0: SelectAll、1: RecallSelection"
+          },
+          "tabKeyBehavior": {
+            "type": "boolean",
+            "description": "TextBox で Tab キーがタブ文字になる"
+          },
+          "wordWrap": {
+            "type": "boolean",
+            "description": "折り返す"
+          },
+          "selectionMargin": {
+            "type": "boolean",
+            "description": "行を選ぶための余白"
+          },
+          "autoWordSelect": {
+            "type": "boolean",
+            "description": "単語単位で選択を広げる"
+          },
+          "autoSize": {
+            "type": "boolean",
+            "description": "内容に合わせて大きさを変える"
+          },
+          "hideSelection": {
+            "type": "boolean",
+            "description": "フォーカスが無いとき選択を隠す"
+          },
+          "autoTab": {
+            "type": "boolean",
+            "description": "MaxLength 文字で次のコントロールへ移る"
+          },
+          "multiLine": {
+            "type": "boolean",
+            "description": "TextBox を複数行にする"
+          },
+          "maxLength": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "description": "最大文字数（0 は制限なし）"
+          },
+          "scrollBars": {
+            "enum": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "description": "TextBox のスクロール バー。0: None、1: Horizontal、2: Vertical、3: Both"
+          },
+          "passwordChar": {
+            "type": "string",
+            "maxLength": 1,
+            "description": "入力した文字の代わりに表示する 1 文字"
+          },
+          "dropButtonStyle": {
+            "enum": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "description": "ComboBox のドロップ ボタンの記号。0: Plain、1: Arrow、2: Ellipsis、3: Reduce"
+          },
+          "listWidth": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 72000,
+            "description": "ComboBox のドロップダウンの幅（ポイント。0 はコントロールの幅）"
+          },
+          "groupName": {
+            "type": "string",
+            "description": "OptionButton のグループ名"
+          },
+          "specialEffect": {
+            "enum": [
+              0,
+              1,
+              2,
+              3,
+              6
+            ],
+            "description": "立体効果。0: Flat、1: Raised、2: Sunken、3: Etched、6: Bump（CheckBox / OptionButton は 0 か 2）"
+          },
+          "borderColor": {
+            "type": "object",
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "rgb",
+                  "system",
+                  "ole"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+              }
+            },
+            "description": "BorderStyle が 1（Single）のときの枠の色"
+          },
+          "cycle": {
+            "enum": [
+              0,
+              2
+            ],
+            "description": "Frame の最後のコントロールからの Tab。0: AllForms、2: CurrentForm"
+          },
+          "mousePointer": {
+            "enum": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15
+            ],
+            "description": "マウス ポインター（fmMousePointer）"
+          },
+          "default": {
+            "type": "boolean",
+            "description": "CommandButton を既定のボタン（Enter）にする"
+          },
+          "cancel": {
+            "type": "boolean",
+            "description": "CommandButton をキャンセル ボタン（Esc）にする"
+          },
+          "takeFocusOnClick": {
+            "type": "boolean",
+            "description": "CommandButton をクリックしたときフォーカスを移す"
+          },
+          "tabStop": {
+            "type": "boolean",
+            "description": "Tab キーでフォーカスを移せる"
+          },
+          "min": {
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 2147483647,
+            "description": "SpinButton / ScrollBar の最小値"
+          },
+          "max": {
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 2147483647,
+            "description": "SpinButton / ScrollBar の最大値（省略時は SpinButton 100、ScrollBar 32767）"
+          },
+          "smallChange": {
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 2147483647,
+            "description": "矢印をクリックしたときの変化量"
+          },
+          "largeChange": {
+            "type": "integer",
+            "minimum": -2147483648,
+            "maximum": 2147483647,
+            "description": "ScrollBar のつまみの外をクリックしたときの変化量"
+          },
+          "orientation": {
+            "enum": [
+              -1,
+              0,
+              1
+            ],
+            "description": "SpinButton / ScrollBar の向き。-1: Auto、0: Vertical、1: Horizontal"
+          },
+          "proportionalThumb": {
+            "type": "boolean",
+            "description": "ScrollBar のつまみの大きさを表示範囲に合わせる"
+          },
+          "delay": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647,
+            "description": "押し続けたときの変化の間隔（ミリ秒）"
+          },
+          "tabOrientation": {
+            "enum": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "description": "TabStrip / MultiPage のタブの位置。0: Top、1: Bottom、2: Left、3: Right"
+          },
+          "multiRow": {
+            "type": "boolean",
+            "description": "TabStrip / MultiPage のタブを複数行にする"
+          },
+          "tabFixedWidth": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 7200,
+            "description": "タブの幅（ポイント。0 は各タブに合わせる）"
+          },
+          "tabFixedHeight": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 7200,
+            "description": "タブの高さ（ポイント。0 はフォントに合わせる）"
           },
           "observed": {
             "type": "object"

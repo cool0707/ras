@@ -81,8 +81,11 @@ export function fontStyle(value: unknown): JSX.CSSProperties {
 }
 export function appearanceStyle(value: unknown): JSX.CSSProperties {
   const appearance = objectValue(value);
+  const borderColor = colorStyle(appearance.borderColor);
   return {
     ...fontStyle(appearance.font),
+    // BorderColor is the color of a Single border (app.css .border-single).
+    ...(borderColor ? ({ "--border-color": borderColor } as JSX.CSSProperties) : {}),
     color: colorStyle(appearance.foreColor),
     backgroundColor: colorStyle(appearance.backColor),
     textAlign:

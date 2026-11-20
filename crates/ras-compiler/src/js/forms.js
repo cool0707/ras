@@ -24,6 +24,7 @@ module.exports = function install(rt) {
     const WINDOW = 0x80000005;
     const WINDOW_TEXT = 0x80000008;
     const BUTTON_TEXT = 0x80000012;
+    const WINDOW_FRAME = 0x80000006;
 
     /** A FormSpec color (`{ kind, value }`) or an OLE color number → OLE color. */
     function oleColor(c, fallback) {
@@ -55,39 +56,41 @@ module.exports = function install(rt) {
     const UPDATING = new Set(["TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar"]);
     const TOGGLES = new Set(["CheckBox", "OptionButton", "ToggleButton"]);
     const LISTS = new Set(["ComboBox", "ListBox"]);
+    /** FormSpec fields that are not plain properties of the control, or are read on their own. */
+    const SPEC_FIELDS = new Set(["id", "name", "type", "progId", "parentId", "zIndex", "left", "top", "width", "height", "tabIndex", "list", "selectedIndex", "tabs", "picture", "controls", "properties", "observed", "unsupported", "font", "foreColor", "backColor", "caption", "text", "value"]);
 
     /** Default value of each property a control of a kind has (the VBA spelling). */
     function defaults(kind) {
-        const d = { Visible: true, Enabled: true, Tag: "", ControlTipText: "", TabStop: FOCUSABLE.has(kind), ForeColor: BUTTON_TEXT, BackColor: BUTTON_FACE };
+        const d = { Visible: true, Enabled: true, Tag: "", ControlTipText: "", TabStop: FOCUSABLE.has(kind), ForeColor: BUTTON_TEXT, BackColor: BUTTON_FACE, MousePointer: 0 };
         switch (kind) {
             case "Label":
-                return Object.assign(d, { Caption: "", TextAlign: 1, WordWrap: true, AutoSize: false, BackStyle: 1, BorderStyle: 0, SpecialEffect: 0 });
+                return Object.assign(d, { Caption: "", TextAlign: 1, WordWrap: true, AutoSize: false, BackStyle: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 0 });
             case "TextBox":
-                return Object.assign(d, { Text: "", Locked: false, MaxLength: 0, MultiLine: false, PasswordChar: "", TextAlign: 1, WordWrap: true, BackColor: WINDOW, ForeColor: WINDOW_TEXT, SelStart: 0, SelLength: 0, EnterKeyBehavior: false, ScrollBars: 0 });
+                return Object.assign(d, { Text: "", Locked: false, MaxLength: 0, MultiLine: false, PasswordChar: "", TextAlign: 1, WordWrap: true, BackColor: WINDOW, ForeColor: WINDOW_TEXT, SelStart: 0, SelLength: 0, EnterKeyBehavior: false, ScrollBars: 0, AutoSize: false, BackStyle: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 2, TabKeyBehavior: false, IMEMode: 0, AutoTab: false, AutoWordSelect: true, DragBehavior: 0, EnterFieldBehavior: 0, HideSelection: true, IntegralHeight: true, SelectionMargin: true });
             case "ComboBox":
-                return Object.assign(d, { Text: "", Locked: false, Style: 0, MatchRequired: false, MatchEntry: 1, ShowDropButtonWhen: 2, ListStyle: 0, ColumnCount: 1, BoundColumn: 1, TextColumn: -1, ListRows: 8, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", MaxLength: 0, TextAlign: 1 });
+                return Object.assign(d, { Text: "", Locked: false, Style: 0, MatchRequired: false, MatchEntry: 1, ShowDropButtonWhen: 2, ListStyle: 0, ColumnCount: 1, BoundColumn: 1, TextColumn: -1, ListRows: 8, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", MaxLength: 0, TextAlign: 1, DropButtonStyle: 1, ListWidth: 0, AutoSize: false, BackStyle: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 2, IMEMode: 0, AutoTab: false, AutoWordSelect: true, DragBehavior: 0, EnterFieldBehavior: 0, HideSelection: true, SelectionMargin: true });
             case "ListBox":
-                return Object.assign(d, { Locked: false, MultiSelect: 0, MatchEntry: 0, ColumnCount: 1, BoundColumn: 1, TextColumn: -1, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", TopIndex: 0, ListStyle: 0, TextAlign: 1 });
+                return Object.assign(d, { Locked: false, MultiSelect: 0, MatchEntry: 0, ColumnCount: 1, BoundColumn: 1, TextColumn: -1, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", TopIndex: 0, ListStyle: 0, TextAlign: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 2, IMEMode: 0, IntegralHeight: true });
             case "CommandButton":
-                return Object.assign(d, { Caption: "", Default: false, Cancel: false, Accelerator: "", TakeFocusOnClick: true, WordWrap: false, Locked: false });
+                return Object.assign(d, { Caption: "", Default: false, Cancel: false, Accelerator: "", TakeFocusOnClick: true, WordWrap: false, Locked: false, AutoSize: false, BackStyle: 1 });
             case "CheckBox":
             case "OptionButton":
             case "ToggleButton":
-                return Object.assign(d, { Caption: "", Value: false, TripleState: false, Locked: false, Accelerator: "", GroupName: "", WordWrap: true, TextAlign: kind === "ToggleButton" ? 2 : 1 });
+                return Object.assign(d, { Caption: "", Value: false, TripleState: false, Locked: false, Accelerator: "", GroupName: "", WordWrap: true, TextAlign: kind === "ToggleButton" ? 2 : 1, AutoSize: false, BackStyle: 1, SpecialEffect: 2, ...(kind === "ToggleButton" ? {} : { Alignment: 1 }) });
             case "SpinButton":
-                return Object.assign(d, { Value: 0, Min: 0, Max: 100, SmallChange: 1, Orientation: -1 });
+                return Object.assign(d, { Value: 0, Min: 0, Max: 100, SmallChange: 1, Orientation: -1, Delay: 50 });
             case "ScrollBar":
-                return Object.assign(d, { Value: 0, Min: 0, Max: 32767, SmallChange: 1, LargeChange: 1, Orientation: -1 });
+                return Object.assign(d, { Value: 0, Min: 0, Max: 32767, SmallChange: 1, LargeChange: 1, Orientation: -1, Delay: 50, ProportionalThumb: true });
             case "Image":
-                return Object.assign(d, { PictureSizeMode: 0, PictureAlignment: 2, BorderStyle: 1, Picture: null });
+                return Object.assign(d, { PictureSizeMode: 0, PictureAlignment: 2, BorderStyle: 1, BorderColor: WINDOW_FRAME, SpecialEffect: 0, Picture: null });
             case "Frame":
-                return Object.assign(d, { Caption: "", BorderStyle: 0, SpecialEffect: 3 });
+                return Object.assign(d, { Caption: "", BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 3, Cycle: 0 });
             case "MultiPage":
-                return Object.assign(d, { Value: 0, Style: 0, TabOrientation: 0, MultiRow: false });
+                return Object.assign(d, { Value: 0, Style: 0, TabOrientation: 0, MultiRow: false, TabFixedWidth: 0, TabFixedHeight: 0 });
             case "Page":
                 return { Visible: true, Enabled: true, Tag: "", ControlTipText: "", Caption: "", Accelerator: "" };
             case "TabStrip":
-                return Object.assign(d, { Value: 0, Style: 0, TabOrientation: 0, MultiRow: false });
+                return Object.assign(d, { Value: 0, Style: 0, TabOrientation: 0, MultiRow: false, TabFixedWidth: 0, TabFixedHeight: 0 });
             default:
                 return d;
         }
@@ -224,6 +227,11 @@ module.exports = function install(rt) {
             const bag = {};
             for (const [k, v] of Object.entries(spec.properties || {})) bag[k.toLowerCase()] = v;
             for (const key of ["caption", "text", "value", "tag", "controlTipText", "accelerator", "enabled", "visible"]) if (spec[key] !== undefined && spec[key] !== null) bag[key.toLowerCase()] = spec[key];
+            // The plain properties of the FormSpec (locked, wordWrap, min ...) have the VBA names and values.
+            for (const [k, v] of Object.entries(spec)) {
+                if (SPEC_FIELDS.has(k) || v === null || (typeof v === "object" && !k.toLowerCase().endsWith("color"))) continue;
+                bag[k.toLowerCase()] = v;
+            }
             for (const [k, v] of Object.entries(bag)) {
                 const name = Object.keys(s).find((n) => n.toLowerCase() === k);
                 if (name === undefined || k === "value" || k === "text") continue;
@@ -231,7 +239,7 @@ module.exports = function install(rt) {
             }
             if (spec.foreColor) s.ForeColor = oleColor(spec.foreColor, s.ForeColor);
             if (spec.backColor) s.BackColor = oleColor(spec.backColor, s.BackColor);
-            for (const [key, name] of [["textAlign", "TextAlign"], ["borderStyle", "BorderStyle"], ["pictureAlignment", "PictureAlignment"], ["pictureSizeMode", "PictureSizeMode"], ["style", "Style"], ["multiSelect", "MultiSelect"], ["listStyle", "ListStyle"], ["matchEntry", "MatchEntry"], ["showDropButtonWhen", "ShowDropButtonWhen"], ["listRows", "ListRows"]]) if (typeof spec[key] === "number" && name in s) s[name] = spec[key];
+            for (const [key, name] of [["textAlign", "TextAlign"], ["borderStyle", "BorderStyle"], ["pictureAlignment", "PictureAlignment"], ["pictureSizeMode", "PictureSizeMode"]]) if (typeof spec[key] === "number" && name in s) s[name] = spec[key];
             const kind = this.$kind;
             if (LISTS.has(kind)) {
                 this.$list = (spec.list || []).map((x) => [rt.cstr(x)]);
@@ -602,7 +610,7 @@ module.exports = function install(rt) {
     }
 
     // Plain properties: read the state, write it and redraw.
-    const PLAIN = ["Left", "Top", "Width", "Height", "Visible", "Enabled", "Tag", "ControlTipText", "TabIndex", "TabStop", "BackColor", "ForeColor", "BorderColor", "Locked", "MaxLength", "MultiLine", "PasswordChar", "TextAlign", "WordWrap", "AutoSize", "BackStyle", "BorderStyle", "SpecialEffect", "Style", "MatchRequired", "ColumnCount", "ColumnWidths", "ColumnHeads", "BoundColumn", "TextColumn", "ListRows", "TopIndex", "ListStyle", "MultiSelect", "Default", "Cancel", "Accelerator", "TakeFocusOnClick", "TripleState", "GroupName", "Min", "Max", "SmallChange", "LargeChange", "Orientation", "PictureSizeMode", "PictureAlignment", "PictureTiling", "EnterKeyBehavior", "TabKeyBehavior", "ScrollBars", "TabOrientation", "MultiRow", "IMEMode", "SelStart", "SelLength", "MatchEntry", "ShowDropButtonWhen", "ListWidth", "ControlSource"];
+    const PLAIN = ["Left", "Top", "Width", "Height", "Visible", "Enabled", "Tag", "ControlTipText", "TabIndex", "TabStop", "BackColor", "ForeColor", "BorderColor", "Locked", "MaxLength", "MultiLine", "PasswordChar", "TextAlign", "WordWrap", "AutoSize", "BackStyle", "BorderStyle", "SpecialEffect", "Style", "MatchRequired", "ColumnCount", "ColumnWidths", "ColumnHeads", "BoundColumn", "TextColumn", "ListRows", "TopIndex", "ListStyle", "MultiSelect", "Default", "Cancel", "Accelerator", "TakeFocusOnClick", "TripleState", "GroupName", "Min", "Max", "SmallChange", "LargeChange", "Orientation", "PictureSizeMode", "PictureAlignment", "PictureTiling", "EnterKeyBehavior", "TabKeyBehavior", "ScrollBars", "TabOrientation", "MultiRow", "IMEMode", "SelStart", "SelLength", "MatchEntry", "ShowDropButtonWhen", "ListWidth", "ControlSource", "Alignment", "DropButtonStyle", "Delay", "ProportionalThumb", "TabFixedWidth", "TabFixedHeight", "Cycle", "AutoTab", "AutoWordSelect", "DragBehavior", "EnterFieldBehavior", "HideSelection", "IntegralHeight", "SelectionMargin", "MousePointer"];
     for (const name of PLAIN) {
         Object.defineProperty(Control.prototype, name, {
             get() {

@@ -544,3 +544,127 @@ body {
 	font-size: 11px;
 	padding: 2px;
 }
+
+/* ------------------------------------------------------ plain properties (look()) */
+
+.ctl.bordered {
+	border-color: var(--border-color, var(--ms-frame));
+}
+
+/* SpecialEffect of the edit fields and labels. */
+.ctl[data-effect="0"] .field {
+	border-color: transparent;
+	box-shadow: none;
+}
+
+.ctl[data-effect="1"] .field,
+.ctl-label[data-effect="1"] {
+	border: 1px solid;
+	border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-light),
+		inset -1px -1px 0 var(--ms-shadow);
+}
+
+.ctl-label[data-effect="2"] {
+	border: 1px solid;
+	border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-dark),
+		inset -1px -1px 0 var(--ms-light);
+}
+
+.ctl[data-effect="3"] .field,
+.ctl-label[data-effect="3"] {
+	border: 1px solid;
+	border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-highlight),
+		inset -1px -1px 0 var(--ms-shadow);
+}
+
+.ctl[data-effect="6"] .field,
+.ctl-label[data-effect="6"] {
+	border: 1px solid;
+	border-color: var(--ms-light) var(--ms-dark) var(--ms-dark) var(--ms-light);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-shadow),
+		inset -1px -1px 0 var(--ms-highlight);
+}
+
+.ctl[data-effect="0"] .toggle input {
+	border: 1px solid var(--ms-frame);
+	box-shadow: none;
+}
+
+.ctl-frame[data-effect="0"]::before {
+	border: 0;
+	box-shadow: none;
+}
+
+.ctl-frame[data-effect="2"]::before {
+	border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-dark),
+		inset -1px -1px 0 var(--ms-light);
+}
+
+/* Alignment Left: the caption before the box. */
+.ctl.caption-left .toggle {
+	flex-direction: row-reverse;
+	justify-content: flex-end;
+}
+
+/* WordWrap: a CommandButton does not wrap unless asked to. */
+.ctl-commandbutton:not(.wrap) .button,
+.ctl.no-wrap .button,
+.ctl.no-wrap .toggle span {
+	white-space: pre;
+}
+
+/* DropButtonStyle Reduce. */
+.ctl .combo-reduce {
+	align-self: flex-end;
+	width: 7px;
+	height: 2px;
+	margin-bottom: 3px;
+	background: var(--ms-text);
+}
+
+.ctl .combo-ellipsis {
+	font-size: 9px;
+	line-height: 1;
+}
+
+/* Style Buttons: separate push buttons, the selected one pressed. */
+.ctl.tab-style-1::before {
+	display: none;
+}
+
+.ctl.tab-style-1 .tabs {
+	gap: 2px;
+	align-items: flex-start;
+}
+
+.ctl.tab-style-1 .tab {
+	border-bottom: 1px solid;
+	border-radius: 0;
+	box-shadow:
+		inset 1px 1px 0 var(--ms-light),
+		inset -1px -1px 0 var(--ms-shadow);
+}
+
+.ctl.tab-style-1 .tab.active {
+	height: 20px;
+	margin: 0;
+	border-color: var(--ms-dark) var(--ms-highlight) var(--ms-highlight) var(--ms-dark);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-shadow),
+		inset -1px -1px 0 var(--ms-light);
+}
+
+/* Style None: no tabs. */
+.ctl.tab-style-2::before,
+.ctl.tab-style-2 .tabs {
+	visibility: hidden;
+}

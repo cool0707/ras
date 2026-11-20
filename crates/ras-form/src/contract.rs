@@ -442,32 +442,20 @@ pub fn type_properties(name: &str) -> Option<Props> {
     ) {
         props.push(("borderStyle", border_style()));
     }
-    if matches!(n, "ComboBox" | "ListBox") {
-        props.push((
-            "listStyle",
-            allowed(p(T::Integer, false, Supported), &["0", "1"]),
-        ));
-        props.push((
-            "matchEntry",
-            allowed(p(T::Integer, false, Supported), &["0", "1", "2"]),
-        ));
-    }
-    if n == "ComboBox" {
-        props.push((
-            "style",
-            allowed(p(T::Integer, false, Supported), &["0", "2"]),
-        ));
-        props.push((
-            "showDropButtonWhen",
-            allowed(p(T::Integer, false, Supported), &["0", "1", "2"]),
-        ));
-        props.push(("listRows", p(T::Integer, false, Supported)));
-    }
-    if n == "ListBox" {
-        props.push((
-            "multiSelect",
-            allowed(p(T::Integer, false, Supported), &["0", "1", "2"]),
-        ));
+    // The plain properties (scalars.rs check their values).
+    for scalar in crate::scalars::of_type(n) {
+        if props.iter().any(|(k, _)| *k == scalar.name) {
+            continue;
+        }
+        use crate::scalars::Kind;
+        let prop = match scalar.kind {
+            Kind::Bool => p(T::Boolean, false, Supported),
+            Kind::Enum(_) | Kind::Int(..) => p(T::Integer, false, Supported),
+            Kind::Points(_) => p(T::Number, false, Supported),
+            Kind::Char | Kind::Text => s(),
+            Kind::Color => color(),
+        };
+        props.push((scalar.name, prop));
     }
     Some(props)
 }

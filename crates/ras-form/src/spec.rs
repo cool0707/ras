@@ -178,24 +178,24 @@ pub struct FormSpecControl {
     #[allow(missing_docs)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture_size_mode: Option<i64>,
-    /// ComboBox `Style`: `0` DropDownCombo, `2` DropDownList.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub style: Option<i64>,
-    /// ListBox `MultiSelect`: `0` single, `1` multi, `2` extended.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub multi_select: Option<i64>,
-    /// ComboBox / ListBox `ListStyle`: `0` plain, `1` option.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub list_style: Option<i64>,
-    /// ComboBox / ListBox `MatchEntry`: `0` first letter, `1` complete, `2` none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub match_entry: Option<i64>,
-    /// ComboBox `ShowDropButtonWhen`: `0` never, `1` focus, `2` always.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub show_drop_button_when: Option<i64>,
-    /// ComboBox `ListRows`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub list_rows: Option<i64>,
+    /// The plain properties of the control (`locked`, `wordWrap`, `style`,
+    /// `multiSelect`, `min`, `default` ...), by FormSpec name. Which exist for a
+    /// control type, and their values, are those of the VBA properties of the
+    /// same name. Other fields of the JSON object are kept here as well, so
+    /// that validation can report them.
+    #[serde(flatten)]
+    pub scalars: Map<String, Value>,
+}
+
+impl FormSpecControl {
+    /// The plain property `name` (`multiSelect` ...), if written.
+    pub fn scalar(&self, name: &str) -> Option<&Value> {
+        self.scalars
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v)
+            .filter(|v| !v.is_null())
+    }
 }
 
 fn non_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {

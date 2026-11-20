@@ -82,6 +82,26 @@ function ControlPicture({ control }: { control: DesignerControl }) {
   return <span class="placeholder">▧ {name || "Image"}</span>;
 }
 
+/** Orientation Horizontal (1) or Vertical (0), else Auto: horizontal when wider than high. */
+const horizontal = (control: DesignerControl) =>
+  control.orientation === 1 || (control.orientation !== 0 && control.width >= control.height);
+
+/** Classes for the plain properties that change how a control is drawn. */
+export function scalarClasses(control: DesignerControl): string {
+  return [
+    typeof control.specialEffect === "number" ? `effect-${control.specialEffect}` : "",
+    control.backStyle === 0 ? "transparent" : "",
+    control.alignment === 0 ? "caption-left" : "",
+    control.wordWrap === false ? "no-wrap" : control.wordWrap === true ? "wrap" : "",
+    control.multiLine ? "multi-line" : "",
+    typeof control.style === "number" && ["multipage", "tabstrip"].includes(control.type.toLowerCase())
+      ? `tab-style-${control.style}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function ControlGlyph({ control }: { control: DesignerControl }) {
   const type = control.type.toLowerCase();
   const caption = control.caption ?? control.name;
@@ -90,8 +110,11 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "commandbutton":
     case "togglebutton":
       return <span>{caption}</span>;
-    case "textbox":
-      return <span>{control.text ?? String(control.value ?? "")}</span>;
+    case "textbox": {
+      const text = control.text ?? String(control.value ?? "");
+      // PasswordChar shows in place of every character.
+      return <span>{control.passwordChar ? control.passwordChar.repeat([...text].length) : text}</span>;
+    }
     case "checkbox":
     case "optionbutton": {
       // MSForms draws the box at the left, vertically centred, with the caption beside it.
@@ -116,7 +139,10 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
           </span>
           {button && (
             <span class="combo-arrow" aria-hidden="true">
-              <span class="combo-chevron" />
+              {/* DropButtonStyle: Plain, Arrow, Ellipsis, Reduce. */}
+              {[null, <span class="combo-chevron" />, "…", <span class="combo-reduce" />][
+                control.dropButtonStyle ?? 1
+              ] ?? null}
             </span>
           )}
         </>
@@ -151,7 +177,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "spinbutton":
       return (
         <span
-          class={`spinbutton-chrome ${control.width >= control.height ? "horizontal" : "vertical"}`}
+          class={`spinbutton-chrome ${horizontal(control) ? "horizontal" : "vertical"}`}
           aria-hidden="true"
         >
           <span class="spinbutton-arrow decrement">
@@ -165,7 +191,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "scrollbar":
       return (
         <span
-          class={`scrollbar-chrome ${control.width >= control.height ? "horizontal" : "vertical"}`}
+          class={`scrollbar-chrome ${horizontal(control) ? "horizontal" : "vertical"}`}
           aria-hidden="true"
         >
           <span class="scrollbar-arrow decrement">
@@ -991,7 +1017,7 @@ export function DesignerCanvas({
       <>
         <div
           key={control.id}
-          class={`control ${type} ${borderClass(shown)} ${control.enabled === false ? "disabled" : ""} ${type === "frame" && control.caption ? "has-caption" : ""} ${type === "togglebutton" && control.value === true ? "pressed" : ""}`}
+          class={`control ${type} ${borderClass(shown)} ${scalarClasses(shown)} ${control.enabled === false ? "disabled" : ""} ${type === "frame" && control.caption ? "has-caption" : ""} ${type === "togglebutton" && control.value === true ? "pressed" : ""}`}
           data-control-id={control.id}
           title={`${control.name} (${control.type})${control.approximate ? ` — ${approximateBounds}` : ""}`}
           style={{

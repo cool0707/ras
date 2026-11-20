@@ -238,9 +238,93 @@ header {
   background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px
     2px;
 }
-/* fmBorderStyleSingle replaces the 3D edge with a 1px line. */
-.control.border-single {
+/* SpecialEffect written in the FormSpec (the controls above draw their default). */
+.control.effect-0:not(.checkbox, .optionbutton, .frame) {
+  border: 0;
+  box-shadow: none;
+}
+.control.effect-1:not(.checkbox, .optionbutton, .frame) {
+  border: 1px solid;
+  border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-light),
+    inset -1px -1px 0 var(--ms-shadow);
+}
+.control.effect-2:not(.checkbox, .optionbutton, .frame) {
+  border: 1px solid;
+  border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-dark),
+    inset -1px -1px 0 var(--ms-light);
+}
+.control.effect-3:not(.checkbox, .optionbutton, .frame) {
+  border: 1px solid;
+  border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-highlight),
+    inset -1px -1px 0 var(--ms-shadow);
+}
+.control.effect-6:not(.checkbox, .optionbutton, .frame) {
+  border: 1px solid;
+  border-color: var(--ms-light) var(--ms-dark) var(--ms-dark) var(--ms-light);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-shadow),
+    inset -1px -1px 0 var(--ms-highlight);
+}
+/* A flat check or option box is a plain square or circle. */
+.control.effect-0 .toggle-box {
   border: 1px solid var(--ms-frame);
+  box-shadow: none;
+}
+/* A Frame draws its effect on the edge under the caption. */
+.frame.effect-0 .frame-edge {
+  border: 0;
+  box-shadow: none;
+}
+.frame.effect-1 .frame-edge {
+  border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-light),
+    inset -1px -1px 0 var(--ms-shadow);
+}
+.frame.effect-2 .frame-edge {
+  border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-dark),
+    inset -1px -1px 0 var(--ms-light);
+}
+.frame.effect-6 .frame-edge {
+  border-color: var(--ms-light) var(--ms-dark) var(--ms-dark) var(--ms-light);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-shadow),
+    inset -1px -1px 0 var(--ms-highlight);
+}
+/* BackStyle Transparent: the parent shows through. */
+.control.transparent,
+.control.transparent .frame-caption {
+  background: transparent !important;
+}
+/* Alignment Left: the caption before the box. */
+.control.caption-left {
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+}
+.control.no-wrap,
+.control.no-wrap .toggle-caption {
+  white-space: pre;
+}
+.control.commandbutton.wrap,
+.control.togglebutton.wrap {
+  white-space: pre-wrap;
+}
+/* A multi-line TextBox wraps (WordWrap defaults to true). */
+.control.textbox.multi-line:not(.no-wrap) {
+  white-space: pre-wrap;
+}
+/* fmBorderStyleSingle replaces the 3D edge with a 1px line of BorderColor (and wins
+   over a SpecialEffect, as in MSForms). */
+.control.border-single:not(.frame) {
+  border: 1px solid var(--border-color, var(--ms-frame));
   box-shadow: none;
 }
 .combobox {
@@ -291,6 +375,14 @@ header {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+/* DropButtonStyle Reduce: a short line like an underscore. */
+.combo-reduce {
+  align-self: flex-end;
+  width: 7px;
+  height: 2px;
+  margin-bottom: 3px;
+  background: var(--ms-text);
 }
 .combo-chevron {
   width: 0;
@@ -476,7 +568,7 @@ header {
   border: 0;
 }
 .frame.border-single .frame-edge {
-  border-color: var(--ms-frame);
+  border-color: var(--border-color, var(--ms-frame));
   box-shadow: none;
 }
 .frame-caption {
@@ -586,6 +678,36 @@ header {
   z-index: 1;
   height: 24px;
   margin: 0 -2px;
+}
+/* Style Buttons: separate push buttons, the selected one pressed, and no body edge. */
+.tab-style-1::before {
+  display: none;
+}
+.tab-style-1 .tabs {
+  gap: 2px;
+  align-items: flex-start;
+}
+.tab-style-1 .tabs span,
+.tab-style-1 .tabs button {
+  border-bottom: 1px solid;
+  border-radius: 0;
+  border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-light),
+    inset -1px -1px 0 var(--ms-shadow);
+}
+.tab-style-1 .tabs .active {
+  height: 20px;
+  margin: 0;
+  border-color: var(--ms-dark) var(--ms-highlight) var(--ms-highlight) var(--ms-dark);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-shadow),
+    inset -1px -1px 0 var(--ms-light);
+}
+/* Style None: no tabs and no edge. */
+.tab-style-2::before,
+.tab-style-2 .tabs {
+  visibility: hidden;
 }
 .page-content {
   position: absolute;

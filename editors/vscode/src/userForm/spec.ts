@@ -264,6 +264,8 @@ function validateObject(root: JsonObject, properties: Record<string, PropertyCon
 		}
 		if (value !== null && contract.allowedValues?.length && !contract.allowedValues.includes(String(value)))
 			issues.push(issue("UFV003", "error", `${field} は次のいずれかでなければなりません: ${contract.allowedValues.join(", ")}`, field));
+		if (typeof value === "number" && ((contract.minimum !== undefined && value < contract.minimum) || (contract.maximum !== undefined && value > contract.maximum)))
+			issues.push(issue("UFV021", "error", `${field} は ${contract.minimum}〜${contract.maximum} でなければなりません。`, field));
 		if (value !== null && contract.children && isObject(value)) issues.push(...validateObject(value, contract.children, field));
 		if (contract.support !== "supported" && contract.support !== "snapshot-only")
 			issues.push(issue("UFV013", "warning", `${field} のサポートは ${contract.support} です。`, field, supportSuggestion(contract.support)));
@@ -317,7 +319,7 @@ function validateTyped(object: JsonObject, path: string, properties: Record<stri
 		if (error) issues.push(issue("UFV021", "error", error, `${path}.${name}`));
 	}
 	if (type && isObject(object.properties)) {
-		for (const name of ["font", "foreColor", "backColor", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode"]) {
+		for (const name of ["font", "foreColor", "backColor", "borderColor", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode"]) {
 			if (object[name] === undefined || object[name] === null) continue;
 			const [legacy, present] = lookupRaw(object.properties, name);
 			if (present && !legacyEqual(name, object[name], legacy))
@@ -328,7 +330,7 @@ function validateTyped(object: JsonObject, path: string, properties: Record<stri
 }
 
 function legacyEqual(name: string, typed: JsonValue, legacy: JsonValue): boolean {
-	if ((name === "foreColor" || name === "backColor") && isObject(typed) && typeof legacy === "number") {
+	if ((name === "foreColor" || name === "backColor" || name === "borderColor") && isObject(typed) && typeof legacy === "number") {
 		const ole = colorToOle(typed);
 		if (ole === undefined) return false;
 		return legacy === ole || legacy === (ole > 0x7fffffff ? ole - 2 ** 32 : ole);
@@ -454,10 +456,17 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 			if (contract && value !== undefined && value !== null && contract.allowedValues && !contract.allowedValues.includes(String(value)))
 				issues.push(issue("UFV021", "error", "値がプロパティの列挙範囲の外にあります。", `${path}.${name}`));
 		}
-		if (typeof control.listRows === "number" && !(Number.isInteger(control.listRows) && control.listRows >= 0 && control.listRows <= 32767))
-			issues.push(issue("UFV021", "error", "listRows は 0〜32767 の整数でなければなりません。", `${path}.listRows`));
+		if (typeof control.passwordChar === "string" && control.passwordChar.length > 1)
+			issues.push(issue("UFV021", "error", "passwordChar は 1 文字にしてください。", `${path}.passwordChar`));
+		if ((type === "SpinButton" || type === "ScrollBar") && typeof control.value === "number") {
+			const min = typeof control.min === "number" ? control.min : 0;
+			const max = typeof control.max === "number" ? control.max : type === "SpinButton" ? 100 : 32767;
+			const [lo, hi] = [Math.min(min, max), Math.max(min, max)];
+			if (control.value < lo || control.value > hi)
+				issues.push(issue("UFV021", "error", `value は min と max の間（${lo}〜${hi}）にしてください。`, `${path}.value`));
+		}
 		const font = control.font ?? (isObject(control.properties) ? control.properties.font : undefined);
-		const multiLine = isObject(control.properties) && control.properties.multiLine === true;
+		const multiLine = control.multiLine === true || (isObject(control.properties) && control.properties.multiLine === true);
 		const minimum = minimumEditHeight(type, font, multiLine);
 		if (minimum !== undefined && typeof control.height === "number" && control.height < minimum)
 			issues.push(

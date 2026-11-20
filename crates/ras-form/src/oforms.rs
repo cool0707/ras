@@ -530,6 +530,21 @@ impl Record {
     }
 
     fn set(&mut self, name: &str, value: &PValue) -> Result<()> {
+        // A property-mask bit without data (TakeFocusOnClick, MultiRow): the
+        // bit is set when the property has the value the flag stands for.
+        if let Some((bit, flag, set)) = self.spec.flags.iter().find(|(_, n, _)| *n == name) {
+            let PValue::Bool(on) = value else {
+                return invalid(format!("{name} は真偽値が必要です"));
+            };
+            if i64::from(*on) == *set {
+                self.mask |= 1u64 << bit;
+                self.values.insert(flag, *set);
+            } else {
+                self.mask &= !(1u64 << bit);
+                self.values.remove(flag);
+            }
+            return Ok(());
+        }
         let Some(field) = self.spec.data.iter().find(|f| f.name == name) else {
             return unsupported(format!("プロパティ {name}"));
         };
@@ -1142,7 +1157,12 @@ impl Generation {
                     position: (0, 0),
                     tab_index: 0,
                     visible: true,
-                    properties: BTreeMap::new(),
+                    // The tab settings of the MultiPage are the TabStrip's.
+                    properties: properties
+                        .iter()
+                        .filter(|(name, _)| crate::scalars::TAB_STRIP_FIELDS.contains(&name.as_str()))
+                        .map(|(name, value)| (name.clone(), value.clone()))
+                        .collect(),
                     controls: Vec::new(),
                     tabs: Some(tabs),
                     internal: true,
@@ -1231,6 +1251,8 @@ impl Generation {
                 }
                 if control.class == 24 {
                     record.set_int("MatchEntry", 0)?;
+                    // MS-OFORMS: MUST be fmScrollBarsBoth for a ListBox.
+                    record.set_int("ScrollBars", 3)?;
                 }
             }
             if spec.text_props {
@@ -1284,12 +1306,19 @@ impl Generation {
                 )?);
             }
             let site_name = edited_string(&control.name)?;
-            let mut flags: i64 = if control.class == 21 { 0x32 } else { 0x33 };
-            if container {
-                flags = 0x40023;
-            }
+            let mut flags = crate::scalars::fresh_site_flags(control.class);
             if !control.visible {
                 flags &= !2;
+            }
+            // TabStop, Default, Cancel.
+            for bit in [0u8, 2, 3] {
+                if let Some(PValue::Bool(on)) = control.properties.get(&format!("SiteFlag{bit}")) {
+                    if *on {
+                        flags |= 1 << bit;
+                    } else {
+                        flags &= !(1 << bit);
+                    }
+                }
             }
             let mut values = HashMap::new();
             values.insert("NameData", site_name.packed());
@@ -1366,7 +1395,10 @@ fn skipped_property(name: &str, class: u16) -> bool {
     matches!(
         name,
         "Tag" | "ControlTipText" | "Accelerator" | "MultiPageEnabled"
-    ) || (class == 7 && (name == "Caption" || name == "BooleanProperties"))
+    ) || name.starts_with("SiteFlag")
+        || (class == 7 && (name == "Caption" || name == "BooleanProperties"))
+        // Held by the hidden TabStrip of a MultiPage.
+        || (class == 57 && crate::scalars::TAB_STRIP_FIELDS.contains(&name))
 }
 
 // ---------------------------------------------------------------------------
@@ -1651,23 +1683,6 @@ fn set_checked(record: &mut Record, property: &str, value: i64, class: Option<u1
         }
         "PictureSizeMode" if class != Some(12) || !matches!(value, 0 | 1 | 3) => {
             return invalid("pictureSizeMode が不正です")
-        }
-        // Only a ComboBox switches between DropDownCombo (3) and DropDownList (7).
-        "DisplayStyle" if class != Some(25) || !matches!(value, 3 | 7) => {
-            return invalid("style が不正です")
-        }
-        "MultiSelect" if class != Some(24) || value > 2 => return invalid("multiSelect が不正です"),
-        "ListStyle" if !matches!(class, Some(24 | 25)) || value > 1 => {
-            return invalid("listStyle が不正です")
-        }
-        "MatchEntry" if !matches!(class, Some(24 | 25)) || value > 2 => {
-            return invalid("matchEntry が不正です")
-        }
-        "ShowDropButtonWhen" if class != Some(25) || value > 2 => {
-            return invalid("showDropButtonWhen が不正です")
-        }
-        "ListRows" if class != Some(25) || value > i16::MAX as i64 => {
-            return invalid("listRows が不正です")
         }
         _ => {}
     }

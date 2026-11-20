@@ -92,6 +92,50 @@ describe("FormSpec editing", () => {
 		assert.equal(previewDocument((parseSpec(text) as any).spec).controls[0].style, 2);
 	});
 
+	it("edits the plain properties of each control type", () => {
+		const controls = [
+			{ id: "t1", name: "TextBox1", type: "TextBox", left: 8, top: 8, width: 120, height: 18 },
+			{ id: "b1", name: "OK", type: "CommandButton", left: 8, top: 30, width: 72, height: 24 },
+			{ id: "s1", name: "Spin1", type: "SpinButton", left: 140, top: 8, width: 18, height: 36 },
+			{ id: "x1", name: "Tabs1", type: "TabStrip", left: 8, top: 60, width: 200, height: 60 },
+			{ id: "k1", name: "Check1", type: "CheckBox", left: 140, top: 50, width: 72, height: 18 },
+		];
+		let text = form(controls);
+		const set = (controlId: string, field: string, value: unknown): SemanticOperation => ({ type: "setControlProperty", controlId, field, value });
+		text = apply(
+			text,
+			set("t1", "locked", true),
+			set("t1", "passwordChar", "*"),
+			set("t1", "specialEffect", 0),
+			set("t1", "borderColor", { kind: "rgb", value: "#FF0000" }),
+			set("b1", "default", true),
+			set("b1", "takeFocusOnClick", false),
+			set("s1", "min", 10),
+			set("s1", "max", 20),
+			set("s1", "value", 15),
+			set("x1", "style", 1),
+			set("x1", "tabOrientation", 1),
+			set("k1", "alignment", 0),
+		);
+		assert.deepEqual(
+			[control(text, "t1").locked, control(text, "t1").passwordChar, control(text, "b1").default, control(text, "s1").value, control(text, "x1").style],
+			[true, "*", true, 15, 1],
+		);
+		// Values outside what the property takes, and properties of other types, are refused.
+		rejects(text, [set("t1", "specialEffect", 4)], "UFE003");
+		rejects(text, [set("s1", "value", 30)], "UFV021");
+		rejects(text, [set("t1", "passwordChar", "**")], "UFV021");
+		rejects(text, [set("b1", "multiLine", true)], "UFE005");
+		rejects(text, [set("k1", "style", 2)], "UFE005");
+		// The grid labels values by their VBA constants, per control type.
+		const grid = propertyGrid((parseSpec(text) as any).spec);
+		const labels = (id: string, field: string) =>
+			grid.controls[id].descriptors.find((d) => d.field === field)?.suggestions?.map((s) => s.label);
+		assert.deepEqual(labels("x1", "style"), ["Tabs", "Buttons", "None"]);
+		assert.deepEqual(labels("k1", "alignment"), ["Left", "Right"]);
+		assert.deepEqual(labels("t1", "specialEffect"), ["Flat", "Raised", "Sunken", "Etched", "Bump"]);
+	});
+
 	it("raises a TextBox to the height its font needs, but only where the edit touched", () => {
 		const low = { id: "t0", name: "Untouched", type: "TextBox", left: 8, top: 60, width: 120, height: 12 };
 		let text = form([{ id: "t1", name: "TextBox1", type: "TextBox", left: 8, top: 8, width: 120, height: 18 }, low]);

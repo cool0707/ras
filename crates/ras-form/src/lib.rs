@@ -36,6 +36,7 @@ pub mod import;
 mod oforms;
 pub mod picture;
 mod reader;
+mod scalars;
 mod snapshot;
 pub mod spec;
 mod validate;

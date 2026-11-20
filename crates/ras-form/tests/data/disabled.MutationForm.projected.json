@@ -190,8 +190,7 @@
         "enabled": false,
         "visible": true,
         "unsupported": [
-          "textProps",
-          "variousPropertyBits"
+          "textProps"
         ]
       },
       {
@@ -209,8 +208,7 @@
         "enabled": false,
         "visible": true,
         "unsupported": [
-          "logicalSize",
-          "specialEffect"
+          "logicalSize"
         ]
       },
       {
@@ -261,7 +259,6 @@
         "enabled": false,
         "visible": true,
         "unsupported": [
-          "scrollBars",
           "textProps"
         ]
       }

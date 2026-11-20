@@ -253,6 +253,7 @@ const legacyNames: Record<string, string> = {
 	font: "font",
 	foreColor: "foreColor",
 	backColor: "backColor",
+	borderColor: "borderColor",
 	textAlign: "textAlign",
 	borderStyle: "borderStyle",
 	pictureAlignment: "pictureAlignment",
@@ -795,7 +796,8 @@ export function applyOperations(text: string, operations: SemanticOperation[]): 
 function fontOf(raw: JsonObject): unknown {
 	return raw.font ?? (isObject(raw.properties) ? raw.properties.font : undefined);
 }
-const multiLineOf = (raw: JsonObject) => isObject(raw.properties) && raw.properties.multiLine === true;
+const multiLineOf = (raw: JsonObject) =>
+	raw.multiLine === true || (isObject(raw.properties) && raw.properties.multiLine === true);
 const sizing = (raw: JsonObject) => JSON.stringify([raw.height ?? null, fontOf(raw) ?? null]);
 
 /**
