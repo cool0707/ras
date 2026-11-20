@@ -9,6 +9,10 @@ const sessions = [
         { t: "input", control: "txtName", text: "yamada", seq: 2 },
         { t: "select", control: "cboKind", index: 1 },
         { t: "click", control: "chkAgree" },
+        // TripleState: off → Null → on → off.
+        { t: "click", control: "chkMaybe" },
+        { t: "click", control: "chkMaybe" },
+        { t: "click", control: "chkMaybe" },
         { t: "click", control: "optM" },
         { t: "spin", control: "spnQty", delta: 1 },
         { t: "spin", control: "spnQty", delta: 1 },

@@ -282,8 +282,14 @@ body {
 		inset -1px -1px 0 var(--ms-light);
 }
 
-.ctl .button.pressed {
+.ctl .button.pressed,
+.ctl .button.mixed {
 	background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px 2px;
+}
+
+/* A ToggleButton that is Null stays raised, with the caption in buttonShadow. */
+.ctl .button.mixed {
+	color: var(--ms-shadow) !important;
 }
 
 /* The default button has a black line round it. */
@@ -347,8 +353,34 @@ body {
 	transform: rotate(40deg);
 }
 
-.ctl .toggle input[type="checkbox"]:indeterminate {
+/* Null (TripleState): the box is dithered and the mark drawn in buttonShadow. A radio button
+   without a name matches :indeterminate whenever it is off, so the state is a class. */
+.ctl .toggle.null input {
 	background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px 2px;
+}
+
+.ctl .toggle.null input[type="checkbox"]::after {
+	content: "";
+	position: absolute;
+	left: 3px;
+	top: 1px;
+	width: 3px;
+	height: 6px;
+	border: solid var(--ms-shadow);
+	border-width: 0 2px 2px 0;
+	transform: rotate(40deg);
+}
+
+.ctl .toggle.null input[type="radio"]::after {
+	content: "";
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	width: 4px;
+	height: 4px;
+	border-radius: 50%;
+	background: var(--ms-shadow);
+	transform: translate(-50%, -50%);
 }
 
 .ctl .toggle input[type="radio"]:checked::after {

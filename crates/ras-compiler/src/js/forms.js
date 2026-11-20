@@ -252,7 +252,8 @@ module.exports = function install(rt) {
                 s.Text = rt.cstr(bag.text ?? bag.value ?? "");
             } else if (TOGGLES.has(kind)) {
                 const v = bag.value;
-                s.Value = v === null ? null : v === undefined ? false : typeof v === "string" ? v.toLowerCase() === "true" || v === "1" : rt.cbool(v);
+                const text = typeof v === "string" ? v.trim().toLowerCase() : undefined;
+                s.Value = v === null || text === "null" ? null : v === undefined ? false : text !== undefined ? text === "true" || text === "1" || text === "-1" : rt.cbool(v);
             } else if (kind === "SpinButton" || kind === "ScrollBar" || kind === "MultiPage" || kind === "TabStrip") {
                 if (bag.value !== undefined) s.Value = rt.toInt(bag.value);
                 if (kind === "TabStrip") {
@@ -912,7 +913,8 @@ module.exports = function install(rt) {
                     if (ctl.$s.Locked) return ctl.$touch();
                     if (TOGGLES.has(ctl.$kind)) {
                         const v = ctl.$s.Value;
-                        const next = ctl.$kind === "OptionButton" ? true : ctl.$s.TripleState ? (v === true ? null : v === null ? false : true) : !v;
+                        // TripleState (not for an OptionButton): off → Null → on → off, as Excel does.
+                        const next = ctl.$kind === "OptionButton" ? true : ctl.$s.TripleState ? (v === false ? null : v === null ? true : false) : v !== true;
                         if (ctl.$kind === "OptionButton" && v === true) ctl.$fire("Click");
                         else ctl.$setToggle(next);
                     } else {

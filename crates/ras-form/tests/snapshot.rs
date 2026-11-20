@@ -524,3 +524,66 @@ fn other_picture_formats_are_converted_when_the_form_is_written() {
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&other);
 }
+
+/// The designer storage of a form saved by Excel (`data/triple-state/`): two
+/// OptionButtons and two CheckBoxes, the first of each with TripleState True.
+fn triple_state_form() -> (BTreeMap<String, Vec<u8>>, BTreeMap<String, [u8; 16]>) {
+    let dir = data_dir().join("triple-state");
+    let streams = [("f", "f"), ("o", "o"), ("\u{1}CompObj", "CompObj"), ("\u{3}VBFrame", "VBFrame")]
+        .into_iter()
+        .map(|(stream, file)| (stream.to_string(), std::fs::read(dir.join(file)).unwrap()))
+        .collect();
+    (streams, BTreeMap::from([(String::new(), [0u8; 16])]))
+}
+
+#[test]
+fn triple_state_is_read_from_excel_and_written_back() {
+    let (streams, storages) = triple_state_form();
+    let snapshot = ras_form::snapshot("UserForm1", &streams, &storages, 932).unwrap();
+    let controls = &snapshot.spec.controls;
+    let triple: Vec<(&str, Option<&Value>)> =
+        controls.iter().map(|c| (c.name.as_str(), c.scalar("tripleState"))).collect();
+    assert_eq!(
+        triple,
+        [
+            ("OptionButton1", Some(&Value::Bool(true))),
+            ("OptionButton2", None),
+            ("CheckBox1", Some(&Value::Bool(true))),
+            ("CheckBox2", None),
+        ]
+    );
+    for control in controls {
+        let unsupported = control.unsupported.clone().unwrap_or_default();
+        assert!(!unsupported.contains(&"multiSelect".to_string()), "{}: {unsupported:?}", control.name);
+        assert_eq!(control.value, Some(Value::from("False")), "{}", control.name);
+    }
+    // Written again, the toggles hold the same records as Excel's.
+    let designer = ras_form::compile(&snapshot.spec, 932).unwrap();
+    let again = ras_form::snapshot("UserForm1", &designer.streams, &designer.storages, 932).unwrap();
+    for (a, b) in controls.iter().zip(&again.spec.controls) {
+        assert_eq!(a.scalar("tripleState"), b.scalar("tripleState"), "{}", a.name);
+    }
+}
+
+#[test]
+fn a_toggle_can_be_null() {
+    let spec = |value: &str| {
+        let text = format!(
+            r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[
+                {{"id":"c","name":"chk","type":"CheckBox","tripleState":true,"value":{value}}},
+                {{"id":"t","name":"tgl","type":"ToggleButton","top":30,"value":{value}}}]}}"#
+        );
+        let parsed = ras_form::parse(&text);
+        assert!(!parsed.has_errors(), "{:?}", parsed.issues);
+        parsed.spec.unwrap()
+    };
+    for (written, read) in [("\"Null\"", "Null"), ("\"null\"", "Null"), ("true", "True"), ("0", "False")] {
+        let designer = ras_form::compile(&spec(written), 932).unwrap();
+        let snapshot = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap();
+        for control in &snapshot.spec.controls {
+            assert_eq!(control.value, Some(Value::from(read)), "{written}: {}", control.name);
+        }
+    }
+    let error = ras_form::compile(&spec("\"maybe\""), 932).unwrap_err();
+    assert!(error.reason.contains("Null"), "{error}");
+}

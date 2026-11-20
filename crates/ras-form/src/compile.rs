@@ -158,28 +158,9 @@ fn convert_value(kind: &str, property: &str, value: &Value) -> Result<Converted,
         },
         "value" | "text" => {
             if kind.eq_ignore_ascii_case("CheckBox") || kind.eq_ignore_ascii_case("OptionButton") {
-                let state = match value {
-                    Value::Bool(b) => Some(*b),
-                    Value::Number(n) => match n.as_f64() {
-                        Some(v) if v == 1.0 || v == -1.0 => Some(true),
-                        Some(0.0) => Some(false),
-                        _ => None,
-                    },
-                    Value::String(s) => match s.trim().to_lowercase().as_str() {
-                        "true" | "1" | "-1" => Some(true),
-                        "false" | "0" => Some(false),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                return match state {
-                    Some(true) => Ok(Converted::Str("1".into())),
-                    Some(false) => Ok(Converted::Str("0".into())),
-                    None => Err(
-                        "オンオフの状態は真偽値か 0 / 1 / -1 にしてください（3 状態は未対応）"
-                            .into(),
-                    ),
-                };
+                return toggle_state(value).map(|stored| Converted::Str(stored.into())).ok_or_else(|| {
+                    "オンオフの状態は真偽値、0 / 1 / -1、\"Null\" のいずれかにしてください".into()
+                });
             }
             match value {
                 Value::String(s) => Ok(Converted::Str(s.clone())),
@@ -188,6 +169,31 @@ fn convert_value(kind: &str, property: &str, value: &Value) -> Result<Converted,
         }
         _ => Err(format!("{property} は変換できません")),
     }
+}
+
+/// The stored `Value` of a CheckBox, OptionButton or ToggleButton: "1" on, "0" off, and
+/// "" for Null (neither: [MS-OFORMS] 2.5.95 takes any other string for it).
+pub(crate) fn toggle_state(value: &Value) -> Option<&'static str> {
+    let on = match value {
+        Value::Bool(b) => Some(*b),
+        Value::Number(n) => match n.as_f64() {
+            Some(v) if v == 1.0 || v == -1.0 => Some(true),
+            Some(0.0) => Some(false),
+            _ => return None,
+        },
+        Value::String(s) => match s.trim().to_lowercase().as_str() {
+            "true" | "1" | "-1" => Some(true),
+            "false" | "0" => Some(false),
+            "null" => None,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(match on {
+        Some(true) => "1",
+        Some(false) => "0",
+        None => "",
+    })
 }
 
 /// `bagValue`.

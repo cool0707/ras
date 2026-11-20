@@ -230,6 +230,12 @@ header {
   text-align: center;
   overflow: hidden;
 }
+/* Null: raised, dithered, with the caption in buttonShadow. */
+.togglebutton.mixed {
+  background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px
+    2px;
+  color: var(--ms-shadow) !important;
+}
 .togglebutton.pressed {
   border-color: var(--ms-dark) var(--ms-highlight) var(--ms-highlight) var(--ms-dark);
   box-shadow:
@@ -429,15 +435,32 @@ header {
   border-width: 0 2px 2px 0;
   transform: rotate(40deg);
 }
-.toggle-box.check.mixed {
+/* Null (TripleState): the box is dithered and the mark drawn in buttonShadow. */
+.toggle-box.mixed {
   background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px
     2px;
 }
 .toggle-box.check.mixed::after {
   content: "";
   position: absolute;
-  inset: 4px 3px;
+  left: 3px;
+  top: 1px;
+  width: 3px;
+  height: 6px;
+  border: solid var(--ms-shadow);
+  border-width: 0 2px 2px 0;
+  transform: rotate(40deg);
+}
+.toggle-box.option.mixed::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
   background: var(--ms-shadow);
+  transform: translate(-50%, -50%);
 }
 .toggle-box.option.checked::after {
   content: "";

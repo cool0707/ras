@@ -4,7 +4,7 @@ import { applyOperations, copyControls } from "../../src/userForm/engine";
 import { bodyIndent, eventsForType, eventTarget, findHandler, findVbaHandler, handlerText, jsName, rasParams, vbaBodyIndent, vbaHandlerText } from "../../src/userForm/events";
 import { formatJson, minimalEdit } from "../../src/userForm/jsonSource";
 import { listToText, textToList } from "../../src/userForm/listItems";
-import { designerDocument } from "../../src/userForm/model";
+import { designerDocument, toggleState } from "../../src/userForm/model";
 import { isWebviewMessage } from "../../src/userForm/protocol";
 import type { SemanticOperation } from "../../src/userForm/protocol";
 import { pasteAllocations } from "../../src/userForm/clipboard";
@@ -134,6 +134,27 @@ describe("FormSpec editing", () => {
 		assert.deepEqual(labels("x1", "style"), ["Tabs", "Buttons", "None"]);
 		assert.deepEqual(labels("k1", "alignment"), ["Left", "Right"]);
 		assert.deepEqual(labels("t1", "specialEffect"), ["Flat", "Raised", "Sunken", "Etched", "Bump"]);
+	});
+
+	it("edits TripleState and a Null value of the toggles", () => {
+		const controls = [
+			{ id: "k1", name: "Check1", type: "CheckBox", left: 8, top: 8, width: 72, height: 18 },
+			{ id: "o1", name: "Option1", type: "OptionButton", left: 8, top: 30, width: 72, height: 18, value: "True" },
+		];
+		let text = form(controls);
+		const set = (controlId: string, field: string, value: unknown): SemanticOperation => ({ type: "setControlProperty", controlId, field, value });
+		text = apply(text, set("k1", "tripleState", true), set("k1", "value", "Null"), set("o1", "tripleState", true));
+		assert.deepEqual([control(text, "k1").tripleState, control(text, "k1").value, control(text, "o1").tripleState], [true, "Null", true]);
+		rejects(text, [set("l1", "tripleState", true)]);
+		const grid = propertyGrid((parseSpec(text) as any).spec);
+		const descriptor = (id: string, field: string) => grid.controls[id].descriptors.find((d) => d.field === field);
+		assert.equal(descriptor("k1", "value")?.editor, "toggle");
+		assert.equal(descriptor("k1", "tripleState")?.editor, "boolean");
+		// What a value stands for, however it was written.
+		assert.deepEqual(
+			[true, "True", -1, "1", false, "False", 0, undefined, "Null", "null"].map(toggleState),
+			["on", "on", "on", "on", "off", "off", "off", "off", "null", "null"],
+		);
 	});
 
 	it("raises a TextBox to the height its font needs, but only where the edit touched", () => {

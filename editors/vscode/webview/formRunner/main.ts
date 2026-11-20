@@ -273,7 +273,7 @@ function create(c: ControlSnapshot): View {
 			view.update = (s, enabled) => {
 				caption.textContent = str(s.state.Caption);
 				box.checked = s.state.Value === true;
-				box.indeterminate = s.state.Value === null;
+				label.classList.toggle("null", s.state.Value === null);
 				box.disabled = !enabled;
 				label.classList.toggle("disabled", !enabled);
 				colors(root, s.state, true);

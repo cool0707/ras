@@ -142,6 +142,9 @@ pub(crate) static SCALARS: &[Scalar] = &[
     s("listRows", &["ComboBox"], Int(0, i16::MAX as i64), Field("ListRows"), 8, None),
     s("listWidth", &["ComboBox"], Points(TAB_SIZE * 10.0), Himetric("ListWidth"), 0, None),
     s("multiSelect", &["ListBox"], Enum(&[0, 1, 2]), Field("MultiSelect"), 0, None),
+    // The toggles keep TripleState in the field of MultiSelect (fmMultiSelectMulti for True),
+    // as Excel writes it; [MS-OFORMS] names no place for it.
+    s("tripleState", &["CheckBox", "OptionButton", "ToggleButton"], Bool, Field("MultiSelect"), 0, None),
     s("groupName", &["OptionButton"], Text, Store::Text("GroupName"), 0, None),
     s("specialEffect", &["TextBox", "ComboBox", "ListBox"], Enum(EFFECTS), Field("SpecialEffect"), 2, None),
     s("specialEffect", &["CheckBox", "OptionButton"], Enum(&[0, 2]), Field("SpecialEffect"), 2, None),

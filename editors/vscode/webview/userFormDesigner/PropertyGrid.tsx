@@ -17,6 +17,7 @@ import { editorRegistry } from "./propertyEditors/registry";
 import { colorStyle } from "./propertyEditors/appearance";
 import { validNumericInput } from "./propertyEditors/numeric";
 import { listToText, textToList } from "../../src/userForm/listItems";
+import { toggleState } from "../../src/userForm/model";
 
 // Presentation only. The server owns types, applicability and authoring values.
 const categories = {
@@ -149,9 +150,18 @@ function PropertyRow({ descriptor, ...props }: Props & { descriptor: PropertyDes
   const source = target.values[descriptor.field];
   // A list of strings is edited as text, one item per line.
   const isList = descriptor.valueType === "stringArray";
+  // The Value of a CheckBox, OptionButton or ToggleButton: True, False or Null.
+  const isToggle = descriptor.editor === "toggle";
   const fromSource = (): Draft => {
     const value = source?.present ? source.value : undefined;
     if (isList) return { text: listToText(value), kind: "string", dirty: false, version };
+    if (isToggle)
+      return {
+        text: value == null ? "" : { on: "True", off: "False", null: "Null" }[toggleState(value)],
+        kind: "string",
+        dirty: false,
+        version,
+      };
     return {
       text: value == null ? "" : String(value),
       kind:
@@ -228,6 +238,18 @@ function PropertyRow({ descriptor, ...props }: Props & { descriptor: PropertyDes
       return;
     }
     let value: ScalarValue = d.text;
+    if (isToggle) {
+      // On and off are written as Boolean values, Null as the string "Null".
+      value = d.text === "True" ? true : d.text === "False" ? false : "Null";
+      if (source?.present && toggleState(source.value) === toggleState(value) && typeof source.value === typeof value) {
+        update(fromSource());
+        return;
+      }
+      const requestId = onCommit(descriptor.field, value);
+      if (requestId !== undefined)
+        update({ ...d, submitted: requestId, attempted: true, error: undefined });
+      return;
+    }
     if (d.kind === "boolean") value = d.text === "true";
     else if (d.kind === "number") {
       value = Number(d.text);
@@ -330,6 +352,27 @@ function PropertyRow({ descriptor, ...props }: Props & { descriptor: PropertyDes
               commit();
             }}
           />
+        ) : isToggle ? (
+          <select
+            id={id}
+            value={unconfigured ? "__unset__" : draft.text}
+            disabled={disabled}
+            aria-invalid={!!error}
+            aria-describedby={error ? `${id}-error` : undefined}
+            onChange={(event) => {
+              change(event.currentTarget.value);
+              commit();
+            }}
+          >
+            {unconfigured && (
+              <option value="__unset__" disabled>
+                {placeholder}
+              </option>
+            )}
+            {["True", "False", "Null"].map((choice) => (
+              <option value={choice}>{choice}</option>
+            ))}
+          </select>
         ) : descriptor.allowedValues || draft.kind === "boolean" ? (
           <select
             id={id}

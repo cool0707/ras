@@ -2,7 +2,7 @@
    Copyright (c) 2026 harumiWeb. See THIRD_PARTY_NOTICES.md. */
 import type { DesignerControl, DesignerDocument } from "../../src/userForm/protocol";
 import { pointsToPixels } from "../../src/userForm/model";
-import { pixelsToPoints } from "../../src/userForm/model";
+import { pixelsToPoints, toggleState } from "../../src/userForm/model";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { displayPages } from "../../src/userForm/collections";
 import type { ActivePages } from "../../src/userForm/collections";
@@ -118,7 +118,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "checkbox":
     case "optionbutton": {
       // MSForms draws the box at the left, vertically centred, with the caption beside it.
-      const state = control.value === true ? "checked" : control.value === null ? "mixed" : "";
+      const state = { on: "checked", null: "mixed", off: "" }[toggleState(control.value)];
       return (
         <>
           <span class={`toggle-box ${type === "checkbox" ? "check" : "option"} ${state}`} aria-hidden="true" />
@@ -1017,7 +1017,7 @@ export function DesignerCanvas({
       <>
         <div
           key={control.id}
-          class={`control ${type} ${borderClass(shown)} ${scalarClasses(shown)} ${control.enabled === false ? "disabled" : ""} ${type === "frame" && control.caption ? "has-caption" : ""} ${type === "togglebutton" && control.value === true ? "pressed" : ""}`}
+          class={`control ${type} ${borderClass(shown)} ${scalarClasses(shown)} ${control.enabled === false ? "disabled" : ""} ${type === "frame" && control.caption ? "has-caption" : ""} ${type === "togglebutton" ? { on: "pressed", null: "mixed", off: "" }[toggleState(control.value)] : ""}`}
           data-control-id={control.id}
           title={`${control.name} (${control.type})${control.approximate ? ` — ${approximateBounds}` : ""}`}
           style={{

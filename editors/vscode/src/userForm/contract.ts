@@ -17,7 +17,7 @@ export interface PropertyContract {
 	description: string;
 	authoring: boolean;
 	allowedValues?: string[];
-	editor?: "font" | "color" | "enum" | "picture" | "list";
+	editor?: "font" | "color" | "enum" | "picture" | "list" | "toggle";
 	children?: Record<string, PropertyContract>;
 	minimum?: number;
 	maximum?: number;
@@ -147,6 +147,13 @@ const listControl = (): Record<string, PropertyContract> => ({
 	selectedIndex: p("integer", false, "supported", "Zero-based selected item of list, or -1 for none; set by generated code in UserForm_Initialize.", true),
 });
 
+/** Caption and Value of a CheckBox, OptionButton or ToggleButton; Value is edited as True, False or Null. */
+const toggleControl = (caption: string, value: string): Record<string, PropertyContract> => {
+	const properties = typed("caption", caption, "value", value);
+	properties.value = { ...properties.value, editor: "toggle" };
+	return properties;
+};
+
 // The plain properties of the controls (crates/ras-form/src/scalars.rs has the same
 // table): the VBA property of the same name, and its values. Omitted, each is what
 // Excel gives a new control.
@@ -199,6 +206,7 @@ export const scalarProperties: Scalar[] = [
 	["listRows", ["ComboBox"], integer("Rows shown in the drop-down list.", 0, 32767)],
 	["listWidth", ["ComboBox"], pointsUpTo("Width of the drop-down list in points; 0 for the control's width.", 72000)],
 	["multiSelect", ["ListBox"], choice("Selection: Single, Multi, Extended.", [0, 1, 2]), ["Single", "Multi", "Extended"]],
+	["tripleState", ["CheckBox", "OptionButton", "ToggleButton"], flag("A click also gives Null (not for an OptionButton).")],
 	["groupName", ["OptionButton"], p("string", false, "supported", "Option buttons of the same group exclude each other.", true)],
 	["specialEffect", ["TextBox", "ComboBox", "ListBox", "Label", "Image", "Frame"], choice("3D look of the edge.", effects), effectLabels],
 	["specialEffect", ["CheckBox", "OptionButton"], choice("3D look of the box.", [0, 2]), ["Flat", "Sunken"]],
@@ -236,9 +244,9 @@ function buildControls(): Record<string, ControlContract> {
 		combobox: control("ComboBox", false, listControl()),
 		listbox: control("ListBox", false, listControl()),
 		commandbutton: control("CommandButton", false, typed("caption", "Button caption.")),
-		checkbox: control("CheckBox", false, typed("caption", "CheckBox caption.", "value", "CheckBox checked state.")),
-		optionbutton: control("OptionButton", false, typed("caption", "OptionButton caption.", "value", "OptionButton selected state.")),
-		togglebutton: control("ToggleButton", false, typed("caption", "ToggleButton caption.", "value", "ToggleButton selected state.")),
+		checkbox: control("CheckBox", false, toggleControl("CheckBox caption.", "CheckBox checked state: true, false or \"Null\".")),
+		optionbutton: control("OptionButton", false, toggleControl("OptionButton caption.", "OptionButton selected state: true, false or \"Null\".")),
+		togglebutton: control("ToggleButton", false, toggleControl("ToggleButton caption.", "ToggleButton pressed state: true, false or \"Null\".")),
 		spinbutton: control("SpinButton", false, { value: p("integer", false, "supported", "SpinButton value.", true) }),
 		scrollbar: control("ScrollBar", false, { value: p("integer", false, "supported", "ScrollBar value.", true) }),
 		image: control("Image", false, {

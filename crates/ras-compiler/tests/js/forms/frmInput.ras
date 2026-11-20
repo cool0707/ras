@@ -23,6 +23,11 @@ function sized() {
     console.log(`optS=${this.optS.value} optM=${this.optM.value}`);
 }
 
+@on("chkMaybe.Change")
+function maybe() {
+    console.log(`maybe=${this.chkMaybe.value == null ? "Null" : this.chkMaybe.value}`);
+}
+
 @on("spnQty.SpinUp")
 function up() {
     console.log(`up ${this.spnQty.value}`);

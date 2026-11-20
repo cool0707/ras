@@ -69,6 +69,13 @@ models are gone from `unsupported` (and so are the warnings of controls
 left with none), and a ComboBox of `typed.bin`, written by xlflow, shows the
 `matchEntry` and `showDropButtonWhen` it really has.
 
+`../data/triple-state/` holds the streams (`f`, `o`, `CompObj` for
+`\x01CompObj`, `VBFrame` for `\x03VBFrame`) of a form made in the VBA
+editor of Excel 16 and saved: two OptionButtons and two CheckBoxes, the first
+of each with TripleState True. It shows where Excel keeps TripleState, which
+MS-OFORMS does not document: in the `MultiSelect` field of the MorphData
+record (1 for True). Only the form's streams are kept, not the project.
+
 `../data/excel-export.frx` is `example/maze-chase/src/forms/MazeChaseForm.frx`
 of xlflow, a file written by `VBComponent.Export` of Excel 16.
 

@@ -626,6 +626,14 @@ impl Projection {
         let Some(record) = source.properties() else {
             return;
         };
+        if matches!(control_type.as_str(), "CheckBox" | "OptionButton" | "ToggleButton")
+            && record.text("Value").is_some_and(|v| {
+                !matches!(v.trim().to_lowercase().as_str(), "0" | "1" | "-1" | "true" | "false")
+            })
+        {
+            // Any other stored string is neither on nor off: Null.
+            control.value = Some(Value::from("Null"));
+        }
         let mut bag = Map::new();
         if control_type == "OptionButton" {
             if let Some(group) = record.text("GroupName").filter(|_| take("groupName")) {
