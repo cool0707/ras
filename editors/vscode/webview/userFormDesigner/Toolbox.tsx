@@ -50,9 +50,14 @@ export function Toolbox({
       }}
     >
       <h2>{strings.toolbox}</h2>
-      <button type="button" aria-pressed={!selected} onClick={() => onSelect(undefined)}>
+      <button
+        type="button"
+        title={strings.pointer}
+        aria-pressed={!selected}
+        onClick={() => onSelect(undefined)}
+      >
         <Icon name="cursor" />
-        {strings.pointer}
+        <span class="toolbox-label">{strings.pointer}</span>
       </button>
       {(["commonControls", "containers"] as const).map((group) => (
         <section class="toolbox-group" key={group}>
@@ -68,6 +73,7 @@ export function Toolbox({
                 type="button"
                 key={control.type}
                 data-toolbox-type={control.type}
+                title={control.type}
                 aria-pressed={selected === control.type}
                 disabled={
                   disabled ||
@@ -77,7 +83,7 @@ export function Toolbox({
                 onClick={() => onSelect(control.type)}
               >
                 <Icon name={icons[control.type]} />
-                {control.type}
+                <span class="toolbox-label">{control.type}</span>
               </button>
             ))}
         </section>
