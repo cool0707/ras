@@ -1346,7 +1346,7 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 |---|---|
 | `forms/<Name>.form.json` | デザイン。xlflow の FormSpec（schemaVersion 1）の JSON 形式。ファイル名は `form.name` と一致させる |
 | `forms/<Name>.bas` | コードビハインド。コードペインに表示される内容だけを UTF-8 で書く（`Attribute` 行・`VERSION` 行は書かない）。無ければ空として扱う |
-| `forms/assets/` など | `Image` コントロールの画像（BMP / JPEG）。置き場所は任意で、FormSpec からプロジェクトのルート基準の相対パスで参照する |
+| `forms/assets/` など | `Image` コントロールの画像（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）。置き場所は任意で、FormSpec からプロジェクトのルート基準の相対パスで参照する |
 
 ```json
 {
@@ -1380,8 +1380,14 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 **`Image` の画像（`picture`）**
 
 * `"picture": { "path": "forms/assets/logo.bmp" }` で画像ファイルを指定する。パスはプロジェクトのルート（`ras.toml` のあるフォルダー）からの相対パスで、ルートの外（`..`、絶対パス、ドライブ指定）は指定できない。
-* 使える形式は BMP（40 バイトの `BITMAPINFOHEADER`、24 ビットまたは 32 ビット、無圧縮）と JPEG。大きさは 16 MiB・1,600 万ピクセルまで。PNG・GIF・アイコン・メタファイルは使えない。
-* 画像はファイルの内容のまま `StdPicture` としてデザイナストレージに埋め込む（xlflow が実機の Excel で確認した形式）。ブックを開くのに元のファイルは要らない。
+* 指定できる形式は BMP・JPEG・PNG・GIF・WebP・TIFF・ICO。ファイルの大きさは 16 MiB まで。形式は拡張子ではなくファイルの内容で判別する。メタファイル（WMF / EMF）は使えない。
+* デザイナストレージに埋め込むのは、MS-Forms が読める形であることを xlflow が実機の Excel で確認している 2 種類だけとする: BMP（40 バイトの `BITMAPINFOHEADER`、24 ビットまたは 32 ビット、無圧縮）と JPEG。この形のファイルは内容のまま `StdPicture` として埋め込む（1,600 万ピクセルまで）。
+* それ以外の画像（PNG・GIF・WebP・TIFF・ICO、および 8 ビットや RLE 圧縮・V4 / V5 ヘッダーなどの BMP）は、書き込みのたびにデコードして 24 ビットの BMP に変換してから埋め込む。元のファイルは書き換えず、`picture.path` は元のファイルを指したままでよい。
+  * 透過部分は、その `Image` の `backColor` に重ねて塗りつぶす（BMP には透過が無いため）。`backColor` がシステム カラーのときは Windows の既定の色（`buttonFace` は `#F0F0F0`）、指定が無いときは `buttonFace` として扱う。
+  * アニメーション GIF は最初のコマ、複数の画像を持つ ICO は最も大きいものを使う。
+  * 変換後の BMP は 16 MiB まで（おおよそ 550 万ピクセル）。これを超える画像はエラーとする（小さくするか、JPEG にする）。
+  * 同じファイルと同じ背景色からは、常に同じ BMP ができる（デザインのハッシュが変わらない）。
+* ブックを開くのに元のファイルは要らない。
 * `"picture": { "remove": true }` は画像なしを表す（`picture` を書かない場合と同じ）。
 
 #### 14.11.2 コマンド
@@ -1443,9 +1449,9 @@ End Sub
 
 * 名前を省略するとブックのすべてのフォームが対象。`forms/` に同名のファイルが既にあるフォームは書き出さない（`--force` で置き換える）。
 * **デザイン:** デザイナストレージを読み、xlflow の projection と同じ規則で FormSpec にする（`crates/ras-form/tests/snapshot.rs` で、Excel が保存したフォームについて xlflow の出力と一致することを確認している）。加えて、xlflow の projection が「表せないプロパティ」として扱うもののうち、生成側が書けるものを取り込む: `Tag` / `ControlTipText`（`tag` / `controlTipText`）、`GroupName`・`MaxLength`・`BorderColor`（`properties`）。キャプションが保存されていないコントロールは `caption: ""` とし、フォームのキャプションがフォームのレコードに無ければデザイナブロック（`VBFrame`）の `Caption` を使う。
-* **画像:** `Image` の画像（BMP / JPEG として保存されているもの）を `forms/assets/<Name>.<コントロール名>.bmp|jpg` に書き出し、`picture.path` で参照する。Excel は JPEG を読み込んだ画像も BMP で保存するため、取り出した画像は多くの場合 BMP になる。
+* **画像:** `Image` の画像（BMP / JPEG として保存されているもの）を `forms/assets/<Name>.<コントロール名>.bmp|jpg` に書き出し、`picture.path` で参照する。Excel は JPEG を読み込んだ画像も BMP で保存するため、取り出した画像は多くの場合 BMP になる。書き込み時に変換された画像（PNG など）も、取り出すと変換後の BMP になる。
 * **コード:** コードモジュールから `Attribute` 行を除いたものをコードビハインドとする。RAS が書き込んだフォームの場合は、目印の行・RAS 管理領域・挿入した `RAS_FormInit` の呼び出しも除く（書き込む前のコードビハインドに戻る）。
-* **リストの項目:** ブックには保存されていないので取り出せない。`--force` で既存の `.form.json` を置き換えるときは、同名の `ComboBox` / `ListBox` の `list` / `selectedIndex` と、内容が同じ画像の `picture.path` を既存のファイルから引き継ぐ。
+* **リストの項目:** ブックには保存されていないので取り出せない。`--force` で既存の `.form.json` を置き換えるときは、同名の `ComboBox` / `ListBox` の `list` / `selectedIndex` と、画像の `picture.path` を既存のファイルから引き継ぐ（そのパスのファイルを書き込み時と同じ規則で変換した結果が、ブックの画像と一致する場合。PNG などを指定していたフォームは、取り込み直しても PNG を指したままになる）。
 * **取り込めないもの:** FormSpec で表せないプロパティ（`specialEffect`、`mousePointer`、スクロールバーの `min` / `max` など）は、コントロールごとに `unsupported` に名前を記録し、コマンドの出力に警告として表示する。これらは `forms/` から書き戻すと既定値になる。組み込み以外のコントロール（ActiveX）は `type: "Control"` として記録され、生成できない。BMP / JPEG 以外の画像（アイコン、メタファイル）は取り出せず、`unsupported` に `picture` が残る（この場合は `picture` に置き換える画像か `{ "remove": true }` を書くまで生成できない）。
 * 取り出しただけではブックは変わらない。VBE で作ったフォームを `forms/` の内容で置き換えるには、`ras pack --overwrite`（または `ras sync --overwrite`）を実行する。
 

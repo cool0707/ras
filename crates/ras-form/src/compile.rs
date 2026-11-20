@@ -577,7 +577,10 @@ fn control_definition(
                     "プロジェクトのルートが分からないため、画像を読めません".into(),
                 ));
             };
-            let raw = crate::picture::load(root, path)
+            // A picture MS-Forms cannot store is converted to a bitmap here;
+            // its transparent parts show the control's background color.
+            let background = crate::picture::background_of(control.back_color.as_ref());
+            let raw = crate::picture::load_with(root, path, background)
                 .and_then(|picture| crate::picture::encode(&picture.data))
                 .map_err(|e| failure(INVALID, "picture.path", e))?;
             item.properties

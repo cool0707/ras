@@ -41,6 +41,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 cfb = "0.10"
 ovba = "0.7"
 uuid = "1"
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "ico", "png", "tiff", "webp"] }
 
 [profile.release]
 opt-level = 3

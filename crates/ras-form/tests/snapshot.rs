@@ -382,3 +382,75 @@ fn a_storage_that_is_not_a_designer_is_refused() {
     let empty: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     assert!(ras_form::snapshot("X", &empty, &BTreeMap::new(), 932).is_err());
 }
+
+/// A picture MS-Forms cannot store (here a PNG with transparency) is
+/// converted when the form is generated; the spec keeps naming the PNG.
+#[test]
+fn other_picture_formats_are_converted_when_the_form_is_written() {
+    let root = temp_root("png");
+    let assets = root.join("forms/assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    let png = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/assets/logo.png"),
+    )
+    .unwrap();
+    std::fs::write(assets.join("logo.png"), &png).unwrap();
+    let spec = |path: &str, back: &str| {
+        format!(
+            r##"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"frmPng"}},
+            "controls":[{{"id":"i","name":"imgLogo","type":"Image","picture":{{"path":"{path}"}}{back}}}]}}"##
+        )
+    };
+    let build = |text: &str| {
+        std::fs::write(root.join("forms/frmPng.form.json"), text).unwrap();
+        let built = workspace::build(&workspace::load(&root).unwrap(), &root, 932);
+        assert_eq!(built.errors(), 0, "{:?}", built.problems);
+        built.forms[0].clone()
+    };
+
+    // The form holds the bitmap the PNG converts to …
+    let from_png = build(&spec("forms/assets/logo.png", ""));
+    let converted = ras_form::picture::prepare(&png, ras_form::picture::DEFAULT_BACKGROUND).unwrap();
+    assert_eq!(converted.converted_from, Some("PNG"));
+    assert_eq!((converted.width, converted.height), (24, 16));
+    // The transparent frame shows the background, the opaque centre the picture.
+    assert_eq!(&converted.data[54..57], [0xf0, 0xf0, 0xf0]);
+    let stored = ras_form::snapshot("frmPng", &from_png.streams, &from_png.storages, 932).unwrap();
+    assert_eq!(stored.pictures[0].picture.data, converted.data);
+
+    // … exactly as if that bitmap had been named in the spec.
+    std::fs::write(assets.join("converted.bmp"), &converted.data).unwrap();
+    let from_bmp = build(&spec("forms/assets/converted.bmp", ""));
+    assert_eq!(from_png.streams, from_bmp.streams);
+
+    // Transparent pixels take the control's background color.
+    let on_red = build(&spec(
+        "forms/assets/logo.png",
+        r##","backColor":{"kind":"rgb","value":"#FF0000"}"##,
+    ));
+    let stored = ras_form::snapshot("frmPng", &on_red.streams, &on_red.storages, 932).unwrap();
+    assert_eq!(&stored.pictures[0].picture.data[54..57], [0, 0, 255], "blue, green, red");
+
+    // Pulling the form back keeps the PNG the spec names.
+    let PullOutcome::Written(pulled) = workspace::pull(&root, &on_red, 932, true).unwrap() else {
+        panic!("nothing written");
+    };
+    assert_eq!(pulled.pictures, ["forms/assets/logo.png"]);
+    assert!(!assets.join("frmPng.imgLogo.bmp").exists());
+    // Into a project without the PNG, the stored bitmap comes out.
+    let other = temp_root("png-other");
+    let PullOutcome::Written(pulled) = workspace::pull(&other, &on_red, 932, false).unwrap() else {
+        panic!("nothing written");
+    };
+    assert_eq!(pulled.pictures, ["forms/assets/frmPng.imgLogo.bmp"]);
+    assert!(std::fs::read(other.join(&pulled.pictures[0])).unwrap().starts_with(b"BM"));
+
+    // A file that is no picture is still an error that names the file.
+    std::fs::write(assets.join("notes.png"), "not a picture").unwrap();
+    std::fs::write(root.join("forms/frmPng.form.json"), spec("forms/assets/notes.png", "")).unwrap();
+    let built = workspace::build(&workspace::load(&root).unwrap(), &root, 932);
+    assert_eq!(built.errors(), 1);
+    assert!(built.problems[0].message.contains("notes.png"), "{:?}", built.problems);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&other);
+}

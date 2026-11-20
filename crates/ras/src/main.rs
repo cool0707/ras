@@ -741,7 +741,7 @@ fn cmd_watch(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
 }
 
 fn is_source_event(ev: &notify::Event) -> bool {
-    !matches!(ev.kind, notify::EventKind::Access(_)) && ev.paths.iter().any(|p| p.extension().is_some_and(|e| ["ras", "toml", "json", "bas", "bmp", "jpg", "jpeg"].iter().any(|known| e.eq_ignore_ascii_case(known))))
+    !matches!(ev.kind, notify::EventKind::Access(_)) && ev.paths.iter().any(|p| p.extension().is_some_and(|e| ["ras", "toml", "json", "bas", "bmp", "jpg", "jpeg", "png", "gif", "webp", "tif", "tiff", "ico"].iter().any(|known| e.eq_ignore_ascii_case(known))))
 }
 
 fn unimplemented_cmd(what: &str, detail: &str) -> Result<ExitCode, String> {

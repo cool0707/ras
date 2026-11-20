@@ -304,15 +304,14 @@ pub fn pull(
     for found in &snapshot.pictures {
         let control = &mut spec.controls[found.control_index];
         let data = &found.picture.data;
-        // Keep the file the previous spec points to when it is this picture.
-        let kept = previous_control(&control.name)
-            .and_then(|old| old.picture.as_ref()?.get("path")?.as_str().map(str::to_string))
-            .filter(|path| {
-                crate::picture::resolve(root, path)
-                    .ok()
-                    .and_then(|file| std::fs::read(file).ok())
-                    .is_some_and(|existing| existing == *data)
-            });
+        // Keep the file the previous spec points to when the form holds
+        // what that file is stored as (the file itself, or its conversion).
+        let kept = previous_control(&control.name).and_then(|old| {
+            let path = old.picture.as_ref()?.get("path")?.as_str()?;
+            let background = crate::picture::background_of(old.back_color.as_ref());
+            let stored = crate::picture::load_with(root, path, background).ok()?;
+            (stored.data == *data).then(|| path.to_string())
+        });
         let rel = match kept {
             Some(path) => path,
             None => {

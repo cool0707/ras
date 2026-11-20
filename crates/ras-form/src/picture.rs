@@ -1,9 +1,16 @@
-//! Pictures of `Image` controls: reading a BMP or JPEG source file and the
+//! Pictures of `Image` controls: reading the source file and the
 //! `StdPicture` payload MS-OFORMS stores for a picture property.
 //!
-//! Port of xlflow's `internal/vba/userforms/picture` (Copyright (c) 2026
-//! harumiWeb, MIT License; see `NOTICE.md`). JPEG files are checked
-//! structurally (marker segments and frame header) instead of being decoded.
+//! What is stored is always a BMP (40-byte `BITMAPINFOHEADER`, 24 or 32
+//! bit, uncompressed) or a JPEG; these two are the payloads known to load
+//! in MS-Forms. A source file in one of these forms is stored as it is.
+//! Any other picture — PNG, GIF, WebP, TIFF, ICO, and BMP files of another
+//! flavour — is decoded and stored as a 24-bit BMP ([`prepare`]).
+//!
+//! The checks of stored pictures are a port of xlflow's
+//! `internal/vba/userforms/picture` (Copyright (c) 2026 harumiWeb, MIT
+//! License; see `NOTICE.md`). JPEG files are checked structurally (marker
+//! segments and frame header) instead of being decoded.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -17,7 +24,65 @@ const STD_PICTURE_CLSID: [u8; 16] = [
     0x04, 0x52, 0xe3, 0x0b, 0x91, 0x8f, 0xce, 0x11, 0x9d, 0xe3, 0x00, 0xaa, 0x00, 0x4b, 0xb8, 0x51,
 ];
 
-/// File format of a picture.
+/// What transparent pixels are blended onto when no color is given: the
+/// default face color of a form (`buttonFace`).
+pub const DEFAULT_BACKGROUND: [u8; 3] = [0xf0, 0xf0, 0xf0];
+
+/// Default colors of the Windows system colors (index of `COLOR_*`), as
+/// red, green, blue. Used where a color has to be known at build time.
+const SYSTEM_COLOR_DEFAULTS: &[(u32, [u8; 3])] = &[
+    (0, [0xc8, 0xc8, 0xc8]),
+    (1, [0x00, 0x00, 0x00]),
+    (2, [0x99, 0xb4, 0xd1]),
+    (3, [0xbf, 0xcd, 0xdb]),
+    (4, [0xf0, 0xf0, 0xf0]),
+    (5, [0xff, 0xff, 0xff]),
+    (6, [0x64, 0x64, 0x64]),
+    (7, [0x00, 0x00, 0x00]),
+    (8, [0x00, 0x00, 0x00]),
+    (9, [0x00, 0x00, 0x00]),
+    (10, [0xb4, 0xb4, 0xb4]),
+    (11, [0xf4, 0xf7, 0xfc]),
+    (12, [0xab, 0xab, 0xab]),
+    (13, [0x00, 0x78, 0xd7]),
+    (14, [0xff, 0xff, 0xff]),
+    (15, [0xf0, 0xf0, 0xf0]),
+    (16, [0xa0, 0xa0, 0xa0]),
+    (17, [0x6d, 0x6d, 0x6d]),
+    (18, [0x00, 0x00, 0x00]),
+    (19, [0x00, 0x00, 0x00]),
+    (20, [0xff, 0xff, 0xff]),
+    (21, [0x69, 0x69, 0x69]),
+    (22, [0xe3, 0xe3, 0xe3]),
+    (23, [0x00, 0x00, 0x00]),
+    (24, [0xff, 0xff, 0xe1]),
+    (26, [0x00, 0x66, 0xcc]),
+    (27, [0xb9, 0xd1, 0xea]),
+    (28, [0xd7, 0xe4, 0xf2]),
+    (29, [0x33, 0x99, 0xff]),
+    (30, [0xf0, 0xf0, 0xf0]),
+];
+
+/// The color transparent pixels of a converted picture are blended onto:
+/// the `backColor` of the Image control. A system color counts with its
+/// Windows default; without a usable color it is [`DEFAULT_BACKGROUND`].
+pub fn background_of(back_color: Option<&crate::FormSpecColor>) -> [u8; 3] {
+    let Some(ole) = back_color.and_then(|c| c.ole().ok()) else {
+        return DEFAULT_BACKGROUND;
+    };
+    if ole & 0xff00_0000 == 0 {
+        // OLE colors are 0x00BBGGRR.
+        return [ole as u8, (ole >> 8) as u8, (ole >> 16) as u8];
+    }
+    if ole & 0xffff_ff00 == 0x8000_0000 {
+        if let Some((_, rgb)) = SYSTEM_COLOR_DEFAULTS.iter().find(|(i, _)| *i == ole & 0xff) {
+            return *rgb;
+        }
+    }
+    DEFAULT_BACKGROUND
+}
+
+/// Format of a picture as it is stored in a form.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     /// Windows bitmap (24 or 32 bit, uncompressed).
@@ -47,6 +112,9 @@ pub struct Picture {
     pub width: u32,
     /// Height in pixels.
     pub height: u32,
+    /// Format of the source file when `data` is a conversion of it
+    /// (`"PNG"`, `"GIF"`, ...); `None` when `data` is the file itself.
+    pub converted_from: Option<&'static str>,
 }
 
 fn u16le(data: &[u8], at: usize) -> u32 {
@@ -164,7 +232,7 @@ fn inspect_jpeg(data: &[u8]) -> Result<(u32, u32), String> {
     Ok((width, height))
 }
 
-/// Checks that `data` is a picture MS-OFORMS can hold.
+/// Checks that `data` is a picture that can be stored in a form as it is.
 pub fn inspect(data: &[u8]) -> Result<(Format, u32, u32), String> {
     if data.is_empty() || data.len() > MAX_BYTES {
         return Err(format!(
@@ -205,8 +273,137 @@ pub fn resolve(root: &Path, path: &str) -> Result<PathBuf, String> {
     Ok(root.join(relative))
 }
 
-/// Reads and checks the picture at the project-root-relative `path`.
+/// Size of a 24-bit BMP file of the given dimensions.
+fn bmp_size(width: u64, height: u64) -> u64 {
+    54 + (width * 3).div_ceil(4) * 4 * height
+}
+
+/// Writes pixels as a bottom-up 24-bit BMP. `rgba` holds the rows top
+/// down; transparent pixels are blended onto `background`.
+fn encode_bmp(width: u32, height: u32, rgba: &[u8], background: [u8; 3]) -> Vec<u8> {
+    let row = (width as usize * 3).div_ceil(4) * 4;
+    let size = 54 + row * height as usize;
+    let mut data = vec![0u8; size];
+    data[..2].copy_from_slice(b"BM");
+    data[2..6].copy_from_slice(&(size as u32).to_le_bytes());
+    data[10..14].copy_from_slice(&54u32.to_le_bytes());
+    data[14..18].copy_from_slice(&40u32.to_le_bytes());
+    data[18..22].copy_from_slice(&(width as i32).to_le_bytes());
+    data[22..26].copy_from_slice(&(height as i32).to_le_bytes());
+    data[26..28].copy_from_slice(&1u16.to_le_bytes());
+    data[28..30].copy_from_slice(&24u16.to_le_bytes());
+    data[34..38].copy_from_slice(&((size - 54) as u32).to_le_bytes());
+    // 96 DPI, like the bitmaps Windows tools write.
+    data[38..42].copy_from_slice(&3780u32.to_le_bytes());
+    data[42..46].copy_from_slice(&3780u32.to_le_bytes());
+    let blend = |value: u8, back: u8, alpha: u32| -> u8 {
+        ((value as u32 * alpha + back as u32 * (255 - alpha) + 127) / 255) as u8
+    };
+    for y in 0..height as usize {
+        let source = &rgba[y * width as usize * 4..(y + 1) * width as usize * 4];
+        let start = 54 + (height as usize - 1 - y) * row;
+        for (x, pixel) in source.chunks_exact(4).enumerate() {
+            let alpha = pixel[3] as u32;
+            // BMP stores blue, green, red.
+            data[start + x * 3] = blend(pixel[2], background[2], alpha);
+            data[start + x * 3 + 1] = blend(pixel[1], background[1], alpha);
+            data[start + x * 3 + 2] = blend(pixel[0], background[0], alpha);
+        }
+    }
+    data
+}
+
+/// The formats that are converted, with the name used in messages.
+fn convertible(format: image::ImageFormat) -> Option<&'static str> {
+    Some(match format {
+        image::ImageFormat::Png => "PNG",
+        image::ImageFormat::Gif => "GIF",
+        image::ImageFormat::WebP => "WebP",
+        image::ImageFormat::Tiff => "TIFF",
+        image::ImageFormat::Ico => "ICO",
+        image::ImageFormat::Bmp => "BMP",
+        _ => return None,
+    })
+}
+
+/// Decodes a picture MS-Forms cannot store and writes it as a 24-bit BMP.
+fn convert(data: &[u8], background: [u8; 3]) -> Result<Picture, String> {
+    let unknown = || {
+        "画像の形式を判別できません（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO に対応しています）"
+            .to_string()
+    };
+    let format = image::guess_format(data).map_err(|_| unknown())?;
+    let name = convertible(format).ok_or_else(unknown)?;
+    let reader = || {
+        let mut reader = image::ImageReader::with_format(std::io::Cursor::new(data), format);
+        let mut limits = image::Limits::default();
+        limits.max_alloc = Some(512 << 20);
+        reader.limits(limits);
+        reader
+    };
+    let unreadable = |e: image::ImageError| format!("{name} として読めません（{e}）");
+    let (width, height) = reader().into_dimensions().map_err(unreadable)?;
+    check_dimensions(width as u64, height as u64)?;
+    if bmp_size(width as u64, height as u64) > MAX_BYTES as u64 {
+        return Err(format!(
+            "{name} の画像（{width}x{height}）は、BMP に変換すると {MAX_BYTES} バイトを超えます。画像を小さくするか、JPEG にしてください"
+        ));
+    }
+    // An animated GIF gives its first frame.
+    let pixels = reader().decode().map_err(unreadable)?.into_rgba8();
+    let bmp = encode_bmp(width, height, pixels.as_raw(), background);
+    debug_assert_eq!(inspect(&bmp), Ok((Format::Bmp, width, height)));
+    Ok(Picture {
+        data: bmp,
+        format: Format::Bmp,
+        width,
+        height,
+        converted_from: Some(name),
+    })
+}
+
+/// Turns the contents of a picture file into what is stored in a form: the
+/// file itself when it is a BMP or JPEG MS-Forms can hold, otherwise a
+/// 24-bit BMP made from it. Transparent pixels of a converted picture are
+/// blended onto `background` (red, green, blue).
+pub fn prepare(data: &[u8], background: [u8; 3]) -> Result<Picture, String> {
+    if data.is_empty() || data.len() > MAX_BYTES {
+        return Err(format!(
+            "画像は 1 バイト以上 {MAX_BYTES} バイト以下にしてください"
+        ));
+    }
+    if data.starts_with(&[0xff, 0xd8]) {
+        let (width, height) = inspect_jpeg(data)?;
+        return Ok(Picture {
+            data: data.to_vec(),
+            format: Format::Jpeg,
+            width,
+            height,
+            converted_from: None,
+        });
+    }
+    if data.starts_with(b"BM") {
+        if let Ok((width, height)) = inspect_bmp(data) {
+            return Ok(Picture {
+                data: data.to_vec(),
+                format: Format::Bmp,
+                width,
+                height,
+                converted_from: None,
+            });
+        }
+    }
+    convert(data, background)
+}
+
+/// Reads the picture at the project-root-relative `path` and prepares it
+/// for a form (see [`prepare`]) with the default background.
 pub fn load(root: &Path, path: &str) -> Result<Picture, String> {
+    load_with(root, path, DEFAULT_BACKGROUND)
+}
+
+/// Like [`load`], blending transparent pixels onto `background`.
+pub fn load_with(root: &Path, path: &str, background: [u8; 3]) -> Result<Picture, String> {
     let file = resolve(root, path)?;
     // A link must not lead out of the project.
     if let (Ok(real_root), Ok(real_file)) = (root.canonicalize(), file.canonicalize()) {
@@ -227,17 +424,11 @@ pub fn load(root: &Path, path: &str) -> Result<Picture, String> {
         ));
     }
     let data = std::fs::read(&file).map_err(|e| format!("画像 {path:?} を読めません: {e}"))?;
-    let (format, width, height) = inspect(&data).map_err(|e| format!("画像 {path:?}: {e}"))?;
-    Ok(Picture {
-        data,
-        format,
-        width,
-        height,
-    })
+    prepare(&data, background).map_err(|e| format!("画像 {path:?}: {e}"))
 }
 
-/// Wraps a picture file in the `StdPicture` form of a `GuidAndPicture`
-/// record.
+/// Wraps a stored picture (a BMP or JPEG that passes [`inspect`]) in the
+/// `StdPicture` form of a `GuidAndPicture` record.
 pub fn encode(data: &[u8]) -> Result<Vec<u8>, String> {
     inspect(data)?;
     let mut raw = Vec::with_capacity(24 + data.len());
@@ -268,6 +459,7 @@ pub fn decode(raw: &[u8]) -> Result<Picture, String> {
         format,
         width,
         height,
+        converted_from: None,
     })
 }
 
@@ -326,6 +518,119 @@ mod tests {
         assert!(inspect(&no_frame).is_err());
         assert!(inspect(b"\x89PNG\r\n\x1a\n").unwrap_err().contains("BMP か JPEG"));
         assert!(inspect(b"").is_err());
+    }
+
+    fn png(width: u32, height: u32, pixel: [u8; 4]) -> Vec<u8> {
+        let image = image::RgbaImage::from_pixel(width, height, image::Rgba(pixel));
+        let mut data = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut data, image::ImageFormat::Png).unwrap();
+        data.into_inner()
+    }
+
+    #[test]
+    fn stored_formats_are_kept_as_they_are() {
+        for data in [bmp(3, 2, 24), bmp(3, -2, 32), jpeg(24, 16)] {
+            let picture = prepare(&data, DEFAULT_BACKGROUND).unwrap();
+            assert_eq!(picture.data, data);
+            assert_eq!(picture.converted_from, None);
+        }
+        // A broken JPEG is not something to convert.
+        assert!(prepare(&[0xff, 0xd8, 0xff], DEFAULT_BACKGROUND).is_err());
+    }
+
+    #[test]
+    fn other_formats_become_24_bit_bitmaps() {
+        // 3x2, opaque red: rows are padded to 4 bytes, stored bottom up as B, G, R.
+        let picture = prepare(&png(3, 2, [255, 0, 0, 255]), DEFAULT_BACKGROUND).unwrap();
+        assert_eq!(picture.converted_from, Some("PNG"));
+        assert_eq!((picture.format, picture.width, picture.height), (Format::Bmp, 3, 2));
+        assert_eq!(picture.data.len(), 54 + 12 * 2);
+        assert_eq!(inspect(&picture.data), Ok((Format::Bmp, 3, 2)));
+        assert_eq!(&picture.data[54..66], [0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0]);
+        assert!(encode(&picture.data).is_ok());
+
+        // Transparency is blended onto the background.
+        let clear = prepare(&png(1, 1, [255, 0, 0, 0]), [10, 20, 30]).unwrap();
+        assert_eq!(&clear.data[54..57], [30, 20, 10]);
+        let half = prepare(&png(1, 1, [255, 255, 255, 128]), [0, 0, 0]).unwrap();
+        assert_eq!(&half.data[54..57], [128, 128, 128]);
+
+        // The same picture gives the same bytes every time.
+        assert_eq!(prepare(&png(3, 2, [1, 2, 3, 255]), [0; 3]), prepare(&png(3, 2, [1, 2, 3, 255]), [0; 3]));
+
+        // The orientation survives: top-left pixel of the source is in the last stored row.
+        let mut image = image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]));
+        image.put_pixel(0, 0, image::Rgba([255, 255, 255, 255]));
+        let mut data = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut data, image::ImageFormat::Png).unwrap();
+        let picture = prepare(&data.into_inner(), [0; 3]).unwrap();
+        assert_eq!(&picture.data[54..62], [0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(&picture.data[62..70], [255, 255, 255, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn every_convertible_format_is_read() {
+        let source = image::RgbaImage::from_fn(4, 3, |x, y| image::Rgba([x as u8 * 60, y as u8 * 80, 7, 255]));
+        let expected = prepare(&{
+            let mut data = std::io::Cursor::new(Vec::new());
+            source.write_to(&mut data, image::ImageFormat::Png).unwrap();
+            data.into_inner()
+        }, [0; 3])
+        .unwrap();
+        // Lossless formats give the same bitmap as the PNG.
+        for (format, name) in [
+            (image::ImageFormat::Gif, "GIF"),
+            (image::ImageFormat::Tiff, "TIFF"),
+            (image::ImageFormat::Ico, "ICO"),
+            (image::ImageFormat::WebP, "WebP"),
+        ] {
+            let mut data = std::io::Cursor::new(Vec::new());
+            source.write_to(&mut data, format).unwrap();
+            let picture = prepare(&data.into_inner(), [0; 3]).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(picture.converted_from, Some(name));
+            assert_eq!(picture.data, expected.data, "{name}");
+        }
+        // A bitmap MS-Forms cannot hold (8 bits per pixel with a palette).
+        let mut indexed = vec![0u8; 54 + 8 + 4];
+        indexed[..2].copy_from_slice(b"BM");
+        indexed[10..14].copy_from_slice(&62u32.to_le_bytes());
+        indexed[14..18].copy_from_slice(&40u32.to_le_bytes());
+        indexed[18..22].copy_from_slice(&1i32.to_le_bytes());
+        indexed[22..26].copy_from_slice(&1i32.to_le_bytes());
+        indexed[26..28].copy_from_slice(&1u16.to_le_bytes());
+        indexed[28..30].copy_from_slice(&8u16.to_le_bytes());
+        indexed[46..50].copy_from_slice(&2u32.to_le_bytes());
+        indexed[58..62].copy_from_slice(&[10, 20, 30, 0]);
+        indexed[62] = 1;
+        assert!(inspect(&indexed).is_err());
+        let picture = prepare(&indexed, [0; 3]).unwrap();
+        assert_eq!(picture.converted_from, Some("BMP"));
+        assert_eq!(&picture.data[54..57], [10, 20, 30]);
+    }
+
+    #[test]
+    fn pictures_that_cannot_be_converted() {
+        assert!(prepare(b"plain text, not a picture", DEFAULT_BACKGROUND).unwrap_err().contains("判別できません"));
+        assert!(prepare(b"", DEFAULT_BACKGROUND).is_err());
+        // A PNG that is cut off.
+        let mut cut = png(8, 8, [1, 2, 3, 255]);
+        cut.truncate(cut.len() - 20);
+        assert!(prepare(&cut, DEFAULT_BACKGROUND).unwrap_err().contains("PNG として読めません"));
+        // 3000x2000 pixels would be an 18 MB bitmap.
+        let large = png(3000, 2000, [0, 0, 0, 255]);
+        assert!(large.len() < MAX_BYTES);
+        assert!(prepare(&large, DEFAULT_BACKGROUND).unwrap_err().contains("BMP に変換すると"));
+    }
+
+    #[test]
+    fn backgrounds() {
+        let color = |kind: &str, value: &str| crate::FormSpecColor { kind: kind.into(), value: value.into() };
+        assert_eq!(background_of(None), DEFAULT_BACKGROUND);
+        assert_eq!(background_of(Some(&color("rgb", "#102030"))), [0x10, 0x20, 0x30]);
+        assert_eq!(background_of(Some(&color("system", "window"))), [255, 255, 255]);
+        assert_eq!(background_of(Some(&color("system", "buttonFace"))), [0xf0, 0xf0, 0xf0]);
+        assert_eq!(background_of(Some(&color("ole", "0x00302010"))), [0x10, 0x20, 0x30]);
+        assert_eq!(background_of(Some(&color("ole", "0x02000000"))), DEFAULT_BACKGROUND);
     }
 
     #[test]

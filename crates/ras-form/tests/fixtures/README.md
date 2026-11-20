@@ -18,6 +18,10 @@ Picture paths in the fixtures are relative to this directory (the test
 compiles them with this directory as the project root). `assets/logo.bmp`
 and `assets/logo.jpg` are xlflow's
 `internal/vba/userforms/compiler/testdata/pictures-excel-authored/logo.*`.
+`assets/logo.png` holds the pixels of `logo.bmp` with a transparent frame;
+it is used by `tests/snapshot.rs` (xlflow has no conversion to compare
+with: the test checks that a PNG gives the same form as the bitmap it is
+converted to).
 
 Fixtures only cover what xlflow accepts as well. What RAS accepts beyond
 that — `tag` / `controlTipText` on every control, `list` / `selectedIndex`

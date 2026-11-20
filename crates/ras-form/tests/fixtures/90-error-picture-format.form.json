@@ -3,5 +3,5 @@
   "kind": "ras.userform",
   "basis": "designer",
   "form": { "name": "ErrPictureFormat" },
-  "controls": [ { "id": "i", "name": "img", "type": "Image", "picture": { "path": "assets/not-a-picture.gif" } } ]
+  "controls": [ { "id": "i", "name": "img", "type": "Image", "picture": { "path": "assets/not-a-picture.txt" } } ]
 }

@@ -204,6 +204,8 @@ pub fn compile(spec: &FormSpec, codepage: u16) -> Result<Designer, CompileError>
 
 /// Like [`compile`], reading the pictures of `Image` controls from the
 /// files their `picture.path` names relative to `root`, the project root.
+/// A picture MS-Forms cannot store as it is (PNG, GIF, ...) is converted to
+/// a 24-bit BMP (see [`picture::prepare`]).
 pub fn compile_in(
     spec: &FormSpec,
     codepage: u16,
