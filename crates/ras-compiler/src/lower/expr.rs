@@ -482,7 +482,9 @@ impl<'p> Lowerer<'p> {
                 t
             }
             ExprKind::Call { .. } => self.call(e, true).unwrap_or_else(|| lit("Empty")),
-            ExprKind::New { ty, args } => self.new_expr(e, ty, args),
+            ExprKind::New { ty, args } => self.new_expr(e, ty, self.info().call_args(e.id, args)),
+            // Reordered into the call's arguments by the checker (spec §3.3).
+            ExprKind::NamedArg { value, .. } => self.expr(value),
             ExprKind::Member { object, name, .. } => self.member_expr(e, object, &name.text),
             ExprKind::Index { object, index } => self.index_expr(e, object, index),
             ExprKind::As { expr, .. } => {
@@ -1356,6 +1358,7 @@ impl<'p> Lowerer<'p> {
     pub(crate) fn call(&mut self, e: &Expr, want: bool) -> Option<VExpr> {
         let ExprKind::Call { callee, args, .. } = &e.kind else { return None };
         let info = self.info();
+        let args = info.call_args(e.id, args);
         let Some(ci) = info.calls.get(&e.id) else {
             return Some(lit("Empty"));
         };

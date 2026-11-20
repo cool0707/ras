@@ -96,6 +96,10 @@ impl<'p> Lowerer<'p> {
             return None;
         }
         let ExprKind::Call { callee, args, .. } = &object.peel().kind else { return None };
+        if info.positional_args.contains_key(&object.peel().id) {
+            // `cells(row: r, columnIndex: c)`: left to the ordinary per-cell access.
+            return None;
+        }
         let Some(CallTarget::Host(f)) = info.calls.get(&object.peel().id).map(|c| &c.target) else { return None };
         let def = &self.prog.fns[*f];
         let FnKind::Host { class: Some(c) } = def.kind else { return None };

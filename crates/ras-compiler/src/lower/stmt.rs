@@ -348,6 +348,7 @@ impl<'p> Lowerer<'p> {
             ExprKind::Assign { target, .. } => is_local(target),
             ExprKind::IncDec { operand, .. } => is_local(operand),
             ExprKind::Call { callee, args, .. } => {
+                let args = info.call_args(e.id, args);
                 // byref arguments and mutating methods (`arr.push`)
                 let target = info.calls.get(&e.id).map(|c| &c.target);
                 let byref_arg = match target {
@@ -637,6 +638,7 @@ impl<'p> Lowerer<'p> {
                 }
                 ExprKind::Arrow(_) => written = true,
                 ExprKind::Call { callee, args, .. } => {
+                    let args = info.call_args(e.id, args);
                     // A field handed to something that may change it (`inc(p.x)` with a byref
                     // parameter, `p.items.push(1)`) would change the element instead of the copy.
                     let rooted = |e: &Expr| is_var(chain_root(e));

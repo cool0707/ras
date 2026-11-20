@@ -96,6 +96,18 @@ pub fn check(prog: &mut Program) {
     ck.lints();
 }
 
+fn has_named(args: &[Expr]) -> bool {
+    args.iter().any(|a| matches!(a.kind, ExprKind::NamedArg { .. }))
+}
+
+/// The value of an argument, without its name.
+fn named_value(a: &Expr) -> &Expr {
+    match &a.kind {
+        ExprKind::NamedArg { value, .. } => value,
+        _ => a,
+    }
+}
+
 fn is_lambda(e: &Expr) -> bool {
     matches!(e.peel().kind, ExprKind::Arrow(_))
 }
@@ -1241,6 +1253,11 @@ impl Checker<'_> {
             }
             ExprKind::Call { callee, type_args, args } => self.call(e, callee, type_args, args, expect),
             ExprKind::New { ty, args } => self.new_expr(e, ty, args),
+            ExprKind::NamedArg { value, .. } => {
+                self.err(e.span, "E0411", "名前付き引数は、宣言された関数・メソッド・コンストラクタの呼び出しにだけ書けます");
+                self.expr(value, None);
+                Type::Error
+            }
             ExprKind::Member { object, name, optional } => {
                 if *optional {
                     self.err(e.span, "E0388", "オプショナルチェーン（`?.`）には対応していません。`!= null` で判定してください");
@@ -2216,6 +2233,34 @@ impl Checker<'_> {
         if !type_args.is_empty() && !matches!(access, Access::Func { .. }) {
             self.err(e.span, "E0401", "型引数はジェネリック関数の呼び出しにのみ指定できます");
         }
+        let positional;
+        let args: &[Expr] = if has_named(args) {
+            let sig = match &access {
+                Access::Func { f, recv, .. } => Some((*f, usize::from(*recv == Recv::Extension))),
+                Access::Value(Type::Class(cid, _)) => self.prog.classes[*cid].call_sig.map(|f| (f, 0)),
+                _ => None,
+            };
+            match sig {
+                Some((f, skip)) => match self.reorder_named(e, f, skip, args) {
+                    Some(v) => {
+                        positional = v;
+                        &positional
+                    }
+                    None => return Type::Error,
+                },
+                None => {
+                    if !matches!(access, Access::Error | Access::Value(Type::Error)) {
+                        self.err(e.span, "E0411", "名前付き引数は、宣言された関数・メソッド・コンストラクタの呼び出しにだけ書けます");
+                    }
+                    for a in args {
+                        self.expr(named_value(a), None);
+                    }
+                    return Type::Error;
+                }
+            }
+        } else {
+            args
+        };
         match access {
             Access::Error => {
                 for a in args {
@@ -2517,6 +2562,118 @@ impl Checker<'_> {
     }
 
     fn new_expr(&mut self, e: &Expr, ty: &ast::TypeRef, args: &[Expr]) -> Type {
+        if !has_named(args) {
+            return self.new_expr_inner(e, ty, args);
+        }
+        let builtin = matches!(ty, ast::TypeRef::Named { path, .. } if path.len() == 1 && matches!(path[0].text.as_str(), "Error" | "Map" | "Array"));
+        let resolved = if builtin {
+            None
+        } else {
+            // Resolved again (with its diagnostics) by `new_expr_inner`.
+            let n = self.prog.diagnostics.len();
+            let tps = self.fx.type_params.clone();
+            let t = resolve_type(self.prog, self.module, &tps, ty);
+            self.prog.diagnostics.truncate(n);
+            Some(t)
+        };
+        let ctor = match &resolved {
+            Some(Type::Class(c, _)) if self.prog.classes[*c].kind == ClassKind::Class => self.prog.classes[*c].ctor,
+            _ => None,
+        };
+        match ctor {
+            Some(f) => match self.reorder_named(e, f, 0, args) {
+                Some(v) => self.new_expr_inner(e, ty, &v),
+                None => Type::Error,
+            },
+            None => {
+                if !matches!(resolved, Some(Type::Error)) {
+                    self.err(e.span, "E0411", "名前付き引数は、宣言された関数・メソッド・コンストラクタの呼び出しにだけ書けます");
+                }
+                let values: Vec<Expr> = args.iter().map(|a| named_value(a).clone()).collect();
+                self.new_expr_inner(e, ty, &values);
+                Type::Error
+            }
+        }
+    }
+
+    /// Puts the arguments of a call with named arguments into parameter order (spec §3.3).
+    /// `skip` leading parameters are not written in the argument list (the receiver of an
+    /// extension method). Returns `None` after reporting an error; every value is then checked.
+    fn reorder_named(&mut self, call: &Expr, f: FnId, skip: usize, args: &[Expr]) -> Option<Rc<[Expr]>> {
+        let def = &self.prog.fns[f];
+        let params: Vec<ParamDef> = def.params.iter().skip(skip).cloned().collect();
+        let shown = if def.name.is_empty() { "既定メンバー".to_string() } else { format!("`{}`", def.name) };
+        let mut slots: Vec<Option<Expr>> = Vec::new();
+        let mut hole = None;
+        let mut ok = true;
+        let mut named_seen = false;
+        for (i, a) in args.iter().enumerate() {
+            let ExprKind::NamedArg { name, value, hole: h } = &a.kind else {
+                if named_seen {
+                    self.err(a.span, "E0413", "名前付き引数の後ろに、名前のない引数は書けません");
+                    ok = false;
+                } else {
+                    slots.resize(slots.len().max(i + 1), None);
+                    slots[i] = Some(a.clone());
+                }
+                continue;
+            };
+            named_seen = true;
+            hole.get_or_insert(*h);
+            match params.iter().position(|p| p.name == name.text) {
+                Some(j) if params[j].rest => {
+                    self.err(name.span, "E0412", format!("可変長引数 `...{}` には名前を付けて渡せません", name.text));
+                    ok = false;
+                }
+                Some(j) => {
+                    slots.resize(slots.len().max(j + 1), None);
+                    if slots[j].is_some() {
+                        self.err(name.span, "E0413", format!("引数 `{}` が二重に指定されています", name.text));
+                        ok = false;
+                    } else {
+                        slots[j] = Some((**value).clone());
+                    }
+                }
+                None => {
+                    let msg = match params.iter().find(|p| p.name.eq_ignore_ascii_case(&name.text)) {
+                        Some(p) => format!("{shown} に引数 `{}` はありません。`{}` ではありませんか", name.text, p.name),
+                        None if params.is_empty() => format!("{shown} は引数を取りません"),
+                        None => {
+                            let list = params.iter().map(|p| format!("`{}`", p.name)).collect::<Vec<_>>().join(", ");
+                            format!("{shown} に引数 `{}` はありません（引数: {list}）", name.text)
+                        }
+                    };
+                    self.err(name.span, "E0412", msg);
+                    ok = false;
+                }
+            }
+        }
+        if ok {
+            let missing: Vec<String> = params
+                .iter()
+                .enumerate()
+                .filter(|(j, p)| !p.optional && p.default.is_none() && !p.rest && slots.get(*j).is_none_or(|s| s.is_none()))
+                .map(|(_, p)| format!("`{}`", p.name))
+                .collect();
+            if !missing.is_empty() {
+                self.err(call.span, "E0414", format!("{shown} の必須の引数 {} が指定されていません", missing.join(", ")));
+                ok = false;
+            }
+        }
+        if !ok {
+            for a in args {
+                self.expr(named_value(a), None);
+            }
+            return None;
+        }
+        let hole = hole.expect("a named argument");
+        let span = Span::empty(call.span.end());
+        let v: Rc<[Expr]> = slots.into_iter().map(|s| s.unwrap_or(Expr { id: hole, kind: ExprKind::Undefined, span })).collect();
+        self.info().positional_args.insert(call.id, v.clone());
+        Some(v)
+    }
+
+    fn new_expr_inner(&mut self, e: &Expr, ty: &ast::TypeRef, args: &[Expr]) -> Type {
         // Built-in constructors.
         if let ast::TypeRef::Named { path, args: targs, .. } = ty {
             if path.len() == 1 {

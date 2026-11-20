@@ -306,6 +306,8 @@ pub enum SyntaxKind {
     INDEX_EXPR,
     AS_EXPR,
     ARG_LIST,
+    /// `name: value` inside an argument list.
+    NAMED_ARG,
     // types
     NAMED_TYPE,
     ARRAY_TYPE,
@@ -352,6 +354,7 @@ impl SyntaxKind {
                 | MEMBER_EXPR
                 | INDEX_EXPR
                 | AS_EXPR
+                | NAMED_ARG
                 | ERROR
         )
     }

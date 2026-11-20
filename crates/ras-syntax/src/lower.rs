@@ -938,6 +938,12 @@ impl Lower {
                 let args = child(n, ARG_LIST).map(|a| self.exprs(&a)).unwrap_or_default();
                 ExprKind::Call { callee, type_args, args }
             }
+            NAMED_ARG => {
+                let name = self.name_or_missing(n);
+                let subs = self.sub_exprs(n);
+                let value = self.boxed(&subs, 0, span);
+                ExprKind::NamedArg { name, value, hole: self.id() }
+            }
             NEW_EXPR => {
                 let ty = self.first_type(n);
                 let args = child(n, ARG_LIST).map(|a| self.exprs(&a)).unwrap_or_default();
