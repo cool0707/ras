@@ -81,8 +81,11 @@ export function fontStyle(value: unknown): JSX.CSSProperties {
 }
 export function appearanceStyle(value: unknown): JSX.CSSProperties {
   const appearance = objectValue(value);
+  const borderColor = colorStyle(appearance.borderColor);
   return {
     ...fontStyle(appearance.font),
+    // BorderColor is the color of a Single border (app.css .border-single).
+    ...(borderColor ? ({ "--border-color": borderColor } as JSX.CSSProperties) : {}),
     color: colorStyle(appearance.foreColor),
     backgroundColor: colorStyle(appearance.backColor),
     textAlign:
@@ -93,9 +96,17 @@ export function appearanceStyle(value: unknown): JSX.CSSProperties {
           : appearance.textAlign === 3
             ? "right"
             : undefined,
-    borderStyle:
-      appearance.borderStyle === 0 ? "none" : appearance.borderStyle === 1 ? "solid" : undefined,
   };
+}
+/**
+ * The class that draws BorderStyle. MSForms draws `fmBorderStyleSingle` as a
+ * 1px line in place of the SpecialEffect edge; `fmBorderStyleNone` leaves the
+ * control's own edge (a TextBox stays sunken) and only removes the line of
+ * controls whose edge is that line (an Image).
+ */
+export function borderClass(value: unknown): string {
+  const style = objectValue(value).borderStyle;
+  return style === 1 ? "border-single" : style === 0 ? "border-none" : "";
 }
 export function previewDocument(
   document: DesignerDocument,

@@ -442,6 +442,21 @@ pub fn type_properties(name: &str) -> Option<Props> {
     ) {
         props.push(("borderStyle", border_style()));
     }
+    // The plain properties (scalars.rs check their values).
+    for scalar in crate::scalars::of_type(n) {
+        if props.iter().any(|(k, _)| *k == scalar.name) {
+            continue;
+        }
+        use crate::scalars::Kind;
+        let prop = match scalar.kind {
+            Kind::Bool => p(T::Boolean, false, Supported),
+            Kind::Enum(_) | Kind::Int(..) => p(T::Integer, false, Supported),
+            Kind::Points(_) => p(T::Number, false, Supported),
+            Kind::Char | Kind::Text => s(),
+            Kind::Color => color(),
+        };
+        props.push((scalar.name, prop));
+    }
     Some(props)
 }
 

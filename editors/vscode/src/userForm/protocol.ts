@@ -108,6 +108,35 @@ export interface SpecControl extends AppearanceProperties {
   visible?: boolean;
   list?: string[];
   tabs?: SpecTab[];
+  /** ComboBox: 0 DropDownCombo, 2 DropDownList. TabStrip / MultiPage: 0 tabs, 1 buttons, 2 none. */
+  style?: number | null;
+  /** ListBox: 0 single, 1 multi, 2 extended. */
+  multiSelect?: number | null;
+  /** ComboBox / ListBox: 0 plain, 1 option (a box beside each item). */
+  listStyle?: number | null;
+  /** ComboBox / ListBox: 0 first letter, 1 complete, 2 none. */
+  matchEntry?: number | null;
+  /** ComboBox: 0 never, 1 with the focus, 2 always (omitted: always, as Excel makes it). */
+  showDropButtonWhen?: number | null;
+  /** ComboBox: rows of the drop-down list. */
+  listRows?: number | null;
+  /** ComboBox: 0 plain, 1 arrow, 2 ellipsis, 3 reduce. */
+  dropButtonStyle?: number | null;
+  /** 0 flat, 1 raised, 2 sunken, 3 etched, 6 bump. */
+  specialEffect?: number | null;
+  /** 0 transparent, 1 opaque. */
+  backStyle?: number | null;
+  borderColor?: ColorValue | null;
+  /** CheckBox / OptionButton: 0 caption on the left, 1 on the right. */
+  alignment?: number | null;
+  wordWrap?: boolean | null;
+  multiLine?: boolean | null;
+  passwordChar?: string | null;
+  /** SpinButton / ScrollBar: -1 by the shape, 0 vertical, 1 horizontal. */
+  orientation?: number | null;
+  /** TabStrip / MultiPage tabs: 0 top, 1 bottom, 2 left, 3 right. */
+  tabOrientation?: number | null;
+  default?: boolean | null;
   observed?: Partial<Omit<SpecControl, "observed">>;
 }
 

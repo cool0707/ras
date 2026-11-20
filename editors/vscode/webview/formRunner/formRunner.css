@@ -124,6 +124,20 @@ body {
 
 /* ---------------------------------------------------------------- controls */
 
+/* MSForms ignores visual styles: it draws classic 3D edges in the system colors (the
+   Windows 10/11 values below). The Designer draws the same edges. */
+:root {
+	--ms-face: #f0f0f0;
+	--ms-highlight: #fff;
+	--ms-light: #e3e3e3;
+	--ms-shadow: #a0a0a0;
+	--ms-dark: #696969;
+	--ms-frame: #646464;
+	--ms-window: #fff;
+	--ms-text: #000;
+	--ms-select: #0078d7;
+}
+
 .ctl {
 	position: absolute;
 	box-sizing: border-box;
@@ -131,7 +145,16 @@ body {
 }
 
 .ctl.bordered {
-	border: 1px solid #646464;
+	border: 1px solid var(--ms-frame);
+}
+
+/* Disabled text is embossed in buttonShadow, as Windows draws it. */
+.ctl .field:disabled,
+.ctl .button:disabled,
+.ctl .toggle.disabled,
+.ctl .tab:disabled {
+	color: var(--ms-shadow) !important;
+	text-shadow: 1px 1px 0 var(--ms-highlight);
 }
 
 .ctl .content {
@@ -147,20 +170,23 @@ body {
 	line-height: 1.25;
 }
 
+/* SpecialEffect fmSpecialEffectSunken: the edit fields. */
 .ctl .field {
 	box-sizing: border-box;
 	width: 100%;
 	height: 100%;
 	margin: 0;
-	padding: 1px 3px;
-	border: 1px solid #7a7a7a;
+	padding: 1px 2px;
+	border: 1px solid;
+	border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
 	border-radius: 0;
+	box-shadow:
+		inset 1px 1px 0 var(--ms-dark),
+		inset -1px -1px 0 var(--ms-light);
+	background-color: var(--ms-window);
+	color: var(--ms-text);
 	font: inherit;
 	outline: none;
-}
-
-.ctl .field:focus {
-	border-color: #0078d7;
 }
 
 .ctl textarea.field {
@@ -168,60 +194,186 @@ body {
 }
 
 .ctl select.field {
-	padding: 0;
+	padding: 0 0 0 1px;
 }
 
-.ctl .field:disabled {
-	color: #6d6d6d;
+.ctl-combobox .field {
+	appearance: none;
+	padding-right: 18px;
+}
+
+.ctl-combobox .field::-webkit-calendar-picker-indicator {
+	display: none !important;
+}
+
+.ctl .combo-arrow {
+	position: absolute;
+	top: 2px;
+	right: 2px;
+	bottom: 2px;
+	width: 15px;
+	box-sizing: border-box;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid;
+	border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-light),
+		inset -1px -1px 0 var(--ms-shadow);
+	background: var(--ms-face);
+	pointer-events: none;
+}
+
+.ctl .combo-chevron {
+	width: 0;
+	height: 0;
+	border-left: 3.5px solid transparent;
+	border-right: 3.5px solid transparent;
+	border-top: 4px solid var(--ms-text);
+}
+
+/* ShowDropButtonWhen: Never, or only while the control has the focus. */
+.ctl-combobox.drop-never .combo-arrow,
+.ctl-combobox.drop-focus:not(:focus-within) .combo-arrow {
+	display: none;
+}
+
+.ctl-combobox:has(.field:disabled) .combo-chevron {
+	border-top-color: var(--ms-shadow);
+}
+
+.ctl select.field option:checked {
+	background: var(--ms-select) linear-gradient(var(--ms-select), var(--ms-select));
+	color: #fff;
+}
+
+/* The raised edge of a push button; pressed, the edge is sunken. */
+.ctl .button,
+.ctl .spin {
+	box-sizing: border-box;
+	margin: 0;
+	border: 1px solid;
+	border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+	border-radius: 0;
+	box-shadow:
+		inset 1px 1px 0 var(--ms-light),
+		inset -1px -1px 0 var(--ms-shadow);
+	background-color: var(--ms-face);
+	color: var(--ms-text);
+	cursor: default;
 }
 
 .ctl .button {
-	box-sizing: border-box;
 	width: 100%;
 	height: 100%;
-	margin: 0;
-	border: 1px solid #adadad;
-	border-radius: 0;
+	padding: 0 4px;
 	font: inherit;
 	color: inherit;
-	cursor: default;
 	white-space: pre-wrap;
 }
 
-.ctl .button.default {
-	border-color: #0078d7;
-}
-
-.ctl .button:hover:not(:disabled) {
-	border-color: #0078d7;
-	filter: brightness(1.03);
-}
-
-.ctl .button:focus-visible {
-	outline: 1px dotted #000;
-	outline-offset: -4px;
+.ctl .button:active:not(:disabled),
+.ctl .spin:active:not(:disabled),
+.ctl .button.pressed {
+	border-color: var(--ms-dark) var(--ms-highlight) var(--ms-highlight) var(--ms-dark);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-shadow),
+		inset -1px -1px 0 var(--ms-light);
 }
 
 .ctl .button.pressed {
-	filter: brightness(0.85);
-	border-color: #0078d7;
+	background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px 2px;
 }
 
-.ctl .button:disabled {
-	color: #6d6d6d;
+/* The default button has a black line round it. */
+.ctl .button.default {
+	outline: 1px solid var(--ms-text);
+	outline-offset: -1px;
 }
 
+.ctl .button:focus-visible {
+	outline: 1px dotted var(--ms-text);
+	outline-offset: -4px;
+}
+
+/* CheckBox / OptionButton: a 13px sunken box at the left, centred vertically. */
 .ctl .toggle {
 	display: flex;
 	align-items: center;
 	gap: 4px;
 	height: 100%;
+	padding-left: 1px;
 	user-select: none;
 }
 
 .ctl .toggle input {
+	appearance: none;
+	position: relative;
+	box-sizing: border-box;
+	width: 13px;
+	height: 13px;
 	margin: 0;
 	flex: none;
+	border: 1px solid;
+	border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+	border-radius: 0;
+	box-shadow:
+		inset 1px 1px 0 var(--ms-dark),
+		inset -1px -1px 0 var(--ms-light);
+	background: var(--ms-window);
+	outline: none;
+}
+
+.ctl .toggle input[type="radio"] {
+	width: 12px;
+	height: 12px;
+	border-radius: 50%;
+}
+
+.ctl .toggle input:disabled {
+	background: var(--ms-face);
+}
+
+.ctl .toggle input[type="checkbox"]:checked::after {
+	content: "";
+	position: absolute;
+	left: 3px;
+	top: 1px;
+	width: 3px;
+	height: 6px;
+	border: solid var(--ms-text);
+	border-width: 0 2px 2px 0;
+	transform: rotate(40deg);
+}
+
+.ctl .toggle input[type="checkbox"]:indeterminate {
+	background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px 2px;
+}
+
+.ctl .toggle input[type="radio"]:checked::after {
+	content: "";
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	width: 4px;
+	height: 4px;
+	border-radius: 50%;
+	background: var(--ms-text);
+	transform: translate(-50%, -50%);
+}
+
+.ctl .toggle input:disabled::after {
+	border-color: var(--ms-shadow) !important;
+	background-color: var(--ms-shadow);
+}
+
+.ctl .toggle input[type="checkbox"]:disabled::after {
+	background: none;
+}
+
+.ctl .toggle input:focus-visible + span {
+	outline: 1px dotted var(--ms-text);
 }
 
 .ctl-spinbutton {
@@ -235,13 +387,15 @@ body {
 
 .ctl .spin {
 	flex: 1;
-	margin: 0;
+	min-width: 0;
+	min-height: 0;
 	padding: 0;
-	border: 1px solid #adadad;
-	background: #f0f0f0;
-	font-size: 7px;
+	font-size: 6px;
 	line-height: 1;
-	color: #000;
+}
+
+.ctl .spin:disabled {
+	color: var(--ms-shadow);
 }
 
 .ctl-scrollbar {
@@ -265,52 +419,111 @@ body {
 	height: 100%;
 }
 
-.ctl-frame {
-	border: 1px solid #b4b4b4;
-	overflow: visible;
+/* Frame: SpecialEffect fmSpecialEffectEtched, with the line through the middle of the
+   caption, which sits inside the frame's bounds. */
+.ctl-frame::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	box-sizing: border-box;
+	border: 1px solid;
+	border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-highlight),
+		inset -1px -1px 0 var(--ms-shadow);
+	pointer-events: none;
+}
+
+.ctl-frame.has-caption::before {
+	top: 0.6em;
 }
 
 .ctl-frame .frame-caption {
 	position: absolute;
 	left: 6px;
-	top: -0.7em;
+	top: 0;
+	max-width: calc(100% - 12px);
+	overflow: hidden;
 	padding: 0 2px;
+	line-height: 1.2;
 	white-space: nowrap;
 	z-index: 1;
 }
 
-.ctl-multipage,
+/* MultiPage / TabStrip: raised tabs over a raised body. */
 .ctl-tabstrip {
-	overflow: visible;
+	font-family: Tahoma, sans-serif;
+	font-size: 8.25pt;
+}
+
+.ctl-multipage::before,
+.ctl-tabstrip::before {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	top: 22px;
+	border: 1px solid;
+	border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-light),
+		inset -1px -1px 0 var(--ms-shadow);
+	pointer-events: none;
 }
 
 .ctl .tabs {
+	position: relative;
+	z-index: 1;
 	display: flex;
+	align-items: flex-end;
 	height: 24px;
+	padding-left: 2px;
 	box-sizing: border-box;
+	overflow: hidden;
 }
 
 .ctl .tab {
+	box-sizing: border-box;
+	height: 20px;
 	margin: 0;
-	padding: 0 8px;
-	border: 1px solid #adadad;
+	padding: 0 6px;
+	border: 1px solid;
 	border-bottom: 0;
-	background: #e9e9e9;
+	border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+	border-radius: 2px 2px 0 0;
+	box-shadow:
+		inset 1px 1px 0 var(--ms-light),
+		inset -1px 0 0 var(--ms-shadow);
+	background: var(--ms-face);
 	font: inherit;
 	color: inherit;
+	white-space: nowrap;
 	cursor: default;
+	outline: none;
 }
 
 .ctl .tab.active {
-	background: #fff;
 	position: relative;
-	top: 1px;
+	z-index: 1;
+	height: 24px;
+	margin: 0 -2px;
 }
 
-.ctl-multipage > .content,
-.ctl-tabstrip > .content {
-	border: 1px solid #adadad;
+.ctl .tab:focus-visible {
+	outline: 1px dotted var(--ms-text);
+	outline-offset: -4px;
+}
+
+/* Inside the body's edge (the left and top insets are set from contentInsets). */
+.ctl-multipage > .content {
+	right: 2px;
+	bottom: 2px;
 	background: inherit;
+}
+
+.ctl-tabstrip > .content {
+	display: none;
 }
 
 .ctl-page {
@@ -330,4 +543,128 @@ body {
 	color: #6d6d6d;
 	font-size: 11px;
 	padding: 2px;
+}
+
+/* ------------------------------------------------------ plain properties (look()) */
+
+.ctl.bordered {
+	border-color: var(--border-color, var(--ms-frame));
+}
+
+/* SpecialEffect of the edit fields and labels. */
+.ctl[data-effect="0"] .field {
+	border-color: transparent;
+	box-shadow: none;
+}
+
+.ctl[data-effect="1"] .field,
+.ctl-label[data-effect="1"] {
+	border: 1px solid;
+	border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-light),
+		inset -1px -1px 0 var(--ms-shadow);
+}
+
+.ctl-label[data-effect="2"] {
+	border: 1px solid;
+	border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-dark),
+		inset -1px -1px 0 var(--ms-light);
+}
+
+.ctl[data-effect="3"] .field,
+.ctl-label[data-effect="3"] {
+	border: 1px solid;
+	border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-highlight),
+		inset -1px -1px 0 var(--ms-shadow);
+}
+
+.ctl[data-effect="6"] .field,
+.ctl-label[data-effect="6"] {
+	border: 1px solid;
+	border-color: var(--ms-light) var(--ms-dark) var(--ms-dark) var(--ms-light);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-shadow),
+		inset -1px -1px 0 var(--ms-highlight);
+}
+
+.ctl[data-effect="0"] .toggle input {
+	border: 1px solid var(--ms-frame);
+	box-shadow: none;
+}
+
+.ctl-frame[data-effect="0"]::before {
+	border: 0;
+	box-shadow: none;
+}
+
+.ctl-frame[data-effect="2"]::before {
+	border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-dark),
+		inset -1px -1px 0 var(--ms-light);
+}
+
+/* Alignment Left: the caption before the box. */
+.ctl.caption-left .toggle {
+	flex-direction: row-reverse;
+	justify-content: flex-end;
+}
+
+/* WordWrap: a CommandButton does not wrap unless asked to. */
+.ctl-commandbutton:not(.wrap) .button,
+.ctl.no-wrap .button,
+.ctl.no-wrap .toggle span {
+	white-space: pre;
+}
+
+/* DropButtonStyle Reduce. */
+.ctl .combo-reduce {
+	align-self: flex-end;
+	width: 7px;
+	height: 2px;
+	margin-bottom: 3px;
+	background: var(--ms-text);
+}
+
+.ctl .combo-ellipsis {
+	font-size: 9px;
+	line-height: 1;
+}
+
+/* Style Buttons: separate push buttons, the selected one pressed. */
+.ctl.tab-style-1::before {
+	display: none;
+}
+
+.ctl.tab-style-1 .tabs {
+	gap: 2px;
+	align-items: flex-start;
+}
+
+.ctl.tab-style-1 .tab {
+	border-bottom: 1px solid;
+	border-radius: 0;
+	box-shadow:
+		inset 1px 1px 0 var(--ms-light),
+		inset -1px -1px 0 var(--ms-shadow);
+}
+
+.ctl.tab-style-1 .tab.active {
+	height: 20px;
+	margin: 0;
+	border-color: var(--ms-dark) var(--ms-highlight) var(--ms-highlight) var(--ms-dark);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-shadow),
+		inset -1px -1px 0 var(--ms-light);
+}
+
+/* Style None: no tabs. */
+.ctl.tab-style-2::before,
+.ctl.tab-style-2 .tabs {
+	visibility: hidden;
 }

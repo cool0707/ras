@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use serde_json::{Map, Value};
 
 use crate::contract::{self, lookup, Prop, Props, Support, ValueType};
+use crate::scalars;
 use crate::spec::{
     FormSpec, FormSpecColor, FormSpecControl, FormSpecFont, FormSpecForm, FormSpecTab, KIND,
     XLFLOW_KIND,
@@ -948,6 +949,53 @@ fn typed_fields(control: &FormSpecControl) -> Vec<(&'static str, Option<Value>)>
     ]
 }
 
+/// The plain properties (scalars.rs) of a control: values of the right kind,
+/// the same as a property-bag entry of the same name, and `value` of a
+/// SpinButton / ScrollBar between `min` and `max`.
+fn validate_scalars(control: &FormSpecControl, path: &str) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    let builtin = contract::control_type(&control.control_type).is_some()
+        && (control.prog_id.is_empty()
+            || prog_id_matches_type(&control.control_type, &control.prog_id));
+    for (name, value) in &control.scalars {
+        if value.is_null() || !builtin {
+            continue;
+        }
+        let field = format!("{path}.{name}");
+        let Some(p) = scalars::find(&control.control_type, name) else {
+            continue;
+        };
+        if let Err(message) = scalars::to_raw(p, value) {
+            issues.push(appearance_issue(&field, format!("{message}。")));
+        }
+        if let Some(legacy) = control.properties.as_ref().and_then(|bag| lookup_raw(bag, name)) {
+            if !legacy_equal(name, value, legacy) {
+                issues.push(appearance_issue(
+                    &field,
+                    "型付きのプロパティと properties の値が食い違っています。".into(),
+                ));
+            }
+        }
+    }
+    if builtin && matches!(control.control_type.as_str(), "SpinButton" | "ScrollBar") {
+        let bound = |name: &str| {
+            let p = scalars::find(&control.control_type, name).expect("min / max");
+            control.scalar(name).and_then(Value::as_i64).unwrap_or(p.omitted)
+        };
+        let (min, max) = (bound("min"), bound("max"));
+        let (lo, hi) = (min.min(max), min.max(max));
+        if let Some(v) = control.value.as_ref().and_then(Value::as_i64) {
+            if v < lo || v > hi {
+                issues.push(appearance_issue(
+                    &format!("{path}.value"),
+                    format!("value は min と max の間（{lo}〜{hi}）にしてください。"),
+                ));
+            }
+        }
+    }
+    issues
+}
+
 fn color_json(color: &FormSpecColor) -> Value {
     serde_json::to_value(color).expect("color")
 }
@@ -958,7 +1006,7 @@ fn prog_id_matches_type(control_type: &str, prog_id: &str) -> bool {
 }
 
 fn legacy_equal(name: &str, typed: &Value, legacy: &Value) -> bool {
-    if name == "foreColor" || name == "backColor" {
+    if name == "foreColor" || name == "backColor" || name == "borderColor" {
         if let Ok(color) = serde_json::from_value::<FormSpecColor>(typed.clone()) {
             let ole = color.ole();
             let n = legacy.as_f64();
@@ -1076,8 +1124,76 @@ fn validate_selected_index(
     Vec::new()
 }
 
+/// The least height of a single-line TextBox / ComboBox for its font, in points
+/// (`editHeight.ts` of the VS Code extension computes the same). MSForms does not
+/// grow an edit field to its font: a lower one clips the text and leaves parts of
+/// glyphs and of the caret as stray lines along the edge.
+fn minimum_edit_height(control: &FormSpecControl) -> Option<f64> {
+    if !matches!(control.control_type.to_lowercase().as_str(), "textbox" | "combobox") {
+        return None;
+    }
+    let bag = control.properties.as_ref();
+    let multi_line = control
+        .scalar("multiLine")
+        .or_else(|| bag.and_then(|b| lookup_raw(b, "multiLine")));
+    if multi_line.and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    let bag_font = bag
+        .and_then(|b| lookup_raw(b, "font"))
+        .and_then(|f| serde_json::from_value::<crate::spec::FormSpecFont>(f.clone()).ok());
+    let font = control.font.clone().or(bag_font).unwrap_or_default();
+    let name = font
+        .name
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| "MS UI Gothic".into())
+        .trim()
+        .to_lowercase();
+    let size = font.size.filter(|s| *s > 0.0).unwrap_or(9.0);
+    // Line height (ascent + descent) per point of size.
+    let starts = |prefixes: &[&str]| prefixes.iter().any(|p| name.starts_with(p));
+    let has = |parts: &[&str]| parts.iter().any(|p| name.contains(p));
+    let factor = if starts(&["ms", "ｍｓ"]) && has(&["gothic", "ゴシック", "mincho", "明朝"]) {
+        1.0
+    } else if starts(&["meiryo ui", "メイリオ ui"]) {
+        1.33
+    } else if starts(&["meiryo", "メイリオ"]) {
+        1.6
+    } else if starts(&["yu gothic ui", "游ゴシック ui"]) {
+        1.33
+    } else if starts(&["yu gothic", "yu mincho", "游ゴシック", "游明朝"]) {
+        1.71
+    } else if starts(&["tahoma"]) {
+        1.21
+    } else if starts(&["segoe ui"]) {
+        1.33
+    } else if starts(&["arial", "times"]) {
+        1.15
+    } else if starts(&["calibri", "verdana"]) {
+        1.22
+    } else {
+        1.3
+    };
+    // The sunken edge and the inner margin, then whole pixels at 96 DPI.
+    let points = size * factor + 4.5;
+    Some((points / 0.75 - 1e-9).ceil() * 0.75)
+}
+
 fn validate_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
     let mut issues = validate_typed_control(control, path);
+    issues.extend(validate_scalars(control, path));
+    if let (Some(minimum), Some(height)) = (minimum_edit_height(control), control.height) {
+        if height < minimum {
+            issues.push(issue(
+                "UFV022",
+                Severity::Warning,
+                format!(
+                    "{path}.height（{height} pt）はフォントに対して低すぎます。Excel では文字が欠け、端に線が残ります。{minimum} pt 以上にしてください。"
+                ),
+                &format!("{path}.height"),
+            ));
+        }
+    }
     if control.id.trim().is_empty() {
         issues.push(required_issue(&format!("{path}.id")));
     }

@@ -157,7 +157,7 @@ function create(c: ControlSnapshot): View {
 				if (max > 0) input.maxLength = max;
 				else input.removeAttribute("maxlength");
 				input.style.textAlign = ALIGN[num(s.state.TextAlign, 1)] ?? "left";
-				colors(input, s.state);
+				colors(input, s.state, num(s.state.BackStyle, 1) === 0);
 			};
 			break;
 		}
@@ -167,9 +167,18 @@ function create(c: ControlSnapshot): View {
 			const listId = `list-${Math.random().toString(36).slice(2)}`;
 			const datalist = el("datalist", "", root);
 			datalist.id = listId;
+			// The drop button of MSForms, drawn over the field (clicks go through to it).
+			const symbol = el("span", "combo-chevron", el("span", "combo-arrow", root));
 			view.update = (s, enabled) => {
 				const list = (s.list ?? []).map((row) => row.join("  "));
 				const dropDownList = num(s.state.Style) === 2;
+				const button = num(s.state.ShowDropButtonWhen, 2);
+				root.classList.toggle("drop-never", button === 0);
+				root.classList.toggle("drop-focus", button === 1);
+				// DropButtonStyle: Plain, Arrow, Ellipsis, Reduce.
+				const style = num(s.state.DropButtonStyle, 1);
+				symbol.className = ["", "combo-chevron", "combo-ellipsis", "combo-reduce"][style] ?? "combo-chevron";
+				symbol.textContent = style === 2 ? "…" : "";
 				if (dropDownList) {
 					input?.remove();
 					input = undefined;
@@ -245,7 +254,7 @@ function create(c: ControlSnapshot): View {
 					button.classList.toggle("pressed", s.state.Value === true);
 					button.classList.toggle("mixed", s.state.Value === null);
 				}
-				colors(button, s.state);
+				colors(button, s.state, num(s.state.BackStyle, 1) === 0);
 			};
 			break;
 		}
@@ -266,6 +275,7 @@ function create(c: ControlSnapshot): View {
 				box.checked = s.state.Value === true;
 				box.indeterminate = s.state.Value === null;
 				box.disabled = !enabled;
+				label.classList.toggle("disabled", !enabled);
 				colors(root, s.state, true);
 			};
 			break;
@@ -336,6 +346,7 @@ function create(c: ControlSnapshot): View {
 			view.update = (s) => {
 				caption.textContent = str(s.state.Caption);
 				caption.style.display = str(s.state.Caption) ? "" : "none";
+				root.classList.toggle("has-caption", str(s.state.Caption) !== "");
 				colors(root, s.state);
 				caption.style.backgroundColor = root.style.backgroundColor;
 				const inset = contentInsets("Frame");
@@ -384,6 +395,22 @@ function create(c: ControlSnapshot): View {
 			root.classList.add("unknown");
 	}
 	return view;
+}
+
+/** The plain properties that change how any control looks (formRunner.css draws them). */
+function look(root: HTMLElement, s: ControlState, type: string): void {
+	const effect = s.SpecialEffect;
+	if (typeof effect === "number") root.dataset.effect = String(effect);
+	else delete root.dataset.effect;
+	root.classList.toggle("caption-left", s.Alignment === 0);
+	root.classList.toggle("wrap", s.WordWrap === true);
+	root.classList.toggle("no-wrap", s.WordWrap === false);
+	const border = oleToCss(s.BorderColor);
+	if (border) root.style.setProperty("--border-color", border);
+	else root.style.removeProperty("--border-color");
+	if (type === "MultiPage" || type === "TabStrip") {
+		for (const n of [0, 1, 2]) root.classList.toggle(`tab-style-${n}`, num(s.Style) === n);
+	}
 }
 
 function fillOptions(select: HTMLSelectElement, items: string[]): void {
@@ -448,6 +475,7 @@ function render(next: FormState, focus: string | undefined): void {
 		view.root.title = str(s.ControlTipText);
 		fontCss(view.root, s.Font);
 		view.update(c, enabledOf(c));
+		look(view.root, s, c.type);
 		if (view.focus) view.focus.tabIndex = s.TabStop === false ? -1 : num(s.TabIndex) + 1;
 	}
 	if (focus) {

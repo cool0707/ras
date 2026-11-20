@@ -14,6 +14,7 @@ use crate::oforms::{
     self, ControlDefinition, Definition, Designer, Edit, FontEdit, PValue, PersistError, Tab,
     TabStripState,
 };
+use crate::scalars::{self, Store};
 use crate::spec::{FormSpec, FormSpecControl, FormSpecFont, FormSpecTab};
 
 /// Why a valid FormSpec could not be turned into a designer storage.
@@ -250,11 +251,13 @@ fn generation_value(kind: &str, key: &str, value: &Value) -> Result<Converted, S
     if key == "value"
         && (kind.eq_ignore_ascii_case("SpinButton") || kind.eq_ignore_ascii_case("ScrollBar"))
     {
-        let v =
-            number(value).filter(|v| v.is_finite() && v.trunc() == *v && (0.0..=100.0).contains(v));
+        // Checked against min and max once both are known (control_definition).
+        let v = number(value).filter(|v| {
+            v.is_finite() && v.trunc() == *v && (i32::MIN as f64..=i32::MAX as f64).contains(v)
+        });
         return v
             .map(|v| Converted::Int(v as i64))
-            .ok_or_else(|| "value は既定の範囲 0〜100 の整数にしてください".into());
+            .ok_or_else(|| "value は整数にしてください".into());
     }
     if (key == "value" || key == "text") && kind.eq_ignore_ascii_case("ToggleButton") {
         return convert_value("CheckBox", key, value);
@@ -546,16 +549,58 @@ fn control_definition(
             item.properties
                 .insert("BooleanProperties".into(), PValue::Int(bits));
         }
-    } else {
-        let mut bits = oforms::default_various_property_bits(class).unwrap_or(0x1b);
-        if class == 23 || class == 25 {
-            bits = 0x2c80481b;
+    }
+    let mut bits = scalars::fresh_bits(class);
+    if enabled == Some(false) {
+        bits &= !2;
+    }
+    // The plain properties (scalars.rs).
+    for p in scalars::of_type(kind) {
+        let Some(value) = control.scalar(p.name) else {
+            continue;
+        };
+        let raw = scalars::to_raw(p, value).map_err(|e| failure(INVALID, p.name, e))?;
+        let mut put = |name: String, value: PValue| {
+            item.properties.insert(name, value);
+        };
+        match p.store {
+            Store::Bit(..) | Store::Bits(..) => bits = scalars::put_bits(bits, p, raw),
+            Store::Field(field) | Store::Himetric(field) => put(field.into(), PValue::Int(raw)),
+            Store::Thumb => put("ProportionalThumb".into(), PValue::Int(raw)),
+            Store::Flag(flag, _) => put(flag.into(), PValue::Bool(raw != 0)),
+            Store::Site(bit) => put(format!("SiteFlag{bit}"), PValue::Bool(raw != 0)),
+            Store::Text(field) => {
+                put(field.into(), PValue::Str(value.as_str().unwrap_or("").into()))
+            }
         }
-        if enabled == Some(false) {
-            bits &= !2;
-        }
+    }
+    // A drop-down list cannot be typed into (Editable off).
+    if item.properties.get("DisplayStyle") == Some(&PValue::Int(7)) {
+        bits &= !(1 << 14);
+    }
+    if !matches!(class, 7 | 14 | 57) {
         item.properties
             .insert("VariousPropertyBits".into(), PValue::Int(bits));
+    }
+    if matches!(class, 16 | 47) {
+        // The value has to lie between Min and Max.
+        let bound = |name: &str| {
+            let p = scalars::find(kind, name).expect("min / max");
+            match item.properties.get(p.field().unwrap_or_default()) {
+                Some(PValue::Int(n)) => *n,
+                _ => p.omitted,
+            }
+        };
+        let (min, max) = (bound("min"), bound("max"));
+        if let Some(PValue::Int(position)) = item.properties.get("Position") {
+            if *position < min.min(max) || *position > min.max(max) {
+                return Err(failure(
+                    INVALID,
+                    "value",
+                    format!("value は min と max の間（{}〜{}）にしてください", min.min(max), min.max(max)),
+                ));
+            }
+        }
     }
     if let Some(picture) = &control.picture {
         if picture.get("remove").and_then(Value::as_bool) != Some(true) {

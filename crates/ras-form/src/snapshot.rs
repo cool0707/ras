@@ -5,8 +5,10 @@
 //! extraction of `internal/filepull` (Copyright (c) 2026 harumiWeb, MIT
 //! License; see `NOTICE.md`). On top of xlflow's projection, properties that
 //! the generator can write but the projection reports as unmodelled (`Tag`,
-//! `ControlTipText`, `GroupName`, `MaxLength`, `BorderColor`) are carried
-//! over, so that they survive a round trip through `forms/`.
+//! `ControlTipText`, and `BorderColor` of the controls `scalars.rs` does not
+//! cover) are carried over, and the plain properties of `scalars.rs` are
+//! projected where they differ from a new control's, so that they survive a
+//! round trip through `forms/`.
 
 use std::collections::BTreeMap;
 
@@ -16,6 +18,7 @@ use crate::contract;
 use crate::oforms::{default_various_property_bits, Tab};
 use crate::picture::{self, Picture};
 use crate::reader::{self, Control, Level, ReadError, Record};
+use crate::scalars::{self, Store};
 use crate::spec::{self, FormSpec, FormSpecColor, FormSpecControl, FormSpecFont, FormSpecTab};
 
 /// `type` of a control the FormSpec cannot express (snapshot only).
@@ -77,7 +80,7 @@ impl std::fmt::Display for SnapshotError {
 impl std::error::Error for SnapshotError {}
 
 /// HIMETRIC → points.
-fn points(value: i32) -> f64 {
+pub(crate) fn points(value: i32) -> f64 {
     value as f64 * 72.0 / 2540.0
 }
 
@@ -193,7 +196,7 @@ fn default_various_bits(control_type: &str) -> Option<i64> {
         "ComboBox" | "ListBox" | "CheckBox" | "OptionButton" | "ToggleButton" => {
             default_various_property_bits(23)
         }
-        "Image" | "SpinButton" | "ScrollBar" => Some(0x1b),
+        "Image" | "SpinButton" | "ScrollBar" | "TabStrip" => Some(0x1b),
         "Label" => default_various_property_bits(21),
         "CommandButton" => default_various_property_bits(17),
         _ => None,
@@ -283,7 +286,9 @@ fn unsupported_control_properties(control: &Control, control_type: &str) -> Vec<
         out.push("helpContextId".to_string());
     }
     if let Some(flags) = site.values.get("BitFlags") {
-        if flags & !2 != default_site_flags(control_type) & !2 {
+        // Visible, TabStop, Default and Cancel are projected.
+        let projected = !2 & !scalars::described_site_flags(control_type);
+        if flags & projected != default_site_flags(control_type) & projected {
             out.push("siteFlags".into());
         }
     }
@@ -324,9 +329,28 @@ fn unsupported_control_properties(control: &Control, control_type: &str) -> Vec<
         if control_type == "TabStrip" {
             projected.extend(["Items", "TipStrings", "TabNames", "Tags", "Accelerators"]);
         }
+        // The plain properties (scalars.rs).
+        for p in scalars::of_type(control_type) {
+            if let Some(field) = p.field() {
+                projected.push(field);
+            }
+            if let Store::Flag(flag, _) = p.store {
+                projected.push(flag);
+            }
+        }
+        // MS-OFORMS: a ListBox always has both scroll bars.
+        if control_type == "ListBox" && record.value("ScrollBars") == Some(3) {
+            projected.push("ScrollBars");
+        }
         out.extend(unsupported_record_properties(record, &projected));
         if let Some(bits) = record.value("VariousPropertyBits") {
-            if default_various_bits(control_type).is_none_or(|d| bits & !2 != d & !2) {
+            // Enabled and the bits of properties are projected; a ComboBox is
+            // Editable unless it is a drop-down list (its style).
+            let mut done = 2 | scalars::described_bits(control_type);
+            if control_type == "ComboBox" {
+                done |= 1 << 14;
+            }
+            if default_various_bits(control_type).is_none_or(|d| bits & !done != d & !done) {
                 out.push("variousPropertyBits".into());
             }
         }
@@ -413,6 +437,50 @@ fn project_typed_control(source: &Control, target: &mut FormSpecControl) {
     if control_type == "Image" {
         target.picture_alignment = record.value("PictureAlignment");
         target.picture_size_mode = record.value("PictureSizeMode");
+    }
+    project_scalars(source, &control_type, record, target);
+}
+
+/// The plain properties (scalars.rs), each only where it differs from what
+/// Excel stores for a new control (which is what the compiler writes).
+fn project_scalars(source: &Control, control_type: &str, record: &Record, target: &mut FormSpecControl) {
+    let Some(class) = scalars::class_of(control_type) else {
+        return;
+    };
+    let bits = record
+        .value("VariousPropertyBits")
+        .or_else(|| default_various_property_bits(class))
+        .unwrap_or(0x1b);
+    let flags = source.site.values.get("BitFlags").copied().unwrap_or(0x33);
+    for p in scalars::of_type(control_type) {
+        let (raw, fresh) = match p.store {
+            Store::Bit(..) | Store::Bits(..) => (
+                scalars::get_bits(bits, p),
+                scalars::get_bits(scalars::fresh_bits(class), p),
+            ),
+            Store::Site(bit) => (
+                (flags >> bit) & 1,
+                (scalars::fresh_site_flags(class) >> bit) & 1,
+            ),
+            Store::Flag(flag, set) => {
+                let on = record.values.contains_key(flag) == set;
+                (i64::from(on), i64::from(!set))
+            }
+            Store::Text(field) => {
+                let text = record.text(field).unwrap_or("");
+                if !text.is_empty() {
+                    target.scalars.insert(p.name.into(), Value::from(text));
+                }
+                continue;
+            }
+            _ => (
+                record.value(p.field().expect("field")).unwrap_or(p.omitted),
+                p.fresh.unwrap_or(p.omitted),
+            ),
+        };
+        if raw != fresh {
+            target.scalars.insert(p.name.into(), scalars::from_raw(p, raw));
+        }
     }
 }
 

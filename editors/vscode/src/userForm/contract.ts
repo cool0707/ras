@@ -22,6 +22,8 @@ export interface PropertyContract {
 	minimum?: number;
 	maximum?: number;
 	exclusiveMinimum?: boolean;
+	/** Names of allowedValues, in order (the VBA constants without their prefix). */
+	valueLabels?: string[];
 }
 
 export interface ControlContract {
@@ -144,6 +146,82 @@ const listControl = (): Record<string, PropertyContract> => ({
 	list: { ...p("stringArray", false, "supported", "List items; generated code in UserForm_Initialize fills the list.", true), editor: "list" },
 	selectedIndex: p("integer", false, "supported", "Zero-based selected item of list, or -1 for none; set by generated code in UserForm_Initialize.", true),
 });
+
+// The plain properties of the controls (crates/ras-form/src/scalars.rs has the same
+// table): the VBA property of the same name, and its values. Omitted, each is what
+// Excel gives a new control.
+type Scalar = [name: string, types: string[], contract: PropertyContract, labels?: string[]];
+const EDITS = ["TextBox", "ComboBox"];
+const FOCUSABLE = ["TextBox", "ComboBox", "ListBox", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar", "MultiPage", "TabStrip"];
+const flag = (description: string) => p("boolean", false, "supported", description, true);
+const choice = (description: string, values: number[]) =>
+	p("integer", false, "supported", description, true, values.map(String));
+const integer = (description: string, minimum: number, maximum: number): PropertyContract => ({
+	...p("integer", false, "supported", description, true),
+	minimum,
+	maximum,
+});
+const pointsUpTo = (description: string, maximum: number): PropertyContract => ({
+	...p("number", false, "supported", description, true),
+	minimum: 0,
+	maximum,
+});
+const effects = [0, 1, 2, 3, 6];
+const effectLabels = ["Flat", "Raised", "Sunken", "Etched", "Bump"];
+const pointers = [...Array(16).keys()];
+const int32 = [-2147483648, 2147483647] as const;
+export const scalarProperties: Scalar[] = [
+	["locked", ["TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton", "CommandButton"], flag("The value cannot be changed by the user.")],
+	["backStyle", ["TextBox", "ComboBox", "CheckBox", "OptionButton", "ToggleButton", "CommandButton", "Label"], choice("Background: Transparent or Opaque.", [0, 1]), ["Transparent", "Opaque"]],
+	["integralHeight", ["TextBox", "ListBox"], flag("Shows only complete lines.")],
+	["matchRequired", ["ComboBox"], flag("The text has to match an item.")],
+	["alignment", ["CheckBox", "OptionButton"], choice("Caption at the Left or the Right of the box.", [0, 1]), ["Left", "Right"]],
+	["imeMode", ["TextBox", "ComboBox", "ListBox"], choice("IME mode.", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), ["NoControl", "On", "Off", "Disable", "Hiragana", "Katakana", "KatakanaHalf", "AlphaFull", "Alpha", "HangulFull", "Hangul"]],
+	["dragBehavior", EDITS, choice("Drag and drop of text.", [0, 1]), ["Disabled", "Enabled"]],
+	["enterKeyBehavior", ["TextBox"], flag("Enter adds a new line.")],
+	["enterFieldBehavior", EDITS, choice("On entering: select all, or keep the last selection.", [0, 1]), ["SelectAll", "RecallSelection"]],
+	["tabKeyBehavior", ["TextBox"], flag("Tab inserts a tab character.")],
+	["wordWrap", ["TextBox", "CheckBox", "OptionButton", "ToggleButton", "CommandButton", "Label"], flag("Long lines wrap.")],
+	["selectionMargin", EDITS, flag("A margin to select whole lines.")],
+	["autoWordSelect", EDITS, flag("Selection extends by whole words.")],
+	["autoSize", ["TextBox", "ComboBox", "CheckBox", "OptionButton", "ToggleButton", "CommandButton", "Label"], flag("The size follows the contents.")],
+	["hideSelection", EDITS, flag("The selection is hidden without the focus.")],
+	["autoTab", EDITS, flag("The focus moves on at MaxLength characters.")],
+	["multiLine", ["TextBox"], flag("Several lines of text.")],
+	["maxLength", EDITS, integer("Most characters; 0 for no limit.", 0, 2147483647)],
+	["scrollBars", ["TextBox"], choice("Scroll bars.", [0, 1, 2, 3]), ["None", "Horizontal", "Vertical", "Both"]],
+	["passwordChar", ["TextBox"], p("string", false, "supported", "Character shown for each character typed; empty for the text.", true)],
+	["style", ["ComboBox"], choice("DropDownCombo (text can be typed) or DropDownList (an item has to be chosen).", [0, 2]), ["DropDownCombo", "DropDownList"]],
+	["listStyle", ["ComboBox", "ListBox"], choice("List style: Plain, Option (a box beside each item).", [0, 1]), ["Plain", "Option"]],
+	["matchEntry", ["ComboBox", "ListBox"], choice("Typing selects an item: FirstLetter, Complete, None.", [0, 1, 2]), ["FirstLetter", "Complete", "None"]],
+	["showDropButtonWhen", ["ComboBox"], choice("When the drop button shows.", [0, 1, 2]), ["Never", "Focus", "Always"]],
+	["dropButtonStyle", ["ComboBox"], choice("Symbol on the drop button.", [0, 1, 2, 3]), ["Plain", "Arrow", "Ellipsis", "Reduce"]],
+	["listRows", ["ComboBox"], integer("Rows shown in the drop-down list.", 0, 32767)],
+	["listWidth", ["ComboBox"], pointsUpTo("Width of the drop-down list in points; 0 for the control's width.", 72000)],
+	["multiSelect", ["ListBox"], choice("Selection: Single, Multi, Extended.", [0, 1, 2]), ["Single", "Multi", "Extended"]],
+	["groupName", ["OptionButton"], p("string", false, "supported", "Option buttons of the same group exclude each other.", true)],
+	["specialEffect", ["TextBox", "ComboBox", "ListBox", "Label", "Image", "Frame"], choice("3D look of the edge.", effects), effectLabels],
+	["specialEffect", ["CheckBox", "OptionButton"], choice("3D look of the box.", [0, 2]), ["Flat", "Sunken"]],
+	["borderColor", ["TextBox", "ComboBox", "ListBox", "Label", "Image", "Frame"], { ...color, description: "Color of a Single border." }],
+	["cycle", ["Frame"], choice("Tab from the last control: to the next form's controls, or back to this frame's first.", [0, 2]), ["AllForms", "CurrentForm"]],
+	["mousePointer", ["Label", "TextBox", "ComboBox", "ListBox", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar", "Image", "Frame", "TabStrip"], choice("Mouse pointer over the control.", pointers), ["Default", "Arrow", "Cross", "IBeam", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "HourGlass", "NoDrop", "AppStarting", "Help", "SizeAll", "SizeAll", "Hand"]],
+	["default", ["CommandButton"], flag("Enter clicks this button.")],
+	["cancel", ["CommandButton"], flag("Esc clicks this button.")],
+	["takeFocusOnClick", ["CommandButton"], flag("Clicking moves the focus to the button.")],
+	["tabStop", FOCUSABLE, flag("Tab moves the focus to the control.")],
+	["min", ["SpinButton", "ScrollBar"], integer("Least value.", ...int32)],
+	["max", ["SpinButton", "ScrollBar"], integer("Greatest value (100 for a SpinButton, 32767 for a ScrollBar when omitted).", ...int32)],
+	["smallChange", ["SpinButton", "ScrollBar"], integer("Change of a click on an arrow.", ...int32)],
+	["largeChange", ["ScrollBar"], integer("Change of a click on the track.", ...int32)],
+	["orientation", ["SpinButton", "ScrollBar"], choice("Auto (by the shape), Vertical or Horizontal.", [-1, 0, 1]), ["Auto", "Vertical", "Horizontal"]],
+	["proportionalThumb", ["ScrollBar"], flag("The thumb's size shows the visible part.")],
+	["delay", ["SpinButton", "ScrollBar"], integer("Milliseconds between repeated changes while held.", 0, 2147483647)],
+	["style", ["TabStrip", "MultiPage"], choice("Tabs, Buttons or None.", [0, 1, 2]), ["Tabs", "Buttons", "None"]],
+	["tabOrientation", ["TabStrip", "MultiPage"], choice("Side of the tabs.", [0, 1, 2, 3]), ["Top", "Bottom", "Left", "Right"]],
+	["multiRow", ["TabStrip", "MultiPage"], flag("Tabs in several rows.")],
+	["tabFixedWidth", ["TabStrip", "MultiPage"], pointsUpTo("Width of every tab in points; 0 for each tab's own.", 7200)],
+	["tabFixedHeight", ["TabStrip", "MultiPage"], pointsUpTo("Height of the tabs in points; 0 for the font's.", 7200)],
+];
 const control = (type: string, canContainChildren: boolean, properties: Record<string, PropertyContract>): ControlContract => ({
 	type,
 	progId: `Forms.${type}.1`,
@@ -205,6 +283,8 @@ function buildControls(): Record<string, ControlContract> {
 		if (t !== "Image" && t !== "Page") contract.properties.foreColor = color;
 		if (["Label", "TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton"].includes(t)) contract.properties.textAlign = textAlign;
 		if (["Frame", "TextBox", "ComboBox", "ListBox", "Label", "Image"].includes(t)) contract.properties.borderStyle = borderStyle;
+		for (const [name, types, scalar, valueLabels] of scalarProperties)
+			if (types.includes(t)) contract.properties[name] = valueLabels ? { ...scalar, valueLabels } : scalar;
 	}
 	return controls;
 }
@@ -237,7 +317,7 @@ export function lookupProperty(properties: Record<string, PropertyContract>, nam
 	return found ? properties[found] : undefined;
 }
 
-const editorPropertyNames = ["font", "foreColor", "backColor", "picture", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode"];
+const editorPropertyNames = ["font", "foreColor", "backColor", "borderColor", "picture", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode"];
 const scalarTypes: ValueType[] = ["string", "number", "integer", "boolean", "any"];
 export const isEditorProperty = (name: string) => editorPropertyNames.includes(name);
 const isScalar = (contract: PropertyContract) => scalarTypes.includes(contract.valueType);
@@ -348,7 +428,7 @@ export function propertyDescriptor(field: string, contract: PropertyContract): P
 	if (contract.minimum !== undefined) descriptor.minimum = contract.minimum;
 	if (contract.maximum !== undefined) descriptor.maximum = contract.maximum;
 	if (contract.exclusiveMinimum) descriptor.exclusiveMinimum = true;
-	const names = labels[field];
+	const names = contract.valueLabels ?? labels[field];
 	if (names && names.length === descriptor.allowedValues?.length)
 		descriptor.suggestions = descriptor.allowedValues.map((value, index) => ({ value, label: names[index] }));
 	if (contract.children) {

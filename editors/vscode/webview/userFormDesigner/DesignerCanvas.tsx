@@ -44,7 +44,7 @@ import {
   stableDelta,
 } from "../../src/userForm/geometry";
 import type { Geometry, ResizeHandle, DropTarget } from "../../src/userForm/geometry";
-import { appearanceStyle, colorStyle } from "./propertyEditors/appearance";
+import { appearanceStyle, borderClass, colorStyle } from "./propertyEditors/appearance";
 const px = (points: number) => `${pointsToPixels(points)}px`;
 
 /** The picture of an Image, or a placeholder when there is none that can be drawn. */
@@ -82,6 +82,26 @@ function ControlPicture({ control }: { control: DesignerControl }) {
   return <span class="placeholder">▧ {name || "Image"}</span>;
 }
 
+/** Orientation Horizontal (1) or Vertical (0), else Auto: horizontal when wider than high. */
+const horizontal = (control: DesignerControl) =>
+  control.orientation === 1 || (control.orientation !== 0 && control.width >= control.height);
+
+/** Classes for the plain properties that change how a control is drawn. */
+export function scalarClasses(control: DesignerControl): string {
+  return [
+    typeof control.specialEffect === "number" ? `effect-${control.specialEffect}` : "",
+    control.backStyle === 0 ? "transparent" : "",
+    control.alignment === 0 ? "caption-left" : "",
+    control.wordWrap === false ? "no-wrap" : control.wordWrap === true ? "wrap" : "",
+    control.multiLine ? "multi-line" : "",
+    typeof control.style === "number" && ["multipage", "tabstrip"].includes(control.type.toLowerCase())
+      ? `tab-style-${control.style}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 export function ControlGlyph({ control }: { control: DesignerControl }) {
   const type = control.type.toLowerCase();
   const caption = control.caption ?? control.name;
@@ -90,43 +110,74 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "commandbutton":
     case "togglebutton":
       return <span>{caption}</span>;
-    case "textbox":
-      return <span>{control.text ?? String(control.value ?? "")}</span>;
+    case "textbox": {
+      const text = control.text ?? String(control.value ?? "");
+      // PasswordChar shows in place of every character.
+      return <span>{control.passwordChar ? control.passwordChar.repeat([...text].length) : text}</span>;
+    }
     case "checkbox":
-      return <span>☐ {caption}</span>;
-    case "optionbutton":
-      return <span>◯ {caption}</span>;
+    case "optionbutton": {
+      // MSForms draws the box at the left, vertically centred, with the caption beside it.
+      const state = control.value === true ? "checked" : control.value === null ? "mixed" : "";
+      return (
+        <>
+          <span class={`toggle-box ${type === "checkbox" ? "check" : "option"} ${state}`} aria-hidden="true" />
+          <span class="toggle-caption">{caption}</span>
+        </>
+      );
+    }
     case "combobox": {
       // Without an authored text or value, the selected list item is what the form shows.
       const authored = control.text || (control.value == null ? "" : String(control.value));
+      // The drop button shows always (what Excel gives a new ComboBox), never, or only
+      // with the focus, which a control on the design surface never has.
+      const button = (control.showDropButtonWhen ?? 2) === 2;
       return (
         <>
           <span class="combo-text">
             {authored || (control.list?.[control.selectedIndex ?? -1] ?? "")}
           </span>
-          <span class="combo-arrow" aria-hidden="true">
-            <span class="combo-chevron" />
-          </span>
+          {button && (
+            <span class="combo-arrow" aria-hidden="true">
+              {/* DropButtonStyle: Plain, Arrow, Ellipsis, Reduce. */}
+              {[null, <span class="combo-chevron" />, "…", <span class="combo-reduce" />][
+                control.dropButtonStyle ?? 1
+              ] ?? null}
+            </span>
+          )}
         </>
       );
     }
-    case "listbox":
+    case "listbox": {
+      // ListStyle Option puts a box before each item: a check box when several
+      // items can be selected, an option button when only one.
+      const box = control.listStyle === 1 ? (control.multiSelect ? "check" : "option") : undefined;
       return (
         <span class="list-items">
-          {(control.list ?? []).map((item, index) => (
-            <div
-              key={index}
-              class={index === control.selectedIndex ? "list-item selected" : "list-item"}
-            >
-              {item}
-            </div>
-          ))}
+          {(control.list ?? []).map((item, index) => {
+            const selected = index === control.selectedIndex;
+            return (
+              <div
+                key={index}
+                class={`list-item ${selected ? "selected" : ""} ${box ? "with-box" : ""}`}
+              >
+                {box && (
+                  <span
+                    class={`toggle-box ${box} ${selected ? "checked" : ""}`}
+                    aria-hidden="true"
+                  />
+                )}
+                {item}
+              </div>
+            );
+          })}
         </span>
       );
+    }
     case "spinbutton":
       return (
         <span
-          class={`spinbutton-chrome ${control.width >= control.height ? "horizontal" : "vertical"}`}
+          class={`spinbutton-chrome ${horizontal(control) ? "horizontal" : "vertical"}`}
           aria-hidden="true"
         >
           <span class="spinbutton-arrow decrement">
@@ -140,7 +191,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "scrollbar":
       return (
         <span
-          class={`scrollbar-chrome ${control.width >= control.height ? "horizontal" : "vertical"}`}
+          class={`scrollbar-chrome ${horizontal(control) ? "horizontal" : "vertical"}`}
           aria-hidden="true"
         >
           <span class="scrollbar-arrow decrement">
@@ -157,7 +208,12 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "image":
       return <ControlPicture control={control} />;
     case "frame":
-      return <span class="frame-caption">{caption}</span>;
+      return (
+        <>
+          <span class="frame-edge" aria-hidden="true" />
+          {control.caption ? <span class="frame-caption">{control.caption}</span> : null}
+        </>
+      );
     case "multipage":
       return null;
     case "page":
@@ -961,7 +1017,7 @@ export function DesignerCanvas({
       <>
         <div
           key={control.id}
-          class={`control ${type} ${control.enabled === false ? "disabled" : ""}`}
+          class={`control ${type} ${borderClass(shown)} ${scalarClasses(shown)} ${control.enabled === false ? "disabled" : ""} ${type === "frame" && control.caption ? "has-caption" : ""} ${type === "togglebutton" && control.value === true ? "pressed" : ""}`}
           data-control-id={control.id}
           title={`${control.name} (${control.type})${control.approximate ? ` — ${approximateBounds}` : ""}`}
           style={{
@@ -1237,10 +1293,15 @@ export function DesignerCanvas({
         }}
       >
         <div class="form-shell" style={{ transform: `scale(${zoom})` }}>
-          <div class="form-title">{document.caption}</div>
+          <div class="form-title">
+            <span class="form-title-text">{document.caption}</span>
+            <span class="form-title-close" aria-hidden="true">
+              ✕
+            </span>
+          </div>
           <div class="form-client-area">
             <div
-              class={`form ${showGrid ? "show-grid" : ""} ${selectedId === undefined ? "form-selected" : ""}`}
+              class={`form ${borderClass(document)} ${showGrid ? "show-grid" : ""} ${selectedId === undefined ? "form-selected" : ""}`}
               data-container-id=""
               style={{
                 ...appearanceStyle(document),

@@ -387,6 +387,61 @@ fn list_items_do_not_change_the_designer() {
 }
 
 #[test]
+fn list_properties_go_round_and_default_to_what_excel_writes() {
+    let project = |controls: &str| {
+        let text = format!(
+            r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{controls}]}}"#
+        );
+        let parsed = ras_form::parse(&text);
+        assert!(!parsed.has_errors(), "{:?}", parsed.issues);
+        let designer = ras_form::compile(parsed.spec.as_ref().unwrap(), 932).unwrap();
+        let snapshot = ras_form::project("F", &designer.streams, &designer.storages).unwrap();
+        snapshot.spec.controls
+    };
+    // A new ComboBox has a drop button and completes entries, as one Excel makes;
+    // none of these is projected, nor left unsupported.
+    let plain = project(
+        r#"{"id":"c","name":"cbo","type":"ComboBox"},{"id":"l","name":"lst","type":"ListBox","top":30}"#,
+    );
+    let keys = ["style", "multiSelect", "listStyle", "matchEntry", "showDropButtonWhen", "listRows"];
+    for control in &plain {
+        let json = serde_json::to_value(control).unwrap();
+        for key in keys {
+            assert!(json.get(key).is_none(), "{}: {key} = {}", control.name, json[key]);
+        }
+        let unsupported = control.unsupported.clone().unwrap_or_default();
+        assert!(!unsupported.iter().any(|u| keys.contains(&u.as_str())), "{unsupported:?}");
+    }
+    let set = project(
+        r#"{"id":"c","name":"cbo","type":"ComboBox","style":2,"listStyle":1,"matchEntry":0,"showDropButtonWhen":1,"listRows":4},
+           {"id":"l","name":"lst","type":"ListBox","top":30,"multiSelect":2,"listStyle":1,"matchEntry":2}"#,
+    );
+    let (combo, list) = (&set[0], &set[1]);
+    let values = |c: &ras_form::FormSpecControl, names: &[&str]| -> Vec<Value> {
+        names.iter().map(|n| c.scalar(n).cloned().unwrap_or(Value::Null)).collect()
+    };
+    assert_eq!(
+        values(combo, &["style", "listStyle", "matchEntry", "showDropButtonWhen", "listRows"]),
+        [2, 1, 0, 1, 4].map(Value::from)
+    );
+    assert_eq!(values(list, &["multiSelect", "listStyle", "matchEntry"]), [2, 1, 2].map(Value::from));
+
+    // Each belongs to its control type only.
+    for bad in [
+        r#"{"id":"t","name":"txt","type":"TextBox","style":2}"#,
+        r#"{"id":"c","name":"cbo","type":"ComboBox","multiSelect":1}"#,
+        r#"{"id":"l","name":"lst","type":"ListBox","showDropButtonWhen":0}"#,
+        r#"{"id":"c","name":"cbo","type":"ComboBox","style":1}"#,
+        r#"{"id":"c","name":"cbo","type":"ComboBox","listRows":-1}"#,
+    ] {
+        let text = format!(
+            r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{bad}]}}"#
+        );
+        assert!(ras_form::parse(&text).has_errors(), "{bad}");
+    }
+}
+
+#[test]
 fn a_storage_that_is_not_a_designer_is_refused() {
     let mut source = form("mutation", "MutationForm");
     let f = source.streams.get_mut("f").unwrap();

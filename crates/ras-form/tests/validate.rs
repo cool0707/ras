@@ -167,3 +167,28 @@ fn round_trip_keeps_unknown_free_json() {
         ras_form::compile(&again, 932).unwrap()
     );
 }
+
+#[test]
+fn an_edit_field_lower_than_its_font_is_warned_about() {
+    let warnings = |control: &str| -> Vec<String> {
+        ras_form::parse(&doc(r#"{"name":"F"}"#, &format!("[{control}]")))
+            .issues
+            .into_iter()
+            .filter(|i| i.severity == ras_form::Severity::Warning && i.code == "UFV022")
+            .map(|i| i.field)
+            .collect()
+    };
+    // 9pt MS UI Gothic (no font written) needs 13.5pt.
+    assert!(warnings(r#"{"id":"t","name":"t","type":"TextBox","height":18}"#).is_empty());
+    assert_eq!(warnings(r#"{"id":"t","name":"t","type":"TextBox","height":12}"#), ["controls[0].height"]);
+    // 16pt Meiryo UI needs 26.25pt, as the Designer computes.
+    let meiryo = r#""font":{"name":"Meiryo UI","size":16}"#;
+    assert_eq!(
+        warnings(&format!(r#"{{"id":"c","name":"c","type":"ComboBox","height":26,{meiryo}}}"#)),
+        ["controls[0].height"]
+    );
+    assert!(warnings(&format!(r#"{{"id":"c","name":"c","type":"ComboBox","height":26.25,{meiryo}}}"#)).is_empty());
+    // Not an edit field, or several lines: no warning.
+    assert!(warnings(&format!(r#"{{"id":"l","name":"l","type":"Label","height":5,{meiryo}}}"#)).is_empty());
+    assert!(warnings(r#"{"id":"t","name":"t","type":"TextBox","height":5,"properties":{"multiLine":true}}"#).is_empty());
+}

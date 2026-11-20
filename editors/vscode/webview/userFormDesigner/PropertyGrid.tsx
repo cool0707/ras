@@ -34,11 +34,50 @@ const categories = {
     "picture",
     "pictureAlignment",
     "pictureSizeMode",
+    "backStyle",
+    "specialEffect",
+    "borderColor",
+    "alignment",
+    "wordWrap",
+    "autoSize",
+    "multiLine",
+    "scrollBars",
+    "passwordChar",
+    "style",
+    "listStyle",
+    "tabOrientation",
+    "multiRow",
+    "tabFixedWidth",
+    "tabFixedHeight",
+    "orientation",
     "controlTipText",
   ],
   layout: ["left", "top", "width", "height"],
-  behavior: ["enabled", "visible"],
-  navigation: ["tabIndex", "selectedIndex", "accelerator"],
+  behavior: [
+    "enabled",
+    "visible",
+    "locked",
+    "default",
+    "cancel",
+    "takeFocusOnClick",
+    "groupName",
+    "maxLength",
+    "multiSelect",
+    "matchEntry",
+    "matchRequired",
+    "showDropButtonWhen",
+    "dropButtonStyle",
+    "listRows",
+    "listWidth",
+    "min",
+    "max",
+    "smallChange",
+    "largeChange",
+    "enterKeyBehavior",
+    "tabKeyBehavior",
+    "imeMode",
+  ],
+  navigation: ["tabIndex", "tabStop", "selectedIndex", "accelerator", "cycle"],
   advanced: [],
 } as const;
 type Category = keyof typeof categories;
@@ -241,7 +280,7 @@ function PropertyRow({ descriptor, ...props }: Props & { descriptor: PropertyDes
   const disabled = !editable || busy;
   // VBE property names are identifiers and stay English in every UI language.
   const fieldLabel =
-    designerStrings[labels[descriptor.field]] ?? objectLabels[descriptor.field] ?? descriptor.field;
+    designerStrings[labels[descriptor.field]] ?? objectLabels[descriptor.field] ?? vbaName(descriptor.field);
   // Source null remains intact until a concrete edit. It is an input hint,
   // never an authorable Designer value or a reason to hide the actual editor.
   const unconfigured = (!source?.present || source.value === null) && !draft.dirty;
@@ -370,11 +409,13 @@ const objectLabels: Record<string, string> = {
   textAlign: "TextAlign",
   borderStyle: "BorderStyle",
 };
+/** The VBA name of a field (`wordWrap` → `WordWrap`), for fields without a label of their own. */
+const vbaName = (field: string) => field.charAt(0).toUpperCase() + field.slice(1);
 function ObjectPropertyRow(props: Props & { descriptor: PropertyDescriptor }) {
   const { descriptor, target, strings } = props;
   const state = target.values[descriptor.field];
   const value = objectValue(state?.value);
-  const label = objectLabels[descriptor.field] ?? descriptor.field;
+  const label = objectLabels[descriptor.field] ?? vbaName(descriptor.field);
   const summary = !state?.present
     ? strings.unset
     : state.value === null

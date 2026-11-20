@@ -92,8 +92,7 @@
         "enabled": true,
         "visible": true,
         "unsupported": [
-          "logicalSize",
-          "specialEffect"
+          "logicalSize"
         ]
       },
       {
@@ -158,8 +157,7 @@
         "visible": true,
         "unsupported": [
           "opaqueRecordTail",
-          "textProps",
-          "variousPropertyBits"
+          "textProps"
         ],
         "tabs": [
           {

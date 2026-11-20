@@ -178,6 +178,24 @@ pub struct FormSpecControl {
     #[allow(missing_docs)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture_size_mode: Option<i64>,
+    /// The plain properties of the control (`locked`, `wordWrap`, `style`,
+    /// `multiSelect`, `min`, `default` ...), by FormSpec name. Which exist for a
+    /// control type, and their values, are those of the VBA properties of the
+    /// same name. Other fields of the JSON object are kept here as well, so
+    /// that validation can report them.
+    #[serde(flatten)]
+    pub scalars: Map<String, Value>,
+}
+
+impl FormSpecControl {
+    /// The plain property `name` (`multiSelect` ...), if written.
+    pub fn scalar(&self, name: &str) -> Option<&Value> {
+        self.scalars
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v)
+            .filter(|v| !v.is_null())
+    }
 }
 
 fn non_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {

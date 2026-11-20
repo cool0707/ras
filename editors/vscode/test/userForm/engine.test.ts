@@ -63,6 +63,101 @@ describe("FormSpec editing", () => {
 		assert.deepEqual(json(text).controls, []);
 	});
 
+	it("edits the list properties of a ComboBox and a ListBox", () => {
+		const combo = { id: "c1", name: "ComboBox1", type: "ComboBox", left: 8, top: 8, width: 120, height: 18 };
+		const list = { id: "b1", name: "ListBox1", type: "ListBox", left: 8, top: 40, width: 120, height: 72 };
+		let text = form([combo, list]);
+		text = apply(
+			text,
+			{ type: "setControlProperty", controlId: "c1", field: "style", value: 2 },
+			{ type: "setControlProperty", controlId: "c1", field: "showDropButtonWhen", value: 1 },
+			{ type: "setControlProperty", controlId: "c1", field: "listRows", value: 12 },
+			{ type: "setControlProperty", controlId: "b1", field: "multiSelect", value: 1 },
+			{ type: "setControlProperty", controlId: "b1", field: "listStyle", value: 1 },
+		);
+		assert.deepEqual(
+			[control(text, "c1").style, control(text, "c1").showDropButtonWhen, control(text, "c1").listRows],
+			[2, 1, 12],
+		);
+		assert.deepEqual([control(text, "b1").multiSelect, control(text, "b1").listStyle], [1, 1]);
+		rejects(text, [{ type: "setControlProperty", controlId: "c1", field: "style", value: 1 }], "UFE003");
+		rejects(text, [{ type: "setControlProperty", controlId: "c1", field: "multiSelect", value: 1 }], "UFE005");
+		rejects(text, [{ type: "setControlProperty", controlId: "b1", field: "showDropButtonWhen", value: 0 }], "UFE005");
+		const grid = propertyGrid((parseSpec(text) as any).spec);
+		const style = grid.controls.c1.descriptors.find((d) => d.field === "style");
+		assert.deepEqual(style?.suggestions, [
+			{ value: "0", label: "DropDownCombo" },
+			{ value: "2", label: "DropDownList" },
+		]);
+		assert.equal(previewDocument((parseSpec(text) as any).spec).controls[0].style, 2);
+	});
+
+	it("edits the plain properties of each control type", () => {
+		const controls = [
+			{ id: "t1", name: "TextBox1", type: "TextBox", left: 8, top: 8, width: 120, height: 18 },
+			{ id: "b1", name: "OK", type: "CommandButton", left: 8, top: 30, width: 72, height: 24 },
+			{ id: "s1", name: "Spin1", type: "SpinButton", left: 140, top: 8, width: 18, height: 36 },
+			{ id: "x1", name: "Tabs1", type: "TabStrip", left: 8, top: 60, width: 200, height: 60 },
+			{ id: "k1", name: "Check1", type: "CheckBox", left: 140, top: 50, width: 72, height: 18 },
+		];
+		let text = form(controls);
+		const set = (controlId: string, field: string, value: unknown): SemanticOperation => ({ type: "setControlProperty", controlId, field, value });
+		text = apply(
+			text,
+			set("t1", "locked", true),
+			set("t1", "passwordChar", "*"),
+			set("t1", "specialEffect", 0),
+			set("t1", "borderColor", { kind: "rgb", value: "#FF0000" }),
+			set("b1", "default", true),
+			set("b1", "takeFocusOnClick", false),
+			set("s1", "min", 10),
+			set("s1", "max", 20),
+			set("s1", "value", 15),
+			set("x1", "style", 1),
+			set("x1", "tabOrientation", 1),
+			set("k1", "alignment", 0),
+		);
+		assert.deepEqual(
+			[control(text, "t1").locked, control(text, "t1").passwordChar, control(text, "b1").default, control(text, "s1").value, control(text, "x1").style],
+			[true, "*", true, 15, 1],
+		);
+		// Values outside what the property takes, and properties of other types, are refused.
+		rejects(text, [set("t1", "specialEffect", 4)], "UFE003");
+		rejects(text, [set("s1", "value", 30)], "UFV021");
+		rejects(text, [set("t1", "passwordChar", "**")], "UFV021");
+		rejects(text, [set("b1", "multiLine", true)], "UFE005");
+		rejects(text, [set("k1", "style", 2)], "UFE005");
+		// The grid labels values by their VBA constants, per control type.
+		const grid = propertyGrid((parseSpec(text) as any).spec);
+		const labels = (id: string, field: string) =>
+			grid.controls[id].descriptors.find((d) => d.field === field)?.suggestions?.map((s) => s.label);
+		assert.deepEqual(labels("x1", "style"), ["Tabs", "Buttons", "None"]);
+		assert.deepEqual(labels("k1", "alignment"), ["Left", "Right"]);
+		assert.deepEqual(labels("t1", "specialEffect"), ["Flat", "Raised", "Sunken", "Etched", "Bump"]);
+	});
+
+	it("raises a TextBox to the height its font needs, but only where the edit touched", () => {
+		const low = { id: "t0", name: "Untouched", type: "TextBox", left: 8, top: 60, width: 120, height: 12 };
+		let text = form([{ id: "t1", name: "TextBox1", type: "TextBox", left: 8, top: 8, width: 120, height: 18 }, low]);
+		// 9pt MS UI Gothic fits in 18pt; 16pt Meiryo UI needs 16 × 1.33 + 4.5 = 25.78 → 26.25pt (35 px).
+		text = apply(text, { type: "setControlProperty", controlId: "t1", field: "font", value: { name: "Meiryo UI", size: 16 } });
+		assert.equal(control(text, "t1").height, 26.25);
+		text = apply(text, { type: "resizeControl", controlId: "t1", width: 120, height: 10 });
+		assert.equal(control(text, "t1").height, 26.25);
+		text = apply(text, { type: "resizeControl", controlId: "t1", width: 120, height: 40 });
+		assert.equal(control(text, "t1").height, 40);
+		// A control the edit did not touch keeps its height; validation warns about it.
+		assert.equal(control(text, "t0").height, 12);
+		const warnings = problems((parseSpec(text) as any).spec).filter((p) => p.code === "UFV022");
+		assert.deepEqual(
+			warnings.map((p) => [p.severity, p.field]),
+			[["warning", "controls[1].height"]],
+		);
+		// Labels are not edit fields.
+		text = apply(form([label]), { type: "setControlProperty", controlId: "l1", field: "font", value: { name: "Meiryo UI", size: 20 } });
+		assert.equal(control(text, "l1").height, 18);
+	});
+
 	it("moves controls between parents and refuses invalid containers", () => {
 		let text = form([frame, label]);
 		text = apply(text, { type: "setParent", controlId: "l1", parentId: "f1", left: 2, top: 3 });

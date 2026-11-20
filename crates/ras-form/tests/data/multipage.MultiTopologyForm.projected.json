@@ -92,8 +92,7 @@
         "enabled": true,
         "visible": true,
         "unsupported": [
-          "logicalSize",
-          "specialEffect"
+          "logicalSize"
         ]
       },
       {

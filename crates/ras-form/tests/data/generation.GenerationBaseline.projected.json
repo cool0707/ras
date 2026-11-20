@@ -191,10 +191,7 @@
         "enabled": true,
         "visible": true,
         "unsupported": [
-          "matchEntry",
-          "showDropButtonWhen",
-          "textProps",
-          "variousPropertyBits"
+          "textProps"
         ]
       },
       {
@@ -216,8 +213,6 @@
         "enabled": true,
         "visible": true,
         "unsupported": [
-          "matchEntry",
-          "scrollBars",
           "textProps"
         ]
       },
@@ -233,10 +228,7 @@
         "height": 36,
         "tabIndex": 8,
         "enabled": true,
-        "visible": true,
-        "unsupported": [
-          "orientation"
-        ]
+        "visible": true
       },
       {
         "id": "control_010",
@@ -250,10 +242,7 @@
         "height": 18,
         "tabIndex": 9,
         "enabled": true,
-        "visible": true,
-        "unsupported": [
-          "orientation"
-        ]
+        "visible": true
       },
       {
         "id": "control_011",
@@ -314,16 +303,6 @@
         "code": "unsupported_properties",
         "message": "Unsupported Designer properties were preserved only in the binary model: matchEntry, scrollBars, textProps.",
         "control": "ListBoxMain"
-      },
-      {
-        "code": "unsupported_properties",
-        "message": "Unsupported Designer properties were preserved only in the binary model: orientation.",
-        "control": "SpinButtonMain"
-      },
-      {
-        "code": "unsupported_properties",
-        "message": "Unsupported Designer properties were preserved only in the binary model: orientation.",
-        "control": "ScrollBarMain"
       }
     ]
   }
