@@ -90,7 +90,7 @@ pub fn fn_at(prog: &Program, m: ModuleId, offset: u32) -> Option<FnId> {
     best.map(|b| b.0).or(md.main_fn).or(md.init_fn)
 }
 
-fn vba_type(t: &Type) -> Option<&'static str> {
+pub(crate) fn vba_type(t: &Type) -> Option<&'static str> {
     Some(match t {
         Type::Byte => "Byte",
         Type::Short => "Integer",
@@ -129,27 +129,29 @@ pub fn signature(prog: &Program, f: FnId) -> String {
         s.push('>');
     }
     s.push('(');
-    let ps: Vec<String> = d
-        .params
-        .iter()
-        .map(|p| {
-            let mut t = String::new();
-            if p.mode == PassMode::ByRef {
-                t.push_str("byref ");
-            }
-            t.push_str(if d.locals.get(p.local).is_some_and(|l| l.kind == LocalKind::This) { "this" } else { &p.name });
-            if p.optional || p.default.is_some() {
-                t.push('?');
-            }
-            t.push_str(": ");
-            t.push_str(&prog.show(&p.ty));
-            t
-        })
-        .collect();
+    let ps: Vec<String> = d.params.iter().map(|p| param_text(prog, d, p)).collect();
     s.push_str(&ps.join(", "));
     s.push_str("): ");
     s.push_str(&prog.show(&d.ret_ty()));
     s
+}
+
+/// `byref name?: type` of one parameter.
+fn param_text(prog: &Program, d: &FnDef, p: &ParamDef) -> String {
+    let mut t = String::new();
+    if p.mode == PassMode::ByRef {
+        t.push_str("byref ");
+    }
+    if p.rest {
+        t.push_str("...");
+    }
+    t.push_str(if d.locals.get(p.local).is_some_and(|l| l.kind == LocalKind::This) { "this" } else { &p.name });
+    if p.optional || p.default.is_some() {
+        t.push('?');
+    }
+    t.push_str(": ");
+    t.push_str(&prog.show(&p.ty));
+    t
 }
 
 pub struct Hover {
@@ -318,10 +320,13 @@ pub struct Completion {
     pub insert: Option<String>,
     /// Text the editor filters on instead of the label.
     pub filter: Option<String>,
+    /// The `import` that makes the name visible, inserted when the item is accepted (an
+    /// export of a module that is not imported yet, spec §16.2.1).
+    pub import: Option<(Span, String)>,
 }
 
 fn item(label: &str, kind: u32, detail: impl Into<String>, doc: Option<&String>, sort: u8) -> Completion {
-    Completion { label: label.to_string(), kind, detail: detail.into(), doc: doc.cloned(), sort, insert: None, filter: None }
+    Completion { label: label.to_string(), kind, detail: detail.into(), doc: doc.cloned(), sort, insert: None, filter: None, import: None }
 }
 
 fn sym_item(prog: &Program, name: &str, sym: &Sym, sort: u8) -> Option<Completion> {
@@ -439,11 +444,138 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
                 out.push(item(&d.name, kind::METHOD, format!("(拡張) {}", signature(prog, f)), d.doc.as_ref(), 1));
             }
         }
+        // Extension methods of modules not imported yet: accepting one adds the import.
+        for (t, name, sym) in importable(prog, m) {
+            let Sym::Fn(f) = sym else { continue };
+            let d = &prog.fns[*f];
+            let Some(p0) = d.params.first().filter(|_| d.is_extension) else { continue };
+            if prog.modules[m].ext_methods.contains(f) || out.iter().any(|o| o.label == *name) {
+                continue;
+            }
+            let fits = p0.ty == *ty || (p0.ty.contains_param() && p0.ty.is_array() == ty.is_array()) || matches!((&p0.ty, ty), (Type::Class(a, _), Type::Class(b, _)) if prog.class_conforms(*b, *a));
+            if fits {
+                let source = import_source(prog, m, t);
+                let mut c = item(name, kind::METHOD, format!("(拡張) {}  — \"{source}\" からインポート", signature(prog, *f)), d.doc.as_ref(), 2);
+                c.import = import_edit(prog, m, t, name);
+                out.push(c);
+            }
+        }
     }
     out
 }
 
-const KEYWORDS: &[&str] = &[
+/// The exports of the other project modules that module `m` can import: (module, name, symbol).
+fn importable(prog: &Program, m: ModuleId) -> Vec<(ModuleId, &String, &Sym)> {
+    let mut out = Vec::new();
+    for (t, md) in prog.modules.iter().enumerate() {
+        if t == m || md.kind != ModuleKind::User || md.key.starts_with(crate::collect::FORM_KEY_PREFIX) {
+            continue;
+        }
+        for (name, sym) in &md.exports {
+            if !matches!(sym, Sym::Module(_) | Sym::Namespace(_)) {
+                out.push((t, name, sym));
+            }
+        }
+    }
+    out.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
+    out
+}
+
+/// The path module `m` imports module `t` by: `./util`, `../lib/str`.
+pub fn import_source(prog: &Program, m: ModuleId, t: ModuleId) -> String {
+    let from: Vec<&str> = prog.modules[m].key.split('/').collect();
+    let from = &from[..from.len() - 1];
+    let to: Vec<&str> = prog.modules[t].key.split('/').collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count().min(to.len() - 1);
+    let ups = from.len() - common;
+    let rest = to[common..].join("/");
+    if ups == 0 {
+        format!("./{rest}")
+    } else {
+        format!("{}{rest}", "../".repeat(ups))
+    }
+}
+
+/// The edit that imports `name` from module `t` into module `m`: added to an existing
+/// `import { … } from` of that module, or a new `import` line after the others.
+pub fn import_edit(prog: &Program, m: ModuleId, t: ModuleId, name: &str) -> Option<(Span, String)> {
+    let md = &prog.modules[m];
+    let imports: Vec<&ast::Import> = md.ast.items.iter().filter_map(|i| if let Item::Import(imp) = i { Some(imp) } else { None }).collect();
+    for imp in &imports {
+        if crate::collect::import_target(prog, m, &imp.source) != Some(t) {
+            continue;
+        }
+        if let Some(last) = imp.names.last() {
+            let end = last.alias.as_ref().unwrap_or(&last.name).span.end();
+            return Some((Span::empty(end), format!(", {name}")));
+        }
+    }
+    let line = format!("import {{ {name} }} from \"{}\";\n", import_source(prog, m, t));
+    let at = match imports.last() {
+        // The start of the line after the last import.
+        Some(last) => {
+            let end = u32::from(last.span.end()) as usize;
+            md.text[end..].find('\n').map(|i| end + i + 1).unwrap_or(md.text.len())
+        }
+        None => 0,
+    };
+    let text = if at == md.text.len() && !md.text.is_empty() && !md.text.ends_with('\n') { format!("\n{line}") } else { line };
+    Some((Span::empty((at as u32).into()), text))
+}
+
+/// A quick fix that imports a name the module uses without importing it.
+pub struct ImportFix {
+    pub title: String,
+    pub span: Span,
+    pub text: String,
+}
+
+/// Imports for the names in `from..=to` that are not found (`E0201` names, `E0170` types,
+/// `E0202` members that an extension method of another module would provide).
+pub fn import_fixes(prog: &Program, m: ModuleId, from: u32, to: u32) -> Vec<ImportFix> {
+    let md = &prog.modules[m];
+    let mut out: Vec<ImportFix> = Vec::new();
+    for d in prog.diagnostics.iter().filter(|d| d.module == Some(m) && matches!(d.code, "E0201" | "E0170" | "E0202")) {
+        let (s, e) = (u32::from(d.span.start()), u32::from(d.span.end()));
+        if e < from || to < s {
+            continue;
+        }
+        let written = md.text.get(s as usize..e as usize).unwrap_or("");
+        // The name: the identifier the span starts with (a type) or ends with (a member).
+        let ident = |t: &str| t.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !t.is_empty();
+        let name = match d.code {
+            "E0170" if d.message.starts_with("型 `") => written.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).next().unwrap_or(""),
+            "E0201" => written,
+            "E0202" => written,
+            _ => continue,
+        };
+        if !ident(name) {
+            continue;
+        }
+        for (t, n, sym) in importable(prog, m) {
+            if n != name {
+                continue;
+            }
+            let is_ext = matches!(sym, Sym::Fn(f) if prog.fns[*f].is_extension);
+            let wanted = match d.code {
+                "E0201" => matches!(sym, Sym::Fn(_) | Sym::Var(_) | Sym::Class(_) | Sym::Enum(_)) && !is_ext,
+                "E0170" => matches!(sym, Sym::Class(_) | Sym::Enum(_) | Sym::Struct(_) | Sym::Alias(_)),
+                _ => is_ext,
+            };
+            if !wanted {
+                continue;
+            }
+            let Some((span, text)) = import_edit(prog, m, t, name) else { continue };
+            let title = format!("\"{}\" から `{name}` をインポート", import_source(prog, m, t));
+            if !out.iter().any(|o| o.title == title) {
+                out.push(ImportFix { title, span, text });
+            }
+        }
+    }
+    out
+}
+
+pub(crate) const KEYWORDS: &[&str] = &[
     "let", "const", "function", "return", "if", "else", "for", "of", "while", "do", "break", "continue", "switch", "case", "default",
     "try", "catch", "finally", "throw", "new", "class", "interface", "enum", "implements", "import", "export", "from", "as", "this",
     "null", "true", "false", "byref", "byval", "inline", "noinline", "resume", "using", "declare", "instanceof", "typeof",
@@ -471,6 +603,14 @@ fn arg_list_at(text: &str, p: usize) -> Option<(usize, Vec<&str>)> {
     if !before.ends_with('(') && !before.ends_with(',') {
         return None;
     }
+    let (paren, mut args) = enclosing_args(text, p)?;
+    args.pop(); // the argument being typed
+    Some((paren, args))
+}
+
+/// The unclosed `(` before `p` and the arguments written after it up to `p`, the one being
+/// typed last.
+fn enclosing_args(text: &str, p: usize) -> Option<(usize, Vec<&str>)> {
     // Walk back to the unclosed `(`, splitting the arguments at the top-level commas.
     let bytes = text.as_bytes();
     let mut depth = 0usize;
@@ -485,10 +625,10 @@ fn arg_list_at(text: &str, p: usize) -> Option<(usize, Vec<&str>)> {
             b'(' => {
                 args.push(&text[i + 1..end]);
                 args.reverse();
-                args.pop(); // the argument being typed
                 return Some((i, args));
             }
-            b'[' | b'{' | b';' => return None,
+            b'[' | b'{' => return None,
+            b';' if depth == 0 => return None,
             b',' if depth == 0 => {
                 args.push(&text[i + 1..end]);
                 end = i;
@@ -577,6 +717,7 @@ fn named_arg_items(prog: &Program, m: ModuleId, p: usize) -> Option<(Vec<Complet
             sort: 0,
             insert: Some(format!("{}: ", pd.name)),
             filter: Some(pd.name.clone()),
+            import: None,
         });
     }
     Some((out, !names.is_empty()))
@@ -587,6 +728,169 @@ pub fn named_arg_completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Co
     let text: &str = &prog.modules[m].text;
     let offset = (offset as usize).min(text.len());
     named_arg_items(prog, m, ident_start(text, offset)).map(|x| x.0).unwrap_or_default()
+}
+
+/// A documentation comment without its `@param` lines, and the description of each parameter.
+pub fn split_doc(doc: &str) -> (String, Vec<(String, String)>) {
+    let mut body: Vec<&str> = Vec::new();
+    let mut params: Vec<(String, String)> = Vec::new();
+    let mut open = false;
+    for line in doc.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("@param") {
+            let mut rest = rest.trim_start();
+            // JSDoc type annotations (`{string}`) are ignored.
+            if rest.starts_with('{') {
+                rest = rest.split_once('}').map(|x| x.1).unwrap_or("").trim_start();
+            }
+            let (name, desc) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            // `[name]` / `[name=default]`: an optional parameter.
+            let name = name.trim_start_matches('[').split(['=', ']']).next().unwrap_or("");
+            let desc = desc.trim_start();
+            let desc = desc.strip_prefix("- ").unwrap_or(desc);
+            params.push((name.to_string(), desc.to_string()));
+            open = true;
+        } else if open && !t.is_empty() && !t.starts_with('@') {
+            let last = params.last_mut().unwrap();
+            if !last.1.is_empty() {
+                last.1.push(' ');
+            }
+            last.1.push_str(t);
+        } else {
+            open = false;
+            body.push(line);
+        }
+    }
+    (body.join("\n").trim().to_string(), params)
+}
+
+/// Parameter information for a call (`textDocument/signatureHelp`).
+pub struct SignatureHelp {
+    /// `name(a: int, b?: string): boolean`
+    pub label: String,
+    pub doc: Option<String>,
+    /// Per parameter: its range in the label in UTF-16 code units, and its `@param` description.
+    pub params: Vec<((u32, u32), Option<String>)>,
+    /// The parameter of the argument at the cursor (`None` when it cannot be told: a
+    /// positional argument after a named one).
+    pub active: Option<u32>,
+}
+
+/// The signature of the call whose argument list `offset` is in, with the parameter being
+/// written (spec §16.2). Works on the text, like named-argument completion.
+pub fn signature_help(prog: &Program, m: ModuleId, offset: u32) -> Option<SignatureHelp> {
+    let text: &str = &prog.modules[m].text;
+    let (paren, args) = enclosing_args(text, (offset as usize).min(text.len()))?;
+    let (f, skip) = callee_at(prog, m, paren as u32)?;
+    let d = &prog.fns[f];
+    let (current, before) = args.split_last()?;
+    let utf16 = |s: &str| s.encode_utf16().count() as u32;
+    let mut label = String::new();
+    match d.kind {
+        FnKind::Ctor { class } => {
+            label.push_str("new ");
+            label.push_str(&prog.class_display(class));
+        }
+        _ => label.push_str(if d.name.is_empty() { "(既定メンバー)" } else { &d.name }),
+    }
+    if !d.type_params.is_empty() {
+        label.push('<');
+        label.push_str(&d.type_params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", "));
+        label.push('>');
+    }
+    label.push('(');
+    let (body, pdocs) = d.doc.as_deref().map(split_doc).unwrap_or_default();
+    let mut params = Vec::new();
+    for (i, pd) in d.params.iter().enumerate().skip(skip) {
+        if i > skip {
+            label.push_str(", ");
+        }
+        let start = utf16(&label);
+        label.push_str(&param_text(prog, d, pd));
+        let doc = pdocs.iter().find(|(n, _)| *n == pd.name).map(|x| x.1.clone()).filter(|s| !s.is_empty());
+        params.push(((start, utf16(&label)), doc));
+    }
+    label.push(')');
+    if !matches!(d.kind, FnKind::Ctor { .. }) {
+        label.push_str(": ");
+        label.push_str(&prog.show(&d.ret_ty()));
+    }
+    let shown = d.params.len() - skip;
+    let active = match arg_name(current) {
+        Some(n) => d.params.iter().skip(skip).position(|p| p.name == n),
+        // Positional after a named argument: a mistake, no parameter to show.
+        None if before.iter().any(|a| arg_name(a).is_some()) => None,
+        None if before.len() < shown => Some(before.len()),
+        None if d.params.last().is_some_and(|p| p.rest) => Some(shown - 1),
+        None => None,
+    };
+    let mut doc = body;
+    if skip == 1 {
+        let recv = prog.show(&d.params[0].ty);
+        let md = &prog.modules[d.module];
+        doc = format!("（拡張メソッド: `{recv}` に対する `{}` の関数）\n\n{doc}", md.key).trim_end().to_string();
+    }
+    Some(SignatureHelp { label, doc: (!doc.is_empty()).then_some(doc), params, active: active.map(|a| a as u32) })
+}
+
+/// The declaration of the type of what is named at `offset` (`textDocument/typeDefinition`).
+pub fn type_definition(prog: &Program, m: ModuleId, offset: u32) -> Option<(ModuleId, Span)> {
+    use crate::refs::Target;
+    let (target, _) = crate::refs::target_at(prog, m, offset)?;
+    let ty = match &target {
+        Target::Local { func, local } => prog.fns[*func].locals[*local].ty.clone(),
+        Target::Global(v) => prog.vars[*v].ty.clone(),
+        Target::Fn(f) => match prog.fns[*f].kind {
+            FnKind::Setter { .. } => prog.fns[*f].params.first().map(|p| p.ty.clone()).unwrap_or(Type::Void),
+            FnKind::Ctor { class } => Type::Class(class, Vec::new()),
+            _ => prog.fns[*f].ret_ty(),
+        },
+        Target::Field(c, i) => prog.classes[*c].fields[*i].ty.clone(),
+        Target::StructField(s, i) => prog.structs[*s].fields[*i].1.clone(),
+        Target::Class(c) => Type::Class(*c, Vec::new()),
+        Target::Enum(e) | Target::EnumMember(e, _) => Type::Enum(*e),
+        Target::Struct(s) => Type::Struct(*s),
+        Target::Alias { .. } => return None,
+    };
+    let mut t = &ty;
+    loop {
+        t = match t {
+            Type::Array(e) => e,
+            Type::Map(_, v) => v,
+            _ => break,
+        };
+    }
+    match t {
+        Type::Class(c, _) | Type::Ns(NsRef::Class(c)) => Some((prog.classes[*c].module, prog.classes[*c].name_span)),
+        Type::Enum(e) | Type::Ns(NsRef::Enum(e)) => Some((prog.enums[*e].module, prog.enums[*e].name_span)),
+        Type::Struct(s) if prog.structs[*s].kind == StructKind::Named => Some((prog.structs[*s].module, prog.structs[*s].name_span)),
+        _ => None,
+    }
+}
+
+/// `query` matches `name` when its characters appear in it in order, ignoring case.
+fn fuzzy(name: &str, query: &str) -> bool {
+    let mut chars = name.chars().flat_map(char::to_lowercase);
+    query.chars().flat_map(char::to_lowercase).all(|q| chars.any(|c| c == q))
+}
+
+/// The declarations of the project's modules whose name matches `query`
+/// (`workspace/symbol`): (module, symbol, name of the enclosing class).
+pub fn workspace_symbols(prog: &Program, query: &str) -> Vec<(ModuleId, Symbol, Option<String>)> {
+    let mut out = Vec::new();
+    for md in prog.modules.iter().filter(|md| md.kind == ModuleKind::User) {
+        for mut s in symbols(prog, md.id) {
+            for c in std::mem::take(&mut s.children) {
+                if fuzzy(&c.name, query) {
+                    out.push((md.id, c, Some(s.name.clone())));
+                }
+            }
+            if fuzzy(&s.name, query) {
+                out.push((md.id, s, None));
+            }
+        }
+    }
+    out
 }
 
 pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> {
@@ -637,6 +941,19 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
     for (n, s) in &prog.globals {
         if !md.scope.contains_key(n) {
             out.extend(sym_item(prog, n, s, 3));
+        }
+    }
+    // Exports of modules not imported yet (spec §16.2.1): accepting one adds the import.
+    let mut offered: Vec<&str> = Vec::new();
+    for (t, name, sym) in importable(prog, m) {
+        if md.scope.contains_key(name) || offered.contains(&name.as_str()) || matches!(sym, Sym::Fn(f) if prog.fns[*f].is_extension) {
+            continue;
+        }
+        if let Some(mut c) = sym_item(prog, name, sym, 3) {
+            c.detail = format!("{}  — \"{}\" からインポート", c.detail, import_source(prog, m, t));
+            c.import = import_edit(prog, m, t, name);
+            offered.push(name);
+            out.push(c);
         }
     }
     for ns in prog.namespaces.keys() {
