@@ -15,7 +15,7 @@ export function formNameError(name: string): string | undefined {
 	return undefined;
 }
 
-function findProjectRoot(start: string | undefined): string | undefined {
+export function findProjectRoot(start: string | undefined): string | undefined {
 	for (let dir = start; dir; ) {
 		if (fs.existsSync(path.join(dir, "ras.toml"))) return dir;
 		const parent = path.dirname(dir);
@@ -25,7 +25,8 @@ function findProjectRoot(start: string | undefined): string | undefined {
 	return undefined;
 }
 
-async function projectRoot(resource?: vscode.Uri): Promise<string | undefined> {
+/** The RAS project (folder with ras.toml) a command applies to: the clicked resource's, the active editor's, else a workspace folder. */
+export async function projectRoot(resource?: vscode.Uri, placeHolder = "フォームを作成するプロジェクトを選んでください"): Promise<string | undefined> {
 	const fromResource = resource?.scheme === "file" ? findProjectRoot(resource.fsPath) : undefined;
 	if (fromResource) return fromResource;
 	const active = vscode.window.activeTextEditor?.document.uri;
@@ -35,7 +36,7 @@ async function projectRoot(resource?: vscode.Uri): Promise<string | undefined> {
 	const projects = roots.filter((root) => fs.existsSync(path.join(root, "ras.toml")));
 	const candidates = projects.length ? projects : roots;
 	if (candidates.length <= 1) return candidates[0];
-	return vscode.window.showQuickPick(candidates, { placeHolder: "フォームを作成するプロジェクトを選んでください" });
+	return vscode.window.showQuickPick(candidates, { placeHolder });
 }
 
 async function newUserForm(resource?: vscode.Uri): Promise<void> {

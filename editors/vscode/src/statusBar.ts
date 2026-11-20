@@ -13,11 +13,16 @@ interface SyncStatus {
 /** Status bar item that mirrors what the server reports; it computes nothing itself. */
 export class SyncStatusBar implements vscode.Disposable {
 	private readonly item = vscode.window.createStatusBarItem("ras.syncStatus", vscode.StatusBarAlignment.Left, 0);
+	/** "Excel で開く", right of the status while the workbook is not open (live sync needs Excel, so Windows only). */
+	private readonly openItem = vscode.window.createStatusBarItem("ras.openInExcel", vscode.StatusBarAlignment.Left, -0.001);
 	private serverState: ServerState = "stopped";
 	private status: SyncStatus | undefined;
 
 	constructor() {
 		this.item.name = "RAS 同期状態";
+		this.openItem.name = "RAS: Excel で開く";
+		this.openItem.text = "$(link-external) Excel で開く";
+		this.openItem.command = "ras.client.openInExcel";
 		this.render();
 		this.item.show();
 	}
@@ -39,11 +44,19 @@ export class SyncStatusBar implements vscode.Disposable {
 
 	dispose(): void {
 		this.item.dispose();
+		this.openItem.dispose();
 	}
 
 	private render(): void {
 		const item = this.item;
 		item.backgroundColor = undefined;
+		const showOpen = process.platform === "win32" && this.serverState === "running" && !this.status?.connected;
+		if (showOpen) {
+			this.openItem.tooltip = this.status?.workbook ? `${this.status.workbook} を Excel で開いて同期します` : "対象のブックを Excel で開いて同期します";
+			this.openItem.show();
+		} else {
+			this.openItem.hide();
+		}
 
 		if (this.serverState !== "running") {
 			const starting = this.serverState === "starting";
@@ -78,7 +91,7 @@ export class SyncStatusBar implements vscode.Disposable {
 		if (status?.message) {
 			tooltip.appendMarkdown("\n\n").appendText(status.message);
 		}
-		tooltip.appendMarkdown("\n\nクリックすると今すぐ同期します。");
+		tooltip.appendMarkdown(status?.connected ? "\n\nクリックすると今すぐ同期します。" : "\n\nクリックすると、ブックファイルへ直接書き込みます（オフライン。ブックを閉じている必要があります）。");
 
 		item.text = text;
 		item.tooltip = tooltip;

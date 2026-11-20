@@ -158,6 +158,8 @@ impl Worker {
                 Job::Sync { id, overwrite } => {
                     let result = match self.sync(overwrite) {
                         Ok(report) => json!({ "ok": true, "message": describe(&report), "drifted": report.drifted }),
+                        // No Excel has the workbook: the editor writes to the file instead (`ras pack`).
+                        Err(e @ Failure::Sync(SyncError::NotOpen(_) | SyncError::Unsupported)) => json!({ "ok": false, "offline": true, "message": e.message() }),
                         Err(e) => json!({ "ok": false, "message": e.message() }),
                     };
                     self.respond(id, result);
