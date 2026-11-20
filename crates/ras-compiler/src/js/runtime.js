@@ -1496,6 +1496,89 @@ function form(name, definition) {
     forms().register(name, definition);
 }
 
+// ---------------------------------------------------------------------------- debugger hovers
+
+/**
+ * Reads `root.a.b` of the source as the program would, for the hovers of the debugger: the
+ * generated code reads members through `get`, so evaluating the source text as JavaScript would
+ * find nothing on a host object (`sheet.name` is `undefined` on a COM object). The VS Code
+ * extension rewrites a hovered member chain into a call of this (`$rasDebugRead`).
+ * `roots`: closures reading the candidate JS names of the root; `name`: the name in the source,
+ * read as a host global (`Sheet1`, `thisWorkbook`) when no local has it.
+ */
+function debugRead(roots, name, path) {
+    let v;
+    let found = false;
+    for (const root of roots) {
+        try {
+            v = root();
+            found = true;
+            break;
+        } catch (e) {
+            if (!(e instanceof ReferenceError)) throw e;
+            // A `let` / `const` whose declaration has not run yet.
+            if (!/is not defined/.test(e.message)) return undefined;
+        }
+    }
+    if (!found) v = global(String(name).charAt(0).toUpperCase() + String(name).slice(1));
+    for (const p of path) v = get(v, p);
+    return v;
+}
+Object.defineProperty(globalThis, "$rasDebugRead", { value: debugRead, configurable: true });
+
+/** The camelCase spelling of a host member, as the RAS source writes it (`names::js_name` of the compiler). */
+function jsName(host) {
+    const run = /^[A-Z]*/.exec(host)[0].length;
+    if (run === 0) return host;
+    const lower = run > 1 && /[a-z]/.test(host.charAt(run)) ? run - 1 : run;
+    return host.slice(0, lower).toLowerCase() + host.slice(lower);
+}
+const debugMembers = new Map();
+/**
+ * What the variables view of the debugger shows for `o` (the `customPropertiesGenerator` of the
+ * debug configuration): for a COM object, its properties from the type library. Numbers,
+ * strings, booleans and enumerations are read at once; objects and `Variant`s (`value` of a
+ * range can be a whole sheet) are getters, read when expanded.
+ */
+function debugProperties(o) {
+    if (!isCom(o) || typeof o.members !== "function") return o;
+    let members;
+    try {
+        const type = o.typeName();
+        members = debugMembers.get(type);
+        if (members === undefined) {
+            members = o.members().sort((a, b) => a.name.localeCompare(b.name));
+            debugMembers.set(type, members);
+        }
+    } catch {
+        return o;
+    }
+    const out = {};
+    for (const m of members) {
+        const read = () => {
+            try {
+                return get(o, m.name);
+            } catch (e) {
+                return `<${(e && e.message) || e}>`;
+            }
+        };
+        if (m.scalar) out[jsName(m.name)] = read();
+        else Object.defineProperty(out, jsName(m.name), { get: read, enumerable: true, configurable: true });
+    }
+    return out;
+}
+/** The label of `o` in the debugger (`customDescriptionGenerator`): the class of a COM object. */
+function debugDescription(o, fallback) {
+    if (!isCom(o)) return fallback;
+    try {
+        return o.typeName();
+    } catch {
+        return fallback;
+    }
+}
+Object.defineProperty(globalThis, "$rasDebugProperties", { value: debugProperties, configurable: true });
+Object.defineProperty(globalThis, "$rasDebugDescription", { value: debugDescription, configurable: true });
+
 process.on("exit", resetAppState);
 
 module.exports = {
