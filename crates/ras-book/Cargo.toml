@@ -1,0 +1,29 @@
+[package]
+name = "ras-book"
+description = "Node addon that stands in for Excel in the RAS debug run time where there is none (the workbook of ras-workbook)"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+# No unit tests: the addon only runs inside Node (tests/excel.rs runs it there).
+test = false
+doctest = false
+
+[dependencies]
+ras-workbook = { path = "../ras-workbook" }
+napi = { version = "2", default-features = false, features = ["napi6", "serde-json"] }
+napi-derive = "2"
+serde_json = { workspace = true }
+
+[build-dependencies]
+napi-build = "2"
+
+[dev-dependencies]
+ras-workbook = { path = "../ras-workbook" }
+ras-compiler = { workspace = true }

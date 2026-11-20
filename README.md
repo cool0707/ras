@@ -37,10 +37,10 @@ Excel / VBA のメンバーとグローバルは、JavaScript の命名規則（
 
 | 成果物 | 内容 |
 |---|---|
-| `ras-windows-x64` | `ras.exe` と `ras_com.node`（Windows x64） |
-| `ras-windows-arm64` | `ras.exe` と `ras_com.node`（Windows arm64） |
-| `ras-linux-x64` | `ras`（Linux x64。ビルド・チェック・オフライン書き込み用） |
-| `ras-macos-arm64` | `ras`（macOS arm64。同上） |
+| `ras-windows-x64` | `ras.exe`、`ras_com.node`、`ras_book.node`（Windows x64） |
+| `ras-windows-arm64` | `ras.exe`、`ras_com.node`、`ras_book.node`（Windows arm64） |
+| `ras-linux-x64` | `ras` と `ras_book.node`（Linux x64。ビルド・チェック・オフライン書き込み・Excel を使わないデバッグ用） |
+| `ras-macos-arm64` | `ras` と `ras_book.node`（macOS arm64。同上） |
 | `ras-vscode` | VS Code 拡張（`.vsix`） |
 
 `ras` は依存ランタイムのない単一バイナリです。PATH の通った場所に置くか、VS Code の設定 `ras.path` で場所を指定します。
@@ -123,7 +123,8 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 
 仕組みは VBA のデバッグではありません。プログラムを JavaScript に変換して VS Code 同梱のランタイムで動かし、Excel の操作だけを実際の Excel に対して行います（仕様 §14.10）。
 
-- Excel の操作には Windows と Excel が必要です。接続には拡張に同梱の `ras_com.node` を使います。Excel を使わない処理だけなら、どの OS でもデバッグできます。
+- Excel の操作は、Windows では拡張に同梱の `ras_com.node` を通じて実際の Excel に対して行います。
+- Mac・Linux や Excel の無い Windows では、Excel の代わりに `ras.toml` の `workbook` のブックを読み込んで、そのセルを読み書きします（拡張に同梱の `ras_book.node`。仕様 §14.10.8）。数式は xljs と同じ GridCraft の計算エンジンで計算し、セルを書き換えると Excel の自動計算と同じく再計算します。プログラムが変更したブックは、終了時に `build/debug/workbooks/` に保存します（元のブックは書き換えません）。Windows でも設定 `ras.debug.excel` を `standIn` にするとこの方法で実行できます。書式は描画・保存されず、手書き VBA・クリップボード・並べ替えなど Excel そのものが必要な操作はエラーになります。
 - 対象のブック（`ras.toml` の `workbook`）が Excel で開かれていればそこに接続し、開かれていなければ開きます。
 - プログラムが Excel の応答を待っている間に Excel がダイアログ（手書き VBA の実行時エラー・コンパイル エラー・`MsgBox`、Excel 自身の確認）を出すと、その内容を VS Code に通知し、ダイアログを前面に出します。`launch.json` の `"dialogs": "dismiss"` を指定すると、キャンセルに相当するボタンで自動的に閉じます（仕様 §14.10.6）。
 - 実行できるのは引数なしの関数とトップレベルの文、およびユーザーフォームです。ブック・シートの `@on` のイベントハンドラや UDF のように Excel から呼ばれる関数は起動できません。
@@ -167,7 +168,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §13 VBA の罠の回避 | 一部 | `Collection` ラッパ、`Range.Find` ラッパ、文字列で指定される名前の存在確認、一時変数の再利用は未実装 |
 | §14.1〜14.8 ライブ同期 | 一部 | Excel で開いているブックへ、保存のたびに反映する（`ras sync`、`ras watch`、VS Code の言語サーバー。Windows のみ）。ras が COM 経由で VBE のコードモジュールを直接書き換える方式で、共有メモリと RASBridge.xlam（§14.2、§14.4、§14.5）は使わない。適用規則（§14.6）のうち差分適用・ドキュメントモジュールの管理領域・属性付きクラスの `Import`・失敗時の巻き戻し・実行中／中断モード中の保留と、ドリフト検出（§14.7）は実装。ブックの手書きの標準モジュール・シート / `ThisWorkbook` のコード・フォームを RAS に変換して取り込み、RAS 管理に移す処理（§14.7.1）は実装。適用後のコンパイル確認（`sync.compileCheck`）、Excel → ローカル方向（`--pull`、非管理モジュールの双方向同期）、クラスモジュールの取り込み、既存クラスの属性変更、`ras setup` は未実装 |
 | §14.9 オフライン書き込み・読み出し | 実装済み | 再署名は未実装。`vba/` の非管理モジュールをブックへ書き戻す処理は未実装（取り出しのみ。ユーザーフォームは `forms/` で扱う） |
-| §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | ユーザーフォーム（§14.10.7）は VS Code のパネルに表示する。キー入力・マウス・ドラッグのイベント、`ControlSource` は未対応。Excel への接続（`ras_com.node`）は Excel 2021（64bit）の実機で確認済み。ダイアログの監視（§14.10.6）は Excel の無い Windows 上の CI でメッセージ ボックスを相手に確認しており、Excel の実機では未確認。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。`super` 呼び出しを伴う継承は対象外 |
+| §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | ユーザーフォーム（§14.10.7）は VS Code のパネルに表示する。キー入力・マウス・ドラッグのイベント、`ControlSource` は未対応。Excel への接続（`ras_com.node`）は Excel 2021（64bit）の実機で確認済み。ダイアログの監視（§14.10.6）は Excel の無い Windows 上の CI でメッセージ ボックスを相手に確認しており、Excel の実機では未確認。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。Excel の無い環境でのブックの代役（§14.10.8、`ras_book.node`）は、RAS のプログラムを Node で動かしてセル・数式・保存結果を確かめる自動テスト（Linux / Windows）で確認しているが、VS Code 上での確認と、Excel と計算結果を突き合わせる確認はまだ。`super` 呼び出しを伴う継承は対象外 |
 | §14.11 ユーザーフォーム（`forms/`） | 実装済み | FormSpec からの生成（`Image` の画像、`ComboBox` / `ListBox` の項目を含む）、ブックからの取り出し（`ras form pull`）、ライブ同期、Excel での実行（§14.11.8）。カスタム ActiveX コントロールの生成、VBE での編集の検出（ドリフト）は未実装 |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱し、メンバーとグローバルを camelCase で参照する（§15.3.1）。`ras typegen` と `vba:` インポートは未実装 |
 | §16.1 JSDoc | 実装済み | 生成 VBA へのコメント・`VB_Description` 出力、`@param` 名の検査 |

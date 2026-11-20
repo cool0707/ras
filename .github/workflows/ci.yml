@@ -105,6 +105,9 @@ jobs:
       - name: Build ras_com addon
         if: startsWith(matrix.name, 'windows-')
         run: cargo build --release --locked -p ras-com --target ${{ matrix.target }}
+      # The stand-in for Excel of the debug run time (spec §14.10.8); every platform.
+      - name: Build ras_book addon
+        run: cargo build --release --locked -p ras-book --target ${{ matrix.target }}
       - name: Collect files
         shell: bash
         run: |
@@ -114,6 +117,12 @@ jobs:
           if [ -f "target/${{ matrix.target }}/release/ras_com.dll" ]; then
             cp "target/${{ matrix.target }}/release/ras_com.dll" dist/ras_com.node
           fi
+          for lib in ras_book.dll libras_book.so libras_book.dylib; do
+            if [ -f "target/${{ matrix.target }}/release/$lib" ]; then
+              cp "target/${{ matrix.target }}/release/$lib" dist/ras_book.node
+            fi
+          done
+          test -f dist/ras_book.node
       # Drives real COM objects (Scripting.Dictionary, WScript.Shell) through the addon.
       - name: Smoke-test ras_com
         if: matrix.name == 'windows-x64'
@@ -134,7 +143,8 @@ jobs:
   vscode:
     name: VS Code extension
     runs-on: ubuntu-latest
-    # The .vsix ships the ras_com addon for both Windows architectures.
+    # The .vsix ships the ras_com addon for both Windows architectures, and the ras_book addon
+    # for every platform.
     needs: build
     defaults:
       run:
@@ -149,11 +159,21 @@ jobs:
         with:
           name: ras-windows-arm64
           path: ${{ runner.temp }}/windows-arm64
-      - name: Add the ras_com addon
+      - uses: actions/download-artifact@v7
+        with:
+          name: ras-linux-x64
+          path: ${{ runner.temp }}/linux-x64
+      - uses: actions/download-artifact@v7
+        with:
+          name: ras-macos-arm64
+          path: ${{ runner.temp }}/macos-arm64
+      - name: Add the addons
         run: |
-          mkdir -p bin/win32-x64 bin/win32-arm64
-          cp "$RUNNER_TEMP/windows-x64/ras_com.node" bin/win32-x64/
-          cp "$RUNNER_TEMP/windows-arm64/ras_com.node" bin/win32-arm64/
+          mkdir -p bin/win32-x64 bin/win32-arm64 bin/linux-x64 bin/darwin-arm64
+          cp "$RUNNER_TEMP/windows-x64/ras_com.node" "$RUNNER_TEMP/windows-x64/ras_book.node" bin/win32-x64/
+          cp "$RUNNER_TEMP/windows-arm64/ras_com.node" "$RUNNER_TEMP/windows-arm64/ras_book.node" bin/win32-arm64/
+          cp "$RUNNER_TEMP/linux-x64/ras_book.node" bin/linux-x64/
+          cp "$RUNNER_TEMP/macos-arm64/ras_book.node" bin/darwin-arm64/
       - uses: actions/setup-node@v5
         with:
           node-version: 22

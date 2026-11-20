@@ -2,7 +2,8 @@
 //
 // The JavaScript emitted by `ras build --target js` calls into this file for everything
 // whose VBA behaviour differs from plain JavaScript: numeric conversions and overflow,
-// string helpers, errors, and every access to Excel (COM, through the `ras_com` addon).
+// string helpers, errors, and every access to Excel (COM, through the `ras_com` addon, or the
+// stand-in of `ras-excel.js` over the `ras_book` addon where there is no Excel).
 "use strict";
 
 // ---------------------------------------------------------------------------- errors
@@ -65,7 +66,7 @@ function rasStack(stack) {
     if (first < 0) return stack;
     let frames = lines.slice(first).filter((l) => /\.ras:\d+:\d+\)?$/.test(l));
     // Without source maps the frames name the generated .js files: drop only the run time's.
-    if (!frames.length) frames = lines.slice(first).filter((l) => !/ras-runtime\.js:|ras-forms\.js:|ras-main\.js:|\(node:|at node:/.test(l));
+    if (!frames.length) frames = lines.slice(first).filter((l) => !/ras-runtime\.js:|ras-forms\.js:|ras-excel\.js:|ras-main\.js:|\(node:|at node:/.test(l));
     if (!frames.length) return stack;
     const rel = frames.map((l) => l.replace(/((?:file:\/\/)?(?:[A-Za-z]:)?[^\s():]+\.(?:ras|js))(?=:\d+:\d+\)?$)/, (f) => projectPath(f)));
     return [...lines.slice(0, first), ...rel].join("\n");
@@ -124,7 +125,7 @@ function locate(stack) {
         const { findSourceMap } = require("module");
         for (const line of text.split("\n")) {
             const m = /\(?((?:[A-Za-z]:)?[^():]+\.js):(\d+):(\d+)\)?$/.exec(line.trim());
-            if (!m || m[1].endsWith("ras-runtime.js")) continue;
+            if (!m || m[1].endsWith("ras-runtime.js") || m[1].endsWith("ras-excel.js")) continue;
             const map = findSourceMap(m[1]);
             const entry = map && map.findEntry(+m[2] - 1, +m[3] - 1);
             if (entry && entry.originalSource) return { file: entry.originalSource.replace(/^file:\/\//, ""), line: entry.originalLine + 1 };
@@ -344,7 +345,7 @@ function cnum(v) {
         default:
             if (v === null) return 0;
             if (v instanceof RDate) return v.oa;
-            if (isCom(v)) return cnum(item(v, []));
+            if (isCom(v) || isValued(v)) return cnum(item(v, []));
             return raise(13);
     }
 }
@@ -388,7 +389,7 @@ function cdate(v) {
         if (t) return new RDate((+t[1] * 3600 + +t[2] * 60 + +(t[3] || 0)) / 86400);
         raise(13, v);
     }
-    if (isCom(v)) return cdate(item(v, []));
+    if (isCom(v) || isValued(v)) return cdate(item(v, []));
     return raise(13);
 }
 /** Implicit conversion to a string (`CStr`). */
@@ -405,7 +406,7 @@ function cstr(v) {
         default:
             if (v === null) return "";
             if (v instanceof RDate || v instanceof CVErr) return v.toString();
-            if (isCom(v)) return cstr(item(v, []));
+            if (isCom(v) || isValued(v)) return cstr(item(v, []));
             return raise(13);
     }
 }
@@ -458,7 +459,7 @@ function scalar(v, other) {
     if (v == null) return typeof other === "string" ? "" : 0;
     if (typeof v === "boolean") return v ? -1 : 0;
     if (v instanceof RDate) return v.oa;
-    if (isCom(v)) return scalar(item(v, []), other);
+    if (isCom(v) || isValued(v)) return scalar(item(v, []), other);
     return v;
 }
 /** Comparison of run-time typed values: negative, zero or positive. */
@@ -476,7 +477,7 @@ function isPlainValue(v) {
 }
 function eq(a, b) {
     if (a == null && b == null) return true;
-    if (!isPlainValue(a) || !isPlainValue(b)) return a === b || (isCom(a) && isCom(b) && a.isSame(b));
+    if (!isPlainValue(a) || !isPlainValue(b)) return a === b || (isCom(a) && isCom(b) && a.isSame(b)) || (a != null && typeof a.$same === "function" && a.$same(b));
     return cmp(a, b) === 0;
 }
 
@@ -547,6 +548,9 @@ function mapSet(m, k, v) {
 
 let com = null; // the `ras_com` addon
 let mock = null; // test double: { globals: { Sheet1: ... }, run(name, args) }
+let bookAddon = null; // the `ras_book` addon: the workbook of the stand-in for Excel (spec §14.10.8)
+let excelHost = null; // the stand-in itself (`ras-excel.js`), made when the program first uses Excel
+let noExcel = false; // the COM addon is there but Excel is not installed: the stand-in is used
 let config = { manifest: {}, root: "." };
 let app = null;
 let book = null;
@@ -560,6 +564,9 @@ function configure(options) {
     if (options.addon) {
         com = require(options.addon);
     }
+    if (options.book) {
+        bookAddon = require(options.book);
+    }
     if (options.dialogs && !DIALOG_MODES.includes(String(options.dialogs).toLowerCase())) {
         console.error(`[ras] ダイアログの扱い \`${options.dialogs}\` は指定できません（${DIALOG_MODES.join(" / ")}）。notify として扱います`);
         config.dialogs = "notify";
@@ -569,6 +576,18 @@ const DIALOG_MODES = ["notify", "dismiss", "off"];
 
 function isCom(v) {
     return com !== null && v instanceof com.ComObject;
+}
+/** An object of the stand-in for Excel whose default member is a value (`Range`). */
+function isValued(v) {
+    return v !== null && typeof v === "object" && typeof v.$defaultValue === "function";
+}
+/** The stand-in for Excel, when the program runs without Excel (no COM addon, no test double). */
+function stand() {
+    if (mock !== null || bookAddon === null || (com !== null && !noExcel)) return null;
+    if (excelHost === null) {
+        excelHost = require("./ras-excel.js")(module.exports, bookAddon, { workbook: config.manifest.workbook, root: config.root });
+    }
+    return excelHost;
 }
 
 function comError(e) {
@@ -610,17 +629,35 @@ function fromCom(v) {
 function needCom(what) {
     if (com === null) {
         throw new RasError(
-            `${what} には Excel への接続が必要ですが、COM アドオン（ras_com）が読み込まれていません。Windows 上で VS Code の RAS デバッグ構成から実行してください`,
+            bookAddon !== null
+                ? `${what} には Excel が必要です。Excel のないデバッグ実行（ブックの代役）では使えません`
+                : `${what} には Excel への接続が必要ですが、COM アドオン（ras_com）もブックの代役（ras_book）も読み込まれていません。VS Code の RAS デバッグ構成から実行してください`,
             429,
             "RAS",
         );
     }
 }
 
+/** Whether Excel is installed (Windows: its ProgID is registered). */
+function excelInstalled() {
+    if (process.platform !== "win32") return false;
+    try {
+        require("child_process").execFileSync("reg", ["query", "HKCR\\Excel.Application\\CLSID"], { stdio: "ignore", windowsHide: true });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 /** Connects to the Excel instance that has the project's workbook open (spec §14.3). */
 function connect() {
-    if (app !== null) return;
+    if (app !== null || noExcel) return;
     needCom("Excel の操作");
+    // Windows without Excel: the stand-in, when it is there (spec §14.10.8).
+    if (bookAddon !== null && mock === null && !excelInstalled()) {
+        noExcel = true;
+        return;
+    }
     const path = require("path");
     const file = config.manifest.workbook ? path.resolve(config.root, config.manifest.workbook) : null;
     comTry(() => {
@@ -720,7 +757,10 @@ function openBook(file) {
 
 function application() {
     if (mock && mock.globals && mock.globals.Application) return mock.globals.Application;
+    const host = stand();
+    if (host !== null) return host.application();
     connect();
+    if (noExcel) return stand().application();
     return app;
 }
 
@@ -731,8 +771,11 @@ function global(name) {
         if (form !== undefined) return form;
     }
     if (mock && mock.globals && name in mock.globals) return mock.globals[name];
+    const host = stand();
+    if (host !== null) return host.global(name);
     if (name === "Application") return application();
     connect();
+    if (noExcel) return stand().global(name);
     if (name === "ThisWorkbook") return book;
     if (sheets.has(name)) return sheets.get(name);
     if (!EXCEL_GLOBALS.has(name)) {
@@ -807,6 +850,7 @@ function setItem(o, args, v) {
     if (isCom(o)) comTry(() => o.put("", args.map(toCom), toCom(v)));
     else if (o instanceof Map) o.set(args[0], v);
     else if (Array.isArray(o)) o[ix(o, args[0])] = v;
+    else if (isCallable(o.$setItem)) o.$setItem(args, v);
     else raise(438);
     return v;
 }
@@ -887,6 +931,7 @@ class Collection {
 
 function createObject(progId) {
     if (mock && isCallable(mock.createObject)) return mock.createObject(progId);
+    if (stand() !== null && /^excel\.application(\.\d+)?$/i.test(String(progId))) return application();
     needCom(`CreateObject("${progId}")`);
     return comTry(() => com.createObject(progId));
 }
@@ -898,7 +943,10 @@ function newHost(namespace, name) {
 /** Calls a procedure of the workbook that is not part of the RAS project (hand-written VBA). */
 function runMacro(name, args) {
     if (mock && isCallable(mock.run)) return mock.run(name, args);
+    const host = stand();
+    if (host !== null) return host.runMacro(name, args);
     connect();
+    if (noExcel) return stand().runMacro(name, args);
     const target = `'${String(get(book, "Name")).replace(/'/g, "''")}'!${name}`;
     return call(app, "Run", [target, ...args]);
 }
@@ -1112,7 +1160,7 @@ function format(value, pattern) {
         if (num[1]) int = int.replace(/\B(?=(\d{3})+$)/g, ",");
         return (x < 0 ? "-" : "") + int + (frac ? `.${frac}` : "") + (num[4] || "");
     }
-    if (com !== null || mock) return call(get(application(), "WorksheetFunction"), "Text", [value, p]);
+    if (com !== null || mock || stand() !== null) return call(get(application(), "WorksheetFunction"), "Text", [value, p]);
     return unsupported(`Format(…, "${p}")`);
 }
 
@@ -1541,6 +1589,13 @@ const debugMembers = new Map();
  * range can be a whole sheet) are getters, read when expanded.
  */
 function debugProperties(o) {
+    if (o !== null && typeof o === "object" && typeof o.$debugProperties === "function") {
+        try {
+            return o.$debugProperties();
+        } catch {
+            return o;
+        }
+    }
     if (!isCom(o) || typeof o.members !== "function") return o;
     let members;
     try {
@@ -1569,6 +1624,9 @@ function debugProperties(o) {
 }
 /** The label of `o` in the debugger (`customDescriptionGenerator`): the class of a COM object. */
 function debugDescription(o, fallback) {
+    if (o !== null && typeof o === "object" && typeof o.$debugProperties === "function" && typeof o.$typeName === "string") {
+        return o instanceof Object && "$r1" in o ? `${o.$typeName} ${o.Address(false, false)}` : o.$typeName;
+    }
     if (!isCom(o)) return fallback;
     try {
         return o.typeName();
@@ -1579,7 +1637,11 @@ function debugDescription(o, fallback) {
 Object.defineProperty(globalThis, "$rasDebugProperties", { value: debugProperties, configurable: true });
 Object.defineProperty(globalThis, "$rasDebugDescription", { value: debugDescription, configurable: true });
 
-process.on("exit", resetAppState);
+process.on("exit", () => {
+    resetAppState();
+    // The workbooks the program changed without Excel are saved under build/debug/workbooks/.
+    if (excelHost !== null) excelHost.finish();
+});
 
 module.exports = {
     RasError, RDate, CVErr, Struct, Collection, Nothing,

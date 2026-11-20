@@ -78,9 +78,17 @@ CodeLens は設定 `ras.codeLens.run` で非表示にできます。
 | `project` | `ras.toml` のあるフォルダー。省略時はワークスペースフォルダー。 |
 | `stopOnEntry` | プログラムの先頭で停止します。 |
 | `dialogs` | プログラムが Excel の応答を待っている間に Excel がダイアログを出したときの扱い。`notify`（既定。内容を通知してダイアログを前面に出す）/ `dismiss`（通知したうえでキャンセルに相当するボタンで閉じる。VBA の実行時エラーは「終了」）/ `off`。 |
-| `runtimeExecutable` / `comAddon` / `mockHost` | 実行に使う Node.js、Excel 接続用アドオン、Excel の代役モジュールを差し替えます（通常は不要）。 |
+| `excel` | プログラムが操作する Excel。`auto`（既定。Windows では Excel、Mac・Linux ではブックの代役）/ `excel`（Excel だけ）/ `standIn`（Windows でもブックの代役）。省略時は設定 `ras.debug.excel`。 |
+| `runtimeExecutable` / `comAddon` / `bookAddon` / `mockHost` | 実行に使う Node.js、Excel 接続用アドオン、ブックの代役のアドオン、Excel の代役モジュールを差し替えます（通常は不要）。 |
 
 デバッグは VBA 上ではなく、プログラムを JavaScript に変換して VS Code 同梱のランタイムで実行します。Excel の操作は、同梱のアドオン（`ras_com.node`、Windows 専用）を通じて実際の Excel に対して行われます。
+
+Mac・Linux や Excel の無い Windows では、Excel の代わりに `ras.toml` の `workbook` のブックを読み込み、そのセルを読み書きして実行します（同梱のアドオン `ras_book.node`）。
+
+- 数式は xljs と同じ GridCraft の計算エンジンで計算し、セルを書き換えると Excel の自動計算と同じく計算し直します。
+- プログラムが変更したブックは、終了時に `build/debug/workbooks/` に保存します。元のブックは書き換えません。
+- フォント・色・罫線・列幅などの書式は受け付けますが、描画も保存もしません。手書き VBA（`Application.Run`）、クリップボード、セルの挿入・削除、並べ替え・フィルターなど Excel そのものが必要な操作はエラーになります。
+- 対応範囲と Excel との違いは言語仕様 §14.10.8 にまとめています。
 
 - 実行できるのは、引数なしの関数とトップレベルの文です。イベントハンドラ（`@on`）や UDF は起動できません。
 - 対象のブックが Excel で開かれていればそのブックに接続し、開かれていなければ開きます。
@@ -97,6 +105,8 @@ CodeLens は設定 `ras.codeLens.run` で非表示にできます。
 | `ras.codeLens.run` | `true` | 単独で起動できる関数の上に「Excelで実行」（Windows のみ）と「デバッグ実行」の CodeLens を表示します。 |
 | `ras.debug.runtimeExecutable` | `""` | デバッグ実行に使う Node.js のパス。空の場合は VS Code 同梱のランタイムを使います。 |
 | `ras.debug.comAddon` | `""` | Excel 接続用アドオン（`ras_com.node`）のパス。空の場合は拡張機能に同梱のもの、無ければ `ras` と同じフォルダーのものを使います。 |
+| `ras.debug.excel` | `auto` | デバッグ実行でプログラムが操作する Excel。`auto`（Windows では Excel、それ以外ではブックの代役）/ `excel` / `standIn`（Windows でもブックの代役）。 |
+| `ras.debug.bookAddon` | `""` | ブックの代役のアドオン（`ras_book.node`）のパス。空の場合は拡張機能に同梱のもの、無ければ `ras` と同じフォルダーのものを使います。 |
 | `ras.debug.dialogs` | `notify` | Excel がダイアログを出して応答を待っているときの扱い（`notify` / `dismiss` / `off`）。`launch.json` の `dialogs` で構成ごとに上書きできます。 |
 
 RAS ファイルでは、言語サーバーによるセマンティックハイライト（`editor.semanticHighlighting.enabled`）を既定で有効にしています。

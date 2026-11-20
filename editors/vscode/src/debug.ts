@@ -8,8 +8,10 @@ import { findServerExecutable } from "./serverPath";
 
 // Debugging (spec §14.10). `ras build --target js` turns the project into JavaScript with
 // source maps; that JavaScript runs in a Node process and reaches Excel through the
-// `ras_com` addon. The debugger itself is VS Code's built-in JavaScript debugger: this
-// file only builds, starts the process and hands its inspector port over.
+// `ras_com` addon. Without Excel (macOS, Linux, or `excel: "standIn"`), it works on the
+// project's workbook through the `ras_book` addon instead (spec §14.10.8). The debugger itself
+// is VS Code's built-in JavaScript debugger: this file only builds, starts the process and
+// hands its inspector port over.
 //
 // The process is VS Code's own runtime in Node mode (`ELECTRON_RUN_AS_NODE`), so no
 // separate Node installation is needed. The built-in debugger's `launch` request cannot
@@ -29,6 +31,13 @@ interface RasDebugConfiguration extends vscode.DebugConfiguration {
 	comAddon?: string;
 	/** Module that stands in for Excel (for tests on machines without Excel). */
 	mockHost?: string;
+	/**
+	 * What the program works on: `auto` (Excel over COM on Windows, the stand-in elsewhere),
+	 * `excel` (Excel only) or `standIn` (the project's workbook through `ras_book`, without Excel).
+	 */
+	excel?: "auto" | "excel" | "standIn";
+	/** Path of the `ras_book` addon. Defaults to the one shipped with the extension. */
+	bookAddon?: string;
 	/** What to do when Excel shows a dialog while the program waits for it. */
 	dialogs?: "notify" | "dismiss" | "off";
 	stopOnEntry?: boolean;
@@ -151,7 +160,7 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 		try {
 			// Variables are substituted after this phase, so the common one is handled here.
 			const base = projectFolder(folder)?.uri.fsPath;
-			for (const key of ["project", "runtimeExecutable", "comAddon", "mockHost"] as const) {
+			for (const key of ["project", "runtimeExecutable", "comAddon", "mockHost", "bookAddon"] as const) {
 				const value = config[key];
 				if (typeof value === "string" && base !== undefined) {
 					config[key] = value.replace(/\$\{workspaceFolder\}/g, base);
@@ -191,18 +200,32 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 			return undefined;
 		}
 
-		const addon = comAddon(this.context, config);
-		if (process.platform === "win32" && addon === undefined && !config.mockHost) {
+		const mode = config.excel || setting("debug.excel") || "auto";
+		const addon = mode === "standIn" ? undefined : comAddon(this.context, config);
+		const book = mode === "excel" ? undefined : bookAddon(this.context, config);
+		if (process.platform === "win32" && mode !== "standIn" && addon === undefined && !config.mockHost) {
 			void vscode.window.showWarningMessage(
-				"RAS: Excel に接続するためのアドオン（ras_com.node）が見つかりません。Excel を操作する箇所でエラーになります。設定 ras.debug.comAddon で場所を指定できます。",
+				book === undefined
+					? "RAS: Excel に接続するためのアドオン（ras_com.node）が見つかりません。Excel を操作する箇所でエラーになります。設定 ras.debug.comAddon で場所を指定できます。"
+					: "RAS: Excel に接続するためのアドオン（ras_com.node）が見つからないため、Excel を使わずにブックの代役（ras_book.node）で実行します。設定 ras.debug.comAddon で場所を指定できます。",
+			);
+		}
+		if (addon === undefined && book === undefined && mode !== "excel" && !config.mockHost) {
+			void vscode.window.showWarningMessage(
+				"RAS: Excel の代わりにブックを読み書きするアドオン（ras_book.node）が見つかりません。Excel を操作する箇所でエラーになります。設定 ras.debug.bookAddon で場所を指定できます。",
 			);
 		}
 		const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
 		// Left over from VS Code's own processes; they must not reach the debuggee.
 		delete env.NODE_OPTIONS;
 		delete env.VSCODE_INSPECTOR_OPTIONS;
+		delete env.RAS_COM_ADDON;
+		delete env.RAS_BOOK_ADDON;
 		if (addon !== undefined) {
 			env.RAS_COM_ADDON = addon;
+		}
+		if (book !== undefined) {
+			env.RAS_BOOK_ADDON = book;
 		}
 		if (config.mockHost) {
 			env.RAS_MOCK_HOST = path.resolve(root, config.mockHost);
@@ -268,7 +291,7 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 			sourceMaps: true,
 			outFiles: [`${dir}/**/*.js`],
 			resolveSourceMapLocations: [`${root.replace(/\\/g, "/")}/**`],
-			skipFiles: ["<node_internals>/**", `${dir}/ras-runtime.js`, `${dir}/ras-forms.js`, `${dir}/ras-main.js`],
+			skipFiles: ["<node_internals>/**", `${dir}/ras-runtime.js`, `${dir}/ras-forms.js`, `${dir}/ras-excel.js`, `${dir}/ras-main.js`],
 			smartStep: true,
 			// COM objects show their properties and class instead of the addon's methods (runtime `debugProperties`).
 			customPropertiesGenerator: "function () { return typeof $rasDebugProperties === 'function' ? $rasDebugProperties(this) : this; }",
@@ -338,6 +361,23 @@ function comAddon(context: vscode.ExtensionContext, config: RasDebugConfiguratio
 	const ras = findServerExecutable(setting("path"), undefined);
 	if (ras !== undefined) {
 		candidates.push(path.join(path.dirname(ras), "ras_com.node"));
+	}
+	return candidates.find((file) => fs.existsSync(file));
+}
+
+/**
+ * The `ras_book` addon (the stand-in for Excel, spec §14.10.8): the setting, the one shipped
+ * with the extension for this platform, or the one next to `ras`.
+ */
+function bookAddon(context: vscode.ExtensionContext, config: RasDebugConfiguration): string | undefined {
+	const explicit = config.bookAddon || setting("debug.bookAddon");
+	if (explicit) {
+		return path.resolve(explicit);
+	}
+	const candidates = [path.join(context.extensionPath, "bin", `${process.platform}-${process.arch}`, "ras_book.node")];
+	const ras = findServerExecutable(setting("path"), undefined);
+	if (ras !== undefined) {
+		candidates.push(path.join(path.dirname(ras), "ras_book.node"));
 	}
 	return candidates.find((file) => fs.existsSync(file));
 }
