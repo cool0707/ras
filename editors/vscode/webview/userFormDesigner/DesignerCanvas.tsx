@@ -44,7 +44,7 @@ import {
   stableDelta,
 } from "../../src/userForm/geometry";
 import type { Geometry, ResizeHandle, DropTarget } from "../../src/userForm/geometry";
-import { appearanceStyle, colorStyle } from "./propertyEditors/appearance";
+import { appearanceStyle, borderClass, colorStyle } from "./propertyEditors/appearance";
 const px = (points: number) => `${pointsToPixels(points)}px`;
 
 /** The picture of an Image, or a placeholder when there is none that can be drawn. */
@@ -93,9 +93,16 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "textbox":
       return <span>{control.text ?? String(control.value ?? "")}</span>;
     case "checkbox":
-      return <span>☐ {caption}</span>;
-    case "optionbutton":
-      return <span>◯ {caption}</span>;
+    case "optionbutton": {
+      // MSForms draws the box at the left, vertically centred, with the caption beside it.
+      const state = control.value === true ? "checked" : control.value === null ? "mixed" : "";
+      return (
+        <>
+          <span class={`toggle-box ${type === "checkbox" ? "check" : "option"} ${state}`} aria-hidden="true" />
+          <span class="toggle-caption">{caption}</span>
+        </>
+      );
+    }
     case "combobox": {
       // Without an authored text or value, the selected list item is what the form shows.
       const authored = control.text || (control.value == null ? "" : String(control.value));
@@ -157,7 +164,12 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "image":
       return <ControlPicture control={control} />;
     case "frame":
-      return <span class="frame-caption">{caption}</span>;
+      return (
+        <>
+          <span class="frame-edge" aria-hidden="true" />
+          {control.caption ? <span class="frame-caption">{control.caption}</span> : null}
+        </>
+      );
     case "multipage":
       return null;
     case "page":
@@ -961,7 +973,7 @@ export function DesignerCanvas({
       <>
         <div
           key={control.id}
-          class={`control ${type} ${control.enabled === false ? "disabled" : ""}`}
+          class={`control ${type} ${borderClass(shown)} ${control.enabled === false ? "disabled" : ""} ${type === "frame" && control.caption ? "has-caption" : ""} ${type === "togglebutton" && control.value === true ? "pressed" : ""}`}
           data-control-id={control.id}
           title={`${control.name} (${control.type})${control.approximate ? ` — ${approximateBounds}` : ""}`}
           style={{
@@ -1237,10 +1249,15 @@ export function DesignerCanvas({
         }}
       >
         <div class="form-shell" style={{ transform: `scale(${zoom})` }}>
-          <div class="form-title">{document.caption}</div>
+          <div class="form-title">
+            <span class="form-title-text">{document.caption}</span>
+            <span class="form-title-close" aria-hidden="true">
+              ✕
+            </span>
+          </div>
           <div class="form-client-area">
             <div
-              class={`form ${showGrid ? "show-grid" : ""} ${selectedId === undefined ? "form-selected" : ""}`}
+              class={`form ${borderClass(document)} ${showGrid ? "show-grid" : ""} ${selectedId === undefined ? "form-selected" : ""}`}
               data-container-id=""
               style={{
                 ...appearanceStyle(document),

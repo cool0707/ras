@@ -109,24 +109,67 @@ header {
 .notice {
   color: var(--vscode-descriptionForeground);
 }
+/* The form is drawn as MSForms draws it on Windows (classic 3D edges in the
+   Windows 10/11 system colors) whatever the editor's theme. MSForms ignores
+   visual styles, so these edges are what Excel shows at run time too. */
+:root {
+  --ms-face: #f0f0f0; /* buttonFace */
+  --ms-highlight: #fff; /* buttonHighlight */
+  --ms-light: #e3e3e3; /* buttonLight (3DLight) */
+  --ms-shadow: #a0a0a0; /* buttonShadow */
+  --ms-dark: #696969; /* buttonDarkShadow */
+  --ms-frame: #646464; /* windowFrame */
+  --ms-window: #fff;
+  --ms-text: #000;
+  --ms-gray: #6d6d6d; /* grayText */
+  --ms-select: #0078d7; /* highlight */
+  /* The ambient font of MSForms in Japanese Excel; the run-time model uses the same. */
+  --ms-font:
+    9pt "MS UI Gothic",
+    "Yu Gothic UI",
+    "Meiryo UI",
+    "Segoe UI",
+    sans-serif;
+}
 .form-shell {
   display: inline-block;
-  border: 1px solid var(--vscode-panel-border);
+  border: 1px solid #7a7a7a;
   transform-origin: top left;
 }
 .form-title {
-  padding: 6px 10px;
-  background: var(--vscode-titleBar-activeBackground);
-  color: var(--vscode-titleBar-activeForeground);
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 30px;
+  padding-left: 10px;
+  background: #fff;
+  color: #000;
+  font:
+    12px "Yu Gothic UI",
+    "Meiryo UI",
+    "Segoe UI",
+    sans-serif;
+}
+.form-title-text {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.form-title-close {
+  width: 46px;
+  text-align: center;
+  font-size: 13px;
 }
 .form {
   position: relative;
   overflow: hidden;
-  background: #f0f0f0;
-  color: #111;
-  font:
-    11px Tahoma,
-    sans-serif;
+  background: var(--ms-face);
+  color: var(--ms-text);
+  font: var(--ms-font);
+}
+.form.border-single {
+  box-shadow: inset 0 0 0 1px var(--ms-frame);
 }
 .form-client-area {
   position: relative;
@@ -140,26 +183,43 @@ header {
   white-space: pre-wrap;
   /* Existing MSForms children keep independent appearance settings. Prevent
      container inheritance; authored inline colors/font members still win. */
-  color: #111;
-  font:
-    11px Tahoma,
-    sans-serif;
+  color: var(--ms-text);
+  font: var(--ms-font);
   text-decoration: none;
+  background: var(--ms-face);
 }
+.control.label {
+  overflow: hidden;
+}
+/* SpecialEffect fmSpecialEffectSunken: the edit fields. */
 .textbox,
 .combobox,
 .listbox {
-  border: 1px solid #888;
-  background: #fff;
-  padding: 2px;
+  border: 1px solid;
+  border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-dark),
+    inset -1px -1px 0 var(--ms-light);
+  background: var(--ms-window);
+  padding: 2px 3px;
   overflow: hidden;
 }
+.textbox {
+  white-space: pre;
+}
+.listbox {
+  padding: 2px;
+}
+/* The raised edge of a push button. */
 .commandbutton,
-.togglebutton {
-  border: 1px outset #aaa;
-  background: #ddd;
-  text-align: center;
-  overflow: hidden;
+.togglebutton,
+.combo-arrow {
+  border: 1px solid;
+  border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-light),
+    inset -1px -1px 0 var(--ms-shadow);
+  background: var(--ms-face);
 }
 .commandbutton,
 .togglebutton {
@@ -167,23 +227,24 @@ header {
   align-items: center;
   justify-content: center;
   padding: 2px 4px;
+  text-align: center;
+  overflow: hidden;
 }
-.commandbutton,
-.togglebutton,
-.combo-arrow {
-  border: 1px solid;
-  border-color: #fff #404040 #404040 #fff;
+.togglebutton.pressed {
+  border-color: var(--ms-dark) var(--ms-highlight) var(--ms-highlight) var(--ms-dark);
   box-shadow:
-    inset 1px 1px 0 #dfdfdf,
-    inset -1px -1px 0 #808080;
-  background: #f0f0f0;
+    inset 1px 1px 0 var(--ms-shadow),
+    inset -1px -1px 0 var(--ms-light);
+  background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px
+    2px;
+}
+/* fmBorderStyleSingle replaces the 3D edge with a 1px line. */
+.control.border-single {
+  border: 1px solid var(--ms-frame);
+  box-shadow: none;
 }
 .combobox {
-  padding: 2px 22px 2px 3px;
-  border-color: #808080 #fff #fff #808080;
-  box-shadow:
-    inset 1px 1px 0 #404040,
-    inset -1px -1px 0 #dfdfdf;
+  padding-right: 18px;
 }
 .combo-text {
   display: block;
@@ -199,7 +260,7 @@ header {
   min-height: 1.2em;
 }
 .list-item.selected {
-  background: #0078d7;
+  background: var(--ms-select);
   color: #fff;
 }
 .combo-arrow {
@@ -207,7 +268,7 @@ header {
   top: 1px;
   bottom: 1px;
   right: 1px;
-  width: 18px;
+  width: 15px;
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -216,16 +277,79 @@ header {
 .combo-chevron {
   width: 0;
   height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 4px solid #000;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-top: 4px solid var(--ms-text);
+}
+/* CheckBox / OptionButton: a 13px sunken box at the left, centred vertically. */
+.checkbox,
+.optionbutton {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 1px;
+  overflow: hidden;
+}
+.toggle-box {
+  flex: none;
+  position: relative;
+  box-sizing: border-box;
+  width: 13px;
+  height: 13px;
+  border: 1px solid;
+  border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-dark),
+    inset -1px -1px 0 var(--ms-light);
+  background: var(--ms-window);
+}
+.toggle-box.option {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+.toggle-box.check.checked::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  width: 3px;
+  height: 6px;
+  border: solid var(--ms-text);
+  border-width: 0 2px 2px 0;
+  transform: rotate(40deg);
+}
+.toggle-box.check.mixed {
+  background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px
+    2px;
+}
+.toggle-box.check.mixed::after {
+  content: "";
+  position: absolute;
+  inset: 4px 3px;
+  background: var(--ms-shadow);
+}
+.toggle-box.option.checked::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ms-text);
+  transform: translate(-50%, -50%);
+}
+.toggle-caption {
+  min-width: 0;
+  overflow: hidden;
 }
 .control.scrollbar,
 .control.spinbutton {
   padding: 0;
   border: 0;
   overflow: hidden;
-  background: #f0f0f0;
+  background: var(--ms-face);
 }
 .scrollbar-chrome,
 .spinbutton-chrome {
@@ -252,11 +376,11 @@ header {
 .spinbutton-arrow {
   box-sizing: border-box;
   border: 1px solid;
-  border-color: #fff #404040 #404040 #fff;
+  border-color: var(--ms-light) var(--ms-dark) var(--ms-dark) var(--ms-light);
   box-shadow:
-    inset 1px 1px 0 #dfdfdf,
-    inset -1px -1px 0 #808080;
-  background: #f0f0f0;
+    inset 1px 1px 0 var(--ms-highlight),
+    inset -1px -1px 0 var(--ms-shadow);
+  background: var(--ms-face);
 }
 .scrollbar-arrow,
 .spinbutton-arrow {
@@ -274,33 +398,34 @@ header {
   border: 4px solid transparent;
 }
 .spinbutton-arrow > span {
-  border-width: 6px;
+  border-width: 3.5px;
 }
 .scrollbar-chrome.horizontal .decrement > span,
 .spinbutton-chrome.horizontal .decrement > span {
   border-left: 0;
-  border-right-color: #000;
+  border-right-color: var(--arrow, var(--ms-text));
 }
 .scrollbar-chrome.horizontal .increment > span,
 .spinbutton-chrome.horizontal .increment > span {
   border-right: 0;
-  border-left-color: #000;
+  border-left-color: var(--arrow, var(--ms-text));
 }
 .scrollbar-chrome.vertical .decrement > span,
 .spinbutton-chrome.vertical .decrement > span {
   border-top: 0;
-  border-bottom-color: #000;
+  border-bottom-color: var(--arrow, var(--ms-text));
 }
 .scrollbar-chrome.vertical .increment > span,
 .spinbutton-chrome.vertical .increment > span {
   border-bottom: 0;
-  border-top-color: #000;
+  border-top-color: var(--arrow, var(--ms-text));
 }
 .scrollbar-track {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: repeating-conic-gradient(#f0f0f0 0 25%, #fff 0 50%) 0 0 / 2px 2px;
+  background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px
+    2px;
 }
 .scrollbar-thumb {
   display: block;
@@ -313,48 +438,125 @@ header {
   width: 100%;
   height: min(16px, 100%);
 }
-.frame,
-.multipage {
-  box-shadow: inset 0 0 0 1px #aaa;
+/* Frame: SpecialEffect fmSpecialEffectEtched, with the line through the middle
+   of the caption, which sits inside the frame's bounds. */
+.frame-edge {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border: 1px solid;
+  border-color: var(--ms-shadow) var(--ms-highlight) var(--ms-highlight) var(--ms-shadow);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-highlight),
+    inset -1px -1px 0 var(--ms-shadow);
+  pointer-events: none;
+}
+.frame.has-caption .frame-edge {
+  top: 0.6em;
+}
+.frame.border-single {
+  border: 0;
+}
+.frame.border-single .frame-edge {
+  border-color: var(--ms-frame);
+  box-shadow: none;
 }
 .frame-caption {
   position: absolute;
-  top: -7px;
-  left: 8px;
-  background: #f0f0f0;
-  padding: 0 3px;
+  top: 0;
+  left: 6px;
+  max-width: calc(100% - 12px);
+  overflow: hidden;
+  padding: 0 2px;
+  line-height: 1.2;
+  white-space: nowrap;
+  background: inherit;
 }
 .image {
-  border: 1px dashed #888;
+  border: 1px solid var(--ms-frame);
   display: flex;
   align-items: center;
   justify-content: center;
 }
+.image.border-none {
+  border: 0;
+}
 .placeholder {
-  color: #555;
+  color: var(--ms-gray);
   overflow: hidden;
 }
-.disabled {
-  opacity: 0.55;
+/* Disabled text is embossed in buttonShadow, as Windows draws it. */
+.control.disabled {
+  color: var(--ms-shadow) !important;
+  text-shadow: 1px 1px 0 var(--ms-highlight);
+  --arrow: var(--ms-shadow);
+}
+.control.disabled .combo-chevron {
+  border-top-color: var(--ms-shadow);
+}
+.control.disabled .toggle-box.checked::after {
+  border-color: var(--ms-shadow);
+  background-color: var(--ms-shadow);
+}
+.control.disabled .toggle-box.check.checked::after {
+  background: none;
+}
+.control.disabled .toggle-box {
+  background: var(--ms-face);
+}
+.control.disabled .container-content,
+.control.disabled .page-content {
+  text-shadow: none;
+}
+/* The compiler writes a TabStrip's font as Tahoma 8.25pt unless one is authored. */
+.control.tabstrip {
+  font:
+    8.25pt Tahoma,
+    sans-serif;
+}
+/* MultiPage / TabStrip: raised tabs over a raised body. */
+.multipage::before,
+.tabstrip::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  top: 22px;
+  border: 1px solid;
+  border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-light),
+    inset -1px -1px 0 var(--ms-shadow);
+  pointer-events: none;
 }
 .tabs {
+  position: relative;
+  z-index: 1;
   display: flex;
+  align-items: flex-end;
   height: 24px;
+  padding-left: 2px;
   overflow: hidden;
 }
-.tabs span {
-  padding: 4px 8px;
-  border: 1px solid #aaa;
-  white-space: nowrap;
-  background: #ddd;
-}
+.tabs span,
 .tabs button {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  height: 20px;
   margin: 0;
-  padding: 4px 8px;
-  border: 1px solid #aaa;
+  padding: 0 6px;
+  border: 1px solid;
+  border-bottom: 0;
+  border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+  border-radius: 2px 2px 0 0;
+  box-shadow:
+    inset 1px 1px 0 var(--ms-light),
+    inset -1px 0 0 var(--ms-shadow);
   white-space: nowrap;
-  background: #ddd;
-  color: #111;
+  background: var(--ms-face);
+  color: inherit;
   font: inherit;
 }
 .tabs button.selected-page {
@@ -362,8 +564,10 @@ header {
   outline-offset: -2px;
 }
 .tabs .active {
-  background: #f0f0f0;
-  border-bottom: 0;
+  position: relative;
+  z-index: 1;
+  height: 24px;
+  margin: 0 -2px;
 }
 .page-content {
   position: absolute;

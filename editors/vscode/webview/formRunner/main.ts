@@ -167,6 +167,8 @@ function create(c: ControlSnapshot): View {
 			const listId = `list-${Math.random().toString(36).slice(2)}`;
 			const datalist = el("datalist", "", root);
 			datalist.id = listId;
+			// The drop button of MSForms, drawn over the field (clicks go through to it).
+			el("span", "combo-chevron", el("span", "combo-arrow", root));
 			view.update = (s, enabled) => {
 				const list = (s.list ?? []).map((row) => row.join("  "));
 				const dropDownList = num(s.state.Style) === 2;
@@ -266,6 +268,7 @@ function create(c: ControlSnapshot): View {
 				box.checked = s.state.Value === true;
 				box.indeterminate = s.state.Value === null;
 				box.disabled = !enabled;
+				label.classList.toggle("disabled", !enabled);
 				colors(root, s.state, true);
 			};
 			break;
@@ -336,6 +339,7 @@ function create(c: ControlSnapshot): View {
 			view.update = (s) => {
 				caption.textContent = str(s.state.Caption);
 				caption.style.display = str(s.state.Caption) ? "" : "none";
+				root.classList.toggle("has-caption", str(s.state.Caption) !== "");
 				colors(root, s.state);
 				caption.style.backgroundColor = root.style.backgroundColor;
 				const inset = contentInsets("Frame");

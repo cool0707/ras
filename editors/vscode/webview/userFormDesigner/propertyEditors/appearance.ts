@@ -93,9 +93,17 @@ export function appearanceStyle(value: unknown): JSX.CSSProperties {
           : appearance.textAlign === 3
             ? "right"
             : undefined,
-    borderStyle:
-      appearance.borderStyle === 0 ? "none" : appearance.borderStyle === 1 ? "solid" : undefined,
   };
+}
+/**
+ * The class that draws BorderStyle. MSForms draws `fmBorderStyleSingle` as a
+ * 1px line in place of the SpecialEffect edge; `fmBorderStyleNone` leaves the
+ * control's own edge (a TextBox stays sunken) and only removes the line of
+ * controls whose edge is that line (an Image).
+ */
+export function borderClass(value: unknown): string {
+  const style = objectValue(value).borderStyle;
+  return style === 1 ? "border-single" : style === 0 ? "border-none" : "";
 }
 export function previewDocument(
   document: DesignerDocument,
