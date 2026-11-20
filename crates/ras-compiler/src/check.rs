@@ -299,7 +299,7 @@ impl Checker<'_> {
 
     /// Reports an error unless a value of type `from` (expression `e`) can be stored into `to`.
     fn coerce(&mut self, e: &Expr, from: &Type, to: &Type) {
-        if self.assignable(from, to) {
+        if self.assignable(from, to) || self.implicit_narrowing(e.span, from, to) {
             return;
         }
         // Integer constants may be stored into narrower integer types when they fit (spec §2.2).
@@ -326,6 +326,27 @@ impl Checker<'_> {
             String::new()
         };
         self.err(e.span, "E0301", format!("型 `{}` を `{}` に代入できません{hint}", self.show(from), self.show(to)));
+    }
+
+    /// A union stored where only some of its members fit (`const ws: Excel.Worksheet = activeSheet`):
+    /// allowed like VBA's `Set ws = ActiveSheet`, which checks at run time, with a warning (spec §2.6.2).
+    fn implicit_narrowing(&mut self, span: Span, from: &Type, to: &Type) -> bool {
+        let Some(ms) = from.union_members() else { return false };
+        if to.has_struct() || matches!(to, Type::Void | Type::Ns(_)) {
+            return false;
+        }
+        let rest: Vec<String> = ms.iter().filter(|m| !self.assignable(m, to)).map(|m| self.show(m)).collect();
+        if rest.len() == ms.len() {
+            return false;
+        }
+        let what = if to.is_object() { "実行時エラー（型が一致しません）になります" } else { "VBA の暗黙の型変換になり、変換できなければ実行時エラーになります" };
+        let (shown_from, shown_to) = (self.show(from), self.show(to));
+        self.warn(
+            span,
+            "W0306",
+            format!("`{shown_from}` を `{shown_to}` として扱います。値が `{}` のときは{what}（`instanceof` / `typeof` で絞り込むか、`as {shown_to}` で変換してください）", rest.join("` / `")),
+        );
+        true
     }
 
     fn unify_branches(&mut self, span: Span, a: &Type, b: &Type) -> Type {
@@ -811,6 +832,15 @@ impl Checker<'_> {
             Type::Map(..) => "Dictionary".into(),
             Type::Enum(_) => "Long".into(),
             Type::Decimal => "Decimal".into(),
+            // `TypeName` of an array: the element type and `()` (`"Variant()"`, `"String()"`).
+            Type::Array(e) if !e.is_array() => {
+                let elem = match &**e {
+                    Type::Any | Type::Decimal | Type::Error | Type::Union(_) => "Variant".to_string(),
+                    Type::Object | Type::Map(..) | Type::Func(_) => "Object".to_string(),
+                    other => self.type_name_of(other)?,
+                };
+                format!("{elem}()")
+            }
             other => crate::query::vba_type(other).filter(|n| !matches!(*n, "Variant" | "Object" | "LongPtr"))?.to_string(),
         })
     }
@@ -912,7 +942,7 @@ impl Checker<'_> {
                     Some(t) => {
                         let tps = self.fx.type_params.clone();
                         let declared = resolve_type(self.prog, self.module, &tps, t);
-                        if !self.assignable(&elem, &declared) {
+                        if !self.assignable(&elem, &declared) && !self.implicit_narrowing(t.span(), &elem, &declared) {
                             self.err(t.span(), "E0301", format!("要素の型 `{}` を `{}` に代入できません", self.show(&elem), self.show(&declared)));
                         }
                         declared
@@ -2217,17 +2247,26 @@ impl Checker<'_> {
                 let d = &self.prog.classes[*c];
                 d.kind == ClassKind::Host && !self.prog.modules[d.module].form.as_ref().is_some_and(|f| f.class == Some(*c))
             });
-            if hosts_only {
+            if hosts_only && found.is_empty() {
                 self.warn(name.span, "W0301", format!("`{}` の型定義に `{}` はありません。遅延バインディングとして扱います", names.join("` / `"), name.text));
                 self.set_res(e.id, Res::Dynamic);
                 return Access::Dynamic;
             }
-            self.err(
+            if hosts_only {
+                // `activeSheet.cells(1, 1)`: typed by the members that have it, called by late binding.
+                self.warn(
+                    name.span,
+                    "W0305",
+                    format!("`{}` は `{}` にないため、値が `{}` のときは実行時エラーになります（ユニオン型 `{shown}` のうち一部の型のメンバーです。`instanceof` で型を絞り込んでください）", name.text, names.join("` / `"), names.join("` / `")),
+                );
+            } else {
+                self.err(
                 name.span,
                 "E0202",
-                format!("`{}` に `{}` はありません（ユニオン型 `{shown}` では、すべての型に共通するメンバーだけを参照できます。`instanceof` で型を絞り込んでください）", names.join("` / `"), name.text),
-            );
-            return Access::Error;
+                    format!("`{}` に `{}` はありません（ユニオン型 `{shown}` では、すべての型に共通するメンバーだけを参照できます。`instanceof` で型を絞り込んでください）", names.join("` / `"), name.text),
+                );
+                return Access::Error;
+            }
         }
         for m in &found {
             let (owner, public) = match m {
@@ -3990,8 +4029,11 @@ fn assigns_in_stmt(s: &Stmt, name: &str) -> bool {
     })
 }
 
-/// The type whose values `TypeName` reports as `name` (`"String"` → `string`).
+/// The type whose values `TypeName` reports as `name` (`"String"` → `string`, `"Variant()"` → `any[]`).
 fn type_of_type_name(name: &str) -> Option<Type> {
+    if let Some(elem) = name.strip_suffix("()") {
+        return Some(Type::array(if elem == "Variant" { Type::Any } else { type_of_type_name(elem)? }));
+    }
     Some(match name {
         "String" => Type::Str,
         "Boolean" => Type::Bool,

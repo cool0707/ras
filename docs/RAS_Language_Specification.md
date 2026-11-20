@@ -7,7 +7,7 @@
 > * 名前付き引数 `f(a: 123, c: "あいう")` を追加（§3.3）。エディタで引数名を補完する（§16.2.1）
 > * ユーザーフォームのデバッグ実行（§14.10.7）と Excel での実行（§14.11.8）を追加
 > * 参照の検索・名前の変更の対象と拒否する名前、セマンティックトークンの種類、未インポートの候補の挿入位置を規定（§16.2.5〜§16.2.7）
-> * ユニオン型 `A | B` と、`instanceof` / `typeof` による型の絞り込みを追加（§2.6）。`sheets(1)` などシートのコレクションの要素は `Excel.Worksheet | Excel.Chart` になる
+> * ユニオン型 `A | B` と、`instanceof` / `typeof` による型の絞り込みを追加（§2.6）。同梱の型定義で Object / Variant を返していたメンバーのうち、値の型が決まっているもの（`activeSheet`・`sheets(1)` は `Excel.Worksheet | Excel.Chart`、`getOpenFilename()` は `string | boolean | any[]` など）をユニオン型にした（§2.6.5）
 > * クラス・インターフェイスの型パラメータに既定の型引数 `T = 型` を書けるようにした（§2.4.1）
 
 > v0.7 からの変更
@@ -350,7 +350,8 @@ End Function
 
 #### 2.6.2 代入と演算
 
-* **代入:** メンバーのどれかに代入できる値は、ユニオン型に代入できる。ユニオン型の値は、すべてのメンバーを代入できる型に代入できる（`Excel.Worksheet | Excel.Chart` は `object` に代入できるが `Excel.Worksheet` には代入できない）。
+* **代入:** メンバーのどれかに代入できる値は、ユニオン型に代入できる。ユニオン型の値は、すべてのメンバーを代入できる型に代入できる（`Excel.Worksheet | Excel.Chart` は `object` に代入できる）。
+* **一部のメンバーだけが代入できる型への代入:** 警告（`W0306`）を出して代入する（`const ws: Excel.Worksheet = activeSheet;`）。VBA の `Set ws = ActiveSheet` と同じく、値が代入できないメンバー（グラフ シート）だったときは実行時エラーになる（値型なら VBA の暗黙の型変換）。`instanceof` / `typeof` で絞り込むか、`as` で変換すると警告は出ない。どのメンバーも代入できない型への代入はエラー。
 * **数値の拡大変換:** メンバーの型そのものではなく拡大変換で入る値は、そのメンバーの型に変換して格納する（`string | double` に `1` を入れると `CDbl(1&)`）。`typeof` が格納した値の型名を返すため。
 * **`==` / `!=`:** どれかのメンバーと比較できれば書ける。`Variant` に格納するユニオン型の比較では、値の種類（数値・文字列・真偽値・日付・オブジェクト）が違えば等しくない（VBA の `=` のように変換したりエラーにしたりしない。ランタイム `RAS_UnionEq`）。
 * **大小比較・文字列の連結:** すべてのメンバーで使える場合だけ書ける（`int | double` どうしの `<`、`"a" + v`）。算術演算は絞り込んでから行う。
@@ -362,7 +363,8 @@ End Function
 * **共通のメンバー:** プロパティ・メソッドは、すべてのメンバーの型に同じ名前のメンバーがあるときに使える。補完にも共通のメンバーだけを出す。値型を含むユニオン型のメンバーは参照できない（レシーバとしてユニオン型を受け取れる拡張メソッドは呼べる）。
 * **プロパティ:** 型はメンバーごとの型のユニオン型になる。型がメンバーごとに異なるプロパティ、どれかで読み取り専用のプロパティには代入できない。
 * **メソッド:** 引数は、すべてのメンバーのメソッドで受け取れなければならない。戻り値はメンバーごとの戻り値のユニオン型（どれかが `void` なら `void`）。名前付き引数は、どのメソッドでも引数の名前と順序が同じときだけ使える。ジェネリックなメソッドは呼べない。
-* **型定義にないメンバー:** ホストの型（Excel など）の型定義にないメンバーは、単独の型と同じく警告 `W0301` を出して遅延バインディングで呼ぶ。RAS のクラスにないメンバーはエラー。
+* **一部の型にだけあるメンバー:** ホストの型（Excel など）のメンバーが一部のメンバー型にしかないときは、警告（`W0305`）を出し、それを持つ型のメンバーとして型を付けて遅延バインディングで呼ぶ（`activeSheet.cells(1, 1)` は `Excel.Range`。グラフ シートがアクティブなら実行時エラー）。RAS のクラスにしかないメンバーはエラー。
+* **型定義にないメンバー:** どのメンバー型の型定義にもないホストのメンバーは、単独の型と同じく警告 `W0301` を出して遅延バインディングで呼ぶ。
 
 #### 2.6.4 型の絞り込み
 
@@ -384,16 +386,42 @@ End Function
 * **`typeof` の名前:** `typeof` は VBA の `TypeName` と同じ名前を返す（`"String"`、`"Long"`、`"Double"`、`"Boolean"`、クラス名）。JavaScript の名前（`"string"`、`"number"` など）と比較すると一致しないため警告（`W0312`）。
 * **生成する VBA:** 変数は宣言した型（`Object` / `Variant`）のままで、絞り込まれた箇所のメンバーも遅延バインディングで呼ぶ。`instanceof` は `TypeOf … Is`、`typeof` は `TypeName` になる。
 
-#### 2.6.5 シートのコレクション
+#### 2.6.5 同梱の型定義のユニオン型
 
-ブックのシートのコレクション（`sheets`、`thisWorkbook.sheets`、`window.selectedSheets`）の要素は `Excel.Worksheet | Excel.Chart` になる（同梱の型定義が `interface Sheets<T = Worksheet | Chart>` と宣言している。§2.4.1）。Excel 4.0 マクロシートは `Worksheet` オブジェクトとして現れる。ダイアログシート（`DialogSheet`）は型定義にないため、ダイアログシートを含むブックでは `instanceof` の偽の分岐が `Excel.Chart` とは限らない。
+タイプ ライブラリが Object / Variant を返すメンバーのうち、実際に返る値の型が決まっているものは、同梱の型定義でユニオン型にしている。
+
+| メンバー | 型 |
+|---|---|
+| `activeSheet`、`application.activeSheet`、`Workbook.activeSheet`、`Window.activeSheet` | `Excel.Worksheet \| Excel.Chart` |
+| シートのコレクションの要素（`sheets(1)`、`for (const s of thisWorkbook.sheets)`、`Window.selectedSheets`、`sheets.add()`） | `Excel.Worksheet \| Excel.Chart` |
+| `Worksheet.next`、`Worksheet.previous` | `Excel.Worksheet \| Excel.Chart` |
+| `Shape.parent`、`Shapes.parent`、`ChartObject.parent`、`ChartObjects.parent`、`PageSetup.parent` | `Excel.Worksheet \| Excel.Chart` |
+| `Chart.parent`（グラフ シートはブック、埋め込みグラフは `ChartObject`） | `Excel.Workbook \| Excel.ChartObject` |
+| `Name.parent`（ブック単位の名前はブック、シート単位の名前はシート） | `Excel.Workbook \| Excel.Worksheet` |
+| `Window.rangeFromPoint(x, y)` | `Excel.Range \| Excel.Shape` |
+| `application.statusBar`（Excel が表示を管理しているときは `false`） | `string \| boolean` |
+| `application.getSaveAsFilename(...)`（キャンセルは `false`） | `string \| boolean` |
+| `application.getOpenFilename(...)`（キャンセルは `false`。`multiSelect` が `true` ならパスの配列） | `string \| boolean \| any[]` |
+
+* **シートの種類:** シートのコレクションは `interface Sheets<T = Worksheet | Chart>` と宣言している（§2.4.1）。Excel 4.0 マクロシートは `Worksheet` オブジェクトとして現れる。ダイアログシート（`DialogSheet`）は型定義にないため、ダイアログシートを含むブックでは `instanceof Excel.Worksheet` の偽の分岐が `Excel.Chart` とは限らない。
+* **`getOpenFilename` の配列:** Excel が返す配列は 1 始まりだが、RAS の配列はすべて 0 始まりのため（§13.3）、生成する VBA はランタイム `RAS_Rebase1` で 0 始まりに直す。`typeof` は `"Variant()"`。
+* **既存のコード:** `const ws: Excel.Worksheet = activeSheet;` や `activeSheet.cells(1, 1)` はそのままコンパイルでき、警告（`W0306` / `W0305`）が出る。
+* **ユニオン型にしていないもの:** 値が引数や状況でさまざまに変わるもの（`selection`、`application.inputBox`・`evaluate`・`run`・`caller`、`Range.value` など）、エラー値（`CVErr`）や `Null` を返しうるもの、引数の有無で単体とコレクションが変わるもの（`chartObjects(...)` など）は `object` / `any` のまま。
 
 ```typescript
+const f = application.getOpenFilename("Excel ブック,*.xlsx", 1, "開くブック", "開く", true);
+if (typeof f == "Boolean") return;          // キャンセル
+if (typeof f == "Variant()") {
+    for (const path of f) workbooks.open(path);
+} else {
+    workbooks.open(f);                     // f: string
+}
+
 for (const sh of thisWorkbook.sheets) {
     if (sh instanceof Excel.Worksheet) {
         sh.cells(1, 1).value = sh.name;
     } else {
-        sh.chartTitle.text = sh.name;   // sh: Excel.Chart
+        sh.chartTitle.text = sh.name;      // sh: Excel.Chart
     }
 }
 ```
@@ -1845,7 +1873,7 @@ Excel / VBA / Office のタイプ ライブラリは、メンバー名を Pascal
 * **生成する VBA:** タイプ ライブラリの綴りで出力する（`ws.Cells(r, 1).Value`）。型のない値（`any` / `object`）のメンバーも、同梱の型定義に同じ名前のメンバーがあればその綴りで出力する（`activeSheet.cells(1, 1)` → `ActiveSheet.Cells(1, 1)`）。
 * **VBA の綴りで書いた場合:** VBA は大文字小文字を区別しないため、`ws.Cells(r, 1).Value` と書いても同じメンバーとして解決する。ただし警告（`W0304`）を出す。`ras check --fix` とエディタのクイックフィックスが camelCase に書き換える。
 * **プロジェクトが宣言した名前はそのまま:** シートのコード名（`Sheet1`）と `types/*.d.ras` で宣言した名前は、書かれたとおりに参照し、そのまま出力する。変換するのは同梱の型定義の名前だけである。
-* **同梱の型定義の書き方:** `.d.ras` 自体はタイプ ライブラリの綴りで書く（`ras typegen` の出力と同じ形）。コレクションの要素の型は、型引数で表す（`interface Sheets<T>`）。型引数を省略したホスト型は、既定の型引数があればそれ（`Excel.Sheets` は `Excel.Sheets<Excel.Worksheet | Excel.Chart>`。§2.6.5）、なければ要素が `object` になる。
+* **同梱の型定義の書き方:** `.d.ras` 自体はタイプ ライブラリの綴りで書く（`ras typegen` の出力と同じ形）。コレクションの要素の型は、型引数で表す（`interface Sheets<T>`）。型引数を省略したホスト型は、既定の型引数があればそれ（`Excel.Sheets` は `Excel.Sheets<Excel.Worksheet | Excel.Chart>`。§2.6.5）、なければ要素が `object` になる。タイプ ライブラリが Object / Variant を返すメンバーでも、値の型が決まっているものはユニオン型で書く（§2.6.5）。
 
 ---
 

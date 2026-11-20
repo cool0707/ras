@@ -102,6 +102,34 @@ Public Function RAS_ValueKind(ByRef v As Variant) As Long
         RAS_ValueKind = 0&
     End Select
 End Function
+'@@ proc RAS_Rebase1
+' A 1-based 1-D array from Excel (GetOpenFilename with MultiSelect) as a 0-based one, like every
+' RAS array; any other value is returned as it is (spec 2.6.5).
+Public Function RAS_Rebase1(ByRef v As Variant) As Variant
+    Dim out() As Variant
+    Dim i As Long
+    Dim lb As Long
+    If IsObject(v) Then
+        Set RAS_Rebase1 = v
+        Exit Function
+    End If
+    If IsArray(v) Then
+        lb = LBound(v)
+        If lb <> 0& Then
+            If UBound(v) < lb Then
+                RAS_Rebase1 = Array()
+                Exit Function
+            End If
+            ReDim out(0 To UBound(v) - lb)
+            For i = lb To UBound(v)
+                out(i - lb) = v(i)
+            Next i
+            RAS_Rebase1 = out
+            Exit Function
+        End If
+    End If
+    RAS_Rebase1 = v
+End Function
 '@@ proc RAS_Assign
 ' Assignment when it is only known at run time whether the value is an object (spec 2.3).
 Public Sub RAS_Assign(ByRef target As Variant, ByRef source As Variant)

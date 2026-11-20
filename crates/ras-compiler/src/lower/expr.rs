@@ -1454,6 +1454,8 @@ impl<'p> Lowerer<'p> {
             }
             CallTarget::Host(f) => {
                 let def = &self.prog.fns[f];
+                // An array in a host result (`getOpenFilename(..., true)`) is 1-based: RAS arrays are 0-based.
+                let rebase = matches!(def.ret_ty(), Type::Union(ms) if ms.iter().any(|m| m.is_array()));
                 let mut fname = def.vba_name().to_string();
                 let outer_qualifier = self.pc.qualifier.clone();
                 let target = match (recv, &def.kind) {
@@ -1481,7 +1483,12 @@ impl<'p> Lowerer<'p> {
                 };
                 let argv = self.call_args(f, 0, args, &[]);
                 self.pc.qualifier = outer_qualifier;
-                self.finish_call(target, argv, want, true)
+                let r = self.finish_call(target, argv, want, true);
+                if rebase {
+                    r.map(|v| call("RAS_Rebase1", vec![v]))
+                } else {
+                    r
+                }
             }
             CallTarget::DefaultMember(_) => {
                 let o = self.expr(callee);

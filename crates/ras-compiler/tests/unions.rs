@@ -266,8 +266,10 @@ fn union_errors() {
         "`v`",
     );
     assert_reports("export function f(v: string | int) { if (typeof v == \"string\") {} }", "W0312", "\"String\"");
-    // Members missing from a host type's definition are late-bound, as for a single host type.
-    assert_reports("export function f(s: Excel.Worksheet | Excel.Chart) { s.cells(1, 1).value = 1; }", "W0301", "`Excel.Chart`");
+    // A host member that only some member types have is typed by those and late-bound, with a warning;
+    // one that none has is late-bound as for a single host type.
+    assert_reports("export function f(s: Excel.Worksheet | Excel.Chart) { s.cells(1, 1).value = 1; }", "W0305", "`Excel.Chart`");
+    assert_reports("export function f(s: Excel.Worksheet | Excel.Chart) { s.noSuchMember(); }", "W0301", "`noSuchMember`");
     assert!(diagnostics("function ok(p: string | Excel.Range | null) {}").is_empty());
 }
 
@@ -291,4 +293,90 @@ fn editor_shows_common_members() {
     for only_one in ["cells", "chartTitle"] {
         assert!(!labels.contains(&only_one.to_string()), "{only_one} is not common: {labels:?}");
     }
+}
+
+#[test]
+fn bundled_members_that_return_a_union() {
+    let src = r#"
+export function members(ws: Excel.Worksheet, ch: Excel.Chart, nm: Excel.Name, shp: Excel.Shape, win: Excel.Window) {
+    const active = activeSheet;
+    const bookActive = thisWorkbook.activeSheet;
+    const next = ws.next;
+    const shapeParent = shp.parent;
+    const chartParent = ch.parent;
+    const nameParent = nm.parent;
+    const hit = win.rangeFromPoint(1, 1);
+    const status = application.statusBar;
+    const saveAs = application.getSaveAsFilename();
+    const open = application.getOpenFilename();
+    const added = thisWorkbook.sheets.add();
+}
+"#;
+    let (prog, m) = analyze_one(src);
+    let f = prog.fns.iter().find(|f| f.module == m && f.name == "members").unwrap();
+    let ty = |name: &str| prog.show(&f.locals.iter().find(|l| l.name == name).unwrap().ty);
+    for name in ["active", "bookActive", "next", "shapeParent", "added"] {
+        assert_eq!(ty(name), "Excel.Worksheet | Excel.Chart", "{name}");
+    }
+    assert_eq!(ty("chartParent"), "Excel.Workbook | Excel.ChartObject");
+    assert_eq!(ty("nameParent"), "Excel.Workbook | Excel.Worksheet");
+    assert_eq!(ty("hit"), "Excel.Range | Excel.Shape");
+    assert_eq!(ty("status"), "string | boolean");
+    assert_eq!(ty("saveAs"), "string | boolean");
+    assert_eq!(ty("open"), "string | boolean | any[]");
+    // Members that are not one of a few known types stay as they were.
+    let (prog, m) = analyze_one("export function f() { const s = selection; const v = sheet1Value(); }\nfunction sheet1Value(): any { return activeCell.value; }\n");
+    let f = prog.fns.iter().find(|f| f.module == m && f.name == "f").unwrap();
+    assert_eq!(prog.show(&f.locals.iter().find(|l| l.name == "s").unwrap().ty), "object");
+}
+
+#[test]
+fn code_written_for_object_still_compiles_with_warnings() {
+    let src = r#"
+export function legacy() {
+    const ws: Excel.Worksheet = activeSheet;
+    ws.cells(1, 1).value = 1;
+    activeSheet.cells(2, 1).value = 2;
+    const path: string = application.getSaveAsFilename();
+}
+"#;
+    let ds = diagnostics(src);
+    assert!(ds.iter().all(|(c, _)| !c.starts_with('E')), "{ds:#?}");
+    assert!(ds.iter().any(|(c, m)| *c == "W0306" && m.contains("`Excel.Worksheet | Excel.Chart` を `Excel.Worksheet` として扱います") && m.contains("`Excel.Chart` のときは実行時エラー")), "{ds:#?}");
+    assert!(ds.iter().any(|(c, m)| *c == "W0306" && m.contains("`string | boolean` を `string`") && m.contains("暗黙の型変換")), "{ds:#?}");
+    assert!(ds.iter().any(|(c, m)| *c == "W0305" && m.contains("`cells` は `Excel.Chart` にない")), "{ds:#?}");
+    // The member is typed by the member types that have it.
+    assert_contains(&hover_at(src, "activeSheet.cells(2, 1).val"), "value");
+    let (_, out) = compile(src);
+    let m = code(&out, "M");
+    assert_contains(&m, "    Set ws = ActiveSheet\n    ws.Cells(1&, 1&).Value = 1&\n    ActiveSheet.Cells(2&, 1&).Value = 2&\n    path_ = Application.GetSaveAsFilename()\n");
+
+    // What the VBA importer writes for `Set ws = ActiveSheet` (spec §14.7.1) keeps compiling.
+    let vba = "Option Explicit\nPublic Sub Test()\n    Dim ws As Worksheet\n    Set ws = ActiveSheet\n    Set ws = ws.Next\n    Application.StatusBar = False\nEnd Sub\n";
+    let converted = ras_compiler::vba2ras::convert(vba, &ras_compiler::vba2ras::Target::Standard, &[]);
+    let ds = diagnostics(&converted.text);
+    assert!(ds.iter().all(|(c, _)| !c.starts_with('E')), "{}\n{ds:#?}", converted.text);
+}
+
+#[test]
+fn get_open_filename_arrays_are_zero_based() {
+    let src = r#"
+export function pick(): int {
+    const f = application.getOpenFilename("Excel,*.xlsx", 1, "選択", "開く", true);
+    if (typeof f == "Boolean") return 0;
+    if (typeof f == "Variant()") {
+        for (const p of f) workbooks.open(p);
+        return f.length;
+    }
+    workbooks.open(f);
+    return 1;
+}
+"#;
+    let ds = diagnostics(src);
+    assert!(ds.is_empty(), "{ds:#?}");
+    let (_, out) = compile(src);
+    let m = code(&out, "M");
+    assert_contains(&m, "    f = RAS_Rebase1(Application.GetOpenFilename(\"Excel,*.xlsx\", 1&, \"選択\", \"開く\", True))\n    If TypeName(f) = \"Boolean\" Then\n");
+    assert_contains(&m, "        For ras_i = 0 To RAS_Len(f) - 1&\n");
+    assert_contains(&code(&out, "RAS_Runtime"), "Public Function RAS_Rebase1(ByRef v As Variant) As Variant\n");
 }
