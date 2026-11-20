@@ -19,6 +19,50 @@ pub struct Config {
     /// `-O` override from the command line.
     #[serde(skip)]
     pub opt_override: Option<u8>,
+    /// User forms of the project (`forms/<Name>.form.json`), whose code-behind
+    /// `forms/<Name>.ras` is compiled as the form's code module (spec §14.11).
+    #[serde(skip)]
+    pub forms: Vec<FormDecl>,
+}
+
+/// What the compiler needs to know about a user form: its name and controls.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FormDecl {
+    /// `form.name` (the VBA name of the form).
+    pub name: String,
+    pub controls: Vec<FormControl>,
+}
+
+/// A control of a user form.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FormControl {
+    /// VBA name (`txtName`).
+    pub name: String,
+    /// FormSpec control type (`TextBox`, `CommandButton`, `Page`, `Control` …).
+    pub control_type: String,
+}
+
+impl FormDecl {
+    /// Reads the name and controls from the text of a `.form.json` file (FormSpec);
+    /// `None` when the text is not JSON with a `form.name`.
+    pub fn from_form_json(text: &str) -> Option<FormDecl> {
+        let value: serde_json::Value = serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text)).ok()?;
+        let name = value.get("form")?.get("name")?.as_str()?.to_string();
+        let mut controls = Vec::new();
+        fn walk(list: Option<&serde_json::Value>, out: &mut Vec<FormControl>) {
+            for c in list.and_then(|v| v.as_array()).into_iter().flatten() {
+                let name = c.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                let ty = c.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+                if !name.is_empty() {
+                    out.push(FormControl { name: name.to_string(), control_type: ty.trim().to_string() });
+                }
+                // Legacy nested specs keep children inside their container.
+                walk(c.get("controls"), out);
+            }
+        }
+        walk(value.get("controls"), &mut controls);
+        Some(FormDecl { name, controls })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

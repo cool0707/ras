@@ -294,6 +294,9 @@ pub enum VModuleKind {
     /// Code for a document module (`ThisWorkbook`, a sheet); merged into the
     /// RAS-managed region by sync / pack, never imported as a file.
     Document,
+    /// Code module of a user form (spec §14.11): the whole code pane, written
+    /// together with the form's designer storage by `ras pack` / `ras sync`.
+    Form,
 }
 
 #[derive(Clone, Debug)]
@@ -400,9 +403,10 @@ impl Printer<'_> {
             }
             VStmt::Call { target, args } => {
                 let mut text = target.print();
-                if !args.is_empty() {
-                    let mut a = String::new();
-                    write_args(&mut a, args);
+                let mut a = String::new();
+                write_args(&mut a, args);
+                // Every argument omitted: `wb.Close`, not `wb.Close `.
+                if !a.is_empty() {
                     if a.starts_with('(') {
                         // `f (x), y` would be parsed as a parenthesised first argument.
                         text = format!("Call {text}({a})");
@@ -584,12 +588,12 @@ impl Printer<'_> {
 pub fn file_header(m: &VModule) -> String {
     let mut s = String::new();
     match m.kind {
-        VModuleKind::Standard | VModuleKind::Document => {}
+        VModuleKind::Standard | VModuleKind::Document | VModuleKind::Form => {}
         VModuleKind::Class => {
             s.push_str("VERSION 1.0 CLASS\r\nBEGIN\r\n  MultiUse = -1  'True\r\nEND\r\n");
         }
     }
-    if m.kind != VModuleKind::Document {
+    if !matches!(m.kind, VModuleKind::Document | VModuleKind::Form) {
         let _ = write!(s, "Attribute VB_Name = \"{}\"\r\n", m.name);
     }
     if m.kind == VModuleKind::Class {

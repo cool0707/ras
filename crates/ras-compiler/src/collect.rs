@@ -126,6 +126,7 @@ pub fn collect(inputs: Vec<SourceInput>, config: Config) -> Program {
         c.declare_module_items(m);
     }
     c.add_sheet_code_names();
+    c.add_forms();
     for m in 0..c.prog.modules.len() {
         c.resolve_imports(m);
     }
@@ -183,11 +184,22 @@ impl Collector {
         let line_starts = line_starts(&input.text);
         let mut info = TypeInfo::default();
         info.expr_types = vec![Type::Error; parse.ast.expr_count as usize];
+        // A form's code-behind is the form's code module: its VBA name is the form's name.
+        let form = match input.key.strip_prefix(FORM_KEY_PREFIX) {
+            Some(name) if input.kind == ModuleKind::User => {
+                Some((name.to_string(), FormModule { decl: self.prog.config.forms.iter().find(|f| f.name.eq_ignore_ascii_case(name)).cloned(), class: None }))
+            }
+            _ => None,
+        };
+        let vba_name = match &form {
+            Some((name, f)) => f.decl.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| name.clone()),
+            None => vba_module_name(&input.key),
+        };
         self.prog.modules.push(ModuleData {
             id,
             path: input.path,
             rel_path: input.rel_path,
-            vba_name: vba_module_name(&input.key),
+            vba_name,
             key: input.key,
             kind: input.kind,
             text: Rc::from(input.text),
@@ -205,6 +217,7 @@ impl Collector {
             vars: Vec::new(),
             imports: Vec::new(),
             line_starts,
+            form: form.map(|f| f.1),
         });
     }
 
@@ -250,6 +263,105 @@ impl Collector {
         }
     }
 
+    /// What a form's code-behind cannot contain: it is the code module of the form (an object
+    /// module), not a standard module (spec §14.11.2).
+    fn check_form_items(&mut self, m: ModuleId) {
+        let ast = self.prog.modules[m].ast.clone();
+        for item in &ast.items {
+            let (span, what) = match item {
+                Item::Stmt(s) if !matches!(s.kind, ast::StmtKind::Empty | ast::StmtKind::Error) => (s.span, "トップレベルの文"),
+                Item::Class(c) => (c.name.span, "クラス"),
+                Item::Interface(i) => (i.name.span, "インターフェイス"),
+                Item::Struct(s) => (s.name.span, "構造体"),
+                Item::DeclareModule(d) => (d.span, "`declare module`"),
+                Item::Var(v) if v.exported => (v.name.span, "`export` した変数"),
+                Item::Enum(e) if e.exported => (e.name.span, "`export` した列挙型"),
+                Item::TypeAlias(a) if a.exported => (a.name.span, "`export` した型エイリアス"),
+                _ => continue,
+            };
+            self.err(m, span, "E0630", format!("フォームのコードビハインドには{what}を書けません（関数・変数・定数・列挙型だけを書けます。共有するものは src/ のモジュールに置いてください）"));
+        }
+    }
+
+    /// The type of `this` in a form's code-behind: a host class named like the form whose fields
+    /// are the controls, extending `MSForms.UserForm`. The form's default instance is a global
+    /// of that type, so other modules can write `frmInput.show()`.
+    fn add_forms(&mut self) {
+        let msforms = self.prog.namespaces.get("MSForms").cloned().unwrap_or_default();
+        let host = |name: &str| match msforms.get(name) {
+            Some(Sym::Class(c)) => Some(*c),
+            _ => None,
+        };
+        for m in 0..self.prog.modules.len() {
+            let Some(form) = self.prog.modules[m].form.clone() else { continue };
+            self.check_form_items(m);
+            let Some(decl) = form.decl else {
+                let msg = format!("フォーム `{}` のデザイン（forms/{}.form.json）が見つかりません。`ras form new` で作るか、ブックから `ras form pull` で取り出してください", self.prog.modules[m].vba_name, self.prog.modules[m].vba_name);
+                self.err(m, Span::default(), "E0631", msg);
+                continue;
+            };
+            let ident = ast::Ident { text: decl.name.clone(), span: Span::default() };
+            let id = self.alloc_class(m, &ident, ClassKind::Host, true, Some(format!("ユーザーフォーム `{}`（forms/{}.form.json）。", decl.name, decl.name)), &Target::Global);
+            // `alloc_class` lists the class under the module; it is not emitted (a host class).
+            self.prog.classes[id].extends = host("UserForm").map(|c| Type::Class(c, Vec::new())).into_iter().collect();
+            let mut fields = Vec::new();
+            for control in &decl.controls {
+                let ty = match control.control_type.as_str() {
+                    t if t.eq_ignore_ascii_case("Control") || t.is_empty() => Type::Object,
+                    t => match msforms.iter().find(|(k, _)| k.eq_ignore_ascii_case(t)) {
+                        Some((_, Sym::Class(c))) => Type::Class(*c, Vec::new()),
+                        _ => Type::Object,
+                    },
+                };
+                if fields.iter().any(|f: &FieldDef| f.name.eq_ignore_ascii_case(&control.name)) {
+                    continue;
+                }
+                fields.push(FieldDef {
+                    name: control.name.clone(),
+                    host_name: None,
+                    ty,
+                    vis: Visibility::Public,
+                    is_static: false,
+                    readonly: true,
+                    init: None,
+                    doc: Some(format!("{}（{}）", control.control_type, control.name)),
+                    span: Span::default(),
+                });
+            }
+            self.prog.classes[id].fields = fields;
+            // Public functions of the code-behind are members of the form.
+            let exported: Vec<FnId> = self.prog.modules[m].fns.iter().copied().filter(|&f| self.prog.fns[f].exported && matches!(self.prog.fns[f].kind, FnKind::Free)).collect();
+            self.prog.classes[id].methods = exported;
+            if let Some(f) = self.prog.modules[m].form.as_mut() {
+                f.class = Some(id);
+            }
+            // The default instance, visible everywhere by the form's name.
+            let var = self.prog.vars.len();
+            self.prog.vars.push(VarDef {
+                id: var,
+                module: m,
+                name: decl.name.clone(),
+                host_name: None,
+                ty: Type::Class(id, Vec::new()),
+                is_const: true,
+                exported: false,
+                declared: true,
+                init: None,
+                const_value: None,
+                doc: Some(format!("ユーザーフォーム `{}` の既定のインスタンス。", decl.name)),
+                name_span: Span::default(),
+                used_outside_main: false,
+                reassigned: false,
+            });
+            if self.prog.globals.contains_key(&decl.name) {
+                let msg = format!("フォーム名 `{}` は既に宣言されている名前と重複します", decl.name);
+                self.err(m, Span::default(), "E0101", msg);
+            } else {
+                self.prog.globals.insert(decl.name.clone(), Sym::Var(var));
+            }
+        }
+    }
+
     fn declare_module_items(&mut self, m: ModuleId) {
         let ast = self.prog.modules[m].ast.clone();
         let is_typedef = self.prog.modules[m].kind == ModuleKind::TypeDef;
@@ -277,7 +389,8 @@ impl Collector {
         let only_vars = !has_decls
             && ast.items.iter().any(|i| matches!(i, Item::Var(v) if v.init.is_some() && !v.declared))
             && !ast.items.iter().any(|i| matches!(i, Item::Var(v) if v.exported));
-        if (has_exec || only_vars) && !is_typedef {
+        let is_form = self.prog.modules[m].form.is_some();
+        if (has_exec || (only_vars && !is_form)) && !is_typedef && !is_form {
             // Script style: top-level statements become `Public Sub Main()`.
             let span = main_stmts.first().map(|s| s.span).unwrap_or_default();
             let decl = ast::FnDecl {
@@ -1003,7 +1116,19 @@ impl Collector {
             // Inferred from the body.
             (None, _) => None,
         };
-        let attrs = self.fn_attrs(m, &decl, &kind);
+        let mut attrs = self.fn_attrs(m, &decl, &kind);
+        if self.prog.modules[m].form.is_some() && matches!(kind, FnKind::Free | FnKind::ModInit) {
+            attrs.form_member = true;
+            let bad = [("macro", attrs.macro_entry), ("init", attrs.init), ("udf", attrs.udf), ("ribbon", attrs.ribbon)];
+            for (name, set) in bad {
+                if set {
+                    self.err(m, decl.name.span, "E0632", format!("フォームのコードビハインドの関数に `@{name}` は付けられません（src/ のモジュールに置いてください）"));
+                }
+            }
+            if decl.params.first().is_some_and(|p| p.is_this) {
+                self.err(m, decl.name.span, "E0632", "フォームのコードビハインドでは拡張メソッドを宣言できません（src/ のモジュールに置いてください）");
+            }
+        }
         let f = &mut self.prog.fns[id];
         f.type_params = own;
         f.params = params;
@@ -1284,6 +1409,10 @@ pub fn struct_map_class(prog: &Program) -> Option<ClassId> {
 }
 
 pub const STRUCT_MAP_MODULE: &str = "ras_collections";
+
+/// Import-key prefix of a form's code-behind (`forms/<Name>.ras` has the key `<forms>/<Name>`).
+/// It cannot be spelled by a relative import, so a code-behind is never imported.
+pub const FORM_KEY_PREFIX: &str = "<forms>/";
 
 fn anon_struct(prog: &mut Program, m: ModuleId, kind: StructKind, fields: Vec<(String, Type, bool)>, span: Span, errors: &mut Vec<(Span, String)>) -> Type {
     if fields.iter().any(|f| f.1.is_error()) {

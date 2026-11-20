@@ -98,6 +98,7 @@ fn kind_of(k: &VModuleKind) -> Kind {
         VModuleKind::Standard => Kind::Standard,
         VModuleKind::Class => Kind::Class,
         VModuleKind::Document => Kind::Document,
+        VModuleKind::Form => Kind::Form,
     }
 }
 
@@ -179,6 +180,9 @@ fn undo(project: &mut dyn VbProject, journal: Vec<Undo>) -> Vec<String> {
 /// code records a hash of the design); otherwise only its code is rewritten. A form made in the
 /// VBE is replaced only with `overwrite`.
 pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, opts: &SyncOptions) -> Result<Report, SyncError> {
+    // The code of a form (`forms/<Name>.ras`) travels with its designer (`forms`), not as a module of its own.
+    let files: Vec<OutputFile> = files.iter().filter(|f| f.kind != VModuleKind::Form).cloned().collect();
+    let files = &files[..];
     let existing = project.components()?;
     let find = |name: &str| existing.iter().find(|c| same_name(&c.name, name));
     let mut report = Report::default();

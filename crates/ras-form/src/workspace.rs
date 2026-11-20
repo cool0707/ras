@@ -1,11 +1,15 @@
 //! The forms of a project: `forms/<Name>.form.json` (the design) and
-//! `forms/<Name>.bas` (the code-behind), RAS language specification §14.11.
+//! `forms/<Name>.ras` (the code-behind, written in RAS and compiled by
+//! `ras-compiler` into the form's code module), RAS language specification
+//! §14.11. A VBA code-behind `forms/<Name>.bas` of earlier versions is still
+//! read when there is no `.ras` file.
 //!
 //! * [`load`] and [`build`] turn the files into what `ras pack` and the
 //!   live sync write into a workbook.
 //! * [`pull`] goes the other way: it writes the files for a form found in a
 //!   workbook.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ras_ovba::UserForm;
@@ -26,6 +30,30 @@ pub struct LoadedForm {
     pub parsed: Parsed,
     /// Path of the code-behind file (which may not exist).
     pub code_path: PathBuf,
+    /// Language of the code-behind.
+    pub code_kind: CodeKind,
+}
+
+/// Language of a form's code-behind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodeKind {
+    /// `forms/<Name>.ras`, compiled by the RAS compiler (also when there is no code-behind yet).
+    Ras,
+    /// `forms/<Name>.bas`: VBA as it appears in the code pane (earlier versions).
+    Bas,
+}
+
+/// The code-behind of form `name`: `forms/<Name>.ras`, or the VBA `forms/<Name>.bas` of
+/// earlier versions when only that exists.
+pub fn code_file(root: &Path, name: &str) -> (PathBuf, CodeKind) {
+    let dir = forms_dir(root);
+    let ras = dir.join(format!("{name}.ras"));
+    let bas = dir.join(format!("{name}.bas"));
+    if !ras.exists() && bas.exists() {
+        (bas, CodeKind::Bas)
+    } else {
+        (ras, CodeKind::Ras)
+    }
 }
 
 /// The directory that holds the forms of the project at `root`.
@@ -70,8 +98,18 @@ pub fn load(root: &Path) -> Result<Vec<LoadedForm>, String> {
                 });
             }
         }
+        let (code_path, code_kind) = code_file(root, &name);
+        if code_kind == CodeKind::Ras && dir.join(format!("{name}.bas")).exists() {
+            parsed.issues.push(Issue {
+                code: "userform_code".into(),
+                severity: Severity::Warning,
+                message: format!("forms/{name}.ras と forms/{name}.bas の両方があります。コードビハインドには {name}.ras を使い、{name}.bas は使いません（不要なら削除してください）"),
+                field: String::new(),
+            });
+        }
         forms.push(LoadedForm {
-            code_path: dir.join(format!("{name}.bas")),
+            code_path,
+            code_kind,
             name,
             rel_path: format!("forms/{file_name}"),
             text,
@@ -171,7 +209,12 @@ impl Built {
 
 /// Validates every form and generates its designer storage and code module.
 /// `root` is the project root (picture paths are relative to it).
-pub fn build(forms: &[LoadedForm], root: &Path, codepage: u16) -> Built {
+///
+/// `compiled` holds the code the RAS compiler generated for the `.ras`
+/// code-behinds (form name → code, the `OutputFile::code` of the form's
+/// module). A `.ras` form missing from it gets no code: enough to check the
+/// design (`ras check`), not to write the form.
+pub fn build(forms: &[LoadedForm], root: &Path, codepage: u16, compiled: &HashMap<String, String>) -> Built {
     let mut built = Built {
         forms: Vec::new(),
         problems: Vec::new(),
@@ -198,9 +241,15 @@ pub fn build(forms: &[LoadedForm], root: &Path, codepage: u16) -> Built {
                 continue;
             }
         };
-        let code = read_code(form).and_then(|code| {
-            codebehind::compose(&form.rel_path, &designer, spec, &code, codepage)
-        });
+        let code = match form.code_kind {
+            CodeKind::Bas => read_code(form),
+            CodeKind::Ras => Ok(compiled
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&form.name))
+                .map(|(_, code)| code.replace("\r\n", "\n"))
+                .unwrap_or_default()),
+        }
+        .and_then(|code| codebehind::compose(&form.rel_path, &designer, spec, &code, codepage));
         match code {
             Ok(code) => built.forms.push(UserForm {
                 name: designer.name,
@@ -227,6 +276,11 @@ pub struct Pulled {
     pub pictures: Vec<String>,
     /// What the FormSpec could not carry over.
     pub warnings: Vec<SnapshotWarning>,
+    /// VBA the conversion to RAS could not translate: (line in the `.ras` file, message).
+    /// The original code is kept there as a comment.
+    pub todos: Vec<(usize, String)>,
+    /// The existing `.ras` code-behind was kept: the form was written from it.
+    pub kept_code: bool,
 }
 
 /// Result of [`pull`].
@@ -243,9 +297,16 @@ fn is_list_control(control_type: &str) -> bool {
     t.eq_ignore_ascii_case("ComboBox") || t.eq_ignore_ascii_case("ListBox")
 }
 
-/// Writes `forms/<Name>.form.json`, `forms/<Name>.bas` and the pictures
+/// Writes `forms/<Name>.form.json`, `forms/<Name>.ras` and the pictures
 /// (`forms/assets/<Name>.<Control>.bmp|jpg`) for a form taken from a
 /// workbook (see `ras_ovba::unpack_user_forms`).
+///
+/// The VBA code of the form is converted to RAS
+/// (`ras_compiler::vba2ras::convert_form`); what could not be converted is
+/// kept as comments and reported in [`Pulled::todos`]. A `forms/<Name>.bas`
+/// of an earlier version is removed when the `.ras` file is written. A form
+/// that was written from `forms/` keeps an existing `.ras` file: its code was
+/// compiled from it ([`Pulled::kept_code`]).
 ///
 /// Existing files are only replaced with `force`. What the designer
 /// storage does not hold — the `list` / `selectedIndex` of ComboBox and
@@ -263,9 +324,10 @@ pub fn pull(
     }
     let dir = forms_dir(root);
     let spec_path = dir.join(format!("{name}.form.json"));
-    let code_path = dir.join(format!("{name}.bas"));
+    let code_path = dir.join(format!("{name}.ras"));
+    let legacy_path = dir.join(format!("{name}.bas"));
     if !force {
-        let existing: Vec<PathBuf> = [&spec_path, &code_path]
+        let existing: Vec<PathBuf> = [&spec_path, &code_path, &legacy_path]
             .into_iter()
             .filter(|p| p.exists())
             .cloned()
@@ -342,16 +404,40 @@ pub fn pull(
         pictures.push(rel);
     }
 
+    let decl = ras_compiler::FormDecl {
+        name: spec.form.name.clone(),
+        controls: spec
+            .controls
+            .iter()
+            .map(|c| ras_compiler::FormControl { name: c.name.clone(), control_type: c.control_type.trim().to_string() })
+            .collect(),
+    };
+    // A form written from `forms/` was compiled from the `.ras` file: that file is the source
+    // of its code, the VBA in the workbook only what it compiled to.
+    let keep_code = ras_ovba::is_generated_form(&form.code) && code_path.exists();
+    let converted = if keep_code {
+        ras_compiler::vba2ras::Converted::default()
+    } else {
+        ras_compiler::vba2ras::convert_form(&codebehind::code_behind(&form.code), &decl)
+    };
+
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     std::fs::write(&spec_path, spec.to_json())
         .map_err(|e| format!("{}: {e}", spec_path.display()))?;
-    std::fs::write(&code_path, codebehind::code_behind(&form.code))
-        .map_err(|e| format!("{}: {e}", code_path.display()))?;
+    if !keep_code {
+        std::fs::write(&code_path, &converted.text)
+            .map_err(|e| format!("{}: {e}", code_path.display()))?;
+    }
+    if legacy_path.exists() && !keep_code {
+        std::fs::remove_file(&legacy_path).map_err(|e| format!("{}: {e}", legacy_path.display()))?;
+    }
     Ok(PullOutcome::Written(Pulled {
         spec_path,
         code_path,
         pictures,
         warnings: snapshot.warnings,
+        todos: converted.todos,
+        kept_code: keep_code,
     }))
 }
 

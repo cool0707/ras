@@ -1,6 +1,6 @@
 //! `ras` — the RAS toolchain in a single binary (spec §7.3).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -79,7 +79,7 @@ enum Command {
         #[arg(long)]
         check: bool,
     },
-    /// ユーザーフォーム（forms/<Name>.form.json と forms/<Name>.bas）を扱う
+    /// ユーザーフォーム（forms/<Name>.form.json と forms/<Name>.ras）を扱う
     Form {
         #[command(subcommand)]
         action: FormCommand,
@@ -108,7 +108,7 @@ enum Command {
 
 #[derive(Subcommand)]
 enum FormCommand {
-    /// 新しいユーザーフォームの雛形（forms/<Name>.form.json と空の forms/<Name>.bas）を作る
+    /// 新しいユーザーフォームの雛形（forms/<Name>.form.json とコードビハインド forms/<Name>.ras）を作る
     New {
         /// フォーム名（VBA の識別子）
         name: String,
@@ -305,7 +305,7 @@ fn write_build(root: &Path, prog: &Program, out: &BuildOutput) -> Result<PathBuf
     let dir = root.join("build");
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let mut keep: HashSet<String> = HashSet::new();
-    for f in &out.files {
+    for f in out.files.iter().filter(|f| f.kind != VModuleKind::Form) {
         // Module files are stored in the target code page, as the VBE expects (spec §13.7).
         let path = dir.join(&f.file_name);
         std::fs::write(&path, encode(&f.full_text, prog.config.target.codepage)).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -328,11 +328,12 @@ fn write_build(root: &Path, prog: &Program, out: &BuildOutput) -> Result<PathBuf
 
 fn cmd_build(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
     let Some((prog, out)) = compile(root, args, None)? else { return Ok(ExitCode::from(1)) };
-    if load_forms(root, prog.config.target.codepage)?.is_none() {
+    if load_forms(root, prog.config.target.codepage, &out)?.is_none() {
         return Ok(ExitCode::from(1));
     }
     let dir = write_build(root, &prog, &out)?;
-    println!("{} 個のモジュールを {} に出力しました", out.files.len(), dir.display());
+    let modules = out.files.iter().filter(|f| f.kind != VModuleKind::Form).count();
+    println!("{modules} 個のモジュールを {} に出力しました", dir.display());
     Ok(ExitCode::SUCCESS)
 }
 
@@ -367,9 +368,10 @@ fn cmd_build_js(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Loads, validates and generates the forms of `forms/`; `None` (after printing the problems) when there are errors.
-fn load_forms(root: &Path, codepage: u16) -> Result<Option<Vec<ras_ovba::UserForm>>, String> {
-    let (_, built) = forms::build(root, codepage)?;
+/// Loads, validates and generates the forms of `forms/` with the code compiled from their
+/// `.ras` code-behinds; `None` (after printing the problems) when there are errors.
+fn load_forms(root: &Path, codepage: u16, out: &BuildOutput) -> Result<Option<Vec<ras_ovba::UserForm>>, String> {
+    let (_, built) = forms::build(root, codepage, &forms::compiled_code(&out.files))?;
     let errors = forms::report(&built);
     if errors > 0 {
         eprintln!("ユーザーフォームに {errors} 件のエラーがあります");
@@ -383,6 +385,7 @@ fn to_ovba_kind(k: &VModuleKind) -> ras_ovba::ModuleKind {
         VModuleKind::Standard => ras_ovba::ModuleKind::Standard,
         VModuleKind::Class => ras_ovba::ModuleKind::Class,
         VModuleKind::Document => ras_ovba::ModuleKind::Document,
+        VModuleKind::Form => ras_ovba::ModuleKind::Form,
     }
 }
 
@@ -403,11 +406,11 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     }
     let Some((prog, out)) = compile(root, args, Some(&book))? else { return Ok(ExitCode::from(1)) };
     write_build(root, &prog, &out)?;
-    let Some(user_forms) = load_forms(root, prog.config.target.codepage)? else { return Ok(ExitCode::from(1)) };
+    let Some(user_forms) = load_forms(root, prog.config.target.codepage, &out)? else { return Ok(ExitCode::from(1)) };
 
     // Modules that RAS generated earlier but that no longer exist are removed; hand-edited ones are reported (spec §14.7).
     let existing = ras_ovba::unpack(&book).map_err(|e| format!("{}: {e}", book.display()))?;
-    let generated: HashSet<&str> = out.files.iter().map(|f| f.name.as_str()).collect();
+    let generated: HashSet<&str> = out.files.iter().filter(|f| f.kind != VModuleKind::Form).map(|f| f.name.as_str()).collect();
     let mut remove = Vec::new();
     let mut drifted = Vec::new();
     if let Some(project) = &existing.project {
@@ -467,6 +470,8 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     let mut document_code = Vec::new();
     for f in &out.files {
         match f.kind {
+            // Written with the form's designer (`user_forms`).
+            VModuleKind::Form => {}
             VModuleKind::Document => document_code.push(ras_ovba::DocumentCode { code_name: f.name.clone(), managed_code: f.code.clone() }),
             _ => modules.push(ras_ovba::VbaModule { name: f.name.clone(), kind: to_ovba_kind(&f.kind), source: f.stream_text() }),
         }
@@ -529,7 +534,7 @@ fn live_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<Option<Ex
     let Some((prog, out)) = compile_with(root, args, Some(&book), true)? else { return Ok(Some(ExitCode::from(1))) };
     write_build(root, &prog, &out)?;
     let codepage = prog.config.target.codepage;
-    let Some(user_forms) = load_forms(root, codepage)? else { return Ok(Some(ExitCode::from(1))) };
+    let Some(user_forms) = load_forms(root, codepage, &out)? else { return Ok(Some(ExitCode::from(1))) };
     let rep = session.apply(&out.files, ras_sync::Forms { forms: &user_forms, codepage }, &ras_sync::SyncOptions { overwrite }).map_err(|e| e.to_string())?;
     println!("{} に同期しました（{}）", book.display(), rep.summary());
     if rep.drifted.is_empty() {
@@ -762,14 +767,15 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                     prog = analyze(&root, &BuildArgs::default(), None)?;
                 }
             }
-            let errors = report(&prog, &prog.diagnostics, true) + forms::check(&root, prog.config.target.codepage)?;
-            if errors > 0 {
-                eprintln!("{errors} 件のエラーがあります");
-                return Ok(ExitCode::from(1));
-            }
+            let mut errors = report(&prog, &prog.diagnostics, true);
             // Code generation can report further problems (size limits, unsupported constructs).
-            let out = ras_compiler::build(&prog, &BuildOptions::default());
-            let errors = report(&prog, &out.diagnostics, true);
+            let mut compiled = HashMap::new();
+            if errors == 0 {
+                let out = ras_compiler::build(&prog, &BuildOptions::default());
+                errors += report(&prog, &out.diagnostics, true);
+                compiled = forms::compiled_code(&out.files);
+            }
+            errors += forms::report(&forms::build(&root, prog.config.target.codepage, &compiled)?.1);
             if errors > 0 {
                 eprintln!("{errors} 件のエラーがあります");
                 return Ok(ExitCode::from(1));
@@ -804,8 +810,9 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         }
         Command::Form { action: FormCommand::Check } => {
             let root = find_root(project)?;
-            let (cfg, _) = ras_compiler::load_project(&root)?;
-            let (count, built) = forms::build(&root, cfg.target.codepage)?;
+            // The code-behinds are RAS: the project is compiled to get the code of the forms.
+            let Some((prog, out)) = compile(&root, &BuildArgs::default(), None)? else { return Ok(ExitCode::from(1)) };
+            let (count, built) = forms::build(&root, prog.config.target.codepage, &forms::compiled_code(&out.files))?;
             let errors = forms::report(&built);
             if errors > 0 {
                 eprintln!("{errors} 件のエラーがあります");

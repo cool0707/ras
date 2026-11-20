@@ -105,7 +105,8 @@ fn compile(root: &Path) -> Result<Built, String> {
         return Err(format!("ビルド エラーが {errors} 件あるため、同期していません"));
     }
     let codepage = prog.config.target.codepage;
-    let forms = ras_form::workspace::build(&ras_form::workspace::load(root)?, root, codepage);
+    let compiled = out.files.iter().filter(|f| f.kind == ras_compiler::vba::VModuleKind::Form).map(|f| (f.name.clone(), f.code.clone())).collect();
+    let forms = ras_form::workspace::build(&ras_form::workspace::load(root)?, root, codepage, &compiled);
     if let Some(first) = forms.problems.iter().find(|p| p.severity == ras_form::Severity::Error) {
         return Err(format!("ユーザーフォームにエラーが {} 件あるため、同期していません（{}: {}）", forms.errors(), first.rel_path, first.message));
     }

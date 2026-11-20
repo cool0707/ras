@@ -1019,6 +1019,7 @@ version = "0.1.0"
 dependencies = [
  "cfb",
  "image",
+ "ras-compiler",
  "ras-ovba",
  "serde",
  "serde_json",

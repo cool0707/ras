@@ -165,6 +165,7 @@ fn file_name(m: &VModule) -> String {
         VModuleKind::Standard => format!("{}.bas", m.name),
         VModuleKind::Class => format!("{}.cls", m.name),
         VModuleKind::Document => format!("{}.doccls", m.name),
+        VModuleKind::Form => format!("{}.frmcode", m.name),
     }
 }
 
@@ -178,7 +179,9 @@ fn finish(m: &VModule, code: String, mappings: Vec<Mapping>, codepage: u16, diag
     };
     let mut reported_char = false;
     // Document modules have no hash line: their code is merged into a managed region.
-    let offset = if m.kind == VModuleKind::Document { 0 } else { 1 };
+    // Forms carry their own marker line (spec §14.11.3).
+    let no_hash = matches!(m.kind, VModuleKind::Document | VModuleKind::Form);
+    let offset = if no_hash { 0 } else { 1 };
     for (i, raw) in code.lines().enumerate() {
         let (line, bad) = sanitize_line(raw, codepage);
         if let (Some(ch), false) = (bad, reported_char) {
@@ -214,7 +217,7 @@ fn finish(m: &VModule, code: String, mappings: Vec<Mapping>, codepage: u16, diag
     }
     let body: String = lines.iter().map(|l| format!("{l}\r\n")).collect();
     let hash = drift_hash(&body);
-    let code = if m.kind == VModuleKind::Document { body } else { format!("' RAS-GENERATED hash={hash:08X}\r\n{body}") };
+    let code = if no_hash { body } else { format!("' RAS-GENERATED hash={hash:08X}\r\n{body}") };
     let full_text = format!("{}{}", file_header(m), code);
     OutputFile { name: m.name.clone(), kind: m.kind.clone(), file_name: file_name(m), code, full_text, sources: m.sources.clone(), mappings: new_mappings, hash }
 }

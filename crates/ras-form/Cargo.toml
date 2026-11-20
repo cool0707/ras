@@ -9,6 +9,8 @@ description = "UserForm specifications (forms/*.form.json): validation and gener
 
 [dependencies]
 ras-ovba = { workspace = true }
+# Form code-behinds are RAS: `pull` converts the VBA of a form (`vba2ras`).
+ras-compiler = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Decoders for pictures that have to be converted to BMP (see `picture`).
