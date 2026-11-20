@@ -11,6 +11,7 @@
 !syntaxes/ras.tmLanguage.json
 !dist/extension.js
 !bin/**/ras_com.node
+!bin/**/ras_book.node
 !dist/webview/userFormDesigner.js
 !dist/webview/userFormDesigner.css
 !dist/webview/formRunner.js

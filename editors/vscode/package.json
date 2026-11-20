@@ -46,7 +46,8 @@
         "ras.path",
         "ras.server.extraArgs",
         "ras.debug.runtimeExecutable",
-        "ras.debug.comAddon"
+        "ras.debug.comAddon",
+        "ras.debug.bookAddon"
       ]
     }
   },
@@ -161,6 +162,28 @@
           "default": "",
           "scope": "machine-overridable",
           "markdownDescription": "デバッグ実行時に Excel へ接続するアドオン（`ras_com.node`）のパス。空の場合は拡張機能に同梱のもの、無ければ `ras` 実行ファイルと同じフォルダーのものを使います。"
+        },
+        "ras.debug.excel": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "excel",
+            "standIn"
+          ],
+          "default": "auto",
+          "markdownEnumDescriptions": [
+            "Windows では Excel（COM）に接続し、それ以外（macOS・Linux）や Excel 接続用アドオンが無い場合は、ブックの代役で実行します。",
+            "Excel（COM）にだけ接続します。",
+            "Excel を使わず、`ras.toml` の `workbook` のブックを読み込んだ代役で実行します（Windows でも）。数式は GridCraft の計算エンジンで計算し、変更後のブックは `build/debug/workbooks/` に保存します。"
+          ],
+          "scope": "resource",
+          "markdownDescription": "デバッグ実行で、プログラムが操作する Excel。`launch.json` の `excel` で構成ごとに上書きできます。"
+        },
+        "ras.debug.bookAddon": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Excel を使わないデバッグ実行でブックを読み書きするアドオン（`ras_book.node`）のパス。空の場合は拡張機能に同梱のもの、無ければ `ras` 実行ファイルと同じフォルダーのものを使います。"
         },
         "ras.debug.dialogs": {
           "type": "string",
@@ -381,6 +404,25 @@
               "mockHost": {
                 "type": "string",
                 "markdownDescription": "Excel の代わりに使う JavaScript モジュールのパス（Excel の無い環境でのテスト用）。"
+              },
+              "excel": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "excel",
+                  "standIn"
+                ],
+                "default": "auto",
+                "markdownEnumDescriptions": [
+                  "Windows では Excel（COM）に接続し、それ以外ではブックの代役で実行します。",
+                  "Excel（COM）にだけ接続します。",
+                  "Excel を使わず、`ras.toml` の `workbook` のブックを読み込んだ代役で実行します。"
+                ],
+                "markdownDescription": "プログラムが操作する Excel。省略時は設定 `ras.debug.excel`。"
+              },
+              "bookAddon": {
+                "type": "string",
+                "markdownDescription": "Excel を使わないときにブックを読み書きするアドオン（`ras_book.node`）のパス。省略時は拡張機能に同梱のものを使います。"
               },
               "dialogs": {
                 "type": "string",

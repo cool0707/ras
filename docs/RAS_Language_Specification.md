@@ -1449,7 +1449,7 @@ Excel を起動せず、ブックファイル内の VBA プロジェクトを ra
 
 ### 14.10 デバッグ実行（JavaScript ランタイム）
 
-VS Code 上でブレークポイント・ステップ実行・変数の確認を行うための、VBA とは別の実行経路。RAS のソースを JavaScript に変換して Node.js 上で動かし、Excel の操作が必要な箇所だけを COM 経由で実際の Excel に対して行う。
+VS Code 上でブレークポイント・ステップ実行・変数の確認を行うための、VBA とは別の実行経路。RAS のソースを JavaScript に変換して Node.js 上で動かし、Excel の操作が必要な箇所だけを COM 経由で実際の Excel に対して行う。Excel の無い環境（macOS・Linux、Excel の入っていない Windows）では、プロジェクトのブックを読み込んだ代役に対して行う（§14.10.8）。
 
 #### 14.10.1 方針
 
@@ -1467,6 +1467,7 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 | `@forms/<フォーム名>.js` / `.js.map` | フォームのコードビハインド（`forms/<フォーム名>.ras`）。§14.10.7 |
 | `ras-runtime.js` | ランタイム（`$rt`）。数値変換・オーバーフロー検査・文字列関数・エラーオブジェクト・VBA 標準関数・Excel へのアクセス |
 | `ras-forms.js` | ユーザーフォームのランタイム（MSForms のオブジェクトとイベント、フォームを表示するホストとの通信）。§14.10.7 |
+| `ras-excel.js` | Excel の代役（`Application`・`Workbook`・`Worksheet`・`Range` などのオブジェクト）。Excel の無いときに使う。§14.10.8 |
 | `ras-main.js` | ランチャー。`node --enable-source-maps build/debug/ras-main.js <モジュール名.関数名>` で実行する（`--list` で実行可能な関数を JSON で出力） |
 | `ras-debug.json` | 実行可能な関数の一覧とフォームの一覧（VS Code 拡張が読む） |
 
@@ -1569,6 +1570,21 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 * **MSForms のオブジェクト:** フォーム（`caption`・`width` / `height`・`backColor`・`font`・`controls`・`activeControl`・`show` / `hide`）と組み込みのコントロール（§14.11.1）の主なプロパティとメソッドを JavaScript で実装している（`text` / `value`、`caption`、`enabled` / `visible` / `locked`、位置と大きさ、色とフォント、`ComboBox` / `ListBox` の `addItem` / `removeItem` / `clear` / `list` / `column` / `listIndex` / `listCount` / `selected` / `multiSelect`、`MultiPage` の `pages` / `selectedItem`、`TabStrip` の `tabs`、`Image` の `picture` と `loadPicture`）。初期値は `.form.json` から読む（`list` / `selectedIndex` を含む）。未実装のメンバーはエラー 438、`controls.add` などの未対応の操作はエラー 445 になる。
 * **見た目:** パネルは Windows の既定の色（システム カラー）とフォントでフォームを描く。座標と大きさはポイント単位で、Excel のフォームとおおむね同じ配置になるが、コントロールの描画（枠の形、リストの行の高さ、`ComboBox` のドロップダウンなど）はブラウザーのものであり、Excel とは一致しない。
 * **再現しないもの:** Excel と VS Code の間のモーダル（モーダル フォームの表示中も Excel や VS Code の他の部分は操作できる。デバッグ実行の他のフォームは操作できない）、`StartUpPosition`、フォームのサイズ変更とスクロール、`ControlSource` によるセルとの連動、カスタム コントロール。
+
+#### 14.10.8 Excel のないデバッグ実行（ブックの代役）
+
+Excel を COM で操作できない環境でも、Excel を操作するプログラムをデバッグできるようにする。Excel の代わりに **`ras.toml` の `workbook` のブックをファイルとして読み込み**、プログラムはそのブックのセルを読み書きする。数式は xljs（`cool0707/xljs`）が使っている GridCraft の計算エンジン（xljs の `vendor/gridcraft`。日本語版 Excel に合わせた変更を含む）で計算する。
+
+* **構成:** Node アドオン `ras_book.node`（`crates/ras-book`）がブックを持つ。ブックの読み書きは umya-spreadsheet（xljs と同じフォーク）、計算は GridCraft で行い、その部分は `crates/ras-workbook` にある。Excel のオブジェクト モデル（`Application`・`Workbooks`・`Workbook`・`Worksheets`・`Worksheet`・`Range`・`Names`・`WorksheetFunction`）は `ras-excel.js` が JavaScript で実装する。生成コードは COM のときと同じ `$rt.get` / `$rt.put` / `$rt.call` で呼ぶため、ビルドの出力は変わらない。
+* **使う条件:** ランタイムは環境変数 `RAS_BOOK_ADDON` でアドオンを受け取り、COM アドオン（`RAS_COM_ADDON`）が無いとき、または COM アドオンはあるが Excel がインストールされていないとき（`Excel.Application` の ProgID が登録されていない）に代役を使う。VS Code 拡張の設定 `ras.debug.excel`（`launch.json` の `excel`）が `auto`（既定）なら Windows では Excel、それ以外では代役、`standIn` なら Windows でも代役、`excel` なら Excel だけを使う。プログラムが最初に Excel のオブジェクトを使った時点でブックを読み込み、その旨をデバッグ コンソールに表示する。`workbook` が未指定なら空のブック（シート 1 枚）で実行する。
+* **計算:** Excel の自動計算と同じく、セルを書き換えると、次に値を読む前にそのセルに依存する数式を計算し直す。ブックを開いたときは保存されている計算結果を使い、結果の保存されていない数式と `NOW` / `RAND` のように毎回変わる数式だけを計算する。エンジンに無い関数（手書き VBA のユーザー定義関数、アドインの関数）・ほかのブックへの参照・データテーブルを含む数式は計算せず、保存されている値をそのまま使う（xljs の `book.calculate()` と同じ扱い。xljs の `docs/design/calc-design.md`）。`Application.Calculation` を手動にしても計算は止めない。
+* **値:** COM のときと同じ対応にする（§14.10.3）。セルの表示形式が日付なら `Value` は日付、`Value2` は数値。`Value` に文字列を入れると Excel にセルへ入力したときと同じく読み取る（`"123"` は数値、`"2026/3/4"` は日付になり表示形式 `yyyy/m/d` が付く、`"=A1*2"` は数式、先頭の `'` は文字列）。表示形式が文字列（`@`）のセルはそのまま文字列になる。日付を入れたセル、`TODAY()` や日付のセルを参照する数式（`=A1+1`）を入れたセルには、Excel と同じく日付の表示形式を付ける。セルのエラー値は `CVErr` の番号（`#N/A` は 2042）。
+* **数式:** `Formula` は動的配列の無い Excel の数式として書き込む（範囲を 1 つの値として使う箇所は暗黙の共通部分）。`Formula2` は動的配列の数式としてスピルする。複数のセルに 1 つの数式を入れると、相対参照をセルごとにずらす。`FormulaR1C1` の読み書き、`Range.Copy Destination:=` での数式の相対参照の移動にも対応する。
+* **対応するメンバー:** `Range` の `Value` / `Value2` / `Formula` / `Formula2` / `FormulaR1C1` / `Text` / `NumberFormat` / `HasFormula`、`Cells` / `Item` / `Rows` / `Columns` / `Range` / `Offset` / `Resize` / `End` / `CurrentRegion` / `EntireRow` / `EntireColumn` / `Address` / `Count` / `Row` / `Column`、`ClearContents` / `Clear` / `Copy` / `Cut` / `FillDown` / `FillRight` / `Find` / `FindNext` / `FindPrevious` / `Select` / `Activate`、`For Each`。`Worksheet` の `Name` / `CodeName` / `Index` / `Visible` / `Cells` / `Range` / `Rows` / `Columns` / `UsedRange` / `Activate` / `Delete` / `Move` / `Evaluate`。`Worksheets.Add`、`Workbooks.Add` / `Open`、`Workbook.Save` / `SaveAs` / `Close`、`Names.Add`、`Application.Intersect` / `Union`（長方形になるもの）/ `Evaluate` / `ActiveSheet` / `ActiveCell` / `Selection`。`WorksheetFunction` はエンジンにある関数（約 490）をすべて呼べる。エラー値になる場合、`WorksheetFunction.X` はエラー 1004、`Application.X` はエラー値を返す。
+* **書式:** `Font` / `Interior` / `Borders` / `ColumnWidth` / `RowHeight` / `Hidden` などはどの値でも受け付け、同じ範囲から読むと設定した値を返すが、描画も保存もしない（表示形式 `NumberFormat` だけは保存する）。
+* **Excel が必要なもの:** 手書き VBA（`Application.Run`）、クリップボード（コピー先の無い `Copy`、`PasteSpecial`）、セルの挿入・削除、並べ替え・フィルター、`SpecialCells`、シートのコピー、ダイアログ（`GetOpenFilename` など）は、Excel が必要である旨のエラー 445 になる。シートやブックのイベント（`@on`）は起きない。未実装のメンバーはエラー 438。
+* **保存:** プロジェクトのブックと `Workbooks.Open` で開いたファイルは上書きしない。プログラムが変更したブックは、終了時（および `Save` / 開いたファイルへの `SaveAs` のとき）に `build/debug/workbooks/<ブック名>` に保存し、デバッグ コンソールに表示する。保存は umya-spreadsheet で行うため、VBA プロジェクトは残るが、umya-spreadsheet が読み書きしない要素は落ちることがある。マクロの無いブックは `.xlsx` で保存する。
+* **入力:** `InputBox` は既定値を返し（既定値が無ければキャンセル）、その旨をデバッグ コンソールに表示する。`MsgBox` は COM の無いときと同じく、デバッグ コンソールに表示して `vbOK` を返す。
 
 ### 14.11 ユーザーフォーム（`forms/`）
 

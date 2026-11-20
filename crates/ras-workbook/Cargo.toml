@@ -1,0 +1,24 @@
+[package]
+name = "ras-workbook"
+description = "The workbook of the RAS debug run time's stand-in for Excel: cells read and written by the program, formulas calculated by GridCraft's engine (as xljs uses it)"
+version.workspace = true
+# GridCraft is 2024 edition code, and so is what is taken over from xljs.
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+# The fork xljs uses (its excel-compat branch: dynamic-array formulas, calculation properties, ...).
+umya-spreadsheet = { git = "https://github.com/cool0707/umya-spreadsheet", rev = "8bebb052f9345cb55a79e47586c9974a413ec514" }
+# The formula engine of xljs (its vendor/gridcraft: GridCraft's engine with xljs's changes for
+# Japanese Excel), taken from the xljs repository at a fixed commit.
+gridcraft-core = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }
+gridcraft-formula = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }
+gridcraft-functions = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }
+gridcraft-numfmt = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }
+gridcraft-model = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }
+gridcraft-calc = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }
+gridcraft-xlsx-formulas = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }
+zip = { workspace = true }
