@@ -1,0 +1,324 @@
+{
+  "pictures": {},
+  "spec": {
+    "schemaVersion": 1,
+    "kind": "xlflow.userform",
+    "basis": "designer",
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "name": "MutationForm",
+      "caption": "issue882-before",
+      "width": 349.2,
+      "height": 271.8141732283465
+    },
+    "controls": [
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikeThrough": false,
+          "charset": 128
+        },
+        "id": "control_001",
+        "zIndex": 0,
+        "type": "Label",
+        "name": "LabelMain",
+        "progId": "Forms.Label.1",
+        "caption": "before-Label",
+        "left": 11.990551181102362,
+        "top": 11.990551181102362,
+        "width": 144,
+        "height": 36,
+        "tabIndex": 0,
+        "enabled": false,
+        "visible": true,
+        "unsupported": [
+          "textProps"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikeThrough": false,
+          "charset": 128
+        },
+        "id": "control_002",
+        "zIndex": 1,
+        "type": "TextBox",
+        "name": "TextMain",
+        "progId": "Forms.TextBox.1",
+        "text": "before-TextBox",
+        "value": "before-TextBox",
+        "left": 172.00629921259844,
+        "top": 11.990551181102362,
+        "width": 144,
+        "height": 36,
+        "tabIndex": 1,
+        "enabled": false,
+        "visible": true,
+        "unsupported": [
+          "textProps"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikeThrough": false,
+          "charset": 128
+        },
+        "id": "control_003",
+        "zIndex": 2,
+        "type": "CommandButton",
+        "name": "ButtonMain",
+        "progId": "Forms.CommandButton.1",
+        "caption": "before-CommandButton",
+        "left": 11.990551181102362,
+        "top": 65.99055118110236,
+        "width": 144,
+        "height": 36,
+        "tabIndex": 2,
+        "enabled": false,
+        "visible": true,
+        "unsupported": [
+          "textProps"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikeThrough": false,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "system",
+          "value": "buttonText"
+        },
+        "backColor": {
+          "kind": "system",
+          "value": "buttonFace"
+        },
+        "id": "control_004",
+        "zIndex": 3,
+        "type": "CheckBox",
+        "name": "CheckMain",
+        "progId": "Forms.CheckBox.1",
+        "caption": "before-CheckBox",
+        "value": "False",
+        "left": 172.00629921259844,
+        "top": 65.99055118110236,
+        "width": 144,
+        "height": 36,
+        "tabIndex": 3,
+        "enabled": false,
+        "visible": true,
+        "unsupported": [
+          "textProps"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikeThrough": false,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "system",
+          "value": "buttonText"
+        },
+        "backColor": {
+          "kind": "system",
+          "value": "buttonFace"
+        },
+        "id": "control_005",
+        "zIndex": 4,
+        "type": "OptionButton",
+        "name": "OptionMain",
+        "progId": "Forms.OptionButton.1",
+        "caption": "before-OptionButton",
+        "value": "False",
+        "left": 11.990551181102362,
+        "top": 119.99055118110236,
+        "width": 144,
+        "height": 36,
+        "tabIndex": 4,
+        "enabled": false,
+        "visible": true,
+        "unsupported": [
+          "textProps"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikeThrough": false,
+          "charset": 128
+        },
+        "id": "control_006",
+        "zIndex": 5,
+        "type": "ComboBox",
+        "name": "ComboMain",
+        "progId": "Forms.ComboBox.1",
+        "value": "beta",
+        "left": 172.00629921259844,
+        "top": 119.99055118110236,
+        "width": 144,
+        "height": 36,
+        "tabIndex": 5,
+        "enabled": false,
+        "visible": true,
+        "unsupported": [
+          "matchEntry",
+          "showDropButtonWhen",
+          "textProps",
+          "variousPropertyBits"
+        ]
+      },
+      {
+        "id": "control_007",
+        "zIndex": 6,
+        "type": "Frame",
+        "name": "FrameMain",
+        "progId": "Forms.Frame.1",
+        "caption": "before-Frame",
+        "left": 172.00629921259844,
+        "top": 173.99055118110238,
+        "width": 144,
+        "height": 36,
+        "tabIndex": 7,
+        "enabled": false,
+        "visible": true,
+        "unsupported": [
+          "logicalSize",
+          "specialEffect"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "bold": false,
+          "italic": false,
+          "underline": false,
+          "strikeThrough": false,
+          "charset": 128
+        },
+        "id": "control_008",
+        "parentId": "control_007",
+        "zIndex": 0,
+        "type": "TextBox",
+        "name": "NestedText",
+        "progId": "Forms.TextBox.1",
+        "text": "before-NestedText",
+        "value": "before-NestedText",
+        "left": 6.009448818897638,
+        "top": 11.990551181102362,
+        "width": 96.00944881889764,
+        "height": 18,
+        "tabIndex": 0,
+        "enabled": false,
+        "visible": true,
+        "unsupported": [
+          "textProps"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "charset": 128
+        },
+        "id": "control_009",
+        "zIndex": 7,
+        "type": "ListBox",
+        "name": "ListMain",
+        "progId": "Forms.ListBox.1",
+        "left": 11.990551181102362,
+        "top": 173.99055118110238,
+        "width": 144,
+        "height": 29.87716535433071,
+        "tabIndex": 6,
+        "enabled": false,
+        "visible": true,
+        "unsupported": [
+          "matchEntry",
+          "scrollBars",
+          "textProps"
+        ]
+      }
+    ],
+    "warnings": [
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported form Designer properties were preserved only in the binary model: logicalSize."
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: textProps.",
+        "control": "LabelMain"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: textProps.",
+        "control": "TextMain"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: textProps.",
+        "control": "ButtonMain"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: textProps.",
+        "control": "CheckMain"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: textProps.",
+        "control": "OptionMain"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: matchEntry, showDropButtonWhen, textProps, variousPropertyBits.",
+        "control": "ComboMain"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: logicalSize, specialEffect.",
+        "control": "FrameMain"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: textProps.",
+        "control": "NestedText"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: matchEntry, scrollBars, textProps.",
+        "control": "ListMain"
+      }
+    ]
+  }
+}

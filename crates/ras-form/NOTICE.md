@@ -1,9 +1,14 @@
 # Notice
 
-Parts of this crate are a Rust port of the UserForm specification, validation
-and Designer generation code of [xlflow](https://github.com/harumiWeb/xlflow)
+Parts of this crate are a Rust port of the UserForm specification, validation,
+Designer generation, Designer reading and projection code of
+[xlflow](https://github.com/harumiWeb/xlflow)
 (`internal/vba/userforms/spec`, `internal/vba/userforms/compiler`,
-`internal/vba/userforms/oforms`), which is distributed under the MIT License:
+`internal/vba/userforms/oforms`, `internal/vba/userforms/projection`,
+`internal/vba/userforms/picture`, and the picture extraction of
+`internal/filepull`). The test data under `tests/data` and
+`tests/fixtures/assets` comes from xlflow's test data and examples (see
+`tests/fixtures/README.md`). xlflow is distributed under the MIT License:
 
 ```
 MIT License

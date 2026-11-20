@@ -1,0 +1,227 @@
+{
+  "pictures": {},
+  "spec": {
+    "schemaVersion": 1,
+    "kind": "xlflow.userform",
+    "basis": "designer",
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "name": "MultiTopologyForm",
+      "width": 349.2,
+      "height": 271.8141732283465
+    },
+    "controls": [
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "charset": 128
+        },
+        "id": "control_001",
+        "zIndex": 0,
+        "type": "MultiPage",
+        "name": "MultiMain",
+        "progId": "Forms.MultiPage.1",
+        "left": 11.990551181102362,
+        "top": 11.990551181102362,
+        "width": 240.00944881889762,
+        "height": 180,
+        "tabIndex": 0,
+        "selectedIndex": 1,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "logicalSize"
+        ]
+      },
+      {
+        "id": "control_002",
+        "parentId": "control_001",
+        "zIndex": 0,
+        "type": "Page",
+        "name": "PageAlpha",
+        "progId": "Forms.Page.1",
+        "caption": "Alpha",
+        "tag": "alpha-tag",
+        "controlTipText": "alpha-tip",
+        "accelerator": "A",
+        "tabIndex": 1,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "logicalSize"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "charset": 128
+        },
+        "id": "control_003",
+        "parentId": "control_002",
+        "zIndex": 0,
+        "type": "TextBox",
+        "name": "PageText",
+        "progId": "Forms.TextBox.1",
+        "text": "page text",
+        "value": "page text",
+        "left": 7.993700787401575,
+        "top": 7.993700787401575,
+        "width": 100.00629921259842,
+        "height": 18,
+        "tabIndex": 0,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "textProps"
+        ]
+      },
+      {
+        "id": "control_004",
+        "parentId": "control_002",
+        "zIndex": 1,
+        "type": "Frame",
+        "name": "PageFrame",
+        "progId": "Forms.Frame.1",
+        "left": 7.993700787401575,
+        "top": 36,
+        "width": 150.00944881889762,
+        "height": 79.99370078740158,
+        "tabIndex": 1,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "logicalSize",
+          "specialEffect"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "charset": 128
+        },
+        "id": "control_005",
+        "parentId": "control_004",
+        "zIndex": 0,
+        "type": "Label",
+        "name": "NestedLabel",
+        "progId": "Forms.Label.1",
+        "caption": "nested",
+        "left": 0,
+        "top": 0,
+        "width": 72,
+        "height": 18,
+        "tabIndex": 0,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "textProps"
+        ]
+      },
+      {
+        "id": "control_006",
+        "parentId": "control_001",
+        "zIndex": 1,
+        "type": "Page",
+        "name": "PageBeta",
+        "progId": "Forms.Page.1",
+        "caption": "Beta",
+        "controlTipText": "",
+        "accelerator": "",
+        "tabIndex": 2,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "logicalSize"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "charset": 128
+        },
+        "id": "control_007",
+        "zIndex": 1,
+        "type": "TabStrip",
+        "name": "StripMain",
+        "progId": "Forms.TabStrip.1",
+        "left": 11.990551181102362,
+        "top": 205.99370078740156,
+        "width": 240.00944881889762,
+        "height": 47.99055118110236,
+        "tabIndex": 1,
+        "selectedIndex": 1,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "opaqueRecordTail",
+          "textProps"
+        ],
+        "tabs": [
+          {
+            "name": "TabAlpha",
+            "caption": "Alpha",
+            "controlTipText": "tab-tip",
+            "tag": "tab-tag",
+            "accelerator": "T",
+            "enabled": true,
+            "visible": true
+          },
+          {
+            "name": "TabBeta",
+            "caption": "Tab2",
+            "controlTipText": "",
+            "tag": "",
+            "accelerator": "",
+            "enabled": true,
+            "visible": true
+          }
+        ]
+      }
+    ],
+    "warnings": [
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported form Designer properties were preserved only in the binary model: logicalSize."
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: logicalSize.",
+        "control": "MultiMain"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: logicalSize.",
+        "control": "PageAlpha"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: textProps.",
+        "control": "PageText"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: logicalSize, specialEffect.",
+        "control": "PageFrame"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: textProps.",
+        "control": "NestedLabel"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: logicalSize.",
+        "control": "PageBeta"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: opaqueRecordTail, textProps.",
+        "control": "StripMain"
+      }
+    ]
+  }
+}

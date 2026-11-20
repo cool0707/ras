@@ -1338,7 +1338,7 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 
 ### 14.11 ユーザーフォーム（`forms/`）
 
-ユーザーフォームのデザイン（コントロールの配置とプロパティ）をテキストで管理し、Excel を起動せずにブックへ書き込む。デザインの形式と生成処理は [xlflow](https://github.com/harumiWeb/xlflow)（MIT License, Copyright (c) 2026 harumiWeb）の FormSpec と、その純 Go 実装のコンパイラを移植したもの（`crates/ras-form`）。
+ユーザーフォームのデザイン（コントロールの配置とプロパティ）をテキストで管理し、Excel を起動せずにブックへ書き込む。ブックにある既存のフォームを取り出すこともできる。デザインの形式、生成処理、デザイナストレージの読み取りは [xlflow](https://github.com/harumiWeb/xlflow)（MIT License, Copyright (c) 2026 harumiWeb）の FormSpec と、その純 Go 実装を移植したもの（`crates/ras-form`）。
 
 #### 14.11.1 ファイル
 
@@ -1346,6 +1346,7 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 |---|---|
 | `forms/<Name>.form.json` | デザイン。xlflow の FormSpec（schemaVersion 1）の JSON 形式。ファイル名は `form.name` と一致させる |
 | `forms/<Name>.bas` | コードビハインド。コードペインに表示される内容だけを UTF-8 で書く（`Attribute` 行・`VERSION` 行は書かない）。無ければ空として扱う |
+| `forms/assets/` など | `Image` コントロールの画像（BMP / JPEG）。置き場所は任意で、FormSpec からプロジェクトのルート基準の相対パスで参照する |
 
 ```json
 {
@@ -1354,8 +1355,10 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
   "basis": "designer",
   "form": { "name": "frmInput", "caption": "入力", "width": 240, "height": 180 },
   "controls": [
-    { "id": "name", "name": "txtName", "type": "TextBox", "left": 12, "top": 12, "width": 150, "height": 18 },
-    { "id": "ok", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 12, "top": 40 }
+    { "id": "logo", "name": "imgLogo", "type": "Image", "left": 12, "top": 12, "width": 32, "height": 32, "picture": { "path": "forms/assets/logo.bmp" } },
+    { "id": "kind", "name": "cboKind", "type": "ComboBox", "left": 56, "top": 12, "list": ["通常", "お急ぎ"], "selectedIndex": 0 },
+    { "id": "name", "name": "txtName", "type": "TextBox", "left": 12, "top": 56, "width": 150, "height": 18, "controlTipText": "氏名" },
+    { "id": "ok", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 12, "top": 84 }
   ]
 }
 ```
@@ -1367,32 +1370,109 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 * 共通のプロパティ（`left` / `top` / `width` / `height` / `tabIndex` / `zIndex` / `enabled` / `visible`）、種類ごとのプロパティ（`caption` / `text` / `value` / `selectedIndex` / `tabs` など）、見た目（`font` / `foreColor` / `backColor` / `textAlign` / `borderStyle` / `pictureAlignment` / `pictureSizeMode`）の詳細と適用できるコントロールは xlflow の [UserForm Specification](https://harumiweb.github.io/xlflow/reference/userform-spec) に従う。色は `{ "kind": "rgb", "value": "#203040" }`、`{ "kind": "system", "value": "buttonFace" }`、`{ "kind": "ole", "value": "0x8000000F" }` の形で書く。
 * 検査結果のコード（`UFY001`、`UFV001`〜`UFV021`）は xlflow と同じ意味を持つ。メッセージは日本語。
 
+xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
+
+| 項目 | RAS での扱い |
+|---|---|
+| `tag` / `controlTipText` | すべてのコントロールで使える（xlflow では `Page` 以外は `properties` に書く） |
+| `ComboBox` / `ListBox` の `list` / `selectedIndex` | 書き込みの対象（§14.11.4）。xlflow では取得した値の記録にだけ使う |
+
+**`Image` の画像（`picture`）**
+
+* `"picture": { "path": "forms/assets/logo.bmp" }` で画像ファイルを指定する。パスはプロジェクトのルート（`ras.toml` のあるフォルダー）からの相対パスで、ルートの外（`..`、絶対パス、ドライブ指定）は指定できない。
+* 使える形式は BMP（40 バイトの `BITMAPINFOHEADER`、24 ビットまたは 32 ビット、無圧縮）と JPEG。大きさは 16 MiB・1,600 万ピクセルまで。PNG・GIF・アイコン・メタファイルは使えない。
+* 画像はファイルの内容のまま `StdPicture` としてデザイナストレージに埋め込む（xlflow が実機の Excel で確認した形式）。ブックを開くのに元のファイルは要らない。
+* `"picture": { "remove": true }` は画像なしを表す（`picture` を書かない場合と同じ）。
+
 #### 14.11.2 コマンド
 
 | コマンド | 動作 |
 |---|---|
 | `ras form new <Name>` | `forms/<Name>.form.json`（240×180、caption = 名前、コントロールなし）と空の `forms/<Name>.bas` を作る。既にあれば何もしない |
 | `ras form check` | すべてのフォームを検査し、ブックへの書き込みと同じ生成まで行う。エラーがあれば終了コード 1 |
+| `ras form pull [<Name>…] [--book <file>] [--force]` | ブックにあるフォームを `forms/` に取り出す（§14.11.5） |
 | `ras check` / `ras build` | RAS ソースと合わせてフォームも検査する（`ras build` はフォームを `build/` に出力しない） |
 | `ras pack` | RAS 管理モジュールと合わせて、すべてのフォーム（デザイナストレージとコードモジュール）をブックに書き込む |
-| `ras watch` | `forms/` の変更も監視する（ブックが閉じていれば `ras pack` と同じ書き込みを行う） |
+| `ras sync` | Excel で開いているブックへ、RAS 管理モジュールと合わせてフォームを反映する（§14.11.6） |
+| `ras watch` | `forms/` の変更も監視する（ブックが開いていれば `ras sync`、閉じていれば `ras pack` と同じ書き込みを行う） |
 
 #### 14.11.3 書き込み（`ras pack`）
 
 1. デザイナストレージ（`<Name>/f`・`o`・`\x01CompObj`・`\x03VBFrame`、コンテナーごとの `i<ID>/` サブストレージ、`MultiPage` の `x`）を FormSpec から一から生成する。生成結果は xlflow の生成結果とバイト単位で一致する（`crates/ras-form/tests/golden.rs`）。
-2. コードモジュール `VBA/<Name>` を作る。新しいフォームには `VB_Base = "0{GUID}{GUID}"`（新しい 2 つの GUID）を含むフォーム用の属性ヘッダーを付け、既存のフォームはヘッダーを保持してコードだけを置き換える。コードの先頭行は `' RAS-FORM forms/<Name>.form.json` とし、RAS が生成したフォームの目印にする。
-3. `PROJECT` ストリームに `BaseClass=<Name>` 行を加え、Microsoft Forms 2.0 Object Library（`MSForms`）の参照が無ければ `dir` ストリームに追加する。
-4. 同名のフォームが既にあれば、デザイナストレージを丸ごと置き換える。デザインもコードも変わっていなければ「変更なし」として扱う。
-5. 次の場合はエラーとし、何も書き込まない: RAS モジュールと同じ名前、フォームではない同名のモジュールがある、目印の無い（VBE で作った）同名のフォームがある（`--overwrite` で置き換えを許可する）。
+2. コードモジュール `VBA/<Name>` を作る。新しいフォームには `VB_Base = "0{GUID}{GUID}"`（新しい 2 つの GUID）を含むフォーム用の属性ヘッダーを付け、既存のフォームはヘッダーを保持してコードだけを置き換える。
+3. コードの先頭行は目印の行 `' RAS-FORM forms/<Name>.form.json design=<ハッシュ> code=<ハッシュ>` とし、RAS が生成したフォームであることを表す。`design` はデザイナストレージ、`code` はその後ろに続くコードのハッシュ（16 進 16 桁）で、ライブ同期が変更の有無を判断するのに使う（§14.11.6）。目印の後ろにコードビハインドと、必要なら生成コード（§14.11.4）が続く。
+4. `PROJECT` ストリームに `BaseClass=<Name>` 行を加え、Microsoft Forms 2.0 Object Library（`MSForms`）の参照が無ければ `dir` ストリームに追加する。
+5. 同名のフォームが既にあれば、デザイナストレージを丸ごと置き換える。デザインもコードも変わっていなければ「変更なし」として扱う。
+6. 次の場合はエラーとし、何も書き込まない: RAS モジュールと同じ名前、フォームではない同名のモジュールがある、目印の無い（VBE で作った）同名のフォームがある（`--overwrite` で置き換えを許可する）。
 
-`ras unpack` は、目印のあるフォームを `vba/` に取り出さない。
+`ras unpack` は、目印のあるフォームを `vba/` に取り出さない。`forms/` から消したフォームは、ブックからは削除しない（VBE で削除する）。
 
-#### 14.11.4 制限
+#### 14.11.4 リストの項目（`list` / `selectedIndex`）
 
-* ライブ同期（`ras sync`、ブックを開いたままの `ras watch`）ではフォームを反映しない（警告を表示する）。ブックを閉じて `ras pack` を使う。
-* ブック内の既存のフォーム（VBE で作ったもの）を FormSpec に取り出す機能（xlflow の `form snapshot` / file pull に相当）は未実装。
-* `Image` の画像の埋め込み（`picture.path`）、`ComboBox` / `ListBox` の `list` / `selectedIndex`、カスタム ActiveX コントロールは生成できない（エラーになる）。リストの項目は `UserForm_Initialize` などで設定する。
-* VBE でフォームのデザインやコードを編集しても `forms/` には反映されず、次の `ras pack` で `forms/` の内容に置き換わる（ドリフト検出は行わない）。
+MS-Forms は `ComboBox` / `ListBox` の項目をデザイナストレージに保存しない（デザイン時に `AddItem` しても、ブックを保存して開き直すと消える）。そのため `list` と `selectedIndex` は、フォームの読み込み時に実行されるコードとしてコードモジュールに出力する。
+
+```vb
+' RAS-FORM forms/frmInput.form.json design=… code=…
+Option Explicit
+
+Private Sub UserForm_Initialize()
+    RAS_FormInit '--- RAS ---
+    Me.txtName.Text = ""
+End Sub
+'--- RAS BEGIN ---
+Private Sub RAS_FormInit()
+    With Me.cboKind
+        .AddItem "通常"
+        .AddItem "お急ぎ"
+        .ListIndex = 0
+    End With
+End Sub
+'--- RAS END ---
+```
+
+* 項目を設定するプロシージャ `RAS_FormInit` を、モジュール末尾の RAS 管理領域（§14.6 と同じ `'--- RAS BEGIN ---` / `'--- RAS END ---`）に生成する。宣言部の後ろに置くので、コードビハインドの `Option Explicit` やモジュールレベルの宣言と干渉しない。
+* コードビハインドに `UserForm_Initialize` が無ければ、`RAS_FormInit` を呼ぶだけの `UserForm_Initialize` も管理領域に生成する。
+* コードビハインドに `UserForm_Initialize` があれば、その先頭に `RAS_FormInit '--- RAS ---` の 1 行を挿入する（`forms/<Name>.bas` は書き換えない）。コードビハインドのどこかで `RAS_FormInit` を呼んでいる場合は、挿入も `UserForm_Initialize` の生成もしない（項目を設定する時点をコードビハインドが決められる）。
+* `selectedIndex` は `-1`（選択なし）か、`list` の範囲内の番号。`list` が無いコントロールでは `-1` 以外を指定できない（`UFV020`）。
+* 項目の文字列のうち、制御文字とコードページで表せない文字は `ChrW(n)` で出力する。
+* コードビハインドでは `RAS_FormInit` という名前のプロシージャと、管理領域の目印の行を書けない（エラー）。
+
+#### 14.11.5 取り出し（`ras form pull`）
+
+ブック（保存されているファイル）のフォームを読み、`forms/<Name>.form.json`・`forms/<Name>.bas` と画像ファイルを書き出す。Excel は使わない。VBE で作ったフォームを `forms/` の管理に移すとき、VBE でデザインを直したフォームを取り込み直すときに使う。
+
+* 名前を省略するとブックのすべてのフォームが対象。`forms/` に同名のファイルが既にあるフォームは書き出さない（`--force` で置き換える）。
+* **デザイン:** デザイナストレージを読み、xlflow の projection と同じ規則で FormSpec にする（`crates/ras-form/tests/snapshot.rs` で、Excel が保存したフォームについて xlflow の出力と一致することを確認している）。加えて、xlflow の projection が「表せないプロパティ」として扱うもののうち、生成側が書けるものを取り込む: `Tag` / `ControlTipText`（`tag` / `controlTipText`）、`GroupName`・`MaxLength`・`BorderColor`（`properties`）。キャプションが保存されていないコントロールは `caption: ""` とし、フォームのキャプションがフォームのレコードに無ければデザイナブロック（`VBFrame`）の `Caption` を使う。
+* **画像:** `Image` の画像（BMP / JPEG として保存されているもの）を `forms/assets/<Name>.<コントロール名>.bmp|jpg` に書き出し、`picture.path` で参照する。Excel は JPEG を読み込んだ画像も BMP で保存するため、取り出した画像は多くの場合 BMP になる。
+* **コード:** コードモジュールから `Attribute` 行を除いたものをコードビハインドとする。RAS が書き込んだフォームの場合は、目印の行・RAS 管理領域・挿入した `RAS_FormInit` の呼び出しも除く（書き込む前のコードビハインドに戻る）。
+* **リストの項目:** ブックには保存されていないので取り出せない。`--force` で既存の `.form.json` を置き換えるときは、同名の `ComboBox` / `ListBox` の `list` / `selectedIndex` と、内容が同じ画像の `picture.path` を既存のファイルから引き継ぐ。
+* **取り込めないもの:** FormSpec で表せないプロパティ（`specialEffect`、`mousePointer`、スクロールバーの `min` / `max` など）は、コントロールごとに `unsupported` に名前を記録し、コマンドの出力に警告として表示する。これらは `forms/` から書き戻すと既定値になる。組み込み以外のコントロール（ActiveX）は `type: "Control"` として記録され、生成できない。BMP / JPEG 以外の画像（アイコン、メタファイル）は取り出せず、`unsupported` に `picture` が残る（この場合は `picture` に置き換える画像か `{ "remove": true }` を書くまで生成できない）。
+* 取り出しただけではブックは変わらない。VBE で作ったフォームを `forms/` の内容で置き換えるには、`ras pack --overwrite`（または `ras sync --overwrite`）を実行する。
+
+#### 14.11.6 ライブ同期（`ras sync`、`ras watch`、VS Code の言語サーバー）
+
+ブックが Excel で開かれているときは、§14.6 のモジュールと同じ同期の中でフォームも反映する（Windows のみ）。
+
+| 状態 | 動作 |
+|---|---|
+| ブックにフォームが無い | 取り込む（作成） |
+| 目印の行が同じ | 何もしない |
+| `design` が同じで `code` が違う | `CodeModule` のコードだけを書き換える |
+| `design` が違う | フォームを取り込み直す（更新） |
+| 目印の無い同名のフォーム（VBE で作ったもの） | エラー。上書きを指定した場合は取り込み直す |
+
+* **取り込み:** フォームを `.frm`（デザイナブロック・属性・コード）と `.frx`（24 バイトのヘッダーと、デザイナストレージを収めた複合ファイル）として一時フォルダーに書き出し、`VBComponents.Import` で読み込ませる。`.frx` の内容は `ras pack` が書くデザイナストレージと同じもの。
+* **取り込み直し:** 既存のフォームを一時的な名前（`RasOld1` など）に変えてから新しいフォームを取り込み、同期全体が成功した後で古いフォームを削除する。途中で失敗した場合は、新しいフォームを削除して古いフォームの名前を戻す（§14.6 の一括性）。
+* **変更の判断:** VBE はコードを整形して保持するため、保持されているコードと書き込んだコードは比較できない。目印の行に記録したハッシュで判断する。
+* VBE でフォームのデザインやコードを直接編集しても目印の行は変わらないため、その編集は次に `forms/` 側が変わるまで残る（ドリフト検出は行わない）。VBE での編集を残したい場合は、ブックを保存してから `ras form pull --force` で `forms/` に取り込む。
+* マクロの実行中・中断モード中は書き込まない（§14.6）。フォームを取り込み直すと、そのフォームのインスタンスとプロジェクトの状態はリセットされる。
+
+#### 14.11.7 制限
+
+* カスタム ActiveX コントロールは生成できない（エラーになる）。
+* VBE でフォームのデザインやコードを編集しても `forms/` には自動では反映されない。`ras form pull --force` で取り込まない限り、次に `forms/` 側を変更して書き込んだ時点で `forms/` の内容に置き換わる（ドリフト検出は行わない）。
+* `ComboBox` / `ListBox` の項目は文字列の 1 列だけを扱う。複数列のリストや `RowSource` は、コードビハインドで設定する。
+* ライブ同期でのフォームの取り込み（`VBComponents.Import`）は、Excel の無い環境では自動テストできない。`.frx` の構成は Excel が書き出したファイルと照合している（`crates/ras-form/tests/project.rs`）。
 
 ## 15. プロジェクト構成
 
@@ -1611,7 +1691,7 @@ Rust で `vbaProject.bin` を**書き込める**ライブラリは見当たら�
 | 読み取り・テストの検証用 | `ovba`（Rust, 読み取り専用） | 書き出した `vbaProject.bin` を別実装で読み直す相互検証に使う（§14.9.3）。`calamine` の VBA 読み取り部も参考 |
 | 検証ツール | oletools（`olevba`, Python） | CI で出力ファイルを解析し、ソース・`dir` ストリームの整合を確認する |
 | OPC のパート構成 | 参考: XlsxWriter の `add_vba_project` | `[Content_Types].xml` とリレーションの書き方 |
-| ユーザーフォームの生成（§14.11） | xlflow（Go, MIT）の `internal/vba/userforms` を移植 | FormSpec・検査・MS-OFORMS デザイナストレージの生成。テストは xlflow の出力とのバイト比較 |
+| ユーザーフォーム（§14.11） | xlflow（Go, MIT）の `internal/vba/userforms` を移植 | FormSpec・検査・MS-OFORMS デザイナストレージの生成と読み取り・画像（`StdPicture`）。テストは xlflow の出力との比較（生成はバイト単位、読み取りは FormSpec の JSON） |
 | 仕様 | [MS-OVBA], [MS-CFB], [MS-VBAL], [MS-OFORMS] | 一次資料。実装はこれを正とする |
 
 ### 17.4 Windows 連携（ライブ同期 §14.1〜14.8、`ras typegen`）

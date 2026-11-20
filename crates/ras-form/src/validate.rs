@@ -1157,6 +1157,16 @@ fn validate_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
             is("TabStrip") && control.tabs.is_some(),
         ));
     }
+    if is("ComboBox") || is("ListBox") {
+        // The selection is set by generated code after the items were
+        // added: it has to name one of them (or none, -1).
+        if let Some(index) = control.selected_index {
+            let count = control.list.as_ref().map_or(0, Vec::len) as i64;
+            if index < -1 || index >= count {
+                issues.push(selected_index_issue(&format!("{path}.selectedIndex")));
+            }
+        }
+    }
     issues
 }
 

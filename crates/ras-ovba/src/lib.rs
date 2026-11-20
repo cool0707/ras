@@ -49,8 +49,10 @@
 //!
 //! User forms can be created, or their designer storage replaced, from a
 //! complete designer storage generated elsewhere ([`UserForm`], e.g. by the
-//! `ras-form` crate); existing designer storages are never decoded or
-//! patched. Re-signing is not implemented, `.xls` (BIFF8) is not supported,
+//! `ras-form` crate). Existing designer storages are handed out as they are
+//! ([`read_user_forms`], [`unpack_user_forms`]) and can be written as the
+//! `.frm` / `.frx` pair the VBA editor imports ([`export_user_form`]); they
+//! are never decoded or patched here. Re-signing is not implemented, `.xls` (BIFF8) is not supported,
 //! and binary (`.xlsb`) workbook and sheet parts are only read, never
 //! rewritten.
 
@@ -63,6 +65,7 @@ pub mod compression;
 mod crypto;
 mod dir;
 mod error;
+mod forms;
 mod opc;
 mod pack;
 mod project;
@@ -73,6 +76,7 @@ mod workbook;
 mod xml;
 
 pub use error::OvbaError;
+pub use forms::{export_user_form, is_generated_form, read_user_forms, unpack_user_forms, FormFiles, RAS_FORM_MARKER};
 pub use opc::workbook_code_names;
 pub use pack::{pack, unpack};
 pub use source::{extract_managed_region, merge_managed_region, procedure_names, RAS_BEGIN_MARKER, RAS_END_MARKER};
@@ -84,6 +88,13 @@ pub use workbook::{create_workbook, BookKind};
 /// [`OvbaError::Encoding`] error.
 pub fn encode_text(codepage: u16, text: &str) -> Result<Vec<u8>, OvbaError> {
     codepage::encode(codepage, text, "text")
+}
+
+/// Decodes text stored in a Windows code page (module source, the designer
+/// properties of a user form). Bytes that are not valid in the code page
+/// become U+FFFD.
+pub fn decode_text(codepage: u16, bytes: &[u8]) -> Result<String, OvbaError> {
+    codepage::decode(codepage, bytes)
 }
 
 use std::path::PathBuf;

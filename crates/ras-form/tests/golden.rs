@@ -5,6 +5,11 @@
 //! `compiler.CompileNew` + `oforms.SerializeForm` (code page 932) on the same
 //! file — see `tests/fixtures/README.md`. A golden file holds either the
 //! designer streams and storage CLSIDs (hex) or the error xlflow reported.
+//!
+//! `tests/data/*.bin` are projects saved by Excel; the `*.projected.json`
+//! next to them hold what xlflow's `oforms.ReadForm` + `projection.Project`
+//! make of their forms. `projection_matches_xlflow` checks the Rust port of
+//! the reading side against them.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -40,7 +45,8 @@ fn generation_matches_xlflow() {
         let text = std::fs::read_to_string(&path).unwrap();
         let parsed = ras_form::parse(&text);
         let result = match &parsed.spec {
-            Some(spec) => ras_form::compile(spec, 932).map_err(|e| e.to_string()),
+            // Picture paths of the fixtures are relative to the fixture directory.
+            Some(spec) => ras_form::compile_in(spec, 932, &dir).map_err(|e| e.to_string()),
             None => Err(parsed
                 .issues
                 .iter()

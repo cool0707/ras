@@ -1,0 +1,22 @@
+{
+  "pictures": {},
+  "spec": {
+    "schemaVersion": 1,
+    "kind": "xlflow.userform",
+    "basis": "designer",
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "name": "EmptyForm",
+      "caption": "issue883-empty-form",
+      "width": 229.20944881889764,
+      "height": 151.79527559055117
+    },
+    "controls": [],
+    "warnings": [
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported form Designer properties were preserved only in the binary model: logicalSize."
+      }
+    ]
+  }
+}

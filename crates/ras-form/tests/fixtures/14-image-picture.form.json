@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "PictureForm", "caption": "Pictures", "width": 240, "height": 160 },
+  "controls": [
+    { "id": "bmp", "name": "imgBmp", "type": "Image", "left": 6, "top": 6, "width": 48, "height": 32, "picture": { "path": "assets/logo.bmp" }, "pictureSizeMode": 3, "pictureAlignment": 3 },
+    { "id": "frame", "name": "fraMain", "type": "Frame", "caption": "Frame", "left": 6, "top": 48, "width": 120, "height": 90 },
+    { "id": "jpg", "name": "imgJpeg", "type": "Image", "parentId": "frame", "left": 6, "top": 6, "width": 48, "height": 32, "picture": { "path": "assets/logo.jpg" }, "borderStyle": 0 },
+    { "id": "none", "name": "imgNone", "type": "Image", "left": 140, "top": 6, "picture": { "remove": true } },
+    { "id": "lbl", "name": "lblAfter", "type": "Label", "caption": "after the pictures", "left": 140, "top": 90 }
+  ]
+}

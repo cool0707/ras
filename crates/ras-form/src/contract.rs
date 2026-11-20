@@ -89,7 +89,7 @@ fn allowed(mut prop: Prop, values: &'static [&'static str]) -> Prop {
     prop
 }
 
-use Support::{CustomUnchecked, ObservedOnly, SnapshotOnly, Supported};
+use Support::{CustomUnchecked, SnapshotOnly, Supported};
 use ValueType as T;
 
 /// A property list keyed by name.
@@ -253,6 +253,8 @@ pub fn common_control_properties() -> Props {
         ("tabIndex", p(T::Integer, false, Supported)),
         ("enabled", p(T::Boolean, false, Supported)),
         ("visible", p(T::Boolean, false, Supported)),
+        ("tag", p(T::String, false, Supported)),
+        ("controlTipText", p(T::String, false, Supported)),
         ("observed", p(T::Object, false, SnapshotOnly)),
         ("controls", p(T::ObjectArray, false, SnapshotOnly)),
         ("properties", p(T::Object, false, CustomUnchecked)),
@@ -380,8 +382,10 @@ pub fn type_properties(name: &str) -> Option<Props> {
         "ComboBox" | "ListBox" => vec![
             ("text", s()),
             ("value", any()),
-            ("list", p(T::StringArray, false, ObservedOnly)),
-            ("selectedIndex", p(T::Integer, false, ObservedOnly)),
+            // Not part of the designer storage: filled by generated code
+            // when the form loads.
+            ("list", p(T::StringArray, false, Supported)),
+            ("selectedIndex", p(T::Integer, false, Supported)),
         ],
         "CheckBox" | "OptionButton" | "ToggleButton" => vec![("caption", s()), ("value", any())],
         "SpinButton" | "ScrollBar" => vec![("value", p(T::Integer, false, Supported))],

@@ -12,7 +12,7 @@ use std::time::Duration;
 use lsp_server::{Message, Notification, RequestId, Response};
 use ras_compiler::emit::OutputFile;
 use ras_compiler::{BuildOptions, Config};
-use ras_sync::{Report, Session, SyncError, SyncOptions};
+use ras_sync::{Forms, Report, Session, SyncError, SyncOptions};
 use serde_json::{json, Value};
 
 /// How often the thread looks whether the workbook was opened or closed, and retries a sync Excel was too busy for.
@@ -87,8 +87,16 @@ fn book_path(root: &Path, config: &Config) -> Result<PathBuf, String> {
     }
 }
 
-/// Compiles what is saved on disk, as `ras build` does, for `CodeModule.AddFromString`.
-fn compile(root: &Path) -> Result<Vec<OutputFile>, String> {
+/// What a sync writes: the generated modules, the user forms of `forms/` and their code page.
+struct Built {
+    files: Vec<OutputFile>,
+    forms: Vec<ras_ovba::UserForm>,
+    codepage: u16,
+}
+
+/// Compiles what is saved on disk, as `ras build` does, for `CodeModule.AddFromString`, and
+/// generates the user forms as `ras pack` does.
+fn compile(root: &Path) -> Result<Built, String> {
     let (config, sources) = crate::load_project(root)?;
     let prog = ras_compiler::analyze(sources, config);
     let out = ras_compiler::build(&prog, &BuildOptions { release: false, erl: None, no_attributes: true });
@@ -96,7 +104,12 @@ fn compile(root: &Path) -> Result<Vec<OutputFile>, String> {
     if errors > 0 {
         return Err(format!("ビルド エラーが {errors} 件あるため、同期していません"));
     }
-    Ok(out.files)
+    let codepage = prog.config.target.codepage;
+    let forms = ras_form::workspace::build(&ras_form::workspace::load(root)?, root, codepage);
+    if let Some(first) = forms.problems.iter().find(|p| p.severity == ras_form::Severity::Error) {
+        return Err(format!("ユーザーフォームにエラーが {} 件あるため、同期していません（{}: {}）", forms.errors(), first.rel_path, first.message));
+    }
+    Ok(Built { files: out.files, forms: forms.forms, codepage })
 }
 
 fn describe(report: &Report) -> String {
@@ -197,8 +210,9 @@ impl Worker {
             let connected = self.session()?.connect();
             self.connected = connected.is_ok();
             connected.map_err(Failure::Sync)?;
-            let files = compile(&root).map_err(Failure::Build)?;
-            self.session()?.apply(&files, &SyncOptions { overwrite }).map_err(Failure::Sync)
+            let built = compile(&root).map_err(Failure::Build)?;
+            let forms = Forms { forms: &built.forms, codepage: built.codepage };
+            self.session()?.apply(&built.files, forms, &SyncOptions { overwrite }).map_err(Failure::Sync)
         })();
         self.retry = matches!(result, Err(Failure::Sync(SyncError::Busy(_))));
         match &result {

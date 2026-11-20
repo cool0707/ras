@@ -896,6 +896,7 @@ version = "0.1.0"
 dependencies = [
  "lsp-server",
  "ras-compiler",
+ "ras-form",
  "ras-ovba",
  "ras-sync",
  "ras-syntax",

@@ -266,6 +266,33 @@ impl VbProject for Project {
         Ok(())
     }
 
+    fn import_form(&mut self, name: &str, files: &ras_ovba::FormFiles) -> Result<(), SyncError> {
+        let dir = std::env::temp_dir().join(format!("ras-sync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| SyncError::Failed(format!("{}: {e}", dir.display())))?;
+        // The `.frm` names its `.frx` by file name: both lie in the same directory.
+        let frm = dir.join(format!("{name}.frm"));
+        let written = std::fs::write(&frm, to_ansi(&files.frm)).and_then(|()| std::fs::write(dir.join(format!("{name}.frx")), &files.frx));
+        if let Err(e) = written {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(SyncError::Failed(format!("{}: {e}", frm.display())));
+        }
+        let imported = self.components.object("Import", &[Arg::Str(&frm.to_string_lossy())]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let component = imported.map_err(|e| if e.is_busy() { SyncError::from(e) } else { SyncError::Failed(format!("ユーザーフォーム `{name}` を取り込めませんでした: {}", e.description)) })?;
+        let actual = component.get("Name", &[])?.string();
+        let is_form = component.get("Type", &[])?.int() == Some(CT_FORM);
+        if actual != name || !is_form {
+            // A component of that name was still there (the VBE numbered the new one), or the files were not taken as a form.
+            let _ = self.components.call("Remove", &[Arg::Obj(&component)]);
+            return Err(SyncError::Failed(format!("ユーザーフォーム `{name}` を取り込めませんでした（`{actual}` という{}になりました）", if is_form { "名前" } else { "フォームではないモジュール" })));
+        }
+        Ok(())
+    }
+
+    fn rename(&mut self, name: &str, new_name: &str) -> Result<(), SyncError> {
+        self.component(name)?.put("Name", Arg::Str(new_name)).map_err(|e| if e.is_busy() { SyncError::from(e) } else { SyncError::Failed(format!("`{name}` の名前を変更できませんでした: {}", e.description)) })
+    }
+
     fn remove(&mut self, name: &str) -> Result<(), SyncError> {
         let component = self.component(name)?;
         self.components.call("Remove", &[Arg::Obj(&component)])?;
