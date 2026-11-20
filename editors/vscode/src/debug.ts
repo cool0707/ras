@@ -270,6 +270,10 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 			resolveSourceMapLocations: [`${root.replace(/\\/g, "/")}/**`],
 			skipFiles: ["<node_internals>/**", `${dir}/ras-runtime.js`, `${dir}/ras-forms.js`, `${dir}/ras-main.js`],
 			smartStep: true,
+			// COM objects show their properties and class instead of the addon's methods (runtime `debugProperties`).
+			customPropertiesGenerator: "function () { return typeof $rasDebugProperties === 'function' ? $rasDebugProperties(this) : this; }",
+			customDescriptionGenerator:
+				"function (fallback) { return typeof $rasDebugDescription === 'function' ? $rasDebugDescription(this, fallback) : fallback; }",
 			cwd: root,
 			__rasProcess: id,
 		};

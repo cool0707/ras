@@ -31,12 +31,17 @@ use windows::core::{Interface, BSTR, GUID, HRESULT, PCWSTR};
 use windows::Win32::Foundation::VARIANT_BOOL;
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoCreateInstance, CoGetObject, CoInitializeEx, CoTaskMemFree, CreateBindCtx, GetRunningObjectTable, IDispatch, IMoniker, CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER,
-    COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT, DISPATCH_PROPERTYPUTREF, DISPPARAMS, EXCEPINFO, SAFEARRAY, SAFEARRAYBOUND,
+    COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT, DISPATCH_PROPERTYPUTREF, DISPPARAMS, EXCEPINFO, FUNCDESC, FUNCFLAG_FHIDDEN,
+    FUNCFLAG_FRESTRICTED, INVOKE_PROPERTYGET, ITypeInfo, SAFEARRAY, SAFEARRAYBOUND, TKIND_ENUM, TKIND_INTERFACE, TYPEATTR, TYPEDESC, VARFLAG_FHIDDEN, VARFLAG_FRESTRICTED, VAR_DISPATCH,
 };
 use windows::Win32::System::Ole::{
     GetActiveObject, IEnumVARIANT, SafeArrayCreate, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayGetVartype, SafeArrayPutElement, VarR8FromDec,
+    PARAMFLAG_FLCID, PARAMFLAG_FOPT, PARAMFLAG_FRETVAL, TYPEFLAG_FDUAL,
 };
-use windows::Win32::System::Variant::{VariantClear, VARENUM, VARIANT, VT_ARRAY, VT_BOOL, VT_BSTR, VT_BYREF, VT_DATE, VT_DISPATCH, VT_ERROR, VT_I4, VT_R8, VT_VARIANT};
+use windows::Win32::System::Variant::{
+    VariantClear, VARENUM, VARIANT, VT_ARRAY, VT_BOOL, VT_BSTR, VT_BYREF, VT_CY, VT_DATE, VT_DECIMAL, VT_DISPATCH, VT_ERROR, VT_I1, VT_I2, VT_I4, VT_I8, VT_INT, VT_R4, VT_R8, VT_UI1, VT_UI2, VT_UI4,
+    VT_UI8, VT_UINT, VT_USERDEFINED, VT_VARIANT,
+};
 
 /// Excel interprets names and values by the locale passed to `Invoke`. VBA always uses
 /// English (United States), which also avoids the "old format or invalid type library" error.
@@ -536,6 +541,49 @@ impl ComObject {
         }
     }
 
+    /// The properties that can be read without arguments, from the type information, for the
+    /// variables view of the debugger. Hidden and restricted members are left out.
+    #[napi]
+    pub fn members(&self) -> Result<Vec<ComMember>> {
+        unsafe {
+            let info = dispatch_info(self.ptr.GetTypeInfo(0, LCID).map_err(win)?);
+            let attr = TypeAttr::of(&info)?;
+            let (funcs, vars) = ((*attr.0).cFuncs, (*attr.0).cVars);
+            let mut out: Vec<ComMember> = Vec::new();
+            let mut push = |memid: i32, tdesc: &TYPEDESC| {
+                let mut name = BSTR::default();
+                let mut context = 0u32;
+                if info.GetDocumentation(memid, Some(&mut name), None, &mut context, None).is_err() {
+                    return;
+                }
+                let name = name.to_string();
+                if name.is_empty() || name.starts_with('_') || out.iter().any(|m| m.name.eq_ignore_ascii_case(&name)) {
+                    return;
+                }
+                out.push(ComMember { name, scalar: is_scalar(&info, tdesc) });
+            };
+            for i in 0..u32::from(funcs) {
+                let Ok(desc) = info.GetFuncDesc(i) else { continue };
+                let f = &*desc;
+                let hidden = f.wFuncFlags.0 & (FUNCFLAG_FHIDDEN.0 | FUNCFLAG_FRESTRICTED.0) != 0;
+                if f.invkind == INVOKE_PROPERTYGET && !hidden && required_params(f) == 0 {
+                    push(f.memid, &f.elemdescFunc.tdesc);
+                }
+                info.ReleaseFuncDesc(desc);
+            }
+            for i in 0..u32::from(vars) {
+                let Ok(desc) = info.GetVarDesc(i) else { continue };
+                let v = &*desc;
+                let hidden = v.wVarFlags.0 & (VARFLAG_FHIDDEN.0 | VARFLAG_FRESTRICTED.0) != 0;
+                if v.varkind == VAR_DISPATCH && !hidden {
+                    push(v.memid, &v.elemdescVar.tdesc);
+                }
+                info.ReleaseVarDesc(desc);
+            }
+            Ok(out)
+        }
+    }
+
     /// True when both wrap the same COM object (`Is` in VBA).
     #[napi]
     pub fn is_same(&self, other: &ComObject) -> bool {
@@ -543,6 +591,66 @@ impl ComObject {
             (Ok(a), Ok(b)) => a.as_raw() == b.as_raw(),
             _ => false,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------- type information
+
+/// A readable property of a COM object (see [`ComObject::members`]).
+#[napi(object)]
+pub struct ComMember {
+    /// Name as the type library spells it (`UsedRange`).
+    pub name: String,
+    /// The property is a number, string, date, boolean or enumeration: reading it is cheap and
+    /// shows its value. Objects and `Variant`s (`Range.Value` of a whole sheet) are read on demand.
+    pub scalar: bool,
+}
+
+struct TypeAttr<'a>(*mut TYPEATTR, &'a ITypeInfo);
+
+impl<'a> TypeAttr<'a> {
+    unsafe fn of(info: &'a ITypeInfo) -> Result<Self> {
+        Ok(Self(unsafe { info.GetTypeAttr() }.map_err(win)?, info))
+    }
+}
+
+impl Drop for TypeAttr<'_> {
+    fn drop(&mut self) {
+        unsafe { self.1.ReleaseTypeAttr(self.0) };
+    }
+}
+
+/// The dispatch view of a dual interface, whose descriptions have the real return types
+/// (the vtable view returns `HRESULT` with the value as a `retval` parameter).
+unsafe fn dispatch_info(info: ITypeInfo) -> ITypeInfo {
+    unsafe {
+        let Ok(attr) = TypeAttr::of(&info) else { return info };
+        let dual = (*attr.0).typekind == TKIND_INTERFACE && i32::from((*attr.0).wTypeFlags) & TYPEFLAG_FDUAL.0 != 0;
+        drop(attr);
+        if dual {
+            if let Ok(dispatch) = info.GetRefTypeOfImplType(u32::MAX).and_then(|r| info.GetRefTypeInfo(r)) {
+                return dispatch;
+            }
+        }
+        info
+    }
+}
+
+/// Parameters a caller must pass (the locale and return-value parameters are filled in by COM).
+unsafe fn required_params(f: &FUNCDESC) -> usize {
+    let n = usize::try_from(f.cParams).unwrap_or(0);
+    let params = if n == 0 || f.lprgelemdescParam.is_null() { &[][..] } else { unsafe { std::slice::from_raw_parts(f.lprgelemdescParam, n) } };
+    params.iter().filter(|p| unsafe { p.Anonymous.paramdesc.wParamFlags.0 } & (PARAMFLAG_FLCID.0 | PARAMFLAG_FRETVAL.0 | PARAMFLAG_FOPT.0) == 0).count()
+}
+
+unsafe fn is_scalar(info: &ITypeInfo, tdesc: &TYPEDESC) -> bool {
+    match tdesc.vt {
+        VT_I1 | VT_I2 | VT_I4 | VT_I8 | VT_UI1 | VT_UI2 | VT_UI4 | VT_UI8 | VT_INT | VT_UINT | VT_R4 | VT_R8 | VT_CY | VT_DATE | VT_BSTR | VT_BOOL | VT_DECIMAL => true,
+        // An enumeration (`XlSheetVisibility`); other user-defined types are interfaces.
+        VT_USERDEFINED => unsafe {
+            info.GetRefTypeInfo(tdesc.Anonymous.hreftype).ok().and_then(|t| TypeAttr::of(&t).ok().map(|a| (*a.0).typekind == TKIND_ENUM)).unwrap_or(false)
+        },
+        _ => false,
     }
 }
 

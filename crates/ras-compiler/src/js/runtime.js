@@ -1526,6 +1526,59 @@ function debugRead(roots, name, path) {
 }
 Object.defineProperty(globalThis, "$rasDebugRead", { value: debugRead, configurable: true });
 
+/** The camelCase spelling of a host member, as the RAS source writes it (`names::js_name` of the compiler). */
+function jsName(host) {
+    const run = /^[A-Z]*/.exec(host)[0].length;
+    if (run === 0) return host;
+    const lower = run > 1 && /[a-z]/.test(host.charAt(run)) ? run - 1 : run;
+    return host.slice(0, lower).toLowerCase() + host.slice(lower);
+}
+const debugMembers = new Map();
+/**
+ * What the variables view of the debugger shows for `o` (the `customPropertiesGenerator` of the
+ * debug configuration): for a COM object, its properties from the type library. Numbers,
+ * strings, booleans and enumerations are read at once; objects and `Variant`s (`value` of a
+ * range can be a whole sheet) are getters, read when expanded.
+ */
+function debugProperties(o) {
+    if (!isCom(o) || typeof o.members !== "function") return o;
+    let members;
+    try {
+        const type = o.typeName();
+        members = debugMembers.get(type);
+        if (members === undefined) {
+            members = o.members().sort((a, b) => a.name.localeCompare(b.name));
+            debugMembers.set(type, members);
+        }
+    } catch {
+        return o;
+    }
+    const out = {};
+    for (const m of members) {
+        const read = () => {
+            try {
+                return get(o, m.name);
+            } catch (e) {
+                return `<${(e && e.message) || e}>`;
+            }
+        };
+        if (m.scalar) out[jsName(m.name)] = read();
+        else Object.defineProperty(out, jsName(m.name), { get: read, enumerable: true, configurable: true });
+    }
+    return out;
+}
+/** The label of `o` in the debugger (`customDescriptionGenerator`): the class of a COM object. */
+function debugDescription(o, fallback) {
+    if (!isCom(o)) return fallback;
+    try {
+        return o.typeName();
+    } catch {
+        return fallback;
+    }
+}
+Object.defineProperty(globalThis, "$rasDebugProperties", { value: debugProperties, configurable: true });
+Object.defineProperty(globalThis, "$rasDebugDescription", { value: debugDescription, configurable: true });
+
 process.on("exit", resetAppState);
 
 module.exports = {
