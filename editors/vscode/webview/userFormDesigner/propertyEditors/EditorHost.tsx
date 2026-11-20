@@ -40,6 +40,8 @@ export function PropertyEditorHost(props: Props) {
   const [submitted, setSubmitted] = useState<number>();
   const [picking, setPicking] = useState<number>();
   const [picture, setPicture] = useState<PictureSelection>();
+  // A picture the browser cannot draw is left out instead of showing a broken image.
+  const [brokenPicture, setBrokenPicture] = useState<string>();
   const callbacks = useRef(props);
   callbacks.current = props;
   const token = useRef<string>();
@@ -135,6 +137,7 @@ export function PropertyEditorHost(props: Props) {
     if (request !== undefined) setSubmitted(request);
   };
   const disabled = pending || props.busy || stale;
+  const pictureSource = picture?.dataURI ?? session.picturePreview;
   return (
     <PropertyModal
       title={isPosition ? strings.editorPosition : session.title}
@@ -207,19 +210,28 @@ export function PropertyEditorHost(props: Props) {
       {session.descriptor.editor === "picture" && (
         <div class="picture-editor">
           <p>{strings.editorPictureHelp}</p>
-          {(picture?.dataURI ?? session.picturePreview) && value.remove !== true && (
+          {pictureSource && pictureSource !== brokenPicture && value.remove !== true && (
             <img
-              src={picture?.dataURI ?? session.picturePreview}
+              src={pictureSource}
               alt={picture?.name ?? String(value.path ?? "Picture")}
+              onError={() => setBrokenPicture(pictureSource)}
             />
           )}
           <p class="picture-editor-path">
             {typeof value.path === "string" ? value.path : props.strings.unset}
           </p>
           {picture && value.remove !== true && (
-            <p>
-              {picture.width} × {picture.height} px
-            </p>
+            <>
+              {picture.width !== undefined && picture.height !== undefined && (
+                <p>
+                  {picture.width} × {picture.height} px
+                </p>
+              )}
+              {(!pictureSource || pictureSource === brokenPicture) && (
+                <p class="notice">{strings.editorPictureNoPreview}</p>
+              )}
+              {picture.converted && <p class="notice">{strings.editorPictureConverted}</p>}
+            </>
           )}
           <button
             type="button"

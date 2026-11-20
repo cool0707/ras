@@ -3,7 +3,8 @@
 //! * [`plan`] — what a sync does to a VBA project: the rules, tested without Excel.
 //! * `excel` — the open workbook, reached over COM (Windows only).
 //!
-//! The code is written through the VBE object model (`CodeModule`) from this process. The
+//! The code is written through the VBE object model (`CodeModule`) from this process; a user
+//! form whose design changed is imported from a generated `.frm` / `.frx` pair. The
 //! shared-memory transport and the RASBridge add-in of spec §14.4 are an optimisation of the
 //! same rules and are not part of this crate.
 
@@ -18,7 +19,7 @@ mod disp;
 mod excel;
 
 use ras_compiler::emit::OutputFile;
-pub use plan::{Report, SyncOptions};
+pub use plan::{Forms, Report, SyncOptions};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SyncError {
@@ -81,11 +82,11 @@ impl Session {
         }
     }
 
-    /// Writes the generated modules into the open workbook.
-    pub fn apply(&mut self, files: &[OutputFile], opts: &SyncOptions) -> Result<Report, SyncError> {
+    /// Writes the generated modules and the user forms into the open workbook.
+    pub fn apply(&mut self, files: &[OutputFile], forms: Forms, opts: &SyncOptions) -> Result<Report, SyncError> {
         self.connect()?;
         let mut project = self.live.as_ref().expect("connected").project()?;
-        plan::apply(&mut project, files, opts)
+        plan::apply(&mut project, files, forms, opts)
     }
 
     /// Runs the macro `Module.proc` in the workbook and waits for it to end.
@@ -110,7 +111,7 @@ impl Session {
         Err(SyncError::Unsupported)
     }
 
-    pub fn apply(&mut self, _files: &[OutputFile], _opts: &SyncOptions) -> Result<Report, SyncError> {
+    pub fn apply(&mut self, _files: &[OutputFile], _forms: Forms, _opts: &SyncOptions) -> Result<Report, SyncError> {
         Err(SyncError::Unsupported)
     }
 

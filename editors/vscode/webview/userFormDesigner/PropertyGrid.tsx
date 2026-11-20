@@ -16,6 +16,7 @@ import { objectValue } from "./propertyEditors/types";
 import { editorRegistry } from "./propertyEditors/registry";
 import { colorStyle } from "./propertyEditors/appearance";
 import { validNumericInput } from "./propertyEditors/numeric";
+import { listToText, textToList } from "../../src/userForm/listItems";
 
 // Presentation only. The server owns types, applicability and authoring values.
 const categories = {
@@ -24,6 +25,7 @@ const categories = {
     "caption",
     "text",
     "value",
+    "list",
     "font",
     "foreColor",
     "backColor",
@@ -55,6 +57,7 @@ const labels: Record<string, keyof DesignerStrings> = {
   height: "propertyHeight",
   tabIndex: "propertyTabIndex",
   selectedIndex: "propertySelectedIndex",
+  list: "propertyList",
   enabled: "propertyEnabled",
   visible: "propertyVisible",
   tag: "propertyTag",
@@ -105,8 +108,11 @@ function PropertyRow({ descriptor, ...props }: Props & { descriptor: PropertyDes
   const { target, version, editable, busy, strings, reply, controlId, onCommit, drafts } = props;
   const draftKey = JSON.stringify([props.draftId ?? controlId ?? null, descriptor.field]);
   const source = target.values[descriptor.field];
+  // A list of strings is edited as text, one item per line.
+  const isList = descriptor.valueType === "stringArray";
   const fromSource = (): Draft => {
     const value = source?.present ? source.value : undefined;
+    if (isList) return { text: listToText(value), kind: "string", dirty: false, version };
     return {
       text: value == null ? "" : String(value),
       kind:
@@ -169,6 +175,19 @@ function PropertyRow({ descriptor, ...props }: Props & { descriptor: PropertyDes
       d.version !== version
     )
       return;
+    if (isList) {
+      const items = textToList(d.text);
+      const authored = source?.present && Array.isArray(source.value) ? source.value : null;
+      if (JSON.stringify(items) === JSON.stringify(authored)) {
+        update(fromSource());
+        return;
+      }
+      // No items removes the field.
+      const requestId = onCommit(descriptor.field, items);
+      if (requestId !== undefined)
+        update({ ...d, submitted: requestId, attempted: true, error: undefined });
+      return;
+    }
     let value: ScalarValue = d.text;
     if (d.kind === "boolean") value = d.text === "true";
     else if (d.kind === "number") {
@@ -231,7 +250,33 @@ function PropertyRow({ descriptor, ...props }: Props & { descriptor: PropertyDes
     <div class="property-row" data-property-field={descriptor.field}>
       <label for={id}>{fieldLabel}</label>
       <div class="property-value">
-        {descriptor.editor === "boolean" && draft.kind === "boolean" ? (
+        {isList ? (
+          <textarea
+            id={id}
+            rows={Math.min(8, Math.max(3, draft.text.split("\n").length + 1))}
+            wrap="off"
+            spellcheck={false}
+            value={draft.text}
+            placeholder={unconfigured ? placeholder : undefined}
+            title={strings.listHelp}
+            disabled={disabled}
+            aria-invalid={!!error}
+            aria-describedby={error ? `${id}-error` : undefined}
+            onInput={(event) => change(event.currentTarget.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.isComposing) return;
+              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                commit();
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                update(fromSource());
+              }
+            }}
+          />
+        ) : descriptor.editor === "boolean" && draft.kind === "boolean" ? (
           <input
             id={id}
             type="checkbox"
@@ -343,9 +388,7 @@ function ObjectPropertyRow(props: Props & { descriptor: PropertyDescriptor }) {
           : descriptor.editor === "picture"
             ? typeof value.path === "string"
               ? value.path
-              : value.remove === true
-                ? "(removed)"
-                : "Picture"
+              : strings.pictureNone
             : "";
   const supported = !!descriptor.editor && Object.hasOwn(editorRegistry, descriptor.editor);
   return (

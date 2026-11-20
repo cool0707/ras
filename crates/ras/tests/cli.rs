@@ -257,7 +257,9 @@ fn forms_are_created_checked_and_packed() {
     let project = book.project.expect("VBA project");
     let form = project.modules.iter().find(|m| m.name == "frmInput").expect("form module");
     assert_eq!(form.kind, ras_ovba::ModuleKind::Form);
-    assert!(form.source.contains("' RAS-FORM forms/frmInput.form.json\r\nPrivate Sub btnOK_Click()\r\n"), "{}", form.source);
+    let code: Vec<&str> = form.source.split("\r\n").skip_while(|l| l.starts_with("Attribute ")).collect();
+    assert!(code[0].starts_with("' RAS-FORM forms/frmInput.form.json design=") && code[0].contains(" code="), "{}", form.source);
+    assert_eq!(code[1], "Private Sub btnOK_Click()", "{}", form.source);
 
     // Changing the design updates the form; unpack leaves generated forms alone.
     good["form"]["width"] = 300.into();
@@ -288,6 +290,110 @@ fn forms_are_created_checked_and_packed() {
     assert!(!ok && out.contains("frmInput") && out.contains("--overwrite"), "{out}");
     let (ok, out) = ras(&other, &["pack", "--overwrite"]);
     assert!(ok, "{out}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&other);
+}
+
+/// A 2×2 bitmap, 24 bits per pixel.
+fn tiny_bmp() -> Vec<u8> {
+    let mut data = vec![0u8; 54 + 16];
+    data[..2].copy_from_slice(b"BM");
+    data[2..6].copy_from_slice(&70u32.to_le_bytes());
+    data[10..14].copy_from_slice(&54u32.to_le_bytes());
+    data[14..18].copy_from_slice(&40u32.to_le_bytes());
+    data[18..22].copy_from_slice(&2i32.to_le_bytes());
+    data[22..26].copy_from_slice(&2i32.to_le_bytes());
+    data[26..28].copy_from_slice(&1u16.to_le_bytes());
+    data[28..30].copy_from_slice(&24u16.to_le_bytes());
+    data[54..].copy_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0]);
+    data
+}
+
+/// Pictures and list items are written by `ras pack`, and `ras form pull` takes a form back
+/// out of the workbook (spec §14.11).
+#[test]
+fn form_pictures_lists_and_pull() {
+    let dir = temp_dir("forms-pull");
+    let (ok, out) = ras(&dir, &["init", ".", "--workbook", "Book.xlsm"]);
+    assert!(ok, "{out}");
+    std::fs::create_dir_all(dir.join("forms/assets")).unwrap();
+    std::fs::write(dir.join("forms/assets/logo.bmp"), tiny_bmp()).unwrap();
+    let spec = serde_json::json!({
+        "schemaVersion": 1, "kind": "ras.userform", "basis": "designer",
+        "form": { "name": "frmOrder", "caption": "注文", "width": 240, "height": 180 },
+        "controls": [
+            { "id": "logo", "name": "imgLogo", "type": "Image", "left": 6, "top": 6, "width": 32, "height": 32, "picture": { "path": "forms/assets/logo.bmp" }, "pictureSizeMode": 3 },
+            { "id": "kind", "name": "cboKind", "type": "ComboBox", "left": 48, "top": 6, "list": ["通常", "お急ぎ"], "selectedIndex": 0 },
+            { "id": "items", "name": "lstItems", "type": "ListBox", "left": 6, "top": 48, "list": ["A", "B", "C"] },
+            { "id": "note", "name": "txtNote", "type": "TextBox", "left": 6, "top": 130, "tag": "note", "controlTipText": "備考" }
+        ]
+    });
+    let spec_path = dir.join("forms/frmOrder.form.json");
+    std::fs::write(&spec_path, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+    let hand = "Option Explicit\n\nPrivate Sub UserForm_Initialize()\n    Me.txtNote.Text = \"\"\nEnd Sub\n";
+    std::fs::write(dir.join("forms/frmOrder.bas"), hand).unwrap();
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok, "{out}");
+    assert!(!out.contains("UFV013"), "list and tag are supported fields: {out}");
+
+    // The picture is in the designer storage, the list items in the code.
+    let book = dir.join("Book.xlsm");
+    let stored = ras_ovba::unpack_user_forms(&book).unwrap();
+    let form = stored.iter().find(|f| f.name == "frmOrder").expect("the form");
+    let bmp = tiny_bmp();
+    assert!(form.streams["o"].windows(bmp.len()).any(|w| w == bmp.as_slice()), "picture not stored");
+    assert!(form.code.contains("Private Sub RAS_FormInit()\n    With Me.cboKind\n        .AddItem \"通常\"\n        .AddItem \"お急ぎ\"\n        .ListIndex = 0\n    End With\n"), "{}", form.code);
+    assert!(form.code.contains("Private Sub UserForm_Initialize()\n    RAS_FormInit '--- RAS ---\n    Me.txtNote.Text = \"\"\n"), "{}", form.code);
+
+    // A selection has to name an item; a broken picture is an error that points into the file.
+    let mut bad = spec.clone();
+    bad["controls"][1]["selectedIndex"] = 5.into();
+    std::fs::write(&spec_path, serde_json::to_string_pretty(&bad).unwrap()).unwrap();
+    let (ok, out) = ras(&dir, &["form", "check"]);
+    assert!(!ok && out.contains("error[UFV020]"), "{out}");
+    let mut bad = spec.clone();
+    bad["controls"][0]["picture"]["path"] = "forms/assets/missing.bmp".into();
+    std::fs::write(&spec_path, serde_json::to_string_pretty(&bad).unwrap()).unwrap();
+    let (ok, out) = ras(&dir, &["form", "check"]);
+    assert!(!ok && out.contains("missing.bmp") && out.contains("forms/frmOrder.form.json:"), "{out}");
+    std::fs::write(&spec_path, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+
+    // Pull into an empty project: design, code-behind and picture come back.
+    let other = temp_dir("forms-pull-target");
+    let (ok, out) = ras(&other, &["init", "."]);
+    assert!(ok, "{out}");
+    let book_arg = book.to_string_lossy().to_string();
+    let (ok, out) = ras(&other, &["form", "pull", "--book", &book_arg]);
+    assert!(ok && out.contains("frmOrder") && out.contains("1 個を forms/ に取り出しました"), "{out}");
+    assert_eq!(std::fs::read_to_string(other.join("forms/frmOrder.bas")).unwrap(), hand);
+    assert_eq!(std::fs::read(other.join("forms/assets/frmOrder.imgLogo.bmp")).unwrap(), bmp);
+    let pulled: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(other.join("forms/frmOrder.form.json")).unwrap()).unwrap();
+    assert_eq!(pulled["form"]["caption"], "注文");
+    assert_eq!(pulled["controls"][0]["picture"]["path"], "forms/assets/frmOrder.imgLogo.bmp");
+    assert_eq!(pulled["controls"][0]["pictureSizeMode"], 3);
+    assert_eq!(pulled["controls"][3]["tag"], "note");
+    assert_eq!(pulled["controls"][3]["controlTipText"], "備考");
+    assert!(pulled["controls"][1].get("list").is_none(), "list items are not stored in the workbook");
+    let (ok, out) = ras(&other, &["form", "check"]);
+    assert!(ok, "the pulled form is a valid form: {out}");
+
+    // Existing files stay unless --force is given; unknown names are reported.
+    let (ok, out) = ras(&other, &["form", "pull", "frmOrder", "--book", &book_arg]);
+    assert!(ok && out.contains("既にあるため") && out.contains("0 個を forms/ に取り出しました"), "{out}");
+    let (ok, out) = ras(&other, &["form", "pull", "frmNone", "--book", &book_arg]);
+    assert!(!ok && out.contains("frmNone") && out.contains("frmOrder"), "{out}");
+
+    // Pulling over the project the form came from keeps the list items.
+    let (ok, out) = ras(&dir, &["form", "pull", "--force"]);
+    assert!(ok, "{out}");
+    let again: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&spec_path).unwrap()).unwrap();
+    assert_eq!(again["controls"][1]["list"], serde_json::json!(["通常", "お急ぎ"]));
+    assert_eq!(again["controls"][1]["selectedIndex"], 0);
+    assert_eq!(again["controls"][0]["picture"]["path"], "forms/assets/logo.bmp");
+    assert_eq!(std::fs::read_to_string(dir.join("forms/frmOrder.bas")).unwrap(), hand);
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok && out.contains("作成 0 / 更新 0 / 削除 0"), "pulling a generated form back changes nothing: {out}");
 
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&other);

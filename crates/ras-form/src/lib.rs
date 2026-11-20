@@ -7,28 +7,44 @@
 //! `forms/<Name>.bas`. This crate
 //!
 //! * parses and validates a FormSpec ([`parse`]; diagnostics `UFY001`,
-//!   `UFV001`–`UFV021` with the meaning they have in xlflow), and
+//!   `UFV001`–`UFV021` with the meaning they have in xlflow),
 //! * generates the MS-OFORMS designer storage of the form from scratch
-//!   ([`compile`]), byte for byte what xlflow's pure-Go compiler writes, so
-//!   that `ras pack` can store the form in a workbook without Excel.
+//!   ([`compile`], [`compile_in`]), byte for byte what xlflow's pure-Go
+//!   compiler writes, so that `ras pack` can store the form in a workbook
+//!   without Excel,
+//! * reads the designer storage of an existing form back into a FormSpec
+//!   ([`snapshot`]), and
+//! * handles the files of a project ([`workspace`]) and the code module of a
+//!   generated form ([`codebehind`]), including the code that fills
+//!   ComboBox / ListBox lists.
 //!
-//! The specification model, validation and generation are a port of
-//! xlflow's `internal/vba/userforms` packages (Copyright (c) 2026 harumiWeb,
-//! MIT License; see `NOTICE.md`). Reading designer storages back into a
-//! FormSpec, editing existing binary forms and embedding Image pictures are
-//! not ported.
+//! The specification model, validation, generation, reading and projection
+//! are a port of xlflow's `internal/vba/userforms` packages (Copyright (c)
+//! 2026 harumiWeb, MIT License; see `NOTICE.md`). Editing an existing
+//! binary form in place is not ported: a form is always generated whole.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod codebehind;
 mod compile;
 pub mod contract;
 mod oforms;
+pub mod picture;
+mod reader;
+mod snapshot;
 pub mod spec;
 mod validate;
+pub mod workspace;
 
 pub use compile::CompileError;
 pub use oforms::Designer;
+pub use reader::ReadError;
+#[doc(hidden)]
+pub use snapshot::project;
+pub use snapshot::{
+    snapshot, Snapshot, SnapshotError, SnapshotPicture, SnapshotWarning, PLACEHOLDER_TYPE,
+};
 pub use spec::{FormSpec, FormSpecColor, FormSpecControl, FormSpecFont, FormSpecForm, FormSpecTab};
 pub use validate::{Issue, Severity};
 
@@ -177,8 +193,25 @@ pub fn parse(text: &str) -> Parsed {
 /// [`parse`] (it is normalised and validated again here); `codepage` is the
 /// project code page (`target.codepage`, normally 932), used for the
 /// `VBFrame` stream.
+///
+/// A form with an `Image` picture (`picture.path`) needs the project root:
+/// use [`compile_in`].
 pub fn compile(spec: &FormSpec, codepage: u16) -> Result<Designer, CompileError> {
     let mut spec = spec.clone();
     spec::normalize(&mut spec);
-    compile::compile_new(&spec, codepage)
+    compile::compile_new(&spec, codepage, None)
+}
+
+/// Like [`compile`], reading the pictures of `Image` controls from the
+/// files their `picture.path` names relative to `root`, the project root.
+/// A picture MS-Forms cannot store as it is (PNG, GIF, ...) is converted to
+/// a 24-bit BMP (see [`picture::prepare`]).
+pub fn compile_in(
+    spec: &FormSpec,
+    codepage: u16,
+    root: &std::path::Path,
+) -> Result<Designer, CompileError> {
+    let mut spec = spec.clone();
+    spec::normalize(&mut spec);
+    compile::compile_new(&spec, codepage, Some(root))
 }

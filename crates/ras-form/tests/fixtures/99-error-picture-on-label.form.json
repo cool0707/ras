@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "ErrPictureOnLabel" },
+  "controls": [ { "id": "l", "name": "lbl", "type": "Label", "picture": { "path": "assets/logo.bmp" } } ]
+}

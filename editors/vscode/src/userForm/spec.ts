@@ -152,14 +152,15 @@ export function previewDocument(spec: ParsedSpec): PreviewDocument {
 			for (const key of ["left", "top", "width", "height"] as const) if (!num(copy[key])) delete copy[key];
 			for (const key of ["foreColor", "backColor"] as const) if (copy[key] !== undefined && colorError(copy[key])) delete copy[key];
 			if (copy.font !== undefined && !isObject(copy.font)) delete copy.font;
+			if (copy.list !== undefined && !(Array.isArray(copy.list) && copy.list.every((item) => typeof item === "string"))) delete copy.list;
 			return copy;
 		}),
 	};
 }
 
 /** Validation issues with their source range, for the Problems panel. */
-export function problems(spec: ParsedSpec): DesignerProblem[] {
-	return spec.issues.map((issue) => {
+export function problems(spec: ParsedSpec, issues: ValidationIssue[] = spec.issues): DesignerProblem[] {
+	return issues.map((issue) => {
 		const node = nodeAtPath(spec.node, issue.field);
 		const start = node?.keyStart ?? node?.start ?? 0;
 		const end = node?.end ?? start;
@@ -510,7 +511,7 @@ function validateTabs(value: JsonValue, path: string): ValidationIssue[] {
 
 function validateSelectedIndex(values: JsonObject, type: string, path: string): ValidationIssue[] {
 	const t = type.toLowerCase();
-	if (t !== "multipage" && t !== "tabstrip") return [];
+	if (!["multipage", "tabstrip", "combobox", "listbox"].includes(t)) return [];
 	const [value, present] = lookupRaw(values, "selectedIndex");
 	if (!present || !isInteger(value)) return [];
 	const index = value as number;
@@ -518,6 +519,11 @@ function validateSelectedIndex(values: JsonObject, type: string, path: string): 
 	if (t === "tabstrip") {
 		const [tabs] = lookupRaw(values, "tabs");
 		if (Array.isArray(tabs)) invalid = (tabs.length === 0 && index !== -1) || (tabs.length > 0 && (index < 0 || index >= tabs.length));
+	}
+	if (t === "combobox" || t === "listbox") {
+		// A missing list counts as empty: the generated code could not select an item that is not there.
+		const [list] = lookupRaw(values, "list");
+		invalid = index < -1 || index >= (Array.isArray(list) ? list.length : 0);
 	}
 	return invalid ? [selectedIndexIssue(`${path}.selectedIndex`)] : [];
 }

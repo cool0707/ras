@@ -17,7 +17,7 @@ export interface PropertyContract {
 	description: string;
 	authoring: boolean;
 	allowedValues?: string[];
-	editor?: "font" | "color" | "enum" | "picture";
+	editor?: "font" | "color" | "enum" | "picture" | "list";
 	children?: Record<string, PropertyContract>;
 	minimum?: number;
 	maximum?: number;
@@ -110,6 +110,8 @@ export const commonControlProperties: Record<string, PropertyContract> = {
 	tabIndex: p("integer", false, "supported", "Control tab order index.", true),
 	enabled: p("boolean", false, "supported", "Whether the control is enabled.", true),
 	visible: p("boolean", false, "supported", "Whether the control is visible.", true),
+	tag: p("string", false, "supported", "Opaque metadata associated with the control.", true),
+	controlTipText: p("string", false, "supported", "Tooltip shown for the control.", true),
 	observed: p("object", false, "snapshot-only", "Snapshot state captured from Excel for review.", false),
 	controls: p("objectArray", false, "snapshot-only", "Legacy nested input accepted and normalized to flat controls.", false),
 	properties: p("object", false, "custom/unchecked", "Unchecked custom property bag.", false),
@@ -127,8 +129,8 @@ export const tabProperties: Record<string, PropertyContract> = {
 };
 
 export const pictureActionProperties: Record<string, PropertyContract> = {
-	path: p("string", false, "supported", "Project-root-relative BMP or JPEG asset path.", true),
-	remove: p("boolean", false, "supported", "Clear the existing Image picture.", true, ["true"]),
+	path: p("string", false, "supported", "Project-root-relative BMP or JPEG asset path, with / separators.", true),
+	remove: p("boolean", false, "supported", "No picture; the same as omitting the field.", true, ["true"]),
 };
 
 const typed = (...entries: string[]) => {
@@ -137,10 +139,10 @@ const typed = (...entries: string[]) => {
 		result[entries[i]] = p(entries[i] === "value" ? "any" : "string", false, "supported", entries[i + 1], true);
 	return result;
 };
-const listControl = () => ({
+const listControl = (): Record<string, PropertyContract> => ({
 	...typed("text", "Displayed text.", "value", "Current control value."),
-	list: p("stringArray", false, "observed-only", "Captured list items; list persistence cannot be authored.", true),
-	selectedIndex: p("integer", false, "observed-only", "Captured list selection; selection persistence cannot be authored.", true),
+	list: { ...p("stringArray", false, "supported", "List items; generated code in UserForm_Initialize fills the list.", true), editor: "list" },
+	selectedIndex: p("integer", false, "supported", "Zero-based selected item of list, or -1 for none; set by generated code in UserForm_Initialize.", true),
 });
 const control = (type: string, canContainChildren: boolean, properties: Record<string, PropertyContract>): ControlContract => ({
 	type,
@@ -162,7 +164,7 @@ function buildControls(): Record<string, ControlContract> {
 		spinbutton: control("SpinButton", false, { value: p("integer", false, "supported", "SpinButton value.", true) }),
 		scrollbar: control("ScrollBar", false, { value: p("integer", false, "supported", "ScrollBar value.", true) }),
 		image: control("Image", false, {
-			picture: { ...p("object", false, "supported", "Replace or remove an Image picture.", true), editor: "picture", children: pictureActionProperties },
+			picture: { ...p("object", false, "supported", "Picture embedded into the Image control.", true), editor: "picture", children: pictureActionProperties },
 			pictureAlignment: { ...p("integer", false, "supported", "Picture alignment: TopLeft, TopRight, Center, BottomLeft, BottomRight.", true, ["0", "1", "2", "3", "4"]), editor: "enum" },
 			pictureSizeMode: { ...p("integer", false, "supported", "Picture size mode: Clip, Stretch, Zoom.", true, ["0", "1", "3"]), editor: "enum" },
 		}),
@@ -247,19 +249,15 @@ export function editableFormProperties(): Record<string, PropertyContract> {
 	);
 }
 
-/**
- * Fields the Property Grid offers for a control. Picture import needs project
- * asset handling that the RAS extension does not provide, so the picture
- * action stays a source-only field.
- */
+/** Fields the Property Grid offers for a control (scalar fields plus typed editors). */
 export function editableControlProperties(type: string, progId?: string): Record<string, PropertyContract> {
 	const typedEditors = !progId || lookupControlContractByProgId(progId)?.type.toLowerCase() === type.toLowerCase();
 	return Object.fromEntries(
 		Object.entries(controlProperties(type)).filter(
 			([name, c]) =>
-				!["id", "type", "parentId", "zIndex", "picture"].includes(name) &&
+				!["id", "type", "parentId", "zIndex"].includes(name) &&
 				c.authoring &&
-				(isEditorProperty(name) ? typedEditors : isScalar(c)),
+				(isEditorProperty(name) || c.editor === "list" ? typedEditors : isScalar(c)),
 		),
 	);
 }

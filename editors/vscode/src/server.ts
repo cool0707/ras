@@ -35,6 +35,10 @@ export class RasServer implements vscode.Disposable {
 	private readonly watchers = [
 		vscode.workspace.createFileSystemWatcher("**/ras.toml"),
 		vscode.workspace.createFileSystemWatcher("**/*.ras"),
+		// User forms: the design, the code-behind and the pictures of Image controls.
+		vscode.workspace.createFileSystemWatcher("**/forms/*.form.json"),
+		vscode.workspace.createFileSystemWatcher("**/forms/*.bas"),
+		vscode.workspace.createFileSystemWatcher("**/forms/assets/*"),
 	];
 	private readonly stateEmitter = new vscode.EventEmitter<ServerState>();
 	private readonly syncStatusEmitter = new vscode.EventEmitter<unknown>();

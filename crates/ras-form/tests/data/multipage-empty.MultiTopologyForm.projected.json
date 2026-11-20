@@ -1,0 +1,79 @@
+{
+  "pictures": {},
+  "spec": {
+    "schemaVersion": 1,
+    "kind": "xlflow.userform",
+    "basis": "designer",
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "name": "MultiTopologyForm",
+      "width": 349.2,
+      "height": 271.8141732283465
+    },
+    "controls": [
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "charset": 128
+        },
+        "id": "control_001",
+        "zIndex": 0,
+        "type": "MultiPage",
+        "name": "MultiMain",
+        "progId": "Forms.MultiPage.1",
+        "left": 11.990551181102362,
+        "top": 11.990551181102362,
+        "width": 263.9905511811024,
+        "height": 204.00944881889762,
+        "tabIndex": 0,
+        "selectedIndex": -1,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "logicalSize"
+        ]
+      },
+      {
+        "font": {
+          "name": "MS UI Gothic",
+          "size": 9,
+          "charset": 128
+        },
+        "id": "control_002",
+        "zIndex": 1,
+        "type": "TabStrip",
+        "name": "StripMain",
+        "progId": "Forms.TabStrip.1",
+        "left": 11.990551181102362,
+        "top": 205.99370078740156,
+        "width": 240.00944881889762,
+        "height": 47.99055118110236,
+        "tabIndex": 1,
+        "selectedIndex": -1,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "textProps"
+        ],
+        "tabs": []
+      }
+    ],
+    "warnings": [
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported form Designer properties were preserved only in the binary model: logicalSize."
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: logicalSize.",
+        "control": "MultiMain"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: textProps.",
+        "control": "StripMain"
+      }
+    ]
+  }
+}

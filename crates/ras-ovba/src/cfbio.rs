@@ -49,6 +49,8 @@ impl Node {
 #[derive(Clone, Default)]
 pub(crate) struct Tree {
     pub root_meta: Option<cfb::Entry>,
+    /// CLSID (wire byte order) of the root storage of a new file without `root_meta`.
+    pub root_clsid: Option<[u8; 16]>,
     pub root_times: (u64, u64),
     pub nodes: Vec<Node>,
 }
@@ -156,6 +158,8 @@ pub(crate) fn write_tree(tree: &Tree) -> Result<Vec<u8>, OvbaError> {
     if let Some(meta) = &tree.root_meta {
         file.set_storage_clsid("/", *meta.clsid()).map_err(cfb_err)?;
         file.set_state_bits("/", meta.state_bits()).map_err(cfb_err)?;
+    } else if let Some(clsid) = tree.root_clsid {
+        file.set_storage_clsid("/", uuid::Uuid::from_bytes_le(clsid)).map_err(cfb_err)?;
     }
 
     // Children of every storage, keyed by the parent's path.
@@ -421,7 +425,7 @@ mod tests {
             nodes.push(Node::stream(p(&["VBA", &format!("Module{i}")]), vec![i as u8; 100 + i]));
         }
         nodes[5].times = (131_715_775_748_160_000, 131_715_775_748_190_000);
-        Tree { root_meta: None, root_times: (0, 130_595_336_503_470_000), nodes }
+        Tree { root_meta: None, root_clsid: None, root_times: (0, 130_595_336_503_470_000), nodes }
     }
 
     #[test]

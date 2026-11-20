@@ -45,7 +45,9 @@ jobs:
           RAS="$GITHUB_WORKSPACE/target/debug/ras"
           "$RAS" init . --workbook Book.xlsm
           "$RAS" form new frmSample
-          printf '{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"frmSample"},"controls":[{"id":"t","name":"txtSample","type":"TextBox","text":"sample text"}]}' > forms/frmSample.form.json
+          mkdir -p forms/assets
+          cp "$GITHUB_WORKSPACE/crates/ras-form/tests/fixtures/assets/logo.bmp" forms/assets/
+          printf '{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"frmSample"},"controls":[{"id":"t","name":"txtSample","type":"TextBox","text":"sample text"},{"id":"c","name":"cboKind","type":"ComboBox","top":24,"list":["first","second"],"selectedIndex":1},{"id":"i","name":"imgLogo","type":"Image","top":48,"picture":{"path":"forms/assets/logo.bmp"}}]}' > forms/frmSample.form.json
           "$RAS" pack
           "$RUNNER_TEMP/venv/bin/olevba" Book.xlsm > olevba.txt
           grep -q "VBA MACRO Main.bas" olevba.txt
@@ -53,8 +55,17 @@ jobs:
           grep -q "Public Sub hello()" olevba.txt
           grep -q "VBA MACRO frmSample.frm" olevba.txt
           grep -q "VBA FORM Variable \"b'txtSample'\"" olevba.txt
+          grep -q "VBA FORM Variable \"b'imgLogo'\"" olevba.txt
+          grep -q "Private Sub RAS_FormInit()" olevba.txt
+          grep -q '.AddItem "second"' olevba.txt
           echo "olevba read the generated VBA project:"
           grep "VBA MACRO" olevba.txt
+          # The form comes back out of the workbook with its picture.
+          mkdir "$RUNNER_TEMP/pulled" && cd "$RUNNER_TEMP/pulled"
+          "$RAS" init .
+          "$RAS" form pull --book "$RUNNER_TEMP/sample/Book.xlsm"
+          cmp forms/assets/frmSample.imgLogo.bmp "$GITHUB_WORKSPACE/crates/ras-form/tests/fixtures/assets/logo.bmp"
+          "$RAS" form check
 
   build:
     name: Build ${{ matrix.name }}

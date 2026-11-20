@@ -46,42 +46,53 @@ const FORM_MASK_FONT: u64 = 1 << 20;
 // ---------------------------------------------------------------------------
 // Record layouts (specs.go)
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FieldKind {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FieldKind {
     Unsigned,
     Signed,
     StringLength,
     Marker,
 }
 
-#[derive(Clone, Copy)]
-enum ExtraKind {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExtraKind {
     Size,
     Position,
     Str,
     Array,
 }
 
-struct DataField {
-    bit: u8,
-    name: &'static str,
-    size: usize,
-    kind: FieldKind,
+#[derive(Debug)]
+pub(crate) struct DataField {
+    pub(crate) bit: u8,
+    pub(crate) name: &'static str,
+    pub(crate) size: usize,
+    pub(crate) kind: FieldKind,
 }
 
-struct ExtraField {
-    bit: u8,
-    name: &'static str,
-    kind: ExtraKind,
+#[derive(Debug)]
+pub(crate) struct ExtraField {
+    pub(crate) bit: u8,
+    pub(crate) name: &'static str,
+    pub(crate) kind: ExtraKind,
 }
 
+#[derive(Debug)]
 pub(crate) struct RecordSpec {
-    major: u8,
-    mask64: bool,
-    stop_after_extra: bool,
-    text_props: bool,
-    data: &'static [DataField],
-    extra: &'static [ExtraField],
+    /// Name of the record in messages (`MorphData`, `Form`, ...).
+    pub(crate) type_name: &'static str,
+    pub(crate) major: u8,
+    pub(crate) mask64: bool,
+    pub(crate) stop_after_extra: bool,
+    pub(crate) text_props: bool,
+    /// Bytes after the last known part are kept instead of being an error.
+    pub(crate) raw_tail: bool,
+    pub(crate) data: &'static [DataField],
+    pub(crate) extra: &'static [ExtraField],
+    /// Pictures (`GuidAndPicture`) that follow the record, in stream order.
+    pub(crate) stream: &'static [(u8, &'static str)],
+    /// Mask bits that carry a value by themselves: (bit, name, value).
+    pub(crate) flags: &'static [(u8, &'static str, i64)],
 }
 
 const fn d(bit: u8, name: &'static str, size: usize, kind: FieldKind) -> DataField {
@@ -100,11 +111,15 @@ const fn e(bit: u8, name: &'static str, kind: ExtraKind) -> ExtraField {
 use ExtraKind as X;
 use FieldKind::{Marker as M, Signed as S, StringLength as L, Unsigned as U};
 
-static TEXT_PROPS: RecordSpec = RecordSpec {
+pub(crate) static TEXT_PROPS: RecordSpec = RecordSpec {
+    type_name: "TextProps",
     major: 2,
     mask64: false,
     stop_after_extra: true,
     text_props: false,
+    raw_tail: false,
+    stream: &[],
+    flags: &[],
     data: &[
         d(0, "FontName", 4, L),
         d(1, "FontEffects", 4, U),
@@ -117,11 +132,15 @@ static TEXT_PROPS: RecordSpec = RecordSpec {
     extra: &[e(0, "FontName", X::Str)],
 };
 
-static MORPH_DATA: RecordSpec = RecordSpec {
+pub(crate) static MORPH_DATA: RecordSpec = RecordSpec {
+    type_name: "MorphData",
     major: 2,
     mask64: true,
     stop_after_extra: false,
     text_props: true,
+    raw_tail: true,
+    stream: &[(27, "MouseIcon"), (28, "Picture")],
+    flags: &[],
     data: &[
         d(0, "VariousPropertyBits", 4, U),
         d(1, "BackColor", 4, U),
@@ -161,11 +180,15 @@ static MORPH_DATA: RecordSpec = RecordSpec {
     ],
 };
 
-static COMMAND_BUTTON: RecordSpec = RecordSpec {
+pub(crate) static COMMAND_BUTTON: RecordSpec = RecordSpec {
+    type_name: "CommandButton",
     major: 2,
     mask64: false,
     stop_after_extra: false,
     text_props: true,
+    raw_tail: false,
+    stream: &[(7, "Picture"), (10, "MouseIcon")],
+    flags: &[(9, "TakeFocusOnClick", 0)],
     data: &[
         d(0, "ForeColor", 4, U),
         d(1, "BackColor", 4, U),
@@ -180,11 +203,15 @@ static COMMAND_BUTTON: RecordSpec = RecordSpec {
     extra: &[e(3, "Caption", X::Str), e(5, "Size", X::Size)],
 };
 
-static LABEL: RecordSpec = RecordSpec {
+pub(crate) static LABEL: RecordSpec = RecordSpec {
+    type_name: "Label",
     major: 2,
     mask64: false,
     stop_after_extra: false,
     text_props: true,
+    raw_tail: false,
+    stream: &[(10, "Picture"), (12, "MouseIcon")],
+    flags: &[],
     data: &[
         d(0, "ForeColor", 4, U),
         d(1, "BackColor", 4, U),
@@ -202,11 +229,15 @@ static LABEL: RecordSpec = RecordSpec {
     extra: &[e(3, "Caption", X::Str), e(5, "Size", X::Size)],
 };
 
-static IMAGE: RecordSpec = RecordSpec {
+pub(crate) static IMAGE: RecordSpec = RecordSpec {
+    type_name: "Image",
     major: 2,
     mask64: false,
     stop_after_extra: false,
     text_props: false,
+    raw_tail: false,
+    stream: &[(10, "Picture"), (14, "MouseIcon")],
+    flags: &[],
     data: &[
         d(3, "BorderColor", 4, U),
         d(4, "BackColor", 4, U),
@@ -222,11 +253,15 @@ static IMAGE: RecordSpec = RecordSpec {
     extra: &[e(9, "Size", X::Size)],
 };
 
-static SPIN_BUTTON: RecordSpec = RecordSpec {
+pub(crate) static SPIN_BUTTON: RecordSpec = RecordSpec {
+    type_name: "SpinButton",
     major: 2,
     mask64: false,
     stop_after_extra: false,
     text_props: false,
+    raw_tail: false,
+    stream: &[(13, "MouseIcon")],
+    flags: &[],
     data: &[
         d(0, "ForeColor", 4, U),
         d(1, "BackColor", 4, U),
@@ -245,11 +280,15 @@ static SPIN_BUTTON: RecordSpec = RecordSpec {
     extra: &[e(3, "Size", X::Size)],
 };
 
-static SCROLL_BAR: RecordSpec = RecordSpec {
+pub(crate) static SCROLL_BAR: RecordSpec = RecordSpec {
+    type_name: "ScrollBar",
     major: 2,
     mask64: false,
     stop_after_extra: false,
     text_props: false,
+    raw_tail: false,
+    stream: &[(16, "MouseIcon")],
+    flags: &[],
     data: &[
         d(0, "ForeColor", 4, U),
         d(1, "BackColor", 4, U),
@@ -270,11 +309,15 @@ static SCROLL_BAR: RecordSpec = RecordSpec {
     extra: &[e(3, "Size", X::Size)],
 };
 
-static TAB_STRIP: RecordSpec = RecordSpec {
+pub(crate) static TAB_STRIP: RecordSpec = RecordSpec {
+    type_name: "TabStrip",
     major: 2,
     mask64: false,
     stop_after_extra: false,
     text_props: true,
+    raw_tail: true,
+    stream: &[(24, "MouseIcon")],
+    flags: &[(10, "MultiRow", 1), (13, "Tooltips", 0), (19, "NewVersion", 1)],
     data: &[
         d(0, "ListIndex", 4, S),
         d(1, "BackColor", 4, U),
@@ -304,11 +347,15 @@ static TAB_STRIP: RecordSpec = RecordSpec {
     ],
 };
 
-static FORM: RecordSpec = RecordSpec {
+pub(crate) static FORM: RecordSpec = RecordSpec {
+    type_name: "Form",
     major: 4,
     mask64: false,
     stop_after_extra: true,
     text_props: false,
+    raw_tail: false,
+    stream: &[],
+    flags: &[],
     data: &[
         d(1, "BackColor", 4, U),
         d(2, "ForeColor", 4, U),
@@ -339,16 +386,45 @@ static FORM: RecordSpec = RecordSpec {
     ],
 };
 
-static MULTI_PAGE_PROPERTIES: RecordSpec = RecordSpec {
+pub(crate) static MULTI_PAGE_PROPERTIES: RecordSpec = RecordSpec {
+    type_name: "MultiPageProperties",
     major: 2,
     mask64: false,
     stop_after_extra: true,
     text_props: false,
+    raw_tail: false,
+    stream: &[],
+    flags: &[(3, "Flags", 0)],
     data: &[d(1, "PageCount", 4, S), d(2, "ID", 4, S)],
     extra: &[],
 };
 
-fn spec_for_class(class: u16) -> Option<&'static RecordSpec> {
+/// One `PageProperties` record of a MultiPage `x` stream.
+pub(crate) static PAGE_PROPERTIES: RecordSpec = RecordSpec {
+    type_name: "PageProperties",
+    major: 2,
+    mask64: false,
+    stop_after_extra: true,
+    text_props: false,
+    raw_tail: false,
+    stream: &[],
+    flags: &[],
+    data: &[d(1, "TransitionEffect", 4, U), d(2, "TransitionPeriod", 4, U)],
+    extra: &[],
+};
+
+/// Name of the data field that holds the byte size of an array.
+pub(crate) fn array_size_field(name: &str) -> &'static str {
+    match name {
+        "Items" => "ItemsSize",
+        "TipStrings" => "TipStringsSize",
+        "TabNames" => "NamesSize",
+        "Tags" => "TagsSize",
+        _ => "AcceleratorsSize",
+    }
+}
+
+pub(crate) fn spec_for_class(class: u16) -> Option<&'static RecordSpec> {
     Some(match class {
         12 => &IMAGE,
         15 | 23..=28 => &MORPH_DATA,
@@ -361,7 +437,7 @@ fn spec_for_class(class: u16) -> Option<&'static RecordSpec> {
     })
 }
 
-fn is_container_class(class: u16) -> bool {
+pub(crate) fn is_container_class(class: u16) -> bool {
     matches!(class, 7 | 14 | 57)
 }
 
@@ -421,6 +497,8 @@ pub(crate) enum PValue {
     Str(String),
     Int(i64),
     Bool(bool),
+    /// An encoded `StdPicture` (see [`crate::picture::encode`]).
+    Picture(Vec<u8>),
 }
 
 #[derive(Clone)]
@@ -431,6 +509,7 @@ pub(crate) struct Record {
     strings: HashMap<&'static str, Stored>,
     sizes: HashMap<&'static str, (i32, i32)>,
     arrays: HashMap<&'static str, Vec<u8>>,
+    pictures: HashMap<&'static str, Vec<u8>>,
     text_props: Option<Box<Record>>,
     tail: Vec<u8>,
 }
@@ -444,6 +523,7 @@ impl Record {
             strings: HashMap::new(),
             sizes: HashMap::new(),
             arrays: HashMap::new(),
+            pictures: HashMap::new(),
             text_props: None,
             tail: Vec::new(),
         }
@@ -454,7 +534,19 @@ impl Record {
             return unsupported(format!("プロパティ {name}"));
         };
         match field.kind {
-            FieldKind::Marker => return unsupported(format!("リソース {name}")),
+            FieldKind::Marker => {
+                // Only the picture of an Image control can be written.
+                if !std::ptr::eq(self.spec, &IMAGE) || name != "Picture" {
+                    return unsupported(format!("リソース {name}"));
+                }
+                let PValue::Picture(raw) = value else {
+                    return invalid("Picture は StdPicture のバイト列が必要です");
+                };
+                crate::picture::decode(raw)
+                    .map_err(|e| PersistError::Invalid(format!("Picture: {e}")))?;
+                self.pictures.insert(field.name, raw.clone());
+                self.values.insert(field.name, 0xffff);
+            }
             FieldKind::StringLength => {
                 let PValue::Str(text) = value else {
                     return invalid(format!("{name} は文字列が必要です"));
@@ -541,6 +633,13 @@ impl Record {
         finish_header(&mut b)?;
         if spec.stop_after_extra {
             return Ok(b);
+        }
+        for (bit, name) in spec.stream {
+            if self.mask & (1u64 << bit) != 0 {
+                if let Some(picture) = self.pictures.get(name) {
+                    b.extend_from_slice(picture);
+                }
+            }
         }
         if spec.text_props {
             let Some(text_props) = &self.text_props else {

@@ -89,11 +89,11 @@ enum Command {
         #[arg(long)]
         stdio: bool,
     },
-    /// Excel で開いているブックの VBA プロジェクトへ、1回だけ反映する（ライブ同期。Windows のみ）
+    /// Excel で開いているブックの VBA プロジェクトへ、モジュールとユーザーフォームを 1 回だけ反映する（ライブ同期。Windows のみ）
     Sync {
         #[command(flatten)]
         build: BuildArgs,
-        /// VBE 上で編集された RAS 管理モジュール（ドリフト）と、同名の手書きモジュールを上書きする
+        /// VBE 上で編集された RAS 管理モジュール（ドリフト）と、同名の手書きモジュール・VBE で作ったフォームを上書きする
         #[arg(long)]
         overwrite: bool,
         /// Excel → ローカル方向に同期する（未実装）
@@ -115,6 +115,17 @@ enum FormCommand {
     },
     /// forms/ のユーザーフォームを検査する（ブックへの書き込みと同じ生成まで行う）
     Check,
+    /// ブックにあるユーザーフォームを forms/ に取り出す（デザイン・コード・Image の画像）
+    Pull {
+        /// 取り出すフォーム名（省略時はブックのすべてのフォーム）
+        names: Vec<String>,
+        /// 対象ブック（省略時は ras.toml の project.workbook）
+        #[arg(long, value_name = "FILE")]
+        book: Option<PathBuf>,
+        /// forms/ に既にあるファイルを置き換える
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
@@ -358,17 +369,13 @@ fn cmd_build_js(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
 
 /// Loads, validates and generates the forms of `forms/`; `None` (after printing the problems) when there are errors.
 fn load_forms(root: &Path, codepage: u16) -> Result<Option<Vec<ras_ovba::UserForm>>, String> {
-    let loaded = forms::load(root)?;
-    let errors = forms::report(&loaded);
+    let (_, built) = forms::build(root, codepage)?;
+    let errors = forms::report(&built);
     if errors > 0 {
         eprintln!("ユーザーフォームに {errors} 件のエラーがあります");
         return Ok(None);
     }
-    let compiled = forms::compile(&loaded, codepage)?;
-    if compiled.is_none() {
-        eprintln!("ユーザーフォームを生成できませんでした");
-    }
-    Ok(compiled)
+    Ok(Some(built.forms))
 }
 
 fn to_ovba_kind(k: &VModuleKind) -> ras_ovba::ModuleKind {
@@ -446,13 +453,13 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         if m.kind != ras_ovba::ModuleKind::Form {
             return Err(format!("ブックには `{}` という名前のフォームではないモジュールがあります。フォーム名を変えてください", m.name));
         }
-        if !forms::is_generated(&m.source) {
+        if !ras_ovba::is_generated_form(&m.source) {
             hand_made_forms.push(m.name.clone());
         }
     }
     if !hand_made_forms.is_empty() && !p.overwrite {
         return Err(format!(
-            "ブックには forms/ から生成したものではない同名のユーザーフォームがあります: {}\n  このまま書き込むと VBE で作ったフォームとそのコードが失われます。フォーム名を変えるか、置き換えてよい場合は --overwrite を付けてください",
+            "ブックには forms/ から生成したものではない同名のユーザーフォームがあります: {}\n  このまま書き込むと VBE で作ったフォームとそのコードが失われます。フォーム名を変えるか、`ras form pull` で forms/ に取り出してください。置き換えてよい場合は --overwrite を付けてください",
             hand_made_forms.join(", ")
         ));
     }
@@ -521,11 +528,9 @@ fn live_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<Option<Ex
     }
     let Some((prog, out)) = compile_with(root, args, Some(&book), true)? else { return Ok(Some(ExitCode::from(1))) };
     write_build(root, &prog, &out)?;
-    let form_count = forms::load(root)?.len();
-    if form_count > 0 {
-        eprintln!("warning: forms/ のユーザーフォーム（{form_count} 個）はライブ同期では反映しません。ブックを閉じて `ras pack` を実行すると書き込まれます");
-    }
-    let rep = session.apply(&out.files, &ras_sync::SyncOptions { overwrite }).map_err(|e| e.to_string())?;
+    let codepage = prog.config.target.codepage;
+    let Some(user_forms) = load_forms(root, codepage)? else { return Ok(Some(ExitCode::from(1))) };
+    let rep = session.apply(&out.files, ras_sync::Forms { forms: &user_forms, codepage }, &ras_sync::SyncOptions { overwrite }).map_err(|e| e.to_string())?;
     println!("{} に同期しました（{}）", book.display(), rep.summary());
     if rep.drifted.is_empty() {
         return Ok(Some(ExitCode::SUCCESS));
@@ -587,7 +592,7 @@ fn cmd_unpack(root: &Path, book: Option<&Path>) -> Result<ExitCode, String> {
                 eprintln!("warning: RAS 管理モジュール `{}` は VBE 上で編集されています。VBE 側の内容を build/drift/{}.vba に保存しました", m.name, m.name);
                 drifted += 1;
             }
-            None if m.kind == ras_ovba::ModuleKind::Form && forms::is_generated(&m.source) => managed += 1,
+            None if m.kind == ras_ovba::ModuleKind::Form && ras_ovba::is_generated_form(&m.source) => managed += 1,
             None => {
                 let ext = match m.kind {
                     ras_ovba::ModuleKind::Standard => "bas",
@@ -736,7 +741,7 @@ fn cmd_watch(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
 }
 
 fn is_source_event(ev: &notify::Event) -> bool {
-    !matches!(ev.kind, notify::EventKind::Access(_)) && ev.paths.iter().any(|p| p.extension().is_some_and(|e| e == "ras" || e == "toml" || e == "json" || e == "bas"))
+    !matches!(ev.kind, notify::EventKind::Access(_)) && ev.paths.iter().any(|p| p.extension().is_some_and(|e| ["ras", "toml", "json", "bas", "bmp", "jpg", "jpeg", "png", "gif", "webp", "tif", "tiff", "ico"].iter().any(|known| e.eq_ignore_ascii_case(known))))
 }
 
 fn unimplemented_cmd(what: &str, detail: &str) -> Result<ExitCode, String> {
@@ -789,11 +794,19 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!("{} と {} を作成しました", spec.display(), code.display());
             Ok(ExitCode::SUCCESS)
         }
+        Command::Form { action: FormCommand::Pull { names, book, force } } => {
+            let root = find_root(project)?;
+            let (cfg, _) = ras_compiler::load_project(&root)?;
+            let Some(book) = workbook_path(&root, &cfg, book.as_deref()) else {
+                return Err("対象ブックが指定されていません。`ras form pull --book <book>` か ras.toml の project.workbook で指定してください".into());
+            };
+            forms::pull(&root, &book, names, *force)
+        }
         Command::Form { action: FormCommand::Check } => {
             let root = find_root(project)?;
             let (cfg, _) = ras_compiler::load_project(&root)?;
-            let count = forms::load(&root)?.len();
-            let errors = forms::check(&root, cfg.target.codepage)?;
+            let (count, built) = forms::build(&root, cfg.target.codepage)?;
+            let errors = forms::report(&built);
             if errors > 0 {
                 eprintln!("{errors} 件のエラーがあります");
                 return Ok(ExitCode::from(1));

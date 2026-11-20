@@ -11,6 +11,10 @@ description = "UserForm specifications (forms/*.form.json): validation and gener
 ras-ovba = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Decoders for pictures that have to be converted to BMP (see `picture`).
+image = { workspace = true }
 
 [dev-dependencies]
 cfb = { workspace = true }
+# The golden files are compared number for number.
+serde_json = { workspace = true, features = ["float_roundtrip"] }

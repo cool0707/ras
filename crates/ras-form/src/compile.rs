@@ -5,6 +5,7 @@
 //! harumiWeb, MIT License; see `NOTICE.md`).
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 use serde_json::Value;
 
@@ -321,6 +322,7 @@ fn has_typed_property(control: &FormSpecControl, key: &str) -> bool {
 fn control_definition(
     control: &FormSpecControl,
     tab_index: usize,
+    root: Option<&Path>,
 ) -> Result<ControlDefinition, (&'static str, String, String)> {
     let failure =
         |code: &'static str, property: &str, reason: String| (code, property.to_string(), reason);
@@ -360,10 +362,18 @@ fn control_definition(
             "既存の画像を保持したままの生成には対応していません".into(),
         ));
     }
-    if control.list.as_ref().is_some_and(|l| !l.is_empty())
-        || (control.selected_index.is_some() && class != 57 && class != 18)
+    // The items of a ComboBox (25) or ListBox (24) are not part of the
+    // designer storage; they are filled by generated code (`codebehind`).
+    let list_control = class == 24 || class == 25;
+    if !list_control
+        && (control.list.as_ref().is_some_and(|l| !l.is_empty())
+            || (control.selected_index.is_some() && class != 57 && class != 18))
     {
-        return Err(failure(UNSUPPORTED, "", "list / selectedIndex の保存には対応していません。項目は Initialize イベントなどで設定してください".into()));
+        return Err(failure(
+            UNSUPPORTED,
+            "",
+            "list / selectedIndex は ComboBox と ListBox でだけ使えます".into(),
+        ));
     }
     if tab_index > i16::MAX as usize {
         return Err(failure(INVALID, "", "コントロールが多すぎます".into()));
@@ -549,11 +559,32 @@ fn control_definition(
     }
     if let Some(picture) = &control.picture {
         if picture.get("remove").and_then(Value::as_bool) != Some(true) {
-            return Err(failure(
-                UNSUPPORTED,
-                "picture.path",
-                "Image の画像の埋め込みにはまだ対応していません".into(),
-            ));
+            let path = picture
+                .get("path")
+                .and_then(Value::as_str)
+                .filter(|p| !p.trim().is_empty());
+            let Some(path) = path else {
+                return Err(failure(
+                    INVALID,
+                    "picture.path",
+                    "画像ファイルのパスを指定してください".into(),
+                ));
+            };
+            let Some(root) = root else {
+                return Err(failure(
+                    INVALID,
+                    "picture.path",
+                    "プロジェクトのルートが分からないため、画像を読めません".into(),
+                ));
+            };
+            // A picture MS-Forms cannot store is converted to a bitmap here;
+            // its transparent parts show the control's background color.
+            let background = crate::picture::background_of(control.back_color.as_ref());
+            let raw = crate::picture::load_with(root, path, background)
+                .and_then(|picture| crate::picture::encode(&picture.data))
+                .map_err(|e| failure(INVALID, "picture.path", e))?;
+            item.properties
+                .insert("Picture".into(), PValue::Picture(raw));
         }
     }
     Ok(item)
@@ -688,8 +719,13 @@ fn font_edit(font: &FormSpecFont) -> FontEdit {
     }
 }
 
-/// Generates the designer storage of a validated, normalised spec.
-pub(crate) fn compile_new(spec: &FormSpec, codepage: u16) -> Result<Designer, CompileError> {
+/// Generates the designer storage of a validated, normalised spec. Picture
+/// paths are resolved against `root`, the project root.
+pub(crate) fn compile_new(
+    spec: &FormSpec,
+    codepage: u16,
+    root: Option<&Path>,
+) -> Result<Designer, CompileError> {
     let form_name = &spec.form.name;
     if !spec.coordinate_system.is_empty()
         && spec.coordinate_system != "points"
@@ -749,6 +785,7 @@ pub(crate) fn compile_new(spec: &FormSpec, codepage: u16) -> Result<Designer, Co
         depth: usize,
         children: &HashMap<&str, Vec<&FormSpecControl>>,
         original_index: &HashMap<&str, usize>,
+        root: Option<&Path>,
     ) -> Result<Vec<ControlDefinition>, CompileError> {
         let mut result = Vec::new();
         for (sibling, control) in children
@@ -760,7 +797,7 @@ pub(crate) fn compile_new(spec: &FormSpec, codepage: u16) -> Result<Designer, Co
         {
             let path = format!("controls[{}]", original_index[control.id.as_str()]);
             let mut item =
-                control_definition(control, sibling).map_err(|(code, property, reason)| {
+                control_definition(control, sibling, root).map_err(|(code, property, reason)| {
                     let property = if property.is_empty() {
                         path.clone()
                     } else {
@@ -788,7 +825,7 @@ pub(crate) fn compile_new(spec: &FormSpec, codepage: u16) -> Result<Designer, Co
                         "入れ子が深すぎます",
                     ));
                 }
-                item.controls = build(&control.id, depth + 1, children, original_index)?;
+                item.controls = build(&control.id, depth + 1, children, original_index, root)?;
             }
             if item.class == 57 {
                 let mut state = TabStripState {
@@ -853,7 +890,7 @@ pub(crate) fn compile_new(spec: &FormSpec, codepage: u16) -> Result<Designer, Co
         }
         Ok(result)
     }
-    let controls = build("", 0, &children, &original_index)?;
+    let controls = build("", 0, &children, &original_index, root)?;
     let definition = Definition {
         name: form_name.clone(),
         caption,

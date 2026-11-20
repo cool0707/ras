@@ -1,0 +1,563 @@
+{
+  "pictures": {
+    "ImageTyped": {
+      "format": "bmp",
+      "height": 1,
+      "sha256": "1843716b9fa9c524e26e4ff32f463a6a486333ddb14cc60cc902ce719ee3b229",
+      "size": 58,
+      "width": 1
+    }
+  },
+  "spec": {
+    "schemaVersion": 1,
+    "kind": "xlflow.userform",
+    "basis": "designer",
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "font": {
+        "name": "Tahoma",
+        "size": 9.5,
+        "bold": true,
+        "italic": false,
+        "underline": false,
+        "strikeThrough": false,
+        "charset": 128
+      },
+      "foreColor": {
+        "kind": "system",
+        "value": "windowText"
+      },
+      "borderStyle": 1,
+      "name": "TypedProperties",
+      "caption": "Typed properties",
+      "width": 360,
+      "height": 230.00314960629922
+    },
+    "controls": [
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "textAlign": 2,
+        "borderStyle": 1,
+        "id": "control_001",
+        "zIndex": 0,
+        "type": "Label",
+        "name": "LabelTyped",
+        "progId": "Forms.Label.1",
+        "caption": "LabelTyped",
+        "left": 7.993700787401575,
+        "top": 7.993700787401575,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 0,
+        "enabled": true,
+        "visible": true
+      },
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "textAlign": 2,
+        "borderStyle": 1,
+        "id": "control_002",
+        "zIndex": 1,
+        "type": "TextBox",
+        "name": "TextBoxTyped",
+        "progId": "Forms.TextBox.1",
+        "left": 92.01259842519686,
+        "top": 7.993700787401575,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 1,
+        "enabled": true,
+        "visible": true
+      },
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "textAlign": 2,
+        "borderStyle": 1,
+        "id": "control_003",
+        "zIndex": 2,
+        "type": "ComboBox",
+        "name": "ComboBoxTyped",
+        "progId": "Forms.ComboBox.1",
+        "left": 176.00314960629922,
+        "top": 7.993700787401575,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 2,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "variousPropertyBits"
+        ]
+      },
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "id": "control_004",
+        "zIndex": 3,
+        "type": "CommandButton",
+        "name": "CommandButtonTyped",
+        "progId": "Forms.CommandButton.1",
+        "caption": "CommandButtonTyped",
+        "left": 7.993700787401575,
+        "top": 53.00787401574803,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 4,
+        "enabled": true,
+        "visible": true
+      },
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "textAlign": 2,
+        "id": "control_005",
+        "zIndex": 4,
+        "type": "CheckBox",
+        "name": "CheckBoxTyped",
+        "progId": "Forms.CheckBox.1",
+        "caption": "CheckBoxTyped",
+        "value": "False",
+        "left": 92.01259842519686,
+        "top": 53.00787401574803,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 5,
+        "enabled": true,
+        "visible": true
+      },
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "textAlign": 2,
+        "id": "control_006",
+        "zIndex": 5,
+        "type": "OptionButton",
+        "name": "OptionButtonTyped",
+        "progId": "Forms.OptionButton.1",
+        "caption": "OptionButtonTyped",
+        "value": "False",
+        "left": 176.00314960629922,
+        "top": 53.00787401574803,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 6,
+        "enabled": true,
+        "visible": true
+      },
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "textAlign": 2,
+        "id": "control_007",
+        "zIndex": 6,
+        "type": "ToggleButton",
+        "name": "ToggleButtonTyped",
+        "progId": "Forms.ToggleButton.1",
+        "caption": "ToggleButtonTyped",
+        "value": "False",
+        "left": 259.99370078740156,
+        "top": 53.00787401574803,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 7,
+        "enabled": true,
+        "visible": true
+      },
+      {
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "id": "control_008",
+        "zIndex": 7,
+        "type": "SpinButton",
+        "name": "SpinButtonTyped",
+        "progId": "Forms.SpinButton.1",
+        "left": 7.993700787401575,
+        "top": 97.99370078740158,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 8,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "orientation"
+        ]
+      },
+      {
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "id": "control_009",
+        "zIndex": 8,
+        "type": "ScrollBar",
+        "name": "ScrollBarTyped",
+        "progId": "Forms.ScrollBar.1",
+        "left": 92.01259842519686,
+        "top": 97.99370078740158,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 9,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "orientation"
+        ]
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "pictureAlignment": 4,
+        "pictureSizeMode": 3,
+        "id": "control_010",
+        "zIndex": 9,
+        "type": "Image",
+        "name": "ImageTyped",
+        "progId": "Forms.Image.1",
+        "left": 176.00314960629922,
+        "top": 97.99370078740158,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 10,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "picture"
+        ]
+      },
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "borderStyle": 1,
+        "id": "control_011",
+        "zIndex": 10,
+        "type": "Frame",
+        "name": "FrameTyped",
+        "progId": "Forms.Frame.1",
+        "caption": "FrameTyped",
+        "left": 259.99370078740156,
+        "top": 97.99370078740158,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 11,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "logicalSize",
+          "specialEffect"
+        ]
+      },
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "id": "control_012",
+        "zIndex": 11,
+        "type": "MultiPage",
+        "name": "MultiPageTyped",
+        "progId": "Forms.MultiPage.1",
+        "left": 7.993700787401575,
+        "top": 143.00787401574803,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 12,
+        "selectedIndex": 0,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "logicalSize"
+        ]
+      },
+      {
+        "id": "control_013",
+        "parentId": "control_012",
+        "zIndex": 0,
+        "type": "Page",
+        "name": "PageTyped",
+        "progId": "Forms.Page.1",
+        "caption": "Page",
+        "controlTipText": "",
+        "accelerator": "",
+        "tabIndex": 0,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "logicalSize"
+        ]
+      },
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "id": "control_014",
+        "zIndex": 12,
+        "type": "TabStrip",
+        "name": "TabStripTyped",
+        "progId": "Forms.TabStrip.1",
+        "left": 176.00314960629922,
+        "top": 143.00787401574803,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 13,
+        "selectedIndex": 0,
+        "enabled": true,
+        "visible": true,
+        "unsupported": [
+          "opaqueRecordTail"
+        ],
+        "tabs": [
+          {
+            "name": "TabOne",
+            "caption": "One",
+            "controlTipText": "",
+            "tag": "",
+            "accelerator": "",
+            "enabled": true,
+            "visible": true
+          }
+        ]
+      },
+      {
+        "font": {
+          "name": "Tahoma",
+          "size": 12.5,
+          "bold": true,
+          "italic": true,
+          "underline": true,
+          "strikeThrough": true,
+          "charset": 128
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "textAlign": 2,
+        "borderStyle": 1,
+        "id": "control_015",
+        "zIndex": 13,
+        "type": "ListBox",
+        "name": "ListBoxTyped",
+        "progId": "Forms.ListBox.1",
+        "left": 259.99370078740156,
+        "top": 7.993700787401575,
+        "width": 75.99685039370078,
+        "height": 35.00787401574803,
+        "tabIndex": 3,
+        "enabled": true,
+        "visible": true
+      }
+    ],
+    "warnings": [
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported form Designer properties were preserved only in the binary model: logicalSize."
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: variousPropertyBits.",
+        "control": "ComboBoxTyped"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: orientation.",
+        "control": "SpinButtonTyped"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: orientation.",
+        "control": "ScrollBarTyped"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: picture.",
+        "control": "ImageTyped"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: logicalSize, specialEffect.",
+        "control": "FrameTyped"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: logicalSize.",
+        "control": "MultiPageTyped"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: logicalSize.",
+        "control": "PageTyped"
+      },
+      {
+        "code": "unsupported_properties",
+        "message": "Unsupported Designer properties were preserved only in the binary model: opaqueRecordTail.",
+        "control": "TabStripTyped"
+      }
+    ]
+  }
+}

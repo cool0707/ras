@@ -57,6 +57,9 @@ ras build                                 # build/ に .bas / .cls / .rasmap を
 ras pack                                  # Excel を起動せず、Book.xlsm の VBA プロジェクトへ直接書き込む
 ras watch                                 # 変更を監視して再ビルド（ブックが閉じていれば pack も行う）
 ras unpack                                # ブック内の手書き VBA を vba/ に取り出す
+ras sync                                  # Excel で開いているブックへ反映する（Windows のみ）
+ras form new frmInput                     # ユーザーフォームの雛形（forms/frmInput.form.json と .bas）を作成
+ras form pull                             # ブックにあるユーザーフォームを forms/ に取り出す
 ras fmt                                   # 整形
 ras build --target js                     # デバッグ実行用の JavaScript を build/debug/ に出力
 ```
@@ -66,6 +69,15 @@ ras build --target js                     # デバッグ実行用の JavaScript 
 `ras pack` はブックが Excel で開かれていると書き込みません（閉じてから実行してください）。
 ブックに RAS が生成したものではない同名のモジュールがある場合や、手書きのイベントプロシージャ（`Workbook_Open` など）と生成コードの名前が重なる場合も、書き込まずにエラーにします（前者は `--overwrite` で置き換えられます）。
 置き換え前のブックは `build/backup/` に保存されます。
+
+### ユーザーフォーム
+
+フォームのデザインは `forms/<名前>.form.json`（FormSpec）、イベント処理などのコードは `forms/<名前>.bas` に書きます（仕様 §14.11）。VS Code 拡張のデザイナーで編集でき、`ras pack` / `ras sync` がブックへ書き込みます。
+
+- `Image` の画像は `"picture": { "path": "forms/assets/logo.png" }` のように、プロジェクト内の画像ファイル（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）を指定します。画像はブックに埋め込まれます。MS-Forms がそのまま保存できる BMP（24 / 32 ビット無圧縮）と JPEG は内容のまま、それ以外は書き込み時に 24 ビットの BMP に変換して埋め込みます（透過部分はコントロールの `backColor` で塗りつぶします。元のファイルは変更しません）。
+- `ComboBox` / `ListBox` の項目は `"list": ["A", "B"]`、最初の選択は `"selectedIndex": 0` で指定します。項目はデザイナの情報としては保存されないため、フォームの読み込み時に項目を設定するコード（`RAS_FormInit`）を生成してコードモジュールに加えます。
+- VBE で作った既存のフォームは `ras form pull` で `forms/` に取り出せます（デザイン・コード・画像）。FormSpec で表せないプロパティは警告として表示され、`forms/` から書き戻すと既定値になります。取り出した後、`ras pack --overwrite` でブックのフォームを `forms/` の内容に置き換えます。
+- ブックを Excel で開いたままでも、`ras sync`（および `ras watch`、VS Code の保存時の同期）がフォームを反映します。デザインが変わったフォームは取り込み直し、コードだけが変わったフォームはコードだけを書き換えます。
 
 ## デバッグ
 
@@ -91,7 +103,8 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | コマンド | 状態 |
 |---|---|
 | `init` / `check` / `build` / `build --target js` / `watch` / `pack` / `unpack` / `fmt` / `lsp --stdio` | 実装済み |
-| `sync` | 実装済み（Windows のみ。Excel で開いているブックへ反映する。`--pull` は未実装） |
+| `form new` / `form check` / `form pull` | 実装済み |
+| `sync` | 実装済み（Windows のみ。Excel で開いているブックへ、モジュールとユーザーフォームを反映する。`--pull` は未実装） |
 | `setup` / `typegen` / `pack --via-excel` | 未実装（実行するとその旨を表示して終了） |
 
 ## 実装状況
@@ -114,8 +127,9 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §12 ボイラープレート・イベント・`@init`・マクロ入口 | 一部 | リボン（`@ribbon`、§12.5）は未実装 |
 | §13 VBA の罠の回避 | 一部 | `Collection` ラッパ、`Range.Find` ラッパ、文字列で指定される名前の存在確認、一時変数の再利用は未実装 |
 | §14.1〜14.8 ライブ同期 | 一部 | Excel で開いているブックへ、保存のたびに反映する（`ras sync`、`ras watch`、VS Code の言語サーバー。Windows のみ）。ras が COM 経由で VBE のコードモジュールを直接書き換える方式で、共有メモリと RASBridge.xlam（§14.2、§14.4、§14.5）は使わない。適用規則（§14.6）のうち差分適用・ドキュメントモジュールの管理領域・属性付きクラスの `Import`・失敗時の巻き戻し・実行中／中断モード中の保留と、ドリフト検出（§14.7）は実装。適用後のコンパイル確認（`sync.compileCheck`）、Excel → ローカル方向（`--pull`、非管理モジュールの双方向同期）、既存クラスの属性変更、`ras setup` は未実装 |
-| §14.9 オフライン書き込み・読み出し | 実装済み | 新規ユーザーフォームの作成と再署名は未実装。`vba/` の非管理モジュールをブックへ書き戻す処理は未実装（取り出しのみ） |
+| §14.9 オフライン書き込み・読み出し | 実装済み | 再署名は未実装。`vba/` の非管理モジュールをブックへ書き戻す処理は未実装（取り出しのみ。ユーザーフォームは `forms/` で扱う） |
 | §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | Excel への接続（`ras_com.node`）は Excel 2021（64bit）の実機で確認済み。ダイアログの監視（§14.10.6）は Excel の無い Windows 上の CI でメッセージ ボックスを相手に確認しており、Excel の実機では未確認。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。`super` 呼び出しを伴う継承は対象外 |
+| §14.11 ユーザーフォーム（`forms/`） | 実装済み | FormSpec からの生成（`Image` の画像、`ComboBox` / `ListBox` の項目を含む）、ブックからの取り出し（`ras form pull`）、ライブ同期。カスタム ActiveX コントロールの生成、VBE での編集の検出（ドリフト）は未実装 |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱し、メンバーとグローバルを camelCase で参照する（§15.3.1）。`ras typegen` と `vba:` インポートは未実装 |
 | §16.1 JSDoc | 実装済み | 生成 VBA へのコメント・`VB_Description` 出力、`@param` 名の検査 |
 | §16.2 IntelliSense（LSP） | 一部 | 診断・補完・ホバー・定義へ移動・シンボル一覧・整形・CodeLens（最適化の通知、関数ごとの「Excelで実行」「デバッグ実行」）・「生成 VBA を表示」と、VBA の綴りの名前を直すクイックフィックスは実装。パラメーター情報・参照検索・名前変更・インレイヒント・セマンティックトークン・その他のコードアクション・未インポート候補は未実装 |
@@ -135,6 +149,10 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
   - `RAS_Runtime.bas` の Win32 API・`SAFEARRAY` を扱う部分（`RAS_Rebase` のその場での下限書き換え、`RAS_Yield` の間引き、`sleep` / `waitUntil`）、Range ⇔ 配列の一括転送、`@on` のイベント、アプリケーション状態の復元
   - Excel が保存したブック（コンパイル済みの p-code 入り）への再 `pack`、開いているブックへの書き込み拒否、`unpack`
   - デバッグ実行（`ras_com.node`）が開いているブックに接続し、VBA ビルドと同じ結果・エラー番号になること
+- ユーザーフォーム:
+  - 生成するデザイナストレージ（画像の埋め込みを含む）は、[xlflow](https://github.com/harumiWeb/xlflow) の生成結果とバイト単位で一致することを自動テストで確認しています。xlflow はこの形式を実機の Excel で確認しています。PNG などから変換した画像は、変換後の BMP を直接指定した場合と同じ結果になることを確認しています。
+  - ブックからの取り出しは、Excel が保存したフォーム 10 個について、xlflow の読み取り結果と一致すること、取り出したものを書き戻すと同じデザインになることを自動テストで確認しています。
+  - ライブ同期でのフォームの取り込み（`VBComponents.Import` に渡す `.frm` / `.frx`）と、`ComboBox` / `ListBox` の項目を設定する生成コードは、実機の Excel では未検証です。`.frx` の構成は Excel が書き出したファイルと自動テストで照合しています。
 - デバッグ実行のダイアログ監視は、Excel / VBE の実際のダイアログ（実行時エラー、コンパイル エラー、Office 独自のダイアログ）では未検証です。判定規則は [xlflow](https://github.com/harumiWeb/xlflow) が実機で確立したもの（ボタンをコントロール ID とアクセスキーで識別する、実行時エラーは「終了」で閉じる、など）に合わせています。
 - 32bit Office では未検証です（`RAS_Rebase` の 32bit 側のオフセットなど）。
 - VS Code 拡張はパッケージ化と文法テストまで確認済みで、実機の VS Code 上では動かしていません。

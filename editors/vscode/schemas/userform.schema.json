@@ -222,19 +222,23 @@
           "value": {},
           "list": {
             "type": "array",
+            "description": "ComboBox / ListBox の項目。フォームの初期化時（UserForm_Initialize）に生成コードが設定します",
             "items": {
               "type": "string"
             }
           },
           "selectedIndex": {
             "type": "integer",
-            "minimum": -1
+            "minimum": -1,
+            "description": "選択する項目・ページ・タブの 0 から始まる番号（選択なしは -1）。ComboBox / ListBox では list の範囲内（list が無いときは -1 のみ）"
           },
           "controlTipText": {
-            "type": "string"
+            "type": "string",
+            "description": "ツールチップの文字列（すべての種類のコントロールで指定可）"
           },
           "tag": {
-            "type": "string"
+            "type": "string",
+            "description": "コントロールに付ける任意の文字列（すべての種類のコントロールで指定可）"
           },
           "accelerator": {
             "type": "string"
@@ -370,7 +374,8 @@
                 "properties": {
                   "path": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "description": "Image に表示する画像ファイル（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）。プロジェクト ルート（ras.toml のあるフォルダー）からの相対パスを / 区切りで指定します。24 / 32 ビットの無圧縮 BMP と JPEG 以外は、フォームの書き込み時に 24 ビットの BMP に変換されます"
                   }
                 }
               },
@@ -382,7 +387,8 @@
                 "additionalProperties": false,
                 "properties": {
                   "remove": {
-                    "const": true
+                    "const": true,
+                    "description": "画像なし（picture を省略したときと同じ）"
                   }
                 }
               }

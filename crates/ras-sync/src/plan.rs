@@ -36,7 +36,25 @@ pub trait VbProject {
     fn add(&mut self, name: &str, kind: Kind) -> Result<(), SyncError>;
     /// Imports an exported module file (`VERSION 1.0 CLASS` … with its `Attribute` lines).
     fn import(&mut self, name: &str, file_text: &str) -> Result<(), SyncError>;
+    /// Imports a user form from its `.frm` text and `.frx` contents.
+    fn import_form(&mut self, name: &str, files: &ras_ovba::FormFiles) -> Result<(), SyncError>;
+    /// Gives a component another name.
+    fn rename(&mut self, name: &str, new_name: &str) -> Result<(), SyncError>;
     fn remove(&mut self, name: &str) -> Result<(), SyncError>;
+}
+
+/// The user forms generated from `forms/` (spec §14.11).
+#[derive(Debug, Clone, Copy)]
+pub struct Forms<'a> {
+    /// Code (starting with the marker line) and designer storage of every form.
+    pub forms: &'a [ras_ovba::UserForm],
+    /// Code page the designer properties are stored in (`target.codepage`).
+    pub codepage: u16,
+}
+
+impl Forms<'_> {
+    /// No forms.
+    pub const NONE: Forms<'static> = Forms { forms: &[], codepage: 932 };
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -88,8 +106,26 @@ fn needs_import(f: &OutputFile) -> bool {
     f.kind == VModuleKind::Class && f.full_text.lines().take_while(|l| !l.starts_with("' RAS-GENERATED")).any(|l| l.starts_with("Attribute VB_") && !l.starts_with("Attribute VB_Name") && l.trim_end().ends_with("= True"))
 }
 
+/// The marker line of a form written from `forms/`: `' RAS-FORM <file> design=<hash> code=<hash>`.
+fn form_marker(code: &str) -> Option<&str> {
+    code.lines().map(str::trim_end).find(|l| !l.trim().is_empty() && !l.starts_with("Attribute ") && !l.starts_with("VERSION ")).filter(|l| l.starts_with(ras_ovba::RAS_FORM_MARKER))
+}
+
+/// The `design=` field of a marker line.
+fn design_of(marker: &str) -> Option<&str> {
+    marker.split_whitespace().find_map(|field| field.strip_prefix("design="))
+}
+
+/// A component name that no component of the project has.
+fn spare_name(existing: &[Component]) -> String {
+    (1..).map(|n| format!("RasOld{n}")).find(|candidate| !existing.iter().any(|c| same_name(&c.name, candidate))).expect("a free name")
+}
+
 enum Op<'a> {
     Create(&'a OutputFile),
+    CreateForm(&'a ras_ovba::UserForm),
+    /// The designer changed: the form is imported anew. `aside` is the name the old one gets meanwhile.
+    ReplaceForm { old: String, aside: String, form: &'a ras_ovba::UserForm },
     /// Rewrite the code of the existing component `name` (its spelling in the project).
     Write { name: String, code: String, before: String },
     /// A component of the same name but of the other kind (module / class) is replaced.
@@ -102,6 +138,8 @@ enum Undo {
     Remove(String),
     Restore { name: String, code: String },
     Recreate(Component),
+    /// Remove the new form `name` and give the old one, set aside as `aside`, its name back.
+    PutBack { name: String, aside: String },
 }
 
 fn create(project: &mut dyn VbProject, f: &OutputFile) -> Result<(), SyncError> {
@@ -123,6 +161,7 @@ fn undo(project: &mut dyn VbProject, journal: Vec<Undo>) -> Vec<String> {
             Undo::Remove(name) => (name.clone(), project.remove(&name)),
             Undo::Restore { name, code } => (name.clone(), project.set_code(&name, &code)),
             Undo::Recreate(c) => (c.name.clone(), project.add(&c.name, c.kind).and_then(|()| project.set_code(&c.name, &c.code))),
+            Undo::PutBack { name, aside } => (name.clone(), project.remove(&name).and_then(|()| project.rename(&aside, &name))),
         };
         if result.is_err() {
             failed.push(name);
@@ -135,7 +174,11 @@ fn undo(project: &mut dyn VbProject, journal: Vec<Undo>) -> Vec<String> {
 ///
 /// Nothing is written when a check fails. When a write fails half-way, the modules already
 /// written are put back as they were (spec §14.6 "一括性").
-pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], opts: &SyncOptions) -> Result<Report, SyncError> {
+///
+/// A form is imported as a whole when it is new or its design changed (the marker line of its
+/// code records a hash of the design); otherwise only its code is rewritten. A form made in the
+/// VBE is replaced only with `overwrite`.
+pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, opts: &SyncOptions) -> Result<Report, SyncError> {
     let existing = project.components()?;
     let find = |name: &str| existing.iter().find(|c| same_name(&c.name, name));
     let mut report = Report::default();
@@ -198,6 +241,40 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], opts: &SyncOptio
         )));
     }
 
+    let mut hand_made = Vec::new();
+    let mut set_aside: Vec<Component> = existing.clone();
+    for form in forms.forms {
+        if files.iter().any(|f| same_name(&f.name, &form.name)) {
+            return Err(SyncError::Failed(format!("ユーザーフォーム `{}` と同じ名前の RAS モジュールがあります。どちらかの名前を変えてください", form.name)));
+        }
+        let Some(c) = find(&form.name) else {
+            ops.push(Op::CreateForm(form));
+            continue;
+        };
+        if c.kind != Kind::Form {
+            return Err(SyncError::Failed(format!("ブックには `{}` という名前のフォームではないモジュールがあります。フォーム名を変えてください", c.name)));
+        }
+        let (old, new) = (form_marker(&c.code), form_marker(&form.code));
+        match old {
+            None if !opts.overwrite => hand_made.push(c.name.clone()),
+            Some(old) if Some(old) == new => report.unchanged.push(c.name.clone()),
+            Some(old) if design_of(old).is_some() && design_of(old) == new.and_then(design_of) => {
+                ops.push(Op::Write { name: c.name.clone(), code: form.code.clone(), before: c.code.clone() });
+            }
+            _ => {
+                let aside = spare_name(&set_aside);
+                set_aside.push(Component { name: aside.clone(), kind: Kind::Form, code: String::new() });
+                ops.push(Op::ReplaceForm { old: c.name.clone(), aside, form });
+            }
+        }
+    }
+    if !hand_made.is_empty() {
+        return Err(SyncError::Failed(format!(
+            "ブックには forms/ から生成したものではない同名のユーザーフォームがあります: {}\n  このまま同期すると VBE で作ったフォームとそのコードが失われます。フォーム名を変えるか、`ras form pull` で forms/ に取り出してください。置き換えてよい場合は上書きを指定してください",
+            hand_made.join(", ")
+        )));
+    }
+
     // What RAS generated earlier and no longer generates.
     for c in &existing {
         if files.iter().any(|f| same_name(&f.name, &c.name)) {
@@ -216,10 +293,28 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], opts: &SyncOptio
         }
     }
 
+    let export = |form: &ras_ovba::UserForm| ras_ovba::export_user_form(form, forms.codepage).map_err(|e| SyncError::Failed(format!("ユーザーフォーム `{}` を書き出せません: {e}", form.name)));
     let mut journal: Vec<Undo> = Vec::new();
+    // Old forms that were set aside; they go once everything else worked.
+    let mut leftovers: Vec<String> = Vec::new();
     let mut failure = None;
     for op in ops {
         let result = match op {
+            Op::CreateForm(form) => export(form).and_then(|files| project.import_form(&form.name, &files)).map(|()| {
+                journal.push(Undo::Remove(form.name.clone()));
+                report.created.push(form.name.clone());
+            }),
+            Op::ReplaceForm { old, aside, form } => export(form).and_then(|files| {
+                project.rename(&old, &aside)?;
+                if let Err(e) = project.import_form(&form.name, &files) {
+                    let _ = project.rename(&aside, &old);
+                    return Err(e);
+                }
+                journal.push(Undo::PutBack { name: form.name.clone(), aside: aside.clone() });
+                leftovers.push(aside);
+                report.updated.push(form.name.clone());
+                Ok(())
+            }),
             Op::Create(f) => create(project, f).map(|()| {
                 journal.push(Undo::Remove(f.name.clone()));
                 report.created.push(f.name.clone());
@@ -245,7 +340,13 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], opts: &SyncOptio
             break;
         }
     }
-    let Some(error) = failure else { return Ok(report) };
+    let Some(error) = failure else {
+        let stuck: Vec<String> = leftovers.into_iter().filter(|name| project.remove(name).is_err()).collect();
+        if !stuck.is_empty() {
+            return Err(SyncError::Failed(format!("フォームは更新しましたが、置き換え前のフォームを削除できませんでした。VBE で削除してください: {}", stuck.join(", "))));
+        }
+        return Ok(report);
+    };
     let not_restored = undo(project, journal);
     Err(match error {
         // Nothing to add: the caller retries later.
@@ -267,6 +368,10 @@ mod tests {
         /// `set_code` fails for this module.
         fail_on: Option<String>,
         imported: Vec<String>,
+        /// Forms that were imported, with the size of their `.frx`.
+        imported_forms: Vec<(String, usize)>,
+        /// `import_form` fails for this form.
+        fail_import: Option<String>,
     }
 
     impl Fake {
@@ -307,6 +412,26 @@ mod tests {
             Ok(())
         }
 
+        fn import_form(&mut self, name: &str, files: &ras_ovba::FormFiles) -> Result<(), SyncError> {
+            if self.fail_import.as_deref() == Some(name) {
+                return Err(SyncError::Failed("取り込めません".into()));
+            }
+            assert!(!self.components.iter().any(|c| same_name(&c.name, name)), "{name} exists");
+            assert!(files.frm.contains(&format!("OleObjectBlob   =   \"{name}.frx\":0000")), "{}", files.frm);
+            assert!(files.frx.starts_with(b"LB"));
+            let code = files.frm.split("\r\n").skip_while(|l| !l.starts_with("Attribute VB_Exposed")).skip(1).collect::<Vec<_>>().join("\r\n");
+            self.components.push(Component { name: name.to_string(), kind: Kind::Form, code });
+            self.imported_forms.push((name.to_string(), files.frx.len()));
+            Ok(())
+        }
+
+        fn rename(&mut self, name: &str, new_name: &str) -> Result<(), SyncError> {
+            assert!(!self.components.iter().any(|c| same_name(&c.name, new_name)), "{new_name} exists");
+            let c = self.components.iter_mut().find(|c| same_name(&c.name, name)).ok_or_else(|| SyncError::Failed(format!("no {name}")))?;
+            c.name = new_name.to_string();
+            Ok(())
+        }
+
         fn remove(&mut self, name: &str) -> Result<(), SyncError> {
             let before = self.components.len();
             self.components.retain(|c| !same_name(&c.name, name));
@@ -343,7 +468,7 @@ mod tests {
     fn creates_then_skips_then_updates() {
         let files = build(HELLO);
         let mut book = documents();
-        let report = apply(&mut book, &files, &SyncOptions::default()).unwrap();
+        let report = apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
         assert!(report.created.contains(&"Main".to_string()), "{report:?}");
         let main = book.code("Main").unwrap().to_string();
         assert!(main.starts_with("' RAS-GENERATED hash="), "{main}");
@@ -352,12 +477,12 @@ mod tests {
         // The VBE stores the text with its own casing and without the last line terminator.
         let stored = main.trim_end().replace("MsgBox", "msgbox");
         book.components.iter_mut().find(|c| c.name == "Main").unwrap().code = stored;
-        let again = apply(&mut book, &files, &SyncOptions::default()).unwrap();
+        let again = apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
         assert_eq!(again.changed(), 0, "{again:?}");
         assert!(again.unchanged.contains(&"Main".to_string()));
 
         let changed = build(&HELLO.replace("hi", "bye"));
-        let report = apply(&mut book, &changed, &SyncOptions::default()).unwrap();
+        let report = apply(&mut book, &changed, Forms::NONE, &SyncOptions::default()).unwrap();
         assert_eq!(report.updated, ["Main"]);
         assert!(book.code("Main").unwrap().contains("bye"));
     }
@@ -366,16 +491,16 @@ mod tests {
     fn drifted_modules_are_left_alone_until_overwrite() {
         let files = build(HELLO);
         let mut book = documents();
-        apply(&mut book, &files, &SyncOptions::default()).unwrap();
+        apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
         let edited = book.code("Main").unwrap().replace("\"hi\"", "\"edited in the VBE\"");
         book.components.iter_mut().find(|c| c.name == "Main").unwrap().code = edited.clone();
 
         let changed = build(&HELLO.replace("hi", "bye"));
-        let report = apply(&mut book, &changed, &SyncOptions::default()).unwrap();
+        let report = apply(&mut book, &changed, Forms::NONE, &SyncOptions::default()).unwrap();
         assert_eq!(report.drifted, ["Main"]);
         assert_eq!(book.code("Main").unwrap(), edited);
 
-        let report = apply(&mut book, &changed, &SyncOptions { overwrite: true }).unwrap();
+        let report = apply(&mut book, &changed, Forms::NONE, &SyncOptions { overwrite: true }).unwrap();
         assert_eq!(report.updated, ["Main"]);
         assert!(report.drifted.is_empty());
         assert!(book.code("Main").unwrap().contains("bye"));
@@ -387,12 +512,12 @@ mod tests {
         let hand = "Option Explicit\r\nSub Mine()\r\nEnd Sub\r\n";
         let mut book = documents();
         book.components.push(Component { name: "main".into(), kind: Kind::Standard, code: hand.into() });
-        let err = apply(&mut book, &files, &SyncOptions::default()).unwrap_err();
+        let err = apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap_err();
         assert!(err.to_string().contains("main"), "{err}");
         assert_eq!(book.code("main").unwrap(), hand);
         assert_eq!(book.components.len(), 3, "nothing may be written when a check fails");
 
-        apply(&mut book, &files, &SyncOptions { overwrite: true }).unwrap();
+        apply(&mut book, &files, Forms::NONE, &SyncOptions { overwrite: true }).unwrap();
         assert!(book.code("main").unwrap().contains("RAS-GENERATED"));
     }
 
@@ -401,7 +526,7 @@ mod tests {
         let files = build(HELLO);
         let mut book = documents();
         book.components.push(Component { name: "Legacy".into(), kind: Kind::Standard, code: "Sub Old()\r\nEnd Sub\r\n".into() });
-        apply(&mut book, &files, &SyncOptions::default()).unwrap();
+        apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
         // The module generated above goes away when the generated set no longer has it.
         let mut renamed = files.clone();
         for f in &mut renamed {
@@ -409,7 +534,7 @@ mod tests {
                 f.name = "Other".into();
             }
         }
-        let report = apply(&mut book, &renamed, &SyncOptions::default()).unwrap();
+        let report = apply(&mut book, &renamed, Forms::NONE, &SyncOptions::default()).unwrap();
         assert_eq!(report.removed, ["Main"]);
         assert!(report.created.contains(&"Other".to_string()));
         assert!(book.code("Main").is_none() && book.code("Legacy").is_some());
@@ -421,21 +546,21 @@ mod tests {
         let doc = files.iter().find(|f| f.kind == VModuleKind::Document).expect("a document module");
         let hand = "Option Explicit\r\nPrivate Sub Hand()\r\nEnd Sub\r\n";
         let mut book = Fake::with(&[(doc.name.as_str(), Kind::Document, hand), ("Sheet1", Kind::Document, "")]);
-        let report = apply(&mut book, &files, &SyncOptions::default()).unwrap();
+        let report = apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
         assert!(report.updated.contains(&doc.name), "{report:?}");
         let code = book.code(&doc.name).unwrap().to_string();
         assert!(code.starts_with(hand) && code.contains(ras_ovba::RAS_BEGIN_MARKER), "{code}");
-        assert_eq!(apply(&mut book, &files, &SyncOptions::default()).unwrap().changed(), 0);
+        assert_eq!(apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap().changed(), 0);
 
         // Without the handler the region is taken out again.
-        let report = apply(&mut book, &build(HELLO), &SyncOptions::default()).unwrap();
+        let report = apply(&mut book, &build(HELLO), Forms::NONE, &SyncOptions::default()).unwrap();
         assert!(report.updated.contains(&doc.name), "{report:?}");
         assert_eq!(book.code(&doc.name).unwrap(), hand);
 
         // A hand-written procedure of the same name would not compile.
         let clash = format!("Private Sub {}()\r\nEnd Sub\r\n", ras_ovba::procedure_names(&doc.code)[0]);
         let mut book = Fake::with(&[(doc.name.as_str(), Kind::Document, clash.as_str())]);
-        assert!(apply(&mut book, &files, &SyncOptions::default()).is_err());
+        assert!(apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).is_err());
     }
 
     #[test]
@@ -443,7 +568,7 @@ mod tests {
         let two = "export function hello() {\n    msgBox(\"hi\");\n}\n";
         let files = build(two);
         let mut book = documents();
-        apply(&mut book, &files, &SyncOptions::default()).unwrap();
+        apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
         let before: Vec<(String, String)> = book.components.iter().map(|c| (c.name.clone(), c.code.clone())).collect();
 
         // Every generated module changes; the last one cannot be written.
@@ -451,7 +576,7 @@ mod tests {
         let extra = OutputFile { name: "Extra".into(), file_name: "Extra.bas".into(), ..changed[0].clone() };
         changed.push(extra);
         book.fail_on = Some("Extra".into());
-        let err = apply(&mut book, &changed, &SyncOptions::default()).unwrap_err();
+        let err = apply(&mut book, &changed, Forms::NONE, &SyncOptions::default()).unwrap_err();
         assert!(err.to_string().contains("元に戻しました"), "{err}");
         let after: Vec<(String, String)> = book.components.iter().map(|c| (c.name.clone(), c.code.clone())).collect();
         assert_eq!(after, before);
@@ -468,9 +593,106 @@ mod tests {
         plain.name = "Plain".into();
         plain.full_text = plain.full_text.replace("VB_PredeclaredId = True", "VB_PredeclaredId = False");
         let mut book = documents();
-        apply(&mut book, &[class.clone(), plain], &SyncOptions::default()).unwrap();
+        apply(&mut book, &[class.clone(), plain], Forms::NONE, &SyncOptions::default()).unwrap();
         assert_eq!(book.imported, ["Registry"]);
         assert_eq!(recorded_hash(book.code("Registry").unwrap()), recorded_hash(&class.code));
         assert!(book.components.iter().any(|c| c.name == "Plain" && c.kind == Kind::Class));
+    }
+
+    /// A form as `ras_form::workspace::build` hands it over: marker line, code, designer streams.
+    fn form(name: &str, design: &str, body: &str) -> ras_ovba::UserForm {
+        let frame = format!("VERSION 5.00\r\nBegin {{C62A69F0-16DC-11CE-9E98-00AA00574A4F}} {name}\r\n   Caption = \"{name}\"\r\n   ClientHeight = 3600\r\n   ClientWidth = 4800\r\n   StartUpPosition = 1\r\nEnd\r\n");
+        let mut streams = std::collections::BTreeMap::new();
+        streams.insert("f".to_string(), design.as_bytes().to_vec());
+        streams.insert("o".to_string(), Vec::new());
+        streams.insert("\u{1}CompObj".to_string(), vec![0; 28]);
+        streams.insert("\u{3}VBFrame".to_string(), frame.into_bytes());
+        let code = format!("' RAS-FORM forms/{name}.form.json design={design} code={:x}\n{body}", body.len());
+        ras_ovba::UserForm { name: name.into(), code, streams, storages: [(String::new(), [0; 16])].into() }
+    }
+
+    fn with_forms(forms: &[ras_ovba::UserForm]) -> Forms<'_> {
+        Forms { forms, codepage: 932 }
+    }
+
+    #[test]
+    fn forms_are_imported_and_updated() {
+        let mut book = documents();
+        let first = [form("frmInput", "d1", "Sub A()\nEnd Sub\n")];
+        let report = apply(&mut book, &[], with_forms(&first), &SyncOptions::default()).unwrap();
+        assert_eq!(report.created, ["frmInput"]);
+        assert_eq!(book.imported_forms.len(), 1);
+        let code = book.code("frmInput").unwrap().to_string();
+        assert!(code.starts_with("' RAS-FORM forms/frmInput.form.json design=d1 "), "{code}");
+
+        // The VBE stores the code its own way; the marker line decides.
+        let stored = code.replace("Sub A()", "Sub a()").trim_end().to_string();
+        book.components.iter_mut().find(|c| c.name == "frmInput").unwrap().code = stored;
+        let report = apply(&mut book, &[], with_forms(&first), &SyncOptions::default()).unwrap();
+        assert_eq!((report.changed(), report.unchanged.as_slice()), (0, ["frmInput".to_string()].as_slice()));
+
+        // Only the code changed: it is rewritten in place.
+        let code_only = [form("frmInput", "d1", "Sub A()\n    Beep\nEnd Sub\n")];
+        let report = apply(&mut book, &[], with_forms(&code_only), &SyncOptions::default()).unwrap();
+        assert_eq!(report.updated, ["frmInput"]);
+        assert_eq!(book.imported_forms.len(), 1, "no import for a code change");
+        assert!(book.code("frmInput").unwrap().contains("Beep"));
+
+        // The design changed: the form is imported again and the old one is gone.
+        let redesigned = [form("frmInput", "d2", "Sub A()\n    Beep\nEnd Sub\n")];
+        let report = apply(&mut book, &[], with_forms(&redesigned), &SyncOptions::default()).unwrap();
+        assert_eq!(report.updated, ["frmInput"]);
+        assert_eq!(book.imported_forms.len(), 2);
+        assert!(book.code("frmInput").unwrap().contains("design=d2 "));
+        assert_eq!(book.components.iter().filter(|c| c.kind == Kind::Form).count(), 1, "{:?}", book.components);
+
+        // A form that is no longer in forms/ stays in the workbook.
+        let report = apply(&mut book, &[], Forms::NONE, &SyncOptions::default()).unwrap();
+        assert_eq!(report.changed(), 0);
+        assert!(book.code("frmInput").is_some());
+    }
+
+    #[test]
+    fn a_form_made_in_the_vbe_is_not_replaced_silently() {
+        let hand = "Private Sub UserForm_Click()\r\nEnd Sub\r\n";
+        let mut book = documents();
+        book.components.push(Component { name: "FrmInput".into(), kind: Kind::Form, code: hand.into() });
+        let forms = [form("frmInput", "d1", "")];
+        let err = apply(&mut book, &[], with_forms(&forms), &SyncOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("FrmInput") && err.to_string().contains("ras form pull"), "{err}");
+        assert_eq!(book.code("FrmInput").unwrap(), hand);
+
+        let report = apply(&mut book, &[], with_forms(&forms), &SyncOptions { overwrite: true }).unwrap();
+        assert_eq!(report.updated, ["frmInput"]);
+        assert!(book.code("frmInput").unwrap().starts_with("' RAS-FORM "));
+        assert!(book.code("FrmInput").is_none() && book.components.len() == 3);
+
+        // Names used by something else.
+        let mut book = documents();
+        book.components.push(Component { name: "frmInput".into(), kind: Kind::Standard, code: String::new() });
+        assert!(apply(&mut book, &[], with_forms(&forms), &SyncOptions { overwrite: true }).is_err());
+        let files = build(HELLO);
+        let clash = [form("Main", "d1", "")];
+        let err = apply(&mut documents(), &files, with_forms(&clash), &SyncOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("同じ名前の RAS モジュール"), "{err}");
+    }
+
+    #[test]
+    fn a_failed_form_import_keeps_the_old_form() {
+        let mut book = documents();
+        let first = [form("frmInput", "d1", "Sub A()\nEnd Sub\n"), form("frmOther", "d1", "")];
+        apply(&mut book, &[], with_forms(&first), &SyncOptions::default()).unwrap();
+        let before: Vec<(String, String)> = book.components.iter().map(|c| (c.name.clone(), c.code.clone())).collect();
+
+        // The first form is replaced, the import of the second one fails: both are as before.
+        let changed = [form("frmInput", "d2", "Sub A()\nEnd Sub\n"), form("frmOther", "d2", "")];
+        book.fail_import = Some("frmOther".into());
+        let err = apply(&mut book, &[], with_forms(&changed), &SyncOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("元に戻しました"), "{err}");
+        let mut after: Vec<(String, String)> = book.components.iter().map(|c| (c.name.clone(), c.code.clone())).collect();
+        let mut expected = before.clone();
+        after.sort();
+        expected.sort();
+        assert_eq!(after, expected);
     }
 }

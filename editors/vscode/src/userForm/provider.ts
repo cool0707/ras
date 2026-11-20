@@ -7,7 +7,8 @@
 // undo/redo, dirty state, save and hot exit apply, and the edit logic runs in
 // the extension (engine.ts) instead of a language server.
 
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { applyToSpec, copyControls, EditError } from "./engine";
@@ -15,6 +16,21 @@ import { bodyIndent, eventsForType, eventTarget, findHandler, handlerText } from
 import type { EventDescriptor } from "./events";
 import { minimalEdit } from "./jsonSource";
 import { designerDocument } from "./model";
+import {
+	ASSET_FOLDER,
+	findProjectRoot,
+	pictureDataUri,
+	pictureFiles,
+	PICTURE_EXTENSIONS,
+	PictureError,
+	PicturePreviews,
+	picturePreviewState,
+	planPictureAsset,
+	previewable,
+	readPictureFile,
+	resolvePicturePath,
+	writePictureAsset,
+} from "./pictures";
 import { designerStrings, isWebviewMessage } from "./protocol";
 import type { ClipboardSnapshot, DesignerDocument, DesignerError, HostMessage, SemanticOperation, WebviewMessage } from "./protocol";
 import type { ParsedSpec } from "./spec";
@@ -99,8 +115,18 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 		panel.webview.html = designerHtml(panel.webview, resources);
 
 		let ready = false;
+		let disposed = false;
 		let latest: { version: number; spec: ParsedSpec; document: DesignerDocument } | undefined;
 		let busy = false;
+		// Pictures are files next to the form, so they are only handled for forms on disk.
+		const specFile = document.uri.scheme === "file" ? document.uri.fsPath : undefined;
+		const previews = new PicturePreviews();
+		let pictureRoot: string | undefined;
+		let refreshing = false;
+		let refreshAgain = false;
+		/** The picture picked in the open editor dialog; it is copied and referenced on OK. */
+		let staged: { token: string; controlId: string; source: string; data: Uint8Array } | undefined;
+		let pickGeneration = 0;
 		const send = (message: HostMessage) => {
 			if (ready) void panel.webview.postMessage(message);
 		};
@@ -117,8 +143,17 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 				send({ type: "invalidDocument", version, error: { code: "invalidSpec", message: parsed.message } });
 				return;
 			}
-			const spec = parsed.spec;
-			const designer = designerDocument(previewDocument(spec), problems(spec), true);
+			compose(version, parsed.spec);
+			void refreshPictures();
+		};
+		/** Builds the Designer document from the spec and the pictures loaded so far, and sends it. */
+		const compose = (version: number, spec: ParsedSpec) => {
+			const preview = previewDocument(spec);
+			const pictures = pictureRoot === undefined ? undefined : picturePreviewState(spec, pictureRoot, previews);
+			pictures?.dataUris.forEach((dataUri, index) => {
+				if (dataUri) preview.controls[index].picturePreview = dataUri;
+			});
+			const designer = designerDocument(preview, [...problems(spec), ...problems(spec, pictures?.issues ?? [])], true);
 			latest = { version, spec, document: designer };
 			send({
 				type: "document",
@@ -135,6 +170,33 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 				propertyGrid: propertyGrid(spec),
 			});
 		};
+		/**
+		 * Reads the picture files the form refers to (again when they changed on
+		 * disk) and sends the document once more when a preview changed.
+		 */
+		const refreshPictures = async () => {
+			if (!specFile || disposed) return;
+			if (refreshing) {
+				refreshAgain = true;
+				return;
+			}
+			refreshing = true;
+			try {
+				do {
+					refreshAgain = false;
+					const root = await findProjectRoot(specFile);
+					if (!latest) continue;
+					const changed = await previews.refresh(pictureFiles(latest.spec, root), root);
+					const moved = root !== pictureRoot;
+					pictureRoot = root;
+					if ((changed || moved) && latest && !disposed) compose(latest.version, latest.spec);
+				} while (refreshAgain && !disposed);
+			} catch {
+				// Previews are best effort; the form stays editable without them.
+			} finally {
+				refreshing = false;
+			}
+		};
 		const stale = (): DesignerError => ({ code: "staleDocument", message: "ドキュメントが変更されました。更新後のフォームで操作し直してください。" });
 		const current = (version: number) => (latest && latest.version === version && document.version === version ? latest : undefined);
 
@@ -146,7 +208,12 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 			edit.replace(document.uri, new vscode.Range(document.positionAt(change.start), document.positionAt(change.end)), change.text);
 			return vscode.workspace.applyEdit(edit);
 		};
-		const run = async (version: number, operations: SemanticOperation[]): Promise<{ error?: DesignerError; selectionIds?: string[] }> => {
+		/** `beforeWrite` runs after the edit was accepted and before the document changes. */
+		const run = async (
+			version: number,
+			operations: SemanticOperation[],
+			beforeWrite?: () => Promise<void>,
+		): Promise<{ error?: DesignerError; selectionIds?: string[] }> => {
 			const snapshot = current(version);
 			if (!snapshot) return { error: stale() };
 			try {
@@ -154,11 +221,97 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 				if (cancelled) return { error: cancelled };
 				if (document.version !== version) return { error: stale() };
 				const result = applyToSpec(snapshot.spec, operations);
+				if (beforeWrite) {
+					await beforeWrite();
+					if (document.version !== version) return { error: stale() };
+				}
 				if (!(await writeText(result.text))) return { error: { code: "editFailed", message: "フォームを書き換えられませんでした。" } };
 				return result.selectionIds ? { selectionIds: result.selectionIds } : {};
 			} catch (error) {
 				if (error instanceof EditError) return { error: error.toDesignerError() };
 				return { error: { code: "editFailed", message: String(error) } };
+			}
+		};
+
+		const isImage = (version: number, controlId: string) =>
+			current(version)?.document.controls.some((c) => c.id === controlId && c.type.toLowerCase() === "image") === true;
+		const pictureError = (error: unknown): DesignerError =>
+			error instanceof PictureError
+				? { code: "invalidPicture", message: error.message }
+				: { code: "pictureUnavailable", message: error instanceof Error ? error.message : String(error) };
+
+		/** Shows the open dialog and stages the chosen file. Nothing is written to the project yet. */
+		const pickPicture = async (message: Extract<WebviewMessage, { type: "picturePick" }>): Promise<Extract<HostMessage, { type: "pictureSelection" }>> => {
+			const reply = { type: "pictureSelection" as const, requestId: message.requestId };
+			if (!specFile) return { ...reply, error: { code: "pictureUnavailable", message: "画像は、ファイルとして保存されたフォームでだけ設定できます。" } };
+			if (!isImage(message.version, message.controlId)) return { ...reply, error: stale() };
+			const generation = ++pickGeneration;
+			try {
+				const root = await findProjectRoot(specFile);
+				const picked = await vscode.window.showOpenDialog({
+					canSelectFiles: true,
+					canSelectFolders: false,
+					canSelectMany: false,
+					defaultUri: vscode.Uri.file(root),
+					title: "Image コントロールの画像を選択",
+					openLabel: "選択",
+					filters: { 画像: PICTURE_EXTENSIONS },
+				});
+				const uri = picked?.[0];
+				if (!uri) return reply;
+				if (uri.scheme !== "file") throw new PictureError("このコンピューター上の画像ファイルを選んでください。");
+				const { data, info } = await readPictureFile(uri.fsPath);
+				const plan = await planPictureAsset(root, uri.fsPath, data);
+				// The editor was closed, or another file was picked, while this one was read.
+				if (generation !== pickGeneration) return reply;
+				staged = { token: randomUUID(), controlId: message.controlId, source: uri.fsPath, data };
+				return {
+					...reply,
+					selection: {
+						token: staged.token,
+						name: plan.relativePath,
+						dataURI: previewable(info.format) ? pictureDataUri(data, info.format) : "",
+						...(info.width !== undefined && info.height !== undefined ? { width: info.width, height: info.height } : {}),
+						converted: info.converted,
+					},
+				};
+			} catch (error) {
+				return { ...reply, error: pictureError(error) };
+			}
+		};
+
+		/** Copies the staged picture into the project when needed and points the control at it. */
+		const commitPicture = async (message: Extract<WebviewMessage, { type: "pictureCommit" }>): Promise<{ error?: DesignerError }> => {
+			const picture = staged;
+			if (!specFile || !picture || picture.token !== message.token || picture.controlId !== message.controlId)
+				return { error: { code: "pictureUnavailable", message: "画像の選択が無効になりました。もう一度選んでください。" } };
+			if (!isImage(message.version, message.controlId)) return { error: stale() };
+			let created: string | undefined;
+			try {
+				const root = await findProjectRoot(specFile);
+				const plan = await planPictureAsset(root, picture.source, picture.data);
+				const result = await run(
+					message.version,
+					[{ type: "setControlProperty", controlId: message.controlId, field: "picture", value: { path: plan.relativePath } }],
+					async () => {
+						try {
+							await writePictureAsset(plan, picture.data);
+						} catch (error) {
+							throw new EditError("pictureUnavailable", `画像を ${ASSET_FOLDER} にコピーできませんでした: ${error instanceof Error ? error.message : String(error)}`);
+						}
+						created = plan.copyTo;
+						// Have the preview ready when the edit redraws the canvas.
+						const file = resolvePicturePath(root, plan.relativePath);
+						if (file) await previews.load(file, root);
+						pictureRoot ??= root;
+					},
+				);
+				// A copy made for an edit that did not happen is not left behind.
+				if (result.error && created) await fs.rm(created, { force: true }).catch(() => undefined);
+				if (!result.error) staged = undefined;
+				return result;
+			} catch (error) {
+				return { error: pictureError(error) };
 			}
 		};
 
@@ -228,6 +381,10 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 			}),
 			this.clipboard.onDidChange(() => send({ type: "clipboardState", available: this.clipboard.available })),
 			vscode.window.onDidChangeActiveColorTheme(() => send({ type: "themeChanged" })),
+			// A picture may have been replaced on disk while another editor was in front.
+			panel.onDidChangeViewState(() => {
+				if (panel.visible) void refreshPictures();
+			}),
 			panel.webview.onDidReceiveMessage(async (message: unknown) => {
 				if (!isWebviewMessage(message)) return;
 				const reply = (requestId: number, result: { error?: DesignerError; selectionIds?: string[] }) =>
@@ -257,14 +414,12 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 						reply(message.requestId, {});
 						return;
 					case "picturePick":
-					case "pictureCommit":
-						send({
-							type: message.type === "picturePick" ? "pictureSelection" : "editResult",
-							requestId: message.requestId,
-							error: { code: "unsupported", message: "画像の取り込みには対応していません。JSON の picture.path を直接編集してください。" },
-						});
+						send(await pickPicture(message));
 						return;
 					case "pictureCancel":
+						pickGeneration++;
+						staged = undefined;
+						return;
 					case "resolveConflict":
 						return;
 					case "openEvent":
@@ -275,6 +430,7 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 							send({ type: "eventResult", requestId: message.requestId, error: error instanceof Error ? error.message : String(error) });
 						}
 						return;
+					case "pictureCommit":
 					case "clipboard":
 					case "edit": {
 						if (busy) {
@@ -283,7 +439,9 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 						}
 						busy = true;
 						try {
-							reply(message.requestId, message.type === "clipboard" ? ((await clipboardAction(message)) ?? {}) : await run(message.version, message.operations));
+							if (message.type === "pictureCommit") reply(message.requestId, await commitPicture(message));
+							else if (message.type === "clipboard") reply(message.requestId, (await clipboardAction(message)) ?? {});
+							else reply(message.requestId, await run(message.version, message.operations));
 						} finally {
 							busy = false;
 						}
@@ -292,7 +450,10 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 				}
 			}),
 		];
-		panel.onDidDispose(() => subscriptions.forEach((s) => s.dispose()));
+		panel.onDidDispose(() => {
+			disposed = true;
+			subscriptions.forEach((s) => s.dispose());
+		});
 		update();
 	}
 

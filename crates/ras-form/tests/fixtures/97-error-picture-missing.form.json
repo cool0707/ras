@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "ErrPictureMissing" },
+  "controls": [ { "id": "i", "name": "img", "type": "Image", "picture": { "path": "assets/no-such-file.bmp" } } ]
+}

@@ -232,6 +232,10 @@ function checkValue(field: string, contract: PropertyContract, value: unknown) {
 			if (child.required && !Object.hasOwn(value as JsonObject, name)) fail("UFE003", `${field}.${name} は必須です。`);
 		return;
 	}
+	if (contract.valueType === "stringArray") {
+		if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) fail("UFE003", `${field} には文字列の配列を指定します。`);
+		return;
+	}
 	const ok =
 		contract.valueType === "any"
 			? ["string", "number", "boolean"].includes(typeof value)
@@ -256,7 +260,16 @@ const legacyNames: Record<string, string> = {
 
 function setProperty(owner: JsonObject, field: string, contract: PropertyContract, value: JsonValue) {
 	checkValue(field, contract, value);
-	if (contract.editor === "font" && isObject(value)) {
+	if (contract.editor === "picture" && (value === null || (isObject(value) && value.remove === true))) {
+		// No picture is written as an absent field.
+		delete owner[field];
+	} else if (contract.editor === "list") {
+		if (value === null) delete owner[field];
+		else owner[field] = value;
+		// A selection that the new list no longer contains becomes "none".
+		const count = Array.isArray(value) ? value.length : 0;
+		if (typeof owner.selectedIndex === "number" && owner.selectedIndex >= count) owner.selectedIndex = -1;
+	} else if (contract.editor === "font" && isObject(value)) {
 		// Font is partial: members not given keep their authored value.
 		const current = isObject(owner.font) ? owner.font : isObject(owner.properties) && isObject(owner.properties.font) ? owner.properties.font : {};
 		owner.font = { ...current, ...value };
