@@ -9,7 +9,8 @@ export const propertyEditorStrings = {
   editorChoosePicture: "BMP / JPEG を選択…",
   editorRemovePicture: "画像を削除",
   editorPicturePending: "画像を選択しています…",
-  editorPictureHelp: "画像の取り込みは RAS では未対応です。JSON に picture.path を直接書いてください。",
+  editorPictureHelp:
+    "BMP（24 / 32 ビット、無圧縮）または JPEG のファイルを選びます。プロジェクトの外にあるファイルは forms/assets にコピーします。",
   editorPosition: "位置とサイズ",
   editorInvalid: "プロパティに合う値を入力してください。",
   editorUnavailable: "このエディターは使用できません。",

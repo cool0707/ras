@@ -560,7 +560,7 @@ The UserForm Designer (`src/userForm/` and `webview/userFormDesigner/`, bundled 
 ### Modifications
 
 1. The webview components and the shared TypeScript modules are copied with their import paths changed (`src/userFormEditor/` → `src/userForm/`), the user-interface strings translated into Japanese, and `return undefined` added where the stricter RAS `tsconfig.json` requires it.
-2. xlflow applies Designer edits, validation and Property Grid metadata in its Go language server. RAS re-implements them in TypeScript (`src/userForm/{contract,spec,engine,events,jsonSource}.ts`) for JSON FormSpecs only; YAML sources, picture asset import and the deferred-draft/checkpoint document model are not ported.
+2. xlflow applies Designer edits, validation and Property Grid metadata in its Go language server. RAS re-implements them in TypeScript (`src/userForm/{contract,spec,engine,events,jsonSource}.ts`) for JSON FormSpecs only; YAML sources and the deferred-draft/checkpoint document model are not ported. Picture selection and validation (`src/userForm/pictures.ts`) are written for RAS and run in the extension host instead of the language server; the list editor of ComboBox / ListBox (`src/userForm/listItems.ts`) is an addition.
 3. The host side (`src/userForm/provider.ts`) is rewritten as a `CustomTextEditorProvider` over the FormSpec JSON document; the event catalogue (`src/userForm/eventCatalogue.json`) is copied unmodified.
 
 ### Licence

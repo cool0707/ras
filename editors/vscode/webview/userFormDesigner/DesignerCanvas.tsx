@@ -61,22 +61,30 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
       return <span>☐ {caption}</span>;
     case "optionbutton":
       return <span>◯ {caption}</span>;
-    case "combobox":
+    case "combobox": {
+      // Without an authored text or value, the selected list item is what the form shows.
+      const authored = control.text || (control.value == null ? "" : String(control.value));
       return (
         <>
           <span class="combo-text">
-            {control.text ?? String(control.value ?? control.list?.[0] ?? "")}
+            {authored || (control.list?.[control.selectedIndex ?? -1] ?? "")}
           </span>
           <span class="combo-arrow" aria-hidden="true">
             <span class="combo-chevron" />
           </span>
         </>
       );
+    }
     case "listbox":
       return (
-        <span>
+        <span class="list-items">
           {(control.list ?? []).map((item, index) => (
-            <div key={index}>{item}</div>
+            <div
+              key={index}
+              class={index === control.selectedIndex ? "list-item selected" : "list-item"}
+            >
+              {item}
+            </div>
           ))}
         </span>
       );

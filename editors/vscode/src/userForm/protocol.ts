@@ -38,7 +38,7 @@ export interface PictureValue {
   path?: string;
   remove?: true;
 }
-export type PropertyValue = ScalarValue | FontValue | ColorValue | PictureValue;
+export type PropertyValue = ScalarValue | FontValue | ColorValue | PictureValue | string[];
 export interface AppearanceProperties {
   font?: FontValue | null;
   foreColor?: ColorValue | null;
@@ -48,11 +48,12 @@ export interface AppearanceProperties {
   picture?: PictureValue | null;
   pictureAlignment?: number | null;
   pictureSizeMode?: number | null;
+  /** `data:` URI of the picture file, read by the extension host for the canvas. */
   picturePreview?: string;
 }
 export interface PropertyDescriptor {
   field: string;
-  valueType: "string" | "number" | "integer" | "boolean" | "any" | "object";
+  valueType: "string" | "number" | "integer" | "boolean" | "any" | "object" | "stringArray";
   required: boolean;
   nullable: boolean;
   allowedValues?: string[];
@@ -236,6 +237,9 @@ export const designerStrings = {
   propertyHeight: "Height",
   propertyTabIndex: "TabIndex",
   propertySelectedIndex: "SelectedIndex",
+  propertyList: "List",
+  listHelp: "1 行に 1 項目を入力します。空にすると list を削除します。",
+  pictureNone: "画像なし",
   propertyEnabled: "Enabled",
   propertyVisible: "Visible",
   propertyTag: "Tag",
@@ -763,7 +767,11 @@ export function isPropertyOperation(value: unknown): value is PropertyOperation 
       (["font", "foreColor", "backColor", "picture"].includes(op.field as string) &&
         typeof op.value === "object" &&
         op.value !== null &&
-        !Array.isArray(op.value)))
+        !Array.isArray(op.value)) ||
+      (control &&
+        op.field === "list" &&
+        Array.isArray(op.value) &&
+        op.value.every((item) => typeof item === "string")))
   );
 }
 
