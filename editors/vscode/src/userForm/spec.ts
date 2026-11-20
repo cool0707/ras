@@ -22,6 +22,7 @@ import {
 	controlContracts,
 } from "./contract";
 import type { PropertyContract, ValueType } from "./contract";
+import { minimumEditHeight } from "./editHeight";
 import type { JsonNode, JsonValue } from "./jsonSource";
 import { JsonSyntaxError, nodeAtPath, offsetToPosition, parseJson } from "./jsonSource";
 import type {
@@ -453,6 +454,21 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 			if (contract && value !== undefined && value !== null && contract.allowedValues && !contract.allowedValues.includes(String(value)))
 				issues.push(issue("UFV021", "error", "値がプロパティの列挙範囲の外にあります。", `${path}.${name}`));
 		}
+		if (typeof control.listRows === "number" && !(Number.isInteger(control.listRows) && control.listRows >= 0 && control.listRows <= 32767))
+			issues.push(issue("UFV021", "error", "listRows は 0〜32767 の整数でなければなりません。", `${path}.listRows`));
+		const font = control.font ?? (isObject(control.properties) ? control.properties.font : undefined);
+		const multiLine = isObject(control.properties) && control.properties.multiLine === true;
+		const minimum = minimumEditHeight(type, font, multiLine);
+		if (minimum !== undefined && typeof control.height === "number" && control.height < minimum)
+			issues.push(
+				issue(
+					"UFV022",
+					"warning",
+					`${path}.height（${control.height} pt）はフォントに対して低すぎます。Excel では文字が欠け、端に線が残ります。`,
+					`${path}.height`,
+					`${minimum} pt 以上にしてください（デザイナーでフォントやサイズを変えると自動で調整されます）。`,
+				),
+			);
 	}
 	if (type && progId) {
 		const byProgId = lookupControlContractByProgId(progId);

@@ -20,6 +20,7 @@ import {
 import type { PropertyContract } from "./contract";
 import type { JsonValue } from "./jsonSource";
 import { formatJson } from "./jsonSource";
+import { minimumEditHeight } from "./editHeight";
 import type { ClipboardSnapshot, DesignerError, SemanticOperation, SpecTab } from "./protocol";
 import type { ControlRecord, JsonObject, ParsedSpec } from "./spec";
 import { errorKeys, flattenControls, isObject, parseSpec, validateSpec } from "./spec";
@@ -790,10 +791,35 @@ export function applyOperations(text: string, operations: SemanticOperation[]): 
 	return applyToSpec(parsed.spec, operations);
 }
 
+/** The font a control is drawn with: the typed field, else the legacy property bag's. */
+function fontOf(raw: JsonObject): unknown {
+	return raw.font ?? (isObject(raw.properties) ? raw.properties.font : undefined);
+}
+const multiLineOf = (raw: JsonObject) => isObject(raw.properties) && raw.properties.multiLine === true;
+const sizing = (raw: JsonObject) => JSON.stringify([raw.height ?? null, fontOf(raw) ?? null]);
+
+/**
+ * A TextBox / ComboBox whose height or font the edit changed (or that it added) is
+ * raised to the height its font needs, so that MSForms does not clip the text.
+ * Controls the edit left alone keep what was written.
+ */
+function fitEditHeights(model: Model, before: Map<string, string>) {
+	for (const record of model.records) {
+		const { raw, control } = record;
+		if (before.get(control.id) === sizing(raw)) continue;
+		const minimum = minimumEditHeight(control.type, fontOf(raw), multiLineOf(raw));
+		if (minimum === undefined) continue;
+		const height = typeof raw.height === "number" ? raw.height : defaults[control.type.toLowerCase()]?.[1];
+		if (height !== undefined && height < minimum) raw.height = minimum;
+	}
+}
+
 export function applyToSpec(spec: ParsedSpec, operations: SemanticOperation[]): ApplyResult {
 	const before = errorKeys(spec.issues);
 	const model = new Model(structuredClone(spec.root));
+	const sized = new Map(model.records.map((r) => [r.control.id, sizing(r.raw)]));
 	for (const op of operations) applyOne(model, op);
+	fitEditHeights(model, sized);
 	const after = validateSpec(model.root).filter((i) => i.severity === "error" && !before.has(`${i.code}\0${i.field}`));
 	if (after.length) fail(after[0].code, after[0].message);
 	const result: ApplyResult = { text: formatJson(model.root, spec.text) };

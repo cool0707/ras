@@ -1603,7 +1603,7 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 * `controls` は平らな配列で、入れ子は `parentId` で表す。コンテナーは `Frame`・`MultiPage`（子は `Page` のみ）・`Page`（親は `MultiPage` のみ）。`TabStrip` のタブは `tabs` 配列に書く。
 * 組み込みのコントロール: `Label`・`TextBox`・`ComboBox`・`ListBox`・`CommandButton`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`・`Image`・`Frame`・`MultiPage`・`Page`・`TabStrip`。
 * 共通のプロパティ（`left` / `top` / `width` / `height` / `tabIndex` / `zIndex` / `enabled` / `visible`）、種類ごとのプロパティ（`caption` / `text` / `value` / `selectedIndex` / `tabs` など）、見た目（`font` / `foreColor` / `backColor` / `textAlign` / `borderStyle` / `pictureAlignment` / `pictureSizeMode`）の詳細と適用できるコントロールは xlflow の [UserForm Specification](https://harumiweb.github.io/xlflow/reference/userform-spec) に従う。色は `{ "kind": "rgb", "value": "#203040" }`、`{ "kind": "system", "value": "buttonFace" }`、`{ "kind": "ole", "value": "0x8000000F" }` の形で書く。
-* 検査結果のコード（`UFY001`、`UFV001`〜`UFV021`）は xlflow と同じ意味を持つ。メッセージは日本語。
+* 検査結果のコード（`UFY001`、`UFV001`〜`UFV021`）は xlflow と同じ意味を持つ。メッセージは日本語。`UFV022`（警告）は RAS だけのもので、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。
 
 xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 
@@ -1611,6 +1611,8 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 |---|---|
 | `tag` / `controlTipText` | すべてのコントロールで使える（xlflow では `Page` 以外は `properties` に書く） |
 | `ComboBox` / `ListBox` の `list` / `selectedIndex` | 書き込みの対象（§14.11.5）。xlflow では取得した値の記録にだけ使う |
+| `ComboBox` / `ListBox` の一覧のプロパティ | `listStyle`（0: Plain、1: Option）と `matchEntry`（0: FirstLetter、1: Complete、2: None）を両方に、`style`（0: DropDownCombo、2: DropDownList）・`showDropButtonWhen`（0: Never、1: Focus、2: Always）・`listRows` を `ComboBox` に、`multiSelect`（0: Single、1: Multi、2: Extended）を `ListBox` に書ける。xlflow では `unsupported` |
+| `ComboBox` / `ListBox` の既定値 | 省略したプロパティは、Excel でコントロールを作ったときと同じ値で書き込む（`ComboBox` は `showDropButtonWhen` 2・`matchEntry` 1、`ListBox` は `matchEntry` 0）。xlflow は MS-OFORMS の既定値（ドロップ ボタンなし・`matchEntry` 2）のまま書く。取り込み（`ras form pull`）では、これと違う値のものだけを書き出す |
 
 **`Image` の画像（`picture`）**
 
