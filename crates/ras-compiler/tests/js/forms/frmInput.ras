@@ -1,0 +1,55 @@
+let opened = 0;
+
+@on("UserForm.Initialize")
+function init() {
+    opened++;
+    this.caption = `入力 ${opened}`;
+    this.cboKind.addItem("予約", 1);
+}
+
+@on("txtName.Change")
+function upper() {
+    // Re-entering the handler through its own change is ignored (spec §14.11.2).
+    this.txtName.text = this.txtName.text.toUpperCase();
+}
+
+@on("txtName.Exit")
+function leave(cancel: MSForms.ReturnBoolean) {
+    cancel.value = this.txtName.text == "NG";
+}
+
+@on("optM.Change")
+function sized() {
+    console.log(`optS=${this.optS.value} optM=${this.optM.value}`);
+}
+
+@on("spnQty.SpinUp")
+function up() {
+    console.log(`up ${this.spnQty.value}`);
+}
+
+@on("btnBoom.Click")
+function boom() {
+    const xs: int[] = [];
+    console.log(xs[3]);
+}
+
+@on("btnOK.Click")
+function ok() {
+    this.hide();
+}
+
+@on("UserForm.QueryClose")
+function closing(byref cancel: short, closeMode: short) {
+    console.log(`QueryClose mode=${closeMode}`);
+    if (closeMode == vbFormControlMenu) cancel = 1;
+}
+
+@on("UserForm.Terminate")
+function bye() {
+    console.log("Terminate");
+}
+
+export function summary(): string {
+    return `${this.txtName.text}/${this.cboKind.text}:${this.cboKind.listIndex}/${this.cboKind.listCount}/${this.chkAgree.value}/${this.spnQty.value}/${opened}`;
+}

@@ -14,10 +14,18 @@ const MESSAGES = {
     9: "インデックスが有効範囲にありません。",
     11: "0 で除算しました。",
     13: "型が一致しません。",
+    53: "ファイルが見つかりません。",
+    75: "パス名が無効です。",
     28: "スタック領域が不足しています。",
     91: "オブジェクト変数または With ブロック変数が設定されていません。",
+    361: "このオブジェクトを読み込んだりアンロードしたりすることはできません。",
+    380: "プロパティの値が不正です。",
+    381: "プロパティ配列のインデックスが不正です。",
+    400: "既にフォームは表示されているので、モーダル表示することはできません。",
+    401: "モーダル フォームが表示されている間は、モードレス フォームを表示できません。",
     424: "オブジェクトが必要です。",
     438: "オブジェクトは、このプロパティまたはメソッドをサポートしていません。",
+    2110: "フォーカスを移動できません。",
 };
 
 /** The value of `catch (e)`: mirrors the VBA class `RAS_Error`. */
@@ -57,7 +65,7 @@ function rasStack(stack) {
     if (first < 0) return stack;
     let frames = lines.slice(first).filter((l) => /\.ras:\d+:\d+\)?$/.test(l));
     // Without source maps the frames name the generated .js files: drop only the run time's.
-    if (!frames.length) frames = lines.slice(first).filter((l) => !/ras-runtime\.js:|ras-main\.js:|\(node:|at node:/.test(l));
+    if (!frames.length) frames = lines.slice(first).filter((l) => !/ras-runtime\.js:|ras-forms\.js:|ras-main\.js:|\(node:|at node:/.test(l));
     if (!frames.length) return stack;
     const rel = frames.map((l) => l.replace(/((?:file:\/\/)?(?:[A-Za-z]:)?[^\s():]+\.(?:ras|js))(?=:\d+:\d+\)?$)/, (f) => projectPath(f)));
     return [...lines.slice(0, first), ...rel].join("\n");
@@ -681,6 +689,10 @@ function application() {
 
 /** A host global: `Application`, `ThisWorkbook`, a sheet code name, or a member of `Application`. */
 function global(name) {
+    if (formsApi !== null) {
+        const form = formsApi.instance(name);
+        if (form !== undefined) return form;
+    }
     if (mock && mock.globals && name in mock.globals) return mock.globals[name];
     if (name === "Application") return application();
     connect();
@@ -1398,6 +1410,7 @@ function ensureInit() {
 function entries() {
     const out = [];
     for (const [name, m] of modules) for (const f of Object.keys(m.entries)) out.push(`${name}.${f}`);
+    if (formsApi !== null) for (const name of formsApi.names()) out.push(`${name}.show`);
     return out;
 }
 function findEntry(entry) {
@@ -1407,6 +1420,7 @@ function findEntry(entry) {
     const name = Array.isArray(hit) ? (hit.length === 1 ? hit[0] : null) : hit;
     if (!name) throw new RasError(`実行する関数 \`${entry}\` が見つかりません（候補: ${all.join(", ") || "なし"}）`, 35, "RAS");
     const [m, f] = name.split(".");
+    if (!modules.has(m)) return () => call(global(m), "Show", []);
     return modules.get(m).entries[f];
 }
 /** Runs an entry point (`Module.proc`, or just `proc` when it is unambiguous). */
@@ -1419,7 +1433,28 @@ function run(entry) {
     });
     const f = findEntry(entry);
     ensureInit();
-    return f();
+    const result = f();
+    if (formsApi !== null) formsApi.idle();
+    return result;
+}
+
+// ---------------------------------------------------------------------------- user forms (spec §14.10.7)
+
+let formsApi = null;
+function forms() {
+    if (formsApi === null) {
+        formsApi = require("./ras-forms.js")(
+            Object.assign(Object.create(module.exports), {
+                config: () => config,
+                mock: () => mock,
+            }),
+        );
+    }
+    return formsApi;
+}
+/** Registers the code-behind of a form (`forms/<Name>.ras`). */
+function form(name, definition) {
+    forms().register(name, definition);
 }
 
 process.on("exit", resetAppState);
@@ -1432,5 +1467,6 @@ module.exports = {
     trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
     configure, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
-    vba, declare, module: module_, ensureInit, entries, run,
+    vba, declare, module: module_, ensureInit, entries, run, form,
 };
+Object.defineProperty(module.exports, "msforms", { get: () => forms().msforms, enumerable: true });

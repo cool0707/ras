@@ -2,6 +2,7 @@ import * as cp from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { FormHost } from "./formRunner/host";
 import { findServerExecutable } from "./serverPath";
 
 // Debugging (spec §14.10). `ras build --target js` turns the project into JavaScript with
@@ -34,10 +35,14 @@ interface RasDebugConfiguration extends vscode.DebugConfiguration {
 
 interface DebugManifest {
 	entries: string[];
+	/** User forms of the project; their panels are drawn by a FormHost (spec §14.10.7). */
+	forms?: string[];
 }
 
 /** Processes started for debug sessions, by the id stored in the attach configuration. */
 const running = new Map<string, cp.ChildProcess>();
+/** The forms of those processes. */
+const formHosts = new Map<string, FormHost>();
 let nextId = 1;
 let output: vscode.OutputChannel | undefined;
 
@@ -55,6 +60,10 @@ export function registerDebugging(context: vscode.ExtensionContext): vscode.Disp
 			if (id !== undefined && child !== undefined) {
 				running.delete(id);
 				child.kill();
+			}
+			if (id !== undefined) {
+				formHosts.get(id)?.dispose();
+				formHosts.delete(id);
 			}
 		}),
 		// The debug lens above a function passes `{ entry, uri }`; the palette and the title bar pass nothing.
@@ -75,6 +84,10 @@ export function registerDebugging(context: vscode.ExtensionContext): vscode.Disp
 				child.kill();
 			}
 			running.clear();
+			for (const host of formHosts.values()) {
+				host.dispose();
+			}
+			formHosts.clear();
 			output?.dispose();
 		}),
 	);
@@ -162,7 +175,7 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 		await build(root);
 		const debugDir = path.join(root, "build", "debug");
 		const manifest = JSON.parse(fs.readFileSync(path.join(debugDir, "ras-debug.json"), "utf8")) as DebugManifest;
-		const entry = config.entry ?? (await pickEntry(manifest.entries));
+		const entry = config.entry ?? (await pickEntry(manifest.entries, manifest.forms ?? []));
 		if (entry === undefined) {
 			return undefined;
 		}
@@ -187,6 +200,11 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 		if (dialogs) {
 			env.RAS_DIALOGS = dialogs;
 		}
+		// The forms are drawn in panels of VS Code; the program connects to them when it shows one.
+		const formHost = (manifest.forms ?? []).length > 0 ? await FormHost.start(this.context) : undefined;
+		if (formHost !== undefined) {
+			env.RAS_FORM_HOST = String(formHost.port);
+		}
 		const runtime = config.runtimeExecutable || setting("debug.runtimeExecutable") || process.execPath;
 		const main = path.join(debugDir, "ras-main.js");
 		const out = channel();
@@ -200,16 +218,32 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 				out.append(text);
 				text.split(/\r?\n/).forEach(notifyDialog);
 			});
-			child.on("exit", (code) => out.appendLine(`（終了コード ${code ?? "?"}）`));
+			child.on("exit", (code) => {
+				out.appendLine(`（終了コード ${code ?? "?"}）`);
+				formHost?.dispose();
+			});
 			out.show(true);
 			return undefined;
 		}
 
 		const child = cp.spawn(runtime, ["--enable-source-maps", "--inspect-brk=127.0.0.1:0", main, entry], { cwd: root, env });
-		const port = await inspectorPort(child, out);
+		let port: number;
+		try {
+			port = await inspectorPort(child, out);
+		} catch (error) {
+			formHost?.dispose();
+			throw error;
+		}
 		const id = String(nextId++);
 		running.set(id, child);
-		child.on("exit", () => running.delete(id));
+		if (formHost !== undefined) {
+			formHosts.set(id, formHost);
+		}
+		child.on("exit", () => {
+			running.delete(id);
+			formHosts.get(id)?.dispose();
+			formHosts.delete(id);
+		});
 
 		const dir = debugDir.replace(/\\/g, "/");
 		return {
@@ -223,7 +257,7 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 			sourceMaps: true,
 			outFiles: [`${dir}/**/*.js`],
 			resolveSourceMapLocations: [`${root.replace(/\\/g, "/")}/**`],
-			skipFiles: ["<node_internals>/**", `${dir}/ras-runtime.js`, `${dir}/ras-main.js`],
+			skipFiles: ["<node_internals>/**", `${dir}/ras-runtime.js`, `${dir}/ras-forms.js`, `${dir}/ras-main.js`],
 			smartStep: true,
 			cwd: root,
 			__rasProcess: id,
@@ -263,14 +297,17 @@ function build(root: string): Promise<void> {
 	});
 }
 
-async function pickEntry(entries: string[]): Promise<string | undefined> {
+async function pickEntry(entries: string[], forms: string[]): Promise<string | undefined> {
 	if (entries.length === 0) {
 		throw new Error("実行できる関数がありません。引数なしの関数か、トップレベルの文が必要です。");
 	}
 	if (entries.length === 1) {
 		return entries[0];
 	}
-	return vscode.window.showQuickPick(entries, { title: "RAS: デバッグする関数", placeHolder: "実行する関数を選んでください" });
+	const isForm = (entry: string) => forms.some((form) => entry.toLowerCase() === `${form.toLowerCase()}.show`);
+	const items = entries.map((entry) => ({ label: entry, description: isForm(entry) ? "ユーザーフォームを表示" : undefined }));
+	const picked = await vscode.window.showQuickPick(items, { title: "RAS: デバッグする関数", placeHolder: "実行する関数かフォームを選んでください" });
+	return picked?.label;
 }
 
 /** The `ras_com` addon: explicit path, the one shipped with the extension, or one next to `ras`. */

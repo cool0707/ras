@@ -9,7 +9,7 @@ export type ServerState = "stopped" | "starting" | "running";
 const SYNC_STATUS_NOTIFICATION = "ras/syncStatus";
 
 /** Commands of the run / debug lenses the server puts above functions that can be started. */
-const RUN_LENS_COMMANDS = new Set(["ras.client.runMacro", "ras.debug.start"]);
+const RUN_LENS_COMMANDS = new Set(["ras.client.runMacro", "ras.client.showForm", "ras.debug.start"]);
 
 /** Thrown by {@link RasServer.execute} when there is no server to talk to. */
 export class ServerNotRunningError extends Error {

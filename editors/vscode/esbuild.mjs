@@ -60,10 +60,11 @@ const context = await esbuild.context({
 	plugins: [checkNotices],
 });
 
-// The UserForm Designer runs in a webview: a browser bundle with its own CSS
-// and the codicon font, loaded under a strict content security policy.
+// The UserForm Designer and the panel of a form being debugged (formRunner) run in
+// webviews: browser bundles with their own CSS (and the codicon font), loaded under a
+// strict content security policy.
 const webview = await esbuild.context({
-	entryPoints: { userFormDesigner: "webview/userFormDesigner/App.tsx" },
+	entryPoints: { userFormDesigner: "webview/userFormDesigner/App.tsx", formRunner: "webview/formRunner/main.ts" },
 	outdir: "dist/webview",
 	bundle: true,
 	format: "iife",

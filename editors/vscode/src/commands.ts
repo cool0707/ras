@@ -1,4 +1,6 @@
 import * as cp from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { isGeneratedVba } from "./generatedVba";
 import type { GeneratedVbaView } from "./generatedVba";
@@ -17,6 +19,7 @@ const SERVER_COMMANDS = {
 	openInExcel: "ras.openInExcel",
 	listMacros: "ras.listMacros",
 	runMacro: "ras.runMacro",
+	showForm: "ras.showForm",
 } as const;
 
 export function registerCommands(server: RasServer, vbaView: GeneratedVbaView): vscode.Disposable {
@@ -38,6 +41,9 @@ export function registerCommands(server: RasServer, vbaView: GeneratedVbaView): 
 		}),
 		// The run lens above a function passes its macro name (`Module.Proc`).
 		command("ras.client.runMacro", "マクロを実行", (name) => runMacro(server, typeof name === "string" ? name : undefined)),
+		// The run lens of a form's code-behind passes the form's name; the Designer's title bar its file.
+		command("ras.client.showForm", "フォームを Excel で実行", (arg) => showForm(server, arg)),
+		command("ras.userForm.debug", "フォームをデバッグ実行", (arg) => debugForm(arg)),
 		command("ras.restartServer", "言語サーバーを再起動", async () => {
 			if (!vscode.workspace.isTrusted) {
 				void vscode.window.showInformationMessage("RAS 言語サーバーは、ワークスペースを信頼すると起動します。");
@@ -156,6 +162,60 @@ async function runMacro(server: RasServer, name: string | undefined): Promise<vo
 	}
 	const result = await withProgress(`RAS: ${macro} を実行しています…`, () => server.execute(SERVER_COMMANDS.runMacro, [macro]));
 	showResult(result, `${macro} を実行しました。`, `${macro} の実行に失敗しました。`);
+}
+
+async function showForm(server: RasServer, arg: unknown): Promise<void> {
+	await vscode.workspace.saveAll(false);
+	const name = typeof arg === "string" ? arg : (formOf(arg) ?? (await pickForm(arg)));
+	if (name === undefined) {
+		return;
+	}
+	if (process.platform !== "win32") {
+		void vscode.window.showInformationMessage("RAS: Excel での実行は Windows でだけ使えます。「デバッグ実行」なら VS Code の中でフォームを表示できます。");
+		return;
+	}
+	// A modal form keeps this waiting until it is closed in Excel.
+	const result = await withProgress(`RAS: ${name} を Excel で表示しています…`, () => server.execute(SERVER_COMMANDS.showForm, [name]));
+	showResult(result, `${name} を閉じました。`, `${name} を表示できませんでした。`);
+}
+
+async function debugForm(arg: unknown): Promise<void> {
+	const name = formOf(arg) ?? (await pickForm(arg));
+	if (name === undefined) {
+		return;
+	}
+	const uri = arg instanceof vscode.Uri ? arg : undefined;
+	await vscode.commands.executeCommand("ras.debug.start", { entry: `${name}.show`, uri });
+}
+
+/** The form a file belongs to: `forms/<Name>.form.json` or `forms/<Name>.ras`. */
+function formOf(arg: unknown): string | undefined {
+	const uri = arg instanceof vscode.Uri ? arg : activeTabUri();
+	if (uri === undefined) {
+		return undefined;
+	}
+	const base = path.basename(uri.path);
+	const match = /^(.+)\.form\.json$/i.exec(base) ?? (path.basename(path.dirname(uri.path)) === "forms" ? /^(.+)\.ras$/i.exec(base) : null);
+	return match?.[1];
+}
+
+function activeTabUri(): vscode.Uri | undefined {
+	const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+	if (input instanceof vscode.TabInputCustom || input instanceof vscode.TabInputText) {
+		return input.uri;
+	}
+	return vscode.window.activeTextEditor?.document.uri;
+}
+
+async function pickForm(arg: unknown): Promise<string | undefined> {
+	const root = await projectRoot(arg instanceof vscode.Uri ? arg : undefined, "プロジェクトを選んでください");
+	const dir = root === undefined ? undefined : path.join(root, "forms");
+	const forms = dir !== undefined && fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".form.json")).map((f) => f.slice(0, -".form.json".length)) : [];
+	if (forms.length === 0) {
+		void vscode.window.showInformationMessage("ユーザーフォームがありません（forms/<名前>.form.json）。");
+		return undefined;
+	}
+	return forms.length === 1 ? forms[0] : vscode.window.showQuickPick(forms, { title: "RAS: ユーザーフォーム", placeHolder: "実行するフォームを選んでください" });
 }
 
 async function pickMacro(server: RasServer): Promise<string | undefined> {

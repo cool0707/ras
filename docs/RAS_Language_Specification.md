@@ -5,6 +5,7 @@
 > * `worksheets` などのホストのコレクションで、配列と同じ `filter` / `map` / `forEach` 等を使える（§4.4）
 > * `ras check --fix` とエディタのクイックフィックスで、VBA の綴りで書かれた名前を書き換える（§7.3、§16.2）
 > * 名前付き引数 `f(a: 123, c: "あいう")` を追加（§3.3）。エディタで引数名を補完する（§16.2.1）
+> * ユーザーフォームのデバッグ実行（§14.10.7）と Excel での実行（§14.11.8）を追加
 
 > v0.7 からの変更
 > * 構造体（`struct`）をデータの入れ物の基本とし、オブジェクトリテラル・無名のオブジェクト型・タプル・分割代入を追加（§2.5）
@@ -671,7 +672,7 @@ On Error GoTo 0
 ### 7.4 VS Code 拡張の責務（最小）
 
 * `ras.path` 設定（未設定時は PATH から検索）でバイナリを起動し、LSP クライアントとして接続するのみ。
-* コマンドはすべて LSP の `workspace/executeCommand` に委譲: 「生成 VBA を表示」「今すぐ同期」「Excel で開く」「マクロを実行」。
+* コマンドはすべて LSP の `workspace/executeCommand` に委譲: 「生成 VBA を表示」「今すぐ同期」「Excel で開く」「マクロを実行」「フォームを Excel で実行」。
 * ステータスバーに同期状態（接続先ブック・未同期件数・ドリフト警告）を表示。
 * IntelliSense（メンバー一覧・クイック情報・パラメーター情報等）はすべて LSP サーバ側（`ras lsp`）が提供し、拡張側は独自実装を持たない（§16）。
 
@@ -1332,11 +1333,13 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 | ファイル | 内容 |
 |---|---|
 | `<モジュール>.js` / `<モジュール>.js.map` | モジュールごとの JavaScript と Source Map。マッピングは文単位で、`sources` は `.ras` ファイルへの相対パス |
+| `@forms/<フォーム名>.js` / `.js.map` | フォームのコードビハインド（`forms/<フォーム名>.ras`）。§14.10.7 |
 | `ras-runtime.js` | ランタイム（`$rt`）。数値変換・オーバーフロー検査・文字列関数・エラーオブジェクト・VBA 標準関数・Excel へのアクセス |
+| `ras-forms.js` | ユーザーフォームのランタイム（MSForms のオブジェクトとイベント、フォームを表示するホストとの通信）。§14.10.7 |
 | `ras-main.js` | ランチャー。`node --enable-source-maps build/debug/ras-main.js <モジュール名.関数名>` で実行する（`--list` で実行可能な関数を JSON で出力） |
-| `ras-debug.json` | 実行可能な関数の一覧（VS Code 拡張が読む） |
+| `ras-debug.json` | 実行可能な関数の一覧とフォームの一覧（VS Code 拡張が読む） |
 
-実行できるのは、引数なしで呼べるトップレベル関数と `Main`（トップレベルの文）。実行前にモジュール初期化と `@init` 関数を一度だけ実行する（VBA の `RAS_EnsureInit` と同じ）。
+実行できるのは、引数なしで呼べるトップレベル関数と `Main`（トップレベルの文）、およびフォーム（`<フォーム名>.show` で、フォームを表示する。§14.10.7）。実行前にモジュール初期化と `@init` 関数を一度だけ実行する（VBA の `RAS_EnsureInit` と同じ）。
 
 #### 14.10.3 Excel との接続
 
@@ -1360,7 +1363,7 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 
 #### 14.10.5 再現しないもの・制限
 
-* **Excel 起点の呼び出し:** `@on` のイベントハンドラ、`@udf`、リボンコールバック、ユーザーフォーム、手書き VBA から RAS 関数を呼ぶ経路は起動できない（RAS から手書き VBA を呼ぶのは `Application.Run` 経由で可能）。
+* **Excel 起点の呼び出し:** `@on` のイベントハンドラ（ブック・シート）、`@udf`、リボンコールバック、手書き VBA から RAS 関数を呼ぶ経路は起動できない（RAS から手書き VBA を呼ぶのは `Application.Run` 経由で可能）。ユーザーフォームは Excel ではなく VS Code に表示して動かす（§14.10.7）。
 * **数値型の精度:** `long`・`currency`・`decimal` は倍精度浮動小数点数で表現する（`long` は 2^53 を超えると不正確、`decimal` の `0.1m + 0.2m == 0.3m` は成り立たない）。`float` は倍精度のまま計算する。
 * **VBA 標準関数:** よく使うもの（文字列・変換・日付・数学・`MsgBox`・`CreateObject`・`Format` の代表的な書式など）は JavaScript で実装している。未対応の関数は呼び出した時点でエラーになる。`Format` の未対応の書式は Excel の `TEXT` 関数に委譲する。ロケール依存の表記（日付の既定書式など）は VBA と一致しないことがある。
 * **`declare`（DLL 関数）:** `kernel32` の `Sleep` / `GetTickCount` / `GetTickCount64` / `GetCurrentProcessId` / `QueryPerformanceCounter` / `QueryPerformanceFrequency` のみ代替実装がある。それ以外は警告 `W1410` を出し、呼び出した時点でエラーになる。
@@ -1402,6 +1405,38 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 | それ以外（「はい / いいえ」のように選択が必要なもの） | 閉じない。通知だけ行い、ユーザーの応答を待つ |
 
 ボタンは `BM_CLICK` で押し、閉じなければ `WM_COMMAND` の通知で再試行する（最大 3 回）。値を入力して続行するような応答（`InputBox` への入力など）は行わない。ダイアログを閉じた結果、元の呼び出しはエラー（キャンセルされた操作のエラー 1004 など）で戻ることがある。
+
+#### 14.10.7 ユーザーフォーム（v0.9で追加）
+
+フォームのコードビハインド（§14.11.2）もデバッグ実行の対象になる。デバッグ実行のプロセスは Excel のフォームのイベントを受け取れないため、フォームは Excel には表示せず、**VS Code のパネルに表示する**。コードビハインドは他のモジュールと同じく JavaScript として動き、ブレークポイント・ステップ実行・変数の確認が使える。Excel の操作（セルの読み書きなど）は従来どおり実際の Excel に対して行う。
+
+* **起動:** フォームのコードビハインドの先頭の CodeLens「デバッグ実行」、デザイナーのタイトルバーのボタン、または実行する関数の一覧の `<フォーム名>.show` から、そのフォームを表示して始める。他のモジュールの関数から `frmInput.show()` で表示することもできる。
+* **インスタンス:** フォームは既定のインスタンスだけを持つ（RAS ではフォームを `new` できない）。フォーム名を最初に参照した時点でインスタンスを作り、モジュール変数を初期化して `Initialize` を起こす。`unload` の後に参照すると、新しいインスタンスを作る（VBA と同じ）。
+* **表示:** `show()` はモーダル（生成するフォームの `ShowModal` の既定値）、`show(vbModeless)` はモードレスで表示する。モーダル表示はフォームが閉じられる（`hide` / `unload`）まで戻らない。モードレス表示はすぐに戻り、起動した関数が終わった後も、表示中のフォームがすべて閉じられるまでプロセスは終わらない。
+* **ホストとの接続:** VS Code 拡張はデバッグ実行のたびに `127.0.0.1` の TCP ポートで待ち受け、その番号を環境変数 `RAS_FORM_HOST` でプロセスに渡す。ランタイムは最初にフォームを表示するときに接続する。生成コードは同期的に動くため、ユーザーの操作を待つ間はワーカースレッドがソケットを受け持ち、メインスレッドは `Atomics.wait` で短い間隔ごとに待つ（その間もデバッガの一時停止は効く）。通信は 1 行 1 つの JSON で、ランタイムがフォームの状態（`show` / `update` / `hide` / `unload`）を送り、拡張はユーザーの操作（フォーカスの移動・入力・クリック・選択・タブの切り替え・閉じるボタン）を返す。`RAS_FORM_HOST` が無い（VS Code の外で実行した）場合、フォームの表示はエラー 429 になる。
+* **状態はランタイムが持つ:** コントロールの値・フォーカス・表示状態はランタイムが持ち、パネルはそれを描画するだけである。入力した文字はランタイムに渡してから `Change` を起こし、ハンドラが書き換えた値をパネルに戻す。ハンドラの実行中（ブレークポイントで止まっている間を含む）に続けて入力した文字は失われない（パネルは最後の入力をランタイムが処理するまで、それより古い値で入力欄を上書きしない）。
+* **イベント:** 次のイベントを VBA と同じ順序で起こす。ハンドラの呼び出し規則（宣言順・再入の無視・`byref` の引数）は §14.11.2 と同じ。
+
+| きっかけ | イベント |
+|---|---|
+| インスタンスの作成 | `UserForm.Initialize`（モジュール変数の初期化の後） |
+| 表示 | `UserForm.Activate`、タブ順で最初のコントロールの `Enter` |
+| フォーカスの移動（クリック・Tab キー・`setFocus()`） | 移る前のコントロールの `BeforeUpdate`（値が変わっていれば）・`AfterUpdate`・`Exit`、移った先の `Enter`。`BeforeUpdate` / `Exit` の `cancel` で取り消すと、フォーカスは移らず、そのクリックや入力も行われない |
+| 入力（`TextBox` / `ComboBox`） | `Change`（1 文字ごと） |
+| クリック | `CommandButton` などの `Click`。`CheckBox` / `OptionButton` / `ToggleButton` は値を変えて `Change` と `Click`（同じグループの `OptionButton` は `false` になり `Change`） |
+| リストの選択（`ComboBox` / `ListBox`） | `Change`、`Click` |
+| `SpinButton` の矢印 | 値を `smallChange` だけ動かして `Change`、`SpinUp` / `SpinDown` |
+| `ScrollBar` / `MultiPage` / `TabStrip` の操作 | `Change` |
+| ダブルクリック | `DblClick` |
+| Enter / Esc キー | `default` / `cancel` が `true` の `CommandButton` の `Click` |
+| 閉じるボタン（パネルの ✕、パネルのタブを閉じる） | `UserForm.QueryClose`（`closeMode` = `vbFormControlMenu`）。`cancel` に 0 以外を入れると閉じない（タブを閉じた場合はパネルを開き直す）。閉じるときは `UserForm.Terminate` |
+| `unload(this)` | `UserForm.QueryClose`（`closeMode` = `vbFormCode`）、`UserForm.Terminate` |
+
+  コードでプロパティを変えたときも、VBA と同じく `Change` などが起きる（`text`・`value`・`listIndex` の変更）。キー入力のイベント（`KeyDown` / `KeyPress` / `KeyUp`）・マウスのイベント（`MouseDown` など）・ドラッグ＆ドロップ・`Deactivate` は起こさない。
+* **エラー:** ハンドラで捕捉されなかったエラーは、VBA ビルドの RAS エラーダイアログ（`RAS_EventError`）と同じく実行を止めない。エラーの内容と RAS の位置をデバッグ コンソールとフォームのパネルに表示し、次の操作を待つ。エラーで止めたい場合は、VS Code のブレークポイントの「捕捉された例外」を有効にする。
+* **MSForms のオブジェクト:** フォーム（`caption`・`width` / `height`・`backColor`・`font`・`controls`・`activeControl`・`show` / `hide`）と組み込みのコントロール（§14.11.1）の主なプロパティとメソッドを JavaScript で実装している（`text` / `value`、`caption`、`enabled` / `visible` / `locked`、位置と大きさ、色とフォント、`ComboBox` / `ListBox` の `addItem` / `removeItem` / `clear` / `list` / `column` / `listIndex` / `listCount` / `selected` / `multiSelect`、`MultiPage` の `pages` / `selectedItem`、`TabStrip` の `tabs`、`Image` の `picture` と `loadPicture`）。初期値は `.form.json` から読む（`list` / `selectedIndex` を含む）。未実装のメンバーはエラー 438、`controls.add` などの未対応の操作はエラー 445 になる。
+* **見た目:** パネルは Windows の既定の色（システム カラー）とフォントでフォームを描く。座標と大きさはポイント単位で、Excel のフォームとおおむね同じ配置になるが、コントロールの描画（枠の形、リストの行の高さ、`ComboBox` のドロップダウンなど）はブラウザーのものであり、Excel とは一致しない。
+* **再現しないもの:** Excel と VS Code の間のモーダル（モーダル フォームの表示中も Excel や VS Code の他の部分は操作できる。デバッグ実行の他のフォームは操作できない）、`StartUpPosition`、フォームのサイズ変更とスクロール、`ControlSource` によるセルとの連動、カスタム コントロール。
 
 ### 14.11 ユーザーフォーム（`forms/`）
 
@@ -1508,7 +1543,7 @@ export function enteredName(): string {
 * **公開:** `export function` はフォームの `Public` メンバーになり、他のモジュールからフォームの既定のインスタンス経由で `frmInput.enteredName()` のように呼べる。フォーム名はどこからでも参照できるグローバル（既定のインスタンス）で、`frmInput.show()` のように使う。`export` しない関数は `Private`。コードビハインドの関数はマクロ入口にならない（§12.4 のラップもしない）。
 * **書けないもの（`E0630`・`E0632`）:** トップレベルの文、クラス・インターフェイス・構造体・`declare module`、`export` した変数・列挙型・型エイリアス、`@macro` / `@init` / `@udf` / `@ribbon`、拡張メソッド。共有したいものは `src/` のモジュールに置き、`import` して使う（コードビハインドは `import` できる。コードビハインドを `import` することはできない）。
 * `.form.json` が無い `forms/<Name>.ras` はエラー（`E0631`）。
-* デバッグ実行（§14.10）ではコードビハインドを実行しない。
+* デバッグ実行（§14.10）では、フォームを VS Code のパネルに表示してコードビハインドを動かす（§14.10.7）。Excel 本体でフォームを表示して動かすのは「Excel で実行」（§14.11.8）。
 
 #### 14.11.3 コマンド
 
@@ -1614,7 +1649,22 @@ End Sub
 * VBE でフォームのデザインやコードを直接編集しても目印の行は変わらないため、その編集は次に `forms/` 側が変わるまで残る（ドリフト検出は行わない）。VBE でのデザインの編集を残したい場合は、ブックを保存してから `ras form pull --force` で `forms/` に取り込む（コードの編集は取り込まれない。§14.11.6）。
 * マクロの実行中・中断モード中は書き込まない（§14.6）。フォームを取り込み直すと、そのフォームのインスタンスとプロジェクトの状態はリセットされる。
 
-#### 14.11.8 制限
+#### 14.11.8 Excel での実行（v0.9で追加）
+
+VS Code の「Excel で実行」（フォームのコードビハインドの先頭の CodeLens、デザイナーのタイトルバーのボタン、コマンド「フォームを Excel で実行」。Windows のみ）は、ブックへ同期（§14.11.7）してから、Excel 本体でフォームを表示する。
+
+* `Application.Run` はフォームのコードモジュールのプロシージャを呼べず、`VBA.UserForms` はプロジェクト内のコードからしか使えない。そのため、プロジェクトにフォームがあるときは、ランタイム（`RAS_Runtime`）に次のプロシージャを出力し、`Application.Run "'<ブック名>'!RAS_Runtime.RAS_ShowForm", "<フォーム名>"` で呼ぶ。
+
+  ```vb
+  Public Sub RAS_ShowForm(ByVal name As String)
+      VBA.UserForms.Add(name).Show
+  End Sub
+  ```
+
+* 表示の前に Excel を前面に出す（Windows が前面の切り替えを許可しない場合は、タスク バーのボタンが点滅する）。
+* モーダルのフォームは閉じられるまで呼び出しが戻らない。その間、同期（保存のたびの同期を含む）は待たされる。
+
+#### 14.11.9 制限
 
 * カスタム ActiveX コントロールは生成できない（エラーになる）。
 * VBE でフォームのデザインやコードを編集しても `forms/` には自動では反映されない。デザインは `ras form pull --force` で取り込める。取り込まない限り、次に `forms/` 側を変更して書き込んだ時点で `forms/` の内容に置き換わる（ドリフト検出は行わない）。
@@ -1761,7 +1811,7 @@ VS Code の IntelliSense に相当する機能を、LSP の標準機能として
 | セマンティックトークン | `textDocument/semanticTokens` | TextMate 文法で区別できない `byref` 引数・拡張メソッド・COM メンバー等を色分けする |
 | 診断 | `textDocument/publishDiagnostics` | §6 のリンタールール、同期時のコンパイルエラー（§14.6） |
 | コードアクション | `textDocument/codeAction` | クイックフィックス（VBA の綴りで書かれたホストの名前を camelCase に直す（§15.3.1。その箇所だけ／ファイル内すべて）、未インポートの関数・拡張メソッドの `import` 追加、`byref` 引数へのリテラル渡しを一時変数に置き換える、縮小変換に `as` を追加する等） |
-| CodeLens | `textDocument/codeLens` | 最適化の適用状況（インライン展開・一括転送・ループ融合・`DoEvents` 挿入）、「生成 VBA を表示」 |
+| CodeLens | `textDocument/codeLens` | 最適化の適用状況（インライン展開・一括転送・ループ融合・`DoEvents` 挿入）、「生成 VBA を表示」、単独で起動できる関数の「Excelで実行」「デバッグ実行」、フォームのコードビハインドの先頭の「Excelで実行」「デバッグ実行」（§14.10.7、§14.11.8） |
 | フォーマット | `textDocument/formatting`, `rangeFormatting` | `ras fmt` と同じ |
 | 折りたたみ | `textDocument/foldingRange` | |
 

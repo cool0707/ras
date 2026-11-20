@@ -311,6 +311,10 @@ pub fn finalize(prog: &Program, lowered: &Lowered, opts: &EmitOptions) -> (Vec<O
         }
         files.push(finish(m, printed.text, printed.mappings, cfg.target.codepage, &mut diags));
     }
+    // "Run in Excel" of a form goes through the runtime (`Application.Run`).
+    if lowered.modules.iter().any(|m| m.kind == VModuleKind::Form) {
+        used.insert("RAS_ShowForm".into());
+    }
     let has_glue = lowered.modules.iter().any(|m| m.name == "RAS_Glue");
     let rt = runtime::build(&used, cfg, has_glue);
     if !rt.module.is_empty() {
