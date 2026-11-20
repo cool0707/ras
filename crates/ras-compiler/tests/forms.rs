@@ -72,6 +72,9 @@ export function selected(): string {
     assert!(code.contains("Unload Me"), "{code}");
     assert!(code.contains("Public Function selected() As String"), "{code}");
     assert!(!code.contains("Attribute VB_Name"));
+    // "Run in Excel" of a form calls the runtime's helper through Application.Run.
+    let runtime = files.iter().find(|f| f.name == "RAS_Runtime").expect("runtime module");
+    assert!(runtime.code.contains("Public Sub RAS_ShowForm(ByVal name As String)") && runtime.code.contains("VBA.UserForms.Add(name).Show"), "{}", runtime.code);
     let main = files.iter().find(|f| f.name == "Main").unwrap();
     println!("{}", main.code);
     assert!(main.code.contains("frmInput.Show"), "{}", main.code);

@@ -13,5 +13,7 @@
 !bin/**/ras_com.node
 !dist/webview/userFormDesigner.js
 !dist/webview/userFormDesigner.css
+!dist/webview/formRunner.js
+!dist/webview/formRunner.css
 !dist/webview/codicon.ttf
 !schemas/userform.schema.json

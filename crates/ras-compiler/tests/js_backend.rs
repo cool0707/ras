@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use ras_compiler::{analyze, build_js, Config, JsOutput, ModuleKind, Program, SourceInput};
+use ras_compiler::{analyze, build_js, form_source, Config, FormDecl, JsOutput, ModuleKind, Program, SourceInput};
 
 fn compile(files: &[(&str, &str)]) -> (Program, JsOutput) {
     let mut cfg = Config::default();
@@ -234,4 +234,99 @@ fn unsupported_constructs_are_reported() {
     let (_, out) = compile(&[("m", src)]);
     let codes: Vec<&str> = out.diagnostics.iter().map(|d| d.code).collect();
     assert_eq!(codes, vec!["W1410"]);
+}
+
+const FORM_MAIN: &str = r#"export function run() {
+    frmInput.show();
+    console.log(frmInput.summary());
+    unload(frmInput);
+    frmInput.show(vbModeless);
+    console.log(`end ${frmInput.caption}`);
+}
+"#;
+
+/// A form's code-behind runs in the debug build; the form is drawn by a host (the VS Code
+/// extension), here a test double that plays a user (spec §14.10.7).
+#[test]
+fn forms_run_with_a_host() {
+    let spec = include_str!("js/forms/frmInput.form.json");
+    let code = include_str!("js/forms/frmInput.ras");
+    let mut cfg = Config::default();
+    cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
+    let sources = vec![
+        SourceInput { path: PathBuf::from("src/main.ras"), rel_path: "src/main.ras".into(), key: "main".into(), kind: ModuleKind::User, text: FORM_MAIN.into() },
+        form_source(PathBuf::from("forms/frmInput.ras"), "frmInput", code.to_string()),
+    ];
+    let prog = analyze(sources, cfg);
+    let errors: Vec<String> = prog.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    let out = build_js(&prog, "../../");
+    assert!(!out.files.is_empty(), "no output: {:?}", out.diagnostics);
+    assert_eq!(out.entries, vec!["Main.run", "frmInput.show"]);
+    let js = &out.files.iter().find(|f| f.rel_path == "@forms/frmInput.js").expect("the form's module").text;
+    assert!(js.contains("$rt.form(\"frmInput\", {"), "{js}");
+    assert!(js.contains("$rt.put($me, \"Caption\","), "{js}");
+    assert!(js.contains("fn: ($a) => closing($a[0], $a[1].v)"), "byref parameters get the cell: {js}");
+    let manifest = &out.files.iter().find(|f| f.rel_path == "ras-debug.json").unwrap().text;
+    assert!(manifest.contains("\"forms\": [\n    \"frmInput\"\n  ]"), "{manifest}");
+    if !has_node() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ras-js-{}-forms", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("src/main.ras", FORM_MAIN);
+    write("forms/frmInput.ras", code);
+    write("forms/frmInput.form.json", spec);
+    for f in &out.files {
+        write(&format!("build/debug/{}", f.rel_path), &f.text);
+    }
+    let p = Project(root);
+    let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_forms.js")));
+    assert!(ok, "{stderr}");
+    let expected = "\
+show frmInput modal=true \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton btnOK:CommandButton btnBoom:CommandButton
+draw txtName= seq=undefined
+focus txtName
+draw txtName=NG seq=1
+focus txtName
+draw txtName=NG seq=1
+focus txtName
+draw txtName=YAMADA seq=2
+focus txtName
+focus cboKind
+focus chkAgree
+optS=false optM=true
+focus optM
+up 2
+focus spnQty
+up 3
+focus spnQty
+up 3
+error frmInput.btnBoom_Click: 実行時エラー 9: インデックスが有効範囲にありません。 (3)（forms/frmInput.ras:34）
+focus btnBoom
+QueryClose mode=0
+focus btnBoom
+hide
+YAMADA/予約:1/3/true/3/1
+QueryClose mode=1
+Terminate
+show frmInput modal=false \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton btnOK:CommandButton btnBoom:CommandButton
+draw txtName= seq=undefined
+focus txtName
+end 入力 1
+QueryClose mode=0
+focus txtName
+Terminate
+";
+    assert_eq!(stdout, expected, "{stderr}");
+    assert!(stderr.contains("[ras] frmInput.btnBoom_Click: 実行時エラー 9"), "{stderr}");
+    // Without a host (outside VS Code), showing a form explains where it can be shown.
+    let (_, stderr, ok) = p.run("frmInput.show", None);
+    assert!(!ok);
+    assert!(stderr.contains("VS Code"), "{stderr}");
 }

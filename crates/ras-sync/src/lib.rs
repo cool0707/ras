@@ -144,6 +144,12 @@ impl Session {
         self.live.as_ref().expect("connected").run(name)
     }
 
+    /// Shows the user form `name` in Excel (with Excel in front) and waits until a modal form is closed.
+    pub fn show_form(&mut self, name: &str) -> Result<(), SyncError> {
+        self.connect()?;
+        self.live.as_ref().expect("connected").show_form(name)
+    }
+
     /// Opens the workbook in Excel when it is not open yet, and brings Excel to the front.
     pub fn open(&mut self) -> Result<(), SyncError> {
         if self.connect().is_err() {
@@ -169,6 +175,10 @@ impl Session {
     }
 
     pub fn run_macro(&mut self, _name: &str) -> Result<(), SyncError> {
+        Err(SyncError::Unsupported)
+    }
+
+    pub fn show_form(&mut self, _name: &str) -> Result<(), SyncError> {
         Err(SyncError::Unsupported)
     }
 

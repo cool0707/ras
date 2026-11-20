@@ -29,6 +29,8 @@ pub enum Job {
     Open { id: RequestId },
     /// "マクロを実行".
     Run { id: RequestId, name: String },
+    /// "Excelで実行" of a user form.
+    ShowForm { id: RequestId, name: String },
 }
 
 pub type Send = Box<dyn Fn(Message) + std::marker::Send>;
@@ -205,6 +207,14 @@ impl Worker {
                 Job::Run { id, name } => {
                     // The macro must be the one in the sources: sync first.
                     let result = match self.sync(false).and_then(|_| self.session()?.run_macro(&name).map_err(Failure::Sync)) {
+                        Ok(()) => json!({ "ok": true }),
+                        Err(e) => json!({ "ok": false, "message": e.message() }),
+                    };
+                    self.respond(id, result);
+                }
+                Job::ShowForm { id, name } => {
+                    // The form must be the one in the sources: sync first.
+                    let result = match self.sync(false).and_then(|_| self.session()?.show_form(&name).map_err(Failure::Sync)) {
                         Ok(()) => json!({ "ok": true }),
                         Err(e) => json!({ "ok": false, "message": e.message() }),
                     };

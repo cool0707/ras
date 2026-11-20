@@ -17,7 +17,7 @@ mod sync;
 
 type Res<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-const COMMANDS: &[&str] = &["ras.showGeneratedVba", "ras.syncNow", "ras.openInExcel", "ras.runMacro", "ras.listMacros"];
+const COMMANDS: &[&str] = &["ras.showGeneratedVba", "ras.syncNow", "ras.openInExcel", "ras.runMacro", "ras.showForm", "ras.listMacros"];
 
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
@@ -161,6 +161,21 @@ impl Server {
     fn run_lenses(prog: &Program, m: ModuleId, uri: &str) -> Vec<Value> {
         let md = &prog.modules[m];
         let mut lenses = Vec::new();
+        // A form's code-behind: one pair at the top that shows the form (spec §14.10.7). Its
+        // functions need the form loaded and are not started on their own.
+        if let Some(form) = &md.form {
+            if form.decl.is_none() {
+                return lenses;
+            }
+            let range = json!({ "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } });
+            let name = &md.vba_name;
+            if cfg!(windows) {
+                lenses.push(json!({ "range": range, "command": { "title": "$(play) Excelで実行", "tooltip": format!("{name} を Excel で表示します（ブックへ同期してから表示）"), "command": "ras.client.showForm", "arguments": [name] } }));
+            }
+            let entry = format!("{name}.show");
+            lenses.push(json!({ "range": range, "command": { "title": "$(debug-alt) デバッグ実行", "tooltip": format!("{name} を表示してデバッグ実行します（フォームは VS Code に表示されます）"), "command": "ras.debug.start", "arguments": [{ "entry": entry, "uri": uri }] } }));
+            return lenses;
+        }
         for &f in &md.fns {
             let d = &prog.fns[f];
             let Some(decl) = d.decl.as_ref().filter(|x| x.body.is_some()) else { continue };
@@ -340,6 +355,7 @@ impl Server {
             "ras.syncNow" => Some(sync::Job::Sync { id, overwrite: args[0]["overwrite"].as_bool().unwrap_or(false) }),
             "ras.openInExcel" => Some(sync::Job::Open { id }),
             "ras.runMacro" => Some(sync::Job::Run { id, name: args[0].as_str()?.to_string() }),
+            "ras.showForm" => Some(sync::Job::ShowForm { id, name: args[0].as_str()?.to_string() }),
             _ => None,
         }
     }
@@ -738,6 +754,66 @@ mod tests {
         assert_eq!(status["connected"], false, "{status}");
         assert_eq!(status["pending"], 0, "{status}");
         assert!(status["workbook"].as_str().is_some_and(|w| w.ends_with("Book.xlsm")), "{status}");
+        send(Message::Notification(Notification::new("exit".into(), Value::Null)));
+        handle.join().unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A form's code-behind gets one run / debug pair at its top, which shows the form (spec §14.10.7).
+    #[test]
+    fn form_code_behind_has_a_run_lens_for_the_form() {
+        let dir = std::env::temp_dir().join(format!("ras-lsp-form-lens-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("forms")).unwrap();
+        std::fs::write(dir.join("ras.toml"), "[project]\nname = \"T\"\n").unwrap();
+        std::fs::write(dir.join("src").join("main.ras"), "export function run() {\n    frmInput.show();\n}\n").unwrap();
+        std::fs::write(
+            dir.join("forms").join("frmInput.form.json"),
+            r#"{ "schemaVersion": 1, "kind": "ras.userform", "form": { "name": "frmInput" }, "controls": [{ "id": "ok", "name": "btnOK", "type": "CommandButton" }] }"#,
+        )
+        .unwrap();
+        let file = dir.join("forms").join("frmInput.ras");
+        let text = "@on(\"btnOK.Click\")\nfunction ok() {\n    unload(this);\n}\n\nexport function value(): string {\n    return \"\";\n}\n";
+        std::fs::write(&file, text).unwrap();
+        let uri = path_to_uri(&file);
+
+        let (server_conn, client) = Connection::memory();
+        let handle = std::thread::spawn(move || run(&server_conn).map_err(|e| e.to_string()));
+        let send = |m: Message| client.sender.send(m).unwrap();
+        let next_id = std::cell::Cell::new(0);
+        let request = |method: &str, params: Value| -> Value {
+            next_id.set(next_id.get() + 1);
+            let id = next_id.get();
+            send(Message::Request(Request { id: id.into(), method: method.into(), params }));
+            loop {
+                match client.receiver.recv_timeout(std::time::Duration::from_secs(30)).unwrap() {
+                    Message::Response(r) if r.id == id.into() => return r.result.unwrap_or(Value::Null),
+                    _ => {}
+                }
+            }
+        };
+        request("initialize", json!({ "rootUri": path_to_uri(&dir), "capabilities": {} }));
+        send(Message::Notification(Notification::new("initialized".into(), json!({}))));
+        send(Message::Notification(Notification::new("textDocument/didOpen".into(), json!({ "textDocument": { "uri": uri, "languageId": "ras", "version": 1, "text": text } }))));
+        let lenses = request("textDocument/codeLens", json!({ "textDocument": { "uri": uri } }));
+        let runs: Vec<(u64, String, Value)> = lenses
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| l["command"]["command"] != "")
+            .map(|l| (l["range"]["start"]["line"].as_u64().unwrap(), l["command"]["command"].as_str().unwrap().to_string(), l["command"]["arguments"][0].clone()))
+            .collect();
+        let mut expected = vec![];
+        if cfg!(windows) {
+            expected.push((0, "ras.client.showForm".to_string(), json!("frmInput")));
+        }
+        expected.push((0, "ras.debug.start".to_string(), json!({ "entry": "frmInput.show", "uri": uri })));
+        assert_eq!(runs, expected, "the exported function of the form gets no lens of its own: {lenses}");
+        // The server advertises the command that shows a form in Excel.
+        assert!(COMMANDS.contains(&"ras.showForm"));
+
+        request("shutdown", Value::Null);
         send(Message::Notification(Notification::new("exit".into(), Value::Null)));
         handle.join().unwrap().unwrap();
         let _ = std::fs::remove_dir_all(&dir);

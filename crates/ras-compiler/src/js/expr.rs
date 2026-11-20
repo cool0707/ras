@@ -168,6 +168,8 @@ impl<'p> Gen<'p> {
             ExprKind::Name(id) => self.name_expr(e, &id.text),
             ExprKind::This => match self.info().res.get(&e.id) {
                 Some(Res::Local(l)) => self.local_js(*l),
+                // In a form's code-behind, `this` is the form (its only instance, spec §14.10.7).
+                _ if self.prog.modules[self.module].form.is_some() => "$me".into(),
                 _ => "this".into(),
             },
             ExprKind::Paren(inner) => {
@@ -664,6 +666,7 @@ impl<'p> Gen<'p> {
         }
         match prog.modules[def.module].key.as_str() {
             "vba.d" => format!("$rt.vba.{}({argv})", def.vba_name()),
+            "msforms.d" => format!("$rt.msforms.{}({argv})", def.vba_name()),
             "excel.d" | "office.d" => format!("$rt.call($rt.global(\"Application\"), {name}, [{argv}])"),
             // Declared in the project's own type definitions: a procedure of the workbook.
             _ => format!("$rt.runMacro({name}, [{argv}])"),

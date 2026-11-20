@@ -793,6 +793,12 @@ Public Function RAS_Match(ByRef lookupValue As Variant, ByRef lookupArray As Var
     r = Application.Match(lookupValue, lookupArray, matchType)
     If Not IsError(r) Then RAS_Match = r
 End Function
+'@@ proc RAS_ShowForm
+' Shows a user form by name: "Run in Excel" of a form (Application.Run cannot reach a form's
+' code module, and VBA.UserForms is visible only to code in the project).
+Public Sub RAS_ShowForm(ByVal name As String)
+    VBA.UserForms.Add(name).Show
+End Sub
 '@@ class RAS_Error
 Public code As Long
 Public description As String

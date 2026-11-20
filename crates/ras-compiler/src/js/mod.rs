@@ -19,6 +19,7 @@ use crate::diag::{Diagnostic, Severity};
 use crate::model::*;
 
 const RUNTIME_JS: &str = include_str!("runtime.js");
+const FORMS_JS: &str = include_str!("forms.js");
 const MAIN_JS: &str = include_str!("main.js");
 
 #[derive(Debug, Clone)]
@@ -32,7 +33,8 @@ pub struct JsFile {
 pub struct JsOutput {
     pub files: Vec<JsFile>,
     pub diagnostics: Vec<Diagnostic>,
-    /// Functions that can be started from the debugger (`Module.proc`), macro entries first.
+    /// Functions that can be started from the debugger (`Module.proc`), macro entries first,
+    /// then the forms (`frmInput.show`).
     pub entries: Vec<String>,
 }
 
@@ -48,48 +50,68 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
     let mut module_files = Vec::new();
     let mut macros = Vec::new();
     let mut others = Vec::new();
+    let mut forms = Vec::new();
     for m in 0..prog.modules.len() {
         // Bundled library modules with code of their own (the struct map) run as RAS code too.
         let std_code = prog.modules[m].kind == ModuleKind::Std && !prog.modules[m].classes.is_empty();
         if prog.modules[m].kind != ModuleKind::User && !std_code {
             continue;
         }
-        // Form code-behinds need the form itself (MSForms): they do not run in the debug runtime.
-        if prog.modules[m].form.is_some() {
+        // A form's code-behind is skipped only when its design is missing (an error already).
+        if prog.modules[m].form.as_ref().is_some_and(|f| f.decl.is_none()) {
             continue;
         }
         let mut g = Gen::new(prog, m);
         g.emit_module();
         let md = &prog.modules[m];
-        let depth = md.key.matches('/').count();
+        let key = js_key(md);
+        let depth = key.matches('/').count();
         let up = "../".repeat(depth);
-        let file_name = format!("{}.js", md.key);
+        let file_name = format!("{key}.js");
         let base_name = file_name.rsplit('/').next().unwrap_or(&file_name).to_string();
         let source = format!("{up}{source_prefix}{}", md.rel_path);
         let (text, map) = finish(&g.assemble(&up), md, &base_name, &source);
         out.files.push(JsFile { rel_path: file_name.clone(), text: format!("{text}//# sourceMappingURL={base_name}.map\n") });
         out.files.push(JsFile { rel_path: format!("{file_name}.map"), text: map });
         module_files.push(file_name);
-        macros.extend(g.macros.iter().map(|n| format!("{}.{n}", md.vba_name)));
-        others.extend(g.entries.iter().filter(|n| !g.macros.contains(n)).map(|n| format!("{}.{n}", md.vba_name)));
+        if md.form.is_some() {
+            // A form is started by showing it (spec §14.10.7).
+            forms.push(format!("{}.show", md.vba_name));
+        } else {
+            macros.extend(g.macros.iter().map(|n| format!("{}.{n}", md.vba_name)));
+            others.extend(g.entries.iter().filter(|n| !g.macros.contains(n)).map(|n| format!("{}.{n}", md.vba_name)));
+        }
         out.diagnostics.append(&mut g.diags);
     }
     out.entries = macros;
     out.entries.extend(others);
+    out.entries.extend(forms);
     let list = module_files.iter().map(|f| format!("    {},\n", js_str(&format!("./{f}")))).collect::<String>();
+    let form_names: Vec<&str> = prog.modules.iter().filter(|m| m.form.as_ref().is_some_and(|f| f.decl.is_some())).map(|m| m.vba_name.as_str()).collect();
     let manifest = serde_json::json!({
         "project": prog.config.project.name,
         "workbook": prog.config.project.workbook,
         "entries": out.entries,
+        "forms": form_names,
     });
     let main = MAIN_JS.replace("/*@MODULES@*/", list.trim()).replace("/*@MANIFEST@*/", &manifest.to_string()).replace("/*@ROOT@*/", &js_str(if source_prefix.is_empty() { "." } else { source_prefix }));
     out.files.push(JsFile { rel_path: "ras-main.js".into(), text: main });
     out.files.push(JsFile { rel_path: "ras-runtime.js".into(), text: RUNTIME_JS.to_string() });
+    out.files.push(JsFile { rel_path: "ras-forms.js".into(), text: FORMS_JS.to_string() });
     out.files.push(JsFile { rel_path: "ras-debug.json".into(), text: format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap_or_default()) });
     if out.diagnostics.iter().any(|d| d.is_error()) {
         out.files.clear();
     }
     out
+}
+
+/// Path of a module's JavaScript file without `.js`: the import key, except for a form's
+/// code-behind (`@forms/frmInput`: its key `<forms>/frmInput` is not a valid file name).
+fn js_key(md: &ModuleData) -> String {
+    match md.key.strip_prefix(crate::collect::FORM_KEY_PREFIX) {
+        Some(name) => format!("@forms/{name}"),
+        None => md.key.clone(),
+    }
 }
 
 /// A JavaScript string literal (JSON strings are valid JavaScript).
@@ -360,7 +382,11 @@ impl<'p> Gen<'p> {
     pub(crate) fn global_ref(&mut self, v: VarId) -> String {
         let d = &self.prog.vars[v];
         if d.declared {
-            return if self.prog.modules[d.module].key == "vba.d" { format!("$rt.vba.{}", d.vba_name()) } else { format!("$rt.global({})", js_str(d.vba_name())) };
+            return match self.prog.modules[d.module].key.as_str() {
+                "vba.d" => format!("$rt.vba.{}", d.vba_name()),
+                "msforms.d" => format!("$rt.msforms.{}", d.vba_name()),
+                _ => format!("$rt.global({})", js_str(d.vba_name())),
+            };
         }
         self.module_member(d.module, &js_ident(&d.name))
     }
@@ -444,7 +470,13 @@ impl<'p> Gen<'p> {
                 inits.push(js_ident(&d.name));
             }
             for ev in &d.attrs.on_events {
-                events.push(format!("{{ target: {}, event: {}, fn: {} }}", js_str(&ev.target), js_str(&ev.event), js_ident(&d.name)));
+                match &md.form {
+                    Some(form) => events.push(self.form_handler(form, ev, f)),
+                    None => events.push(format!("{{ target: {}, event: {}, fn: {} }}", js_str(&ev.target), js_str(&ev.event), js_ident(&d.name))),
+                }
+            }
+            if md.form.is_some() {
+                continue;
             }
             if d.is_debug_entry() {
                 self.entries.push(d.name.clone());
@@ -452,6 +484,10 @@ impl<'p> Gen<'p> {
                     self.macros.push(d.name.clone());
                 }
             }
+        }
+        if md.form.is_some() {
+            self.register_form(events);
+            return;
         }
         // Registration with the run time.
         let init_fn = md.init_fn.map(|f| js_ident(&prog.fns[f].name));
@@ -480,6 +516,63 @@ impl<'p> Gen<'p> {
         self.w("});");
     }
 
+    /// The entry of `$rt.form` for an `@on` handler of a form (spec §14.11.2). The run time
+    /// passes every argument of the event as a `{ v }` cell; a handler that declares the
+    /// parameter `byref` gets the cell, the others its value.
+    fn form_handler(&self, form: &FormModule, ev: &OnEvent, f: FnId) -> String {
+        let d = &self.prog.fns[f];
+        let is_form = ev.target.eq_ignore_ascii_case("UserForm") || form.decl.as_ref().is_some_and(|x| x.name.eq_ignore_ascii_case(&ev.target));
+        let target = if is_form { "UserForm" } else { ev.target.as_str() };
+        let args: Vec<String> = d.params.iter().enumerate().map(|(i, p)| if p.mode == PassMode::ByRef { format!("$a[{i}]") } else { format!("$a[{i}].v") }).collect();
+        format!(
+            "{{ target: {}, event: {}, reentrant: {}, fn: ($a) => {}({}) }}",
+            js_str(target),
+            js_str(&ev.event),
+            ev.reentrant,
+            js_ident(&d.name),
+            args.join(", ")
+        )
+    }
+
+    /// Registration of a form's code-behind: the run time creates the form (its only, default
+    /// instance) and calls `load` with it, which sets `$me` and the module variables.
+    fn register_form(&mut self, events: Vec<String>) {
+        let prog = self.prog;
+        let md = &prog.modules[self.module];
+        self.w("let $me = null;");
+        self.w("function $load($form) {");
+        self.indent += 1;
+        self.w("$me = $form;");
+        for &v in &md.vars {
+            let d = &prog.vars[v];
+            if d.declared || d.const_value.is_some() {
+                continue;
+            }
+            let z = self.zero(&d.ty);
+            self.w(format!("{} = {z};", js_ident(&d.name)));
+        }
+        if let Some(f) = md.init_fn {
+            self.w(format!("{}();", js_ident(&prog.fns[f].name)));
+        }
+        self.indent -= 1;
+        self.w("}");
+        let members: Vec<String> = md
+            .fns
+            .iter()
+            .map(|&f| &prog.fns[f])
+            .filter(|d| d.exported && matches!(d.kind, FnKind::Free) && d.decl.as_ref().is_some_and(|x| x.body.is_some()))
+            .map(|d| format!("{}: {}", js_str(&d.name), js_ident(&d.name)))
+            .collect();
+        let dir = md.rel_path.rsplit_once('/').map(|(d, _)| format!("{d}/")).unwrap_or_default();
+        self.w(format!("$rt.form({}, {{", js_str(&md.vba_name)));
+        self.w(format!("    file: {},", js_str(&md.rel_path)));
+        self.w(format!("    spec: {},", js_str(&format!("{dir}{}.form.json", md.vba_name))));
+        self.w("    load: $load,");
+        self.w(format!("    members: {{ {} }},", members.join(", ")));
+        self.w(format!("    events: [{}],", events.join(", ")));
+        self.w("});");
+    }
+
     /// Puts the header (exports, imports) in front of the generated body.
     fn assemble(&mut self, up: &str) -> String {
         let prog = self.prog;
@@ -504,7 +597,7 @@ impl<'p> Gen<'p> {
             }
         }
         for (m, alias) in &self.imports {
-            let key = &prog.modules[*m].key;
+            let key = js_key(&prog.modules[*m]);
             head.push_str(&format!("const {alias} = require({});\n", js_str(&format!("./{up}{key}.js"))));
         }
         let mut body = std::mem::take(&mut self.bufs[0]);

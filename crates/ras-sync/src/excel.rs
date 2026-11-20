@@ -172,6 +172,23 @@ impl Book {
         Ok(())
     }
 
+    /// Shows the user form `name` (`RAS_Runtime.RAS_ShowForm`) with Excel in front; returns
+    /// when a modal form is closed, or at once for a modeless one.
+    pub fn show_form(&self, name: &str) -> Result<(), SyncError> {
+        self.activate();
+        let book = self.workbook.get("Name", &[])?.string();
+        let qualified = format!("'{}'!RAS_Runtime.RAS_ShowForm", book.replace('\'', "''"));
+        // A modal form keeps the call waiting for as long as it is open.
+        self.app.call_patiently("Run", &[Arg::Str(&qualified), Arg::Str(name)], RUN_WAIT_MS).map_err(|e| {
+            if e.is_busy() {
+                SyncError::from(e)
+            } else {
+                SyncError::Failed(format!("ユーザーフォーム `{name}` を表示できませんでした: {}", e.description))
+            }
+        })?;
+        Ok(())
+    }
+
     /// Shows Excel with the workbook in front. Windows may refuse to change the foreground window.
     pub fn activate(&self) {
         let _ = self.app.put("Visible", Arg::Bool(true));
