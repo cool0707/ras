@@ -2,6 +2,7 @@ import * as cp from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { hoverExpression } from "./debugHover";
 import { FormHost } from "./formRunner/host";
 import { findServerExecutable } from "./serverPath";
 
@@ -54,6 +55,16 @@ function channel(): vscode.OutputChannel {
 export function registerDebugging(context: vscode.ExtensionContext): vscode.Disposable {
 	return vscode.Disposable.from(
 		vscode.debug.registerDebugConfigurationProvider(DEBUG_TYPE, new RasDebugConfigurationProvider(context)),
+		vscode.languages.registerEvaluatableExpressionProvider("ras", {
+			provideEvaluatableExpression(document, position) {
+				const hover = hoverExpression(document.lineAt(position.line).text, position.character);
+				if (hover === undefined) {
+					return undefined;
+				}
+				const range = new vscode.Range(position.line, hover.start, position.line, hover.end);
+				return new vscode.EvaluatableExpression(range, hover.expression);
+			},
+		}),
 		vscode.debug.onDidTerminateDebugSession((session) => {
 			const id = session.configuration.__rasProcess as string | undefined;
 			const child = id === undefined ? undefined : running.get(id);

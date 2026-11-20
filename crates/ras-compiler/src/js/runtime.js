@@ -1496,6 +1496,36 @@ function form(name, definition) {
     forms().register(name, definition);
 }
 
+// ---------------------------------------------------------------------------- debugger hovers
+
+/**
+ * Reads `root.a.b` of the source as the program would, for the hovers of the debugger: the
+ * generated code reads members through `get`, so evaluating the source text as JavaScript would
+ * find nothing on a host object (`sheet.name` is `undefined` on a COM object). The VS Code
+ * extension rewrites a hovered member chain into a call of this (`$rasDebugRead`).
+ * `roots`: closures reading the candidate JS names of the root; `name`: the name in the source,
+ * read as a host global (`Sheet1`, `thisWorkbook`) when no local has it.
+ */
+function debugRead(roots, name, path) {
+    let v;
+    let found = false;
+    for (const root of roots) {
+        try {
+            v = root();
+            found = true;
+            break;
+        } catch (e) {
+            if (!(e instanceof ReferenceError)) throw e;
+            // A `let` / `const` whose declaration has not run yet.
+            if (!/is not defined/.test(e.message)) return undefined;
+        }
+    }
+    if (!found) v = global(String(name).charAt(0).toUpperCase() + String(name).slice(1));
+    for (const p of path) v = get(v, p);
+    return v;
+}
+Object.defineProperty(globalThis, "$rasDebugRead", { value: debugRead, configurable: true });
+
 process.on("exit", resetAppState);
 
 module.exports = {
