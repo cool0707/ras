@@ -11,6 +11,9 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 path = "src/lib.rs"
+# No unit tests: the addon only runs inside Node (tests/excel.rs runs it there).
+test = false
+doctest = false
 
 [dependencies]
 ras-workbook = { path = "../ras-workbook" }

@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use ras_workbook::RangeRef;
 use ras_workbook::book::{Book, Read, Val};
@@ -18,20 +19,40 @@ fn has_node() -> bool {
     found
 }
 
-/// This crate's addon, as Node loads it (a `.node` file).
+/// This crate's addon, built once for the test run. `cargo test` does not build the cdylib of a
+/// package whose integration tests cannot link it, so the test builds it with Cargo, into the
+/// same target directory and profile as itself.
+fn built_addon() -> &'static Path {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT.get_or_init(|| {
+        let exe = std::env::current_exe().unwrap();
+        // <target>/<profile>/deps/excel-<hash>
+        let profile_dir = exe.parent().and_then(Path::parent).expect("the test runs from <target>/<profile>/deps");
+        let target_dir = profile_dir.parent().expect("the profile directory is in the target directory");
+        let mut cmd = Command::new(env!("CARGO"));
+        cmd.args(["build", "-p", "ras-book", "--target-dir"]).arg(target_dir).current_dir(env!("CARGO_MANIFEST_DIR"));
+        if profile_dir.file_name().is_some_and(|n| n == "release") {
+            cmd.arg("--release");
+        }
+        let out = cmd.output().expect("cargo");
+        assert!(out.status.success(), "cargo build -p ras-book failed:\n{}", String::from_utf8_lossy(&out.stderr));
+        let name = if cfg!(windows) {
+            "ras_book.dll"
+        } else if cfg!(target_os = "macos") {
+            "libras_book.dylib"
+        } else {
+            "libras_book.so"
+        };
+        let lib = profile_dir.join(name);
+        assert!(lib.exists(), "{} was not built", lib.display());
+        lib
+    })
+}
+
+/// The addon as Node loads it (a `.node` file), in the project directory.
 fn addon(dir: &Path) -> PathBuf {
-    let exe = std::env::current_exe().unwrap();
-    let deps = exe.parent().unwrap();
-    let name = if cfg!(windows) {
-        "ras_book.dll"
-    } else if cfg!(target_os = "macos") {
-        "libras_book.dylib"
-    } else {
-        "libras_book.so"
-    };
-    let lib = [deps.join(name), deps.parent().unwrap().join(name)].into_iter().find(|p| p.exists()).unwrap_or_else(|| panic!("{name} was not built next to {}", exe.display()));
     let target = dir.join("ras_book.node");
-    std::fs::copy(lib, &target).unwrap();
+    std::fs::copy(built_addon(), &target).unwrap();
     target
 }
 
