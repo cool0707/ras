@@ -35,7 +35,8 @@
     "onDebugResolve:ras",
     "onDebugInitialConfigurations",
     "onCustomEditor:ras.userFormDesigner",
-    "onCommand:ras.userForm.new"
+    "onCommand:ras.userForm.new",
+    "onCommand:ras.module.new"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -192,10 +193,16 @@
         "icon": "$(debug-alt)"
       },
       {
+        "command": "ras.module.new",
+        "title": "新しい標準モジュール",
+        "category": "RAS",
+        "icon": "$(file-code)"
+      },
+      {
         "command": "ras.userForm.new",
         "title": "新しいユーザーフォーム",
         "category": "RAS",
-        "icon": "$(add)"
+        "icon": "$(window)"
       },
       {
         "command": "ras.userForm.openDesigner",
@@ -266,9 +273,26 @@
           "group": "navigation@20"
         },
         {
-          "command": "ras.userForm.new",
+          "command": "ras.module.new",
           "when": "explorerResourceIsFolder",
           "group": "navigation@21"
+        },
+        {
+          "command": "ras.userForm.new",
+          "when": "explorerResourceIsFolder",
+          "group": "navigation@22"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "ras.module.new",
+          "when": "view == workbench.explorer.fileView && ras.projectOpen",
+          "group": "navigation@-2"
+        },
+        {
+          "command": "ras.userForm.new",
+          "when": "view == workbench.explorer.fileView && ras.projectOpen",
+          "group": "navigation@-1"
         }
       ]
     },

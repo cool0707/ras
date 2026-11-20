@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { registerCommands } from "./commands";
 import { registerDebugging } from "./debug";
 import { GeneratedVbaView } from "./generatedVba";
+import { registerModuleCommands } from "./newModule";
 import { RasServer } from "./server";
 import { SyncStatusBar } from "./statusBar";
 import { registerUserFormCommands } from "./userForm/commands";
@@ -33,6 +34,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		registerDebugging(context),
 		UserFormDesignerProvider.register(context),
 		registerUserFormCommands(),
+		registerModuleCommands(),
+		trackProjectContext(),
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (event.affectsConfiguration("ras.path") || event.affectsConfiguration("ras.server.extraArgs")) {
 				void rasServer.restart();
@@ -42,6 +45,23 @@ export function activate(context: vscode.ExtensionContext): void {
 	);
 
 	void rasServer.start();
+}
+
+/** Keeps the `ras.projectOpen` context key (a ras.toml in the workspace) current for the Explorer's buttons. */
+function trackProjectContext(): vscode.Disposable {
+	const update = async () => {
+		const found = await vscode.workspace.findFiles("**/ras.toml", "**/node_modules/**", 1);
+		await vscode.commands.executeCommand("setContext", "ras.projectOpen", found.length > 0);
+	};
+	const watcher = vscode.workspace.createFileSystemWatcher("**/ras.toml", false, true, false);
+	const refresh = () => void update();
+	void update();
+	return vscode.Disposable.from(
+		watcher,
+		watcher.onDidCreate(refresh),
+		watcher.onDidDelete(refresh),
+		vscode.workspace.onDidChangeWorkspaceFolders(refresh),
+	);
 }
 
 export async function deactivate(): Promise<void> {
