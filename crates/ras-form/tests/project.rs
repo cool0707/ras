@@ -449,3 +449,33 @@ fn the_frx_layout_is_the_one_excel_writes() {
     assert_eq!(new_streams, expected);
     assert!(files.frm.contains("   OleObjectBlob   =   \"MazeChaseForm.frx\":0000\r\n"));
 }
+
+/// What `VBComponent.Export` writes reads back as the same form: the forms of
+/// projects saved by Excel, written as `.frm` / `.frx` and read again, have the
+/// same designer streams and nested storages and give the same FormSpec.
+#[test]
+fn an_exported_form_reads_back() {
+    for file in ["generation.bin", "frame.bin", "multipage.bin", "pictures.bin", "typed.bin"] {
+        let bin = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(file)).unwrap();
+        for form in ras_ovba::read_user_forms(&bin).unwrap() {
+            let files = ras_ovba::export_user_form(&form, 932).unwrap();
+            let back = ras_ovba::import_user_form(&files.frm, &files.frx, 932).unwrap();
+            assert_eq!(back.name, form.name);
+            assert_eq!(back.code, form.code, "{file} {}", form.name);
+            // The root storage: Excel stores it with or without the form's CLSID; the `.frx` has it.
+            let nested = |s: &BTreeMap<String, [u8; 16]>| s.iter().filter(|(p, _)| !p.is_empty()).map(|(p, c)| (p.clone(), *c)).collect::<Vec<_>>();
+            assert_eq!(nested(&back.storages), nested(&form.storages), "{file} {}", form.name);
+            assert!(back.storages.contains_key(""));
+            for (path, data) in &form.streams {
+                if path != "\u{1}CompObj" && path != "\u{3}VBFrame" {
+                    assert_eq!(back.streams.get(path), Some(data), "{file} {} {path:?}", form.name);
+                }
+            }
+            let original = ras_form::snapshot(&form.name, &form.streams, &form.storages, 932).unwrap();
+            let read = ras_form::snapshot(&back.name, &back.streams, &back.storages, 932).unwrap();
+            assert_eq!(read.spec.to_json(), original.spec.to_json(), "{file} {}", form.name);
+        }
+    }
+    // Not an exported form.
+    assert!(ras_ovba::import_user_form("Attribute VB_Name = \"X\"\r\n", b"", 932).is_err());
+}

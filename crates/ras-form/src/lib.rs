@@ -17,7 +17,9 @@
 //!   ([`snapshot`]), and
 //! * handles the files of a project ([`workspace`]) and the code module of a
 //!   generated form ([`codebehind`]), including the code that fills
-//!   ComboBox / ListBox lists.
+//!   ComboBox / ListBox lists, and
+//! * takes over the hand-written VBA of a workbook when it is synced
+//!   ([`import`]: forms, standard modules and the code of sheets).
 //!
 //! The specification model, validation, generation, reading and projection
 //! are a port of xlflow's `internal/vba/userforms` packages (Copyright (c)
@@ -30,6 +32,7 @@
 pub mod codebehind;
 mod compile;
 pub mod contract;
+pub mod import;
 mod oforms;
 pub mod picture;
 mod reader;

@@ -371,6 +371,30 @@ pub fn procedure_names(code: &str) -> Vec<String> {
     names
 }
 
+/// The source of a document module without its hand-written code: the
+/// `Attribute` header, the `Option` statements and the RAS-managed region
+/// are kept, everything else goes. Used when the hand-written code was
+/// taken over into the project (converted to RAS).
+pub fn strip_hand_written(source: &str) -> String {
+    let nl = newline_style(source);
+    let lines = split_lines(source);
+    let region = find_region(&lines);
+    let mut out = String::with_capacity(source.len());
+    for (i, line) in lines.iter().enumerate() {
+        let in_region = match region {
+            Some((begin, Some(end))) => i >= begin && i <= end,
+            Some((begin, None)) => i >= begin,
+            None => false,
+        };
+        let trimmed = line.trim_start().to_ascii_lowercase();
+        if in_region || line.starts_with("Attribute ") || line.starts_with("VERSION ") || trimmed.starts_with("option ") {
+            out.push_str(line);
+            out.push_str(nl);
+        }
+    }
+    out
+}
+
 /// Returns the code inside the RAS-managed region (without the marker
 /// lines and without a trailing line terminator), or `None` when the source
 /// has no complete region.
@@ -386,6 +410,16 @@ pub fn extract_managed_region(source: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hand_written_code_is_stripped() {
+        let source = "Attribute VB_Name = \"Sheet1\"\r\nOption Explicit\r\nPrivate Sub Worksheet_Change(ByVal Target As Range)\r\nEnd Sub\r\n'--- RAS BEGIN ---\r\nPrivate Sub Worksheet_Activate()\r\nEnd Sub\r\n'--- RAS END ---\r\nSub Tail()\r\nEnd Sub\r\n";
+        assert_eq!(
+            strip_hand_written(source),
+            "Attribute VB_Name = \"Sheet1\"\r\nOption Explicit\r\n'--- RAS BEGIN ---\r\nPrivate Sub Worksheet_Activate()\r\nEnd Sub\r\n'--- RAS END ---\r\n"
+        );
+        assert_eq!(strip_hand_written("Sub A()\nEnd Sub\n"), "");
+    }
 
     #[test]
     fn procedures_are_found() {

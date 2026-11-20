@@ -318,6 +318,20 @@ pub fn pull(
     codepage: u16,
     force: bool,
 ) -> Result<PullOutcome, String> {
+    pull_with(root, form, codepage, force, &[], None)
+}
+
+/// [`pull`] for the sync's take-over of a workbook (spec §14.7.1): names of
+/// the other converted modules (`peers`) are imported from them, and the
+/// code-behind starts with `header` (lines, the import marker).
+pub fn pull_with(
+    root: &Path,
+    form: &UserForm,
+    codepage: u16,
+    force: bool,
+    peers: &[ras_compiler::vba2ras::Peer],
+    header: Option<&str>,
+) -> Result<PullOutcome, String> {
     let name = &form.name;
     if name.is_empty() || name.contains(['/', '\\', ':', '\0']) || name.starts_with('.') {
         return Err(format!("フォーム名 {name:?} はファイル名に使えません"));
@@ -415,11 +429,18 @@ pub fn pull(
     // A form written from `forms/` was compiled from the `.ras` file: that file is the source
     // of its code, the VBA in the workbook only what it compiled to.
     let keep_code = ras_ovba::is_generated_form(&form.code) && code_path.exists();
-    let converted = if keep_code {
+    let mut converted = if keep_code {
         ras_compiler::vba2ras::Converted::default()
     } else {
-        ras_compiler::vba2ras::convert_form(&codebehind::code_behind(&form.code), &decl)
+        ras_compiler::vba2ras::convert(&codebehind::code_behind(&form.code), &ras_compiler::vba2ras::Target::Form(&decl), peers)
     };
+    if let Some(header) = header.filter(|_| !keep_code) {
+        let shift = header.lines().count();
+        converted.text = format!("{header}{}", converted.text);
+        for todo in &mut converted.todos {
+            todo.0 += shift;
+        }
+    }
 
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     std::fs::write(&spec_path, spec.to_json())

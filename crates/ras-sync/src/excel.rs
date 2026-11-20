@@ -5,7 +5,7 @@ use std::path::Path;
 
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Globalization::{WideCharToMultiByte, CP_ACP};
+use windows::Win32::Globalization::{MultiByteToWideChar, WideCharToMultiByte, CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
 use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, CreateBindCtx, GetRunningObjectTable, IDispatch, IMoniker};
 use windows::Win32::System::Ole::GetActiveObject;
 use windows::Win32::UI::Shell::ShellExecuteW;
@@ -153,6 +153,11 @@ impl Book {
         Ok(Project { components: project.object("VBComponents", &[])?, app: self.app.clone(), book })
     }
 
+    /// The code name of the workbook (`ThisWorkbook`).
+    pub fn code_name(&self) -> Result<String, SyncError> {
+        Ok(self.workbook.get("CodeName", &[])?.string())
+    }
+
     /// `Application.Run` with the workbook-qualified name (spec §14.5); returns when the macro ends.
     pub fn run(&self, name: &str) -> Result<(), SyncError> {
         let book = self.workbook.get("Name", &[])?.string();
@@ -228,6 +233,46 @@ fn to_ansi(text: &str) -> Vec<u8> {
         let written = WideCharToMultiByte(CP_ACP, 0, &units, Some(&mut out), windows::core::PCSTR::null(), None);
         out.truncate(written.max(0) as usize);
         out
+    }
+}
+
+/// Text in the ANSI code page of this Windows (what `VBComponent.Export` writes), decoded.
+fn from_ansi(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    unsafe {
+        let len = MultiByteToWideChar(CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, None);
+        let mut out = vec![0u16; len.max(0) as usize];
+        let written = MultiByteToWideChar(CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, Some(&mut out));
+        out.truncate(written.max(0) as usize);
+        String::from_utf16_lossy(&out)
+    }
+}
+
+impl Project {
+    /// The user form `name` as `VBComponent.Export` writes it (`.frm` / `.frx`), read back with
+    /// its designer storage. `codepage` is the code page its designer properties are stored in.
+    pub fn export_form(&mut self, name: &str, codepage: u16) -> Result<ras_ovba::UserForm, SyncError> {
+        let dir = std::env::temp_dir().join(format!("ras-sync-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| SyncError::Failed(format!("{}: {e}", dir.display())))?;
+        let frm = dir.join(format!("{name}.frm"));
+        let result = (|| {
+            self.component(name)?.call("Export", &[Arg::Str(&frm.to_string_lossy())]).map_err(|e| {
+                if e.is_busy() {
+                    SyncError::from(e)
+                } else {
+                    SyncError::Failed(format!("ユーザーフォーム `{name}` を書き出せませんでした: {}", e.description))
+                }
+            })?;
+            let text = std::fs::read(&frm).map_err(|e| SyncError::Failed(format!("{}: {e}", frm.display())))?;
+            let frx_path = frm.with_extension("frx");
+            let frx = std::fs::read(&frx_path).map_err(|e| SyncError::Failed(format!("{}: {e}", frx_path.display())))?;
+            ras_ovba::import_user_form(&from_ansi(&text), &frx, codepage).map_err(|e| SyncError::Failed(format!("ユーザーフォーム `{name}` を読み取れませんでした: {e}")))
+        })();
+        let _ = std::fs::remove_dir_all(&dir);
+        result
     }
 }
 
@@ -385,6 +430,9 @@ mod tests {
         assert!(!same_path("C:\\Work\\Book.xlsm", "C:\\Work\\Other.xlsm"));
         assert_eq!(to_ansi("Sub A()\r\n"), b"Sub A()\r\n");
         assert!(to_ansi("").is_empty());
+        assert_eq!(from_ansi(b"Sub A()\r\n"), "Sub A()\r\n");
+        assert_eq!(from_ansi(&to_ansi("Caption = \"x\"")), "Caption = \"x\"");
+        assert!(from_ansi(b"").is_empty());
     }
 
     /// No Excel on the build machines: looking for a workbook must simply find none.

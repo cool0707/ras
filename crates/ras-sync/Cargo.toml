@@ -10,6 +10,8 @@ description = "Live sync of generated VBA into a workbook that is open in Excel 
 [dependencies]
 ras-compiler.workspace = true
 ras-ovba.workspace = true
+# Taking over the hand-written VBA of the workbook into the project (spec §14.7.1).
+ras-form.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
