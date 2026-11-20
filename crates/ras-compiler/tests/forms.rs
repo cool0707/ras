@@ -308,3 +308,98 @@ function changed() {
     let (diags, _) = compile(&converted.text, &[]);
     assert!(diags.is_empty(), "{diags:?}");
 }
+
+#[test]
+fn editor_completes_controls_and_form_members() {
+    let labels = |line: &str| -> Vec<String> {
+        let mut config = Config::default();
+        config.forms = vec![FormDecl { name: "frmInput".into(), controls: vec![control("txtName", "TextBox")] }];
+        let text = format!("@on(\"UserForm.Initialize\")\nfunction init() {{\n    {line}\n}}\n");
+        let prog = analyze(vec![form_source(PathBuf::from("forms/frmInput.ras"), "frmInput", text.clone())], config);
+        let m = prog.modules.iter().position(|m| m.form.is_some()).unwrap();
+        let offset = text.find(line).unwrap() + line.len();
+        ras_compiler::query::completions(&prog, m, offset as u32).into_iter().map(|c| c.label).collect()
+    };
+    let this = labels("this.");
+    for want in ["txtName", "caption", "hide", "controls"] {
+        assert!(this.contains(&want.to_string()), "{want} missing: {this:?}");
+    }
+    let ctl = labels("this.txtName.");
+    for want in ["text", "setFocus", "visible"] {
+        assert!(ctl.contains(&want.to_string()), "{want} missing: {ctl:?}");
+    }
+}
+
+const COMMON_VBA: &str = r#"Option Explicit
+
+Private Sub UserForm_Activate()
+    Dim ws As Worksheet
+    Dim r As Long, lastRow As Long
+    Set ws = ThisWorkbook.Worksheets("Data")
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    lstItems.Clear
+    For r = 2 To lastRow
+        If ws.Cells(r, 1).Value <> "" Then lstItems.AddItem ws.Cells(r, 1).Value
+    Next r
+    lblCount.Caption = lstItems.ListCount & " 件"
+End Sub
+
+Private Sub lstItems_DblClick(ByVal Cancel As MSForms.ReturnBoolean)
+    Dim i As Long, picked As String
+    For i = 0 To lstItems.ListCount - 1
+        If lstItems.Selected(i) Then
+            picked = picked & lstItems.List(i) & vbCrLf
+        End If
+    Next
+    If Len(picked) > 0 Then MsgBox picked, vbInformation, "選択"
+    Cancel = True
+End Sub
+
+Private Sub txtQty_KeyPress(ByVal KeyAscii As MSForms.ReturnInteger)
+    Select Case KeyAscii
+        Case Asc("0") To Asc("9")
+        Case Else
+            KeyAscii = 0
+    End Select
+End Sub
+
+Private Sub chkAll_Click()
+    Dim i As Long
+    For i = 0 To lstItems.ListCount - 1
+        lstItems.Selected(i) = chkAll.Value
+    Next i
+End Sub
+
+Private Sub btnClose_Click()
+    Me.Hide
+End Sub
+
+Private Function Clamp(ByVal v As Double, Optional ByVal lo As Double = 0, Optional ByVal hi As Double = 100) As Double
+    If v < lo Then
+        Clamp = lo
+    ElseIf v > hi Then
+        Clamp = hi
+    Else
+        Clamp = v
+    End If
+End Function
+"#;
+
+#[test]
+fn common_form_code_converts() {
+    let decl = FormDecl {
+        name: "frmList".into(),
+        controls: vec![control("lstItems", "ListBox"), control("lblCount", "Label"), control("txtQty", "TextBox"), control("chkAll", "CheckBox"), control("btnClose", "CommandButton")],
+    };
+    let converted = ras_compiler::vba2ras::convert_form(COMMON_VBA, &decl);
+    println!("{}", converted.text);
+    println!("{:?}", converted.todos);
+    let mut config = Config::default();
+    config.forms = vec![decl];
+    let prog = analyze(vec![form_source(PathBuf::from("forms/frmList.ras"), "frmList", converted.text.clone())], config);
+    let errors: Vec<String> = prog.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{}:{}: {}", d.code, prog.modules[d.module.unwrap()].line_col_utf16(d.span.start().into()).0 + 1, d.message)).collect();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(converted.text.contains("if (KeyAscii.value >= asc(\"0\") && KeyAscii.value <= asc(\"9\")) {"), "{}", converted.text);
+    assert_eq!(converted.todos.len(), 1, "{:?}", converted.todos);
+    assert!(converted.todos[0].1.contains("引数を取るプロパティ"));
+}

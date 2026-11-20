@@ -2316,7 +2316,7 @@ impl<'a> Emitter<'a> {
 
     fn select(&mut self, s: &Stmt, subject: &Expr, cases: &[(Vec<CaseItem>, Vec<Stmt>)], els: Option<&[Stmt]>) {
         let tail = self.trailing(s);
-        let subj = match self.expr(subject) {
+        let subj = match self.value_expr(subject) {
             Ok(x) => x,
             Err(reason) => {
                 self.todo(s.line, s.line, &reason);
@@ -2405,6 +2405,10 @@ impl<'a> Emitter<'a> {
                 let (v, _) = self.expr(value)?;
                 return Ok(format!("{result} = {v}"));
             }
+        }
+        // `lst.Selected(i) = True`: RAS cannot assign to a property that takes arguments.
+        if matches!(target, Expr::Call(callee, _) if matches!(**callee, Expr::Member(..))) {
+            return Err("引数を取るプロパティへの代入には対応していません（メソッドがあればそれを使ってください）".into());
         }
         let t = self.lvalue(target)?;
         // VBA's True is -1 when it is stored in a number (`Cancel = True` in QueryClose).
