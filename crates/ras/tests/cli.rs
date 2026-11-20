@@ -221,7 +221,10 @@ fn forms_are_created_checked_and_packed() {
     let spec: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&spec_path).unwrap()).unwrap();
     assert_eq!(spec["kind"], "ras.userform");
     assert_eq!(spec["form"]["width"], 240.0);
-    assert_eq!(std::fs::read_to_string(dir.join("forms/frmInput.bas")).unwrap(), "");
+    // The code-behind is RAS: a new one only holds comments.
+    let template = std::fs::read_to_string(dir.join("forms/frmInput.ras")).unwrap();
+    assert!(template.lines().all(|l| l.starts_with("//")), "{template}");
+    assert!(!dir.join("forms/frmInput.bas").exists());
     let (ok, out) = ras(&dir, &["form", "new", "frmInput"]);
     assert!(!ok && out.contains("既に存在します"), "{out}");
     let (ok, out) = ras(&dir, &["form", "new", "1bad"]);
@@ -245,8 +248,16 @@ fn forms_are_created_checked_and_packed() {
         { "id": "ok", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 12, "top": 40 }
     ]);
     std::fs::write(&spec_path, serde_json::to_string_pretty(&good).unwrap()).unwrap();
-    std::fs::write(dir.join("forms/frmInput.bas"), "Private Sub btnOK_Click()\n    Unload Me\nEnd Sub\n").unwrap();
+    // Errors in the code-behind are compile errors of the project.
+    std::fs::write(dir.join("forms/frmInput.ras"), "@on(\"btnOK.Click\")\nfunction ok() {\n    this.txtNone.text = \"\";\n}\n").unwrap();
     let (ok, out) = ras(&dir, &["form", "check"]);
+    assert!(!ok && out.contains("forms/frmInput.ras:3:"), "{out}");
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(!ok && out.contains("forms/frmInput.ras:3:"), "{out}");
+    std::fs::write(dir.join("forms/frmInput.ras"), "@on(\"btnOK.Click\")\nfunction ok() {\n    unload(this);\n}\n").unwrap();
+    let (ok, out) = ras(&dir, &["form", "check"]);
+    assert!(ok, "{out}");
+    let (ok, out) = ras(&dir, &["check"]);
     assert!(ok, "{out}");
     let (ok, out) = ras(&dir, &["pack"]);
     assert!(ok, "{out}");
@@ -259,7 +270,9 @@ fn forms_are_created_checked_and_packed() {
     assert_eq!(form.kind, ras_ovba::ModuleKind::Form);
     let code: Vec<&str> = form.source.split("\r\n").skip_while(|l| l.starts_with("Attribute ")).collect();
     assert!(code[0].starts_with("' RAS-FORM forms/frmInput.form.json design=") && code[0].contains(" code="), "{}", form.source);
-    assert_eq!(code[1], "Private Sub btnOK_Click()", "{}", form.source);
+    assert!(form.source.contains("Private Sub btnOK_Click()\r\n"), "{}", form.source);
+    assert!(form.source.contains("Unload Me\r\n"), "{}", form.source);
+    assert!(!dir.join("build/frmInput.frmcode").exists(), "forms are not build products");
 
     // Changing the design updates the form; unpack leaves generated forms alone.
     good["form"]["width"] = 300.into();
@@ -331,8 +344,8 @@ fn form_pictures_lists_and_pull() {
     });
     let spec_path = dir.join("forms/frmOrder.form.json");
     std::fs::write(&spec_path, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
-    let hand = "Option Explicit\n\nPrivate Sub UserForm_Initialize()\n    Me.txtNote.Text = \"\"\nEnd Sub\n";
-    std::fs::write(dir.join("forms/frmOrder.bas"), hand).unwrap();
+    let hand = "@on(\"UserForm.Initialize\")\nfunction init() {\n    this.txtNote.text = \"\";\n}\n";
+    std::fs::write(dir.join("forms/frmOrder.ras"), hand).unwrap();
     let (ok, out) = ras(&dir, &["pack"]);
     assert!(ok, "{out}");
     assert!(!out.contains("UFV013"), "list and tag are supported fields: {out}");
@@ -344,7 +357,8 @@ fn form_pictures_lists_and_pull() {
     let bmp = tiny_bmp();
     assert!(form.streams["o"].windows(bmp.len()).any(|w| w == bmp.as_slice()), "picture not stored");
     assert!(form.code.contains("Private Sub RAS_FormInit()\n    With Me.cboKind\n        .AddItem \"通常\"\n        .AddItem \"お急ぎ\"\n        .ListIndex = 0\n    End With\n"), "{}", form.code);
-    assert!(form.code.contains("Private Sub UserForm_Initialize()\n    RAS_FormInit '--- RAS ---\n    Me.txtNote.Text = \"\"\n"), "{}", form.code);
+    assert!(form.code.contains("Private Sub UserForm_Initialize()\n    RAS_FormInit '--- RAS ---\n"), "{}", form.code);
+    assert!(form.code.contains("Me.txtNote.Text = \"\""), "{}", form.code);
 
     // A selection has to name an item; a broken picture is an error that points into the file.
     let mut bad = spec.clone();
@@ -366,7 +380,10 @@ fn form_pictures_lists_and_pull() {
     let book_arg = book.to_string_lossy().to_string();
     let (ok, out) = ras(&other, &["form", "pull", "--book", &book_arg]);
     assert!(ok && out.contains("frmOrder") && out.contains("1 個を forms/ に取り出しました"), "{out}");
-    assert_eq!(std::fs::read_to_string(other.join("forms/frmOrder.bas")).unwrap(), hand);
+    // The code comes back as RAS: the generated event procedure becomes the handler again.
+    let pulled_code = std::fs::read_to_string(other.join("forms/frmOrder.ras")).unwrap();
+    assert!(pulled_code.contains("@on(\"UserForm.Initialize\")\nfunction init() {\n    this.txtNote.text = \"\";\n}\n"), "{pulled_code}");
+    assert!(!other.join("forms/frmOrder.bas").exists());
     assert_eq!(std::fs::read(other.join("forms/assets/frmOrder.imgLogo.bmp")).unwrap(), bmp);
     let pulled: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(other.join("forms/frmOrder.form.json")).unwrap()).unwrap();
     assert_eq!(pulled["form"]["caption"], "注文");
@@ -391,7 +408,9 @@ fn form_pictures_lists_and_pull() {
     assert_eq!(again["controls"][1]["list"], serde_json::json!(["通常", "お急ぎ"]));
     assert_eq!(again["controls"][1]["selectedIndex"], 0);
     assert_eq!(again["controls"][0]["picture"]["path"], "forms/assets/logo.bmp");
-    assert_eq!(std::fs::read_to_string(dir.join("forms/frmOrder.bas")).unwrap(), hand);
+    // The code-behind the form was compiled from stays as it is.
+    assert!(out.contains("既存の forms/frmOrder.ras"), "{out}");
+    assert_eq!(std::fs::read_to_string(dir.join("forms/frmOrder.ras")).unwrap(), hand);
     let (ok, out) = ras(&dir, &["pack"]);
     assert!(ok && out.contains("作成 0 / 更新 0 / 削除 0"), "pulling a generated form back changes nothing: {out}");
 

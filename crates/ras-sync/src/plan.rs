@@ -40,6 +40,10 @@ pub trait VbProject {
     fn import_form(&mut self, name: &str, files: &ras_ovba::FormFiles) -> Result<(), SyncError>;
     /// Gives a component another name.
     fn rename(&mut self, name: &str, new_name: &str) -> Result<(), SyncError>;
+    /// Makes the forms `names` ready to be renamed or rewritten: closes their designer windows
+    /// and unloads their loaded instances (a form hidden with `Hide`, a modeless form). The VBE
+    /// refuses to rename a loaded form.
+    fn unload_forms(&mut self, names: &[String]) -> Result<(), SyncError>;
     fn remove(&mut self, name: &str) -> Result<(), SyncError>;
 }
 
@@ -98,6 +102,7 @@ fn kind_of(k: &VModuleKind) -> Kind {
         VModuleKind::Standard => Kind::Standard,
         VModuleKind::Class => Kind::Class,
         VModuleKind::Document => Kind::Document,
+        VModuleKind::Form => Kind::Form,
     }
 }
 
@@ -179,6 +184,9 @@ fn undo(project: &mut dyn VbProject, journal: Vec<Undo>) -> Vec<String> {
 /// code records a hash of the design); otherwise only its code is rewritten. A form made in the
 /// VBE is replaced only with `overwrite`.
 pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, opts: &SyncOptions) -> Result<Report, SyncError> {
+    // The code of a form (`forms/<Name>.ras`) travels with its designer (`forms`), not as a module of its own.
+    let files: Vec<OutputFile> = files.iter().filter(|f| f.kind != VModuleKind::Form).cloned().collect();
+    let files = &files[..];
     let existing = project.components()?;
     let find = |name: &str| existing.iter().find(|c| same_name(&c.name, name));
     let mut report = Report::default();
@@ -293,6 +301,22 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, op
         }
     }
 
+    // Forms that are replaced or whose code is rewritten must not be loaded.
+    let mut busy_forms: Vec<String> = Vec::new();
+    for op in &ops {
+        let name = match op {
+            Op::ReplaceForm { old, .. } => old,
+            Op::Write { name, .. } if find(name).is_some_and(|c| c.kind == Kind::Form) => name,
+            _ => continue,
+        };
+        if !busy_forms.iter().any(|n| same_name(n, name)) {
+            busy_forms.push(name.clone());
+        }
+    }
+    if !busy_forms.is_empty() {
+        project.unload_forms(&busy_forms)?;
+    }
+
     let export = |form: &ras_ovba::UserForm| ras_ovba::export_user_form(form, forms.codepage).map_err(|e| SyncError::Failed(format!("ユーザーフォーム `{}` を書き出せません: {e}", form.name)));
     let mut journal: Vec<Undo> = Vec::new();
     // Old forms that were set aside; they go once everything else worked.
@@ -372,6 +396,10 @@ mod tests {
         imported_forms: Vec<(String, usize)>,
         /// `import_form` fails for this form.
         fail_import: Option<String>,
+        /// Forms that were unloaded before they were written.
+        unloaded: Vec<String>,
+        /// `unload_forms` fails (a form refused to close).
+        fail_unload: bool,
     }
 
     impl Fake {
@@ -422,6 +450,14 @@ mod tests {
             let code = files.frm.split("\r\n").skip_while(|l| !l.starts_with("Attribute VB_Exposed")).skip(1).collect::<Vec<_>>().join("\r\n");
             self.components.push(Component { name: name.to_string(), kind: Kind::Form, code });
             self.imported_forms.push((name.to_string(), files.frx.len()));
+            Ok(())
+        }
+
+        fn unload_forms(&mut self, names: &[String]) -> Result<(), SyncError> {
+            if self.fail_unload {
+                return Err(SyncError::Failed("閉じられません".into()));
+            }
+            self.unloaded.extend(names.iter().cloned());
             Ok(())
         }
 
@@ -636,6 +672,7 @@ mod tests {
         let report = apply(&mut book, &[], with_forms(&code_only), &SyncOptions::default()).unwrap();
         assert_eq!(report.updated, ["frmInput"]);
         assert_eq!(book.imported_forms.len(), 1, "no import for a code change");
+        assert_eq!(book.unloaded, ["frmInput"], "a loaded form is closed before its code is written");
         assert!(book.code("frmInput").unwrap().contains("Beep"));
 
         // The design changed: the form is imported again and the old one is gone.
@@ -645,6 +682,15 @@ mod tests {
         assert_eq!(book.imported_forms.len(), 2);
         assert!(book.code("frmInput").unwrap().contains("design=d2 "));
         assert_eq!(book.components.iter().filter(|c| c.kind == Kind::Form).count(), 1, "{:?}", book.components);
+        assert_eq!(book.unloaded, ["frmInput", "frmInput"], "a loaded form is closed before it is replaced");
+
+        // A form that cannot be closed is not touched.
+        let again = [form("frmInput", "d3", "")];
+        book.fail_unload = true;
+        let before = book.code("frmInput").unwrap().to_string();
+        assert!(apply(&mut book, &[], with_forms(&again), &SyncOptions::default()).is_err());
+        assert_eq!(book.code("frmInput").unwrap(), before);
+        book.fail_unload = false;
 
         // A form that is no longer in forms/ stays in the workbook.
         let report = apply(&mut book, &[], Forms::NONE, &SyncOptions::default()).unwrap();

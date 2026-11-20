@@ -54,11 +54,24 @@ async function newUserForm(resource?: vscode.Uri): Promise<void> {
 	if (!name) return;
 	const formName = name.trim();
 	const spec = vscode.Uri.file(path.join(formsDir, `${formName}${FORM_SUFFIX}`));
-	const code = vscode.Uri.file(path.join(formsDir, `${formName}.bas`));
+	const code = vscode.Uri.file(path.join(formsDir, `${formName}.ras`));
 	await vscode.workspace.fs.createDirectory(vscode.Uri.file(formsDir));
-	await vscode.workspace.fs.writeFile(spec,Buffer.from(formatJson(newFormSpec(formName)), "utf8"));
-	if (!fs.existsSync(code.fsPath)) await vscode.workspace.fs.writeFile(code, new Uint8Array());
+	await vscode.workspace.fs.writeFile(spec, Buffer.from(formatJson(newFormSpec(formName)), "utf8"));
+	if (!fs.existsSync(code.fsPath)) await vscode.workspace.fs.writeFile(code, Buffer.from(newCodeBehind(formName), "utf8"));
 	await vscode.commands.executeCommand("vscode.openWith", spec, designerViewType);
+}
+
+/** The code-behind of a new form (the same text as `ras form new`). */
+export function newCodeBehind(name: string): string {
+	return [
+		`// フォーム ${name} のコードビハインド。\`this\` がフォームで、コントロールは \`this.<名前>\` で参照します。`,
+		`// イベントは @on("<コントロール名>.<イベント>") を付けた関数で受け取ります（フォーム自身は UserForm）。`,
+		"//",
+		`// @on("UserForm.Initialize")`,
+		"// function initialize() {",
+		"// }",
+		"",
+	].join("\n");
 }
 
 function nextName(formsDir: string): string {

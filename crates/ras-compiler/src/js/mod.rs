@@ -54,6 +54,10 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
         if prog.modules[m].kind != ModuleKind::User && !std_code {
             continue;
         }
+        // Form code-behinds need the form itself (MSForms): they do not run in the debug runtime.
+        if prog.modules[m].form.is_some() {
+            continue;
+        }
         let mut g = Gen::new(prog, m);
         g.emit_module();
         let md = &prog.modules[m];

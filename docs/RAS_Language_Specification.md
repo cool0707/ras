@@ -1380,7 +1380,8 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 | ファイル | 内容 |
 |---|---|
 | `forms/<Name>.form.json` | デザイン。xlflow の FormSpec（schemaVersion 1）の JSON 形式。ファイル名は `form.name` と一致させる |
-| `forms/<Name>.bas` | コードビハインド。コードペインに表示される内容だけを UTF-8 で書く（`Attribute` 行・`VERSION` 行は書かない）。無ければ空として扱う |
+| `forms/<Name>.ras` | コードビハインド。RAS で書き、フォームのコードモジュールにコンパイルする（§14.11.2）。無ければコードなしとして扱う |
+| `forms/<Name>.bas` | 以前の版のコードビハインド（VBA。コードペインの内容をそのまま UTF-8 で書いたもの）。`.ras` が無いときだけ読む。両方あれば `.ras` を使い、警告を出す。`ras form pull --force` で取り込み直すと `.ras` に置き換わる |
 | `forms/assets/` など | `Image` コントロールの画像（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）。置き場所は任意で、FormSpec からプロジェクトのルート基準の相対パスで参照する |
 
 ```json
@@ -1410,7 +1411,7 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 | 項目 | RAS での扱い |
 |---|---|
 | `tag` / `controlTipText` | すべてのコントロールで使える（xlflow では `Page` 以外は `properties` に書く） |
-| `ComboBox` / `ListBox` の `list` / `selectedIndex` | 書き込みの対象（§14.11.4）。xlflow では取得した値の記録にだけ使う |
+| `ComboBox` / `ListBox` の `list` / `selectedIndex` | 書き込みの対象（§14.11.5）。xlflow では取得した値の記録にだけ使う |
 
 **`Image` の画像（`picture`）**
 
@@ -1425,40 +1426,101 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 * ブックを開くのに元のファイルは要らない。
 * `"picture": { "remove": true }` は画像なしを表す（`picture` を書かない場合と同じ）。
 
-#### 14.11.2 コマンド
+#### 14.11.2 コードビハインド（`forms/<Name>.ras`）
+
+フォームのイベント処理などのコードは RAS で書く。コンパイラは `forms/<Name>.ras` を `src/` のモジュールと一緒に解析し、標準モジュールではなく**フォームのコードモジュール**として出力する（`ras build` は `build/` に書き出さず、`ras pack` / `ras sync` がデザイナストレージと一緒にブックへ書き込む）。
+
+```typescript
+// forms/frmInput.ras
+let count = 0;
+
+@on("UserForm.Initialize")
+function init() {
+    this.caption = `入力（${count}）`;
+}
+
+@on("btnOK.Click")
+function ok() {
+    if (this.txtName.text == "") {
+        msgBox("名前を入力してください");
+        this.txtName.setFocus();
+        return;
+    }
+    count++;
+    this.hide();
+}
+
+@on("txtName.Exit")
+function leave(cancel: MSForms.ReturnBoolean) {
+    cancel.value = this.txtName.text.length > 20;
+}
+
+@on("UserForm.QueryClose")
+function closing(byref cancel: short, closeMode: short) {
+    if (closeMode == vbFormControlMenu) cancel = 1;
+}
+
+/** 入力された名前（他のモジュールから `frmInput.enteredName()` で呼べる）。 */
+export function enteredName(): string {
+    return this.txtName.text;
+}
+```
+
+* **`this`:** コードビハインドの関数の中では、`this` がフォーム（VBA の `Me`）を表す。型はフォーム名の型で、`MSForms.UserForm` のメンバー（`caption`・`hide()`・`controls` など）と、`.form.json` のコントロールを持つ。コントロールは `this.<コントロール名>` で参照し、型は `MSForms.TextBox` などの組み込みコントロールの型（カスタム コントロールは `object`）。フォームにないメンバーはエラー（`E0202`）。
+* **型定義:** Microsoft Forms 2.0 の型（`MSForms.UserForm`・`MSForms.Control`・各コントロール・`MSForms.ReturnBoolean` などのイベント引数・`fm…` 列挙型）と `load` / `unload` / `loadPicture`、`vbModeless` / `vbFormControlMenu` などの定数を同梱する（`stdlib/msforms.d.ras`）。名前の綴りは他の型定義と同じく camelCase（§15.3.1）。生成する VBA では `MSForms.TextBox` のように名前空間付きで宣言する。
+* **イベント:** `@on("<コントロール名>.<イベント>")` を付けた関数がイベントを受け取る。フォーム自身のイベントは `UserForm.<イベント>`（`Initialize`・`Activate`・`QueryClose`・`Terminate` など）。コンパイラは VBE と同じ宣言のイベント プロシージャ（`Private Sub btnOK_Click()`、`Private Sub txtName_Exit(ByVal Cancel As MSForms.ReturnBoolean)` など）をフォームのコードモジュールに生成し、そこからハンドラを呼ぶ。イベントと引数は xlflow が VBE で採取した一覧に従う（VS Code 拡張と共通）。
+  * ドキュメントモジュールのイベント（§12.2）と同じく、同じイベントに複数のハンドラを書け（宣言順に呼ぶ）、ハンドラ実行中に自身が発火させたイベントは無視する（`@on("…", { reentrant: true })` で解除）。ハンドラで捕捉されなかったエラーは RAS のエラーダイアログで表示する。
+  * ハンドラの引数はイベントの引数の先頭から順に受け取り、省略できる。`ByVal` のオブジェクト引数（`MSForms.ReturnBoolean` など）は `value` に代入して結果を返す。`QueryClose` の `Cancel` のような `ByRef` の数値引数を書き換えるときは、`byref cancel: short` と宣言する（イベント プロシージャの宣言と型を合わせるため `Integer` は `short`）。
+  * エラー: コントロールがない（`E0613`）、そのコントロールにないイベント（`E0611`。ページのイベントは親の `MultiPage` で受け取る）、引数が多すぎる（`E0612`）、関数名が生成するイベント プロシージャ名（`btnOK_Click`）と同じ（`E0614`）。
+* **変数:** トップレベルの `let` / `const` はフォームのモジュール変数（`Private`）になる。初期値は `UserForm_Initialize` の先頭で設定する（`Initialize` のハンドラが無くても生成する）。フォームのインスタンスごとに持つ。
+* **公開:** `export function` はフォームの `Public` メンバーになり、他のモジュールからフォームの既定のインスタンス経由で `frmInput.enteredName()` のように呼べる。フォーム名はどこからでも参照できるグローバル（既定のインスタンス）で、`frmInput.show()` のように使う。`export` しない関数は `Private`。コードビハインドの関数はマクロ入口にならない（§12.4 のラップもしない）。
+* **書けないもの（`E0630`・`E0632`）:** トップレベルの文、クラス・インターフェイス・構造体・`declare module`、`export` した変数・列挙型・型エイリアス、`@macro` / `@init` / `@udf` / `@ribbon`、拡張メソッド。共有したいものは `src/` のモジュールに置き、`import` して使う（コードビハインドは `import` できる。コードビハインドを `import` することはできない）。
+* `.form.json` が無い `forms/<Name>.ras` はエラー（`E0631`）。
+* デバッグ実行（§14.10）ではコードビハインドを実行しない。
+
+#### 14.11.3 コマンド
 
 | コマンド | 動作 |
 |---|---|
-| `ras form new <Name>` | `forms/<Name>.form.json`（240×180、caption = 名前、コントロールなし）と空の `forms/<Name>.bas` を作る。既にあれば何もしない |
-| `ras form check` | すべてのフォームを検査し、ブックへの書き込みと同じ生成まで行う。エラーがあれば終了コード 1 |
-| `ras form pull [<Name>…] [--book <file>] [--force]` | ブックにあるフォームを `forms/` に取り出す（§14.11.5） |
-| `ras check` / `ras build` | RAS ソースと合わせてフォームも検査する（`ras build` はフォームを `build/` に出力しない） |
+| `ras form new <Name>` | `forms/<Name>.form.json`（240×180、caption = 名前、コントロールなし）と、書き方の例をコメントで示した `forms/<Name>.ras` を作る。既にあれば何もしない |
+| `ras form check` | プロジェクトをコンパイルし、すべてのフォームを検査して、ブックへの書き込みと同じ生成まで行う。エラーがあれば終了コード 1 |
+| `ras form pull [<Name>…] [--book <file>] [--force]` | ブックにあるフォームを `forms/` に取り出す。コードは RAS に変換する（§14.11.6） |
+| `ras check` / `ras build` | RAS ソース（コードビハインドを含む）と合わせてフォームも検査する（`ras build` はフォームを `build/` に出力しない） |
 | `ras pack` | RAS 管理モジュールと合わせて、すべてのフォーム（デザイナストレージとコードモジュール）をブックに書き込む |
-| `ras sync` | Excel で開いているブックへ、RAS 管理モジュールと合わせてフォームを反映する（§14.11.6） |
+| `ras sync` | Excel で開いているブックへ、RAS 管理モジュールと合わせてフォームを反映する（§14.11.7） |
 | `ras watch` | `forms/` の変更も監視する（ブックが開いていれば `ras sync`、閉じていれば `ras pack` と同じ書き込みを行う） |
 
-#### 14.11.3 書き込み（`ras pack`）
+#### 14.11.4 書き込み（`ras pack`）
 
 1. デザイナストレージ（`<Name>/f`・`o`・`\x01CompObj`・`\x03VBFrame`、コンテナーごとの `i<ID>/` サブストレージ、`MultiPage` の `x`）を FormSpec から一から生成する。生成結果は xlflow の生成結果とバイト単位で一致する（`crates/ras-form/tests/golden.rs`）。
 2. コードモジュール `VBA/<Name>` を作る。新しいフォームには `VB_Base = "0{GUID}{GUID}"`（新しい 2 つの GUID）を含むフォーム用の属性ヘッダーを付け、既存のフォームはヘッダーを保持してコードだけを置き換える。
-3. コードの先頭行は目印の行 `' RAS-FORM forms/<Name>.form.json design=<ハッシュ> code=<ハッシュ>` とし、RAS が生成したフォームであることを表す。`design` はデザイナストレージ、`code` はその後ろに続くコードのハッシュ（16 進 16 桁）で、ライブ同期が変更の有無を判断するのに使う（§14.11.6）。目印の後ろにコードビハインドと、必要なら生成コード（§14.11.4）が続く。
+3. コードの先頭行は目印の行 `' RAS-FORM forms/<Name>.form.json design=<ハッシュ> code=<ハッシュ>` とし、RAS が生成したフォームであることを表す。`design` はデザイナストレージ、`code` はその後ろに続くコードのハッシュ（16 進 16 桁）で、ライブ同期が変更の有無を判断するのに使う（§14.11.7）。目印の後ろにコードビハインドをコンパイルしたコードと、必要なら生成コード（§14.11.5）が続く。
 4. `PROJECT` ストリームに `BaseClass=<Name>` 行を加え、Microsoft Forms 2.0 Object Library（`MSForms`）の参照が無ければ `dir` ストリームに追加する。
 5. 同名のフォームが既にあれば、デザイナストレージを丸ごと置き換える。デザインもコードも変わっていなければ「変更なし」として扱う。
 6. 次の場合はエラーとし、何も書き込まない: RAS モジュールと同じ名前、フォームではない同名のモジュールがある、目印の無い（VBE で作った）同名のフォームがある（`--overwrite` で置き換えを許可する）。
 
 `ras unpack` は、目印のあるフォームを `vba/` に取り出さない。`forms/` から消したフォームは、ブックからは削除しない（VBE で削除する）。
 
-#### 14.11.4 リストの項目（`list` / `selectedIndex`）
+#### 14.11.5 リストの項目（`list` / `selectedIndex`）
 
 MS-Forms は `ComboBox` / `ListBox` の項目をデザイナストレージに保存しない（デザイン時に `AddItem` しても、ブックを保存して開き直すと消える）。そのため `list` と `selectedIndex` は、フォームの読み込み時に実行されるコードとしてコードモジュールに出力する。
 
 ```vb
 ' RAS-FORM forms/frmInput.form.json design=… code=…
 Option Explicit
+Option Compare Binary
+
+Private Sub init()
+    Me.txtName.Text = ""
+End Sub
 
 Private Sub UserForm_Initialize()
     RAS_FormInit '--- RAS ---
-    Me.txtName.Text = ""
+    On Error GoTo RAS_OnError
+    init
+    Exit Sub
+RAS_OnError:
+    RAS_EventError "frmInput.UserForm_Initialize", Err.Number, Err.Source, Err.Description
 End Sub
 '--- RAS BEGIN ---
 Private Sub RAS_FormInit()
@@ -1473,24 +1535,34 @@ End Sub
 
 * 項目を設定するプロシージャ `RAS_FormInit` を、モジュール末尾の RAS 管理領域（§14.6 と同じ `'--- RAS BEGIN ---` / `'--- RAS END ---`）に生成する。宣言部の後ろに置くので、コードビハインドの `Option Explicit` やモジュールレベルの宣言と干渉しない。
 * コードビハインドに `UserForm_Initialize` が無ければ、`RAS_FormInit` を呼ぶだけの `UserForm_Initialize` も管理領域に生成する。
-* コードビハインドに `UserForm_Initialize` があれば、その先頭に `RAS_FormInit '--- RAS ---` の 1 行を挿入する（`forms/<Name>.bas` は書き換えない）。コードビハインドのどこかで `RAS_FormInit` を呼んでいる場合は、挿入も `UserForm_Initialize` の生成もしない（項目を設定する時点をコードビハインドが決められる）。
+* コンパイルしたコードに `UserForm_Initialize`（`@on("UserForm.Initialize")` のハンドラや変数の初期化があると生成される）があれば、その先頭に `RAS_FormInit '--- RAS ---` の 1 行を挿入する。以前の版の VBA のコードビハインド（`.bas`）では、コードビハインドのどこかで `RAS_FormInit` を呼んでいる場合は、挿入も `UserForm_Initialize` の生成もしない（項目を設定する時点をコードビハインドが決められる）。
 * `selectedIndex` は `-1`（選択なし）か、`list` の範囲内の番号。`list` が無いコントロールでは `-1` 以外を指定できない（`UFV020`）。
 * 項目の文字列のうち、制御文字とコードページで表せない文字は `ChrW(n)` で出力する。
 * コードビハインドでは `RAS_FormInit` という名前のプロシージャと、管理領域の目印の行を書けない（エラー）。
 
-#### 14.11.5 取り出し（`ras form pull`）
+#### 14.11.6 取り出し（`ras form pull`）
 
-ブック（保存されているファイル）のフォームを読み、`forms/<Name>.form.json`・`forms/<Name>.bas` と画像ファイルを書き出す。Excel は使わない。VBE で作ったフォームを `forms/` の管理に移すとき、VBE でデザインを直したフォームを取り込み直すときに使う。
+ブック（保存されているファイル）のフォームを読み、`forms/<Name>.form.json`・`forms/<Name>.ras` と画像ファイルを書き出す。Excel は使わない。VBE で作ったフォームを `forms/` の管理に移すとき、VBE でデザインを直したフォームを取り込み直すときに使う。
 
 * 名前を省略するとブックのすべてのフォームが対象。`forms/` に同名のファイルが既にあるフォームは書き出さない（`--force` で置き換える）。
 * **デザイン:** デザイナストレージを読み、xlflow の projection と同じ規則で FormSpec にする（`crates/ras-form/tests/snapshot.rs` で、Excel が保存したフォームについて xlflow の出力と一致することを確認している）。加えて、xlflow の projection が「表せないプロパティ」として扱うもののうち、生成側が書けるものを取り込む: `Tag` / `ControlTipText`（`tag` / `controlTipText`）、`GroupName`・`MaxLength`・`BorderColor`（`properties`）。キャプションが保存されていないコントロールは `caption: ""` とし、フォームのキャプションがフォームのレコードに無ければデザイナブロック（`VBFrame`）の `Caption` を使う。
 * **画像:** `Image` の画像（BMP / JPEG として保存されているもの）を `forms/assets/<Name>.<コントロール名>.bmp|jpg` に書き出し、`picture.path` で参照する。Excel は JPEG を読み込んだ画像も BMP で保存するため、取り出した画像は多くの場合 BMP になる。書き込み時に変換された画像（PNG など）も、取り出すと変換後の BMP になる。
-* **コード:** コードモジュールから `Attribute` 行を除いたものをコードビハインドとする。RAS が書き込んだフォームの場合は、目印の行・RAS 管理領域・挿入した `RAS_FormInit` の呼び出しも除く（書き込む前のコードビハインドに戻る）。
+* **コード:** コードモジュールから `Attribute` 行を除いた VBA を RAS に変換して `forms/<Name>.ras` に書く（下記）。RAS が書き込んだフォームの場合は、目印の行・RAS 管理領域・挿入した `RAS_FormInit` の呼び出しも除いてから変換する。
+  * RAS が書き込んだフォーム（目印の行がある）で、`forms/<Name>.ras` が既にあるときは、コードビハインドを書き換えない（そのファイルからコンパイルしたコードなので）。デザインだけを取り込み直す。VBE でコードを編集しても取り込まれない。
+  * 以前の版の `forms/<Name>.bas` は、`.ras` を書いたときに削除する。
+* **VBA から RAS への変換:** 構文を読み替えて RAS を書く（`ras_compiler::vba2ras`）。
+  * イベント プロシージャ `<コントロール>_<イベント>` は `@on("<コントロール>.<イベント>")` を付けた関数（名前は `btnOKClick` のように付ける）に、`Me` は `this` に、コントロールの参照は `this.<コントロール名>` にする。既定メンバーで使われているコントロール（`txtName = "x"`、`If chkAll Then`）と `MSForms.ReturnBoolean` などの引数（`Cancel = True`）は `.value` を補う。
+  * ホストの関数・メンバーは RAS の綴り（`MsgBox` → `msgBox`、`.ListIndex` → `.listIndex`）、型は RAS の型（`Long` → `int`、`Integer` → `int`（イベントの引数は `short`）、`Range` → `Excel.Range`、`TextBox` → `MSForms.TextBox`）にする。
+  * `&` の連結はテンプレートリテラル、`/` は実数の除算（整数同士なら `as double` を補う）、`=` / `<>` は `==` / `!=`、`And` / `Or` / `Not` は `&&` / `||` / `!`（数値の演算は `&` / `|` / `~`）にする。
+  * `If` / `Select Case`（`if` の連鎖にする）/ `For` / `For Each` / `Do … Loop` / `While … Wend` / `With`（対象を繰り返し書くか、一時的な `const` に入れる）/ `Exit` を変換する。`On Error Resume Next` … `On Error GoTo 0` は `try { … } catch { resume; }`、`On Error GoTo <ラベル>` … `Exit Sub` / `<ラベル>:` … は `try { … } catch (e) { … }`（ハンドラ内の `Err.Number` / `Err.Description` は `e.code` / `e.description`）にする。
+  * `Function` の戻り値（`関数名 = 値`）は `return` かローカル変数 `result` にする。引数は `ByVal` が既定になるため、`ByVal` の無い引数はプロシージャ内で代入している場合だけ `byref` にする。
+  * RAS が書き込んだフォームのコード（`.ras` の無いプロジェクトへ取り出したとき）は、生成したイベント プロシージャを `@on` に、変数の初期化（`RAS_ModInit`）を変数の初期値に戻す。行番号（`Erl` 用）は捨てる。
+  * 変換できないもの（`GoTo` / 行ラベル、`ReDim`、大きさを指定した配列、`Like`、日付リテラル、`Static`、引数を取るプロパティへの代入、ユーザー定義型・`Declare`・`Public` 変数（フォーム内の変数にする）など）は、元の行を `// TODO(VBA): <理由>` のコメントとして残し、コマンドの出力に警告（ファイルと行）として表示する。変換結果は必ずしもそのままコンパイルできるとは限らない。`ras check` で確認して直す。
 * **リストの項目:** ブックには保存されていないので取り出せない。`--force` で既存の `.form.json` を置き換えるときは、同名の `ComboBox` / `ListBox` の `list` / `selectedIndex` と、画像の `picture.path` を既存のファイルから引き継ぐ（そのパスのファイルを書き込み時と同じ規則で変換した結果が、ブックの画像と一致する場合。PNG などを指定していたフォームは、取り込み直しても PNG を指したままになる）。
 * **取り込めないもの:** FormSpec で表せないプロパティ（`specialEffect`、`mousePointer`、スクロールバーの `min` / `max` など）は、コントロールごとに `unsupported` に名前を記録し、コマンドの出力に警告として表示する。これらは `forms/` から書き戻すと既定値になる。組み込み以外のコントロール（ActiveX）は `type: "Control"` として記録され、生成できない。BMP / JPEG 以外の画像（アイコン、メタファイル）は取り出せず、`unsupported` に `picture` が残る（この場合は `picture` に置き換える画像か `{ "remove": true }` を書くまで生成できない）。
 * 取り出しただけではブックは変わらない。VBE で作ったフォームを `forms/` の内容で置き換えるには、`ras pack --overwrite`（または `ras sync --overwrite`）を実行する。
 
-#### 14.11.6 ライブ同期（`ras sync`、`ras watch`、VS Code の言語サーバー）
+#### 14.11.7 ライブ同期（`ras sync`、`ras watch`、VS Code の言語サーバー）
 
 ブックが Excel で開かれているときは、§14.6 のモジュールと同じ同期の中でフォームも反映する（Windows のみ）。
 
@@ -1504,14 +1576,16 @@ End Sub
 
 * **取り込み:** フォームを `.frm`（デザイナブロック・属性・コード）と `.frx`（24 バイトのヘッダーと、デザイナストレージを収めた複合ファイル）として一時フォルダーに書き出し、`VBComponents.Import` で読み込ませる。`.frx` の内容は `ras pack` が書くデザイナストレージと同じもの。
 * **取り込み直し:** 既存のフォームを一時的な名前（`RasOld1` など）に変えてから新しいフォームを取り込み、同期全体が成功した後で古いフォームを削除する。途中で失敗した場合は、新しいフォームを削除して古いフォームの名前を戻す（§14.6 の一括性）。
+* **読み込まれているフォーム:** 取り込み直すフォームとコードを書き換えるフォームは、書き込む前に閉じる。VBE で開いているデザイナーウィンドウを閉じ、読み込まれているインスタンス（`Hide` で隠しただけのフォーム、モードレスで表示中のフォーム）を `Unload` する（VBE は読み込まれているフォームの名前を変更できないため）。`Unload` はプロジェクトに一時的な標準モジュール（`RAS_SyncUnload`）を加えて `Application.Run` で実行し、終わったら削除する。フォームの `QueryClose` / `Terminate` のハンドラは実行される。`QueryClose` で閉じるのを取り消されたフォームがあれば、何も書き込まずにエラーにする。
 * **変更の判断:** VBE はコードを整形して保持するため、保持されているコードと書き込んだコードは比較できない。目印の行に記録したハッシュで判断する。
-* VBE でフォームのデザインやコードを直接編集しても目印の行は変わらないため、その編集は次に `forms/` 側が変わるまで残る（ドリフト検出は行わない）。VBE での編集を残したい場合は、ブックを保存してから `ras form pull --force` で `forms/` に取り込む。
+* VBE でフォームのデザインやコードを直接編集しても目印の行は変わらないため、その編集は次に `forms/` 側が変わるまで残る（ドリフト検出は行わない）。VBE でのデザインの編集を残したい場合は、ブックを保存してから `ras form pull --force` で `forms/` に取り込む（コードの編集は取り込まれない。§14.11.6）。
 * マクロの実行中・中断モード中は書き込まない（§14.6）。フォームを取り込み直すと、そのフォームのインスタンスとプロジェクトの状態はリセットされる。
 
-#### 14.11.7 制限
+#### 14.11.8 制限
 
 * カスタム ActiveX コントロールは生成できない（エラーになる）。
-* VBE でフォームのデザインやコードを編集しても `forms/` には自動では反映されない。`ras form pull --force` で取り込まない限り、次に `forms/` 側を変更して書き込んだ時点で `forms/` の内容に置き換わる（ドリフト検出は行わない）。
+* VBE でフォームのデザインやコードを編集しても `forms/` には自動では反映されない。デザインは `ras form pull --force` で取り込める。取り込まない限り、次に `forms/` 側を変更して書き込んだ時点で `forms/` の内容に置き換わる（ドリフト検出は行わない）。
+* コードビハインドで扱えるのは組み込みのコントロールのイベントだけで、`WithEvents` で受け取るイベントや、コントロールの配列（同じハンドラを複数のコントロールに付けるクラス）は書けない。
 * `ComboBox` / `ListBox` の項目は文字列の 1 列だけを扱う。複数列のリストや `RowSource` は、コードビハインドで設定する。
 * ライブ同期でのフォームの取り込み（`VBComponents.Import`）は、Excel の無い環境では自動テストできない。`.frx` の構成は Excel が書き出したファイルと照合している（`crates/ras-form/tests/project.rs`）。
 
@@ -1524,7 +1598,7 @@ myproject/
   ras.toml
   src/            *.ras（RAS 管理モジュール）
   vba/            非管理の VBA モジュール・ユーザーフォーム（双方向同期）
-  forms/          ユーザーフォームのデザイン（*.form.json）とコードビハインド（*.bas）（§14.11）
+  forms/          ユーザーフォームのデザイン（*.form.json）とコードビハインド（*.ras）（§14.11）
   types/          追加の型定義（*.d.ras）
   build/          生成物（.bas / .cls / .rasmap）
   build/debug/    デバッグ実行用の JavaScript とソースマップ（§14.10）
@@ -1796,3 +1870,4 @@ Rust で `vbaProject.bin` を**書き込める**ライブラリは見当たら�
 
 * Excel / VBA / Office のメンバーとグローバルは camelCase で参照し、生成する VBA にはタイプ ライブラリの綴りを出力する。VBA の綴りも受け付けるが警告とし、自動で書き換えられるようにする（§15.3.1）。
 * ホストのコレクションの配列メソッドは `For Each` に展開し、結果は配列で返す（§4.4）。
+* ユーザーフォームのコードビハインドは RAS で書き（`forms/<Name>.ras`）、フォームのコードモジュールにコンパイルする。イベントは `@on("<コントロール>.<イベント>")` で受け取り、`this` がフォームを表す。`ras form pull` は VBA のコードを RAS に変換する（§14.11.2、§14.11.6）。

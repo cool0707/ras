@@ -1,17 +1,26 @@
 //! User forms in `forms/` (spec §14.11): `forms/<Name>.form.json` (the
-//! designer, a FormSpec) and `forms/<Name>.bas` (the code-behind). The work
-//! is done by `ras_form::workspace`; this module prints.
+//! designer, a FormSpec) and `forms/<Name>.ras` (the code-behind, compiled by
+//! the RAS compiler). The work is done by `ras_form::workspace`; this module
+//! prints.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ras_form::workspace::{self, Built, PullOutcome};
 
 /// Loads, validates and generates the forms of `forms/`. Returns their number and the result.
-pub fn build(root: &Path, codepage: u16) -> Result<(usize, Built), String> {
+/// `compiled`: the code the compiler generated for the `.ras` code-behinds (form name → code);
+/// empty when only the designs are checked.
+pub fn build(root: &Path, codepage: u16, compiled: &HashMap<String, String>) -> Result<(usize, Built), String> {
     let loaded = workspace::load(root)?;
-    let built = workspace::build(&loaded, root, codepage);
+    let built = workspace::build(&loaded, root, codepage, compiled);
     Ok((loaded.len(), built))
+}
+
+/// The code of the forms among the compiler's output files (form name → code).
+pub fn compiled_code(files: &[ras_compiler::OutputFile]) -> HashMap<String, String> {
+    files.iter().filter(|f| f.kind == ras_compiler::vba::VModuleKind::Form).map(|f| (f.name.clone(), f.code.clone())).collect()
 }
 
 /// Prints the problems of the forms; returns the number of errors.
@@ -22,11 +31,6 @@ pub fn report(built: &Built) -> usize {
     built.errors()
 }
 
-/// `ras form check`: validates and generates every form. Returns the number of errors.
-pub fn check(root: &Path, codepage: u16) -> Result<usize, String> {
-    Ok(report(&build(root, codepage)?.1))
-}
-
 /// `ras form new <Name>`.
 pub fn new_form(root: &Path, name: &str) -> Result<(PathBuf, PathBuf), String> {
     if !workspace::valid_form_name(name) {
@@ -34,8 +38,8 @@ pub fn new_form(root: &Path, name: &str) -> Result<(PathBuf, PathBuf), String> {
     }
     let dir = workspace::forms_dir(root);
     let spec_path = dir.join(format!("{name}.form.json"));
-    let code_path = dir.join(format!("{name}.bas"));
-    for path in [&spec_path, &code_path] {
+    let code_path = dir.join(format!("{name}.ras"));
+    for path in [&spec_path, &code_path, &dir.join(format!("{name}.bas"))] {
         if path.exists() {
             return Err(format!("{} は既に存在します", path.display()));
         }
@@ -51,15 +55,27 @@ pub fn new_form(root: &Path, name: &str) -> Result<(PathBuf, PathBuf), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     std::fs::write(&spec_path, ras_form::FormSpec::new_form(name).to_json())
         .map_err(|e| format!("{}: {e}", spec_path.display()))?;
-    std::fs::write(&code_path, "").map_err(|e| format!("{}: {e}", code_path.display()))?;
+    std::fs::write(&code_path, new_code_behind(name)).map_err(|e| format!("{}: {e}", code_path.display()))?;
     Ok((spec_path, code_path))
+}
+
+/// The code-behind of a new form: comments that show how handlers are written.
+pub fn new_code_behind(name: &str) -> String {
+    format!(
+        "// フォーム {name} のコードビハインド。`this` がフォームで、コントロールは `this.<名前>` で参照します。\n\
+         // イベントは @on(\"<コントロール名>.<イベント>\") を付けた関数で受け取ります（フォーム自身は UserForm）。\n\
+         //\n\
+         // @on(\"UserForm.Initialize\")\n\
+         // function initialize() {{\n\
+         // }}\n"
+    )
 }
 
 fn relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/")
 }
 
-/// `ras form pull`: writes `forms/` files for forms of the workbook (spec §14.11.4).
+/// `ras form pull`: writes `forms/` files for forms of the workbook (spec §14.11.6).
 pub fn pull(root: &Path, book: &Path, names: &[String], force: bool) -> Result<ExitCode, String> {
     let at = |e: ras_ovba::OvbaError| format!("{}: {e}", book.display());
     let Some(project) = ras_ovba::unpack(book).map_err(at)?.project else {
@@ -99,10 +115,20 @@ pub fn pull(root: &Path, book: &Path, names: &[String], force: bool) -> Result<E
             Ok(PullOutcome::Written(pulled)) => {
                 written += 1;
                 let pictures = if pulled.pictures.is_empty() { String::new() } else { format!("、画像 {} 個", pulled.pictures.len()) };
-                println!("{}: {} と {} を書き出しました{pictures}", form.name, relative(root, &pulled.spec_path), relative(root, &pulled.code_path));
+                if pulled.kept_code {
+                    println!("{}: {} を書き出しました{pictures}（コードビハインドは既存の {} を使います）", form.name, relative(root, &pulled.spec_path), relative(root, &pulled.code_path));
+                } else {
+                    println!("{}: {} と {} を書き出しました{pictures}", form.name, relative(root, &pulled.spec_path), relative(root, &pulled.code_path));
+                }
                 for warning in &pulled.warnings {
                     let place = if warning.control.is_empty() { form.name.clone() } else { format!("{}.{}", form.name, warning.control) };
                     eprintln!("warning: {place}: {}", warning.message);
+                }
+                for (line, message) in &pulled.todos {
+                    eprintln!("warning: {}:{line}: VBA から RAS に変換できませんでした: {message}", relative(root, &pulled.code_path));
+                }
+                if !pulled.todos.is_empty() {
+                    eprintln!("  変換できなかったコードは `// TODO(VBA):` のコメントとして残しています。RAS で書き直してください");
                 }
                 if !ras_ovba::is_generated_form(&form.code) {
                     hand_made.push(form.name.clone());

@@ -4,7 +4,8 @@
 //! FormSpec version 1 document as defined by
 //! [xlflow](https://github.com/harumiWeb/xlflow) (JSON form; `kind` is
 //! `ras.userform` or `xlflow.userform`) — with its code-behind in
-//! `forms/<Name>.bas`. This crate
+//! `forms/<Name>.ras` (RAS, compiled by `ras-compiler`; a VBA
+//! `forms/<Name>.bas` of earlier versions is still read). This crate
 //!
 //! * parses and validates a FormSpec ([`parse`]; diagnostics `UFY001`,
 //!   `UFV001`–`UFV021` with the meaning they have in xlflow),

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { applyOperations, copyControls } from "../../src/userForm/engine";
-import { bodyIndent, eventsForType, eventTarget, findHandler, handlerText } from "../../src/userForm/events";
+import { bodyIndent, eventsForType, eventTarget, findHandler, findVbaHandler, handlerText, jsName, rasParams, vbaBodyIndent, vbaHandlerText } from "../../src/userForm/events";
 import { formatJson, minimalEdit } from "../../src/userForm/jsonSource";
 import { listToText, textToList } from "../../src/userForm/listItems";
 import { designerDocument } from "../../src/userForm/model";
@@ -360,12 +360,35 @@ describe("event handlers", () => {
 	});
 
 	it("finds existing handlers and appends new ones", () => {
-		const code = "Option Explicit\n\nPrivate Sub OkButton_Click()\n\tMsgBox 1\nEnd Sub\n";
-		assert.deepEqual(findHandler(code, "okbutton", "click"), { line: 2, bodyLine: 3 });
+		const code = '// form\n\n@on("OkButton.Click")\nfunction ok() {\n\tmsgBox(1);\n}\n';
+		assert.deepEqual(findHandler(code, "okbutton", "click"), { line: 2, bodyLine: 4 });
 		assert.equal(findHandler(code, "OkButton", "DblClick"), undefined);
 		assert.equal(bodyIndent(code, "    "), "\t");
-		const appended = code + handlerText(code, "Private Sub UserForm_Initialize()", "\t", "\n");
+		const init = eventsForType("UserForm", "UserForm").find((e) => e.name === "Initialize")!;
+		const appended = code + handlerText(code, "UserForm", init, "\t", "\n");
+		assert.equal(appended.endsWith('\n}\n\n@on("UserForm.Initialize")\nfunction userFormInitialize() {\n\t\n}\n'), true, appended);
+		assert.deepEqual(findHandler(appended, "UserForm", "Initialize"), { line: 7, bodyLine: 9 });
+		const exit = eventsForType("TextBox", "txtName").find((e) => e.name === "Exit")!;
+		assert.equal(handlerText("", "txtName", exit, "    ", "\r\n"), '@on("txtName.Exit")\r\nfunction txtNameExit(cancel: MSForms.ReturnBoolean) {\r\n    \r\n}\r\n');
+		// A name that is taken gets a number.
+		const taken = "function txtNameExit() {\n}\n";
+		assert.equal(handlerText(taken, "txtName", exit, "    ", "\n").includes("function txtNameExit2("), true);
+	});
+
+	it("writes event parameters as RAS", () => {
+		assert.equal(jsName("KeyCode"), "keyCode");
+		assert.equal(jsName("RGB"), "rgb");
+		assert.equal(rasParams("Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)"), "byref cancel: short, byref closeMode: short");
+		assert.equal(rasParams("Private Sub B_Click()"), "");
+	});
+
+	it("still edits VBA code-behinds of earlier versions", () => {
+		const code = "Option Explicit\n\nPrivate Sub OkButton_Click()\n\tMsgBox 1\nEnd Sub\n";
+		assert.deepEqual(findVbaHandler(code, "okbutton", "click"), { line: 2, bodyLine: 3 });
+		assert.equal(findVbaHandler(code, "OkButton", "DblClick"), undefined);
+		assert.equal(vbaBodyIndent(code, "    "), "\t");
+		const appended = code + vbaHandlerText(code, "Private Sub UserForm_Initialize()", "\t", "\n");
 		assert.equal(appended.endsWith("\nEnd Sub\n\nPrivate Sub UserForm_Initialize()\n\t\nEnd Sub\n"), true);
-		assert.equal(handlerText("", "Private Sub A_B()", "    ", "\r\n"), "Private Sub A_B()\r\n    \r\nEnd Sub\r\n");
+		assert.equal(vbaHandlerText("", "Private Sub A_B()", "    ", "\r\n"), "Private Sub A_B()\r\n    \r\nEnd Sub\r\n");
 	});
 });

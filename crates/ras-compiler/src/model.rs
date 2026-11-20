@@ -244,6 +244,8 @@ pub struct FnAttrs {
     pub on_error: Option<String>,
     pub ribbon: bool,
     pub fallback: Option<String>,
+    /// Declared in a form's code-behind: a member of the form's code module.
+    pub form_member: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -339,7 +341,7 @@ impl FnDef {
 
     /// A macro of the workbook: shown in Excel's macro dialog and runnable with `Application.Run`.
     pub fn is_macro_entry(&self) -> bool {
-        if self.is_generic() || !self.attrs.on_events.is_empty() || self.attrs.init || self.attrs.udf {
+        if self.is_generic() || !self.attrs.on_events.is_empty() || self.attrs.init || self.attrs.udf || self.attrs.form_member {
             return false;
         }
         match self.kind {
@@ -627,6 +629,18 @@ pub struct ModuleData {
     pub vars: Vec<VarId>,
     pub imports: Vec<ModuleId>,
     pub line_starts: Vec<u32>,
+    /// Set for a form's code-behind (`forms/<Name>.ras`, spec §14.11): the module is the
+    /// form's code module.
+    pub form: Option<FormModule>,
+}
+
+/// A module that is the code of a user form.
+#[derive(Clone, Debug)]
+pub struct FormModule {
+    /// Name and controls; `None` when `forms/<Name>.form.json` is missing or unreadable.
+    pub decl: Option<crate::config::FormDecl>,
+    /// The type of `this`: the form with its controls as fields.
+    pub class: Option<ClassId>,
 }
 
 impl ModuleData {

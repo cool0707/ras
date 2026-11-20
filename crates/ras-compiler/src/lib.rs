@@ -19,12 +19,14 @@ pub mod model;
 pub mod names;
 pub mod query;
 pub mod runtime;
+pub mod userform;
 pub mod vba;
+pub mod vba2ras;
 
 use std::path::{Path, PathBuf};
 
 pub use collect::SourceInput;
-pub use config::Config;
+pub use config::{Config, FormControl, FormDecl};
 pub use diag::{apply_fixes, Diagnostic, Fix, Severity};
 pub use emit::OutputFile;
 pub use js::{build_js, JsFile, JsOutput};
@@ -36,6 +38,7 @@ const STDLIB: &[(&str, ModuleKind, &str)] = &[
     ("vba.d", ModuleKind::TypeDef, include_str!("../stdlib/vba.d.ras")),
     ("excel.d", ModuleKind::TypeDef, include_str!("../stdlib/excel.d.ras")),
     ("office.d", ModuleKind::TypeDef, include_str!("../stdlib/office.d.ras")),
+    ("msforms.d", ModuleKind::TypeDef, include_str!("../stdlib/msforms.d.ras")),
     ("win32", ModuleKind::Std, include_str!("../stdlib/win32.ras")),
     (collect::STRUCT_MAP_MODULE, ModuleKind::Std, include_str!("../stdlib/ras_collections.ras")),
 ];
@@ -128,7 +131,53 @@ pub fn load_project(root: &Path) -> Result<(Config, Vec<SourceInput>), String> {
             });
         }
     }
+    let (form_sources, forms) = load_forms(root)?;
+    sources.extend(form_sources);
+    let mut config = config;
+    config.forms = forms;
     Ok((config, sources))
+}
+
+/// Path of a form's RAS code-behind: `forms/<Name>.ras` (spec §14.11.1).
+pub fn form_code_path(root: &Path, name: &str) -> PathBuf {
+    root.join("forms").join(format!("{name}.ras"))
+}
+
+/// Reads the RAS code-behinds of the forms of the project at `root` (`forms/<Name>.ras`) and
+/// the declarations (name and controls) of every `forms/<Name>.form.json`.
+pub fn load_forms(root: &Path) -> Result<(Vec<SourceInput>, Vec<FormDecl>), String> {
+    let dir = root.join("forms");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+    paths.sort();
+    let mut sources = Vec::new();
+    let mut forms = Vec::new();
+    for path in paths {
+        let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        if let Some(stem) = file_name.strip_suffix(".form.json") {
+            let Ok(text) = std::fs::read_to_string(&path) else { continue };
+            if let Some(mut decl) = FormDecl::from_form_json(&text) {
+                // The file name is the form's name (a mismatch is reported by the form checks).
+                decl.name = stem.to_string();
+                forms.push(decl);
+            }
+        } else if let Some(stem) = file_name.strip_suffix(".ras") {
+            if stem.contains('.') {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let text = text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text);
+            sources.push(form_source(path.clone(), stem, text));
+        }
+    }
+    Ok((sources, forms))
+}
+
+/// The source input of the code-behind `forms/<name>.ras`.
+pub fn form_source(path: PathBuf, name: &str, text: String) -> SourceInput {
+    SourceInput { path, rel_path: format!("forms/{name}.ras"), key: format!("{}{name}", collect::FORM_KEY_PREFIX), kind: ModuleKind::User, text }
 }
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {

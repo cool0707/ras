@@ -2,6 +2,7 @@
 //! through generation, and `workspace::pull`.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ras_form::workspace::{self, PullOutcome};
@@ -212,7 +213,7 @@ fn a_pulled_form_is_generated_again_with_the_same_design() {
         let first = loaded[0].parsed.spec.clone().unwrap_or_else(|| {
             panic!("{label}.{name}: pulled spec is not valid: {:?}", loaded[0].parsed.issues)
         });
-        let built = workspace::build(&loaded, &dir, 932);
+        let built = workspace::build(&loaded, &dir, 932, &HashMap::new());
         assert_eq!(built.errors(), 0, "{label}.{name}: {:?}", built.problems);
         let generated = &built.forms[0];
         assert!(ras_ovba::is_generated_form(&generated.code));
@@ -246,7 +247,7 @@ fn pull_writes_the_files_of_a_form() {
         panic!("nothing written");
     };
     assert_eq!(pulled.spec_path, root.join("forms/PictureForm.form.json"));
-    assert_eq!(pulled.code_path, root.join("forms/PictureForm.bas"));
+    assert_eq!(pulled.code_path, root.join("forms/PictureForm.ras"));
     assert_eq!(
         pulled.pictures,
         ["forms/assets/PictureForm.ImageBmp.bmp", "forms/assets/PictureForm.ImageJpeg.bmp"]
@@ -259,7 +260,7 @@ fn pull_writes_the_files_of_a_form() {
     assert_eq!(spec["kind"], "ras.userform");
     assert!(spec.get("warnings").is_none(), "warnings are reported, not stored");
     assert_eq!(spec["controls"][0]["picture"]["path"], "forms/assets/PictureForm.ImageBmp.bmp");
-    // The code-behind is the code pane text.
+    // The code-behind is the code pane converted to RAS.
     let code = std::fs::read_to_string(&pulled.code_path).unwrap();
     assert!(!code.contains("Attribute VB_") && !code.contains('\r'), "{code}");
 
@@ -300,7 +301,7 @@ fn pull_keeps_what_only_the_spec_knows() {
     std::fs::write(dir.join("frmList.bas"), hand).unwrap();
 
     let loaded = workspace::load(&root).unwrap();
-    let built = workspace::build(&loaded, &root, 932);
+    let built = workspace::build(&loaded, &root, 932, &HashMap::new());
     assert_eq!(built.errors(), 0, "{:?}", built.problems);
     let generated = built.forms[0].clone();
     assert!(generated.code.contains(".AddItem \"A\""), "{}", generated.code);
@@ -311,7 +312,12 @@ fn pull_keeps_what_only_the_spec_knows() {
         panic!("nothing written");
     };
     assert_eq!(pulled.warnings, [], "nothing of a generated form is lost");
-    assert_eq!(std::fs::read_to_string(&pulled.code_path).unwrap(), hand);
+    // The VBA code-behind comes back as RAS, and the old `.bas` file is gone.
+    assert_eq!(pulled.code_path, dir.join("frmList.ras"));
+    assert!(!dir.join("frmList.bas").exists());
+    assert_eq!(pulled.todos, []);
+    let ras = std::fs::read_to_string(&pulled.code_path).unwrap();
+    assert_eq!(ras, "@on(\"UserForm.Initialize\")\nfunction userFormInitialize() {\n    this.caption = \"ready\";\n}\n");
     assert_eq!(pulled.pictures, ["forms/assets/logo.bmp"], "the existing file is reused");
     let text = std::fs::read_to_string(&pulled.spec_path).unwrap();
     let spec: Value = serde_json::from_str(&text).unwrap();
@@ -320,11 +326,20 @@ fn pull_keeps_what_only_the_spec_knows() {
     assert_eq!(spec["controls"][2]["tag"], "name");
     assert_eq!(spec["controls"][2]["controlTipText"], "Your name");
 
-    // Building the pulled files gives the same form again.
-    let rebuilt = workspace::build(&workspace::load(&root).unwrap(), &root, 932);
+    // Building the pulled files gives the same form again, with the code compiled from RAS.
+    let (sources, decls) = ras_compiler::load_forms(&root).unwrap();
+    let config = ras_compiler::Config { forms: decls, ..Default::default() };
+    let prog = ras_compiler::analyze(sources, config);
+    let out = ras_compiler::build(&prog, &ras_compiler::BuildOptions { no_attributes: true, ..Default::default() });
+    assert!(prog.diagnostics.iter().chain(&out.diagnostics).all(|d| !d.is_error()), "{:?}", prog.diagnostics);
+    let compiled: HashMap<String, String> = out.files.iter().filter(|f| f.name == "frmList").map(|f| (f.name.clone(), f.code.clone())).collect();
+    let rebuilt = workspace::build(&workspace::load(&root).unwrap(), &root, 932, &compiled);
     assert_eq!(rebuilt.errors(), 0, "{:?}", rebuilt.problems);
     assert_eq!(rebuilt.forms[0].streams, generated.streams);
-    assert_eq!(rebuilt.forms[0].code, generated.code);
+    let code = &rebuilt.forms[0].code;
+    assert!(code.contains("Private Sub UserForm_Initialize()\n    RAS_FormInit '--- RAS ---\n"), "{code}");
+    assert!(code.contains("Me.Caption = \"ready\""), "{code}");
+    assert!(code.contains(".AddItem \"A\""), "{code}");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -403,7 +418,7 @@ fn other_picture_formats_are_converted_when_the_form_is_written() {
     };
     let build = |text: &str| {
         std::fs::write(root.join("forms/frmPng.form.json"), text).unwrap();
-        let built = workspace::build(&workspace::load(&root).unwrap(), &root, 932);
+        let built = workspace::build(&workspace::load(&root).unwrap(), &root, 932, &HashMap::new());
         assert_eq!(built.errors(), 0, "{:?}", built.problems);
         built.forms[0].clone()
     };
@@ -448,7 +463,7 @@ fn other_picture_formats_are_converted_when_the_form_is_written() {
     // A file that is no picture is still an error that names the file.
     std::fs::write(assets.join("notes.png"), "not a picture").unwrap();
     std::fs::write(root.join("forms/frmPng.form.json"), spec("forms/assets/notes.png", "")).unwrap();
-    let built = workspace::build(&workspace::load(&root).unwrap(), &root, 932);
+    let built = workspace::build(&workspace::load(&root).unwrap(), &root, 932, &HashMap::new());
     assert_eq!(built.errors(), 1);
     assert!(built.problems[0].message.contains("notes.png"), "{:?}", built.problems);
     let _ = std::fs::remove_dir_all(&root);

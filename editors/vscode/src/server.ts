@@ -37,6 +37,7 @@ export class RasServer implements vscode.Disposable {
 		vscode.workspace.createFileSystemWatcher("**/*.ras"),
 		// User forms: the design, the code-behind and the pictures of Image controls.
 		vscode.workspace.createFileSystemWatcher("**/forms/*.form.json"),
+		// `.ras` code-behinds are covered above; `.bas` is the VBA code-behind of earlier versions.
 		vscode.workspace.createFileSystemWatcher("**/forms/*.bas"),
 		vscode.workspace.createFileSystemWatcher("**/forms/assets/*"),
 	];

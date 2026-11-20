@@ -392,6 +392,8 @@ impl Checker<'_> {
         let (class, is_static) = match def.kind {
             FnKind::Method { class, is_static } | FnKind::Getter { class, is_static } | FnKind::Setter { class, is_static } => (Some(class), is_static),
             FnKind::Ctor { class } => (Some(class), false),
+            // A form's code-behind: `this` is the form (spec §14.11.2).
+            FnKind::Free | FnKind::ModInit if !def.is_extension => (self.prog.modules[def.module].form.as_ref().and_then(|f| f.class), false),
             _ => (None, false),
         };
         let mut type_params = class.map(|c| self.prog.classes[c].type_params.clone()).unwrap_or_default();
@@ -1114,7 +1116,7 @@ impl Checker<'_> {
                         Type::Class(c, args)
                     }
                     _ => {
-                        self.err(e.span, "E0383", "`this` はクラスのインスタンスメソッドか拡張メソッドの中でのみ使えます");
+                        self.err(e.span, "E0383", "`this` はクラスのインスタンスメソッド、拡張メソッド、フォームのコードビハインドの中でのみ使えます");
                         Type::Error
                     }
                 }
@@ -1824,7 +1826,13 @@ impl Checker<'_> {
                     return self.member_access(e, object, ot, &Ident { text: js, span: name.span });
                 }
                 let def = &self.prog.classes[*c];
-                if def.kind == ClassKind::Host {
+                // A form's members are all known: its controls, the UserForm members, its exports.
+                let is_form = self.prog.modules[def.module].form.as_ref().is_some_and(|f| f.class == Some(*c));
+                if is_form {
+                    let shown = self.prog.class_display(*c);
+                    self.err(name.span, "E0202", format!("フォーム `{shown}` にコントロールやメンバー `{}` はありません（コントロールは forms/{shown}.form.json に、公開する関数は export して書きます）", name.text));
+                    Access::Error
+                } else if def.kind == ClassKind::Host {
                     let shown = self.prog.class_display(*c);
                     self.warn(name.span, "W0301", format!("`{shown}` の型定義に `{}` はありません。遅延バインディングとして扱います", name.text));
                     self.set_res(e.id, Res::Dynamic);
@@ -3349,6 +3357,10 @@ impl Checker<'_> {
             }
             for &c in &m.classes {
                 let d = &self.prog.classes[c];
+                // The form of a code-behind: its controls are named in the designer.
+                if d.kind == ClassKind::Host {
+                    continue;
+                }
                 items.push((m.id, d.name_span, d.name.clone()));
                 for fld in &d.fields {
                     items.push((m.id, fld.span, fld.name.clone()));

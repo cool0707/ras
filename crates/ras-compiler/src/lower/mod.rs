@@ -352,6 +352,14 @@ impl<'p> Lowerer<'p> {
 
     fn std_vmodule(&mut self, m: ModuleId) -> usize {
         let md = &self.prog.modules[m];
+        if md.form.is_some() {
+            // A form's code-behind is the form's code module (spec §14.11).
+            let i = self.vmodule(&md.vba_name.clone(), VModuleKind::Form);
+            if self.out[i].sources.is_empty() {
+                self.out[i].sources.push(md.rel_path.clone());
+            }
+            return i;
+        }
         let i = self.vmodule(&md.vba_name.clone(), VModuleKind::Standard);
         if self.out[i].sources.is_empty() {
             self.out[i].sources.push(md.rel_path.clone());
@@ -433,6 +441,11 @@ impl<'p> Lowerer<'p> {
             if prog.classes[c].type_params.is_empty() {
                 self.class_name(c, &[]);
             }
+        }
+        if md.form.is_some() {
+            // Variables of a form are initialised by `UserForm_Initialize` (see `emit_form_events`).
+            self.emit_form_events(m);
+            return;
         }
         if let Some(f) = md.init_fn {
             self.init_calls.push(format!("{}.{}", md.vba_name, prog.fns[f].name));
@@ -721,6 +734,9 @@ impl<'p> Lowerer<'p> {
         if def.kind == ClassKind::Host {
             return match def.namespace.as_deref() {
                 Some("Excel") | Some("VBA") | Some("Office") | None => def.name.clone(),
+                // `StdFont` is stdole's; the rest are qualified (`Label`, `Image` … would be ambiguous).
+                Some("MSForms") if def.name == "StdFont" => def.name.clone(),
+                Some("MSForms") => format!("MSForms.{}", def.name),
                 // Libraries from `ras typegen` are late-bound by default (spec §15.3).
                 Some(_) => "Object".into(),
             };
@@ -1007,7 +1023,8 @@ impl<'p> Lowerer<'p> {
         let mi = self.std_vmodule(def.module);
         let name = self.fn_name(f, targs);
         let env: HashMap<String, Type> = def.type_params.iter().zip(targs.iter()).map(|(p, a)| (p.name.clone(), a.clone())).collect();
-        let public = def.exported || def.attrs.macro_entry || !def.attrs.on_events.is_empty() || matches!(def.kind, FnKind::Main | FnKind::ModInit);
+        // In a form, only `export` makes a member public: handlers are called from the form itself.
+        let public = def.exported || (!def.attrs.form_member && (def.attrs.macro_entry || !def.attrs.on_events.is_empty() || matches!(def.kind, FnKind::Main | FnKind::ModInit)));
         if let Some(p) = self.build_proc(f, env, None, name.clone(), public) {
             self.fn_procs.entry(f).or_default().push((mi, name));
             self.out[mi].procs.push(p);
@@ -1061,7 +1078,7 @@ impl<'p> Lowerer<'p> {
             frame.locals.insert(p.local, Binding::Var(pname.clone()));
             params.push(VParam { name: pname, byref, ty, is_array, optional_default });
         }
-        if matches!(def.kind, FnKind::ModInit) {
+        if matches!(def.kind, FnKind::ModInit) && !def.attrs.form_member {
             // A dummy parameter keeps the initializer out of Excel's macro list.
             params.push(VParam { name: "ras_dummy".into(), byref: false, ty: "Long".into(), is_array: false, optional_default: Some("0&".into()) });
         }
@@ -1485,6 +1502,9 @@ impl<'p> Lowerer<'p> {
         // (document module, event) → handlers in declaration order
         let mut table: Vec<((String, String), Vec<(FnId, bool)>)> = Vec::new();
         for f in &prog.fns {
+            if prog.modules[f.module].form.is_some() {
+                continue;
+            }
             for ev in &f.attrs.on_events {
                 let key = (ev.target.clone(), ev.event.clone());
                 let is_wb = ev.target == "Workbook" || ev.target == "ThisWorkbook";
@@ -1595,6 +1615,103 @@ impl<'p> Lowerer<'p> {
             self.out[ri].procs.push(simple("RAS_DeferredInit", body));
             // spec §12.3 path 2
             self.out[ri].procs.push(simple("Auto_Open", vec![call_stmt("RAS_EnsureInit", vec![])]));
+        }
+    }
+
+    /// Event procedures of a form (spec §14.11.2): `@on("btnOK.Click")` handlers are called from
+    /// `Private Sub btnOK_Click()`, generated in the form's code module with the same re-entrancy
+    /// guard and error dialog as document-module events (spec §12.2). `UserForm_Initialize`
+    /// also runs the initialisers of the form's variables.
+    fn emit_form_events(&mut self, m: ModuleId) {
+        let prog = self.prog;
+        let md = &prog.modules[m];
+        let Some(form) = &md.form else { return };
+        let Some(decl) = &form.decl else { return };
+        let fi = self.std_vmodule(m);
+        // (object, event) → handlers in declaration order.
+        let mut table: Vec<((String, &'static crate::userform::EventDef), Vec<(FnId, bool)>)> = Vec::new();
+        for &f in &md.fns {
+            let d = &prog.fns[f];
+            for ev in &d.attrs.on_events {
+                let host_type = if ev.target.eq_ignore_ascii_case("UserForm") || ev.target.eq_ignore_ascii_case(&decl.name) {
+                    Some(("UserForm".to_string(), "UserForm".to_string()))
+                } else {
+                    decl.controls.iter().find(|c| c.name.eq_ignore_ascii_case(&ev.target)).map(|c| (c.control_type.clone(), c.name.clone()))
+                };
+                let Some((host_type, object)) = host_type else {
+                    self.diag(Severity::Error, m, ev.span, "E0613", format!("`@on(\"{}.{}\")`: フォーム `{}` にコントロール `{}` がありません（フォーム自身のイベントは `UserForm.イベント`）", ev.target, ev.event, decl.name, ev.target));
+                    continue;
+                };
+                let Some(def) = crate::userform::find_event(&host_type, &ev.event) else {
+                    let known: Vec<&str> = crate::userform::events_of(&host_type).iter().map(|e| e.name.as_str()).collect();
+                    let hint = if known.is_empty() {
+                        if host_type.eq_ignore_ascii_case("Page") { "ページのイベントは親の MultiPage で受け取ります".to_string() } else { format!("{host_type} のイベントは扱えません") }
+                    } else {
+                        format!("使えるイベント: {}", known.join(", "))
+                    };
+                    self.diag(Severity::Error, m, ev.span, "E0611", format!("`@on(\"{}.{}\")`: {} にイベント `{}` はありません（{hint}）", ev.target, ev.event, object, ev.event));
+                    continue;
+                };
+                if d.params.len() > def.params.len() {
+                    self.diag(Severity::Error, m, ev.span, "E0612", format!("イベント `{object}_{}` の引数は {} 個（{}）ですが、ハンドラ `{}` は {} 個受け取ります", def.name, def.params.len(), def.ras_params(), d.name, d.params.len()));
+                    continue;
+                }
+                let key = (object, def);
+                match table.iter_mut().find(|t| t.0 .0 == key.0 && t.0 .1.name == key.1.name) {
+                    Some(t) => t.1.push((f, ev.reentrant)),
+                    None => table.push((key, vec![(f, ev.reentrant)])),
+                }
+            }
+        }
+        let init_fn = md.init_fn;
+        if init_fn.is_some() && !table.iter().any(|t| t.0 .0 == "UserForm" && t.0 .1.name == "Initialize") {
+            if let Some(def) = crate::userform::find_event("UserForm", "Initialize") {
+                table.insert(0, (("UserForm".to_string(), def), Vec::new()));
+            }
+        }
+        for ((object, def), handlers) in table {
+            let proc_name = format!("{object}_{}", def.name);
+            // A function of the code-behind named like the event procedure would clash with it.
+            for &f in &md.fns {
+                let d = &prog.fns[f];
+                if names::member_ident(&d.name).eq_ignore_ascii_case(&proc_name) {
+                    self.diag(Severity::Error, m, d.name_span, "E0614", format!("関数 `{}` の名前はイベント プロシージャ `{proc_name}` と同じです。別の名前にしてください（`@on(\"{object}.{}\")` で受け取ります）", d.name, def.name));
+                }
+            }
+            let mut body = Vec::new();
+            let mut calls = Vec::new();
+            let mut locals = Vec::new();
+            if object == "UserForm" && def.name == "Initialize" {
+                if let Some(f) = init_fn {
+                    calls.push(call_stmt(names::member_ident(&prog.fns[f].name), vec![]));
+                }
+            }
+            for (i, (h, reentrant)) in handlers.iter().enumerate() {
+                let d = &prog.fns[*h];
+                let args: Vec<VExpr> = def.params.iter().take(d.params.len()).map(|p| vname(p.name.clone())).collect();
+                let call = VStmt::Call { target: VExpr::Name(names::member_ident(&d.name)), args };
+                if *reentrant {
+                    calls.push(call);
+                } else {
+                    // Re-entrancy guard: ignore events raised by the handler itself (spec §12.2).
+                    let flag = format!("ras_busy{}", i + 1);
+                    locals.push(flag.clone());
+                    calls.push(if_then(vname(flag.clone()).not(), vec![assign(vname(flag.clone()), lit("True")), call, assign(vname(flag), lit("False"))]));
+                }
+            }
+            for flag in &locals {
+                body.push(VStmt::Raw(format!("Static {flag} As Boolean")));
+            }
+            body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
+            body.extend(calls);
+            body.push(VStmt::Exit("Sub"));
+            body.push(VStmt::Label("RAS_OnError".into()));
+            for flag in &locals {
+                body.push(assign(vname(flag.clone()), lit("False")));
+            }
+            body.push(call_stmt("RAS_EventError", vec![lit(format!("\"{}.{proc_name}\"", decl.name)), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
+            let params = def.params.iter().map(|p| VParam { name: p.name.clone(), byref: p.byref, ty: p.vba_type.clone(), is_array: false, optional_default: None }).collect();
+            self.out[fi].procs.push(VProc { kind: ProcKind::Sub, public: false, friend: false, name: proc_name, params, ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None });
         }
     }
 

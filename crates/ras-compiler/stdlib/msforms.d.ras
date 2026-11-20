@@ -1,0 +1,896 @@
+// Microsoft Forms 2.0（ユーザーフォーム）の型定義（RAS 同梱・抜粋）。
+//
+// フォームのコードビハインド（forms/<名前>.ras、仕様 §14.11）から使う部分を収録する:
+//   - フォーム自身（`this`）が持つ UserForm のメンバー
+//   - 組み込みのコントロール（TextBox / ComboBox / ListBox など）と、共通の Control のメンバー
+//   - イベントの引数で受け取る ReturnBoolean / ReturnInteger などと列挙型
+//   - フォームを読み込む / 破棄する `Load` / `Unload` ステートメント
+// 名前はタイプ ライブラリの綴り（PascalCase）で書く。RAS のソースからは camelCase で見える（仕様 §15.3.1）。
+// 生成する VBA では `MSForms.TextBox` のように名前空間付きで宣言する。
+// JSDoc の要約は独自に書いたもの。詳細は @see の Microsoft リファレンスを参照。
+
+/**
+ * ユーザーフォームを読み込む（表示はしない）。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/load-statement
+ */
+declare function Load(object: any): void;
+
+/**
+ * ユーザーフォームを閉じてメモリから破棄する。`unload(this)` でフォーム自身を閉じる。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/unload-statement
+ */
+declare function Unload(object: any): void;
+
+/**
+ * 画像ファイルを読み込む。`Image` の `picture` などに設定する。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/loadpicture-function
+ */
+declare function LoadPicture(fileName?: any): object;
+
+/** `show` の引数: モーダルで表示する。 */
+declare const vbModal: int;
+/** `show` の引数: モードレスで表示する。 */
+declare const vbModeless: int;
+/** `QueryClose` の `CloseMode`: タイトル バーの閉じるボタンで閉じた。 */
+declare const vbFormControlMenu: int;
+/** `QueryClose` の `CloseMode`: コードの `unload` で閉じた。 */
+declare const vbFormCode: int;
+/** `QueryClose` の `CloseMode`: Windows の終了で閉じた。 */
+declare const vbAppWindows: int;
+/** `QueryClose` の `CloseMode`: タスク マネージャーで閉じた。 */
+declare const vbAppTaskManager: int;
+
+declare namespace MSForms {
+    /**
+     * フォントの設定（stdole の StdFont）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/font-object-microsoft-forms
+     */
+    interface StdFont {
+        /** フォント名。 */
+        Name: string;
+        /** フォントサイズ（ポイント）。 */
+        Size: currency;
+        /** 太字。 */
+        Bold: boolean;
+        /** 斜体。 */
+        Italic: boolean;
+        /** 下線。 */
+        Underline: boolean;
+        /** 取り消し線。 */
+        Strikethrough: boolean;
+        /** 文字の太さ（400 が標準、700 が太字）。 */
+        Weight: short;
+        /** 文字セット。 */
+        Charset: short;
+    }
+
+    /**
+     * イベントの引数で受け取る真偽値。`value` に `true` を代入すると処理を取り消す（`Cancel`）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/returnboolean-object
+     */
+    interface ReturnBoolean {
+        /** 値。 */
+        Value: boolean;
+    }
+
+    /**
+     * イベントの引数で受け取る整数。`KeyPress` の `KeyAscii` などで、書き換えると入力された文字やキーが変わる。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/returninteger-object
+     */
+    interface ReturnInteger {
+        /** 値。 */
+        Value: short;
+    }
+
+    /**
+     * イベントの引数で受け取る実数。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/returnsingle-object
+     */
+    interface ReturnSingle {
+        /** 値。 */
+        Value: float;
+    }
+
+    /**
+     * イベントの引数で受け取る文字列。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/returnstring-object
+     */
+    interface ReturnString {
+        /** 値。 */
+        Value: string;
+    }
+
+    /**
+     * ドラッグ アンド ドロップの効果。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/returneffect-object
+     */
+    interface ReturnEffect {
+        /** 値。 */
+        Value: fmDropEffect;
+    }
+
+    /**
+     * クリップボードやドラッグ アンド ドロップで受け渡すデータ。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/dataobject-object
+     */
+    interface DataObject {
+        /** データを文字列で取り出す。 */
+        GetText(format?: any): string;
+        /** 文字列のデータを設定する。 */
+        SetText(text: string, format?: any): void;
+        /** 指定した形式のデータがあるかどうか。 */
+        GetFormat(format: any): boolean;
+        /** クリップボードの内容を読み込む。 */
+        GetFromClipboard(): void;
+        /** 内容をクリップボードに書き込む。 */
+        PutInClipboard(): void;
+        /** ドラッグ アンド ドロップを開始する。 */
+        StartDrag(effect?: any): fmDropEffect;
+        /** データを消去する。 */
+        Clear(): void;
+    }
+
+    /**
+     * フォームやフレームに置かれたコントロールに共通するメンバー（位置・大きさ・表示など）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/control-object
+     */
+    interface Control {
+        /** コントロールの名前。 */
+        Name: string;
+        /** 親コンテナー内の左端の位置（ポイント）。 */
+        Left: float;
+        /** 親コンテナー内の上端の位置（ポイント）。 */
+        Top: float;
+        /** 幅（ポイント）。 */
+        Width: float;
+        /** 高さ（ポイント）。 */
+        Height: float;
+        /** 表示するかどうか。 */
+        Visible: boolean;
+        /** 任意の文字列を保持する。 */
+        Tag: string;
+        /** マウスを重ねたときに表示するヒント。 */
+        ControlTipText: string;
+        /** Tab キーで移動する順番（0 始まり）。 */
+        TabIndex: short;
+        /** Tab キーでフォーカスを受け取るかどうか。 */
+        TabStop: boolean;
+        /** コントロールを含む親（フォーム、フレームなど）。 */
+        readonly Parent: object;
+        /** コントロールそのもの（拡張メンバーを除いたオブジェクト）。 */
+        readonly Object: object;
+        /** ヘルプのコンテキスト ID。 */
+        HelpContextID: int;
+        /** フォーカスを移す。 */
+        SetFocus(): void;
+        /** 位置と大きさを変える。 */
+        Move(left?: any, top?: any, width?: any, height?: any, layout?: any): void;
+        /** 重なり順を変える。 */
+        ZOrder(zPosition?: any): void;
+    }
+
+    /**
+     * コントロールの集まり（`this.controls`）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/controls-collection-microsoft-forms
+     */
+    interface Controls {
+        /** 名前または番号（0 始まり）でコントロールを返す（既定メンバー）。 */
+        (index: any): Control;
+        /** 名前または番号（0 始まり）でコントロールを返す。 */
+        Item(index: any): Control;
+        /** コントロールの数。 */
+        readonly Count: int;
+        /** コントロールを追加する（`"Forms.TextBox.1"` などの ProgID を指定する）。 */
+        Add(progId: string, name?: any, visible?: any): Control;
+        /** コントロールを削除する（実行時に追加したものだけ）。 */
+        Remove(index: any): void;
+        /** 実行時に追加したコントロールをすべて削除する。 */
+        Clear(): void;
+    }
+
+    /**
+     * ユーザーフォーム。フォームのコードビハインドでは `this` がこの型（とフォームのコントロール）を持つ。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/userform-object
+     */
+    interface UserForm {
+        /** フォームを表示する。`modal` に `vbModeless`（0）を指定するとモードレス。 */
+        Show(modal?: any): void;
+        /** フォームを非表示にする（破棄はしない）。 */
+        Hide(): void;
+        /** タイトル バーの文字列。 */
+        Caption: string;
+        /** フォーム上のコントロール。 */
+        readonly Controls: Controls;
+        /** フォーカスを持つコントロール。 */
+        readonly ActiveControl: Control;
+        /** 名前。 */
+        Name: string;
+        /** 左端の位置（ポイント）。 */
+        Left: float;
+        /** 上端の位置（ポイント）。 */
+        Top: float;
+        /** 幅（ポイント）。 */
+        Width: float;
+        /** 高さ（ポイント）。 */
+        Height: float;
+        /** クライアント領域の幅（ポイント）。 */
+        readonly InsideWidth: float;
+        /** クライアント領域の高さ（ポイント）。 */
+        readonly InsideHeight: float;
+        /** 表示する位置（0: 手動、1: オーナーの中央、2: 画面の中央、3: Windows の既定）。 */
+        StartUpPosition: int;
+        /** 背景色。 */
+        BackColor: int;
+        /** 文字色。 */
+        ForeColor: int;
+        /** 枠線の色。 */
+        BorderColor: int;
+        /** コントロールを操作できるかどうか。 */
+        Enabled: boolean;
+        /** 任意の文字列を保持する。 */
+        Tag: string;
+        /** フォント。 */
+        readonly Font: StdFont;
+        /** 拡大率（パーセント）。 */
+        Zoom: short;
+        /** スクロール バーの表示。 */
+        ScrollBars: fmScrollBars;
+        /** スクロール領域の幅（ポイント）。 */
+        ScrollWidth: float;
+        /** スクロール領域の高さ（ポイント）。 */
+        ScrollHeight: float;
+        /** 水平方向のスクロール位置。 */
+        ScrollLeft: float;
+        /** 垂直方向のスクロール位置。 */
+        ScrollTop: float;
+        /** 表示を更新する。 */
+        Repaint(): void;
+        /** 位置と大きさを変える。 */
+        Move(left?: any, top?: any, width?: any, height?: any, layout?: any): void;
+        /** フォームを印刷する。 */
+        PrintForm(): void;
+        /** 直前の操作を取り消す。 */
+        UndoAction(): void;
+        /** 取り消した操作をやり直す。 */
+        RedoAction(): void;
+        /** 指定した位置へスクロールする。 */
+        Scroll(actionX?: any, actionY?: any): void;
+    }
+
+    /**
+     * ラベル。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/label-control
+     */
+    interface Label extends Control {
+        /** 表示する文字列。 */
+        Caption: string;
+        /** 文字の配置。 */
+        TextAlign: fmTextAlign;
+        /** 折り返して表示するかどうか。 */
+        WordWrap: boolean;
+        /** 文字に合わせて大きさを変えるかどうか。 */
+        AutoSize: boolean;
+        /** 背景色。 */
+        BackColor: int;
+        /** 文字色。 */
+        ForeColor: int;
+        /** 背景を透明にするかどうか（0: 透明、1: 不透明）。 */
+        BackStyle: fmBackStyle;
+        /** 枠線の種類。 */
+        BorderStyle: fmBorderStyle;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** フォント。 */
+        readonly Font: StdFont;
+        /** アクセス キー。 */
+        Accelerator: string;
+    }
+
+    /**
+     * テキスト ボックス。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/textbox-control
+     */
+    interface TextBox extends Control {
+        /** 入力されている文字列。 */
+        Text: string;
+        /** 値（`Text` と同じ内容）。 */
+        Value: any;
+        /** 入力できる最大の文字数（0 は無制限）。 */
+        MaxLength: int;
+        /** 複数行を入力できるかどうか。 */
+        MultiLine: boolean;
+        /** 入力した文字の代わりに表示する文字（パスワード入力）。 */
+        PasswordChar: string;
+        /** 文字列を変更できないようにするかどうか。 */
+        Locked: boolean;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** 選択範囲の開始位置（0 始まり）。 */
+        SelStart: int;
+        /** 選択範囲の長さ。 */
+        SelLength: int;
+        /** 選択されている文字列。 */
+        SelText: string;
+        /** 文字列の長さ。 */
+        readonly TextLength: int;
+        /** 文字の配置。 */
+        TextAlign: fmTextAlign;
+        /** 折り返して表示するかどうか。 */
+        WordWrap: boolean;
+        /** Enter キーで改行を入力できるかどうか。 */
+        EnterKeyBehavior: boolean;
+        /** Tab キーでタブ文字を入力できるかどうか。 */
+        TabKeyBehavior: boolean;
+        /** スクロール バーの表示。 */
+        ScrollBars: fmScrollBars;
+        /** IME の入力モード。 */
+        IMEMode: fmIMEMode;
+        /** 背景色。 */
+        BackColor: int;
+        /** 文字色。 */
+        ForeColor: int;
+        /** 枠線の種類。 */
+        BorderStyle: fmBorderStyle;
+        /** フォント。 */
+        readonly Font: StdFont;
+        /** 行数。 */
+        readonly LineCount: int;
+        /** 現在の行（0 始まり）。 */
+        CurLine: int;
+        /** 選択範囲をクリップボードにコピーする。 */
+        Copy(): void;
+        /** 選択範囲を切り取る。 */
+        Cut(): void;
+        /** クリップボードの内容を貼り付ける。 */
+        Paste(): void;
+    }
+
+    /**
+     * リストを持つコントロール（ComboBox / ListBox）に共通するメンバー。
+     */
+    interface ListControl extends Control {
+        /** 項目を追加する。`index` を省略すると末尾に追加する。 */
+        AddItem(item?: any, index?: any): void;
+        /** 項目を削除する（番号は 0 始まり）。 */
+        RemoveItem(index: any): void;
+        /** 項目をすべて削除する。 */
+        Clear(): void;
+        /** 項目の値を返す。引数を省略すると全項目を 2 次元配列で返す。 */
+        List(index?: any, column?: any): any;
+        /** 列の値を返す。 */
+        Column(column?: any, index?: any): any;
+        /** 項目の数。 */
+        readonly ListCount: int;
+        /** 選択されている項目の番号（0 始まり、未選択は -1）。 */
+        ListIndex: int;
+        /** 先頭に表示されている項目の番号。 */
+        TopIndex: int;
+        /** 値。 */
+        Value: any;
+        /** 選択されている項目の文字列。 */
+        Text: string;
+        /** 列の数。 */
+        ColumnCount: int;
+        /** 列の幅（`"50 pt;80 pt"` の形式）。 */
+        ColumnWidths: string;
+        /** 列見出しを表示するかどうか。 */
+        ColumnHeads: boolean;
+        /** `Value` に使う列（1 始まり）。 */
+        BoundColumn: any;
+        /** `Text` に使う列（0 始まり）。 */
+        TextColumn: any;
+        /** 項目の参照元のセル範囲（`"Sheet1!A1:A10"`）。 */
+        RowSource: string;
+        /** 値を連動させるセル（`"Sheet1!B1"`）。 */
+        ControlSource: string;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** 値を変更できないようにするかどうか。 */
+        Locked: boolean;
+        /** 背景色。 */
+        BackColor: int;
+        /** 文字色。 */
+        ForeColor: int;
+        /** フォント。 */
+        readonly Font: StdFont;
+        /** 文字の配置。 */
+        TextAlign: fmTextAlign;
+    }
+
+    /**
+     * コンボ ボックス。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/combobox-control
+     */
+    interface ComboBox extends ListControl {
+        /** 一覧からだけ選べるようにするか（`fmStyleDropDownList`）、入力もできるようにするか。 */
+        Style: fmStyle;
+        /** 入力した値が一覧に無いときに受け付けないかどうか。 */
+        MatchRequired: boolean;
+        /** 入力に合わせて一覧から補完する方法。 */
+        MatchEntry: fmMatchEntry;
+        /** 一覧に一度に表示する行数。 */
+        ListRows: int;
+        /** 一覧の幅。 */
+        ListWidth: any;
+        /** 入力できる最大の文字数。 */
+        MaxLength: int;
+        /** 選択範囲の開始位置。 */
+        SelStart: int;
+        /** 選択範囲の長さ。 */
+        SelLength: int;
+        /** 選択されている文字列。 */
+        SelText: string;
+        /** 文字列の長さ。 */
+        readonly TextLength: int;
+        /** 一覧を表示する。 */
+        DropDown(): void;
+        /** 選択範囲をクリップボードにコピーする。 */
+        Copy(): void;
+        /** 選択範囲を切り取る。 */
+        Cut(): void;
+        /** クリップボードの内容を貼り付ける。 */
+        Paste(): void;
+    }
+
+    /**
+     * リスト ボックス。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/listbox-control
+     */
+    interface ListBox extends ListControl {
+        /** 複数の項目を選べるかどうか。 */
+        MultiSelect: fmMultiSelect;
+        /** 項目が選択されているかどうか（番号は 0 始まり）。 */
+        Selected(index: any): boolean;
+        /** 項目の表示方法（チェック ボックスなど）。 */
+        ListStyle: fmListStyle;
+        /** 高さを項目の高さの整数倍に揃えるかどうか。 */
+        IntegralHeight: boolean;
+        /** 入力に合わせて項目を選ぶ方法。 */
+        MatchEntry: fmMatchEntry;
+    }
+
+    /**
+     * コマンド ボタン。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/commandbutton-control
+     */
+    interface CommandButton extends Control {
+        /** 表示する文字列。 */
+        Caption: string;
+        /** Enter キーで押されるボタンにするかどうか。 */
+        Default: boolean;
+        /** Esc キーで押されるボタンにするかどうか。 */
+        Cancel: boolean;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** 押したときにフォーカスを受け取るかどうか。 */
+        TakeFocusOnClick: boolean;
+        /** アクセス キー。 */
+        Accelerator: string;
+        /** 背景色。 */
+        BackColor: int;
+        /** 文字色。 */
+        ForeColor: int;
+        /** 折り返して表示するかどうか。 */
+        WordWrap: boolean;
+        /** 文字に合わせて大きさを変えるかどうか。 */
+        AutoSize: boolean;
+        /** フォント。 */
+        readonly Font: StdFont;
+    }
+
+    /**
+     * オンとオフを持つコントロール（CheckBox / OptionButton / ToggleButton）に共通するメンバー。
+     */
+    interface ToggleControl extends Control {
+        /** 値（`true` / `false`、3 状態のときは `null`）。 */
+        Value: any;
+        /** 表示する文字列。 */
+        Caption: string;
+        /** 3 つの状態を持たせるかどうか。 */
+        TripleState: boolean;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** 値を変更できないようにするかどうか。 */
+        Locked: boolean;
+        /** アクセス キー。 */
+        Accelerator: string;
+        /** 背景色。 */
+        BackColor: int;
+        /** 文字色。 */
+        ForeColor: int;
+        /** 値を連動させるセル（`"Sheet1!B1"`）。 */
+        ControlSource: string;
+        /** 折り返して表示するかどうか。 */
+        WordWrap: boolean;
+        /** フォント。 */
+        readonly Font: StdFont;
+    }
+
+    /**
+     * チェック ボックス。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/checkbox-control
+     */
+    interface CheckBox extends ToggleControl {
+    }
+
+    /**
+     * オプション ボタン。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/optionbutton-control
+     */
+    interface OptionButton extends ToggleControl {
+        /** 同時に 1 つだけ選べるボタンのグループ名。 */
+        GroupName: string;
+    }
+
+    /**
+     * トグル ボタン。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/togglebutton-control
+     */
+    interface ToggleButton extends ToggleControl {
+    }
+
+    /**
+     * スピン ボタン。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/spinbutton-control
+     */
+    interface SpinButton extends Control {
+        /** 値。 */
+        Value: int;
+        /** 最小値。 */
+        Min: int;
+        /** 最大値。 */
+        Max: int;
+        /** 1 回の操作で変わる量。 */
+        SmallChange: int;
+        /** 向き。 */
+        Orientation: fmOrientation;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** 値を連動させるセル（`"Sheet1!B1"`）。 */
+        ControlSource: string;
+    }
+
+    /**
+     * スクロール バー。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/scrollbar-control
+     */
+    interface ScrollBar extends Control {
+        /** 値。 */
+        Value: int;
+        /** 最小値。 */
+        Min: int;
+        /** 最大値。 */
+        Max: int;
+        /** 矢印を押したときに変わる量。 */
+        SmallChange: int;
+        /** つまみの外側を押したときに変わる量。 */
+        LargeChange: int;
+        /** 向き。 */
+        Orientation: fmOrientation;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** 値を連動させるセル（`"Sheet1!B1"`）。 */
+        ControlSource: string;
+    }
+
+    /**
+     * イメージ。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/image-control
+     */
+    interface Image extends Control {
+        /** 表示する画像（`loadPicture` で読み込む）。 */
+        Picture: object;
+        /** 画像の大きさの合わせ方。 */
+        PictureSizeMode: fmPictureSizeMode;
+        /** 画像の配置。 */
+        PictureAlignment: fmPictureAlignment;
+        /** 画像を並べて表示するかどうか。 */
+        PictureTiling: boolean;
+        /** 画像に合わせて大きさを変えるかどうか。 */
+        AutoSize: boolean;
+        /** 背景色。 */
+        BackColor: int;
+        /** 枠線の種類。 */
+        BorderStyle: fmBorderStyle;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+    }
+
+    /**
+     * フレーム。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/frame-control
+     */
+    interface Frame extends Control {
+        /** 見出しの文字列。 */
+        Caption: string;
+        /** フレーム上のコントロール。 */
+        readonly Controls: Controls;
+        /** フォーカスを持つコントロール。 */
+        readonly ActiveControl: Control;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** 背景色。 */
+        BackColor: int;
+        /** 文字色。 */
+        ForeColor: int;
+        /** スクロール バーの表示。 */
+        ScrollBars: fmScrollBars;
+        /** フォント。 */
+        readonly Font: StdFont;
+        /** 表示を更新する。 */
+        Repaint(): void;
+    }
+
+    /**
+     * マルチページのページ。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/page-object
+     */
+    interface Page {
+        /** タブに表示する文字列。 */
+        Caption: string;
+        /** 名前。 */
+        Name: string;
+        /** ページ上のコントロール。 */
+        readonly Controls: Controls;
+        /** 番号（0 始まり）。 */
+        Index: int;
+        /** 表示するかどうか。 */
+        Visible: boolean;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** 任意の文字列を保持する。 */
+        Tag: string;
+        /** マウスを重ねたときに表示するヒント。 */
+        ControlTipText: string;
+    }
+
+    /**
+     * マルチページのページの集まり。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/pages-collection
+     */
+    interface Pages {
+        /** 名前または番号（0 始まり）でページを返す（既定メンバー）。 */
+        (index: any): Page;
+        /** 名前または番号（0 始まり）でページを返す。 */
+        Item(index: any): Page;
+        /** ページの数。 */
+        readonly Count: int;
+        /** ページを追加する。 */
+        Add(name?: any, caption?: any, index?: any): Page;
+        /** ページを削除する。 */
+        Remove(index: any): void;
+        /** ページをすべて削除する。 */
+        Clear(): void;
+    }
+
+    /**
+     * マルチページ。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/multipage-control
+     */
+    interface MultiPage extends Control {
+        /** ページ。 */
+        readonly Pages: Pages;
+        /** 選択されているページの番号（0 始まり）。 */
+        Value: int;
+        /** 選択されているページ。 */
+        readonly SelectedItem: Page;
+        /** タブの位置。 */
+        TabOrientation: fmTabOrientation;
+        /** タブの表示方法。 */
+        Style: fmTabStyle;
+        /** 複数行にタブを並べるかどうか。 */
+        MultiRow: boolean;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** フォント。 */
+        readonly Font: StdFont;
+    }
+
+    /**
+     * タブ ストリップのタブ。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/tab-object
+     */
+    interface Tab {
+        /** 表示する文字列。 */
+        Caption: string;
+        /** 名前。 */
+        Name: string;
+        /** 番号（0 始まり）。 */
+        Index: int;
+        /** 表示するかどうか。 */
+        Visible: boolean;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** 任意の文字列を保持する。 */
+        Tag: string;
+        /** マウスを重ねたときに表示するヒント。 */
+        ControlTipText: string;
+    }
+
+    /**
+     * タブ ストリップのタブの集まり。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/tabs-collection
+     */
+    interface Tabs {
+        /** 名前または番号（0 始まり）でタブを返す（既定メンバー）。 */
+        (index: any): Tab;
+        /** 名前または番号（0 始まり）でタブを返す。 */
+        Item(index: any): Tab;
+        /** タブの数。 */
+        readonly Count: int;
+        /** タブを追加する。 */
+        Add(name?: any, caption?: any, index?: any): Tab;
+        /** タブを削除する。 */
+        Remove(index: any): void;
+        /** タブをすべて削除する。 */
+        Clear(): void;
+    }
+
+    /**
+     * タブ ストリップ。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/tabstrip-control
+     */
+    interface TabStrip extends Control {
+        /** タブ。 */
+        readonly Tabs: Tabs;
+        /** 選択されているタブの番号（0 始まり）。 */
+        Value: int;
+        /** 選択されているタブ。 */
+        readonly SelectedItem: Tab;
+        /** タブの位置。 */
+        TabOrientation: fmTabOrientation;
+        /** タブの表示方法。 */
+        Style: fmTabStyle;
+        /** 複数行にタブを並べるかどうか。 */
+        MultiRow: boolean;
+        /** 操作できるかどうか。 */
+        Enabled: boolean;
+        /** フォント。 */
+        readonly Font: StdFont;
+    }
+
+    /** 文字の配置。 */
+    enum fmTextAlign {
+        fmTextAlignLeft = 1,
+        fmTextAlignCenter = 2,
+        fmTextAlignRight = 3
+    }
+
+    /** 背景の表示方法。 */
+    enum fmBackStyle {
+        fmBackStyleTransparent = 0,
+        fmBackStyleOpaque = 1
+    }
+
+    /** 枠線の種類。 */
+    enum fmBorderStyle {
+        fmBorderStyleNone = 0,
+        fmBorderStyleSingle = 1
+    }
+
+    /** スクロール バーの表示。 */
+    enum fmScrollBars {
+        fmScrollBarsNone = 0,
+        fmScrollBarsHorizontal = 1,
+        fmScrollBarsVertical = 2,
+        fmScrollBarsBoth = 3
+    }
+
+    /** ComboBox の種類。 */
+    enum fmStyle {
+        fmStyleDropDownCombo = 0,
+        fmStyleDropDownList = 2
+    }
+
+    /** 入力に合わせた項目の選び方。 */
+    enum fmMatchEntry {
+        fmMatchEntryFirstLetter = 0,
+        fmMatchEntryComplete = 1,
+        fmMatchEntryNone = 2
+    }
+
+    /** ListBox の複数選択。 */
+    enum fmMultiSelect {
+        fmMultiSelectSingle = 0,
+        fmMultiSelectMulti = 1,
+        fmMultiSelectExtended = 2
+    }
+
+    /** ListBox の項目の表示方法。 */
+    enum fmListStyle {
+        fmListStylePlain = 0,
+        fmListStyleOption = 1
+    }
+
+    /** 向き。 */
+    enum fmOrientation {
+        fmOrientationAuto = -1,
+        fmOrientationVertical = 0,
+        fmOrientationHorizontal = 1
+    }
+
+    /** 画像の大きさの合わせ方。 */
+    enum fmPictureSizeMode {
+        fmPictureSizeModeClip = 0,
+        fmPictureSizeModeStretch = 1,
+        fmPictureSizeModeZoom = 3
+    }
+
+    /** 画像の配置。 */
+    enum fmPictureAlignment {
+        fmPictureAlignmentTopLeft = 0,
+        fmPictureAlignmentTopRight = 1,
+        fmPictureAlignmentCenter = 2,
+        fmPictureAlignmentBottomLeft = 3,
+        fmPictureAlignmentBottomRight = 4
+    }
+
+    /** タブの位置。 */
+    enum fmTabOrientation {
+        fmTabOrientationTop = 0,
+        fmTabOrientationBottom = 1,
+        fmTabOrientationLeft = 2,
+        fmTabOrientationRight = 3
+    }
+
+    /** タブの表示方法。 */
+    enum fmTabStyle {
+        fmTabStyleTabs = 0,
+        fmTabStyleButtons = 1,
+        fmTabStyleNone = 2
+    }
+
+    /** IME の入力モード。 */
+    enum fmIMEMode {
+        fmIMEModeNoControl = 0,
+        fmIMEModeOn = 1,
+        fmIMEModeOff = 2,
+        fmIMEModeDisable = 3,
+        fmIMEModeHiragana = 4,
+        fmIMEModeKatakana = 5,
+        fmIMEModeKatakanaHalf = 6,
+        fmIMEModeAlphaFull = 7,
+        fmIMEModeAlpha = 8,
+        fmIMEModeHangulFull = 9,
+        fmIMEModeHangul = 10,
+        fmIMEModeHanziFull = 11,
+        fmIMEModeHanzi = 12
+    }
+
+    /** ドラッグ アンド ドロップの効果。 */
+    enum fmDropEffect {
+        fmDropEffectNone = 0,
+        fmDropEffectCopy = 1,
+        fmDropEffectMove = 2,
+        fmDropEffectCopyOrMove = 3
+    }
+
+    /** ドラッグの状態。 */
+    enum fmDragState {
+        fmDragStateEnter = 0,
+        fmDragStateLeave = 1,
+        fmDragStateOver = 2
+    }
+
+    /** ドロップ・貼り付けの操作。 */
+    enum fmAction {
+        fmActionCut = 0,
+        fmActionCopy = 1,
+        fmActionPaste = 2,
+        fmActionDragDrop = 3
+    }
+
+    /** スクロールの操作。 */
+    enum fmScrollAction {
+        fmScrollActionNoChange = 0,
+        fmScrollActionLineUp = 1,
+        fmScrollActionLineDown = 2,
+        fmScrollActionPageUp = 3,
+        fmScrollActionPageDown = 4,
+        fmScrollActionBegin = 5,
+        fmScrollActionEnd = 6,
+        fmScrollActionPropertyChange = 8,
+        fmScrollActionControlRequest = 9,
+        fmScrollActionFocusRequest = 10
+    }
+}

@@ -149,7 +149,8 @@ impl Book {
         if project.get("Mode", &[])?.int() != Some(VM_DESIGN) {
             return Err(SyncError::Busy("マクロの実行中か、中断モードです".into()));
         }
-        Ok(Project { components: project.object("VBComponents", &[])? })
+        let book = self.workbook.get("Name", &[])?.string();
+        Ok(Project { components: project.object("VBComponents", &[])?, app: self.app.clone(), book })
     }
 
     /// `Application.Run` with the workbook-qualified name (spec §14.5); returns when the macro ends.
@@ -180,6 +181,33 @@ impl Book {
 
 pub struct Project {
     components: Obj,
+    /// `Application`, to run the helper that unloads forms.
+    app: Obj,
+    /// `Workbook.Name`, to qualify that helper.
+    book: String,
+}
+
+/// Name of the temporary module that unloads forms before they are replaced.
+const UNLOAD_MODULE: &str = "RAS_SyncUnload";
+
+/// VBA that unloads every loaded instance of the forms `names` and returns how many are still
+/// loaded (a `QueryClose` handler can refuse to close).
+fn unload_code(names: &[String]) -> String {
+    let test = names.iter().map(|n| format!("n = \"{}\"", n.to_lowercase().replace('"', "\"\""))).collect::<Vec<_>>().join(" Or ");
+    format!(
+        "Public Function RAS_UnloadForms() As Long\r\n\
+         \x20   Dim i As Long, n As String\r\n\
+         \x20   On Error Resume Next\r\n\
+         \x20   For i = VBA.UserForms.Count - 1 To 0 Step -1\r\n\
+         \x20       n = LCase$(TypeName(VBA.UserForms(i)))\r\n\
+         \x20       If {test} Then Unload VBA.UserForms(i)\r\n\
+         \x20   Next\r\n\
+         \x20   For i = 0 To VBA.UserForms.Count - 1\r\n\
+         \x20       n = LCase$(TypeName(VBA.UserForms(i)))\r\n\
+         \x20       If {test} Then RAS_UnloadForms = RAS_UnloadForms + 1\r\n\
+         \x20   Next\r\n\
+         End Function\r\n"
+    )
 }
 
 impl Project {
@@ -289,6 +317,46 @@ impl VbProject for Project {
         Ok(())
     }
 
+    fn unload_forms(&mut self, names: &[String]) -> Result<(), SyncError> {
+        // A designer open in the VBE.
+        for name in names {
+            let Ok(component) = self.component(name) else { continue };
+            if component.get("HasOpenDesigner", &[]).ok().and_then(|v| v.int()).is_some_and(|v| v != 0) {
+                if let Ok(window) = component.object("DesignerWindow", &[]) {
+                    let _ = window.call("Close", &[]);
+                }
+            }
+        }
+        // Loaded instances (a form closed with `Hide`, a modeless form) live in `VBA.UserForms`,
+        // which only code of the project sees: a temporary module unloads them.
+        if let Ok(stale) = self.component(UNLOAD_MODULE) {
+            let _ = self.components.call("Remove", &[Arg::Obj(&stale)]);
+        }
+        let module = self.components.object("Add", &[Arg::Int(CT_STANDARD)])?;
+        let result = (|| -> Result<i32, SyncError> {
+            module.put("Name", Arg::Str(UNLOAD_MODULE))?;
+            let code = module.object("CodeModule", &[])?;
+            code.call("AddFromString", &[Arg::Str(&unload_code(names))])?;
+            let qualified = format!("'{}'!{UNLOAD_MODULE}.RAS_UnloadForms", self.book.replace('\'', "''"));
+            let left = self.app.call_patiently("Run", &[Arg::Str(&qualified)], RUN_WAIT_MS).map_err(|e| {
+                if e.is_busy() {
+                    SyncError::from(e)
+                } else {
+                    SyncError::Failed(format!("読み込まれているユーザーフォームを閉じられませんでした: {}", e.description))
+                }
+            })?;
+            Ok(left.int().unwrap_or(0))
+        })();
+        let _ = self.components.call("Remove", &[Arg::Obj(&module)]);
+        match result? {
+            0 => Ok(()),
+            _ => Err(SyncError::Failed(format!(
+                "ユーザーフォーム {} が読み込まれたままで閉じられないため、更新できません（QueryClose で閉じるのを取り消していないか確認してください。フォームを閉じると同期します）",
+                names.join(", ")
+            ))),
+        }
+    }
+
     fn rename(&mut self, name: &str, new_name: &str) -> Result<(), SyncError> {
         self.component(name)?.put("Name", Arg::Str(new_name)).map_err(|e| if e.is_busy() { SyncError::from(e) } else { SyncError::Failed(format!("`{name}` の名前を変更できませんでした: {}", e.description)) })
     }
@@ -303,6 +371,13 @@ impl VbProject for Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unload_code_names_the_forms() {
+        let code = unload_code(&["frmInput".to_string(), "UserForm1".to_string()]);
+        assert!(code.contains("If n = \"frminput\" Or n = \"userform1\" Then Unload VBA.UserForms(i)\r\n"), "{code}");
+        assert!(code.starts_with("Public Function RAS_UnloadForms() As Long\r\n    Dim i As Long"), "{code}");
+    }
 
     #[test]
     fn paths_and_ansi_text() {
