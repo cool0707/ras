@@ -59,6 +59,7 @@ describe("form runner protocol", () => {
 		assert.deepEqual(contentInsets("MultiPage", 2), { left: 18, top: 1.5, right: 1.5, bottom: 1.5 });
 		assert.deepEqual(contentInsets("MultiPage", 3), { left: 1.5, top: 1.5, right: 18, bottom: 1.5 });
 		assert.deepEqual(contentInsets("Label"), { left: 0, top: 0, right: 0, bottom: 0 });
-		assert.deepEqual([0, 3, 11, 99, undefined].map(cursorOf), ["", "text", "wait", "", ""]);
+		assert.deepEqual([0, 3, 11, 99, undefined].map((n) => cursorOf(n)), ["", "text", "wait", "", ""]);
+		assert.equal(cursorOf(99, "data:x"), 'url("data:x"), auto');
 	});
 });

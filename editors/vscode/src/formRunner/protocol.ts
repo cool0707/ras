@@ -30,8 +30,10 @@ export interface ControlSnapshot {
 	listIndex?: number;
 	selected?: boolean[];
 	tabs?: ControlState[];
-	/** Data URI of an Image's picture. */
+	/** Data URI of the control's picture (an Image's, a Label's, a button's; a Frame's or Page's background). */
 	picture?: string | null;
+	/** Data URI of the icon or cursor of MousePointer Custom (99). */
+	mouseIcon?: string | null;
 	/** `seq` of the last `input` of the panel that the form's code has seen (TextBox / ComboBox). */
 	inputSeq?: number;
 }
@@ -114,8 +116,9 @@ export function oleToCss(value: unknown): string | undefined {
 	return `#${hex(n & 255)}${hex((n >>> 8) & 255)}${hex((n >>> 16) & 255)}`;
 }
 
-/** The CSS cursor of an fmMousePointer ("" for Default: the control's own). */
-export function cursorOf(pointer: unknown): string {
+/** The CSS cursor of an fmMousePointer ("" for Default: the control's own); Custom (99) shows `icon`. */
+export function cursorOf(pointer: unknown, icon?: string | null): string {
+	if (pointer === 99) return icon ? `url("${icon}"), auto` : "";
 	const cursors: Record<number, string> = {
 		1: "default",
 		2: "crosshair",

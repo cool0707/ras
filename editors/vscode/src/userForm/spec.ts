@@ -149,6 +149,10 @@ export function previewDocument(spec: ParsedSpec): PreviewDocument {
 			borderStyle: pick<number>(form.borderStyle, num),
 			borderColor: pick(form.borderColor, (v) => colorError(v) === undefined),
 			specialEffect: pick<number>(form.specialEffect, num),
+			picture: pick(form.picture, isObject),
+			pictureAlignment: pick<number>(form.pictureAlignment, num),
+			pictureSizeMode: pick<number>(form.pictureSizeMode, num),
+			pictureTiling: pick<boolean>(form.pictureTiling, (v) => typeof v === "boolean"),
 		},
 		controls: spec.records.map(({ control }) => {
 			const copy = { ...control };
@@ -447,8 +451,10 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 	if (builtIn) allowed = controlProperties(type);
 	else if (progId && !lookupControlContractByProgId(progId)) genericCustom(allowed);
 	const issues = validateObject(control, allowed, path);
-	const [picture, hasPicture] = lookupRaw(control, "picture");
-	if (hasPicture) issues.push(...validatePicture(picture, type, `${path}.picture`));
+	for (const field of ["picture", "mouseIcon"]) {
+		const [picture, hasPicture] = lookupRaw(control, field);
+		if (hasPicture) issues.push(...validatePicture(picture, type, `${path}.${field}`, Object.hasOwn(controlProperties(type), field)));
+	}
 	const [tabs, hasTabs] = lookupRaw(control, "tabs");
 	if (hasTabs) issues.push(...validateTabs(tabs, `${path}.tabs`));
 	issues.push(...validateSelectedIndex(control, type, path));
@@ -512,13 +518,14 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 	return issues;
 }
 
-function validatePicture(value: JsonValue, type: string, path: string): ValidationIssue[] {
-	if (type.toLowerCase() !== "image") return [issue("UFV005", "error", `${path} はコントロールの種類 ${type} では使えません。`, path)];
+/** A picture action (`picture`, `mouseIcon`) of a control that `takes` it, or of the form. */
+function validatePicture(value: JsonValue, type: string, path: string, takes: boolean): ValidationIssue[] {
+	if (!takes) return [issue("UFV005", "error", `${path} はコントロールの種類 ${type} では使えません。`, path)];
 	if (!isObject(value)) return [issue("UFV005", "error", `${path} はオブジェクトでなければなりません。`, path, "{ \"path\": ... } または { \"remove\": true } を使ってください。")];
 	const issues: ValidationIssue[] = [];
 	const keys = Object.keys(value).map((k) => k.trim().toLowerCase());
 	for (const key of Object.keys(value))
-		if (!["path", "remove"].includes(key.trim().toLowerCase())) issues.push(issue("UFV001", "error", `${path}.${key} は picture では定義されていない項目です。`, `${path}.${key}`));
+		if (!["path", "remove"].includes(key.trim().toLowerCase())) issues.push(issue("UFV001", "error", `${path}.${key} は画像の指定では定義されていない項目です。`, `${path}.${key}`));
 	const hasPath = keys.includes("path");
 	const hasRemove = keys.includes("remove");
 	if (hasPath && hasRemove) issues.push(issue("UFV005", "error", `${path} には path と remove のどちらか一方だけを指定します。`, path));
@@ -702,6 +709,10 @@ export function validateSpec(root: JsonObject): ValidationIssue[] {
 		if (isObject(form.observed)) issues.push(...validateObject(form.observed, formObservedProperties, "form.observed"));
 		issues.push(...validateFormDimensions(form));
 		issues.push(...validateTyped(form, "form", formProperties));
+		for (const field of ["picture", "mouseIcon"]) {
+			const [picture, hasPicture] = lookupRaw(form, field);
+			if (hasPicture) issues.push(...validatePicture(picture, "UserForm", `form.${field}`, true));
+		}
 		// The Tag of the designer block: [MS-OVBA] allows 130 characters in quotes, on one line.
 		if (typeof form.tag === "string" && (/[\u0000-\u001f\u007f]/.test(form.tag) || [...form.tag].length > 130))
 			issues.push(issue("UFV021", "error", "tag は制御文字を含まない 130 文字以内の文字列にしてください。", "form.tag"));

@@ -23,6 +23,10 @@ it is used by `tests/snapshot.rs` (xlflow has no conversion to compare
 with: the test checks that a PNG gives the same form as the bitmap it is
 converted to).
 
+xlflow's fixture of a Label with a picture (`99-error-picture-on-label`,
+rejected by xlflow) is not kept: RAS writes the pictures of Labels, buttons,
+toggles, Frames, Pages and the form (`tests/snapshot.rs`).
+
 Fixtures only cover what xlflow accepts as well. What RAS accepts beyond
 that — `tag` / `controlTipText` on every control, `list` / `selectedIndex`
 of ComboBox and ListBox — is tested in `tests/snapshot.rs` by comparison

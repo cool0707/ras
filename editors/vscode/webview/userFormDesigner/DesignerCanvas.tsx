@@ -4,6 +4,7 @@ import type { DesignerControl, DesignerDocument } from "../../src/userForm/proto
 import { pointsToPixels } from "../../src/userForm/model";
 import { pixelsToPoints, toggleState } from "../../src/userForm/model";
 import { columnLayout, itemColumns, textColumnIndex } from "../../src/userForm/listItems";
+import { backgroundPicture, picturePositionLayout } from "../../src/userForm/pictureLayout";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { displayPages } from "../../src/userForm/collections";
 import type { ActivePages } from "../../src/userForm/collections";
@@ -83,6 +84,22 @@ function ControlPicture({ control }: { control: DesignerControl }) {
   return <span class="placeholder">▧ {name || "Image"}</span>;
 }
 
+/** A caption with the control's picture beside it, as PicturePosition places it. */
+function PictureCaption({ control, caption }: { control: DesignerControl; caption: string }) {
+  const source = control.picture?.remove === true ? undefined : control.picturePreview;
+  if (!source) return <span>{caption}</span>;
+  const layout = picturePositionLayout(control.picturePosition);
+  return (
+    <span
+      class={`picture-caption ${layout.direction}`}
+      style={layout.direction === "stack" ? undefined : { flexDirection: layout.direction, alignItems: layout.align }}
+    >
+      <img class="caption-picture" src={source} alt="" draggable={false} />
+      {caption && <span class="caption-text">{caption}</span>}
+    </span>
+  );
+}
+
 /** Orientation Horizontal (1) or Vertical (0), else Auto: horizontal when wider than high. */
 const horizontal = (control: DesignerControl) =>
   control.orientation === 1 || (control.orientation !== 0 && control.width >= control.height);
@@ -116,7 +133,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "label":
     case "commandbutton":
     case "togglebutton":
-      return <span>{caption}</span>;
+      return <PictureCaption control={control} caption={caption} />;
     case "textbox": {
       const text = control.text ?? String(control.value ?? "");
       // PasswordChar shows in place of every character.
@@ -129,7 +146,9 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
       return (
         <>
           <span class={`toggle-box ${type === "checkbox" ? "check" : "option"} ${state}`} aria-hidden="true" />
-          <span class="toggle-caption">{caption}</span>
+          <span class="toggle-caption">
+            <PictureCaption control={control} caption={caption} />
+          </span>
         </>
       );
     }
@@ -1111,6 +1130,12 @@ export function DesignerCanvas({
                   title={page.name}
                   style={{
                     ...appearanceStyle(page),
+                    ...backgroundPicture(
+                      page.picture?.remove === true ? undefined : page.picturePreview,
+                      page.pictureAlignment,
+                      page.pictureSizeMode,
+                      page.pictureTiling,
+                    ),
                     left: px(insets.left),
                     top: px(insets.top),
                     right: px(insets.right),
@@ -1126,6 +1151,12 @@ export function DesignerCanvas({
               class="container-content"
               data-container-id={control.id}
               style={{
+                ...backgroundPicture(
+                  control.picture?.remove === true ? undefined : control.picturePreview,
+                  control.pictureAlignment,
+                  control.pictureSizeMode,
+                  control.pictureTiling,
+                ),
                 left: px(insets.left),
                 top: px(insets.top),
                 right: px(insets.right),
@@ -1354,6 +1385,12 @@ export function DesignerCanvas({
               data-container-id=""
               style={{
                 ...appearanceStyle(document),
+                ...backgroundPicture(
+                  document.picture?.remove === true ? undefined : document.picturePreview,
+                  document.pictureAlignment,
+                  document.pictureSizeMode,
+                  document.pictureTiling,
+                ),
                 width: px((formResizePreview ?? document).width),
                 height: px((formResizePreview ?? document).height),
                 backgroundSize: `${px(gridSize)} ${px(gridSize)}`,

@@ -1566,7 +1566,7 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 
   コードでプロパティを変えたときも、VBA と同じく `Change` などが起きる（`text`・`value`・`listIndex` の変更）。キー入力のイベント（`KeyDown` / `KeyPress` / `KeyUp`）・マウスのイベント（`MouseDown` など）・ドラッグ＆ドロップ・`Deactivate` は起こさない。
 * **エラー:** ハンドラで捕捉されなかったエラーは、VBA ビルドの RAS エラーダイアログ（`RAS_EventError`）と同じく実行を止めない。エラーの内容と RAS の位置をデバッグ コンソールとフォームのパネルに表示し、次の操作を待つ。エラーで止めたい場合は、VS Code のブレークポイントの「捕捉された例外」を有効にする。
-* **MSForms のオブジェクト:** フォーム（`caption`・`width` / `height`・`backColor`・`font`・`controls`・`activeControl`・`show` / `hide`）と組み込みのコントロール（§14.11.1）の主なプロパティとメソッドを JavaScript で実装している（`text` / `value`、`caption`、`enabled` / `visible` / `locked`、位置と大きさ、色とフォント、`ComboBox` / `ListBox` の `addItem` / `removeItem` / `clear` / `list` / `column` / `listIndex` / `listCount` / `selected` / `multiSelect`、`MultiPage` の `pages` / `selectedItem`、`TabStrip` の `tabs`、`Image` の `picture` と `loadPicture`）。初期値は `.form.json` から読む（`list` / `selectedIndex` を含む）。未実装のメンバーはエラー 438、`controls.add` などの未対応の操作はエラー 445 になる。
+* **MSForms のオブジェクト:** フォーム（`caption`・`width` / `height`・`backColor`・`font`・`controls`・`activeControl`・`show` / `hide`）と組み込みのコントロール（§14.11.1）の主なプロパティとメソッドを JavaScript で実装している（`text` / `value`、`caption`、`enabled` / `visible` / `locked`、位置と大きさ、色とフォント、`ComboBox` / `ListBox` の `addItem` / `removeItem` / `clear` / `list` / `column` / `listIndex` / `listCount` / `selected` / `multiSelect`、`MultiPage` の `pages` / `selectedItem`、`TabStrip` の `tabs`、`Image` などの `picture`・`mouseIcon` と `loadPicture`）。初期値は `.form.json` から読む（`list` / `selectedIndex` を含む）。未実装のメンバーはエラー 438、`controls.add` などの未対応の操作はエラー 445 になる。
 * **見た目:** パネルは Windows の既定の色（システム カラー）とフォントでフォームを描く。座標と大きさはポイント単位で、Excel のフォームとおおむね同じ配置になるが、コントロールの描画（枠の形、リストの行の高さ、`ComboBox` のドロップダウンなど）はブラウザーのものであり、Excel とは一致しない。
 * **再現しないもの:** Excel と VS Code の間のモーダル（モーダル フォームの表示中も Excel や VS Code の他の部分は操作できる。デバッグ実行の他のフォームは操作できない）、`StartUpPosition`、ユーザーによるフォームのサイズ変更、カスタム コントロール。フォームの `zoom` はコントロールの拡大縮小、`scrollBars` / `keepScrollBarsVisible` / `scrollWidth` / `scrollHeight` / `scrollLeft` / `scrollTop` はパネルの中のスクロールとして表示する。
 * **セルとの連動:** `rowSource` のある `ComboBox` / `ListBox` は、フォームを読み込むときに Excel のそのセル範囲から項目を読む。`controlSource` のあるコントロールは、フォームを読み込むとき（`Initialize` の前）にそのセルの値を表示し、ユーザーが変えた値が確定するとき（`BeforeUpdate` の後、`AfterUpdate` の前）にセルへ書き込む。読み書きできなかったときは、デバッグ コンソールに表示して続ける。
@@ -1616,9 +1616,9 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 | 書かなかったプロパティ | Excel でコントロールを作ったときと同じ値で書き込む（`ComboBox` はドロップ ボタンを常に表示・`matchEntry` 1、`ListBox` は `matchEntry` 0・スクロール バーあり、`Frame` は `specialEffect` 3 など）。xlflow は `ComboBox` と `ListBox` を MS-OFORMS の既定値（ドロップ ボタンなし・`matchEntry` 2）のまま書く。取り込み（`ras form pull`）では、これと違う値のものだけを書き出す |
 | `CheckBox` / `OptionButton` / `ToggleButton` の `value` | `true` / `false`（`"True"` / `"False"`、0 / 1 / -1 も可）に加えて、どちらでもない状態（VBA の `Null`）を `"Null"` と書ける。`tripleState` は、Excel が保存するのと同じく MS-OFORMS の `MultiSelect` の欄に書き込む（仕様書には格納場所の記載が無い） |
 | フォームのプロパティ | `form` に、VBA の UserForm の同名のプロパティを同じ値で書ける。<br>・デザイナブロック（`VBFrame` ストリーム。[MS-OVBA] 2.3.5）に書くもの: `startUpPosition`（0: Manual、1: CenterOwner（省略時）、2: CenterScreen、3: WindowsDefault）・`showModal`・`tag`（130 文字まで）・`helpContextId`・`rightToLeft`・`whatsThisButton`・`whatsThisHelp`。真偽値は VBABOOL（`0` / `-1`）で書く<br>・フォームのレコード（`f` ストリーム）に書くもの: `enabled`（`false` はデザイナブロックの `Enabled = 0` も書く）・`borderColor`・`cycle`・`mousePointer`・`specialEffect`・`zoom`（10〜400）・`drawBuffer`・`scrollBars`・`keepScrollBarsVisible`（0: None、1: Horizontal、2: Vertical、3: Both（省略時））・`scrollWidth` / `scrollHeight`（ポイント。0 はフォームの大きさ）・`scrollLeft` / `scrollTop`<br>取り込み（`ras form pull`）では、新しいフォームと違う値のものだけを書き出す。デザイナブロックに行が無いプロパティは書き出さない。`Left` / `Top`（`ClientLeft` / `ClientTop`）は、ウィンドウの枠の大きさが環境で変わるため扱わない |
-| 書けないプロパティ | 画像（`Image` の `picture` 以外）、`MouseIcon`。取り込んだフォームでは、これらは今までどおり `unsupported` に残る |
+| 画像とマウス アイコン | `picture` は `Image` のほか、`Label`・`CommandButton`・`CheckBox`・`OptionButton`・`ToggleButton`（キャプションの横の画像。位置は `picturePosition`: 0 LeftTop〜12 Center、省略時は 7 AboveCenter）、`Frame`・`Page`（背景。`pictureAlignment`・`pictureSizeMode`・`pictureTiling`）とフォーム（`form.picture`。`form.pictureAlignment` など）に書ける。`mouseIcon` は `mousePointer` を持つコントロールとフォームに書け、`mousePointer` 99（Custom）のときのポインターになる。どちらも下の「画像」と同じく `{ "path": … }` / `{ "remove": true }` で指定する。xlflow では `Image` の `picture` だけ |
 
-**`Image` の画像（`picture`）**
+**画像（`picture`）とマウス アイコン（`mouseIcon`）**
 
 * `"picture": { "path": "forms/assets/logo.bmp" }` で画像ファイルを指定する。パスはプロジェクトのルート（`ras.toml` のあるフォルダー）からの相対パスで、ルートの外（`..`、絶対パス、ドライブ指定）は指定できない。
 * 指定できる形式は BMP・JPEG・PNG・GIF・WebP・TIFF・ICO。ファイルの大きさは 16 MiB まで。形式は拡張子ではなくファイルの内容で判別する。メタファイル（WMF / EMF）は使えない。
@@ -1630,6 +1630,8 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
   * 同じファイルと同じ背景色からは、常に同じ BMP ができる（デザインのハッシュが変わらない）。
 * ブックを開くのに元のファイルは要らない。
 * `"picture": { "remove": true }` は画像なしを表す（`picture` を書かない場合と同じ）。
+* コントロールの画像は、そのレコードの `Picture`（`MorphData` / `CommandButton` / `Label` の `StreamData`）に、`Frame`・`Page`・フォームの背景は、それぞれの `f` ストリームのフォント（`TextProps`）の後ろに書き込む。`pictureTiling` は値を持たない `FormPropMask` のビット（24）で表す。
+* `mouseIcon` に指定できるのはアイコン（ICO）とカーソル（CUR）のファイルで、変換せずにそのまま `StdPicture` として埋め込む（[MS-OFORMS] 2.4.13 は `StdPicture` にアイコンを持てるとしている）。MS-Forms がそのまま持てる BMP / JPEG も受け付けるが、変換はしない。フォームと `Frame` / `Page` のものは `f` ストリームのフォントの前に書き込む。
 
 #### 14.11.2 コードビハインド（`forms/<Name>.ras`）
 
@@ -1753,7 +1755,7 @@ End Sub
 
 * 名前を省略するとブックのすべてのフォームが対象。`forms/` に同名のファイルが既にあるフォームは書き出さない（`--force` で置き換える）。
 * **デザイン:** デザイナストレージを読み、xlflow の projection と同じ規則で FormSpec にする（`crates/ras-form/tests/snapshot.rs` で、Excel が保存したフォームについて xlflow の出力と一致することを確認している）。加えて、xlflow の projection が「表せないプロパティ」として扱うもののうち、生成側が書けるものを取り込む: `Tag` / `ControlTipText`（`tag` / `controlTipText`）、`GroupName`・`MaxLength`・`BorderColor`（`properties`）。キャプションが保存されていないコントロールは `caption: ""` とし、フォームのキャプションがフォームのレコードに無ければデザイナブロック（`VBFrame`）の `Caption` を使う。
-* **画像:** `Image` の画像（BMP / JPEG として保存されているもの）を `forms/assets/<Name>.<コントロール名>.bmp|jpg` に書き出し、`picture.path` で参照する。Excel は JPEG を読み込んだ画像も BMP で保存するため、取り出した画像は多くの場合 BMP になる。書き込み時に変換された画像（PNG など）も、取り出すと変換後の BMP になる。
+* **画像:** コントロールとフォームの画像（BMP / JPEG として保存されているもの）を `forms/assets/<Name>.<コントロール名>.bmp|jpg`（フォームのものは `forms/assets/<Name>.bmp|jpg`）に書き出し、`picture.path` で参照する。マウス アイコンは `forms/assets/<Name>[.<コントロール名>].mouseIcon.ico|cur` に書き出し、`mouseIcon.path` で参照する。Excel は JPEG を読み込んだ画像も BMP で保存するため、取り出した画像は多くの場合 BMP になる。書き込み時に変換された画像（PNG など）も、取り出すと変換後の BMP になる。
 * **コード:** コードモジュールから `Attribute` 行を除いた VBA を RAS に変換して `forms/<Name>.ras` に書く（下記）。RAS が書き込んだフォームの場合は、目印の行・RAS 管理領域・挿入した `RAS_FormInit` の呼び出しも除いてから変換する。
   * RAS が書き込んだフォーム（目印の行がある）で、`forms/<Name>.ras` が既にあるときは、コードビハインドを書き換えない（そのファイルからコンパイルしたコードなので）。デザインだけを取り込み直す。VBE でコードを編集しても取り込まれない。
   * 以前の版の `forms/<Name>.bas` は、`.ras` を書いたときに削除する。
@@ -1766,7 +1768,7 @@ End Sub
   * RAS が書き込んだフォームのコード（`.ras` の無いプロジェクトへ取り出したとき）は、生成したイベント プロシージャを `@on` に、変数の初期化（`RAS_ModInit`）を変数の初期値に戻す。行番号（`Erl` 用）は捨てる。
   * 変換できないもの（`GoTo` / 行ラベル、`ReDim`、大きさを指定した配列、`Like`、日付リテラル、`Static`、引数を取るプロパティへの代入、ユーザー定義型・`Declare`・`Public` 変数（フォーム内の変数にする）など）は、元の行を `// TODO(VBA): <理由>` のコメントとして残し、コマンドの出力に警告（ファイルと行）として表示する。変換結果は必ずしもそのままコンパイルできるとは限らない。`ras check` で確認して直す。
 * **リストの項目:** ブックには保存されていないので取り出せない。`--force` で既存の `.form.json` を置き換えるときは、同名の `ComboBox` / `ListBox` の `list` / `selectedIndex` と、画像の `picture.path` を既存のファイルから引き継ぐ（そのパスのファイルを書き込み時と同じ規則で変換した結果が、ブックの画像と一致する場合。PNG などを指定していたフォームは、取り込み直しても PNG を指したままになる）。
-* **取り込めないもの:** FormSpec で表せないプロパティ（`specialEffect`、`mousePointer`、スクロールバーの `min` / `max` など）は、コントロールごとに `unsupported` に名前を記録し、コマンドの出力に警告として表示する。これらは `forms/` から書き戻すと既定値になる。組み込み以外のコントロール（ActiveX）は `type: "Control"` として記録され、生成できない。BMP / JPEG 以外の画像（アイコン、メタファイル）は取り出せず、`unsupported` に `picture` が残る（この場合は `picture` に置き換える画像か `{ "remove": true }` を書くまで生成できない）。
+* **取り込めないもの:** FormSpec で表せないプロパティ（`specialEffect`、`mousePointer`、スクロールバーの `min` / `max` など）は、コントロールごとに `unsupported` に名前を記録し、コマンドの出力に警告として表示する。これらは `forms/` から書き戻すと既定値になる。組み込み以外のコントロール（ActiveX）は `type: "Control"` として記録され、生成できない。BMP / JPEG / アイコン以外の画像（メタファイルなど）は取り出せず、`unsupported` に `picture`（`mouseIcon`）が残る（この場合は置き換える画像か `{ "remove": true }` を書くまで生成できない）。
 * 取り出しただけではブックは変わらない。VBE で作ったフォームを `forms/` の内容で置き換えるには、`ras pack --overwrite`（または `ras sync --overwrite`）を実行する。
 * `forms/` に無いフォームは、同期（`ras sync`・`ras pack` など）のときにも同じ変換で取り込まれ、置き換えられる（§14.7.1）。
 

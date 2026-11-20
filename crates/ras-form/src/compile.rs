@@ -359,17 +359,19 @@ fn control_definition(
             "VBA の識別子にしてください".into(),
         ));
     }
-    if control.picture.is_none()
-        && control
-            .unsupported
-            .as_ref()
-            .is_some_and(|u| u.iter().any(|v| v.trim().eq_ignore_ascii_case("picture")))
-    {
-        return Err(failure(
-            UNSUPPORTED,
-            "picture",
-            "既存の画像を保持したままの生成には対応していません".into(),
-        ));
+    for (field, given) in [("picture", control.picture.is_some()), ("mouseIcon", control.mouse_icon.is_some())] {
+        if !given
+            && control
+                .unsupported
+                .as_ref()
+                .is_some_and(|u| u.iter().any(|v| v.trim().eq_ignore_ascii_case(field)))
+        {
+            return Err(failure(
+                UNSUPPORTED,
+                field,
+                "既存の画像を保持したままの生成には対応していません".into(),
+            ));
+        }
     }
     // The items of a ComboBox (25) or ListBox (24) are not part of the
     // designer storage; they are filled by generated code (`codebehind`).
@@ -622,37 +624,46 @@ fn control_definition(
             }
         }
     }
-    if let Some(picture) = &control.picture {
-        if picture.get("remove").and_then(Value::as_bool) != Some(true) {
-            let path = picture
-                .get("path")
-                .and_then(Value::as_str)
-                .filter(|p| !p.trim().is_empty());
-            let Some(path) = path else {
-                return Err(failure(
-                    INVALID,
-                    "picture.path",
-                    "画像ファイルのパスを指定してください".into(),
-                ));
-            };
-            let Some(root) = root else {
-                return Err(failure(
-                    INVALID,
-                    "picture.path",
-                    "プロジェクトのルートが分からないため、画像を読めません".into(),
-                ));
-            };
-            // A picture MS-Forms cannot store is converted to a bitmap here;
-            // its transparent parts show the control's background color.
-            let background = crate::picture::background_of(control.back_color.as_ref());
-            let raw = crate::picture::load_with(root, path, background)
-                .and_then(|picture| crate::picture::encode(&picture.data))
-                .map_err(|e| failure(INVALID, "picture.path", e))?;
-            item.properties
-                .insert("Picture".into(), PValue::Picture(raw));
+    for (field, property) in [("picture", "Picture"), ("mouseIcon", "MouseIcon")] {
+        let action = if field == "picture" { &control.picture } else { &control.mouse_icon };
+        let raw = picture_action(action.as_ref(), field, root, control.back_color.as_ref())
+            .map_err(|(path, reason)| failure(INVALID, &path, reason))?;
+        if let Some(raw) = raw {
+            item.properties.insert(property.into(), PValue::Picture(raw));
         }
     }
     Ok(item)
+}
+
+/// The stored `GuidAndPicture` of a picture action (`{ path }`; `None` for none or
+/// `{ remove: true }`): a picture MS-Forms cannot store is converted to a bitmap, its
+/// transparent parts showing `back_color`; a `mouseIcon` is an icon or cursor file as it is.
+/// The error names the field concerned.
+fn picture_action(
+    action: Option<&Value>,
+    field: &str,
+    root: Option<&Path>,
+    back_color: Option<&crate::spec::FormSpecColor>,
+) -> Result<Option<Vec<u8>>, (String, String)> {
+    let Some(action) = action.filter(|a| a.get("remove").and_then(Value::as_bool) != Some(true)) else {
+        return Ok(None);
+    };
+    let path_field = format!("{field}.path");
+    let Some(path) = action.get("path").and_then(Value::as_str).filter(|p| !p.trim().is_empty()) else {
+        return Err((path_field, "画像ファイルのパスを指定してください".into()));
+    };
+    let Some(root) = root else {
+        return Err((path_field, "プロジェクトのルートが分からないため、画像を読めません".into()));
+    };
+    let picture = if field == "mouseIcon" {
+        crate::picture::load_icon(root, path)
+    } else {
+        crate::picture::load_with(root, path, crate::picture::background_of(back_color))
+    };
+    picture
+        .and_then(|picture| crate::picture::encode(&picture.data))
+        .map(Some)
+        .map_err(|e| (path_field, e))
 }
 
 fn generation_tabs(tabs: &[FormSpecTab], index: Option<i64>) -> Result<TabStripState, String> {
@@ -777,6 +788,7 @@ fn promote_legacy_appearance(control: &mut FormSpecControl) {
 #[allow(clippy::type_complexity)]
 fn form_properties(
     form: &crate::spec::FormSpecForm,
+    root: Option<&Path>,
 ) -> Result<(BTreeMap<String, PValue>, Vec<(&'static str, String)>), CompileError> {
     let mut properties = BTreeMap::new();
     let mut frame = Vec::new();
@@ -797,6 +809,9 @@ fn form_properties(
                 let current = fields.entry(name).or_insert(p.omitted);
                 *current = scalars::put_field_bits(*current, p, raw);
             }
+            Store::Flag(name, _) => {
+                properties.insert(name.to_string(), PValue::Bool(raw != 0));
+            }
             Store::Extent(name, index) => {
                 let size = extents.entry(name).or_insert_with(|| {
                     // What generation writes for a new form: no scroll area, not scrolled.
@@ -816,6 +831,13 @@ fn form_properties(
     }
     for (name, (width, height)) in extents {
         properties.insert(name.to_string(), PValue::Pair(width, height));
+    }
+    for (field, property, action) in [("picture", "Picture", &form.picture), ("mouseIcon", "MouseIcon", &form.mouse_icon)] {
+        let raw = picture_action(action.as_ref(), field, root, form.back_color.as_ref())
+            .map_err(|(path, reason)| fail(INVALID, "", &format!("form.{path}"), reason))?;
+        if let Some(raw) = raw {
+            properties.insert(property.to_string(), PValue::Picture(raw));
+        }
     }
     // A disabled form: its record, and the designer block as the VBA editor writes it.
     if properties.get("BooleanProperties").is_some_and(|v| *v == PValue::Int(0)) {
@@ -1008,7 +1030,7 @@ pub(crate) fn compile_new(
         Ok(result)
     }
     let controls = build("", 0, &children, &original_index, root)?;
-    let (properties, frame) = form_properties(&spec.form)?;
+    let (properties, frame) = form_properties(&spec.form, root)?;
     let definition = Definition {
         name: form_name.clone(),
         caption,

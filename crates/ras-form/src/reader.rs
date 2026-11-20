@@ -507,9 +507,11 @@ fn read_font_blob(r: &mut Reader) -> Result<Vec<u8>> {
 #[derive(Clone, Debug)]
 pub(crate) struct Level {
     pub record: Record,
-    pub mouse_icon: bool,
+    /// The `GuidAndPicture` of the level's MouseIcon, if it has one.
+    pub mouse_icon: Option<Vec<u8>>,
     pub font_raw: Vec<u8>,
-    pub picture: bool,
+    /// The `GuidAndPicture` of the level's Picture, if it has one.
+    pub picture: Option<Vec<u8>>,
     /// Streams of the storage that are not part of the designer format.
     pub extra_streams: Vec<String>,
 }
@@ -1016,22 +1018,20 @@ fn parse_form_stream(data: &[u8]) -> Result<(Level, Vec<Site>)> {
     let mut r = Reader::new(data);
     r.pos = form_end;
     let mut level = Level {
-        mouse_icon: false,
+        mouse_icon: None,
         font_raw: Vec::new(),
-        picture: false,
+        picture: None,
         extra_streams: Vec::new(),
         record,
     };
     if level.record.mask & FORM_MASK_MOUSE_ICON != 0 {
-        r.guid_and_picture().map_err(|e| format!("MouseIcon: {e}"))?;
-        level.mouse_icon = true;
+        level.mouse_icon = Some(r.guid_and_picture().map_err(|e| format!("MouseIcon: {e}"))?);
     }
     if level.record.mask & FORM_MASK_FONT != 0 {
         level.font_raw = read_font_blob(&mut r).map_err(|e| format!("Font: {e}"))?;
     }
     if level.record.mask & FORM_MASK_PICTURE != 0 {
-        r.guid_and_picture().map_err(|e| format!("Picture: {e}"))?;
-        level.picture = true;
+        level.picture = Some(r.guid_and_picture().map_err(|e| format!("Picture: {e}"))?);
     }
     let start = r.pos;
     let sites = match parse_site_data(data, start, true) {

@@ -4,6 +4,7 @@
 import "./formRunner.css";
 import { contentInsets, cursorOf, oleToCss, px } from "../../src/formRunner/protocol";
 import { columnLayout, textColumnIndex } from "../../src/userForm/listItems";
+import { backgroundPicture, picturePositionLayout } from "../../src/userForm/pictureLayout";
 import type { ControlSnapshot, ControlState, FontState, FormState, PanelMessage, UserAction } from "../../src/formRunner/protocol";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -113,6 +114,38 @@ function colors(node: HTMLElement, s: ControlState, transparent = false): void {
 
 const ALIGN = ["left", "left", "center", "right"];
 
+/** Fills `node` with the caption and, when the control has one, its picture as PicturePosition places it. */
+function captionWithPicture(node: HTMLElement, caption: string, picture: string | null | undefined, position: unknown): void {
+	const key = JSON.stringify([caption, picture ?? "", position]);
+	if (node.dataset.drawn === key) return;
+	node.dataset.drawn = key;
+	while (node.firstChild) node.firstChild.remove();
+	if (!picture) {
+		node.textContent = caption;
+		return;
+	}
+	const layout = picturePositionLayout(position);
+	const box = el("span", `picture-caption ${layout.direction}`, node);
+	if (layout.direction !== "stack") {
+		box.style.flexDirection = layout.direction;
+		box.style.alignItems = layout.align;
+	}
+	const img = el("img", "caption-picture", box);
+	img.src = picture;
+	img.alt = "";
+	img.draggable = false;
+	if (caption) el("span", "caption-text", box).textContent = caption;
+}
+
+/** The background picture of a form, Frame or Page. */
+function background(node: HTMLElement, picture: string | null | undefined, s: ControlState): void {
+	const css = backgroundPicture(picture ?? undefined, s.PictureAlignment, s.PictureSizeMode, s.PictureTiling);
+	node.style.backgroundImage = css.backgroundImage ?? "";
+	node.style.backgroundPosition = css.backgroundPosition ?? "";
+	node.style.backgroundSize = css.backgroundSize ?? "";
+	node.style.backgroundRepeat = css.backgroundRepeat ?? "";
+}
+
 function focusable(view: View, node: HTMLElement, name: string): void {
 	view.focus = node;
 	node.addEventListener("focus", () => {
@@ -133,7 +166,7 @@ function create(c: ControlSnapshot): View {
 			const text = el("span", "label-text", root);
 			root.addEventListener("click", () => send({ t: "click", control: name }));
 			view.update = (s) => {
-				text.textContent = str(s.state.Caption);
+				captionWithPicture(text, str(s.state.Caption), s.picture, s.state.PicturePosition);
 				root.style.whiteSpace = s.state.WordWrap === false ? "pre" : "pre-wrap";
 				root.style.textAlign = ALIGN[num(s.state.TextAlign, 1)] ?? "left";
 				colors(root, s.state, num(s.state.BackStyle, 1) === 0);
@@ -324,7 +357,7 @@ function create(c: ControlSnapshot): View {
 			focusable(view, button, name);
 			button.addEventListener("click", () => send({ t: "click", control: name }));
 			view.update = (s, enabled) => {
-				button.textContent = str(s.state.Caption);
+				captionWithPicture(button, str(s.state.Caption), s.picture, s.state.PicturePosition);
 				button.disabled = !enabled;
 				button.classList.toggle("default", bool(s.state.Default));
 				if (c.type === "ToggleButton") {
@@ -348,7 +381,7 @@ function create(c: ControlSnapshot): View {
 				send({ t: "click", control: name });
 			});
 			view.update = (s, enabled) => {
-				caption.textContent = str(s.state.Caption);
+				captionWithPicture(caption, str(s.state.Caption), s.picture, s.state.PicturePosition);
 				box.checked = s.state.Value === true;
 				label.classList.toggle("null", s.state.Value === null);
 				box.disabled = !enabled;
@@ -426,6 +459,7 @@ function create(c: ControlSnapshot): View {
 				root.classList.toggle("has-caption", str(s.state.Caption) !== "");
 				colors(root, s.state);
 				caption.style.backgroundColor = root.style.backgroundColor;
+				background(content, s.picture, s.state);
 				const inset = contentInsets("Frame");
 				content.style.left = px(inset.left);
 				content.style.top = px(inset.top);
@@ -466,7 +500,10 @@ function create(c: ControlSnapshot): View {
 		case "Page": {
 			const content = el("div", "content", root);
 			view.content = content;
-			view.update = (s) => colors(root, s.state);
+			view.update = (s) => {
+				colors(root, s.state);
+				background(root, s.picture, s.state);
+			};
 			break;
 		}
 		default:
@@ -477,7 +514,7 @@ function create(c: ControlSnapshot): View {
 }
 
 /** The plain properties that change how any control looks (formRunner.css draws them). */
-function look(root: HTMLElement, s: ControlState, type: string): void {
+function look(root: HTMLElement, s: ControlState, type: string, mouseIcon?: string | null): void {
 	const effect = s.SpecialEffect;
 	if (typeof effect === "number") root.dataset.effect = String(effect);
 	else delete root.dataset.effect;
@@ -487,7 +524,7 @@ function look(root: HTMLElement, s: ControlState, type: string): void {
 	const border = oleToCss(s.BorderColor);
 	if (border) root.style.setProperty("--border-color", border);
 	else root.style.removeProperty("--border-color");
-	root.style.cursor = cursorOf(s.MousePointer);
+	root.style.cursor = cursorOf(s.MousePointer, mouseIcon);
 	if (type === "MultiPage" || type === "TabStrip") {
 		for (const n of [0, 1, 2]) root.classList.toggle(`tab-style-${n}`, num(s.Style) === n);
 		for (const n of [1, 2, 3]) root.classList.toggle(`tab-orient-${n}`, num(s.TabOrientation) === n);
@@ -516,7 +553,8 @@ function render(next: FormState, focus: string | undefined): void {
 	client.classList.toggle("bordered", num(form.BorderStyle) === 1);
 	client.style.setProperty("--border-color", oleToCss(form.BorderColor) ?? "");
 	client.dataset.effect = String(num(form.SpecialEffect));
-	client.style.cursor = cursorOf(form.MousePointer);
+	client.style.cursor = cursorOf(form.MousePointer, form.MouseIconData as string | undefined);
+	background(surface, form.PictureData as string | undefined, form);
 	// Zoom scales the controls; the scroll bars (ScrollBars, KeepScrollBarsVisible) scroll
 	// the area of ScrollWidth × ScrollHeight (0: the form's size).
 	const zoom = Math.min(400, Math.max(10, num(form.Zoom, 100))) / 100;
@@ -576,7 +614,7 @@ function render(next: FormState, focus: string | undefined): void {
 		view.root.title = str(s.ControlTipText);
 		fontCss(view.root, s.Font);
 		view.update(c, enabledOf(c));
-		look(view.root, s, c.type);
+		look(view.root, s, c.type, c.mouseIcon);
 		if (view.focus) view.focus.tabIndex = s.TabStop === false ? -1 : num(s.TabIndex) + 1;
 	}
 	if (focus) {

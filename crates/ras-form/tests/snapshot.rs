@@ -136,7 +136,8 @@ fn pictures_are_extracted_as_xlflow_does() {
         let expected = golden["pictures"].as_object().unwrap();
         assert_eq!(snapshot.pictures.len(), expected.len(), "{label}.{name}");
         for found in &snapshot.pictures {
-            let control = &snapshot.spec.controls[found.control_index];
+            let control = &snapshot.spec.controls[found.control_index.unwrap()];
+            assert_eq!(found.property, "picture");
             let want = &expected[&control.name];
             assert_eq!(control.control_type, "Image");
             assert_eq!(found.picture.format.extension(), want["format"].as_str().unwrap());
@@ -709,4 +710,152 @@ fn properties_of_the_form_go_round() {
         );
         assert!(ras_form::parse(&text).has_errors(), "{bad}");
     }
+}
+
+/// A cursor file (CUR) of one 2×2 image.
+fn cursor_file() -> Vec<u8> {
+    let image: Vec<u8> = {
+        // BITMAPINFOHEADER (height doubled for the mask), 2×2 at 32 bits, the AND mask.
+        let mut b = Vec::new();
+        for v in [40u32, 2, 4] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&32u16.to_le_bytes());
+        b.extend_from_slice(&[0; 24]);
+        b.extend_from_slice(&[0xff; 16]);
+        b.extend_from_slice(&[0; 8]);
+        b
+    };
+    let mut file = vec![0, 0, 2, 0, 1, 0];
+    file.extend_from_slice(&[2, 2, 0, 0, 0, 0, 0, 0]);
+    file.extend_from_slice(&(image.len() as u32).to_le_bytes());
+    file.extend_from_slice(&22u32.to_le_bytes());
+    file.extend_from_slice(&image);
+    file
+}
+
+#[test]
+fn pictures_and_mouse_icons_of_controls_and_the_form_go_round() {
+    let root = temp_root("pictures-all");
+    let assets = root.join("forms/assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    let logo = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/assets/logo.bmp")).unwrap();
+    std::fs::write(assets.join("logo.bmp"), &logo).unwrap();
+    std::fs::write(assets.join("hand.cur"), cursor_file()).unwrap();
+    let text = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer",
+        "form":{"name":"Pics","picture":{"path":"forms/assets/logo.bmp"},"pictureAlignment":0,"pictureTiling":true,
+                "mouseIcon":{"path":"forms/assets/hand.cur"},"mousePointer":99},
+        "controls":[
+          {"id":"b","name":"btn","type":"CommandButton","picture":{"path":"forms/assets/logo.bmp"},"picturePosition":1},
+          {"id":"c","name":"chk","type":"CheckBox","top":30,"picture":{"path":"forms/assets/logo.bmp"},"mouseIcon":{"path":"forms/assets/hand.cur"},"mousePointer":99},
+          {"id":"l","name":"lbl","type":"Label","top":60,"picture":{"path":"forms/assets/logo.bmp"},"picturePosition":12},
+          {"id":"f","name":"fra","type":"Frame","left":100,"picture":{"path":"forms/assets/logo.bmp"},"pictureSizeMode":1,"pictureTiling":true,"mouseIcon":{"path":"forms/assets/hand.cur"}},
+          {"id":"m","name":"mp","type":"MultiPage","top":120},
+          {"id":"p","parentId":"m","name":"pg","type":"Page","picture":{"path":"forms/assets/logo.bmp"},"pictureAlignment":4}]}"#;
+    let parsed = ras_form::parse(text);
+    assert!(!parsed.has_errors(), "{:?}", parsed.issues);
+    let designer = ras_form::compile_in(parsed.spec.as_ref().unwrap(), 932, &root).unwrap();
+    let snapshot = ras_form::snapshot("Pics", &designer.streams, &designer.storages, 932).unwrap();
+    assert!(snapshot.warnings.is_empty(), "{:?}", snapshot.warnings);
+    let found: Vec<(String, &str, &str)> = snapshot
+        .pictures
+        .iter()
+        .map(|p| {
+            let owner = p.control_index.map_or(String::new(), |i| snapshot.spec.controls[i].name.clone());
+            (owner, p.property, p.picture.format.extension())
+        })
+        .collect();
+    let expected = [
+        ("", "picture", "bmp"),
+        ("", "mouseIcon", "cur"),
+        ("btn", "picture", "bmp"),
+        ("chk", "picture", "bmp"),
+        ("chk", "mouseIcon", "cur"),
+        ("lbl", "picture", "bmp"),
+        ("fra", "picture", "bmp"),
+        ("fra", "mouseIcon", "cur"),
+        ("pg", "picture", "bmp"),
+    ];
+    let mut found_sorted = found.clone();
+    found_sorted.sort();
+    let mut expected_sorted: Vec<(String, &str, &str)> =
+        expected.iter().map(|(o, p, e)| (o.to_string(), *p, *e)).collect();
+    expected_sorted.sort();
+    assert_eq!(found_sorted, expected_sorted);
+    let control = |name: &str| snapshot.spec.controls.iter().find(|c| c.name == name).unwrap();
+    assert_eq!(control("btn").scalar("picturePosition"), Some(&Value::from(1)));
+    assert_eq!(control("lbl").scalar("picturePosition"), Some(&Value::from(12)));
+    assert_eq!(control("fra").scalar("pictureTiling"), Some(&Value::from(true)));
+    assert_eq!(control("fra").picture_size_mode, Some(1));
+    assert_eq!(control("pg").picture_alignment, Some(4));
+    assert_eq!(control("chk").scalar("mousePointer"), Some(&Value::from(99)));
+    let form = &snapshot.spec.form.scalars;
+    assert_eq!((form.get("pictureAlignment"), form.get("pictureTiling")), (Some(&Value::from(0)), Some(&Value::from(true))));
+    for c in &snapshot.spec.controls {
+        assert_eq!(c.unsupported, None, "{}", c.name);
+    }
+
+    // Pulled, every picture is a file under forms/assets; written again, the design is the same.
+    let pulled_root = temp_root("pictures-all-pull");
+    let source = ras_ovba::UserForm {
+        name: "Pics".into(),
+        code: String::new(),
+        streams: designer.streams.clone(),
+        storages: designer.storages.clone(),
+    };
+    let PullOutcome::Written(pulled) = workspace::pull(&pulled_root, &source, 932, false).unwrap() else {
+        panic!("nothing written");
+    };
+    let mut files = pulled.pictures.clone();
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "forms/assets/Pics.bmp",
+            "forms/assets/Pics.btn.bmp",
+            "forms/assets/Pics.chk.bmp",
+            "forms/assets/Pics.chk.mouseIcon.cur",
+            "forms/assets/Pics.fra.bmp",
+            "forms/assets/Pics.fra.mouseIcon.cur",
+            "forms/assets/Pics.lbl.bmp",
+            "forms/assets/Pics.mouseIcon.cur",
+            "forms/assets/Pics.pg.bmp",
+        ]
+    );
+    let text = std::fs::read_to_string(&pulled.spec_path).unwrap();
+    let respec = ras_form::parse(&text);
+    assert!(!respec.has_errors(), "{:?}", respec.issues);
+    let again = ras_form::compile_in(respec.spec.as_ref().unwrap(), 932, &pulled_root).unwrap();
+    let reread = ras_form::snapshot("Pics", &again.streams, &again.storages, 932).unwrap();
+    let pictures = |s: &ras_form::Snapshot| -> Vec<(Option<String>, &'static str, Vec<u8>)> {
+        let mut out: Vec<_> = s
+            .pictures
+            .iter()
+            .map(|p| (p.control_index.map(|i| s.spec.controls[i].name.clone()), p.property, p.picture.data.clone()))
+            .collect();
+        out.sort();
+        out
+    };
+    assert_eq!(pictures(&reread), pictures(&snapshot));
+    assert_eq!(reread.spec.form.scalars, snapshot.spec.form.scalars);
+    for (a, b) in reread.spec.controls.iter().zip(&snapshot.spec.controls) {
+        assert_eq!(a.scalars, b.scalars, "{}", a.name);
+        assert_eq!((a.picture_alignment, a.picture_size_mode), (b.picture_alignment, b.picture_size_mode), "{}", a.name);
+    }
+
+    // A mouse icon has to be an icon or a cursor; a TextBox has no picture.
+    for bad in [
+        r#""controls":[{"id":"t","name":"txt","type":"TextBox","picture":{"path":"forms/assets/logo.bmp"}}]"#,
+        r#""controls":[{"id":"m","name":"mp","type":"MultiPage","mouseIcon":{"path":"forms/assets/hand.cur"}}]"#,
+    ] {
+        let text = format!(r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},{bad}}}"#);
+        assert!(ras_form::parse(&text).has_errors(), "{bad}");
+    }
+    std::fs::write(assets.join("not-an-icon.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+    let text = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F","mouseIcon":{"path":"forms/assets/not-an-icon.png"}},"controls":[]}"#;
+    let error = ras_form::compile_in(ras_form::parse(text).spec.as_ref().unwrap(), 932, &root).unwrap_err();
+    assert!(error.reason.contains("MouseIcon"), "{error}");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&pulled_root);
 }

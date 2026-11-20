@@ -471,6 +471,7 @@ const objectLabels: Record<string, string> = {
   foreColor: "ForeColor",
   backColor: "BackColor",
   picture: "Picture",
+  mouseIcon: "MouseIcon",
   pictureAlignment: "PictureAlignment",
   pictureSizeMode: "PictureSizeMode",
   textAlign: "TextAlign",

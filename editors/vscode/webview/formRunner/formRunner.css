@@ -540,6 +540,32 @@ body {
 	background: none;
 }
 
+/* A picture beside the caption (PicturePosition); Center puts the caption over it. */
+.ctl .picture-caption {
+	display: inline-flex;
+	justify-content: center;
+	gap: 2px;
+	max-width: 100%;
+	max-height: 100%;
+	vertical-align: middle;
+}
+
+.ctl .picture-caption.stack {
+	display: inline-grid;
+	place-items: center;
+}
+
+.ctl .picture-caption.stack > * {
+	grid-area: 1 / 1;
+}
+
+.ctl .caption-picture {
+	flex: none;
+	max-width: 100%;
+	max-height: 100%;
+	object-fit: none;
+}
+
 .ctl .toggle input:focus-visible + span {
 	outline: 1px dotted var(--ms-text);
 }

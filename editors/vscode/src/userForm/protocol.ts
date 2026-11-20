@@ -38,6 +38,8 @@ export interface PictureValue {
   path?: string;
   remove?: true;
 }
+/** A property that holds a picture file: the picture of a control or form, or its mouse icon. */
+export type PictureField = "picture" | "mouseIcon";
 export type PropertyValue = ScalarValue | FontValue | ColorValue | PictureValue | string[] | (string | string[])[];
 export interface AppearanceProperties {
   font?: FontValue | null;
@@ -140,6 +142,12 @@ export interface SpecControl extends AppearanceProperties {
   default?: boolean | null;
   /** ComboBox / ListBox: the cells the items come from. */
   rowSource?: string | null;
+  /** Label, buttons, toggles: where the picture is beside the caption (fmPicturePosition 0–12). */
+  picturePosition?: number | null;
+  /** Frame / Page: the background picture repeats. */
+  pictureTiling?: boolean | null;
+  mouseIcon?: PictureValue | null;
+  mousePointer?: number | null;
   /** ComboBox / ListBox: columns shown (-1 all), their widths ("72 pt;;1 in"), the column of Text. */
   columnCount?: number | null;
   columnWidths?: string | null;
@@ -152,6 +160,8 @@ export interface FormDimensions extends AppearanceProperties {
   /** The form's edge: the color of a Single border, and 0 flat, 1 raised, 2 sunken, 3 etched, 6 bump. */
   borderColor?: ColorValue | null;
   specialEffect?: number | null;
+  /** The background picture repeats. */
+  pictureTiling?: boolean | null;
   caption?: string | null;
   width?: number | null;
   height?: number | null;
@@ -221,6 +231,7 @@ export interface DesignerControl extends Omit<SpecControl, "observed"> {
 export interface DesignerDocument extends AppearanceProperties {
   borderColor?: ColorValue | null;
   specialEffect?: number | null;
+  pictureTiling?: boolean | null;
   name: string;
   caption: string;
   width: number;
@@ -854,8 +865,16 @@ export type WebviewMessage =
       choose: boolean;
     }
   | { type: "history"; action: "undo" | "redo"; requestId: number; version: number }
-  | { type: "picturePick"; requestId: number; version: number; controlId: string }
-  | { type: "pictureCommit"; requestId: number; version: number; controlId: string; token: string }
+  /** `controlId` "" is the form; `field` the picture property (`picture`, `mouseIcon`). */
+  | { type: "picturePick"; requestId: number; version: number; controlId: string; field: PictureField }
+  | {
+      type: "pictureCommit";
+      requestId: number;
+      version: number;
+      controlId: string;
+      field: PictureField;
+      token: string;
+    }
   | { type: "pictureCancel" }
   | { type: "resolveConflict"; choice: "source" | "designer" }
   | {
@@ -968,6 +987,7 @@ export function isWebviewMessage(value: unknown): value is WebviewMessage {
       "requestId",
       "version",
       "controlId",
+      "field",
       ...(message.type === "pictureCommit" ? ["token"] : []),
     ];
     return (
@@ -978,7 +998,7 @@ export function isWebviewMessage(value: unknown): value is WebviewMessage {
       Number.isSafeInteger(message.version) &&
       Number(message.version) >= 0 &&
       typeof message.controlId === "string" &&
-      message.controlId.length > 0 &&
+      (message.field === "picture" || message.field === "mouseIcon") &&
       (message.type !== "pictureCommit" ||
         (typeof message.token === "string" && message.token.length > 0))
     );

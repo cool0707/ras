@@ -42,9 +42,11 @@ pub struct SnapshotWarning {
 /// The picture of an `Image` control found in a designer storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SnapshotPicture {
-    /// Index of the control in [`FormSpec::controls`].
-    pub control_index: usize,
-    /// The picture file (BMP or JPEG) as stored.
+    /// Index of the control in [`FormSpec::controls`]; `None` for the form itself.
+    pub control_index: Option<usize>,
+    /// The property it is the picture of: `picture` or `mouseIcon`.
+    pub property: &'static str,
+    /// The picture file (BMP or JPEG; an icon or cursor for a `mouseIcon`) as stored.
     pub picture: Picture,
 }
 
@@ -273,13 +275,13 @@ fn unsupported_level_properties(level: Option<&Level>) -> Vec<String> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    if level.mouse_icon {
+    if level.mouse_icon.is_some() {
         out.push("mouseIcon".to_string());
     }
     if !level.font_raw.is_empty() && reader::level_font(level).is_err() {
         out.push("font".into());
     }
-    if level.picture {
+    if level.picture.is_some() {
         out.push("picture".into());
     }
     for name in &level.extra_streams {
@@ -335,7 +337,7 @@ fn unsupported_control_properties(control: &Control, control_type: &str) -> Vec<
         if is_default_boolean_properties(control_type, record.value("BooleanProperties").unwrap_or(0)) {
             projected.push("BooleanProperties");
         }
-        if control_type == "Image" {
+        if matches!(control_type, "Image" | "Frame" | "Page") {
             projected.extend(["PictureAlignment", "PictureSizeMode"]);
         }
         if control_type == "TabStrip" {
@@ -449,7 +451,7 @@ fn project_typed_control(source: &Control, target: &mut FormSpecControl) {
             });
         }
     }
-    if control_type == "Image" {
+    if matches!(control_type.as_str(), "Image" | "Frame" | "Page") {
         target.picture_alignment = record.value("PictureAlignment");
         target.picture_size_mode = record.value("PictureSizeMode");
     }
@@ -686,24 +688,38 @@ impl Projection {
         if !bag.is_empty() {
             control.properties = Some(bag);
         }
-        if control_type == "Image" {
-            if let Some(raw) = record.pictures.get("Picture") {
-                match picture::decode(raw) {
-                    Ok(picture) => {
-                        take("picture");
-                        self.pictures.push(SnapshotPicture {
-                            control_index: self.controls.len(),
-                            picture,
-                        });
-                    }
-                    Err(reason) => self.warnings.push(SnapshotWarning {
-                        code: "unsupported_picture_resource",
-                        control: control.name.clone(),
-                        message: format!(
-                            "画像を BMP / JPEG として取り出せませんでした（{reason}）"
-                        ),
-                    }),
+        if source.level.as_ref().is_some_and(|l| l.record.sizes.get("LogicalSize") == Some(&(0, 0))) {
+            // An empty scroll area is what generation writes for a Frame, MultiPage or Page.
+            take("logicalSize");
+        }
+        // The picture and the mouse icon: of the record, or of the level of a Frame or Page.
+        let stored = |name: &str| -> Option<&Vec<u8>> {
+            match &source.level {
+                Some(level) => if name == "Picture" { level.picture.as_ref() } else { level.mouse_icon.as_ref() },
+                None => record.pictures.get(name),
+            }
+        };
+        for (field, property, takes) in [
+            ("picture", "Picture", contract::takes_picture(&control_type)),
+            ("mouseIcon", "MouseIcon", contract::takes_mouse_icon(&control_type)),
+        ] {
+            let Some(raw) = stored(property).filter(|_| takes && source.multipage.is_none()) else {
+                continue;
+            };
+            match picture::decode(raw) {
+                Ok(picture) => {
+                    take(field);
+                    self.pictures.push(SnapshotPicture {
+                        control_index: Some(self.controls.len()),
+                        property: field,
+                        picture,
+                    });
                 }
+                Err(reason) => self.warnings.push(SnapshotWarning {
+                    code: "unsupported_picture_resource",
+                    control: control.name.clone(),
+                    message: format!("{field} の画像を取り出せませんでした（{reason}）"),
+                }),
             }
         }
     }
@@ -934,6 +950,13 @@ fn project_form_scalars(record: &Record, lines: &[(String, String)], form: &mut 
                 }
                 scalars::from_raw(p, raw)
             }
+            Store::Flag(name, set) => {
+                let on = record.values.contains_key(name) == set;
+                if i64::from(on) == i64::from(!set) {
+                    continue;
+                }
+                Value::from(on)
+            }
             Store::Extent(name, index) => {
                 let size = record.sizes.get(name).copied();
                 let raw = size.map_or(p.omitted, |(w, h)| i64::from(if index == 0 { w } else { h }));
@@ -1018,6 +1041,27 @@ fn snapshot_with(
     unsupported.extend(unsupported_level_properties(Some(&form.root)));
     unsupported.sort();
     unsupported.dedup();
+    if extras {
+        // The form's background picture and mouse icon.
+        for (field, raw) in [("picture", &form.root.picture), ("mouseIcon", &form.root.mouse_icon)] {
+            let Some(raw) = raw else { continue };
+            match picture::decode(raw) {
+                Ok(picture) => {
+                    unsupported.retain(|u| u != field);
+                    projection.pictures.push(SnapshotPicture {
+                        control_index: None,
+                        property: field,
+                        picture,
+                    });
+                }
+                Err(reason) => projection.warnings.push(SnapshotWarning {
+                    code: "unsupported_picture_resource",
+                    control: String::new(),
+                    message: format!("フォームの {field} の画像を取り出せませんでした（{reason}）"),
+                }),
+            }
+        }
+    }
 
     if !unsupported.is_empty() {
         projection

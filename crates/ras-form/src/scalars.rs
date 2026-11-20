@@ -111,7 +111,7 @@ const BOUND: &[&str] = &[
     "ScrollBar",
 ];
 /// fmMousePointer: 4 and 5 are not values of it ([MS-OFORMS] 2.5.x).
-const POINTERS: &[i64] = &[0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+const POINTERS: &[i64] = &[0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 99];
 const EFFECTS: &[i64] = &[0, 1, 2, 3, 6];
 /// 254000 HIMETRIC, the most a tab can be.
 const TAB_SIZE: f64 = 7200.0;
@@ -190,6 +190,11 @@ pub(crate) static SCALARS: &[Scalar] = &[
     s("borderColor", &["TextBox", "ComboBox", "ListBox", "Label", "Image", "Frame"], Color, Field("BorderColor"), 0x8000_0006, None),
     s("cycle", &["Frame"], Enum(&[0, 2]), Field("Cycle"), 0, None),
     s("mousePointer", &["Label", "TextBox", "ComboBox", "ListBox", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar", "Image", "Frame", "TabStrip"], Enum(POINTERS), Field("MousePointer"), 0, None),
+    // Where the picture is beside the caption (fmPicturePosition 0–12, stored as MS-OFORMS
+    // packs it: see PICTURE_POSITIONS).
+    s("picturePosition", &["Label", "CommandButton", "CheckBox", "OptionButton", "ToggleButton"], Enum(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]), Field("PicturePosition"), 0x0007_0001, None),
+    // The background picture of a Frame or Page repeated over it.
+    s("pictureTiling", &["Frame", "Page"], Bool, Flag("PictureTiling", true), 0, None),
     // CommandButton.
     s("default", &["CommandButton"], Bool, Site(2), 0, None),
     s("cancel", &["CommandButton"], Bool, Site(3), 0, None),
@@ -241,6 +246,27 @@ pub(crate) static FORM_SCALARS: &[Scalar] = &[
     s("scrollHeight", FORM, Points(SCROLL_SIZE), Extent("LogicalSize", 1), 3000, Some(0)),
     s("scrollLeft", FORM, Points(SCROLL_SIZE), Extent("ScrollPosition", 0), 0, None),
     s("scrollTop", FORM, Points(SCROLL_SIZE), Extent("ScrollPosition", 1), 0, None),
+    // The background picture (`form.picture`).
+    s("pictureAlignment", FORM, Enum(&[0, 1, 2, 3, 4]), Field("PictureAlignment"), 2, None),
+    s("pictureSizeMode", FORM, Enum(&[0, 1, 3]), Field("PictureSizeMode"), 0, None),
+    s("pictureTiling", FORM, Bool, Flag("PictureTiling", true), 0, None),
+];
+
+/// fmPicturePosition 0 (LeftTop) to 12 (Center) as MS-OFORMS stores them.
+const PICTURE_POSITIONS: [i64; 13] = [
+    0x0002_0000, // LeftTop
+    0x0005_0003, // LeftCenter
+    0x0008_0006, // LeftBottom
+    0x0000_0002, // RightTop
+    0x0003_0005, // RightCenter
+    0x0006_0008, // RightBottom
+    0x0006_0000, // AboveLeft
+    0x0007_0001, // AboveCenter
+    0x0008_0002, // AboveRight
+    0x0000_0006, // BelowLeft
+    0x0001_0007, // BelowCenter
+    0x0002_0008, // BelowRight
+    0x0004_0004, // Center
 ];
 
 /// `value` with `raw` put in the bits of a [`Store::FieldBits`] property.
@@ -450,6 +476,7 @@ pub(crate) fn to_raw(p: &Scalar, value: &Value) -> Result<i64, String> {
         }
     };
     Ok(match p.store {
+        Store::Field("PicturePosition") => PICTURE_POSITIONS[raw as usize],
         // ComboBox Style is its DisplayStyle: combo (3) or drop-down list (7).
         Store::Field("DisplayStyle") => {
             if raw == 2 {
@@ -473,6 +500,9 @@ pub(crate) fn to_raw(p: &Scalar, value: &Value) -> Result<i64, String> {
 pub(crate) fn from_raw(p: &Scalar, raw: i64) -> Value {
     match (p.kind, p.store) {
         (_, Store::Field("DisplayStyle")) => Value::from(if raw == 7 { 2 } else { 0 }),
+        (_, Store::Field("PicturePosition")) => {
+            Value::from(PICTURE_POSITIONS.iter().position(|v| *v == raw).unwrap_or(7) as i64)
+        }
         (_, Store::Thumb) => Value::from(raw != 0),
         (Kind::Bool, _) => Value::from(raw != 0),
         (Kind::Points(_), _) => Value::from(crate::snapshot::points(raw as i32)),
@@ -639,8 +669,14 @@ mod tests {
             for control_type in p.types {
                 let class = class_of(control_type).unwrap();
                 let value = other_value(p, class);
+                // A Page goes into a MultiPage.
+                let (owner, parent) = if *control_type == "Page" {
+                    (r#"{"id":"m","name":"m","type":"MultiPage"},"#, r#","parentId":"m""#)
+                } else {
+                    ("", "")
+                };
                 let text = format!(
-                    r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{{"id":"c","name":"c","type":"{control_type}","{}":{value}}}]}}"#,
+                    r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{owner}{{"id":"c","name":"c","type":"{control_type}"{parent},"{}":{value}}}]}}"#,
                     p.name
                 );
                 let parsed = crate::parse(&text);
@@ -648,7 +684,7 @@ mod tests {
                 let designer = crate::compile(parsed.spec.as_ref().unwrap(), 932)
                     .unwrap_or_else(|e| panic!("{control_type}.{}: {e}", p.name));
                 let spec = crate::project("F", &designer.streams, &designer.storages).unwrap().spec;
-                let control = &spec.controls[0];
+                let control = spec.controls.iter().find(|c| c.name == "c").unwrap();
                 let back = control.scalar(p.name).unwrap_or_else(|| {
                     panic!("{control_type}.{} = {value} was not read back: {:?}", p.name, control.scalars)
                 });

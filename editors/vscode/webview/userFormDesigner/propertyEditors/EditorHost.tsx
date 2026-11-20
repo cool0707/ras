@@ -61,7 +61,7 @@ export function PropertyEditorHost(props: Props) {
           ? value
           : {
               [session.descriptor.field]: value,
-              ...(session.descriptor.editor === "picture" && (picture || value.remove === true)
+              ...(session.descriptor.field === "picture" && (picture || value.remove === true)
                 ? { picturePreview: value.remove === true ? "" : picture?.dataURI }
                 : {}),
             },

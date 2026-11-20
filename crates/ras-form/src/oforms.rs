@@ -354,8 +354,10 @@ pub(crate) static FORM: RecordSpec = RecordSpec {
     stop_after_extra: true,
     text_props: false,
     raw_tail: false,
+    // Written by the level, around its font (FormStreamData: MouseIcon, Font, Picture).
     stream: &[],
-    flags: &[],
+    // [MS-OFORMS] stores no value for PictureTiling: the bit stands for True.
+    flags: &[(24, "PictureTiling", 1)],
     data: &[
         d(1, "BackColor", 4, U),
         d(2, "ForeColor", 4, U),
@@ -560,15 +562,15 @@ impl Record {
         };
         match field.kind {
             FieldKind::Marker => {
-                // Only the picture of an Image control can be written.
-                if !std::ptr::eq(self.spec, &IMAGE) || name != "Picture" {
+                // A picture or mouse icon (the font of a form is written by its level).
+                if name != "Picture" && name != "MouseIcon" {
                     return unsupported(format!("リソース {name}"));
                 }
                 let PValue::Picture(raw) = value else {
-                    return invalid("Picture は StdPicture のバイト列が必要です");
+                    return invalid(format!("{name} は StdPicture のバイト列が必要です"));
                 };
                 crate::picture::decode(raw)
-                    .map_err(|e| PersistError::Invalid(format!("Picture: {e}")))?;
+                    .map_err(|e| PersistError::Invalid(format!("{name}: {e}")))?;
                 self.pictures.insert(field.name, raw.clone());
                 self.values.insert(field.name, 0xffff);
             }
@@ -1722,7 +1724,14 @@ impl Form {
                 return invalid("o ストリームが大きすぎます");
             }
             let mut f = level.record.encode()?;
+            // FormStreamData: MouseIcon, Font, Picture.
+            if let Some(icon) = level.record.pictures.get("MouseIcon") {
+                f.extend_from_slice(icon);
+            }
             f.extend_from_slice(&level.font_raw);
+            if let Some(picture) = level.record.pictures.get("Picture") {
+                f.extend_from_slice(picture);
+            }
             f.extend_from_slice(&level.class_table_raw);
             f.extend_from_slice(&(sites.len() as u32).to_le_bytes());
             let count_at = f.len();
@@ -1778,10 +1787,11 @@ fn set_checked(record: &mut Record, property: &str, value: i64, class: Option<u1
     }
     match property {
         "BorderStyle" if value > 1 => return invalid("borderStyle は 0 か 1 にしてください"),
-        "PictureAlignment" if class != Some(12) || value > 4 => {
+        // An Image's picture, or the background of a Frame or Page.
+        "PictureAlignment" if !matches!(class, Some(7 | 12 | 14)) || value > 4 => {
             return invalid("pictureAlignment が不正です")
         }
-        "PictureSizeMode" if class != Some(12) || !matches!(value, 0 | 1 | 3) => {
+        "PictureSizeMode" if !matches!(class, Some(7 | 12 | 14)) || !matches!(value, 0 | 1 | 3) => {
             return invalid("pictureSizeMode が不正です")
         }
         _ => {}

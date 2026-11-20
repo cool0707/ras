@@ -67,7 +67,7 @@ module.exports = function install(rt) {
         const d = { Visible: true, Enabled: true, Tag: "", ControlTipText: "", TabStop: FOCUSABLE.has(kind), ForeColor: BUTTON_TEXT, BackColor: BUTTON_FACE, MousePointer: 0, ...(BOUND.has(kind) ? { ControlSource: "" } : {}) };
         switch (kind) {
             case "Label":
-                return Object.assign(d, { Caption: "", TextAlign: 1, WordWrap: true, AutoSize: false, BackStyle: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 0 });
+                return Object.assign(d, { Caption: "", TextAlign: 1, WordWrap: true, AutoSize: false, BackStyle: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 0, PicturePosition: 7 });
             case "TextBox":
                 return Object.assign(d, { Text: "", Locked: false, MaxLength: 0, MultiLine: false, PasswordChar: "", TextAlign: 1, WordWrap: true, BackColor: WINDOW, ForeColor: WINDOW_TEXT, SelStart: 0, SelLength: 0, EnterKeyBehavior: false, ScrollBars: 0, AutoSize: false, BackStyle: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 2, TabKeyBehavior: false, IMEMode: 0, AutoTab: false, AutoWordSelect: true, DragBehavior: 0, EnterFieldBehavior: 0, HideSelection: true, IntegralHeight: true, SelectionMargin: true });
             case "ComboBox":
@@ -75,11 +75,11 @@ module.exports = function install(rt) {
             case "ListBox":
                 return Object.assign(d, { Locked: false, MultiSelect: 0, MatchEntry: 0, ColumnCount: 1, ColumnWidths: "", ColumnHeads: false, BoundColumn: 1, TextColumn: -1, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", TopIndex: 0, ListStyle: 0, TextAlign: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 2, IMEMode: 0, IntegralHeight: true });
             case "CommandButton":
-                return Object.assign(d, { Caption: "", Default: false, Cancel: false, Accelerator: "", TakeFocusOnClick: true, WordWrap: false, Locked: false, AutoSize: false, BackStyle: 1 });
+                return Object.assign(d, { Caption: "", Default: false, Cancel: false, Accelerator: "", TakeFocusOnClick: true, WordWrap: false, Locked: false, AutoSize: false, BackStyle: 1, PicturePosition: 7 });
             case "CheckBox":
             case "OptionButton":
             case "ToggleButton":
-                return Object.assign(d, { Caption: "", Value: false, TripleState: false, Locked: false, Accelerator: "", GroupName: "", WordWrap: true, TextAlign: kind === "ToggleButton" ? 2 : 1, AutoSize: false, BackStyle: 1, SpecialEffect: 2, ...(kind === "ToggleButton" ? {} : { Alignment: 1 }) });
+                return Object.assign(d, { Caption: "", Value: false, TripleState: false, Locked: false, Accelerator: "", GroupName: "", WordWrap: true, TextAlign: kind === "ToggleButton" ? 2 : 1, AutoSize: false, BackStyle: 1, SpecialEffect: 2, PicturePosition: 7, ...(kind === "ToggleButton" ? {} : { Alignment: 1 }) });
             case "SpinButton":
                 return Object.assign(d, { Value: 0, Min: 0, Max: 100, SmallChange: 1, Orientation: -1, Delay: 50 });
             case "ScrollBar":
@@ -87,11 +87,11 @@ module.exports = function install(rt) {
             case "Image":
                 return Object.assign(d, { PictureSizeMode: 0, PictureAlignment: 2, BorderStyle: 1, BorderColor: WINDOW_FRAME, SpecialEffect: 0, Picture: null });
             case "Frame":
-                return Object.assign(d, { Caption: "", BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 3, Cycle: 0 });
+                return Object.assign(d, { Caption: "", BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 3, Cycle: 0, PictureAlignment: 2, PictureSizeMode: 0, PictureTiling: false });
             case "MultiPage":
                 return Object.assign(d, { Value: 0, Style: 0, TabOrientation: 0, MultiRow: false, TabFixedWidth: 0, TabFixedHeight: 0 });
             case "Page":
-                return { Visible: true, Enabled: true, Tag: "", ControlTipText: "", Caption: "", Accelerator: "" };
+                return { Visible: true, Enabled: true, Tag: "", ControlTipText: "", Caption: "", Accelerator: "", PictureAlignment: 2, PictureSizeMode: 0, PictureTiling: false };
             case "TabStrip":
                 return Object.assign(d, { Value: 0, Style: 0, TabOrientation: 0, MultiRow: false, TabFixedWidth: 0, TabFixedHeight: 0 });
             default:
@@ -221,6 +221,7 @@ module.exports = function install(rt) {
             this.$index = -1;
             this.$tabs = [];
             this.$picture = null;
+            this.$mouseIcon = null;
             this.$entered = null; // value when the focus came in (BeforeUpdate / AfterUpdate)
             this.$init(spec);
         }
@@ -265,9 +266,10 @@ module.exports = function install(rt) {
                     if (typeof spec.selectedIndex === "number") s.Value = spec.selectedIndex;
                 }
             }
-            if (kind === "Image" && spec.picture && typeof spec.picture.path === "string" && spec.picture.remove !== true) {
-                this.$picture = pictureData(path.resolve(rt.config().root, spec.picture.path));
-            }
+            // The picture (of an Image, a Label, a button, a toggle; the background of a Frame or Page)
+            // and the icon of MousePointer Custom.
+            this.$picture = specPicture(spec.picture);
+            this.$mouseIcon = specPicture(spec.mouseIcon);
         }
 
         /** Records that the control must be redrawn. */
@@ -638,6 +640,13 @@ module.exports = function install(rt) {
             this.$picture = v && v.$picture ? v.$picture : null;
             this.$touch();
         }
+        get MouseIcon() {
+            return this.$mouseIcon === null ? rt.Nothing : { $picture: this.$mouseIcon, Handle: 1, Type: 3 };
+        }
+        set MouseIcon(v) {
+            this.$mouseIcon = v && v.$picture ? v.$picture : null;
+            this.$touch();
+        }
 
         /** What the host needs to draw the control. */
         $snapshot() {
@@ -650,13 +659,14 @@ module.exports = function install(rt) {
                 out.selected = this.$s.MultiSelect ? this.$selected.slice() : this.$list.map((_, n) => n === this.$index);
             }
             if (this.$kind === "TabStrip") out.tabs = this.$tabs.map((t) => ({ ...t.$s }));
-            if (this.$kind === "Image") out.picture = this.$picture;
+            if (this.$picture !== null) out.picture = this.$picture;
+            if (this.$mouseIcon !== null) out.mouseIcon = this.$mouseIcon;
             return out;
         }
     }
 
     // Plain properties: read the state, write it and redraw.
-    const PLAIN = ["Left", "Top", "Width", "Height", "Visible", "Enabled", "Tag", "ControlTipText", "TabIndex", "TabStop", "BackColor", "ForeColor", "BorderColor", "Locked", "MaxLength", "MultiLine", "PasswordChar", "TextAlign", "WordWrap", "AutoSize", "BackStyle", "BorderStyle", "SpecialEffect", "Style", "MatchRequired", "ColumnCount", "ColumnWidths", "ColumnHeads", "BoundColumn", "TextColumn", "ListRows", "TopIndex", "ListStyle", "MultiSelect", "Default", "Cancel", "Accelerator", "TakeFocusOnClick", "TripleState", "GroupName", "Min", "Max", "SmallChange", "LargeChange", "Orientation", "PictureSizeMode", "PictureAlignment", "PictureTiling", "EnterKeyBehavior", "TabKeyBehavior", "ScrollBars", "TabOrientation", "MultiRow", "IMEMode", "SelStart", "SelLength", "MatchEntry", "ShowDropButtonWhen", "ListWidth", "ControlSource", "Alignment", "DropButtonStyle", "Delay", "ProportionalThumb", "TabFixedWidth", "TabFixedHeight", "Cycle", "AutoTab", "AutoWordSelect", "DragBehavior", "EnterFieldBehavior", "HideSelection", "IntegralHeight", "SelectionMargin", "MousePointer"];
+    const PLAIN = ["Left", "Top", "Width", "Height", "Visible", "Enabled", "Tag", "ControlTipText", "TabIndex", "TabStop", "BackColor", "ForeColor", "BorderColor", "Locked", "MaxLength", "MultiLine", "PasswordChar", "TextAlign", "WordWrap", "AutoSize", "BackStyle", "BorderStyle", "SpecialEffect", "Style", "MatchRequired", "ColumnCount", "ColumnWidths", "ColumnHeads", "BoundColumn", "TextColumn", "ListRows", "TopIndex", "ListStyle", "MultiSelect", "Default", "Cancel", "Accelerator", "TakeFocusOnClick", "TripleState", "GroupName", "Min", "Max", "SmallChange", "LargeChange", "Orientation", "PictureSizeMode", "PictureAlignment", "PictureTiling", "PicturePosition", "EnterKeyBehavior", "TabKeyBehavior", "ScrollBars", "TabOrientation", "MultiRow", "IMEMode", "SelStart", "SelLength", "MatchEntry", "ShowDropButtonWhen", "ListWidth", "ControlSource", "Alignment", "DropButtonStyle", "Delay", "ProportionalThumb", "TabFixedWidth", "TabFixedHeight", "Cycle", "AutoTab", "AutoWordSelect", "DragBehavior", "EnterFieldBehavior", "HideSelection", "IntegralHeight", "SelectionMargin", "MousePointer"];
     for (const name of PLAIN) {
         Object.defineProperty(Control.prototype, name, {
             get() {
@@ -724,6 +734,7 @@ module.exports = function install(rt) {
                 BackColor: oleColor(f.backColor, BUTTON_FACE), ForeColor: oleColor(f.foreColor, BUTTON_TEXT), BorderColor: BUTTON_TEXT, BorderStyle: f.borderStyle ?? 0,
                 Zoom: 100, ScrollBars: 0, KeepScrollBarsVisible: 3, ScrollWidth: 0, ScrollHeight: 0, ScrollLeft: 0, ScrollTop: 0,
                 SpecialEffect: 0, Cycle: 0, MousePointer: 0, DrawBuffer: 32000, HelpContextID: 0, RightToLeft: false, WhatsThisButton: false, WhatsThisHelp: false,
+                PictureAlignment: 2, PictureSizeMode: 0, PictureTiling: false,
             };
             // The form's plain properties (form.showModal ...), and the legacy property bag.
             const plain = Object.entries(f).filter(([k, v]) => !["name", "caption", "width", "height", "font", "foreColor", "backColor", "borderStyle", "observed", "properties", "picture", "mouseIcon"].includes(k) && v !== null && (typeof v !== "object" || k.toLowerCase().endsWith("color")));
@@ -732,6 +743,8 @@ module.exports = function install(rt) {
                 if (key) this.$s[key] = key.endsWith("Color") ? oleColor(v, this.$s[key]) : typeof this.$s[key] === "boolean" ? rt.cbool(v) : typeof this.$s[key] === "number" ? rt.cnum(v) : rt.cstr(v);
             }
             this.$font = new Font(this, f.font);
+            this.$picture = specPicture(f.picture);
+            this.$mouseIcon = specPicture(f.mouseIcon);
             // Controls, with their containers (`parentId` is the id of the container in the spec).
             const byId = new Map();
             this.$all = [];
@@ -844,7 +857,22 @@ module.exports = function install(rt) {
         Scroll() {}
 
         $formSnapshot() {
-            return { ...this.$s, Font: this.$font.snapshot() };
+            // The pictures go as data URIs (the form's Picture property is an object).
+            return { ...this.$s, Font: this.$font.snapshot(), PictureData: this.$picture, MouseIconData: this.$mouseIcon };
+        }
+        get Picture() {
+            return this.$picture === null ? rt.Nothing : { $picture: this.$picture, Handle: 1, Type: 1 };
+        }
+        set Picture(v) {
+            this.$picture = v && v.$picture ? v.$picture : null;
+            this.$touch();
+        }
+        get MouseIcon() {
+            return this.$mouseIcon === null ? rt.Nothing : { $picture: this.$mouseIcon, Handle: 1, Type: 3 };
+        }
+        set MouseIcon(v) {
+            this.$mouseIcon = v && v.$picture ? v.$picture : null;
+            this.$touch();
         }
         $flush() {
             if (!this.$visible || this.$dirty.size === 0) {
@@ -1028,7 +1056,7 @@ module.exports = function install(rt) {
             if (this.$entry.instance === this) this.$entry.instance = null;
         }
     }
-    for (const name of ["Caption", "Width", "Height", "Left", "Top", "StartUpPosition", "Enabled", "Tag", "BackColor", "ForeColor", "BorderColor", "BorderStyle", "ShowModal", "Zoom", "ScrollBars", "ScrollWidth", "ScrollHeight", "ScrollLeft", "ScrollTop", "SpecialEffect", "KeepScrollBarsVisible", "PictureSizeMode", "MousePointer", "Cycle", "DrawBuffer", "HelpContextID", "RightToLeft", "WhatsThisButton", "WhatsThisHelp"]) {
+    for (const name of ["Caption", "Width", "Height", "Left", "Top", "StartUpPosition", "Enabled", "Tag", "BackColor", "ForeColor", "BorderColor", "BorderStyle", "ShowModal", "Zoom", "ScrollBars", "ScrollWidth", "ScrollHeight", "ScrollLeft", "ScrollTop", "SpecialEffect", "KeepScrollBarsVisible", "PictureSizeMode", "PictureAlignment", "PictureTiling", "MousePointer", "Cycle", "DrawBuffer", "HelpContextID", "RightToLeft", "WhatsThisButton", "WhatsThisHelp"]) {
         Object.defineProperty(UserForm.prototype, name, {
             get() {
                 return this.$s[name] ?? 0;
@@ -1065,10 +1093,16 @@ module.exports = function install(rt) {
         return out;
     }
 
+    /** The data URI of a picture action of a FormSpec (`{ path }`), or null. */
+    function specPicture(action) {
+        if (!action || typeof action.path !== "string" || action.remove === true) return null;
+        return pictureData(path.resolve(rt.config().root, action.path));
+    }
+
     function pictureData(file) {
         try {
             const bytes = fs.readFileSync(file);
-            const type = bytes[0] === 0x42 && bytes[1] === 0x4d ? "image/bmp" : bytes[0] === 0xff && bytes[1] === 0xd8 ? "image/jpeg" : bytes[0] === 0x89 && bytes[1] === 0x50 ? "image/png" : bytes[0] === 0x47 && bytes[1] === 0x49 ? "image/gif" : bytes.slice(8, 12).toString() === "WEBP" ? "image/webp" : bytes[0] === 0 && bytes[2] === 1 ? "image/x-icon" : "application/octet-stream";
+            const type = bytes[0] === 0x42 && bytes[1] === 0x4d ? "image/bmp" : bytes[0] === 0xff && bytes[1] === 0xd8 ? "image/jpeg" : bytes[0] === 0x89 && bytes[1] === 0x50 ? "image/png" : bytes[0] === 0x47 && bytes[1] === 0x49 ? "image/gif" : bytes.slice(8, 12).toString() === "WEBP" ? "image/webp" : bytes[0] === 0 && (bytes[2] === 1 || bytes[2] === 2) ? "image/x-icon" : "application/octet-stream";
             return `data:${type};base64,${bytes.toString("base64")}`;
         } catch {
             return null;

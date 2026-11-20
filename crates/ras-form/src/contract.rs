@@ -185,6 +185,8 @@ pub fn form_properties() -> Props {
         ("backColor", color()),
         ("borderStyle", border_style()),
     ];
+    props.push(("picture", picture_action()));
+    props.push(("mouseIcon", picture_action()));
     // The plain properties of the form (scalars.rs checks their values).
     for scalar in crate::scalars::FORM_SCALARS {
         props.push((scalar.name, scalar_prop(scalar)));
@@ -409,21 +411,7 @@ pub fn type_properties(name: &str) -> Option<Props> {
         ],
         "CheckBox" | "OptionButton" | "ToggleButton" => vec![("caption", s()), ("value", any())],
         "SpinButton" | "ScrollBar" => vec![("value", p(T::Integer, false, Supported))],
-        "Image" => {
-            let mut picture = p(T::Object, false, Supported);
-            picture.children = Some(picture_properties());
-            vec![
-                ("picture", picture),
-                (
-                    "pictureAlignment",
-                    allowed(p(T::Integer, false, Supported), &["0", "1", "2", "3", "4"]),
-                ),
-                (
-                    "pictureSizeMode",
-                    allowed(p(T::Integer, false, Supported), &["0", "1", "3"]),
-                ),
-            ]
-        }
+        "Image" => vec![("picture", picture_action())],
         "MultiPage" => vec![("selectedIndex", p(T::Integer, false, Supported))],
         "Page" => vec![
             ("caption", s()),
@@ -438,6 +426,23 @@ pub fn type_properties(name: &str) -> Option<Props> {
         _ => vec![],
     };
     let n = t.name;
+    if takes_picture(n) {
+        props.push(("picture", picture_action()));
+    }
+    // The picture of an Image, and the background of a Frame or Page.
+    if matches!(n, "Image" | "Frame" | "Page") {
+        props.push((
+            "pictureAlignment",
+            allowed(p(T::Integer, false, Supported), &["0", "1", "2", "3", "4"]),
+        ));
+        props.push((
+            "pictureSizeMode",
+            allowed(p(T::Integer, false, Supported), &["0", "1", "3"]),
+        ));
+    }
+    if takes_mouse_icon(n) {
+        props.push(("mouseIcon", picture_action()));
+    }
     if !matches!(n, "Page" | "Image" | "SpinButton" | "ScrollBar") {
         props.push(("font", font()));
     }
@@ -470,6 +475,29 @@ pub fn type_properties(name: &str) -> Option<Props> {
         props.push((scalar.name, scalar_prop(scalar)));
     }
     Some(props)
+}
+
+/// A picture action: `{ path }` or `{ remove: true }`.
+fn picture_action() -> Prop {
+    let mut picture = p(T::Object, false, Supported);
+    picture.children = Some(picture_properties());
+    picture
+}
+
+/// Whether a control of the type has a `picture`: an Image, a Label, the buttons and
+/// toggles, and (as its background) a Frame or Page.
+pub fn takes_picture(type_name: &str) -> bool {
+    control_type(type_name).is_some_and(|t| {
+        matches!(
+            t.name,
+            "Image" | "Label" | "CommandButton" | "CheckBox" | "OptionButton" | "ToggleButton" | "Frame" | "Page"
+        )
+    })
+}
+
+/// Whether a control of the type has a `mouseIcon`: those with a `mousePointer`.
+pub fn takes_mouse_icon(type_name: &str) -> bool {
+    control_type(type_name).is_some_and(|t| crate::scalars::find(t.name, "mousePointer").is_some())
 }
 
 /// All properties of a control type: the common ones (minus exclusions)

@@ -257,7 +257,15 @@ describe("FormSpec editing", () => {
 		assert.deepEqual(control(text, "img").picture, { path: "forms/assets/logo.bmp" });
 		rejects(text, [{ type: "setControlProperty", controlId: "img", field: "picture", value: { path: "" } }], "UFV005");
 		rejects(text, [{ type: "setControlProperty", controlId: "img", field: "picture", value: { file: "a.bmp" } as never }], "UFE003");
-		rejects(text, [{ type: "setControlProperty", controlId: "l1", field: "picture", value: { path: "a.bmp" } }], "UFE005");
+		// A Label, the buttons, Frames, Pages and the form have pictures too; a TextBox has none.
+		const withLabel = apply(text, { type: "setControlProperty", controlId: "l1", field: "picture", value: { path: "a.bmp" } }, { type: "setControlProperty", controlId: "l1", field: "picturePosition", value: 12 });
+		assert.deepEqual([control(withLabel, "l1").picture, control(withLabel, "l1").picturePosition], [{ path: "a.bmp" }, 12]);
+		const withForm = apply(text, { type: "setFormProperty", field: "picture", value: { path: "a.bmp" } }, { type: "setFormProperty", field: "pictureTiling", value: true }, { type: "setFormProperty", field: "mouseIcon", value: { path: "hand.cur" } });
+		assert.deepEqual([json(withForm).form.picture, json(withForm).form.pictureTiling, json(withForm).form.mouseIcon], [{ path: "a.bmp" }, true, { path: "hand.cur" }]);
+		const withIcon = apply(text, { type: "setControlProperty", controlId: "l1", field: "mouseIcon", value: { path: "hand.cur" } }, { type: "setControlProperty", controlId: "l1", field: "mousePointer", value: 99 });
+		assert.deepEqual([control(withIcon, "l1").mouseIcon, control(withIcon, "l1").mousePointer], [{ path: "hand.cur" }, 99]);
+		const box = apply(text, { type: "addControl", control: { id: "t1", name: "Text1", type: "TextBox", left: 8, top: 90, width: 72, height: 18 } as never });
+		rejects(box, [{ type: "setControlProperty", controlId: "t1", field: "picture", value: { path: "a.bmp" } }], "UFE005");
 		// Removing writes no picture field at all, and restores the source text.
 		const removed = apply(text, { type: "setControlProperty", controlId: "img", field: "picture", value: { remove: true } });
 		assert.equal(removed, form([image, label]));
@@ -344,9 +352,11 @@ describe("FormSpec editing", () => {
 		assert.equal(edit({ type: "setControlProperty", controlId: "cb", field: "caption", value: ["a"] }), false);
 		assert.equal(edit({ type: "setFormProperty", field: "list", value: ["a"] }), false);
 		assert.equal(edit({ type: "setControlProperty", controlId: "img", field: "picture", value: { remove: true } }), true);
-		assert.equal(isWebviewMessage({ type: "picturePick", requestId: 1, version: 1, controlId: "img" }), true);
-		assert.equal(isWebviewMessage({ type: "pictureCommit", requestId: 1, version: 1, controlId: "img", token: "t" }), true);
-		assert.equal(isWebviewMessage({ type: "pictureCommit", requestId: 1, version: 1, controlId: "img" }), false);
+		assert.equal(isWebviewMessage({ type: "picturePick", requestId: 1, version: 1, controlId: "img", field: "picture" }), true);
+		assert.equal(isWebviewMessage({ type: "picturePick", requestId: 1, version: 1, controlId: "", field: "mouseIcon" }), true);
+		assert.equal(isWebviewMessage({ type: "picturePick", requestId: 1, version: 1, controlId: "img", field: "caption" }), false);
+		assert.equal(isWebviewMessage({ type: "pictureCommit", requestId: 1, version: 1, controlId: "img", field: "picture", token: "t" }), true);
+		assert.equal(isWebviewMessage({ type: "pictureCommit", requestId: 1, version: 1, controlId: "img", field: "picture" }), false);
 	});
 
 	it("sets tag and controlTipText on any control", () => {
@@ -476,7 +486,9 @@ describe("FormSpec validation and metadata", () => {
 		assert.deepEqual(image({ remove: true }), []);
 		assert.deepEqual(image({ path: "" }), ["UFV005"]);
 		assert.deepEqual(image({ path: "a.bmp", remove: true }), ["UFV005"]);
-		assert.deepEqual(codes([{ ...label, picture: { path: "a.bmp" } }]), ["UFV005"]);
+		assert.deepEqual(codes([{ ...label, picture: { path: "a.bmp" } }]), []);
+		assert.deepEqual(codes([{ id: "t", name: "T", type: "TextBox", picture: { path: "a.bmp" } }]), ["UFV005"]);
+		assert.deepEqual(codes([{ ...label, mouseIcon: { path: "" } }]), ["UFV005"]);
 	});
 
 	it("locates problems in the source", () => {
@@ -506,7 +518,7 @@ describe("FormSpec validation and metadata", () => {
 		const fields = (id: string) => grid.controls[id].descriptors.map((d) => d.field);
 		assert.ok(fields("l1").includes("font") && fields("l1").includes("textAlign"));
 		assert.ok(!fields("img").includes("font") && fields("img").includes("picture") && fields("img").includes("pictureSizeMode"));
-		assert.ok(!fields("l1").includes("picture") && !fields("l1").includes("list") && !fields("odd").includes("picture"));
+		assert.ok(fields("l1").includes("picture") && fields("l1").includes("mouseIcon") && !fields("l1").includes("list") && !fields("odd").includes("picture"));
 		assert.ok(!fields("pg").includes("left") && fields("pg").includes("controlTipText"));
 		// tag and controlTipText are common to every control; accelerator is not.
 		for (const id of ["l1", "img", "mp", "pg", "lb"]) assert.ok(fields(id).includes("tag") && fields(id).includes("controlTipText"), id);
@@ -519,7 +531,7 @@ describe("FormSpec validation and metadata", () => {
 		assert.equal(descriptor("lb", "selectedIndex")?.valueType, "integer");
 		assert.deepEqual(grid.form.descriptors.map((d) => d.field), [
 			"backColor", "borderColor", "borderStyle", "caption", "cycle", "drawBuffer", "enabled", "font", "foreColor", "height", "helpContextId",
-			"keepScrollBarsVisible", "mousePointer", "name", "rightToLeft", "scrollBars", "scrollHeight", "scrollLeft", "scrollTop", "scrollWidth",
+			"keepScrollBarsVisible", "mouseIcon", "mousePointer", "name", "picture", "pictureAlignment", "pictureSizeMode", "pictureTiling", "rightToLeft", "scrollBars", "scrollHeight", "scrollLeft", "scrollTop", "scrollWidth",
 			"showModal", "specialEffect", "startUpPosition", "tag", "whatsThisButton", "whatsThisHelp", "width", "zoom",
 		]);
 		const formField = (field: string) => grid.form.descriptors.find((d) => d.field === field);

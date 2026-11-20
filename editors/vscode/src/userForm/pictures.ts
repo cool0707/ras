@@ -1,11 +1,12 @@
-// Image control pictures: validation of picture files (the checks of the
-// compiler that need no decoder), project asset paths, and previews for the
+// Pictures of controls and forms (`picture`, `mouseIcon`): validation of picture files (the
+// checks of the compiler that need no decoder), project asset paths, and previews for the
 // Designer canvas. This module does not depend on VS Code.
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { ParsedSpec, ValidationIssue } from "./spec";
 import { isObject } from "./spec";
+import { controlProperties } from "./contract";
 
 export const MAX_PICTURE_BYTES = 16 << 20;
 export const MAX_PICTURE_PIXELS = 16_000_000;
@@ -17,7 +18,7 @@ export const ASSET_FOLDER = "forms/assets";
 /** A picture that the compiler would reject; the message is shown to the user. */
 export class PictureError extends Error {}
 
-export type PictureFormat = "bmp" | "jpeg" | "png" | "gif" | "webp" | "tiff" | "ico";
+export type PictureFormat = "bmp" | "jpeg" | "png" | "gif" | "webp" | "tiff" | "ico" | "cur";
 
 export interface PictureInfo {
 	format: PictureFormat;
@@ -35,6 +36,8 @@ export interface PictureInfo {
 export const FORMAT_LIST = "BMP / JPEG / PNG / GIF / WebP / TIFF / ICO";
 /** File name extensions offered by the open dialog. */
 export const PICTURE_EXTENSIONS = ["bmp", "jpg", "jpeg", "png", "gif", "webp", "tif", "tiff", "ico"];
+/** File name extensions offered for a `mouseIcon`: icons and cursors, stored as they are. */
+export const ICON_EXTENSIONS = ["ico", "cur"];
 
 const sizeMessage = "画像ファイルは 1 バイト以上 16 MiB 以下でなければなりません。";
 
@@ -151,6 +154,36 @@ export function inspectPicture(data: Uint8Array): PictureInfo {
 	throw new PictureError(`画像の形式を判別できません（${FORMAT_LIST} に対応しています）。`);
 }
 
+/**
+ * Checks an icon or cursor file for a `mouseIcon` (stored as it is). A BMP or JPEG that
+ * MS Forms holds unchanged is taken too; nothing is converted.
+ */
+export function inspectIcon(data: Uint8Array): PictureInfo {
+	if (data.length < 1 || data.length > MAX_PICTURE_BYTES) throw new PictureError(sizeMessage);
+	const icon = startsWith(data, [0x00, 0x00, 0x01, 0x00]);
+	if (icon || startsWith(data, [0x00, 0x00, 0x02, 0x00])) {
+		const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+		const count = data.length >= 6 ? view.getUint16(4, true) : 0;
+		if (count === 0 || data.length < 6 + count * 16) throw new PictureError("アイコン（ICO / CUR）として読めません（画像の一覧が途中で切れています）。");
+		for (let entry = 0; entry < count; entry++) {
+			const size = view.getUint32(6 + entry * 16 + 8, true);
+			const offset = view.getUint32(6 + entry * 16 + 12, true);
+			if (size === 0 || offset < 6 + count * 16 || offset + size > data.length) throw new PictureError("アイコン（ICO / CUR）として読めません（画像のデータがファイルの外を指しています）。");
+		}
+		const side = (b: number) => (b === 0 ? 256 : b);
+		return { format: icon ? "ico" : "cur", width: side(data[6]), height: side(data[7]), converted: false };
+	}
+	const info = (() => {
+		try {
+			return inspectPicture(data);
+		} catch {
+			return undefined;
+		}
+	})();
+	if (info && !info.converted) return info;
+	throw new PictureError("MouseIcon にはアイコン（.ico）かカーソル（.cur）のファイルを指定してください。");
+}
+
 const mimeTypes: Record<PictureFormat, string> = {
 	bmp: "image/bmp",
 	jpeg: "image/jpeg",
@@ -159,6 +192,7 @@ const mimeTypes: Record<PictureFormat, string> = {
 	webp: "image/webp",
 	tiff: "image/tiff",
 	ico: "image/x-icon",
+	cur: "image/x-icon",
 };
 
 export function pictureDataUri(data: Uint8Array, format: PictureFormat): string {
@@ -168,8 +202,8 @@ export function pictureDataUri(data: Uint8Array, format: PictureFormat): string 
 /** Whether the webview (Chromium) can draw the format; TIFF is the one it cannot. */
 export const previewable = (format: PictureFormat) => format !== "tiff";
 
-/** Reads a picture file without ever loading more than the size limit. */
-export async function readPictureFile(file: string): Promise<{ data: Uint8Array; info: PictureInfo }> {
+/** Reads a picture file (an icon or cursor for a `mouseIcon`) without ever loading more than the size limit. */
+export async function readPictureFile(file: string, icon = false): Promise<{ data: Uint8Array; info: PictureInfo }> {
 	let handle: fs.FileHandle;
 	try {
 		handle = await fs.open(file, "r");
@@ -191,7 +225,7 @@ export async function readPictureFile(file: string): Promise<{ data: Uint8Array;
 		}
 		if (length !== stat.size) throw new PictureError("画像ファイルが読み取り中に変更されました。もう一度選んでください。");
 		const data = buffer.subarray(0, length);
-		return { data, info: inspectPicture(data) };
+		return { data, info: icon ? inspectIcon(data) : inspectPicture(data) };
 	} catch (error) {
 		if (error instanceof PictureError) throw error;
 		throw new PictureError("画像ファイルを読み取れません。");
@@ -314,8 +348,10 @@ export interface PicturePreview {
 	dataUri?: string;
 	/** Source size of the picture, for the per-form preview budget. */
 	bytes?: number;
-	/** Why there is no preview. */
+	/** Why there is no preview (the file is no picture). */
 	problem?: string;
+	/** Why the file cannot be a mouse icon. */
+	iconProblem?: string;
 }
 
 /** Previews by absolute file path. A file is read again only after it changed on disk. */
@@ -345,14 +381,28 @@ export class PicturePreviews {
 			// Like the compiler, do not follow a link out of the project.
 			const [realRoot, realFile] = await Promise.all([root, file].map((p) => fs.realpath(p).catch(() => undefined)));
 			if (realRoot && realFile && projectRelativePath(realRoot, realFile) === undefined) throw new PictureError("リンクの先がプロジェクトの外にあります。");
-			const { data, info } = await readPictureFile(file);
-			// A format the webview cannot draw has no preview; that is not a problem of the form.
-			preview = previewable(info.format) ? { dataUri: pictureDataUri(data, info.format), bytes: data.length } : {};
+			const { data } = await readPictureFile(file, true).catch(() => readPictureFile(file));
+			const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+			let iconProblem: string | undefined;
+			try {
+				inspectIcon(data);
+			} catch (error) {
+				iconProblem = message(error);
+			}
+			try {
+				const info = inspectPicture(data);
+				// A format the webview cannot draw has no preview; that is not a problem of the form.
+				preview = previewable(info.format) ? { dataUri: pictureDataUri(data, info.format), bytes: data.length } : {};
+			} catch (error) {
+				preview = { problem: message(error) };
+			}
+			if (iconProblem) preview.iconProblem = iconProblem;
 		} catch (error) {
-			preview = { problem: error instanceof Error ? error.message : String(error) };
+			const problem = error instanceof Error ? error.message : String(error);
+			preview = { problem, iconProblem: problem };
 		}
 		this.entries.set(file, { stamp, preview });
-		return cached?.preview.dataUri !== preview.dataUri || cached?.preview.problem !== preview.problem;
+		return cached?.preview.dataUri !== preview.dataUri || cached?.preview.problem !== preview.problem || cached?.preview.iconProblem !== preview.iconProblem;
 	}
 
 	/** Brings the cache in line with the files a form uses now. Returns true when any preview changed. */
@@ -365,19 +415,34 @@ export class PicturePreviews {
 	}
 }
 
-/** The `picture.path` of each Image control that has one, by index into `spec.records`. */
-function picturePaths(spec: ParsedSpec): { index: number; field: string; picturePath: string }[] {
-	const result: { index: number; field: string; picturePath: string }[] = [];
+/** A picture action of a form: of a control (by index into `spec.records`) or of the form (-1). */
+interface PictureUse {
+	index: number;
+	property: "picture" | "mouseIcon";
+	field: string;
+	picturePath: string;
+}
+
+/** The `picture.path` and `mouseIcon.path` of the form and of each control that has them. */
+function picturePaths(spec: ParsedSpec): PictureUse[] {
+	const result: PictureUse[] = [];
+	const add = (owner: Record<string, unknown>, index: number, base: string) => {
+		for (const property of ["picture", "mouseIcon"] as const) {
+			const picture = owner[property];
+			if (!isObject(picture) || typeof picture.path !== "string" || !picture.path.trim() || picture.remove === true) continue;
+			result.push({ index, property, field: `${base}.${property}.path`, picturePath: picture.path });
+		}
+	};
+	if (isObject(spec.form)) add(spec.form, -1, "form");
 	spec.records.forEach((record, index) => {
-		const picture = record.raw.picture;
-		if (record.control.type.toLowerCase() !== "image" || !isObject(picture)) return;
-		if (typeof picture.path !== "string" || !picture.path.trim() || picture.remove === true) return;
-		result.push({ index, field: `${record.path}.picture.path`, picturePath: picture.path });
+		const properties = controlProperties(record.control.type);
+		const owner = Object.fromEntries(Object.entries(record.raw).filter(([key]) => key in properties));
+		add(owner, index, record.path);
 	});
 	return result;
 }
 
-/** Absolute paths of the picture files a form refers to. */
+/** Absolute paths of the picture files a form refers to (pictures and mouse icons). */
 export function pictureFiles(spec: ParsedSpec, root: string): string[] {
 	const files = new Set<string>();
 	for (const { picturePath } of picturePaths(spec)) {
@@ -387,31 +452,41 @@ export function pictureFiles(spec: ParsedSpec, root: string): string[] {
 	return [...files];
 }
 
+/** The previews of a form: of each control's picture (aligned with `spec.records`) and of the form's. */
+export interface PicturePreviewState {
+	dataUris: (string | undefined)[];
+	/** The form's background picture. */
+	form?: string;
+	issues: ValidationIssue[];
+}
+
 /**
- * What the loaded previews mean for a form: a data URI per control (aligned
- * with `spec.records`) and a warning for each picture that cannot be shown.
+ * What the loaded previews mean for a form: a data URI per picture, and a warning for each
+ * picture or mouse icon that cannot be used.
  */
-export function picturePreviewState(spec: ParsedSpec, root: string, previews: PicturePreviews): { dataUris: (string | undefined)[]; issues: ValidationIssue[] } {
-	const dataUris: (string | undefined)[] = spec.records.map(() => undefined);
-	const issues: ValidationIssue[] = [];
+export function picturePreviewState(spec: ParsedSpec, root: string, previews: PicturePreviews): PicturePreviewState {
+	const state: PicturePreviewState = { dataUris: spec.records.map(() => undefined), issues: [] };
 	const counted = new Set<string>();
 	let total = 0;
-	const warn = (field: string, message: string, suggestion: string) => issues.push({ code: "UFP001", severity: "warning", message, field, suggestion });
-	for (const { index, field, picturePath } of picturePaths(spec)) {
+	const warn = (field: string, message: string, suggestion: string) => state.issues.push({ code: "UFP001", severity: "warning", message, field, suggestion });
+	for (const { index, property, field, picturePath } of picturePaths(spec)) {
 		const file = resolvePicturePath(root, picturePath);
 		if (!file) {
 			warn(field, `${field} "${picturePath}" はプロジェクト ルートからの相対パスではありません（.. や絶対パスは使えません）。`, "ras.toml のあるフォルダーからの相対パスを / 区切りで指定してください。");
 			continue;
 		}
 		const preview = previews.get(file);
-		if (preview?.problem) warn(field, `${field} "${picturePath}" を画像として使えません: ${preview.problem}`, `${FORMAT_LIST} のファイルを指定してください。`);
-		if (!preview?.dataUri) continue;
+		const problem = property === "mouseIcon" ? preview?.iconProblem : preview?.problem;
+		if (problem) warn(field, `${field} "${picturePath}" を${property === "mouseIcon" ? "マウス アイコン" : "画像"}として使えません: ${problem}`, property === "mouseIcon" ? "ICO / CUR のファイルを指定してください。" : `${FORMAT_LIST} のファイルを指定してください。`);
+		// A mouse icon is not drawn on the canvas.
+		if (property === "mouseIcon" || !preview?.dataUri) continue;
 		if (!counted.has(file)) {
 			if (total + (preview.bytes ?? 0) > MAX_PREVIEW_TOTAL_BYTES) continue;
 			counted.add(file);
 			total += preview.bytes ?? 0;
 		}
-		dataUris[index] = preview.dataUri;
+		if (index < 0) state.form = preview.dataUri;
+		else state.dataUris[index] = preview.dataUri;
 	}
-	return { dataUris, issues };
+	return state;
 }

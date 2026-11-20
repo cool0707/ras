@@ -228,6 +228,11 @@ pub(crate) fn validate_raw(root: &Value) -> Vec<Issue> {
     let mut issues = validate_object(root, &contract::document_properties(), "");
     if let Some(form) = root.get("form").and_then(Value::as_object) {
         issues.extend(validate_object(form, &contract::form_properties(), "form"));
+        for field in ["picture", "mouseIcon"] {
+            if let Some(value) = lookup_raw(form, field) {
+                issues.extend(validate_raw_picture(value, "UserForm", true, &format!("form.{field}")));
+            }
+        }
         if let Some(observed) = form.get("observed").and_then(Value::as_object) {
             issues.extend(validate_object(
                 observed,
@@ -458,12 +463,13 @@ fn validate_raw_control_properties(
         add_generic_custom_properties(&mut allowed);
     }
     let mut issues = validate_object(control, &allowed, path);
-    if let Some(value) = lookup_raw(control, "picture") {
-        issues.extend(validate_raw_picture(
-            value,
-            control_type,
-            &format!("{path}.picture"),
-        ));
+    for (field, takes) in [
+        ("picture", contract::takes_picture(control_type)),
+        ("mouseIcon", contract::takes_mouse_icon(control_type)),
+    ] {
+        if let Some(value) = lookup_raw(control, field) {
+            issues.extend(validate_raw_picture(value, control_type, takes, &format!("{path}.{field}")));
+        }
     }
     if let Some(tabs) = lookup_raw(control, "tabs") {
         issues.extend(validate_raw_tabs(tabs, &format!("{path}.tabs")));
@@ -517,8 +523,9 @@ fn validate_raw_control_properties(
     issues
 }
 
-fn validate_raw_picture(value: &Value, control_type: &str, path: &str) -> Vec<Issue> {
-    if !control_type.trim().eq_ignore_ascii_case("Image") {
+/// A picture action (`picture`, `mouseIcon`) of a control that `takes` it, or of the form.
+fn validate_raw_picture(value: &Value, control_type: &str, takes: bool, path: &str) -> Vec<Issue> {
+    if !takes {
         return vec![invalid_property_issue(path, control_type)];
     }
     let Some(object) = value.as_object() else {
@@ -535,7 +542,7 @@ fn validate_raw_picture(value: &Value, control_type: &str, path: &str) -> Vec<Is
         if name != "path" && name != "remove" {
             issues.push(error(
                 "UFV001",
-                format!("{path}.{key} は picture にないフィールドです。"),
+                format!("{path}.{key} は画像の指定にないフィールドです。"),
                 &format!("{path}.{key}"),
             ));
             continue;
@@ -1264,11 +1271,13 @@ fn validate_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
         }
     }
     let is = |name: &str| control.control_type.trim().eq_ignore_ascii_case(name);
-    if control.picture.is_some() && !is("Image") {
-        issues.push(invalid_property_issue(
-            &format!("{path}.picture"),
-            &control.control_type,
-        ));
+    for (field, given, takes) in [
+        ("picture", control.picture.is_some(), contract::takes_picture(&control.control_type)),
+        ("mouseIcon", control.mouse_icon.is_some(), contract::takes_mouse_icon(&control.control_type)),
+    ] {
+        if given && !takes {
+            issues.push(invalid_property_issue(&format!("{path}.{field}"), &control.control_type));
+        }
     }
     if is("Page") {
         for (name, value) in [

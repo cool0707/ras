@@ -63,6 +63,12 @@ pub struct FormSpecForm {
     /// `0` none, `1` single.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_style: Option<i64>,
+    /// The background picture, as a picture action (`{ path }` or `{ remove: true }`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<Value>,
+    /// The icon or cursor shown with `mousePointer` 99 (Custom), as a picture action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mouse_icon: Option<Value>,
     /// Snapshot-only observations (never authoring input).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed: Option<Value>,
@@ -163,9 +169,13 @@ pub struct FormSpecControl {
     /// Snapshot-only list of unmodelled properties.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unsupported: Option<Vec<String>>,
-    /// Image picture action.
+    /// Picture action (`{ path }` or `{ remove: true }`): the picture of an Image, of a
+    /// Label, button, CheckBox, OptionButton, ToggleButton, and the background of a Frame or Page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<Value>,
+    /// The icon or cursor shown with `mousePointer` 99 (Custom), as a picture action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mouse_icon: Option<Value>,
     /// Legacy nested children (normalised to the flat list).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controls: Option<Vec<FormSpecControl>>,

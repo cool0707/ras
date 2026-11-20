@@ -382,24 +382,45 @@ pub fn pull_with(
 
     let mut pictures = Vec::new();
     for found in &snapshot.pictures {
-        let control = &mut spec.controls[found.control_index];
         let data = &found.picture.data;
+        let icon = found.property == "mouseIcon";
+        // The previous action of the same property, and the color a converted picture of it
+        // was blended onto.
+        let (previous, owner) = match found.control_index {
+            Some(index) => {
+                let old = previous_control(&spec.controls[index].name);
+                let action = old.and_then(|o| if icon { o.mouse_icon.clone() } else { o.picture.clone() });
+                (action.zip(Some(old.and_then(|o| o.back_color.clone()))), spec.controls[index].name.clone())
+            }
+            None => {
+                let old = previous.as_ref().map(|p| &p.form);
+                let action = old.and_then(|o| if icon { o.mouse_icon.clone() } else { o.picture.clone() });
+                (action.zip(Some(old.and_then(|o| o.back_color.clone()))), String::new())
+            }
+        };
         // Keep the file the previous spec points to when the form holds
         // what that file is stored as (the file itself, or its conversion).
-        let kept = previous_control(&control.name).and_then(|old| {
-            let path = old.picture.as_ref()?.get("path")?.as_str()?;
-            let background = crate::picture::background_of(old.back_color.as_ref());
-            let stored = crate::picture::load_with(root, path, background).ok()?;
-            (stored.data == *data).then(|| path.to_string())
+        let kept = previous.and_then(|(action, back_color)| {
+            let path = action.get("path")?.as_str()?.to_string();
+            let stored = if icon {
+                crate::picture::load_icon(root, &path).ok()?
+            } else {
+                crate::picture::load_with(root, &path, crate::picture::background_of(back_color.as_ref())).ok()?
+            };
+            (stored.data == *data).then_some(path)
         });
         let rel = match kept {
             Some(path) => path,
             None => {
-                let rel = format!(
-                    "forms/assets/{name}.{}.{}",
-                    control.name,
-                    found.picture.format.extension()
-                );
+                // forms/assets/<Form>[.<Control>][.mouseIcon].<ext>
+                let mut stem = name.to_string();
+                if !owner.is_empty() {
+                    stem = format!("{stem}.{owner}");
+                }
+                if icon {
+                    stem.push_str(".mouseIcon");
+                }
+                let rel = format!("forms/assets/{stem}.{}", found.picture.format.extension());
                 let file = root.join(&rel);
                 let same = std::fs::read(&file).is_ok_and(|existing| existing == *data);
                 if file.exists() && !same && !force {
@@ -418,7 +439,13 @@ pub fn pull_with(
                 rel
             }
         };
-        control.picture = Some(json!({ "path": rel }));
+        let action = Some(json!({ "path": rel }));
+        match (found.control_index, icon) {
+            (Some(index), false) => spec.controls[index].picture = action,
+            (Some(index), true) => spec.controls[index].mouse_icon = action,
+            (None, false) => spec.form.picture = action,
+            (None, true) => spec.form.mouse_icon = action,
+        }
         pictures.push(rel);
     }
 

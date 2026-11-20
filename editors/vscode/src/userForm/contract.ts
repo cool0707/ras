@@ -130,6 +130,9 @@ export const tabProperties: Record<string, PropertyContract> = {
 	visible: p("boolean", false, "supported", "Whether the tab is visible.", true),
 };
 
+/** Control types with a `picture`: the Image, a Label, the buttons and toggles, and (as the background) a Frame or Page. */
+export const PICTURE_TYPES = ["Image", "Label", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "Frame", "Page"];
+
 export const pictureActionProperties: Record<string, PropertyContract> = {
 	path: p("string", false, "supported", "Project-root-relative BMP or JPEG asset path, with / separators.", true),
 	remove: p("boolean", false, "supported", "No picture; the same as omitting the field.", true, ["true"]),
@@ -179,8 +182,9 @@ const pointsUpTo = (description: string, maximum: number): PropertyContract => (
 const effects = [0, 1, 2, 3, 6];
 const effectLabels = ["Flat", "Raised", "Sunken", "Etched", "Bump"];
 // fmMousePointer: 4 and 5 are not values of it.
-const pointers = [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-const pointerLabels = ["Default", "Arrow", "Cross", "IBeam", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "HourGlass", "NoDrop", "AppStarting", "Help", "SizeAll"];
+const pointers = [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 99];
+const pointerLabels = ["Default", "Arrow", "Cross", "IBeam", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "HourGlass", "NoDrop", "AppStarting", "Help", "SizeAll", "Custom"];
+const picturePositionLabels = ["LeftTop", "LeftCenter", "LeftBottom", "RightTop", "RightCenter", "RightBottom", "AboveLeft", "AboveCenter", "AboveRight", "BelowLeft", "BelowCenter", "BelowRight", "Center"];
 const scrollBarLabels = ["None", "Horizontal", "Vertical", "Both"];
 const int32 = [-2147483648, 2147483647] as const;
 export const scalarProperties: Scalar[] = [
@@ -228,6 +232,8 @@ export const scalarProperties: Scalar[] = [
 	["cancel", ["CommandButton"], flag("Esc clicks this button.")],
 	["takeFocusOnClick", ["CommandButton"], flag("Clicking moves the focus to the button.")],
 	["tabStop", FOCUSABLE, flag("Tab moves the focus to the control.")],
+	["picturePosition", ["Label", "CommandButton", "CheckBox", "OptionButton", "ToggleButton"], choice("Where the picture is beside the caption (omitted: AboveCenter).", [...picturePositionLabels.keys()]), picturePositionLabels],
+	["pictureTiling", ["Frame", "Page"], flag("The background picture is repeated over the whole area.")],
 	["controlSource", BOUND, p("string", false, "supported", "Cell the value is read from when the form loads and written to when it changes (\"Sheet1!B2\").", true)],
 	["rowSource", ["ComboBox", "ListBox"], p("string", false, "supported", "Cells the items come from (\"Sheet1!A2:B10\"); list cannot be written as well.", true)],
 	["min", ["SpinButton", "ScrollBar"], integer("Least value.", ...int32)],
@@ -263,6 +269,9 @@ export const scalarProperties: Scalar[] = [
 	["scrollHeight", FORM, pointsUpTo("Height of the scroll area in points; 0 for the form's.", 1000000)],
 	["scrollLeft", FORM, pointsUpTo("How far the form is scrolled to the right, in points.", 1000000)],
 	["scrollTop", FORM, pointsUpTo("How far the form is scrolled down, in points.", 1000000)],
+	["pictureAlignment", FORM, choice("Where the background picture is: TopLeft, TopRight, Center, BottomLeft, BottomRight.", [0, 1, 2, 3, 4]), ["TopLeft", "TopRight", "Center", "BottomLeft", "BottomRight"]],
+	["pictureSizeMode", FORM, choice("How the background picture fits: Clip, Stretch, Zoom.", [0, 1, 3]), ["Clip", "Stretch", "Zoom"]],
+	["pictureTiling", FORM, flag("The background picture is repeated over the whole form.")],
 ];
 const control = (type: string, canContainChildren: boolean, properties: Record<string, PropertyContract>): ControlContract => ({
 	type,
@@ -283,11 +292,7 @@ function buildControls(): Record<string, ControlContract> {
 		togglebutton: control("ToggleButton", false, toggleControl("ToggleButton caption.", "ToggleButton pressed state: true, false or \"Null\".")),
 		spinbutton: control("SpinButton", false, { value: p("integer", false, "supported", "SpinButton value.", true) }),
 		scrollbar: control("ScrollBar", false, { value: p("integer", false, "supported", "ScrollBar value.", true) }),
-		image: control("Image", false, {
-			picture: { ...p("object", false, "supported", "Picture embedded into the Image control.", true), editor: "picture", children: pictureActionProperties },
-			pictureAlignment: { ...p("integer", false, "supported", "Picture alignment: TopLeft, TopRight, Center, BottomLeft, BottomRight.", true, ["0", "1", "2", "3", "4"]), editor: "enum" },
-			pictureSizeMode: { ...p("integer", false, "supported", "Picture size mode: Clip, Stretch, Zoom.", true, ["0", "1", "3"]), editor: "enum" },
-		}),
+		image: control("Image", false, {}),
 		frame: control("Frame", true, typed("caption", "Frame caption.")),
 		multipage: {
 			...control("MultiPage", true, {
@@ -320,6 +325,11 @@ function buildControls(): Record<string, ControlContract> {
 	};
 	for (const contract of Object.values(controls)) {
 		const t = contract.type;
+		if (PICTURE_TYPES.includes(t)) contract.properties.picture = pictureAction(t === "Image" ? "Picture embedded into the Image control." : t === "Frame" || t === "Page" ? "Background picture." : "Picture shown beside the caption.");
+		if (["Image", "Frame", "Page"].includes(t)) {
+			contract.properties.pictureAlignment = pictureAlignment;
+			contract.properties.pictureSizeMode = pictureSizeMode;
+		}
 		if (!["Page", "Image", "SpinButton", "ScrollBar"].includes(t)) contract.properties.font = font;
 		if (t !== "Page") contract.properties.backColor = color;
 		if (t !== "Image" && t !== "Page") contract.properties.foreColor = color;
@@ -327,11 +337,20 @@ function buildControls(): Record<string, ControlContract> {
 		if (["Frame", "TextBox", "ComboBox", "ListBox", "Label", "Image"].includes(t)) contract.properties.borderStyle = borderStyle;
 		for (const [name, types, scalar, valueLabels] of scalarProperties)
 			if (types.includes(t)) contract.properties[name] = valueLabels ? { ...scalar, valueLabels } : scalar;
+		// The icon or cursor of MousePointer Custom (99), where there is a MousePointer.
+		if (contract.properties.mousePointer) contract.properties.mouseIcon = mouseIcon;
 	}
 	return controls;
 }
 
+const pictureAction = (description: string): PropertyContract => ({ ...p("object", false, "supported", description, true), editor: "picture", children: pictureActionProperties });
+const mouseIcon = pictureAction("Icon or cursor (.ico / .cur) shown with MousePointer Custom (99).");
+const pictureAlignment: PropertyContract = { ...p("integer", false, "supported", "Picture alignment: TopLeft, TopRight, Center, BottomLeft, BottomRight.", true, ["0", "1", "2", "3", "4"]), editor: "enum" };
+const pictureSizeMode: PropertyContract = { ...p("integer", false, "supported", "Picture size mode: Clip, Stretch, Zoom.", true, ["0", "1", "3"]), editor: "enum" };
+
 export const controlContracts = buildControls();
+formProperties.picture = pictureAction("Background picture of the form.");
+formProperties.mouseIcon = mouseIcon;
 for (const [name, types, scalar, valueLabels] of scalarProperties)
 	if (types.includes("UserForm")) formProperties[name] = valueLabels ? { ...scalar, valueLabels } : scalar;
 
@@ -361,7 +380,7 @@ export function lookupProperty(properties: Record<string, PropertyContract>, nam
 	return found ? properties[found] : undefined;
 }
 
-const editorPropertyNames = ["font", "foreColor", "backColor", "borderColor", "picture", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode"];
+const editorPropertyNames = ["font", "foreColor", "backColor", "borderColor", "picture", "mouseIcon", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode"];
 const scalarTypes: ValueType[] = ["string", "number", "integer", "boolean", "any"];
 export const isEditorProperty = (name: string) => editorPropertyNames.includes(name);
 const isScalar = (contract: PropertyContract) => scalarTypes.includes(contract.valueType);
