@@ -44,8 +44,43 @@ import {
   stableDelta,
 } from "../../src/userForm/geometry";
 import type { Geometry, ResizeHandle, DropTarget } from "../../src/userForm/geometry";
-import { appearanceStyle } from "./propertyEditors/appearance";
+import { appearanceStyle, colorStyle } from "./propertyEditors/appearance";
 const px = (points: number) => `${pointsToPixels(points)}px`;
+
+/** The picture of an Image, or a placeholder when there is none that can be drawn. */
+function ControlPicture({ control }: { control: DesignerControl }) {
+  // A picture the browser cannot draw must not leave a broken-image icon.
+  const [broken, setBroken] = useState<string>();
+  const source = control.picture?.remove === true ? undefined : control.picturePreview;
+  if (source && source !== broken)
+    return (
+      <img
+        class="control-picture"
+        src={source}
+        alt=""
+        draggable={false}
+        onError={() => setBroken(source)}
+        style={{
+          // Transparent pixels are blended onto BackColor (buttonFace by default).
+          backgroundColor: colorStyle(control.backColor) ?? "#f0f0f0",
+          objectFit:
+            control.pictureSizeMode === 1
+              ? "fill"
+              : control.pictureSizeMode === 3
+                ? "contain"
+                : "none",
+          objectPosition:
+            ["left top", "right top", "center", "left bottom", "right bottom"][
+              control.pictureAlignment ?? 2
+            ] ?? "center",
+        }}
+      />
+    );
+  // A picture that is set but not shown is named, so that it is not mistaken for none.
+  const path = control.picture?.remove === true ? undefined : control.picture?.path;
+  const name = typeof path === "string" ? path.split("/").pop() : undefined;
+  return <span class="placeholder">▧ {name || "Image"}</span>;
+}
 
 export function ControlGlyph({ control }: { control: DesignerControl }) {
   const type = control.type.toLowerCase();
@@ -120,28 +155,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
         </span>
       );
     case "image":
-      return control.picturePreview && control.picture?.remove !== true ? (
-        <img
-          class="control-picture"
-          src={control.picturePreview}
-          alt=""
-          draggable={false}
-          style={{
-            objectFit:
-              control.pictureSizeMode === 1
-                ? "fill"
-                : control.pictureSizeMode === 3
-                  ? "contain"
-                  : "none",
-            objectPosition:
-              ["left top", "right top", "center", "left bottom", "right bottom"][
-                control.pictureAlignment ?? 2
-              ] ?? "center",
-          }}
-        />
-      ) : (
-        <span class="placeholder">▧ Image</span>
-      );
+      return <ControlPicture control={control} />;
     case "frame":
       return <span class="frame-caption">{caption}</span>;
     case "multipage":

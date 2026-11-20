@@ -1,6 +1,6 @@
-// Image control pictures: validation of BMP / JPEG files (the same rules as
-// the compiler), project asset paths, and previews for the Designer canvas.
-// This module does not depend on VS Code.
+// Image control pictures: validation of picture files (the checks of the
+// compiler that need no decoder), project asset paths, and previews for the
+// Designer canvas. This module does not depend on VS Code.
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -17,11 +17,24 @@ export const ASSET_FOLDER = "forms/assets";
 /** A picture that the compiler would reject; the message is shown to the user. */
 export class PictureError extends Error {}
 
+export type PictureFormat = "bmp" | "jpeg" | "png" | "gif" | "webp" | "tiff" | "ico";
+
 export interface PictureInfo {
-	format: "bmp" | "jpeg";
-	width: number;
-	height: number;
+	format: PictureFormat;
+	/** Size in pixels, where the file header gives it without decoding. */
+	width?: number;
+	height?: number;
+	/**
+	 * False for a picture that is embedded as it is (a 24 / 32 bit uncompressed
+	 * BMP, a JPEG); true for one the compiler converts to a 24-bit BMP when it
+	 * writes the form.
+	 */
+	converted: boolean;
 }
+
+export const FORMAT_LIST = "BMP / JPEG / PNG / GIF / WebP / TIFF / ICO";
+/** File name extensions offered by the open dialog. */
+export const PICTURE_EXTENSIONS = ["bmp", "jpg", "jpeg", "png", "gif", "webp", "tif", "tiff", "ico"];
 
 const sizeMessage = "画像ファイルは 1 バイト以上 16 MiB 以下でなければなりません。";
 
@@ -30,6 +43,7 @@ function checkDimensions(width: number, height: number) {
 		throw new PictureError(`画像の大きさ（${width} × ${height}）が上限の 16,000,000 ピクセルを超えています。`);
 }
 
+/** The check of a BMP that MS Forms can store unchanged. */
 function inspectBmp(data: Uint8Array, view: DataView): PictureInfo {
 	if (data.length < 54) throw new PictureError("BMP のヘッダーが途中で切れています。");
 	if (view.getUint32(14, true) !== 40) throw new PictureError("BITMAPINFOHEADER（40 バイトのヘッダー）を持つ BMP だけを使えます。");
@@ -51,7 +65,7 @@ function inspectBmp(data: Uint8Array, view: DataView): PictureInfo {
 		throw new PictureError("BMP のヘッダーにあるファイル サイズがピクセル データと合いません。");
 	const imageSize = view.getUint32(34, true);
 	if (imageSize !== 0 && imageSize < pixelBytes) throw new PictureError("BMP のヘッダーにある画像サイズがピクセル データより小さくなっています。");
-	return { format: "bmp", width, height };
+	return { format: "bmp", width, height, converted: false };
 }
 
 /** Walks the marker segments up to the start of the scan; the image data itself is not decoded. */
@@ -81,21 +95,78 @@ function inspectJpeg(data: Uint8Array, view: DataView): PictureInfo {
 	if (!closed) throw broken("終了マーカーがありません");
 	if (frame.width === 0 || frame.height === 0) throw new PictureError("JPEG の幅と高さが正しくありません。");
 	checkDimensions(frame.width, frame.height);
-	return { format: "jpeg", ...frame };
+	return { format: "jpeg", ...frame, converted: false };
 }
 
-/** Checks that `data` is a BMP or JPEG file the compiler can embed. */
+/** Size of the 24-bit BMP a picture of this many pixels is converted to. */
+export function convertedBmpBytes(width: number, height: number): number {
+	return 54 + Math.floor((width * 3 + 3) / 4) * 4 * height;
+}
+
+/** A picture that is converted; its size is only known where the header is trivial to read. */
+function converted(format: PictureFormat, width?: number, height?: number): PictureInfo {
+	if (width === undefined || height === undefined) return { format, converted: true };
+	if (width === 0 || height === 0) throw new PictureError("画像の幅と高さが正しくありません。");
+	if (convertedBmpBytes(width, height) > MAX_PICTURE_BYTES)
+		throw new PictureError(`画像が大きすぎます（${width} × ${height}）。24 ビットの BMP に変換すると 16 MiB を超えます。`);
+	return { format, width, height, converted: true };
+}
+
+const startsWith = (data: Uint8Array, bytes: number[], at = 0) => data.length >= at + bytes.length && bytes.every((byte, index) => data[at + index] === byte);
+const ascii = (text: string) => [...text].map((ch) => ch.charCodeAt(0));
+
+/**
+ * Checks a picture file as far as that is possible without decoding it:
+ * the size, the format (by signature, never by file name) and, for the
+ * formats whose header is trivial to read, the size of the converted bitmap.
+ * Damaged image data is left for the compiler to report.
+ */
 export function inspectPicture(data: Uint8Array): PictureInfo {
 	if (data.length < 1 || data.length > MAX_PICTURE_BYTES) throw new PictureError(sizeMessage);
 	const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-	if (data.length >= 2 && data[0] === 0x42 && data[1] === 0x4d) return inspectBmp(data, view);
-	if (data.length >= 2 && data[0] === 0xff && data[1] === 0xd8) return inspectJpeg(data, view);
-	throw new PictureError("BMP または JPEG の画像ファイルを指定してください。");
+	if (startsWith(data, ascii("BM"))) {
+		try {
+			return inspectBmp(data, view);
+		} catch {
+			// 8-bit, RLE, V4 / V5 headers and the like are converted. The size is
+			// taken from the header only when it is plainly there.
+			const header = data.length >= 26 ? view.getUint32(14, true) : 0;
+			const [width, height] = header === 12 ? [view.getUint16(18, true), view.getUint16(20, true)] : header >= 40 ? [view.getInt32(18, true), Math.abs(view.getInt32(22, true))] : [0, 0];
+			return width > 0 && height > 0 ? converted("bmp", width, height) : converted("bmp");
+		}
+	}
+	// A JPEG is always embedded as it is, so one that fails the check is an error.
+	if (startsWith(data, [0xff, 0xd8])) return inspectJpeg(data, view);
+	if (startsWith(data, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) {
+		// The IHDR chunk comes first: width and height at offsets 16 and 20.
+		return startsWith(data, ascii("IHDR"), 12) && data.length >= 24 ? converted("png", view.getUint32(16, false), view.getUint32(20, false)) : converted("png");
+	}
+	if (startsWith(data, ascii("GIF87a")) || startsWith(data, ascii("GIF89a"))) {
+		// The logical screen descriptor follows the signature.
+		return data.length >= 10 ? converted("gif", view.getUint16(6, true), view.getUint16(8, true)) : converted("gif");
+	}
+	if (startsWith(data, ascii("RIFF")) && startsWith(data, ascii("WEBP"), 8)) return converted("webp");
+	if (startsWith(data, [0x49, 0x49, 0x2a, 0x00]) || startsWith(data, [0x4d, 0x4d, 0x00, 0x2a])) return converted("tiff");
+	if (startsWith(data, [0x00, 0x00, 0x01, 0x00])) return converted("ico");
+	throw new PictureError(`画像の形式を判別できません（${FORMAT_LIST} に対応しています）。`);
 }
 
-export function pictureDataUri(data: Uint8Array, format: PictureInfo["format"]): string {
-	return `data:image/${format};base64,${Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("base64")}`;
+const mimeTypes: Record<PictureFormat, string> = {
+	bmp: "image/bmp",
+	jpeg: "image/jpeg",
+	png: "image/png",
+	gif: "image/gif",
+	webp: "image/webp",
+	tiff: "image/tiff",
+	ico: "image/x-icon",
+};
+
+export function pictureDataUri(data: Uint8Array, format: PictureFormat): string {
+	return `data:${mimeTypes[format]};base64,${Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("base64")}`;
 }
+
+/** Whether the webview (Chromium) can draw the format; TIFF is the one it cannot. */
+export const previewable = (format: PictureFormat) => format !== "tiff";
 
 /** Reads a picture file without ever loading more than the size limit. */
 export async function readPictureFile(file: string): Promise<{ data: Uint8Array; info: PictureInfo }> {
@@ -275,7 +346,8 @@ export class PicturePreviews {
 			const [realRoot, realFile] = await Promise.all([root, file].map((p) => fs.realpath(p).catch(() => undefined)));
 			if (realRoot && realFile && projectRelativePath(realRoot, realFile) === undefined) throw new PictureError("リンクの先がプロジェクトの外にあります。");
 			const { data, info } = await readPictureFile(file);
-			preview = { dataUri: pictureDataUri(data, info.format), bytes: data.length };
+			// A format the webview cannot draw has no preview; that is not a problem of the form.
+			preview = previewable(info.format) ? { dataUri: pictureDataUri(data, info.format), bytes: data.length } : {};
 		} catch (error) {
 			preview = { problem: error instanceof Error ? error.message : String(error) };
 		}
@@ -332,7 +404,7 @@ export function picturePreviewState(spec: ParsedSpec, root: string, previews: Pi
 			continue;
 		}
 		const preview = previews.get(file);
-		if (preview?.problem) warn(field, `${field} "${picturePath}" を画像として使えません: ${preview.problem}`, "24 / 32 ビットの無圧縮 BMP か JPEG のファイルを指定してください。");
+		if (preview?.problem) warn(field, `${field} "${picturePath}" を画像として使えません: ${preview.problem}`, `${FORMAT_LIST} のファイルを指定してください。`);
 		if (!preview?.dataUri) continue;
 		if (!counted.has(file)) {
 			if (total + (preview.bytes ?? 0) > MAX_PREVIEW_TOTAL_BYTES) continue;

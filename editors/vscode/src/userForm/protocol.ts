@@ -346,7 +346,17 @@ export type HostMessage =
   | {
       type: "pictureSelection";
       requestId: number;
-      selection?: { token: string; name: string; dataURI: string; width: number; height: number };
+      selection?: {
+        token: string;
+        name: string;
+        /** Empty when the webview cannot draw the format. */
+        dataURI: string;
+        /** Size in pixels, when the host could read it. */
+        width?: number;
+        height?: number;
+        /** The compiler converts the picture to a 24-bit BMP when it writes the form. */
+        converted?: boolean;
+      };
       error?: DesignerError;
     }
   | { type: "clipboardState"; available: boolean }

@@ -21,10 +21,12 @@ import {
 	findProjectRoot,
 	pictureDataUri,
 	pictureFiles,
+	PICTURE_EXTENSIONS,
 	PictureError,
 	PicturePreviews,
 	picturePreviewState,
 	planPictureAsset,
+	previewable,
 	readPictureFile,
 	resolvePicturePath,
 	writePictureAsset,
@@ -253,17 +255,26 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 					defaultUri: vscode.Uri.file(root),
 					title: "Image コントロールの画像を選択",
 					openLabel: "選択",
-					filters: { "BMP / JPEG": ["bmp", "jpg", "jpeg"] },
+					filters: { 画像: PICTURE_EXTENSIONS },
 				});
 				const uri = picked?.[0];
 				if (!uri) return reply;
-				if (uri.scheme !== "file") throw new PictureError("このコンピューター上の BMP または JPEG のファイルを選んでください。");
+				if (uri.scheme !== "file") throw new PictureError("このコンピューター上の画像ファイルを選んでください。");
 				const { data, info } = await readPictureFile(uri.fsPath);
 				const plan = await planPictureAsset(root, uri.fsPath, data);
 				// The editor was closed, or another file was picked, while this one was read.
 				if (generation !== pickGeneration) return reply;
 				staged = { token: randomUUID(), controlId: message.controlId, source: uri.fsPath, data };
-				return { ...reply, selection: { token: staged.token, name: plan.relativePath, dataURI: pictureDataUri(data, info.format), width: info.width, height: info.height } };
+				return {
+					...reply,
+					selection: {
+						token: staged.token,
+						name: plan.relativePath,
+						dataURI: previewable(info.format) ? pictureDataUri(data, info.format) : "",
+						...(info.width !== undefined && info.height !== undefined ? { width: info.width, height: info.height } : {}),
+						converted: info.converted,
+					},
+				};
 			} catch (error) {
 				return { ...reply, error: pictureError(error) };
 			}

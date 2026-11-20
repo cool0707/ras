@@ -5,15 +5,18 @@ import path from "node:path";
 import { after, describe, it } from "node:test";
 import { formatJson } from "../../src/userForm/jsonSource";
 import {
+	convertedBmpBytes,
 	findProjectRoot,
 	inspectPicture,
 	MAX_PICTURE_BYTES,
+	PICTURE_EXTENSIONS,
 	pictureDataUri,
 	PictureError,
 	pictureFiles,
 	PicturePreviews,
 	picturePreviewState,
 	planPictureAsset,
+	previewable,
 	projectRelativePath,
 	readPictureFile,
 	resolvePicturePath,
@@ -47,6 +50,26 @@ const eoi = [0xff, 0xd9];
 const jpegHead = (...parts: number[][]) => Buffer.from([0xff, 0xd8, ...parts.flat()]);
 const jpeg = (...parts: number[][]) => jpegHead(...parts, scan, eoi);
 
+/** The signature and the IHDR chunk of a PNG; the image data is left out. */
+function png(width: number, height: number): Buffer {
+	const data = Buffer.alloc(33);
+	Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]).copy(data);
+	data.write("IHDR", 12, "latin1");
+	data.writeUInt32BE(width, 16);
+	data.writeUInt32BE(height, 20);
+	data.set([8, 6, 0, 0, 0], 24);
+	return data;
+}
+
+/** The signature and the logical screen descriptor of a GIF. */
+function gif(version: string, width: number, height: number): Buffer {
+	const data = Buffer.alloc(13);
+	data.write(version, 0, "latin1");
+	data.writeUInt16LE(width, 6);
+	data.writeUInt16LE(height, 8);
+	return data;
+}
+
 const rejects = (data: Uint8Array, pattern: RegExp) =>
 	assert.throws(
 		() => inspectPicture(data),
@@ -55,45 +78,53 @@ const rejects = (data: Uint8Array, pattern: RegExp) =>
 
 describe("picture file validation", () => {
 	it("accepts uncompressed 24-bit and 32-bit BMP files", () => {
-		assert.deepEqual(inspectPicture(bmp(3, 2)), { format: "bmp", width: 3, height: 2 });
-		assert.deepEqual(inspectPicture(bmp(5, -4, 32)), { format: "bmp", width: 5, height: 4 });
+		assert.deepEqual(inspectPicture(bmp(3, 2)), { format: "bmp", width: 3, height: 2, converted: false });
+		assert.deepEqual(inspectPicture(bmp(5, -4, 32)), { format: "bmp", width: 5, height: 4, converted: false });
 		// Bytes after the pixel array and a later pixel offset are fine.
 		const padded = Buffer.concat([bmp(2, 2), Buffer.alloc(8)]);
 		assert.equal(inspectPicture(padded).format, "bmp");
 		assert.ok(pictureDataUri(bmp(1, 1), "bmp").startsWith("data:image/bmp;base64,Qk"));
 	});
 
-	it("rejects BMP files the compiler cannot embed", () => {
-		rejects(bmp(3, 2).subarray(0, 40), /ヘッダー/);
-		rejects(bmp(3, 2, 24, (d) => d.writeUInt32LE(124, 14)), /BITMAPINFOHEADER/);
-		rejects(bmp(3, 2, 24, (d) => d.writeInt32LE(0, 18)), /幅と高さ/);
-		rejects(bmp(3, 2, 24, (d) => d.writeInt32LE(-3, 18)), /幅と高さ/);
-		rejects(bmp(3, 2, 24, (d) => d.writeInt32LE(0, 22)), /幅と高さ/);
-		rejects(bmp(3, 2, 24, (d) => d.writeUInt16LE(0, 26)), /プレーン/);
-		rejects(bmp(3, 2, 24, (d) => d.writeUInt16LE(8, 28)), /8 ビット/);
-		rejects(bmp(3, 2, 24, (d) => d.writeUInt32LE(1, 30)), /無圧縮/);
-		rejects(bmp(3, 2, 24, (d) => d.writeUInt32LE(40, 10)), /ピクセル データ/);
-		rejects(bmp(3, 2, 24, (d) => d.writeUInt32LE(58, 10)), /ピクセル データ/);
-		rejects(bmp(3, 2).subarray(0, 60), /ピクセル データ/);
-		rejects(bmp(3, 2, 24, (d) => d.writeInt32LE(-0x80000000, 22)), /幅と高さ/);
-		// Sizes in the header may be 0, but must not contradict the pixel data.
-		assert.equal(inspectPicture(bmp(3, 2, 24, (d) => d.writeUInt32LE(0, 2))).width, 3);
-		assert.equal(inspectPicture(bmp(3, 2, 24, (d) => d.writeUInt32LE(24, 34))).width, 3);
-		rejects(bmp(3, 2, 24, (d) => d.writeUInt32LE(d.length + 1, 2)), /ファイル サイズ/);
-		rejects(bmp(3, 2, 24, (d) => d.writeUInt32LE(60, 2)), /ファイル サイズ/);
-		rejects(bmp(3, 2, 24, (d) => d.writeUInt32LE(23, 34)), /画像サイズ/);
-		// A header that claims more pixels than the limit, without the data for them.
-		rejects(bmp(1, 1, 24, (d) => (d.writeInt32LE(5000, 18), d.writeInt32LE(4000, 22))), /16,000,000/);
+	it("accepts other BMP files as pictures to convert", () => {
+		const toConvert = (data: Uint8Array, size: { width?: number; height?: number } = { width: 3, height: 2 }) =>
+			assert.deepEqual(inspectPicture(data), { format: "bmp", ...size, converted: true });
+		toConvert(bmp(3, 2, 24, (d) => d.writeUInt16LE(8, 28))); // 8-bit
+		toConvert(bmp(3, 2, 24, (d) => d.writeUInt32LE(1, 30))); // RLE
+		toConvert(bmp(3, 2, 24, (d) => d.writeUInt32LE(124, 14))); // V5 header
+		toConvert(bmp(3, 2, 24, (d) => d.writeUInt16LE(0, 26)));
+		toConvert(bmp(3, 2, 24, (d) => d.writeUInt32LE(40, 10)));
+		toConvert(bmp(3, 2, 24, (d) => d.writeUInt32LE(58, 10)));
+		toConvert(bmp(3, 2).subarray(0, 60));
+		toConvert(bmp(3, 2).subarray(0, 40));
+		// Sizes in the header may be 0; ones that contradict the pixel data make it a picture to convert.
+		assert.equal(inspectPicture(bmp(3, 2, 24, (d) => d.writeUInt32LE(0, 2))).converted, false);
+		assert.equal(inspectPicture(bmp(3, 2, 24, (d) => d.writeUInt32LE(24, 34))).converted, false);
+		toConvert(bmp(3, 2, 24, (d) => d.writeUInt32LE(d.length + 1, 2)));
+		toConvert(bmp(3, 2, 24, (d) => d.writeUInt32LE(60, 2)));
+		toConvert(bmp(3, 2, 24, (d) => d.writeUInt32LE(23, 34)));
+		// An OS/2 header has 16-bit sizes.
+		toConvert(bmp(3, 2, 24, (d) => (d.writeUInt32LE(12, 14), d.writeUInt16LE(7, 18), d.writeUInt16LE(5, 20))), { width: 7, height: 5 });
+		// A header whose size cannot be trusted is left to the compiler.
+		toConvert(bmp(3, 2, 24, (d) => d.writeInt32LE(0, 18)), {});
+		toConvert(bmp(3, 2, 24, (d) => d.writeInt32LE(-3, 18)), {});
+		toConvert(bmp(3, 2, 24, (d) => d.writeInt32LE(0, 22)), {});
+		toConvert(bmp(3, 2, 24, (d) => d.writeUInt32LE(16, 14)), {});
+		toConvert(bmp(3, 2).subarray(0, 20), {});
+		toConvert(Buffer.from("BM"), {});
+		// The converted bitmap must fit, whatever the bit depth of the source.
+		rejects(bmp(1, 1, 24, (d) => (d.writeUInt16LE(8, 28), d.writeInt32LE(3000, 18), d.writeInt32LE(-3000, 22))), /3000 × 3000.*16 MiB/);
+		assert.equal(inspectPicture(bmp(1, 1, 24, (d) => (d.writeUInt16LE(8, 28), d.writeInt32LE(2364, 18), d.writeInt32LE(2364, 22)))).width, 2364);
 	});
 
 	it("reads JPEG dimensions from the first frame header", () => {
 		const table = segment(0xc4, [0, 1, 2, 3]);
-		assert.deepEqual(inspectPicture(jpeg(app0, frame(0xc0, 24, 16))), { format: "jpeg", width: 24, height: 16 });
+		assert.deepEqual(inspectPicture(jpeg(app0, frame(0xc0, 24, 16))), { format: "jpeg", width: 24, height: 16, converted: false });
 		// DHT (0xC4) is not a frame header; progressive frames (0xC2) count.
-		assert.deepEqual(inspectPicture(jpeg(app0, table, frame(0xc2, 640, 480), table)), { format: "jpeg", width: 640, height: 480 });
+		assert.deepEqual(inspectPicture(jpeg(app0, table, frame(0xc2, 640, 480), table)), { format: "jpeg", width: 640, height: 480, converted: false });
 		// Fill bytes before a marker are skipped.
-		assert.deepEqual(inspectPicture(jpeg(app0, [0xff, 0xff], frame(0xc1, 300, 2))), { format: "jpeg", width: 300, height: 2 });
-		assert.deepEqual(inspectPicture(jpeg(frame(0xc0, 4000, 4000))), { format: "jpeg", width: 4000, height: 4000 });
+		assert.deepEqual(inspectPicture(jpeg(app0, [0xff, 0xff], frame(0xc1, 300, 2))), { format: "jpeg", width: 300, height: 2, converted: false });
+		assert.deepEqual(inspectPicture(jpeg(frame(0xc0, 4000, 4000))), { format: "jpeg", width: 4000, height: 4000, converted: false });
 	});
 
 	it("rejects JPEG files without usable dimensions", () => {
@@ -114,9 +145,58 @@ describe("picture file validation", () => {
 		rejects(jpeg([0xff, 0xe0, 0, 1]), /途中で切れています/);
 	});
 
-	it("rejects other formats and sizes outside 1 byte to 16 MiB", () => {
-		rejects(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), /BMP または JPEG/);
-		rejects(Buffer.from("B"), /BMP または JPEG/);
+	it("detects the formats to convert by signature", () => {
+		const signature = (...bytes: (number | string)[]) => Buffer.concat(bytes.map((b) => (typeof b === "string" ? Buffer.from(b, "latin1") : Buffer.from([b]))));
+		assert.deepEqual(inspectPicture(png(48, 32)), { format: "png", width: 48, height: 32, converted: true });
+		assert.deepEqual(inspectPicture(gif("GIF89a", 300, 200)), { format: "gif", width: 300, height: 200, converted: true });
+		assert.deepEqual(inspectPicture(gif("GIF87a", 1, 1)), { format: "gif", width: 1, height: 1, converted: true });
+		assert.deepEqual(inspectPicture(signature("RIFF", 0x24, 0, 0, 0, "WEBPVP8 ")), { format: "webp", converted: true });
+		assert.deepEqual(inspectPicture(signature("II*", 0, 8, 0, 0, 0)), { format: "tiff", converted: true });
+		assert.deepEqual(inspectPicture(signature("MM", 0, "*", 0, 0, 0, 8)), { format: "tiff", converted: true });
+		assert.deepEqual(inspectPicture(signature(0, 0, 1, 0, 1, 0, 16, 16)), { format: "ico", converted: true });
+		// A header too short to give the size is left to the compiler.
+		assert.deepEqual(inspectPicture(png(48, 32).subarray(0, 20)), { format: "png", converted: true });
+		assert.deepEqual(inspectPicture(Buffer.from("GIF89a")), { format: "gif", converted: true });
+		// The file name plays no part: only these signatures are pictures.
+		const unknown = /判別できません（BMP \/ JPEG \/ PNG \/ GIF \/ WebP \/ TIFF \/ ICO に対応しています）/;
+		rejects(Buffer.from("hello"), unknown);
+		rejects(Buffer.from("B"), unknown);
+		rejects(signature("GIF88a", 1, 0, 1, 0), unknown);
+		rejects(signature("RIFF", 0x24, 0, 0, 0, "WAVEfmt "), unknown);
+		rejects(signature("II", 0, "*"), unknown);
+		rejects(signature(0, 0, 2, 0, 1, 0), unknown);
+		rejects(signature(0x89, "PNG\r\n"), unknown);
+		rejects(signature("<svg xmlns='http://www.w3.org/2000/svg'/>"), unknown);
+		// A JPEG is embedded as it is, so a broken one is not handed to the converter.
+		rejects(signature(0xff, 0xd8, 0xff, 0xe0), /JPEG として読めません/);
+	});
+
+	it("limits pictures to convert by the size of the resulting 24-bit BMP", () => {
+		assert.equal(convertedBmpBytes(1, 1), 58);
+		assert.equal(convertedBmpBytes(3, 2), 78);
+		assert.equal(convertedBmpBytes(4, 1), 66);
+		// 2364 x 2364 pixels fit into 16 MiB as a 24-bit BMP, 2365 x 2365 do not.
+		assert.ok(convertedBmpBytes(2364, 2364) <= MAX_PICTURE_BYTES && convertedBmpBytes(2365, 2365) > MAX_PICTURE_BYTES);
+		assert.equal(inspectPicture(png(2364, 2364)).width, 2364);
+		rejects(png(2365, 2365), /2365 × 2365.*16 MiB/);
+		rejects(png(0x7fffffff, 0x7fffffff), /16 MiB/);
+		assert.equal(inspectPicture(gif("GIF89a", 2364, 2364)).height, 2364);
+		rejects(gif("GIF89a", 2365, 2365), /16 MiB/);
+		rejects(gif("GIF87a", 65535, 65535), /16 MiB/);
+		rejects(png(0, 32), /幅と高さ/);
+		rejects(gif("GIF89a", 16, 0), /幅と高さ/);
+		// Pictures embedded as they are keep the 16,000,000 pixel limit.
+		assert.equal(inspectPicture(jpeg(frame(0xc0, 4000, 4000))).converted, false);
+	});
+
+	it("gives each format its MIME type and leaves TIFF without a preview", () => {
+		const types = (["bmp", "jpeg", "png", "gif", "webp", "tiff", "ico"] as const).map((format) => pictureDataUri(Buffer.from("x"), format));
+		assert.deepEqual(types, ["image/bmp", "image/jpeg", "image/png", "image/gif", "image/webp", "image/tiff", "image/x-icon"].map((type) => `data:${type};base64,eA==`));
+		assert.deepEqual(["bmp", "jpeg", "png", "gif", "webp", "tiff", "ico"].filter((format) => !previewable(format as "bmp")), ["tiff"]);
+		assert.deepEqual(PICTURE_EXTENSIONS, ["bmp", "jpg", "jpeg", "png", "gif", "webp", "tif", "tiff", "ico"]);
+	});
+
+	it("rejects sizes outside 1 byte to 16 MiB", () => {
 		rejects(Buffer.alloc(0), /16 MiB/);
 		const large = Buffer.alloc(MAX_PICTURE_BYTES + 1);
 		large.write("BM", 0, "latin1");
@@ -233,11 +313,36 @@ describe("picture assets", () => {
 
 	it("reads picture files with the same checks", async () => {
 		const good = write(path.join(base, "read", "good.jpg"), jpeg(app0, frame(0xc0, 24, 16)));
-		assert.deepEqual((await readPictureFile(good)).info, { format: "jpeg", width: 24, height: 16 });
+		assert.deepEqual((await readPictureFile(good)).info, { format: "jpeg", width: 24, height: 16, converted: false });
 		await assert.rejects(readPictureFile(path.join(base, "read", "missing.bmp")), PictureError);
 		await assert.rejects(readPictureFile(path.join(base, "read")), PictureError);
 		await assert.rejects(readPictureFile(write(path.join(base, "read", "empty.bmp"))), /16 MiB/);
-		await assert.rejects(readPictureFile(write(path.join(base, "read", "text.bmp"), "hello")), /BMP または JPEG/);
+		await assert.rejects(readPictureFile(write(path.join(base, "read", "text.bmp"), "hello")), /判別できません/);
+		// The format comes from the content, not from the extension.
+		assert.deepEqual((await readPictureFile(write(path.join(base, "read", "really-png.bmp"), png(8, 4)))).info, { format: "png", width: 8, height: 4, converted: true });
+	});
+
+	it("previews converted formats with their MIME type, and TIFF not at all", async () => {
+		const root = project("formats");
+		const picture = png(8, 4);
+		const tiff = Buffer.from([0x49, 0x49, 0x2a, 0x00, 8, 0, 0, 0]);
+		write(path.join(root, "forms", "assets", "icon.png"), picture);
+		write(path.join(root, "forms", "assets", "scan.tif"), tiff);
+		const parsed = parseSpec(
+			formatJson({
+				...newFormSpec("Main"),
+				controls: [
+					{ id: "a", name: "A", type: "Image", picture: { path: "forms/assets/icon.png" } },
+					{ id: "b", name: "B", type: "Image", picture: { path: "forms/assets/scan.tif" } },
+				],
+			}),
+		);
+		assert.ok(parsed.ok);
+		const previews = new PicturePreviews();
+		await previews.refresh(pictureFiles(parsed.spec, root), root);
+		// A format the webview cannot draw is neither previewed nor reported.
+		assert.deepEqual(picturePreviewState(parsed.spec, root, previews), { dataUris: [pictureDataUri(picture, "png"), undefined], issues: [] });
+		assert.ok(pictureDataUri(picture, "png").startsWith("data:image/png;base64,iVBOR"));
 	});
 
 	it("previews the pictures of a form and reports the ones it cannot show", async () => {
@@ -277,7 +382,7 @@ describe("picture assets", () => {
 			["UFP001", "warning", "controls[4].picture.path"],
 		]);
 		assert.match(state.issues[0].message, /見つからない/);
-		assert.match(state.issues[1].message, /BMP または JPEG/);
+		assert.match(state.issues[1].message, /判別できません/);
 		const [problem] = problems(parsed.spec, state.issues);
 		assert.match(parsed.spec.text.split("\n")[problem.range!.start.line], /missing\.bmp/);
 

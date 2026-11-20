@@ -23,8 +23,9 @@ export interface PictureSelection {
   token: string;
   name: string;
   dataURI: string;
-  width: number;
-  height: number;
+  width?: number;
+  height?: number;
+  converted?: boolean;
 }
 
 export const objectValue = (value: unknown): Record<string, unknown> =>

@@ -375,7 +375,7 @@
                   "path": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Image に埋め込む BMP / JPEG ファイル。プロジェクト ルート（ras.toml のあるフォルダー）からの相対パスを / 区切りで指定します"
+                    "description": "Image に表示する画像ファイル（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）。プロジェクト ルート（ras.toml のあるフォルダー）からの相対パスを / 区切りで指定します。24 / 32 ビットの無圧縮 BMP と JPEG 以外は、フォームの書き込み時に 24 ビットの BMP に変換されます"
                   }
                 }
               },
