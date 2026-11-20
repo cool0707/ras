@@ -120,9 +120,22 @@ export function px(points: unknown): string {
 	return `${(n * 96) / 72}px`;
 }
 
-/** Offset of a container's content from its corner, in points (the Designer draws them the same way). */
-export function contentInsets(type: string): { left: number; top: number } {
-	if (type === "MultiPage") return { left: 1.5, top: 18 };
-	if (type === "Frame") return { left: 0.75, top: 0.75 };
-	return { left: 0, top: 0 };
+export interface Insets {
+	left: number;
+	top: number;
+	right: number;
+	bottom: number;
+}
+
+/**
+ * Offset of a container's content from its edges, in points (the Designer draws them the same
+ * way): the tabs of a MultiPage take 18pt on the side of its TabOrientation.
+ */
+export function contentInsets(type: string, tabOrientation?: unknown): Insets {
+	if (type === "MultiPage") {
+		const side = (["top", "bottom", "left", "right"] as const)[typeof tabOrientation === "number" ? tabOrientation : 0] ?? "top";
+		return { left: 1.5, top: 1.5, right: 1.5, bottom: 1.5, [side]: 18 };
+	}
+	if (type === "Frame") return { left: 0.75, top: 0.75, right: 0.75, bottom: 0.75 };
+	return { left: 0, top: 0, right: 0, bottom: 0 };
 }

@@ -97,6 +97,12 @@ export function scalarClasses(control: DesignerControl): string {
     typeof control.style === "number" && ["multipage", "tabstrip"].includes(control.type.toLowerCase())
       ? `tab-style-${control.style}`
       : "",
+    // TabOrientation Bottom, Left or Right (Top is the default drawing).
+    typeof control.tabOrientation === "number" &&
+    control.tabOrientation > 0 &&
+    ["multipage", "tabstrip"].includes(control.type.toLowerCase())
+      ? `tab-orient-${control.tabOrientation}`
+      : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -225,7 +231,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
             (tab, index) =>
               tab.visible !== false && (
                 <span key={tab.name} class={index === (control.selectedIndex ?? 0) ? "active" : ""}>
-                  {tab.caption ?? tab.name}
+                  <span class="tab-text">{tab.caption ?? tab.name}</span>
                 </span>
               ),
           )}
@@ -1011,7 +1017,7 @@ export function DesignerCanvas({
         : groupPosition
           ? { ...control, left: groupPosition.left, top: groupPosition.top }
           : control;
-    const insets = contentInsets(type);
+    const insets = contentInsets(type, control.tabOrientation);
     const selectedControl = selectionIds.includes(control.id);
     return (
       <>
@@ -1050,7 +1056,7 @@ export function DesignerCanvas({
                           setSelection([p.id]);
                         }}
                       >
-                        {p.caption ?? p.name}
+                        <span class="tab-text">{p.caption ?? p.name}</span>
                       </button>
                     ),
                 )}

@@ -19,13 +19,21 @@ export const gridSize = 8;
 export const minimumSize = 1;
 
 // Container decoration has one point-space definition for rendering and editing.
-export function contentInsets(type: string) {
-  if (type.toLowerCase() === "multipage") return { left: 1.5, top: 18, right: 1.5, bottom: 1.5 };
+/**
+ * Offset of a container's content from its edges, in points. The tabs of a MultiPage take
+ * 18pt on the side its TabOrientation names (Top, Bottom, Left, Right); the edge 1.5pt on
+ * the others.
+ */
+export function contentInsets(type: string, tabOrientation?: unknown) {
+  if (type.toLowerCase() === "multipage") {
+    const side = ["top", "bottom", "left", "right"][typeof tabOrientation === "number" ? tabOrientation : 0] ?? "top";
+    return { left: 1.5, top: 1.5, right: 1.5, bottom: 1.5, [side]: 18 };
+  }
   if (type.toLowerCase() === "frame") return { left: 0.75, top: 0.75, right: 0.75, bottom: 0.75 };
   return { left: 0, top: 0, right: 0, bottom: 0 };
 }
 export function contentBounds(control: DesignerControl): Bounds {
-  const inset = contentInsets(control.type);
+  const inset = contentInsets(control.type, control.tabOrientation);
   return {
     width: Math.max(0, control.width - inset.left - inset.right),
     height: Math.max(0, control.height - inset.top - inset.bottom),
@@ -72,7 +80,7 @@ export function parentOrigin(
   if (!parent) return { left: 0, top: 0 };
   const origin = parentOrigin(document, parent.parentId, visited);
   if (parent.type.toLowerCase() === "page") return origin;
-  const inset = contentInsets(parent.type);
+  const inset = contentInsets(parent.type, parent.tabOrientation);
   return { left: origin.left + parent.left + inset.left, top: origin.top + parent.top + inset.top };
 }
 
@@ -207,7 +215,7 @@ export function requiredSize(document: DesignerDocument, control: DesignerContro
   const children = document.controls.filter(
     (c) => owners.has(c.parentId ?? "") && c.type.toLowerCase() !== "page",
   );
-  const inset = contentInsets(control.type);
+  const inset = contentInsets(control.type, control.tabOrientation);
   return {
     width: Math.max(
       minimumSize,

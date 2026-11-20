@@ -946,18 +946,26 @@ fn generated_vbframe(
     ras_ovba::encode_text(codepage, &text).map_err(|e| PersistError::Invalid(e.to_string()))
 }
 
-/// Page box inside a new MultiPage: fixed 96 DPI, 2px border, 19px tab band.
-fn generated_page_box(size: (i32, i32)) -> ((i32, i32), (i32, i32)) {
+/// Page box inside a new MultiPage: fixed 96 DPI, 2px border, 19px tab band on the side
+/// of `tab_orientation` (Top, Bottom, Left, Right).
+fn generated_page_box(size: (i32, i32), tab_orientation: i64) -> ((i32, i32), (i32, i32)) {
     let (w, h) = (size.0 as i64, size.1 as i64);
     let wide = 1.max((w as f64 * 96.0 / 2540.0).round() as i64);
     let tall = 1.max((h as f64 * 96.0 / 2540.0).round() as i64);
     let scale = |pixels: i64, value: i64, extent: i64| -> i32 {
         ((2 * pixels * value + extent) / (2 * extent)) as i32
     };
-    let left = scale(2, w, wide);
-    let top = scale(21, h, tall);
-    let right = scale(2.max(wide - 2), w, wide);
-    let bottom = scale(21.max(tall - 2), h, tall);
+    // Pixels from the left, top, right and bottom edges.
+    let (l, t, r, b) = match tab_orientation {
+        1 => (2, 2, 2, 21),
+        2 => (21, 2, 2, 2),
+        3 => (2, 2, 21, 2),
+        _ => (2, 21, 2, 2),
+    };
+    let left = scale(l, w, wide);
+    let top = scale(t, h, tall);
+    let right = scale(l.max(wide - r), w, wide);
+    let bottom = scale(t.max(tall - b), h, tall);
     ((left, top), (0.max(right - left), 0.max(bottom - top)))
 }
 
@@ -1139,7 +1147,11 @@ impl Generation {
             if tabs.tabs.len() != controls.len() {
                 return invalid("MultiPage のタブとページの数が一致しません");
             }
-            let (position, page_size) = generated_page_box(size);
+            let orientation = match properties.get("TabOrientation") {
+                Some(PValue::Int(n)) => *n,
+                _ => 0,
+            };
+            let (position, page_size) = generated_page_box(size, orientation);
             for (i, control) in controls.iter_mut().enumerate() {
                 if control.class != 7 {
                     return invalid("MultiPage には Page しか入れられません");
@@ -1705,4 +1717,30 @@ fn encode_multipage_x(state: &MultiPageState) -> Result<Vec<u8>> {
         b.extend_from_slice(&(*id as u32).to_le_bytes());
     }
     Ok(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generated_page_box;
+
+    #[test]
+    fn the_page_box_leaves_the_band_of_tabs_on_their_side() {
+        // 240 × 180 points.
+        let size = (8467, 6350);
+        let top = generated_page_box(size, 0);
+        let bottom = generated_page_box(size, 1);
+        let left = generated_page_box(size, 2);
+        let right = generated_page_box(size, 3);
+        // 2px and 21px at 96 DPI, in HIMETRIC.
+        let (two, band) = (53, 556);
+        assert_eq!(top.0, (two, band));
+        assert_eq!(bottom.0, (two, two));
+        assert_eq!(left.0, (band, two));
+        assert_eq!(right.0, (two, two));
+        // The band takes the same room whichever side it is on.
+        assert_eq!(top.1, bottom.1);
+        assert_eq!(left.1, right.1);
+        assert_eq!(top.1 .0 - left.1 .0, band - two);
+        assert_eq!(left.1 .1 - top.1 .1, band - two);
+    }
 }

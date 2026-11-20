@@ -547,10 +547,8 @@ body {
 	outline-offset: -4px;
 }
 
-/* Inside the body's edge (the left and top insets are set from contentInsets). */
+/* Inside the body's edge (the insets are set from contentInsets). */
 .ctl-multipage > .content {
-	right: 2px;
-	bottom: 2px;
 	background: inherit;
 }
 
@@ -699,4 +697,131 @@ body {
 .ctl.tab-style-2::before,
 .ctl.tab-style-2 .tabs {
 	visibility: hidden;
+}
+
+/* TabOrientation Bottom, Left, Right: the band of tabs on that side, the active tab over the
+   body's edge. Captions on the left read upwards, on the right downwards (MSForms turns a
+   TrueType font). */
+.ctl.tab-orient-1::before {
+	top: 0;
+	bottom: 22px;
+}
+
+.ctl.tab-orient-1 .tabs {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	align-items: flex-start;
+}
+
+.ctl.tab-orient-1 .tab {
+	border-top: 0;
+	border-bottom: 1px solid;
+	border-radius: 0 0 2px 2px;
+	box-shadow: inset -1px -1px 0 var(--ms-shadow);
+}
+
+.ctl.tab-orient-2::before,
+.ctl.tab-orient-3::before {
+	top: 0;
+}
+
+.ctl.tab-orient-2::before {
+	left: 22px;
+}
+
+.ctl.tab-orient-3::before {
+	right: 22px;
+}
+
+.ctl.tab-orient-2 .tabs,
+.ctl.tab-orient-3 .tabs {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	flex-direction: column;
+	width: 24px;
+	height: auto;
+	padding: 2px 0 0;
+}
+
+.ctl.tab-orient-2 .tabs {
+	left: 0;
+	align-items: flex-end;
+}
+
+.ctl.tab-orient-3 .tabs {
+	right: 0;
+	align-items: flex-start;
+}
+
+.ctl.tab-orient-2 .tab,
+.ctl.tab-orient-3 .tab {
+	width: 20px;
+	height: auto;
+	padding: 6px 0;
+	border: 1px solid;
+	border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+}
+
+.ctl.tab-orient-2 .tab {
+	border-right: 0;
+	border-radius: 2px 0 0 2px;
+	box-shadow:
+		inset 1px 1px 0 var(--ms-light),
+		inset 0 -1px 0 var(--ms-shadow);
+}
+
+.ctl.tab-orient-3 .tab {
+	border-left: 0;
+	border-radius: 0 2px 2px 0;
+	box-shadow:
+		inset 0 1px 0 var(--ms-light),
+		inset -1px -1px 0 var(--ms-shadow);
+}
+
+.ctl.tab-orient-2 .tab.active,
+.ctl.tab-orient-3 .tab.active {
+	width: 24px;
+	height: auto;
+	margin: -2px 0;
+}
+
+.ctl.tab-orient-2 .tab-text,
+.ctl.tab-orient-3 .tab-text {
+	writing-mode: vertical-rl;
+	text-orientation: sideways;
+}
+
+.ctl.tab-orient-2 .tab-text {
+	display: inline-block;
+	transform: rotate(180deg);
+}
+
+/* Buttons keep their full edge on every side. */
+.ctl.tab-style-1.tab-orient-1 .tab,
+.ctl.tab-style-1.tab-orient-2 .tab,
+.ctl.tab-style-1.tab-orient-3 .tab {
+	border: 1px solid;
+	border-radius: 0;
+	border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-light),
+		inset -1px -1px 0 var(--ms-shadow);
+}
+
+.ctl.tab-style-1.tab-orient-1 .tab.active,
+.ctl.tab-style-1.tab-orient-2 .tab.active,
+.ctl.tab-style-1.tab-orient-3 .tab.active {
+	margin: 0;
+	border-color: var(--ms-dark) var(--ms-highlight) var(--ms-highlight) var(--ms-dark);
+	box-shadow:
+		inset 1px 1px 0 var(--ms-shadow),
+		inset -1px -1px 0 var(--ms-light);
+}
+
+.ctl.tab-style-1.tab-orient-2 .tab.active,
+.ctl.tab-style-1.tab-orient-3 .tab.active {
+	width: 20px;
 }

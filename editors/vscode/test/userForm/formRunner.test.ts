@@ -54,7 +54,10 @@ describe("form runner protocol", () => {
 	it("measures in points", () => {
 		assert.equal(px(72), "96px");
 		assert.equal(px(undefined), "0px");
-		assert.deepEqual(contentInsets("MultiPage"), { left: 1.5, top: 18 });
-		assert.deepEqual(contentInsets("Label"), { left: 0, top: 0 });
+		assert.deepEqual(contentInsets("MultiPage"), { left: 1.5, top: 18, right: 1.5, bottom: 1.5 });
+		assert.deepEqual(contentInsets("MultiPage", 1), { left: 1.5, top: 1.5, right: 1.5, bottom: 18 });
+		assert.deepEqual(contentInsets("MultiPage", 2), { left: 18, top: 1.5, right: 1.5, bottom: 1.5 });
+		assert.deepEqual(contentInsets("MultiPage", 3), { left: 1.5, top: 1.5, right: 18, bottom: 1.5 });
+		assert.deepEqual(contentInsets("Label"), { left: 0, top: 0, right: 0, bottom: 0 });
 	});
 });

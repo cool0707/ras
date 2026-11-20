@@ -368,7 +368,7 @@ function create(c: ControlSnapshot): View {
 					if (page.Visible === false) return;
 					const tab = el("button", index === current ? "tab active" : "tab", tabs);
 					tab.type = "button";
-					tab.textContent = str(page.Caption) || str(page.Name);
+					el("span", "tab-text", tab).textContent = str(page.Caption) || str(page.Name);
 					tab.disabled = !enabled || page.Enabled === false;
 					tab.tabIndex = index === current ? 0 : -1;
 					tab.addEventListener("focus", () => {
@@ -378,9 +378,11 @@ function create(c: ControlSnapshot): View {
 					if (index === current) view.focus = tab;
 				});
 				colors(root, s.state);
-				const inset = contentInsets(c.type);
+				const inset = contentInsets(c.type, s.state.TabOrientation);
 				content.style.left = px(inset.left);
 				content.style.top = px(inset.top);
+				content.style.right = px(inset.right);
+				content.style.bottom = px(inset.bottom);
 			};
 			break;
 		}
@@ -410,6 +412,7 @@ function look(root: HTMLElement, s: ControlState, type: string): void {
 	else root.style.removeProperty("--border-color");
 	if (type === "MultiPage" || type === "TabStrip") {
 		for (const n of [0, 1, 2]) root.classList.toggle(`tab-style-${n}`, num(s.Style) === n);
+		for (const n of [1, 2, 3]) root.classList.toggle(`tab-orient-${n}`, num(s.TabOrientation) === n);
 	}
 }
 
