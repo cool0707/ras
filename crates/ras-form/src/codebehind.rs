@@ -222,7 +222,8 @@ fn sub_declaration_end(lines: &[&str], name: &str) -> Option<usize> {
 /// The whole code-pane text of a form written from `forms/`.
 ///
 /// * `rel_path` — the `.form.json` file relative to the project root.
-/// * `code` — the code-behind (`forms/<Name>.bas`).
+/// * `code` — the code of the form: what the compiler generated from
+///   `forms/<Name>.ras`, or the VBA of a `forms/<Name>.bas` of earlier versions.
 pub fn compose(
     rel_path: &str,
     designer: &Designer,

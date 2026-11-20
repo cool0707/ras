@@ -75,7 +75,7 @@ fn relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/")
 }
 
-/// `ras form pull`: writes `forms/` files for forms of the workbook (spec §14.11.4).
+/// `ras form pull`: writes `forms/` files for forms of the workbook (spec §14.11.6).
 pub fn pull(root: &Path, book: &Path, names: &[String], force: bool) -> Result<ExitCode, String> {
     let at = |e: ras_ovba::OvbaError| format!("{}: {e}", book.display());
     let Some(project) = ras_ovba::unpack(book).map_err(at)?.project else {

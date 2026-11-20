@@ -58,8 +58,8 @@ ras pack                                  # Excel を起動せず、Book.xlsm �
 ras watch                                 # 変更を監視して再ビルド（ブックが閉じていれば pack も行う）
 ras unpack                                # ブック内の手書き VBA を vba/ に取り出す
 ras sync                                  # Excel で開いているブックへ反映する（Windows のみ）
-ras form new frmInput                     # ユーザーフォームの雛形（forms/frmInput.form.json と .bas）を作成
-ras form pull                             # ブックにあるユーザーフォームを forms/ に取り出す
+ras form new frmInput                     # ユーザーフォームの雛形（forms/frmInput.form.json と .ras）を作成
+ras form pull                             # ブックにあるユーザーフォームを forms/ に取り出す（コードは RAS に変換）
 ras fmt                                   # 整形
 ras build --target js                     # デバッグ実行用の JavaScript を build/debug/ に出力
 ```
@@ -72,11 +72,31 @@ ras build --target js                     # デバッグ実行用の JavaScript 
 
 ### ユーザーフォーム
 
-フォームのデザインは `forms/<名前>.form.json`（FormSpec）、イベント処理などのコードは `forms/<名前>.bas` に書きます（仕様 §14.11）。VS Code 拡張のデザイナーで編集でき、`ras pack` / `ras sync` がブックへ書き込みます。
+フォームのデザインは `forms/<名前>.form.json`（FormSpec）、イベント処理などのコードは RAS で `forms/<名前>.ras` に書きます（仕様 §14.11）。VS Code 拡張のデザイナーで編集でき、`ras pack` / `ras sync` がブックへ書き込みます。
+
+```typescript
+// forms/frmInput.ras — `this` がフォーム、コントロールは this.<名前>
+@on("btnOK.Click")
+function ok() {
+    if (this.txtName.text == "") {
+        msgBox("名前を入力してください");
+        return;
+    }
+    unload(this);
+}
+
+@on("txtName.Exit")
+function leave(cancel: MSForms.ReturnBoolean) {
+    cancel.value = this.txtName.text.length > 20;
+}
+```
+
+- イベントは `@on("<コントロール名>.<イベント>")`（フォーム自身は `UserForm.Initialize` など）を付けた関数で受け取ります。コンパイラが `Private Sub btnOK_Click()` などのイベントプロシージャを生成します。`export function` はフォームの公開メンバーになり、他のモジュールから `frmInput.show()` / `frmInput.enteredName()` のように使えます。
 
 - `Image` の画像は `"picture": { "path": "forms/assets/logo.png" }` のように、プロジェクト内の画像ファイル（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）を指定します。画像はブックに埋め込まれます。MS-Forms がそのまま保存できる BMP（24 / 32 ビット無圧縮）と JPEG は内容のまま、それ以外は書き込み時に 24 ビットの BMP に変換して埋め込みます（透過部分はコントロールの `backColor` で塗りつぶします。元のファイルは変更しません）。
 - `ComboBox` / `ListBox` の項目は `"list": ["A", "B"]`、最初の選択は `"selectedIndex": 0` で指定します。項目はデザイナの情報としては保存されないため、フォームの読み込み時に項目を設定するコード（`RAS_FormInit`）を生成してコードモジュールに加えます。
-- VBE で作った既存のフォームは `ras form pull` で `forms/` に取り出せます（デザイン・コード・画像）。FormSpec で表せないプロパティは警告として表示され、`forms/` から書き戻すと既定値になります。取り出した後、`ras pack --overwrite` でブックのフォームを `forms/` の内容に置き換えます。
+- VBE で作った既存のフォームは `ras form pull` で `forms/` に取り出せます（デザイン・コード・画像）。コードは VBA から RAS に変換して `forms/<名前>.ras` に書きます。変換できなかった行（`GoTo`・`ReDim` など）は `// TODO(VBA):` のコメントとして残り、警告として表示されます。FormSpec で表せないプロパティも警告として表示され、`forms/` から書き戻すと既定値になります。取り出した後、`ras pack --overwrite` でブックのフォームを `forms/` の内容に置き換えます。
+- 以前の版の VBA のコードビハインド `forms/<名前>.bas` も、`.ras` が無ければそのまま使えます。`ras form pull --force` で取り込み直すと `.ras` に変換されます。
 - ブックを Excel で開いたままでも、`ras sync`（および `ras watch`、VS Code の保存時の同期）がフォームを反映します。デザインが変わったフォームは取り込み直し、コードだけが変わったフォームはコードだけを書き換えます。
 
 ## デバッグ

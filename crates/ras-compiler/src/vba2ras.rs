@@ -1,5 +1,5 @@
 //! Conversion of VBA to RAS, used by `ras form pull` to turn the code of a
-//! form made in the VBE into a RAS code-behind (`forms/<Name>.ras`, spec §14.11.5).
+//! form made in the VBE into a RAS code-behind (`forms/<Name>.ras`, spec §14.11.6).
 //!
 //! The conversion is syntactic: VBA is parsed into a small tree and printed as RAS.
 //! Host names are written as RAS spells them (`MsgBox` → `msgBox`, `.Text` → `.text`),
