@@ -158,6 +158,13 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
       // ListStyle Option puts a box before each item: a check box when several
       // items can be selected, an option button when only one.
       const box = control.listStyle === 1 ? (control.multiSelect ? "check" : "option") : undefined;
+      // The items of a RowSource are in the workbook; the canvas names the cells.
+      if (control.rowSource && !control.list?.length)
+        return (
+          <span class="list-items">
+            <div class="list-source">{control.rowSource}</div>
+          </span>
+        );
       return (
         <span class="list-items">
           {(control.list ?? []).map((item, index) => {

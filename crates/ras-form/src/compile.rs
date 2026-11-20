@@ -578,6 +578,12 @@ fn control_definition(
             Store::Text(field) => {
                 put(field.into(), PValue::Str(value.as_str().unwrap_or("").into()))
             }
+            Store::SiteText(field) => {
+                let text = value.as_str().unwrap_or("");
+                if !text.is_empty() {
+                    put(format!("Site{field}"), PValue::Str(text.into()));
+                }
+            }
         }
     }
     // A drop-down list cannot be typed into (Editable off).

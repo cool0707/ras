@@ -160,6 +160,7 @@ const toggleControl = (caption: string, value: string): Record<string, PropertyC
 type Scalar = [name: string, types: string[], contract: PropertyContract, labels?: string[]];
 const EDITS = ["TextBox", "ComboBox"];
 const FOCUSABLE = ["TextBox", "ComboBox", "ListBox", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar", "MultiPage", "TabStrip"];
+const BOUND = ["TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar"];
 const flag = (description: string) => p("boolean", false, "supported", description, true);
 const choice = (description: string, values: number[]) =>
 	p("integer", false, "supported", description, true, values.map(String));
@@ -217,6 +218,8 @@ export const scalarProperties: Scalar[] = [
 	["cancel", ["CommandButton"], flag("Esc clicks this button.")],
 	["takeFocusOnClick", ["CommandButton"], flag("Clicking moves the focus to the button.")],
 	["tabStop", FOCUSABLE, flag("Tab moves the focus to the control.")],
+	["controlSource", BOUND, p("string", false, "supported", "Cell the value is read from when the form loads and written to when it changes (\"Sheet1!B2\").", true)],
+	["rowSource", ["ComboBox", "ListBox"], p("string", false, "supported", "Cells the items come from (\"Sheet1!A2:B10\"); list cannot be written as well.", true)],
 	["min", ["SpinButton", "ScrollBar"], integer("Least value.", ...int32)],
 	["max", ["SpinButton", "ScrollBar"], integer("Greatest value (100 for a SpinButton, 32767 for a ScrollBar when omitted).", ...int32)],
 	["smallChange", ["SpinButton", "ScrollBar"], integer("Change of a click on an arrow.", ...int32)],

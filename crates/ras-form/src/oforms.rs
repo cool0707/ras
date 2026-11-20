@@ -741,6 +741,16 @@ const SITE_FIELDS: &[SiteField] = &[
         name: "ControlTipTextData",
         size: 4,
     },
+    SiteField {
+        bit: 13,
+        name: "ControlSourceData",
+        size: 4,
+    },
+    SiteField {
+        bit: 14,
+        name: "RowSourceData",
+        size: 4,
+    },
 ];
 
 struct Site {
@@ -749,6 +759,8 @@ struct Site {
     name: Stored,
     tag: Option<Stored>,
     tip: Option<Stored>,
+    /// `ControlSource` and `RowSource`, which follow `ControlTipText`.
+    sources: [Option<Stored>; 2],
     position: (i32, i32),
 }
 
@@ -778,8 +790,8 @@ impl Site {
             b.extend_from_slice(&self.position.0.to_le_bytes());
             b.extend_from_slice(&self.position.1.to_le_bytes());
         }
-        if let Some(tip) = &self.tip {
-            b.extend_from_slice(&tip.raw);
+        for text in [&self.tip, &self.sources[0], &self.sources[1]].into_iter().flatten() {
+            b.extend_from_slice(&text.raw);
             pad(&mut b, 4);
         }
         finish_header(&mut b)?;
@@ -1344,6 +1356,7 @@ impl Generation {
                 name: site_name,
                 tag: None,
                 tip: None,
+                sources: [None, None],
                 position: control.position,
             };
             if container {
@@ -1365,6 +1378,21 @@ impl Generation {
                     } else {
                         site.tip = Some(stored);
                     }
+                }
+            }
+            // The cell and the range a control is bound to (scalars.rs, `SiteText`).
+            for (index, (property, length, bit)) in [
+                ("SiteControlSource", "ControlSourceData", 1u32 << 13),
+                ("SiteRowSource", "RowSourceData", 1 << 14),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if let Some(PValue::Str(text)) = control.properties.get(property) {
+                    let stored = edited_string(text)?;
+                    site.mask |= bit;
+                    site.values.insert(length, stored.packed());
+                    site.sources[index] = Some(stored);
                 }
             }
             built.push(Control {
@@ -1407,7 +1435,7 @@ fn skipped_property(name: &str, class: u16) -> bool {
     matches!(
         name,
         "Tag" | "ControlTipText" | "Accelerator" | "MultiPageEnabled"
-    ) || name.starts_with("SiteFlag")
+    ) || name.starts_with("Site")
         || (class == 7 && (name == "Caption" || name == "BooleanProperties"))
         // Held by the hidden TabStrip of a MultiPage.
         || (class == 57 && crate::scalars::TAB_STRIP_FIELDS.contains(&name))
@@ -1677,6 +1705,7 @@ fn clone_site(site: &Site) -> Site {
         name: site.name.clone(),
         tag: site.tag.clone(),
         tip: site.tip.clone(),
+        sources: site.sources.clone(),
         position: site.position,
     }
 }

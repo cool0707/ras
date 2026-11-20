@@ -977,6 +977,16 @@ fn validate_scalars(control: &FormSpecControl, path: &str) -> Vec<Issue> {
             }
         }
     }
+    if builtin
+        && control.scalar("rowSource").and_then(Value::as_str).is_some_and(|s| !s.is_empty())
+        && control.list.as_ref().is_some_and(|l| !l.is_empty())
+    {
+        // MSForms refuses AddItem on a list that comes from cells.
+        issues.push(appearance_issue(
+            &format!("{path}.list"),
+            "rowSource を指定したコントロールには list を書けません（項目はセル範囲から読み込まれます）。".into(),
+        ));
+    }
     if builtin && matches!(control.control_type.as_str(), "SpinButton" | "ScrollBar") {
         let bound = |name: &str| {
             let p = scalars::find(&control.control_type, name).expect("min / max");

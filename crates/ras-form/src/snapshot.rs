@@ -296,6 +296,9 @@ fn unsupported_control_properties(control: &Control, control_type: &str) -> Vec<
         if control_type == "Page" && (name == "Tag" || name == "ControlTipText") {
             continue;
         }
+        if scalars::describes_site_text(control_type, name) {
+            continue;
+        }
         if site.strings.get(name).is_some_and(|v| !v.is_empty()) {
             out.push(lower_first(name));
         }
@@ -470,6 +473,12 @@ fn project_scalars(source: &Control, control_type: &str, record: &Record, target
                 let text = record.text(field).unwrap_or("");
                 if !text.is_empty() {
                     target.scalars.insert(p.name.into(), Value::from(text));
+                }
+                continue;
+            }
+            Store::SiteText(field) => {
+                if let Some(text) = source.site.strings.get(field).filter(|t| !t.is_empty()) {
+                    target.scalars.insert(p.name.into(), Value::from(text.as_str()));
                 }
                 continue;
             }

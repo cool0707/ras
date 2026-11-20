@@ -5,7 +5,7 @@
   "controls": [
     { "id": "name", "name": "txtName", "type": "TextBox", "left": 12, "top": 12, "width": 120, "height": 18 },
     { "id": "kind", "name": "cboKind", "type": "ComboBox", "left": 12, "top": 36, "list": ["通常", "お急ぎ"], "selectedIndex": 0 },
-    { "id": "chk", "name": "chkAgree", "type": "CheckBox", "caption": "同意", "left": 12, "top": 60 },
+    { "id": "chk", "name": "chkAgree", "type": "CheckBox", "caption": "同意", "left": 12, "top": 60, "controlSource": "Sheet1!B2" },
     { "id": "tri", "name": "chkMaybe", "type": "CheckBox", "caption": "保留", "left": 120, "top": 60, "tripleState": true },
     { "id": "fra", "name": "fraSize", "type": "Frame", "caption": "サイズ", "left": 12, "top": 84, "width": 100, "height": 50 },
     { "id": "s", "parentId": "fra", "name": "optS", "type": "OptionButton", "caption": "S", "left": 6, "top": 6, "value": true },

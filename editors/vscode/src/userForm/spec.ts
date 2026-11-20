@@ -458,6 +458,9 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 		}
 		if (typeof control.passwordChar === "string" && control.passwordChar.length > 1)
 			issues.push(issue("UFV021", "error", "passwordChar は 1 文字にしてください。", `${path}.passwordChar`));
+		// MSForms refuses AddItem on a list that comes from cells.
+		if (typeof control.rowSource === "string" && control.rowSource && Array.isArray(control.list) && control.list.length > 0)
+			issues.push(issue("UFV021", "error", "rowSource を指定したコントロールには list を書けません（項目はセル範囲から読み込まれます）。", `${path}.list`));
 		if ((type === "SpinButton" || type === "ScrollBar") && typeof control.value === "number") {
 			const min = typeof control.min === "number" ? control.min : 0;
 			const max = typeof control.max === "number" ? control.max : type === "SpinButton" ? 100 : 32767;

@@ -51,6 +51,8 @@ pub(crate) enum Store {
     Site(u8),
     /// A record string field.
     Text(&'static str),
+    /// A string of the control's site (`ControlSource`, `RowSource`).
+    SiteText(&'static str),
 }
 
 /// One property.
@@ -82,6 +84,17 @@ const FOCUSABLE: &[&str] = &[
     "MultiPage",
     "TabStrip",
 ];
+/// Controls whose value can be bound to a cell (`ControlSource`).
+const BOUND: &[&str] = &[
+    "TextBox",
+    "ComboBox",
+    "ListBox",
+    "CheckBox",
+    "OptionButton",
+    "ToggleButton",
+    "SpinButton",
+    "ScrollBar",
+];
 const POINTERS: &[i64] = &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const EFFECTS: &[i64] = &[0, 1, 2, 3, 6];
 /// 254000 HIMETRIC, the most a tab can be.
@@ -106,7 +119,7 @@ const fn s(
 }
 
 use Kind::{Bool, Char, Color, Enum, Int, Points, Text};
-use Store::{Bit, Bits, Field, Flag, Himetric, Site, Thumb};
+use Store::{Bit, Bits, Field, Flag, Himetric, Site, SiteText, Thumb};
 
 /// Every plain property. A name can appear more than once for different types.
 pub(crate) static SCALARS: &[Scalar] = &[
@@ -160,6 +173,9 @@ pub(crate) static SCALARS: &[Scalar] = &[
     s("cancel", &["CommandButton"], Bool, Site(3), 0, None),
     s("takeFocusOnClick", &["CommandButton"], Bool, Flag("TakeFocusOnClick", false), 0, None),
     s("tabStop", FOCUSABLE, Bool, Site(0), 0, None),
+    // The cell the value is bound to, and the range the items come from (site strings).
+    s("controlSource", BOUND, Text, SiteText("ControlSource"), 0, None),
+    s("rowSource", &["ComboBox", "ListBox"], Text, SiteText("RowSource"), 0, None),
     // SpinButton and ScrollBar.
     s("min", &["SpinButton", "ScrollBar"], Int(i32::MIN as i64, i32::MAX as i64), Field("Min"), 0, None),
     s("max", &["SpinButton"], Int(i32::MIN as i64, i32::MAX as i64), Field("Max"), 100, None),
@@ -189,7 +205,7 @@ pub(crate) const TAB_STRIP_FIELDS: &[&str] = &[
 impl Store {
     #[cfg(test)]
     fn is_text(self) -> bool {
-        matches!(self, Store::Text(_))
+        matches!(self, Store::Text(_) | Store::SiteText(_))
     }
 }
 
@@ -269,6 +285,11 @@ pub(crate) fn described_bits(control_type: &str) -> i64 {
         }
     }
     mask
+}
+
+/// Whether the site string `name` (`ControlSource` ...) is a property of `control_type`.
+pub(crate) fn describes_site_text(control_type: &str, name: &str) -> bool {
+    of_type(control_type).any(|p| matches!(p.store, Store::SiteText(n) if n == name))
 }
 
 /// The site flags that properties of `control_type` describe.

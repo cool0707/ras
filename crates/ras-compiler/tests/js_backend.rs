@@ -318,7 +318,7 @@ focus btnBoom
 QueryClose mode=0
 focus btnBoom
 hide
-YAMADA/予約:1/3/true/3/1
+YAMADA/予約:1/3/false/3/1
 QueryClose mode=1
 Terminate
 show frmInput modal=false \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox chkMaybe:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton btnOK:CommandButton btnBoom:CommandButton
@@ -328,6 +328,7 @@ end 入力 1
 QueryClose mode=0
 focus txtName
 Terminate
+B2=false
 ";
     assert_eq!(stdout, expected, "{stderr}");
     assert!(stderr.contains("[ras] frmInput.btnBoom_Click: 実行時エラー 9"), "{stderr}");

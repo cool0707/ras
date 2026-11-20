@@ -137,6 +137,8 @@ export interface SpecControl extends AppearanceProperties {
   /** TabStrip / MultiPage tabs: 0 top, 1 bottom, 2 left, 3 right. */
   tabOrientation?: number | null;
   default?: boolean | null;
+  /** ComboBox / ListBox: the cells the items come from. */
+  rowSource?: string | null;
   observed?: Partial<Omit<SpecControl, "observed">>;
 }
 

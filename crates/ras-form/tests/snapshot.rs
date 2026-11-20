@@ -587,3 +587,34 @@ fn a_toggle_can_be_null() {
     let error = ras_form::compile(&spec("\"maybe\""), 932).unwrap_err();
     assert!(error.reason.contains("Null"), "{error}");
 }
+
+#[test]
+fn controls_are_bound_to_cells() {
+    let text = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F"},"controls":[
+        {"id":"t","name":"txt","type":"TextBox","controlSource":"Sheet1!B2","tag":"t","controlTipText":"tip"},
+        {"id":"l","name":"lst","type":"ListBox","top":30,"rowSource":"'売上 2026'!A2:B9","controlSource":"Sheet1!C2"}]}"#;
+    let parsed = ras_form::parse(text);
+    assert!(!parsed.has_errors(), "{:?}", parsed.issues);
+    let designer = ras_form::compile(parsed.spec.as_ref().unwrap(), 932).unwrap();
+    let snapshot = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap();
+    let (txt, lst) = (&snapshot.spec.controls[0], &snapshot.spec.controls[1]);
+    assert_eq!(txt.scalar("controlSource"), Some(&Value::from("Sheet1!B2")));
+    assert_eq!((txt.tag.as_deref(), txt.control_tip_text.as_deref()), (Some("t"), Some("tip")));
+    assert_eq!(lst.scalar("rowSource"), Some(&Value::from("'売上 2026'!A2:B9")));
+    assert_eq!(lst.scalar("controlSource"), Some(&Value::from("Sheet1!C2")));
+    for control in [txt, lst] {
+        assert_eq!(control.unsupported, None, "{}", control.name);
+    }
+
+    // A list from cells cannot be filled by AddItem as well; a Label has no ControlSource.
+    for bad in [
+        r#"{"id":"l","name":"lst","type":"ListBox","rowSource":"A1:A3","list":["a"]}"#,
+        r#"{"id":"b","name":"lbl","type":"Label","controlSource":"A1"}"#,
+        r#"{"id":"t","name":"txt","type":"TextBox","rowSource":"A1:A3"}"#,
+    ] {
+        let text = format!(
+            r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{bad}]}}"#
+        );
+        assert!(ras_form::parse(&text).has_errors(), "{bad}");
+    }
+}

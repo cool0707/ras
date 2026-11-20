@@ -157,6 +157,21 @@ describe("FormSpec editing", () => {
 		);
 	});
 
+	it("binds controls to cells with controlSource and rowSource", () => {
+		const controls = [
+			{ id: "t1", name: "Text1", type: "TextBox", left: 8, top: 8, width: 120, height: 18 },
+			{ id: "b1", name: "List1", type: "ListBox", left: 8, top: 30, width: 120, height: 60 },
+		];
+		let text = form(controls);
+		const set = (controlId: string, field: string, value: unknown): SemanticOperation => ({ type: "setControlProperty", controlId, field, value });
+		text = apply(text, set("t1", "controlSource", "Sheet1!B2"), set("b1", "rowSource", "Sheet1!A2:A9"), set("b1", "controlSource", "Sheet1!C2"));
+		assert.deepEqual([control(text, "t1").controlSource, control(text, "b1").rowSource], ["Sheet1!B2", "Sheet1!A2:A9"]);
+		rejects(text, [set("t1", "rowSource", "A1:A3")], "UFE005");
+		rejects(text, [set("l1", "controlSource", "A1")]);
+		// Items cannot be written for a list that comes from cells.
+		rejects(text, [set("b1", "list", ["a", "b"])], "UFV021");
+	});
+
 	it("raises a TextBox to the height its font needs, but only where the edit touched", () => {
 		const low = { id: "t0", name: "Untouched", type: "TextBox", left: 8, top: 60, width: 120, height: 12 };
 		let text = form([{ id: "t1", name: "TextBox1", type: "TextBox", left: 8, top: 8, width: 120, height: 18 }, low]);

@@ -59,9 +59,12 @@ module.exports = function install(rt) {
     /** FormSpec fields that are not plain properties of the control, or are read on their own. */
     const SPEC_FIELDS = new Set(["id", "name", "type", "progId", "parentId", "zIndex", "left", "top", "width", "height", "tabIndex", "list", "selectedIndex", "tabs", "picture", "controls", "properties", "observed", "unsupported", "font", "foreColor", "backColor", "caption", "text", "value"]);
 
+    /** Controls whose value can be bound to a cell (`ControlSource`). */
+    const BOUND = new Set(["TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar"]);
+
     /** Default value of each property a control of a kind has (the VBA spelling). */
     function defaults(kind) {
-        const d = { Visible: true, Enabled: true, Tag: "", ControlTipText: "", TabStop: FOCUSABLE.has(kind), ForeColor: BUTTON_TEXT, BackColor: BUTTON_FACE, MousePointer: 0 };
+        const d = { Visible: true, Enabled: true, Tag: "", ControlTipText: "", TabStop: FOCUSABLE.has(kind), ForeColor: BUTTON_TEXT, BackColor: BUTTON_FACE, MousePointer: 0, ...(BOUND.has(kind) ? { ControlSource: "" } : {}) };
         switch (kind) {
             case "Label":
                 return Object.assign(d, { Caption: "", TextAlign: 1, WordWrap: true, AutoSize: false, BackStyle: 1, BorderStyle: 0, BorderColor: WINDOW_FRAME, SpecialEffect: 0 });
@@ -466,6 +469,37 @@ module.exports = function install(rt) {
             this.$fire("Change");
             if (i >= 0) this.$fire("Click");
         }
+        /** The control takes the value of its ControlSource cell (when the form is loaded). */
+        $readControlSource() {
+            const source = this.$s.ControlSource;
+            if (!source) return;
+            let v;
+            try {
+                v = rt.get(rt.call(rt.global("Application"), "Range", [source]), "Value");
+            } catch (e) {
+                console.error(`[ras] ${this.$form.$name}.${this.$s.Name}: ControlSource \`${source}\` を読めませんでした（${(e && e.message) || e}）`);
+                return;
+            }
+            const k = this.$kind;
+            if (k === "TextBox") this.$s.Text = rt.str(v);
+            else if (k === "ComboBox" || k === "ListBox") {
+                const i = v === null || v === undefined ? -1 : this.$list.findIndex((_, n) => rt.eq(rt.str(this.$bound(n)), rt.str(v)));
+                this.$index = i;
+                this.$selected = this.$list.map((_, n) => n === i);
+                if (k === "ComboBox") this.$s.Text = i >= 0 ? this.$text(i) : rt.str(v);
+            } else if (TOGGLES.has(k)) this.$s.Value = v === null || v === undefined || v === "" ? null : rt.cbool(v);
+            else if (k === "SpinButton" || k === "ScrollBar") this.$s.Value = Math.max(Math.min(this.$s.Min, this.$s.Max), Math.min(Math.max(this.$s.Min, this.$s.Max), rt.toInt(v ?? 0)));
+        }
+        /** The value goes to the ControlSource cell (when the user's change is committed). */
+        $writeControlSource() {
+            const source = this.$s.ControlSource;
+            if (!source) return;
+            try {
+                rt.put(rt.call(rt.global("Application"), "Range", [source]), "Value", this.Value);
+            } catch (e) {
+                console.error(`[ras] ${this.$form.$name}.${this.$s.Name}: ControlSource \`${source}\` に書き込めませんでした（${(e && e.message) || e}）`);
+            }
+        }
         $rowSource(source) {
             try {
                 const range = rt.call(rt.global("Application"), "Range", [source]);
@@ -717,6 +751,8 @@ module.exports = function install(rt) {
                     Object.defineProperty(this, key, { get: () => ctl, enumerable: true });
                 }
             }
+            // Bound controls show their cells from the start (MSForms reads them as the form loads).
+            for (const ctl of this.$all) ctl.$readControlSource();
             for (const [member, fn] of Object.entries(def.members || {})) {
                 if (!(member in this)) this[member] = fn;
             }
@@ -862,6 +898,7 @@ module.exports = function install(rt) {
                     const cancel = returnBoolean();
                     from.$fire("BeforeUpdate", [cancel]);
                     if (cancel.v.Value) return this.$refuse(from, byUser);
+                    from.$writeControlSource();
                     from.$fire("AfterUpdate");
                 }
                 const cancel = returnBoolean();

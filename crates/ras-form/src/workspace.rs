@@ -370,6 +370,10 @@ pub fn pull_with(
             .and_then(|p| p.controls.iter().find(|c| c.name.eq_ignore_ascii_case(name)))
     };
     for control in spec.controls.iter_mut().filter(|c| is_list_control(&c.control_type)) {
+        // A list that comes from cells (RowSource) has no items of its own.
+        if control.scalar("rowSource").and_then(serde_json::Value::as_str).is_some_and(|s| !s.is_empty()) {
+            continue;
+        }
         if let Some(old) = previous_control(&control.name).filter(|o| is_list_control(&o.control_type)) {
             control.list = old.list.clone();
             control.selected_index = old.selected_index;
