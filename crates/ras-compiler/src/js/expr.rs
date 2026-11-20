@@ -19,7 +19,33 @@ pub(crate) enum Place {
 
 /// Types whose values are only known at run time (VBA `Variant`).
 fn is_dyn(t: &Type) -> bool {
-    matches!(t, Type::Any | Type::Error | Type::Param(_))
+    matches!(t, Type::Any | Type::Error | Type::Param(_)) || t.is_value_union()
+}
+
+/// The `TypeName` of the numbers a value of type `t` can hold, when there is only one.
+fn numeric_type_name(t: &Type) -> Option<&'static str> {
+    let members = match t {
+        Type::Union(ms) => ms.as_slice(),
+        other => std::slice::from_ref(other),
+    };
+    let mut names: Vec<&'static str> = Vec::new();
+    for m in members {
+        let n = match m {
+            Type::Byte => "Byte",
+            Type::Short => "Integer",
+            Type::Int | Type::Enum(_) => "Long",
+            Type::Long => "LongLong",
+            Type::Float => "Single",
+            Type::Double => "Double",
+            Type::Currency => "Currency",
+            Type::Decimal => "Decimal",
+            _ => continue,
+        };
+        if !names.contains(&n) {
+            names.push(n);
+        }
+    }
+    (names.len() == 1).then(|| names[0])
 }
 
 fn int_like(t: &Type) -> bool {
@@ -38,7 +64,11 @@ impl<'p> Gen<'p> {
 
     /// Members of these are reached through `$rt.get` / `$rt.call` (late binding).
     fn is_late_bound(&self, t: &Type) -> bool {
-        matches!(t, Type::Any | Type::Object | Type::Param(_)) || self.is_host_class(t)
+        match t {
+            // The members of a union are found by name at run time unless all are RAS classes.
+            Type::Union(ms) => ms.iter().any(|m| !matches!(m, Type::Class(c, _) if self.prog.classes[*c].kind != ClassKind::Host)),
+            _ => matches!(t, Type::Any | Type::Object | Type::Param(_)) || self.is_host_class(t),
+        }
     }
 
     pub(crate) fn to_string(&mut self, v: String, ty: &Type) -> String {
@@ -197,7 +227,12 @@ impl<'p> Gen<'p> {
                     UnaryOp::Neg => format!("(-{v})"),
                     UnaryOp::Plus => v,
                     UnaryOp::BitNot => format!("(~{v})"),
-                    UnaryOp::TypeOf => format!("$rt.typeName({v})"),
+                    // A JavaScript number does not tell `Long` from `Double`: the static type does when
+                    // it has one numeric member (`string | double`).
+                    UnaryOp::TypeOf => match numeric_type_name(&self.ty(operand)) {
+                        Some(n) => format!("$rt.typeName({v}, {})", js_str(n)),
+                        None => format!("$rt.typeName({v})"),
+                    },
                 }
             }
             ExprKind::IncDec { .. } | ExprKind::Assign { .. } => format!("({})", self.effect_ex(e, true)),
@@ -333,6 +368,10 @@ impl<'p> Gen<'p> {
         let obj_ty = self.ty(object);
         let obj_is_ns = matches!(obj_ty, Type::Ns(_));
         let dot = if optional { "?." } else { "." };
+        if matches!(obj_ty, Type::Union(_)) && self.is_late_bound(&obj_ty) && matches!(res, Some(Res::Field(..) | Res::Method(_) | Res::Property { .. })) {
+            let o = self.expr(object);
+            return self.host_get(o, member, optional);
+        }
         match res {
             Some(Res::Field(c, idx)) => {
                 if self.prog.classes[c].kind == ClassKind::Host {
@@ -419,6 +458,9 @@ impl<'p> Gen<'p> {
             ExprKind::Member { object, name, .. } => {
                 let res = self.info().res.get(&inner.id).cloned();
                 let obj_ty = self.ty(object);
+                if matches!(obj_ty, Type::Union(_)) && self.is_late_bound(&obj_ty) {
+                    return Place::Host { obj: self.expr(object), name: name.text.clone() };
+                }
                 match res {
                     Some(Res::Field(c, idx)) if self.prog.classes[c].kind == ClassKind::Host => Place::Host { obj: self.expr(object), name: self.prog.classes[c].fields[idx].vba_name().to_string() },
                     Some(Res::Field(c, _)) if matches!(obj_ty, Type::Ns(_)) => Place::Native(format!("{}.{}", self.class_ref(c), name.text)),
@@ -708,8 +750,12 @@ impl<'p> Gen<'p> {
             }
             CallTarget::Method(f) => {
                 let Some(r) = recv else { return "undefined".into() };
+                let rt = self.ty(r);
                 let o = self.expr(r);
                 let argv = self.ras_args(f, 0, args).join(", ");
+                if matches!(rt, Type::Union(_)) && self.is_late_bound(&rt) {
+                    return format!("$rt.call({o}, {}, [{argv}])", js_str(&self.prog.fns[f].name));
+                }
                 format!("{o}.{}({argv})", self.prog.fns[f].name)
             }
             CallTarget::Host(f) => {

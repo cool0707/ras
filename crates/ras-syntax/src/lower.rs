@@ -269,8 +269,11 @@ impl Lower {
             .filter(|c| c.kind() == TYPE_PARAM)
             .map(|tp| {
                 let has_extends = has_tok(&tp, EXTENDS_KW);
-                let constraint = if has_extends { tp.children().find(|c| c.kind().is_type()).map(|t| self.ty(&t)) } else { None };
-                TypeParam { name: self.name_or_missing(&tp), constraint }
+                let has_default = has_tok(&tp, EQ);
+                let mut types = tp.children().filter(|c| c.kind().is_type());
+                let constraint = if has_extends { types.next().map(|t| self.ty(&t)) } else { None };
+                let default = if has_default { types.next().map(|t| self.ty(&t)) } else { None };
+                TypeParam { name: self.name_or_missing(&tp), constraint, default }
             })
             .collect()
     }
@@ -586,16 +589,18 @@ impl Lower {
                         rest.push(c);
                     }
                 }
-                if rest.len() == 1 {
-                    let inner = self.ty(&rest[0]);
-                    if nullable {
-                        TypeRef::Nullable { inner: Box::new(inner), span }
-                    } else {
-                        inner
+                match rest.len() {
+                    // `null | undefined`
+                    0 => self.first_type(n),
+                    1 => {
+                        let inner = self.ty(&rest[0]);
+                        if nullable {
+                            TypeRef::Nullable { inner: Box::new(inner), span }
+                        } else {
+                            inner
+                        }
                     }
-                } else {
-                    self.err(span, "ユニオン型は `T | null` の形のみ使えます（異種の値は `any` を使ってください）");
-                    TypeRef::Error { span }
+                    _ => TypeRef::Union { elems: rest.iter().map(|c| self.ty(c)).collect(), nullable, span },
                 }
             }
             _ => TypeRef::Error { span },

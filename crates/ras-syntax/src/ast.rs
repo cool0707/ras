@@ -98,6 +98,8 @@ pub struct FnDecl {
 pub struct TypeParam {
     pub name: Ident,
     pub constraint: Option<TypeRef>,
+    /// `T = Default`: used when the type argument is omitted.
+    pub default: Option<TypeRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,6 +124,8 @@ pub enum TypeRef {
     Fn { params: Vec<Param>, ret: Box<TypeRef>, span: Span },
     /// `T | null` / `T | undefined`
     Nullable { inner: Box<TypeRef>, span: Span },
+    /// `A | B | ...` with two or more non-null members; `nullable` when `| null` was also written.
+    Union { elems: Vec<TypeRef>, nullable: bool, span: Span },
     /// `[A, B]` — a tuple: an anonymous struct with positional fields.
     Tuple { elems: Vec<TypeRef>, span: Span },
     /// `{ a: A; b: B }` — an anonymous struct.
@@ -136,6 +140,7 @@ impl TypeRef {
             | TypeRef::Array { span, .. }
             | TypeRef::Fn { span, .. }
             | TypeRef::Nullable { span, .. }
+            | TypeRef::Union { span, .. }
             | TypeRef::Tuple { span, .. }
             | TypeRef::Object { span, .. }
             | TypeRef::Error { span } => *span,

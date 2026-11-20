@@ -10,7 +10,8 @@
 //     camelCase（`Cells` → `cells`、`ScreenUpdating` → `screenUpdating`）で見える（仕様 §15.3.1）。
 //     生成される VBA にはここに書いた綴りが出力される。
 //   - `Sheets<T>` の `T` は要素の型。`Worksheets` はタイプ ライブラリ上は Object を返すが、
-//     ワークシートしか含まないため `Sheets<Worksheet>` とする。`T` を省略すると `object`。
+//     ワークシートしか含まないため `Sheets<Worksheet>` とする。`T` を省略すると `Worksheet | Chart`
+//     （Excel 4.0 マクロシートは `Worksheet` として現れる。ダイアログシートは宣言していない）。
 //   - Variant を返すが戻り値に意味がない操作系メソッド（Select / Copy / Clear など）は void とする。
 //   - JSDoc の要約は独自に書いたもの。詳細は @see の Microsoft リファレンスを参照。
 //   - 列挙定数の値はタイプ ライブラリの実値。定数名は VBA と同じく修飾なしで参照できる。
@@ -864,7 +865,7 @@ declare namespace Excel {
      * ブック内のシート（ワークシート / グラフ シート）のコレクション。
      * @see https://learn.microsoft.com/office/vba/api/excel.sheets
      */
-    interface Sheets<T> {
+    interface Sheets<T = Worksheet | Chart> {
         /**
          * インデックスまたはシート名でシートを返す（既定メンバー）。
          * @see https://learn.microsoft.com/office/vba/api/excel.sheets.item

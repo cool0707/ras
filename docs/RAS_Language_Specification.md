@@ -7,6 +7,8 @@
 > * 名前付き引数 `f(a: 123, c: "あいう")` を追加（§3.3）。エディタで引数名を補完する（§16.2.1）
 > * ユーザーフォームのデバッグ実行（§14.10.7）と Excel での実行（§14.11.8）を追加
 > * 参照の検索・名前の変更の対象と拒否する名前、セマンティックトークンの種類、未インポートの候補の挿入位置を規定（§16.2.5〜§16.2.7）
+> * ユニオン型 `A | B` と、`instanceof` / `typeof` による型の絞り込みを追加（§2.6）。`sheets(1)` などシートのコレクションの要素は `Excel.Worksheet | Excel.Chart` になる
+> * クラス・インターフェイスの型パラメータに既定の型引数 `T = 型` を書けるようにした（§2.4.1）
 
 > v0.7 からの変更
 > * 構造体（`struct`）をデータの入れ物の基本とし、オブジェクトリテラル・無名のオブジェクト型・タプル・分割代入を追加（§2.5）
@@ -84,6 +86,7 @@ TypeScript の `number` 型は存在しない（`number` と書いた場合は�
 | `boolean` | `Boolean` | |
 | `any` | `Variant` | 型不明・異種混在 |
 | `object` | `Object` | 遅延バインディング |
+| `A \| B`（ユニオン型） | `Object` / `Variant` | メンバーがすべてオブジェクト型なら `Object`、それ以外は `Variant`。§2.6 |
 | `Excel.Range` 等 | `Range` 等（事前バインディング） | ホスト型ライブラリ由来。§15.3 |
 | RAS の `class` | 生成クラス名 | |
 | `struct` / `{ a: A; b: B }` / `[A, B]` | `Type`（ユーザー定義型） | 値型。§2.5 |
@@ -167,6 +170,7 @@ End Function
   
   制約を満たさない型引数はコンパイル時にエラーにする。
 * **無限展開の禁止:** 呼び出しのたびに型引数が大きくなる再帰（`f<T>` の中で `f<T[]>` を呼ぶ等）はエラーにする。
+* **既定の型引数（v0.9で追加）:** クラス・インターフェイスの型パラメータには `T = 型` で既定の型引数を書ける。型引数を省略して書いた型はその型引数になる（`interface Sheets<T = Worksheet | Chart>` の `Sheets` は `Sheets<Worksheet | Chart>`）。既定の型引数を持つ型パラメータより後ろの型パラメータにも既定の型引数が必要（`E0171`）。関数の型パラメータには書けない（型引数は引数から推論する）。
 * **コード量の警告:** 1つのジェネリック定義から出力される実装数が閾値（既定 16）を超えたら警告する。展開後のプロシージャ・モジュールのサイズ制限は §13.8 の規則で検査する。
 * **ラムダ:** ジェネリック関数内でクラス化されるラムダ（§4.1）も、型引数の組み合わせごとに別のクラスとして出力する。
 
@@ -296,6 +300,103 @@ VBA の `Type` は `Variant` に変換できず、クラスモジュールの公
 * 構造体の 2 次元配列、`null`。
 
 参照を共有したい・`null` を持たせたい・`any` に入れたい場合は `class` を使う。
+
+### 2.6 ユニオン型（v0.9で追加）
+
+いくつかの型のどれかの値を持つ型を `A | B` と書く。`any` と違い、使えるのはすべてのメンバーに共通する操作だけで、それ以外は型ガード（§2.6.4）で型を絞り込んでから使う。
+
+```typescript
+function describe(s: Excel.Worksheet | Excel.Chart): string {
+    s.activate();                                  // 共通のメンバーは絞り込まずに使える
+    if (s instanceof Excel.Worksheet) {
+        return `${s.name}: ${s.usedRange.address()}`;  // ここでは s は Excel.Worksheet
+    }
+    return s.chartTitle.text;                      // ここでは s は Excel.Chart
+}
+
+function cellText(v: string | double): string {
+    if (typeof v == "String") return v;            // v: string
+    return v.toFixed(2);                           // v: double
+}
+```
+
+**出力VBAコード:**
+```vba
+Private Function describe(ByVal s As Object) As String
+    s.Activate
+    If (TypeOf s Is Worksheet) Then
+        describe = s.Name & ": " & s.UsedRange.Address()
+        Exit Function
+    End If
+    describe = s.ChartTitle.Text
+End Function
+
+Private Function cellText(ByVal v As Variant) As String
+    If TypeName(v) = "String" Then
+        cellText = v
+        Exit Function
+    End If
+    cellText = RAS_ToFixed(v, 2&)
+End Function
+```
+
+#### 2.6.1 型と格納先
+
+* **VBA の型:** メンバーがすべてオブジェクト型（クラス・インターフェイス・ホストの型・`object`・`Map`・関数型）なら `Object`、それ以外は `Variant` に格納する。メンバーのアクセスは遅延バインディングになる。
+* **正規化:** 入れ子のユニオン型は平らにし、重複したメンバーは除く。メンバーは値型・オブジェクト型の順に並べて表示する（`int | string` は `string | int`）。`any` を含むと `any`、`object` を含むと他のオブジェクト型は `object` にまとまる。
+* **`null`:** `| null` はオブジェクト型を含むユニオン型にだけ書ける（`Excel.Range | string | null`）。`string | int | null` はエラー。
+* **含められない型:** `void`、構造体（`Variant` に入らないため。§2.5.7）、型パラメータ、`wstr` / `astr`。
+* 配列の要素・`Map` の値・型引数・型エイリアスにも使える（`type Shape = Circle | Square;`、`(Circle | Square)[]`、`Box<string | int>`）。
+
+#### 2.6.2 代入と演算
+
+* **代入:** メンバーのどれかに代入できる値は、ユニオン型に代入できる。ユニオン型の値は、すべてのメンバーを代入できる型に代入できる（`Excel.Worksheet | Excel.Chart` は `object` に代入できるが `Excel.Worksheet` には代入できない）。
+* **数値の拡大変換:** メンバーの型そのものではなく拡大変換で入る値は、そのメンバーの型に変換して格納する（`string | double` に `1` を入れると `CDbl(1&)`）。`typeof` が格納した値の型名を返すため。
+* **`==` / `!=`:** どれかのメンバーと比較できれば書ける。`Variant` に格納するユニオン型の比較では、値の種類（数値・文字列・真偽値・日付・オブジェクト）が違えば等しくない（VBA の `=` のように変換したりエラーにしたりしない。ランタイム `RAS_UnionEq`）。
+* **大小比較・文字列の連結:** すべてのメンバーで使える場合だけ書ける（`int | double` どうしの `<`、`"a" + v`）。算術演算は絞り込んでから行う。
+* **`as`:** どれかのメンバーとの間で変換できれば書ける（`v as double`）。
+* **条件演算子・配列リテラル:** 型の異なる値からユニオン型は推論しない（`cond ? 1 : "a"` はエラー `E0302`）。`const x: string | int = ...` のように型注釈を付ける。
+
+#### 2.6.3 メンバー
+
+* **共通のメンバー:** プロパティ・メソッドは、すべてのメンバーの型に同じ名前のメンバーがあるときに使える。補完にも共通のメンバーだけを出す。値型を含むユニオン型のメンバーは参照できない（レシーバとしてユニオン型を受け取れる拡張メソッドは呼べる）。
+* **プロパティ:** 型はメンバーごとの型のユニオン型になる。型がメンバーごとに異なるプロパティ、どれかで読み取り専用のプロパティには代入できない。
+* **メソッド:** 引数は、すべてのメンバーのメソッドで受け取れなければならない。戻り値はメンバーごとの戻り値のユニオン型（どれかが `void` なら `void`）。名前付き引数は、どのメソッドでも引数の名前と順序が同じときだけ使える。ジェネリックなメソッドは呼べない。
+* **型定義にないメンバー:** ホストの型（Excel など）の型定義にないメンバーは、単独の型と同じく警告 `W0301` を出して遅延バインディングで呼ぶ。RAS のクラスにないメンバーはエラー。
+
+#### 2.6.4 型の絞り込み
+
+ローカル変数と引数は、条件式の型ガードで型が絞り込まれる。
+
+| 型ガード | 条件が真のとき | 条件が偽のとき |
+|---|---|---|
+| `x instanceof T` | `T`（ユニオン型なら、`T` のインスタンスになりうるメンバー） | ユニオン型から `T` のメンバーを除いた型 |
+| `typeof x == "名前"` | `TypeName` が「名前」になるメンバー（`"String"` → `string`、`"Long"` → `int` と列挙型、`"Worksheet"` → `Excel.Worksheet`） | それ以外のメンバー |
+
+* **組み合わせ:** `!=` と `!` は真偽を入れ替える。`a && b` の `b`、`a || b` の `b` には `a` の結果が効く。`x instanceof A || x instanceof B` が真なら `A | B`。
+* **効く範囲:** `if` の各分岐、条件演算子の各分岐、`while` / `for` の本体、`&&` / `||` の右辺。`if` の一方の分岐が `return` / `throw` / `break` / `continue` で抜けるときは、同じブロックの `if` より後ろの文にも効く。
+  ```typescript
+  if (!(s instanceof Excel.Worksheet)) return;
+  s.cells(1, 1).value = 1;   // s: Excel.Worksheet
+  ```
+* **`any` / `object`:** `instanceof` で絞り込まれる（`activeSheet` など）。`any` は `typeof x == "String"` のような基本型の名前でも絞り込まれる。
+* **絞り込まれないもの:** その範囲で代入（`=`・複合代入・`++` / `--`）される変数、モジュール変数・フィールド・`this`。絞り込まれた変数は `byref` 引数に渡せない（`E0415`。呼び出し先で書き換えられると絞り込みが成り立たなくなるため）。
+* **`typeof` の名前:** `typeof` は VBA の `TypeName` と同じ名前を返す（`"String"`、`"Long"`、`"Double"`、`"Boolean"`、クラス名）。JavaScript の名前（`"string"`、`"number"` など）と比較すると一致しないため警告（`W0312`）。
+* **生成する VBA:** 変数は宣言した型（`Object` / `Variant`）のままで、絞り込まれた箇所のメンバーも遅延バインディングで呼ぶ。`instanceof` は `TypeOf … Is`、`typeof` は `TypeName` になる。
+
+#### 2.6.5 シートのコレクション
+
+ブックのシートのコレクション（`sheets`、`thisWorkbook.sheets`、`window.selectedSheets`）の要素は `Excel.Worksheet | Excel.Chart` になる（同梱の型定義が `interface Sheets<T = Worksheet | Chart>` と宣言している。§2.4.1）。Excel 4.0 マクロシートは `Worksheet` オブジェクトとして現れる。ダイアログシート（`DialogSheet`）は型定義にないため、ダイアログシートを含むブックでは `instanceof` の偽の分岐が `Excel.Chart` とは限らない。
+
+```typescript
+for (const sh of thisWorkbook.sheets) {
+    if (sh instanceof Excel.Worksheet) {
+        sh.cells(1, 1).value = sh.name;
+    } else {
+        sh.chartTitle.text = sh.name;   // sh: Excel.Chart
+    }
+}
+```
 
 ---
 
@@ -614,6 +715,7 @@ On Error GoTo 0
 12. **（追加）VBA の構造制限超過の予測:** プロシージャ 64KB 制限、行継続 24 個制限等（§13.8）。
 13. **（追加）最適化の可視化:** インライン展開・一括転送・ループ融合が適用された／適用できなかった箇所を Hint と CodeLens で示す（理由付き）。
 14. **（v0.9で追加）ホストの名前の綴り:** Excel / VBA / Office のメンバー・グローバルを VBA の綴り（`ws.Cells`、`MsgBox`）で書くと警告（`W0304`）。意味は変わらず、`ras check --fix` とクイックフィックスで camelCase に書き換えられる（§15.3.1）。
+15. **（v0.9で追加）`typeof` の比較:** `typeof x == "string"` のように JavaScript の型名と比較すると警告（`W0312`）。`typeof` は VBA の `TypeName` と同じ名前を返す（§2.6.4）。
 
 ---
 
@@ -1365,6 +1467,7 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 #### 14.10.5 再現しないもの・制限
 
 * **Excel 起点の呼び出し:** `@on` のイベントハンドラ（ブック・シート）、`@udf`、リボンコールバック、手書き VBA から RAS 関数を呼ぶ経路は起動できない（RAS から手書き VBA を呼ぶのは `Application.Run` 経由で可能）。ユーザーフォームは Excel ではなく VS Code に表示して動かす（§14.10.7）。
+* **数値の `typeof`:** JavaScript の数値は `Long` と `Double` を区別しない。`typeof` は、静的な型に数値型が 1 つだけ含まれるとき（`double`、`string | double` など）はその型名を返し、それ以外では整数を `"Long"`、それ以外を `"Double"` とする。そのため `int | double` のように数値型を複数含むユニオン型を `typeof` で絞り込むと、VBA ビルドと結果が異なることがある。
 * **数値型の精度:** `long`・`currency`・`decimal` は倍精度浮動小数点数で表現する（`long` は 2^53 を超えると不正確、`decimal` の `0.1m + 0.2m == 0.3m` は成り立たない）。`float` は倍精度のまま計算する。
 * **VBA 標準関数:** よく使うもの（文字列・変換・日付・数学・`MsgBox`・`CreateObject`・`Format` の代表的な書式など）は JavaScript で実装している。未対応の関数は呼び出した時点でエラーになる。`Format` の未対応の書式は Excel の `TEXT` 関数に委譲する。ロケール依存の表記（日付の既定書式など）は VBA と一致しないことがある。
 * **`declare`（DLL 関数）:** `kernel32` の `Sleep` / `GetTickCount` / `GetTickCount64` / `GetCurrentProcessId` / `QueryPerformanceCounter` / `QueryPerformanceFrequency` のみ代替実装がある。それ以外は警告 `W1410` を出し、呼び出した時点でエラーになる。
@@ -1742,7 +1845,7 @@ Excel / VBA / Office のタイプ ライブラリは、メンバー名を Pascal
 * **生成する VBA:** タイプ ライブラリの綴りで出力する（`ws.Cells(r, 1).Value`）。型のない値（`any` / `object`）のメンバーも、同梱の型定義に同じ名前のメンバーがあればその綴りで出力する（`activeSheet.cells(1, 1)` → `ActiveSheet.Cells(1, 1)`）。
 * **VBA の綴りで書いた場合:** VBA は大文字小文字を区別しないため、`ws.Cells(r, 1).Value` と書いても同じメンバーとして解決する。ただし警告（`W0304`）を出す。`ras check --fix` とエディタのクイックフィックスが camelCase に書き換える。
 * **プロジェクトが宣言した名前はそのまま:** シートのコード名（`Sheet1`）と `types/*.d.ras` で宣言した名前は、書かれたとおりに参照し、そのまま出力する。変換するのは同梱の型定義の名前だけである。
-* **同梱の型定義の書き方:** `.d.ras` 自体はタイプ ライブラリの綴りで書く（`ras typegen` の出力と同じ形）。コレクションの要素の型は、型引数で表す（`interface Sheets<T>`）。型引数を省略したホスト型（`Excel.Sheets`）の要素は `object` になる。
+* **同梱の型定義の書き方:** `.d.ras` 自体はタイプ ライブラリの綴りで書く（`ras typegen` の出力と同じ形）。コレクションの要素の型は、型引数で表す（`interface Sheets<T>`）。型引数を省略したホスト型は、既定の型引数があればそれ（`Excel.Sheets` は `Excel.Sheets<Excel.Worksheet | Excel.Chart>`。§2.6.5）、なければ要素が `object` になる。
 
 ---
 

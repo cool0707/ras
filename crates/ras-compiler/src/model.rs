@@ -52,6 +52,10 @@ pub enum Type {
     Func(Box<FuncType>),
     /// A type parameter of the enclosing generic declaration.
     Param(String),
+    /// `A | B`: two or more distinct member types, flattened and in canonical order
+    /// (build with [`Type::union`]). Stored in an `Object` when every member is an object
+    /// type, otherwise in a `Variant`.
+    Union(Vec<Type>),
     /// Not a value: a module namespace, host namespace, class or enum name, or built-in namespace.
     Ns(NsRef),
 }
@@ -106,7 +110,99 @@ impl Type {
 
     /// Types whose values are VBA object references (assigned with `Set`).
     pub fn is_object(&self) -> bool {
-        matches!(self, Type::Object | Type::Class(..) | Type::Map(..) | Type::Func(_) | Type::Null)
+        match self {
+            Type::Union(ms) => ms.iter().all(|m| m.is_object()),
+            _ => matches!(self, Type::Object | Type::Class(..) | Type::Map(..) | Type::Func(_) | Type::Null),
+        }
+    }
+
+    /// The members of a union type.
+    pub fn union_members(&self) -> Option<&[Type]> {
+        match self {
+            Type::Union(ms) => Some(ms),
+            _ => None,
+        }
+    }
+
+    /// A union stored in a `Variant` (it has a member that is not an object type).
+    pub fn is_value_union(&self) -> bool {
+        matches!(self, Type::Union(ms) if !ms.iter().all(|m| m.is_object()))
+    }
+
+    /// A union stored in a `Variant` that may also hold an object reference (`string | Excel.Range`).
+    pub fn is_mixed_union(&self) -> bool {
+        matches!(self, Type::Union(ms) if ms.iter().any(|m| m.is_object()) && !ms.iter().all(|m| m.is_object()))
+    }
+
+    /// Values whose kind is only known at run time: they live in a `Variant` and may hold an object.
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self, Type::Any | Type::Error | Type::Param(_)) || self.is_mixed_union()
+    }
+
+    /// `A | B | ...`: flattens nested unions, drops duplicates and sorts the members into a
+    /// canonical order. `any` absorbs everything, `object` absorbs the other object types,
+    /// and a single remaining member is returned as it is.
+    pub fn union(members: impl IntoIterator<Item = Type>) -> Type {
+        let mut flat: Vec<Type> = Vec::new();
+        for m in members {
+            match m {
+                Type::Union(inner) => flat.extend(inner),
+                other => flat.push(other),
+            }
+        }
+        if flat.iter().any(|m| m.is_error()) {
+            return Type::Error;
+        }
+        if flat.contains(&Type::Any) {
+            return Type::Any;
+        }
+        flat.retain(|m| *m != Type::Null);
+        if flat.contains(&Type::Object) {
+            flat.retain(|m| *m == Type::Object || !m.is_object());
+        }
+        let mut out: Vec<Type> = Vec::new();
+        for m in flat {
+            if !out.contains(&m) {
+                out.push(m);
+            }
+        }
+        out.sort_by_cached_key(Type::order_key);
+        match out.len() {
+            0 => Type::Null,
+            1 => out.pop().unwrap(),
+            _ => Type::Union(out),
+        }
+    }
+
+    /// Sort key of the canonical member order of a union: value types first, then object types.
+    fn order_key(&self) -> (u8, usize, String) {
+        let rank = match self {
+            Type::Str => 0,
+            Type::Bool => 1,
+            Type::Byte => 2,
+            Type::Short => 3,
+            Type::Int => 4,
+            Type::Long => 5,
+            Type::Float => 6,
+            Type::Double => 7,
+            Type::Currency => 8,
+            Type::Decimal => 9,
+            Type::Ptr => 10,
+            Type::Date => 11,
+            Type::Enum(_) => 12,
+            Type::Struct(_) => 13,
+            Type::Array(_) => 14,
+            Type::Class(..) => 15,
+            Type::Map(..) => 16,
+            Type::Func(_) => 17,
+            Type::Object => 18,
+            _ => 19,
+        };
+        let id = match self {
+            Type::Enum(i) | Type::Struct(i) | Type::Class(i, _) => *i,
+            _ => 0,
+        };
+        (rank, id, format!("{self:?}"))
     }
 
     pub fn is_array(&self) -> bool {
@@ -143,6 +239,7 @@ impl Type {
         match self {
             Type::Struct(_) => true,
             Type::Array(t) => t.has_struct(),
+            Type::Union(ms) => ms.iter().any(|m| m.has_struct()),
             _ => false,
         }
     }
@@ -158,6 +255,7 @@ impl Type {
             Type::Class(_, args) => args.iter().any(|a| a.contains_param()),
             Type::Map(k, v) => k.contains_param() || v.contains_param(),
             Type::Func(f) => f.params.iter().any(|p| p.contains_param()) || f.ret.contains_param(),
+            Type::Union(ms) => ms.iter().any(|m| m.contains_param()),
             _ => false,
         }
     }
@@ -175,6 +273,7 @@ impl Type {
                 params: f.params.iter().map(|p| p.subst(env)).collect(),
                 ret: f.ret.subst(env),
             })),
+            Type::Union(ms) => Type::union(ms.iter().map(|m| m.subst(env))),
             other => other.clone(),
         }
     }
@@ -194,6 +293,8 @@ pub enum Constraint {
 pub struct TypeParamDef {
     pub name: String,
     pub constraint: Constraint,
+    /// `T = Default` of a class or interface: the type argument when it is omitted.
+    pub default: Option<Type>,
 }
 
 #[derive(Clone, Debug)]
@@ -753,9 +854,17 @@ impl Program {
             Type::WStr => "wstr".into(),
             Type::AStr => "astr".into(),
             Type::Array(e) => match &**e {
-                Type::Func(_) => format!("({})[]", self.show(e)),
+                Type::Func(_) | Type::Union(_) => format!("({})[]", self.show(e)),
                 _ => format!("{}[]", self.show(e)),
             },
+            Type::Union(ms) => ms
+                .iter()
+                .map(|m| match m {
+                    Type::Func(_) => format!("({})", self.show(m)),
+                    _ => self.show(m),
+                })
+                .collect::<Vec<_>>()
+                .join(" | "),
             Type::Class(id, args) => {
                 let mut s = self.class_display(*id);
                 if !args.is_empty() {

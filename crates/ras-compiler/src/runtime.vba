@@ -71,6 +71,37 @@ Public Function RAS_IsNullish(ByRef v As Variant) As Boolean
         RAS_IsNullish = IsEmpty(v) Or IsNull(v)
     End If
 End Function
+'@@ proc RAS_UnionEq
+' `==` on a union value (spec 2.6): values of different kinds are not equal (VBA would convert or raise).
+Public Function RAS_UnionEq(ByRef a As Variant, ByRef b As Variant) As Boolean
+    If IsObject(a) Or IsObject(b) Then
+        If IsObject(a) And IsObject(b) Then RAS_UnionEq = (a Is b)
+        Exit Function
+    End If
+    If IsArray(a) Or IsArray(b) Then Exit Function
+    If RAS_ValueKind(a) <> RAS_ValueKind(b) Then Exit Function
+    If IsNull(a) Or IsEmpty(a) Then
+        RAS_UnionEq = True
+    Else
+        RAS_UnionEq = (a = b)
+    End If
+End Function
+'@@ proc RAS_ValueKind
+' 0 number, 1 string, 2 boolean, 3 date, 4 empty / null.
+Public Function RAS_ValueKind(ByRef v As Variant) As Long
+    Select Case VarType(v)
+    Case vbString
+        RAS_ValueKind = 1&
+    Case vbBoolean
+        RAS_ValueKind = 2&
+    Case vbDate
+        RAS_ValueKind = 3&
+    Case vbEmpty, vbNull
+        RAS_ValueKind = 4&
+    Case Else
+        RAS_ValueKind = 0&
+    End Select
+End Function
 '@@ proc RAS_Assign
 ' Assignment when it is only known at run time whether the value is an object (spec 2.3).
 Public Sub RAS_Assign(ByRef target As Variant, ByRef source As Variant)

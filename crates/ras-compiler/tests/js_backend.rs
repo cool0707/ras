@@ -330,3 +330,59 @@ Terminate
     assert!(!ok);
     assert!(stderr.contains("VS Code"), "{stderr}");
 }
+
+const UNIONS: &str = r#"
+class Circle {
+    r: double = 1;
+    area(): double { return 3 * this.r * this.r; }
+    label(): string { return "circle"; }
+}
+class Square {
+    s: double = 2;
+    area(): double { return this.s * this.s; }
+    label(): string { return "square"; }
+}
+
+function describe(x: Circle | Square): string {
+    if (x instanceof Circle) {
+        return `${x.label()} r=${x.r} a=${x.area()}`;
+    }
+    return `${x.label()} s=${x.s} a=${x.area()}`;
+}
+
+function kind(v: string | int | boolean): string {
+    if (typeof v == "String") return `s:${v.length}`;
+    if (typeof v == "Long") return `i:${v + 1}`;
+    return `b:${v}`;
+}
+
+export function run() {
+    const shapes: (Circle | Square)[] = [new Circle(), new Square()];
+    for (const s of shapes) console.log(describe(s), s.area());
+    let v: string | int | boolean = "abc";
+    console.log(kind(v), v == "abc", v == 3);
+    v = 7;
+    console.log(kind(v), v == 7, v == "7");
+    v = true;
+    console.log(kind(v));
+    const w: string | double = 4;
+    console.log(typeof w);
+}
+"#;
+
+#[test]
+fn union_types_narrow_like_the_vba_build() {
+    let files = [("main", UNIONS)];
+    let (_, out) = compile(&files);
+    let js = &out.files.iter().find(|f| f.rel_path == "main.js").unwrap().text;
+    // Values of different kinds are not equal; a number's `TypeName` follows the static type when it can.
+    assert!(js.contains("$rt.eq(v, \"abc\")"), "{js}");
+    assert!(js.contains("$rt.typeName(w, \"Double\")"), "{js}");
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("unions", &files, &out);
+    let (stdout, stderr, ok) = p.run("Main.run", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout, "circle r=1 a=3 3\nsquare s=2 a=4 4\ns:3 true false\ni:8 true false\nb:true\nDouble\n");
+}
