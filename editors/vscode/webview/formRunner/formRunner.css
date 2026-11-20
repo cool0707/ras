@@ -233,6 +233,12 @@ body {
 	border-top: 4px solid var(--ms-text);
 }
 
+/* ShowDropButtonWhen: Never, or only while the control has the focus. */
+.ctl-combobox.drop-never .combo-arrow,
+.ctl-combobox.drop-focus:not(:focus-within) .combo-arrow {
+	display: none;
+}
+
 .ctl-combobox:has(.field:disabled) .combo-chevron {
 	border-top-color: var(--ms-shadow);
 }

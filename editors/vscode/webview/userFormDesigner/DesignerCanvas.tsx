@@ -106,30 +106,48 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "combobox": {
       // Without an authored text or value, the selected list item is what the form shows.
       const authored = control.text || (control.value == null ? "" : String(control.value));
+      // The drop button shows always (what Excel gives a new ComboBox), never, or only
+      // with the focus, which a control on the design surface never has.
+      const button = (control.showDropButtonWhen ?? 2) === 2;
       return (
         <>
           <span class="combo-text">
             {authored || (control.list?.[control.selectedIndex ?? -1] ?? "")}
           </span>
-          <span class="combo-arrow" aria-hidden="true">
-            <span class="combo-chevron" />
-          </span>
+          {button && (
+            <span class="combo-arrow" aria-hidden="true">
+              <span class="combo-chevron" />
+            </span>
+          )}
         </>
       );
     }
-    case "listbox":
+    case "listbox": {
+      // ListStyle Option puts a box before each item: a check box when several
+      // items can be selected, an option button when only one.
+      const box = control.listStyle === 1 ? (control.multiSelect ? "check" : "option") : undefined;
       return (
         <span class="list-items">
-          {(control.list ?? []).map((item, index) => (
-            <div
-              key={index}
-              class={index === control.selectedIndex ? "list-item selected" : "list-item"}
-            >
-              {item}
-            </div>
-          ))}
+          {(control.list ?? []).map((item, index) => {
+            const selected = index === control.selectedIndex;
+            return (
+              <div
+                key={index}
+                class={`list-item ${selected ? "selected" : ""} ${box ? "with-box" : ""}`}
+              >
+                {box && (
+                  <span
+                    class={`toggle-box ${box} ${selected ? "checked" : ""}`}
+                    aria-hidden="true"
+                  />
+                )}
+                {item}
+              </div>
+            );
+          })}
         </span>
       );
+    }
     case "spinbutton":
       return (
         <span

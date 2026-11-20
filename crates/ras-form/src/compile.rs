@@ -949,6 +949,13 @@ pub(crate) fn compile_new(
             ("BorderStyle", control.border_style),
             ("PictureAlignment", control.picture_alignment),
             ("PictureSizeMode", control.picture_size_mode),
+            // ComboBox Style is the record's DisplayStyle: combo (3) or drop-down list (7).
+            ("DisplayStyle", control.style.map(|s| if s == 2 { 7 } else { 3 })),
+            ("MultiSelect", control.multi_select),
+            ("ListStyle", control.list_style),
+            ("MatchEntry", control.match_entry),
+            ("ShowDropButtonWhen", control.show_drop_button_when),
+            ("ListRows", control.list_rows),
         ] {
             if let Some(v) = value {
                 apply(name, property, Edit::Int(property, v))?;

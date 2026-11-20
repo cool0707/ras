@@ -1223,6 +1223,15 @@ impl Generation {
                     _ => 0,
                 };
                 record.set_int("DisplayStyle", style)?;
+                // What Excel stores for a new control; the record's own
+                // defaults are no drop button and no auto-completion.
+                if control.class == 25 {
+                    record.set_int("ShowDropButtonWhen", 2)?;
+                    record.set_int("MatchEntry", 1)?;
+                }
+                if control.class == 24 {
+                    record.set_int("MatchEntry", 0)?;
+                }
             }
             if spec.text_props {
                 record.text_props = Some(Box::new(Record::new(&TEXT_PROPS)));
@@ -1642,6 +1651,23 @@ fn set_checked(record: &mut Record, property: &str, value: i64, class: Option<u1
         }
         "PictureSizeMode" if class != Some(12) || !matches!(value, 0 | 1 | 3) => {
             return invalid("pictureSizeMode が不正です")
+        }
+        // Only a ComboBox switches between DropDownCombo (3) and DropDownList (7).
+        "DisplayStyle" if class != Some(25) || !matches!(value, 3 | 7) => {
+            return invalid("style が不正です")
+        }
+        "MultiSelect" if class != Some(24) || value > 2 => return invalid("multiSelect が不正です"),
+        "ListStyle" if !matches!(class, Some(24 | 25)) || value > 1 => {
+            return invalid("listStyle が不正です")
+        }
+        "MatchEntry" if !matches!(class, Some(24 | 25)) || value > 2 => {
+            return invalid("matchEntry が不正です")
+        }
+        "ShowDropButtonWhen" if class != Some(25) || value > 2 => {
+            return invalid("showDropButtonWhen が不正です")
+        }
+        "ListRows" if class != Some(25) || value > i16::MAX as i64 => {
+            return invalid("listRows が不正です")
         }
         _ => {}
     }

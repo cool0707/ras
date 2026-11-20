@@ -108,6 +108,18 @@ export interface SpecControl extends AppearanceProperties {
   visible?: boolean;
   list?: string[];
   tabs?: SpecTab[];
+  /** ComboBox: 0 DropDownCombo, 2 DropDownList. */
+  style?: number | null;
+  /** ListBox: 0 single, 1 multi, 2 extended. */
+  multiSelect?: number | null;
+  /** ComboBox / ListBox: 0 plain, 1 option (a box beside each item). */
+  listStyle?: number | null;
+  /** ComboBox / ListBox: 0 first letter, 1 complete, 2 none. */
+  matchEntry?: number | null;
+  /** ComboBox: 0 never, 1 with the focus, 2 always (omitted: always, as Excel makes it). */
+  showDropButtonWhen?: number | null;
+  /** ComboBox: rows of the drop-down list. */
+  listRows?: number | null;
   observed?: Partial<Omit<SpecControl, "observed">>;
 }
 

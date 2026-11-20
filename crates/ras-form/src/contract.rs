@@ -442,6 +442,33 @@ pub fn type_properties(name: &str) -> Option<Props> {
     ) {
         props.push(("borderStyle", border_style()));
     }
+    if matches!(n, "ComboBox" | "ListBox") {
+        props.push((
+            "listStyle",
+            allowed(p(T::Integer, false, Supported), &["0", "1"]),
+        ));
+        props.push((
+            "matchEntry",
+            allowed(p(T::Integer, false, Supported), &["0", "1", "2"]),
+        ));
+    }
+    if n == "ComboBox" {
+        props.push((
+            "style",
+            allowed(p(T::Integer, false, Supported), &["0", "2"]),
+        ));
+        props.push((
+            "showDropButtonWhen",
+            allowed(p(T::Integer, false, Supported), &["0", "1", "2"]),
+        ));
+        props.push(("listRows", p(T::Integer, false, Supported)));
+    }
+    if n == "ListBox" {
+        props.push((
+            "multiSelect",
+            allowed(p(T::Integer, false, Supported), &["0", "1", "2"]),
+        ));
+    }
     Some(props)
 }
 

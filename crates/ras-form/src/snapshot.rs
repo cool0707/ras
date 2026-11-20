@@ -324,6 +324,12 @@ fn unsupported_control_properties(control: &Control, control_type: &str) -> Vec<
         if control_type == "TabStrip" {
             projected.extend(["Items", "TipStrings", "TabNames", "Tags", "Accelerators"]);
         }
+        if control_type == "ComboBox" {
+            projected.extend(["ListStyle", "MatchEntry", "ShowDropButtonWhen", "ListRows"]);
+        }
+        if control_type == "ListBox" {
+            projected.extend(["ListStyle", "MatchEntry", "MultiSelect"]);
+        }
         out.extend(unsupported_record_properties(record, &projected));
         if let Some(bits) = record.value("VariousPropertyBits") {
             if default_various_bits(control_type).is_none_or(|d| bits & !2 != d & !2) {
@@ -413,6 +419,32 @@ fn project_typed_control(source: &Control, target: &mut FormSpecControl) {
     if control_type == "Image" {
         target.picture_alignment = record.value("PictureAlignment");
         target.picture_size_mode = record.value("PictureSizeMode");
+    }
+    project_list_properties(&control_type, record, target);
+}
+
+/// The list properties of a ComboBox / ListBox, each only where it differs
+/// from what Excel stores for a new control (and the compiler writes).
+fn project_list_properties(control_type: &str, record: &Record, target: &mut FormSpecControl) {
+    let combo = control_type == "ComboBox";
+    if !combo && control_type != "ListBox" {
+        return;
+    }
+    // Omitted fields take the MS-OFORMS defaults, which are not Excel's.
+    let differs = |name: &str, omitted: i64, excel: i64| {
+        let value = record.value(name).unwrap_or(omitted);
+        (value != excel).then_some(value)
+    };
+    target.list_style = differs("ListStyle", 0, 0);
+    target.match_entry = differs("MatchEntry", 2, if combo { 1 } else { 0 });
+    if combo {
+        if record.value("DisplayStyle") == Some(7) {
+            target.style = Some(2);
+        }
+        target.show_drop_button_when = differs("ShowDropButtonWhen", 0, 2);
+        target.list_rows = differs("ListRows", 8, 8);
+    } else {
+        target.multi_select = differs("MultiSelect", 0, 0);
     }
 }
 

@@ -37,7 +37,16 @@ const categories = {
     "controlTipText",
   ],
   layout: ["left", "top", "width", "height"],
-  behavior: ["enabled", "visible"],
+  behavior: [
+    "enabled",
+    "visible",
+    "style",
+    "multiSelect",
+    "listStyle",
+    "matchEntry",
+    "showDropButtonWhen",
+    "listRows",
+  ],
   navigation: ["tabIndex", "selectedIndex", "accelerator"],
   advanced: [],
 } as const;
@@ -369,6 +378,12 @@ const objectLabels: Record<string, string> = {
   pictureSizeMode: "PictureSizeMode",
   textAlign: "TextAlign",
   borderStyle: "BorderStyle",
+  style: "Style",
+  multiSelect: "MultiSelect",
+  listStyle: "ListStyle",
+  matchEntry: "MatchEntry",
+  showDropButtonWhen: "ShowDropButtonWhen",
+  listRows: "ListRows",
 };
 function ObjectPropertyRow(props: Props & { descriptor: PropertyDescriptor }) {
   const { descriptor, target, strings } = props;

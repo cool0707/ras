@@ -410,6 +410,50 @@
               3
             ]
           },
+          "style": {
+            "enum": [
+              0,
+              2
+            ],
+            "description": "ComboBox のスタイル。0: DropDownCombo（入力できる）、2: DropDownList（一覧から選ぶだけ）"
+          },
+          "multiSelect": {
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "description": "ListBox の選択方法。0: Single、1: Multi、2: Extended"
+          },
+          "listStyle": {
+            "enum": [
+              0,
+              1
+            ],
+            "description": "ComboBox / ListBox の一覧の見た目。0: Plain、1: Option（項目の前に選択の枠）"
+          },
+          "matchEntry": {
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "description": "入力で項目を選ぶ方法。0: FirstLetter、1: Complete、2: None。省略時は Excel で作ったときと同じ（ComboBox は 1、ListBox は 0）"
+          },
+          "showDropButtonWhen": {
+            "enum": [
+              0,
+              1,
+              2
+            ],
+            "description": "ComboBox のドロップ ボタンを出すとき。0: Never、1: Focus、2: Always。省略時は 2"
+          },
+          "listRows": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32767,
+            "description": "ComboBox のドロップダウンに表示する行数。省略時は 8"
+          },
           "observed": {
             "type": "object"
           },

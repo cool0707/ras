@@ -28,6 +28,16 @@ that — `tag` / `controlTipText` on every control, `list` / `selectedIndex`
 of ComboBox and ListBox — is tested in `tests/snapshot.rs` by comparison
 with the equivalent xlflow-compatible spec.
 
+### Where RAS writes what Excel writes instead
+
+xlflow writes a ComboBox and a ListBox without `ShowDropButtonWhen` and
+`MatchEntry`, so they take the MS-OFORMS defaults: no drop button and no
+auto-completion. Excel stores `ShowDropButtonWhen = 2` and `MatchEntry = 1`
+for a new ComboBox and `MatchEntry = 0` for a new ListBox (as the forms in
+`../data` show), and RAS writes the same. The `o` streams of
+`03-all-controls.golden.json` and `12-bag-appearance.golden.json` differ
+from xlflow's output by these fields only.
+
 ## Projects saved by Excel (`../data`)
 
 `../data/<label>.bin` are `xl/vbaProject.bin` files of workbooks saved by
@@ -49,7 +59,11 @@ Excel 16, taken from xlflow's test data
 `projection.Project` (code page 932), `pictures` describes what
 `picture.Decode` finds in the Image controls. `tests/snapshot.rs` checks
 that `ras_form::project` gives the same FormSpec (apart from `kind` and the
-language of the warning messages).
+language of the warning messages). RAS also projects the list properties
+of a ComboBox / ListBox (`style`, `multiSelect`, `listStyle`, `matchEntry`,
+`showDropButtonWhen`, `listRows`) where they differ from what Excel stores
+for a new control; xlflow lists them as `unsupported`. The goldens have
+been changed to match.
 
 `../data/excel-export.frx` is `example/maze-chase/src/forms/MazeChaseForm.frx`
 of xlflow, a file written by `VBComponent.Export` of Excel 16.

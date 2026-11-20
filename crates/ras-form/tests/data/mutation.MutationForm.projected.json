@@ -165,8 +165,6 @@
         "enabled": true,
         "visible": true,
         "unsupported": [
-          "matchEntry",
-          "showDropButtonWhen",
           "textProps",
           "variousPropertyBits"
         ]
@@ -190,7 +188,6 @@
         "enabled": true,
         "visible": true,
         "unsupported": [
-          "matchEntry",
           "scrollBars",
           "textProps"
         ]

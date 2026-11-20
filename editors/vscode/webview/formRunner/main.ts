@@ -172,6 +172,9 @@ function create(c: ControlSnapshot): View {
 			view.update = (s, enabled) => {
 				const list = (s.list ?? []).map((row) => row.join("  "));
 				const dropDownList = num(s.state.Style) === 2;
+				const button = num(s.state.ShowDropButtonWhen, 2);
+				root.classList.toggle("drop-never", button === 0);
+				root.classList.toggle("drop-focus", button === 1);
 				if (dropDownList) {
 					input?.remove();
 					input = undefined;

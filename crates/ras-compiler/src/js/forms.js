@@ -65,9 +65,9 @@ module.exports = function install(rt) {
             case "TextBox":
                 return Object.assign(d, { Text: "", Locked: false, MaxLength: 0, MultiLine: false, PasswordChar: "", TextAlign: 1, WordWrap: true, BackColor: WINDOW, ForeColor: WINDOW_TEXT, SelStart: 0, SelLength: 0, EnterKeyBehavior: false, ScrollBars: 0 });
             case "ComboBox":
-                return Object.assign(d, { Text: "", Locked: false, Style: 0, MatchRequired: false, ColumnCount: 1, BoundColumn: 1, TextColumn: -1, ListRows: 8, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", MaxLength: 0, TextAlign: 1 });
+                return Object.assign(d, { Text: "", Locked: false, Style: 0, MatchRequired: false, MatchEntry: 1, ShowDropButtonWhen: 2, ListStyle: 0, ColumnCount: 1, BoundColumn: 1, TextColumn: -1, ListRows: 8, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", MaxLength: 0, TextAlign: 1 });
             case "ListBox":
-                return Object.assign(d, { Locked: false, MultiSelect: 0, ColumnCount: 1, BoundColumn: 1, TextColumn: -1, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", TopIndex: 0, ListStyle: 0, TextAlign: 1 });
+                return Object.assign(d, { Locked: false, MultiSelect: 0, MatchEntry: 0, ColumnCount: 1, BoundColumn: 1, TextColumn: -1, BackColor: WINDOW, ForeColor: WINDOW_TEXT, RowSource: "", TopIndex: 0, ListStyle: 0, TextAlign: 1 });
             case "CommandButton":
                 return Object.assign(d, { Caption: "", Default: false, Cancel: false, Accelerator: "", TakeFocusOnClick: true, WordWrap: false, Locked: false });
             case "CheckBox":
@@ -231,7 +231,7 @@ module.exports = function install(rt) {
             }
             if (spec.foreColor) s.ForeColor = oleColor(spec.foreColor, s.ForeColor);
             if (spec.backColor) s.BackColor = oleColor(spec.backColor, s.BackColor);
-            for (const [key, name] of [["textAlign", "TextAlign"], ["borderStyle", "BorderStyle"], ["pictureAlignment", "PictureAlignment"], ["pictureSizeMode", "PictureSizeMode"]]) if (typeof spec[key] === "number" && name in s) s[name] = spec[key];
+            for (const [key, name] of [["textAlign", "TextAlign"], ["borderStyle", "BorderStyle"], ["pictureAlignment", "PictureAlignment"], ["pictureSizeMode", "PictureSizeMode"], ["style", "Style"], ["multiSelect", "MultiSelect"], ["listStyle", "ListStyle"], ["matchEntry", "MatchEntry"], ["showDropButtonWhen", "ShowDropButtonWhen"], ["listRows", "ListRows"]]) if (typeof spec[key] === "number" && name in s) s[name] = spec[key];
             const kind = this.$kind;
             if (LISTS.has(kind)) {
                 this.$list = (spec.list || []).map((x) => [rt.cstr(x)]);
@@ -602,7 +602,7 @@ module.exports = function install(rt) {
     }
 
     // Plain properties: read the state, write it and redraw.
-    const PLAIN = ["Left", "Top", "Width", "Height", "Visible", "Enabled", "Tag", "ControlTipText", "TabIndex", "TabStop", "BackColor", "ForeColor", "BorderColor", "Locked", "MaxLength", "MultiLine", "PasswordChar", "TextAlign", "WordWrap", "AutoSize", "BackStyle", "BorderStyle", "SpecialEffect", "Style", "MatchRequired", "ColumnCount", "ColumnWidths", "ColumnHeads", "BoundColumn", "TextColumn", "ListRows", "TopIndex", "ListStyle", "MultiSelect", "Default", "Cancel", "Accelerator", "TakeFocusOnClick", "TripleState", "GroupName", "Min", "Max", "SmallChange", "LargeChange", "Orientation", "PictureSizeMode", "PictureAlignment", "PictureTiling", "EnterKeyBehavior", "TabKeyBehavior", "ScrollBars", "TabOrientation", "MultiRow", "IMEMode", "SelStart", "SelLength", "MatchEntry", "ListWidth", "ControlSource"];
+    const PLAIN = ["Left", "Top", "Width", "Height", "Visible", "Enabled", "Tag", "ControlTipText", "TabIndex", "TabStop", "BackColor", "ForeColor", "BorderColor", "Locked", "MaxLength", "MultiLine", "PasswordChar", "TextAlign", "WordWrap", "AutoSize", "BackStyle", "BorderStyle", "SpecialEffect", "Style", "MatchRequired", "ColumnCount", "ColumnWidths", "ColumnHeads", "BoundColumn", "TextColumn", "ListRows", "TopIndex", "ListStyle", "MultiSelect", "Default", "Cancel", "Accelerator", "TakeFocusOnClick", "TripleState", "GroupName", "Min", "Max", "SmallChange", "LargeChange", "Orientation", "PictureSizeMode", "PictureAlignment", "PictureTiling", "EnterKeyBehavior", "TabKeyBehavior", "ScrollBars", "TabOrientation", "MultiRow", "IMEMode", "SelStart", "SelLength", "MatchEntry", "ShowDropButtonWhen", "ListWidth", "ControlSource"];
     for (const name of PLAIN) {
         Object.defineProperty(Control.prototype, name, {
             get() {

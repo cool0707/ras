@@ -135,7 +135,9 @@
         "visible": true,
         "unsupported": [
           "variousPropertyBits"
-        ]
+        ],
+        "matchEntry": 2,
+        "showDropButtonWhen": 0
       },
       {
         "font": {
@@ -510,7 +512,8 @@
         "height": 35.00787401574803,
         "tabIndex": 3,
         "enabled": true,
-        "visible": true
+        "visible": true,
+        "matchEntry": 2
       }
     ],
     "warnings": [

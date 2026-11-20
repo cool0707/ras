@@ -143,6 +143,19 @@ const listControl = (): Record<string, PropertyContract> => ({
 	...typed("text", "Displayed text.", "value", "Current control value."),
 	list: { ...p("stringArray", false, "supported", "List items; generated code in UserForm_Initialize fills the list.", true), editor: "list" },
 	selectedIndex: p("integer", false, "supported", "Zero-based selected item of list, or -1 for none; set by generated code in UserForm_Initialize.", true),
+	listStyle: p("integer", false, "supported", "List style: Plain, Option (a box beside each item).", true, ["0", "1"]),
+	// Omitted, MatchEntry is what Excel gives a new control: Complete for a ComboBox, FirstLetter for a ListBox.
+	matchEntry: p("integer", false, "supported", "Typing selects an item: FirstLetter, Complete, None.", true, ["0", "1", "2"]),
+});
+const comboBox = (): Record<string, PropertyContract> => ({
+	...listControl(),
+	style: p("integer", false, "supported", "DropDownCombo (text can be typed) or DropDownList (an item has to be chosen).", true, ["0", "2"]),
+	showDropButtonWhen: p("integer", false, "supported", "When the drop button shows: Never, Focus, Always.", true, ["0", "1", "2"]),
+	listRows: { ...p("integer", false, "supported", "Rows shown in the drop-down list.", true), minimum: 0, maximum: 32767 },
+});
+const listBox = (): Record<string, PropertyContract> => ({
+	...listControl(),
+	multiSelect: p("integer", false, "supported", "Selection: Single, Multi, Extended.", true, ["0", "1", "2"]),
 });
 const control = (type: string, canContainChildren: boolean, properties: Record<string, PropertyContract>): ControlContract => ({
 	type,
@@ -155,8 +168,8 @@ function buildControls(): Record<string, ControlContract> {
 	const controls: Record<string, ControlContract> = {
 		label: control("Label", false, typed("caption", "Text displayed by the label.")),
 		textbox: control("TextBox", false, typed("text", "TextBox text.", "value", "TextBox value.")),
-		combobox: control("ComboBox", false, listControl()),
-		listbox: control("ListBox", false, listControl()),
+		combobox: control("ComboBox", false, comboBox()),
+		listbox: control("ListBox", false, listBox()),
 		commandbutton: control("CommandButton", false, typed("caption", "Button caption.")),
 		checkbox: control("CheckBox", false, typed("caption", "CheckBox caption.", "value", "CheckBox checked state.")),
 		optionbutton: control("OptionButton", false, typed("caption", "OptionButton caption.", "value", "OptionButton selected state.")),
@@ -314,6 +327,11 @@ const labels: Record<string, string[]> = {
 	borderStyle: ["None", "Single"],
 	pictureAlignment: ["TopLeft", "TopRight", "Center", "BottomLeft", "BottomRight"],
 	pictureSizeMode: ["Clip", "Stretch", "Zoom"],
+	style: ["DropDownCombo", "DropDownList"],
+	multiSelect: ["Single", "Multi", "Extended"],
+	listStyle: ["Plain", "Option"],
+	matchEntry: ["FirstLetter", "Complete", "None"],
+	showDropButtonWhen: ["Never", "Focus", "Always"],
 };
 const charsets: [number, string][] = [
 	[0, "ANSI"],

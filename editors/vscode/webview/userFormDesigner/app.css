@@ -263,6 +263,24 @@ header {
   background: var(--ms-select);
   color: #fff;
 }
+/* ListStyle Option: the item is marked by its box, not highlighted. */
+.list-item.with-box {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.list-item.with-box.selected {
+  background: none;
+  color: inherit;
+}
+.list-item .toggle-box {
+  width: 11px;
+  height: 11px;
+}
+.list-item .toggle-box.check.checked::after {
+  left: 2px;
+  top: 0;
+}
 .combo-arrow {
   position: absolute;
   top: 1px;
