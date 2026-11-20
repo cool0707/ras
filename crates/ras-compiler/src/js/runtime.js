@@ -633,6 +633,16 @@ function connect() {
         try {
             app = com.getActiveObject("Excel.Application");
         } catch {
+            // No Excel is running. The workbook is opened the way a double click does, so that
+            // Excel is the user's own instance and not an automation server: an Excel started by
+            // `CreateObject` refuses access to the VBA project, which breaks the sync and
+            // "Run in Excel" for as long as it stays open after the run.
+            if (file && typeof com.shellOpen === "function") {
+                book = openByShell(file);
+                app = book.get("Application", []);
+                watchDialogs();
+                return;
+            }
             app = com.createObject("Excel.Application");
             app.put("Visible", [], true);
         }
@@ -658,6 +668,33 @@ function watchDialogs() {
         if (pid) com.watchDialogs(pid, String(config.dialogs || "notify").toLowerCase());
     } catch {
         // Watching is an aid; the program runs without it.
+    }
+}
+
+/** Opens `file` with the shell and waits until Excel has registered it (spec §14.3). */
+function openByShell(file) {
+    if (!require("fs").existsSync(file)) throw new RasError(`${file} が見つかりません`, 53, "RAS");
+    com.shellOpen(file);
+    const start = Date.now();
+    for (;;) {
+        sleep(500);
+        const found = com.findWorkbook(file) || openByName(file);
+        if (found) return found;
+        if (Date.now() - start >= 60000) {
+            throw new RasError(`${file} が Excel で開かれたことを確認できませんでした（保護ビューで開いた場合は「編集を有効にする」を押してから実行し直してください）`, 1004, "RAS");
+        }
+    }
+}
+
+/** A workbook in a OneDrive / SharePoint folder, which the ROT lists under its URL: looked up by name. */
+function openByName(file) {
+    try {
+        const open = com.getActiveObject("Excel.Application").get("Workbooks", []).call("Item", [require("path").basename(file)]);
+        const full = String(open.get("FullName", []));
+        const norm = (p) => p.replace(/\//g, "\\").toLowerCase();
+        return norm(full) === norm(file) || /^https?:\/\//i.test(full) ? open : null;
+    } catch {
+        return null; // not started yet, or not open yet
     }
 }
 
