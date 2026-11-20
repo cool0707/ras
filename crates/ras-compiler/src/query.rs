@@ -314,10 +314,14 @@ pub struct Completion {
     pub doc: Option<String>,
     /// Sorts type members before extension methods (spec §16.2.1).
     pub sort: u8,
+    /// Text inserted instead of the label (`name: ` for a named argument).
+    pub insert: Option<String>,
+    /// Text the editor filters on instead of the label.
+    pub filter: Option<String>,
 }
 
 fn item(label: &str, kind: u32, detail: impl Into<String>, doc: Option<&String>, sort: u8) -> Completion {
-    Completion { label: label.to_string(), kind, detail: detail.into(), doc: doc.cloned(), sort }
+    Completion { label: label.to_string(), kind, detail: detail.into(), doc: doc.cloned(), sort, insert: None, filter: None }
 }
 
 fn sym_item(prog: &Program, name: &str, sym: &Sym, sort: u8) -> Option<Completion> {
@@ -445,11 +449,8 @@ const KEYWORDS: &[&str] = &[
     "null", "true", "false", "byref", "byval", "inline", "noinline", "resume", "using", "declare", "instanceof", "typeof",
 ];
 
-pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> {
-    let md = &prog.modules[m];
-    let text: &str = &md.text;
-    let offset = (offset as usize).min(text.len());
-    // Start of the identifier being typed.
+/// Start of the identifier that ends at `offset`.
+fn ident_start(text: &str, offset: usize) -> usize {
     let mut p = offset;
     while p > 0 {
         let Some(c) = text[..p].chars().next_back() else { break };
@@ -459,6 +460,140 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
             break;
         }
     }
+    p
+}
+
+/// The argument list `p` is at the start of an argument of: the offset of its `(` and the
+/// arguments before the one being typed (spec §3.3). Works on the text, since the buffer
+/// is usually incomplete while typing.
+fn arg_list_at(text: &str, p: usize) -> Option<(usize, Vec<&str>)> {
+    let before = text[..p].trim_end();
+    if !before.ends_with('(') && !before.ends_with(',') {
+        return None;
+    }
+    // Walk back to the unclosed `(`, splitting the arguments at the top-level commas.
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut end = p;
+    let mut args = Vec::new();
+    let mut i = p;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b')' | b']' | b'}' => depth += 1,
+            b'(' | b'[' | b'{' if depth > 0 => depth -= 1,
+            b'(' => {
+                args.push(&text[i + 1..end]);
+                args.reverse();
+                args.pop(); // the argument being typed
+                return Some((i, args));
+            }
+            b'[' | b'{' | b';' => return None,
+            b',' if depth == 0 => {
+                args.push(&text[i + 1..end]);
+                end = i;
+            }
+            q @ (b'"' | b'\'' | b'`') => {
+                // Skip a string literal on the same line.
+                let line_start = text[..i].rfind('\n').map_or(0, |n| n + 1);
+                i = text[line_start..i].rfind(q as char).map(|j| line_start + j)?;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `name` of an argument written as `name: value`.
+fn arg_name(arg: &str) -> Option<&str> {
+    let a = arg.trim_start();
+    let n = a.len() - a.trim_start_matches(|c: char| c.is_alphanumeric() || c == '_' || c == '$').len();
+    (n > 0 && a[n..].trim_start().starts_with(':')).then(|| &a[..n])
+}
+
+/// `f<T>(`: the type arguments sit between the callee and the `(`.
+fn generic_callee(text: &str, callee: Span, paren: u32) -> bool {
+    let (end, paren) = (u32::from(callee.end()) as usize, paren as usize);
+    end < paren && text[end..paren].trim_start().starts_with('<') && text[..paren].trim_end().ends_with('>')
+}
+
+/// Function (and the leading parameters not written in the argument list) whose argument
+/// list opens at `paren`.
+fn callee_at(prog: &Program, m: ModuleId, paren: u32) -> Option<(FnId, usize)> {
+    let md = &prog.modules[m];
+    let mut callee: Option<&Expr> = None;
+    let mut fallback: Option<&Expr> = None;
+    let mut ctor: Option<FnId> = None;
+    walk_module(&md.ast, &mut |e| match &e.kind {
+        ExprKind::Call { callee: c, type_args, .. } if u32::from(c.span.end()) == paren || (!type_args.is_empty() && generic_callee(&md.text, c.span, paren)) => callee = Some(c),
+        ExprKind::New { ty, .. } if u32::from(ty.span().end()) == paren => {
+            if let Type::Class(c, _) = md.info.ty(e.id) {
+                ctor = prog.classes[c].ctor;
+            }
+        }
+        _ if u32::from(e.span.end()) == paren && fallback.is_none_or(|f| e.span.len() >= f.span.len()) => fallback = Some(e),
+        _ => {}
+    });
+    if let Some(f) = ctor {
+        return Some((f, 0));
+    }
+    let e = callee.or(fallback)?;
+    match md.info.res.get(&e.id) {
+        Some(Res::Fn(f) | Res::Method(f)) => Some((*f, 0)),
+        Some(Res::ExtMethod(f)) => Some((*f, 1)),
+        // A call of a value: the default member of its class.
+        _ => match md.info.ty(e.id) {
+            Type::Class(c, _) => prog.classes[c].call_sig.map(|f| (f, 0)),
+            _ => None,
+        },
+    }
+}
+
+/// `name: ` items for the parameters of the call whose argument list `p` is in, not yet
+/// given positionally or by name. The flag tells whether a named argument came before, so
+/// that only names can follow.
+fn named_arg_items(prog: &Program, m: ModuleId, p: usize) -> Option<(Vec<Completion>, bool)> {
+    let text: &str = &prog.modules[m].text;
+    let (paren, args) = arg_list_at(text, p)?;
+    let (f, skip) = callee_at(prog, m, paren as u32)?;
+    let d = &prog.fns[f];
+    let names: Vec<&str> = args.iter().filter_map(|a| arg_name(a)).collect();
+    let positional = args.iter().take_while(|a| arg_name(a).is_none()).count();
+    let mut out = Vec::new();
+    for (i, pd) in d.params.iter().enumerate().skip(skip) {
+        let is_this = d.locals.get(pd.local).is_some_and(|l| l.kind == LocalKind::This);
+        if pd.rest || is_this || pd.name.is_empty() || i - skip < positional || names.contains(&pd.name.as_str()) {
+            continue;
+        }
+        let mut detail = prog.show(&pd.ty);
+        if pd.optional || pd.default.is_some() {
+            detail.push_str("（省略可）");
+        }
+        out.push(Completion {
+            label: format!("{}:", pd.name),
+            kind: kind::VARIABLE,
+            detail,
+            doc: Some(code_block(&signature(prog, f), None)),
+            sort: 0,
+            insert: Some(format!("{}: ", pd.name)),
+            filter: Some(pd.name.clone()),
+        });
+    }
+    Some((out, !names.is_empty()))
+}
+
+/// Only the named-argument items at `offset` (completion triggered by `(` or `,`).
+pub fn named_arg_completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> {
+    let text: &str = &prog.modules[m].text;
+    let offset = (offset as usize).min(text.len());
+    named_arg_items(prog, m, ident_start(text, offset)).map(|x| x.0).unwrap_or_default()
+}
+
+pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> {
+    let md = &prog.modules[m];
+    let text: &str = &md.text;
+    let offset = (offset as usize).min(text.len());
+    let p = ident_start(text, offset);
     if text[..p].ends_with('.') {
         let dot = (p - 1) as u32;
         // The receiver is the largest expression that ends right at the dot.
@@ -478,7 +613,14 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
             None => Vec::new(),
         };
     }
+    // Named arguments (spec §3.3) come first; after one, only names can follow.
     let mut out = Vec::new();
+    if let Some((named, only)) = named_arg_items(prog, m, p) {
+        out = named;
+        if only {
+            return out;
+        }
+    }
     if let Some(f) = fn_at(prog, m, offset as u32) {
         for l in &prog.fns[f].locals {
             if !l.name.is_empty() && !l.name.starts_with("ras$") && u32::from(l.span.start()) < offset as u32 && !out.iter().any(|o: &Completion| o.label == l.name) && l.kind != LocalKind::This {

@@ -240,17 +240,27 @@ impl Server {
             }
             "textDocument/completion" => {
                 let Some((m, off)) = self.locate(p) else { return json!([]) };
-                let items: Vec<Value> = query::completions(prog, m, off)
+                // Typing `(` or `,` only offers the names of the arguments (spec §3.3); the
+                // list is incomplete so that the next keystroke asks for everything again.
+                let by_char = p["context"]["triggerKind"] == 2 && matches!(p["context"]["triggerCharacter"].as_str(), Some("(" | ","));
+                let list = if by_char { query::named_arg_completions(prog, m, off) } else { query::completions(prog, m, off) };
+                let items: Vec<Value> = list
                     .into_iter()
                     .map(|c| {
                         let mut v = json!({ "label": c.label, "kind": c.kind, "detail": c.detail, "sortText": format!("{}{}", c.sort, c.label) });
                         if let Some(doc) = c.doc {
                             v["documentation"] = json!({ "kind": "markdown", "value": doc });
                         }
+                        if let Some(t) = c.insert {
+                            v["insertText"] = json!(t);
+                        }
+                        if let Some(t) = c.filter {
+                            v["filterText"] = json!(t);
+                        }
                         v
                     })
                     .collect();
-                json!({ "isIncomplete": false, "items": items })
+                json!({ "isIncomplete": by_char, "items": items })
             }
             "textDocument/definition" => {
                 let Some((m, off)) = self.locate(p) else { return Value::Null };
@@ -374,7 +384,7 @@ pub fn run(conn: &Connection) -> Res<()> {
             "capabilities": {
                 "textDocumentSync": 1,
                 "hoverProvider": true,
-                "completionProvider": { "triggerCharacters": ["."] },
+                "completionProvider": { "triggerCharacters": [".", "(", ","] },
                 "definitionProvider": true,
                 "documentSymbolProvider": true,
                 "documentFormattingProvider": true,
@@ -594,6 +604,96 @@ mod tests {
         send(Message::Notification(Notification::new("textDocument/didChange".into(), json!({ "textDocument": { "uri": uri, "version": 4 }, "contentChanges": [{ "text": messy }] }))));
         let edits = request("textDocument/formatting", json!({ "textDocument": { "uri": uri }, "options": { "tabSize": 4, "insertSpaces": true } }));
         assert_eq!(edits[0]["newText"].as_str().unwrap(), good);
+
+        request("shutdown", Value::Null);
+        send(Message::Notification(Notification::new("exit".into(), Value::Null)));
+        handle.join().unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Argument names are offered inside an argument list (spec §3.3).
+    #[test]
+    fn completes_named_arguments() {
+        let dir = std::env::temp_dir().join(format!("ras-lsp-named-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("ras.toml"), "[project]\nname = \"T\"\n").unwrap();
+        let file = dir.join("src").join("main.ras");
+        let head = "function label(a: int, b: int = 2, c: string = \"x\"): string {\n    return c;\n}\n\nfunction first<T>(xs: T[], fallback?: T): T {\n    return xs[0];\n}\n\nfunction lastRow(this: Excel.Worksheet, col: int = 1): int {\n    return col;\n}\n\nclass Point {\n    x: double;\n    y: double;\n    constructor(x: double, y: double = 0) {\n        this.x = x;\n        this.y = y;\n    }\n}\n\nexport function run(ws: Excel.Worksheet) {\n    ";
+        std::fs::write(&file, format!("{head}\n}}\n")).unwrap();
+        let uri = path_to_uri(&file);
+
+        let (server_conn, client) = Connection::memory();
+        let handle = std::thread::spawn(move || run(&server_conn).map_err(|e| e.to_string()));
+        let send = |m: Message| client.sender.send(m).unwrap();
+        let next_id = std::cell::Cell::new(0);
+        let request = |method: &str, params: Value| -> Value {
+            next_id.set(next_id.get() + 1);
+            let id = next_id.get();
+            send(Message::Request(Request { id: id.into(), method: method.into(), params }));
+            loop {
+                match client.receiver.recv_timeout(std::time::Duration::from_secs(30)).unwrap() {
+                    Message::Response(r) if r.id == id.into() => return r.result.unwrap_or(Value::Null),
+                    _ => {}
+                }
+            }
+        };
+        request("initialize", json!({ "rootUri": path_to_uri(&dir), "capabilities": {} }));
+        send(Message::Notification(Notification::new("initialized".into(), json!({}))));
+        let version = std::cell::Cell::new(0);
+        // Completion at the end of `typed` (written in `run`), optionally triggered by a character.
+        let complete = |typed: &str, trigger: Option<&str>| -> (Vec<String>, Value) {
+            version.set(version.get() + 1);
+            let text = format!("{head}{typed}\n}}\n");
+            send(Message::Notification(Notification::new("textDocument/didChange".into(), json!({ "textDocument": { "uri": uri, "version": version.get() }, "contentChanges": [{ "text": text }] }))));
+            let line = text[..head.len() + typed.len()].matches('\n').count();
+            let character = typed.rsplit('\n').next().unwrap().encode_utf16().count() + 4;
+            let mut params = json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character } });
+            if let Some(c) = trigger {
+                params["context"] = json!({ "triggerKind": 2, "triggerCharacter": c });
+            }
+            let comp = request("textDocument/completion", params);
+            let labels = comp["items"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().to_string()).collect();
+            (labels, comp)
+        };
+        let named = |labels: &[String]| -> Vec<String> { labels.iter().filter(|l| l.ends_with(':')).cloned().collect() };
+
+        // typing `(` offers only the names, inserted as `name: `
+        let (labels, comp) = complete("label(", Some("("));
+        assert_eq!(labels, ["a:", "b:", "c:"]);
+        assert_eq!(comp["isIncomplete"], true);
+        assert_eq!(comp["items"][0]["insertText"], "a: ");
+        assert_eq!(comp["items"][0]["filterText"], "a");
+        assert!(comp["items"][1]["detail"].as_str().unwrap().contains("省略可"), "{comp}");
+
+        // parameters given positionally are left out; ordinary names are offered too
+        let (labels, _) = complete("label(1, ", Some(","));
+        assert_eq!(labels, ["b:", "c:"]);
+        let (labels, _) = complete("label(1, b", None);
+        assert_eq!(named(&labels), ["b:", "c:"]);
+        assert!(labels.iter().any(|l| l == "ws"), "{labels:?}");
+
+        // after a named argument only the remaining names can follow
+        let (labels, _) = complete("label(c: \"a, b\", ", None);
+        assert_eq!(labels, ["a:", "b:"]);
+        let (labels, _) = complete("const s = label(a: label(1), ", Some(","));
+        assert_eq!(labels, ["b:", "c:"]);
+
+        // the value of a named argument, nested parentheses and other brackets are not argument names
+        assert!(named(&complete("label(a: ", None).0).is_empty());
+        assert!(complete("label((", Some("(")).0.is_empty());
+        assert!(complete("const xs = [1, ", Some(",")).0.is_empty());
+        assert!(complete("if (", Some("(")).0.is_empty());
+
+        // extension methods (without `this`), constructors and host functions
+        assert_eq!(complete("ws.lastRow(", Some("(")).0, ["col:"]);
+        assert_eq!(complete("lastRow(", Some("(")).0, ["col:"]);
+        assert_eq!(complete("const n = first<int>([1], ", Some(",")).0, ["fallback:"]);
+        assert_eq!(complete("const p = new Point(1, ", Some(",")).0, ["y:"]);
+        let (labels, _) = complete("msgBox(\"x\", ", Some(","));
+        assert!(labels.iter().any(|l| l == "title:") && !labels.iter().any(|l| l == "prompt:"), "{labels:?}");
+        let (labels, _) = complete("ws.range(\"A:A\").find(\"x\", ", Some(","));
+        assert!(labels.iter().any(|l| l == "lookAt:") && !labels.iter().any(|l| l == "what:"), "{labels:?}");
 
         request("shutdown", Value::Null);
         send(Message::Notification(Notification::new("exit".into(), Value::Null)));
