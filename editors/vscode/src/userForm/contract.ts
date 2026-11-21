@@ -47,7 +47,7 @@ const p = (
 
 export const documentProperties: Record<string, PropertyContract> = {
 	schemaVersion: p("integer", true, "supported", "UserForm spec schema version.", false, ["1"]),
-	kind: p("string", true, "supported", "Document kind discriminator.", false, ["ras.userform", "xlflow.userform"]),
+	kind: p("string", true, "supported", "Document kind discriminator.", false, ["ras.userform"]),
 	basis: p("string", true, "supported", "Inspection/build basis for the spec.", false, ["designer"]),
 	coordinateSystem: p("string", false, "supported", "Coordinate basis used by geometry fields.", false, ["points", "parent-relative"]),
 	form: p("object", true, "supported", "Top-level UserForm authoring and observed metadata.", false),

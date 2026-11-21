@@ -36,7 +36,6 @@ import type {
 
 export type JsonObject = { [key: string]: JsonValue };
 export const FORM_KIND = "ras.userform";
-export const ACCEPTED_KINDS = ["ras.userform", "xlflow.userform"];
 
 export interface ValidationIssue {
 	code: string;

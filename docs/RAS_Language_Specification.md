@@ -1579,9 +1579,8 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 
 | ファイル | 内容 |
 |---|---|
-| `forms/<Name>.form.json` | デザイン。xlflow の FormSpec（schemaVersion 1）の JSON 形式。ファイル名は `form.name` と一致させる |
+| `forms/<Name>.form.json` | デザイン。FormSpec（schemaVersion 1。xlflow の FormSpec を元にした JSON 形式）。ファイル名は `form.name` と一致させる |
 | `forms/<Name>.ras` | コードビハインド。RAS で書き、フォームのコードモジュールにコンパイルする（§14.11.2）。無ければコードなしとして扱う |
-| `forms/<Name>.bas` | 以前の版のコードビハインド（VBA。コードペインの内容をそのまま UTF-8 で書いたもの）。`.ras` が無いときだけ読む。両方あれば `.ras` を使い、警告を出す。`ras form pull --force` で取り込み直すと `.ras` に置き換わる |
 | `forms/assets/` など | `Image` コントロールの画像（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）。置き場所は任意で、FormSpec からプロジェクトのルート基準の相対パスで参照する |
 
 ```json
@@ -1599,12 +1598,12 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 }
 ```
 
-* `kind` は `ras.userform`（`ras form new` が書く値）または `xlflow.userform`。xlflow の JSON 形式の FormSpec はそのまま使える（YAML 形式は対象外）。
+* `kind` は `ras.userform`。
 * 座標・サイズはポイント単位で、親コンテナー基準。`form.width` / `form.height` はクライアント領域（MS-OFORMS の `DisplayedSize`）。
 * `controls` は平らな配列で、入れ子は `parentId` で表す。コンテナーは `Frame`・`MultiPage`（子は `Page` のみ）・`Page`（親は `MultiPage` のみ）。`TabStrip` のタブは `tabs` 配列に書く。
 * 組み込みのコントロール: `Label`・`TextBox`・`ComboBox`・`ListBox`・`CommandButton`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`・`Image`・`Frame`・`MultiPage`・`Page`・`TabStrip`。
 * 共通のプロパティ（`left` / `top` / `width` / `height` / `tabIndex` / `zIndex` / `enabled` / `visible`）、種類ごとのプロパティ（`caption` / `text` / `value` / `selectedIndex` / `tabs` など）、見た目（`font` / `foreColor` / `backColor` / `textAlign` / `borderStyle` / `pictureAlignment` / `pictureSizeMode`）の詳細と適用できるコントロールは xlflow の [UserForm Specification](https://harumiweb.github.io/xlflow/reference/userform-spec) に従う。色は `{ "kind": "rgb", "value": "#203040" }`、`{ "kind": "system", "value": "buttonFace" }`、`{ "kind": "ole", "value": "0x8000000F" }` の形で書く。
-* 検査結果のコード（`UFY001`、`UFV001`〜`UFV021`）は xlflow と同じ意味を持つ。メッセージは日本語。`UFV022`（警告）は RAS だけのもので、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。
+* 検査結果のコードは `UFY001`（JSON の構文）と `UFV001`〜`UFV022`。メッセージは日本語。`UFV022`（警告）は、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。
 
 xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 
@@ -1700,7 +1699,7 @@ export function enteredName(): string {
 
 #### 14.11.4 書き込み（`ras pack`）
 
-1. デザイナストレージ（`<Name>/f`・`o`・`\x01CompObj`・`\x03VBFrame`、コンテナーごとの `i<ID>/` サブストレージ、`MultiPage` の `x`）を FormSpec から一から生成する。生成結果は xlflow の生成結果とバイト単位で一致する（`crates/ras-form/tests/golden.rs`）。
+1. デザイナストレージ（`<Name>/f`・`o`・`\x01CompObj`・`\x03VBFrame`、コンテナーごとの `i<ID>/` サブストレージ、`MultiPage` の `x`）を FormSpec から一から生成する。生成したフォームを読み戻して書き直すと同じデザイナストレージになること（`crates/ras-form/tests/fixtures.rs`）、全プロパティについて書いた値が読み戻せること（`crates/ras-form/src/scalars.rs` のテスト）を自動テストで確認している。実物の Excel との突き合わせには `tools/excel-check` を使う。
 2. コードモジュール `VBA/<Name>` を作る。新しいフォームには `VB_Base = "0{GUID}{GUID}"`（新しい 2 つの GUID）を含むフォーム用の属性ヘッダーを付け、既存のフォームはヘッダーを保持してコードだけを置き換える。
 3. コードの先頭行は目印の行 `' RAS-FORM forms/<Name>.form.json design=<ハッシュ> code=<ハッシュ>` とし、RAS が生成したフォームであることを表す。`design` はデザイナストレージ、`code` はその後ろに続くコードのハッシュ（16 進 16 桁）で、ライブ同期が変更の有無を判断するのに使う（§14.11.7）。目印の後ろにコードビハインドをコンパイルしたコードと、必要なら生成コード（§14.11.5）が続く。
 4. `PROJECT` ストリームに `BaseClass=<Name>` 行を加え、Microsoft Forms 2.0 Object Library（`MSForms`）の参照が無ければ `dir` ストリームに追加する。
@@ -1744,7 +1743,7 @@ End Sub
 * `list` の項目は文字列か、列ごとの文字列の配列（1〜10 列。`["001", "山田"]`）。複数の列を持つ項目は、`AddItem` で最初の列を、`.List(.ListCount - 1, <列>) = …` で残りの列を設定する（MSForms がセルに連動しないリストに `AddItem` / `List` で設定できるのは 10 列まで）。表示する列の数や幅は `columnCount` / `columnWidths` で指定する。
 * 項目を設定するプロシージャ `RAS_FormInit` を、モジュール末尾の RAS 管理領域（§14.6 と同じ `'--- RAS BEGIN ---` / `'--- RAS END ---`）に生成する。宣言部の後ろに置くので、コードビハインドの `Option Explicit` やモジュールレベルの宣言と干渉しない。
 * コードビハインドに `UserForm_Initialize` が無ければ、`RAS_FormInit` を呼ぶだけの `UserForm_Initialize` も管理領域に生成する。
-* コンパイルしたコードに `UserForm_Initialize`（`@on("UserForm.Initialize")` のハンドラや変数の初期化があると生成される）があれば、その先頭に `RAS_FormInit '--- RAS ---` の 1 行を挿入する。以前の版の VBA のコードビハインド（`.bas`）では、コードビハインドのどこかで `RAS_FormInit` を呼んでいる場合は、挿入も `UserForm_Initialize` の生成もしない（項目を設定する時点をコードビハインドが決められる）。
+* コンパイルしたコードに `UserForm_Initialize`（`@on("UserForm.Initialize")` のハンドラや変数の初期化があると生成される）があれば、その先頭に `RAS_FormInit '--- RAS ---` の 1 行を挿入する。
 * `selectedIndex` は `-1`（選択なし）か、`list` の範囲内の番号。`list` が無いコントロールでは `-1` 以外を指定できない（`UFV020`）。
 * `rowSource` を指定したコントロールには `list` を書けない（`UFV021`）。MSForms はセル範囲から項目を読むリストへの `AddItem` を拒むため。
 * 項目の文字列のうち、制御文字とコードページで表せない文字は `ChrW(n)` で出力する。
@@ -1755,11 +1754,10 @@ End Sub
 ブック（保存されているファイル）のフォームを読み、`forms/<Name>.form.json`・`forms/<Name>.ras` と画像ファイルを書き出す。Excel は使わない。VBE で作ったフォームを `forms/` の管理に移すとき、VBE でデザインを直したフォームを取り込み直すときに使う。
 
 * 名前を省略するとブックのすべてのフォームが対象。`forms/` に同名のファイルが既にあるフォームは書き出さない（`--force` で置き換える）。
-* **デザイン:** デザイナストレージを読み、xlflow の projection と同じ規則で FormSpec にする（`crates/ras-form/tests/snapshot.rs` で、Excel が保存したフォームについて xlflow の出力と一致することを確認している）。加えて、xlflow の projection が「表せないプロパティ」として扱うもののうち、生成側が書けるものを取り込む: `Tag` / `ControlTipText`（`tag` / `controlTipText`）、`GroupName`・`MaxLength`・`BorderColor`（`properties`）。キャプションが保存されていないコントロールは `caption: ""` とし、フォームのキャプションがフォームのレコードに無ければデザイナブロック（`VBFrame`）の `Caption` を使う。
+* **デザイン:** デザイナストレージを読み、FormSpec にする（xlflow の projection を移植し、生成側が書けるプロパティを取り込むよう広げたもの）。`Tag` / `ControlTipText`（`tag` / `controlTipText`）、`GroupName`・`MaxLength`・`BorderColor`（`properties`）も取り込む。Excel が保存したフォーム（`crates/ras-form/tests/data`）の読み取り結果は `crates/ras-form/tests/snapshot.rs` で確認している。キャプションが保存されていないコントロールは `caption: ""` とし、フォームのキャプションがフォームのレコードに無ければデザイナブロック（`VBFrame`）の `Caption` を使う。
 * **画像:** コントロールとフォームの画像（BMP / JPEG として保存されているもの）を `forms/assets/<Name>.<コントロール名>.bmp|jpg`（フォームのものは `forms/assets/<Name>.bmp|jpg`）に書き出し、`picture.path` で参照する。マウス アイコンは `forms/assets/<Name>[.<コントロール名>].mouseIcon.ico|cur` に書き出し、`mouseIcon.path` で参照する。Excel は JPEG を読み込んだ画像も BMP で保存するため、取り出した画像は多くの場合 BMP になる。書き込み時に変換された画像（PNG など）も、取り出すと変換後の BMP になる。
 * **コード:** コードモジュールから `Attribute` 行を除いた VBA を RAS に変換して `forms/<Name>.ras` に書く（下記）。RAS が書き込んだフォームの場合は、目印の行・RAS 管理領域・挿入した `RAS_FormInit` の呼び出しも除いてから変換する。
   * RAS が書き込んだフォーム（目印の行がある）で、`forms/<Name>.ras` が既にあるときは、コードビハインドを書き換えない（そのファイルからコンパイルしたコードなので）。デザインだけを取り込み直す。VBE でコードを編集しても取り込まれない。
-  * 以前の版の `forms/<Name>.bas` は、`.ras` を書いたときに削除する。
 * **VBA から RAS への変換:** 構文を読み替えて RAS を書く（`ras_compiler::vba2ras`）。
   * イベント プロシージャ `<コントロール>_<イベント>` は `@on("<コントロール>.<イベント>")` を付けた関数（名前は `btnOKClick` のように付ける）に、`Me` は `this` に、コントロールの参照は `this.<コントロール名>` にする。既定メンバーで使われているコントロール（`txtName = "x"`、`If chkAll Then`）と `MSForms.ReturnBoolean` などの引数（`Cancel = True`）は `.value` を補う。
   * ホストの関数・メンバーは RAS の綴り（`MsgBox` → `msgBox`、`.ListIndex` → `.listIndex`）、型は RAS の型（`Long` → `int`、`Integer` → `int`（イベントの引数は `short`）、`Range` → `Excel.Range`、`TextBox` → `MSForms.TextBox`）にする。
@@ -2052,7 +2050,7 @@ Rust で `vbaProject.bin` を**書き込める**ライブラリは見当たら�
 | 読み取り・テストの検証用 | `ovba`（Rust, 読み取り専用） | 書き出した `vbaProject.bin` を別実装で読み直す相互検証に使う（§14.9.3）。`calamine` の VBA 読み取り部も参考 |
 | 検証ツール | oletools（`olevba`, Python） | CI で出力ファイルを解析し、ソース・`dir` ストリームの整合を確認する |
 | OPC のパート構成 | 参考: XlsxWriter の `add_vba_project` | `[Content_Types].xml` とリレーションの書き方 |
-| ユーザーフォーム（§14.11） | xlflow（Go, MIT）の `internal/vba/userforms` を移植 | FormSpec・検査・MS-OFORMS デザイナストレージの生成と読み取り・画像（`StdPicture`）。テストは xlflow の出力との比較（生成はバイト単位、読み取りは FormSpec の JSON） |
+| ユーザーフォーム（§14.11） | xlflow（Go, MIT）の `internal/vba/userforms` を移植 | FormSpec・検査・MS-OFORMS デザイナストレージの生成と読み取り・画像（`StdPicture`）。xlflow との互換性は持たない（`kind` は `ras.userform` のみ） |
 | 仕様 | [MS-OVBA], [MS-CFB], [MS-VBAL], [MS-OFORMS] | 一次資料。実装はこれを正とする |
 
 ### 17.4 Windows 連携（ライブ同期 §14.1〜14.8、`ras typegen`）

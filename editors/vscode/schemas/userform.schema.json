@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "RAS UserForm FormSpec v1",
-  "description": "forms/<Name>.form.json — ユーザーフォームのデザイン（xlflow FormSpec v1 の JSON 形式）",
+  "description": "forms/<Name>.form.json — ユーザーフォームのデザイン（FormSpec v1）",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -15,10 +15,7 @@
       "const": 1
     },
     "kind": {
-      "enum": [
-        "ras.userform",
-        "xlflow.userform"
-      ]
+      "const": "ras.userform"
     },
     "basis": {
       "const": "designer"

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { applyOperations, copyControls } from "../../src/userForm/engine";
-import { bodyIndent, eventsForType, eventTarget, findHandler, findVbaHandler, handlerText, jsName, rasParams, vbaBodyIndent, vbaHandlerText } from "../../src/userForm/events";
+import { bodyIndent, eventsForType, eventTarget, findHandler, handlerText, jsName, rasParams } from "../../src/userForm/events";
 import { formatJson, minimalEdit } from "../../src/userForm/jsonSource";
 import { columnLayout, itemColumns, listToText, parseColumnWidths, textColumnIndex, textToList } from "../../src/userForm/listItems";
 import { designerDocument, toggleState } from "../../src/userForm/model";
@@ -428,9 +428,9 @@ describe("FormSpec validation and metadata", () => {
 		return parsed.spec.issues.map((i) => i.code).sort();
 	};
 
-	it("accepts new forms and both document kinds", () => {
+	it("accepts new forms and only the RAS document kind", () => {
 		assert.deepEqual(codes([]), []);
-		assert.deepEqual(codes([], { kind: "xlflow.userform" }), []);
+		assert.deepEqual(codes([], { kind: "xlflow.userform" }), ["UFV003"]);
 		assert.deepEqual(codes([], { kind: "other" }), ["UFV003"]);
 	});
 
@@ -590,15 +590,5 @@ describe("event handlers", () => {
 		assert.equal(jsName("RGB"), "rgb");
 		assert.equal(rasParams("Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)"), "byref cancel: short, byref closeMode: short");
 		assert.equal(rasParams("Private Sub B_Click()"), "");
-	});
-
-	it("still edits VBA code-behinds of earlier versions", () => {
-		const code = "Option Explicit\n\nPrivate Sub OkButton_Click()\n\tMsgBox 1\nEnd Sub\n";
-		assert.deepEqual(findVbaHandler(code, "okbutton", "click"), { line: 2, bodyLine: 3 });
-		assert.equal(findVbaHandler(code, "OkButton", "DblClick"), undefined);
-		assert.equal(vbaBodyIndent(code, "    "), "\t");
-		const appended = code + vbaHandlerText(code, "Private Sub UserForm_Initialize()", "\t", "\n");
-		assert.equal(appended.endsWith("\nEnd Sub\n\nPrivate Sub UserForm_Initialize()\n\t\nEnd Sub\n"), true);
-		assert.equal(vbaHandlerText("", "Private Sub A_B()", "    ", "\r\n"), "Private Sub A_B()\r\n    \r\nEnd Sub\r\n");
 	});
 });

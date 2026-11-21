@@ -1,0 +1,61 @@
+{
+  "pictures": [],
+  "spec": {
+    "basis": "designer",
+    "controls": [
+      {
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 204.00944881889762,
+        "id": "control_001",
+        "left": 11.990551181102362,
+        "name": "MultiMain",
+        "progId": "Forms.MultiPage.1",
+        "selectedIndex": -1,
+        "tabIndex": 0,
+        "top": 11.990551181102362,
+        "type": "MultiPage",
+        "visible": true,
+        "width": 263.9905511811024,
+        "zIndex": 0
+      },
+      {
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 47.99055118110236,
+        "id": "control_002",
+        "left": 11.990551181102362,
+        "name": "StripMain",
+        "progId": "Forms.TabStrip.1",
+        "selectedIndex": -1,
+        "tabIndex": 1,
+        "tabs": [],
+        "top": 205.99370078740156,
+        "type": "TabStrip",
+        "visible": true,
+        "width": 240.00944881889762,
+        "zIndex": 1
+      }
+    ],
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "caption": "UserForm1",
+      "height": 271.8141732283465,
+      "name": "MultiTopologyForm",
+      "width": 349.2
+    },
+    "kind": "ras.userform",
+    "schemaVersion": 1,
+    "warnings": []
+  }
+}

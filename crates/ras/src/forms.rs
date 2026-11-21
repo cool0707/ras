@@ -39,7 +39,7 @@ pub fn new_form(root: &Path, name: &str) -> Result<(PathBuf, PathBuf), String> {
     let dir = workspace::forms_dir(root);
     let spec_path = dir.join(format!("{name}.form.json"));
     let code_path = dir.join(format!("{name}.ras"));
-    for path in [&spec_path, &code_path, &dir.join(format!("{name}.bas"))] {
+    for path in [&spec_path, &code_path] {
         if path.exists() {
             return Err(format!("{} は既に存在します", path.display()));
         }

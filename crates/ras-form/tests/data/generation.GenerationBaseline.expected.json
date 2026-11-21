@@ -1,0 +1,253 @@
+{
+  "pictures": [],
+  "spec": {
+    "basis": "designer",
+    "controls": [
+      {
+        "caption": "",
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 18.0,
+        "id": "control_001",
+        "left": 6.009448818897638,
+        "name": "LabelMain",
+        "progId": "Forms.Label.1",
+        "tabIndex": 0,
+        "top": 6.009448818897638,
+        "type": "Label",
+        "visible": true,
+        "width": 72.0,
+        "zIndex": 0
+      },
+      {
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 18.0,
+        "id": "control_002",
+        "left": 114.00944881889764,
+        "name": "TextBoxMain",
+        "progId": "Forms.TextBox.1",
+        "tabIndex": 1,
+        "top": 6.009448818897638,
+        "type": "TextBox",
+        "visible": true,
+        "width": 119.99055118110236,
+        "zIndex": 1
+      },
+      {
+        "caption": "",
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 24.00944881889764,
+        "id": "control_003",
+        "left": 6.009448818897638,
+        "name": "CommandButtonMain",
+        "progId": "Forms.CommandButton.1",
+        "tabIndex": 2,
+        "top": 29.99055118110236,
+        "type": "CommandButton",
+        "visible": true,
+        "width": 72.0,
+        "zIndex": 2
+      },
+      {
+        "backColor": {
+          "kind": "system",
+          "value": "buttonFace"
+        },
+        "caption": "",
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "foreColor": {
+          "kind": "system",
+          "value": "buttonText"
+        },
+        "height": 18.0,
+        "id": "control_004",
+        "left": 114.00944881889764,
+        "name": "CheckBoxMain",
+        "progId": "Forms.CheckBox.1",
+        "tabIndex": 3,
+        "top": 29.99055118110236,
+        "type": "CheckBox",
+        "value": "False",
+        "visible": true,
+        "width": 72.0,
+        "zIndex": 3
+      },
+      {
+        "backColor": {
+          "kind": "system",
+          "value": "buttonFace"
+        },
+        "caption": "",
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "foreColor": {
+          "kind": "system",
+          "value": "buttonText"
+        },
+        "height": 18.0,
+        "id": "control_005",
+        "left": 6.009448818897638,
+        "name": "OptionButtonMain",
+        "progId": "Forms.OptionButton.1",
+        "tabIndex": 4,
+        "top": 54.0,
+        "type": "OptionButton",
+        "value": "False",
+        "visible": true,
+        "width": 72.0,
+        "zIndex": 4
+      },
+      {
+        "backColor": {
+          "kind": "system",
+          "value": "buttonFace"
+        },
+        "caption": "",
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "foreColor": {
+          "kind": "system",
+          "value": "buttonText"
+        },
+        "height": 18.0,
+        "id": "control_006",
+        "left": 114.00944881889764,
+        "name": "ToggleButtonMain",
+        "progId": "Forms.ToggleButton.1",
+        "tabIndex": 5,
+        "textAlign": 2,
+        "top": 54.0,
+        "type": "ToggleButton",
+        "value": "False",
+        "visible": true,
+        "width": 72.0,
+        "zIndex": 5
+      },
+      {
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 18.0,
+        "id": "control_007",
+        "left": 6.009448818897638,
+        "name": "ComboBoxMain",
+        "progId": "Forms.ComboBox.1",
+        "tabIndex": 6,
+        "top": 78.00944881889764,
+        "type": "ComboBox",
+        "visible": true,
+        "width": 119.99055118110236,
+        "zIndex": 6
+      },
+      {
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 72.0,
+        "id": "control_008",
+        "left": 6.009448818897638,
+        "name": "ListBoxMain",
+        "progId": "Forms.ListBox.1",
+        "tabIndex": 7,
+        "top": 101.99055118110236,
+        "type": "ListBox",
+        "visible": true,
+        "width": 119.99055118110236,
+        "zIndex": 7
+      },
+      {
+        "enabled": true,
+        "height": 36.0,
+        "id": "control_009",
+        "left": 216.0,
+        "name": "SpinButtonMain",
+        "progId": "Forms.SpinButton.1",
+        "tabIndex": 8,
+        "top": 6.009448818897638,
+        "type": "SpinButton",
+        "visible": true,
+        "width": 18.0,
+        "zIndex": 8
+      },
+      {
+        "enabled": true,
+        "height": 18.0,
+        "id": "control_010",
+        "left": 114.00944881889764,
+        "name": "ScrollBarMain",
+        "progId": "Forms.ScrollBar.1",
+        "tabIndex": 9,
+        "top": 78.00944881889764,
+        "type": "ScrollBar",
+        "visible": true,
+        "width": 119.99055118110236,
+        "zIndex": 9
+      },
+      {
+        "enabled": true,
+        "height": 72.0,
+        "id": "control_011",
+        "left": 162.0,
+        "name": "ImageMain",
+        "progId": "Forms.Image.1",
+        "tabIndex": 10,
+        "top": 108.0,
+        "type": "Image",
+        "visible": true,
+        "width": 72.0,
+        "zIndex": 10
+      }
+    ],
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "caption": "issue883-generation-baseline",
+      "height": 151.79527559055117,
+      "name": "GenerationBaseline",
+      "width": 229.20944881889764
+    },
+    "kind": "ras.userform",
+    "schemaVersion": 1,
+    "warnings": []
+  }
+}

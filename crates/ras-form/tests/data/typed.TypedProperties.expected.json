@@ -1,0 +1,495 @@
+{
+  "pictures": [
+    {
+      "control": "ImageTyped",
+      "format": "bmp",
+      "height": 1,
+      "property": "picture",
+      "size": 58,
+      "width": 1
+    }
+  ],
+  "spec": {
+    "basis": "designer",
+    "controls": [
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "borderStyle": 1,
+        "caption": "LabelTyped",
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_001",
+        "left": 7.993700787401575,
+        "name": "LabelTyped",
+        "progId": "Forms.Label.1",
+        "tabIndex": 0,
+        "textAlign": 2,
+        "top": 7.993700787401575,
+        "type": "Label",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 0
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "borderStyle": 1,
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_002",
+        "left": 92.01259842519686,
+        "name": "TextBoxTyped",
+        "progId": "Forms.TextBox.1",
+        "tabIndex": 1,
+        "textAlign": 2,
+        "top": 7.993700787401575,
+        "type": "TextBox",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 1
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "borderStyle": 1,
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_003",
+        "left": 176.00314960629922,
+        "matchEntry": 2,
+        "name": "ComboBoxTyped",
+        "progId": "Forms.ComboBox.1",
+        "showDropButtonWhen": 0,
+        "tabIndex": 2,
+        "textAlign": 2,
+        "top": 7.993700787401575,
+        "type": "ComboBox",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 2
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "caption": "CommandButtonTyped",
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_004",
+        "left": 7.993700787401575,
+        "name": "CommandButtonTyped",
+        "progId": "Forms.CommandButton.1",
+        "tabIndex": 4,
+        "top": 53.00787401574803,
+        "type": "CommandButton",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 3
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "caption": "CheckBoxTyped",
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_005",
+        "left": 92.01259842519686,
+        "name": "CheckBoxTyped",
+        "progId": "Forms.CheckBox.1",
+        "tabIndex": 5,
+        "textAlign": 2,
+        "top": 53.00787401574803,
+        "type": "CheckBox",
+        "value": "False",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 4
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "caption": "OptionButtonTyped",
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_006",
+        "left": 176.00314960629922,
+        "name": "OptionButtonTyped",
+        "progId": "Forms.OptionButton.1",
+        "tabIndex": 6,
+        "textAlign": 2,
+        "top": 53.00787401574803,
+        "type": "OptionButton",
+        "value": "False",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 5
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "caption": "ToggleButtonTyped",
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_007",
+        "left": 259.99370078740156,
+        "name": "ToggleButtonTyped",
+        "progId": "Forms.ToggleButton.1",
+        "tabIndex": 7,
+        "textAlign": 2,
+        "top": 53.00787401574803,
+        "type": "ToggleButton",
+        "value": "False",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 6
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "enabled": true,
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_008",
+        "left": 7.993700787401575,
+        "name": "SpinButtonTyped",
+        "progId": "Forms.SpinButton.1",
+        "tabIndex": 8,
+        "top": 97.99370078740158,
+        "type": "SpinButton",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 7
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "enabled": true,
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_009",
+        "left": 92.01259842519686,
+        "name": "ScrollBarTyped",
+        "progId": "Forms.ScrollBar.1",
+        "tabIndex": 9,
+        "top": 97.99370078740158,
+        "type": "ScrollBar",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 8
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "enabled": true,
+        "height": 35.00787401574803,
+        "id": "control_010",
+        "left": 176.00314960629922,
+        "name": "ImageTyped",
+        "pictureAlignment": 4,
+        "pictureSizeMode": 3,
+        "progId": "Forms.Image.1",
+        "tabIndex": 10,
+        "top": 97.99370078740158,
+        "type": "Image",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 9
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "borderStyle": 1,
+        "caption": "FrameTyped",
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_011",
+        "left": 259.99370078740156,
+        "name": "FrameTyped",
+        "progId": "Forms.Frame.1",
+        "tabIndex": 11,
+        "top": 97.99370078740158,
+        "type": "Frame",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 10
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_012",
+        "left": 7.993700787401575,
+        "name": "MultiPageTyped",
+        "progId": "Forms.MultiPage.1",
+        "selectedIndex": 0,
+        "tabIndex": 12,
+        "top": 143.00787401574803,
+        "type": "MultiPage",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 11
+      },
+      {
+        "caption": "Page",
+        "enabled": true,
+        "id": "control_013",
+        "name": "PageTyped",
+        "parentId": "control_012",
+        "progId": "Forms.Page.1",
+        "tabIndex": 0,
+        "type": "Page",
+        "visible": true,
+        "zIndex": 0
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_014",
+        "left": 176.00314960629922,
+        "name": "TabStripTyped",
+        "progId": "Forms.TabStrip.1",
+        "selectedIndex": 0,
+        "tabIndex": 13,
+        "tabs": [
+          {
+            "accelerator": "",
+            "caption": "One",
+            "controlTipText": "",
+            "enabled": true,
+            "name": "TabOne",
+            "tag": "",
+            "visible": true
+          }
+        ],
+        "top": 143.00787401574803,
+        "type": "TabStrip",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 12
+      },
+      {
+        "backColor": {
+          "kind": "rgb",
+          "value": "#DDEEFF"
+        },
+        "borderStyle": 1,
+        "enabled": true,
+        "font": {
+          "bold": true,
+          "charset": 128,
+          "italic": true,
+          "name": "Tahoma",
+          "size": 12.5,
+          "strikeThrough": true,
+          "underline": true
+        },
+        "foreColor": {
+          "kind": "rgb",
+          "value": "#123456"
+        },
+        "height": 35.00787401574803,
+        "id": "control_015",
+        "left": 259.99370078740156,
+        "matchEntry": 2,
+        "name": "ListBoxTyped",
+        "progId": "Forms.ListBox.1",
+        "tabIndex": 3,
+        "textAlign": 2,
+        "top": 7.993700787401575,
+        "type": "ListBox",
+        "visible": true,
+        "width": 75.99685039370078,
+        "zIndex": 13
+      }
+    ],
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "borderStyle": 1,
+      "caption": "Typed properties",
+      "font": {
+        "bold": true,
+        "charset": 128,
+        "italic": false,
+        "name": "Tahoma",
+        "size": 9.5,
+        "strikeThrough": false,
+        "underline": false
+      },
+      "foreColor": {
+        "kind": "system",
+        "value": "windowText"
+      },
+      "height": 230.00314960629922,
+      "name": "TypedProperties",
+      "width": 360.0
+    },
+    "kind": "ras.userform",
+    "schemaVersion": 1,
+    "warnings": []
+  }
+}

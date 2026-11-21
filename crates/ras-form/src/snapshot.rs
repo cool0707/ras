@@ -414,7 +414,7 @@ fn spec_font(font: Option<reader::Font>) -> Option<FormSpecFont> {
         underline: font.underline,
         strike_through: font.strike_through,
         charset: font.charset,
-        // xlflow's projection has no pitch; `snapshot` adds it (carry_over).
+        // Added by `carry_over` where Excel stored one.
         pitch_and_family: None,
     })
 }
@@ -625,8 +625,6 @@ struct Projection {
     pictures: Vec<SnapshotPicture>,
     next_id: usize,
     unnamed: usize,
-    /// Carry over what the generator can write and extract pictures.
-    extras: bool,
 }
 
 fn unsupported_warning(control: &str, unsupported: &[String]) -> SnapshotWarning {
@@ -858,8 +856,9 @@ impl Projection {
                     )));
                 };
                 control.caption = Some(tab.caption.clone());
-                control.control_tip_text = Some(tab.control_tip_text.clone());
-                control.accelerator = Some(tab.accelerator.clone());
+                // No tip or accelerator is stored as an empty string: as for the other controls, none.
+                control.control_tip_text = Some(tab.control_tip_text.clone()).filter(|s| !s.is_empty());
+                control.accelerator = Some(tab.accelerator.clone()).filter(|s| !s.is_empty());
                 control.enabled = Some(tab.enabled);
                 control.visible = Some(tab.visible);
                 if let Some(tag) = source.site.strings.get("Tag") {
@@ -903,9 +902,7 @@ impl Projection {
             }
             unsupported.sort();
             unsupported.dedup();
-            if self.extras {
-                self.carry_over(source, &mut control, &mut unsupported);
-            }
+            self.carry_over(source, &mut control, &mut unsupported);
             if !unsupported.is_empty() {
                 self.warnings
                     .push(unsupported_warning(&control.name, &unsupported));
@@ -1021,13 +1018,17 @@ fn project_form_scalars(record: &Record, lines: &[(String, String)], form: &mut 
     }
 }
 
-fn snapshot_with(
+/// Turns the designer storage of the form `name` into a FormSpec.
+///
+/// `streams` and `storages` are keyed by their path below the form storage,
+/// as in [`crate::Designer`] and `ras_ovba::UserForm`; `codepage` is the
+/// code page of the project the form comes from.
+pub fn snapshot(
     name: &str,
     streams: &BTreeMap<String, Vec<u8>>,
     storages: &BTreeMap<String, [u8; 16]>,
-    codepage: Option<u16>,
+    codepage: u16,
 ) -> Result<Snapshot, SnapshotError> {
-    let extras = codepage.is_some();
     let form = reader::read_form(streams, storages).map_err(SnapshotError::Read)?;
     let record = &form.root.record;
     let mut spec = FormSpec {
@@ -1045,19 +1046,17 @@ fn snapshot_with(
     spec.form.fore_color = record.value("ForeColor").map(color);
     spec.form.border_style = record.value("BorderStyle");
     spec.form.caption = record.text("Caption").map(str::to_string);
-    let lines = codepage.map(|codepage| frame_lines(streams, codepage)).unwrap_or_default();
-    if let (None, Some(_)) = (&spec.form.caption, codepage) {
+    let lines = frame_lines(streams, codepage);
+    if spec.form.caption.is_none() {
         // Without a caption in the form record the form shows the one of
         // its designer block; without that one, none.
         spec.form.caption = Some(frame_caption(&lines).unwrap_or_default());
     }
-    if extras {
-        project_form_scalars(record, &lines, &mut spec.form);
-        if let (Ok(Some(font)), Some(target)) = (reader::level_font(&form.root), spec.form.font.as_mut()) {
-            target.pitch_and_family = font.pitch_and_family;
-            if !font.weight_stored && target.bold == Some(false) {
-                target.bold = None;
-            }
+    project_form_scalars(record, &lines, &mut spec.form);
+    if let (Ok(Some(font)), Some(target)) = (reader::level_font(&form.root), spec.form.font.as_mut()) {
+        target.pitch_and_family = font.pitch_and_family;
+        if !font.weight_stored && target.bold == Some(false) {
+            target.bold = None;
         }
     }
     if let Some((width, height)) = record.sizes.get("DisplayedSize") {
@@ -1071,51 +1070,46 @@ fn snapshot_with(
         pictures: Vec::new(),
         next_id: 0,
         unnamed: 0,
-        extras,
     };
     let mut projected = vec!["Caption", "DisplayedSize", "BackColor", "ForeColor", "BorderStyle"];
     if is_default_boolean_properties("Form", record.value("BooleanProperties").unwrap_or(0)) {
         projected.push("BooleanProperties");
     }
-    if extras {
-        // The plain properties of the form; of BooleanProperties only Enabled (and the
-        // design-extender flag, which generation leaves out) is known.
-        for p in scalars::FORM_SCALARS {
-            match p.store {
-                Store::Field(name) | Store::Extent(name, _) => projected.push(name),
-                Store::FieldBits("BooleanProperties", ..) => {
-                    if record.value("BooleanProperties").unwrap_or(4) & !(4 | 0x4000) == 0 {
-                        projected.push("BooleanProperties");
-                    }
+    // The plain properties of the form; of BooleanProperties only Enabled (and the
+    // design-extender flag, which generation leaves out) is known.
+    for p in scalars::FORM_SCALARS {
+        match p.store {
+            Store::Field(name) | Store::Extent(name, _) => projected.push(name),
+            Store::FieldBits("BooleanProperties", ..) => {
+                if record.value("BooleanProperties").unwrap_or(4) & !(4 | 0x4000) == 0 {
+                    projected.push("BooleanProperties");
                 }
-                Store::FieldBits(name, ..) => projected.push(name),
-                _ => {}
             }
+            Store::FieldBits(name, ..) => projected.push(name),
+            _ => {}
         }
     }
     let mut unsupported = unsupported_record_properties(record, &projected);
     unsupported.extend(unsupported_level_properties(Some(&form.root)));
     unsupported.sort();
     unsupported.dedup();
-    if extras {
-        // The form's background picture and mouse icon.
-        for (field, raw) in [("picture", &form.root.picture), ("mouseIcon", &form.root.mouse_icon)] {
-            let Some(raw) = raw else { continue };
-            match picture::decode(raw) {
-                Ok(picture) => {
-                    unsupported.retain(|u| u != field);
-                    projection.pictures.push(SnapshotPicture {
-                        control_index: None,
-                        property: field,
-                        picture,
-                    });
-                }
-                Err(reason) => projection.warnings.push(SnapshotWarning {
-                    code: "unsupported_picture_resource",
-                    control: String::new(),
-                    message: format!("フォームの {field} の画像を取り出せませんでした（{reason}）"),
-                }),
+    // The form's background picture and mouse icon.
+    for (field, raw) in [("picture", &form.root.picture), ("mouseIcon", &form.root.mouse_icon)] {
+        let Some(raw) = raw else { continue };
+        match picture::decode(raw) {
+            Ok(picture) => {
+                unsupported.retain(|u| u != field);
+                projection.pictures.push(SnapshotPicture {
+                    control_index: None,
+                    property: field,
+                    picture,
+                });
             }
+            Err(reason) => projection.warnings.push(SnapshotWarning {
+                code: "unsupported_picture_resource",
+                control: String::new(),
+                message: format!("フォームの {field} の画像を取り出せませんでした（{reason}）"),
+            }),
         }
     }
 
@@ -1145,32 +1139,6 @@ fn snapshot_with(
         pictures: projection.pictures,
         warnings: projection.warnings,
     })
-}
-
-/// Turns the designer storage of the form `name` into a FormSpec.
-///
-/// `streams` and `storages` are keyed by their path below the form storage,
-/// as in [`crate::Designer`] and `ras_ovba::UserForm`; `codepage` is the
-/// code page of the project the form comes from.
-pub fn snapshot(
-    name: &str,
-    streams: &BTreeMap<String, Vec<u8>>,
-    storages: &BTreeMap<String, [u8; 16]>,
-    codepage: u16,
-) -> Result<Snapshot, SnapshotError> {
-    snapshot_with(name, streams, storages, Some(codepage))
-}
-
-/// xlflow's projection without the additions of [`snapshot`]; the result is
-/// what xlflow produces for the same storage (apart from `kind` and the
-/// language of the warnings). For comparing against xlflow.
-#[doc(hidden)]
-pub fn project(
-    name: &str,
-    streams: &BTreeMap<String, Vec<u8>>,
-    storages: &BTreeMap<String, [u8; 16]>,
-) -> Result<Snapshot, SnapshotError> {
-    snapshot_with(name, streams, storages, None)
 }
 
 #[cfg(test)]

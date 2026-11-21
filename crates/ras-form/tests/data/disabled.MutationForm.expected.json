@@ -1,0 +1,242 @@
+{
+  "pictures": [],
+  "spec": {
+    "basis": "designer",
+    "controls": [
+      {
+        "caption": "before-Label",
+        "enabled": false,
+        "font": {
+          "charset": 128,
+          "italic": false,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0,
+          "strikeThrough": false,
+          "underline": false
+        },
+        "height": 36.0,
+        "id": "control_001",
+        "left": 11.990551181102362,
+        "name": "LabelMain",
+        "progId": "Forms.Label.1",
+        "tabIndex": 0,
+        "top": 11.990551181102362,
+        "type": "Label",
+        "visible": true,
+        "width": 144.0,
+        "zIndex": 0
+      },
+      {
+        "enabled": false,
+        "font": {
+          "charset": 128,
+          "italic": false,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0,
+          "strikeThrough": false,
+          "underline": false
+        },
+        "height": 36.0,
+        "id": "control_002",
+        "left": 172.00629921259844,
+        "name": "TextMain",
+        "progId": "Forms.TextBox.1",
+        "tabIndex": 1,
+        "text": "before-TextBox",
+        "top": 11.990551181102362,
+        "type": "TextBox",
+        "value": "before-TextBox",
+        "visible": true,
+        "width": 144.0,
+        "zIndex": 1
+      },
+      {
+        "caption": "before-CommandButton",
+        "enabled": false,
+        "font": {
+          "charset": 128,
+          "italic": false,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0,
+          "strikeThrough": false,
+          "underline": false
+        },
+        "height": 36.0,
+        "id": "control_003",
+        "left": 11.990551181102362,
+        "name": "ButtonMain",
+        "progId": "Forms.CommandButton.1",
+        "tabIndex": 2,
+        "top": 65.99055118110236,
+        "type": "CommandButton",
+        "visible": true,
+        "width": 144.0,
+        "zIndex": 2
+      },
+      {
+        "backColor": {
+          "kind": "system",
+          "value": "buttonFace"
+        },
+        "caption": "before-CheckBox",
+        "enabled": false,
+        "font": {
+          "charset": 128,
+          "italic": false,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0,
+          "strikeThrough": false,
+          "underline": false
+        },
+        "foreColor": {
+          "kind": "system",
+          "value": "buttonText"
+        },
+        "height": 36.0,
+        "id": "control_004",
+        "left": 172.00629921259844,
+        "name": "CheckMain",
+        "progId": "Forms.CheckBox.1",
+        "tabIndex": 3,
+        "top": 65.99055118110236,
+        "type": "CheckBox",
+        "value": "False",
+        "visible": true,
+        "width": 144.0,
+        "zIndex": 3
+      },
+      {
+        "backColor": {
+          "kind": "system",
+          "value": "buttonFace"
+        },
+        "caption": "before-OptionButton",
+        "enabled": false,
+        "font": {
+          "charset": 128,
+          "italic": false,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0,
+          "strikeThrough": false,
+          "underline": false
+        },
+        "foreColor": {
+          "kind": "system",
+          "value": "buttonText"
+        },
+        "height": 36.0,
+        "id": "control_005",
+        "left": 11.990551181102362,
+        "name": "OptionMain",
+        "progId": "Forms.OptionButton.1",
+        "tabIndex": 4,
+        "top": 119.99055118110236,
+        "type": "OptionButton",
+        "value": "False",
+        "visible": true,
+        "width": 144.0,
+        "zIndex": 4
+      },
+      {
+        "enabled": false,
+        "font": {
+          "charset": 128,
+          "italic": false,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0,
+          "strikeThrough": false,
+          "underline": false
+        },
+        "height": 36.0,
+        "id": "control_006",
+        "left": 172.00629921259844,
+        "name": "ComboMain",
+        "progId": "Forms.ComboBox.1",
+        "tabIndex": 5,
+        "top": 119.99055118110236,
+        "type": "ComboBox",
+        "value": "beta",
+        "visible": true,
+        "width": 144.0,
+        "zIndex": 5
+      },
+      {
+        "caption": "before-Frame",
+        "enabled": false,
+        "height": 36.0,
+        "id": "control_007",
+        "left": 172.00629921259844,
+        "name": "FrameMain",
+        "progId": "Forms.Frame.1",
+        "tabIndex": 7,
+        "top": 173.99055118110238,
+        "type": "Frame",
+        "visible": true,
+        "width": 144.0,
+        "zIndex": 6
+      },
+      {
+        "enabled": false,
+        "font": {
+          "charset": 128,
+          "italic": false,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0,
+          "strikeThrough": false,
+          "underline": false
+        },
+        "height": 18.0,
+        "id": "control_008",
+        "left": 6.009448818897638,
+        "name": "NestedText",
+        "parentId": "control_007",
+        "progId": "Forms.TextBox.1",
+        "tabIndex": 0,
+        "text": "before-NestedText",
+        "top": 11.990551181102362,
+        "type": "TextBox",
+        "value": "before-NestedText",
+        "visible": true,
+        "width": 96.00944881889764,
+        "zIndex": 0
+      },
+      {
+        "enabled": false,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 29.87716535433071,
+        "id": "control_009",
+        "left": 11.990551181102362,
+        "name": "ListMain",
+        "progId": "Forms.ListBox.1",
+        "tabIndex": 6,
+        "top": 173.99055118110238,
+        "type": "ListBox",
+        "visible": true,
+        "width": 144.0,
+        "zIndex": 7
+      }
+    ],
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "caption": "issue882-before",
+      "height": 271.8141732283465,
+      "name": "MutationForm",
+      "width": 349.2
+    },
+    "kind": "ras.userform",
+    "schemaVersion": 1,
+    "warnings": []
+  }
+}

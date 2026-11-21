@@ -8,10 +8,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// `kind` written for new RAS forms.
+/// `kind` of a FormSpec.
 pub const KIND: &str = "ras.userform";
-/// `kind` of xlflow's FormSpec, accepted as well.
-pub const XLFLOW_KIND: &str = "xlflow.userform";
 
 /// A whole FormSpec document.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -19,7 +17,7 @@ pub const XLFLOW_KIND: &str = "xlflow.userform";
 pub struct FormSpec {
     /// Always `1`.
     pub schema_version: i64,
-    /// `ras.userform` or `xlflow.userform`.
+    /// Always `ras.userform`.
     pub kind: String,
     /// Always `designer`.
     pub basis: String,
@@ -345,13 +343,9 @@ const SYSTEM_COLORS: &[(&str, u32)] = &[
     ("menuBar", 30),
 ];
 
-/// Names of the system colors accepted by `{kind: "system"}`.
-pub fn system_color_names() -> impl Iterator<Item = &'static str> {
-    SYSTEM_COLORS.iter().map(|(name, _)| *name)
-}
-
 impl FormSpecColor {
-    /// The color spelled the way xlflow projects an OLE color.
+    /// An OLE color as a FormSpec color: a system color by name, a plain color as `#RRGGBB`,
+    /// anything else as its hex value.
     pub fn from_ole(value: u32) -> FormSpecColor {
         if value & 0xffff_ff00 == 0x8000_0000 {
             if let Some((name, _)) = SYSTEM_COLORS

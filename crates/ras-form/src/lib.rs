@@ -1,18 +1,16 @@
 //! User forms described as data (RAS language specification §14.11).
 //!
 //! A user form lives next to `ras.toml` as `forms/<Name>.form.json` — a
-//! FormSpec version 1 document as defined by
-//! [xlflow](https://github.com/harumiWeb/xlflow) (JSON form; `kind` is
-//! `ras.userform` or `xlflow.userform`) — with its code-behind in
-//! `forms/<Name>.ras` (RAS, compiled by `ras-compiler`; a VBA
-//! `forms/<Name>.bas` of earlier versions is still read). This crate
+//! FormSpec version 1 document (`kind` `ras.userform`; the format of
+//! [xlflow](https://github.com/harumiWeb/xlflow)'s FormSpec, extended) — with
+//! its code-behind in `forms/<Name>.ras` (RAS, compiled by `ras-compiler`).
+//! This crate
 //!
 //! * parses and validates a FormSpec ([`parse`]; diagnostics `UFY001`,
-//!   `UFV001`–`UFV021` with the meaning they have in xlflow),
+//!   `UFV001`–`UFV022`),
 //! * generates the MS-OFORMS designer storage of the form from scratch
-//!   ([`compile`], [`compile_in`]), byte for byte what xlflow's pure-Go
-//!   compiler writes, so that `ras pack` can store the form in a workbook
-//!   without Excel,
+//!   ([`compile`], [`compile_in`]), so that `ras pack` can store the form in
+//!   a workbook without Excel,
 //! * reads the designer storage of an existing form back into a FormSpec
 //!   ([`snapshot`]), and
 //! * handles the files of a project ([`workspace`]) and the code module of a
@@ -45,8 +43,6 @@ pub mod workspace;
 pub use compile::CompileError;
 pub use oforms::Designer;
 pub use reader::ReadError;
-#[doc(hidden)]
-pub use snapshot::project;
 pub use snapshot::{
     snapshot, Snapshot, SnapshotError, SnapshotPicture, SnapshotWarning, PLACEHOLDER_TYPE,
 };

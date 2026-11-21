@@ -1,0 +1,17 @@
+{
+  "pictures": [],
+  "spec": {
+    "basis": "designer",
+    "controls": [],
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "caption": "issue883-empty-form",
+      "height": 151.79527559055117,
+      "name": "EmptyForm",
+      "width": 229.20944881889764
+    },
+    "kind": "ras.userform",
+    "schemaVersion": 1,
+    "warnings": []
+  }
+}

@@ -21,9 +21,6 @@ fn minimal_and_new_form_are_valid() {
     assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
     let spec = parsed.spec.unwrap();
     assert_eq!(spec.form.width, Some(240.0));
-    // xlflow's kind is accepted as well.
-    let xlflow = doc(r#"{"name":"F"}"#, "[]").replace("ras.userform", "xlflow.userform");
-    assert!(codes(&xlflow).is_empty());
 }
 
 #[test]

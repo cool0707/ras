@@ -1,5 +1,5 @@
-//! Reading existing forms: the projection against xlflow's, the round trip
-//! through generation, and `workspace::pull`.
+//! Reading existing forms: forms saved by Excel, the round trip through
+//! generation, and `workspace::pull`.
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -25,23 +25,18 @@ fn form(label: &str, name: &str) -> UserForm {
         .unwrap_or_else(|| panic!("{label}.bin has no form {name}"))
 }
 
-/// `(label, form name, golden)` for every `<label>.<Form>.projected.json`.
-fn goldens() -> Vec<(String, String, Value)> {
+/// `(label, form name)` of every form of `tests/data/*.bin` with a `<label>.<Form>.expected.json`.
+fn excel_forms() -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let mut paths: Vec<_> = std::fs::read_dir(data_dir())
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.to_string_lossy().ends_with(".projected.json"))
-        .collect();
-    paths.sort();
-    for path in paths {
-        let file = path.file_name().unwrap().to_string_lossy().to_string();
-        let mut parts = file.split('.');
-        let (label, name) = (parts.next().unwrap(), parts.next().unwrap());
-        let golden = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        out.push((label.to_string(), name.to_string(), golden));
+    for entry in std::fs::read_dir(data_dir()).unwrap() {
+        let file = entry.unwrap().file_name().to_string_lossy().to_string();
+        if let Some(stem) = file.strip_suffix(".expected.json") {
+            let (label, name) = stem.split_once('.').unwrap();
+            out.push((label.to_string(), name.to_string()));
+        }
     }
-    assert!(out.len() >= 9, "projection goldens missing");
+    out.sort();
+    assert!(out.len() >= 9, "expected readings missing");
     out
 }
 
@@ -72,55 +67,46 @@ fn difference(path: &str, expected: &Value, actual: &Value) -> Option<String> {
     }
 }
 
-/// The warnings of a spec as `(code, control)` — the messages are in a
-/// different language.
-fn warning_keys(spec: &mut Value) -> Vec<(String, String)> {
-    let warnings = spec
-        .as_object_mut()
-        .unwrap()
-        .remove("warnings")
-        .unwrap_or(Value::Array(Vec::new()));
-    warnings
-        .as_array()
-        .unwrap()
+/// What `snapshot` makes of a form saved by Excel: the FormSpec, with its warnings, and the pictures.
+fn reading(label: &str, name: &str) -> Value {
+    let source = form(label, name);
+    let snapshot = ras_form::snapshot(name, &source.streams, &source.storages, 932)
+        .unwrap_or_else(|e| panic!("{label}.{name}: {e}"));
+    let pictures: Vec<Value> = snapshot
+        .pictures
         .iter()
-        .map(|w| {
-            (
-                w["code"].as_str().unwrap().to_string(),
-                w.get("control").and_then(Value::as_str).unwrap_or("").to_string(),
-            )
+        .map(|p| {
+            let control = p.control_index.map(|i| snapshot.spec.controls[i].name.clone()).unwrap_or_default();
+            serde_json::json!({
+                "control": control, "property": p.property, "format": p.picture.format.extension(),
+                "size": p.picture.data.len(), "width": p.picture.width, "height": p.picture.height,
+            })
         })
-        .collect()
+        .collect();
+    serde_json::json!({ "spec": serde_json::to_value(&snapshot.spec).unwrap(), "pictures": pictures })
 }
 
+/// The forms saved by Excel (`tests/data/*.bin`) are read as `<label>.<Form>.expected.json` says.
+/// With `RAS_UPDATE_EXPECTED=1` the files are written instead (check the change with `git diff`).
 #[test]
-fn projection_matches_xlflow() {
+fn forms_saved_by_excel_are_read_as_expected() {
+    let update = std::env::var_os("RAS_UPDATE_EXPECTED").is_some();
     let mut failures = Vec::new();
-    for (label, name, golden) in goldens() {
-        let source = form(&label, &name);
-        let projected = match ras_form::project(&name, &source.streams, &source.storages) {
-            Ok(snapshot) => snapshot,
-            Err(e) => {
-                failures.push(format!("{label}.{name}: {e}"));
-                continue;
-            }
-        };
-        let mut expected = golden["spec"].clone();
-        expected["kind"] = Value::from("ras.userform");
-        let mut actual = serde_json::to_value(&projected.spec).unwrap();
-        let (expected_warnings, actual_warnings) =
-            (warning_keys(&mut expected), warning_keys(&mut actual));
-        if let Some(diff) = difference("spec", &expected, &actual) {
-            failures.push(format!("{label}.{name}: {diff}"));
+    for (label, name) in excel_forms() {
+        let actual = reading(&label, &name);
+        let path = data_dir().join(format!("{label}.{name}.expected.json"));
+        if update {
+            std::fs::write(&path, serde_json::to_string_pretty(&actual).unwrap() + "\n").unwrap();
+            continue;
         }
-        if expected_warnings != actual_warnings {
-            failures.push(format!(
-                "{label}.{name}: warnings {actual_warnings:?}, expected {expected_warnings:?}"
-            ));
+        let expected: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        if let Some(diff) = difference(&format!("{label}.{name}"), &expected, &actual) {
+            failures.push(diff);
         }
-        // The projected spec is a valid FormSpec.
-        let parsed = ras_form::parse(&projected.spec.to_json());
-        if parsed.has_errors() && !projected.spec.controls.iter().any(|c| c.control_type == "Control") {
+        // The spec read is a valid FormSpec.
+        let spec: ras_form::FormSpec = serde_json::from_value(actual["spec"].clone()).unwrap();
+        let parsed = ras_form::parse(&spec.to_json());
+        if parsed.has_errors() && !spec.controls.iter().any(|c| c.control_type == "Control") {
             failures.push(format!("{label}.{name}: not valid: {:?}", parsed.issues));
         }
     }
@@ -128,24 +114,16 @@ fn projection_matches_xlflow() {
 }
 
 #[test]
-fn pictures_are_extracted_as_xlflow_does() {
+fn the_pictures_of_forms_saved_by_excel_are_extracted() {
     let mut seen = 0;
-    for (label, name, golden) in goldens() {
+    for (label, name) in excel_forms() {
         let source = form(&label, &name);
         let snapshot = ras_form::snapshot(&name, &source.streams, &source.storages, 932).unwrap();
-        let expected = golden["pictures"].as_object().unwrap();
-        assert_eq!(snapshot.pictures.len(), expected.len(), "{label}.{name}");
         for found in &snapshot.pictures {
-            let control = &snapshot.spec.controls[found.control_index.unwrap()];
-            assert_eq!(found.property, "picture");
-            let want = &expected[&control.name];
-            assert_eq!(control.control_type, "Image");
-            assert_eq!(found.picture.format.extension(), want["format"].as_str().unwrap());
-            assert_eq!(found.picture.data.len() as u64, want["size"].as_u64().unwrap());
-            assert_eq!(found.picture.width as u64, want["width"].as_u64().unwrap());
-            assert_eq!(found.picture.height as u64, want["height"].as_u64().unwrap());
+            let Some(index) = found.control_index else { continue };
             // An extracted picture is no longer reported as lost.
-            assert!(!control.unsupported.iter().flatten().any(|u| u == "picture"));
+            let control = &snapshot.spec.controls[index];
+            assert!(!control.unsupported.iter().flatten().any(|u| u == found.property), "{label}.{name}");
             seen += 1;
         }
     }
@@ -199,7 +177,7 @@ fn essence(spec: &ras_form::FormSpec) -> Vec<Value> {
 fn a_pulled_form_is_generated_again_with_the_same_design() {
     let root = temp_root("roundtrip");
     let mut checked = 0;
-    for (label, name, _) in goldens() {
+    for (label, name) in excel_forms() {
         let source = form(&label, &name);
         let dir = root.join(format!("{label}.{name}"));
         std::fs::create_dir_all(&dir).unwrap();
@@ -281,6 +259,16 @@ fn pull_writes_the_files_of_a_form() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The code the RAS compiler generates for the `.ras` code-behinds of the project at `root`.
+fn compile_forms(root: &Path) -> HashMap<String, String> {
+    let (sources, decls) = ras_compiler::load_forms(root).unwrap();
+    let config = ras_compiler::Config { forms: decls, ..Default::default() };
+    let prog = ras_compiler::analyze(sources, config);
+    let out = ras_compiler::build(&prog, &ras_compiler::BuildOptions { no_attributes: true, ..Default::default() });
+    assert!(prog.diagnostics.iter().chain(&out.diagnostics).all(|d| !d.is_error()), "{:?}", prog.diagnostics);
+    out.files.iter().map(|f| (f.name.clone(), f.code.clone())).collect()
+}
+
 #[test]
 fn pull_keeps_what_only_the_spec_knows() {
     let root = temp_root("pull-lists");
@@ -298,27 +286,24 @@ fn pull_keeps_what_only_the_spec_knows() {
   ]
 }"#;
     std::fs::write(dir.join("frmList.form.json"), spec).unwrap();
-    let hand = "Option Explicit\n\nPrivate Sub UserForm_Initialize()\n    Me.Caption = \"ready\"\nEnd Sub\n";
-    std::fs::write(dir.join("frmList.bas"), hand).unwrap();
+    let ras = "@on(\"UserForm.Initialize\")\nfunction userFormInitialize() {\n    this.caption = \"ready\";\n}\n";
+    std::fs::write(dir.join("frmList.ras"), ras).unwrap();
 
-    let loaded = workspace::load(&root).unwrap();
-    let built = workspace::build(&loaded, &root, 932, &HashMap::new());
+    let built = workspace::build(&workspace::load(&root).unwrap(), &root, 932, &compile_forms(&root));
     assert_eq!(built.errors(), 0, "{:?}", built.problems);
     let generated = built.forms[0].clone();
-    assert!(generated.code.contains(".AddItem \"A\""), "{}", generated.code);
-    assert!(generated.code.contains("RAS_FormInit '--- RAS ---"));
+    let code = &generated.code;
+    assert!(code.contains(".AddItem \"A\""), "{code}");
+    assert!(code.contains("Private Sub UserForm_Initialize()\n    RAS_FormInit '--- RAS ---\n"), "{code}");
+    assert!(code.contains("Me.Caption = \"ready\""), "{code}");
 
     // As if the form came back from a workbook.
     let PullOutcome::Written(pulled) = workspace::pull(&root, &generated, 932, true).unwrap() else {
         panic!("nothing written");
     };
     assert_eq!(pulled.warnings, [], "nothing of a generated form is lost");
-    // The VBA code-behind comes back as RAS, and the old `.bas` file is gone.
-    assert_eq!(pulled.code_path, dir.join("frmList.ras"));
-    assert!(!dir.join("frmList.bas").exists());
-    assert_eq!(pulled.todos, []);
-    let ras = std::fs::read_to_string(&pulled.code_path).unwrap();
-    assert_eq!(ras, "@on(\"UserForm.Initialize\")\nfunction userFormInitialize() {\n    this.caption = \"ready\";\n}\n");
+    assert!(pulled.kept_code, "the code was compiled from the .ras file");
+    assert_eq!(std::fs::read_to_string(&pulled.code_path).unwrap(), ras);
     assert_eq!(pulled.pictures, ["forms/assets/logo.bmp"], "the existing file is reused");
     let text = std::fs::read_to_string(&pulled.spec_path).unwrap();
     let spec: Value = serde_json::from_str(&text).unwrap();
@@ -327,21 +312,22 @@ fn pull_keeps_what_only_the_spec_knows() {
     assert_eq!(spec["controls"][2]["tag"], "name");
     assert_eq!(spec["controls"][2]["controlTipText"], "Your name");
 
-    // Building the pulled files gives the same form again, with the code compiled from RAS.
-    let (sources, decls) = ras_compiler::load_forms(&root).unwrap();
-    let config = ras_compiler::Config { forms: decls, ..Default::default() };
-    let prog = ras_compiler::analyze(sources, config);
-    let out = ras_compiler::build(&prog, &ras_compiler::BuildOptions { no_attributes: true, ..Default::default() });
-    assert!(prog.diagnostics.iter().chain(&out.diagnostics).all(|d| !d.is_error()), "{:?}", prog.diagnostics);
-    let compiled: HashMap<String, String> = out.files.iter().filter(|f| f.name == "frmList").map(|f| (f.name.clone(), f.code.clone())).collect();
-    let rebuilt = workspace::build(&workspace::load(&root).unwrap(), &root, 932, &compiled);
+    // Building the pulled files gives the same form again.
+    let rebuilt = workspace::build(&workspace::load(&root).unwrap(), &root, 932, &compile_forms(&root));
     assert_eq!(rebuilt.errors(), 0, "{:?}", rebuilt.problems);
     assert_eq!(rebuilt.forms[0].streams, generated.streams);
-    let code = &rebuilt.forms[0].code;
-    assert!(code.contains("Private Sub UserForm_Initialize()\n    RAS_FormInit '--- RAS ---\n"), "{code}");
-    assert!(code.contains("Me.Caption = \"ready\""), "{code}");
-    assert!(code.contains(".AddItem \"A\""), "{code}");
+    assert_eq!(rebuilt.forms[0].code, generated.code);
+
+    // In a project without the form, its VBA comes back as RAS.
+    let other = temp_root("pull-lists-other");
+    let PullOutcome::Written(fresh) = workspace::pull(&other, &generated, 932, false).unwrap() else {
+        panic!("nothing written");
+    };
+    assert!(!fresh.kept_code);
+    assert_eq!(fresh.todos, []);
+    assert_eq!(std::fs::read_to_string(&fresh.code_path).unwrap(), ras);
     let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&other);
 }
 
 #[test]
@@ -354,7 +340,7 @@ fn typed_tag_fields_equal_the_property_bag() {
         assert!(!parsed.has_errors(), "{:?}", parsed.issues);
         ras_form::compile(parsed.spec.as_ref().unwrap(), 932).unwrap()
     };
-    // The bag form is what xlflow accepts (covered by the golden fixtures).
+    // The same written in the property bag (`properties`).
     let bag = spec(r#""properties":{"tag":"t1","controlTipText":"tip"}"#);
     let typed = spec(r#""tag":"t1","controlTipText":"tip""#);
     assert_eq!(bag.streams, typed.streams);
@@ -396,7 +382,7 @@ fn list_properties_go_round_and_default_to_what_excel_writes() {
         let parsed = ras_form::parse(&text);
         assert!(!parsed.has_errors(), "{:?}", parsed.issues);
         let designer = ras_form::compile(parsed.spec.as_ref().unwrap(), 932).unwrap();
-        let snapshot = ras_form::project("F", &designer.streams, &designer.storages).unwrap();
+        let snapshot = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap();
         snapshot.spec.controls
     };
     // A new ComboBox has a drop button and completes entries, as one Excel makes;

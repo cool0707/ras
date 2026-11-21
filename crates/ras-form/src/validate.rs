@@ -1,4 +1,4 @@
-//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV021`).
+//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV022`).
 //!
 //! Port of the validation in xlflow's `internal/vba/userforms/spec`
 //! (`spec.go`, `appearance.go`; Copyright (c) 2026 harumiWeb, MIT License;
@@ -14,7 +14,6 @@ use crate::contract::{self, lookup, Prop, Props, Support, ValueType};
 use crate::scalars;
 use crate::spec::{
     FormSpec, FormSpecColor, FormSpecControl, FormSpecFont, FormSpecForm, FormSpecTab, KIND,
-    XLFLOW_KIND,
 };
 
 /// Severity of an [`Issue`].
@@ -1346,7 +1345,7 @@ pub(crate) fn validate_strict(spec: &FormSpec) -> Vec<Issue> {
             "schemaVersion",
         ));
     }
-    if spec.kind != KIND && spec.kind != XLFLOW_KIND {
+    if spec.kind != KIND {
         issues.push(error(
             "UFV003",
             format!("kind は {KIND:?} にしてください。"),

@@ -1,5 +1,5 @@
 // UserForm event handlers in the code-behind: `@on("<object>.<event>")` functions in
-// forms/<Name>.ras, or VBA event procedures in a forms/<Name>.bas of earlier versions.
+// forms/<Name>.ras.
 //
 // The catalogue (eventCatalogue.json) is xlflow's VBE-observed list of event
 // declarations (internal/vba/userforms/events/catalogue.json).
@@ -128,37 +128,4 @@ export function handlerText(existing: string, objectName: string, event: EventDe
 	const separator = !existing.trim() ? "" : /(\r\n|\r|\n)$/.test(existing) ? newline : newline + newline;
 	const name = handlerName(existing, objectName, event.name);
 	return `${separator}@on("${objectName}.${event.name}")${newline}function ${name}(${rasParams(event.signature)}) {${newline}${indent}${newline}}${newline}`;
-}
-
-// --- VBA code-behinds of earlier versions (forms/<Name>.bas) ----------------------------------
-
-/** Finds `[Private|Public] Sub <object>_<event>(` (case-insensitive). */
-export function findVbaHandler(text: string, objectName: string, eventName: string): HandlerLocation | undefined {
-	const lines = text.split(/\r\n|\r|\n/);
-	const name = `${objectName}_${eventName}`.toLowerCase();
-	for (let line = 0; line < lines.length; line++) {
-		const match = /^\s*(?:(?:Private|Public|Friend)\s+)?(?:Static\s+)?Sub\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/i.exec(lines[line]);
-		if (match && match[1].toLowerCase() === name) return { line, bodyLine: Math.min(line + 1, lines.length - 1) };
-	}
-	return undefined;
-}
-
-/** Indentation of existing VBA procedure bodies, or `fallback`. */
-export function vbaBodyIndent(text: string, fallback: string): string {
-	const lines = text.split(/\r\n|\r|\n/);
-	for (let index = 0; index < lines.length; index++) {
-		if (!/^\s*(?:(?:Private|Public|Friend)\s+)?(?:Sub|Function)\b/i.test(lines[index])) continue;
-		for (const body of lines.slice(index + 1)) {
-			if (!body.trim() || /^\s*End\s+(?:Sub|Function)\b/i.test(body)) continue;
-			const indentation = /^[\t ]*/.exec(body)?.[0] ?? "";
-			if (indentation) return indentation;
-		}
-	}
-	return fallback;
-}
-
-/** Text to append to a VBA code-behind for a new, empty event procedure. */
-export function vbaHandlerText(existing: string, signature: string, indent: string, newline: string): string {
-	const separator = !existing.trim() ? "" : /(\r\n|\r|\n)$/.test(existing) ? newline : newline + newline;
-	return `${separator}${signature}${newline}${indent}${newline}End Sub${newline}`;
 }

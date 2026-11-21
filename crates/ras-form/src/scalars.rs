@@ -735,7 +735,7 @@ mod tests {
                 assert!(!parsed.has_errors(), "{control_type}.{}: {:?}", p.name, parsed.issues);
                 let designer = crate::compile(parsed.spec.as_ref().unwrap(), 932)
                     .unwrap_or_else(|e| panic!("{control_type}.{}: {e}", p.name));
-                let spec = crate::project("F", &designer.streams, &designer.storages).unwrap().spec;
+                let spec = crate::snapshot("F", &designer.streams, &designer.storages, 932).unwrap().spec;
                 let control = spec.controls.iter().find(|c| c.name == "c").unwrap();
                 let back = control.scalar(p.name).unwrap_or_else(|| {
                     panic!("{control_type}.{} = {value} was not read back: {:?}", p.name, control.scalars)
@@ -766,7 +766,7 @@ mod tests {
             );
             let parsed = crate::parse(&text);
             let designer = crate::compile(parsed.spec.as_ref().unwrap(), 932).unwrap();
-            let spec = crate::project("F", &designer.streams, &designer.storages).unwrap().spec;
+            let spec = crate::snapshot("F", &designer.streams, &designer.storages, 932).unwrap().spec;
             let shown: Vec<_> = spec.controls[0].scalars.keys().collect();
             assert!(shown.is_empty(), "{}: {shown:?}", t.name);
         }

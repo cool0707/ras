@@ -8,12 +8,11 @@
 // the extension (engine.ts) instead of a language server.
 
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { applyToSpec, copyControls, EditError } from "./engine";
-import { bodyIndent, eventsForType, eventTarget, findHandler, findVbaHandler, handlerText, rasParams, vbaBodyIndent, vbaHandlerText } from "./events";
+import { bodyIndent, eventsForType, eventTarget, findHandler, handlerText, rasParams } from "./events";
 import type { EventDescriptor } from "./events";
 import { minimalEdit } from "./jsonSource";
 import { designerDocument } from "./model";
@@ -80,17 +79,11 @@ class DesignerClipboard {
 	}
 }
 
-/**
- * The code-behind that belongs to a FormSpec: `forms/<Name>.ras`, or the VBA
- * `forms/<Name>.bas` of earlier versions when only that exists.
- */
+/** The code-behind that belongs to a FormSpec: `forms/<Name>.ras`. */
 export function codeBehindUri(spec: vscode.Uri): vscode.Uri {
 	const base = path.posix.basename(spec.path);
 	const stem = base.toLowerCase().endsWith(FORM_SUFFIX) ? base.slice(0, -FORM_SUFFIX.length) : base.replace(/\.json$/i, "");
-	const ras = vscode.Uri.joinPath(spec, "..", `${stem}.ras`);
-	const bas = vscode.Uri.joinPath(spec, "..", `${stem}.bas`);
-	if (ras.scheme === "file" && !existsSync(ras.fsPath) && existsSync(bas.fsPath)) return bas;
-	return ras;
+	return vscode.Uri.joinPath(spec, "..", `${stem}.ras`);
 }
 
 const projectKey = (uri: vscode.Uri) => {
@@ -520,8 +513,7 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 			await vscode.workspace.applyEdit(create);
 			code = await vscode.workspace.openTextDocument(uri);
 		}
-		const vba = uri.path.toLowerCase().endsWith(".bas");
-		const find = (text: string) => (vba ? findVbaHandler : findHandler)(text, target.objectName, event!.name);
+		const find = (text: string) => findHandler(text, target.objectName, event!.name);
 		let handler = find(code.getText());
 		if (!handler) {
 			const text = code.getText();
@@ -529,9 +521,7 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 			const tabSize = editorConfig.get<number>("tabSize", 4);
 			const fallback = editorConfig.get<boolean>("insertSpaces", true) ? " ".repeat(tabSize > 0 ? tabSize : 4) : "\t";
 			const newline = code.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
-			const added = vba
-				? vbaHandlerText(text, event.signature, vbaBodyIndent(text, fallback), newline)
-				: handlerText(text, target.objectName, event, bodyIndent(text, fallback), newline);
+			const added = handlerText(text, target.objectName, event, bodyIndent(text, fallback), newline);
 			const edit = new vscode.WorkspaceEdit();
 			edit.insert(uri, code.positionAt(text.length), added);
 			await vscode.workspace.applyEdit(edit);

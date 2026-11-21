@@ -1,0 +1,83 @@
+{
+  "pictures": [
+    {
+      "control": "ImageBmp",
+      "format": "bmp",
+      "height": 16,
+      "property": "picture",
+      "size": 1206,
+      "width": 24
+    },
+    {
+      "control": "ImageJpeg",
+      "format": "bmp",
+      "height": 16,
+      "property": "picture",
+      "size": 1206,
+      "width": 24
+    }
+  ],
+  "spec": {
+    "basis": "designer",
+    "controls": [
+      {
+        "enabled": true,
+        "height": 32.00314960629921,
+        "id": "control_001",
+        "left": 6.009448818897638,
+        "name": "ImageBmp",
+        "pictureAlignment": 3,
+        "pictureSizeMode": 3,
+        "progId": "Forms.Image.1",
+        "tabIndex": 1,
+        "top": 6.009448818897638,
+        "type": "Image",
+        "visible": true,
+        "width": 47.99055118110236,
+        "zIndex": 0
+      },
+      {
+        "caption": "",
+        "enabled": true,
+        "height": 72.0,
+        "id": "control_002",
+        "left": 6.009448818897638,
+        "name": "FrameMain",
+        "progId": "Forms.Frame.1",
+        "tabIndex": 0,
+        "top": 47.99055118110236,
+        "type": "Frame",
+        "visible": true,
+        "width": 90.0,
+        "zIndex": 1
+      },
+      {
+        "enabled": true,
+        "height": 32.00314960629921,
+        "id": "control_003",
+        "left": 6.009448818897638,
+        "name": "ImageJpeg",
+        "parentId": "control_002",
+        "pictureAlignment": 3,
+        "pictureSizeMode": 3,
+        "progId": "Forms.Image.1",
+        "tabIndex": 0,
+        "top": 6.009448818897638,
+        "type": "Image",
+        "visible": true,
+        "width": 47.99055118110236,
+        "zIndex": 0
+      }
+    ],
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "caption": "UserForm1",
+      "height": 151.79527559055117,
+      "name": "PictureForm",
+      "width": 229.20944881889764
+    },
+    "kind": "ras.userform",
+    "schemaVersion": 1,
+    "warnings": []
+  }
+}

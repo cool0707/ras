@@ -151,10 +151,7 @@ pub fn document_properties() -> Props {
         ),
         (
             "kind",
-            allowed(
-                p(T::String, true, Supported),
-                &["ras.userform", "xlflow.userform"],
-            ),
+            allowed(p(T::String, true, Supported), &["ras.userform"]),
         ),
         (
             "basis",
