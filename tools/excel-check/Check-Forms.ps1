@@ -29,8 +29,9 @@
 param(
     # ras の実行ファイル。
     [string]$Ras = "ras",
-    # 結果を書き出すフォルダー（実行のたびに作り直す）。
-    [string]$Out = (Join-Path $PSScriptRoot "out"),
+    # 結果を書き出すフォルダー（実行のたびに作り直す。省略時は tools\excel-check\out）。
+    # Windows PowerShell 5.1 では [CmdletBinding()] の param の既定値で $PSScriptRoot が空なので、既定は本体で決める。
+    [string]$Out = "",
     # 確かめるフォーム（省略時は forms\ のすべて）。
     [string[]]$Forms = @(),
     # 見た目の比較で、違っていてもよいピクセル数（TextBox のカーソルの点滅など）。
@@ -43,6 +44,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
+if (-not $Out) { $Out = Join-Path $here "out" }
 $previousEncoding = $null
 try {
     # ras の出力（UTF-8）をそのまま読む。
@@ -178,6 +180,11 @@ function ConvertFrom-Vba([string]$field, $value) {
     if ($value -is [string] -and $value.StartsWith("#ERROR")) { return $value }
     if ($field -in @("foreColor", "backColor", "borderColor")) { return ConvertFrom-Long $value }
     if ($field -eq "columnWidths") { return , (ConvertFrom-Widths ([string]$value)) }
+    # ListWidth comes back as text with its unit ("150 pt").
+    if ($field -eq "listWidth" -and $value -is [string]) {
+        $widths = ConvertFrom-Widths $value
+        if ($widths.Count -eq 1) { return [double]$widths[0] }
+    }
     if ($value -is [bool] -or $value -is [string]) { return $value }
     return [double]$value
 }
@@ -297,8 +304,9 @@ function Get-DesignFields($object, [string]$type) {
 }
 
 # Order in which the fields of a control are set: what others depend on first.
-$firstFields = @("left", "top", "width", "height", "min", "max", "columnCount", "multiSelect", "style", "tripleState", "multiLine",
-    "listStyle", "rowSource", "whatsThisHelp")
+# IntegralHeight before the height: while it is on, the VBA editor fits a ListBox's height to its rows.
+$firstFields = @("integralHeight", "left", "top", "width", "height", "min", "max", "columnCount", "multiSelect", "style", "tripleState",
+    "multiLine", "listStyle", "rowSource", "whatsThisHelp")
 $lastFields = @("value", "text", "selectedIndex", "autoSize")
 
 function Get-SetOrder($fields) {
@@ -338,6 +346,9 @@ $xl.AutomationSecurity = 1
 
 $rows = New-Object System.Collections.ArrayList
 $visuals = New-Object System.Collections.ArrayList
+# By form: the controls whose size the VBA editor works out (name, and left / top / width / height
+# as @(expected, reference)).
+$excelSized = @{}
 $setupErrors = New-Object System.Collections.ArrayList
 $pullLog = ""
 $rasWb = $null
@@ -360,9 +371,11 @@ function Invoke-Check($book, [string]$name) {
 }
 
 function Import-Helpers($book) {
-    try { $null = $book.VBProject.VBComponents.Count }
-    catch { throw "VBA プロジェクトにアクセスできません。Excel のオプション［トラスト センター］［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにしてください。" }
-    $null = $book.VBProject.VBComponents.Import((Join-Path $here "RasCheck.bas"))
+    # Without the trust, VBProject comes back as $null rather than as an error.
+    $project = $null
+    try { $project = $book.VBProject } catch { }
+    if ($null -eq $project) { throw "VBA プロジェクトにアクセスできません。Excel のオプション［トラスト センター］［マクロの設定］で「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」をオンにしてください。" }
+    $null = $project.VBComponents.Import((Join-Path $here "RasCheck.bas"))
 }
 
 # Data the controls bound to cells (ControlSource, RowSource) read: the same in both workbooks.
@@ -370,9 +383,19 @@ function Set-SheetData($book) {
     $sheet = $book.Worksheets.Item(1)
     if ($sheet.Name -ne "Sheet1") { $sheet.Name = "Sheet1" }
     $cells = @(@("東京", "Tokyo"), @("大阪", "Osaka"), @("名古屋", "Nagoya"))
-    for ($r = 0; $r -lt 3; $r++) { for ($c = 0; $c -lt 2; $c++) { $sheet.Cells.Item($r + 1, $c + 1).Value2 = $cells[$r][$c] } }
-    $values = @("セルの値", "大阪", "名古屋", $true, 3, 7, $true, $false)
-    for ($i = 0; $i -lt $values.Count; $i++) { $sheet.Cells.Item($i + 1, 4).Value2 = $values[$i] }
+    for ($r = 0; $r -lt 3; $r++) { for ($c = 0; $c -lt 2; $c++) { Set-CellValue $sheet ($r + 1) ($c + 1) $cells[$r][$c] } }
+    # D1〜D8: the ControlSource of txtBound, cboRows, lstRows, chkBound, spnDisabled, scrDisabled,
+    # optLeft, tglDisabled. Excel shows a bound control with its cell's value (in the designer too), so
+    # those controls set no value of their own.
+    $values = @("セルの値", "大阪", "名古屋", $true, 3, 7, $true, $true)
+    for ($i = 0; $i -lt $values.Count; $i++) { Set-CellValue $sheet ($i + 1) 4 $values[$i] }
+}
+
+# Windows PowerShell sets Value2 as the type it was first set with ("Unable to cast System.Boolean to
+# System.String" after a string), so the value goes through IDispatch as it is.
+function Set-CellValue($sheet, [int]$row, [int]$column, $value) {
+    $cell = $sheet.Cells.Item($row, $column)
+    [void][System.__ComObject].InvokeMember("Value2", [System.Reflection.BindingFlags]::SetProperty, $null, $cell, @($value))
 }
 
 function Add-SetupError([string]$where, $message) {
@@ -598,16 +621,34 @@ public static class RasCapture {
         return part;
     }
 
-    // Pixels that differ (-1 when the sizes differ); writes an image with them in red.
-    public static int Compare(Bitmap a, Bitmap b, string diffPath) {
+    // Whether two captures are the same picture (the window has finished drawing).
+    public static bool Same(Bitmap a, Bitmap b) {
+        if (a.Width != b.Width || a.Height != b.Height) return false;
+        for (int y = 0; y < a.Height; y++)
+            for (int x = 0; x < a.Width; x++)
+                if (a.GetPixel(x, y).ToArgb() != b.GetPixel(x, y).ToArgb()) return false;
+        return true;
+    }
+
+    static bool Masked(int[] masks, int x, int y) {
+        for (int i = 0; i + 3 < masks.Length; i += 4)
+            if (x >= masks[i] && y >= masks[i + 1] && x < masks[i] + masks[i + 2] && y < masks[i + 1] + masks[i + 3]) return true;
+        return false;
+    }
+
+    // Pixels that differ outside the masks (x, y, width, height, ...); -1 when the sizes differ.
+    // Writes an image with them in red and the masks in blue.
+    public static int Compare(Bitmap a, Bitmap b, string diffPath, int[] masks) {
         if (a.Width != b.Width || a.Height != b.Height) return -1;
         int n = 0;
         using (Bitmap d = new Bitmap(a.Width, a.Height, PixelFormat.Format32bppArgb)) {
             for (int y = 0; y < a.Height; y++) {
                 for (int x = 0; x < a.Width; x++) {
                     Color ca = a.GetPixel(x, y), cb = b.GetPixel(x, y);
-                    if (ca.ToArgb() != cb.ToArgb()) { n++; d.SetPixel(x, y, Color.Red); }
-                    else { int g = 190 + (ca.R + ca.G + ca.B) / 12; d.SetPixel(x, y, Color.FromArgb(g, g, g)); }
+                    int g = 190 + (ca.R + ca.G + ca.B) / 12;
+                    if (Masked(masks, x, y)) { d.SetPixel(x, y, ca.ToArgb() != cb.ToArgb() ? Color.CornflowerBlue : Color.FromArgb(g - 30, g - 20, 255)); }
+                    else if (ca.ToArgb() != cb.ToArgb()) { n++; d.SetPixel(x, y, Color.Red); }
+                    else { d.SetPixel(x, y, Color.FromArgb(g, g, g)); }
                 }
             }
             d.Save(diffPath, ImageFormat.Png);
@@ -648,7 +689,16 @@ function Show-Form($book, $spec, [string]$label, [bool]$fill, [uint32]$excelPid)
         $caption = [string](Get-Field $spec.form "caption")
         $hwnd = [RasCapture]::Find($caption, $excelPid)
         if ($hwnd -eq [IntPtr]::Zero) { $result.error = "フォームのウィンドウが見つかりません"; return $result }
+        # Captured until two in a row are the same: a busy machine draws the form late.
         $result.image = [RasCapture]::CaptureClient($hwnd)
+        for ($try = 0; $try -lt 10; $try++) {
+            Start-Sleep -Milliseconds 300
+            $next = [RasCapture]::CaptureClient($hwnd)
+            $same = [RasCapture]::Same($result.image, $next)
+            $result.image.Dispose()
+            $result.image = $next
+            if ($same) { break }
+        }
         $result.file = Join-Path $Out "images\$formName.$label.png"
         $result.image.Save($result.file, [System.Drawing.Imaging.ImageFormat]::Png)
         return $result
@@ -707,10 +757,11 @@ try {
             $pulledFormSpec = $null; if ($pulledForm) { $pulledFormSpec = $pulledForm.form }
             foreach ($f in (Get-DesignFields $spec.form "UserForm")) {
                 $expected = ConvertFrom-Spec $f (Get-Field $spec.form $f) "UserForm"
-                $ras = Read-DesignField $rasWb $formName $null $f "UserForm"
+                # Not $ras: that is the -Ras parameter, a [string] (variable names ignore case).
+                $rasValue = Read-DesignField $rasWb $formName $null $f "UserForm"
                 $reference = Read-DesignField $ref $formName $null $f "UserForm"
                 $p = Read-PulledField $pulledFormSpec $f "UserForm"
-                Add-Row $formName "(form)" $f $expected $ras $reference $p "" $true
+                Add-Row $formName "(form)" $f $expected $rasValue $reference $p "" $true
             }
             foreach ($c in $spec.controls) {
                 $type = $c.type
@@ -719,14 +770,30 @@ try {
                 $pulledControl = $null
                 if ($pulledForm) { $pulledControl = @($pulledForm.controls | Where-Object { $_.name -eq $c.name }) | Select-Object -First 1 }
                 $auto = (Get-Field $c "autoSize") -eq $true
+                $box = @{}
                 foreach ($f in (Get-DesignFields $c $type)) {
                     $expected = ConvertFrom-Spec $f (Get-Field $c $f) $type
-                    if ($null -ne $rasControl) { $ras = Read-DesignField $rasWb $formName $rasControl $f $type } else { $ras = "#ERROR コントロールがありません" }
+                    if ($null -ne $rasControl) { $rasValue = Read-DesignField $rasWb $formName $rasControl $f $type } else { $rasValue = "#ERROR コントロールがありません" }
                     if ($null -ne $refControl) { $reference = Read-DesignField $ref $formName $refControl $f $type } else { $reference = "#ERROR コントロールがありません" }
                     $p = Read-PulledField $pulledControl $f $type
                     $note = ""; $counts = $true
                     if ($auto -and $geometry -contains $f) { $note = "AutoSize: 大きさは Excel が決める"; $counts = $false }
-                    Add-Row $formName $c.name $f $expected $ras $reference $p $note $counts
+                    Add-Row $formName $c.name $f $expected $rasValue $reference $p $note $counts
+                    if ($geometry -contains $f) { $box[$f] = @($expected, $rasValue, $reference) }
+                }
+                # A size the VBA editor works out when it is set (AutoSize, the IntegralHeight of a
+                # ListBox), which RAS writes as given: its place is left out of the picture comparison.
+                $decided = $false
+                foreach ($f in @("width", "height")) {
+                    if (-not $box.ContainsKey($f)) { continue }
+                    $e, $r, $x = $box[$f]
+                    if ((Test-Same $e $r $f) -and $x -is [double] -and -not (Test-Same $e $x $f)) { $decided = $true }
+                }
+                if ($decided -and -not (Get-Field $c "parentId") -and $box.Count -eq 4) {
+                    if (-not $excelSized.ContainsKey($formName)) { $excelSized[$formName] = New-Object System.Collections.ArrayList }
+                    $place = @{ name = $c.name }
+                    foreach ($f in $geometry) { $place[$f] = @([double]$box[$f][0], [double]$box[$f][2]) }
+                    [void]$excelSized[$formName].Add($place)
                 }
             }
         }
@@ -754,13 +821,28 @@ try {
             if ($null -ne $c.list) { $expected = (ConvertFrom-List $c.list $columns) + "ListIndex=$index" } else { $expected = $refList }
             Add-Row $formName $c.name "list（実行時）" $expected $rasList $refList "―" "" $true
         }
-        $entry = [ordered]@{ form = $formName; ras = $null; excel = $null; diff = $null; pixels = $null; status = "未比較"; error = "" }
+        $entry = [ordered]@{ form = $formName; ras = $null; excel = $null; diff = $null; pixels = $null; status = "未比較"; error = ""; excluded = @() }
         if ($rasShown.error) { $entry.error += "RAS: $($rasShown.error) " }
         if ($refShown.error) { $entry.error += "Excel: $($refShown.error)" }
         if ($rasShown.file) { $entry.ras = "images/$formName.ras.png" }
         if ($refShown.file) { $entry.excel = "images/$formName.excel.png" }
         if ($rasShown.image -and $refShown.image) {
-            $n = [RasCapture]::Compare($rasShown.image, $refShown.image, (Join-Path $Out "images\$formName.diff.png"))
+            # The places of the controls whose size Excel works out, in pixels (both sizes, and a
+            # margin for the edge).
+            $masks = New-Object System.Collections.Generic.List[int]
+            $formWidth = Get-Field $spec.form "width"; if ($null -eq $formWidth) { $formWidth = 240 }
+            $scale = $rasShown.image.Width / [double]$formWidth
+            if ($excelSized.ContainsKey($formName)) {
+                foreach ($place in $excelSized[$formName]) {
+                    $x0 = [Math]::Floor($place.left[0] * $scale) - 3
+                    $y0 = [Math]::Floor($place.top[0] * $scale) - 3
+                    $x1 = [Math]::Ceiling([Math]::Max($place.left[0] + $place.width[0], $place.left[1] + $place.width[1]) * $scale) + 3
+                    $y1 = [Math]::Ceiling([Math]::Max($place.top[0] + $place.height[0], $place.top[1] + $place.height[1]) * $scale) + 3
+                    $masks.AddRange([int[]]@($x0, $y0, ($x1 - $x0), ($y1 - $y0)))
+                    $entry.excluded += $place.name
+                }
+            }
+            $n = [RasCapture]::Compare($rasShown.image, $refShown.image, (Join-Path $Out "images\$formName.diff.png"), $masks.ToArray())
             if ($n -ge 0) { $entry.diff = "images/$formName.diff.png" }
             $entry.pixels = $n
             if ($n -lt 0) { $entry.status = "NG（大きさが違う）" } elseif ($n -le $Tolerance) { $entry.status = "OK" } else { $entry.status = "NG" }
@@ -816,6 +898,9 @@ foreach ($spec in $cases) {
     if ($v) {
         [void]$html.Append("<p>見た目: <b>" + (Format-Html $v.status) + "</b>")
         if ($null -ne $v.pixels -and $v.pixels -ge 0) { [void]$html.Append("（違うピクセル $($v.pixels)）") }
+        if (@($v.excluded).Count -gt 0) {
+            [void]$html.Append("<br>大きさを Excel が決めるコントロール（AutoSize、ListBox の IntegralHeight）の場所は比べていません（違いの画像の青）: " + (Format-Html (@($v.excluded) -join ", ")))
+        }
         if ($v.error) { [void]$html.Append(" " + (Format-Html $v.error)) }
         [void]$html.Append("</p><div class='images'>")
         foreach ($k in @("ras", "excel", "diff")) {

@@ -177,8 +177,7 @@
       "width": 72,
       "height": 24,
       "caption": "押下",
-      "value": true,
-      "controlSource": "Sheet1!D8"
+      "value": true
     },
     {
       "id": "g2",
@@ -227,7 +226,8 @@
       "height": 24,
       "caption": "無効",
       "enabled": false,
-      "backStyle": 0
+      "backStyle": 0,
+      "controlSource": "Sheet1!D8"
     },
     {
       "id": "g5",

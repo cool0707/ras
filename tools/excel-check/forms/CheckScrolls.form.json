@@ -33,7 +33,6 @@
       "orientation": 1,
       "delay": 100,
       "mousePointer": 7,
-      "controlSource": "Sheet1!D5",
       "backColor": {
         "kind": "rgb",
         "value": "#FFE0E0"
@@ -56,7 +55,8 @@
       "mousePointer": 99,
       "mouseIcon": {
         "path": "forms/assets/hand.cur"
-      }
+      },
+      "controlSource": "Sheet1!D5"
     },
     {
       "id": "r1",
@@ -106,8 +106,7 @@
       "mousePointer": 99,
       "mouseIcon": {
         "path": "forms/assets/hand.cur"
-      },
-      "controlSource": "Sheet1!D6"
+      }
     },
     {
       "id": "r4",
@@ -118,7 +117,8 @@
       "width": 150,
       "height": 18,
       "enabled": false,
-      "orientation": 1
+      "orientation": 1,
+      "controlSource": "Sheet1!D6"
     }
   ]
 }
