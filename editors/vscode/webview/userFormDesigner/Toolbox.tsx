@@ -1,6 +1,6 @@
 /* Ported from xlflow (https://github.com/harumiWeb/xlflow), MIT License,
    Copyright (c) 2026 harumiWeb. See THIRD_PARTY_NOTICES.md. */
-import { Icon } from "./Icon";
+import { ControlIcon } from "./ControlIcon";
 import { controlMetadata } from "../../src/userForm/toolbox";
 import type { ToolboxType } from "../../src/userForm/toolbox";
 import type { DesignerStrings } from "../../src/userForm/protocol";
@@ -22,22 +22,6 @@ export function Toolbox({
   strings: DesignerStrings;
   onSelect: (type?: ToolboxType) => void;
 }) {
-  const icons: Record<ToolboxType, string> = {
-    Label: "symbol-string",
-    TextBox: "symbol-field",
-    ComboBox: "list-selection",
-    ListBox: "list-flat",
-    CommandButton: "symbol-event",
-    CheckBox: "check",
-    OptionButton: "circle",
-    ToggleButton: "symbol-boolean",
-    SpinButton: "arrow-swap",
-    ScrollBar: "arrow-both",
-    Image: "file-media",
-    Frame: "symbol-class",
-    MultiPage: "multiple-windows",
-    TabStrip: "layout",
-  };
   return (
     <aside
       class="toolbox"
@@ -56,7 +40,7 @@ export function Toolbox({
         aria-pressed={!selected}
         onClick={() => onSelect(undefined)}
       >
-        <Icon name="cursor" />
+        <ControlIcon name="Pointer" />
         <span class="toolbox-label">{strings.pointer}</span>
       </button>
       {(["commonControls", "containers"] as const).map((group) => (
@@ -82,7 +66,7 @@ export function Toolbox({
                 }
                 onClick={() => onSelect(control.type)}
               >
-                <Icon name={icons[control.type]} />
+                <ControlIcon name={control.type} />
                 <span class="toolbox-label">{control.type}</span>
               </button>
             ))}
