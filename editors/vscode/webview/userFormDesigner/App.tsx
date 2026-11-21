@@ -49,10 +49,21 @@ import type { ProductivityClipboardAction } from "./ProductivityToolbar";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: WebviewMessage): void;
-  getState(): { scrollX?: number; scrollY?: number } | undefined;
-  setState(state: { scrollX: number; scrollY: number }): void;
+  getState(): ViewState | undefined;
+  setState(state: ViewState): void;
 };
+interface ViewState {
+  scrollX?: number;
+  scrollY?: number;
+  propertiesWidth?: number;
+}
 const bridge = acquireVsCodeApi();
+const mergeViewState = (next: ViewState) => bridge.setState({ ...bridge.getState(), ...next });
+const PROPERTIES_MIN = 220;
+const PROPERTIES_DEFAULT = 300;
+/** The widest the properties pane may grow, leaving the canvas room to stay usable. */
+const propertiesMax = (workspace: HTMLElement | null) =>
+  Math.max(PROPERTIES_MIN, (workspace?.clientWidth ?? 1200) - 160 - 240);
 export function App() {
   const [strings, setStrings] = useState(designerStrings);
   const [document, setDocument] = useState<DesignerDocument>();
@@ -110,6 +121,17 @@ export function App() {
   const pendingClipboardVersion = useRef<number>();
   const documentAfterClipboard = useRef(false);
   const propertiesPane = useRef<HTMLDivElement>(null);
+  const workspace = useRef<HTMLDivElement>(null);
+  const [propertiesWidth, setPropertiesWidth] = useState(
+    () => bridge.getState()?.propertiesWidth ?? PROPERTIES_DEFAULT,
+  );
+  const resizeProperties = (width: number) => {
+    const next = Math.round(
+      Math.min(propertiesMax(workspace.current), Math.max(PROPERTIES_MIN, width)),
+    );
+    setPropertiesWidth(next);
+    mergeViewState({ propertiesWidth: next });
+  };
   const currentDocument = useRef<DesignerDocument>();
   const drafts = useRef<PropertyDraftStore>({ values: new Map(), replies: new Map() });
   const restored = useRef(false);
@@ -759,13 +781,14 @@ export function App() {
           </button>
         </div>
         <button
-          class="primary-action"
-          disabled={busy || draftState.saving || draftState.conflicted}
+          class={`save-action ${draftState.dirty ? "primary-action" : "secondary-action"}`}
+          disabled={busy || draftState.saving || draftState.conflicted || !draftState.dirty}
+          title={draftState.dirty ? strings.unsaved : undefined}
           onClick={() => bridge.postMessage({ type: "save" })}
         >
+          {draftState.dirty && <span class="save-dot" aria-hidden="true" />}
           {strings.save}
         </button>
-        {draftState.dirty && <span class="notice">{strings.unsaved}</span>}
       </header>
       <div class="designer-notices">
         {draftState.conflicted && (
@@ -837,7 +860,9 @@ export function App() {
       {document && (
         <>
           <div
+            ref={workspace}
             class={`designer-workspace ${mobilePane ? `show-${mobilePane}` : ""}`}
+            style={{ "--properties-width": `${propertiesWidth}px` }}
             onKeyDown={(event) => {
               if (
                 mobilePane &&
@@ -941,7 +966,7 @@ export function App() {
                 class="canvas-scroll"
                 ref={canvasScroll}
                 onScroll={(event) =>
-                  bridge.setState({
+                  mergeViewState({
                     scrollX: event.currentTarget.scrollLeft,
                     scrollY: event.currentTarget.scrollTop,
                   })
@@ -1024,6 +1049,54 @@ export function App() {
               </div>
             </section>
             <aside class="properties-pane" id="designer-properties" ref={propertiesPane}>
+              <div
+                class="properties-splitter"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label={strings.resizeProperties}
+                aria-valuemin={PROPERTIES_MIN}
+                aria-valuemax={propertiesMax(workspace.current)}
+                aria-valuenow={propertiesWidth}
+                tabIndex={0}
+                title={strings.resizeProperties}
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.preventDefault();
+                  const handle = event.currentTarget;
+                  handle.setPointerCapture(event.pointerId);
+                  handle.classList.add("dragging");
+                  const right = workspace.current!.getBoundingClientRect().right;
+                  const move = (moveEvent: PointerEvent) =>
+                    resizeProperties(right - moveEvent.clientX);
+                  const end = () => {
+                    handle.classList.remove("dragging");
+                    handle.removeEventListener("pointermove", move);
+                    handle.removeEventListener("pointerup", end);
+                    handle.removeEventListener("pointercancel", end);
+                  };
+                  handle.addEventListener("pointermove", move);
+                  handle.addEventListener("pointerup", end);
+                  handle.addEventListener("pointercancel", end);
+                }}
+                onDblClick={() => resizeProperties(PROPERTIES_DEFAULT)}
+                onKeyDown={(event) => {
+                  const step = event.shiftKey ? 40 : 10;
+                  const next =
+                    event.key === "ArrowLeft"
+                      ? propertiesWidth + step
+                      : event.key === "ArrowRight"
+                        ? propertiesWidth - step
+                        : event.key === "Home"
+                          ? PROPERTIES_MIN
+                          : event.key === "End"
+                            ? propertiesMax(workspace.current)
+                            : undefined;
+                  if (next === undefined) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  resizeProperties(next);
+                }}
+              />
               <button
                 class="pane-close"
                 type="button"

@@ -96,7 +96,12 @@ export function PropertyModal(props: Props) {
         <h2>{props.title}</h2>
         <div class="property-modal-body">{props.children}</div>
         <div class="property-modal-actions">
-          <button type="button" onClick={props.onCancel} disabled={props.pending}>
+          <button
+            class="secondary-action"
+            type="button"
+            onClick={props.onCancel}
+            disabled={props.pending}
+          >
             {props.cancelLabel}
           </button>
           <button
