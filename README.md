@@ -3,6 +3,7 @@
 TypeScript ライクな構文から VBA（`.bas` / `.cls`）へトランスパイルする Better VBA 言語。
 
 - 言語仕様: [docs/RAS_Language_Specification.md](docs/RAS_Language_Specification.md)
+- 今後実装する機能: [docs/ROADMAP.md](docs/ROADMAP.md)
 - 対象: Windows 版 Excel（Office 2007 以降、32bit / 64bit）
 
 ```typescript
@@ -145,6 +146,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | `form new` / `form check` / `form pull` | 実装済み |
 | `sync` | 実装済み（Windows のみ。Excel で開いているブックへ、モジュールとユーザーフォームを反映する。`--pull` は未実装） |
 | `setup` / `typegen` / `pack --via-excel` | 未実装（実行するとその旨を表示して終了） |
+| `test` | 未実装（仕様 §14.12） |
 
 ## 実装状況
 
@@ -170,6 +172,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §14.9 オフライン書き込み・読み出し | 実装済み | 再署名は未実装。`vba/` の非管理モジュールをブックへ書き戻す処理は未実装（取り出しのみ。ユーザーフォームは `forms/` で扱う） |
 | §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | ユーザーフォーム（§14.10.7）は VS Code のパネルに表示する。キー入力・マウス・ドラッグのイベント、`ControlSource` は未対応。Excel への接続（`ras_com.node`）は Excel 2021（64bit）の実機で確認済み。ダイアログの監視（§14.10.6）は Excel の無い Windows 上の CI でメッセージ ボックスを相手に確認しており、Excel の実機では未確認。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。Excel の無い環境でのブックの代役（§14.10.8、`ras_book.node`）は、RAS のプログラムを Node で動かしてセル・数式・保存結果を確かめる自動テスト（Linux / Windows）で確認しているが、VS Code 上での確認と、Excel と計算結果を突き合わせる確認はまだ。セルの挿入・削除、切り取り・コピー・貼り付け、並べ替え・フィルター、書式の保存、手動計算、ブック・シートのイベントも同じ自動テストで確認しており、Excel の実機との突き合わせ（イベントの順序、コピーが解除される操作、保存したブックを Excel で開いたときの書式とフィルター）はまだ。`super` 呼び出しを伴う継承は対象外 |
 | §14.11 ユーザーフォーム（`forms/`） | 実装済み | FormSpec からの生成（`Image` の画像、`ComboBox` / `ListBox` の項目を含む）、ブックからの取り出し（`ras form pull`）、ライブ同期、Excel での実行（§14.11.8）。カスタム ActiveX コントロールの生成、VBE での編集の検出（ドリフト）は未実装 |
+| §14.12 テスト（`ras test`） | 未実装 | 仕様のみ |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱し、メンバーとグローバルを camelCase で参照する（§15.3.1）。`Scripting`（`FileSystemObject`・`Dictionary`）と `VBScript.RegExp` の型定義も同梱し、VBA には遅延バインディングで出力する（§15.3）。`ras typegen` と `vba:` インポートは未実装 |
 | §16.1 JSDoc | 実装済み | 生成 VBA へのコメント・`VB_Description` 出力、`@param` 名の検査 |
 | §16.2 IntelliSense（LSP） | 一部 | 診断・補完（名前付き引数の引数名、未インポートの候補と `import` の自動追加を含む）・ホバー・パラメーター情報・定義へ移動・型定義へ移動・参照の検索・強調表示・名前の変更・シンボル一覧（ファイル・ワークスペース）・インレイヒント・セマンティックトークン・折りたたみ・整形・CodeLens（最適化の通知、関数ごとの「Excelで実行」「デバッグ実行」）・「生成 VBA を表示」と、クイックフィックス（VBA の綴りの名前を直す、未インポートの名前の `import` を追加する）は実装。`completionItem/resolve`（JSDoc の遅延読み込み）、範囲の整形、その他のコードアクション（`byref` 引数へのリテラル渡しの一時変数化・縮小変換への `as` 追加）、`@deprecated` の使用箇所の警告は未実装 |
@@ -199,7 +202,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 - 既存のブックの取り込み（§14.7.1）: `ras pack` での取り込みと置き換えは自動テストで確認しています。ライブ同期での取り込み（COM でのコードの読み取り、`VBComponent.Export` で書き出したフォームの読み取り）は実機の Excel では未検証です。`.frm` / `.frx` の読み取りは、Excel が保存したフォームを書き出して読み直すと同じデザインになることを自動テストで確認しています。
 - デバッグ実行のダイアログ監視は、Excel / VBE の実際のダイアログ（実行時エラー、コンパイル エラー、Office 独自のダイアログ）では未検証です。判定規則は [xlflow](https://github.com/harumiWeb/xlflow) が実機で確立したもの（ボタンをコントロール ID とアクセスキーで識別する、実行時エラーは「終了」で閉じる、など）に合わせています。
 - 32bit Office では未検証です（`RAS_Rebase` の 32bit 側のオフセットなど）。
-- VS Code 拡張はパッケージ化と文法テストまで確認済みで、実機の VS Code 上では動かしていません。
+- VS Code 拡張は実機の VS Code 上で動作を確認しています。
 
 ## 開発
 

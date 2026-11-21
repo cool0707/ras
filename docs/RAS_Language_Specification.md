@@ -9,6 +9,7 @@
 > * 参照の検索・名前の変更の対象と拒否する名前、セマンティックトークンの種類、未インポートの候補の挿入位置を規定（§16.2.5〜§16.2.7）
 > * ユニオン型 `A | B` と、`instanceof` / `typeof` による型の絞り込みを追加（§2.6）。同梱の型定義で Object / Variant を返していたメンバーのうち、値の型が決まっているもの（`activeSheet`・`sheets(1)` は `Excel.Worksheet | Excel.Chart`、`getOpenFilename()` は `string | boolean | any[]` など）をユニオン型にした（§2.6.5）
 > * クラス・インターフェイスの型パラメータに既定の型引数 `T = 型` を書けるようにした（§2.4.1）
+> * テスト（`ras test`）を追加。`test/` の `*.test.ras` に vitest 形式（`describe` / `test` / `expect`）で書き、ブックの代役（§14.10.8）で Excel を起動せずに実行する（§14.12）
 
 > v0.7 からの変更
 > * 構造体（`struct`）をデータの入れ物の基本とし、オブジェクトリテラル・無名のオブジェクト型・タプル・分割代入を追加（§2.5）
@@ -799,6 +800,7 @@ On Error GoTo 0
 | `ras setup` | 「VBA プロジェクト オブジェクト モデルへのアクセスを信頼する」設定（ユーザー同意の上でレジストリ `AccessVBOM` を設定）と RASBridge のインストール |
 | `ras typegen <TypeLib>` | COM タイプライブラリから RAS 型定義（`.d.ras`）を生成 |
 | `ras fmt` | フォーマッタ |
+| `ras test [<file>...]` | `test/` のテストを実行する（§14.12）。既定は Excel を使わずブックの代役で実行し、`--excel` で実際の Excel に対して実行する。`--reporter json` で結果を JSON で出力 |
 
 ### 7.4 VS Code 拡張の責務（最小）
 
@@ -1868,6 +1870,217 @@ VS Code の「Excel で実行」（フォームのコードビハインドの先
 * コードビハインドで扱えるのは組み込みのコントロールのイベントだけで、`WithEvents` で受け取るイベントや、コントロールの配列（同じハンドラを複数のコントロールに付けるクラス）は書けない。
 * ライブ同期でのフォームの取り込み（`VBComponents.Import`）は、Excel の無い環境では自動テストできない。`.frx` の構成は Excel が書き出したファイルと照合している（`crates/ras-form/tests/project.rs`）。
 
+### 14.12 テスト（`ras test`）（v0.9で追加）
+
+RAS のプログラムを、Excel を起動せずに自動テストする。テストは vitest / Jest と同じ形（`describe` / `test` / `expect`）で書き、デバッグ実行と同じ JavaScript ランタイム（§14.10）とブックの代役（§14.10.8）で実行する。Mac・Linux・Excel の無い Windows・CI で同じ結果になることを目的とする。
+
+#### 14.12.1 方針
+
+* **本体のソースにテストを書かない:** テストは `test/` の `*.test.ras` に置く（§14.12.2）。`src/` のモジュールにテストを書くこと（vitest の in-source testing に当たるもの）はできない。
+* **ブックに入れない:** テストファイルとテスト用のヘルパーは `ras build` / `ras pack` / `ras sync` / `ras watch` の出力に含めない。`ras check` と LSP は型チェック・リントの対象にする。
+* **静的に列挙できる:** `describe` / `test` はファイルのトップレベルと `describe` の中にだけ書け、名前は文字列リテラルに限る（§14.12.3）。実行しなくても、コンパイラと LSP がテストの一覧（名前・位置・入れ子）を得られる。
+* **既定はブックの代役:** Windows で Excel があっても、既定ではブックの代役で実行する（結果が環境に依存しないようにするため）。実際の Excel に対して実行するには `--excel` を指定する（§14.12.7）。
+* **VBA ビルドの検証ではない:** デバッグ実行と同じく、最適化（§8〜§10.4）は適用しない。意味論の違いは §14.10.4・§14.10.5、代役と Excel の違いは §14.10.8 のとおり。
+
+#### 14.12.2 ファイル
+
+| パス | 内容 |
+|---|---|
+| `test/**/*.test.ras` | テストファイル。1 ファイルが 1 つのテストスイートになる |
+| `test/**/*.ras`（`.test.ras` 以外） | テスト用のヘルパーモジュール。テストファイルから `import` できる。テストの API（§14.12.4〜§14.12.6）を使える |
+| `test/fixtures/` | テストで読み込むブック（`.xlsx` / `.xlsm`）やテキスト ファイルの置き場所（慣例。§14.12.5 の `useWorkbook` はプロジェクトのルート基準の任意のパスを受け付ける） |
+| `build/test/` | `ras test` が出力する JavaScript とソースマップ、失敗したテストのブック（§14.12.8）。実行のたびに作り直す |
+
+* **テスト対象の参照:** テストファイルは、`src/` と `forms/` のモジュールの `export` されたものを相対パスで `import` して使う（`import { lastRow } from "../src/report";`）。`export` されていない関数は呼べない。シートのコード名（`Sheet1`）、`thisWorkbook` などのグローバルは、通常のモジュールと同じく使える。
+* **逆向きの参照は不可:** `src/` / `forms/` のモジュールから `test/` のファイルを `import` するとエラー（`E0701`）。
+* **場所の変更:** `ras.toml` の `[test]` `include` で、テストファイルとみなすパターンを変更できる（§14.12.9）。`include` に一致するファイルはすべてテスト側（ビルドに含めない）として扱う。
+
+#### 14.12.3 テストファイルに書けるもの
+
+テストファイルのトップレベルに書けるのは次のものだけである。
+
+* `import`
+* 関数・クラス・構造体・列挙型・型エイリアスの宣言（`export` は不要。付けても意味を持たない）
+* `const` / `let` の宣言（フック（§14.12.4）とテストの間で値を共有するため）
+* `describe` / `test`（`it`）/ `beforeAll` / `afterAll` / `beforeEach` / `afterEach` の呼び出し文
+
+`describe` の本体（ラムダ）に書けるのは、`const` / `let` の宣言と、`describe` / `test` / フックの呼び出し文だけである。それ以外の文（`ws.cells(1, 1).value = 1;`、`for` など）はエラー（`E0702`）。準備の処理はフックかテストの本体に書く。
+
+* `describe` / `test` の第 1 引数（名前）は文字列リテラルでなければならない（`E0703`）。テンプレート文字列や変数は使えない。
+* `test.each` / `describe.each` の表（§14.12.4）は任意の式でよい。配列リテラルのときは、一覧（LSP・`--list`）にケースごとの名前を出す。それ以外の式のときは、実行するまでケースが分からないため、一覧には名前のテンプレートを 1 つだけ出す。
+* `@macro` / `@init` / `@udf` / `@on` / `@ribbon` と、トップレベルの文による `Main`（§12.4）は書けない（`E0704`）。拡張メソッドはヘルパーモジュールで宣言して `import` すれば使える。
+* テストの本体・フックは通常のラムダ（§4）であり、`describe` の中の `let` を捕捉して読み書きできる。
+
+```typescript
+// test/report.test.ras
+import { rebuildReport, lastRow } from "../src/report";
+
+describe("lastRow", () => {
+    beforeEach(() => useWorkbook("test/fixtures/sales.xlsx"));
+
+    test("データの最終行を返す", () => {
+        expect(Sheet1.lastRow()).toBe(120);
+    });
+
+    test.each([[1, 120], [3, 98]])("列 %i の最終行は %i", (col: int, want: int) => {
+        expect(Sheet1.lastRow(col)).toBe(want);
+    });
+});
+
+describe("rebuildReport", () => {
+    let last: int;
+
+    beforeAll(() => {
+        useWorkbook("test/fixtures/sales.xlsx");
+        last = Sheet1.lastRow();
+    });
+
+    test("C 列に行番号の 2 倍を書く", () => {
+        rebuildReport();
+        expect(Sheet1.cells(2, 3).value).toBe(4);
+        expect(Sheet1.cells(last, 3).value).toBe(last * 2);
+    });
+
+    test("空のシートではエラーにしない", () => {
+        Sheet1.cells.clearContents();
+        expect(() => rebuildReport()).not.toThrow();
+    });
+});
+```
+
+#### 14.12.4 テストの宣言とフック
+
+テストファイルとテスト用のヘルパーモジュールでは、次の名前を `import` なしで使える（同梱の型定義 `ras:test`。ほかのモジュールでは使えない）。ユーザーが同じ名前を宣言した場合は、その宣言が優先する。
+
+| API | 内容 |
+|---|---|
+| `describe(name, body)` | テストをまとめる。入れ子にできる。テストの名前は `describe` の名前と ` > ` でつないだもの（`lastRow > データの最終行を返す`）になる |
+| `test(name, body, options?)` / `it(...)` | テストを宣言する。`body` は引数なしのラムダ。`options` は `{ timeout: int }`（ミリ秒） |
+| `test.skip` / `describe.skip` | 実行しない（結果は「スキップ」） |
+| `test.only` / `describe.only` | そのファイルで `only` の付いたものだけを実行する。`--ci`（§14.12.7）のときは、`only` があるとエラーにする（消し忘れを防ぐため） |
+| `test.todo(name)` | 本体のない予定のテスト（結果は「未実装」） |
+| `test.each(table)(name, body)` / `describe.each(...)` | 表の行ごとにテストを作る。行がタプル・配列なら要素を `body` の引数に、構造体なら構造体を 1 つの引数に渡す。名前には `%s`（文字列化）・`%i` / `%d`（整数）・`%f`（実数）・`%%`・`$フィールド名`（構造体の行）を書ける |
+| `beforeAll(fn)` / `afterAll(fn)` | その `describe`（トップレベルならファイル）の最初のテストの前・最後のテストの後に 1 回実行する |
+| `beforeEach(fn)` / `afterEach(fn)` | その `describe` の中の各テストの前・後に実行する。外側の `beforeEach` から順に、`afterEach` は内側から順に実行する |
+
+* **実行順:** ファイルの中のテストは書いた順に、1 つずつ実行する（並行しない）。ファイルどうしは並行して実行してよい（§14.12.6 の分離があるため結果は変わらない）。`--sequence`（§14.12.7）で 1 ファイルずつにできる。
+* **フックの失敗:** `beforeAll` が失敗すると、その `describe` のテストはすべて失敗になる（本体は実行しない）。`beforeEach` が失敗すると、そのテストの本体は実行せず失敗にし、`afterEach` は実行する。
+* **タイムアウト:** 既定は 1 テスト 10 秒（`[test]` `timeout-ms`）。超えるとテストを失敗にし、そのファイルの実行を打ち切る（残りのテストは失敗になる）。JavaScript の実行を途中で止められないため、プロセスごと終了させる。
+* **`async` は無い:** テストの本体は同期的に実行する。`sleep` / `waitUntil`・`DoEvents` はデバッグ実行と同じ動作になる。
+
+#### 14.12.5 ブックとテストの分離
+
+* **ファイルごとに新しいランタイム:** テストファイルごとに新しいランタイム（モジュール変数・`@init`・アプリケーションの状態・ブックの代役）で実行する。モジュール初期化と `@init` は、そのファイルで最初にテスト対象のモジュールを使う前に 1 回だけ実行する（§14.10.2 と同じ）。同じファイルの中では、モジュール変数はテストをまたいで残る（vitest と同じ）。
+* **ブックはテストごとに戻す:** 各テストの開始時に、ブックの状態（開いているブック、すべてのセル・書式・名前・シート・選択範囲・計算モード・コピー中の範囲）を、そのテストを囲む `beforeAll` をすべて実行し終えた時点の状態に戻す。そのあと `beforeEach` を実行する。テストやその `beforeEach` での変更は、次のテストに持ち越さない。`beforeAll` での準備（セルの書き込みなど）は、各テストの開始時点の状態に含まれる。
+* **既定のブック:** `ras.toml` の `workbook`（§15.2）。`workbook` が無いときは、シートが 1 つの空のブックで始める。
+* **`useWorkbook(path: string): Excel.Workbook`:** プロジェクトのブックを、`path`（プロジェクトのルート基準）のブックの内容に置き換える。ブックのコード名（`Sheet1` など）はプロジェクトのブックのまま、`path` のブックのシートに対応付ける（シートの順に対応付け、`path` のブックの方がシートが多ければ残りは名前だけで参照できる）。`beforeAll` / `beforeEach` / テストの本体で呼べる。元のファイルは書き換えない。
+* **`Workbooks.Open`:** テストからの `Workbooks.Open` は、デバッグ実行と同じくファイルを読み込み、元のファイルは書き換えない（§14.10.8）。開いたブックもテストの開始時に閉じた状態に戻る（`beforeAll` で開いたものは開いたまま）。
+* **ファイル システム:** `Scripting.FileSystemObject` による読み書きは、実際のファイル システムに対して行う（戻さない）。テストで書き込むファイルは、`tempDir(): string`（テストごとに作り、テストの終了後に削除する空のフォルダー）の中に置く。
+* **イベント:** ブック・シートの `@on` のハンドラは、デバッグ実行（§14.10.8）と同じく、テストの操作に応じて呼び出す。ハンドラで捕捉されなかったエラーは、デバッグ実行では実行を止めないが、テストではそのテストを失敗にする（`[test]` `event-errors = "ignore"` で止めないようにできる）。
+
+#### 14.12.6 `expect` と置き換え（モック）
+
+**`expect(actual)`** は、次の判定（マッチャ）を持つ。`.not` を付けると判定を逆にする。失敗すると、テストを止めて期待値と実際の値（配列・構造体は差分）を表示する。
+
+| マッチャ | 判定 |
+|---|---|
+| `toBe(expected)` | RAS の `==` と同じ比較（数値は型をまたいで値で比較、文字列は大文字小文字を区別、オブジェクトは同一性（`Is`）） |
+| `toEqual(expected)` | 配列・構造体・タプル・`Map` を要素ごとに比較する。`Range.value` の 2 次元配列と配列リテラル（`[[1, 2], [3, 4]]`）を比べられる |
+| `toBeCloseTo(expected, digits = 2)` | `actual` と `expected` の差の絶対値が `10 ^ -digits / 2` 未満 |
+| `toBeGreaterThan` / `toBeGreaterThanOrEqual` / `toBeLessThan` / `toBeLessThanOrEqual` | 数値・日付・文字列の大小 |
+| `toBeTruthy()` / `toBeFalsy()` | RAS の条件式と同じ判定 |
+| `toBeEmpty()` | `Empty`（空のセルの値） |
+| `toBeNothing()` | `Nothing` |
+| `toContain(item)` | 配列の要素、または文字列の部分文字列 |
+| `toHaveLength(n)` | 配列・文字列の長さ |
+| `toMatch(pattern: string)` | 文字列が正規表現（`VBScript.RegExp` の構文）に一致する |
+| `toThrow(expected?)` | `actual` は引数なしのラムダ。実行してエラーが起きれば成功。`expected` が整数ならエラー番号、文字列なら説明に含まれる文字列で絞る |
+
+* `expect` の型は `expect<T>(actual: T)` で、`toBe` / `toEqual` の期待値は `T` に代入できる型でなければならない（型エラー）。`actual` が `any` のときは任意の値を受け付ける。
+* マッチャの失敗は、`try` / `catch`（§5）では捕捉されない（テストの中で `catch` しても必ず失敗として報告する）。
+
+**ダイアログと外部の呼び出しの置き換え:** デバッグ実行では応答を固定しているもの（§14.10.8）を、テストから差し替える。置き換えはテストの終了時に元に戻る（`beforeEach` で設定すれば、その `describe` のテストすべてに効く）。
+
+| API | 内容 |
+|---|---|
+| `mockMsgBox(handler)` | `msgBox` の代わりに `handler(prompt, buttons, title)` を呼び、その戻り値（`vbYes` など）を返す。省略時は `vbOK` |
+| `mockInputBox(handler)` | `inputBox` と `application.inputBox` の代わりに `handler(prompt, title, defaultValue)` を呼ぶ |
+| `mockGetOpenFilename(handler)` / `mockGetSaveAsFilename(handler)` | ファイルの選択ダイアログの代わりに `handler(...)` を呼ぶ（キャンセルは `false` を返す） |
+| `mockRun(macroName, handler)` | `application.run(macroName, ...)`（手書き VBA の呼び出し）の代わりに `handler(...args)` を呼ぶ |
+| `mockCreateObject(progId, factory)` | `createObject(progId)` / `new` で、`factory()` の返すオブジェクトを使う（代役に無い COM オブジェクトを、同じメンバーを持つ RAS のクラスで置き換える） |
+
+* 置き換えた関数は、呼び出しの記録を持つ（`const m = mockMsgBox(...); expect(m.calls.length).toBe(1); expect(m.calls[0].prompt).toContain("完了");`）。
+* 置き換えていないダイアログは、デバッグ実行と同じ応答（§14.10.8）をし、テストの結果に警告として表示する（`--ci` ではテストを失敗にする）。
+* **出力:** `printed(): string[]` は、そのテストの中で `debug.print` が出力した行を返す。`debug.print` の出力は、テストが失敗したときにだけ結果に表示する。
+
+#### 14.12.7 `ras test`
+
+```sh
+ras test                          # すべてのテストを実行
+ras test test/report.test.ras     # ファイルを指定
+ras test -t "lastRow"             # 名前（describe > test）に含まれる文字列で絞る
+ras test --list                   # 実行せずに一覧を出す
+ras test --reporter json          # 結果を JSON で出力（エディタ・AI エージェント向け）
+ras test --watch                  # 変更を監視して、影響するテストファイルを実行し直す
+```
+
+| オプション | 内容 |
+|---|---|
+| `[<file>...]` | 実行するテストファイル（またはフォルダー）。省略時は `include` に一致するすべて |
+| `-t, --name <text>` | フルネームに `text` を含むテストだけを実行する（`describe` で絞ると、その中のテストすべて） |
+| `--list` | テストを列挙する（§14.12.3 により実行しない）。`--reporter json` と合わせると、ファイル・名前・位置（行・列）・入れ子の木を出力する |
+| `--reporter <pretty\|json\|junit>` | 出力の形式。既定は `pretty`。`json` は 1 行 1 イベント（ファイルの開始、テストの結果、全体の集計）の JSON Lines、`junit` は JUnit XML |
+| `--watch` | ソースの変更で、変更されたモジュールを（推移的に）`import` しているテストファイルを実行し直す |
+| `--excel` | ブックの代役ではなく、実際の Excel に対して実行する（Windows のみ、§14.10.3）。対象のブックは `build/test/workbooks/` にコピーして開き、テストの開始時にコピーし直して開き直す（遅い）。元のブックは開かない |
+| `--ci` | `test.only` と、置き換えていないダイアログをエラーにする |
+| `--sequence` | テストファイルを 1 つずつ実行する |
+| `--bail <n>` | 失敗が `n` 件になったら打ち切る |
+
+* **終了コード:** すべて成功（スキップ・未実装を含む）なら 0、失敗があれば 1、コンパイル エラーなどでテストを実行できなければ 2。
+* **コンパイル:** テストの前に `ras check` と同じ検査を行い、エラーがあれば実行しない。テストファイルの型エラーも同じ。
+* **失敗の表示:** テストの名前、失敗したマッチャ（期待値・実際の値・差分）または実行時エラー（VBA のエラー番号と説明）、`.ras` の位置（ソースマップ、§14.10.2）、`debug.print` の出力、そのテストのブック（§14.12.8）のパスを表示する。
+
+`--reporter json` のテストの結果のイベントは次の形にする。
+
+```json
+{"type":"test","file":"test/report.test.ras","name":["rebuildReport","C 列に行番号の 2 倍を書く"],
+ "line":21,"status":"failed","durationMs":38,
+ "failure":{"kind":"expect","matcher":"toBe","expected":"240","actual":"0",
+            "location":{"file":"test/report.test.ras","line":24,"column":9}},
+ "printed":[],"workbook":"build/test/workbooks/report.test/rebuildReport > C 列に行番号の 2 倍を書く.xlsx"}
+```
+
+* `status` は `passed` / `failed` / `skipped` / `todo`。`failure.kind` は `expect`（マッチャの失敗）/ `error`（実行時エラー。`code`・`description`・`location` を持つ）/ `timeout` / `hook`（フックの失敗）。
+
+#### 14.12.8 失敗したテストのブック
+
+* 失敗したテストについて、失敗した時点のブック（プロジェクトのブックと、テストで開いたブック）を `build/test/workbooks/<テストファイル名>/<テストのフルネーム>.xlsx` に保存する（保存の方法と制限は §14.10.8 と同じ。VBA プロジェクトは含まない）。テストが何を書き込んだかを、Excel やほかのツールで確かめられる。
+* `[test]` `save-workbooks = "always"` で成功したテストのブックも保存する。`"never"` で保存しない。
+
+#### 14.12.9 `ras.toml` の `[test]`
+
+```toml
+[test]
+include = ["test/**/*.test.ras"]   # テストファイルのパターン（プロジェクトのルート基準）
+timeout-ms = 10000                 # 1 テストのタイムアウト
+excel = "standIn"                  # "standIn"（既定）/ "com"（--excel と同じ）
+save-workbooks = "failed"          # "failed"（既定）/ "always" / "never"
+event-errors = "fail"              # "fail"（既定）/ "ignore"（§14.12.5）
+```
+
+#### 14.12.10 エディタ
+
+* **CodeLens:** `test` / `describe` の上に「▶ テストを実行 | デバッグ」を表示する。「デバッグ」はデバッグ実行（§14.10）と同じく、ブレークポイント・ステップ実行でそのテストを実行する（`beforeAll` / `beforeEach` を含む）。
+* **テスト エクスプローラー:** VS Code 拡張は `ras test --list --reporter json` の結果を VS Code のテスト エクスプローラー（Testing API）に表示し、実行結果（`--reporter json`）を反映する。失敗したマッチャの位置にメッセージ（期待値と実際の値）を表示する。
+* **補完・型:** テストファイルでは、テストの API（§14.12.4〜§14.12.6）を補完・クイック情報に出す。`src/` のモジュールでは出さない。
+
+#### 14.12.11 制限
+
+* VBA ビルド（実際の VBA として実行するテスト）は行わない。最適化（一括転送・インライン展開など）を通したコードの検証は、従来どおり実機で行う。
+* スナップショット テスト（`toMatchSnapshot`）、モジュールのモック（`import` したモジュールの関数の置き換え）、テストの並行実行（ファイルの中）は無い。
+* ユーザーフォームの表示（`frmInput.show()`）は、テストではエラー（445）になる。フォームのコードビハインドの `export function` は呼べる。
+* `--excel` での実行は、Excel が起こすイベント（ユーザーの操作によるもの）やダイアログの扱いがデバッグ実行（§14.10.6）と同じであり、`mock*` の置き換えは RAS から呼ぶ `msgBox` などにだけ効く（手書き VBA の出すダイアログには効かない）。
+
 ## 15. プロジェクト構成
 
 ### 15.1 ディレクトリ
@@ -1879,8 +2092,10 @@ myproject/
   vba/            非管理の VBA モジュール・ユーザーフォーム（双方向同期）
   forms/          ユーザーフォームのデザイン（*.form.json）とコードビハインド（*.ras）（§14.11）
   types/          追加の型定義（*.d.ras）
+  test/           テスト（*.test.ras）とテスト用のヘルパー・フィクスチャ。ビルドには含めない（§14.12）
   build/          生成物（.bas / .cls / .rasmap）
   build/debug/    デバッグ実行用の JavaScript とソースマップ（§14.10）
+  build/test/     テスト実行用の JavaScript と、失敗したテストのブック（§14.12）
 ```
 
 ### 15.2 `ras.toml`
@@ -1914,6 +2129,10 @@ enabled = true
 compileCheck = true
 shared-memory-mb = 64
 pull-unmanaged = true   # 同期・ras pack のときに、ブックの手書きの VBA を RAS に変換して取り込む（§14.7.1）
+
+[test]                  # §14.12.9
+include = ["test/**/*.test.ras"]
+timeout-ms = 10000
 ```
 
 ### 15.3 ホスト型定義
@@ -2179,3 +2398,4 @@ Rust で `vbaProject.bin` を**書き込める**ライブラリは見当たら�
 * ホストのコレクションの配列メソッドは `For Each` に展開し、結果は配列で返す（§4.4）。
 * ユーザーフォームのコードビハインドは RAS で書き（`forms/<Name>.ras`）、フォームのコードモジュールにコンパイルする。イベントは `@on("<コントロール>.<イベント>")` で受け取り、`this` がフォームを表す。`ras form pull` は VBA のコードを RAS に変換する（§14.11.2、§14.11.6）。
 * 同期（ライブ同期・`ras pack`）は、ブックの手書きの標準モジュール・シート / `ThisWorkbook` のコード・VBE で作ったフォームを RAS に変換して取り込み、変換しきれたものから RAS の生成コードで置き換える（§14.7.1）。非管理モジュールを `vba/` で双方向に同期する方式（§14.7）より先に、RAS 管理へ移す方式を実装する。
+* テストは vitest 形式（`describe` / `test` / `expect`）で、本体とは別の `test/*.test.ras` に書く。アノテーション（`@test`）方式は採らない。`describe` / `test` はトップレベルと `describe` の中に限り、名前は文字列リテラルとして、実行せずに列挙できるようにする。既定の実行先はブックの代役とし、テストごとにブックを `beforeAll` 後の状態に戻す（§14.12）。
