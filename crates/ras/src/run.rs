@@ -179,6 +179,9 @@ pub struct RunArgs {
     /// COM オブジェクト（createObject / new）を RAS のクラスで置き換える（例: --replace-object ADODB.Connection=Mocks.FakeConnection）
     #[arg(long, value_name = "PROGID=MODULE.CLASS")]
     pub replace_object: Vec<String>,
+    /// 実行後のブックをグリッドで表示する HTML（build/view/）を作る。変更されたセルを強調する
+    #[arg(long)]
+    pub view: bool,
     /// 変更されたセルの差分を出力しない
     #[arg(long)]
     pub no_diff: bool,
@@ -300,6 +303,16 @@ pub fn run(root: &Path, out: &ras_compiler::JsOutput, args: &RunArgs) -> Result<
                     print!("{}", diff::text(d, MAX_CELLS));
                 }
                 Err(e) => eprintln!("warning: {file} の差分を取れませんでした: {e}"),
+            }
+        }
+    }
+    if args.view && !args.json {
+        for w in report["workbooks"].as_array().cloned().unwrap_or_default() {
+            let Some(file) = w["file"].as_str() else { continue };
+            let before = w["source"].as_str().map(|s| root.join(s));
+            match crate::book::write_view(&root.join(file), before.as_deref(), false, None, &root.join("build").join("view")) {
+                Ok(page) => println!("グリッド表示: {}", page.strip_prefix(root).unwrap_or(&page).display()),
+                Err(e) => eprintln!("warning: {file} のグリッド表示を作れませんでした: {e}"),
             }
         }
     }

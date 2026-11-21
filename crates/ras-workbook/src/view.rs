@@ -1,0 +1,51 @@
+//! `ras book view`: a workbook drawn as a grid, the way Excel shows it, in one HTML page — for
+//! people working without Excel. The cells a run changed are marked when another workbook is
+//! given to compare with. The editor shows the same page in a panel.
+
+use serde_json::{Value as Json, json};
+
+use crate::book::Book;
+use crate::diff::{self, Diff};
+
+const CSS: &str = include_str!("view/view.css");
+const JS: &str = include_str!("view/view.js");
+
+/// What the page draws: the sheets of `book` and, with `changes`, what differs from another workbook.
+pub fn data(book: &mut Book, file: &str, limits: Option<(u32, u32)>, changes: Option<(&str, &Diff)>) -> Result<Json, String> {
+    let (rows, cols) = limits.unwrap_or((crate::book::MAX_ROWS, crate::book::MAX_COLS));
+    let mut sheets = Vec::new();
+    for si in 0..book.sheet_count() {
+        sheets.push(book.sheet_view(si, rows, cols)?);
+    }
+    let diff = changes.map(|(before, d)| {
+        let mut by_sheet = serde_json::Map::new();
+        for c in &d.cells {
+            let side = |s: &Option<diff::Side>| s.as_ref().map(diff::Side::shown).unwrap_or_else(|| "（空）".into());
+            let list = by_sheet.entry(c.sheet.clone()).or_insert_with(|| json!([]));
+            if let Some(list) = list.as_array_mut() {
+                list.push(json!({ "a": c.at.a1(), "before": side(&c.before), "after": side(&c.after) }));
+            }
+        }
+        json!({ "before": before, "structure": diff::structure_lines(d), "changes": by_sheet })
+    });
+    Ok(json!({ "file": file, "sheets": sheets, "diff": diff, "active": Json::Null }))
+}
+
+fn escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// The page for `data`: everything in one file (no network, no other files).
+pub fn page(data: &Json) -> String {
+    // `</script>` inside the data would end the script element.
+    let embedded = data.to_string().replace("</", "<\\/").replace("<!--", "<\\!--");
+    let title = escape(data["file"].as_str().unwrap_or("workbook"));
+    format!(
+        "<!doctype html>\n<html lang=\"ja\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>\n<style>\n{CSS}</style>\n</head>\n<body>\n\
+         <div id=\"top\"><span class=\"file\" id=\"file\"></span><span class=\"note\" id=\"summary\"></span></div>\n\
+         <div id=\"bar\"><div id=\"name\"></div><div id=\"fx\"></div></div>\n\
+         <div id=\"main\"><div id=\"grid\"></div><div id=\"side\"></div></div>\n\
+         <div id=\"note\" hidden></div>\n<div id=\"tabs\"></div>\n\
+         <script>window.DATA = {embedded};</script>\n<script>\n{JS}</script>\n</body>\n</html>\n"
+    )
+}

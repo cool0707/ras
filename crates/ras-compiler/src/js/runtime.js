@@ -1691,6 +1691,19 @@ function debugDescription(o, fallback) {
         return fallback;
     }
 }
+/**
+ * The workbooks of the stand-in as they are now, written into `dir` for the editor's sheet
+ * panel (evaluated by the editor while the program is stopped). 0 when the program does not
+ * work on the stand-in, or has not used a workbook yet.
+ */
+function bookSnapshot(dir) {
+    try {
+        return excelHost !== null && typeof excelHost.saveSnapshot === "function" ? excelHost.saveSnapshot(String(dir)) : 0;
+    } catch {
+        return 0;
+    }
+}
+Object.defineProperty(globalThis, "$rasBookSnapshot", { value: bookSnapshot, configurable: true });
 Object.defineProperty(globalThis, "$rasDebugProperties", { value: debugProperties, configurable: true });
 Object.defineProperty(globalThis, "$rasDebugDescription", { value: debugDescription, configurable: true });
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ras_workbook::book::Book;
-use ras_workbook::{diff, dump, RangeRef};
+use ras_workbook::{diff, dump, view, RangeRef};
 
 #[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
 pub enum DumpFormat {
@@ -47,6 +47,29 @@ pub enum BookCommand {
         /// 行数・列数の上限を付けずに出力する
         #[arg(long)]
         all: bool,
+    },
+    /// ブックを Excel のようなグリッドで表示する HTML を作る（値・数式・主な書式・結合セル・フィルター。--diff で変更されたセルを強調）
+    View {
+        /// 対象ブック（省略時は ras.toml の project.workbook）
+        file: Option<PathBuf>,
+        /// このブックからの変更を強調して表示する（例: 実行前のブック）
+        #[arg(long, value_name = "BEFORE")]
+        diff: Option<PathBuf>,
+        /// 出力する HTML ファイル（省略時は build/view/<ブック名>.html）
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+        /// HTML をファイルに書かず、標準出力に出す
+        #[arg(long)]
+        stdout: bool,
+        /// 作った HTML を既定のブラウザーで開く
+        #[arg(long)]
+        open: bool,
+        /// 行数・列数の上限（500 行 × 100 列）を付けずに表示する
+        #[arg(long)]
+        all: bool,
+        /// 表示するブックの名前（省略時はファイル名）
+        #[arg(long, value_name = "NAME")]
+        title: Option<String>,
     },
     /// 2 つのブックのセル（値・数式・表示形式）と構造（シート、行・列の挿入と削除の推定）の差分を出力する
     Diff {
@@ -151,4 +174,47 @@ pub fn diff_cmd(before: &Path, after: &Path, format: DiffFormat, max_cells: usiz
         DiffFormat::Json => println!("{}", serde_json::to_string_pretty(&diff::to_json(&d)).unwrap_or_default()),
     }
     Ok(if d.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
+/// The page that draws `file` as a grid, with what differs from `before` marked.
+pub fn view_page(file: &Path, before: Option<&Path>, all: bool, title: Option<&str>) -> Result<String, String> {
+    let mut book = open(file)?;
+    let name = title.map(str::to_string).unwrap_or_else(|| file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+    let changes = match before {
+        // (Compared with a snapshot of itself, it is "the last time".)
+        Some(b) => Some((if title.is_some() { "前回".to_string() } else { b.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default() }, diff::diff(&mut open(b)?, &mut book)?)),
+        None => None,
+    };
+    let limits = if all { None } else { Some((ras_workbook::book::VIEW_ROWS, ras_workbook::book::VIEW_COLS)) };
+    let data = view::data(&mut book, &name, limits, changes.as_ref().map(|(n, d)| (n.as_str(), d)))?;
+    Ok(view::page(&data))
+}
+
+/// Writes the page for `file` into `dir` (`<name>.html`); returns its path.
+pub fn write_view(file: &Path, before: Option<&Path>, all: bool, output: Option<&Path>, dir: &Path) -> Result<PathBuf, String> {
+    let page = view_page(file, before, all, None)?;
+    let target = match output {
+        Some(o) => o.to_path_buf(),
+        None => dir.join(format!("{}.html", file.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "book".into()))),
+    };
+    if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    std::fs::write(&target, page).map_err(|e| format!("{}: {e}", target.display()))?;
+    Ok(target)
+}
+
+/// Opens a file with the program the system has for it (a page: the browser).
+pub fn open_in_browser(path: &Path) -> Result<(), String> {
+    let mut cmd = if cfg!(windows) {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/c", "start", ""]);
+        c
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    cmd.arg(path).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.spawn().map(|_| ()).map_err(|e| format!("{} を開けませんでした: {e}", path.display()))
 }

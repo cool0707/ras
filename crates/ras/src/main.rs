@@ -1006,6 +1006,29 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             };
             book::dump(&file, sheet, range.as_deref(), *format, *formats, if *all { None } else { Some((*max_rows, *max_cols)) })
         }
+        Command::Book { action: book::BookCommand::View { file, diff, output, stdout, open, all, title } } => {
+            // The project, when there is one: its workbook, and build/view/ for the page.
+            let root = find_root(project).ok();
+            let file = match (file, &root) {
+                (Some(f), _) => f.clone(),
+                (None, Some(root)) => {
+                    let (cfg, _) = ras_compiler::load_project(root)?;
+                    workbook_path(root, &cfg, None).ok_or("対象ブックを指定してください（ras.toml の project.workbook が未設定です）")?
+                }
+                (None, None) => return Err("対象ブックを指定してください".into()),
+            };
+            if *stdout {
+                print!("{}", book::view_page(&file, diff.as_deref(), *all, title.as_deref())?);
+                return Ok(ExitCode::SUCCESS);
+            }
+            let dir = root.unwrap_or_else(|| PathBuf::from(".")).join("build").join("view");
+            let page = book::write_view(&file, diff.as_deref(), *all, output.as_deref(), &dir)?;
+            println!("{} を作成しました（ブラウザーで開くと、シートをグリッドで見られます）", page.display());
+            if *open {
+                book::open_in_browser(&page)?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Book { action: book::BookCommand::Diff { before, after, format, max_cells } } => book::diff_cmd(before, after, *format, *max_cells),
         Command::Lsp { .. } => {
             ras_lsp::run_stdio().map_err(|e| e.to_string())?;

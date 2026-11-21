@@ -4,6 +4,7 @@ import { registerDebugging } from "./debug";
 import { GeneratedVbaView } from "./generatedVba";
 import { registerModuleCommands } from "./newModule";
 import { RasServer } from "./server";
+import { registerSheetView } from "./sheetView";
 import { SyncStatusBar } from "./statusBar";
 import { registerUserFormCommands } from "./userForm/commands";
 import { UserFormDesignerProvider } from "./userForm/provider";
@@ -32,6 +33,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		rasServer.onDidReceiveSyncStatus((params) => statusBar.setSyncStatus(params)),
 		registerCommands(rasServer, vbaView),
 		registerDebugging(context),
+		registerSheetView(),
 		UserFormDesignerProvider.register(context),
 		registerUserFormCommands(),
 		registerModuleCommands(),

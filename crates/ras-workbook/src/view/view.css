@@ -1,0 +1,42 @@
+:root { --line: #d4d4d4; --head: #f3f3f3; --head-text: #444; --accent: #107c41; --changed: #fff2b3; --changed-line: #e8a200; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; background: #fff; color: #000; font: 13px/1.3 "Yu Gothic UI", "Meiryo UI", "Segoe UI", sans-serif; }
+#top { display: flex; align-items: center; gap: 12px; padding: 4px 8px; background: var(--accent); color: #fff; }
+#top .file { font-weight: bold; }
+#top .note { opacity: .9; }
+#bar { display: flex; min-height: 25px; border-bottom: 1px solid var(--line); }
+#name { width: 90px; padding: 3px 6px; border-right: 1px solid var(--line); text-align: center; }
+#fx { flex: 1; padding: 3px 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; font-family: Consolas, "MS Gothic", monospace; }
+#fx .was { color: #8a6d00; margin-left: 16px; }
+#main { flex: 1; display: flex; min-height: 0; }
+#grid { flex: 1; overflow: auto; }
+#side { width: 280px; border-left: 1px solid var(--line); overflow: auto; padding: 6px 8px; }
+#side h2 { font-size: 13px; margin: 4px 0 6px; }
+#side .sheet { margin: 8px 0 2px; font-weight: bold; }
+#side .change { padding: 2px 4px; cursor: pointer; border-radius: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#side .change:hover { background: var(--changed); }
+#side .change b { display: inline-block; min-width: 44px; }
+#side .structure { color: #555; margin: 2px 0; }
+table { border-collapse: collapse; table-layout: fixed; font: 11pt "Yu Gothic", Meiryo, sans-serif; }
+th { position: sticky; background: var(--head); color: var(--head-text); font: 12px "Segoe UI", sans-serif; font-weight: normal; border: 1px solid var(--line); z-index: 2; }
+thead th { top: 0; height: 20px; }
+tbody th { left: 0; min-width: 40px; width: 40px; }
+thead th:first-child { left: 0; z-index: 3; }
+td { border: 1px solid var(--line); padding: 0 3px; overflow: hidden; white-space: nowrap; vertical-align: bottom; }
+td.ov { overflow: visible; }
+td { position: relative; }
+/* A changed cell keeps its own fill: a line around it and a corner mark. */
+td.chg { box-shadow: inset 0 0 0 1px var(--changed-line); }
+td.chg::before { content: ""; position: absolute; top: 0; right: 0; border: 4px solid; border-color: var(--changed-line) var(--changed-line) transparent transparent; }
+td.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
+td.filter::after { content: "▾"; float: right; color: #555; font-size: 10px; border: 1px solid #aaa; background: #fff; padding: 0 2px; margin-left: 2px; }
+tr.gap th { border-bottom: 2px solid #888; }
+th.gap { border-right: 2px solid #888; }
+#tabs { display: flex; gap: 2px; padding: 2px 6px 0; background: var(--head); border-top: 1px solid var(--line); overflow-x: auto; }
+#tabs button { border: 1px solid var(--line); border-top: none; background: #e9e9e9; padding: 3px 12px; cursor: pointer; font: inherit; white-space: nowrap; border-bottom: 3px solid transparent; }
+#tabs button.on { background: #fff; color: var(--accent); font-weight: bold; }
+#tabs button.hidden { color: #999; font-style: italic; }
+#tabs .badge { background: var(--changed-line); color: #fff; border-radius: 8px; padding: 0 6px; margin-left: 6px; font-size: 11px; }
+#note { padding: 2px 8px; color: #8a6d00; background: #fffbe6; border-top: 1px solid var(--line); }
+.empty { padding: 24px; color: #666; }

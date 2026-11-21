@@ -199,6 +199,19 @@
             "ダイアログを監視しません。"
           ],
           "markdownDescription": "デバッグ実行中、プログラムが Excel の応答を待っている間に Excel がダイアログ（手書き VBA の実行時エラー・コンパイル エラー・確認メッセージなど）を表示したときの扱い。`launch.json` の `dialogs` で構成ごとに上書きできます。"
+        },
+        "ras.debug.sheetView": {
+          "type": "string",
+          "enum": [
+            "onStop",
+            "off"
+          ],
+          "default": "onStop",
+          "markdownEnumDescriptions": [
+            "ブレークポイントやステップ実行で止まるたびに、そのときのシートをパネルに表示し、前回から変わったセルを強調します。",
+            "表示しません。"
+          ],
+          "markdownDescription": "Excel を使わないデバッグ実行（ブックの代役）で、一時停止中にシートをグリッドで表示するかどうか。"
         }
       }
     },
@@ -235,6 +248,11 @@
         "title": "フォームをデバッグ実行",
         "category": "RAS",
         "icon": "$(debug-alt)"
+      },
+      {
+        "command": "ras.book.show",
+        "title": "ブックを表示（グリッド）",
+        "category": "RAS"
       },
       {
         "command": "ras.restartServer",
@@ -350,6 +368,11 @@
           "command": "ras.userForm.new",
           "when": "explorerResourceIsFolder",
           "group": "navigation@22"
+        },
+        {
+          "command": "ras.book.show",
+          "when": "resourceExtname == .xlsx || resourceExtname == .xlsm",
+          "group": "navigation@9"
         }
       ],
       "view/title": [
@@ -430,32 +453,53 @@
                 "properties": {
                   "msgBox": {
                     "type": "array",
-                    "items": { "type": ["string", "number"] },
+                    "items": {
+                      "type": [
+                        "string",
+                        "number"
+                      ]
+                    },
                     "markdownDescription": "`msgBox` の応答（`\"vbYes\"` など）。表示された順に使います。"
                   },
                   "inputBox": {
                     "type": "array",
-                    "items": { "type": "string" },
+                    "items": {
+                      "type": "string"
+                    },
                     "markdownDescription": "`inputBox` の応答。表示された順に使います。"
                   },
                   "openFile": {
                     "type": "array",
-                    "items": { "type": ["string", "boolean"] },
+                    "items": {
+                      "type": [
+                        "string",
+                        "boolean"
+                      ]
+                    },
                     "markdownDescription": "`getOpenFilename` の応答（ファイルのパス。`false` でキャンセル）。"
                   },
                   "saveFile": {
                     "type": "array",
-                    "items": { "type": ["string", "boolean"] },
+                    "items": {
+                      "type": [
+                        "string",
+                        "boolean"
+                      ]
+                    },
                     "markdownDescription": "`getSaveAsFilename` の応答（ファイルのパス。`false` でキャンセル）。"
                   },
                   "run": {
                     "type": "object",
-                    "additionalProperties": { "type": "string" },
+                    "additionalProperties": {
+                      "type": "string"
+                    },
                     "markdownDescription": "`application.run` で呼ぶ手書き VBA の置き換え。マクロ名 → `モジュール名.関数名`（例: `{ \"Legacy\": \"Mocks.legacy\" }`）。"
                   },
                   "createObject": {
                     "type": "object",
-                    "additionalProperties": { "type": "string" },
+                    "additionalProperties": {
+                      "type": "string"
+                    },
                     "markdownDescription": "`createObject` / `new` で作る COM オブジェクトの置き換え。ProgID → `モジュール名.クラス名`。"
                   }
                 }
