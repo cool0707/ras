@@ -170,4 +170,10 @@ export function probe() {
         }
         console.log(`regex ${p} err=${code}`);
     }
+    re.pattern = "(x)";
+    const ms = re.execute("x");
+    console.log(`typeName.match=${typeName(ms)} ${typeName(ms(0))} ${typeName(ms(0).subMatches)}`);
+    console.log(`typeName.fso=${typeName(f.parentFolder.files)} ${typeName(f.parentFolder.subFolders)} ${typeName(f.drive)}`);
+    console.log(`typeName.excel=${typeName(application)} ${typeName(thisWorkbook)} ${typeName(ws)} ${typeName(ws.range("A1"))} ${typeName(thisWorkbook.worksheets)} ${typeName(thisWorkbook.sheets)} ${typeName(application.workbooks)} ${typeName(thisWorkbook.names)}`);
+    console.log(`typeName.format=${typeName(ws.range("A1").font)} ${typeName(ws.range("A1").interior)} ${typeName(ws.range("A1").borders)} ${typeName(ws.range("A1").borders(xlEdgeLeft))} ${typeName(ws.sort)} ${typeName(application.worksheetFunction)}`);
 }

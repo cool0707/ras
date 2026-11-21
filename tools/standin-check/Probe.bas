@@ -178,5 +178,13 @@ Public Function RunProbe() As String
         Err.Clear
         On Error GoTo 0
     Next
+    ' What TypeName calls other objects.
+    Dim ms As Object
+    re.Pattern = "(x)"
+    Set ms = re.Execute("x")
+    Say "typeName.match=" & TypeName(ms) & " " & TypeName(ms(0)) & " " & TypeName(ms(0).SubMatches)
+    Say "typeName.fso=" & TypeName(f.ParentFolder.Files) & " " & TypeName(f.ParentFolder.SubFolders) & " " & TypeName(f.Drive)
+    Say "typeName.excel=" & TypeName(Application) & " " & TypeName(wb) & " " & TypeName(ws) & " " & TypeName(ws.Range("A1")) & " " & TypeName(wb.Worksheets) & " " & TypeName(wb.Sheets) & " " & TypeName(Application.Workbooks) & " " & TypeName(wb.Names)
+    Say "typeName.format=" & TypeName(ws.Range("A1").Font) & " " & TypeName(ws.Range("A1").Interior) & " " & TypeName(ws.Range("A1").Borders) & " " & TypeName(ws.Range("A1").Borders(xlEdgeLeft)) & " " & TypeName(ws.Sort) & " " & TypeName(Application.WorksheetFunction)
     RunProbe = out
 End Function

@@ -432,6 +432,15 @@ impl FnDef {
         self.host_name.as_deref().unwrap_or(&self.name)
     }
 
+    /// The VBA identifier of the procedure. A function of a module must not hide a function of
+    /// the VBA library (`names::module_ident`); a member of a class hides nothing outside it.
+    pub fn proc_ident(&self) -> String {
+        match self.kind {
+            FnKind::Free => crate::names::module_ident(&self.name),
+            _ => crate::names::member_ident(&self.name),
+        }
+    }
+
     pub fn is_generic(&self) -> bool {
         !self.type_params.is_empty()
     }

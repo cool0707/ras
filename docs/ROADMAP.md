@@ -23,7 +23,7 @@ Mac・Linux・Excel の無い Windows で、RAS と VS Code だけでマクロ�
 | 8 | P1 | AI 向けの短いドキュメント（`AGENTS.md`・早見表） | AI | 実装済み |
 | 9 | P2 | 生成 VBA の構文検査（32bit / 64bit） | 人間・AI | 未着手 |
 | 10 | P2 | Windows の Excel への橋渡し（リモート実行・CI） | 人間 | 未着手 |
-| 11 | P2 | 代役と Excel の互換性の突き合わせと一覧の公開 | 人間・AI | 未着手 |
+| 11 | P2 | 代役と Excel の互換性の突き合わせと一覧の公開 | 人間・AI | 一部（突き合わせは `tools/standin-check`。一覧の公開は未着手） |
 | 12 | P2 | API・型定義を CLI で引く（`ras doc`） | AI | 未着手 |
 | 13 | P2 | ロケール・数値精度の違いの警告 | 人間 | 未着手 |
 | 14 | P3 | 入力用ブックの生成（`ras book new --from`） | AI・人間 | 未着手 |

@@ -49,10 +49,23 @@ const STAND_INS: &[&str] = &["CUBEKPIMEMBER", "CUBEMEMBER", "CUBEMEMBERPROPERTY"
 pub const MAX_ROWS: u32 = gridcraft_core::addr::MAX_ROWS;
 pub const MAX_COLS: u32 = gridcraft_core::addr::MAX_COLS;
 
-/// The number format Japanese Excel gives a cell when a date is written into it.
-const DATE_FORMAT: &str = "yyyy/m/d";
-const DATE_TIME_FORMAT: &str = "yyyy/m/d h:mm";
+/// The number format Excel gives a cell when a date is written into it: the short date of the
+/// system (the built-in formats 14 and 22), which `NumberFormat` spells as the United States
+/// do. What the cell shows, and `NumberFormatLocal`, are the system's: Japanese here, as
+/// everywhere in the stand-in (`local_format`).
+const DATE_FORMAT: &str = "m/d/yyyy";
+const DATE_TIME_FORMAT: &str = "m/d/yyyy h:mm";
 const TIME_FORMAT: &str = "h:mm:ss";
+
+/// The number format a Japanese Excel shows a cell by, and says its `NumberFormatLocal` is.
+pub fn local_format(code: &str) -> &str {
+    match code {
+        DATE_FORMAT => "yyyy/m/d",
+        DATE_TIME_FORMAT => "yyyy/m/d h:mm",
+        "General" => "G/標準",
+        other => other,
+    }
+}
 
 // ---------------------------------------------------------------------------- values
 
@@ -503,6 +516,17 @@ impl Book {
                 ws.set_code_name(format!("Sheet{}", i + 1));
             }
         }
+        // Column widths are kept as `ColumnWidth` has them (see `widths_for_file`).
+        for ws in file.sheet_collection_mut() {
+            let default = ws.sheet_format_properties().default_column_width();
+            if default > 0.0 {
+                ws.sheet_format_properties_mut().set_default_column_width(format::width_from_file(default));
+            }
+            for c in ws.column_dimensions_mut() {
+                let w = format::width_from_file(c.width());
+                c.set_width(w);
+            }
+        }
         let mut model = outline(&file, date1904);
         let mut calc = Calc::new();
         calc.seed(seed());
@@ -756,7 +780,8 @@ impl Book {
                 n.to_string()
             }
             None => {
-                let mut i = self.sheet_count() + 1;
+                // The first name that is free, as Excel names a sheet added to a workbook it opened.
+                let mut i = 1;
                 loop {
                     let n = format!("Sheet{i}");
                     if self.model.sheet_index(&n).is_none() {
@@ -1059,6 +1084,7 @@ impl Book {
 
     fn display(&mut self, v: &Value, code: &str) -> String {
         let sys = self.model.date_system;
+        let code = if code == "General" { code } else { local_format(code) };
         gridcraft_numfmt::format_value(v, self.format(code), sys).text
     }
 
@@ -1187,6 +1213,8 @@ impl Book {
             let f = match f {
                 "yyyy-mm-dd" | "m/d/yyyy" => DATE_FORMAT,
                 "m/d/yyyy h:mm" => DATE_TIME_FORMAT,
+                // A month and a day without a year, as a Japanese Excel formats it.
+                "d-mmm" => "m\"月\"d\"日\"",
                 other => other,
             };
             self.set_number_format_at(si, at, f);
@@ -1262,8 +1290,34 @@ impl Book {
         if found.is_some() {
             return found;
         }
-        let (sheet, at) = first_ref?;
-        self.is_date_format(sheet, at).then(|| self.number_format_code(sheet, at))
+        if let Some((sheet, at)) = first_ref
+            && self.is_date_format(sheet, at)
+        {
+            return Some(self.number_format_code(sheet, at));
+        }
+        self.inherited_format(si, e)
+    }
+
+    /// The number format a formula takes from the cells it adds up: the format of the first of
+    /// them that has one. As Excel 2021 does (tools/standin-check): `=SUM(C2:C4)`, `=C2+1` and
+    /// `=D2+C2` take the `#,##0.00` of column C; `=C2*D2` and `=ROUND(C3*D3,0)` stay General.
+    fn inherited_format(&mut self, si: usize, e: &Expr) -> Option<String> {
+        use gridcraft_formula::ast::{BinOp, UnOp};
+        match e {
+            Expr::Paren(x) | Expr::Unary(UnOp::Neg | UnOp::Plus, x) => self.inherited_format(si, x),
+            Expr::Binary(BinOp::Add | BinOp::Sub, a, b) => self.inherited_format(si, a).or_else(|| self.inherited_format(si, b)),
+            Expr::Call(name, args) if matches!(name.as_str(), "SUM" | "AVERAGE" | "MIN" | "MAX" | "MEDIAN") => args.iter().find_map(|a| self.inherited_format(si, a)),
+            Expr::Ref(r) => {
+                let sheet = match &r.sheet {
+                    SheetSel::Current => si,
+                    SheetSel::Named(n) => self.model.sheet_index(n)?,
+                    SheetSel::Span(..) => return None,
+                };
+                let code = self.number_format_code(sheet, r.range().start);
+                (code != "General" && code != "@").then_some(code)
+            }
+            _ => None,
+        }
     }
 
     /// `Range.ClearContents` (`formats`: `Range.Clear`, which also clears the number formats).
@@ -1455,8 +1509,45 @@ impl Book {
         self.file.calculation_properties_mut().set_calc_mode(mode);
         let macro_ext = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xlsm"));
         let path = if macro_ext && !self.file.has_macros() { path.with_extension("xlsx") } else { path.to_path_buf() };
-        umya_spreadsheet::writer::xlsx::write(&self.file, &path).map_err(|e| format!("{} に保存できません（{e}）", path.display()))?;
+        let kept = self.widths_for_file();
+        let written = umya_spreadsheet::writer::xlsx::write(&self.file, &path);
+        self.widths_back(kept);
+        written.map_err(|e| format!("{} に保存できません（{e}）", path.display()))?;
         Ok(path)
+    }
+
+    /// Makes the column widths what the file has, and returns what they were (`widths_back`).
+    /// A width of the file is the `ColumnWidth` of Excel and the padding of a cell, and
+    /// umya-spreadsheet gives every column it has touched a width of its own (8.38): written as
+    /// it is, Excel would show the columns the program wrote to narrower than the others
+    /// (7.75), and a `ColumnWidth` of 20 as 19.38.
+    fn widths_for_file(&mut self) -> Vec<(f64, Vec<umya_spreadsheet::structs::Column>)> {
+        let mut kept = Vec::new();
+        for ws in self.file.sheet_collection_mut() {
+            let default = ws.sheet_format_properties().default_column_width();
+            let columns = ws.column_dimensions().to_vec();
+            kept.push((default, columns));
+            if default > 0.0 {
+                ws.sheet_format_properties_mut().set_default_column_width(format::width_to_file(default));
+            }
+            let untouched = |c: &umya_spreadsheet::structs::Column| default <= 0.0 && c.width() == format::DEFAULT_COLUMN_WIDTH && !c.hidden() && !c.best_fit() && *c.style() == umya_spreadsheet::Style::default();
+            let columns = ws.column_dimensions_mut();
+            columns.retain(|c| !untouched(c));
+            for c in columns.iter_mut() {
+                let w = format::width_to_file(c.width());
+                c.set_width(w);
+            }
+        }
+        kept
+    }
+
+    fn widths_back(&mut self, kept: Vec<(f64, Vec<umya_spreadsheet::structs::Column>)>) {
+        for (ws, (default, columns)) in self.file.sheet_collection_mut().iter_mut().zip(kept) {
+            if default > 0.0 {
+                ws.sheet_format_properties_mut().set_default_column_width(default);
+            }
+            *ws.column_dimensions_mut() = columns;
+        }
     }
 
     /// The bytes of the file as `save` would write them.
@@ -1464,7 +1555,10 @@ impl Book {
         self.flush();
         self.store();
         let mut buf = Vec::new();
-        umya_spreadsheet::writer::xlsx::write_writer(&self.file, &mut buf).map_err(|e| format!("保存できません（{e}）"))?;
+        let kept = self.widths_for_file();
+        let written = umya_spreadsheet::writer::xlsx::write_writer(&self.file, &mut buf);
+        self.widths_back(kept);
+        written.map_err(|e| format!("保存できません（{e}）"))?;
         Ok(buf)
     }
 

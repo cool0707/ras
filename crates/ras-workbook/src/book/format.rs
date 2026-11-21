@@ -15,6 +15,21 @@ use umya_spreadsheet::{
 use super::{Book, MAX_COLS, MAX_ROWS, Result, Val, at_of, coord};
 
 pub(super) const DEFAULT_COLUMN_WIDTH: f64 = 8.38;
+/// The width of a digit of the default font in pixels, which the widths of columns are counted
+/// in. The default font is taken to be 游ゴシック 11pt, as everywhere here (Calibri 11pt has 7).
+const DIGIT_WIDTH: f64 = 8.0;
+/// The padding of a cell in pixels, which the width of a column has in the file.
+const CELL_PADDING: f64 = 5.0;
+
+/// The width of a column as the file has it, of a `ColumnWidth` (ECMA-376 18.3.1.13).
+pub(super) fn width_to_file(chars: f64) -> f64 {
+    ((chars * DIGIT_WIDTH + CELL_PADDING) / DIGIT_WIDTH * 256.0).trunc() / 256.0
+}
+
+/// The `ColumnWidth` of a width of the file.
+pub(super) fn width_from_file(width: f64) -> f64 {
+    (((width * DIGIT_WIDTH - CELL_PADDING) / DIGIT_WIDTH * 100.0 + 0.5).trunc() / 100.0).max(0.0)
+}
 const DEFAULT_ROW_HEIGHT: f64 = 18.75;
 const DEFAULT_FONT: &str = "游ゴシック";
 const NONE: f64 = -4142.0;

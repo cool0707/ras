@@ -20,9 +20,9 @@ $repo = (Resolve-Path "$here\..\..").Path
 if (-not $Target) { $Target = Join-Path $repo "target\release" }
 if (-not $Ras) { $Ras = Join-Path $Target "ras.exe" }
 if (-not $Out) { $Out = Join-Path $here "out" }
-$comAddon = Join-Path $Target "ras_com.node"
+$comDll = Join-Path $Target "ras_com.dll"
 $bookDll = Join-Path $Target "ras_book.dll"
-foreach ($f in $Ras, $comAddon, $bookDll) { if (-not (Test-Path $f)) { throw "$f がありません（cargo build --release）" } }
+foreach ($f in $Ras, $comDll, $bookDll) { if (-not (Test-Path $f)) { throw "$f がありません（cargo build --release）" } }
 
 # Each scenario: the project, the entry point, and whether the workbooks are compared.
 $scenarios = @(
@@ -41,6 +41,9 @@ $scenarios = @(
     @{ name = "regex"; project = "cells"; entry = "Tools.regex" }
     # The same questions asked of VBA in Excel (Probe.bas), which is what both should answer.
     @{ name = "probe"; project = "cells"; entry = "Probe.probe"; vba = "Probe.RunProbe" }
+    # The order of the events: the VBA build in Excel against the stand-in.
+    @{ name = "events.run"; project = "events"; entry = "Main.run"; packed = $true }
+    @{ name = "events.sheets"; project = "events"; entry = "Main.sheets"; packed = $true }
 )
 $Only = @($Only | ForEach-Object { $_ -split "," } | Where-Object { $_ })   # -File passes `a,b` as one string
 if ($Only.Count -gt 0) { $scenarios = $scenarios | Where-Object { $Only -contains $_.name } }
@@ -50,6 +53,9 @@ $work = Join-Path $Out "work"
 New-Item -ItemType Directory -Force $work, "$Out\standin", "$Out\excel" | Out-Null
 $bookAddon = Join-Path $Out "ras_book.node"
 Copy-Item $bookDll $bookAddon
+# The addons as Node loads them: copies of what cargo built (a `.node` left in target\ may be old).
+$comAddon = Join-Path $Out "ras_com.node"
+Copy-Item $comDll $comAddon
 
 function Invoke-Node([string]$dir, [string]$entry, [hashtable]$vars) {
     $psi = [System.Diagnostics.ProcessStartInfo]::new("node")
@@ -106,18 +112,38 @@ try {
         $a = Invoke-Node $dir $s.entry @{ RAS_BOOK_ADDON = $bookAddon; RAS_WORKBOOKS = $saved }
 
         Copy-Item $seed $book -Force
-        $wb = $xl.Workbooks.Open($book)
-        # A workbook the VBA editor has never seen has no code names (`CodeName` is ""), and the
-        # debug run finds its sheets by them. Reading the VBA project makes Excel give them.
-        [void]$wb.VBProject.VBComponents.Count
-        $b = Invoke-Node $dir $s.entry @{ RAS_COM_ADDON = $comAddon; RAS_DIALOGS = "dismiss" }
         $excelBook = Join-Path $Out "excel\$($s.name).xlsx"
-        $xl.CutCopyMode = 0
-        $xl.Calculation = -4105
-        $xl.EnableEvents = $true
-        $xl.ScreenUpdating = $true
-        try { if ($wb.ActiveSheet.AutoFilterMode -or $true) { $wb.SaveCopyAs($excelBook) } } catch { Write-Host "  SaveCopyAs: $_" -ForegroundColor Yellow }
+        if ($s.packed) {
+            # Excel raises its events for VBA only: the VBA build, written into a copy of the
+            # workbook, is run as a macro, and what it returns is what it would have printed.
+            # (A compile error of the VBA stops Excel in the VBA editor, and this script with it.)
+            $packed = Join-Path $dir "Packed.xlsm"
+            if (-not (Test-Path $packed)) {
+                & $Ras pack --project $dir --convert --output $packed | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "ras pack ($($s.name)) が失敗しました" }
+            }
+            $macroBook = Join-Path $dir "Run.xlsm"
+            Copy-Item $packed $macroBook -Force
+            $wb = $xl.Workbooks.Open($macroBook)
+            # The workbook's Workbook_Open asks Excel to call its initialization when it is idle
+            # (Application.OnTime). Closed before that, Excel would open the workbook again for it.
+            Start-Sleep -Seconds 2
+            # Deleting a sheet asks; the alerts can be on again after the macro before.
+            $xl.DisplayAlerts = $false
+            $text = "$($xl.Run("Run.xlsm!$($s.entry)"))"
+            $b = @{ lines = @($text -split "`r?`n" | Where-Object { $_ -ne "" }); stderr = ""; code = 0 }
+            $excelBook = $null
+            $xl.EnableEvents = $false
+        } else {
+            $wb = $xl.Workbooks.Open($book)
+            $b = Invoke-Node $dir $s.entry @{ RAS_COM_ADDON = $comAddon; RAS_DIALOGS = "dismiss" }
+            $xl.CutCopyMode = 0
+            $xl.Calculation = -4105
+            $xl.ScreenUpdating = $true
+            try { $wb.SaveCopyAs($excelBook) } catch { Write-Host "  SaveCopyAs: $_" -ForegroundColor Yellow }
+        }
         foreach ($open in @($xl.Workbooks)) { $open.Close($false) }
+        $xl.EnableEvents = $true
 
         # VBA itself, in a module imported into the same workbook.
         $v = $null
@@ -151,7 +177,8 @@ try {
 
         $bookDiff = $null
         $standinBook = Join-Path $saved "Book.xlsx"
-        if ((Test-Path $standinBook) -and (Test-Path $excelBook)) {
+        if ($null -eq $excelBook) {
+        } elseif ((Test-Path $standinBook) -and (Test-Path $excelBook)) {
             $bookDiff = @(& $Ras book diff $standinBook $excelBook 2>&1 | ForEach-Object { "$_" })
             if ($LASTEXITCODE -ne 0) { $bookDiff | ForEach-Object { Write-Host "  book: $_" -ForegroundColor Yellow } } else { $bookDiff = @() }
         } elseif (Test-Path $excelBook) {
@@ -162,8 +189,9 @@ try {
     }
 } finally {
     if (-not $KeepExcel) {
-        foreach ($open in @($xl.Workbooks)) { $open.Close($false) }
-        $xl.Quit()
+        # Whatever went wrong, Excel is not left running.
+        try { $xl.EnableEvents = $false; foreach ($open in @($xl.Workbooks)) { $open.Close($false) } } catch { }
+        try { $xl.Quit() } catch { }
     }
     [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($xl)
 }

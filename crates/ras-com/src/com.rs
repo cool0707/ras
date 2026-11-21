@@ -32,10 +32,10 @@ use windows::Win32::Foundation::VARIANT_BOOL;
 use windows::Win32::System::Com::{
     CLSIDFromProgID, CoCreateInstance, CoGetObject, CoInitializeEx, CoTaskMemFree, CreateBindCtx, GetRunningObjectTable, IDispatch, IMoniker, CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER,
     COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT, DISPATCH_PROPERTYPUTREF, DISPPARAMS, EXCEPINFO, FUNCDESC, FUNCFLAG_FHIDDEN,
-    FUNCFLAG_FRESTRICTED, INVOKE_PROPERTYGET, ITypeInfo, SAFEARRAY, SAFEARRAYBOUND, TKIND_ENUM, TKIND_INTERFACE, TYPEATTR, TYPEDESC, VARFLAG_FHIDDEN, VARFLAG_FRESTRICTED, VAR_DISPATCH,
+    FUNCFLAG_FRESTRICTED, IMPLTYPEFLAG_FDEFAULT, IMPLTYPEFLAG_FSOURCE, INVOKE_PROPERTYGET, ITypeInfo, SAFEARRAY, SAFEARRAYBOUND, TKIND_COCLASS, TKIND_ENUM, TKIND_INTERFACE, TYPEATTR, TYPEDESC, VARFLAG_FHIDDEN, VARFLAG_FRESTRICTED, VAR_DISPATCH,
 };
 use windows::Win32::System::Ole::{
-    GetActiveObject, IEnumVARIANT, SafeArrayCreate, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayGetVartype, SafeArrayPutElement, VarR8FromDec,
+    GetActiveObject, IEnumVARIANT, IProvideClassInfo, SafeArrayCreate, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayGetVartype, SafeArrayPutElement, VarR8FromDec,
     PARAMFLAG_FLCID, PARAMFLAG_FOPT, PARAMFLAG_FRETVAL, TYPEFLAG_FDUAL,
 };
 use windows::Win32::System::Variant::{
@@ -58,6 +58,15 @@ const DISP_E_EXCEPTION: i32 = 0x8002_0009_u32 as i32;
 const DISP_E_OVERFLOW: i32 = 0x8002_000A_u32 as i32;
 const DISP_E_BADINDEX: i32 = 0x8002_000B_u32 as i32;
 const DISP_E_BADPARAMCOUNT: i32 = 0x8002_000E_u32 as i32;
+const DISP_E_PARAMNOTOPTIONAL: i32 = 0x8002_000F_u32 as i32;
+const DISP_E_DIVBYZERO: i32 = 0x8002_0012_u32 as i32;
+// What VBA makes of the general HRESULTs (`Border.ThemeColor` of a border without one: 5).
+const E_INVALIDARG: i32 = 0x8007_0057_u32 as i32;
+const E_OUTOFMEMORY: i32 = 0x8007_000E_u32 as i32;
+const E_ACCESSDENIED: i32 = 0x8007_0005_u32 as i32;
+const E_NOTIMPL: i32 = 0x8000_4001_u32 as i32;
+const E_FILENOTFOUND: i32 = 0x8007_0002_u32 as i32;
+const E_PATHNOTFOUND: i32 = 0x8007_0003_u32 as i32;
 const RPC_E_CALL_REJECTED: i32 = 0x8001_0001_u32 as i32;
 const RPC_E_SERVERCALL_RETRYLATER: i32 = 0x8001_010A_u32 as i32;
 const RPC_E_CHANGED_MODE: i32 = 0x8001_0106_u32 as i32;
@@ -100,6 +109,14 @@ fn vba_number(hr: i32) -> i32 {
         DISP_E_BADINDEX => 9,
         DISP_E_BADPARAMCOUNT => 450,
         DISP_E_PARAMNOTFOUND => 448,
+        DISP_E_PARAMNOTOPTIONAL => 449,
+        DISP_E_DIVBYZERO => 11,
+        E_INVALIDARG => 5,
+        E_OUTOFMEMORY => 7,
+        E_ACCESSDENIED => 70,
+        E_NOTIMPL => 445,
+        E_FILENOTFOUND => 53,
+        E_PATHNOTFOUND => 76,
         other => other,
     }
 }
@@ -532,11 +549,17 @@ impl ComObject {
     #[napi]
     pub fn type_name(&self) -> Result<String> {
         unsafe {
+            // The class the object says it is, as VBA asks first.
+            if let Some(name) = self.ptr.cast::<IProvideClassInfo>().ok().and_then(|p| p.GetClassInfo().ok()).and_then(|class| type_info_name(&class)) {
+                return Ok(name);
+            }
             let info = self.ptr.GetTypeInfo(0, LCID).map_err(win)?;
-            let mut name = BSTR::default();
-            let mut context = 0u32;
-            info.GetDocumentation(-1, Some(&mut name), None, &mut context, None).map_err(win)?;
-            let name = name.to_string();
+            // Else the class of its library whose default interface this is: `File` for
+            // `IFile`, `Dictionary` for `IDictionary`, `FileSystemObject` for `IFileSystem3`.
+            if let Some(name) = class_of_interface(&info) {
+                return Ok(name);
+            }
+            let name = type_info_name(&info).ok_or_else(|| com_error(438, "RAS", "型の名前を取得できません"))?;
             Ok(name.strip_prefix('_').unwrap_or(&name).to_string())
         }
     }
@@ -604,6 +627,60 @@ pub struct ComMember {
     /// The property is a number, string, date, boolean or enumeration: reading it is cheap and
     /// shows its value. Objects and `Variant`s (`Range.Value` of a whole sheet) are read on demand.
     pub scalar: bool,
+}
+
+unsafe fn type_info_name(info: &ITypeInfo) -> Option<String> {
+    let mut name = BSTR::default();
+    let mut context = 0u32;
+    unsafe { info.GetDocumentation(-1, Some(&mut name), None, &mut context, None) }.ok()?;
+    Some(name.to_string()).filter(|n| !n.is_empty())
+}
+
+/// The class (coclass) of the type library of `info` that has it as its default interface,
+/// remembered by the interface's GUID (a library has hundreds of types).
+unsafe fn class_of_interface(info: &ITypeInfo) -> Option<String> {
+    thread_local! {
+        static KNOWN: std::cell::RefCell<std::collections::HashMap<u128, Option<String>>> = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    unsafe {
+        let guid = (*TypeAttr::of(info).ok()?.0).guid;
+        if let Some(known) = KNOWN.with(|k| k.borrow().get(&guid.to_u128()).cloned()) {
+            return known;
+        }
+        let find = || -> Option<String> {
+            let mut lib = None;
+            let mut index = 0u32;
+            info.GetContainingTypeLib(&mut lib, &mut index).ok()?;
+            let lib = lib?;
+            let mut other = None;
+            for i in 0..lib.GetTypeInfoCount() {
+                if lib.GetTypeInfoType(i).ok()? != TKIND_COCLASS {
+                    continue;
+                }
+                let Ok(class) = lib.GetTypeInfo(i) else { continue };
+                let Ok(attr) = TypeAttr::of(&class) else { continue };
+                for j in 0..u32::from((*attr.0).cImplTypes) {
+                    let Ok(flags) = class.GetImplTypeFlags(j) else { continue };
+                    if flags.0 & IMPLTYPEFLAG_FSOURCE.0 != 0 {
+                        continue;
+                    }
+                    let Ok(implemented) = class.GetRefTypeOfImplType(j).and_then(|r| class.GetRefTypeInfo(r)) else { continue };
+                    let Ok(its) = TypeAttr::of(&implemented) else { continue };
+                    if (*its.0).guid != guid {
+                        continue;
+                    }
+                    if flags.0 & IMPLTYPEFLAG_FDEFAULT.0 != 0 {
+                        return type_info_name(&class);
+                    }
+                    other = other.or_else(|| type_info_name(&class));
+                }
+            }
+            other
+        };
+        let found = find();
+        KNOWN.with(|k| k.borrow_mut().insert(guid.to_u128(), found.clone()));
+        found
+    }
 }
 
 struct TypeAttr<'a>(*mut TYPEATTR, &'a ITypeInfo);

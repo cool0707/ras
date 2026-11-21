@@ -467,7 +467,7 @@ impl<'p> Lowerer<'p> {
         }
         for &f in &md.fns {
             if prog.fns[f].attrs.init {
-                self.init_calls.push(format!("{}.{}", md.vba_name, names::member_ident(&prog.fns[f].name)));
+                self.init_calls.push(format!("{}.{}", md.vba_name, prog.fns[f].proc_ident()));
                 self.force_public.insert(f);
             }
         }
@@ -638,7 +638,7 @@ impl<'p> Lowerer<'p> {
                 }
                 let public = d.exported || self.force_public_vars.contains(&v);
                 let vis = if public { "Public" } else { "Private" };
-                let name = names::member_ident(&d.name);
+                let name = names::module_ident(&d.name);
                 let (ty, arr) = self.vtype(&d.ty);
                 if let Some(c) = self.const_literal(v) {
                     lines.push(format!("{vis} Const {name} As {ty} = {c}"));
@@ -781,7 +781,7 @@ impl<'p> Lowerer<'p> {
                 format!("{}_{}", names::member_ident(&self.prog.classes[*class].name), def.name)
             }
             FnKind::Host { .. } => def.vba_name().to_string(),
-            _ => names::member_ident(&def.name),
+            _ => def.proc_ident(),
         };
         if let FnKind::Declare { .. } = def.kind {
             if self.prog.modules[def.module].kind == ModuleKind::Std {
@@ -837,7 +837,7 @@ impl<'p> Lowerer<'p> {
         if d.declared {
             return VExpr::Name(d.vba_name().to_string());
         }
-        let name = names::member_ident(&d.name);
+        let name = names::module_ident(&d.name);
         let same_module = d.module == self.pc.emit_module && !self.pc.in_class && !self.pc.in_closure;
         if same_module {
             return VExpr::Name(name);
@@ -1050,7 +1050,7 @@ impl<'p> Lowerer<'p> {
             self.out[mi].procs.push(p);
         }
         if def.is_macro_entry() {
-            self.macros.push(format!("{}.{}", prog.modules[def.module].vba_name, names::member_ident(&def.name)));
+            self.macros.push(format!("{}.{}", prog.modules[def.module].vba_name, def.proc_ident()));
         }
     }
 
@@ -1587,7 +1587,7 @@ impl<'p> Lowerer<'p> {
                 let mut locals = Vec::new();
                 for (i, (h, reentrant)) in handlers.iter().enumerate() {
                     let d = &prog.fns[*h];
-                    let target = VExpr::Name(prog.modules[d.module].vba_name.clone()).member(names::member_ident(&d.name));
+                    let target = VExpr::Name(prog.modules[d.module].vba_name.clone()).member(d.proc_ident());
                     let args: Vec<VExpr> = sig.iter().take(d.params.len()).map(|p| vname(p.0)).collect();
                     let call = VStmt::Call { target, args };
                     if *reentrant || (is_wb && ev == "Open") {
@@ -1694,7 +1694,7 @@ impl<'p> Lowerer<'p> {
             // A function of the code-behind named like the event procedure would clash with it.
             for &f in &md.fns {
                 let d = &prog.fns[f];
-                if names::member_ident(&d.name).eq_ignore_ascii_case(&proc_name) {
+                if d.proc_ident().eq_ignore_ascii_case(&proc_name) {
                     self.diag(Severity::Error, m, d.name_span, "E0614", format!("関数 `{}` の名前はイベント プロシージャ `{proc_name}` と同じです。別の名前にしてください（`@on(\"{object}.{}\")` で受け取ります）", d.name, def.name));
                 }
             }
@@ -1703,13 +1703,13 @@ impl<'p> Lowerer<'p> {
             let mut locals = Vec::new();
             if object == "UserForm" && def.name == "Initialize" {
                 if let Some(f) = init_fn {
-                    calls.push(call_stmt(names::member_ident(&prog.fns[f].name), vec![]));
+                    calls.push(call_stmt(prog.fns[f].proc_ident(), vec![]));
                 }
             }
             for (i, (h, reentrant)) in handlers.iter().enumerate() {
                 let d = &prog.fns[*h];
                 let args: Vec<VExpr> = def.params.iter().take(d.params.len()).map(|p| vname(p.name.clone())).collect();
-                let call = VStmt::Call { target: VExpr::Name(names::member_ident(&d.name)), args };
+                let call = VStmt::Call { target: VExpr::Name(d.proc_ident()), args };
                 if *reentrant {
                     calls.push(call);
                 } else {

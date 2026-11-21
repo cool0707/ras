@@ -31,9 +31,9 @@ function recalculated() {
     log(`Calculate F1=${Sheet1.range("F1").value}`);
 }
 
+// A function named as one of VBA's (Left$): the VBA build names it `left_`.
 @on("Sheet1.Deactivate")
-// Not left: a public procedure of that name hides VBA's Left$ from RAS_Runtime (a compile error in Excel).
-function leftSheet() {
+function left() {
     log("Deactivate");
 }
 

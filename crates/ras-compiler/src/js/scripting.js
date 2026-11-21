@@ -28,6 +28,8 @@ const MESSAGES = {
     457: "このキーは既にこのコレクションの要素に割り当てられています。",
     5017: "正規表現で構文エラーが発生しました。",
     5018: "予期しない量指定子です。",
+    5019: "正規表現に ']' がありません。",
+    5020: "正規表現に ')' がありません。",
     32811: "要素が見つかりません。",
 };
 const WINDOWS = process.platform === "win32";
@@ -690,16 +692,19 @@ module.exports = function createScripting(rt) {
             this.IgnoreCase = false;
             this.Multiline = false;
         }
-        /** As `TypeName` names the real one. */
+        /** As `TypeName` names the real one . */
         get $typeName() {
-            return "IRegExp2";
+            return "RegExp";
         }
         $compile() {
             const flags = `g${rt.cbool(this.IgnoreCase) ? "i" : ""}${rt.cbool(this.Multiline) ? "m" : ""}`;
             try {
                 return new RegExp(rt.cstr(this.Pattern), flags);
             } catch (e) {
-                return fail(/quantifier|nothing to repeat/i.test(String(e && e.message)) ? 5018 : 5017, rt.cstr(this.Pattern));
+                // The numbers VBScript gives: an unexpected quantifier, a class or a group left open.
+                const message = String(e && e.message);
+                const code = /quantifier|nothing to repeat/i.test(message) ? 5018 : /unterminated character class/i.test(message) ? 5019 : /unterminated group/i.test(message) ? 5020 : 5017;
+                return fail(code, rt.cstr(this.Pattern));
             }
         }
         $all(source) {
@@ -713,13 +718,13 @@ module.exports = function createScripting(rt) {
             const list = this.$all(sourceString).map((m) => {
                 const subs = m.slice(1);
                 return {
-                    $typeName: "IMatch2",
+                    $typeName: "Match",
                     $defaultValue: () => m[0],
                     Value: m[0],
                     FirstIndex: m.index,
                     Length: m[0].length,
                     SubMatches: {
-                        $typeName: "ISubMatches",
+                        $typeName: "SubMatches",
                         Count: subs.length,
                         Item: (i) => (Number.isInteger(rt.cnum(i)) && rt.cnum(i) >= 0 && rt.cnum(i) < subs.length ? subs[rt.cnum(i)] : fail(5)),
                         *[Symbol.iterator]() {
@@ -729,7 +734,7 @@ module.exports = function createScripting(rt) {
                 };
             });
             return {
-                $typeName: "IMatchCollection2",
+                $typeName: "MatchCollection",
                 Count: list.length,
                 Item: (i) => list[rt.cnum(i)] || fail(5),
                 *[Symbol.iterator]() {

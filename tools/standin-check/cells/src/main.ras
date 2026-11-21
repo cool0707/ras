@@ -121,9 +121,11 @@ export function clipboard() {
     ws.range("C2:C4").cut();
     ws.paste(ws.range("K2"));
     console.log(`${ws.range("H1").formula} ${ws.range("E2").formula} ${ws.range("C2").value == null} ${ws.range("K3").text} sel=${selection.address(false, false)}`);
-    // Changing a cell ends the copy, as in Excel.
+    // Writing a value leaves the copy, clearing cells ends it, as in Excel.
     ws.range("A2").copy();
     ws.range("J9").value = 1;
+    console.log(`mode=${application.cutCopyMode}`);
+    ws.range("J9").clearContents();
     try {
         ws.range("A9").pasteSpecial(xlPasteValues);
     } catch (e) {

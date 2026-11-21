@@ -793,10 +793,24 @@ function global(name) {
     if (name === "ThisWorkbook") return book;
     if (sheets.has(name)) return sheets.get(name);
     if (!EXCEL_GLOBALS.has(name)) {
-        for (const sheet of iter(get(book, "Sheets"))) {
-            if (get(sheet, "CodeName") === name) {
-                sheets.set(name, sheet);
-                return sheet;
+        // The sheets of a workbook the VBA editor has not seen yet have no code name (`CodeName`
+        // is ""; so has a sheet just added). Reading the VBA project makes Excel give them; it
+        // needs the access to the VBA project the sync needs too.
+        for (const named of [false, true]) {
+            let unnamed = false;
+            for (const sheet of iter(get(book, "Sheets"))) {
+                const code = get(sheet, "CodeName");
+                if (code === name) {
+                    sheets.set(name, sheet);
+                    return sheet;
+                }
+                if (code === "") unnamed = true;
+            }
+            if (named || !unnamed) break;
+            try {
+                get(get(get(book, "VBProject"), "VBComponents"), "Count");
+            } catch {
+                break;
             }
         }
     }

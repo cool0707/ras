@@ -103,6 +103,35 @@ pub fn member_ident(name: &str) -> String {
     }
 }
 
+/// Functions and statements of the VBA library that are not reserved words. A module-level
+/// procedure or variable of such a name hides the library's for the whole project (in its own
+/// module when private): `Left$(s, 1)` in `RAS_Runtime` then does not compile ("型宣言文字と
+/// 宣言されたデータ型が一致しません"), and Excel stops in the VBA editor when a macro is run.
+const VBA_GLOBALS: &[&str] = &[
+    "abs", "appactivate", "array", "asc", "ascb", "ascw", "atn", "beep", "callbyname", "chdir", "chdrive", "choose", "chr", "chrb",
+    "chrw", "command", "cos", "createobject", "curdir", "dateadd", "datediff", "datepart", "dateserial", "datevalue", "day", "ddb",
+    "deletesetting", "dir", "environ", "eof", "erl", "err", "exp", "fileattr", "filecopy", "filedatetime", "filelen", "filter", "fix",
+    "format", "formatcurrency", "formatdatetime", "formatnumber", "formatpercent", "freefile", "fv", "getallsettings", "getattr",
+    "getobject", "getsetting", "hex", "hour", "iif", "imestatus", "inputbox", "instr", "instrb", "instrrev", "int", "ipmt", "irr",
+    "isarray", "isdate", "isempty", "iserror", "ismissing", "isnull", "isnumeric", "isobject", "join", "kill", "lcase", "left", "leftb",
+    "lenb", "load", "loc", "lof", "log", "ltrim", "midb", "minute", "mirr", "mkdir", "month", "monthname", "msgbox", "name", "now",
+    "nper", "npv", "objptr", "oct", "partition", "pmt", "ppmt", "pv", "qbcolor", "randomize", "rate", "replace", "reset", "rgb",
+    "right", "rightb", "rmdir", "rnd", "round", "rtrim", "savesetting", "second", "sendkeys", "setattr", "sgn", "shell", "sin", "sln",
+    "space", "split", "sqr", "str", "strcomp", "strconv", "strptr", "strreverse", "switch", "syd", "tan", "time", "timer",
+    "timeserial", "timevalue", "trim", "typename", "ucase", "unload", "val", "varptr", "vartype", "weekday", "weekdayname", "year",
+];
+
+/// Identifier for a module-level procedure or variable: as `member_ident`, and a name of the
+/// VBA library gets a trailing underscore too (`left` → `left_`), so that it hides nothing.
+pub fn module_ident(name: &str) -> String {
+    let base = member_ident(name);
+    if VBA_GLOBALS.contains(&base.to_ascii_lowercase().as_str()) {
+        format!("{base}_")
+    } else {
+        base
+    }
+}
+
 /// Identifier for a local variable: reserved words and built-in names are both avoided.
 pub fn local_ident(name: &str) -> String {
     let base = valid_ident(name);
@@ -158,5 +187,9 @@ mod tests {
         assert_eq!(member_ident("release"), "release_");
         assert_eq!(local_ident("release"), "release");
         assert_eq!(member_ident("isBlank"), "isBlank");
+        assert_eq!(module_ident("left"), "left_");
+        assert_eq!(module_ident("Trim"), "Trim_");
+        assert_eq!(module_ident("type"), "type_");
+        assert_eq!(module_ident("run"), "run");
     }
 }
