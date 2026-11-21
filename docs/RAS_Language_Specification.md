@@ -801,6 +801,8 @@ On Error GoTo 0
 | `ras typegen <TypeLib>` | COM タイプライブラリから RAS 型定義（`.d.ras`）を生成 |
 | `ras fmt` | フォーマッタ |
 | `ras test [<file>...]` | `test/` のテストを実行する（§14.12）。既定は Excel を使わずブックの代役で実行し、`--excel` で実際の Excel に対して実行する。`--reporter json` で結果を JSON で出力 |
+| `ras run [<Module.proc>]` | 関数を Excel なしで実行し、出力・エラー・変更されたセルを表示する（§14.13）。`--json` で結果を JSON で出力 |
+| `ras book dump [<book>]` / `ras book diff <before> <after>` | ブックの中身をテキストで出力する・2 つのブックを比べる（§14.14） |
 
 ### 7.4 VS Code 拡張の責務（最小）
 
@@ -2056,6 +2058,7 @@ ras test --watch                  # 変更を監視して、影響するテス�
 
 * 失敗したテストについて、失敗した時点のブック（プロジェクトのブックと、テストで開いたブック）を `build/test/workbooks/<テストファイル名>/<テストのフルネーム>.xlsx` に保存する（保存の方法と制限は §14.10.8 と同じ。VBA プロジェクトは含まない）。テストが何を書き込んだかを、Excel やほかのツールで確かめられる。
 * `[test]` `save-workbooks = "always"` で成功したテストのブックも保存する。`"never"` で保存しない。
+* ファイル名に使えない文字（`> ` の `>` など）は `_` に置き換える（`rebuildReport _ C 列に行番号の 2 倍を書く.xlsx`）。テストで開いたほかのブックは `<テストのフルネーム> - <ブック名>.xlsx`。
 
 #### 14.12.9 `ras.toml` の `[test]`
 
@@ -2080,6 +2083,43 @@ event-errors = "fail"              # "fail"（既定）/ "ignore"（§14.12.5）
 * スナップショット テスト（`toMatchSnapshot`）、モジュールのモック（`import` したモジュールの関数の置き換え）、テストの並行実行（ファイルの中）は無い。
 * ユーザーフォームの表示（`frmInput.show()`）は、テストではエラー（445）になる。フォームのコードビハインドの `export function` は呼べる。
 * `--excel` での実行は、Excel が起こすイベント（ユーザーの操作によるもの）やダイアログの扱いがデバッグ実行（§14.10.6）と同じであり、`mock*` の置き換えは RAS から呼ぶ `msgBox` などにだけ効く（手書き VBA の出すダイアログには効かない）。
+
+### 14.13 CLI からの実行（`ras run`）
+
+デバッグ実行（§14.10）を VS Code なしで行う。AI エージェントのように CLI でしか作業できない場合や、テストにしにくい一度きりの確認に使う。
+
+```sh
+ras run Report.rebuildReport              # 実行して結果を表示
+ras run rebuildReport --json              # 結果を JSON で出力（モジュール名は、1 つに決まれば省ける）
+ras run --list                            # 実行できる関数の一覧
+ras run ask --msgbox vbYes --inputbox "2026/4"
+```
+
+* **実行:** デバッグ用の JavaScript を `build/debug/` に出力し（`ras build --target js` と同じ）、JavaScript のランタイムで `ras-main.js` を実行する。Excel の操作は、Windows でも常にブックの代役（§14.10.8）に対して行う。
+* **ランタイム:** 環境変数 `RAS_NODE`、PATH の `node`、VS Code の実行ファイル（`ELECTRON_RUN_AS_NODE` で Node として動かす）の順に探す。ブックの代役のアドオンは、環境変数 `RAS_BOOK_ADDON`、`ras` と同じフォルダーの `ras_book.node` の順に探す。`ras test` も同じ。
+* **表示するもの:** `debug.print` の行（実行中に表示）、表示したダイアログとその応答、実行時エラー（VBA のエラー番号・説明・`.ras` の位置）、変更されたセルの差分（§14.14 の `diff` と同じ形式。読み込んだファイルと、保存した `build/debug/workbooks/` のブックを比べる）。`--no-diff` で差分を出さない。
+* **ダイアログの応答:** `--msgbox <vbYes など>`・`--inputbox <文字列>`・`--open-file <パス>`・`--save-file <パス>`（`false` でキャンセル）を、表示される順に指定する。指定のない `msgBox` は `vbOK`、`inputBox` は既定値（無ければキャンセル）で、その旨を表示する。応答のないファイルの選択ダイアログはエラー 445。
+* **`--json`:** `entry`・`ok`・`printed`（`debug.print` の行）・`dialogs`（`kind`・`prompt`・`answer`・`answered`）・`error`（`code`・`description`・`source`・`file`・`line`）・`eventErrors`・`notes`・`workbooks`（`name`・`file`・`source`・`diff`）を 1 つのオブジェクトで出力する。
+* **終了コード:** 正常に終われば 0、実行時エラーで終われば 1、コンパイル エラーなどで実行できなければ 2。
+
+### 14.14 ブックの中身をテキストで見る・比べる（`ras book`）
+
+`.xlsx` / `.xlsm` を Excel なしでテキストにする。AI エージェントがシートの構成やセルの内容を推測せずに済むようにし、人間が実行結果を確かめる手段にもなる。読み取りはブックの代役と同じ `crates/ras-workbook` で行う。
+
+```sh
+ras book dump Book.xlsm                                   # シートの一覧、使用範囲、数式、名前、テーブル
+ras book dump Book.xlsm --sheet Sheet1 --range A1:F20     # セルの値・数式
+ras book dump Book.xlsm --sheet Sheet1 --format csv       # text（既定）/ json / csv / markdown
+ras book diff before.xlsm build/debug/workbooks/Book.xlsm # セルと構造の差分
+```
+
+* **`dump`（シートの指定なし）:** シートごとに、名前・コード名・表示状態・使用範囲・値のあるセルと数式の数・結合セル・フィルター・テーブル・入力規則・条件付き書式と、数式を出力する。下や右へ同じ形でコピーされた数式（R1C1 形式で同じもの）は、範囲と先頭のセルの数式で 1 行にまとめる。続けてブックの名前定義を出力する。ブックを省略すると `ras.toml` の `workbook`。
+* **`dump --sheet`:** 値のあるセルを 1 行に 1 つ、`番地 <タブ> 値`（数式のセルは `番地 <タブ> 数式 <タブ> → 値`）で出力する。文字列は `"..."`、日付は `2026-04-01`、エラー値は `#N/A` の形。`--sheet` はシート名・コード名・1 から始まる番号で、複数指定できる。`--range` は `A1:F20` または `Sheet1!A1:F20`。`--formats` で表示形式とセルの表示（`Text`）も出力する。
+* **大きなシート:** 既定では 200 行 × 50 列まで（`--max-rows` / `--max-cols`、`--all` で上限なし）を出力し、打ち切ったときは出力した範囲を示す。
+* **形式:** `json` はシートの情報と `cells`（`address`・`row`・`column`・`type`・`value`・`formula`、`--formats` で `numberFormat`・`text`）、`csv` / `markdown` はセルの表示を表にしたもの。
+* **`diff`:** シートを名前で対応付け、セルごとに値・数式・表示形式を比べる。構造の差分として、シートの追加・削除・名前の変更（中身が同じ、または同じ位置で 1 つずつ入れ替わったもの）と、行・列の挿入・削除（ひとまとまりのもの。セルの並びからの推定）を出力する。挿入・削除でずれただけのセルは差分にしない。名前定義の差分も出力する。`--format json` で JSON。
+* **終了コード:** `diff` は差分が無ければ 0、あれば 1。読み取れなければ 2。
+* **対象外:** 書式（フォント・色・罫線）、グラフ・図形・コメント、VBA のコードの差分（`ras unpack` で取り出して比べる）。
 
 ## 15. プロジェクト構成
 
