@@ -211,7 +211,7 @@ pub fn view_page(file: &Path, before: Option<&Path>, all: bool, title: Option<&s
 }
 
 /// The name of the sheet whose code name or name is `wanted` (the code name first, as the
-/// editor asks by code name: `Sheet1` is the sheet of `Sheet1Events.ras` even when another sheet
+/// editor asks by code name: `Sheet1` is the sheet of `objects/Sheet1.ras` even when another sheet
 /// is named "Sheet1"; case does not matter).
 fn sheet_named(book: &Book, wanted: &str) -> Option<String> {
     let count = book.sheet_count();

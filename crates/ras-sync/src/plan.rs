@@ -67,12 +67,15 @@ pub struct SyncOptions {
     pub overwrite: bool,
     /// Hand-written components whose code was taken over into the project (spec §14.7.1): they
     /// are replaced by what the project generates — a standard module or form of that name,
-    /// the RAS-managed region of a document module, whose hand-written code goes — or, a
-    /// standard module the project generates under another name, removed.
+    /// the whole code of a document module — or, a standard module the project generates
+    /// under another name, removed.
     pub adopt: Vec<String>,
     /// Components taken over into files that still need the user's attention: `(component,
     /// generated module)`. Neither is written, the component stays as it is.
     pub pending: Vec<(String, String)>,
+    /// Modules a sync of this project wrote code into before (`build/sync/`): generated code
+    /// in a sheet that is not one of them came with a copy of another sheet.
+    pub written: Vec<String>,
 }
 
 impl SyncOptions {
@@ -95,6 +98,9 @@ pub struct Report {
     pub drifted: Vec<String>,
     /// Components left alone because their converted file needs attention ([`SyncOptions::pending`]).
     pub pending: Vec<String>,
+    /// Sheets whose module holds generated code that no file of the project generates and
+    /// that this project did not write: copies of sheets, left alone (spec §14.6).
+    pub foreign: Vec<String>,
 }
 
 impl Report {
@@ -111,6 +117,72 @@ impl Report {
 /// Whether a module holds anything besides `Attribute` lines, `Option` statements and blank lines.
 pub fn has_code(source: &str) -> bool {
     source.lines().map(str::trim).any(|l| !l.is_empty() && !l.starts_with("Attribute ") && !l.starts_with("VERSION ") && !l.to_ascii_lowercase().starts_with("option "))
+}
+
+/// Whether code holds statements: anything besides `Attribute` lines, `Option` statements,
+/// comments and blank lines.
+fn has_statements(source: &str) -> bool {
+    source.lines().map(str::trim).any(|l| {
+        let lower = l.to_ascii_lowercase();
+        !l.is_empty() && !l.starts_with('\'') && !l.starts_with("Attribute ") && !l.starts_with("VERSION ") && !lower.starts_with("option ") && !lower.starts_with("rem ")
+    })
+}
+
+/// What a sync does with a document module — the workbook's or a sheet's (spec §14.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentAction {
+    /// Nothing: it holds what its file generates, or no code and no file.
+    Unchanged,
+    /// Its whole code becomes this (empty: no code).
+    Write(String),
+    /// Hand-written code no file of the project generates code for: left as it is.
+    Keep,
+    /// Generated code that was edited in the VBE (spec §14.7).
+    Drifted,
+    /// Hand-written code that what the file generates would replace.
+    HandWritten,
+    /// Generated code this project did not write into the module, which has no file: it came
+    /// with a copy of a sheet. Left as it is (spec §14.6).
+    Foreign,
+}
+
+/// Decides what to do with a document module (spec §14.6). `current` is its code (with or
+/// without the `Attribute` header), `generated` what its file generates (`None`: no file, or a
+/// file without code). `adopt`: its hand-written code, or what was added to it in the VBE,
+/// was taken over into the project (spec §14.7.1, §14.7.3). `own`: a sync of this project
+/// wrote code into this module before.
+///
+/// The module is written as a whole. The RAS-managed region that earlier versions kept
+/// inside a document module is removed first; what is left decides.
+pub fn document_action(current: &str, generated: Option<&str>, adopt: bool, overwrite: bool, own: bool) -> DocumentAction {
+    let pane: String = current.replace("\r\n", "\n").lines().skip_while(|l| l.starts_with("Attribute ") || l.starts_with("VERSION ")).map(|l| format!("{l}\r\n")).collect();
+    let legacy = pane.lines().any(|l| l.trim() == ras_ovba::RAS_BEGIN_MARKER);
+    let rest = if legacy { ras_ovba::merge_managed_region(&pane, "") } else { pane.clone() };
+    match (generated, has_drifted(&rest)) {
+        (Some(code), Some(false)) if !legacy && same_code(&pane, code) => DocumentAction::Unchanged,
+        (Some(code), Some(false)) => DocumentAction::Write(code.to_string()),
+        (_, Some(true)) if !overwrite && !adopt => DocumentAction::Drifted,
+        (Some(code), Some(true)) => DocumentAction::Write(code.to_string()),
+        (Some(code), None) if has_statements(&rest) && !adopt && !overwrite => {
+            let _ = code;
+            DocumentAction::HandWritten
+        }
+        (Some(code), None) => DocumentAction::Write(code.to_string()),
+        // Generated earlier, no longer generated.
+        (None, Some(_)) if own || overwrite => DocumentAction::Write(String::new()),
+        (None, Some(_)) => DocumentAction::Foreign,
+        (None, None) if has_statements(&rest) => {
+            if adopt {
+                DocumentAction::Write(String::new())
+            } else if legacy {
+                DocumentAction::Write(rest)
+            } else {
+                DocumentAction::Keep
+            }
+        }
+        (None, None) if legacy => DocumentAction::Write(rest),
+        (None, None) => DocumentAction::Unchanged,
+    }
 }
 
 fn same_name(a: &str, b: &str) -> bool {
@@ -217,29 +289,34 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, op
     let mut ops: Vec<Op> = Vec::new();
     let mut hand_written = Vec::new();
 
-    for f in files {
-        if f.kind == VModuleKind::Document {
-            let Some(doc) = find(&f.name).filter(|c| c.kind == Kind::Document) else {
-                return Err(SyncError::Failed(format!("ブックに `{}` というコード名のシート（またはブック）がありません。Excel 側でシートを追加するか、RAS 側の指定を直してください", f.name)));
-            };
-            // Hand-written code that was taken over into the project goes.
-            let current = if opts.adopts(&doc.name) { ras_ovba::strip_hand_written(&doc.code) } else { doc.code.clone() };
-            // The VBE reports a procedure that exists twice only as a compile error dialog.
-            let hand = ras_ovba::procedure_names(&ras_ovba::merge_managed_region(&current, ""));
-            for generated in ras_ovba::procedure_names(&f.code) {
-                if let Some(clash) = hand.iter().find(|n| same_name(n, &generated)) {
-                    return Err(SyncError::Failed(format!(
-                        "ドキュメントモジュール `{}` には手書きの `{clash}` があり、RAS が生成するプロシージャと名前が重なります。手書き側の処理を RAS の `@on` ハンドラへ移すか、手書きのプロシージャを削除してください",
-                        doc.name
-                    )));
+    // Document modules are written as a whole from their files (spec §12.2, §14.6).
+    for f in files.iter().filter(|f| f.kind == VModuleKind::Document) {
+        if find(&f.name).filter(|c| c.kind == Kind::Document).is_none() {
+            return Err(SyncError::Failed(format!("ブックに `{}` というコード名のシート（またはブック）がありません。Excel 側でシートを追加するか、objects/ のファイル名を直してください", f.name)));
+        }
+    }
+    for doc in existing.iter().filter(|c| c.kind == Kind::Document) {
+        if opts.is_pending(&doc.name) {
+            continue;
+        }
+        let generated = files.iter().find(|f| f.kind == VModuleKind::Document && same_name(&f.name, &doc.name));
+        let own = opts.written.iter().any(|n| same_name(n, &doc.name));
+        match document_action(&doc.code, generated.map(|f| f.code.as_str()), opts.adopts(&doc.name), opts.overwrite, own) {
+            DocumentAction::Unchanged => {
+                if generated.is_some() {
+                    report.unchanged.push(doc.name.clone());
                 }
             }
-            let merged = ras_ovba::merge_managed_region(&current, &f.code);
-            if same_code(&merged, &doc.code) {
-                report.unchanged.push(doc.name.clone());
-            } else {
-                ops.push(Op::Write { name: doc.name.clone(), code: merged, before: doc.code.clone() });
-            }
+            DocumentAction::Write(code) => ops.push(Op::Write { name: doc.name.clone(), code, before: doc.code.clone() }),
+            DocumentAction::Keep => {}
+            DocumentAction::Drifted => report.drifted.push(doc.name.clone()),
+            DocumentAction::HandWritten => hand_written.push(doc.name.clone()),
+            DocumentAction::Foreign => report.foreign.push(doc.name.clone()),
+        }
+    }
+
+    for f in files {
+        if f.kind == VModuleKind::Document {
             continue;
         }
         let Some(c) = find(&f.name) else {
@@ -254,7 +331,8 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, op
                 hand_written.push(c.name.clone());
                 continue;
             }
-            Some(true) if !opts.overwrite => {
+            // (What was added to it in the VBE was taken over: written again from its file.)
+            Some(true) if !opts.overwrite && !opts.adopts(&c.name) => {
                 report.drifted.push(c.name.clone());
                 continue;
             }
@@ -309,9 +387,9 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, op
         )));
     }
 
-    // What RAS generated earlier and no longer generates.
+    // What RAS generated earlier and no longer generates (document modules: above).
     for c in &existing {
-        if files.iter().any(|f| same_name(&f.name, &c.name)) {
+        if c.kind == Kind::Document || files.iter().any(|f| same_name(&f.name, &c.name)) {
             continue;
         }
         if opts.is_pending(&c.name) {
@@ -325,15 +403,6 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, op
                 None if c.kind == Kind::Standard && opts.adopts(&c.name) => ops.push(Op::Remove(c.clone())),
                 None => {}
             },
-            Kind::Document if opts.adopts(&c.name) => {
-                let code = ras_ovba::merge_managed_region(&ras_ovba::strip_hand_written(&c.code), "");
-                if !same_code(&code, &c.code) {
-                    ops.push(Op::Write { name: c.name.clone(), code, before: c.code.clone() });
-                }
-            }
-            Kind::Document if ras_ovba::extract_managed_region(&c.code).is_some() => {
-                ops.push(Op::Write { name: c.name.clone(), code: ras_ovba::merge_managed_region(&c.code, ""), before: c.code.clone() });
-            }
             _ => {}
         }
     }
@@ -517,11 +586,20 @@ mod tests {
 
     /// Compiles a one-file project and returns its generated modules.
     fn build(source: &str) -> Vec<OutputFile> {
+        build_with(source, &[])
+    }
+
+    /// Builds `src/main.ras` and the files of `objects/` (name, text).
+    fn build_with(source: &str, objects: &[(&str, &str)]) -> Vec<OutputFile> {
         let dir = std::env::temp_dir().join(format!("ras-sync-plan-{}-{:?}", std::process::id(), std::thread::current().id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("objects")).unwrap();
         std::fs::write(dir.join("ras.toml"), "[project]\nname = \"T\"\n").unwrap();
         std::fs::write(dir.join("src").join("main.ras"), source).unwrap();
+        for (name, text) in objects {
+            std::fs::write(dir.join("objects").join(format!("{name}.ras")), text).unwrap();
+        }
         let (mut config, sources) = ras_compiler::load_project(&dir).unwrap();
         config.sheet_code_names = vec!["Sheet1".into()];
         let prog = ras_compiler::analyze(sources, config);
@@ -613,27 +691,85 @@ mod tests {
         assert!(book.code("Main").is_none() && book.code("Legacy").is_some());
     }
 
+    const ON_OPEN: &str = "@on(\"Workbook.Open\")\nfunction opened() {\n    msgBox(\"open\");\n}\n";
+    const ON_CHANGE: &str = "@on(\"Worksheet.Change\")\nfunction changed(target: Excel.Range) {\n    msgBox(target.address);\n}\n";
+
     #[test]
-    fn document_modules_keep_the_hand_written_part() {
-        let files = build("@on(\"Workbook.Open\")\nfunction opened() {\n    msgBox(\"open\");\n}\n");
-        let doc = files.iter().find(|f| f.kind == VModuleKind::Document).expect("a document module");
-        let hand = "Option Explicit\r\nPrivate Sub Hand()\r\nEnd Sub\r\n";
-        let mut book = Fake::with(&[(doc.name.as_str(), Kind::Document, hand), ("Sheet1", Kind::Document, "")]);
+    fn document_modules_are_written_whole() {
+        let files = build_with(HELLO, &[("ThisWorkbook", ON_OPEN), ("Sheet1", ON_CHANGE)]);
+        let doc = files.iter().find(|f| f.name == "Sheet1").expect("the module of the sheet");
+        let mut book = documents();
         let report = apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
-        assert!(report.updated.contains(&doc.name), "{report:?}");
-        let code = book.code(&doc.name).unwrap().to_string();
-        assert!(code.starts_with(hand) && code.contains(ras_ovba::RAS_BEGIN_MARKER), "{code}");
+        assert!(report.updated.contains(&"Sheet1".to_string()) && report.updated.contains(&"ThisWorkbook".to_string()), "{report:?}");
+        let code = book.code("Sheet1").unwrap().to_string();
+        assert_eq!(code, doc.code);
+        assert!(code.starts_with("' RAS-GENERATED hash=") && code.contains("Option Explicit") && !code.contains(ras_ovba::RAS_BEGIN_MARKER), "{code}");
         assert_eq!(apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap().changed(), 0);
 
-        // Without the handler the region is taken out again.
-        let report = apply(&mut book, &build(HELLO), Forms::NONE, &SyncOptions::default()).unwrap();
-        assert!(report.updated.contains(&doc.name), "{report:?}");
-        assert_eq!(book.code(&doc.name).unwrap(), hand);
+        // Without the file: generated code this project did not write came with a copy of a
+        // sheet and stays; what it wrote goes, and the module is left without code.
+        let without = build_with(HELLO, &[("ThisWorkbook", ON_OPEN)]);
+        let report = apply(&mut book, &without, Forms::NONE, &SyncOptions::default()).unwrap();
+        assert_eq!((report.foreign.as_slice(), report.changed()), (&["Sheet1".to_string()][..], 0), "{report:?}");
+        let own = SyncOptions { written: vec!["sheet1".into()], ..SyncOptions::default() };
+        let report = apply(&mut book, &without, Forms::NONE, &own).unwrap();
+        assert_eq!(report.updated, ["Sheet1"], "{report:?}");
+        assert_eq!(book.code("Sheet1").unwrap(), "");
 
-        // A hand-written procedure of the same name would not compile.
-        let clash = format!("Private Sub {}()\r\nEnd Sub\r\n", ras_ovba::procedure_names(&doc.code)[0]);
-        let mut book = Fake::with(&[(doc.name.as_str(), Kind::Document, clash.as_str())]);
+        // Edited in the VBE: drift, left alone until `overwrite`.
+        let mut book = documents();
+        apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
+        let edited = format!("{}Private Sub Added()\r\nEnd Sub\r\n", book.code("Sheet1").unwrap());
+        book.components.iter_mut().find(|c| c.name == "Sheet1").unwrap().code = edited.clone();
+        let report = apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
+        assert_eq!(report.drifted, ["Sheet1"], "{report:?}");
+        assert_eq!(book.code("Sheet1").unwrap(), edited);
+        // What was added to it was taken over into its file (spec §14.7.3): written again.
+        let report = apply(&mut book, &files, Forms::NONE, &adopting(&["Sheet1"])).unwrap();
+        assert_eq!(report.updated, ["Sheet1"], "{report:?}");
+        book.components.iter_mut().find(|c| c.name == "Sheet1").unwrap().code = edited;
+        apply(&mut book, &files, Forms::NONE, &SyncOptions { overwrite: true, ..SyncOptions::default() }).unwrap();
+        assert_eq!(book.code("Sheet1").unwrap(), doc.code);
+    }
+
+    #[test]
+    fn hand_written_code_of_a_document_module() {
+        let hand = "Option Explicit\r\nPrivate Sub Hand()\r\nEnd Sub\r\n";
+        // No file generates code for the sheet: its code stays (and that of `ThisWorkbook`
+        // where nothing needs to be initialised).
+        let mut book = Fake::with(&[("ThisWorkbook", Kind::Document, hand), ("Sheet1", Kind::Document, hand)]);
+        let report = apply(&mut book, &build(HELLO), Forms::NONE, &SyncOptions::default()).unwrap();
+        assert!(!report.updated.contains(&"Sheet1".to_string()), "{report:?}");
+        assert_eq!(book.code("Sheet1").unwrap(), hand);
+        assert_eq!(book.code("ThisWorkbook").unwrap(), hand);
+        // The file of the sheet has code: it would replace the hand-written code.
+        let files = build_with(HELLO, &[("Sheet1", ON_CHANGE)]);
+        let mut book = Fake::with(&[("ThisWorkbook", Kind::Document, ""), ("Sheet1", Kind::Document, hand)]);
+        let err = apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap_err();
+        assert!(format!("{err:?}").contains("Sheet1"), "{err:?}");
+        assert_eq!(book.code("Sheet1").unwrap(), hand);
+        assert!(book.code("Main").is_none(), "nothing is written");
+        apply(&mut book, &files, Forms::NONE, &SyncOptions { overwrite: true, ..SyncOptions::default() }).unwrap();
+        assert!(book.code("Sheet1").unwrap().starts_with("' RAS-GENERATED hash="));
+    }
+
+    #[test]
+    fn the_region_of_earlier_versions_goes() {
+        let region = format!("{}\r\nPrivate Sub Worksheet_Change(ByVal Target As Range)\r\n    Sheet1Events.changed Target\r\nEnd Sub\r\n{}\r\n", ras_ovba::RAS_BEGIN_MARKER, ras_ovba::RAS_END_MARKER);
+        // Only the region: the module is written from its file, or left without the region.
+        let mut book = Fake::with(&[("ThisWorkbook", Kind::Document, ""), ("Sheet1", Kind::Document, region.as_str())]);
+        apply(&mut book, &build(HELLO), Forms::NONE, &SyncOptions::default()).unwrap();
+        assert_eq!(book.code("Sheet1").unwrap(), "");
+        let files = build_with(HELLO, &[("Sheet1", ON_CHANGE)]);
+        let mut book = Fake::with(&[("ThisWorkbook", Kind::Document, ""), ("Sheet1", Kind::Document, region.as_str())]);
+        apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
+        assert!(book.code("Sheet1").unwrap().starts_with("' RAS-GENERATED hash=") && !book.code("Sheet1").unwrap().contains(ras_ovba::RAS_BEGIN_MARKER));
+        // Hand-written code next to the region is hand-written code.
+        let mixed = format!("Private Sub Hand()\r\nEnd Sub\r\n{region}");
+        let mut book = Fake::with(&[("ThisWorkbook", Kind::Document, ""), ("Sheet1", Kind::Document, mixed.as_str())]);
         assert!(apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).is_err());
+        apply(&mut book, &build(HELLO), Forms::NONE, &SyncOptions::default()).unwrap();
+        assert_eq!(book.code("Sheet1").unwrap(), "Private Sub Hand()\r\nEnd Sub\r\n");
     }
 
     #[test]
@@ -813,24 +949,24 @@ mod tests {
 
     #[test]
     fn hand_written_document_code_taken_over_goes() {
-        let files = build("@on(\"Sheet1.Change\")\nfunction changed(target: Excel.Range) {\n    msgBox(target.address);\n}\n");
+        let files = build_with(HELLO, &[("Sheet1", ON_CHANGE)]);
         let hand = "Option Explicit\r\nPrivate Sub Worksheet_Change(ByVal Target As Range)\r\n    MsgBox Target.Address\r\nEnd Sub\r\n";
         let mut book = documents();
         book.components.iter_mut().find(|c| c.name == "Sheet1").unwrap().code = hand.into();
-        // Not taken over: the generated handler would be there twice.
+        // Not taken over: the hand-written code is not replaced.
         assert!(apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).is_err());
         let report = apply(&mut book, &files, Forms::NONE, &adopting(&["Sheet1"])).unwrap();
         assert!(report.updated.contains(&"Sheet1".to_string()), "{report:?}");
         let code = book.code("Sheet1").unwrap();
-        assert!(code.starts_with("Option Explicit\r\n'--- RAS BEGIN ---"), "{code}");
+        assert!(code.starts_with("' RAS-GENERATED hash="), "{code}");
         assert_eq!(code.matches("Sub Worksheet_Change(").count(), 1, "{code}");
         assert!(!code.contains("MsgBox Target.Address"), "{code}");
 
-        // Code that generates nothing for the sheet: its hand-written code still goes.
+        // A file that generates nothing for the sheet: its hand-written code still goes.
         let mut book = documents();
         book.components.iter_mut().find(|c| c.name == "Sheet1").unwrap().code = hand.into();
         apply(&mut book, &build(HELLO), Forms::NONE, &adopting(&["Sheet1"])).unwrap();
-        assert_eq!(book.code("Sheet1").unwrap(), "Option Explicit\r\n");
+        assert_eq!(book.code("Sheet1").unwrap(), "");
     }
 
     #[test]
@@ -847,14 +983,13 @@ mod tests {
     fn pending_take_overs_are_left_alone() {
         let hand = "Sub Hello()\r\nEnd Sub\r\n";
         let sheet = "Private Sub Worksheet_Change(ByVal Target As Range)\r\nEnd Sub\r\n";
-        let mut files = build(HELLO);
-        files.extend(build("@on(\"Sheet1.Change\")\nfunction changed() {\n}\n").into_iter().filter(|f| f.name == "Sheet1"));
+        let files = build_with(HELLO, &[("Sheet1", ON_CHANGE)]);
         let mut book = documents();
         book.components.push(Component { name: "mod_Main".into(), kind: Kind::Standard, code: hand.into() });
         book.components.push(Component { name: "frmInput".into(), kind: Kind::Form, code: "Private Sub UserForm_Click()\r\nEnd Sub\r\n".into() });
         book.components.iter_mut().find(|c| c.name == "Sheet1").unwrap().code = sheet.into();
         let forms = [form("frmInput", "d1", "")];
-        let opts = SyncOptions { pending: vec![("mod_Main".into(), "Main".into()), ("Sheet1".into(), "Sheet1Events".into()), ("frmInput".into(), "frmInput".into())], ..SyncOptions::default() };
+        let opts = SyncOptions { pending: vec![("mod_Main".into(), "Main".into()), ("Sheet1".into(), "Sheet1".into()), ("frmInput".into(), "frmInput".into())], ..SyncOptions::default() };
         let report = apply(&mut book, &files, with_forms(&forms), &opts).unwrap();
         assert_eq!(report.pending, ["mod_Main", "Sheet1", "frmInput"]);
         assert!(book.code("Main").is_none(), "the generated module waits");

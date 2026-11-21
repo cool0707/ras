@@ -482,7 +482,7 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
 fn importable(prog: &Program, m: ModuleId) -> Vec<(ModuleId, &String, &Sym)> {
     let mut out = Vec::new();
     for (t, md) in prog.modules.iter().enumerate() {
-        if t == m || md.kind != ModuleKind::User || md.key.starts_with(crate::collect::FORM_KEY_PREFIX) {
+        if t == m || md.kind != ModuleKind::User || md.form.is_some() {
             continue;
         }
         for (name, sym) in &md.exports {

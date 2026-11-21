@@ -12,6 +12,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub mod plan;
+pub mod sheets;
 
 #[cfg(windows)]
 mod disp;
@@ -23,13 +24,176 @@ use ras_compiler::emit::OutputFile;
 pub use plan::{Forms, Report, SyncOptions};
 pub use ras_form::import::Prepared;
 
-/// The options of a sync that follows the take-over `prepared` (spec §14.7.1).
-pub fn options(prepared: &Prepared, overwrite: bool) -> SyncOptions {
+/// The options of a sync of the project at `root` that follows the take-over `prepared`
+/// (spec §14.7.1).
+pub fn options(root: &Path, prepared: &Prepared, overwrite: bool) -> SyncOptions {
     SyncOptions {
         overwrite,
         adopt: prepared.adopt.iter().map(|(name, _)| name.clone()).collect(),
         pending: prepared.pending.iter().map(|p| (p.name.clone(), p.generated.clone())).collect(),
+        written: written_modules(root),
     }
+}
+
+/// Where the code a sync wrote into each module is kept (`build/sync/<Module>.vba`): what a
+/// module is compared with to find the code added to it in the VBE (spec §14.7.3).
+pub fn written_dir(root: &Path) -> PathBuf {
+    root.join("build").join("sync")
+}
+
+/// The modules a sync of this project has written code into.
+pub fn written_modules(root: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(written_dir(root)) else { return Vec::new() };
+    entries.flatten().filter_map(|e| e.file_name().to_string_lossy().strip_suffix(".vba").map(str::to_string)).collect()
+}
+
+/// Keeps the code a sync (or `ras pack`) wrote: that of the standard and document modules
+/// among `files`, but for those in `not_written` (drifted or pending modules, left as they
+/// were). Copies of modules that are not generated any more are removed.
+pub fn save_written(root: &Path, files: &[OutputFile], not_written: &[String]) -> Result<(), String> {
+    use ras_compiler::vba::VModuleKind;
+    let dir = written_dir(root);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+    let kept = |name: &str| not_written.iter().any(|n| same(n, name));
+    let modules: Vec<&OutputFile> = files.iter().filter(|f| matches!(f.kind, VModuleKind::Standard | VModuleKind::Document)).collect();
+    for name in written_modules(root) {
+        if !modules.iter().any(|f| same(&f.name, &name)) && !kept(&name) {
+            let _ = std::fs::remove_file(dir.join(format!("{name}.vba")));
+        }
+    }
+    for f in modules.iter().filter(|f| !kept(&f.name)) {
+        let path = dir.join(format!("{}.vba", f.name));
+        if std::fs::read_to_string(&path).is_ok_and(|old| old == f.code) {
+            continue;
+        }
+        std::fs::write(&path, &f.code).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// The code RAS wrote into the modules of the workbook the last time, for
+/// [`ras_form::import::Book::written`]: the copy [`save_written`] kept, or — where there is
+/// none (a sync from another computer, `build/` removed) — what the project generates now.
+pub struct Written {
+    root: PathBuf,
+    /// The modules the project generates now (built when a copy is missing).
+    generated: Option<Vec<OutputFile>>,
+}
+
+impl Written {
+    /// For the project at `root`.
+    pub fn new(root: &Path) -> Written {
+        Written { root: root.to_path_buf(), generated: None }
+    }
+
+    /// The code written into the module `name`.
+    pub fn code(&mut self, name: &str) -> Option<String> {
+        let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+        if let Some(saved) = written_modules(&self.root).into_iter().find(|n| same(n, name)) {
+            if let Ok(text) = std::fs::read_to_string(written_dir(&self.root).join(format!("{saved}.vba"))) {
+                return Some(text);
+            }
+        }
+        if self.generated.is_none() {
+            self.generated = Some(generate(&self.root).unwrap_or_default());
+        }
+        self.generated.as_ref()?.iter().find(|f| same(&f.name, name)).map(|f| f.code.clone())
+    }
+}
+
+/// The modules the project at `root` generates as it is now; `None` when it does not compile.
+fn generate(root: &Path) -> Option<Vec<OutputFile>> {
+    let prog = analyze(root)?;
+    if prog.diagnostics.iter().any(|d| d.is_error()) {
+        return None;
+    }
+    let out = ras_compiler::build(&prog, &ras_compiler::BuildOptions { no_attributes: true, ..Default::default() });
+    if out.diagnostics.iter().any(|d| d.is_error()) {
+        return None;
+    }
+    Some(out.files)
+}
+
+/// The project at `root`, analysed with what its workbook says.
+pub(crate) fn analyze(root: &Path) -> Option<ras_compiler::Program> {
+    let (mut config, sources) = ras_compiler::load_project(root).ok()?;
+    if let Some(book) = config.project.workbook.as_ref().map(|w| root.join(w)).filter(|b| b.is_file()) {
+        let _ = read_workbook(&mut config, root, &book);
+    }
+    Some(ras_compiler::analyze(sources, config))
+}
+
+/// After a take-over that appended code added in the VBE to RAS files (spec §14.7.3): a file
+/// that does not compile with what was appended gets its text back, and the module stays as
+/// drift.
+pub fn settle_appended(root: &Path, prepared: &mut Prepared) -> Result<(), String> {
+    if prepared.appended.is_empty() {
+        return Ok(());
+    }
+    let Some(prog) = analyze(root) else { return Ok(()) };
+    let failed: Vec<String> = prog.diagnostics.iter().filter(|d| d.is_error()).filter_map(|d| d.module).map(|m| prog.modules[m].rel_path.clone()).collect();
+    ras_form::import::revert_appended(root, prepared, &failed)
+}
+
+/// The file the live sync keeps the code names of the open workbook's sheets in: a sheet
+/// added in Excel is not in the workbook file until it is saved (spec §12.2).
+fn live_code_names_path(root: &Path) -> PathBuf {
+    written_dir(root).join("code-names.txt")
+}
+
+/// Records the code names of the sheets of the open workbook (see [`read_workbook`]).
+pub fn save_live_code_names(root: &Path, names: &[String]) {
+    let path = live_code_names_path(root);
+    if std::fs::create_dir_all(written_dir(root)).is_ok() {
+        let text: String = names.iter().map(|n| format!("{n}\n")).collect();
+        if std::fs::read_to_string(&path).is_ok_and(|old| old == text) {
+            // Kept newer than the workbook file all the same.
+            let _ = std::fs::File::options().append(true).open(&path).and_then(|f| f.set_modified(std::time::SystemTime::now()));
+            return;
+        }
+        let _ = std::fs::write(&path, text);
+    }
+}
+
+/// The ActiveX controls on the sheets of the workbook file `book` as the compiler takes them
+/// (spec §12.2.1): one entry per sheet that has any. `None` when they cannot be read (an
+/// `.xlsb`, a file that is not a workbook).
+pub fn sheet_controls(book: &Path) -> Option<Vec<ras_compiler::FormDecl>> {
+    let sheets = ras_ovba::workbook_sheet_controls(book).ok()??;
+    Some(
+        sheets
+            .into_iter()
+            .filter(|s| !s.controls.is_empty())
+            .map(|s| ras_compiler::FormDecl { name: s.code_name, controls: s.controls.into_iter().map(|c| ras_compiler::FormControl { name: c.name, control_type: c.class }).collect() })
+            .collect(),
+    )
+}
+
+/// Fills in what the compiler takes from the workbook file `book` of the project at `root`:
+/// the code names of its sheets (spec §12.2) and the controls on them (spec §12.2.1). The
+/// code names the live sync saw in the open workbook after the file was saved last are taken
+/// instead of the file's (a sheet added in Excel and not saved yet).
+pub fn read_workbook(config: &mut ras_compiler::Config, root: &Path, book: &Path) -> Result<(), String> {
+    let names = ras_ovba::workbook_code_names(book).map_err(|e| e.to_string())?;
+    config.sheet_code_names = names.sheets.into_iter().map(|s| s.code_name).collect();
+    let live = live_code_names_path(root);
+    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+    if let (Some(seen), Some(saved)) = (modified(&live), modified(book)) {
+        if seen > saved {
+            if let Ok(text) = std::fs::read_to_string(&live) {
+                let names: Vec<String> = text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
+                if !names.is_empty() {
+                    config.sheet_code_names = names;
+                }
+            }
+        }
+    }
+    if let Some(controls) = sheet_controls(book) {
+        config.sheet_controls = controls;
+        config.sheet_controls_known = true;
+    }
+    Ok(())
 }
 
 /// A component of the project as [`ras_form::import`] takes it; `None` for what it does not take.
@@ -126,6 +290,8 @@ impl Session {
         if sync.pull_unmanaged {
             let mut project = book.project()?;
             let modules: Vec<ras_form::import::BookModule> = project.components()?.iter().filter_map(book_module).collect();
+            // The controls on the sheets, as the workbook was saved last.
+            let sheet_controls: Vec<ras_compiler::FormDecl> = sheet_controls(&self.book).unwrap_or_default();
             let mut failure = None;
             let mut form = |name: &str| {
                 project.export_form(name, codepage).map_err(|e| {
@@ -136,16 +302,41 @@ impl Session {
                     message
                 })
             };
-            prepared = ras_form::import::prepare(root, ras_form::import::Book { modules: &modules, workbook_code_name: &code_name, form: &mut form }, codepage).map_err(SyncError::Failed)?;
+            let mut written = Written::new(root);
+            let mut written = |name: &str| written.code(name);
+            let mut taken = ras_form::import::Book { modules: &modules, workbook_code_name: &code_name, sheet_controls: &sheet_controls, form: &mut form, written: &mut written };
+            prepared = ras_form::import::prepare(root, &mut taken, codepage).map_err(SyncError::Failed)?;
             if let Some(busy) = failure {
                 return Err(busy);
             }
         }
+        let sheets = book.sheets()?;
+        // What the compiler takes for the sheets of the workbook until it is saved.
+        save_live_code_names(root, &sheets.iter().map(|s| s.code_name.clone()).collect::<Vec<_>>());
         if sync.sheet_files {
-            let sheets = book.sheets()?;
-            prepared.created = ras_form::import::sheet_files(root, &sheets, &code_name).map_err(SyncError::Failed)?;
+            // A copied sheet gets a copy of its source's file: the modules tell which it is.
+            let modules: Vec<ras_form::import::BookModule> = if sync.pull_unmanaged { book.project()?.components()?.iter().filter_map(book_module).collect() } else { Vec::new() };
+            let sheet_controls: Vec<ras_compiler::FormDecl> = sheet_controls(&self.book).unwrap_or_default();
+            let mut form = |_: &str| Err(String::new());
+            let mut written = Written::new(root);
+            let mut written = |name: &str| written.code(name);
+            let mut taken = ras_form::import::Book { modules: &modules, workbook_code_name: &code_name, sheet_controls: &sheet_controls, form: &mut form, written: &mut written };
+            ras_form::import::sheet_files(root, &sheets, &mut taken, &mut prepared).map_err(SyncError::Failed)?;
         }
+        settle_appended(root, &mut prepared).map_err(SyncError::Failed)?;
         Ok(prepared)
+    }
+
+    /// The worksheets of the open workbook (code name and tab name), in workbook order.
+    pub fn sheets(&mut self) -> Result<Vec<ras_form::import::Sheet>, SyncError> {
+        self.connect()?;
+        self.live.as_ref().expect("connected").sheets()
+    }
+
+    /// Adds, copies, removes or renames a worksheet of the open workbook (spec §14.16).
+    pub fn edit_sheet(&mut self, edit: &ras_ovba::SheetEdit) -> Result<ras_ovba::SheetEditReport, SyncError> {
+        self.connect()?;
+        self.live.as_ref().expect("connected").edit_sheet(edit)
     }
 
     /// Runs the macro `Module.proc` in the workbook and waits for it to end.
@@ -181,6 +372,14 @@ impl Session {
     }
 
     pub fn open(&mut self) -> Result<(), SyncError> {
+        Err(SyncError::Unsupported)
+    }
+
+    pub fn sheets(&mut self) -> Result<Vec<ras_form::import::Sheet>, SyncError> {
+        Err(SyncError::Unsupported)
+    }
+
+    pub fn edit_sheet(&mut self, _edit: &ras_ovba::SheetEdit) -> Result<ras_ovba::SheetEditReport, SyncError> {
         Err(SyncError::Unsupported)
     }
 

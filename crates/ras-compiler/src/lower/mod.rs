@@ -167,6 +167,8 @@ pub(crate) struct Lowerer<'p> {
     pub pc: ProcCtx,
     force_public: HashSet<FnId>,
     force_public_vars: HashSet<VarId>,
+    /// Variables and fields declared `WithEvents` (spec §12.2.2).
+    with_events: HashSet<EventSource>,
     fn_procs: HashMap<FnId, Vec<(usize, String)>>,
     /// Procedures to call from `RAS_InitAll`, in order.
     init_calls: Vec<String>,
@@ -189,6 +191,123 @@ const SHEET_EVENTS: &[&str] = &["Activate", "Deactivate", "Calculate", "Change",
 pub(crate) fn document_event(target_is_workbook: bool, event: &str) -> Option<&'static str> {
     let events = if target_is_workbook { WORKBOOK_EVENTS } else { SHEET_EVENTS };
     events.iter().copied().find(|e| e.eq_ignore_ascii_case(event)).filter(|e| event_params(target_is_workbook, e).is_some())
+}
+
+/// The events of a control on a sheet (spec §12.2.1): those of the control on a form, without
+/// what a form raises (`Enter`, `Exit`, `BeforeUpdate`, `AfterUpdate`) and with what a sheet
+/// raises (`GotFocus`, `LostFocus`).
+fn sheet_control_events(control_type: &str) -> Vec<String> {
+    let mut names: Vec<String> = crate::userform::events_of(control_type).iter().map(|e| e.name.clone()).filter(|n| !FORM_ONLY_EVENTS.iter().any(|x| x.eq_ignore_ascii_case(n))).collect();
+    if !names.is_empty() {
+        names.extend(SHEET_ONLY_EVENTS.iter().map(|s| s.to_string()));
+    }
+    names
+}
+
+const FORM_ONLY_EVENTS: [&str; 4] = ["Enter", "Exit", "BeforeUpdate", "AfterUpdate"];
+const SHEET_ONLY_EVENTS: [&str; 2] = ["GotFocus", "LostFocus"];
+
+/// Name and parameters (name, VBA type, by reference) of an event of a control on a sheet.
+pub(crate) fn sheet_control_event(control_type: &str, event: &str) -> Option<(String, Vec<(String, String, bool)>)> {
+    if FORM_ONLY_EVENTS.iter().any(|x| x.eq_ignore_ascii_case(event)) {
+        return None;
+    }
+    if let Some(name) = SHEET_ONLY_EVENTS.iter().find(|x| x.eq_ignore_ascii_case(event)) {
+        return if crate::userform::events_of(control_type).is_empty() { None } else { Some((name.to_string(), Vec::new())) };
+    }
+    let def = crate::userform::find_event(control_type, event)?;
+    Some((def.name.clone(), def.params.iter().map(|p| (p.name.clone(), p.vba_type.clone(), p.byref)).collect()))
+}
+
+/// The events an object of the host class `class` raises for a `WithEvents` variable
+/// (spec §12.2.2): name and parameters (name, VBA type, by reference). `None` for a class
+/// whose events are not known.
+fn host_events(prog: &Program, class: ClassId) -> Option<Vec<(String, Vec<(String, String, bool)>)>> {
+    type Sig = (&'static str, &'static [(&'static str, &'static str, bool)]);
+    const WB: (&str, &str, bool) = ("Wb", "Workbook", false);
+    const SH: (&str, &str, bool) = ("Sh", "Object", false);
+    const TARGET: (&str, &str, bool) = ("Target", "Range", false);
+    const CANCEL: (&str, &str, bool) = ("Cancel", "Boolean", true);
+    const WN: (&str, &str, bool) = ("Wn", "Window", false);
+    const PVW: (&str, &str, bool) = ("Pvw", "ProtectedViewWindow", false);
+    const APPLICATION: &[Sig] = &[
+        ("NewWorkbook", &[WB]),
+        ("SheetActivate", &[SH]),
+        ("SheetDeactivate", &[SH]),
+        ("SheetCalculate", &[SH]),
+        ("SheetBeforeDelete", &[SH]),
+        ("SheetChange", &[SH, TARGET]),
+        ("SheetSelectionChange", &[SH, TARGET]),
+        ("SheetBeforeDoubleClick", &[SH, TARGET, CANCEL]),
+        ("SheetBeforeRightClick", &[SH, TARGET, CANCEL]),
+        ("SheetFollowHyperlink", &[SH, ("Target", "Hyperlink", false)]),
+        ("SheetPivotTableUpdate", &[SH, ("Target", "PivotTable", false)]),
+        ("WindowActivate", &[WB, WN]),
+        ("WindowDeactivate", &[WB, WN]),
+        ("WindowResize", &[WB, WN]),
+        ("WorkbookOpen", &[WB]),
+        ("WorkbookActivate", &[WB]),
+        ("WorkbookDeactivate", &[WB]),
+        ("WorkbookAddinInstall", &[WB]),
+        ("WorkbookAddinUninstall", &[WB]),
+        ("WorkbookBeforeClose", &[WB, CANCEL]),
+        ("WorkbookBeforePrint", &[WB, CANCEL]),
+        ("WorkbookBeforeSave", &[WB, ("SaveAsUI", "Boolean", false), CANCEL]),
+        ("WorkbookAfterSave", &[WB, ("Success", "Boolean", false)]),
+        ("WorkbookNewSheet", &[WB, SH]),
+        ("WorkbookNewChart", &[WB, ("Ch", "Chart", false)]),
+        ("AfterCalculate", &[]),
+        ("ProtectedViewWindowOpen", &[PVW]),
+        ("ProtectedViewWindowActivate", &[PVW]),
+        ("ProtectedViewWindowDeactivate", &[PVW]),
+        ("ProtectedViewWindowResize", &[PVW]),
+        ("ProtectedViewWindowBeforeEdit", &[PVW, CANCEL]),
+    ];
+    const ELEMENT: [(&str, &str, bool); 3] = [("ElementID", "Long", false), ("Arg1", "Long", false), ("Arg2", "Long", false)];
+    const MOUSE: &[(&str, &str, bool)] = &[("Button", "Long", false), ("Shift", "Long", false), ("x", "Long", false), ("y", "Long", false)];
+    const CHART: &[Sig] = &[
+        ("Activate", &[]),
+        ("Deactivate", &[]),
+        ("Calculate", &[]),
+        ("Resize", &[]),
+        ("BeforeDoubleClick", &[ELEMENT[0], ELEMENT[1], ELEMENT[2], CANCEL]),
+        ("BeforeRightClick", &[CANCEL]),
+        ("Select", &ELEMENT),
+        ("SeriesChange", &[("SeriesIndex", "Long", false), ("PointIndex", "Long", false)]),
+        ("MouseDown", MOUSE),
+        ("MouseMove", MOUSE),
+        ("MouseUp", MOUSE),
+    ];
+    const QUERY_TABLE: &[Sig] = &[("BeforeRefresh", &[CANCEL]), ("AfterRefresh", &[("Success", "Boolean", false)])];
+    let own = |list: &[Sig]| list.iter().map(|(name, params)| (name.to_string(), params.iter().map(|p| (p.0.to_string(), p.1.to_string(), p.2)).collect())).collect();
+    let document = |workbook: bool| {
+        let names = if workbook { WORKBOOK_EVENTS } else { SHEET_EVENTS };
+        names.iter().filter_map(|name| event_params(workbook, name).map(|sig| (name.to_string(), sig.into_iter().map(|p| (p.0.to_string(), p.1.to_string(), p.2)).collect()))).collect()
+    };
+    let def = &prog.classes[class];
+    match (def.namespace.as_deref(), def.name.as_str()) {
+        (Some("Excel"), "Application") => Some(own(APPLICATION)),
+        (Some("Excel"), "Workbook") => Some(document(true)),
+        (Some("Excel"), "Worksheet") => Some(document(false)),
+        (Some("Excel"), "Chart") => Some(own(CHART)),
+        (Some("Excel"), "QueryTable") => Some(own(QUERY_TABLE)),
+        // What a form raises for its controls (`Enter`, `Exit` …) does not reach a variable.
+        (Some("MSForms"), name) => {
+            let events: Vec<(String, Vec<(String, String, bool)>)> = crate::userform::events_of(name)
+                .into_iter()
+                .filter(|e| !FORM_ONLY_EVENTS.iter().any(|x| x.eq_ignore_ascii_case(&e.name)))
+                .map(|e| (e.name.clone(), e.params.iter().map(|p| (p.name.clone(), p.vba_type.clone(), p.byref)).collect()))
+                .collect();
+            if events.is_empty() { None } else { Some(events) }
+        }
+        _ => None,
+    }
+}
+
+/// An event of the workbook or of a sheet with its parameters (name, VBA type, by reference).
+fn document_event_sig(target_is_workbook: bool, event: &str) -> Option<(&'static str, Vec<(&'static str, &'static str, bool)>)> {
+    let name = document_event(target_is_workbook, event)?;
+    Some((name, event_params(target_is_workbook, name)?))
 }
 
 fn event_params(target_is_workbook: bool, event: &str) -> Option<Vec<(&'static str, &'static str, bool)>> {
@@ -243,6 +362,7 @@ pub fn lower(prog: &Program) -> Lowered {
         pc: ProcCtx::default(),
         force_public: HashSet::new(),
         force_public_vars: HashSet::new(),
+        with_events: HashSet::new(),
         fn_procs: HashMap::new(),
         init_calls: Vec::new(),
         macros: Vec::new(),
@@ -312,6 +432,7 @@ impl<'p> Lowerer<'p> {
             }
         }
 
+        self.collect_with_events();
         for m in 0..prog.modules.len() {
             if prog.modules[m].kind == ModuleKind::User {
                 self.emit_module(m);
@@ -352,7 +473,8 @@ impl<'p> Lowerer<'p> {
                 self.diag(Severity::Info, f.module, f.name_span, "I0502", format!("ジェネリック関数 `{}` は一度も呼ばれていないため、何も出力されません", f.name));
             }
         }
-        self.out.retain(|m| !(m.decls.is_empty() && m.procs.is_empty() && m.kind == VModuleKind::Standard));
+        // A sheet's file without code leaves the module of the sheet without code (spec §12.2).
+        self.out.retain(|m| !(m.decls.is_empty() && m.procs.is_empty() && matches!(m.kind, VModuleKind::Standard | VModuleKind::Document)));
     }
 
     pub(crate) fn vmodule(&mut self, name: &str, kind: VModuleKind) -> usize {
@@ -367,9 +489,11 @@ impl<'p> Lowerer<'p> {
 
     fn std_vmodule(&mut self, m: ModuleId) -> usize {
         let md = &self.prog.modules[m];
-        if md.form.is_some() {
-            // A form's code-behind is the form's code module (spec §14.11).
-            let i = self.vmodule(&md.vba_name.clone(), VModuleKind::Form);
+        if let Some(form) = &md.form {
+            // A form's code-behind is the form's code module (spec §14.11); the file of a sheet
+            // or of `ThisWorkbook` is that document module (spec §12.2).
+            let kind = if form.kind == ObjectKind::Form { VModuleKind::Form } else { VModuleKind::Document };
+            let i = self.vmodule(&md.vba_name.clone(), kind);
             if self.out[i].sources.is_empty() {
                 self.out[i].sources.push(md.rel_path.clone());
             }
@@ -457,11 +581,13 @@ impl<'p> Lowerer<'p> {
                 self.class_name(c, &[]);
             }
         }
-        if md.form.is_some() {
+        if md.is_form() {
             // Variables of a form are initialised by `UserForm_Initialize` (see `emit_form_events`).
             self.emit_form_events(m);
             return;
         }
+        // The events of a sheet's (the workbook's) file are generated by `emit_events`; its
+        // variables are initialised with those of the standard modules.
         if let Some(f) = md.init_fn {
             self.init_calls.push(format!("{}.{}", md.vba_name, prog.fns[f].name));
         }
@@ -640,7 +766,10 @@ impl<'p> Lowerer<'p> {
                 let vis = if public { "Public" } else { "Private" };
                 let name = names::module_ident(&d.name);
                 let (ty, arr) = self.vtype(&d.ty);
-                if let Some(c) = self.const_literal(v) {
+                if self.with_events.contains(&EventSource::Var(v)) {
+                    // Its object's events are handled (spec §12.2.2).
+                    lines.push(format!("Private WithEvents {name} As {ty}"));
+                } else if let Some(c) = self.const_literal(v) {
                     lines.push(format!("{vis} Const {name} As {ty} = {c}"));
                 } else {
                     lines.push(ptr_conditional(&format!("{vis} {name}{} As {ty}", if arr { "()" } else { "" }), self.cfg.target.vba6));
@@ -1044,7 +1173,8 @@ impl<'p> Lowerer<'p> {
         let name = self.fn_name(f, targs);
         let env: HashMap<String, Type> = def.type_params.iter().zip(targs.iter()).map(|(p, a)| (p.name.clone(), a.clone())).collect();
         // In a form, only `export` makes a member public: handlers are called from the form itself.
-        let public = def.exported || (!def.attrs.form_member && (def.attrs.macro_entry || !def.attrs.on_events.is_empty() || matches!(def.kind, FnKind::Main | FnKind::ModInit)));
+        // In a sheet's file too, where the handlers are called from the sheet's own module.
+        let public = def.exported || (!def.attrs.form_member && (def.attrs.macro_entry || (!def.attrs.on_events.is_empty() && !def.attrs.doc_member) || matches!(def.kind, FnKind::Main | FnKind::ModInit)));
         if let Some(p) = self.build_proc(f, env, None, name.clone(), public) {
             self.fn_procs.entry(f).or_default().push((mi, name));
             self.out[mi].procs.push(p);
@@ -1307,7 +1437,8 @@ impl<'p> Lowerer<'p> {
                 });
             } else {
                 let vis = if fld.vis == Visibility::Public { "Public" } else { "Private" };
-                self.out[ci].decls.push(ptr_conditional(&format!("{vis} {fname}{} As {ty}", if arr { "()" } else { "" }), self.cfg.target.vba6));
+                let with_events = if self.with_events.contains(&EventSource::Field(c, idx)) { "WithEvents " } else { "" };
+                self.out[ci].decls.push(ptr_conditional(&format!("{vis} {with_events}{fname}{} As {ty}", if arr { "()" } else { "" }), self.cfg.target.vba6));
             }
             if fld.init.is_some() {
                 init_stmts.push((idx, fld.is_static));
@@ -1368,6 +1499,9 @@ impl<'p> Lowerer<'p> {
                 });
             }
         }
+        // Event procedures of the fields whose objects are listened to (spec §12.2.2).
+        let handlers: Vec<FnId> = def.methods.iter().copied().filter(|&m| !prog.fns[m].attrs.on_events.is_empty()).collect();
+        self.emit_with_events(ci, &name, &handlers, true);
         for &m in &def.methods {
             let d = &prog.fns[m];
             if d.is_generic() {
@@ -1517,117 +1651,193 @@ impl<'p> Lowerer<'p> {
 
     // ------------------------------------------------------------------ events and init glue (spec §12)
 
+    /// Event procedures of the sheets and of the workbook (spec §12.2): the handlers of
+    /// `objects/<CodeName>.ras` (`@on("Worksheet.Change")`, `@on("CommandButton1.Click")`) and of
+    /// `objects/ThisWorkbook.ras` (`@on("Workbook.Open")`) are called from the event procedure
+    /// generated in the same module. `ThisWorkbook` also gets the calls that make sure the
+    /// project is initialised (spec §12.3), file or not.
     fn emit_events(&mut self) {
         let prog = self.prog;
-        // (document module, event) → handlers in declaration order
-        let mut table: Vec<((String, String), Vec<(FnId, bool)>)> = Vec::new();
+        // `@on` belongs to the file of what raises the event.
         for f in &prog.fns {
-            if prog.modules[f.module].form.is_some() {
+            if prog.modules[f.module].form.is_some() || prog.modules[f.module].kind != ModuleKind::User {
+                continue;
+            }
+            // (Methods of a class: `emit_with_events`.)
+            if !matches!(f.kind, FnKind::Free) {
                 continue;
             }
             for ev in &f.attrs.on_events {
-                let key = (ev.target.clone(), ev.event.clone());
-                let is_wb = ev.target == "Workbook" || ev.target == "ThisWorkbook";
-                if !is_wb && !self.cfg.sheet_code_names.contains(&ev.target) && !prog.globals.contains_key(&ev.target) {
-                    self.diag(Severity::Error, f.module, ev.span, "E0610", format!("`@on(\"{}.{}\")`: シートのコード名 `{}` が見つかりません", ev.target, ev.event, ev.target));
+                if let Some(EventSource::Var(v)) = prog.event_source(f.id, &ev.target) {
+                    self.diag(Severity::Error, f.module, ev.span, "E0610", format!("`@on(\"{}.{}\")`: 標準モジュールの変数 `{}` のイベントは受け取れません（VBA の `WithEvents` は、標準モジュールに置けません）。変数とハンドラを、クラスのフィールドとメソッドにするか、`objects/` のシート・`ThisWorkbook` のファイルに移してください", ev.target, ev.event, prog.vars[v].name));
                     continue;
                 }
-                let Some(sig) = event_params(is_wb, &ev.event) else {
-                    self.diag(Severity::Error, f.module, ev.span, "E0611", format!("`@on(\"{}.{}\")`: イベント `{}` には対応していません", ev.target, ev.event, ev.event));
-                    continue;
-                };
-                if f.params.len() > sig.len() {
-                    self.diag(Severity::Error, f.module, ev.span, "E0612", format!("イベント `{}` の引数は {} 個ですが、ハンドラ `{}` は {} 個受け取ります", ev.event, sig.len(), f.name, f.params.len()));
-                    continue;
-                }
-                self.force_public.insert(f.id);
-                match table.iter_mut().find(|t| t.0 == key) {
-                    Some(t) => t.1.push((f.id, ev.reentrant)),
-                    None => table.push((key, vec![(f.id, ev.reentrant)])),
+                let wb = ev.target.eq_ignore_ascii_case("Workbook") || ev.target.eq_ignore_ascii_case("ThisWorkbook");
+                let file = if wb { "objects/ThisWorkbook.ras".to_string() } else if ev.target.eq_ignore_ascii_case("Worksheet") { "objects/<シートのコード名>.ras".to_string() } else { format!("objects/{}.ras", ev.target) };
+                let on = if wb { format!("Workbook.{}", ev.event) } else { format!("Worksheet.{}", ev.event) };
+                self.diag(Severity::Error, f.module, ev.span, "E0610", format!("`@on(\"{}.{}\")`: イベントハンドラは、そのイベントを起こすシート・ブックのファイルに書きます。`{file}` に `@on(\"{on}\")` として書いてください（`src/` のファイルは標準モジュールで、イベントを受け取れません）", ev.target, ev.event));
+            }
+        }
+        // (module, object, event procedure) → handlers in declaration order
+        struct Proc {
+            module: ModuleId,
+            object: String,
+            event: String,
+            params: Vec<(String, String, bool)>,
+            handlers: Vec<(FnId, bool)>,
+        }
+        let mut table: Vec<Proc> = Vec::new();
+        let docs: Vec<ModuleId> = (0..prog.modules.len()).filter(|&m| prog.modules[m].document().is_some()).collect();
+        for &m in &docs {
+            let md = &prog.modules[m];
+            let Some(doc) = md.document() else { continue };
+            let is_wb = doc.kind == ObjectKind::Workbook;
+            let own = if is_wb { "Workbook" } else { "Worksheet" };
+            for &f in &md.fns {
+                let d = &prog.fns[f];
+                for ev in &d.attrs.on_events {
+                    // A variable whose object is listened to: `emit_with_events` below.
+                    if prog.event_source(f, &ev.target).is_some() {
+                        continue;
+                    }
+                    let other = if is_wb { "Worksheet" } else { "Workbook" };
+                    if ev.target.eq_ignore_ascii_case(other) || (!is_wb && ev.target.eq_ignore_ascii_case("ThisWorkbook")) {
+                        let msg = if is_wb {
+                            format!("`@on(\"{}.{}\")`: シートのイベントは、そのシートのファイル（`objects/<シートのコード名>.ras`）に書きます。すべてのシートのイベントをブックで受け取るには `@on(\"Workbook.Sheet{}\")` を使います", ev.target, ev.event, ev.event)
+                        } else {
+                            format!("`@on(\"{}.{}\")`: ブックのイベントは `objects/ThisWorkbook.ras` に書きます", ev.target, ev.event)
+                        };
+                        self.diag(Severity::Error, m, ev.span, "E0610", msg);
+                        continue;
+                    }
+                    let own_event = ev.target.eq_ignore_ascii_case(own) || (is_wb && ev.target.eq_ignore_ascii_case("ThisWorkbook")) || (!is_wb && ev.target.to_lowercase() == md.vba_name.to_lowercase());
+                    let (object, event, params): (String, String, Vec<(String, String, bool)>) = if own_event {
+                        match document_event_sig(is_wb, &ev.event) {
+                            Some((name, sig)) => (own.to_string(), name.to_string(), sig.into_iter().map(|p| (p.0.to_string(), p.1.to_string(), p.2)).collect()),
+                            None => {
+                                self.diag(Severity::Error, m, ev.span, "E0611", format!("`@on(\"{}.{}\")`: イベント `{}` には対応していません", ev.target, ev.event, ev.event));
+                                continue;
+                            }
+                        }
+                    } else if let Some(name) = self.untyped_control(doc, &ev.target) {
+                        // A control whose events are not known (not an MSForms control, or no
+                        // workbook to read the controls from): the event procedure is declared
+                        // as the handler is (spec §12.2.1).
+                        let params = self.fn_procs.get(&f).and_then(|procs| procs.first()).and_then(|(mi, proc)| self.out[*mi].procs.iter().find(|p| &p.name == proc)).map(|p| p.params.iter().map(|x| (x.name.clone(), x.ty.clone(), x.byref)).collect()).unwrap_or_default();
+                        (name, ev.event.clone(), params)
+                    } else if let Some(control) = doc.decl.as_ref().and_then(|x| x.controls.iter().find(|c| c.name.eq_ignore_ascii_case(&ev.target))) {
+                        match sheet_control_event(&control.control_type, &ev.event) {
+                            Some((name, params)) => (control.name.clone(), name, params),
+                            None => {
+                                let known = sheet_control_events(&control.control_type);
+                                let hint = if known.is_empty() { format!("{} のイベントは扱えません", control.control_type) } else { format!("使えるイベント: {}", known.join(", ")) };
+                                self.diag(Severity::Error, m, ev.span, "E0611", format!("`@on(\"{}.{}\")`: {} にイベント `{}` はありません（{hint}）", ev.target, ev.event, control.name, ev.event));
+                                continue;
+                            }
+                        }
+                    } else {
+                        let what = if is_wb { "ブック".to_string() } else { format!("シート `{}` ", md.vba_name) };
+                        self.diag(Severity::Error, m, ev.span, "E0613", format!("`@on(\"{}.{}\")`: {what}にコントロール `{}` がありません（{}自身のイベントは `{own}.イベント`）", ev.target, ev.event, ev.target, if is_wb { "ブック" } else { "シート" }));
+                        continue;
+                    };
+                    if d.params.len() > params.len() {
+                        self.diag(Severity::Error, m, ev.span, "E0612", format!("イベント `{object}_{event}` の引数は {} 個ですが、ハンドラ `{}` は {} 個受け取ります", params.len(), d.name, d.params.len()));
+                        continue;
+                    }
+                    match table.iter_mut().find(|t| t.module == m && t.object == object && t.event == event) {
+                        Some(t) => t.handlers.push((f, ev.reentrant)),
+                        None => table.push(Proc { module: m, object, event, params, handlers: vec![(f, ev.reentrant)] }),
+                    }
                 }
             }
         }
-        let needs_init = !self.init_calls.is_empty() || !table.is_empty();
+        for &m in &docs {
+            let vi = self.std_vmodule(m);
+            let name = prog.modules[m].vba_name.clone();
+            let handlers = prog.modules[m].fns.clone();
+            self.emit_with_events(vi, &name, &handlers, true);
+        }
+        let needs_init = !self.init_calls.is_empty() || !table.is_empty() || docs.iter().any(|&m| prog.modules[m].fns.iter().any(|&f| !prog.fns[f].attrs.on_events.is_empty()));
         // Initialisation must run from every entry path (spec §12.3).
-        let mut wb_events: Vec<String> = table.iter().filter(|t| t.0 .0 == "Workbook" || t.0 .0 == "ThisWorkbook").map(|t| t.0 .1.clone()).collect();
+        let wb_module = docs.iter().copied().find(|&m| prog.modules[m].document().is_some_and(|d| d.kind == ObjectKind::Workbook));
+        // `usize::MAX`: `ThisWorkbook` of a project without `objects/ThisWorkbook.ras`.
+        let wb_key = wb_module.unwrap_or(usize::MAX);
         if needs_init {
             for ev in ["Open", "Activate", "WindowActivate"] {
-                if !wb_events.iter().any(|e| e == ev) {
-                    wb_events.push(ev.to_string());
+                if !table.iter().any(|t| t.module == wb_key && t.object == "Workbook" && t.event == ev) {
+                    let params = document_event_sig(true, ev).map(|(_, sig)| sig.into_iter().map(|p| (p.0.to_string(), p.1.to_string(), p.2)).collect()).unwrap_or_default();
+                    table.push(Proc { module: wb_key, object: "Workbook".into(), event: ev.to_string(), params, handlers: Vec::new() });
                 }
             }
         }
-        let mut docs: Vec<String> = Vec::new();
-        for ((target, _), _) in &table {
-            let doc = if target == "Workbook" { "ThisWorkbook".to_string() } else { target.clone() };
-            if !docs.contains(&doc) {
-                docs.push(doc);
-            }
-        }
-        if needs_init && !docs.iter().any(|d| d == "ThisWorkbook") {
-            docs.insert(0, "ThisWorkbook".into());
-        }
-        let mut deferred_open: Vec<VStmt> = Vec::new();
-        for doc in docs {
-            let is_wb = doc == "ThisWorkbook";
-            let di = self.vmodule(&doc, VModuleKind::Document);
-            let events: Vec<String> = if is_wb {
-                wb_events.clone()
+        let mut has_open_handlers = false;
+        for t in table {
+            let is_wb = t.module == wb_key;
+            let (di, doc) = if t.module == usize::MAX {
+                (self.vmodule("ThisWorkbook", VModuleKind::Document), "ThisWorkbook".to_string())
             } else {
-                table.iter().filter(|t| t.0 .0 == doc).map(|t| t.0 .1.clone()).collect()
+                (self.std_vmodule(t.module), prog.modules[t.module].vba_name.clone())
             };
-            for ev in events {
-                let sig = event_params(is_wb, &ev).unwrap_or_default();
-                let handlers: Vec<(FnId, bool)> = table
-                    .iter()
-                    .filter(|t| t.0 .1 == ev && (if is_wb { t.0 .0 == "Workbook" || t.0 .0 == "ThisWorkbook" } else { t.0 .0 == doc }))
-                    .flat_map(|t| t.1.clone())
-                    .collect();
-                let mut calls = Vec::new();
-                let mut locals = Vec::new();
-                for (i, (h, reentrant)) in handlers.iter().enumerate() {
-                    let d = &prog.fns[*h];
-                    let target = VExpr::Name(prog.modules[d.module].vba_name.clone()).member(d.proc_ident());
-                    let args: Vec<VExpr> = sig.iter().take(d.params.len()).map(|p| vname(p.0)).collect();
-                    let call = VStmt::Call { target, args };
-                    if *reentrant || (is_wb && ev == "Open") {
-                        calls.push(call);
-                    } else {
-                        // Re-entrancy guard: ignore events raised by the handler itself (spec §12.2).
-                        let flag = format!("ras_busy{}", i + 1);
-                        locals.push(flag.clone());
-                        calls.push(if_then(vname(flag.clone()).not(), vec![assign(vname(flag.clone()), lit("True")), call, assign(vname(flag), lit("False"))]));
+            let proc_name = format!("{}_{}", t.object, t.event);
+            if t.module != usize::MAX {
+                // A function of the file named like the event procedure would clash with it.
+                for &f in &prog.modules[t.module].fns {
+                    let d = &prog.fns[f];
+                    if d.proc_ident().eq_ignore_ascii_case(&proc_name) {
+                        self.diag(Severity::Error, t.module, d.name_span, "E0614", format!("関数 `{}` の名前はイベント プロシージャ `{proc_name}` と同じです。別の名前にしてください（`@on(\"{}.{}\")` で受け取ります）", d.name, t.object, t.event));
                     }
                 }
-                let proc_name = format!("{}_{ev}", if is_wb { "Workbook" } else { "Worksheet" });
-                let mut body = Vec::new();
-                if is_wb && ev == "Open" {
-                    // At once, or when the workbook is activated if it is leaving the protected
-                    // view (spec §12.3 path 1).
-                    body.push(call_stmt("RAS_WorkbookOpen", vec![]));
-                    deferred_open = calls;
-                } else {
-                    for flag in &locals {
-                        body.push(VStmt::Raw(format!("Static {flag} As Boolean")));
-                    }
-                    body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
-                    body.push(call_stmt("RAS_EnsureInit", vec![]));
-                    if is_wb && needs_init && (ev == "Activate" || ev == "WindowActivate") {
-                        // What `Workbook_Open` left for now (the workbook was in the protected view).
-                        body.push(call_stmt("RAS_OpenDeferred", vec![]));
-                    }
-                    body.extend(calls);
-                    body.push(VStmt::Exit("Sub"));
-                    body.push(VStmt::Label("RAS_OnError".into()));
-                    for flag in &locals {
-                        body.push(assign(vname(flag.clone()), lit("False")));
-                    }
-                    body.push(call_stmt("RAS_EventError", vec![lit(format!("\"{doc}.{ev}\"")), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
-                }
-                let params = sig.iter().map(|p| VParam { name: p.0.into(), byref: p.2, ty: p.1.into(), is_array: false, optional_default: None }).collect();
-                self.out[di].procs.push(VProc { kind: ProcKind::Sub, public: false, friend: false, name: proc_name, params, ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None });
             }
+            let open = is_wb && t.object == "Workbook" && t.event == "Open";
+            let mut calls = Vec::new();
+            let mut locals = Vec::new();
+            for (i, (h, reentrant)) in t.handlers.iter().enumerate() {
+                let d = &prog.fns[*h];
+                let args: Vec<VExpr> = t.params.iter().take(d.params.len()).map(|p| vname(p.0.clone())).collect();
+                let call = VStmt::Call { target: VExpr::Name(d.proc_ident()), args };
+                if *reentrant || open {
+                    calls.push(call);
+                } else {
+                    // Re-entrancy guard: ignore events raised by the handler itself (spec §12.2).
+                    let flag = format!("ras_busy{}", i + 1);
+                    locals.push(flag.clone());
+                    calls.push(if_then(vname(flag.clone()).not(), vec![assign(vname(flag.clone()), lit("True")), call, assign(vname(flag), lit("False"))]));
+                }
+            }
+            let event_name = if t.object == "Workbook" || t.object == "Worksheet" { format!("{doc}.{}", t.event) } else { format!("{doc}.{proc_name}") };
+            let error = call_stmt("RAS_EventError", vec![lit(format!("\"{event_name}\"")), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]);
+            let mut body = Vec::new();
+            if open {
+                // At once, or when the workbook is activated if it is leaving the protected
+                // view (spec §12.3 path 1): `RAS_Glue` calls the handlers back.
+                body.push(call_stmt("RAS_WorkbookOpen", vec![]));
+                if !calls.is_empty() {
+                    has_open_handlers = true;
+                    let params = vec![VParam { name: "ras_dummy".into(), byref: false, ty: "Long".into(), is_array: false, optional_default: Some("0&".into()) }];
+                    self.out[di].procs.push(VProc { kind: ProcKind::Sub, public: true, friend: false, name: "RAS_WorkbookOpened".into(), params, ret: None, locals: vec![], body: calls, leading_comments: vec![], attributes: vec![], source: None });
+                }
+            } else {
+                for flag in &locals {
+                    body.push(VStmt::Raw(format!("Static {flag} As Boolean")));
+                }
+                body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
+                body.push(call_stmt("RAS_EnsureInit", vec![]));
+                if is_wb && needs_init && t.object == "Workbook" && (t.event == "Activate" || t.event == "WindowActivate") {
+                    // What `Workbook_Open` left for now (the workbook was in the protected view).
+                    body.push(call_stmt("RAS_OpenDeferred", vec![]));
+                }
+                body.extend(calls);
+                body.push(VStmt::Exit("Sub"));
+                body.push(VStmt::Label("RAS_OnError".into()));
+                for flag in &locals {
+                    body.push(assign(vname(flag.clone()), lit("False")));
+                }
+                body.push(error);
+            }
+            let params = t.params.iter().map(|p| VParam { name: p.0.clone(), byref: p.2, ty: p.1.clone(), is_array: false, optional_default: None }).collect();
+            self.out[di].procs.push(VProc { kind: ProcKind::Sub, public: false, friend: false, name: proc_name, params, ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None });
         }
+        let deferred_open: Vec<VStmt> = if has_open_handlers { vec![VStmt::Call { target: vname("ThisWorkbook").member("RAS_WorkbookOpened"), args: vec![] }] } else { Vec::new() };
         if needs_init {
             let ri = self.vmodule("RAS_Glue", VModuleKind::Standard);
             self.out[ri].private_module = true;
@@ -1669,6 +1879,168 @@ impl<'p> Lowerer<'p> {
         }
     }
 
+    /// The class whose events a `WithEvents` variable of type `t` receives: one host class that
+    /// VBA can declare by name (a late-bound one is an `Object`, which has no events).
+    fn event_class(&mut self, t: &Type) -> Option<ClassId> {
+        match t {
+            Type::Class(c, args) if args.is_empty() && self.prog.classes[*c].kind == ClassKind::Host && self.class_name(*c, &[]) != "Object" => Some(*c),
+            _ => None,
+        }
+    }
+
+    /// Finds the variables and fields named by `@on("<name>.<Event>")` (spec §12.2.2) and
+    /// checks that VBA can declare them `WithEvents`.
+    fn collect_with_events(&mut self) {
+        let prog = self.prog;
+        for f in &prog.fns {
+            if prog.modules[f.module].kind != ModuleKind::User || prog.modules[f.module].is_test() {
+                continue;
+            }
+            for ev in &f.attrs.on_events {
+                let Some(source) = prog.event_source(f.id, &ev.target) else { continue };
+                if self.with_events.contains(&source) {
+                    continue;
+                }
+                let (name, ty, problem) = match source {
+                    EventSource::Var(v) => {
+                        let d = &prog.vars[v];
+                        // A standard module: reported by `emit_events`.
+                        if prog.modules[f.module].form.is_none() {
+                            continue;
+                        }
+                        let problem = if d.is_const { Some("`const` にはできません（代入したオブジェクトのイベントを受け取るため、`let` で宣言します）") } else if d.exported { Some("`export` できません") } else { None };
+                        (d.name.clone(), d.ty.clone(), problem)
+                    }
+                    EventSource::Field(c, i) => {
+                        let fld = &prog.classes[c].fields[i];
+                        let problem = if !prog.classes[c].type_params.is_empty() { Some("ジェネリック クラスのフィールドにはできません") } else { None };
+                        (fld.name.clone(), fld.ty.clone(), problem)
+                    }
+                };
+                let problem = match problem {
+                    Some(p) => Some(p.to_string()),
+                    None if self.event_class(&ty).is_none() => Some(format!("型 `{}` のイベントは受け取れません（`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`MSForms.CommandButton` のように、イベントを持つクラスの型を 1 つだけ書きます。`object`・`any`・ユニオン型・配列・RAS のクラスは使えません）", prog.show(&ty))),
+                    None => None,
+                };
+                match problem {
+                    Some(p) => self.diag(Severity::Error, f.module, ev.span, "E0615", format!("`@on(\"{}.{}\")`: `{name}` のイベントは受け取れません: {p}", ev.target, ev.event)),
+                    None => {
+                        self.with_events.insert(source);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Event procedures for the objects that variables (fields) hold (spec §12.2.2): the
+    /// `@on("<variable>.<Event>")` handlers among `fns` are called from
+    /// `Private Sub <variable>_<Event>(…)`, generated in the module `vi` (named `owner`) that
+    /// declares the variable `WithEvents`.
+    fn emit_with_events(&mut self, vi: usize, owner: &str, fns: &[FnId], ensure_init: bool) {
+        let prog = self.prog;
+        struct Proc {
+            object: String,
+            event: String,
+            params: Vec<(String, String, bool)>,
+            handlers: Vec<(FnId, bool)>,
+        }
+        let mut table: Vec<Proc> = Vec::new();
+        for &f in fns {
+            let d = &prog.fns[f];
+            for ev in &d.attrs.on_events {
+                let Some(source) = prog.event_source(f, &ev.target) else { continue };
+                if !self.with_events.contains(&source) {
+                    continue;
+                }
+                let (object, ty) = match source {
+                    EventSource::Var(v) => (names::module_ident(&prog.vars[v].name), prog.vars[v].ty.clone()),
+                    EventSource::Field(c, i) => (names::member_ident(&prog.classes[c].fields[i].name), prog.classes[c].fields[i].ty.clone()),
+                };
+                let Some(class) = self.event_class(&ty) else { continue };
+                let (event, params) = match host_events(prog, class) {
+                    Some(events) => match events.into_iter().find(|e| e.0.eq_ignore_ascii_case(&ev.event)) {
+                        Some(e) => e,
+                        None => {
+                            self.diag(Severity::Error, d.module, ev.span, "E0611", format!("`@on(\"{}.{}\")`: `{}` にイベント `{}` はありません（または対応していません）", ev.target, ev.event, prog.class_display(class), ev.event));
+                            continue;
+                        }
+                    },
+                    // A class whose events are not known: declared as the handler is.
+                    None => {
+                        let mut params = Vec::new();
+                        for p in &d.params {
+                            let (ty, is_array) = self.vtype(&p.ty);
+                            params.push((names::member_ident(&p.name), ty, p.mode == PassMode::ByRef || is_array));
+                        }
+                        (ev.event.clone(), params)
+                    }
+                };
+                if d.params.len() > params.len() {
+                    self.diag(Severity::Error, d.module, ev.span, "E0612", format!("イベント `{object}_{event}` の引数は {} 個ですが、ハンドラ `{}` は {} 個受け取ります", params.len(), d.name, d.params.len()));
+                    continue;
+                }
+                match table.iter_mut().find(|t| t.object.eq_ignore_ascii_case(&object) && t.event == event) {
+                    Some(t) => t.handlers.push((f, ev.reentrant)),
+                    None => table.push(Proc { object, event, params, handlers: vec![(f, ev.reentrant)] }),
+                }
+            }
+        }
+        for t in table {
+            let proc_name = format!("{}_{}", t.object, t.event);
+            for &f in fns {
+                let d = &prog.fns[f];
+                if d.proc_ident().eq_ignore_ascii_case(&proc_name) {
+                    self.diag(Severity::Error, d.module, d.name_span, "E0614", format!("関数 `{}` の名前はイベント プロシージャ `{proc_name}` と同じです。別の名前にしてください（`@on(\"{}.{}\")` で受け取ります）", d.name, t.object, t.event));
+                }
+            }
+            let mut calls = Vec::new();
+            let mut locals = Vec::new();
+            for (i, (h, reentrant)) in t.handlers.iter().enumerate() {
+                let d = &prog.fns[*h];
+                let args: Vec<VExpr> = t.params.iter().take(d.params.len()).map(|p| vname(p.0.clone())).collect();
+                let call = VStmt::Call { target: VExpr::Name(d.proc_ident()), args };
+                if *reentrant {
+                    calls.push(call);
+                } else {
+                    let flag = format!("ras_busy{}", i + 1);
+                    locals.push(flag.clone());
+                    calls.push(if_then(vname(flag.clone()).not(), vec![assign(vname(flag.clone()), lit("True")), call, assign(vname(flag), lit("False"))]));
+                }
+            }
+            let mut body = Vec::new();
+            for flag in &locals {
+                body.push(VStmt::Raw(format!("Static {flag} As Boolean")));
+            }
+            body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
+            if ensure_init {
+                body.push(call_stmt("RAS_EnsureInit", vec![]));
+            }
+            body.extend(calls);
+            body.push(VStmt::Exit("Sub"));
+            body.push(VStmt::Label("RAS_OnError".into()));
+            for flag in &locals {
+                body.push(assign(vname(flag.clone()), lit("False")));
+            }
+            body.push(call_stmt("RAS_EventError", vec![lit(format!("\"{owner}.{proc_name}\"")), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
+            let params = t.params.iter().map(|p| VParam { name: p.0.clone(), byref: p.2, ty: p.1.clone(), is_array: false, optional_default: None }).collect();
+            self.out[vi].procs.push(VProc { kind: ProcKind::Sub, public: false, friend: false, name: proc_name, params, ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None });
+        }
+    }
+
+    /// The name of the control `target` of a sheet when its events are not known: a control
+    /// that is not an MSForms one, or any name when the controls of the workbook were not read.
+    fn untyped_control(&self, doc: &FormModule, target: &str) -> Option<String> {
+        if doc.kind != ObjectKind::Sheet {
+            return None;
+        }
+        match doc.decl.as_ref().and_then(|x| x.controls.iter().find(|c| c.name.eq_ignore_ascii_case(target))) {
+            Some(c) if crate::userform::events_of(&c.control_type).is_empty() => Some(c.name.clone()),
+            Some(_) => None,
+            None if !self.cfg.sheet_controls_known => Some(target.to_string()),
+            None => None,
+        }
+    }
+
     /// Event procedures of a form (spec §14.11.2): `@on("btnOK.Click")` handlers are called from
     /// `Private Sub btnOK_Click()`, generated in the form's code module with the same re-entrancy
     /// guard and error dialog as document-module events (spec §12.2). `UserForm_Initialize`
@@ -1684,6 +2056,10 @@ impl<'p> Lowerer<'p> {
         for &f in &md.fns {
             let d = &prog.fns[f];
             for ev in &d.attrs.on_events {
+                // A variable whose object is listened to (spec §12.2.2): `emit_with_events`.
+                if prog.event_source(f, &ev.target).is_some() {
+                    continue;
+                }
                 let host_type = if ev.target.eq_ignore_ascii_case("UserForm") || ev.target.eq_ignore_ascii_case(&decl.name) {
                     Some(("UserForm".to_string(), "UserForm".to_string()))
                 } else {
@@ -1714,6 +2090,8 @@ impl<'p> Lowerer<'p> {
                 }
             }
         }
+        let handlers = md.fns.clone();
+        self.emit_with_events(fi, &decl.name, &handlers, false);
         let init_fn = md.init_fn;
         if init_fn.is_some() && !table.iter().any(|t| t.0 .0 == "UserForm" && t.0 .1.name == "Initialize") {
             if let Some(def) = crate::userform::find_event("UserForm", "Initialize") {

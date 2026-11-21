@@ -66,6 +66,11 @@ impl Drop for Project {
 
 /// A project with one module, its workbook `Book.xlsx` (as `book` leaves it), and its debug build.
 fn project(name: &str, source: &str, book: impl FnOnce(&mut Book)) -> Project {
+    project_with(name, source, &[], book)
+}
+
+/// A project of `src/main.ras` and the files of `objects/` (name, text).
+fn project_with(name: &str, source: &str, objects: &[(&str, &str)], book: impl FnOnce(&mut Book)) -> Project {
     let root = std::env::temp_dir().join(format!("ras-book-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -77,7 +82,13 @@ fn project(name: &str, source: &str, book: impl FnOnce(&mut Book)) -> Project {
     let mut cfg = Config::default();
     cfg.project.workbook = Some("Book.xlsx".into());
     cfg.sheet_code_names = vec!["Sheet1".into()];
-    let sources = vec![SourceInput { path: root.join("src/main.ras"), rel_path: "src/main.ras".into(), key: "main".into(), kind: ModuleKind::User, text: source.into() }];
+    let mut sources = vec![SourceInput { path: root.join("src/main.ras"), rel_path: "src/main.ras".into(), key: "main".into(), kind: ModuleKind::User, text: source.into() }];
+    for (object, text) in objects {
+        let path = root.join(format!("objects/{object}.ras"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+        sources.push(ras_compiler::object_source(path, object, text.to_string()));
+    }
     let prog = analyze(sources, cfg);
     let errors: Vec<String> = prog.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect();
     assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
@@ -520,39 +531,46 @@ fn manual_calculation_stops_formulas() {
     assert_eq!(out, vec!["9", "107", "107 true"]);
 }
 
-const EVENTS: &str = r#"
-let depth = 0;
-
-@on("Sheet1.Change")
+/// `objects/Sheet1.ras`.
+const EVENTS_SHEET1: &str = r#"
+@on("Worksheet.Change")
 function changed(target: Excel.Range) {
     console.log(`Change ${target.address(false, false)}`);
     // Written by the handler itself: not entered again.
-    if (target.column == 1) Sheet1.cells(target.row, 8).value = "seen";
+    if (target.column == 1) this.cells(target.row, 8).value = "seen";
 }
 
-@on("Workbook.SheetChange")
-function anySheet(sh: object, target: Excel.Range) {
-    console.log(`SheetChange ${sh.name}!${target.address(false, false)}`);
-}
-
-@on("Sheet1.SelectionChange")
+@on("Worksheet.SelectionChange")
 function selected(target: Excel.Range) {
     console.log(`SelectionChange ${target.address(false, false)}`);
 }
 
-@on("Sheet1.Calculate")
+@on("Worksheet.Calculate")
 function recalculated() {
-    console.log(`Calculate F1=${Sheet1.range("F1").value}`);
+    console.log(`Calculate F1=${this.range("F1").value}`);
 }
 
-@on("Sheet1.Deactivate")
+@on("Worksheet.Deactivate")
 function left() {
     console.log("Deactivate");
 }
 
-@on("Sheet1.Activate")
+@on("Worksheet.Activate")
 function entered() {
     console.log("Activate");
+}
+
+@on("Worksheet.BeforeDelete")
+function deleting() {
+    throw new Error("消せません");
+}
+"#;
+
+/// `objects/ThisWorkbook.ras`.
+const EVENTS_BOOK: &str = r#"
+@on("Workbook.SheetChange")
+function anySheet(sh: object, target: Excel.Range) {
+    console.log(`SheetChange ${sh.name}!${target.address(false, false)}`);
 }
 
 @on("Workbook.NewSheet")
@@ -565,12 +583,9 @@ function saving(saveAsUI: boolean, byref cancel: boolean) {
     console.log(`BeforeSave ${saveAsUI}`);
     cancel = true;
 }
+"#;
 
-@on("Sheet1.BeforeDelete")
-function deleting() {
-    throw new Error("消せません");
-}
-
+const EVENTS: &str = r#"
 export function run() {
     const ws = Sheet1;
     ws.range("F1").formula = "=SUM(D2:D4)";
@@ -597,7 +612,7 @@ fn events_are_raised_for_what_the_program_does() {
     if !has_node() {
         return;
     }
-    let p = project("events", EVENTS, sales);
+    let p = project_with("events", EVENTS, &[("Sheet1", EVENTS_SHEET1), ("ThisWorkbook", EVENTS_BOOK)], sales);
     let (stdout, stderr, ok) = p.run("Main.run");
     assert!(ok, "{stderr}\n{stdout}");
     assert_eq!(
@@ -623,6 +638,94 @@ fn events_are_raised_for_what_the_program_does() {
     );
     // The error of a handler is reported, and the program goes on.
     assert!(stderr.contains("Sheet1.BeforeDelete: 実行時エラー") && stderr.contains("消せません"), "{stderr}");
+}
+
+/// `objects/ThisWorkbook.ras`: variables whose objects are listened to (spec §12.2.2).
+const SOURCES_BOOK: &str = r#"
+let app: Excel.Application;
+let sheet: Excel.Worksheet;
+
+export function listen() {
+    app = application;
+    sheet = Sheet1;
+}
+
+export function stop() {
+    app = null;
+    sheet = null;
+}
+
+@on("app.SheetChange")
+function anyChange(sh: object, target: Excel.Range) {
+    console.log(`app SheetChange ${sh.name}!${target.address(false, false)}`);
+}
+
+@on("app.WorkbookBeforeSave")
+function saving(wb: Excel.Workbook, saveAsUI: boolean, byref cancel: boolean) {
+    console.log(`app WorkbookBeforeSave ${wb === thisWorkbook} ${saveAsUI}`);
+    cancel = true;
+}
+
+@on("sheet.Change")
+function changed(target: Excel.Range) {
+    console.log(`sheet Change ${target.address(false, false)}`);
+}
+"#;
+
+const SOURCES: &str = r#"
+class BookWatcher {
+    private book: Excel.Workbook;
+    private seen = 0;
+
+    constructor() {
+        this.book = thisWorkbook;
+    }
+
+    @on("book.SheetChange")
+    private changed(sh: object, target: Excel.Range) {
+        this.seen++;
+        console.log(`class SheetChange ${target.address(false, false)} #${this.seen}`);
+    }
+}
+
+let watcher: BookWatcher;
+
+export function listen() {
+    Sheet1.range("A6").value = "nobody listens yet";
+    thisWorkbook.listen();
+    watcher = new BookWatcher();
+    Sheet1.range("A7").value = "x";
+    thisWorkbook.save();
+    console.log(`saved=${thisWorkbook.saved}`);
+    thisWorkbook.stop();
+    Sheet1.range("A8").value = "y";
+}
+"#;
+
+/// The stand-in raises the events of the objects that variables hold (`WithEvents`).
+#[test]
+fn events_reach_the_variables_that_hold_the_object() {
+    if !has_node() {
+        return;
+    }
+    let p = project_with("sources", SOURCES, &[("ThisWorkbook", SOURCES_BOOK)], sales);
+    let (stdout, stderr, ok) = p.run("Main.listen");
+    assert!(ok, "{stderr}\n{stdout}");
+    assert_eq!(
+        lines(&stdout),
+        vec![
+            // The sheet's own event, then the workbook's: to the variable that holds the
+            // sheet, to the one that holds `Application`, to the field of the class.
+            "sheet Change A7",
+            "app SheetChange Sheet1!A7",
+            "class SheetChange A7 #1",
+            // The workbook's event reaches `Application` with the workbook in front.
+            "app WorkbookBeforeSave true false",
+            "saved=false",
+            // Variables that hold nothing any more are not called.
+            "class SheetChange A8 #2",
+        ]
+    );
 }
 
 const MORE: &str = r#"

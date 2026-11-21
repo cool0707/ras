@@ -40,13 +40,3 @@ export function countCustomers(): int {
     }
     return seen.size;
 }
-
-/** データが変更されたら、ステータスバーに知らせる。 */
-@on("Sheet1.Change")
-function onDataChanged(target: Excel.Range) {
-    try {
-        status(`${target.address} が変更されました`);
-    } catch (e) {
-        console.log(e.description);
-    }
-}

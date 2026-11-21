@@ -683,6 +683,8 @@
     for (const sheet of data.sheets) {
         const b = el("button", sheet.visible === "visible" ? null : "hidden", sheet.name + (sheet.visible === "visible" ? "" : "（非表示）"));
         b.sheet = sheet;
+        // In the editor, the tab's context menu offers the sheet commands (copy, rename, remove).
+        b.dataset.vscodeContext = JSON.stringify({ webviewSection: "sheetTab", sheet: sheet.name, preventDefaultContextMenuItems: true });
         if (sheet.tabColor) b.style.borderBottomColor = sheet.tabColor;
         const n = (changes[sheet.name] || []).length;
         if (n) b.appendChild(el("span", "badge", String(n)));

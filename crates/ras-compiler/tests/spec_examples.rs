@@ -513,20 +513,19 @@ let cache = new Map<string, int>();
 @init
 function prepare() { cache.set("a", 1); }
 
-@on("Workbook.Open")
-export function setup() { status("ready"); }
-
-@on("Sheet1.Change")
-function onSheet1Change(target: Excel.Range) { target.interior.color = 255; }
 "#;
-    let (_, out) = compile(&[("report", src)]);
+    let book = "@on(\"Workbook.Open\")\nfunction setup() { status(\"ready\"); }\n";
+    let sheet1 = "@on(\"Worksheet.Change\")\nfunction onSheet1Change(target: Excel.Range) { target.interior.color = 255; }\n";
+    let (_, out) = compile(&[("report", src), ("objects/ThisWorkbook", book), ("objects/Sheet1", sheet1)]);
     let sheet = code(&out, "Sheet1");
     assert_contains(
         &sheet,
-        "Private Sub Worksheet_Change(ByVal Target As Range)\n    Static ras_busy1 As Boolean\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    If Not ras_busy1 Then\n        ras_busy1 = True\n        Report.onSheet1Change Target\n        ras_busy1 = False\n    End If\n    Exit Sub\n",
+        "Private Sub Worksheet_Change(ByVal Target As Range)\n    Static ras_busy1 As Boolean\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    If Not ras_busy1 Then\n        ras_busy1 = True\n        onSheet1Change Target\n        ras_busy1 = False\n    End If\n    Exit Sub\nRAS_OnError:\n    ras_busy1 = False\n    RAS_EventError \"Sheet1.Change\", Err.Number, Err.Source, Err.Description\nEnd Sub\n",
     );
     let wb = code(&out, "ThisWorkbook");
     assert_contains(&wb, "Private Sub Workbook_Open()\n    RAS_WorkbookOpen\nEnd Sub\n");
+    // The handlers of `Open`, called once the workbook is ready.
+    assert_contains(&wb, "Public Sub RAS_WorkbookOpened(Optional ByVal ras_dummy As Long = 0&)\n    setup\nEnd Sub\n");
     // What `Workbook_Open` left while the workbook was leaving the protected view.
     assert_contains(&wb, "Private Sub Workbook_Activate()\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    RAS_OpenDeferred\n    Exit Sub\n");
     assert_contains(&wb, "Private Sub Workbook_WindowActivate(ByVal Wn As Window)\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    RAS_OpenDeferred\n    Exit Sub\n");
@@ -534,17 +533,19 @@ function onSheet1Change(target: Excel.Range) { target.interior.color = 255; }
     assert!(!out.files.iter().any(|f| f.code.contains("OnTime")));
     let glue = code(&out, "RAS_Glue");
     assert_contains(&glue, "Public Sub RAS_InitAll(Optional ByVal ras_dummy As Long = 0&)\n    Report.RAS_ModInit\n    Report.prepare\nEnd Sub\n");
-    assert_contains(&glue, "Public Sub RAS_DeferredInit()\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    Report.setup\n");
+    assert_contains(&glue, "Public Sub RAS_DeferredInit()\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    ThisWorkbook.RAS_WorkbookOpened\n");
     assert_contains(&glue, "Public Sub RAS_WorkbookOpen()\n    If RAS_InProtectedView() Then\n        ras_open_deferred = True\n    Else\n        RAS_DeferredInit\n    End If\nEnd Sub\n");
     assert_contains(&glue, "Public Sub RAS_OpenDeferred()\n    If Not ras_open_deferred Then Exit Sub\n    ras_open_deferred = False\n    RAS_DeferredInit\nEnd Sub\n");
     assert_contains(&glue, "    Set w = app.ProtectedViewWindows.Item(ThisWorkbook.Name)\n    RAS_InProtectedView = Not w Is Nothing\nEnd Function\n");
     assert_contains(&glue, "Public Sub Auto_Open()\n    RAS_EnsureInit\nEnd Sub\n");
     assert_contains(&code(&out, "RAS_Runtime"), "    RAS_Glue.RAS_InitAll\n");
-    // Document modules are not importable files and carry no hash line.
+    // Document modules are generated whole, with the hash line of every module (spec §12.2).
     let f = out.files.iter().find(|f| f.name == "Sheet1").unwrap();
-    assert!(!f.code.contains("RAS-GENERATED"));
-    // Unknown sheet code names are an error (spec §14.9.2 item 7).
-    assert_eq!(error_codes_build(&[("m", "@on(\"Sheet9.Change\")\nfunction h() {}\n")]), vec!["E0610"]);
+    assert!(f.code.starts_with("' RAS-GENERATED hash="));
+    assert!(f.code.contains("Option Explicit"));
+    // `@on` is written in the file of the sheet; a file needs a sheet of the workbook.
+    assert_eq!(error_codes_build(&[("m", "@on(\"Sheet1.Change\")\nfunction h() {}\n")]), vec!["E0610"]);
+    assert_eq!(error_codes(&[("objects/Sheet9", "function h() {}\n")]), vec!["E0610"]);
 }
 
 /// Error codes reported by code generation.

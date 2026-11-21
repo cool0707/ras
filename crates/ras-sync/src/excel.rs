@@ -170,6 +170,146 @@ impl Book {
         Ok(out)
     }
 
+    /// The worksheets as objects, with their tab names, in workbook order.
+    fn worksheet_objects(&self) -> Result<Vec<(Obj, String)>, SyncError> {
+        let sheets = self.workbook.object("Worksheets", &[])?;
+        let count = sheets.get("Count", &[])?.int().unwrap_or(0);
+        let mut out = Vec::with_capacity(count as usize);
+        for i in 1..=count {
+            let sheet = sheets.object("Item", &[Arg::Int(i)])?;
+            let name = sheet.get("Name", &[])?.string();
+            out.push((sheet, name));
+        }
+        Ok(out)
+    }
+
+    /// The component of the VBA project that is the module of the worksheet with the tab name
+    /// `name`. Looked up by the sheet's name, not its `CodeName`: Excel leaves the `CodeName`
+    /// of a sheet it just added empty until the project is looked at.
+    fn sheet_component(&self, name: &str) -> Result<Obj, SyncError> {
+        let project = self.project()?;
+        let count = project.components.get("Count", &[])?.int().unwrap_or(0);
+        for i in 1..=count {
+            let component = project.components.object("Item", &[Arg::Int(i)])?;
+            if component.get("Type", &[])?.int() != Some(CT_DOCUMENT) {
+                continue;
+            }
+            let Ok(properties) = component.object("Properties", &[]) else { continue };
+            let Ok(property) = properties.object("Item", &[Arg::Str("Name")]) else { continue };
+            if property.get("Value", &[]).map(|v| v.string()).is_ok_and(|v| v == name) {
+                return Ok(component);
+            }
+        }
+        Err(SyncError::Failed(format!("シート「{name}」のモジュールが VBA プロジェクトに見つかりません")))
+    }
+
+    /// Deletes a worksheet without Excel asking.
+    fn delete_sheet(&self, sheet: &Obj) -> Result<(), SyncError> {
+        let alerts = self.app.get("DisplayAlerts", &[]).ok().and_then(|v| v.int()).is_none_or(|v| v != 0);
+        let _ = self.app.put("DisplayAlerts", Arg::Bool(false));
+        let result = sheet.call("Delete", &[]);
+        let _ = self.app.put("DisplayAlerts", Arg::Bool(alerts));
+        result.map(|_| ()).map_err(excel_refused)
+    }
+
+    /// Adds, copies, removes or renames a worksheet of the open workbook (spec §14.16). The
+    /// workbook is not saved. The names are checked by the caller.
+    pub fn edit_sheet(&self, edit: &ras_ovba::SheetEdit) -> Result<ras_ovba::SheetEditReport, SyncError> {
+        use ras_ovba::{Place, SheetEdit};
+        // A macro that runs, a cell being edited: nothing is changed (spec §14.6).
+        self.project()?;
+        let sheets = self.sheets()?;
+        let objects = self.worksheet_objects()?;
+        let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+        let find = |wanted: &str| -> Result<usize, SyncError> {
+            sheets.iter().position(|s| same(&s.code_name, wanted)).or_else(|| sheets.iter().position(|s| same(&s.name, wanted))).ok_or_else(|| SyncError::Failed(format!("ブックに「{wanted}」というシートがありません")))
+        };
+        // The new sheet gets its names; when that fails, it goes again.
+        let finish = |sheet: Obj, name: Option<&str>, code_name: Option<&str>| -> Result<(String, String), SyncError> {
+            let named = (|| {
+                if let Some(name) = name {
+                    sheet.put("Name", Arg::Str(name)).map_err(excel_refused)?;
+                }
+                let tab = sheet.get("Name", &[])?.string();
+                let component = self.sheet_component(&tab)?;
+                if let Some(code_name) = code_name {
+                    component.put("Name", Arg::Str(code_name)).map_err(excel_refused)?;
+                }
+                Ok((tab, component.get("Name", &[])?.string()))
+            })();
+            if named.is_err() {
+                let _ = self.delete_sheet(&sheet);
+            }
+            named
+        };
+        let mut report = ras_ovba::SheetEditReport::default();
+        match edit {
+            SheetEdit::Add { name, code_name, place } => {
+                let collection = self.workbook.object("Worksheets", &[])?;
+                let sheet = match place {
+                    Place::Before(s) => collection.object("Add", &[Arg::Obj(&objects[find(s)?].0)]),
+                    Place::After(s) => collection.object("Add", &[Arg::Missing, Arg::Obj(&objects[find(s)?].0)]),
+                    Place::End => match objects.last() {
+                        Some(last) => collection.object("Add", &[Arg::Missing, Arg::Obj(&last.0)]),
+                        None => collection.object("Add", &[]),
+                    },
+                }
+                .map_err(excel_refused)?;
+                (report.name, report.code_name) = finish(sheet, Some(name), code_name.as_deref())?;
+            }
+            SheetEdit::Copy { sheet, name, code_name, place } => {
+                let index = find(sheet)?;
+                let source = &objects[index].0;
+                match place {
+                    Some(Place::Before(s)) => source.call("Copy", &[Arg::Obj(&objects[find(s)?].0)]),
+                    Some(Place::After(s)) => source.call("Copy", &[Arg::Missing, Arg::Obj(&objects[find(s)?].0)]),
+                    Some(Place::End) => source.call("Copy", &[Arg::Missing, Arg::Obj(&objects[objects.len() - 1].0)]),
+                    None => source.call("Copy", &[Arg::Missing, Arg::Obj(source)]),
+                }
+                .map_err(excel_refused)?;
+                // The copy is the active sheet of the workbook.
+                let copy = self.workbook.object("ActiveSheet", &[])?;
+                if objects.iter().any(|(_, tab)| copy.get("Name", &[]).map(|v| v.string()).is_ok_and(|v| v == *tab)) {
+                    return Err(SyncError::Failed("シートを複製できませんでした".into()));
+                }
+                (report.name, report.code_name) = finish(copy, name.as_deref(), code_name.as_deref())?;
+                report.before = Some((sheets[index].name.clone(), sheets[index].code_name.clone()));
+            }
+            SheetEdit::Remove { sheet } => {
+                let index = find(sheet)?;
+                self.delete_sheet(&objects[index].0)?;
+                if self.worksheet_objects()?.len() >= objects.len() {
+                    return Err(SyncError::Failed(format!("シート「{}」を削除できませんでした（表示されているシートがほかに無い場合、Excel は削除しません）", sheets[index].name)));
+                }
+                report.name = sheets[index].name.clone();
+                report.code_name = sheets[index].code_name.clone();
+            }
+            SheetEdit::Rename { sheet, name, code_name } => {
+                let index = find(sheet)?;
+                let old = &sheets[index];
+                report.before = Some((old.name.clone(), old.code_name.clone()));
+                report.name = old.name.clone();
+                report.code_name = old.code_name.clone();
+                // The code name first: it is the one Excel may refuse (a module of that name).
+                if let Some(code_name) = code_name.as_ref().filter(|c| **c != old.code_name) {
+                    self.sheet_component(&old.name)?.put("Name", Arg::Str(code_name)).map_err(excel_refused)?;
+                    report.code_name = code_name.clone();
+                }
+                if let Some(name) = name.as_ref().filter(|n| **n != old.name) {
+                    if let Err(e) = objects[index].0.put("Name", Arg::Str(name)) {
+                        // Back to the code name it had.
+                        if report.code_name != old.code_name {
+                            let _ = self.sheet_component(&old.name).and_then(|c| c.put("Name", Arg::Str(&old.code_name)).map_err(SyncError::from));
+                        }
+                        return Err(excel_refused(e));
+                    }
+                    report.name = name.clone();
+                }
+            }
+        }
+        Ok(report)
+    }
+
     /// `Application.Run` with the workbook-qualified name (spec §14.5); returns when the macro ends.
     pub fn run(&self, name: &str) -> Result<(), SyncError> {
         let book = self.workbook.get("Name", &[])?.string();
@@ -210,6 +350,15 @@ impl Book {
                 let _ = SetForegroundWindow(HWND(handle as isize as *mut c_void));
             }
         }
+    }
+}
+
+/// What Excel said when it did not do what it was asked (or that it is busy).
+fn excel_refused(e: ComError) -> SyncError {
+    if e.is_busy() {
+        SyncError::from(e)
+    } else {
+        SyncError::Failed(format!("Excel が操作を受け付けませんでした: {}", e.description))
     }
 }
 

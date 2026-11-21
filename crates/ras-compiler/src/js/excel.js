@@ -139,16 +139,45 @@ module.exports = function createExcel(rt, addon, options) {
     function listens(...events) {
         return handlers().some((h) => events.some((e) => sameName(h.event, e)));
     }
-    /** Raises an event; returns its arguments as `{ v }` cells (a handler may set `cancel`). */
-    function raise(targets, event, args) {
+    /**
+     * Raises an event; returns its arguments as `{ v }` cells (a handler may set `cancel`).
+     * `origin` is the sheet or the workbook the event is of: the handlers of a variable that
+     * holds it (`@on("sheet.Change")`, spec §12.2.2) are called too, and those of a variable
+     * that holds `Application` for the events of the workbook — its `Sheet…` events under the
+     * same name, its own as `Workbook…` with the workbook as the first argument.
+     */
+    function raise(targets, event, args, origin) {
         const cells = args.map((v) => ({ v }));
         if (!app.$state.EnableEvents) return cells;
         for (const h of handlers()) {
-            if (!sameName(h.event, event) || !targets.some((t) => sameName(h.target, t))) continue;
+            let passed = cells;
+            if (h.source !== undefined) {
+                if (origin === undefined) continue;
+                let held;
+                try {
+                    held = h.source();
+                } catch {
+                    continue;
+                }
+                if (held === origin) {
+                    if (!sameName(h.event, event)) continue;
+                } else if ((held === app || held === appProxy) && origin instanceof Workbook) {
+                    if (/^sheet/i.test(event)) {
+                        if (!sameName(h.event, event)) continue;
+                    } else {
+                        if (!sameName(h.event, `Workbook${event}`)) continue;
+                        passed = [{ v: origin }, ...cells];
+                    }
+                } else {
+                    continue;
+                }
+            } else if (!sameName(h.event, event) || !targets.some((t) => sameName(h.target, t))) {
+                continue;
+            }
             if (!h.reentrant && running.has(h)) continue;
             running.add(h);
             try {
-                h.fn(cells);
+                h.fn(passed);
             } catch (err) {
                 const e = rt.caught(err);
                 const at = e.rasFile ? `（${e.rasFile}:${e.rasLine}）` : "";
@@ -163,11 +192,11 @@ module.exports = function createExcel(rt, addon, options) {
     /** An event of a sheet of the project's workbook, and the workbook's event for it. */
     function sheetEvent(sheet, event, args) {
         if (!sheet.$wb.$project || sheet.$wb.$closed) return;
-        raise([sheet.CodeName], event, args);
-        raise(WORKBOOK, `Sheet${event}`, [sheet, ...args]);
+        raise([sheet.CodeName], event, args, sheet);
+        raise(WORKBOOK, `Sheet${event}`, [sheet, ...args], sheet.$wb);
     }
     function bookEvent(wb, event, args) {
-        return wb.$project ? raise(WORKBOOK, event, args) : args.map((v) => ({ v }));
+        return wb.$project ? raise(WORKBOOK, event, args, wb) : args.map((v) => ({ v }));
     }
     /** `Calculate` for the sheets whose formulas the last change had calculated. */
     function calculated(wb, always) {
@@ -179,8 +208,8 @@ module.exports = function createExcel(rt, addon, options) {
         for (const i of book(() => wb.$book.calculatedSheets())) {
             const sheet = wb.$sheets[i];
             if (sheet === undefined) continue;
-            raise([sheet.CodeName], "Calculate", []);
-            raise(WORKBOOK, "SheetCalculate", [sheet]);
+            raise([sheet.CodeName], "Calculate", [], sheet);
+            raise(WORKBOOK, "SheetCalculate", [sheet], wb);
         }
     }
     /** Cells of a range changed: `Calculate`, then `Change`. */
@@ -1227,7 +1256,7 @@ module.exports = function createExcel(rt, addon, options) {
         }
         Delete() {
             const wb = this.$wb;
-            if (wb.$project) raise([this.CodeName], "BeforeDelete", []);
+            if (wb.$project) raise([this.CodeName], "BeforeDelete", [], this);
             wb.$changed();
             const i = this.$index();
             const active = wb.$sheets[wb.$active];
@@ -2047,8 +2076,8 @@ module.exports = function createExcel(rt, addon, options) {
                 book(() => b.$book.calculate());
                 if (b.$project && listens("Calculate", "SheetCalculate")) {
                     for (const sheet of b.$sheets) {
-                        raise([sheet.CodeName], "Calculate", []);
-                        raise(WORKBOOK, "SheetCalculate", [sheet]);
+                        raise([sheet.CodeName], "Calculate", [], sheet);
+                        raise(WORKBOOK, "SheetCalculate", [sheet], sheet.$wb);
                     }
                 }
             }

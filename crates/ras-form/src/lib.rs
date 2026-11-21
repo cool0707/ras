@@ -31,6 +31,7 @@ pub mod codebehind;
 mod compile;
 pub mod contract;
 pub mod import;
+pub mod vbdiff;
 mod oforms;
 pub mod picture;
 mod reader;

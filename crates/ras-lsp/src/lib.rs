@@ -17,7 +17,7 @@ mod sync;
 
 type Res<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-const COMMANDS: &[&str] = &["ras.showGeneratedVba", "ras.syncNow", "ras.openInExcel", "ras.runMacro", "ras.showForm", "ras.listMacros"];
+const COMMANDS: &[&str] = &["ras.showGeneratedVba", "ras.syncNow", "ras.openInExcel", "ras.runMacro", "ras.showForm", "ras.listMacros", "ras.sheet"];
 
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
@@ -74,9 +74,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 fn load_project(root: &Path) -> Result<(Config, Vec<SourceInput>), String> {
     let (mut config, sources) = ras_compiler::load_project(root)?;
     if let Some(book) = config.project.workbook.as_ref().map(|w| root.join(w)).filter(|b| b.is_file()) {
-        if let Ok(names) = ras_ovba::workbook_code_names(&book) {
-            config.sheet_code_names = names.sheets.into_iter().map(|s| s.code_name).collect();
-        }
+        let _ = ras_sync::read_workbook(&mut config, root, &book);
     }
     Ok((config, sources))
 }
@@ -119,6 +117,12 @@ impl Server {
                     // A file outside any project (or not saved yet): analysed on its own.
                     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                     let is_typedef = name.ends_with(".d.ras");
+                    // A new file of `objects/`: the module of a sheet (spec §12.2).
+                    let objects = self.root.as_ref().map(|r| r.join(ras_compiler::OBJECTS_DIR));
+                    if let (Some(stem), true) = (name.strip_suffix(".ras"), !is_typedef && path.parent().is_some_and(|d| objects.as_ref().is_some_and(|o| same_file(d, o)))) {
+                        sources.push(ras_compiler::object_source(path.clone(), stem, text.clone()));
+                        continue;
+                    }
                     sources.push(SourceInput {
                         path: path.clone(),
                         rel_path: name.clone(),
@@ -163,7 +167,7 @@ impl Server {
         let mut lenses = Vec::new();
         // A form's code-behind: one pair at the top that shows the form (spec §14.10.7). Its
         // functions need the form loaded and are not started on their own.
-        if let Some(form) = &md.form {
+        if let Some(form) = md.form.as_ref().filter(|_| md.is_form()) {
             if form.decl.is_none() {
                 return lenses;
             }
@@ -509,6 +513,8 @@ impl Server {
             "ras.openInExcel" => Some(sync::Job::Open { id }),
             "ras.runMacro" => Some(sync::Job::Run { id, name: args[0].as_str()?.to_string() }),
             "ras.showForm" => Some(sync::Job::ShowForm { id, name: args[0].as_str()?.to_string() }),
+            // `{ action: "add" | "copy" | "remove" | "rename" | "list", … }` (spec §14.16).
+            "ras.sheet" => sync::sheet_edit(&args[0]).map(|(edit, force)| sync::Job::Sheet { id, edit, force }),
             _ => None,
         }
     }

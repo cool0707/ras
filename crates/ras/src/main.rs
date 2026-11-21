@@ -10,6 +10,7 @@ mod book;
 mod explain;
 mod forms;
 mod run;
+mod sheet;
 mod test;
 use ras_compiler::vba::VModuleKind;
 use ras_compiler::{BuildOptions, BuildOutput, Config, Diagnostic, ModuleKind, Program, Severity};
@@ -118,6 +119,11 @@ enum Command {
     Book {
         #[command(subcommand)]
         action: book::BookCommand,
+    },
+    /// シートの追加・複製・削除・名前の変更を、ブックと objects/ のファイルに一緒に行う
+    Sheet {
+        #[command(subcommand)]
+        action: sheet::SheetCommand,
     },
     /// LSP サーバとして起動する（VS Code 拡張から呼ばれる）
     Lsp {
@@ -244,9 +250,8 @@ fn analyze_project(root: &Path, args: &BuildArgs, book: Option<&Path>, tests: bo
     };
     if let Some(book) = book {
         if book.is_file() {
-            match ras_ovba::workbook_code_names(&book) {
-                Ok(names) => cfg.sheet_code_names = names.sheets.into_iter().map(|s| s.code_name).collect(),
-                Err(e) => eprintln!("warning: {} のシート名を読み取れませんでした: {e}", book.display()),
+            if let Err(e) = ras_sync::read_workbook(&mut cfg, root, &book) {
+                eprintln!("warning: {} のシート名を読み取れませんでした: {e}", book.display());
             }
         }
     }
@@ -515,7 +520,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     let Some((prog, out)) = compile(root, args, Some(&book))? else { return Ok(ExitCode::from(1)) };
     write_build(root, &prog, &out)?;
     let Some(user_forms) = load_forms(root, prog.config.target.codepage, &out)? else { return Ok(ExitCode::from(1)) };
-    let opts = ras_sync::options(&prepared, p.overwrite);
+    let opts = ras_sync::options(root, &prepared, p.overwrite);
     let pending = |name: &str| opts.pending.iter().any(|(c, g)| c.eq_ignore_ascii_case(name) || g.eq_ignore_ascii_case(name));
     let adopted = |name: &str| opts.adopt.iter().any(|n| n.eq_ignore_ascii_case(name));
     // What a pending take-over generates is not written yet.
@@ -529,6 +534,10 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     let mut drifted = Vec::new();
     if let Some(project) = &existing.project {
         for m in &project.modules {
+            // Document modules are decided below, each as a whole.
+            if m.kind == ras_ovba::ModuleKind::Document {
+                continue;
+            }
             let Some(is_drifted) = ras_compiler::emit::has_drifted(&m.source) else {
                 // Taken over into a RAS module of another name (`mod_Main` → `ModMain`).
                 if m.kind == ras_ovba::ModuleKind::Standard && adopted(&m.name) && !generated.iter().any(|g| g.eq_ignore_ascii_case(&m.name)) {
@@ -536,7 +545,8 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
                 }
                 continue;
             };
-            if is_drifted {
+            // (What was added to it in the VBE was taken over: written again from its file.)
+            if is_drifted && !adopted(&m.name) {
                 drifted.push(m.name.clone());
             }
             if !generated.contains(m.name.as_str()) && matches!(m.kind, ras_ovba::ModuleKind::Standard | ras_ovba::ModuleKind::Class) {
@@ -545,7 +555,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         }
     }
     // A module of the same name that RAS did not generate is hand-written code: replacing it silently would lose it.
-    let hand_written: Vec<String> = existing
+    let mut hand_written: Vec<String> = existing
         .project
         .iter()
         .flat_map(|project| &project.modules)
@@ -554,6 +564,42 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         .filter(|m| generated.iter().any(|g| g.to_lowercase() == m.name.to_lowercase()))
         .map(|m| m.name.clone())
         .collect();
+    let locked = || format!(
+            "{} は Excel で開かれているため、オフライン書き込みはできません。開いたまま反映するには `ras sync` を使ってください（Windows のみ）。または、ブックを閉じてから再実行してください{}",
+            book.display(),
+            stale_owner_hint(&book)
+        );
+    // A workbook open in Excel is not written to, whatever else is wrong (spec §14.9.3).
+    if is_open_in_excel(&book) {
+        return Err(locked());
+    }
+    // The modules of the workbook and of the sheets are written whole from their files
+    // (spec §12.2, §14.6).
+    let mut document_code = Vec::new();
+    let mut document_names = vec![existing.code_names.workbook.clone()];
+    document_names.extend(existing.code_names.sheets.iter().map(|s| s.code_name.clone()));
+    for f in files.iter().filter(|f| f.kind == VModuleKind::Document) {
+        let name = if f.name.eq_ignore_ascii_case("ThisWorkbook") { existing.code_names.workbook.as_str() } else { f.name.as_str() };
+        if !document_names.iter().any(|n| n.to_lowercase() == name.to_lowercase()) {
+            return Err(format!("{}: ブックに `{}` というコード名のシートがありません（objects/{}.ras）。シートのコード名を変えたときは、ファイル名も変えてください", book.display(), f.name, f.name));
+        }
+    }
+    for name in document_names.iter().filter(|n| !n.is_empty()) {
+        let generated_name = if name.to_lowercase() == existing.code_names.workbook.to_lowercase() { "ThisWorkbook" } else { name.as_str() };
+        if pending(name) || pending(generated_name) {
+            continue;
+        }
+        let current = existing.project.iter().flat_map(|project| &project.modules).find(|m| m.kind == ras_ovba::ModuleKind::Document && m.name.to_lowercase() == name.to_lowercase()).map(|m| m.source.as_str()).unwrap_or("");
+        let code = files.iter().find(|f| f.kind == VModuleKind::Document && f.name.to_lowercase() == generated_name.to_lowercase()).map(|f| f.code.as_str());
+        let own = opts.written.iter().any(|n| n.to_lowercase() == generated_name.to_lowercase());
+        match ras_sync::plan::document_action(current, code, adopted(name), p.overwrite, own) {
+            ras_sync::plan::DocumentAction::Write(code) => document_code.push(ras_ovba::DocumentCode { code_name: name.clone(), code }),
+            ras_sync::plan::DocumentAction::Drifted => drifted.push(name.clone()),
+            ras_sync::plan::DocumentAction::HandWritten => hand_written.push(name.clone()),
+            ras_sync::plan::DocumentAction::Foreign => eprintln!("warning: シート `{name}` のモジュールには RAS が生成したコードがありますが、対応するファイル（objects/{name}.ras）がありません（シートの複製でコードごと複製されたものです）。そのまま残しています。`ras sync`（Excel で開いた状態）でコピー元のファイルを複製できます"),
+            ras_sync::plan::DocumentAction::Unchanged | ras_sync::plan::DocumentAction::Keep => {}
+        }
+    }
     if !hand_written.is_empty() && !p.overwrite {
         return Err(format!(
             "ブックには RAS が生成したものではない同名のモジュールがあります: {}\n  このまま書き込むと手書きのコードが失われます。`ras unpack` で vba/ に取り出してモジュール名を変えるか、RAS 側のファイル名を変えてください。置き換えてよい場合は --overwrite を付けてください",
@@ -587,12 +633,10 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         ));
     }
     let mut modules = Vec::new();
-    let mut document_code = Vec::new();
     for f in files {
         match f.kind {
-            // Written with the form's designer (`user_forms`).
-            VModuleKind::Form => {}
-            VModuleKind::Document => document_code.push(ras_ovba::DocumentCode { code_name: f.name.clone(), managed_code: f.code.clone() }),
+            // Written with the form's designer (`user_forms`); the document modules: above.
+            VModuleKind::Form | VModuleKind::Document => {}
             _ => modules.push(ras_ovba::VbaModule { name: f.name.clone(), kind: to_ovba_kind(&f.kind), source: f.stream_text() }),
         }
     }
@@ -604,9 +648,9 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         project_name: None,
         modules,
         document_code,
-        // Document modules whose hand-written code was taken over.
-        replace_hand_written: prepared.adopt.iter().filter(|(_, kind)| matches!(kind, ras_form::import::ImportKind::Document { .. })).map(|(name, _)| name.clone()).collect(),
         remove_modules: remove,
+        rename_modules: Vec::new(),
+        prune_documents: false,
         forms: user_forms,
         backup_dir: Some(root.join("build").join("backup")),
         backup_generations: prog.config.pack.backup_generations,
@@ -614,6 +658,11 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     match ras_ovba::pack(&req) {
         Ok(rep) => {
             ras_form::import::finish(&prepared)?;
+            // What was written, to tell later what was added in the VBE (spec §14.7.3).
+            if p.output.is_none() {
+                let not_written: Vec<String> = out.files.iter().filter(|f| pending(&f.name)).map(|f| f.name.clone()).collect();
+                ras_sync::save_written(root, &out.files, &not_written)?;
+            }
             for w in &rep.warnings {
                 eprintln!("warning: {w}");
             }
@@ -627,11 +676,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
             );
             Ok(ExitCode::SUCCESS)
         }
-        Err(ras_ovba::OvbaError::Locked) => Err(format!(
-            "{} は Excel で開かれているため、オフライン書き込みはできません。開いたまま反映するには `ras sync` を使ってください（Windows のみ）。または、ブックを閉じてから再実行してください{}",
-            book.display(),
-            stale_owner_hint(&book)
-        )),
+        Err(ras_ovba::OvbaError::Locked) => Err(locked()),
         Err(ras_ovba::OvbaError::DuplicateProcedure { module, procedure }) => Err(format!(
             "{}: ドキュメントモジュール `{module}` には手書きの `{procedure}` があり、RAS が生成するプロシージャと名前が重なります（このまま書き込むと、ブックを開いたときに VBE が「名前が適切ではありません」のコンパイル エラーを出します）\n  手書き側の処理を RAS の `@on` ハンドラへ移すか、手書きのプロシージャを削除してください",
             book.display()
@@ -662,8 +707,16 @@ fn live_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<Option<Ex
     write_build(root, &prog, &out)?;
     let codepage = prog.config.target.codepage;
     let Some(user_forms) = load_forms(root, codepage, &out)? else { return Ok(Some(ExitCode::from(1))) };
-    let rep = session.apply(&out.files, ras_sync::Forms { forms: &user_forms, codepage }, &ras_sync::options(&prepared, overwrite)).map_err(|e| e.to_string())?;
+    let rep = session.apply(&out.files, ras_sync::Forms { forms: &user_forms, codepage }, &ras_sync::options(root, &prepared, overwrite)).map_err(|e| e.to_string())?;
     ras_form::import::finish(&prepared)?;
+    // What was written, to tell later what was added in the VBE (spec §14.7.3).
+    let mut not_written = rep.drifted.clone();
+    not_written.extend(rep.pending.iter().cloned());
+    not_written.extend(prepared.pending.iter().map(|p| p.generated.clone()));
+    ras_sync::save_written(root, &out.files, &not_written)?;
+    if !rep.foreign.is_empty() {
+        eprintln!("warning: 次のシートのモジュールには RAS が生成したコードがありますが、対応するファイルがありません（シートの複製でコードごと複製されたものです）。そのまま残しています: {}", rep.foreign.join(", "));
+    }
     println!("{} に同期しました（{}）", book.display(), rep.summary());
     if rep.drifted.is_empty() {
         return Ok(Some(ExitCode::SUCCESS));
@@ -697,7 +750,14 @@ fn take_over_offline(root: &Path, book: &Path, codepage: u16) -> Result<ras_sync
         }
         forms.iter().flatten().find(|f| f.name.eq_ignore_ascii_case(name)).cloned().ok_or_else(|| format!("{} にフォーム `{name}` のデザイナがありません", book.display()))
     };
-    ras_form::import::prepare(root, ras_form::import::Book { modules: &modules, workbook_code_name: &unpacked.code_names.workbook, form: &mut form }, codepage)
+    let sheet_controls = ras_sync::sheet_controls(book).unwrap_or_default();
+    let mut written = ras_sync::Written::new(root);
+    let mut written = |name: &str| written.code(name);
+    let mut taken = ras_form::import::Book { modules: &modules, workbook_code_name: &unpacked.code_names.workbook, sheet_controls: &sheet_controls, form: &mut form, written: &mut written };
+    let mut prepared = ras_form::import::prepare(root, &mut taken, codepage)?;
+    // Code added in the VBE that does not compile as RAS goes back out of the file (spec §14.7.3).
+    ras_sync::settle_appended(root, &mut prepared)?;
+    Ok(prepared)
 }
 
 /// Prints what was taken over from the workbook and what waits for the user.
@@ -1045,6 +1105,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Book { action: book::BookCommand::Diff { before, after, format, max_cells } } => book::diff_cmd(before, after, *format, *max_cells),
+        Command::Sheet { action } => sheet::run(&find_root(project)?, action),
         Command::Lsp { .. } => {
             ras_lsp::run_stdio().map_err(|e| e.to_string())?;
             Ok(ExitCode::SUCCESS)

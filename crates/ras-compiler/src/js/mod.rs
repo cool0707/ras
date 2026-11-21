@@ -89,7 +89,7 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
         }
         module_names.insert(md.vba_name.clone(), serde_json::Value::String(format!("./{file_name}")));
         module_files.push(file_name);
-        if md.form.is_some() {
+        if md.is_form() {
             // A form is started by showing it (spec §14.10.7).
             forms.push(format!("{}.show", md.vba_name));
         } else {
@@ -102,7 +102,7 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
     out.entries.extend(others);
     out.entries.extend(forms);
     let list = module_files.iter().map(|f| format!("    {},\n", js_str(&format!("./{f}")))).collect::<String>();
-    let form_names: Vec<&str> = prog.modules.iter().filter(|m| m.form.as_ref().is_some_and(|f| f.decl.is_some())).map(|m| m.vba_name.as_str()).collect();
+    let form_names: Vec<&str> = prog.modules.iter().filter(|m| m.is_form() && m.form.as_ref().is_some_and(|f| f.decl.is_some())).map(|m| m.vba_name.as_str()).collect();
     let manifest = serde_json::json!({
         "project": prog.config.project.name,
         "workbook": prog.config.project.workbook,
@@ -134,9 +134,10 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
 /// Path of a module's JavaScript file without `.js`: the import key, except for a form's
 /// code-behind (`@forms/frmInput`: its key `<forms>/frmInput` is not a valid file name).
 fn js_key(md: &ModuleData) -> String {
-    match md.key.strip_prefix(crate::collect::FORM_KEY_PREFIX) {
-        Some(name) => format!("@forms/{name}"),
-        None => md.key.clone(),
+    match (md.key.strip_prefix(crate::collect::FORM_KEY_PREFIX), md.key.strip_prefix(crate::collect::OBJECT_KEY_PREFIX)) {
+        (Some(name), _) => format!("@forms/{name}"),
+        (_, Some(name)) => format!("@objects/{name}"),
+        _ => md.key.clone(),
     }
 }
 
@@ -480,6 +481,8 @@ impl<'p> Gen<'p> {
         }
         let mut inits = Vec::new();
         let mut events = Vec::new();
+        // Handlers of the objects that module variables hold (`WithEvents`, spec §12.2.2).
+        let mut sources: Vec<String> = Vec::new();
         for &f in &md.fns {
             let d = &prog.fns[f];
             if !matches!(d.kind, FnKind::Free | FnKind::Main | FnKind::ModInit) {
@@ -498,11 +501,21 @@ impl<'p> Gen<'p> {
             }
             for ev in &d.attrs.on_events {
                 match &md.form {
-                    Some(form) => events.push(self.form_handler(form, ev, f)),
-                    None => events.push(self.document_handler(ev, f)),
+                    // The events of the object a variable holds (spec §12.2.2).
+                    Some(_) if prog.event_source(f, &ev.target).is_some() => {
+                        if let Some(EventSource::Var(v)) = prog.event_source(f, &ev.target) {
+                            let source = format!("() => {}", js_ident(&prog.vars[v].name));
+                            let call = js_ident(&d.name);
+                            sources.push(self.source_handler(ev, f, &source, &call, None));
+                        }
+                    }
+                    Some(form) if form.kind == ObjectKind::Form => events.push(self.form_handler(form, ev, f)),
+                    Some(form) => events.extend(self.document_handler(form, ev, f)),
+                    // An error already (`E0610`): `@on` is written in the file of the sheet.
+                    None => {}
                 }
             }
-            if md.form.is_some() {
+            if md.is_form() {
                 continue;
             }
             if d.is_debug_entry() {
@@ -512,7 +525,10 @@ impl<'p> Gen<'p> {
                 }
             }
         }
-        if md.form.is_some() {
+        if !sources.is_empty() {
+            self.w(format!("$rt.withEvents([{}]);", sources.join(", ")));
+        }
+        if md.is_form() {
             self.register_form(events);
             return;
         }
@@ -547,15 +563,41 @@ impl<'p> Gen<'p> {
     /// The stand-in for Excel calls it with the arguments of the event as `{ v }` cells, as the
     /// forms do: a `byref` parameter (`cancel`) gets the cell, the others its value. A handler
     /// takes as many of the event's arguments as it declares parameters.
-    fn document_handler(&self, ev: &OnEvent, f: FnId) -> String {
+    ///
+    /// The target is the sheet's code name, or `Workbook`. Events of controls on a sheet are
+    /// raised by the user only: they are not registered.
+    fn document_handler(&self, doc: &FormModule, ev: &OnEvent, f: FnId) -> Option<String> {
+        let d = &self.prog.fns[f];
+        let md = &self.prog.modules[self.module];
+        let target = match doc.kind {
+            ObjectKind::Workbook if ev.target.eq_ignore_ascii_case("Workbook") || ev.target.eq_ignore_ascii_case("ThisWorkbook") => "Workbook".to_string(),
+            ObjectKind::Sheet if ev.target.eq_ignore_ascii_case("Worksheet") || ev.target.to_lowercase() == md.vba_name.to_lowercase() => md.vba_name.clone(),
+            _ => return None,
+        };
+        let event = crate::lower::document_event(doc.kind == ObjectKind::Workbook, &ev.event)?;
+        let args: Vec<String> = d.params.iter().enumerate().map(|(i, p)| if p.mode == PassMode::ByRef { format!("$a[{i}]") } else { format!("$a[{i}].v") }).collect();
+        Some(format!(
+            "{{ target: {}, event: {}, reentrant: {}, fn: ($a) => {}({}) }}",
+            js_str(&target),
+            js_str(event),
+            ev.reentrant,
+            js_ident(&d.name),
+            args.join(", ")
+        ))
+    }
+
+    /// The entry of `$rt.withEvents` for an `@on("<variable>.<Event>")` handler (spec §12.2.2):
+    /// `source` gives the object the variable holds, `call` is the handler. The stand-in for
+    /// Excel calls it with the arguments of the event as `{ v }` cells, as the other handlers.
+    fn source_handler(&self, ev: &OnEvent, f: FnId, source: &str, call: &str, alive: Option<&str>) -> String {
         let d = &self.prog.fns[f];
         let args: Vec<String> = d.params.iter().enumerate().map(|(i, p)| if p.mode == PassMode::ByRef { format!("$a[{i}]") } else { format!("$a[{i}].v") }).collect();
         format!(
-            "{{ target: {}, event: {}, reentrant: {}, fn: ($a) => {}({}) }}",
+            "{{ target: {}, event: {}, reentrant: {}, source: {source}, {}fn: ($a) => {call}({}) }}",
             js_str(&ev.target),
             js_str(&ev.event),
             ev.reentrant,
-            js_ident(&d.name),
+            alive.map(|a| format!("alive: {a}, ")).unwrap_or_default(),
             args.join(", ")
         )
     }
@@ -778,6 +820,22 @@ impl<'p> Gen<'p> {
                 None => self.zero(&fd.ty),
             };
             self.wm(fd.span, format!("this.{} = {v};", fd.name));
+        }
+        // The handlers of the objects its fields hold (`WithEvents`, spec §12.2.2). The run
+        // time must not keep the instance alive: it is reached through a weak reference.
+        let mut sources: Vec<String> = Vec::new();
+        for &m in &def.methods {
+            for ev in &prog.fns[m].attrs.on_events {
+                if let Some(EventSource::Field(_, i)) = prog.event_source(m, &ev.target) {
+                    let source = format!("() => $w.deref()?.{}", def.fields[i].name);
+                    let call = format!("$w.deref()?.{}", prog.fns[m].name);
+                    sources.push(self.source_handler(ev, m, &source, &call, Some("() => $w.deref() !== undefined")));
+                }
+            }
+        }
+        if !sources.is_empty() {
+            self.w("const $w = new WeakRef(this);");
+            self.w(format!("$rt.withEvents([{}]);", sources.join(", ")));
         }
         if let Some(b) = body {
             self.ret_ty = Some(Type::Void);

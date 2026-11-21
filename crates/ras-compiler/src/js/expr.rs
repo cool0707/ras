@@ -199,7 +199,9 @@ impl<'p> Gen<'p> {
             ExprKind::This => match self.info().res.get(&e.id) {
                 Some(Res::Local(l)) => self.local_js(*l),
                 // In a form's code-behind, `this` is the form (its only instance, spec §14.10.7).
-                _ if self.prog.modules[self.module].form.is_some() => "$me".into(),
+                _ if self.prog.modules[self.module].is_form() => "$me".into(),
+                // In the file of a sheet (of `ThisWorkbook`), `this` is that sheet (workbook).
+                _ if self.prog.modules[self.module].document().is_some() => format!("$rt.global({})", js_str(&self.prog.modules[self.module].vba_name)),
                 _ => "this".into(),
             },
             ExprKind::Paren(inner) => {
@@ -751,6 +753,12 @@ impl<'p> Gen<'p> {
             }
             CallTarget::Method(f) => {
                 let Some(r) = recv else { return "undefined".into() };
+                // `Sheet1.clearInput()`: an `export function` of the sheet's file (spec §12.2).
+                if matches!(self.prog.fns[f].kind, FnKind::Free) && self.prog.modules[self.prog.fns[f].module].document().is_some() {
+                    let target = self.fn_ref(f);
+                    let argv = self.ras_args(f, 0, args).join(", ");
+                    return format!("{target}({argv})");
+                }
                 let rt = self.ty(r);
                 let o = self.expr(r);
                 let argv = self.ras_args(f, 0, args).join(", ");

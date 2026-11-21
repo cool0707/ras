@@ -1,0 +1,18 @@
+// The module of the workbook: its events.
+import { log } from "../main";
+
+@on("Workbook.SheetChange")
+function anySheet(sh: object, target: Excel.Range) {
+    log(`SheetChange ${sh.name}!${target.address(false, false)}`);
+}
+
+@on("Workbook.NewSheet")
+function added(sh: object) {
+    log(`NewSheet ${sh.name}`);
+}
+
+@on("Workbook.BeforeSave")
+function saving(saveAsUI: boolean, byref cancel: boolean) {
+    log(`BeforeSave ${saveAsUI}`);
+    cancel = true;
+}

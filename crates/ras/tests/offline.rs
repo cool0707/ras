@@ -126,8 +126,10 @@ export function outOfRange() {
     Sheet1.range("F2").value = "before";
     debug.print(a[5]);
 }
+"#;
 
-@on("Sheet1.Change")
+/// `objects/Sheet1.ras`: the module of the sheet.
+const SHEET1: &str = r#"@on("Worksheet.Change")
 function changed(target: Excel.Range) {
     if (target.address == "$H$1") {
         throw new Error("H1 は書き換えられません");
@@ -239,7 +241,7 @@ fn run_reports_output_dialogs_errors_and_changed_cells() {
     if !has_node() {
         return;
     }
-    let dir = project("run", &mut sales(), &[("src/report.ras", REPORT)]);
+    let dir = project("run", &mut sales(), &[("src/report.ras", REPORT), ("objects/Sheet1.ras", SHEET1)]);
 
     let (code, out, err) = ras(&dir, &["run", "--list"]);
     assert_eq!(code, 0, "{err}");
@@ -488,7 +490,7 @@ fn test_project(name: &str) -> PathBuf {
         name,
         &mut sales(),
         &[
-            ("src/report.ras", REPORT),
+            ("src/report.ras", REPORT), ("objects/Sheet1.ras", SHEET1),
             ("test/helper.ras", "export function twice(n: int): int {\n    return n * 2;\n}\n"),
             ("test/report.test.ras", REPORT_TEST),
             ("test/more.test.ras", MORE_TEST),
@@ -637,7 +639,7 @@ fn test_time_outs_only_and_what_test_files_may_hold() {
     }
     let slow = "test(\"速い\", () => {\n    expect(1).toBe(1);\n});\ntest(\"終わらない\", () => {\n    let i = 0;\n    while (true) {\n        i = (i + 1) % 10;\n    }\n}, { timeout: 300 });\ntest(\"その後\", () => {\n    expect(1).toBe(1);\n});\n";
     let only = "test(\"a\", () => {\n    expect(1).toBe(2);\n});\ntest.only(\"b\", () => {\n    expect(1).toBe(1);\n});\ndescribe.skip(\"s\", () => {\n    test(\"c\", () => {\n        expect(1).toBe(2);\n    });\n});\n";
-    let dir = project("test-limits", &mut sales(), &[("src/report.ras", REPORT), ("test/slow.test.ras", slow), ("test/only.test.ras", only)]);
+    let dir = project("test-limits", &mut sales(), &[("src/report.ras", REPORT), ("objects/Sheet1.ras", SHEET1), ("test/slow.test.ras", slow), ("test/only.test.ras", only)]);
 
     // The file is given up at the time-out: the tests after it fail too (spec §14.12.4).
     let (code, out, err) = ras(&dir, &["test", "test/slow.test.ras", "--reporter", "json"]);
@@ -891,7 +893,7 @@ fn run_view_and_the_snapshot_of_a_stopped_run() {
     if !has_node() {
         return;
     }
-    let dir = project("run-view", &mut sales(), &[("src/report.ras", REPORT)]);
+    let dir = project("run-view", &mut sales(), &[("src/report.ras", REPORT), ("objects/Sheet1.ras", SHEET1)]);
     let (code, out, err) = ras(&dir, &["run", "rebuildReport", "--view"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("グリッド表示: build/view/Book.html") || out.contains("グリッド表示: build\\view\\Book.html"), "{out}");
@@ -938,7 +940,9 @@ fn cheat_sheet_examples_pass_the_check() {
     let mut files: Vec<(String, String)> = Vec::new();
     for (i, block) in sheet.split("```typescript\n").skip(1).enumerate() {
         let code = block.split("```").next().unwrap().to_string();
-        let path = if code.starts_with("// test/") { format!("test/block{i}.test.ras") } else { format!("src/block{i}.ras") };
+        // `// objects/Sheet1.ras…`: the file of a sheet or of the workbook.
+        let object = code.strip_prefix("// objects/").and_then(|rest| rest.split_once(".ras")).map(|(name, _)| format!("objects/{name}.ras"));
+        let path = if code.starts_with("// test/") { format!("test/block{i}.test.ras") } else { object.unwrap_or_else(|| format!("src/block{i}.ras")) };
         files.push((path, code));
     }
     assert!(files.len() >= 6, "the cheat sheet has code examples");
@@ -957,4 +961,103 @@ fn cheat_sheet_examples_pass_the_check() {
     assert!(std::fs::read_to_string(fresh.join("AGENTS.md")).unwrap().contains("ras book dump"));
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&fresh);
+}
+
+/// `ras sheet`: the sheets of the workbook file and their files in `objects/` change together
+/// (spec §14.16). The workbook is read back as Excel's stand-in reads it.
+#[test]
+fn sheets_are_added_copied_renamed_and_removed() {
+    use ras_workbook::book::Read;
+    let mut book = sales();
+    book.add_sheet(1, Some("Data")).unwrap();
+    book.set_values(1, at("A1:A3"), &[vec![Val::Num(1.0)], vec![Val::Num(2.0)], vec![Val::Num(3.0)]]).unwrap();
+    book.set_formulas(0, at("E1"), &[vec![text("=SUM(Data!A1:A3)")]], false).unwrap();
+    book.add_name("データ", None, "Data!$A$1:$A$3").unwrap();
+    let main = "export function total(): double {\n    return Sheet2.range(\"A1\").value as double + Sheet1.range(\"E1\").value as double;\n}\n";
+    let dir = project("sheets", &mut book, &[("src/main.ras", main), ("objects/Sheet2.ras", "export function first(): any {\n    return this.range(\"A1\").value;\n}\n")]);
+    let book_file = dir.join("Book.xlsx");
+    let names = || {
+        let b = Book::open(&book_file).unwrap();
+        (0..b.sheet_count()).map(|i| format!("{}={}", b.sheet_name(i).unwrap_or_default(), b.code_name(i).unwrap_or_default())).collect::<Vec<_>>()
+    };
+    let formula = |cell: &str| match &Book::open(&book_file).unwrap().get(0, at(cell), Read::Formula).unwrap()[0][0] {
+        Val::Text(t) => t.clone(),
+        other => format!("{other:?}"),
+    };
+    assert_eq!(names(), ["Sheet1=Sheet1", "Data=Sheet2"]);
+
+    let (code, out, err) = ras(&dir, &["sheet", "list"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("Sheet1（コード名 Sheet1）") && out.contains("Data（コード名 Sheet2）  objects/Sheet2.ras") && out.contains("ファイルなし"), "{out}");
+
+    // Add: the sheet and its file.
+    let (code, out, err) = ras(&dir, &["sheet", "add", "集計", "--after", "Sheet1"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("シート「集計」（コード名 Sheet3）を追加しました") && out.contains("作成: objects/Sheet3.ras"), "{out}");
+    assert_eq!(names(), ["Sheet1=Sheet1", "集計=Sheet3", "Data=Sheet2"]);
+    assert!(std::fs::read_to_string(dir.join("objects/Sheet3.ras")).unwrap().contains("シート「集計」（コード名 Sheet3）"));
+    assert_eq!(formula("E1"), "=SUM(Data!A1:A3)");
+    let (code, _, err) = ras(&dir, &["check"]);
+    assert_eq!(code, 0, "{err}");
+
+    // Rename: the tab name in the formulas, the code name in the sources and the file name.
+    let (code, out, err) = ras(&dir, &["sheet", "rename", "Data", "--name", "売上 2026", "--code-name", "Sales", "--json"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let result: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(result["codeName"], "Sales");
+    assert_eq!(result["before"]["codeName"], "Sheet2");
+    assert_eq!(result["renamed"][0]["to"], "objects/Sales.ras");
+    assert_eq!(result["references"], 1);
+    assert!(result["formulas"].as_u64().unwrap() >= 2, "{result}");
+    assert_eq!(names(), ["Sheet1=Sheet1", "集計=Sheet3", "売上 2026=Sales"]);
+    assert_eq!(formula("E1"), "=SUM('売上 2026'!A1:A3)");
+    assert!(Book::open(&book_file).unwrap().names().iter().any(|(name, _, refers)| name == "データ" && refers.contains("売上 2026")), "{:?}", Book::open(&book_file).unwrap().names());
+    assert!(std::fs::read_to_string(dir.join("src/main.ras")).unwrap().contains("Sales.range(\"A1\")"));
+    assert!(dir.join("objects/Sales.ras").is_file() && !dir.join("objects/Sheet2.ras").exists());
+    let (code, _, err) = ras(&dir, &["check"]);
+    assert_eq!(code, 0, "{err}");
+    // The value the formula computes is still there for the stand-in.
+    let (code, out, err) = ras(&dir, &["run", "Main.total"]);
+    assert_eq!(code, 0, "{out}{err}");
+
+    // Copy: the cells and the file.
+    let (code, out, err) = ras(&dir, &["sheet", "copy", "Sales"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(names(), ["Sheet1=Sheet1", "集計=Sheet3", "売上 2026=Sales", "売上 2026 (2)=Sheet2"]);
+    assert_eq!(std::fs::read_to_string(dir.join("objects/Sheet2.ras")).unwrap(), std::fs::read_to_string(dir.join("objects/Sales.ras")).unwrap());
+    assert_eq!(Book::open(&book_file).unwrap().get(3, at("A1:A3"), Read::Value).unwrap(), vec![vec![Val::Num(1.0)], vec![Val::Num(2.0)], vec![Val::Num(3.0)]]);
+
+    // Remove: refused while something refers to the sheet.
+    let (code, out, err) = ras(&dir, &["sheet", "remove", "Sales"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(err.contains("objects/Sales.ras にコードがあります") && err.contains("src/main.ras:2") && err.contains("Sheet1!E1") && err.contains("名前の定義 データ") && err.contains("--force"), "{err}");
+    assert_eq!(names().len(), 4);
+    assert!(dir.join("objects/Sales.ras").is_file());
+    let (code, out, err) = ras(&dir, &["sheet", "remove", "Sales", "--force", "--json"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(names(), ["Sheet1=Sheet1", "集計=Sheet3", "売上 2026 (2)=Sheet2"]);
+    assert!(!dir.join("objects/Sales.ras").exists());
+    // The formula and the defined name that referred to the sheet were rewritten to `#REF!`
+    // (as Excel does; the stand-in cannot read such a formula back).
+    let result: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!((result["removed"][0].as_str(), result["formulas"].as_u64()), (Some("objects/Sales.ras"), Some(2)), "{result}");
+    assert!(!formula("E1").contains("売上"), "{}", formula("E1"));
+    // A sheet without code that nothing refers to goes without `--force`.
+    let (code, out, err) = ras(&dir, &["sheet", "remove", "集計"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!dir.join("objects/Sheet3.ras").exists());
+
+    // What cannot be done says why, and changes nothing.
+    for (args, why) in [
+        (&["sheet", "add", "Sheet1"][..], "既にあります"),
+        (&["sheet", "add", "a/b"][..], "見出しの名前にできません"),
+        (&["sheet", "add", "New", "--code-name", "main"][..], "ほかのシートかモジュールが使っています"),
+        (&["sheet", "rename", "Nope", "--name", "x"][..], "というシートがありません"),
+        (&["sheet", "rename", "Sheet1"][..], "新しい名前を指定してください"),
+    ] {
+        let (code, out, err) = ras(&dir, args);
+        assert!(code != 0 && err.contains(why), "{args:?}: {out}{err}");
+    }
+    assert_eq!(names(), ["Sheet1=Sheet1", "売上 2026 (2)=Sheet2"]);
+    let _ = std::fs::remove_dir_all(&dir);
 }

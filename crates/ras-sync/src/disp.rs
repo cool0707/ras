@@ -5,7 +5,7 @@ use std::mem::ManuallyDrop;
 use windows::core::{BSTR, GUID, PCWSTR};
 use windows::Win32::Foundation::VARIANT_BOOL;
 use windows::Win32::System::Com::{CoInitializeEx, IDispatch, COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT, DISPPARAMS, EXCEPINFO};
-use windows::Win32::System::Variant::{VariantClear, VARENUM, VARIANT, VT_BOOL, VT_BSTR, VT_DISPATCH, VT_I4};
+use windows::Win32::System::Variant::{VariantClear, VARENUM, VARIANT, VT_BOOL, VT_BSTR, VT_DISPATCH, VT_ERROR, VT_I4};
 
 use crate::SyncError;
 
@@ -125,6 +125,8 @@ pub enum Arg<'a> {
     Int(i32),
     Bool(bool),
     Obj(&'a Obj),
+    /// An optional argument that is left out (`Worksheets.Add , After`).
+    Missing,
 }
 
 impl Arg<'_> {
@@ -140,6 +142,8 @@ impl Arg<'_> {
                 let d = o.0.clone();
                 Value::with(VT_DISPATCH, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.pdispVal = ManuallyDrop::new(Some(d)) })
             }
+            // `DISP_E_PARAMNOTFOUND`: how a caller leaves an optional argument out.
+            Arg::Missing => Value::with(VT_ERROR, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.scode = 0x8002_0004_u32 as i32 }),
         }
     }
 }

@@ -261,6 +261,30 @@
         "icon": "$(table)"
       },
       {
+        "command": "ras.sheet.add",
+        "title": "シートを追加",
+        "category": "RAS",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ras.sheet.copy",
+        "title": "シートを複製",
+        "category": "RAS",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "ras.sheet.remove",
+        "title": "シートを削除",
+        "category": "RAS",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "ras.sheet.rename",
+        "title": "シートの名前を変更",
+        "category": "RAS",
+        "icon": "$(edit)"
+      },
+      {
         "command": "ras.restartServer",
         "title": "言語サーバーを再起動",
         "category": "RAS"
@@ -317,6 +341,22 @@
         {
           "command": "ras.sheet.show",
           "when": "editorLangId == ras"
+        },
+        {
+          "command": "ras.sheet.add",
+          "when": "ras.projectOpen"
+        },
+        {
+          "command": "ras.sheet.copy",
+          "when": "ras.projectOpen"
+        },
+        {
+          "command": "ras.sheet.remove",
+          "when": "ras.projectOpen"
+        },
+        {
+          "command": "ras.sheet.rename",
+          "when": "ras.projectOpen"
         }
       ],
       "editor/title": [
@@ -398,6 +438,26 @@
           "command": "ras.sheet.show",
           "when": "resourcePath in ras.sheetFiles",
           "group": "navigation@9"
+        },
+        {
+          "command": "ras.sheet.copy",
+          "when": "resourcePath in ras.sheetFiles",
+          "group": "ras.sheet@2"
+        },
+        {
+          "command": "ras.sheet.rename",
+          "when": "resourcePath in ras.sheetFiles",
+          "group": "ras.sheet@3"
+        },
+        {
+          "command": "ras.sheet.remove",
+          "when": "resourcePath in ras.sheetFiles",
+          "group": "ras.sheet@4"
+        },
+        {
+          "command": "ras.sheet.add",
+          "when": "(resourcePath in ras.sheetFiles) || (explorerResourceIsFolder && resourceFilename == objects && ras.projectOpen)",
+          "group": "ras.sheet@1"
         }
       ],
       "view/title": [
@@ -410,6 +470,50 @@
           "command": "ras.userForm.new",
           "when": "view == workbench.explorer.fileView && ras.projectOpen",
           "group": "navigation@-1"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "ras.sheet.copy",
+          "when": "resourcePath in ras.sheetFiles",
+          "group": "ras.sheet@2"
+        },
+        {
+          "command": "ras.sheet.rename",
+          "when": "resourcePath in ras.sheetFiles",
+          "group": "ras.sheet@3"
+        },
+        {
+          "command": "ras.sheet.remove",
+          "when": "resourcePath in ras.sheetFiles",
+          "group": "ras.sheet@4"
+        },
+        {
+          "command": "ras.sheet.add",
+          "when": "resourcePath in ras.sheetFiles",
+          "group": "ras.sheet@1"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "ras.sheet.copy",
+          "when": "webviewId == 'ras.sheetView' && webviewSection == 'sheetTab'",
+          "group": "ras.sheet@2"
+        },
+        {
+          "command": "ras.sheet.rename",
+          "when": "webviewId == 'ras.sheetView' && webviewSection == 'sheetTab'",
+          "group": "ras.sheet@3"
+        },
+        {
+          "command": "ras.sheet.remove",
+          "when": "webviewId == 'ras.sheetView' && webviewSection == 'sheetTab'",
+          "group": "ras.sheet@4"
+        },
+        {
+          "command": "ras.sheet.add",
+          "when": "webviewId == 'ras.sheetView' && webviewSection == 'sheetTab'",
+          "group": "ras.sheet@1"
         }
       ]
     },

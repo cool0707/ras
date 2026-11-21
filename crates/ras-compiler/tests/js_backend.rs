@@ -546,12 +546,12 @@ fn scripting_objects_run_without_com() {
 /// `RAS_Runtime` calls `Left$`, and Excel then stops at a compile error (seen with Excel 2021).
 #[test]
 fn a_function_named_as_one_of_vba_is_renamed_in_the_vba_build() {
-    let source = "let trim = 0;\n\n@on(\"Sheet1.Deactivate\")\nfunction left() {\n    trim += 1;\n}\n\nexport function format(): int {\n    left();\n    return trim;\n}\n";
+    let source = "let trim = 0;\n\n@macro\nfunction left() {\n    trim += 1;\n}\n\nexport function format(): int {\n    left();\n    return trim;\n}\n";
     let (prog, _) = compile(&[("main", source)]);
     let vba = ras_compiler::build(&prog, &ras_compiler::BuildOptions::default());
     let all: String = vba.files.iter().map(|f| f.code.as_str()).collect::<Vec<_>>().join("\n");
     let main = &vba.files.iter().find(|f| f.file_name == "Main.bas").expect("Main.bas").code;
-    for want in ["Sub left_()", "Function format_() As Long", "trim_ As Long", "Main.left_"] {
+    for want in ["Sub left_()", "Function format_() As Long", "trim_ As Long"] {
         assert!(all.contains(want), "{want}\n{all}");
     }
     for bad in ["Sub left()", "Function format()", " trim As Long"] {

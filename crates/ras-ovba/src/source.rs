@@ -371,6 +371,28 @@ pub fn procedure_names(code: &str) -> Vec<String> {
     names
 }
 
+/// The source of a document module with all of its code replaced by `code`
+/// (RAS specification §12.2): the leading `Attribute` lines of
+/// `existing_source` stay, everything after them goes. The result uses the
+/// line terminator of `existing_source` (CR LF when it has none).
+pub fn replace_document_code(existing_source: &str, code: &str) -> String {
+    let nl = newline_style(existing_source);
+    let mut out = String::with_capacity(existing_source.len() + code.len());
+    for line in split_lines(existing_source).into_iter().take_while(|l| l.starts_with("Attribute ") || l.starts_with("VERSION ")) {
+        out.push_str(line);
+        out.push_str(nl);
+    }
+    let mut lines: Vec<&str> = split_lines(code);
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    for line in lines {
+        out.push_str(line);
+        out.push_str(nl);
+    }
+    out
+}
+
 /// The source of a document module without its hand-written code: the
 /// `Attribute` header, the `Option` statements and the RAS-managed region
 /// are kept, everything else goes. Used when the hand-written code was

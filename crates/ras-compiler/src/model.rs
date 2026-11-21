@@ -347,6 +347,9 @@ pub struct FnAttrs {
     pub fallback: Option<String>,
     /// Declared in a form's code-behind: a member of the form's code module.
     pub form_member: bool,
+    /// Declared in the file of a sheet or of `ThisWorkbook` (spec §12.2): a member of that
+    /// document module.
+    pub doc_member: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -761,21 +764,80 @@ pub struct ModuleData {
     pub vars: Vec<VarId>,
     pub imports: Vec<ModuleId>,
     pub line_starts: Vec<u32>,
-    /// Set for a form's code-behind (`forms/<Name>.ras`, spec §14.11): the module is the
-    /// form's code module.
+    /// Set for a module that is the code of an object of the workbook: a form's code-behind
+    /// (`forms/<Name>.ras`, spec §14.11), or the file of a sheet or of `ThisWorkbook`
+    /// (`objects/<CodeName>.ras`, spec §12.2).
     pub form: Option<FormModule>,
 }
 
-/// A module that is the code of a user form.
+/// A variable or a class field whose object's events are handled (`@on("app.SheetChange")`,
+/// spec §12.2.2): VBA's `WithEvents`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EventSource {
+    /// A module variable of a sheet's file, of `ThisWorkbook`'s or of a form's code-behind.
+    Var(VarId),
+    /// A field of a class (the handler is a method of the class).
+    Field(ClassId, usize),
+}
+
+/// Which object of the workbook a module is the code of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectKind {
+    /// A user form (`forms/<Name>.ras`).
+    Form,
+    /// A worksheet (`objects/<CodeName>.ras`).
+    Sheet,
+    /// The workbook (`objects/ThisWorkbook.ras`).
+    Workbook,
+}
+
+/// A module that is the code of a user form, of a sheet or of the workbook.
 #[derive(Clone, Debug)]
 pub struct FormModule {
+    pub kind: ObjectKind,
     /// Name and controls; `None` when `forms/<Name>.form.json` is missing or unreadable.
+    /// For a sheet, its code name and the ActiveX controls on it (spec §12.2.1).
     pub decl: Option<crate::config::FormDecl>,
-    /// The type of `this`: the form with its controls as fields.
+    /// The type of `this`: the form (sheet, workbook) with its controls as fields.
     pub class: Option<ClassId>,
 }
 
+impl Program {
+    /// The variable or field the handler `f` names in `@on("<target>.<Event>")`, when the
+    /// target is neither the object of the file (`Worksheet`, `Workbook`, `UserForm`) nor a
+    /// control: the object it holds is listened to (spec §12.2.2). A variable of a standard
+    /// module is found too (VBA cannot listen there: an error of the caller's).
+    pub fn event_source(&self, f: FnId, target: &str) -> Option<EventSource> {
+        let d = &self.fns[f];
+        match d.kind {
+            FnKind::Method { class, is_static: false } => self.classes[class].fields.iter().position(|x| !x.is_static && x.name.eq_ignore_ascii_case(target)).map(|i| EventSource::Field(class, i)),
+            FnKind::Free => {
+                let md = &self.modules[d.module];
+                if let Some(form) = &md.form {
+                    let reserved = ["UserForm", "Worksheet", "Workbook", "ThisWorkbook"].iter().any(|r| r.eq_ignore_ascii_case(target)) || md.vba_name.eq_ignore_ascii_case(target);
+                    let control = form.decl.as_ref().is_some_and(|x| x.controls.iter().any(|c| c.name.eq_ignore_ascii_case(target)));
+                    if reserved || control {
+                        return None;
+                    }
+                }
+                md.vars.iter().copied().find(|&v| !self.vars[v].declared && self.vars[v].module == d.module && self.vars[v].name.eq_ignore_ascii_case(target)).map(EventSource::Var)
+            }
+            _ => None,
+        }
+    }
+}
+
 impl ModuleData {
+    /// A form's code-behind (`forms/<Name>.ras`).
+    pub fn is_form(&self) -> bool {
+        self.form.as_ref().is_some_and(|f| f.kind == ObjectKind::Form)
+    }
+
+    /// The file of a sheet or of `ThisWorkbook` (`objects/<CodeName>.ras`): a document module.
+    pub fn document(&self) -> Option<&FormModule> {
+        self.form.as_ref().filter(|f| f.kind != ObjectKind::Form)
+    }
+
     /// 1-based line number of a byte offset.
     pub fn line_of(&self, offset: u32) -> u32 {
         match self.line_starts.binary_search(&offset) {

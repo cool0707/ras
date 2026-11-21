@@ -28,6 +28,14 @@ pub struct Config {
     /// `forms/<Name>.ras` is compiled as the form's code module (spec §14.11).
     #[serde(skip)]
     pub forms: Vec<FormDecl>,
+    /// The ActiveX controls on the sheets of the target workbook (spec §12.2.1): one entry per
+    /// sheet that has any, named by the sheet's code name (filled in by the driver).
+    #[serde(skip)]
+    pub sheet_controls: Vec<FormDecl>,
+    /// `sheet_controls` was read from the workbook: a control it does not list is not on the
+    /// sheet. Otherwise (no workbook, or one that could not be read) the controls are unknown.
+    #[serde(skip)]
+    pub sheet_controls_known: bool,
 }
 
 /// What the compiler needs to know about a user form: its name and controls.
@@ -169,7 +177,7 @@ pub struct SyncCfg {
     pub compile_check: bool,
     pub shared_memory_mb: u32,
     pub pull_unmanaged: bool,
-    /// Live sync creates `src/<CodeName>Events.ras` for each sheet (and `ThisWorkbook`) that has
+    /// Live sync creates `objects/<CodeName>.ras` for each sheet (and `ThisWorkbook`) that has
     /// no file yet (spec §14.7.2).
     pub sheet_files: bool,
 }
