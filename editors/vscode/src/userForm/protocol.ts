@@ -253,6 +253,7 @@ export const designerStrings = {
   moreActions: "その他の操作",
   selectionBounds: "位置とサイズ",
   closePane: "ペインを閉じる",
+  resizeProperties: "ドラッグしてプロパティ ペインの幅を変更（ダブルクリックで元に戻す）",
   openText: "JSON を横に開く",
   openEvent: "イベントを開く…",
   eventPending: "イベントを開いています…",

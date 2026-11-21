@@ -14,7 +14,7 @@ import type {
 } from "../../src/userForm/protocol";
 import { objectValue } from "./propertyEditors/types";
 import { editorRegistry } from "./propertyEditors/registry";
-import { colorStyle } from "./propertyEditors/appearance";
+import { colorStyle, systemColorTable } from "./propertyEditors/appearance";
 import { validNumericInput } from "./propertyEditors/numeric";
 import { listToText, textToList } from "../../src/userForm/listItems";
 import { toggleState } from "../../src/userForm/model";
@@ -493,7 +493,9 @@ function ObjectPropertyRow(props: Props & { descriptor: PropertyDescriptor }) {
             .filter((item) => item !== undefined)
             .join(", ") || "Font"
         : descriptor.editor === "color"
-          ? String(value.value ?? "Color")
+          ? value.kind === "system" && typeof value.value === "string"
+            ? (systemColorTable[value.value]?.label ?? value.value)
+            : String(value.value ?? "Color")
           : descriptor.editor === "picture"
             ? typeof value.path === "string"
               ? value.path

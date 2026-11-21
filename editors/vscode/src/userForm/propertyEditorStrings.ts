@@ -5,7 +5,7 @@ export const propertyEditorStrings = {
   editorOK: "OK",
   editorStale: "ソースが変更されました。キャンセルしてエディターを開き直してください。",
   editorApproximate: "フォントの代替やシステム カラーは近似のプレビューです。",
-  editorFontSample: "The quick brown fox / 日本語のサンプル 0123456789",
+  editorFontSample: "あいうえお 漢字 アイウエオ AaBbYyZz 0123456789",
   editorChoosePicture: "画像を選択…",
   editorRemovePicture: "画像を削除",
   editorPicturePending: "画像を選択しています…",
