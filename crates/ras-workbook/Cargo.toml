@@ -29,3 +29,5 @@ serde_json = { workspace = true }
 # The drawings of a sheet for `ras book view` (shapes, pictures, controls), read from the file as
 # xljs reads them for printing; the version umya-spreadsheet uses.
 quick-xml = "0.41"
+# The bitmaps of EMF pictures, as PNG.
+flate2 = "1"

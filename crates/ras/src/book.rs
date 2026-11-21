@@ -48,7 +48,7 @@ pub enum BookCommand {
         #[arg(long)]
         all: bool,
     },
-    /// ブックを Excel のようなグリッドで表示する HTML を作る（値・数式・主な書式・結合セル・フィルター・図形・画像・コントロール。--diff で変更されたセルを強調）
+    /// ブックを Excel のようなグリッドで表示する HTML を作る（値・数式・主な書式・結合セル・フィルター・図形・画像・グラフ・コントロール。--diff で変更されたセルを強調）
     View {
         /// 対象ブック（省略時は ras.toml の project.workbook）
         file: Option<PathBuf>,

@@ -5,8 +5,8 @@
 //! How Excel's formats become CSS (theme colors, the kinds of border lines, column widths in
 //! pixels, the alignment of values without one) follows xljs's printing of sheets
 //! (`src/api/xlsx_print.rs` there), without its pages: this is the screen, not the paper.
-//! The objects of the sheet's drawing (shapes, pictures, controls; charts as boxes with their
-//! titles) are drawn over the cells (`crate::view::drawing`). Conditional formats and table
+//! The objects of the sheet's drawing (shapes, pictures, charts, controls) are drawn over the
+//! cells (`crate::view::drawing`). Conditional formats and table
 //! styles are not drawn.
 
 use std::collections::HashMap;
@@ -381,6 +381,9 @@ impl Book {
                 if !o.macro_name.is_empty() {
                     j["macro"] = json!(o.macro_name);
                 }
+                if let Some(c) = &o.chart {
+                    j["chart"] = c.clone();
+                }
                 j
             })
             .collect();
@@ -439,8 +442,33 @@ impl Book {
                 _ => c.text,
             })
         };
+        let range = |r: &str| -> Option<Vec<Vec<crate::view::chart::Point>>> {
+            use crate::view::chart::Point;
+            let (at, range) = resolve(r).filter(|(_, g)| g.count() <= 100_000)?;
+            let cells = me.borrow_mut().cells(at, range).ok()?;
+            let by: HashMap<(u32, u32), CellInfo> = cells.into_iter().map(|c| ((c.at.row, c.at.col), c)).collect();
+            Some(
+                (range.start.row..=range.end.row)
+                    .map(|row| {
+                        (range.start.col..=range.end.col)
+                            .map(|col| match by.get(&(row, col)) {
+                                Some(c) => Point {
+                                    number: match c.value {
+                                        Val::Num(x) | Val::Date(x) => Some(x),
+                                        _ => None,
+                                    },
+                                    text: c.text.clone(),
+                                    format: c.number_format.clone(),
+                                },
+                                None => Point::default(),
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            )
+        };
         let size = |an: &crate::view::drawing::Anchor| sizes.anchor(an).map(|(x, y, x2, y2)| ((x2 - x) * 0.75, (y2 - y) * 0.75)).filter(|(w, h)| *w > 0.0 && *h > 0.0);
-        let env = Env { size: &size, texts: &texts, value: &value };
+        let env = Env { size: &size, texts: &texts, value: &value, range: &range };
         sheet_objects(d.parts, sheet, &env, d.ids, d.images)
     }
 }

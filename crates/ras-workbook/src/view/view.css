@@ -10,6 +10,10 @@ body { display: flex; flex-direction: column; background: #fff; color: #000; fon
 #name { width: 90px; padding: 3px 6px; border-right: 1px solid var(--line); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #fx { flex: 1; padding: 3px 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; font-family: Consolas, "MS Gothic", monospace; }
 #fx .was { color: #8a6d00; margin-left: 16px; }
+#fx .ref { font-weight: bold; }
+#formulas { flex: none; margin: 2px 6px; padding: 0 10px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #333; font: inherit; cursor: pointer; }
+#formulas:hover { background: #f0f0f0; }
+#formulas.on { background: #d3e9db; border-color: var(--accent); color: #0b5a2e; }
 #main { flex: 1; display: flex; min-height: 0; }
 #grid { flex: 1; overflow: auto; }
 #side { width: 280px; border-left: 1px solid var(--line); overflow: auto; padding: 6px 8px; }
@@ -52,6 +56,12 @@ th.gap { border-right: 2px solid #888; }
 #note { padding: 2px 8px; color: #8a6d00; background: #fffbe6; border-top: 1px solid var(--line); }
 .empty { padding: 24px; color: #666; }
 
+/* The formula view: formulas as text in the cells. */
+td.fml { font-family: Consolas, "MS Gothic", monospace; font-size: 10pt; color: #000; }
+/* The references of the selected formula. */
+.refs { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 1; pointer-events: none; }
+.refbox { position: absolute; box-sizing: border-box; border: 2px solid; }
+
 /* The objects of the sheet's drawing, over the cells and under the headers. */
 .objs { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 1; }
 .obj { position: absolute; cursor: default; font: 11pt "Yu Gothic", Meiryo, sans-serif; line-height: 1.2; }
@@ -59,10 +69,11 @@ th.gap { border-right: 2px solid #888; }
 .obj img { display: block; }
 .shape { position: absolute; box-sizing: border-box; }
 .shape p { margin: 0; }
-.chart { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 6px; overflow: hidden; background: #fff; border: 1px solid #bfbfbf; color: #444; text-align: center; font-size: 12px; }
-.chart svg { width: 32px; height: 32px; fill: none; stroke: #7f9cc7; stroke-width: 2; stroke-linecap: round; }
-.chart b { font-size: 13px; }
-.chart span { color: #777; font-size: 11px; }
+.chartbox { position: absolute; inset: 0; }
+.chartnote { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 6px; overflow: hidden; background: #fff; border: 1px solid #bfbfbf; color: #444; text-align: center; font-size: 12px; }
+.chartnote svg { width: 32px; height: 32px; fill: none; stroke: #7f9cc7; stroke-width: 2; stroke-linecap: round; }
+.chartnote b { font-size: 13px; }
+.chartnote span { color: #777; font-size: 11px; }
 .noimage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 4px; overflow: hidden; border: 1px dashed #999; background: rgba(255, 255, 255, .8); color: #666; font-size: 11px; text-align: center; }
 
 /* Controls: buttons, check boxes and the like, as Windows draws them. */

@@ -1,7 +1,7 @@
 //! The drawings of a sheet for the grid: shapes, text boxes, lines and connectors, groups,
-//! pictures and WordArt as HTML/SVG in the order of the sheet's drawing, the places of its
-//! charts (drawn as a box with their title), and the form and ActiveX controls
-//! (`controls.rs`).
+//! pictures (EMF too: `emf.rs`), WordArt and SmartArt as HTML/SVG in the order of the sheet's
+//! drawing, its charts (read in `chart.rs`, drawn by the page), the form and ActiveX controls and
+//! the embedded objects (`controls.rs`): everything a macro can be assigned to.
 //!
 //! Taken from xljs's printing of sheets (`src/api/xlsx_shape.rs`, the colours and anchors of
 //! `src/api/xlsx_chart.rs`); the geometry of shapes is in `geom.rs`. The parts are read from the
@@ -72,7 +72,8 @@ impl Parts {
             let keep = name == "xl/workbook.xml"
                 || name.ends_with(".rels")
                 || name.starts_with("xl/drawings/")
-                || (name.starts_with("xl/charts/chart") && name.ends_with(".xml"))
+                || name.starts_with("xl/charts/")
+                || name.starts_with("xl/diagrams/")
                 || name.starts_with("xl/media/")
                 || name.starts_with("xl/theme/")
                 || name.starts_with("xl/activeX/")
@@ -91,13 +92,17 @@ impl Parts {
         let sheets: Vec<String> = names
             .iter()
             .filter(|n| n.starts_with("xl/worksheets/_rels/"))
-            .filter(|n| files.get(*n).is_some_and(|r| String::from_utf8_lossy(r).contains("/ctrlProp\"") || String::from_utf8_lossy(r).contains("/control\"")))
+            .filter(|n| files.get(*n).is_some_and(|r| ["/ctrlProp\"", "/control\"", "/oleObject\""].iter().any(|k| String::from_utf8_lossy(r).contains(k))))
             .map(|n| format!("xl/worksheets/{}", n.trim_start_matches("xl/worksheets/_rels/").trim_end_matches(".rels")))
             .collect();
         for sheet in sheets {
             let Some(xml) = read_part(&mut zr, &sheet) else { continue };
-            if let Some(c) = element_text(&String::from_utf8_lossy(&xml), "controls") {
+            let xml = String::from_utf8_lossy(&xml);
+            if let Some(c) = element_text(&xml, "controls") {
                 files.insert(format!("{sheet}#controls"), c.into_bytes());
+            }
+            if let Some(c) = element_text(&xml, "oleObjects") {
+                files.insert(format!("{sheet}#oleObjects"), c.into_bytes());
             }
         }
         Parts { files }
@@ -280,7 +285,7 @@ pub(crate) fn font_family(name: &str) -> String {
 // -------------------------------------------------------------------------------------- colors
 
 /// A color element (a:srgbClr, a:schemeClr, a:sysClr) as RRGGBB, before its modifiers.
-fn base_color(c: &Node, theme: &HashMap<String, String>) -> Option<String> {
+pub(crate) fn base_color(c: &Node, theme: &HashMap<String, String>) -> Option<String> {
     Some(match c.name.as_str() {
         "srgbClr" => c.attr("val")?.to_uppercase(),
         "sysClr" => c.attr("lastClr")?.to_uppercase(),
@@ -310,7 +315,7 @@ fn base_color(c: &Node, theme: &HashMap<String, String>) -> Option<String> {
 }
 
 /// The color modifiers among the children of `n` (lumMod, lumOff, shade, tint) as fractions.
-fn mods_of(n: &Node) -> Vec<(String, f64)> {
+pub(crate) fn mods_of(n: &Node) -> Vec<(String, f64)> {
     n.children
         .iter()
         .filter(|c| matches!(c.name.as_str(), "lumMod" | "lumOff" | "shade" | "tint"))
@@ -320,7 +325,7 @@ fn mods_of(n: &Node) -> Vec<(String, f64)> {
 
 /// `rgb` (RRGGBB) with modifiers applied, as "#RRGGBB". lumMod / lumOff work on the luminance
 /// (HSL), as Office does; shade / tint darken and lighten.
-fn modified(rgb: &str, mods: &[(String, f64)]) -> Option<String> {
+pub(crate) fn modified(rgb: &str, mods: &[(String, f64)]) -> Option<String> {
     let v = u32::from_str_radix(rgb, 16).ok()?;
     let (mut r, mut g, mut b) = (((v >> 16) & 255) as f64 / 255.0, ((v >> 8) & 255) as f64 / 255.0, (v & 255) as f64 / 255.0);
     let get = |k: &str| mods.iter().find(|(n, _)| n == k).map(|(_, x)| *x);
@@ -390,7 +395,7 @@ pub(crate) fn color_of(fill: &Node, theme: &HashMap<String, String>) -> Option<S
 }
 
 /// Office's default theme (when the workbook has none).
-fn office_color(name: &str) -> Option<&'static str> {
+pub(crate) fn office_color(name: &str) -> Option<&'static str> {
     Some(match name {
         "dk1" => "000000",
         "lt1" => "FFFFFF",
@@ -446,6 +451,8 @@ pub struct Obj {
     pub macro_name: String,
     /// "shape", "picture", "group", "chart", "control".
     pub kind: &'static str,
+    /// What the page draws of a chart (`chart::chart_spec`).
+    pub chart: Option<serde_json::Value>,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -467,7 +474,7 @@ impl Images {
     }
 }
 
-fn base64(data: &[u8]) -> String {
+pub(crate) fn base64(data: &[u8]) -> String {
     const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for c in data.chunks(3) {
@@ -506,6 +513,9 @@ pub struct Env<'a> {
     pub texts: &'a dyn Fn(&str) -> Vec<String>,
     /// The text of a cell, for the controls linked to one.
     pub value: &'a dyn Fn(&str) -> Option<String>,
+    /// The cells of one area of a reference (rows of cells), for the series of charts; None
+    /// when they cannot be read (another workbook, a sheet that is not there).
+    pub range: &'a dyn Fn(&str) -> Option<Vec<Vec<super::chart::Point>>>,
 }
 
 /// What drawing a shape needs.
@@ -579,9 +589,16 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
     // "[0]!Macro1": a macro of this workbook.
     let macro_name = obj.attr("macro").unwrap_or("").trim_start_matches("[0]!").to_string();
     if obj.name == "graphicFrame" {
-        // A chart (or another graphic: SmartArt, ...): a box with its title.
-        if let Some(html) = chart_html(ctx, obj, &name) {
-            out.push(Obj { anchor, html, name, macro_name, kind: "chart" });
+        let size = (env.size)(&anchor);
+        // SmartArt: the shapes Excel keeps drawn.
+        if let Some(html) = diagram_html(ctx, obj, size) {
+            out.push(Obj { anchor, html, name, macro_name, kind: "group", chart: None });
+            return;
+        }
+        // A chart: drawn by the page; one the page does not draw is a box with its title.
+        let (html, chart) = chart_html(ctx, obj, &name, env);
+        if !html.is_empty() {
+            out.push(Obj { anchor, html, name, macro_name, kind: "chart", chart });
         }
         return;
     }
@@ -594,30 +611,85 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
             "grpSp" => "group",
             _ => "shape",
         };
-        out.push(Obj { anchor, html, name, macro_name, kind });
+        out.push(Obj { anchor, html, name, macro_name, kind, chart: None });
     }
 }
 
-/// A chart (or SmartArt) as a box with its title: the grid does not draw charts.
-fn chart_html(ctx: &Ctx, frame: &Node, name: &str) -> Option<String> {
+/// A chart: its spec for the page, or a box with its title when the page does not draw it (the
+/// newer kinds: waterfall, treemap, ...; other graphics).
+fn chart_html(ctx: &Ctx, frame: &Node, name: &str, env: &Env) -> (String, Option<serde_json::Value>) {
     if frame.find("cNvPr").and_then(|c| c.attr("hidden")).is_some_and(|h| h == "1" || h == "true") {
-        return None;
+        return (String::new(), None);
     }
-    let data = frame.find("graphicData")?;
+    let Some(data) = frame.find("graphicData") else { return (String::new(), None) };
     let chart = data.children.iter().find(|c| c.name == "chart").and_then(|c| c.attr("id")).and_then(|id| ctx.rels.get(id));
-    let title = chart.and_then(|(_, part)| ctx.parts.xml(part)).and_then(|root| {
+    if let Some((_, part)) = chart
+        && let Some(spec) = super::chart::chart_spec(ctx.parts, part, &ctx.theme, env)
+    {
+        return ("<div class=\"chartbox\"></div>".into(), Some(spec));
+    }
+    // chartEx (cx:chart) and the like: the title of the chart, if it has one.
+    let part = chart.map(|(_, p)| p.clone()).or_else(|| {
+        let id = data.children.iter().find_map(|c| c.attr("id"))?;
+        ctx.rels.get(id).map(|(_, p)| p.clone())
+    });
+    let title = part.and_then(|p| ctx.parts.xml(&p)).and_then(|root| {
         let t = root.find("chart")?.child("title")?;
         let mut runs = Vec::new();
         t.find_all("t", &mut runs);
         let s: String = runs.iter().map(|r| r.text.as_str()).collect();
         (!s.trim().is_empty()).then(|| s.trim().to_string())
     });
-    let what = if chart.is_some() { "グラフ" } else { "図表" };
+    let what = if chart.is_some() || data.attr("uri").is_some_and(|u| u.contains("chart")) { "このグラフ" } else { "この図表" };
     let title = title.unwrap_or_else(|| name.to_string());
-    Some(format!(
-        "<div class=\"chart\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M3 21h18M6 18V11M11 18V6M16 18v-9M21 18v-4\"/></svg><b>{}</b><span>{what}は表示されません</span></div>",
+    let html = format!(
+        "<div class=\"chartnote\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M3 21h18M6 18V11M11 18V6M16 18v-9M21 18v-4\"/></svg><b>{}</b><span>{what}の種類は表示できません</span></div>",
         esc(&title)
-    ))
+    );
+    (html, None)
+}
+
+/// SmartArt (a graphic frame of a diagram) as the shapes Excel keeps drawn for it (the drawing
+/// of its data model, `xl/diagrams/drawingN.xml`); None for other graphics. `size`: the frame's
+/// box (pt).
+fn diagram_html(ctx: &Ctx, frame: &Node, size: Option<(f64, f64)>) -> Option<String> {
+    let ids = frame.find("relIds")?;
+    let (_, data) = ctx.rels.get(ids.attr("dm")?)?;
+    let model = ctx.parts.xml(data)?;
+    let drawing = model.find("dataModelExt").and_then(|e| e.attr("relId")).and_then(|id| ctx.rels.get(id)).map(|(_, p)| p.clone()).or_else(|| {
+        // Without the extension: the diagram drawing of the data part, by its name.
+        let n = data.rsplit('/').next()?.trim_start_matches("data").trim_end_matches(".xml").to_string();
+        Some(format!("xl/diagrams/drawing{n}.xml"))
+    })?;
+    let tree = ctx.parts.xml(&drawing)?;
+    let tree = tree.find("spTree")?;
+    // The frame's size in the diagram's coordinates (pt): its xfrm, else its box.
+    let ext = frame.child("xfrm").and_then(|x| x.child("ext")).and_then(|e| Some((e.attr("cx")?.parse::<f64>().ok()? / EMU_PT, e.attr("cy")?.parse::<f64>().ok()? / EMU_PT)));
+    let (w, h) = size.or(ext)?;
+    let (fw, fh) = ext.unwrap_or((w, h));
+    if fw <= 0.0 || fh <= 0.0 {
+        return None;
+    }
+    let mut out = String::new();
+    let mut put = |c: &Node| {
+        let Some(cx) = xfrm(c) else { return };
+        let place = (cx.off.0 / fw, cx.off.1 / fh, cx.ext.0 / fw, cx.ext.1 / fh);
+        out.push_str(&object_html(ctx, c, Some(place), Some((cx.ext.0 * w / fw, cx.ext.1 * h / fh))));
+    };
+    for c in tree.children.iter().filter(|c| matches!(c.name.as_str(), "sp" | "cxnSp" | "grpSp" | "pic")) {
+        // The text in the box SmartArt gives it (txXfrm), not in the shape's own text box.
+        match (c.child("txXfrm"), c.child("txBody")) {
+            (Some(tx), Some(body)) => {
+                let mut shape = c.clone();
+                shape.children.retain(|x| x.name != "txBody" && x.name != "txXfrm");
+                put(&shape);
+                let props = Node { name: "spPr".into(), children: vec![Node { name: "xfrm".into(), ..tx.clone() }, Node { name: "noFill".into(), ..Default::default() }], ..Default::default() };
+                put(&Node { name: "sp".into(), children: vec![props, body.clone()], ..Default::default() });
+            }
+            _ => put(c),
+        }
+    }
+    (!out.is_empty()).then(|| format!("<div class=\"shape\" style=\"left:0;top:0;width:100%;height:100%\">{out}</div>"))
 }
 
 /// The transform of a shape, picture or group (pt).
@@ -723,6 +795,13 @@ fn picture_html(ctx: &Ctx, pic: &Node, x: &Xfrm) -> String {
 
 /// An `<img>` filling its box for the picture `part`, or a box saying that it cannot be shown.
 pub(crate) fn picture_of(ctx: &Ctx, part: &str, data: &[u8], style: &str) -> String {
+    // EMF (a range copied as a picture, a linked picture, the preview of an object): as SVG.
+    if part.to_ascii_lowercase().ends_with(".emf")
+        && let Some(svg) = super::emf::to_svg(data)
+    {
+        let i = ctx.images.borrow_mut().add(part, svg.as_bytes(), "image/svg+xml");
+        return format!("<img alt=\"\" data-img=\"{i}\" style=\"position:absolute;inset:0;width:100%;height:100%;{style}\">");
+    }
     let Some(mime) = image_mime(part) else {
         let kind = part.rsplit('.').next().unwrap_or("").to_ascii_uppercase();
         return format!("<div class=\"noimage\">表示できない形式の画像（{}）</div>", esc(&kind));

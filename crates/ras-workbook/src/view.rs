@@ -10,8 +10,10 @@ use crate::book::Book;
 use crate::book::view::Drawing;
 use crate::diff::{self, Diff};
 
+pub mod chart;
 mod controls;
 pub mod drawing;
+mod emf;
 mod geom;
 #[cfg(test)]
 mod tests;
@@ -21,6 +23,7 @@ pub use drawing::Parts;
 
 const CSS: &str = include_str!("view/view.css");
 const JS: &str = include_str!("view/view.js");
+const CHART_JS: &str = include_str!("view/chart.js");
 
 /// What the page draws: the sheets of `book` with the drawings of the workbook file `source`
 /// (its bytes) and, with `changes`, what differs from another workbook.
@@ -59,9 +62,9 @@ pub fn page(data: &Json) -> String {
     format!(
         "<!doctype html>\n<html lang=\"ja\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>\n<style>\n{CSS}</style>\n</head>\n<body>\n\
          <div id=\"top\"><span class=\"file\" id=\"file\"></span><span class=\"note\" id=\"summary\"></span></div>\n\
-         <div id=\"bar\"><div id=\"name\"></div><div id=\"fx\"></div></div>\n\
+         <div id=\"bar\"><div id=\"name\"></div><div id=\"fx\"></div><button id=\"formulas\" type=\"button\" title=\"セルに値ではなく数式を表示します（Ctrl+` / Ctrl+Shift+@）\" aria-pressed=\"false\">数式の表示</button></div>\n\
          <div id=\"main\"><div id=\"grid\"></div><div id=\"side\"></div></div>\n\
          <div id=\"note\" hidden></div>\n<div id=\"tabs\"></div>\n\
-         <script>window.DATA = {embedded};</script>\n<script>\n{JS}</script>\n</body>\n</html>\n"
+         <script>window.DATA = {embedded};</script>\n<script>\n{CHART_JS}</script>\n<script>\n{JS}</script>\n</body>\n</html>\n"
     )
 }

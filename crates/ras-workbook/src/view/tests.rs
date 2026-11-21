@@ -4,7 +4,7 @@
 
 use std::io::Write as _;
 
-use serde_json::Value as Json;
+use serde_json::{Value as Json, json};
 
 use crate::book::Book;
 
@@ -62,6 +62,16 @@ fn vml_shape(id: u32, object: &str, anchor: &str, text: &str, extra: &str) -> St
 
 /// A workbook with what a sheet's drawing holds, as Excel saves it.
 pub(crate) fn sample() -> Vec<u8> {
+    book(false)
+}
+
+/// The same with an embedded object, without the mirrors of the controls in the drawing
+/// (umya-spreadsheet takes every mirror for the mirror of an embedded object).
+fn with_object() -> Vec<u8> {
+    book(true)
+}
+
+fn book(object: bool) -> Vec<u8> {
     let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
     let mut add = |name: &str, data: Vec<u8>| parts.push((name.to_string(), data));
     add(
@@ -95,6 +105,10 @@ pub(crate) fn sample() -> Vec<u8> {
         (18, vec![cell("K18", "東京")]),
         (19, vec![cell("K19", "大阪")]),
         (20, vec![cell("K20", "名古屋")]),
+        (30, vec![cell("L30", "月"), cell("M30", "売上")]),
+        (31, vec![cell("L31", "4月"), "<c r=\"M31\"><v>120</v></c>".to_string()]),
+        (32, vec![cell("L32", "5月"), "<c r=\"M32\"><v>150</v></c>".to_string()]),
+        (33, vec![cell("L33", "6月"), "<c r=\"M33\"><v>90</v></c>".to_string()]),
     ];
     let data: String = rows.iter().map(|(r, cells)| format!("<row r=\"{r}\">{}</row>", cells.concat())).collect();
     let controls = [
@@ -104,10 +118,11 @@ pub(crate) fn sample() -> Vec<u8> {
         control(1028, "rId7", "List Box 4", (4, 16), (6, 20)),
     ]
     .concat();
+    let objects = if object { "<oleObjects><mc:AlternateContent><mc:Choice Requires=\"x14\"><oleObject progId=\"Word.Document.12\" shapeId=\"1029\" r:id=\"rId8\"><objectPr defaultSize=\"0\" r:id=\"rId9\"><anchor moveWithCells=\"1\"><from><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>10</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>19</xdr:row><xdr:rowOff>0</xdr:rowOff></to></anchor></objectPr></oleObject></mc:Choice><mc:Fallback><oleObject progId=\"Word.Document.12\" shapeId=\"1029\" r:id=\"rId8\"/></mc:Fallback></mc:AlternateContent></oleObjects>" } else { "" };
     add(
         "xl/worksheets/sheet1.xml",
         format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"{R}\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"><dimension ref=\"B5:K20\"/><sheetViews><sheetView workbookViewId=\"0\"/></sheetViews><sheetFormatPr defaultRowHeight=\"18.75\"/><sheetData>{data}</sheetData><pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/><drawing r:id=\"rId1\"/><legacyDrawing r:id=\"rId2\"/><controls>{controls}</controls></worksheet>"
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"{R}\" xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\"><dimension ref=\"B5:K20\"/><sheetViews><sheetView workbookViewId=\"0\"/></sheetViews><sheetFormatPr defaultRowHeight=\"18.75\"/><sheetData>{data}</sheetData><pageMargins left=\"0.7\" right=\"0.7\" top=\"0.75\" bottom=\"0.75\" header=\"0.3\" footer=\"0.3\"/><drawing r:id=\"rId1\"/><legacyDrawing r:id=\"rId2\"/>{objects}<controls>{controls}</controls></worksheet>"
         )
         .into_bytes(),
     );
@@ -120,6 +135,8 @@ pub(crate) fn sample() -> Vec<u8> {
             ("rId4", &format!("{R}/control"), "../activeX/activeX1.xml"),
             ("rId6", &format!("{R}/ctrlProp"), "../ctrlProps/ctrlProp2.xml"),
             ("rId7", &format!("{R}/ctrlProp"), "../ctrlProps/ctrlProp3.xml"),
+            ("rId8", &format!("{R}/package"), "../embeddings/Document.docx"),
+            ("rId9", &format!("{R}/image"), "../media/image2.emf"),
         ])
         .into_bytes(),
     );
@@ -136,6 +153,22 @@ pub(crate) fn sample() -> Vec<u8> {
         marker("from", 8, 0, 8, 0),
         marker("to", 10, 0, 10, 0)
     );
+    let chart = format!(
+        "<xdr:twoCellAnchor>{}{}<xdr:graphicFrame macro=\"[0]!Chart_Click\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"7\" name=\"グラフ 6\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/></xdr:xfrm><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" r:id=\"rId2\"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>",
+        marker("from", 13, 0, 28, 0),
+        marker("to", 19, 0, 40, 0)
+    );
+    let smartart = format!(
+        "<xdr:twoCellAnchor>{}{}<xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"8\" name=\"図表 7\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"3048000\" cy=\"952500\"/></xdr:xfrm><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/diagram\"><dgm:relIds xmlns:dgm=\"http://schemas.openxmlformats.org/drawingml/2006/diagram\" r:dm=\"rId3\" r:lo=\"rId4\" r:qs=\"rId5\" r:cs=\"rId6\"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>",
+        marker("from", 0, 0, 28, 0),
+        marker("to", 4, 0, 32, 0)
+    );
+    let emf = "<xdr:oneCellAnchor><xdr:from><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>28</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx=\"1905000\" cy=\"952500\"/><xdr:pic macro=\"[0]!Picture_Click\"><xdr:nvPicPr><xdr:cNvPr id=\"9\" name=\"図 8\"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed=\"rId7\"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor>";
+    let wordart365 = format!(
+        "<xdr:twoCellAnchor>{}{}<xdr:sp macro=\"[0]!WordArt_Click\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"10\" name=\"テキスト ボックス 9\"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></xdr:spPr><xdr:txBody><a:bodyPr wrap=\"none\" lIns=\"91440\" tIns=\"45720\" rIns=\"91440\" bIns=\"45720\"><a:spAutoFit/></a:bodyPr><a:lstStyle/><a:p><a:r><a:rPr lang=\"ja-JP\" sz=\"3600\" b=\"1\"><a:ln w=\"12700\"><a:solidFill><a:srgbClr val=\"C55A11\"/></a:solidFill></a:ln><a:gradFill><a:gsLst><a:gs pos=\"0\"><a:srgbClr val=\"FFC000\"/></a:gs><a:gs pos=\"100000\"><a:srgbClr val=\"ED7D31\"/></a:gs></a:gsLst><a:lin ang=\"5400000\"/></a:gradFill><a:effectLst><a:outerShdw blurRad=\"38100\" dist=\"19050\" dir=\"2700000\" algn=\"tl\" rotWithShape=\"0\"><a:srgbClr val=\"000000\"><a:alpha val=\"40000\"/></a:srgbClr></a:outerShdw></a:effectLst></a:rPr><a:t>ワードアート</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>",
+        marker("from", 4, 0, 21, 0),
+        marker("to", 9, 0, 25, 0)
+    );
     let wordart = format!(
         "<xdr:twoCellAnchor>{}{}<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"6\" name=\"テキスト ボックス 5\"/><xdr:cNvSpPr txBox=\"1\"/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></xdr:spPr><xdr:txBody><a:bodyPr wrap=\"none\"><a:prstTxWarp prst=\"textArchUp\"><a:avLst/></a:prstTxWarp></a:bodyPr><a:lstStyle/><a:p><a:r><a:rPr lang=\"ja-JP\" sz=\"1800\" b=\"1\"><a:solidFill><a:srgbClr val=\"2F5597\"/></a:solidFill></a:rPr><a:t>ワードアート</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor>",
         marker("from", 0, 0, 21, 0),
@@ -144,14 +177,62 @@ pub(crate) fn sample() -> Vec<u8> {
     add(
         "xl/drawings/drawing1.xml",
         format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"{R}\">{oval}{picture}{}{}{arrow}{wordart}</xdr:wsDr>",
-            mirror(1025, "Button 1", (5, 4), (7, 6), "ボタン 1"),
-            mirror(1026, "CommandButton1", (6, 11), (7, 13), "")
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<xdr:wsDr xmlns:xdr=\"http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"{R}\">{oval}{picture}{}{}{arrow}{wordart}{chart}{smartart}{emf}{wordart365}</xdr:wsDr>",
+            if object { String::new() } else { mirror(1025, "Button 1", (5, 4), (7, 6), "ボタン 1") },
+            if object { String::new() } else { mirror(1026, "CommandButton1", (6, 11), (7, 13), "") }
         )
         .into_bytes(),
     );
-    add("xl/drawings/_rels/drawing1.xml.rels", rels(&[("rId1", &format!("{R}/image"), "../media/image1.png")]).into_bytes());
+    add(
+        "xl/drawings/_rels/drawing1.xml.rels",
+        rels(&[
+            ("rId1", &format!("{R}/image"), "../media/image1.png"),
+            ("rId2", &format!("{R}/chart"), "../charts/chart1.xml"),
+            ("rId3", &format!("{R}/diagramData"), "../diagrams/data1.xml"),
+            ("rId4", &format!("{R}/diagramLayout"), "../diagrams/layout1.xml"),
+            ("rId5", &format!("{R}/diagramQuickStyle"), "../diagrams/quickStyle1.xml"),
+            ("rId6", &format!("{R}/diagramColors"), "../diagrams/colors1.xml"),
+            ("rId7", &format!("{R}/image"), "../media/image3.emf"),
+            ("rId8", "http://schemas.microsoft.com/office/2007/relationships/diagramDrawing", "../diagrams/drawing1.xml"),
+        ])
+        .into_bytes(),
+    );
     add("xl/media/image1.png", PNG.to_vec());
+    add("xl/media/image2.emf", super::emf::tests::sample());
+    add("xl/media/image3.emf", super::emf::tests::sample());
+    add("xl/embeddings/Document.docx", b"PK".to_vec());
+    // A column chart of L30:M33, with its cache (the cells win).
+    add(
+        "xl/charts/chart1.xml",
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>月別売上</a:t></a:r></a:p></c:rich></c:tx></c:title><c:autoTitleDeleted val="0"/><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Sheet1!$M$30</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$L$31:$L$33</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$M$31:$M$33</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="3"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt><c:pt idx="2"><c:v>3</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser><c:gapWidth val="150"/><c:axId val="10"/><c:axId val="20"/></c:barChart><c:catAx><c:axId val="10"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:crossAx val="20"/></c:catAx><c:valAx><c:axId val="20"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:crossAx val="10"/></c:valAx></c:plotArea><c:legend><c:legendPos val="b"/></c:legend><c:plotVisOnly val="1"/></c:chart></c:chartSpace>"#
+            .as_bytes()
+            .to_vec(),
+    );
+    // SmartArt: its data refers to the drawing Excel keeps of it.
+    add(
+        "xl/diagrams/data1.xml",
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<dgm:dataModel xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><dgm:ptLst/><dgm:cxnLst/><dgm:bg/><dgm:whole/><dgm:extLst><a:ext uri="http://schemas.microsoft.com/office/drawing/2008/diagram"><dsp:dataModelExt xmlns:dsp="http://schemas.microsoft.com/office/drawing/2008/diagram" relId="rId8" minVer="http://schemas.openxmlformats.org/drawingml/2006/diagram"/></a:ext></dgm:extLst></dgm:dataModel>"#
+            .to_vec(),
+    );
+    let step = |i: i64, text: &str| {
+        format!(
+            "<dsp:sp modelId=\"{{0000000{i}-0000-0000-0000-000000000000}}\"><dsp:nvSpPr><dsp:cNvPr id=\"0\" name=\"\"/><dsp:cNvSpPr/></dsp:nvSpPr><dsp:spPr><a:xfrm><a:off x=\"{}\" y=\"0\"/><a:ext cx=\"914400\" cy=\"952500\"/></a:xfrm><a:prstGeom prst=\"chevron\"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val=\"4472C4\"/></a:solidFill></dsp:spPr><dsp:txBody><a:bodyPr anchor=\"ctr\"/><a:p><a:pPr algn=\"ctr\"/><a:r><a:rPr sz=\"1400\"><a:solidFill><a:srgbClr val=\"FFFFFF\"/></a:solidFill></a:rPr><a:t>{text}</a:t></a:r></a:p></dsp:txBody><dsp:txXfrm><a:off x=\"{}\" y=\"0\"/><a:ext cx=\"457200\" cy=\"952500\"/></dsp:txXfrm></dsp:sp>",
+            i * 1066800,
+            i * 1066800 + 228600
+        )
+    };
+    add(
+        "xl/diagrams/drawing1.xml",
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<dsp:drawing xmlns:dsp=\"http://schemas.microsoft.com/office/drawing/2008/diagram\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><dsp:spTree><dsp:nvGrpSpPr><dsp:cNvPr id=\"0\" name=\"\"/><dsp:cNvGrpSpPr/></dsp:nvGrpSpPr><dsp:grpSpPr/>{}{}{}</dsp:spTree></dsp:drawing>",
+            step(0, "企画"),
+            step(1, "開発"),
+            step(2, "公開")
+        )
+        .into_bytes(),
+    );
     // VML: the button, the ActiveX control's picture, a check box and a list box without mirrors,
     // a comment.
     let vml = format!(
@@ -160,7 +241,17 @@ pub(crate) fn sample() -> Vec<u8> {
         vml_shape(1027, "Checkbox", " 1, 0, 16, 0, 3, 0, 17, 0", "チェック 3", "<x:Checked>0</x:Checked><x:FmlaLink>$K$17</x:FmlaLink><x:TextVAlign>Center</x:TextVAlign>"),
         vml_shape(1028, "List", " 4, 0, 16, 0, 6, 0, 20, 0", "", "<x:FmlaRange>$K$18:$K$20</x:FmlaRange><x:Sel>2</x:Sel>")
     );
+    // The embedded object's picture.
+    let vml = if !object {
+        vml
+    } else {
+        vml.replace(
+        "</xml>",
+        "<v:shape id=\"_x0000_s1029\" type=\"#_x0000_t75\" style='position:absolute;z-index:5'><v:imagedata o:relid=\"rId1\" o:title=\"\"/><x:ClientData ObjectType=\"Pict\"><x:Anchor> 8, 0, 15, 0, 10, 0, 19, 0</x:Anchor><x:CF>Pict</x:CF></x:ClientData></v:shape></xml>",
+        )
+    };
     add("xl/drawings/vmlDrawing1.vml", vml.into_bytes());
+    add("xl/drawings/_rels/vmlDrawing1.vml.rels", rels(&[("rId1", &format!("{R}/image"), "../media/image2.emf")]).into_bytes());
     let props = |p: &str| format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<formControlPr xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" {p}/>").into_bytes();
     add("xl/ctrlProps/ctrlProp1.xml", props("objectType=\"Button\" lockText=\"1\""));
     add("xl/ctrlProps/ctrlProp2.xml", props("objectType=\"CheckBox\" fmlaLink=\"$K$17\" lockText=\"1\" noThreeD=\"1\""));
@@ -210,6 +301,10 @@ fn the_drawing_over_the_grid() {
             ("control", "CommandButton1"),
             ("shape", "直線矢印コネクタ 4"),
             ("shape", "テキスト ボックス 5"),
+            ("chart", "グラフ 6"),
+            ("group", "図表 7"),
+            ("picture", "図 8"),
+            ("shape", "テキスト ボックス 9"),
             ("control", "Check Box 3"),
             ("control", "List Box 4"),
         ]
@@ -217,12 +312,12 @@ fn the_drawing_over_the_grid() {
     let html = |i: usize| objects[i]["html"].as_str().unwrap();
     // The oval: the theme's accent color, from C3 (with its offsets in pixels).
     assert!(html(0).contains("fill=\"#4472C4\""), "{}", html(0));
-    assert_eq!(objects[0]["from"], serde_json::json!([2, 31.5, 2, 15.75]));
+    assert_eq!(objects[0]["from"], json!([2, 31.5, 2, 15.75]));
     assert_eq!(objects[0]["macro"], "Oval_Click");
     // The picture, once in the page's pictures.
     assert!(html(1).contains("data-img=\"0\""));
     assert!(data["images"][0].as_str().unwrap().starts_with("data:image/png;base64,iVBORw0KGgo"));
-    assert_eq!(objects[1]["ext"], serde_json::json!([100.0, 100.0]));
+    assert_eq!(objects[1]["ext"], json!([100.0, 100.0]));
     // The form button: its text and its macro.
     assert!(html(2).contains("class=\"ctl button\"") && html(2).contains("ボタン 1"), "{}", html(2));
     assert_eq!(objects[2]["macro"], "Button1_Click");
@@ -233,15 +328,55 @@ fn the_drawing_over_the_grid() {
     assert!(html(5).contains("class=\"warp\""), "{}", html(5));
     // The check box follows its linked cell (TRUE), not what was saved; the list shows its
     // items with the second one chosen.
-    assert!(html(6).contains("class=\"box\"><svg"), "{}", html(6));
-    assert!(html(7).contains("<span>東京</span><span class=\"sel\">大阪</span><span>名古屋</span>"), "{}", html(7));
-    // The comment is not drawn; the grid reaches to the objects (the WordArt to row 27).
+    assert!(html(10).contains("class=\"box\"><svg"), "{}", html(10));
+    assert!(html(11).contains("<span>東京</span><span class=\"sel\">大阪</span><span>名古屋</span>"), "{}", html(11));
+    // The chart: its series from the cells (not its cache), for the page to draw.
+    let chart = &objects[6]["chart"];
+    assert_eq!(chart["title"], "月別売上");
+    assert_eq!(chart["legend"], "b");
+    let series = &chart["groups"][0]["series"][0];
+    assert_eq!((&series["name"], &series["cat"], &series["val"]), (&json!("売上"), &json!(["4月", "5月", "6月"]), &json!([120.0, 150.0, 90.0])));
+    assert_eq!(chart["groups"][0]["kind"], "bar");
+    assert_eq!(objects[6]["macro"], "Chart_Click");
+    // SmartArt: the shapes Excel keeps drawn of it.
+    assert_eq!(html(7).matches("<path").count(), 3, "{}", html(7));
+    assert_eq!(html(7).matches("class=\"shape\"").count(), 1 + 6, "{}", html(7));
+    assert!(html(7).contains(">企画</span>") && html(7).contains(">公開</span>"), "{}", html(7));
+    // The EMF picture as SVG.
+    assert!(html(8).contains("data-img=\"1\""), "{}", html(8));
+    assert!(data["images"][1].as_str().unwrap().starts_with("data:image/svg+xml;base64,"));
+    assert_eq!(objects[8]["macro"], "Picture_Click");
+    // WordArt as Office 365 makes it: an outline, a gradient, a shadow.
+    assert!(html(9).contains("-webkit-text-stroke:1pt #C55A11") && html(9).contains("background-clip:text") && html(9).contains("drop-shadow"), "{}", html(9));
+    // The comment is not drawn; the grid reaches to the objects (the chart to row 41).
     assert!(!objects.iter().any(|o| o["html"].as_str().unwrap().contains("メモ")));
-    assert_eq!(sheet["rows"], 27);
+    assert_eq!(sheet["rows"], 41);
     // The grid goes on past the cells.
     assert_eq!((sheet["maxRows"].as_u64(), sheet["maxCols"].as_u64()), (Some(1_048_576), Some(16_384)));
     assert_eq!((sheet["defaultWidth"].as_f64(), sheet["defaultHeight"].as_f64()), (Some(72.0), Some(25.0)));
     assert_eq!(sheet["gridLines"], true);
+}
+
+/// What a run changed in the cells, the chart shows.
+#[test]
+fn charts_follow_the_cells() {
+    let bytes = sample();
+    let mut book = Book::open_bytes(&bytes).unwrap();
+    book.set_values(0, crate::RangeRef::parse("M31").unwrap(), &[vec![crate::book::Val::Num(500.0)]]).unwrap();
+    let data = super::data(&mut book, "x.xlsx", Some(&bytes), None, None).unwrap();
+    let chart = data["sheets"][0]["objects"].as_array().unwrap().iter().find(|o| o["kind"] == "chart").unwrap();
+    assert_eq!(chart["chart"]["groups"][0]["series"][0]["val"], json!([500.0, 150.0, 90.0]));
+}
+
+/// An embedded object: its picture (EMF) where the sheet puts it.
+#[test]
+fn an_embedded_object() {
+    let data = view_of(&with_object());
+    let objects = data["sheets"][0]["objects"].as_array().unwrap();
+    let ole = objects.iter().find(|o| o["name"] == "Word.Document.12").expect("the object");
+    assert_eq!(ole["from"], json!([8, 0.0, 15, 0.0]));
+    let i: usize = ole["html"].as_str().unwrap().split("data-img=\"").nth(1).unwrap().split('"').next().unwrap().parse().unwrap();
+    assert!(data["images"][i].as_str().unwrap().starts_with("data:image/svg+xml;base64,"));
 }
 
 /// Without the file, the cells alone.
@@ -249,8 +384,8 @@ fn the_drawing_over_the_grid() {
 fn without_the_drawing() {
     let mut book = Book::open_bytes(&sample()).unwrap();
     let data = super::data(&mut book, "x.xlsx", None, None, None).unwrap();
-    assert_eq!(data["sheets"][0]["objects"], serde_json::json!([]));
-    assert_eq!(data["images"], serde_json::json!([]));
+    assert_eq!(data["sheets"][0]["objects"], json!([]));
+    assert_eq!(data["images"], json!([]));
     assert_eq!(data["sheets"][0]["gridLines"], true);
 }
 

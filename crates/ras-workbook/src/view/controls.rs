@@ -77,6 +77,8 @@ struct Control {
     client: HashMap<String, String>,
     text: Option<Text>,
     ax: Option<Ax>,
+    /// The picture Excel shows for it (an embedded object's, an ActiveX control's preview).
+    image: Option<String>,
     hidden: bool,
     done: bool,
 }
@@ -116,6 +118,12 @@ impl Controls {
                         ctl.anchor = Some(an);
                     }
                 }
+                // The preview of an ActiveX control.
+                if ctl.image.is_none()
+                    && let Some((_, part)) = c.find("controlPr").and_then(|p| p.attr("id")).and_then(|r| rels.get(r))
+                {
+                    ctl.image = Some(part.clone());
+                }
                 let Some((kind, part)) = c.attr("id").and_then(|r| rels.get(r)) else { continue };
                 if kind.ends_with("/ctrlProp") {
                     if let Some(p) = parts.xml(part) {
@@ -130,10 +138,42 @@ impl Controls {
                 }
             }
         }
+        // Embedded objects (OLE): where they are and their pictures.
+        if let Some(root) = parts.xml(&format!("{sheet_part}#oleObjects")) {
+            let mut found = Vec::new();
+            root.find_all("oleObject", &mut found);
+            for o in found {
+                let Some(id) = o.attr("shapeId").and_then(spid_number) else { continue };
+                let at = match list.iter().position(|x| x.id == id) {
+                    Some(i) => i,
+                    None => {
+                        list.push(Control { id, kind: "Pict".into(), ..Default::default() });
+                        list.len() - 1
+                    }
+                };
+                let ctl = &mut list[at];
+                if ctl.name.is_empty() {
+                    ctl.name = o.attr("progId").unwrap_or("").to_string();
+                }
+                if let Some(pr) = o.child("objectPr") {
+                    if ctl.anchor.is_none()
+                        && let Some(a) = pr.find("anchor").map(anchor_of).filter(|a| a.from.is_some())
+                    {
+                        ctl.anchor = Some(a);
+                    }
+                    if ctl.image.is_none()
+                        && let Some((_, part)) = pr.attr("id").and_then(|r| rels.get(r))
+                    {
+                        ctl.image = Some(part.clone());
+                    }
+                }
+            }
+        }
         // The VML drawing: anchors, texts, the state of form controls.
         let vml: Vec<String> = rels.values().filter(|(t, _)| t.ends_with("/vmlDrawing")).map(|(_, p)| p.clone()).collect();
         for part in vml {
             let Some(root) = parts.xml(&part) else { continue };
+            let vml_rels = parts.rels(&part);
             let mut shapes = Vec::new();
             root.find_all("shape", &mut shapes);
             for sh in shapes {
@@ -162,6 +202,12 @@ impl Controls {
                 }
                 if let Some(tb) = sh.child("textbox") {
                     ctl.text = Some(vml_text(tb, &ctl.client));
+                }
+                // The picture of an object or an ActiveX control.
+                if ctl.image.is_none()
+                    && let Some((_, p)) = sh.child("imagedata").and_then(|d| d.attr("relid")).and_then(|r| vml_rels.get(r))
+                {
+                    ctl.image = Some(p.clone());
                 }
             }
         }
@@ -193,36 +239,41 @@ impl Controls {
                 c.client.insert("FmlaMacro".into(), m.to_string());
             }
         }
-        self.draw(i, env)
+        self.draw(i, env, ctx)
     }
 
     /// The controls not drawn yet (no mirror in the drawing), in the order of the sheet.
-    pub(crate) fn rest(&mut self, env: &Env, _ctx: &Ctx) -> Vec<Obj> {
+    pub(crate) fn rest(&mut self, env: &Env, ctx: &Ctx) -> Vec<Obj> {
         let mut out = Vec::new();
         for i in 0..self.list.len() {
             if self.list[i].done {
                 continue;
             }
             self.list[i].done = true;
-            if let Some(o) = self.draw(i, env) {
+            if let Some(o) = self.draw(i, env, ctx) {
                 out.push(o);
             }
         }
         out
     }
 
-    fn draw(&self, i: usize, env: &Env) -> Option<Obj> {
+    fn draw(&self, i: usize, env: &Env, ctx: &Ctx) -> Option<Obj> {
         let c = &self.list[i];
         if c.hidden {
             return None;
         }
         let anchor = c.anchor.clone()?;
+        let picture = || c.image.as_ref().and_then(|p| Some(super::drawing::picture_of(ctx, p, ctx.parts.bytes(p)?, "")));
         let html = match &c.ax {
-            Some(ax) => activex_html(c, ax, &self.font),
+            // An ActiveX control the grid draws itself; another one: its preview.
+            Some(ax) if !ax.class.is_empty() => activex_html(c, ax, &self.font),
+            Some(ax) => picture().unwrap_or_else(|| activex_html(c, ax, &self.font)),
+            // An embedded object: its picture.
+            None if c.kind == "Pict" => picture()?,
             None => form_html(c, env, &self.font)?,
         };
         let macro_name = c.client.get("FmlaMacro").map(|m| m.trim_start_matches("[0]!").to_string()).unwrap_or_default();
-        Some(Obj { anchor, html, name: c.name.clone(), macro_name, kind: "control" })
+        Some(Obj { anchor, html, name: c.name.clone(), macro_name, kind: "control", chart: None })
     }
 }
 

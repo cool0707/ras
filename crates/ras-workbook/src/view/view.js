@@ -48,6 +48,40 @@
     function clearSelection() {
         if (selected) selected.classList.remove(selected.classList.contains("obj") ? "on" : "sel");
         selected = null;
+        if (view) view.refs.textContent = "";
+    }
+
+    // ---- formulas: the references in them, colored as Excel colors them while one is edited
+
+    const REF_COLORS = ["#2f6fdb", "#d64545", "#7b3fb8", "#2e9e4f", "#c46a00", "#0097a7", "#c0398a"];
+    const REF = /(?<![\p{L}\p{N}_.$\]])((?:'(?:[^']|'')+'|[\p{L}_][\p{L}\p{N}_.]*)!)?(\$?[A-Z]{1,3}\$?[0-9]+(?::\$?[A-Z]{1,3}\$?[0-9]+)?|\$?[A-Z]{1,3}:\$?[A-Z]{1,3}|\$?[0-9]+:\$?[0-9]+)(?![\p{L}\p{N}_(!])/gu;
+    const colNumber = (letters) => {
+        let c = 0;
+        for (const ch of letters) c = c * 26 + ch.charCodeAt(0) - 64;
+        return c - 1;
+    };
+    // A reference as rows and columns: [r1, c1, r2, c2] (whole columns and rows to the ends).
+    function area(text) {
+        const ends = text.replace(/\$/g, "").split(":");
+        const one = (t) => {
+            const m = /^([A-Z]*)([0-9]*)$/.exec(t);
+            return m ? [m[2] ? +m[2] - 1 : null, m[1] ? colNumber(m[1]) : null] : [null, null];
+        };
+        const [a, b] = [one(ends[0]), one(ends[1] || ends[0])];
+        const rows = [a[0], b[0]].map((x, i) => (x === null ? (i ? 1048575 : 0) : x));
+        const cols = [a[1], b[1]].map((x, i) => (x === null ? (i ? 16383 : 0) : x));
+        return [Math.min(...rows), Math.min(...cols), Math.max(...rows), Math.max(...cols)];
+    }
+    // The references of a formula outside its strings: [{ start, end, sheet, area }].
+    function references(formula) {
+        const out = [];
+        // Strings ("..." with "" inside) are left out.
+        const masked = formula.replace(/"(?:[^"]|"")*"/g, (m) => " ".repeat(m.length));
+        for (const m of masked.matchAll(REF)) {
+            const sheet = m[1] ? m[1].slice(0, -1).replace(/^'(.*)'$/, "$1").replace(/''/g, "'") : null;
+            out.push({ start: m.index, end: m.index + m[0].length, sheet, area: area(m[2]) });
+        }
+        return out;
     }
 
     function select(sheet, td, r, c) {
@@ -57,9 +91,64 @@
         const cell = td.cell || {};
         $("name").textContent = address(r, c);
         const fx = $("fx");
-        fx.textContent = cell.f || cell.v || cell.t || "";
+        fx.textContent = "";
+        if (cell.f) {
+            // The references in colors, the same on the grid.
+            const refs = references(cell.f);
+            const colors = new Map();
+            let at = 0;
+            for (const ref of refs) {
+                const key = `${ref.sheet || ""}!${ref.area.join(",")}`;
+                if (!colors.has(key)) colors.set(key, REF_COLORS[colors.size % REF_COLORS.length]);
+                const color = colors.get(key);
+                fx.appendChild(document.createTextNode(cell.f.slice(at, ref.start)));
+                fx.appendChild(el("span", "ref", cell.f.slice(ref.start, ref.end))).style.color = color;
+                at = ref.end;
+                if (!ref.sheet || ref.sheet === sheet.name) outline(ref.area, color);
+            }
+            fx.appendChild(document.createTextNode(cell.f.slice(at)));
+        } else {
+            fx.textContent = cell.v || cell.t || "";
+        }
         const was = (changes[sheet.name] || []).find((x) => x.a === address(r, c));
         if (was) fx.appendChild(el("span", "was", `変更前: ${was.before}`));
+    }
+
+    // A box around the cells of a reference on the grid (as far as it is drawn).
+    function outline([r1, c1, r2, c2], color) {
+        const v = view;
+        if (!v || r1 >= v.nrows || c1 >= v.ncols) return;
+        r2 = Math.min(r2, v.nrows - 1);
+        c2 = Math.min(c2, v.ncols - 1);
+        const x = columnLeft(v, c1),
+            y = rowTop(v, r1);
+        const x2 = columnLeft(v, c2 + 1),
+            y2 = rowTop(v, r2 + 1);
+        const box = v.refs.appendChild(el("div", "refbox"));
+        Object.assign(box.style, { left: `${x}px`, top: `${y}px`, width: `${Math.max(2, x2 - x + 1)}px`, height: `${Math.max(2, y2 - y + 1)}px`, borderColor: color, background: `${color}14` });
+    }
+
+    // ---- the formula view (Excel's 数式の表示): formulas in the cells, columns twice as wide
+
+    let formulas = !!saved.formulas;
+    function showFormulas(on) {
+        formulas = on;
+        remember({ formulas: on });
+        $("formulas").classList.toggle("on", on);
+        $("formulas").setAttribute("aria-pressed", String(on));
+        if (current) {
+            const grid = $("grid");
+            const [x, y] = [grid.scrollLeft, grid.scrollTop];
+            const at = selected && selected.r !== undefined ? [selected.r, selected.c] : null;
+            draw(current);
+            grid.scrollLeft = x;
+            grid.scrollTop = y;
+            view.fill();
+            // The cell selected before, again.
+            const tr = at && view.trs.get(at[0]);
+            const td = tr && Array.from(tr.children).find((t) => t.c === at[1]);
+            if (td) select(current, td, at[0], at[1]);
+        }
     }
 
     function selectObject(box, obj) {
@@ -72,9 +161,10 @@
 
     // The width of a column and the height of a row (px), drawn or not.
     function width(sheet, c) {
-        if (c < sheet.cols) return sheet.colWidths[c];
+        const k = formulas ? 2 : 1;
+        if (c < sheet.cols) return sheet.colWidths[c] * k;
         const w = sheet.moreWidths && sheet.moreWidths[c];
-        return w !== undefined ? w : sheet.defaultWidth;
+        return (w !== undefined ? w : sheet.defaultWidth) * k;
     }
     function height(sheet, r) {
         if (r < sheet.rows) return sheet.rowHeights[r];
@@ -116,6 +206,7 @@
         const body = table.appendChild(el("tbody"));
         wrap.appendChild(table);
         const layer = wrap.appendChild(el("div", "objs"));
+        const refs = wrap.appendChild(el("div", "refs"));
         grid.appendChild(wrap);
 
         const v = (view = {
@@ -130,6 +221,7 @@
             ncols: 0, // columns drawn (visible or not)
             nrows: 0,
             width: 0, // of the cells (without the row headers)
+            refs, // the boxes of the references of the selected formula
             head: 40, // the width of the row headers
             byAddress: new Map(),
             // Right gridlines hidden under text that runs over empty cells: key -> true.
@@ -146,16 +238,24 @@
             td.c = c;
             if (cell) {
                 if (cell.s) td.style.cssText = sheet.styles[cell.s];
-                if (cell.t !== undefined) {
+                // The formula view: formulas (left, as text) and the values as they are typed.
+                const shown = formulas ? cell.f || cell.v || cell.t : cell.t;
+                if (formulas && cell.f) {
+                    td.style.textAlign = "left";
+                    td.classList.add("fml");
+                }
+                if (shown !== undefined) {
                     // Text runs over the empty cells to its right, as in Excel.
                     const next = v.cols[i + 1] !== undefined ? v.cols[i + 1] : c + 1;
-                    if (cell.k === "string" && !/pre-wrap/.test(td.style.cssText) && !/text-align/.test(td.style.cssText) && !cells.has(r * KEY + next) && !span.has(key)) {
+                    const text = cell.k === "string" || (formulas && cell.f);
+                    if (text && !/pre-wrap/.test(td.style.cssText) && (!/text-align/.test(td.style.cssText) || (formulas && cell.f)) && !cells.has(r * KEY + next) && !span.has(key)) {
                         td.classList.add("ov");
-                        td.appendChild(el("div", "ovt")).appendChild(el("span", null, cell.t));
+                        td.appendChild(el("div", "ovt")).appendChild(el("span", null, shown));
                     } else {
-                        td.textContent = cell.t;
+                        td.textContent = shown;
                     }
                 }
+                if (cell.f && !formulas && !td.title) td.title = cell.f;
             }
             if (v.noRight.has(key)) td.classList.add("nogr");
             const merged = span.get(key);
@@ -319,6 +419,13 @@
             const box = layer.appendChild(el("div", `obj ${obj.kind}`));
             Object.assign(box.style, { left: `${x}px`, top: `${y}px`, width: `${x2 - x}px`, height: `${y2 - y}px` });
             box.innerHTML = obj.html;
+            if (obj.chart && window.rasChart) {
+                try {
+                    window.rasChart.draw(box.querySelector(".chartbox") || box, obj.chart);
+                } catch (e) {
+                    // A chart that cannot be drawn leaves its box empty.
+                }
+            }
             if (obj.name) box.title = obj.macro ? `${obj.name}（マクロ: ${obj.macro}）` : obj.name;
             box.addEventListener("click", (e) => {
                 e.stopPropagation();
@@ -554,6 +661,18 @@
             box.replaceChildren(...out);
         }
     }
+
+    $("formulas").addEventListener("click", () => showFormulas(!formulas));
+    $("formulas").classList.toggle("on", formulas);
+    $("formulas").setAttribute("aria-pressed", String(formulas));
+    // Ctrl+` (Ctrl+Shift+@ on a Japanese keyboard), as in Excel.
+    document.addEventListener("keydown", (e) => {
+        if (e.ctrlKey && !e.altKey && (e.key === "`" || e.code === "Backquote")) {
+            e.preventDefault();
+            e.stopPropagation();
+            showFormulas(!formulas);
+        }
+    });
 
     $("file").textContent = data.file;
     const total = Object.values(changes).reduce((n, list) => n + list.length, 0);
