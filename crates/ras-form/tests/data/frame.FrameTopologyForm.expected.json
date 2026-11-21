@@ -6,12 +6,6 @@
       {
         "caption": "root-common",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 18.0,
         "id": "control_001",
         "left": 11.990551181102362,
@@ -56,12 +50,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 18.0,
         "id": "control_004",
         "left": 10.006299212598424,
@@ -96,12 +84,6 @@
       {
         "caption": "nested-label",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 18.0,
         "id": "control_006",
         "left": 7.993700787401575,
@@ -117,12 +99,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 20.01259842519685,
         "id": "control_007",
         "left": 11.990551181102362,

@@ -6,12 +6,6 @@
       {
         "caption": "before-Label",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 36.0,
         "id": "control_001",
         "left": 11.990551181102362,
@@ -26,12 +20,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 36.0,
         "id": "control_002",
         "left": 172.00629921259844,
@@ -49,12 +37,6 @@
       {
         "caption": "before-CommandButton",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 36.0,
         "id": "control_003",
         "left": 11.990551181102362,
@@ -68,22 +50,8 @@
         "zIndex": 2
       },
       {
-        "backColor": {
-          "kind": "system",
-          "value": "buttonFace"
-        },
         "caption": "before-CheckBox",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
-        "foreColor": {
-          "kind": "system",
-          "value": "buttonText"
-        },
         "height": 36.0,
         "id": "control_004",
         "left": 172.00629921259844,
@@ -98,22 +66,8 @@
         "zIndex": 3
       },
       {
-        "backColor": {
-          "kind": "system",
-          "value": "buttonFace"
-        },
         "caption": "before-OptionButton",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
-        "foreColor": {
-          "kind": "system",
-          "value": "buttonText"
-        },
         "height": 36.0,
         "id": "control_005",
         "left": 11.990551181102362,
@@ -129,12 +83,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 36.0,
         "id": "control_006",
         "left": 172.00629921259844,
@@ -149,12 +97,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 36.0,
         "id": "control_007",
         "left": 11.990551181102362,
@@ -184,12 +126,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 18.0,
         "id": "control_009",
         "left": 6.009448818897638,

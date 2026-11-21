@@ -1216,9 +1216,26 @@ fn minimum_edit_height(control: &FormSpecControl) -> Option<f64> {
     Some((points / 0.75 - 1e-9).ceil() * 0.75)
 }
 
+/// UFV023: a Single border and an effect. MSForms draws one edge, and the VBA editor puts back
+/// the other property when one is set; generation keeps the border.
+fn edge_issue(border_style: Option<i64>, effect: Option<&Value>, path: &str) -> Option<Issue> {
+    let effect = effect.and_then(Value::as_i64).filter(|e| *e != 0)?;
+    (border_style == Some(1)).then(|| {
+        issue(
+            "UFV023",
+            Severity::Warning,
+            format!(
+                "{path}.specialEffect（{effect}）は borderStyle 1（Single）と同時には使えません。MSForms は縁を 1 つしか描かず、Excel では一方を設定するともう一方が戻ります。borderStyle を優先し、平面として書き込みます。"
+            ),
+            &format!("{path}.specialEffect"),
+        )
+    })
+}
+
 fn validate_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
     let mut issues = validate_typed_control(control, path);
     issues.extend(validate_scalars(control, path));
+    issues.extend(edge_issue(control.border_style, control.scalar("specialEffect"), path));
     if let (Some(minimum), Some(height)) = (minimum_edit_height(control), control.height) {
         if height < minimum {
             issues.push(issue(
@@ -1368,6 +1385,7 @@ pub(crate) fn validate_strict(spec: &FormSpec) -> Vec<Issue> {
         }
     }
     issues.extend(validate_typed_form(&spec.form));
+    issues.extend(edge_issue(spec.form.border_style, spec.form.scalar("specialEffect"), "form"));
     let mut by_id: HashMap<&str, &FormSpecControl> = HashMap::new();
     for (i, control) in spec.controls.iter().enumerate() {
         let path = format!("controls[{i}]");

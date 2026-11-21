@@ -718,12 +718,6 @@ header {
 .control.disabled .page-content {
   text-shadow: none;
 }
-/* The compiler writes a TabStrip's font as Tahoma 8.25pt unless one is authored. */
-.control.tabstrip {
-  font:
-    8.25pt Tahoma,
-    sans-serif;
-}
 /* MultiPage / TabStrip: raised tabs over a raised body. */
 .multipage::before,
 .tabstrip::before {

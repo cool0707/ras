@@ -43,12 +43,42 @@ pub(crate) const MAX_NESTING_DEPTH: usize = 64;
 const MAX_SITES_PER_FORM: i64 = 65_535;
 const FORM_MASK_FONT: u64 = 1 << 20;
 
+/// `CFE_AUTOCOLOR` of the RichEdit `CHARFORMAT` flags that TextProps uses.
+pub(crate) const CFE_AUTOCOLOR: i64 = 0x4000_0000;
 /// The font effects of the text of a disabled control as Excel stores them: `CFE_DISABLED`
-/// and `CFE_AUTOCOLOR` (the RichEdit `CHARFORMAT` flags that TextProps uses).
-pub(crate) const DISABLED_TEXT_EFFECTS: i64 = 0x4000_2000;
+/// and `CFE_AUTOCOLOR`.
+pub(crate) const DISABLED_TEXT_EFFECTS: i64 = 0x2000 | CFE_AUTOCOLOR;
 /// The classes Excel stores them for: Label, TextBox, CommandButton, ComboBox, CheckBox,
 /// OptionButton and ToggleButton (not a ListBox or TabStrip).
 pub(crate) const DISABLED_TEXT_CLASSES: &[u16] = &[17, 21, 23, 25, 26, 27, 28];
+
+/// The font the VBA editor (in Japanese) stores in the TextProps of every control it makes:
+/// MS UI Gothic 9pt, `SHIFTJIS_CHARSET`, `VARIABLE_PITCH`. Without one MSForms draws the
+/// text in a font of its own.
+pub(crate) const FRESH_FONT_NAME: &str = "MS UI Gothic";
+pub(crate) const FRESH_FONT_HEIGHT: i64 = 180;
+pub(crate) const FRESH_FONT_CHARSET: i64 = 128;
+pub(crate) const FRESH_FONT_PITCH: i64 = 2;
+/// The classes whose caption is centred when made (CommandButton, ToggleButton): Excel
+/// stores the PARAFORMAT center (3) for them.
+pub(crate) const CENTERED_CLASSES: &[u16] = &[17, 28];
+/// CheckBox, OptionButton and ToggleButton: made with the button face and text colors.
+pub(crate) const FACE_COLORED_CLASSES: &[u16] = &[26, 27, 28];
+pub(crate) const BUTTON_FACE: i64 = 0x8000_000F;
+pub(crate) const BUTTON_TEXT: i64 = 0x8000_0012;
+
+/// The TextProps of a new control of `class`, as Excel writes them.
+fn fresh_text_props(class: u16) -> Result<Record> {
+    let mut text_props = Record::new(&TEXT_PROPS);
+    text_props.set("FontName", &PValue::Str(FRESH_FONT_NAME.into()))?;
+    text_props.set_int("FontHeight", FRESH_FONT_HEIGHT)?;
+    text_props.set_int("FontCharSet", FRESH_FONT_CHARSET)?;
+    text_props.set_int("FontPitchAndFamily", FRESH_FONT_PITCH)?;
+    if CENTERED_CLASSES.contains(&class) {
+        text_props.set_int("ParagraphAlign", 3)?;
+    }
+    Ok(text_props)
+}
 
 // ---------------------------------------------------------------------------
 // Record layouts (specs.go)
@@ -612,6 +642,14 @@ impl Record {
 
     fn set_int(&mut self, name: &str, value: i64) -> Result<()> {
         self.set(name, &PValue::Int(value))
+    }
+
+    /// Leaves out a plain data field: it takes the file-format default.
+    fn clear(&mut self, name: &str) {
+        if let Some(field) = self.spec.data.iter().find(|f| f.name == name) {
+            self.mask &= !(1u64 << field.bit);
+            self.values.remove(field.name);
+        }
     }
 
     fn set_size(&mut self, name: &'static str, size: (i32, i32)) {
@@ -1194,7 +1232,12 @@ impl Generation {
                 root.values.insert("BooleanProperties", 0xc004);
             }
         }
-        root.set("Caption", &PValue::Str(caption.to_string()))?;
+        // The caption of the form itself is only in its designer block (VBFrame), as
+        // Excel stores it: in the form record MSForms draws it inside the form, as on
+        // a Frame, and the controls move down.
+        if depth > 0 {
+            root.set("Caption", &PValue::Str(caption.to_string()))?;
+        }
         for (name, value) in properties {
             if skipped_property(name, class) {
                 continue;
@@ -1338,7 +1381,13 @@ impl Generation {
                 }
             }
             if spec.text_props {
-                record.text_props = Some(Box::new(Record::new(&TEXT_PROPS)));
+                record.text_props = Some(Box::new(fresh_text_props(control.class)?));
+            }
+            if FACE_COLORED_CLASSES.contains(&control.class) {
+                // The colors of a new CheckBox, OptionButton or ToggleButton; the record's
+                // own defaults are those of a TextBox (window, windowText).
+                record.set_int("BackColor", BUTTON_FACE)?;
+                record.set_int("ForeColor", BUTTON_TEXT)?;
             }
             if control.class == 18 {
                 record.mask |= 1 << 19;
@@ -1351,9 +1400,6 @@ impl Generation {
                     record.mask |= 1;
                     record.values.insert("ListIndex", -1);
                 }
-                let font = record.text_props.as_mut().expect("TabStrip has TextProps");
-                font.set("FontName", &PValue::Str("Tahoma".into()))?;
-                font.set_int("FontHeight", 165)?;
             }
             for (name, value) in &control.properties {
                 if skipped_property(name, control.class) {
@@ -1576,7 +1622,12 @@ fn edit_text_font(record: &mut Record, font: &FontEdit) -> Result<()> {
         if !(0..=255).contains(&pitch) {
             return invalid("pitchAndFamily は 0〜255 にしてください");
         }
-        record.set_int("FontPitchAndFamily", pitch)?;
+        // 0 (DEFAULT_PITCH, FF_DONTCARE) is the file-format default: none is stored.
+        if pitch == 0 {
+            record.clear("FontPitchAndFamily");
+        } else {
+            record.set_int("FontPitchAndFamily", pitch)?;
+        }
     }
     for (bit, value) in [font.bold, font.italic, font.underline, font.strike_through]
         .into_iter()
@@ -1585,7 +1636,9 @@ fn edit_text_font(record: &mut Record, font: &FontEdit) -> Result<()> {
         let Some(value) = value else { continue };
         let mut flags = record.values.get("FontEffects").copied().unwrap_or(0);
         if value {
-            flags |= 1 << bit;
+            // The VBA editor stores CFE_AUTOCOLOR with the effects it sets; MSForms draws the
+            // text a little differently without it.
+            flags |= 1 << bit | CFE_AUTOCOLOR;
         } else {
             flags &= !(1 << bit);
         }
@@ -1686,11 +1739,15 @@ impl Form {
                 if !(1..=3).contains(value) {
                     return invalid("textAlign は 1〜3 にしてください");
                 }
-                // PARAFORMAT uses right = 2 / center = 3; MSForms the reverse.
+                // PARAFORMAT uses right = 2 / center = 3; MSForms the reverse. Left is the
+                // file-format default, which Excel leaves out.
                 let align = match value {
                     2 => 3,
                     3 => 2,
-                    v => *v,
+                    _ => {
+                        text_props.clear("ParagraphAlign");
+                        return Ok(());
+                    }
                 };
                 text_props.set_int("ParagraphAlign", align)
             }

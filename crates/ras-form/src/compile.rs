@@ -91,6 +91,18 @@ fn defaults(control_type: &str) -> Option<(u16, f64, f64)> {
     })
 }
 
+/// The client size of the form as stored. A whole number of points that is not a whole number
+/// of pixels at 96 DPI (340 pt is 453⅓ px; a multiple of 3 always is) goes to the nearest pixel,
+/// as the VBA editor stores it at 100% scaling. Other sizes, such as those read from a workbook
+/// saved at another scaling (349.2 pt is 582 px at 120 DPI), are kept.
+fn client_points(points: f64) -> f64 {
+    if points.is_finite() && points.fract() == 0.0 {
+        (points / 0.75).round() * 0.75
+    } else {
+        points
+    }
+}
+
 /// Points → HIMETRIC.
 pub(crate) fn himetric(points: f64, property: &str) -> Result<i32, String> {
     if !points.is_finite() || ((property == "width" || property == "height") && points < 0.0) {
@@ -561,6 +573,12 @@ fn control_definition(
     let mut bits = scalars::fresh_bits(class);
     if enabled == Some(false) {
         bits &= !2;
+        if matches!(class, 16 | 47) {
+            // Excel turns the arrows of a disabled SpinButton or ScrollBar off as well;
+            // MSForms draws them black without.
+            item.properties.insert("PrevEnabled".into(), PValue::Int(0));
+            item.properties.insert("NextEnabled".into(), PValue::Int(0));
+        }
     }
     // The plain properties (scalars.rs).
     for p in scalars::of_type(kind) {
@@ -594,6 +612,25 @@ fn control_definition(
             }
             // The form's own (FORM_SCALARS).
             Store::Frame(_) | Store::FieldBits(..) | Store::Extent(..) => {}
+        }
+    }
+    // MSForms draws one edge: a Single border makes the control flat, and an effect takes the
+    // border away (the VBA editor changes the other property when one is set). With both,
+    // the border wins, as the designer draws it (UFV023).
+    if let Some(effect) = scalars::find(kind, "specialEffect") {
+        if control.border_style == Some(1) {
+            if effect.omitted == 0 && effect.fresh.is_none() {
+                // Flat is what a new one has: nothing to store.
+                item.properties.remove("SpecialEffect");
+            } else {
+                item.properties.insert("SpecialEffect".into(), PValue::Int(0));
+            }
+        } else if kind == "Image"
+            && control.border_style.is_none()
+            && item.properties.get("SpecialEffect").is_some_and(|e| *e != PValue::Int(0))
+        {
+            // The only control made with a Single border.
+            item.properties.insert("BorderStyle".into(), PValue::Int(0));
         }
     }
     // A drop-down list cannot be typed into (Editable off).
@@ -832,6 +869,10 @@ fn form_properties(
     for (name, (width, height)) in extents {
         properties.insert(name.to_string(), PValue::Pair(width, height));
     }
+    // One edge, as on a control: a Single border leaves the form flat, its default (UFV023).
+    if form.border_style == Some(1) {
+        properties.remove("SpecialEffect");
+    }
     for (field, property, action) in [("picture", "Picture", &form.picture), ("mouseIcon", "MouseIcon", &form.mouse_icon)] {
         let raw = picture_action(action.as_ref(), field, root, form.back_color.as_ref())
             .map_err(|(path, reason)| fail(INVALID, "", &format!("form.{path}"), reason))?;
@@ -879,15 +920,18 @@ pub(crate) fn compile_new(
         ));
     }
     validate_component_name(form_name, codepage).map_err(|e| fail(INVALID, "", "form.name", e))?;
+    // MSForms places the controls by the ratio of the client area's pixels to its HIMETRIC
+    // size: one that is not whole pixels moves them by a pixel here and there.
+    let client = |points: f64, property: &str| himetric(client_points(points), property);
     let mut root_size = (
-        himetric(240.0, "width").expect("default"),
-        himetric(180.0, "height").expect("default"),
+        client(240.0, "width").expect("default"),
+        client(180.0, "height").expect("default"),
     );
     if let Some(w) = spec.form.width {
-        root_size.0 = himetric(w, "width").map_err(|e| fail(INVALID, "", "form.width", e))?;
+        root_size.0 = client(w, "width").map_err(|e| fail(INVALID, "", "form.width", e))?;
     }
     if let Some(h) = spec.form.height {
-        root_size.1 = himetric(h, "height").map_err(|e| fail(INVALID, "", "form.height", e))?;
+        root_size.1 = client(h, "height").map_err(|e| fail(INVALID, "", "form.height", e))?;
     }
     let caption = spec
         .form

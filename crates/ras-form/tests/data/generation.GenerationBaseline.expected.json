@@ -6,12 +6,6 @@
       {
         "caption": "",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 18.0,
         "id": "control_001",
         "left": 6.009448818897638,
@@ -26,12 +20,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 18.0,
         "id": "control_002",
         "left": 114.00944881889764,
@@ -47,12 +35,6 @@
       {
         "caption": "",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 24.00944881889764,
         "id": "control_003",
         "left": 6.009448818897638,
@@ -66,22 +48,8 @@
         "zIndex": 2
       },
       {
-        "backColor": {
-          "kind": "system",
-          "value": "buttonFace"
-        },
         "caption": "",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
-        "foreColor": {
-          "kind": "system",
-          "value": "buttonText"
-        },
         "height": 18.0,
         "id": "control_004",
         "left": 114.00944881889764,
@@ -96,22 +64,8 @@
         "zIndex": 3
       },
       {
-        "backColor": {
-          "kind": "system",
-          "value": "buttonFace"
-        },
         "caption": "",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
-        "foreColor": {
-          "kind": "system",
-          "value": "buttonText"
-        },
         "height": 18.0,
         "id": "control_005",
         "left": 6.009448818897638,
@@ -126,29 +80,14 @@
         "zIndex": 4
       },
       {
-        "backColor": {
-          "kind": "system",
-          "value": "buttonFace"
-        },
         "caption": "",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
-        "foreColor": {
-          "kind": "system",
-          "value": "buttonText"
-        },
         "height": 18.0,
         "id": "control_006",
         "left": 114.00944881889764,
         "name": "ToggleButtonMain",
         "progId": "Forms.ToggleButton.1",
         "tabIndex": 5,
-        "textAlign": 2,
         "top": 54.0,
         "type": "ToggleButton",
         "value": "False",
@@ -158,12 +97,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 18.0,
         "id": "control_007",
         "left": 6.009448818897638,
@@ -178,12 +111,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 72.0,
         "id": "control_008",
         "left": 6.009448818897638,

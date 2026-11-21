@@ -645,11 +645,6 @@ body {
 }
 
 /* MultiPage / TabStrip: raised tabs over a raised body. */
-.ctl-tabstrip {
-	font-family: Tahoma, sans-serif;
-	font-size: 8.25pt;
-}
-
 .ctl-multipage::before,
 .ctl-tabstrip::before {
 	content: "";

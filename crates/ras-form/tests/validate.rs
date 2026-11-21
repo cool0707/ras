@@ -189,3 +189,59 @@ fn an_edit_field_lower_than_its_font_is_warned_about() {
     assert!(warnings(&format!(r#"{{"id":"l","name":"l","type":"Label","height":5,{meiryo}}}"#)).is_empty());
     assert!(warnings(r#"{"id":"t","name":"t","type":"TextBox","height":5,"properties":{"multiLine":true}}"#).is_empty());
 }
+
+#[test]
+fn a_single_border_with_an_effect_is_warned_about_and_written_flat() {
+    let parsed = |form: &str, control: &str| ras_form::parse(&doc(form, &format!("[{control}]")));
+    let warnings = |form: &str, control: &str| -> Vec<String> {
+        parsed(form, control)
+            .issues
+            .into_iter()
+            .filter(|i| i.severity == ras_form::Severity::Warning && i.code == "UFV023")
+            .map(|i| i.field)
+            .collect()
+    };
+    let both = r#"{"id":"t","name":"t","type":"TextBox","borderStyle":1,"specialEffect":3}"#;
+    assert_eq!(warnings(r#"{"name":"F"}"#, both), ["controls[0].specialEffect"]);
+    assert_eq!(
+        warnings(r#"{"name":"F","borderStyle":1,"specialEffect":2}"#, r#"{"id":"l","name":"l","type":"Label"}"#),
+        ["form.specialEffect"]
+    );
+    // One of them, or a flat effect: no warning.
+    assert!(warnings(r#"{"name":"F"}"#, r#"{"id":"t","name":"t","type":"TextBox","borderStyle":1}"#).is_empty());
+    assert!(warnings(r#"{"name":"F"}"#, r#"{"id":"t","name":"t","type":"TextBox","borderStyle":1,"specialEffect":0}"#).is_empty());
+
+    // Written with one edge, as the VBA editor leaves it: the border wins.
+    let read_back = |control: &str| -> ras_form::FormSpecControl {
+        let spec = parsed(r#"{"name":"F"}"#, control).spec.unwrap();
+        let designer = ras_form::compile(&spec, 932).unwrap();
+        let back = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap().spec;
+        back.controls.into_iter().next().unwrap()
+    };
+    let effect = |c: &ras_form::FormSpecControl| c.scalar("specialEffect").and_then(|v| v.as_i64());
+    for control in [both, r#"{"id":"t","name":"t","type":"TextBox","borderStyle":1}"#, r#"{"id":"f","name":"f","type":"Frame","borderStyle":1}"#] {
+        let back = read_back(control);
+        assert_eq!((back.border_style, effect(&back)), (Some(1), Some(0)), "{control}");
+    }
+    // An Image is made with a Single border, which an effect takes away.
+    let back = read_back(r#"{"id":"i","name":"i","type":"Image","specialEffect":2}"#);
+    assert_eq!((back.border_style, effect(&back)), (Some(0), Some(2)));
+}
+
+#[test]
+fn a_form_size_in_whole_points_is_stored_in_whole_pixels() {
+    let read_back = |form: &str| -> (f64, f64) {
+        let spec = ras_form::parse(&doc(form, "[]")).spec.unwrap();
+        let designer = ras_form::compile(&spec, 932).unwrap();
+        let back = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap().spec.form;
+        (back.width.unwrap(), back.height.unwrap())
+    };
+    let pixels = |points: f64| points / 0.75;
+    // 340 x 250 pt is 453⅓ x 333⅓ px at 96 DPI: the VBA editor keeps 453 x 333 px.
+    let (width, height) = read_back(r#"{"name":"F","width":340,"height":250}"#);
+    assert!((pixels(width) - 453.0).abs() < 0.02 && (pixels(height) - 333.0).abs() < 0.02, "{width} x {height}");
+    // A multiple of 3 pt is whole pixels already; a size read from a workbook saved at
+    // 120 DPI (349.2 pt = 582 px) is kept.
+    let (width, height) = read_back(r#"{"name":"F","width":330,"height":349.2}"#);
+    assert!((width - 330.0).abs() < 0.02 && (height - 349.2).abs() < 0.02, "{width} x {height}");
+}

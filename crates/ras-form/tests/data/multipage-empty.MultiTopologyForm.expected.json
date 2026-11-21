@@ -5,12 +5,6 @@
     "controls": [
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 204.00944881889762,
         "id": "control_001",
         "left": 11.990551181102362,
@@ -26,12 +20,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 47.99055118110236,
         "id": "control_002",
         "left": 11.990551181102362,
