@@ -20,7 +20,7 @@ use napi::{Error, Result};
 use napi_derive::napi;
 use serde_json::{Value as Json, json};
 
-use ras_workbook::book::{self, Dir, MAX_COLS, MAX_ROWS, Read, Val};
+use ras_workbook::book::{self, Dir, FilterCriterion, MAX_COLS, MAX_ROWS, Paste, PasteOp, PasteWhat, Read, SortKey, Special, Val};
 
 fn err(msg: impl Into<String>) -> Error {
     Error::from_reason(msg.into())
@@ -95,6 +95,39 @@ fn value_json(v: &Value) -> Json {
         ),
         _ => to_json(&book::val_of(v, false)),
     }
+}
+
+fn areas(list: &[RangeRef]) -> Json {
+    Json::Array(list.iter().map(|r| bounds(*r)).collect())
+}
+
+/// `[top, left, bottom, right]` (and a sheet before them, with `sheet`), or null.
+fn range_json(v: &Json, sheet: bool) -> Result<Option<(usize, RangeRef)>> {
+    let Json::Array(a) = v else { return Ok(None) };
+    let n: Vec<f64> = a.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect();
+    let (si, n) = if sheet { (n.first().copied().unwrap_or(0.0) as usize, &n[1.min(n.len())..]) } else { (0, &n[..]) };
+    if n.len() != 4 {
+        return Err(err("範囲の指定が正しくありません"));
+    }
+    Ok(Some((si, range(n[0], n[1], n[2], n[3])?)))
+}
+
+/// What a column of a filter shows: `{ kind: "values", values, blanks }`,
+/// `{ kind: "custom", a: [op, value], b: [op, value] | null, and }`,
+/// `{ kind: "top", bottom, percent, count }`.
+fn criterion(v: &Json) -> Result<Option<FilterCriterion>> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    let text = |x: &Json| x.as_str().map(str::to_string).unwrap_or_default();
+    let flag = |k: &str| v.get(k).and_then(Json::as_bool).unwrap_or(false);
+    let test = |x: &Json| -> Option<(String, String)> { x.as_array().filter(|a| a.len() == 2).map(|a| (text(&a[0]), text(&a[1]))) };
+    Ok(Some(match v.get("kind").and_then(Json::as_str) {
+        Some("values") => FilterCriterion::Values { values: v.get("values").and_then(Json::as_array).map(|a| a.iter().map(text).collect()).unwrap_or_default(), blanks: flag("blanks") },
+        Some("custom") => FilterCriterion::Custom { a: v.get("a").and_then(test).ok_or_else(|| err("フィルターの条件が正しくありません"))?, b: v.get("b").and_then(test), and: flag("and") },
+        Some("top") => FilterCriterion::Top10 { bottom: flag("bottom"), percent: flag("percent"), count: v.get("count").and_then(Json::as_u64).unwrap_or(10) as u32 },
+        _ => return Err(err("フィルターの条件が正しくありません")),
+    }))
 }
 
 fn what(s: &str) -> Result<Read> {
@@ -215,6 +248,231 @@ impl JsBook {
         let i = sheet(&self.inner, i)?;
         let to = sheet(&self.inner, to)?;
         self.inner.copy(i, range(r1, c1, r2, c2)?, to, cell(row, col)?).map_err(err)
+    }
+
+    /// Pastes a range of sheet `i` at (`row`, `col`) of sheet `to`, as `Range.PasteSpecial` does:
+    /// `what` is `XlPasteType`, `op` `XlPasteSpecialOperation`.
+    #[napi]
+    pub fn paste(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, to: u32, row: f64, col: f64, what_: i32, op: i32, skip_blanks: bool, transpose: bool) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        let to = sheet(&self.inner, to)?;
+        let what = PasteWhat::of(what_).ok_or_else(|| err("この形式の貼り付け（コメント・入力規則など）には対応していません"))?;
+        let p = Paste { what, op: PasteOp::of(op), skip_blanks, transpose };
+        self.inner.paste(i, range(r1, c1, r2, c2)?, to, cell(row, col)?, &p).map_err(err)
+    }
+
+    /// `Range.Cut Destination`: moves a range of sheet `i` to (`row`, `col`) of sheet `to`.
+    #[napi]
+    pub fn move_cells(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, to: u32, row: f64, col: f64) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        let to = sheet(&self.inner, to)?;
+        self.inner.move_cells(i, range(r1, c1, r2, c2)?, to, cell(row, col)?).map_err(err)
+    }
+
+    /// `Range.Insert`: `right` shifts the cells right (down otherwise); `from_after` formats the
+    /// new cells as the ones below or to the right.
+    #[napi]
+    pub fn insert_cells(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, right: bool, from_after: bool) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        self.inner.insert_cells(i, range(r1, c1, r2, c2)?, right, from_after).map_err(err)
+    }
+
+    /// `Range.Delete`: `left` shifts the cells left (up otherwise).
+    #[napi]
+    pub fn delete_cells(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, left: bool) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        self.inner.delete_cells(i, range(r1, c1, r2, c2)?, left).map_err(err)
+    }
+
+    /// `Range.Sort` of a range without its headings: `keys` is `[[column, descending], ...]`
+    /// (the row, when `across` sorts columns).
+    #[napi]
+    pub fn sort(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, keys: Json, across: bool, match_case: bool) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        let keys: Vec<SortKey> = keys
+            .as_array()
+            .map(|a| a.iter().filter_map(|k| Some(SortKey { index: (k.get(0)?.as_f64()? as u32).checked_sub(1)?, descending: k.get(1)?.as_bool()? })).collect())
+            .unwrap_or_default();
+        self.inner.sort(i, range(r1, c1, r2, c2)?, &keys, across, match_case).map_err(err)
+    }
+
+    /// Whether the first row of a range looks like headings (`Header:=xlGuess`).
+    #[napi]
+    pub fn guess_header(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64) -> Result<bool> {
+        let i = sheet(&self.inner, i)?;
+        Ok(self.inner.guess_header(i, range(r1, c1, r2, c2)?))
+    }
+
+    /// `Range.RemoveDuplicates` of a range without its headings, by the columns `columns` (of
+    /// the sheet). Returns how many rows went.
+    #[napi]
+    pub fn remove_duplicates(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, columns: Vec<u32>) -> Result<u32> {
+        let i = sheet(&self.inner, i)?;
+        let columns: Vec<u32> = columns.into_iter().filter_map(|c| c.checked_sub(1)).collect();
+        self.inner.remove_duplicates(i, range(r1, c1, r2, c2)?, &columns).map_err(err)
+    }
+
+    /// The filter of a sheet: `{ range: [top, left, bottom, right], fields: [...] }` (the fields
+    /// it filters by, counted from 1), or null.
+    #[napi]
+    pub fn auto_filter(&self, i: u32) -> Result<Json> {
+        let i = sheet(&self.inner, i)?;
+        Ok(match self.inner.auto_filter(i) {
+            Some((r, fields)) => json!({ "range": bounds(r), "fields": fields.iter().map(|f| f + 1).collect::<Vec<_>>() }),
+            None => Json::Null,
+        })
+    }
+
+    /// Puts the filter of a sheet on a range (`[top, left, bottom, right]`), or removes it (null).
+    #[napi]
+    pub fn set_auto_filter(&mut self, i: u32, r: Json) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        let r = range_json(&r, false)?.map(|(_, r)| r);
+        self.inner.set_auto_filter(i, r).map_err(err)
+    }
+
+    /// Filters by field `field` (from 1) of the filter, or no longer (null).
+    #[napi]
+    pub fn set_filter(&mut self, i: u32, field: u32, c: Json) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        let field = field.checked_sub(1).ok_or_else(|| err("AutoFilter の Field が正しくありません。"))?;
+        self.inner.set_filter(i, field, criterion(&c)?).map_err(err)
+    }
+
+    #[napi]
+    pub fn filter_mode(&self, i: u32) -> Result<bool> {
+        let i = sheet(&self.inner, i)?;
+        Ok(self.inner.filter_mode(i))
+    }
+
+    #[napi]
+    pub fn show_all(&mut self, i: u32) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        self.inner.show_all(i).map_err(err)
+    }
+
+    /// `Range.AdvancedFilter`: `criteria` and `copy_to` are `[sheet, top, left, bottom, right]` or null.
+    #[napi]
+    pub fn advanced_filter(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, criteria: Json, copy_to: Json, unique: bool) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        self.inner.advanced_filter(i, range(r1, c1, r2, c2)?, range_json(&criteria, true)?, range_json(&copy_to, true)?, unique).map_err(err)
+    }
+
+    /// Hides or shows the rows (`columns`: the columns) `lo` to `hi`.
+    #[napi]
+    pub fn set_hidden(&mut self, i: u32, columns: bool, lo: u32, hi: u32, hidden: bool) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        self.inner.set_hidden(i, columns, lo.saturating_sub(1), hi.saturating_sub(1), hidden).map_err(err)
+    }
+
+    /// Whether the rows (columns) `lo` to `hi` are hidden: null when only some are.
+    #[napi]
+    pub fn hidden(&self, i: u32, columns: bool, lo: u32, hi: u32) -> Result<Option<bool>> {
+        let i = sheet(&self.inner, i)?;
+        Ok(self.inner.hidden(i, columns, lo.saturating_sub(1), hi.saturating_sub(1)))
+    }
+
+    /// The cells of a range that are not hidden, as `[[top, left, bottom, right], ...]`.
+    #[napi]
+    pub fn visible_areas(&self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64) -> Result<Json> {
+        let i = sheet(&self.inner, i)?;
+        Ok(areas(&self.inner.visible_areas(i, range(r1, c1, r2, c2)?)))
+    }
+
+    /// `Range.SpecialCells(type, value)`: the areas found (none: an empty array).
+    #[napi]
+    pub fn special_cells(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, type_: i32, value: i32) -> Result<Json> {
+        let i = sheet(&self.inner, i)?;
+        let mask = if value <= 0 { 23 } else { value as u32 };
+        let what = match type_ {
+            2 => Special::Constants(mask),
+            -4123 => Special::Formulas(mask),
+            4 => Special::Blanks,
+            11 => Special::LastCell,
+            12 => Special::Visible,
+            _ => return Err(err("この種類の SpecialCells には対応していません")),
+        };
+        Ok(areas(&self.inner.special_cells(i, range(r1, c1, r2, c2)?, what).map_err(err)?))
+    }
+
+    /// A format of the cells of a range (`font.bold`, `interior.color`, `borders.9.linestyle`,
+    /// `columnwidth`, ...): null when the cells differ.
+    #[napi]
+    pub fn format(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, prop: String) -> Result<Json> {
+        let i = sheet(&self.inner, i)?;
+        Ok(self.inner.format_of(i, range(r1, c1, r2, c2)?, &prop).map_err(err)?.as_ref().map(to_json).unwrap_or(Json::Null))
+    }
+
+    #[napi]
+    pub fn set_format(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, prop: String, value: Json) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        self.inner.set_format(i, range(r1, c1, r2, c2)?, &prop, &from_json(&value)?).map_err(err)
+    }
+
+    #[napi]
+    pub fn clear_formats(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        self.inner.clear_formats(i, range(r1, c1, r2, c2)?).map_err(err)
+    }
+
+    /// `Range.Merge` (`across`: each row on its own).
+    #[napi]
+    pub fn merge(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64, across: bool) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        self.inner.merge_cells(i, range(r1, c1, r2, c2)?, across).map_err(err)
+    }
+
+    /// `Range.MergeArea` of a cell.
+    #[napi]
+    pub fn merge_area(&self, i: u32, row: f64, col: f64) -> Result<Json> {
+        let i = sheet(&self.inner, i)?;
+        Ok(bounds(self.inner.merge_area(i, cell(row, col)?)))
+    }
+
+    /// The colour of a sheet's tab (as VBA numbers colours), or null.
+    #[napi]
+    pub fn tab_color(&self, i: u32) -> Result<Option<f64>> {
+        let i = sheet(&self.inner, i)?;
+        Ok(self.inner.tab_color(i))
+    }
+
+    #[napi]
+    pub fn set_tab_color(&mut self, i: u32, color: Option<f64>) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        self.inner.set_tab_color(i, color);
+        Ok(())
+    }
+
+    /// `Worksheet.Copy`: a copy of sheet `i` before position `at`; returns its index.
+    #[napi]
+    pub fn copy_sheet(&mut self, i: u32, at: u32) -> Result<u32> {
+        let i = sheet(&self.inner, i)?;
+        self.inner.copy_sheet(i, at as usize).map(|n| n as u32).map_err(err)
+    }
+
+    /// `Application.Calculation`: manual stops formulas from following what is written.
+    #[napi]
+    pub fn set_manual(&mut self, manual: bool) {
+        self.inner.set_manual(manual);
+    }
+
+    /// Whether the workbook was saved with manual calculation.
+    #[napi]
+    pub fn saved_manual(&self) -> bool {
+        self.inner.saved_manual()
+    }
+
+    /// `Application.Calculate`: the formulas that wait to be calculated.
+    #[napi]
+    pub fn recalculate(&mut self) {
+        self.inner.recalculate();
+    }
+
+    /// Calculates what waits (unless calculation is manual) and returns the sheets whose
+    /// formulas were calculated, for the `Calculate` events.
+    #[napi]
+    pub fn calculated_sheets(&mut self) -> Vec<u32> {
+        self.inner.calculated_sheets().into_iter().map(|i| i as u32).collect()
     }
 
     /// Whether the engine has a worksheet function.

@@ -10,8 +10,11 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-# The fork xljs uses (its excel-compat branch: dynamic-array formulas, calculation properties, ...).
-umya-spreadsheet = { git = "https://github.com/cool0707/umya-spreadsheet", rev = "8bebb052f9345cb55a79e47586c9974a413ec514" }
+# The fork xljs uses (its excel-compat branch: dynamic-array formulas, calculation properties, ...),
+# with what the stand-in needs on top of it and xljs has yet to take in: cells inserted and
+# removed within a band of rows or columns (`LineEdit::within`), and the criteria of filters.
+# These are on the fork's branch ccr-271d854d-h93j05 until they are merged into excel-compat.
+umya-spreadsheet = { git = "https://github.com/cool0707/umya-spreadsheet", rev = "0f60b327184b54d87c227e3d481a47d47dd39edb" }
 # The formula engine of xljs (its vendor/gridcraft: GridCraft's engine with xljs's changes for
 # Japanese Excel), taken from the xljs repository at a fixed commit.
 gridcraft-core = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }

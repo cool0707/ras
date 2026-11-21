@@ -474,7 +474,7 @@ impl<'p> Gen<'p> {
             for ev in &d.attrs.on_events {
                 match &md.form {
                     Some(form) => events.push(self.form_handler(form, ev, f)),
-                    None => events.push(format!("{{ target: {}, event: {}, fn: {} }}", js_str(&ev.target), js_str(&ev.event), js_ident(&d.name))),
+                    None => events.push(self.document_handler(ev, f)),
                 }
             }
             if md.form.is_some() {
@@ -516,6 +516,23 @@ impl<'p> Gen<'p> {
         self.w(format!("    macros: [{macros}],"));
         self.w(format!("    events: [{}],", events.join(", ")));
         self.w("});");
+    }
+
+    /// The entry of `$rt.module` for an `@on` handler of the workbook or a sheet (spec §12.2).
+    /// The stand-in for Excel calls it with the arguments of the event as `{ v }` cells, as the
+    /// forms do: a `byref` parameter (`cancel`) gets the cell, the others its value. A handler
+    /// takes as many of the event's arguments as it declares parameters.
+    fn document_handler(&self, ev: &OnEvent, f: FnId) -> String {
+        let d = &self.prog.fns[f];
+        let args: Vec<String> = d.params.iter().enumerate().map(|(i, p)| if p.mode == PassMode::ByRef { format!("$a[{i}]") } else { format!("$a[{i}].v") }).collect();
+        format!(
+            "{{ target: {}, event: {}, reentrant: {}, fn: ($a) => {}({}) }}",
+            js_str(&ev.target),
+            js_str(&ev.event),
+            ev.reentrant,
+            js_ident(&d.name),
+            args.join(", ")
+        )
     }
 
     /// The entry of `$rt.form` for an `@on` handler of a form (spec §14.11.2). The run time

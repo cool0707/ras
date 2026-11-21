@@ -6,11 +6,12 @@
 // Excel object model on top of it: `Application`, `Workbooks`, `Workbook`, `Worksheets`,
 // `Worksheet`, `Range`, `Names`, `WorksheetFunction`.
 //
-// Only what changes cells is followed. Formatting (fonts, colours, borders, widths) is accepted
-// and remembered while the program runs, but not drawn or saved; what needs Excel itself
-// (hand-written VBA, the clipboard, sorting and filtering, charts, events) raises an error that
-// says so. The workbooks the program changed are saved under build/debug/workbooks/ when it ends;
-// the project's own workbook is never overwritten.
+// What changes the workbook is followed: cells and formulas, cells inserted and deleted, cut,
+// copied and pasted, sorted and filtered, and the formats (kept in the workbook and saved with
+// it; nothing is drawn). The events of the project's workbook and sheets are raised for what the
+// program does (`@on`). What needs Excel itself (hand-written VBA, dialogs, the clipboard of
+// other applications) raises an error that says so. The workbooks the program changed are saved
+// under build/debug/workbooks/ when it ends; the project's own workbook is never overwritten.
 "use strict";
 
 const fs = require("fs");
@@ -22,9 +23,20 @@ const XL = {
     up: -4162, down: -4121, toLeft: -4159, toRight: -4161,
     a1: 1, r1c1: -4150,
     values: -4163, formulas: -4123, whole: 1, part: 2, byRows: 1, byColumns: 2, next: 1, previous: 2,
-    automatic: -4105,
+    automatic: -4105, manual: -4135, none: -4142,
+    pasteAll: -4104, pasteFormats: -4122, pasteColumnWidths: 8,
+    descending: 2, guess: 0, yes: 1, leftToRight: 2,
+    filterCopy: 2, filterValues: 7,
+    cellTypeVisible: 12, cellTypeLastCell: 11,
 };
 const ERROR_LITERALS = { 2000: "#NULL!", 2007: "#DIV/0!", 2015: "#VALUE!", 2023: "#REF!", 2029: "#NAME?", 2036: "#NUM!", 2042: "#N/A", 2043: "#GETTING_DATA", 2045: "#SPILL!", 2047: "#BLOCKED!", 2050: "#CALC!" };
+const NO_AREAS = Object.freeze([]);
+/** The formats kept in the workbook (the others are remembered while the program runs). */
+const FONT = new Set(["name", "size", "bold", "italic", "underline", "strikethrough", "color", "colorindex", "superscript", "subscript"]);
+const INTERIOR = new Set(["color", "colorindex", "pattern", "patterncolor"]);
+const BORDER = new Set(["linestyle", "weight", "color", "colorindex"]);
+const REMEMBERED = { themecolor: null, tintandshade: 0, themefont: 0, fontstyle: "標準", patterncolorindex: -4105, patterntintandshade: 0, style: "Normal" };
+const WORKBOOK = ["Workbook", "ThisWorkbook"];
 
 module.exports = function createExcel(rt, addon, options) {
     const { RasError, RDate, CVErr } = rt;
@@ -103,37 +115,234 @@ module.exports = function createExcel(rt, addon, options) {
         return String(a).toLowerCase() === String(b).toLowerCase();
     }
 
-    // ------------------------------------------------------------------------ formatting the program sets
+    function flag(v, initial) {
+        return opt(v) === undefined ? initial : rt.cbool(v);
+    }
+    function number(v, initial) {
+        return opt(v) === undefined ? initial : rt.cnum(v);
+    }
+
+    // ------------------------------------------------------------------------ events (spec §12.2)
 
     /**
-     * A formatting object (`Font`, `Interior`, `Borders` ...): accepts every property, and gives
-     * back what was set for the same range while the program runs. Nothing of it is drawn or saved.
+     * The `@on` handlers of the project, as the modules registered them. Events are raised for
+     * what the program does to the project's workbook, in the order Excel raises them; a handler
+     * is not entered again while it runs (unless `reentrant`), and an error it does not catch is
+     * reported and does not stop the program, as in the VBA build (`RAS_EventError`).
      */
-    function formatting(store, key, typeName, defaults) {
+    const handlers = typeof options.handlers === "function" ? options.handlers : () => [];
+    const running = new Set();
+    function listens(...events) {
+        return handlers().some((h) => events.some((e) => sameName(h.event, e)));
+    }
+    /** Raises an event; returns its arguments as `{ v }` cells (a handler may set `cancel`). */
+    function raise(targets, event, args) {
+        const cells = args.map((v) => ({ v }));
+        if (!app.$state.EnableEvents) return cells;
+        for (const h of handlers()) {
+            if (!sameName(h.event, event) || !targets.some((t) => sameName(h.target, t))) continue;
+            if (!h.reentrant && running.has(h)) continue;
+            running.add(h);
+            try {
+                h.fn(cells);
+            } catch (err) {
+                const e = rt.caught(err);
+                const at = e.rasFile ? `（${e.rasFile}:${e.rasLine}）` : "";
+                console.error(`[ras] ${h.target}.${h.event}: 実行時エラー ${e.code}: ${e.description}${at}`);
+            } finally {
+                running.delete(h);
+            }
+        }
+        return cells;
+    }
+    /** An event of a sheet of the project's workbook, and the workbook's event for it. */
+    function sheetEvent(sheet, event, args) {
+        if (!sheet.$wb.$project || sheet.$wb.$closed) return;
+        raise([sheet.CodeName], event, args);
+        raise(WORKBOOK, `Sheet${event}`, [sheet, ...args]);
+    }
+    function bookEvent(wb, event, args) {
+        return wb.$project ? raise(WORKBOOK, event, args) : args.map((v) => ({ v }));
+    }
+    /** `Calculate` for the sheets whose formulas the last change had calculated. */
+    function calculated(wb, always) {
+        if (!wb.$project || wb.$closed || !listens("Calculate", "SheetCalculate")) {
+            if (always) book(() => wb.$book.recalculate());
+            return;
+        }
+        if (!always && app.$state.Calculation === XL.manual) return;
+        for (const i of book(() => wb.$book.calculatedSheets())) {
+            const sheet = wb.$sheets[i];
+            if (sheet === undefined) continue;
+            raise([sheet.CodeName], "Calculate", []);
+            raise(WORKBOOK, "SheetCalculate", [sheet]);
+        }
+    }
+    /** Cells of a range changed: `Calculate`, then `Change`. */
+    function changed(range) {
+        calculated(range.$sheet.$wb, false);
+        sheetEvent(range.$sheet, "Change", [range]);
+    }
+
+    // ------------------------------------------------------------------------ formats
+
+    /** The formats of a range that are only remembered while the program runs. */
+    function remembered(store, key) {
         let values = store.get(key);
         if (values === undefined) {
             values = new Map();
             store.set(key, values);
         }
-        const target = { $typeName: typeName };
-        return new Proxy(target, {
+        return values;
+    }
+    /**
+     * A formatting object (`Font`, `Interior`, `Border`): the properties in `known` are the
+     * workbook's (`prefix.name` of the addon); every other one is accepted, and gives back what
+     * was set for the same range while the program runs.
+     */
+    function formatObject(range, prefix, known, typeName, members) {
+        const memory = remembered(range.$sheet.$formats, `${range.$key}/${prefix}`);
+        return new Proxy({ $typeName: typeName, ...members }, {
             has: () => true,
             get(t, prop) {
                 if (typeof prop === "symbol" || prop in t) return t[prop];
                 const k = String(prop).toLowerCase();
-                if (values.has(k)) return values.get(k);
-                if (defaults && k in defaults) return defaults[k];
-                // Borders(xlEdgeBottom) and the like: the same object again.
-                return (..._args) => formatting(store, `${key}/${k}`, typeName, defaults);
+                if (known.has(k)) return range.$format(`${prefix}.${k}`);
+                if (memory.has(k)) return memory.get(k);
+                return k in REMEMBERED ? REMEMBERED[k] : null;
             },
             set(t, prop, v) {
-                values.set(String(prop).toLowerCase(), v);
+                const k = String(prop).toLowerCase();
+                if (known.has(k)) range.$setFormat(`${prefix}.${k}`, v);
+                else memory.set(k, v);
                 return true;
             },
         });
     }
-    const FONT_DEFAULTS = { name: "游ゴシック", size: 11, bold: false, italic: false, underline: -4142, color: 0, colorindex: 1, strikethrough: false };
-    const INTERIOR_DEFAULTS = { color: 16777215, colorindex: -4142, pattern: -4142 };
+    function borderObject(range, index) {
+        return formatObject(range, `borders.${index}`, BORDER, "Border", {});
+    }
+
+    // ------------------------------------------------------------------------ the clipboard
+
+    /**
+     * What `Copy` and `Cut` without a destination took: the range itself, as in Excel (what is
+     * pasted is what the cells have then). Only cells of the workbooks of this run: nothing
+     * comes from or goes to other applications. As in Excel, changing cells or their formats
+     * ends the cut or copy (`CutCopyMode` is 0 again, and `PasteSpecial` fails); pasting what
+     * was copied does not.
+     */
+    let clip = null;
+
+    /** The rows of a range a filter leaves, as ranges of its columns (Excel copies only those). */
+    function shownRows(r) {
+        if (!book(() => r.$book.filterMode(r.$i))) return [r];
+        const seen = new Set();
+        const out = [];
+        for (const [r1, , r2] of book(() => r.$book.visibleAreas(r.$i, r.$r1, 1, r.$r2, MAX_COLS))) {
+            if (seen.has(r1)) continue;
+            seen.add(r1);
+            out.push(r.$at(r1, r.$c1, r2, r.$c2));
+        }
+        return out.length ? out : [r];
+    }
+    /** The areas of a copied range with their places in the block that is pasted. */
+    function pieces(src) {
+        let list = src.$list();
+        if (list.length === 1) list = shownRows(list[0]);
+        const first = list[0];
+        if (list.length === 1) return { parts: [{ r: first, dr: 0, dc: 0 }], h: first.$height, w: first.$width };
+        const down = list.every((a) => a.$c1 === first.$c1 && a.$c2 === first.$c2);
+        const across = list.every((a) => a.$r1 === first.$r1 && a.$r2 === first.$r2);
+        if (!down && !across) fail("そのコマンドは複数の選択範囲に対して実行できません。");
+        const parts = [];
+        let at = 0;
+        for (const r of list.slice().sort((a, b) => (down ? a.$r1 - b.$r1 : a.$c1 - b.$c1))) {
+            parts.push(down ? { r, dr: at, dc: 0 } : { r, dr: 0, dc: at });
+            at += down ? r.$height : r.$width;
+        }
+        return down ? { parts, h: at, w: first.$width } : { parts, h: first.$height, w: at };
+    }
+    /** Cells of another workbook: their values or formulas, and their number formats. */
+    function pasteAcross(part, sheet, row, col, o) {
+        if (o.transpose || o.op !== XL.none) fail("別のブックへの、行と列の入れ替えや演算を伴う貼り付けには対応していません");
+        if (o.what === XL.pasteFormats || o.what === XL.pasteColumnWidths) return;
+        const target = new Range(sheet, row, col, row + part.$height - 1, col + part.$width - 1);
+        const values = o.what === XL.values || o.what === 12;
+        const data = toBook(values ? part.$get("Value") : part.$get("FormulaR1C1"));
+        const b = target.$book;
+        if (values) book(() => b.setValues(target.$i, ...target.$bounds(), data));
+        else book(() => b.setFormulasR1C1(target.$i, ...target.$bounds(), data));
+        if ((o.what === XL.pasteAll || o.what === 11 || o.what === 12) && part.Count <= 10000) {
+            part.$get("NumberFormat").forEach((line, i) => line.forEach((code, j) => {
+                if (code !== "General") book(() => b.setNumberFormat(target.$i, row + i, col + j, row + i, col + j, code));
+            }));
+        }
+    }
+    /** Pastes `src` on `dest` as Excel lays it out; returns the cells pasted on. */
+    function pasteCells(src, dest, o) {
+        const { parts, h, w } = pieces(src);
+        const [bh, bw] = o.transpose ? [w, h] : [h, w];
+        const d = dest.$single();
+        // A destination that is a multiple of what is pasted is filled with copies of it.
+        const tiled = d.$height % bh === 0 && d.$width % bw === 0;
+        const [down, across] = tiled ? [d.$height / bh, d.$width / bw] : [1, 1];
+        if (d.$r1 + down * bh - 1 > MAX_ROWS || d.$c1 + across * bw - 1 > MAX_COLS) fail("貼り付け先がシートの外です");
+        const same = src.$sheet.$wb === d.$sheet.$wb;
+        d.$sheet.$wb.$changed();
+        for (let ty = 0; ty < down; ty++) {
+            for (let tx = 0; tx < across; tx++) {
+                for (const p of parts) {
+                    const [dr, dc] = o.transpose ? [p.dc, p.dr] : [p.dr, p.dc];
+                    const row = d.$r1 + ty * bh + dr;
+                    const col = d.$c1 + tx * bw + dc;
+                    if (same) book(() => d.$book.paste(p.r.$i, ...p.r.$bounds(), d.$i, row, col, o.what, o.op, o.skipBlanks, o.transpose));
+                    else pasteAcross(p.r, d.$sheet, row, col, o);
+                }
+            }
+        }
+        const pasted = d.$at(d.$r1, d.$c1, d.$r1 + down * bh - 1, d.$c1 + across * bw - 1);
+        changed(pasted);
+        return pasted;
+    }
+    /** Moves cut cells to `dest`; returns where they are. */
+    function moveCells(src, dest) {
+        if (src.$rest.length) fail("そのコマンドは複数の選択範囲に対して実行できません。");
+        const d = dest.$single();
+        const moved = d.$at(d.$r1, d.$c1, d.$r1 + src.$height - 1, d.$c1 + src.$width - 1);
+        src.$sheet.$wb.$changed();
+        d.$sheet.$wb.$changed();
+        if (src.$sheet.$wb === d.$sheet.$wb) {
+            book(() => d.$book.moveCells(src.$i, ...src.$bounds(), d.$i, d.$r1, d.$c1));
+        } else {
+            pasteAcross(src, d.$sheet, d.$r1, d.$c1, PASTE_ALL);
+            book(() => src.$book.clear(src.$i, ...src.$bounds(), true));
+        }
+        if (src.$sheet !== moved.$sheet) changed(src);
+        changed(moved);
+        return moved;
+    }
+    const PASTE_ALL = Object.freeze({ what: XL.pasteAll, op: XL.none, skipBlanks: false, transpose: false });
+
+    /** Whether cells inserted at (or deleted from) a range move sideways when the program does not say. */
+    function sideways(r, shift, right, down) {
+        const s = opt(shift);
+        if (s !== undefined) {
+            const n = rt.cnum(s);
+            if (n !== right && n !== down) fail("Shift の値が正しくありません");
+            return n === right;
+        }
+        if (r.$isRows()) return false;
+        if (r.$isCols()) return true;
+        // As Excel decides by the shape of the range: a tall one moves the cells sideways.
+        return r.$height > r.$width;
+    }
+    /** A comparison of a filter as the addon takes it: `">=10"` is `[">=", "10"]`. */
+    function comparison(v) {
+        const text = rt.cstr(v);
+        const m = /^(<>|>=|<=|=|>|<)?([\s\S]*)$/.exec(text);
+        return [m[1] || "=", m[2]];
+    }
 
     // ------------------------------------------------------------------------ Range
 
@@ -146,6 +355,14 @@ module.exports = function createExcel(rt, addon, options) {
             this.$r2 = r2;
             this.$c2 = c2;
             this.$mode = mode || "cells";
+            // The other areas of a range of several (`Union`, `SpecialCells`): ranges of one area each.
+            this.$rest = NO_AREAS;
+        }
+        /** A range of the areas `boxes` (`[top, left, bottom, right]` each). */
+        static $of(sheet, boxes, mode) {
+            const first = new Range(sheet, ...boxes[0], mode);
+            if (boxes.length > 1) first.$rest = boxes.slice(1).map((b) => new Range(sheet, ...b, mode));
+            return first;
         }
         get $typeName() {
             return "Range";
@@ -154,8 +371,25 @@ module.exports = function createExcel(rt, addon, options) {
         $defaultValue() {
             return this.Value;
         }
+        $bounds() {
+            return [this.$r1, this.$c1, this.$r2, this.$c2];
+        }
+        /** The first area alone. */
+        $single() {
+            return this.$rest.length ? this.$at(this.$r1, this.$c1, this.$r2, this.$c2, this.$mode) : this;
+        }
+        /** The areas, each a range of its own. */
+        $list() {
+            return this.$rest.length ? [this.$single(), ...this.$rest] : [this];
+        }
+        /** The range of what `f` makes of each area. */
+        $map(f, mode) {
+            return Range.$of(this.$sheet, this.$list().map((a) => f(a).$bounds()), mode);
+        }
         $same(o) {
-            return o instanceof Range && o.$sheet === this.$sheet && o.$r1 === this.$r1 && o.$c1 === this.$c1 && o.$r2 === this.$r2 && o.$c2 === this.$c2;
+            if (!(o instanceof Range) || o.$sheet !== this.$sheet || o.$rest.length !== this.$rest.length) return false;
+            const mine = this.$list();
+            return o.$list().every((a, i) => a.$r1 === mine[i].$r1 && a.$c1 === mine[i].$c1 && a.$r2 === mine[i].$r2 && a.$c2 === mine[i].$c2);
         }
         $at(r1, c1, r2, c2, mode) {
             return new Range(this.$sheet, r1, c1, r2 === undefined ? r1 : r2, c2 === undefined ? c1 : c2, mode);
@@ -179,9 +413,23 @@ module.exports = function createExcel(rt, addon, options) {
             const first = rows[0][0];
             return rows.every((r) => r.every((v) => v === first)) ? first : null;
         }
-        $write(f) {
+        /** Changes every area with a call of the addon (`f` gets the area), without events. */
+        $each(f) {
+            clip = null;
             this.$sheet.$wb.$changed();
-            book(f);
+            for (const a of this.$list()) book(() => f(a, a.$book, a.$i));
+        }
+        /** Changes the cells of every area, and raises the events of a change. */
+        $write(f) {
+            this.$each(f);
+            changed(this);
+        }
+        $format(prop) {
+            return fromBook(book(() => this.$book.format(this.$i, this.$r1, this.$c1, this.$r2, this.$c2, prop)));
+        }
+        $setFormat(prop, v) {
+            const data = toBook(v);
+            this.$each((a, b, i) => b.setFormat(i, ...a.$bounds(), prop, data));
         }
         get $key() {
             return `${this.$r1},${this.$c1},${this.$r2},${this.$c2}`;
@@ -201,9 +449,9 @@ module.exports = function createExcel(rt, addon, options) {
             return this.$c2 - this.$c1 + 1;
         }
         get Count() {
-            if (this.$mode === "rows") return this.$height;
-            if (this.$mode === "cols") return this.$width;
-            return this.$height * this.$width;
+            let n = 0;
+            for (const a of this.$list()) n += this.$mode === "rows" ? a.$height : this.$mode === "cols" ? a.$width : a.$height * a.$width;
+            return n;
         }
         get CountLarge() {
             return this.Count;
@@ -218,34 +466,35 @@ module.exports = function createExcel(rt, addon, options) {
             return appProxy;
         }
         get Areas() {
-            const self = this;
-            return { $typeName: "Areas", Count: 1, Item: (i) => (rt.cnum(i) === 1 ? self : rt.raise(9)), *[Symbol.iterator]() { yield self; } };
+            const list = this.$list();
+            return { $typeName: "Areas", Count: list.length, Item: (i) => list[rt.cnum(i) - 1] || rt.raise(9), *[Symbol.iterator]() { yield* list; } };
         }
         Address(rowAbsolute, columnAbsolute, referenceStyle, external, relativeTo) {
-            const ra = opt(rowAbsolute) === undefined ? true : rt.cbool(rowAbsolute);
-            const ca = opt(columnAbsolute) === undefined ? true : rt.cbool(columnAbsolute);
+            const ra = flag(rowAbsolute, true);
+            const ca = flag(columnAbsolute, true);
             const r1c1 = opt(referenceStyle) !== undefined && rt.cnum(referenceStyle) === XL.r1c1;
-            let text;
-            if (r1c1) {
-                const base = opt(relativeTo) instanceof Range ? relativeTo : null;
-                const part = (letter, n, abs, from) => (abs || !base ? `${letter}${n}` : n === from ? letter : `${letter}[${n - from}]`);
-                const cell = (r, c) => part("R", r, ra, base ? base.$r1 : 1) + part("C", c, ca, base ? base.$c1 : 1);
-                text = this.$isRows() ? `${part("R", this.$r1, ra, base ? base.$r1 : 1)}:${part("R", this.$r2, ra, base ? base.$r1 : 1)}`
-                    : this.$isCols() ? `${part("C", this.$c1, ca, base ? base.$c1 : 1)}:${part("C", this.$c2, ca, base ? base.$c1 : 1)}`
-                    : this.$r1 === this.$r2 && this.$c1 === this.$c2 ? cell(this.$r1, this.$c1) : `${cell(this.$r1, this.$c1)}:${cell(this.$r2, this.$c2)}`;
-            } else {
+            const one = (a) => {
+                if (r1c1) {
+                    const base = opt(relativeTo) instanceof Range ? relativeTo : null;
+                    const part = (letter, n, abs, from) => (abs || !base ? `${letter}${n}` : n === from ? letter : `${letter}[${n - from}]`);
+                    const cell = (r, c) => part("R", r, ra, base ? base.$r1 : 1) + part("C", c, ca, base ? base.$c1 : 1);
+                    return a.$isRows() ? `${part("R", a.$r1, ra, base ? base.$r1 : 1)}:${part("R", a.$r2, ra, base ? base.$r1 : 1)}`
+                        : a.$isCols() ? `${part("C", a.$c1, ca, base ? base.$c1 : 1)}:${part("C", a.$c2, ca, base ? base.$c1 : 1)}`
+                        : a.$r1 === a.$r2 && a.$c1 === a.$c2 ? cell(a.$r1, a.$c1) : `${cell(a.$r1, a.$c1)}:${cell(a.$r2, a.$c2)}`;
+                }
                 const R = ra ? "$" : "";
                 const C = ca ? "$" : "";
                 const cell = (r, c) => `${C}${colName(c)}${R}${r}`;
-                text = this.$isRows() ? `${R}${this.$r1}:${R}${this.$r2}`
-                    : this.$isCols() ? `${C}${colName(this.$c1)}:${C}${colName(this.$c2)}`
-                    : this.$r1 === this.$r2 && this.$c1 === this.$c2 ? cell(this.$r1, this.$c1) : `${cell(this.$r1, this.$c1)}:${cell(this.$r2, this.$c2)}`;
-            }
+                return a.$isRows() ? `${R}${a.$r1}:${R}${a.$r2}`
+                    : a.$isCols() ? `${C}${colName(a.$c1)}:${C}${colName(a.$c2)}`
+                    : a.$r1 === a.$r2 && a.$c1 === a.$c2 ? cell(a.$r1, a.$c1) : `${cell(a.$r1, a.$c1)}:${cell(a.$r2, a.$c2)}`;
+            };
+            let prefix = "";
             if (opt(external) !== undefined && rt.cbool(external)) {
                 const name = `[${this.$sheet.$wb.Name}]${this.$sheet.Name}`;
-                text = `${/^[A-Za-z0-9_.[\]]+$/.test(name) ? name : `'${name.replace(/'/g, "''")}'`}!${text}`;
+                prefix = `${/^[A-Za-z0-9_.[\]]+$/.test(name) ? name : `'${name.replace(/'/g, "''")}'`}!`;
             }
-            return text;
+            return this.$list().map((a) => prefix + one(a)).join(",");
         }
         get AddressLocal() {
             return this.Address();
@@ -259,7 +508,7 @@ module.exports = function createExcel(rt, addon, options) {
 
         // ---- other ranges from this one
         Cells(row, col) {
-            if (opt(row) === undefined && opt(col) === undefined) return this.$at(this.$r1, this.$c1, this.$r2, this.$c2);
+            if (opt(row) === undefined && opt(col) === undefined) return this.$map((a) => a, "cells");
             return this.Item(row, col);
         }
         Item(row, col) {
@@ -297,13 +546,13 @@ module.exports = function createExcel(rt, addon, options) {
             return this.$at(inner.$r1 + dr, inner.$c1 + dc, inner.$r2 + dr, inner.$c2 + dc);
         }
         Offset(rowOffset, columnOffset) {
-            const dr = opt(rowOffset) === undefined ? 0 : rt.cnum(rowOffset);
-            const dc = opt(columnOffset) === undefined ? 0 : rt.cnum(columnOffset);
-            return this.$at(this.$r1 + dr, this.$c1 + dc, this.$r2 + dr, this.$c2 + dc);
+            const dr = number(rowOffset, 0);
+            const dc = number(columnOffset, 0);
+            return this.$map((a) => a.$at(a.$r1 + dr, a.$c1 + dc, a.$r2 + dr, a.$c2 + dc));
         }
         Resize(rowSize, columnSize) {
-            const h = opt(rowSize) === undefined ? this.$height : rt.cnum(rowSize);
-            const w = opt(columnSize) === undefined ? this.$width : rt.cnum(columnSize);
+            const h = number(rowSize, this.$height);
+            const w = number(columnSize, this.$width);
             if (!(h >= 1 && w >= 1)) fail("Resize の大きさ");
             return this.$at(this.$r1, this.$c1, this.$r1 + h - 1, this.$c1 + w - 1);
         }
@@ -316,21 +565,24 @@ module.exports = function createExcel(rt, addon, options) {
             return this.$at(r1, c1, r2, c2);
         }
         get EntireRow() {
-            return this.$at(this.$r1, 1, this.$r2, MAX_COLS);
+            return this.$map((a) => a.$at(a.$r1, 1, a.$r2, MAX_COLS), "rows");
         }
         get EntireColumn() {
-            return this.$at(1, this.$c1, MAX_ROWS, this.$c2);
+            return this.$map((a) => a.$at(1, a.$c1, MAX_ROWS, a.$c2), "cols");
         }
         get MergeArea() {
-            return this;
+            const [r1, c1, r2, c2] = book(() => this.$book.mergeArea(this.$i, this.$r1, this.$c1));
+            return this.$at(r1, c1, r2, c2);
         }
         *[Symbol.iterator]() {
-            if (this.$mode === "rows") {
-                for (let r = this.$r1; r <= this.$r2; r++) yield this.$at(r, this.$c1, r, this.$c2);
-            } else if (this.$mode === "cols") {
-                for (let c = this.$c1; c <= this.$c2; c++) yield this.$at(this.$r1, c, this.$r2, c);
-            } else {
-                for (let r = this.$r1; r <= this.$r2; r++) for (let c = this.$c1; c <= this.$c2; c++) yield this.$at(r, c);
+            for (const a of this.$list()) {
+                if (this.$mode === "rows") {
+                    for (let r = a.$r1; r <= a.$r2; r++) yield a.$at(r, a.$c1, r, a.$c2);
+                } else if (this.$mode === "cols") {
+                    for (let c = a.$c1; c <= a.$c2; c++) yield a.$at(a.$r1, c, a.$r2, c);
+                } else {
+                    for (let r = a.$r1; r <= a.$r2; r++) for (let c = a.$c1; c <= a.$c2; c++) yield a.$at(r, c);
+                }
             }
         }
 
@@ -340,7 +592,7 @@ module.exports = function createExcel(rt, addon, options) {
         }
         set Value(v) {
             const data = toBook(v);
-            this.$write(() => this.$book.setValues(this.$i, this.$r1, this.$c1, this.$r2, this.$c2, data));
+            this.$write((a, b, i) => b.setValues(i, ...a.$bounds(), data));
         }
         get Value2() {
             return this.$read("Value2");
@@ -353,14 +605,14 @@ module.exports = function createExcel(rt, addon, options) {
         }
         set Formula(v) {
             const data = toBook(v);
-            this.$write(() => this.$book.setFormulas(this.$i, this.$r1, this.$c1, this.$r2, this.$c2, data, false));
+            this.$write((a, b, i) => b.setFormulas(i, ...a.$bounds(), data, false));
         }
         get Formula2() {
             return this.$read("Formula2");
         }
         set Formula2(v) {
             const data = toBook(v);
-            this.$write(() => this.$book.setFormulas(this.$i, this.$r1, this.$c1, this.$r2, this.$c2, data, true));
+            this.$write((a, b, i) => b.setFormulas(i, ...a.$bounds(), data, true));
         }
         get FormulaLocal() {
             return this.Formula;
@@ -373,7 +625,7 @@ module.exports = function createExcel(rt, addon, options) {
         }
         set FormulaR1C1(v) {
             const data = toBook(v);
-            this.$write(() => this.$book.setFormulasR1C1(this.$i, this.$r1, this.$c1, this.$r2, this.$c2, data));
+            this.$write((a, b, i) => b.setFormulasR1C1(i, ...a.$bounds(), data));
         }
         get HasFormula() {
             const rows = this.$get("Formula").flat();
@@ -388,7 +640,7 @@ module.exports = function createExcel(rt, addon, options) {
         }
         set NumberFormat(code) {
             const text = rt.cstr(code);
-            this.$write(() => this.$book.setNumberFormat(this.$i, this.$r1, this.$c1, this.$r2, this.$c2, text));
+            this.$each((a, b, i) => b.setNumberFormat(i, ...a.$bounds(), text));
         }
         get NumberFormatLocal() {
             const f = this.NumberFormat;
@@ -398,40 +650,212 @@ module.exports = function createExcel(rt, addon, options) {
             this.NumberFormat = rt.cstr(code) === "G/標準" ? "General" : code;
         }
         ClearContents() {
-            this.$write(() => this.$book.clear(this.$i, this.$r1, this.$c1, this.$r2, this.$c2, false));
+            this.$write((a, b, i) => b.clear(i, ...a.$bounds(), false));
         }
         Clear() {
-            this.$write(() => this.$book.clear(this.$i, this.$r1, this.$c1, this.$r2, this.$c2, true));
-            this.$sheet.$formats.clear();
+            this.$write((a, b, i) => b.clear(i, ...a.$bounds(), true));
         }
         ClearFormats() {
-            this.$sheet.$formats.clear();
+            this.$each((a, b, i) => b.clearFormats(i, ...a.$bounds()));
         }
+        Calculate() {
+            calculated(this.$sheet.$wb, true);
+        }
+
+        // ---- copying, cutting and pasting
         Copy(destination) {
             const dest = opt(destination);
-            if (dest === undefined) return needsExcel("コピー先のない Range.Copy（クリップボード）");
-            if (!(dest instanceof Range)) return rt.raise(13);
-            if (dest.$sheet.$wb !== this.$sheet.$wb) {
-                // Another workbook: the values and formulas as they are.
-                const target = dest.Resize(this.$height, this.$width);
-                target.Formula = this.Formula;
+            if (dest === undefined) {
+                pieces(this);
+                clip = { range: this, cut: false };
                 return true;
             }
-            dest.$sheet.$wb.$changed();
-            book(() => this.$book.copy(this.$i, this.$r1, this.$c1, this.$r2, this.$c2, dest.$i, dest.$r1, dest.$c1));
+            if (!(dest instanceof Range)) return rt.raise(13);
+            pasteCells(this, dest, PASTE_ALL);
             return true;
         }
         Cut(destination) {
             const dest = opt(destination);
-            if (dest === undefined) return needsExcel("切り取り先のない Range.Cut（クリップボード）");
-            this.Copy(dest);
-            const moved = dest.Resize(this.$height, this.$width);
-            // What the copy wrote over is not cleared.
-            for (const cell of this) if (!(cell.$sheet === moved.$sheet && cell.$r1 >= moved.$r1 && cell.$r1 <= moved.$r2 && cell.$c1 >= moved.$c1 && cell.$c1 <= moved.$c2)) cell.ClearContents();
+            if (this.$rest.length) fail("そのコマンドは複数の選択範囲に対して実行できません。");
+            if (dest === undefined) {
+                clip = { range: this, cut: true };
+                return true;
+            }
+            if (!(dest instanceof Range)) return rt.raise(13);
+            moveCells(this, dest);
             return true;
         }
-        Calculate() {
-            book(() => this.$book.calculate());
+        PasteSpecial(paste, operation, skipBlanks, transpose) {
+            if (clip === null || clip.cut) throw new RasError("Range クラスの PasteSpecial メソッドが失敗しました。", 1004, "Microsoft Excel");
+            const pasted = pasteCells(clip.range, this, { what: number(paste, XL.pasteAll), op: number(operation, XL.none), skipBlanks: flag(skipBlanks, false), transpose: flag(transpose, false) });
+            app.$select(pasted);
+            return true;
+        }
+        FillDown() {
+            clip = null;
+            if (this.$height > 1) pasteCells(this.Rows(1), this.$at(this.$r1 + 1, this.$c1, this.$r2, this.$c2), PASTE_ALL);
+            return true;
+        }
+        FillRight() {
+            clip = null;
+            if (this.$width > 1) pasteCells(this.Columns(1), this.$at(this.$r1, this.$c1 + 1, this.$r2, this.$c2), PASTE_ALL);
+            return true;
+        }
+
+        // ---- cells inserted and deleted
+        Insert(shift, copyOrigin) {
+            const after = number(copyOrigin, 0) === 1;
+            if (clip !== null) return this.$insertClip(shift);
+            // From the last area back: the areas before it stay where the program said.
+            const list = this.$list().slice().sort((a, b) => b.$r1 - a.$r1 || b.$c1 - a.$c1);
+            this.$sheet.$wb.$changed();
+            for (const a of list) {
+                const right = sideways(a, shift, XL.toRight, XL.down);
+                book(() => a.$book.insertCells(a.$i, ...a.$bounds(), right, after));
+            }
+            changed(this);
+            return true;
+        }
+        /** `Insert` while cells are cut or copied: they are inserted here ("Insert Copied Cells"). */
+        $insertClip(shift) {
+            const src = clip.range;
+            if (src.$rest.length || src.$sheet.$wb !== this.$sheet.$wb) fail("コピーした範囲は、ここには挿入できません");
+            const rows = src.$isRows();
+            const cols = src.$isCols();
+            const at = this.$at(rows || cols ? (cols ? 1 : this.$r1) : this.$r1, rows ? 1 : this.$c1);
+            const target = this.$at(at.$r1, at.$c1, at.$r1 + src.$height - 1, at.$c1 + src.$width - 1);
+            const right = opt(shift) === undefined ? cols : sideways(target, shift, XL.toRight, XL.down);
+            this.$sheet.$wb.$changed();
+            book(() => target.$book.insertCells(target.$i, ...target.$bounds(), right, false));
+            // What was copied moved with the cells, when it lies after them.
+            let from = src;
+            if (src.$sheet === target.$sheet) {
+                if (!right && src.$r1 >= target.$r1 && src.$c1 >= target.$c1 && src.$c2 <= target.$c2) from = src.$at(src.$r1 + target.$height, src.$c1, src.$r2 + target.$height, src.$c2);
+                if (right && src.$c1 >= target.$c1 && src.$r1 >= target.$r1 && src.$r2 <= target.$r2) from = src.$at(src.$r1, src.$c1 + target.$width, src.$r2, src.$c2 + target.$width);
+            }
+            if (clip.cut) {
+                moveCells(from, target);
+                // The place the cells were cut from closes up, when they moved along their rows or columns.
+                const along = right ? from.$r1 === target.$r1 && from.$r2 === target.$r2 : from.$c1 === target.$c1 && from.$c2 === target.$c2;
+                if (along && from.$sheet === target.$sheet) book(() => from.$book.deleteCells(from.$i, ...from.$bounds(), right));
+                clip = null;
+            } else {
+                pasteCells(from, target, PASTE_ALL);
+                clip = { range: from, cut: false };
+            }
+            return true;
+        }
+        Delete(shift) {
+            // From the last area back, so that the areas before it are still where the program said.
+            const list = this.$list().slice().sort((a, b) => b.$r1 - a.$r1 || b.$c1 - a.$c1);
+            clip = null;
+            this.$sheet.$wb.$changed();
+            for (const a of list) {
+                const left = sideways(a, shift, XL.toLeft, XL.up);
+                book(() => a.$book.deleteCells(a.$i, ...a.$bounds(), left));
+            }
+            changed(this);
+            return true;
+        }
+
+        // ---- sorting and filtering
+        Sort(key1, order1, key2, type, order2, key3, order3, header, orderCustom, matchCase, orientation) {
+            const keys = [[key1, order1], [key2, order2], [key3, order3]].filter(([k]) => opt(k) !== undefined).map(([k, o]) => ({ key: k, descending: number(o, 1) === XL.descending }));
+            this.$sort(keys, number(header, 2), flag(matchCase, false), number(orientation, 1) === XL.leftToRight);
+            return true;
+        }
+        /** Sorts by `keys` (`{ key: a range or its address, descending }`); `header` is `XlYesNoGuess`. */
+        $sort(keys, header, matchCase, across) {
+            let r = this.$single();
+            if (r.Count === 1) r = r.CurrentRegion;
+            const list = keys.map(({ key, descending }) => {
+                const k = key instanceof Range ? key : this.$sheet.$range(key);
+                return [across ? k.$r1 : k.$c1, descending];
+            });
+            if (list.length === 0) list.push([across ? r.$r1 : r.$c1, false]);
+            const headed = header === XL.yes || (header === XL.guess && !across && book(() => r.$book.guessHeader(r.$i, ...r.$bounds())));
+            if (headed) {
+                if (across ? r.$width === 1 : r.$height === 1) return;
+                r = across ? r.$at(r.$r1, r.$c1 + 1, r.$r2, r.$c2) : r.$at(r.$r1 + 1, r.$c1, r.$r2, r.$c2);
+            }
+            r.$write((a, b, i) => b.sort(i, ...a.$bounds(), list, across, matchCase));
+        }
+        RemoveDuplicates(columns, header) {
+            let r = this.$single();
+            const first = r.$c1;
+            const h = number(header, 2);
+            if (h === XL.yes || (h === XL.guess && book(() => r.$book.guessHeader(r.$i, ...r.$bounds())))) {
+                if (r.$height === 1) return true;
+                r = r.$at(r.$r1 + 1, r.$c1, r.$r2, r.$c2);
+            }
+            const picked = opt(columns);
+            const offsets = picked === undefined ? Array.from({ length: r.$width }, (_, k) => k + 1) : (Array.isArray(picked) ? picked : [picked]).map((c) => rt.cnum(c));
+            if (offsets.some((c) => !(c >= 1 && c <= r.$width))) fail("RemoveDuplicates の Columns");
+            r.$write((a, b, i) => b.removeDuplicates(i, ...a.$bounds(), offsets.map((c) => first + c - 1)));
+            return true;
+        }
+        AutoFilter(field, criteria1, operator, criteria2) {
+            const sheet = this.$sheet;
+            const b = this.$book;
+            const i = this.$i;
+            const on = () => {
+                const r = this.Count === 1 ? this.CurrentRegion : this.$single();
+                book(() => b.setAutoFilter(i, r.$bounds()));
+            };
+            clip = null;
+            sheet.$wb.$changed();
+            if (opt(field) === undefined) {
+                // Without a field: the filter is put on the range, or taken away when there is one.
+                if (book(() => b.autoFilter(i)) === null) on();
+                else book(() => b.setAutoFilter(i, null));
+                return true;
+            }
+            if (book(() => b.autoFilter(i)) === null) on();
+            const f = rt.cnum(field);
+            const op = number(operator, 1);
+            const c1 = opt(criteria1);
+            let criterion = null;
+            if (op >= 3 && op <= 6) {
+                criterion = { kind: "top", bottom: op === 4 || op === 6, percent: op >= 5, count: number(criteria1, 10) };
+            } else if (Array.isArray(c1)) {
+                const values = c1.flat().map((v) => rt.cstr(v).replace(/^=/, ""));
+                criterion = { kind: "values", values: values.filter((v) => v !== ""), blanks: values.includes("") };
+            } else if (c1 !== undefined) {
+                const c2 = opt(criteria2);
+                criterion = { kind: "custom", a: comparison(c1), b: c2 === undefined ? null : comparison(c2), and: op !== 2 };
+            } else if (op > 7) {
+                fail("色やアイコンによるフィルターには対応していません");
+            }
+            book(() => b.setFilter(i, f, criterion));
+            calculated(sheet.$wb, false);
+            return true;
+        }
+        AdvancedFilter(action, criteriaRange, copyToRange, unique) {
+            const list = this.Count === 1 ? this.CurrentRegion : this.$single();
+            const where = (r) => {
+                const x = opt(r);
+                if (x === undefined) return null;
+                if (!(x instanceof Range)) rt.raise(13);
+                if (x.$sheet.$wb !== this.$sheet.$wb) fail("別のブックの範囲");
+                return [x.$i, ...x.$bounds()];
+            };
+            const criteria = where(criteriaRange);
+            const copy = rt.cnum(action) === XL.filterCopy ? where(copyToRange) : null;
+            if (rt.cnum(action) === XL.filterCopy && copy === null) fail("AdvancedFilter の CopyToRange");
+            clip = null;
+            this.$sheet.$wb.$changed();
+            book(() => this.$book.advancedFilter(this.$i, ...list.$bounds(), criteria, copy, flag(unique, false)));
+            if (copy !== null) changed(copyToRange);
+            else calculated(this.$sheet.$wb, false);
+            return true;
+        }
+        SpecialCells(type, value) {
+            const t = rt.cnum(type);
+            const r = this.Count === 1 && t !== XL.cellTypeVisible && t !== XL.cellTypeLastCell ? this.$sheet.UsedRange : this.$single();
+            const found = [];
+            for (const a of t === XL.cellTypeVisible ? this.$list() : [r]) found.push(...book(() => a.$book.specialCells(a.$i, ...a.$bounds(), t, number(value, 23))));
+            if (found.length === 0) throw new RasError("該当するセルが見つかりません。", 1004, "Microsoft Excel");
+            return Range.$of(this.$sheet, found);
         }
 
         // ---- searching
@@ -494,8 +918,8 @@ module.exports = function createExcel(rt, addon, options) {
         // ---- selection
         Select() {
             this.$sheet.Activate();
-            app.$selection = this;
-            app.$activeCell = this.$at(this.$r1, this.$c1);
+            app.$select(this);
+            sheetEvent(this.$sheet, "SelectionChange", [this]);
             return true;
         }
         Activate() {
@@ -508,70 +932,66 @@ module.exports = function createExcel(rt, addon, options) {
             return true;
         }
 
-        // ---- formatting: remembered, not drawn
+        // ---- formats: kept in the workbook, not drawn
         get Font() {
-            return formatting(this.$sheet.$formats, `${this.$key}/font`, "Font", FONT_DEFAULTS);
+            return formatObject(this, "font", FONT, "Font", {});
         }
         get Interior() {
-            return formatting(this.$sheet.$formats, `${this.$key}/interior`, "Interior", INTERIOR_DEFAULTS);
+            return formatObject(this, "interior", INTERIOR, "Interior", {});
         }
         Borders(index) {
-            return formatting(this.$sheet.$formats, `${this.$key}/borders/${opt(index) === undefined ? "" : index}`, "Borders", { linestyle: -4142, weight: 2, color: 0 });
+            if (opt(index) !== undefined) return borderObject(this, rt.cnum(index));
+            return formatObject(this, "borders.all", BORDER, "Borders", { Count: 6, Item: (i) => borderObject(this, rt.cnum(i)) });
         }
-        BorderAround() {
+        BorderAround(lineStyle, weight, colorIndex, color) {
+            for (const edge of [7, 8, 9, 10]) {
+                const b = borderObject(this, edge);
+                b.linestyle = number(lineStyle, 1);
+                if (opt(weight) !== undefined) b.weight = rt.cnum(weight);
+                if (opt(colorIndex) !== undefined) b.colorindex = rt.cnum(colorIndex);
+                if (opt(color) !== undefined) b.color = rt.cnum(color);
+            }
             return true;
         }
         AutoFit() {
             return true;
         }
-        Merge() {
-            this.$sheet.$layout.set(`${this.$key}/merged`, true);
+        Merge(across) {
+            const each = flag(across, false);
+            this.$each((a, b, i) => b.merge(i, ...a.$bounds(), each));
         }
         UnMerge() {
-            this.$sheet.$layout.delete(`${this.$key}/merged`);
+            this.$setFormat("mergecells", false);
         }
         get MergeCells() {
-            return this.$sheet.$layout.get(`${this.$key}/merged`) === true;
+            return this.$format("mergecells");
         }
         set MergeCells(v) {
             if (rt.cbool(v)) this.Merge();
             else this.UnMerge();
         }
-
-        // ---- what needs Excel
-        Delete() {
-            return needsExcel("セルの削除（Range.Delete）");
+        /** `Hidden` is of whole rows or columns. */
+        $lines() {
+            if (this.$isRows()) return [false, (a) => [a.$r1, a.$r2]];
+            if (this.$isCols()) return [true, (a) => [a.$c1, a.$c2]];
+            return fail("Hidden は行全体または列全体に使います（EntireRow / EntireColumn）");
         }
-        Insert() {
-            return needsExcel("セルの挿入（Range.Insert）");
+        get Hidden() {
+            const [columns, span] = this.$lines();
+            return book(() => this.$book.hidden(this.$i, columns, ...span(this)));
         }
-        Sort() {
-            return needsExcel("並べ替え（Range.Sort）");
+        set Hidden(v) {
+            const [columns, span] = this.$lines();
+            const hidden = rt.cbool(v);
+            this.$each((a, b, i) => b.setHidden(i, columns, ...span(a), hidden));
+            calculated(this.$sheet.$wb, false);
         }
-        AutoFilter() {
-            return needsExcel("オートフィルター（Range.AutoFilter）");
+        get Style() {
+            const v = remembered(this.$sheet.$formats, this.$key).get("style");
+            return v === undefined ? "Normal" : v;
         }
-        AdvancedFilter() {
-            return needsExcel("フィルター（Range.AdvancedFilter）");
-        }
-        RemoveDuplicates() {
-            return needsExcel("重複の削除（Range.RemoveDuplicates）");
-        }
-        SpecialCells() {
-            return needsExcel("Range.SpecialCells");
-        }
-        PasteSpecial() {
-            return needsExcel("形式を選択して貼り付け（Range.PasteSpecial）");
-        }
-        FillDown() {
-            const first = this.Rows(1);
-            this.Formula = first.Formula;
-            return true;
-        }
-        FillRight() {
-            const first = this.Columns(1);
-            this.Formula = first.Formula;
-            return true;
+        set Style(v) {
+            remembered(this.$sheet.$formats, this.$key).set("style", v);
         }
 
         $debugProperties() {
@@ -596,17 +1016,14 @@ module.exports = function createExcel(rt, addon, options) {
             };
         }
     }
-    // Layout the program sets on a range or its rows and columns: remembered, not drawn.
-    const LAYOUT = { ColumnWidth: 8.38, RowHeight: 18.75, Hidden: false, WrapText: false, HorizontalAlignment: 1, VerticalAlignment: -4108, IndentLevel: 0, Orientation: -4128, ShrinkToFit: false, Locked: true, FormulaHidden: false, Style: "Normal", Name: "" };
-    for (const [prop, initial] of Object.entries(LAYOUT)) {
-        if (prop === "Name") continue;
+    // The formats of the cells of a range, and the sizes of its rows and columns.
+    for (const prop of ["ColumnWidth", "RowHeight", "WrapText", "HorizontalAlignment", "VerticalAlignment", "IndentLevel", "Orientation", "ShrinkToFit", "Locked", "FormulaHidden"]) {
         Object.defineProperty(Range.prototype, prop, {
             get() {
-                const v = this.$sheet.$layout.get(`${this.$key}/${prop}`);
-                return v === undefined ? initial : v;
+                return this.$format(prop.toLowerCase());
             },
             set(v) {
-                this.$sheet.$layout.set(`${this.$key}/${prop}`, v);
+                this.$setFormat(prop.toLowerCase(), v);
             },
             configurable: true,
         });
@@ -614,11 +1031,65 @@ module.exports = function createExcel(rt, addon, options) {
 
     // ------------------------------------------------------------------------ Worksheet
 
+    /** `Worksheet.Sort`: the keys and range the program sets, sorted by `Apply`. */
+    class SortState {
+        constructor(sheet) {
+            this.$sheet = sheet;
+            this.$fields = [];
+            this.$range = null;
+            this.Header = 2;
+            this.MatchCase = false;
+            this.Orientation = 1;
+            this.SortMethod = 1;
+        }
+        get $typeName() {
+            return "Sort";
+        }
+        get SortFields() {
+            const fields = this.$fields;
+            const add = (key, sortOn, order) => {
+                if (!(opt(key) instanceof Range)) rt.raise(13);
+                if (number(sortOn, 0) !== 0) fail("値以外（色・アイコン）による並べ替えには対応していません");
+                const field = { $typeName: "SortField", Key: key, Order: number(order, 1), SortOn: 0 };
+                fields.push(field);
+                return field;
+            };
+            return {
+                $typeName: "SortFields",
+                get Count() {
+                    return fields.length;
+                },
+                Item: (i) => fields[rt.cnum(i) - 1] || rt.raise(9),
+                Clear: () => {
+                    fields.length = 0;
+                },
+                Add: add,
+                Add2: add,
+                *[Symbol.iterator]() {
+                    yield* fields;
+                },
+            };
+        }
+        get Rng() {
+            return this.$range;
+        }
+        SetRange(range) {
+            if (!(range instanceof Range) || range.$sheet !== this.$sheet) rt.raise(13);
+            this.$range = range;
+        }
+        Apply() {
+            if (this.$range === null) fail("並べ替える範囲が設定されていません（SetRange）");
+            const keys = this.$fields.map((f) => ({ key: f.Key, descending: rt.cnum(f.Order) === XL.descending }));
+            this.$range.$sort(keys, rt.cnum(this.Header), rt.cbool(this.MatchCase), rt.cnum(this.Orientation) === XL.leftToRight);
+        }
+    }
+
     class Worksheet {
         constructor(wb) {
             this.$wb = wb;
+            // Formats that are not kept in the workbook: remembered while the program runs.
             this.$formats = new Map();
-            this.$layout = new Map();
+            this.$sort = null;
         }
         get $typeName() {
             return "Worksheet";
@@ -677,6 +1148,12 @@ module.exports = function createExcel(rt, addon, options) {
                     return c;
                 }
                 const text = rt.cstr(c);
+                // "A1:B2,D4": several areas.
+                if (text.includes(",") && !text.includes("(")) {
+                    const parts = text.split(",").map((t) => one(t.trim()));
+                    if (parts.some((p) => p.$sheet !== parts[0].$sheet)) fail("別のシートのセル");
+                    return Range.$of(parts[0].$sheet, parts.map((p) => p.$bounds()));
+                }
                 const hit = book(() => this.$wb.$book.resolve(this.$index(), text));
                 if (hit === null) fail(`範囲 "${text}"`);
                 const [si, r1, c1, r2, c2] = hit;
@@ -714,11 +1191,15 @@ module.exports = function createExcel(rt, addon, options) {
         }
         Activate() {
             const i = this.$index();
-            this.$wb.Activate();
-            if (this.$wb.$active !== i) {
-                this.$wb.$active = i;
+            const wb = this.$wb;
+            wb.Activate();
+            if (wb.$active !== i) {
+                const old = wb.$sheets[wb.$active];
+                if (old !== undefined) sheetEvent(old, "Deactivate", []);
+                wb.$active = i;
                 app.$selection = null;
                 app.$activeCell = null;
+                sheetEvent(this, "Activate", []);
             }
             return true;
         }
@@ -726,11 +1207,23 @@ module.exports = function createExcel(rt, addon, options) {
             return this.Activate();
         }
         Delete() {
-            this.$wb.$changed();
+            const wb = this.$wb;
+            if (wb.$project) raise([this.CodeName], "BeforeDelete", []);
+            wb.$changed();
             const i = this.$index();
-            book(() => this.$wb.$book.deleteSheet(i));
-            this.$wb.$sheets.splice(i, 1);
-            if (this.$wb.$active >= this.$wb.$sheets.length) this.$wb.$active = this.$wb.$sheets.length - 1;
+            const active = wb.$sheets[wb.$active];
+            book(() => wb.$book.deleteSheet(i));
+            wb.$sheets.splice(i, 1);
+            if (clip !== null && clip.range.$sheet === this) clip = null;
+            // The sheet after it (or the last one) is the active one now.
+            const next = active === this ? Math.min(i, wb.$sheets.length - 1) : wb.$sheets.indexOf(active);
+            wb.$active = next;
+            if (active === this) {
+                app.$selection = null;
+                app.$activeCell = null;
+                sheetEvent(wb.$sheets[next], "Activate", []);
+            }
+            calculated(wb, false);
             return true;
         }
         Move(before, after) {
@@ -742,16 +1235,33 @@ module.exports = function createExcel(rt, addon, options) {
             if (!(target instanceof Worksheet) || target.$wb !== this.$wb) return needsExcel("別のブックへの Worksheet.Move");
             let to = target.$index() + (b !== undefined ? 0 : 1);
             if (to > from) to -= 1;
+            const active = this.$wb.$sheets[this.$wb.$active];
             this.$wb.$changed();
             book(() => this.$wb.$book.moveSheet(from, to));
             const [s] = this.$wb.$sheets.splice(from, 1);
             this.$wb.$sheets.splice(to, 0, s);
+            this.$wb.$active = this.$wb.$sheets.indexOf(active);
         }
-        Copy() {
-            return needsExcel("シートのコピー（Worksheet.Copy）");
+        Copy(before, after) {
+            const b = opt(before);
+            const a = opt(after);
+            if (b === undefined && a === undefined) return needsExcel("コピー先のない Worksheet.Copy（新しいブックへのコピー）");
+            const target = b !== undefined ? b : a;
+            const wb = this.$wb;
+            if (!(target instanceof Worksheet) || target.$wb !== wb) return needsExcel("別のブックへの Worksheet.Copy");
+            const at = target.$index() + (b !== undefined ? 0 : 1);
+            const active = wb.$sheets[wb.$active];
+            wb.$changed();
+            const i = book(() => wb.$book.copySheet(this.$index(), at));
+            const copy = new Worksheet(wb);
+            wb.$sheets.splice(i, 0, copy);
+            wb.$active = wb.$sheets.indexOf(active);
+            // Excel raises no NewSheet for a copy; the copy becomes the active sheet.
+            copy.Activate();
+            return true;
         }
         Calculate() {
-            book(() => this.$wb.$book.calculate());
+            calculated(this.$wb, true);
         }
         Evaluate(text) {
             return evaluate(this, text);
@@ -759,15 +1269,78 @@ module.exports = function createExcel(rt, addon, options) {
         get Names() {
             return this.$wb.Names;
         }
+        /** `Paste`: what was cut or copied, on `destination` (the selection without one). */
+        Paste(destination) {
+            if (clip === null) throw new RasError("Worksheet クラスの Paste メソッドが失敗しました。", 1004, "Microsoft Excel");
+            let dest = opt(destination);
+            if (dest === undefined) {
+                this.Activate();
+                dest = app.Selection;
+            }
+            if (!(dest instanceof Range) || dest.$sheet !== this) fail("貼り付け先がこのシートの範囲ではありません");
+            if (clip.cut) {
+                const moved = moveCells(clip.range, dest);
+                clip = null;
+                app.$select(moved);
+            } else {
+                app.$select(pasteCells(clip.range, dest, PASTE_ALL));
+            }
+            return true;
+        }
+        PasteSpecial() {
+            return this.Paste();
+        }
+        // ---- filters
+        get AutoFilterMode() {
+            return book(() => this.$wb.$book.autoFilter(this.$index())) !== null;
+        }
+        set AutoFilterMode(v) {
+            if (rt.cbool(v)) fail("AutoFilterMode に設定できるのは False だけです");
+            this.$wb.$changed();
+            book(() => this.$wb.$book.setAutoFilter(this.$index(), null));
+            calculated(this.$wb, false);
+        }
+        get FilterMode() {
+            return book(() => this.$wb.$book.filterMode(this.$index()));
+        }
+        ShowAllData() {
+            if (!this.FilterMode) throw new RasError("Worksheet クラスの ShowAllData メソッドが失敗しました。", 1004, "Microsoft Excel");
+            this.$wb.$changed();
+            book(() => this.$wb.$book.showAll(this.$index()));
+            calculated(this.$wb, false);
+        }
+        get AutoFilter() {
+            const f = book(() => this.$wb.$book.autoFilter(this.$index()));
+            if (f === null) return null;
+            const sheet = this;
+            const range = new Range(this, ...f.range);
+            return {
+                $typeName: "AutoFilter",
+                Range: range,
+                get FilterMode() {
+                    return sheet.FilterMode;
+                },
+                Filters: {
+                    $typeName: "Filters",
+                    Count: range.$width,
+                    Item: (i) => ({ $typeName: "Filter", On: f.fields.includes(rt.cnum(i)) }),
+                },
+                get Sort() {
+                    return sheet.Sort;
+                },
+                ShowAllData: () => sheet.ShowAllData(),
+                ApplyFilter: () => true,
+            };
+        }
+        get Sort() {
+            if (this.$sort === null) this.$sort = new SortState(this);
+            return this.$sort;
+        }
         Protect() {}
         Unprotect() {}
         get ProtectContents() {
             return false;
         }
-        get AutoFilterMode() {
-            return false;
-        }
-        set AutoFilterMode(v) {}
         get EnableCalculation() {
             return true;
         }
@@ -776,7 +1349,38 @@ module.exports = function createExcel(rt, addon, options) {
             return 8.38;
         }
         get Tab() {
-            return formatting(this.$formats, "tab", "Tab", { color: false, colorindex: -4142 });
+            const sheet = this;
+            const memory = remembered(this.$formats, "tab");
+            return {
+                $typeName: "Tab",
+                get Color() {
+                    const c = book(() => sheet.$wb.$book.tabColor(sheet.$index()));
+                    return c === null ? false : c;
+                },
+                set Color(v) {
+                    sheet.$wb.$changed();
+                    book(() => sheet.$wb.$book.setTabColor(sheet.$index(), v === false || opt(v) === undefined ? null : rt.cnum(v)));
+                },
+                get ColorIndex() {
+                    return memory.has("colorindex") ? memory.get("colorindex") : XL.none;
+                },
+                set ColorIndex(v) {
+                    memory.set("colorindex", v);
+                    if (rt.cnum(v) === XL.none) this.Color = false;
+                },
+                get ThemeColor() {
+                    return memory.get("themecolor") ?? null;
+                },
+                set ThemeColor(v) {
+                    memory.set("themecolor", v);
+                },
+                get TintAndShade() {
+                    return memory.get("tintandshade") ?? 0;
+                },
+                set TintAndShade(v) {
+                    memory.set("tintandshade", v);
+                },
+            };
         }
         $debugProperties() {
             const self = this;
@@ -792,9 +1396,6 @@ module.exports = function createExcel(rt, addon, options) {
             };
         }
     }
-    Range.prototype.$bounds = function () {
-        return [this.$r1, this.$c1, this.$r2, this.$c2];
-    };
 
     /** `Worksheets` / `Sheets` of a workbook. */
     class Sheets {
@@ -827,10 +1428,13 @@ module.exports = function createExcel(rt, addon, options) {
             let added = null;
             wb.$changed();
             for (let k = 0; k < n; k++) {
+                const active = wb.$sheets[wb.$active];
                 const i = book(() => wb.$book.addSheet(at, null));
                 added = new Worksheet(wb);
                 wb.$sheets.splice(i, 0, added);
+                wb.$active = wb.$sheets.indexOf(active);
                 at = i;
+                bookEvent(wb, "NewSheet", [added]);
             }
             added.Activate();
             return added;
@@ -952,6 +1556,7 @@ module.exports = function createExcel(rt, addon, options) {
             for (let i = 0; i < n; i++) this.$sheets.push(new Worksheet(this));
             this.$active = Math.max(0, this.$sheets.findIndex((_, i) => handle.sheetInfo(i).visible === -1));
             this.$closed = false;
+            handle.setManual(app.$state.Calculation === XL.manual);
         }
         get $typeName() {
             return "Workbook";
@@ -1006,28 +1611,40 @@ module.exports = function createExcel(rt, addon, options) {
             return /\.xlsm$/i.test(this.$name) ? 52 : 51;
         }
         Activate() {
-            if (app.$activeBook !== this) {
+            const old = app.$activeBook;
+            if (old !== this) {
+                if (old) bookEvent(old, "Deactivate", []);
                 app.$activeBook = this;
                 app.$selection = null;
                 app.$activeCell = null;
+                bookEvent(this, "Activate", []);
             }
             return true;
         }
-        Save() {
-            saveCopy(this, true);
+        /** `BeforeSave`, the save itself (`write`), `AfterSave`. A handler can cancel it. */
+        $save(saveAs, write) {
+            const [, cancel] = bookEvent(this, "BeforeSave", [saveAs, false]);
+            if (cancel.v) return;
+            if (app.$state.Calculation === XL.manual && rt.cbool(app.$state.CalculateBeforeSave)) calculated(this, true);
+            write();
             this.$dirty = false;
+            bookEvent(this, "AfterSave", [true]);
+        }
+        Save() {
+            this.$save(false, () => saveCopy(this, true));
         }
         SaveAs(fileName) {
             const target = opt(fileName) === undefined ? null : path.resolve(root, rt.cstr(fileName));
-            if (target === null || isProtected(target)) {
-                saveCopy(this, true);
-            } else {
-                const written = book(() => this.$book.save(target));
-                this.$file = written;
-                this.$name = path.basename(written);
-                this.$project = false;
-            }
-            this.$dirty = false;
+            this.$save(true, () => {
+                if (target === null || isProtected(target)) {
+                    saveCopy(this, true);
+                } else {
+                    const written = book(() => this.$book.save(target));
+                    this.$file = written;
+                    this.$name = path.basename(written);
+                    this.$project = false;
+                }
+            });
         }
         SaveCopyAs(fileName) {
             const target = path.resolve(root, rt.cstr(fileName));
@@ -1035,17 +1652,25 @@ module.exports = function createExcel(rt, addon, options) {
             else book(() => this.$book.save(target));
         }
         Close(saveChanges) {
+            const [cancel] = bookEvent(this, "BeforeClose", [false]);
+            if (cancel.v) return false;
             if (opt(saveChanges) !== undefined && rt.cbool(saveChanges) && this.$dirty) this.Save();
             else if (this.$dirty) saveCopy(this, false);
             this.$dirty = false;
-            this.$closed = true;
             const i = app.$books.indexOf(this);
             if (i >= 0) app.$books.splice(i, 1);
-            if (app.$activeBook === this) app.$activeBook = app.$books[app.$books.length - 1] || null;
+            if (clip !== null && clip.range.$sheet.$wb === this) clip = null;
+            if (app.$activeBook === this) {
+                bookEvent(this, "Deactivate", []);
+                app.$activeBook = null;
+                const next = app.$books[app.$books.length - 1];
+                if (next) next.Activate();
+            }
+            this.$closed = true;
             return true;
         }
         Calculate() {
-            book(() => this.$book.calculate());
+            calculated(this, true);
         }
         $debugProperties() {
             return { name: this.Name, fullName: this.FullName, saved: this.Saved, worksheets: this.$sheets.slice() };
@@ -1194,7 +1819,7 @@ module.exports = function createExcel(rt, addon, options) {
 
     const APP_STATE = {
         ScreenUpdating: true, EnableEvents: true, Calculation: XL.automatic, DisplayAlerts: true, StatusBar: false, Cursor: -4143, Interactive: true,
-        DisplayStatusBar: true, EnableCancelKey: 1, CutCopyMode: false, Caption: "Microsoft Excel", Visible: true, WindowState: -4137, AskToUpdateLinks: true,
+        DisplayStatusBar: true, EnableCancelKey: 1, Caption: "Microsoft Excel", Visible: true, WindowState: -4137, AskToUpdateLinks: true,
         AutomationSecurity: 1, DisplayFormulaBar: true, Iteration: false, MaxIterations: 100, MaxChange: 0.001, EnableAnimations: true, CalculateBeforeSave: true,
         DisplayFullScreen: false, PrintCommunication: true, UserName: (() => { try { return require("os").userInfo().username; } catch { return ""; } })(),
     };
@@ -1210,6 +1835,11 @@ module.exports = function createExcel(rt, addon, options) {
         }
         get $typeName() {
             return "Application";
+        }
+        /** Makes a range the selection, without the events of selecting it. */
+        $select(range) {
+            this.$selection = range;
+            this.$activeCell = range.$at(range.$r1, range.$c1);
         }
         get Name() {
             return "Microsoft Excel";
@@ -1278,6 +1908,25 @@ module.exports = function createExcel(rt, addon, options) {
         get WorksheetFunction() {
             return worksheetFunctions;
         }
+        /** Manual calculation stops formulas from following the cells until `Calculate`. */
+        get Calculation() {
+            return this.$state.Calculation;
+        }
+        set Calculation(v) {
+            const mode = rt.cnum(v);
+            const was = this.$state.Calculation;
+            this.$state.Calculation = mode;
+            for (const b of this.$books) b.$book.setManual(mode === XL.manual);
+            // Back to automatic: what waited is calculated.
+            if (was === XL.manual && mode !== XL.manual) for (const b of this.$books.slice()) calculated(b, false);
+        }
+        /** `xlCopy` (1) or `xlCut` (2) while cells are copied or cut; setting 0 (False) forgets them. */
+        get CutCopyMode() {
+            return clip === null ? 0 : clip.cut ? 2 : 1;
+        }
+        set CutCopyMode(v) {
+            if (v === false || v === 0 || opt(v) === undefined) clip = null;
+        }
         Range(cell1, cell2) {
             if (cell1 instanceof Range) return cell1.$sheet.$range(cell1, cell2);
             return activeSheet().$range(cell1, cell2);
@@ -1295,28 +1944,51 @@ module.exports = function createExcel(rt, addon, options) {
             const rs = ranges.map(opt).filter((r) => r !== undefined);
             if (rs.length < 2 || rs.some((r) => !(r instanceof Range))) rt.raise(13);
             if (rs.some((r) => r.$sheet !== rs[0].$sheet)) fail("別のシートの範囲");
-            const r1 = Math.max(...rs.map((r) => r.$r1));
-            const c1 = Math.max(...rs.map((r) => r.$c1));
-            const r2 = Math.min(...rs.map((r) => r.$r2));
-            const c2 = Math.min(...rs.map((r) => r.$c2));
-            return r1 > r2 || c1 > c2 ? null : new Range(rs[0].$sheet, r1, c1, r2, c2);
+            // The cells every range has: area by area.
+            let boxes = rs[0].$list().map((a) => a.$bounds());
+            for (const r of rs.slice(1)) {
+                const next = [];
+                for (const [r1, c1, r2, c2] of boxes) {
+                    for (const a of r.$list()) {
+                        const box = [Math.max(r1, a.$r1), Math.max(c1, a.$c1), Math.min(r2, a.$r2), Math.min(c2, a.$c2)];
+                        if (box[0] <= box[2] && box[1] <= box[3]) next.push(box);
+                    }
+                }
+                boxes = next;
+            }
+            return boxes.length === 0 ? null : Range.$of(rs[0].$sheet, boxes);
         }
         Union(...ranges) {
             const rs = ranges.map(opt).filter((r) => r !== undefined);
-            if (rs.some((r) => !(r instanceof Range))) rt.raise(13);
-            const box = new Range(rs[0].$sheet, Math.min(...rs.map((r) => r.$r1)), Math.min(...rs.map((r) => r.$c1)), Math.max(...rs.map((r) => r.$r2)), Math.max(...rs.map((r) => r.$c2)));
-            const cells = (r) => r.$height * r.$width;
-            // Only a union that is a rectangle: several areas need Excel.
-            const inside = new Set();
-            for (const r of rs) for (let i = r.$r1; i <= r.$r2 && inside.size <= 1e6; i++) for (let j = r.$c1; j <= r.$c2; j++) inside.add(`${i},${j}`);
-            if (rs.some((r) => r.$sheet !== box.$sheet) || inside.size !== cells(box)) needsExcel("複数の領域からなる範囲（Union）");
-            return box;
+            if (rs.length === 0 || rs.some((r) => !(r instanceof Range))) rt.raise(13);
+            if (rs.some((r) => r.$sheet !== rs[0].$sheet)) fail("別のシートの範囲");
+            const areas = rs.flatMap((r) => r.$list());
+            const box = [Math.min(...areas.map((r) => r.$r1)), Math.min(...areas.map((r) => r.$c1)), Math.max(...areas.map((r) => r.$r2)), Math.max(...areas.map((r) => r.$c2))];
+            // One area when the ranges fill a rectangle; otherwise the areas as they are given
+            // (without those that lie within another).
+            const cells = (box[2] - box[0] + 1) * (box[3] - box[1] + 1);
+            if (cells <= 1e6) {
+                const inside = new Set();
+                for (const r of areas) for (let i = r.$r1; i <= r.$r2; i++) for (let j = r.$c1; j <= r.$c2; j++) inside.add(i * 16385 + j);
+                if (inside.size === cells) return new Range(rs[0].$sheet, ...box);
+            }
+            const within = (a, b) => a !== b && a.$r1 >= b.$r1 && a.$c1 >= b.$c1 && a.$r2 <= b.$r2 && a.$c2 <= b.$c2;
+            const kept = areas.filter((a, i) => !areas.some((b, j) => within(a, b) || (j < i && a.$same(b))));
+            return Range.$of(rs[0].$sheet, kept.map((a) => a.$bounds()));
         }
         Calculate() {
-            for (const b of this.$books) book(() => b.$book.calculate());
+            for (const b of this.$books.slice()) calculated(b, true);
         }
         CalculateFull() {
-            this.Calculate();
+            for (const b of this.$books.slice()) {
+                book(() => b.$book.calculate());
+                if (b.$project && listens("Calculate", "SheetCalculate")) {
+                    for (const sheet of b.$sheets) {
+                        raise([sheet.CodeName], "Calculate", []);
+                        raise(WORKBOOK, "SheetCalculate", [sheet]);
+                    }
+                }
+            }
         }
         Evaluate(text) {
             return evaluate(activeSheet(), text);
@@ -1355,10 +2027,11 @@ module.exports = function createExcel(rt, addon, options) {
             return true;
         }
         $debugProperties() {
-            return { name: this.Name, activeWorkbook: this.$activeBook, workbooks: this.$books.slice(), ...this.$state };
+            return { name: this.Name, activeWorkbook: this.$activeBook, workbooks: this.$books.slice(), cutCopyMode: this.CutCopyMode, ...this.$state };
         }
     }
     for (const prop of Object.keys(APP_STATE)) {
+        if (prop === "Calculation") continue;
         Object.defineProperty(Application.prototype, prop, {
             get() {
                 return this.$state[prop];
@@ -1382,9 +2055,14 @@ module.exports = function createExcel(rt, addon, options) {
         const file = options.workbook ? path.resolve(root, options.workbook) : null;
         if (file !== null) {
             if (!fs.existsSync(file)) throw new RasError(`ブック ${file} が見つかりません（ras.toml の project.workbook）`, 1004, "RAS");
-            project = new Workbook(book(() => Book.open(file)), file, true);
+            const handle = book(() => Book.open(file));
+            // Excel takes its calculation mode from the first workbook it opens.
+            const manual = handle.savedManual();
+            if (manual) app.$state.Calculation = XL.manual;
+            project = new Workbook(handle, file, true);
             app.$sources.push(file);
             console.log(`[ras] Excel を使わずに実行します。${path.basename(file)} を読み込み、数式は GridCraft の計算エンジンで計算します`);
+            if (manual) console.log("[ras] このブックは計算方法が手動で保存されています。数式は Calculate を呼ぶまで計算し直しません（Application.Calculation）");
         } else {
             project = new Workbook(Book.create(), null, true);
             console.log("[ras] Excel を使わずに実行します。ras.toml に workbook がないため、空のブックで実行します");

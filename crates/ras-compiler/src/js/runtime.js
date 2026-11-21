@@ -585,7 +585,7 @@ function isValued(v) {
 function stand() {
     if (mock !== null || bookAddon === null || (com !== null && !noExcel)) return null;
     if (excelHost === null) {
-        excelHost = require("./ras-excel.js")(module.exports, bookAddon, { workbook: config.manifest.workbook, root: config.root });
+        excelHost = require("./ras-excel.js")(module.exports, bookAddon, { workbook: config.manifest.workbook, root: config.root, handlers: documentHandlers });
     }
     return excelHost;
 }
@@ -1486,6 +1486,15 @@ let initialised = false;
 
 function module_(name, definition) {
     modules.set(name, definition);
+}
+/**
+ * The `@on` handlers of the workbook and its sheets, in the order they are declared. The
+ * stand-in for Excel raises their events (spec §14.10.8); with a real Excel they are not called.
+ */
+function documentHandlers() {
+    const out = [];
+    for (const m of modules.values()) for (const e of m.events || []) out.push(e);
+    return out;
 }
 /** Runs the module initialisers and `@init` functions once (VBA `RAS_EnsureInit`). */
 function ensureInit() {
