@@ -1,0 +1,34 @@
+// The module of the sheet Sheet1: its events.
+import { log } from "../main";
+
+@on("Worksheet.Change")
+function changed(target: Excel.Range) {
+    log(`Change ${target.address(false, false)}`);
+    // Written by the handler itself: not entered again.
+    if (target.column == 1) this.cells(target.row, 8).value = "seen";
+}
+
+@on("Worksheet.SelectionChange")
+function selected(target: Excel.Range) {
+    log(`SelectionChange ${target.address(false, false)}`);
+}
+
+@on("Worksheet.Calculate")
+function recalculated() {
+    log(`Calculate F1=${this.range("F1").value}`);
+}
+
+@on("Worksheet.Deactivate")
+function deactivated() {
+    log("Deactivate");
+}
+
+@on("Worksheet.Activate")
+function entered() {
+    log("Activate");
+}
+
+@on("Worksheet.BeforeDelete")
+function deleting() {
+    log("BeforeDelete");
+}

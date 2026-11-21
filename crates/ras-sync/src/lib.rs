@@ -126,6 +126,9 @@ impl Session {
         if sync.pull_unmanaged {
             let mut project = book.project()?;
             let modules: Vec<ras_form::import::BookModule> = project.components()?.iter().filter_map(book_module).collect();
+            // The controls on the sheets are read from the saved workbook by the compiler's driver;
+            // the take-over of an open workbook converts their event procedures without them.
+            let sheet_controls: Vec<ras_compiler::FormDecl> = Vec::new();
             let mut failure = None;
             let mut form = |name: &str| {
                 project.export_form(name, codepage).map_err(|e| {
@@ -136,7 +139,7 @@ impl Session {
                     message
                 })
             };
-            prepared = ras_form::import::prepare(root, ras_form::import::Book { modules: &modules, workbook_code_name: &code_name, form: &mut form }, codepage).map_err(SyncError::Failed)?;
+            prepared = ras_form::import::prepare(root, ras_form::import::Book { modules: &modules, workbook_code_name: &code_name, sheet_controls: &sheet_controls, form: &mut form }, codepage).map_err(SyncError::Failed)?;
             if let Some(busy) = failure {
                 return Err(busy);
             }

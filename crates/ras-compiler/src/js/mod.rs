@@ -89,7 +89,7 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
         }
         module_names.insert(md.vba_name.clone(), serde_json::Value::String(format!("./{file_name}")));
         module_files.push(file_name);
-        if md.form.is_some() {
+        if md.is_form() {
             // A form is started by showing it (spec §14.10.7).
             forms.push(format!("{}.show", md.vba_name));
         } else {
@@ -102,7 +102,7 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
     out.entries.extend(others);
     out.entries.extend(forms);
     let list = module_files.iter().map(|f| format!("    {},\n", js_str(&format!("./{f}")))).collect::<String>();
-    let form_names: Vec<&str> = prog.modules.iter().filter(|m| m.form.as_ref().is_some_and(|f| f.decl.is_some())).map(|m| m.vba_name.as_str()).collect();
+    let form_names: Vec<&str> = prog.modules.iter().filter(|m| m.is_form() && m.form.as_ref().is_some_and(|f| f.decl.is_some())).map(|m| m.vba_name.as_str()).collect();
     let manifest = serde_json::json!({
         "project": prog.config.project.name,
         "workbook": prog.config.project.workbook,
@@ -134,9 +134,10 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
 /// Path of a module's JavaScript file without `.js`: the import key, except for a form's
 /// code-behind (`@forms/frmInput`: its key `<forms>/frmInput` is not a valid file name).
 fn js_key(md: &ModuleData) -> String {
-    match md.key.strip_prefix(crate::collect::FORM_KEY_PREFIX) {
-        Some(name) => format!("@forms/{name}"),
-        None => md.key.clone(),
+    match (md.key.strip_prefix(crate::collect::FORM_KEY_PREFIX), md.key.strip_prefix(crate::collect::OBJECT_KEY_PREFIX)) {
+        (Some(name), _) => format!("@forms/{name}"),
+        (_, Some(name)) => format!("@objects/{name}"),
+        _ => md.key.clone(),
     }
 }
 
@@ -498,11 +499,13 @@ impl<'p> Gen<'p> {
             }
             for ev in &d.attrs.on_events {
                 match &md.form {
-                    Some(form) => events.push(self.form_handler(form, ev, f)),
-                    None => events.push(self.document_handler(ev, f)),
+                    Some(form) if form.kind == ObjectKind::Form => events.push(self.form_handler(form, ev, f)),
+                    Some(form) => events.extend(self.document_handler(form, ev, f)),
+                    // An error already (`E0610`): `@on` is written in the file of the sheet.
+                    None => {}
                 }
             }
-            if md.form.is_some() {
+            if md.is_form() {
                 continue;
             }
             if d.is_debug_entry() {
@@ -512,7 +515,7 @@ impl<'p> Gen<'p> {
                 }
             }
         }
-        if md.form.is_some() {
+        if md.is_form() {
             self.register_form(events);
             return;
         }
@@ -547,17 +550,27 @@ impl<'p> Gen<'p> {
     /// The stand-in for Excel calls it with the arguments of the event as `{ v }` cells, as the
     /// forms do: a `byref` parameter (`cancel`) gets the cell, the others its value. A handler
     /// takes as many of the event's arguments as it declares parameters.
-    fn document_handler(&self, ev: &OnEvent, f: FnId) -> String {
+    ///
+    /// The target is the sheet's code name, or `Workbook`. Events of controls on a sheet are
+    /// raised by the user only: they are not registered.
+    fn document_handler(&self, doc: &FormModule, ev: &OnEvent, f: FnId) -> Option<String> {
         let d = &self.prog.fns[f];
+        let md = &self.prog.modules[self.module];
+        let target = match doc.kind {
+            ObjectKind::Workbook if ev.target.eq_ignore_ascii_case("Workbook") || ev.target.eq_ignore_ascii_case("ThisWorkbook") => "Workbook".to_string(),
+            ObjectKind::Sheet if ev.target.eq_ignore_ascii_case("Worksheet") || ev.target.to_lowercase() == md.vba_name.to_lowercase() => md.vba_name.clone(),
+            _ => return None,
+        };
+        let event = crate::lower::document_event(doc.kind == ObjectKind::Workbook, &ev.event)?;
         let args: Vec<String> = d.params.iter().enumerate().map(|(i, p)| if p.mode == PassMode::ByRef { format!("$a[{i}]") } else { format!("$a[{i}].v") }).collect();
-        format!(
+        Some(format!(
             "{{ target: {}, event: {}, reentrant: {}, fn: ($a) => {}({}) }}",
-            js_str(&ev.target),
-            js_str(&ev.event),
+            js_str(&target),
+            js_str(event),
             ev.reentrant,
             js_ident(&d.name),
             args.join(", ")
-        )
+        ))
     }
 
     /// The entry of `$rt.form` for an `@on` handler of a form (spec §14.11.2). The run time

@@ -622,12 +622,12 @@ pub fn print_module(m: &VModule, opts: &PrintOptions) -> Printed {
     for c in &m.leading_comments {
         p.raw_line(&format!("' {c}"));
     }
-    if m.kind != VModuleKind::Document {
-        p.raw_line("Option Explicit");
-        p.raw_line("Option Compare Binary");
-        if m.private_module && m.kind == VModuleKind::Standard {
-            p.raw_line("Option Private Module");
-        }
+    // A document module is generated whole, like the others (spec §12.2); `Option Private Module`
+    // cannot be written in an object module.
+    p.raw_line("Option Explicit");
+    p.raw_line("Option Compare Binary");
+    if m.private_module && m.kind == VModuleKind::Standard {
+        p.raw_line("Option Private Module");
     }
     for i in &m.implements {
         p.raw_line(&format!("Implements {i}"));

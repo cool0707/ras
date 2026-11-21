@@ -1,0 +1,11 @@
+// シート Sheet1（売上データ）のモジュール。このファイルがシートのモジュール全体になる。
+
+/** データが変更されたら、ステータスバーに知らせる。 */
+@on("Worksheet.Change")
+function onDataChanged(target: Excel.Range) {
+    try {
+        status(`${target.address} が変更されました`);
+    } catch (e) {
+        console.log(e.description);
+    }
+}

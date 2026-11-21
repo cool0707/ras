@@ -196,15 +196,28 @@ export function ask(): string {
     }
     return inputBox("月を入力してください", "入力", "2026/4");
 }
+```
 
-// イベントは @on("対象.イベント")。シートはコード名、ブックは Workbook
-@on("Sheet1.Change")
+シートと `ThisWorkbook` のコード（イベントなど）は、`objects/` のファイルに書きます。ファイルがそのシートのモジュール全体になります。
+
+```typescript
+// objects/Sheet1.ras（コード名 Sheet1 のシートのモジュール）
+// イベントは @on("Worksheet.イベント")。このシートは this
+@on("Worksheet.Change")
 function changed(target: Excel.Range) {
     if (target.column == 1) {
-        status("A 列が変更されました: " + target.address);
+        this.range("D1").value = target.address;
     }
 }
 
+// export した関数は、ほかのモジュールから Sheet1.clearInput() で呼べる
+export function clearInput() {
+    this.range("A2:C100").clearContents();
+}
+```
+
+```typescript
+// objects/ThisWorkbook.ras（ブックのモジュール）
 @on("Workbook.Open")
 function opened() {
     status("");

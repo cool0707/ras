@@ -625,9 +625,11 @@ fn renamable(prog: &Program, t: &Target) -> Result<(), String> {
             }
         }
         Target::Field(c, _) if prog.classes[*c].kind == ClassKind::Host => {
-            let is_form = md.form.as_ref().is_some_and(|f| f.class == Some(*c));
-            return Err(if is_form {
+            let object = md.form.as_ref().filter(|f| f.class == Some(*c)).map(|f| f.kind);
+            return Err(if object == Some(ObjectKind::Form) {
                 format!("`{name}` はフォームのコントロールです。名前はデザイナー（forms/{}.form.json）で変更してください", md.vba_name)
+            } else if object.is_some() {
+                format!("`{name}` はシートの上のコントロールです。名前は Excel で変更してください")
             } else {
                 format!("`{name}` は型定義のメンバーのため、名前を変更できません")
             });
@@ -846,7 +848,8 @@ fn check_new_name(prog: &Program, targets: &[Target], refs: &[Reference], new: &
             // share the names of its procedures and variables.
             if let Some(c) = prog.modules[home].form.as_ref().and_then(|f| f.class) {
                 if prog.find_field(c, new).is_some() || !prog.find_methods(c, new).is_empty() {
-                    return Err(format!("`{new}` はフォーム `{}` のコントロールまたはメンバーと同じ名前のため使えません", prog.class_display(c)));
+                    let what = if prog.modules[home].is_form() { "フォーム" } else { "シート・ブック" };
+                    return Err(format!("`{new}` は{what} `{}` のコントロールまたはメンバーと同じ名前のため使えません", prog.class_display(c)));
                 }
             }
             for &m in &affected {

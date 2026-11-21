@@ -347,6 +347,9 @@ pub struct FnAttrs {
     pub fallback: Option<String>,
     /// Declared in a form's code-behind: a member of the form's code module.
     pub form_member: bool,
+    /// Declared in the file of a sheet or of `ThisWorkbook` (spec §12.2): a member of that
+    /// document module.
+    pub doc_member: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -761,21 +764,45 @@ pub struct ModuleData {
     pub vars: Vec<VarId>,
     pub imports: Vec<ModuleId>,
     pub line_starts: Vec<u32>,
-    /// Set for a form's code-behind (`forms/<Name>.ras`, spec §14.11): the module is the
-    /// form's code module.
+    /// Set for a module that is the code of an object of the workbook: a form's code-behind
+    /// (`forms/<Name>.ras`, spec §14.11), or the file of a sheet or of `ThisWorkbook`
+    /// (`objects/<CodeName>.ras`, spec §12.2).
     pub form: Option<FormModule>,
 }
 
-/// A module that is the code of a user form.
+/// Which object of the workbook a module is the code of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObjectKind {
+    /// A user form (`forms/<Name>.ras`).
+    Form,
+    /// A worksheet (`objects/<CodeName>.ras`).
+    Sheet,
+    /// The workbook (`objects/ThisWorkbook.ras`).
+    Workbook,
+}
+
+/// A module that is the code of a user form, of a sheet or of the workbook.
 #[derive(Clone, Debug)]
 pub struct FormModule {
+    pub kind: ObjectKind,
     /// Name and controls; `None` when `forms/<Name>.form.json` is missing or unreadable.
+    /// For a sheet, its code name and the ActiveX controls on it (spec §12.2.1).
     pub decl: Option<crate::config::FormDecl>,
-    /// The type of `this`: the form with its controls as fields.
+    /// The type of `this`: the form (sheet, workbook) with its controls as fields.
     pub class: Option<ClassId>,
 }
 
 impl ModuleData {
+    /// A form's code-behind (`forms/<Name>.ras`).
+    pub fn is_form(&self) -> bool {
+        self.form.as_ref().is_some_and(|f| f.kind == ObjectKind::Form)
+    }
+
+    /// The file of a sheet or of `ThisWorkbook` (`objects/<CodeName>.ras`): a document module.
+    pub fn document(&self) -> Option<&FormModule> {
+        self.form.as_ref().filter(|f| f.kind != ObjectKind::Form)
+    }
+
     /// 1-based line number of a byte offset.
     pub fn line_of(&self, offset: u32) -> u32 {
         match self.line_starts.binary_search(&offset) {

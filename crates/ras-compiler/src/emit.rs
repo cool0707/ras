@@ -178,9 +178,8 @@ fn finish(m: &VModule, code: String, mappings: Vec<Mapping>, codepage: u16, diag
         diags.push(Diagnostic { severity: Severity::Error, code, message, module: None, span: Default::default() });
     };
     let mut reported_char = false;
-    // Document modules have no hash line: their code is merged into a managed region.
     // Forms carry their own marker line (spec §14.11.3).
-    let no_hash = matches!(m.kind, VModuleKind::Document | VModuleKind::Form);
+    let no_hash = matches!(m.kind, VModuleKind::Form);
     let offset = if no_hash { 0 } else { 1 };
     for (i, raw) in code.lines().enumerate() {
         let (line, bad) = sanitize_line(raw, codepage);

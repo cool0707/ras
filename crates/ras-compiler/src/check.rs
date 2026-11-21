@@ -1844,6 +1844,12 @@ impl Checker<'_> {
     }
 
     /// A bundled host name written with another casing (usually the type library's `Cells`).
+    /// Whether the controls on the sheets are known (the project's workbook was read): a member
+    /// a sheet does not have is then an error, not a late-bound call (spec §12.2.1).
+    fn knows_document_members(&self, _module: ModuleId) -> bool {
+        self.prog.config.sheet_controls_known
+    }
+
     fn warn_host_case(&mut self, written: &Ident, js: &str) {
         self.warn(written.span, "W0304", format!("`{}` は RAS では `{js}` と書きます（Excel / VBA のメンバーは camelCase で参照します）", written.text));
         self.prog.fixes.push(crate::diag::Fix { module: self.module, span: written.span, replacement: js.to_string(), code: "W0304" });
@@ -2097,10 +2103,17 @@ impl Checker<'_> {
                 }
                 let def = &self.prog.classes[*c];
                 // A form's members are all known: its controls, the UserForm members, its exports.
-                let is_form = self.prog.modules[def.module].form.as_ref().is_some_and(|f| f.class == Some(*c));
-                if is_form {
+                let object = self.prog.modules[def.module].form.as_ref().filter(|f| f.class == Some(*c)).map(|f| f.kind);
+                if object == Some(ObjectKind::Form) {
                     let shown = self.prog.class_display(*c);
                     self.err(name.span, "E0202", format!("フォーム `{shown}` にコントロールやメンバー `{}` はありません（コントロールは forms/{shown}.form.json に、公開する関数は export して書きます）", name.text));
+                    Access::Error
+                } else if object.is_some() && self.knows_document_members(def.module) {
+                    // A sheet's members are all known too: those of the worksheet, the controls
+                    // on it and the exports of its file (spec §12.2).
+                    let shown = self.prog.class_display(*c);
+                    let what = if object == Some(ObjectKind::Workbook) { "ブック".to_string() } else { format!("シート `{shown}` ") };
+                    self.err(name.span, "E0202", format!("{what}にメンバーやコントロール `{}` はありません（公開する関数は objects/{shown}.ras に export して書きます。Excel で足したコントロールは、ブックを保存すると使えます）", name.text));
                     Access::Error
                 } else if def.kind == ClassKind::Host {
                     let shown = self.prog.class_display(*c);

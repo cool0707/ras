@@ -125,8 +125,9 @@ pub fn collect(inputs: Vec<SourceInput>, config: Config) -> Program {
     for m in 0..c.prog.modules.len() {
         c.declare_module_items(m);
     }
-    c.add_sheet_code_names();
+    // The files of sheets come first: their code names get the type with the file's members.
     c.add_forms();
+    c.add_sheet_code_names();
     for m in 0..c.prog.modules.len() {
         c.resolve_imports(m);
     }
@@ -139,6 +140,7 @@ pub fn collect(inputs: Vec<SourceInput>, config: Config) -> Program {
         }
     }
     c.resolve_signatures();
+    c.check_document_names();
     c.prog.cur_namespace = None;
     for m in 0..c.prog.modules.len() {
         if !c.is_bundled_typedef(m) {
@@ -193,9 +195,21 @@ impl Collector {
         let mut info = TypeInfo::default();
         info.expr_types = vec![Type::Error; parse.ast.expr_count as usize];
         // A form's code-behind is the form's code module: its VBA name is the form's name.
-        let form = match input.key.strip_prefix(FORM_KEY_PREFIX) {
-            Some(name) if input.kind == ModuleKind::User => {
-                Some((name.to_string(), FormModule { decl: self.prog.config.forms.iter().find(|f| f.name.eq_ignore_ascii_case(name)).cloned(), class: None }))
+        // The file of a sheet (of `ThisWorkbook`) is that document module (spec §12.2).
+        let form = match (input.key.strip_prefix(FORM_KEY_PREFIX), input.key.strip_prefix(OBJECT_KEY_PREFIX)) {
+            (Some(name), _) if input.kind == ModuleKind::User => {
+                Some((name.to_string(), FormModule { kind: ObjectKind::Form, decl: self.prog.config.forms.iter().find(|f| f.name.eq_ignore_ascii_case(name)).cloned(), class: None }))
+            }
+            (_, Some(name)) if input.kind == ModuleKind::User => {
+                let cfg = &self.prog.config;
+                let (kind, code_name) = if name.eq_ignore_ascii_case("ThisWorkbook") {
+                    (ObjectKind::Workbook, "ThisWorkbook".to_string())
+                } else {
+                    // The code name as the workbook spells it.
+                    (ObjectKind::Sheet, cfg.sheet_code_names.iter().find(|n| n.to_lowercase() == name.to_lowercase()).cloned().unwrap_or_else(|| name.to_string()))
+                };
+                let controls = cfg.sheet_controls.iter().find(|d| d.name.to_lowercase() == code_name.to_lowercase()).map(|d| d.controls.clone()).unwrap_or_default();
+                Some((code_name.clone(), FormModule { kind, decl: Some(crate::config::FormDecl { name: code_name, controls }), class: None }))
             }
             _ => None,
         };
@@ -240,6 +254,22 @@ impl Collector {
                 continue;
             }
             let lower = self.prog.modules[m].vba_name.to_lowercase();
+            // A standard module cannot have the name of a sheet or of the workbook: their code
+            // is written in `objects/` (spec §12.1.1).
+            if self.prog.modules[m].form.is_none() && self.prog.modules[m].kind == ModuleKind::User && !self.prog.modules[m].is_test() {
+                let sheet = self.prog.config.sheet_code_names.iter().find(|n| n.to_lowercase() == lower).cloned();
+                let document = if lower == "thisworkbook" { Some("ThisWorkbook".to_string()) } else { sheet };
+                if let Some(doc) = document {
+                    let msg = format!(
+                        "VBA モジュール名 `{}` が{}と重複します。{}のコードは `objects/{doc}.ras` に書きます（`src/` のファイルは標準モジュールになります）",
+                        self.prog.modules[m].vba_name,
+                        if doc == "ThisWorkbook" { "ブックのモジュール `ThisWorkbook` ".to_string() } else { format!("シートのコード名 `{doc}` ") },
+                        if doc == "ThisWorkbook" { "ブック" } else { "シート" }
+                    );
+                    self.err(m, Span::default(), "E0102", msg);
+                    continue;
+                }
+            }
             if let Some(&other) = seen.get(&lower) {
                 let msg = format!(
                     "VBA モジュール名 `{}` が `{}` と重複します（VBA のモジュール名は大文字小文字を区別せず、プロジェクト内で一意である必要があります）",
@@ -277,8 +307,9 @@ impl Collector {
     }
 
     /// What a form's code-behind cannot contain: it is the code module of the form (an object
-    /// module), not a standard module (spec §14.11.2).
-    fn check_form_items(&mut self, m: ModuleId) {
+    /// module), not a standard module (spec §14.11.2). The same holds for the file of a sheet or
+    /// of `ThisWorkbook` (spec §12.2).
+    fn check_form_items(&mut self, m: ModuleId, kind: ObjectKind) {
         let ast = self.prog.modules[m].ast.clone();
         for item in &ast.items {
             let (span, what) = match item {
@@ -292,7 +323,12 @@ impl Collector {
                 Item::TypeAlias(a) if a.exported => (a.name.span, "`export` した型エイリアス"),
                 _ => continue,
             };
-            self.err(m, span, "E0630", format!("フォームのコードビハインドには{what}を書けません（関数・変数・定数・列挙型だけを書けます。共有するものは src/ のモジュールに置いてください）"));
+            if kind == ObjectKind::Form {
+                self.err(m, span, "E0630", format!("フォームのコードビハインドには{what}を書けません（関数・変数・定数・列挙型だけを書けます。共有するものは src/ のモジュールに置いてください）"));
+            } else {
+                let file = if kind == ObjectKind::Workbook { "`ThisWorkbook` のファイル" } else { "シートのファイル" };
+                self.err(m, span, "E0650", format!("{file}には{what}を書けません（VBA のドキュメントモジュールに置けないためです。関数・変数・定数・列挙型だけを書けます。共有するものは src/ のモジュールに置いてください）"));
+            }
         }
     }
 
@@ -305,9 +341,14 @@ impl Collector {
             Some(Sym::Class(c)) => Some(*c),
             _ => None,
         };
+        let excel = self.prog.namespaces.get("Excel").cloned().unwrap_or_default();
         for m in 0..self.prog.modules.len() {
             let Some(form) = self.prog.modules[m].form.clone() else { continue };
-            self.check_form_items(m);
+            self.check_form_items(m, form.kind);
+            if form.kind != ObjectKind::Form {
+                self.add_document(m, &form, &excel, &msforms);
+                continue;
+            }
             let Some(decl) = form.decl else {
                 let msg = format!("フォーム `{}` のデザイン（forms/{}.form.json）が見つかりません。`ras form new` で作るか、ブックから `ras form pull` で取り出してください", self.prog.modules[m].vba_name, self.prog.modules[m].vba_name);
                 self.err(m, Span::default(), "E0631", msg);
@@ -371,6 +412,150 @@ impl Collector {
                 self.err(m, Span::default(), "E0101", msg);
             } else {
                 self.prog.globals.insert(decl.name.clone(), Sym::Var(var));
+            }
+        }
+    }
+
+    /// The type of `this` in the file of a sheet or of `ThisWorkbook` (spec §12.2): a host class
+    /// extending `Excel.Worksheet` (`Excel.Workbook`) whose fields are the ActiveX controls on the
+    /// sheet (spec §12.2.1) and whose methods are the file's `export function`s. The sheet's code
+    /// name (`thisWorkbook`) is a global of that type, so other modules can write
+    /// `Sheet1.clearInput()`.
+    fn add_document(&mut self, m: ModuleId, form: &FormModule, excel: &HashMap<String, Sym>, msforms: &HashMap<String, Sym>) {
+        let Some(decl) = form.decl.clone() else { return };
+        let workbook = form.kind == ObjectKind::Workbook;
+        if !workbook {
+            let known = &self.prog.config.sheet_code_names;
+            if !known.is_empty() && !known.iter().any(|n| n.to_lowercase() == decl.name.to_lowercase()) {
+                let msg = format!(
+                    "`{}`: ブックにコード名 `{}` のワークシートがありません。コード名は、シートの見出しの名前ではなく、VBE のプロジェクトに表示される名前です（ブックのシート: {}）。シートのコード名を変えたときは、ファイル名も変えてください",
+                    self.prog.modules[m].rel_path,
+                    decl.name,
+                    known.join(", ")
+                );
+                self.err(m, Span::default(), "E0610", msg);
+            }
+        }
+        let base = match excel.get(if workbook { "Workbook" } else { "Worksheet" }) {
+            Some(Sym::Class(c)) => Some(*c),
+            _ => None,
+        };
+        let doc = if workbook { "ブックのモジュール（objects/ThisWorkbook.ras）。".to_string() } else { format!("シート `{}` のモジュール（objects/{}.ras）。", decl.name, decl.name) };
+        let ident = ast::Ident { text: decl.name.clone(), span: Span::default() };
+        let id = self.alloc_class(m, &ident, ClassKind::Host, true, Some(doc.clone()), &Target::Global);
+        self.prog.classes[id].extends = base.map(|c| Type::Class(c, Vec::new())).into_iter().collect();
+        let mut fields: Vec<FieldDef> = Vec::new();
+        for control in &decl.controls {
+            let ty = match msforms.iter().find(|(k, _)| k.eq_ignore_ascii_case(&control.control_type)) {
+                Some((_, Sym::Class(c))) => Type::Class(*c, Vec::new()),
+                _ => Type::Object,
+            };
+            if fields.iter().any(|f| f.name.eq_ignore_ascii_case(&control.name)) {
+                continue;
+            }
+            fields.push(FieldDef {
+                name: control.name.clone(),
+                host_name: None,
+                ty,
+                vis: Visibility::Public,
+                is_static: false,
+                readonly: true,
+                init: None,
+                doc: Some(format!("シートの上のコントロール {}（{}）", control.name, if control.control_type.is_empty() { "ActiveX" } else { control.control_type.as_str() })),
+                span: Span::default(),
+            });
+        }
+        self.prog.classes[id].fields = fields;
+        let exported: Vec<FnId> = self.prog.modules[m].fns.iter().copied().filter(|&f| self.prog.fns[f].exported && matches!(self.prog.fns[f].kind, FnKind::Free)).collect();
+        self.prog.classes[id].methods = exported;
+        if let Some(f) = self.prog.modules[m].form.as_mut() {
+            f.class = Some(id);
+        }
+        // The global the sheet (workbook) is referred to by gets the type with these members.
+        let global = if workbook { "thisWorkbook".to_string() } else { decl.name.clone() };
+        match self.prog.globals.get(&global).cloned() {
+            Some(Sym::Var(v)) => self.prog.vars[v].ty = Type::Class(id, Vec::new()),
+            Some(_) => {
+                let msg = format!("シートのコード名 `{}` は既に宣言されている名前と重複します", decl.name);
+                self.err(m, Span::default(), "E0101", msg);
+            }
+            None => {
+                let var = self.prog.vars.len();
+                self.prog.vars.push(VarDef {
+                    id: var,
+                    module: m,
+                    name: global.clone(),
+                    host_name: if workbook { Some("ThisWorkbook".into()) } else { None },
+                    ty: Type::Class(id, Vec::new()),
+                    is_const: true,
+                    exported: false,
+                    declared: true,
+                    init: None,
+                    const_value: None,
+                    doc: Some(doc),
+                    name_span: Span::default(),
+                    used_outside_main: false,
+                    reassigned: false,
+                });
+                self.prog.globals.insert(global, Sym::Var(var));
+            }
+        }
+    }
+
+    /// Functions and variables of a sheet's (the workbook's) file named like a member of the
+    /// sheet (workbook) or a control on it: `Sheet1.name` would be either (spec §12.2, `E0651`).
+    fn check_document_names(&mut self) {
+        for m in 0..self.prog.modules.len() {
+            let Some(doc) = self.prog.modules[m].document().cloned() else { continue };
+            let Some(class) = doc.class else { continue };
+            // The global keeps the type with the file's members, whatever its declaration says
+            // (`declare const ThisWorkbook: Excel.Workbook`).
+            let global = if doc.kind == ObjectKind::Workbook { "thisWorkbook".to_string() } else { self.prog.modules[m].vba_name.clone() };
+            if let Some(Sym::Var(v)) = self.prog.globals.get(&global).cloned() {
+                self.prog.vars[v].ty = Type::Class(class, Vec::new());
+            }
+            // Members of the sheet: those of `Excel.Worksheet` and what it extends, and the controls.
+            let mut members: HashMap<String, String> = HashMap::new();
+            let mut pending: Vec<ClassId> = self.prog.classes[class].extends.iter().filter_map(|t| if let Type::Class(c, _) = t { Some(*c) } else { None }).collect();
+            let mut seen: Vec<ClassId> = Vec::new();
+            while let Some(c) = pending.pop() {
+                if seen.contains(&c) {
+                    continue;
+                }
+                seen.push(c);
+                let def = &self.prog.classes[c];
+                for f in &def.fields {
+                    members.entry(f.name.to_lowercase()).or_insert_with(|| f.name.clone());
+                }
+                for &f in &def.methods {
+                    let name = &self.prog.fns[f].name;
+                    members.entry(name.to_lowercase()).or_insert_with(|| name.clone());
+                }
+                pending.extend(def.extends.iter().filter_map(|t| if let Type::Class(c, _) = t { Some(*c) } else { None }));
+            }
+            for f in &self.prog.classes[class].fields {
+                members.entry(f.name.to_lowercase()).or_insert_with(|| f.name.clone());
+            }
+            let what = if doc.kind == ObjectKind::Workbook { "ブック" } else { "シート" };
+            let mut bad: Vec<(Span, String, String)> = Vec::new();
+            for &f in &self.prog.modules[m].fns {
+                let d = &self.prog.fns[f];
+                if matches!(d.kind, FnKind::Free) {
+                    if let Some(member) = members.get(&d.name.to_lowercase()) {
+                        bad.push((d.name_span, d.name.clone(), member.clone()));
+                    }
+                }
+            }
+            for &v in &self.prog.modules[m].vars {
+                let d = &self.prog.vars[v];
+                if d.module == m && d.name_span != Span::default() {
+                    if let Some(member) = members.get(&d.name.to_lowercase()) {
+                        bad.push((d.name_span, d.name.clone(), member.clone()));
+                    }
+                }
+            }
+            for (span, name, member) in bad {
+                self.err(m, span, "E0651", format!("`{name}` は{what}のメンバー `{member}` と同じ名前です。別の名前にしてください（`{}.{member}` や `this.{member}` がどちらを指すか決まらなくなります）", doc.decl.as_ref().map(|d| d.name.as_str()).unwrap_or("this")));
             }
         }
     }
@@ -1167,7 +1352,18 @@ impl Collector {
             (None, _) => None,
         };
         let mut attrs = self.fn_attrs(m, &decl, &kind);
-        if self.prog.modules[m].form.is_some() && matches!(kind, FnKind::Free | FnKind::ModInit) {
+        if self.prog.modules[m].document().is_some() && matches!(kind, FnKind::Free | FnKind::ModInit) {
+            attrs.doc_member = true;
+            let bad = [("init", attrs.init), ("udf", attrs.udf), ("ribbon", attrs.ribbon)];
+            for (name, set) in bad {
+                if set {
+                    self.err(m, decl.name.span, "E0650", format!("シート・`ThisWorkbook` のファイルの関数に `@{name}` は付けられません（標準モジュールに置かなければ働きません。src/ のモジュールに置いてください）"));
+                }
+            }
+            if decl.params.first().is_some_and(|p| p.is_this) {
+                self.err(m, decl.name.span, "E0650", "シート・`ThisWorkbook` のファイルでは拡張メソッドを宣言できません（src/ のモジュールに置いてください）");
+            }
+        } else if self.prog.modules[m].form.is_some() && matches!(kind, FnKind::Free | FnKind::ModInit) {
             attrs.form_member = true;
             let bad = [("macro", attrs.macro_entry), ("init", attrs.init), ("udf", attrs.udf), ("ribbon", attrs.ribbon)];
             for (name, set) in bad {
@@ -1231,7 +1427,7 @@ impl Collector {
                         continue;
                     };
                     let Some((target, event)) = spec.split_once('.') else {
-                        self.err(m, d.span, "E0161", format!("`@on(\"{spec}\")`: `対象.イベント`（例: `Workbook.Open`, `Sheet1.Change`）の形式で指定してください"));
+                        self.err(m, d.span, "E0161", format!("`@on(\"{spec}\")`: `対象.イベント`（例: `Workbook.Open`, `Worksheet.Change`）の形式で指定してください"));
                         continue;
                     };
                     let mut reentrant = false;
@@ -1550,6 +1746,10 @@ pub const TEST_KEY_PREFIX: &str = "@test/";
 /// Import-key prefix of a form's code-behind (`forms/<Name>.ras` has the key `<forms>/<Name>`).
 /// It cannot be spelled by a relative import, so a code-behind is never imported.
 pub const FORM_KEY_PREFIX: &str = "<forms>/";
+
+/// Import-key prefix of the file of a sheet or of `ThisWorkbook` (`objects/<CodeName>.ras` has
+/// the key `<objects>/<CodeName>`, spec §12.2).
+pub const OBJECT_KEY_PREFIX: &str = "<objects>/";
 
 fn anon_struct(prog: &mut Program, m: ModuleId, kind: StructKind, fields: Vec<(String, Type, bool)>, span: Span, errors: &mut Vec<(Span, String)>) -> Type {
     if fields.iter().any(|f| f.1.is_error()) {

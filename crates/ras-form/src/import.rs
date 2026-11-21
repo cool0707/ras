@@ -8,8 +8,9 @@
 //! project:
 //!
 //! * a standard module `Module1` → `src/Module1.ras`,
-//! * the hand-written code of the sheet `Sheet1` → `src/Sheet1Events.ras`
-//!   (its event procedures become `@on("Sheet1.Change")` handlers),
+//! * the hand-written code of the sheet `Sheet1` → `objects/Sheet1.ras`, of the
+//!   workbook → `objects/ThisWorkbook.ras` (spec §12.2: the file is the whole
+//!   module; event procedures become `@on("Worksheet.Change")` handlers),
 //! * a form `frmInput` → `forms/frmInput.form.json` and `forms/frmInput.ras`
 //!   (as `ras form pull` does).
 //!
@@ -53,6 +54,8 @@ pub struct Book<'a> {
     pub modules: &'a [BookModule],
     /// The code name of the workbook (`ThisWorkbook`); the other document modules are sheets.
     pub workbook_code_name: &'a str,
+    /// The ActiveX controls on the sheets, by the sheet's code name (spec §12.2.1).
+    pub sheet_controls: &'a [ras_compiler::FormDecl],
     /// The designer of a form made in the VBE, by name (exported from the open workbook,
     /// or read from the workbook file).
     pub form: &'a mut dyn FnMut(&str) -> Result<UserForm, String>,
@@ -95,8 +98,8 @@ pub struct Imported {
 pub struct Pending {
     /// Name of the component in the workbook.
     pub name: String,
-    /// Name of the module generated from the file (`Sheet1Events` for `Sheet1`); the
-    /// same as `name` for a form.
+    /// Name of the module generated from the file (`ModMain` for `mod_Main`); the same as
+    /// `name` for a form, a sheet and the workbook.
     pub generated: String,
     /// What it is.
     pub kind: ImportKind,
@@ -157,7 +160,7 @@ impl Prepared {
         }
         out.extend(self.skipped.iter().cloned());
         for (path, what) in &self.created {
-            out.push(format!("{what}のイベント処理を書くファイル {path} を作成しました"));
+            out.push(format!("{what}のモジュールのファイル {path} を作成しました"));
         }
         out
     }
@@ -193,9 +196,46 @@ fn code_pane(code: &str) -> String {
     code.replace("\r\n", "\n").lines().skip_while(|l| l.starts_with("Attribute ") || l.starts_with("VERSION ")).map(|l| format!("{l}\n")).collect()
 }
 
-/// The hand-written part of a document module (without the RAS-managed region).
+/// The hand-written code of a document module: its code pane without the RAS-managed region
+/// that RAS wrote into document modules before a file was the whole module.
 pub fn hand_written(code: &str) -> String {
     code_pane(&ras_ovba::merge_managed_region(&code.replace("\r\n", "\n"), ""))
+}
+
+/// Whether a RAS source holds anything besides comments, blank lines and imports: a file
+/// without code generates nothing (spec §12.1), as the files [`sheet_files`] creates.
+pub fn ras_has_code(text: &str) -> bool {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut rest = text;
+    let mut code = String::new();
+    // Comments go; what a string holds does not matter here, a string being code itself.
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix("//") {
+            rest = r.find('\n').map(|i| &r[i..]).unwrap_or("");
+        } else if let Some(r) = rest.strip_prefix("/*") {
+            rest = r.find("*/").map(|i| &r[i + 2..]).unwrap_or("");
+        } else {
+            let mut chars = rest.chars();
+            let c = chars.next().unwrap_or(' ');
+            if c == '"' || c == '\'' || c == '`' {
+                // The module name of an import; any other string is code.
+                let statement = code.rsplit([';', '\n']).next().unwrap_or_default().trim_start();
+                if !statement.starts_with("import") {
+                    return true;
+                }
+                rest = rest.find('\n').map(|i| &rest[i..]).unwrap_or("");
+                continue;
+            }
+            code.push(c);
+            rest = chars.as_str();
+        }
+    }
+    code.split([';', '\n']).map(str::trim).any(|stmt| !stmt.is_empty() && !stmt.starts_with("import"))
+}
+
+/// The file of a sheet (by its code name) or of the workbook (spec §12.2).
+fn object_path(root: &Path, code_name: &str, workbook: bool) -> PathBuf {
+    ras_compiler::object_code_path(root, if workbook { "ThisWorkbook" } else { code_name })
 }
 
 /// A project module found on disk.
@@ -224,7 +264,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The modules of `src/` and the code-behinds of `forms/`.
+/// The modules of `src/`, the files of `objects/` and the code-behinds of `forms/`.
 fn project_files(root: &Path) -> Vec<ProjectFile> {
     let mut paths = Vec::new();
     walk(&root.join("src"), &mut paths);
@@ -242,7 +282,20 @@ fn project_files(root: &Path) -> Vec<ProjectFile> {
             out.push(ProjectFile { vba_name: form.name.clone(), marker: marker_of(&text), todos: todo_count(&text), path: form.code_path });
         }
     }
+    for path in object_files(root) {
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let name = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        out.push(ProjectFile { vba_name: name, marker: marker_of(&text), todos: todo_count(&text), path });
+    }
     out
+}
+
+/// The files of `objects/` (spec §12.2), sorted.
+fn object_files(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root.join(ras_compiler::OBJECTS_DIR)) else { return Vec::new() };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "ras") && !p.to_string_lossy().ends_with(".d.ras")).collect();
+    paths.sort();
+    paths
 }
 
 /// A component to convert.
@@ -274,8 +327,9 @@ pub fn prepare(root: &Path, book: Book, codepage: u16) -> Result<Prepared, Strin
                 (ImportKind::Standard, code_pane(&module.code))
             }
             ModuleKind::Document => {
+                // RAS-generated (the file is the whole module, spec §12.2), or nothing in it.
                 let code = hand_written(&module.code);
-                if !has_code(&code) {
+                if ras_compiler::emit::has_drifted(&code).is_some() || !has_code(&code) {
                     continue;
                 }
                 (ImportKind::Document { workbook: module.name.eq_ignore_ascii_case(book.workbook_code_name) }, code)
@@ -313,10 +367,15 @@ pub fn prepare(root: &Path, book: Book, codepage: u16) -> Result<Prepared, Strin
                 }
                 candidates.push(Candidate { module, kind, code, key });
             }
-            ImportKind::Document { .. } => {
-                let Some(key) = (1..100).map(|n| if n == 1 { format!("{}Events", module.name) } else { format!("{}Events{n}", module.name) }).find(|k| !taken(&vba_module_name(k)) && !root.join("src").join(format!("{k}.ras")).exists()) else {
+            ImportKind::Document { workbook } => {
+                // The file of the sheet. One with code is the project's: the usual rules of
+                // the sync apply (the hand-written code is not replaced silently). One without
+                // code — as the sync creates them (spec §14.7.2) — is replaced.
+                let path = object_path(root, &module.name, workbook);
+                if std::fs::read_to_string(&path).is_ok_and(|text| ras_has_code(&text)) {
                     continue;
-                };
+                }
+                let key = if workbook { "ThisWorkbook".to_string() } else { module.name.clone() };
                 candidates.push(Candidate { module, kind, code, key });
             }
             ImportKind::Form => {
@@ -330,16 +389,18 @@ pub fn prepare(root: &Path, book: Book, codepage: u16) -> Result<Prepared, Strin
         }
     }
 
+    let sheet_controls = book.sheet_controls;
+    let controls_of = |code_name: &str| sheet_controls.iter().find(|d| d.name.to_lowercase() == code_name.to_lowercase()).map(|d| &d.controls[..]).unwrap_or(&[]);
     // Names the converted modules make public to each other.
     let peers: Vec<Peer> = candidates
         .iter()
         .filter_map(|c| {
             let target = match c.kind {
                 ImportKind::Standard => Target::Standard,
-                ImportKind::Document { workbook } => Target::Document { code_name: &c.module.name, workbook },
+                ImportKind::Document { workbook } => Target::Document { code_name: &c.module.name, workbook, controls: controls_of(&c.module.name) },
                 ImportKind::Form => return None,
             };
-            Some(Peer { vba_name: c.module.name.clone(), key: c.key.clone(), names: vba2ras::public_names(&c.code, &target) })
+            Some(Peer { vba_name: c.module.name.clone(), key: c.key.clone(), document: matches!(c.kind, ImportKind::Document { .. }), names: vba2ras::public_names(&c.code, &target) })
         })
         .collect();
 
@@ -384,12 +445,15 @@ pub fn prepare(root: &Path, book: Book, codepage: u16) -> Result<Prepared, Strin
             }
             ImportKind::Standard | ImportKind::Document { .. } => {
                 let target = match c.kind {
-                    ImportKind::Document { workbook } => Target::Document { code_name: name, workbook },
+                    ImportKind::Document { workbook } => Target::Document { code_name: name, workbook, controls: controls_of(name) },
                     _ => Target::Standard,
                 };
                 let converted = vba2ras::convert(&c.code, &target, &peers);
                 let shift = header.lines().count();
-                let path = root.join("src").join(format!("{}.ras", c.key));
+                let path = match c.kind {
+                    ImportKind::Document { workbook } => object_path(root, name, workbook),
+                    _ => root.join("src").join(format!("{}.ras", c.key)),
+                };
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
                 }
@@ -399,8 +463,8 @@ pub fn prepare(root: &Path, book: Book, codepage: u16) -> Result<Prepared, Strin
             }
         };
         let generated = match c.kind {
-            ImportKind::Form => name.clone(),
-            _ => vba_module_name(&c.key),
+            ImportKind::Form | ImportKind::Document { .. } => name.clone(),
+            ImportKind::Standard => vba_module_name(&c.key),
         };
         if imported.todos.is_empty() {
             prepared.adopt.push((name.clone(), c.kind));
@@ -438,70 +502,46 @@ pub struct Sheet {
     pub name: String,
 }
 
-/// Whether a RAS source has a handler for an event of `target` (`@on("Sheet1.` / `@on('Sheet1.`).
-fn handles(text: &str, target: &str) -> bool {
-    let text = text.to_ascii_lowercase();
-    let target = target.to_ascii_lowercase();
-    ['"', '\''].iter().any(|q| text.contains(&format!("@on({q}{target}.")))
-}
-
 /// The text of a file [`sheet_files`] creates for the worksheet `sheet`, or the workbook when `None`.
 pub fn sheet_file_text(sheet: Option<&Sheet>, workbook_code_name: &str) -> String {
-    let (what, target, example) = match sheet {
-        Some(s) => (
-            format!("シート「{}」（コード名 {}）", s.name, s.code_name),
-            s.code_name.clone(),
-            format!("//   @on(\"{}.Change\")\n//   function onChange(target: Excel.Range) {{\n//       // セルの値が変わったとき\n//   }}\n", s.code_name),
+    match sheet {
+        Some(s) => format!(
+            "// シート「{}」（コード名 {}）のモジュールです（同期のときに作成しました）。\n// このファイルに書いたコードが、ブックのシート {} のモジュールになります（仕様 §12.2）。\n// イベントは @on(\"Worksheet.<イベント名>\") を付けた関数で受け取ります。例:\n//\n//   @on(\"Worksheet.Change\")\n//   function onChange(target: Excel.Range) {{\n//       // セルの値が変わったとき。このシートは this で表します: this.range(\"A1\")\n//   }}\n",
+            s.name, s.code_name, s.code_name
         ),
-        None => (
-            format!("ブック（{workbook_code_name}）"),
-            "Workbook".to_string(),
-            "//   @on(\"Workbook.Open\")\n//   function onOpen() {\n//       // ブックを開いたとき\n//   }\n".to_string(),
+        None => format!(
+            "// ブック（{workbook_code_name}）のモジュールです（同期のときに作成しました）。\n// このファイルに書いたコードが、ブックのモジュール {workbook_code_name} になります（仕様 §12.2）。\n// イベントは @on(\"Workbook.<イベント名>\") を付けた関数で受け取ります。例:\n//\n//   @on(\"Workbook.Open\")\n//   function onOpen() {{\n//       // ブックを開いたとき。このブックは this で表します: this.name\n//   }}\n"
         ),
-    };
-    format!(
-        "// {what}のイベント処理を書くファイルです（同期のときに作成しました）。\n// イベントは @on(\"{target}.<イベント名>\") を付けた関数で受け取ります（仕様 §12.2）。例:\n//\n{example}//\n// 関数や変数などのコードが無い間は、ブックの VBA モジュールにはなりません。\n"
-    )
+    }
 }
 
-/// Creates `src/<CodeName>Events.ras` for each worksheet of `sheets`, and for the workbook
-/// (`workbook_code_name`, normally `ThisWorkbook`), that has no file yet: the place to write
-/// its event handlers (spec §14.7.2). Nothing is created for a sheet whose events a file of
-/// the project already handles (`@on("Sheet1.…")`), or when the name is taken by another
-/// module. A file without code is not built into a module (spec §12.1), so the files cost
-/// nothing until something is written in them. Returns the files created (relative to `root`)
-/// with what they are for.
+/// Creates `objects/<CodeName>.ras` for each worksheet of `sheets`, and
+/// `objects/ThisWorkbook.ras` for the workbook (`workbook_code_name`), that has no file yet
+/// (spec §14.7.2). Nothing is created while `objects/` holds a file no sheet answers to: a
+/// sheet whose code name was changed, whose file is to be renamed. A file without code does
+/// not change the module (spec §12.2), so the files cost nothing until something is written
+/// in them. Returns the files created (relative to `root`) with what they are for.
 pub fn sheet_files(root: &Path, sheets: &[Sheet], workbook_code_name: &str) -> Result<Vec<(String, String)>, String> {
-    let mut paths = Vec::new();
-    walk(&root.join("src"), &mut paths);
-    if let Ok(forms) = workspace::load(root) {
-        paths.extend(forms.into_iter().map(|f| f.code_path));
-    }
-    let sources: Vec<(String, String)> = paths
-        .iter()
-        .map(|p| {
-            let key = relative(&root.join("src"), p);
-            (vba_module_name(key.strip_suffix(".ras").unwrap_or(&key)), std::fs::read_to_string(p).unwrap_or_default())
-        })
-        .collect();
+    let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
+    let existing: Vec<String> = object_files(root).iter().filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string())).collect();
+    let orphan = existing.iter().any(|name| !same(name, "ThisWorkbook") && !sheets.iter().any(|s| same(&s.code_name, name)));
     let mut targets: Vec<Option<&Sheet>> = sheets.iter().filter(|s| !s.code_name.is_empty()).map(Some).collect();
     if !workbook_code_name.is_empty() {
         targets.push(None);
     }
     let mut created = Vec::new();
     for sheet in targets {
-        let (code_name, target, what) = match sheet {
-            Some(s) => (s.code_name.as_str(), s.code_name.as_str(), format!("シート「{}」（{}）", s.name, s.code_name)),
-            None => (workbook_code_name, "Workbook", format!("ブック（{workbook_code_name}）")),
+        let (file, what) = match sheet {
+            Some(s) => (s.code_name.as_str(), format!("シート「{}」（{}）", s.name, s.code_name)),
+            None => ("ThisWorkbook", format!("ブック（{workbook_code_name}）")),
         };
-        let key = format!("{code_name}Events");
-        let path = root.join("src").join(format!("{key}.ras"));
-        let module = vba_module_name(&key);
-        let taken = sources.iter().any(|(name, _)| name.eq_ignore_ascii_case(&module)) || sheets.iter().any(|s| s.code_name.eq_ignore_ascii_case(&module));
-        if path.exists() || taken || sources.iter().any(|(_, text)| handles(text, target)) {
+        if existing.iter().any(|name| same(name, file)) || (orphan && sheet.is_some()) {
             continue;
         }
-        std::fs::create_dir_all(root.join("src")).map_err(|e| format!("{}: {e}", root.join("src").display()))?;
+        let path = ras_compiler::object_code_path(root, file);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
         std::fs::write(&path, sheet_file_text(sheet, workbook_code_name)).map_err(|e| format!("{}: {e}", path.display()))?;
         created.push((relative(root, &path), what));
     }
@@ -522,17 +562,21 @@ mod tests {
     #[test]
     fn sheets_without_a_file_get_one() {
         let root = project();
-        std::fs::write(root.join("src/main.ras"), "@on(\"Sheet2.Change\")\nfunction h(target: Excel.Range) {}\n").unwrap();
-        std::fs::write(root.join("src/Sheet3Events.ras"), "// mine\n").unwrap();
+        std::fs::create_dir_all(root.join("objects")).unwrap();
+        std::fs::write(root.join("objects/Sheet3.ras"), "// mine\n").unwrap();
         let sheets: Vec<Sheet> = [("Sheet1", "売上"), ("Sheet2", "集計"), ("Sheet3", "メモ")].iter().map(|(c, n)| Sheet { code_name: c.to_string(), name: n.to_string() }).collect();
         let created = sheet_files(&root, &sheets, "ThisWorkbook").unwrap();
         let paths: Vec<&str> = created.iter().map(|(p, _)| p.as_str()).collect();
-        // Sheet2 is handled in main.ras; Sheet3 has its file.
-        assert_eq!(paths, ["src/Sheet1Events.ras", "src/ThisWorkbookEvents.ras"]);
-        let text = std::fs::read_to_string(root.join("src/Sheet1Events.ras")).unwrap();
-        assert!(text.contains("シート「売上」（コード名 Sheet1）") && text.contains("@on(\"Sheet1.Change\")"), "{text}");
-        assert_eq!(std::fs::read_to_string(root.join("src/Sheet3Events.ras")).unwrap(), "// mine\n");
+        // Sheet3 has its file.
+        assert_eq!(paths, ["objects/Sheet1.ras", "objects/Sheet2.ras", "objects/ThisWorkbook.ras"]);
+        let text = std::fs::read_to_string(root.join("objects/Sheet1.ras")).unwrap();
+        assert!(text.contains("シート「売上」（コード名 Sheet1）") && text.contains("@on(\"Worksheet.Change\")"), "{text}");
+        assert_eq!(std::fs::read_to_string(root.join("objects/Sheet3.ras")).unwrap(), "// mine\n");
         // Nothing more the next time.
+        assert!(sheet_files(&root, &sheets, "ThisWorkbook").unwrap().is_empty());
+        // A file no sheet answers to (a code name that was changed): no file for the sheets.
+        std::fs::remove_file(root.join("objects/Sheet2.ras")).unwrap();
+        std::fs::write(root.join("objects/Old.ras"), "export function a() {}\n").unwrap();
         assert!(sheet_files(&root, &sheets, "ThisWorkbook").unwrap().is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -540,11 +584,20 @@ mod tests {
     #[test]
     fn the_files_build_into_nothing() {
         let sheet = Sheet { code_name: "Sheet1".into(), name: "Sheet1".into() };
-        for text in [sheet_file_text(Some(&sheet), "ThisWorkbook"), sheet_file_text(None, "ThisWorkbook")] {
+        for (key, text) in [("objects/Sheet1", sheet_file_text(Some(&sheet), "ThisWorkbook")), ("objects/ThisWorkbook", sheet_file_text(None, "ThisWorkbook"))] {
+            assert!(!ras_has_code(&text), "{text}");
             let cfg = ras_compiler::Config { sheet_code_names: vec!["Sheet1".into()], ..Default::default() };
-            let (prog, out) = ras_compiler::compile_str(&[("Sheet1Events", text.as_str())], cfg, &Default::default());
+            let (prog, out) = ras_compiler::compile_str(&[(key, text.as_str())], cfg, &Default::default());
             assert!(!prog.diagnostics.iter().any(|d| d.is_error()), "{:?}", prog.diagnostics);
             assert!(out.files.iter().all(|f| f.name.starts_with("RAS_")), "{:?}", out.files.iter().map(|f| &f.name).collect::<Vec<_>>());
         }
+    }
+
+    #[test]
+    fn what_counts_as_code() {
+        assert!(!ras_has_code("// a\n/* b\n c */\n\nimport { x } from \"../m\";\n"));
+        assert!(ras_has_code("// a\nlet n = 1;\n"));
+        assert!(ras_has_code("export function f() {}\n"));
+        assert!(ras_has_code("@on(\"Worksheet.Change\")\nfunction f() {}\n"));
     }
 }

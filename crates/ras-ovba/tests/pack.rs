@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use common::*;
 use ras_ovba::{
-    create_workbook, extract_managed_region, pack, read_project_bin, unpack, workbook_code_names,
+    create_workbook, pack, read_project_bin, unpack, workbook_code_names,
     BookKind, DocumentCode, ModuleKind, OvbaError, PackReport, PackRequest, VbaModule,
 };
 
@@ -50,11 +50,11 @@ fn base_request(book: &Path) -> PackRequest {
         document_code: vec![
             DocumentCode {
                 code_name: "ThisWorkbook".into(),
-                managed_code: "Private Sub Workbook_Open()\n    Call 起動\nEnd Sub\n".into(),
+                code: "Private Sub Workbook_Open()\n    Call 起動\nEnd Sub\n".into(),
             },
             DocumentCode {
                 code_name: "Sheet1".into(),
-                managed_code: "Private Sub Worksheet_Activate()\r\nEnd Sub".into(),
+                code: "Private Sub Worksheet_Activate()\r\nEnd Sub".into(),
             },
         ],
         ..request(book)
@@ -149,12 +149,12 @@ fn pack_creates_a_project_and_unpack_returns_it() {
         module(
             ModuleKind::Document,
             "ThisWorkbook",
-            &format!("{}'--- RAS BEGIN ---\r\nPrivate Sub Workbook_Open()\r\n    Call 起動\r\nEnd Sub\r\n'--- RAS END ---\r\n", workbook_header()),
+            &format!("{}Private Sub Workbook_Open()\r\n    Call 起動\r\nEnd Sub\r\n", workbook_header()),
         ),
         module(
             ModuleKind::Document,
             "Sheet1",
-            &format!("{}'--- RAS BEGIN ---\r\nPrivate Sub Worksheet_Activate()\r\nEnd Sub\r\n'--- RAS END ---\r\n", sheet_header("Sheet1")),
+            &format!("{}Private Sub Worksheet_Activate()\r\nEnd Sub\r\n", sheet_header("Sheet1")),
         ),
         module(ModuleKind::Document, "Sheet2", &sheet_header("Sheet2")),
         standard("集計", &format!("Attribute VB_Name = \"集計\"\r\n{JP_SOURCE}")),
@@ -255,64 +255,36 @@ fn update_and_remove_are_classified() {
 }
 
 #[test]
-fn document_code_is_merged_into_the_managed_region() {
-    let dir = fresh_dir("managed_region");
+fn document_code_replaces_the_whole_module() {
+    let dir = fresh_dir("document_code");
     let book = new_book(&dir, "book.xlsm", BookKind::Xlsm, &["Sheet1"]);
     pack(&base_request(&book)).unwrap();
-
-    // Simulate hand-written code around the managed region (as a user would
-    // add it in the VBA editor).
-    let current = source_of(&book, "Sheet1");
-    let hand_written = current
-        .replace("'--- RAS BEGIN ---", "Private Sub 手書き()\r\n    Debug.Print \"before\"\r\nEnd Sub\r\n'--- RAS BEGIN ---")
-        + "Private Sub Tail()\r\nEnd Sub\r\n";
-    let edit = PackRequest {
-        modules: vec![module(ModuleKind::Document, "Sheet1", &hand_written)],
-        ..request(&book)
-    };
+    // Code written in the VBA editor.
+    let hand_written = format!("{}Private Sub 手書き()\r\n    Debug.Print \"before\"\r\nEnd Sub\r\n", sheet_header("Sheet1"));
+    let edit = PackRequest { modules: vec![module(ModuleKind::Document, "Sheet1", &hand_written)], ..request(&book) };
     let report = pack(&edit).unwrap();
     assert_eq!(report.updated, vec!["Sheet1".to_string()]);
     assert_eq!(source_of(&book, "Sheet1"), hand_written);
 
-    // New generated code replaces only the region.
+    // The generated code replaces all of it; the header of the module stays.
     let regen = PackRequest {
         document_code: vec![DocumentCode {
             code_name: "sheet1".into(), // code names are case-insensitive
-            managed_code: "Private Sub Worksheet_Change(ByVal Target As Range)\r\n    ' 変更\r\nEnd Sub\r\n".into(),
+            code: "Private Sub Worksheet_Change(ByVal Target As Range)\r\n    ' 変更\r\nEnd Sub\r\n".into(),
         }],
         ..request(&book)
     };
     let report = pack(&regen).unwrap();
     assert_eq!(report.updated, vec!["Sheet1".to_string()]);
-    let merged = source_of(&book, "Sheet1");
-    assert_eq!(
-        merged,
-        format!(
-            "{}Private Sub 手書き()\r\n    Debug.Print \"before\"\r\nEnd Sub\r\n'--- RAS BEGIN ---\r\nPrivate Sub Worksheet_Change(ByVal Target As Range)\r\n    ' 変更\r\nEnd Sub\r\n'--- RAS END ---\r\nPrivate Sub Tail()\r\nEnd Sub\r\n",
-            sheet_header("Sheet1")
-        )
-    );
-    assert_eq!(
-        extract_managed_region(&merged).as_deref(),
-        Some("Private Sub Worksheet_Change(ByVal Target As Range)\r\n    ' 変更\r\nEnd Sub")
-    );
+    assert_eq!(source_of(&book, "Sheet1"), format!("{}Private Sub Worksheet_Change(ByVal Target As Range)\r\n    ' 変更\r\nEnd Sub\r\n", sheet_header("Sheet1")));
     // Same code again: unchanged.
     let report = pack(&regen).unwrap();
     assert!(report.updated.is_empty() && report.unchanged.contains(&"Sheet1".to_string()));
 
-    // Empty managed code removes the region, the hand-written code stays.
-    let clear = PackRequest {
-        document_code: vec![DocumentCode { code_name: "Sheet1".into(), managed_code: String::new() }],
-        ..request(&book)
-    };
+    // Empty code: a module without code.
+    let clear = PackRequest { document_code: vec![DocumentCode { code_name: "Sheet1".into(), code: String::new() }], ..request(&book) };
     pack(&clear).unwrap();
-    assert_eq!(
-        source_of(&book, "Sheet1"),
-        format!(
-            "{}Private Sub 手書き()\r\n    Debug.Print \"before\"\r\nEnd Sub\r\nPrivate Sub Tail()\r\nEnd Sub\r\n",
-            sheet_header("Sheet1")
-        )
-    );
+    assert_eq!(source_of(&book, "Sheet1"), sheet_header("Sheet1"));
 }
 
 #[test]
@@ -321,7 +293,7 @@ fn unknown_code_name_is_an_error() {
     let book = new_book(&dir, "book.xlsm", BookKind::Xlsm, &["Sheet1"]);
     let before = fs::read(&book).unwrap();
     let req = PackRequest {
-        document_code: vec![DocumentCode { code_name: "Sheet9".into(), managed_code: "' x".into() }],
+        document_code: vec![DocumentCode { code_name: "Sheet9".into(), code: "' x".into() }],
         ..base_request(&book)
     };
     match pack(&req) {
@@ -610,7 +582,7 @@ fn missing_code_names_are_assigned_and_written() {
         convert: true,
         codepage: 1252,
         modules: vec![standard("Main", "Sub Main()\r\nEnd Sub\r\n")],
-        document_code: vec![DocumentCode { code_name: "Sheet2".into(), managed_code: "' on sheet 2".into() }],
+        document_code: vec![DocumentCode { code_name: "Sheet2".into(), code: "' on sheet 2".into() }],
         ..request(&book)
     };
     let report = pack(&req).unwrap();
@@ -647,7 +619,7 @@ fn missing_code_names_are_assigned_and_written() {
     let listed: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(listed, vec!["ThisWorkbook", "Sheet1", "Sheet2", "Chart1", "Main"]);
     assert_eq!(modules[1].source, sheet_header("Sheet1"));
-    assert_eq!(modules[2].source, format!("{}'--- RAS BEGIN ---\r\n' on sheet 2\r\n'--- RAS END ---\r\n", sheet_header("Sheet2")));
+    assert_eq!(modules[2].source, format!("{}' on sheet 2\r\n", sheet_header("Sheet2")));
     assert_eq!(modules[3].source, doc_header("Chart1", "00020821"));
     assert!(modules[..4].iter().all(|m| m.kind == ModuleKind::Document));
 
@@ -689,7 +661,7 @@ fn excel_made_project_inside_a_workbook_is_updated_in_place() {
     let req = PackRequest {
         codepage: 1252,
         modules: vec![standard("Module1", "Sub say_hello()\r\n    MsgBox \"Hello from RAS!\"\r\nEnd Sub\r\n")],
-        document_code: vec![DocumentCode { code_name: "Sheet2".into(), managed_code: "' generated".into() }],
+        document_code: vec![DocumentCode { code_name: "Sheet2".into(), code: "' generated".into() }],
         ..request(&book)
     };
     let report = pack(&req).unwrap();
@@ -702,7 +674,7 @@ fn excel_made_project_inside_a_workbook_is_updated_in_place() {
     assert_eq!(after[1], before[1]);
     assert_eq!(after[3], before[3]);
     assert_eq!(after[2].source, "Attribute VB_Name = \"Module1\"\r\nSub say_hello()\r\n    MsgBox \"Hello from RAS!\"\r\nEnd Sub\r\n");
-    assert_eq!(after[4].source, format!("{}'--- RAS BEGIN ---\r\n' generated\r\n'--- RAS END ---\r\n", before[4].source));
+    assert_eq!(after[4].source, format!("{}' generated\r\n", before[4].source));
     // The content type for the part was missing in this hand-made package.
     assert!(zip_text(&book, "[Content_Types].xml").contains(CT_VBA));
     assert_no_changes(&pack(&req).unwrap(), &["ThisWorkbook", "Sheet1", "Module1", "ThisWorkbook1", "Sheet2"]);
@@ -826,7 +798,7 @@ fn xlsb_with_code_names() {
     let modules = sources(&book);
     let listed: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
     assert_eq!(listed, vec!["ThisWorkbook", "Sheet1", "Sheet2", "集計", "Counter"]);
-    assert!(modules[1].source.contains("'--- RAS BEGIN ---\r\nPrivate Sub Worksheet_Activate()"));
+    assert!(modules[1].source.contains("\r\nPrivate Sub Worksheet_Activate()"));
     assert_no_changes(&pack(&base_request(&book)).unwrap(), &["ThisWorkbook", "Sheet1", "Sheet2", "集計", "Counter"]);
 }
 
@@ -853,12 +825,12 @@ fn xlsb_without_code_names() {
     assert_eq!(report.created, vec!["M".to_string()]);
     assert_eq!(sorted(report.unchanged.clone()), names(&["ThisWorkbook", "Sheet1"]));
     // Sheet1 exists as a module: its region can be managed.
-    let ok = req_with(&book, vec![], vec![DocumentCode { code_name: "Sheet1".into(), managed_code: "' x".into() }]);
+    let ok = req_with(&book, vec![], vec![DocumentCode { code_name: "Sheet1".into(), code: "' x".into() }]);
     assert_eq!(pack(&ok).unwrap().updated, vec!["Sheet1".to_string()]);
     // Sheet2 would have to be created, which needs a recorded code name.
-    let missing = req_with(&book, vec![], vec![DocumentCode { code_name: "Sheet2".into(), managed_code: "' x".into() }]);
+    let missing = req_with(&book, vec![], vec![DocumentCode { code_name: "Sheet2".into(), code: "' x".into() }]);
     assert!(matches!(pack(&missing), Err(OvbaError::UnsupportedFormat(_))));
-    let unknown = req_with(&book, vec![], vec![DocumentCode { code_name: "Sheet3".into(), managed_code: "' x".into() }]);
+    let unknown = req_with(&book, vec![], vec![DocumentCode { code_name: "Sheet3".into(), code: "' x".into() }]);
     assert!(matches!(pack(&unknown), Err(OvbaError::UnknownCodeName(_))));
 }
 

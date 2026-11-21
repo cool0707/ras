@@ -5,9 +5,9 @@
 // - While a debug run on the stand-in for Excel is stopped (a breakpoint, a step), the panel
 //   shows the workbook as it is at that moment, with the cells changed since the last stop
 //   marked: the run time writes the workbooks out when the editor asks (`$rasBookSnapshot`).
-// - "RAS: シートのグリッドを表示" on a RAS file of a worksheet (`Sheet1Events.ras`, a file with
-//   `@on("Sheet1.…")` handlers) shows the project's workbook at that sheet: from the editor's
-//   title bar and context menu, and from the Explorer's context menu.
+// - "RAS: シートのグリッドを表示" on the RAS file of a worksheet (`objects/Sheet1.ras`) shows the
+//   project's workbook at that sheet: from the editor's title bar and context menu, and from
+//   the Explorer's context menu.
 
 import * as cp from "child_process";
 import * as fs from "fs";
@@ -106,25 +106,12 @@ export async function showWorkbook(file: string): Promise<void> {
 	}
 }
 
-/** The text of a file: what the editor has (saved or not), else what is on disk. */
-async function textOf(uri: vscode.Uri): Promise<string> {
-	const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
-	if (open !== undefined) {
-		return open.getText();
-	}
-	try {
-		return Buffer.from(await vscode.workspace.fs.readFile(uri)).toString("utf8");
-	} catch {
-		return "";
-	}
-}
-
-/** Shows the project's workbook at the worksheet the RAS file `uri` is about. */
+/** Shows the project's workbook at the worksheet the RAS file `uri` is the module of. */
 export async function showSheetOf(uri: vscode.Uri): Promise<void> {
 	const file = uri.fsPath;
-	const sheet = sheetOfRasFile(path.basename(file), await textOf(uri));
+	const sheet = sheetOfRasFile(file);
 	if (sheet === undefined) {
-		void vscode.window.showInformationMessage(`RAS: ${path.basename(file)} はワークシートのファイルではありません（Sheet1Events.ras のような名前か、@on("Sheet1.…") のハンドラがあるファイルです）。`);
+		void vscode.window.showInformationMessage(`RAS: ${path.basename(file)} はワークシートのファイルではありません（シートのファイルは objects/Sheet1.ras のように、objects/ にシートのコード名で置きます）。`);
 		return;
 	}
 	const root = projectRoot(file);
@@ -142,32 +129,25 @@ export async function showSheetOf(uri: vscode.Uri): Promise<void> {
 
 /**
  * Keeps the `ras.sheetFiles` context key current: the paths of the RAS files of the workspace
- * that are about a worksheet. The editor's title bar and the Explorer offer the sheet's grid on them.
+ * that are the module of a worksheet (`objects/<CodeName>.ras`). The editor's title bar and the Explorer offer the sheet's grid on them.
  */
 function trackSheetFiles(): vscode.Disposable {
 	let timer: NodeJS.Timeout | undefined;
 	const update = async () => {
-		const found = await vscode.workspace.findFiles("**/*.ras", "**/{node_modules,.git,build,vba}/**", 5000);
-		const files: string[] = [];
-		for (const uri of found) {
-			if (!uri.fsPath.endsWith(".d.ras") && sheetOfRasFile(path.basename(uri.fsPath), await textOf(uri)) !== undefined) {
-				files.push(uri.fsPath);
-			}
-		}
+		const found = await vscode.workspace.findFiles("**/objects/*.ras", "**/{node_modules,.git,build,vba}/**", 5000);
+		const files = found.map((uri) => uri.fsPath).filter((file) => sheetOfRasFile(file) !== undefined);
 		await vscode.commands.executeCommand("setContext", "ras.sheetFiles", files);
 	};
 	const refresh = () => {
 		clearTimeout(timer);
 		timer = setTimeout(() => void update(), 300);
 	};
-	const watcher = vscode.workspace.createFileSystemWatcher("**/*.ras");
+	const watcher = vscode.workspace.createFileSystemWatcher("**/objects/*.ras");
 	void update();
 	return vscode.Disposable.from(
 		watcher,
 		watcher.onDidCreate(refresh),
-		watcher.onDidChange(refresh),
 		watcher.onDidDelete(refresh),
-		vscode.workspace.onDidSaveTextDocument((d) => d.languageId === "ras" && refresh()),
 		vscode.workspace.onDidChangeWorkspaceFolders(refresh),
 		{ dispose: () => clearTimeout(timer) },
 	);

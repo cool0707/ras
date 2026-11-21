@@ -119,6 +119,12 @@ impl Server {
                     // A file outside any project (or not saved yet): analysed on its own.
                     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                     let is_typedef = name.ends_with(".d.ras");
+                    // A new file of `objects/`: the module of a sheet (spec §12.2).
+                    let objects = self.root.as_ref().map(|r| r.join(ras_compiler::OBJECTS_DIR));
+                    if let (Some(stem), true) = (name.strip_suffix(".ras"), !is_typedef && path.parent().is_some_and(|d| objects.as_ref().is_some_and(|o| same_file(d, o)))) {
+                        sources.push(ras_compiler::object_source(path.clone(), stem, text.clone()));
+                        continue;
+                    }
                     sources.push(SourceInput {
                         path: path.clone(),
                         rel_path: name.clone(),
@@ -163,7 +169,7 @@ impl Server {
         let mut lenses = Vec::new();
         // A form's code-behind: one pair at the top that shows the form (spec §14.10.7). Its
         // functions need the form loaded and are not started on their own.
-        if let Some(form) = &md.form {
+        if let Some(form) = md.form.as_ref().filter(|_| md.is_form()) {
             if form.decl.is_none() {
                 return lenses;
             }

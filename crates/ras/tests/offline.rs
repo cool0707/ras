@@ -126,8 +126,10 @@ export function outOfRange() {
     Sheet1.range("F2").value = "before";
     debug.print(a[5]);
 }
+"#;
 
-@on("Sheet1.Change")
+/// `objects/Sheet1.ras`: the module of the sheet.
+const SHEET1: &str = r#"@on("Worksheet.Change")
 function changed(target: Excel.Range) {
     if (target.address == "$H$1") {
         throw new Error("H1 は書き換えられません");
@@ -239,7 +241,7 @@ fn run_reports_output_dialogs_errors_and_changed_cells() {
     if !has_node() {
         return;
     }
-    let dir = project("run", &mut sales(), &[("src/report.ras", REPORT)]);
+    let dir = project("run", &mut sales(), &[("src/report.ras", REPORT), ("objects/Sheet1.ras", SHEET1)]);
 
     let (code, out, err) = ras(&dir, &["run", "--list"]);
     assert_eq!(code, 0, "{err}");
@@ -488,7 +490,7 @@ fn test_project(name: &str) -> PathBuf {
         name,
         &mut sales(),
         &[
-            ("src/report.ras", REPORT),
+            ("src/report.ras", REPORT), ("objects/Sheet1.ras", SHEET1),
             ("test/helper.ras", "export function twice(n: int): int {\n    return n * 2;\n}\n"),
             ("test/report.test.ras", REPORT_TEST),
             ("test/more.test.ras", MORE_TEST),
@@ -637,7 +639,7 @@ fn test_time_outs_only_and_what_test_files_may_hold() {
     }
     let slow = "test(\"速い\", () => {\n    expect(1).toBe(1);\n});\ntest(\"終わらない\", () => {\n    let i = 0;\n    while (true) {\n        i = (i + 1) % 10;\n    }\n}, { timeout: 300 });\ntest(\"その後\", () => {\n    expect(1).toBe(1);\n});\n";
     let only = "test(\"a\", () => {\n    expect(1).toBe(2);\n});\ntest.only(\"b\", () => {\n    expect(1).toBe(1);\n});\ndescribe.skip(\"s\", () => {\n    test(\"c\", () => {\n        expect(1).toBe(2);\n    });\n});\n";
-    let dir = project("test-limits", &mut sales(), &[("src/report.ras", REPORT), ("test/slow.test.ras", slow), ("test/only.test.ras", only)]);
+    let dir = project("test-limits", &mut sales(), &[("src/report.ras", REPORT), ("objects/Sheet1.ras", SHEET1), ("test/slow.test.ras", slow), ("test/only.test.ras", only)]);
 
     // The file is given up at the time-out: the tests after it fail too (spec §14.12.4).
     let (code, out, err) = ras(&dir, &["test", "test/slow.test.ras", "--reporter", "json"]);
@@ -891,7 +893,7 @@ fn run_view_and_the_snapshot_of_a_stopped_run() {
     if !has_node() {
         return;
     }
-    let dir = project("run-view", &mut sales(), &[("src/report.ras", REPORT)]);
+    let dir = project("run-view", &mut sales(), &[("src/report.ras", REPORT), ("objects/Sheet1.ras", SHEET1)]);
     let (code, out, err) = ras(&dir, &["run", "rebuildReport", "--view"]);
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("グリッド表示: build/view/Book.html") || out.contains("グリッド表示: build\\view\\Book.html"), "{out}");
@@ -938,7 +940,9 @@ fn cheat_sheet_examples_pass_the_check() {
     let mut files: Vec<(String, String)> = Vec::new();
     for (i, block) in sheet.split("```typescript\n").skip(1).enumerate() {
         let code = block.split("```").next().unwrap().to_string();
-        let path = if code.starts_with("// test/") { format!("test/block{i}.test.ras") } else { format!("src/block{i}.ras") };
+        // `// objects/Sheet1.ras…`: the file of a sheet or of the workbook.
+        let object = code.strip_prefix("// objects/").and_then(|rest| rest.split_once(".ras")).map(|(name, _)| format!("objects/{name}.ras"));
+        let path = if code.starts_with("// test/") { format!("test/block{i}.test.ras") } else { object.unwrap_or_else(|| format!("src/block{i}.ras")) };
         files.push((path, code));
     }
     assert!(files.len() >= 6, "the cheat sheet has code examples");

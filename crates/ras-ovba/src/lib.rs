@@ -79,7 +79,7 @@ pub use error::OvbaError;
 pub use forms::{export_user_form, import_user_form, is_generated_form, read_user_forms, unpack_user_forms, FormFiles, RAS_FORM_MARKER};
 pub use opc::workbook_code_names;
 pub use pack::{pack, unpack};
-pub use source::{extract_managed_region, merge_managed_region, procedure_names, strip_hand_written, RAS_BEGIN_MARKER, RAS_END_MARKER};
+pub use source::{extract_managed_region, merge_managed_region, procedure_names, replace_document_code, strip_hand_written, RAS_BEGIN_MARKER, RAS_END_MARKER};
 pub use vba::{read_project_bin, write_project_bin};
 pub use workbook::{create_workbook, BookKind};
 
@@ -230,9 +230,10 @@ pub struct UnpackedBook {
 pub struct DocumentCode {
     /// Code name of the workbook or sheet the code belongs to.
     pub code_name: String,
-    /// The code to put between the RAS markers of that module (see
-    /// [`merge_managed_region`]). Empty code removes the region.
-    pub managed_code: String,
+    /// The whole code of that module, as RAS generates it from the module's
+    /// file (RAS specification §12.2): it replaces everything after the
+    /// module's `Attribute` header. Empty code leaves the module without code.
+    pub code: String,
 }
 
 /// Everything [`pack`] needs to know.
@@ -251,12 +252,9 @@ pub struct PackRequest {
     pub project_name: Option<String>,
     /// Standard/Class modules to create or replace
     pub modules: Vec<VbaModule>,
-    /// merged into the RAS-managed region of that document module
+    /// The code of document modules (the workbook's, a sheet's), each
+    /// replaced as a whole.
     pub document_code: Vec<DocumentCode>,
-    /// Code names of document modules whose hand-written code goes (it was
-    /// taken over into the project): only their `Attribute` header, `Option`
-    /// statements and RAS-managed region stay.
-    pub replace_hand_written: Vec<String>,
     /// Standard or class modules to delete.
     pub remove_modules: Vec<String>,
     /// User forms to create or replace (see [`UserForm`]).
@@ -280,7 +278,6 @@ impl Default for PackRequest {
             project_name: None,
             modules: Vec::new(),
             document_code: Vec::new(),
-            replace_hand_written: Vec::new(),
             remove_modules: Vec::new(),
             forms: Vec::new(),
             backup_dir: None,

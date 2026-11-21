@@ -194,9 +194,47 @@ pub fn load_project(root: &Path) -> Result<(Config, Vec<SourceInput>), String> {
     }
     let (form_sources, forms) = load_forms(root)?;
     sources.extend(form_sources);
+    sources.extend(load_objects(root)?);
     let mut config = config;
     config.forms = forms;
     Ok((config, sources))
+}
+
+/// Directory of the files of the sheets and of `ThisWorkbook` (spec §12.2): the VBE's
+/// "Microsoft Excel Objects".
+pub const OBJECTS_DIR: &str = "objects";
+
+/// Path of the file of a sheet (by its code name) or of `ThisWorkbook`: `objects/<CodeName>.ras`.
+pub fn object_code_path(root: &Path, code_name: &str) -> PathBuf {
+    root.join(OBJECTS_DIR).join(format!("{code_name}.ras"))
+}
+
+/// Reads the files of the sheets and of `ThisWorkbook` of the project at `root`
+/// (`objects/<CodeName>.ras`, spec §12.2). Sub-directories are not read.
+pub fn load_objects(root: &Path) -> Result<Vec<SourceInput>, String> {
+    let dir = root.join(OBJECTS_DIR);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(Vec::new());
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+    paths.sort();
+    let mut sources = Vec::new();
+    for path in paths {
+        let file_name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let Some(stem) = file_name.strip_suffix(".ras") else { continue };
+        if stem.ends_with(".d") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text);
+        sources.push(object_source(path.clone(), stem, text));
+    }
+    Ok(sources)
+}
+
+/// The source input of the file `objects/<name>.ras`.
+pub fn object_source(path: PathBuf, name: &str, text: String) -> SourceInput {
+    SourceInput { path, rel_path: format!("{OBJECTS_DIR}/{name}.ras"), key: format!("{}{name}", collect::OBJECT_KEY_PREFIX), kind: ModuleKind::User, text }
 }
 
 /// Path of a form's RAS code-behind: `forms/<Name>.ras` (spec §14.11.1).
@@ -286,12 +324,16 @@ pub fn render_diagnostics(prog: &Program, diags: &[Diagnostic]) -> String {
 pub fn compile_str(files: &[(&str, &str)], config: Config, opts: &BuildOptions) -> (Program, BuildOutput) {
     let sources = files
         .iter()
-        .map(|(key, text)| SourceInput {
-            path: PathBuf::from(format!("src/{key}.ras")),
-            rel_path: format!("src/{key}.ras"),
-            key: (*key).to_string(),
-            kind: if key.ends_with(".d") { ModuleKind::TypeDef } else { ModuleKind::User },
-            text: (*text).to_string(),
+        .map(|(key, text)| match key.strip_prefix("objects/") {
+            // `objects/Sheet1`: the file of a sheet or of `ThisWorkbook` (spec §12.2).
+            Some(name) => object_source(PathBuf::from(format!("objects/{name}.ras")), name, (*text).to_string()),
+            None => SourceInput {
+                path: PathBuf::from(format!("src/{key}.ras")),
+                rel_path: format!("src/{key}.ras"),
+                key: (*key).to_string(),
+                kind: if key.ends_with(".d") { ModuleKind::TypeDef } else { ModuleKind::User },
+                text: (*text).to_string(),
+            },
         })
         .collect();
     let prog = analyze(sources, config);

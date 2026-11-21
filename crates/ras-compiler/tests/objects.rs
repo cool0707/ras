@@ -1,0 +1,281 @@
+//! The files of sheets and of `ThisWorkbook` (`objects/<CodeName>.ras`, spec §12.2).
+
+#![allow(clippy::field_reassign_with_default)]
+
+use std::path::PathBuf;
+
+use ras_compiler::{analyze, build, build_js, object_source, BuildOptions, Config, FormControl, FormDecl, ModuleKind, SourceInput};
+
+fn config() -> Config {
+    let mut config = Config::default();
+    config.sheet_code_names = vec!["Sheet1".into(), "Sheet2".into()];
+    config.sheet_controls_known = true;
+    config.sheet_controls = vec![FormDecl {
+        name: "Sheet1".into(),
+        controls: vec![FormControl { name: "CommandButton1".into(), control_type: "CommandButton".into() }, FormControl { name: "TextBox1".into(), control_type: "TextBox".into() }],
+    }];
+    config
+}
+
+fn sources(objects: &[(&str, &str)], src: &[(&str, &str)]) -> Vec<SourceInput> {
+    let mut sources: Vec<SourceInput> = src
+        .iter()
+        .map(|(key, text)| SourceInput { path: PathBuf::from(format!("src/{key}.ras")), rel_path: format!("src/{key}.ras"), key: key.to_string(), kind: ModuleKind::User, text: text.to_string() })
+        .collect();
+    for (name, text) in objects {
+        sources.push(object_source(PathBuf::from(format!("objects/{name}.ras")), name, text.to_string()));
+    }
+    sources
+}
+
+fn compile(objects: &[(&str, &str)], src: &[(&str, &str)]) -> (Vec<String>, Vec<ras_compiler::OutputFile>) {
+    let prog = analyze(sources(objects, src), config());
+    let out = build(&prog, &BuildOptions { erl: Some(false), ..Default::default() });
+    let mut diags: Vec<String> = prog.diagnostics.iter().chain(out.diagnostics.iter()).filter(|d| d.module.is_none_or(|m| prog.modules[m].kind == ModuleKind::User)).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    diags.sort();
+    diags.dedup();
+    (diags, out.files)
+}
+
+fn codes(diags: &[String]) -> Vec<&str> {
+    diags.iter().map(|d| d.split(':').next().unwrap_or_default()).collect()
+}
+
+fn module(files: &[ras_compiler::OutputFile], name: &str) -> String {
+    files.iter().find(|f| f.name == name).map(|f| f.code.replace("\r\n", "\n")).unwrap_or_default()
+}
+
+const SHEET1: &str = r#"
+let lastEdited = "";
+
+@on("Worksheet.Change")
+function onChange(target: Excel.Range) {
+    lastEdited = target.address;
+    this.range("D1").value = lastEdited;
+    helper();
+}
+
+@on("Worksheet.BeforeDoubleClick")
+function onDoubleClick(target: Excel.Range, byref cancel: boolean) {
+    cancel = true;
+}
+
+function helper() {
+    this.cells(1, 1).value = 1;
+}
+
+/** 入力欄を消す。 */
+export function clearInput() {
+    this.range("A2:C100").clearContents();
+}
+
+export function total(n: int): int {
+    return n * 2;
+}
+"#;
+
+#[test]
+fn a_sheets_file_is_its_whole_module() {
+    let (diags, files) = compile(&[("Sheet1", SHEET1)], &[("main", "export function run() {\n    Sheet1.clearInput();\n    debug.print(Sheet1.total(2));\n    Sheet1.range(\"A1\").value = 1;\n}\n")]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let file = files.iter().find(|f| f.name == "Sheet1").expect("Sheet1");
+    assert_eq!(file.file_name, "Sheet1.doccls");
+    assert_eq!(file.kind, ras_compiler::vba::VModuleKind::Document);
+    let code = module(&files, "Sheet1");
+    // Generated whole: the hash line and the options of every module, no `Option Private Module`.
+    let head: Vec<&str> = code.lines().take(3).collect();
+    assert!(head[0].starts_with("' RAS-GENERATED hash="), "{code}");
+    assert_eq!(&head[1..], ["Option Explicit", "Option Compare Binary"], "{code}");
+    assert!(!code.contains("Option Private Module"), "{code}");
+    // Module variables, handlers called from the event procedures of the same module.
+    assert!(code.contains("Private lastEdited As String"), "{code}");
+    assert!(code.contains("Private Sub Worksheet_Change(ByVal Target As Range)"), "{code}");
+    assert!(code.contains("Private Sub Worksheet_BeforeDoubleClick(ByVal Target As Range, ByRef Cancel As Boolean)"), "{code}");
+    assert!(code.contains("onChange Target"), "{code}");
+    assert!(code.contains("onDoubleClick Target, Cancel"), "{code}");
+    assert!(code.contains("Private Sub onChange(ByVal target As Range)"), "{code}");
+    assert!(code.contains("RAS_EventError \"Sheet1.Change\""), "{code}");
+    // `this` is the sheet; functions of the file are called without a qualifier.
+    assert!(code.contains("Me.Range(\"D1\").Value"), "{code}");
+    assert!(code.contains("Me.Cells(1&, 1&).Value"), "{code}");
+    assert!(!code.contains("Sheet1.helper"), "{code}");
+    // Exports are public members of the sheet.
+    assert!(code.contains("Public Sub clearInput()"), "{code}");
+    assert!(code.contains("Public Function total(ByVal n As Long) As Long"), "{code}");
+    assert!(code.contains("Private Sub helper()"), "{code}");
+    let main = module(&files, "Main");
+    assert!(main.contains("Sheet1.clearInput"), "{main}");
+    assert!(main.contains("Sheet1.total(2&)"), "{main}");
+    // No standard module for the sheet.
+    assert!(!files.iter().any(|f| f.name == "Sheet1Events"), "{:?}", files.iter().map(|f| &f.file_name).collect::<Vec<_>>());
+}
+
+#[test]
+fn the_workbooks_file_and_the_initialisation() {
+    let book = r#"
+@on("Workbook.Open")
+function setup() {
+    debug.print(this.name);
+}
+
+@on("Workbook.SheetChange")
+function onAnySheetChange(sh: object, target: Excel.Range) {
+    debug.print(target.address);
+}
+
+export function refresh() {
+    this.save();
+}
+"#;
+    let (diags, files) = compile(&[("ThisWorkbook", book)], &[("main", "export function run() {\n    thisWorkbook.refresh();\n}\n")]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = module(&files, "ThisWorkbook");
+    assert!(code.contains("Private Sub Workbook_Open()"), "{code}");
+    assert!(code.contains("RAS_WorkbookOpen"), "{code}");
+    // The handlers of `Open` are called back once the workbook is ready (spec §12.3).
+    assert!(code.contains("Public Sub RAS_WorkbookOpened(Optional ByVal ras_dummy As Long = 0&)"), "{code}");
+    assert!(code.contains("Private Sub Workbook_SheetChange(ByVal Sh As Object, ByVal Target As Range)"), "{code}");
+    assert!(code.contains("Private Sub Workbook_Activate()") && code.contains("Private Sub Workbook_WindowActivate(ByVal Wn As Window)"), "{code}");
+    assert!(code.contains("Debug.Print Me.Name"), "{code}");
+    assert!(code.contains("Public Sub refresh()"), "{code}");
+    let glue = module(&files, "RAS_Glue");
+    assert!(glue.contains("ThisWorkbook.RAS_WorkbookOpened"), "{glue}");
+    assert!(module(&files, "Main").contains("ThisWorkbook.refresh"), "{}", module(&files, "Main"));
+}
+
+#[test]
+fn this_workbook_gets_the_initialisation_without_a_file() {
+    let (diags, files) = compile(&[], &[("main", "let n = compute();\nfunction compute(): int { return 1; }\nexport function run() {\n    debug.print(n);\n}\n")]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = module(&files, "ThisWorkbook");
+    assert!(code.contains("Private Sub Workbook_Open()") && code.contains("RAS_WorkbookOpen"), "{code}");
+    assert!(!code.contains("RAS_WorkbookOpened"), "{code}");
+}
+
+#[test]
+fn module_variables_are_initialised_with_the_others() {
+    let (diags, files) = compile(&[("Sheet1", "let labels: string[] = [\"a\", \"b\"];\nexport function labelCount(): int { return labels.length; }\n")], &[]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let glue = module(&files, "RAS_Glue");
+    assert!(glue.contains("Sheet1.RAS_ModInit"), "{glue}");
+}
+
+#[test]
+fn controls_on_the_sheet() {
+    let sheet = r#"
+@on("CommandButton1.Click")
+function run() {
+    this.CommandButton1.caption = "実行中";
+    this.TextBox1.text = "";
+}
+
+@on("TextBox1.KeyDown")
+function keyDown(keyCode: MSForms.ReturnInteger, shift: short) {
+    if (keyCode.value == 13) this.range("B2").value = shift;
+}
+
+@on("TextBox1.LostFocus")
+function left() {
+}
+"#;
+    let (diags, files) = compile(&[("Sheet1", sheet)], &[("main", "export function run() {\n    Sheet1.CommandButton1.caption = \"x\";\n}\n")]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = module(&files, "Sheet1");
+    assert!(code.contains("Private Sub CommandButton1_Click()"), "{code}");
+    assert!(code.contains("Private Sub TextBox1_KeyDown(ByVal KeyCode As MSForms.ReturnInteger, ByVal Shift As Integer)"), "{code}");
+    assert!(code.contains("Private Sub TextBox1_LostFocus()"), "{code}");
+    assert!(code.contains("Me.CommandButton1.Caption = "), "{code}");
+    assert!(code.contains("RAS_EventError \"Sheet1.CommandButton1_Click\""), "{code}");
+    assert!(module(&files, "Main").contains("Sheet1.CommandButton1.Caption = \"x\""), "{}", module(&files, "Main"));
+
+    // What a form raises is not an event of a control on a sheet; unknown controls and members.
+    let (diags, _) = compile(&[("Sheet1", "@on(\"TextBox1.Exit\")\nfunction a() {}\n@on(\"Button9.Click\")\nfunction b() {}\n")], &[]);
+    assert_eq!(codes(&diags), ["E0611", "E0613"], "{diags:#?}");
+    let (diags, _) = compile(&[("Sheet1", "function c() { this.Nothing1.value = 1; }\n")], &[]);
+    assert_eq!(codes(&diags), ["E0202"], "{diags:#?}");
+}
+
+#[test]
+fn what_a_document_module_cannot_hold() {
+    let sheet = r#"
+export let shared = 1;
+export const LIMIT = 10;
+export enum Kind { A, B }
+struct Point { x: int; y: int; }
+class Helper {}
+debug.print("top level");
+@udf
+export function twice(n: int): int { return n * 2; }
+@init
+function start() {}
+function name(): string { return ""; }
+let range = 1;
+"#;
+    let (diags, _) = compile(&[("Sheet1", sheet)], &[]);
+    let got = codes(&diags);
+    assert_eq!(got.iter().filter(|c| **c == "E0650").count(), 7, "{diags:#?}");
+    assert_eq!(got.iter().filter(|c| **c == "E0651").count(), 2, "{diags:#?}");
+    assert!(got.iter().all(|c| *c == "E0650" || *c == "E0651"), "{diags:#?}");
+}
+
+#[test]
+fn where_on_can_be_written() {
+    // In a standard module, and the form of v0.9 that names the sheet.
+    let (diags, _) = compile(&[], &[("main", "@on(\"Sheet1.Change\")\nfunction a(target: Excel.Range) {}\n@on(\"Workbook.Open\")\nfunction b() {}\n")]);
+    assert_eq!(codes(&diags), ["E0610", "E0610"], "{diags:#?}");
+    assert!(diags[0].contains("objects/Sheet1.ras") && diags[0].contains("Worksheet.Change"), "{diags:#?}");
+    // The workbook's events in a sheet's file and the other way round.
+    let (diags, _) = compile(&[("Sheet1", "@on(\"Workbook.Open\")\nfunction a() {}\n"), ("ThisWorkbook", "@on(\"Worksheet.Change\")\nfunction b() {}\n")], &[]);
+    assert_eq!(codes(&diags), ["E0610", "E0610"], "{diags:#?}");
+    // Unknown events, too many parameters, a function named like the event procedure.
+    let (diags, _) = compile(&[("Sheet1", "@on(\"Worksheet.Open\")\nfunction a() {}\n@on(\"Worksheet.Change\")\nfunction b(t: Excel.Range, more: int) {}\n@on(\"Worksheet.Activate\")\nfunction c() {}\nfunction Worksheet_Activate() {}\n")], &[]);
+    assert_eq!(codes(&diags), ["E0611", "E0612", "E0614"], "{diags:#?}");
+}
+
+#[test]
+fn files_and_the_sheets_of_the_workbook() {
+    // No sheet of that code name.
+    let (diags, _) = compile(&[("Sheet9", "export function a() {}\n")], &[]);
+    assert_eq!(codes(&diags), ["E0610"], "{diags:#?}");
+    assert!(diags[0].contains("Sheet1, Sheet2"), "{diags:#?}");
+    // A standard module named like a sheet or the workbook.
+    let (diags, _) = compile(&[], &[("Sheet1", "export function a() {}\n"), ("thisWorkbook", "export function b() {}\n")]);
+    assert_eq!(codes(&diags), ["E0102", "E0102"], "{diags:#?}");
+    assert!(diags.iter().any(|d| d.contains("objects/Sheet1.ras")) && diags.iter().any(|d| d.contains("objects/ThisWorkbook.ras")), "{diags:#?}");
+    // The file name in any case; the module has the code name of the workbook.
+    let (diags, files) = compile(&[("sheet1", "export function a() {}\n")], &[]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    assert!(files.iter().any(|f| f.name == "Sheet1"), "{:?}", files.iter().map(|f| &f.name).collect::<Vec<_>>());
+    // Without a workbook, the file declares the sheet.
+    let prog = analyze(sources(&[("Data", "export function a() {}\n")], &[("main", "export function run() {\n    Data.a();\n    Data.range(\"A1\").value = 1;\n}\n")]), Config::default());
+    assert!(prog.diagnostics.iter().all(|d| !d.is_error()), "{:#?}", prog.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>());
+}
+
+#[test]
+fn exported_functions_are_macros() {
+    let prog = analyze(sources(&[("Sheet1", SHEET1)], &[]), config());
+    let f = prog.fns.iter().find(|f| f.name == "clearInput").unwrap();
+    assert!(f.is_macro_entry());
+    let out = build(&prog, &BuildOptions { erl: Some(false), ..Default::default() });
+    let code = module(&out.files, "Sheet1");
+    // The wrapping of a macro entry (spec §12.4).
+    let body = &code[code.find("Public Sub clearInput()").unwrap()..];
+    assert!(body.contains("RAS_EnsureInit"), "{code}");
+}
+
+#[test]
+fn debug_build() {
+    let prog = analyze(sources(&[("Sheet1", SHEET1), ("ThisWorkbook", "@on(\"Workbook.Open\")\nfunction setup() {}\n")], &[("main", "export function run() {\n    Sheet1.clearInput();\n}\n")]), config());
+    let out = build_js(&prog, "");
+    assert!(out.diagnostics.iter().all(|d| !d.is_error()), "{:#?}", out.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>());
+    let sheet = &out.files.iter().find(|f| f.rel_path == "@objects/Sheet1.js").expect("@objects/Sheet1.js").text;
+    assert!(sheet.contains("$rt.module(\"Sheet1\""), "{sheet}");
+    assert!(sheet.contains("{ target: \"Sheet1\", event: \"Change\", reentrant: false, fn: ($a) => onChange($a[0].v) }"), "{sheet}");
+    assert!(sheet.contains("{ target: \"Sheet1\", event: \"BeforeDoubleClick\", reentrant: false, fn: ($a) => onDoubleClick($a[0].v, $a[1]) }"), "{sheet}");
+    assert!(sheet.contains("$rt.global(\"Sheet1\")"), "{sheet}");
+    let book = &out.files.iter().find(|f| f.rel_path == "@objects/ThisWorkbook.js").expect("@objects/ThisWorkbook.js").text;
+    assert!(book.contains("{ target: \"Workbook\", event: \"Open\""), "{book}");
+    let main = &out.files.iter().find(|f| f.rel_path == "main.js").unwrap().text;
+    assert!(main.contains(".clearInput()"), "{main}");
+    assert!(!main.contains("$rt.global(\"Sheet1\").clearInput"), "{main}");
+}

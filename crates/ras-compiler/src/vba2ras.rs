@@ -38,11 +38,12 @@ pub enum Target<'a> {
     Form(&'a FormDecl),
     /// A module of `src/`, from a standard module.
     Standard,
-    /// A module of `src/`, from the hand-written code of a document module: the sheet with
-    /// this code name, or `ThisWorkbook` (`workbook`). Its event procedures become `@on`
-    /// handlers; its own members used without a qualifier (`Range`, `Me.Cells`) get the
-    /// sheet (or `thisWorkbook`) as their object.
-    Document { code_name: &'a str, workbook: bool },
+    /// The file of a sheet or of `ThisWorkbook` (`objects/<CodeName>.ras`, spec §12.2), from
+    /// the hand-written code of that document module: the sheet with this code name, or
+    /// `ThisWorkbook` (`workbook`). Its event procedures become `@on` handlers
+    /// (`Worksheet.Change`; `CommandButton1.Click` for a control on the sheet); `Me` and its own
+    /// members used without a qualifier (`Range`, `Me.Cells`, a control) become `this.…`.
+    Document { code_name: &'a str, workbook: bool, controls: &'a [crate::config::FormControl] },
 }
 
 /// Another module converted with this one, whose public names the converted code may use:
@@ -53,6 +54,9 @@ pub struct Peer {
     pub vba_name: String,
     /// Key of the RAS module it becomes: its path in `src/` without `.ras` (`Module1`).
     pub key: String,
+    /// A sheet or `ThisWorkbook`: its public procedures stay members of the sheet
+    /// (`Sheet1.Foo`), which every module can refer to without an import (spec §12.2).
+    pub document: bool,
     /// Its public names: VBA name and RAS name, and whether it is a function.
     pub names: Vec<PublicName>,
 }
@@ -1698,6 +1702,7 @@ impl<'a> Emitter<'a> {
     fn new(host: &'a HostIndex, target: Target<'a>, peers: &'a [Peer], lines: &'a [Line]) -> Emitter<'a> {
         let controls = match target {
             Target::Form(form) => form.controls.iter().map(|c| (c.name.to_lowercase(), c.name.clone())).collect(),
+            Target::Document { controls, .. } => controls.iter().map(|c| (c.name.to_lowercase(), c.name.clone())).collect(),
             _ => HashMap::new(),
         };
         Emitter {
@@ -1735,8 +1740,9 @@ impl<'a> Emitter<'a> {
         }
         // Imports of the names used from the peers.
         let from = |key: &str| match self.target {
-            // A code-behind lies in `forms/`; module keys are relative to `src/`.
-            Target::Form(_) => format!("../{key}"),
+            // A code-behind lies in `forms/`, the file of a sheet in `objects/`; module keys
+            // are relative to `src/`.
+            Target::Form(_) | Target::Document { .. } => format!("../{key}"),
             _ => format!("./{key}"),
         };
         let mut head: Vec<String> = Vec::new();
@@ -1762,10 +1768,8 @@ impl<'a> Emitter<'a> {
     /// What `Me` is: the form, the sheet, or the workbook.
     fn self_ref(&self) -> Option<String> {
         match self.target {
-            Target::Form(_) => Some("this".into()),
+            Target::Form(_) | Target::Document { .. } => Some("this".into()),
             Target::Standard => None,
-            Target::Document { workbook: true, .. } => Some("thisWorkbook".into()),
-            Target::Document { code_name, .. } => Some(code_name.to_string()),
         }
     }
 
@@ -1782,6 +1786,8 @@ impl<'a> Emitter<'a> {
     fn place(&self) -> &'static str {
         match self.target {
             Target::Form(_) => "フォームのコードビハインド",
+            Target::Document { workbook: true, .. } => "`ThisWorkbook` のファイル",
+            Target::Document { .. } => "シートのファイル",
             _ => "RAS のモジュール",
         }
     }
@@ -1789,7 +1795,7 @@ impl<'a> Emitter<'a> {
     /// A public name of a peer used without a qualifier: imported by name.
     fn peer_name(&mut self, lower: &str) -> Option<PublicName> {
         let peers = self.peers;
-        let (peer, name) = peers.iter().find_map(|p| p.names.iter().find(|n| n.vba.to_lowercase() == lower).map(|n| (p, n)))?;
+        let (peer, name) = peers.iter().filter(|p| !p.document).find_map(|p| p.names.iter().find(|n| n.vba.to_lowercase() == lower).map(|n| (p, n)))?;
         self.imports.entry(peer.key.clone()).or_default().insert(name.ras.clone());
         Some(name.clone())
     }
@@ -1799,6 +1805,11 @@ impl<'a> Emitter<'a> {
         let peers = self.peers;
         let peer = peers.iter().find(|p| p.vba_name.eq_ignore_ascii_case(module))?;
         let name = peer.names.iter().find(|n| n.vba.to_lowercase() == lower)?;
+        if peer.document {
+            // A member of the sheet (of the workbook): `Sheet1.foo`, `thisWorkbook.foo`.
+            let object = if peer.vba_name.eq_ignore_ascii_case("ThisWorkbook") { "thisWorkbook".to_string() } else { peer.vba_name.clone() };
+            return Some((object, name.clone()));
+        }
         let alias = crate::collect::vba_module_name(&peer.key);
         self.namespace_imports.insert(peer.key.clone(), alias.clone());
         Some((alias, name.clone()))
@@ -1978,6 +1989,12 @@ impl<'a> Emitter<'a> {
                             }
                             ""
                         }
+                        Target::Document { .. } => {
+                            if *public {
+                                self.todo(*line, *line, "Public な列挙型はシート・ThisWorkbook のファイルで公開できません（このファイルの中だけで使います。ほかのモジュールでも使うなら src/ のモジュールに移してください）");
+                            }
+                            ""
+                        }
                         _ if *public => "export ",
                         _ => "",
                     };
@@ -2011,8 +2028,10 @@ impl<'a> Emitter<'a> {
         match &s.kind {
             StmtKind::Dim { vars, is_static: _ } => {
                 let public = is_public_decl(&self.lines[s.line]);
-                let form = matches!(self.target, Target::Form(_));
-                if public && form {
+                let form = !matches!(self.target, Target::Standard);
+                if public && matches!(self.target, Target::Document { .. }) {
+                    self.todo(s.line, s.line, "Public 変数はシート・ThisWorkbook のファイルで公開できません（このファイルの中だけの変数にしました。外から使うときは export した関数で受け渡してください）");
+                } else if public && form {
                     self.todo(s.line, s.line, "Public 変数はフォームのコードビハインドで公開できません（フォームの中だけの変数にしました。外から使うときは export した関数で受け渡してください）");
                 }
                 let start = self.out.len();
@@ -2023,8 +2042,10 @@ impl<'a> Emitter<'a> {
             }
             StmtKind::Const(vars) => {
                 let public = is_public_decl(&self.lines[s.line]);
-                let form = matches!(self.target, Target::Form(_));
-                if public && form {
+                let form = !matches!(self.target, Target::Standard);
+                if public && matches!(self.target, Target::Document { .. }) {
+                    self.todo(s.line, s.line, "Public 定数はシート・ThisWorkbook のファイルで公開できません（このファイルの中だけの定数にしました。ほかのモジュールでも使うなら src/ のモジュールに移してください）");
+                } else if public && form {
                     self.todo(s.line, s.line, "Public 定数はフォームのコードビハインドで公開できません（フォームの中だけの定数にしました）");
                 }
                 let start = self.out.len();
@@ -2208,14 +2229,24 @@ impl<'a> Emitter<'a> {
                 None
             }
             Target::Standard => None,
-            Target::Document { code_name, workbook } => {
-                let (object, event) = name.split_once('_')?;
+            Target::Document { workbook, controls, .. } => {
                 let prefix = if workbook { "Workbook" } else { "Worksheet" };
-                if !object.eq_ignore_ascii_case(prefix) {
-                    return None;
+                if let Some((object, event)) = name.split_once('_') {
+                    if object.eq_ignore_ascii_case(prefix) {
+                        let event = crate::lower::document_event(workbook, event)?;
+                        return Some((prefix.to_string(), event.to_string()));
+                    }
                 }
-                let event = crate::lower::document_event(workbook, event)?;
-                Some((if workbook { "Workbook".to_string() } else { code_name.to_string() }, event.to_string()))
+                // An ActiveX control on the sheet (spec §12.2.1).
+                for (i, _) in name.match_indices('_') {
+                    let (object, event) = (&name[..i], &name[i + 1..]);
+                    if let Some(c) = controls.iter().find(|c| c.name.eq_ignore_ascii_case(object)) {
+                        if let Some((event, _)) = crate::lower::sheet_control_event(&c.control_type, event) {
+                            return Some((c.name.clone(), event));
+                        }
+                    }
+                }
+                None
             }
         }
     }
@@ -2256,7 +2287,7 @@ impl<'a> Emitter<'a> {
         let mut params = Vec::new();
         for prm in &p.params {
             let name = Self::user_ident(&prm.name);
-            self.exact_integer = event.is_some() && matches!(self.target, Target::Form(_));
+            self.exact_integer = event.is_some() && !matches!(self.target, Target::Standard);
             let ty = self.ras_type(prm.ty.as_ref(), prm.suffix, prm.array || prm.paramarray);
             self.exact_integer = false;
             self.locals.insert(prm.name.to_lowercase(), VarInfo { name: name.clone(), ty: ty.clone() });
@@ -2278,7 +2309,7 @@ impl<'a> Emitter<'a> {
         }
         let header = match &event {
             Some((object, event)) => {
-                let base = format!("{}{event}", if object == "Workbook" { "workbook".to_string() } else { names::js_name(object) });
+                let base = format!("{}{event}", if object == "Workbook" || object == "Worksheet" { "on".to_string() } else { names::js_name(object) });
                 let name = self.fresh(&base);
                 self.line(format!("@on(\"{object}.{event}\")"));
                 format!("function {name}({})", params.join(", "))
@@ -2943,7 +2974,7 @@ impl<'a> Emitter<'a> {
             }
             if let Some(p) = self.procs.get(&lower).cloned() {
                 // Private procedures are called directly; exported ones are members of the form.
-                let form = matches!(self.target, Target::Form(_));
+                let form = !matches!(self.target, Target::Standard);
                 let base = if p.exported && form { format!("this.{}", p.name) } else { p.name.clone() };
                 return Ok(if called || !p.is_function { base } else { format!("{base}()") });
             }

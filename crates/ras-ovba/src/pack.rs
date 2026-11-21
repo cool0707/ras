@@ -340,11 +340,10 @@ fn document_plan(layout: &BookLayout) -> DocumentPlan {
 /// * `modules` are created or replaced as given (standard and class
 ///   modules; a `Document` module is accepted when its name is a code name
 ///   of the workbook, a `Form` module when the form already exists).
-/// * `document_code` is merged into the RAS-managed region of the document
-///   module with that code name ([`merge_managed_region`](crate::merge_managed_region));
-///   hand-written code outside the markers is preserved, except in the
-///   modules `replace_hand_written` names. A code name the workbook does
-///   not have is an [`OvbaError::UnknownCodeName`].
+/// * `document_code` replaces the whole code of the document module with
+///   that code name; its `Attribute` header stays
+///   ([`replace_document_code`](crate::replace_document_code)). A code name
+///   the workbook does not have is an [`OvbaError::UnknownCodeName`].
 /// * `remove_modules` are deleted.
 /// * A workbook without a VBA project gets one (document modules for the
 ///   workbook and every sheet included), together with the relationship,
@@ -436,13 +435,7 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
         }
         upsert.push(module.clone());
     }
-    // Hand-written code that goes from a document module the RAS code does not write to.
-    let mut document_code = req.document_code.clone();
-    for code_name in &req.replace_hand_written {
-        if !document_code.iter().any(|c| same_name(&c.code_name, code_name)) {
-            document_code.push(crate::DocumentCode { code_name: code_name.clone(), managed_code: String::new() });
-        }
-    }
+    let document_code = &req.document_code;
     for (index, code) in document_code.iter().enumerate() {
         let Some((code_name, what, base)) =
             documents.known.iter().find(|(name, _, _)| same_name(name, &code.code_name))
@@ -474,27 +467,10 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
                 }
             },
         };
-        let current = if req.replace_hand_written.iter().any(|n| same_name(n, code_name)) {
-            source::strip_hand_written(&current)
-        } else {
-            current
-        };
-        // What the generated code defines must not exist in the hand-written
-        // part as well: the VBE reports that only when the workbook is opened
-        // ("Ambiguous name detected"), and the whole project stops compiling.
-        let hand_written = source::procedure_names(&source::merge_managed_region(&current, ""));
-        for generated in source::procedure_names(&code.managed_code) {
-            if let Some(clash) = hand_written.iter().find(|name| same_name(name, &generated)) {
-                return Err(OvbaError::DuplicateProcedure {
-                    module: code_name.clone(),
-                    procedure: clash.clone(),
-                });
-            }
-        }
         upsert.push(VbaModule {
             name: code_name.clone(),
             kind: ModuleKind::Document,
-            source: source::merge_managed_region(&current, &code.managed_code),
+            source: source::replace_document_code(&current, &code.code),
         });
     }
 
@@ -796,8 +772,8 @@ mod tests {
     }
 
     #[test]
-    fn generated_event_handler_must_not_duplicate_a_hand_written_one() {
-        let dir = scratch_dir("dup");
+    fn document_code_replaces_the_whole_module() {
+        let dir = scratch_dir("doc");
         let book = dir.join("book.xlsm");
         fs::write(&book, crate::create_workbook(crate::BookKind::Xlsm, &["Sheet1"])).unwrap();
         let hand = "Private Sub workbook_open()\r\n    MsgBox \"hi\"\r\nEnd Sub\r\n";
@@ -807,24 +783,25 @@ mod tests {
             ..PackRequest::default()
         })
         .unwrap();
-        let before = fs::read(&book).unwrap();
         let generated = |code: &str| PackRequest {
             book: book.clone(),
-            document_code: vec![crate::DocumentCode { code_name: "ThisWorkbook".into(), managed_code: code.into() }],
+            document_code: vec![crate::DocumentCode { code_name: "ThisWorkbook".into(), code: code.into() }],
             ..PackRequest::default()
         };
-        match pack(&generated("Private Sub Workbook_Open()\r\nEnd Sub\r\n")) {
-            Err(OvbaError::DuplicateProcedure { module, procedure }) => {
-                assert_eq!((module.as_str(), procedure.as_str()), ("ThisWorkbook", "workbook_open"));
-            }
-            other => panic!("expected a duplicate procedure, got {other:?}"),
-        }
-        assert_eq!(fs::read(&book).unwrap(), before, "nothing was written");
-        // Another event is fine, and replacing the generated region is not a clash with itself.
-        let activate = "Private Sub Workbook_Activate()\r\nEnd Sub\r\n";
-        pack(&generated(activate)).unwrap();
-        let report = pack(&generated(activate)).unwrap();
+        let code = "Option Explicit\r\nPrivate Sub Workbook_Open()\r\nEnd Sub\r\n";
+        pack(&generated(code)).unwrap();
+        let module = |name: &str| crate::unpack(&book).unwrap().project.unwrap().modules.into_iter().find(|m| m.name == name).unwrap().source;
+        let source = module("ThisWorkbook");
+        // The header of the document module stays; what was there before is gone.
+        assert!(source.starts_with("Attribute VB_Name = \"ThisWorkbook\""), "{source}");
+        assert!(source.ends_with(code), "{source}");
+        assert!(!source.contains("MsgBox"), "{source}");
+        let report = pack(&generated(code)).unwrap();
         assert_eq!(report.unchanged, ["ThisWorkbook", "Sheet1"]);
+        // Empty code: a module without code.
+        pack(&generated("")).unwrap();
+        let source = module("ThisWorkbook");
+        assert!(source.lines().all(|l| l.starts_with("Attribute ")), "{source}");
         let _ = fs::remove_dir_all(&dir);
     }
 

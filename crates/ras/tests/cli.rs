@@ -25,9 +25,12 @@ fn init_build_pack_unpack_round_trip() {
 
     std::fs::write(
         dir.join("src/report.ras"),
-        "/** 日本語の説明。 */\n@fast\nexport function fill() {\n    const ws = Sheet1;\n    for (let r = 1; r <= 10; r++) {\n        ws.cells(r, 1).value = r * 2;\n    }\n}\n\n@on(\"Sheet1.Change\")\nfunction changed(target: Excel.Range) {\n    status(\"変更: \" + target.address);\n}\n",
+        "/** 日本語の説明。 */\n@fast\nexport function fill() {\n    const ws = Sheet1;\n    for (let r = 1; r <= 10; r++) {\n        ws.cells(r, 1).value = r * 2;\n    }\n}\n",
     )
     .unwrap();
+    // The module of the sheet (spec §12.2).
+    std::fs::create_dir_all(dir.join("objects")).unwrap();
+    std::fs::write(dir.join("objects/Sheet1.ras"), "@on(\"Worksheet.Change\")\nfunction changed(target: Excel.Range) {\n    status(\"変更: \" + target.address);\n}\n").unwrap();
 
     let (ok, out) = ras(&dir, &["check"]);
     assert!(ok, "{out}");
@@ -66,7 +69,8 @@ fn init_build_pack_unpack_round_trip() {
     let report = project.modules.iter().find(|m| m.name == "Report").unwrap();
     assert!(report.source.contains("' 日本語の説明。"));
     let sheet = project.modules.iter().find(|m| m.name == "Sheet1").unwrap();
-    assert!(sheet.source.contains("'--- RAS BEGIN ---") && sheet.source.contains("Private Sub Worksheet_Change(ByVal Target As Range)"), "{}", sheet.source);
+    assert!(sheet.source.contains("' RAS-GENERATED hash=") && sheet.source.contains("Option Explicit") && sheet.source.contains("Private Sub Worksheet_Change(ByVal Target As Range)"), "{}", sheet.source);
+    assert!(!sheet.source.contains("'--- RAS BEGIN ---"), "{}", sheet.source);
 
     // Removing a source file removes its module; unpack reports only RAS-managed modules.
     std::fs::remove_file(dir.join("src/main.ras")).unwrap();
@@ -107,11 +111,11 @@ fn pack_refuses_to_clobber_hand_written_code() {
     assert!(!ok && out.contains("同名のモジュール") && out.contains("MAIN") && out.contains("--overwrite"), "{out}");
     assert_eq!(std::fs::read(&book).unwrap(), before, "nothing may be written");
 
-    // The generated `Workbook_Open` (from `@init`) would be a second definition next to the hand-written one.
+    // The generated `ThisWorkbook` (the calls of `@init`) would replace the hand-written `Workbook_Open`.
     std::fs::rename(dir.join("src/main.ras"), dir.join("src/app.ras")).unwrap();
     std::fs::write(dir.join("src/setup.ras"), "@init\nfunction prepare() {\n    status(\"ready\");\n}\n").unwrap();
     let (ok, out) = ras(&dir, &["pack"]);
-    assert!(!ok && out.contains("ThisWorkbook") && out.contains("Workbook_Open") && out.contains("名前が重なります"), "{out}");
+    assert!(!ok && out.contains("ThisWorkbook") && out.contains("同名のモジュール") && out.contains("--overwrite"), "{out}");
     assert_eq!(std::fs::read(&book).unwrap(), before, "nothing may be written");
 
     // A leftover owner file is named in the message.
@@ -168,17 +172,18 @@ fn hand_written_vba_is_taken_over() {
 
     let (ok, out) = ras(&dir, &["pack"]);
     assert!(ok, "{out}");
-    for file in ["src/mod_Util.ras", "src/Module1.ras", "src/Sheet1Events.ras", "forms/frmHello.form.json", "forms/frmHello.ras", "vba/mod_Util.bas", "vba/Module1.bas", "vba/Sheet1.cls", "vba/frmHello.frm"] {
+    for file in ["src/mod_Util.ras", "src/Module1.ras", "objects/Sheet1.ras", "forms/frmHello.form.json", "forms/frmHello.ras", "vba/mod_Util.bas", "vba/Module1.bas", "vba/Sheet1.cls", "vba/frmHello.frm"] {
         assert!(dir.join(file).is_file(), "{file} missing: {out}");
     }
     assert!(out.contains("src/Module1.ras") && out.contains("TODO(VBA)") && out.contains("`Module1` は置き換えずに"), "{out}");
     let read = |file: &str| std::fs::read_to_string(dir.join(file)).unwrap();
     // Taken over: the marker line became a comment, the hand-written code is gone from the workbook.
-    for file in ["src/mod_Util.ras", "src/Sheet1Events.ras", "forms/frmHello.ras"] {
+    for file in ["src/mod_Util.ras", "objects/Sheet1.ras", "forms/frmHello.ras"] {
         assert!(!read(file).contains("RAS-IMPORTED") && read(file).starts_with("// ブックの VBA（"), "{file}: {}", read(file));
     }
-    assert!(read("src/Sheet1Events.ras").contains("@on(\"Sheet1.Change\")"), "{}", read("src/Sheet1Events.ras"));
-    assert!(read("src/Sheet1Events.ras").contains("import { Twice } from \"./mod_Util\";"), "{}", read("src/Sheet1Events.ras"));
+    assert!(read("objects/Sheet1.ras").contains("@on(\"Worksheet.Change\")"), "{}", read("objects/Sheet1.ras"));
+    assert!(read("objects/Sheet1.ras").contains("this.range(\"B1\").value"), "{}", read("objects/Sheet1.ras"));
+    assert!(read("objects/Sheet1.ras").contains("import { Twice } from \"../mod_Util\";"), "{}", read("objects/Sheet1.ras"));
     // Pending: `Module1` has a TODO, the workbook keeps it.
     let module1 = read("src/Module1.ras");
     assert!(module1.starts_with("// RAS-IMPORTED Module1 ") && module1.contains("// TODO(VBA):"), "{module1}");
@@ -192,7 +197,8 @@ fn hand_written_vba_is_taken_over() {
     assert!(source_of("ModUtil").unwrap().contains("' RAS-GENERATED"));
     assert!(source_of("Module1").unwrap().contains("GoTo Done"), "pending: kept as it was");
     let sheet = source_of("Sheet1").unwrap();
-    assert!(sheet.contains("'--- RAS BEGIN ---") && !sheet.contains("Range(\"B1\")") && sheet.contains("Option Explicit"), "{sheet}");
+    // The module of the sheet is generated whole from `objects/Sheet1.ras`.
+    assert!(sheet.contains("' RAS-GENERATED hash=") && sheet.contains("Me.Range(\"B1\")") && !sheet.contains("'--- RAS BEGIN ---") && sheet.matches("Option Explicit").count() == 1, "{sheet}");
     let form = ras_ovba::unpack_user_forms(&book).unwrap().into_iter().find(|f| f.name == "frmHello").unwrap();
     assert!(ras_ovba::is_generated_form(&form.code), "{}", form.code);
 
@@ -250,7 +256,7 @@ fn bundled_example_project_builds() {
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/sales-report");
     let out_dir = temp_dir("example");
     // Work on a copy so that the repository stays clean.
-    for sub in ["src", "types"] {
+    for sub in ["src", "types", "objects"] {
         std::fs::create_dir_all(out_dir.join(sub)).unwrap();
         for entry in std::fs::read_dir(example.join(sub)).unwrap() {
             let entry = entry.unwrap();
