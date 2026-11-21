@@ -1,15 +1,17 @@
 {
   "schemaVersion": 1,
   "kind": "ras.userform",
-  "form": { "name": "frmInput", "caption": "入力", "width": 240, "height": 180 },
+  "form": { "name": "frmInput", "caption": "入力", "width": 240, "height": 180, "tag": "入力用", "zoom": 120 },
   "controls": [
     { "id": "name", "name": "txtName", "type": "TextBox", "left": 12, "top": 12, "width": 120, "height": 18 },
     { "id": "kind", "name": "cboKind", "type": "ComboBox", "left": 12, "top": 36, "list": ["通常", "お急ぎ"], "selectedIndex": 0 },
-    { "id": "chk", "name": "chkAgree", "type": "CheckBox", "caption": "同意", "left": 12, "top": 60 },
+    { "id": "chk", "name": "chkAgree", "type": "CheckBox", "caption": "同意", "left": 12, "top": 60, "controlSource": "Sheet1!B2" },
+    { "id": "tri", "name": "chkMaybe", "type": "CheckBox", "caption": "保留", "left": 120, "top": 60, "tripleState": true },
     { "id": "fra", "name": "fraSize", "type": "Frame", "caption": "サイズ", "left": 12, "top": 84, "width": 100, "height": 50 },
     { "id": "s", "parentId": "fra", "name": "optS", "type": "OptionButton", "caption": "S", "left": 6, "top": 6, "value": true },
     { "id": "m", "parentId": "fra", "name": "optM", "type": "OptionButton", "caption": "M", "left": 6, "top": 26 },
     { "id": "spn", "name": "spnQty", "type": "SpinButton", "left": 120, "top": 84, "properties": { "Min": 1, "Max": 3 }, "value": 1 },
+    { "id": "staff", "name": "lstStaff", "type": "ListBox", "left": 150, "top": 100, "width": 80, "height": 36, "columnCount": 2, "columnWidths": "0;", "boundColumn": 1, "list": [["001", "山田"], ["002", "佐藤"]], "selectedIndex": 1 },
     { "id": "ok", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 150, "top": 140, "properties": { "Default": true } },
     { "id": "boom", "name": "btnBoom", "type": "CommandButton", "caption": "!", "left": 12, "top": 140 }
   ]

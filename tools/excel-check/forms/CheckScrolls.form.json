@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckScrolls",
+    "caption": "SpinButton / ScrollBar の確認",
+    "width": 330,
+    "height": 160
+  },
+  "controls": [
+    {
+      "id": "s1",
+      "name": "spnPlain",
+      "type": "SpinButton",
+      "left": 6,
+      "top": 6,
+      "width": 18,
+      "height": 36
+    },
+    {
+      "id": "s2",
+      "name": "spnSet",
+      "type": "SpinButton",
+      "left": 30,
+      "top": 6,
+      "width": 36,
+      "height": 18,
+      "min": -5,
+      "max": 5,
+      "value": 2,
+      "smallChange": 2,
+      "orientation": 1,
+      "delay": 100,
+      "mousePointer": 7,
+      "controlSource": "Sheet1!D5",
+      "backColor": {
+        "kind": "rgb",
+        "value": "#FFE0E0"
+      },
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#0000FF"
+      },
+      "tabStop": false
+    },
+    {
+      "id": "s3",
+      "name": "spnDisabled",
+      "type": "SpinButton",
+      "left": 72,
+      "top": 6,
+      "width": 18,
+      "height": 36,
+      "enabled": false,
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      }
+    },
+    {
+      "id": "r1",
+      "name": "scrPlain",
+      "type": "ScrollBar",
+      "left": 6,
+      "top": 60,
+      "width": 150,
+      "height": 18
+    },
+    {
+      "id": "r2",
+      "name": "scrSet",
+      "type": "ScrollBar",
+      "left": 6,
+      "top": 84,
+      "width": 150,
+      "height": 18,
+      "min": 10,
+      "max": 200,
+      "value": 50,
+      "smallChange": 5,
+      "largeChange": 20,
+      "proportionalThumb": false,
+      "delay": 70,
+      "backColor": {
+        "kind": "rgb",
+        "value": "#E0E0FF"
+      },
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#008000"
+      },
+      "tabStop": false
+    },
+    {
+      "id": "r3",
+      "name": "scrVertical",
+      "type": "ScrollBar",
+      "left": 170,
+      "top": 6,
+      "width": 18,
+      "height": 120,
+      "orientation": 0,
+      "max": 10,
+      "value": 3,
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      },
+      "controlSource": "Sheet1!D6"
+    },
+    {
+      "id": "r4",
+      "name": "scrDisabled",
+      "type": "ScrollBar",
+      "left": 6,
+      "top": 108,
+      "width": 150,
+      "height": 18,
+      "enabled": false,
+      "orientation": 1
+    }
+  ]
+}

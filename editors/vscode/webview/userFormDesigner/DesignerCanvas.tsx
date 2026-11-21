@@ -2,7 +2,9 @@
    Copyright (c) 2026 harumiWeb. See THIRD_PARTY_NOTICES.md. */
 import type { DesignerControl, DesignerDocument } from "../../src/userForm/protocol";
 import { pointsToPixels } from "../../src/userForm/model";
-import { pixelsToPoints } from "../../src/userForm/model";
+import { pixelsToPoints, toggleState } from "../../src/userForm/model";
+import { columnLayout, itemColumns, textColumnIndex } from "../../src/userForm/listItems";
+import { backgroundPicture, picturePositionLayout } from "../../src/userForm/pictureLayout";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { displayPages } from "../../src/userForm/collections";
 import type { ActivePages } from "../../src/userForm/collections";
@@ -82,6 +84,22 @@ function ControlPicture({ control }: { control: DesignerControl }) {
   return <span class="placeholder">▧ {name || "Image"}</span>;
 }
 
+/** A caption with the control's picture beside it, as PicturePosition places it. */
+function PictureCaption({ control, caption }: { control: DesignerControl; caption: string }) {
+  const source = control.picture?.remove === true ? undefined : control.picturePreview;
+  if (!source) return <span>{caption}</span>;
+  const layout = picturePositionLayout(control.picturePosition);
+  return (
+    <span
+      class={`picture-caption ${layout.direction}`}
+      style={layout.direction === "stack" ? undefined : { flexDirection: layout.direction, alignItems: layout.align }}
+    >
+      <img class="caption-picture" src={source} alt="" draggable={false} />
+      {caption && <span class="caption-text">{caption}</span>}
+    </span>
+  );
+}
+
 /** Orientation Horizontal (1) or Vertical (0), else Auto: horizontal when wider than high. */
 const horizontal = (control: DesignerControl) =>
   control.orientation === 1 || (control.orientation !== 0 && control.width >= control.height);
@@ -97,6 +115,12 @@ export function scalarClasses(control: DesignerControl): string {
     typeof control.style === "number" && ["multipage", "tabstrip"].includes(control.type.toLowerCase())
       ? `tab-style-${control.style}`
       : "",
+    // TabOrientation Bottom, Left or Right (Top is the default drawing).
+    typeof control.tabOrientation === "number" &&
+    control.tabOrientation > 0 &&
+    ["multipage", "tabstrip"].includes(control.type.toLowerCase())
+      ? `tab-orient-${control.tabOrientation}`
+      : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -109,7 +133,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "label":
     case "commandbutton":
     case "togglebutton":
-      return <span>{caption}</span>;
+      return <PictureCaption control={control} caption={caption} />;
     case "textbox": {
       const text = control.text ?? String(control.value ?? "");
       // PasswordChar shows in place of every character.
@@ -118,24 +142,41 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
     case "checkbox":
     case "optionbutton": {
       // MSForms draws the box at the left, vertically centred, with the caption beside it.
-      const state = control.value === true ? "checked" : control.value === null ? "mixed" : "";
+      const state = { on: "checked", null: "mixed", off: "" }[toggleState(control.value)];
       return (
         <>
           <span class={`toggle-box ${type === "checkbox" ? "check" : "option"} ${state}`} aria-hidden="true" />
-          <span class="toggle-caption">{caption}</span>
+          <span class="toggle-caption">
+            <PictureCaption control={control} caption={caption} />
+          </span>
         </>
       );
     }
     case "combobox": {
       // Without an authored text or value, the selected list item is what the form shows.
       const authored = control.text || (control.value == null ? "" : String(control.value));
+      // The selected item shows its TextColumn.
+      const rows = (control.list ?? []).map(itemColumns);
+      const columns = columnLayout(
+        control.columnCount,
+        control.columnWidths,
+        control.width,
+        Math.max(1, ...rows.map((row) => row.length)),
+      );
+      const shownColumn = textColumnIndex(control.textColumn, columns);
+      const selectedRow = rows[control.selectedIndex ?? -1];
+      const selectedText = selectedRow
+        ? shownColumn < 0
+          ? String(control.selectedIndex)
+          : (selectedRow[shownColumn] ?? "")
+        : "";
       // The drop button shows always (what Excel gives a new ComboBox), never, or only
       // with the focus, which a control on the design surface never has.
       const button = (control.showDropButtonWhen ?? 2) === 2;
       return (
         <>
           <span class="combo-text">
-            {authored || (control.list?.[control.selectedIndex ?? -1] ?? "")}
+            {authored || selectedText}
           </span>
           {button && (
             <span class="combo-arrow" aria-hidden="true">
@@ -152,9 +193,36 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
       // ListStyle Option puts a box before each item: a check box when several
       // items can be selected, an option button when only one.
       const box = control.listStyle === 1 ? (control.multiSelect ? "check" : "option") : undefined;
+      // The items of a RowSource are in the workbook; the canvas names the cells.
+      if (control.rowSource && !control.list?.length)
+        return (
+          <span class="list-items">
+            <div class="list-source">{control.rowSource}</div>
+          </span>
+        );
+      // Several columns (or headings) are laid out by ColumnCount and ColumnWidths.
+      const rows = (control.list ?? []).map(itemColumns);
+      const columns = columnLayout(
+        control.columnCount,
+        control.columnWidths,
+        Math.max(0, control.width - 4),
+        Math.max(1, ...rows.map((row) => row.length)),
+      );
+      const cells = columns.length > 1 || control.columnHeads === true;
+      const line = (row: string[]) =>
+        cells
+          ? columns.map((width, column) => (
+              <span class="list-cell" style={{ width: px(width) }}>
+                {row[column] ?? ""}
+              </span>
+            ))
+          : row[0];
       return (
         <span class="list-items">
-          {(control.list ?? []).map((item, index) => {
+          {control.columnHeads === true && (
+            <div class="list-item list-heads">{line([])}</div>
+          )}
+          {rows.map((row, index) => {
             const selected = index === control.selectedIndex;
             return (
               <div
@@ -167,7 +235,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
                     aria-hidden="true"
                   />
                 )}
-                {item}
+                {line(row)}
               </div>
             );
           })}
@@ -225,7 +293,7 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
             (tab, index) =>
               tab.visible !== false && (
                 <span key={tab.name} class={index === (control.selectedIndex ?? 0) ? "active" : ""}>
-                  {tab.caption ?? tab.name}
+                  <span class="tab-text">{tab.caption ?? tab.name}</span>
                 </span>
               ),
           )}
@@ -1011,13 +1079,13 @@ export function DesignerCanvas({
         : groupPosition
           ? { ...control, left: groupPosition.left, top: groupPosition.top }
           : control;
-    const insets = contentInsets(type);
+    const insets = contentInsets(type, control.tabOrientation);
     const selectedControl = selectionIds.includes(control.id);
     return (
       <>
         <div
           key={control.id}
-          class={`control ${type} ${borderClass(shown)} ${scalarClasses(shown)} ${control.enabled === false ? "disabled" : ""} ${type === "frame" && control.caption ? "has-caption" : ""} ${type === "togglebutton" && control.value === true ? "pressed" : ""}`}
+          class={`control ${type} ${borderClass(shown)} ${scalarClasses(shown)} ${control.enabled === false ? "disabled" : ""} ${type === "frame" && control.caption ? "has-caption" : ""} ${type === "togglebutton" ? { on: "pressed", null: "mixed", off: "" }[toggleState(control.value)] : ""}`}
           data-control-id={control.id}
           title={`${control.name} (${control.type})${control.approximate ? ` — ${approximateBounds}` : ""}`}
           style={{
@@ -1050,7 +1118,7 @@ export function DesignerCanvas({
                           setSelection([p.id]);
                         }}
                       >
-                        {p.caption ?? p.name}
+                        <span class="tab-text">{p.caption ?? p.name}</span>
                       </button>
                     ),
                 )}
@@ -1062,6 +1130,12 @@ export function DesignerCanvas({
                   title={page.name}
                   style={{
                     ...appearanceStyle(page),
+                    ...backgroundPicture(
+                      page.picture?.remove === true ? undefined : page.picturePreview,
+                      page.pictureAlignment,
+                      page.pictureSizeMode,
+                      page.pictureTiling,
+                    ),
                     left: px(insets.left),
                     top: px(insets.top),
                     right: px(insets.right),
@@ -1077,6 +1151,12 @@ export function DesignerCanvas({
               class="container-content"
               data-container-id={control.id}
               style={{
+                ...backgroundPicture(
+                  control.picture?.remove === true ? undefined : control.picturePreview,
+                  control.pictureAlignment,
+                  control.pictureSizeMode,
+                  control.pictureTiling,
+                ),
                 left: px(insets.left),
                 top: px(insets.top),
                 right: px(insets.right),
@@ -1301,10 +1381,16 @@ export function DesignerCanvas({
           </div>
           <div class="form-client-area">
             <div
-              class={`form ${borderClass(document)} ${showGrid ? "show-grid" : ""} ${selectedId === undefined ? "form-selected" : ""}`}
+              class={`form ${borderClass(document)} ${typeof document.specialEffect === "number" ? `effect-${document.specialEffect}` : ""} ${showGrid ? "show-grid" : ""} ${selectedId === undefined ? "form-selected" : ""}`}
               data-container-id=""
               style={{
                 ...appearanceStyle(document),
+                ...backgroundPicture(
+                  document.picture?.remove === true ? undefined : document.picturePreview,
+                  document.pictureAlignment,
+                  document.pictureSizeMode,
+                  document.pictureTiling,
+                ),
                 width: px((formResizePreview ?? document).width),
                 height: px((formResizePreview ?? document).height),
                 backgroundSize: `${px(gridSize)} ${px(gridSize)}`,

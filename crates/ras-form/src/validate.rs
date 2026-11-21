@@ -1,4 +1,4 @@
-//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV021`).
+//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV022`).
 //!
 //! Port of the validation in xlflow's `internal/vba/userforms/spec`
 //! (`spec.go`, `appearance.go`; Copyright (c) 2026 harumiWeb, MIT License;
@@ -14,7 +14,6 @@ use crate::contract::{self, lookup, Prop, Props, Support, ValueType};
 use crate::scalars;
 use crate::spec::{
     FormSpec, FormSpecColor, FormSpecControl, FormSpecFont, FormSpecForm, FormSpecTab, KIND,
-    XLFLOW_KIND,
 };
 
 /// Severity of an [`Issue`].
@@ -85,6 +84,9 @@ fn matches_type(value: &Value, value_type: ValueType) -> bool {
         (ValueType::Integer, v) => is_integer(v),
         (ValueType::Boolean, v) => v.is_boolean(),
         (ValueType::StringArray, Value::Array(items)) => items.iter().all(Value::is_string),
+        (ValueType::ListItems, Value::Array(items)) => items.iter().all(|item| {
+            item.is_string() || item.as_array().is_some_and(|row| row.iter().all(Value::is_string))
+        }),
         (ValueType::Object, v) => v.is_object(),
         (ValueType::ObjectArray, Value::Array(items)) => items.iter().all(Value::is_object),
         _ => false,
@@ -225,6 +227,11 @@ pub(crate) fn validate_raw(root: &Value) -> Vec<Issue> {
     let mut issues = validate_object(root, &contract::document_properties(), "");
     if let Some(form) = root.get("form").and_then(Value::as_object) {
         issues.extend(validate_object(form, &contract::form_properties(), "form"));
+        for field in ["picture", "mouseIcon"] {
+            if let Some(value) = lookup_raw(form, field) {
+                issues.extend(validate_raw_picture(value, "UserForm", true, &format!("form.{field}")));
+            }
+        }
         if let Some(observed) = form.get("observed").and_then(Value::as_object) {
             issues.extend(validate_object(
                 observed,
@@ -455,12 +462,13 @@ fn validate_raw_control_properties(
         add_generic_custom_properties(&mut allowed);
     }
     let mut issues = validate_object(control, &allowed, path);
-    if let Some(value) = lookup_raw(control, "picture") {
-        issues.extend(validate_raw_picture(
-            value,
-            control_type,
-            &format!("{path}.picture"),
-        ));
+    for (field, takes) in [
+        ("picture", contract::takes_picture(control_type)),
+        ("mouseIcon", contract::takes_mouse_icon(control_type)),
+    ] {
+        if let Some(value) = lookup_raw(control, field) {
+            issues.extend(validate_raw_picture(value, control_type, takes, &format!("{path}.{field}")));
+        }
     }
     if let Some(tabs) = lookup_raw(control, "tabs") {
         issues.extend(validate_raw_tabs(tabs, &format!("{path}.tabs")));
@@ -514,8 +522,9 @@ fn validate_raw_control_properties(
     issues
 }
 
-fn validate_raw_picture(value: &Value, control_type: &str, path: &str) -> Vec<Issue> {
-    if !control_type.trim().eq_ignore_ascii_case("Image") {
+/// A picture action (`picture`, `mouseIcon`) of a control that `takes` it, or of the form.
+fn validate_raw_picture(value: &Value, control_type: &str, takes: bool, path: &str) -> Vec<Issue> {
+    if !takes {
         return vec![invalid_property_issue(path, control_type)];
     }
     let Some(object) = value.as_object() else {
@@ -532,7 +541,7 @@ fn validate_raw_picture(value: &Value, control_type: &str, path: &str) -> Vec<Is
         if name != "path" && name != "remove" {
             issues.push(error(
                 "UFV001",
-                format!("{path}.{key} は picture にないフィールドです。"),
+                format!("{path}.{key} は画像の指定にないフィールドです。"),
                 &format!("{path}.{key}"),
             ));
             continue;
@@ -880,11 +889,11 @@ fn validate_font(font: Option<&FormSpecFont>, path: &str) -> Vec<Issue> {
             ));
         }
     }
-    if let Some(charset) = font.charset {
-        if !(0..=255).contains(&charset) {
+    for (name, value) in [("charset", font.charset), ("pitchAndFamily", font.pitch_and_family)] {
+        if value.is_some_and(|v| !(0..=255).contains(&v)) {
             issues.push(appearance_issue(
-                &format!("{path}.charset"),
-                "charset は 0〜255 の整数にしてください。".into(),
+                &format!("{path}.{name}"),
+                format!("{name} は 0〜255 の整数にしてください。"),
             ));
         }
     }
@@ -916,6 +925,24 @@ fn validate_typed_form(form: &FormSpecForm) -> Vec<Issue> {
             "form.borderStyle",
             "borderStyle は 0 か 1 にしてください。".into(),
         ));
+    }
+    // The plain properties of the form (scalars.rs).
+    for (name, value) in &form.scalars {
+        let Some(p) = scalars::form_scalar(name).filter(|_| !value.is_null()) else {
+            continue;
+        };
+        let field = format!("form.{name}");
+        if let Err(message) = scalars::to_raw(p, value) {
+            issues.push(appearance_issue(&field, format!("{message}。")));
+        } else if let (scalars::Store::Frame(_), Some(text)) = (p.store, value.as_str()) {
+            // A line of the designer block: [MS-OVBA] allows 130 characters in quotes.
+            if text.chars().any(char::is_control) || text.chars().count() > 130 {
+                issues.push(appearance_issue(
+                    &field,
+                    format!("{name} は制御文字を含まない 130 文字以内の文字列にしてください。"),
+                ));
+            }
+        }
     }
     issues
 }
@@ -976,6 +1003,16 @@ fn validate_scalars(control: &FormSpecControl, path: &str) -> Vec<Issue> {
                 ));
             }
         }
+    }
+    if builtin
+        && control.scalar("rowSource").and_then(Value::as_str).is_some_and(|s| !s.is_empty())
+        && control.list.as_ref().is_some_and(|l| !l.is_empty())
+    {
+        // MSForms refuses AddItem on a list that comes from cells.
+        issues.push(appearance_issue(
+            &format!("{path}.list"),
+            "rowSource を指定したコントロールには list を書けません（項目はセル範囲から読み込まれます）。".into(),
+        ));
     }
     if builtin && matches!(control.control_type.as_str(), "SpinButton" | "ScrollBar") {
         let bound = |name: &str| {
@@ -1233,11 +1270,13 @@ fn validate_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
         }
     }
     let is = |name: &str| control.control_type.trim().eq_ignore_ascii_case(name);
-    if control.picture.is_some() && !is("Image") {
-        issues.push(invalid_property_issue(
-            &format!("{path}.picture"),
-            &control.control_type,
-        ));
+    for (field, given, takes) in [
+        ("picture", control.picture.is_some(), contract::takes_picture(&control.control_type)),
+        ("mouseIcon", control.mouse_icon.is_some(), contract::takes_mouse_icon(&control.control_type)),
+    ] {
+        if given && !takes {
+            issues.push(invalid_property_issue(&format!("{path}.{field}"), &control.control_type));
+        }
     }
     if is("Page") {
         for (name, value) in [
@@ -1274,6 +1313,16 @@ fn validate_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
         ));
     }
     if is("ComboBox") || is("ListBox") {
+        // AddItem and List(row, column) fill at most 10 columns of a list
+        // that is not bound to cells.
+        for (index, item) in control.list.iter().flatten().enumerate() {
+            if !(1..=10).contains(&item.columns().len()) {
+                issues.push(appearance_issue(
+                    &format!("{path}.list[{index}]"),
+                    "list の項目の列は 1〜10 個にしてください。".into(),
+                ));
+            }
+        }
         // The selection is set by generated code after the items were
         // added: it has to name one of them (or none, -1).
         if let Some(index) = control.selected_index {
@@ -1296,7 +1345,7 @@ pub(crate) fn validate_strict(spec: &FormSpec) -> Vec<Issue> {
             "schemaVersion",
         ));
     }
-    if spec.kind != KIND && spec.kind != XLFLOW_KIND {
+    if spec.kind != KIND {
         issues.push(error(
             "UFV003",
             format!("kind は {KIND:?} にしてください。"),

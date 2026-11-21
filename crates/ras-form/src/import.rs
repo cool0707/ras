@@ -315,7 +315,7 @@ pub fn prepare(root: &Path, book: Book, codepage: u16) -> Result<Prepared, Strin
             }
             ImportKind::Form => {
                 let dir = workspace::forms_dir(root);
-                let exists = ["form.json", "ras", "bas"].iter().any(|ext| dir.join(format!("{}.{ext}", module.name)).exists()) || files.iter().any(|f| f.vba_name.eq_ignore_ascii_case(&module.name));
+                let exists = ["form.json", "ras"].iter().any(|ext| dir.join(format!("{}.{ext}", module.name)).exists()) || files.iter().any(|f| f.vba_name.eq_ignore_ascii_case(&module.name));
                 if exists {
                     continue;
                 }

@@ -129,14 +129,27 @@ pub fn init_procedure(spec: &FormSpec, codepage: u16) -> Result<Option<String>, 
         }
         body.push_str(&format!("    With Me.{}\n", control.name));
         for item in items {
-            let line = format!("        .AddItem {}\n", vba_string(item, codepage));
-            if line.chars().count() > MAX_LINE {
-                return Err(format!(
-                    "{} の list の項目が長すぎます（1 項目は VBA の 1 行に収まる長さにしてください）",
-                    control.name
+            // AddItem gives the first column; List(row, column) the others.
+            let columns = item.columns();
+            let mut lines = vec![format!(
+                "        .AddItem {}\n",
+                vba_string(columns.first().map_or("", String::as_str), codepage)
+            )];
+            for (column, text) in columns.iter().enumerate().skip(1) {
+                lines.push(format!(
+                    "        .List(.ListCount - 1, {column}) = {}\n",
+                    vba_string(text, codepage)
                 ));
             }
-            body.push_str(&line);
+            for line in lines {
+                if line.chars().count() > MAX_LINE {
+                    return Err(format!(
+                        "{} の list の項目が長すぎます（1 項目・1 列は VBA の 1 行に収まる長さにしてください）",
+                        control.name
+                    ));
+                }
+                body.push_str(&line);
+            }
         }
         if let Some(index) = selected {
             body.push_str(&format!("        .ListIndex = {index}\n"));
@@ -223,7 +236,7 @@ fn sub_declaration_end(lines: &[&str], name: &str) -> Option<usize> {
 ///
 /// * `rel_path` — the `.form.json` file relative to the project root.
 /// * `code` — the code of the form: what the compiler generated from
-///   `forms/<Name>.ras`, or the VBA of a `forms/<Name>.bas` of earlier versions.
+///   `forms/<Name>.ras`.
 pub fn compose(
     rel_path: &str,
     designer: &Designer,
@@ -353,6 +366,25 @@ mod tests {
         assert_ne!(other[1], fields[1]);
         assert_eq!(lines.collect::<Vec<_>>(), ["Private Sub txt_Change()", "End Sub"]);
         assert_eq!(code_behind(&code), "Private Sub txt_Change()\nEnd Sub\n");
+    }
+
+    #[test]
+    fn items_of_several_columns_fill_the_other_columns_by_list() {
+        let spec = spec(
+            r#"{"id":"l","name":"lstStaff","type":"ListBox","columnCount":3,"list":[["001","山田","営業"],"002",["003",""]]}"#,
+        );
+        let code = init_procedure(&spec, 932).unwrap().unwrap();
+        assert_eq!(
+            code,
+            "Private Sub RAS_FormInit()\n    With Me.lstStaff\n        .AddItem \"001\"\n        .List(.ListCount - 1, 1) = \"山田\"\n        .List(.ListCount - 1, 2) = \"営業\"\n        .AddItem \"002\"\n        .AddItem \"003\"\n        .List(.ListCount - 1, 1) = \"\"\n    End With\nEnd Sub\n"
+        );
+        // 1 to 10 columns.
+        for bad in [r#"[]"#, r#"["1","2","3","4","5","6","7","8","9","10","11"]"#] {
+            let text = format!(
+                r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{{"id":"l","name":"lst","type":"ListBox","list":[{bad}]}}]}}"#
+            );
+            assert!(crate::parse(&text).has_errors(), "{bad}");
+        }
     }
 
     #[test]

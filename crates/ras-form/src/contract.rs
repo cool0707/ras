@@ -15,6 +15,8 @@ pub enum ValueType {
     Boolean,
     Any,
     StringArray,
+    /// List items: strings, or arrays of strings (the columns of an item).
+    ListItems,
     Object,
     ObjectArray,
 }
@@ -29,6 +31,7 @@ impl ValueType {
             ValueType::Boolean => "真偽値",
             ValueType::Any => "任意の値",
             ValueType::StringArray => "文字列の配列",
+            ValueType::ListItems => "文字列か、文字列の配列（各列）の配列",
             ValueType::Object => "オブジェクト",
             ValueType::ObjectArray => "オブジェクトの配列",
         }
@@ -118,6 +121,7 @@ fn font() -> Prop {
         ("underline", p(T::Boolean, false, Supported)),
         ("strikeThrough", p(T::Boolean, false, Supported)),
         ("charset", p(T::Integer, false, Supported)),
+        ("pitchAndFamily", p(T::Integer, false, Supported)),
     ]);
     font
 }
@@ -147,10 +151,7 @@ pub fn document_properties() -> Props {
         ),
         (
             "kind",
-            allowed(
-                p(T::String, true, Supported),
-                &["ras.userform", "xlflow.userform"],
-            ),
+            allowed(p(T::String, true, Supported), &["ras.userform"]),
         ),
         (
             "basis",
@@ -171,7 +172,7 @@ pub fn document_properties() -> Props {
 
 /// Fields of `form`.
 pub fn form_properties() -> Props {
-    vec![
+    let mut props = vec![
         ("name", p(T::String, true, Supported)),
         ("caption", p(T::String, false, Supported)),
         ("width", p(T::Number, false, Supported)),
@@ -181,7 +182,26 @@ pub fn form_properties() -> Props {
         ("foreColor", color()),
         ("backColor", color()),
         ("borderStyle", border_style()),
-    ]
+    ];
+    props.push(("picture", picture_action()));
+    props.push(("mouseIcon", picture_action()));
+    // The plain properties of the form (scalars.rs checks their values).
+    for scalar in crate::scalars::FORM_SCALARS {
+        props.push((scalar.name, scalar_prop(scalar)));
+    }
+    props
+}
+
+/// The contract of a plain property (scalars.rs checks its value).
+fn scalar_prop(scalar: &crate::scalars::Scalar) -> Prop {
+    use crate::scalars::Kind;
+    match scalar.kind {
+        Kind::Bool => p(T::Boolean, false, Supported),
+        Kind::Enum(_) | Kind::Int(..) => p(T::Integer, false, Supported),
+        Kind::Points(_) => p(T::Number, false, Supported),
+        Kind::Char | Kind::Text | Kind::Widths => p(T::String, false, Supported),
+        Kind::Color => color(),
+    }
 }
 
 /// Fields of `form.observed`.
@@ -384,26 +404,12 @@ pub fn type_properties(name: &str) -> Option<Props> {
             ("value", any()),
             // Not part of the designer storage: filled by generated code
             // when the form loads.
-            ("list", p(T::StringArray, false, Supported)),
+            ("list", p(T::ListItems, false, Supported)),
             ("selectedIndex", p(T::Integer, false, Supported)),
         ],
         "CheckBox" | "OptionButton" | "ToggleButton" => vec![("caption", s()), ("value", any())],
         "SpinButton" | "ScrollBar" => vec![("value", p(T::Integer, false, Supported))],
-        "Image" => {
-            let mut picture = p(T::Object, false, Supported);
-            picture.children = Some(picture_properties());
-            vec![
-                ("picture", picture),
-                (
-                    "pictureAlignment",
-                    allowed(p(T::Integer, false, Supported), &["0", "1", "2", "3", "4"]),
-                ),
-                (
-                    "pictureSizeMode",
-                    allowed(p(T::Integer, false, Supported), &["0", "1", "3"]),
-                ),
-            ]
-        }
+        "Image" => vec![("picture", picture_action())],
         "MultiPage" => vec![("selectedIndex", p(T::Integer, false, Supported))],
         "Page" => vec![
             ("caption", s()),
@@ -418,6 +424,23 @@ pub fn type_properties(name: &str) -> Option<Props> {
         _ => vec![],
     };
     let n = t.name;
+    if takes_picture(n) {
+        props.push(("picture", picture_action()));
+    }
+    // The picture of an Image, and the background of a Frame or Page.
+    if matches!(n, "Image" | "Frame" | "Page") {
+        props.push((
+            "pictureAlignment",
+            allowed(p(T::Integer, false, Supported), &["0", "1", "2", "3", "4"]),
+        ));
+        props.push((
+            "pictureSizeMode",
+            allowed(p(T::Integer, false, Supported), &["0", "1", "3"]),
+        ));
+    }
+    if takes_mouse_icon(n) {
+        props.push(("mouseIcon", picture_action()));
+    }
     if !matches!(n, "Page" | "Image" | "SpinButton" | "ScrollBar") {
         props.push(("font", font()));
     }
@@ -447,17 +470,32 @@ pub fn type_properties(name: &str) -> Option<Props> {
         if props.iter().any(|(k, _)| *k == scalar.name) {
             continue;
         }
-        use crate::scalars::Kind;
-        let prop = match scalar.kind {
-            Kind::Bool => p(T::Boolean, false, Supported),
-            Kind::Enum(_) | Kind::Int(..) => p(T::Integer, false, Supported),
-            Kind::Points(_) => p(T::Number, false, Supported),
-            Kind::Char | Kind::Text => s(),
-            Kind::Color => color(),
-        };
-        props.push((scalar.name, prop));
+        props.push((scalar.name, scalar_prop(scalar)));
     }
     Some(props)
+}
+
+/// A picture action: `{ path }` or `{ remove: true }`.
+fn picture_action() -> Prop {
+    let mut picture = p(T::Object, false, Supported);
+    picture.children = Some(picture_properties());
+    picture
+}
+
+/// Whether a control of the type has a `picture`: an Image, a Label, the buttons and
+/// toggles, and (as its background) a Frame or Page.
+pub fn takes_picture(type_name: &str) -> bool {
+    control_type(type_name).is_some_and(|t| {
+        matches!(
+            t.name,
+            "Image" | "Label" | "CommandButton" | "CheckBox" | "OptionButton" | "ToggleButton" | "Frame" | "Page"
+        )
+    })
+}
+
+/// Whether a control of the type has a `mouseIcon`: those with a `mousePointer`.
+pub fn takes_mouse_icon(type_name: &str) -> bool {
+    control_type(type_name).is_some_and(|t| crate::scalars::find(t.name, "mousePointer").is_some())
 }
 
 /// All properties of a control type: the common ones (minus exclusions)

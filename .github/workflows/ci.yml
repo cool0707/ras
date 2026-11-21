@@ -35,6 +35,22 @@ jobs:
       - name: Clippy
         if: matrix.os == 'ubuntu-latest'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The scripts that check against the real Excel (tools/, see tools/README.md) need Excel: only parsed here.
+      - name: Parse PowerShell scripts
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($file in Get-ChildItem -Path tools -Filter *.ps1 -Recurse) {
+            $tokens = $null; $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
+            foreach ($e in $errors) {
+              Write-Host "::error file=$($file.FullName),line=$($e.Extent.StartLineNumber)::$($e.Message)"
+              $failed = $true
+            }
+            Write-Host "parsed $($file.FullName)"
+          }
+          if ($failed) { exit 1 }
       # Spec §17.3: the workbook written by `ras pack` is checked with an independent parser (oletools).
       - name: Validate packed workbook with olevba
         if: matrix.os == 'ubuntu-latest'

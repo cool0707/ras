@@ -158,28 +158,9 @@ fn convert_value(kind: &str, property: &str, value: &Value) -> Result<Converted,
         },
         "value" | "text" => {
             if kind.eq_ignore_ascii_case("CheckBox") || kind.eq_ignore_ascii_case("OptionButton") {
-                let state = match value {
-                    Value::Bool(b) => Some(*b),
-                    Value::Number(n) => match n.as_f64() {
-                        Some(v) if v == 1.0 || v == -1.0 => Some(true),
-                        Some(0.0) => Some(false),
-                        _ => None,
-                    },
-                    Value::String(s) => match s.trim().to_lowercase().as_str() {
-                        "true" | "1" | "-1" => Some(true),
-                        "false" | "0" => Some(false),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                return match state {
-                    Some(true) => Ok(Converted::Str("1".into())),
-                    Some(false) => Ok(Converted::Str("0".into())),
-                    None => Err(
-                        "オンオフの状態は真偽値か 0 / 1 / -1 にしてください（3 状態は未対応）"
-                            .into(),
-                    ),
-                };
+                return toggle_state(value).map(|stored| Converted::Str(stored.into())).ok_or_else(|| {
+                    "オンオフの状態は真偽値、0 / 1 / -1、\"Null\" のいずれかにしてください".into()
+                });
             }
             match value {
                 Value::String(s) => Ok(Converted::Str(s.clone())),
@@ -188,6 +169,31 @@ fn convert_value(kind: &str, property: &str, value: &Value) -> Result<Converted,
         }
         _ => Err(format!("{property} は変換できません")),
     }
+}
+
+/// The stored `Value` of a CheckBox, OptionButton or ToggleButton: "1" on, "0" off, and
+/// "" for Null (neither: [MS-OFORMS] 2.5.95 takes any other string for it).
+pub(crate) fn toggle_state(value: &Value) -> Option<&'static str> {
+    let on = match value {
+        Value::Bool(b) => Some(*b),
+        Value::Number(n) => match n.as_f64() {
+            Some(v) if v == 1.0 || v == -1.0 => Some(true),
+            Some(0.0) => Some(false),
+            _ => return None,
+        },
+        Value::String(s) => match s.trim().to_lowercase().as_str() {
+            "true" | "1" | "-1" => Some(true),
+            "false" | "0" => Some(false),
+            "null" => None,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(match on {
+        Some(true) => "1",
+        Some(false) => "0",
+        None => "",
+    })
 }
 
 /// `bagValue`.
@@ -353,17 +359,19 @@ fn control_definition(
             "VBA の識別子にしてください".into(),
         ));
     }
-    if control.picture.is_none()
-        && control
-            .unsupported
-            .as_ref()
-            .is_some_and(|u| u.iter().any(|v| v.trim().eq_ignore_ascii_case("picture")))
-    {
-        return Err(failure(
-            UNSUPPORTED,
-            "picture",
-            "既存の画像を保持したままの生成には対応していません".into(),
-        ));
+    for (field, given) in [("picture", control.picture.is_some()), ("mouseIcon", control.mouse_icon.is_some())] {
+        if !given
+            && control
+                .unsupported
+                .as_ref()
+                .is_some_and(|u| u.iter().any(|v| v.trim().eq_ignore_ascii_case(field)))
+        {
+            return Err(failure(
+                UNSUPPORTED,
+                field,
+                "既存の画像を保持したままの生成には対応していません".into(),
+            ));
+        }
     }
     // The items of a ComboBox (25) or ListBox (24) are not part of the
     // designer storage; they are filled by generated code (`codebehind`).
@@ -572,6 +580,20 @@ fn control_definition(
             Store::Text(field) => {
                 put(field.into(), PValue::Str(value.as_str().unwrap_or("").into()))
             }
+            Store::SiteText(field) => {
+                let text = value.as_str().unwrap_or("");
+                if !text.is_empty() {
+                    put(format!("Site{field}"), PValue::Str(text.into()));
+                }
+            }
+            Store::Columns => {
+                let text = value.as_str().unwrap_or("");
+                if !text.trim().is_empty() {
+                    put("ColumnWidths".into(), PValue::Str(text.into()));
+                }
+            }
+            // The form's own (FORM_SCALARS).
+            Store::Frame(_) | Store::FieldBits(..) | Store::Extent(..) => {}
         }
     }
     // A drop-down list cannot be typed into (Editable off).
@@ -602,37 +624,46 @@ fn control_definition(
             }
         }
     }
-    if let Some(picture) = &control.picture {
-        if picture.get("remove").and_then(Value::as_bool) != Some(true) {
-            let path = picture
-                .get("path")
-                .and_then(Value::as_str)
-                .filter(|p| !p.trim().is_empty());
-            let Some(path) = path else {
-                return Err(failure(
-                    INVALID,
-                    "picture.path",
-                    "画像ファイルのパスを指定してください".into(),
-                ));
-            };
-            let Some(root) = root else {
-                return Err(failure(
-                    INVALID,
-                    "picture.path",
-                    "プロジェクトのルートが分からないため、画像を読めません".into(),
-                ));
-            };
-            // A picture MS-Forms cannot store is converted to a bitmap here;
-            // its transparent parts show the control's background color.
-            let background = crate::picture::background_of(control.back_color.as_ref());
-            let raw = crate::picture::load_with(root, path, background)
-                .and_then(|picture| crate::picture::encode(&picture.data))
-                .map_err(|e| failure(INVALID, "picture.path", e))?;
-            item.properties
-                .insert("Picture".into(), PValue::Picture(raw));
+    for (field, property) in [("picture", "Picture"), ("mouseIcon", "MouseIcon")] {
+        let action = if field == "picture" { &control.picture } else { &control.mouse_icon };
+        let raw = picture_action(action.as_ref(), field, root, control.back_color.as_ref())
+            .map_err(|(path, reason)| failure(INVALID, &path, reason))?;
+        if let Some(raw) = raw {
+            item.properties.insert(property.into(), PValue::Picture(raw));
         }
     }
     Ok(item)
+}
+
+/// The stored `GuidAndPicture` of a picture action (`{ path }`; `None` for none or
+/// `{ remove: true }`): a picture MS-Forms cannot store is converted to a bitmap, its
+/// transparent parts showing `back_color`; a `mouseIcon` is an icon or cursor file as it is.
+/// The error names the field concerned.
+fn picture_action(
+    action: Option<&Value>,
+    field: &str,
+    root: Option<&Path>,
+    back_color: Option<&crate::spec::FormSpecColor>,
+) -> Result<Option<Vec<u8>>, (String, String)> {
+    let Some(action) = action.filter(|a| a.get("remove").and_then(Value::as_bool) != Some(true)) else {
+        return Ok(None);
+    };
+    let path_field = format!("{field}.path");
+    let Some(path) = action.get("path").and_then(Value::as_str).filter(|p| !p.trim().is_empty()) else {
+        return Err((path_field, "画像ファイルのパスを指定してください".into()));
+    };
+    let Some(root) = root else {
+        return Err((path_field, "プロジェクトのルートが分からないため、画像を読めません".into()));
+    };
+    let picture = if field == "mouseIcon" {
+        crate::picture::load_icon(root, path)
+    } else {
+        crate::picture::load_with(root, path, crate::picture::background_of(back_color))
+    };
+    picture
+        .and_then(|picture| crate::picture::encode(&picture.data))
+        .map(Some)
+        .map_err(|e| (path_field, e))
 }
 
 fn generation_tabs(tabs: &[FormSpecTab], index: Option<i64>) -> Result<TabStripState, String> {
@@ -752,6 +783,69 @@ fn promote_legacy_appearance(control: &mut FormSpecControl) {
     }
 }
 
+/// The plain properties of the form (`FORM_SCALARS`): fields of its record, and lines of
+/// its designer block.
+#[allow(clippy::type_complexity)]
+fn form_properties(
+    form: &crate::spec::FormSpecForm,
+    root: Option<&Path>,
+) -> Result<(BTreeMap<String, PValue>, Vec<(&'static str, String)>), CompileError> {
+    let mut properties = BTreeMap::new();
+    let mut frame = Vec::new();
+    let mut fields: BTreeMap<&'static str, i64> = BTreeMap::new();
+    let mut extents: BTreeMap<&'static str, (i32, i32)> = BTreeMap::new();
+    for p in scalars::FORM_SCALARS {
+        let Some(value) = form.scalar(p.name) else {
+            continue;
+        };
+        let field = format!("form.{}", p.name);
+        let raw = scalars::to_raw(p, value).map_err(|e| fail(INVALID, "", &field, e))?;
+        match p.store {
+            Store::Frame(key) => frame.push((key, scalars::frame_text(p, value, raw))),
+            Store::Field(name) => {
+                properties.insert(name.to_string(), PValue::Int(raw));
+            }
+            Store::FieldBits(name, ..) => {
+                let current = fields.entry(name).or_insert(p.omitted);
+                *current = scalars::put_field_bits(*current, p, raw);
+            }
+            Store::Flag(name, _) => {
+                properties.insert(name.to_string(), PValue::Bool(raw != 0));
+            }
+            Store::Extent(name, index) => {
+                let size = extents.entry(name).or_insert_with(|| {
+                    // What generation writes for a new form: no scroll area, not scrolled.
+                    (0, 0)
+                });
+                if index == 0 {
+                    size.0 = raw as i32;
+                } else {
+                    size.1 = raw as i32;
+                }
+            }
+            _ => {}
+        }
+    }
+    for (name, value) in fields {
+        properties.insert(name.to_string(), PValue::Int(value));
+    }
+    for (name, (width, height)) in extents {
+        properties.insert(name.to_string(), PValue::Pair(width, height));
+    }
+    for (field, property, action) in [("picture", "Picture", &form.picture), ("mouseIcon", "MouseIcon", &form.mouse_icon)] {
+        let raw = picture_action(action.as_ref(), field, root, form.back_color.as_ref())
+            .map_err(|(path, reason)| fail(INVALID, "", &format!("form.{path}"), reason))?;
+        if let Some(raw) = raw {
+            properties.insert(property.to_string(), PValue::Picture(raw));
+        }
+    }
+    // A disabled form: its record, and the designer block as the VBA editor writes it.
+    if properties.get("BooleanProperties").is_some_and(|v| *v == PValue::Int(0)) {
+        frame.push(("Enabled", "0".into()));
+    }
+    Ok((properties, frame))
+}
+
 fn font_edit(font: &FormSpecFont) -> FontEdit {
     FontEdit {
         name: font.name.clone(),
@@ -761,6 +855,7 @@ fn font_edit(font: &FormSpecFont) -> FontEdit {
         underline: font.underline,
         strike_through: font.strike_through,
         charset: font.charset,
+        pitch_and_family: font.pitch_and_family,
     }
 }
 
@@ -936,11 +1031,14 @@ pub(crate) fn compile_new(
         Ok(result)
     }
     let controls = build("", 0, &children, &original_index, root)?;
+    let (properties, frame) = form_properties(&spec.form, root)?;
     let definition = Definition {
         name: form_name.clone(),
         caption,
         size: root_size,
         controls,
+        properties,
+        frame,
     };
     let mut form = oforms::new_form(&definition, codepage).map_err(|e| {
         let mut error = from_persist(e);

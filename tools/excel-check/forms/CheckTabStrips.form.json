@@ -1,0 +1,193 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckTabStrips",
+    "caption": "TabStrip の確認",
+    "width": 330,
+    "height": 270
+  },
+  "controls": [
+    {
+      "id": "ts1",
+      "name": "tabTop",
+      "type": "TabStrip",
+      "left": 6,
+      "top": 6,
+      "width": 150,
+      "height": 60,
+      "tabs": [
+        {
+          "name": "t1",
+          "caption": "タブ1"
+        },
+        {
+          "name": "t2",
+          "caption": "Tab 2",
+          "controlTipText": "ヒント",
+          "accelerator": "T"
+        },
+        {
+          "name": "t3",
+          "caption": "無効",
+          "enabled": false
+        }
+      ],
+      "selectedIndex": 1
+    },
+    {
+      "id": "ts2",
+      "name": "tabBottom",
+      "type": "TabStrip",
+      "left": 162,
+      "top": 6,
+      "width": 150,
+      "height": 60,
+      "tabOrientation": 1,
+      "tabs": [
+        {
+          "name": "a"
+        },
+        {
+          "name": "b"
+        }
+      ],
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      }
+    },
+    {
+      "id": "ts3",
+      "name": "tabLeft",
+      "type": "TabStrip",
+      "left": 6,
+      "top": 72,
+      "width": 150,
+      "height": 80,
+      "tabOrientation": 2,
+      "tabFixedHeight": 18,
+      "tabs": [
+        {
+          "name": "左1"
+        },
+        {
+          "name": "左2"
+        }
+      ]
+    },
+    {
+      "id": "ts4",
+      "name": "tabRight",
+      "type": "TabStrip",
+      "left": 162,
+      "top": 72,
+      "width": 150,
+      "height": 80,
+      "tabOrientation": 3,
+      "style": 1,
+      "tabFixedWidth": 40,
+      "tabs": [
+        {
+          "name": "右1"
+        },
+        {
+          "name": "右2"
+        }
+      ]
+    },
+    {
+      "id": "ts5",
+      "name": "tabMulti",
+      "type": "TabStrip",
+      "left": 6,
+      "top": 158,
+      "width": 150,
+      "height": 60,
+      "multiRow": true,
+      "tabs": [
+        {
+          "name": "n1",
+          "caption": "タブ 1"
+        },
+        {
+          "name": "n2",
+          "caption": "タブ 2"
+        },
+        {
+          "name": "n3",
+          "caption": "タブ 3"
+        },
+        {
+          "name": "n4",
+          "caption": "タブ 4"
+        },
+        {
+          "name": "n5",
+          "caption": "タブ 5"
+        },
+        {
+          "name": "n6",
+          "caption": "タブ 6"
+        },
+        {
+          "name": "n7",
+          "caption": "タブ 7"
+        }
+      ],
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      }
+    },
+    {
+      "id": "ts6",
+      "name": "tabNone",
+      "type": "TabStrip",
+      "left": 162,
+      "top": 158,
+      "width": 150,
+      "height": 40,
+      "style": 2,
+      "tabs": [
+        {
+          "name": "x"
+        }
+      ],
+      "backColor": {
+        "kind": "rgb",
+        "value": "#FFF0F0"
+      },
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#800000"
+      },
+      "enabled": false,
+      "tabStop": false
+    },
+    {
+      "id": "ts7",
+      "name": "tabHidden",
+      "type": "TabStrip",
+      "left": 162,
+      "top": 204,
+      "width": 150,
+      "height": 40,
+      "tabs": [
+        {
+          "name": "見える"
+        },
+        {
+          "name": "隠れる",
+          "visible": false
+        }
+      ]
+    }
+  ]
+}

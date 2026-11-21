@@ -308,7 +308,6 @@ fn forms_are_created_checked_and_packed() {
     // The code-behind is RAS: a new one only holds comments.
     let template = std::fs::read_to_string(dir.join("forms/frmInput.ras")).unwrap();
     assert!(template.lines().all(|l| l.starts_with("//")), "{template}");
-    assert!(!dir.join("forms/frmInput.bas").exists());
     let (ok, out) = ras(&dir, &["form", "new", "frmInput"]);
     assert!(!ok && out.contains("既に存在します"), "{out}");
     let (ok, out) = ras(&dir, &["form", "new", "1bad"]);
@@ -467,7 +466,6 @@ fn form_pictures_lists_and_pull() {
     // The code comes back as RAS: the generated event procedure becomes the handler again.
     let pulled_code = std::fs::read_to_string(other.join("forms/frmOrder.ras")).unwrap();
     assert!(pulled_code.contains("@on(\"UserForm.Initialize\")\nfunction init() {\n    this.txtNote.text = \"\";\n}\n"), "{pulled_code}");
-    assert!(!other.join("forms/frmOrder.bas").exists());
     assert_eq!(std::fs::read(other.join("forms/assets/frmOrder.imgLogo.bmp")).unwrap(), bmp);
     let pulled: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(other.join("forms/frmOrder.form.json")).unwrap()).unwrap();
     assert_eq!(pulled["form"]["caption"], "注文");

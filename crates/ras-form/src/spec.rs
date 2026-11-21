@@ -8,10 +8,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// `kind` written for new RAS forms.
+/// `kind` of a FormSpec.
 pub const KIND: &str = "ras.userform";
-/// `kind` of xlflow's FormSpec, accepted as well.
-pub const XLFLOW_KIND: &str = "xlflow.userform";
 
 /// A whole FormSpec document.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -19,7 +17,7 @@ pub const XLFLOW_KIND: &str = "xlflow.userform";
 pub struct FormSpec {
     /// Always `1`.
     pub schema_version: i64,
-    /// `ras.userform` or `xlflow.userform`.
+    /// Always `ras.userform`.
     pub kind: String,
     /// Always `designer`.
     pub basis: String,
@@ -63,9 +61,32 @@ pub struct FormSpecForm {
     /// `0` none, `1` single.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_style: Option<i64>,
+    /// The background picture, as a picture action (`{ path }` or `{ remove: true }`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub picture: Option<Value>,
+    /// The icon or cursor shown with `mousePointer` 99 (Custom), as a picture action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mouse_icon: Option<Value>,
     /// Snapshot-only observations (never authoring input).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed: Option<Value>,
+    /// The plain properties of the form (`startUpPosition`, `showModal`,
+    /// `specialEffect`, `zoom` ...), by FormSpec name, with the values of the
+    /// VBA properties of the same name. Other fields are kept here as well, so
+    /// that validation can report them.
+    #[serde(flatten)]
+    pub scalars: Map<String, Value>,
+}
+
+impl FormSpecForm {
+    /// The plain property `name` (`showModal` ...), if written.
+    pub fn scalar(&self, name: &str) -> Option<&Value> {
+        self.scalars
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v)
+            .filter(|v| !v.is_null())
+    }
 }
 
 /// One control.
@@ -136,18 +157,23 @@ pub struct FormSpecControl {
     #[allow(missing_docs)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visible: Option<bool>,
-    /// ComboBox / ListBox items (observed only; not generated).
+    /// ComboBox / ListBox items, filled by generated code (`codebehind`): a
+    /// string per item, or the strings of the columns of an item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub list: Option<Vec<String>>,
+    pub list: Option<Vec<FormSpecListItem>>,
     /// TabStrip tabs; `None` = unspecified, `Some([])` = no tabs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tabs: Option<Vec<FormSpecTab>>,
     /// Snapshot-only list of unmodelled properties.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unsupported: Option<Vec<String>>,
-    /// Image picture action.
+    /// Picture action (`{ path }` or `{ remove: true }`): the picture of an Image, of a
+    /// Label, button, CheckBox, OptionButton, ToggleButton, and the background of a Frame or Page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picture: Option<Value>,
+    /// The icon or cursor shown with `mousePointer` 99 (Custom), as a picture action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mouse_icon: Option<Value>,
     /// Legacy nested children (normalised to the flat list).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controls: Option<Vec<FormSpecControl>>,
@@ -198,6 +224,32 @@ impl FormSpecControl {
     }
 }
 
+/// One item of a ComboBox / ListBox: its text, or the texts of its columns.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FormSpecListItem {
+    /// An item of one column.
+    Text(String),
+    /// The columns of an item, from the first.
+    Row(Vec<String>),
+}
+
+impl FormSpecListItem {
+    /// The texts of the item's columns.
+    pub fn columns(&self) -> &[String] {
+        match self {
+            FormSpecListItem::Text(text) => std::slice::from_ref(text),
+            FormSpecListItem::Row(row) => row,
+        }
+    }
+}
+
+impl From<&str> for FormSpecListItem {
+    fn from(text: &str) -> Self {
+        FormSpecListItem::Text(text.to_string())
+    }
+}
+
 fn non_null<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Value>, D::Error> {
     Ok(Option::<Value>::deserialize(d)?.filter(|v| !v.is_null()))
 }
@@ -243,6 +295,10 @@ pub struct FormSpecFont {
     /// Windows charset number (0–255).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub charset: Option<i64>,
+    /// `lfPitchAndFamily` of the font (0–255), as the VBA editor stores it for a control it
+    /// makes (2, variable pitch). RAS only; not written when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pitch_and_family: Option<i64>,
 }
 
 /// A color: `{kind: "rgb", value: "#RRGGBB"}`, `{kind: "system", value:
@@ -287,13 +343,9 @@ const SYSTEM_COLORS: &[(&str, u32)] = &[
     ("menuBar", 30),
 ];
 
-/// Names of the system colors accepted by `{kind: "system"}`.
-pub fn system_color_names() -> impl Iterator<Item = &'static str> {
-    SYSTEM_COLORS.iter().map(|(name, _)| *name)
-}
-
 impl FormSpecColor {
-    /// The color spelled the way xlflow projects an OLE color.
+    /// An OLE color as a FormSpec color: a system color by name, a plain color as `#RRGGBB`,
+    /// anything else as its hex value.
     pub fn from_ole(value: u32) -> FormSpecColor {
         if value & 0xffff_ff00 == 0x8000_0000 {
             if let Some((name, _)) = SYSTEM_COLORS

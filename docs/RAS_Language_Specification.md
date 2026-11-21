@@ -1556,7 +1556,7 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 | 表示 | `UserForm.Activate`、タブ順で最初のコントロールの `Enter` |
 | フォーカスの移動（クリック・Tab キー・`setFocus()`） | 移る前のコントロールの `BeforeUpdate`（値が変わっていれば）・`AfterUpdate`・`Exit`、移った先の `Enter`。`BeforeUpdate` / `Exit` の `cancel` で取り消すと、フォーカスは移らず、そのクリックや入力も行われない |
 | 入力（`TextBox` / `ComboBox`） | `Change`（1 文字ごと） |
-| クリック | `CommandButton` などの `Click`。`CheckBox` / `OptionButton` / `ToggleButton` は値を変えて `Change` と `Click`（同じグループの `OptionButton` は `false` になり `Change`） |
+| クリック | `CommandButton` などの `Click`。`CheckBox` / `OptionButton` / `ToggleButton` は値を変えて `Change` と `Click`（同じグループの `OptionButton` は `false` になり `Change`）。`tripleState` が `true` の `CheckBox` / `ToggleButton` は Excel と同じく `false` → `null` → `true` → `false` の順に変わる（`OptionButton` では `tripleState` は効かない） |
 | リストの選択（`ComboBox` / `ListBox`） | `Change`、`Click` |
 | `SpinButton` の矢印 | 値を `smallChange` だけ動かして `Change`、`SpinUp` / `SpinDown` |
 | `ScrollBar` / `MultiPage` / `TabStrip` の操作 | `Change` |
@@ -1567,9 +1567,10 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 
   コードでプロパティを変えたときも、VBA と同じく `Change` などが起きる（`text`・`value`・`listIndex` の変更）。キー入力のイベント（`KeyDown` / `KeyPress` / `KeyUp`）・マウスのイベント（`MouseDown` など）・ドラッグ＆ドロップ・`Deactivate` は起こさない。
 * **エラー:** ハンドラで捕捉されなかったエラーは、VBA ビルドの RAS エラーダイアログ（`RAS_EventError`）と同じく実行を止めない。エラーの内容と RAS の位置をデバッグ コンソールとフォームのパネルに表示し、次の操作を待つ。エラーで止めたい場合は、VS Code のブレークポイントの「捕捉された例外」を有効にする。
-* **MSForms のオブジェクト:** フォーム（`caption`・`width` / `height`・`backColor`・`font`・`controls`・`activeControl`・`show` / `hide`）と組み込みのコントロール（§14.11.1）の主なプロパティとメソッドを JavaScript で実装している（`text` / `value`、`caption`、`enabled` / `visible` / `locked`、位置と大きさ、色とフォント、`ComboBox` / `ListBox` の `addItem` / `removeItem` / `clear` / `list` / `column` / `listIndex` / `listCount` / `selected` / `multiSelect`、`MultiPage` の `pages` / `selectedItem`、`TabStrip` の `tabs`、`Image` の `picture` と `loadPicture`）。初期値は `.form.json` から読む（`list` / `selectedIndex` を含む）。未実装のメンバーはエラー 438、`controls.add` などの未対応の操作はエラー 445 になる。
+* **MSForms のオブジェクト:** フォーム（`caption`・`width` / `height`・`backColor`・`font`・`controls`・`activeControl`・`show` / `hide`）と組み込みのコントロール（§14.11.1）の主なプロパティとメソッドを JavaScript で実装している（`text` / `value`、`caption`、`enabled` / `visible` / `locked`、位置と大きさ、色とフォント、`ComboBox` / `ListBox` の `addItem` / `removeItem` / `clear` / `list` / `column` / `listIndex` / `listCount` / `selected` / `multiSelect`、`MultiPage` の `pages` / `selectedItem`、`TabStrip` の `tabs`、`Image` などの `picture`・`mouseIcon` と `loadPicture`）。初期値は `.form.json` から読む（`list` / `selectedIndex` を含む）。未実装のメンバーはエラー 438、`controls.add` などの未対応の操作はエラー 445 になる。
 * **見た目:** パネルは Windows の既定の色（システム カラー）とフォントでフォームを描く。座標と大きさはポイント単位で、Excel のフォームとおおむね同じ配置になるが、コントロールの描画（枠の形、リストの行の高さ、`ComboBox` のドロップダウンなど）はブラウザーのものであり、Excel とは一致しない。
-* **再現しないもの:** Excel と VS Code の間のモーダル（モーダル フォームの表示中も Excel や VS Code の他の部分は操作できる。デバッグ実行の他のフォームは操作できない）、`StartUpPosition`、フォームのサイズ変更とスクロール、`ControlSource` によるセルとの連動、カスタム コントロール。
+* **再現しないもの:** Excel と VS Code の間のモーダル（モーダル フォームの表示中も Excel や VS Code の他の部分は操作できる。デバッグ実行の他のフォームは操作できない）、`StartUpPosition`、ユーザーによるフォームのサイズ変更、カスタム コントロール。フォームの `zoom` はコントロールの拡大縮小、`scrollBars` / `keepScrollBarsVisible` / `scrollWidth` / `scrollHeight` / `scrollLeft` / `scrollTop` はパネルの中のスクロールとして表示する。
+* **セルとの連動:** `rowSource` のある `ComboBox` / `ListBox` は、フォームを読み込むときに Excel のそのセル範囲から項目を読む。`controlSource` のあるコントロールは、フォームを読み込むとき（`Initialize` の前）にそのセルの値を表示し、ユーザーが変えた値が確定するとき（`BeforeUpdate` の後、`AfterUpdate` の前）にセルへ書き込む。読み書きできなかったときは、デバッグ コンソールに表示して続ける。
 
 #### 14.10.8 Excel のないデバッグ実行（ブックの代役）
 
@@ -1594,9 +1595,8 @@ Excel を COM で操作できない環境でも、Excel を操作するプログ
 
 | ファイル | 内容 |
 |---|---|
-| `forms/<Name>.form.json` | デザイン。xlflow の FormSpec（schemaVersion 1）の JSON 形式。ファイル名は `form.name` と一致させる |
+| `forms/<Name>.form.json` | デザイン。FormSpec（schemaVersion 1。xlflow の FormSpec を元にした JSON 形式）。ファイル名は `form.name` と一致させる |
 | `forms/<Name>.ras` | コードビハインド。RAS で書き、フォームのコードモジュールにコンパイルする（§14.11.2）。無ければコードなしとして扱う |
-| `forms/<Name>.bas` | 以前の版のコードビハインド（VBA。コードペインの内容をそのまま UTF-8 で書いたもの）。`.ras` が無いときだけ読む。両方あれば `.ras` を使い、警告を出す。`ras form pull --force` で取り込み直すと `.ras` に置き換わる |
 | `forms/assets/` など | `Image` コントロールの画像（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）。置き場所は任意で、FormSpec からプロジェクトのルート基準の相対パスで参照する |
 
 ```json
@@ -1614,12 +1614,12 @@ Excel を COM で操作できない環境でも、Excel を操作するプログ
 }
 ```
 
-* `kind` は `ras.userform`（`ras form new` が書く値）または `xlflow.userform`。xlflow の JSON 形式の FormSpec はそのまま使える（YAML 形式は対象外）。
+* `kind` は `ras.userform`。
 * 座標・サイズはポイント単位で、親コンテナー基準。`form.width` / `form.height` はクライアント領域（MS-OFORMS の `DisplayedSize`）。
 * `controls` は平らな配列で、入れ子は `parentId` で表す。コンテナーは `Frame`・`MultiPage`（子は `Page` のみ）・`Page`（親は `MultiPage` のみ）。`TabStrip` のタブは `tabs` 配列に書く。
 * 組み込みのコントロール: `Label`・`TextBox`・`ComboBox`・`ListBox`・`CommandButton`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`・`Image`・`Frame`・`MultiPage`・`Page`・`TabStrip`。
 * 共通のプロパティ（`left` / `top` / `width` / `height` / `tabIndex` / `zIndex` / `enabled` / `visible`）、種類ごとのプロパティ（`caption` / `text` / `value` / `selectedIndex` / `tabs` など）、見た目（`font` / `foreColor` / `backColor` / `textAlign` / `borderStyle` / `pictureAlignment` / `pictureSizeMode`）の詳細と適用できるコントロールは xlflow の [UserForm Specification](https://harumiweb.github.io/xlflow/reference/userform-spec) に従う。色は `{ "kind": "rgb", "value": "#203040" }`、`{ "kind": "system", "value": "buttonFace" }`、`{ "kind": "ole", "value": "0x8000000F" }` の形で書く。
-* 検査結果のコード（`UFY001`、`UFV001`〜`UFV021`）は xlflow と同じ意味を持つ。メッセージは日本語。`UFV022`（警告）は RAS だけのもので、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。
+* 検査結果のコードは `UFY001`（JSON の構文）と `UFV001`〜`UFV022`。メッセージは日本語。`UFV022`（警告）は、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。
 
 xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 
@@ -1627,11 +1627,14 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 |---|---|
 | `tag` / `controlTipText` | すべてのコントロールで使える（xlflow では `Page` 以外は `properties` に書く） |
 | `ComboBox` / `ListBox` の `list` / `selectedIndex` | 書き込みの対象（§14.11.5）。xlflow では取得した値の記録にだけ使う |
-| コントロールのプロパティ | 値が 1 つのプロパティを、VBA の同名のプロパティと同じ値で書ける（名前は先頭を小文字にしたもの）。xlflow では `unsupported`。<br>・`TextBox`: `locked`・`multiLine`・`wordWrap`・`autoSize`・`passwordChar`・`scrollBars`・`maxLength`・`enterKeyBehavior`・`tabKeyBehavior`・`enterFieldBehavior`・`autoTab`・`autoWordSelect`・`hideSelection`・`selectionMargin`・`integralHeight`・`dragBehavior`・`imeMode`・`backStyle`・`specialEffect`・`borderColor`<br>・`ComboBox`: `style`（0: DropDownCombo、2: DropDownList）・`showDropButtonWhen`・`dropButtonStyle`・`listRows`・`listWidth`・`listStyle`・`matchEntry`・`matchRequired`・`locked`・`maxLength`・`autoSize` などの編集のプロパティ・`imeMode`・`backStyle`・`specialEffect`・`borderColor`<br>・`ListBox`: `multiSelect`・`listStyle`・`matchEntry`・`locked`・`integralHeight`・`imeMode`・`specialEffect`・`borderColor`<br>・`CommandButton`: `default`・`cancel`・`takeFocusOnClick`・`locked`・`wordWrap`・`autoSize`・`backStyle`<br>・`CheckBox` / `OptionButton` / `ToggleButton`: `locked`・`wordWrap`・`autoSize`・`backStyle`、`CheckBox` / `OptionButton` は `alignment`・`specialEffect`（0 か 2）、`OptionButton` は `groupName`<br>・`Label`: `wordWrap`・`autoSize`・`backStyle`・`specialEffect`・`borderColor`<br>・`SpinButton` / `ScrollBar`: `min`・`max`・`smallChange`・`orientation`・`delay`、`ScrollBar` は `largeChange`・`proportionalThumb`。`value` は `min` と `max` の間<br>・`Image`: `specialEffect`・`borderColor`<br>・`Frame`: `specialEffect`・`borderColor`・`cycle`<br>・`TabStrip` / `MultiPage`: `style`（0: Tabs、1: Buttons、2: None）・`tabOrientation`・`multiRow`・`tabFixedWidth`・`tabFixedHeight`（`MultiPage` のものは、その中の隠れた `TabStrip` に書き込む）<br>・`Image`・`Frame`・`TabStrip` と `Page` 以外のすべて: `mousePointer`。フォーカスを受け取るコントロール: `tabStop`<br>長さ（`listWidth`・`tabFixedWidth`・`tabFixedHeight`）はポイント、`borderColor` は色、`passwordChar` は 1 文字の文字列 |
+| コントロールのプロパティ | 値が 1 つのプロパティを、VBA の同名のプロパティと同じ値で書ける（名前は先頭を小文字にしたもの）。xlflow では `unsupported`。<br>・`TextBox`: `locked`・`multiLine`・`wordWrap`・`autoSize`・`passwordChar`・`scrollBars`・`maxLength`・`enterKeyBehavior`・`tabKeyBehavior`・`enterFieldBehavior`・`autoTab`・`autoWordSelect`・`hideSelection`・`selectionMargin`・`integralHeight`・`dragBehavior`・`imeMode`・`backStyle`・`specialEffect`・`borderColor`<br>・`ComboBox`: `style`（0: DropDownCombo、2: DropDownList）・`showDropButtonWhen`・`dropButtonStyle`・`listRows`・`listWidth`・`listStyle`・`matchEntry`・`matchRequired`・`locked`・`maxLength`・`autoSize` などの編集のプロパティ・`imeMode`・`backStyle`・`specialEffect`・`borderColor`<br>・`ListBox`: `multiSelect`・`listStyle`・`matchEntry`・`locked`・`integralHeight`・`imeMode`・`specialEffect`・`borderColor`<br>・`ComboBox` / `ListBox` の列: `columnCount`（-1 は項目のすべての列）・`columnWidths`（`"72 pt;;1 in"` のように ; で区切った各列の幅。単位は pt（省略時）・in・cm、空の欄と -1 は自動。MS-OFORMS の `MorphDataColumnInfo` の並びに書き込む）・`boundColumn`・`textColumn`・`columnHeads`<br>・`CommandButton`: `default`・`cancel`・`takeFocusOnClick`・`locked`・`wordWrap`・`autoSize`・`backStyle`<br>・`CheckBox` / `OptionButton` / `ToggleButton`: `tripleState`・`locked`・`wordWrap`・`autoSize`・`backStyle`、`CheckBox` / `OptionButton` は `alignment`・`specialEffect`（0 か 2）、`OptionButton` は `groupName`<br>・`Label`: `wordWrap`・`autoSize`・`backStyle`・`specialEffect`・`borderColor`<br>・`SpinButton` / `ScrollBar`: `min`・`max`・`smallChange`・`orientation`・`delay`、`ScrollBar` は `largeChange`・`proportionalThumb`。`value` は `min` と `max` の間<br>・`Image`: `specialEffect`・`borderColor`<br>・`Frame`: `specialEffect`・`borderColor`・`cycle`<br>・`TabStrip` / `MultiPage`: `style`（0: Tabs、1: Buttons、2: None）・`tabOrientation`・`multiRow`・`tabFixedWidth`・`tabFixedHeight`（`MultiPage` のものは、その中の隠れた `TabStrip` に書き込む）<br>・`Image`・`Frame`・`TabStrip` と `Page` 以外のすべて: `mousePointer`。フォーカスを受け取るコントロール: `tabStop`<br>・値を持つコントロール（`TextBox`・`ComboBox`・`ListBox`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`）: `controlSource`（値を連動させるセル。`"Sheet1!B2"`）、`ComboBox` / `ListBox` は `rowSource`（項目を読むセル範囲。`"Sheet1!A2:A10"`。`list` と同時には書けない）。この 2 つはコントロールのサイト（`OleSiteConcrete`）に書き込む<br>長さ（`listWidth`・`tabFixedWidth`・`tabFixedHeight`）はポイント、`borderColor` は色、`passwordChar` は 1 文字の文字列 |
 | 書かなかったプロパティ | Excel でコントロールを作ったときと同じ値で書き込む（`ComboBox` はドロップ ボタンを常に表示・`matchEntry` 1、`ListBox` は `matchEntry` 0・スクロール バーあり、`Frame` は `specialEffect` 3 など）。xlflow は `ComboBox` と `ListBox` を MS-OFORMS の既定値（ドロップ ボタンなし・`matchEntry` 2）のまま書く。取り込み（`ras form pull`）では、これと違う値のものだけを書き出す |
-| 書けないプロパティ | `TripleState`（ファイル形式の仕様に格納場所が無い）、`ColumnCount` / `ColumnWidths` / `BoundColumn` / `TextColumn` / `ColumnHeads`（`list` が 1 列のため）、`ControlSource` / `RowSource`、画像（`Image` の `picture` 以外）、`MouseIcon`、フォームそのもののプロパティ（`startUpPosition` など）。取り込んだフォームでは、これらは今までどおり `unsupported` に残る |
+| `CheckBox` / `OptionButton` / `ToggleButton` の `value` | `true` / `false`（`"True"` / `"False"`、0 / 1 / -1 も可）に加えて、どちらでもない状態（VBA の `Null`）を `"Null"` と書ける。`tripleState` は、Excel が保存するのと同じく MS-OFORMS の `MultiSelect` の欄に書き込む（仕様書には格納場所の記載が無い） |
+| フォームのプロパティ | `form` に、VBA の UserForm の同名のプロパティを同じ値で書ける。<br>・デザイナブロック（`VBFrame` ストリーム。[MS-OVBA] 2.3.5）に書くもの: `startUpPosition`（0: Manual、1: CenterOwner（省略時）、2: CenterScreen、3: WindowsDefault）・`showModal`・`tag`（130 文字まで）・`helpContextId`・`rightToLeft`・`whatsThisButton`・`whatsThisHelp`。真偽値は VBABOOL（`0` / `-1`）で書く<br>・フォームのレコード（`f` ストリーム）に書くもの: `enabled`（`false` はデザイナブロックの `Enabled = 0` も書く）・`borderColor`・`cycle`・`mousePointer`・`specialEffect`・`zoom`（10〜400）・`drawBuffer`・`scrollBars`・`keepScrollBarsVisible`（0: None、1: Horizontal、2: Vertical、3: Both（省略時））・`scrollWidth` / `scrollHeight`（ポイント。0 はフォームの大きさ）・`scrollLeft` / `scrollTop`<br>取り込み（`ras form pull`）では、新しいフォームと違う値のものだけを書き出す。デザイナブロックに行が無いプロパティは書き出さない。`Left` / `Top`（`ClientLeft` / `ClientTop`）は、ウィンドウの枠の大きさが環境で変わるため扱わない |
+| フォント | `font.pitchAndFamily`（0〜255。Windows の `lfPitchAndFamily`）を書ける。VBE で作ったコントロールのフォントには 2（可変ピッチ）が保存されており、取り込みでこれを書き出して、書き戻すときに同じ値を書き込む（デザイナーのフォントの編集には出さない）。また、無効（`enabled: false`）の `Label`・`TextBox`・`CommandButton`・`ComboBox`・`CheckBox`・`OptionButton`・`ToggleButton` には、Excel と同じくフォントの効果に `CFE_DISABLED` / `CFE_AUTOCOLOR`（`FontEffects` の `0x40002000`。文字を淡色で描く指定）を書き込む。xlflow はどちらも書かない |
+| 画像とマウス アイコン | `picture` は `Image` のほか、`Label`・`CommandButton`・`CheckBox`・`OptionButton`・`ToggleButton`（キャプションの横の画像。位置は `picturePosition`: 0 LeftTop〜12 Center、省略時は 7 AboveCenter）、`Frame`・`Page`（背景。`pictureAlignment`・`pictureSizeMode`・`pictureTiling`）とフォーム（`form.picture`。`form.pictureAlignment` など）に書ける。`mouseIcon` は `mousePointer` を持つコントロールとフォームに書け、`mousePointer` 99（Custom）のときのポインターになる。どちらも下の「画像」と同じく `{ "path": … }` / `{ "remove": true }` で指定する。xlflow では `Image` の `picture` だけ |
 
-**`Image` の画像（`picture`）**
+**画像（`picture`）とマウス アイコン（`mouseIcon`）**
 
 * `"picture": { "path": "forms/assets/logo.bmp" }` で画像ファイルを指定する。パスはプロジェクトのルート（`ras.toml` のあるフォルダー）からの相対パスで、ルートの外（`..`、絶対パス、ドライブ指定）は指定できない。
 * 指定できる形式は BMP・JPEG・PNG・GIF・WebP・TIFF・ICO。ファイルの大きさは 16 MiB まで。形式は拡張子ではなくファイルの内容で判別する。メタファイル（WMF / EMF）は使えない。
@@ -1643,6 +1646,8 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
   * 同じファイルと同じ背景色からは、常に同じ BMP ができる（デザインのハッシュが変わらない）。
 * ブックを開くのに元のファイルは要らない。
 * `"picture": { "remove": true }` は画像なしを表す（`picture` を書かない場合と同じ）。
+* コントロールの画像は、そのレコードの `Picture`（`MorphData` / `CommandButton` / `Label` の `StreamData`）に、`Frame`・`Page`・フォームの背景は、それぞれの `f` ストリームのフォント（`TextProps`）の後ろに書き込む。`pictureTiling` は値を持たない `FormPropMask` のビット（24）で表す。
+* `mouseIcon` に指定できるのはアイコン（ICO）とカーソル（CUR）のファイルで、変換せずにそのまま `StdPicture` として埋め込む（[MS-OFORMS] 2.4.13 は `StdPicture` にアイコンを持てるとしている）。MS-Forms がそのまま持てる BMP / JPEG も受け付けるが、変換はしない。フォームと `Frame` / `Page` のものは `f` ストリームのフォントの前に書き込む。
 
 #### 14.11.2 コードビハインド（`forms/<Name>.ras`）
 
@@ -1710,7 +1715,7 @@ export function enteredName(): string {
 
 #### 14.11.4 書き込み（`ras pack`）
 
-1. デザイナストレージ（`<Name>/f`・`o`・`\x01CompObj`・`\x03VBFrame`、コンテナーごとの `i<ID>/` サブストレージ、`MultiPage` の `x`）を FormSpec から一から生成する。生成結果は xlflow の生成結果とバイト単位で一致する（`crates/ras-form/tests/golden.rs`）。
+1. デザイナストレージ（`<Name>/f`・`o`・`\x01CompObj`・`\x03VBFrame`、コンテナーごとの `i<ID>/` サブストレージ、`MultiPage` の `x`）を FormSpec から一から生成する。生成したフォームを読み戻して書き直すと同じデザイナストレージになること（`crates/ras-form/tests/fixtures.rs`）、全プロパティについて書いた値が読み戻せること（`crates/ras-form/src/scalars.rs` のテスト）を自動テストで確認している。実物の Excel との突き合わせには `tools/excel-check` を使う。
 2. コードモジュール `VBA/<Name>` を作る。新しいフォームには `VB_Base = "0{GUID}{GUID}"`（新しい 2 つの GUID）を含むフォーム用の属性ヘッダーを付け、既存のフォームはヘッダーを保持してコードだけを置き換える。
 3. コードの先頭行は目印の行 `' RAS-FORM forms/<Name>.form.json design=<ハッシュ> code=<ハッシュ>` とし、RAS が生成したフォームであることを表す。`design` はデザイナストレージ、`code` はその後ろに続くコードのハッシュ（16 進 16 桁）で、ライブ同期が変更の有無を判断するのに使う（§14.11.7）。目印の後ろにコードビハインドをコンパイルしたコードと、必要なら生成コード（§14.11.5）が続く。
 4. `PROJECT` ストリームに `BaseClass=<Name>` 行を加え、Microsoft Forms 2.0 Object Library（`MSForms`）の参照が無ければ `dir` ストリームに追加する。
@@ -1751,10 +1756,12 @@ End Sub
 '--- RAS END ---
 ```
 
+* `list` の項目は文字列か、列ごとの文字列の配列（1〜10 列。`["001", "山田"]`）。複数の列を持つ項目は、`AddItem` で最初の列を、`.List(.ListCount - 1, <列>) = …` で残りの列を設定する（MSForms がセルに連動しないリストに `AddItem` / `List` で設定できるのは 10 列まで）。表示する列の数や幅は `columnCount` / `columnWidths` で指定する。
 * 項目を設定するプロシージャ `RAS_FormInit` を、モジュール末尾の RAS 管理領域（§14.6 と同じ `'--- RAS BEGIN ---` / `'--- RAS END ---`）に生成する。宣言部の後ろに置くので、コードビハインドの `Option Explicit` やモジュールレベルの宣言と干渉しない。
 * コードビハインドに `UserForm_Initialize` が無ければ、`RAS_FormInit` を呼ぶだけの `UserForm_Initialize` も管理領域に生成する。
-* コンパイルしたコードに `UserForm_Initialize`（`@on("UserForm.Initialize")` のハンドラや変数の初期化があると生成される）があれば、その先頭に `RAS_FormInit '--- RAS ---` の 1 行を挿入する。以前の版の VBA のコードビハインド（`.bas`）では、コードビハインドのどこかで `RAS_FormInit` を呼んでいる場合は、挿入も `UserForm_Initialize` の生成もしない（項目を設定する時点をコードビハインドが決められる）。
+* コンパイルしたコードに `UserForm_Initialize`（`@on("UserForm.Initialize")` のハンドラや変数の初期化があると生成される）があれば、その先頭に `RAS_FormInit '--- RAS ---` の 1 行を挿入する。
 * `selectedIndex` は `-1`（選択なし）か、`list` の範囲内の番号。`list` が無いコントロールでは `-1` 以外を指定できない（`UFV020`）。
+* `rowSource` を指定したコントロールには `list` を書けない（`UFV021`）。MSForms はセル範囲から項目を読むリストへの `AddItem` を拒むため。
 * 項目の文字列のうち、制御文字とコードページで表せない文字は `ChrW(n)` で出力する。
 * コードビハインドでは `RAS_FormInit` という名前のプロシージャと、管理領域の目印の行を書けない（エラー）。
 
@@ -1763,11 +1770,10 @@ End Sub
 ブック（保存されているファイル）のフォームを読み、`forms/<Name>.form.json`・`forms/<Name>.ras` と画像ファイルを書き出す。Excel は使わない。VBE で作ったフォームを `forms/` の管理に移すとき、VBE でデザインを直したフォームを取り込み直すときに使う。
 
 * 名前を省略するとブックのすべてのフォームが対象。`forms/` に同名のファイルが既にあるフォームは書き出さない（`--force` で置き換える）。
-* **デザイン:** デザイナストレージを読み、xlflow の projection と同じ規則で FormSpec にする（`crates/ras-form/tests/snapshot.rs` で、Excel が保存したフォームについて xlflow の出力と一致することを確認している）。加えて、xlflow の projection が「表せないプロパティ」として扱うもののうち、生成側が書けるものを取り込む: `Tag` / `ControlTipText`（`tag` / `controlTipText`）、`GroupName`・`MaxLength`・`BorderColor`（`properties`）。キャプションが保存されていないコントロールは `caption: ""` とし、フォームのキャプションがフォームのレコードに無ければデザイナブロック（`VBFrame`）の `Caption` を使う。
-* **画像:** `Image` の画像（BMP / JPEG として保存されているもの）を `forms/assets/<Name>.<コントロール名>.bmp|jpg` に書き出し、`picture.path` で参照する。Excel は JPEG を読み込んだ画像も BMP で保存するため、取り出した画像は多くの場合 BMP になる。書き込み時に変換された画像（PNG など）も、取り出すと変換後の BMP になる。
+* **デザイン:** デザイナストレージを読み、FormSpec にする（xlflow の projection を移植し、生成側が書けるプロパティを取り込むよう広げたもの）。`Tag` / `ControlTipText`（`tag` / `controlTipText`）、`GroupName`・`MaxLength`・`BorderColor`（`properties`）も取り込む。Excel が保存したフォーム（`crates/ras-form/tests/data`）の読み取り結果は `crates/ras-form/tests/snapshot.rs` で確認している。キャプションが保存されていないコントロールは `caption: ""` とし、フォームのキャプションがフォームのレコードに無ければデザイナブロック（`VBFrame`）の `Caption` を使う。
+* **画像:** コントロールとフォームの画像（BMP / JPEG として保存されているもの）を `forms/assets/<Name>.<コントロール名>.bmp|jpg`（フォームのものは `forms/assets/<Name>.bmp|jpg`）に書き出し、`picture.path` で参照する。マウス アイコンは `forms/assets/<Name>[.<コントロール名>].mouseIcon.ico|cur` に書き出し、`mouseIcon.path` で参照する。Excel は JPEG を読み込んだ画像も BMP で保存するため、取り出した画像は多くの場合 BMP になる。書き込み時に変換された画像（PNG など）も、取り出すと変換後の BMP になる。
 * **コード:** コードモジュールから `Attribute` 行を除いた VBA を RAS に変換して `forms/<Name>.ras` に書く（下記）。RAS が書き込んだフォームの場合は、目印の行・RAS 管理領域・挿入した `RAS_FormInit` の呼び出しも除いてから変換する。
   * RAS が書き込んだフォーム（目印の行がある）で、`forms/<Name>.ras` が既にあるときは、コードビハインドを書き換えない（そのファイルからコンパイルしたコードなので）。デザインだけを取り込み直す。VBE でコードを編集しても取り込まれない。
-  * 以前の版の `forms/<Name>.bas` は、`.ras` を書いたときに削除する。
 * **VBA から RAS への変換:** 構文を読み替えて RAS を書く（`ras_compiler::vba2ras`）。
   * イベント プロシージャ `<コントロール>_<イベント>` は `@on("<コントロール>.<イベント>")` を付けた関数（名前は `btnOKClick` のように付ける）に、`Me` は `this` に、コントロールの参照は `this.<コントロール名>` にする。既定メンバーで使われているコントロール（`txtName = "x"`、`If chkAll Then`）と `MSForms.ReturnBoolean` などの引数（`Cancel = True`）は `.value` を補う。
   * ホストの関数・メンバーは RAS の綴り（`MsgBox` → `msgBox`、`.ListIndex` → `.listIndex`）、型は RAS の型（`Long` → `int`、`Integer` → `int`（イベントの引数は `short`）、`Range` → `Excel.Range`、`TextBox` → `MSForms.TextBox`）にする。
@@ -1777,7 +1783,7 @@ End Sub
   * RAS が書き込んだフォームのコード（`.ras` の無いプロジェクトへ取り出したとき）は、生成したイベント プロシージャを `@on` に、変数の初期化（`RAS_ModInit`）を変数の初期値に戻す。行番号（`Erl` 用）は捨てる。
   * 変換できないもの（`GoTo` / 行ラベル、`ReDim`、大きさを指定した配列、`Like`、日付リテラル、`Static`、引数を取るプロパティへの代入、ユーザー定義型・`Declare`・`Public` 変数（フォーム内の変数にする）など）は、元の行を `// TODO(VBA): <理由>` のコメントとして残し、コマンドの出力に警告（ファイルと行）として表示する。変換結果は必ずしもそのままコンパイルできるとは限らない。`ras check` で確認して直す。
 * **リストの項目:** ブックには保存されていないので取り出せない。`--force` で既存の `.form.json` を置き換えるときは、同名の `ComboBox` / `ListBox` の `list` / `selectedIndex` と、画像の `picture.path` を既存のファイルから引き継ぐ（そのパスのファイルを書き込み時と同じ規則で変換した結果が、ブックの画像と一致する場合。PNG などを指定していたフォームは、取り込み直しても PNG を指したままになる）。
-* **取り込めないもの:** FormSpec で表せないプロパティ（`specialEffect`、`mousePointer`、スクロールバーの `min` / `max` など）は、コントロールごとに `unsupported` に名前を記録し、コマンドの出力に警告として表示する。これらは `forms/` から書き戻すと既定値になる。組み込み以外のコントロール（ActiveX）は `type: "Control"` として記録され、生成できない。BMP / JPEG 以外の画像（アイコン、メタファイル）は取り出せず、`unsupported` に `picture` が残る（この場合は `picture` に置き換える画像か `{ "remove": true }` を書くまで生成できない）。
+* **取り込めないもの:** FormSpec で表せないプロパティ（`helpContextId`、`accelerator`、`Frame` の `scrollBars` など）は、コントロールごとに `unsupported` に名前を記録し、コマンドの出力に警告として表示する。フォントの内容（`textProps`）は、書き戻して同じになるもの（`font` の各項目、VBE が保存する `pitchAndFamily`、無効のコントロールの淡色の指定、`CommandButton` の中央揃え）だけなら報告しない。これらは `forms/` から書き戻すと既定値になる。組み込み以外のコントロール（ActiveX）は `type: "Control"` として記録され、生成できない。BMP / JPEG / アイコン以外の画像（メタファイルなど）は取り出せず、`unsupported` に `picture`（`mouseIcon`）が残る（この場合は置き換える画像か `{ "remove": true }` を書くまで生成できない）。
 * 取り出しただけではブックは変わらない。VBE で作ったフォームを `forms/` の内容で置き換えるには、`ras pack --overwrite`（または `ras sync --overwrite`）を実行する。
 * `forms/` に無いフォームは、同期（`ras sync`・`ras pack` など）のときにも同じ変換で取り込まれ、置き換えられる（§14.7.1）。
 
@@ -1820,7 +1826,6 @@ VS Code の「Excel で実行」（フォームのコードビハインドの先
 * カスタム ActiveX コントロールは生成できない（エラーになる）。
 * VBE でフォームのデザインやコードを編集しても `forms/` には自動では反映されない。デザインは `ras form pull --force` で取り込める。取り込まない限り、次に `forms/` 側を変更して書き込んだ時点で `forms/` の内容に置き換わる（ドリフト検出は行わない）。
 * コードビハインドで扱えるのは組み込みのコントロールのイベントだけで、`WithEvents` で受け取るイベントや、コントロールの配列（同じハンドラを複数のコントロールに付けるクラス）は書けない。
-* `ComboBox` / `ListBox` の項目は文字列の 1 列だけを扱う。複数列のリストや `RowSource` は、コードビハインドで設定する。
 * ライブ同期でのフォームの取り込み（`VBComponents.Import`）は、Excel の無い環境では自動テストできない。`.frx` の構成は Excel が書き出したファイルと照合している（`crates/ras-form/tests/project.rs`）。
 
 ## 15. プロジェクト構成
@@ -2061,7 +2066,7 @@ Rust で `vbaProject.bin` を**書き込める**ライブラリは見当たら�
 | 読み取り・テストの検証用 | `ovba`（Rust, 読み取り専用） | 書き出した `vbaProject.bin` を別実装で読み直す相互検証に使う（§14.9.3）。`calamine` の VBA 読み取り部も参考 |
 | 検証ツール | oletools（`olevba`, Python） | CI で出力ファイルを解析し、ソース・`dir` ストリームの整合を確認する |
 | OPC のパート構成 | 参考: XlsxWriter の `add_vba_project` | `[Content_Types].xml` とリレーションの書き方 |
-| ユーザーフォーム（§14.11） | xlflow（Go, MIT）の `internal/vba/userforms` を移植 | FormSpec・検査・MS-OFORMS デザイナストレージの生成と読み取り・画像（`StdPicture`）。テストは xlflow の出力との比較（生成はバイト単位、読み取りは FormSpec の JSON） |
+| ユーザーフォーム（§14.11） | xlflow（Go, MIT）の `internal/vba/userforms` を移植 | FormSpec・検査・MS-OFORMS デザイナストレージの生成と読み取り・画像（`StdPicture`）。xlflow との互換性は持たない（`kind` は `ras.userform` のみ） |
 | 仕様 | [MS-OVBA], [MS-CFB], [MS-VBAL], [MS-OFORMS] | 一次資料。実装はこれを正とする |
 
 ### 17.4 Windows 連携（ライブ同期 §14.1〜14.8、`ras typegen`）

@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckFrames",
+    "caption": "Frame の確認",
+    "width": 340,
+    "height": 260
+  },
+  "controls": [
+    {
+      "id": "f1",
+      "name": "fraPlain",
+      "type": "Frame",
+      "left": 6,
+      "top": 6,
+      "width": 100,
+      "height": 60,
+      "caption": "既定"
+    },
+    {
+      "id": "f1a",
+      "name": "lblInPlain",
+      "type": "Label",
+      "left": 6,
+      "top": 6,
+      "width": 80,
+      "height": 18,
+      "caption": "中のラベル",
+      "parentId": "f1"
+    },
+    {
+      "id": "f2",
+      "name": "fraFlat",
+      "type": "Frame",
+      "left": 112,
+      "top": 6,
+      "width": 100,
+      "height": 60,
+      "caption": "Flat",
+      "specialEffect": 0,
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      }
+    },
+    {
+      "id": "f3",
+      "name": "fraRaised",
+      "type": "Frame",
+      "left": 218,
+      "top": 6,
+      "width": 100,
+      "height": 60,
+      "caption": "Raised",
+      "specialEffect": 1,
+      "cycle": 2
+    },
+    {
+      "id": "f4",
+      "name": "fraSunken",
+      "type": "Frame",
+      "left": 6,
+      "top": 72,
+      "width": 100,
+      "height": 60,
+      "caption": "Sunken",
+      "specialEffect": 2,
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#C00000"
+      }
+    },
+    {
+      "id": "f5",
+      "name": "fraBump",
+      "type": "Frame",
+      "left": 112,
+      "top": 72,
+      "width": 100,
+      "height": 60,
+      "caption": "Bump",
+      "specialEffect": 6,
+      "backColor": {
+        "kind": "rgb",
+        "value": "#E0F0FF"
+      }
+    },
+    {
+      "id": "f6",
+      "name": "fraSingle",
+      "type": "Frame",
+      "left": 218,
+      "top": 72,
+      "width": 100,
+      "height": 60,
+      "caption": "Single",
+      "borderStyle": 1,
+      "borderColor": {
+        "kind": "rgb",
+        "value": "#008000"
+      }
+    },
+    {
+      "id": "f7",
+      "name": "fraPicture",
+      "type": "Frame",
+      "left": 6,
+      "top": 138,
+      "width": 150,
+      "height": 100,
+      "caption": "画像を並べる",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "pictureTiling": true,
+      "pictureAlignment": 0,
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      }
+    },
+    {
+      "id": "f7a",
+      "name": "txtInPicture",
+      "type": "TextBox",
+      "left": 6,
+      "top": 6,
+      "width": 80,
+      "height": 18,
+      "text": "上に重なる",
+      "parentId": "f7"
+    },
+    {
+      "id": "f8",
+      "name": "fraStretch",
+      "type": "Frame",
+      "left": 162,
+      "top": 138,
+      "width": 80,
+      "height": 60,
+      "caption": "伸縮",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "pictureSizeMode": 1
+    },
+    {
+      "id": "f9",
+      "name": "fraDisabled",
+      "type": "Frame",
+      "left": 248,
+      "top": 138,
+      "width": 80,
+      "height": 100,
+      "caption": "無効",
+      "enabled": false
+    },
+    {
+      "id": "f9a",
+      "name": "chkInDisabled",
+      "type": "CheckBox",
+      "left": 6,
+      "top": 6,
+      "width": 60,
+      "height": 18,
+      "caption": "中",
+      "parentId": "f9"
+    },
+    {
+      "id": "f10",
+      "name": "fraZoom",
+      "type": "Frame",
+      "left": 162,
+      "top": 204,
+      "width": 80,
+      "height": 40,
+      "caption": "Zoom",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "pictureSizeMode": 3,
+      "pictureAlignment": 4
+    }
+  ]
+}

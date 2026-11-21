@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { applyOperations, copyControls } from "../../src/userForm/engine";
-import { bodyIndent, eventsForType, eventTarget, findHandler, findVbaHandler, handlerText, jsName, rasParams, vbaBodyIndent, vbaHandlerText } from "../../src/userForm/events";
+import { bodyIndent, eventsForType, eventTarget, findHandler, handlerText, jsName, rasParams } from "../../src/userForm/events";
 import { formatJson, minimalEdit } from "../../src/userForm/jsonSource";
-import { listToText, textToList } from "../../src/userForm/listItems";
-import { designerDocument } from "../../src/userForm/model";
+import { columnLayout, itemColumns, listToText, parseColumnWidths, textColumnIndex, textToList } from "../../src/userForm/listItems";
+import { designerDocument, toggleState } from "../../src/userForm/model";
 import { isWebviewMessage } from "../../src/userForm/protocol";
 import type { SemanticOperation } from "../../src/userForm/protocol";
 import { pasteAllocations } from "../../src/userForm/clipboard";
@@ -136,6 +136,67 @@ describe("FormSpec editing", () => {
 		assert.deepEqual(labels("t1", "specialEffect"), ["Flat", "Raised", "Sunken", "Etched", "Bump"]);
 	});
 
+	it("keeps the pitch of a pulled font through font edits", () => {
+		const pulled = { ...label, font: { name: "MS UI Gothic", size: 9, charset: 128, pitchAndFamily: 2 } };
+		let text = form([pulled]);
+		assert.deepEqual(problems((parseSpec(text) as any).spec).filter((p: any) => p.severity === "error"), []);
+		text = apply(text, { type: "setControlProperty", controlId: "l1", field: "font", value: { size: 12 } });
+		assert.deepEqual(control(text, "l1").font, { name: "MS UI Gothic", size: 12, charset: 128, pitchAndFamily: 2 });
+		// The font editor does not offer it.
+		const grid = propertyGrid((parseSpec(text) as any).spec);
+		const font = grid.controls.l1.descriptors.find((d) => d.field === "font");
+		assert.ok(font?.children?.some((c) => c.field === "charset") && !font.children.some((c) => c.field === "pitchAndFamily"));
+		rejects(text, [{ type: "setControlProperty", controlId: "l1", field: "font", value: { pitchAndFamily: 300 } }], "UFV021");
+	});
+
+	it("edits TripleState and a Null value of the toggles", () => {
+		const controls = [
+			{ id: "k1", name: "Check1", type: "CheckBox", left: 8, top: 8, width: 72, height: 18 },
+			{ id: "o1", name: "Option1", type: "OptionButton", left: 8, top: 30, width: 72, height: 18, value: "True" },
+		];
+		let text = form(controls);
+		const set = (controlId: string, field: string, value: unknown): SemanticOperation => ({ type: "setControlProperty", controlId, field, value });
+		text = apply(text, set("k1", "tripleState", true), set("k1", "value", "Null"), set("o1", "tripleState", true));
+		assert.deepEqual([control(text, "k1").tripleState, control(text, "k1").value, control(text, "o1").tripleState], [true, "Null", true]);
+		rejects(text, [set("l1", "tripleState", true)]);
+		const grid = propertyGrid((parseSpec(text) as any).spec);
+		const descriptor = (id: string, field: string) => grid.controls[id].descriptors.find((d) => d.field === field);
+		assert.equal(descriptor("k1", "value")?.editor, "toggle");
+		assert.equal(descriptor("k1", "tripleState")?.editor, "boolean");
+		// What a value stands for, however it was written.
+		assert.deepEqual(
+			[true, "True", -1, "1", false, "False", 0, undefined, "Null", "null"].map(toggleState),
+			["on", "on", "on", "on", "off", "off", "off", "off", "null", "null"],
+		);
+	});
+
+	it("binds controls to cells with controlSource and rowSource", () => {
+		const controls = [
+			{ id: "t1", name: "Text1", type: "TextBox", left: 8, top: 8, width: 120, height: 18 },
+			{ id: "b1", name: "List1", type: "ListBox", left: 8, top: 30, width: 120, height: 60 },
+		];
+		let text = form(controls);
+		const set = (controlId: string, field: string, value: unknown): SemanticOperation => ({ type: "setControlProperty", controlId, field, value });
+		text = apply(text, set("t1", "controlSource", "Sheet1!B2"), set("b1", "rowSource", "Sheet1!A2:A9"), set("b1", "controlSource", "Sheet1!C2"));
+		assert.deepEqual([control(text, "t1").controlSource, control(text, "b1").rowSource], ["Sheet1!B2", "Sheet1!A2:A9"]);
+		rejects(text, [set("t1", "rowSource", "A1:A3")], "UFE005");
+		rejects(text, [set("l1", "controlSource", "A1")]);
+		// Items cannot be written for a list that comes from cells.
+		rejects(text, [set("b1", "list", ["a", "b"])], "UFV021");
+	});
+
+	it("edits the properties of the form itself", () => {
+		let text = form([label]);
+		const set = (field: string, value: unknown): SemanticOperation => ({ type: "setFormProperty", field, value });
+		text = apply(text, set("startUpPosition", 0), set("showModal", false), set("tag", "メモ"), set("zoom", 150), set("scrollBars", 3));
+		const f = json(text).form;
+		assert.deepEqual([f.startUpPosition, f.showModal, f.tag, f.zoom, f.scrollBars], [0, false, "メモ", 150, 3]);
+		rejects(text, [set("zoom", 5)], "UFV021");
+		rejects(text, [set("startUpPosition", 4)], "UFE003");
+		rejects(text, [set("tag", "a\nb")], "UFV021");
+		rejects(text, [set("mousePointer", 4)], "UFE003");
+	});
+
 	it("raises a TextBox to the height its font needs, but only where the edit touched", () => {
 		const low = { id: "t0", name: "Untouched", type: "TextBox", left: 8, top: 60, width: 120, height: 12 };
 		let text = form([{ id: "t1", name: "TextBox1", type: "TextBox", left: 8, top: 8, width: 120, height: 18 }, low]);
@@ -209,7 +270,15 @@ describe("FormSpec editing", () => {
 		assert.deepEqual(control(text, "img").picture, { path: "forms/assets/logo.bmp" });
 		rejects(text, [{ type: "setControlProperty", controlId: "img", field: "picture", value: { path: "" } }], "UFV005");
 		rejects(text, [{ type: "setControlProperty", controlId: "img", field: "picture", value: { file: "a.bmp" } as never }], "UFE003");
-		rejects(text, [{ type: "setControlProperty", controlId: "l1", field: "picture", value: { path: "a.bmp" } }], "UFE005");
+		// A Label, the buttons, Frames, Pages and the form have pictures too; a TextBox has none.
+		const withLabel = apply(text, { type: "setControlProperty", controlId: "l1", field: "picture", value: { path: "a.bmp" } }, { type: "setControlProperty", controlId: "l1", field: "picturePosition", value: 12 });
+		assert.deepEqual([control(withLabel, "l1").picture, control(withLabel, "l1").picturePosition], [{ path: "a.bmp" }, 12]);
+		const withForm = apply(text, { type: "setFormProperty", field: "picture", value: { path: "a.bmp" } }, { type: "setFormProperty", field: "pictureTiling", value: true }, { type: "setFormProperty", field: "mouseIcon", value: { path: "hand.cur" } });
+		assert.deepEqual([json(withForm).form.picture, json(withForm).form.pictureTiling, json(withForm).form.mouseIcon], [{ path: "a.bmp" }, true, { path: "hand.cur" }]);
+		const withIcon = apply(text, { type: "setControlProperty", controlId: "l1", field: "mouseIcon", value: { path: "hand.cur" } }, { type: "setControlProperty", controlId: "l1", field: "mousePointer", value: 99 });
+		assert.deepEqual([control(withIcon, "l1").mouseIcon, control(withIcon, "l1").mousePointer], [{ path: "hand.cur" }, 99]);
+		const box = apply(text, { type: "addControl", control: { id: "t1", name: "Text1", type: "TextBox", left: 8, top: 90, width: 72, height: 18 } as never });
+		rejects(box, [{ type: "setControlProperty", controlId: "t1", field: "picture", value: { path: "a.bmp" } }], "UFE005");
 		// Removing writes no picture field at all, and restores the source text.
 		const removed = apply(text, { type: "setControlProperty", controlId: "img", field: "picture", value: { remove: true } });
 		assert.equal(removed, form([image, label]));
@@ -251,6 +320,41 @@ describe("FormSpec editing", () => {
 		assert.equal(textToList(""), null);
 		assert.equal(textToList("\n\n"), null);
 		assert.deepEqual(textToList(listToText(["x", "y"])), ["x", "y"]);
+		// The columns of an item are separated by tabs (as Excel copies a range).
+		assert.equal(listToText([["001", "山田"], "002", ["003", ""]]), "001\t山田\n002\n003\t");
+		assert.deepEqual(textToList("001\t山田\n002\n003\t"), [["001", "山田"], "002", ["003", ""]]);
+		assert.equal(listToText([["a", 1]]), "");
+	});
+
+	it("lays out the columns of a list as MSForms does", () => {
+		assert.deepEqual(parseColumnWidths("72 pt;;1 in;2.54cm;-1;x"), [72, undefined, 72, 72, undefined, undefined]);
+		assert.deepEqual(parseColumnWidths(""), []);
+		// One column takes the whole width; the open columns share what is left (72pt each at least).
+		assert.deepEqual(columnLayout(undefined, undefined, 120, 3), [120]);
+		assert.deepEqual(columnLayout(3, "30;60", 200, 3), [30, 60, 110]);
+		assert.deepEqual(columnLayout(3, "30", 100, 3), [30, 72, 72]);
+		assert.deepEqual(columnLayout(-1, "", 150, 2), [75, 75]);
+		// TextColumn: -1 the first column wider than 0, 0 the row number, n the n-th.
+		assert.equal(textColumnIndex(-1, [0, 72]), 1);
+		assert.equal(textColumnIndex(undefined, [72, 72]), 0);
+		assert.equal(textColumnIndex(0, [72]), -1);
+		assert.equal(textColumnIndex(2, [72, 72]), 1);
+		assert.deepEqual(itemColumns("a"), ["a"]);
+	});
+
+	it("edits a list of several columns", () => {
+		let text = form([{ id: "lb", name: "List1", type: "ListBox", left: 8, top: 8, width: 120, height: 60 }]);
+		const set = (field: string, value: unknown): SemanticOperation => ({ type: "setControlProperty", controlId: "lb", field, value });
+		text = apply(text, set("list", [["1", "a"], "2"]), set("columnCount", 2), set("columnWidths", "36 pt;"), set("boundColumn", 2), set("textColumn", 1), set("columnHeads", true));
+		const lb = control(text, "lb");
+		assert.deepEqual([lb.list, lb.columnCount, lb.columnWidths, lb.boundColumn, lb.columnHeads], [[["1", "a"], "2"], 2, "36 pt;", 2, true]);
+		rejects(text, [set("list", [["1", 2]])], "UFE003");
+		rejects(text, [set("columnWidths", "wide")], "UFV021");
+		rejects(text, [set("list", [["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]])], "UFV021");
+		rejects(text, [set("columnCount", -2)]);
+		const edit = (operation: unknown) => isWebviewMessage({ type: "edit", requestId: 1, version: 1, operations: [operation] });
+		assert.equal(edit({ type: "setControlProperty", controlId: "lb", field: "list", value: [["a", "b"], "c"] }), true);
+		assert.equal(edit({ type: "setControlProperty", controlId: "lb", field: "list", value: [["a", 1]] }), false);
 	});
 
 	it("accepts list and picture edits from the webview", () => {
@@ -261,9 +365,11 @@ describe("FormSpec editing", () => {
 		assert.equal(edit({ type: "setControlProperty", controlId: "cb", field: "caption", value: ["a"] }), false);
 		assert.equal(edit({ type: "setFormProperty", field: "list", value: ["a"] }), false);
 		assert.equal(edit({ type: "setControlProperty", controlId: "img", field: "picture", value: { remove: true } }), true);
-		assert.equal(isWebviewMessage({ type: "picturePick", requestId: 1, version: 1, controlId: "img" }), true);
-		assert.equal(isWebviewMessage({ type: "pictureCommit", requestId: 1, version: 1, controlId: "img", token: "t" }), true);
-		assert.equal(isWebviewMessage({ type: "pictureCommit", requestId: 1, version: 1, controlId: "img" }), false);
+		assert.equal(isWebviewMessage({ type: "picturePick", requestId: 1, version: 1, controlId: "img", field: "picture" }), true);
+		assert.equal(isWebviewMessage({ type: "picturePick", requestId: 1, version: 1, controlId: "", field: "mouseIcon" }), true);
+		assert.equal(isWebviewMessage({ type: "picturePick", requestId: 1, version: 1, controlId: "img", field: "caption" }), false);
+		assert.equal(isWebviewMessage({ type: "pictureCommit", requestId: 1, version: 1, controlId: "img", field: "picture", token: "t" }), true);
+		assert.equal(isWebviewMessage({ type: "pictureCommit", requestId: 1, version: 1, controlId: "img", field: "picture" }), false);
 	});
 
 	it("sets tag and controlTipText on any control", () => {
@@ -322,9 +428,9 @@ describe("FormSpec validation and metadata", () => {
 		return parsed.spec.issues.map((i) => i.code).sort();
 	};
 
-	it("accepts new forms and both document kinds", () => {
+	it("accepts new forms and only the RAS document kind", () => {
 		assert.deepEqual(codes([]), []);
-		assert.deepEqual(codes([], { kind: "xlflow.userform" }), []);
+		assert.deepEqual(codes([], { kind: "xlflow.userform" }), ["UFV003"]);
 		assert.deepEqual(codes([], { kind: "other" }), ["UFV003"]);
 	});
 
@@ -393,7 +499,9 @@ describe("FormSpec validation and metadata", () => {
 		assert.deepEqual(image({ remove: true }), []);
 		assert.deepEqual(image({ path: "" }), ["UFV005"]);
 		assert.deepEqual(image({ path: "a.bmp", remove: true }), ["UFV005"]);
-		assert.deepEqual(codes([{ ...label, picture: { path: "a.bmp" } }]), ["UFV005"]);
+		assert.deepEqual(codes([{ ...label, picture: { path: "a.bmp" } }]), []);
+		assert.deepEqual(codes([{ id: "t", name: "T", type: "TextBox", picture: { path: "a.bmp" } }]), ["UFV005"]);
+		assert.deepEqual(codes([{ ...label, mouseIcon: { path: "" } }]), ["UFV005"]);
 	});
 
 	it("locates problems in the source", () => {
@@ -423,7 +531,7 @@ describe("FormSpec validation and metadata", () => {
 		const fields = (id: string) => grid.controls[id].descriptors.map((d) => d.field);
 		assert.ok(fields("l1").includes("font") && fields("l1").includes("textAlign"));
 		assert.ok(!fields("img").includes("font") && fields("img").includes("picture") && fields("img").includes("pictureSizeMode"));
-		assert.ok(!fields("l1").includes("picture") && !fields("l1").includes("list") && !fields("odd").includes("picture"));
+		assert.ok(fields("l1").includes("picture") && fields("l1").includes("mouseIcon") && !fields("l1").includes("list") && !fields("odd").includes("picture"));
 		assert.ok(!fields("pg").includes("left") && fields("pg").includes("controlTipText"));
 		// tag and controlTipText are common to every control; accelerator is not.
 		for (const id of ["l1", "img", "mp", "pg", "lb"]) assert.ok(fields(id).includes("tag") && fields(id).includes("controlTipText"), id);
@@ -431,10 +539,17 @@ describe("FormSpec validation and metadata", () => {
 		const descriptor = (id: string, field: string) => grid.controls[id].descriptors.find((d) => d.field === field);
 		assert.deepEqual(descriptor("img", "picture")?.children?.map((d) => d.field), ["path", "remove"]);
 		assert.deepEqual(grid.controls.img.values.picture, { present: true, value: { path: "logo.bmp" } });
-		assert.deepEqual([descriptor("lb", "list")?.valueType, descriptor("lb", "list")?.editor], ["stringArray", "list"]);
+		assert.deepEqual([descriptor("lb", "list")?.valueType, descriptor("lb", "list")?.editor], ["listItems", "list"]);
 		assert.deepEqual(grid.controls.lb.values.list.value, ["a", "b"]);
 		assert.equal(descriptor("lb", "selectedIndex")?.valueType, "integer");
-		assert.deepEqual(grid.form.descriptors.map((d) => d.field), ["backColor", "borderStyle", "caption", "font", "foreColor", "height", "name", "width"]);
+		assert.deepEqual(grid.form.descriptors.map((d) => d.field), [
+			"backColor", "borderColor", "borderStyle", "caption", "cycle", "drawBuffer", "enabled", "font", "foreColor", "height", "helpContextId",
+			"keepScrollBarsVisible", "mouseIcon", "mousePointer", "name", "picture", "pictureAlignment", "pictureSizeMode", "pictureTiling", "rightToLeft", "scrollBars", "scrollHeight", "scrollLeft", "scrollTop", "scrollWidth",
+			"showModal", "specialEffect", "startUpPosition", "tag", "whatsThisButton", "whatsThisHelp", "width", "zoom",
+		]);
+		const formField = (field: string) => grid.form.descriptors.find((d) => d.field === field);
+		assert.deepEqual(formField("startUpPosition")?.suggestions?.map((s) => s.label), ["Manual", "CenterOwner", "CenterScreen", "WindowsDefault"]);
+		assert.deepEqual(formField("mousePointer")?.allowedValues?.slice(0, 5), ["0", "1", "2", "3", "6"]);
 		assert.equal(grid.controls.l1.values.caption.value, "Label1");
 		assert.equal(grid.controls.l1.values.font.present, false);
 	});
@@ -475,15 +590,5 @@ describe("event handlers", () => {
 		assert.equal(jsName("RGB"), "rgb");
 		assert.equal(rasParams("Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)"), "byref cancel: short, byref closeMode: short");
 		assert.equal(rasParams("Private Sub B_Click()"), "");
-	});
-
-	it("still edits VBA code-behinds of earlier versions", () => {
-		const code = "Option Explicit\n\nPrivate Sub OkButton_Click()\n\tMsgBox 1\nEnd Sub\n";
-		assert.deepEqual(findVbaHandler(code, "okbutton", "click"), { line: 2, bodyLine: 3 });
-		assert.equal(findVbaHandler(code, "OkButton", "DblClick"), undefined);
-		assert.equal(vbaBodyIndent(code, "    "), "\t");
-		const appended = code + vbaHandlerText(code, "Private Sub UserForm_Initialize()", "\t", "\n");
-		assert.equal(appended.endsWith("\nEnd Sub\n\nPrivate Sub UserForm_Initialize()\n\t\nEnd Sub\n"), true);
-		assert.equal(vbaHandlerText("", "Private Sub A_B()", "    ", "\r\n"), "Private Sub A_B()\r\n    \r\nEnd Sub\r\n");
 	});
 });

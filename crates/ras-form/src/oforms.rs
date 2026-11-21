@@ -43,6 +43,13 @@ pub(crate) const MAX_NESTING_DEPTH: usize = 64;
 const MAX_SITES_PER_FORM: i64 = 65_535;
 const FORM_MASK_FONT: u64 = 1 << 20;
 
+/// The font effects of the text of a disabled control as Excel stores them: `CFE_DISABLED`
+/// and `CFE_AUTOCOLOR` (the RichEdit `CHARFORMAT` flags that TextProps uses).
+pub(crate) const DISABLED_TEXT_EFFECTS: i64 = 0x4000_2000;
+/// The classes Excel stores them for: Label, TextBox, CommandButton, ComboBox, CheckBox,
+/// OptionButton and ToggleButton (not a ListBox or TabStrip).
+pub(crate) const DISABLED_TEXT_CLASSES: &[u16] = &[17, 21, 23, 25, 26, 27, 28];
+
 // ---------------------------------------------------------------------------
 // Record layouts (specs.go)
 
@@ -354,8 +361,10 @@ pub(crate) static FORM: RecordSpec = RecordSpec {
     stop_after_extra: true,
     text_props: false,
     raw_tail: false,
+    // Written by the level, around its font (FormStreamData: MouseIcon, Font, Picture).
     stream: &[],
-    flags: &[],
+    // [MS-OFORMS] stores no value for PictureTiling: the bit stands for True.
+    flags: &[(24, "PictureTiling", 1)],
     data: &[
         d(1, "BackColor", 4, U),
         d(2, "ForeColor", 4, U),
@@ -499,6 +508,8 @@ pub(crate) enum PValue {
     Bool(bool),
     /// An encoded `StdPicture` (see [`crate::picture::encode`]).
     Picture(Vec<u8>),
+    /// A size or position (HIMETRIC): `LogicalSize`, `ScrollPosition`.
+    Pair(i32, i32),
 }
 
 #[derive(Clone)]
@@ -545,20 +556,28 @@ impl Record {
             }
             return Ok(());
         }
+        if let PValue::Pair(width, height) = value {
+            let Some(extra) = self.spec.extra.iter().find(|x| x.name == name) else {
+                return unsupported(format!("プロパティ {name}"));
+            };
+            self.mask |= 1u64 << extra.bit;
+            self.sizes.insert(extra.name, (*width, *height));
+            return Ok(());
+        }
         let Some(field) = self.spec.data.iter().find(|f| f.name == name) else {
             return unsupported(format!("プロパティ {name}"));
         };
         match field.kind {
             FieldKind::Marker => {
-                // Only the picture of an Image control can be written.
-                if !std::ptr::eq(self.spec, &IMAGE) || name != "Picture" {
+                // A picture or mouse icon (the font of a form is written by its level).
+                if name != "Picture" && name != "MouseIcon" {
                     return unsupported(format!("リソース {name}"));
                 }
                 let PValue::Picture(raw) = value else {
-                    return invalid("Picture は StdPicture のバイト列が必要です");
+                    return invalid(format!("{name} は StdPicture のバイト列が必要です"));
                 };
                 crate::picture::decode(raw)
-                    .map_err(|e| PersistError::Invalid(format!("Picture: {e}")))?;
+                    .map_err(|e| PersistError::Invalid(format!("{name}: {e}")))?;
                 self.pictures.insert(field.name, raw.clone());
                 self.values.insert(field.name, 0xffff);
             }
@@ -741,6 +760,16 @@ const SITE_FIELDS: &[SiteField] = &[
         name: "ControlTipTextData",
         size: 4,
     },
+    SiteField {
+        bit: 13,
+        name: "ControlSourceData",
+        size: 4,
+    },
+    SiteField {
+        bit: 14,
+        name: "RowSourceData",
+        size: 4,
+    },
 ];
 
 struct Site {
@@ -749,6 +778,8 @@ struct Site {
     name: Stored,
     tag: Option<Stored>,
     tip: Option<Stored>,
+    /// `ControlSource` and `RowSource`, which follow `ControlTipText`.
+    sources: [Option<Stored>; 2],
     position: (i32, i32),
 }
 
@@ -778,8 +809,8 @@ impl Site {
             b.extend_from_slice(&self.position.0.to_le_bytes());
             b.extend_from_slice(&self.position.1.to_le_bytes());
         }
-        if let Some(tip) = &self.tip {
-            b.extend_from_slice(&tip.raw);
+        for text in [&self.tip, &self.sources[0], &self.sources[1]].into_iter().flatten() {
+            b.extend_from_slice(&text.raw);
             pad(&mut b, 4);
         }
         finish_header(&mut b)?;
@@ -838,6 +869,11 @@ pub(crate) struct Definition {
     pub caption: String,
     pub size: (i32, i32),
     pub controls: Vec<ControlDefinition>,
+    /// Fields of the form's own record (`Zoom`, `LogicalSize` ...).
+    pub properties: BTreeMap<String, PValue>,
+    /// Lines of the designer block besides Caption and the size (`ShowModal`, `Tag` ...), with
+    /// their value as written; StartUpPosition is 1 unless given.
+    pub frame: Vec<(&'static str, String)>,
 }
 
 #[derive(Clone)]
@@ -928,36 +964,78 @@ fn twips(himetric: i32) -> i64 {
     (himetric as f64 * 1440.0 / 2540.0).round() as i64
 }
 
+/// The designer properties of [MS-OVBA] 2.3.5.1, in the order they have to be written.
+const DESIGNER_PROPERTIES: &[&str] = &[
+    "Caption",
+    "ClientHeight",
+    "ClientLeft",
+    "ClientTop",
+    "ClientWidth",
+    "Enabled",
+    "HelpContextID",
+    "RightToLeft",
+    "ShowModal",
+    "StartUpPosition",
+    "Tag",
+    "TypeInfoVer",
+    "Visible",
+    "WhatsThisButton",
+    "WhatsThisHelp",
+];
+
 fn generated_vbframe(
     name: &str,
     caption: &str,
     size: (i32, i32),
+    frame: &[(&'static str, String)],
     codepage: u16,
 ) -> Result<Vec<u8>> {
     if caption.chars().any(char::is_control) {
         return invalid("フォームの caption に制御文字は使えません");
     }
-    let text = format!(
-        "VERSION 5.00\r\nBegin {{C62A69F0-16DC-11CE-9E98-00AA00574A4F}} {name}\r\n   Caption = \"{}\"\r\n   ClientHeight = {}\r\n   ClientWidth = {}\r\n   StartUpPosition = 1\r\nEnd\r\n",
-        caption.replace('"', "\"\""),
-        twips(size.1),
-        twips(size.0)
-    );
+    let mut lines: Vec<(&str, String)> = vec![
+        ("Caption", format!("\"{}\"", caption.replace('"', "\"\""))),
+        ("ClientHeight", twips(size.1).to_string()),
+        ("ClientWidth", twips(size.0).to_string()),
+    ];
+    if !frame.iter().any(|(key, _)| *key == "StartUpPosition") {
+        lines.push(("StartUpPosition", "1".into()));
+    }
+    for (key, value) in frame {
+        if value.chars().any(char::is_control) {
+            return invalid(format!("フォームの {key} に制御文字は使えません"));
+        }
+        lines.push((key, value.clone()));
+    }
+    lines.sort_by_key(|(key, _)| DESIGNER_PROPERTIES.iter().position(|k| k == key));
+    let mut text = format!("VERSION 5.00\r\nBegin {{C62A69F0-16DC-11CE-9E98-00AA00574A4F}} {name}\r\n");
+    for (key, value) in lines {
+        text.push_str(&format!("   {key} = {value}\r\n"));
+    }
+    text.push_str("End\r\n");
     ras_ovba::encode_text(codepage, &text).map_err(|e| PersistError::Invalid(e.to_string()))
 }
 
-/// Page box inside a new MultiPage: fixed 96 DPI, 2px border, 19px tab band.
-fn generated_page_box(size: (i32, i32)) -> ((i32, i32), (i32, i32)) {
+/// Page box inside a new MultiPage: fixed 96 DPI, 2px border, 19px tab band on the side
+/// of `tab_orientation` (Top, Bottom, Left, Right).
+fn generated_page_box(size: (i32, i32), tab_orientation: i64) -> ((i32, i32), (i32, i32)) {
     let (w, h) = (size.0 as i64, size.1 as i64);
     let wide = 1.max((w as f64 * 96.0 / 2540.0).round() as i64);
     let tall = 1.max((h as f64 * 96.0 / 2540.0).round() as i64);
     let scale = |pixels: i64, value: i64, extent: i64| -> i32 {
         ((2 * pixels * value + extent) / (2 * extent)) as i32
     };
-    let left = scale(2, w, wide);
-    let top = scale(21, h, tall);
-    let right = scale(2.max(wide - 2), w, wide);
-    let bottom = scale(21.max(tall - 2), h, tall);
+    // Pixels from the left, top, right and bottom edges.
+    let (l, t, r, b) = match tab_orientation {
+        1 => (2, 2, 2, 21),
+        2 => (21, 2, 2, 2),
+        3 => (2, 2, 21, 2),
+        _ => (2, 21, 2, 2),
+    };
+    let left = scale(l, w, wide);
+    let top = scale(t, h, tall);
+    let right = scale(l.max(wide - r), w, wide);
+    let bottom = scale(t.max(tall - b), h, tall);
     ((left, top), (0.max(right - left), 0.max(bottom - top)))
 }
 
@@ -1058,7 +1136,7 @@ pub(crate) fn new_form(input: &Definition, codepage: u16) -> Result<Form> {
     if input.size.0 < 0 || input.size.1 < 0 || input.controls.len() > i16::MAX as usize + 1 {
         return invalid("サイズまたはコントロール数が不正です");
     }
-    let vbframe = generated_vbframe(&input.name, &input.caption, input.size, codepage)?;
+    let vbframe = generated_vbframe(&input.name, &input.caption, input.size, &input.frame, codepage)?;
     let mut g = Generation {
         levels: Vec::new(),
         names: Default::default(),
@@ -1068,7 +1146,7 @@ pub(crate) fn new_form(input: &Definition, codepage: u16) -> Result<Form> {
         String::new(),
         &input.caption,
         input.size,
-        &BTreeMap::new(),
+        &input.properties,
         input.controls.clone(),
         0,
         0,
@@ -1139,7 +1217,11 @@ impl Generation {
             if tabs.tabs.len() != controls.len() {
                 return invalid("MultiPage のタブとページの数が一致しません");
             }
-            let (position, page_size) = generated_page_box(size);
+            let orientation = match properties.get("TabOrientation") {
+                Some(PValue::Int(n)) => *n,
+                _ => 0,
+            };
+            let (position, page_size) = generated_page_box(size, orientation);
             for (i, control) in controls.iter_mut().enumerate() {
                 if control.class != 7 {
                     return invalid("MultiPage には Page しか入れられません");
@@ -1286,6 +1368,25 @@ impl Generation {
                     }
                 })?;
             }
+            if let (Some(text_props), Some(PValue::Int(bits))) =
+                (record.text_props.as_mut(), control.properties.get("VariousPropertyBits"))
+            {
+                if bits & 2 == 0 && DISABLED_TEXT_CLASSES.contains(&control.class) {
+                    // A disabled control: Excel keeps its text grayed in the font effects.
+                    let effects = text_props.values.get("FontEffects").copied().unwrap_or(0);
+                    text_props.set_int("FontEffects", effects | DISABLED_TEXT_EFFECTS)?;
+                }
+            }
+            if let Some(PValue::Str(text)) = control.properties.get("ColumnWidths") {
+                // The widths go to the MorphDataColumnInfo array after the TextProps.
+                let widths = crate::scalars::parse_column_widths(text).map_err(|e| {
+                    PersistError::Invalid(format!("コントロール {:?}: columnWidths: {e}", control.name))
+                })?;
+                if !widths.is_empty() {
+                    record.set_int("cColumnInfo", widths.len() as i64)?;
+                    record.tail = crate::scalars::encode_column_infos(&widths);
+                }
+            }
             record.encode()?;
             let mut child = None;
             if container {
@@ -1332,6 +1433,7 @@ impl Generation {
                 name: site_name,
                 tag: None,
                 tip: None,
+                sources: [None, None],
                 position: control.position,
             };
             if container {
@@ -1353,6 +1455,21 @@ impl Generation {
                     } else {
                         site.tip = Some(stored);
                     }
+                }
+            }
+            // The cell and the range a control is bound to (scalars.rs, `SiteText`).
+            for (index, (property, length, bit)) in [
+                ("SiteControlSource", "ControlSourceData", 1u32 << 13),
+                ("SiteRowSource", "RowSourceData", 1 << 14),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if let Some(PValue::Str(text)) = control.properties.get(property) {
+                    let stored = edited_string(text)?;
+                    site.mask |= bit;
+                    site.values.insert(length, stored.packed());
+                    site.sources[index] = Some(stored);
                 }
             }
             built.push(Control {
@@ -1394,8 +1511,8 @@ impl Generation {
 fn skipped_property(name: &str, class: u16) -> bool {
     matches!(
         name,
-        "Tag" | "ControlTipText" | "Accelerator" | "MultiPageEnabled"
-    ) || name.starts_with("SiteFlag")
+        "Tag" | "ControlTipText" | "Accelerator" | "MultiPageEnabled" | "ColumnWidths"
+    ) || name.starts_with("Site")
         || (class == 7 && (name == "Caption" || name == "BooleanProperties"))
         // Held by the hidden TabStrip of a MultiPage.
         || (class == 57 && crate::scalars::TAB_STRIP_FIELDS.contains(&name))
@@ -1414,6 +1531,7 @@ pub(crate) struct FontEdit {
     pub underline: Option<bool>,
     pub strike_through: Option<bool>,
     pub charset: Option<i64>,
+    pub pitch_and_family: Option<i64>,
 }
 
 impl FontEdit {
@@ -1453,6 +1571,12 @@ fn edit_text_font(record: &mut Record, font: &FontEdit) -> Result<()> {
             return invalid("charset は 0〜255 にしてください");
         }
         record.set_int("FontCharSet", charset)?;
+    }
+    if let Some(pitch) = font.pitch_and_family {
+        if !(0..=255).contains(&pitch) {
+            return invalid("pitchAndFamily は 0〜255 にしてください");
+        }
+        record.set_int("FontPitchAndFamily", pitch)?;
     }
     for (bit, value) in [font.bold, font.italic, font.underline, font.strike_through]
         .into_iter()
@@ -1623,7 +1747,14 @@ impl Form {
                 return invalid("o ストリームが大きすぎます");
             }
             let mut f = level.record.encode()?;
+            // FormStreamData: MouseIcon, Font, Picture.
+            if let Some(icon) = level.record.pictures.get("MouseIcon") {
+                f.extend_from_slice(icon);
+            }
             f.extend_from_slice(&level.font_raw);
+            if let Some(picture) = level.record.pictures.get("Picture") {
+                f.extend_from_slice(picture);
+            }
             f.extend_from_slice(&level.class_table_raw);
             f.extend_from_slice(&(sites.len() as u32).to_le_bytes());
             let count_at = f.len();
@@ -1665,6 +1796,7 @@ fn clone_site(site: &Site) -> Site {
         name: site.name.clone(),
         tag: site.tag.clone(),
         tip: site.tip.clone(),
+        sources: site.sources.clone(),
         position: site.position,
     }
 }
@@ -1678,10 +1810,11 @@ fn set_checked(record: &mut Record, property: &str, value: i64, class: Option<u1
     }
     match property {
         "BorderStyle" if value > 1 => return invalid("borderStyle は 0 か 1 にしてください"),
-        "PictureAlignment" if class != Some(12) || value > 4 => {
+        // An Image's picture, or the background of a Frame or Page.
+        "PictureAlignment" if !matches!(class, Some(7 | 12 | 14)) || value > 4 => {
             return invalid("pictureAlignment が不正です")
         }
-        "PictureSizeMode" if class != Some(12) || !matches!(value, 0 | 1 | 3) => {
+        "PictureSizeMode" if !matches!(class, Some(7 | 12 | 14)) || !matches!(value, 0 | 1 | 3) => {
             return invalid("pictureSizeMode が不正です")
         }
         _ => {}
@@ -1705,4 +1838,30 @@ fn encode_multipage_x(state: &MultiPageState) -> Result<Vec<u8>> {
         b.extend_from_slice(&(*id as u32).to_le_bytes());
     }
     Ok(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generated_page_box;
+
+    #[test]
+    fn the_page_box_leaves_the_band_of_tabs_on_their_side() {
+        // 240 × 180 points.
+        let size = (8467, 6350);
+        let top = generated_page_box(size, 0);
+        let bottom = generated_page_box(size, 1);
+        let left = generated_page_box(size, 2);
+        let right = generated_page_box(size, 3);
+        // 2px and 21px at 96 DPI, in HIMETRIC.
+        let (two, band) = (53, 556);
+        assert_eq!(top.0, (two, band));
+        assert_eq!(bottom.0, (two, two));
+        assert_eq!(left.0, (band, two));
+        assert_eq!(right.0, (two, two));
+        // The band takes the same room whichever side it is on.
+        assert_eq!(top.1, bottom.1);
+        assert_eq!(left.1, right.1);
+        assert_eq!(top.1 .0 - left.1 .0, band - two);
+        assert_eq!(left.1 .1 - top.1 .1, band - two);
+    }
 }

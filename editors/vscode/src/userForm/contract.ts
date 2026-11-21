@@ -7,7 +7,7 @@
 
 import type { PropertyDescriptor } from "./protocol";
 
-export type ValueType = "string" | "number" | "integer" | "boolean" | "any" | "stringArray" | "object" | "objectArray";
+export type ValueType = "string" | "number" | "integer" | "boolean" | "any" | "stringArray" | "listItems" | "object" | "objectArray";
 export type SupportLevel = "supported" | "best-effort" | "observed-only" | "snapshot-only" | "custom/unchecked";
 
 export interface PropertyContract {
@@ -17,7 +17,7 @@ export interface PropertyContract {
 	description: string;
 	authoring: boolean;
 	allowedValues?: string[];
-	editor?: "font" | "color" | "enum" | "picture" | "list";
+	editor?: "font" | "color" | "enum" | "picture" | "list" | "toggle";
 	children?: Record<string, PropertyContract>;
 	minimum?: number;
 	maximum?: number;
@@ -47,7 +47,7 @@ const p = (
 
 export const documentProperties: Record<string, PropertyContract> = {
 	schemaVersion: p("integer", true, "supported", "UserForm spec schema version.", false, ["1"]),
-	kind: p("string", true, "supported", "Document kind discriminator.", false, ["ras.userform", "xlflow.userform"]),
+	kind: p("string", true, "supported", "Document kind discriminator.", false, ["ras.userform"]),
 	basis: p("string", true, "supported", "Inspection/build basis for the spec.", false, ["designer"]),
 	coordinateSystem: p("string", false, "supported", "Coordinate basis used by geometry fields.", false, ["points", "parent-relative"]),
 	form: p("object", true, "supported", "Top-level UserForm authoring and observed metadata.", false),
@@ -66,6 +66,8 @@ const font: PropertyContract = {
 		name: p("string", false, "supported", "Font family name.", true),
 		size: { ...p("number", false, "supported", "Font size in points, greater than zero.", true), minimum: 0, maximum: 3276.75, exclusiveMinimum: true },
 		charset: { ...p("integer", false, "supported", "Windows charset number; unlisted values remain valid.", true, []), minimum: 0, maximum: 255 },
+		// Kept as pulled (the VBA editor stores 2, variable pitch); not offered by the font editor.
+		pitchAndFamily: { ...p("integer", false, "supported", "lfPitchAndFamily of the font, as the VBA editor stored it.", false), minimum: 0, maximum: 255 },
 	},
 };
 const color: PropertyContract = {
@@ -130,6 +132,9 @@ export const tabProperties: Record<string, PropertyContract> = {
 	visible: p("boolean", false, "supported", "Whether the tab is visible.", true),
 };
 
+/** Control types with a `picture`: the Image, a Label, the buttons and toggles, and (as the background) a Frame or Page. */
+export const PICTURE_TYPES = ["Image", "Label", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "Frame", "Page"];
+
 export const pictureActionProperties: Record<string, PropertyContract> = {
 	path: p("string", false, "supported", "Project-root-relative BMP or JPEG asset path, with / separators.", true),
 	remove: p("boolean", false, "supported", "No picture; the same as omitting the field.", true, ["true"]),
@@ -143,9 +148,16 @@ const typed = (...entries: string[]) => {
 };
 const listControl = (): Record<string, PropertyContract> => ({
 	...typed("text", "Displayed text.", "value", "Current control value."),
-	list: { ...p("stringArray", false, "supported", "List items; generated code in UserForm_Initialize fills the list.", true), editor: "list" },
+	list: { ...p("listItems", false, "supported", "List items (a string, or an array of the strings of its columns); generated code in UserForm_Initialize fills the list.", true), editor: "list" },
 	selectedIndex: p("integer", false, "supported", "Zero-based selected item of list, or -1 for none; set by generated code in UserForm_Initialize.", true),
 });
+
+/** Caption and Value of a CheckBox, OptionButton or ToggleButton; Value is edited as True, False or Null. */
+const toggleControl = (caption: string, value: string): Record<string, PropertyContract> => {
+	const properties = typed("caption", caption, "value", value);
+	properties.value = { ...properties.value, editor: "toggle" };
+	return properties;
+};
 
 // The plain properties of the controls (crates/ras-form/src/scalars.rs has the same
 // table): the VBA property of the same name, and its values. Omitted, each is what
@@ -153,6 +165,9 @@ const listControl = (): Record<string, PropertyContract> => ({
 type Scalar = [name: string, types: string[], contract: PropertyContract, labels?: string[]];
 const EDITS = ["TextBox", "ComboBox"];
 const FOCUSABLE = ["TextBox", "ComboBox", "ListBox", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar", "MultiPage", "TabStrip"];
+/** The form itself: the plain properties of `form`. */
+const FORM = ["UserForm"];
+const BOUND = ["TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar"];
 const flag = (description: string) => p("boolean", false, "supported", description, true);
 const choice = (description: string, values: number[]) =>
 	p("integer", false, "supported", description, true, values.map(String));
@@ -168,7 +183,11 @@ const pointsUpTo = (description: string, maximum: number): PropertyContract => (
 });
 const effects = [0, 1, 2, 3, 6];
 const effectLabels = ["Flat", "Raised", "Sunken", "Etched", "Bump"];
-const pointers = [...Array(16).keys()];
+// fmMousePointer: 4 and 5 are not values of it.
+const pointers = [0, 1, 2, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 99];
+const pointerLabels = ["Default", "Arrow", "Cross", "IBeam", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "HourGlass", "NoDrop", "AppStarting", "Help", "SizeAll", "Custom"];
+const picturePositionLabels = ["LeftTop", "LeftCenter", "LeftBottom", "RightTop", "RightCenter", "RightBottom", "AboveLeft", "AboveCenter", "AboveRight", "BelowLeft", "BelowCenter", "BelowRight", "Center"];
+const scrollBarLabels = ["None", "Horizontal", "Vertical", "Both"];
 const int32 = [-2147483648, 2147483647] as const;
 export const scalarProperties: Scalar[] = [
 	["locked", ["TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton", "CommandButton"], flag("The value cannot be changed by the user.")],
@@ -199,16 +218,26 @@ export const scalarProperties: Scalar[] = [
 	["listRows", ["ComboBox"], integer("Rows shown in the drop-down list.", 0, 32767)],
 	["listWidth", ["ComboBox"], pointsUpTo("Width of the drop-down list in points; 0 for the control's width.", 72000)],
 	["multiSelect", ["ListBox"], choice("Selection: Single, Multi, Extended.", [0, 1, 2]), ["Single", "Multi", "Extended"]],
+	["columnCount", ["ComboBox", "ListBox"], integer("Columns shown; -1 for all the columns of the items.", -1, 32767)],
+	["columnWidths", ["ComboBox", "ListBox"], p("string", false, "supported", "Width of each column, separated by ; (\"72 pt;;1 in\"); an empty entry is worked out.", true)],
+	["boundColumn", ["ComboBox", "ListBox"], integer("Column that gives Value (1 for the first); 0 for the row number.", 0, 32767)],
+	["textColumn", ["ComboBox", "ListBox"], integer("Column that gives Text (1 for the first); -1 for the first that is wider than 0, 0 for the row number.", -1, 32767)],
+	["columnHeads", ["ComboBox", "ListBox"], flag("A row of column headings above the items.")],
+	["tripleState", ["CheckBox", "OptionButton", "ToggleButton"], flag("A click also gives Null (not for an OptionButton).")],
 	["groupName", ["OptionButton"], p("string", false, "supported", "Option buttons of the same group exclude each other.", true)],
 	["specialEffect", ["TextBox", "ComboBox", "ListBox", "Label", "Image", "Frame"], choice("3D look of the edge.", effects), effectLabels],
 	["specialEffect", ["CheckBox", "OptionButton"], choice("3D look of the box.", [0, 2]), ["Flat", "Sunken"]],
 	["borderColor", ["TextBox", "ComboBox", "ListBox", "Label", "Image", "Frame"], { ...color, description: "Color of a Single border." }],
 	["cycle", ["Frame"], choice("Tab from the last control: to the next form's controls, or back to this frame's first.", [0, 2]), ["AllForms", "CurrentForm"]],
-	["mousePointer", ["Label", "TextBox", "ComboBox", "ListBox", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar", "Image", "Frame", "TabStrip"], choice("Mouse pointer over the control.", pointers), ["Default", "Arrow", "Cross", "IBeam", "SizeNESW", "SizeNS", "SizeNWSE", "SizeWE", "UpArrow", "HourGlass", "NoDrop", "AppStarting", "Help", "SizeAll", "SizeAll", "Hand"]],
+	["mousePointer", ["Label", "TextBox", "ComboBox", "ListBox", "CommandButton", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar", "Image", "Frame", "TabStrip"], choice("Mouse pointer over the control.", pointers), pointerLabels],
 	["default", ["CommandButton"], flag("Enter clicks this button.")],
 	["cancel", ["CommandButton"], flag("Esc clicks this button.")],
 	["takeFocusOnClick", ["CommandButton"], flag("Clicking moves the focus to the button.")],
 	["tabStop", FOCUSABLE, flag("Tab moves the focus to the control.")],
+	["picturePosition", ["Label", "CommandButton", "CheckBox", "OptionButton", "ToggleButton"], choice("Where the picture is beside the caption (omitted: AboveCenter).", [...picturePositionLabels.keys()]), picturePositionLabels],
+	["pictureTiling", ["Frame", "Page"], flag("The background picture is repeated over the whole area.")],
+	["controlSource", BOUND, p("string", false, "supported", "Cell the value is read from when the form loads and written to when it changes (\"Sheet1!B2\").", true)],
+	["rowSource", ["ComboBox", "ListBox"], p("string", false, "supported", "Cells the items come from (\"Sheet1!A2:B10\"); list cannot be written as well.", true)],
 	["min", ["SpinButton", "ScrollBar"], integer("Least value.", ...int32)],
 	["max", ["SpinButton", "ScrollBar"], integer("Greatest value (100 for a SpinButton, 32767 for a ScrollBar when omitted).", ...int32)],
 	["smallChange", ["SpinButton", "ScrollBar"], integer("Change of a click on an arrow.", ...int32)],
@@ -221,6 +250,30 @@ export const scalarProperties: Scalar[] = [
 	["multiRow", ["TabStrip", "MultiPage"], flag("Tabs in several rows.")],
 	["tabFixedWidth", ["TabStrip", "MultiPage"], pointsUpTo("Width of every tab in points; 0 for each tab's own.", 7200)],
 	["tabFixedHeight", ["TabStrip", "MultiPage"], pointsUpTo("Height of the tabs in points; 0 for the font's.", 7200)],
+	// The form itself: its designer block (VBFrame) and its own record.
+	["startUpPosition", FORM, choice("Where the form first shows: Manual, CenterOwner, CenterScreen, WindowsDefault.", [0, 1, 2, 3]), ["Manual", "CenterOwner", "CenterScreen", "WindowsDefault"]],
+	["showModal", FORM, flag("Show waits until the form is closed (omitted: True).")],
+	["tag", FORM, p("string", false, "supported", "Opaque metadata associated with the form (130 characters at most).", true)],
+	["helpContextId", FORM, integer("Help topic of the form.", ...int32)],
+	["rightToLeft", FORM, flag("Right-to-left reading order.")],
+	["whatsThisButton", FORM, flag("A What's This button in the title bar.")],
+	["whatsThisHelp", FORM, flag("Help through What's This.")],
+	["enabled", FORM, flag("The form responds to the user.")],
+	["borderColor", FORM, { ...color, description: "Color of a Single border." }],
+	["cycle", FORM, choice("Tab from the last control of a Frame or Page: to the next, or back to its first.", [0, 2]), ["AllForms", "CurrentForm"]],
+	["mousePointer", FORM, choice("Mouse pointer over the form.", pointers), pointerLabels],
+	["specialEffect", FORM, choice("3D look of the edge.", effects), effectLabels],
+	["zoom", FORM, integer("Percentage the controls are shown at.", 10, 400)],
+	["drawBuffer", FORM, integer("Pixels of the off-screen buffer (32000 for a new form).", 16000, 1048576)],
+	["scrollBars", FORM, choice("Scroll bars of the form.", [0, 1, 2, 3]), scrollBarLabels],
+	["keepScrollBarsVisible", FORM, choice("Scroll bars shown even when there is nothing to scroll (omitted: Both).", [0, 1, 2, 3]), scrollBarLabels],
+	["scrollWidth", FORM, pointsUpTo("Width of the scroll area in points; 0 for the form's.", 1000000)],
+	["scrollHeight", FORM, pointsUpTo("Height of the scroll area in points; 0 for the form's.", 1000000)],
+	["scrollLeft", FORM, pointsUpTo("How far the form is scrolled to the right, in points.", 1000000)],
+	["scrollTop", FORM, pointsUpTo("How far the form is scrolled down, in points.", 1000000)],
+	["pictureAlignment", FORM, choice("Where the background picture is: TopLeft, TopRight, Center, BottomLeft, BottomRight.", [0, 1, 2, 3, 4]), ["TopLeft", "TopRight", "Center", "BottomLeft", "BottomRight"]],
+	["pictureSizeMode", FORM, choice("How the background picture fits: Clip, Stretch, Zoom.", [0, 1, 3]), ["Clip", "Stretch", "Zoom"]],
+	["pictureTiling", FORM, flag("The background picture is repeated over the whole form.")],
 ];
 const control = (type: string, canContainChildren: boolean, properties: Record<string, PropertyContract>): ControlContract => ({
 	type,
@@ -236,16 +289,12 @@ function buildControls(): Record<string, ControlContract> {
 		combobox: control("ComboBox", false, listControl()),
 		listbox: control("ListBox", false, listControl()),
 		commandbutton: control("CommandButton", false, typed("caption", "Button caption.")),
-		checkbox: control("CheckBox", false, typed("caption", "CheckBox caption.", "value", "CheckBox checked state.")),
-		optionbutton: control("OptionButton", false, typed("caption", "OptionButton caption.", "value", "OptionButton selected state.")),
-		togglebutton: control("ToggleButton", false, typed("caption", "ToggleButton caption.", "value", "ToggleButton selected state.")),
+		checkbox: control("CheckBox", false, toggleControl("CheckBox caption.", "CheckBox checked state: true, false or \"Null\".")),
+		optionbutton: control("OptionButton", false, toggleControl("OptionButton caption.", "OptionButton selected state: true, false or \"Null\".")),
+		togglebutton: control("ToggleButton", false, toggleControl("ToggleButton caption.", "ToggleButton pressed state: true, false or \"Null\".")),
 		spinbutton: control("SpinButton", false, { value: p("integer", false, "supported", "SpinButton value.", true) }),
 		scrollbar: control("ScrollBar", false, { value: p("integer", false, "supported", "ScrollBar value.", true) }),
-		image: control("Image", false, {
-			picture: { ...p("object", false, "supported", "Picture embedded into the Image control.", true), editor: "picture", children: pictureActionProperties },
-			pictureAlignment: { ...p("integer", false, "supported", "Picture alignment: TopLeft, TopRight, Center, BottomLeft, BottomRight.", true, ["0", "1", "2", "3", "4"]), editor: "enum" },
-			pictureSizeMode: { ...p("integer", false, "supported", "Picture size mode: Clip, Stretch, Zoom.", true, ["0", "1", "3"]), editor: "enum" },
-		}),
+		image: control("Image", false, {}),
 		frame: control("Frame", true, typed("caption", "Frame caption.")),
 		multipage: {
 			...control("MultiPage", true, {
@@ -278,6 +327,11 @@ function buildControls(): Record<string, ControlContract> {
 	};
 	for (const contract of Object.values(controls)) {
 		const t = contract.type;
+		if (PICTURE_TYPES.includes(t)) contract.properties.picture = pictureAction(t === "Image" ? "Picture embedded into the Image control." : t === "Frame" || t === "Page" ? "Background picture." : "Picture shown beside the caption.");
+		if (["Image", "Frame", "Page"].includes(t)) {
+			contract.properties.pictureAlignment = pictureAlignment;
+			contract.properties.pictureSizeMode = pictureSizeMode;
+		}
 		if (!["Page", "Image", "SpinButton", "ScrollBar"].includes(t)) contract.properties.font = font;
 		if (t !== "Page") contract.properties.backColor = color;
 		if (t !== "Image" && t !== "Page") contract.properties.foreColor = color;
@@ -285,11 +339,22 @@ function buildControls(): Record<string, ControlContract> {
 		if (["Frame", "TextBox", "ComboBox", "ListBox", "Label", "Image"].includes(t)) contract.properties.borderStyle = borderStyle;
 		for (const [name, types, scalar, valueLabels] of scalarProperties)
 			if (types.includes(t)) contract.properties[name] = valueLabels ? { ...scalar, valueLabels } : scalar;
+		// The icon or cursor of MousePointer Custom (99), where there is a MousePointer.
+		if (contract.properties.mousePointer) contract.properties.mouseIcon = mouseIcon;
 	}
 	return controls;
 }
 
+const pictureAction = (description: string): PropertyContract => ({ ...p("object", false, "supported", description, true), editor: "picture", children: pictureActionProperties });
+const mouseIcon = pictureAction("Icon or cursor (.ico / .cur) shown with MousePointer Custom (99).");
+const pictureAlignment: PropertyContract = { ...p("integer", false, "supported", "Picture alignment: TopLeft, TopRight, Center, BottomLeft, BottomRight.", true, ["0", "1", "2", "3", "4"]), editor: "enum" };
+const pictureSizeMode: PropertyContract = { ...p("integer", false, "supported", "Picture size mode: Clip, Stretch, Zoom.", true, ["0", "1", "3"]), editor: "enum" };
+
 export const controlContracts = buildControls();
+formProperties.picture = pictureAction("Background picture of the form.");
+formProperties.mouseIcon = mouseIcon;
+for (const [name, types, scalar, valueLabels] of scalarProperties)
+	if (types.includes("UserForm")) formProperties[name] = valueLabels ? { ...scalar, valueLabels } : scalar;
 
 export function lookupControlContract(type: unknown): ControlContract | undefined {
 	return typeof type === "string" ? controlContracts[type.trim().toLowerCase()] : undefined;
@@ -317,7 +382,7 @@ export function lookupProperty(properties: Record<string, PropertyContract>, nam
 	return found ? properties[found] : undefined;
 }
 
-const editorPropertyNames = ["font", "foreColor", "backColor", "borderColor", "picture", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode"];
+const editorPropertyNames = ["font", "foreColor", "backColor", "borderColor", "picture", "mouseIcon", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode"];
 const scalarTypes: ValueType[] = ["string", "number", "integer", "boolean", "any"];
 export const isEditorProperty = (name: string) => editorPropertyNames.includes(name);
 const isScalar = (contract: PropertyContract) => scalarTypes.includes(contract.valueType);
@@ -433,6 +498,7 @@ export function propertyDescriptor(field: string, contract: PropertyContract): P
 		descriptor.suggestions = descriptor.allowedValues.map((value, index) => ({ value, label: names[index] }));
 	if (contract.children) {
 		descriptor.children = Object.keys(contract.children)
+			.filter((name) => contract.children![name].authoring)
 			.sort()
 			.map((name) => {
 				const child = propertyDescriptor(name, contract.children![name]);

@@ -9,6 +9,10 @@ const sessions = [
         { t: "input", control: "txtName", text: "yamada", seq: 2 },
         { t: "select", control: "cboKind", index: 1 },
         { t: "click", control: "chkAgree" },
+        // TripleState: off → Null → on → off.
+        { t: "click", control: "chkMaybe" },
+        { t: "click", control: "chkMaybe" },
+        { t: "click", control: "chkMaybe" },
         { t: "click", control: "optM" },
         { t: "spin", control: "spnQty", delta: 1 },
         { t: "spin", control: "spnQty", delta: 1 },
@@ -22,8 +26,12 @@ const sessions = [
 let id = 0;
 let queue = [];
 let shown = 0;
+// The cells that controls are bound to (ControlSource).
+const cells = new Map([["Sheet1!B2", { Value: true }]]);
+const Application = { Range: (address) => cells.get(address) || cells.set(address, { Value: null }).get(address) };
+process.on("exit", () => console.log(`B2=${cells.get("Sheet1!B2").Value}`));
 module.exports = {
-    globals: {},
+    globals: { Application },
     formHost: {
         send(msg) {
             if (msg.t === "show") {

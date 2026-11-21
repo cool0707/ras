@@ -1,0 +1,254 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckButtons",
+    "caption": "ボタンの確認",
+    "width": 330,
+    "height": 250
+  },
+  "controls": [
+    {
+      "id": "k1",
+      "name": "btnDefault",
+      "type": "CommandButton",
+      "left": 6,
+      "top": 6,
+      "width": 72,
+      "height": 24,
+      "caption": "既定 OK",
+      "default": true
+    },
+    {
+      "id": "k2",
+      "name": "btnCancel",
+      "type": "CommandButton",
+      "left": 84,
+      "top": 6,
+      "width": 72,
+      "height": 24,
+      "caption": "キャンセル",
+      "cancel": true,
+      "takeFocusOnClick": false
+    },
+    {
+      "id": "k3",
+      "name": "btnWrap",
+      "type": "CommandButton",
+      "left": 162,
+      "top": 6,
+      "width": 72,
+      "height": 36,
+      "caption": "長いキャプションの折り返し",
+      "wordWrap": true,
+      "locked": true,
+      "tabStop": false
+    },
+    {
+      "id": "k4",
+      "name": "btnAuto",
+      "type": "CommandButton",
+      "left": 240,
+      "top": 6,
+      "width": 30,
+      "height": 24,
+      "caption": "自動サイズ",
+      "autoSize": true
+    },
+    {
+      "id": "k5",
+      "name": "btnStyle",
+      "type": "CommandButton",
+      "left": 6,
+      "top": 48,
+      "width": 90,
+      "height": 30,
+      "caption": "色と書体",
+      "backColor": {
+        "kind": "rgb",
+        "value": "#C0E0FF"
+      },
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#800080"
+      },
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      },
+      "backStyle": 0
+    },
+    {
+      "id": "k6",
+      "name": "btnDisabled",
+      "type": "CommandButton",
+      "left": 102,
+      "top": 48,
+      "width": 72,
+      "height": 30,
+      "caption": "無効",
+      "enabled": false
+    },
+    {
+      "id": "k7",
+      "name": "btnPicLeft",
+      "type": "CommandButton",
+      "left": 180,
+      "top": 48,
+      "width": 90,
+      "height": 36,
+      "caption": "左上",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "picturePosition": 0,
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      }
+    },
+    {
+      "id": "k8",
+      "name": "btnPicRight",
+      "type": "CommandButton",
+      "left": 6,
+      "top": 90,
+      "width": 90,
+      "height": 36,
+      "caption": "右中",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "picturePosition": 4
+    },
+    {
+      "id": "k9",
+      "name": "btnPicAbove",
+      "type": "CommandButton",
+      "left": 102,
+      "top": 90,
+      "width": 72,
+      "height": 50,
+      "caption": "上中",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      }
+    },
+    {
+      "id": "k10",
+      "name": "btnPicBelow",
+      "type": "CommandButton",
+      "left": 180,
+      "top": 90,
+      "width": 90,
+      "height": 50,
+      "caption": "下右",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "picturePosition": 11
+    },
+    {
+      "id": "k11",
+      "name": "btnPicCenter",
+      "type": "CommandButton",
+      "left": 6,
+      "top": 144,
+      "width": 90,
+      "height": 40,
+      "caption": "中央",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "picturePosition": 12
+    },
+    {
+      "id": "g1",
+      "name": "tglOn",
+      "type": "ToggleButton",
+      "left": 102,
+      "top": 150,
+      "width": 72,
+      "height": 24,
+      "caption": "押下",
+      "value": true,
+      "controlSource": "Sheet1!D8"
+    },
+    {
+      "id": "g2",
+      "name": "tglNull",
+      "type": "ToggleButton",
+      "left": 180,
+      "top": 150,
+      "width": 72,
+      "height": 24,
+      "caption": "Null",
+      "tripleState": true,
+      "value": "Null"
+    },
+    {
+      "id": "g3",
+      "name": "tglStyle",
+      "type": "ToggleButton",
+      "left": 6,
+      "top": 192,
+      "width": 90,
+      "height": 40,
+      "caption": "左寄せ 画像",
+      "textAlign": 1,
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "picturePosition": 1,
+      "wordWrap": false,
+      "locked": true,
+      "backColor": {
+        "kind": "rgb",
+        "value": "#E0FFE0"
+      },
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      }
+    },
+    {
+      "id": "g4",
+      "name": "tglDisabled",
+      "type": "ToggleButton",
+      "left": 102,
+      "top": 192,
+      "width": 72,
+      "height": 24,
+      "caption": "無効",
+      "enabled": false,
+      "backStyle": 0
+    },
+    {
+      "id": "g5",
+      "name": "tglAuto",
+      "type": "ToggleButton",
+      "left": 180,
+      "top": 192,
+      "width": 30,
+      "height": 24,
+      "caption": "AutoSize",
+      "autoSize": true,
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      },
+      "tabStop": false
+    }
+  ]
+}

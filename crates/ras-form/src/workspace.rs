@@ -1,8 +1,7 @@
 //! The forms of a project: `forms/<Name>.form.json` (the design) and
 //! `forms/<Name>.ras` (the code-behind, written in RAS and compiled by
 //! `ras-compiler` into the form's code module), RAS language specification
-//! §14.11. A VBA code-behind `forms/<Name>.bas` of earlier versions is still
-//! read when there is no `.ras` file.
+//! §14.11.
 //!
 //! * [`load`] and [`build`] turn the files into what `ras pack` and the
 //!   live sync write into a workbook.
@@ -28,32 +27,8 @@ pub struct LoadedForm {
     pub text: String,
     /// Result of parsing and validating `text`.
     pub parsed: Parsed,
-    /// Path of the code-behind file (which may not exist).
+    /// Path of the code-behind `forms/<Name>.ras` (which may not exist).
     pub code_path: PathBuf,
-    /// Language of the code-behind.
-    pub code_kind: CodeKind,
-}
-
-/// Language of a form's code-behind.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CodeKind {
-    /// `forms/<Name>.ras`, compiled by the RAS compiler (also when there is no code-behind yet).
-    Ras,
-    /// `forms/<Name>.bas`: VBA as it appears in the code pane (earlier versions).
-    Bas,
-}
-
-/// The code-behind of form `name`: `forms/<Name>.ras`, or the VBA `forms/<Name>.bas` of
-/// earlier versions when only that exists.
-pub fn code_file(root: &Path, name: &str) -> (PathBuf, CodeKind) {
-    let dir = forms_dir(root);
-    let ras = dir.join(format!("{name}.ras"));
-    let bas = dir.join(format!("{name}.bas"));
-    if !ras.exists() && bas.exists() {
-        (bas, CodeKind::Bas)
-    } else {
-        (ras, CodeKind::Ras)
-    }
 }
 
 /// The directory that holds the forms of the project at `root`.
@@ -98,18 +73,8 @@ pub fn load(root: &Path) -> Result<Vec<LoadedForm>, String> {
                 });
             }
         }
-        let (code_path, code_kind) = code_file(root, &name);
-        if code_kind == CodeKind::Ras && dir.join(format!("{name}.bas")).exists() {
-            parsed.issues.push(Issue {
-                code: "userform_code".into(),
-                severity: Severity::Warning,
-                message: format!("forms/{name}.ras と forms/{name}.bas の両方があります。コードビハインドには {name}.ras を使い、{name}.bas は使いません（不要なら削除してください）"),
-                field: String::new(),
-            });
-        }
         forms.push(LoadedForm {
-            code_path,
-            code_kind,
+            code_path: dir.join(format!("{name}.ras")),
             name,
             rel_path: format!("forms/{file_name}"),
             text,
@@ -155,36 +120,6 @@ fn problem(form: &LoadedForm, severity: Severity, code: &str, message: &str, fie
         severity,
         code: code.to_string(),
         message: message.to_string(),
-    }
-}
-
-/// Code-behind text of a form (empty when the file does not exist).
-fn read_code(form: &LoadedForm) -> Result<String, String> {
-    match std::fs::read(&form.code_path) {
-        Ok(bytes) => {
-            let text = String::from_utf8(bytes).map_err(|_| {
-                format!(
-                    "{}: UTF-8 のテキストとして読めません",
-                    form.code_path.display()
-                )
-            })?;
-            let text = text
-                .strip_prefix('\u{feff}')
-                .unwrap_or(&text)
-                .replace("\r\n", "\n");
-            if text.lines().any(|l| {
-                l.trim_start().starts_with("Attribute VB_")
-                    || l.trim_start().starts_with("VERSION ")
-            }) {
-                return Err(format!(
-                    "{}: コードビハインドには Attribute 行や VERSION 行を書かないでください（コードペインの内容だけを書きます）",
-                    form.code_path.display()
-                ));
-            }
-            Ok(text)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(e) => Err(format!("{}: {e}", form.code_path.display())),
     }
 }
 
@@ -241,15 +176,12 @@ pub fn build(forms: &[LoadedForm], root: &Path, codepage: u16, compiled: &HashMa
                 continue;
             }
         };
-        let code = match form.code_kind {
-            CodeKind::Bas => read_code(form),
-            CodeKind::Ras => Ok(compiled
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case(&form.name))
-                .map(|(_, code)| code.replace("\r\n", "\n"))
-                .unwrap_or_default()),
-        }
-        .and_then(|code| codebehind::compose(&form.rel_path, &designer, spec, &code, codepage));
+        let code = compiled
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(&form.name))
+            .map(|(_, code)| code.replace("\r\n", "\n"))
+            .unwrap_or_default();
+        let code = codebehind::compose(&form.rel_path, &designer, spec, &code, codepage);
         match code {
             Ok(code) => built.forms.push(UserForm {
                 name: designer.name,
@@ -303,8 +235,7 @@ fn is_list_control(control_type: &str) -> bool {
 ///
 /// The VBA code of the form is converted to RAS
 /// (`ras_compiler::vba2ras::convert_form`); what could not be converted is
-/// kept as comments and reported in [`Pulled::todos`]. A `forms/<Name>.bas`
-/// of an earlier version is removed when the `.ras` file is written. A form
+/// kept as comments and reported in [`Pulled::todos`]. A form
 /// that was written from `forms/` keeps an existing `.ras` file: its code was
 /// compiled from it ([`Pulled::kept_code`]).
 ///
@@ -339,9 +270,8 @@ pub fn pull_with(
     let dir = forms_dir(root);
     let spec_path = dir.join(format!("{name}.form.json"));
     let code_path = dir.join(format!("{name}.ras"));
-    let legacy_path = dir.join(format!("{name}.bas"));
     if !force {
-        let existing: Vec<PathBuf> = [&spec_path, &code_path, &legacy_path]
+        let existing: Vec<PathBuf> = [&spec_path, &code_path]
             .into_iter()
             .filter(|p| p.exists())
             .cloned()
@@ -370,6 +300,10 @@ pub fn pull_with(
             .and_then(|p| p.controls.iter().find(|c| c.name.eq_ignore_ascii_case(name)))
     };
     for control in spec.controls.iter_mut().filter(|c| is_list_control(&c.control_type)) {
+        // A list that comes from cells (RowSource) has no items of its own.
+        if control.scalar("rowSource").and_then(serde_json::Value::as_str).is_some_and(|s| !s.is_empty()) {
+            continue;
+        }
         if let Some(old) = previous_control(&control.name).filter(|o| is_list_control(&o.control_type)) {
             control.list = old.list.clone();
             control.selected_index = old.selected_index;
@@ -378,24 +312,45 @@ pub fn pull_with(
 
     let mut pictures = Vec::new();
     for found in &snapshot.pictures {
-        let control = &mut spec.controls[found.control_index];
         let data = &found.picture.data;
+        let icon = found.property == "mouseIcon";
+        // The previous action of the same property, and the color a converted picture of it
+        // was blended onto.
+        let (previous, owner) = match found.control_index {
+            Some(index) => {
+                let old = previous_control(&spec.controls[index].name);
+                let action = old.and_then(|o| if icon { o.mouse_icon.clone() } else { o.picture.clone() });
+                (action.zip(Some(old.and_then(|o| o.back_color.clone()))), spec.controls[index].name.clone())
+            }
+            None => {
+                let old = previous.as_ref().map(|p| &p.form);
+                let action = old.and_then(|o| if icon { o.mouse_icon.clone() } else { o.picture.clone() });
+                (action.zip(Some(old.and_then(|o| o.back_color.clone()))), String::new())
+            }
+        };
         // Keep the file the previous spec points to when the form holds
         // what that file is stored as (the file itself, or its conversion).
-        let kept = previous_control(&control.name).and_then(|old| {
-            let path = old.picture.as_ref()?.get("path")?.as_str()?;
-            let background = crate::picture::background_of(old.back_color.as_ref());
-            let stored = crate::picture::load_with(root, path, background).ok()?;
-            (stored.data == *data).then(|| path.to_string())
+        let kept = previous.and_then(|(action, back_color)| {
+            let path = action.get("path")?.as_str()?.to_string();
+            let stored = if icon {
+                crate::picture::load_icon(root, &path).ok()?
+            } else {
+                crate::picture::load_with(root, &path, crate::picture::background_of(back_color.as_ref())).ok()?
+            };
+            (stored.data == *data).then_some(path)
         });
         let rel = match kept {
             Some(path) => path,
             None => {
-                let rel = format!(
-                    "forms/assets/{name}.{}.{}",
-                    control.name,
-                    found.picture.format.extension()
-                );
+                // forms/assets/<Form>[.<Control>][.mouseIcon].<ext>
+                let mut stem = name.to_string();
+                if !owner.is_empty() {
+                    stem = format!("{stem}.{owner}");
+                }
+                if icon {
+                    stem.push_str(".mouseIcon");
+                }
+                let rel = format!("forms/assets/{stem}.{}", found.picture.format.extension());
                 let file = root.join(&rel);
                 let same = std::fs::read(&file).is_ok_and(|existing| existing == *data);
                 if file.exists() && !same && !force {
@@ -414,7 +369,13 @@ pub fn pull_with(
                 rel
             }
         };
-        control.picture = Some(json!({ "path": rel }));
+        let action = Some(json!({ "path": rel }));
+        match (found.control_index, icon) {
+            (Some(index), false) => spec.controls[index].picture = action,
+            (Some(index), true) => spec.controls[index].mouse_icon = action,
+            (None, false) => spec.form.picture = action,
+            (None, true) => spec.form.mouse_icon = action,
+        }
         pictures.push(rel);
     }
 
@@ -448,9 +409,6 @@ pub fn pull_with(
     if !keep_code {
         std::fs::write(&code_path, &converted.text)
             .map_err(|e| format!("{}: {e}", code_path.display()))?;
-    }
-    if legacy_path.exists() && !keep_code {
-        std::fs::remove_file(&legacy_path).map_err(|e| format!("{}: {e}", legacy_path.display()))?;
     }
     Ok(PullOutcome::Written(Pulled {
         spec_path,

@@ -1,11 +1,14 @@
-//! Pictures of `Image` controls: reading the source file and the
+//! Pictures of controls and forms: reading the source file and the
 //! `StdPicture` payload MS-OFORMS stores for a picture property.
 //!
-//! What is stored is always a BMP (40-byte `BITMAPINFOHEADER`, 24 or 32
-//! bit, uncompressed) or a JPEG; these two are the payloads known to load
+//! A `Picture` is always stored as a BMP (40-byte `BITMAPINFOHEADER`, 24 or
+//! 32 bit, uncompressed) or a JPEG; these two are the payloads known to load
 //! in MS-Forms. A source file in one of these forms is stored as it is.
 //! Any other picture — PNG, GIF, WebP, TIFF, ICO, and BMP files of another
 //! flavour — is decoded and stored as a 24-bit BMP ([`prepare`]).
+//!
+//! A `MouseIcon` is an icon or a cursor file (ICO / CUR), stored as it is
+//! ([`prepare_icon`]); `StdPicture` holds icons ([MS-OFORMS] 2.4.13).
 //!
 //! The checks of stored pictures are a port of xlflow's
 //! `internal/vba/userforms/picture` (Copyright (c) 2026 harumiWeb, MIT
@@ -89,14 +92,20 @@ pub enum Format {
     Bmp,
     /// JPEG.
     Jpeg,
+    /// Icon (ICO): a `MouseIcon`.
+    Icon,
+    /// Cursor (CUR): a `MouseIcon`.
+    Cursor,
 }
 
 impl Format {
-    /// File name extension (`bmp` / `jpg`).
+    /// File name extension (`bmp` / `jpg` / `ico` / `cur`).
     pub fn extension(self) -> &'static str {
         match self {
             Format::Bmp => "bmp",
             Format::Jpeg => "jpg",
+            Format::Icon => "ico",
+            Format::Cursor => "cur",
         }
     }
 }
@@ -232,8 +241,48 @@ fn inspect_jpeg(data: &[u8]) -> Result<(u32, u32), String> {
     Ok((width, height))
 }
 
-/// Checks that `data` is a picture that can be stored in a form as it is.
+/// Checks an icon or cursor file (`ICONDIR` and its entries); returns its kind and the size
+/// of its first image.
+fn inspect_icon(data: &[u8]) -> Result<(Format, u32, u32), String> {
+    let bad = |what: &str| format!("アイコン（ICO / CUR）として読めません（{what}）");
+    if data.len() < 6 || u16le(data, 0) != 0 {
+        return Err(bad("ヘッダーが不正です"));
+    }
+    let format = match u16le(data, 2) {
+        1 => Format::Icon,
+        2 => Format::Cursor,
+        _ => return Err(bad("種類がアイコンでもカーソルでもありません")),
+    };
+    let count = u16le(data, 4) as usize;
+    if count == 0 || data.len() < 6 + count * 16 {
+        return Err(bad("画像の一覧が途中で切れています"));
+    }
+    for entry in 0..count {
+        let at = 6 + entry * 16;
+        let size = u32le(data, at + 8) as u64;
+        let offset = u32le(data, at + 12) as u64;
+        if size == 0 || offset < (6 + count * 16) as u64 || offset + size > data.len() as u64 {
+            return Err(bad("画像のデータがファイルの外を指しています"));
+        }
+    }
+    let side = |b: u8| if b == 0 { 256 } else { b as u32 };
+    Ok((format, side(data[6]), side(data[7])))
+}
+
+/// Checks that `data` is a picture that can be stored in a form as it is: a BMP or JPEG
+/// picture, or an icon or cursor.
 pub fn inspect(data: &[u8]) -> Result<(Format, u32, u32), String> {
+    if data.len() >= 4 && data[..2] == [0, 0] && matches!(data[2..4], [1, 0] | [2, 0]) {
+        if data.len() > MAX_BYTES {
+            return Err(format!("画像は {MAX_BYTES} バイト以下にしてください"));
+        }
+        return inspect_icon(data);
+    }
+    inspect_picture(data)
+}
+
+/// Checks that `data` is a BMP or JPEG picture that can be stored in a form as it is.
+fn inspect_picture(data: &[u8]) -> Result<(Format, u32, u32), String> {
     if data.is_empty() || data.len() > MAX_BYTES {
         return Err(format!(
             "画像は 1 バイト以上 {MAX_BYTES} バイト以下にしてください"
@@ -404,6 +453,12 @@ pub fn load(root: &Path, path: &str) -> Result<Picture, String> {
 
 /// Like [`load`], blending transparent pixels onto `background`.
 pub fn load_with(root: &Path, path: &str, background: [u8; 3]) -> Result<Picture, String> {
+    let data = read_file(root, path)?;
+    prepare(&data, background).map_err(|e| format!("画像 {path:?}: {e}"))
+}
+
+/// The contents of the picture file at the project-root-relative `path`.
+fn read_file(root: &Path, path: &str) -> Result<Vec<u8>, String> {
     let file = resolve(root, path)?;
     // A link must not lead out of the project.
     if let (Ok(real_root), Ok(real_file)) = (root.canonicalize(), file.canonicalize()) {
@@ -423,11 +478,32 @@ pub fn load_with(root: &Path, path: &str, background: [u8; 3]) -> Result<Picture
             "画像 {path:?} は 1 バイト以上 {MAX_BYTES} バイト以下にしてください"
         ));
     }
-    let data = std::fs::read(&file).map_err(|e| format!("画像 {path:?} を読めません: {e}"))?;
-    prepare(&data, background).map_err(|e| format!("画像 {path:?}: {e}"))
+    std::fs::read(&file).map_err(|e| format!("画像 {path:?} を読めません: {e}"))
 }
 
-/// Wraps a stored picture (a BMP or JPEG that passes [`inspect`]) in the
+/// Turns the contents of an icon or cursor file into what is stored for a `MouseIcon`: the
+/// file itself. A BMP or JPEG that MS-Forms holds is taken as it is too (Excel may have
+/// stored one), but nothing is converted.
+pub fn prepare_icon(data: &[u8]) -> Result<Picture, String> {
+    let (format, width, height) = inspect(data).map_err(|_| {
+        "MouseIcon にはアイコン（.ico）かカーソル（.cur）のファイルを指定してください".to_string()
+    })?;
+    Ok(Picture {
+        data: data.to_vec(),
+        format,
+        width,
+        height,
+        converted_from: None,
+    })
+}
+
+/// Reads the icon or cursor at the project-root-relative `path` for a `MouseIcon`.
+pub fn load_icon(root: &Path, path: &str) -> Result<Picture, String> {
+    let data = read_file(root, path)?;
+    prepare_icon(&data).map_err(|e| format!("画像 {path:?}: {e}"))
+}
+
+/// Wraps a stored picture (one that passes [`inspect`]) in the
 /// `StdPicture` form of a `GuidAndPicture` record.
 pub fn encode(data: &[u8]) -> Result<Vec<u8>, String> {
     inspect(data)?;

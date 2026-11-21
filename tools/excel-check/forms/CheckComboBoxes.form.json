@@ -1,0 +1,162 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckComboBoxes",
+    "caption": "ComboBox の確認",
+    "width": 330,
+    "height": 200
+  },
+  "controls": [
+    {
+      "id": "c1",
+      "name": "cboList",
+      "type": "ComboBox",
+      "left": 6,
+      "top": 6,
+      "width": 120,
+      "height": 18,
+      "style": 2,
+      "list": [
+        "東京",
+        "大阪",
+        "名古屋"
+      ],
+      "selectedIndex": 1,
+      "listRows": 2,
+      "listWidth": 150,
+      "listStyle": 1,
+      "matchEntry": 2,
+      "locked": true
+    },
+    {
+      "id": "c2",
+      "name": "cboColumns",
+      "type": "ComboBox",
+      "left": 6,
+      "top": 30,
+      "width": 150,
+      "height": 18,
+      "list": [
+        [
+          "001",
+          "山田",
+          "営業"
+        ],
+        [
+          "002",
+          "佐藤",
+          "経理"
+        ]
+      ],
+      "selectedIndex": 0,
+      "columnCount": 3,
+      "columnWidths": "30 pt;60 pt;40 pt",
+      "boundColumn": 2,
+      "textColumn": 2,
+      "columnHeads": true,
+      "matchEntry": 0,
+      "matchRequired": true,
+      "showDropButtonWhen": 1,
+      "dropButtonStyle": 2
+    },
+    {
+      "id": "c3",
+      "name": "cboRows",
+      "type": "ComboBox",
+      "left": 6,
+      "top": 54,
+      "width": 150,
+      "height": 18,
+      "rowSource": "Sheet1!A1:B3",
+      "columnCount": 2,
+      "columnWidths": "0 pt;",
+      "controlSource": "Sheet1!D2"
+    },
+    {
+      "id": "c4",
+      "name": "cboStyle",
+      "type": "ComboBox",
+      "left": 162,
+      "top": 6,
+      "width": 120,
+      "height": 18,
+      "text": "入力",
+      "dropButtonStyle": 3,
+      "showDropButtonWhen": 0,
+      "specialEffect": 3,
+      "borderStyle": 1,
+      "borderColor": {
+        "kind": "rgb",
+        "value": "#A00000"
+      },
+      "backColor": {
+        "kind": "rgb",
+        "value": "#FFFFE0"
+      },
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#004000"
+      },
+      "textAlign": 3,
+      "maxLength": 8,
+      "autoWordSelect": false,
+      "autoTab": true,
+      "dragBehavior": 1,
+      "enterFieldBehavior": 1,
+      "hideSelection": false,
+      "selectionMargin": false,
+      "imeMode": 1,
+      "backStyle": 0
+    },
+    {
+      "id": "c5",
+      "name": "cboDisabled",
+      "type": "ComboBox",
+      "left": 162,
+      "top": 30,
+      "width": 120,
+      "height": 18,
+      "text": "無効",
+      "enabled": false,
+      "dropButtonStyle": 0,
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      }
+    },
+    {
+      "id": "c6",
+      "name": "cboFont",
+      "type": "ComboBox",
+      "left": 162,
+      "top": 54,
+      "width": 140,
+      "height": 24,
+      "text": "フォント",
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      },
+      "autoSize": true
+    },
+    {
+      "id": "c7",
+      "name": "cboFlat",
+      "type": "ComboBox",
+      "left": 6,
+      "top": 90,
+      "width": 120,
+      "height": 18,
+      "text": "Flat",
+      "specialEffect": 0,
+      "tabStop": false
+    }
+  ]
+}

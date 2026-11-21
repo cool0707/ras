@@ -36,7 +36,6 @@ import type {
 
 export type JsonObject = { [key: string]: JsonValue };
 export const FORM_KIND = "ras.userform";
-export const ACCEPTED_KINDS = ["ras.userform", "xlflow.userform"];
 
 export interface ValidationIssue {
 	code: string;
@@ -147,13 +146,19 @@ export function previewDocument(spec: ParsedSpec): PreviewDocument {
 			foreColor: pick(form.foreColor, (v) => colorError(v) === undefined),
 			backColor: pick(form.backColor, (v) => colorError(v) === undefined),
 			borderStyle: pick<number>(form.borderStyle, num),
+			borderColor: pick(form.borderColor, (v) => colorError(v) === undefined),
+			specialEffect: pick<number>(form.specialEffect, num),
+			picture: pick(form.picture, isObject),
+			pictureAlignment: pick<number>(form.pictureAlignment, num),
+			pictureSizeMode: pick<number>(form.pictureSizeMode, num),
+			pictureTiling: pick<boolean>(form.pictureTiling, (v) => typeof v === "boolean"),
 		},
 		controls: spec.records.map(({ control }) => {
 			const copy = { ...control };
 			for (const key of ["left", "top", "width", "height"] as const) if (!num(copy[key])) delete copy[key];
 			for (const key of ["foreColor", "backColor"] as const) if (copy[key] !== undefined && colorError(copy[key])) delete copy[key];
 			if (copy.font !== undefined && !isObject(copy.font)) delete copy.font;
-			if (copy.list !== undefined && !(Array.isArray(copy.list) && copy.list.every((item) => typeof item === "string"))) delete copy.list;
+			if (copy.list !== undefined && !valueMatchesType(copy.list, "listItems")) delete copy.list;
 			return copy;
 		}),
 	};
@@ -206,6 +211,8 @@ function valueMatchesType(value: unknown, type: ValueType): boolean {
 			return typeof value === "boolean";
 		case "stringArray":
 			return Array.isArray(value) && value.every((item) => typeof item === "string");
+		case "listItems":
+			return Array.isArray(value) && value.every((item) => typeof item === "string" || (Array.isArray(item) && item.every((column) => typeof column === "string")));
 		case "object":
 			return isObject(value);
 		case "objectArray":
@@ -220,6 +227,7 @@ const typeLabel: Record<ValueType, string> = {
 	boolean: "真偽値",
 	any: "任意の値",
 	stringArray: "文字列の配列",
+	listItems: "文字列か、文字列の配列（各列）の配列",
 	object: "オブジェクト",
 	objectArray: "オブジェクトの配列",
 };
@@ -442,8 +450,10 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 	if (builtIn) allowed = controlProperties(type);
 	else if (progId && !lookupControlContractByProgId(progId)) genericCustom(allowed);
 	const issues = validateObject(control, allowed, path);
-	const [picture, hasPicture] = lookupRaw(control, "picture");
-	if (hasPicture) issues.push(...validatePicture(picture, type, `${path}.picture`));
+	for (const field of ["picture", "mouseIcon"]) {
+		const [picture, hasPicture] = lookupRaw(control, field);
+		if (hasPicture) issues.push(...validatePicture(picture, type, `${path}.${field}`, Object.hasOwn(controlProperties(type), field)));
+	}
 	const [tabs, hasTabs] = lookupRaw(control, "tabs");
 	if (hasTabs) issues.push(...validateTabs(tabs, `${path}.tabs`));
 	issues.push(...validateSelectedIndex(control, type, path));
@@ -458,6 +468,17 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 		}
 		if (typeof control.passwordChar === "string" && control.passwordChar.length > 1)
 			issues.push(issue("UFV021", "error", "passwordChar は 1 文字にしてください。", `${path}.passwordChar`));
+		// AddItem and List(row, column) fill at most 10 columns of a list not bound to cells.
+		if (Array.isArray(control.list))
+			control.list.forEach((item, index) => {
+				if (Array.isArray(item) && (item.length < 1 || item.length > 10))
+					issues.push(issue("UFV021", "error", "list の項目の列は 1〜10 個にしてください。", `${path}.list[${index}]`));
+			});
+		if (typeof control.columnWidths === "string" && control.columnWidths.trim() && !/^\s*(-1|[\d.]+\s*(pt|in|cm)?)?\s*(;\s*(-1|[\d.]+\s*(pt|in|cm)?)?\s*)*$/i.test(control.columnWidths))
+			issues.push(issue("UFV021", "error", "columnWidths は ; で区切った幅（pt、in、cm の単位を付けられます）にしてください。", `${path}.columnWidths`));
+		// MSForms refuses AddItem on a list that comes from cells.
+		if (typeof control.rowSource === "string" && control.rowSource && Array.isArray(control.list) && control.list.length > 0)
+			issues.push(issue("UFV021", "error", "rowSource を指定したコントロールには list を書けません（項目はセル範囲から読み込まれます）。", `${path}.list`));
 		if ((type === "SpinButton" || type === "ScrollBar") && typeof control.value === "number") {
 			const min = typeof control.min === "number" ? control.min : 0;
 			const max = typeof control.max === "number" ? control.max : type === "SpinButton" ? 100 : 32767;
@@ -496,13 +517,14 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 	return issues;
 }
 
-function validatePicture(value: JsonValue, type: string, path: string): ValidationIssue[] {
-	if (type.toLowerCase() !== "image") return [issue("UFV005", "error", `${path} はコントロールの種類 ${type} では使えません。`, path)];
+/** A picture action (`picture`, `mouseIcon`) of a control that `takes` it, or of the form. */
+function validatePicture(value: JsonValue, type: string, path: string, takes: boolean): ValidationIssue[] {
+	if (!takes) return [issue("UFV005", "error", `${path} はコントロールの種類 ${type} では使えません。`, path)];
 	if (!isObject(value)) return [issue("UFV005", "error", `${path} はオブジェクトでなければなりません。`, path, "{ \"path\": ... } または { \"remove\": true } を使ってください。")];
 	const issues: ValidationIssue[] = [];
 	const keys = Object.keys(value).map((k) => k.trim().toLowerCase());
 	for (const key of Object.keys(value))
-		if (!["path", "remove"].includes(key.trim().toLowerCase())) issues.push(issue("UFV001", "error", `${path}.${key} は picture では定義されていない項目です。`, `${path}.${key}`));
+		if (!["path", "remove"].includes(key.trim().toLowerCase())) issues.push(issue("UFV001", "error", `${path}.${key} は画像の指定では定義されていない項目です。`, `${path}.${key}`));
 	const hasPath = keys.includes("path");
 	const hasRemove = keys.includes("remove");
 	if (hasPath && hasRemove) issues.push(issue("UFV005", "error", `${path} には path と remove のどちらか一方だけを指定します。`, path));
@@ -686,6 +708,13 @@ export function validateSpec(root: JsonObject): ValidationIssue[] {
 		if (isObject(form.observed)) issues.push(...validateObject(form.observed, formObservedProperties, "form.observed"));
 		issues.push(...validateFormDimensions(form));
 		issues.push(...validateTyped(form, "form", formProperties));
+		for (const field of ["picture", "mouseIcon"]) {
+			const [picture, hasPicture] = lookupRaw(form, field);
+			if (hasPicture) issues.push(...validatePicture(picture, "UserForm", `form.${field}`, true));
+		}
+		// The Tag of the designer block: [MS-OVBA] allows 130 characters in quotes, on one line.
+		if (typeof form.tag === "string" && (/[\u0000-\u001f\u007f]/.test(form.tag) || [...form.tag].length > 130))
+			issues.push(issue("UFV021", "error", "tag は制御文字を含まない 130 文字以内の文字列にしてください。", "form.tag"));
 	}
 	if (root.controls !== undefined) {
 		const [refs, controlIssues] = validateControls(root.controls, "controls", "");

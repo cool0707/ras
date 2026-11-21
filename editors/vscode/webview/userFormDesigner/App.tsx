@@ -3,6 +3,7 @@
 import { render } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
+  PictureField,
   DesignerDocument,
   HostMessage,
   WebviewMessage,
@@ -626,9 +627,12 @@ export function App() {
       version: documentVersion,
       epoch: editorEpoch,
       returnFocus: window.document.activeElement as HTMLElement,
+      // A mouse icon has no preview on the canvas.
       picturePreview:
-        selectedControl?.picturePreview ??
-        (selectedId === undefined ? document?.picturePreview : undefined),
+        descriptor.field !== "picture"
+          ? undefined
+          : (selectedControl?.picturePreview ??
+            (selectedId === undefined ? document?.picturePreview : undefined)),
       value: selectedTarget.values[descriptor.field]?.present
         ? selectedTarget.values[descriptor.field].value
         : undefined,
@@ -694,28 +698,38 @@ export function App() {
           },
     ]);
   };
+  // The picture properties: a control's (Image, Label, buttons, Frame, Page ...) or the form's
+  // (controlId ""), and their mouse icons.
+  const pictureField = (): PictureField | undefined =>
+    editor?.descriptor.field === "picture" || editor?.descriptor.field === "mouseIcon"
+      ? editor.descriptor.field
+      : undefined;
   const pickPicture = () => {
-    if (!editor?.controlId || editor.version !== version.current || busy) return;
+    const field = pictureField();
+    if (!editor || !field || editor.version !== version.current || busy) return;
     const requestId = ++nextRequest.current;
     bridge.postMessage({
       type: "picturePick",
       requestId,
       version: version.current,
-      controlId: editor.controlId,
+      controlId: editor.controlId ?? "",
+      field,
     });
     return requestId;
   };
   const commitPicture = (selection: PictureSelection) => {
-    if (!editor?.controlId || pending.current || editor.version !== version.current || busy) return;
+    const field = pictureField();
+    if (!editor || !field || pending.current || editor.version !== version.current || busy) return;
     const requestId = ++nextRequest.current;
-    pending.current = { requestId, field: "picture", controlId: editor.controlId };
+    pending.current = { requestId, field, ...(editor.controlId === undefined ? {} : { controlId: editor.controlId }) };
     setEditError(undefined);
     setBusy(true);
     bridge.postMessage({
       type: "pictureCommit",
       requestId,
       version: version.current,
-      controlId: editor.controlId,
+      controlId: editor.controlId ?? "",
+      field,
       token: selection.token,
     });
     return requestId;

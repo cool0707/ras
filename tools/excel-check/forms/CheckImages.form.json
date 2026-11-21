@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckImages",
+    "caption": "Image の確認",
+    "width": 330,
+    "height": 200
+  },
+  "controls": [
+    {
+      "id": "i1",
+      "name": "imgClip",
+      "type": "Image",
+      "left": 6,
+      "top": 6,
+      "width": 60,
+      "height": 60,
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      }
+    },
+    {
+      "id": "i2",
+      "name": "imgStretch",
+      "type": "Image",
+      "left": 72,
+      "top": 6,
+      "width": 80,
+      "height": 50,
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "pictureSizeMode": 1,
+      "specialEffect": 2
+    },
+    {
+      "id": "i3",
+      "name": "imgZoom",
+      "type": "Image",
+      "left": 158,
+      "top": 6,
+      "width": 80,
+      "height": 60,
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "pictureSizeMode": 3,
+      "pictureAlignment": 4,
+      "borderStyle": 0,
+      "backColor": {
+        "kind": "rgb",
+        "value": "#FFE0F0"
+      }
+    },
+    {
+      "id": "i4",
+      "name": "imgAligned",
+      "type": "Image",
+      "left": 244,
+      "top": 6,
+      "width": 70,
+      "height": 70,
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "pictureAlignment": 0,
+      "borderColor": {
+        "kind": "rgb",
+        "value": "#FF0000"
+      },
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      }
+    },
+    {
+      "id": "i5",
+      "name": "imgEffects",
+      "type": "Image",
+      "left": 6,
+      "top": 90,
+      "width": 60,
+      "height": 40,
+      "specialEffect": 1
+    },
+    {
+      "id": "i6",
+      "name": "imgEtched",
+      "type": "Image",
+      "left": 72,
+      "top": 90,
+      "width": 60,
+      "height": 40,
+      "specialEffect": 3,
+      "enabled": false
+    },
+    {
+      "id": "i7",
+      "name": "imgBump",
+      "type": "Image",
+      "left": 138,
+      "top": 90,
+      "width": 60,
+      "height": 40,
+      "specialEffect": 6
+    }
+  ]
+}

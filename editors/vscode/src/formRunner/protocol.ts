@@ -30,8 +30,10 @@ export interface ControlSnapshot {
 	listIndex?: number;
 	selected?: boolean[];
 	tabs?: ControlState[];
-	/** Data URI of an Image's picture. */
+	/** Data URI of the control's picture (an Image's, a Label's, a button's; a Frame's or Page's background). */
 	picture?: string | null;
+	/** Data URI of the icon or cursor of MousePointer Custom (99). */
+	mouseIcon?: string | null;
 	/** `seq` of the last `input` of the panel that the form's code has seen (TextBox / ComboBox). */
 	inputSeq?: number;
 }
@@ -114,15 +116,49 @@ export function oleToCss(value: unknown): string | undefined {
 	return `#${hex(n & 255)}${hex((n >>> 8) & 255)}${hex((n >>> 16) & 255)}`;
 }
 
+/** The CSS cursor of an fmMousePointer ("" for Default: the control's own); Custom (99) shows `icon`. */
+export function cursorOf(pointer: unknown, icon?: string | null): string {
+	if (pointer === 99) return icon ? `url("${icon}"), auto` : "";
+	const cursors: Record<number, string> = {
+		1: "default",
+		2: "crosshair",
+		3: "text",
+		6: "nesw-resize",
+		7: "ns-resize",
+		8: "nwse-resize",
+		9: "ew-resize",
+		10: "n-resize",
+		11: "wait",
+		12: "no-drop",
+		13: "progress",
+		14: "help",
+		15: "move",
+	};
+	return typeof pointer === "number" ? (cursors[pointer] ?? "") : "";
+}
+
 /** Points (the unit of MSForms) → CSS pixels. */
 export function px(points: unknown): string {
 	const n = typeof points === "number" && Number.isFinite(points) ? points : 0;
 	return `${(n * 96) / 72}px`;
 }
 
-/** Offset of a container's content from its corner, in points (the Designer draws them the same way). */
-export function contentInsets(type: string): { left: number; top: number } {
-	if (type === "MultiPage") return { left: 1.5, top: 18 };
-	if (type === "Frame") return { left: 0.75, top: 0.75 };
-	return { left: 0, top: 0 };
+export interface Insets {
+	left: number;
+	top: number;
+	right: number;
+	bottom: number;
+}
+
+/**
+ * Offset of a container's content from its edges, in points (the Designer draws them the same
+ * way): the tabs of a MultiPage take 18pt on the side of its TabOrientation.
+ */
+export function contentInsets(type: string, tabOrientation?: unknown): Insets {
+	if (type === "MultiPage") {
+		const side = (["top", "bottom", "left", "right"] as const)[typeof tabOrientation === "number" ? tabOrientation : 0] ?? "top";
+		return { left: 1.5, top: 1.5, right: 1.5, bottom: 1.5, [side]: 18 };
+	}
+	if (type === "Frame") return { left: 0.75, top: 0.75, right: 0.75, bottom: 0.75 };
+	return { left: 0, top: 0, right: 0, bottom: 0 };
 }

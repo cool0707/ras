@@ -1,0 +1,168 @@
+{
+  "pictures": [],
+  "spec": {
+    "basis": "designer",
+    "controls": [
+      {
+        "enabled": false,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 180.0,
+        "id": "control_001",
+        "left": 11.990551181102362,
+        "name": "MultiMain",
+        "progId": "Forms.MultiPage.1",
+        "selectedIndex": 1,
+        "tabIndex": 0,
+        "top": 11.990551181102362,
+        "type": "MultiPage",
+        "visible": true,
+        "width": 240.00944881889762,
+        "zIndex": 0
+      },
+      {
+        "accelerator": "A",
+        "caption": "日本語",
+        "controlTipText": "alpha-tip",
+        "enabled": false,
+        "id": "control_002",
+        "name": "PageAlpha",
+        "parentId": "control_001",
+        "progId": "Forms.Page.1",
+        "tabIndex": 1,
+        "tag": "alpha-tag",
+        "type": "Page",
+        "visible": false,
+        "zIndex": 0
+      },
+      {
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 18.0,
+        "id": "control_003",
+        "left": 7.993700787401575,
+        "name": "PageText",
+        "parentId": "control_002",
+        "progId": "Forms.TextBox.1",
+        "tabIndex": 0,
+        "text": "page text",
+        "top": 7.993700787401575,
+        "type": "TextBox",
+        "value": "page text",
+        "visible": true,
+        "width": 100.00629921259842,
+        "zIndex": 0
+      },
+      {
+        "caption": "",
+        "enabled": true,
+        "height": 79.99370078740158,
+        "id": "control_004",
+        "left": 7.993700787401575,
+        "name": "PageFrame",
+        "parentId": "control_002",
+        "progId": "Forms.Frame.1",
+        "tabIndex": 1,
+        "top": 36.0,
+        "type": "Frame",
+        "visible": true,
+        "width": 150.00944881889762,
+        "zIndex": 1
+      },
+      {
+        "caption": "nested",
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 18.0,
+        "id": "control_005",
+        "left": 0.0,
+        "name": "NestedLabel",
+        "parentId": "control_004",
+        "progId": "Forms.Label.1",
+        "tabIndex": 0,
+        "top": 0.0,
+        "type": "Label",
+        "visible": true,
+        "width": 72.0,
+        "zIndex": 0
+      },
+      {
+        "caption": "Beta",
+        "enabled": true,
+        "id": "control_006",
+        "name": "PageBeta",
+        "parentId": "control_001",
+        "progId": "Forms.Page.1",
+        "tabIndex": 2,
+        "type": "Page",
+        "visible": true,
+        "zIndex": 1
+      },
+      {
+        "enabled": false,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 47.99055118110236,
+        "id": "control_007",
+        "left": 11.990551181102362,
+        "name": "StripMain",
+        "progId": "Forms.TabStrip.1",
+        "selectedIndex": 1,
+        "tabIndex": 1,
+        "tabs": [
+          {
+            "accelerator": "T",
+            "caption": "Alpha",
+            "controlTipText": "tab-tip",
+            "enabled": true,
+            "name": "TabAlpha",
+            "tag": "tab-tag",
+            "visible": true
+          },
+          {
+            "accelerator": "",
+            "caption": "Tab2",
+            "controlTipText": "",
+            "enabled": true,
+            "name": "TabBeta",
+            "tag": "",
+            "visible": true
+          }
+        ],
+        "top": 205.99370078740156,
+        "type": "TabStrip",
+        "visible": true,
+        "width": 240.00944881889762,
+        "zIndex": 1
+      }
+    ],
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "caption": "UserForm1",
+      "height": 271.8141732283465,
+      "name": "MultiTopologyForm",
+      "width": 349.2
+    },
+    "kind": "ras.userform",
+    "schemaVersion": 1,
+    "warnings": []
+  }
+}

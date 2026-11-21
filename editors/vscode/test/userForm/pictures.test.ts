@@ -7,6 +7,8 @@ import { formatJson } from "../../src/userForm/jsonSource";
 import {
 	convertedBmpBytes,
 	findProjectRoot,
+	ICON_EXTENSIONS,
+	inspectIcon,
 	inspectPicture,
 	MAX_PICTURE_BYTES,
 	PICTURE_EXTENSIONS,
@@ -394,5 +396,54 @@ describe("picture assets", () => {
 		assert.equal(await previews.refresh(files.slice(1), root), true);
 		assert.equal(previews.get(logo), undefined);
 		assert.equal(previews.get(files[1])?.problem, undefined);
+	});
+
+	it("checks mouse icons, and previews the pictures of other controls and of the form", async () => {
+		// An icon (type 1) or cursor (type 2) with one 2×2 image.
+		const icon = (type: number) => {
+			const data = Buffer.alloc(22 + 40, 0);
+			data.writeUInt16LE(type, 2);
+			data.writeUInt16LE(1, 4);
+			data.writeUInt8(2, 6);
+			data.writeUInt8(2, 7);
+			data.writeUInt32LE(40, 14);
+			data.writeUInt32LE(22, 18);
+			return data;
+		};
+		assert.deepEqual(inspectIcon(icon(1)), { format: "ico", width: 2, height: 2, converted: false });
+		assert.deepEqual(inspectIcon(icon(2)), { format: "cur", width: 2, height: 2, converted: false });
+		// A bitmap MS Forms holds as it is will do; one that would be converted will not.
+		assert.equal(inspectIcon(bmp(2, 2)).format, "bmp");
+		assert.throws(() => inspectIcon(Buffer.from("\x89PNG\r\n\x1a\n", "latin1")), PictureError);
+		assert.throws(() => inspectIcon(icon(1).subarray(0, 30)), PictureError);
+		assert.deepEqual(ICON_EXTENSIONS, ["ico", "cur"]);
+
+		const root = project("others");
+		write(path.join(root, "forms", "assets", "logo.bmp"), bmp(2, 2));
+		write(path.join(root, "forms", "assets", "hand.cur"), icon(2));
+		const parsed = parseSpec(
+			formatJson({
+				...newFormSpec("Main"),
+				form: { name: "Main", picture: { path: "forms/assets/logo.bmp" }, mouseIcon: { path: "forms/assets/hand.cur" } },
+				controls: [
+					{ id: "l", name: "L", type: "Label", picture: { path: "forms/assets/logo.bmp" }, mouseIcon: { path: "forms/assets/logo.bmp" } },
+					{ id: "b", name: "B", type: "CommandButton", mouseIcon: { path: "forms/assets/logo.png" } },
+					{ id: "t", name: "T", type: "TextBox", picture: { path: "forms/assets/ignored.bmp" } },
+				],
+			}),
+		);
+		assert.ok(parsed.ok);
+		const spec = parsed.spec;
+		const files = pictureFiles(spec, root);
+		// The TextBox has no picture: its path is not read.
+		assert.deepEqual(files.sort(), ["hand.cur", "logo.bmp", "logo.png"].map((name) => path.join(root, "forms", "assets", name)).sort());
+		const previews = new PicturePreviews();
+		await previews.refresh(files, root);
+		const state = picturePreviewState(spec, root, previews);
+		const uri = pictureDataUri(bmp(2, 2), "bmp");
+		assert.equal(state.form, uri);
+		assert.deepEqual(state.dataUris, [uri, undefined, undefined]);
+		// A mouse icon is checked as an icon, and not previewed.
+		assert.deepEqual(state.issues.map((i) => i.field), ["controls[1].mouseIcon.path"]);
 	});
 });

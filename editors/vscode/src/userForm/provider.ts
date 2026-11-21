@@ -8,12 +8,11 @@
 // the extension (engine.ts) instead of a language server.
 
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { applyToSpec, copyControls, EditError } from "./engine";
-import { bodyIndent, eventsForType, eventTarget, findHandler, findVbaHandler, handlerText, rasParams, vbaBodyIndent, vbaHandlerText } from "./events";
+import { bodyIndent, eventsForType, eventTarget, findHandler, handlerText, rasParams } from "./events";
 import type { EventDescriptor } from "./events";
 import { minimalEdit } from "./jsonSource";
 import { designerDocument } from "./model";
@@ -23,6 +22,7 @@ import {
 	pictureDataUri,
 	pictureFiles,
 	PICTURE_EXTENSIONS,
+	ICON_EXTENSIONS,
 	PictureError,
 	PicturePreviews,
 	picturePreviewState,
@@ -33,7 +33,8 @@ import {
 	writePictureAsset,
 } from "./pictures";
 import { designerStrings, isWebviewMessage } from "./protocol";
-import type { ClipboardSnapshot, DesignerDocument, DesignerError, HostMessage, SemanticOperation, WebviewMessage } from "./protocol";
+import type { ClipboardSnapshot, DesignerDocument, DesignerError, HostMessage, PictureField, SemanticOperation, WebviewMessage } from "./protocol";
+import { editableControlProperties } from "./contract";
 import type { ParsedSpec } from "./spec";
 import { flattenControls, parseSpec, previewDocument, problems, propertyGrid } from "./spec";
 import { subtreeIds } from "./toolbox";
@@ -78,17 +79,11 @@ class DesignerClipboard {
 	}
 }
 
-/**
- * The code-behind that belongs to a FormSpec: `forms/<Name>.ras`, or the VBA
- * `forms/<Name>.bas` of earlier versions when only that exists.
- */
+/** The code-behind that belongs to a FormSpec: `forms/<Name>.ras`. */
 export function codeBehindUri(spec: vscode.Uri): vscode.Uri {
 	const base = path.posix.basename(spec.path);
 	const stem = base.toLowerCase().endsWith(FORM_SUFFIX) ? base.slice(0, -FORM_SUFFIX.length) : base.replace(/\.json$/i, "");
-	const ras = vscode.Uri.joinPath(spec, "..", `${stem}.ras`);
-	const bas = vscode.Uri.joinPath(spec, "..", `${stem}.bas`);
-	if (ras.scheme === "file" && !existsSync(ras.fsPath) && existsSync(bas.fsPath)) return bas;
-	return ras;
+	return vscode.Uri.joinPath(spec, "..", `${stem}.ras`);
 }
 
 const projectKey = (uri: vscode.Uri) => {
@@ -132,7 +127,7 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 		let refreshing = false;
 		let refreshAgain = false;
 		/** The picture picked in the open editor dialog; it is copied and referenced on OK. */
-		let staged: { token: string; controlId: string; source: string; data: Uint8Array } | undefined;
+		let staged: { token: string; controlId: string; field: PictureField; source: string; data: Uint8Array } | undefined;
 		let pickGeneration = 0;
 		const send = (message: HostMessage) => {
 			if (ready) void panel.webview.postMessage(message);
@@ -160,6 +155,7 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 			pictures?.dataUris.forEach((dataUri, index) => {
 				if (dataUri) preview.controls[index].picturePreview = dataUri;
 			});
+			if (pictures?.form) preview.form.picturePreview = pictures.form;
 			const designer = designerDocument(preview, [...problems(spec), ...problems(spec, pictures?.issues ?? [])], true);
 			latest = { version, spec, document: designer };
 			send({
@@ -240,8 +236,14 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 			}
 		};
 
-		const isImage = (version: number, controlId: string) =>
-			current(version)?.document.controls.some((c) => c.id === controlId && c.type.toLowerCase() === "image") === true;
+		/** Whether the control (the form for "") of the current document has the picture property. */
+		const takesPicture = (version: number, controlId: string, field: PictureField) => {
+			const document = current(version)?.document;
+			if (!document) return false;
+			if (!controlId) return true;
+			const control = document.controls.find((c) => c.id === controlId);
+			return control !== undefined && Object.hasOwn(editableControlProperties(control.type, control.progId), field);
+		};
 		const pictureError = (error: unknown): DesignerError =>
 			error instanceof PictureError
 				? { code: "invalidPicture", message: error.message }
@@ -251,7 +253,8 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 		const pickPicture = async (message: Extract<WebviewMessage, { type: "picturePick" }>): Promise<Extract<HostMessage, { type: "pictureSelection" }>> => {
 			const reply = { type: "pictureSelection" as const, requestId: message.requestId };
 			if (!specFile) return { ...reply, error: { code: "pictureUnavailable", message: "画像は、ファイルとして保存されたフォームでだけ設定できます。" } };
-			if (!isImage(message.version, message.controlId)) return { ...reply, error: stale() };
+			if (!takesPicture(message.version, message.controlId, message.field)) return { ...reply, error: stale() };
+			const icon = message.field === "mouseIcon";
 			const generation = ++pickGeneration;
 			try {
 				const root = await findProjectRoot(specFile);
@@ -260,18 +263,18 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 					canSelectFolders: false,
 					canSelectMany: false,
 					defaultUri: vscode.Uri.file(root),
-					title: "Image コントロールの画像を選択",
+					title: icon ? "マウス アイコン（アイコン / カーソル）を選択" : message.controlId ? "コントロールの画像を選択" : "フォームの画像を選択",
 					openLabel: "選択",
-					filters: { 画像: PICTURE_EXTENSIONS },
+					filters: icon ? { "アイコン / カーソル": ICON_EXTENSIONS } : { 画像: PICTURE_EXTENSIONS },
 				});
 				const uri = picked?.[0];
 				if (!uri) return reply;
 				if (uri.scheme !== "file") throw new PictureError("このコンピューター上の画像ファイルを選んでください。");
-				const { data, info } = await readPictureFile(uri.fsPath);
+				const { data, info } = await readPictureFile(uri.fsPath, icon);
 				const plan = await planPictureAsset(root, uri.fsPath, data);
 				// The editor was closed, or another file was picked, while this one was read.
 				if (generation !== pickGeneration) return reply;
-				staged = { token: randomUUID(), controlId: message.controlId, source: uri.fsPath, data };
+				staged = { token: randomUUID(), controlId: message.controlId, field: message.field, source: uri.fsPath, data };
 				return {
 					...reply,
 					selection: {
@@ -290,16 +293,20 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 		/** Copies the staged picture into the project when needed and points the control at it. */
 		const commitPicture = async (message: Extract<WebviewMessage, { type: "pictureCommit" }>): Promise<{ error?: DesignerError }> => {
 			const picture = staged;
-			if (!specFile || !picture || picture.token !== message.token || picture.controlId !== message.controlId)
+			if (!specFile || !picture || picture.token !== message.token || picture.controlId !== message.controlId || picture.field !== message.field)
 				return { error: { code: "pictureUnavailable", message: "画像の選択が無効になりました。もう一度選んでください。" } };
-			if (!isImage(message.version, message.controlId)) return { error: stale() };
+			if (!takesPicture(message.version, message.controlId, message.field)) return { error: stale() };
 			let created: string | undefined;
 			try {
 				const root = await findProjectRoot(specFile);
 				const plan = await planPictureAsset(root, picture.source, picture.data);
 				const result = await run(
 					message.version,
-					[{ type: "setControlProperty", controlId: message.controlId, field: "picture", value: { path: plan.relativePath } }],
+					[
+						message.controlId
+							? { type: "setControlProperty", controlId: message.controlId, field: message.field, value: { path: plan.relativePath } }
+							: { type: "setFormProperty", field: message.field, value: { path: plan.relativePath } },
+					],
 					async () => {
 						try {
 							await writePictureAsset(plan, picture.data);
@@ -506,8 +513,7 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 			await vscode.workspace.applyEdit(create);
 			code = await vscode.workspace.openTextDocument(uri);
 		}
-		const vba = uri.path.toLowerCase().endsWith(".bas");
-		const find = (text: string) => (vba ? findVbaHandler : findHandler)(text, target.objectName, event!.name);
+		const find = (text: string) => findHandler(text, target.objectName, event!.name);
 		let handler = find(code.getText());
 		if (!handler) {
 			const text = code.getText();
@@ -515,9 +521,7 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 			const tabSize = editorConfig.get<number>("tabSize", 4);
 			const fallback = editorConfig.get<boolean>("insertSpaces", true) ? " ".repeat(tabSize > 0 ? tabSize : 4) : "\t";
 			const newline = code.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
-			const added = vba
-				? vbaHandlerText(text, event.signature, vbaBodyIndent(text, fallback), newline)
-				: handlerText(text, target.objectName, event, bodyIndent(text, fallback), newline);
+			const added = handlerText(text, target.objectName, event, bodyIndent(text, fallback), newline);
 			const edit = new vscode.WorkspaceEdit();
 			edit.insert(uri, code.positionAt(text.length), added);
 			await vscode.workspace.applyEdit(edit);

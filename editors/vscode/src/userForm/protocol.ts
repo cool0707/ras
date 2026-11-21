@@ -38,7 +38,9 @@ export interface PictureValue {
   path?: string;
   remove?: true;
 }
-export type PropertyValue = ScalarValue | FontValue | ColorValue | PictureValue | string[];
+/** A property that holds a picture file: the picture of a control or form, or its mouse icon. */
+export type PictureField = "picture" | "mouseIcon";
+export type PropertyValue = ScalarValue | FontValue | ColorValue | PictureValue | string[] | (string | string[])[];
 export interface AppearanceProperties {
   font?: FontValue | null;
   foreColor?: ColorValue | null;
@@ -53,7 +55,7 @@ export interface AppearanceProperties {
 }
 export interface PropertyDescriptor {
   field: string;
-  valueType: "string" | "number" | "integer" | "boolean" | "any" | "object" | "stringArray";
+  valueType: "string" | "number" | "integer" | "boolean" | "any" | "object" | "stringArray" | "listItems";
   required: boolean;
   nullable: boolean;
   allowedValues?: string[];
@@ -106,7 +108,8 @@ export interface SpecControl extends AppearanceProperties {
   selectedIndex?: number;
   enabled?: boolean;
   visible?: boolean;
-  list?: string[];
+  /** ComboBox / ListBox items: a string, or the strings of an item's columns. */
+  list?: (string | string[])[];
   tabs?: SpecTab[];
   /** ComboBox: 0 DropDownCombo, 2 DropDownList. TabStrip / MultiPage: 0 tabs, 1 buttons, 2 none. */
   style?: number | null;
@@ -137,10 +140,28 @@ export interface SpecControl extends AppearanceProperties {
   /** TabStrip / MultiPage tabs: 0 top, 1 bottom, 2 left, 3 right. */
   tabOrientation?: number | null;
   default?: boolean | null;
+  /** ComboBox / ListBox: the cells the items come from. */
+  rowSource?: string | null;
+  /** Label, buttons, toggles: where the picture is beside the caption (fmPicturePosition 0–12). */
+  picturePosition?: number | null;
+  /** Frame / Page: the background picture repeats. */
+  pictureTiling?: boolean | null;
+  mouseIcon?: PictureValue | null;
+  mousePointer?: number | null;
+  /** ComboBox / ListBox: columns shown (-1 all), their widths ("72 pt;;1 in"), the column of Text. */
+  columnCount?: number | null;
+  columnWidths?: string | null;
+  textColumn?: number | null;
+  columnHeads?: boolean | null;
   observed?: Partial<Omit<SpecControl, "observed">>;
 }
 
 export interface FormDimensions extends AppearanceProperties {
+  /** The form's edge: the color of a Single border, and 0 flat, 1 raised, 2 sunken, 3 etched, 6 bump. */
+  borderColor?: ColorValue | null;
+  specialEffect?: number | null;
+  /** The background picture repeats. */
+  pictureTiling?: boolean | null;
   caption?: string | null;
   width?: number | null;
   height?: number | null;
@@ -208,6 +229,9 @@ export interface DesignerControl extends Omit<SpecControl, "observed"> {
 }
 
 export interface DesignerDocument extends AppearanceProperties {
+  borderColor?: ColorValue | null;
+  specialEffect?: number | null;
+  pictureTiling?: boolean | null;
   name: string;
   caption: string;
   width: number;
@@ -267,7 +291,7 @@ export const designerStrings = {
   propertyTabIndex: "TabIndex",
   propertySelectedIndex: "SelectedIndex",
   propertyList: "List",
-  listHelp: "1 行に 1 項目を入力します。空にすると list を削除します。",
+  listHelp: "1 行に 1 項目を入力します。複数の列はタブ（Tab キー。Excel からの貼り付けも可）で区切ります。空にすると list を削除します。",
   pictureNone: "画像なし",
   propertyEnabled: "Enabled",
   propertyVisible: "Visible",
@@ -810,7 +834,11 @@ export function isPropertyOperation(value: unknown): value is PropertyOperation 
       (control &&
         op.field === "list" &&
         Array.isArray(op.value) &&
-        op.value.every((item) => typeof item === "string")))
+        op.value.every(
+          (item) =>
+            typeof item === "string" ||
+            (Array.isArray(item) && item.every((column) => typeof column === "string")),
+        )))
   );
 }
 
@@ -837,8 +865,16 @@ export type WebviewMessage =
       choose: boolean;
     }
   | { type: "history"; action: "undo" | "redo"; requestId: number; version: number }
-  | { type: "picturePick"; requestId: number; version: number; controlId: string }
-  | { type: "pictureCommit"; requestId: number; version: number; controlId: string; token: string }
+  /** `controlId` "" is the form; `field` the picture property (`picture`, `mouseIcon`). */
+  | { type: "picturePick"; requestId: number; version: number; controlId: string; field: PictureField }
+  | {
+      type: "pictureCommit";
+      requestId: number;
+      version: number;
+      controlId: string;
+      field: PictureField;
+      token: string;
+    }
   | { type: "pictureCancel" }
   | { type: "resolveConflict"; choice: "source" | "designer" }
   | {
@@ -951,6 +987,7 @@ export function isWebviewMessage(value: unknown): value is WebviewMessage {
       "requestId",
       "version",
       "controlId",
+      "field",
       ...(message.type === "pictureCommit" ? ["token"] : []),
     ];
     return (
@@ -961,7 +998,7 @@ export function isWebviewMessage(value: unknown): value is WebviewMessage {
       Number.isSafeInteger(message.version) &&
       Number(message.version) >= 0 &&
       typeof message.controlId === "string" &&
-      message.controlId.length > 0 &&
+      (message.field === "picture" || message.field === "mouseIcon") &&
       (message.type !== "pictureCommit" ||
         (typeof message.token === "string" && message.token.length > 0))
     );

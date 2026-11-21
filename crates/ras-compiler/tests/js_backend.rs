@@ -289,7 +289,7 @@ fn forms_run_with_a_host() {
     let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_forms.js")));
     assert!(ok, "{stderr}");
     let expected = "\
-show frmInput modal=true \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton btnOK:CommandButton btnBoom:CommandButton
+show frmInput modal=true \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox chkMaybe:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton lstStaff:ListBox btnOK:CommandButton btnBoom:CommandButton
 draw txtName= seq=undefined
 focus txtName
 draw txtName=NG seq=1
@@ -300,6 +300,12 @@ draw txtName=YAMADA seq=2
 focus txtName
 focus cboKind
 focus chkAgree
+maybe=Null
+focus chkMaybe
+maybe=True
+focus chkMaybe
+maybe=False
+focus chkMaybe
 optS=false optM=true
 focus optM
 up 2
@@ -307,21 +313,22 @@ focus spnQty
 up 3
 focus spnQty
 up 3
-error frmInput.btnBoom_Click: 実行時エラー 9: インデックスが有効範囲にありません。 (3)（forms/frmInput.ras:34）
+error frmInput.btnBoom_Click: 実行時エラー 9: インデックスが有効範囲にありません。 (3)（forms/frmInput.ras:39）
 focus btnBoom
 QueryClose mode=0
 focus btnBoom
 hide
-YAMADA/予約:1/3/true/3/1
+YAMADA/予約:1/3/false/3/1/002:佐藤:山田/入力用:120
 QueryClose mode=1
 Terminate
-show frmInput modal=false \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton btnOK:CommandButton btnBoom:CommandButton
+show frmInput modal=false \"入力 1\" txtName:TextBox cboKind:ComboBox chkAgree:CheckBox chkMaybe:CheckBox fraSize:Frame fraSize/optS:OptionButton fraSize/optM:OptionButton spnQty:SpinButton lstStaff:ListBox btnOK:CommandButton btnBoom:CommandButton
 draw txtName= seq=undefined
 focus txtName
 end 入力 1
 QueryClose mode=0
 focus txtName
 Terminate
+B2=false
 ";
     assert_eq!(stdout, expected, "{stderr}");
     assert!(stderr.contains("[ras] frmInput.btnBoom_Click: 実行時エラー 9"), "{stderr}");

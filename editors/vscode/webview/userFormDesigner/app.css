@@ -169,7 +169,36 @@ header {
   font: var(--ms-font);
 }
 .form.border-single {
-  box-shadow: inset 0 0 0 1px var(--ms-frame);
+  box-shadow: inset 0 0 0 1px var(--border-color, var(--ms-text));
+}
+/* SpecialEffect of the form itself: a 2px edge inside the client area. */
+.form.effect-1 {
+  box-shadow:
+    inset 1px 1px 0 var(--ms-highlight),
+    inset -1px -1px 0 var(--ms-dark),
+    inset 2px 2px 0 var(--ms-light),
+    inset -2px -2px 0 var(--ms-shadow);
+}
+.form.effect-2 {
+  box-shadow:
+    inset 1px 1px 0 var(--ms-shadow),
+    inset -1px -1px 0 var(--ms-highlight),
+    inset 2px 2px 0 var(--ms-dark),
+    inset -2px -2px 0 var(--ms-light);
+}
+.form.effect-3 {
+  box-shadow:
+    inset 1px 1px 0 var(--ms-shadow),
+    inset -1px -1px 0 var(--ms-highlight),
+    inset 2px 2px 0 var(--ms-highlight),
+    inset -2px -2px 0 var(--ms-shadow);
+}
+.form.effect-6 {
+  box-shadow:
+    inset 1px 1px 0 var(--ms-highlight),
+    inset -1px -1px 0 var(--ms-shadow),
+    inset 2px 2px 0 var(--ms-shadow),
+    inset -2px -2px 0 var(--ms-highlight);
 }
 .form-client-area {
   position: relative;
@@ -229,6 +258,12 @@ header {
   padding: 2px 4px;
   text-align: center;
   overflow: hidden;
+}
+/* Null: raised, dithered, with the caption in buttonShadow. */
+.togglebutton.mixed {
+  background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px
+    2px;
+  color: var(--ms-shadow) !important;
 }
 .togglebutton.pressed {
   border-color: var(--ms-dark) var(--ms-highlight) var(--ms-highlight) var(--ms-dark);
@@ -347,6 +382,24 @@ header {
   background: var(--ms-select);
   color: #fff;
 }
+/* Columns of an item, and the row of headings (ColumnHeads) above the items. */
+.list-cell {
+  display: inline-block;
+  box-sizing: border-box;
+  overflow: hidden;
+  vertical-align: top;
+  padding-right: 3px;
+  white-space: pre;
+}
+.list-heads {
+  min-height: 1.2em;
+  border-bottom: 1px solid var(--ms-shadow);
+}
+.list-heads .list-cell {
+  min-height: 1.2em;
+  border-right: 1px solid var(--ms-shadow);
+  background: var(--ms-face);
+}
 /* ListStyle Option: the item is marked by its box, not highlighted. */
 .list-item.with-box {
   display: flex;
@@ -356,6 +409,12 @@ header {
 .list-item.with-box.selected {
   background: none;
   color: inherit;
+}
+.list-source {
+  padding: 1px 2px;
+  color: var(--ms-shadow);
+  font-style: italic;
+  white-space: nowrap;
 }
 .list-item .toggle-box {
   width: 11px;
@@ -429,15 +488,32 @@ header {
   border-width: 0 2px 2px 0;
   transform: rotate(40deg);
 }
-.toggle-box.check.mixed {
+/* Null (TripleState): the box is dithered and the mark drawn in buttonShadow. */
+.toggle-box.mixed {
   background: repeating-conic-gradient(var(--ms-face) 0 25%, var(--ms-highlight) 0 50%) 0 0 / 2px
     2px;
 }
 .toggle-box.check.mixed::after {
   content: "";
   position: absolute;
-  inset: 4px 3px;
+  left: 3px;
+  top: 1px;
+  width: 3px;
+  height: 6px;
+  border: solid var(--ms-shadow);
+  border-width: 0 2px 2px 0;
+  transform: rotate(40deg);
+}
+.toggle-box.option.mixed::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
   background: var(--ms-shadow);
+  transform: translate(-50%, -50%);
 }
 .toggle-box.option.checked::after {
   content: "";
@@ -453,6 +529,27 @@ header {
 .toggle-caption {
   min-width: 0;
   overflow: hidden;
+}
+/* A picture beside the caption (PicturePosition); Center puts the caption over it. */
+.picture-caption {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  max-width: 100%;
+  max-height: 100%;
+}
+.picture-caption.stack {
+  display: grid;
+  place-items: center;
+}
+.picture-caption.stack > * {
+  grid-area: 1 / 1;
+}
+.caption-picture {
+  flex: none;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: none;
 }
 .control.scrollbar,
 .control.spinbutton {
@@ -552,6 +649,7 @@ header {
    of the caption, which sits inside the frame's bounds. */
 .frame-edge {
   position: absolute;
+  z-index: 1;
   inset: 0;
   box-sizing: border-box;
   border: 1px solid;
@@ -573,6 +671,8 @@ header {
 }
 .frame-caption {
   position: absolute;
+  /* Over the background picture of the content. */
+  z-index: 1;
   top: 0;
   left: 6px;
   max-width: calc(100% - 12px);
@@ -649,7 +749,7 @@ header {
   padding-left: 2px;
   overflow: hidden;
 }
-.tabs span,
+.tabs > span,
 .tabs button {
   box-sizing: border-box;
   display: flex;
@@ -687,7 +787,7 @@ header {
   gap: 2px;
   align-items: flex-start;
 }
-.tab-style-1 .tabs span,
+.tab-style-1 .tabs > span,
 .tab-style-1 .tabs button {
   border-bottom: 1px solid;
   border-radius: 0;
@@ -708,6 +808,126 @@ header {
 .tab-style-2::before,
 .tab-style-2 .tabs {
   visibility: hidden;
+}
+/* TabOrientation Bottom, Left, Right: the band of tabs on that side, the active tab over the
+   body's edge. Captions on the left read upwards, on the right downwards (MSForms turns a
+   TrueType font). */
+.tab-orient-1::before {
+  top: 0;
+  bottom: 22px;
+}
+.tab-orient-1 .tabs {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  align-items: flex-start;
+}
+.tab-orient-1 .tabs > span,
+.tab-orient-1 .tabs button {
+  border-top: 0;
+  border-bottom: 1px solid;
+  border-radius: 0 0 2px 2px;
+  box-shadow: inset -1px -1px 0 var(--ms-shadow);
+}
+.tab-orient-2::before,
+.tab-orient-3::before {
+  top: 0;
+}
+.tab-orient-2::before {
+  left: 22px;
+}
+.tab-orient-3::before {
+  right: 22px;
+}
+.tab-orient-2 .tabs,
+.tab-orient-3 .tabs {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  flex-direction: column;
+  width: 24px;
+  height: auto;
+  padding: 2px 0 0;
+}
+.tab-orient-2 .tabs {
+  left: 0;
+  align-items: flex-end;
+}
+.tab-orient-3 .tabs {
+  right: 0;
+  align-items: flex-start;
+}
+.tab-orient-2 .tabs > span,
+.tab-orient-2 .tabs button,
+.tab-orient-3 .tabs > span,
+.tab-orient-3 .tabs button {
+  width: 20px;
+  height: auto;
+  padding: 6px 0;
+  justify-content: center;
+}
+.tab-orient-2 .tabs > span,
+.tab-orient-2 .tabs button {
+  border: 1px solid;
+  border-right: 0;
+  border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+  border-radius: 2px 0 0 2px;
+  box-shadow:
+    inset 1px 1px 0 var(--ms-light),
+    inset 0 -1px 0 var(--ms-shadow);
+}
+.tab-orient-3 .tabs > span,
+.tab-orient-3 .tabs button {
+  border: 1px solid;
+  border-left: 0;
+  border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+  border-radius: 0 2px 2px 0;
+  box-shadow:
+    inset 0 1px 0 var(--ms-light),
+    inset -1px -1px 0 var(--ms-shadow);
+}
+.tab-orient-2 .tabs .active,
+.tab-orient-3 .tabs .active {
+  width: 24px;
+  height: auto;
+  margin: -2px 0;
+}
+.tab-orient-2 .tab-text,
+.tab-orient-3 .tab-text {
+  writing-mode: vertical-rl;
+  text-orientation: sideways;
+}
+.tab-orient-2 .tab-text {
+  transform: rotate(180deg);
+}
+/* Buttons keep their full edge on every side. */
+.tab-style-1.tab-orient-1 .tabs > span,
+.tab-style-1.tab-orient-1 .tabs button,
+.tab-style-1.tab-orient-2 .tabs > span,
+.tab-style-1.tab-orient-2 .tabs button,
+.tab-style-1.tab-orient-3 .tabs > span,
+.tab-style-1.tab-orient-3 .tabs button {
+  border: 1px solid;
+  border-radius: 0;
+  border-color: var(--ms-highlight) var(--ms-dark) var(--ms-dark) var(--ms-highlight);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-light),
+    inset -1px -1px 0 var(--ms-shadow);
+}
+.tab-style-1.tab-orient-1 .tabs .active,
+.tab-style-1.tab-orient-2 .tabs .active,
+.tab-style-1.tab-orient-3 .tabs .active {
+  width: auto;
+  margin: 0;
+  border-color: var(--ms-dark) var(--ms-highlight) var(--ms-highlight) var(--ms-dark);
+  box-shadow:
+    inset 1px 1px 0 var(--ms-shadow),
+    inset -1px -1px 0 var(--ms-light);
+}
+.tab-style-1.tab-orient-2 .tabs .active,
+.tab-style-1.tab-orient-3 .tabs .active {
+  width: 20px;
 }
 .page-content {
   position: absolute;

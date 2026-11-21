@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckFormCenter",
+    "caption": "中央に表示",
+    "width": 200,
+    "height": 100,
+    "startUpPosition": 3,
+    "specialEffect": 3,
+    "picture": {
+      "path": "forms/assets/logo.bmp"
+    },
+    "pictureSizeMode": 3,
+    "scrollBars": 1,
+    "keepScrollBarsVisible": 0,
+    "zoom": 80
+  },
+  "controls": [
+    {
+      "id": "fc1",
+      "name": "lblCenter",
+      "type": "Label",
+      "left": 6,
+      "top": 6,
+      "width": 160,
+      "height": 18,
+      "caption": "CenterScreen / Zoom"
+    }
+  ]
+}

@@ -1,0 +1,152 @@
+{
+  "pictures": [],
+  "spec": {
+    "basis": "designer",
+    "controls": [
+      {
+        "caption": "root-common",
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 18.0,
+        "id": "control_001",
+        "left": 11.990551181102362,
+        "name": "RootCommon",
+        "progId": "Forms.Label.1",
+        "tabIndex": 0,
+        "top": 10.006299212598424,
+        "type": "Label",
+        "visible": true,
+        "width": 90.0,
+        "zIndex": 0
+      },
+      {
+        "caption": "empty-frame",
+        "enabled": true,
+        "height": 57.99685039370079,
+        "id": "control_002",
+        "left": 11.990551181102362,
+        "name": "EmptyFrame",
+        "progId": "Forms.Frame.1",
+        "tabIndex": 1,
+        "top": 39.99685039370079,
+        "type": "Frame",
+        "visible": true,
+        "width": 100.00629921259842,
+        "zIndex": 1
+      },
+      {
+        "caption": "parent-frame",
+        "enabled": true,
+        "height": 136.00629921259844,
+        "id": "control_003",
+        "left": 129.99685039370078,
+        "name": "ParentFrame",
+        "progId": "Forms.Frame.1",
+        "tabIndex": 2,
+        "top": 39.99685039370079,
+        "type": "Frame",
+        "visible": true,
+        "width": 180.0,
+        "zIndex": 2
+      },
+      {
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 18.0,
+        "id": "control_004",
+        "left": 10.006299212598424,
+        "name": "SiblingText",
+        "parentId": "control_003",
+        "progId": "Forms.TextBox.1",
+        "tabIndex": 0,
+        "text": "sibling-text",
+        "top": 21.996850393700786,
+        "type": "TextBox",
+        "value": "sibling-text",
+        "visible": true,
+        "width": 83.99055118110236,
+        "zIndex": 0
+      },
+      {
+        "caption": "nested-frame",
+        "enabled": true,
+        "height": 64.00629921259842,
+        "id": "control_005",
+        "left": 11.990551181102362,
+        "name": "NestedFrame",
+        "parentId": "control_003",
+        "progId": "Forms.Frame.1",
+        "tabIndex": 1,
+        "top": 54.0,
+        "type": "Frame",
+        "visible": true,
+        "width": 144.0,
+        "zIndex": 1
+      },
+      {
+        "caption": "nested-label",
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 18.0,
+        "id": "control_006",
+        "left": 7.993700787401575,
+        "name": "NestedLabel",
+        "parentId": "control_005",
+        "progId": "Forms.Label.1",
+        "tabIndex": 0,
+        "top": 20.01259842519685,
+        "type": "Label",
+        "visible": true,
+        "width": 108.0,
+        "zIndex": 0
+      },
+      {
+        "enabled": true,
+        "font": {
+          "charset": 128,
+          "name": "MS UI Gothic",
+          "pitchAndFamily": 2,
+          "size": 9.0
+        },
+        "height": 20.01259842519685,
+        "id": "control_007",
+        "left": 11.990551181102362,
+        "name": "RootText",
+        "progId": "Forms.TextBox.1",
+        "tabIndex": 3,
+        "text": "root-text",
+        "top": 201.99685039370078,
+        "type": "TextBox",
+        "value": "root-text",
+        "visible": true,
+        "width": 180.0,
+        "zIndex": 3
+      }
+    ],
+    "coordinateSystem": "parent-relative",
+    "form": {
+      "caption": "issue884-frame-topology",
+      "height": 231.59055118110237,
+      "name": "FrameTopologyForm",
+      "width": 329.38582677165357
+    },
+    "kind": "ras.userform",
+    "schemaVersion": 1,
+    "warnings": []
+  }
+}

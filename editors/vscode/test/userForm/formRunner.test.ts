@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { applyUpdate, contentInsets, initialState, LineReader, oleToCss, px } from "../../src/formRunner/protocol";
+import { applyUpdate, contentInsets, cursorOf, initialState, LineReader, oleToCss, px } from "../../src/formRunner/protocol";
 import type { RuntimeMessage } from "../../src/formRunner/protocol";
 
 // The panel of a form being debugged (spec §14.10.7): what the extension keeps of the state
@@ -54,7 +54,12 @@ describe("form runner protocol", () => {
 	it("measures in points", () => {
 		assert.equal(px(72), "96px");
 		assert.equal(px(undefined), "0px");
-		assert.deepEqual(contentInsets("MultiPage"), { left: 1.5, top: 18 });
-		assert.deepEqual(contentInsets("Label"), { left: 0, top: 0 });
+		assert.deepEqual(contentInsets("MultiPage"), { left: 1.5, top: 18, right: 1.5, bottom: 1.5 });
+		assert.deepEqual(contentInsets("MultiPage", 1), { left: 1.5, top: 1.5, right: 1.5, bottom: 18 });
+		assert.deepEqual(contentInsets("MultiPage", 2), { left: 18, top: 1.5, right: 1.5, bottom: 1.5 });
+		assert.deepEqual(contentInsets("MultiPage", 3), { left: 1.5, top: 1.5, right: 18, bottom: 1.5 });
+		assert.deepEqual(contentInsets("Label"), { left: 0, top: 0, right: 0, bottom: 0 });
+		assert.deepEqual([0, 3, 11, 99, undefined].map((n) => cursorOf(n)), ["", "text", "wait", "", ""]);
+		assert.equal(cursorOf(99, "data:x"), 'url("data:x"), auto');
 	});
 });

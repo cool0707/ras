@@ -24,6 +24,13 @@ export function designerDocument(
     foreColor: form.foreColor,
     backColor: form.backColor,
     borderStyle: form.borderStyle,
+    borderColor: form.borderColor,
+    specialEffect: form.specialEffect,
+    picture: form.picture,
+    picturePreview: form.picturePreview,
+    pictureAlignment: form.pictureAlignment,
+    pictureSizeMode: form.pictureSizeMode,
+    pictureTiling: form.pictureTiling,
     name: form.name,
     caption: form.caption ?? form.name,
     width: width ?? 240,
@@ -47,4 +54,18 @@ export function designerDocument(
       };
     }),
   };
+}
+
+/**
+ * The state the Value of a CheckBox, OptionButton or ToggleButton stands for: true, 1, -1 and
+ * "True" are on, "Null" is neither (TripleState), anything else is off.
+ */
+export function toggleState(value: unknown): "on" | "off" | "null" {
+  if (value === true || value === 1 || value === -1) return "on";
+  if (typeof value === "string") {
+    const text = value.trim().toLowerCase();
+    if (text === "true" || text === "1" || text === "-1") return "on";
+    if (text === "null") return "null";
+  }
+  return "off";
 }

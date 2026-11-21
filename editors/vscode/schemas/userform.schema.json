@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "RAS UserForm FormSpec v1",
-  "description": "forms/<Name>.form.json — ユーザーフォームのデザイン（xlflow FormSpec v1 の JSON 形式）",
+  "description": "forms/<Name>.form.json — ユーザーフォームのデザイン（FormSpec v1）",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -15,10 +15,7 @@
       "const": 1
     },
     "kind": {
-      "enum": [
-        "ras.userform",
-        "xlflow.userform"
-      ]
+      "const": "ras.userform"
     },
     "basis": {
       "const": "designer"
@@ -81,6 +78,12 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 255
+            },
+            "pitchAndFamily": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255,
+              "description": "フォントの lfPitchAndFamily（VBE が作ったコントロールでは 2）。取り込んだ値を保つためのもので、省略時は書き込みません"
             }
           }
         },
@@ -135,6 +138,239 @@
         "observed": {
           "type": "object",
           "description": "Excel から取り込んだ観測値（スナップショット専用）"
+        },
+        "startUpPosition": {
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "description": "フォームを最初に表示する位置。0: Manual、1: CenterOwner（省略時）、2: CenterScreen、3: WindowsDefault"
+        },
+        "showModal": {
+          "type": "boolean",
+          "description": "Show がフォームを閉じるまで戻らない（省略時は true）"
+        },
+        "tag": {
+          "type": "string",
+          "maxLength": 130,
+          "description": "フォームに付ける任意の文字列（130 文字まで）"
+        },
+        "helpContextId": {
+          "type": "integer",
+          "description": "ヘルプのトピック"
+        },
+        "rightToLeft": {
+          "type": "boolean",
+          "description": "右から左に読む"
+        },
+        "whatsThisButton": {
+          "type": "boolean",
+          "description": "タイトル バーに［?］ボタンを表示する"
+        },
+        "whatsThisHelp": {
+          "type": "boolean",
+          "description": "［?］によるヘルプを使う"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "フォームを操作できる"
+        },
+        "borderColor": {
+          "type": "object",
+          "required": [
+            "kind",
+            "value"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": [
+                "rgb",
+                "system",
+                "ole"
+              ]
+            },
+            "value": {
+              "type": "string",
+              "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+            }
+          }
+        },
+        "cycle": {
+          "enum": [
+            0,
+            2
+          ],
+          "description": "Frame / Page の最後のコントロールからの Tab の移り先。0: AllForms、2: CurrentForm"
+        },
+        "mousePointer": {
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            99
+          ],
+          "description": "フォームの上のマウス ポインター"
+        },
+        "specialEffect": {
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            6
+          ],
+          "description": "フォームの縁の立体感。0: Flat、1: Raised、2: Sunken、3: Etched、6: Bump"
+        },
+        "zoom": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 400,
+          "description": "コントロールを表示する倍率（%）"
+        },
+        "drawBuffer": {
+          "type": "integer",
+          "minimum": 16000,
+          "maximum": 1048576,
+          "description": "描画用のバッファーの大きさ（ピクセル。新しいフォームは 32000）"
+        },
+        "scrollBars": {
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "description": "スクロール バー。0: None、1: Horizontal、2: Vertical、3: Both"
+        },
+        "keepScrollBarsVisible": {
+          "enum": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "description": "スクロールが要らなくても表示するスクロール バー（省略時は 3: Both）"
+        },
+        "scrollWidth": {
+          "type": "number",
+          "minimum": 0,
+          "description": "スクロール領域の幅（ポイント。0 はフォームの幅）"
+        },
+        "scrollHeight": {
+          "type": "number",
+          "minimum": 0,
+          "description": "スクロール領域の高さ（ポイント。0 はフォームの高さ）"
+        },
+        "scrollLeft": {
+          "type": "number",
+          "minimum": 0,
+          "description": "横方向のスクロール位置（ポイント）"
+        },
+        "scrollTop": {
+          "type": "number",
+          "minimum": 0,
+          "description": "縦方向のスクロール位置（ポイント）"
+        },
+        "picture": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "画像ファイル（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）。プロジェクト ルート（ras.toml のあるフォルダー）からの相対パスを / 区切りで指定します。24 / 32 ビットの無圧縮 BMP と JPEG 以外は、フォームの書き込み時に 24 ビットの BMP に変換されます"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "remove"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "remove": {
+                  "const": true,
+                  "description": "画像なし（picture を省略したときと同じ）"
+                }
+              }
+            }
+          ],
+          "description": "フォームの背景の画像（{ path } か { remove: true }）"
+        },
+        "mouseIcon": {
+          "description": "MousePointer が 99（Custom）のときのマウス ポインター。アイコン（.ico）かカーソル（.cur）のファイルを { path } で指定します",
+          "type": "object",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "path"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "アイコン（.ico）かカーソル（.cur）のファイル。プロジェクト ルートからの相対パスを / 区切りで指定します。ファイルはそのまま埋め込みます"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "required": [
+                "remove"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "remove": {
+                  "const": true,
+                  "description": "マウス アイコンなし（mouseIcon を省略したときと同じ）"
+                }
+              }
+            }
+          ]
+        },
+        "pictureAlignment": {
+          "enum": [
+            0,
+            1,
+            2,
+            3,
+            4
+          ],
+          "description": "背景の画像の位置。0: TopLeft、1: TopRight、2: Center（省略時）、3: BottomLeft、4: BottomRight"
+        },
+        "pictureSizeMode": {
+          "enum": [
+            0,
+            1,
+            3
+          ],
+          "description": "背景の画像の大きさ。0: Clip、1: Stretch、3: Zoom"
+        },
+        "pictureTiling": {
+          "type": "boolean",
+          "description": "背景の画像を並べて敷き詰める"
         }
       }
     },
@@ -219,12 +455,26 @@
           "text": {
             "type": "string"
           },
-          "value": {},
+          "value": {
+            "description": "値。CheckBox / OptionButton / ToggleButton は true / false（\"True\" / \"False\"、0 / 1 / -1 も可）か、どちらでもない状態の \"Null\""
+          },
           "list": {
             "type": "array",
-            "description": "ComboBox / ListBox の項目。フォームの初期化時（UserForm_Initialize）に生成コードが設定します",
+            "description": "ComboBox / ListBox の項目。フォームの初期化時（UserForm_Initialize）に生成コードが設定します。複数の列を持つ項目は、列ごとの文字列の配列（1〜10 列）で書きます",
             "items": {
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "maxItems": 10
+                }
+              ]
             }
           },
           "selectedIndex": {
@@ -305,6 +555,12 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 255
+              },
+              "pitchAndFamily": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255,
+                "description": "フォントの lfPitchAndFamily（VBE が作ったコントロールでは 2）。取り込んだ値を保つためのもので、省略時は書き込みません"
               }
             }
           },
@@ -375,7 +631,7 @@
                   "path": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Image に表示する画像ファイル（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）。プロジェクト ルート（ras.toml のあるフォルダー）からの相対パスを / 区切りで指定します。24 / 32 ビットの無圧縮 BMP と JPEG 以外は、フォームの書き込み時に 24 ビットの BMP に変換されます"
+                    "description": "画像ファイル（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）。プロジェクト ルート（ras.toml のあるフォルダー）からの相対パスを / 区切りで指定します。24 / 32 ビットの無圧縮 BMP と JPEG 以外は、フォームの書き込み時に 24 ビットの BMP に変換されます"
                   }
                 }
               },
@@ -392,7 +648,63 @@
                   }
                 }
               }
+            ],
+            "description": "画像（{ path } か { remove: true }）。Image の画像、Label・CommandButton・CheckBox・OptionButton・ToggleButton のキャプションの横の画像、Frame・Page の背景"
+          },
+          "mouseIcon": {
+            "description": "MousePointer が 99（Custom）のときのマウス ポインター。アイコン（.ico）かカーソル（.cur）のファイルを { path } で指定します",
+            "type": "object",
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "アイコン（.ico）かカーソル（.cur）のファイル。プロジェクト ルートからの相対パスを / 区切りで指定します。ファイルはそのまま埋め込みます"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "remove"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "remove": {
+                    "const": true,
+                    "description": "マウス アイコンなし（mouseIcon を省略したときと同じ）"
+                  }
+                }
+              }
             ]
+          },
+          "picturePosition": {
+            "enum": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12
+            ],
+            "description": "キャプションに対する画像の位置。0: LeftTop … 7: AboveCenter（省略時）… 12: Center"
+          },
+          "pictureTiling": {
+            "type": "boolean",
+            "description": "Frame / Page の背景の画像を並べて敷き詰める"
           },
           "pictureAlignment": {
             "enum": [
@@ -425,6 +737,44 @@
               2
             ],
             "description": "ListBox の選択方法。0: Single、1: Multi、2: Extended"
+          },
+          "columnCount": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 32767,
+            "description": "ComboBox / ListBox の表示する列の数（-1 は項目のすべての列）"
+          },
+          "columnWidths": {
+            "type": "string",
+            "description": "ComboBox / ListBox の各列の幅を ; で区切ったもの（\"72 pt;;1 in\"）。単位は pt（省略時）・in・cm。空の欄と -1 は自動"
+          },
+          "boundColumn": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32767,
+            "description": "Value にする列（1 から数える）。0 は行の番号"
+          },
+          "textColumn": {
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 32767,
+            "description": "Text にする列（1 から数える）。-1 は幅が 0 でない最初の列、0 は行の番号"
+          },
+          "columnHeads": {
+            "type": "boolean",
+            "description": "項目の上に列見出しの行を表示する"
+          },
+          "rowSource": {
+            "type": "string",
+            "description": "ComboBox / ListBox の項目を読み込むセル範囲（\"Sheet1!A2:B10\"）。list と同時には書けません"
+          },
+          "controlSource": {
+            "type": "string",
+            "description": "値を連動させるセル（\"Sheet1!B2\"）。フォームの読み込み時にセルの値を表示し、変更をセルに書き込みます"
+          },
+          "tripleState": {
+            "type": "boolean",
+            "description": "CheckBox / ToggleButton をクリックで Null（どちらでもない状態）にもできるようにする（OptionButton では効きません）"
           },
           "listStyle": {
             "enum": [
@@ -631,8 +981,6 @@
               1,
               2,
               3,
-              4,
-              5,
               6,
               7,
               8,
@@ -642,7 +990,8 @@
               12,
               13,
               14,
-              15
+              15,
+              99
             ],
             "description": "マウス ポインター（fmMousePointer）"
           },

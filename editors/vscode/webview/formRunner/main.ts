@@ -2,7 +2,9 @@
 // process reports (through the extension) and reports what the user does; the form's code
 // decides everything else (values, focus, closing), so the panel keeps no state of its own.
 import "./formRunner.css";
-import { contentInsets, oleToCss, px } from "../../src/formRunner/protocol";
+import { contentInsets, cursorOf, oleToCss, px } from "../../src/formRunner/protocol";
+import { columnLayout, textColumnIndex } from "../../src/userForm/listItems";
+import { backgroundPicture, picturePositionLayout } from "../../src/userForm/pictureLayout";
 import type { ControlSnapshot, ControlState, FontState, FormState, PanelMessage, UserAction } from "../../src/formRunner/protocol";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -31,11 +33,14 @@ closeButton.title = "閉じる";
 closeButton.textContent = "✕";
 closeButton.addEventListener("click", () => send({ t: "close" }));
 const client = el("div", "form-client", frame);
+// The controls, at the form's Zoom, over its scroll area (ScrollWidth / ScrollHeight).
+const surface = el("div", "form-surface", client);
+const onForm = (target: EventTarget | null) => target === client || target === surface;
 client.addEventListener("click", (e) => {
-	if (e.target === client) send({ t: "click" });
+	if (onForm(e.target)) send({ t: "click" });
 });
 client.addEventListener("dblclick", (e) => {
-	if (e.target === client) send({ t: "dblclick" });
+	if (onForm(e.target)) send({ t: "dblclick" });
 });
 const banners = el("div", "banners", app);
 const note = el("div", "note", app);
@@ -66,6 +71,8 @@ interface View {
 }
 
 let state: FormState | undefined;
+/** The scroll position last taken from the state (the user scrolls freely in between). */
+let scrolled = "";
 const views = new Map<string, View>();
 /**
  * Inputs sent per control. While the form's code has not seen the last one, the text the
@@ -107,6 +114,38 @@ function colors(node: HTMLElement, s: ControlState, transparent = false): void {
 
 const ALIGN = ["left", "left", "center", "right"];
 
+/** Fills `node` with the caption and, when the control has one, its picture as PicturePosition places it. */
+function captionWithPicture(node: HTMLElement, caption: string, picture: string | null | undefined, position: unknown): void {
+	const key = JSON.stringify([caption, picture ?? "", position]);
+	if (node.dataset.drawn === key) return;
+	node.dataset.drawn = key;
+	while (node.firstChild) node.firstChild.remove();
+	if (!picture) {
+		node.textContent = caption;
+		return;
+	}
+	const layout = picturePositionLayout(position);
+	const box = el("span", `picture-caption ${layout.direction}`, node);
+	if (layout.direction !== "stack") {
+		box.style.flexDirection = layout.direction;
+		box.style.alignItems = layout.align;
+	}
+	const img = el("img", "caption-picture", box);
+	img.src = picture;
+	img.alt = "";
+	img.draggable = false;
+	if (caption) el("span", "caption-text", box).textContent = caption;
+}
+
+/** The background picture of a form, Frame or Page. */
+function background(node: HTMLElement, picture: string | null | undefined, s: ControlState): void {
+	const css = backgroundPicture(picture ?? undefined, s.PictureAlignment, s.PictureSizeMode, s.PictureTiling);
+	node.style.backgroundImage = css.backgroundImage ?? "";
+	node.style.backgroundPosition = css.backgroundPosition ?? "";
+	node.style.backgroundSize = css.backgroundSize ?? "";
+	node.style.backgroundRepeat = css.backgroundRepeat ?? "";
+}
+
 function focusable(view: View, node: HTMLElement, name: string): void {
 	view.focus = node;
 	node.addEventListener("focus", () => {
@@ -127,7 +166,7 @@ function create(c: ControlSnapshot): View {
 			const text = el("span", "label-text", root);
 			root.addEventListener("click", () => send({ t: "click", control: name }));
 			view.update = (s) => {
-				text.textContent = str(s.state.Caption);
+				captionWithPicture(text, str(s.state.Caption), s.picture, s.state.PicturePosition);
 				root.style.whiteSpace = s.state.WordWrap === false ? "pre" : "pre-wrap";
 				root.style.textAlign = ALIGN[num(s.state.TextAlign, 1)] ?? "left";
 				colors(root, s.state, num(s.state.BackStyle, 1) === 0);
@@ -169,8 +208,17 @@ function create(c: ControlSnapshot): View {
 			datalist.id = listId;
 			// The drop button of MSForms, drawn over the field (clicks go through to it).
 			const symbol = el("span", "combo-chevron", el("span", "combo-arrow", root));
+			let shownList: string[] = [];
 			view.update = (s, enabled) => {
-				const list = (s.list ?? []).map((row) => row.join("  "));
+				// The drop-down shows the columns of ColumnCount; the field holds the TextColumn.
+				const rows = s.list ?? [];
+				const widths = columnLayout(s.state.ColumnCount, s.state.ColumnWidths, num(s.state.Width), Math.max(1, ...rows.map((r) => r.length)));
+				const shown = textColumnIndex(s.state.TextColumn, widths);
+				// Columns 0 wide are hidden, in the drop-down as in the field.
+				const list = rows.map((row, i) =>
+					widths.length > 1 ? row.slice(0, widths.length).filter((_, n) => widths[n] > 0).join("  ") : shown < 0 ? String(i) : (row[shown] ?? ""),
+				);
+				shownList = list;
 				const dropDownList = num(s.state.Style) === 2;
 				const button = num(s.state.ShowDropButtonWhen, 2);
 				root.classList.toggle("drop-never", button === 0);
@@ -203,7 +251,7 @@ function create(c: ControlSnapshot): View {
 						field.addEventListener("input", (e) => {
 							// Picking from the list replaces the whole text.
 							const picked = (e as InputEvent).inputType === "insertReplacementText" || (e as InputEvent).inputType === undefined;
-							const index = picked ? (state?.controls.find((x) => x.name === name)?.list ?? []).findIndex((row) => row.join("  ") === field.value || row[0] === field.value) : -1;
+							const index = picked ? shownList.indexOf(field.value) : -1;
 							if (index >= 0) send({ t: "select", control: name, index });
 							else sendInput(name, field.value);
 						});
@@ -220,23 +268,85 @@ function create(c: ControlSnapshot): View {
 			break;
 		}
 		case "ListBox": {
-			const select = el("select", "field", root);
-			focusable(view, select, name);
-			select.addEventListener("change", () => {
-				const options = [...select.options];
-				if (select.multiple) send({ t: "select", control: name, index: select.selectedIndex, selected: options.map((o) => o.selected) });
-				else send({ t: "select", control: name, index: select.selectedIndex });
+			// Drawn here rather than by a <select>, which has no columns: the rows of the items
+			// in the columns of ColumnCount / ColumnWidths, under a row of headings (ColumnHeads).
+			const box = el("div", "field listbox", root);
+			box.tabIndex = 0;
+			box.setAttribute("role", "listbox");
+			focusable(view, box, name);
+			let current: ControlSnapshot = c;
+			let enabled = true;
+			let anchor = -1;
+			const choose = (index: number, e?: MouseEvent | KeyboardEvent) => {
+				if (!enabled || index < 0 || index >= (current.list ?? []).length) return;
+				const mode = num(current.state.MultiSelect);
+				if (mode === 0) return send({ t: "select", control: name, index });
+				const selected = (current.list ?? []).map((_, i) => !!current.selected?.[i]);
+				if (mode === 1 || e?.ctrlKey || e?.metaKey) {
+					// Multi: a click turns an item on or off; Extended with Ctrl the same.
+					selected[index] = !selected[index];
+					anchor = index;
+				} else if (e?.shiftKey && anchor >= 0) {
+					selected.forEach((_, i) => (selected[i] = i >= Math.min(anchor, index) && i <= Math.max(anchor, index)));
+				} else {
+					selected.forEach((_, i) => (selected[i] = i === index));
+					anchor = index;
+				}
+				send({ t: "select", control: name, index, selected });
+			};
+			box.addEventListener("click", (e) => {
+				const row = (e.target as HTMLElement).closest<HTMLElement>(".lb-row");
+				if (row) choose(Number(row.dataset.index), e);
 			});
-			view.update = (s, enabled) => {
-				const list = (s.list ?? []).map((row) => row.join("  "));
-				select.multiple = num(s.state.MultiSelect) !== 0;
-				select.size = Math.max(2, list.length);
-				fillOptions(select, list);
-				const selected = s.selected ?? [];
-				[...select.options].forEach((o, i) => (o.selected = !!selected[i]));
-				if (!select.multiple && !selected.some(Boolean)) select.selectedIndex = -1;
-				select.disabled = !enabled || bool(s.state.Locked);
-				colors(select, s.state);
+			box.addEventListener("keydown", (e) => {
+				const count = (current.list ?? []).length;
+				const at = current.listIndex ?? -1;
+				const next = e.key === "ArrowDown" ? Math.min(count - 1, at + 1) : e.key === "ArrowUp" ? Math.max(0, at - 1) : e.key === "Home" ? 0 : e.key === "End" ? count - 1 : undefined;
+				if (next !== undefined) {
+					e.preventDefault();
+					if (num(current.state.MultiSelect) === 0) choose(next, e);
+					else send({ t: "select", control: name, index: next, selected: (current.list ?? []).map((_, i) => !!current.selected?.[i]) });
+				} else if (e.key === " " && num(current.state.MultiSelect) !== 0) {
+					e.preventDefault();
+					choose(at, e);
+				}
+			});
+			let drawn = "";
+			view.update = (s, on) => {
+				current = s;
+				enabled = on && !bool(s.state.Locked);
+				const rows = s.list ?? [];
+				const optionBox = num(s.state.ListStyle) === 1 ? (num(s.state.MultiSelect) !== 0 ? "check" : "option") : "";
+				const widths = columnLayout(s.state.ColumnCount, s.state.ColumnWidths, Math.max(0, num(s.state.Width) - 4), Math.max(1, ...rows.map((r) => r.length)));
+				const cells = widths.length > 1 || bool(s.state.ColumnHeads);
+				const key = JSON.stringify([rows, widths, cells, optionBox, bool(s.state.ColumnHeads)]);
+				if (key !== drawn) {
+					drawn = key;
+					while (box.firstChild) box.firstChild.remove();
+					const line = (row: string[], node: HTMLElement) => {
+						if (!cells) return void (el("span", "lb-text", node).textContent = row[0] ?? "");
+						widths.forEach((w, i) => {
+							const cell = el("span", "lb-cell", node);
+							cell.style.width = px(w);
+							cell.textContent = row[i] ?? "";
+						});
+					};
+					if (bool(s.state.ColumnHeads)) line([], el("div", "lb-heads", box));
+					rows.forEach((row, index) => {
+						const node = el("div", "lb-row", box);
+						node.dataset.index = String(index);
+						node.setAttribute("role", "option");
+						if (optionBox) el("span", `lb-box ${optionBox}`, node);
+						line(row, node);
+					});
+				}
+				[...box.querySelectorAll<HTMLElement>(".lb-row")].forEach((node, index) => {
+					node.classList.toggle("selected", !!s.selected?.[index]);
+					node.classList.toggle("current", index === s.listIndex);
+					node.setAttribute("aria-selected", String(!!s.selected?.[index]));
+				});
+				box.classList.toggle("disabled", !on);
+				colors(box, s.state);
 			};
 			break;
 		}
@@ -247,7 +357,7 @@ function create(c: ControlSnapshot): View {
 			focusable(view, button, name);
 			button.addEventListener("click", () => send({ t: "click", control: name }));
 			view.update = (s, enabled) => {
-				button.textContent = str(s.state.Caption);
+				captionWithPicture(button, str(s.state.Caption), s.picture, s.state.PicturePosition);
 				button.disabled = !enabled;
 				button.classList.toggle("default", bool(s.state.Default));
 				if (c.type === "ToggleButton") {
@@ -271,9 +381,9 @@ function create(c: ControlSnapshot): View {
 				send({ t: "click", control: name });
 			});
 			view.update = (s, enabled) => {
-				caption.textContent = str(s.state.Caption);
+				captionWithPicture(caption, str(s.state.Caption), s.picture, s.state.PicturePosition);
 				box.checked = s.state.Value === true;
-				box.indeterminate = s.state.Value === null;
+				label.classList.toggle("null", s.state.Value === null);
 				box.disabled = !enabled;
 				label.classList.toggle("disabled", !enabled);
 				colors(root, s.state, true);
@@ -349,6 +459,7 @@ function create(c: ControlSnapshot): View {
 				root.classList.toggle("has-caption", str(s.state.Caption) !== "");
 				colors(root, s.state);
 				caption.style.backgroundColor = root.style.backgroundColor;
+				background(content, s.picture, s.state);
 				const inset = contentInsets("Frame");
 				content.style.left = px(inset.left);
 				content.style.top = px(inset.top);
@@ -368,7 +479,7 @@ function create(c: ControlSnapshot): View {
 					if (page.Visible === false) return;
 					const tab = el("button", index === current ? "tab active" : "tab", tabs);
 					tab.type = "button";
-					tab.textContent = str(page.Caption) || str(page.Name);
+					el("span", "tab-text", tab).textContent = str(page.Caption) || str(page.Name);
 					tab.disabled = !enabled || page.Enabled === false;
 					tab.tabIndex = index === current ? 0 : -1;
 					tab.addEventListener("focus", () => {
@@ -378,16 +489,21 @@ function create(c: ControlSnapshot): View {
 					if (index === current) view.focus = tab;
 				});
 				colors(root, s.state);
-				const inset = contentInsets(c.type);
+				const inset = contentInsets(c.type, s.state.TabOrientation);
 				content.style.left = px(inset.left);
 				content.style.top = px(inset.top);
+				content.style.right = px(inset.right);
+				content.style.bottom = px(inset.bottom);
 			};
 			break;
 		}
 		case "Page": {
 			const content = el("div", "content", root);
 			view.content = content;
-			view.update = (s) => colors(root, s.state);
+			view.update = (s) => {
+				colors(root, s.state);
+				background(root, s.picture, s.state);
+			};
 			break;
 		}
 		default:
@@ -398,7 +514,7 @@ function create(c: ControlSnapshot): View {
 }
 
 /** The plain properties that change how any control looks (formRunner.css draws them). */
-function look(root: HTMLElement, s: ControlState, type: string): void {
+function look(root: HTMLElement, s: ControlState, type: string, mouseIcon?: string | null): void {
 	const effect = s.SpecialEffect;
 	if (typeof effect === "number") root.dataset.effect = String(effect);
 	else delete root.dataset.effect;
@@ -408,8 +524,10 @@ function look(root: HTMLElement, s: ControlState, type: string): void {
 	const border = oleToCss(s.BorderColor);
 	if (border) root.style.setProperty("--border-color", border);
 	else root.style.removeProperty("--border-color");
+	root.style.cursor = cursorOf(s.MousePointer, mouseIcon);
 	if (type === "MultiPage" || type === "TabStrip") {
 		for (const n of [0, 1, 2]) root.classList.toggle(`tab-style-${n}`, num(s.Style) === n);
+		for (const n of [1, 2, 3]) root.classList.toggle(`tab-orient-${n}`, num(s.TabOrientation) === n);
 	}
 }
 
@@ -431,6 +549,27 @@ function render(next: FormState, focus: string | undefined): void {
 	colors(client, form);
 	fontCss(client, form.Font as FontState | undefined);
 	frame.classList.toggle("disabled", form.Enabled === false);
+	// BorderStyle / BorderColor and SpecialEffect draw the edge of the client area.
+	client.classList.toggle("bordered", num(form.BorderStyle) === 1);
+	client.style.setProperty("--border-color", oleToCss(form.BorderColor) ?? "");
+	client.dataset.effect = String(num(form.SpecialEffect));
+	client.style.cursor = cursorOf(form.MousePointer, form.MouseIconData as string | undefined);
+	background(surface, form.PictureData as string | undefined, form);
+	// Zoom scales the controls; the scroll bars (ScrollBars, KeepScrollBarsVisible) scroll
+	// the area of ScrollWidth × ScrollHeight (0: the form's size).
+	const zoom = Math.min(400, Math.max(10, num(form.Zoom, 100))) / 100;
+	surface.style.zoom = String(zoom);
+	surface.style.width = px(Math.max(num(form.ScrollWidth), num(form.Width) / zoom));
+	surface.style.height = px(Math.max(num(form.ScrollHeight), num(form.Height) / zoom));
+	const bars = num(form.ScrollBars);
+	const keep = num(form.KeepScrollBarsVisible, 3);
+	client.style.overflowX = bars & 1 ? (keep & 1 ? "scroll" : "auto") : "hidden";
+	client.style.overflowY = bars & 2 ? (keep & 2 ? "scroll" : "auto") : "hidden";
+	const scrollTo = { left: (num(form.ScrollLeft) * 96 * zoom) / 72, top: (num(form.ScrollTop) * 96 * zoom) / 72 };
+	if (scrolled !== `${scrollTo.left},${scrollTo.top}`) {
+		scrolled = `${scrollTo.left},${scrollTo.top}`;
+		client.scrollTo(scrollTo);
+	}
 
 	const byName = new Map(next.controls.map((c) => [c.name.toLowerCase(), c]));
 	for (const [key, view] of views) {
@@ -458,7 +597,7 @@ function render(next: FormState, focus: string | undefined): void {
 	for (const c of next.controls) {
 		const view = views.get(c.name.toLowerCase()) as View;
 		const parent = c.parent ? views.get(c.parent.toLowerCase()) : undefined;
-		const home = parent?.content ?? client;
+		const home = parent?.content ?? surface;
 		if (view.root.parentElement !== home) home.appendChild(view.root);
 		const s = c.state;
 		if (c.type === "Page") {
@@ -475,7 +614,7 @@ function render(next: FormState, focus: string | undefined): void {
 		view.root.title = str(s.ControlTipText);
 		fontCss(view.root, s.Font);
 		view.update(c, enabledOf(c));
-		look(view.root, s, c.type);
+		look(view.root, s, c.type, c.mouseIcon);
 		if (view.focus) view.focus.tabIndex = s.TabStop === false ? -1 : num(s.TabIndex) + 1;
 	}
 	if (focus) {
