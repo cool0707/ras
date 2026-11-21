@@ -4,6 +4,8 @@
 //   node ras-main.js --list                               print the entry points as JSON
 //
 // Environment: RAS_COM_ADDON = path of the `ras_com` addon (Excel access),
+//              RAS_BOOK_ADDON = path of the `ras_book` addon: without Excel (no RAS_COM_ADDON), the
+//                              program works on the project's workbook read by it (spec §14.10.8).
 //              RAS_MOCK_HOST = path of a module that stands in for Excel (tests).
 //              RAS_DIALOGS   = what to do when Excel shows a dialog while a call waits for it:
 //                              notify (default; report it and bring it to the front),
@@ -32,6 +34,7 @@ function main(argv) {
         manifest,
         root: path.resolve(__dirname, /*@ROOT@*/),
         addon: process.env.RAS_COM_ADDON || null,
+        book: process.env.RAS_BOOK_ADDON || null,
         dialogs: process.env.RAS_DIALOGS || null,
         mock: process.env.RAS_MOCK_HOST ? path.resolve(process.env.RAS_MOCK_HOST) : null,
     });
