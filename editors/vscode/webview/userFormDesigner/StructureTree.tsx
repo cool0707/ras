@@ -8,6 +8,8 @@ import type {
   DesignerStrings,
 } from "../../src/userForm/protocol";
 import { Icon } from "./Icon";
+import { ControlIcon, isControlIconName } from "./ControlIcon";
+import { controlMetadata } from "../../src/userForm/toolbox";
 
 interface TreeEntry {
   id: string;
@@ -60,11 +62,17 @@ function createTree(document: DesignerDocument) {
   return { root, entries };
 }
 
-function iconName(entry: TreeEntry): string {
-  if (!entry.control) return "symbol-namespace";
-  if (entry.control.type.toLowerCase() === "frame") return "symbol-class";
-  if (entry.control.type.toLowerCase() === "page") return "file-directory";
-  return "symbol-field";
+function entryIcon(entry: TreeEntry) {
+  if (!entry.control) return <Icon name="symbol-namespace" />;
+  const type = entry.control.type.toLowerCase();
+  const name = ["Page", ...controlMetadata.map((control) => control.type)].find(
+    (candidate) => candidate.toLowerCase() === type,
+  );
+  return name && isControlIconName(name) ? (
+    <ControlIcon name={name} />
+  ) : (
+    <Icon name="symbol-field" />
+  );
 }
 
 export function StructureTree({
@@ -366,7 +374,7 @@ export function StructureTree({
               aria-hidden="true"
             />
           )}
-          <Icon name={iconName(entry)} />
+          {entryIcon(entry)}
           <span class="structure-tree-label">{label}</span>
           {!isRoot && <span class="structure-tree-type">{entry.control?.type}</span>}
         </div>

@@ -1810,7 +1810,8 @@ body.vscode-high-contrast-light button {
 .structure-tree-disclosure-empty {
   cursor: default;
 }
-.structure-tree-row > .codicon {
+.structure-tree-row > .codicon,
+.structure-tree-row > .control-icon {
   flex-shrink: 0;
 }
 .property-modal-backdrop {
@@ -2377,4 +2378,13 @@ body.vscode-high-contrast-light button {
   height: 100%;
   display: block;
   pointer-events: none;
+}
+.control-icon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+.control-icon .fill {
+  fill: currentColor;
+  stroke: none;
 }
