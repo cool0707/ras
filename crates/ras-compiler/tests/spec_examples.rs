@@ -526,11 +526,18 @@ function onSheet1Change(target: Excel.Range) { target.interior.color = 255; }
         "Private Sub Worksheet_Change(ByVal Target As Range)\n    Static ras_busy1 As Boolean\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    If Not ras_busy1 Then\n        ras_busy1 = True\n        Report.onSheet1Change Target\n        ras_busy1 = False\n    End If\n    Exit Sub\n",
     );
     let wb = code(&out, "ThisWorkbook");
-    assert_contains(&wb, "Private Sub Workbook_Open()\n    Application.OnTime Now, \"'\" & ThisWorkbook.Name & \"'!RAS_DeferredInit\"\nEnd Sub\n");
-    assert_contains(&wb, "Private Sub Workbook_Activate()");
+    assert_contains(&wb, "Private Sub Workbook_Open()\n    RAS_WorkbookOpen\nEnd Sub\n");
+    // What `Workbook_Open` left while the workbook was leaving the protected view.
+    assert_contains(&wb, "Private Sub Workbook_Activate()\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    RAS_OpenDeferred\n    Exit Sub\n");
+    assert_contains(&wb, "Private Sub Workbook_WindowActivate(ByVal Wn As Window)\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    RAS_OpenDeferred\n    Exit Sub\n");
+    // No `Application.OnTime`: Excel opens a workbook again to make a call it was asked for.
+    assert!(!out.files.iter().any(|f| f.code.contains("OnTime")));
     let glue = code(&out, "RAS_Glue");
     assert_contains(&glue, "Public Sub RAS_InitAll(Optional ByVal ras_dummy As Long = 0&)\n    Report.RAS_ModInit\n    Report.prepare\nEnd Sub\n");
     assert_contains(&glue, "Public Sub RAS_DeferredInit()\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    Report.setup\n");
+    assert_contains(&glue, "Public Sub RAS_WorkbookOpen()\n    If RAS_InProtectedView() Then\n        ras_open_deferred = True\n    Else\n        RAS_DeferredInit\n    End If\nEnd Sub\n");
+    assert_contains(&glue, "Public Sub RAS_OpenDeferred()\n    If Not ras_open_deferred Then Exit Sub\n    ras_open_deferred = False\n    RAS_DeferredInit\nEnd Sub\n");
+    assert_contains(&glue, "    Set w = app.ProtectedViewWindows.Item(ThisWorkbook.Name)\n    RAS_InProtectedView = Not w Is Nothing\nEnd Function\n");
     assert_contains(&glue, "Public Sub Auto_Open()\n    RAS_EnsureInit\nEnd Sub\n");
     assert_contains(&code(&out, "RAS_Runtime"), "    RAS_Glue.RAS_InitAll\n");
     // Document modules are not importable files and carry no hash line.

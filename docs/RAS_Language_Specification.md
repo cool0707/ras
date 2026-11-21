@@ -1209,9 +1209,9 @@ function onAnySheetChange(sh: object, target: Excel.Range) { ... }
 
 RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化済みフラグで1回に制限する。
 
-1. `Workbook_Open`（即時実行せず `Application.OnTime Now, "RAS_DeferredInit"` で遅延実行し、ウィンドウ準備前の失敗を避ける）
+1. `Workbook_Open`。その場で初期化し、`@on("Workbook.Open")` のハンドラを呼ぶ。ただし、ブックが保護ビューから出るところ（「編集を有効にする」）なら、次の `Workbook_Activate` / `Workbook_WindowActivate` まで遅らせる。このときの `Workbook_Open` は保護ビューのブックが閉じる前に起き、オブジェクト モデルの呼び出し（`Range.Select` など）がエラー 1004 になるため（Microsoft「Object Model calls may fail from WorkbookOpen event when exiting Protected View」の回避策と同じ。保護ビューにあるかは `Application.ProtectedViewWindows` で調べる）。`Application.OnTime` での遅延は使わない: 予約した呼び出しの前にブックが閉じられると、Excel は呼び出すためにブックを開き直し（マクロの中で開いてすぐ閉じた場合など）、閉じる途中のイベントからは予約を取り消せない
 2. `Auto_Open`
-3. `Workbook_Activate` / `Workbook_WindowActivate`
+3. `Workbook_Activate` / `Workbook_WindowActivate`（1 で遅らせたハンドラもここで呼ぶ）
 4. すべてのマクロ入口（`@macro` / `export` された引数なし Sub、ボタン・リボンのコールバック）の先頭
 5. リボンの `onLoad` コールバック
 
@@ -1280,7 +1280,7 @@ RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化�
 
 * **大文字小文字の非区別:** VBA は大小を区別せず、VBE が宣言時の大小で全モジュールを書き換える（`Value` を変数名にすると `.value` が全部書き換わる等）。RAS は大小のみ異なる識別子をエラーにする。また VBA 組み込みメンバ名（`Value`, `Name`, `Count`, `Item` 等）や同梱の型定義のグローバル（`Range`, `Workbooks`, `Left` 等）とローカル変数名が衝突する場合は自動リネームする（`value` → `value_`、`const range = ws.range("A1")` → `range_`）。
 * **ホストの名前の綴り:** RAS のソースでは camelCase（`ws.cells`）、生成する VBA ではタイプ ライブラリの綴り（`ws.Cells`）を使う（§15.3.1）。
-* **予約語・組み込み関数名との衝突:** `Date`, `Name`, `Type`, `Error`, `Len` 等と同名の識別子は自動リネームする。
+* **予約語・組み込み関数名との衝突:** `Date`, `Name`, `Type`, `Error`, `Len` 等と同名の識別子は自動リネームする。モジュールの関数・変数が VBA の関数（`Left`, `Trim`, `Format`, `Replace` 等）と同名の場合も、末尾に `_` を付ける（`function left()` → `left_`。マクロの名前も `left_` になる）。そのままでは VBA の関数がプロジェクト全体で隠され、`Left$(s, 1)` のような呼び出しがコンパイル エラーになるため。クラスのメンバーは対象外。
 * **公開名の衝突:** 複数モジュールで同名の `Public` 関数がある場合、呼び出しを常に `モジュール名.関数名` で修飾して出力する。
 * **文字列で指定される名前:** `Application.Run "name"`, `OnTime`, リボンコールバック、`@on` で生成されるハンドラ名は、存在確認を行い、リネーム・インライン除去の対象外にする。
 

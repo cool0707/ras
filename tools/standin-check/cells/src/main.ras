@@ -1,0 +1,251 @@
+// The scenarios of crates/ras-book/tests/excel.rs, run on the stand-in and on Excel itself
+// by Check-StandIn.ps1.
+
+function dump(r: Excel.Range): string {
+    let out = "";
+    let rows = 0;
+    for (const row of r.rows) {
+        let line = "";
+        let cells = 0;
+        for (const c of row.cells) {
+            if (cells > 0) line += "|";
+            line += c.text;
+            cells++;
+        }
+        if (rows > 0) out += " / ";
+        out += line;
+        rows++;
+    }
+    return out;
+}
+
+export function lastRow(this: Excel.Worksheet, col: int = 1): int {
+    return this.cells(this.rows.count, col).end(xlUp).row;
+}
+
+export function rebuild() {
+    const ws = Sheet1;
+    const last = ws.lastRow();
+    let total = 0.0;
+    for (let r = 2; r <= last; r++) {
+        const price: double = ws.cells(r, 3).value;
+        const qty: double = ws.cells(r, 4).value;
+        total += price * qty;
+    }
+    for (let r = 2; r <= last; r++) {
+        ws.cells(r, 5).formula = `=ROUND(C${r}*D${r}*1.1,0)`;
+    }
+    ws.range("E1").value = "税込";
+    ws.range("F1").formula = "=SUM(E:E)";
+    console.log(`last=${last} total=${total} sum=${ws.range("F1").value}`);
+    // Formulas follow what the program writes next.
+    ws.cells(2, 4).value = 10;
+    console.log(`E2=${ws.range("E2").value} F1=${ws.range("F1").value} formula=${ws.range("E2").formula}`);
+    console.log(`used=${ws.usedRange.address} region=${ws.range("B2").currentRegion.address(false, false)}`);
+    console.log(`match=${application.worksheetFunction.match("B社", ws.range("A:A"), 0)} count=${application.worksheetFunction.countIf(ws.range("A2:A4"), "*社")}`);
+    const hit = ws.range("A1:A10").find("C社");
+    console.log(`find=${hit.address} next=${ws.cells(1, 1).end(xlDown).address}`);
+    let names = "";
+    for (const c of ws.range("A2:A4")) names += `${c.value};`;
+    console.log(`names=${names} text=${ws.range("C3").text}`);
+}
+
+export function dates() {
+    const ws = Sheet1;
+    ws.range("G1").value = "2026/3/4";
+    const v = ws.range("G1").value;
+    console.log(`${typeName(v)} ${v} ${ws.range("G1").numberFormat} ${ws.range("G1").value2}`);
+    ws.range("G2").value = dateSerial(2026, 1, 31);
+    ws.range("G3").formula = "=G2+1";
+    console.log(`${ws.range("G3").text} ${typeName(ws.range("G2").value)}`);
+}
+
+export function sheets() {
+    const added = thisWorkbook.worksheets.add(undefined, Sheet1);
+    added.name = "集計";
+    added.range("A1").formula = "=SUM(Sheet1!C2:C4)";
+    Sheet1.name = "売上";
+    console.log(`${thisWorkbook.worksheets.count} ${added.index} ${added.range("A1").formula} ${added.range("A1").value}`);
+    for (const s of thisWorkbook.worksheets) console.log(`- ${s.name} (${s.codeName})`);
+}
+
+export function failing() {
+    try {
+        application.run("手書きのマクロ");
+    } catch (e) {
+        console.log(`${e.code}: ${e.description}`);
+    }
+    try {
+        application.worksheetFunction.vLookup("X社", Sheet1.range("A2:D4"), 2, false);
+    } catch (e) {
+        console.log(`${e.code}: ${e.description}`);
+    }
+    console.log(`${typeName(application.vLookup("X社", Sheet1.range("A2:D4"), 2, false))}`);
+}
+
+export function insertAndDelete() {
+    const ws = Sheet1;
+    ws.range("F1").formula = "=SUM(C2:C4)";
+    ws.range("A2:D2").font.bold = true;
+    ws.rows(3).insert();
+    console.log(`${dump(ws.range("A1:D5"))}`);
+    console.log(`${ws.range("F1").formula} ${ws.range("F1").value} bold=${ws.range("A3").font.bold},${ws.range("A4").font.bold}`);
+    ws.range("B2").insert(xlShiftToRight);
+    console.log(`${dump(ws.range("A2:E2"))}`);
+    ws.range("B2").delete(xlShiftToLeft);
+    ws.columns("B").delete();
+    ws.range("A3").entireRow.delete();
+    console.log(`${dump(ws.range("A1:C4"))} ${ws.range("E1").formula}`);
+    // Rows deleted from the bottom up, as macros do.
+    for (let r = ws.cells(ws.rows.count, 1).end(xlUp).row; r >= 2; r--) {
+        if (ws.cells(r, 3).value < 4) ws.rows(r).delete();
+    }
+    console.log(`${dump(ws.usedRange)}`);
+}
+
+export function clipboard() {
+    const ws = Sheet1;
+    ws.range("E2").formula = "=C2*D2";
+    ws.range("E2").interior.color = rgb(255, 0, 0);
+    ws.range("E2").copy();
+    console.log(`mode=${application.cutCopyMode}`);
+    ws.range("E3:E4").pasteSpecial(xlPasteFormulas);
+    console.log(`${ws.range("E4").formula} ${ws.range("E4").value} color=${ws.range("E4").interior.colorIndex} ${ws.range("E2").interior.color}`);
+    ws.range("E2:E4").copy();
+    ws.range("G2").pasteSpecial(xlPasteValues);
+    ws.range("G6").pasteSpecial(paste: xlPasteValues, transpose: true);
+    application.cutCopyMode = 0;
+    console.log(`${ws.range("G3").formula} ${ws.range("G2").interior.colorIndex} ${dump(ws.range("G6:I6"))} ${ws.range("H6").formula} mode=${application.cutCopyMode}`);
+    // Cut and paste: the references follow the cells.
+    ws.range("H1").formula = "=C2+1";
+    ws.range("C2:C4").cut();
+    ws.paste(ws.range("K2"));
+    console.log(`${ws.range("H1").formula} ${ws.range("E2").formula} ${ws.range("C2").value == null} ${ws.range("K3").text} sel=${selection.address(false, false)}`);
+    // Writing a value leaves the copy, clearing cells ends it, as in Excel.
+    ws.range("A2").copy();
+    ws.range("J9").value = 1;
+    console.log(`mode=${application.cutCopyMode}`);
+    ws.range("J9").clearContents();
+    try {
+        ws.range("A9").pasteSpecial(xlPasteValues);
+    } catch (e) {
+        console.log(`${e.code} mode=${application.cutCopyMode}`);
+    }
+    // Insert copied cells.
+    ws.rows(2).copy();
+    ws.rows(4).insert();
+    console.log(`${dump(ws.range("A2:B5"))}`);
+}
+
+export function sortAndFilter() {
+    const ws = Sheet1;
+    ws.range("A1:D4").sort(ws.range("C1"), xlDescending, header: xlYes);
+    console.log(`${dump(ws.range("A1:A4"))}`);
+    ws.sort.sortFields.clear();
+    ws.sort.sortFields.add(ws.range("B2:B4"), order: xlAscending);
+    ws.sort.sortFields.add(ws.range("A2:A4"), order: xlDescending);
+    ws.sort.setRange(ws.range("A1:D4"));
+    ws.sort.header = xlYes;
+    ws.sort.apply();
+    console.log(`${dump(ws.range("A1:B4"))}`);
+
+    ws.range("F1").formula = "=SUBTOTAL(109,D2:D4)";
+    ws.range("A1").autoFilter(2, "佐藤");
+    console.log(`filter=${ws.autoFilterMode},${ws.filterMode} ${ws.autoFilter.range.address} hidden=${ws.rows(2).hidden},${ws.rows(3).hidden} sub=${ws.range("F1").value}`);
+    const shown = ws.range("A2:D4").specialCells(xlCellTypeVisible);
+    console.log(`${shown.address(false, false)} areas=${shown.areas.count} count=${shown.count}`);
+    shown.copy(ws.range("A10"));
+    console.log(`${dump(ws.range("A10:D11"))}`);
+    ws.range("A1").autoFilter(4, ">=3", xlAnd, "<10");
+    console.log(`${ws.range("A2:A4").specialCells(xlCellTypeVisible).address(false, false)}`);
+    ws.showAllData();
+    console.log(`filter=${ws.autoFilterMode},${ws.filterMode} ${ws.rows("2:4").hidden}`);
+    ws.range("A1").autoFilter(1, ["A社", "C社"], xlFilterValues);
+    console.log(`${ws.range("A2:A4").specialCells(xlCellTypeVisible).address(false, false)}`);
+    ws.autoFilterMode = false;
+    console.log(`filter=${ws.autoFilterMode} ${ws.rows("2:4").hidden}`);
+    try {
+        ws.range("H1:H3").specialCells(xlCellTypeConstants);
+    } catch (e) {
+        console.log(`${e.code}: ${e.description}`);
+    }
+    const u = union(ws.range("A1"), ws.range("C1:C2"), ws.range("A2"));
+    u.font.italic = true;
+    console.log(`${u.address(false, false)} ${u.count} ${ws.range("C2").font.italic} ${ws.range("B1").font.italic} ${intersect(u, ws.range("A1:B9")).address(false, false)}`);
+    ws.range("A1:D4").removeDuplicates(2, xlYes);
+    console.log(`${dump(ws.range("A1:B4"))}`);
+}
+
+export function formats() {
+    const ws = Sheet1;
+    const head = ws.range("A1:D1");
+    head.font.bold = true;
+    head.font.color = rgb(255, 255, 255);
+    head.interior.color = rgb(0, 112, 192);
+    head.horizontalAlignment = xlCenter;
+    head.borders(xlEdgeBottom).lineStyle = xlContinuous;
+    head.borders(xlEdgeBottom).weight = xlMedium;
+    ws.range("A2:D4").borders.lineStyle = xlContinuous;
+    ws.columns("A").columnWidth = 20;
+    ws.rows(1).rowHeight = 24;
+    ws.range("F1:G1").merge();
+    ws.columns("D").hidden = true;
+    console.log(`${head.font.bold} ${head.interior.color} ${ws.range("A1:A2").font.bold == null} ${ws.range("B3").borders(xlEdgeTop).lineStyle} ${ws.range("G1").mergeArea.address} ${ws.range("A1").columnWidth}`);
+    thisWorkbook.save();
+}
+
+export function manual() {
+    const ws = Sheet1;
+    ws.range("F1").formula = "=SUM(D2:D4)";
+    application.calculation = xlCalculationManual;
+    ws.range("D2").value = 100;
+    console.log(`${ws.range("F1").value}`);
+    application.calculate();
+    console.log(`${ws.range("F1").value}`);
+    using _ = fastMode();
+    ws.range("D2").value = 200;
+    console.log(`${ws.range("F1").value} ${application.calculation == xlCalculationManual}`);
+}
+
+export function more() {
+    const ws = Sheet1;
+    // Several areas by address; deleting rows of several areas.
+    const picked = ws.range("A2:A2,A4:A4");
+    console.log(`${picked.address(false, false)} ${picked.areas.count} ${picked.entireRow.address(false, false)}`);
+    picked.entireRow.delete();
+    console.log(`${dump(ws.range("A1:B3"))}`);
+    // Fill down: formulas move, formats come along.
+    ws.range("E2").formula = "=C2*2";
+    ws.range("E2").font.bold = true;
+    ws.range("A3:B4").value = [["D社", "田中"], ["E社", "山田"]];
+    ws.range("C3:D4").value = [[10, 1], [20, 2]];
+    ws.range("E2:E4").fillDown();
+    console.log(`${ws.range("E4").formula} ${ws.range("E4").value} ${ws.range("E4").font.bold}`);
+    // Sorting with the headings guessed, from one cell.
+    ws.range("A1").sort(key1: ws.range("C1"), order1: xlDescending, header: xlGuess);
+    console.log(`${dump(ws.range("A1:A4"))} ${ws.range("E2").formula}`);
+    // Cut cells inserted elsewhere: the rows change places.
+    ws.rows(4).cut();
+    ws.rows(2).insert();
+    console.log(`${dump(ws.range("A1:A4"))} mode=${application.cutCopyMode}`);
+    // An advanced filter: in place, then copied out.
+    ws.range("G1:G2").value = [["数量"], [">1"]];
+    ws.range("A1:D4").advancedFilter(xlFilterInPlace, ws.range("G1:G2"));
+    console.log(`${ws.filterMode} ${ws.range("A2:A4").specialCells(xlCellTypeVisible).address(false, false)}`);
+    ws.showAllData();
+    ws.range("A1:D4").advancedFilter(xlFilterCopy, ws.range("G1:G2"), ws.range("I1"), true);
+    console.log(`${dump(ws.range("I1:L3"))}`);
+    // Borders as a collection, and around a range.
+    ws.range("A1:B2").borderAround(xlContinuous, xlThick);
+    console.log(`${ws.range("A1").borders(xlEdgeLeft).weight == xlThick} ${ws.range("B1").borders.item(xlEdgeLeft).lineStyle == xlLineStyleNone}`);   // themeColor: probe.ras
+    // A copy of the sheet, and another workbook.
+    Sheet1.copy(after: Sheet1);
+    const copy = thisWorkbook.worksheets(2);
+    console.log(`${copy.name} ${copy.range("A2").value} ${copy.range("E2").formula} ${activeSheet.name}`);
+    const other = workbooks.add();
+    ws.range("A1:E3").copy(other.worksheets(1).range("B2"));
+    const pasted = other.worksheets(1);
+    console.log(`${pasted.range("B4").value} ${pasted.range("F3").formula} ${pasted.range("D4").numberFormat}`);
+    other.close(false);
+    console.log(`${workbooks.count} ${activeWorkbook.name}`);
+}

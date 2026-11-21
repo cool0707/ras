@@ -185,7 +185,7 @@ impl Server {
             // Above the declaration with its decorators (the first statement for top-level code).
             let range = Self::range(prog, m, ras_syntax::TextRange::empty(decl.span.start()));
             if cfg!(windows) && d.is_macro_entry() {
-                let name = format!("{}.{}", md.vba_name, ras_compiler::names::member_ident(&d.name));
+                let name = format!("{}.{}", md.vba_name, d.proc_ident());
                 lenses.push(json!({ "range": range, "command": { "title": "$(play) Excelで実行", "tooltip": format!("{name} を Excel で実行します（ブックへ同期してから実行）"), "command": "ras.client.runMacro", "arguments": [name] } }));
             }
             let entry = format!("{}.{}", md.vba_name, d.name);

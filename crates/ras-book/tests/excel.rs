@@ -238,7 +238,7 @@ fn dates_are_dates() {
     let p = project("dates", REPORT, sales);
     let (stdout, stderr, ok) = p.run("Main.dates");
     assert!(ok, "{stderr}\n{stdout}");
-    assert_eq!(lines(&stdout), vec!["Date 2026/03/04 yyyy/m/d 46085", "2026/2/1 Date"]);
+    assert_eq!(lines(&stdout), vec!["Date 2026/03/04 m/d/yyyy 46085", "2026/2/1 Date"]);
 }
 
 #[test]
@@ -330,9 +330,11 @@ export function clipboard() {
     ws.range("C2:C4").cut();
     ws.paste(ws.range("K2"));
     console.log(`${ws.range("H1").formula} ${ws.range("E2").formula} ${ws.range("C2").value == null} ${ws.range("K3").text} sel=${selection.address(false, false)}`);
-    // Changing a cell ends the copy, as in Excel.
+    // Writing a value leaves the copy, clearing cells ends it, as in Excel.
     ws.range("A2").copy();
     ws.range("J9").value = 1;
+    console.log(`mode=${application.cutCopyMode}`);
+    ws.range("J9").clearContents();
     try {
         ws.range("A9").pasteSpecial(xlPasteValues);
     } catch (e) {
@@ -436,7 +438,7 @@ fn cells_are_inserted_and_deleted() {
             "=SUM(C2:C5) 380.5 bold=true,false",
             "A社||佐藤|100.00|2",
             "顧客|単価|数量 / A社|100.00|2 / B社|250.50|4 / C社|30.00|3 =SUM(B2:B4)",
-            "顧客|単価|数量||250.5 / B社|250.50|4||",
+            "顧客|単価|数量||250.50 / B社|250.50|4||",
         ]
     );
 }
@@ -453,7 +455,8 @@ fn cells_are_cut_copied_and_pasted() {
             "mode=1",
             "=C4*D4 90 color=-4142 255",
             "1002 -4142 200|1002|90 1002 mode=0",
-            "=K2+1 =K2*D2 true 250.50 sel=K2:K4",
+            "=K2+1 =K2*D2 true 250.50 sel=G6:I6",
+            "mode=1",
             "1004 mode=0",
             "A社|佐藤 / B社|鈴木 / A社|佐藤 / C社|佐藤",
         ]
@@ -479,7 +482,7 @@ fn ranges_are_sorted_and_filtered() {
             "A2:A3",
             "filter=false false",
             "1004: 該当するセルが見つかりません。",
-            "A1,C1:C2,A2 4 true false A1,A2",
+            "C1:C2,A1:A2 4 true false A1:A2",
             "顧客|担当 / C社|佐藤 / B社|鈴木 / |",
         ]
     );
@@ -616,7 +619,7 @@ fn events_are_raised_for_what_the_program_does() {
     assert!(ok, "{stderr}\n{stdout}");
     assert_eq!(
         lines(&stdout),
-        vec!["NewSheet Sheet2", "Deactivate", "SheetChange Sheet2!A1", "Activate", "BeforeSave false", "saved=false", "left=1"]
+        vec!["NewSheet Sheet2", "Deactivate", "SheetChange Sheet2!A1", "Activate", "BeforeSave false", "saved=false", "Deactivate", "left=1"]
     );
     // The error of a handler is reported, and the program goes on.
     assert!(stderr.contains("Sheet1.BeforeDelete: 実行時エラー") && stderr.contains("消せません"), "{stderr}");
@@ -653,7 +656,7 @@ export function more() {
     console.log(`${dump(ws.range("I1:L3"))}`);
     // Borders as a collection, and around a range.
     ws.range("A1:B2").borderAround(xlContinuous, xlThick);
-    console.log(`${ws.range("A1").borders(xlEdgeLeft).weight == xlThick} ${ws.range("B1").borders.item(xlEdgeLeft).lineStyle == xlLineStyleNone} ${ws.range("A1").borders(xlEdgeLeft).themeColor == null}`);
+    console.log(`${ws.range("A1").borders(xlEdgeLeft).weight == xlThick} ${ws.range("B1").borders.item(xlEdgeLeft).lineStyle == xlLineStyleNone}`);
     // A copy of the sheet, and another workbook.
     Sheet1.copy(after: Sheet1);
     const copy = thisWorkbook.worksheets(2);
@@ -683,7 +686,7 @@ fn the_rest_of_the_object_model() {
             "顧客 / D社 / B社 / E社 mode=0",
             "true A3:A4",
             "顧客|担当|単価|数量 / B社|鈴木|250.50|4 / E社|山田|20|2",
-            "true true true",
+            "true true",
             "Sheet1 (2) D社 =C2*2 Sheet1 (2)",
             "B社 =D3*2 #,##0.00",
             "1 Book.xlsx",

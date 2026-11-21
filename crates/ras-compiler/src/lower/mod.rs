@@ -467,7 +467,7 @@ impl<'p> Lowerer<'p> {
         }
         for &f in &md.fns {
             if prog.fns[f].attrs.init {
-                self.init_calls.push(format!("{}.{}", md.vba_name, names::member_ident(&prog.fns[f].name)));
+                self.init_calls.push(format!("{}.{}", md.vba_name, prog.fns[f].proc_ident()));
                 self.force_public.insert(f);
             }
         }
@@ -638,7 +638,7 @@ impl<'p> Lowerer<'p> {
                 }
                 let public = d.exported || self.force_public_vars.contains(&v);
                 let vis = if public { "Public" } else { "Private" };
-                let name = names::member_ident(&d.name);
+                let name = names::module_ident(&d.name);
                 let (ty, arr) = self.vtype(&d.ty);
                 if let Some(c) = self.const_literal(v) {
                     lines.push(format!("{vis} Const {name} As {ty} = {c}"));
@@ -781,7 +781,7 @@ impl<'p> Lowerer<'p> {
                 format!("{}_{}", names::member_ident(&self.prog.classes[*class].name), def.name)
             }
             FnKind::Host { .. } => def.vba_name().to_string(),
-            _ => names::member_ident(&def.name),
+            _ => def.proc_ident(),
         };
         if let FnKind::Declare { .. } = def.kind {
             if self.prog.modules[def.module].kind == ModuleKind::Std {
@@ -837,7 +837,7 @@ impl<'p> Lowerer<'p> {
         if d.declared {
             return VExpr::Name(d.vba_name().to_string());
         }
-        let name = names::member_ident(&d.name);
+        let name = names::module_ident(&d.name);
         let same_module = d.module == self.pc.emit_module && !self.pc.in_class && !self.pc.in_closure;
         if same_module {
             return VExpr::Name(name);
@@ -1050,7 +1050,7 @@ impl<'p> Lowerer<'p> {
             self.out[mi].procs.push(p);
         }
         if def.is_macro_entry() {
-            self.macros.push(format!("{}.{}", prog.modules[def.module].vba_name, names::member_ident(&def.name)));
+            self.macros.push(format!("{}.{}", prog.modules[def.module].vba_name, def.proc_ident()));
         }
     }
 
@@ -1587,7 +1587,7 @@ impl<'p> Lowerer<'p> {
                 let mut locals = Vec::new();
                 for (i, (h, reentrant)) in handlers.iter().enumerate() {
                     let d = &prog.fns[*h];
-                    let target = VExpr::Name(prog.modules[d.module].vba_name.clone()).member(names::member_ident(&d.name));
+                    let target = VExpr::Name(prog.modules[d.module].vba_name.clone()).member(d.proc_ident());
                     let args: Vec<VExpr> = sig.iter().take(d.params.len()).map(|p| vname(p.0)).collect();
                     let call = VStmt::Call { target, args };
                     if *reentrant || (is_wb && ev == "Open") {
@@ -1602,8 +1602,9 @@ impl<'p> Lowerer<'p> {
                 let proc_name = format!("{}_{ev}", if is_wb { "Workbook" } else { "Worksheet" });
                 let mut body = Vec::new();
                 if is_wb && ev == "Open" {
-                    // Deferred so that windows are ready (spec §12.3 path 1).
-                    body.push(VStmt::Raw("Application.OnTime Now, \"'\" & ThisWorkbook.Name & \"'!RAS_DeferredInit\"".into()));
+                    // At once, or when the workbook is activated if it is leaving the protected
+                    // view (spec §12.3 path 1).
+                    body.push(call_stmt("RAS_WorkbookOpen", vec![]));
                     deferred_open = calls;
                 } else {
                     for flag in &locals {
@@ -1611,6 +1612,10 @@ impl<'p> Lowerer<'p> {
                     }
                     body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
                     body.push(call_stmt("RAS_EnsureInit", vec![]));
+                    if is_wb && needs_init && (ev == "Activate" || ev == "WindowActivate") {
+                        // What `Workbook_Open` left for now (the workbook was in the protected view).
+                        body.push(call_stmt("RAS_OpenDeferred", vec![]));
+                    }
                     body.extend(calls);
                     body.push(VStmt::Exit("Sub"));
                     body.push(VStmt::Label("RAS_OnError".into()));
@@ -1633,6 +1638,32 @@ impl<'p> Lowerer<'p> {
             body.push(call_stmt("RAS_EventError", vec![lit("\"Workbook.Open\""), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
             let simple = |name: &str, body: Vec<VStmt>| VProc { kind: ProcKind::Sub, public: true, friend: false, name: name.into(), params: vec![], ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None };
             self.out[ri].procs.push(simple("RAS_DeferredInit", body));
+            // `Workbook_Open` while the workbook leaves the protected view ("Enable Editing") comes
+            // before Excel is ready for it: calls of the object model fail with error 1004. As
+            // Microsoft says to ("Object Model calls may fail from WorkbookOpen event when exiting
+            // Protected View"), what the event does then waits for `Workbook_Activate`. Not
+            // `Application.OnTime`: Excel opens a workbook again to make a call it was asked for,
+            // when the workbook is closed before it, and the call cannot be taken back while the
+            // workbook closes (seen with Excel 2021).
+            self.out[ri].decls.push("Private ras_open_deferred As Boolean".into());
+            let open = vec![VStmt::Raw("If RAS_InProtectedView() Then".into()), VStmt::Raw("    ras_open_deferred = True".into()), VStmt::Raw("Else".into()), VStmt::Raw("    RAS_DeferredInit".into()), VStmt::Raw("End If".into())];
+            self.out[ri].procs.push(simple("RAS_WorkbookOpen", open));
+            let later = vec![VStmt::Raw("If Not ras_open_deferred Then Exit Sub".into()), VStmt::Raw("ras_open_deferred = False".into()), VStmt::Raw("RAS_DeferredInit".into())];
+            self.out[ri].procs.push(simple("RAS_OpenDeferred", later));
+            // Late-bound: Excel 2007 has no protected view (and no `ProtectedViewWindows`).
+            let in_view = vec![
+                VStmt::Raw("Dim app As Object".into()),
+                VStmt::Raw("Dim w As Object".into()),
+                VStmt::Raw("On Error Resume Next".into()),
+                VStmt::Raw("Set app = Application".into()),
+                VStmt::Raw("Set w = app.ProtectedViewWindows.Item(ThisWorkbook.Name)".into()),
+                VStmt::Raw("RAS_InProtectedView = Not w Is Nothing".into()),
+            ];
+            let mut f = simple("RAS_InProtectedView", in_view);
+            f.kind = ProcKind::Function;
+            f.public = false;
+            f.ret = Some("Boolean".into());
+            self.out[ri].procs.push(f);
             // spec §12.3 path 2
             self.out[ri].procs.push(simple("Auto_Open", vec![call_stmt("RAS_EnsureInit", vec![])]));
         }
@@ -1694,7 +1725,7 @@ impl<'p> Lowerer<'p> {
             // A function of the code-behind named like the event procedure would clash with it.
             for &f in &md.fns {
                 let d = &prog.fns[f];
-                if names::member_ident(&d.name).eq_ignore_ascii_case(&proc_name) {
+                if d.proc_ident().eq_ignore_ascii_case(&proc_name) {
                     self.diag(Severity::Error, m, d.name_span, "E0614", format!("関数 `{}` の名前はイベント プロシージャ `{proc_name}` と同じです。別の名前にしてください（`@on(\"{object}.{}\")` で受け取ります）", d.name, def.name));
                 }
             }
@@ -1703,13 +1734,13 @@ impl<'p> Lowerer<'p> {
             let mut locals = Vec::new();
             if object == "UserForm" && def.name == "Initialize" {
                 if let Some(f) = init_fn {
-                    calls.push(call_stmt(names::member_ident(&prog.fns[f].name), vec![]));
+                    calls.push(call_stmt(prog.fns[f].proc_ident(), vec![]));
                 }
             }
             for (i, (h, reentrant)) in handlers.iter().enumerate() {
                 let d = &prog.fns[*h];
                 let args: Vec<VExpr> = def.params.iter().take(d.params.len()).map(|p| vname(p.name.clone())).collect();
-                let call = VStmt::Call { target: VExpr::Name(names::member_ident(&d.name)), args };
+                let call = VStmt::Call { target: VExpr::Name(d.proc_ident()), args };
                 if *reentrant {
                     calls.push(call);
                 } else {

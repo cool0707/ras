@@ -37,6 +37,9 @@ const INTERIOR = new Set(["color", "colorindex", "pattern", "patterncolor"]);
 const BORDER = new Set(["linestyle", "weight", "color", "colorindex"]);
 const REMEMBERED = { themecolor: null, tintandshade: 0, themefont: 0, fontstyle: "標準", patterncolorindex: -4105, patterntintandshade: 0, style: "Normal" };
 const WORKBOOK = ["Workbook", "ThisWorkbook"];
+// `NumberFormatLocal` of a Japanese Excel, where it is not `NumberFormat`: the short date of the
+// system (the built-in formats 14 and 22) is spelled by `NumberFormat` as the United States do.
+const LOCAL_FORMATS = { General: "G/標準", "m/d/yyyy": "yyyy/m/d", "m/d/yyyy h:mm": "yyyy/m/d h:mm" };
 
 module.exports = function createExcel(rt, addon, options) {
     const { RasError, RDate, CVErr } = rt;
@@ -211,6 +214,10 @@ module.exports = function createExcel(rt, addon, options) {
                 const k = String(prop).toLowerCase();
                 if (known.has(k)) return range.$format(`${prefix}.${k}`);
                 if (memory.has(k)) return memory.get(k);
+                // The colour of the theme, where none was set: a border has none (Excel raises
+                // error 5), the text of a cell is the theme's first (2).
+                if (k === "themecolor" && typeName === "Border") return rt.raise(5);
+                if (k === "themecolor" && typeName === "Font") return 2;
                 return k in REMEMBERED ? REMEMBERED[k] : null;
             },
             set(t, prop, v) {
@@ -230,9 +237,13 @@ module.exports = function createExcel(rt, addon, options) {
     /**
      * What `Copy` and `Cut` without a destination took: the range itself, as in Excel (what is
      * pasted is what the cells have then). Only cells of the workbooks of this run: nothing
-     * comes from or goes to other applications. As in Excel, changing cells or their formats
-     * ends the cut or copy (`CutCopyMode` is 0 again, and `PasteSpecial` fails); pasting what
-     * was copied does not.
+     * comes from or goes to other applications. Some changes end the cut or copy (`CutCopyMode`
+     * is 0 again, and `PasteSpecial` fails), as they do in Excel (measured with Excel 2021,
+     * tools/standin-check): clearing cells, their fonts, number formats, borders and merging,
+     * deleting cells, sorting, filtering, filling down, a copy with a destination, a
+     * calculation, changing the calculation mode and saving. Writing values and formulas, the
+     * colour of the cells, the sizes of rows and columns and hiding them, selecting, adding and
+     * renaming sheets, and pasting what was copied do not.
      */
     let clip = null;
 
@@ -416,14 +427,14 @@ module.exports = function createExcel(rt, addon, options) {
             return rows.every((r) => r.every((v) => v === first)) ? first : null;
         }
         /** Changes every area with a call of the addon (`f` gets the area), without events. */
-        $each(f) {
-            clip = null;
+        $each(f, keepsClip) {
+            if (!keepsClip) clip = null;
             this.$sheet.$wb.$changed();
             for (const a of this.$list()) book(() => f(a, a.$book, a.$i));
         }
         /** Changes the cells of every area, and raises the events of a change. */
-        $write(f) {
-            this.$each(f);
+        $write(f, keepsClip) {
+            this.$each(f, keepsClip);
             changed(this);
         }
         $format(prop) {
@@ -431,7 +442,9 @@ module.exports = function createExcel(rt, addon, options) {
         }
         $setFormat(prop, v) {
             const data = toBook(v);
-            this.$each((a, b, i) => b.setFormat(i, ...a.$bounds(), prop, data));
+            // The colour of the cells and the sizes of rows and columns leave what was copied.
+            const keepsClip = prop.startsWith("interior.") || prop === "columnwidth" || prop === "rowheight";
+            this.$each((a, b, i) => b.setFormat(i, ...a.$bounds(), prop, data), keepsClip);
         }
         get $key() {
             return `${this.$r1},${this.$c1},${this.$r2},${this.$c2}`;
@@ -594,7 +607,7 @@ module.exports = function createExcel(rt, addon, options) {
         }
         set Value(v) {
             const data = toBook(v);
-            this.$write((a, b, i) => b.setValues(i, ...a.$bounds(), data));
+            this.$write((a, b, i) => b.setValues(i, ...a.$bounds(), data), true);
         }
         get Value2() {
             return this.$read("Value2");
@@ -607,14 +620,14 @@ module.exports = function createExcel(rt, addon, options) {
         }
         set Formula(v) {
             const data = toBook(v);
-            this.$write((a, b, i) => b.setFormulas(i, ...a.$bounds(), data, false));
+            this.$write((a, b, i) => b.setFormulas(i, ...a.$bounds(), data, false), true);
         }
         get Formula2() {
             return this.$read("Formula2");
         }
         set Formula2(v) {
             const data = toBook(v);
-            this.$write((a, b, i) => b.setFormulas(i, ...a.$bounds(), data, true));
+            this.$write((a, b, i) => b.setFormulas(i, ...a.$bounds(), data, true), true);
         }
         get FormulaLocal() {
             return this.Formula;
@@ -627,7 +640,7 @@ module.exports = function createExcel(rt, addon, options) {
         }
         set FormulaR1C1(v) {
             const data = toBook(v);
-            this.$write((a, b, i) => b.setFormulasR1C1(i, ...a.$bounds(), data));
+            this.$write((a, b, i) => b.setFormulasR1C1(i, ...a.$bounds(), data), true);
         }
         get HasFormula() {
             const rows = this.$get("Formula").flat();
@@ -646,10 +659,12 @@ module.exports = function createExcel(rt, addon, options) {
         }
         get NumberFormatLocal() {
             const f = this.NumberFormat;
-            return f === "General" ? "G/標準" : f;
+            return f in LOCAL_FORMATS ? LOCAL_FORMATS[f] : f;
         }
         set NumberFormatLocal(code) {
-            this.NumberFormat = rt.cstr(code) === "G/標準" ? "General" : code;
+            const local = rt.cstr(code);
+            const f = Object.keys(LOCAL_FORMATS).find((k) => LOCAL_FORMATS[k] === local);
+            this.NumberFormat = f === undefined ? code : f;
         }
         ClearContents() {
             this.$write((a, b, i) => b.clear(i, ...a.$bounds(), false));
@@ -661,6 +676,7 @@ module.exports = function createExcel(rt, addon, options) {
             this.$each((a, b, i) => b.clearFormats(i, ...a.$bounds()));
         }
         Calculate() {
+            clip = null;
             calculated(this.$sheet.$wb, true);
         }
 
@@ -674,6 +690,7 @@ module.exports = function createExcel(rt, addon, options) {
             }
             if (!(dest instanceof Range)) return rt.raise(13);
             pasteCells(this, dest, PASTE_ALL);
+            clip = null;
             return true;
         }
         Cut(destination) {
@@ -985,7 +1002,7 @@ module.exports = function createExcel(rt, addon, options) {
         set Hidden(v) {
             const [columns, span] = this.$lines();
             const hidden = rt.cbool(v);
-            this.$each((a, b, i) => b.setHidden(i, columns, ...span(a), hidden));
+            this.$each((a, b, i) => b.setHidden(i, columns, ...span(a), hidden), true);
             calculated(this.$sheet.$wb, false);
         }
         get Style() {
@@ -1214,6 +1231,8 @@ module.exports = function createExcel(rt, addon, options) {
             wb.$changed();
             const i = this.$index();
             const active = wb.$sheets[wb.$active];
+            // The active sheet is left before it goes.
+            if (active === this) sheetEvent(this, "Deactivate", []);
             book(() => wb.$book.deleteSheet(i));
             wb.$sheets.splice(i, 1);
             if (clip !== null && clip.range.$sheet === this) clip = null;
@@ -1263,6 +1282,7 @@ module.exports = function createExcel(rt, addon, options) {
             return true;
         }
         Calculate() {
+            clip = null;
             calculated(this.$wb, true);
         }
         Evaluate(text) {
@@ -1275,18 +1295,21 @@ module.exports = function createExcel(rt, addon, options) {
         Paste(destination) {
             if (clip === null) throw new RasError("Worksheet クラスの Paste メソッドが失敗しました。", 1004, "Microsoft Excel");
             let dest = opt(destination);
-            if (dest === undefined) {
+            // On the selection, what is pasted is selected; a destination leaves the selection.
+            const selects = dest === undefined;
+            if (selects) {
                 this.Activate();
                 dest = app.Selection;
             }
             if (!(dest instanceof Range) || dest.$sheet !== this) fail("貼り付け先がこのシートの範囲ではありません");
+            let pasted;
             if (clip.cut) {
-                const moved = moveCells(clip.range, dest);
+                pasted = moveCells(clip.range, dest);
                 clip = null;
-                app.$select(moved);
             } else {
-                app.$select(pasteCells(clip.range, dest, PASTE_ALL));
+                pasted = pasteCells(clip.range, dest, PASTE_ALL);
             }
+            if (selects) app.$select(pasted);
             return true;
         }
         PasteSpecial() {
@@ -1639,10 +1662,12 @@ module.exports = function createExcel(rt, addon, options) {
             bookEvent(this, "AfterSave", [true]);
         }
         Save() {
+            clip = null;
             this.$save(false, () => saveCopy(this, true));
         }
         SaveAs(fileName) {
             const target = opt(fileName) === undefined ? null : path.resolve(root, rt.cstr(fileName));
+            clip = null;
             this.$save(true, () => {
                 if (target === null || isProtected(target)) {
                     saveCopy(this, true);
@@ -1678,6 +1703,7 @@ module.exports = function createExcel(rt, addon, options) {
             return true;
         }
         Calculate() {
+            clip = null;
             calculated(this, true);
         }
         $debugProperties() {
@@ -1925,6 +1951,8 @@ module.exports = function createExcel(rt, addon, options) {
         set Calculation(v) {
             const mode = rt.cnum(v);
             const was = this.$state.Calculation;
+            // Setting the mode ends a cut or copy, as in Excel (even to the mode it has).
+            clip = null;
             this.$state.Calculation = mode;
             for (const b of this.$books) b.$book.setManual(mode === XL.manual);
             // Back to automatic: what waited is calculated.
@@ -1974,22 +2002,47 @@ module.exports = function createExcel(rt, addon, options) {
             if (rs.some((r) => r.$sheet !== rs[0].$sheet)) fail("別のシートの範囲");
             const areas = rs.flatMap((r) => r.$list());
             const box = [Math.min(...areas.map((r) => r.$r1)), Math.min(...areas.map((r) => r.$c1)), Math.max(...areas.map((r) => r.$r2)), Math.max(...areas.map((r) => r.$c2))];
-            // One area when the ranges fill a rectangle; otherwise the areas as they are given
-            // (without those that lie within another).
+            // One area when the ranges fill a rectangle; otherwise the areas in the order they
+            // are given, each put together with those before it that it makes a rectangle with
+            // (the rectangle is then where the last of them is, as in Excel:
+            // `Union(A1, C1:C2, A2)` is `C1:C2,A1:A2`).
             const cells = (box[2] - box[0] + 1) * (box[3] - box[1] + 1);
             if (cells <= 1e6) {
                 const inside = new Set();
                 for (const r of areas) for (let i = r.$r1; i <= r.$r2; i++) for (let j = r.$c1; j <= r.$c2; j++) inside.add(i * 16385 + j);
                 if (inside.size === cells) return new Range(rs[0].$sheet, ...box);
             }
-            const within = (a, b) => a !== b && a.$r1 >= b.$r1 && a.$c1 >= b.$c1 && a.$r2 <= b.$r2 && a.$c2 <= b.$c2;
-            const kept = areas.filter((a, i) => !areas.some((b, j) => within(a, b) || (j < i && a.$same(b))));
-            return Range.$of(rs[0].$sheet, kept.map((a) => a.$bounds()));
+            const within = (a, b) => a[0] >= b[0] && a[1] >= b[1] && a[2] <= b[2] && a[3] <= b[3];
+            // Two areas side by side, or one above the other, with the same extent.
+            const joined = (a, b) => {
+                if (a[1] === b[1] && a[3] === b[3] && (a[2] + 1 === b[0] || b[2] + 1 === a[0])) return [Math.min(a[0], b[0]), a[1], Math.max(a[2], b[2]), a[3]];
+                if (a[0] === b[0] && a[2] === b[2] && (a[3] + 1 === b[1] || b[3] + 1 === a[1])) return [a[0], Math.min(a[1], b[1]), a[2], Math.max(a[3], b[3])];
+                return null;
+            };
+            const kept = [];
+            for (const r of areas) {
+                let a = r.$bounds();
+                if (kept.some((b) => within(a, b))) continue;
+                for (let i = 0; i < kept.length; ) {
+                    const both = within(kept[i], a) ? a : joined(kept[i], a);
+                    if (both === null) {
+                        i++;
+                        continue;
+                    }
+                    kept.splice(i, 1);
+                    a = both;
+                    i = 0;
+                }
+                kept.push(a);
+            }
+            return Range.$of(rs[0].$sheet, kept);
         }
         Calculate() {
+            clip = null;
             for (const b of this.$books.slice()) calculated(b, true);
         }
         CalculateFull() {
+            clip = null;
             for (const b of this.$books.slice()) {
                 book(() => b.$book.calculate());
                 if (b.$project && listens("Calculate", "SheetCalculate")) {

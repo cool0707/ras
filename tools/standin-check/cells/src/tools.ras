@@ -1,0 +1,101 @@
+// The scenarios of crates/ras-compiler/tests/js_backend.rs (SCRIPTING).
+
+export function files() {
+    const fso = new Scripting.FileSystemObject();
+    if (fso.folderExists("work")) fso.deleteFolder("work");
+    const work = fso.createFolder("work");
+    const out = fso.createTextFile(fso.buildPath(work.path, "名簿.txt"));
+    out.writeLine("佐藤,41");
+    out.write("鈴木,");
+    out.writeLine("29");
+    out.close();
+    const f = fso.getFile("work\\名簿.txt");
+    console.log(`${f.name} ${f.size} ${fso.getBaseName(f.path)} ${fso.getExtensionName(f.path)} ${f.parentFolder.name} ${typeof f}`);
+    const ts = fso.openTextFile(f.path, forReading);
+    while (!ts.atEndOfStream) {
+        const at = ts.line;
+        console.log(`${at}:${ts.readLine()}`);
+    }
+    ts.close();
+    const more = f.openAsTextStream(forAppending);
+    more.writeLine("高橋,35");
+    more.close();
+    console.log(`${fso.openTextFile(f.path).readAll().length}`);
+    // Unicode: UTF-16 with a byte order mark.
+    const u = fso.createTextFile("work/u.txt", true, true);
+    u.write("あ");
+    u.close();
+    console.log(`${fso.getFile("work/u.txt").size} ${fso.openTextFile("work/u.txt", forReading, false, tristateTrue).readAll()}`);
+    // Copies with wildcards, the collections of a folder, moves and deletes.
+    work.subFolders.add("copy");
+    fso.copyFile("work\\*.txt", "work\\copy\\");
+    let names = "";
+    for (const file of fso.getFolder("work/copy").files) names += `${file.name};`;
+    fso.moveFile("work/copy/u.txt", "work/v.txt");
+    fso.deleteFile("work/copy/*.txt");
+    console.log(`${names} ${work.files.count} ${work.subFolders.count} ${work.subFolders("copy").files.count} ${fso.fileExists("work/v.txt")}`);
+    console.log(`${fso.getParentFolderName("C:\\a\\b.txt")} ${fso.getFileName("C:\\a\\b.txt")} ${fso.getBaseName("a/b.tar.gz")} ${fso.getDriveName("C:\\a")}`);
+    try {
+        fso.getFile("work/none.txt");
+    } catch (e) {
+        console.log(`${e.code}`);
+    }
+    try {
+        fso.createFolder("work");
+    } catch (e) {
+        console.log(`${e.code}`);
+    }
+    work.delete();
+    console.log(`${fso.folderExists("work")}`);
+}
+
+export function dictionary() {
+    const d = createObject("Scripting.Dictionary");
+    d.add("b", 2);
+    d.add("a", 1);
+    d["c"] = 3;
+    d["a"] = 10;
+    console.log(`${d.count} ${d.exists("a")} ${d.exists("A")} ${d("a")} ${d.item("b")} ${d.keys().join(",")} ${d.items().join(",")}`);
+    let keys = "";
+    for (const k of d) keys += `${k}`;
+    try {
+        d.add("a", 0);
+    } catch (e) {
+        console.log(`${keys} ${e.code}`);
+    }
+    d.remove("b");
+    const missing = d("zz");
+    console.log(`${d.count} ${typeof missing}`);
+    const t = new Scripting.Dictionary();
+    t.compareMode = vbTextCompare;
+    t.add("Key", 1);
+    console.log(`${t.exists("KEY")} ${typeof t}`);
+}
+
+export function regex() {
+    const re = new VBScript.RegExp();
+    re.pattern = "(\\d{4})/(\\d{1,2})";
+    re.global = true;
+    const text = "2026/3 と 2025/12";
+    const found = re.execute(text);
+    console.log(`${re.test(text)} ${found.count} ${found(1).value} ${found(1).firstIndex} ${found(0).subMatches(1)} ${found.item(0).length}`);
+    let years = "";
+    for (const m of found) years += `${m.subMatches(0)};`;
+    console.log(`${years} ${re.replace(text, "$2月")}`);
+    re.global = false;
+    console.log(`${re.replace(text, "$1年")} ${re.execute(text).count}`);
+    re.pattern = "^abc";
+    re.ignoreCase = true;
+    console.log(`${re.test("ABCdef")}`);
+    re.pattern = "(";
+    try {
+        re.test("x");
+    } catch (e) {
+        console.log(`${e.code}`);
+    }
+    try {
+        createObject("ADODB.Connection");
+    } catch (e) {
+        console.log(`${e.code}`);
+    }
+}
