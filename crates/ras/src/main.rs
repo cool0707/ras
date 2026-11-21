@@ -7,6 +7,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 mod book;
+mod explain;
 mod forms;
 mod run;
 mod test;
@@ -19,9 +20,21 @@ struct Cli {
     /// プロジェクトのルート（ras.toml のあるディレクトリ）。省略時はカレントディレクトリから上へ探す
     #[arg(long, global = true, value_name = "DIR")]
     project: Option<PathBuf>,
+    /// 診断（エラー・警告）の出力形式。json は 1 行 1 件の JSON（コード・重大度・メッセージ・範囲・修正内容）を標準出力に出す
+    #[arg(long, global = true, value_enum, default_value_t = MessageFormat::Human, value_name = "FORMAT")]
+    message_format: MessageFormat,
     #[command(subcommand)]
     command: Command,
 }
+
+#[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
+enum MessageFormat {
+    Human,
+    Json,
+}
+
+/// `--message-format json`: diagnostics are written as JSON Lines.
+static JSON_MESSAGES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Subcommand)]
 enum Command {
@@ -39,6 +52,9 @@ enum Command {
         /// 機械的に直せる警告（Excel / VBA のメンバー名の大文字小文字など）をソースに書き戻す
         #[arg(long)]
         fix: bool,
+        /// stand-in: Excel を使わない実行（ras run・ras test・Excel のないデバッグ実行）のブックの代役で使えないものも警告する
+        #[arg(long, value_enum, value_name = "TARGET")]
+        target: Option<CheckTarget>,
     },
     /// VBA ファイルを build/ に出力する（--target js でデバッグ用の JavaScript を build/debug/ に出力する）
     Build {
@@ -89,6 +105,13 @@ enum Command {
     },
     /// 関数を Excel なしで実行する（デバッグ実行と同じ JavaScript ランタイムとブックの代役。出力・エラー・変更されたセルを表示する）
     Run(run::RunArgs),
+    /// 構文と Excel の操作の早見表（TypeScript との違い、型、関数、エラー処理、テスト、コマンド）を表示する
+    Cheatsheet,
+    /// エラー・警告のコード（E0301 など）の説明、典型的な原因、直し方を表示する
+    Explain {
+        /// コード（省略するとコードの一覧）
+        code: Option<String>,
+    },
     /// テスト（test/**/*.test.ras）を Excel なしで実行する
     Test(test::TestArgs),
     /// ブックの中身をテキストで見る・比べる（Excel は不要）
@@ -141,6 +164,14 @@ enum FormCommand {
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
+enum CheckTarget {
+    /// Excel で動かす VBA（既定）
+    Excel,
+    /// ブックの代役
+    StandIn,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
 enum Target {
     Vba,
     Js,
@@ -161,6 +192,7 @@ struct BuildArgs {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    JSON_MESSAGES.store(cli.message_format == MessageFormat::Json, std::sync::atomic::Ordering::Relaxed);
     match run(cli) {
         Ok(code) => code,
         Err(msg) => {
@@ -254,6 +286,12 @@ fn report(prog: &Program, diags: &[Diagnostic], show_hints: bool) -> usize {
         .filter(|d| d.module.is_none_or(|m| prog.modules[m].kind == ModuleKind::User) || d.is_error())
         .collect();
     items.sort_by_key(|d| (d.module, u32::from(d.span.start())));
+    if JSON_MESSAGES.load(std::sync::atomic::Ordering::Relaxed) {
+        for d in &items {
+            println!("{}", diagnostic_json(prog, d));
+        }
+        return items.iter().filter(|d| d.is_error()).count();
+    }
     for d in &items {
         let sev = match d.severity {
             Severity::Error => "error",
@@ -276,7 +314,49 @@ fn report(prog: &Program, diags: &[Diagnostic], show_hints: bool) -> usize {
         }
         eprintln!();
     }
-    items.iter().filter(|d| d.is_error()).count()
+    let errors = items.iter().filter(|d| d.is_error()).count();
+    static HINTED: std::sync::Once = std::sync::Once::new();
+    if errors > 0 {
+        HINTED.call_once(|| eprintln!("（エラーの説明と直し方: ras explain <コード>。例: ras explain {}）", items.iter().find(|d| d.is_error()).map(|d| d.code).unwrap_or("E0301")));
+    }
+    errors
+}
+
+/// A diagnostic as `--message-format json` writes it: lines and columns are 1-based, columns
+/// in UTF-16 code units (as editors count them); `fixes` are the edits `ras check --fix` makes.
+fn diagnostic_json(prog: &Program, d: &Diagnostic) -> serde_json::Value {
+    use serde_json::json;
+    let severity = match d.severity {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+        Severity::Info => "info",
+        Severity::Hint => "hint",
+    };
+    let mut out = json!({ "type": "diagnostic", "code": d.code, "severity": severity, "message": d.message });
+    let range = |m: usize, span: ras_syntax::ast::Span| {
+        let md = &prog.modules[m];
+        let (l1, c1) = md.line_col_utf16(u32::from(span.start()));
+        let (l2, c2) = md.line_col_utf16(u32::from(span.end()));
+        json!({ "start": { "line": l1 + 1, "column": c1 + 1 }, "end": { "line": l2 + 1, "column": c2 + 1 } })
+    };
+    if let Some(m) = d.module {
+        out["file"] = json!(prog.modules[m].rel_path);
+        out["range"] = range(m, d.span);
+        // The corrections of this diagnostic: those of its code inside its range.
+        let fixes: Vec<serde_json::Value> = prog
+            .fixes
+            .iter()
+            .filter(|f| f.module == m && f.code == d.code && f.span.start() >= d.span.start() && f.span.end() <= d.span.end())
+            .map(|f| json!({ "file": prog.modules[m].rel_path, "range": range(m, f.span), "newText": f.replacement }))
+            .collect();
+        if !fixes.is_empty() {
+            out["fixes"] = json!(fixes);
+        }
+    }
+    if explain::find(d.code).is_some() {
+        out["explain"] = json!(format!("ras explain {}", d.code));
+    }
+    out
 }
 
 fn encode(text: &str, codepage: u16) -> Vec<u8> {
@@ -695,6 +775,9 @@ fn cmd_unpack(root: &Path, book: Option<&Path>) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+const AGENTS_TEMPLATE: &str = include_str!("../templates/AGENTS.md");
+const CHEATSHEET: &str = include_str!("../../../docs/cheatsheet.md");
+
 fn cmd_init(dir: &Path, workbook: Option<&str>) -> Result<ExitCode, String> {
     let toml_path = dir.join("ras.toml");
     if toml_path.exists() {
@@ -722,6 +805,11 @@ fn cmd_init(dir: &Path, workbook: Option<&str>) -> Result<ExitCode, String> {
     let main_path = dir.join("src").join("main.ras");
     if !main_path.exists() {
         std::fs::write(&main_path, main).map_err(|e| e.to_string())?;
+    }
+    // What an AI agent working in the project reads first (the work flow, the rules, what cannot be used).
+    let agents = dir.join("AGENTS.md");
+    if !agents.exists() {
+        std::fs::write(&agents, AGENTS_TEMPLATE).map_err(|e| e.to_string())?;
     }
     let gitignore = dir.join(".gitignore");
     if !gitignore.exists() {
@@ -833,7 +921,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
     let project = cli.project.as_deref();
     match &cli.command {
         Command::Init { dir, workbook } => cmd_init(dir, workbook.as_deref()),
-        Command::Check { fix } => {
+        Command::Check { fix, target } => {
             let root = find_root(project)?;
             // The tests are checked too (spec §14.12.1); they are no part of what is built.
             let mut prog = analyze_with_tests(&root)?;
@@ -845,6 +933,9 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 }
             }
             let mut errors = report(&prog, &prog.diagnostics, true);
+            if *target == Some(CheckTarget::StandIn) || (target.is_none() && prog.config.lint.stand_in) {
+                report(&prog, &ras_compiler::standin::check(&prog), true);
+            }
             // Code generation can report further problems (size limits, unsupported constructs).
             let mut compiled = HashMap::new();
             if errors == 0 {
@@ -901,6 +992,21 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!("ユーザーフォーム {count} 個に問題は見つかりませんでした");
             Ok(ExitCode::SUCCESS)
         }
+        Command::Cheatsheet => {
+            print!("{CHEATSHEET}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Explain { code: None } => {
+            print!("{}", explain::list());
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Explain { code: Some(code) } => match explain::find(code) {
+            Some(entry) => {
+                print!("{}", explain::text(entry));
+                Ok(ExitCode::SUCCESS)
+            }
+            None => Err(format!("`{code}` という診断のコードはありません（`ras explain` でコードの一覧を表示します）")),
+        },
         Command::Run(args) => cmd_run(&find_root(project)?, args),
         Command::Test(args) => test::cmd(&find_root(project)?, args),
         Command::Book { action: book::BookCommand::Dump { file, sheet, range, format, formats, max_rows, max_cols, all } } => {
@@ -913,6 +1019,29 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 }
             };
             book::dump(&file, sheet, range.as_deref(), *format, *formats, if *all { None } else { Some((*max_rows, *max_cols)) })
+        }
+        Command::Book { action: book::BookCommand::View { file, diff, output, stdout, open, all, title } } => {
+            // The project, when there is one: its workbook, and build/view/ for the page.
+            let root = find_root(project).ok();
+            let file = match (file, &root) {
+                (Some(f), _) => f.clone(),
+                (None, Some(root)) => {
+                    let (cfg, _) = ras_compiler::load_project(root)?;
+                    workbook_path(root, &cfg, None).ok_or("対象ブックを指定してください（ras.toml の project.workbook が未設定です）")?
+                }
+                (None, None) => return Err("対象ブックを指定してください".into()),
+            };
+            if *stdout {
+                print!("{}", book::view_page(&file, diff.as_deref(), *all, title.as_deref())?);
+                return Ok(ExitCode::SUCCESS);
+            }
+            let dir = root.unwrap_or_else(|| PathBuf::from(".")).join("build").join("view");
+            let page = book::write_view(&file, diff.as_deref(), *all, output.as_deref(), &dir)?;
+            println!("{} を作成しました（ブラウザーで開くと、シートをグリッドで見られます）", page.display());
+            if *open {
+                book::open_in_browser(&page)?;
+            }
+            Ok(ExitCode::SUCCESS)
         }
         Command::Book { action: book::BookCommand::Diff { before, after, format, max_cells } } => book::diff_cmd(before, after, *format, *max_cells),
         Command::Lsp { .. } => {

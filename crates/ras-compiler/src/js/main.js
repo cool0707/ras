@@ -10,8 +10,11 @@
 //              RAS_RUN_REPORT = path of a file the run is reported into as JSON when the process
 //                              ends (`ras run`): what `debug.print` printed, the dialogs and their
 //                              answers, the error that ended the run, the workbooks saved.
-//                              RAS_ANSWERS = the answers of the dialogs, in order, as JSON
-//                              ({"msgbox":[6],"inputbox":["2026/4"],"openfile":[],"savefile":[]}),
+//                              RAS_ANSWERS = the answers of the dialogs, in order, and the
+//                              replacements of hand-written VBA and COM objects, as JSON
+//                              ({"msgbox":[6],"inputbox":["2026/4"],"openfile":[],"savefile":[],
+//                              "run":{"Legacy":"Mocks.legacy"},"createObject":{"ADODB.Connection":"Mocks.FakeConnection"}});
+//                              it is used without RAS_RUN_REPORT too (the debug run of the editor),
 //                              RAS_RUN_QUIET = 1 to print nothing but what the run time reports.
 //              RAS_WORKBOOKS = where the workbooks the program changed are saved (default build/debug/workbooks).
 //              RAS_DIALOGS   = what to do when Excel shows a dialog while a call waits for it:
@@ -26,21 +29,97 @@ const modules = [
     /*@MODULES@*/
 ];
 
+/** The answers of the dialogs and the replacements given for the run (RAS_ANSWERS), or null. */
+function givenAnswers() {
+    if (!process.env.RAS_ANSWERS) return null;
+    try {
+        const a = JSON.parse(process.env.RAS_ANSWERS);
+        return a !== null && typeof a === "object" ? a : null;
+    } catch {
+        console.error("[ras] RAS_ANSWERS を JSON として読み取れませんでした。ダイアログには既定の応答をします");
+        return null;
+    }
+}
+
+/** `Module.name` of the program: an exported function or class. */
+function exported(spec, what) {
+    const [moduleName, name] = String(spec).split(".");
+    const file = Object.keys(manifest.modules || {}).find((m) => m.toLowerCase() === String(moduleName).toLowerCase());
+    const exports = file === undefined ? null : require(manifest.modules[file]);
+    const key = exports === null ? undefined : Object.keys(exports).find((k) => k.toLowerCase() === String(name).toLowerCase());
+    if (key === undefined || typeof exports[key] !== "function") {
+        throw $rt.makeError(`${what} の置き換え \`${spec}\` が見つかりません（\`モジュール名.関数名\` / \`モジュール名.クラス名\` の形で、プロジェクトの関数・クラスを指定します）`, 5);
+    }
+    return exports[key];
+}
+
+/**
+ * Answers the dialogs from `answers` (in the order they are shown) and replaces hand-written
+ * VBA and COM objects with functions and classes of the program (spec §14.13). `record`
+ * (optional) is told every dialog; `say` prints what was answered.
+ */
+function answering(answers, record, say) {
+    const next = (kind) => (Array.isArray(answers[kind]) && answers[kind].length ? answers[kind].shift() : undefined);
+    const told = record || (() => {});
+    const h = $rt.hooks;
+    const names = ["", "vbOK", "vbCancel", "vbAbort", "vbRetry", "vbIgnore", "vbYes", "vbNo"];
+    h.msgBox = (prompt, buttons, title) => {
+        const given = next("msgbox");
+        // Without an answer (and nobody recording), the run time's own dialog or default.
+        if (given === undefined && record === null) return undefined;
+        const answer = given === undefined ? 1 : typeof given === "string" ? Math.max(1, names.findIndex((n) => n.toLowerCase() === given.toLowerCase())) : given;
+        told({ kind: "msgBox", prompt, title: title === undefined ? null : title, buttons, answer, answered: given !== undefined });
+        say(`[MsgBox] ${prompt} → ${names[answer] || answer}`);
+        return answer;
+    };
+    h.inputBox = (prompt, title, defaultValue) => {
+        const given = next("inputbox");
+        if (given === undefined && record === null) return undefined;
+        const answer = given !== undefined ? given : defaultValue === undefined ? false : defaultValue;
+        told({ kind: "inputBox", prompt, title: title === undefined ? null : title, default: defaultValue === undefined ? null : defaultValue, answer, answered: given !== undefined });
+        say(`[InputBox] ${prompt} → ${answer === false ? "（キャンセル）" : answer}`);
+        return answer;
+    };
+    const fileDialog = (kind, key, option, what) => () => {
+        const given = next(key);
+        if (given === undefined && record === null) return undefined;
+        told({ kind, prompt: null, answer: given === undefined ? null : given, answered: given !== undefined });
+        if (given === undefined) throw $rt.makeError(`${what}の応答がありません。ras run の ${option} <パス> で指定してください（キャンセルは ${option} false）`, 445);
+        say(`[${kind}] → ${given}`);
+        return given === "false" || given === false ? false : given;
+    };
+    h.getOpenFilename = fileDialog("getOpenFilename", "openfile", "--open-file", "ファイルを開くダイアログ（GetOpenFilename）");
+    h.getSaveAsFilename = fileDialog("getSaveAsFilename", "savefile", "--save-file", "名前を付けて保存ダイアログ（GetSaveAsFilename）");
+    const lower = (o) => new Map(Object.entries(o || {}).map(([k, v]) => [k.toLowerCase(), v]));
+    const runs = lower(answers.run);
+    const objects = lower(answers.createObject);
+    if (runs.size > 0) {
+        h.run = (name, args) => {
+            const key = String(name).toLowerCase();
+            const spec = runs.get(key) || runs.get(key.slice(key.lastIndexOf("!") + 1));
+            if (spec === undefined) return undefined;
+            return { value: exported(spec, `手書き VBA \`${name}\``)(...args) };
+        };
+    }
+    if (objects.size > 0) {
+        h.createObject = (progId) => {
+            const spec = objects.get(String(progId).toLowerCase());
+            if (spec === undefined) return undefined;
+            const made = exported(spec, `COM オブジェクト \`${progId}\``);
+            // A class of the program, or a function that returns the object.
+            return /^class\s/.test(Function.prototype.toString.call(made)) ? new made() : made();
+        };
+    }
+}
+
 /** Records the run for `ras run` (RAS_RUN_REPORT) and answers the dialogs from RAS_ANSWERS. */
 function reporting(file) {
     const fs = require("fs");
-    let answers = {};
-    try {
-        answers = JSON.parse(process.env.RAS_ANSWERS || "{}");
-    } catch {
-        // No answers: every dialog gets its default.
-    }
     const quiet = process.env.RAS_RUN_QUIET === "1";
     const say = (text) => {
         if (!quiet) console.log(text);
     };
     const report = { entry: null, ok: true, printed: [], dialogs: [], notes: [], error: null, eventErrors: [], workbooks: [] };
-    const next = (kind) => (Array.isArray(answers[kind]) && answers[kind].length ? answers[kind].shift() : undefined);
     const h = $rt.hooks;
     h.print = (line) => {
         report.printed.push(line);
@@ -50,29 +129,7 @@ function reporting(file) {
         report.notes.push(text);
         if (!quiet) console.error(`[ras] ${text}`);
     };
-    h.msgBox = (prompt, buttons, title) => {
-        const given = next("msgbox");
-        const answer = given === undefined ? 1 : given;
-        report.dialogs.push({ kind: "msgBox", prompt, title: title === undefined ? null : title, buttons, answer, answered: given !== undefined });
-        say(`[MsgBox] ${prompt} → ${["", "vbOK", "vbCancel", "vbAbort", "vbRetry", "vbIgnore", "vbYes", "vbNo"][answer] || answer}`);
-        return answer;
-    };
-    h.inputBox = (prompt, title, defaultValue) => {
-        const given = next("inputbox");
-        const answer = given !== undefined ? given : defaultValue === undefined ? false : defaultValue;
-        report.dialogs.push({ kind: "inputBox", prompt, title: title === undefined ? null : title, default: defaultValue === undefined ? null : defaultValue, answer, answered: given !== undefined });
-        say(`[InputBox] ${prompt} → ${answer === false ? "（キャンセル）" : answer}`);
-        return answer;
-    };
-    const fileDialog = (kind, key, option, what) => () => {
-        const given = next(key);
-        report.dialogs.push({ kind, prompt: null, answer: given === undefined ? null : given, answered: given !== undefined });
-        if (given === undefined) throw $rt.makeError(`${what}の応答がありません。ras run の ${option} <パス> で指定してください（キャンセルは ${option} false）`, 445);
-        say(`[${kind}] → ${given}`);
-        return given === "false" ? false : given;
-    };
-    h.getOpenFilename = fileDialog("getOpenFilename", "openfile", "--open-file", "ファイルを開くダイアログ（GetOpenFilename）");
-    h.getSaveAsFilename = fileDialog("getSaveAsFilename", "savefile", "--save-file", "名前を付けて保存ダイアログ（GetSaveAsFilename）");
+    answering(givenAnswers() || {}, (dialog) => report.dialogs.push(dialog), say);
     h.saved = (info) => {
         const at = report.workbooks.findIndex((w) => w.file === info.file);
         if (at >= 0) report.workbooks.splice(at, 1);
@@ -116,6 +173,9 @@ function main(argv) {
     const report = process.env.RAS_RUN_REPORT ? reporting(process.env.RAS_RUN_REPORT) : null;
     for (const m of modules) require(m);
     if (report === null) {
+        // The debug run of the editor: the answers of its launch configuration.
+        const answers = givenAnswers();
+        if (answers !== null) answering(answers, null, (text) => console.log(text));
         // Errors are deliberately not caught here: the debugger stops on them as uncaught
         // exceptions, at the RAS statement that raised.
         $rt.run(entry);

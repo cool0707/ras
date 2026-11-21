@@ -16,11 +16,11 @@ Mac・Linux・Excel の無い Windows で、RAS と VS Code だけでマクロ�
 | 1 | P0 | テスト（`ras test`） | AI・人間 | 実装済み（§14.12。エディタの連携と `--excel` は未実装） |
 | 2 | P0 | CLI からの実行（`ras run`） | AI | 実装済み（§14.13） |
 | 3 | P0 | ブックの中身をテキストで見る・比べる（`ras book dump` / `diff`） | AI・人間 | 実装済み（§14.14） |
-| 4 | P1 | 機械可読の診断（`--message-format json`）とエラーの説明（`ras explain`） | AI | 未着手 |
-| 5 | P1 | ブックの代役で使えない API の事前警告 | AI・人間 | 未着手 |
-| 6 | P1 | ダイアログ・外部呼び出しの置き換え（デバッグ実行） | AI・人間 | テストの分は仕様あり（§14.12.6） |
-| 7 | P1 | シートの表示（デバッグ中・実行後のグリッド表示） | 人間 | 未着手 |
-| 8 | P1 | AI 向けの短いドキュメント（`AGENTS.md`・早見表） | AI | 未着手 |
+| 4 | P1 | 機械可読の診断（`--message-format json`）とエラーの説明（`ras explain`） | AI | 実装済み（§14.15） |
+| 5 | P1 | ブックの代役で使えない API の事前警告 | AI・人間 | 実装済み（§14.15。言語サーバーのクイック情報は未実装） |
+| 6 | P1 | ダイアログ・外部呼び出しの置き換え（デバッグ実行） | AI・人間 | 実装済み（§14.13。`launch.json` の分は実機の VS Code で未確認） |
+| 7 | P1 | シートの表示（デバッグ中・実行後のグリッド表示） | 人間 | 実装済み（§14.14。VS Code のパネルは実機で未確認） |
+| 8 | P1 | AI 向けの短いドキュメント（`AGENTS.md`・早見表） | AI | 実装済み |
 | 9 | P2 | 生成 VBA の構文検査（32bit / 64bit） | 人間・AI | 未着手 |
 | 10 | P2 | Windows の Excel への橋渡し（リモート実行・CI） | 人間 | 未着手 |
 | 11 | P2 | 代役と Excel の互換性の突き合わせと一覧の公開 | 人間・AI | 未着手 |
@@ -76,7 +76,11 @@ ras book diff before.xlsm build/debug/workbooks/Book.xlsm # セルの差分
 
 ## P1
 
+P1 の 5 つは実装済み。残っているものは各項目の「残り」と README の「実装状況」を参照。
+
 ### 4. 機械可読の診断とエラーの説明
+
+* **残り:** 診断の「関連する位置」（コンパイラの診断に持たせる必要がある）、ユーザーフォームの検査の結果の JSON 出力。
 
 * `ras check --message-format json`（`build` / `pack` も同じ）: コード、重大度、メッセージ、範囲（ファイル・行・列）、関連する位置、クイックフィックスの編集内容を JSON Lines で出力する。現状、構造化された診断は LSP を動かさないと得られない。
 * `ras explain E0412`: エラー・警告の説明、典型的な原因、直し方の例を表示する。診断のメッセージにも `ras explain` を案内する。
@@ -88,6 +92,7 @@ ras book diff before.xlsm build/debug/workbooks/Book.xlsm # セルの差分
 * 同梱の型定義のメンバーに「代役で使えるか」の情報を持たせる（代役の実装から生成する）。
 * `ras check --target stand-in`（または `ras.toml` の設定）で、使えないメンバーの使用箇所を警告する。LSP のクイック情報にも表示する。
 * AI の無駄な試行と、人間の「デバッグ実行してみたら途中で止まった」を減らす。
+* **残り:** 言語サーバーのクイック情報への表示、`Font` / `Interior` など一覧にないオブジェクトのメンバーと、引数の値によって使えない場合の検査。
 
 ### 6. ダイアログ・外部呼び出しの置き換え（デバッグ実行）
 
@@ -95,6 +100,7 @@ ras book diff before.xlsm build/debug/workbooks/Book.xlsm # セルの差分
 
 * `launch.json` / `ras run` のオプションで、`msgBox` / `inputBox` / `getOpenFilename` / `getSaveAsFilename` の応答（順番に返す値の並び）を与える。
 * `application.run` で呼ぶ手書き VBA と、代役に無い COM オブジェクトは、RAS で書いた代わりの関数・クラスを指定できるようにする（テストの `mockRun` / `mockCreateObject` と同じ仕組み）。
+* **残り:** `launch.json` の `answers` を実機の VS Code で確かめる。
 
 ### 7. シートの表示
 
@@ -103,6 +109,8 @@ ras book diff before.xlsm build/debug/workbooks/Book.xlsm # セルの差分
 * デバッグ実行の一時停止中に、VS Code のパネルでシートをグリッド表示する（値・数式・主な書式・結合セル・フィルター）。ステップ実行で変わったセルを強調する。
 * 保存したブック（`build/debug/workbooks/`、テストの失敗したブック）を開いて表示するコマンド。3 の `diff` の結果を色付きで表示する。
 * フォームのパネル（§14.10.7）と同じ webview の仕組みを使う。
+* 書式から見た目への変換は、xljs のブックの PDF 出力（印刷レイアウトの HTML）を参考にした。
+* **残り:** VS Code のパネルを実機で確かめる。条件付き書式・テーブルのスタイル・画像・グラフの描画。テストの失敗したブックをテスト エクスプローラーから開く導線。
 
 ### 8. AI 向けの短いドキュメント
 
@@ -111,6 +119,7 @@ ras book diff before.xlsm build/debug/workbooks/Book.xlsm # セルの差分
 * `AGENTS.md`（プロジェクトのテンプレートにも入れる。`ras init` が作る）: 作業の手順（`ras check` → `ras run` / `ras test` → `ras book diff`）、camelCase の規約（§15.3.1）、VBA との違い、よくある間違い、使えないもの。
 * `docs/cheatsheet.md`: 構文の早見表（型、関数、ラムダ、`try`、構造体、デコレータ）と、Excel の典型的な操作の書き方。
 * `llms.txt`: 仕様書の節の一覧と要約。
+* 早見表のコード例は、自動テストで `ras check` に通している。`ras cheatsheet` でも表示できる。
 
 ## P2
 

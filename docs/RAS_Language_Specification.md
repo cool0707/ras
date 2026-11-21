@@ -802,7 +802,8 @@ On Error GoTo 0
 | `ras fmt` | フォーマッタ |
 | `ras test [<file>...]` | `test/` のテストを実行する（§14.12）。既定は Excel を使わずブックの代役で実行し、`--excel` で実際の Excel に対して実行する。`--reporter json` で結果を JSON で出力 |
 | `ras run [<Module.proc>]` | 関数を Excel なしで実行し、出力・エラー・変更されたセルを表示する（§14.13）。`--json` で結果を JSON で出力 |
-| `ras book dump [<book>]` / `ras book diff <before> <after>` | ブックの中身をテキストで出力する・2 つのブックを比べる（§14.14） |
+| `ras book dump [<book>]` / `ras book diff <before> <after>` / `ras book view [<book>]` | ブックの中身をテキストで出力する・2 つのブックを比べる・グリッドで表示する（§14.14） |
+| `ras explain [<code>]` / `ras cheatsheet` | エラー・警告のコードの説明（§14.15）、構文の早見表を表示する |
 
 ### 7.4 VS Code 拡張の責務（最小）
 
@@ -2099,6 +2100,9 @@ ras run ask --msgbox vbYes --inputbox "2026/4"
 * **ランタイム:** 環境変数 `RAS_NODE`、PATH の `node`、VS Code の実行ファイル（`ELECTRON_RUN_AS_NODE` で Node として動かす）の順に探す。ブックの代役のアドオンは、環境変数 `RAS_BOOK_ADDON`、`ras` と同じフォルダーの `ras_book.node` の順に探す。`ras test` も同じ。
 * **表示するもの:** `debug.print` の行（実行中に表示）、表示したダイアログとその応答、実行時エラー（VBA のエラー番号・説明・`.ras` の位置）、変更されたセルの差分（§14.14 の `diff` と同じ形式。読み込んだファイルと、保存した `build/debug/workbooks/` のブックを比べる）。`--no-diff` で差分を出さない。
 * **ダイアログの応答:** `--msgbox <vbYes など>`・`--inputbox <文字列>`・`--open-file <パス>`・`--save-file <パス>`（`false` でキャンセル）を、表示される順に指定する。指定のない `msgBox` は `vbOK`、`inputBox` は既定値（無ければキャンセル）で、その旨を表示する。応答のないファイルの選択ダイアログはエラー 445。
+* **置き換え:** `--replace-run <マクロ名>=<モジュール名.関数名>` は、`application.run` で呼ぶ手書き VBA（および `types/*.d.ras` に宣言した手書きの関数）の代わりに、プロジェクトの関数を呼ぶ。`--replace-object <ProgID>=<モジュール名.クラス名>` は、`createObject` / `new` で作る COM オブジェクトの代わりに、プロジェクトのクラスのインスタンス（関数を指定したときは、その戻り値）を使う。テストの `mockRun` / `mockCreateObject`（§14.12.6）と同じ仕組みである。指定した関数・クラスが無ければ、呼ばれた時点でエラーにする。
+* **デバッグ実行での指定:** VS Code のデバッグ実行（§14.10）では、同じものを `launch.json` の `answers` に書く: `{ "msgBox": ["vbYes"], "inputBox": ["2026/4"], "openFile": [], "saveFile": [], "run": { "Legacy": "Mocks.legacy" }, "createObject": { "ADODB.Connection": "Mocks.FakeConnection" } }`。応答の指定のないダイアログは、これまでどおりに表示・応答する。実際の Excel に接続している場合も、RAS から呼ぶ `msgBox` / `inputBox` / `application.run` / `createObject` に効く（手書き VBA の出すダイアログには効かない）。
+* **`--view`:** 実行後のブックをグリッドで表示する HTML を `build/view/<ブック名>.html` に作る（§14.14 の `view`。変更されたセルを強調する）。
 * **`--json`:** `entry`・`ok`・`printed`（`debug.print` の行）・`dialogs`（`kind`・`prompt`・`answer`・`answered`）・`error`（`code`・`description`・`source`・`file`・`line`）・`eventErrors`・`notes`・`workbooks`（`name`・`file`・`source`・`diff`）を 1 つのオブジェクトで出力する。
 * **終了コード:** 正常に終われば 0、実行時エラーで終われば 1、コンパイル エラーなどで実行できなければ 2。
 
@@ -2119,7 +2123,45 @@ ras book diff before.xlsm build/debug/workbooks/Book.xlsm # セルと構造の�
 * **形式:** `json` はシートの情報と `cells`（`address`・`row`・`column`・`type`・`value`・`formula`、`--formats` で `numberFormat`・`text`）、`csv` / `markdown` はセルの表示を表にしたもの。
 * **`diff`:** シートを名前で対応付け、セルごとに値・数式・表示形式を比べる。構造の差分として、シートの追加・削除・名前の変更（中身が同じ、または同じ位置で 1 つずつ入れ替わったもの）と、行・列の挿入・削除（ひとまとまりのもの。セルの並びからの推定）を出力する。挿入・削除でずれただけのセルは差分にしない。名前定義の差分も出力する。`--format json` で JSON。
 * **終了コード:** `diff` は差分が無ければ 0、あれば 1。読み取れなければ 2。
-* **対象外:** 書式（フォント・色・罫線）、グラフ・図形・コメント、VBA のコードの差分（`ras unpack` で取り出して比べる）。
+* **対象外（`dump` / `diff`）:** 書式（フォント・色・罫線）、グラフ・図形・コメント、VBA のコードの差分（`ras unpack` で取り出して比べる）。
+
+**グリッド表示（`ras book view`）:** ブックの代役は書式を保持するが描画しないため、人がシートを目で見るための表示を別に持つ。
+
+```sh
+ras book view Book.xlsx                                        # build/view/Book.html を作る（--open でブラウザーで開く）
+ras book view build/debug/workbooks/Book.xlsx --diff Book.xlsx # 変更されたセルを強調する
+ras run Report.rebuildReport --view                            # 実行後のブックを、変更を強調して表示する
+```
+
+* **出力:** ほかのファイルを参照しない 1 つの HTML（`-o` で出力先、`--stdout` で標準出力）。行番号・列見出しの付いたグリッド、シートの見出し、選択したセルの番地と数式（または値）を表示する。
+* **描くもの:** セルの表示（表示形式を適用したもの）、フォント（名前・大きさ・太字・斜体・下線・取り消し線・色）、塗りつぶし、罫線、横・縦の配置（指定のない数値・日付は右、真偽値・エラー値は中央）、折り返し、インデント、列幅・行の高さ、非表示の行・列（詰めて表示し、境目を示す）、結合セル、フィルターの見出し、シート見出しの色、非表示のシート。右のセルが空の文字列は、Excel と同じくはみ出して表示する。
+* **`--diff <before>`:** `before` との差分（`diff` と同じ比較）のあるセルに印を付け、変更の一覧（クリックでそのセルへ移動）と、変更前の内容を表示する。
+* **大きなシート:** 既定では 1 シート 500 行 × 100 列まで（`--all` で上限なし）。
+* **描かないもの:** 条件付き書式、テーブルのスタイル、画像・図形・グラフ、斜線、文字の回転。書式から CSS への変換（テーマの色、罫線の種類、列幅のピクセル数）は xljs の印刷（PDF 出力）の実装に合わせている。
+* **エディタ:** VS Code 拡張は同じページをパネルに表示する。「RAS: ブックを表示（グリッド）」（エクスプローラーの `.xlsx` / `.xlsm` の右クリックにも出る）はブックのファイルを表示し、`build/` の下の実行結果のブックは、プロジェクトのブックとの差分を強調する。Excel のないデバッグ実行（§14.10.8）では、ブレークポイントやステップ実行で止まるたびに、そのときのブックを表示し、前回の停止から変わったセル（最初はファイルから変わったセル）を強調する（設定 `ras.debug.sheetView` を `off` にすると表示しない）。拡張は停止のたびに、デバッグ対象の `$rasBookSnapshot(<フォルダー>)` を評価して開いているブックを書き出させ、`ras book view --stdout` の出力を表示する。
+
+### 14.15 機械可読の診断・エラーの説明・代役で使えない API の警告
+
+* **`--message-format json`:** どのコマンドでも、エラー・警告を 1 行 1 件の JSON で標準出力に出す（人向けの表示は出さない）。
+
+  ```json
+  {"type":"diagnostic","code":"W0304","severity":"warning","message":"`Cells` は RAS では `cells` と書きます（…）",
+   "file":"src/main.ras","range":{"start":{"line":3,"column":8},"end":{"line":3,"column":13}},
+   "fixes":[{"file":"src/main.ras","range":{"start":{"line":3,"column":8},"end":{"line":3,"column":13}},"newText":"cells"}],
+   "explain":"ras explain W0304"}
+  ```
+
+  `severity` は `error` / `warning` / `info` / `hint`。行・列は 1 始まりで、列は UTF-16 の符号単位（エディタと同じ数え方）。`fixes` は `ras check --fix` が行う編集で、あるときだけ付く。ユーザーフォームの検査（`forms/*.form.json`）の結果は、まだ人向けの表示だけである。
+* **`ras explain <コード>`:** そのコードの意味、典型的な原因、直し方（一部は例）を表示する。コードを省略すると一覧を出す。コンパイラの出すすべてのコードに説明がある。人向けの表示では、エラーがあるときに `ras explain` を案内する。
+* **`ras check --target stand-in`**（または `ras.toml` の `[lint]` `stand-in = true`）: Excel を使わない実行（`ras run`・`ras test`・Excel のないデバッグ実行）で使えないものを、実行する前に警告する。VBA として Excel で動かす分には問題のないコードなので、既定では出さない。
+
+  | コード | 内容 | 実行時のエラー |
+  |---|---|---|
+  | `W0510` | ブックの代役の `Application` / `Workbooks` / `Workbook` / `Sheets` / `Worksheet` / `Range` / `Names` / `Name` / `Sort` にないメンバー、ランタイムにない VBA の標準関数 | 438（VBA の標準関数は 445） |
+  | `W0511` | Excel そのものが必要な操作（`application.run` と `types/*.d.ras` の手書き VBA、`getOpenFilename` / `getSaveAsFilename` / `fileDialog`、`onTime`） | 445 |
+  | `W0512` | 作れない COM オブジェクト（`createObject("...")` に文字列リテラルで書いた ProgID、`new` するホストのクラス。`Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` 以外） | 429 |
+
+  代役にあるメンバーの一覧（`crates/ras-compiler/stdlib/standin.json`）は、代役の実装から `tools/standin/members.js` で作り、自動テストで実装と一致することを確かめる。検査するのは、型の分かっているメンバーの参照だけである（`any` / `object` のメンバー、ユニオン型の値のメンバー、`Font` / `Interior` / `Borders` など上の表にないオブジェクトのメンバーは検査しない）。引数の値によって使えない場合（別のブックへのシートのコピーなど）も検査しない。
 
 ## 15. プロジェクト構成
 

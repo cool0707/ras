@@ -684,3 +684,270 @@ fn test_time_outs_only_and_what_test_files_may_hold() {
     assert!(err.contains("error[E0702]") && err.contains("error[E0701]"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn run_replaces_hand_written_vba_and_com_objects() {
+    if !has_node() {
+        return;
+    }
+    let main = r#"export function legacyTotal() {
+    const total = application.run("LegacyTotal", 2, 3);
+    debug.print("total", total);
+    const conn = createObject("ADODB.Connection");
+    conn.open("dsn");
+    debug.print("state", conn.state);
+}
+"#;
+    let mocks = r#"export function total(a: int, b: int): int {
+    return a + b;
+}
+
+export class FakeConnection {
+    state: int = 0;
+    open(source: string) {
+        this.state = 1;
+    }
+}
+"#;
+    let dir = project("replace", &mut sales(), &[("src/main.ras", main), ("src/mocks.ras", mocks)]);
+
+    // Without replacements both need Excel.
+    let (code, _, err) = ras(&dir, &["run", "legacyTotal"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("実行時エラー 445"), "{err}");
+
+    let (code, out, err) = ras(&dir, &["run", "legacyTotal", "--replace-run", "LegacyTotal=Mocks.total", "--replace-object", "ADODB.Connection=Mocks.FakeConnection"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("total 5\n") && out.contains("state 1\n"), "{out}");
+
+    let (code, _, err) = ras(&dir, &["run", "legacyTotal", "--replace-run", "LegacyTotal=Mocks.nothing"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("置き換え `Mocks.nothing` が見つかりません"), "{err}");
+    let (code, _, err) = ras(&dir, &["run", "legacyTotal", "--replace-run", "LegacyTotal"]);
+    assert_eq!(code, 2);
+    assert!(err.contains("`名前=モジュール名.関数名` の形"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn diagnostics_as_json_and_explained() {
+    let dir = project("json", &mut sales(), &[("src/main.ras", "export function f() {\n    const ws = Sheet1;\n    ws.Cells(1, 1).value = \"a\" - 1;\n}\n")]);
+    let (code, out, err) = ras(&dir, &["check", "--message-format", "json"]);
+    assert_eq!(code, 1, "{err}");
+    let lines: Vec<serde_json::Value> = out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(
+        lines[0],
+        serde_json::json!({
+            "type": "diagnostic", "code": "W0304", "severity": "warning", "file": "src/main.ras",
+            "message": "`Cells` は RAS では `cells` と書きます（Excel / VBA のメンバーは camelCase で参照します）",
+            "range": { "start": { "line": 3, "column": 8 }, "end": { "line": 3, "column": 13 } },
+            "fixes": [{ "file": "src/main.ras", "newText": "cells", "range": { "start": { "line": 3, "column": 8 }, "end": { "line": 3, "column": 13 } } }],
+            "explain": "ras explain W0304",
+        })
+    );
+    assert_eq!((lines[1]["code"].as_str(), lines[1]["severity"].as_str(), lines[1]["range"]["start"]["line"].as_i64()), (Some("E0387"), Some("error"), Some(3)));
+    // The other commands that compile write them the same way.
+    let (code, out, _) = ras(&dir, &["build", "--message-format", "json"]);
+    assert_eq!(code, 1);
+    assert!(out.lines().any(|l| l.contains("\"code\":\"E0387\"")), "{out}");
+    // People are pointed to the explanations.
+    let (_, _, err) = ras(&dir, &["check"]);
+    assert!(err.contains("error[E0387]") && err.contains("ras explain E0387"), "{err}");
+
+    let (code, out, _) = ras(&dir, &["explain", "e0387"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("E0387 — 数値が必要（エラー）\n"), "{out}");
+    let (code, out, _) = ras(&dir, &["explain"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("W0304  VBA の綴りの名前\n"), "{out}");
+    let (code, _, err) = ras(&dir, &["explain", "E9999"]);
+    assert_eq!(code, 2);
+    assert!(err.contains("`E9999` という診断のコードはありません"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `stdlib/standin.json` is what `tools/standin/members.js` lists from the stand-in itself.
+#[test]
+fn stand_in_members_are_up_to_date() {
+    if !has_node() {
+        return;
+    }
+    let dir = project("standin-list", &mut sales(), &[("src/main.ras", "export function f() {\n}\n")]);
+    let (code, _, err) = ras(&dir, &["build", "--target", "js"]);
+    assert_eq!(code, 0, "{err}");
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let out = Command::new("node").arg(repo.join("tools/standin/members.js")).arg(dir.join("build/debug")).env("RAS_BOOK_ADDON", addon()).output().expect("node");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let listed = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
+    let file = repo.join("crates/ras-compiler/stdlib/standin.json");
+    if std::env::var_os("RAS_UPDATE_STANDIN").is_some() {
+        std::fs::write(&file, &listed).unwrap();
+    }
+    let committed = std::fs::read_to_string(&file).unwrap().replace("\r\n", "\n");
+    assert!(committed == listed, "crates/ras-compiler/stdlib/standin.json is out of date: run this test with RAS_UPDATE_STANDIN=1");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_warns_about_what_the_stand_in_lacks() {
+    let source = r#"export function f() {
+    const ws = Sheet1;
+    ws.range("A1").value = application.max(1, 2) + worksheets.count;
+    ws.range("A1").font.bold = true;
+    ws.range("A1").addComment("x");
+    ws.shapes.count;
+    const file = application.getOpenFilename();
+    application.run("Legacy");
+    const conn = createObject("ADODB.Connection");
+    const dict = new Scripting.Dictionary();
+    debug.print(format(now(), "yyyy"), file, dict.count);
+}
+"#;
+    let dir = project("standin", &mut sales(), &[("src/main.ras", source)]);
+    // Not by default: the program is VBA for Excel.
+    let (code, _, err) = ras(&dir, &["check"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!err.contains("W051"), "{err}");
+
+    let (code, out, _) = ras(&dir, &["check", "--target", "stand-in", "--message-format", "json"]);
+    assert_eq!(code, 0, "warnings only: {out}");
+    let found: Vec<(String, i64)> = out
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|d| d["code"].as_str().is_some_and(|c| c.starts_with("W051")))
+        .map(|d| (d["code"].as_str().unwrap().to_string(), d["range"]["start"]["line"].as_i64().unwrap()))
+        .collect();
+    assert_eq!(found, vec![("W0510".to_string(), 5), ("W0510".to_string(), 6), ("W0511".to_string(), 7), ("W0511".to_string(), 8), ("W0512".to_string(), 9)], "{out}");
+
+    // Or always, from ras.toml.
+    std::fs::write(dir.join("ras.toml"), "[project]\nname = \"Sales\"\nworkbook = \"Book.xlsx\"\n\n[lint]\nstand-in = true\n").unwrap();
+    let (_, _, err) = ras(&dir, &["check"]);
+    assert!(err.contains("warning[W0510]: `addComment` はブックの代役の `Range` にありません"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `window.DATA` of a page of `ras book view`.
+fn view_data(page: &str) -> serde_json::Value {
+    let start = page.find("window.DATA = ").expect("the data of the page") + "window.DATA = ".len();
+    let end = page[start..].find(";</script>").unwrap() + start;
+    serde_json::from_str(&page[start..end].replace("<\\/", "</")).unwrap()
+}
+
+#[test]
+fn book_view_draws_the_sheets_and_marks_changes() {
+    let dir = temp_dir("view");
+    let mut a = sales();
+    a.set_format(0, at("A1:C1"), "font.bold", &Val::Bool(true)).unwrap();
+    a.set_format(0, at("A1:C1"), "interior.color", &Val::Num(0x41_7C_10 as f64)).unwrap();
+    a.set_number_format(0, at("C2:C5"), "#,##0").unwrap();
+    a.merge_cells(0, at("E1:F2"), false).unwrap();
+    a.save(&dir.join("a.xlsx")).unwrap();
+    a.set_values(0, at("B3"), &[vec![Val::Num(70.0)]]).unwrap();
+    a.save(&dir.join("b.xlsx")).unwrap();
+
+    let (code, out, err) = ras(&dir, &["book", "view", "b.xlsx", "--diff", "a.xlsx", "--stdout"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.starts_with("<!doctype html>") && out.contains("<div id=\"grid\">"), "{}", &out[..200.min(out.len())]);
+    let data = view_data(&out);
+    assert_eq!(data["file"], "b.xlsx");
+    let sheet = &data["sheets"][0];
+    assert_eq!((sheet["name"].as_str(), sheet["rows"].as_i64(), sheet["cols"].as_i64()), (Some("Sheet1"), Some(5), Some(6)), "{sheet:#}");
+    let cell = |a1: (i64, i64)| sheet["cells"].as_array().unwrap().iter().find(|c| c["r"] == a1.0 && c["c"] == a1.1).cloned().unwrap();
+    let style = |c: &serde_json::Value| sheet["styles"][c["s"].as_u64().unwrap() as usize].as_str().unwrap().to_string();
+    // A1: bold on a green fill.
+    let a1 = cell((0, 0));
+    assert_eq!(a1["t"], "商品");
+    assert!(style(&a1).contains("font-weight:bold") && style(&a1).contains("background:#107C41"), "{}", style(&a1));
+    // C3: what the cell shows, its formula, and numbers to the right.
+    let c3 = cell((2, 2));
+    assert_eq!((c3["t"].as_str(), c3["f"].as_str(), c3["k"].as_str()), (Some("7,000"), Some("=B3*100"), Some("number")));
+    assert!(style(&c3).contains("text-align:right"), "{}", style(&c3));
+    assert_eq!(sheet["merges"], serde_json::json!([[0, 4, 1, 5]]));
+    // What changed since a.xlsx, for the marks and the list.
+    assert_eq!(data["diff"]["before"], "a.xlsx");
+    let changed: Vec<&str> = data["diff"]["changes"]["Sheet1"].as_array().unwrap().iter().map(|c| c["a"].as_str().unwrap()).collect();
+    assert_eq!(changed, vec!["B3", "C3", "C5"]);
+    assert_eq!(data["diff"]["changes"]["Sheet1"][0], serde_json::json!({ "a": "B3", "before": "5", "after": "70" }));
+
+    // Into a file; the limit on rows is told.
+    let (code, out, err) = ras(&dir, &["book", "view", "b.xlsx", "-o", "out/b.html"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("b.html を作成しました"), "{out}");
+    let page = std::fs::read_to_string(dir.join("out/b.html")).unwrap();
+    assert_eq!(view_data(&page)["diff"], serde_json::Value::Null);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn run_view_and_the_snapshot_of_a_stopped_run() {
+    if !has_node() {
+        return;
+    }
+    let dir = project("run-view", &mut sales(), &[("src/report.ras", REPORT)]);
+    let (code, out, err) = ras(&dir, &["run", "rebuildReport", "--view"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("グリッド表示: build/view/Book.html") || out.contains("グリッド表示: build\\view\\Book.html"), "{out}");
+    let data = view_data(&std::fs::read_to_string(dir.join("build/view/Book.html")).unwrap());
+    assert_eq!(data["diff"]["changes"]["Sheet1"].as_array().unwrap().len(), 3, "{:#}", data["diff"]);
+
+    // The editor asks the stopped program for its workbooks (`$rasBookSnapshot`), then draws them.
+    let script = dir.join("snapshot.js");
+    std::fs::write(
+        &script,
+        r#"const path = require("path");
+const dir = path.join(__dirname, "build", "debug");
+const $rt = require(path.join(dir, "ras-runtime.js"));
+$rt.configure({ manifest: { workbook: "Book.xlsx" }, root: __dirname, book: process.env.RAS_BOOK_ADDON, saveOnExit: false });
+$rt.hooks.note = () => {};
+$rt.hooks.print = () => {};
+require(path.join(dir, "report.js"));
+const out = path.join(__dirname, "snap");
+console.log($rasBookSnapshot(out));
+$rt.run("Report.rebuildReport");
+console.log($rasBookSnapshot(out));
+"#,
+    )
+    .unwrap();
+    let run = Command::new("node").arg(&script).env("RAS_BOOK_ADDON", addon()).output().expect("node");
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    // Nothing before the program used a workbook; then the project's workbook.
+    assert_eq!(String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n"), "0\n1\n");
+    let list: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("snap/snapshot.json")).unwrap()).unwrap();
+    assert_eq!((list["books"][0]["name"].as_str(), list["books"][0]["file"].as_str(), list["books"][0]["project"].as_bool()), (Some("Book.xlsx"), Some("book-0.xlsx"), Some(true)));
+    let (code, page, err) = ras(&dir, &["book", "view", "snap/book-0.xlsx", "--diff", "Book.xlsx", "--title", "Book.xlsx", "--stdout"]);
+    assert_eq!(code, 0, "{err}");
+    let data = view_data(&page);
+    assert_eq!((data["file"].as_str(), data["diff"]["before"].as_str()), (Some("Book.xlsx"), Some("前回")));
+    assert_eq!(data["diff"]["changes"]["Sheet1"][0], serde_json::json!({ "a": "D2", "before": "（空）", "after": "6" }));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The examples of the cheat sheet are checked as they are written (docs/cheatsheet.md).
+#[test]
+fn cheat_sheet_examples_pass_the_check() {
+    // (A checkout on Windows may have CRLF line ends.)
+    let sheet = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/cheatsheet.md")).unwrap().replace("\r\n", "\n");
+    let mut files: Vec<(String, String)> = Vec::new();
+    for (i, block) in sheet.split("```typescript\n").skip(1).enumerate() {
+        let code = block.split("```").next().unwrap().to_string();
+        let path = if code.starts_with("// test/") { format!("test/block{i}.test.ras") } else { format!("src/block{i}.ras") };
+        files.push((path, code));
+    }
+    assert!(files.len() >= 6, "the cheat sheet has code examples");
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+    let dir = project("cheatsheet", &mut sales(), &refs);
+    let (code, out, err) = ras(&dir, &["check"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!err.contains("warning["), "{err}");
+    // `ras cheatsheet` prints it, and `ras init` leaves the guide for AI agents.
+    let (code, out, _) = ras(&dir, &["cheatsheet"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("# RAS 早見表"), "{}", &out[..40.min(out.len())]);
+    let fresh = temp_dir("init-agents");
+    let (code, _, err) = ras(&fresh, &["init", "."]);
+    assert_eq!(code, 0, "{err}");
+    assert!(std::fs::read_to_string(fresh.join("AGENTS.md")).unwrap().contains("ras book dump"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&fresh);
+}

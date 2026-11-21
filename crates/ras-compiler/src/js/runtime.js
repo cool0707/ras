@@ -1262,7 +1262,11 @@ const vbaImpl = {
         return call(shell(), "Popup", [text, 0, title === undefined ? "Microsoft Excel" : cstr(title), buttons || 0]);
     },
     InputBox(prompt, title, defaultValue) {
-        // `Application.InputBox` of the stand-in asks the same hook.
+        // (With the stand-in, its `Application.InputBox` asks the same hook.)
+        if (hooks.inputBox && stand() === null) {
+            const given = hooks.inputBox(cstr(prompt), title === undefined ? undefined : cstr(title), defaultValue);
+            if (given !== undefined) return given === false ? "" : cstr(given);
+        }
         const r = call(application(), "InputBox", [cstr(prompt), title, defaultValue]);
         return r === false ? "" : cstr(r);
     },
@@ -1687,6 +1691,19 @@ function debugDescription(o, fallback) {
         return fallback;
     }
 }
+/**
+ * The workbooks of the stand-in as they are now, written into `dir` for the editor's sheet
+ * panel (evaluated by the editor while the program is stopped). 0 when the program does not
+ * work on the stand-in, or has not used a workbook yet.
+ */
+function bookSnapshot(dir) {
+    try {
+        return excelHost !== null && typeof excelHost.saveSnapshot === "function" ? excelHost.saveSnapshot(String(dir)) : 0;
+    } catch {
+        return 0;
+    }
+}
+Object.defineProperty(globalThis, "$rasBookSnapshot", { value: bookSnapshot, configurable: true });
 Object.defineProperty(globalThis, "$rasDebugProperties", { value: debugProperties, configurable: true });
 Object.defineProperty(globalThis, "$rasDebugDescription", { value: debugDescription, configurable: true });
 
@@ -1703,7 +1720,7 @@ module.exports = {
     date, clone, i32, i64, idiv, imod, div, fmod, pow, sqrt, log, post, round, bankersRound, numStr, toFixed, val,
     cnum, cint, clng, toInt, toLong, cbool, cdate, cstr, str, dyn, cmp, eq,
     trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
-    configure, hooks, note, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
+    configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
     vba, declare, module: module_, ensureInit, entries, run, form,
 };

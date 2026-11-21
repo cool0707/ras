@@ -181,6 +181,8 @@ impl Default for SyncCfg {
 #[serde(default, rename_all = "kebab-case")]
 pub struct LintCfg {
     pub require_docs: bool,
+    /// Warn about what the stand-in for Excel does not have (`ras check --target stand-in`).
+    pub stand_in: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

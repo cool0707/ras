@@ -56,6 +56,7 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
     let mut others = Vec::new();
     let mut forms = Vec::new();
     let mut tests = Vec::new();
+    let mut module_names = serde_json::Map::new();
     for m in 0..prog.modules.len() {
         // Bundled library modules with code of their own (the struct map) run as RAS code too.
         let std_code = prog.modules[m].kind == ModuleKind::Std && !prog.modules[m].classes.is_empty();
@@ -86,6 +87,7 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
             out.diagnostics.append(&mut g.diags);
             continue;
         }
+        module_names.insert(md.vba_name.clone(), serde_json::Value::String(format!("./{file_name}")));
         module_files.push(file_name);
         if md.form.is_some() {
             // A form is started by showing it (spec §14.10.7).
@@ -106,6 +108,7 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
         "workbook": prog.config.project.workbook,
         "entries": out.entries,
         "forms": form_names,
+        "modules": module_names,
     });
     if prog.modules.iter().any(|m| m.is_test()) {
         let mut manifest = manifest.clone();

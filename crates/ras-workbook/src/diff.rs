@@ -23,7 +23,8 @@ pub struct Side {
 }
 
 impl Side {
-    fn shown(&self) -> String {
+    /// The cell as text: its value, with its formula before it.
+    pub fn shown(&self) -> String {
         match &self.formula {
             Some(f) => format!("{f}（{}）", self.value),
             None => self.value.clone(),
@@ -280,20 +281,25 @@ fn lines_text(columns: bool, inserted: bool, at: u32, count: u32) -> String {
     format!("{span} を{}（推定）", if inserted { "挿入" } else { "削除" })
 }
 
+/// The changes of structure, a line each.
+pub fn structure_lines(d: &Diff) -> Vec<String> {
+    d.structure
+        .iter()
+        .map(|s| match s {
+            Structure::SheetAdded(n) => format!("+ シート「{n}」を追加"),
+            Structure::SheetRemoved(n) => format!("- シート「{n}」を削除"),
+            Structure::SheetRenamed { from, to } => format!("~ シート「{from}」の名前を「{to}」に変更"),
+            Structure::Lines { sheet, columns, inserted, at, count } => format!("~ {sheet}: {}", lines_text(*columns, *inserted, *at, *count)),
+        })
+        .collect()
+}
+
 /// The changes as text; `max_cells`: the changed cells written at most.
 pub fn text(d: &Diff, max_cells: usize) -> String {
     if d.is_empty() {
         return "差分はありません\n".into();
     }
-    let mut out = String::new();
-    for s in &d.structure {
-        out.push_str(&match s {
-            Structure::SheetAdded(n) => format!("+ シート「{n}」を追加\n"),
-            Structure::SheetRemoved(n) => format!("- シート「{n}」を削除\n"),
-            Structure::SheetRenamed { from, to } => format!("~ シート「{from}」の名前を「{to}」に変更\n"),
-            Structure::Lines { sheet, columns, inserted, at, count } => format!("~ {sheet}: {}\n", lines_text(*columns, *inserted, *at, *count)),
-        });
-    }
+    let mut out: String = structure_lines(d).into_iter().map(|l| l + "\n").collect();
     let mut sheet = "";
     for c in d.cells.iter().take(max_cells) {
         if c.sheet != sheet {

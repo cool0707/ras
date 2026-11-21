@@ -68,6 +68,9 @@ ras run Report.rebuildReport              # 関数を Excel なしで実行し�
 ras test                                  # test/**/*.test.ras のテストを Excel なしで実行
 ras book dump Book.xlsm                   # ブックの中身（シート・数式・名前・テーブル）をテキストで出力
 ras book diff before.xlsm after.xlsm      # 2 つのブックのセルと構造の差分
+ras book view Book.xlsm                   # シートを Excel のようなグリッドで表示する HTML を作る
+ras explain E0301                         # エラー・警告のコードの説明と直し方
+ras cheatsheet                            # 構文と Excel の操作の早見表
 ```
 
 サンプルプロジェクトは [examples/sales-report](examples/sales-report) にあります（`ras --project examples/sales-report build`）。
@@ -147,6 +150,8 @@ Sheet1:
 差分 3 件（構造 0、セル 3、名前 0）
 ```
 
+`application.run` で呼ぶ手書き VBA と、代役に無い COM オブジェクトは、プロジェクトの関数・クラスで置き換えられます（`--replace-run Legacy=Mocks.legacy`、`--replace-object ADODB.Connection=Mocks.FakeConnection`）。`--view` を付けると、実行後のブックをグリッドで表示する HTML（下の `ras book view`）も作ります。
+
 応答を指定しなかった `msgBox` は `vbOK`、`inputBox` は既定値（無ければキャンセル）で応答します。終了コードは、正常に終われば 0、実行時エラーで終われば 1、実行できなければ 2 です（仕様 §14.13）。
 
 ### テスト（`ras test`）
@@ -210,6 +215,30 @@ Book.xlsx
 - 下や右へコピーされた同じ形の数式は 1 行にまとめます。大きなシートは既定で 200 行 × 50 列まで出力し、打ち切った範囲を示します（`--max-rows` / `--max-cols` / `--all`）。
 - `diff` は、シートの追加・削除・名前の変更と、行・列の挿入・削除（ひとまとまりのもの。推定）も出力します。差分が無ければ終了コード 0、あれば 1 です（仕様 §14.14）。
 
+### シートを目で見る（`ras book view`）
+
+```sh
+ras book view Book.xlsx --open                                 # グリッド表示の HTML（build/view/Book.html）を作ってブラウザーで開く
+ras book view build/debug/workbooks/Book.xlsx --diff Book.xlsx # 変更されたセルを強調する
+ras run Report.rebuildReport --view                            # 実行して、結果のブックを変更つきで表示する
+```
+
+値・数式・主な書式（フォント・塗りつぶし・罫線・配置・表示形式）・列幅と行の高さ・結合セル・フィルターを、Excel に近い見た目のグリッドで表示します。`--diff` を付けると、変更されたセルに印が付き、変更の一覧からそのセルへ移動できます。条件付き書式・テーブルのスタイル・画像・グラフは描きません。
+
+VS Code では「RAS: ブックを表示（グリッド）」（エクスプローラーのブックの右クリックにもあります）で同じ表示をパネルに出せます。Excel を使わないデバッグ実行では、ブレークポイントやステップ実行で止まるたびに、そのときのシートをパネルに表示し、前回から変わったセルを強調します（設定 `ras.debug.sheetView`）。
+
+### エラーを調べる・AI に渡す
+
+```sh
+ras check --message-format json           # 診断を 1 行 1 件の JSON で出力（build / pack / run / test でも同じ）
+ras explain E0320                         # コードの説明、典型的な原因、直し方
+ras check --target stand-in               # Excel なしの実行で使えない API（代役に無いメンバーなど）も警告する
+ras cheatsheet                            # 構文の早見表
+```
+
+- `ras check --target stand-in` は、ブックの代役に無いメンバー（W0510）、Excel が必要な操作（W0511）、作れない COM オブジェクト（W0512）を、実行する前に警告します。`ras.toml` の `[lint]` に `stand-in = true` と書くと、常に警告します。
+- `ras init` は、AI エージェント向けの手引き `AGENTS.md`（作業の手順、書き方の決まり、使えないもの）もプロジェクトに作ります。早見表は [docs/cheatsheet.md](docs/cheatsheet.md)、仕様書の節の一覧は [llms.txt](llms.txt) にあります。
+
 ## デバッグ
 
 VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイントを置き、F5（または「RAS: デバッグを開始」）で実行します。
@@ -239,7 +268,8 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | `form new` / `form check` / `form pull` | 実装済み |
 | `sync` | 実装済み（Windows のみ。Excel で開いているブックへ、モジュールとユーザーフォームを反映する。`--pull` は未実装） |
 | `setup` / `typegen` / `pack --via-excel` | 未実装（実行するとその旨を表示して終了） |
-| `run` / `book dump` / `book diff` | 実装済み（仕様 §14.13、§14.14） |
+| `run` / `book dump` / `book diff` / `book view` | 実装済み（仕様 §14.13、§14.14） |
+| `explain` / `cheatsheet` | 実装済み（仕様 §14.15） |
 | `test` | 実装済み（仕様 §14.12。`--excel` とエディタの連携は未実装） |
 
 ## 実装状況
@@ -268,7 +298,8 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §14.11 ユーザーフォーム（`forms/`） | 実装済み | FormSpec からの生成（`Image` の画像、`ComboBox` / `ListBox` の項目を含む）、ブックからの取り出し（`ras form pull`）、ライブ同期、Excel での実行（§14.11.8）。カスタム ActiveX コントロールの生成、VBE での編集の検出（ドリフト）は未実装 |
 | §14.12 テスト（`ras test`） | 一部 | テストの列挙（`--list`）、実行、`expect`、フック、ブックの巻き戻し、`useWorkbook` / `tempDir` / `printed`、置き換え（`mock*`）、タイムアウト、`--reporter pretty / json / junit`、`-t`、`--ci`、`--bail`、`--watch`、失敗したテストのブックの保存、`[test]` の設定は実装。実際の Excel での実行（`--excel`、`[test] excel = "com"`）、エディタの連携（§14.12.10。CodeLens・テスト エクスプローラー、言語サーバーでのテストファイルの型チェックと補完）は未実装。テストファイルは 1 つずつ実行する（並行しない）。`-t` で選ばれなかったテストは結果に出さない。`toBeEmpty` と `toBeNothing` は、ブックの代役では `Empty` と `Nothing` をどちらも成功にする（ランタイムが区別しないため）。`expect` の型は `toBe` の期待値だけを検査する |
 | §14.13 CLI からの実行（`ras run`） | 実装済み | ブックの代役でだけ実行する（実際の Excel に対する実行は VS Code のデバッグ実行を使う）。ユーザーフォームの表示はエラーになる |
-| §14.14 ブックの中身を見る・比べる（`ras book dump` / `diff`） | 実装済み | 行・列の挿入・削除の推定は、ひとまとまりの挿入・削除だけ（複数箇所は、セルの差分として出る）。書式（フォント・色・罫線）は対象外 |
+| §14.14 ブックの中身を見る・比べる（`ras book dump` / `diff` / `view`） | 実装済み | 行・列の挿入・削除の推定は、ひとまとまりの挿入・削除だけ（複数箇所は、セルの差分として出る）。`dump` / `diff` は書式（フォント・色・罫線）を扱わない。`view` は条件付き書式・テーブルのスタイル・画像・図形・グラフ・斜線・文字の回転を描かず、列幅は既定のフォントを日本語のフォント（11pt）とみなして計算する |
+| §14.15 機械可読の診断・エラーの説明・代役で使えない API の警告 | 一部 | `--message-format json`、`ras explain`（すべてのコード）、`ras check --target stand-in`（W0510〜W0512）は実装。診断の「関連する位置」は、コンパイラが持っていないため出力しない。ユーザーフォームの検査の結果は JSON にならない。代役で使えるかどうかを言語サーバーのクイック情報に表示することは未実装 |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱し、メンバーとグローバルを camelCase で参照する（§15.3.1）。`Scripting`（`FileSystemObject`・`Dictionary`）と `VBScript.RegExp` の型定義も同梱し、VBA には遅延バインディングで出力する（§15.3）。`ras typegen` と `vba:` インポートは未実装 |
 | §16.1 JSDoc | 実装済み | 生成 VBA へのコメント・`VB_Description` 出力、`@param` 名の検査 |
 | §16.2 IntelliSense（LSP） | 一部 | 診断・補完（名前付き引数の引数名、未インポートの候補と `import` の自動追加を含む）・ホバー・パラメーター情報・定義へ移動・型定義へ移動・参照の検索・強調表示・名前の変更・シンボル一覧（ファイル・ワークスペース）・インレイヒント・セマンティックトークン・折りたたみ・整形・CodeLens（最適化の通知、関数ごとの「Excelで実行」「デバッグ実行」）・「生成 VBA を表示」と、クイックフィックス（VBA の綴りの名前を直す、未インポートの名前の `import` を追加する）は実装。`completionItem/resolve`（JSDoc の遅延読み込み）、範囲の整形、その他のコードアクション（`byref` 引数へのリテラル渡しの一時変数化・縮小変換への `as` 追加）、`@deprecated` の使用箇所の警告は未実装 |
@@ -282,6 +313,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 ## 検証状況
 
 - 自動テスト: `cargo test --workspace`（構文、型チェック、仕様書のコード例と生成 VBA の照合、CLI の一連の流れ、LSP のセッション、`vbaProject.bin` の読み書き）。
+- `ras book view` のページは、自動テストで描画のもとになるデータ（セルの表示・数式・書式の CSS・結合セル・変更の一覧）を確かめ、Chromium（Playwright）で開いて見た目とセルの選択・変更の一覧からの移動を手で確認しています。VS Code のパネル（「ブックを表示」、デバッグの一時停止中の表示）と `launch.json` の `answers` は、型チェックと拡張のビルドだけで、実機の VS Code では未確認です。一時停止中にランタイムがブックを書き出す部分（`$rasBookSnapshot`）は自動テストで確かめています。
 - `ras run`・`ras test`・`ras book dump` / `diff` は、プロジェクトを作って `ras` を実行する自動テスト（`crates/ras/tests/offline.rs`。Linux の Node 22）で確認しています。Windows・macOS と、VS Code の実行ファイルをランタイムに使う経路は未確認です。`ras book dump` の出力は xljs のテスト用ブック（入力規則・条件付き書式・テーブル）でも確かめています。Excel が保存した大きなブックでの速度は測っていません。
 - `ras pack` が出力したブックは、別実装の `ovba` クレートと oletools（`olevba`）で読み直して確認しています（CI でも実行）。
 - 実機の Excel（Windows 11、Excel 2021 64bit）で次を確認しています（CI には Excel が無いため手動）:

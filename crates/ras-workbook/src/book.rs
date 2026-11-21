@@ -1705,11 +1705,13 @@ mod format;
 mod inspect;
 mod paste;
 mod sort;
+mod view;
 
 pub use gridcraft_model::FilterCriterion;
 pub use inspect::{CellInfo, FormulaRegion, RuleInfo, SheetInfo, TableInfo};
 pub use paste::{Paste, PasteOp, PasteWhat};
 pub use sort::{SortKey, Special, split_criterion};
+pub use view::{VIEW_COLS, VIEW_ROWS};
 
 #[cfg(test)]
 mod tests;

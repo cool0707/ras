@@ -2240,5 +2240,25 @@ module.exports = function createExcel(rt, addon, options) {
         return written;
     }
 
-    return { application, global, runMacro, finish, snapshot, restore, useWorkbook, saveAll, Range, Worksheet, Workbook };
+    /**
+     * Writes the open workbooks as they are now into `dir` (`book-<n>.xlsx`) with a list of them
+     * (`snapshot.json`): what the editor draws while the program is stopped. Returns how many.
+     */
+    function saveSnapshot(dir) {
+        fs.mkdirSync(dir, { recursive: true });
+        const books = [];
+        app.$books.forEach((wb, i) => {
+            if (wb.$snap === undefined || wb.$snap.rev !== wb.$rev) wb.$snap = { rev: wb.$rev, bytes: book(() => wb.$book.toBytes()) };
+            const file = `book-${i}.xlsx`;
+            fs.writeFileSync(path.join(dir, file), wb.$snap.bytes);
+            const active = wb.$sheets[wb.$active];
+            books.push({ name: wb.$name, file, project: wb.$project, rev: wb.$rev, source: wb.$file || null, activeSheet: active ? active.Name : null, active: app.$activeBook === wb });
+        });
+        fs.writeFileSync(path.join(dir, "snapshot.json"), JSON.stringify({ books }));
+        return books.length;
+    }
+
+    // The objects of the stand-in by the name of their Excel class (what `tools/standin/members.js` lists).
+    const classes = { Application, Workbooks, Workbook, Sheets, Worksheet, Range, Names, Name, Sort: SortState };
+    return { application, global, runMacro, finish, snapshot, restore, useWorkbook, saveAll, saveSnapshot, classes, Range, Worksheet, Workbook };
 };
