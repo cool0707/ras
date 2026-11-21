@@ -124,10 +124,12 @@ try {
             }
             $macroBook = Join-Path $dir "Run.xlsm"
             Copy-Item $packed $macroBook -Force
+            # Opened without events: Workbook_Open would ask Excel to call the workbook's
+            # initialization later (Application.OnTime), and Excel opens a workbook again to make
+            # such a call when the workbook was closed before it. The macro initializes on its own.
+            $xl.EnableEvents = $false
             $wb = $xl.Workbooks.Open($macroBook)
-            # The workbook's Workbook_Open asks Excel to call its initialization when it is idle
-            # (Application.OnTime). Closed before that, Excel would open the workbook again for it.
-            Start-Sleep -Seconds 2
+            $xl.EnableEvents = $true
             # Deleting a sheet asks; the alerts can be on again after the macro before.
             $xl.DisplayAlerts = $false
             $text = "$($xl.Run("Run.xlsm!$($s.entry)"))"
