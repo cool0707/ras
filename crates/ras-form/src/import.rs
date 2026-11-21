@@ -118,6 +118,9 @@ pub struct Prepared {
     pub pending: Vec<Pending>,
     /// Components that were not taken over, with the reason.
     pub skipped: Vec<String>,
+    /// Files [`sheet_files`] created for sheets (and `ThisWorkbook`) that had none, relative
+    /// to the project root, with what they are for.
+    pub created: Vec<(String, String)>,
     /// Files whose marker line becomes a plain comment once the workbook has the generated code.
     marked: Vec<PathBuf>,
 }
@@ -153,6 +156,9 @@ impl Prepared {
             ));
         }
         out.extend(self.skipped.iter().cloned());
+        for (path, what) in &self.created {
+            out.push(format!("{what}のイベント処理を書くファイル {path} を作成しました"));
+        }
         out
     }
 }
@@ -421,4 +427,124 @@ pub fn finish(prepared: &Prepared) -> Result<(), String> {
         std::fs::write(path, format!("{bom}{comment}{}", &body[first.len()..])).map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(())
+}
+
+/// A worksheet of the workbook, for [`sheet_files`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Sheet {
+    /// Its code name (`Sheet1`).
+    pub code_name: String,
+    /// The name on its tab.
+    pub name: String,
+}
+
+/// Whether a RAS source has a handler for an event of `target` (`@on("Sheet1.` / `@on('Sheet1.`).
+fn handles(text: &str, target: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    let target = target.to_ascii_lowercase();
+    ['"', '\''].iter().any(|q| text.contains(&format!("@on({q}{target}.")))
+}
+
+/// The text of a file [`sheet_files`] creates for the worksheet `sheet`, or the workbook when `None`.
+pub fn sheet_file_text(sheet: Option<&Sheet>, workbook_code_name: &str) -> String {
+    let (what, target, example) = match sheet {
+        Some(s) => (
+            format!("シート「{}」（コード名 {}）", s.name, s.code_name),
+            s.code_name.clone(),
+            format!("//   @on(\"{}.Change\")\n//   function onChange(target: Excel.Range) {{\n//       // セルの値が変わったとき\n//   }}\n", s.code_name),
+        ),
+        None => (
+            format!("ブック（{workbook_code_name}）"),
+            "Workbook".to_string(),
+            "//   @on(\"Workbook.Open\")\n//   function onOpen() {\n//       // ブックを開いたとき\n//   }\n".to_string(),
+        ),
+    };
+    format!(
+        "// {what}のイベント処理を書くファイルです（同期のときに作成しました）。\n// イベントは @on(\"{target}.<イベント名>\") を付けた関数で受け取ります（仕様 §12.2）。例:\n//\n{example}//\n// 関数や変数などのコードが無い間は、ブックの VBA モジュールにはなりません。\n"
+    )
+}
+
+/// Creates `src/<CodeName>Events.ras` for each worksheet of `sheets`, and for the workbook
+/// (`workbook_code_name`, normally `ThisWorkbook`), that has no file yet: the place to write
+/// its event handlers (spec §14.7.2). Nothing is created for a sheet whose events a file of
+/// the project already handles (`@on("Sheet1.…")`), or when the name is taken by another
+/// module. A file without code is not built into a module (spec §12.1), so the files cost
+/// nothing until something is written in them. Returns the files created (relative to `root`)
+/// with what they are for.
+pub fn sheet_files(root: &Path, sheets: &[Sheet], workbook_code_name: &str) -> Result<Vec<(String, String)>, String> {
+    let mut paths = Vec::new();
+    walk(&root.join("src"), &mut paths);
+    if let Ok(forms) = workspace::load(root) {
+        paths.extend(forms.into_iter().map(|f| f.code_path));
+    }
+    let sources: Vec<(String, String)> = paths
+        .iter()
+        .map(|p| {
+            let key = relative(&root.join("src"), p);
+            (vba_module_name(key.strip_suffix(".ras").unwrap_or(&key)), std::fs::read_to_string(p).unwrap_or_default())
+        })
+        .collect();
+    let mut targets: Vec<Option<&Sheet>> = sheets.iter().filter(|s| !s.code_name.is_empty()).map(Some).collect();
+    if !workbook_code_name.is_empty() {
+        targets.push(None);
+    }
+    let mut created = Vec::new();
+    for sheet in targets {
+        let (code_name, target, what) = match sheet {
+            Some(s) => (s.code_name.as_str(), s.code_name.as_str(), format!("シート「{}」（{}）", s.name, s.code_name)),
+            None => (workbook_code_name, "Workbook", format!("ブック（{workbook_code_name}）")),
+        };
+        let key = format!("{code_name}Events");
+        let path = root.join("src").join(format!("{key}.ras"));
+        let module = vba_module_name(&key);
+        let taken = sources.iter().any(|(name, _)| name.eq_ignore_ascii_case(&module)) || sheets.iter().any(|s| s.code_name.eq_ignore_ascii_case(&module));
+        if path.exists() || taken || sources.iter().any(|(_, text)| handles(text, target)) {
+            continue;
+        }
+        std::fs::create_dir_all(root.join("src")).map_err(|e| format!("{}: {e}", root.join("src").display()))?;
+        std::fs::write(&path, sheet_file_text(sheet, workbook_code_name)).map_err(|e| format!("{}: {e}", path.display()))?;
+        created.push((relative(root, &path), what));
+    }
+    Ok(created)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ras-sheet-files-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn sheets_without_a_file_get_one() {
+        let root = project();
+        std::fs::write(root.join("src/main.ras"), "@on(\"Sheet2.Change\")\nfunction h(target: Excel.Range) {}\n").unwrap();
+        std::fs::write(root.join("src/Sheet3Events.ras"), "// mine\n").unwrap();
+        let sheets: Vec<Sheet> = [("Sheet1", "売上"), ("Sheet2", "集計"), ("Sheet3", "メモ")].iter().map(|(c, n)| Sheet { code_name: c.to_string(), name: n.to_string() }).collect();
+        let created = sheet_files(&root, &sheets, "ThisWorkbook").unwrap();
+        let paths: Vec<&str> = created.iter().map(|(p, _)| p.as_str()).collect();
+        // Sheet2 is handled in main.ras; Sheet3 has its file.
+        assert_eq!(paths, ["src/Sheet1Events.ras", "src/ThisWorkbookEvents.ras"]);
+        let text = std::fs::read_to_string(root.join("src/Sheet1Events.ras")).unwrap();
+        assert!(text.contains("シート「売上」（コード名 Sheet1）") && text.contains("@on(\"Sheet1.Change\")"), "{text}");
+        assert_eq!(std::fs::read_to_string(root.join("src/Sheet3Events.ras")).unwrap(), "// mine\n");
+        // Nothing more the next time.
+        assert!(sheet_files(&root, &sheets, "ThisWorkbook").unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_files_build_into_nothing() {
+        let sheet = Sheet { code_name: "Sheet1".into(), name: "Sheet1".into() };
+        for text in [sheet_file_text(Some(&sheet), "ThisWorkbook"), sheet_file_text(None, "ThisWorkbook")] {
+            let cfg = ras_compiler::Config { sheet_code_names: vec!["Sheet1".into()], ..Default::default() };
+            let (prog, out) = ras_compiler::compile_str(&[("Sheet1Events", text.as_str())], cfg, &Default::default());
+            assert!(!prog.diagnostics.iter().any(|d| d.is_error()), "{:?}", prog.diagnostics);
+            assert!(out.files.iter().all(|f| f.name.starts_with("RAS_")), "{:?}", out.files.iter().map(|f| &f.name).collect::<Vec<_>>());
+        }
+    }
 }

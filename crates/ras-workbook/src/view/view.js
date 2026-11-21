@@ -1,5 +1,6 @@
 // The grid of `ras book view` (and of the editor's sheet panel): draws the sheets of DATA.
-// DATA = { file, sheets: [sheet_view...], images: [data URL], diff: { before, structure: [text], changes: { sheet: [{ a, before, after }] } } | null, active: name | null }
+// DATA = { file, sheets: [sheet_view...], images: [data URL], diff: { before, structure: [text], changes: { sheet: [{ a, before, after }] } } | null, active: name | null, focus?: true }
+// (`focus`: `active` was asked for (`ras book view --sheet`) and comes before the sheet shown last time.)
 //
 // The grid goes on past the cells as Excel's does: empty rows and columns are added while the
 // sheet is scrolled to its end. The objects of the sheet's drawing (shapes, pictures, controls)
@@ -709,8 +710,9 @@
     } else {
         side.hidden = true;
     }
-    // The sheet shown last time, else the active one, else the first with changes.
+    // The sheet asked for, else the one shown last time, else the first with changes, else the active one.
     const first =
+        (data.focus && data.sheets.find((s) => s.name === data.active)) ||
         data.sheets.find((s) => s.name === saved.sheet) ||
         data.sheets.find((s) => (changes[s.name] || []).length) ||
         data.sheets.find((s) => s.name === data.active) ||

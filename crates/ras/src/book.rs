@@ -73,6 +73,9 @@ pub enum BookCommand {
         /// 図形・画像・コントロールを読むブック（省略時は対象ブック）。実行で保存されたブックを、実行前のブックの図形と重ねて表示するときに指定する
         #[arg(long, value_name = "BOOK")]
         drawings: Option<PathBuf>,
+        /// 最初に表示するシート（コード名かシート名。両方に当たるときはコード名。例: Sheet1）
+        #[arg(long, value_name = "SHEET")]
+        sheet: Option<String>,
     },
     /// 2 つのブックのセル（値・数式・表示形式）と構造（シート、行・列の挿入と削除の推定）の差分を出力する
     Diff {
@@ -182,9 +185,14 @@ pub fn diff_cmd(before: &Path, after: &Path, format: DiffFormat, max_cells: usiz
 /// The page that draws `file` as a grid, with what differs from `before` marked. The objects of
 /// the sheets' drawings (shapes, pictures, controls) are those of `drawings` when it is given: a
 /// workbook a run saved has lost some of them (the stand-in for Excel saves the cells and the
-/// formats, not the controls), and the run does not change them.
-pub fn view_page(file: &Path, before: Option<&Path>, all: bool, title: Option<&str>, drawings: Option<&Path>) -> Result<String, String> {
+/// formats, not the controls), and the run does not change them. `sheet` (a sheet's name or
+/// code name) is the sheet shown first.
+pub fn view_page(file: &Path, before: Option<&Path>, all: bool, title: Option<&str>, drawings: Option<&Path>, sheet: Option<&str>) -> Result<String, String> {
     let mut book = open(file)?;
+    let focus = match sheet {
+        Some(wanted) => Some(sheet_named(&book, wanted).ok_or_else(|| format!("{}: シート `{wanted}` がありません", file.display()))?),
+        None => None,
+    };
     let name = title.map(str::to_string).unwrap_or_else(|| file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
     let changes = match before {
         // (Compared with a snapshot of itself, it is "the last time".)
@@ -194,13 +202,27 @@ pub fn view_page(file: &Path, before: Option<&Path>, all: bool, title: Option<&s
     let limits = if all { None } else { Some((ras_workbook::book::VIEW_ROWS, ras_workbook::book::VIEW_COLS)) };
     // The drawings (shapes, pictures, controls) are read from the file itself.
     let source = drawings.and_then(|d| std::fs::read(d).ok()).or_else(|| std::fs::read(file).ok());
-    let data = view::data(&mut book, &name, source.as_deref(), limits, changes.as_ref().map(|(n, d)| (n.as_str(), d)))?;
+    let mut data = view::data(&mut book, &name, source.as_deref(), limits, changes.as_ref().map(|(n, d)| (n.as_str(), d)))?;
+    if let Some(focus) = focus {
+        data["active"] = focus.into();
+        data["focus"] = true.into();
+    }
     Ok(view::page(&data))
 }
 
+/// The name of the sheet whose code name or name is `wanted` (the code name first, as the
+/// editor asks by code name: `Sheet1` is the sheet of `Sheet1Events.ras` even when another sheet
+/// is named "Sheet1"; case does not matter).
+fn sheet_named(book: &Book, wanted: &str) -> Option<String> {
+    let count = book.sheet_count();
+    let by_code = (0..count).find(|&si| book.code_name(si).is_some_and(|c| c.eq_ignore_ascii_case(wanted)));
+    let si = by_code.or_else(|| (0..count).find(|&si| book.sheet_name(si).is_some_and(|n| n.eq_ignore_ascii_case(wanted))))?;
+    book.sheet_name(si).map(str::to_string)
+}
+
 /// Writes the page for `file` into `dir` (`<name>.html`); returns its path.
-pub fn write_view(file: &Path, before: Option<&Path>, all: bool, output: Option<&Path>, dir: &Path, drawings: Option<&Path>) -> Result<PathBuf, String> {
-    let page = view_page(file, before, all, None, drawings)?;
+pub fn write_view(file: &Path, before: Option<&Path>, all: bool, output: Option<&Path>, dir: &Path, drawings: Option<&Path>, sheet: Option<&str>) -> Result<PathBuf, String> {
+    let page = view_page(file, before, all, None, drawings, sheet)?;
     let target = match output {
         Some(o) => o.to_path_buf(),
         None => dir.join(format!("{}.html", file.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "book".into()))),
@@ -225,4 +247,22 @@ pub fn open_in_browser(path: &Path) -> Result<(), String> {
     };
     cmd.arg(path).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     cmd.spawn().map(|_| ()).map_err(|e| format!("{} を開けませんでした: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_sheet_is_found_by_its_code_name_first() {
+        // "集計" has the code name Sheet1; the sheet named "Sheet1" has Sheet2.
+        let mut book = Book::new_book();
+        book.rename_sheet(0, "集計").unwrap();
+        book.add_sheet(1, Some("Sheet1")).unwrap();
+        assert_eq!(book.code_name(1).as_deref(), Some("Sheet2"));
+        assert_eq!(sheet_named(&book, "sheet1").as_deref(), Some("集計"));
+        assert_eq!(sheet_named(&book, "Sheet2").as_deref(), Some("Sheet1"));
+        assert_eq!(sheet_named(&book, "集計").as_deref(), Some("集計"));
+        assert_eq!(sheet_named(&book, "Sheet9"), None);
+    }
 }

@@ -130,10 +130,14 @@ fn describe(report: &Report) -> String {
 
 /// A short account of what a take-over wrote into the project, for a notification.
 fn describe_take_over(prepared: &Prepared) -> Option<(i32, String)> {
-    if prepared.imported.is_empty() && prepared.skipped.is_empty() {
+    if prepared.imported.is_empty() && prepared.skipped.is_empty() && prepared.created.is_empty() {
         return None;
     }
     let mut parts = Vec::new();
+    if !prepared.created.is_empty() {
+        let items: Vec<String> = prepared.created.iter().map(|(path, what)| format!("{what} → {path}")).collect();
+        parts.push(format!("シートのイベント処理を書くファイルを作成しました（{}）", items.join("、")));
+    }
     if !prepared.imported.is_empty() {
         let items: Vec<String> = prepared.imported.iter().map(|i| format!("{} → {}", i.name, i.path)).collect();
         parts.push(format!("ブックの VBA を RAS に変換して取り込みました（{}）。元の VBA は vba/ に保存しています", items.join("、")));
@@ -247,9 +251,10 @@ impl Worker {
             let connected = self.session()?.connect();
             self.connected = connected.is_ok();
             connected.map_err(Failure::Sync)?;
-            // The hand-written VBA of the workbook is taken over into the project first (spec §14.7.1).
+            // The hand-written VBA of the workbook is taken over into the project first (spec §14.7.1),
+            // and the sheets without a file get one (spec §14.7.2).
             let config = read_config(&root).map_err(Failure::Build)?;
-            let prepared = if config.sync.pull_unmanaged { self.session()?.take_over(&root, config.target.codepage).map_err(Failure::Sync)? } else { Prepared::default() };
+            let prepared = if config.sync.pull_unmanaged || config.sync.sheet_files { self.session()?.take_over(&root, config.target.codepage, &config.sync).map_err(Failure::Sync)? } else { Prepared::default() };
             self.announce(&prepared);
             let built = compile(&root).map_err(Failure::Build)?;
             let forms = Forms { forms: &built.forms, codepage: built.codepage };
@@ -276,7 +281,7 @@ impl Worker {
     fn announce(&mut self, prepared: &Prepared) {
         // Only when something was written or could not be: what is pending is in the result of every sync.
         let Some((level, message)) = describe_take_over(prepared) else { return };
-        if prepared.imported.is_empty() && self.last_take_over.as_ref() == Some(&message) {
+        if prepared.imported.is_empty() && prepared.created.is_empty() && self.last_take_over.as_ref() == Some(&message) {
             return;
         }
         self.last_take_over = Some(message.clone());

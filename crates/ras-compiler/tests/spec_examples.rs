@@ -975,3 +975,19 @@ export function sheets(): string[] {
     // The same holds for a collection, which then needs no counter for the source position.
     assert_contains(&m, "        For Each ras_e In Worksheets\n            If ras_e.Visible = xlSheetVisible Then\n                r(ras_n) = CStr(ras_n) & \":\" & ras_e.Name\n                ras_n = ras_n + 1&\n            End If\n        Next ras_e\n");
 }
+
+#[test]
+fn spec_12_1_files_without_code_are_no_modules() {
+    let files = [
+        ("Sheet1Events", "// シート Sheet1 のイベント処理を書くファイルです。\n\n/* まだ何もない */\n"),
+        ("onlyImports", "import { twice } from \"./util\";\n// twice を使う予定\n"),
+        ("util", "export function twice(x: int): int { return x * 2; }\n"),
+        ("onlyConst", "const LIMIT = 10;\n"),
+    ];
+    let (_, out) = compile(&files);
+    let names: Vec<&str> = out.files.iter().map(|f| f.name.as_str()).collect();
+    assert!(!names.contains(&"Sheet1Events") && !names.contains(&"OnlyImports"), "{names:?}");
+    assert!(names.contains(&"Util") && names.contains(&"OnlyConst"), "{names:?}");
+    // Nothing refers to the modules left out.
+    assert!(!out.files.iter().any(|f| f.code.contains("Sheet1Events") || f.code.contains("OnlyImports")));
+}

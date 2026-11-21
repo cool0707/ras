@@ -255,6 +255,12 @@
         "category": "RAS"
       },
       {
+        "command": "ras.sheet.show",
+        "title": "シートのグリッドを表示",
+        "category": "RAS",
+        "icon": "$(table)"
+      },
+      {
         "command": "ras.restartServer",
         "title": "言語サーバーを再起動",
         "category": "RAS"
@@ -307,12 +313,21 @@
         {
           "command": "ras.client.showForm",
           "when": "isWindows"
+        },
+        {
+          "command": "ras.sheet.show",
+          "when": "editorLangId == ras"
         }
       ],
       "editor/title": [
         {
           "command": "ras.client.showGeneratedVba",
           "when": "editorLangId == ras",
+          "group": "navigation"
+        },
+        {
+          "command": "ras.sheet.show",
+          "when": "resourcePath in ras.sheetFiles",
           "group": "navigation"
         },
         {
@@ -348,6 +363,11 @@
           "group": "navigation@90"
         },
         {
+          "command": "ras.sheet.show",
+          "when": "resourcePath in ras.sheetFiles",
+          "group": "navigation@90"
+        },
+        {
           "command": "ras.userForm.openDesigner",
           "when": "resourceFilename =~ /\\.form\\.json$/",
           "group": "navigation@91"
@@ -372,6 +392,11 @@
         {
           "command": "ras.book.show",
           "when": "resourceExtname == .xlsx || resourceExtname == .xlsm",
+          "group": "navigation@9"
+        },
+        {
+          "command": "ras.sheet.show",
+          "when": "resourcePath in ras.sheetFiles",
           "group": "navigation@9"
         }
       ],
