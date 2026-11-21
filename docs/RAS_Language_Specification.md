@@ -1467,7 +1467,8 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 | `@forms/<フォーム名>.js` / `.js.map` | フォームのコードビハインド（`forms/<フォーム名>.ras`）。§14.10.7 |
 | `ras-runtime.js` | ランタイム（`$rt`）。数値変換・オーバーフロー検査・文字列関数・エラーオブジェクト・VBA 標準関数・Excel へのアクセス |
 | `ras-forms.js` | ユーザーフォームのランタイム（MSForms のオブジェクトとイベント、フォームを表示するホストとの通信）。§14.10.7 |
-| `ras-excel.js` | Excel の代役（`Application`・`Workbook`・`Worksheet`・`Range` などのオブジェクト）。Excel の無いときに使う。§14.10.8 |
+| `ras-scripting.js` | COM の無いときの `Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp`。§14.10.5 |
+| `ras-excel.js` | Excel の代役（`Application`・`Workbook`・`Worksheet`・`Range` などのオブジェクトと、ブック・シートのイベント）。Excel の無いときに使う。§14.10.8 |
 | `ras-main.js` | ランチャー。`node --enable-source-maps build/debug/ras-main.js <モジュール名.関数名>` で実行する（`--list` で実行可能な関数を JSON で出力） |
 | `ras-debug.json` | 実行可能な関数の一覧とフォームの一覧（VS Code 拡張が読む） |
 
@@ -1495,10 +1496,16 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 
 #### 14.10.5 再現しないもの・制限
 
-* **Excel 起点の呼び出し:** `@on` のイベントハンドラ（ブック・シート）、`@udf`、リボンコールバック、手書き VBA から RAS 関数を呼ぶ経路は起動できない（RAS から手書き VBA を呼ぶのは `Application.Run` 経由で可能）。ユーザーフォームは Excel ではなく VS Code に表示して動かす（§14.10.7）。
+* **Excel 起点の呼び出し:** `@on` のイベントハンドラ（ブック・シート）、`@udf`、リボンコールバック、手書き VBA から RAS 関数を呼ぶ経路は起動できない（RAS から手書き VBA を呼ぶのは `Application.Run` 経由で可能）。Excel が起こしたイベントを RAS のハンドラで受け取ることもできない。Excel のないデバッグ実行（§14.10.8）では、プログラムの操作で起きるブック・シートのイベントをランタイムが起こし、`@on` のハンドラを呼び出す。ユーザーフォームは Excel ではなく VS Code に表示して動かす（§14.10.7）。
 * **数値の `typeof`:** JavaScript の数値は `Long` と `Double` を区別しない。`typeof` は、静的な型に数値型が 1 つだけ含まれるとき（`double`、`string | double` など）はその型名を返し、それ以外では整数を `"Long"`、それ以外を `"Double"` とする。そのため `int | double` のように数値型を複数含むユニオン型を `typeof` で絞り込むと、VBA ビルドと結果が異なることがある。
 * **数値型の精度:** `long`・`currency`・`decimal` は倍精度浮動小数点数で表現する（`long` は 2^53 を超えると不正確、`decimal` の `0.1m + 0.2m == 0.3m` は成り立たない）。`float` は倍精度のまま計算する。
 * **VBA 標準関数:** よく使うもの（文字列・変換・日付・数学・`MsgBox`・`CreateObject`・`Format` の代表的な書式など）は JavaScript で実装している。未対応の関数は呼び出した時点でエラーになる。`Format` の未対応の書式は Excel の `TEXT` 関数に委譲する。ロケール依存の表記（日付の既定書式など）は VBA と一致しないことがある。
+* **`CreateObject` / `new`（COM オブジェクト）:** COM アドオン（`ras_com.node`）のある Windows では、実際の COM オブジェクトを作る（Excel が無くても作れる）。COM の無いデバッグ実行（Mac・Linux、および `ras.debug.excel` が `standIn` の Windows）では、`Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` をランタイムの JavaScript 実装（`ras-scripting.js`）で作る。これ以外の ProgID（`ADODB.Connection`、`WScript.Shell`、`MSXML2.XMLHTTP` など）はエラー 429。JavaScript 実装は日本語版 Windows の動作に合わせている。
+  * **ファイル:** `FileSystemObject` のファイル・フォルダーの操作（コピー・移動・削除はワイルドカード可）、`File` / `Folder` / `Files` / `Folders`、`TextStream` の読み書き。ドライブ（`drives` / `getDrive`）は未対応。エラーは VBA の番号（53 ファイルが見つからない、76 パスが見つからない、58 既に存在する、62 ファイルの終わり、70 書き込みできない）。
+  * **文字コード:** テキスト ファイルは、Windows と同じく ANSI（Shift_JIS、コード ページ 932）で読み書きする。`unicode` / `tristateTrue` を指定すると UTF-16（BOM 付き）。UTF-8 のファイルを ANSI として読むと、Windows と同じく文字化けする。
+  * **パス:** Mac・Linux では、`/` に加えて `\` もパスの区切りとして扱う（`folder + "\\data.txt"` のように書いたコードがそのまま動く）。`getParentFolderName` などパスの文字列だけを扱うメソッドは、どちらの区切りも受け付ける。
+  * **辞書:** キーの順序、`compareMode`、無いキーを読むと空の値で追加される動作、エラー番号（457、32811）は本物と同じ。
+  * **正規表現:** パターンは JavaScript の正規表現として解釈する（VBScript の正規表現の構文はその部分集合にあたる）。`global` / `ignoreCase` / `multiline`、`test` / `execute` / `replace`（`$1`・`$&`）。パターンの誤りはエラー 5017。
 * **`declare`（DLL 関数）:** `kernel32` の `Sleep` / `GetTickCount` / `GetTickCount64` / `GetCurrentProcessId` / `QueryPerformanceCounter` / `QueryPerformanceFrequency` のみ代替実装がある。それ以外は警告 `W1410` を出し、呼び出した時点でエラーになる。
 * **速度:** Excel へのアクセスはプロセス間 COM 呼び出しになるため、セルを 1 つずつ読み書きするループは VBA ビルドより大幅に遅い。
 * **実行中の Excel:** マクロ実行中の状態ではないため、停止中も実行中もユーザーが Excel を操作できる。
@@ -1578,12 +1585,45 @@ Excel を COM で操作できない環境でも、Excel を操作するプログ
 
 * **構成:** Node アドオン `ras_book.node`（`crates/ras-book`）がブックを持つ。ブックの読み書きは umya-spreadsheet（xljs と同じフォーク）、計算は GridCraft で行い、その部分は `crates/ras-workbook` にある。Excel のオブジェクト モデル（`Application`・`Workbooks`・`Workbook`・`Worksheets`・`Worksheet`・`Range`・`Names`・`WorksheetFunction`）は `ras-excel.js` が JavaScript で実装する。生成コードは COM のときと同じ `$rt.get` / `$rt.put` / `$rt.call` で呼ぶため、ビルドの出力は変わらない。
 * **使う条件:** ランタイムは環境変数 `RAS_BOOK_ADDON` でアドオンを受け取り、COM アドオン（`RAS_COM_ADDON`）が無いとき、または COM アドオンはあるが Excel がインストールされていないとき（`Excel.Application` の ProgID が登録されていない）に代役を使う。VS Code 拡張の設定 `ras.debug.excel`（`launch.json` の `excel`）が `auto`（既定）なら Windows では Excel、それ以外では代役、`standIn` なら Windows でも代役、`excel` なら Excel だけを使う。プログラムが最初に Excel のオブジェクトを使った時点でブックを読み込み、その旨をデバッグ コンソールに表示する。`workbook` が未指定なら空のブック（シート 1 枚）で実行する。
-* **計算:** Excel の自動計算と同じく、セルを書き換えると、次に値を読む前にそのセルに依存する数式を計算し直す。ブックを開いたときは保存されている計算結果を使い、結果の保存されていない数式と `NOW` / `RAND` のように毎回変わる数式だけを計算する。エンジンに無い関数（手書き VBA のユーザー定義関数、アドインの関数）・ほかのブックへの参照・データテーブルを含む数式は計算せず、保存されている値をそのまま使う（xljs の `book.calculate()` と同じ扱い。xljs の `docs/design/calc-design.md`）。`Application.Calculation` を手動にしても計算は止めない。
+* **計算:** Excel の自動計算と同じく、セルを書き換えると、次に値を読む前にそのセルに依存する数式を計算し直す。ブックを開いたときは保存されている計算結果を使い、結果の保存されていない数式と `NOW` / `RAND` のように毎回変わる数式だけを計算する。エンジンに無い関数（手書き VBA のユーザー定義関数、アドインの関数）・ほかのブックへの参照・データテーブルを含む数式は計算せず、保存されている値をそのまま使う（xljs の `book.calculate()` と同じ扱い。xljs の `docs/design/calc-design.md`）。
+* **手動計算:** `Application.Calculation` を手動（`xlCalculationManual`）にすると、Excel と同じく計算を止める。セルを書き換えても数式は計算し直さず、`Calculate`（`Application` / `Workbook` / `Worksheet` / `Range`。どれも待っている数式をすべて計算する）を呼んだときと、自動に戻したときに計算する。`CalculateFull` はすべての数式を計算し直す。手動の間も、セルに入れた数式そのものは入れた時点で 1 回計算する（それを参照する数式は計算しない）。`fastMode()` / `suspendCalc()`（§10）の間も同じ。計算方法が手動で保存されているブックをプロジェクトのブックとして読み込むと、Excel がそのブックを最初に開いたときと同じく手動で始まり、その旨をデバッグ コンソールに表示する。保存するブックには計算方法を書き込み、手動のときは `CalculateBeforeSave` が `True`（既定）なら保存の前に計算する。
 * **値:** COM のときと同じ対応にする（§14.10.3）。セルの表示形式が日付なら `Value` は日付、`Value2` は数値。`Value` に文字列を入れると Excel にセルへ入力したときと同じく読み取る（`"123"` は数値、`"2026/3/4"` は日付になり表示形式 `yyyy/m/d` が付く、`"=A1*2"` は数式、先頭の `'` は文字列）。表示形式が文字列（`@`）のセルはそのまま文字列になる。日付を入れたセル、`TODAY()` や日付のセルを参照する数式（`=A1+1`）を入れたセルには、Excel と同じく日付の表示形式を付ける。セルのエラー値は `CVErr` の番号（`#N/A` は 2042）。
 * **数式:** `Formula` は動的配列の無い Excel の数式として書き込む（範囲を 1 つの値として使う箇所は暗黙の共通部分）。`Formula2` は動的配列の数式としてスピルする。複数のセルに 1 つの数式を入れると、相対参照をセルごとにずらす。`FormulaR1C1` の読み書き、`Range.Copy Destination:=` での数式の相対参照の移動にも対応する。
-* **対応するメンバー:** `Range` の `Value` / `Value2` / `Formula` / `Formula2` / `FormulaR1C1` / `Text` / `NumberFormat` / `HasFormula`、`Cells` / `Item` / `Rows` / `Columns` / `Range` / `Offset` / `Resize` / `End` / `CurrentRegion` / `EntireRow` / `EntireColumn` / `Address` / `Count` / `Row` / `Column`、`ClearContents` / `Clear` / `Copy` / `Cut` / `FillDown` / `FillRight` / `Find` / `FindNext` / `FindPrevious` / `Select` / `Activate`、`For Each`。`Worksheet` の `Name` / `CodeName` / `Index` / `Visible` / `Cells` / `Range` / `Rows` / `Columns` / `UsedRange` / `Activate` / `Delete` / `Move` / `Evaluate`。`Worksheets.Add`、`Workbooks.Add` / `Open`、`Workbook.Save` / `SaveAs` / `Close`、`Names.Add`、`Application.Intersect` / `Union`（長方形になるもの）/ `Evaluate` / `ActiveSheet` / `ActiveCell` / `Selection`。`WorksheetFunction` はエンジンにある関数（約 490）をすべて呼べる。エラー値になる場合、`WorksheetFunction.X` はエラー 1004、`Application.X` はエラー値を返す。
-* **書式:** `Font` / `Interior` / `Borders` / `ColumnWidth` / `RowHeight` / `Hidden` などはどの値でも受け付け、同じ範囲から読むと設定した値を返すが、描画も保存もしない（表示形式 `NumberFormat` だけは保存する）。
-* **Excel が必要なもの:** 手書き VBA（`Application.Run`）、クリップボード（コピー先の無い `Copy`、`PasteSpecial`）、セルの挿入・削除、並べ替え・フィルター、`SpecialCells`、シートのコピー、ダイアログ（`GetOpenFilename` など）は、Excel が必要である旨のエラー 445 になる。シートやブックのイベント（`@on`）は起きない。未実装のメンバーはエラー 438。
+* **対応するメンバー:** `Range` の `Value` / `Value2` / `Formula` / `Formula2` / `FormulaR1C1` / `Text` / `NumberFormat` / `HasFormula`、`Cells` / `Item` / `Rows` / `Columns` / `Range` / `Offset` / `Resize` / `End` / `CurrentRegion` / `EntireRow` / `EntireColumn` / `Areas` / `Address` / `Count` / `Row` / `Column`、`ClearContents` / `Clear` / `ClearFormats` / `Copy` / `Cut` / `PasteSpecial` / `Insert` / `Delete` / `FillDown` / `FillRight` / `Sort` / `RemoveDuplicates` / `AutoFilter` / `AdvancedFilter` / `SpecialCells` / `Find` / `FindNext` / `FindPrevious` / `Select` / `Activate`、`For Each`、書式（下記）。`Worksheet` の `Name` / `CodeName` / `Index` / `Visible` / `Cells` / `Range` / `Rows` / `Columns` / `UsedRange` / `Activate` / `Delete` / `Move` / `Copy`（同じブックの中）/ `Paste` / `Sort` / `AutoFilter` / `AutoFilterMode` / `FilterMode` / `ShowAllData` / `Evaluate`。`Worksheets.Add`、`Workbooks.Add` / `Open`、`Workbook.Save` / `SaveAs` / `Close`、`Names.Add`、`Application.Intersect` / `Union` / `Evaluate` / `ActiveSheet` / `ActiveCell` / `Selection` / `Calculation` / `Calculate` / `CutCopyMode`。`WorksheetFunction` はエンジンにある関数（約 490）をすべて呼べる。エラー値になる場合、`WorksheetFunction.X` はエラー 1004、`Application.X` はエラー値を返す。
+* **複数の領域:** `Union`、`SpecialCells`、`Range("A1:B2,D4")` は複数の領域からなる範囲を返す。`Areas`・`Count`・`Address`・`For Each`・`EntireRow` / `EntireColumn`・`Offset` と、値・数式・書式の書き込み、`Clear`、`Delete`、`Copy`（行または列のそろった領域）は、すべての領域を対象にする。値の読み取りと `Rows` / `Columns` / `Resize` などは、Excel と同じく最初の領域だけを見る。
+* **セルの挿入・削除:** `Range.Insert` / `Range.Delete` は、行全体・列全体と、セル単位（`xlShiftDown` / `xlShiftToRight` / `xlShiftUp` / `xlShiftToLeft`。省略すると Excel と同じく範囲の形で決める）に対応する。Excel と同じく、セルと一緒に書式・結合セル・フィルター・入力規則と条件付き書式の範囲・テーブルが移動し、ブック全体の数式と名前の参照を付け替える（削除されたセルへの参照は `#REF!`）。挿入したセルは上または左のセルの書式を引き継ぐ（`CopyOrigin` が `xlFormatFromRightOrBelow` なら下または右）。Excel が拒否する操作（空でないセルをシートの外へ押し出す、配列数式・結合セル・テーブルを分断する）はエラー 1004。**変数に入れた `Range` は、Excel と違って挿入・削除に追従しない**（`rows(1).insert()` の後も、`const r = ws.range("A5")` の `r` は A5 のまま）。
+* **クリップボード:** 対応するのは、Excel の中での切り取り・コピー・貼り付けだけである（ほかのアプリケーションとの受け渡しはしない）。`Range.Copy` / `Range.Cut`（コピー先の有無とも）、`Worksheet.Paste`、`Range.PasteSpecial`（`xlPasteAll` / `xlPasteValues` / `xlPasteFormulas` / `xlPasteFormats` / `xlPasteValuesAndNumberFormats` / `xlPasteFormulasAndNumberFormats` / `xlPasteAllExceptBorders` / `xlPasteColumnWidths`、`Operation`、`SkipBlanks`、`Transpose`）、`Application.CutCopyMode`。
+  * コピー元は Excel と同じく範囲そのものを覚えておき、貼り付ける時点の内容を、書式・結合セルとともに貼り付ける。コピーした数式は相対参照をずらす。切り取ったセルの数式は参照先を変えず、切り取ったセルへの参照は（ほかのシートからのものも）移動先に追従する。
+  * 貼り付け先がコピー元の整数倍の大きさなら繰り返して貼り付け、そうでなければ左上のセルから 1 回貼り付ける。フィルターで隠れている行はコピーしない。貼り付けた範囲が選択範囲になる。
+  * コピー・切り取りの最中の `Range.Insert` は、Excel と同じく「コピーしたセルの挿入」になる（切り取った行・列を同じ並びの中に挿入すると、元の場所は詰まる）。
+  * Excel と同じく、セルの値や書式を変更するとコピー・切り取りは解除される（`CutCopyMode` は 0 に戻り、その後の `PasteSpecial` / `Paste` はエラー 1004）。コピーしたものの貼り付けでは解除されない。切り取ったものは 1 回貼り付けると解除される。
+  * 別のブックへは、値または数式と表示形式だけを貼り付ける（その他の書式は移らない。`Operation` / `Transpose` はエラー）。コメントだけ・入力規則だけの貼り付け（`xlPasteComments` / `xlPasteValidation`）はエラー 1004。
+* **並べ替え・フィルター:**
+  * `Range.Sort`（キーは 3 つまで、`Header`、`MatchCase`、`Orientation`）と `Worksheet.Sort`（`SortFields.Add` / `Add2` / `Clear`、`SetRange`、`Header`、`Apply`）。順序は Excel と同じ（数値、文字列、`FALSE`、`TRUE`、エラー値の順。空のセルは昇順でも降順でも最後）。数式は相対参照をずらし、書式もセルと一緒に動く。非表示の行は動かさない。文字列はふりがなではなく文字そのもので比べる。色・アイコンによる並べ替えは未対応。
+  * `Range.AutoFilter`: 比較（`"=東京"`、`">=10"`、`"<>"`、ワイルドカード `*` `?`）とその `xlAnd` / `xlOr`、値の一覧（`xlFilterValues`）、上位・下位（`xlTop10Items` / `xlBottom10Items` / `xlTop10Percent` / `xlBottom10Percent`）。等しいかどうかは Excel と同じくセルの表示と比べ、大小は値で比べる。`Worksheet.AutoFilterMode` / `FilterMode` / `ShowAllData` / `AutoFilter`（`Range`、`Filters(i).On`）。フィルターの条件はブックに保存する。色・アイコンによるフィルターは未対応。
+  * `Range.AdvancedFilter`: 検索条件範囲（見出しの下の各行が OR、行の中が AND。文字列は前方一致）、`xlFilterInPlace` / `xlFilterCopy`（抽出範囲の見出しで列を選べる）、`Unique`。数式による条件は未対応。
+  * `Range.RemoveDuplicates`、行・列の `Hidden`、`Range.SpecialCells`（`xlCellTypeVisible` / `xlCellTypeConstants` / `xlCellTypeFormulas` / `xlCellTypeBlanks` / `xlCellTypeLastCell`。見つからなければ Excel と同じくエラー 1004）。`SUBTOTAL` / `AGGREGATE` は、フィルターで隠れた行（関数番号によっては非表示にした行）を除いて計算する。
+* **書式:** 次の書式はブックに保持し、保存する。セルの挿入・削除、コピー・切り取り、並べ替えで、セルと一緒に動く。`Font`（`Name` / `Size` / `Bold` / `Italic` / `Underline` / `Strikethrough` / `Color` / `ColorIndex` / `Superscript` / `Subscript`）、`Interior`（`Color` / `ColorIndex` / `Pattern` / `PatternColor`）、`Borders`（`LineStyle` / `Weight` / `Color` / `ColorIndex`。`Borders(xlEdgeBottom)` などの各辺と、辺を指定しない `Borders`、`BorderAround`）、`HorizontalAlignment` / `VerticalAlignment` / `WrapText` / `ShrinkToFit` / `IndentLevel` / `Orientation`、`Locked` / `FormulaHidden`、`ColumnWidth` / `RowHeight`、`Hidden`（行全体・列全体）、`Merge` / `UnMerge` / `MergeCells` / `MergeArea`、表示形式 `NumberFormat`、シート見出しの色（`Tab.Color`）。セルによって値の違う範囲から読むと、VBA の `Null` にあたる `null` を返す。行全体・列全体に設定した書式は、その行・列に後から書き込んだセルにも付く。画面が無いので**描画はしない**（`AutoFit` は何もしない）。これ以外の書式のプロパティ（`ThemeColor`、`TintAndShade`、`Style` など）は、どの値でも受け付け、同じ範囲から読むと設定した値を返すが、保存しない。
+* **イベント:** プロジェクトのブックとそのシートの `@on` のハンドラ（§12.2）を、プログラムの操作に応じて呼び出す。順序は Excel が起こす順序に合わせているが、Excel の実機との突き合わせはまだ行っていない。
+
+  | プログラムの操作 | イベント（シート、続いてブック） |
+  |---|---|
+  | セルの値・数式の書き込み、`Clear` / `ClearContents`、貼り付け・切り取り、セルの挿入・削除、並べ替え、`RemoveDuplicates`、`FillDown` / `FillRight` | `Change` / `SheetChange`（`target` は変更された範囲） |
+  | 上の操作やフィルター、行の非表示、`Calculate` で、数式が計算し直された | そのシートの `Calculate` / `SheetCalculate`（`Change` より先） |
+  | `Range.Select`、`Application.Goto` | `SelectionChange` / `SheetSelectionChange` |
+  | `Worksheet.Activate` / `Select`（アクティブなシートが変わるとき） | 前のシートの `Deactivate` / `SheetDeactivate`、次のシートの `Activate` / `SheetActivate` |
+  | `Worksheets.Add` | `NewSheet`、続いて上のシートの切り替え（`Worksheet.Copy` は、Excel と同じく `NewSheet` を起こさない） |
+  | `Worksheet.Delete` | そのシートの `BeforeDelete` |
+  | `Workbook.Save` / `SaveAs` | `BeforeSave`（`cancel` を `true` にすると保存しない）、`AfterSave` |
+  | `Workbook.Close` | `BeforeClose`（`cancel` を `true` にすると閉じない） |
+  | ほかのブックとの間の `Workbook.Activate` | `Deactivate` / `Activate` |
+
+  * `Application.EnableEvents` が `False` の間（`fastMode()` / `suspendEvents()` の間を含む）は起こさない。ハンドラの再入防止（§12.2）は VBA ビルドと同じで、ハンドラの中の書き込みがそのハンドラ自身を呼び直すことはない（`reentrant: true` を除く）。
+  * ハンドラで捕捉されなかったエラーは、VBA ビルドの RAS エラーダイアログ（`RAS_EventError`）と同じく実行を止めない。エラーの内容と RAS の位置をデバッグ コンソールに表示して、元の文の続きを実行する。エラーで止めたい場合は、VS Code のブレークポイントの「捕捉された例外」を有効にする。
+  * `Calculate` は、数式を書き込んだシートと、書き換えたセルに依存する数式のあるシートで起こす（`NOW` などの揮発性関数だけのシートでは起こさない）。`Calculate` / `SheetCalculate` のハンドラがあるときは、セルを書き換えるたびにその場で計算する。
+  * `Workbook.Open`、ユーザーの操作で起きるイベント（`BeforeDoubleClick` / `BeforeRightClick` / `FollowHyperlink`）、ウィンドウのイベント、`Workbooks.Open` で開いたほかのブックのイベントは起こさない。
+* **ファイルと正規表現:** `Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` は、ランタイムの JavaScript 実装を使う（§14.10.5）。ほかの COM オブジェクトは作れない（エラー 429）。
+* **Excel が必要なもの:** 手書き VBA（`Application.Run`）、ほかのアプリケーションとのクリップボードの受け渡し、別のブック・新しいブックへのシートのコピーと移動、ダイアログ（`GetOpenFilename` など）、`Application.OnTime` は、Excel が必要である旨のエラー 445 になる。未実装のメンバーはエラー 438。
 * **保存:** プロジェクトのブックと `Workbooks.Open` で開いたファイルは上書きしない。プログラムが変更したブックは、終了時（および `Save` / 開いたファイルへの `SaveAs` のとき）に `build/debug/workbooks/<ブック名>` に保存し、デバッグ コンソールに表示する。保存は umya-spreadsheet で行うため、VBA プロジェクトは残るが、umya-spreadsheet が読み書きしない要素は落ちることがある。マクロの無いブックは `.xlsx` で保存する。
 * **入力:** `InputBox` は既定値を返し（既定値が無ければキャンセル）、その旨をデバッグ コンソールに表示する。`MsgBox` は COM の無いときと同じく、デバッグ コンソールに表示して `vbOK` を返す。
 
@@ -1880,6 +1920,14 @@ pull-unmanaged = true   # 同期・ras pack のときに、ブックの手書き
 
 * Excel オブジェクトモデル（`Excel.Range`, `Excel.Worksheet` 等）と Office・VBA 標準関数の型定義を同梱する。
 * その他の COM ライブラリ（ADODB 等）は `ras typegen` でタイプライブラリから生成する。生成した型を使ったコードは既定で遅延バインディング（`Object` + `CreateObject`）で出力し、参照設定への依存を避ける（`@earlyBinding` で事前バインディングに切り替え）。
+* **Scripting Runtime と VBScript の正規表現（v0.9で追加）:** `Scripting`（`FileSystemObject`・`File`・`Folder`・`Files`・`Folders`・`TextStream`・`Dictionary`）と `VBScript`（`RegExp`・`MatchCollection`・`Match`・`SubMatches`）の型定義も同梱する。どちらも参照設定に入っていないライブラリなので、**生成する VBA は遅延バインディング**にする（変数は `Object`、参照設定は不要）。
+  * **作成:** `new Scripting.FileSystemObject()` / `new Scripting.Dictionary()` / `new VBScript.RegExp()` と書く。VBA には `CreateObject("Scripting.FileSystemObject")` などとして出力する。これ以外の型（`File`、`TextStream` など）は `new` で作れない。
+  * **`createObject` の型:** `createObject("Scripting.FileSystemObject")` のように、この 3 つの ProgID を文字列リテラルで書いた `createObject` は、`object` ではなくその型になる（大文字小文字は区別しない）。メンバーの補完と型チェックが効く。ProgID を変数で渡した場合や、ほかの ProgID は従来どおり `object`。
+  * **列挙値:** `forReading` / `forWriting` / `forAppending`（`IOMode`）、`tristateTrue` / `tristateFalse` / `tristateUseDefault`（`Tristate`）、`windowsFolder` / `systemFolder` / `temporaryFolder`（`SpecialFolderConst`）を使える。参照設定が無いと VBA には定数が無いため、VBA には数値で出力する（`fso.openTextFile(path, forReading)` は `fso.OpenTextFile(path, 1&)`）。属性（`attributes`）と比較方法（`compareMode`）には VBA の定数（`vbReadOnly`、`vbTextCompare` など）を使う。
+  * **コレクション:** `folder.files` / `folder.subFolders` / `RegExp.execute` の結果 / `Dictionary`（キー）は `for...of` と §4.4 のメソッドで列挙できる。
+  * **辞書:** キーと値の辞書には、通常は `Map<K, V>`（§13.3）を使う。`Scripting.Dictionary` 型は、`CreateObject("Scripting.Dictionary")` をそのまま使う既存のコードのためにある（値は `any`。`d[key] = value` で設定し、`d(key)` / `d.item(key)` で読む）。
+  * **手書き VBA の取り込み（§14.7.1）:** `Dim fso As New FileSystemObject`、`As Dictionary`、`New RegExp`、`ForReading` などは、これらの型と列挙値に変換する。
+  * デバッグ実行での扱いは §14.10.5。
 
 #### 15.3.1 名前の綴り（v0.9で追加）
 

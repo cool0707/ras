@@ -87,7 +87,12 @@ Mac・Linux や Excel の無い Windows では、Excel の代わりに `ras.toml
 
 - 数式は xljs と同じ GridCraft の計算エンジンで計算し、セルを書き換えると Excel の自動計算と同じく計算し直します。
 - プログラムが変更したブックは、終了時に `build/debug/workbooks/` に保存します。元のブックは書き換えません。
-- フォント・色・罫線・列幅などの書式は受け付けますが、描画も保存もしません。手書き VBA（`Application.Run`）、クリップボード、セルの挿入・削除、並べ替え・フィルターなど Excel そのものが必要な操作はエラーになります。
+- セルの挿入・削除、切り取り・コピー・貼り付け（Excel の中だけ。ほかのアプリケーションとは受け渡ししません）、並べ替え・フィルターに対応しています。
+- フォント・色・罫線・列幅などの書式はブックに保存します（画面が無いので描画はしません）。
+- プログラムの操作で起きるブック・シートのイベント（`Change`・`SelectionChange`・`Activate`・`BeforeSave` など）は、`@on` のハンドラを呼び出します。
+- 計算方法を手動（`Application.Calculation`）にすると、`Calculate` を呼ぶまで数式を計算し直しません。
+- `Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` は使えます（テキスト ファイルは Windows と同じく Shift_JIS か UTF-16 で読み書きします）。`ADODB` や `WScript.Shell` など、ほかの COM オブジェクトは作れません。
+- 手書き VBA（`Application.Run`）、ダイアログなど Excel そのものが必要な操作はエラーになります。変数に入れた `Range` は、Excel と違ってセルの挿入・削除に追従しません。
 - 対応範囲と Excel との違いは言語仕様 §14.10.8 にまとめています。
 
 - 実行できるのは、引数なしの関数とトップレベルの文です。イベントハンドラ（`@on`）や UDF は起動できません。

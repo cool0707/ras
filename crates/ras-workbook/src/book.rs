@@ -7,7 +7,11 @@
 //!   what depends on it is calculated again before the next read, as Excel does in automatic
 //!   calculation.
 //! * the file as umya-spreadsheet read it, which holds everything else (styles, number formats,
-//!   page setup, ...). The cells are copied into it when the workbook is saved.
+//!   page setup, ...). The formats the program sets go there (`book/format.rs`), and the cells
+//!   are copied into it when the workbook is saved.
+//!
+//! What moves cells is done to both: cells inserted and deleted (`book/edit.rs`), cut, copied
+//! and pasted (`book/paste.rs`), sorted and filtered (`book/sort.rs`).
 //!
 //! How the file is read into the engine follows xljs (`src/api/xlsx_calc.rs`), from which the
 //! engine (`vendor/gridcraft`) is taken: shared, array and dynamic-array formulas, implicit
@@ -28,7 +32,7 @@ use gridcraft_formula::{Expr, SheetSel};
 use gridcraft_model as gm;
 use gridcraft_numfmt::NumberFormat;
 use gridcraft_xlsx_formulas::{FunctionInfo, Names, SaveAs, apply_legacy, fmla, save_as};
-use umya_spreadsheet::{Cell, CellErrorType, CellFormula, CellFormulaValues, CellRawValue, Worksheet};
+use umya_spreadsheet::{Cell, CellErrorType, CellFormula, CellFormulaValues, CellRawValue, EnumTrait, Worksheet};
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -273,10 +277,21 @@ fn layout(ws: &Worksheet, id: &mut u32) -> gm::Sheet {
             sh.rows.insert(r.row_num() - 1, gm::LineInfo { hidden: true, ..Default::default() });
         }
     }
+    for c in ws.column_dimensions() {
+        if c.hidden() && c.col_num() >= 1 {
+            sh.cols.insert(c.col_num() - 1, gm::LineInfo { hidden: true, ..Default::default() });
+        }
+    }
     let filtered = |r: &RangeRef| hidden.iter().any(|h| *h > r.start.row && *h <= r.end.row);
     let criterion = || vec![(0u32, gm::FilterCriterion::Values { values: Vec::new(), blanks: false })];
-    if let Some(r) = ws.auto_filter().and_then(|f| range(&f.range().range())) {
-        sh.autofilter = Some(gm::AutoFilter { range: r, criteria: if filtered(&r) { criterion() } else { Vec::new() } });
+    if let Some((f, r)) = ws.auto_filter().and_then(|f| Some((f, range(&f.range().range())?))) {
+        let mut criteria: Vec<(u32, gm::FilterCriterion)> = f.filter_columns().iter().filter_map(|c| Some((c.column_id(), file_criterion(c.criteria()?)?))).collect();
+        if criteria.is_empty() && filtered(&r) {
+            // Filtered by something the file's reader does not keep (colours, icons): the rows
+            // it hides are filtered rows all the same.
+            criteria = criterion();
+        }
+        sh.autofilter = Some(gm::AutoFilter { range: r, criteria });
     }
     for t in ws.tables() {
         if !t.is_ok() {
@@ -308,6 +323,16 @@ fn layout(ws: &Worksheet, id: &mut u32) -> gm::Sheet {
         });
     }
     sh
+}
+
+/// What a column of a filter of the file shows, for the engine.
+fn file_criterion(c: &umya_spreadsheet::FilterCriteria) -> Option<gm::FilterCriterion> {
+    use umya_spreadsheet::FilterCriteria as F;
+    Some(match c {
+        F::Values { values, blank } => gm::FilterCriterion::Values { values: values.clone(), blanks: *blank },
+        F::Custom { tests, and } => gm::FilterCriterion::Custom { a: tests.first()?.clone(), b: tests.get(1).cloned(), and: *and },
+        F::Top10 { top, percent, val } => gm::FilterCriterion::Top10 { bottom: !*top, percent: *percent, count: *val as u32 },
+    })
 }
 
 /// The workbook for the engine without its cells: sheets, names, calculation options.
@@ -442,6 +467,11 @@ pub struct Book {
     names: Names,
     /// Number formats parsed so far.
     formats: HashMap<String, NumberFormat>,
+    /// `Application.Calculation` is manual: formulas are calculated when the program asks.
+    manual: bool,
+    /// The sheets (by their id in the model) whose rows `Range.AdvancedFilter` hid in place,
+    /// with the rows of the list.
+    advanced: HashMap<u64, RangeRef>,
 }
 
 impl Book {
@@ -509,7 +539,7 @@ impl Book {
                 }
             }
         }
-        let mut book = Book { file, model, calc, pending: Vec::new(), rebuild: false, names: Names::default(), formats: HashMap::new() };
+        let mut book = Book { file, model, calc, pending: Vec::new(), rebuild: false, names: Names::default(), formats: HashMap::new(), manual: false, advanced: HashMap::new() };
         let mut legacy: Vec<Vec<CellRef>> = vec![Vec::new(); book.model.sheets.len()];
         let mut fresh = Vec::new();
         for (si, at, kind) in formulas {
@@ -564,8 +594,36 @@ impl Book {
         true
     }
 
-    /// Brings the values of the formulas up to date with what was written.
+    /// Brings the values of the formulas up to date with what was written, unless calculation
+    /// is manual.
     fn flush(&mut self) {
+        if !self.manual {
+            self.recalculate();
+        }
+    }
+
+    /// `Application.Calculation`: manual stops formulas from being calculated as cells change
+    /// (a formula is still worked out when it is written into a cell), until `calculate`.
+    pub fn set_manual(&mut self, manual: bool) {
+        if manual && !self.manual {
+            // What was written while calculation was automatic is calculated.
+            self.recalculate();
+        }
+        self.manual = manual;
+    }
+
+    pub fn manual(&self) -> bool {
+        self.manual
+    }
+
+    /// Whether the workbook was saved with manual calculation.
+    pub fn saved_manual(&self) -> bool {
+        self.file.calculation_properties().calc_mode().value_string() == "manual"
+    }
+
+    /// The formulas that wait to be calculated again (`Application.Calculate`, and every read
+    /// while calculation is automatic).
+    pub fn recalculate(&mut self) {
         if self.rebuild {
             self.rebuild = false;
             self.pending.clear();
@@ -576,7 +634,47 @@ impl Book {
         }
     }
 
-    /// `Application.Calculate`: every formula again.
+    /// Calculates what waits to be calculated, and tells which sheets had formulas calculated
+    /// (for the `Calculate` events): those with a formula that was written, or that depends on
+    /// a cell that was.
+    pub fn calculated_sheets(&mut self) -> Vec<usize> {
+        if self.manual {
+            return Vec::new();
+        }
+        let mut sheets: HashSet<usize> = HashSet::new();
+        if self.rebuild {
+            for (i, sh) in self.model.sheets.iter().enumerate() {
+                if sh.cells.iter().any(|(_, c)| c.formula.is_some()) {
+                    sheets.insert(i);
+                }
+            }
+        } else if !self.pending.is_empty() {
+            let mut seen: HashSet<gridcraft_calc::Key> = HashSet::new();
+            let mut queue: Vec<gridcraft_calc::Key> = self.pending.clone();
+            for k in &self.pending {
+                if self.model.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.formula.is_some()) {
+                    sheets.insert(k.0);
+                }
+            }
+            let mut out = Vec::new();
+            while let Some(k) = queue.pop() {
+                out.clear();
+                self.calc.graph.dependents(k.0, k.1, &mut out);
+                for d in out.drain(..) {
+                    if seen.insert(d) {
+                        sheets.insert(d.0);
+                        queue.push(d);
+                    }
+                }
+            }
+        }
+        self.recalculate();
+        let mut sheets: Vec<usize> = sheets.into_iter().collect();
+        sheets.sort_unstable();
+        sheets
+    }
+
+    /// `Application.CalculateFull`: every formula again.
     pub fn calculate(&mut self) {
         self.pending.clear();
         self.rebuild = false;
@@ -709,6 +807,52 @@ impl Book {
         Ok(())
     }
 
+    /// `Worksheet.Copy`: a copy of sheet `si` before position `at`, named as Excel names it
+    /// (`Sheet1 (2)`). Returns its index.
+    pub fn copy_sheet(&mut self, si: usize, at: usize) -> Result<usize> {
+        self.check_sheet(si)?;
+        let at = at.min(self.sheet_count());
+        let old = self.model.sheet(si).map(|s| s.name.clone()).unwrap_or_default();
+        let name = (2..)
+            .map(|i| {
+                let suffix = format!(" ({i})");
+                let base: String = old.chars().take(31 - suffix.chars().count()).collect();
+                format!("{base}{suffix}")
+            })
+            .find(|n| self.model.sheet_index(n).is_none())
+            .unwrap_or_default();
+        self.flush();
+        self.store();
+        let code = {
+            let used: HashSet<String> = (0..self.sheet_count()).filter_map(|i| self.code_name(i)).map(|s| s.to_lowercase()).collect();
+            (1..).map(|i| format!("Sheet{i}")).find(|n| !used.contains(&n.to_lowercase())).unwrap_or_default()
+        };
+        let ws = self.file.copy_sheet(si, &name, at).map_err(|e| format!("シートをコピーできません（{e}）"))?;
+        ws.set_code_name(code);
+        let mut copy: gm::Sheet = self.model.sheet(si).cloned().expect("checked");
+        copy.name = name;
+        copy.uid = gm::SheetUid::fresh();
+        self.model.sheets.insert(at, Arc::new(copy));
+        // The names of the sheet copied belong to the copy too; the others keep their sheets.
+        let source = if at <= si { si + 1 } else { si };
+        let mut added = Vec::new();
+        for n in &mut self.model.names {
+            if let Some(s) = n.scope.as_mut()
+                && *s >= at
+            {
+                *s += 1;
+            }
+            if n.scope == Some(source) {
+                added.push(gm::DefinedName { scope: Some(at), ..n.clone() });
+            }
+        }
+        self.model.names.extend(added);
+        self.relayout(at);
+        self.names = Names::default();
+        self.rebuild = true;
+        Ok(at)
+    }
+
     /// Moves a sheet so that it ends up at position `to`.
     pub fn move_sheet(&mut self, from: usize, to: usize) -> Result<()> {
         self.check_sheet(from)?;
@@ -824,11 +968,12 @@ impl Book {
 
     fn number_format_code(&self, si: usize, at: CellRef) -> String {
         let Ok(ws) = self.file.sheet(si) else { return "General".into() };
-        let Some(c) = ws.cell(coord(at)) else { return column_format(ws, at) };
-        match c.style().number_format() {
-            Some(f) if !f.format_code().is_empty() => f.format_code().to_string(),
-            _ => "General".into(),
+        let code = |style: &umya_spreadsheet::Style| style.number_format().map(|f| f.format_code().to_string()).filter(|s| !s.is_empty());
+        match ws.cell(coord(at)) {
+            Some(c) => code(c.style()),
+            None => code(&self.style_at(si, at)),
         }
+        .unwrap_or_else(|| "General".into())
     }
 
     fn format(&mut self, code: &str) -> &NumberFormat {
@@ -995,52 +1140,6 @@ impl Book {
         Ok(())
     }
 
-    /// `Range.Copy Destination`: the cells of `from` (on sheet `si`) with their number formats,
-    /// into the cells from `to` (on sheet `ti`) on. The relative references of the formulas move
-    /// with them, as when Excel pastes.
-    pub fn copy(&mut self, si: usize, from: RangeRef, ti: usize, to: CellRef) -> Result<()> {
-        self.check_sheet(si)?;
-        self.check_sheet(ti)?;
-        let (dr, dc) = (to.row as i64 - from.start.row as i64, to.col as i64 - from.start.col as i64);
-        let Some(end) = to.offset(from.height() as i64 - 1, from.width() as i64 - 1) else { return Err("コピー先がシートの外です".into()) };
-        let _ = end;
-        self.flush();
-        // Read everything first: the ranges may overlap.
-        let mut cells = Vec::new();
-        for at in from.iter() {
-            let own = self.model.sheet(si).and_then(|s| s.cell(at)).cloned();
-            let code = self.number_format_code(si, at);
-            cells.push((at, own, code));
-        }
-        for (at, own, code) in cells {
-            let target = at.offset(dr, dc).ok_or("コピー先がシートの外です")?;
-            if code != self.number_format_code(ti, target) {
-                self.set_number_format_at(ti, target, &code);
-            }
-            let Some(sh) = self.model.sheet_mut(ti) else { continue };
-            match own {
-                Some(c) if c.formula.is_some() => {
-                    let f = c.formula.as_ref().expect("checked");
-                    let moved = f.expr().map(|e| gridcraft_formula::adjust::shift_relative(e, dr, dc));
-                    let mut formula = match moved {
-                        Some(e) => gm::Formula::from_expr(e),
-                        None => (**f).clone(),
-                    };
-                    formula.array = None;
-                    formula.dynamic = f.dynamic;
-                    let style = sh.style_id(target);
-                    sh.set_cell(target, gm::Cell { value: Value::Empty, formula: Some(Arc::new(formula)), style, py: None });
-                }
-                Some(c) if !c.value.is_empty() => sh.set_value(target, c.value.clone()),
-                _ => {
-                    sh.remove_cell(target);
-                }
-            }
-            self.touch(ti, target);
-        }
-        Ok(())
-    }
-
     /// Whether the engine has a worksheet function (`WorksheetFunction.Name`).
     pub fn is_function(name: &str) -> bool {
         gridcraft_calc::is_known_function(&name.to_ascii_uppercase()) && !STAND_INS.contains(&name.to_ascii_uppercase().as_str())
@@ -1115,6 +1214,17 @@ impl Book {
             // `Range.Formula`: the formula as Excel without dynamic arrays reads it.
             apply_legacy(&mut self.model, vec![(si, vec![at])], FUNCTIONS);
         }
+        if self.manual {
+            // Excel works a formula out when it is entered, also in manual calculation; what
+            // depends on it waits.
+            let expr = self.model.sheet(si).and_then(|s| s.cell(at)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc());
+            if let Some(e) = expr {
+                let v = gridcraft_calc::recalc::evaluate_expr(&self.model, si, at, &e).scalar();
+                if let Some(c) = self.model.sheet_mut(si).and_then(|s| s.cells.get_mut(at)) {
+                    c.value = if v == Value::Error(CellError::Circ) { Value::number(0.0) } else { v };
+                }
+            }
+        }
         self.touch(si, at);
         Ok(())
     }
@@ -1168,12 +1278,8 @@ impl Book {
         for at in cells {
             self.touch(si, at);
         }
-        if formats && let Ok(ws) = self.file.sheet_mut(si) {
-            let inside: Vec<(u32, u32)> =
-                ws.cells().iter().map(|c| at_of(c)).filter(|at| r.contains(*at)).map(coord).collect();
-            for co in inside {
-                ws.cell_mut(co).set_style(umya_spreadsheet::Style::default());
-            }
+        if formats {
+            self.clear_formats(si, r)?;
         }
         Ok(())
     }
@@ -1298,6 +1404,7 @@ impl Book {
     // ---- number formats
 
     fn set_number_format_at(&mut self, si: usize, at: CellRef, code: &str) {
+        self.inherit_style(si, at);
         if let Ok(ws) = self.file.sheet_mut(si) {
             ws.style_mut(coord(at)).number_format_mut().set_format_code(code);
         }
@@ -1341,7 +1448,11 @@ impl Book {
     pub fn save(&mut self, path: &Path) -> Result<std::path::PathBuf> {
         self.flush();
         self.store();
-        self.file.calculation_properties_mut().set_full_calc_on_load(true);
+        // Excel calculates everything when it opens the file, unless the program left the
+        // calculation manual: the values are then the ones it left.
+        self.file.calculation_properties_mut().set_full_calc_on_load(!self.manual);
+        let mode = if self.manual { umya_spreadsheet::CalculateModeValues::Manual } else { umya_spreadsheet::CalculateModeValues::Auto };
+        self.file.calculation_properties_mut().set_calc_mode(mode);
         let macro_ext = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xlsm"));
         let path = if macro_ext && !self.file.has_macros() { path.with_extension("xlsx") } else { path.to_path_buf() };
         umya_spreadsheet::writer::xlsx::write(&self.file, &path).map_err(|e| format!("{} に保存できません（{e}）", path.display()))?;
@@ -1381,6 +1492,14 @@ impl Book {
         self.file.set_defined_names(builtin.into_iter().chain(global).collect::<Vec<_>>());
 
         for si in 0..sheets {
+            let fresh: Vec<CellRef> = match (self.model.sheet(si), self.file.sheet(si)) {
+                (Some(sh), Ok(ws)) => sh.cells.iter().map(|(at, _)| at).chain(sh.spill.keys().copied()).filter(|at| ws.cell(coord(*at)).is_none()).collect(),
+                _ => Vec::new(),
+            };
+            for at in fresh {
+                self.inherit_style(si, at);
+            }
+            self.store_filter(si);
             let Some(sh) = self.model.sheet(si) else { continue };
             let mut writes: Vec<(CellRef, Option<FileFormula>, Value)> = Vec::new();
             for (at, c) in sh.cells.iter() {
@@ -1435,6 +1554,40 @@ impl Book {
                 let c = ws.cell_mut(coord(at));
                 set_plain(c, &v);
             }
+        }
+    }
+}
+
+impl Book {
+    /// Writes the filter of a sheet (its range and what it filters by) into the file.
+    fn store_filter(&mut self, si: usize) {
+        let Some(filter) = self.model.sheet(si).map(|s| s.autofilter.clone()) else { return };
+        let Ok(ws) = self.file.sheet_mut(si) else { return };
+        let Some(f) = filter else {
+            ws.remove_auto_filter();
+            return;
+        };
+        ws.set_auto_filter(f.range.a1());
+        let Some(out) = ws.auto_filter_mut() else { return };
+        for (offset, criterion) in &f.criteria {
+            let mut column = umya_spreadsheet::FilterColumn::default();
+            column.set_column_id(*offset);
+            match criterion {
+                gm::FilterCriterion::Values { values, blanks } => {
+                    column.set_values(values.clone(), *blanks);
+                }
+                gm::FilterCriterion::Custom { a, b, and } => {
+                    let mut tests = vec![(a.0.clone(), a.1.clone())];
+                    tests.extend(b.iter().cloned());
+                    column.set_custom(tests, *and);
+                }
+                gm::FilterCriterion::Top10 { bottom, percent, count } => {
+                    column.set_top10(!*bottom, *percent, f64::from(*count));
+                }
+                // Kept in the file as it was read, when it was.
+                _ => continue,
+            }
+            out.add_filter_column(column);
         }
     }
 }
@@ -1529,17 +1682,6 @@ fn r1c1_to_a1(formula: &str, at: CellRef) -> Result<String> {
 /// dynamic-array formula.
 type FileFormula = (String, Option<RangeRef>, bool);
 
-/// The number format of a cell that is not stored: its column's.
-fn column_format(ws: &Worksheet, at: CellRef) -> String {
-    let col = at.col + 1;
-    ws.column_dimensions()
-        .iter()
-        .find(|c| c.col_num() == col)
-        .and_then(|c| c.style().number_format().map(|f| f.format_code().to_string()))
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "General".into())
-}
-
 fn rows_val(rows: &[Vec<Val>], r: usize, c: usize) -> Option<&Val> {
     let r = if rows.len() == 1 { 0 } else { r };
     let row = rows.get(r)?;
@@ -1557,6 +1699,15 @@ fn to_array(rows: &[Vec<Val>]) -> Array {
     }
     Array::new(height, width, data).unwrap_or_else(|| Array::scalar(Value::Empty))
 }
+
+mod edit;
+mod format;
+mod paste;
+mod sort;
+
+pub use gridcraft_model::FilterCriterion;
+pub use paste::{Paste, PasteOp, PasteWhat};
+pub use sort::{SortKey, Special, split_criterion};
 
 #[cfg(test)]
 mod tests;

@@ -172,7 +172,7 @@ export function sheets() {
 
 export function failing() {
     try {
-        Sheet1.range("A1").sort();
+        application.run("手書きのマクロ");
     } catch (e) {
         console.log(`${e.code}: ${e.description}`);
     }
@@ -263,9 +263,430 @@ fn what_needs_excel_says_so() {
     assert_eq!(
         lines(&stdout),
         vec![
-            "445: 並べ替え（Range.Sort） は Excel が必要です。Excel のないデバッグ実行（ブックの代役）では使えません",
+            "445: 手書きの VBA（手書きのマクロ）は、Excel のないデバッグ実行では実行できません",
             "1004: WorksheetFunction クラスの VLookup プロパティを取得できません。",
             "Error",
+        ]
+    );
+}
+
+/// What `sales` has, read back as lines of `a|b|c|d`.
+const HELPERS: &str = r#"
+function dump(r: Excel.Range): string {
+    let out = "";
+    let rows = 0;
+    for (const row of r.rows) {
+        let line = "";
+        let cells = 0;
+        for (const c of row.cells) {
+            if (cells > 0) line += "|";
+            line += c.text;
+            cells++;
+        }
+        if (rows > 0) out += " / ";
+        out += line;
+        rows++;
+    }
+    return out;
+}
+"#;
+
+const EDITS: &str = r#"
+export function insertAndDelete() {
+    const ws = Sheet1;
+    ws.range("F1").formula = "=SUM(C2:C4)";
+    ws.range("A2:D2").font.bold = true;
+    ws.rows(3).insert();
+    console.log(`${dump(ws.range("A1:D5"))}`);
+    console.log(`${ws.range("F1").formula} ${ws.range("F1").value} bold=${ws.range("A3").font.bold},${ws.range("A4").font.bold}`);
+    ws.range("B2").insert(xlShiftToRight);
+    console.log(`${dump(ws.range("A2:E2"))}`);
+    ws.range("B2").delete(xlShiftToLeft);
+    ws.columns("B").delete();
+    ws.range("A3").entireRow.delete();
+    console.log(`${dump(ws.range("A1:C4"))} ${ws.range("E1").formula}`);
+    // Rows deleted from the bottom up, as macros do.
+    for (let r = ws.cells(ws.rows.count, 1).end(xlUp).row; r >= 2; r--) {
+        if (ws.cells(r, 3).value < 4) ws.rows(r).delete();
+    }
+    console.log(`${dump(ws.usedRange)}`);
+}
+
+export function clipboard() {
+    const ws = Sheet1;
+    ws.range("E2").formula = "=C2*D2";
+    ws.range("E2").interior.color = rgb(255, 0, 0);
+    ws.range("E2").copy();
+    console.log(`mode=${application.cutCopyMode}`);
+    ws.range("E3:E4").pasteSpecial(xlPasteFormulas);
+    console.log(`${ws.range("E4").formula} ${ws.range("E4").value} color=${ws.range("E4").interior.colorIndex} ${ws.range("E2").interior.color}`);
+    ws.range("E2:E4").copy();
+    ws.range("G2").pasteSpecial(xlPasteValues);
+    ws.range("G6").pasteSpecial(paste: xlPasteValues, transpose: true);
+    application.cutCopyMode = 0;
+    console.log(`${ws.range("G3").formula} ${ws.range("G2").interior.colorIndex} ${dump(ws.range("G6:I6"))} ${ws.range("H6").formula} mode=${application.cutCopyMode}`);
+    // Cut and paste: the references follow the cells.
+    ws.range("H1").formula = "=C2+1";
+    ws.range("C2:C4").cut();
+    ws.paste(ws.range("K2"));
+    console.log(`${ws.range("H1").formula} ${ws.range("E2").formula} ${ws.range("C2").value == null} ${ws.range("K3").text} sel=${selection.address(false, false)}`);
+    // Changing a cell ends the copy, as in Excel.
+    ws.range("A2").copy();
+    ws.range("J9").value = 1;
+    try {
+        ws.range("A9").pasteSpecial(xlPasteValues);
+    } catch (e) {
+        console.log(`${e.code} mode=${application.cutCopyMode}`);
+    }
+    // Insert copied cells.
+    ws.rows(2).copy();
+    ws.rows(4).insert();
+    console.log(`${dump(ws.range("A2:B5"))}`);
+}
+
+export function sortAndFilter() {
+    const ws = Sheet1;
+    ws.range("A1:D4").sort(ws.range("C1"), xlDescending, header: xlYes);
+    console.log(`${dump(ws.range("A1:A4"))}`);
+    ws.sort.sortFields.clear();
+    ws.sort.sortFields.add(ws.range("B2:B4"), order: xlAscending);
+    ws.sort.sortFields.add(ws.range("A2:A4"), order: xlDescending);
+    ws.sort.setRange(ws.range("A1:D4"));
+    ws.sort.header = xlYes;
+    ws.sort.apply();
+    console.log(`${dump(ws.range("A1:B4"))}`);
+
+    ws.range("F1").formula = "=SUBTOTAL(109,D2:D4)";
+    ws.range("A1").autoFilter(2, "佐藤");
+    console.log(`filter=${ws.autoFilterMode},${ws.filterMode} ${ws.autoFilter.range.address} hidden=${ws.rows(2).hidden},${ws.rows(3).hidden} sub=${ws.range("F1").value}`);
+    const shown = ws.range("A2:D4").specialCells(xlCellTypeVisible);
+    console.log(`${shown.address(false, false)} areas=${shown.areas.count} count=${shown.count}`);
+    shown.copy(ws.range("A10"));
+    console.log(`${dump(ws.range("A10:D11"))}`);
+    ws.range("A1").autoFilter(4, ">=3", xlAnd, "<10");
+    console.log(`${ws.range("A2:A4").specialCells(xlCellTypeVisible).address(false, false)}`);
+    ws.showAllData();
+    console.log(`filter=${ws.autoFilterMode},${ws.filterMode} ${ws.rows("2:4").hidden}`);
+    ws.range("A1").autoFilter(1, ["A社", "C社"], xlFilterValues);
+    console.log(`${ws.range("A2:A4").specialCells(xlCellTypeVisible).address(false, false)}`);
+    ws.autoFilterMode = false;
+    console.log(`filter=${ws.autoFilterMode} ${ws.rows("2:4").hidden}`);
+    try {
+        ws.range("H1:H3").specialCells(xlCellTypeConstants);
+    } catch (e) {
+        console.log(`${e.code}: ${e.description}`);
+    }
+    const u = union(ws.range("A1"), ws.range("C1:C2"), ws.range("A2"));
+    u.font.italic = true;
+    console.log(`${u.address(false, false)} ${u.count} ${ws.range("C2").font.italic} ${ws.range("B1").font.italic} ${intersect(u, ws.range("A1:B9")).address(false, false)}`);
+    ws.range("A1:D4").removeDuplicates(2, xlYes);
+    console.log(`${dump(ws.range("A1:B4"))}`);
+}
+
+export function formats() {
+    const ws = Sheet1;
+    const head = ws.range("A1:D1");
+    head.font.bold = true;
+    head.font.color = rgb(255, 255, 255);
+    head.interior.color = rgb(0, 112, 192);
+    head.horizontalAlignment = xlCenter;
+    head.borders(xlEdgeBottom).lineStyle = xlContinuous;
+    head.borders(xlEdgeBottom).weight = xlMedium;
+    ws.range("A2:D4").borders.lineStyle = xlContinuous;
+    ws.columns("A").columnWidth = 20;
+    ws.rows(1).rowHeight = 24;
+    ws.range("F1:G1").merge();
+    ws.columns("D").hidden = true;
+    console.log(`${head.font.bold} ${head.interior.color} ${ws.range("A1:A2").font.bold == null} ${ws.range("B3").borders(xlEdgeTop).lineStyle} ${ws.range("G1").mergeArea.address} ${ws.range("A1").columnWidth}`);
+    thisWorkbook.save();
+}
+
+export function manual() {
+    const ws = Sheet1;
+    ws.range("F1").formula = "=SUM(D2:D4)";
+    application.calculation = xlCalculationManual;
+    ws.range("D2").value = 100;
+    console.log(`${ws.range("F1").value}`);
+    application.calculate();
+    console.log(`${ws.range("F1").value}`);
+    using _ = fastMode();
+    ws.range("D2").value = 200;
+    console.log(`${ws.range("F1").value} ${application.calculation == xlCalculationManual}`);
+}
+"#;
+
+fn run_with(name: &str, source: &str, entry: &str) -> (Project, Vec<String>) {
+    let p = project(name, &format!("{HELPERS}{source}"), sales);
+    let (stdout, stderr, ok) = p.run(entry);
+    assert!(ok, "{stderr}\n{stdout}");
+    let out = lines(&stdout).into_iter().map(str::to_string).collect();
+    (p, out)
+}
+
+#[test]
+fn cells_are_inserted_and_deleted() {
+    if !has_node() {
+        return;
+    }
+    let (_p, out) = run_with("edits", EDITS, "Main.insertAndDelete");
+    assert_eq!(
+        out,
+        vec![
+            "顧客|担当|単価|数量 / A社|佐藤|100.00|2 / ||| / B社|鈴木|250.50|4 / C社|佐藤|30.00|3",
+            "=SUM(C2:C5) 380.5 bold=true,false",
+            "A社||佐藤|100.00|2",
+            "顧客|単価|数量 / A社|100.00|2 / B社|250.50|4 / C社|30.00|3 =SUM(B2:B4)",
+            "顧客|単価|数量||250.5 / B社|250.50|4||",
+        ]
+    );
+}
+
+#[test]
+fn cells_are_cut_copied_and_pasted() {
+    if !has_node() {
+        return;
+    }
+    let (_p, out) = run_with("clipboard", EDITS, "Main.clipboard");
+    assert_eq!(
+        out,
+        vec![
+            "mode=1",
+            "=C4*D4 90 color=-4142 255",
+            "1002 -4142 200|1002|90 1002 mode=0",
+            "=K2+1 =K2*D2 true 250.50 sel=K2:K4",
+            "1004 mode=0",
+            "A社|佐藤 / B社|鈴木 / A社|佐藤 / C社|佐藤",
+        ]
+    );
+}
+
+#[test]
+fn ranges_are_sorted_and_filtered() {
+    if !has_node() {
+        return;
+    }
+    let (_p, out) = run_with("sort", EDITS, "Main.sortAndFilter");
+    assert_eq!(
+        out,
+        vec![
+            "顧客 / B社 / A社 / C社",
+            "顧客|担当 / C社|佐藤 / A社|佐藤 / B社|鈴木",
+            "filter=true,true $A$1:$D$4 hidden=false,false sub=5",
+            "A2:D3 areas=1 count=8",
+            "C社|佐藤|30.00|3 / A社|佐藤|100.00|2",
+            "A2",
+            "filter=true,false false",
+            "A2:A3",
+            "filter=false false",
+            "1004: 該当するセルが見つかりません。",
+            "A1,C1:C2,A2 4 true false A1,A2",
+            "顧客|担当 / C社|佐藤 / B社|鈴木 / |",
+        ]
+    );
+}
+
+#[test]
+fn formats_are_saved_with_the_workbook() {
+    if !has_node() {
+        return;
+    }
+    let (p, out) = run_with("formats", EDITS, "Main.formats");
+    assert_eq!(out, vec!["true 12611584 true 1 $F$1:$G$1 20"]);
+    let mut saved = p.saved();
+    let v = |b: &mut Book, a1: &str, prop: &str| b.format_of(0, rng(a1), prop).unwrap();
+    assert_eq!(v(&mut saved, "A1:D1", "font.bold"), Some(Val::Bool(true)));
+    assert_eq!(v(&mut saved, "A1:D1", "font.color"), Some(Val::Num(16777215.0)));
+    assert_eq!(v(&mut saved, "B1", "interior.color"), Some(Val::Num(12611584.0)));
+    assert_eq!(v(&mut saved, "C1", "horizontalalignment"), Some(Val::Num(-4108.0)));
+    assert_eq!(v(&mut saved, "A1:D1", "borders.9.weight"), Some(Val::Num(-4138.0)));
+    assert_eq!(v(&mut saved, "A2:D4", "borders.all.linestyle"), Some(Val::Num(1.0)));
+    assert_eq!(v(&mut saved, "A9", "columnwidth"), Some(Val::Num(20.0)));
+    assert_eq!(v(&mut saved, "A1", "rowheight"), Some(Val::Num(24.0)));
+    assert_eq!(v(&mut saved, "F1:G1", "mergecells"), Some(Val::Bool(true)));
+    assert_eq!(saved.hidden(0, true, 3, 3), Some(true));
+    // The number format set before is still there.
+    assert_eq!(saved.get(0, rng("C3"), Read::Text).unwrap(), vec![vec![Val::Text("250.50".into())]]);
+}
+
+#[test]
+fn manual_calculation_stops_formulas() {
+    if !has_node() {
+        return;
+    }
+    let (_p, out) = run_with("manual", EDITS, "Main.manual");
+    assert_eq!(out, vec!["9", "107", "107 true"]);
+}
+
+const EVENTS: &str = r#"
+let depth = 0;
+
+@on("Sheet1.Change")
+function changed(target: Excel.Range) {
+    console.log(`Change ${target.address(false, false)}`);
+    // Written by the handler itself: not entered again.
+    if (target.column == 1) Sheet1.cells(target.row, 8).value = "seen";
+}
+
+@on("Workbook.SheetChange")
+function anySheet(sh: object, target: Excel.Range) {
+    console.log(`SheetChange ${sh.name}!${target.address(false, false)}`);
+}
+
+@on("Sheet1.SelectionChange")
+function selected(target: Excel.Range) {
+    console.log(`SelectionChange ${target.address(false, false)}`);
+}
+
+@on("Sheet1.Calculate")
+function recalculated() {
+    console.log(`Calculate F1=${Sheet1.range("F1").value}`);
+}
+
+@on("Sheet1.Deactivate")
+function left() {
+    console.log("Deactivate");
+}
+
+@on("Sheet1.Activate")
+function entered() {
+    console.log("Activate");
+}
+
+@on("Workbook.NewSheet")
+function added(sh: object) {
+    console.log(`NewSheet ${sh.name}`);
+}
+
+@on("Workbook.BeforeSave")
+function saving(saveAsUI: boolean, byref cancel: boolean) {
+    console.log(`BeforeSave ${saveAsUI}`);
+    cancel = true;
+}
+
+@on("Sheet1.BeforeDelete")
+function deleting() {
+    throw new Error("消せません");
+}
+
+export function run() {
+    const ws = Sheet1;
+    ws.range("F1").formula = "=SUM(D2:D4)";
+    ws.range("A5").value = "D社";
+    ws.range("D2").value = 5;
+    ws.range("B2").select();
+    using _ = fastMode();
+    ws.range("A6").value = "E社";
+}
+
+export function sheets() {
+    const added = thisWorkbook.worksheets.add(after: Sheet1);
+    added.range("A1").value = 1;
+    Sheet1.activate();
+    thisWorkbook.save();
+    console.log(`saved=${thisWorkbook.saved}`);
+    Sheet1.delete();
+    console.log(`left=${thisWorkbook.worksheets.count}`);
+}
+"#;
+
+#[test]
+fn events_are_raised_for_what_the_program_does() {
+    if !has_node() {
+        return;
+    }
+    let p = project("events", EVENTS, sales);
+    let (stdout, stderr, ok) = p.run("Main.run");
+    assert!(ok, "{stderr}\n{stdout}");
+    assert_eq!(
+        lines(&stdout),
+        vec![
+            "Calculate F1=9",
+            "Change F1",
+            "SheetChange Sheet1!F1",
+            "Change A5",
+            "SheetChange Sheet1!H5",
+            "SheetChange Sheet1!A5",
+            "Calculate F1=12",
+            "Change D2",
+            "SheetChange Sheet1!D2",
+            "SelectionChange B2",
+        ]
+    );
+    let (stdout, stderr, ok) = p.run("Main.sheets");
+    assert!(ok, "{stderr}\n{stdout}");
+    assert_eq!(
+        lines(&stdout),
+        vec!["NewSheet Sheet2", "Deactivate", "SheetChange Sheet2!A1", "Activate", "BeforeSave false", "saved=false", "left=1"]
+    );
+    // The error of a handler is reported, and the program goes on.
+    assert!(stderr.contains("Sheet1.BeforeDelete: 実行時エラー") && stderr.contains("消せません"), "{stderr}");
+}
+
+const MORE: &str = r#"
+export function more() {
+    const ws = Sheet1;
+    // Several areas by address; deleting rows of several areas.
+    const picked = ws.range("A2:A2,A4:A4");
+    console.log(`${picked.address(false, false)} ${picked.areas.count} ${picked.entireRow.address(false, false)}`);
+    picked.entireRow.delete();
+    console.log(`${dump(ws.range("A1:B3"))}`);
+    // Fill down: formulas move, formats come along.
+    ws.range("E2").formula = "=C2*2";
+    ws.range("E2").font.bold = true;
+    ws.range("A3:B4").value = [["D社", "田中"], ["E社", "山田"]];
+    ws.range("C3:D4").value = [[10, 1], [20, 2]];
+    ws.range("E2:E4").fillDown();
+    console.log(`${ws.range("E4").formula} ${ws.range("E4").value} ${ws.range("E4").font.bold}`);
+    // Sorting with the headings guessed, from one cell.
+    ws.range("A1").sort(key1: ws.range("C1"), order1: xlDescending, header: xlGuess);
+    console.log(`${dump(ws.range("A1:A4"))} ${ws.range("E2").formula}`);
+    // Cut cells inserted elsewhere: the rows change places.
+    ws.rows(4).cut();
+    ws.rows(2).insert();
+    console.log(`${dump(ws.range("A1:A4"))} mode=${application.cutCopyMode}`);
+    // An advanced filter: in place, then copied out.
+    ws.range("G1:G2").value = [["数量"], [">1"]];
+    ws.range("A1:D4").advancedFilter(xlFilterInPlace, ws.range("G1:G2"));
+    console.log(`${ws.filterMode} ${ws.range("A2:A4").specialCells(xlCellTypeVisible).address(false, false)}`);
+    ws.showAllData();
+    ws.range("A1:D4").advancedFilter(xlFilterCopy, ws.range("G1:G2"), ws.range("I1"), true);
+    console.log(`${dump(ws.range("I1:L3"))}`);
+    // Borders as a collection, and around a range.
+    ws.range("A1:B2").borderAround(xlContinuous, xlThick);
+    console.log(`${ws.range("A1").borders(xlEdgeLeft).weight == xlThick} ${ws.range("B1").borders.item(xlEdgeLeft).lineStyle == xlLineStyleNone} ${ws.range("A1").borders(xlEdgeLeft).themeColor == null}`);
+    // A copy of the sheet, and another workbook.
+    Sheet1.copy(after: Sheet1);
+    const copy = thisWorkbook.worksheets(2);
+    console.log(`${copy.name} ${copy.range("A2").value} ${copy.range("E2").formula} ${activeSheet.name}`);
+    const other = workbooks.add();
+    ws.range("A1:E3").copy(other.worksheets(1).range("B2"));
+    const pasted = other.worksheets(1);
+    console.log(`${pasted.range("B4").value} ${pasted.range("F3").formula} ${pasted.range("D4").numberFormat}`);
+    other.close(false);
+    console.log(`${workbooks.count} ${activeWorkbook.name}`);
+}
+"#;
+
+#[test]
+fn the_rest_of_the_object_model() {
+    if !has_node() {
+        return;
+    }
+    let (_p, out) = run_with("more", MORE, "Main.more");
+    assert_eq!(
+        out,
+        vec![
+            "A2,A4 2 2:2,4:4",
+            "顧客|担当 / B社|鈴木 / |",
+            "=C4*2 40 true",
+            "顧客 / B社 / E社 / D社 =C2*2",
+            "顧客 / D社 / B社 / E社 mode=0",
+            "true A3:A4",
+            "顧客|担当|単価|数量 / B社|鈴木|250.50|4 / E社|山田|20|2",
+            "true true true",
+            "Sheet1 (2) D社 =C2*2 Sheet1 (2)",
+            "B社 =D3*2 #,##0.00",
+            "1 Book.xlsx",
         ]
     );
 }

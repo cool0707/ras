@@ -169,3 +169,51 @@ fn me_in_a_standard_module_is_a_todo() {
     let c = convert("Sub A()\n    Me.Hide\nEnd Sub\n", &Target::Standard, &[]);
     assert_eq!(c.todos.len(), 1, "{c:?}");
 }
+
+const SCRIPTING: &str = r#"Option Explicit
+
+Public Function ReadNames(ByVal path As String) As Long
+    Dim fso As New Scripting.FileSystemObject
+    Dim ts As TextStream
+    Dim seen As Dictionary
+    Dim re As RegExp
+    Dim d As Object
+    Set seen = New Dictionary
+    Set re = New RegExp
+    Set d = CreateObject("Scripting.Dictionary")
+    re.Pattern = "^\s*$"
+    If Not fso.FileExists(path) Then Exit Function
+    Set ts = fso.OpenTextFile(path, ForReading)
+    Do Until ts.AtEndOfStream
+        Dim line As String
+        line = ts.ReadLine
+        If Not re.Test(line) Then
+            If Not seen.Exists(line) Then seen.Add line, True
+        End If
+    Loop
+    ts.Close
+    ReadNames = seen.Count + d.Count
+End Function
+"#;
+
+#[test]
+fn scripting_types_convert_and_stay_late_bound() {
+    let m = convert(SCRIPTING, &Target::Standard, &[]);
+    println!("{}\n{:?}", m.text, m.todos);
+    assert!(m.todos.is_empty(), "{:?}", m.todos);
+    for want in [
+        "new Scripting.FileSystemObject()",
+        ": Scripting.TextStream",
+        "new Scripting.Dictionary()",
+        "new VBScript.RegExp()",
+        "fso.openTextFile(path, forReading)",
+        "re.test(line)",
+    ] {
+        assert!(m.text.contains(want), "{want}\n{}", m.text);
+    }
+    let (diags, files) = compile(&[("Module1", &m.text)]);
+    assert!(diags.is_empty(), "{diags:?}");
+    let vba = code(&files, "Module1");
+    assert!(vba.contains("CreateObject(\"Scripting.FileSystemObject\")") && vba.contains("CreateObject(\"VBScript.RegExp\")"), "{vba}");
+    assert!(vba.contains("fso.OpenTextFile(path_, 1&)") && !vba.contains("As TextStream"), "{vba}");
+}

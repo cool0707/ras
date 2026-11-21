@@ -597,7 +597,7 @@ impl<'p> Lowerer<'p> {
 
     fn enum_value(&self, en: EnumId, i: usize) -> VExpr {
         let d = &self.prog.enums[en];
-        if d.host {
+        if d.host && !d.late_bound {
             VExpr::Name(d.members[i].name.clone())
         } else {
             // RAS enums are emitted as literals so that private enums work from any module.
@@ -1542,6 +1542,10 @@ impl<'p> Lowerer<'p> {
                 };
                 let cname = self.class_name(c, &targs);
                 if def.kind == ClassKind::Host {
+                    // Without a reference to its library: by its ProgID (spec §15.3).
+                    if let Some(id) = crate::model::prog_id(def.namespace.as_deref(), &def.name) {
+                        return call("CreateObject", vec![lit(format!("\"{id}\""))]);
+                    }
                     return lit(format!("New {cname}"));
                 }
                 let factory = VExpr::Name(self.prog.modules[def.module].vba_name.clone()).member(format!("New_{cname}"));

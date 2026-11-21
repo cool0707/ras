@@ -3017,6 +3017,16 @@ impl Checker<'_> {
             }
         }
         let ret = self.fn_ret(f, call.span).subst(&env);
+        // `createObject("Scripting.FileSystemObject")`: the type of what a ProgID written out creates.
+        if def.host_name.as_deref() == Some("CreateObject") && self.prog.modules[def.module].rel_path.starts_with("<stdlib>/") {
+            if let [arg] = args {
+                if let ExprKind::Str(id) = &arg.peel().kind {
+                    if let Some(c) = self.prog.class_of_prog_id(id) {
+                        return (Type::Class(c, Vec::new()), targs);
+                    }
+                }
+            }
+        }
         (ret, targs)
     }
 
@@ -3278,7 +3288,7 @@ impl Checker<'_> {
                         self.err(e.span, "E0409", format!("インターフェイス `{}` のインスタンスは作れません", def.name));
                     }
                     ClassKind::Host => {
-                        if def.namespace.as_deref() != Some("VBA") {
+                        if def.namespace.as_deref() != Some("VBA") && crate::model::prog_id(def.namespace.as_deref(), &def.name).is_none() {
                             self.err(e.span, "E0409", format!("`{}` は `new` で作成できません", self.prog.class_display(*c)));
                         }
                         for a in args {

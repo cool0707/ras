@@ -650,6 +650,7 @@ impl Collector {
                     module: m,
                     name: e.name.text.clone(),
                     host,
+                    late_bound: host && matches!(target, Target::Namespace(ns) if !crate::model::referenced_namespace(Some(ns.as_str()))),
                     exported: e.exported,
                     members,
                     doc: e.doc.clone(),

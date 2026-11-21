@@ -41,6 +41,7 @@ const STDLIB: &[(&str, ModuleKind, &str)] = &[
     ("excel.d", ModuleKind::TypeDef, include_str!("../stdlib/excel.d.ras")),
     ("office.d", ModuleKind::TypeDef, include_str!("../stdlib/office.d.ras")),
     ("msforms.d", ModuleKind::TypeDef, include_str!("../stdlib/msforms.d.ras")),
+    ("scripting.d", ModuleKind::TypeDef, include_str!("../stdlib/scripting.d.ras")),
     ("win32", ModuleKind::Std, include_str!("../stdlib/win32.ras")),
     (collect::STRUCT_MAP_MODULE, ModuleKind::Std, include_str!("../stdlib/ras_collections.ras")),
 ];

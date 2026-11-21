@@ -516,6 +516,9 @@ pub struct EnumDef {
     pub module: ModuleId,
     pub name: String,
     pub host: bool,
+    /// A host enum of a library the generated VBA does not reference (`Scripting`): its
+    /// members are emitted as numbers.
+    pub late_bound: bool,
     pub exported: bool,
     pub members: Vec<EnumMemberDef>,
     pub doc: Option<String>,
@@ -601,6 +604,25 @@ pub enum Sym {
     Module(ModuleId),
     Namespace(String),
     Alias(Type),
+}
+
+/// The host classes `new` and `CreateObject` create by their ProgID: (ProgID, namespace, name).
+/// The generated VBA creates them with `CreateObject`, without a reference to their library.
+pub const PROG_IDS: &[(&str, &str, &str)] = &[
+    ("Scripting.FileSystemObject", "Scripting", "FileSystemObject"),
+    ("Scripting.Dictionary", "Scripting", "Dictionary"),
+    ("VBScript.RegExp", "VBScript", "RegExp"),
+];
+
+/// The ProgID of a host class of namespace `namespace`, when it has one.
+pub fn prog_id(namespace: Option<&str>, name: &str) -> Option<&'static str> {
+    PROG_IDS.iter().find(|(_, ns, n)| Some(*ns) == namespace && *n == name).map(|(id, ..)| *id)
+}
+
+/// Whether the types of a host namespace are those of a library the VBA project references
+/// (the others are late-bound: `Object`, and numbers for their enums; spec §15.3).
+pub fn referenced_namespace(namespace: Option<&str>) -> bool {
+    matches!(namespace, None | Some("Excel" | "VBA" | "Office" | "MSForms"))
 }
 
 /// What a name / member / call expression resolved to.
@@ -821,6 +843,15 @@ pub struct Program {
 impl Program {
     pub fn module_by_key(&self, key: &str) -> Option<ModuleId> {
         self.modules.iter().position(|m| m.key == key)
+    }
+
+    /// The bundled host class a ProgID creates (`Scripting.FileSystemObject`), in any case.
+    pub fn class_of_prog_id(&self, id: &str) -> Option<ClassId> {
+        let (_, ns, name) = PROG_IDS.iter().find(|(p, ..)| p.eq_ignore_ascii_case(id.trim()))?;
+        match self.namespaces.get(*ns)?.get(*name)? {
+            Sym::Class(c) => Some(*c),
+            _ => None,
+        }
     }
 
     pub fn class_display(&self, id: ClassId) -> String {
