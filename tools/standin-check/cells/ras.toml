@@ -1,0 +1,12 @@
+[project]
+name = "standincheck"
+workbook = "Book.xlsx"
+
+[target]
+host = "excel"
+vba6 = false
+codepage = 932
+
+[build]
+opt-level = 1
+erl = true

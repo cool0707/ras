@@ -5,6 +5,7 @@
 | フォルダー | 確かめるもの |
 | --- | --- |
 | [`excel-check/`](excel-check/README.md) | ユーザーフォーム（`ras pack` / `ras form pull`）の全プロパティと見た目 |
+| [`standin-check/`](standin-check/README.md) | ブックの代役（Excel なしの実行）と Excel の動作の違い |
 
 ## 書き方の決まり
 

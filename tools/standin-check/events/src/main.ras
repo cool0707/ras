@@ -1,0 +1,85 @@
+// The scenarios of crates/ras-book/tests/excel.rs, run on the stand-in and on Excel itself
+// by Check-StandIn.ps1.
+
+// What happened, in order. Excel has nowhere to print to that a script can read, so the entry
+// points return it (Application.Run) and print it (the stand-in).
+let buf = "";
+
+function log(line: string) {
+    buf += line + "\n";
+}
+
+@on("Sheet1.Change")
+function changed(target: Excel.Range) {
+    log(`Change ${target.address(false, false)}`);
+    // Written by the handler itself: not entered again.
+    if (target.column == 1) Sheet1.cells(target.row, 8).value = "seen";
+}
+
+@on("Workbook.SheetChange")
+function anySheet(sh: object, target: Excel.Range) {
+    log(`SheetChange ${sh.name}!${target.address(false, false)}`);
+}
+
+@on("Sheet1.SelectionChange")
+function selected(target: Excel.Range) {
+    log(`SelectionChange ${target.address(false, false)}`);
+}
+
+@on("Sheet1.Calculate")
+function recalculated() {
+    log(`Calculate F1=${Sheet1.range("F1").value}`);
+}
+
+@on("Sheet1.Deactivate")
+// Not left: a public procedure of that name hides VBA's Left$ from RAS_Runtime (a compile error in Excel).
+function leftSheet() {
+    log("Deactivate");
+}
+
+@on("Sheet1.Activate")
+function entered() {
+    log("Activate");
+}
+
+@on("Workbook.NewSheet")
+function added(sh: object) {
+    log(`NewSheet ${sh.name}`);
+}
+
+@on("Workbook.BeforeSave")
+function saving(saveAsUI: boolean, byref cancel: boolean) {
+    log(`BeforeSave ${saveAsUI}`);
+    cancel = true;
+}
+
+@on("Sheet1.BeforeDelete")
+function deleting() {
+    log("BeforeDelete");
+}
+
+export function run(): string {
+    buf = "";
+    const ws = Sheet1;
+    ws.range("F1").formula = "=SUM(D2:D4)";
+    ws.range("A5").value = "D社";
+    ws.range("D2").value = 5;
+    ws.range("B2").select();
+    using _ = fastMode();
+    ws.range("A6").value = "E社";
+    console.log(buf);
+    return buf;
+}
+
+export function sheets(): string {
+    buf = "";
+    const added = thisWorkbook.worksheets.add(after: Sheet1);
+    added.range("A1").value = 1;
+    Sheet1.activate();
+    thisWorkbook.save();
+    log(`saved=${thisWorkbook.saved}`);
+    Sheet1.delete();
+    log(`left=${thisWorkbook.worksheets.count}`);
+    console.log(buf);
+    return buf;
+}

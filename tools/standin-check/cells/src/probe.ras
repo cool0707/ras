@@ -1,0 +1,173 @@
+// The same questions as Probe.bas asks Excel and VBA, line for line (Check-StandIn.ps1 compares
+// the three: VBA in Excel, the debug run over COM, the stand-in).
+
+function afterCopy(ws: Excel.Worksheet, what: string) {
+    let m = "";
+    ws.range("A2").copy();
+    try {
+        switch (what) {
+            case "value": ws.range("J9").value = 1; break;
+            case "formula": ws.range("J10").formula = "=1+1"; break;
+            case "clearContents": ws.range("J9").clearContents(); break;
+            case "clear": ws.range("J9").clear(); break;
+            case "font": ws.range("J9").font.bold = true; break;
+            case "numberFormat": ws.range("J9").numberFormat = "0.0"; break;
+            case "interior": ws.range("J9").interior.color = 255; break;
+            case "columnWidth": ws.columns("J").columnWidth = 12; break;
+            case "rowHeight": ws.rows(9).rowHeight = 20; break;
+            case "hidden": ws.columns("M").hidden = true; break;
+            case "insert": ws.rows(20).insert(); break;
+            case "delete": ws.rows(20).delete(); break;
+            case "sort": ws.range("A1:D4").sort(ws.range("C1"), xlDescending, header: xlYes); break;
+            case "autoFilter": ws.range("A1").autoFilter(2, "x"); break;
+            case "showAll": ws.autoFilterMode = false; break;
+            case "merge": ws.range("L1:M1").merge(); break;
+            case "fillDown": ws.range("J9:J11").fillDown(); break;
+            case "calculate": application.calculate(); break;
+            case "select": ws.range("B3").select(); break;
+            case "sheetAdd": thisWorkbook.worksheets.add(after: ws); break;
+            case "activate": ws.activate(); break;
+            case "rename": ws.name = "S1"; break;
+            case "nameAdd": thisWorkbook.names.add("Probe1", "=1"); break;
+            case "pasteSpecial": ws.range("N2").pasteSpecial(xlPasteValues); break;
+            case "paste": ws.paste(ws.range("N3")); break;
+            case "copyDest": ws.range("A3").copy(ws.range("N4")); break;
+            case "borders": ws.range("J9").borders.lineStyle = xlContinuous; break;
+            case "calcManual":
+                application.calculation = xlCalculationManual;
+                application.calculation = xlCalculationAutomatic;
+                break;
+            case "screenUpdating":
+                application.screenUpdating = false;
+                application.screenUpdating = true;
+                break;
+            case "enableEvents":
+                application.enableEvents = false;
+                application.enableEvents = true;
+                break;
+            case "save": thisWorkbook.save(); break;
+        }
+    } catch (e) {
+        m = ` err${e.code}`;
+    }
+    console.log(`copy.${what}=${application.cutCopyMode as int}${m}`);
+    application.cutCopyMode = 0;
+}
+
+function themeColorOf(o: object): string {
+    try {
+        const t: any = o.themeColor;
+        return `${typeName(t)} err=0`;
+    } catch (e) {
+        return `String err=${e.code}`;
+    }
+}
+
+function entered(ws: Excel.Worksheet, at: string, text: string): Excel.Range {
+    const c = ws.range(at);
+    c.value = text;
+    return c;
+}
+
+function formula(ws: Excel.Worksheet, at: string, text: string): string {
+    const c = ws.range(at);
+    c.formula = text;
+    return `${c.numberFormat} text=${c.text}`;
+}
+
+export function probe() {
+    const ws = Sheet1;
+    ws.activate();
+    const ops = ["value", "formula", "clearContents", "clear", "font", "numberFormat", "interior", "borders",
+        "columnWidth", "rowHeight", "hidden", "insert", "delete", "sort", "autoFilter", "showAll", "merge", "fillDown",
+        "calculate", "select", "activate", "rename", "nameAdd", "pasteSpecial", "paste", "copyDest",
+        "calcManual", "screenUpdating", "enableEvents", "save", "sheetAdd"];
+    for (const op of ops) afterCopy(ws, op);
+    ws.activate();
+
+    ws.range("A1").select();
+    ws.range("A2:A4").copy();
+    ws.range("P6").pasteSpecial(paste: xlPasteValues, transpose: true);
+    console.log(`sel.pasteSpecial=${selection.address(false, false)}`);
+    ws.range("A1").select();
+    ws.range("A2:A4").copy();
+    ws.paste(ws.range("P2"));
+    console.log(`sel.pasteDest=${selection.address(false, false)} mode=${application.cutCopyMode as int}`);
+    ws.range("A1").select();
+    ws.range("A2:A4").cut();
+    ws.paste(ws.range("R2"));
+    console.log(`sel.cutPasteDest=${selection.address(false, false)} mode=${application.cutCopyMode as int}`);
+    ws.range("R2:R4").cut(ws.range("A2"));
+    ws.range("B1").select();
+    ws.range("A2:A4").copy();
+    ws.range("T2").select();
+    ws.paste();
+    console.log(`sel.paste=${selection.address(false, false)} mode=${application.cutCopyMode as int}`);
+    application.cutCopyMode = 0;
+
+    let u = union(ws.range("A1"), ws.range("C1:C2"), ws.range("A2"));
+    console.log(`union=${u.address(false, false)} areas=${u.areas.count} count=${u.count} intersect=${intersect(u, ws.range("A1:B9")).address(false, false)}`);
+    u = union(ws.range("A1"), ws.range("C1"), ws.range("B1"));
+    console.log(`union2=${u.address(false, false)} areas=${u.areas.count}`);
+    u = union(ws.range("A1:B2"), ws.range("B2:C3"));
+    console.log(`union3=${u.address(false, false)} areas=${u.areas.count} count=${u.count}`);
+
+    ws.range("V1:W2").borderAround(xlContinuous, xlThick);
+    console.log(`border.themeColor=${themeColorOf(ws.range("V1").borders(xlEdgeLeft))}`);
+    try {
+        const t: any = ws.range("V1").font.themeColor;
+        console.log(`font.themeColor=${typeName(t)} ${t} err=0`);
+    } catch (e) {
+        console.log(`font.themeColor=String unset err=${e.code}`);
+    }
+    console.log(`interior.themeColor=${themeColorOf(ws.range("V1").interior)}`);
+
+    let c = entered(ws, "X1", "2026/3/4");
+    console.log(`date=${typeName(c.value)} ${c.numberFormat} local=${c.numberFormatLocal} text=${c.text}`);
+    ws.range("X2").value = dateSerial(2026, 1, 31);
+    console.log(`date2=${ws.range("X2").numberFormat} text=${ws.range("X2").text}`);
+    console.log(`date3=${formula(ws, "X3", "=X2+1")}`);
+    console.log(`inherit.sum=${formula(ws, "X4", "=SUM(C2:C4)")}`);
+    console.log(`inherit.mul=${formula(ws, "X5", "=C2*D2")}`);
+    console.log(`inherit.add=${formula(ws, "X6", "=C2+1")}`);
+    console.log(`inherit.round=${formula(ws, "X7", "=ROUND(C3*D3*1.1,0)")}`);
+    console.log(`inherit.first=${formula(ws, "X8", "=D2+C2")}`);
+    c = entered(ws, "X9", "50%");
+    console.log(`percent=${c.numberFormat} ${c.value2}`);
+    c = entered(ws, "X10", "1,234");
+    console.log(`thousands=${c.numberFormat} ${c.value2}`);
+    c = entered(ws, "X11", "12:30");
+    console.log(`time=${c.numberFormat} text=${c.text}`);
+    c = entered(ws, "X12", "1e3");
+    console.log(`sci=${c.numberFormat} ${c.value2}`);
+    c = entered(ws, "X13", "TRUE");
+    console.log(`bool=${typeName(c.value)}`);
+    c = entered(ws, "X14", "001");
+    console.log(`leadingZero=${typeName(c.value)} ${c.text}`);
+    c = entered(ws, "X15", "3/4");
+    console.log(`monthDay=${typeName(c.value)} ${c.numberFormat} local=${c.numberFormatLocal}`);
+    c = entered(ws, "X16", "\\100");
+    console.log(`yen=${typeName(c.value)} ${c.numberFormat}`);
+
+    const added = thisWorkbook.worksheets.add(after: thisWorkbook.worksheets(thisWorkbook.worksheets.count));
+    console.log(`added.codeName=[${added.codeName}] name=${added.name}`);
+
+    const fso = new Scripting.FileSystemObject();
+    const d = new Scripting.Dictionary();
+    const f = fso.getFile(thisWorkbook.fullName);
+    console.log(`typeName=${typeName(f)} ${typeName(d)} ${typeName(fso)} ${typeName(f.parentFolder)}`);
+    const v: any = d("zz");
+    console.log(`missing=${typeName(v)} count=${d.count}`);
+    const re = new VBScript.RegExp();
+    console.log(`typeName.re=${typeName(re)}`);
+    for (const p of ["(", ")", "[", "a{2", "*a", "a**", "\\"]) {
+        re.pattern = p;
+        let code = 0;
+        try {
+            re.test("x");
+        } catch (e) {
+            code = e.code;
+        }
+        console.log(`regex ${p} err=${code}`);
+    }
+}
