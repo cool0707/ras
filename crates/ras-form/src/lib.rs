@@ -7,7 +7,7 @@
 //! This crate
 //!
 //! * parses and validates a FormSpec ([`parse`]; diagnostics `UFY001`,
-//!   `UFV001`–`UFV022`),
+//!   `UFV001`–`UFV023`),
 //! * generates the MS-OFORMS designer storage of the form from scratch
 //!   ([`compile`], [`compile_in`]), so that `ras pack` can store the form in
 //!   a workbook without Excel,

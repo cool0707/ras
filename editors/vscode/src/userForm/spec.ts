@@ -240,6 +240,25 @@ function lookupRaw(root: JsonObject, key: string): [JsonValue, boolean] {
 	return found === undefined ? [null, false] : [root[found], true];
 }
 
+/**
+ * UFV023: a Single border and an effect. MSForms draws one edge, and the VBA editor puts back
+ * the other property when one is set; generation keeps the border.
+ */
+function edgeIssues(root: JsonObject, path: string): ValidationIssue[] {
+	const [border] = lookupRaw(root, "borderStyle");
+	const [effect] = lookupRaw(root, "specialEffect");
+	if (border !== 1 || typeof effect !== "number" || effect === 0) return [];
+	return [
+		issue(
+			"UFV023",
+			"warning",
+			`${path}.specialEffect（${effect}）は borderStyle 1（Single）と同時には使えません。MSForms は縁を 1 つしか描かず、Excel では一方を設定するともう一方が戻ります。`,
+			`${path}.specialEffect`,
+			"borderStyle を優先し、平面として書き込みます。立体にするなら borderStyle を 0 にしてください。",
+		),
+	];
+}
+
 function supportSuggestion(level: string): string | undefined {
 	switch (level) {
 		case "best-effort":
@@ -486,6 +505,7 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 			if (control.value < lo || control.value > hi)
 				issues.push(issue("UFV021", "error", `value は min と max の間（${lo}〜${hi}）にしてください。`, `${path}.value`));
 		}
+		issues.push(...edgeIssues(control, path));
 		const font = control.font ?? (isObject(control.properties) ? control.properties.font : undefined);
 		const multiLine = control.multiLine === true || (isObject(control.properties) && control.properties.multiLine === true);
 		const minimum = minimumEditHeight(type, font, multiLine);
@@ -708,6 +728,7 @@ export function validateSpec(root: JsonObject): ValidationIssue[] {
 		if (isObject(form.observed)) issues.push(...validateObject(form.observed, formObservedProperties, "form.observed"));
 		issues.push(...validateFormDimensions(form));
 		issues.push(...validateTyped(form, "form", formProperties));
+		issues.push(...edgeIssues(form, "form"));
 		for (const field of ["picture", "mouseIcon"]) {
 			const [picture, hasPicture] = lookupRaw(form, field);
 			if (hasPicture) issues.push(...validatePicture(picture, "UserForm", `form.${field}`, true));

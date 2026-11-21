@@ -572,10 +572,10 @@ pub(crate) fn format_column_widths(widths: &[i32]) -> String {
 }
 
 /// The `MorphDataColumnInfo` records of `widths`: the width of a column is stored only
-/// when it is not -1, the file-format default.
+/// when it is not -1, the file-format default. Excel stores the last column first.
 pub(crate) fn encode_column_infos(widths: &[i32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(widths.len() * 12);
-    for width in widths {
+    for width in widths.iter().rev() {
         if *width < 0 {
             out.extend_from_slice(&[0, 2, 4, 0, 0, 0, 0, 0]);
         } else {
@@ -586,7 +586,8 @@ pub(crate) fn encode_column_infos(widths: &[i32]) -> Vec<u8> {
     out
 }
 
-/// The widths in `count` `MorphDataColumnInfo` records that make up `raw` exactly.
+/// The widths in `count` `MorphDataColumnInfo` records that make up `raw` exactly, first
+/// column first (the records run from the last column).
 pub(crate) fn decode_column_infos(raw: &[u8], count: usize) -> Option<Vec<i32>> {
     let mut widths = Vec::with_capacity(count);
     let mut at = 0;
@@ -605,6 +606,7 @@ pub(crate) fn decode_column_infos(raw: &[u8], count: usize) -> Option<Vec<i32>> 
         widths.push(width);
         at += 4 + cb;
     }
+    widths.reverse();
     (at == raw.len()).then_some(widths)
 }
 
@@ -767,8 +769,38 @@ mod tests {
             let parsed = crate::parse(&text);
             let designer = crate::compile(parsed.spec.as_ref().unwrap(), 932).unwrap();
             let spec = crate::snapshot("F", &designer.streams, &designer.storages, 932).unwrap().spec;
-            let shown: Vec<_> = spec.controls[0].scalars.keys().collect();
+            let control = &spec.controls[0];
+            let shown: Vec<_> = control.scalars.keys().collect();
             assert!(shown.is_empty(), "{}: {shown:?}", t.name);
+            // Nor its font, colors or alignment: generation writes Excel's.
+            assert_eq!(control.font, None, "{}", t.name);
+            assert_eq!(control.back_color, None, "{}", t.name);
+            assert_eq!(control.fore_color, None, "{}", t.name);
+            assert_eq!(control.text_align, None, "{}", t.name);
         }
+    }
+
+    #[test]
+    fn the_column_widths_are_stored_from_the_last_column() {
+        let widths = parse_column_widths("30 pt;;60 pt").unwrap();
+        let raw = encode_column_infos(&widths);
+        // Excel stores "30 pt;;60 pt" as 60 pt, worked out, 30 pt.
+        assert_eq!(&raw[..8], &[0, 2, 8, 0, 1, 0, 0, 0]);
+        assert_eq!(i32::from_le_bytes(raw[8..12].try_into().unwrap()), widths[2]);
+        assert_eq!(decode_column_infos(&raw, 3), Some(widths));
+    }
+
+    #[test]
+    fn a_form_without_a_start_up_position_is_placed_by_hand() {
+        let text = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F"},"controls":[]}"#;
+        let mut designer = crate::compile(crate::parse(text).spec.as_ref().unwrap(), 932).unwrap();
+        let spec = crate::snapshot("F", &designer.streams, &designer.storages, 932).unwrap().spec;
+        assert_eq!(spec.form.scalar("startUpPosition"), None);
+        // The VBA editor leaves the line out for 0 (Manual).
+        let frame = designer.streams.get_mut("\u{3}VBFrame").unwrap();
+        let text = String::from_utf8(frame.clone()).unwrap();
+        *frame = text.lines().filter(|l| !l.contains("StartUpPosition")).collect::<Vec<_>>().join("\r\n").into_bytes();
+        let spec = crate::snapshot("F", &designer.streams, &designer.storages, 932).unwrap().spec;
+        assert_eq!(spec.form.scalar("startUpPosition"), Some(&Value::from(0)));
     }
 }

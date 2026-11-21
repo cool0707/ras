@@ -25,6 +25,7 @@
           "charset": 128,
           "italic": true,
           "name": "Tahoma",
+          "pitchAndFamily": 0,
           "size": 12.5,
           "strikeThrough": true,
           "underline": true
@@ -58,6 +59,7 @@
           "charset": 128,
           "italic": true,
           "name": "Tahoma",
+          "pitchAndFamily": 0,
           "size": 12.5,
           "strikeThrough": true,
           "underline": true
@@ -91,6 +93,7 @@
           "charset": 128,
           "italic": true,
           "name": "Tahoma",
+          "pitchAndFamily": 0,
           "size": 12.5,
           "strikeThrough": true,
           "underline": true
@@ -126,6 +129,7 @@
           "charset": 128,
           "italic": true,
           "name": "Tahoma",
+          "pitchAndFamily": 0,
           "size": 12.5,
           "strikeThrough": true,
           "underline": true
@@ -158,6 +162,7 @@
           "charset": 128,
           "italic": true,
           "name": "Tahoma",
+          "pitchAndFamily": 0,
           "size": 12.5,
           "strikeThrough": true,
           "underline": true
@@ -192,6 +197,7 @@
           "charset": 128,
           "italic": true,
           "name": "Tahoma",
+          "pitchAndFamily": 0,
           "size": 12.5,
           "strikeThrough": true,
           "underline": true
@@ -226,6 +232,7 @@
           "charset": 128,
           "italic": true,
           "name": "Tahoma",
+          "pitchAndFamily": 0,
           "size": 12.5,
           "strikeThrough": true,
           "underline": true
@@ -240,7 +247,6 @@
         "name": "ToggleButtonTyped",
         "progId": "Forms.ToggleButton.1",
         "tabIndex": 7,
-        "textAlign": 2,
         "top": 53.00787401574803,
         "type": "ToggleButton",
         "value": "False",
@@ -356,6 +362,7 @@
           "charset": 128,
           "italic": true,
           "name": "Tahoma",
+          "pitchAndFamily": 0,
           "size": 12.5,
           "strikeThrough": true,
           "underline": true
@@ -400,6 +407,7 @@
           "charset": 128,
           "italic": true,
           "name": "Tahoma",
+          "pitchAndFamily": 0,
           "size": 12.5,
           "strikeThrough": true,
           "underline": true
@@ -444,6 +452,7 @@
           "charset": 128,
           "italic": true,
           "name": "Tahoma",
+          "pitchAndFamily": 0,
           "size": 12.5,
           "strikeThrough": true,
           "underline": true

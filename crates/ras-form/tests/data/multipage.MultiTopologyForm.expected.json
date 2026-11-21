@@ -5,12 +5,6 @@
     "controls": [
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 180.0,
         "id": "control_001",
         "left": 11.990551181102362,
@@ -41,12 +35,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 18.0,
         "id": "control_003",
         "left": 7.993700787401575,
@@ -81,12 +69,6 @@
       {
         "caption": "nested",
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 18.0,
         "id": "control_005",
         "left": 0.0,
@@ -114,12 +96,6 @@
       },
       {
         "enabled": true,
-        "font": {
-          "charset": 128,
-          "name": "MS UI Gothic",
-          "pitchAndFamily": 2,
-          "size": 9.0
-        },
         "height": 47.99055118110236,
         "id": "control_007",
         "left": 11.990551181102362,

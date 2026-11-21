@@ -172,6 +172,7 @@
       "height": 18,
       "caption": "Null",
       "tripleState": true,
+      "groupName": "N",
       "value": "Null"
     },
     {
@@ -186,6 +187,7 @@
       "alignment": 0,
       "specialEffect": 0,
       "wordWrap": false,
+      "groupName": "L",
       "controlSource": "Sheet1!D7"
     },
     {

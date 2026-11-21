@@ -219,6 +219,19 @@ describe("FormSpec editing", () => {
 		assert.equal(control(text, "l1").height, 18);
 	});
 
+	it("warns about a Single border with an effect, which MSForms cannot draw together", () => {
+		const both = { id: "t1", name: "TextBox1", type: "TextBox", left: 8, top: 8, width: 120, height: 18, borderStyle: 1, specialEffect: 2 };
+		const warnings = (text: string) =>
+			problems((parseSpec(text) as any).spec)
+				.filter((p) => p.code === "UFV023")
+				.map((p) => [p.severity, p.field]);
+		assert.deepEqual(warnings(form([both])), [["warning", "controls[0].specialEffect"]]);
+		assert.deepEqual(warnings(form([], { borderStyle: 1, specialEffect: 3 })), [["warning", "form.specialEffect"]]);
+		// One of them, or a flat effect: no warning.
+		assert.deepEqual(warnings(form([{ ...both, specialEffect: 0 }])), []);
+		assert.deepEqual(warnings(form([{ ...both, borderStyle: 0 }])), []);
+	});
+
 	it("moves controls between parents and refuses invalid containers", () => {
 		let text = form([frame, label]);
 		text = apply(text, { type: "setParent", controlId: "l1", parentId: "f1", left: 2, top: 3 });

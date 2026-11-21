@@ -217,11 +217,17 @@ fn is_default_boolean_properties(control_type: &str, value: i64) -> bool {
 }
 
 /// Whether generation writes the TextProps of a pulled control back as they are: a font
-/// whose pitch `snapshot` carries over, and for a disabled control the effects Excel stores
-/// for its grayed text (which generation writes too).
+/// whose pitch `snapshot` carries over, the `CFE_AUTOCOLOR` the VBA editor stores with bold,
+/// italic, underline or strikethrough (generation adds it to effects stored without), and
+/// for a disabled control the effects Excel stores for its grayed text (which generation
+/// writes too).
 fn text_props_carried(record: &Record, control_type: &str, enabled: bool) -> bool {
     let known = 1u64 | 1 << 1 | 1 << 2 | 1 << 4 | 1 << 5 | 1 << 6 | 1 << 7;
-    let effects = record.value("FontEffects").unwrap_or(0) & !15;
+    let stored = record.value("FontEffects").unwrap_or(0);
+    let mut effects = stored & !15;
+    if stored & 15 != 0 {
+        effects &= !crate::oforms::CFE_AUTOCOLOR;
+    }
     let grayed = !enabled
         && scalars::class_of(control_type)
             .is_some_and(|class| crate::oforms::DISABLED_TEXT_CLASSES.contains(&class));
@@ -235,7 +241,7 @@ fn text_props_carried(record: &Record, control_type: &str, enabled: bool) -> boo
     record.mask & !known == 0
         && align
         && record.value("FontWeight").is_none_or(|w| w == 400 || w == 700)
-        && (effects == 0 || (grayed && effects == crate::oforms::DISABLED_TEXT_EFFECTS))
+        && (effects == 0 || (grayed && effects | crate::oforms::CFE_AUTOCOLOR == crate::oforms::DISABLED_TEXT_EFFECTS))
         && record.tail.is_empty()
 }
 
@@ -437,10 +443,25 @@ fn color(value: i64) -> FormSpecColor {
     FormSpecColor::from_ole(value as u32)
 }
 
+/// Whether a font of a control's TextProps is the one Excel stores for a new control,
+/// which generation writes when the FormSpec gives none.
+fn is_fresh_font(font: &reader::Font) -> bool {
+    font.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(crate::oforms::FRESH_FONT_NAME))
+        && font.size == Some(crate::oforms::FRESH_FONT_HEIGHT as f64 / 20.0)
+        && font.charset == Some(crate::oforms::FRESH_FONT_CHARSET)
+        && font.pitch_and_family == Some(crate::oforms::FRESH_FONT_PITCH)
+        // The effects of a disabled control (its grayed text) are no style.
+        && [font.bold, font.italic, font.underline, font.strike_through].iter().all(|v| *v != Some(true))
+        && !font.weight_stored
+}
+
 fn project_typed_control(source: &Control, target: &mut FormSpecControl) {
     let control_type = target.control_type.clone();
     if let Ok(font) = control_font(source) {
-        if has_property(&control_type, "font") {
+        // Fresh in TextProps (a level keeps its own font).
+        let fresh = (source.level.is_none() || source.multipage.is_some())
+            && font.as_ref().is_some_and(is_fresh_font);
+        if has_property(&control_type, "font") && !fresh {
             target.font = spec_font(font);
         }
     }
@@ -453,27 +474,36 @@ fn project_typed_control(source: &Control, target: &mut FormSpecControl) {
             None => return,
         }
     }
+    // The colors of a new CheckBox, OptionButton or ToggleButton are what generation writes.
+    let face_colored = scalars::class_of(&control_type)
+        .is_some_and(|class| crate::oforms::FACE_COLORED_CLASSES.contains(&class));
+    let fresh_color = |name: &str, fresh: i64| {
+        record.value(name).filter(|v| !(face_colored && *v == fresh)).map(color)
+    };
     if has_property(&control_type, "backColor") {
-        target.back_color = record.value("BackColor").map(color);
+        target.back_color = fresh_color("BackColor", crate::oforms::BUTTON_FACE);
     }
     if has_property(&control_type, "foreColor") {
-        target.fore_color = record.value("ForeColor").map(color);
+        target.fore_color = fresh_color("ForeColor", crate::oforms::BUTTON_TEXT);
     }
     if has_property(&control_type, "borderStyle") {
         target.border_style = record.value("BorderStyle");
     }
     if has_property(&control_type, "textAlign") {
-        if let Some(align) = record
-            .text_props
-            .as_ref()
-            .and_then(|t| t.value("ParagraphAlign"))
-        {
-            // PARAFORMAT uses right = 2 / center = 3; MSForms the reverse.
-            target.text_align = Some(match align {
-                2 => 3,
-                3 => 2,
+        let stored = record.text_props.as_ref().and_then(|t| t.value("ParagraphAlign"));
+        // PARAFORMAT uses right = 2 / center = 3; MSForms the reverse.
+        target.text_align = stored.map(|align| match align {
+            2 => 3,
+            3 => 2,
+            other => other,
+        });
+        if control_type == "ToggleButton" {
+            // A new one is centred; left is the file-format default, which Excel leaves out.
+            target.text_align = match target.text_align {
+                Some(2) => None,
+                None => Some(1),
                 other => other,
-            });
+            };
         }
     }
     if matches!(control_type.as_str(), "Image" | "Frame" | "Page") {
@@ -711,9 +741,11 @@ impl Projection {
         if !bag.is_empty() {
             control.properties = Some(bag);
         }
-        // The pitch of the font (the VBA editor stores 2 for the controls it makes).
+        // The pitch of the font (the VBA editor stores 2 for the controls it makes). Generation
+        // keeps that one unless told otherwise, so a TextProps font without any says 0.
         if let (Ok(Some(font)), Some(target)) = (control_font(source), control.font.as_mut()) {
-            target.pitch_and_family = font.pitch_and_family;
+            let text_props = source.level.is_none() || source.multipage.is_some();
+            target.pitch_and_family = font.pitch_and_family.or(text_props.then_some(0));
             // No weight stored is not Bold, and is written back as none.
             if !font.weight_stored && target.bold == Some(false) {
                 target.bold = None;
@@ -966,8 +998,14 @@ fn project_form_scalars(record: &Record, lines: &[(String, String)], form: &mut 
         let fresh = p.fresh.unwrap_or(p.omitted);
         let value = match p.store {
             Store::Frame(key) => {
-                // A line the block does not have stays unknown (generation writes its default).
                 let Some((_, text)) = lines.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)) else {
+                    // A line the block does not have holds the file-format default: the VBA
+                    // editor leaves out StartUpPosition = 0 (Manual), a new form's being 1.
+                    // Without a block it stays unknown (generation writes its default).
+                    if lines.is_empty() || p.omitted == fresh {
+                        continue;
+                    }
+                    form.scalars.insert(p.name.into(), scalars::from_raw(p, p.omitted));
                     continue;
                 };
                 let Some(value) = scalars::frame_value(p, text) else {
@@ -1210,13 +1248,23 @@ mod text_props_tests {
             let (before, after) = (fonts(&streams, &storages), fonts(&designer.streams, &designer.storages));
             assert!(!before.is_empty());
             for (name, font) in &before {
-                let mut font = font.clone();
-                if snapshot.spec.controls.iter().any(|c| &c.name == name && c.control_type == "CommandButton") {
-                    // A CommandButton's caption is centred whether or not the alignment is stored.
-                    font.0 &= !(1 << 6);
-                    font.1.retain(|(k, _)| k != "ParagraphAlign");
+                let (mut font, mut written) = (font.clone(), after.get(name).cloned());
+                // Bold, italic, underline or strikethrough are written with CFE_AUTOCOLOR, as
+                // the VBA editor stores them when they are set from VBA.
+                for (key, value) in &mut font.1 {
+                    if key == "FontEffects" && *value & 15 != 0 {
+                        *value |= crate::oforms::CFE_AUTOCOLOR;
+                    }
                 }
-                assert_eq!(after.get(name), Some(&font), "{label}: {name}");
+                if snapshot.spec.controls.iter().any(|c| &c.name == name && c.control_type == "CommandButton") {
+                    // A CommandButton's caption is centred whether or not the alignment is stored
+                    // (Excel stores it for a new one, older forms may not).
+                    for font in std::iter::once(&mut font).chain(written.as_mut()) {
+                        font.0 &= !(1 << 6);
+                        font.1.retain(|(k, _)| k != "ParagraphAlign");
+                    }
+                }
+                assert_eq!(written, Some(font), "{label}: {name}");
             }
         }
     }

@@ -85,7 +85,6 @@
       "text": "入力",
       "dropButtonStyle": 3,
       "showDropButtonWhen": 0,
-      "specialEffect": 3,
       "borderStyle": 1,
       "borderColor": {
         "kind": "rgb",

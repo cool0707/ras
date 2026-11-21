@@ -178,6 +178,7 @@ RAS ファイルでは、言語サーバーによるセマンティックハイ�
 - **CheckBox / OptionButton / ToggleButton の Value**: True・False・Null から選びます（Null は `"Null"` と書き込みます）。Null は Windows と同じく、網掛けの箱に灰色の印で表示します。デバッグ実行では、TripleState が True の CheckBox / ToggleButton はクリックのたびに False → Null → True → False の順に変わります（OptionButton には TripleState は効きません）。
 - **フォームのプロパティ**: フォームを選んだときの［プロパティ］で、StartUpPosition・ShowModal・Tag・Enabled・BorderColor・SpecialEffect・Cycle・MousePointer・Zoom・ScrollBars・KeepScrollBarsVisible・ScrollWidth / ScrollHeight / ScrollLeft / ScrollTop・HelpContextID・WhatsThisButton / WhatsThisHelp・RightToLeft・DrawBuffer を設定できます（`form` に書き込みます）。キャンバスはフォームの枠（BorderStyle・BorderColor・SpecialEffect）を、デバッグ実行のフォームはそれに加えて Zoom・スクロール・マウス ポインターを反映します。
 - **TextBox の高さ**: 1 行の TextBox / ComboBox がフォントの 1 行分より低いと、Excel では文字が欠けて端に線が残ります。デザイナーでフォントやサイズを変えると、足りない高さは自動で広げます。JSON を直接書いて低くなっているものは［問題］パネルに警告（`UFV022`）を表示します。
+- **枠と立体の効果**: MSForms は BorderStyle が Single の枠と SpecialEffect（立体）を同時には描けず、VBE でも一方を設定するともう一方が戻ります。両方を指定したものは［問題］パネルに警告（`UFV023`）を表示し、ブックには枠を優先して（SpecialEffect を平面にして）書き込みます。
 - **イベント**: コントロールやフォームの背景をダブルクリックすると、既定のイベント（CommandButton なら `Click`、TextBox なら `Change`、フォームなら `UserForm_Click`）のハンドラー（`@on("OkButton.Click")` を付けた関数）を `forms/<名前>.ras` に開きます。無ければ空のハンドラーを、イベントの引数（`cancel: MSForms.ReturnBoolean` など）付きで追加します。右クリックの［イベントを開く…］で他のイベントも選べます。
 - **問題**: 下部の［問題］パネルに FormSpec の検証結果（重複した ID、存在しない親、種類に合わないプロパティなど）を表示し、選ぶとその項目を JSON 上で表示します。新しい検証エラーを生む編集は反映しません。
 - **元に戻す・保存**: デザイナーでの操作はすべて JSON ドキュメントの編集になるため、VS Code の元に戻す / やり直し・保存・自動保存がそのまま使えます。JSON をテキストエディターで編集すると、デザイナーにもすぐに反映されます。

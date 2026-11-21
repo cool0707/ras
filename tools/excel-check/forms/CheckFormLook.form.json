@@ -7,7 +7,6 @@
     "caption": "フォームの見た目",
     "width": 260,
     "height": 160,
-    "specialEffect": 2,
     "borderStyle": 1,
     "borderColor": {
       "kind": "rgb",
