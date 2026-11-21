@@ -2233,9 +2233,9 @@ VS Code の IntelliSense に相当する機能を、LSP の標準機能として
 | インレイヒント | `textDocument/inlayHint` | 推論された型、推論されたジェネリクスの型引数、呼び出し側の `byref` 引数（`byref` と表示） |
 | セマンティックトークン | `textDocument/semanticTokens` | TextMate 文法で区別できない `byref` 引数・拡張メソッド・COM メンバー等を色分けする |
 | 診断 | `textDocument/publishDiagnostics` | §6 のリンタールール、同期時のコンパイルエラー（§14.6） |
-| コードアクション | `textDocument/codeAction` | クイックフィックス（VBA の綴りで書かれたホストの名前を camelCase に直す（§15.3.1。その箇所だけ／ファイル内すべて）、未インポートの関数・拡張メソッドの `import` 追加、`byref` 引数へのリテラル渡しを一時変数に置き換える、縮小変換に `as` を追加する等） |
+| コードアクション | `textDocument/codeAction` | クイックフィックス（VBA の綴りで書かれたホストの名前を camelCase に直す（§15.3.1。その箇所だけ／ファイル内すべて。保存時の `source.fixAll` にも応じる）、未インポートの関数・拡張メソッドの `import` 追加、`byref` 引数へのリテラル渡しを一時変数に置き換える、縮小変換に `as` を追加する等） |
 | CodeLens | `textDocument/codeLens` | 最適化の適用状況（インライン展開・一括転送・ループ融合・`DoEvents` 挿入）、「生成 VBA を表示」、単独で起動できる関数の「Excelで実行」「デバッグ実行」、フォームのコードビハインドの先頭の「Excelで実行」「デバッグ実行」（§14.10.7、§14.11.8） |
-| フォーマット | `textDocument/formatting`, `rangeFormatting` | `ras fmt` と同じ |
+| フォーマット | `textDocument/formatting`, `rangeFormatting` | `ras fmt` と同じ。ただし整形の前に `ras check --fix` と同じ修正（§6 ルール 14）を適用する |
 | 折りたたみ | `textDocument/foldingRange` | |
 
 #### 16.2.1 メンバー一覧の詳細

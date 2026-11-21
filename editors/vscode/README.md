@@ -128,9 +128,9 @@ RAS ファイルでは、言語サーバーによるセマンティックハイ�
 | シンボル | アウトライン、［シンボルへ移動］（Ctrl+Shift+O）、［ワークスペース内のシンボルへ移動］（Ctrl+T） |
 | インレイヒント | 推論された変数・ラムダ引数の型、ジェネリック関数の推論された型引数、参照渡しの引数の前の `byref`（`editor.inlayHints.enabled` で切り替え） |
 | セマンティックハイライト | 引数・ローカル変数・プロパティ・メソッド・Excel / VBA の名前などを区別して色分けします。参照渡しの引数は下線、`@deprecated` の宣言は取り消し線で表示します（`editor.semanticTokenColorCustomizations` の `*.byref:ras` / `*.extension:ras` などで変更できます） |
-| クイック フィックス | VBA の綴りの名前を camelCase に直す、インポートしていない名前の `import` を追加する |
+| クイック フィックス | VBA の綴りの名前を camelCase に直す、インポートしていない名前の `import` を追加する。`"editor.codeActionsOnSave": { "source.fixAll": "explicit" }` を設定すると、保存時に VBA の綴りの名前をすべて直します |
 | 折りたたみ | ブロック、複数行のコメント、`import` の並び、`// #region` ～ `// #endregion` |
-| 整形・CodeLens | 「ドキュメントのフォーマット」、関数の上の「Excelで実行」「デバッグ実行」と最適化の適用状況 |
+| 整形・CodeLens | 「ドキュメントのフォーマット」（VBA の綴りの名前（`W0304`）も camelCase に直してから整形します。`ras check --fix` と同じ修正です）、関数の上の「Excelで実行」「デバッグ実行」と最適化の適用状況 |
 
 ## Excel とのライブ同期（Windows）
 

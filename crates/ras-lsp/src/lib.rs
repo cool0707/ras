@@ -432,7 +432,11 @@ impl Server {
             "textDocument/formatting" => {
                 let Some(m) = p["textDocument"]["uri"].as_str().and_then(uri_to_path).and_then(|path| self.module_for(&path)) else { return Value::Null };
                 let md = &prog.modules[m];
-                match ras_syntax::format(&md.text) {
+                // The mechanical fixes (`ras check --fix`: `Cells` → `cells`, W0304) are applied before formatting.
+                let mut seen = HashSet::new();
+                let fixes: Vec<&ras_compiler::Fix> = prog.fixes.iter().filter(|f| f.module == m && seen.insert(u32::from(f.span.start()))).collect();
+                let fixed = ras_compiler::apply_fixes(&md.text, &fixes);
+                match ras_syntax::format(&fixed).or(Some(fixed)) {
                     Some(text) if text != *md.text => {
                         let end = md.line_col_utf16(md.text.len() as u32);
                         json!([{ "range": { "start": { "line": 0, "character": 0 }, "end": { "line": end.0, "character": end.1 } }, "newText": text }])
@@ -470,6 +474,16 @@ impl Server {
                 if !actions.is_empty() && fixes.len() > 1 {
                     let all: Vec<Value> = fixes.iter().map(|f| edit(f)).collect();
                     actions.push(json!({ "title": format!("このファイルの同種の警告をすべて修正（{} 箇所）", all.len()), "kind": "quickfix", "edit": { "changes": { uri: all } } }));
+                }
+                // `source.fixAll` (run on save through `editor.codeActionsOnSave`) applies every mechanical fix of the file.
+                let only: Vec<&str> = p["context"]["only"].as_array().map(|a| a.iter().filter_map(|k| k.as_str()).collect()).unwrap_or_default();
+                if !only.is_empty() && !only.contains(&"quickfix") {
+                    let wants_fix_all = only.iter().any(|k| matches!(*k, "source" | "source.fixAll" | "source.fixAll.ras"));
+                    if !wants_fix_all || fixes.is_empty() {
+                        return json!([]);
+                    }
+                    let all: Vec<Value> = fixes.iter().map(|f| edit(f)).collect();
+                    return json!([{ "title": format!("機械的に直せる警告をすべて修正（{} 箇所）", all.len()), "kind": "source.fixAll.ras", "edit": { "changes": { uri: all } } }]);
                 }
                 // Names used without their `import`.
                 for fix in query::import_fixes(prog, m, from, to) {
@@ -552,7 +566,7 @@ pub fn run(conn: &Connection) -> Res<()> {
                 "semanticTokensProvider": { "legend": { "tokenTypes": hints::TOKEN_TYPES, "tokenModifiers": hints::TOKEN_MODIFIERS }, "full": true },
                 "foldingRangeProvider": true,
                 "documentFormattingProvider": true,
-                "codeActionProvider": { "codeActionKinds": ["quickfix"] },
+                "codeActionProvider": { "codeActionKinds": ["quickfix", "source.fixAll.ras"] },
                 "codeLensProvider": { "resolveProvider": false },
                 "executeCommandProvider": { "commands": COMMANDS },
             },
@@ -773,6 +787,17 @@ mod tests {
         send(Message::Notification(Notification::new("textDocument/didChange".into(), json!({ "textDocument": { "uri": uri, "version": 4 }, "contentChanges": [{ "text": messy }] }))));
         let edits = request("textDocument/formatting", json!({ "textDocument": { "uri": uri }, "options": { "tabSize": 4, "insertSpaces": true } }));
         assert_eq!(edits[0]["newText"].as_str().unwrap(), good);
+
+        // formatting also applies the W0304 fixes, and so does `source.fixAll` on save
+        let messy_cased = messy.replace("msgBox(", "MsgBox(");
+        send(Message::Notification(Notification::new("textDocument/didChange".into(), json!({ "textDocument": { "uri": uri, "version": 5 }, "contentChanges": [{ "text": messy_cased }] }))));
+        let edits = request("textDocument/formatting", json!({ "textDocument": { "uri": uri }, "options": { "tabSize": 4, "insertSpaces": true } }));
+        assert_eq!(edits[0]["newText"].as_str().unwrap(), good);
+        let fix_all = request("textDocument/codeAction", json!({ "textDocument": { "uri": uri }, "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "context": { "diagnostics": [], "only": ["source.fixAll"] } }));
+        assert_eq!(fix_all[0]["kind"], "source.fixAll.ras", "{fix_all}");
+        assert_eq!(fix_all[0]["edit"]["changes"][&uri][0]["newText"], "msgBox", "{fix_all}");
+        let organize = request("textDocument/codeAction", json!({ "textDocument": { "uri": uri }, "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 0 } }, "context": { "diagnostics": [], "only": ["source.organizeImports"] } }));
+        assert_eq!(organize, json!([]));
 
         request("shutdown", Value::Null);
         send(Message::Notification(Notification::new("exit".into(), Value::Null)));
