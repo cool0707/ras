@@ -1021,7 +1021,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             };
             book::dump(&file, sheet, range.as_deref(), *format, *formats, if *all { None } else { Some((*max_rows, *max_cols)) })
         }
-        Command::Book { action: book::BookCommand::View { file, diff, output, stdout, open, all, title, drawings } } => {
+        Command::Book { action: book::BookCommand::View { file, diff, output, stdout, open, all, title, drawings, sheet } } => {
             // The project, when there is one: its workbook, and build/view/ for the page.
             let root = find_root(project).ok();
             let file = match (file, &root) {
@@ -1033,11 +1033,11 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 (None, None) => return Err("対象ブックを指定してください".into()),
             };
             if *stdout {
-                print!("{}", book::view_page(&file, diff.as_deref(), *all, title.as_deref(), drawings.as_deref())?);
+                print!("{}", book::view_page(&file, diff.as_deref(), *all, title.as_deref(), drawings.as_deref(), sheet.as_deref())?);
                 return Ok(ExitCode::SUCCESS);
             }
             let dir = root.unwrap_or_else(|| PathBuf::from(".")).join("build").join("view");
-            let page = book::write_view(&file, diff.as_deref(), *all, output.as_deref(), &dir, drawings.as_deref())?;
+            let page = book::write_view(&file, diff.as_deref(), *all, output.as_deref(), &dir, drawings.as_deref(), sheet.as_deref())?;
             println!("{} を作成しました（ブラウザーで開くと、シートをグリッドで見られます）", page.display());
             if *open {
                 book::open_in_browser(&page)?;
