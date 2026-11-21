@@ -922,3 +922,31 @@ console.log($rasBookSnapshot(out));
     assert_eq!(data["diff"]["changes"]["Sheet1"][0], serde_json::json!({ "a": "D2", "before": "（空）", "after": "6" }));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The examples of the cheat sheet are checked as they are written (docs/cheatsheet.md).
+#[test]
+fn cheat_sheet_examples_pass_the_check() {
+    let sheet = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/cheatsheet.md")).unwrap();
+    let mut files: Vec<(String, String)> = Vec::new();
+    for (i, block) in sheet.split("```typescript\n").skip(1).enumerate() {
+        let code = block.split("```").next().unwrap().to_string();
+        let path = if code.starts_with("// test/") { format!("test/block{i}.test.ras") } else { format!("src/block{i}.ras") };
+        files.push((path, code));
+    }
+    assert!(files.len() >= 6, "the cheat sheet has code examples");
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+    let dir = project("cheatsheet", &mut sales(), &refs);
+    let (code, out, err) = ras(&dir, &["check"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!err.contains("warning["), "{err}");
+    // `ras cheatsheet` prints it, and `ras init` leaves the guide for AI agents.
+    let (code, out, _) = ras(&dir, &["cheatsheet"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("# RAS 早見表"), "{}", &out[..40.min(out.len())]);
+    let fresh = temp_dir("init-agents");
+    let (code, _, err) = ras(&fresh, &["init", "."]);
+    assert_eq!(code, 0, "{err}");
+    assert!(std::fs::read_to_string(fresh.join("AGENTS.md")).unwrap().contains("ras book dump"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&fresh);
+}

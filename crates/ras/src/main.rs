@@ -105,6 +105,8 @@ enum Command {
     },
     /// 関数を Excel なしで実行する（デバッグ実行と同じ JavaScript ランタイムとブックの代役。出力・エラー・変更されたセルを表示する）
     Run(run::RunArgs),
+    /// 構文と Excel の操作の早見表（TypeScript との違い、型、関数、エラー処理、テスト、コマンド）を表示する
+    Cheatsheet,
     /// エラー・警告のコード（E0301 など）の説明、典型的な原因、直し方を表示する
     Explain {
         /// コード（省略するとコードの一覧）
@@ -773,6 +775,9 @@ fn cmd_unpack(root: &Path, book: Option<&Path>) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+const AGENTS_TEMPLATE: &str = include_str!("../templates/AGENTS.md");
+const CHEATSHEET: &str = include_str!("../../../docs/cheatsheet.md");
+
 fn cmd_init(dir: &Path, workbook: Option<&str>) -> Result<ExitCode, String> {
     let toml_path = dir.join("ras.toml");
     if toml_path.exists() {
@@ -800,6 +805,11 @@ fn cmd_init(dir: &Path, workbook: Option<&str>) -> Result<ExitCode, String> {
     let main_path = dir.join("src").join("main.ras");
     if !main_path.exists() {
         std::fs::write(&main_path, main).map_err(|e| e.to_string())?;
+    }
+    // What an AI agent working in the project reads first (the work flow, the rules, what cannot be used).
+    let agents = dir.join("AGENTS.md");
+    if !agents.exists() {
+        std::fs::write(&agents, AGENTS_TEMPLATE).map_err(|e| e.to_string())?;
     }
     let gitignore = dir.join(".gitignore");
     if !gitignore.exists() {
@@ -980,6 +990,10 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 return Ok(ExitCode::from(1));
             }
             println!("ユーザーフォーム {count} 個に問題は見つかりませんでした");
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Cheatsheet => {
+            print!("{CHEATSHEET}");
             Ok(ExitCode::SUCCESS)
         }
         Command::Explain { code: None } => {
