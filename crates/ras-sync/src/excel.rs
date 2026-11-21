@@ -158,6 +158,18 @@ impl Book {
         Ok(self.workbook.get("CodeName", &[])?.string())
     }
 
+    /// The worksheets of the workbook (code name and tab name), in workbook order.
+    pub fn sheets(&self) -> Result<Vec<ras_form::import::Sheet>, SyncError> {
+        let sheets = self.workbook.object("Worksheets", &[])?;
+        let count = sheets.get("Count", &[])?.int().unwrap_or(0);
+        let mut out = Vec::with_capacity(count as usize);
+        for i in 1..=count {
+            let sheet = sheets.object("Item", &[Arg::Int(i)])?;
+            out.push(ras_form::import::Sheet { code_name: sheet.get("CodeName", &[])?.string(), name: sheet.get("Name", &[])?.string() });
+        }
+        Ok(out)
+    }
+
     /// `Application.Run` with the workbook-qualified name (spec §14.5); returns when the macro ends.
     pub fn run(&self, name: &str) -> Result<(), SyncError> {
         let book = self.workbook.get("Name", &[])?.string();

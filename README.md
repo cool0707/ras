@@ -91,6 +91,9 @@ ras cheatsheet                            # 構文と Excel の操作の早見�
 - 変換したコードにコンパイル エラーがあると、ほかのビルド エラーと同じく同期しません（エディタに表示されるエラーを直してください）。
 - 取り込みを止めるには、`ras.toml` に `[sync]` `pull-unmanaged = false` を書きます。
 
+同期（`ras sync`、`ras watch`、VS Code）では、ブックの各シートと `ThisWorkbook` について、イベント処理を書くファイル `src/Sheet1Events.ras` / `src/ThisWorkbookEvents.ras` が無ければ作成します（仕様 §14.7.2。`[sync]` `sheet-files = false` で止められます）。
+作成されるファイルは書き方の例のコメントだけで、`@on("Sheet1.Change")` などのハンドラを書くまではブックのモジュールになりません。一般に、関数・変数などのコードが無い `.ras` ファイルからは VBA のモジュールを生成しません。
+
 `ras pack` はブックが Excel で開かれていると書き込みません（閉じてから実行してください）。
 ブックに RAS が生成したものではない同名のモジュールがある場合や、手書きのイベントプロシージャ（`Workbook_Open` など）と生成コードの名前が重なる場合も、書き込まずにエラーにします（前者は `--overwrite` で置き換えられます）。
 置き換え前のブックは `build/backup/` に保存されます。

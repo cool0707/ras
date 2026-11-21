@@ -18,6 +18,7 @@ mod disp;
 #[cfg(windows)]
 mod excel;
 
+use ras_compiler::config::SyncCfg;
 use ras_compiler::emit::OutputFile;
 pub use plan::{Forms, Report, SyncOptions};
 pub use ras_form::import::Prepared;
@@ -113,29 +114,38 @@ impl Session {
 
     /// Takes over the hand-written VBA of the open workbook — standard modules, the code of
     /// sheets and of `ThisWorkbook`, forms made in the VBE — into the project at `root`
-    /// (spec §14.7.1). `codepage` is the project's `target.codepage`.
-    pub fn take_over(&mut self, root: &Path, codepage: u16) -> Result<Prepared, SyncError> {
+    /// (spec §14.7.1) when `[sync] pull-unmanaged` is on, then creates a RAS file for each
+    /// sheet (and `ThisWorkbook`) that has none when `[sync] sheet-files` is on (spec §14.7.2).
+    /// `codepage` is the project's `target.codepage`.
+    pub fn take_over(&mut self, root: &Path, codepage: u16, sync: &SyncCfg) -> Result<Prepared, SyncError> {
         use plan::VbProject;
         self.connect()?;
         let book = self.live.as_ref().expect("connected");
-        let mut project = book.project()?;
-        let modules: Vec<ras_form::import::BookModule> = project.components()?.iter().filter_map(book_module).collect();
         let code_name = book.code_name()?;
-        let mut failure = None;
-        let mut form = |name: &str| {
-            project.export_form(name, codepage).map_err(|e| {
-                let message = e.to_string();
-                if matches!(e, SyncError::Busy(_)) {
-                    failure = Some(e);
-                }
-                message
-            })
-        };
-        let prepared = ras_form::import::prepare(root, ras_form::import::Book { modules: &modules, workbook_code_name: &code_name, form: &mut form }, codepage).map_err(SyncError::Failed)?;
-        match failure {
-            Some(busy) => Err(busy),
-            None => Ok(prepared),
+        let mut prepared = Prepared::default();
+        if sync.pull_unmanaged {
+            let mut project = book.project()?;
+            let modules: Vec<ras_form::import::BookModule> = project.components()?.iter().filter_map(book_module).collect();
+            let mut failure = None;
+            let mut form = |name: &str| {
+                project.export_form(name, codepage).map_err(|e| {
+                    let message = e.to_string();
+                    if matches!(e, SyncError::Busy(_)) {
+                        failure = Some(e);
+                    }
+                    message
+                })
+            };
+            prepared = ras_form::import::prepare(root, ras_form::import::Book { modules: &modules, workbook_code_name: &code_name, form: &mut form }, codepage).map_err(SyncError::Failed)?;
+            if let Some(busy) = failure {
+                return Err(busy);
+            }
         }
+        if sync.sheet_files {
+            let sheets = book.sheets()?;
+            prepared.created = ras_form::import::sheet_files(root, &sheets, &code_name).map_err(SyncError::Failed)?;
+        }
+        Ok(prepared)
     }
 
     /// Runs the macro `Module.proc` in the workbook and waits for it to end.
@@ -182,7 +192,7 @@ impl Session {
         Err(SyncError::Unsupported)
     }
 
-    pub fn take_over(&mut self, _root: &Path, _codepage: u16) -> Result<Prepared, SyncError> {
+    pub fn take_over(&mut self, _root: &Path, _codepage: u16, _sync: &SyncCfg) -> Result<Prepared, SyncError> {
         Err(SyncError::Unsupported)
     }
 }

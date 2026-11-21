@@ -169,11 +169,14 @@ pub struct SyncCfg {
     pub compile_check: bool,
     pub shared_memory_mb: u32,
     pub pull_unmanaged: bool,
+    /// Live sync creates `src/<CodeName>Events.ras` for each sheet (and `ThisWorkbook`) that has
+    /// no file yet (spec §14.7.2).
+    pub sheet_files: bool,
 }
 
 impl Default for SyncCfg {
     fn default() -> Self {
-        SyncCfg { enabled: true, compile_check: true, shared_memory_mb: 64, pull_unmanaged: true }
+        SyncCfg { enabled: true, compile_check: true, shared_memory_mb: 64, pull_unmanaged: true, sheet_files: true }
     }
 }
 

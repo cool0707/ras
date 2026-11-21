@@ -298,13 +298,19 @@ fn drift_hash(code: &str) -> u32 {
     crc32fast::hash(out.as_bytes())
 }
 
+/// A standard module with nothing in it: its RAS files hold only comments, blank lines,
+/// `import`s or type declarations. It is not written into the workbook (spec §12.1).
+pub fn is_empty_module(m: &VModule) -> bool {
+    m.kind == VModuleKind::Standard && m.decls.is_empty() && m.procs.is_empty()
+}
+
 pub fn finalize(prog: &Program, lowered: &Lowered, opts: &EmitOptions) -> (Vec<OutputFile>, Vec<Diagnostic>) {
     let cfg = &prog.config;
     let popts = PrintOptions { erl: opts.erl, attributes: opts.attributes, vba6: cfg.target.vba6 };
     let mut diags = Vec::new();
     let mut files = Vec::new();
     let mut used: HashSet<String> = HashSet::new();
-    for m in &lowered.modules {
+    for m in lowered.modules.iter().filter(|m| !is_empty_module(m)) {
         let printed = print_module(m, &popts);
         for id in runtime::identifiers(&printed.text) {
             used.insert(id.to_string());

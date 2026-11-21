@@ -654,8 +654,9 @@ fn live_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<Option<Ex
         Err(ras_sync::SyncError::NotOpen(_) | ras_sync::SyncError::Unsupported) => return Ok(None),
         Err(e) => return Err(e.to_string()),
     }
-    // The hand-written VBA of the workbook is taken over into the project first (spec §14.7.1).
-    let prepared = if cfg.sync.pull_unmanaged { session.take_over(root, cfg.target.codepage).map_err(|e| e.to_string())? } else { ras_sync::Prepared::default() };
+    // The hand-written VBA of the workbook is taken over into the project first (spec §14.7.1),
+    // and the sheets without a file get one (spec §14.7.2).
+    let prepared = if cfg.sync.pull_unmanaged || cfg.sync.sheet_files { session.take_over(root, cfg.target.codepage, &cfg.sync).map_err(|e| e.to_string())? } else { ras_sync::Prepared::default() };
     report_take_over(&prepared);
     let Some((prog, out)) = compile_with(root, args, Some(&book), true)? else { return Ok(Some(ExitCode::from(1))) };
     write_build(root, &prog, &out)?;
