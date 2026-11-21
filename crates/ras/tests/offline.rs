@@ -926,7 +926,8 @@ console.log($rasBookSnapshot(out));
 /// The examples of the cheat sheet are checked as they are written (docs/cheatsheet.md).
 #[test]
 fn cheat_sheet_examples_pass_the_check() {
-    let sheet = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/cheatsheet.md")).unwrap();
+    // (A checkout on Windows may have CRLF line ends.)
+    let sheet = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/cheatsheet.md")).unwrap().replace("\r\n", "\n");
     let mut files: Vec<(String, String)> = Vec::new();
     for (i, block) in sheet.split("```typescript\n").skip(1).enumerate() {
         let code = block.split("```").next().unwrap().to_string();
