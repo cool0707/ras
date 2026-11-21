@@ -4,6 +4,7 @@ import type { EditorDescriptor } from "./types";
 import { fontStyle } from "./appearance";
 import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { validNumericInput } from "./numeric";
+import { Icon } from "../Icon";
 
 // Suggestions only: any name may be typed. Each is drawn in itself, so a font
 // the machine lacks shows in the fallback face.
@@ -40,7 +41,7 @@ const families: { group: string; names: string[] }[] = [
     ],
   },
 ];
-const sizes = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48];
+const sizes = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 // Windows character sets (LOGFONT lfCharSet), the "文字セット" of the font dialog.
 const charsets: [number, string][] = [
   [0, "欧文 (ANSI)"],
@@ -174,37 +175,17 @@ export function FontEditor({ descriptor, value, disabled, unset, sample, onChang
               <label class="font-section-title" for={`${id}-size`}>
                 サイズ
               </label>
-              <div class="font-size-input">
-                <input
-                  id={`${id}-size`}
-                  type="text"
-                  inputMode="decimal"
-                  disabled={disabled}
-                  placeholder={value.size === null ? "null" : unset}
-                  value={sizeText}
-                  onInput={(event) => {
-                    setSizeText(event.currentTarget.value);
-                    numeric("size", event.currentTarget.value);
-                  }}
-                />
-                <span>pt</span>
-              </div>
-              <div class="font-size-chips">
-                {sizes.map((size) => (
-                  <button
-                    type="button"
-                    class="chip"
-                    aria-pressed={value.size === size}
-                    disabled={disabled}
-                    onClick={() => {
-                      setSizeText(String(size));
-                      numeric("size", String(size));
-                    }}
-                  >
-                    {size}
-                  </button>
-                ))}
-              </div>
+              <SizeCombo
+                id={`${id}-size`}
+                text={sizeText}
+                current={typeof value.size === "number" ? value.size : undefined}
+                disabled={disabled}
+                placeholder={value.size === null ? "null" : unset}
+                onText={(text) => {
+                  setSizeText(text);
+                  numeric("size", text);
+                }}
+              />
             </div>
           )}
           {styleToggles.some((toggle) => child(toggle.field)) && (
@@ -320,6 +301,126 @@ export function FontEditor({ descriptor, value, disabled, unset, sample, onChang
             です。通常はフォントに合わせて自動で決まるため、変更する必要はありません。
           </p>
         </details>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The size combo box of the Windows font dialog: type any size, or open the
+ * list of the usual ones (Alt+Down, Down or the arrow button).
+ */
+function SizeCombo(props: {
+  id: string;
+  text: string;
+  current: number | undefined;
+  disabled: boolean;
+  placeholder: string;
+  onText: (text: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(-1);
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const listId = `${props.id}-list`;
+  const show = () => {
+    setActive(Math.max(0, props.current === undefined ? -1 : sizes.indexOf(props.current)));
+    setOpen(true);
+  };
+  const choose = (size: number) => {
+    props.onText(String(size));
+    setOpen(false);
+    input.current?.focus();
+  };
+  useEffect(() => {
+    if (open) list.current?.children[active]?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+  return (
+    <div
+      class="font-size-combo"
+      onFocusOut={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
+      <div class="font-size-field">
+        <input
+          ref={input}
+          id={props.id}
+          type="text"
+          role="combobox"
+          inputMode="decimal"
+          autoComplete="off"
+          aria-expanded={open}
+          aria-controls={listId}
+          aria-autocomplete="none"
+          aria-activedescendant={open && active >= 0 ? `${listId}-${active}` : undefined}
+          data-handles-enter={open ? "" : undefined}
+          disabled={props.disabled}
+          placeholder={props.placeholder}
+          value={props.text}
+          onInput={(event) => props.onText(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.isComposing) return;
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!open) return show();
+              if (event.altKey) return setOpen(false);
+              setActive((index) =>
+                Math.max(
+                  0,
+                  Math.min(sizes.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)),
+                ),
+              );
+            } else if (open && (event.key === "Enter" || event.key === "Escape")) {
+              event.preventDefault();
+              event.stopPropagation();
+              if (event.key === "Enter" && active >= 0) choose(sizes[active]);
+              else setOpen(false);
+            }
+          }}
+        />
+        <span class="font-size-unit">pt</span>
+        <button
+          type="button"
+          class="font-size-toggle"
+          tabIndex={-1}
+          aria-label="サイズの一覧"
+          aria-expanded={open}
+          aria-controls={listId}
+          disabled={props.disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            if (open) setOpen(false);
+            else show();
+            input.current?.focus();
+          }}
+        >
+          <Icon name="chevron-down" />
+        </button>
+      </div>
+      {open && (
+        <ul
+          ref={list}
+          id={listId}
+          class="font-size-list"
+          role="listbox"
+          aria-label="サイズ"
+          onMouseDown={(event) => event.preventDefault()}
+        >
+          {sizes.map((size, index) => (
+            <li
+              id={`${listId}-${index}`}
+              role="option"
+              class={index === active ? "active" : undefined}
+              aria-selected={props.current === size}
+              onMouseEnter={() => setActive(index)}
+              onClick={() => choose(size)}
+            >
+              {size}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
