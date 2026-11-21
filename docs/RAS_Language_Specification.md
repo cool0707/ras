@@ -1467,6 +1467,7 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 | `@forms/<フォーム名>.js` / `.js.map` | フォームのコードビハインド（`forms/<フォーム名>.ras`）。§14.10.7 |
 | `ras-runtime.js` | ランタイム（`$rt`）。数値変換・オーバーフロー検査・文字列関数・エラーオブジェクト・VBA 標準関数・Excel へのアクセス |
 | `ras-forms.js` | ユーザーフォームのランタイム（MSForms のオブジェクトとイベント、フォームを表示するホストとの通信）。§14.10.7 |
+| `ras-scripting.js` | COM の無いときの `Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp`。§14.10.5 |
 | `ras-excel.js` | Excel の代役（`Application`・`Workbook`・`Worksheet`・`Range` などのオブジェクトと、ブック・シートのイベント）。Excel の無いときに使う。§14.10.8 |
 | `ras-main.js` | ランチャー。`node --enable-source-maps build/debug/ras-main.js <モジュール名.関数名>` で実行する（`--list` で実行可能な関数を JSON で出力） |
 | `ras-debug.json` | 実行可能な関数の一覧とフォームの一覧（VS Code 拡張が読む） |
@@ -1499,6 +1500,12 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 * **数値の `typeof`:** JavaScript の数値は `Long` と `Double` を区別しない。`typeof` は、静的な型に数値型が 1 つだけ含まれるとき（`double`、`string | double` など）はその型名を返し、それ以外では整数を `"Long"`、それ以外を `"Double"` とする。そのため `int | double` のように数値型を複数含むユニオン型を `typeof` で絞り込むと、VBA ビルドと結果が異なることがある。
 * **数値型の精度:** `long`・`currency`・`decimal` は倍精度浮動小数点数で表現する（`long` は 2^53 を超えると不正確、`decimal` の `0.1m + 0.2m == 0.3m` は成り立たない）。`float` は倍精度のまま計算する。
 * **VBA 標準関数:** よく使うもの（文字列・変換・日付・数学・`MsgBox`・`CreateObject`・`Format` の代表的な書式など）は JavaScript で実装している。未対応の関数は呼び出した時点でエラーになる。`Format` の未対応の書式は Excel の `TEXT` 関数に委譲する。ロケール依存の表記（日付の既定書式など）は VBA と一致しないことがある。
+* **`CreateObject` / `new`（COM オブジェクト）:** COM アドオン（`ras_com.node`）のある Windows では、実際の COM オブジェクトを作る（Excel が無くても作れる）。COM の無いデバッグ実行（Mac・Linux、および `ras.debug.excel` が `standIn` の Windows）では、`Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` をランタイムの JavaScript 実装（`ras-scripting.js`）で作る。これ以外の ProgID（`ADODB.Connection`、`WScript.Shell`、`MSXML2.XMLHTTP` など）はエラー 429。JavaScript 実装は日本語版 Windows の動作に合わせている。
+  * **ファイル:** `FileSystemObject` のファイル・フォルダーの操作（コピー・移動・削除はワイルドカード可）、`File` / `Folder` / `Files` / `Folders`、`TextStream` の読み書き。ドライブ（`drives` / `getDrive`）は未対応。エラーは VBA の番号（53 ファイルが見つからない、76 パスが見つからない、58 既に存在する、62 ファイルの終わり、70 書き込みできない）。
+  * **文字コード:** テキスト ファイルは、Windows と同じく ANSI（Shift_JIS、コード ページ 932）で読み書きする。`unicode` / `tristateTrue` を指定すると UTF-16（BOM 付き）。UTF-8 のファイルを ANSI として読むと、Windows と同じく文字化けする。
+  * **パス:** Mac・Linux では、`/` に加えて `\` もパスの区切りとして扱う（`folder + "\\data.txt"` のように書いたコードがそのまま動く）。`getParentFolderName` などパスの文字列だけを扱うメソッドは、どちらの区切りも受け付ける。
+  * **辞書:** キーの順序、`compareMode`、無いキーを読むと空の値で追加される動作、エラー番号（457、32811）は本物と同じ。
+  * **正規表現:** パターンは JavaScript の正規表現として解釈する（VBScript の正規表現の構文はその部分集合にあたる）。`global` / `ignoreCase` / `multiline`、`test` / `execute` / `replace`（`$1`・`$&`）。パターンの誤りはエラー 5017。
 * **`declare`（DLL 関数）:** `kernel32` の `Sleep` / `GetTickCount` / `GetTickCount64` / `GetCurrentProcessId` / `QueryPerformanceCounter` / `QueryPerformanceFrequency` のみ代替実装がある。それ以外は警告 `W1410` を出し、呼び出した時点でエラーになる。
 * **速度:** Excel へのアクセスはプロセス間 COM 呼び出しになるため、セルを 1 つずつ読み書きするループは VBA ビルドより大幅に遅い。
 * **実行中の Excel:** マクロ実行中の状態ではないため、停止中も実行中もユーザーが Excel を操作できる。
@@ -1615,6 +1622,7 @@ Excel を COM で操作できない環境でも、Excel を操作するプログ
   * ハンドラで捕捉されなかったエラーは、VBA ビルドの RAS エラーダイアログ（`RAS_EventError`）と同じく実行を止めない。エラーの内容と RAS の位置をデバッグ コンソールに表示して、元の文の続きを実行する。エラーで止めたい場合は、VS Code のブレークポイントの「捕捉された例外」を有効にする。
   * `Calculate` は、数式を書き込んだシートと、書き換えたセルに依存する数式のあるシートで起こす（`NOW` などの揮発性関数だけのシートでは起こさない）。`Calculate` / `SheetCalculate` のハンドラがあるときは、セルを書き換えるたびにその場で計算する。
   * `Workbook.Open`、ユーザーの操作で起きるイベント（`BeforeDoubleClick` / `BeforeRightClick` / `FollowHyperlink`）、ウィンドウのイベント、`Workbooks.Open` で開いたほかのブックのイベントは起こさない。
+* **ファイルと正規表現:** `Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` は、ランタイムの JavaScript 実装を使う（§14.10.5）。ほかの COM オブジェクトは作れない（エラー 429）。
 * **Excel が必要なもの:** 手書き VBA（`Application.Run`）、ほかのアプリケーションとのクリップボードの受け渡し、別のブック・新しいブックへのシートのコピーと移動、ダイアログ（`GetOpenFilename` など）、`Application.OnTime` は、Excel が必要である旨のエラー 445 になる。未実装のメンバーはエラー 438。
 * **保存:** プロジェクトのブックと `Workbooks.Open` で開いたファイルは上書きしない。プログラムが変更したブックは、終了時（および `Save` / 開いたファイルへの `SaveAs` のとき）に `build/debug/workbooks/<ブック名>` に保存し、デバッグ コンソールに表示する。保存は umya-spreadsheet で行うため、VBA プロジェクトは残るが、umya-spreadsheet が読み書きしない要素は落ちることがある。マクロの無いブックは `.xlsx` で保存する。
 * **入力:** `InputBox` は既定値を返し（既定値が無ければキャンセル）、その旨をデバッグ コンソールに表示する。`MsgBox` は COM の無いときと同じく、デバッグ コンソールに表示して `vbOK` を返す。
@@ -1912,6 +1920,14 @@ pull-unmanaged = true   # 同期・ras pack のときに、ブックの手書き
 
 * Excel オブジェクトモデル（`Excel.Range`, `Excel.Worksheet` 等）と Office・VBA 標準関数の型定義を同梱する。
 * その他の COM ライブラリ（ADODB 等）は `ras typegen` でタイプライブラリから生成する。生成した型を使ったコードは既定で遅延バインディング（`Object` + `CreateObject`）で出力し、参照設定への依存を避ける（`@earlyBinding` で事前バインディングに切り替え）。
+* **Scripting Runtime と VBScript の正規表現（v0.9で追加）:** `Scripting`（`FileSystemObject`・`File`・`Folder`・`Files`・`Folders`・`TextStream`・`Dictionary`）と `VBScript`（`RegExp`・`MatchCollection`・`Match`・`SubMatches`）の型定義も同梱する。どちらも参照設定に入っていないライブラリなので、**生成する VBA は遅延バインディング**にする（変数は `Object`、参照設定は不要）。
+  * **作成:** `new Scripting.FileSystemObject()` / `new Scripting.Dictionary()` / `new VBScript.RegExp()` と書く。VBA には `CreateObject("Scripting.FileSystemObject")` などとして出力する。これ以外の型（`File`、`TextStream` など）は `new` で作れない。
+  * **`createObject` の型:** `createObject("Scripting.FileSystemObject")` のように、この 3 つの ProgID を文字列リテラルで書いた `createObject` は、`object` ではなくその型になる（大文字小文字は区別しない）。メンバーの補完と型チェックが効く。ProgID を変数で渡した場合や、ほかの ProgID は従来どおり `object`。
+  * **列挙値:** `forReading` / `forWriting` / `forAppending`（`IOMode`）、`tristateTrue` / `tristateFalse` / `tristateUseDefault`（`Tristate`）、`windowsFolder` / `systemFolder` / `temporaryFolder`（`SpecialFolderConst`）を使える。参照設定が無いと VBA には定数が無いため、VBA には数値で出力する（`fso.openTextFile(path, forReading)` は `fso.OpenTextFile(path, 1&)`）。属性（`attributes`）と比較方法（`compareMode`）には VBA の定数（`vbReadOnly`、`vbTextCompare` など）を使う。
+  * **コレクション:** `folder.files` / `folder.subFolders` / `RegExp.execute` の結果 / `Dictionary`（キー）は `for...of` と §4.4 のメソッドで列挙できる。
+  * **辞書:** キーと値の辞書には、通常は `Map<K, V>`（§13.3）を使う。`Scripting.Dictionary` 型は、`CreateObject("Scripting.Dictionary")` をそのまま使う既存のコードのためにある（値は `any`。`d[key] = value` で設定し、`d(key)` / `d.item(key)` で読む）。
+  * **手書き VBA の取り込み（§14.7.1）:** `Dim fso As New FileSystemObject`、`As Dictionary`、`New RegExp`、`ForReading` などは、これらの型と列挙値に変換する。
+  * デバッグ実行での扱いは §14.10.5。
 
 #### 15.3.1 名前の綴り（v0.9で追加）
 

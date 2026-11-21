@@ -91,6 +91,7 @@ Mac・Linux や Excel の無い Windows では、Excel の代わりに `ras.toml
 - フォント・色・罫線・列幅などの書式はブックに保存します（画面が無いので描画はしません）。
 - プログラムの操作で起きるブック・シートのイベント（`Change`・`SelectionChange`・`Activate`・`BeforeSave` など）は、`@on` のハンドラを呼び出します。
 - 計算方法を手動（`Application.Calculation`）にすると、`Calculate` を呼ぶまで数式を計算し直しません。
+- `Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` は使えます（テキスト ファイルは Windows と同じく Shift_JIS か UTF-16 で読み書きします）。`ADODB` や `WScript.Shell` など、ほかの COM オブジェクトは作れません。
 - 手書き VBA（`Application.Run`）、ダイアログなど Excel そのものが必要な操作はエラーになります。変数に入れた `Range` は、Excel と違ってセルの挿入・削除に追従しません。
 - 対応範囲と Excel との違いは言語仕様 §14.10.8 にまとめています。
 

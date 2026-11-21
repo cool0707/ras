@@ -1,0 +1,529 @@
+// Microsoft Scripting Runtime（FileSystemObject・Dictionary）と VBScript の正規表現の型定義（RAS 同梱）。
+//
+// どちらのライブラリも VBA プロジェクトの参照設定には入っていないので、生成する VBA では遅延バインディングにする
+// （仕様 §15.3）: 変数は `Object`、作成は `CreateObject("Scripting.FileSystemObject")`、列挙値は数値。
+// RAS では `new Scripting.FileSystemObject()` / `new Scripting.Dictionary()` / `new VBScript.RegExp()` か、
+// `createObject("Scripting.FileSystemObject")` のように ProgID を文字列で書いた `createObject` で作る。
+// 名前はタイプ ライブラリの綴り（PascalCase）で書く。RAS のソースからは camelCase で見える（仕様 §15.3.1）。
+// 列挙値だけは RAS から見える綴り（`forReading`）で書いている（VBA には数値で出力するため、綴りを残す必要がない）。
+// JSDoc の要約は独自に書いたもの。詳細は @see の Microsoft リファレンスを参照。
+
+declare namespace Scripting {
+    /**
+     * `openTextFile` / `openAsTextStream` でファイルを開く目的。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/opentextfile-method
+     */
+    enum IOMode {
+        /** 読み取り。 */
+        forReading = 1,
+        /** 書き込み（内容は上書きされる）。 */
+        forWriting = 2,
+        /** 末尾への追記。 */
+        forAppending = 8
+    }
+
+    /**
+     * テキスト ファイルの文字コード。`tristateFalse` は ANSI（日本語 Windows では Shift_JIS）、`tristateTrue` は Unicode（UTF-16）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/opentextfile-method
+     */
+    enum Tristate {
+        tristateTrue = -1,
+        tristateFalse = 0,
+        /** システムの既定（ANSI）。 */
+        tristateUseDefault = -2
+    }
+
+    /**
+     * `getSpecialFolder` で取得するフォルダー。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getspecialfolder-method
+     */
+    enum SpecialFolderConst {
+        windowsFolder = 0,
+        systemFolder = 1,
+        /** 一時ファイル用のフォルダー（TMP）。 */
+        temporaryFolder = 2
+    }
+
+    /**
+     * ファイル・フォルダーを操作する。`new Scripting.FileSystemObject()` で作成する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/filesystemobject-object
+     */
+    interface FileSystemObject {
+        /**
+         * パスの末尾に名前をつなぐ（区切り文字は必要なときだけ入る）。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/buildpath-method
+         */
+        BuildPath(path: string, name: string): string;
+
+        /**
+         * ファイルをコピーする。コピー元の最後の部分にはワイルドカード（`*` `?`）を使える。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/copyfile-method
+         */
+        CopyFile(source: string, destination: string, overWriteFiles?: boolean): void;
+
+        /**
+         * フォルダーを中身ごとコピーする。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/copyfolder-method
+         */
+        CopyFolder(source: string, destination: string, overWriteFiles?: boolean): void;
+
+        /**
+         * フォルダーを作成する。既にあるとエラー 58。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/createfolder-method
+         */
+        CreateFolder(path: string): Folder;
+
+        /**
+         * テキスト ファイルを作成して開く。`unicode` が `true` なら UTF-16、既定は ANSI。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/createtextfile-method
+         */
+        CreateTextFile(fileName: string, overwrite?: boolean, unicode?: boolean): TextStream;
+
+        /**
+         * ファイルを削除する。最後の部分にはワイルドカードを使える。1 つも無いとエラー 53。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/deletefile-method
+         */
+        DeleteFile(fileSpec: string, force?: boolean): void;
+
+        /**
+         * フォルダーを中身ごと削除する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/deletefolder-method
+         */
+        DeleteFolder(folderSpec: string, force?: boolean): void;
+
+        /**
+         * ドライブがあるかどうか。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/driveexists-method
+         */
+        DriveExists(driveSpec: string): boolean;
+
+        /**
+         * ファイルがあるかどうか。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/fileexists-method
+         */
+        FileExists(fileSpec: string): boolean;
+
+        /**
+         * フォルダーがあるかどうか。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/folderexists-method
+         */
+        FolderExists(folderSpec: string): boolean;
+
+        /**
+         * 絶対パスに直す。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getabsolutepathname-method
+         */
+        GetAbsolutePathName(path: string): string;
+
+        /**
+         * パスの最後の部分から拡張子を除いた名前。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getbasename-method
+         */
+        GetBaseName(path: string): string;
+
+        /**
+         * パスのドライブ名（`C:`）。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getdrivename-method
+         */
+        GetDriveName(path: string): string;
+
+        /**
+         * パスの最後の部分の拡張子（`.` は含まない）。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getextensionname-method
+         */
+        GetExtensionName(path: string): string;
+
+        /**
+         * ファイルを表す `File` を返す。無いとエラー 53。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getfile-method
+         */
+        GetFile(filePath: string): File;
+
+        /**
+         * パスの最後の部分（ファイル名）。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getfilename-method-visual-basic-for-applications
+         */
+        GetFileName(path: string): string;
+
+        /**
+         * フォルダーを表す `Folder` を返す。無いとエラー 76。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getfolder-method
+         */
+        GetFolder(folderPath: string): Folder;
+
+        /**
+         * パスの最後の部分を除いた、親フォルダーのパス。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getparentfoldername-method
+         */
+        GetParentFolderName(path: string): string;
+
+        /**
+         * Windows・システム・一時ファイル用のフォルダーを返す。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getspecialfolder-method
+         */
+        GetSpecialFolder(specialFolder: SpecialFolderConst): Folder;
+
+        /**
+         * 一時ファイル用の、重ならない名前（`rad1A2B3.tmp`）を作る。ファイルは作らない。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/gettempname-method
+         */
+        GetTempName(): string;
+
+        /**
+         * ファイルを移動する（名前の変更にも使う）。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/movefile-method
+         */
+        MoveFile(source: string, destination: string): void;
+
+        /**
+         * フォルダーを移動する（名前の変更にも使う）。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/movefolder-method
+         */
+        MoveFolder(source: string, destination: string): void;
+
+        /**
+         * テキスト ファイルを開く。`create` が `true` なら、無いときに作成する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/opentextfile-method
+         */
+        OpenTextFile(fileName: string, ioMode?: IOMode, create?: boolean, format?: Tristate): TextStream;
+
+        /**
+         * ドライブの一覧。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/drives-property
+         */
+        readonly Drives: object;
+
+        /**
+         * ドライブを表すオブジェクトを返す。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/getdrive-method
+         */
+        GetDrive(driveSpec: string): object;
+    }
+
+    /**
+     * ファイル。`FileSystemObject.getFile` やフォルダーの `files` で取得する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/file-object
+     */
+    interface File {
+        /** ファイル名。代入すると名前を変更する。 */
+        Name: string;
+        /** フル パス。 */
+        readonly Path: string;
+        /** 短い形式（8.3）のファイル名。 */
+        readonly ShortName: string;
+        /** 短い形式（8.3）のパス。 */
+        readonly ShortPath: string;
+        /** 親フォルダー。 */
+        readonly ParentFolder: Folder;
+        /** ドライブ。 */
+        readonly Drive: object;
+        /** サイズ（バイト）。 */
+        readonly Size: any;
+        /** ファイルの種類の説明（`テキスト ドキュメント` など）。 */
+        readonly Type: string;
+        /** 属性（`vbReadOnly`・`vbHidden` などの組み合わせ）。 */
+        Attributes: int;
+        /** 作成日時。 */
+        readonly DateCreated: date;
+        /** 最終アクセス日時。 */
+        readonly DateLastAccessed: date;
+        /** 最終更新日時。 */
+        readonly DateLastModified: date;
+
+        /**
+         * コピーする。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/copy-method-visual-basic-for-applications
+         */
+        Copy(destination: string, overWriteFiles?: boolean): void;
+
+        /**
+         * 移動する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/move-method-filesystemobject-object
+         */
+        Move(destination: string): void;
+
+        /**
+         * 削除する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/delete-method-visual-basic-for-applications
+         */
+        Delete(force?: boolean): void;
+
+        /**
+         * テキスト ファイルとして開く。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/openastextstream-method
+         */
+        OpenAsTextStream(ioMode?: IOMode, format?: Tristate): TextStream;
+    }
+
+    /**
+     * フォルダーの中のファイルの集まり。`for...of` で列挙でき、ファイル名で取り出せる。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/files-collection
+     */
+    interface Files {
+        /** ファイル名で取り出す（既定メンバー）。 */
+        (key: any): File;
+        /** ファイル名で取り出す。 */
+        Item(key: any): File;
+        /** ファイルの数。 */
+        readonly Count: int;
+    }
+
+    /**
+     * フォルダー。`FileSystemObject.getFolder` などで取得する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/folder-object
+     */
+    interface Folder {
+        /** フォルダー名。代入すると名前を変更する。 */
+        Name: string;
+        /** フル パス。 */
+        readonly Path: string;
+        /** 短い形式（8.3）のフォルダー名。 */
+        readonly ShortName: string;
+        /** 短い形式（8.3）のパス。 */
+        readonly ShortPath: string;
+        /** 親フォルダー。ルート フォルダーでは `null`。 */
+        readonly ParentFolder: Folder;
+        /** ドライブ。 */
+        readonly Drive: object;
+        /** ルート フォルダーかどうか。 */
+        readonly IsRootFolder: boolean;
+        /** 中のファイルとサブフォルダーをすべて合わせたサイズ（バイト）。 */
+        readonly Size: any;
+        /** フォルダーの種類の説明。 */
+        readonly Type: string;
+        /** 属性（`vbDirectory` などの組み合わせ）。 */
+        Attributes: int;
+        /** 作成日時。 */
+        readonly DateCreated: date;
+        /** 最終アクセス日時。 */
+        readonly DateLastAccessed: date;
+        /** 最終更新日時。 */
+        readonly DateLastModified: date;
+        /** 中のファイル。 */
+        readonly Files: Files;
+        /** サブフォルダー。 */
+        readonly SubFolders: Folders;
+
+        /**
+         * 中身ごとコピーする。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/copy-method-visual-basic-for-applications
+         */
+        Copy(destination: string, overWriteFiles?: boolean): void;
+
+        /**
+         * 移動する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/move-method-filesystemobject-object
+         */
+        Move(destination: string): void;
+
+        /**
+         * 中身ごと削除する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/delete-method-visual-basic-for-applications
+         */
+        Delete(force?: boolean): void;
+
+        /**
+         * このフォルダーにテキスト ファイルを作成して開く。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/createtextfile-method
+         */
+        CreateTextFile(fileName: string, overwrite?: boolean, unicode?: boolean): TextStream;
+    }
+
+    /**
+     * フォルダーの中のサブフォルダーの集まり。`for...of` で列挙でき、フォルダー名で取り出せる。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/folders-collection
+     */
+    interface Folders {
+        /** フォルダー名で取り出す（既定メンバー）。 */
+        (key: any): Folder;
+        /** フォルダー名で取り出す。 */
+        Item(key: any): Folder;
+        /** サブフォルダーの数。 */
+        readonly Count: int;
+
+        /**
+         * サブフォルダーを作成する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/add-method-folders
+         */
+        Add(name: string): Folder;
+    }
+
+    /**
+     * 開いているテキスト ファイル。順に読むか、順に書く。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/textstream-object
+     */
+    interface TextStream {
+        /** 行の終わり（改行の直前）にいるかどうか。 */
+        readonly AtEndOfLine: boolean;
+        /** ファイルの終わりにいるかどうか。 */
+        readonly AtEndOfStream: boolean;
+        /** 現在の桁（1 始まり）。 */
+        readonly Column: int;
+        /** 現在の行（1 始まり）。 */
+        readonly Line: int;
+
+        /**
+         * 閉じる。書き込んだ内容はここでファイルに確定する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/close-method-textstream-object
+         */
+        Close(): void;
+
+        /**
+         * 指定した文字数を読む。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/read-method
+         */
+        Read(characters: int): string;
+
+        /**
+         * 残りをすべて読む。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/readall-method
+         */
+        ReadAll(): string;
+
+        /**
+         * 1 行読む（改行は含まない）。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/readline-method
+         */
+        ReadLine(): string;
+
+        /**
+         * 指定した文字数を読み飛ばす。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/skip-method
+         */
+        Skip(characters: int): void;
+
+        /**
+         * 1 行読み飛ばす。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/skipline-method
+         */
+        SkipLine(): void;
+
+        /**
+         * 文字列を書く（改行は付かない）。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/write-method
+         */
+        Write(text: string): void;
+
+        /**
+         * 空の行を書く。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/writeblanklines-method
+         */
+        WriteBlankLines(lines: int): void;
+
+        /**
+         * 文字列と改行（CRLF）を書く。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/writeline-method
+         */
+        WriteLine(text?: string): void;
+    }
+
+    /**
+     * キーと値の組を保持する辞書。RAS では通常 `Map<K, V>` を使う（同じ `Scripting.Dictionary` に変換される）。
+     * この型は、`CreateObject("Scripting.Dictionary")` をそのまま使う既存のコードのためにある。`for...of` はキーを列挙する。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/dictionary-object
+     */
+    interface Dictionary {
+        /** キーの値を返す（既定メンバー）。無いキーを読むと、空の値でそのキーが追加される。`d[key] = value` で設定する。 */
+        (key: any): any;
+        /** キーの値を返す。 */
+        Item(key: any): any;
+        /** 組の数。 */
+        readonly Count: int;
+        /** キーの比べ方（`vbBinaryCompare` / `vbTextCompare`）。空のときだけ変更できる。 */
+        CompareMode: VBA.VbCompareMethod;
+
+        /**
+         * 組を追加する。キーが既にあるとエラー 457。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/add-method-dictionary
+         */
+        Add(key: any, item: any): void;
+
+        /**
+         * キーがあるかどうか。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/exists-method
+         */
+        Exists(key: any): boolean;
+
+        /**
+         * 値の配列（0 始まり）を返す。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/items-method
+         */
+        Items(): any[];
+
+        /**
+         * キーの配列（0 始まり）を返す。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/keys-method
+         */
+        Keys(): any[];
+
+        /**
+         * 組を削除する。キーが無いとエラー 32811。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/remove-method-dictionary
+         */
+        Remove(key: any): void;
+
+        /**
+         * すべての組を削除する。
+         * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/removeall-method
+         */
+        RemoveAll(): void;
+    }
+}
+
+declare namespace VBScript {
+    /**
+     * 正規表現。`new VBScript.RegExp()` で作成する。
+     * @see https://learn.microsoft.com/previous-versions/windows/internet-explorer/ie-developer/scripting-articles/yab2dx62(v=vs.84)
+     */
+    interface RegExp {
+        /** 正規表現のパターン。 */
+        Pattern: string;
+        /** 文字列全体から、一致するものをすべて探すかどうか（既定は最初の 1 つ）。 */
+        Global: boolean;
+        /** 大文字と小文字を区別しないかどうか。 */
+        IgnoreCase: boolean;
+        /** `^` と `$` を各行の先頭と末尾にも一致させるかどうか。 */
+        Multiline: boolean;
+
+        /** パターンに一致する部分があるかどうか。 */
+        Test(sourceString: string): boolean;
+
+        /** 一致した部分の集まりを返す。 */
+        Execute(sourceString: string): MatchCollection;
+
+        /** 一致した部分を置き換えた文字列を返す。置き換える文字列では `$1`・`$&` などを使える。 */
+        Replace(sourceString: string, replaceVar: any): string;
+    }
+
+    /** `RegExp.execute` が返す、一致した部分の集まり（0 始まり）。`for...of` で列挙できる。 */
+    interface MatchCollection {
+        /** 番号（0 始まり）で取り出す（既定メンバー）。 */
+        (index: int): Match;
+        /** 番号（0 始まり）で取り出す。 */
+        Item(index: int): Match;
+        /** 一致した部分の数。 */
+        readonly Count: int;
+    }
+
+    /** パターンに一致した 1 つの部分。 */
+    interface Match {
+        /** 一致した文字列。 */
+        readonly Value: string;
+        /** 元の文字列の中の位置（0 始まり）。 */
+        readonly FirstIndex: int;
+        /** 一致した文字列の長さ。 */
+        readonly Length: int;
+        /** パターンの `( )` に一致した部分。 */
+        readonly SubMatches: SubMatches;
+    }
+
+    /** パターンの `( )` に一致した文字列の集まり（0 始まり）。一致しなかった `( )` は空（`Empty`）。 */
+    interface SubMatches {
+        /** 番号（0 始まり）で取り出す（既定メンバー）。 */
+        (index: int): any;
+        /** 番号（0 始まり）で取り出す。 */
+        Item(index: int): any;
+        /** `( )` の数。 */
+        readonly Count: int;
+    }
+}

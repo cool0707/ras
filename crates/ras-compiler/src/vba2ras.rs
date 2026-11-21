@@ -148,7 +148,7 @@ impl HostIndex {
         }
         let mut classes = HashMap::new();
         // Earlier namespaces win: `MSForms.Label`, not a later `Label`.
-        for ns in ["MSForms", "Excel", "VBA", "Office"] {
+        for ns in ["MSForms", "Excel", "VBA", "Office", "Scripting", "VBScript"] {
             let Some(members) = prog.namespaces.get(ns) else { continue };
             for (name, sym) in members {
                 if matches!(sym, Sym::Class(_) | Sym::Enum(_)) {

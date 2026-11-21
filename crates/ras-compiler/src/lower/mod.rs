@@ -698,7 +698,7 @@ impl<'p> Lowerer<'p> {
             Type::Class(c, args) => self.class_name(*c, args),
             Type::Enum(e) => {
                 let d = &self.prog.enums[*e];
-                if d.host {
+                if d.host && !d.late_bound {
                     d.name.clone()
                 } else {
                     // Private enums of other modules are not visible as a type; `Long` is equivalent.
@@ -750,11 +750,12 @@ impl<'p> Lowerer<'p> {
         let def = &self.prog.classes[c];
         if def.kind == ClassKind::Host {
             return match def.namespace.as_deref() {
+                // (`model::referenced_namespace` names the same libraries.)
                 Some("Excel") | Some("VBA") | Some("Office") | None => def.name.clone(),
                 // `StdFont` is stdole's; the rest are qualified (`Label`, `Image` … would be ambiguous).
                 Some("MSForms") if def.name == "StdFont" => def.name.clone(),
                 Some("MSForms") => format!("MSForms.{}", def.name),
-                // Libraries from `ras typegen` are late-bound by default (spec §15.3).
+                // `Scripting`, `VBScript` and libraries from `ras typegen` are late-bound (spec §15.3).
                 Some(_) => "Object".into(),
             };
         }

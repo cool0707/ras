@@ -393,3 +393,151 @@ fn union_types_narrow_like_the_vba_build() {
     assert!(ok, "{stderr}");
     assert_eq!(stdout, "circle r=1 a=3 3\nsquare s=2 a=4 4\ns:3 true false\ni:8 true false\nb:true\nDouble\n");
 }
+
+const SCRIPTING: &str = r#"
+export function files() {
+    const fso = new Scripting.FileSystemObject();
+    if (fso.folderExists("work")) fso.deleteFolder("work");
+    const work = fso.createFolder("work");
+    const out = fso.createTextFile(fso.buildPath(work.path, "名簿.txt"));
+    out.writeLine("佐藤,41");
+    out.write("鈴木,");
+    out.writeLine("29");
+    out.close();
+    const f = fso.getFile("work\\名簿.txt");
+    console.log(`${f.name} ${f.size} ${fso.getBaseName(f.path)} ${fso.getExtensionName(f.path)} ${f.parentFolder.name} ${typeof f}`);
+    const ts = fso.openTextFile(f.path, forReading);
+    while (!ts.atEndOfStream) {
+        const at = ts.line;
+        console.log(`${at}:${ts.readLine()}`);
+    }
+    ts.close();
+    const more = f.openAsTextStream(forAppending);
+    more.writeLine("高橋,35");
+    more.close();
+    console.log(`${fso.openTextFile(f.path).readAll().length}`);
+    // Unicode: UTF-16 with a byte order mark.
+    const u = fso.createTextFile("work/u.txt", true, true);
+    u.write("あ");
+    u.close();
+    console.log(`${fso.getFile("work/u.txt").size} ${fso.openTextFile("work/u.txt", forReading, false, tristateTrue).readAll()}`);
+    // Copies with wildcards, the collections of a folder, moves and deletes.
+    work.subFolders.add("copy");
+    fso.copyFile("work\\*.txt", "work\\copy\\");
+    let names = "";
+    for (const file of fso.getFolder("work/copy").files) names += `${file.name};`;
+    fso.moveFile("work/copy/u.txt", "work/v.txt");
+    fso.deleteFile("work/copy/*.txt");
+    console.log(`${names} ${work.files.count} ${work.subFolders.count} ${work.subFolders("copy").files.count} ${fso.fileExists("work/v.txt")}`);
+    console.log(`${fso.getParentFolderName("C:\\a\\b.txt")} ${fso.getFileName("C:\\a\\b.txt")} ${fso.getBaseName("a/b.tar.gz")} ${fso.getDriveName("C:\\a")}`);
+    try {
+        fso.getFile("work/none.txt");
+    } catch (e) {
+        console.log(`${e.code}`);
+    }
+    try {
+        fso.createFolder("work");
+    } catch (e) {
+        console.log(`${e.code}`);
+    }
+    work.delete();
+    console.log(`${fso.folderExists("work")}`);
+}
+
+export function dictionary() {
+    const d = createObject("Scripting.Dictionary");
+    d.add("b", 2);
+    d.add("a", 1);
+    d["c"] = 3;
+    d["a"] = 10;
+    console.log(`${d.count} ${d.exists("a")} ${d.exists("A")} ${d("a")} ${d.item("b")} ${d.keys().join(",")} ${d.items().join(",")}`);
+    let keys = "";
+    for (const k of d) keys += `${k}`;
+    try {
+        d.add("a", 0);
+    } catch (e) {
+        console.log(`${keys} ${e.code}`);
+    }
+    d.remove("b");
+    const missing = d("zz");
+    console.log(`${d.count} ${typeof missing}`);
+    const t = new Scripting.Dictionary();
+    t.compareMode = vbTextCompare;
+    t.add("Key", 1);
+    console.log(`${t.exists("KEY")} ${typeof t}`);
+}
+
+export function regex() {
+    const re = new VBScript.RegExp();
+    re.pattern = "(\\d{4})/(\\d{1,2})";
+    re.global = true;
+    const text = "2026/3 と 2025/12";
+    const found = re.execute(text);
+    console.log(`${re.test(text)} ${found.count} ${found(1).value} ${found(1).firstIndex} ${found(0).subMatches(1)} ${found.item(0).length}`);
+    let years = "";
+    for (const m of found) years += `${m.subMatches(0)};`;
+    console.log(`${years} ${re.replace(text, "$2月")}`);
+    re.global = false;
+    console.log(`${re.replace(text, "$1年")} ${re.execute(text).count}`);
+    re.pattern = "^abc";
+    re.ignoreCase = true;
+    console.log(`${re.test("ABCdef")}`);
+    re.pattern = "(";
+    try {
+        re.test("x");
+    } catch (e) {
+        console.log(`${e.code}`);
+    }
+    try {
+        createObject("ADODB.Connection");
+    } catch (e) {
+        console.log(`${e.code}`);
+    }
+}
+"#;
+
+#[test]
+fn scripting_objects_run_without_com() {
+    let files = [("tools", SCRIPTING)];
+    let (prog, out) = compile(&files);
+    // The VBA build creates them by their ProgID, late-bound: no reference to their libraries.
+    let vba = ras_compiler::build(&prog, &ras_compiler::BuildOptions::default());
+    let bas = &vba.files.iter().find(|f| f.file_name == "Tools.bas").expect("Tools.bas").code;
+    for want in [
+        "Dim fso As Object",
+        "Set fso = CreateObject(\"Scripting.FileSystemObject\")",
+        "Set ts = fso.OpenTextFile(f.Path, 1&)",
+        "Set d = CreateObject(\"Scripting.Dictionary\")",
+        "Set re = CreateObject(\"VBScript.RegExp\")",
+        "re.Global = True",
+    ] {
+        assert!(bas.contains(want), "{want}\n{bas}");
+    }
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("scripting", &files, &out);
+    let (stdout, stderr, ok) = p.run("Tools.files", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec![
+            "名簿.txt 18 名簿 txt work File",
+            "1:佐藤,41",
+            "2:鈴木,29",
+            "21",
+            "4 あ",
+            "u.txt;名簿.txt; 3 1 0 true",
+            "C:\\a b.txt b.tar C:",
+            "53",
+            "58",
+            "false",
+        ]
+    );
+    let (stdout, stderr, ok) = p.run("Tools.dictionary", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout.lines().collect::<Vec<_>>(), vec!["3 true false 10 2 b,a,c 2,10,3", "bac 457", "3 Empty", "true Dictionary"]);
+    let (stdout, stderr, ok) = p.run("Tools.regex", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout.lines().collect::<Vec<_>>(), vec!["true 2 2025/12 9 3 6", "2026;2025; 3月 と 12月", "2026年 と 2025/12 1", "true", "5017", "429"]);
+}

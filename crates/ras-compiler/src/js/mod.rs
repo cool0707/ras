@@ -21,6 +21,7 @@ use crate::model::*;
 const RUNTIME_JS: &str = include_str!("runtime.js");
 const FORMS_JS: &str = include_str!("forms.js");
 const EXCEL_JS: &str = include_str!("excel.js");
+const SCRIPTING_JS: &str = include_str!("scripting.js");
 const MAIN_JS: &str = include_str!("main.js");
 
 #[derive(Debug, Clone)]
@@ -100,6 +101,7 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
     out.files.push(JsFile { rel_path: "ras-runtime.js".into(), text: RUNTIME_JS.to_string() });
     out.files.push(JsFile { rel_path: "ras-forms.js".into(), text: FORMS_JS.to_string() });
     out.files.push(JsFile { rel_path: "ras-excel.js".into(), text: EXCEL_JS.to_string() });
+    out.files.push(JsFile { rel_path: "ras-scripting.js".into(), text: SCRIPTING_JS.to_string() });
     out.files.push(JsFile { rel_path: "ras-debug.json".into(), text: format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap_or_default()) });
     if out.diagnostics.iter().any(|d| d.is_error()) {
         out.files.clear();
