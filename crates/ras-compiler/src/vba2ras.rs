@@ -80,6 +80,7 @@ pub fn convert(vba: &str, target: &Target, peers: &[Peer]) -> Converted {
     let mut parser = Parser::new(&lines);
     let items = parser.module();
     let mut em = Emitter::new(&host, *target, peers, &lines);
+    em.with_events = parser.with_events;
     em.module(&items);
     em.finish()
 }
@@ -91,7 +92,8 @@ pub fn public_names(vba: &str, target: &Target) -> Vec<PublicName> {
     let lines = logical_lines(vba);
     let mut parser = Parser::new(&lines);
     let items = parser.module();
-    let em = Emitter::new(&host, *target, &[], &lines);
+    let mut em = Emitter::new(&host, *target, &[], &lines);
+    em.with_events = parser.with_events;
     let mut out = Vec::new();
     for item in &items {
         match item {
@@ -564,13 +566,15 @@ struct Parser<'a> {
     ti: usize,
     /// `Next i, j` closes more than one loop.
     pending_next: usize,
+    /// Variables declared `WithEvents`.
+    with_events: Vec<String>,
 }
 
 type PResult<T> = Result<T, String>;
 
 impl<'a> Parser<'a> {
     fn new(lines: &'a [Line]) -> Parser<'a> {
-        Parser { lines, li: 0, ti: 0, pending_next: 0 }
+        Parser { lines, li: 0, ti: 0, pending_next: 0, with_events: Vec::new() }
     }
 
     fn at_end(&self) -> bool {
@@ -724,8 +728,8 @@ impl<'a> Parser<'a> {
                 self.next_line();
                 continue;
             }
-            if kw("Implements") || kw("Event") || head.as_ref().is_some_and(|t| t.is_kw("WithEvents")) || self.toks().iter().any(|t| t.is_kw("WithEvents")) {
-                items.push(Item::Todo { from: start, to: start, reason: "Implements / Event / WithEvents には対応していません".into() });
+            if kw("Implements") || kw("Event") {
+                items.push(Item::Todo { from: start, to: start, reason: "Implements / Event には対応していません".into() });
                 self.next_line();
                 continue;
             }
@@ -981,6 +985,7 @@ impl<'a> Parser<'a> {
         if kw("Dim") || kw("Private") || kw("Public") || kw("Global") || kw("Static") || kw("Const") {
             let mut is_static = false;
             let mut is_const = false;
+            let mut with_events = false;
             while let Some(Tok::Word(w, None)) = self.peek() {
                 match w.to_ascii_lowercase().as_str() {
                     "dim" | "private" | "public" | "global" => self.ti += 1,
@@ -992,13 +997,20 @@ impl<'a> Parser<'a> {
                         is_const = true;
                         self.ti += 1;
                     }
-                    "withevents" => return Err("WithEvents には対応していません".into()),
+                    // The events of the object the variable holds: `@on("<variable>.<Event>")`.
+                    "withevents" => {
+                        with_events = true;
+                        self.ti += 1;
+                    }
                     _ => break,
                 }
             }
             let mut vars = Vec::new();
             loop {
                 let (name, suffix) = self.ident()?;
+                if with_events {
+                    self.with_events.push(name.clone());
+                }
                 let mut v = VarDecl { name, suffix, ty: None, dims: None, value: None };
                 if self.eat_op("(") {
                     let mut dims = Vec::new();
@@ -1667,6 +1679,8 @@ struct Emitter<'a> {
     out: Vec<String>,
     todos: Vec<(usize, String)>,
     indent: usize,
+    /// Variables declared `WithEvents`: their event procedures are handlers.
+    with_events: Vec<String>,
     controls: HashMap<String, String>,
     module_vars: HashMap<String, VarInfo>,
     procs: HashMap<String, ProcInfo>,
@@ -1713,6 +1727,7 @@ impl<'a> Emitter<'a> {
             out: Vec::new(),
             todos: Vec::new(),
             indent: 0,
+            with_events: Vec::new(),
             controls,
             module_vars: HashMap::new(),
             procs: HashMap::new(),
@@ -2211,6 +2226,16 @@ impl<'a> Emitter<'a> {
     /// `(object, event)` when `name` is an event procedure of the form or one of its controls,
     /// or of the sheet or workbook of a document module (`Sheet1`, `Change`; `Workbook`, `Open`).
     fn event_of(&self, name: &str) -> Option<(String, String)> {
+        // `app_SheetChange` of `Private WithEvents app As Application` (spec §12.2.2): where
+        // VBA allows such a variable, in the module of a form, of a sheet or of the workbook.
+        if !matches!(self.target, Target::Standard) {
+            for (i, _) in name.match_indices('_') {
+                let (object, event) = (&name[..i], &name[i + 1..]);
+                if let Some(variable) = self.with_events.iter().find(|v| !event.is_empty() && v.eq_ignore_ascii_case(object)) {
+                    return Some((Self::user_ident(variable), event.to_string()));
+                }
+            }
+        }
         match self.target {
             Target::Form(form) => {
                 for (i, _) in name.match_indices('_') {
@@ -2243,6 +2268,11 @@ impl<'a> Emitter<'a> {
                     if let Some(c) = controls.iter().find(|c| c.name.eq_ignore_ascii_case(object)) {
                         if let Some((event, _)) = crate::lower::sheet_control_event(&c.control_type, event) {
                             return Some((c.name.clone(), event));
+                        }
+                        // A control that is not an MSForms one: its events are not known, the
+                        // procedure is taken as it is declared.
+                        if crate::userform::events_of(&c.control_type).is_empty() && !event.is_empty() {
+                            return Some((c.name.clone(), event.to_string()));
                         }
                     }
                 }

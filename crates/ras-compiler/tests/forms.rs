@@ -418,3 +418,17 @@ fn spec_example_compiles() {
     assert!(diags.is_empty(), "{diags:?}");
     assert!(form_code(&files).contains("Public Function enteredName() As String"));
 }
+
+/// A variable of the code-behind whose object's events are handled (spec §12.2.2).
+#[test]
+fn with_events_in_a_code_behind() {
+    let (diags, files) = compile(
+        "let sheet: Excel.Worksheet;\n\n@on(\"UserForm.Initialize\")\nfunction init() {\n    sheet = activeSheet as Excel.Worksheet;\n}\n\n@on(\"sheet.Change\")\nfunction changed(target: Excel.Range) {\n    this.txtName.text = target.address;\n}\n",
+        &[],
+    );
+    assert!(diags.iter().all(|d| !d.starts_with('E')), "{diags:#?}");
+    let code = form_code(&files);
+    assert!(code.contains("Private WithEvents sheet As Worksheet"), "{code}");
+    assert!(code.contains("Private Sub sheet_Change(ByVal Target As Range)"), "{code}");
+    assert!(code.contains("RAS_EventError \"frmInput.sheet_Change\""), "{code}");
+}

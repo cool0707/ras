@@ -499,6 +499,9 @@ impl<'p> Gen<'p> {
             }
             for ev in &d.attrs.on_events {
                 match &md.form {
+                    // The events of the object a variable holds (spec §12.2.2) are raised by
+                    // Excel: not registered with the run time.
+                    Some(_) if prog.event_source(f, &ev.target).is_some() => {}
                     Some(form) if form.kind == ObjectKind::Form => events.push(self.form_handler(form, ev, f)),
                     Some(form) => events.extend(self.document_handler(form, ev, f)),
                     // An error already (`E0610`): `@on` is written in the file of the sheet.

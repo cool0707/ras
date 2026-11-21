@@ -772,9 +772,114 @@ pub fn workbook_code_names(book: &std::path::Path) -> Result<CodeNames, OvbaErro
     Ok(analyze(&mut package)?.code_names())
 }
 
+/// The MSForms control (`CommandButton`, `TextBox`, …) of an ActiveX class id; empty for
+/// another control.
+fn msforms_class(clsid: &str) -> &'static str {
+    match clsid.trim_matches(['{', '}']).to_ascii_uppercase().as_str() {
+        "D7053240-CE69-11CD-A777-00DD01143C57" => "CommandButton",
+        "978C9E23-D4B0-11CE-BF2D-00AA003F40D0" => "Label",
+        "8BD21D10-EC42-11CE-9E0D-00AA006002F3" => "TextBox",
+        "8BD21D20-EC42-11CE-9E0D-00AA006002F3" => "ListBox",
+        "8BD21D30-EC42-11CE-9E0D-00AA006002F3" => "ComboBox",
+        "8BD21D40-EC42-11CE-9E0D-00AA006002F3" => "CheckBox",
+        "8BD21D50-EC42-11CE-9E0D-00AA006002F3" => "OptionButton",
+        "8BD21D60-EC42-11CE-9E0D-00AA006002F3" => "ToggleButton",
+        "79176FB0-B7F2-11CE-97EF-00AA006D2776" => "SpinButton",
+        "DFD181E0-5E2F-11CE-A449-00AA004A803D" => "ScrollBar",
+        "4C599241-6926-101B-9992-00000B65C6F9" => "Image",
+        _ => "",
+    }
+}
+
+/// The ActiveX controls of the sheet part `part` (its `<controls>`): name and MSForms class.
+fn sheet_controls(package: &mut Package, part: &str) -> Result<Vec<crate::SheetControl>, OvbaError> {
+    let mut out: Vec<crate::SheetControl> = Vec::new();
+    let Some((text, _)) = package.read_text(part)? else { return Ok(out) };
+    if !text.contains("control") {
+        return Ok(out);
+    }
+    let rels = match package.read_text(&rels_part_for(part))? {
+        Some((doc, _)) => parse_relationships(&doc),
+        None => Vec::new(),
+    };
+    for tag in xml::tags(&text).filter(|t| t.kind != TagKind::Close && t.local_name() == "control") {
+        let Some(name) = tag.attr("name").filter(|n| !n.is_empty()) else { continue };
+        if out.iter().any(|c| same_name(&c.name, &name)) {
+            continue;
+        }
+        let Some(id) = tag.attributes().into_iter().find(|a| a.local_name() == "id").map(|a| a.value()) else { continue };
+        // A form control (`ctrlProp`) is no member of the sheet's module: only ActiveX controls.
+        let Some(rel) = rels.iter().find(|r| r.id == id && !r.external && r.rel_type.ends_with("/control")) else { continue };
+        let target = resolve_target(part, &rel.target);
+        let class = match package.read_text(&target)? {
+            Some((doc, _)) => xml::tags(&doc)
+                .find(|t| t.kind != TagKind::Close && t.local_name() == "ocx")
+                .and_then(|t| t.attributes().into_iter().find(|a| a.local_name() == "classid").map(|a| a.value()))
+                .map(|clsid| msforms_class(&clsid).to_string())
+                .unwrap_or_default(),
+            None => String::new(),
+        };
+        out.push(crate::SheetControl { name, class });
+    }
+    Ok(out)
+}
+
+/// Reads the ActiveX controls on the worksheets of a workbook file, without Excel: for each
+/// worksheet (by code name, in sheet order) the name and MSForms class of its controls. They
+/// are the members of the sheet's module that event procedures are written for
+/// (`CommandButton1_Click`). `None` for a binary workbook (`.xlsb`), whose sheets are not read.
+pub fn workbook_sheet_controls(book: &std::path::Path) -> Result<Option<Vec<crate::SheetControls>>, OvbaError> {
+    let bytes = std::fs::read(book).map_err(crate::pack::map_open_error)?;
+    let mut package = Package::open(bytes)?;
+    let layout = analyze(&mut package)?;
+    if layout.binary {
+        return Ok(None);
+    }
+    let mut out = Vec::new();
+    for sheet in layout.sheets.iter().filter(|s| s.kind == SheetKind::Worksheet && !s.part.is_empty()) {
+        out.push(crate::SheetControls { code_name: sheet.code_name.clone(), controls: sheet_controls(&mut package, &sheet.part)? });
+    }
+    Ok(Some(out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controls_of_a_sheet() {
+        use std::io::Write;
+        let sheet = concat!(
+            r#"<?xml version="1.0"?><worksheet xmlns="x" xmlns:r="r" xmlns:mc="mc"><sheetPr codeName="Data"/><sheetData/>"#,
+            r#"<mc:AlternateContent><mc:Choice Requires="x14"><controls>"#,
+            r#"<mc:AlternateContent><mc:Choice Requires="x14"><control shapeId="1025" r:id="rId3" name="CommandButton1"><controlPr r:id="rId4"/></control></mc:Choice>"#,
+            r#"<mc:Fallback><control shapeId="1025" r:id="rId3" name="CommandButton1"/></mc:Fallback></mc:AlternateContent>"#,
+            r#"<control shapeId="1026" r:id="rId5" name="Check Box 2"/><control shapeId="1027" r:id="rId6" name="Other1"/>"#,
+            r#"</controls></mc:Choice></mc:AlternateContent></worksheet>"#
+        );
+        let rels = concat!(
+            r#"<Relationships xmlns="p">"#,
+            r#"<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/control" Target="../activeX/activeX1.xml"/>"#,
+            r#"<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/ctrlProp" Target="../ctrlProps/ctrlProp1.xml"/>"#,
+            r#"<Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/control" Target="../activeX/activeX2.xml"/>"#,
+            r#"</Relationships>"#
+        );
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default();
+        for (name, text) in [
+            ("xl/worksheets/sheet1.xml", sheet),
+            ("xl/worksheets/_rels/sheet1.xml.rels", rels),
+            ("xl/activeX/activeX1.xml", r#"<ax:ocx ax:classid="{D7053240-CE69-11CD-A777-00DD01143C57}" ax:persistence="persistStreamInit" r:id="rId1" xmlns:ax="a" xmlns:r="r"/>"#),
+            ("xl/activeX/activeX2.xml", r#"<ax:ocx ax:classid="{00000000-0000-0000-0000-000000000001}" xmlns:ax="a"/>"#),
+        ] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(text.as_bytes()).unwrap();
+        }
+        let mut package = Package::open(zip.finish().unwrap().into_inner()).unwrap();
+        let controls = sheet_controls(&mut package, "xl/worksheets/sheet1.xml").unwrap();
+        // The ActiveX controls, once each; the form control (a check box) is not one.
+        assert_eq!(controls, vec![crate::SheetControl { name: "CommandButton1".into(), class: "CommandButton".into() }, crate::SheetControl { name: "Other1".into(), class: String::new() }]);
+    }
 
     #[test]
     fn target_resolution() {

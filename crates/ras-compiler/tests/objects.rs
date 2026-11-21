@@ -196,6 +196,25 @@ function left() {
 }
 
 #[test]
+fn controls_whose_events_are_not_known() {
+    let sheet = "@on(\"Calendar1.DateClick\")\nfunction picked(dateClicked: date, byref cancel: boolean) {\n    cancel = true;\n}\n\n@on(\"Calendar1.DateClick\")\nfunction also() {\n}\n";
+    // A control that is not an MSForms one: the event procedure is declared as the handler is.
+    let mut cfg = config();
+    cfg.sheet_controls[0].controls.push(FormControl { name: "Calendar1".into(), control_type: String::new() });
+    let prog = analyze(sources(&[("Sheet1", sheet)], &[]), cfg);
+    let out = build(&prog, &BuildOptions { erl: Some(false), ..Default::default() });
+    assert!(prog.diagnostics.iter().chain(out.diagnostics.iter()).all(|d| !d.is_error()), "{:#?}", prog.diagnostics.iter().chain(out.diagnostics.iter()).map(|d| &d.message).collect::<Vec<_>>());
+    let code = module(&out.files, "Sheet1");
+    assert!(code.contains("Private Sub Calendar1_DateClick(ByVal dateClicked As Date, ByRef cancel As Boolean)"), "{code}");
+    assert!(code.contains("picked dateClicked, cancel") && code.contains("        also\n"), "{code}");
+    // Without a workbook the controls are not known: any name is taken as a control.
+    let prog = analyze(sources(&[("Sheet1", sheet)], &[]), Config::default());
+    let out = build(&prog, &BuildOptions { erl: Some(false), ..Default::default() });
+    assert!(prog.diagnostics.iter().chain(out.diagnostics.iter()).all(|d| !d.is_error()), "{:#?}", prog.diagnostics.iter().chain(out.diagnostics.iter()).map(|d| &d.message).collect::<Vec<_>>());
+    assert!(module(&out.files, "Sheet1").contains("Private Sub Calendar1_DateClick(ByVal dateClicked As Date, ByRef cancel As Boolean)"));
+}
+
+#[test]
 fn what_a_document_module_cannot_hold() {
     let sheet = r#"
 export let shared = 1;
@@ -278,4 +297,109 @@ fn debug_build() {
     let main = &out.files.iter().find(|f| f.rel_path == "main.js").unwrap().text;
     assert!(main.contains(".clearInput()"), "{main}");
     assert!(!main.contains("$rt.global(\"Sheet1\").clearInput"), "{main}");
+}
+
+const BOOK_WITH_APP: &str = r#"
+let app: Excel.Application;
+
+@on("Workbook.Open")
+function start() {
+    app = application;
+}
+
+@on("app.SheetChange")
+function onAnyChange(sh: object, target: Excel.Range) {
+    debug.print(target.address);
+}
+
+@on("app.WorkbookBeforeClose")
+function onClose(wb: Excel.Workbook, byref cancel: boolean) {
+    cancel = wb.name == "x";
+}
+"#;
+
+#[test]
+fn with_events_variables() {
+    let (diags, files) = compile(&[("ThisWorkbook", BOOK_WITH_APP)], &[]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = module(&files, "ThisWorkbook");
+    assert!(code.contains("Private WithEvents app As Application"), "{code}");
+    assert!(code.contains("Private Sub app_SheetChange(ByVal Sh As Object, ByVal Target As Range)"), "{code}");
+    assert!(code.contains("Private Sub app_WorkbookBeforeClose(ByVal Wb As Workbook, ByRef Cancel As Boolean)"), "{code}");
+    assert!(code.contains("onAnyChange Sh, Target") && code.contains("onClose Wb, Cancel"), "{code}");
+    assert!(code.contains("RAS_EventError \"ThisWorkbook.app_SheetChange\""), "{code}");
+    assert!(code.contains("Set app = Application"), "{code}");
+    // The debug build compiles; Excel raises these events, the run time does not know them.
+    let prog = analyze(sources(&[("ThisWorkbook", BOOK_WITH_APP)], &[]), config());
+    let out = build_js(&prog, "");
+    assert!(out.diagnostics.iter().all(|d| !d.is_error()), "{:#?}", out.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>());
+    let js = &out.files.iter().find(|f| f.rel_path == "@objects/ThisWorkbook.js").unwrap().text;
+    assert!(js.contains("event: \"Open\"") && !js.contains("target: \"app\""), "{js}");
+}
+
+#[test]
+fn with_events_fields_of_a_class() {
+    let watcher = r#"
+export class ButtonWatcher {
+    private button: MSForms.CommandButton;
+    private clicks = 0;
+
+    constructor(button: MSForms.CommandButton) {
+        this.button = button;
+    }
+
+    @on("button.Click")
+    private clicked() {
+        this.clicks++;
+    }
+
+    @on("button.KeyDown")
+    private keyDown(keyCode: MSForms.ReturnInteger) {
+        keyCode.value = 0;
+    }
+}
+
+export function watch(b: MSForms.CommandButton): ButtonWatcher {
+    return new ButtonWatcher(b);
+}
+"#;
+    let (diags, files) = compile(&[], &[("watcher", watcher)]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = module(&files, "ButtonWatcher");
+    assert!(code.contains("Private WithEvents button As MSForms.CommandButton"), "{code}");
+    assert!(code.contains("Private Sub button_Click()"), "{code}");
+    assert!(code.contains("Private Sub button_KeyDown(ByVal KeyCode As MSForms.ReturnInteger, ByVal Shift As Integer)"), "{code}");
+    assert!(code.contains("        clicked\n") && code.contains("keyDown KeyCode"), "{code}");
+}
+
+#[test]
+fn what_with_events_cannot_be() {
+    // A standard module cannot listen.
+    let (diags, _) = compile(&[], &[("main", "let app: Excel.Application;\n@on(\"app.SheetChange\")\nfunction a(sh: object) {}\n")]);
+    assert_eq!(codes(&diags), ["E0610"], "{diags:#?}");
+    assert!(diags[0].contains("WithEvents"), "{diags:#?}");
+    // The type of the variable; an event its class does not have; a form's event on a variable.
+    let sheet = r#"
+let anything: object;
+let list: Excel.Range[] = [];
+let book: Excel.Workbook;
+let box1: MSForms.TextBox;
+
+@on("anything.Click")
+function a() {}
+
+@on("list.Change")
+function b() {}
+
+@on("book.Bogus")
+function c() {}
+
+@on("box1.Exit")
+function d() {}
+
+@on("book.Open")
+function e(more: int) {}
+"#;
+    let (diags, _) = compile(&[("Sheet1", sheet)], &[]);
+    assert_eq!(codes(&diags), ["E0611", "E0611", "E0612", "E0615", "E0615"], "{diags:#?}");
 }

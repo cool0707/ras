@@ -74,9 +74,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 fn load_project(root: &Path) -> Result<(Config, Vec<SourceInput>), String> {
     let (mut config, sources) = ras_compiler::load_project(root)?;
     if let Some(book) = config.project.workbook.as_ref().map(|w| root.join(w)).filter(|b| b.is_file()) {
-        if let Ok(names) = ras_ovba::workbook_code_names(&book) {
-            config.sheet_code_names = names.sheets.into_iter().map(|s| s.code_name).collect();
-        }
+        let _ = ras_sync::read_workbook(&mut config, &book);
     }
     Ok((config, sources))
 }

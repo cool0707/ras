@@ -770,6 +770,16 @@ pub struct ModuleData {
     pub form: Option<FormModule>,
 }
 
+/// A variable or a class field whose object's events are handled (`@on("app.SheetChange")`,
+/// spec §12.2.2): VBA's `WithEvents`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EventSource {
+    /// A module variable of a sheet's file, of `ThisWorkbook`'s or of a form's code-behind.
+    Var(VarId),
+    /// A field of a class (the handler is a method of the class).
+    Field(ClassId, usize),
+}
+
 /// Which object of the workbook a module is the code of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObjectKind {
@@ -790,6 +800,31 @@ pub struct FormModule {
     pub decl: Option<crate::config::FormDecl>,
     /// The type of `this`: the form (sheet, workbook) with its controls as fields.
     pub class: Option<ClassId>,
+}
+
+impl Program {
+    /// The variable or field the handler `f` names in `@on("<target>.<Event>")`, when the
+    /// target is neither the object of the file (`Worksheet`, `Workbook`, `UserForm`) nor a
+    /// control: the object it holds is listened to (spec §12.2.2). A variable of a standard
+    /// module is found too (VBA cannot listen there: an error of the caller's).
+    pub fn event_source(&self, f: FnId, target: &str) -> Option<EventSource> {
+        let d = &self.fns[f];
+        match d.kind {
+            FnKind::Method { class, is_static: false } => self.classes[class].fields.iter().position(|x| !x.is_static && x.name.eq_ignore_ascii_case(target)).map(|i| EventSource::Field(class, i)),
+            FnKind::Free => {
+                let md = &self.modules[d.module];
+                if let Some(form) = &md.form {
+                    let reserved = ["UserForm", "Worksheet", "Workbook", "ThisWorkbook"].iter().any(|r| r.eq_ignore_ascii_case(target)) || md.vba_name.eq_ignore_ascii_case(target);
+                    let control = form.decl.as_ref().is_some_and(|x| x.controls.iter().any(|c| c.name.eq_ignore_ascii_case(target)));
+                    if reserved || control {
+                        return None;
+                    }
+                }
+                md.vars.iter().copied().find(|&v| !self.vars[v].declared && self.vars[v].module == d.module && self.vars[v].name.eq_ignore_ascii_case(target)).map(EventSource::Var)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl ModuleData {

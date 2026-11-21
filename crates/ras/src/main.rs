@@ -244,9 +244,8 @@ fn analyze_project(root: &Path, args: &BuildArgs, book: Option<&Path>, tests: bo
     };
     if let Some(book) = book {
         if book.is_file() {
-            match ras_ovba::workbook_code_names(&book) {
-                Ok(names) => cfg.sheet_code_names = names.sheets.into_iter().map(|s| s.code_name).collect(),
-                Err(e) => eprintln!("warning: {} のシート名を読み取れませんでした: {e}", book.display()),
+            if let Err(e) = ras_sync::read_workbook(&mut cfg, &book) {
+                eprintln!("warning: {} のシート名を読み取れませんでした: {e}", book.display());
             }
         }
     }
@@ -727,7 +726,7 @@ fn take_over_offline(root: &Path, book: &Path, codepage: u16) -> Result<ras_sync
         }
         forms.iter().flatten().find(|f| f.name.eq_ignore_ascii_case(name)).cloned().ok_or_else(|| format!("{} にフォーム `{name}` のデザイナがありません", book.display()))
     };
-    ras_form::import::prepare(root, ras_form::import::Book { modules: &modules, workbook_code_name: &unpacked.code_names.workbook, sheet_controls: &[], form: &mut form }, codepage)
+    ras_form::import::prepare(root, ras_form::import::Book { modules: &modules, workbook_code_name: &unpacked.code_names.workbook, sheet_controls: &ras_sync::sheet_controls(book).unwrap_or_default(), form: &mut form }, codepage)
 }
 
 /// Prints what was taken over from the workbook and what waits for the user.

@@ -32,6 +32,32 @@ pub fn options(prepared: &Prepared, overwrite: bool) -> SyncOptions {
     }
 }
 
+/// The ActiveX controls on the sheets of the workbook file `book` as the compiler takes them
+/// (spec §12.2.1): one entry per sheet that has any. `None` when they cannot be read (an
+/// `.xlsb`, a file that is not a workbook).
+pub fn sheet_controls(book: &Path) -> Option<Vec<ras_compiler::FormDecl>> {
+    let sheets = ras_ovba::workbook_sheet_controls(book).ok()??;
+    Some(
+        sheets
+            .into_iter()
+            .filter(|s| !s.controls.is_empty())
+            .map(|s| ras_compiler::FormDecl { name: s.code_name, controls: s.controls.into_iter().map(|c| ras_compiler::FormControl { name: c.name, control_type: c.class }).collect() })
+            .collect(),
+    )
+}
+
+/// Fills in what the compiler takes from the workbook file `book`: the code names of its
+/// sheets (spec §12.2) and the controls on them (spec §12.2.1).
+pub fn read_workbook(config: &mut ras_compiler::Config, book: &Path) -> Result<(), String> {
+    let names = ras_ovba::workbook_code_names(book).map_err(|e| e.to_string())?;
+    config.sheet_code_names = names.sheets.into_iter().map(|s| s.code_name).collect();
+    if let Some(controls) = sheet_controls(book) {
+        config.sheet_controls = controls;
+        config.sheet_controls_known = true;
+    }
+    Ok(())
+}
+
 /// A component of the project as [`ras_form::import`] takes it; `None` for what it does not take.
 pub fn book_module(c: &plan::Component) -> Option<ras_form::import::BookModule> {
     let kind = match c.kind {
@@ -126,9 +152,8 @@ impl Session {
         if sync.pull_unmanaged {
             let mut project = book.project()?;
             let modules: Vec<ras_form::import::BookModule> = project.components()?.iter().filter_map(book_module).collect();
-            // The controls on the sheets are read from the saved workbook by the compiler's driver;
-            // the take-over of an open workbook converts their event procedures without them.
-            let sheet_controls: Vec<ras_compiler::FormDecl> = Vec::new();
+            // The controls on the sheets, as the workbook was saved last.
+            let sheet_controls: Vec<ras_compiler::FormDecl> = sheet_controls(&self.book).unwrap_or_default();
             let mut failure = None;
             let mut form = |name: &str| {
                 project.export_form(name, codepage).map_err(|e| {

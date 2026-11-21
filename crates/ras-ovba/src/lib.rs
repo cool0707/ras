@@ -77,7 +77,7 @@ mod xml;
 
 pub use error::OvbaError;
 pub use forms::{export_user_form, import_user_form, is_generated_form, read_user_forms, unpack_user_forms, FormFiles, RAS_FORM_MARKER};
-pub use opc::workbook_code_names;
+pub use opc::{workbook_code_names, workbook_sheet_controls};
 pub use pack::{pack, unpack};
 pub use source::{extract_managed_region, merge_managed_region, procedure_names, replace_document_code, strip_hand_written, RAS_BEGIN_MARKER, RAS_END_MARKER};
 pub use vba::{read_project_bin, write_project_bin};
@@ -212,6 +212,23 @@ pub struct SheetCodeName {
     pub sheet_name: String,
     /// VBA code name (name of the sheet's document module).
     pub code_name: String,
+}
+
+/// The ActiveX controls on a worksheet (see [`workbook_sheet_controls`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SheetControls {
+    /// VBA code name of the sheet.
+    pub code_name: String,
+    pub controls: Vec<SheetControl>,
+}
+
+/// An ActiveX control on a worksheet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SheetControl {
+    /// Its name: a member of the sheet's module (`CommandButton1`).
+    pub name: String,
+    /// Its MSForms class (`CommandButton`, `TextBox`, …); empty for another control.
+    pub class: String,
 }
 
 /// Result of [`unpack`].

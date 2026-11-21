@@ -185,6 +185,28 @@ fn controls_and_public_declarations_of_a_sheet() {
     assert!(doc.contains("Private Sub CommandButton1_Click()") && doc.contains("Private Sub TextBox1_LostFocus()"), "{doc}");
 }
 
+/// `WithEvents` variables (spec §12.2.2) and controls whose events are not known.
+#[test]
+fn with_events_and_other_controls() {
+    let vba = "Private WithEvents App As Application\n\nPrivate Sub Workbook_Open()\n    Set App = Application\nEnd Sub\n\nPrivate Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)\n    Debug.Print Target.Address\nEnd Sub\n\nPrivate Sub app_WorkbookBeforeClose(ByVal Wb As Workbook, Cancel As Boolean)\n    Cancel = True\nEnd Sub\n";
+    let c = convert(vba, &Target::Document { code_name: "ThisWorkbook", workbook: true, controls: &[] }, &[]);
+    println!("{}\n{:?}", c.text, c.todos);
+    assert!(c.todos.is_empty(), "{:?}", c.todos);
+    assert!(c.text.contains("let App: Excel.Application;"), "{}", c.text);
+    assert!(c.text.contains("@on(\"App.SheetChange\")\nfunction appSheetChange(Sh: object, Target: Excel.Range) {"), "{}", c.text);
+    assert!(c.text.contains("@on(\"App.WorkbookBeforeClose\")\nfunction appWorkbookBeforeClose(Wb: Excel.Workbook, byref Cancel: boolean) {"), "{}", c.text);
+    let (diags, files) = compile(&[("objects/ThisWorkbook", &c.text)]);
+    assert!(diags.is_empty(), "{diags:?}");
+    let doc = code(&files, "ThisWorkbook");
+    assert!(doc.contains("Private WithEvents App As Application") && doc.contains("Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)"), "{doc}");
+
+    // A control that is not an MSForms one: the handler keeps the declaration of the procedure.
+    let list = vec![FormControl { name: "Calendar1".into(), control_type: String::new() }];
+    let c = convert("Private Sub Calendar1_DateClick(ByVal DateClicked As Date)\n    Range(\"A1\").Value = DateClicked\nEnd Sub\n", &Target::Document { code_name: "Sheet2", workbook: false, controls: &list }, &[]);
+    assert!(c.todos.is_empty(), "{:?}", c.todos);
+    assert!(c.text.contains("@on(\"Calendar1.DateClick\")\nfunction calendar1DateClick(DateClicked: date) {"), "{}", c.text);
+}
+
 #[test]
 fn this_workbook_converts_and_unknown_events_are_todos() {
     let wb = convert(THIS_WORKBOOK, &Target::Document { code_name: "ThisWorkbook", workbook: true, controls: &[] }, &[]);
