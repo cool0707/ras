@@ -709,6 +709,7 @@ impl<'p> Gen<'p> {
         match prog.modules[def.module].key.as_str() {
             "vba.d" => format!("$rt.vba.{}({argv})", def.vba_name()),
             "msforms.d" => format!("$rt.msforms.{}({argv})", def.vba_name()),
+            "test.d" => format!("$rt.test.{}({argv})", def.vba_name()),
             "excel.d" | "office.d" => format!("$rt.call($rt.global(\"Application\"), {name}, [{argv}])"),
             // Declared in the project's own type definitions: a procedure of the workbook.
             _ => format!("$rt.runMacro({name}, [{argv}])"),

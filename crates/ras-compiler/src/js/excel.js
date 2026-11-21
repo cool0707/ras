@@ -42,7 +42,8 @@ module.exports = function createExcel(rt, addon, options) {
     const { RasError, RDate, CVErr } = rt;
     const Book = addon.Book;
     const root = path.resolve(options.root || ".");
-    const outDir = path.join(root, "build", "debug", "workbooks");
+    const outDir = options.outDir ? path.resolve(root, options.outDir) : path.join(root, "build", "debug", "workbooks");
+    const hooks = rt.hooks || {};
 
     // ------------------------------------------------------------------------ errors and values
 
@@ -148,7 +149,8 @@ module.exports = function createExcel(rt, addon, options) {
             } catch (err) {
                 const e = rt.caught(err);
                 const at = e.rasFile ? `（${e.rasFile}:${e.rasLine}）` : "";
-                console.error(`[ras] ${h.target}.${h.event}: 実行時エラー ${e.code}: ${e.description}${at}`);
+                if (hooks.eventError) hooks.eventError(e, h);
+                else console.error(`[ras] ${h.target}.${h.event}: 実行時エラー ${e.code}: ${e.description}${at}`);
             } finally {
                 running.delete(h);
             }
@@ -1551,6 +1553,10 @@ module.exports = function createExcel(rt, addon, options) {
             this.$project = project;
             this.$name = file ? path.basename(file) : `Book${++untitled}`;
             this.$dirty = false;
+            // Counts the changes: a test's workbook is only read again when it changed (`restore`).
+            this.$rev = 0;
+            // The code names of the project's workbook, kept when a test replaces its contents (`useWorkbook`).
+            this.$codeNames = null;
             this.$sheets = [];
             const n = handle.sheetCount();
             for (let i = 0; i < n; i++) this.$sheets.push(new Worksheet(this));
@@ -1564,8 +1570,10 @@ module.exports = function createExcel(rt, addon, options) {
         $changed() {
             if (this.$closed) rt.raise(424, this.$name);
             this.$dirty = true;
+            this.$rev++;
         }
         $codeName(i) {
+            if (this.$codeNames !== null && i < this.$codeNames.length) return this.$codeNames[i];
             return this.$book.sheetInfo(i).codeName || "";
         }
         get Name() {
@@ -1688,11 +1696,12 @@ module.exports = function createExcel(rt, addon, options) {
         fs.mkdirSync(outDir, { recursive: true });
         const name = path.extname(wb.$name) ? wb.$name : `${wb.$name}.xlsx`;
         const target = book(() => wb.$book.save(path.join(outDir, name)));
+        const rel = path.relative(root, target).split(path.sep).join("/");
+        if (hooks.saved) hooks.saved({ name: wb.$name, file: rel, source: wb.$file ? path.relative(root, wb.$file).split(path.sep).join("/") : null, project: wb.$project });
         if (!saved.has(target)) {
             saved.add(target);
-            const rel = path.relative(root, target).split(path.sep).join("/");
             const why = asked ? "保存の指示により、" : "変更された";
-            console.log(`[ras] ${why}ブック ${wb.$name} を ${rel} に保存しました（元のファイルは書き換えません）`);
+            rt.note(`${why}ブック ${wb.$name} を ${rel} に保存しました（元のファイルは書き換えません）`);
         }
     }
 
@@ -1716,6 +1725,7 @@ module.exports = function createExcel(rt, addon, options) {
         Add() {
             const wb = new Workbook(Book.create(), null, false);
             wb.$dirty = true;
+            wb.$rev++;
             app.$books.push(wb);
             wb.Activate();
             return wb;
@@ -1993,18 +2003,34 @@ module.exports = function createExcel(rt, addon, options) {
         Evaluate(text) {
             return evaluate(activeSheet(), text);
         }
-        Run(macro) {
+        Run(macro, ...args) {
+            if (hooks.run) {
+                const r = hooks.run(rt.cstr(macro), args);
+                if (r !== undefined) return r.value;
+            }
             return runMacro(rt.cstr(macro));
         }
         InputBox(prompt, title, defaultValue) {
             const d = opt(defaultValue);
+            if (hooks.inputBox) {
+                const r = hooks.inputBox(rt.cstr(prompt), opt(title) === undefined ? undefined : rt.cstr(title), d);
+                if (r !== undefined) return r;
+            }
             console.log(`[InputBox] ${rt.cstr(prompt)} → ${d === undefined ? "（キャンセル）" : rt.cstr(d)}`);
             return d === undefined ? false : d;
         }
-        GetOpenFilename() {
+        GetOpenFilename(...args) {
+            if (hooks.getOpenFilename) {
+                const r = hooks.getOpenFilename(...args.map(opt));
+                if (r !== undefined) return r;
+            }
             return needsExcel("ファイルを開くダイアログ（GetOpenFilename）");
         }
-        GetSaveAsFilename() {
+        GetSaveAsFilename(...args) {
+            if (hooks.getSaveAsFilename) {
+                const r = hooks.getSaveAsFilename(...args.map(opt));
+                if (r !== undefined) return r;
+            }
             return needsExcel("名前を付けて保存ダイアログ（GetSaveAsFilename）");
         }
         FileDialog() {
@@ -2061,11 +2087,11 @@ module.exports = function createExcel(rt, addon, options) {
             if (manual) app.$state.Calculation = XL.manual;
             project = new Workbook(handle, file, true);
             app.$sources.push(file);
-            console.log(`[ras] Excel を使わずに実行します。${path.basename(file)} を読み込み、数式は GridCraft の計算エンジンで計算します`);
-            if (manual) console.log("[ras] このブックは計算方法が手動で保存されています。数式は Calculate を呼ぶまで計算し直しません（Application.Calculation）");
+            rt.note(`Excel を使わずに実行します。${path.basename(file)} を読み込み、数式は GridCraft の計算エンジンで計算します`);
+            if (manual) rt.note("このブックは計算方法が手動で保存されています。数式は Calculate を呼ぶまで計算し直しません（Application.Calculation）");
         } else {
             project = new Workbook(Book.create(), null, true);
-            console.log("[ras] Excel を使わずに実行します。ras.toml に workbook がないため、空のブックで実行します");
+            rt.note("Excel を使わずに実行します。ras.toml に workbook がないため、空のブックで実行します");
         }
         app.$books.unshift(project);
         if (app.$activeBook === null) app.$activeBook = project;
@@ -2104,5 +2130,115 @@ module.exports = function createExcel(rt, addon, options) {
         }
     }
 
-    return { application, global, runMacro, finish, Range, Worksheet, Workbook };
+    // ------------------------------------------------------------------------ tests (spec §14.12.5)
+
+    /**
+     * Everything a test can change: the open workbooks (their cells, formats, names and sheets
+     * as the bytes of their files), the selection, the calculation mode and the other state of
+     * `Application`, the range being copied.
+     */
+    function snapshot() {
+        return {
+            loaded: project !== null,
+            books: app.$books.map((wb) => {
+                if (wb.$snap === undefined || wb.$snap.rev !== wb.$rev) wb.$snap = { rev: wb.$rev, bytes: book(() => wb.$book.toBytes()) };
+                return {
+                    wb,
+                    rev: wb.$rev,
+                    bytes: wb.$snap.bytes,
+                    name: wb.$name,
+                    file: wb.$file,
+                    project: wb.$project,
+                    dirty: wb.$dirty,
+                    active: wb.$active,
+                    codeNames: wb.$codeNames,
+                    sheets: wb.$sheets.map((sheet) => ({ sheet, formats: new Map(sheet.$formats), sort: sheet.$sort })),
+                };
+            }),
+            state: { ...app.$state },
+            sources: app.$sources.slice(),
+            activeBook: app.$activeBook,
+            selection: app.$selection,
+            activeCell: app.$activeCell,
+            lastFind: app.$lastFind,
+            clip,
+            untitled,
+        };
+    }
+    /** Puts back what `snapshot` took. The workbook and sheet objects the program holds stay valid. */
+    function restore(snap) {
+        for (const wb of app.$books) if (!snap.books.some((b) => b.wb === wb)) wb.$closed = true;
+        app.$state = { ...snap.state };
+        for (const b of snap.books) {
+            const wb = b.wb;
+            // Unchanged since the snapshot: nothing to read again.
+            if (wb.$rev !== b.rev || wb.$closed) {
+                wb.$book = book(() => Book.fromBytes(b.bytes));
+                wb.$snap = { rev: b.rev, bytes: b.bytes };
+            }
+            wb.$rev = b.rev;
+            wb.$name = b.name;
+            wb.$file = b.file;
+            wb.$project = b.project;
+            wb.$dirty = b.dirty;
+            wb.$active = b.active;
+            wb.$codeNames = b.codeNames;
+            wb.$closed = false;
+            wb.$sheets = b.sheets.map((x) => x.sheet);
+            for (const x of b.sheets) {
+                x.sheet.$formats = new Map(x.formats);
+                x.sheet.$sort = x.sort;
+            }
+            wb.$book.setManual(app.$state.Calculation === XL.manual);
+        }
+        app.$books = snap.books.map((b) => b.wb);
+        app.$sources = snap.sources.slice();
+        app.$activeBook = snap.activeBook;
+        app.$selection = snap.selection;
+        app.$activeCell = snap.activeCell;
+        app.$lastFind = snap.lastFind;
+        clip = snap.clip;
+        untitled = snap.untitled;
+        if (!snap.loaded) project = null;
+    }
+    /**
+     * Replaces the contents of the project's workbook with those of another file. The code
+     * names stay those of the project's workbook, given to the sheets of the file in order.
+     */
+    function useWorkbook(file) {
+        const wb = projectBook();
+        if (!fs.existsSync(file)) throw new RasError(`'${file}' が見つかりません。`, 1004, "Microsoft Excel");
+        const codeNames = wb.$codeNames !== null ? wb.$codeNames : wb.$sheets.map((_, i) => wb.$codeName(i));
+        const handle = book(() => Book.open(file));
+        wb.$book = handle;
+        wb.$codeNames = codeNames;
+        const n = handle.sheetCount();
+        wb.$sheets.length = Math.min(wb.$sheets.length, n);
+        while (wb.$sheets.length < n) wb.$sheets.push(new Worksheet(wb));
+        for (const sheet of wb.$sheets) {
+            sheet.$formats = new Map();
+            sheet.$sort = null;
+        }
+        wb.$active = Math.max(0, wb.$sheets.findIndex((_, i) => handle.sheetInfo(i).visible === -1));
+        handle.setManual(app.$state.Calculation === XL.manual);
+        wb.$rev++;
+        wb.$dirty = false;
+        if (clip !== null && clip.range.$sheet.$wb === wb) clip = null;
+        app.$selection = null;
+        app.$activeCell = null;
+        app.$lastFind = null;
+        return wb;
+    }
+    /** Saves every open workbook into `dir` as `<base>.xlsx` (the others as `<base> - <name>`): what a test left. */
+    function saveAll(dir, base) {
+        const written = [];
+        fs.mkdirSync(dir, { recursive: true });
+        for (const wb of app.$books) {
+            const name = wb.$project ? base : `${base} - ${path.parse(wb.$name).name}`;
+            written.push(book(() => wb.$book.save(path.join(dir, `${name}.xlsx`))));
+        }
+        return written;
+    }
+
+    return { application, global, runMacro, finish, snapshot, restore, useWorkbook, saveAll, Range, Worksheet, Workbook };
 };

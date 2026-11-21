@@ -552,6 +552,20 @@ let bookAddon = null; // the `ras_book` addon: the workbook of the stand-in for 
 let excelHost = null; // the stand-in itself (`ras-excel.js`), made when the program first uses Excel
 let noExcel = false; // the COM addon is there but Excel is not installed: the stand-in is used
 let config = { manifest: {}, root: "." };
+/**
+ * What the one who runs the program (`ras run`, `ras test`) takes over: `print(line)` for
+ * `debug.print`; the dialogs `msgBox(prompt, buttons, title)`, `inputBox(prompt, title, default)`,
+ * `getOpenFilename(...)`, `getSaveAsFilename(...)` (returning `undefined` leaves the answer to
+ * the run time); `run(name, args)` for hand-written VBA and `createObject(progId)` (`undefined`:
+ * not replaced); `note(text)` for what the run time tells the user; `saved(name, file)` for
+ * each workbook saved; `eventError(error, handler)` for an error an event handler did not catch.
+ */
+const hooks = {};
+/** Something the run time tells the user (`[ras] ...`). */
+function note(text) {
+    if (hooks.note) hooks.note(text);
+    else console.log(`[ras] ${text}`);
+}
 let app = null;
 let book = null;
 const sheets = new Map();
@@ -585,7 +599,7 @@ function isValued(v) {
 function stand() {
     if (mock !== null || bookAddon === null || (com !== null && !noExcel)) return null;
     if (excelHost === null) {
-        excelHost = require("./ras-excel.js")(module.exports, bookAddon, { workbook: config.manifest.workbook, root: config.root, handlers: documentHandlers });
+        excelHost = require("./ras-excel.js")(module.exports, bookAddon, { workbook: config.manifest.workbook, root: config.root, handlers: documentHandlers, outDir: config.workbooksDir || null });
     }
     return excelHost;
 }
@@ -936,6 +950,10 @@ function scripting() {
     return scriptingApi;
 }
 function createObject(progId) {
+    if (hooks.createObject) {
+        const made = hooks.createObject(String(progId));
+        if (made !== undefined) return made;
+    }
     if (mock && isCallable(mock.createObject)) return mock.createObject(progId);
     if (stand() !== null && /^excel\.application(\.\d+)?$/i.test(String(progId))) return application();
     if (com === null) {
@@ -957,6 +975,10 @@ function newHost(namespace, name) {
 
 /** Calls a procedure of the workbook that is not part of the RAS project (hand-written VBA). */
 function runMacro(name, args) {
+    if (hooks.run) {
+        const r = hooks.run(String(name), args || []);
+        if (r !== undefined) return r.value;
+    }
     if (mock && isCallable(mock.run)) return mock.run(name, args);
     const host = stand();
     if (host !== null) return host.runMacro(name, args);
@@ -1064,7 +1086,9 @@ function match(value, lookup, matchType) {
 }
 
 function print(...parts) {
-    console.log(parts.join(" "));
+    const line = parts.join(" ");
+    if (hooks.print) hooks.print(line);
+    else console.log(line);
 }
 
 // ---------------------------------------------------------------------------- VBA library
@@ -1219,7 +1243,7 @@ const vbaImpl = {
     vbObjectError: VB_OBJECT_ERROR,
     Err: vbaErr,
     Debug: {
-        Print: (...args) => console.log(args.map(str).join(" ")),
+        Print: (...args) => print(...args.map(str)),
         Assert: (c) => {
             if (!c) debugger; // eslint-disable-line no-debugger
         },
@@ -1227,6 +1251,10 @@ const vbaImpl = {
     MsgBox(prompt, buttons, title) {
         const text = cstr(prompt);
         if (mock && isCallable(mock.msgBox)) return mock.msgBox(text, buttons || 0, title);
+        if (hooks.msgBox) {
+            const r = hooks.msgBox(text, buttons || 0, title === undefined ? undefined : cstr(title));
+            if (r !== undefined) return r;
+        }
         if (com === null) {
             console.log(`[MsgBox] ${text}`);
             return 1;
@@ -1234,6 +1262,7 @@ const vbaImpl = {
         return call(shell(), "Popup", [text, 0, title === undefined ? "Microsoft Excel" : cstr(title), buttons || 0]);
     },
     InputBox(prompt, title, defaultValue) {
+        // `Application.InputBox` of the stand-in asks the same hook.
         const r = call(application(), "InputBox", [cstr(prompt), title, defaultValue]);
         return r === false ? "" : cstr(r);
     },
@@ -1664,7 +1693,8 @@ Object.defineProperty(globalThis, "$rasDebugDescription", { value: debugDescript
 process.on("exit", () => {
     resetAppState();
     // The workbooks the program changed without Excel are saved under build/debug/workbooks/.
-    if (excelHost !== null) excelHost.finish();
+    // (`ras test` keeps the workbooks of the failed tests itself.)
+    if (excelHost !== null && config.saveOnExit !== false) excelHost.finish();
 });
 
 module.exports = {
@@ -1673,8 +1703,25 @@ module.exports = {
     date, clone, i32, i64, idiv, imod, div, fmod, pow, sqrt, log, post, round, bankersRound, numStr, toFixed, val,
     cnum, cint, clng, toInt, toLong, cbool, cdate, cstr, str, dyn, cmp, eq,
     trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
-    configure, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
+    configure, hooks, note, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
     vba, declare, module: module_, ensureInit, entries, run, form,
 };
 Object.defineProperty(module.exports, "msforms", { get: () => forms().msforms, enumerable: true });
+// The API of test files (spec §14.12), there only in the build of `ras test`.
+let testApi = null;
+Object.defineProperty(module.exports, "test", {
+    get() {
+        if (testApi === null) {
+            testApi = require("./ras-test.js")(
+                Object.assign(Object.create(module.exports), {
+                    config: () => config,
+                    host: () => stand(),
+                    modules: () => modules,
+                }),
+            );
+        }
+        return testApi;
+    },
+    enumerable: true,
+});

@@ -21,6 +21,7 @@ pub mod names;
 pub mod query;
 pub mod refs;
 pub mod runtime;
+pub mod testing;
 pub mod userform;
 pub mod vba;
 pub mod vba2ras;
@@ -42,6 +43,7 @@ const STDLIB: &[(&str, ModuleKind, &str)] = &[
     ("office.d", ModuleKind::TypeDef, include_str!("../stdlib/office.d.ras")),
     ("msforms.d", ModuleKind::TypeDef, include_str!("../stdlib/msforms.d.ras")),
     ("scripting.d", ModuleKind::TypeDef, include_str!("../stdlib/scripting.d.ras")),
+    (collect::TEST_DEFS_MODULE, ModuleKind::TypeDef, include_str!("../stdlib/test.d.ras")),
     ("win32", ModuleKind::Std, include_str!("../stdlib/win32.ras")),
     (collect::STRUCT_MAP_MODULE, ModuleKind::Std, include_str!("../stdlib/ras_collections.ras")),
 ];
@@ -65,6 +67,7 @@ pub fn analyze(sources: Vec<SourceInput>, config: Config) -> Program {
     inputs.extend(sources);
     let mut prog = collect::collect(inputs, config);
     check::check(&mut prog);
+    testing::check(&mut prog);
     prog
 }
 
@@ -102,7 +105,58 @@ pub fn build(prog: &Program, opts: &BuildOptions) -> BuildOutput {
     BuildOutput { files, diagnostics, notes: lowered.notes, macros: lowered.macros }
 }
 
+/// Reads the project as [`load_project`] does, with its tests (spec §14.12.2): the test files
+/// (`[test] include`, `test/**/*.test.ras`) and the helper modules of `test/`. They are
+/// type-checked and run by `ras test`, and are no part of what is built into the workbook.
+pub fn load_project_with_tests(root: &Path) -> Result<(Config, Vec<SourceInput>), String> {
+    let (mut config, mut sources) = load_project(root)?;
+    let mut files = Vec::new();
+    walk_tests(root, root, &mut files).map_err(|e| format!("{}: {e}", root.display()))?;
+    files.sort();
+    for path in files {
+        let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+        let is_test = config.test.is_test_file(&rel);
+        if !is_test && !rel.starts_with("test/") {
+            continue;
+        }
+        if rel.ends_with(".d.ras") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text);
+        if is_test {
+            config.test_files.push(rel.clone());
+        }
+        sources.push(SourceInput { key: format!("{}{}", collect::TEST_KEY_PREFIX, rel.strip_suffix(".ras").unwrap_or(&rel)), rel_path: rel, kind: ModuleKind::User, text, path });
+    }
+    Ok((config, sources))
+}
+
+/// The `.ras` files of the project outside what holds no sources (`build/`, hidden folders,
+/// `node_modules/`).
+fn walk_tests(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in entries {
+        let path = entry?.path();
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        if path.is_dir() {
+            if dir == root && matches!(name.as_str(), "build" | "node_modules" | "vba" | "types") || name.starts_with('.') {
+                continue;
+            }
+            walk_tests(root, &path, out)?;
+        } else if name.ends_with(".ras") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
 /// Reads `ras.toml` and every source file of the project rooted at `root` (spec §15.1).
+/// Files matching `[test] include` are tests, wherever they are: they are left out.
 pub fn load_project(root: &Path) -> Result<(Config, Vec<SourceInput>), String> {
     let toml_path = root.join("ras.toml");
     let config = match std::fs::read_to_string(&toml_path) {
@@ -120,6 +174,9 @@ pub fn load_project(root: &Path) -> Result<(Config, Vec<SourceInput>), String> {
         files.sort();
         for path in files {
             let rel = path.strip_prefix(&base).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+            if config.test.is_test_file(&format!("{dir}/{rel}")) {
+                continue;
+            }
             let is_typedef = rel.ends_with(".d.ras");
             let key = rel.strip_suffix(".ras").unwrap_or(&rel).to_string();
             let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;

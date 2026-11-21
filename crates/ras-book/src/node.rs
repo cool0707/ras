@@ -159,6 +159,20 @@ impl JsBook {
         Ok(JsBook { inner: book::Book::open(Path::new(&path)).map_err(err)? })
     }
 
+    /// Opens a workbook from the bytes of a file (`toBytes`): `ras test` puts a workbook back
+    /// to what it was before a test this way (spec §14.12.5).
+    #[napi(factory)]
+    pub fn from_bytes(data: napi::bindgen_prelude::Buffer) -> Result<JsBook> {
+        Ok(JsBook { inner: book::Book::open_bytes(&data).map_err(err)? })
+    }
+
+    /// The bytes of the file `save` would write.
+    #[allow(clippy::wrong_self_convention)]
+    #[napi]
+    pub fn to_bytes(&mut self) -> Result<napi::bindgen_prelude::Buffer> {
+        self.inner.to_bytes().map(Into::into).map_err(err)
+    }
+
     /// A new workbook with one sheet.
     #[napi(factory)]
     pub fn create() -> JsBook {

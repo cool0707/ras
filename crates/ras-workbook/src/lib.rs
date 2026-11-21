@@ -5,5 +5,7 @@
 //! GridCraft's engine, as xljs uses it (the engine is taken from xljs's `vendor/gridcraft`).
 
 pub mod book;
+pub mod diff;
+pub mod dump;
 
 pub use gridcraft_core::{CellRef, RangeRef, Value};

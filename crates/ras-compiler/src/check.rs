@@ -133,6 +133,11 @@ impl Checker<'_> {
     // ------------------------------------------------------------------ plumbing
 
     fn diag(&mut self, severity: Severity, span: Span, code: &'static str, message: impl Into<String>) {
+        // Tests only run as JavaScript, where an arrow function is a closure: the hooks and
+        // tests of a `describe` share its variables (spec §14.12.3).
+        if matches!(code, "E0320" | "E0322") && self.prog.modules[self.module].is_test() {
+            return;
+        }
         self.prog.diagnostics.push(Diagnostic { severity, code, message: message.into(), module: Some(self.module), span });
     }
 
@@ -168,7 +173,8 @@ impl Checker<'_> {
             (Error, _) | (_, Error) => true,
             (Void, _) | (_, Void) | (Ns(_), _) | (_, Ns(_)) => false,
             // Structs (and arrays of them) cannot be stored in a Variant.
-            (f, Any) | (Any, f) if f.has_struct() => false,
+            // (A test only runs as JavaScript, where a struct is an object like any other.)
+            (f, Any) | (Any, f) if f.has_struct() => self.prog.modules[self.module].is_test(),
             (_, Any) | (Any, _) => true,
             // `A | B` fits where each of its members fits; a value fits a union when it fits one of the members.
             (Union(fs), _) => fs.iter().all(|f| self.assignable(f, to)),
@@ -2988,6 +2994,11 @@ impl Checker<'_> {
                         self.err(call.span, "E0404", format!("型引数 `{} = {}` は制約 `{c}` を満たしません", tp.name, self.show(t)));
                     }
                     targs.push(t.clone());
+                }
+                // `expect(null)`: nothing to infer from.
+                None if self.prog.modules[def.module].key == crate::collect::TEST_DEFS_MODULE => {
+                    env.insert(tp.name.clone(), Type::Any);
+                    targs.push(Type::Any);
                 }
                 None => {
                     self.err(call.span, "E0405", format!("`{}` の型引数 `{}` を推論できません。`{}<型>(...)` のように明示してください", def.name, tp.name, def.name));

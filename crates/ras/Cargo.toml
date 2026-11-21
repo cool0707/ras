@@ -18,11 +18,14 @@ ras-ovba.workspace = true
 ras-form.workspace = true
 ras-lsp.workspace = true
 ras-sync.workspace = true
+ras-workbook = { path = "../ras-workbook" }
+serde_json.workspace = true
 clap.workspace = true
 encoding_rs.workspace = true
 notify.workspace = true
 
 [dev-dependencies]
+ras-workbook = { path = "../ras-workbook" }
 ras-ovba.workspace = true
 ras-form.workspace = true
 serde_json.workspace = true

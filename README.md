@@ -45,6 +45,7 @@ Excel / VBA のメンバーとグローバルは、JavaScript の命名規則（
 | `ras-vscode` | VS Code 拡張（`.vsix`） |
 
 `ras` は依存ランタイムのない単一バイナリです。PATH の通った場所に置くか、VS Code の設定 `ras.path` で場所を指定します。
+`ras run` と `ras test` は、プログラムを JavaScript に変換して実行するため、Node.js（PATH の `node`。無ければ VS Code の実行ファイルを使います）と、`ras` と同じフォルダーに置いた `ras_book.node` が必要です。
 VS Code 拡張は「拡張機能」ビューの `…` → 「VSIX からのインストール」で入れられます。
 
 ## 使い方
@@ -63,6 +64,10 @@ ras form new frmInput                     # ユーザーフォームの雛形（
 ras form pull                             # ブックにあるユーザーフォームを forms/ に取り出す（コードは RAS に変換）
 ras fmt                                   # 整形
 ras build --target js                     # デバッグ実行用の JavaScript を build/debug/ に出力
+ras run Report.rebuildReport              # 関数を Excel なしで実行し、出力・エラー・変更されたセルを表示
+ras test                                  # test/**/*.test.ras のテストを Excel なしで実行
+ras book dump Book.xlsm                   # ブックの中身（シート・数式・名前・テーブル）をテキストで出力
+ras book diff before.xlsm after.xlsm      # 2 つのブックのセルと構造の差分
 ```
 
 サンプルプロジェクトは [examples/sales-report](examples/sales-report) にあります（`ras --project examples/sales-report build`）。
@@ -117,6 +122,94 @@ function leave(cancel: MSForms.ReturnBoolean) {
 - ブックを Excel で開いたままでも、`ras sync`（および `ras watch`、VS Code の保存時の同期）がフォームを反映します。デザインが変わったフォームは取り込み直し、コードだけが変わったフォームはコードだけを書き換えます。
 - `forms/<名前>.ras` の先頭の CodeLens「▶ Excelで実行 | デバッグ実行」（デザイナーではタイトルバーのボタン）から、フォームを直接動かせます。「Excelで実行」はブックへ同期してから Excel 本体でフォームを表示し（Windows のみ）、「デバッグ実行」はフォームを VS Code のパネルに表示して、コードビハインドをブレークポイント付きでデバッグします（次の「デバッグ」を参照）。
 
+## Excel なしで動かす・確かめる（CLI）
+
+Mac・Linux や Excel の無い Windows、CI、AI エージェントの作業では、`ras` だけで「書く → 動かす → 確かめる」を回せます。どれも Excel を起動せず、`ras.toml` の `workbook` を読み込んだブックの代役（下の「デバッグ」と同じもの）に対して実行し、元のブックは書き換えません。
+
+### 実行（`ras run`）
+
+```sh
+ras run --list                                        # 実行できる関数の一覧
+ras run Report.rebuildReport                          # 実行する（モジュール名は、1 つに決まれば省ける）
+ras run ask --msgbox vbYes --inputbox "2026/4"        # ダイアログの応答を、表示される順に指定する
+ras run Report.rebuildReport --json                   # 結果を JSON で出力する
+```
+
+`debug.print` の出力、表示したダイアログと応答、実行時エラー（VBA のエラー番号・説明・`.ras` の位置）に続けて、変更されたセルを表示します。変更されたブックは `build/debug/workbooks/` に保存します。
+
+```
+rows 3
+変更されたセル（Book.xlsx → build/debug/workbooks/Book.xlsx）:
+Sheet1:
+  D2	（空） → 6
+  D3	（空） → 10
+  D4	（空） → 4
+差分 3 件（構造 0、セル 3、名前 0）
+```
+
+応答を指定しなかった `msgBox` は `vbOK`、`inputBox` は既定値（無ければキャンセル）で応答します。終了コードは、正常に終われば 0、実行時エラーで終われば 1、実行できなければ 2 です（仕様 §14.13）。
+
+### テスト（`ras test`）
+
+テストは `test/` の `*.test.ras` に、vitest と同じ形で書きます（仕様 §14.12）。テストのファイルとヘルパー（`test/` の `.ras`）はブックには入りません。
+
+```typescript
+// test/report.test.ras
+import { rebuildReport, lastRow } from "../src/report";
+
+describe("rebuildReport", () => {
+    beforeEach(() => useWorkbook("test/fixtures/sales.xlsx"));
+
+    test("D 列に数量の 2 倍を書く", () => {
+        rebuildReport();
+        expect(Sheet1.cells(2, 4).value).toBe(6);
+        expect(Sheet1.range("D2:D4").value).toEqual([[6], [10], [4]]);
+    });
+
+    test("確認で「いいえ」を選ぶと何もしない", () => {
+        const box = mockMsgBox(() => vbNo);
+        expect(ask()).toBe("");
+        expect(box.calls.length).toBe(1);
+    });
+});
+```
+
+```sh
+ras test                          # すべてのテストを実行
+ras test test/report.test.ras     # ファイル（またはフォルダー）を指定
+ras test -t "rebuildReport"       # 名前（describe > test）に含まれる文字列で絞る
+ras test --list                   # 実行せずに一覧を出す
+ras test --reporter json          # 結果を JSON Lines で出力（junit で JUnit XML）
+ras test --watch                  # 変更を監視して、影響するテストファイルを実行し直す
+ras test --ci                     # test.only と、置き換えていないダイアログをエラーにする
+```
+
+- ブックの状態はテストごとに、そのテストを囲む `beforeAll` を実行し終えた時点に戻ります。失敗したテストのブックは `build/test/workbooks/<テストファイル名>/` に保存します。
+- 使える API: `describe` / `test`（`it`）とその `.skip` / `.only` / `.each`、`test.todo`、`beforeAll` / `afterAll` / `beforeEach` / `afterEach`、`expect(...)` のマッチャ（`toBe`・`toEqual`・`toBeCloseTo`・大小の比較・`toBeTruthy`・`toBeFalsy`・`toBeEmpty`・`toBeNothing`・`toContain`・`toHaveLength`・`toMatch`・`toThrow` と `.not`）、`useWorkbook`、`tempDir`、`printed`、`mockMsgBox` / `mockInputBox` / `mockGetOpenFilename` / `mockGetSaveAsFilename` / `mockRun` / `mockCreateObject`。
+- 終了コードは、すべて成功なら 0、失敗があれば 1、コンパイル エラーなどで実行できなければ 2 です。`ras check` はテストのファイルも検査します。
+
+### ブックの中身を見る・比べる（`ras book`）
+
+```sh
+ras book dump Book.xlsm                                   # シートの一覧、使用範囲、数式、名前、テーブル、入力規則、条件付き書式
+ras book dump Book.xlsm --sheet Sheet1 --range A1:F20     # セルの値・数式（--formats で表示形式とセルの表示も）
+ras book dump Book.xlsm --sheet Sheet1 --format csv       # text（既定）/ json / csv / markdown
+ras book diff before.xlsm build/debug/workbooks/Book.xlsm # セル（値・数式・表示形式）と構造の差分
+```
+
+```
+Book.xlsx
+シート:
+  1. Sheet1（コード名 Sheet1）  使用範囲 A1:C5、値のあるセル 13 個（うち数式 4 個）
+     数式: C2:C4 =B2*100（同じ形の数式 3 個）
+     数式: C5 =SUM(C2:C4)
+名前:
+  合計 = Sheet1!$C$5
+```
+
+- 下や右へコピーされた同じ形の数式は 1 行にまとめます。大きなシートは既定で 200 行 × 50 列まで出力し、打ち切った範囲を示します（`--max-rows` / `--max-cols` / `--all`）。
+- `diff` は、シートの追加・削除・名前の変更と、行・列の挿入・削除（ひとまとまりのもの。推定）も出力します。差分が無ければ終了コード 0、あれば 1 です（仕様 §14.14）。
+
 ## デバッグ
 
 VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイントを置き、F5（または「RAS: デバッグを開始」）で実行します。
@@ -146,7 +239,8 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | `form new` / `form check` / `form pull` | 実装済み |
 | `sync` | 実装済み（Windows のみ。Excel で開いているブックへ、モジュールとユーザーフォームを反映する。`--pull` は未実装） |
 | `setup` / `typegen` / `pack --via-excel` | 未実装（実行するとその旨を表示して終了） |
-| `test` | 未実装（仕様 §14.12） |
+| `run` / `book dump` / `book diff` | 実装済み（仕様 §14.13、§14.14） |
+| `test` | 実装済み（仕様 §14.12。`--excel` とエディタの連携は未実装） |
 
 ## 実装状況
 
@@ -172,7 +266,9 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §14.9 オフライン書き込み・読み出し | 実装済み | 再署名は未実装。`vba/` の非管理モジュールをブックへ書き戻す処理は未実装（取り出しのみ。ユーザーフォームは `forms/` で扱う） |
 | §14.10 デバッグ実行（JavaScript ランタイム） | 実装済み | ユーザーフォーム（§14.10.7）は VS Code のパネルに表示する。キー入力・マウス・ドラッグのイベント、`ControlSource` は未対応。Excel への接続（`ras_com.node`）は Excel 2021（64bit）の実機で確認済み。ダイアログの監視（§14.10.6）は Excel の無い Windows 上の CI でメッセージ ボックスを相手に確認しており、Excel の実機では未確認。CI では Excel の無い Windows 上で `Scripting.Dictionary` 等を使って COM 呼び出しを確認している。Excel の無い環境でのブックの代役（§14.10.8、`ras_book.node`）は、RAS のプログラムを Node で動かしてセル・数式・保存結果を確かめる自動テスト（Linux / Windows）で確認しているが、VS Code 上での確認と、Excel と計算結果を突き合わせる確認はまだ。セルの挿入・削除、切り取り・コピー・貼り付け、並べ替え・フィルター、書式の保存、手動計算、ブック・シートのイベントも同じ自動テストで確認しており、Excel の実機との突き合わせ（イベントの順序、コピーが解除される操作、保存したブックを Excel で開いたときの書式とフィルター）はまだ。`super` 呼び出しを伴う継承は対象外 |
 | §14.11 ユーザーフォーム（`forms/`） | 実装済み | FormSpec からの生成（`Image` の画像、`ComboBox` / `ListBox` の項目を含む）、ブックからの取り出し（`ras form pull`）、ライブ同期、Excel での実行（§14.11.8）。カスタム ActiveX コントロールの生成、VBE での編集の検出（ドリフト）は未実装 |
-| §14.12 テスト（`ras test`） | 未実装 | 仕様のみ |
+| §14.12 テスト（`ras test`） | 一部 | テストの列挙（`--list`）、実行、`expect`、フック、ブックの巻き戻し、`useWorkbook` / `tempDir` / `printed`、置き換え（`mock*`）、タイムアウト、`--reporter pretty / json / junit`、`-t`、`--ci`、`--bail`、`--watch`、失敗したテストのブックの保存、`[test]` の設定は実装。実際の Excel での実行（`--excel`、`[test] excel = "com"`）、エディタの連携（§14.12.10。CodeLens・テスト エクスプローラー、言語サーバーでのテストファイルの型チェックと補完）は未実装。テストファイルは 1 つずつ実行する（並行しない）。`-t` で選ばれなかったテストは結果に出さない。`toBeEmpty` と `toBeNothing` は、ブックの代役では `Empty` と `Nothing` をどちらも成功にする（ランタイムが区別しないため）。`expect` の型は `toBe` の期待値だけを検査する |
+| §14.13 CLI からの実行（`ras run`） | 実装済み | ブックの代役でだけ実行する（実際の Excel に対する実行は VS Code のデバッグ実行を使う）。ユーザーフォームの表示はエラーになる |
+| §14.14 ブックの中身を見る・比べる（`ras book dump` / `diff`） | 実装済み | 行・列の挿入・削除の推定は、ひとまとまりの挿入・削除だけ（複数箇所は、セルの差分として出る）。書式（フォント・色・罫線）は対象外 |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱し、メンバーとグローバルを camelCase で参照する（§15.3.1）。`Scripting`（`FileSystemObject`・`Dictionary`）と `VBScript.RegExp` の型定義も同梱し、VBA には遅延バインディングで出力する（§15.3）。`ras typegen` と `vba:` インポートは未実装 |
 | §16.1 JSDoc | 実装済み | 生成 VBA へのコメント・`VB_Description` 出力、`@param` 名の検査 |
 | §16.2 IntelliSense（LSP） | 一部 | 診断・補完（名前付き引数の引数名、未インポートの候補と `import` の自動追加を含む）・ホバー・パラメーター情報・定義へ移動・型定義へ移動・参照の検索・強調表示・名前の変更・シンボル一覧（ファイル・ワークスペース）・インレイヒント・セマンティックトークン・折りたたみ・整形・CodeLens（最適化の通知、関数ごとの「Excelで実行」「デバッグ実行」）・「生成 VBA を表示」と、クイックフィックス（VBA の綴りの名前を直す、未インポートの名前の `import` を追加する）は実装。`completionItem/resolve`（JSDoc の遅延読み込み）、範囲の整形、その他のコードアクション（`byref` 引数へのリテラル渡しの一時変数化・縮小変換への `as` 追加）、`@deprecated` の使用箇所の警告は未実装 |
@@ -186,6 +282,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 ## 検証状況
 
 - 自動テスト: `cargo test --workspace`（構文、型チェック、仕様書のコード例と生成 VBA の照合、CLI の一連の流れ、LSP のセッション、`vbaProject.bin` の読み書き）。
+- `ras run`・`ras test`・`ras book dump` / `diff` は、プロジェクトを作って `ras` を実行する自動テスト（`crates/ras/tests/offline.rs`。Linux の Node 22）で確認しています。Windows・macOS と、VS Code の実行ファイルをランタイムに使う経路は未確認です。`ras book dump` の出力は xljs のテスト用ブック（入力規則・条件付き書式・テーブル）でも確かめています。Excel が保存した大きなブックでの速度は測っていません。
 - `ras pack` が出力したブックは、別実装の `ovba` クレートと oletools（`olevba`）で読み直して確認しています（CI でも実行）。
 - 実機の Excel（Windows 11、Excel 2021 64bit）で次を確認しています（CI には Excel が無いため手動）:
   - `ras pack` で書き込んだブックを開いてマクロを実行できること。`crates/ras-compiler/tests/js/semantics.ras` の VBA ビルドの出力が `semantics.out` と一致すること
@@ -221,5 +318,7 @@ cd editors/vscode && npm ci && npm test && npm run package
 | `crates/ras-ovba` | MS-OVBA 圧縮、`vbaProject.bin` の読み書き、OPC パッケージ |
 | `crates/ras-lsp` | 言語サーバ |
 | `crates/ras` | CLI |
+| `crates/ras-workbook` | ブックの代役のブック（umya-spreadsheet と GridCraft の計算エンジン）、`ras book dump` / `diff` |
+| `crates/ras-book` | ブックの代役を Node に渡すアドオン（`ras_book.node`） |
 | `editors/vscode` | VS Code 拡張 |
 | `examples/sales-report` | サンプルプロジェクト |
