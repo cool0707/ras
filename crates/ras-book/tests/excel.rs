@@ -640,6 +640,94 @@ fn events_are_raised_for_what_the_program_does() {
     assert!(stderr.contains("Sheet1.BeforeDelete: 実行時エラー") && stderr.contains("消せません"), "{stderr}");
 }
 
+/// `objects/ThisWorkbook.ras`: variables whose objects are listened to (spec §12.2.2).
+const SOURCES_BOOK: &str = r#"
+let app: Excel.Application;
+let sheet: Excel.Worksheet;
+
+export function listen() {
+    app = application;
+    sheet = Sheet1;
+}
+
+export function stop() {
+    app = null;
+    sheet = null;
+}
+
+@on("app.SheetChange")
+function anyChange(sh: object, target: Excel.Range) {
+    console.log(`app SheetChange ${sh.name}!${target.address(false, false)}`);
+}
+
+@on("app.WorkbookBeforeSave")
+function saving(wb: Excel.Workbook, saveAsUI: boolean, byref cancel: boolean) {
+    console.log(`app WorkbookBeforeSave ${wb === thisWorkbook} ${saveAsUI}`);
+    cancel = true;
+}
+
+@on("sheet.Change")
+function changed(target: Excel.Range) {
+    console.log(`sheet Change ${target.address(false, false)}`);
+}
+"#;
+
+const SOURCES: &str = r#"
+class BookWatcher {
+    private book: Excel.Workbook;
+    private seen = 0;
+
+    constructor() {
+        this.book = thisWorkbook;
+    }
+
+    @on("book.SheetChange")
+    private changed(sh: object, target: Excel.Range) {
+        this.seen++;
+        console.log(`class SheetChange ${target.address(false, false)} #${this.seen}`);
+    }
+}
+
+let watcher: BookWatcher;
+
+export function listen() {
+    Sheet1.range("A6").value = "nobody listens yet";
+    thisWorkbook.listen();
+    watcher = new BookWatcher();
+    Sheet1.range("A7").value = "x";
+    thisWorkbook.save();
+    console.log(`saved=${thisWorkbook.saved}`);
+    thisWorkbook.stop();
+    Sheet1.range("A8").value = "y";
+}
+"#;
+
+/// The stand-in raises the events of the objects that variables hold (`WithEvents`).
+#[test]
+fn events_reach_the_variables_that_hold_the_object() {
+    if !has_node() {
+        return;
+    }
+    let p = project_with("sources", SOURCES, &[("ThisWorkbook", SOURCES_BOOK)], sales);
+    let (stdout, stderr, ok) = p.run("Main.listen");
+    assert!(ok, "{stderr}\n{stdout}");
+    assert_eq!(
+        lines(&stdout),
+        vec![
+            // The sheet's own event, then the workbook's: to the variable that holds the
+            // sheet, to the one that holds `Application`, to the field of the class.
+            "sheet Change A7",
+            "app SheetChange Sheet1!A7",
+            "class SheetChange A7 #1",
+            // The workbook's event reaches `Application` with the workbook in front.
+            "app WorkbookBeforeSave true false",
+            "saved=false",
+            // Variables that hold nothing any more are not called.
+            "class SheetChange A8 #2",
+        ]
+    );
+}
+
 const MORE: &str = r#"
 export function more() {
     const ws = Sheet1;

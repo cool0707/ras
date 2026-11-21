@@ -1556,7 +1556,23 @@ function module_(name, definition) {
 function documentHandlers() {
     const out = [];
     for (const m of modules.values()) for (const e of m.events || []) out.push(e);
+    // The handlers of the objects that variables hold (spec §12.2.2); those of class instances
+    // that are gone are dropped.
+    for (let i = eventSources.length - 1; i >= 0; i--) {
+        if (eventSources[i].alive && !eventSources[i].alive()) eventSources.splice(i, 1);
+    }
+    for (const e of eventSources) out.push(e);
     return out;
+}
+/**
+ * Handlers of the events of the object a variable holds (`@on("app.SheetChange")`, VBA's
+ * `WithEvents`, spec §12.2.2): `{ target, event, reentrant, source, fn, alive }`. `source()` is
+ * the object the variable holds now. The stand-in for Excel calls them when that object is
+ * the project's workbook, one of its sheets or `Application`.
+ */
+const eventSources = [];
+function withEvents(list) {
+    for (const e of list) eventSources.push(e);
 }
 /** Runs the module initialisers and `@init` functions once (VBA `RAS_EnsureInit`). */
 function ensureInit() {
@@ -1736,7 +1752,7 @@ module.exports = {
     trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
-    vba, declare, module: module_, ensureInit, entries, run, form,
+    vba, declare, module: module_, withEvents, ensureInit, entries, run, form,
 };
 Object.defineProperty(module.exports, "msforms", { get: () => forms().msforms, enumerable: true });
 // The API of test files (spec §14.12), there only in the build of `ras test`.

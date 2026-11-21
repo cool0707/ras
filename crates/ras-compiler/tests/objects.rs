@@ -329,12 +329,13 @@ fn with_events_variables() {
     assert!(code.contains("onAnyChange Sh, Target") && code.contains("onClose Wb, Cancel"), "{code}");
     assert!(code.contains("RAS_EventError \"ThisWorkbook.app_SheetChange\""), "{code}");
     assert!(code.contains("Set app = Application"), "{code}");
-    // The debug build compiles; Excel raises these events, the run time does not know them.
     let prog = analyze(sources(&[("ThisWorkbook", BOOK_WITH_APP)], &[]), config());
     let out = build_js(&prog, "");
     assert!(out.diagnostics.iter().all(|d| !d.is_error()), "{:#?}", out.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>());
     let js = &out.files.iter().find(|f| f.rel_path == "@objects/ThisWorkbook.js").unwrap().text;
-    assert!(js.contains("event: \"Open\"") && !js.contains("target: \"app\""), "{js}");
+    // The handlers of the variable are registered with the object it holds (spec §12.2.2).
+    assert!(js.contains("event: \"Open\""), "{js}");
+    assert!(js.contains("$rt.withEvents([{ target: \"app\", event: \"SheetChange\", reentrant: false, source: () => app, fn: ($a) => onAnyChange($a[0].v, $a[1].v) }, { target: \"app\", event: \"WorkbookBeforeClose\", reentrant: false, source: () => app, fn: ($a) => onClose($a[0].v, $a[1]) }]);"), "{js}");
 }
 
 #[test]

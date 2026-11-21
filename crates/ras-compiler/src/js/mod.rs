@@ -481,6 +481,8 @@ impl<'p> Gen<'p> {
         }
         let mut inits = Vec::new();
         let mut events = Vec::new();
+        // Handlers of the objects that module variables hold (`WithEvents`, spec §12.2.2).
+        let mut sources: Vec<String> = Vec::new();
         for &f in &md.fns {
             let d = &prog.fns[f];
             if !matches!(d.kind, FnKind::Free | FnKind::Main | FnKind::ModInit) {
@@ -499,9 +501,14 @@ impl<'p> Gen<'p> {
             }
             for ev in &d.attrs.on_events {
                 match &md.form {
-                    // The events of the object a variable holds (spec §12.2.2) are raised by
-                    // Excel: not registered with the run time.
-                    Some(_) if prog.event_source(f, &ev.target).is_some() => {}
+                    // The events of the object a variable holds (spec §12.2.2).
+                    Some(_) if prog.event_source(f, &ev.target).is_some() => {
+                        if let Some(EventSource::Var(v)) = prog.event_source(f, &ev.target) {
+                            let source = format!("() => {}", js_ident(&prog.vars[v].name));
+                            let call = js_ident(&d.name);
+                            sources.push(self.source_handler(ev, f, &source, &call, None));
+                        }
+                    }
                     Some(form) if form.kind == ObjectKind::Form => events.push(self.form_handler(form, ev, f)),
                     Some(form) => events.extend(self.document_handler(form, ev, f)),
                     // An error already (`E0610`): `@on` is written in the file of the sheet.
@@ -517,6 +524,9 @@ impl<'p> Gen<'p> {
                     self.macros.push(d.name.clone());
                 }
             }
+        }
+        if !sources.is_empty() {
+            self.w(format!("$rt.withEvents([{}]);", sources.join(", ")));
         }
         if md.is_form() {
             self.register_form(events);
@@ -574,6 +584,22 @@ impl<'p> Gen<'p> {
             js_ident(&d.name),
             args.join(", ")
         ))
+    }
+
+    /// The entry of `$rt.withEvents` for an `@on("<variable>.<Event>")` handler (spec §12.2.2):
+    /// `source` gives the object the variable holds, `call` is the handler. The stand-in for
+    /// Excel calls it with the arguments of the event as `{ v }` cells, as the other handlers.
+    fn source_handler(&self, ev: &OnEvent, f: FnId, source: &str, call: &str, alive: Option<&str>) -> String {
+        let d = &self.prog.fns[f];
+        let args: Vec<String> = d.params.iter().enumerate().map(|(i, p)| if p.mode == PassMode::ByRef { format!("$a[{i}]") } else { format!("$a[{i}].v") }).collect();
+        format!(
+            "{{ target: {}, event: {}, reentrant: {}, source: {source}, {}fn: ($a) => {call}({}) }}",
+            js_str(&ev.target),
+            js_str(&ev.event),
+            ev.reentrant,
+            alive.map(|a| format!("alive: {a}, ")).unwrap_or_default(),
+            args.join(", ")
+        )
     }
 
     /// The entry of `$rt.form` for an `@on` handler of a form (spec §14.11.2). The run time
@@ -794,6 +820,22 @@ impl<'p> Gen<'p> {
                 None => self.zero(&fd.ty),
             };
             self.wm(fd.span, format!("this.{} = {v};", fd.name));
+        }
+        // The handlers of the objects its fields hold (`WithEvents`, spec §12.2.2). The run
+        // time must not keep the instance alive: it is reached through a weak reference.
+        let mut sources: Vec<String> = Vec::new();
+        for &m in &def.methods {
+            for ev in &prog.fns[m].attrs.on_events {
+                if let Some(EventSource::Field(_, i)) = prog.event_source(m, &ev.target) {
+                    let source = format!("() => $w.deref()?.{}", def.fields[i].name);
+                    let call = format!("$w.deref()?.{}", prog.fns[m].name);
+                    sources.push(self.source_handler(ev, m, &source, &call, Some("() => $w.deref() !== undefined")));
+                }
+            }
+        }
+        if !sources.is_empty() {
+            self.w("const $w = new WeakRef(this);");
+            self.w(format!("$rt.withEvents([{}]);", sources.join(", ")));
         }
         if let Some(b) = body {
             self.ret_ty = Some(Type::Void);
