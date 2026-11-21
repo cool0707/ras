@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckFormFlags",
+    "caption": "フォームの設定",
+    "width": 240,
+    "height": 140,
+    "enabled": false,
+    "startUpPosition": 0,
+    "showModal": false,
+    "tag": "フォームのタグ",
+    "helpContextId": 7,
+    "whatsThisButton": true,
+    "whatsThisHelp": true,
+    "rightToLeft": true,
+    "picture": {
+      "path": "forms/assets/logo.bmp"
+    },
+    "pictureSizeMode": 1,
+    "pictureAlignment": 4,
+    "specialEffect": 1,
+    "mousePointer": 11
+  },
+  "controls": [
+    {
+      "id": "ff1",
+      "name": "lblFlags",
+      "type": "Label",
+      "left": 6,
+      "top": 6,
+      "width": 160,
+      "height": 18,
+      "caption": "無効のフォーム"
+    },
+    {
+      "id": "ff2",
+      "name": "txtFlags",
+      "type": "TextBox",
+      "left": 6,
+      "top": 30,
+      "width": 100,
+      "height": 18,
+      "text": "無効"
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckFormLook",
+    "caption": "フォームの見た目",
+    "width": 260,
+    "height": 160,
+    "specialEffect": 2,
+    "borderStyle": 1,
+    "borderColor": {
+      "kind": "rgb",
+      "value": "#C00000"
+    },
+    "backColor": {
+      "kind": "rgb",
+      "value": "#F8F0E0"
+    },
+    "foreColor": {
+      "kind": "rgb",
+      "value": "#000080"
+    },
+    "font": {
+      "name": "Meiryo UI",
+      "size": 10,
+      "charset": 128
+    },
+    "picture": {
+      "path": "forms/assets/logo.bmp"
+    },
+    "pictureAlignment": 0,
+    "pictureTiling": true,
+    "mousePointer": 99,
+    "mouseIcon": {
+      "path": "forms/assets/hand.cur"
+    },
+    "zoom": 150,
+    "scrollBars": 3,
+    "keepScrollBarsVisible": 1,
+    "scrollWidth": 400,
+    "scrollHeight": 300,
+    "scrollLeft": 20,
+    "scrollTop": 10,
+    "cycle": 2,
+    "drawBuffer": 64000
+  },
+  "controls": [
+    {
+      "id": "fl1",
+      "name": "lblOnForm",
+      "type": "Label",
+      "left": 6,
+      "top": 6,
+      "width": 120,
+      "height": 18,
+      "caption": "フォームの上"
+    },
+    {
+      "id": "fl2",
+      "name": "btnOnForm",
+      "type": "CommandButton",
+      "left": 6,
+      "top": 30,
+      "width": 72,
+      "height": 24,
+      "caption": "ボタン"
+    }
+  ]
+}

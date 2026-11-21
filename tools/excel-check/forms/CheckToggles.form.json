@@ -1,0 +1,245 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckToggles",
+    "caption": "CheckBox / OptionButton の確認",
+    "width": 330,
+    "height": 230
+  },
+  "controls": [
+    {
+      "id": "x1",
+      "name": "chkOn",
+      "type": "CheckBox",
+      "left": 6,
+      "top": 6,
+      "width": 100,
+      "height": 18,
+      "caption": "オン",
+      "value": true
+    },
+    {
+      "id": "x2",
+      "name": "chkNull",
+      "type": "CheckBox",
+      "left": 112,
+      "top": 6,
+      "width": 100,
+      "height": 18,
+      "caption": "Null（3 状態）",
+      "tripleState": true,
+      "value": "Null"
+    },
+    {
+      "id": "x3",
+      "name": "chkLeft",
+      "type": "CheckBox",
+      "left": 218,
+      "top": 6,
+      "width": 100,
+      "height": 18,
+      "caption": "左にキャプション",
+      "alignment": 0,
+      "specialEffect": 0
+    },
+    {
+      "id": "x4",
+      "name": "chkWrap",
+      "type": "CheckBox",
+      "left": 6,
+      "top": 30,
+      "width": 80,
+      "height": 36,
+      "caption": "長いキャプションの折り返しなし",
+      "wordWrap": false,
+      "tabStop": false
+    },
+    {
+      "id": "x5",
+      "name": "chkAuto",
+      "type": "CheckBox",
+      "left": 112,
+      "top": 30,
+      "width": 40,
+      "height": 18,
+      "caption": "自動サイズ",
+      "autoSize": true,
+      "backStyle": 0
+    },
+    {
+      "id": "x6",
+      "name": "chkPicture",
+      "type": "CheckBox",
+      "left": 218,
+      "top": 30,
+      "width": 100,
+      "height": 36,
+      "caption": "画像",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "picturePosition": 4
+    },
+    {
+      "id": "x7",
+      "name": "chkDisabled",
+      "type": "CheckBox",
+      "left": 6,
+      "top": 72,
+      "width": 100,
+      "height": 18,
+      "caption": "無効",
+      "enabled": false,
+      "value": true
+    },
+    {
+      "id": "x8",
+      "name": "chkStyle",
+      "type": "CheckBox",
+      "left": 112,
+      "top": 72,
+      "width": 100,
+      "height": 18,
+      "caption": "色と書体",
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      },
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#C00000"
+      },
+      "backColor": {
+        "kind": "rgb",
+        "value": "#FFFFC0"
+      },
+      "textAlign": 3,
+      "locked": true,
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      }
+    },
+    {
+      "id": "x9",
+      "name": "chkBound",
+      "type": "CheckBox",
+      "left": 218,
+      "top": 72,
+      "width": 100,
+      "height": 18,
+      "caption": "セル連動",
+      "controlSource": "Sheet1!D4"
+    },
+    {
+      "id": "o1",
+      "name": "optA",
+      "type": "OptionButton",
+      "left": 6,
+      "top": 108,
+      "width": 100,
+      "height": 18,
+      "caption": "グループ A-1",
+      "groupName": "A",
+      "value": true
+    },
+    {
+      "id": "o2",
+      "name": "optB",
+      "type": "OptionButton",
+      "left": 6,
+      "top": 130,
+      "width": 100,
+      "height": 18,
+      "caption": "グループ A-2",
+      "groupName": "A",
+      "tabStop": false
+    },
+    {
+      "id": "o3",
+      "name": "optNull",
+      "type": "OptionButton",
+      "left": 112,
+      "top": 108,
+      "width": 100,
+      "height": 18,
+      "caption": "Null",
+      "tripleState": true,
+      "value": "Null"
+    },
+    {
+      "id": "o4",
+      "name": "optLeft",
+      "type": "OptionButton",
+      "left": 112,
+      "top": 130,
+      "width": 100,
+      "height": 18,
+      "caption": "左に",
+      "alignment": 0,
+      "specialEffect": 0,
+      "wordWrap": false,
+      "controlSource": "Sheet1!D7"
+    },
+    {
+      "id": "o5",
+      "name": "optPicture",
+      "type": "OptionButton",
+      "left": 218,
+      "top": 108,
+      "width": 100,
+      "height": 36,
+      "caption": "画像",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "picturePosition": 1
+    },
+    {
+      "id": "o6",
+      "name": "optDisabled",
+      "type": "OptionButton",
+      "left": 218,
+      "top": 150,
+      "width": 100,
+      "height": 18,
+      "caption": "無効",
+      "enabled": false,
+      "value": true,
+      "backStyle": 0,
+      "locked": true,
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      },
+      "textAlign": 3
+    },
+    {
+      "id": "o7",
+      "name": "optAuto",
+      "type": "OptionButton",
+      "left": 6,
+      "top": 160,
+      "width": 40,
+      "height": 18,
+      "caption": "自動サイズ",
+      "autoSize": true,
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      }
+    }
+  ]
+}

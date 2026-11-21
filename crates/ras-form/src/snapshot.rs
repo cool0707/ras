@@ -730,6 +730,14 @@ impl Projection {
         {
             take("textProps");
         }
+        if source.tab_strip.is_some() && record.mask & (1 << 22) != 0 {
+            // The tail of a TabStrip record is its TabData (each tab's Visible and Enabled),
+            // which `tabs` holds.
+            let tabs = record.value("TabData").unwrap_or(0).max(0) as usize;
+            if record.tail.len() == tabs * 4 {
+                take("opaqueRecordTail");
+            }
+        }
         if source.level.as_ref().is_some_and(|l| l.record.sizes.get("LogicalSize") == Some(&(0, 0))) {
             // An empty scroll area is what generation writes for a Frame, MultiPage or Page.
             take("logicalSize");

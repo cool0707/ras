@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckTextBoxes",
+    "caption": "TextBox の確認",
+    "width": 330,
+    "height": 230
+  },
+  "controls": [
+    {
+      "id": "t1",
+      "name": "txtPlain",
+      "type": "TextBox",
+      "left": 6,
+      "top": 6,
+      "width": 100,
+      "height": 18,
+      "text": "既定"
+    },
+    {
+      "id": "t2",
+      "name": "txtMulti",
+      "type": "TextBox",
+      "left": 112,
+      "top": 6,
+      "width": 100,
+      "height": 48,
+      "text": "複数行の\r\nテキスト\r\n3 行目",
+      "multiLine": true,
+      "scrollBars": 2,
+      "enterKeyBehavior": true,
+      "tabKeyBehavior": true,
+      "wordWrap": false,
+      "locked": true
+    },
+    {
+      "id": "t3",
+      "name": "txtPassword",
+      "type": "TextBox",
+      "left": 218,
+      "top": 6,
+      "width": 100,
+      "height": 18,
+      "text": "secret",
+      "passwordChar": "*",
+      "maxLength": 10
+    },
+    {
+      "id": "t4",
+      "name": "txtBehavior",
+      "type": "TextBox",
+      "left": 6,
+      "top": 30,
+      "width": 100,
+      "height": 18,
+      "text": "動作",
+      "enterFieldBehavior": 1,
+      "autoTab": true,
+      "maxLength": 5,
+      "autoWordSelect": false,
+      "hideSelection": false,
+      "selectionMargin": false,
+      "integralHeight": false,
+      "dragBehavior": 1,
+      "imeMode": 4
+    },
+    {
+      "id": "t5",
+      "name": "txtFlat",
+      "type": "TextBox",
+      "left": 6,
+      "top": 60,
+      "width": 100,
+      "height": 18,
+      "text": "Flat",
+      "specialEffect": 0,
+      "backStyle": 0
+    },
+    {
+      "id": "t6",
+      "name": "txtRaised",
+      "type": "TextBox",
+      "left": 112,
+      "top": 60,
+      "width": 100,
+      "height": 18,
+      "text": "Raised",
+      "specialEffect": 1
+    },
+    {
+      "id": "t7",
+      "name": "txtEtched",
+      "type": "TextBox",
+      "left": 218,
+      "top": 60,
+      "width": 100,
+      "height": 18,
+      "text": "Etched",
+      "specialEffect": 3
+    },
+    {
+      "id": "t8",
+      "name": "txtBump",
+      "type": "TextBox",
+      "left": 6,
+      "top": 84,
+      "width": 100,
+      "height": 18,
+      "text": "Bump",
+      "specialEffect": 6
+    },
+    {
+      "id": "t9",
+      "name": "txtBorder",
+      "type": "TextBox",
+      "left": 112,
+      "top": 84,
+      "width": 100,
+      "height": 18,
+      "text": "Single",
+      "borderStyle": 1,
+      "borderColor": {
+        "kind": "rgb",
+        "value": "#00A000"
+      },
+      "backColor": {
+        "kind": "rgb",
+        "value": "#F0F8FF"
+      },
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#000080"
+      },
+      "textAlign": 2
+    },
+    {
+      "id": "t10",
+      "name": "txtDisabled",
+      "type": "TextBox",
+      "left": 218,
+      "top": 84,
+      "width": 100,
+      "height": 18,
+      "text": "無効",
+      "enabled": false
+    },
+    {
+      "id": "t11",
+      "name": "txtFont",
+      "type": "TextBox",
+      "left": 6,
+      "top": 108,
+      "width": 150,
+      "height": 24,
+      "text": "フォント",
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      },
+      "textAlign": 3
+    },
+    {
+      "id": "t12",
+      "name": "txtAuto",
+      "type": "TextBox",
+      "left": 162,
+      "top": 108,
+      "width": 60,
+      "height": 18,
+      "text": "AutoSize の幅",
+      "autoSize": true,
+      "mousePointer": 3
+    },
+    {
+      "id": "t13",
+      "name": "txtBound",
+      "type": "TextBox",
+      "left": 6,
+      "top": 138,
+      "width": 100,
+      "height": 18,
+      "controlSource": "Sheet1!D1",
+      "tabStop": false,
+      "tabIndex": 0
+    }
+  ]
+}

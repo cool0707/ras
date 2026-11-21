@@ -1,0 +1,169 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckListBoxes",
+    "caption": "ListBox の確認",
+    "width": 330,
+    "height": 220
+  },
+  "controls": [
+    {
+      "id": "b1",
+      "name": "lstMulti",
+      "type": "ListBox",
+      "left": 6,
+      "top": 6,
+      "width": 100,
+      "height": 60,
+      "list": [
+        "りんご",
+        "みかん",
+        "ぶどう"
+      ],
+      "multiSelect": 1,
+      "listStyle": 1
+    },
+    {
+      "id": "b2",
+      "name": "lstColumns",
+      "type": "ListBox",
+      "left": 112,
+      "top": 6,
+      "width": 200,
+      "height": 60,
+      "list": [
+        [
+          "001",
+          "山田",
+          "営業"
+        ],
+        [
+          "002",
+          "佐藤",
+          "経理"
+        ],
+        [
+          "003",
+          "鈴木",
+          "総務"
+        ]
+      ],
+      "selectedIndex": 1,
+      "columnCount": 3,
+      "columnWidths": "30;;60",
+      "columnHeads": true,
+      "boundColumn": 0,
+      "textColumn": 0,
+      "matchEntry": 1
+    },
+    {
+      "id": "b3",
+      "name": "lstRows",
+      "type": "ListBox",
+      "left": 6,
+      "top": 72,
+      "width": 100,
+      "height": 60,
+      "rowSource": "Sheet1!A1:A3",
+      "controlSource": "Sheet1!D3",
+      "integralHeight": false
+    },
+    {
+      "id": "b4",
+      "name": "lstStyle",
+      "type": "ListBox",
+      "left": 112,
+      "top": 72,
+      "width": 100,
+      "height": 60,
+      "list": [
+        "A",
+        "B"
+      ],
+      "multiSelect": 2,
+      "specialEffect": 0,
+      "borderStyle": 1,
+      "borderColor": {
+        "kind": "rgb",
+        "value": "#0000C0"
+      },
+      "backColor": {
+        "kind": "rgb",
+        "value": "#FFF8F0"
+      },
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#800000"
+      },
+      "textAlign": 3,
+      "imeMode": 2,
+      "locked": true
+    },
+    {
+      "id": "b5",
+      "name": "lstDisabled",
+      "type": "ListBox",
+      "left": 218,
+      "top": 72,
+      "width": 100,
+      "height": 60,
+      "list": [
+        "無効",
+        "Disabled"
+      ],
+      "enabled": false,
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      },
+      "mousePointer": 12
+    },
+    {
+      "id": "b6",
+      "name": "lstRaised",
+      "type": "ListBox",
+      "left": 6,
+      "top": 138,
+      "width": 100,
+      "height": 50,
+      "list": [
+        "Raised"
+      ],
+      "specialEffect": 1,
+      "tabStop": false
+    },
+    {
+      "id": "b7",
+      "name": "lstEtched",
+      "type": "ListBox",
+      "left": 112,
+      "top": 138,
+      "width": 100,
+      "height": 50,
+      "list": [
+        "Etched"
+      ],
+      "specialEffect": 3
+    },
+    {
+      "id": "b8",
+      "name": "lstBump",
+      "type": "ListBox",
+      "left": 218,
+      "top": 138,
+      "width": 100,
+      "height": 50,
+      "list": [
+        "Bump"
+      ],
+      "specialEffect": 6
+    }
+  ]
+}

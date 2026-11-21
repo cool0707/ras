@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckMultiPages",
+    "caption": "MultiPage の確認",
+    "width": 320,
+    "height": 280
+  },
+  "controls": [
+    {
+      "id": "m1",
+      "name": "mpTop",
+      "type": "MultiPage",
+      "left": 6,
+      "top": 6,
+      "width": 150,
+      "height": 90,
+      "selectedIndex": 0,
+      "tabStop": false
+    },
+    {
+      "id": "m1a",
+      "parentId": "m1",
+      "name": "mpTopA",
+      "type": "Page",
+      "caption": "ページ1"
+    },
+    {
+      "id": "m1b",
+      "parentId": "m1",
+      "name": "mpTopB",
+      "type": "Page",
+      "caption": "Page 2"
+    },
+    {
+      "id": "m1l",
+      "name": "mpTopLabel",
+      "type": "Label",
+      "left": 3,
+      "top": 3,
+      "width": 70,
+      "height": 16,
+      "caption": "中身",
+      "parentId": "m1a"
+    },
+    {
+      "id": "m2",
+      "name": "mpBottom",
+      "type": "MultiPage",
+      "left": 162,
+      "top": 6,
+      "width": 150,
+      "height": 90,
+      "tabOrientation": 1,
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      }
+    },
+    {
+      "id": "m2a",
+      "parentId": "m2",
+      "name": "mpBottomA",
+      "type": "Page",
+      "caption": "ページ1"
+    },
+    {
+      "id": "m2b",
+      "parentId": "m2",
+      "name": "mpBottomB",
+      "type": "Page",
+      "caption": "Page 2"
+    },
+    {
+      "id": "m2l",
+      "name": "mpBottomLabel",
+      "type": "Label",
+      "left": 3,
+      "top": 3,
+      "width": 70,
+      "height": 16,
+      "caption": "中身",
+      "parentId": "m2a"
+    },
+    {
+      "id": "m3",
+      "name": "mpLeft",
+      "type": "MultiPage",
+      "left": 6,
+      "top": 102,
+      "width": 150,
+      "height": 90,
+      "tabOrientation": 2,
+      "tabFixedWidth": 30,
+      "tabFixedHeight": 20
+    },
+    {
+      "id": "m3a",
+      "parentId": "m3",
+      "name": "mpLeftA",
+      "type": "Page",
+      "caption": "ページ1"
+    },
+    {
+      "id": "m3b",
+      "parentId": "m3",
+      "name": "mpLeftB",
+      "type": "Page",
+      "caption": "Page 2"
+    },
+    {
+      "id": "m3l",
+      "name": "mpLeftLabel",
+      "type": "Label",
+      "left": 3,
+      "top": 3,
+      "width": 70,
+      "height": 16,
+      "caption": "中身",
+      "parentId": "m3a"
+    },
+    {
+      "id": "m4",
+      "name": "mpRight",
+      "type": "MultiPage",
+      "left": 162,
+      "top": 102,
+      "width": 150,
+      "height": 90,
+      "tabOrientation": 3,
+      "style": 1,
+      "multiRow": true
+    },
+    {
+      "id": "m4a",
+      "parentId": "m4",
+      "name": "mpRightA",
+      "type": "Page",
+      "caption": "ページ1"
+    },
+    {
+      "id": "m4b",
+      "parentId": "m4",
+      "name": "mpRightB",
+      "type": "Page",
+      "caption": "Page 2"
+    },
+    {
+      "id": "m4l",
+      "name": "mpRightLabel",
+      "type": "Label",
+      "left": 3,
+      "top": 3,
+      "width": 70,
+      "height": 16,
+      "caption": "中身",
+      "parentId": "m4a"
+    },
+    {
+      "id": "m5",
+      "name": "mpNone",
+      "type": "MultiPage",
+      "left": 6,
+      "top": 198,
+      "width": 150,
+      "height": 70,
+      "style": 2,
+      "backColor": {
+        "kind": "rgb",
+        "value": "#F0FFF0"
+      },
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#000080"
+      }
+    },
+    {
+      "id": "m5a",
+      "parentId": "m5",
+      "name": "mpNoneA",
+      "type": "Page",
+      "caption": "ページ1",
+      "controlTipText": "ページのヒント",
+      "tag": "pt",
+      "accelerator": "P",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "pictureAlignment": 0,
+      "pictureSizeMode": 1,
+      "pictureTiling": true
+    },
+    {
+      "id": "m5b",
+      "parentId": "m5",
+      "name": "mpNoneB",
+      "type": "Page",
+      "caption": "Page 2"
+    },
+    {
+      "id": "m5l",
+      "name": "mpNoneLabel",
+      "type": "Label",
+      "left": 3,
+      "top": 3,
+      "width": 70,
+      "height": 16,
+      "caption": "中身",
+      "parentId": "m5a"
+    },
+    {
+      "id": "m6",
+      "name": "mpDisabled",
+      "type": "MultiPage",
+      "left": 162,
+      "top": 198,
+      "width": 150,
+      "height": 70,
+      "enabled": false,
+      "selectedIndex": 1
+    },
+    {
+      "id": "m6a",
+      "parentId": "m6",
+      "name": "mpDisabledA",
+      "type": "Page",
+      "caption": "ページ1"
+    },
+    {
+      "id": "m6b",
+      "parentId": "m6",
+      "name": "mpDisabledB",
+      "type": "Page",
+      "caption": "Page 2"
+    },
+    {
+      "id": "m6l",
+      "name": "mpDisabledLabel",
+      "type": "Label",
+      "left": 3,
+      "top": 3,
+      "width": 70,
+      "height": 16,
+      "caption": "中身",
+      "parentId": "m6a"
+    }
+  ]
+}

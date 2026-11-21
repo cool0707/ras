@@ -663,6 +663,58 @@ mod tests {
         }
     }
 
+    /// The forms of `tools/excel-check` (checked against Excel on Windows) set every plain
+    /// property of every control type, and of the form, to a value a new one does not have.
+    #[test]
+    fn the_excel_check_forms_cover_every_property() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/excel-check");
+        let mut specs = Vec::new();
+        for entry in std::fs::read_dir(root.join("forms")).unwrap() {
+            let path = entry.unwrap().path();
+            if !path.to_string_lossy().ends_with(".form.json") {
+                continue;
+            }
+            let parsed = crate::parse(&std::fs::read_to_string(&path).unwrap());
+            assert!(!parsed.has_errors(), "{}: {:?}", path.display(), parsed.issues);
+            let spec = parsed.spec.unwrap();
+            crate::compile_in(&spec, 932, &root).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            specs.push(spec);
+        }
+        let differs = |p: &Scalar, class: Option<u16>, value: &Value| -> bool {
+            let Ok(raw) = to_raw(p, value) else { return false };
+            if matches!(p.kind, Kind::Text | Kind::Widths) {
+                return value.as_str().is_some_and(|s| !s.is_empty());
+            }
+            match (p.store, class) {
+                (Store::Bit(..) | Store::Bits(..), Some(class)) => raw != get_bits(fresh_bits(class), p),
+                (Store::Site(bit), Some(class)) => raw != (fresh_site_flags(class) >> bit) & 1,
+                (Store::Flag(_, set), _) => raw != i64::from(!set),
+                (Store::FieldBits(..), _) => {
+                    get_field_bits(put_field_bits(p.omitted, p, raw), p) != get_field_bits(p.fresh.unwrap_or(p.omitted), p)
+                }
+                _ => raw != p.fresh.unwrap_or(p.omitted),
+            }
+        };
+        let mut missing = Vec::new();
+        for p in SCALARS {
+            for control_type in p.types {
+                let class = class_of(control_type);
+                let covered = specs.iter().flat_map(|s| &s.controls).any(|c| {
+                    c.control_type == *control_type && c.scalar(p.name).is_some_and(|v| differs(p, class, v))
+                });
+                if !covered {
+                    missing.push(format!("{control_type}.{}", p.name));
+                }
+            }
+        }
+        for p in FORM_SCALARS {
+            if !specs.iter().any(|s| s.form.scalar(p.name).is_some_and(|v| differs(p, None, v))) {
+                missing.push(format!("form.{}", p.name));
+            }
+        }
+        assert!(missing.is_empty(), "not covered by tools/excel-check/forms: {missing:?}");
+    }
+
     #[test]
     fn every_property_goes_round_and_a_new_control_shows_none() {
         for p in SCALARS {

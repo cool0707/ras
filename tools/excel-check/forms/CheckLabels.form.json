@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "CheckLabels",
+    "caption": "Label の確認",
+    "width": 330,
+    "height": 230
+  },
+  "controls": [
+    {
+      "id": "l1",
+      "name": "lblPlain",
+      "type": "Label",
+      "left": 6,
+      "top": 6,
+      "width": 90,
+      "height": 18,
+      "caption": "既定のラベル"
+    },
+    {
+      "id": "l2",
+      "name": "lblStyle",
+      "type": "Label",
+      "left": 102,
+      "top": 6,
+      "width": 110,
+      "height": 36,
+      "caption": "書式 Style",
+      "backStyle": 0,
+      "specialEffect": 1,
+      "wordWrap": false,
+      "textAlign": 3,
+      "foreColor": {
+        "kind": "rgb",
+        "value": "#C00000"
+      },
+      "font": {
+        "name": "Meiryo UI",
+        "size": 10,
+        "bold": true,
+        "italic": true,
+        "underline": true,
+        "strikeThrough": true,
+        "charset": 128
+      },
+      "tag": "タグ",
+      "controlTipText": "ヒント"
+    },
+    {
+      "id": "l3",
+      "name": "lblBorder",
+      "type": "Label",
+      "left": 220,
+      "top": 6,
+      "width": 100,
+      "height": 36,
+      "caption": "枠 Border",
+      "borderStyle": 1,
+      "borderColor": {
+        "kind": "rgb",
+        "value": "#0060C0"
+      },
+      "backColor": {
+        "kind": "rgb",
+        "value": "#FFF0C0"
+      },
+      "textAlign": 2
+    },
+    {
+      "id": "l4",
+      "name": "lblAuto",
+      "type": "Label",
+      "left": 6,
+      "top": 48,
+      "width": 40,
+      "height": 18,
+      "caption": "自動サイズ AutoSize",
+      "autoSize": true
+    },
+    {
+      "id": "l5",
+      "name": "lblPicture",
+      "type": "Label",
+      "left": 102,
+      "top": 48,
+      "width": 110,
+      "height": 50,
+      "caption": "画像 Picture",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "picturePosition": 1,
+      "mousePointer": 99,
+      "mouseIcon": {
+        "path": "forms/assets/hand.cur"
+      }
+    },
+    {
+      "id": "l6",
+      "name": "lblDisabled",
+      "type": "Label",
+      "left": 220,
+      "top": 48,
+      "width": 100,
+      "height": 18,
+      "caption": "無効 Disabled",
+      "enabled": false
+    },
+    {
+      "id": "l7",
+      "name": "lblEtched",
+      "type": "Label",
+      "left": 6,
+      "top": 104,
+      "width": 90,
+      "height": 30,
+      "caption": "Etched",
+      "specialEffect": 3
+    },
+    {
+      "id": "l8",
+      "name": "lblBump",
+      "type": "Label",
+      "left": 102,
+      "top": 104,
+      "width": 90,
+      "height": 30,
+      "caption": "Bump",
+      "specialEffect": 6,
+      "mousePointer": 2
+    },
+    {
+      "id": "l9",
+      "name": "lblSunken",
+      "type": "Label",
+      "left": 220,
+      "top": 104,
+      "width": 100,
+      "height": 30,
+      "caption": "Sunken 折り返し",
+      "specialEffect": 2
+    },
+    {
+      "id": "l10",
+      "name": "lblCenterPicture",
+      "type": "Label",
+      "left": 6,
+      "top": 140,
+      "width": 110,
+      "height": 60,
+      "caption": "中央",
+      "picture": {
+        "path": "forms/assets/logo.bmp"
+      },
+      "picturePosition": 12,
+      "backStyle": 0
+    },
+    {
+      "id": "l11",
+      "name": "lblHidden",
+      "type": "Label",
+      "left": 220,
+      "top": 140,
+      "width": 100,
+      "height": 18,
+      "caption": "非表示",
+      "visible": false
+    }
+  ]
+}
