@@ -42,8 +42,11 @@ function projectWorkbook(root: string): string | undefined {
 	}
 }
 
-/** The page of `ras book view` for a workbook. */
-function page(root: string | undefined, file: string, before: string | undefined, title: string | undefined): Promise<string> {
+/**
+ * The page of `ras book view` for a workbook. `drawings`: the workbook whose shapes, pictures and
+ * controls are drawn (a workbook a run saved keeps its cells, not all of them).
+ */
+function page(root: string | undefined, file: string, before: string | undefined, title: string | undefined, drawings?: string): Promise<string> {
 	const exe = findServerExecutable(setting("path"), root ?? path.dirname(file));
 	if (exe === undefined) {
 		return Promise.reject(new Error("ras 実行ファイルが見つかりません。設定 ras.path を確認してください。"));
@@ -54,6 +57,9 @@ function page(root: string | undefined, file: string, before: string | undefined
 	}
 	if (title !== undefined) {
 		args.push("--title", title);
+	}
+	if (drawings !== undefined) {
+		args.push("--drawings", drawings);
 	}
 	return new Promise((resolve, reject) => {
 		cp.execFile(exe, args, { cwd: root ?? path.dirname(file), windowsHide: true, maxBuffer: 256 * 1024 * 1024 }, (error, stdout, stderr) => {
@@ -87,7 +93,7 @@ export async function showWorkbook(file: string): Promise<void> {
 	const sameBook = source !== undefined && path.parse(source).name.toLowerCase() === path.parse(file).name.toLowerCase();
 	const before = saved && sameBook && source !== undefined && fs.existsSync(source) ? source : undefined;
 	try {
-		show(await page(root, file, before, undefined), `シート: ${path.basename(file)}`, true);
+		show(await page(root, file, before, undefined, before), `シート: ${path.basename(file)}`, true);
 	} catch (error) {
 		void vscode.window.showErrorMessage(`RAS: ${path.basename(file)} を表示できませんでした: ${error instanceof Error ? error.message : String(error)}`);
 	}
@@ -173,7 +179,8 @@ class Follower implements vscode.DebugAdapterTracker {
 			const last = path.join(previous, book.file);
 			// The first time: against the file the workbook was read from.
 			const before = fs.existsSync(last) ? last : book.source !== null && fs.existsSync(book.source) ? book.source : undefined;
-			const html = await page(root, path.join(current, book.file), before, book.name);
+			const source = book.source !== null && fs.existsSync(book.source) ? book.source : undefined;
+			const html = await page(root, path.join(current, book.file), before, book.name, source);
 			show(html, `シート: ${book.name}（デバッグ中）`, false);
 			this.shown = key;
 		} catch {

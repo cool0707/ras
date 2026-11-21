@@ -1799,7 +1799,7 @@ mod format;
 mod inspect;
 mod paste;
 mod sort;
-mod view;
+pub mod view;
 
 pub use gridcraft_model::FilterCriterion;
 pub use inspect::{CellInfo, FormulaRegion, RuleInfo, SheetInfo, TableInfo};
