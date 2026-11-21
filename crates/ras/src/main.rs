@@ -52,6 +52,9 @@ enum Command {
         /// 機械的に直せる警告（Excel / VBA のメンバー名の大文字小文字など）をソースに書き戻す
         #[arg(long)]
         fix: bool,
+        /// stand-in: Excel を使わない実行（ras run・ras test・Excel のないデバッグ実行）のブックの代役で使えないものも警告する
+        #[arg(long, value_enum, value_name = "TARGET")]
+        target: Option<CheckTarget>,
     },
     /// VBA ファイルを build/ に出力する（--target js でデバッグ用の JavaScript を build/debug/ に出力する）
     Build {
@@ -156,6 +159,14 @@ enum FormCommand {
         #[arg(long)]
         force: bool,
     },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
+enum CheckTarget {
+    /// Excel で動かす VBA（既定）
+    Excel,
+    /// ブックの代役
+    StandIn,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
@@ -900,7 +911,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
     let project = cli.project.as_deref();
     match &cli.command {
         Command::Init { dir, workbook } => cmd_init(dir, workbook.as_deref()),
-        Command::Check { fix } => {
+        Command::Check { fix, target } => {
             let root = find_root(project)?;
             // The tests are checked too (spec §14.12.1); they are no part of what is built.
             let mut prog = analyze_with_tests(&root)?;
@@ -912,6 +923,9 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 }
             }
             let mut errors = report(&prog, &prog.diagnostics, true);
+            if *target == Some(CheckTarget::StandIn) || (target.is_none() && prog.config.lint.stand_in) {
+                report(&prog, &ras_compiler::standin::check(&prog), true);
+            }
             // Code generation can report further problems (size limits, unsupported constructs).
             let mut compiled = HashMap::new();
             if errors == 0 {

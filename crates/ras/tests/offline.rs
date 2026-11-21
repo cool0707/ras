@@ -766,3 +766,63 @@ fn diagnostics_as_json_and_explained() {
     assert!(err.contains("`E9999` という診断のコードはありません"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `stdlib/standin.json` is what `tools/standin/members.js` lists from the stand-in itself.
+#[test]
+fn stand_in_members_are_up_to_date() {
+    if !has_node() {
+        return;
+    }
+    let dir = project("standin-list", &mut sales(), &[("src/main.ras", "export function f() {\n}\n")]);
+    let (code, _, err) = ras(&dir, &["build", "--target", "js"]);
+    assert_eq!(code, 0, "{err}");
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let out = Command::new("node").arg(repo.join("tools/standin/members.js")).arg(dir.join("build/debug")).env("RAS_BOOK_ADDON", addon()).output().expect("node");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let listed = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
+    let file = repo.join("crates/ras-compiler/stdlib/standin.json");
+    if std::env::var_os("RAS_UPDATE_STANDIN").is_some() {
+        std::fs::write(&file, &listed).unwrap();
+    }
+    let committed = std::fs::read_to_string(&file).unwrap().replace("\r\n", "\n");
+    assert!(committed == listed, "crates/ras-compiler/stdlib/standin.json is out of date: run this test with RAS_UPDATE_STANDIN=1");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn check_warns_about_what_the_stand_in_lacks() {
+    let source = r#"export function f() {
+    const ws = Sheet1;
+    ws.range("A1").value = application.max(1, 2) + worksheets.count;
+    ws.range("A1").font.bold = true;
+    ws.range("A1").addComment("x");
+    ws.shapes.count;
+    const file = application.getOpenFilename();
+    application.run("Legacy");
+    const conn = createObject("ADODB.Connection");
+    const dict = new Scripting.Dictionary();
+    debug.print(format(now(), "yyyy"), file, dict.count);
+}
+"#;
+    let dir = project("standin", &mut sales(), &[("src/main.ras", source)]);
+    // Not by default: the program is VBA for Excel.
+    let (code, _, err) = ras(&dir, &["check"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!err.contains("W051"), "{err}");
+
+    let (code, out, _) = ras(&dir, &["check", "--target", "stand-in", "--message-format", "json"]);
+    assert_eq!(code, 0, "warnings only: {out}");
+    let found: Vec<(String, i64)> = out
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|d| d["code"].as_str().is_some_and(|c| c.starts_with("W051")))
+        .map(|d| (d["code"].as_str().unwrap().to_string(), d["range"]["start"]["line"].as_i64().unwrap()))
+        .collect();
+    assert_eq!(found, vec![("W0510".to_string(), 5), ("W0510".to_string(), 6), ("W0511".to_string(), 7), ("W0511".to_string(), 8), ("W0512".to_string(), 9)], "{out}");
+
+    // Or always, from ras.toml.
+    std::fs::write(dir.join("ras.toml"), "[project]\nname = \"Sales\"\nworkbook = \"Book.xlsx\"\n\n[lint]\nstand-in = true\n").unwrap();
+    let (_, _, err) = ras(&dir, &["check"]);
+    assert!(err.contains("warning[W0510]: `addComment` はブックの代役の `Range` にありません"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1707,7 +1707,7 @@ module.exports = {
     date, clone, i32, i64, idiv, imod, div, fmod, pow, sqrt, log, post, round, bankersRound, numStr, toFixed, val,
     cnum, cint, clng, toInt, toLong, cbool, cdate, cstr, str, dyn, cmp, eq,
     trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
-    configure, hooks, note, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
+    configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
     vba, declare, module: module_, ensureInit, entries, run, form,
 };

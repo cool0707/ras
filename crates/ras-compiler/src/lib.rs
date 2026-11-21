@@ -21,6 +21,7 @@ pub mod names;
 pub mod query;
 pub mod refs;
 pub mod runtime;
+pub mod standin;
 pub mod testing;
 pub mod userform;
 pub mod vba;

@@ -2240,5 +2240,7 @@ module.exports = function createExcel(rt, addon, options) {
         return written;
     }
 
-    return { application, global, runMacro, finish, snapshot, restore, useWorkbook, saveAll, Range, Worksheet, Workbook };
+    // The objects of the stand-in by the name of their Excel class (what `tools/standin/members.js` lists).
+    const classes = { Application, Workbooks, Workbook, Sheets, Worksheet, Range, Names, Name, Sort: SortState };
+    return { application, global, runMacro, finish, snapshot, restore, useWorkbook, saveAll, classes, Range, Worksheet, Workbook };
 };
