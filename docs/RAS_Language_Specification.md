@@ -1209,9 +1209,9 @@ function onAnySheetChange(sh: object, target: Excel.Range) { ... }
 
 RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化済みフラグで1回に制限する。
 
-1. `Workbook_Open`（即時実行せず `Application.OnTime Now, "RAS_DeferredInit"` で遅延実行し、ウィンドウ準備前の失敗を避ける）
+1. `Workbook_Open`。その場で初期化し、`@on("Workbook.Open")` のハンドラを呼ぶ。ただし、ブックが保護ビューから出るところ（「編集を有効にする」）なら、次の `Workbook_Activate` / `Workbook_WindowActivate` まで遅らせる。このときの `Workbook_Open` は保護ビューのブックが閉じる前に起き、オブジェクト モデルの呼び出し（`Range.Select` など）がエラー 1004 になるため（Microsoft「Object Model calls may fail from WorkbookOpen event when exiting Protected View」の回避策と同じ。保護ビューにあるかは `Application.ProtectedViewWindows` で調べる）。`Application.OnTime` での遅延は使わない: 予約した呼び出しの前にブックが閉じられると、Excel は呼び出すためにブックを開き直し（マクロの中で開いてすぐ閉じた場合など）、閉じる途中のイベントからは予約を取り消せない
 2. `Auto_Open`
-3. `Workbook_Activate` / `Workbook_WindowActivate`
+3. `Workbook_Activate` / `Workbook_WindowActivate`（1 で遅らせたハンドラもここで呼ぶ）
 4. すべてのマクロ入口（`@macro` / `export` された引数なし Sub、ボタン・リボンのコールバック）の先頭
 5. リボンの `onLoad` コールバック
 

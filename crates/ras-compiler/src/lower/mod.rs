@@ -1602,8 +1602,9 @@ impl<'p> Lowerer<'p> {
                 let proc_name = format!("{}_{ev}", if is_wb { "Workbook" } else { "Worksheet" });
                 let mut body = Vec::new();
                 if is_wb && ev == "Open" {
-                    // Deferred so that windows are ready (spec §12.3 path 1).
-                    body.push(VStmt::Raw("Application.OnTime Now, \"'\" & ThisWorkbook.Name & \"'!RAS_DeferredInit\"".into()));
+                    // At once, or when the workbook is activated if it is leaving the protected
+                    // view (spec §12.3 path 1).
+                    body.push(call_stmt("RAS_WorkbookOpen", vec![]));
                     deferred_open = calls;
                 } else {
                     for flag in &locals {
@@ -1611,6 +1612,10 @@ impl<'p> Lowerer<'p> {
                     }
                     body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
                     body.push(call_stmt("RAS_EnsureInit", vec![]));
+                    if is_wb && needs_init && (ev == "Activate" || ev == "WindowActivate") {
+                        // What `Workbook_Open` left for now (the workbook was in the protected view).
+                        body.push(call_stmt("RAS_OpenDeferred", vec![]));
+                    }
                     body.extend(calls);
                     body.push(VStmt::Exit("Sub"));
                     body.push(VStmt::Label("RAS_OnError".into()));
@@ -1633,6 +1638,32 @@ impl<'p> Lowerer<'p> {
             body.push(call_stmt("RAS_EventError", vec![lit("\"Workbook.Open\""), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
             let simple = |name: &str, body: Vec<VStmt>| VProc { kind: ProcKind::Sub, public: true, friend: false, name: name.into(), params: vec![], ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None };
             self.out[ri].procs.push(simple("RAS_DeferredInit", body));
+            // `Workbook_Open` while the workbook leaves the protected view ("Enable Editing") comes
+            // before Excel is ready for it: calls of the object model fail with error 1004. As
+            // Microsoft says to ("Object Model calls may fail from WorkbookOpen event when exiting
+            // Protected View"), what the event does then waits for `Workbook_Activate`. Not
+            // `Application.OnTime`: Excel opens a workbook again to make a call it was asked for,
+            // when the workbook is closed before it, and the call cannot be taken back while the
+            // workbook closes (seen with Excel 2021).
+            self.out[ri].decls.push("Private ras_open_deferred As Boolean".into());
+            let open = vec![VStmt::Raw("If RAS_InProtectedView() Then".into()), VStmt::Raw("    ras_open_deferred = True".into()), VStmt::Raw("Else".into()), VStmt::Raw("    RAS_DeferredInit".into()), VStmt::Raw("End If".into())];
+            self.out[ri].procs.push(simple("RAS_WorkbookOpen", open));
+            let later = vec![VStmt::Raw("If Not ras_open_deferred Then Exit Sub".into()), VStmt::Raw("ras_open_deferred = False".into()), VStmt::Raw("RAS_DeferredInit".into())];
+            self.out[ri].procs.push(simple("RAS_OpenDeferred", later));
+            // Late-bound: Excel 2007 has no protected view (and no `ProtectedViewWindows`).
+            let in_view = vec![
+                VStmt::Raw("Dim app As Object".into()),
+                VStmt::Raw("Dim w As Object".into()),
+                VStmt::Raw("On Error Resume Next".into()),
+                VStmt::Raw("Set app = Application".into()),
+                VStmt::Raw("Set w = app.ProtectedViewWindows.Item(ThisWorkbook.Name)".into()),
+                VStmt::Raw("RAS_InProtectedView = Not w Is Nothing".into()),
+            ];
+            let mut f = simple("RAS_InProtectedView", in_view);
+            f.kind = ProcKind::Function;
+            f.public = false;
+            f.ret = Some("Boolean".into());
+            self.out[ri].procs.push(f);
             // spec §12.3 path 2
             self.out[ri].procs.push(simple("Auto_Open", vec![call_stmt("RAS_EnsureInit", vec![])]));
         }
