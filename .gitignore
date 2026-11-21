@@ -7,4 +7,4 @@ editors/vscode/*.vsix
 .DS_Store
 editors/vscode/bin
 /examples/*/build
-/tools/excel-check/out
+/tools/*/out

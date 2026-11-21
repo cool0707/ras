@@ -28,7 +28,7 @@ RAS が書き込むユーザーフォーム（`ras pack`）と読み込むユー
 ## 必要なもの
 
 - Windows と Excel（デスクトップ版）
-- Windows PowerShell 5.1（`powershell.exe`。Windows に最初から入っているもの）
+- Windows PowerShell 5.1（`powershell.exe`。Windows に最初から入っているもの）。`tools/` の他のスクリプトは PowerShell 7 で書く決まりですが（[`../README.md`](../README.md)）、このスクリプトは 5.1 向けに書いてあり、7 での動作は確かめていません
 - `ras`（PATH に置くか、`-Ras` でパスを指定）
 - Excel の［ファイル］［オプション］［トラスト センター］［トラスト センターの設定］［マクロの設定］で「**VBA プロジェクト オブジェクト モデルへのアクセスを信頼する**」をオン
 
