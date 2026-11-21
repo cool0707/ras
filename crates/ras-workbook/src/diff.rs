@@ -137,9 +137,10 @@ fn one_block(a: &[u64], b: &[u64]) -> Option<(bool, u32, u32)> {
     let count = long.len() - short.len();
     let prefix = short.iter().zip(long).take_while(|(x, y)| x == y).count();
     let suffix = short[prefix..].iter().rev().zip(long.iter().rev()).take_while(|(x, y)| x == y).count();
-    // Lines that differ besides the block are told as changed cells; the block is taken when
-    // most of the shorter side matches around it.
-    if (prefix + suffix) * 2 < short.len() || prefix + suffix == 0 {
+    // Lines added after the last one are new cells, not an insertion: something has to follow
+    // the block. Lines that differ besides the block are told as changed cells; the block is
+    // taken when most of the shorter side matches around it.
+    if suffix == 0 || (prefix + suffix) * 2 < short.len() {
         return None;
     }
     Some((inserted, prefix as u32, count as u32))
@@ -184,16 +185,9 @@ fn sheet_diff(name: &str, a: &Cells, b: &Cells, out: &mut Diff) {
         let aligned = count_changes(&candidate, b, true).saturating_sub(added_in_block);
         if aligned * 2 < direct.saturating_sub(removed).max(1) {
             out.structure.push(Structure::Lines { sheet: name.to_string(), columns, inserted, at, count });
+            // The cells of inserted lines are told as new cells.
             a = candidate;
             moved = true;
-            if inserted {
-                // The cells of the inserted lines are new, not changes of what was there.
-                for (k, c) in b {
-                    if (at..at + count).contains(if columns { &k.1 } else { &k.0 }) {
-                        a.insert(*k, c.clone());
-                    }
-                }
-            }
         }
     }
     let mut keys: Vec<(u32, u32)> = a.keys().chain(b.keys()).copied().collect();

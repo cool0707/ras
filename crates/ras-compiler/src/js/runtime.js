@@ -1693,7 +1693,8 @@ Object.defineProperty(globalThis, "$rasDebugDescription", { value: debugDescript
 process.on("exit", () => {
     resetAppState();
     // The workbooks the program changed without Excel are saved under build/debug/workbooks/.
-    if (excelHost !== null) excelHost.finish();
+    // (`ras test` keeps the workbooks of the failed tests itself.)
+    if (excelHost !== null && config.saveOnExit !== false) excelHost.finish();
 });
 
 module.exports = {

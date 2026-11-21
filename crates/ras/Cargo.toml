@@ -25,6 +25,7 @@ encoding_rs.workspace = true
 notify.workspace = true
 
 [dev-dependencies]
+ras-workbook = { path = "../ras-workbook" }
 ras-ovba.workspace = true
 ras-form.workspace = true
 serde_json.workspace = true

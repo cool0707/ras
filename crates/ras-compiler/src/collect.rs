@@ -130,6 +130,14 @@ pub fn collect(inputs: Vec<SourceInput>, config: Config) -> Program {
     for m in 0..c.prog.modules.len() {
         c.resolve_imports(m);
     }
+    // The API of tests, where the module does not declare or import the name itself.
+    for m in 0..c.prog.modules.len() {
+        if c.prog.modules[m].is_test() {
+            for (name, sym) in c.prog.test_globals.clone() {
+                c.prog.modules[m].scope.entry(name).or_insert(sym);
+            }
+        }
+    }
     c.resolve_signatures();
     c.prog.cur_namespace = None;
     for m in 0..c.prog.modules.len() {
@@ -193,6 +201,10 @@ impl Collector {
         };
         let vba_name = match &form {
             Some((name, f)) => f.decl.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| name.clone()),
+            // A test module is no VBA module: its name only tells the modules apart at run time.
+            None if input.kind == ModuleKind::User && input.key.starts_with(TEST_KEY_PREFIX) => {
+                format!("T_{}", input.key[TEST_KEY_PREFIX.len()..].chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect::<String>())
+            }
             None => vba_module_name(&input.key),
         };
         self.prog.modules.push(ModuleData {
@@ -253,6 +265,7 @@ impl Collector {
                 }
                 dup
             }
+            Target::Global if self.prog.modules[module].key == TEST_DEFS_MODULE => self.prog.test_globals.insert(name.text.clone(), sym).is_some(),
             Target::Global => self.prog.globals.insert(name.text.clone(), sym).is_some(),
             Target::Namespace(ns) => {
                 self.prog.namespaces.entry(ns.clone()).or_default().insert(name.text.clone(), sym).is_some()
@@ -460,7 +473,7 @@ impl Collector {
     /// `name` as it is registered in a scope: with the RAS spelling.
     fn host_ident(&mut self, m: ModuleId, target: &Target, name: &ast::Ident) -> ast::Ident {
         let (js, _) = self.host_names(m, &name.text, true);
-        if matches!(target, Target::Global) && self.is_bundled_typedef(m) {
+        if matches!(target, Target::Global) && self.is_bundled_typedef(m) && self.prog.modules[m].key != TEST_DEFS_MODULE {
             self.prog.host_global_names.insert(name.text.to_lowercase(), js.clone());
         }
         ast::Ident { text: js, span: name.span }
@@ -793,7 +806,11 @@ impl Collector {
                 import_target(&self.prog, m, &imp.source)
             };
             let Some(t) = target else {
-                self.err(m, imp.source_span, "E0121", format!("モジュール `{}` が見つかりません", imp.source));
+                if imp.source.starts_with('.') && import_by_path(&self.prog, m, &imp.source).is_some_and(|t| self.prog.modules[t].is_test()) {
+                    self.err(m, imp.source_span, "E0701", format!("`{}` はテスト側のファイルです。`src/` / `forms/` のモジュールからテストのファイルは `import` できません", imp.source));
+                } else {
+                    self.err(m, imp.source_span, "E0121", format!("モジュール `{}` が見つかりません", imp.source));
+                }
                 continue;
             };
             if t == m {
@@ -1473,6 +1490,10 @@ pub fn import_target(prog: &Program, m: ModuleId, source: &str) -> Option<Module
     if !source.starts_with('.') {
         return prog.modules.iter().position(|x| x.kind == ModuleKind::Std && x.key == source);
     }
+    // A test module names what it imports by its path (`../src/report`, `./helper`).
+    if prog.modules[m].is_test() {
+        return import_by_path(prog, m, source);
+    }
     let base = prog.modules[m].key.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
     let mut parts: Vec<&str> = if base.is_empty() { Vec::new() } else { base.split('/').collect() };
     for seg in source.split('/') {
@@ -1498,7 +1519,33 @@ pub fn struct_map_class(prog: &Program) -> Option<ClassId> {
     }
 }
 
+/// The module a relative import names by the path of its file from the project root
+/// (`test/report.test.ras` importing `../src/report` → `src/report.ras`).
+fn import_by_path(prog: &Program, m: ModuleId, source: &str) -> Option<ModuleId> {
+    let from = &prog.modules[m].rel_path;
+    let mut parts: Vec<&str> = from.rsplit_once('/').map(|(d, _)| d.split('/').collect()).unwrap_or_default();
+    for seg in source.split('/') {
+        match seg {
+            "." | "" => {}
+            ".." => {
+                parts.pop()?;
+            }
+            s => parts.push(s),
+        }
+    }
+    let path = parts.join("/");
+    let path = path.strip_suffix(".ras").unwrap_or(&path);
+    prog.modules.iter().position(|x| x.kind == ModuleKind::User && x.rel_path.strip_suffix(".ras") == Some(path))
+}
+
 pub const STRUCT_MAP_MODULE: &str = "ras_collections";
+
+/// The bundled type definitions of the test API (`describe`, `expect`, ...; spec §14.12.4).
+pub const TEST_DEFS_MODULE: &str = "test.d";
+
+/// Import-key prefix of the test files and their helper modules (`test/a.test.ras` has the
+/// key `@test/test/a.test`): they are apart from the modules built into the workbook.
+pub const TEST_KEY_PREFIX: &str = "@test/";
 
 /// Import-key prefix of a form's code-behind (`forms/<Name>.ras` has the key `<forms>/<Name>`).
 /// It cannot be spelled by a relative import, so a code-behind is never imported.

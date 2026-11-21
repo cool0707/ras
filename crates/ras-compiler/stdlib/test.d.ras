@@ -1,0 +1,107 @@
+// テストの API（仕様 §14.12）。テストファイル（`test/**/*.test.ras`）とテスト用のヘルパーモジュールでだけ、
+// `import` なしで使える。`ras test` が JavaScript ランタイムとブックの代役で実行する（VBA には出力しない）。
+
+declare namespace RasTest {
+    /** `expect(actual)` の判定。失敗するとテストを止める（`try` / `catch` では捕捉されない）。 */
+    interface Matchers<T> {
+        /** 判定を逆にする。 */
+        readonly not: Matchers<T>;
+        /** RAS の `==` と同じ比較（オブジェクトは同一性）。 */
+        toBe(expected: T): void;
+        /** 配列・構造体・タプル・`Map` を要素ごとに比較する。 */
+        toEqual(expected: any): void;
+        /** 差の絶対値が `10 ^ -digits / 2` 未満（`digits` の既定は 2）。 */
+        toBeCloseTo(expected: double, digits?: int): void;
+        toBeGreaterThan(expected: any): void;
+        toBeGreaterThanOrEqual(expected: any): void;
+        toBeLessThan(expected: any): void;
+        toBeLessThanOrEqual(expected: any): void;
+        /** RAS の条件式と同じ判定で真。 */
+        toBeTruthy(): void;
+        toBeFalsy(): void;
+        /** `Empty`（空のセルの値）。 */
+        toBeEmpty(): void;
+        /** `Nothing`。 */
+        toBeNothing(): void;
+        /** 配列の要素、または文字列の部分文字列。 */
+        toContain(item: any): void;
+        /** 配列・文字列の長さ。 */
+        toHaveLength(n: int): void;
+        /** 文字列が正規表現（`VBScript.RegExp` の構文）に一致する。 */
+        toMatch(pattern: string): void;
+        /** `actual` は引数なしのラムダ。実行してエラーが起きれば成功。整数ならエラー番号、文字列なら説明に含まれる文字列で絞る。 */
+        toThrow(expected?: any): void;
+    }
+
+    /** `test.each(table)` / `describe.each(table)` の戻り値。 */
+    interface EachFn {
+        /** 表の行ごとにテストを作る。名前には `%s` `%i` `%d` `%f` `%%` と `$フィールド名` を書ける。 */
+        (name: string, body: any, options?: any): void;
+    }
+
+    interface TestFn {
+        /** テストを宣言する。`options` は `{ timeout: ミリ秒 }`。 */
+        (name: string, body: () => void, options?: any): void;
+        /** 実行しない（結果は「スキップ」）。 */
+        skip(name: string, body?: () => void, options?: any): void;
+        /** そのファイルで `only` の付いたものだけを実行する。 */
+        only(name: string, body: () => void, options?: any): void;
+        /** 本体のない予定のテスト（結果は「未実装」）。 */
+        todo(name: string): void;
+        /** 表の行ごとにテストを作る。 */
+        each(table: any): EachFn;
+    }
+
+    interface DescribeFn {
+        /** テストをまとめる。入れ子にできる。 */
+        (name: string, body: () => void): void;
+        skip(name: string, body: () => void): void;
+        only(name: string, body: () => void): void;
+        each(table: any): EachFn;
+    }
+
+    /** 置き換えた関数の呼び出しの記録。 */
+    interface Mock {
+        /** 呼び出しごとの引数（`calls[0].prompt` など。`mockRun` は `calls[0].args`）。 */
+        readonly calls: any[];
+    }
+}
+
+/** テストをまとめる。テストの名前は `describe` の名前と ` > ` でつないだものになる。 */
+declare const describe: RasTest.DescribeFn;
+/** テストを宣言する。`body` は引数なしのラムダ。 */
+declare const test: RasTest.TestFn;
+/** `test` と同じ。 */
+declare const it: RasTest.TestFn;
+
+/** その `describe`（トップレベルならファイル）の最初のテストの前に 1 回実行する。 */
+declare function beforeAll(fn: () => void): void;
+/** その `describe` の最後のテストの後に 1 回実行する。 */
+declare function afterAll(fn: () => void): void;
+/** その `describe` の中の各テストの前に実行する。 */
+declare function beforeEach(fn: () => void): void;
+/** その `describe` の中の各テストの後に実行する。 */
+declare function afterEach(fn: () => void): void;
+
+/** 値を判定する。`expect(actual).toBe(expected)`。 */
+declare function expect<T>(actual: T): RasTest.Matchers<T>;
+
+/** プロジェクトのブックを、`path`（プロジェクトのルート基準）のブックの内容に置き換える。元のファイルは書き換えない。 */
+declare function useWorkbook(path: string): Excel.Workbook;
+/** テストごとに作り、テストの終了後に削除する空のフォルダー。 */
+declare function tempDir(): string;
+/** そのテストの中で `debug.print` が出力した行。 */
+declare function printed(): string[];
+
+/** `msgBox` の代わりに `handler(prompt, buttons, title)` を呼び、その戻り値を返す。省略時は `vbOK`。 */
+declare function mockMsgBox(handler?: (prompt: string, buttons: int, title: string) => int): RasTest.Mock;
+/** `inputBox` と `application.inputBox` の代わりに `handler(prompt, title, defaultValue)` を呼ぶ。 */
+declare function mockInputBox(handler?: (prompt: string, title: string, defaultValue: any) => any): RasTest.Mock;
+/** `getOpenFilename` の代わりに `handler()` を呼ぶ（キャンセルは `false` を返す）。 */
+declare function mockGetOpenFilename(handler?: () => any): RasTest.Mock;
+/** `getSaveAsFilename` の代わりに `handler()` を呼ぶ（キャンセルは `false` を返す）。 */
+declare function mockGetSaveAsFilename(handler?: () => any): RasTest.Mock;
+/** `application.run(macroName, ...)`（手書き VBA の呼び出し）の代わりに `handler(...args)` を呼ぶ。 */
+declare function mockRun(macroName: string, handler?: any): RasTest.Mock;
+/** `createObject(progId)` / `new` で、`factory()` の返すオブジェクトを使う。 */
+declare function mockCreateObject(progId: string, factory: any): RasTest.Mock;

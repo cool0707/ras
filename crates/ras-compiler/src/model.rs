@@ -824,6 +824,8 @@ pub struct Program {
     pub namespaces: HashMap<String, HashMap<String, Sym>>,
     /// Names visible everywhere (host globals, host enum members).
     pub globals: HashMap<String, Sym>,
+    /// The API of tests (`describe`, `expect`, ...; spec §14.12.4): visible in test modules only.
+    pub test_globals: HashMap<String, Sym>,
     /// Lower-cased type-library spelling of every bundled host global → its RAS name
     /// (`cells` → `cells`, `msgbox` → `msgBox`). Finds a name written in another casing.
     pub host_global_names: HashMap<String, String>,
@@ -840,7 +842,19 @@ pub struct Program {
     pub cur_namespace: Option<String>,
 }
 
+impl ModuleData {
+    /// A test file or a helper module of the tests (spec §14.12.2): not built into the workbook.
+    pub fn is_test(&self) -> bool {
+        self.kind == ModuleKind::User && self.key.starts_with(crate::collect::TEST_KEY_PREFIX)
+    }
+}
+
 impl Program {
+    /// A test file (matching `[test] include`), as opposed to a helper module.
+    pub fn is_test_file(&self, m: ModuleId) -> bool {
+        self.modules[m].is_test() && self.config.test_files.iter().any(|f| *f == self.modules[m].rel_path)
+    }
+
     pub fn module_by_key(&self, key: &str) -> Option<ModuleId> {
         self.modules.iter().position(|m| m.key == key)
     }

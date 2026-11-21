@@ -13,6 +13,11 @@ pub struct Config {
     pub sync: SyncCfg,
     pub lint: LintCfg,
     pub init: InitCfg,
+    pub test: TestCfg,
+    /// The test files of the project (`rel_path`s matching `[test] include`), as opposed to
+    /// the helper modules next to them (filled in by the driver).
+    #[serde(skip)]
+    pub test_files: Vec<String>,
     /// Sheet code names of the target workbook (filled in by the driver, not read from the file).
     #[serde(skip)]
     pub sheet_code_names: Vec<String>,
@@ -191,9 +196,69 @@ impl Default for InitCfg {
     }
 }
 
+/// `[test]` (spec §14.12.9).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct TestCfg {
+    /// Patterns of the test files, relative to the project root.
+    pub include: Vec<String>,
+    /// Time a test may take.
+    pub timeout_ms: u64,
+    /// `standIn` (the workbook's stand-in) or `com` (the real Excel).
+    pub excel: String,
+    /// `failed`, `always` or `never`.
+    pub save_workbooks: String,
+    /// `fail` or `ignore`: what an error an event handler does not catch does to the test.
+    pub event_errors: String,
+}
+
+impl Default for TestCfg {
+    fn default() -> Self {
+        TestCfg { include: vec!["test/**/*.test.ras".into()], timeout_ms: 10_000, excel: "standIn".into(), save_workbooks: "failed".into(), event_errors: "fail".into() }
+    }
+}
+
+impl TestCfg {
+    /// Whether a path relative to the project root (`/`-separated) is a test file.
+    pub fn is_test_file(&self, rel_path: &str) -> bool {
+        self.include.iter().any(|p| glob_match(p, rel_path))
+    }
+}
+
+/// Matches a path against a pattern with `*` (within a name), `?` and `**` (any folders).
+pub fn glob_match(pattern: &str, path: &str) -> bool {
+    fn segs(p: &[&str], s: &[&str]) -> bool {
+        match p.split_first() {
+            None => s.is_empty(),
+            Some((&"**", rest)) => (0..=s.len()).any(|i| segs(rest, &s[i..])),
+            Some((first, rest)) => s.split_first().is_some_and(|(name, more)| seg(first.as_bytes(), name.as_bytes()) && segs(rest, more)),
+        }
+    }
+    fn seg(p: &[u8], s: &[u8]) -> bool {
+        match p.split_first() {
+            None => s.is_empty(),
+            Some((b'*', rest)) => (0..=s.len()).any(|i| seg(rest, &s[i..])),
+            Some((b'?', rest)) => !s.is_empty() && seg(rest, &s[1..]),
+            Some((c, rest)) => s.first() == Some(c) && seg(rest, &s[1..]),
+        }
+    }
+    let p: Vec<&str> = pattern.trim_start_matches("./").split('/').collect();
+    let s: Vec<&str> = path.split('/').collect();
+    segs(&p, &s)
+}
+
 impl Config {
     pub fn from_toml(text: &str) -> Result<Config, String> {
         let cfg: Config = toml::from_str(text).map_err(|e| e.to_string())?;
+        for (key, value, allowed) in [
+            ("excel", &cfg.test.excel, &["standIn", "com"][..]),
+            ("save-workbooks", &cfg.test.save_workbooks, &["failed", "always", "never"][..]),
+            ("event-errors", &cfg.test.event_errors, &["fail", "ignore"][..]),
+        ] {
+            if !allowed.contains(&value.as_str()) {
+                return Err(format!("test.{key} = \"{value}\" は指定できません（{}）", allowed.join(" / ")));
+            }
+        }
         if cfg.target.host != "excel" {
             return Err(format!("target.host = \"{}\" には対応していません（現状 \"excel\" のみ）", cfg.target.host));
         }

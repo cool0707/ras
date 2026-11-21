@@ -23,6 +23,8 @@ const FORMS_JS: &str = include_str!("forms.js");
 const EXCEL_JS: &str = include_str!("excel.js");
 const SCRIPTING_JS: &str = include_str!("scripting.js");
 const MAIN_JS: &str = include_str!("main.js");
+const TEST_JS: &str = include_str!("test.js");
+const TEST_MAIN_JS: &str = include_str!("test_main.js");
 
 #[derive(Debug, Clone)]
 pub struct JsFile {
@@ -53,6 +55,7 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
     let mut macros = Vec::new();
     let mut others = Vec::new();
     let mut forms = Vec::new();
+    let mut tests = Vec::new();
     for m in 0..prog.modules.len() {
         // Bundled library modules with code of their own (the struct map) run as RAS code too.
         let std_code = prog.modules[m].kind == ModuleKind::Std && !prog.modules[m].classes.is_empty();
@@ -75,6 +78,14 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
         let (text, map) = finish(&g.assemble(&up), md, &base_name, &source);
         out.files.push(JsFile { rel_path: file_name.clone(), text: format!("{text}//# sourceMappingURL={base_name}.map\n") });
         out.files.push(JsFile { rel_path: format!("{file_name}.map"), text: map });
+        if md.is_test() {
+            // Run by `ras test` (ras-test-main.js), which loads the test file it is given.
+            if prog.is_test_file(m) {
+                tests.push(serde_json::json!({ "file": md.rel_path, "module": md.vba_name, "js": format!("./{file_name}") }));
+            }
+            out.diagnostics.append(&mut g.diags);
+            continue;
+        }
         module_files.push(file_name);
         if md.form.is_some() {
             // A form is started by showing it (spec §14.10.7).
@@ -96,6 +107,14 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
         "entries": out.entries,
         "forms": form_names,
     });
+    if prog.modules.iter().any(|m| m.is_test()) {
+        let mut manifest = manifest.clone();
+        manifest["tests"] = serde_json::Value::Array(tests);
+        manifest["eventErrors"] = serde_json::json!(prog.config.test.event_errors);
+        let main = TEST_MAIN_JS.replace("/*@MODULES@*/", list.trim()).replace("/*@MANIFEST@*/", &manifest.to_string()).replace("/*@ROOT@*/", &js_str(if source_prefix.is_empty() { "." } else { source_prefix }));
+        out.files.push(JsFile { rel_path: "ras-test-main.js".into(), text: main });
+        out.files.push(JsFile { rel_path: "ras-test.js".into(), text: TEST_JS.to_string() });
+    }
     let main = MAIN_JS.replace("/*@MODULES@*/", list.trim()).replace("/*@MANIFEST@*/", &manifest.to_string()).replace("/*@ROOT@*/", &js_str(if source_prefix.is_empty() { "." } else { source_prefix }));
     out.files.push(JsFile { rel_path: "ras-main.js".into(), text: main });
     out.files.push(JsFile { rel_path: "ras-runtime.js".into(), text: RUNTIME_JS.to_string() });
@@ -389,6 +408,7 @@ impl<'p> Gen<'p> {
             return match self.prog.modules[d.module].key.as_str() {
                 "vba.d" => format!("$rt.vba.{}", d.vba_name()),
                 "msforms.d" => format!("$rt.msforms.{}", d.vba_name()),
+                "test.d" => format!("$rt.test.{}", d.vba_name()),
                 _ => format!("$rt.global({})", js_str(d.vba_name())),
             };
         }

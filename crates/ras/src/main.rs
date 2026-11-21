@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 mod book;
 mod forms;
 mod run;
+mod test;
 use ras_compiler::vba::VModuleKind;
 use ras_compiler::{BuildOptions, BuildOutput, Config, Diagnostic, ModuleKind, Program, Severity};
 
@@ -88,6 +89,8 @@ enum Command {
     },
     /// 関数を Excel なしで実行する（デバッグ実行と同じ JavaScript ランタイムとブックの代役。出力・エラー・変更されたセルを表示する）
     Run(run::RunArgs),
+    /// テスト（test/**/*.test.ras）を Excel なしで実行する
+    Test(test::TestArgs),
     /// ブックの中身をテキストで見る・比べる（Excel は不要）
     Book {
         #[command(subcommand)]
@@ -192,7 +195,16 @@ fn workbook_path(root: &Path, cfg: &Config, explicit: Option<&Path>) -> Option<P
 /// Loads and analyses the project. Sheet code names come from the workbook when it can be read.
 /// `book` is a path already resolved with [`workbook_path`]; without it the project's workbook is used.
 fn analyze(root: &Path, args: &BuildArgs, book: Option<&Path>) -> Result<Program, String> {
-    let (mut cfg, sources) = ras_compiler::load_project(root)?;
+    analyze_project(root, args, book, false)
+}
+
+/// The project with its tests (spec §14.12.2): what `ras check` and `ras test` look at.
+fn analyze_with_tests(root: &Path) -> Result<Program, String> {
+    analyze_project(root, &BuildArgs::default(), None, true)
+}
+
+fn analyze_project(root: &Path, args: &BuildArgs, book: Option<&Path>, tests: bool) -> Result<Program, String> {
+    let (mut cfg, sources) = if tests { ras_compiler::load_project_with_tests(root)? } else { ras_compiler::load_project(root)? };
     cfg.opt_override = args.opt.or(if args.release { Some(cfg.build.opt_level.max(2)) } else { None });
     let book = match book {
         Some(b) => Some(b.to_path_buf()),
@@ -823,18 +835,22 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
         Command::Init { dir, workbook } => cmd_init(dir, workbook.as_deref()),
         Command::Check { fix } => {
             let root = find_root(project)?;
-            let mut prog = analyze(&root, &BuildArgs::default(), None)?;
+            // The tests are checked too (spec §14.12.1); they are no part of what is built.
+            let mut prog = analyze_with_tests(&root)?;
             if *fix {
                 let fixed = apply_fixes(&prog)?;
                 if fixed > 0 {
                     println!("{fixed} 箇所を修正しました");
-                    prog = analyze(&root, &BuildArgs::default(), None)?;
+                    prog = analyze_with_tests(&root)?;
                 }
             }
             let mut errors = report(&prog, &prog.diagnostics, true);
             // Code generation can report further problems (size limits, unsupported constructs).
             let mut compiled = HashMap::new();
             if errors == 0 {
+                if prog.modules.iter().any(|m| m.is_test()) {
+                    prog = analyze(&root, &BuildArgs::default(), None)?;
+                }
                 let out = ras_compiler::build(&prog, &BuildOptions::default());
                 errors += report(&prog, &out.diagnostics, true);
                 compiled = forms::compiled_code(&out.files);
@@ -886,6 +902,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Run(args) => cmd_run(&find_root(project)?, args),
+        Command::Test(args) => test::cmd(&find_root(project)?, args),
         Command::Book { action: book::BookCommand::Dump { file, sheet, range, format, formats, max_rows, max_cols, all } } => {
             let file = match file {
                 Some(f) => f.clone(),
