@@ -6,7 +6,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+mod book;
 mod forms;
+mod run;
 use ras_compiler::vba::VModuleKind;
 use ras_compiler::{BuildOptions, BuildOutput, Config, Diagnostic, ModuleKind, Program, Severity};
 
@@ -83,6 +85,13 @@ enum Command {
     Form {
         #[command(subcommand)]
         action: FormCommand,
+    },
+    /// 関数を Excel なしで実行する（デバッグ実行と同じ JavaScript ランタイムとブックの代役。出力・エラー・変更されたセルを表示する）
+    Run(run::RunArgs),
+    /// ブックの中身をテキストで見る・比べる（Excel は不要）
+    Book {
+        #[command(subcommand)]
+        action: book::BookCommand,
     },
     /// LSP サーバとして起動する（VS Code 拡張から呼ばれる）
     Lsp {
@@ -340,32 +349,36 @@ fn cmd_build(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
 /// `ras build --target js`: the debug build (spec §14.10). Runs the program as written,
 /// so the optimisation options of the VBA build do not apply.
 fn cmd_build_js(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
+    let Some(out) = build_debug(root, args)? else { return Ok(ExitCode::from(1)) };
+    let dir = root.join("build").join("debug");
+    println!("デバッグ用の JavaScript を {} に出力しました（実行できる関数: {}）", dir.display(), if out.entries.is_empty() { "なし".to_string() } else { out.entries.join(", ") });
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Writes the debug build into build/debug/; `None` (after printing the problems) when the
+/// program has errors.
+fn build_debug(root: &Path, args: &BuildArgs) -> Result<Option<ras_compiler::JsOutput>, String> {
     let prog = analyze(root, args, None)?;
     let errors = report(&prog, &prog.diagnostics, false);
     if errors > 0 {
         eprintln!("{errors} 件のエラーがあります");
-        return Ok(ExitCode::from(1));
+        return Ok(None);
     }
     let out = ras_compiler::build_js(&prog, "../../");
     let errors = report(&prog, &out.diagnostics, false);
     if errors > 0 {
         eprintln!("{errors} 件のエラーがあります");
-        return Ok(ExitCode::from(1));
+        return Ok(None);
     }
-    let dir = root.join("build").join("debug");
-    // Stale modules would still be loaded by source-map discovery: start from an empty directory.
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
-    for f in &out.files {
-        let path = dir.join(&f.rel_path);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-        }
-        std::fs::write(&path, &f.text).map_err(|e| format!("{}: {e}", path.display()))?;
-    }
-    println!("デバッグ用の JavaScript を {} に出力しました（実行できる関数: {}）", dir.display(), if out.entries.is_empty() { "なし".to_string() } else { out.entries.join(", ") });
-    Ok(ExitCode::SUCCESS)
+    run::write_js(&root.join("build").join("debug"), &out.files)?;
+    Ok(Some(out))
+}
+
+/// `ras run`: builds the debug build and runs an entry point of it under Node, on the
+/// stand-in for Excel.
+fn cmd_run(root: &Path, args: &run::RunArgs) -> Result<ExitCode, String> {
+    let Some(out) = build_debug(root, &BuildArgs::default())? else { return Ok(ExitCode::from(2)) };
+    run::run(root, &out, args)
 }
 
 /// Loads, validates and generates the forms of `forms/` with the code compiled from their
@@ -872,6 +885,19 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!("ユーザーフォーム {count} 個に問題は見つかりませんでした");
             Ok(ExitCode::SUCCESS)
         }
+        Command::Run(args) => cmd_run(&find_root(project)?, args),
+        Command::Book { action: book::BookCommand::Dump { file, sheet, range, format, formats, max_rows, max_cols, all } } => {
+            let file = match file {
+                Some(f) => f.clone(),
+                None => {
+                    let root = find_root(project)?;
+                    let (cfg, _) = ras_compiler::load_project(&root)?;
+                    workbook_path(&root, &cfg, None).ok_or("対象ブックを指定してください（ras.toml の project.workbook が未設定です）")?
+                }
+            };
+            book::dump(&file, sheet, range.as_deref(), *format, *formats, if *all { None } else { Some((*max_rows, *max_cols)) })
+        }
+        Command::Book { action: book::BookCommand::Diff { before, after, format, max_cells } } => book::diff_cmd(before, after, *format, *max_cells),
         Command::Lsp { .. } => {
             ras_lsp::run_stdio().map_err(|e| e.to_string())?;
             Ok(ExitCode::SUCCESS)

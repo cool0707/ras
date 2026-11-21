@@ -1702,10 +1702,12 @@ fn to_array(rows: &[Vec<Val>]) -> Array {
 
 mod edit;
 mod format;
+mod inspect;
 mod paste;
 mod sort;
 
 pub use gridcraft_model::FilterCriterion;
+pub use inspect::{CellInfo, FormulaRegion, RuleInfo, SheetInfo, TableInfo};
 pub use paste::{Paste, PasteOp, PasteWhat};
 pub use sort::{SortKey, Special, split_criterion};
 

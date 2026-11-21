@@ -25,3 +25,4 @@ gridcraft-model = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }
 gridcraft-calc = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }
 gridcraft-xlsx-formulas = { git = "https://github.com/cool0707/xljs", rev = "60e7e7f" }
 zip = { workspace = true }
+serde_json = { workspace = true }

@@ -1429,6 +1429,7 @@ dependencies = [
  "ras-ovba",
  "ras-sync",
  "ras-syntax",
+ "ras-workbook",
  "serde_json",
 ]
 
@@ -1534,6 +1535,7 @@ dependencies = [
  "gridcraft-model",
  "gridcraft-numfmt",
  "gridcraft-xlsx-formulas",
+ "serde_json",
  "umya-spreadsheet",
  "zip 2.6.1",
 ]

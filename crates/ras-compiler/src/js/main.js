@@ -7,6 +7,13 @@
 //              RAS_BOOK_ADDON = path of the `ras_book` addon: without Excel (no RAS_COM_ADDON), the
 //                              program works on the project's workbook read by it (spec §14.10.8).
 //              RAS_MOCK_HOST = path of a module that stands in for Excel (tests).
+//              RAS_RUN_REPORT = path of a file the run is reported into as JSON when the process
+//                              ends (`ras run`): what `debug.print` printed, the dialogs and their
+//                              answers, the error that ended the run, the workbooks saved.
+//                              RAS_ANSWERS = the answers of the dialogs, in order, as JSON
+//                              ({"msgbox":[6],"inputbox":["2026/4"],"openfile":[],"savefile":[]}),
+//                              RAS_RUN_QUIET = 1 to print nothing but what the run time reports.
+//              RAS_WORKBOOKS = where the workbooks the program changed are saved (default build/debug/workbooks).
 //              RAS_DIALOGS   = what to do when Excel shows a dialog while a call waits for it:
 //                              notify (default; report it and bring it to the front),
 //                              dismiss (answer it with its cancelling button; unattended runs), off.
@@ -18,6 +25,73 @@ const manifest = /*@MANIFEST@*/;
 const modules = [
     /*@MODULES@*/
 ];
+
+/** Records the run for `ras run` (RAS_RUN_REPORT) and answers the dialogs from RAS_ANSWERS. */
+function reporting(file) {
+    const fs = require("fs");
+    let answers = {};
+    try {
+        answers = JSON.parse(process.env.RAS_ANSWERS || "{}");
+    } catch {
+        // No answers: every dialog gets its default.
+    }
+    const quiet = process.env.RAS_RUN_QUIET === "1";
+    const say = (text) => {
+        if (!quiet) console.log(text);
+    };
+    const report = { entry: null, ok: true, printed: [], dialogs: [], notes: [], error: null, eventErrors: [], workbooks: [] };
+    const next = (kind) => (Array.isArray(answers[kind]) && answers[kind].length ? answers[kind].shift() : undefined);
+    const h = $rt.hooks;
+    h.print = (line) => {
+        report.printed.push(line);
+        say(line);
+    };
+    h.note = (text) => {
+        report.notes.push(text);
+        if (!quiet) console.error(`[ras] ${text}`);
+    };
+    h.msgBox = (prompt, buttons, title) => {
+        const given = next("msgbox");
+        const answer = given === undefined ? 1 : given;
+        report.dialogs.push({ kind: "msgBox", prompt, title: title === undefined ? null : title, buttons, answer, answered: given !== undefined });
+        say(`[MsgBox] ${prompt} → ${["", "vbOK", "vbCancel", "vbAbort", "vbRetry", "vbIgnore", "vbYes", "vbNo"][answer] || answer}`);
+        return answer;
+    };
+    h.inputBox = (prompt, title, defaultValue) => {
+        const given = next("inputbox");
+        const answer = given !== undefined ? given : defaultValue === undefined ? false : defaultValue;
+        report.dialogs.push({ kind: "inputBox", prompt, title: title === undefined ? null : title, default: defaultValue === undefined ? null : defaultValue, answer, answered: given !== undefined });
+        say(`[InputBox] ${prompt} → ${answer === false ? "（キャンセル）" : answer}`);
+        return answer;
+    };
+    const fileDialog = (kind, key, option, what) => () => {
+        const given = next(key);
+        report.dialogs.push({ kind, prompt: null, answer: given === undefined ? null : given, answered: given !== undefined });
+        if (given === undefined) throw $rt.makeError(`${what}の応答がありません。ras run の ${option} <パス> で指定してください（キャンセルは ${option} false）`, 445);
+        say(`[${kind}] → ${given}`);
+        return given === "false" ? false : given;
+    };
+    h.getOpenFilename = fileDialog("getOpenFilename", "openfile", "--open-file", "ファイルを開くダイアログ（GetOpenFilename）");
+    h.getSaveAsFilename = fileDialog("getSaveAsFilename", "savefile", "--save-file", "名前を付けて保存ダイアログ（GetSaveAsFilename）");
+    h.saved = (info) => {
+        const at = report.workbooks.findIndex((w) => w.file === info.file);
+        if (at >= 0) report.workbooks.splice(at, 1);
+        report.workbooks.push(info);
+    };
+    h.eventError = (e, handler) => {
+        report.eventErrors.push({ handler: `${handler.target}.${handler.event}`, code: e.code, description: e.description, file: e.rasFile || null, line: e.rasLine || 0 });
+        console.error(`[ras] ${handler.target}.${handler.event}: 実行時エラー ${e.code}: ${e.description}${e.rasFile ? `（${e.rasFile}:${e.rasLine}）` : ""}`);
+    };
+    // After the run time's own handler, which saves the workbooks the program changed.
+    process.on("exit", () => {
+        try {
+            fs.writeFileSync(file, JSON.stringify(report));
+        } catch (e) {
+            console.error(`[ras] 実行結果を ${file} に書き込めませんでした: ${(e && e.message) || e}`);
+        }
+    });
+    return report;
+}
 
 function main(argv) {
     if (argv[0] === "--list") {
@@ -36,12 +110,26 @@ function main(argv) {
         addon: process.env.RAS_COM_ADDON || null,
         book: process.env.RAS_BOOK_ADDON || null,
         dialogs: process.env.RAS_DIALOGS || null,
+        workbooksDir: process.env.RAS_WORKBOOKS || null,
         mock: process.env.RAS_MOCK_HOST ? path.resolve(process.env.RAS_MOCK_HOST) : null,
     });
+    const report = process.env.RAS_RUN_REPORT ? reporting(process.env.RAS_RUN_REPORT) : null;
     for (const m of modules) require(m);
-    // Errors are deliberately not caught here: the debugger stops on them as uncaught
-    // exceptions, at the RAS statement that raised.
-    $rt.run(entry);
+    if (report === null) {
+        // Errors are deliberately not caught here: the debugger stops on them as uncaught
+        // exceptions, at the RAS statement that raised.
+        $rt.run(entry);
+        return;
+    }
+    report.entry = entry;
+    try {
+        $rt.run(entry);
+    } catch (err) {
+        const e = $rt.caught(err);
+        report.ok = false;
+        report.error = { code: e.code, description: e.description, source: e.source, file: e.rasFile || null, line: e.rasLine || 0, stack: String(e.stack || "") };
+        process.exitCode = 1;
+    }
 }
 
 main(process.argv.slice(2));

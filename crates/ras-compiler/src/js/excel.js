@@ -42,7 +42,8 @@ module.exports = function createExcel(rt, addon, options) {
     const { RasError, RDate, CVErr } = rt;
     const Book = addon.Book;
     const root = path.resolve(options.root || ".");
-    const outDir = path.join(root, "build", "debug", "workbooks");
+    const outDir = options.outDir ? path.resolve(root, options.outDir) : path.join(root, "build", "debug", "workbooks");
+    const hooks = rt.hooks || {};
 
     // ------------------------------------------------------------------------ errors and values
 
@@ -148,7 +149,8 @@ module.exports = function createExcel(rt, addon, options) {
             } catch (err) {
                 const e = rt.caught(err);
                 const at = e.rasFile ? `（${e.rasFile}:${e.rasLine}）` : "";
-                console.error(`[ras] ${h.target}.${h.event}: 実行時エラー ${e.code}: ${e.description}${at}`);
+                if (hooks.eventError) hooks.eventError(e, h);
+                else console.error(`[ras] ${h.target}.${h.event}: 実行時エラー ${e.code}: ${e.description}${at}`);
             } finally {
                 running.delete(h);
             }
@@ -1688,11 +1690,12 @@ module.exports = function createExcel(rt, addon, options) {
         fs.mkdirSync(outDir, { recursive: true });
         const name = path.extname(wb.$name) ? wb.$name : `${wb.$name}.xlsx`;
         const target = book(() => wb.$book.save(path.join(outDir, name)));
+        const rel = path.relative(root, target).split(path.sep).join("/");
+        if (hooks.saved) hooks.saved({ name: wb.$name, file: rel, source: wb.$file ? path.relative(root, wb.$file).split(path.sep).join("/") : null, project: wb.$project });
         if (!saved.has(target)) {
             saved.add(target);
-            const rel = path.relative(root, target).split(path.sep).join("/");
             const why = asked ? "保存の指示により、" : "変更された";
-            console.log(`[ras] ${why}ブック ${wb.$name} を ${rel} に保存しました（元のファイルは書き換えません）`);
+            rt.note(`${why}ブック ${wb.$name} を ${rel} に保存しました（元のファイルは書き換えません）`);
         }
     }
 
@@ -1993,18 +1996,34 @@ module.exports = function createExcel(rt, addon, options) {
         Evaluate(text) {
             return evaluate(activeSheet(), text);
         }
-        Run(macro) {
+        Run(macro, ...args) {
+            if (hooks.run) {
+                const r = hooks.run(rt.cstr(macro), args);
+                if (r !== undefined) return r.value;
+            }
             return runMacro(rt.cstr(macro));
         }
         InputBox(prompt, title, defaultValue) {
             const d = opt(defaultValue);
+            if (hooks.inputBox) {
+                const r = hooks.inputBox(rt.cstr(prompt), opt(title) === undefined ? undefined : rt.cstr(title), d);
+                if (r !== undefined) return r;
+            }
             console.log(`[InputBox] ${rt.cstr(prompt)} → ${d === undefined ? "（キャンセル）" : rt.cstr(d)}`);
             return d === undefined ? false : d;
         }
-        GetOpenFilename() {
+        GetOpenFilename(...args) {
+            if (hooks.getOpenFilename) {
+                const r = hooks.getOpenFilename(...args.map(opt));
+                if (r !== undefined) return r;
+            }
             return needsExcel("ファイルを開くダイアログ（GetOpenFilename）");
         }
-        GetSaveAsFilename() {
+        GetSaveAsFilename(...args) {
+            if (hooks.getSaveAsFilename) {
+                const r = hooks.getSaveAsFilename(...args.map(opt));
+                if (r !== undefined) return r;
+            }
             return needsExcel("名前を付けて保存ダイアログ（GetSaveAsFilename）");
         }
         FileDialog() {
@@ -2061,11 +2080,11 @@ module.exports = function createExcel(rt, addon, options) {
             if (manual) app.$state.Calculation = XL.manual;
             project = new Workbook(handle, file, true);
             app.$sources.push(file);
-            console.log(`[ras] Excel を使わずに実行します。${path.basename(file)} を読み込み、数式は GridCraft の計算エンジンで計算します`);
-            if (manual) console.log("[ras] このブックは計算方法が手動で保存されています。数式は Calculate を呼ぶまで計算し直しません（Application.Calculation）");
+            rt.note(`Excel を使わずに実行します。${path.basename(file)} を読み込み、数式は GridCraft の計算エンジンで計算します`);
+            if (manual) rt.note("このブックは計算方法が手動で保存されています。数式は Calculate を呼ぶまで計算し直しません（Application.Calculation）");
         } else {
             project = new Workbook(Book.create(), null, true);
-            console.log("[ras] Excel を使わずに実行します。ras.toml に workbook がないため、空のブックで実行します");
+            rt.note("Excel を使わずに実行します。ras.toml に workbook がないため、空のブックで実行します");
         }
         app.$books.unshift(project);
         if (app.$activeBook === null) app.$activeBook = project;
