@@ -5,6 +5,7 @@ import { GeneratedVbaView } from "./generatedVba";
 import { registerModuleCommands } from "./newModule";
 import { RasServer } from "./server";
 import { registerSheetView } from "./sheetView";
+import { registerSheetCommands } from "./sheetCommands";
 import { SyncStatusBar } from "./statusBar";
 import { registerUserFormCommands } from "./userForm/commands";
 import { UserFormDesignerProvider } from "./userForm/provider";
@@ -34,6 +35,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		registerCommands(rasServer, vbaView),
 		registerDebugging(context),
 		registerSheetView(),
+		registerSheetCommands(rasServer),
 		UserFormDesignerProvider.register(context),
 		registerUserFormCommands(),
 		registerModuleCommands(),

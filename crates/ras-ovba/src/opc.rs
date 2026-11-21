@@ -111,6 +111,11 @@ impl Package {
         Ok(Package { archive, names })
     }
 
+    /// The names of the zip entries.
+    pub(crate) fn names(&self) -> Vec<String> {
+        self.names.clone()
+    }
+
     /// Finds the zip entry for a part name (part names are case-insensitive).
     pub(crate) fn find(&self, part: &str) -> Option<&str> {
         let part = part.trim_start_matches('/');
@@ -200,7 +205,7 @@ impl Package {
 }
 
 /// Directory of a part (`xl/workbook.xml` -> `xl`).
-fn part_dir(part: &str) -> &str {
+pub(crate) fn part_dir(part: &str) -> &str {
     match part.rfind('/') {
         Some(i) => &part[..i],
         None => "",
@@ -226,7 +231,7 @@ pub(crate) fn rels_part_for(part: &str) -> String {
 
 /// Resolves a relationship target against the part that owns the
 /// relationship part. Returns a zip entry name (no leading slash).
-fn resolve_target(source_part: &str, target: &str) -> String {
+pub(crate) fn resolve_target(source_part: &str, target: &str) -> String {
     let target = target.replace('\\', "/");
     let mut segments: Vec<&str> = if target.starts_with('/') {
         Vec::new()

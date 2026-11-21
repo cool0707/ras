@@ -19,7 +19,7 @@ use crate::{
 
 /// Workbook file types, by extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BookType {
+pub(crate) enum BookType {
     Xlsm,
     Xltm,
     Xlam,
@@ -34,7 +34,7 @@ impl BookType {
     }
 }
 
-fn book_type(path: &Path) -> Result<BookType, OvbaError> {
+pub(crate) fn book_type(path: &Path) -> Result<BookType, OvbaError> {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -59,7 +59,7 @@ fn book_type(path: &Path) -> Result<BookType, OvbaError> {
 }
 
 /// A sharing or lock violation reported by the operating system.
-fn is_sharing_violation(error: &io::Error) -> bool {
+pub(crate) fn is_sharing_violation(error: &io::Error) -> bool {
     #[cfg(windows)]
     {
         // ERROR_SHARING_VIOLATION (32), ERROR_LOCK_VIOLATION (33)
@@ -92,7 +92,7 @@ fn owner_file(path: &Path) -> Option<PathBuf> {
 /// Fails with [`OvbaError::Locked`] when `path` looks open in Excel: its
 /// owner file exists or, with `for_write`, the existing file cannot be
 /// opened for writing.
-fn check_not_locked(path: &Path, for_write: bool) -> Result<(), OvbaError> {
+pub(crate) fn check_not_locked(path: &Path, for_write: bool) -> Result<(), OvbaError> {
     if let Some(owner) = owner_file(path) {
         if owner.exists() {
             return Err(OvbaError::Locked);
@@ -158,9 +158,9 @@ pub fn unpack(book: &Path) -> Result<UnpackedBook, OvbaError> {
 }
 
 /// Removes the temporary file unless the write completed.
-struct TempFile {
-    path: PathBuf,
-    keep: bool,
+pub(crate) struct TempFile {
+    pub(crate) path: PathBuf,
+    pub(crate) keep: bool,
 }
 
 impl Drop for TempFile {
@@ -230,7 +230,7 @@ fn list_backups(dir: &Path, stem: &str, extension: &str) -> Result<Vec<BackupEnt
 
 /// Copies `target` into `dir` under a timestamped name and keeps only the
 /// newest `generations` backups of that workbook.
-fn back_up(target: &Path, dir: &Path, generations: usize) -> Result<Option<PathBuf>, OvbaError> {
+pub(crate) fn back_up(target: &Path, dir: &Path, generations: usize) -> Result<Option<PathBuf>, OvbaError> {
     if generations == 0 || !target.exists() {
         return Ok(None);
     }
@@ -270,7 +270,7 @@ fn back_up(target: &Path, dir: &Path, generations: usize) -> Result<Option<PathB
     Ok(Some(backup))
 }
 
-fn write_temp_file(target: &Path, bytes: &[u8]) -> Result<TempFile, OvbaError> {
+pub(crate) fn write_temp_file(target: &Path, bytes: &[u8]) -> Result<TempFile, OvbaError> {
     let dir = match target.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
@@ -301,14 +301,14 @@ fn write_temp_file(target: &Path, bytes: &[u8]) -> Result<TempFile, OvbaError> {
 
 /// The document modules the project must contain and the code names that
 /// may receive document code.
-struct DocumentPlan {
+pub(crate) struct DocumentPlan {
     /// Modules to create when missing.
-    ensure: Vec<DocSpec>,
+    pub(crate) ensure: Vec<DocSpec>,
     /// `(code name, what it is, creatable)` of the workbook and every sheet.
-    known: Vec<(String, &'static str, Option<&'static str>)>,
+    pub(crate) known: Vec<(String, &'static str, Option<&'static str>)>,
 }
 
-fn document_plan(layout: &BookLayout) -> DocumentPlan {
+pub(crate) fn document_plan(layout: &BookLayout) -> DocumentPlan {
     let mut plan = DocumentPlan { ensure: Vec::new(), known: Vec::new() };
     // In a binary workbook a missing code name cannot be written into the
     // part, so only recorded code names may get a module created.
@@ -478,6 +478,8 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
     let edit = ProjectEdit {
         upsert,
         remove: req.remove_modules.clone(),
+        rename: req.rename_modules.clone(),
+        keep_documents: req.prune_documents.then(|| documents.known.iter().map(|(name, _, _)| name.clone()).collect()),
         codepage: Some(req.codepage),
         project_name: req.project_name.clone(),
         forms: req.forms.clone(),

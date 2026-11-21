@@ -112,6 +112,17 @@ export function clearInput() {
 - ファイル名はシートのコード名です（シートの見出しの名前ではなく、VBE のプロジェクトに表示される名前）。ブックにそのコード名のシートが無いとエラーになります。ブックのモジュールは `objects/ThisWorkbook.ras` です。
 - イベントは、シートのファイルでは `@on("Worksheet.<イベント>")`、`ThisWorkbook.ras` では `@on("Workbook.<イベント>")` で受け取ります。`src/` のファイルには書けません。
 - VBA がドキュメントモジュールに置けないもの（`export` した変数・定数、構造体・クラス、`@udf` など）はエラーになります。共有するものは `src/` のモジュールに置いて `import` します。
+- シートの追加・複製・削除・名前の変更は、`ras sheet`（VS Code では「RAS: シートを追加」など）で、ブックと `objects/` のファイルに一緒に行えます（仕様 §14.16）。
+
+  ```sh
+  ras sheet list                                   # シートの一覧（見出しの名前・コード名・ファイル）
+  ras sheet add 集計 --after Sheet1                # シートを追加し、objects/Sheet3.ras を作る
+  ras sheet copy Sheet1 4月                        # シートを複製し、objects/Sheet1.ras も複製する
+  ras sheet rename Sheet1 --name 売上 --code-name Sales   # ファイル名とソースの参照（Sheet1.…）も変える
+  ras sheet remove Sheet3                          # コードや参照があると理由を表示して止まる（--force で削除）
+  ```
+
+  ブックが閉じていればブックのファイルを書き換え、Excel で開いていれば Excel を操作します（Windows のみ）。
 - 同期（`ras sync`、`ras watch`、VS Code）では、ブックの各シートと `ThisWorkbook` について、ファイル `objects/Sheet1.ras` / `objects/ThisWorkbook.ras` が無ければ作成します（仕様 §14.7.2。`[sync]` `sheet-files = false` で止められます）。作成されるファイルは書き方の例のコメントだけで、コードを書くまではブックのモジュールを変えません。一般に、関数・変数などのコードが無い `.ras` ファイルからは VBA のモジュールを生成しません。
 
 `ras pack` はブックが Excel で開かれていると書き込みません（閉じてから実行してください）。
@@ -321,6 +332,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §14.11 ユーザーフォーム（`forms/`） | 実装済み | FormSpec からの生成（`Image` の画像、`ComboBox` / `ListBox` の項目を含む）、ブックからの取り出し（`ras form pull`）、ライブ同期、Excel での実行（§14.11.8）。カスタム ActiveX コントロールの生成、VBE での編集の検出（ドリフト）は未実装 |
 | §14.12 テスト（`ras test`） | 一部 | テストの列挙（`--list`）、実行、`expect`、フック、ブックの巻き戻し、`useWorkbook` / `tempDir` / `printed`、置き換え（`mock*`）、タイムアウト、`--reporter pretty / json / junit`、`-t`、`--ci`、`--bail`、`--watch`、失敗したテストのブックの保存、`[test]` の設定は実装。実際の Excel での実行（`--excel`、`[test] excel = "com"`）、エディタの連携（§14.12.10。CodeLens・テスト エクスプローラー、言語サーバーでのテストファイルの型チェックと補完）は未実装。テストファイルは 1 つずつ実行する（並行しない）。`-t` で選ばれなかったテストは結果に出さない。`toBeEmpty` と `toBeNothing` は、ブックの代役では `Empty` と `Nothing` をどちらも成功にする（ランタイムが区別しないため）。`expect` の型は `toBe` の期待値だけを検査する |
 | §14.13 CLI からの実行（`ras run`） | 実装済み | ブックの代役でだけ実行する（実際の Excel に対する実行は VS Code のデバッグ実行を使う）。ユーザーフォームの表示はエラーになる |
+| §14.16 シートの追加・複製・削除・名前の変更（`ras sheet`） | 一部 | ブックのファイルを直接書き換える操作（`.xlsx` / `.xlsm`。`.xlsb` は不可）と、VS Code のコマンドは実装済み。Excel で開いているブックに対する操作は、Windows 専用のコードを書いたが、実際の Excel での確認はまだ行っていない |
 | §14.14 ブックの中身を見る・比べる（`ras book dump` / `diff` / `view`） | 実装済み | 行・列の挿入・削除の推定は、ひとまとまりの挿入・削除だけ（複数箇所は、セルの差分として出る）。`dump` / `diff` は書式（フォント・色・罫線）を扱わない。`view` は条件付き書式・テーブルのスタイル・画像・図形・グラフ・斜線・文字の回転を描かず、列幅は既定のフォントを日本語のフォント（11pt）とみなして計算する |
 | §14.15 機械可読の診断・エラーの説明・代役で使えない API の警告 | 一部 | `--message-format json`、`ras explain`（すべてのコード）、`ras check --target stand-in`（W0510〜W0512）は実装。診断の「関連する位置」は、コンパイラが持っていないため出力しない。ユーザーフォームの検査の結果は JSON にならない。代役で使えるかどうかを言語サーバーのクイック情報に表示することは未実装 |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱し、メンバーとグローバルを camelCase で参照する（§15.3.1）。`Scripting`（`FileSystemObject`・`Dictionary`）と `VBScript.RegExp` の型定義も同梱し、VBA には遅延バインディングで出力する（§15.3）。`ras typegen` と `vba:` インポートは未実装 |

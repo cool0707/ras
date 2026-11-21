@@ -259,6 +259,12 @@ export function registerSheetView(): vscode.Disposable {
 				await showSheetOf(uri);
 			}
 		}),
+		// After a sheet was added, copied or renamed in the workbook file: the grid, when it is open.
+		vscode.commands.registerCommand("ras.sheet.refresh", async (resource?: unknown) => {
+			if (panel !== undefined && resource instanceof vscode.Uri) {
+				await showSheetOf(resource);
+			}
+		}),
 		trackSheetFiles(),
 		vscode.debug.registerDebugAdapterTrackerFactory("*", {
 			createDebugAdapterTracker(session) {

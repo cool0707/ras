@@ -271,6 +271,48 @@ fn code_added_in_the_vbe_is_taken_over() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `ras sheet` in a workbook with a VBA project: the document modules follow the sheets, and
+/// `ras pack` writes them from the files of `objects/` (spec §14.16).
+#[test]
+fn sheets_and_their_modules() {
+    let dir = temp_dir("sheet-modules");
+    let (ok, out) = ras(&dir, &["init", ".", "--workbook", "Book.xlsm"]);
+    assert!(ok, "{out}");
+    let book = dir.join("Book.xlsm");
+    let modules = || ras_ovba::unpack(&book).unwrap().project.map(|p| p.modules.into_iter().map(|m| (m.name, m.source)).collect::<Vec<_>>()).unwrap_or_default();
+    let source = |name: &str| modules().into_iter().find(|(n, _)| n == name).map(|(_, s)| s);
+    assert!(ras(&dir, &["pack"]).0);
+
+    let (ok, out) = ras(&dir, &["sheet", "add", "集計"]);
+    assert!(ok && out.contains("objects/Sheet2.ras"), "{out}");
+    assert!(source("Sheet2").is_some(), "the new sheet has its module");
+    std::fs::write(dir.join("objects/Sheet2.ras"), "@on(\"Worksheet.Activate\")\nfunction shown() {\n    this.range(\"A1\").value = 1;\n}\n").unwrap();
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok, "{out}");
+    assert!(source("Sheet2").unwrap().contains("Private Sub Worksheet_Activate()"));
+
+    // The code name: the module, the file and what was written follow.
+    let (ok, out) = ras(&dir, &["sheet", "rename", "集計", "--code-name", "Summary"]);
+    assert!(ok && out.contains("objects/Sheet2.ras → objects/Summary.ras"), "{out}");
+    assert!(source("Sheet2").is_none() && source("Summary").unwrap().contains("Private Sub Worksheet_Activate()"), "{:?}", modules().iter().map(|m| &m.0).collect::<Vec<_>>());
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok, "{out}");
+    assert!(source("Summary").unwrap().contains("RAS_EventError \"Summary.Activate\""), "{}", source("Summary").unwrap());
+
+    // A copy gets the file, and its module the code at the next pack.
+    let (ok, out) = ras(&dir, &["sheet", "copy", "Summary", "集計の写し", "--code-name", "Summary2"]);
+    assert!(ok, "{out}");
+    assert!(ras(&dir, &["pack"]).0);
+    assert!(source("Summary2").unwrap().contains("Private Sub Worksheet_Activate()"));
+
+    let (ok, out) = ras(&dir, &["sheet", "remove", "Summary", "--force"]);
+    assert!(ok, "{out}");
+    assert!(source("Summary").is_none() && source("Summary2").is_some() && source("Main").is_some());
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok && out.contains("作成 0 / 更新 0 / 削除 0"), "{out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn errors_are_reported_with_source_position() {
     let dir = temp_dir("errors");

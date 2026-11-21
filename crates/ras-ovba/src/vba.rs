@@ -441,6 +441,36 @@ pub(crate) fn build_project(
         }
     }
 
+    // A document module follows its sheet's code name.
+    for (old, new) in &edit.rename {
+        let Some(index) = modules.iter().position(|m| same_name(&m.name, old)) else { continue };
+        validate_module_name(new)?;
+        if modules.iter().enumerate().any(|(i, m)| i != index && same_name(&m.name, new)) {
+            return Err(OvbaError::InvalidRequest(format!("module `{old}` cannot be renamed to `{new}`: a module of that name exists")));
+        }
+        let what = format!("source of module `{old}`");
+        let text = codepage::decode_strict(cp, &modules[index].bytes, &what)?;
+        let renamed: String = text
+            .split_inclusive('\n')
+            .map(|line| if line.trim_start().to_ascii_lowercase().starts_with("attribute vb_name") { format!("Attribute VB_Name = \"{new}\"{}", if line.ends_with("\r\n") { "\r\n" } else if line.ends_with('\n') { "\n" } else { "" }) } else { line.to_string() })
+            .collect();
+        modules[index].bytes = codepage::encode(cp, &renamed, &what)?;
+        modules[index].name = new.clone();
+        modules[index].stream = new.clone();
+    }
+    // The modules of sheets that are gone.
+    if let Some(keep) = &edit.keep_documents {
+        let mut index = 0;
+        while index < modules.len() {
+            if modules[index].kind == ModuleKind::Document && !keep.iter().any(|k| same_name(k, &modules[index].name)) {
+                modules.remove(index);
+                previous_source.remove(index);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
     // Document modules that must exist.
     let mut created_documents = 0usize;
     for doc in documents {

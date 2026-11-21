@@ -38,6 +38,10 @@ pub enum OvbaError {
     /// the hand-written part of that module defines as well. The VBE would
     /// refuse the module with "Ambiguous name detected" when the workbook
     /// is opened. Nothing is written.
+    /// A change to the sheets of the workbook that cannot be made (see
+    /// [`SheetError`](crate::SheetError)). Nothing is written.
+    Sheet(crate::SheetError),
+    /// (No longer reported: a document module is written as a whole.)
     DuplicateProcedure {
         /// Code name of the document module.
         module: String,
@@ -66,6 +70,7 @@ impl fmt::Display for OvbaError {
             OvbaError::Verify(m) => write!(f, "verification after writing failed: {m}"),
             OvbaError::Encoding(m) => write!(f, "code page error: {m}"),
             OvbaError::InvalidRequest(m) => write!(f, "invalid request: {m}"),
+            OvbaError::Sheet(e) => write!(f, "{e}"),
             OvbaError::DuplicateProcedure { module, procedure } => write!(
                 f,
                 "the document module `{module}` already has a hand-written procedure `{procedure}`; the generated code defines it too (VBA: ambiguous name)"

@@ -69,6 +69,7 @@ mod forms;
 mod opc;
 mod pack;
 mod project;
+mod sheets;
 mod source;
 mod stomp;
 mod vba;
@@ -78,6 +79,7 @@ mod xml;
 pub use error::OvbaError;
 pub use forms::{export_user_form, import_user_form, is_generated_form, read_user_forms, unpack_user_forms, FormFiles, RAS_FORM_MARKER};
 pub use opc::{workbook_code_names, workbook_sheet_controls};
+pub use sheets::{edit_sheets, sheet_references, valid_code_name, valid_sheet_name, workbook_sheets, Place, SheetEdit, SheetEditReport, SheetEditRequest, SheetError, SheetInfo};
 pub use pack::{pack, unpack};
 pub use source::{extract_managed_region, merge_managed_region, procedure_names, replace_document_code, strip_hand_written, RAS_BEGIN_MARKER, RAS_END_MARKER};
 pub use vba::{read_project_bin, write_project_bin};
@@ -176,6 +178,12 @@ pub struct ProjectEdit {
     /// Names of standard or class modules to delete (never documents or
     /// forms). Names that do not exist are ignored.
     pub remove: Vec<String>,
+    /// Modules to rename, `(old, new)`: a document module whose sheet got another code
+    /// name. Names that do not exist are ignored.
+    pub rename: Vec<(String, String)>,
+    /// When set, document modules whose name is not listed are deleted (the modules of
+    /// sheets that were removed from the workbook).
+    pub keep_documents: Option<Vec<String>>,
     /// Code page to store the project in. `None` keeps the existing one (a
     /// new project uses 932). Changing it re-encodes every module.
     pub codepage: Option<u16>,
@@ -274,6 +282,11 @@ pub struct PackRequest {
     pub document_code: Vec<DocumentCode>,
     /// Standard or class modules to delete.
     pub remove_modules: Vec<String>,
+    /// Modules to rename, `(old, new)`, before anything else: the document module of a
+    /// sheet whose code name was changed.
+    pub rename_modules: Vec<(String, String)>,
+    /// Delete the document modules of sheets the workbook no longer has.
+    pub prune_documents: bool,
     /// User forms to create or replace (see [`UserForm`]).
     pub forms: Vec<UserForm>,
     /// Directory that receives a copy of the file that is about to be
@@ -296,6 +309,8 @@ impl Default for PackRequest {
             modules: Vec::new(),
             document_code: Vec::new(),
             remove_modules: Vec::new(),
+            rename_modules: Vec::new(),
+            prune_documents: false,
             forms: Vec::new(),
             backup_dir: None,
             backup_generations: 0,

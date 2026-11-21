@@ -17,7 +17,7 @@ mod sync;
 
 type Res<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-const COMMANDS: &[&str] = &["ras.showGeneratedVba", "ras.syncNow", "ras.openInExcel", "ras.runMacro", "ras.showForm", "ras.listMacros"];
+const COMMANDS: &[&str] = &["ras.showGeneratedVba", "ras.syncNow", "ras.openInExcel", "ras.runMacro", "ras.showForm", "ras.listMacros", "ras.sheet"];
 
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
@@ -513,6 +513,8 @@ impl Server {
             "ras.openInExcel" => Some(sync::Job::Open { id }),
             "ras.runMacro" => Some(sync::Job::Run { id, name: args[0].as_str()?.to_string() }),
             "ras.showForm" => Some(sync::Job::ShowForm { id, name: args[0].as_str()?.to_string() }),
+            // `{ action: "add" | "copy" | "remove" | "rename" | "list", … }` (spec §14.16).
+            "ras.sheet" => sync::sheet_edit(&args[0]).map(|(edit, force)| sync::Job::Sheet { id, edit, force }),
             _ => None,
         }
     }

@@ -12,6 +12,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 pub mod plan;
+pub mod sheets;
 
 #[cfg(windows)]
 mod disp;
@@ -115,7 +116,7 @@ fn generate(root: &Path) -> Option<Vec<OutputFile>> {
 }
 
 /// The project at `root`, analysed with what its workbook says.
-fn analyze(root: &Path) -> Option<ras_compiler::Program> {
+pub(crate) fn analyze(root: &Path) -> Option<ras_compiler::Program> {
     let (mut config, sources) = ras_compiler::load_project(root).ok()?;
     if let Some(book) = config.project.workbook.as_ref().map(|w| root.join(w)).filter(|b| b.is_file()) {
         let _ = read_workbook(&mut config, root, &book);
@@ -326,6 +327,18 @@ impl Session {
         Ok(prepared)
     }
 
+    /// The worksheets of the open workbook (code name and tab name), in workbook order.
+    pub fn sheets(&mut self) -> Result<Vec<ras_form::import::Sheet>, SyncError> {
+        self.connect()?;
+        self.live.as_ref().expect("connected").sheets()
+    }
+
+    /// Adds, copies, removes or renames a worksheet of the open workbook (spec §14.16).
+    pub fn edit_sheet(&mut self, edit: &ras_ovba::SheetEdit) -> Result<ras_ovba::SheetEditReport, SyncError> {
+        self.connect()?;
+        self.live.as_ref().expect("connected").edit_sheet(edit)
+    }
+
     /// Runs the macro `Module.proc` in the workbook and waits for it to end.
     pub fn run_macro(&mut self, name: &str) -> Result<(), SyncError> {
         self.connect()?;
@@ -359,6 +372,14 @@ impl Session {
     }
 
     pub fn open(&mut self) -> Result<(), SyncError> {
+        Err(SyncError::Unsupported)
+    }
+
+    pub fn sheets(&mut self) -> Result<Vec<ras_form::import::Sheet>, SyncError> {
+        Err(SyncError::Unsupported)
+    }
+
+    pub fn edit_sheet(&mut self, _edit: &ras_ovba::SheetEdit) -> Result<ras_ovba::SheetEditReport, SyncError> {
         Err(SyncError::Unsupported)
     }
 

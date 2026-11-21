@@ -22,6 +22,7 @@
 - 名前は大文字小文字だけの違いでは区別できない（`Rect` という型と `rect` という変数は同時に使えない）。
 - アロー関数の中から外側の変数を書き換えない（`for...of` か `reduce` を使う）。テストファイルの中では書き換えられる。
 - セルを 1 つずつ読み書きするループはそのまま書いてよい（配列との一括転送に変換される）。画面更新などを止めるには関数に `@fast` を付ける。
+- シートを増やす・消す・名前を変えるときは、`objects/` のファイルを直接作ったり消したりせず、`ras sheet add` / `copy` / `remove` / `rename` を使う（ブックのシートとファイルを一緒に変える）。
 - シートと `ThisWorkbook` のコードは `objects/<シートのコード名>.ras` / `objects/ThisWorkbook.ras` に書く（ファイルがそのモジュール全体になる。`this` がそのシート・ブック）。イベントは、そのファイルの中で `@on("Worksheet.Change")` / `@on("Workbook.Open")` を付けた関数で受け取る。`src/` のファイルには `@on` を書けない。`Worksheet_Change` という名前の関数は書かない。
 - エラー処理は `try` / `catch (e)`（`e.code`・`e.description`）。VBA の `On Error Resume Next` は `try { ... } catch { resume; }`。
 

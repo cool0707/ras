@@ -31,6 +31,58 @@ pub enum Job {
     Run { id: RequestId, name: String },
     /// "Excelで実行" of a user form.
     ShowForm { id: RequestId, name: String },
+    /// "シートを追加" / "複製" / "削除" / "名前を変更" (spec §14.16); `None`: the list of the sheets.
+    Sheet { id: RequestId, edit: Option<ras_ovba::SheetEdit>, force: bool },
+}
+
+/// The sheet command of `workspace/executeCommand` arguments: `{ action, sheet, name, codeName,
+/// before, after, force }`.
+pub fn sheet_edit(args: &Value) -> Option<(Option<ras_ovba::SheetEdit>, bool)> {
+    use ras_ovba::{Place, SheetEdit};
+    let text = |key: &str| args[key].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+    let place = match (text("before"), text("after")) {
+        (Some(s), _) => Some(Place::Before(s)),
+        (_, Some(s)) => Some(Place::After(s)),
+        _ => None,
+    };
+    let edit = match args["action"].as_str()? {
+        "list" => None,
+        "add" => Some(SheetEdit::Add { name: text("name")?, code_name: text("codeName"), place: place.unwrap_or(Place::End) }),
+        "copy" => Some(SheetEdit::Copy { sheet: text("sheet")?, name: text("name"), code_name: text("codeName"), place }),
+        "remove" => Some(SheetEdit::Remove { sheet: text("sheet")? }),
+        "rename" => Some(SheetEdit::Rename { sheet: text("sheet")?, name: text("name"), code_name: text("codeName") }),
+        _ => return None,
+    };
+    Some((edit, args["force"].as_bool().unwrap_or(false)))
+}
+
+/// Carries out a sheet command for the project at `root` and answers as JSON: `{ ok: true, … }`,
+/// `{ ok: false, refused: [reasons] }` (a removal that needs `force`) or `{ ok: false, message }`.
+pub fn run_sheet_command(root: &Path, edit: Option<&ras_ovba::SheetEdit>, force: bool) -> Value {
+    let Some(edit) = edit else {
+        return match ras_sync::sheets::list(root) {
+            Ok((rows, live)) => json!({ "ok": true, "live": live, "sheets": rows.iter().map(|r| json!({ "name": r.name, "codeName": r.code_name, "worksheet": r.worksheet, "visible": r.visible, "file": r.file })).collect::<Vec<_>>() }),
+            Err(message) => json!({ "ok": false, "message": message }),
+        };
+    };
+    match ras_sync::sheets::apply(root, edit, force) {
+        Ok(o) => json!({
+            "ok": true,
+            "action": o.action,
+            "name": o.name,
+            "codeName": o.code_name,
+            "before": o.before.as_ref().map(|(name, code_name)| json!({ "name": name, "codeName": code_name })),
+            "live": o.live,
+            "created": o.created,
+            "removed": o.removed,
+            "renamed": o.renamed.iter().map(|(from, to)| json!({ "from": from, "to": to })).collect::<Vec<_>>(),
+            "references": o.references,
+            "formulas": o.formulas,
+            "warnings": o.warnings,
+        }),
+        Err(ras_sync::sheets::Failure::Refused(reasons)) => json!({ "ok": false, "refused": reasons }),
+        Err(ras_sync::sheets::Failure::Error(message)) => json!({ "ok": false, "message": message }),
+    }
 }
 
 pub type Send = Box<dyn Fn(Message) + std::marker::Send>;
@@ -223,6 +275,14 @@ impl Worker {
                     };
                     self.respond(id, result);
                 }
+                Job::Sheet { id, edit, force } => {
+                    // On this thread: it is the one that talks to Excel.
+                    let result = match self.root.clone() {
+                        Some(root) => run_sheet_command(&root, edit.as_ref(), force),
+                        None => json!({ "ok": false, "message": "ras.toml のあるフォルダーを開いてください" }),
+                    };
+                    self.respond(id, result);
+                }
                 Job::ShowForm { id, name } => {
                     // The form must be the one in the sources: sync first.
                     let result = match self.sync(false).and_then(|_| self.session()?.show_form(&name).map_err(Failure::Sync)) {
@@ -366,5 +426,48 @@ impl Worker {
             (self.send)(Message::Notification(Notification::new("ras/syncStatus".into(), status.clone())));
             self.last_status = Some(status);
         }
+    }
+}
+
+#[cfg(test)]
+mod sheet_tests {
+    use super::*;
+
+    #[test]
+    fn sheet_commands_from_their_arguments() {
+        use ras_ovba::{Place, SheetEdit};
+        let (edit, force) = sheet_edit(&json!({ "action": "add", "name": "集計", "codeName": "", "after": "Sheet1" })).unwrap();
+        assert_eq!(edit, Some(SheetEdit::Add { name: "集計".into(), code_name: None, place: Place::After("Sheet1".into()) }));
+        assert!(!force);
+        let (edit, force) = sheet_edit(&json!({ "action": "remove", "sheet": "Sheet2", "force": true })).unwrap();
+        assert_eq!((edit, force), (Some(SheetEdit::Remove { sheet: "Sheet2".into() }), true));
+        assert_eq!(sheet_edit(&json!({ "action": "list" })), Some((None, false)));
+        // What is missing or unknown is no command.
+        assert_eq!(sheet_edit(&json!({ "action": "add" })), None);
+        assert_eq!(sheet_edit(&json!({ "action": "paint", "sheet": "Sheet1" })), None);
+    }
+
+    #[test]
+    fn a_sheet_command_changes_the_workbook_file_and_the_project() {
+        let root = std::env::temp_dir().join(format!("ras-lsp-sheet-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("ras.toml"), "[project]\nname = \"T\"\nworkbook = \"Book.xlsm\"\n").unwrap();
+        std::fs::write(root.join("src/main.ras"), "export function hello() {\n    msgBox(\"hi\");\n}\n").unwrap();
+        std::fs::write(root.join("Book.xlsm"), ras_ovba::create_workbook(ras_ovba::BookKind::Xlsm, &["Sheet1"])).unwrap();
+        let (edit, force) = sheet_edit(&json!({ "action": "add", "name": "集計" })).unwrap();
+        let result = run_sheet_command(&root, edit.as_ref(), force);
+        assert_eq!((result["ok"].as_bool(), result["codeName"].as_str(), result["live"].as_bool()), (Some(true), Some("Sheet2"), Some(false)), "{result}");
+        assert_eq!(result["created"][0], "objects/Sheet2.ras");
+        assert!(root.join("objects/Sheet2.ras").is_file());
+        let list = run_sheet_command(&root, None, false);
+        assert_eq!(list["sheets"].as_array().map(Vec::len), Some(2), "{list}");
+        assert_eq!(list["sheets"][1]["file"], "objects/Sheet2.ras");
+        // A refusal says why.
+        let (edit, force) = sheet_edit(&json!({ "action": "add", "name": "集計" })).unwrap();
+        let result = run_sheet_command(&root, edit.as_ref(), force);
+        assert_eq!(result["ok"], false);
+        assert!(result["message"].as_str().unwrap().contains("既にあります"), "{result}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

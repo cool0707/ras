@@ -266,4 +266,5 @@ describe("fill", () => {
 | `ras book dump Book.xlsm` | シート・数式・名前の一覧（`--sheet Sheet1 --range A1:F20` でセル） |
 | `ras book diff a.xlsx b.xlsx` | 2 つのブックの差分 |
 | `ras book view Book.xlsx` | シートをグリッドで表示する HTML を作る |
+| `ras sheet list` / `add 集計` / `copy Sheet1` / `rename Sheet1 --code-name Sales` / `remove Sheet3` | シートの一覧・追加・複製・名前の変更・削除（ブックと `objects/` のファイルを一緒に変える） |
 | `ras build` / `ras pack` | VBA を出力する / ブックに書き込む |

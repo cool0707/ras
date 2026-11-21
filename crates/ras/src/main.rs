@@ -10,6 +10,7 @@ mod book;
 mod explain;
 mod forms;
 mod run;
+mod sheet;
 mod test;
 use ras_compiler::vba::VModuleKind;
 use ras_compiler::{BuildOptions, BuildOutput, Config, Diagnostic, ModuleKind, Program, Severity};
@@ -118,6 +119,11 @@ enum Command {
     Book {
         #[command(subcommand)]
         action: book::BookCommand,
+    },
+    /// シートの追加・複製・削除・名前の変更を、ブックと objects/ のファイルに一緒に行う
+    Sheet {
+        #[command(subcommand)]
+        action: sheet::SheetCommand,
     },
     /// LSP サーバとして起動する（VS Code 拡張から呼ばれる）
     Lsp {
@@ -643,6 +649,8 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         modules,
         document_code,
         remove_modules: remove,
+        rename_modules: Vec::new(),
+        prune_documents: false,
         forms: user_forms,
         backup_dir: Some(root.join("build").join("backup")),
         backup_generations: prog.config.pack.backup_generations,
@@ -1097,6 +1105,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Book { action: book::BookCommand::Diff { before, after, format, max_cells } } => book::diff_cmd(before, after, *format, *max_cells),
+        Command::Sheet { action } => sheet::run(&find_root(project)?, action),
         Command::Lsp { .. } => {
             ras_lsp::run_stdio().map_err(|e| e.to_string())?;
             Ok(ExitCode::SUCCESS)
