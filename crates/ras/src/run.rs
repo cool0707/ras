@@ -173,6 +173,12 @@ pub struct RunArgs {
     /// getSaveAsFilename の応答（ファイルのパス。false でキャンセル）
     #[arg(long, value_name = "PATH")]
     pub save_file: Vec<String>,
+    /// 手書き VBA（application.run で呼ぶマクロ）を RAS の関数で置き換える（例: --replace-run Legacy=Mocks.legacy）
+    #[arg(long, value_name = "MACRO=MODULE.FUNC")]
+    pub replace_run: Vec<String>,
+    /// COM オブジェクト（createObject / new）を RAS のクラスで置き換える（例: --replace-object ADODB.Connection=Mocks.FakeConnection）
+    #[arg(long, value_name = "PROGID=MODULE.CLASS")]
+    pub replace_object: Vec<String>,
     /// 変更されたセルの差分を出力しない
     #[arg(long)]
     pub no_diff: bool,
@@ -207,7 +213,18 @@ pub fn run(root: &Path, out: &ras_compiler::JsOutput, args: &RunArgs) -> Result<
     let dir = root.join("build").join("debug");
     let report_path = dir.join("ras-run.json");
     let _ = std::fs::remove_file(&report_path);
-    let answers = json!({ "msgbox": msgbox, "inputbox": args.inputbox, "openfile": args.open_file, "savefile": args.save_file });
+    let pairs = |list: &[String], option: &str| -> Result<serde_json::Map<String, Json>, String> {
+        let mut out = serde_json::Map::new();
+        for item in list {
+            let (from, to) = item.split_once('=').filter(|(a, b)| !a.is_empty() && b.contains('.')).ok_or_else(|| format!("{option} `{item}` は `名前=モジュール名.関数名` の形で指定してください"))?;
+            out.insert(from.to_string(), json!(to));
+        }
+        Ok(out)
+    };
+    let answers = json!({
+        "msgbox": msgbox, "inputbox": args.inputbox, "openfile": args.open_file, "savefile": args.save_file,
+        "run": pairs(&args.replace_run, "--replace-run")?, "createObject": pairs(&args.replace_object, "--replace-object")?,
+    });
     let mut cmd = node.command();
     cmd.arg("--enable-source-maps").arg(dir.join("ras-main.js")).arg(&entry).current_dir(root);
     cmd.env("RAS_BOOK_ADDON", &addon).env("RAS_RUN_REPORT", &report_path).env("RAS_ANSWERS", answers.to_string());

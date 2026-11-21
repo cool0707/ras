@@ -424,6 +424,42 @@
                 "type": "string",
                 "markdownDescription": "Excel を使わないときにブックを読み書きするアドオン（`ras_book.node`）のパス。省略時は拡張機能に同梱のものを使います。"
               },
+              "answers": {
+                "type": "object",
+                "markdownDescription": "プログラムが表示するダイアログの応答と、手書き VBA・COM オブジェクトの置き換え（`ras run` のオプションと同じ）。指定のないダイアログは、これまでどおりに表示・応答します。",
+                "properties": {
+                  "msgBox": {
+                    "type": "array",
+                    "items": { "type": ["string", "number"] },
+                    "markdownDescription": "`msgBox` の応答（`\"vbYes\"` など）。表示された順に使います。"
+                  },
+                  "inputBox": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "markdownDescription": "`inputBox` の応答。表示された順に使います。"
+                  },
+                  "openFile": {
+                    "type": "array",
+                    "items": { "type": ["string", "boolean"] },
+                    "markdownDescription": "`getOpenFilename` の応答（ファイルのパス。`false` でキャンセル）。"
+                  },
+                  "saveFile": {
+                    "type": "array",
+                    "items": { "type": ["string", "boolean"] },
+                    "markdownDescription": "`getSaveAsFilename` の応答（ファイルのパス。`false` でキャンセル）。"
+                  },
+                  "run": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "markdownDescription": "`application.run` で呼ぶ手書き VBA の置き換え。マクロ名 → `モジュール名.関数名`（例: `{ \"Legacy\": \"Mocks.legacy\" }`）。"
+                  },
+                  "createObject": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "markdownDescription": "`createObject` / `new` で作る COM オブジェクトの置き換え。ProgID → `モジュール名.クラス名`。"
+                  }
+                }
+              },
               "dialogs": {
                 "type": "string",
                 "enum": [

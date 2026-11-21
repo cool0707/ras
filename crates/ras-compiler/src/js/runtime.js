@@ -1262,7 +1262,11 @@ const vbaImpl = {
         return call(shell(), "Popup", [text, 0, title === undefined ? "Microsoft Excel" : cstr(title), buttons || 0]);
     },
     InputBox(prompt, title, defaultValue) {
-        // `Application.InputBox` of the stand-in asks the same hook.
+        // (With the stand-in, its `Application.InputBox` asks the same hook.)
+        if (hooks.inputBox && stand() === null) {
+            const given = hooks.inputBox(cstr(prompt), title === undefined ? undefined : cstr(title), defaultValue);
+            if (given !== undefined) return given === false ? "" : cstr(given);
+        }
         const r = call(application(), "InputBox", [cstr(prompt), title, defaultValue]);
         return r === false ? "" : cstr(r);
     },

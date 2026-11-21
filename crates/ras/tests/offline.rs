@@ -684,3 +684,85 @@ fn test_time_outs_only_and_what_test_files_may_hold() {
     assert!(err.contains("error[E0702]") && err.contains("error[E0701]"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn run_replaces_hand_written_vba_and_com_objects() {
+    if !has_node() {
+        return;
+    }
+    let main = r#"export function legacyTotal() {
+    const total = application.run("LegacyTotal", 2, 3);
+    debug.print("total", total);
+    const conn = createObject("ADODB.Connection");
+    conn.open("dsn");
+    debug.print("state", conn.state);
+}
+"#;
+    let mocks = r#"export function total(a: int, b: int): int {
+    return a + b;
+}
+
+export class FakeConnection {
+    state: int = 0;
+    open(source: string) {
+        this.state = 1;
+    }
+}
+"#;
+    let dir = project("replace", &mut sales(), &[("src/main.ras", main), ("src/mocks.ras", mocks)]);
+
+    // Without replacements both need Excel.
+    let (code, _, err) = ras(&dir, &["run", "legacyTotal"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("実行時エラー 445"), "{err}");
+
+    let (code, out, err) = ras(&dir, &["run", "legacyTotal", "--replace-run", "LegacyTotal=Mocks.total", "--replace-object", "ADODB.Connection=Mocks.FakeConnection"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("total 5\n") && out.contains("state 1\n"), "{out}");
+
+    let (code, _, err) = ras(&dir, &["run", "legacyTotal", "--replace-run", "LegacyTotal=Mocks.nothing"]);
+    assert_eq!(code, 1);
+    assert!(err.contains("置き換え `Mocks.nothing` が見つかりません"), "{err}");
+    let (code, _, err) = ras(&dir, &["run", "legacyTotal", "--replace-run", "LegacyTotal"]);
+    assert_eq!(code, 2);
+    assert!(err.contains("`名前=モジュール名.関数名` の形"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn diagnostics_as_json_and_explained() {
+    let dir = project("json", &mut sales(), &[("src/main.ras", "export function f() {\n    const ws = Sheet1;\n    ws.Cells(1, 1).value = \"a\" - 1;\n}\n")]);
+    let (code, out, err) = ras(&dir, &["check", "--message-format", "json"]);
+    assert_eq!(code, 1, "{err}");
+    let lines: Vec<serde_json::Value> = out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert_eq!(
+        lines[0],
+        serde_json::json!({
+            "type": "diagnostic", "code": "W0304", "severity": "warning", "file": "src/main.ras",
+            "message": "`Cells` は RAS では `cells` と書きます（Excel / VBA のメンバーは camelCase で参照します）",
+            "range": { "start": { "line": 3, "column": 8 }, "end": { "line": 3, "column": 13 } },
+            "fixes": [{ "file": "src/main.ras", "newText": "cells", "range": { "start": { "line": 3, "column": 8 }, "end": { "line": 3, "column": 13 } } }],
+            "explain": "ras explain W0304",
+        })
+    );
+    assert_eq!((lines[1]["code"].as_str(), lines[1]["severity"].as_str(), lines[1]["range"]["start"]["line"].as_i64()), (Some("E0387"), Some("error"), Some(3)));
+    // The other commands that compile write them the same way.
+    let (code, out, _) = ras(&dir, &["build", "--message-format", "json"]);
+    assert_eq!(code, 1);
+    assert!(out.lines().any(|l| l.contains("\"code\":\"E0387\"")), "{out}");
+    // People are pointed to the explanations.
+    let (_, _, err) = ras(&dir, &["check"]);
+    assert!(err.contains("error[E0387]") && err.contains("ras explain E0387"), "{err}");
+
+    let (code, out, _) = ras(&dir, &["explain", "e0387"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("E0387 — 数値が必要（エラー）\n"), "{out}");
+    let (code, out, _) = ras(&dir, &["explain"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("W0304  VBA の綴りの名前\n"), "{out}");
+    let (code, _, err) = ras(&dir, &["explain", "E9999"]);
+    assert_eq!(code, 2);
+    assert!(err.contains("`E9999` という診断のコードはありません"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

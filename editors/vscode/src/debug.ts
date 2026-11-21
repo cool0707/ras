@@ -230,6 +230,20 @@ class RasDebugConfigurationProvider implements vscode.DebugConfigurationProvider
 		if (config.mockHost) {
 			env.RAS_MOCK_HOST = path.resolve(root, config.mockHost);
 		}
+		// The answers of the program's own dialogs and the replacements of hand-written VBA
+		// and COM objects (the same as the options of `ras run`).
+		delete env.RAS_ANSWERS;
+		if (config.answers && typeof config.answers === "object") {
+			const a = config.answers;
+			env.RAS_ANSWERS = JSON.stringify({
+				msgbox: a.msgBox ?? [],
+				inputbox: a.inputBox ?? [],
+				openfile: a.openFile ?? [],
+				savefile: a.saveFile ?? [],
+				run: a.run ?? {},
+				createObject: a.createObject ?? {},
+			});
+		}
 		const dialogs = config.dialogs || setting("debug.dialogs");
 		if (dialogs) {
 			env.RAS_DIALOGS = dialogs;
