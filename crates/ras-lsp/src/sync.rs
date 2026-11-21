@@ -125,18 +125,25 @@ fn describe(report: &Report) -> String {
     if !report.pending.is_empty() {
         text.push_str(&format!("。取り込んだファイルに `// TODO(VBA):` の行が残っているため置き換えていないもの: {}", report.pending.join(", ")));
     }
+    if !report.foreign.is_empty() {
+        text.push_str(&format!("。RAS が生成したコードがあるのに対応するファイルが無いため、そのまま残しているシート（シートの複製）: {}", report.foreign.join(", ")));
+    }
     text
 }
 
 /// A short account of what a take-over wrote into the project, for a notification.
 fn describe_take_over(prepared: &Prepared) -> Option<(i32, String)> {
-    if prepared.imported.is_empty() && prepared.skipped.is_empty() && prepared.created.is_empty() {
+    if prepared.imported.is_empty() && prepared.skipped.is_empty() && prepared.created.is_empty() && prepared.appended.is_empty() {
         return None;
     }
     let mut parts = Vec::new();
     if !prepared.created.is_empty() {
         let items: Vec<String> = prepared.created.iter().map(|(path, what)| format!("{what} → {path}")).collect();
-        parts.push(format!("シートのイベント処理を書くファイルを作成しました（{}）", items.join("、")));
+        parts.push(format!("シート・ブックのモジュールのファイルを作成しました（{}）", items.join("、")));
+    }
+    if !prepared.appended.is_empty() {
+        let items: Vec<String> = prepared.appended.iter().map(|a| format!("{} の {} → {}", a.name, a.names.join("・"), a.path)).collect();
+        parts.push(format!("VBE で足されたコードを RAS に変換して取り込みました（{}）", items.join("、")));
     }
     if !prepared.imported.is_empty() {
         let items: Vec<String> = prepared.imported.iter().map(|i| format!("{} → {}", i.name, i.path)).collect();
@@ -258,8 +265,13 @@ impl Worker {
             self.announce(&prepared);
             let built = compile(&root).map_err(Failure::Build)?;
             let forms = Forms { forms: &built.forms, codepage: built.codepage };
-            let report = self.session()?.apply(&built.files, forms, &ras_sync::options(&prepared, overwrite)).map_err(Failure::Sync)?;
+            let report = self.session()?.apply(&built.files, forms, &ras_sync::options(&root, &prepared, overwrite)).map_err(Failure::Sync)?;
             ras_form::import::finish(&prepared).map_err(Failure::Build)?;
+            // What was written, to tell later what was added in the VBE (spec §14.7.3).
+            let mut not_written = report.drifted.clone();
+            not_written.extend(report.pending.iter().cloned());
+            not_written.extend(prepared.pending.iter().map(|p| p.generated.clone()));
+            ras_sync::save_written(&root, &built.files, &not_written).map_err(Failure::Build)?;
             Ok(report)
         })();
         self.retry = matches!(result, Err(Failure::Sync(SyncError::Busy(_))));
@@ -281,7 +293,7 @@ impl Worker {
     fn announce(&mut self, prepared: &Prepared) {
         // Only when something was written or could not be: what is pending is in the result of every sync.
         let Some((level, message)) = describe_take_over(prepared) else { return };
-        if prepared.imported.is_empty() && prepared.created.is_empty() && self.last_take_over.as_ref() == Some(&message) {
+        if prepared.imported.is_empty() && prepared.created.is_empty() && prepared.appended.is_empty() && self.last_take_over.as_ref() == Some(&message) {
             return;
         }
         self.last_take_over = Some(message.clone());

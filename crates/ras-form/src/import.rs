@@ -59,6 +59,22 @@ pub struct Book<'a> {
     /// The designer of a form made in the VBE, by name (exported from the open workbook,
     /// or read from the workbook file).
     pub form: &'a mut dyn FnMut(&str) -> Result<UserForm, String>,
+    /// The code RAS wrote into the module of this name the last time (spec §14.7.3), if known.
+    pub written: &'a mut dyn FnMut(&str) -> Option<String>,
+}
+
+/// Code added in the VBE to a module RAS generated, taken over into the module's file
+/// (spec §14.7.3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Appended {
+    /// Name of the module in the workbook.
+    pub name: String,
+    /// The RAS file the code was appended to, relative to the project root.
+    pub path: String,
+    /// What was added: the names of the procedures, and how many declarations.
+    pub names: Vec<String>,
+    /// The file as it was before, to put it back when the result does not compile.
+    original: Option<String>,
 }
 
 /// What [`prepare`] takes over from a component of the workbook.
@@ -124,6 +140,8 @@ pub struct Prepared {
     /// Files [`sheet_files`] created for sheets (and `ThisWorkbook`) that had none, relative
     /// to the project root, with what they are for.
     pub created: Vec<(String, String)>,
+    /// Code added in the VBE that was appended to the file of its module (spec §14.7.3).
+    pub appended: Vec<Appended>,
     /// Files whose marker line becomes a plain comment once the workbook has the generated code.
     marked: Vec<PathBuf>,
 }
@@ -157,6 +175,9 @@ impl Prepared {
                 "{} には変換できなかった行（`// TODO(VBA):`）が {} 行残っているため、ブックの `{}` は置き換えずにそのまま残しています。直して `// TODO(VBA):` の行を消すと、次の同期で置き換えます",
                 p.path, p.todos, p.name
             ));
+        }
+        for a in &self.appended {
+            out.push(format!("ブックの `{}` に VBE で足されたコード（{}）を {} に取り込みました", a.name, a.names.join("、"), a.path));
         }
         out.extend(self.skipped.iter().cloned());
         for (path, what) in &self.created {
@@ -310,7 +331,7 @@ struct Candidate<'b> {
 
 /// Converts what the sync takes over from the workbook and writes it into the project at
 /// `root` (see the module documentation). `codepage` is the project's `target.codepage`.
-pub fn prepare(root: &Path, book: Book, codepage: u16) -> Result<Prepared, String> {
+pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, String> {
     let mut prepared = Prepared::default();
     let files = project_files(root);
     let taken = |name: &str| files.iter().any(|f| f.vba_name.eq_ignore_ascii_case(name)) || book.modules.iter().any(|m| m.name.eq_ignore_ascii_case(name));
@@ -474,7 +495,105 @@ pub fn prepare(root: &Path, book: Book, codepage: u16) -> Result<Prepared, Strin
         }
         prepared.imported.push(imported);
     }
+
+    // What was added in the VBE to the modules RAS generated (spec §14.7.3).
+    for module in book.modules {
+        let (kind, pane) = match module.kind {
+            ModuleKind::Standard if !module.name.starts_with("RAS_") => (ImportKind::Standard, code_pane(&module.code)),
+            ModuleKind::Document => (ImportKind::Document { workbook: module.name.eq_ignore_ascii_case(book.workbook_code_name) }, hand_written(&module.code)),
+            _ => continue,
+        };
+        if ras_compiler::emit::has_drifted(&pane) != Some(true) {
+            continue;
+        }
+        // The file the module is generated from. (A sheet without a file: a copy, `sheet_files`.)
+        let path = match kind {
+            ImportKind::Document { workbook } => object_path(root, &module.name, workbook),
+            _ => match files.iter().find(|f| f.vba_name.eq_ignore_ascii_case(&module.name) && f.path.starts_with(root.join("src"))) {
+                Some(f) => f.path.clone(),
+                None => continue,
+            },
+        };
+        if !path.is_file() {
+            continue;
+        }
+        let Some(written) = (book.written)(&module.name) else { continue };
+        let diff = crate::vbdiff::diff(&written, &pane);
+        if !diff.has_additions() {
+            continue;
+        }
+        let target = match kind {
+            ImportKind::Document { workbook } => Target::Document { code_name: &module.name, workbook, controls: controls_of(&module.name) },
+            _ => Target::Standard,
+        };
+        let todos = append_added(root, &path, &module.name, &diff, &target, matches!(kind, ImportKind::Document { .. }), &mut prepared)?;
+        if todos > 0 {
+            prepared.pending.push(Pending { name: module.name.clone(), generated: module.name.clone(), kind, path: relative(root, &path), todos });
+        } else if !diff.has_drift() {
+            // Nothing RAS wrote was changed: the module is written again from its file.
+            prepared.adopt.push((module.name.clone(), kind));
+        }
+    }
     Ok(prepared)
+}
+
+/// Start of the comment line above code that was added in the VBE and taken over.
+const ADDED_MARKER: &str = "// VBE で追加されたコードを取り込みました";
+
+/// Appends the code a [`Diff`](crate::vbdiff::Diff) found added in the VBE to the RAS file
+/// `path` of its module `name`, converted to RAS, unless the file has it already (the comment
+/// line above it carries a hash of the added code). The added VBA is kept in `vba/`. Returns
+/// the number of `// TODO(VBA):` lines the file has afterwards.
+fn append_added(root: &Path, path: &Path, name: &str, diff: &crate::vbdiff::Diff, target: &Target, document: bool, prepared: &mut Prepared) -> Result<usize, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let marker = format!("{ADDED_MARKER}（{}）", diff.added_hash());
+    if text.contains(&marker) {
+        return Ok(todo_count(&text));
+    }
+    let added = diff.added_code();
+    let vba_dir = root.join("vba");
+    std::fs::create_dir_all(&vba_dir).map_err(|e| format!("{}: {e}", vba_dir.display()))?;
+    let copy = vba_dir.join(format!("{name}.{}", if document { "cls" } else { "bas" }));
+    std::fs::write(&copy, &added).map_err(|e| format!("{}: {e}", copy.display()))?;
+    let converted = vba2ras::convert(&added, target, &[]);
+    let mut new_text = text.clone();
+    if !new_text.is_empty() && !new_text.ends_with('\n') {
+        new_text.push('\n');
+    }
+    if !new_text.is_empty() {
+        new_text.push('\n');
+    }
+    new_text.push_str(&format!("{marker}: {}\n{}", diff.added_names().join("、"), converted.text));
+    std::fs::write(path, &new_text).map_err(|e| format!("{}: {e}", path.display()))?;
+    prepared.appended.push(Appended { name: name.to_string(), path: relative(root, path), names: diff.added_names(), original: Some(text) });
+    Ok(todo_count(&new_text))
+}
+
+/// Takes back what [`prepare`] and [`sheet_files`] appended to the files `failed` (paths
+/// relative to `root`): the result did not compile (a name that exists already, …). The
+/// module stays as it is in the workbook, as drift (spec §14.7.3).
+pub fn revert_appended(root: &Path, prepared: &mut Prepared, failed: &[String]) -> Result<(), String> {
+    let mut kept = Vec::new();
+    for a in std::mem::take(&mut prepared.appended) {
+        if !failed.iter().any(|f| f.eq_ignore_ascii_case(&a.path)) {
+            kept.push(a);
+            continue;
+        }
+        let path = root.join(&a.path);
+        match &a.original {
+            Some(original) => std::fs::write(&path, original).map_err(|e| format!("{}: {e}", path.display()))?,
+            // A file made for a copied sheet: it goes.
+            None => {
+                let _ = std::fs::remove_file(&path);
+                prepared.created.retain(|(p, _)| !p.eq_ignore_ascii_case(&a.path));
+            }
+        }
+        prepared.adopt.retain(|(n, _)| !n.eq_ignore_ascii_case(&a.name));
+        prepared.pending.retain(|p| !p.name.eq_ignore_ascii_case(&a.name));
+        prepared.skipped.push(format!("ブックの `{}` に VBE で足されたコード（{}）は、RAS に変換するとコンパイル エラーになるため取り込みませんでした（ドリフトとして残ります）", a.name, a.names.join("、")));
+    }
+    prepared.appended = kept;
+    Ok(())
 }
 
 /// After a sync that replaced the components [`Prepared::adopt`] names: turns the marker
@@ -516,12 +635,19 @@ pub fn sheet_file_text(sheet: Option<&Sheet>, workbook_code_name: &str) -> Strin
 }
 
 /// Creates `objects/<CodeName>.ras` for each worksheet of `sheets`, and
-/// `objects/ThisWorkbook.ras` for the workbook (`workbook_code_name`), that has no file yet
-/// (spec §14.7.2). Nothing is created while `objects/` holds a file no sheet answers to: a
-/// sheet whose code name was changed, whose file is to be renamed. A file without code does
-/// not change the module (spec §12.2), so the files cost nothing until something is written
-/// in them. Returns the files created (relative to `root`) with what they are for.
-pub fn sheet_files(root: &Path, sheets: &[Sheet], workbook_code_name: &str) -> Result<Vec<(String, String)>, String> {
+/// `objects/ThisWorkbook.ras` for the workbook, that has no file yet (spec §14.7.2), and
+/// records them in `prepared.created` (relative to `root`, with what they are for).
+///
+/// * Nothing is created while `objects/` holds a file no sheet answers to: a sheet whose code
+///   name was changed, whose file is to be renamed.
+/// * A sheet whose module holds code RAS generated is a copy of another sheet (Excel copies
+///   the code with the sheet): it gets a copy of the file of the sheet it was copied from —
+///   the sheet whose written code its module holds. Code added in the VBE since is appended
+///   (spec §14.7.3). A copy whose source is not found gets no file; its module is left alone.
+/// * A file without code does not change the module (spec §12.2), so the other files cost
+///   nothing until something is written in them.
+pub fn sheet_files(root: &Path, sheets: &[Sheet], book: &mut Book, prepared: &mut Prepared) -> Result<(), String> {
+    let workbook_code_name = book.workbook_code_name;
     let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
     let existing: Vec<String> = object_files(root).iter().filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().to_string())).collect();
     let orphan = existing.iter().any(|name| !same(name, "ThisWorkbook") && !sheets.iter().any(|s| same(&s.code_name, name)));
@@ -529,7 +655,6 @@ pub fn sheet_files(root: &Path, sheets: &[Sheet], workbook_code_name: &str) -> R
     if !workbook_code_name.is_empty() {
         targets.push(None);
     }
-    let mut created = Vec::new();
     for sheet in targets {
         let (file, what) = match sheet {
             Some(s) => (s.code_name.as_str(), format!("シート「{}」（{}）", s.name, s.code_name)),
@@ -542,10 +667,55 @@ pub fn sheet_files(root: &Path, sheets: &[Sheet], workbook_code_name: &str) -> R
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
+        // The module of the sheet holds generated code: a copy of another sheet.
+        let module = sheet.and_then(|s| book.modules.iter().find(|m| m.kind == ModuleKind::Document && same(&m.name, &s.code_name)));
+        let pane = module.map(|m| hand_written(&m.code)).unwrap_or_default();
+        if let (Some(s), true) = (sheet, ras_compiler::emit::has_drifted(&pane).is_some()) {
+            // The sheet whose written code the module holds; one it holds unchanged first.
+            let mut source: Option<(&Sheet, crate::vbdiff::Diff)> = None;
+            for other in sheets.iter().filter(|o| !same(&o.code_name, &s.code_name) && existing.iter().any(|name| same(name, &o.code_name))) {
+                let Some(written) = (book.written)(&other.code_name) else { continue };
+                let diff = crate::vbdiff::diff(&written, &pane);
+                if diff.has_drift() || crate::vbdiff::split(&written).procedures.is_empty() {
+                    continue;
+                }
+                let exact = !diff.has_additions();
+                if source.is_none() || exact {
+                    source = Some((other, diff));
+                }
+                if exact {
+                    break;
+                }
+            }
+            let Some((from, diff)) = source else {
+                prepared.skipped.push(format!("{what}のモジュールには RAS が生成したコードがありますが、どのシートのファイルから生成されたものか分からないため、ファイルを作成していません（モジュールはそのまま残しています）"));
+                continue;
+            };
+            let from_path = ras_compiler::object_code_path(root, &existing.iter().find(|name| same(name, &from.code_name)).cloned().unwrap_or_else(|| from.code_name.clone()));
+            let text = std::fs::read_to_string(&from_path).map_err(|e| format!("{}: {e}", from_path.display()))?;
+            std::fs::write(&path, &text).map_err(|e| format!("{}: {e}", path.display()))?;
+            prepared.created.push((relative(root, &path), format!("{what}（シート「{}」の複製。{} を写しました）", from.name, relative(root, &from_path))));
+            if diff.has_additions() {
+                let controls = book.sheet_controls.iter().find(|d| same(&d.name, &s.code_name)).map(|d| &d.controls[..]).unwrap_or(&[]);
+                let target = Target::Document { code_name: &s.code_name, workbook: false, controls };
+                let todos = append_added(root, &path, &s.code_name, &diff, &target, true, prepared)?;
+                // (Taking it back removes the copy: the file did not exist before.)
+                if let Some(a) = prepared.appended.last_mut() {
+                    a.original = None;
+                }
+                let kind = ImportKind::Document { workbook: false };
+                if todos > 0 {
+                    prepared.pending.push(Pending { name: s.code_name.clone(), generated: s.code_name.clone(), kind, path: relative(root, &path), todos });
+                } else {
+                    prepared.adopt.push((s.code_name.clone(), kind));
+                }
+            }
+            continue;
+        }
         std::fs::write(&path, sheet_file_text(sheet, workbook_code_name)).map_err(|e| format!("{}: {e}", path.display()))?;
-        created.push((relative(root, &path), what));
+        prepared.created.push((relative(root, &path), what));
     }
-    Ok(created)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -565,7 +735,7 @@ mod tests {
         std::fs::create_dir_all(root.join("objects")).unwrap();
         std::fs::write(root.join("objects/Sheet3.ras"), "// mine\n").unwrap();
         let sheets: Vec<Sheet> = [("Sheet1", "売上"), ("Sheet2", "集計"), ("Sheet3", "メモ")].iter().map(|(c, n)| Sheet { code_name: c.to_string(), name: n.to_string() }).collect();
-        let created = sheet_files(&root, &sheets, "ThisWorkbook").unwrap();
+        let created = create(&root, &sheets, &[], &mut |_: &str| None).created;
         let paths: Vec<&str> = created.iter().map(|(p, _)| p.as_str()).collect();
         // Sheet3 has its file.
         assert_eq!(paths, ["objects/Sheet1.ras", "objects/Sheet2.ras", "objects/ThisWorkbook.ras"]);
@@ -573,11 +743,66 @@ mod tests {
         assert!(text.contains("シート「売上」（コード名 Sheet1）") && text.contains("@on(\"Worksheet.Change\")"), "{text}");
         assert_eq!(std::fs::read_to_string(root.join("objects/Sheet3.ras")).unwrap(), "// mine\n");
         // Nothing more the next time.
-        assert!(sheet_files(&root, &sheets, "ThisWorkbook").unwrap().is_empty());
+        assert!(create(&root, &sheets, &[], &mut |_: &str| None).created.is_empty());
         // A file no sheet answers to (a code name that was changed): no file for the sheets.
         std::fs::remove_file(root.join("objects/Sheet2.ras")).unwrap();
         std::fs::write(root.join("objects/Old.ras"), "export function a() {}\n").unwrap();
-        assert!(sheet_files(&root, &sheets, "ThisWorkbook").unwrap().is_empty());
+        assert!(create(&root, &sheets, &[], &mut |_: &str| None).created.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Runs [`sheet_files`] for a workbook with the document modules `modules`.
+    fn create(root: &Path, sheets: &[Sheet], modules: &[BookModule], written: &mut dyn FnMut(&str) -> Option<String>) -> Prepared {
+        let mut prepared = Prepared::default();
+        let mut form = |_: &str| Err(String::new());
+        let mut book = Book { modules, workbook_code_name: "ThisWorkbook", sheet_controls: &[], form: &mut form, written };
+        sheet_files(root, sheets, &mut book, &mut prepared).unwrap();
+        prepared
+    }
+
+    const SHEET1_RAS: &str = "@on(\"Worksheet.Change\")\nfunction onChange(target: Excel.Range) {\n    this.range(\"D1\").value = target.address;\n}\n";
+
+    /// The code RAS generates for `objects/Sheet1.ras` holding `SHEET1_RAS`.
+    fn generated() -> String {
+        let cfg = ras_compiler::Config { sheet_code_names: vec!["Sheet1".into(), "Sheet2".into()], ..Default::default() };
+        let (_, out) = ras_compiler::compile_str(&[("objects/Sheet1", SHEET1_RAS)], cfg, &ras_compiler::BuildOptions { no_attributes: true, ..Default::default() });
+        out.files.iter().find(|f| f.name == "Sheet1").expect("Sheet1").code.clone()
+    }
+
+    #[test]
+    fn a_copied_sheet_gets_a_copy_of_the_file() {
+        let root = project();
+        std::fs::create_dir_all(root.join("objects")).unwrap();
+        std::fs::write(root.join("objects/Sheet1.ras"), SHEET1_RAS).unwrap();
+        std::fs::write(root.join("objects/ThisWorkbook.ras"), "// nothing\n").unwrap();
+        let code = generated();
+        let sheets: Vec<Sheet> = [("Sheet1", "売上"), ("Sheet2", "売上 (2)"), ("Sheet3", "新規")].iter().map(|(c, n)| Sheet { code_name: c.to_string(), name: n.to_string() }).collect();
+        // Sheet2 was copied from Sheet1 in Excel, and a procedure was added to it in the VBE.
+        let copy = format!("{code}\r\nPrivate Sub Worksheet_Activate()\r\n    Range(\"A1\").Value = 1\r\nEnd Sub\r\n");
+        let modules = [
+            BookModule { name: "Sheet1".into(), kind: ModuleKind::Document, code: code.clone() },
+            BookModule { name: "Sheet2".into(), kind: ModuleKind::Document, code: copy },
+            BookModule { name: "Sheet3".into(), kind: ModuleKind::Document, code: String::new() },
+        ];
+        let mut written = |name: &str| (name == "Sheet1").then(|| code.clone());
+        let prepared = create(&root, &sheets, &modules, &mut written);
+        let paths: Vec<&str> = prepared.created.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(paths, ["objects/Sheet2.ras", "objects/Sheet3.ras"]);
+        assert!(prepared.created[0].1.contains("複製") && prepared.created[0].1.contains("objects/Sheet1.ras"), "{:?}", prepared.created);
+        let text = std::fs::read_to_string(root.join("objects/Sheet2.ras")).unwrap();
+        // The file of the source, and what was added to the copy.
+        assert!(text.starts_with(SHEET1_RAS), "{text}");
+        assert!(text.contains("// VBE で追加されたコードを取り込みました（") && text.contains("@on(\"Worksheet.Activate\")") && text.contains("this.range(\"A1\").value = 1;"), "{text}");
+        assert_eq!(prepared.appended.len(), 1, "{:?}", prepared.appended);
+        assert!(prepared.adopts("Sheet2"));
+        // The new sheet gets the plain file.
+        assert!(!ras_has_code(&std::fs::read_to_string(root.join("objects/Sheet3.ras")).unwrap()));
+
+        // A copy whose source is not known gets no file.
+        std::fs::remove_file(root.join("objects/Sheet2.ras")).unwrap();
+        let prepared = create(&root, &sheets, &modules, &mut |_: &str| None);
+        assert!(prepared.created.is_empty() && prepared.skipped.len() == 1, "{prepared:?}");
+        assert!(!root.join("objects/Sheet2.ras").exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

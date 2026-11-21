@@ -74,7 +74,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 fn load_project(root: &Path) -> Result<(Config, Vec<SourceInput>), String> {
     let (mut config, sources) = ras_compiler::load_project(root)?;
     if let Some(book) = config.project.workbook.as_ref().map(|w| root.join(w)).filter(|b| b.is_file()) {
-        let _ = ras_sync::read_workbook(&mut config, &book);
+        let _ = ras_sync::read_workbook(&mut config, root, &book);
     }
     Ok((config, sources))
 }

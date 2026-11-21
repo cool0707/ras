@@ -244,7 +244,7 @@ fn analyze_project(root: &Path, args: &BuildArgs, book: Option<&Path>, tests: bo
     };
     if let Some(book) = book {
         if book.is_file() {
-            if let Err(e) = ras_sync::read_workbook(&mut cfg, &book) {
+            if let Err(e) = ras_sync::read_workbook(&mut cfg, root, &book) {
                 eprintln!("warning: {} のシート名を読み取れませんでした: {e}", book.display());
             }
         }
@@ -514,7 +514,7 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     let Some((prog, out)) = compile(root, args, Some(&book))? else { return Ok(ExitCode::from(1)) };
     write_build(root, &prog, &out)?;
     let Some(user_forms) = load_forms(root, prog.config.target.codepage, &out)? else { return Ok(ExitCode::from(1)) };
-    let opts = ras_sync::options(&prepared, p.overwrite);
+    let opts = ras_sync::options(root, &prepared, p.overwrite);
     let pending = |name: &str| opts.pending.iter().any(|(c, g)| c.eq_ignore_ascii_case(name) || g.eq_ignore_ascii_case(name));
     let adopted = |name: &str| opts.adopt.iter().any(|n| n.eq_ignore_ascii_case(name));
     // What a pending take-over generates is not written yet.
@@ -539,7 +539,8 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
                 }
                 continue;
             };
-            if is_drifted {
+            // (What was added to it in the VBE was taken over: written again from its file.)
+            if is_drifted && !adopted(&m.name) {
                 drifted.push(m.name.clone());
             }
             if !generated.contains(m.name.as_str()) && matches!(m.kind, ras_ovba::ModuleKind::Standard | ras_ovba::ModuleKind::Class) {
@@ -584,10 +585,12 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         }
         let current = existing.project.iter().flat_map(|project| &project.modules).find(|m| m.kind == ras_ovba::ModuleKind::Document && m.name.to_lowercase() == name.to_lowercase()).map(|m| m.source.as_str()).unwrap_or("");
         let code = files.iter().find(|f| f.kind == VModuleKind::Document && f.name.to_lowercase() == generated_name.to_lowercase()).map(|f| f.code.as_str());
-        match ras_sync::plan::document_action(current, code, adopted(name), p.overwrite) {
+        let own = opts.written.iter().any(|n| n.to_lowercase() == generated_name.to_lowercase());
+        match ras_sync::plan::document_action(current, code, adopted(name), p.overwrite, own) {
             ras_sync::plan::DocumentAction::Write(code) => document_code.push(ras_ovba::DocumentCode { code_name: name.clone(), code }),
             ras_sync::plan::DocumentAction::Drifted => drifted.push(name.clone()),
             ras_sync::plan::DocumentAction::HandWritten => hand_written.push(name.clone()),
+            ras_sync::plan::DocumentAction::Foreign => eprintln!("warning: シート `{name}` のモジュールには RAS が生成したコードがありますが、対応するファイル（objects/{name}.ras）がありません（シートの複製でコードごと複製されたものです）。そのまま残しています。`ras sync`（Excel で開いた状態）でコピー元のファイルを複製できます"),
             ras_sync::plan::DocumentAction::Unchanged | ras_sync::plan::DocumentAction::Keep => {}
         }
     }
@@ -647,6 +650,11 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     match ras_ovba::pack(&req) {
         Ok(rep) => {
             ras_form::import::finish(&prepared)?;
+            // What was written, to tell later what was added in the VBE (spec §14.7.3).
+            if p.output.is_none() {
+                let not_written: Vec<String> = out.files.iter().filter(|f| pending(&f.name)).map(|f| f.name.clone()).collect();
+                ras_sync::save_written(root, &out.files, &not_written)?;
+            }
             for w in &rep.warnings {
                 eprintln!("warning: {w}");
             }
@@ -691,8 +699,16 @@ fn live_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<Option<Ex
     write_build(root, &prog, &out)?;
     let codepage = prog.config.target.codepage;
     let Some(user_forms) = load_forms(root, codepage, &out)? else { return Ok(Some(ExitCode::from(1))) };
-    let rep = session.apply(&out.files, ras_sync::Forms { forms: &user_forms, codepage }, &ras_sync::options(&prepared, overwrite)).map_err(|e| e.to_string())?;
+    let rep = session.apply(&out.files, ras_sync::Forms { forms: &user_forms, codepage }, &ras_sync::options(root, &prepared, overwrite)).map_err(|e| e.to_string())?;
     ras_form::import::finish(&prepared)?;
+    // What was written, to tell later what was added in the VBE (spec §14.7.3).
+    let mut not_written = rep.drifted.clone();
+    not_written.extend(rep.pending.iter().cloned());
+    not_written.extend(prepared.pending.iter().map(|p| p.generated.clone()));
+    ras_sync::save_written(root, &out.files, &not_written)?;
+    if !rep.foreign.is_empty() {
+        eprintln!("warning: 次のシートのモジュールには RAS が生成したコードがありますが、対応するファイルがありません（シートの複製でコードごと複製されたものです）。そのまま残しています: {}", rep.foreign.join(", "));
+    }
     println!("{} に同期しました（{}）", book.display(), rep.summary());
     if rep.drifted.is_empty() {
         return Ok(Some(ExitCode::SUCCESS));
@@ -726,7 +742,14 @@ fn take_over_offline(root: &Path, book: &Path, codepage: u16) -> Result<ras_sync
         }
         forms.iter().flatten().find(|f| f.name.eq_ignore_ascii_case(name)).cloned().ok_or_else(|| format!("{} にフォーム `{name}` のデザイナがありません", book.display()))
     };
-    ras_form::import::prepare(root, ras_form::import::Book { modules: &modules, workbook_code_name: &unpacked.code_names.workbook, sheet_controls: &ras_sync::sheet_controls(book).unwrap_or_default(), form: &mut form }, codepage)
+    let sheet_controls = ras_sync::sheet_controls(book).unwrap_or_default();
+    let mut written = ras_sync::Written::new(root);
+    let mut written = |name: &str| written.code(name);
+    let mut taken = ras_form::import::Book { modules: &modules, workbook_code_name: &unpacked.code_names.workbook, sheet_controls: &sheet_controls, form: &mut form, written: &mut written };
+    let mut prepared = ras_form::import::prepare(root, &mut taken, codepage)?;
+    // Code added in the VBE that does not compile as RAS goes back out of the file (spec §14.7.3).
+    ras_sync::settle_appended(root, &mut prepared)?;
+    Ok(prepared)
 }
 
 /// Prints what was taken over from the workbook and what waits for the user.

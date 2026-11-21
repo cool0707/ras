@@ -215,6 +215,62 @@ fn hand_written_vba_is_taken_over() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Code added in the VBE to modules RAS generated is taken over into their files (spec §14.7.3).
+#[test]
+fn code_added_in_the_vbe_is_taken_over() {
+    let dir = temp_dir("added");
+    let (ok, out) = ras(&dir, &["init", ".", "--workbook", "Book.xlsm"]);
+    assert!(ok, "{out}");
+    std::fs::create_dir_all(dir.join("objects")).unwrap();
+    let sheet_ras = "@on(\"Worksheet.Change\")\nfunction changed(target: Excel.Range) {\n    this.range(\"D1\").value = target.address;\n}\n";
+    std::fs::write(dir.join("objects/Sheet1.ras"), sheet_ras).unwrap();
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok, "{out}");
+    // What was written is kept, to compare with later.
+    assert!(dir.join("build/sync/Sheet1.vba").is_file() && dir.join("build/sync/Main.vba").is_file());
+    let book = dir.join("Book.xlsm");
+    let source_of = |name: &str| ras_ovba::unpack(&book).unwrap().project.unwrap().modules.into_iter().find(|m| m.name == name).unwrap().source;
+    let read = |file: &str| std::fs::read_to_string(dir.join(file)).unwrap();
+    // As the VBE would: a procedure and a variable in the sheet's module, a procedure in `Main`.
+    let edit = |name: &str, kind: ras_ovba::ModuleKind, change: &dyn Fn(String) -> String| {
+        ras_ovba::pack(&ras_ovba::PackRequest { book: book.clone(), codepage: 932, modules: vec![ras_ovba::VbaModule { name: name.into(), kind, source: change(source_of(name)) }], ..Default::default() }).unwrap();
+    };
+    edit("Sheet1", ras_ovba::ModuleKind::Document, &|s| format!("{}\r\nPrivate Sub Worksheet_Activate()\r\n    Range(\"A1\").Value = Counter\r\nEnd Sub\r\n", s.replace("Option Compare Binary\r\n", "Option Compare Binary\r\nPrivate Counter As Long\r\n")));
+    edit("Main", ras_ovba::ModuleKind::Standard, &|s| format!("{s}\r\nPublic Sub Extra()\r\n    MsgBox \"extra\"\r\nEnd Sub\r\n"));
+    assert!(source_of("Sheet1").contains("Private Counter As Long"));
+
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("VBE で足されたコード") && out.contains("objects/Sheet1.ras") && out.contains("Worksheet_Activate") && out.contains("src/main.ras") && out.contains("Extra"), "{out}");
+    let sheet = read("objects/Sheet1.ras");
+    assert!(sheet.starts_with(sheet_ras) && sheet.contains("// VBE で追加されたコードを取り込みました（"), "{sheet}");
+    assert!(sheet.contains("let Counter: int;") && sheet.contains("@on(\"Worksheet.Activate\")") && sheet.contains("this.range(\"A1\").value = Counter;"), "{sheet}");
+    assert!(read("src/main.ras").contains("export function Extra() {"), "{}", read("src/main.ras"));
+    assert!(read("vba/Sheet1.cls").contains("Private Sub Worksheet_Activate()"));
+    // The modules are written again from their files: no drift is left.
+    assert!(ras_compiler::emit::has_drifted(&source_of("Sheet1")) == Some(false) && source_of("Sheet1").contains("Private Sub Worksheet_Activate()"), "{}", source_of("Sheet1"));
+    assert_eq!(ras_compiler::emit::has_drifted(&source_of("Main")), Some(false));
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(ok && !out.contains("取り込みました") && out.contains("作成 0 / 更新 0 / 削除 0"), "{out}");
+
+    // What does not compile as RAS is not taken over: the module stays as drift.
+    let before = read("src/main.ras");
+    edit("Main", ras_ovba::ModuleKind::Standard, &|s| format!("{s}\r\nPublic Sub Broken()\r\n    NoSuchProcedure 1\r\nEnd Sub\r\n"));
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(!ok && out.contains("コンパイル エラーになるため取り込みませんでした") && out.contains("ドリフト"), "{out}");
+    assert_eq!(read("src/main.ras"), before);
+
+    // A procedure RAS wrote was changed: drift; what was added next to it is taken over all the same.
+    let (ok, out) = ras(&dir, &["pack", "--overwrite"]);
+    assert!(ok, "{out}");
+    edit("Sheet1", ras_ovba::ModuleKind::Document, &|s| format!("{}\r\nPrivate Sub Worksheet_Deactivate()\r\nEnd Sub\r\n", s.replace("changed Target", "changed Target: Beep")));
+    let (ok, out) = ras(&dir, &["pack"]);
+    assert!(!ok && out.contains("ドリフト") && out.contains("Sheet1") && out.contains("Worksheet_Deactivate"), "{out}");
+    assert!(read("objects/Sheet1.ras").contains("@on(\"Worksheet.Deactivate\")"));
+    assert!(source_of("Sheet1").contains("Beep"), "left as it is");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn errors_are_reported_with_source_position() {
     let dir = temp_dir("errors");

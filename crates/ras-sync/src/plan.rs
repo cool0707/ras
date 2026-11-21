@@ -73,6 +73,9 @@ pub struct SyncOptions {
     /// Components taken over into files that still need the user's attention: `(component,
     /// generated module)`. Neither is written, the component stays as it is.
     pub pending: Vec<(String, String)>,
+    /// Modules a sync of this project wrote code into before (`build/sync/`): generated code
+    /// in a sheet that is not one of them came with a copy of another sheet.
+    pub written: Vec<String>,
 }
 
 impl SyncOptions {
@@ -95,6 +98,9 @@ pub struct Report {
     pub drifted: Vec<String>,
     /// Components left alone because their converted file needs attention ([`SyncOptions::pending`]).
     pub pending: Vec<String>,
+    /// Sheets whose module holds generated code that no file of the project generates and
+    /// that this project did not write: copies of sheets, left alone (spec §14.6).
+    pub foreign: Vec<String>,
 }
 
 impl Report {
@@ -135,23 +141,27 @@ pub enum DocumentAction {
     Drifted,
     /// Hand-written code that what the file generates would replace.
     HandWritten,
+    /// Generated code this project did not write into the module, which has no file: it came
+    /// with a copy of a sheet. Left as it is (spec §14.6).
+    Foreign,
 }
 
 /// Decides what to do with a document module (spec §14.6). `current` is its code (with or
 /// without the `Attribute` header), `generated` what its file generates (`None`: no file, or a
-/// file without code). `adopt`: its hand-written code was taken over into the project (spec
-/// §14.7.1).
+/// file without code). `adopt`: its hand-written code, or what was added to it in the VBE,
+/// was taken over into the project (spec §14.7.1, §14.7.3). `own`: a sync of this project
+/// wrote code into this module before.
 ///
 /// The module is written as a whole. The RAS-managed region that earlier versions kept
 /// inside a document module is removed first; what is left decides.
-pub fn document_action(current: &str, generated: Option<&str>, adopt: bool, overwrite: bool) -> DocumentAction {
+pub fn document_action(current: &str, generated: Option<&str>, adopt: bool, overwrite: bool, own: bool) -> DocumentAction {
     let pane: String = current.replace("\r\n", "\n").lines().skip_while(|l| l.starts_with("Attribute ") || l.starts_with("VERSION ")).map(|l| format!("{l}\r\n")).collect();
     let legacy = pane.lines().any(|l| l.trim() == ras_ovba::RAS_BEGIN_MARKER);
     let rest = if legacy { ras_ovba::merge_managed_region(&pane, "") } else { pane.clone() };
     match (generated, has_drifted(&rest)) {
         (Some(code), Some(false)) if !legacy && same_code(&pane, code) => DocumentAction::Unchanged,
         (Some(code), Some(false)) => DocumentAction::Write(code.to_string()),
-        (_, Some(true)) if !overwrite => DocumentAction::Drifted,
+        (_, Some(true)) if !overwrite && !adopt => DocumentAction::Drifted,
         (Some(code), Some(true)) => DocumentAction::Write(code.to_string()),
         (Some(code), None) if has_statements(&rest) && !adopt && !overwrite => {
             let _ = code;
@@ -159,7 +169,8 @@ pub fn document_action(current: &str, generated: Option<&str>, adopt: bool, over
         }
         (Some(code), None) => DocumentAction::Write(code.to_string()),
         // Generated earlier, no longer generated.
-        (None, Some(_)) => DocumentAction::Write(String::new()),
+        (None, Some(_)) if own || overwrite => DocumentAction::Write(String::new()),
+        (None, Some(_)) => DocumentAction::Foreign,
         (None, None) if has_statements(&rest) => {
             if adopt {
                 DocumentAction::Write(String::new())
@@ -289,7 +300,8 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, op
             continue;
         }
         let generated = files.iter().find(|f| f.kind == VModuleKind::Document && same_name(&f.name, &doc.name));
-        match document_action(&doc.code, generated.map(|f| f.code.as_str()), opts.adopts(&doc.name), opts.overwrite) {
+        let own = opts.written.iter().any(|n| same_name(n, &doc.name));
+        match document_action(&doc.code, generated.map(|f| f.code.as_str()), opts.adopts(&doc.name), opts.overwrite, own) {
             DocumentAction::Unchanged => {
                 if generated.is_some() {
                     report.unchanged.push(doc.name.clone());
@@ -299,6 +311,7 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, op
             DocumentAction::Keep => {}
             DocumentAction::Drifted => report.drifted.push(doc.name.clone()),
             DocumentAction::HandWritten => hand_written.push(doc.name.clone()),
+            DocumentAction::Foreign => report.foreign.push(doc.name.clone()),
         }
     }
 
@@ -318,7 +331,8 @@ pub fn apply(project: &mut dyn VbProject, files: &[OutputFile], forms: Forms, op
                 hand_written.push(c.name.clone());
                 continue;
             }
-            Some(true) if !opts.overwrite => {
+            // (What was added to it in the VBE was taken over: written again from its file.)
+            Some(true) if !opts.overwrite && !opts.adopts(&c.name) => {
                 report.drifted.push(c.name.clone());
                 continue;
             }
@@ -692,8 +706,13 @@ mod tests {
         assert!(code.starts_with("' RAS-GENERATED hash=") && code.contains("Option Explicit") && !code.contains(ras_ovba::RAS_BEGIN_MARKER), "{code}");
         assert_eq!(apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap().changed(), 0);
 
-        // Without the file the generated code goes: the module is left without code.
-        let report = apply(&mut book, &build_with(HELLO, &[("ThisWorkbook", ON_OPEN)]), Forms::NONE, &SyncOptions::default()).unwrap();
+        // Without the file: generated code this project did not write came with a copy of a
+        // sheet and stays; what it wrote goes, and the module is left without code.
+        let without = build_with(HELLO, &[("ThisWorkbook", ON_OPEN)]);
+        let report = apply(&mut book, &without, Forms::NONE, &SyncOptions::default()).unwrap();
+        assert_eq!((report.foreign.as_slice(), report.changed()), (&["Sheet1".to_string()][..], 0), "{report:?}");
+        let own = SyncOptions { written: vec!["sheet1".into()], ..SyncOptions::default() };
+        let report = apply(&mut book, &without, Forms::NONE, &own).unwrap();
         assert_eq!(report.updated, ["Sheet1"], "{report:?}");
         assert_eq!(book.code("Sheet1").unwrap(), "");
 
@@ -705,6 +724,10 @@ mod tests {
         let report = apply(&mut book, &files, Forms::NONE, &SyncOptions::default()).unwrap();
         assert_eq!(report.drifted, ["Sheet1"], "{report:?}");
         assert_eq!(book.code("Sheet1").unwrap(), edited);
+        // What was added to it was taken over into its file (spec §14.7.3): written again.
+        let report = apply(&mut book, &files, Forms::NONE, &adopting(&["Sheet1"])).unwrap();
+        assert_eq!(report.updated, ["Sheet1"], "{report:?}");
+        book.components.iter_mut().find(|c| c.name == "Sheet1").unwrap().code = edited;
         apply(&mut book, &files, Forms::NONE, &SyncOptions { overwrite: true, ..SyncOptions::default() }).unwrap();
         assert_eq!(book.code("Sheet1").unwrap(), doc.code);
     }
