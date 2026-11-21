@@ -2,20 +2,39 @@
 //! people working without Excel. The cells a run changed are marked when another workbook is
 //! given to compare with. The editor shows the same page in a panel.
 
+use std::cell::{Cell, RefCell};
+
 use serde_json::{Value as Json, json};
 
 use crate::book::Book;
+use crate::book::view::Drawing;
 use crate::diff::{self, Diff};
+
+pub mod chart;
+mod controls;
+pub mod drawing;
+mod emf;
+mod geom;
+#[cfg(test)]
+mod tests;
+mod xml;
+
+pub use drawing::Parts;
 
 const CSS: &str = include_str!("view/view.css");
 const JS: &str = include_str!("view/view.js");
+const CHART_JS: &str = include_str!("view/chart.js");
 
-/// What the page draws: the sheets of `book` and, with `changes`, what differs from another workbook.
-pub fn data(book: &mut Book, file: &str, limits: Option<(u32, u32)>, changes: Option<(&str, &Diff)>) -> Result<Json, String> {
+/// What the page draws: the sheets of `book` with the drawings of the workbook file `source`
+/// (its bytes) and, with `changes`, what differs from another workbook.
+pub fn data(book: &mut Book, file: &str, source: Option<&[u8]>, limits: Option<(u32, u32)>, changes: Option<(&str, &Diff)>) -> Result<Json, String> {
     let (rows, cols) = limits.unwrap_or((crate::book::MAX_ROWS, crate::book::MAX_COLS));
+    let parts = source.map(Parts::read);
+    let (ids, images) = (Cell::new(0), RefCell::new(drawing::Images::default()));
+    let drawing = parts.as_ref().map(|parts| Drawing { parts, ids: &ids, images: &images });
     let mut sheets = Vec::new();
     for si in 0..book.sheet_count() {
-        sheets.push(book.sheet_view(si, rows, cols)?);
+        sheets.push(book.sheet_view(si, rows, cols, drawing.as_ref())?);
     }
     let diff = changes.map(|(before, d)| {
         let mut by_sheet = serde_json::Map::new();
@@ -28,7 +47,7 @@ pub fn data(book: &mut Book, file: &str, limits: Option<(u32, u32)>, changes: Op
         }
         json!({ "before": before, "structure": diff::structure_lines(d), "changes": by_sheet })
     });
-    Ok(json!({ "file": file, "sheets": sheets, "diff": diff, "active": Json::Null }))
+    Ok(json!({ "file": file, "sheets": sheets, "diff": diff, "active": Json::Null, "images": images.into_inner().list }))
 }
 
 fn escape(s: &str) -> String {
@@ -43,9 +62,9 @@ pub fn page(data: &Json) -> String {
     format!(
         "<!doctype html>\n<html lang=\"ja\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>\n<style>\n{CSS}</style>\n</head>\n<body>\n\
          <div id=\"top\"><span class=\"file\" id=\"file\"></span><span class=\"note\" id=\"summary\"></span></div>\n\
-         <div id=\"bar\"><div id=\"name\"></div><div id=\"fx\"></div></div>\n\
+         <div id=\"bar\"><div id=\"name\"></div><div id=\"fx\"></div><button id=\"formulas\" type=\"button\" title=\"セルに値ではなく数式を表示します（Ctrl+` / Ctrl+Shift+@）\" aria-pressed=\"false\">数式の表示</button></div>\n\
          <div id=\"main\"><div id=\"grid\"></div><div id=\"side\"></div></div>\n\
          <div id=\"note\" hidden></div>\n<div id=\"tabs\"></div>\n\
-         <script>window.DATA = {embedded};</script>\n<script>\n{JS}</script>\n</body>\n</html>\n"
+         <script>window.DATA = {embedded};</script>\n<script>\n{CHART_JS}</script>\n<script>\n{JS}</script>\n</body>\n</html>\n"
     )
 }

@@ -310,7 +310,8 @@ pub fn run(root: &Path, out: &ras_compiler::JsOutput, args: &RunArgs) -> Result<
         for w in report["workbooks"].as_array().cloned().unwrap_or_default() {
             let Some(file) = w["file"].as_str() else { continue };
             let before = w["source"].as_str().map(|s| root.join(s));
-            match crate::book::write_view(&root.join(file), before.as_deref(), false, None, &root.join("build").join("view")) {
+            // The shapes and controls of the workbook the run read: the saved one keeps the cells.
+            match crate::book::write_view(&root.join(file), before.as_deref(), false, None, &root.join("build").join("view"), before.as_deref()) {
                 Ok(page) => println!("グリッド表示: {}", page.strip_prefix(root).unwrap_or(&page).display()),
                 Err(e) => eprintln!("warning: {file} のグリッド表示を作れませんでした: {e}"),
             }

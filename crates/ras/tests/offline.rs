@@ -864,11 +864,18 @@ fn book_view_draws_the_sheets_and_marks_changes() {
     assert_eq!((c3["t"].as_str(), c3["f"].as_str(), c3["k"].as_str()), (Some("7,000"), Some("=B3*100"), Some("number")));
     assert!(style(&c3).contains("text-align:right"), "{}", style(&c3));
     assert_eq!(sheet["merges"], serde_json::json!([[0, 4, 1, 5]]));
+    // The grid goes on past the cells; no drawing, no objects.
+    assert_eq!((sheet["maxRows"].as_u64(), sheet["maxCols"].as_u64(), sheet["gridLines"].as_bool()), (Some(1_048_576), Some(16_384), Some(true)));
+    assert_eq!(sheet["objects"], serde_json::json!([]));
     // What changed since a.xlsx, for the marks and the list.
     assert_eq!(data["diff"]["before"], "a.xlsx");
     let changed: Vec<&str> = data["diff"]["changes"]["Sheet1"].as_array().unwrap().iter().map(|c| c["a"].as_str().unwrap()).collect();
     assert_eq!(changed, vec!["B3", "C3", "C5"]);
     assert_eq!(data["diff"]["changes"]["Sheet1"][0], serde_json::json!({ "a": "B3", "before": "5", "after": "70" }));
+
+    // The drawings of another workbook (the one a run read).
+    let (code, _, err) = ras(&dir, &["book", "view", "b.xlsx", "--drawings", "a.xlsx", "--stdout"]);
+    assert_eq!(code, 0, "{err}");
 
     // Into a file; the limit on rows is told.
     let (code, out, err) = ras(&dir, &["book", "view", "b.xlsx", "-o", "out/b.html"]);

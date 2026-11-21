@@ -48,7 +48,7 @@ pub enum BookCommand {
         #[arg(long)]
         all: bool,
     },
-    /// ブックを Excel のようなグリッドで表示する HTML を作る（値・数式・主な書式・結合セル・フィルター。--diff で変更されたセルを強調）
+    /// ブックを Excel のようなグリッドで表示する HTML を作る（値・数式・主な書式・結合セル・フィルター・図形・画像・グラフ・コントロール。--diff で変更されたセルを強調）
     View {
         /// 対象ブック（省略時は ras.toml の project.workbook）
         file: Option<PathBuf>,
@@ -70,6 +70,9 @@ pub enum BookCommand {
         /// 表示するブックの名前（省略時はファイル名）
         #[arg(long, value_name = "NAME")]
         title: Option<String>,
+        /// 図形・画像・コントロールを読むブック（省略時は対象ブック）。実行で保存されたブックを、実行前のブックの図形と重ねて表示するときに指定する
+        #[arg(long, value_name = "BOOK")]
+        drawings: Option<PathBuf>,
     },
     /// 2 つのブックのセル（値・数式・表示形式）と構造（シート、行・列の挿入と削除の推定）の差分を出力する
     Diff {
@@ -176,8 +179,11 @@ pub fn diff_cmd(before: &Path, after: &Path, format: DiffFormat, max_cells: usiz
     Ok(if d.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
 }
 
-/// The page that draws `file` as a grid, with what differs from `before` marked.
-pub fn view_page(file: &Path, before: Option<&Path>, all: bool, title: Option<&str>) -> Result<String, String> {
+/// The page that draws `file` as a grid, with what differs from `before` marked. The objects of
+/// the sheets' drawings (shapes, pictures, controls) are those of `drawings` when it is given: a
+/// workbook a run saved has lost some of them (the stand-in for Excel saves the cells and the
+/// formats, not the controls), and the run does not change them.
+pub fn view_page(file: &Path, before: Option<&Path>, all: bool, title: Option<&str>, drawings: Option<&Path>) -> Result<String, String> {
     let mut book = open(file)?;
     let name = title.map(str::to_string).unwrap_or_else(|| file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
     let changes = match before {
@@ -186,13 +192,15 @@ pub fn view_page(file: &Path, before: Option<&Path>, all: bool, title: Option<&s
         None => None,
     };
     let limits = if all { None } else { Some((ras_workbook::book::VIEW_ROWS, ras_workbook::book::VIEW_COLS)) };
-    let data = view::data(&mut book, &name, limits, changes.as_ref().map(|(n, d)| (n.as_str(), d)))?;
+    // The drawings (shapes, pictures, controls) are read from the file itself.
+    let source = drawings.and_then(|d| std::fs::read(d).ok()).or_else(|| std::fs::read(file).ok());
+    let data = view::data(&mut book, &name, source.as_deref(), limits, changes.as_ref().map(|(n, d)| (n.as_str(), d)))?;
     Ok(view::page(&data))
 }
 
 /// Writes the page for `file` into `dir` (`<name>.html`); returns its path.
-pub fn write_view(file: &Path, before: Option<&Path>, all: bool, output: Option<&Path>, dir: &Path) -> Result<PathBuf, String> {
-    let page = view_page(file, before, all, None)?;
+pub fn write_view(file: &Path, before: Option<&Path>, all: bool, output: Option<&Path>, dir: &Path, drawings: Option<&Path>) -> Result<PathBuf, String> {
+    let page = view_page(file, before, all, None, drawings)?;
     let target = match output {
         Some(o) => o.to_path_buf(),
         None => dir.join(format!("{}.html", file.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "book".into()))),
