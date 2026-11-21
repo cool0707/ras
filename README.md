@@ -3,6 +3,7 @@
 TypeScript ライクな構文から VBA（`.bas` / `.cls`）へトランスパイルする Better VBA 言語。
 
 - 言語仕様: [docs/RAS_Language_Specification.md](docs/RAS_Language_Specification.md)
+- 今後実装する機能: [docs/ROADMAP.md](docs/ROADMAP.md)
 - 対象: Windows 版 Excel（Office 2007 以降、32bit / 64bit）
 
 ```typescript
@@ -201,7 +202,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 - 既存のブックの取り込み（§14.7.1）: `ras pack` での取り込みと置き換えは自動テストで確認しています。ライブ同期での取り込み（COM でのコードの読み取り、`VBComponent.Export` で書き出したフォームの読み取り）は実機の Excel では未検証です。`.frm` / `.frx` の読み取りは、Excel が保存したフォームを書き出して読み直すと同じデザインになることを自動テストで確認しています。
 - デバッグ実行のダイアログ監視は、Excel / VBE の実際のダイアログ（実行時エラー、コンパイル エラー、Office 独自のダイアログ）では未検証です。判定規則は [xlflow](https://github.com/harumiWeb/xlflow) が実機で確立したもの（ボタンをコントロール ID とアクセスキーで識別する、実行時エラーは「終了」で閉じる、など）に合わせています。
 - 32bit Office では未検証です（`RAS_Rebase` の 32bit 側のオフセットなど）。
-- VS Code 拡張はパッケージ化と文法テストまで確認済みで、実機の VS Code 上では動かしていません。
+- VS Code 拡張は実機の VS Code 上で動作を確認しています。
 
 ## 開発
 
