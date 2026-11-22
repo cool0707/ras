@@ -5,17 +5,15 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Offline reader/writer for the VBA project (vbaProject.bin) inside Excel workbooks"
+description = "Offline pack / unpack of the VBA project of Excel workbooks: the package around vbaProject.bin, which umya-spreadsheet's vba module reads and writes"
 
 [dependencies]
-cfb = { workspace = true }
+# The VBA project itself (umya_spreadsheet::vba): the fork that xljs uses too.
+umya-spreadsheet = { workspace = true }
 zip = { workspace = true }
-encoding_rs = { workspace = true }
-crc32fast = { workspace = true }
-uuid = { workspace = true }
-# The clock (`SystemTime::now`) that works in the browser too (crates/ras-wasm); cfb uses it as well.
-web-time = "1"
 
 [dev-dependencies]
+# The project of a workbook as the tests look into it.
+cfb = { workspace = true }
+encoding_rs = { workspace = true }
 ovba = { workspace = true }
-proptest = { workspace = true }

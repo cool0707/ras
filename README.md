@@ -466,7 +466,7 @@ cd web && npm ci && npm run wasm && npm test && npm run serve   # プレイグ�
 |---|---|
 | `crates/ras-syntax` | 字句解析（`logos`）、構文解析（手書き再帰下降、`rowan` のロスレス CST）、AST、フォーマッタ |
 | `crates/ras-compiler` | 宣言収集、型チェック、VBA への変換、ランタイム、出力 |
-| `crates/ras-ovba` | MS-OVBA 圧縮、`vbaProject.bin` の読み書き、OPC パッケージ |
+| `crates/ras-ovba` | ブックのファイルの VBA プロジェクトの pack / unpack（OPC パッケージの編集、シートの追加・削除、ユーザーフォームの取り出し）。`vbaProject.bin` そのものの読み書き・MS-OVBA 圧縮は umya-spreadsheet のフォークの `vba` モジュール（xljs と共用）で、その型と関数をここから使えるようにしている |
 | `crates/ras-lsp` | 言語サーバ |
 | `crates/ras` | CLI |
 | `crates/ras-workbook` | ブックの代役のブック（umya-spreadsheet と GridCraft の計算エンジン）、`ras book dump` / `diff` / `view`、`ras book edit`（`patch`: 編集をブックのファイルに書き戻す） |

@@ -12,11 +12,12 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use umya_spreadsheet::vba::{self, VbaProject};
+
 use crate::error::OvbaError;
 use crate::opc::{self, Package, PackagePlan, SheetKind};
 use crate::pack::{self, BookType};
-use crate::project::same_name;
-use crate::vba::{self, LoadedProject};
+use crate::same_name;
 use crate::xml::{self, Edits, TagKind};
 use crate::ProjectEdit;
 
@@ -950,8 +951,8 @@ fn follow_in_project(
         return Ok(bytes);
     };
     let bin = package.read(&part)?.unwrap_or_default();
-    let loaded = LoadedProject::read(&bin)?;
-    if loaded.protection.is_protected() {
+    let loaded = VbaProject::read(&bin)?;
+    if loaded.is_protected() {
         return Err(OvbaError::Protected);
     }
     let documents = pack::document_plan(&layout);
@@ -968,9 +969,9 @@ fn follow_in_project(
     };
     let built = vba::build_project(Some(&loaded), &documents.ensure, &edit)?;
     let before: Vec<String> = loaded
-        .modules
+        .modules()
         .iter()
-        .map(|m| m.record.name.clone())
+        .map(|m| m.name().to_string())
         .collect();
     let after: Vec<String> = built.modules.iter().map(|m| m.name.clone()).collect();
     if before == after {
@@ -1046,10 +1047,10 @@ pub fn edit_sheets(req: &SheetEditRequest) -> Result<SheetEditReport, OvbaError>
     if let Some(part) = &layout.vba_part {
         let bin = package.read(part)?.unwrap_or_default();
         code_names.extend(
-            LoadedProject::read(&bin)?
-                .modules
+            VbaProject::read(&bin)?
+                .modules()
                 .iter()
-                .map(|m| m.record.name.clone()),
+                .map(|m| m.name().to_string()),
         );
     }
     let check_name = |name: &str, but: Option<usize>| -> Result<(), OvbaError> {

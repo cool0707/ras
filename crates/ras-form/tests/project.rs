@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 
-use ras_ovba::{DocumentSpec, ModuleKind, ProjectEdit, UserForm};
+use ras_ovba::{DocumentKind, DocumentSpec, ModuleKind, ProjectEdit, UserForm};
 
 fn fixture(name: &str) -> ras_form::Designer {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -91,7 +91,7 @@ fn new_project_with_a_generated_form() {
     };
     let documents = [DocumentSpec {
         code_name: "ThisWorkbook".into(),
-        is_workbook: true,
+        kind: DocumentKind::Workbook,
     }];
     let bin = ras_ovba::write_project_bin(None, &documents, &edit).unwrap();
 
@@ -261,7 +261,7 @@ fn forms_are_read_back_from_a_project() {
     };
     let documents = [DocumentSpec {
         code_name: "ThisWorkbook".into(),
-        is_workbook: true,
+        kind: DocumentKind::Workbook,
     }];
     let bin = ras_ovba::write_project_bin(None, &documents, &edit).unwrap();
 

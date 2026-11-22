@@ -271,8 +271,8 @@ pub fn diff_cmd(
 
 /// The page that draws `file` as a grid, with what differs from `before` marked. The objects of
 /// the sheets' drawings (shapes, pictures, controls) are those of `drawings` when it is given: a
-/// workbook a run saved has lost some of them (the stand-in for Excel saves the cells and the
-/// formats, not the controls), and the run does not change them. `sheet` (a sheet's name or
+/// workbook a run saved can draw some of them differently (umya-spreadsheet, which the stand-in
+/// saves with, does not keep all of what drawings hold), and the run does not change them. `sheet` (a sheet's name or
 /// code name) is the sheet shown first.
 pub fn view_page(
     file: &Path,

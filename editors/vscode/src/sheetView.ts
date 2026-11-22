@@ -70,7 +70,7 @@ function projectWorkbook(root: string): string | undefined {
 
 /**
  * The page of `ras book view` for a workbook. `drawings`: the workbook whose shapes, pictures and
- * controls are drawn (a workbook a run saved keeps its cells, not all of them).
+ * controls are drawn (a workbook a run saved may not keep all of what they look like).
  */
 function page(root: string | undefined, file: string, before: string | undefined, title: string | undefined, drawings?: string, sheet?: string, editable = false): Promise<string> {
 	const exe = findServerExecutable(setting("path"), root ?? path.dirname(file));

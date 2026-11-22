@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use serde_json::{Value as Json, json};
 use umya_spreadsheet::EnumTrait;
 use umya_spreadsheet::Style;
+use umya_spreadsheet::drawingml::anchor::Anchor;
 
 use super::*;
 
@@ -400,8 +401,8 @@ impl Sizes {
     }
 
     /// The box of an anchor in pixels: (left, top, right, bottom).
-    fn anchor(&self, an: &crate::view::drawing::Anchor) -> Option<(f64, f64, f64, f64)> {
-        use crate::view::drawing::EMU_PX;
+    fn anchor(&self, an: &Anchor) -> Option<(f64, f64, f64, f64)> {
+        use umya_spreadsheet::drawingml::EMU_PX;
         let at = |m: (u32, i64, u32, i64)| {
             (
                 self.x(m.0) + m.1 as f64 / EMU_PX,
@@ -495,10 +496,7 @@ impl Book {
             }
             widths.retain(|_, w| *w != default_w);
             heights.retain(|_, h| *h != default_h);
-            // (umya-spreadsheet reads an absent showGridLines as false: the file says it.)
-            let grid = drawing
-                .and_then(|d| d.parts.grid_lines(&info.name))
-                .unwrap_or(true);
+            let grid = super::sheet_view::grid_lines(ws);
             (
                 Sizes {
                     default_w,
@@ -558,7 +556,7 @@ impl Book {
         // The icons of icon sets, once each: "set:index" -> SVG.
         let mut icons = serde_json::Map::new();
         // The workbook's own table styles.
-        let custom = drawing.map(|d| d.parts.table_styles()).unwrap_or_default();
+        let custom = super::tables::custom_styles(&self.file);
         // The colors number formats give what the cells show (`[Red]`).
         let mut format_colors: HashMap<(u32, u32), String> = HashMap::new();
         for c in &cells {
@@ -575,16 +573,15 @@ impl Book {
             };
             // The cells with a value, then those with only formats (a fill, a border).
             let plain = Style::default();
-            // A cell without a format of its own has the Normal style's alignment (umya-spreadsheet
-            // reads it as no format at all).
-            let normal = drawing.and_then(|d| d.parts.normal_alignment()).map(|a| {
+            // A cell without a format of its own has the Normal style's alignment (its style is
+            // empty).
+            let normal = self.file.normal_style().alignment().map(|a| {
                 let mut st = Style::default();
-                st.set_alignment(a);
+                st.set_alignment(a.clone());
                 st
             });
             // The tables' styles under the cells' own formats.
-            let flags = |name: &str| drawing.and_then(|d| d.parts.table_flags(name));
-            let tables = super::tables::overlays(ws, &custom, &flags);
+            let tables = super::tables::overlays(ws, &custom);
             let mut at: Vec<(u32, u32)> = by_at.keys().copied().collect();
             for c in ws.cells() {
                 let p = at_of(c);
@@ -705,7 +702,7 @@ impl Book {
         let objects: Vec<Json> = objects
             .iter()
             .map(|o| {
-                use crate::view::drawing::EMU_PX;
+                use umya_spreadsheet::drawingml::EMU_PX;
                 let px = |v: i64| (v as f64 / EMU_PX * 100.0).round() / 100.0;
                 let marker = |m: (u32, i64, u32, i64)| json!([m.0, px(m.1), m.2, px(m.3)]);
                 let mut j = json!({ "kind": o.kind, "html": o.html });
@@ -787,11 +784,11 @@ impl Book {
             })
             .unwrap_or_default();
         // The buttons of the tables' headings: [row, column, filtered (0 / 1)].
-        let table_filters: Vec<Json> = match (self.file.sheet(si), drawing) {
-            (Ok(ws), Some(d)) => ws
+        let table_filters: Vec<Json> = match self.file.sheet(si) {
+            Ok(ws) => ws
                 .tables()
                 .iter()
-                .filter_map(|t| d.parts.table_filter(t.name()))
+                .filter_map(super::sheet_view::table_filter)
                 .flat_map(|(r, hidden, filtered)| {
                     (r.start.col..=r.end.col)
                         .map(move |c| (r.start.row, c, c - r.start.col))
@@ -804,13 +801,14 @@ impl Book {
         let (notes, lists) = self.notes_and_lists(si, &info.name)?;
         let links = self.links(si);
         // The panes frozen (rows, columns), as the file keeps them.
-        let frozen = drawing.and_then(|d| d.parts.frozen(&info.name));
+        let screen = self.file.sheet(si).ok();
+        let frozen = screen.and_then(super::sheet_view::frozen);
         Ok(json!({
             "frozen": frozen.map(|(r, c)| json!([r, c])),
-            "zoom": drawing.and_then(|d| d.parts.zoom(&info.name)),
+            "zoom": screen.and_then(super::sheet_view::zoom),
             // The active cell and the range selected when the file was saved.
-            "selection": drawing
-                .and_then(|d| d.parts.selection(&info.name))
+            "selection": screen
+                .and_then(super::sheet_view::selection)
                 .map(|(a, r)| json!([a.row, a.col, r.start.row, r.start.col, r.end.row, r.end.col])),
             "notes": notes,
             "links": links,
@@ -848,6 +846,15 @@ impl Book {
     /// choose from a list, with what the list holds: `{ ranges: [[r1, c1, r2, c2]], values,
     /// title, prompt, stop, all }` (`values` absent: the list's button is hidden; `stop`: an
     /// entry not among `all` is refused, with that message, empty for Excel's own).
+    /// The workbook's default font (the Normal style's name and size).
+    fn default_font(&self) -> (String, f64) {
+        self.file
+            .default_font()
+            .filter(|(name, _)| !name.is_empty())
+            .map(|(name, size)| (name, if size > 0.0 { size } else { 11.0 }))
+            .unwrap_or(("游ゴシック".into(), 11.0))
+    }
+
     fn notes_and_lists(&mut self, si: usize, sheet: &str) -> Result<(Vec<Json>, Vec<Json>)> {
         let Ok(ws) = self.file.sheet(si) else {
             return Err("シートがありません".into());
@@ -1018,6 +1025,7 @@ impl Book {
         sizes: &Sizes,
     ) -> Vec<crate::view::drawing::Obj> {
         use crate::view::drawing::{Env, sheet_objects};
+        let font = self.default_font();
         let me = std::cell::RefCell::new(&mut *self);
         // A reference of a control (`$A$1:$A$5`, `Sheet2!A1:A3`): its sheet and its range.
         let resolve = |r: &str| -> Option<(usize, RangeRef)> {
@@ -1089,7 +1097,7 @@ impl Book {
                     .collect(),
             )
         };
-        let size = |an: &crate::view::drawing::Anchor| {
+        let size = |an: &Anchor| {
             sizes
                 .anchor(an)
                 .map(|(x, y, x2, y2)| ((x2 - x) * 0.75, (y2 - y) * 0.75))
@@ -1100,6 +1108,7 @@ impl Book {
             texts: &texts,
             value: &value,
             range: &range,
+            font,
         };
         sheet_objects(d.parts, sheet, &env, d.ids, d.images)
     }
