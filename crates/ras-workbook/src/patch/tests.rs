@@ -660,3 +660,34 @@ fn the_fill_handle_continues_what_it_is_dragged_from() {
     );
     assert!(refused(r#"{"op":"autofill","from":"A1:B2","to":"A1:C3"}"#).contains("どちらかにだけ"));
 }
+
+#[test]
+fn a_macro_is_assigned_to_a_button_and_a_chart() {
+    let out = edit(
+        r#"[{"op":"macro","shape":1025,"macro":"Sheet1.runIt"},{"op":"macro","object":"Chart 1","macro":"Sheet1.chartClick"}]"#,
+    );
+    assert_eq!(
+        changed(BOOK, &out),
+        ["xl/drawings/drawing1.xml", "xl/drawings/vmlDrawing1.vml"]
+    );
+    let vml = part(&out, "xl/drawings/vmlDrawing1.vml");
+    assert!(vml.contains("<x:FmlaMacro>[0]!Sheet1.runIt</x:FmlaMacro>"));
+    assert!(!vml.contains("say_hello"));
+    assert!(
+        part(&out, "xl/drawings/drawing1.xml")
+            .contains("<xdr:graphicFrame macro=\"[0]!Sheet1.chartClick\">")
+    );
+    // The cells are those they were.
+    assert_eq!(
+        cell(&out, "Data", "A1", Read::Formula),
+        cell(BOOK, "Data", "A1", Read::Formula)
+    );
+    assert!(refused(r#"{"op":"macro","object":"なし","macro":"Sheet1.a"}"#).contains("なし"));
+    assert!(
+        parse_ops(
+            &serde_json::json!({"op":"macro","object":"Chart 1","macro":"a b"}),
+            Some("Data")
+        )
+        .is_err()
+    );
+}

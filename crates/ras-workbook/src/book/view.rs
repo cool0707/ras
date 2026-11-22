@@ -582,6 +582,15 @@ impl Book {
                 if !o.macro_name.is_empty() {
                     j["macro"] = json!(o.macro_name);
                 }
+                if let Some(class) = o.activex {
+                    j["activex"] = json!(class);
+                }
+                if o.assignable {
+                    j["onAction"] = json!(true);
+                }
+                if let Some(id) = o.shape_id {
+                    j["shapeId"] = json!(id);
+                }
                 if let Some(c) = &o.chart {
                     j["chart"] = c.clone();
                 }

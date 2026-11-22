@@ -351,6 +351,10 @@ impl Controls {
             macro_name,
             kind: "control",
             chart: None,
+            activex: c.ax.as_ref().map(msforms_type),
+            // Embedded objects run no macro.
+            assignable: c.ax.is_none() && c.kind != "Pict",
+            shape_id: Some(c.id),
         })
     }
 }
@@ -865,6 +869,20 @@ fn class_of(clsid: &str) -> (&'static str, u8) {
         "79176FB0-B7F2-11CE-97EF-00AA006D2776" => ("SpinButton", 0),
         "DFD181E0-5E2F-11CE-A449-00AA004A803D" => ("ScrollBar", 0),
         _ => ("", 0),
+    }
+}
+
+/// The Microsoft Forms 2.0 type of an ActiveX control (`TextBox`; empty for another control).
+fn msforms_type(ax: &Ax) -> &'static str {
+    match (ax.class, ax.display) {
+        ("MorphData", 1) => "TextBox",
+        ("MorphData", 2) => "ListBox",
+        ("MorphData", 3) => "ComboBox",
+        ("MorphData", 4) => "CheckBox",
+        ("MorphData", 5) => "OptionButton",
+        ("MorphData", 6) => "ToggleButton",
+        ("MorphData", _) => "",
+        (class, _) => class,
     }
 }
 

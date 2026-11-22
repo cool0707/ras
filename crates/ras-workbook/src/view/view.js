@@ -45,6 +45,7 @@
     let current = null;
     // The object (a shape, a control) selected, and the cell of the active cell.
     let selected = null;
+    let selectedObj = null;
     let activeTd = null;
     // The sheet as drawn: its table, the rows and columns so far, where they are.
     let view = null;
@@ -69,6 +70,8 @@
     function clearSelection() {
         if (selected) selected.classList.remove("on");
         selected = null;
+        selectedObj = null;
+        refreshEventButton();
         if (activeTd) activeTd.classList.remove("sel");
         activeTd = null;
         if (view) {
@@ -175,7 +178,9 @@
         if (entry) cancelEntry();
         clearSelection();
         selected = box;
+        selectedObj = obj;
         box.classList.add("on");
+        refreshEventButton();
         $("name").textContent = obj.name || "";
         $("fx").textContent = obj.macro ? `マクロ: ${obj.macro}` : "";
     }
@@ -592,6 +597,21 @@
             box.addEventListener("click", (e) => {
                 e.stopPropagation();
                 selectObject(box, obj);
+            });
+            // As the form designer: a double click opens the default event, the menu the others.
+            box.addEventListener("dblclick", (e) => {
+                e.stopPropagation();
+                if (!hasEvents(obj)) return;
+                e.preventDefault();
+                selectObject(box, obj);
+                openEvent(obj, false);
+            });
+            box.addEventListener("contextmenu", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                selectObject(box, obj);
+                const items = eventItems(obj);
+                if (items.length) showMenu(e.clientX, e.clientY, items);
             });
         }
         for (const img of layer.querySelectorAll("img[data-img]")) {
@@ -1061,7 +1081,9 @@
     }
     window.addEventListener("message", (e) => {
         const m = e.data;
-        if (m && m.type === "error") {
+        if (m && m.type === "events") {
+            if (m.on) enableEvents();
+        } else if (m && m.type === "error") {
             setBusy(false);
             showError(String(m.message || "変更できませんでした。"));
             focusGrid();
@@ -1355,6 +1377,11 @@
                 items.push(["再表示", () => hide(false), ""]);
             }
         }
+        showMenu(x, y, items);
+    }
+    // `items`: [label, act, key] or null (a line between them).
+    function showMenu(x, y, items) {
+        closeMenu();
         menu = document.body.appendChild(el("div", "menu"));
         menu.setAttribute("role", "menu");
         menu.dataset.vscodeContext = JSON.stringify({ preventDefaultContextMenuItems: true });
@@ -1390,6 +1417,73 @@
         if (menu && !menu.contains(e.target)) closeMenu();
     });
     window.addEventListener("blur", closeMenu);
+
+    // ---- the events of the objects: their handlers in the sheet's file, written by the editor
+    // An ActiveX control's events are `@on("CommandButton1.Click")` functions of the sheet's
+    // file; a shape or a form control runs the macro assigned to it (`OnAction`). The editor says
+    // whether the workbook shown is the project's (`events`), whose sheets have files.
+
+    let events = false;
+    const hasEvents = (obj) => events && !!obj && (obj.activex !== undefined || !!obj.onAction);
+    function openEvent(obj, choose) {
+        if (!hasEvents(obj) || busy || !view) return;
+        closeMenu();
+        vscode.postMessage({
+            type: "event",
+            sheet: view.sheet.name,
+            codeName: view.sheet.codeName || "",
+            object: obj.name || "",
+            shape: obj.shapeId,
+            activex: obj.activex,
+            macro: obj.macro || "",
+            choose,
+        });
+    }
+    function eventItems(obj) {
+        if (!hasEvents(obj)) return [];
+        if (obj.activex !== undefined) {
+            return [
+                ["既定のイベントを開く", () => openEvent(obj, false), ""],
+                ["イベントを開く…", () => openEvent(obj, true), ""],
+            ];
+        }
+        return obj.macro
+            ? [
+                  [`マクロを開く（${obj.macro}）`, () => openEvent(obj, false), ""],
+                  ["マクロの登録…", () => openEvent(obj, true), ""],
+              ]
+            : [
+                  ["新しいマクロを登録", () => openEvent(obj, false), ""],
+                  ["マクロの登録…", () => openEvent(obj, true), ""],
+              ];
+    }
+    // The button of the bar: the events of the object selected (a menu).
+    function refreshEventButton() {
+        const b = $("event");
+        if (!b) return;
+        const on = hasEvents(selectedObj);
+        b.disabled = !on;
+        b.textContent = on && selectedObj.activex === undefined ? "マクロ" : "イベント";
+    }
+    function enableEvents() {
+        events = true;
+        if (!$("event")) {
+            const b = el("button", null, "イベント");
+            b.id = "event";
+            b.type = "button";
+            b.title = "選択した図形・コントロールのイベント（マクロ）を開きます。シートのファイルにハンドラーを追加します（図形をダブルクリックすると既定のイベント）";
+            b.addEventListener("mousedown", (e) => e.preventDefault());
+            b.addEventListener("click", () => {
+                const items = eventItems(selectedObj);
+                if (!items.length) return;
+                const r = b.getBoundingClientRect();
+                showMenu(r.left, r.bottom + 1, items);
+            });
+            $("formulas").before(b);
+        }
+        refreshEventButton();
+    }
+    if (editable) vscode.postMessage({ type: "ready" });
 
     // ---- formats, merged cells, sorting and the filter: the toolbar, the menus, the keys
 
