@@ -1,5 +1,9 @@
 //! The addon's functions: a `Book` class over [`crate::book::Book`].
 //!
+//! How values, cells and ranges cross the boundary is `ras_workbook::js`'s, which the browser's
+//! `Book` (`crates/ras-wasm`) uses too: keep the two to the same methods (a test of
+//! `ras_workbook::js` checks it).
+//!
 //! Rows and columns are 1-based here, as in Excel. Values cross the boundary as the COM addon
 //! passes them (`ras-com/src/com.rs`), so that the run time converts both the same way:
 //!
@@ -17,191 +21,47 @@ use std::path::Path;
 
 use napi::{Error, Result};
 use napi_derive::napi;
-use ras_workbook::{CellRef, RangeRef, Value};
+use ras_workbook::js::{self, areas, bounds, to_json, value_json};
+use ras_workbook::{CellRef, RangeRef};
 use serde_json::{Value as Json, json};
 
-use ras_workbook::book::{
-    self, Dir, FilterCriterion, MAX_COLS, MAX_ROWS, Paste, PasteOp, PasteWhat, Read, SortKey,
-    Special, Val,
-};
+use ras_workbook::book::{self, FilterCriterion, Read, Val};
 
 fn err(msg: impl Into<String>) -> Error {
     Error::from_reason(msg.into())
 }
 
+// The conversions are the ones the browser's `Book` uses too (`ras_workbook::js`).
 fn sheet(b: &book::Book, i: u32) -> Result<usize> {
-    let i = i as usize;
-    if i < b.sheet_count() {
-        Ok(i)
-    } else {
-        Err(err("インデックスが有効範囲にありません"))
-    }
+    js::sheet(b, i).map_err(err)
 }
 
 fn cell(row: f64, col: f64) -> Result<CellRef> {
-    if !(1.0..=MAX_ROWS as f64).contains(&row)
-        || !(1.0..=MAX_COLS as f64).contains(&col)
-        || row.fract() != 0.0
-        || col.fract() != 0.0
-    {
-        return Err(err(format!("セル ({row}, {col}) はシートの外です")));
-    }
-    Ok(CellRef::new(row as u32 - 1, col as u32 - 1))
+    js::cell(row, col).map_err(err)
 }
 
 fn range(r1: f64, c1: f64, r2: f64, c2: f64) -> Result<RangeRef> {
-    Ok(RangeRef::new(cell(r1, c1)?, cell(r2, c2)?))
-}
-
-fn bounds(r: RangeRef) -> Json {
-    json!([
-        r.start.row + 1,
-        r.start.col + 1,
-        r.end.row + 1,
-        r.end.col + 1
-    ])
-}
-
-fn to_json(v: &Val) -> Json {
-    match v {
-        Val::Empty => Json::Null,
-        Val::Num(n) => json!(n),
-        Val::Text(s) => json!(s),
-        Val::Bool(b) => json!(b),
-        Val::Date(n) => json!({ "$t": "date", "v": n }),
-        Val::Err(n) => json!({ "$t": "error", "v": n }),
-    }
+    js::range(r1, c1, r2, c2).map_err(err)
 }
 
 fn from_json(v: &Json) -> Result<Val> {
-    Ok(match v {
-        Json::Null => Val::Empty,
-        Json::Bool(b) => Val::Bool(*b),
-        Json::Number(n) => Val::Num(n.as_f64().unwrap_or(0.0)),
-        Json::String(s) => Val::Text(s.clone()),
-        Json::Object(o) => {
-            let n = o.get("v").and_then(Json::as_f64).unwrap_or(0.0);
-            match o.get("$t").and_then(Json::as_str) {
-                Some("date") => Val::Date(n),
-                Some("error") => Val::Err(n as i32),
-                Some("nothing") | None => Val::Empty,
-                Some(_) => return Err(err("セルに入れられない値です")),
-            }
-        }
-        Json::Array(_) => return Err(err("セルに配列は入れられません")),
-    })
+    js::from_json(v).map_err(err)
 }
 
 fn rows_from_json(rows: &Json) -> Result<Vec<Vec<Val>>> {
-    match rows {
-        Json::Array(rs) if rs.iter().all(Json::is_array) && !rs.is_empty() => rs
-            .iter()
-            .map(|r| {
-                r.as_array()
-                    .map(|r| r.iter().map(from_json).collect::<Result<Vec<_>>>())
-                    .unwrap_or_else(|| Ok(Vec::new()))
-            })
-            .collect(),
-        // A one-dimensional array is a row, as in VBA.
-        Json::Array(r) if !r.is_empty() => {
-            Ok(vec![r.iter().map(from_json).collect::<Result<Vec<_>>>()?])
-        }
-        Json::Array(_) => Err(err("空の配列はセルに入れられません")),
-        v => Ok(vec![vec![from_json(v)?]]),
-    }
+    js::rows_from_json(rows).map_err(err)
 }
 
-fn value_json(v: &Value) -> Json {
-    match v {
-        Value::Array(a) => Json::Array(
-            (0..a.rows)
-                .map(|r| {
-                    Json::Array(
-                        (0..a.cols)
-                            .map(|c| {
-                                to_json(&book::val_of(a.get(r, c).unwrap_or(&Value::Empty), false))
-                            })
-                            .collect(),
-                    )
-                })
-                .collect(),
-        ),
-        _ => to_json(&book::val_of(v, false)),
-    }
-}
-
-fn areas(list: &[RangeRef]) -> Json {
-    Json::Array(list.iter().map(|r| bounds(*r)).collect())
-}
-
-/// `[top, left, bottom, right]` (and a sheet before them, with `sheet`), or null.
 fn range_json(v: &Json, sheet: bool) -> Result<Option<(usize, RangeRef)>> {
-    let Json::Array(a) = v else { return Ok(None) };
-    let n: Vec<f64> = a.iter().map(|x| x.as_f64().unwrap_or(0.0)).collect();
-    let (si, n) = if sheet {
-        (
-            n.first().copied().unwrap_or(0.0) as usize,
-            &n[1.min(n.len())..],
-        )
-    } else {
-        (0, &n[..])
-    };
-    if n.len() != 4 {
-        return Err(err("範囲の指定が正しくありません"));
-    }
-    Ok(Some((si, range(n[0], n[1], n[2], n[3])?)))
+    js::range_json(v, sheet).map_err(err)
 }
 
-/// What a column of a filter shows: `{ kind: "values", values, blanks }`,
-/// `{ kind: "custom", a: [op, value], b: [op, value] | null, and }`,
-/// `{ kind: "top", bottom, percent, count }`.
 fn criterion(v: &Json) -> Result<Option<FilterCriterion>> {
-    if v.is_null() {
-        return Ok(None);
-    }
-    let text = |x: &Json| x.as_str().map(str::to_string).unwrap_or_default();
-    let flag = |k: &str| v.get(k).and_then(Json::as_bool).unwrap_or(false);
-    let test = |x: &Json| -> Option<(String, String)> {
-        x.as_array()
-            .filter(|a| a.len() == 2)
-            .map(|a| (text(&a[0]), text(&a[1])))
-    };
-    Ok(Some(match v.get("kind").and_then(Json::as_str) {
-        Some("values") => FilterCriterion::Values {
-            values: v
-                .get("values")
-                .and_then(Json::as_array)
-                .map(|a| a.iter().map(text).collect())
-                .unwrap_or_default(),
-            blanks: flag("blanks"),
-        },
-        Some("custom") => FilterCriterion::Custom {
-            a: v.get("a")
-                .and_then(test)
-                .ok_or_else(|| err("フィルターの条件が正しくありません"))?,
-            b: v.get("b").and_then(test),
-            and: flag("and"),
-        },
-        Some("top") => FilterCriterion::Top10 {
-            bottom: flag("bottom"),
-            percent: flag("percent"),
-            count: v.get("count").and_then(Json::as_u64).unwrap_or(10) as u32,
-        },
-        _ => return Err(err("フィルターの条件が正しくありません")),
-    }))
+    js::criterion(v).map_err(err)
 }
 
 fn what(s: &str) -> Result<Read> {
-    Ok(match s {
-        "Value" => Read::Value,
-        "Value2" => Read::Value2,
-        "Formula" => Read::Formula,
-        "Formula2" => Read::Formula2,
-        "FormulaR1C1" => Read::FormulaR1C1,
-        "Text" => Read::Text,
-        "NumberFormat" => Read::NumberFormat,
-        _ => return Err(err(format!("{s} は読めません"))),
-    })
+    js::what(s).map_err(err)
 }
 
 /// A workbook the program works on instead of one open in Excel.
@@ -315,11 +175,7 @@ impl JsBook {
             .inner
             .get(i, range(r1, c1, r2, c2)?, what(&what_)?)
             .map_err(err)?;
-        Ok(Json::Array(
-            rows.iter()
-                .map(|r| Json::Array(r.iter().map(to_json).collect()))
-                .collect(),
-        ))
+        Ok(js::rows_json(&rows))
     }
 
     /// `Range.Value = rows` (a value, or an array laid over the range).
@@ -414,15 +270,7 @@ impl JsBook {
     ) -> Result<()> {
         let i = sheet(&self.inner, i)?;
         let to = sheet(&self.inner, to)?;
-        let what = PasteWhat::of(what_).ok_or_else(|| {
-            err("この形式の貼り付け（コメント・入力規則など）には対応していません")
-        })?;
-        let p = Paste {
-            what,
-            op: PasteOp::of(op),
-            skip_blanks,
-            transpose,
-        };
+        let p = js::paste_of(what_, op, skip_blanks, transpose).map_err(err)?;
         self.inner
             .paste(i, range(r1, c1, r2, c2)?, to, cell(row, col)?, &p)
             .map_err(err)
@@ -499,19 +347,7 @@ impl JsBook {
         match_case: bool,
     ) -> Result<()> {
         let i = sheet(&self.inner, i)?;
-        let keys: Vec<SortKey> = keys
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|k| {
-                        Some(SortKey {
-                            index: (k.get(0)?.as_f64()? as u32).checked_sub(1)?,
-                            descending: k.get(1)?.as_bool()?,
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let keys = js::sort_keys(&keys);
         self.inner
             .sort(i, range(r1, c1, r2, c2)?, &keys, across, match_case)
             .map_err(err)
@@ -551,12 +387,7 @@ impl JsBook {
     #[napi]
     pub fn auto_filter(&self, i: u32) -> Result<Json> {
         let i = sheet(&self.inner, i)?;
-        Ok(match self.inner.auto_filter(i) {
-            Some((r, fields)) => {
-                json!({ "range": bounds(r), "fields": fields.iter().map(|f| f + 1).collect::<Vec<_>>() })
-            }
-            None => Json::Null,
-        })
+        Ok(js::auto_filter_json(self.inner.auto_filter(i)))
     }
 
     /// Puts the filter of a sheet on a range (`[top, left, bottom, right]`), or removes it (null).
@@ -665,15 +496,7 @@ impl JsBook {
         value: i32,
     ) -> Result<Json> {
         let i = sheet(&self.inner, i)?;
-        let mask = if value <= 0 { 23 } else { value as u32 };
-        let what = match type_ {
-            2 => Special::Constants(mask),
-            -4123 => Special::Formulas(mask),
-            4 => Special::Blanks,
-            11 => Special::LastCell,
-            12 => Special::Visible,
-            _ => return Err(err("この種類の SpecialCells には対応していません")),
-        };
+        let what = js::special(type_, value).map_err(err)?;
         Ok(areas(
             &self
                 .inner
@@ -855,13 +678,7 @@ impl JsBook {
     #[napi]
     pub fn end(&mut self, i: u32, row: f64, col: f64, direction: i32) -> Result<Vec<u32>> {
         let i = sheet(&self.inner, i)?;
-        let dir = match direction {
-            -4162 => Dir::Up,
-            -4121 => Dir::Down,
-            -4159 => Dir::Left,
-            -4161 => Dir::Right,
-            _ => return Err(err("End の方向が正しくありません")),
-        };
+        let dir = js::direction(direction).map_err(err)?;
         let at = self.inner.end(i, cell(row, col)?, dir);
         Ok(vec![at.row + 1, at.col + 1])
     }
@@ -883,16 +700,7 @@ impl JsBook {
     #[napi]
     pub fn resolve(&mut self, i: u32, text: String) -> Result<Json> {
         let i = sheet(&self.inner, i)?;
-        Ok(match self.inner.resolve(i, &text) {
-            Some((s, r)) => json!([
-                s,
-                r.start.row + 1,
-                r.start.col + 1,
-                r.end.row + 1,
-                r.end.col + 1
-            ]),
-            None => Json::Null,
-        })
+        Ok(js::resolved(self.inner.resolve(i, &text)))
     }
 
     /// The hyperlinks of the cells of a range: `[{ row, col, address, subAddress, tip }]`, by rows.
@@ -903,11 +711,7 @@ impl JsBook {
             .inner
             .hyperlinks(i, range(r1, c1, r2, c2)?)
             .map_err(err)?;
-        Ok(Json::Array(
-            list.into_iter()
-                .map(|l| json!({ "row": l.at.row + 1, "col": l.at.col + 1, "address": l.address, "subAddress": l.sub_address, "tip": l.tip }))
-                .collect(),
-        ))
+        Ok(js::hyperlinks_json(list))
     }
 
     #[napi]
@@ -938,13 +742,7 @@ impl JsBook {
     /// `[{ name, sheet, refersTo }]`: `sheet` is the index of the sheet a name belongs to, or -1.
     #[napi]
     pub fn names(&self) -> Json {
-        Json::Array(
-            self.inner
-                .names()
-                .into_iter()
-                .map(|(name, scope, formula)| json!({ "name": name, "sheet": scope.map(|s| s as i64).unwrap_or(-1), "refersTo": format!("={formula}") }))
-                .collect(),
-        )
+        js::names_json(&self.inner)
     }
 
     #[napi]

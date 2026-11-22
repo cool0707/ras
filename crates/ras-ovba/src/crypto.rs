@@ -6,7 +6,8 @@
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+// `web_time`: the browser's clock on wasm32, where `std::time::SystemTime::now` panics.
+use web_time::{SystemTime, UNIX_EPOCH};
 
 /// Encryption version mandated by the specification.
 const VERSION: u8 = 2;
@@ -174,6 +175,8 @@ pub(crate) fn random_u64() -> u64 {
     if let Ok(elapsed) = SystemTime::now().duration_since(UNIX_EPOCH) {
         hasher.write_u128(elapsed.as_nanos());
     }
+    // (There are no process ids on wasm32: `process::id` panics there.)
+    #[cfg(not(target_arch = "wasm32"))]
     hasher.write_u32(std::process::id());
     hasher.finish()
 }

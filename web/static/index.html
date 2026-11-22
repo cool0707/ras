@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAS Playground</title>
+<meta name="description" content="TypeScript に似た構文の RAS を、ブラウザの中で VBA に変換し、Excel なしで実行・テストします。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23107c41'/%3E%3Ctext x='16' y='22' font-family='system-ui,sans-serif' font-size='15' font-weight='700' fill='white' text-anchor='middle'%3ER%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand"><span class="logo">R</span><span>RAS Playground</span></div>
+  <label class="field">
+    <span class="sr">サンプル</span>
+    <select id="sample" title="サンプルを開く"></select>
+  </label>
+  <div class="group">
+    <button id="run" class="primary" title="選んだ関数を実行する（Ctrl+Enter）"><span aria-hidden="true">▶</span> 実行</button>
+    <label class="field"><span class="sr">実行する関数</span><select id="entry" title="実行する関数"></select></label>
+    <button id="test" title="test/*.test.ras のテストを実行する">テスト</button>
+    <button id="stop" hidden title="実行を止める">■ 停止</button>
+  </div>
+  <div class="group">
+    <button id="format" title="このファイルを整形する（Shift+Alt+F）">整形</button>
+    <button id="share" title="このプロジェクトを開く URL をコピーする">共有</button>
+  </div>
+  <span class="spacer"></span>
+  <span id="status" class="status" role="status"></span>
+  <a class="link" href="https://github.com/cool0707/ras#readme" target="_blank" rel="noopener">ドキュメント</a>
+</header>
+<main class="panes">
+  <section class="pane editor-pane" aria-label="ソース">
+    <nav class="tabs" id="files" aria-label="ファイル"></nav>
+    <div id="editor" class="editor"></div>
+  </section>
+  <section class="pane out-pane" aria-label="出力">
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="vba" aria-selected="true">VBA</button>
+      <button role="tab" data-tab="problems">問題 <span id="problem-count" class="count"></span></button>
+      <button role="tab" data-tab="output">実行結果</button>
+      <button role="tab" data-tab="book">ブック</button>
+    </nav>
+    <div class="tab-body" data-body="vba">
+      <div class="subbar">
+        <select id="vba-module" title="モジュール"></select>
+        <span class="spacer"></span>
+        <button id="vba-download" title="このモジュールを VBE で読み込めるファイル（.bas / .cls）として保存する">このモジュールを保存</button>
+        <button id="pack" class="primary" title="生成した VBA をブックに書き込み、マクロ有効ブック（.xlsm）として保存する（ras pack）">.xlsm に書き込んで保存</button>
+      </div>
+      <div id="vba" class="editor"></div>
+    </div>
+    <div class="tab-body" data-body="problems" hidden>
+      <ul id="problems" class="problems"></ul>
+      <pre id="explain" class="explain" hidden></pre>
+    </div>
+    <div class="tab-body" data-body="output" hidden>
+      <div id="output" class="output"><p class="hint">▶ 実行 で関数を、テスト で test/*.test.ras を、Excel を使わずにブラウザの中で動かします。</p></div>
+    </div>
+    <div class="tab-body" data-body="book" hidden>
+      <div class="subbar">
+        <span id="book-name" class="book-name"></span>
+        <span class="spacer"></span>
+        <label class="button" title=".xlsx / .xlsm を読み込んで、プログラムが動くブックにする">ブックを読み込む<input id="book-file" type="file" accept=".xlsx,.xlsm" hidden></label>
+        <button id="book-new" title="空のブック（Sheet1 だけ）に戻す">新しいブック</button>
+        <button id="book-download" title="実行後のブック（実行前なら元のブック）を保存する">ダウンロード</button>
+      </div>
+      <iframe id="book" class="book" title="ブック"></iframe>
+    </div>
+  </section>
+</main>
+<dialog id="dialog" class="dialog">
+  <form method="dialog">
+    <h2 id="dialog-title"></h2>
+    <p id="dialog-prompt"></p>
+    <input id="dialog-input" type="text" autocomplete="off">
+    <div id="dialog-buttons" class="dialog-buttons"></div>
+  </form>
+</dialog>
+<div id="toast" class="toast" role="alert" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

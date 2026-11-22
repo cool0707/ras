@@ -631,9 +631,9 @@ fn date1904_of<R: std::io::Read + std::io::Seek>(file: R) -> bool {
 }
 
 fn seed() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
+    // GridCraft's clock, which is the browser's on wasm32 (where `SystemTime::now` panics).
+    gridcraft_core::date::unix_now_ms()
+        .map(|ms| (ms * 1_000_000.0) as u64)
         .unwrap_or(1)
 }
 
@@ -1998,6 +1998,23 @@ impl Book {
     /// without macros is written as `.xlsx` (umya-spreadsheet marks the file by its macros, and
     /// Excel refuses an `.xlsm` file marked as an `.xlsx` one). Returns the path written.
     pub fn save(&mut self, path: &Path) -> Result<std::path::PathBuf> {
+        let (path, bytes) = self.save_bytes(path)?;
+        // Through a temporary file, as umya-spreadsheet writes: a failed write leaves the file as it was.
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("xlsx");
+        let tmp = path.with_extension(format!("{ext}tmp"));
+        std::fs::write(&tmp, bytes)
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .map_err(|e| {
+                let _ = std::fs::remove_file(&tmp);
+                format!("{} に保存できません（{e}）", path.display())
+            })?;
+        Ok(path)
+    }
+
+    /// What `save` writes: the path it writes to (`.xlsx` for a workbook without macros saved
+    /// as `.xlsm`) and the bytes of the file. Without a file system (the browser), the caller
+    /// keeps them.
+    pub fn save_bytes(&mut self, path: &Path) -> Result<(std::path::PathBuf, Vec<u8>)> {
         self.flush();
         self.store();
         // Excel calculates everything when it opens the file, unless the program left the
@@ -2020,10 +2037,11 @@ impl Book {
             path.to_path_buf()
         };
         let kept = self.widths_for_file();
-        let written = umya_spreadsheet::writer::xlsx::write(&self.file, &path);
+        let mut buf = Vec::new();
+        let written = umya_spreadsheet::writer::xlsx::write_writer(&self.file, &mut buf);
         self.widths_back(kept);
         written.map_err(|e| format!("{} に保存できません（{e}）", path.display()))?;
-        Ok(path)
+        Ok((path, buf))
     }
 
     /// Makes the column widths what the file has, and returns what they were (`widths_back`).

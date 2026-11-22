@@ -11,6 +11,7 @@ members = [
     "crates/ras-com",
     "crates/ras-workbook",
     "crates/ras-book",
+    "crates/ras-wasm",
 ]
 
 [workspace.package]
@@ -40,7 +41,7 @@ crc32fast = "1"
 proptest = "1"
 lsp-server = "0.7"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-cfb = "0.10"
+cfb = "0.16"
 ovba = "0.7"
 uuid = "1"
 image = { version = "0.25", default-features = false, features = ["bmp", "gif", "ico", "png", "tiff", "webp"] }
@@ -51,3 +52,8 @@ lto = "thin"
 codegen-units = 4
 strip = true
 panic = "abort"
+
+# The stand-in for Excel in the browser (crates/ras-wasm) needs a fix of gridcraft-core: see
+# vendor/gridcraft-core/README.md.
+[patch."https://github.com/cool0707/xljs"]
+gridcraft-core = { path = "vendor/gridcraft-core" }

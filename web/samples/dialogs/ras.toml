@@ -1,0 +1,6 @@
+[project]
+name = "Playground"
+workbook = "Book.xlsx"
+
+[build]
+opt-level = 1

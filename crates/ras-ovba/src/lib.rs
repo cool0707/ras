@@ -82,7 +82,7 @@ pub use forms::{
     FormFiles, RAS_FORM_MARKER,
 };
 pub use opc::{workbook_code_names, workbook_sheet_controls};
-pub use pack::{pack, replace_workbook, unpack};
+pub use pack::{pack, pack_bytes, replace_workbook, unpack, unpack_bytes};
 pub use sheets::{
     edit_sheets, sheet_references, valid_code_name, valid_sheet_name, workbook_sheets, Place,
     SheetEdit, SheetEditReport, SheetEditRequest, SheetError, SheetInfo,

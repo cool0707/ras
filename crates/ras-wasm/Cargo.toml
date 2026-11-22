@@ -1,0 +1,25 @@
+[package]
+name = "ras-wasm"
+description = "The compiler and the stand-in for Excel as WebAssembly, for the playground (web/)"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ras-syntax.workspace = true
+ras-compiler.workspace = true
+ras-ovba.workspace = true
+ras-workbook = { path = "../ras-workbook" }
+serde_json.workspace = true
+encoding_rs.workspace = true
+wasm-bindgen = "=0.2.130"
+
+# umya-spreadsheet draws random numbers (rand → getrandom), from the browser's crypto on wasm32.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }

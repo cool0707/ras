@@ -7,6 +7,7 @@
 pub mod book;
 pub mod diff;
 pub mod dump;
+pub mod js;
 pub mod patch;
 pub mod view;
 
