@@ -2,9 +2,9 @@
 //! stand-in. They are kept where the file keeps them (umya-spreadsheet's cells), so they are saved
 //! with the workbook and move with the cells inserted and deleted.
 //!
-//! A link of the file is either an address (a web page, a file: `r:id`), or a place in the
-//! workbook (`location`). umya-spreadsheet holds one text for the two, so an address with a place
-//! in it is kept as `address#place`, as a browser reads it.
+//! A link of the file is either an address (a web page, a file: `r:id`) with the place in it it
+//! goes to (`location` beside the `r:id`, umya-spreadsheet's `target_location`), or a place in the
+//! workbook (`location` alone).
 
 use umya_spreadsheet::{Hyperlink, Worksheet};
 
@@ -25,7 +25,10 @@ pub struct LinkInfo {
 fn info(at: CellRef, h: &Hyperlink) -> LinkInfo {
     let (address, sub_address) = if h.location() {
         (String::new(), h.url().to_string())
+    } else if !h.target_location().is_empty() {
+        (h.url().to_string(), h.target_location().to_string())
     } else {
+        // (`address#place`: as an address with a place in it was kept before.)
         match h.url().split_once('#') {
             Some((a, s)) => (a.to_string(), s.to_string()),
             None => (h.url().to_string(), String::new()),
@@ -101,12 +104,10 @@ impl Book {
         if address.is_empty() {
             h.set_url(sub_address);
             h.set_location(true);
+            h.set_target_location("");
         } else {
-            h.set_url(if sub_address.is_empty() {
-                address.to_string()
-            } else {
-                format!("{address}#{sub_address}")
-            });
+            h.set_url(address);
+            h.set_target_location(sub_address);
             h.set_location(false);
         }
         h.set_tooltip(tip);

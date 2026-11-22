@@ -12,8 +12,6 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::{Cursor, Read};
 
-use gridcraft_core::RangeRef;
-
 use super::controls::{self, Controls};
 use super::geom;
 use super::xml::{Node, parse};
@@ -49,120 +47,9 @@ impl Parts {
             return Parts { files };
         };
         let names: Vec<String> = zr.file_names().map(str::to_string).collect();
-        // How each sheet is shown (its gridlines): the start of its XML.
-        for name in names.iter().filter(|n| {
-            n.starts_with("xl/worksheets/") && n.ends_with(".xml") && !n.contains("/_rels/")
-        }) {
-            let Ok(f) = zr.by_name(name) else { continue };
-            let mut head = Vec::new();
-            if f.take(16 << 10).read_to_end(&mut head).is_err() {
-                continue;
-            }
-            let head = String::from_utf8_lossy(&head);
-            if let Some(i) = head
-                .find("<sheetView ")
-                .or_else(|| head.find(":sheetView "))
-                && let Some(j) = head[i..].find('>')
-            {
-                let start = head[..i + 1].rfind('<').unwrap_or(i);
-                files.insert(
-                    format!("{name}#view"),
-                    format!("{}/>", head[start..i + j].trim_end_matches('/')).into_bytes(),
-                );
-                // Its pane (the rows and columns frozen), the first element in it.
-                let rest = if head[..i + j].ends_with('/') {
-                    ""
-                } else {
-                    &head[i + j..]
-                };
-                let end = rest.find("sheetView>").unwrap_or(rest.len());
-                // What is in it (the pane and the selections), as one element.
-                if let Some(close) = rest[..end].rfind('<').filter(|_| rest.starts_with('>')) {
-                    files.insert(
-                        format!("{name}#viewbody"),
-                        format!("<v>{}</v>", &rest[1..close]).into_bytes(),
-                    );
-                }
-                if let Some(p) = rest[..end].find("pane ")
-                    && rest[..p].ends_with(['<', ':'])
-                    && let Some(q) = rest[p..].find('>')
-                {
-                    let open = rest[..p].rfind('<').unwrap_or(p);
-                    files.insert(
-                        format!("{name}#pane"),
-                        format!("{}/>", rest[open..p + q].trim_end_matches('/')).into_bytes(),
-                    );
-                }
-            }
-        }
-        // What the tables show of their style (`tableStyleInfo`), by the table's name.
-        for name in names
-            .iter()
-            .filter(|n| n.starts_with("xl/tables/") && n.ends_with(".xml"))
-        {
-            let Some(b) = read_part(&mut zr, name) else {
-                continue;
-            };
-            let xml = String::from_utf8_lossy(&b);
-            let Some(root) = parse(xml.as_bytes()) else {
-                continue;
-            };
-            // Its filter: the range, then the columns (from 0) whose button is hidden and those
-            // filtered by, as `A1:C7;1,2;0`.
-            if let (Some(table), Some(f)) = (root.attr("name"), root.child("autoFilter"))
-                && let Some(range) = f.attr("ref")
-            {
-                let cols = |pick: &dyn Fn(&Node) -> bool| {
-                    f.all("filterColumn")
-                        .filter(|c| pick(c))
-                        .filter_map(|c| c.attr("colId"))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                };
-                let hidden = cols(&|c| matches!(c.attr("hiddenButton"), Some("1" | "true")));
-                let filtered = cols(&|c| !c.children.is_empty());
-                files.insert(
-                    format!("#tablefilter:{table}"),
-                    format!("{range};{hidden};{filtered}").into_bytes(),
-                );
-            }
-            if let (Some(table), Some(info)) = (root.attr("name"), root.child("tableStyleInfo")) {
-                let on = |a: &str| u8::from(matches!(info.attr(a), Some("1" | "true")));
-                files.insert(
-                    format!("#table:{table}"),
-                    vec![
-                        on("showFirstColumn"),
-                        on("showLastColumn"),
-                        on("showRowStripes"),
-                        on("showColumnStripes"),
-                    ],
-                );
-            }
-        }
         for name in ["xl/workbook.xml", "xl/_rels/workbook.xml.rels"] {
             if let Some(b) = read_part(&mut zr, name) {
                 files.insert(name.into(), b);
-            }
-        }
-        // The default font (the first of the styles) and the format of the cells without one
-        // (the first of cellXfs: the Normal style, centred vertically by Japanese Excel).
-        if let Some(styles) = read_part(&mut zr, "xl/styles.xml") {
-            let styles = String::from_utf8_lossy(&styles);
-            if let Some(font) = first_font(&styles) {
-                files.insert("#font".into(), font.into_bytes());
-            }
-            if let Some(xf) = element_text(&styles, "cellXfs").and_then(|xfs| first_xf(&xfs)) {
-                files.insert("#xf0".into(), xf.into_bytes());
-            }
-            // The workbook's own table styles, with the formats they use.
-            if let Some(ts) =
-                element_text(&styles, "tableStyles").filter(|t| t.contains("tableStyleElement"))
-            {
-                let dxfs = element_text(&styles, "dxfs").unwrap_or_default();
-                files.insert(
-                    "#tableStyles".into(),
-                    format!("<styleSheet>{dxfs}{ts}</styleSheet>").into_bytes(),
-                );
             }
         }
         if !names.iter().any(|n| n.starts_with("xl/drawings/")) {
@@ -279,145 +166,6 @@ impl Parts {
         }
         out
     }
-
-    /// Whether the sheet named `sheet` shows its gridlines (None: the file does not say).
-    pub fn grid_lines(&self, sheet: &str) -> Option<bool> {
-        let view = self.xml(&format!("{}#view", self.sheet_part(sheet)?))?;
-        Some(!matches!(view.attr("showGridLines"), Some("0" | "false")))
-    }
-
-    /// What a table (by its name) shows of its style: first column, last column, row stripes,
-    /// column stripes.
-    pub(crate) fn table_flags(&self, table: &str) -> Option<crate::book::tables::Shown> {
-        let f = self.files.get(&format!("#table:{table}"))?;
-        (f.len() == 4).then(|| (f[0] == 1, f[1] == 1, f[2] == 1, f[3] == 1))
-    }
-
-    /// The filter of a table (by its name): its range, and the columns (from 0) whose button is
-    /// hidden and those it filters by.
-    pub(crate) fn table_filter(&self, table: &str) -> Option<(RangeRef, Vec<u32>, Vec<u32>)> {
-        let f = self.files.get(&format!("#tablefilter:{table}"))?;
-        let f = String::from_utf8_lossy(f);
-        let mut parts = f.split(';');
-        let range = RangeRef::parse(&parts.next()?.replace('$', ""))?;
-        let mut cols = || -> Vec<u32> {
-            parts
-                .next()
-                .unwrap_or("")
-                .split(',')
-                .filter_map(|c| c.parse().ok())
-                .collect()
-        };
-        let hidden = cols();
-        Some((range, hidden, cols()))
-    }
-
-    /// The workbook's own table styles by name.
-    pub(crate) fn table_styles(&self) -> HashMap<String, crate::book::tables::StyleDef> {
-        self.xml("#tableStyles")
-            .map(|root| crate::book::tables::custom_styles(&root))
-            .unwrap_or_default()
-    }
-
-    /// The zoom (%) the sheet named `sheet` is shown at, when the file says (and it is not 100).
-    pub fn zoom(&self, sheet: &str) -> Option<u32> {
-        let view = self.xml(&format!("{}#view", self.sheet_part(sheet)?))?;
-        view.attr("zoomScale")
-            .and_then(|v| v.parse::<u32>().ok())
-            .filter(|z| (10..=400).contains(z) && *z != 100)
-    }
-
-    /// The rows and columns the sheet named `sheet` keeps on the screen (its panes frozen): as
-    /// many as are above and to the left of the pane, counted from A1 (rows scrolled away above
-    /// a frozen pane count as frozen too).
-    pub fn frozen(&self, sheet: &str) -> Option<(u32, u32)> {
-        let part = self.sheet_part(sheet)?;
-        let pane = self.xml(&format!("{part}#pane"))?;
-        if !matches!(pane.attr("state"), Some("frozen" | "frozenSplit")) {
-            return None;
-        }
-        let split = |name: &str| {
-            pane.attr(name)
-                .and_then(|v| v.parse::<f64>().ok())
-                .filter(|v| *v > 0.0)
-                .map(|v| v.round() as u32)
-                .unwrap_or(0)
-        };
-        let (rows, cols) = (split("ySplit"), split("xSplit"));
-        if rows == 0 && cols == 0 {
-            return None;
-        }
-        let top = self
-            .xml(&format!("{part}#view"))
-            .and_then(|v| v.attr("topLeftCell").map(str::to_string))
-            .and_then(|a| gridcraft_core::CellRef::parse(&a.replace('$', "")))
-            .unwrap_or(gridcraft_core::CellRef::new(0, 0));
-        Some((
-            if rows > 0 { top.row + rows } else { 0 },
-            if cols > 0 { top.col + cols } else { 0 },
-        ))
-    }
-
-    /// The cells selected on the sheet named `sheet` when it was saved, in its active pane: the
-    /// active cell and the range around it.
-    pub fn selection(&self, sheet: &str) -> Option<(gridcraft_core::CellRef, RangeRef)> {
-        let part = self.sheet_part(sheet)?;
-        let body = self.xml(&format!("{part}#viewbody"))?;
-        let pane = body
-            .child("pane")
-            .map(|p| p.attr("activePane").unwrap_or("topLeft").to_string());
-        let sel = body.all("selection").find(|s| match &pane {
-            Some(p) => s.attr("pane").unwrap_or("topLeft") == p,
-            None => true,
-        })?;
-        let active = gridcraft_core::CellRef::parse(&sel.attr("activeCell")?.replace('$', ""))?;
-        let range = sel
-            .attr("sqref")
-            .unwrap_or("")
-            .split_whitespace()
-            .filter_map(|r| RangeRef::parse(&r.replace('$', "")))
-            .find(|r| r.contains(active))
-            .unwrap_or(RangeRef::cell(active));
-        Some((active, range))
-    }
-
-    /// The alignment of the cells without a format of their own (the first of cellXfs), when
-    /// it has one.
-    pub(crate) fn normal_alignment(&self) -> Option<umya_spreadsheet::Alignment> {
-        let xf = self.xml("#xf0")?;
-        let a = xf.child("alignment")?;
-        let mut out = umya_spreadsheet::Alignment::default();
-        if let Some(h) = a.attr("horizontal").and_then(|v| v.parse().ok()) {
-            out.set_horizontal(h);
-        }
-        if let Some(v) = a.attr("vertical").and_then(|v| v.parse().ok()) {
-            out.set_vertical(v);
-        }
-        if matches!(a.attr("wrapText"), Some("1" | "true")) {
-            out.set_wrap_text(true);
-        }
-        Some(out)
-    }
-
-    /// The workbook's default font (name, size).
-    pub(crate) fn default_font(&self) -> (String, f64) {
-        let font = self.xml("#font").and_then(|f| f.find("font").cloned());
-        let name = font
-            .as_ref()
-            .and_then(|f| f.child("name"))
-            .and_then(|n| n.attr("val"))
-            .filter(|s| !s.is_empty())
-            .unwrap_or("游ゴシック")
-            .to_string();
-        let size = font
-            .as_ref()
-            .and_then(|f| f.child("sz"))
-            .and_then(|n| n.attr("val"))
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| *v > 0.0)
-            .unwrap_or(11.0);
-        (name, size)
-    }
 }
 
 /// The text of the first element `name` (with any prefix) of an XML document, to its first end
@@ -444,28 +192,6 @@ fn element_text(xml: &str, name: &str) -> Option<String> {
         Some(c) => xml[start..c + name.len() + 1].to_string(),
         None => xml[start..].to_string(),
     })
-}
-
-/// The first font of the styles (`<fonts><font>...</font>`, the rest left out).
-fn first_font(styles: &str) -> Option<String> {
-    let fonts = element_text(styles, "fonts").unwrap_or_default();
-    let font = element_text(&fonts, "font")?;
-    Some(format!("<fonts>{font}</fonts>"))
-}
-
-/// The first `<xf>` of `<cellXfs>...</cellXfs>`.
-fn first_xf(xfs: &str) -> Option<String> {
-    let start = xfs.match_indices('<').map(|(i, _)| i).find(|&i| {
-        let rest = &xfs[i + 1..];
-        let local = rest.split(['>', ' ', '/']).next().unwrap_or("");
-        local == "xf" || local.ends_with(":xf")
-    })?;
-    let open_end = start + xfs[start..].find('>')?;
-    if xfs[..open_end].ends_with('/') {
-        return Some(xfs[start..=open_end].to_string());
-    }
-    let close = open_end + xfs[open_end..].find("xf>")?;
-    Some(xfs[start..close + 3].to_string())
 }
 
 /// `target` relative to the folder `dir` ("../drawings/drawing1.xml"), or absolute ("/xl/...").
@@ -854,6 +580,8 @@ pub struct Env<'a> {
     /// The cells of one area of a reference (rows of cells), for the series of charts; None
     /// when they cannot be read (another workbook, a sheet that is not there).
     pub range: &'a dyn Fn(&str) -> Option<Vec<Vec<super::chart::Point>>>,
+    /// The workbook's default font (name, size): the Normal style's.
+    pub font: (String, f64),
 }
 
 /// What drawing a shape needs.
@@ -881,7 +609,7 @@ pub fn sheet_objects(
         return out;
     };
     let theme = parts.theme();
-    let font = parts.default_font();
+    let font = env.font.clone();
     let mut controls = Controls::read(parts, &sheet_part, &font);
     let mut drawings: Vec<String> = parts
         .rels(&sheet_part)

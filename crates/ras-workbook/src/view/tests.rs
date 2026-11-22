@@ -629,8 +629,7 @@ fn without_the_drawing() {
 /// A sheet whose gridlines are off says so.
 #[test]
 fn gridlines_off() {
-    let parts = super::Parts::read(&sample());
-    assert_eq!(parts.grid_lines("Sheet1"), Some(true));
+    assert_eq!(view_of(&sample())["sheets"][0]["gridLines"], true);
     let mut files = parts_of(&sample());
     let sheet = files
         .iter_mut()

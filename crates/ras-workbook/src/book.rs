@@ -22,7 +22,7 @@
 //! Positions are 0-based here (`CellRef`, `RangeRef`); the addon converts.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{Cursor, Read as _};
+use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -607,29 +607,6 @@ fn unsupported(wb: &gm::Workbook, sheet: usize, e: &Expr) -> bool {
     found
 }
 
-fn read_date1904(path: &Path) -> bool {
-    let Ok(file) = std::fs::File::open(path) else {
-        return false;
-    };
-    date1904_of(file)
-}
-
-fn date1904_of<R: std::io::Read + std::io::Seek>(file: R) -> bool {
-    let Ok(mut zip) = zip::ZipArchive::new(file) else {
-        return false;
-    };
-    let Ok(mut part) = zip.by_name("xl/workbook.xml") else {
-        return false;
-    };
-    let mut s = String::new();
-    if part.read_to_string(&mut s).is_err() {
-        return false;
-    }
-    s.find("<workbookPr")
-        .and_then(|i| s[i..].find('>').map(|j| &s[i..i + j]))
-        .is_some_and(|tag| tag.contains("date1904=\"1\"") || tag.contains("date1904=\"true\""))
-}
-
 fn seed() -> u64 {
     // GridCraft's clock, which is the browser's on wasm32 (where `SystemTime::now` panics).
     gridcraft_core::date::unix_now_ms()
@@ -692,22 +669,23 @@ impl Book {
         if let Ok(ws) = file.sheet_mut(0) {
             ws.set_code_name("Sheet1");
         }
-        Book::from_file(file, false)
+        Book::from_file(file)
     }
 
     pub fn open(path: &Path) -> Result<Book> {
         let file = umya_spreadsheet::reader::xlsx::read(path)
             .map_err(|e| format!("{} を開けません（{e}）", path.display()))?;
-        Ok(Book::from_file(file, read_date1904(path)))
+        Ok(Book::from_file(file))
     }
 
     pub fn open_bytes(data: &[u8]) -> Result<Book> {
         let file = umya_spreadsheet::reader::xlsx::read_reader(Cursor::new(data), true)
             .map_err(|e| format!("ブックを開けません（{e}）"))?;
-        Ok(Book::from_file(file, date1904_of(Cursor::new(data))))
+        Ok(Book::from_file(file))
     }
 
-    fn from_file(mut file: umya_spreadsheet::Workbook, date1904: bool) -> Book {
+    fn from_file(mut file: umya_spreadsheet::Workbook) -> Book {
+        let date1904 = file.date1904();
         file.read_sheet_collection();
         // A workbook without a VBA project has no code names in its file (umya-spreadsheet writes
         // them with macros only): they are what Excel gives the sheets, Sheet1, Sheet2, ...
@@ -2404,6 +2382,7 @@ pub(crate) use format::width_of_px;
 mod inspect;
 mod links;
 mod paste;
+mod sheet_view;
 pub mod snapshot;
 mod sort;
 pub(crate) mod tables;
