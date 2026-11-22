@@ -2164,6 +2164,8 @@ impl Checker<'_> {
             _ => {
                 // user extension methods take priority over built-in members (spec §3.2.4)
                 let builtin = match ot {
+                    // `controls.on("Click", …)` on an array of objects (spec §12.2.3).
+                    Type::Array(_) if ot.dims() == 1 && intrinsics::EVENT_MEMBERS.contains(&name.text.as_str()) && matches!(ot.elem(), Some(Type::Class(..))) => Some(Intr::EventOn),
                     Type::Array(_) => intrinsics::array_member(&name.text, ot.dims()),
                     Type::Str => intrinsics::string_member(&name.text),
                     Type::Map(..) => intrinsics::map_member(&name.text),
@@ -3512,20 +3514,56 @@ impl Checker<'_> {
             self.skip_handler(&args[1]);
             return Type::Error;
         };
-        let class = match recv {
-            Some(Type::Class(c, _)) => *c,
+        // An array or a collection of objects: each member gets the handler.
+        let any_control = |prog: &Program, c: ClassId| prog.classes[c].namespace.as_deref() == Some("MSForms") && prog.classes[c].name == "Control";
+        let (class, each) = match recv {
+            Some(t @ Type::Array(_)) => match t.elem() {
+                Some(Type::Class(c, _)) => (*c, true),
+                _ => {
+                    self.skip_handler(&args[1]);
+                    return Type::Error;
+                }
+            },
+            Some(t @ Type::Class(c, _)) => match self.prog.collection_elem(t) {
+                Some(Type::Class(m, _)) if crate::lower::listen_target(self.prog, *c).is_none() && (any_control(self.prog, m) || crate::lower::listen_target(self.prog, m).is_some()) => (m, true),
+                _ => (*c, false),
+            },
             _ => {
                 self.skip_handler(&args[1]);
                 return Type::Error;
             }
         };
         let shown = self.prog.class_display(class);
-        match crate::lower::listen_target(self.prog, class) {
+        // A `MSForms.Control` is any control: the events that controls have, with the
+        // arguments that all of those controls pass.
+        let dynamic = any_control(self.prog, class);
+        let mut control_classes: Vec<(ClassId, Vec<(String, Vec<(String, String, bool)>)>)> = Vec::new();
+        let target = if dynamic {
+            let mut ids: Vec<ClassId> = self.prog.namespaces.get("MSForms").map(|n| n.values().filter_map(|s| if let Sym::Class(c) = s { Some(*c) } else { None }).collect()).unwrap_or_default();
+            ids.sort_by(|a, b| self.prog.classes[*a].name.cmp(&self.prog.classes[*b].name));
+            let mut events: Vec<(String, Vec<(String, String, bool)>)> = Vec::new();
+            for c in ids {
+                let Some(crate::lower::ListenTarget::Events(_, own)) = crate::lower::listen_target(self.prog, c) else { continue };
+                for (name, params) in &own {
+                    match events.iter_mut().find(|e| e.0.eq_ignore_ascii_case(name)) {
+                        Some(e) => {
+                            let common = e.1.iter().zip(params.iter()).take_while(|(a, b)| a.1 == b.1 && a.2 == b.2).count();
+                            e.1.truncate(common);
+                        }
+                        None => events.push((name.clone(), params.clone())),
+                    }
+                }
+                control_classes.push((c, own));
+            }
+            events.sort_by(|a, b| a.0.cmp(&b.0));
+            Some(crate::lower::ListenTarget::Events(class, events))
+        } else {
+            crate::lower::listen_target(self.prog, class)
+        };
+        match target {
             None => {
                 let def = &self.prog.classes[class];
-                let hint = if def.namespace.as_deref() == Some("MSForms") && def.name == "Control" {
-                    "コントロールの種類ごとにイベントが違うので、`if (c instanceof MSForms.TextBox)` のように種類を絞り込んでから `on` を呼びます".to_string()
-                } else if self.prog.modules[def.module].is_form() {
+                let hint = if self.prog.modules[def.module].is_form() {
                     "フォーム自身のイベントは、コードビハインドの `@on(\"UserForm.<イベント>\")` で受け取ります".to_string()
                 } else {
                     "`on` を使えるのは、イベントを持つオブジェクト（`MSForms.CommandButton` などのコントロール、`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`Excel.Chart`・`Excel.QueryTable`）と、`onAction` を持つオブジェクト（`Excel.Shape`）です".to_string()
@@ -3550,7 +3588,7 @@ impl Checker<'_> {
                         if let Some(slot) = self.info().expr_types.get_mut(args[1].peel().id as usize) {
                             *slot = sig;
                         }
-                        self.info().event_binds.insert(call.id, EventBind { kind: EventBindKind::OnAction, handler_fn: Some(f) });
+                        self.info().event_binds.insert(call.id, EventBind { kind: EventBindKind::OnAction { each }, handler_fn: Some(f) });
                     }
                     None => {
                         self.skip_handler(&args[1]);
@@ -3569,9 +3607,18 @@ impl Checker<'_> {
                     };
                     self.err(args[0].span, "E0611", format!("`{shown}` にイベント `{event}` はありません（{hint}）"));
                     self.skip_handler(&args[1]);
-                    return listener;
+                    return if each { Type::Void } else { listener };
                 };
-                let param_types: Vec<Type> = params.iter().map(|p| self.event_param_type(&p.1)).collect();
+                // Every member is listened to: there is not one listener to give back.
+                let listener = if each { Type::Void } else { listener };
+                let classes: Vec<ClassId> = if dynamic { control_classes.iter().filter(|(_, own)| own.iter().any(|e| e.0.eq_ignore_ascii_case(&name))).map(|(c, _)| *c).collect() } else { vec![event_class] };
+                let mut param_types: Vec<Type> = params.iter().map(|p| self.event_param_type(&p.1)).collect();
+                // The handler of the members of an array or a collection is told which member
+                // the event is of: it comes first, before the arguments of the event.
+                if each {
+                    param_types.insert(0, Type::Class(class, Vec::new()));
+                }
+                let limit = param_types.len();
                 let (argc, handler_fn) = match self.function_name(&args[1]) {
                     Some(f) => {
                         self.ensure_fn(f);
@@ -3582,8 +3629,8 @@ impl Checker<'_> {
                         let test = self.prog.modules[d.module].is_test() && !self.prog.modules[self.module].is_test();
                         if generic || test {
                             self.err(args[1].span, "E0617", format!("関数 `{fname}` はイベントハンドラにできません（ジェネリック関数・テストの関数は使えません）"));
-                        } else if have.len() > params.len() {
-                            self.err(args[1].span, "E0612", format!("イベント `{name}` の引数は {} 個ですが、ハンドラ `{fname}` は {} 個受け取ります", params.len(), have.len()));
+                        } else if have.len() > limit {
+                            self.err(args[1].span, "E0612", format!("イベント `{name}` のハンドラに渡される引数は {limit} 個ですが、ハンドラ `{fname}` は {} 個受け取ります", have.len()));
                         } else {
                             for (i, (ty, byref)) in have.iter().enumerate() {
                                 if *byref {
@@ -3600,13 +3647,13 @@ impl Checker<'_> {
                         if !self.fx.calls.contains(&f) {
                             self.fx.calls.push(f);
                         }
-                        (have.len().min(params.len()), Some(f))
+                        (have.len().min(limit), Some(f))
                     }
                     None => {
                         // (Said once, in the words of events.)
                         if let ExprKind::Arrow(arrow) = &args[1].peel().kind {
-                            if arrow.params.len() > params.len() {
-                                self.err(args[1].span, "E0612", format!("イベント `{name}` の引数は {} 個ですが、ハンドラは {} 個受け取ります", params.len(), arrow.params.len()));
+                            if arrow.params.len() > limit {
+                                self.err(args[1].span, "E0612", format!("イベント `{name}` のハンドラに渡される引数は {limit} 個ですが、ハンドラは {} 個受け取ります", arrow.params.len()));
                                 self.skip_handler(&args[1]);
                                 return listener;
                             }
@@ -3618,10 +3665,10 @@ impl Checker<'_> {
                             Type::Func(f) => f.params.len(),
                             _ => 0,
                         };
-                        (argc.min(params.len()), None)
+                        (argc.min(limit), None)
                     }
                 };
-                self.info().event_binds.insert(call.id, EventBind { kind: EventBindKind::Listener { class: event_class, event: name, params, argc }, handler_fn });
+                self.info().event_binds.insert(call.id, EventBind { kind: EventBindKind::Listener { classes, dynamic, each, event: name, params, argc }, handler_fn });
                 listener
             }
         }

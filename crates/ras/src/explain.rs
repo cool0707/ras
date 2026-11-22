@@ -180,8 +180,8 @@ pub const ENTRIES: &[Entry] = &[
     x(
         "E0616",
         "`on` でイベントハンドラを付けられない",
-        "`on` / `addEventListener` は、イベントを持つオブジェクト（`MSForms.CommandButton` などのコントロール、`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`Excel.Chart`・`Excel.QueryTable`）と、`onAction` を持つオブジェクト（`Excel.Shape`）で使えます。`this.controls` の要素（`MSForms.Control`）は、`instanceof` でコントロールの種類を絞り込んでから呼びます。フォーム自身のイベントは `@on(\"UserForm.<イベント>\")` で受け取ります。イベントの名前は文字列リテラルで書きます（実行時に決まる名前は使えません）。",
-        "for (const c of this.controls) {\n    if (c instanceof MSForms.TextBox) {\n        c.on(\"Change\", () => { c.backColor = rgb(255, 255, 200); });\n    }\n}",
+        "`on` / `addEventListener` は、イベントを持つオブジェクト（`MSForms.CommandButton` などのコントロール、`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`Excel.Chart`・`Excel.QueryTable`）と、`onAction` を持つオブジェクト（`Excel.Shape`）で使えます。これらの配列・コレクション（`this.controls`、`book.worksheets`）と `MSForms.Control` にも使えます。フォーム自身のイベントは `@on(\"UserForm.<イベント>\")` で受け取ります。イベントの名前は文字列リテラルで書きます（実行時に決まる名前は使えません）。",
+        "this.controls.on(\"Change\", (c) => { c.tag = \"edited\"; });\nthis.btnOK.on(\"Click\", () => { this.hide(); });",
     ),
     x(
         "E0617",

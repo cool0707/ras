@@ -514,7 +514,8 @@ function init() {
     this.btnOK.on("Change", () => {});                 // E0611: no such event
     this.txtName.on("Exit", (cancel) => {});           // E0611: raised by the form
     this.on("Click", () => {});                        // E0616: the form itself
-    for (const c of this.controls) c.on("Click", () => {});   // E0616: MSForms.Control
+    this.controls.on("NoSuchEvent", () => {});         // E0611
+    this.controls.on("KeyDown", (c, keyCode, shift, more) => {});   // E0612
     this.btnOK.on("Click", (a) => {});                 // E0612: too many parameters
     this.btnOK.on("Click", two);                       // E0612
     this.btnOK.on("Click", 1);                         // E0301: not a function
@@ -523,8 +524,7 @@ function init() {
         &[],
     );
     let codes: Vec<&str> = diags.iter().map(|d| d.split(':').next().unwrap()).collect();
-    assert_eq!(codes, ["E0301", "E0611", "E0611", "E0612", "E0612", "E0616", "E0616", "E0616"], "{diags:?}");
-    assert!(diags.iter().any(|d| d.contains("instanceof MSForms.TextBox")), "{diags:?}");
+    assert_eq!(codes, ["E0301", "E0611", "E0611", "E0611", "E0612", "E0612", "E0612", "E0616", "E0616"], "{diags:?}");
     assert!(diags.iter().any(|d| d.contains("@on(\"<コントロール名>.Exit\")")), "{diags:?}");
 }
 
@@ -588,4 +588,51 @@ fn spec_example_of_on_compiles() {
     let shown = &text[text.find("  ' RAS_On_CommandButton_Click.cls\n").unwrap()..];
     let shown: String = shown[..shown.find("  ```").unwrap()].lines().skip(1).map(|l| format!("{}\n", l.strip_prefix("  ").unwrap_or(l))).collect();
     assert!(listener.ends_with(&shown), "the spec shows:\n{shown}\nthe compiler writes:\n{listener}");
+}
+
+/// `on` of the collection of the controls, of an array and of a control whose kind is not
+/// known (spec §12.2.3): a generated procedure finds the listener class by the type of each.
+#[test]
+fn handlers_of_collections_and_arrays() {
+    let (diags, files) = compile(
+        r#"
+let edited = 0;
+function pressed(c: MSForms.Control, keyCode: MSForms.ReturnInteger) { edited++; }
+
+@on("UserForm.Initialize")
+function init() {
+    this.controls.on("Change", (c) => { edited++; c.tag = "edited"; });
+    this.controls.addEventListener("KeyDown", pressed);
+    const boxes = [this.txtName];
+    boxes.on("Change", () => { edited++; });
+    for (const c of this.controls) {
+        const l = c.on("Click", () => { edited++; });
+        if (l != null) l.off();
+    }
+}
+"#,
+        &[],
+    );
+    assert!(diags.is_empty(), "{diags:?}");
+    let code = form_code(&files);
+    assert!(code.contains("RAS_OnEach_Change Me.Controls, ras_t1, 256&, Me"), "{code}");
+    assert!(code.contains("RAS_OnEach_KeyDown Me.Controls, ras_t2, 257&, Me"), "{code}");
+    assert!(code.contains("RAS_OnEach_Change boxes, ras_t3, 0&, Me"), "{code}");
+    assert!(code.contains("Set l = RAS_OnAny_Click(c, ras_t4, 0&, Me)"), "{code}");
+    let events = file(&files, "RAS_Events");
+    println!("{events}");
+    assert!(events.contains("Option Private Module"), "{events}");
+    assert!(events.contains("Public Function RAS_OnAny_Change(ByVal target As Object, ByVal handler As Object, ByVal argc As Long, ByVal owner As Object) As Object\n    Select Case TypeName(target)\n    Case \"CheckBox\"\n        Set RAS_OnAny_Change = RAS_Listen(New RAS_On_CheckBox_Change, target, handler, argc, owner)\n"), "{events}");
+    assert!(events.contains("Case \"TextBox\"\n        Set RAS_OnAny_Change = RAS_Listen(New RAS_On_TextBox_Change, target, handler, argc, owner)\n"), "{events}");
+    assert!(events.contains("Public Sub RAS_OnEach_Change(ByRef targets As Variant, ByVal handler As Object, ByVal argc As Long, ByVal owner As Object)") && events.contains("    For Each t In targets\n        RAS_OnAny_Change t, handler, argc, owner\n    Next t\n"), "{events}");
+    // A control without the event (a label has no `Change`) is left alone.
+    assert!(!events.contains("RAS_On_Label_Change") && events.contains("RAS_On_Label_Click"), "{events}");
+    assert!(!events.contains("RAS_OnEach_Click"), "{events}");
+    // The handler of a member gets the member, then the arguments of the event.
+    let change = file(&files, "RAS_On_TextBox_Change");
+    assert!(change.contains("Case 0&\n        ras_handler.Apply\n") && change.contains("Case 256&\n        ras_handler.Apply ras_target\n"), "{change}");
+    let key = file(&files, "RAS_On_TextBox_KeyDown");
+    assert!(key.contains("    ras_handler.Apply ras_target, KeyCode\n"), "{key}");
+    let lambdas: String = files.iter().filter(|f| f.name.starts_with("RAS_Lambda_")).map(|f| f.code.replace("\r\n", "\n")).collect();
+    assert!(lambdas.contains("Public Function Apply(ByVal c As Variant) As Variant") && lambdas.contains("Me.Captured_Me.pressed a1, a2"), "{lambdas}");
 }

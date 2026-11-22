@@ -728,12 +728,16 @@ pub struct EventBind {
 
 #[derive(Clone, Debug)]
 pub enum EventBindKind {
-    /// A listener object holds the target in a `WithEvents` variable of the host class
-    /// `class` and calls the handler from the event procedure. `params` are those of the
-    /// event (name, VBA type, by reference); the handler takes the first `argc` of them.
-    Listener { class: ClassId, event: String, params: Vec<(String, String, bool)>, argc: usize },
-    /// The target's `OnAction` property gets the name of the macro.
-    OnAction,
+    /// A listener object holds the target in a `WithEvents` variable of a host class and
+    /// calls the handler from the event procedure. `params` are those of the event (name, VBA
+    /// type, by reference); the handler takes the first `argc` of them.
+    ///
+    /// `classes` is the class of the target, or — `dynamic`, for a `MSForms.Control` — the
+    /// classes of controls that have the event: the one of the control is found at run time.
+    /// `each`: the target is an array or a collection, every member of which is listened to.
+    Listener { classes: Vec<ClassId>, dynamic: bool, each: bool, event: String, params: Vec<(String, String, bool)>, argc: usize },
+    /// The target's `OnAction` property (of each member of the target) gets the name of the macro.
+    OnAction { each: bool },
 }
 
 impl TypeInfo {

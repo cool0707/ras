@@ -24,7 +24,7 @@
 - セルを 1 つずつ読み書きするループはそのまま書いてよい（配列との一括転送に変換される）。画面更新などを止めるには関数に `@fast` を付ける。
 - シートを増やす・消す・名前を変えるときは、`objects/` のファイルを直接作ったり消したりせず、`ras sheet add` / `copy` / `remove` / `rename` を使う（ブックのシートとファイルを一緒に変える）。
 - シートと `ThisWorkbook` のコードは `objects/<シートのコード名>.ras` / `objects/ThisWorkbook.ras` に書く（ファイルがそのモジュール全体になる。`this` がそのシート・ブック）。イベントは、そのファイルの中で `@on("Worksheet.Change")` / `@on("Workbook.Open")` を付けた関数で受け取る。`src/` のファイルには `@on` を書けない。`Worksheet_Change` という名前の関数は書かない。
-- イベントハンドラを実行時に付けるとき（同じ処理を多くのコントロールに付ける、条件で付け外しする）は `対象.on("イベント", ハンドラ)`（`addEventListener` も同じ）。対象はコントロール・シート・ブック・`application`、ハンドラはアロー関数か関数の名前。戻り値の `off()` で外す。`this.controls` の要素は `instanceof MSForms.TextBox` などで絞り込んでから呼ぶ。図形には `shape.on("Click", マクロにする関数の名前)`。決まったコントロールのイベントは `@on("btnOK.Click")` で書く。
+- イベントハンドラを実行時に付けるとき（同じ処理を多くのコントロールに付ける、条件で付け外しする）は `対象.on("イベント", ハンドラ)`（`addEventListener` も同じ）。対象はコントロール・シート・ブック・`application`、ハンドラはアロー関数か関数の名前。戻り値の `off()` で外す。配列・コレクションにも使える（`this.controls.on("Change", (c) => { ... })`。そのイベントを持つメンバーすべてに付き、ハンドラは先頭の引数でメンバーを受け取る。戻り値は無い）。図形には `shape.on("Click", マクロにする関数の名前)`。決まったコントロールのイベントは `@on("btnOK.Click")` で書く。
 - エラー処理は `try` / `catch (e)`（`e.code`・`e.description`）。VBA の `On Error Resume Next` は `try { ... } catch { resume; }`。
 
 ## 使えないもの

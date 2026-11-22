@@ -13,9 +13,10 @@ function init() {
         console.log(`agree ${this.chkAgree.value} ${agreed}`);
     });
     firstSpin = this.spnQty.addEventListener("SpinUp", spunOnce);
-    for (const c of this.controls) {
-        if (c instanceof MSForms.CommandButton) c.on("Click", () => console.log(`clicked ${c.name}`));
-    }
+    // An array, and the collection of the controls: every member that has the event gets
+    // the handler, which is told the member first.
+    [this.btnOK, this.btnBoom].on("Click", (button) => console.log(`clicked ${button.name}`));
+    this.controls.on("SpinUp", (c) => console.log(`spin ${c.name}`));
 }
 
 function spunOnce() {

@@ -515,3 +515,29 @@ fn spec_example_of_on_compiles() {
     assert!(code.contains(".OnAction = RAS_MacroName(\"Watch.reload\")"), "{code}");
     assert!(code.contains("RAS_Listen New RAS_On_Workbook_BeforeClose, ThisWorkbook, "), "{code}");
 }
+
+/// Arrays and collections of sheets and shapes (spec §12.2.3).
+#[test]
+fn handlers_of_collections_of_sheets_and_shapes() {
+    let main = r#"
+export function reload() {}
+
+export function setup(book: Excel.Workbook) {
+    book.worksheets.on("Change", (ws, target) => { console.log(`${ws.name}!${target.address}`); });
+    const sheets: Excel.Worksheet[] = [Sheet1, Sheet2];
+    sheets.on("BeforeDoubleClick", () => false);
+    Sheet1.shapes.on("Click", reload);
+}
+"#;
+    let (diags, files) = compile(&[("Sheet1", ""), ("Sheet2", "")], &[("main", main)]);
+    assert!(diags.is_empty(), "{diags:?}");
+    let code = module(&files, "Main");
+    assert!(code.contains("RAS_OnEach_Change book.Worksheets, ras_t1, 257&, Nothing"), "{code}");
+    assert!(code.contains("RAS_OnEach_BeforeDoubleClick sheets_, ras_t2, 0&, Nothing"), "{code}");
+    assert!(code.contains("RAS_OnActionEach Sheet1.Shapes, RAS_MacroName(\"Main.reload\")"), "{code}");
+    let events = module(&files, "RAS_Events");
+    assert!(events.contains("Case \"Worksheet\"\n        Set RAS_OnAny_Change = RAS_Listen(New RAS_On_Worksheet_Change, target, handler, argc, owner)\n"), "{events}");
+    let change = module(&files, "RAS_On_Worksheet_Change");
+    assert!(change.contains("    ras_handler.Apply ras_target, Target\n"), "{change}");
+    assert!(module(&files, "RAS_Runtime").contains("Sub RAS_OnActionEach("));
+}

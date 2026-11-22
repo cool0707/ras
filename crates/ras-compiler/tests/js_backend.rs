@@ -314,11 +314,14 @@ optS=false optM=true
 focus optM
 up 2
 first spin
+spin spnQty
 focus spnQty
 up 3
+spin spnQty
 focus spnQty
 up 3
-error frmInput.btnBoom_Click: 実行時エラー 9: インデックスが有効範囲にありません。 (3)（forms/frmInput.ras:55）
+spin spnQty
+error frmInput.btnBoom_Click: 実行時エラー 9: インデックスが有効範囲にありません。 (3)（forms/frmInput.ras:56）
 clicked btnBoom
 focus btnBoom
 QueryClose mode=0

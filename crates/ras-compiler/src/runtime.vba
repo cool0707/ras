@@ -916,3 +916,14 @@ End Function
 Public Function RAS_MacroName(ByVal proc As String) As String
     RAS_MacroName = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!" & proc
 End Function
+'@@ proc RAS_OnActionEach
+' `shapes.on("Click", macro)`: the macro of every member of an array or a collection.
+Public Sub RAS_OnActionEach(ByRef targets As Variant, ByVal macroName As String)
+    Dim t As Variant
+    If IsArray(targets) Then
+        If RAS_Len(targets) = 0& Then Exit Sub
+    End If
+    For Each t In targets
+        t.OnAction = macroName
+    Next t
+End Sub

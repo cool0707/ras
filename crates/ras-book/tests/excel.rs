@@ -744,6 +744,8 @@ export function listen() {
     });
     application.addEventListener("SheetChange", (sh, target) => console.log(`app SheetChange ${sh.name}!${target.address(false, false)}`));
     const closing = application.on("WorkbookBeforeSave", (wb) => console.log(`app WorkbookBeforeSave ${wb === thisWorkbook}`));
+    // Every sheet of a collection: the handler is told which one.
+    thisWorkbook.worksheets.on("Change", (ws, target) => console.log(`each ${ws.name}!${target.address(false, false)}`));
     // A handler that returns `false` cancels the event.
     const save = thisWorkbook.on("BeforeSave", saving);
     Sheet1.range("A7").value = "x";
@@ -772,11 +774,13 @@ fn events_reach_the_handlers_attached_at_run_time() {
         lines(&stdout),
         vec![
             "sheet Change A7 #1",
+            "each Sheet1!A7",
             "app SheetChange Sheet1!A7",
             "BeforeSave false",
             "app WorkbookBeforeSave true",
             "saved=false",
-            // Taken off: only the handler of `Application` is left.
+            // Taken off: the handlers of the collection and of `Application` are left.
+            "each Sheet1!A8",
             "app SheetChange Sheet1!A8",
             "saved=true changes=1",
         ]

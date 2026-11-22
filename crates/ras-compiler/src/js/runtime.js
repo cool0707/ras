@@ -1616,12 +1616,25 @@ function fireListeners(target, event, cells, onError) {
         }
     }
 }
+/** `listen` when `target` is of one of the classes `kinds` (a control that has the event). */
+function listenAny(target, kinds, event, fn, owner, cancel) {
+    if (target == null) raise(91);
+    return kinds.includes(typeName(target)) ? listen(target, event, fn, owner, cancel) : null;
+}
+/** `controls.on(…)`: the members of an array or a collection that have the event. */
+function listenEach(targets, kinds, event, fn, owner, cancel) {
+    // The handler is told which member the event is of: it comes first.
+    for (const t of iter(targets)) if (t != null) listenAny(t, kinds, event, (...args) => fn(t, ...args), owner, cancel);
+}
 function unlistenOwner(owner) {
     for (const l of listeners.slice()) if (l.owner === owner) l.Off();
 }
 /** `shape.on("Click", refresh)`: the macro Excel calls for the object (its `OnAction`). */
 function onAction(target, macro) {
     put(target, "OnAction", macro);
+}
+function onActionEach(targets, macro) {
+    for (const t of iter(targets)) put(t, "OnAction", macro);
 }
 /** Runs the module initialisers and `@init` functions once (VBA `RAS_EnsureInit`). */
 function ensureInit() {
@@ -1801,7 +1814,7 @@ module.exports = {
     trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
-    vba, declare, module: module_, withEvents, listen, fireListeners, unlistenOwner, onAction, ensureInit, entries, run, form,
+    vba, declare, module: module_, withEvents, listen, listenAny, listenEach, fireListeners, unlistenOwner, onAction, onActionEach, ensureInit, entries, run, form,
 };
 Object.defineProperty(module.exports, "msforms", { get: () => forms().msforms, enumerable: true });
 // The API of test files (spec §14.12), there only in the build of `ras test`.

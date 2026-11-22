@@ -228,7 +228,7 @@ function opened() {
 }
 ```
 
-`on` は、コントロール（`this.btnOK.on("Click", () => { ... })`）・シート・ブック・`application` に使えます。フォームのコードビハインドで付けたものは、フォームが閉じると外れます。図形には、マクロにする関数の名前を渡します（`shape.on("Click", reload)`。`OnAction` に設定されます）。決まったコントロールのイベントは `@on("btnOK.Click")` で書きます。
+`on` は、コントロール（`this.btnOK.on("Click", () => { ... })`）・シート・ブック・`application` に使えます。配列・コレクションにも使えます（`this.controls.on("Change", (c) => { ... })`、`[this.txtA, this.txtB].on(...)`。ハンドラは先頭の引数でそのメンバーを受け取ります）。フォームのコードビハインドで付けたものは、フォームが閉じると外れます。図形には、マクロにする関数の名前を渡します（`shape.on("Click", reload)`。`OnAction` に設定されます）。決まったコントロールのイベントは `@on("btnOK.Click")` で書きます。
 
 ## テスト（`test/*.test.ras`）
 

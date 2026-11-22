@@ -180,6 +180,9 @@ pub(crate) struct Lowerer<'p> {
     reported_3d: bool,
     /// Listener classes of the `on` calls (spec §12.2.3).
     listeners: Vec<events::ListenerClass>,
+    /// Per event: the classes whose listener is chosen by the type of the target at run time
+    /// (type name, listener class), and whether arrays and collections are listened to.
+    dispatchers: Vec<events::Dispatcher>,
     /// Forms whose code attaches event handlers: they are detached when the form is unloaded.
     form_listens: HashSet<ModuleId>,
     /// No "this arrow function becomes a class" hint (the handler of an `on` call).
@@ -412,6 +415,7 @@ pub fn lower(prog: &Program) -> Lowered {
         instance_counts: HashMap::new(),
         reported_3d: false,
         listeners: Vec::new(),
+        dispatchers: Vec::new(),
         form_listens: HashSet::new(),
         quiet_closures: false,
     };
@@ -493,6 +497,7 @@ impl<'p> Lowerer<'p> {
                 break;
             }
         }
+        self.emit_dispatchers();
         self.emit_listeners();
         self.emit_struct_helpers();
         self.emit_std_declares();

@@ -871,15 +871,15 @@ impl<'p> Gen<'p> {
     fn event_on(&mut self, e: &Expr, target: &str, args: &[Expr]) -> String {
         let Some(bind) = self.info().event_binds.get(&e.id).cloned() else { return "null".into() };
         match bind.kind {
-            EventBindKind::OnAction => match bind.handler_fn {
+            EventBindKind::OnAction { each } => match bind.handler_fn {
                 Some(f) => {
                     let d = &self.prog.fns[f];
                     let macro_name = format!("{}.{}", self.prog.modules[d.module].vba_name, d.name);
-                    format!("$rt.onAction({target}, {})", js_str(&macro_name))
+                    format!("$rt.{}({target}, {})", if each { "onActionEach" } else { "onAction" }, js_str(&macro_name))
                 }
                 None => "null".into(),
             },
-            EventBindKind::Listener { event, params, .. } => {
+            EventBindKind::Listener { classes, dynamic, each, event, params, .. } => {
                 let handler = match (bind.handler_fn, args.get(1)) {
                     (Some(f), _) => self.fn_ref(f),
                     (None, Some(a)) => self.expr(a),
@@ -888,6 +888,11 @@ impl<'p> Gen<'p> {
                 let cancel = params.iter().position(|p| p.2 && p.1 == "Boolean").map(|i| i as i64).unwrap_or(-1);
                 // The form whose code attaches the handler: it goes when the form is unloaded.
                 let owner = if self.prog.modules[self.module].is_form() { "$me" } else { "null" };
+                if dynamic || each {
+                    // The members (the target) of the classes that have the event.
+                    let kinds: Vec<String> = classes.iter().map(|c| js_str(&self.prog.classes[*c].name)).collect();
+                    return format!("$rt.{}({target}, [{}], {}, {handler}, {owner}, {cancel})", if each { "listenEach" } else { "listenAny" }, kinds.join(", "), js_str(&event));
+                }
                 format!("$rt.listen({target}, {}, {handler}, {owner}, {cancel})", js_str(&event))
             }
         }
