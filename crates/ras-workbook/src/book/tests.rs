@@ -458,6 +458,75 @@ fn what_excel_refuses_to_move() {
 // ---------------------------------------------------------------------------- copying and moving
 
 #[test]
+fn formulas_pasted_transposed_and_with_operations() {
+    // What Excel 2021 writes (checked with Range.PasteSpecial).
+    let mut b = Book::new_book();
+    b.add_sheet(1, Some("Other")).unwrap();
+    for (a1, f) in [
+        ("C2", "=B2"),
+        ("D2", "=$B2"),
+        ("B3", "=B$2"),
+        ("C3", "=$B$2+A1"),
+        ("D3", "=SUM(B2:C2)+Z9"),
+        ("B4", "=$Z$9+Z$9+$Z9+SUM(2:2)"),
+        ("C4", "=Other!B2+Other!$B$2+SUM(B:B)+SUM($A:$C)"),
+    ] {
+        formula(&mut b, a1, f);
+    }
+    put(&mut b, "B2", num(1.0));
+    let transposed = Paste {
+        transpose: true,
+        ..Paste::all()
+    };
+    b.paste(0, rng("B2:D4"), 0, at("G10"), &transposed).unwrap();
+    for (a1, f) in [
+        ("G11", "=G10"),
+        ("G12", "=G$10"),
+        ("H10", "=$G10"),
+        ("H11", "=$G$10+F9"),
+        ("H12", "=SUM(G10:G11)+N34"),
+        ("I10", "=$Z$9+Z$9+$Z9+SUM(G$9:G$1048576)"),
+        ("I11", "=Other!G10+Other!$B$2+SUM($F10:$XFD10)+SUM($A:$C)"),
+    ] {
+        assert_eq!(read(&mut b, a1, Read::Formula), text(f), "{a1}");
+    }
+
+    // Formulas pasted with an operation are joined to what the cells have.
+    formula(&mut b, "B20", "=A20*2");
+    put(&mut b, "B21", num(7.0));
+    formula(&mut b, "B22", "=A22+1");
+    formula(&mut b, "B23", "=A23");
+    put(&mut b, "E20", num(100.0));
+    formula(&mut b, "E21", "=C21*3");
+    formula(&mut b, "E22", "=C22*3");
+    put(&mut b, "E24", text("abc"));
+    let add = Paste {
+        op: PasteOp::Add,
+        ..Paste::all()
+    };
+    b.paste(0, rng("B20:B24"), 0, at("E20"), &add).unwrap();
+    for (a1, f) in [
+        ("E20", "=100+(D20*2)"),
+        ("E21", "=(C21*3)+7"),
+        ("E22", "=(C22*3)+(D22+1)"),
+        ("E23", "=0+(D23)"),
+    ] {
+        assert_eq!(read(&mut b, a1, Read::Formula), text(f), "{a1}");
+    }
+    assert_eq!(read(&mut b, "E24", Read::Value), text("abc"));
+    // Values pasted with an operation are worked out, formulas or not.
+    let values = Paste {
+        what: PasteWhat::Values,
+        op: PasteOp::Multiply,
+        ..Paste::all()
+    };
+    put(&mut b, "A20", num(5.0));
+    put(&mut b, "H20", num(3.0));
+    b.paste(0, rng("B20"), 0, at("H20"), &values).unwrap();
+    assert_eq!(read(&mut b, "H20", Read::Formula), text("30"));
+}
+
+#[test]
 fn pasting_values_formats_and_operations() {
     let mut b = grid();
     b.set_number_format(0, rng("E1"), "#,##0").unwrap();

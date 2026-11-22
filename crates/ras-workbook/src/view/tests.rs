@@ -804,3 +804,49 @@ fn formats_as_excel_draws_them() {
     assert!(css("B3").contains("background:#FFEB84;"), "{}", css("B3"));
     assert!(css("B4").contains("background:#63BE7B;"), "{}", css("B4"));
 }
+
+/// The buttons of a table's headings (not those hidden; marked when filtered), the cells the
+/// file was saved with selected, and the code Japanese Excel shows a built-in format by.
+#[test]
+fn table_buttons_and_the_selection_saved() {
+    let mut files = parts_of(&formatted());
+    for (name, data) in files.iter_mut() {
+        let text = String::from_utf8_lossy(data).to_string();
+        *data = match name.as_str() {
+            "[Content_Types].xml" => text.replace(
+                "</Types>",
+                "<Override PartName=\"/xl/tables/table1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml\"/></Types>",
+            ),
+            "xl/worksheets/sheet1.xml" => text
+                .replace(
+                    "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">",
+                    &format!("<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"{R}\"><sheetViews><sheetView workbookViewId=\"0\"><selection activeCell=\"B3\" sqref=\"A2:B3\"/></sheetView></sheetViews>"),
+                )
+                .replace("</worksheet>", "<tableParts count=\"1\"><tablePart r:id=\"rId1\"/></tableParts></worksheet>"),
+            _ => text,
+        }
+        .into_bytes();
+    }
+    files.push((
+        "xl/worksheets/_rels/sheet1.xml.rels".to_string(),
+        rels(&[("rId1", &format!("{R}/table"), "../tables/table1.xml")]).into_bytes(),
+    ));
+    files.push((
+        "xl/tables/table1.xml".to_string(),
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" id="1" name="T1" displayName="T1" ref="A1:C4"><autoFilter ref="A1:C4"><filterColumn colId="1" hiddenButton="1"/><filterColumn colId="2"><filters><filter val="x"/></filters></filterColumn></autoFilter><tableColumns count="3"><tableColumn id="1" name="plain"/><tableColumn id="2" name="b"/><tableColumn id="3" name="c"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showRowStripes="1"/></table>"#
+            .to_vec(),
+    ));
+    let data = view_of(&zip_of(files));
+    let sheet = &data["sheets"][0];
+    assert_eq!(sheet["tableFilters"], json!([[0, 0, 0], [0, 2, 1]]));
+    assert_eq!(sheet["selection"], json!([2, 1, 1, 0, 2, 1]));
+    // Format 38: the code of the file, and the one Japanese Excel shows it by.
+    let b1 = sheet["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["r"] == json!(0) && c["c"] == json!(1))
+        .unwrap();
+    assert!(b1["sn"].is_string() && b1["sn"] != b1["n"], "{b1}");
+}
