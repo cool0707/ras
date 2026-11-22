@@ -81,7 +81,7 @@ pub enum BookCommand {
         #[arg(long, hide = true)]
         editable: bool,
     },
-    /// ブックのセルを Excel と同じように編集して、ファイルに書き込む（入力・クリア・コピーと移動・セルと行と列の挿入と削除）
+    /// ブックのセルを Excel と同じように編集して、ファイルに書き込む（入力・クリア・コピーと移動・セルと行と列の挿入と削除・書式。図形・フォームコントロール・ActiveX コントロールの配置と設定）
     Edit {
         /// 対象ブック（省略時は ras.toml の project.workbook）
         file: Option<PathBuf>,
@@ -103,7 +103,7 @@ pub enum BookCommand {
         /// セルの挿入・削除で、ほかのセルを動かす向き（挿入: down / right、削除: up / left。既定は上下）
         #[arg(long, value_name = "DIR")]
         shift: Option<String>,
-        /// 編集を JSON で指定する（1 つの編集か、その配列。例: '{"op":"copy","from":"A1:B2","to":"D1"}'）。複数指定できる
+        /// 編集を JSON で指定する（1 つの編集か、その配列。例: '{"op":"copy","from":"A1:B2","to":"D1"}'、'{"op":"addControl","control":"button","range":"F2:G3","set":{"text":"実行","macro":"Main.run"}}'）。複数指定できる
         #[arg(long, value_name = "JSON")]
         op: Vec<String>,
         /// 編集の JSON を読むファイル（`-` で標準入力）

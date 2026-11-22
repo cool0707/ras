@@ -1839,6 +1839,89 @@ fn sheets_are_added_copied_renamed_and_removed() {
 }
 
 #[test]
+fn book_edit_places_objects_on_the_sheet() {
+    let mut book = sales();
+    // The sheet's module takes the event of a control the workbook does not have yet.
+    let module = "@on(\"CommandButton1.Click\")\nfunction pressed() {\n    this.CommandButton1.caption = \"実行中\";\n}\n";
+    let dir = project(
+        "objects",
+        &mut book,
+        &[("src/main.ras", REPORT), ("objects/Sheet1.ras", module)],
+    );
+    let file = dir.join("Book.xlsx");
+    let (code, out, err) = ras(&dir, &["check"]);
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(
+        format!("{out}{err}").contains("CommandButton1"),
+        "{out}{err}"
+    );
+
+    // A shape, a form control with a macro and an ActiveX control, added from the command line.
+    let ops = r##"[
+        {"op":"addShape","shape":"roundRect","range":"F2:G4","set":{"text":"集計","fill":"#DDEEFF"}},
+        {"op":"addControl","control":"button","range":"F6:G7","set":{"text":"実行","macro":"Report.rebuildReport"}},
+        {"op":"addActiveX","control":"CommandButton","range":"F9:G10","set":{"text":"押す"}}
+    ]"##;
+    let (code, out, err) = ras(&dir, &["book", "edit", "--op", ops]);
+    assert_eq!(code, 0, "{out}{err}");
+    // The compiler reads the control from the workbook: its event is known now.
+    let controls = ras_ovba::workbook_sheet_controls(&file).unwrap().unwrap();
+    assert_eq!(controls[0].controls.len(), 1);
+    assert_eq!(controls[0].controls[0].name, "CommandButton1");
+    assert_eq!(controls[0].controls[0].class, "CommandButton");
+    let (code, out, err) = ras(&dir, &["check"]);
+    assert_eq!(code, 0, "{out}{err}");
+
+    // The grid draws them, with what the edits name them by.
+    let (code, page, err) = ras(&dir, &["book", "view", "--stdout"]);
+    assert_eq!(code, 0, "{err}");
+    for wanted in [
+        r#""id":"s2""#,
+        r#""name":"四角形: 角を丸くする 1""#,
+        r#""macro":"Report.rebuildReport""#,
+        r#""name":"CommandButton1""#,
+        r#""sub":"CommandButton""#,
+    ] {
+        assert!(page.contains(wanted), "{wanted}");
+    }
+
+    // Moved, set and deleted by name; what is not there is refused and nothing is written.
+    let (code, out, err) = ras(
+        &dir,
+        &[
+            "book",
+            "edit",
+            "--op",
+            r#"{"op":"placeObject","object":"ボタン 1","at":"B10","width":120,"height":30}"#,
+            "--op",
+            r#"{"op":"setObject","object":"CommandButton1","set":{"linkedCell":"A1"}}"#,
+            "--op",
+            r#"{"op":"deleteObject","object":"四角形: 角を丸くする 1"}"#,
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let before = std::fs::read(&file).unwrap();
+    let (code, _, err) = ras(
+        &dir,
+        &[
+            "book",
+            "edit",
+            "--op",
+            r#"{"op":"deleteObject","object":"四角形: 角を丸くする 1"}"#,
+        ],
+    );
+    assert_eq!(code, 1, "{err}");
+    assert!(
+        err.contains("オブジェクト: CommandButton1, ボタン 1"),
+        "{err}"
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    // The cells are still what they were.
+    assert_eq!(Book::open(&file).unwrap().sheet_name(0), Some("Sheet1"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn book_edit_writes_the_cells_into_the_file() {
     use ras_workbook::book::Read;
     let mut book = sales();

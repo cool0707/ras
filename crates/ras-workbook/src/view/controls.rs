@@ -21,6 +21,12 @@ pub(crate) fn spid_number(s: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
+/// The name of a control whose VML shape has none of its own, as Excel names it: by its kind
+/// and its number on the sheet (`ボタン 1`).
+pub(crate) fn default_name(object: &str, id: u32) -> String {
+    format!("{} {}", crate::patch::form_base(object), id & 1023)
+}
+
 /// A text as a control shows it.
 #[derive(Clone, Debug, Default)]
 struct Text {
@@ -41,6 +47,9 @@ struct Text {
 /// What the persisted data of an ActiveX control says.
 #[derive(Clone, Debug, Default)]
 struct Ax {
+    /// The class as VBA names it ("CommandButton", "CheckBox", ...); empty for another control.
+    kind: &'static str,
+    /// The record of the class ("CommandButton", "Label", "MorphData", "SpinButton", "ScrollBar").
     class: &'static str,
     caption: Option<String>,
     value: Option<String>,
@@ -60,6 +69,8 @@ struct Ax {
     min: i64,
     max: i64,
     position: i64,
+    small: i64,
+    large: i64,
     /// Orientation: -1 automatic, 0 vertical, 1 horizontal.
     orientation: i64,
 }
@@ -231,6 +242,16 @@ impl Controls {
                 if ctl.kind.is_empty() {
                     ctl.kind = form_kind(object).to_string();
                 }
+                // Its name, where the sheet's `<controls>` does not say it: the id of the shape
+                // when it is not the shape id, else the name Excel gives it.
+                if ctl.name.is_empty() {
+                    ctl.name = sh
+                        .attr("spid")
+                        .and(sh.attr("id"))
+                        .filter(|n| !n.starts_with("_x0000_s"))
+                        .map(crate::patch::decode_name)
+                        .unwrap_or_else(|| default_name(object, id));
+                }
                 ctl.client = data
                     .children
                     .iter()
@@ -351,8 +372,140 @@ impl Controls {
             macro_name,
             kind: "control",
             chart: None,
+            id: format!("c{}", c.id),
+            props: control_props(c),
         })
     }
+}
+
+/// What the grid's dialog shows of a control: its kind and its settings.
+fn control_props(c: &Control) -> serde_json::Value {
+    use serde_json::json;
+    let prop = |k: &str| c.props.get(k).map(String::as_str).filter(|v| !v.is_empty());
+    let client = |k: &str| {
+        c.client
+            .get(k)
+            .map(String::as_str)
+            .filter(|v| !v.is_empty())
+    };
+    // (`<x:MoveWithCells/>` says that the control does not move with the cells.)
+    let off = |k: &str| {
+        c.client
+            .get(k)
+            .is_some_and(|v| !v.eq_ignore_ascii_case("false"))
+    };
+    let placement = if off("MoveWithCells") {
+        "free"
+    } else if off("SizeWithCells") {
+        "move"
+    } else {
+        "moveAndSize"
+    };
+    let mut out = json!({ "placement": placement });
+    let mut put = |key: &str, value: Option<serde_json::Value>| {
+        if let Some(v) = value {
+            out[key] = v;
+        }
+    };
+    let text = |v: Option<&str>| v.map(|s| json!(s));
+    put(
+        "linkedCell",
+        text(prop("fmlaLink").or_else(|| client("FmlaLink"))),
+    );
+    put(
+        "inputRange",
+        text(prop("fmlaRange").or_else(|| client("FmlaRange"))),
+    );
+    match &c.ax {
+        Some(ax) => {
+            put("type", Some(json!("activex")));
+            put("sub", Some(json!(ax.kind)));
+            let on = matches!(
+                ax.value.as_deref().map(str::to_ascii_lowercase).as_deref(),
+                Some("1" | "-1" | "true")
+            );
+            match ax.kind {
+                "TextBox" | "ComboBox" => put("text", text(ax.value.as_deref().or(Some("")))),
+                "CommandButton" | "Label" => put("text", text(ax.caption.as_deref().or(Some("")))),
+                "CheckBox" | "OptionButton" | "ToggleButton" => {
+                    put("text", text(ax.caption.as_deref().or(Some(""))));
+                    put("value", Some(json!(on)));
+                }
+                "ScrollBar" | "SpinButton" => {
+                    put("value", Some(json!(ax.position)));
+                    put("min", Some(json!(ax.min)));
+                    put("max", Some(json!(ax.max)));
+                    put("step", Some(json!(ax.small)));
+                    if ax.kind == "ScrollBar" {
+                        put("page", Some(json!(ax.large)));
+                    }
+                }
+                _ => {}
+            }
+            if !ax.class.is_empty() {
+                put("color", ax.fore.as_deref().map(|v| json!(v)));
+                put("fill", ax.back.as_deref().map(|v| json!(v)));
+            }
+            if matches!(ax.class, "CommandButton" | "Label" | "MorphData") {
+                put("fontName", ax.font.as_deref().map(|v| json!(v)));
+                put("fontSize", ax.size.map(|v| json!(v)));
+                put("bold", Some(json!(ax.bold)));
+                put("italic", Some(json!(ax.italic)));
+            }
+        }
+        None if c.kind == "Pict" => put("type", Some(json!("object"))),
+        None => {
+            put("type", Some(json!("form")));
+            put("sub", Some(json!(c.kind)));
+            let num = |p: &str, v: &str| {
+                prop(p)
+                    .or_else(|| client(v))
+                    .and_then(|x| x.parse::<i64>().ok())
+                    .map(|n| json!(n))
+            };
+            if let Some(t) = &c.text {
+                put("text", Some(json!(t.text)));
+                put("fontSize", t.size.map(|v| json!(v)));
+            }
+            put(
+                "macro",
+                text(client("FmlaMacro").map(|m| m.trim_start_matches("[0]!"))),
+            );
+            match c.kind.as_str() {
+                "CheckBox" | "Radio" => put(
+                    "checked",
+                    Some(match prop("checked").or_else(|| client("Checked")) {
+                        Some("Checked" | "1") => json!(true),
+                        Some("Mixed" | "2") => json!("mixed"),
+                        _ => json!(false),
+                    }),
+                ),
+                "List" | "Drop" => {
+                    put("value", num("sel", "Sel"));
+                    if c.kind == "Drop" {
+                        put("dropLines", num("dropLines", "DropLines"));
+                    }
+                }
+                "Scroll" | "Spin" => {
+                    put("value", num("val", "Val"));
+                    put("min", num("min", "Min"));
+                    put("max", num("max", "Max"));
+                    put("step", num("inc", "Inc"));
+                    put("page", num("page", "Page"));
+                }
+                _ => {}
+            }
+            if matches!(c.kind.as_str(), "CheckBox" | "Radio" | "GBox") {
+                put(
+                    "threeD",
+                    Some(json!(
+                        prop("noThreeD").is_none() && !c.client.contains_key("NoThreeD")
+                    )),
+                );
+            }
+        }
+    }
+    out
 }
 
 /// The object type of `formControlPr` for a VML `ObjectType`.
@@ -850,31 +1003,15 @@ fn activex_html(c: &Control, ax: &Ax, default: &(String, f64)) -> String {
     }
 }
 
-/// The class of an ActiveX control by its CLSID, as the grid draws it, with MorphData's
-/// DisplayStyle (TextBox 1, ListBox 2, ComboBox 3, CheckBox 4, OptionButton 5, ToggleButton 6).
-fn class_of(clsid: &str) -> (&'static str, u8) {
-    match clsid.trim_matches(['{', '}']).to_ascii_uppercase().as_str() {
-        "D7053240-CE69-11CD-A777-00DD01143C57" => ("CommandButton", 0),
-        "978C9E23-D4B0-11CE-BF2D-00AA003F40D0" => ("Label", 0),
-        "8BD21D10-EC42-11CE-9E0D-00AA006002F3" => ("MorphData", 1),
-        "8BD21D20-EC42-11CE-9E0D-00AA006002F3" => ("MorphData", 2),
-        "8BD21D30-EC42-11CE-9E0D-00AA006002F3" => ("MorphData", 3),
-        "8BD21D40-EC42-11CE-9E0D-00AA006002F3" => ("MorphData", 4),
-        "8BD21D50-EC42-11CE-9E0D-00AA006002F3" => ("MorphData", 5),
-        "8BD21D60-EC42-11CE-9E0D-00AA006002F3" => ("MorphData", 6),
-        "79176FB0-B7F2-11CE-97EF-00AA006D2776" => ("SpinButton", 0),
-        "DFD181E0-5E2F-11CE-A449-00AA004A803D" => ("ScrollBar", 0),
-        _ => ("", 0),
-    }
-}
-
 /// What an ActiveX control (`xl/activeX/activeXN.xml`) says of itself.
 fn activex(parts: &Parts, part: &str) -> Ax {
     let Some(ocx) = parts.xml(part) else {
         return Ax::default();
     };
-    let (class, display) = class_of(ocx.attr("classid").unwrap_or(""));
+    let (kind, class, display) =
+        crate::oforms::class_of(ocx.attr("classid").unwrap_or("")).unwrap_or(("", "", 0));
     let mut ax = Ax {
+        kind,
         class,
         display,
         max: 100,
@@ -907,237 +1044,17 @@ fn activex(parts: &Parts, part: &str) -> Ax {
     ax
 }
 
-/// A field of a record's DataBlock: (mask bit, name, size).
-type Field = (u8, &'static str, usize);
-
-/// How a class's record is read: its fields, whether its mask has 64 bits, the strings and sizes
-/// of its ExtraDataBlock (mask bit, name), the mask bits of its pictures.
-type Spec = (
-    &'static [Field],
-    bool,
-    &'static [(u8, &'static str)],
-    &'static [u8],
-);
-
-const COMMAND_BUTTON: &[Field] = &[
-    (0, "ForeColor", 4),
-    (1, "BackColor", 4),
-    (2, "VariousPropertyBits", 4),
-    (3, "Caption", 4),
-    (4, "PicturePosition", 4),
-    (6, "MousePointer", 1),
-    (7, "Picture", 2),
-    (8, "Accelerator", 2),
-    (10, "MouseIcon", 2),
-];
-const LABEL: &[Field] = &[
-    (0, "ForeColor", 4),
-    (1, "BackColor", 4),
-    (2, "VariousPropertyBits", 4),
-    (3, "Caption", 4),
-    (4, "PicturePosition", 4),
-    (6, "MousePointer", 1),
-    (7, "BorderColor", 4),
-    (8, "BorderStyle", 2),
-    (9, "SpecialEffect", 2),
-    (10, "Picture", 2),
-    (11, "Accelerator", 2),
-    (12, "MouseIcon", 2),
-];
-const MORPH_DATA: &[Field] = &[
-    (0, "VariousPropertyBits", 4),
-    (1, "BackColor", 4),
-    (2, "ForeColor", 4),
-    (3, "MaxLength", 4),
-    (4, "BorderStyle", 1),
-    (5, "ScrollBars", 1),
-    (6, "DisplayStyle", 1),
-    (7, "MousePointer", 1),
-    (9, "PasswordChar", 2),
-    (10, "ListWidth", 4),
-    (11, "BoundColumn", 2),
-    (12, "TextColumn", 2),
-    (13, "ColumnCount", 2),
-    (14, "ListRows", 2),
-    (15, "cColumnInfo", 2),
-    (16, "MatchEntry", 1),
-    (17, "ListStyle", 1),
-    (18, "ShowDropButtonWhen", 1),
-    (20, "DropButtonStyle", 1),
-    (21, "MultiSelect", 1),
-    (22, "Value", 4),
-    (23, "Caption", 4),
-    (24, "PicturePosition", 4),
-    (25, "BorderColor", 4),
-    (26, "SpecialEffect", 4),
-    (27, "MouseIcon", 2),
-    (28, "Picture", 2),
-    (29, "Accelerator", 2),
-    (32, "GroupName", 4),
-];
-const SPIN_BUTTON: &[Field] = &[
-    (0, "ForeColor", 4),
-    (1, "BackColor", 4),
-    (2, "VariousPropertyBits", 4),
-    (5, "Min", 4),
-    (6, "Max", 4),
-    (7, "Position", 4),
-    (8, "PrevEnabled", 4),
-    (9, "NextEnabled", 4),
-    (10, "SmallChange", 4),
-    (11, "Orientation", 4),
-];
-const SCROLL_BAR: &[Field] = &[
-    (0, "ForeColor", 4),
-    (1, "BackColor", 4),
-    (2, "VariousPropertyBits", 4),
-    (4, "MousePointer", 1),
-    (5, "Min", 4),
-    (6, "Max", 4),
-    (7, "Position", 4),
-    (9, "PrevEnabled", 4),
-    (10, "NextEnabled", 4),
-    (11, "SmallChange", 4),
-    (12, "LargeChange", 4),
-    (13, "Orientation", 4),
-];
-const TEXT_PROPS: &[Field] = &[
-    (0, "FontName", 4),
-    (1, "FontEffects", 4),
-    (2, "FontHeight", 4),
-    (4, "FontCharSet", 1),
-    (5, "FontPitchAndFamily", 1),
-    (6, "ParagraphAlign", 1),
-    (7, "FontWeight", 2),
-];
-
-/// A record read: its values, its strings (in the order of `strings`), where it ends.
-struct Record {
-    mask: u64,
-    values: HashMap<&'static str, u32>,
-    strings: HashMap<&'static str, String>,
-    /// Where the StreamData after the record starts.
-    end: usize,
-}
-
-/// Reads a record of MS-OFORMS (minor 0, major 2): its DataBlock, then the strings of its
-/// ExtraDataBlock (`extra`: the strings and sizes in their order, a size as "#Size").
-fn record(
-    data: &[u8],
-    fields: &[Field],
-    mask64: bool,
-    extra: &[(u8, &'static str)],
-) -> Option<Record> {
-    let u16_at = |i: usize| data.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
-    let u32_at = |i: usize| {
-        data.get(i..i + 4)
-            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-    };
-    if data.len() < 8 || data[0] != 0 || data[1] != 2 {
-        return None;
-    }
-    let cb = u16_at(2)? as usize;
-    let end = 4 + cb;
-    if end > data.len() {
-        return None;
-    }
-    let mut mask = u32_at(4)? as u64;
-    let mut pos: usize = 8;
-    if mask64 {
-        mask |= (u32_at(8)? as u64) << 32;
-        pos = 12;
-    }
-    let mut values = HashMap::new();
-    for &(bit, name, size) in fields {
-        if mask & (1u64 << bit) == 0 {
-            continue;
-        }
-        pos = pos.next_multiple_of(size);
-        let v = match size {
-            1 => *data.get(pos)? as u32,
-            2 => u16_at(pos)? as u32,
-            _ => u32_at(pos)?,
-        };
-        values.insert(name, v);
-        pos += size;
-    }
-    pos = pos.next_multiple_of(4);
-    let mut strings = HashMap::new();
-    for &(bit, name) in extra {
-        if mask & (1u64 << bit) == 0 {
-            continue;
-        }
-        if name == "#Size" {
-            pos += 8;
-            continue;
-        }
-        let packed = values.get(name).copied().unwrap_or(0);
-        let len = (packed & 0x7fff_ffff) as usize;
-        let raw = data.get(pos..pos.checked_add(len)?)?;
-        let s = if packed & 0x8000_0000 != 0 {
-            raw.iter().map(|b| *b as char).collect()
-        } else {
-            let units: Vec<u16> = raw
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect();
-            String::from_utf16_lossy(&units)
-        };
-        strings.insert(name, s);
-        pos = (pos + len).next_multiple_of(4);
-    }
-    if pos > end {
-        return None;
-    }
-    Some(Record {
-        mask,
-        values,
-        strings,
-        end,
-    })
-}
-
-/// Skips the pictures (GuidAndPicture) of a record's StreamData; returns where they end.
-fn skip_pictures(data: &[u8], mut pos: usize, count: usize) -> Option<usize> {
-    for _ in 0..count {
-        let size = data
-            .get(pos + 20..pos + 24)
-            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))? as usize;
-        pos = pos.checked_add(24 + size)?;
-        if pos > data.len() {
-            return None;
-        }
-    }
-    Some(pos)
-}
-
 /// The control's stream: its caption, value, colors and font.
 fn read_stream(ax: &mut Ax, data: &[u8]) {
-    const SIZE: &str = "#Size";
-    let (fields, mask64, extra, pictures): Spec = match ax.class {
-        "CommandButton" => (
-            COMMAND_BUTTON,
-            false,
-            &[(3, "Caption"), (5, SIZE)],
-            &[7, 10],
-        ),
-        "Label" => (LABEL, false, &[(3, "Caption"), (5, SIZE)], &[10, 12]),
-        "MorphData" => (
-            MORPH_DATA,
-            true,
-            &[(8, SIZE), (22, "Value"), (23, "Caption"), (32, "GroupName")],
-            &[27, 28],
-        ),
-        "SpinButton" => (SPIN_BUTTON, false, &[(3, SIZE)], &[]),
-        "ScrollBar" => (SCROLL_BAR, false, &[(3, SIZE)], &[]),
-        _ => return,
-    };
-    let Some(r) = record(data, fields, mask64, extra) else {
+    let Some(r) = crate::oforms::Record::parse(ax.class, data) else {
         return;
     };
-    let v = |k: &str| r.values.get(k).copied();
-    ax.caption = r.strings.get("Caption").cloned().or(ax.caption.take());
-    ax.value = r.strings.get("Value").cloned().or(ax.value.take());
+    let v = |k: &str| r.get(k);
+    ax.caption = r
+        .string("Caption")
+        .map(str::to_string)
+        .or(ax.caption.take());
+    ax.value = r.string("Value").map(str::to_string).or(ax.value.take());
     ax.fore = v("ForeColor").map(ole_color);
     ax.back = v("BackColor").map(ole_color);
     // fBackStyle: opaque unless said otherwise (the default bits of each class have it).
@@ -1145,44 +1062,38 @@ fn read_stream(ax: &mut Ax, data: &[u8]) {
     if ax.class == "MorphData" {
         ax.display = v("DisplayStyle").map(|d| d as u8).unwrap_or(ax.display);
     }
-    let signed = |k: &str| v(k).map(|x| x as i32 as i64);
-    ax.min = signed("Min").unwrap_or(0);
-    ax.max = signed("Max").unwrap_or(if ax.class == "ScrollBar" { 32767 } else { 100 });
-    ax.position = signed("Position").unwrap_or(0);
-    ax.orientation = signed("Orientation").unwrap_or(-1);
+    ax.min = r.signed("Min").unwrap_or(0);
+    ax.max = r
+        .signed("Max")
+        .unwrap_or(if ax.class == "ScrollBar" { 32767 } else { 100 });
+    ax.position = r.signed("Position").unwrap_or(0);
+    ax.small = r.signed("SmallChange").unwrap_or(1);
+    ax.large = r.signed("LargeChange").unwrap_or(1);
+    ax.orientation = r.signed("Orientation").unwrap_or(-1);
     if ax.orientation == -1 {
         // Automatic: by the shape of the control, which is not known here; vertical.
         ax.orientation = 0;
     }
-    // TextProps after the pictures.
-    if !matches!(ax.class, "CommandButton" | "Label" | "MorphData") {
-        return;
-    }
-    let count = pictures
-        .iter()
-        .filter(|b| r.mask & (1u64 << **b) != 0)
-        .count();
-    let Some(at) = skip_pictures(data, r.end, count) else {
+    let Some(t) = &r.text else {
         return;
     };
-    let Some(t) = record(&data[at..], TEXT_PROPS, false, &[(0, "FontName")]) else {
-        return;
-    };
-    ax.font = t.strings.get("FontName").cloned().filter(|s| !s.is_empty());
+    ax.font = t
+        .string("FontName")
+        .map(str::to_string)
+        .filter(|s| !s.is_empty());
     ax.size = t
-        .values
         .get("FontHeight")
-        .map(|h| *h as f64 / 20.0)
+        .map(|h| h as f64 / 20.0)
         .filter(|s| *s > 0.0);
-    if let Some(e) = t.values.get("FontEffects") {
+    if let Some(e) = t.get("FontEffects") {
         ax.bold = e & 1 != 0;
         ax.italic = e & 2 != 0;
         ax.underline = e & 4 != 0;
     }
-    if let Some(w) = t.values.get("FontWeight") {
-        ax.bold = *w > 550;
+    if let Some(w) = t.get("FontWeight") {
+        ax.bold = w > 550;
     }
-    ax.align = match t.values.get("ParagraphAlign") {
+    ax.align = match t.get("ParagraphAlign") {
         Some(1) => Some("left"),
         Some(2) => Some("right"),
         Some(3) => Some("center"),

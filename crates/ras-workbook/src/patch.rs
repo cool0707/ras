@@ -20,12 +20,15 @@ use serde_json::Value as Json;
 use crate::book::snapshot::{CellState, Raw, Snapshot, Styles};
 use crate::book::{Book, MAX_COLS, MAX_ROWS, SortKey, Val};
 
+mod objects;
 mod scan;
 mod structure;
 mod styles;
 #[cfg(test)]
 mod tests;
 
+pub use objects::{Marker, Order, Place, What};
+pub(crate) use objects::{decode_name, form_base};
 use scan::Edits;
 
 type Result<T> = std::result::Result<T, String>;
@@ -142,11 +145,18 @@ pub enum Op {
         from: RangeRef,
         to: RangeRef,
     },
+    /// An object over the cells of the sheet (a shape, a form control, an ActiveX control)
+    /// added, placed, set, put before or behind the others, or deleted.
+    Object { sheet: String, what: What },
 }
 
 impl Op {
     fn structural(&self) -> bool {
         matches!(self, Op::Insert { .. } | Op::Delete { .. })
+    }
+
+    fn object(&self) -> bool {
+        matches!(self, Op::Object { .. })
     }
 }
 
@@ -209,6 +219,10 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
             .ok_or("シートが指定されていません（`sheet`）")?;
         let from_sheet = text("fromSheet").unwrap_or_else(|| sheet.clone());
         let shift = text("shift").unwrap_or_default();
+        if let Some(what) = objects::parse(kind, o)? {
+            out.push(Op::Object { sheet, what });
+            continue;
+        }
         out.push(match kind {
             "set" => Op::Set {
                 sheet,
@@ -375,7 +389,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 from: range_of(o, "from")?,
                 to: range_of(o, "to")?,
             },
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy）")),
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / addShape / addControl / addActiveX / placeObject / setObject / deleteObject / orderObject）")),
         });
     }
     Ok(out)
@@ -389,8 +403,24 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
     let mut at = 0;
     while at < ops.len() {
         let mut end = at + 1;
+        if ops[at].object() {
+            // The objects over the cells are written straight into the file.
+            while end < ops.len() && ops[end].object() {
+                end += 1;
+            }
+            let list: Vec<(&str, &What)> = ops[at..end]
+                .iter()
+                .filter_map(|op| match op {
+                    Op::Object { sheet, what } => Some((sheet.as_str(), what)),
+                    _ => None,
+                })
+                .collect();
+            bytes = objects::apply(&bytes, &list)?;
+            at = end;
+            continue;
+        }
         if !ops[at].structural() {
-            while end < ops.len() && !ops[end].structural() {
+            while end < ops.len() && !ops[end].structural() && !ops[end].object() {
                 end += 1;
             }
         }
@@ -995,6 +1025,8 @@ fn run(
             let target = copy(book, si, first, si, rest)?;
             written.push((si, target));
         }
+        // (Made in the file itself: `objects::apply`.)
+        Op::Object { .. } => {}
     }
     Ok(())
 }
@@ -1118,6 +1150,21 @@ impl<'a> Pack<'a> {
             .map_err(|_| format!("{name} は UTF-8 ではないため、書き換えられません"))
     }
 
+    /// A part's bytes.
+    pub(crate) fn bytes(&mut self, part: &str) -> Result<Option<Vec<u8>>> {
+        let Some(name) = self.find(part) else {
+            return Ok(None);
+        };
+        let mut file = self
+            .zip
+            .by_name(&name)
+            .map_err(|e| format!("{name}: {e}"))?;
+        let mut data = Vec::with_capacity(file.size().min(1 << 28) as usize);
+        file.read_to_end(&mut data)
+            .map_err(|e| format!("{name}: {e}"))?;
+        Ok(Some(data))
+    }
+
     /// The relationships of a part: (id, type, the part it points to).
     pub(crate) fn rels(&mut self, part: &str) -> Result<Vec<(String, String, String)>> {
         let (dir, file) = part.rsplit_once('/').unwrap_or(("", part));
@@ -1142,8 +1189,9 @@ impl<'a> Pack<'a> {
         Ok(out)
     }
 
-    /// The file with the parts of `replace` given new contents and those of `remove` left out;
-    /// the others are copied as they are stored.
+    /// The file with the parts of `replace` given new contents (those the file does not have
+    /// are added at its end) and those of `remove` left out; the others are copied as they are
+    /// stored.
     fn rewrite(
         &mut self,
         replace: &BTreeMap<String, Vec<u8>>,
@@ -1175,6 +1223,17 @@ impl<'a> Pack<'a> {
                 }
                 options
             };
+            writer.start_file(name.as_str(), options).map_err(failed)?;
+            writer
+                .write_all(data)
+                .map_err(|e| format!("ブックを書き出せません（{e}）"))?;
+        }
+        for (name, data) in replace {
+            if self.names.contains(name) {
+                continue;
+            }
+            let options =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
             writer.start_file(name.as_str(), options).map_err(failed)?;
             writer
                 .write_all(data)

@@ -195,7 +195,7 @@ pub struct Drawing<'a> {
 }
 
 /// The sizes of a sheet's columns and rows in pixels, as Excel shows them at 100%.
-struct Sizes {
+pub(crate) struct Sizes {
     default_w: f64,
     default_h: f64,
     widths: HashMap<u32, f64>,
@@ -216,7 +216,7 @@ impl Sizes {
     }
 
     /// The left of the column `c`: the widths before it.
-    fn x(&self, c: u32) -> f64 {
+    pub(crate) fn x(&self, c: u32) -> f64 {
         let custom: f64 = self
             .widths
             .iter()
@@ -227,7 +227,7 @@ impl Sizes {
         custom + (c as f64 - n) * self.default_w
     }
 
-    fn y(&self, r: u32) -> f64 {
+    pub(crate) fn y(&self, r: u32) -> f64 {
         let custom: f64 = self
             .heights
             .iter()
@@ -239,7 +239,7 @@ impl Sizes {
     }
 
     /// The box of an anchor in pixels: (left, top, right, bottom).
-    fn anchor(&self, an: &crate::view::drawing::Anchor) -> Option<(f64, f64, f64, f64)> {
+    pub(crate) fn anchor(&self, an: &crate::view::drawing::Anchor) -> Option<(f64, f64, f64, f64)> {
         use crate::view::drawing::EMU_PX;
         let at = |m: (u32, i64, u32, i64)| {
             (
@@ -260,6 +260,18 @@ impl Sizes {
         (x2 >= x && y2 >= y).then_some((x, y, x2, y2))
     }
 
+    /// A point (pixels) as the marker of an anchor: the column and the pixels into it, the row
+    /// and the pixels into it. A hidden column or row holds no point.
+    pub(crate) fn marker(&self, x: f64, y: f64) -> (u32, f64, u32, f64) {
+        let (row, col) = self.cell_at(x.max(0.0), y.max(0.0));
+        (
+            col,
+            (x - self.x(col)).clamp(0.0, self.w(col)),
+            row,
+            (y - self.y(row)).clamp(0.0, self.h(row)),
+        )
+    }
+
     /// The cell at a point (pixels).
     fn cell_at(&self, x: f64, y: f64) -> (u32, u32) {
         let (mut col, mut left) = (0, 0.0);
@@ -277,6 +289,57 @@ impl Sizes {
 }
 
 impl Book {
+    /// The sizes of the sheet's columns and rows as the grid draws them.
+    pub(crate) fn sizes(&self, si: usize) -> Result<Sizes> {
+        // Column widths (in characters) to pixels as Excel does, with the widest digit 8 px wide
+        // (the default Japanese fonts at 11pt).
+        let mdw = 8.0_f64;
+        let px = |w: f64| ((256.0 * w + (128.0 / mdw).trunc()) / 256.0 * mdw).trunc();
+        let Ok(ws) = self.file.sheet(si) else {
+            return Err("シートがありません".into());
+        };
+        let fmt = ws.sheet_format_properties();
+        let default_w = if fmt.default_column_width() > 0.0 {
+            px(fmt.default_column_width())
+        } else {
+            72.0
+        };
+        let default_h = if fmt.default_row_height() > 0.0 {
+            (fmt.default_row_height() * 96.0 / 72.0).round()
+        } else {
+            25.0
+        };
+        let mut widths: HashMap<u32, f64> = HashMap::new();
+        for c in ws.column_dimensions() {
+            widths.insert(
+                c.col_num(),
+                if c.hidden() {
+                    0.0
+                } else if c.width() > 0.0 {
+                    px(c.width())
+                } else {
+                    default_w
+                },
+            );
+        }
+        let mut heights: HashMap<u32, f64> = HashMap::new();
+        for r in ws.row_dimensions() {
+            if r.hidden() {
+                heights.insert(r.row_num(), 0.0);
+            } else if r.height() > 0.0 {
+                heights.insert(r.row_num(), (r.height() * 96.0 / 72.0).round());
+            }
+        }
+        widths.retain(|_, w| *w != default_w);
+        heights.retain(|_, h| *h != default_h);
+        Ok(Sizes {
+            default_w,
+            default_h,
+            widths,
+            heights,
+        })
+    }
+
     /// The sheet for the grid: `rows` × `cols` of it at most, from its first cell, with the
     /// objects of its drawing.
     pub fn sheet_view(
@@ -294,62 +357,11 @@ impl Book {
         for m in info.merged.iter().filter_map(|m| RangeRef::parse(m)) {
             used = used.union(&m);
         }
-        // Column widths (in characters) to pixels as Excel does, with the widest digit 8 px wide
-        // (the default Japanese fonts at 11pt).
-        let mdw = 8.0_f64;
-        let px = |w: f64| ((256.0 * w + (128.0 / mdw).trunc()) / 256.0 * mdw).trunc();
-        let (sizes, grid_lines) = {
-            let Ok(ws) = self.file.sheet(si) else {
-                return Err("シートがありません".into());
-            };
-            let fmt = ws.sheet_format_properties();
-            let default_w = if fmt.default_column_width() > 0.0 {
-                px(fmt.default_column_width())
-            } else {
-                72.0
-            };
-            let default_h = if fmt.default_row_height() > 0.0 {
-                (fmt.default_row_height() * 96.0 / 72.0).round()
-            } else {
-                25.0
-            };
-            let mut widths: HashMap<u32, f64> = HashMap::new();
-            for c in ws.column_dimensions() {
-                widths.insert(
-                    c.col_num(),
-                    if c.hidden() {
-                        0.0
-                    } else if c.width() > 0.0 {
-                        px(c.width())
-                    } else {
-                        default_w
-                    },
-                );
-            }
-            let mut heights: HashMap<u32, f64> = HashMap::new();
-            for r in ws.row_dimensions() {
-                if r.hidden() {
-                    heights.insert(r.row_num(), 0.0);
-                } else if r.height() > 0.0 {
-                    heights.insert(r.row_num(), (r.height() * 96.0 / 72.0).round());
-                }
-            }
-            widths.retain(|_, w| *w != default_w);
-            heights.retain(|_, h| *h != default_h);
-            // (umya-spreadsheet reads an absent showGridLines as false: the file says it.)
-            let grid = drawing
-                .and_then(|d| d.parts.grid_lines(&info.name))
-                .unwrap_or(true);
-            (
-                Sizes {
-                    default_w,
-                    default_h,
-                    widths,
-                    heights,
-                },
-                grid,
-            )
-        };
+        let sizes = self.sizes(si)?;
+        // (umya-spreadsheet reads an absent showGridLines as false: the file says it.)
+        let grid_lines = drawing
+            .and_then(|d| d.parts.grid_lines(&info.name))
+            .unwrap_or(true);
         // The objects of the drawing; the grid reaches to them.
         let objects = match drawing {
             Some(d) => self.drawn(si, &info.name, d, &sizes),
@@ -459,7 +471,7 @@ impl Book {
                 use crate::view::drawing::EMU_PX;
                 let px = |v: i64| (v as f64 / EMU_PX * 100.0).round() / 100.0;
                 let marker = |m: (u32, i64, u32, i64)| json!([m.0, px(m.1), m.2, px(m.3)]);
-                let mut j = json!({ "kind": o.kind, "html": o.html });
+                let mut j = json!({ "kind": o.kind, "html": o.html, "id": o.id, "props": o.props });
                 if let Some(f) = o.anchor.from {
                     j["from"] = marker(f);
                 }

@@ -279,6 +279,7 @@ VS Code のグリッド（「RAS: ブックを表示（グリッド）」「RAS:
 | 列の幅・行の高さ | 列見出し・行番号の境目をドラッグ（ダブルクリックで内容に合わせる）。見出しの右クリックで数値の指定・非表示・再表示 |
 | 並べ替え・フィルター | ツールバーの A→Z / Z→A / フィルター（Ctrl+Shift+L）、見出しの ▾ から値を選んで絞り込み |
 | 連続データ（フィルハンドル） | 選択範囲の右下の ■ をドラッグ（数値・日付・「第1回」のような番号は続きを、数式は参照をずらして入力）。ダブルクリックで隣の列の下端まで |
+| 図形・フォームコントロール・ActiveX コントロール | ツールバーの「図形 ▾」「フォーム ▾」「ActiveX ▾」で選び、シートの上をドラッグ（クリックで既定の大きさ）。クリックで選択、ドラッグで移動、ハンドルでサイズ変更、矢印キーで微調整、Delete で削除。ダブルクリックか右クリックの「プロパティ…」で名前・文字列・マクロ・リンクするセル・入力範囲・値・色などを設定、右クリックで重なりの順序 |
 | 元に戻す・やり直し | Ctrl+Z / Ctrl+Y |
 
 行・列・セルを挿入・削除すると、Excel と同じく、全シートの数式・名前の定義・結合セル・条件付き書式・入力規則・フィルター・メモ・図形やグラフの位置とグラフの参照が付いていき、編集したセルに依存する数式は再計算されます。結合セルの一部だけを動かす挿入など、Excel が拒む操作は理由を表示して何も変えません。
@@ -293,10 +294,13 @@ ras book edit Book.xlsm --sheet Sheet1 --delete B:B                     # 列を
 ras book edit Book.xlsm --op '{"op":"copy","sheet":"Sheet1","from":"A1:B2","to":"D1"}'   # JSON で指定する編集（copy / move / fill / values など）
 ras book edit Book.xlsm --op '{"op":"format","sheet":"Sheet1","range":"A1:D1","set":{"bold":true,"fill":"#DDEEFF","border":"all"}}'   # 書式
 ras book edit Book.xlsm --op '{"op":"sort","sheet":"Sheet1","range":"A1","by":"B","desc":true}'    # 並べ替え（filter / filterBy / size / hide / merge / autofill も同様）
+ras book edit Book.xlsm --op '{"op":"addControl","sheet":"Sheet1","control":"button","range":"F2:G3","set":{"text":"実行","macro":"Report.rebuildReport"}}'   # フォームコントロール（addShape: 図形、addActiveX: ActiveX コントロール）
+ras book edit Book.xlsm --op '{"op":"setObject","sheet":"Sheet1","object":"ボタン 1","set":{"text":"集計"}}'   # オブジェクトの設定（placeObject: 移動とサイズ変更、orderObject、deleteObject）
 ras book edit Book.xlsm --set A1=x -o build/edited.xlsm                 # 別のファイルに書く（元のブックは変えない）
 ```
 
 - ファイルは、変わったセルだけを元のブックの XML に書き戻します。VBA プロジェクト（署名も）、図形・画像・コントロール、スタイル、変更のないシートは、元のバイト列のまま残ります。VBA の関数を呼ぶ数式など、Excel なしでは計算できない数式も、数式のまま保ちます。
+- 図形・フォームコントロール・ActiveX コントロールは、Excel が保存する形で描画のパート（DrawingML・VML・`xl/activeX/`）に直接書きます。足した ActiveX コントロールは、そのシートのファイルの `@on("CommandButton1.Click")` で使えます（§12.2.1）。設定できる項目は仕様 §14.14 の表を参照してください。
 - 書き込む前に、書き換えたファイルを読み戻してセルが編集の結果と一致することを確かめます。プロジェクトのブックは、前のファイルを `build/backup/` に残します。
 - Excel で開いているブックは書き換えません（エラーになります。Excel で閉じてから行ってください）。
 - テーブルの列をまたぐ列の挿入・削除と、ピボットテーブルのあるシートでの挿入・削除は、ファイルの書き換えでは行えません（Excel で行ってください）。
@@ -391,7 +395,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 
 - 自動テスト: `cargo test --workspace`（構文、型チェック、仕様書のコード例と生成 VBA の照合、CLI の一連の流れ、LSP のセッション、`vbaProject.bin` の読み書き）。
 - `ras book view` のページは、自動テストで描画のもとになるデータ（セルの表示・数式・書式の CSS・結合セル・変更の一覧・図形とコントロールの HTML と位置）を確かめ、Chromium（Playwright）で開いて見た目（スクロールで続くグリッド、図形・画像・コントロール・ワードアート）とセルの選択・変更の一覧からの移動を手で確認しています。図形を含むテスト用のブックは、Excel が保存する形をまねて作ったもので、Excel が保存したフォームコントロール・ActiveX コントロール・SmartArt・埋め込みオブジェクトのブックでは未確認です。グラフは xljs のテスト用ブック（12 種類）、EMF は Office が作った EMF（python-pptx の埋め込みオブジェクトのアイコン）で見た目を確かめています。VS Code のパネル（「ブックを表示」、デバッグの一時停止中の表示）と `launch.json` の `answers` は、型チェックと拡張のビルドだけで、実機の VS Code では未確認です。一時停止中にランタイムがブックを書き出す部分（`$rasBookSnapshot`）は自動テストで確かめています。
-- `ras book edit` は、XlsxWriter で作ったブック（数式・VBA の関数を呼ぶ数式・結合セル・条件付き書式・入力規則・フィルター・メモ・ボタン・ハイパーリンク・名前の定義・グラフ・テーブル・VBA プロジェクト）を編集する自動テスト（`crates/ras-workbook/src/patch/tests.rs`）で、書き換えたパートと変えていないパートを確かめ、書き換えたブックを openpyxl で読めることを手で確認しています。**Excel が保存したブックの編集と、書き換えたブックを Excel で開くことは未確認です。** グリッドでの編集は、Chromium（Playwright）でページを操作し、`ras book edit` につないで確認しています（入力・再計算・行の挿入・元に戻す・コピーと貼り付け・エラーの表示、ツールバーの書式・表示形式・フィルハンドル・列幅のドラッグ・並べ替え・フィルター・結合）。VS Code のパネルでの編集（キーの受け取り・クリップボード・IME・元に戻す）は、型チェックと拡張のビルドだけで、実機の VS Code では未確認です。
+- `ras book edit` は、XlsxWriter で作ったブック（数式・VBA の関数を呼ぶ数式・結合セル・条件付き書式・入力規則・フィルター・メモ・ボタン・ハイパーリンク・名前の定義・グラフ・テーブル・VBA プロジェクト）を編集する自動テスト（`crates/ras-workbook/src/patch/tests.rs`）で、書き換えたパートと変えていないパートを確かめ、書き換えたブックを openpyxl で読めることを手で確認しています。**Excel が保存したブックの編集と、書き換えたブックを Excel で開くことは未確認です。** グリッドでの編集は、Chromium（Playwright）でページを操作し、`ras book edit` につないで確認しています（入力・再計算・行の挿入・元に戻す・コピーと貼り付け・エラーの表示、ツールバーの書式・表示形式・フィルハンドル・列幅のドラッグ・並べ替え・フィルター・結合）。図形・フォームコントロール・ActiveX コントロールの配置と設定は、自動テスト（`crates/ras-workbook/src/patch/objects/tests.rs`: 書き換えたパート、グリッドの読み取りでの読み戻し、Excel 2010 以降の形のコントロール）のほか、書き換えたブックを LibreOffice（別実装）で開いて、図形と 9 種類のフォームコントロール・6 種類の ActiveX コントロールが名前・文字列・リンクするセル・入力範囲・値つきで読めることを手で確認し、グリッドでの挿入・移動・サイズ変更・プロパティ・削除を Chromium（Playwright）で操作して確認しています。**足したコントロールを実機の Excel で開くこと（特に ActiveX コントロール）は未確認です。** VS Code のパネルでの編集（キーの受け取り・クリップボード・IME・元に戻す）は、型チェックと拡張のビルドだけで、実機の VS Code では未確認です。
 - `ras run`・`ras test`・`ras book dump` / `diff` は、プロジェクトを作って `ras` を実行する自動テスト（`crates/ras/tests/offline.rs`。Linux の Node 22）で確認しています。Windows・macOS と、VS Code の実行ファイルをランタイムに使う経路は未確認です。`ras book dump` の出力は xljs のテスト用ブック（入力規則・条件付き書式・テーブル）でも確かめています。Excel が保存した大きなブックでの速度は測っていません。
 - `ras pack` が出力したブックは、別実装の `ovba` クレートと oletools（`olevba`）で読み直して確認しています（CI でも実行）。
 - 実機の Excel（Windows 11、Excel 2021 64bit）で次を確認しています（CI には Excel が無いため手動）:

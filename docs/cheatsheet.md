@@ -273,5 +273,6 @@ describe("fill", () => {
 | `ras book diff a.xlsx b.xlsx` | 2 つのブックの差分 |
 | `ras book view Book.xlsx` | シートをグリッドで表示する HTML を作る |
 | `ras book edit Book.xlsm --sheet Sheet1 --set B2=100` | セルを編集してブックに書き込む（`--clear A1:C3`、`--insert 3:4`、`--delete B:B`、`--op '<JSON>'`） |
+| `ras book edit Book.xlsm --sheet Sheet1 --op '{"op":"addControl","control":"button","range":"F2:G3","set":{"text":"実行","macro":"Main.run"}}'` | ボタンなどをシートに置く（`addShape` / `addActiveX` / `placeObject` / `setObject` / `deleteObject`） |
 | `ras sheet list` / `add 集計` / `copy Sheet1` / `rename Sheet1 --code-name Sales` / `remove Sheet3` | シートの一覧・追加・複製・名前の変更・削除（ブックと `objects/` のファイルを一緒に変える） |
 | `ras build` / `ras pack` | VBA を出力する / ブックに書き込む |

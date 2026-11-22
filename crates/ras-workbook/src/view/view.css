@@ -183,3 +183,23 @@ table.ns th { cursor: row-resize; }
 /* The fill handle and the cells it is drawn out over. */
 .fillhandle { position: absolute; width: 7px; height: 7px; box-sizing: border-box; background: var(--accent); border: 1px solid #fff; cursor: crosshair; pointer-events: auto; z-index: 2; }
 .fillbox { position: absolute; box-sizing: border-box; border: 2px dashed #555; }
+/* The object selected where objects are edited: its handles; a new one being drawn out. */
+.objsel { position: absolute; box-sizing: border-box; border: 1px solid #217346; pointer-events: none; z-index: 3; }
+.objsel .h { position: absolute; width: 8px; height: 8px; box-sizing: border-box; background: #fff; border: 1px solid #217346; border-radius: 50%; pointer-events: auto; }
+.objsel .h.nw { left: -5px; top: -5px; cursor: nwse-resize; }
+.objsel .h.n { left: calc(50% - 4px); top: -5px; cursor: ns-resize; }
+.objsel .h.ne { right: -5px; top: -5px; cursor: nesw-resize; }
+.objsel .h.e { right: -5px; top: calc(50% - 4px); cursor: ew-resize; }
+.objsel .h.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.objsel .h.s { left: calc(50% - 4px); bottom: -5px; cursor: ns-resize; }
+.objsel .h.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.objsel .h.w { left: -5px; top: calc(50% - 4px); cursor: ew-resize; }
+body.editable .obj { cursor: move; }
+body.placing #grid, body.placing #grid td, body.placing #grid .obj { cursor: crosshair; }
+.band { position: absolute; box-sizing: border-box; border: 1px dashed #217346; background: rgba(33, 115, 70, .08); pointer-events: none; z-index: 3; }
+.dlg.props { min-width: 380px; max-height: 90vh; overflow: auto; }
+.dlg.props label { gap: 10px; }
+.dlg.props label span { flex: none; width: 150px; }
+.dlg.props label.tall { align-items: flex-start; }
+.dlg.props input[type="text"], .dlg.props input[type="number"], .dlg.props textarea, .dlg.props select { flex: 1; min-width: 0; width: auto; margin: 0; font: inherit; }
+.dlg.props input[type="checkbox"] { margin: 0; }

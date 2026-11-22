@@ -2525,7 +2525,7 @@ ras run Report.rebuildReport --view                            # 実行後のブ
 * **描かないもの:** 条件付き書式、テーブルのスタイル、グラフの細部（近似曲線・誤差範囲・データテーブル・書式を変えた軸と目盛線・図形の効果）、セルのメモ・コメント、斜線、文字の回転。書式から CSS への変換（テーマの色、罫線の種類、列幅のピクセル数）は xljs の印刷（PDF 出力）の実装に合わせている。
 * **エディタ:** VS Code 拡張は同じページをパネルに表示する。「RAS: ブックを表示（グリッド）」（エクスプローラーの `.xlsx` / `.xlsm` の右クリックにも出る）はブックのファイルを表示し、`build/` の下の実行結果のブックは、プロジェクトのブックとの差分を強調する。Excel のないデバッグ実行（§14.10.8）では、ブレークポイントやステップ実行で止まるたびに、そのときのブックを表示し、前回の停止から変わったセル（最初はファイルから変わったセル）を強調する（設定 `ras.debug.sheetView` を `off` にすると表示しない）。「RAS: シートのグリッドを表示」は、シートのファイル（`objects/<コード名>.ras`。§12.2。`ThisWorkbook.ras` は対象外）で、プロジェクトのブックをそのシートで表示する（`ras book view --stdout --sheet <コード名>`）。エディターのタイトルバー・右クリックとエクスプローラーの右クリックに出す（どのファイルが対象かは拡張が `.ras` の変更を監視して、コンテキストキー `ras.sheetFiles` に保つ）。拡張は停止のたびに、デバッグ対象の `$rasBookSnapshot(<フォルダー>)` を評価して開いているブックを書き出させ、`ras book view --stdout`（図形は `--drawings` で読み込み元のブックから）の出力を表示する。
 
-**セルの編集（`ras book edit`、エディタのグリッド）:** ブックのファイルを、Excel でセルを編集したときと同じ結果になるように書き換える。Excel のない環境でブックのデータを直す手段であり、エディタのグリッド（上記）は同じ処理でセルを編集できる。
+**セルの編集（`ras book edit`、エディタのグリッド）:** ブックのファイルを、Excel でセルを編集したときと同じ結果になるように書き換える。Excel のない環境でブックのデータを直す手段であり、エディタのグリッド（上記）は同じ処理でセルを編集できる。セルの上のオブジェクト（図形・フォーム コントロール・ActiveX コントロール）も、同じコマンドとグリッドで配置・設定できる。
 
 ```sh
 ras book edit Book.xlsm --sheet Sheet1 --set B2=100 --set "C2==B2*2"   # セルに入力する
@@ -2556,7 +2556,41 @@ ras book edit Book.xlsm --op '{"op":"copy","sheet":"Sheet1","from":"A1:B2","to":
   | `sort` | `range`、`by`（列の文字）、`desc`、`header` | 行の並べ替え。`range` が 1 つのセルなら、そのセルを含むフィルターの範囲、無ければアクティブセル領域を並べ替える。`header` を省略すると、先頭行が見出しかどうかを推定する |
   | `filter` | `range`、または `off: true` | オートフィルターの設定（1 つのセルならアクティブセル領域）と解除 |
   | `filterBy` | `column`（列の文字）、`values`、`blanks`、または `clear: true` | フィルターの列の絞り込み（表示が `values` のどれかの行と、`blanks` なら空のセルの行を残す）と、その解除 |
+  | `addShape` | `shape`、位置、`set` | 図形を足す。`shape` は `rect` / `roundRect` / `ellipse` / `triangle` / `diamond` / `rightArrow` / `star5` / `wedgeRectCallout` など（DrawingML の既定の図形の名前）と、`textBox`（テキスト ボックス）・`line`（直線）・`arrow`（矢印） |
+  | `addControl` | `control`、位置、`set` | フォーム コントロールを足す。`control` は `button` / `checkBox` / `optionButton` / `groupBox` / `label` / `listBox` / `comboBox` / `scrollBar` / `spinner` |
+  | `addActiveX` | `control`、位置、`set` | ActiveX コントロール（Microsoft Forms 2.0）を足す。`control` は `CommandButton` / `CheckBox` / `OptionButton` / `ToggleButton` / `TextBox` / `Label` / `ListBox` / `ComboBox` / `ScrollBar` / `SpinButton` |
+  | `placeObject` | `object`、位置 | オブジェクト（図形・画像・グラフ・コントロール）の移動とサイズ変更 |
+  | `setObject` | `object`、`set` | オブジェクトの設定（下の「オブジェクトの設定」） |
+  | `orderObject` | `object`、`to`（`front` / `back` / `forward` / `backward`） | 重なりの順序（最前面・最背面・前面・背面へ） |
+  | `deleteObject` | `object` | オブジェクトの削除 |
 
+* **オブジェクト（図形・フォーム コントロール・ActiveX コントロール）の配置と設定:** `addShape` / `addControl` / `addActiveX` / `placeObject` / `setObject` / `orderObject` / `deleteObject`。
+
+  ```sh
+  ras book edit Book.xlsm --sheet Sheet1 --op '{"op":"addControl","control":"button","range":"F2:G3","set":{"text":"実行","macro":"Report.rebuildReport"}}'
+  ras book edit Book.xlsm --sheet Sheet1 --op '{"op":"addActiveX","control":"CommandButton","at":"F5","width":96,"height":28,"set":{"text":"更新"}}'
+  ras book edit Book.xlsm --sheet Sheet1 --op '{"op":"addShape","shape":"roundRect","range":"B8:D10","set":{"text":"注意","fill":"#FFF2CC"}}'
+  ras book edit Book.xlsm --sheet Sheet1 --op '{"op":"setObject","object":"チェック 2","set":{"linkedCell":"B1","checked":true}}'
+  ras book edit Book.xlsm --sheet Sheet1 --op '{"op":"placeObject","object":"ボタン 1","range":"F6:G7"}'
+  ```
+
+  * **位置:** `range`（セル範囲。左上のセルの左上から、右下のセルの右下まで）、`at` と `width` / `height`（セルの左上に、グリッドが 100% で描くピクセル数の大きさで置く）、`from` と `to`（左上と右下の角。それぞれ `[列, 列の中のピクセル, 行, 行の中のピクセル]`。列・行は 0 始まり。`ras book view` のデータの `from` / `to` と同じ形）のどれか。
+  * **`object`:** オブジェクトの名前（名前ボックスに出る名前。大文字と小文字は区別しない）か、グリッドのデータの `id`（`s12`: 描画の中の id が 12 のオブジェクト、`c1025`: 図形 id が 1025 のコントロール）。無ければ、そのシートのオブジェクトの名前を添えてエラーにする。足したオブジェクトの名前は Excel（日本語版）が付けるのと同じ形（`正方形/長方形 1`、`ボタン 1`、`CommandButton1`）で、シートの中で重ならない番号を付ける。
+  * **オブジェクトの設定（`set` のキー）:** どの種類にも `name`（名前）と `placement`（`moveAndSize`: セルに合わせて移動やサイズ変更をする、`move`: 移動するがサイズ変更はしない、`free`: どちらもしない）。そのほかは種類による（その種類に無いキーはエラー）。
+
+    | 種類 | キー |
+    |---|---|
+    | 図形・テキスト ボックス | `text`（改行は段落になる）、`macro`（登録するマクロ）、`fill` / `line`（`"#RRGGBB"`。`null` は塗りつぶしなし・線なし）、`lineWidth`（pt）、`color`（文字の色）、`fontSize`（pt）、`bold`、`italic`、`align`（`left` / `center` / `right`）、`valign`（`top` / `middle` / `bottom`） |
+    | 線・画像・グラフ・グループ | `macro`。線は `line` / `lineWidth` も |
+    | フォーム コントロール | `text`（ボタン・チェック ボックス・オプション ボタン・グループ ボックス・ラベル）、`macro`、`linkedCell`（リンクするセル）、`inputRange`（リスト・コンボの入力範囲）、`checked`（`true` / `false` / `"mixed"`）、`value`（スクロール バー・スピン ボタンの値、リスト・コンボの選択した番号）、`min` / `max` / `step` / `page`（0〜30000）、`dropLines`、`threeD`、`horizontal`、`fontSize`、`color` |
+    | ActiveX コントロール | `text`（`Caption`。テキスト ボックス・コンボ ボックスは `Value`）、`value`（チェック ボックスなどは真偽値、スクロール バー・スピン ボタンは `Value`、ほかは文字列）、`linkedCell`（`LinkedCell`）、`inputRange`（`ListFillRange`）、`color`（`ForeColor`）、`fill`（`BackColor`）、`fontName`、`fontSize`、`bold`、`italic`、`align`、`min` / `max`、`step`（`SmallChange`）、`page`（`LargeChange`） |
+
+    マクロの名前は、このブックのマクロとして書く（`Report.rebuildReport` → `[0]!Report.rebuildReport`）。セルの参照は `B1`、`Sheet2!A1:A5` のように書く（絶対参照にして書き込む）。
+  * **ファイルへの書き方:** ブックの代役はこれらのオブジェクトを保持しないので、Excel が保存する形で、ファイルのパートに直接書く。ほかのパートは元のバイト列のまま残す。書き換えたファイルは、書き込む前に代役で読み戻せることを確かめる。
+    * 図形は、シートの描画（`xl/drawings/drawingN.xml`）のアンカーとして書く（Excel が新しい図形に付けるスタイルと同じもの）。描画の無いシートには、描画のパート・リレーションシップ・コンテンツ タイプ・シートの `<drawing>` を足す。移動とサイズ変更は、アンカー（`from` / `to`、`pos` / `ext`）と、図形が保持する枠（`xfrm`）を書き換える。重なりの順序は、描画の中の並び。
+    * フォーム コントロールは、シートの VML 描画（`xl/drawings/vmlDrawingN.vml`）の図形と `x:ClientData` として、**Excel 2007 が保存する形**で足す（それ以降の Excel はこの形を読み、保存するときに自分の形にする）。VML 描画の無いシートには、そのパートとシートの `<legacyDrawing>` を足し、図形 id はブックのどの VML 描画も使っていない区画（`o:idmap`）から取る。Excel 2010 以降が保存したコントロール（シートの `<controls>` の項目とアンカー、プロパティ `xl/ctrlProps/ctrlPropN.xml`、描画の中の非表示の鏡像）は、設定・移動・削除のときに、そのすべてを書き換える。
+    * ActiveX コントロールは、シートの `<controls>` の項目、クラスと保存データ（`xl/activeX/activeXN.xml` と `.bin`。`persistStreamInit`: クラス ID に続けて [MS-OFORMS] のコントロールのレコード）、位置とリンクするセルを持つ VML の図形として足す。保存データは、Excel が新しいコントロールに書くものと同じ既定値（フォントはブックの既定のフォント）で作る。設定は保存データのレコードを読み、変えるプロパティだけを書き換えて書き戻す（画像など、ほかのデータはそのまま保つ）。サイズ変更では、コントロールが保持する大きさも書き換える。プレビューの画像は書かない（Excel はコントロールそのものを描く）。Microsoft Forms 2.0 以外のコントロールと、`persistStorage` / `persistPropertyBag` で保存されたコントロールは、名前・位置・リンクするセル以外を設定できない。
+    * 足した ActiveX コントロールは、コンパイラがブックから読むコントロールの一覧（§12.2.1）に入る: そのシートのファイルで `@on("CommandButton1.Click")` と `this.CommandButton1` が使える。フォーム コントロールと図形には、`export function` のマクロを `macro` で登録する（§12.2.1）。
 * **編集の意味:** 編集そのものはブックの代役（§14.10.8、`crates/ras-workbook`）が行う。行・列・セルの挿入と削除では、全シートの数式と名前の定義の参照を付け替え、挿入した行・列には Excel と同じく前の行・列の書式を与える。編集したセルに依存する数式は、ほかのシートのものも含めて再計算し、その値をファイルに書く。結合セルや配列数式の一部だけを動かす編集、空でないセルをシートの外に押し出す挿入など、Excel が拒む編集はエラーにして、何も変えない。
 * **書き込み:** ファイルは代役のブックからは保存しない（代役が保持しないフォームコントロール・ActiveX コントロール・VBA プロジェクトの署名などが失われるため）。読み込んだままのブックと編集後のブックのセル（数式・値・書式）を比べ、**変わったセルだけ**を元のファイルのシートの XML に書き戻す。それ以外（VBA プロジェクト、図形・画像、スタイル、共有文字列、変更のないシート）は、パートごと元のバイト列のまま残す。
   * 変わらなかったセルは、行・列の挿入と削除で位置が変わっても、番地以外は元の XML のまま書く（共有文字列・リッチテキスト・書式の番号）。書式だけが変わったセルは、書式の番号（`s`）だけを書き換える。新しく書く文字列はインライン文字列（`t="inlineStr"`）にする。
@@ -2579,7 +2613,9 @@ ras book edit Book.xlsm --op '{"op":"copy","sheet":"Sheet1","from":"A1:B2","to":
   * 列の幅・行の高さ: 列見出しの右端・行番号の下端をドラッグする（選択中の列・行をまとめて変える）。端のダブルクリックで、描かれているセルの内容に合わせる。見出しの右クリックに「列の幅…」「行の高さ…」「非表示」「再表示」。
   * フィルター: 見出しのセルの ▾ で、昇順・降順の並べ替えと、表示する値のチェックリスト（「(空白セル)」を含む）を出す。絞り込んでいる列は ▼ になる。
   * フィルハンドル: 選択範囲の右下の ■ をドラッグすると `autofill`、ダブルクリックすると隣の列のデータの下端までコピーする。
+  * オブジェクト（図形・フォーム コントロール・ActiveX コントロール）: ツールバーの「図形 ▾」「フォーム ▾」「ActiveX ▾」で種類を選び、シートの上をドラッグして大きさを決める（クリックだけなら既定の大きさ。Esc で取り消し）。オブジェクトはクリックで選択し（名前ボックスに名前、数式バーにマクロ）、ドラッグで移動、周りの 8 つのハンドルでサイズ変更、矢印キーで 1 ピクセルずつ移動（Shift で大きさ）、Delete で削除する。ダブルクリック・右クリックの「プロパティ…」・Alt+Enter で、その種類の設定（上の表のキー: 名前・文字列・マクロ・リンクするセル・入力範囲・値・色・フォント・オブジェクトの位置関係など）のダイアログを出し、変えた項目だけを `setObject` で送る。右クリックのメニューには、重なりの順序（最前面・前面・背面・最背面へ移動）と削除もある。ページは位置を、描いているグリッドの上の位置から `from` / `to` にして送る。画像・グラフも同じに移動・サイズ変更・削除できる。
   * 元に戻す・やり直し（Ctrl+Z、Ctrl+Y / Ctrl+Shift+Z）: 拡張が編集の前のファイルの内容を保持し（ブックごとに 50 回分、合計 200 MB まで）、それを書き戻す。ほかのもの（Excel、`ras pack`、同期）がファイルを変えたら、履歴を捨てる。
+* **オブジェクトの制限:** オブジェクトのコピーと貼り付け、複数のオブジェクトの選択、グループ化、回転、図形の線種・グラデーション・効果、頂点の編集、画像・グラフの挿入、フォーム コントロールの太字・斜体、ActiveX コントロールのそのほかのプロパティ（`Enabled`・`Locked`・`MultiLine`・画像など）と Microsoft Forms 2.0 以外のコントロールの追加は、まだ行えない。削除した画像・グラフのパートはファイルに残る（Excel が保存するときに消える）。ActiveX コントロールの名前を変えても、VBA・RAS のコードの中の名前は変わらない。
 * **制限:** 形式を選択して貼り付け、条件付き書式・入力規則の編集、複数キーの並べ替え、値の一覧以外の条件（数値フィルター・色）での絞り込み、罫線の線種・色の指定、フォント名の選択（グリッドのツールバーには無い。`format` の `fontName` では指定できる）、曜日・月名などのユーザー設定リストの連続データは、まだ行えない。並べ替えた範囲にある、代役が計算できない数式は値になる。読み込めていないセルのあるブック（Excel 以外が作った一部のブック）は、そのセルを上書きする編集をエラーにする。Excel で開いているブックの編集（Excel を操作する経路）は無い。切り取って貼り付けたセルを参照するグラフの系列・条件付き書式の範囲は付け替えない（数式と名前の定義は付け替える）。代役が計算できない数式のセルを切り取って貼り付けると、値になる。編集のたびにブックを読み直すため、大きなブック（10 万セル以上）では 1 回の編集に数秒かかる。
 
 ### 14.15 機械可読の診断・エラーの説明・代役で使えない API の警告

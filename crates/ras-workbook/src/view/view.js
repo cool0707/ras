@@ -1,6 +1,7 @@
 // The grid of `ras book view` (and of the editor's sheet panel): draws the sheets of DATA.
 // (A sheet: `filter` is its filter's range, `filterColumns` { offset: { values, blanks } | { other } } the columns filtered.)
 // DATA = { editable?: true, file, sheets: [sheet_view...], images: [data URL], diff: { before, structure: [text], changes: { sheet: [{ a, before, after }] } } | null, active: name | null, focus?: true }
+// (An object of a sheet: { kind, html, id (what the edits name it by), props: { type, sub, ...its settings }, name?, macro?, from?, to?, pos?, ext?, chart? }.)
 // (`focus`: `active` was asked for (`ras book view --sheet`) and comes before the sheet shown last time.)
 //
 // The grid goes on past the cells as Excel's does: empty rows and columns are added while the
@@ -43,6 +44,8 @@
     };
 
     let current = null;
+    // The sheet is being drawn (again).
+    let drawing = false;
     // The object (a shape, a control) selected, and the cell of the active cell.
     let selected = null;
     let activeTd = null;
@@ -52,6 +55,7 @@
     // Cells are edited only in the editor's panel, on a page made for it: the editor writes the
     // workbook file and draws the page again.
     const editable = !!(data.editable && vscode);
+    document.body.classList.toggle("editable", editable);
     const MAXR = 1048576;
     const MAXC = 16384;
     // The selection: { kind: "cells" | "rows" | "cols" | "all", nr, nc (where it was started), fr, fc
@@ -67,7 +71,15 @@
     let clip = saved.clip || null;
 
     function clearSelection() {
-        if (selected) selected.classList.remove("on");
+        if (selected) {
+            selected.classList.remove("on");
+            // (Not while the page draws the sheet again: the object is selected again then.)
+            if (!drawing && saved.selObj) remember({ selObj: null });
+        }
+        if (view && view.objsel) {
+            view.objsel.remove();
+            view.objsel = null;
+        }
         selected = null;
         if (activeTd) activeTd.classList.remove("sel");
         activeTd = null;
@@ -178,6 +190,20 @@
         box.classList.add("on");
         $("name").textContent = obj.name || "";
         $("fx").textContent = obj.macro ? `マクロ: ${obj.macro}` : "";
+        if (!editable) return;
+        // Where objects are edited: the handles that size it, and it stays selected when the
+        // page is drawn again.
+        remember({ selObj: { sheet: view.sheet.name, id: obj.id } });
+        const frame = view.layer.appendChild(el("div", "objsel"));
+        for (const dir of ["nw", "n", "ne", "e", "se", "s", "sw", "w"]) frame.appendChild(el("i", `h ${dir}`)).grip = dir;
+        view.objsel = frame;
+        frameObject();
+        drawBoxes();
+    }
+    // The handles around the object selected, where its box is now.
+    function frameObject() {
+        if (!view || !view.objsel || !selected) return;
+        for (const k of ["left", "top", "width", "height"]) view.objsel.style[k] = selected.style[k];
     }
 
     // The width of a column and the height of a row (px), drawn or not.
@@ -194,6 +220,16 @@
     }
 
     function draw(sheet) {
+        drawing = true;
+        try {
+            drawSheet(sheet);
+        } finally {
+            drawing = false;
+        }
+        restoreObject();
+    }
+
+    function drawSheet(sheet) {
         // What was being typed on the sheet shown before is dropped.
         entry = null;
         ed.value = "";
@@ -491,9 +527,10 @@
                 }
             }
             if (obj.name) box.title = obj.macro ? `${obj.name}（マクロ: ${obj.macro}）` : obj.name;
+            box.obj = obj;
             box.addEventListener("click", (e) => {
                 e.stopPropagation();
-                selectObject(box, obj);
+                if (selected !== box) selectObject(box, obj);
             });
         }
         for (const img of layer.querySelectorAll("img[data-img]")) {
@@ -501,6 +538,28 @@
             if (src) img.src = src;
         }
         warpText(layer);
+        if (!drawing) restoreObject();
+    }
+
+    // The object that was selected before the page was drawn again; after one was added, the
+    // new one.
+    function restoreObject() {
+        if (!editable || !view) return;
+        const boxes = Array.from(view.layer.querySelectorAll(".obj"));
+        const added = saved.newObj;
+        if (added && added.sheet === view.sheet.name) {
+            remember({ newObj: null });
+            const fresh = boxes.filter((b) => !added.ids.includes(b.obj.id));
+            if (fresh.length === 1) {
+                selectObject(fresh[0], fresh[0].obj);
+                return;
+            }
+        }
+        const was = saved.selObj;
+        if (!was || was.sheet !== view.sheet.name) return;
+        const box = boxes.find((b) => b.obj.id === was.id);
+        if (box) selectObject(box, box.obj);
+        else remember({ selObj: null });
     }
 
     function go(sheetName, a) {
@@ -1412,6 +1471,11 @@
     const NUMBER_FORMATS = [["General", "標準"], ["0.00", "数値"], ["#,##0", "桁区切り"], ["¥#,##0", "通貨"], ["0%", "パーセント"], ["yyyy/m/d", "日付"], ["h:mm", "時刻"], ["@", "文字列"]];
     const FONT_SIZES = [6, 8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 
+    // What is put over the cells: (what the edit calls it, its name in the menu, the size a click gives it).
+    const SHAPES = [["rect", "四角形", 120, 80], ["roundRect", "角丸四角形", 120, 80], ["ellipse", "楕円", 120, 80], ["triangle", "三角形", 110, 90], ["diamond", "ひし形", 110, 90], ["rightArrow", "右矢印", 130, 70], ["star5", "星", 100, 100], ["wedgeRectCallout", "吹き出し", 140, 80], ["textBox", "テキスト ボックス", 160, 40], ["line", "直線", 120, 60], ["arrow", "矢印", 120, 60]];
+    const FORM_CONTROLS = [["button", "ボタン", 96, 28], ["checkBox", "チェック ボックス", 110, 22], ["optionButton", "オプション ボタン", 110, 22], ["groupBox", "グループ ボックス", 160, 110], ["label", "ラベル", 90, 20], ["listBox", "リスト ボックス", 110, 90], ["comboBox", "コンボ ボックス", 110, 22], ["scrollBar", "スクロール バー", 20, 120], ["spinner", "スピン ボタン", 20, 40]];
+    const ACTIVEX_CONTROLS = [["CommandButton", "コマンド ボタン", 96, 28], ["CheckBox", "チェック ボックス", 110, 22], ["OptionButton", "オプション ボタン", 110, 22], ["ToggleButton", "トグル ボタン", 96, 28], ["TextBox", "テキスト ボックス", 110, 22], ["Label", "ラベル", 90, 20], ["ListBox", "リスト ボックス", 110, 90], ["ComboBox", "コンボ ボックス", 110, 22], ["ScrollBar", "スクロール バー", 20, 120], ["SpinButton", "スピン ボタン", 20, 40]];
+
     // The toolbar (where cells are edited): its buttons, by what they do.
     const tools = {};
     function makeTools() {
@@ -1481,6 +1545,18 @@
         button("filter", "フィルター", "フィルター（Ctrl+Shift+L）", toggleFilter);
         gap();
         button("clearFormats", "書式のクリア", "書式のクリア", clearFormats);
+        gap();
+        // What is put over the cells: chosen here, then drawn out on the sheet with the mouse.
+        for (const [key, label, title, op, arg, list] of [
+            ["insShape", "図形 ▾", "図形の挿入", "addShape", "shape", SHAPES],
+            ["insForm", "フォーム ▾", "フォーム コントロールの挿入", "addControl", "control", FORM_CONTROLS],
+            ["insActiveX", "ActiveX ▾", "ActiveX コントロールの挿入", "addActiveX", "control", ACTIVEX_CONTROLS],
+        ]) {
+            button(key, label, title, (b) => {
+                const pop = openPop(b, "inserts");
+                for (const [kind, name, w, h] of list) popItem(pop, name, () => beginPlacing({ op, arg, kind, name, w, h })).dataset.kind = kind;
+            });
+        }
     }
     // The buttons show the format of the active cell.
     function showTools() {
@@ -1780,6 +1856,382 @@
         autofill(sel, [sel.r1, sel.c1, r, sel.c2]);
     });
 
+
+    // ---- the objects over the cells: shapes, form controls, ActiveX controls
+    //
+    // An object is selected by a click, moved by dragging it, sized by the handles around it,
+    // set in the dialog of its properties, and deleted with Delete. A new one is chosen in the
+    // toolbar and drawn out on the sheet. Every change is an edit of the workbook file
+    // (`addShape`, `addControl`, `addActiveX`, `placeObject`, `setObject`, `orderObject`,
+    // `deleteObject`), after which the page is drawn again.
+
+
+    const round2 = (x) => Math.round(x * 100) / 100;
+    // A point of the sheet (px from the corner of the grid) as the marker of an anchor: the
+    // column and the pixels into it, the row and the pixels into it.
+    function markerAt(x, y) {
+        const v = view;
+        let c = v.cols[0];
+        for (const col of v.cols) {
+            if (v.ths.get(col).offsetLeft > x) break;
+            c = col;
+        }
+        const th = v.ths.get(c);
+        let row = v.rows[0];
+        for (const one of v.rows) {
+            if (one[1].offsetTop > y) break;
+            row = one;
+        }
+        // (A row drawn taller than it is, for what its cells hold: by its share.)
+        const nominal = height(v.sheet, row[0]);
+        const tall = row[1].offsetHeight || nominal;
+        const dy = Math.max(0, Math.min(((y - row[1].offsetTop) * nominal) / tall, nominal));
+        return [c, round2(Math.max(0, Math.min(x - th.offsetLeft, th.offsetWidth))), row[0], round2(dy)];
+    }
+    const placeOf = (b) => ({ from: markerAt(b.x, b.y), to: markerAt(b.x + b.w, b.y + b.h) });
+    // Where the mouse is on the sheet.
+    function pointOf(e) {
+        const r = view.wrap.getBoundingClientRect();
+        return { x: Math.max(view.head, e.clientX - r.left), y: Math.max(view.table.tHead.offsetHeight, e.clientY - r.top) };
+    }
+    const boxOfObject = (box) => ({ x: box.offsetLeft, y: box.offsetTop, w: box.offsetWidth, h: box.offsetHeight });
+    const objectIds = () => (view.sheet.objects || []).map((o) => o.id);
+
+    // Moving and sizing: { box, obj, dir (null: moved), x, y (the mouse at the start), from (its box then), now, moved }.
+    let shaping = null;
+    function beginShaping(e, box, dir) {
+        shaping = { box, obj: box.obj, dir, x: e.clientX, y: e.clientY, from: boxOfObject(box), now: boxOfObject(box), moved: false };
+    }
+    function moveShaping(e) {
+        const s = shaping;
+        if (!(e.buttons & 1)) {
+            cancelShaping();
+            return;
+        }
+        const [dx, dy] = [e.clientX - s.x, e.clientY - s.y];
+        if (!s.moved && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+        s.moved = true;
+        const f = s.from;
+        let [x, y, x2, y2] = [f.x, f.y, f.x + f.w, f.y + f.h];
+        if (!s.dir) [x, y, x2, y2] = [x + dx, y + dy, x2 + dx, y2 + dy];
+        else {
+            if (s.dir.includes("w")) x = Math.min(x + dx, x2 - 1);
+            if (s.dir.includes("e")) x2 = Math.max(x2 + dx, x + 1);
+            if (s.dir.includes("n")) y = Math.min(y + dy, y2 - 1);
+            if (s.dir.includes("s")) y2 = Math.max(y2 + dy, y + 1);
+        }
+        // Not under the headers.
+        const [left, top] = [view.head, view.table.tHead.offsetHeight];
+        if (x < left) [x, x2] = s.dir ? [left, x2] : [left, x2 + left - x];
+        if (y < top) [y, y2] = s.dir ? [top, y2] : [top, y2 + top - y];
+        s.now = { x, y, w: x2 - x, h: y2 - y };
+        Object.assign(s.box.style, { left: `${x}px`, top: `${y}px`, width: `${x2 - x}px`, height: `${y2 - y}px` });
+        frameObject();
+    }
+    function cancelShaping() {
+        const s = shaping;
+        shaping = null;
+        if (!s) return;
+        Object.assign(s.box.style, { left: `${s.from.x}px`, top: `${s.from.y}px`, width: `${s.from.w}px`, height: `${s.from.h}px` });
+        frameObject();
+    }
+    function endShaping() {
+        const s = shaping;
+        shaping = null;
+        if (!s.moved) return;
+        if (!postEdit([Object.assign({ op: "placeObject", sheet: view.sheet.name, object: s.obj.id }, placeOf(s.now))])) cancelShaping();
+    }
+
+    // A new object: chosen in the toolbar, then drawn out on the sheet (a click: at its usual size).
+    let placing = null;
+    function beginPlacing(what) {
+        if (!editable || busy || !view) return;
+        if (entry) commit(null);
+        clearSelection();
+        placing = what;
+        document.body.classList.add("placing");
+        $("name").textContent = what.name;
+        $("fx").textContent = "シートの上をドラッグして大きさを決めます（クリックで既定の大きさ、Esc で取り消し）";
+    }
+    function endPlacing() {
+        if (placing && placing.band) placing.band.remove();
+        placing = null;
+        document.body.classList.remove("placing");
+        if (sel) paint(false);
+    }
+    function movePlacing(e) {
+        const p = placing;
+        if (!p.start) return;
+        const at = pointOf(e);
+        p.now = { x: Math.min(p.start.x, at.x), y: Math.min(p.start.y, at.y), w: Math.abs(at.x - p.start.x), h: Math.abs(at.y - p.start.y) };
+        // (A line goes from where it starts to where it ends: down and to the right here.)
+        Object.assign(p.band.style, { left: `${p.now.x}px`, top: `${p.now.y}px`, width: `${p.now.w}px`, height: `${p.now.h}px` });
+    }
+    function finishPlacing() {
+        const p = placing;
+        if (!p.start) return;
+        const drawn = p.now && (p.now.w >= 4 || p.now.h >= 4);
+        const b = drawn ? p.now : { x: p.start.x, y: p.start.y, w: p.w, h: p.h };
+        const ids = objectIds();
+        const sheet = view.sheet.name;
+        endPlacing();
+        if (postEdit([Object.assign({ op: p.op, sheet, [p.arg]: p.kind }, placeOf(b))])) remember({ newObj: { sheet, ids } });
+    }
+
+    $("grid").addEventListener(
+        "mousedown",
+        (e) => {
+            if (!editable || !view || e.button !== 0) return;
+            if (placing) {
+                if (!view.wrap.contains(e.target)) return;
+                e.preventDefault();
+                e.stopPropagation();
+                placing.start = pointOf(e);
+                placing.band = view.layer.appendChild(el("div", "band"));
+                movePlacing(e);
+                return;
+            }
+            const handle = e.target.closest && e.target.closest(".objsel .h");
+            const box = handle ? selected : e.target.closest && e.target.closest(".obj");
+            if (!box || !view.layer.contains(box)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            closeMenu();
+            if (entry) commit(null);
+            focusGrid();
+            if (selected !== box) selectObject(box, box.obj);
+            if (!busy) beginShaping(e, box, handle ? handle.grip : null);
+        },
+        true,
+    );
+    document.addEventListener("mousemove", (e) => {
+        if (placing) movePlacing(e);
+        else if (shaping) moveShaping(e);
+    });
+    document.addEventListener("mouseup", () => {
+        if (placing) finishPlacing();
+        else if (shaping) endShaping();
+    });
+    $("grid").addEventListener("dblclick", (e) => {
+        const box = e.target.closest && e.target.closest(".obj");
+        if (!editable || !box || !view.layer.contains(box)) return;
+        e.stopPropagation();
+        openProperties(box.obj);
+    });
+    $("grid").addEventListener(
+        "contextmenu",
+        (e) => {
+            const box = e.target.closest && e.target.closest(".obj, .objsel .h");
+            if (!editable || !box || !view.layer.contains(box)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const target = box.obj ? box : selected;
+            if (selected !== target) selectObject(target, target.obj);
+            openObjectMenu(e.clientX, e.clientY, target.obj);
+        },
+        true,
+    );
+
+    function objectEdit(obj, more) {
+        return postEdit([Object.assign({ sheet: view.sheet.name, object: obj.id }, more)]);
+    }
+    function deleteObject(obj) {
+        remember({ selObj: null });
+        objectEdit(obj, { op: "deleteObject" });
+    }
+    function openObjectMenu(x, y, obj) {
+        closeMenu();
+        const items = [["プロパティ…", () => openProperties(obj)], null, ["最前面へ移動", () => objectEdit(obj, { op: "orderObject", to: "front" })], ["前面へ移動", () => objectEdit(obj, { op: "orderObject", to: "forward" })], ["背面へ移動", () => objectEdit(obj, { op: "orderObject", to: "backward" })], ["最背面へ移動", () => objectEdit(obj, { op: "orderObject", to: "back" })], null, ["削除", () => deleteObject(obj), "Delete"]];
+        menu = document.body.appendChild(el("div", "menu"));
+        menu.setAttribute("role", "menu");
+        menu.dataset.vscodeContext = JSON.stringify({ preventDefaultContextMenuItems: true });
+        for (const item of items) {
+            if (!item) {
+                menu.appendChild(el("hr"));
+                continue;
+            }
+            const b = menu.appendChild(el("button"));
+            b.type = "button";
+            b.setAttribute("role", "menuitem");
+            b.appendChild(el("span", null, item[0]));
+            b.appendChild(el("kbd", null, item[2] || ""));
+            b.disabled = busy;
+            b.addEventListener("click", () => {
+                closeMenu();
+                focusGrid();
+                item[1]();
+            });
+        }
+        menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - menu.offsetWidth - 4))}px`;
+        menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - menu.offsetHeight - 4))}px`;
+    }
+    // The keys of the object selected. False: the key is not the object's.
+    function objectKey(e) {
+        const obj = selected.obj;
+        const ctrl = e.ctrlKey || e.metaKey;
+        const arrows = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+        if (e.key === "Delete" || e.key === "Backspace") deleteObject(obj);
+        else if (e.key === "Escape") {
+            if (shaping) cancelShaping();
+            else if (sel) paint(false);
+        } else if (arrows[e.key] && !ctrl && !e.altKey) {
+            // A pixel at a time (with Shift: the size).
+            const b = boxOfObject(selected);
+            const [dx, dy] = arrows[e.key];
+            if (e.shiftKey) [b.w, b.h] = [Math.max(1, b.w + dx), Math.max(1, b.h + dy)];
+            else [b.x, b.y] = [Math.max(view.head, b.x + dx), Math.max(view.table.tHead.offsetHeight, b.y + dy)];
+            objectEdit(obj, Object.assign({ op: "placeObject" }, placeOf(b)));
+        } else if (e.key === "Enter" && e.altKey) openProperties(obj);
+        else if (ctrl && !e.shiftKey && (e.key === "z" || e.key === "Z")) postHistory("undo");
+        else if (ctrl && (e.key === "y" || e.key === "Y" || (e.shiftKey && (e.key === "z" || e.key === "Z")))) postHistory("redo");
+        else return e.key === "Tab" || e.key === "Enter" || e.key === "F2" || (e.key.length === 1 && !ctrl && !e.altKey);
+        return true;
+    }
+
+    // The settings of an object the dialog offers: key -> [label, kind of input, choices].
+    const PLACEMENTS = [["moveAndSize", "セルに合わせて移動やサイズ変更をする"], ["move", "セルに合わせて移動するがサイズ変更はしない"], ["free", "セルに合わせて移動やサイズ変更をしない"]];
+    const SETTINGS = {
+        name: ["名前", "text"],
+        text: ["文字列", "area"],
+        macro: ["マクロ", "text"],
+        linkedCell: ["リンクするセル", "text"],
+        inputRange: ["入力範囲", "text"],
+        checked: ["値", "choice", [["false", "オフ"], ["true", "オン"], ["mixed", "淡色表示"]]],
+        value: ["値", "auto"],
+        min: ["最小値", "number"],
+        max: ["最大値", "number"],
+        step: ["変化の増分", "number"],
+        page: ["スクロール バー シャフトの増分", "number"],
+        dropLines: ["ドロップダウン リストの行数", "number"],
+        threeD: ["3-D 表示", "flag"],
+        fill: ["塗りつぶしの色", "color"],
+        line: ["線の色", "color"],
+        lineWidth: ["線の太さ（pt）", "number"],
+        color: ["文字の色", "color"],
+        fontName: ["フォント", "text"],
+        fontSize: ["フォントの大きさ（pt）", "number"],
+        bold: ["太字", "flag"],
+        italic: ["斜体", "flag"],
+        placement: ["オブジェクトの位置関係", "choice", PLACEMENTS],
+    };
+    function settingsOf(obj) {
+        const p = obj.props || {};
+        const font = ["color", "fill", "fontName", "fontSize", "bold", "italic"];
+        let keys;
+        if (p.type === "shape") keys = p.sub === "line" || /Connector/.test(p.sub) ? ["macro", "line", "lineWidth"] : ["text", "macro", "fill", "line", "lineWidth", "color", "fontSize"];
+        else if (p.type === "form")
+            keys =
+                {
+                    Button: ["text", "macro", "fontSize"],
+                    CheckBox: ["text", "macro", "checked", "linkedCell", "threeD"],
+                    Radio: ["text", "macro", "checked", "linkedCell", "threeD"],
+                    GBox: ["text", "macro"],
+                    Label: ["text", "macro"],
+                    List: ["macro", "inputRange", "linkedCell", "value"],
+                    Drop: ["macro", "inputRange", "linkedCell", "value", "dropLines"],
+                    Scroll: ["macro", "value", "min", "max", "step", "page", "linkedCell"],
+                    Spin: ["macro", "value", "min", "max", "step", "linkedCell"],
+                }[p.sub] || ["macro"];
+        else if (p.type === "activex")
+            keys =
+                {
+                    CommandButton: ["text", ...font],
+                    Label: ["text", ...font],
+                    CheckBox: ["text", "value", "linkedCell", ...font],
+                    OptionButton: ["text", "value", "linkedCell", ...font],
+                    ToggleButton: ["text", "value", "linkedCell", ...font],
+                    TextBox: ["text", "linkedCell", ...font],
+                    ComboBox: ["text", "linkedCell", "inputRange", ...font],
+                    ListBox: ["linkedCell", "inputRange", ...font],
+                    ScrollBar: ["value", "min", "max", "step", "page", "linkedCell"],
+                    SpinButton: ["value", "min", "max", "step", "linkedCell"],
+                }[p.sub] || ["linkedCell"];
+        else if (p.type === "object") keys = [];
+        else keys = ["macro"];
+        return ["name", ...keys, "placement"];
+    }
+    const KINDS = { shape: "図形", picture: "画像", group: "グループ", chart: "グラフ", form: "フォーム コントロール", activex: "ActiveX コントロール", object: "埋め込みオブジェクト" };
+
+    // The dialog of an object's properties: what was changed in it is set.
+    function openProperties(obj) {
+        if (!editable || busy) return;
+        closeMenu();
+        closeDialog();
+        const p = obj.props || {};
+        const now = Object.assign({}, p, { name: obj.name || "", macro: p.macro !== undefined ? p.macro : obj.macro || "" });
+        dialog = document.body.appendChild(el("div", "dlgback"));
+        const form = dialog.appendChild(el("form", "dlg props"));
+        form.setAttribute("role", "dialog");
+        form.appendChild(el("h2", null, `${KINDS[p.type] || "オブジェクト"}${p.sub ? `（${p.sub}）` : ""}のプロパティ`));
+        const inputs = [];
+        for (const key of settingsOf(obj)) {
+            let [label, kind, choices] = SETTINGS[key];
+            const value = now[key];
+            if (kind === "auto") kind = typeof value === "boolean" ? "flag" : typeof value === "number" ? "number" : "text";
+            const line = form.appendChild(el("label", kind === "area" ? "tall" : null));
+            line.appendChild(el("span", null, label));
+            let input;
+            if (kind === "choice") {
+                input = line.appendChild(el("select"));
+                for (const [v, text] of choices) input.appendChild(el("option", null, text)).value = v;
+                input.value = String(value === undefined ? choices[0][0] : value);
+            } else if (kind === "flag") {
+                input = line.appendChild(el("input"));
+                input.type = "checkbox";
+                input.checked = !!value;
+            } else if (kind === "area") {
+                input = line.appendChild(el("textarea"));
+                input.rows = 3;
+                input.value = value === undefined || value === null ? "" : String(value);
+            } else {
+                input = line.appendChild(el("input"));
+                input.type = kind === "number" ? "number" : "text";
+                if (kind === "number") input.step = "any";
+                if (kind === "color") {
+                    input.placeholder = key === "color" ? "#RRGGBB" : "#RRGGBB（空: なし）";
+                    input.maxLength = 7;
+                }
+                input.value = value === undefined || value === null ? "" : String(value);
+            }
+            input.name = key;
+            inputs.push({ key, kind, input, was: kind === "flag" ? input.checked : input.value });
+        }
+        const buttons = form.appendChild(el("div", "buttons"));
+        buttons.appendChild(el("button", "ok", "OK")).type = "submit";
+        const cancel = buttons.appendChild(el("button", null, "キャンセル"));
+        cancel.type = "button";
+        cancel.addEventListener("click", closeDialog);
+        dialog.addEventListener("mousedown", (e) => {
+            if (e.target === dialog) closeDialog();
+        });
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const set = {};
+            for (const { key, kind, input, was } of inputs) {
+                const v = kind === "flag" ? input.checked : input.value;
+                if (v === was) continue;
+                if (kind === "flag") set[key] = v;
+                else if (kind === "number") {
+                    if (v.trim() === "" || !isFinite(+v)) continue;
+                    set[key] = +v;
+                } else if (kind === "color") {
+                    const m = /^#?([0-9a-f]{6})$/i.exec(v.trim());
+                    if (m) set[key] = `#${m[1].toUpperCase()}`;
+                    else if (v.trim() === "" && key !== "color") set[key] = null;
+                    else {
+                        input.focus();
+                        return;
+                    }
+                } else if (key === "checked") set[key] = v === "mixed" ? "mixed" : v === "true";
+                else set[key] = v;
+            }
+            closeDialog();
+            if (Object.keys(set).length) objectEdit(obj, { op: "setObject", set });
+        });
+        const first = form.querySelector("input, textarea, select");
+        if (first) first.focus();
+    }
+
     // ---- the keys
 
     // The rows a page key moves by.
@@ -1833,6 +2285,15 @@
         }
         if (entry) {
             entryKey(e);
+            return;
+        }
+        if (placing && e.key === "Escape") {
+            e.preventDefault();
+            endPlacing();
+            return;
+        }
+        if (editable && selected && onGrid() && objectKey(e)) {
+            e.preventDefault();
             return;
         }
         if (!view || !sel || !onGrid()) return;

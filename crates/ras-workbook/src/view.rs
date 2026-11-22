@@ -11,12 +11,12 @@ use crate::book::view::Drawing;
 use crate::diff::{self, Diff};
 
 pub mod chart;
-mod controls;
+pub(crate) mod controls;
 pub mod drawing;
 mod emf;
-mod geom;
+pub(crate) mod geom;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod xml;
 
 pub use drawing::Parts;

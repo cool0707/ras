@@ -562,6 +562,13 @@ pub struct Obj {
     pub kind: &'static str,
     /// What the page draws of a chart (`chart::chart_spec`).
     pub chart: Option<serde_json::Value>,
+    /// What the edits of the grid name it by: `s12` (the object of the drawing with the id
+    /// 12), `c1025` (the control with the shape id 1025).
+    pub id: String,
+    /// What it is and how it is set, for the grid's dialog of its properties: `type` ("shape",
+    /// "picture", "group", "chart", "form", "activex", "object"), `sub` (the kind of shape or
+    /// control) and the settings an edit can change (`text`, `linkedCell`, ...).
+    pub props: serde_json::Value,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -753,6 +760,8 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
         .find(|c| c.name.starts_with("nv"))
         .and_then(|c| c.child("cNvPr"));
     let name = nv.and_then(|c| c.attr("name")).unwrap_or("").to_string();
+    let id = format!("s{}", nv.and_then(|c| c.attr("id")).unwrap_or("0"));
+    let props = |kind: &str| shape_props(ctx, a, obj, kind);
     // A control's mirror without mc:AlternateContent.
     if let Some(id) = nv
         .and_then(|c| c.find("compatExt"))
@@ -781,6 +790,8 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 macro_name,
                 kind: "group",
                 chart: None,
+                id,
+                props: props("group"),
             });
             return;
         }
@@ -794,6 +805,8 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 macro_name,
                 kind: "chart",
                 chart,
+                id,
+                props: props("chart"),
             });
         }
         return;
@@ -816,8 +829,75 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
             macro_name,
             kind,
             chart: None,
+            id,
+            props: props(kind),
         });
     }
+}
+
+/// What the grid's dialog shows of an object of the drawing: its kind and its settings.
+fn shape_props(ctx: &Ctx, anchor: &Node, obj: &Node, kind: &str) -> serde_json::Value {
+    use serde_json::json;
+    let pr = obj.child("spPr");
+    let sub = match obj.name.as_str() {
+        "sp" if obj
+            .child("nvSpPr")
+            .and_then(|n| n.child("cNvSpPr"))
+            .and_then(|c| c.attr("txBox"))
+            .is_some_and(|t| t == "1" || t == "true") =>
+        {
+            "textBox"
+        }
+        "sp" | "cxnSp" => pr
+            .and_then(|p| p.child("prstGeom"))
+            .and_then(|g| g.attr("prst"))
+            .unwrap_or("custom"),
+        _ => "",
+    };
+    let placement = match (anchor.name.as_str(), anchor.attr("editAs")) {
+        ("absoluteAnchor", _) | (_, Some("absolute")) => "free",
+        ("oneCellAnchor", _) | (_, Some("oneCell")) => "move",
+        _ => "moveAndSize",
+    };
+    let mut out = json!({ "type": kind, "sub": sub, "placement": placement });
+    if let Some(body) = obj.child("txBody") {
+        let lines: Vec<String> = body
+            .all("p")
+            .map(|p| {
+                p.children
+                    .iter()
+                    .map(|r| match r.name.as_str() {
+                        "r" | "fld" => r.child("t").map(|t| t.text.clone()).unwrap_or_default(),
+                        "br" => "\n".to_string(),
+                        _ => String::new(),
+                    })
+                    .collect()
+            })
+            .collect();
+        out["text"] = json!(lines.join("\n"));
+    }
+    if matches!(obj.name.as_str(), "sp" | "cxnSp") {
+        if let Some((color, _)) = paint(pr, &ctx.theme) {
+            out["fill"] = if color == "none" {
+                json!(null)
+            } else {
+                json!(color)
+            };
+        }
+        if let Some(ln) = pr.and_then(|p| p.child("ln")) {
+            if let Some((color, _)) = paint(Some(ln), &ctx.theme) {
+                out["line"] = if color == "none" {
+                    json!(null)
+                } else {
+                    json!(color)
+                };
+            }
+            if let Some(w) = ln.attr("w").and_then(|w| w.parse::<f64>().ok()) {
+                out["lineWidth"] = json!((w / EMU_PT * 100.0).round() / 100.0);
+            }
+        }
+    }
+    out
 }
 
 /// A chart: its spec for the page, or a box with its title when the page does not draw it (the
