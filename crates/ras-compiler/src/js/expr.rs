@@ -866,6 +866,33 @@ impl<'p> Gen<'p> {
 
     // ------------------------------------------------------------------ intrinsics
 
+    /// `target.on("<Event>", handler)` (spec §12.2.3): the run time keeps the handler and the
+    /// forms and the stand-in for Excel call it when they raise the event of `target`.
+    fn event_on(&mut self, e: &Expr, target: &str, args: &[Expr]) -> String {
+        let Some(bind) = self.info().event_binds.get(&e.id).cloned() else { return "null".into() };
+        match bind.kind {
+            EventBindKind::OnAction => match bind.handler_fn {
+                Some(f) => {
+                    let d = &self.prog.fns[f];
+                    let macro_name = format!("{}.{}", self.prog.modules[d.module].vba_name, d.name);
+                    format!("$rt.onAction({target}, {})", js_str(&macro_name))
+                }
+                None => "null".into(),
+            },
+            EventBindKind::Listener { event, params, .. } => {
+                let handler = match (bind.handler_fn, args.get(1)) {
+                    (Some(f), _) => self.fn_ref(f),
+                    (None, Some(a)) => self.expr(a),
+                    (None, None) => "null".into(),
+                };
+                let cancel = params.iter().position(|p| p.2 && p.1 == "Boolean").map(|i| i as i64).unwrap_or(-1);
+                // The form whose code attaches the handler: it goes when the form is unloaded.
+                let owner = if self.prog.modules[self.module].is_form() { "$me" } else { "null" };
+                format!("$rt.listen({target}, {}, {handler}, {owner}, {cancel})", js_str(&event))
+            }
+        }
+    }
+
     fn intrinsic(&mut self, e: &Expr, intr: Intr, recv: Option<&Expr>, args: &[Expr]) -> String {
         use Intr::*;
         let recv_ty = recv.map(|r| self.ty(r)).unwrap_or(Type::Error);
@@ -878,11 +905,15 @@ impl<'p> Gen<'p> {
             Some(elem) if matches!(intr, ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind | ArrFindIndex | CollToArray) => (format!("Array.from($rt.iter({r}))"), Type::array(elem)),
             _ => (r, recv_ty),
         };
+        if intr == EventOn {
+            return self.event_on(e, &r, args);
+        }
         let a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
         let argv = a.join(", ");
         let arg = |i: usize, default: &str| a.get(i).cloned().unwrap_or_else(|| default.to_string());
         let elem = recv_ty.elem_of();
         match intr {
+            EventOn => unreachable!(),
             ArrLength | ArrRows | StrLength => format!("{r}.length"),
             ArrCols => format!("$rt.cols({r})"),
             MapSize => format!("{r}.size"),

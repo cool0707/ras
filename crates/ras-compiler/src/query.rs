@@ -400,6 +400,14 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
                     _ => {}
                 }
             }
+            // Handlers attached at run time (spec §12.2.3).
+            if crate::lower::listen_target(prog, *c).is_some() {
+                for n in intrinsics::EVENT_MEMBERS {
+                    if !out.iter().any(|o| o.label == *n) {
+                        out.push(item(n, kind::METHOD, "(組み込み・イベントハンドラを付ける) on(\"<イベント>\", ハンドラ): RAS_Listener", None, 0));
+                    }
+                }
+            }
             // Array-style methods of a collection; a member of the type with the same name wins (`range.find`).
             if prog.collection_elem(ty).is_some() {
                 for n in intrinsics::COLLECTION_MEMBERS {

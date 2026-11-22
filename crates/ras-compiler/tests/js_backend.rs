@@ -267,6 +267,9 @@ fn forms_run_with_a_host() {
     assert!(js.contains("$rt.form(\"frmInput\", {"), "{js}");
     assert!(js.contains("$rt.put($me, \"Caption\","), "{js}");
     assert!(js.contains("fn: ($a) => closing($a[0], $a[1].v)"), "byref parameters get the cell: {js}");
+    // Handlers attached at run time (spec §12.2.3): the form is their owner.
+    assert!(js.contains("$rt.listen($rt.get($me, \"chkAgree\"), \"Click\", "), "{js}");
+    assert!(js.contains("firstSpin = $rt.listen($rt.get($me, \"spnQty\"), \"SpinUp\", spunOnce, $me, -1)"), "{js}");
     let manifest = &out.files.iter().find(|f| f.rel_path == "ras-debug.json").unwrap().text;
     assert!(manifest.contains("\"forms\": [\n    \"frmInput\"\n  ]"), "{manifest}");
     if !has_node() {
@@ -299,6 +302,7 @@ focus txtName
 draw txtName=YAMADA seq=2
 focus txtName
 focus cboKind
+agree false 1
 focus chkAgree
 maybe=Null
 focus chkMaybe
@@ -309,15 +313,18 @@ focus chkMaybe
 optS=false optM=true
 focus optM
 up 2
+first spin
 focus spnQty
 up 3
 focus spnQty
 up 3
-error frmInput.btnBoom_Click: 実行時エラー 9: インデックスが有効範囲にありません。 (3)（forms/frmInput.ras:39）
+error frmInput.btnBoom_Click: 実行時エラー 9: インデックスが有効範囲にありません。 (3)（forms/frmInput.ras:55）
+clicked btnBoom
 focus btnBoom
 QueryClose mode=0
 focus btnBoom
 hide
+clicked btnOK
 YAMADA/予約:1/3/false/3/1/002:佐藤:山田/入力用:120
 QueryClose mode=1
 Terminate

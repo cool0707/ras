@@ -1,10 +1,26 @@
 let opened = 0;
+let agreed = 0;
+let firstSpin: RAS_Listener = null;
 
 @on("UserForm.Initialize")
 function init() {
     opened++;
     this.caption = `入力 ${opened}`;
     this.cboKind.addItem("予約", 1);
+    // Handlers attached at run time (spec §12.2.3): called after the `@on` handlers.
+    this.chkAgree.on("Click", () => {
+        agreed++;
+        console.log(`agree ${this.chkAgree.value} ${agreed}`);
+    });
+    firstSpin = this.spnQty.addEventListener("SpinUp", spunOnce);
+    for (const c of this.controls) {
+        if (c instanceof MSForms.CommandButton) c.on("Click", () => console.log(`clicked ${c.name}`));
+    }
+}
+
+function spunOnce() {
+    console.log("first spin");
+    firstSpin.off();
 }
 
 @on("txtName.Change")

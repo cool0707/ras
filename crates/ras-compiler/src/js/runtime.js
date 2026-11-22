@@ -1574,6 +1574,55 @@ const eventSources = [];
 function withEvents(list) {
     for (const e of list) eventSources.push(e);
 }
+/**
+ * Event handlers attached at run time: `target.on("Click", handler)` (spec §12.2.3). The forms
+ * and the stand-in for Excel call them, after the `@on` handlers, when they raise an event of
+ * `target`; an object of a real Excel raises nothing here. `owner` is the form whose code
+ * attached the handler (it goes when the form is unloaded), `cancel` the index of the event's
+ * `Cancel` argument by reference (-1: none), which a handler sets by returning `false`.
+ */
+const listeners = [];
+function listen(target, event, fn, owner, cancel) {
+    if (target == null) raise(91);
+    const l = {
+        target,
+        event: String(event),
+        fn,
+        owner: owner ?? null,
+        cancel,
+        busy: false,
+        Off() {
+            const i = listeners.indexOf(l);
+            if (i >= 0) listeners.splice(i, 1);
+            l.fn = null;
+        },
+    };
+    listeners.push(l);
+    return l;
+}
+/** Calls the handlers attached to `target` for `event`; `cells` are its arguments as `{ v }`. */
+function fireListeners(target, event, cells, onError) {
+    const name = String(event).toLowerCase();
+    for (const l of listeners.slice()) {
+        if (l.fn === null || l.target !== target || l.event.toLowerCase() !== name || l.busy) continue;
+        l.busy = true;
+        try {
+            const result = l.fn(...cells.map((c) => c.v));
+            if (result === false && l.cancel >= 0 && cells[l.cancel]) cells[l.cancel].v = true;
+        } catch (err) {
+            onError(err, { target: typeName(target), event: l.event });
+        } finally {
+            l.busy = false;
+        }
+    }
+}
+function unlistenOwner(owner) {
+    for (const l of listeners.slice()) if (l.owner === owner) l.Off();
+}
+/** `shape.on("Click", refresh)`: the macro Excel calls for the object (its `OnAction`). */
+function onAction(target, macro) {
+    put(target, "OnAction", macro);
+}
 /** Runs the module initialisers and `@init` functions once (VBA `RAS_EnsureInit`). */
 function ensureInit() {
     if (initialised) return;
@@ -1752,7 +1801,7 @@ module.exports = {
     trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
-    vba, declare, module: module_, withEvents, ensureInit, entries, run, form,
+    vba, declare, module: module_, withEvents, listen, fireListeners, unlistenOwner, onAction, ensureInit, entries, run, form,
 };
 Object.defineProperty(module.exports, "msforms", { get: () => forms().msforms, enumerable: true });
 // The API of test files (spec §14.12), there only in the build of `ras test`.

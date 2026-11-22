@@ -728,6 +728,61 @@ fn events_reach_the_variables_that_hold_the_object() {
     );
 }
 
+/// Handlers attached at run time (`on`, spec §12.2.3).
+const LISTENERS: &str = r#"
+let changes = 0;
+
+function saving(saveAsUI: boolean): boolean {
+    console.log(`BeforeSave ${saveAsUI}`);
+    return false;
+}
+
+export function listen() {
+    const sheet = Sheet1.on("Change", (target) => {
+        changes++;
+        console.log(`sheet Change ${target.address(false, false)} #${changes}`);
+    });
+    application.addEventListener("SheetChange", (sh, target) => console.log(`app SheetChange ${sh.name}!${target.address(false, false)}`));
+    const closing = application.on("WorkbookBeforeSave", (wb) => console.log(`app WorkbookBeforeSave ${wb === thisWorkbook}`));
+    // A handler that returns `false` cancels the event.
+    const save = thisWorkbook.on("BeforeSave", saving);
+    Sheet1.range("A7").value = "x";
+    thisWorkbook.save();
+    console.log(`saved=${thisWorkbook.saved}`);
+    sheet.off();
+    sheet.off();
+    save.off();
+    closing.off();
+    Sheet1.range("A8").value = "y";
+    thisWorkbook.save();
+    console.log(`saved=${thisWorkbook.saved} changes=${changes}`);
+}
+"#;
+
+/// The stand-in raises the events for the handlers that `on` attached, until `off`.
+#[test]
+fn events_reach_the_handlers_attached_at_run_time() {
+    if !has_node() {
+        return;
+    }
+    let p = project_with("listeners", LISTENERS, &[], sales);
+    let (stdout, stderr, ok) = p.run("Main.listen");
+    assert!(ok, "{stderr}\n{stdout}");
+    assert_eq!(
+        lines(&stdout),
+        vec![
+            "sheet Change A7 #1",
+            "app SheetChange Sheet1!A7",
+            "BeforeSave false",
+            "app WorkbookBeforeSave true",
+            "saved=false",
+            // Taken off: only the handler of `Application` is left.
+            "app SheetChange Sheet1!A8",
+            "saved=true changes=1",
+        ]
+    );
+}
+
 const MORE: &str = r#"
 export function more() {
     const ws = Sheet1;

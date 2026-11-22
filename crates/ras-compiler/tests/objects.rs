@@ -404,3 +404,114 @@ function e(more: int) {}
     let (diags, _) = compile(&[("Sheet1", sheet)], &[]);
     assert_eq!(codes(&diags), ["E0611", "E0611", "E0612", "E0615", "E0615"], "{diags:#?}");
 }
+
+/// `on` / `addEventListener` (spec §12.2.3): a control on a sheet, the sheet, the workbook and
+/// `Application` are listened to by generated classes; a shape gets the macro's name.
+#[test]
+fn handlers_attached_at_run_time() {
+    let sheet = r#"
+let clicks = 0;
+
+@on("Worksheet.Activate")
+function activated() {
+    this.CommandButton1.on("Click", () => { clicks++; this.range("A1").value = clicks; });
+    this.TextBox1.addEventListener("Change", refresh);
+    this.on("BeforeDoubleClick", (target) => target.row > 1);
+    this.shapes("Button 1").on("Click", refresh);
+}
+
+export function refresh() {
+    this.calculate();
+}
+"#;
+    let main_src = r#"
+export function reload() {}
+function quiet(): boolean { return false; }
+
+export function setup(ws: Excel.Worksheet) {
+    const shp = ws.shapes.addShape(1, 10, 10, 80, 24);
+    shp.on("click", reload);
+    shp.addEventListener("Click", Sheet1.refresh);
+    application.on("SheetChange", (sh, target) => { console.log(target.address); });
+    const l = thisWorkbook.on("BeforeClose", quiet);
+    l.off();
+}
+"#;
+    let (diags, files) = compile(&[("Sheet1", sheet)], &[("main", main_src)]);
+    assert!(diags.is_empty(), "{diags:?}");
+    let code = module(&files, "Sheet1");
+    // A sheet has no instances: nothing owns its listeners, they stay until `off`.
+    assert!(code.contains("RAS_Listen New RAS_On_CommandButton_Click, Me.CommandButton1, ras_t1, 0&, Nothing"), "{code}");
+    assert!(code.contains("RAS_Listen New RAS_On_TextBox_Change, Me.TextBox1, ras_t2, 0&, Nothing"), "{code}");
+    assert!(code.contains("RAS_Listen New RAS_On_Worksheet_Befor_"), "{code}");
+    assert!(code.contains("Me.Shapes(\"Button 1\").OnAction = RAS_MacroName(\"Sheet1.refresh\")"), "{code}");
+    assert!(code.contains("Public clicks As Long"), "{code}");
+    let main = module(&files, "Main");
+    assert!(main.contains("shp.OnAction = RAS_MacroName(\"Main.reload\")"), "{main}");
+    assert!(main.contains("shp.OnAction = RAS_MacroName(\"Sheet1.refresh\")"), "{main}");
+    assert!(main.contains("RAS_Listen New RAS_On_Application_SheetChange, Application, ras_t1, 2&, Nothing"), "{main}");
+    assert!(main.contains("Set l = RAS_Listen(New RAS_On_Workbook_BeforeClose, ThisWorkbook, ras_t2, 0&, Nothing)"), "{main}");
+    assert!(main.contains("Dim l As Object") && main.contains("Public Function quiet() As Boolean"), "{main}");
+
+    // `this` of the sheet's file inside the closure is the sheet; its variables are the sheet's.
+    let lambdas: String = files.iter().filter(|f| f.name.starts_with("RAS_Lambda_")).map(|f| f.code.replace("\r\n", "\n")).collect();
+    assert!(lambdas.contains("Sheet1.clicks = Sheet1.clicks + 1&") && lambdas.contains("Me.Captured_Me.Range(\"A1\").Value = Sheet1.clicks"), "{lambdas}");
+    assert!(lambdas.contains("Sheet1.refresh\n"), "{lambdas}");
+    assert!(lambdas.contains("Apply = Main.quiet\n"), "{lambdas}");
+
+    // An event with a `Cancel` argument by reference is cancelled by a handler that returns `false`.
+    let cancel = files.iter().find(|f| f.name.starts_with("RAS_On_Worksheet_Befor_")).map(|f| f.code.replace("\r\n", "\n")).unwrap();
+    assert!(cancel.contains("Private WithEvents ras_target As Worksheet"), "{cancel}");
+    assert!(cancel.contains("Private Sub ras_target_BeforeDoubleClick(ByVal Target As Range, ByRef Cancel As Boolean)"), "{cancel}");
+    assert!(cancel.contains("If RAS_Cancels(ras_handler.Apply(Target)) Then Cancel = True"), "{cancel}");
+    let close = module(&files, "RAS_On_Workbook_BeforeClose");
+    assert!(close.contains("If RAS_Cancels(ras_handler.Apply()) Then Cancel = True"), "{close}");
+    let runtime = module(&files, "RAS_Runtime");
+    assert!(runtime.contains("Function RAS_Cancels(") && runtime.contains("Function RAS_MacroName(") && !runtime.contains("RAS_UnlistenOwner"), "{runtime}");
+
+    // The debug build registers the handlers with the run time.
+    let prog = analyze(sources(&[("Sheet1", sheet)], &[("main", main_src)]), config());
+    let out = build_js(&prog, "");
+    assert!(out.diagnostics.iter().all(|d| !d.is_error()), "{:#?}", out.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>());
+    let js = &out.files.iter().find(|f| f.rel_path == "main.js").unwrap().text;
+    assert!(js.contains("$rt.onAction(shp, \"Main.reload\")") && js.contains("$rt.onAction(shp, \"Sheet1.refresh\")"), "{js}");
+    assert!(js.contains("\"BeforeClose\", quiet, null, 0)"), "{js}");
+    let js = &out.files.iter().find(|f| f.rel_path == "@objects/Sheet1.js").unwrap().text;
+    assert!(js.contains("\"BeforeDoubleClick\", ") && js.contains(", null, 1)"), "{js}");
+}
+
+#[test]
+fn what_on_cannot_attach() {
+    let main = r#"
+function helper(x: int) {}
+export function twoArgs(a: int, b: int) {}
+function cancels(target: Excel.Range, byref cancel: boolean) {}
+
+export function setup(ws: Excel.Worksheet, shp: Excel.Shape, r: Excel.Range) {
+    r.on("Change", () => {});                        // E0616: a range has no events
+    shp.on("Change", setup2);                        // E0611: only Click
+    shp.on("Click", () => {});                       // E0617: not the name of a macro
+    shp.on("Click", helper);                         // E0617: not a macro
+    ws.on("Change", cancels);                        // E0612
+    ws.on("BeforeDoubleClick", cancels);             // E0617: byref
+    ws.on("Change", (target: string) => {});         // E0301
+    ws.on("NoSuchEvent", (a, b) => {});              // E0611
+}
+export function setup2() {}
+"#;
+    let (diags, _) = compile(&[], &[("main", main)]);
+    assert_eq!(codes(&diags), ["E0301", "E0611", "E0611", "E0612", "E0616", "E0617", "E0617", "E0617"], "{diags:#?}");
+}
+
+/// The example of spec §12.2.3 for sheets, the workbook, `Application` and shapes.
+#[test]
+fn spec_example_of_on_compiles() {
+    let text = include_str!("../../../docs/RAS_Language_Specification.md").replace("\r\n", "\n");
+    let start = text.find("// src/watch.ras: ").unwrap();
+    let example = &text[start..start + text[start..].find("```").unwrap()];
+    let (diags, files) = compile(&[("Sheet1", "")], &[("watch", example)]);
+    assert!(diags.is_empty(), "{diags:?}");
+    let code = module(&files, "Watch");
+    assert!(code.contains(".OnAction = RAS_MacroName(\"Watch.reload\")"), "{code}");
+    assert!(code.contains("RAS_Listen New RAS_On_Workbook_BeforeClose, ThisWorkbook, "), "{code}");
+}

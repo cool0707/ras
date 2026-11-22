@@ -707,6 +707,8 @@ module.exports = function install(rt) {
     const defs = new Map(); // lower-case name → { name, def, instance }
     const modal = []; // forms shown modally, innermost last
     const busyHandlers = new Set();
+    /** Events of a control that the form raises: a `WithEvents` variable does not get them. */
+    const FORM_RAISED = new Set(["enter", "exit", "beforeupdate", "afterupdate"]);
 
     class UserForm {
         constructor(entry) {
@@ -929,6 +931,11 @@ module.exports = function install(rt) {
                 }
                 if (!this.$loaded) break;
             }
+            // The handlers attached to the control with `on` (spec §12.2.3). What the form
+            // raises for its controls (`Enter`, `Exit` …) does not reach them, as in Excel.
+            if (!this.$loaded || t === "userform" || FORM_RAISED.has(e)) return;
+            const source = this.$all.find((c) => c.$s.Name.toLowerCase() === t);
+            if (source) rt.fireListeners(source, event, args, (err) => reportError(this, `${this.$name}.${target}_${event}`, err));
         }
 
         /** Moves the focus; returns false when the control that has it keeps it (`Cancel`). */
@@ -1052,6 +1059,7 @@ module.exports = function install(rt) {
                 host().send({ t: "unload", id: this.$id });
             }
             this.$fire("UserForm", "Terminate", []);
+            rt.unlistenOwner(this);
             this.$loaded = false;
             if (this.$entry.instance === this) this.$entry.instance = null;
         }

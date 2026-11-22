@@ -987,6 +987,21 @@ mod tests {
         assert!(errors(&renamed).is_empty(), "{:?}", errors(&renamed));
     }
 
+    /// The name of a function as the handler of `on` (spec §12.2.3) is a reference to it.
+    #[test]
+    fn renames_a_function_named_as_an_event_handler() {
+        let util = "export function reload() {\n}\n";
+        let main = "import { reload } from \"./util\";\nimport * as u from \"./util\";\n\nfunction changed(target: Excel.Range) {\n}\n\nexport function run(ws: Excel.Worksheet, shp: Excel.Shape) {\n    ws.on(\"Change\", changed);\n    shp.on(\"Click\", reload);\n    shp.addEventListener(\"Click\", u.reload);\n}\n";
+        let prog = program(&[("util", util), ("main", main)]);
+        assert!(errors(&prog).is_empty(), "{:?}", errors(&prog));
+        let m = module(&prog, "main");
+        let refs = references(&prog, m, at(&prog, "main", "changed", 0));
+        assert_eq!(refs.len(), 2, "{refs:?}");
+        let edits = rename(&prog, m, at(&prog, "main", "reload);", 0), "refresh").unwrap();
+        assert_eq!(apply(&prog, "util", &edits), util.replace("reload", "refresh"));
+        assert_eq!(apply(&prog, "main", &edits), main.replace("reload", "refresh"));
+    }
+
     #[test]
     fn renames_a_parameter_with_named_arguments_and_docs() {
         let src = "/**\n * ラベル。\n * @param count 個数\n * @param {string} unit 単位\n */\nexport function label(count: int, unit: string = \"個\"): string {\n    return count + unit;\n}\n\nexport function run() {\n    const s = label(unit: \"本\", count: 3);\n    const t = label(2);\n}\n";

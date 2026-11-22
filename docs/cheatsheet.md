@@ -221,8 +221,14 @@ export function clearInput() {
 @on("Workbook.Open")
 function opened() {
     status("");
+    // 実行時にイベントハンドラを付ける: on(イベント, ハンドラ)。addEventListener も同じ
+    const l = Sheet1.on("SelectionChange", (target) => { status(target.address); });
+    this.on("BeforeClose", () => msgBox("閉じますか？", vbYesNo) == vbYes);   // false を返すと取り消す
+    l.off();                                                                   // 外す
 }
 ```
+
+`on` は、コントロール（`this.btnOK.on("Click", () => { ... })`）・シート・ブック・`application` に使えます。フォームのコードビハインドで付けたものは、フォームが閉じると外れます。図形には、マクロにする関数の名前を渡します（`shape.on("Click", reload)`。`OnAction` に設定されます）。決まったコントロールのイベントは `@on("btnOK.Click")` で書きます。
 
 ## テスト（`test/*.test.ras`）
 
