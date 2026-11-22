@@ -278,7 +278,7 @@ VS Code では「RAS: ブックをシートプレビューで表示」（エク�
 
 ### ブックを編集する（`ras book edit`、VS Code のシートプレビュー）
 
-VS Code のシートプレビュー（「RAS: ブックをシートプレビューで表示」「RAS: シートプレビューを表示」）では、ブックのファイルを Excel と同じ操作で編集できます。操作は Excel のリボン（ホーム・数式・データ・表示・開発のタブ）と同じ配置です。
+VS Code のシートプレビュー（「RAS: ブックをシートプレビューで表示」「RAS: シートプレビューを表示」）では、ブックのファイルを Excel と同じ操作で編集できます。操作は Excel のリボン（ホーム・挿入・数式・データ・表示・開発のタブ）と同じ配置です。
 
 | 操作 | キー・マウス |
 |---|---|
@@ -299,6 +299,10 @@ VS Code のシートプレビュー（「RAS: ブックをシートプレビュ�
 | 列の幅・行の高さ | 列見出し・行番号の境目をドラッグ（ダブルクリックで内容に合わせる）。ホームの「書式」・見出しの右クリックで数値の指定・自動調整・非表示・再表示 |
 | 並べ替え・フィルター | ホームの「並べ替えとフィルター」、データの昇順・降順・並べ替え（複数の列で）・フィルター（Ctrl+Shift+L）・クリア、見出しの ▾ から値を選んで絞り込み、数値フィルター・テキスト フィルター（2 つまでの条件）・トップテン |
 | ウィンドウ枠の固定 | 表示の「ウィンドウ枠の固定」（アクティブセルの上と左・先頭行・先頭列・解除） |
+| テーブル | 挿入の「テーブル」、Ctrl+T / Ctrl+L（範囲と、先頭行を見出しにするかを選ぶ。見出しが無ければ「列1」… の行を挿入します） |
+| ハイパーリンク | 挿入の「リンク」、Ctrl+K、右クリックの「リンク」（Web ページ・ファイル・メールか、ブック内のセル・名前。表示文字列とヒント）。右クリックの「リンクの削除」 |
+| メモ | 挿入の「メモ」、Shift+F2、右クリックの「新しいメモ」「メモの編集」「メモの削除」 |
+| 記号と特殊文字 | 挿入の「記号と特殊文字」（入力中のセルのカーソルの位置、入力中でなければアクティブセルの内容の後ろに入れます） |
 | 連続データ（フィルハンドル） | 選択範囲の右下の ■ をドラッグ（数値・日付・「第1回」のような番号は続きを、数式は参照をずらして入力）。ダブルクリックで隣の列の下端まで |
 | 元に戻す・やり直し | Ctrl+Z / Ctrl+Y |
 
@@ -315,6 +319,9 @@ ras book edit Book.xlsm --op '{"op":"copy","sheet":"Sheet1","from":"A1:B2","to":
 ras book edit Book.xlsm --op '{"op":"format","sheet":"Sheet1","range":"A1:D1","set":{"bold":true,"fill":"#DDEEFF","border":"all"}}'   # 書式
 ras book edit Book.xlsm --op '{"op":"sort","sheet":"Sheet1","range":"A1","by":"B","desc":true}'    # 並べ替え（filter / filterBy / size / hide / merge / autofill も同様）
 ras book edit Book.xlsm --op '{"op":"freeze","sheet":"Sheet1","at":"B2"}'    # ウィンドウ枠の固定（1 行目と A 列。"off":true で解除）
+ras book edit Book.xlsm --op '{"op":"table","sheet":"Sheet1","range":"A1:D20"}'    # テーブルにする（"header":false で見出しの行を挿入、"name" で名前）
+ras book edit Book.xlsm --op '{"op":"link","sheet":"Sheet1","range":"B2","url":"https://example.com"}'   # ハイパーリンク（"to":"Sheet2!A1" でブック内、"off":true で削除）
+ras book edit Book.xlsm --op '{"op":"note","sheet":"Sheet1","at":"B2","text":"確認済み"}'   # メモ（"off":true で削除）
 ras book edit Book.xlsm --op '{"op":"sort","sheet":"Sheet1","range":"A1","keys":[{"by":"C"},{"by":"D","desc":true}]}'    # 複数の列で並べ替える
 ras book edit Book.xlsm --op '{"op":"filterBy","sheet":"Sheet1","column":"D","criteria":[[">=","100"],["<","500"]]}'   # 数値フィルター（"top":10 でトップテン）
 ras book edit Book.xlsm --op '{"op":"pasteSpecial","sheet":"Sheet1","from":"A1:B5","to":"D1","paste":"values","transpose":true}'   # 形式を選択して貼り付け
@@ -326,7 +333,7 @@ ras book edit Book.xlsm --set A1=x -o build/edited.xlsm                 # 別の
 - Excel で開いているブックは書き換えません（エラーになります。Excel で閉じてから行ってください）。
 - テーブルの列をまたぐ列の挿入・削除と、ピボットテーブルのあるシートでの挿入・削除は、ファイルの書き換えでは行えません（Excel で行ってください）。
 - 新しい書式は、元のスタイル（`xl/styles.xml`）の末尾に足します。既存の書式の番号は変わりません。
-- 条件付き書式・入力規則の編集、色・アイコンでの絞り込み、メモの追加・編集、数式の入力中にほかのシートのセルをクリックして参照を入れることは、まだ行えません。`ras book view` が作る HTML（ブラウザーで開くもの）は読み取り専用です。
+- 条件付き書式・入力規則の編集、色・アイコンでの絞り込み、スレッド形式のコメントの編集、図形・画像・グラフの挿入、数式の入力中にほかのシートのセルをクリックして参照を入れることは、まだ行えません。`ras book view` が作る HTML（ブラウザーで開くもの）は読み取り専用です。
 
 ### エラーを調べる・AI に渡す
 

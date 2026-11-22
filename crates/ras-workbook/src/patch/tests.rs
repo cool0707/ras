@@ -902,3 +902,216 @@ fn links_conditional_formats_tables_and_functions_for_the_grid() {
         json!("SUBTOTAL(function_num, ref1, [ref2], ...)")
     );
 }
+
+#[test]
+fn hyperlinks_inserted_and_taken_away() {
+    // A web page: the sheet's hyperlinks get one, its relationships the page.
+    let out =
+        edit(r#"{"op":"link","range":"C2","url":"https://example.org/a?b=1&c=2","tip":"説明"}"#);
+    assert_eq!(
+        changed(BOOK, &out),
+        [
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            "xl/worksheets/sheet1.xml"
+        ]
+    );
+    let doc = part(&out, SHEET1);
+    assert!(doc.contains(r#"<hyperlinks><hyperlink ref="A10" r:id="rId1"/><hyperlink ref="C2" tooltip="説明" r:id="rId5"/></hyperlinks>"#), "{doc}");
+    assert!(part(&out, "xl/worksheets/_rels/sheet1.xml.rels").contains(r#"<Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.org/a?b=1&amp;c=2" TargetMode="External"/>"#));
+    assert_eq!(
+        view(&out)["sheets"][0]["links"],
+        json!([
+            { "r": 1, "c": 2, "url": "https://example.org/a?b=1&c=2", "tip": "説明" },
+            { "r": 9, "c": 0, "url": "https://example.com" }
+        ])
+    );
+    // A place in the workbook, in place of the cell's link: the page's relationship goes.
+    let to = apply(
+        &out,
+        &ops(r#"{"op":"link","range":"C2","to":"Summary!A1","display":"集計へ"}"#),
+    )
+    .unwrap();
+    let doc = part(&to, SHEET1);
+    assert!(doc.contains(r#"<hyperlink ref="A10" r:id="rId1"/><hyperlink ref="C2" location="Summary!A1" display="集計へ"/></hyperlinks>"#), "{doc}");
+    assert!(!part(&to, "xl/worksheets/_rels/sheet1.xml.rels").contains("rId5"));
+    assert_eq!(
+        view(&to)["sheets"][0]["links"][0],
+        json!({ "r": 1, "c": 2, "to": "Summary!A1" })
+    );
+    // Taken away: the last one takes `<hyperlinks>` with it.
+    let off = apply(&to, &ops(r#"[{"op":"link","range":"A1:C10","off":true}]"#)).unwrap();
+    let doc = part(&off, SHEET1);
+    assert!(!doc.contains("hyperlink"), "{doc}");
+    assert!(!part(&off, "xl/worksheets/_rels/sheet1.xml.rels").contains("/hyperlink\""));
+    assert_eq!(view(&off)["sheets"][0]["links"], json!([]));
+    // A sheet without relationships gets them; nothing to take away changes nothing.
+    let other =
+        edit(r#"{"op":"link","sheet":"Summary","range":"B2","url":"mailto:a@example.com"}"#);
+    let doc = part(&other, SHEET2);
+    assert!(
+        doc.contains(r#"<hyperlinks><hyperlink ref="B2" r:id="rId1"/></hyperlinks><pageMargins"#),
+        "{doc}"
+    );
+    assert!(
+        part(&other, "xl/worksheets/_rels/sheet2.xml.rels")
+            .contains(r#"Target="mailto:a@example.com" TargetMode="External""#)
+    );
+    assert_eq!(
+        view(&other)["sheets"][1]["links"],
+        json!([{ "r": 1, "c": 1, "url": "mailto:a@example.com" }])
+    );
+    assert_eq!(edit(r#"{"op":"link","range":"B2","off":true}"#), BOOK);
+    assert!(parse_ops(&json!({"op":"link","range":"A1"}), Some("Data")).is_err());
+    assert!(
+        parse_ops(
+            &json!({"op":"link","range":"A1","url":"x","to":"y"}),
+            Some("Data")
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn notes_written_edited_and_deleted() {
+    // A new note: the comments part and the VML drawing the sheet has get it.
+    let out = edit(r#"{"op":"note","at":"C2","text":"新しい\nメモ & <注>","author":"ras"}"#);
+    assert_eq!(
+        changed(BOOK, &out),
+        ["xl/comments1.xml", "xl/drawings/vmlDrawing1.vml"]
+    );
+    let comments = part(&out, "xl/comments1.xml");
+    assert!(
+        comments.contains("<authors><author></author><author>ras</author></authors>"),
+        "{comments}"
+    );
+    assert!(comments.contains(r#"<comment ref="C2" authorId="1"><text><r>"#));
+    let vml = part(&out, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains(r##"<v:shape id="_x0000_s1027" type="#_x0000_t202""##),
+        "{vml}"
+    );
+    assert!(vml.contains("<x:Row>1</x:Row>\n   <x:Column>2</x:Column>"));
+    let notes = |b: &[u8], i: usize| view(b)["sheets"][i]["notes"].clone();
+    assert_eq!(
+        notes(&out, 0),
+        json!([
+            { "r": 2, "c": 1, "text": "メモです", "author": "" },
+            { "r": 1, "c": 2, "text": "新しい\nメモ & <注>", "author": "ras" }
+        ])
+    );
+    // Edited: its text only.
+    let edited = apply(&out, &ops(r#"{"op":"note","at":"B3","text":"書き換えた"}"#)).unwrap();
+    assert_eq!(changed(&out, &edited), ["xl/comments1.xml"]);
+    assert_eq!(notes(&edited, 0)[0]["text"], json!("書き換えた"));
+    // Deleted: the note and its box.
+    let gone = apply(&edited, &ops(r#"{"op":"note","at":"B3","off":true}"#)).unwrap();
+    assert!(!part(&gone, "xl/comments1.xml").contains("ref=\"B3\""));
+    let vml = part(&gone, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        !vml.contains("<x:Row>2</x:Row>") && vml.contains("_x0000_s1025"),
+        "{vml}"
+    );
+    assert_eq!(notes(&gone, 0).as_array().unwrap().len(), 1);
+    assert_eq!(edit(r#"{"op":"note","at":"D4","off":true}"#), BOOK);
+    // A sheet without notes: a comments part and a VML drawing of its own.
+    let other = edit(r#"{"op":"note","sheet":"Summary","at":"A1","text":"合計の2倍"}"#);
+    assert_eq!(
+        changed(BOOK, &other),
+        [
+            "[Content_Types].xml",
+            "xl/comments2.xml",
+            "xl/drawings/vmlDrawing2.vml",
+            "xl/worksheets/_rels/sheet2.xml.rels",
+            "xl/worksheets/sheet2.xml"
+        ]
+    );
+    let doc = part(&other, SHEET2);
+    assert!(doc.contains(r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><legacyDrawing r:id="rId2"/></worksheet>"#), "{doc}");
+    assert!(part(&other, "[Content_Types].xml").contains(r#"<Override PartName="/xl/comments2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>"#));
+    let vml = part(&other, "xl/drawings/vmlDrawing2.vml");
+    assert!(
+        vml.contains(r#"<o:idmap v:ext="edit" data="2"/>"#) && vml.contains("_x0000_s2049"),
+        "{vml}"
+    );
+    assert_eq!(
+        notes(&other, 1),
+        json!([{ "r": 0, "c": 0, "text": "合計の2倍", "author": "" }])
+    );
+    // The cells are as they were; a row inserted moves the new note too.
+    assert_eq!(cell(&other, "Summary", "A1", Read::Formula), "=Data!D6*2");
+    let moved = apply(
+        &other,
+        &ops(r#"{"op":"insert","sheet":"Summary","range":"1:1"}"#),
+    )
+    .unwrap();
+    assert_eq!(notes(&moved, 1)[0]["r"], json!(1));
+}
+
+#[test]
+fn tables_made_of_the_data() {
+    // A cell of the filter's range: the table is the filter's range, and takes its place.
+    let out = edit(r#"{"op":"table","range":"B3"}"#);
+    let doc = part(&out, SHEET1);
+    assert!(!doc.contains("<autoFilter"), "{doc}");
+    assert!(doc.contains(r#"<legacyDrawing r:id="rId3"/><tableParts count="1"><tablePart r:id="rId5"/></tableParts></worksheet>"#), "{doc}");
+    let table = part(&out, "xl/tables/table2.xml");
+    assert!(table.contains(r#"id="2" name="テーブル1" displayName="テーブル1" ref="A1:D5" totalsRowShown="0"><autoFilter ref="A1:D5"/><tableColumns count="4"><tableColumn id="1" name="品名"/><tableColumn id="2" name="単価"/><tableColumn id="3" name="数量"/><tableColumn id="4" name="金額"/></tableColumns><tableStyleInfo name="TableStyleMedium2""#), "{table}");
+    assert!(
+        part(&out, "[Content_Types].xml").contains(r#"<Override PartName="/xl/tables/table2.xml""#)
+    );
+    assert!(
+        part(&out, "xl/worksheets/_rels/sheet1.xml.rels")
+            .contains(r#"Target="../tables/table2.xml""#)
+    );
+    assert_eq!(cell(&out, "Data", "D6", Read::Formula), "=SUM(D2:D5)");
+    let mut book = Book::open_bytes(&out).unwrap();
+    let info = book.sheet_summary(0).unwrap();
+    assert_eq!(
+        (info.tables[0].name.as_str(), info.tables[0].range.as_str()),
+        ("テーブル1", "A1:D5")
+    );
+    assert_eq!(info.filter, None);
+    // A row inserted in it makes it longer.
+    let longer = apply(&out, &ops(r#"{"op":"insert","range":"3:3"}"#)).unwrap();
+    assert!(part(&longer, "xl/tables/table2.xml").contains(r#"ref="A1:D6""#));
+
+    // Headings that are not texts of their own are made so: a formula, a number, one again.
+    let sum = edit(
+        r#"[{"op":"set","sheet":"Summary","range":"B1","text":"6720"},{"op":"set","sheet":"Summary","range":"B2","text":"x"}]"#,
+    );
+    let out = apply(
+        &sum,
+        &ops(r#"{"op":"table","sheet":"Summary","range":"A1:B3","name":"集計"}"#),
+    )
+    .unwrap();
+    assert_eq!(
+        cells(&out, "Summary", "A1:B1", Read::Formula),
+        [["6720", "67202"]]
+    );
+    assert!(
+        part(&out, "xl/tables/table2.xml")
+            .contains(r#"name="集計" displayName="集計" ref="A1:B3""#)
+    );
+    assert!(
+        part(&out, "xl/tables/table2.xml")
+            .contains(r#"<tableColumn id="1" name="6720"/><tableColumn id="2" name="67202"/>"#)
+    );
+    // No headings: a row of them is inserted above the data.
+    let out = edit(r#"{"op":"table","sheet":"Summary","range":"A1:A3","header":false}"#);
+    assert_eq!(
+        cells(&out, "Summary", "A1:A4", Read::Formula),
+        [["列1"], ["=Data!D6*2"], ["=SUM(Data!D2:D5)"], ["=Total+1"]]
+    );
+    // (Only the cells of the table move down.)
+    assert_eq!(
+        cell(&out, "Summary", "B1", Read::Formula),
+        cell(BOOK, "Summary", "B1", Read::Formula)
+    );
+    assert!(part(&out, "xl/tables/table2.xml").contains(r#"ref="A1:A4""#));
+
+    // Refused: over a table, over merged cells, a name taken.
+    assert!(refused(r#"{"op":"table","sheet":"Tbl","range":"A1:C3"}"#).contains("重ね"));
+    assert!(refused(r#"{"op":"table","range":"A8:C9"}"#).contains("結合"));
+    assert!(refused(r#"{"op":"table","range":"A1:D5","name":"Items"}"#).contains("既に"));
+    assert!(refused(r#"{"op":"table","range":"A1:D5","name":"A1"}"#).contains("使えません"));
+}
