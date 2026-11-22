@@ -6,6 +6,8 @@
 !package.json
 !README.md
 !LICENSE
+!images/icon.png
+!images/ras-file.png
 !THIRD_PARTY_NOTICES.md
 !language-configuration.json
 !syntaxes/ras.tmLanguage.json

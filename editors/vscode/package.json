@@ -4,6 +4,7 @@
   "description": "RAS（TypeScript ライクな構文から VBA へトランスパイルする言語）の言語サポート。シンタックスハイライト、ras 言語サーバー（ras lsp）への接続、ブレークポイントを使ったデバッグ実行、ユーザーフォーム デザイナーを提供します。",
   "version": "0.1.0",
   "publisher": "cool0707",
+  "icon": "images/icon.png",
   "license": "MIT",
   "private": true,
   "repository": {
@@ -61,7 +62,11 @@
         "extensions": [
           ".ras"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/ras-file.png",
+          "dark": "./images/ras-file.png"
+        }
       }
     ],
     "grammars": [
