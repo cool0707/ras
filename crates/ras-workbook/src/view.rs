@@ -267,7 +267,8 @@ pub fn page(data: &Json) -> String {
     format!(
         "<!doctype html>\n<html lang=\"ja\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>\n<style>\n{CSS}</style>\n</head>\n<body>\n\
          <div id=\"top\"><span class=\"file\" id=\"file\"></span><span class=\"note\" id=\"summary\"></span></div>\n\
-         <div id=\"bar\"><input id=\"name\" type=\"text\" list=\"names\" autocomplete=\"off\" spellcheck=\"false\" aria-label=\"名前ボックス\" title=\"セル番地や名前を入力して Enter で移動します（Ctrl+G でジャンプ）\"><datalist id=\"names\"></datalist><div id=\"fx\"></div><button id=\"formulas\" type=\"button\" title=\"セルに値ではなく数式を表示します（Ctrl+` / Ctrl+Shift+@）\" aria-pressed=\"false\">数式の表示</button></div>\n\
+         <div id=\"ribbon\"></div>\n\
+         <div id=\"bar\"><input id=\"name\" type=\"text\" list=\"names\" autocomplete=\"off\" spellcheck=\"false\" aria-label=\"名前ボックス\" title=\"セル番地や名前を入力して Enter で移動します（Ctrl+G でジャンプ）\"><datalist id=\"names\"></datalist><span id=\"fxlabel\" aria-hidden=\"true\">fx</span><div id=\"fx\"></div></div>\n\
          <div id=\"main\"><div id=\"grid\"></div><div id=\"side\"></div></div>\n\
          <div id=\"note\" hidden></div>\n<div id=\"tabs\"></div>\n<div id=\"status\"><span id=\"mode\"></span><span id=\"stats\"></span><span id=\"zoom\"></span></div>\n\
          <script>window.DATA = {embedded};</script>\n<script>\n{CHART_JS}</script>\n<script>\n{JS}</script>\n</body>\n</html>\n"

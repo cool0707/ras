@@ -14,7 +14,7 @@
 //   handler is an `@on("CommandButton1.Click")` function of the sheet's file; a shape or a form
 //   control gets an `export function` of the sheet's file as its macro (`ras book edit`'s `macro`
 //   writes `OnAction` into the workbook file).
-// - "RAS: シートのグリッドを表示" on the RAS file of a worksheet (`objects/Sheet1.ras`) shows the
+// - "RAS: シートプレビューを表示" on the RAS file of a worksheet (`objects/Sheet1.ras`) shows the
 //   project's workbook at that sheet: from the editor's title bar and context menu, and from
 //   the Explorer's context menu.
 
@@ -510,7 +510,7 @@ export async function showWorkbook(file: string): Promise<void> {
 	try {
 		// A workbook a run saved is shown with what the run changed; the others are edited in place.
 		const editable = before === undefined && !saved;
-		show(await page(root, file, before, undefined, before, undefined, editable), `シート: ${path.basename(file)}`, true, { root, file, editable });
+		show(await page(root, file, before, undefined, before, undefined, editable), `シートプレビュー: ${path.basename(file)}`, true, { root, file, editable });
 	} catch (error) {
 		void vscode.window.showErrorMessage(`RAS: ${path.basename(file)} を表示できませんでした: ${error instanceof Error ? error.message : String(error)}`);
 	}
@@ -531,7 +531,7 @@ export async function showSheetOf(uri: vscode.Uri): Promise<void> {
 		return;
 	}
 	try {
-		show(await page(root, book, undefined, undefined, undefined, sheet, true), `シート: ${sheet}（${path.basename(book)}）`, true, { root, file: book, sheet, editable: true });
+		show(await page(root, book, undefined, undefined, undefined, sheet, true), `シートプレビュー: ${sheet}（${path.basename(book)}）`, true, { root, file: book, sheet, editable: true });
 	} catch (error) {
 		void vscode.window.showErrorMessage(`RAS: シート ${sheet} を表示できませんでした: ${error instanceof Error ? error.message : String(error)}`);
 	}
@@ -645,7 +645,7 @@ class Follower implements vscode.DebugAdapterTracker {
 			const before = fs.existsSync(last) ? last : book.source !== null && fs.existsSync(book.source) ? book.source : undefined;
 			const source = book.source !== null && fs.existsSync(book.source) ? book.source : undefined;
 			const html = await page(root, path.join(current, book.file), before, book.name, source);
-			show(html, `シート: ${book.name}（デバッグ中）`, false, undefined);
+			show(html, `シートプレビュー: ${book.name}（デバッグ中）`, false, undefined);
 			this.shown = key;
 		} catch {
 			// The program went on, or the session ended, before the answer: nothing to show.
