@@ -20,6 +20,7 @@ use serde_json::Value as Json;
 use crate::book::snapshot::{CellState, Raw, Snapshot, Styles};
 use crate::book::{Book, MAX_COLS, MAX_ROWS, Paste, PasteOp, PasteWhat, SortKey, Val};
 
+mod insert;
 mod macros;
 mod panes;
 mod scan;
@@ -167,13 +168,56 @@ pub enum Op {
     /// The rows above `at` and the columns to its left frozen ("ウィンドウ枠の固定"); None (or
     /// A1): no longer frozen.
     Freeze { sheet: String, at: Option<CellRef> },
+    /// A hyperlink given to the cells of `range` (in place of the ones they have): Excel's
+    /// "リンクの挿入"; None: their hyperlinks taken away ("ハイパーリンクの削除").
+    Link {
+        sheet: String,
+        range: RangeRef,
+        link: Option<Link>,
+    },
+    /// The note of the cell `at` (in place of the one it has): Excel's "新しいメモ" and
+    /// "メモの編集"; None: taken away ("メモの削除").
+    Note {
+        sheet: String,
+        at: CellRef,
+        text: Option<String>,
+        author: String,
+    },
+    /// A table made of `range` (a single cell: the data around it), as Excel's "テーブルの作成"
+    /// makes it. `header`: its first row is the headings; otherwise a row of headings (列1,
+    /// 列2, ...) is inserted above it.
+    Table {
+        sheet: String,
+        range: RangeRef,
+        header: bool,
+        name: Option<String>,
+    },
+}
+
+/// Where a hyperlink goes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Link {
+    /// A web page or a file (`https://...`, `mailto:...`), or (`location`) a place in the
+    /// workbook: `Sheet2!A1`, a name.
+    pub target: String,
+    pub location: bool,
+    /// What the cell shows ("表示文字列"); empty: what it has.
+    pub display: String,
+    /// The tip shown over the cell ("ヒント設定").
+    pub tip: String,
 }
 
 impl Op {
     fn structural(&self) -> bool {
         matches!(
             self,
-            Op::Insert { .. } | Op::Delete { .. } | Op::Macro { .. } | Op::Freeze { .. }
+            Op::Insert { .. }
+                | Op::Delete { .. }
+                | Op::Macro { .. }
+                | Op::Freeze { .. }
+                | Op::Link { .. }
+                | Op::Note { .. }
+                | Op::Table { .. }
         )
     }
 }
@@ -534,7 +578,51 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     Some(at.start)
                 },
             },
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze）")),
+            "link" => Op::Link {
+                sheet,
+                range: range_of(o, "range")?,
+                link: if o.get("off").and_then(Json::as_bool).unwrap_or(false) {
+                    None
+                } else {
+                    let (target, location) = match (text("url"), text("to")) {
+                        (Some(url), None) if !url.trim().is_empty() => (url.trim().to_string(), false),
+                        (None, Some(to)) if !to.trim().is_empty() => (to.trim().trim_start_matches('#').to_string(), true),
+                        _ => return Err("リンク先を `url`（Web ページ・ファイル）か `to`（ブック内の場所: Sheet2!A1、名前）のどちらか一方で指定してください".into()),
+                    };
+                    if target.chars().count() > 2079 {
+                        return Err("リンク先が長すぎます（2079 文字まで）".into());
+                    }
+                    Some(Link {
+                        target,
+                        location,
+                        display: text("display").unwrap_or_default(),
+                        tip: text("tip").unwrap_or_default(),
+                    })
+                },
+            },
+            "note" => {
+                let at = range_of(o, "at")?;
+                if !at.is_single() {
+                    return Err("`at` はセル 1 つで指定してください".into());
+                }
+                Op::Note {
+                    sheet,
+                    at: at.start,
+                    text: if o.get("off").and_then(Json::as_bool).unwrap_or(false) {
+                        None
+                    } else {
+                        Some(text("text").ok_or("`text` がありません（メモを削除するときは `off`）")?)
+                    },
+                    author: text("author").unwrap_or_default(),
+                }
+            }
+            "table" => Op::Table {
+                sheet,
+                range: range_of(o, "range")?,
+                header: o.get("header").and_then(Json::as_bool).unwrap_or(true),
+                name: text("name").filter(|n| !n.trim().is_empty()),
+            },
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table）")),
         });
     }
     Ok(out)
@@ -562,6 +650,29 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 name,
             } => macros::assign(&bytes, sheet, object, *shape, name)?,
             Op::Freeze { sheet, at } => panes::freeze(&bytes, sheet, *at)?,
+            Op::Link { sheet, range, link } => insert::link(&bytes, sheet, *range, link.as_ref())?,
+            Op::Note {
+                sheet,
+                at,
+                text,
+                author,
+            } => insert::note(&bytes, sheet, *at, text.as_deref(), author)?,
+            Op::Table {
+                sheet,
+                range,
+                header,
+                name,
+            } => {
+                // The cells first (the row of headings inserted, the headings made texts), then
+                // the table over them.
+                let (ops, range) = insert::table_cells(&bytes, sheet, *range, *header)?;
+                let bytes = if ops.is_empty() {
+                    bytes
+                } else {
+                    apply(&bytes, &ops)?
+                };
+                insert::table(&bytes, sheet, range, name.as_deref())?
+            }
             _ => apply_group(&bytes, &ops[at..end])?,
         };
         at = end;
@@ -1153,7 +1264,11 @@ fn run(
             written.push((si, *to));
         }
         // (Made on the file by `apply`: it changes no cell.)
-        Op::Macro { .. } | Op::Freeze { .. } => {}
+        Op::Macro { .. }
+        | Op::Freeze { .. }
+        | Op::Link { .. }
+        | Op::Note { .. }
+        | Op::Table { .. } => {}
         Op::Fill {
             sheet,
             range,
@@ -1333,8 +1448,9 @@ impl<'a> Pack<'a> {
         Ok(out)
     }
 
-    /// The file with the parts of `replace` given new contents and those of `remove` left out;
-    /// the others are copied as they are stored.
+    /// The file with the parts of `replace` given new contents (those the file does not have
+    /// added after the others) and those of `remove` left out; the others are copied as they
+    /// are stored.
     fn rewrite(
         &mut self,
         replace: &BTreeMap<String, Vec<u8>>,
@@ -1366,6 +1482,17 @@ impl<'a> Pack<'a> {
                 }
                 options
             };
+            writer.start_file(name.as_str(), options).map_err(failed)?;
+            writer
+                .write_all(data)
+                .map_err(|e| format!("ブックを書き出せません（{e}）"))?;
+        }
+        for (name, data) in replace {
+            if self.names.contains(name) {
+                continue;
+            }
+            let options =
+                SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
             writer.start_file(name.as_str(), options).map_err(failed)?;
             writer
                 .write_all(data)
