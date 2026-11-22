@@ -781,3 +781,124 @@ fn notes_lists_and_names_for_the_grid() {
         (json!(120.0), json!("#,##0"))
     );
 }
+
+#[test]
+fn pasted_special_transposed_and_multiplied() {
+    // B2:C3 (120 3 / 80 10) as values, rows made columns.
+    let out = edit(
+        r#"{"op":"pasteSpecial","from":"B2:C3","to":"F10","paste":"values","transpose":true}"#,
+    );
+    assert_eq!(
+        cells(&out, "Data", "F10:G11", Read::Value),
+        [["120", "80"], ["3", "10"]]
+    );
+    // The quantities multiplied into the prices; the formulas of D follow them.
+    let out = edit(
+        r#"{"op":"pasteSpecial","from":"C2:C3","to":"B2:B3","paste":"values","operation":"multiply"}"#,
+    );
+    assert_eq!(
+        cells(&out, "Data", "B2:B3", Read::Value),
+        [["360"], ["800"]]
+    );
+    assert_eq!(cell(&out, "Data", "D2", Read::Value), "1080");
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(
+        wrong(r#"{"op":"pasteSpecial","from":"A1","to":"B1","paste":"notes"}"#).contains("notes")
+    );
+}
+
+#[test]
+fn sorted_by_several_keys_and_filtered_by_comparisons() {
+    let out = edit(
+        r#"{"op":"sort","range":"A1:D5","keys":[{"by":"C","desc":true},{"by":"A"}],"header":true}"#,
+    );
+    assert_eq!(
+        cells(&out, "Data", "A2:A5", Read::Value),
+        [["みかん"], ["もも"], ["りんご"], ["ぶどう"]]
+    );
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(wrong(r#"{"op":"sort","range":"A1:D5","keys":[]}"#).contains("keys"));
+    // Prices from 100 up to 400: the rows of 80 and 500 are hidden.
+    let out = edit(r#"{"op":"filterBy","column":"B","criteria":[[">=","100"],["<","400"]]}"#);
+    let sheet = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<filterColumn colId="1"><customFilters and="1"><customFilter operator="greaterThanOrEqual" val="100"/><customFilter operator="lessThan" val="400"/></customFilters></filterColumn>"#), "{sheet}");
+    let hidden = |doc: &str, r: u32| {
+        doc.split("<row ").any(|row| {
+            row.starts_with(&format!("r=\"{r}\""))
+                && row
+                    .split('>')
+                    .next()
+                    .is_some_and(|t| t.contains("hidden=\"1\""))
+        })
+    };
+    assert!(hidden(&sheet, 3) && hidden(&sheet, 4) && !hidden(&sheet, 2) && !hidden(&sheet, 5));
+    // The largest amount only.
+    let out = edit(r#"{"op":"filterBy","column":"D","top":1}"#);
+    let sheet = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<top10 val="1"/>"#));
+    assert!(hidden(&sheet, 2) && hidden(&sheet, 3) && hidden(&sheet, 4) && !hidden(&sheet, 5));
+    assert!(wrong(r#"{"op":"filterBy","column":"B","criteria":[["~","1"]]}"#).contains("~"));
+}
+
+#[test]
+fn links_conditional_formats_tables_and_functions_for_the_grid() {
+    let data = view(BOOK);
+    let sheet = &data["sheets"][0];
+    assert_eq!(
+        sheet["links"],
+        json!([{ "r": 9, "c": 0, "url": "https://example.com" }])
+    );
+    // D2:D5 over 500 (800, 1000, 1200) in the rule's format: bold, filled, with borders.
+    let css = |sheet: &Json, r: u64, c: u64| -> String {
+        let cell = sheet["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["r"] == json!(r) && x["c"] == json!(c))
+            .unwrap();
+        sheet["styles"][cell["s"].as_u64().unwrap_or(0) as usize]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(!css(sheet, 1, 3).contains("font-weight:bold"));
+    for r in 2..=4 {
+        let s = css(sheet, r, 3);
+        assert!(
+            s.contains("font-weight:bold") && s.contains("background:#DDEEFF"),
+            "{s}"
+        );
+    }
+    // The table of Tbl (XlsxWriter's Table Style Medium 9): its heading filled, its rows in
+    // stripes of two tints of the accent.
+    let tbl = &data["sheets"][2];
+    let (head, first, second) = (css(tbl, 1, 1), css(tbl, 2, 1), css(tbl, 3, 1));
+    assert!(
+        head.contains("background:#4F81BD") && head.contains("font-weight:bold"),
+        "{head}"
+    );
+    assert!(
+        first.contains("background:#B8CCE4") && second.contains("background:#DCE6F1"),
+        "{first} / {second}"
+    );
+    // The functions to complete formulas with: the evaluator's own too.
+    let functions = crate::view::functions();
+    let find = |n: &str| {
+        functions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f[0] == json!(n))
+            .cloned()
+    };
+    assert_eq!(
+        find("VLOOKUP").unwrap()[1],
+        json!("VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])")
+    );
+    assert_eq!(
+        find("SUBTOTAL").unwrap()[1],
+        json!("SUBTOTAL(function_num, ref1, [ref2], ...)")
+    );
+}

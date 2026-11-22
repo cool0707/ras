@@ -18,7 +18,7 @@ use gridcraft_formula::adjust::{Axis, Edit};
 use serde_json::Value as Json;
 
 use crate::book::snapshot::{CellState, Raw, Snapshot, Styles};
-use crate::book::{Book, MAX_COLS, MAX_ROWS, SortKey, Val};
+use crate::book::{Book, MAX_COLS, MAX_ROWS, Paste, PasteOp, PasteWhat, SortKey, Val};
 
 mod macros;
 mod panes;
@@ -73,6 +73,16 @@ pub enum Op {
         from: RangeRef,
         to: RangeRef,
     },
+    /// What of the cells of `from` is pasted at `to` ("形式を選択して貼り付け"): formulas, values,
+    /// formats, ..., with an operation on the cells there, empty cells skipped, rows and
+    /// columns swapped.
+    PasteSpecial {
+        sheet: String,
+        from_sheet: String,
+        from: RangeRef,
+        to: RangeRef,
+        paste: Paste,
+    },
     /// The cells of `from` moved to `to` (cut and paste).
     Move {
         sheet: String,
@@ -116,13 +126,13 @@ pub enum Op {
         across: bool,
         on: bool,
     },
-    /// The rows of `range` sorted by the column `by`. A single cell stands for the data
-    /// around it; `header`: its first row is headings (None: guessed).
+    /// The rows of `range` sorted by the columns of `keys` (each descending or not), the first
+    /// first. A single cell stands for the data around it; `header`: its first row is headings
+    /// (None: guessed).
     Sort {
         sheet: String,
         range: RangeRef,
-        by: u32,
-        descending: bool,
+        keys: Vec<(u32, bool)>,
         header: Option<bool>,
     },
     /// The sheet's filter put on `range` (a single cell: the data around it), or taken away.
@@ -130,12 +140,13 @@ pub enum Op {
         sheet: String,
         range: Option<RangeRef>,
     },
-    /// The rows shown by a column of the filter: those whose cell shows one of `values`
-    /// (`blanks`: and the empty ones); None: no longer filtered by the column.
+    /// The rows shown by a column of the filter: those whose cell shows one of a list of values
+    /// (and the empty ones), passes one or two comparisons, or is among the largest or smallest;
+    /// None: no longer filtered by the column.
     FilterBy {
         sheet: String,
         column: u32,
-        show: Option<(Vec<String>, bool)>,
+        show: Option<crate::book::FilterCriterion>,
     },
     /// The fill handle: `from` continued over `to` (a series of numbers or dates, texts that
     /// end in a number, formulas with their references moved; anything else repeated).
@@ -205,6 +216,65 @@ fn column_of(o: &Json, key: &str) -> Result<u32> {
         .ok_or_else(|| format!("`{key}` がありません"))?;
     gridcraft_core::addr::letters_to_col(&text.trim().to_ascii_uppercase())
         .ok_or_else(|| format!("列 `{text}` を読み取れません（B のように指定してください）"))
+}
+
+/// What a column of the filter shows: `values` (and `blanks`), `criteria` (one or two
+/// comparisons `[op, value]`, op one of = <> > >= < <=, the value with `*` and `?`; `and`), or
+/// `top` / `bottom` (how many, `percent`).
+fn criterion_of(o: &Json) -> Result<crate::book::FilterCriterion> {
+    use crate::book::FilterCriterion as C;
+    let text = |v: &Json| match v {
+        Json::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    if let Some(list) = o.get("criteria").and_then(Json::as_array) {
+        let test = |v: &Json| -> Result<(String, String)> {
+            let pair = v.as_array().filter(|p| p.len() == 2);
+            let (op, value) = pair
+                .map(|p| (text(&p[0]), text(&p[1])))
+                .ok_or("`criteria` は [演算子, 値] の配列です（例: [[\">=\", \"100\"]]）")?;
+            if !["=", "<>", ">", ">=", "<", "<="].contains(&op.as_str()) {
+                return Err(format!("演算子 `{op}` は指定できません（= <> > >= < <=）"));
+            }
+            Ok((op, value))
+        };
+        let a = test(list.first().ok_or("`criteria` が空です")?)?;
+        let b = list.get(1).map(test).transpose()?;
+        if list.len() > 2 {
+            return Err("`criteria` は 2 つまでです".into());
+        }
+        return Ok(C::Custom {
+            a,
+            b,
+            and: o.get("and").and_then(Json::as_bool).unwrap_or(true),
+        });
+    }
+    for (key, bottom) in [("top", false), ("bottom", true)] {
+        if let Some(n) = o.get(key) {
+            let percent = o.get("percent").and_then(Json::as_bool).unwrap_or(false);
+            let count = n
+                .as_u64()
+                .filter(|n| (1..=if percent { 100 } else { 500 }).contains(n))
+                .ok_or(format!(
+                    "`{key}` は 1〜500 の数（`percent` なら 1〜100）です"
+                ))?;
+            return Ok(C::Top10 {
+                bottom,
+                percent,
+                count: count as u32,
+            });
+        }
+    }
+    Ok(C::Values {
+        values: o
+            .get("values")
+            .and_then(Json::as_array)
+            .ok_or("`values`・`criteria`・`top`・`bottom` のどれかを指定してください")?
+            .iter()
+            .map(text)
+            .collect(),
+        blanks: o.get("blanks").and_then(Json::as_bool).unwrap_or(false),
+    })
 }
 
 /// The edits of a JSON value: one object, or an array of them. `sheet`: the sheet of those that
@@ -294,6 +364,35 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 from: range_of(o, "from")?,
                 to: range_of(o, "to")?,
             },
+            "pasteSpecial" => Op::PasteSpecial {
+                sheet,
+                from_sheet,
+                from: range_of(o, "from")?,
+                to: range_of(o, "to")?,
+                paste: Paste {
+                    what: match text("paste").as_deref().unwrap_or("all") {
+                        "all" => PasteWhat::All,
+                        "allExceptBorders" => PasteWhat::AllExceptBorders,
+                        "formulas" => PasteWhat::Formulas,
+                        "formulasAndNumberFormats" => PasteWhat::FormulasAndNumberFormats,
+                        "values" => PasteWhat::Values,
+                        "valuesAndNumberFormats" => PasteWhat::ValuesAndNumberFormats,
+                        "formats" => PasteWhat::Formats,
+                        "columnWidths" => PasteWhat::ColumnWidths,
+                        other => return Err(format!("`paste` の `{other}` は指定できません（all / allExceptBorders / formulas / formulasAndNumberFormats / values / valuesAndNumberFormats / formats / columnWidths）")),
+                    },
+                    op: match text("operation").as_deref().unwrap_or("none") {
+                        "none" => PasteOp::None,
+                        "add" => PasteOp::Add,
+                        "subtract" => PasteOp::Subtract,
+                        "multiply" => PasteOp::Multiply,
+                        "divide" => PasteOp::Divide,
+                        other => return Err(format!("`operation` の `{other}` は指定できません（none / add / subtract / multiply / divide）")),
+                    },
+                    skip_blanks: o.get("skipBlanks").and_then(Json::as_bool).unwrap_or(false),
+                    transpose: o.get("transpose").and_then(Json::as_bool).unwrap_or(false),
+                },
+            },
             "move" => Op::Move {
                 sheet,
                 from_sheet,
@@ -355,8 +454,26 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
             "sort" => Op::Sort {
                 sheet,
                 range: range_of(o, "range")?,
-                by: column_of(o, "by")?,
-                descending: o.get("desc").and_then(Json::as_bool).unwrap_or(false),
+                keys: match o.get("keys").and_then(Json::as_array) {
+                    // `keys`: [{ "by": "B", "desc": true }, ...] (Excel takes 64 at most).
+                    Some(list) => {
+                        if list.is_empty() || list.len() > 64 {
+                            return Err("`keys` には 1〜64 個の列を指定してください".into());
+                        }
+                        list.iter()
+                            .map(|k| {
+                                Ok((
+                                    column_of(k, "by")?,
+                                    k.get("desc").and_then(Json::as_bool).unwrap_or(false),
+                                ))
+                            })
+                            .collect::<Result<Vec<_>>>()?
+                    }
+                    None => vec![(
+                        column_of(o, "by")?,
+                        o.get("desc").and_then(Json::as_bool).unwrap_or(false),
+                    )],
+                },
                 header: o.get("header").and_then(Json::as_bool),
             },
             "filter" => Op::Filter {
@@ -373,18 +490,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 show: if o.get("clear").and_then(Json::as_bool).unwrap_or(false) {
                     None
                 } else {
-                    Some((
-                        o.get("values")
-                            .and_then(Json::as_array)
-                            .ok_or("`values` がありません")?
-                            .iter()
-                            .map(|v| match v {
-                                Json::String(s) => s.clone(),
-                                other => other.to_string(),
-                            })
-                            .collect(),
-                        o.get("blanks").and_then(Json::as_bool).unwrap_or(false),
-                    ))
+                    Some(criterion_of(o)?)
                 },
             },
             "autofill" => Op::Autofill {
@@ -428,7 +534,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     Some(at.start)
                 },
             },
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze）")),
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze）")),
         });
     }
     Ok(out)
@@ -504,7 +610,24 @@ fn limit(cells: u64) -> Result<()> {
 
 /// `from` pasted at `to`, repeated over it when it is a multiple of `from` (as Excel pastes).
 fn copy(book: &mut Book, fi: usize, from: RangeRef, ti: usize, to: RangeRef) -> Result<RangeRef> {
-    let (h, w) = (from.height(), from.width());
+    paste(book, fi, from, ti, to, &Paste::all())
+}
+
+/// What `p` says of `from` pasted at `to`, repeated over it when it is a multiple of `from`
+/// (turned, when the rows and columns are swapped).
+fn paste(
+    book: &mut Book,
+    fi: usize,
+    from: RangeRef,
+    ti: usize,
+    to: RangeRef,
+    p: &Paste,
+) -> Result<RangeRef> {
+    let (h, w) = if p.transpose {
+        (from.width(), from.height())
+    } else {
+        (from.height(), from.width())
+    };
     let (rows, cols) = if to.height() % h == 0 && to.width() % w == 0 {
         (to.height() / h, to.width() / w)
     } else {
@@ -517,7 +640,7 @@ fn copy(book: &mut Book, fi: usize, from: RangeRef, ti: usize, to: RangeRef) -> 
     for r in 0..rows {
         for c in 0..cols {
             let at = CellRef::new(to.start.row + r * h, to.start.col + c * w);
-            book.copy(fi, from, ti, at)?;
+            book.paste(fi, from, ti, at, p)?;
         }
     }
     Ok(target)
@@ -863,6 +986,17 @@ fn run(
             let target = copy(book, fi, *from, ti, *to)?;
             written.push((ti, target));
         }
+        Op::PasteSpecial {
+            sheet,
+            from_sheet,
+            from,
+            to,
+            paste: p,
+        } => {
+            let (fi, ti) = (sheet_index(book, from_sheet)?, sheet_index(book, sheet)?);
+            let target = paste(book, fi, *from, ti, *to, p)?;
+            written.push((ti, target));
+        }
         Op::Move {
             sheet,
             from_sheet,
@@ -958,13 +1092,15 @@ fn run(
         Op::Sort {
             sheet,
             range,
-            by,
-            descending,
+            keys,
             header,
         } => {
             let si = sheet_index(book, sheet)?;
             let mut rows = around(book, si, *range);
-            if !(rows.start.col..=rows.end.col).contains(by) {
+            if keys
+                .iter()
+                .any(|(by, _)| !(rows.start.col..=rows.end.col).contains(by))
+            {
                 return Err("並べ替えの列が、並べ替える範囲の外です".into());
             }
             if header.unwrap_or_else(|| book.guess_header(si, rows)) {
@@ -973,16 +1109,14 @@ fn run(
                 }
                 rows.start.row += 1;
             }
-            book.sort(
-                si,
-                rows,
-                &[SortKey {
-                    index: *by,
+            let keys: Vec<SortKey> = keys
+                .iter()
+                .map(|(index, descending)| SortKey {
+                    index: *index,
                     descending: *descending,
-                }],
-                false,
-                false,
-            )?;
+                })
+                .collect();
+            book.sort(si, rows, &keys, false, false)?;
             written.push((si, rows));
         }
         Op::Filter { sheet, range } => {
@@ -1011,15 +1145,7 @@ fn run(
             else {
                 return Err("フィルターの範囲の外の列です".into());
             };
-            book.set_filter(
-                si,
-                offset,
-                show.as_ref()
-                    .map(|(values, blanks)| crate::book::FilterCriterion::Values {
-                        values: values.clone(),
-                        blanks: *blanks,
-                    }),
-            )?;
+            book.set_filter(si, offset, show.clone())?;
         }
         Op::Autofill { sheet, from, to } => {
             let si = sheet_index(book, sheet)?;

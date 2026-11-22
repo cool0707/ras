@@ -250,6 +250,14 @@ function receive(message: unknown): void {
 		}
 		return;
 	}
+	if (type === "link") {
+		// A hyperlink of a cell: web pages and mail only.
+		const url = (message as { url?: unknown }).url;
+		if (typeof url === "string" && /^(https?:\/\/|mailto:)/i.test(url)) {
+			void vscode.env.openExternal(vscode.Uri.parse(url, true));
+		}
+		return;
+	}
 	if (type !== "edit" && type !== "undo" && type !== "redo" && type !== "event") {
 		return;
 	}

@@ -86,6 +86,31 @@ impl Parts {
                 }
             }
         }
+        // What the tables show of their style (`tableStyleInfo`), by the table's name.
+        for name in names
+            .iter()
+            .filter(|n| n.starts_with("xl/tables/") && n.ends_with(".xml"))
+        {
+            let Some(b) = read_part(&mut zr, name) else {
+                continue;
+            };
+            let xml = String::from_utf8_lossy(&b);
+            let Some(root) = parse(xml.as_bytes()) else {
+                continue;
+            };
+            if let (Some(table), Some(info)) = (root.attr("name"), root.child("tableStyleInfo")) {
+                let on = |a: &str| u8::from(matches!(info.attr(a), Some("1" | "true")));
+                files.insert(
+                    format!("#table:{table}"),
+                    vec![
+                        on("showFirstColumn"),
+                        on("showLastColumn"),
+                        on("showRowStripes"),
+                        on("showColumnStripes"),
+                    ],
+                );
+            }
+        }
         for name in ["xl/workbook.xml", "xl/_rels/workbook.xml.rels"] {
             if let Some(b) = read_part(&mut zr, name) {
                 files.insert(name.into(), b);
@@ -100,6 +125,16 @@ impl Parts {
             }
             if let Some(xf) = element_text(&styles, "cellXfs").and_then(|xfs| first_xf(&xfs)) {
                 files.insert("#xf0".into(), xf.into_bytes());
+            }
+            // The workbook's own table styles, with the formats they use.
+            if let Some(ts) =
+                element_text(&styles, "tableStyles").filter(|t| t.contains("tableStyleElement"))
+            {
+                let dxfs = element_text(&styles, "dxfs").unwrap_or_default();
+                files.insert(
+                    "#tableStyles".into(),
+                    format!("<styleSheet>{dxfs}{ts}</styleSheet>").into_bytes(),
+                );
             }
         }
         if !names.iter().any(|n| n.starts_with("xl/drawings/")) {
@@ -221,6 +256,28 @@ impl Parts {
     pub fn grid_lines(&self, sheet: &str) -> Option<bool> {
         let view = self.xml(&format!("{}#view", self.sheet_part(sheet)?))?;
         Some(!matches!(view.attr("showGridLines"), Some("0" | "false")))
+    }
+
+    /// What a table (by its name) shows of its style: first column, last column, row stripes,
+    /// column stripes.
+    pub(crate) fn table_flags(&self, table: &str) -> Option<crate::book::tables::Shown> {
+        let f = self.files.get(&format!("#table:{table}"))?;
+        (f.len() == 4).then(|| (f[0] == 1, f[1] == 1, f[2] == 1, f[3] == 1))
+    }
+
+    /// The workbook's own table styles by name.
+    pub(crate) fn table_styles(&self) -> HashMap<String, crate::book::tables::StyleDef> {
+        self.xml("#tableStyles")
+            .map(|root| crate::book::tables::custom_styles(&root))
+            .unwrap_or_default()
+    }
+
+    /// The zoom (%) the sheet named `sheet` is shown at, when the file says (and it is not 100).
+    pub fn zoom(&self, sheet: &str) -> Option<u32> {
+        let view = self.xml(&format!("{}#view", self.sheet_part(sheet)?))?;
+        view.attr("zoomScale")
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|z| (10..=400).contains(z) && *z != 100)
     }
 
     /// The rows and columns the sheet named `sheet` keeps on the screen (its panes frozen): as

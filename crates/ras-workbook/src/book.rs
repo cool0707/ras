@@ -2387,6 +2387,7 @@ mod inspect;
 mod paste;
 pub mod snapshot;
 mod sort;
+pub(crate) mod tables;
 pub mod view;
 
 pub(crate) use edit::{adjusted, moved};

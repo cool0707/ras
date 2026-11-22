@@ -50,6 +50,9 @@ td .rot { display: inline-block; white-space: nowrap; }
 /* Data bars of conditional formats: under the value, over the cell's fill. */
 td.cfb { position: relative; z-index: 0; }
 td .cfbar { position: absolute; top: 2px; bottom: 2px; z-index: -1; pointer-events: none; }
+/* Icons of icon sets: at the left of the cell, the value after them. */
+td.cfi { position: relative; padding-left: 19px; }
+td .cficon { position: absolute; left: 2px; bottom: 3px; width: 14px; height: 14px; pointer-events: none; }
 td .cfaxis { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #000; z-index: -1; pointer-events: none; }
 /* Text that runs over the empty cells to its right: their gridlines are under it. */
 td.ov { overflow: visible; }
@@ -135,6 +138,9 @@ th.hs { background: #d3e9db; color: #0b5a2e; border-bottom-color: var(--accent);
 tbody th.hs { border-bottom-color: var(--line); border-right-color: var(--accent); }
 th { user-select: none; cursor: default; }
 .selbox { position: absolute; box-sizing: border-box; border: 2px solid var(--accent); background: rgba(16, 124, 65, .08); }
+/* The areas of a selection made with Ctrl: shaded, the last one outlined thinly. */
+.selbox.multi { border-width: 1px; background: rgba(16, 124, 65, .14); }
+.selbox.more { border-color: rgba(16, 124, 65, .5); }
 .clipbox { position: absolute; box-sizing: border-box; border: 2px dashed var(--accent); animation: ants .6s steps(2) infinite; }
 @keyframes ants { 50% { border-style: dotted; } }
 /* The box typed into: on the active cell, seen while something is typed. */
@@ -204,6 +210,14 @@ table.ns th { cursor: row-resize; }
 /* The status bar. */
 #status { display: flex; align-items: center; gap: 24px; min-height: 22px; padding: 1px 10px; background: var(--head); border-top: 1px solid var(--line); color: #333; font-size: 12px; }
 #stats { display: flex; gap: 24px; margin-left: auto; }
+#zoom { display: flex; align-items: center; gap: 2px; }
+#zoom button { min-width: 20px; padding: 0 4px; border: 0; background: none; color: #333; font: inherit; cursor: pointer; }
+#zoom button:hover { background: #e2e2e2; }
+#zoom button.pct { min-width: 44px; text-align: right; }
+#zoom input { width: 100px; margin: 0 2px; accent-color: #666; }
+
+/* Hyperlinks: the hand over them. */
+td.haslink { cursor: pointer; }
 
 /* Notes: the mark at the corner of the cell, the note while the mouse is on it. */
 td.hasnote { position: relative; }
@@ -258,3 +272,41 @@ td.fzr.fzc { z-index: 4; }
 .frzline { position: absolute; background: #9b9b9b; pointer-events: none; }
 .frzline.h { left: 0; height: 1px; }
 .frzline.v { top: 0; width: 1px; }
+
+/* "形式を選択して貼り付け". */
+.dlg.pastespecial fieldset { margin: 0 0 8px; padding: 4px 10px 6px; border: 1px solid var(--line); display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
+.dlg.pastespecial legend { padding: 0 4px; }
+.dlg.pastespecial .checks { display: flex; gap: 16px; }
+
+/* The filter's comparisons, the top ten, the sort with several keys. */
+.dlg.customfilter .cond, .dlg.top10 .cond { display: flex; gap: 6px; margin: 4px 0; }
+.dlg.customfilter .cond input { width: 180px; font: inherit; }
+.dlg.customfilter select, .dlg.top10 select, .dlg.sortdlg select, .dlg.top10 input { font: inherit; }
+.dlg.top10 input { width: 70px; }
+.dlg.customfilter .join { display: flex; gap: 16px; margin: 2px 0 2px 12px; }
+.dlg .hint { margin-top: 6px; color: #555; font-size: 12px; }
+.dlg.sortdlg { min-width: 460px; }
+.dlg.sortdlg .sorttools { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.dlg.sortdlg .sorttools label { margin-left: auto; }
+.dlg.sortdlg .sorttools button { min-width: 0; }
+.dlg.sortdlg .levels { max-height: 260px; overflow: auto; border: 1px solid var(--line); padding: 4px; }
+.dlg.sortdlg .level { display: flex; align-items: center; gap: 8px; padding: 3px 4px; }
+.dlg.sortdlg .level.on { background: #e8f3ec; }
+.dlg.sortdlg .level .lbl { width: 120px; }
+.dlg.sortdlg .level select.col { flex: 1; min-width: 0; }
+
+/* The selection's border: moved by dragging (Ctrl: copied). */
+table.mv td { cursor: move; }
+body.copying, body.copying td { cursor: copy; }
+.fillbox.moving { border: 3px solid #8a8a8a; border-style: solid; }
+.dlg .msg { margin: 4px 0 8px; }
+
+/* Completing formulas: the functions and names that begin with the word, the arguments. */
+.fnlist { position: fixed; z-index: 19; width: 280px; max-height: 260px; overflow: auto; background: #fff; border: 1px solid #a0a0a0; box-shadow: 0 2px 8px rgba(0, 0, 0, .2); font-size: 12px; }
+.fnlist .item { display: flex; gap: 6px; align-items: center; padding: 1px 6px; cursor: default; white-space: nowrap; }
+.fnlist .item.on { background: #cce4f7; }
+.fnlist .fx, .fnlist .nm { flex: none; width: 18px; font-size: 10px; color: #fff; text-align: center; border-radius: 2px; background: #5a7fb0; font-style: italic; }
+.fnlist .nm { background: #8a8a8a; font-style: normal; }
+.fnlist .desc { position: sticky; bottom: 0; padding: 4px 6px; border-top: 1px solid var(--line); background: #ffffe1; color: #333; white-space: normal; }
+.fnhint { position: fixed; z-index: 19; max-width: 520px; padding: 2px 6px; background: #ffffe1; border: 1px solid #767676; color: #000; font: 12px Consolas, "MS Gothic", monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fnhint .on { font-weight: bold; }

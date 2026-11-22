@@ -17,7 +17,7 @@ mod emf;
 mod geom;
 #[cfg(test)]
 mod tests;
-mod xml;
+pub(crate) mod xml;
 
 pub use drawing::Parts;
 
@@ -86,6 +86,170 @@ pub fn data(
     )
 }
 
+/// The functions the stand-in works out, for completing formulas typed into the grid:
+/// `[name, signature, description]` by name.
+pub fn functions() -> Json {
+    let mut list: Vec<(&str, &str, &str)> = gridcraft_functions::all()
+        .iter()
+        .map(|f| (f.name, f.signature, f.description))
+        .collect();
+    // Those the evaluator works out itself (they take references, names, LAMBDAs).
+    for name in gridcraft_calc::SPECIAL_FUNCTIONS {
+        if gridcraft_functions::lookup(name).is_some() {
+            continue;
+        }
+        let (sig, desc) = SPECIAL
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, s, d)| (*s, *d))
+            .unwrap_or(("", ""));
+        list.push((name, sig, desc));
+    }
+    list.sort_by_key(|f| f.0);
+    list.dedup_by_key(|f| f.0);
+    Json::Array(
+        list.into_iter()
+            .map(|(name, sig, desc)| {
+                let sig = if sig.is_empty() {
+                    format!("{name}(...)")
+                } else {
+                    sig.to_string()
+                };
+                json!([name, sig, desc])
+            })
+            .collect(),
+    )
+}
+
+/// The signatures of the functions the evaluator works out itself, as Excel's help gives them.
+const SPECIAL: &[(&str, &str, &str)] = &[
+    (
+        "AGGREGATE",
+        "AGGREGATE(function_num, options, ref1, [ref2], ...)",
+        "Returns an aggregate in a list or database, optionally ignoring hidden rows and errors.",
+    ),
+    (
+        "AREAS",
+        "AREAS(reference)",
+        "Returns the number of areas in a reference.",
+    ),
+    (
+        "BYCOL",
+        "BYCOL(array, lambda)",
+        "Applies a LAMBDA to each column and returns an array of the results.",
+    ),
+    (
+        "BYROW",
+        "BYROW(array, lambda)",
+        "Applies a LAMBDA to each row and returns an array of the results.",
+    ),
+    (
+        "CELL",
+        "CELL(info_type, [reference])",
+        "Returns information about the formatting, location or contents of a cell.",
+    ),
+    (
+        "COLUMN",
+        "COLUMN([reference])",
+        "Returns the column number of a reference.",
+    ),
+    (
+        "FORMULATEXT",
+        "FORMULATEXT(reference)",
+        "Returns the formula at the given reference as text.",
+    ),
+    (
+        "INDIRECT",
+        "INDIRECT(ref_text, [a1])",
+        "Returns the reference specified by a text string.",
+    ),
+    (
+        "ISFORMULA",
+        "ISFORMULA(reference)",
+        "Returns TRUE if the reference is to a cell that contains a formula.",
+    ),
+    (
+        "ISOMITTED",
+        "ISOMITTED(argument)",
+        "Checks whether an argument of a LAMBDA is missing.",
+    ),
+    (
+        "ISREF",
+        "ISREF(value)",
+        "Returns TRUE if the value is a reference.",
+    ),
+    (
+        "LAMBDA",
+        "LAMBDA([parameter1, ...], calculation)",
+        "Creates a function that can be called with arguments.",
+    ),
+    (
+        "LET",
+        "LET(name1, name_value1, calculation_or_name2, ...)",
+        "Assigns names to calculation results.",
+    ),
+    (
+        "MAKEARRAY",
+        "MAKEARRAY(rows, cols, lambda)",
+        "Returns an array of the given size, its values worked out by a LAMBDA.",
+    ),
+    (
+        "MAP",
+        "MAP(array1, lambda_or_array2, ...)",
+        "Returns an array of the values of the arrays mapped by a LAMBDA.",
+    ),
+    (
+        "OFFSET",
+        "OFFSET(reference, rows, cols, [height], [width])",
+        "Returns a reference offset from a given reference.",
+    ),
+    (
+        "PHONETIC",
+        "PHONETIC(reference)",
+        "Extracts the phonetic (furigana) characters from a text string.",
+    ),
+    (
+        "REDUCE",
+        "REDUCE([initial_value], array, lambda)",
+        "Reduces an array to an accumulated value by applying a LAMBDA to each value.",
+    ),
+    (
+        "ROW",
+        "ROW([reference])",
+        "Returns the row number of a reference.",
+    ),
+    (
+        "SCAN",
+        "SCAN([initial_value], array, lambda)",
+        "Applies a LAMBDA to each value of an array and returns the values in between.",
+    ),
+    (
+        "SHEET",
+        "SHEET([value])",
+        "Returns the sheet number of the referenced sheet.",
+    ),
+    (
+        "SHEETS",
+        "SHEETS([reference])",
+        "Returns the number of sheets in a reference.",
+    ),
+    (
+        "SUBTOTAL",
+        "SUBTOTAL(function_num, ref1, [ref2], ...)",
+        "Returns a subtotal in a list or database.",
+    ),
+    (
+        "TEXT",
+        "TEXT(value, format_text)",
+        "Formats a number and converts it to text.",
+    ),
+    (
+        "TRIMRANGE",
+        "TRIMRANGE(range, [trim_rows], [trim_cols])",
+        "Leaves out the empty rows and columns at the edges of a range.",
+    ),
+];
+
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -105,7 +269,7 @@ pub fn page(data: &Json) -> String {
          <div id=\"top\"><span class=\"file\" id=\"file\"></span><span class=\"note\" id=\"summary\"></span></div>\n\
          <div id=\"bar\"><input id=\"name\" type=\"text\" list=\"names\" autocomplete=\"off\" spellcheck=\"false\" aria-label=\"名前ボックス\" title=\"セル番地や名前を入力して Enter で移動します（Ctrl+G でジャンプ）\"><datalist id=\"names\"></datalist><div id=\"fx\"></div><button id=\"formulas\" type=\"button\" title=\"セルに値ではなく数式を表示します（Ctrl+` / Ctrl+Shift+@）\" aria-pressed=\"false\">数式の表示</button></div>\n\
          <div id=\"main\"><div id=\"grid\"></div><div id=\"side\"></div></div>\n\
-         <div id=\"note\" hidden></div>\n<div id=\"tabs\"></div>\n<div id=\"status\"><span id=\"mode\"></span><span id=\"stats\"></span></div>\n\
+         <div id=\"note\" hidden></div>\n<div id=\"tabs\"></div>\n<div id=\"status\"><span id=\"mode\"></span><span id=\"stats\"></span><span id=\"zoom\"></span></div>\n\
          <script>window.DATA = {embedded};</script>\n<script>\n{CHART_JS}</script>\n<script>\n{JS}</script>\n</body>\n</html>\n"
     )
 }
