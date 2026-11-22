@@ -109,7 +109,7 @@ fn edits_are_read_from_json() {
     assert!(matches!(shifts[3], Op::Delete { left: false, .. }));
     let bad = |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), None).unwrap_err();
     assert!(bad(r#"{"op":"set","range":"A1","text":"x"}"#).contains("シート"));
-    assert!(bad(r#"{"op":"sort","sheet":"S"}"#).contains("sort"));
+    assert!(bad(r#"{"op":"nope","sheet":"S"}"#).contains("nope"));
     assert!(bad(r#"{"op":"clear","sheet":"S","range":"A0"}"#).contains("A0"));
 }
 
@@ -466,4 +466,197 @@ fn positions_after_an_insertion_or_a_deletion() {
     assert_eq!(map_cell(at("C3"), &left), None);
     assert_eq!(map_cell(at("E3"), &left), Some(at("C3")));
     assert_eq!(map_cell(at("E4"), &left), Some(at("E4")));
+}
+
+#[test]
+fn formats_are_added_to_the_styles_and_cells_keep_what_they_hold() {
+    let out = edit(
+        r##"[{"op":"format","range":"A2:B3","set":{"bold":true,"fill":"#FFFF00","color":"#FF0000","border":"all","align":"center","fontSize":14}},{"op":"format","range":"C2","set":{"numberFormat":"0.00"}},{"op":"format","range":"E:E","set":{"italic":true}}]"##,
+    );
+    assert_eq!(changed(BOOK, &out), ["xl/styles.xml", SHEET1]);
+    let sheet = part(&out, SHEET1);
+    // Only the format of the cells changes: their shared strings and formulas are as written.
+    assert!(sheet.contains(r#"<c r="A2" t="s" s="4"><v>4</v></c><c r="B2" s="5"><v>120</v></c><c r="C2" s="6"><v>3</v></c>"#), "{sheet}");
+    assert!(
+        sheet.contains(r#"<c r="E2" s="7"><f>MyUdf(D2)</f><v>42</v></c>"#),
+        "{sheet}"
+    );
+    // A whole column: its format in `<cols>`, without a width of its own.
+    assert!(
+        sheet.contains(r#"<col min="5" max="5" width="9.140625" style="7"/>"#),
+        "{sheet}"
+    );
+    let styles = part(&out, "xl/styles.xml");
+    for expected in [
+        r#"<font><b/><sz val="14"/><color rgb="FFFF0000"/>"#,
+        r#"<fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/></patternFill></fill>"#,
+        r#"<border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/><diagonal/></border>"#,
+        r#"<cellXfs count="8">"#,
+        // The number format alone: made from the format the cell had.
+        r#"<xf numFmtId="2" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>"#,
+        r#"applyAlignment="1"><alignment horizontal="center"/></xf>"#,
+    ] {
+        assert!(styles.contains(expected), "{expected}: {styles}");
+    }
+    // What the workbook reads back.
+    let mut book = Book::open_bytes(&out).unwrap();
+    let a2 = RangeRef::parse("A2:B3").unwrap();
+    assert_eq!(
+        book.format_of(0, a2, "font.bold").unwrap(),
+        Some(Val::Bool(true))
+    );
+    assert_eq!(
+        book.format_of(0, a2, "font.size").unwrap(),
+        Some(Val::Num(14.0))
+    );
+    assert_eq!(
+        book.format_of(0, a2, "interior.color").unwrap(),
+        Some(Val::Num(f64::from(0x00FFFFu32)))
+    );
+    assert_eq!(cell(&out, "Data", "C2", Read::NumberFormat), "0.00");
+    // The same formats again use the formats added; cleared, the cells have the first one.
+    let again = apply(
+        &out,
+        &ops(r#"[{"op":"format","range":"A4","set":{"italic":true}},{"op":"clearFormats","range":"A2:B2"}]"#),
+    )
+    .unwrap();
+    let sheet = part(&again, SHEET1);
+    assert!(
+        sheet.contains(r#"<c r="A2" t="s" s="0"><v>4</v></c><c r="B2" s="0"><v>120</v></c>"#),
+        "{sheet}"
+    );
+    assert!(
+        sheet.contains(r#"<c r="A4" t="s" s="7"><v>6</v></c>"#),
+        "{sheet}"
+    );
+    assert!(part(&again, "xl/styles.xml").contains(r#"<cellXfs count="8">"#));
+}
+
+#[test]
+fn sizes_hidden_lines_and_merged_cells() {
+    let out = edit(
+        r#"[{"op":"size","range":"B:C","px":120},{"op":"size","range":"3:3","px":40},{"op":"hide","range":"5:5","hidden":true},{"op":"hide","range":"A:A","hidden":true},{"op":"merge","range":"A2:B3"},{"op":"unmerge","range":"A8"}]"#,
+    );
+    assert_eq!(changed(BOOK, &out), [SHEET1, SHEET2]);
+    let sheet = part(&out, SHEET1);
+    assert!(sheet.contains(r#"<cols><col min="1" max="1" width="14.7109375" customWidth="1" hidden="1"/><col min="2" max="3" width="15.625" customWidth="1"/><col min="4" max="4" width="12.7109375" style="1" customWidth="1"/></cols>"#), "{sheet}");
+    assert!(
+        sheet.contains(r#"<row r="3" ht="30" customHeight="1">"#),
+        "{sheet}"
+    );
+    assert!(sheet.contains(r#"<row r="5" hidden="1">"#), "{sheet}");
+    assert!(
+        sheet.contains(r#"<mergeCells count="1"><mergeCell ref="A2:B3"/></mergeCells>"#),
+        "{sheet}"
+    );
+    // A merged cell keeps what its first cell holds.
+    assert_eq!(
+        cells(&out, "Data", "A2:B3", Read::Value),
+        [["りんご", ""], ["", ""]]
+    );
+    assert_eq!(cell(&out, "Data", "D2", Read::Value), "0");
+    // Shown again, as high as the others again.
+    let back = apply(
+        &out,
+        &ops(r#"[{"op":"hide","range":"1:1048576","hidden":false},{"op":"hide","range":"A:XFD","hidden":false}]"#),
+    )
+    .unwrap();
+    let sheet = part(&back, SHEET1);
+    assert!(!sheet.contains("hidden"), "{sheet}");
+    let bad = serde_json::from_str(r#"{"op":"size","range":"B2:C3","px":10}"#).unwrap();
+    assert!(
+        parse_ops(&bad, Some("Data"))
+            .unwrap_err()
+            .contains("行（3:5）か列（B:D）")
+    );
+}
+
+#[test]
+fn rows_sorted_and_filtered() {
+    let out = edit(r#"{"op":"sort","range":"B3","by":"B","desc":true}"#);
+    // The data around the cell (the filter's range), under its headings.
+    assert_eq!(
+        cells(&out, "Data", "A1:D5", Read::Formula),
+        [
+            ["品名", "単価", "数量", "金額"],
+            ["ぶどう", "500", "2", "=B2*C2"],
+            ["もも", "300", "4", "=B3*C3"],
+            ["りんご", "120", "3", "=B4*C4"],
+            ["みかん", "80", "10", "=B5*C5"],
+        ]
+    );
+    // A formula beside the rows sorted stays where it is.
+    assert!(part(&out, SHEET1).contains(r#"<c r="E2"><f>MyUdf(D2)</f><v>42</v></c>"#));
+
+    let out = edit(r#"{"op":"filterBy","column":"A","values":["りんご","もも"]}"#);
+    let sheet = part(&out, SHEET1);
+    assert!(sheet.contains(r#"<autoFilter ref="A1:D5"><filterColumn colId="0"><filters><filter val="りんご"/><filter val="もも"/></filters></filterColumn></autoFilter>"#), "{sheet}");
+    assert!(
+        sheet.contains(r#"<row r="3" hidden="1">"#) && sheet.contains(r#"<row r="4" hidden="1">"#),
+        "{sheet}"
+    );
+    assert!(!sheet.contains(r#"<row r="2" hidden"#), "{sheet}");
+    // No longer filtered by the column: the rows show; without the filter, its name goes too.
+    let shown = apply(&out, &ops(r#"{"op":"filterBy","column":"A","clear":true}"#)).unwrap();
+    let sheet = part(&shown, SHEET1);
+    assert!(
+        sheet.contains(r#"<autoFilter ref="A1:D5"/>"#) && !sheet.contains("hidden"),
+        "{sheet}"
+    );
+    let off = apply(&out, &ops(r#"{"op":"filter","off":true}"#)).unwrap();
+    assert!(!part(&off, SHEET1).contains("autoFilter"));
+    assert!(!part(&off, "xl/workbook.xml").contains("_FilterDatabase"));
+    // Put on the data around a cell of another sheet: the element in its place, and the name.
+    let on = apply(
+        BOOK,
+        &parse_ops(
+            &serde_json::from_str(r#"[{"op":"set","range":"D1:E1","text":"h"},{"op":"set","range":"D2:E4","text":"1"},{"op":"filter","range":"D2"}]"#).unwrap(),
+            Some("Summary"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(part(&on, SHEET2).contains(r#"</sheetData><autoFilter ref="D1:E4"/><pageMargins"#));
+    assert!(part(&on, "xl/workbook.xml").contains(r#"<definedName name="_xlnm._FilterDatabase" localSheetId="1" hidden="1">Summary!$D$1:$E$4</definedName>"#));
+    assert!(refused(r#"{"op":"filterBy","column":"H","values":[]}"#).contains("範囲の外"));
+}
+
+#[test]
+fn the_fill_handle_continues_what_it_is_dragged_from() {
+    let out = edit(
+        r#"[{"op":"values","at":"G1","rows":[["1","第1回","2026/4/1","a","=C1*2","No.008"],["3","第2回","2026/4/3","b","","No.009"]]},{"op":"autofill","from":"G1:L2","to":"G1:L6"}]"#,
+    );
+    assert_eq!(
+        cells(&out, "Data", "G3:I6", Read::Value2),
+        [
+            ["5", "第3回", "46117"],
+            ["7", "第4回", "46119"],
+            ["9", "第5回", "46121"],
+            ["11", "第6回", "46123"],
+        ]
+    );
+    // Anything else is repeated; formulas with their references moved.
+    assert_eq!(
+        cells(&out, "Data", "J3:L6", Read::Formula),
+        [
+            ["a", "=C3*2", "No.010"],
+            ["b", "", "No.011"],
+            ["a", "=C5*2", "No.012"],
+            ["b", "", "No.013"],
+        ]
+    );
+    assert_eq!(cell(&out, "Data", "I6", Read::NumberFormat), "m/d/yyyy");
+    // One number is repeated, one date goes on by days; to the right and upwards too.
+    let out = edit(
+        r#"[{"op":"values","at":"G5","rows":[["7","2026/4/1"]]},{"op":"autofill","from":"G5:H5","to":"G3:H5"},{"op":"autofill","from":"G5","to":"G5:G6"},{"op":"autofill","from":"C2:C3","to":"C2:E3"}]"#,
+    );
+    assert_eq!(
+        cells(&out, "Data", "G3:H6", Read::Value2),
+        [["7", "46111"], ["7", "46112"], ["7", "46113"], ["7", ""]]
+    );
+    assert_eq!(
+        cells(&out, "Data", "C2:E3", Read::Value),
+        [["3", "3", "3"], ["10", "10", "10"]]
+    );
+    assert!(refused(r#"{"op":"autofill","from":"A1:B2","to":"A1:C3"}"#).contains("どちらかにだけ"));
 }

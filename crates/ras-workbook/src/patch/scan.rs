@@ -351,8 +351,13 @@ impl Edits {
         self.list.is_empty()
     }
     pub fn apply(mut self, doc: &str) -> String {
-        // Wider spans first among those that start together.
-        self.list.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+        // Among those that start together: what is put in before the place first (in the order
+        // it was asked for), then the wider spans.
+        self.list.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then((a.1 != a.0).cmp(&(b.1 != b.0)))
+                .then(b.1.cmp(&a.1))
+        });
         let mut out = String::with_capacity(doc.len() + 256);
         let mut at = 0;
         for (start, end, text) in self.list {

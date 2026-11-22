@@ -1,4 +1,5 @@
 // The grid of `ras book view` (and of the editor's sheet panel): draws the sheets of DATA.
+// (A sheet: `filter` is its filter's range, `filterColumns` { offset: { values, blanks } | { other } } the columns filtered.)
 // DATA = { editable?: true, file, sheets: [sheet_view...], images: [data URL], diff: { before, structure: [text], changes: { sheet: [{ a, before, after }] } } | null, active: name | null, focus?: true }
 // (`focus`: `active` was asked for (`ras book view --sheet`) and comes before the sheet shown last time.)
 //
@@ -246,7 +247,9 @@
         const marks = wrap.appendChild(el("div", "refs"));
         const selbox = marks.appendChild(el("div", "selbox"));
         const clipbox = marks.appendChild(el("div", "clipbox"));
-        selbox.hidden = clipbox.hidden = true;
+        const fillbox = marks.appendChild(el("div", "fillbox"));
+        const fillh = marks.appendChild(el("div", "fillhandle"));
+        selbox.hidden = clipbox.hidden = fillbox.hidden = fillh.hidden = true;
         wrap.appendChild(ed);
         grid.appendChild(wrap);
 
@@ -260,6 +263,9 @@
             owner,
             selbox,
             clipbox,
+            fillbox,
+            fillh,
+            filter, // the filter's corners: [[r, c], [r, c]]
             hl: [], // the headers of the selection
 
             layer,
@@ -318,7 +324,10 @@
                 td.classList.add("chg");
                 td.title = `変更前: ${was.before}`;
             }
-            if (filter && filter[0] && filter[1] && r === filter[0][0] && c >= filter[0][1] && c <= filter[1][1]) td.classList.add("filter");
+            if (filter && filter[0] && filter[1] && r === filter[0][0] && c >= filter[0][1] && c <= filter[1][1]) {
+                td.classList.add("filter");
+                if ((sheet.filterColumns || {})[c - filter[0][1]]) td.classList.add("filtered");
+            }
             if (cell || was || merged) v.byAddress.set(a, td);
         }
 
@@ -598,6 +607,7 @@
         drawBoxes();
         if (scroll) reveal(sel.kind === "cols" ? null : sel.fr, sel.kind === "rows" ? null : sel.fc);
         placeEditor();
+        showTools();
     }
 
     // The box of the range, its headers, and the dashed box of the cells copied.
@@ -617,6 +627,10 @@
             put(v.selbox, single(sel) ? null : boxOf(sel.r1, sel.c1, sel.r2, sel.c2));
         }
         put(v.clipbox, clip && clip.sheet === v.sheet.name ? boxOf(clip.r1, clip.c1, clip.r2, clip.c2) : null);
+        // The fill handle: at the bottom right corner of the cells selected.
+        const b = editable && sel && !selected && !entry && sel.kind === "cells" ? boxOf(sel.r1, sel.c1, sel.r2, sel.c2) : null;
+        v.fillh.hidden = !b || sel.r2 >= v.nrows || sel.c2 >= v.ncols;
+        if (b) Object.assign(v.fillh.style, { left: `${b.x + b.w - 3}px`, top: `${b.y + b.h - 3}px` });
     }
 
     // Scrolls a cell out from under the headers and into the window (null: that way stays).
@@ -720,9 +734,21 @@
         const hit = hitOf(e.target);
         if (!hit) return;
         e.preventDefault();
+        const edge = e.button === 0 ? edgeOf(e) : null;
+        const button = e.button === 0 && filterButton(e);
         closeMenu();
         if (entry) commit(null);
         focusGrid();
+        if (edge) {
+            beginResize(edge, e);
+            return;
+        }
+        if (button) {
+            setSel(cellSel(button.r, button.c), false);
+            // (After this click, which closes what is open.)
+            setTimeout(() => openFilter(button));
+            return;
+        }
         // A right click inside the selection keeps it for the menu.
         if (e.button === 2 && inSel(hit)) return;
         if (e.shiftKey && sel && sel.kind === hit.kind && hit.kind !== "all") setSel({ kind: hit.kind, nr: sel.nr, nc: sel.nc, fr: hit.r, fc: hit.c }, false);
@@ -730,6 +756,15 @@
         if (e.button === 0 && hit.kind !== "all") drag = hit.kind;
     });
     document.addEventListener("mousemove", (e) => {
+        if (resizing) {
+            moveResize(e);
+            return;
+        }
+        if (filling) {
+            moveFill(e);
+            return;
+        }
+        if (!drag) hoverEdge(e);
         if (!drag || !sel) return;
         if (!(e.buttons & 1)) {
             drag = null;
@@ -743,10 +778,18 @@
         if (hit.r === sel.fr && hit.c === sel.fc) return;
         setSel({ kind: drag, nr: sel.nr, nc: sel.nc, fr: hit.r, fc: hit.c }, false);
     });
-    document.addEventListener("mouseup", () => {
+    document.addEventListener("mouseup", (e) => {
         drag = null;
+        if (resizing) endResize(e);
+        if (filling) endFill();
     });
     $("grid").addEventListener("dblclick", (e) => {
+        const edge = edgeOf(e);
+        if (edge) {
+            autofit(edge);
+            return;
+        }
+        if (filterButton(e)) return;
         const hit = hitOf(e.target);
         if (hit && hit.kind === "cells" && !entry) beginEntry("edit", null, "cell");
     });
@@ -1199,6 +1242,20 @@
                 items.push([header ? "削除" : "削除…", () => insertOrDelete(false), "Ctrl+-"]);
             }
             items.push(["数式と値のクリア", clearSel, "Delete"]);
+            items.push(["書式のクリア", clearFormats, ""]);
+            if (kind === "cells") {
+                items.push(null);
+                if (mergedIn(sel)) items.push(["結合の解除", () => merge("unmerge"), ""]);
+                if (!single(sel)) items.push(["セルの結合", () => merge("merge"), ""]);
+                items.push(["昇順で並べ替え", () => sortBy(false), ""]);
+                items.push(["降順で並べ替え", () => sortBy(true), ""]);
+            } else {
+                items.push(null);
+                if (kind === "cols") items.push(["列の幅…", () => askSize(true), ""]);
+                if (kind === "rows") items.push(["行の高さ…", () => askSize(false), ""]);
+                if (kind !== "all") items.push(["非表示", () => hide(true), ""]);
+                items.push(["再表示", () => hide(false), ""]);
+            }
         }
         menu = document.body.appendChild(el("div", "menu"));
         menu.setAttribute("role", "menu");
@@ -1235,6 +1292,493 @@
         if (menu && !menu.contains(e.target)) closeMenu();
     });
     window.addEventListener("blur", closeMenu);
+
+    // ---- formats, merged cells, sorting and the filter: the toolbar, the menus, the keys
+
+    const rangeOrCell = () => (single(sel) ? address(sel.ar, sel.ac) : rangeText(sel));
+    // The cells selected, a merged cell with all its cells (its format is that of all of them).
+    const areaText = (s) => (s.kind !== "cells" ? rangeText(s) : s.r1 === s.r2 && s.c1 === s.c2 ? address(s.r1, s.c1) : `${address(s.r1, s.c1)}:${address(s.r2, s.c2)}`);
+    // The CSS the active cell is drawn with (its format, as far as the page knows it).
+    const activeCss = () => (view && activeTd && activeTd.cell && activeTd.cell.s && view.sheet.styles[activeTd.cell.s]) || "";
+    const STATE = {
+        bold: (css) => /font-weight:bold/.test(css),
+        italic: (css) => /font-style:italic/.test(css),
+        underline: (css) => /text-decoration:[^;]*underline/.test(css),
+        strike: (css) => /text-decoration:[^;]*line-through/.test(css),
+        wrap: (css) => /white-space:pre-wrap/.test(css),
+    };
+    function format(set) {
+        if (sel && view) postEdit([{ op: "format", sheet: view.sheet.name, range: areaText(sel), set }]);
+    }
+    function toggleFormat(name) {
+        if (editable) format({ [name]: !STATE[name](activeCss()) });
+    }
+    function clearFormats() {
+        if (sel && view) postEdit([{ op: "clearFormats", sheet: view.sheet.name, range: areaText(sel) }]);
+    }
+    // A merged cell among the cells selected.
+    function mergedIn(s) {
+        return !!s && view.sheet.merges.some(([a, b, c, d]) => a <= s.r2 && c >= s.r1 && b <= s.c2 && d >= s.c1);
+    }
+    // `how`: "center" (merged and centered), "across" (each row on its own), "merge", "unmerge".
+    function merge(how) {
+        if (!sel || !view || sel.kind === "all") return;
+        const sheet = view.sheet.name;
+        const range = areaText(sel);
+        if (how === "unmerge") postEdit([{ op: "unmerge", sheet, range }]);
+        else if (single(sel)) return;
+        else if (how === "across") postEdit([{ op: "merge", sheet, range, across: true }]);
+        else if (how === "center") postEdit([{ op: "merge", sheet, range }, { op: "format", sheet, range, set: { align: "center" } }]);
+        else postEdit([{ op: "merge", sheet, range }]);
+    }
+    // By the column of the active cell: the cells selected, or the data around the cell.
+    function sortBy(desc) {
+        if (sel && view) postEdit([{ op: "sort", sheet: view.sheet.name, range: rangeOrCell(), by: colName(sel.ac), desc }]);
+    }
+    function toggleFilter() {
+        if (!editable || !sel || !view) return;
+        const sheet = view.sheet.name;
+        postEdit([view.sheet.filter ? { op: "filter", sheet, off: true } : { op: "filter", sheet, range: rangeOrCell() }]);
+    }
+    function hide(hidden) {
+        if (!sel || !view) return;
+        const sheet = view.sheet.name;
+        if (sel.kind === "all") postEdit([{ op: "hide", sheet, range: `1:${MAXR}`, hidden }, { op: "hide", sheet, range: `A:${colName(MAXC - 1)}`, hidden }]);
+        else if (sel.kind !== "cells") postEdit([{ op: "hide", sheet, range: rangeText(sel), hidden }]);
+    }
+
+    // A box under a button of the toolbar (closed as the menu is).
+    function openPop(anchor, cls) {
+        closeMenu();
+        menu = document.body.appendChild(el("div", `menu pop ${cls || ""}`));
+        menu.dataset.vscodeContext = JSON.stringify({ preventDefaultContextMenuItems: true });
+        const b = anchor.getBoundingClientRect();
+        const pop = menu;
+        // Placed when it is filled.
+        requestAnimationFrame(() => {
+            if (menu !== pop) return;
+            pop.style.left = `${Math.max(0, Math.min(b.left, window.innerWidth - pop.offsetWidth - 4))}px`;
+            pop.style.top = `${Math.max(0, Math.min(b.bottom + 1, window.innerHeight - pop.offsetHeight - 4))}px`;
+        });
+        Object.assign(pop.style, { left: `${b.left}px`, top: `${b.bottom + 1}px` });
+        return pop;
+    }
+    function popItem(pop, label, act) {
+        const b = pop.appendChild(el("button"));
+        b.type = "button";
+        b.appendChild(el("span", null, label));
+        b.addEventListener("click", () => {
+            closeMenu();
+            focusGrid();
+            act();
+        });
+        return b;
+    }
+    const PALETTE = ["#000000", "#ffffff", "#7f7f7f", "#c00000", "#ff0000", "#ffc000", "#ffff00", "#92d050", "#00b050", "#00b0f0", "#0070c0", "#002060", "#7030a0", "#f2f2f2", "#d9d9d9", "#fce4d6", "#fff2cc", "#e2efda", "#ddebf7", "#d9e1f2"];
+    // The colors to choose from; `name` is the format ("color", "fill"), `none` what no color is called.
+    function openColors(anchor, name, none) {
+        const pop = openPop(anchor, "colors");
+        popItem(pop, none, () => format({ [name]: null }));
+        const grid = pop.appendChild(el("div", "swatches"));
+        for (const color of PALETTE) {
+            const b = grid.appendChild(el("button", "swatch"));
+            b.type = "button";
+            b.title = color;
+            b.dataset.color = color;
+            b.style.background = color;
+            b.addEventListener("click", () => {
+                closeMenu();
+                focusGrid();
+                format({ [name]: color.toUpperCase() });
+            });
+        }
+        // Any other color, as #RRGGBB.
+        const form = pop.appendChild(el("form", "hex"));
+        const input = form.appendChild(el("input"));
+        input.type = "text";
+        input.placeholder = "#RRGGBB";
+        input.maxLength = 7;
+        form.appendChild(el("button", null, "OK")).type = "submit";
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const m = /^#?([0-9a-f]{6})$/i.exec(input.value.trim());
+            if (!m) return;
+            closeMenu();
+            focusGrid();
+            format({ [name]: `#${m[1].toUpperCase()}` });
+        });
+    }
+    const BORDERS = [["all", "格子"], ["outline", "外枠"], ["thick", "太い外枠"], ["top", "上"], ["bottom", "下"], ["left", "左"], ["right", "右"], ["none", "枠なし"]];
+    const NUMBER_FORMATS = [["General", "標準"], ["0.00", "数値"], ["#,##0", "桁区切り"], ["¥#,##0", "通貨"], ["0%", "パーセント"], ["yyyy/m/d", "日付"], ["h:mm", "時刻"], ["@", "文字列"]];
+    const FONT_SIZES = [6, 8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
+
+    // The toolbar (where cells are edited): its buttons, by what they do.
+    const tools = {};
+    function makeTools() {
+        const box = el("div");
+        box.id = "tools";
+        $("bar").after(box);
+        // The grid keeps the keys: a click on a button does not take them.
+        box.addEventListener("mousedown", (e) => {
+            if (!e.target.closest("select")) e.preventDefault();
+        });
+        const button = (key, label, title, act, cls) => {
+            const b = box.appendChild(el("button", cls || null, label));
+            b.type = "button";
+            b.title = title;
+            b.dataset.tool = key;
+            b.addEventListener("click", () => {
+                if (busy || !sel) return;
+                if (entry) commit(null);
+                act(b);
+                focusGrid();
+            });
+            tools[key] = b;
+            return b;
+        };
+        const select = (key, title, options) => {
+            const s = box.appendChild(el("select"));
+            s.title = title;
+            s.dataset.tool = key;
+            for (const [value, label] of options) s.appendChild(el("option", null, label)).value = value;
+            tools[key] = s;
+            return s;
+        };
+        const gap = () => box.appendChild(el("span", "gap"));
+        button("bold", "B", "太字（Ctrl+B）", () => toggleFormat("bold"), "b");
+        button("italic", "I", "斜体（Ctrl+I）", () => toggleFormat("italic"), "i");
+        button("underline", "U", "下線（Ctrl+U）", () => toggleFormat("underline"), "u");
+        button("strike", "S", "取り消し線（Ctrl+5）", () => toggleFormat("strike"), "s");
+        const size = select("fontSize", "フォント サイズ", FONT_SIZES.map((n) => [String(n), String(n)]));
+        size.addEventListener("change", () => {
+            format({ fontSize: +size.value });
+            focusGrid();
+        });
+        button("color", "A", "フォントの色", (b) => openColors(b, "color", "自動"), "fc");
+        button("fill", "◧", "塗りつぶしの色", (b) => openColors(b, "fill", "塗りつぶしなし"));
+        button("border", "田", "罫線", (b) => {
+            const pop = openPop(b, "borders");
+            for (const [value, label] of BORDERS) popItem(pop, label, () => format({ border: value })).dataset.border = value;
+        });
+        gap();
+        for (const [value, label, title] of [["left", "⇤", "左揃え"], ["center", "↔", "中央揃え"], ["right", "⇥", "右揃え"]]) button(`align-${value}`, label, title, () => format({ align: value }));
+        for (const [value, label, title] of [["top", "⤒", "上揃え"], ["middle", "↕", "上下中央揃え"], ["bottom", "⤓", "下揃え"]]) button(`valign-${value}`, label, title, () => format({ valign: value }));
+        button("wrap", "↵", "折り返して全体を表示する", () => toggleFormat("wrap"));
+        button("merge", "結合", "セルを結合して中央揃え（結合したセルでは結合の解除）", () => merge(sel && single(sel) && mergedIn(sel) ? "unmerge" : "center"));
+        button("mergeMore", "▾", "セルの結合", (b) => {
+            const pop = openPop(b, "merges");
+            for (const [how, label] of [["center", "セルを結合して中央揃え"], ["across", "横方向に結合"], ["merge", "セルの結合"], ["unmerge", "結合の解除"]]) popItem(pop, label, () => merge(how)).dataset.merge = how;
+        }, "more");
+        gap();
+        const number = select("numberFormat", "表示形式", [["", "表示形式"]].concat(NUMBER_FORMATS));
+        number.addEventListener("change", () => {
+            if (number.value) format({ numberFormat: number.value });
+            focusGrid();
+        });
+        gap();
+        button("sortAsc", "A→Z", "昇順で並べ替え", () => sortBy(false));
+        button("sortDesc", "Z→A", "降順で並べ替え", () => sortBy(true));
+        button("filter", "フィルター", "フィルター（Ctrl+Shift+L）", toggleFilter);
+        gap();
+        button("clearFormats", "書式のクリア", "書式のクリア", clearFormats);
+    }
+    // The buttons show the format of the active cell.
+    function showTools() {
+        if (!tools.bold || !view) return;
+        const css = activeCss();
+        const cell = (activeTd && activeTd.cell) || {};
+        for (const name of Object.keys(STATE)) tools[name].classList.toggle("on", STATE[name](css));
+        const align = (/text-align:(\w+)/.exec(css) || [])[1];
+        for (const a of ["left", "center", "right"]) tools[`align-${a}`].classList.toggle("on", align === a);
+        const valign = (/vertical-align:(\w+)/.exec(css) || [])[1];
+        for (const a of ["top", "middle"]) tools[`valign-${a}`].classList.toggle("on", valign === a);
+        const size = (/font-size:([\d.]+)pt/.exec(css) || [])[1] || "11";
+        if (![...tools.fontSize.options].some((o) => o.value === size)) tools.fontSize.appendChild(el("option", null, size)).value = size;
+        tools.fontSize.value = size;
+        const code = cell.n || "General";
+        tools.numberFormat.value = NUMBER_FORMATS.some(([c]) => c === code) ? code : "";
+        tools.merge.classList.toggle("on", !!sel && single(sel) && mergedIn(sel));
+        tools.filter.classList.toggle("on", !!view.sheet.filter);
+    }
+    if (editable) makeTools();
+
+    // ---- the widths of columns and the heights of rows: the edges of the headers
+
+    // How near an edge of a header the mouse takes it (px).
+    const EDGE = 4;
+    let resizing = null;
+    const guide = el("div", "guide");
+    // The edge of a header under the mouse: { cols, index } (the column or row before the edge).
+    function edgeOf(e) {
+        if (!editable || !view || busy) return null;
+        const th = e.target.closest && e.target.closest("th");
+        if (!th || !view.table.contains(th) || (th.r === undefined && th.c === undefined)) return null;
+        const b = th.getBoundingClientRect();
+        if (th.c !== undefined) {
+            if (b.right - e.clientX <= EDGE) return { cols: true, index: th.c, th };
+            const i = view.cols.indexOf(th.c);
+            if (e.clientX - b.left <= EDGE && i > 0) return { cols: true, index: view.cols[i - 1], th: view.ths.get(view.cols[i - 1]) };
+            return null;
+        }
+        if (b.bottom - e.clientY <= EDGE) return { cols: false, index: th.r, th };
+        const i = view.rows.findIndex((x) => x[0] === th.r);
+        if (e.clientY - b.top <= EDGE && i > 0) return { cols: false, index: view.rows[i - 1][0], th: view.rows[i - 1][1].firstChild };
+        return null;
+    }
+    function hoverEdge(e) {
+        if (!editable || !view) return;
+        const edge = edgeOf(e);
+        view.table.classList.toggle("ew", !!edge && edge.cols);
+        view.table.classList.toggle("ns", !!edge && !edge.cols);
+    }
+    // The columns (rows) an edge sizes: those selected whole when it is one of them, else its own.
+    function sized(edge) {
+        const kind = edge.cols ? "cols" : "rows";
+        const [lo, hi] = edge.cols ? [sel && sel.c1, sel && sel.c2] : [sel && sel.r1, sel && sel.r2];
+        if (sel && sel.kind === kind && edge.index >= lo && edge.index <= hi) return rangeText(sel);
+        return edge.cols ? `${colName(edge.index)}:${colName(edge.index)}` : `${edge.index + 1}:${edge.index + 1}`;
+    }
+    function beginResize(edge, e) {
+        const b = edge.th.getBoundingClientRect();
+        resizing = Object.assign(edge, { start: edge.cols ? b.left : b.top, at: edge.cols ? e.clientX : e.clientY, moved: false });
+        document.body.appendChild(guide);
+        guide.className = edge.cols ? "guide v" : "guide h";
+        moveResize(e);
+    }
+    function moveResize(e) {
+        const r = resizing;
+        const at = Math.max(r.start, r.cols ? e.clientX : e.clientY);
+        if (Math.abs(at - r.at) > 1) r.moved = true;
+        r.now = at;
+        guide.style.left = r.cols ? `${at}px` : "0";
+        guide.style.top = r.cols ? "0" : `${at}px`;
+    }
+    function endResize() {
+        const r = resizing;
+        resizing = null;
+        guide.remove();
+        if (!r.moved || !view) return;
+        // (Columns are drawn twice as wide while formulas are shown.)
+        const px = Math.round((r.now - r.start) / (r.cols && formulas ? 2 : 1));
+        const sheet = view.sheet.name;
+        const range = sized(r);
+        postEdit([px <= 0 ? { op: "hide", sheet, range, hidden: true } : { op: "size", sheet, range, px }]);
+    }
+    // As wide as the widest text of the column's cells, as tall as the tallest content of the row's.
+    function autofit(edge) {
+        const v = view;
+        const sheet = v.sheet;
+        let px = 0;
+        if (edge.cols) {
+            const ctx = document.createElement("canvas").getContext("2d");
+            for (const [, tr] of v.rows) {
+                for (const td of tr.children) {
+                    if (td.c !== edge.index || td.colSpan > 1 || !td.cell || !td.textContent) continue;
+                    ctx.font = getComputedStyle(td).font;
+                    for (const line of td.textContent.split("\n")) px = Math.max(px, ctx.measureText(line).width);
+                }
+            }
+            // The padding of a cell and its gridline.
+            px = px > 0 ? Math.ceil(px) + 8 : sheet.defaultWidth;
+        } else {
+            const tr = v.trs.get(edge.index);
+            const probe = v.wrap.appendChild(el("div", "probe"));
+            for (const td of tr ? tr.children : []) {
+                if (td.r === undefined || td.rowSpan > 1 || !td.cell || !td.textContent) continue;
+                const cs = getComputedStyle(td);
+                Object.assign(probe.style, { font: cs.font, whiteSpace: cs.whiteSpace === "pre-wrap" ? "pre-wrap" : "pre", width: `${td.clientWidth}px` });
+                probe.textContent = td.textContent;
+                px = Math.max(px, probe.offsetHeight + 1);
+            }
+            probe.remove();
+            px = px > 0 ? px : sheet.defaultHeight;
+        }
+        postEdit([{ op: "size", sheet: sheet.name, range: sized(edge), px: Math.round(px) }]);
+    }
+    // The width (height) of the columns (rows) selected, asked for in px.
+    function askSize(cols) {
+        if (!sel || !view) return;
+        closeMenu();
+        closeDialog();
+        const sheet = view.sheet;
+        const now = cols ? width(sheet, sel.c1) / (formulas ? 2 : 1) : height(sheet, sel.r1);
+        dialog = document.body.appendChild(el("div", "dlgback"));
+        const form = dialog.appendChild(el("form", "dlg"));
+        form.setAttribute("role", "dialog");
+        form.appendChild(el("h2", null, cols ? "列の幅" : "行の高さ"));
+        const line = form.appendChild(el("label"));
+        line.appendChild(document.createTextNode(cols ? "幅（ピクセル）" : "高さ（ピクセル）"));
+        const input = line.appendChild(el("input"));
+        input.type = "number";
+        input.min = "0";
+        input.max = cols ? "1790" : "545";
+        input.step = "1";
+        input.value = String(Math.round(now));
+        const buttons = form.appendChild(el("div", "buttons"));
+        buttons.appendChild(el("button", "ok", "OK")).type = "submit";
+        const cancel = buttons.appendChild(el("button", null, "キャンセル"));
+        cancel.type = "button";
+        cancel.addEventListener("click", closeDialog);
+        dialog.addEventListener("mousedown", (e) => {
+            if (e.target === dialog) closeDialog();
+        });
+        const range = rangeText(sel);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const px = Math.round(+input.value);
+            closeDialog();
+            if (!(px >= 0)) return;
+            postEdit([px === 0 ? { op: "hide", sheet: sheet.name, range, hidden: true } : { op: "size", sheet: sheet.name, range, px }]);
+        });
+        input.focus();
+        input.select();
+    }
+
+    // ---- the filter: the buttons of its headings
+
+    const BLANK = "(空白セル)";
+    // The button (▾) of a heading of the filter under the mouse: { r, c }.
+    function filterButton(e) {
+        if (!editable || busy || !view) return null;
+        const td = e.target.closest && e.target.closest("td.filter");
+        if (!td || !view.table.contains(td)) return null;
+        const b = td.getBoundingClientRect();
+        return b.right - e.clientX <= 20 ? { r: td.r, c: td.c, td } : null;
+    }
+    function openFilter(at) {
+        const v = view;
+        const sheet = v.sheet;
+        const [[r1, c1], [r2]] = v.filter;
+        const column = colName(at.c);
+        const now = (sheet.filterColumns || {})[at.c - c1] || null;
+        // The texts the column shows, each once; empty cells last.
+        const texts = new Set();
+        let blanks = false;
+        for (let r = r1 + 1; r <= r2; r++) {
+            const cell = v.cells.get(r * KEY + at.c);
+            if (cell && cell.t) texts.add(cell.t);
+            else blanks = true;
+        }
+        const list = [...texts].sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
+        const pop = openPop(at.td, "filterpop");
+        const sort = (desc) => postEdit([{ op: "sort", sheet: sheet.name, range: sheet.filter, by: column, desc, header: true }]);
+        popItem(pop, "昇順", () => sort(false)).dataset.sort = "asc";
+        popItem(pop, "降順", () => sort(true)).dataset.sort = "desc";
+        if (now) popItem(pop, "フィルターをクリア", () => postEdit([{ op: "filterBy", sheet: sheet.name, column, clear: true }])).dataset.clear = "1";
+        pop.appendChild(el("hr"));
+        const form = pop.appendChild(el("form"));
+        const checks = [];
+        const check = (label, on, value) => {
+            const line = form.appendChild(el("label"));
+            const box = line.appendChild(el("input"));
+            box.type = "checkbox";
+            box.checked = on;
+            box.value = value === undefined ? "" : value;
+            line.appendChild(document.createTextNode(label));
+            return box;
+        };
+        const all = check("(すべて選択)", false);
+        all.className = "all";
+        const items = form.appendChild(el("div", "values"));
+        const shown = (text) => !now || !now.values || now.values.some((x) => x.toLowerCase() === text.toLowerCase());
+        const add = (label, on, value) => {
+            const line = items.appendChild(el("label"));
+            const box = line.appendChild(el("input"));
+            box.type = "checkbox";
+            box.checked = on;
+            line.appendChild(document.createTextNode(label));
+            checks.push([box, value]);
+        };
+        for (const text of list) add(text, shown(text), text);
+        if (blanks) add(BLANK, !now || !now.values || !!now.blanks, null);
+        const buttons = form.appendChild(el("div", "buttons"));
+        const ok = buttons.appendChild(el("button", "ok", "OK"));
+        ok.type = "submit";
+        const cancel = buttons.appendChild(el("button", null, "キャンセル"));
+        cancel.type = "button";
+        cancel.addEventListener("click", () => {
+            closeMenu();
+            focusGrid();
+        });
+        const sync = () => {
+            const n = checks.filter(([b]) => b.checked).length;
+            all.checked = n === checks.length;
+            all.indeterminate = n > 0 && n < checks.length;
+            ok.disabled = n === 0;
+        };
+        all.addEventListener("change", () => {
+            for (const [b] of checks) b.checked = all.checked;
+            sync();
+        });
+        items.addEventListener("change", sync);
+        sync();
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const on = checks.filter(([b]) => b.checked);
+            closeMenu();
+            focusGrid();
+            if (!on.length) return;
+            if (on.length === checks.length) {
+                if (now) postEdit([{ op: "filterBy", sheet: sheet.name, column, clear: true }]);
+                return;
+            }
+            const op = { op: "filterBy", sheet: sheet.name, column, values: on.filter(([, value]) => value !== null).map(([, value]) => value) };
+            if (on.some(([, value]) => value === null)) op.blanks = true;
+            postEdit([op]);
+        });
+    }
+
+    // ---- the fill handle: the cells selected, drawn out over the cells next to them
+
+    let filling = null;
+    // The cells the handle is drawn out to: [r1, c1, r2, c2], along the way the mouse went further.
+    function fillTarget(e) {
+        const f = filling;
+        const hit = hitOf(document.elementFromPoint(e.clientX, e.clientY));
+        if (!hit || hit.kind !== "cells") return f.to;
+        const down = Math.abs(e.clientY - f.y) >= Math.abs(e.clientX - f.x);
+        if (down) return [Math.min(f.r1, hit.r), f.c1, Math.max(f.r2, hit.r), f.c2];
+        return [f.r1, Math.min(f.c1, hit.c), f.r2, Math.max(f.c2, hit.c)];
+    }
+    function moveFill(e) {
+        const f = filling;
+        f.to = fillTarget(e);
+        const b = boxOf(f.to[0], f.to[1], f.to[2], f.to[3]);
+        view.fillbox.hidden = !b;
+        if (b) Object.assign(view.fillbox.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w + 1}px`, height: `${b.h + 1}px` });
+    }
+    function autofill(f, to) {
+        if (to[0] === f.r1 && to[1] === f.c1 && to[2] === f.r2 && to[3] === f.c2) return;
+        const text = (r1, c1, r2, c2) => (r1 === r2 && c1 === c2 ? address(r1, c1) : `${address(r1, c1)}:${address(r2, c2)}`);
+        setSel(areaSel(to[0], to[1], to[2], to[3]), false);
+        postEdit([{ op: "autofill", sheet: view.sheet.name, from: text(f.r1, f.c1, f.r2, f.c2), to: text(to[0], to[1], to[2], to[3]) }]);
+    }
+    function endFill() {
+        const f = filling;
+        filling = null;
+        if (!view) return;
+        view.fillbox.hidden = true;
+        autofill(f, f.to);
+    }
+    $("grid").addEventListener("mousedown", (e) => {
+        if (!view || e.target !== view.fillh || e.button !== 0 || busy || !sel) return;
+        e.preventDefault();
+        e.stopPropagation();
+        closeMenu();
+        filling = { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2, x: e.clientX, y: e.clientY, to: [sel.r1, sel.c1, sel.r2, sel.c2] };
+    });
+    // Double-click: down as far as the column next to the cells has content.
+    $("grid").addEventListener("dblclick", (e) => {
+        if (!view || e.target !== view.fillh || busy || !sel) return;
+        e.stopPropagation();
+        const v = view;
+        const has = (r, c) => c >= 0 && v.filled.has(r * KEY + c);
+        const beside = [sel.c1 - 1, sel.c2 + 1].find((c) => has(sel.r2 + 1, c));
+        if (beside === undefined) return;
+        let r = sel.r2;
+        while (has(r + 1, beside)) r++;
+        autofill(sel, [sel.r1, sel.c1, r, sel.c2]);
+    });
 
     // ---- the keys
 
@@ -1316,6 +1860,11 @@
         else if (key === "Delete" || key === "Backspace") clearSel();
         else if (ctrl && !e.shiftKey && (key === "z" || key === "Z")) postHistory("undo");
         else if (ctrl && (key === "y" || key === "Y" || (e.shiftKey && (key === "z" || key === "Z")))) postHistory("redo");
+        else if (ctrl && !e.shiftKey && (key === "b" || key === "B")) toggleFormat("bold");
+        else if (ctrl && !e.shiftKey && (key === "i" || key === "I")) toggleFormat("italic");
+        else if (ctrl && !e.shiftKey && (key === "u" || key === "U")) toggleFormat("underline");
+        else if (ctrl && !e.shiftKey && (key === "5" || e.code === "Digit5")) toggleFormat("strike");
+        else if (ctrl && e.shiftKey && (key === "l" || key === "L")) toggleFilter();
         else if (ctrl && !e.shiftKey && (key === "d" || key === "D")) fill("down");
         else if (ctrl && !e.shiftKey && (key === "r" || key === "R")) fill("right");
         else if (ctrl && (key === "+" || e.code === "NumpadAdd" || (e.shiftKey && (key === ";" || e.code === "Semicolon" || e.code === "Equal")))) insertOrDelete(true);
@@ -1325,7 +1874,7 @@
     });
     // A click on the page outside a control gives the keys back to the grid.
     document.addEventListener("mouseup", (e) => {
-        if (!entry && !dialog && !(e.target.closest && e.target.closest("button, input, textarea, .menu, #side"))) focusGrid();
+        if (!entry && !dialog && !(e.target.closest && e.target.closest("button, input, select, label, textarea, .menu, #side"))) focusGrid();
     });
 
     // More rows and columns while the sheet is scrolled to its end.

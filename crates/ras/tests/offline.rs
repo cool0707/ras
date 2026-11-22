@@ -1930,6 +1930,43 @@ fn book_edit_writes_the_cells_into_the_file() {
     let (_, out, _) = ras(&dir, &["book", "view", "--stdout"]);
     assert!(view_data(&out).get("editable").is_none());
 
+    // Formats, sizes and the filter, and what the page of the grid is told of them.
+    let (code, out, err) = ras(
+        &dir,
+        &[
+            "book",
+            "edit",
+            "--view",
+            "--op",
+            r##"[{"op":"format","range":"A1:C1","set":{"bold":true,"fill":"#DDEEFF"}},{"op":"size","range":"A:A","px":160},{"op":"filter","range":"A1"},{"op":"filterBy","column":"A","values":["りんご"]}]"##,
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    let sheet = &view_data(&out)["sheets"][0];
+    assert_eq!(sheet["colWidths"][0], 160.0);
+    assert_eq!(sheet["filter"], "A1:C5");
+    assert_eq!(
+        sheet["filterColumns"]["0"],
+        serde_json::json!({ "values": ["りんご"], "blanks": false })
+    );
+    // (みかん and ぶどう are hidden.)
+    assert_eq!(sheet["rowHeights"][2], 0.0);
+    let mut edited = Book::open(&file).unwrap();
+    assert_eq!(
+        edited.format_of(0, at("A1:C1"), "font.bold").unwrap(),
+        Some(Val::Bool(true))
+    );
+    assert_eq!(edited.hidden(0, false, 2, 3), Some(true));
+    let (code, out, err) = ras(
+        &dir,
+        &["book", "edit", "--op", r#"{"op":"filter","off":true}"#],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(
+        Book::open(&file).unwrap().hidden(0, false, 2, 3),
+        Some(false)
+    );
+
     // -o: another file; the workbook stays.
     let before = std::fs::read(&file).unwrap();
     let (code, out, err) = ras(

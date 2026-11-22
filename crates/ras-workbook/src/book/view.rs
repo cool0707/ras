@@ -498,6 +498,26 @@ impl Book {
                 ])
             })
             .collect();
+        // The columns the filter filters by now, for the buttons of its headings.
+        let filter_columns: serde_json::Map<String, Json> = self
+            .model
+            .sheet(si)
+            .and_then(|s| s.autofilter.as_ref())
+            .map(|f| {
+                f.criteria
+                    .iter()
+                    .map(|(offset, c)| {
+                        let shown = match c {
+                            gridcraft_model::FilterCriterion::Values { values, blanks } => {
+                                json!({ "values": values, "blanks": blanks })
+                            }
+                            _ => json!({ "other": true }),
+                        };
+                        (offset.to_string(), shown)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         Ok(json!({
             "name": info.name,
             "codeName": info.code_name,
@@ -521,6 +541,7 @@ impl Book {
             "cells": out_cells,
             "merges": merges,
             "filter": info.filter,
+            "filterColumns": filter_columns,
             "tabColor": self.tab_color(si).map(|c| { let c = c as u32; format!("#{:02x}{:02x}{:02x}", c & 0xff, (c >> 8) & 0xff, (c >> 16) & 0xff) }),
         }))
     }

@@ -7,6 +7,9 @@ use std::collections::HashMap;
 use gridcraft_core::{CellRef, RangeRef};
 use umya_spreadsheet::{CellFormula, CellFormulaValues, CellRawValue, Style};
 
+use gridcraft_model as gm;
+
+use super::format::{DEFAULT_COLUMN_WIDTH, width_to_file};
 use super::{Book, at_of};
 
 /// The value a cell is saved with.
@@ -67,6 +70,15 @@ impl Styles {
             .unwrap_or_else(|| "General".into())
     }
 
+    /// The format of cells that are given none.
+    pub fn plain(&mut self) -> usize {
+        self.intern(&Style::default())
+    }
+
+    pub fn get(&self, id: usize) -> Option<&Style> {
+        self.list.get(id)
+    }
+
     /// Whether two formats differ in nothing but their number formats.
     pub fn same_but_number_format(&self, a: usize, b: usize) -> bool {
         let (Some(a), Some(b)) = (self.list.get(a), self.list.get(b)) else {
@@ -79,14 +91,103 @@ impl Styles {
     }
 }
 
+/// What a whole column is given.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColState {
+    /// Its width as the file has it.
+    pub width: f64,
+    /// It has a width of its own (not the one columns have when none is set).
+    pub sized: bool,
+    pub hidden: bool,
+    pub style: usize,
+}
+
+/// What a whole row is given.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowState {
+    /// Its height in points (0: the sheet's default).
+    pub height: f64,
+    pub custom: bool,
+    pub hidden: bool,
+    pub style: usize,
+}
+
+/// The filter of a sheet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FilterState {
+    pub range: RangeRef,
+    /// The columns it filters by (counted from its first), each with its criterion as the
+    /// file writes it (the elements inside `filterColumn`); None for one that is kept as the
+    /// file has it.
+    pub columns: Vec<(u32, Option<String>)>,
+}
+
 #[derive(Default)]
 pub struct SheetState {
     pub name: String,
     pub cells: HashMap<CellRef, CellState>,
     pub merges: Vec<RangeRef>,
-    /// The formats of whole columns and rows (by 0-based column and row).
-    pub col_styles: HashMap<u32, usize>,
-    pub row_styles: HashMap<u32, usize>,
+    /// The columns and rows that are given something (by 0-based column and row).
+    pub cols: HashMap<u32, ColState>,
+    pub rows: HashMap<u32, RowState>,
+    /// The width of the other columns as the file has it (0: none given), and the height of
+    /// the other rows.
+    pub default_width: f64,
+    pub default_height: f64,
+    pub filter: Option<FilterState>,
+}
+
+fn attr(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// A criterion of a filter as the file writes it.
+fn criterion_xml(c: &gm::FilterCriterion) -> Option<String> {
+    Some(match c {
+        gm::FilterCriterion::Values { values, blanks } => {
+            let mut xml = String::from(if *blanks {
+                "<filters blank=\"1\">"
+            } else {
+                "<filters>"
+            });
+            for v in values {
+                xml.push_str(&format!("<filter val=\"{}\"/>", attr(v)));
+            }
+            xml + "</filters>"
+        }
+        gm::FilterCriterion::Custom { a, b, and } => {
+            let test = |(op, val): &(String, String)| {
+                let operator = match op.as_str() {
+                    "<" => " operator=\"lessThan\"",
+                    "<=" => " operator=\"lessThanOrEqual\"",
+                    "<>" => " operator=\"notEqual\"",
+                    ">=" => " operator=\"greaterThanOrEqual\"",
+                    ">" => " operator=\"greaterThan\"",
+                    _ => "",
+                };
+                format!("<customFilter{operator} val=\"{}\"/>", attr(val))
+            };
+            format!(
+                "<customFilters{}>{}{}</customFilters>",
+                if *and { " and=\"1\"" } else { "" },
+                test(a),
+                b.as_ref().map(test).unwrap_or_default()
+            )
+        }
+        gm::FilterCriterion::Top10 {
+            bottom,
+            percent,
+            count,
+        } => format!(
+            "<top10{}{} val=\"{count}\"/>",
+            if *bottom { " top=\"0\"" } else { "" },
+            if *percent { " percent=\"1\"" } else { "" }
+        ),
+        _ => return None,
+    })
 }
 
 #[derive(Default)]
@@ -189,20 +290,56 @@ impl Book {
                 .iter()
                 .filter_map(|m| RangeRef::parse(&m.range().replace('$', "")))
                 .collect();
+            let format = ws.sheet_format_properties();
+            let default = format.default_column_width();
+            sheet.default_width = if default > 0.0 {
+                width_to_file(default)
+            } else {
+                0.0
+            };
+            sheet.default_height = format.default_row_height();
             for c in ws.column_dimensions() {
-                if *c.style() != plain && c.col_num() > 0 {
-                    sheet
-                        .col_styles
-                        .insert(c.col_num() - 1, styles.intern(c.style()));
+                // (A column with nothing of its own is one the workbook only looked at.)
+                let untouched = default <= 0.0
+                    && c.width() == DEFAULT_COLUMN_WIDTH
+                    && !c.hidden()
+                    && !c.best_fit()
+                    && *c.style() == plain;
+                if c.col_num() > 0 && !untouched {
+                    sheet.cols.insert(
+                        c.col_num() - 1,
+                        ColState {
+                            width: width_to_file(c.width()),
+                            sized: default > 0.0 || c.width() != DEFAULT_COLUMN_WIDTH,
+                            hidden: c.hidden(),
+                            style: styles.intern(c.style()),
+                        },
+                    );
                 }
             }
             for r in ws.row_dimensions() {
-                if *r.style() != plain && r.row_num() > 0 {
-                    sheet
-                        .row_styles
-                        .insert(r.row_num() - 1, styles.intern(r.style()));
+                let state = RowState {
+                    height: if r.custom_height() { r.height() } else { 0.0 },
+                    custom: r.custom_height(),
+                    hidden: r.hidden(),
+                    style: styles.intern(r.style()),
+                };
+                if r.row_num() > 0 && (state.custom || state.hidden || *r.style() != plain) {
+                    sheet.rows.insert(r.row_num() - 1, state);
                 }
             }
+            sheet.filter = self
+                .model
+                .sheet(si)
+                .and_then(|s| s.autofilter.as_ref())
+                .map(|f| FilterState {
+                    range: f.range,
+                    columns: f
+                        .criteria
+                        .iter()
+                        .map(|(offset, c)| (*offset, criterion_xml(c)))
+                        .collect(),
+                });
             out.sheets.push(sheet);
         }
         // Formulas of the file whose cells the engine holds nothing for (no saved value).

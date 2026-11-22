@@ -743,6 +743,36 @@
       },
       {
         "command": "ras.sheet.gridKey",
+        "key": "ctrl+b",
+        "mac": "cmd+b",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+i",
+        "mac": "cmd+i",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+u",
+        "mac": "cmd+u",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+5",
+        "mac": "cmd+5",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
         "key": "ctrl+y",
         "mac": "cmd+y",
         "when": "activeWebviewPanelId == 'ras.sheetView'"

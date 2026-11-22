@@ -142,3 +142,44 @@ body.busy, body.busy td, body.busy th { cursor: progress; }
 .dlg .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 .dlg button { min-width: 76px; padding: 3px 10px; border: 1px solid #adadad; background: #e1e1e1; color: #000; font: inherit; cursor: pointer; }
 .dlg button.ok { border-color: var(--accent); }
+
+/* The toolbar of the formats (where cells are edited). */
+#tools { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 2px 6px; border-bottom: 1px solid var(--line); background: #fafafa; }
+#tools button, #tools select { height: 22px; min-width: 24px; padding: 0 5px; border: 1px solid transparent; border-radius: 3px; background: none; color: #222; font: inherit; cursor: pointer; }
+#tools select { border-color: #c8c8c8; background: #fff; padding: 0 2px; }
+#tools button:hover { background: #e9e9e9; }
+#tools button.on { background: #d3e9db; border-color: var(--accent); color: #0b5a2e; }
+#tools button.b { font-weight: bold; }
+#tools button.i { font-style: italic; font-family: serif; }
+#tools button.u { text-decoration: underline; }
+#tools button.s { text-decoration: line-through; }
+#tools button.fc { text-decoration: underline; text-decoration-color: #c00000; text-decoration-thickness: 3px; }
+#tools button.more { min-width: 14px; padding: 0 1px; margin-left: -2px; }
+#tools .gap { width: 1px; height: 16px; margin: 0 4px; background: var(--line); }
+body.busy #tools { opacity: .6; }
+.menu.pop { min-width: 150px; }
+.menu.pop button kbd { display: none; }
+.menu .swatches { display: grid; grid-template-columns: repeat(10, 18px); gap: 3px; padding: 4px 10px; }
+.menu .swatches .swatch { display: block; width: 18px; height: 18px; padding: 0; border: 1px solid #b0b0b0; }
+.menu .swatches .swatch:hover { outline: 2px solid var(--accent); }
+.menu form.hex { display: flex; gap: 4px; padding: 4px 10px; }
+.menu form.hex input { width: 90px; font: inherit; }
+.menu form.hex button, .menu .buttons button { display: inline-block; width: auto; padding: 1px 10px; border: 1px solid #adadad; background: #e1e1e1; }
+.menu.filterpop { min-width: 210px; }
+.menu.filterpop label { display: flex; align-items: center; gap: 6px; padding: 1px 12px; white-space: nowrap; }
+.menu.filterpop .values { max-height: 220px; overflow: auto; margin: 2px 8px; border: 1px solid var(--line); }
+.menu.filterpop .values label { padding: 1px 6px; }
+.menu.filterpop .buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 6px 10px 2px; }
+.menu.filterpop .buttons button:disabled { color: #999; }
+td.filter.filtered::after { content: "▼"; color: var(--accent); border-color: var(--accent); }
+.dlg label input[type="number"] { width: 80px; margin-left: auto; font: inherit; }
+/* The edges of the headers: the widths of columns, the heights of rows. */
+table.ew th { cursor: col-resize; }
+table.ns th { cursor: row-resize; }
+.guide { position: fixed; z-index: 15; background: var(--accent); pointer-events: none; }
+.guide.v { top: 0; bottom: 0; width: 1px; height: 100%; }
+.guide.h { left: 0; right: 0; height: 1px; width: 100%; }
+.probe { position: absolute; left: 0; top: 0; visibility: hidden; padding: 0 3px; overflow-wrap: anywhere; }
+/* The fill handle and the cells it is drawn out over. */
+.fillhandle { position: absolute; width: 7px; height: 7px; box-sizing: border-box; background: var(--accent); border: 1px solid #fff; cursor: crosshair; pointer-events: auto; z-index: 2; }
+.fillbox { position: absolute; box-sizing: border-box; border: 2px dashed #555; }

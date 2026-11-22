@@ -397,6 +397,243 @@ fn columns(doc: &str, cols: &El, s: &Shift, edits: &mut Edits) {
     edits.replace(cols.span(), xml);
 }
 
+/// The width of a column after a change.
+pub(super) enum Width {
+    /// The one it had.
+    Kept,
+    /// Its own, as the file has widths.
+    Own(f64),
+    /// None of its own: as wide as the columns that are given none.
+    Other,
+}
+
+/// A change of what a column is given: the column, and what it has now (its width, hidden, the
+/// `xf` of its format) or nothing.
+pub(super) type ColumnChange = (u32, Option<(Width, bool, Option<u32>)>);
+
+fn col_runs(doc: &str, cols: &El) -> Vec<(u32, u32, String)> {
+    let mut runs = Vec::new();
+    for col in cols.children.iter().filter(|c| c.local() == "col") {
+        let number = |name: &str| {
+            col.attr(doc, name)
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|v| *v > 0)
+        };
+        let (Some(min), Some(max)) = (number("min"), number("max")) else {
+            continue;
+        };
+        let attrs = super::attrs_without(doc, col.open.clone(), &["min", "max"]);
+        runs.push((min - 1, (max - 1).min(super::MAX_COLS - 1), attrs));
+    }
+    runs
+}
+
+fn cols_xml(p: &str, mut runs: Vec<(u32, u32, String)>) -> String {
+    runs.retain(|(min, max, _)| min <= max && *min < super::MAX_COLS);
+    runs.sort_by_key(|r| r.0);
+    // Columns side by side with the same properties are one run.
+    let mut joined: Vec<(u32, u32, String)> = Vec::new();
+    for run in runs {
+        match joined.last_mut() {
+            Some(last) if last.1 + 1 == run.0 && last.2 == run.2 => last.1 = run.1,
+            _ => joined.push(run),
+        }
+    }
+    if joined.is_empty() {
+        return String::new();
+    }
+    let mut xml = format!("<{p}cols>");
+    for (min, max, attrs) in joined {
+        xml.push_str(&format!(
+            "<{p}col min=\"{}\" max=\"{}\"{attrs}/>",
+            min + 1,
+            (max + 1).min(super::MAX_COLS)
+        ));
+    }
+    xml + &format!("</{p}cols>")
+}
+
+/// The widths, formats and hidden state of the columns that changed, written into `<cols>`;
+/// what else the file gives the columns stays.
+pub(super) fn columns_set(
+    doc: &str,
+    root: &El,
+    p: &str,
+    changes: &[ColumnChange],
+    other_width: f64,
+    edits: &mut Edits,
+) {
+    if changes.is_empty() {
+        return;
+    }
+    let cols = root.child("cols");
+    let runs = cols.map(|c| col_runs(doc, c)).unwrap_or_default();
+    let changed: std::collections::BTreeMap<u32, &ColumnChange> =
+        changes.iter().map(|c| (c.0, c)).collect();
+    let mut out: Vec<(u32, u32, String)> = Vec::new();
+    // The runs without the columns that changed.
+    for (min, max, attrs) in &runs {
+        let mut from = *min;
+        for (c, _) in changed.range(*min..=*max) {
+            if *c > from {
+                out.push((from, c - 1, attrs.clone()));
+            }
+            from = c + 1;
+        }
+        if from <= *max {
+            out.push((from, *max, attrs.clone()));
+        }
+    }
+    for (c, now) in changes {
+        let Some((width, hidden, xf)) = now else {
+            continue;
+        };
+        let had = runs
+            .iter()
+            .find(|(min, max, _)| (*min..=*max).contains(c))
+            .map_or("", |r| r.2.as_str());
+        let mut attrs = super::Attrs::parse(had);
+        match width {
+            Width::Own(width) => {
+                attrs.set("width", &super::number(*width));
+                attrs.set("customWidth", "1");
+                attrs.remove("bestFit");
+            }
+            Width::Kept | Width::Other => {
+                if !had.contains(" width=") {
+                    attrs.set("width", &super::number(other_width));
+                }
+            }
+        }
+        if *hidden {
+            attrs.set("hidden", "1");
+        } else {
+            attrs.remove("hidden");
+        }
+        match xf {
+            Some(xf) => attrs.set("style", &xf.to_string()),
+            None => attrs.remove("style"),
+        }
+        out.push((*c, *c, attrs.text()));
+    }
+    let xml = cols_xml(p, out);
+    match (cols, root.child("sheetData")) {
+        (Some(cols), _) => edits.replace(cols.span(), xml),
+        // Before the cells.
+        (None, Some(data)) => edits.insert(data.open.start, xml),
+        _ => {}
+    }
+}
+
+/// The width of the columns and the height of the rows that are given none (`sheetFormatPr`).
+pub(super) fn defaults(doc: &str, root: &El, p: &str, width: f64, height: f64, edits: &mut Edits) {
+    match root.child("sheetFormatPr") {
+        Some(el) => {
+            if width > 0.0 {
+                scan::set_attr(
+                    doc,
+                    el.open.clone(),
+                    "defaultColWidth",
+                    &super::number(width),
+                    edits,
+                );
+            }
+            if height > 0.0 {
+                scan::set_attr(
+                    doc,
+                    el.open.clone(),
+                    "defaultRowHeight",
+                    &super::number(height),
+                    edits,
+                );
+                scan::set_attr(doc, el.open.clone(), "customHeight", "1", edits);
+            }
+        }
+        None => {
+            let mut xml = format!(
+                "<{p}sheetFormatPr defaultRowHeight=\"{}\"",
+                super::number(if height > 0.0 { height } else { 15.0 })
+            );
+            if height > 0.0 {
+                xml.push_str(" customHeight=\"1\"");
+            }
+            if width > 0.0 {
+                xml.push_str(&format!(" defaultColWidth=\"{}\"", super::number(width)));
+            }
+            xml.push_str("/>");
+            if let Some(next) = root.child("cols").or_else(|| root.child("sheetData")) {
+                edits.insert(next.open.start, xml);
+            }
+        }
+    }
+}
+
+/// The filter of the sheet, written from the workbook's. A column filtered in a way the
+/// workbook only keeps (by a colour, an icon) is written as the file has it.
+pub(super) fn filter(
+    doc: &str,
+    root: &El,
+    p: &str,
+    filter: Option<&crate::book::snapshot::FilterState>,
+    edits: &mut Edits,
+) {
+    let old = root.child("autoFilter");
+    let Some(f) = filter else {
+        if let Some(old) = old {
+            edits.replace(old.span(), "");
+        }
+        return;
+    };
+    let mut xml = format!(
+        "<{p}autoFilter ref=\"{}:{}\"",
+        f.range.start.a1(),
+        f.range.end.a1()
+    );
+    let mut columns = String::new();
+    for (offset, criterion) in &f.columns {
+        match criterion {
+            Some(inner) => columns.push_str(&format!(
+                "<{p}filterColumn colId=\"{offset}\">{inner}</{p}filterColumn>"
+            )),
+            None => {
+                let kept = old.and_then(|o| {
+                    o.children.iter().find(|c| {
+                        c.local() == "filterColumn"
+                            && c.attr(doc, "colId").as_deref() == Some(offset.to_string().as_str())
+                    })
+                });
+                if let Some(kept) = kept {
+                    columns.push_str(&doc[kept.span()]);
+                }
+            }
+        }
+    }
+    if columns.is_empty() {
+        xml.push_str("/>");
+    } else {
+        xml.push_str(&format!(">{columns}</{p}autoFilter>"));
+    }
+    if let Some(old) = old {
+        edits.replace(old.span(), xml);
+        return;
+    }
+    const BEFORE: &[&str] = &[
+        "sheetData",
+        "sheetCalcPr",
+        "sheetProtection",
+        "protectedRanges",
+        "scenarios",
+    ];
+    if let Some(last) = root
+        .children
+        .iter()
+        .rev()
+        .find(|c| BEFORE.contains(&c.local()))
+    {
+        edits.replace(last.end..last.end, xml);
+    }
+}
+
 /// The sheet's XML outside its cells, after an edit of the sheet `target`. `own`: this is that
 /// sheet (its ranges move); other sheets have formulas that refer to it.
 pub(super) fn sheet(
@@ -790,6 +1027,66 @@ pub(super) fn workbook(
     let root = scan::tree(doc, &[]).ok_or("xl/workbook.xml を読み取れません")?;
     let p = scan::prefix(root.name);
     let mut edits = Edits::default();
+    // The name Excel keeps for the range of each sheet's filter.
+    const FILTER: &str = "_xlnm._FilterDatabase";
+    let mut added = String::new();
+    if edit.is_none() {
+        for (i, (was, now)) in before.sheets.iter().zip(&after.sheets).enumerate() {
+            let range =
+                |f: &Option<crate::book::snapshot::FilterState>| f.as_ref().map(|f| f.range);
+            if range(&was.filter) == range(&now.filter) {
+                continue;
+            }
+            let text = range(&now.filter).map(|r| {
+                format!(
+                    "{}!${}${}:${}${}",
+                    gridcraft_core::addr::quote_sheet(&now.name),
+                    gridcraft_core::addr::col_to_letters(r.start.col),
+                    r.start.row + 1,
+                    gridcraft_core::addr::col_to_letters(r.end.col),
+                    r.end.row + 1
+                )
+            });
+            let existing = root.child("definedNames").and_then(|names| {
+                names.children.iter().find(|n| {
+                    n.attr(doc, "name").as_deref() == Some(FILTER)
+                        && n.attr(doc, "localSheetId").as_deref() == Some(i.to_string().as_str())
+                })
+            });
+            match (existing, text) {
+                (Some(name), Some(text)) => set_text(name, &text, &mut edits),
+                (Some(name), None) => edits.replace(name.span(), ""),
+                (None, Some(text)) => added.push_str(&format!(
+                    "<{p}definedName name=\"{FILTER}\" localSheetId=\"{i}\" hidden=\"1\">{}</{p}definedName>",
+                    scan::escape(&text)
+                )),
+                (None, None) => {}
+            }
+        }
+    }
+    if !added.is_empty() {
+        match root.child("definedNames") {
+            Some(names) if names.end != names.open.end => edits.insert(names.inner.end, added),
+            Some(names) => edits.replace(
+                names.span(),
+                format!("<{p}definedNames>{added}</{p}definedNames>"),
+            ),
+            None => {
+                const BEFORE: &[&str] = &["sheets", "functionGroups", "externalReferences"];
+                if let Some(last) = root
+                    .children
+                    .iter()
+                    .rev()
+                    .find(|c| BEFORE.contains(&c.local()))
+                {
+                    edits.replace(
+                        last.end..last.end,
+                        format!("<{p}definedNames>{added}</{p}definedNames>"),
+                    );
+                }
+            }
+        }
+    }
     if let Some(names) = root.child("definedNames") {
         let shift = edit.map(|(si, edit)| Shift {
             target: &after.sheets[si].name,

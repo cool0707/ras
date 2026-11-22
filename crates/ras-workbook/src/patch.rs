@@ -18,7 +18,7 @@ use gridcraft_formula::adjust::{Axis, Edit};
 use serde_json::Value as Json;
 
 use crate::book::snapshot::{CellState, Raw, Snapshot, Styles};
-use crate::book::{Book, MAX_COLS, MAX_ROWS, Val};
+use crate::book::{Book, MAX_COLS, MAX_ROWS, SortKey, Val};
 
 mod scan;
 mod structure;
@@ -85,6 +85,63 @@ pub enum Op {
         range: RangeRef,
         right: bool,
     },
+    /// Formats given to the cells of `range` (`set`: what the grid's toolbar sets).
+    Format {
+        sheet: String,
+        range: RangeRef,
+        set: Vec<(String, Json)>,
+    },
+    /// The cells get the default format, and are no longer merged.
+    ClearFormats { sheet: String, range: RangeRef },
+    /// The width of whole columns, or the height of whole rows, in pixels as the grid draws.
+    Size {
+        sheet: String,
+        range: RangeRef,
+        columns: bool,
+        px: f64,
+    },
+    /// Whole rows or columns hidden, or shown again.
+    Hide {
+        sheet: String,
+        range: RangeRef,
+        columns: bool,
+        hidden: bool,
+    },
+    /// The cells of `range` merged (`across`: each of its rows on its own), or taken apart.
+    Merge {
+        sheet: String,
+        range: RangeRef,
+        across: bool,
+        on: bool,
+    },
+    /// The rows of `range` sorted by the column `by`. A single cell stands for the data
+    /// around it; `header`: its first row is headings (None: guessed).
+    Sort {
+        sheet: String,
+        range: RangeRef,
+        by: u32,
+        descending: bool,
+        header: Option<bool>,
+    },
+    /// The sheet's filter put on `range` (a single cell: the data around it), or taken away.
+    Filter {
+        sheet: String,
+        range: Option<RangeRef>,
+    },
+    /// The rows shown by a column of the filter: those whose cell shows one of `values`
+    /// (`blanks`: and the empty ones); None: no longer filtered by the column.
+    FilterBy {
+        sheet: String,
+        column: u32,
+        show: Option<(Vec<String>, bool)>,
+    },
+    /// The fill handle: `from` continued over `to` (a series of numbers or dates, texts that
+    /// end in a number, formulas with their references moved; anything else repeated).
+    Autofill {
+        sheet: String,
+        from: RangeRef,
+        to: RangeRef,
+    },
 }
 
 impl Op {
@@ -101,6 +158,36 @@ fn range_of(o: &Json, key: &str) -> Result<RangeRef> {
     RangeRef::parse(&text.replace('$', "")).ok_or_else(|| {
         format!("範囲 `{text}` を読み取れません（A1:B2、3:5、B:D のように指定してください）")
     })
+}
+
+/// Whole rows (`3:5`) or whole columns (`B:D`: true) of `range`.
+fn lines_of(o: &Json) -> Result<(RangeRef, bool)> {
+    let range = range_of(o, "range")?;
+    let text = o.get("range").and_then(Json::as_str).unwrap_or_default();
+    let columns = text
+        .trim_start_matches('$')
+        .starts_with(|c: char| c.is_ascii_alphabetic());
+    let whole = if columns {
+        range.is_full_cols()
+    } else {
+        range.is_full_rows()
+    };
+    if !whole {
+        return Err(format!(
+            "範囲 `{text}` は、行（3:5）か列（B:D）で指定してください"
+        ));
+    }
+    Ok((range, columns))
+}
+
+/// A column given by its letters (`"B"`).
+fn column_of(o: &Json, key: &str) -> Result<u32> {
+    let text = o
+        .get(key)
+        .and_then(Json::as_str)
+        .ok_or_else(|| format!("`{key}` がありません"))?;
+    gridcraft_core::addr::letters_to_col(&text.trim().to_ascii_uppercase())
+        .ok_or_else(|| format!("列 `{text}` を読み取れません（B のように指定してください）"))
 }
 
 /// The edits of a JSON value: one object, or an array of them. `sheet`: the sheet of those that
@@ -205,7 +292,90 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     Some(other) => return Err(format!("`dir` の `{other}` は指定できません")),
                 },
             },
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill）")),
+            "format" => Op::Format {
+                sheet,
+                range: range_of(o, "range")?,
+                set: o
+                    .get("set")
+                    .and_then(Json::as_object)
+                    .ok_or("`set` がありません")?
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect(),
+            },
+            "clearFormats" => Op::ClearFormats {
+                sheet,
+                range: range_of(o, "range")?,
+            },
+            "size" => {
+                let (range, columns) = lines_of(o)?;
+                Op::Size {
+                    sheet,
+                    range,
+                    columns,
+                    px: o
+                        .get("px")
+                        .and_then(Json::as_f64)
+                        .filter(|px| (0.0..=4000.0).contains(px))
+                        .ok_or("`px` がありません")?,
+                }
+            }
+            "hide" => {
+                let (range, columns) = lines_of(o)?;
+                Op::Hide {
+                    sheet,
+                    range,
+                    columns,
+                    hidden: o.get("hidden").and_then(Json::as_bool).unwrap_or(true),
+                }
+            }
+            "merge" | "unmerge" => Op::Merge {
+                sheet,
+                range: range_of(o, "range")?,
+                across: o.get("across").and_then(Json::as_bool).unwrap_or(false),
+                on: kind == "merge",
+            },
+            "sort" => Op::Sort {
+                sheet,
+                range: range_of(o, "range")?,
+                by: column_of(o, "by")?,
+                descending: o.get("desc").and_then(Json::as_bool).unwrap_or(false),
+                header: o.get("header").and_then(Json::as_bool),
+            },
+            "filter" => Op::Filter {
+                sheet,
+                range: if o.get("off").and_then(Json::as_bool).unwrap_or(false) {
+                    None
+                } else {
+                    Some(range_of(o, "range")?)
+                },
+            },
+            "filterBy" => Op::FilterBy {
+                sheet,
+                column: column_of(o, "column")?,
+                show: if o.get("clear").and_then(Json::as_bool).unwrap_or(false) {
+                    None
+                } else {
+                    Some((
+                        o.get("values")
+                            .and_then(Json::as_array)
+                            .ok_or("`values` がありません")?
+                            .iter()
+                            .map(|v| match v {
+                                Json::String(s) => s.clone(),
+                                other => other.to_string(),
+                            })
+                            .collect(),
+                        o.get("blanks").and_then(Json::as_bool).unwrap_or(false),
+                    ))
+                },
+            },
+            "autofill" => Op::Autofill {
+                sheet,
+                from: range_of(o, "from")?,
+                to: range_of(o, "to")?,
+            },
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy）")),
         });
     }
     Ok(out)
@@ -288,6 +458,273 @@ fn copy(book: &mut Book, fi: usize, from: RangeRef, ti: usize, to: RangeRef) -> 
         }
     }
     Ok(target)
+}
+
+/// The data a single cell stands for: the filter's range when the cell is in it, else the
+/// cells around it; a range of several cells is itself.
+fn around(book: &mut Book, si: usize, range: RangeRef) -> RangeRef {
+    if !range.is_single() {
+        return range;
+    }
+    match book.auto_filter(si) {
+        Some((filter, _)) if filter.contains(range.start) => filter,
+        _ => book.current_region(si, range.start),
+    }
+}
+
+/// VBA's colour number (blue, green, red) of `#RRGGBB`.
+fn colour(text: &str) -> Result<f64> {
+    let hex = text.trim().trim_start_matches('#');
+    let rgb = u32::from_str_radix(hex, 16)
+        .ok()
+        .filter(|_| hex.len() == 6)
+        .ok_or_else(|| format!("色 `{text}` を読み取れません（#RRGGBB で指定してください）"))?;
+    Ok(f64::from(
+        ((rgb & 0xFF) << 16) | (rgb & 0xFF00) | (rgb >> 16),
+    ))
+}
+
+/// One format of the toolbar given to the cells of `range`.
+fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) -> Result<()> {
+    const NONE: f64 = -4142.0;
+    let wrong = || format!("書式 `{key}` の値 {value} は指定できません");
+    let flag = || value.as_bool().map(Val::Bool).ok_or_else(wrong);
+    let text = || value.as_str().ok_or_else(wrong);
+    let mut set = |prop: &str, v: Val| book.set_format(si, range, prop, &v);
+    match key {
+        "bold" => set("font.bold", flag()?),
+        "italic" => set("font.italic", flag()?),
+        "underline" => set("font.underline", flag()?),
+        "strike" => set("font.strikethrough", flag()?),
+        "wrap" => set("wraptext", flag()?),
+        "fontName" => set("font.name", Val::Text(text()?.to_string())),
+        "fontSize" => set(
+            "font.size",
+            Val::Num(
+                value
+                    .as_f64()
+                    .filter(|s| (1.0..=409.0).contains(s))
+                    .ok_or_else(wrong)?,
+            ),
+        ),
+        "color" => match value {
+            // Automatic: black.
+            Json::Null => set("font.color", Val::Num(0.0)),
+            _ => set("font.color", Val::Num(colour(text()?)?)),
+        },
+        "fill" => match value {
+            Json::Null => set("interior.pattern", Val::Num(NONE)),
+            _ => set("interior.color", Val::Num(colour(text()?)?)),
+        },
+        "align" => set(
+            "horizontalalignment",
+            Val::Num(match text()? {
+                "left" => -4131.0,
+                "center" => -4108.0,
+                "right" => -4152.0,
+                "general" => 1.0,
+                _ => return Err(wrong()),
+            }),
+        ),
+        "valign" => set(
+            "verticalalignment",
+            Val::Num(match text()? {
+                "top" => -4160.0,
+                "middle" => -4108.0,
+                "bottom" => -4107.0,
+                _ => return Err(wrong()),
+            }),
+        ),
+        "numberFormat" => book.set_number_format(si, range, text()?),
+        "border" => {
+            // `Borders(index)`: 7 left, 8 top, 9 bottom, 10 right, 11 and 12 the lines inside.
+            const THIN: f64 = 2.0;
+            const THICK: f64 = 4.0;
+            let (sides, weight): (&[&str], f64) = match text()? {
+                "all" => (&["7", "8", "9", "10", "11", "12"], THIN),
+                "outline" => (&["7", "8", "9", "10"], THIN),
+                "thick" => (&["7", "8", "9", "10"], THICK),
+                "top" => (&["8"], THIN),
+                "bottom" => (&["9"], THIN),
+                "left" => (&["7"], THIN),
+                "right" => (&["10"], THIN),
+                "none" => (&["7", "8", "9", "10", "11", "12"], NONE),
+                _ => return Err(wrong()),
+            };
+            for side in sides {
+                if weight == NONE {
+                    set(&format!("borders.{side}.linestyle"), Val::Num(NONE))?;
+                } else {
+                    set(&format!("borders.{side}.linestyle"), Val::Num(1.0))?;
+                    set(&format!("borders.{side}.weight"), Val::Num(weight))?;
+                }
+            }
+            Ok(())
+        }
+        _ => Err(format!("書式 `{key}` はありません")),
+    }
+}
+
+/// A text with a number in it (the last one): what is before it, the number, how many digits
+/// it has, and what is after it.
+fn numbered(text: &str) -> Option<(&str, i64, usize, &str)> {
+    let end = text.rfind(|c: char| c.is_ascii_digit())? + 1;
+    let digits = text[..end]
+        .chars()
+        .rev()
+        .take_while(char::is_ascii_digit)
+        .count();
+    if digits > 15 {
+        return None;
+    }
+    let start = end - digits;
+    Some((
+        &text[..start],
+        text[start..end].parse().ok()?,
+        digits,
+        &text[end..],
+    ))
+}
+
+/// The fill handle: the cells of `from` continued over `to`, which is `from` made longer one way.
+fn autofill(book: &mut Book, si: usize, from: RangeRef, to: RangeRef) -> Result<()> {
+    use crate::book::Read;
+    if !to.contains_range(&from) || to == from {
+        return Err("オートフィルの範囲が正しくありません".into());
+    }
+    let down = to.start.col == from.start.col && to.end.col == from.end.col;
+    let across = to.start.row == from.start.row && to.end.row == from.end.row;
+    if down == across {
+        return Err("オートフィルは、上下か左右のどちらかにだけ行えます".into());
+    }
+    limit(to.count())?;
+    // Along the fill: `n` lines of the source, the lines of `to` at -before..n+after.
+    let (n, before, after) = if down {
+        (
+            from.height() as i64,
+            (from.start.row - to.start.row) as i64,
+            (to.end.row - from.end.row) as i64,
+        )
+    } else {
+        (
+            from.width() as i64,
+            (from.start.col - to.start.col) as i64,
+            (to.end.col - from.end.col) as i64,
+        )
+    };
+    let lines: Vec<i64> = (-before..0).rev().chain(n..n + after).collect();
+    let cell = |k: i64, j: u32| {
+        if down {
+            CellRef::new((from.start.row as i64 + k) as u32, from.start.col + j)
+        } else {
+            CellRef::new(from.start.row + j, (from.start.col as i64 + k) as u32)
+        }
+    };
+    let width = if down { from.width() } else { from.height() };
+    let typed = book.get(si, from, Read::Formula)?;
+    let values = book.get(si, from, Read::Value)?;
+    let source = |k: i64, j: u32| -> (usize, usize) {
+        if down {
+            (k as usize, j as usize)
+        } else {
+            (j as usize, k as usize)
+        }
+    };
+    // What each line across the fill continues as: a series of numbers, of numbered texts, or
+    // (None) its cells again.
+    enum Series {
+        Numbers(f64, f64),
+        Texts(String, i64, i64, usize, String),
+    }
+    let mut series: Vec<Option<Series>> = Vec::new();
+    for j in 0..width {
+        let cells: Vec<(&Val, &Val)> = (0..n)
+            .map(|k| {
+                let (r, c) = source(k, j);
+                (&typed[r][c], &values[r][c])
+            })
+            .collect();
+        let formula = cells
+            .iter()
+            .any(|(t, _)| matches!(t, Val::Text(s) if s.starts_with('=')));
+        let numbers: Option<Vec<f64>> = cells
+            .iter()
+            .map(|(_, v)| match v {
+                Val::Num(x) | Val::Date(x) => Some(*x),
+                _ => None,
+            })
+            .collect();
+        let dates = cells.iter().all(|(_, v)| matches!(v, Val::Date(_)));
+        let texts: Option<Vec<(&str, i64, usize, &str)>> = cells
+            .iter()
+            .map(|(_, v)| match v {
+                Val::Text(s) => numbered(s),
+                _ => None,
+            })
+            .collect();
+        series.push(if formula {
+            None
+        } else if let Some(xs) = numbers {
+            if xs.len() >= 2 {
+                // The line through the numbers (least squares), as Excel continues them.
+                let m = xs.len() as f64;
+                let mean_k = (m - 1.0) / 2.0;
+                let mean_x = xs.iter().sum::<f64>() / m;
+                let (mut num, mut den) = (0.0, 0.0);
+                for (k, x) in xs.iter().enumerate() {
+                    num += (k as f64 - mean_k) * (x - mean_x);
+                    den += (k as f64 - mean_k).powi(2);
+                }
+                let slope = num / den;
+                Some(Series::Numbers(mean_x - slope * mean_k, slope))
+            } else if dates {
+                // One date: the days after it.
+                Some(Series::Numbers(xs[0], 1.0))
+            } else {
+                None
+            }
+        } else if let Some(ts) = texts {
+            let step = if ts.len() >= 2 { ts[1].1 - ts[0].1 } else { 1 };
+            let regular = ts
+                .windows(2)
+                .all(|w| w[0].0 == w[1].0 && w[0].3 == w[1].3 && w[1].1 - w[0].1 == step);
+            regular.then(|| {
+                Series::Texts(
+                    ts[0].0.to_string(),
+                    ts[0].1,
+                    step,
+                    ts[0].2,
+                    ts[0].3.to_string(),
+                )
+            })
+        } else {
+            None
+        });
+    }
+    for k in lines {
+        // The cells of the source again, with their formats; formulas with their references moved.
+        let from_k = k.rem_euclid(n);
+        let line = RangeRef::new(cell(from_k, 0), cell(from_k, width - 1));
+        book.copy(si, line, si, cell(k, 0))?;
+        for (j, s) in series.iter().enumerate() {
+            let at = RangeRef::cell(cell(k, j as u32));
+            match s {
+                Some(Series::Numbers(first, step)) => {
+                    // (Sums of tenths are not exact: 0.1, 0.2, 0.30000000000000004.)
+                    let v = first + step * k as f64;
+                    let v = (v * 1e10).round() / 1e10;
+                    book.set_values(si, at, &[vec![Val::Num(v)]])?;
+                }
+                Some(Series::Texts(head, first, step, digits, tail)) => {
+                    let v = (first + step * k).abs();
+                    let text = format!("{head}{v:0digits$}{tail}");
+                    book.set_values(si, at, &[vec![Val::Text(text)]])?;
+                }
+                None => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Makes one edit in the stand-in. `written`: the cells it wrote to; `moved`: the cells it
@@ -375,6 +812,157 @@ fn run(
             written.push((fi, *from));
             written.push((ti, target));
         }
+        Op::Format { sheet, range, set } => {
+            let si = sheet_index(book, sheet)?;
+            for (key, value) in set {
+                format(book, si, *range, key, value)?;
+            }
+        }
+        Op::ClearFormats { sheet, range } => {
+            let si = sheet_index(book, sheet)?;
+            book.clear_formats(si, *range)?;
+        }
+        Op::Size {
+            sheet,
+            range,
+            columns,
+            px,
+        } => {
+            let si = sheet_index(book, sheet)?;
+            if *columns {
+                // The grid draws a column of w characters trunc(8w + 0.5) px wide.
+                book.set_format(si, *range, "columnwidth", &Val::Num(px / 8.0))?;
+            } else {
+                book.set_format(si, *range, "rowheight", &Val::Num(px * 0.75))?;
+            }
+        }
+        Op::Hide {
+            sheet,
+            range,
+            columns,
+            hidden,
+        } => {
+            let si = sheet_index(book, sheet)?;
+            let (lo, hi) = if *columns {
+                (range.start.col, range.end.col)
+            } else {
+                (range.start.row, range.end.row)
+            };
+            book.set_hidden(si, *columns, lo, hi, *hidden)?;
+        }
+        Op::Merge {
+            sheet,
+            range,
+            across,
+            on,
+        } => {
+            let si = sheet_index(book, sheet)?;
+            if !*on {
+                book.set_format(si, *range, "mergecells", &Val::Bool(false))?;
+                return Ok(());
+            }
+            limit(range.count())?;
+            // A merged cell keeps what its first cell holds, as in Excel.
+            let areas: Vec<RangeRef> = if *across {
+                (range.start.row..=range.end.row)
+                    .map(|r| {
+                        RangeRef::new(
+                            CellRef::new(r, range.start.col),
+                            CellRef::new(r, range.end.col),
+                        )
+                    })
+                    .collect()
+            } else {
+                vec![*range]
+            };
+            for area in areas {
+                if area.width() > 1 {
+                    let rest = RangeRef::new(
+                        CellRef::new(area.start.row, area.start.col + 1),
+                        CellRef::new(area.start.row, area.end.col),
+                    );
+                    book.clear(si, rest, false)?;
+                }
+                if area.height() > 1 {
+                    let rest =
+                        RangeRef::new(CellRef::new(area.start.row + 1, area.start.col), area.end);
+                    book.clear(si, rest, false)?;
+                }
+            }
+            book.merge_cells(si, *range, *across)?;
+            written.push((si, *range));
+        }
+        Op::Sort {
+            sheet,
+            range,
+            by,
+            descending,
+            header,
+        } => {
+            let si = sheet_index(book, sheet)?;
+            let mut rows = around(book, si, *range);
+            if !(rows.start.col..=rows.end.col).contains(by) {
+                return Err("並べ替えの列が、並べ替える範囲の外です".into());
+            }
+            if header.unwrap_or_else(|| book.guess_header(si, rows)) {
+                if rows.height() < 2 {
+                    return Ok(());
+                }
+                rows.start.row += 1;
+            }
+            book.sort(
+                si,
+                rows,
+                &[SortKey {
+                    index: *by,
+                    descending: *descending,
+                }],
+                false,
+                false,
+            )?;
+            written.push((si, rows));
+        }
+        Op::Filter { sheet, range } => {
+            let si = sheet_index(book, sheet)?;
+            let range = range.map(|r| {
+                if r.is_single() {
+                    book.current_region(si, r.start)
+                } else {
+                    r
+                }
+            });
+            book.set_auto_filter(si, range)?;
+        }
+        Op::FilterBy {
+            sheet,
+            column,
+            show,
+        } => {
+            let si = sheet_index(book, sheet)?;
+            let Some((range, _)) = book.auto_filter(si) else {
+                return Err("オートフィルターが設定されていません。".into());
+            };
+            let Some(offset) = column
+                .checked_sub(range.start.col)
+                .filter(|o| *o < range.width())
+            else {
+                return Err("フィルターの範囲の外の列です".into());
+            };
+            book.set_filter(
+                si,
+                offset,
+                show.as_ref()
+                    .map(|(values, blanks)| crate::book::FilterCriterion::Values {
+                        values: values.clone(),
+                        blanks: *blanks,
+                    }),
+            )?;
+        }
+        Op::Autofill { sheet, from, to } => {
+            let si = sheet_index(book, sheet)?;
+            autofill(book, si, *from, *to)?;
+            written.push((si, *to));
+        }
         Op::Fill {
             sheet,
             range,
@@ -422,11 +1010,13 @@ fn apply_group(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
         run(&mut book, op, &mut written, &mut moved)?;
     }
     let after = book.snapshot(&mut styles, &written);
+    let plain = styles.plain();
     let out = write(
         bytes,
         &before,
         &after,
         &styles,
+        plain,
         moved.as_ref().map(|(si, e)| (*si, e)),
     )?;
     verify(&out, &after)?;
@@ -788,7 +1378,41 @@ fn attrs_without(doc: &str, tag: Range<usize>, without: &[&str]) -> String {
     out
 }
 
-fn number(n: f64) -> String {
+/// The attributes of a tag as they are written (` a="1" b="2"`), to change some of them.
+pub(crate) struct Attrs(Vec<(String, String)>);
+
+impl Attrs {
+    pub(crate) fn parse(text: &str) -> Attrs {
+        let tag = format!("<x{text}>");
+        Attrs(
+            scan::attrs(&tag, 0..tag.len())
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), tag[value].to_string()))
+                .collect(),
+        )
+    }
+
+    /// Sets an attribute to `value` (as it is written: escaped).
+    pub(crate) fn set(&mut self, name: &str, value: &str) {
+        match self.0.iter_mut().find(|(n, _)| n == name) {
+            Some((_, v)) => *v = value.to_string(),
+            None => self.0.push((name.to_string(), value.to_string())),
+        }
+    }
+
+    pub(crate) fn remove(&mut self, name: &str) {
+        self.0.retain(|(n, _)| n != name);
+    }
+
+    pub(crate) fn text(&self) -> String {
+        self.0
+            .iter()
+            .map(|(n, v)| format!(" {n}=\"{v}\""))
+            .collect()
+    }
+}
+
+pub(crate) fn number(n: f64) -> String {
     let s = format!("{n}");
     if s.len() > 24 { format!("{n:e}") } else { s }
 }
@@ -849,23 +1473,37 @@ fn cell_xml(p: &str, at: CellRef, s: u32, state: &CellState, cm: Option<&str>) -
     }
 }
 
-/// A cell of the file as it is, at `at`.
-fn verbatim(doc: &str, cell: &SrcCell, at: CellRef) -> String {
+/// A cell of the file as it is, at `at`, with the format `s` when one is given.
+fn verbatim(doc: &str, cell: &SrcCell, at: CellRef, s: Option<u32>) -> String {
     let text = &doc[cell.span.clone()];
-    if cell.at == at {
+    let s = s.filter(|s| *s != cell.s);
+    if cell.at == at && s.is_none() {
         return text.to_string();
     }
+    let open = 0..cell.open.len();
     let mut edits = Edits::default();
-    scan::set_attr(text, 0..cell.open.len(), "r", &at.a1(), &mut edits);
+    if cell.at != at {
+        scan::set_attr(text, open.clone(), "r", &at.a1(), &mut edits);
+    }
+    if let Some(s) = s {
+        scan::set_attr(text, open, "s", &s.to_string(), &mut edits);
+    }
     edits.apply(text)
+}
+
+/// A format to add to the file's.
+pub(crate) enum NewXf {
+    /// The `xf` with this index, with another number format.
+    Derived(u32, String),
+    /// A format of the workbook (an index into [`Styles`]) written out whole.
+    Fresh(usize),
 }
 
 /// The formats of the file (`xf` indexes) for the formats of the cells.
 struct Formats<'a> {
     styles: &'a Styles,
     known: HashMap<usize, u32>,
-    /// The formats to add: the `xf` they are made from and their number format.
-    new: Vec<(u32, String)>,
+    new: Vec<NewXf>,
     /// The number of `xf` the file has.
     count: u32,
 }
@@ -881,7 +1519,9 @@ impl Formats<'_> {
         if let Some(s) = self.known.get(&style) {
             return *s;
         }
-        // The same format with another number format (a date typed into a cell): made from it.
+        // The same format with another number format (a date typed into a cell) is made from
+        // the format the file has, which may hold more than the workbook reads of it.
+        let count = self.count;
         let base = was
             .filter(|(old, _)| self.styles.same_but_number_format(*old, style))
             .map(|(_, s)| s)
@@ -894,22 +1534,25 @@ impl Formats<'_> {
                     .collect();
                 like.sort();
                 like.first().map(|(_, s)| *s)
-            });
-        let s = match base {
-            Some(base) => {
-                let code = self.styles.number_format(style);
-                let at = match self.new.iter().position(|n| n.0 == base && n.1 == code) {
-                    Some(i) => i,
-                    None => {
-                        self.new.push((base, code));
-                        self.new.len() - 1
-                    }
-                };
-                self.count + at as u32
-            }
-            // A format the file has nowhere: the cell keeps the one it had.
-            None => was.map_or(0, |(_, s)| s),
+            })
+            .filter(|s| *s < count);
+        let new = match base {
+            Some(base) => NewXf::Derived(base, self.styles.number_format(style)),
+            None => NewXf::Fresh(style),
         };
+        let at = self
+            .new
+            .iter()
+            .position(|n| match (n, &new) {
+                (NewXf::Derived(a, x), NewXf::Derived(b, y)) => a == b && x == y,
+                (NewXf::Fresh(a), NewXf::Fresh(b)) => a == b,
+                _ => false,
+            })
+            .unwrap_or_else(|| {
+                self.new.push(new);
+                self.new.len() - 1
+            });
+        let s = self.count + at as u32;
         self.known.insert(style, s);
         s
     }
@@ -926,20 +1569,31 @@ fn rewrite_sheet(
     edit: Option<&Edit>,
     moved: Option<(&str, &Edit)>,
     formats: &mut Formats,
+    plain: usize,
 ) -> Result<Option<String>> {
     let (b, a) = (&before.sheets[si], &after.sheets[si]);
+    // What whole rows and columns are given, and the filter: where no cells moved (rows and
+    // columns inserted take theirs from their neighbours, in the XML).
+    let still = edit.is_none();
+    let rows_changed = still && a.rows != b.rows;
+    let cols_changed = still && a.cols != b.cols;
+    let filter_changed = still && a.filter != b.filter;
+    let defaults_changed =
+        still && (a.default_width != b.default_width || a.default_height != b.default_height);
+    let layout_changed = rows_changed || cols_changed || filter_changed || defaults_changed;
     let merges_changed = {
         let set = |m: &[RangeRef]| m.iter().map(RangeRef::a1).collect::<HashSet<String>>();
         set(&b.merges) != set(&a.merges)
     };
     let cells_changed = edit.is_some()
+        || rows_changed
         || a.cells.len() != b.cells.len()
         || a.cells.iter().any(|(at, c)| b.cells.get(at) != Some(c));
-    if !cells_changed && !merges_changed && moved.is_none() {
+    if !cells_changed && !merges_changed && !layout_changed && moved.is_none() {
         return Ok(None);
     }
     if data.unread {
-        return if cells_changed || merges_changed {
+        return if cells_changed || merges_changed || layout_changed {
             Err(format!(
                 "シート `{}` のセルを読み取れないため、書き換えられません",
                 a.name
@@ -972,14 +1626,38 @@ fn rewrite_sheet(
             }
         }
         let mut rows: BTreeMap<u32, BTreeMap<u32, String>> = BTreeMap::new();
-        for (q, state) in &a.cells {
+        // (In the order of the sheet: the formats added to the file are then the same every time.)
+        let mut cells: Vec<(&CellRef, &CellState)> = a.cells.iter().collect();
+        cells.sort_by_key(|(q, _)| (q.row, q.col));
+        for (q, state) in cells {
             let src = sources.get(q).copied();
             let old = old_at.get(q).and_then(|at| b.cells.get(at));
             let same = old == Some(state);
             let opaque = state.formula.as_ref().is_some_and(|f| f.opaque);
+            // Only its format changed: the cell as it is written, with the other format.
+            let restyled = old.filter(|o| o.formula == state.formula && o.value == state.value);
             let xml = match src {
-                Some(cell) if opaque || (same && !cell.shared) => verbatim(doc, cell, *q),
+                Some(cell) if opaque || (same && !cell.shared) => verbatim(doc, cell, *q, None),
+                Some(cell) if restyled.is_some() && !cell.shared => {
+                    let was = restyled.map(|o| (o.style, cell.s));
+                    verbatim(doc, cell, *q, Some(formats.of(state.style, was)))
+                }
                 _ => {
+                    // A cell of the file with something in it that the workbook did not read
+                    // would be written over without it.
+                    if let Some(cell) = src
+                        && old.is_none()
+                        && ["<v", "<f", "<is"].iter().any(|tag| {
+                            doc[cell.span.clone()].contains(&format!("{tag}>"))
+                                || doc[cell.span.clone()].contains(&format!("{tag} "))
+                        })
+                    {
+                        return Err(format!(
+                            "シート `{}` のセル {} を読み取れていないため、書き換えられません（Excel で保存し直すと編集できることがあります）",
+                            a.name,
+                            cell.at.a1()
+                        ));
+                    }
                     let was = match (old, src) {
                         (Some(old), Some(cell)) => Some((old.style, cell.s)),
                         _ => None,
@@ -998,7 +1676,7 @@ fn rewrite_sheet(
             if !a.cells.contains_key(q) && !b.cells.contains_key(&cell.at) {
                 rows.entry(q.row)
                     .or_default()
-                    .insert(q.col, verbatim(doc, cell, *q));
+                    .insert(q.col, verbatim(doc, cell, *q, None));
             }
         }
         // The rows: their heights and formats go where their cells go.
@@ -1051,6 +1729,46 @@ fn rewrite_sheet(
                 }
             }
         }
+        if rows_changed {
+            let rows: std::collections::BTreeSet<u32> =
+                a.rows.keys().chain(b.rows.keys()).copied().collect();
+            for r in rows {
+                let (was, now) = (b.rows.get(&r), a.rows.get(&r));
+                if was == now {
+                    continue;
+                }
+                let mut attrs = Attrs::parse(row_attrs.get(&r).map_or("", String::as_str));
+                let custom = now.is_some_and(|n| n.custom);
+                if custom {
+                    attrs.set("ht", &number(now.map_or(0.0, |n| n.height)));
+                    attrs.set("customHeight", "1");
+                } else if was.is_some_and(|w| w.custom) {
+                    attrs.remove("ht");
+                    attrs.remove("customHeight");
+                }
+                if now.is_some_and(|n| n.hidden) {
+                    attrs.set("hidden", "1");
+                } else {
+                    attrs.remove("hidden");
+                }
+                let style = now.map_or(plain, |n| n.style);
+                if style != was.map_or(plain, |w| w.style) {
+                    if style == plain {
+                        attrs.remove("s");
+                        attrs.remove("customFormat");
+                    } else {
+                        attrs.set("s", &formats.of(style, None).to_string());
+                        attrs.set("customFormat", "1");
+                    }
+                }
+                let text = attrs.text();
+                if text.is_empty() {
+                    row_attrs.remove(&r);
+                } else {
+                    row_attrs.insert(r, text);
+                }
+            }
+        }
         let numbers: std::collections::BTreeSet<u32> =
             rows.keys().chain(row_attrs.keys()).copied().collect();
         let mut out = String::new();
@@ -1085,8 +1803,51 @@ fn rewrite_sheet(
             scan::set_attr(doc, dimension.open.clone(), "ref", &area, &mut edits);
         }
     }
+    // (What is put in at the same place goes in the order asked for: the order of a sheet's
+    // elements.)
+    if filter_changed {
+        structure::filter(doc, &root, p, a.filter.as_ref(), &mut edits);
+    }
     if merges_changed {
         structure::merges(&root, p, &a.merges, &mut edits);
+    }
+    if cols_changed || defaults_changed {
+        let columns: std::collections::BTreeSet<u32> =
+            a.cols.keys().chain(b.cols.keys()).copied().collect();
+        let mut changes = Vec::new();
+        for c in columns {
+            let (was, now) = (b.cols.get(&c), a.cols.get(&c));
+            if was == now {
+                continue;
+            }
+            let style = now.map_or(plain, |n| n.style);
+            let xf = (style != plain).then(|| formats.of(style, None));
+            changes.push((
+                c,
+                now.map(|n| {
+                    // (Read and written back, a width is not to the last digit what it was.)
+                    let kept = was.is_some_and(|w| w.sized && (w.width - n.width).abs() < 0.01);
+                    let width = if kept {
+                        structure::Width::Kept
+                    } else if n.sized {
+                        structure::Width::Own(n.width)
+                    } else {
+                        structure::Width::Other
+                    };
+                    (width, n.hidden, xf)
+                }),
+            ));
+        }
+        if defaults_changed {
+            structure::defaults(doc, &root, p, a.default_width, a.default_height, &mut edits);
+        }
+        // (9.140625: the width of a column of a new workbook, in the file's units.)
+        let other = if a.default_width > 0.0 {
+            a.default_width
+        } else {
+            9.140625
+        };
+        structure::columns_set(doc, &root, p, &changes, other, &mut edits);
     }
     if let Some((target, moved)) = moved {
         structure::sheet(
@@ -1127,6 +1888,7 @@ fn write(
     before: &Snapshot,
     after: &Snapshot,
     styles: &Styles,
+    plain: usize,
     moved: Option<(usize, &Edit)>,
 ) -> Result<Vec<u8>> {
     if before.sheets.len() != after.sheets.len() {
@@ -1160,7 +1922,8 @@ fn write(
     // The formats of the file by the formats of the cells that have them.
     let mut formats = Formats {
         styles,
-        known: HashMap::new(),
+        // (Cells without a format have the first one.)
+        known: HashMap::from([(plain, 0)]),
         new: Vec::new(),
         count: style_doc.as_deref().map_or(0, styles::xf_count),
     };
@@ -1171,30 +1934,26 @@ fn write(
                 formats.known.entry(state.style).or_insert(cell.s);
             }
         }
-        for (styles_of, tag, key, attr) in [
-            (&sheet.row_styles, "row", "r", "s"),
-            (&sheet.col_styles, "col", "min", "style"),
-        ] {
-            if styles_of.is_empty() {
-                continue;
+        // The formats of whole rows and columns, for the cells typed into them.
+        for row in &data.rows {
+            if let (Some(state), Some(s)) = (
+                sheet.rows.get(&row.r),
+                scan::attr(doc, row.open.clone(), "s").and_then(|v| v.parse::<u32>().ok()),
+            ) {
+                formats.known.entry(state.style).or_insert(s);
             }
-            // The formats of whole rows and columns, for the cells typed into them.
-            let end = if tag == "col" {
-                doc.find("sheetData").unwrap_or(doc.len())
-            } else {
-                doc.len()
+        }
+        let end = doc.find("sheetData").unwrap_or(doc.len());
+        for t in scan::tags(&doc[..end], 0).filter(|t| !t.is_close() && t.local() == "col") {
+            let span = t.start..t.end;
+            let (Some(n), Some(s)) = (
+                scan::attr(doc, span.clone(), "min").and_then(|v| v.parse::<u32>().ok()),
+                scan::attr(doc, span, "style").and_then(|v| v.parse::<u32>().ok()),
+            ) else {
+                continue;
             };
-            for t in scan::tags(&doc[..end], 0).filter(|t| !t.is_close() && t.local() == tag) {
-                let span = t.start..t.end;
-                let (Some(n), Some(s)) = (
-                    scan::attr(doc, span.clone(), key).and_then(|v| v.parse::<u32>().ok()),
-                    scan::attr(doc, span, attr).and_then(|v| v.parse::<u32>().ok()),
-                ) else {
-                    continue;
-                };
-                if let Some(style) = n.checked_sub(1).and_then(|n| styles_of.get(&n)) {
-                    formats.known.entry(*style).or_insert(s);
-                }
+            if let Some(state) = n.checked_sub(1).and_then(|n| sheet.cols.get(&n)) {
+                formats.known.entry(state.style).or_insert(s);
             }
         }
     }
@@ -1203,15 +1962,49 @@ fn write(
     let mut remove: HashSet<String> = HashSet::new();
     let target = moved.map(|(si, e)| (after.sheets[si].name.as_str(), e));
     let mut touched = false;
-    for (si, (part, doc, data)) in docs.iter().enumerate() {
-        let edit = moved.filter(|(at, _)| *at == si).map(|(_, e)| e);
-        if let Some(new) = rewrite_sheet(doc, data, si, before, after, edit, target, &mut formats)?
-        {
-            scan::tree(&new, &["sheetData"])
-                .ok_or_else(|| format!("{part} を書き換えられませんでした"))?;
-            replace.insert(part.clone(), new.into_bytes());
-            touched = true;
+    let known = formats.known.clone();
+    // Twice at most: a format to add that the file turns out to have (one added by an earlier
+    // edit, which the workbook reads back as another) is used in its place the second time.
+    let mut same: Vec<(usize, u32)> = Vec::new();
+    let mut style_out = None;
+    for pass in 0..2 {
+        formats.known = known.clone();
+        formats.known.extend(same.iter().copied());
+        formats.new.clear();
+        for (si, (part, doc, data)) in docs.iter().enumerate() {
+            let edit = moved.filter(|(at, _)| *at == si).map(|(_, e)| e);
+            if let Some(new) = rewrite_sheet(
+                doc,
+                data,
+                si,
+                before,
+                after,
+                edit,
+                target,
+                &mut formats,
+                plain,
+            )? {
+                scan::tree(&new, &["sheetData"])
+                    .ok_or_else(|| format!("{part} を書き換えられませんでした"))?;
+                replace.insert(part.clone(), new.into_bytes());
+                touched = true;
+            }
         }
+        if formats.new.is_empty() {
+            break;
+        }
+        let (Some(part), Some(doc)) = (&style_part, &style_doc) else {
+            return Err("ブックに xl/styles.xml がありません".into());
+        };
+        let (new, found) = styles::with_formats(doc, &formats.new, styles)?;
+        if found.is_empty() || pass == 1 {
+            style_out = Some((part.clone(), new));
+            break;
+        }
+        same = found;
+    }
+    if let Some((part, doc)) = style_out {
+        replace.insert(part, doc.into_bytes());
     }
     if let Some((si, edit)) = moved {
         let sheet = &after.sheets[si].name;
@@ -1227,15 +2020,6 @@ fn write(
     if !touched && before.names == after.names {
         // Nothing to write: the file as it is.
         return Ok(bytes.to_vec());
-    }
-    if !formats.new.is_empty() {
-        let (Some(part), Some(doc)) = (&style_part, &style_doc) else {
-            return Err("ブックに xl/styles.xml がありません".into());
-        };
-        replace.insert(
-            part.clone(),
-            styles::with_formats(doc, &formats.new)?.into_bytes(),
-        );
     }
     structure::workbook(
         &mut pack,
