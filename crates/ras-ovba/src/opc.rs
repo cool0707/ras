@@ -11,7 +11,7 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::biff12;
 use crate::error::OvbaError;
-use crate::project::same_name;
+use crate::same_name;
 use crate::xml::{self, Edits, TagKind};
 use crate::{CodeNames, SheetCodeName};
 

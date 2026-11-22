@@ -4,36 +4,25 @@
 //!
 //! A macro-enabled workbook (`.xlsm`, `.xltm`, `.xlam`, `.xlsb`) is an OPC
 //! (zip) package whose part `xl/vbaProject.bin` is a compound file
-//! (\[MS-CFB\]) laid out as described by \[MS-OVBA\]. This crate
+//! (\[MS-CFB\]) laid out as described by \[MS-OVBA\]. The project itself —
+//! reading it (including projects saved by Excel, with p-code in front of
+//! the source), writing it without p-code while keeping references, the
+//! project id, protection values and designer storages byte for byte, the
+//! module source text and the user forms — is
+//! [`umya_spreadsheet::vba`], which xljs uses as well; this crate re-exports
+//! its types and functions. What this crate adds is the package around it:
 //!
-//! * reads such a project ([`unpack`], [`read_project_bin`]) — including
-//!   projects saved by Excel, where every module stream starts with compiled
-//!   p-code and the source follows at `MODULEOFFSET`;
-//! * writes it ([`pack`], [`write_project_bin`]) **without p-code**: module
-//!   streams contain only the compressed source, `_VBA_PROJECT` is reduced to
-//!   its 7-byte version-independent header with version `0xFFFF`, and the
-//!   `__SRP_*` caches are dropped, so Office recompiles from source on the
-//!   next open regardless of its build or bitness;
-//! * keeps everything it does not have to touch: project references, the
-//!   project id and protection values, user forms (designer storages) and
-//!   unrelated zip entries (copied raw, without recompression).
+//! * [`unpack`] / [`pack`]: the project of a workbook file, with the
+//!   relationship, the content types and the code names of the sheets, and
+//!   the code of document modules as RAS generates it
+//!   ([`replace_document_code`], the RAS-managed region of a module);
+//! * the sheets of a workbook ([`edit_sheets`], [`workbook_sheets`]) and new
+//!   workbooks ([`create_workbook`]);
+//! * the user forms of a workbook ([`unpack_user_forms`]).
 //!
-//! # Module source text
-//!
-//! [`VbaModule::source`] is the complete text of a module stream, including
-//! the leading `Attribute VB_...` lines that the VBA editor hides. When a
-//! module is written
-//!
-//! * line terminators are normalised to CR LF,
-//! * `Attribute VB_Name` is made to match the module name,
-//! * a standard module without `Attribute VB_Name` gets one; a class module
-//!   that lacks part of the standard header (`VB_Name`, `VB_GlobalNameSpace`,
-//!   `VB_Creatable`, `VB_PredeclaredId`, `VB_Exposed`) gets the missing lines
-//!   with their default value `False`,
-//! * a new document module gets the document header (`VB_Base` of the
-//!   workbook or worksheet class, `VB_PredeclaredId = True`, ...),
-//! * the text is encoded in the project code page; a character the code page
-//!   cannot represent is an error ([`OvbaError::Encoding`]), never a `?`.
+//! The package is edited in place: XML parts are changed by splicing and
+//! every unrelated zip entry is copied raw, without recompression (it is not
+//! saved through umya-spreadsheet).
 //!
 //! # Safety net of [`pack`]
 //!
@@ -47,39 +36,25 @@
 //!
 //! # Scope
 //!
-//! User forms can be created, or their designer storage replaced, from a
-//! complete designer storage generated elsewhere ([`UserForm`], e.g. by the
-//! `ras-form` crate). Existing designer storages are handed out as they are
-//! ([`read_user_forms`], [`unpack_user_forms`]) and can be written as the
-//! `.frm` / `.frx` pair the VBA editor imports ([`export_user_form`]); they
-//! are never decoded or patched here. Re-signing is not implemented, `.xls` (BIFF8) is not supported,
-//! and binary (`.xlsb`) workbook and sheet parts are only read, never
-//! rewritten.
+//! Re-signing is not implemented, `.xls` (BIFF8) is not supported, and binary
+//! (`.xlsb`) workbook and sheet parts are only read, never rewritten.
 
 #![forbid(unsafe_code)]
 
 mod biff12;
-mod cfbio;
-mod codepage;
-pub mod compression;
-mod crypto;
-mod dir;
 mod error;
 mod forms;
 mod opc;
 mod pack;
-mod project;
 mod sheets;
 mod source;
-mod stomp;
-mod vba;
 mod workbook;
 mod xml;
 
 pub use error::OvbaError;
 pub use forms::{
     export_user_form, import_user_form, is_generated_form, read_user_forms, unpack_user_forms,
-    FormFiles, RAS_FORM_MARKER,
+    RAS_FORM_MARKER,
 };
 pub use opc::{workbook_code_names, workbook_sheet_controls};
 pub use pack::{pack, pack_bytes, replace_workbook, unpack, unpack_bytes};
@@ -91,126 +66,56 @@ pub use source::{
     extract_managed_region, merge_managed_region, procedure_names, replace_document_code,
     strip_hand_written, RAS_BEGIN_MARKER, RAS_END_MARKER,
 };
-pub use vba::{read_project_bin, write_project_bin};
+/// The MS-OVBA compression ([`umya_spreadsheet::vba::compression`]).
+pub use umya_spreadsheet::vba::compression;
+pub use umya_spreadsheet::vba::{
+    DocumentKind, DocumentSpec, FormFiles, ModuleKind, ProjectEdit, UserForm, VbaModule,
+    VbaProjectInfo,
+};
 pub use workbook::{create_workbook, BookKind};
+
+use std::path::PathBuf;
+
+use umya_spreadsheet::vba;
+
+/// VBA identifiers (and the names of the parts of a package) compare
+/// case-insensitively.
+pub(crate) fn same_name(a: &str, b: &str) -> bool {
+    a == b || a.to_lowercase() == b.to_lowercase()
+}
+
+/// Reads a `vbaProject.bin` ([`umya_spreadsheet::vba::read_project_bin`]).
+///
+/// For a protected project the function still succeeds and reports
+/// `is_protected = true`; [`unpack`] and [`pack`] turn that into
+/// [`OvbaError::Protected`].
+pub fn read_project_bin(bin: &[u8]) -> Result<VbaProjectInfo, OvbaError> {
+    Ok(vba::read_project_bin(bin)?)
+}
+
+/// Creates a new `vbaProject.bin` or rewrites an existing one
+/// ([`umya_spreadsheet::vba::write_project_bin`], see
+/// [`umya_spreadsheet::vba::build_project`] for what is written and kept).
+pub fn write_project_bin(
+    existing: Option<&[u8]>,
+    documents: &[DocumentSpec],
+    edit: &ProjectEdit,
+) -> Result<Vec<u8>, OvbaError> {
+    Ok(vba::write_project_bin(existing, documents, edit)?)
+}
 
 /// Encodes `text` in a Windows code page (as used for module source and
 /// designer properties). A character the code page cannot represent is an
 /// [`OvbaError::Encoding`] error.
 pub fn encode_text(codepage: u16, text: &str) -> Result<Vec<u8>, OvbaError> {
-    codepage::encode(codepage, text, "text")
+    Ok(vba::encode_text(codepage, text)?)
 }
 
 /// Decodes text stored in a Windows code page (module source, the designer
 /// properties of a user form). Bytes that are not valid in the code page
 /// become U+FFFD.
 pub fn decode_text(codepage: u16, bytes: &[u8]) -> Result<String, OvbaError> {
-    codepage::decode(codepage, bytes)
-}
-
-use std::path::PathBuf;
-
-/// The four kinds of VBA modules.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum ModuleKind {
-    /// Standard (procedural) module, `.bas`.
-    Standard,
-    /// Class module, `.cls`.
-    Class,
-    /// Document module: `ThisWorkbook` or the module behind a sheet.
-    Document,
-    /// Code module of a user form (designer module), `.frm`.
-    Form,
-}
-
-/// A VBA module and its source.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VbaModule {
-    /// Module name (a VBA identifier, at most 31 characters).
-    pub name: String,
-    /// What kind of module this is.
-    pub kind: ModuleKind,
-    /// Full module text as stored in the module stream, decoded to UTF-8, including leading `Attribute VB_...` lines.
-    pub source: String,
-}
-
-/// What [`read_project_bin`] found in a `vbaProject.bin`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VbaProjectInfo {
-    /// Project name (`PROJECTNAME`).
-    pub name: String,
-    /// Windows code page of all MBCS text in the project.
-    pub codepage: u16,
-    /// The modules, in the order of the `dir` stream.
-    pub modules: Vec<VbaModule>,
-    /// The project is protected: its `DPB` value carries a password, its
-    /// `CMG` value says it is locked (by the user, the host or the editor),
-    /// or one of the two cannot be decrypted (Office calls such a project
-    /// "unviewable"). [`pack`] and [`unpack`] refuse protected projects.
-    pub is_protected: bool,
-    /// Modules whose stored source does not match their compiled p-code
-    /// ("VBA stomping", RAS specification §14.9.4). Best effort: only a
-    /// mismatch between the p-code line table and the number of source
-    /// lines is detected; empty when nothing is known or nothing is wrong.
-    /// The source text is what is returned in any case.
-    pub stomped_modules: Vec<String>,
-}
-
-/// A user form to create, or whose code and designer storage to replace.
-///
-/// The designer storage is written as given (it is not validated beyond its
-/// paths); the code module gets the standard form header. A new form gets a
-/// fresh `VB_Base` component identity, an existing form keeps its header.
-/// Writing a form adds the reference to the Microsoft Forms 2.0 Object
-/// Library (`MSForms`) when the project does not have it yet.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct UserForm {
-    /// Name of the form (module name and name of the designer storage).
-    pub name: String,
-    /// Code pane text of the form, without `Attribute` lines.
-    pub code: String,
-    /// Designer streams, keyed by their path relative to the form storage
-    /// (`"f"`, `"o"`, `"\u{1}CompObj"`, `"\u{3}VBFrame"`, `"i01/f"`, ...).
-    pub streams: std::collections::BTreeMap<String, Vec<u8>>,
-    /// Storages below (and including, as `""`) the form storage with their
-    /// CLSID in wire byte order.
-    pub storages: std::collections::BTreeMap<String, [u8; 16]>,
-}
-
-/// Changes to apply with [`write_project_bin`].
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ProjectEdit {
-    /// Modules to create or replace (standard, class, document; the code
-    /// of an *existing* form may be replaced too). `source` is the full
-    /// module text including `Attribute` lines.
-    pub upsert: Vec<VbaModule>,
-    /// Names of standard or class modules to delete (never documents or
-    /// forms). Names that do not exist are ignored.
-    pub remove: Vec<String>,
-    /// Modules to rename, `(old, new)`: a document module whose sheet got another code
-    /// name. Names that do not exist are ignored.
-    pub rename: Vec<(String, String)>,
-    /// When set, document modules whose name is not listed are deleted (the modules of
-    /// sheets that were removed from the workbook).
-    pub keep_documents: Option<Vec<String>>,
-    /// Code page to store the project in. `None` keeps the existing one (a
-    /// new project uses 932). Changing it re-encodes every module.
-    pub codepage: Option<u16>,
-    /// New project name; `None` keeps the existing one (`VBAProject` for a
-    /// new project).
-    pub project_name: Option<String>,
-    /// User forms to create or replace (code and designer storage).
-    pub forms: Vec<UserForm>,
-}
-
-/// A document module that must exist in the project.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DocumentSpec {
-    /// Code name of the workbook or sheet.
-    pub code_name: String,
-    /// `true` for the workbook module (`ThisWorkbook`), `false` for a
-    /// worksheet module.
-    pub is_workbook: bool,
+    Ok(vba::decode_text(codepage, bytes)?)
 }
 
 /// The code names of a workbook and its sheets.

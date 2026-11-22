@@ -6,14 +6,11 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::codepage;
-use crate::crypto;
+use umya_spreadsheet::vba::{self, source, DocumentKind, DocumentSpec, VbaProject};
+
 use crate::error::OvbaError;
 use crate::opc::{self, BookLayout, Package, PackagePlan, SheetKind};
-use crate::project::same_name;
-use crate::source;
-use crate::vba::{self, DocSpec, LoadedProject};
-use crate::{ModuleKind, PackReport, PackRequest, ProjectEdit, UnpackedBook, VbaModule};
+use crate::{same_name, ModuleKind, PackReport, PackRequest, ProjectEdit, UnpackedBook, VbaModule};
 
 /// Workbook file types, by extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -305,7 +302,7 @@ pub(crate) fn write_temp_file(target: &Path, bytes: &[u8]) -> Result<TempFile, O
         let path = dir.join(format!(
             ".{name}.{}-{:08x}.ras-tmp",
             std::process::id(),
-            crypto::random_u64() as u32
+            random_u32()
         ));
         match fs::OpenOptions::new()
             .write(true)
@@ -359,13 +356,25 @@ pub fn replace_workbook(
     Ok(())
 }
 
+/// A number that differs from call to call, for the names of temporary files.
+pub(crate) fn random_u32() -> u32 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+    hasher.finish() as u32
+}
+
 /// The document modules the project must contain and the code names that
 /// may receive document code.
 pub(crate) struct DocumentPlan {
     /// Modules to create when missing.
-    pub(crate) ensure: Vec<DocSpec>,
-    /// `(code name, what it is, creatable)` of the workbook and every sheet.
-    pub(crate) known: Vec<(String, &'static str, Option<&'static str>)>,
+    pub(crate) ensure: Vec<DocumentSpec>,
+    /// `(code name, what it is, the kind of module to create when it is missing)` of the
+    /// workbook and every sheet; no kind when it cannot be created offline.
+    pub(crate) known: Vec<(String, &'static str, Option<DocumentKind>)>,
 }
 
 pub(crate) fn document_plan(layout: &BookLayout) -> DocumentPlan {
@@ -376,28 +385,28 @@ pub(crate) fn document_plan(layout: &BookLayout) -> DocumentPlan {
     // In a binary workbook a missing code name cannot be written into the
     // part, so only recorded code names may get a module created.
     let creatable = |explicit: bool| !layout.binary || explicit;
-    let workbook_base =
-        creatable(layout.explicit_workbook_code_name.is_some()).then_some(source::VB_BASE_WORKBOOK);
+    let workbook_kind =
+        creatable(layout.explicit_workbook_code_name.is_some()).then_some(DocumentKind::Workbook);
     plan.known.push((
         layout.workbook_code_name.clone(),
         "the workbook",
-        workbook_base,
+        workbook_kind,
     ));
     for sheet in &layout.sheets {
-        let (what, base) = match sheet.kind {
-            SheetKind::Worksheet => ("a worksheet", Some(source::VB_BASE_WORKSHEET)),
-            SheetKind::Chartsheet => ("a chart sheet", Some(source::VB_BASE_CHART)),
+        let (what, kind) = match sheet.kind {
+            SheetKind::Worksheet => ("a worksheet", Some(DocumentKind::Worksheet)),
+            SheetKind::Chartsheet => ("a chart sheet", Some(DocumentKind::Chartsheet)),
             SheetKind::Dialogsheet => ("a dialog sheet", None),
             SheetKind::Macrosheet => ("a macro sheet", None),
         };
-        let base = base.filter(|_| creatable(sheet.explicit_code_name.is_some()));
-        plan.known.push((sheet.code_name.clone(), what, base));
+        let kind = kind.filter(|_| creatable(sheet.explicit_code_name.is_some()));
+        plan.known.push((sheet.code_name.clone(), what, kind));
     }
-    for (name, _, base) in &plan.known {
-        if let Some(base) = base {
-            plan.ensure.push(DocSpec {
+    for (name, _, kind) in &plan.known {
+        if let Some(kind) = kind {
+            plan.ensure.push(DocumentSpec {
                 code_name: name.clone(),
-                base,
+                kind: *kind,
             });
         }
     }
@@ -539,7 +548,7 @@ fn pack_target(req: &PackRequest) -> Result<(PathBuf, BookType), OvbaError> {
             output.display()
         )));
     }
-    codepage::writable_encoding(req.codepage)?;
+    vba::check_codepage(req.codepage)?;
     Ok((output, output_type))
 }
 
@@ -562,17 +571,15 @@ fn pack_package(
     let loaded = match &layout.vba_part {
         Some(part) => {
             let bin = package.read(part)?.unwrap_or_default();
-            Some((LoadedProject::read(&bin)?, bin))
+            Some((VbaProject::read(&bin)?, bin))
         }
         None => None,
     };
     let loaded_project = loaded.as_ref().map(|(project, _)| project);
-    if loaded_project.is_some_and(|p| p.protection.is_protected()) {
+    if loaded_project.is_some_and(|p| p.is_protected()) {
         return Err(OvbaError::Protected);
     }
-    let existing_module = |name: &str| {
-        loaded_project.and_then(|p| p.modules.iter().find(|m| same_name(&m.record.name, name)))
-    };
+    let existing_module = |name: &str| loaded_project.and_then(|p| p.module(name));
 
     // ---- document modules ---------------------------------------------------
     let documents = document_plan(&layout);
@@ -598,7 +605,7 @@ fn pack_package(
     }
     let document_code = &req.document_code;
     for (index, code) in document_code.iter().enumerate() {
-        let Some((code_name, what, base)) = documents
+        let Some((code_name, what, kind)) = documents
             .known
             .iter()
             .find(|(name, _, _)| same_name(name, &code.code_name))
@@ -619,15 +626,15 @@ fn pack_package(
             )));
         }
         let current = match existing_module(code_name) {
-            Some(module) if module.kind == ModuleKind::Document => module.source.clone(),
+            Some(module) if module.kind() == ModuleKind::Document => module.source().to_string(),
             Some(module) => {
                 return Err(OvbaError::InvalidRequest(format!(
                     "`{code_name}` is the code name of {what}, but the project has a {:?} module with that name",
-                    module.kind
+                    module.kind()
                 )));
             }
-            None => match base {
-                Some(base) => source::default_document_source(code_name, base),
+            None => match kind {
+                Some(kind) => source::document_source(code_name, *kind),
                 None => {
                     return Err(OvbaError::UnsupportedFormat(format!(
                         "the document module `{code_name}` of {what} does not exist yet and cannot be created offline"
@@ -638,7 +645,7 @@ fn pack_package(
         upsert.push(VbaModule {
             name: code_name.clone(),
             kind: ModuleKind::Document,
-            source: source::replace_document_code(&current, &code.code),
+            source: crate::source::replace_document_code(&current, &code.code),
         });
     }
 
@@ -698,15 +705,15 @@ fn pack_package(
             !report.created.is_empty()
                 || !report.updated.is_empty()
                 || !report.removed.is_empty()
-                || project.dir.codepage != req.codepage
+                || project.codepage() != req.codepage
                 || req
                     .project_name
                     .as_ref()
-                    .is_some_and(|name| *name != project.dir.name)
+                    .is_some_and(|name| name != project.name())
         }
     };
     if let Some(project) = loaded_project {
-        for name in &project.stomped {
+        for name in project.stomped_modules() {
             warnings.push(format!(
                 "module `{name}`: the stored source does not match the compiled p-code (possible VBA stomping); the source text is used"
             ));
@@ -884,7 +891,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ras-ovba-{name}-{}-{:08x}",
             std::process::id(),
-            crypto::random_u64() as u32
+            random_u32()
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -893,43 +900,44 @@ mod tests {
     /// Turns the project of a packed workbook into a password-protected one
     /// by replacing the CMG / DPB values of its PROJECT stream.
     fn protect(book: &Path) {
+        use std::io::{Cursor, Read, Seek, Write};
         let mut package = Package::open(fs::read(book).unwrap()).unwrap();
         let bin = package.read("xl/vbaProject.bin").unwrap().unwrap();
-        let mut tree = crate::cfbio::read_tree(&bin).unwrap();
-        let node = tree
-            .nodes
-            .iter_mut()
-            .find(|n| n.path == ["PROJECT"])
+        let mut file = cfb::CompoundFile::open(Cursor::new(bin)).unwrap();
+        let mut text = String::new();
+        file.open_stream("/PROJECT")
+            .unwrap()
+            .read_to_string(&mut text)
             .unwrap();
-        let text = String::from_utf8(node.data.clone().unwrap()).unwrap();
         // A locked project stores the all-zero id and a 29-byte password
-        // hash structure ([MS-OVBA] 2.3.1.2, 2.4.4.1).
+        // hash structure ([MS-OVBA] 2.3.1.2, 2.4.4.1). The values are the
+        // \[MS-OVBA\] 2.4.3.2 encryption with that id of the protection state 1
+        // (seed 0x3C, filler 1, 2, 3) and of the hash FF FF FF FF, 11 × 4,
+        // 22 × 20, 00 (seed 0x5A, filler 4, 5, 6).
         let id = "{00000000-0000-0000-0000-000000000000}";
-        let mut hash = vec![0xFFu8];
-        hash.extend([0xFF, 0xFF, 0xFF]);
-        hash.extend([0x11; 4]);
-        hash.extend([0x22; 20]);
-        hash.push(0);
-        assert_eq!(hash.len(), 29);
+        let cmg = "3C3E90EB93E997E997E898E898";
+        let dpb = "5A58F600E71DE71D18E3E81DF63F1641054105410541054105410541054105410541054127";
         let mut out = String::new();
-        for line in crate::project::split_lines(&text) {
+        for line in umya_spreadsheet::vba::source::split_lines(&text) {
             let line = if line.starts_with("ID=") {
                 format!("ID=\"{id}\"")
             } else if line.starts_with("CMG=") {
-                format!(
-                    "CMG=\"{}\"",
-                    crypto::encrypt(&[1, 0, 0, 0], id, 0x3C, &[1, 2, 3])
-                )
+                format!("CMG=\"{cmg}\"")
             } else if line.starts_with("DPB=") {
-                format!("DPB=\"{}\"", crypto::encrypt(&hash, id, 0x5A, &[4, 5, 6]))
+                format!("DPB=\"{dpb}\"")
             } else {
                 line.to_string()
             };
             out.push_str(&line);
             out.push_str("\r\n");
         }
-        node.data = Some(out.into_bytes());
-        let protected = crate::cfbio::write_tree(&tree).unwrap();
+        let mut stream = file.open_stream("/PROJECT").unwrap();
+        stream.set_len(0).unwrap();
+        stream.rewind().unwrap();
+        stream.write_all(out.as_bytes()).unwrap();
+        drop(stream);
+        file.flush().unwrap();
+        let protected = file.into_inner().into_inner();
         let mut replace = std::collections::BTreeMap::new();
         replace.insert("xl/vbaProject.bin".to_string(), protected);
         let bytes = package.rewrite(&replace, &Default::default(), &[]).unwrap();
@@ -972,10 +980,10 @@ mod tests {
         // The low-level functions report / refuse it as well.
         let mut package = Package::open(locked).unwrap();
         let bin = package.read("xl/vbaProject.bin").unwrap().unwrap();
-        let info = vba::read_project_bin(&bin).unwrap();
+        let info = crate::read_project_bin(&bin).unwrap();
         assert!(info.is_protected);
         assert!(matches!(
-            vba::write_project_bin(Some(&bin), &[], &ProjectEdit::default()),
+            crate::write_project_bin(Some(&bin), &[], &ProjectEdit::default()),
             Err(OvbaError::Protected)
         ));
         let _ = fs::remove_dir_all(&dir);
