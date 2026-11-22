@@ -36,3 +36,36 @@ export function sheets(): string {
     console.log(buf);
     return buf;
 }
+
+// The links of a sheet: what Hyperlinks.Add does to the cell, whether Follow raises
+// FollowHyperlink (in the stand-in it does, after the place is selected), and what the ways of
+// clearing leave. Only places in the workbook are followed: Excel would open a browser.
+export function links(): string {
+    buf = "";
+    const ws = Sheet1;
+    const h = ws.hyperlinks.add(ws.range("A7"), "", "Sheet1!D3", "D3 へ", "合計へ");
+    log(`count=${ws.hyperlinks.count} address=[${h.address}] sub=${h.subAddress} tip=${h.screenTip} text=${h.textToDisplay} type=${h.type}`);
+    log(`underline=${ws.range("A7").font.underline} color=${ws.range("A7").font.color}`);
+    h.follow();
+    log(`selection=${(selection as Excel.Range).address(false, false)}`);
+    try {
+        thisWorkbook.followHyperlink("#Sheet1!B2");
+        log(`followHyperlink selection=${(selection as Excel.Range).address(false, false)}`);
+    } catch (e) {
+        log(`followHyperlink error ${e.code}`);
+    }
+    ws.range("A8").value = "x";
+    ws.hyperlinks.add(ws.range("A8"), "", "Sheet1!A1");
+    ws.hyperlinks.add(ws.range("A9"), "", "Sheet1!A1");
+    log(`a8=${ws.range("A8").value} a9=${ws.range("A9").value} count=${ws.hyperlinks.count}`);
+    ws.range("A8").clearContents();
+    log(`clearContents=${ws.range("A8").hyperlinks.count}`);
+    ws.range("A8").clear();
+    log(`clear=${ws.range("A8").hyperlinks.count}`);
+    ws.range("A9").clearHyperlinks();
+    log(`clearHyperlinks=${ws.range("A9").hyperlinks.count} underline=${ws.range("A9").font.underline}`);
+    ws.range("A7").hyperlinks.delete();
+    log(`delete=${ws.hyperlinks.count} underline=${ws.range("A7").font.underline} value=${ws.range("A7").value}`);
+    console.log(buf);
+    return buf;
+}

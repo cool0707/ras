@@ -16,3 +16,8 @@ function saving(saveAsUI: boolean, byref cancel: boolean) {
     log(`BeforeSave ${saveAsUI}`);
     cancel = true;
 }
+
+@on("Workbook.SheetFollowHyperlink")
+function anyLink(sh: object, target: Excel.Hyperlink) {
+    log(`SheetFollowHyperlink ${sh.name} ${target.textToDisplay}`);
+}

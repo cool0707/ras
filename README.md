@@ -337,7 +337,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 仕組みは VBA のデバッグではありません。プログラムを JavaScript に変換して VS Code 同梱のランタイムで動かし、Excel の操作だけを実際の Excel に対して行います（仕様 §14.10）。
 
 - Excel の操作は、Windows では拡張に同梱の `ras_com.node` を通じて実際の Excel に対して行います。
-- Mac・Linux や Excel の無い Windows では、Excel の代わりに `ras.toml` の `workbook` のブックを読み込んで、そのセルを読み書きします（拡張に同梱の `ras_book.node`。仕様 §14.10.8）。数式は xljs と同じ GridCraft の計算エンジンで計算し、セルを書き換えると Excel の自動計算と同じく再計算します。プログラムが変更したブックは、終了時に `build/debug/workbooks/` に保存します（元のブックは書き換えません）。Windows でも設定 `ras.debug.excel` を `standIn` にするとこの方法で実行できます。セルの挿入・削除、Excel の中での切り取り・コピー・貼り付け、並べ替え・フィルター、書式（保存します。描画はしません）、手動計算に対応し、プログラムの操作で起きるブック・シートのイベントは `@on` のハンドラを呼び出します。`Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` も使えます（ほかの COM オブジェクトは作れません）。手書き VBA・ダイアログなど Excel そのものが必要な操作はエラーになります。
+- Mac・Linux や Excel の無い Windows では、Excel の代わりに `ras.toml` の `workbook` のブックを読み込んで、そのセルを読み書きします（拡張に同梱の `ras_book.node`。仕様 §14.10.8）。数式は xljs と同じ GridCraft の計算エンジンで計算し、セルを書き換えると Excel の自動計算と同じく再計算します。プログラムが変更したブックは、終了時に `build/debug/workbooks/` に保存します（元のブックは書き換えません）。Windows でも設定 `ras.debug.excel` を `standIn` にするとこの方法で実行できます。セルの挿入・削除、Excel の中での切り取り・コピー・貼り付け、並べ替え・フィルター、書式（保存します。描画はしません）、ハイパーリンク（`Follow` で `FollowHyperlink` のハンドラも呼びます）、手動計算に対応し、プログラムの操作で起きるブック・シートのイベントは `@on` のハンドラを呼び出します。`Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` も使えます（ほかの COM オブジェクトは作れません）。手書き VBA・ダイアログなど Excel そのものが必要な操作はエラーになります。
 - 対象のブック（`ras.toml` の `workbook`）が Excel で開かれていればそこに接続し、開かれていなければ開きます。
 - プログラムが Excel の応答を待っている間に Excel がダイアログ（手書き VBA の実行時エラー・コンパイル エラー・`MsgBox`、Excel 自身の確認）を出すと、その内容を VS Code に通知し、ダイアログを前面に出します。`launch.json` の `"dialogs": "dismiss"` を指定すると、キャンセルに相当するボタンで自動的に閉じます（仕様 §14.10.6）。
 - 実行できるのは引数なしの関数とトップレベルの文、およびユーザーフォームです。ブック・シートの `@on` のイベントハンドラや UDF のように Excel から呼ばれる関数は起動できません。Excel を使わない実行では、プログラムの操作（セルの書き込み、シートの切り替え、保存など）で起きるイベントのハンドラが呼ばれ、ステップ実行できます。
@@ -426,6 +426,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
   - セルの数値の `typeName` は整数なら `Long` になる（VBA は `Double`）。空のセルと `Dictionary` に無いキーは、COM 経由では `Nothing` になる（VBA は `Empty`）。ランタイムが `Empty` と `Nothing` を区別しないため。
   - 列幅に収まらない数値・日付の `.text` は `#####` にならない。`Interior.ThemeColor` は `null` を返す。
   - VBE で開いたことのないブックに追加したシートの `codeName` は、Excel では空文字列（代役は `Sheet2` など）。
+  - `Hyperlink.Follow` で `FollowHyperlink` を起こすこと、`Clear` がハイパーリンクも消すこと、`Hyperlinks.Add` / `Delete` の下線と色は、まだ Excel と突き合わせていません（`tools/standin-check` の `events.links`）。
   - COM 経由のデバッグ実行では、閉じていない `TextStream` が変数の寿命で解放されないため、そのファイルのあるフォルダーの削除がエラー 70 になることがある（VBA では参照がなくなった時点で閉じる）。
 - 初期化の入口（§12.3）は、Excel 2021 の実機で次を確認しています（手動）: ブックをマクロの中で開いてすぐ閉じても、Excel がブックを開き直さないこと（`Application.OnTime` で遅延していた版では開き直し、セキュリティの通知で止まった）。保護ビューで開いて編集を有効にしたとき（`ProtectedViewWindow.Edit`）、`@on("Workbook.Open")` のハンドラが `Workbook_Activate` で呼ばれ、`Range.Select` などが成功すること（`Workbook_Open` から直接呼ぶ手書きのブックではエラー 1004 になる）。リボンから「編集を有効にする」を押す操作と、「コンテンツの有効化」の後の動作は未確認です。
 - 32bit Office では未検証です（`RAS_Rebase` の 32bit 側のオフセットなど）。

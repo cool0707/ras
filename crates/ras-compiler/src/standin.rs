@@ -71,6 +71,8 @@ fn stand_in_class(def: &ClassDef) -> Option<&'static str> {
         "Names" => "Names",
         "Name" => "Name",
         "Sort" => "Sort",
+        "Hyperlinks" => "Hyperlinks",
+        "Hyperlink" => "Hyperlink",
         _ => return None,
     })
 }

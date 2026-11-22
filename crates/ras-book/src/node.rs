@@ -895,6 +895,46 @@ impl JsBook {
         })
     }
 
+    /// The hyperlinks of the cells of a range: `[{ row, col, address, subAddress, tip }]`, by rows.
+    #[napi]
+    pub fn hyperlinks(&self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64) -> Result<Json> {
+        let i = sheet(&self.inner, i)?;
+        let list = self
+            .inner
+            .hyperlinks(i, range(r1, c1, r2, c2)?)
+            .map_err(err)?;
+        Ok(Json::Array(
+            list.into_iter()
+                .map(|l| json!({ "row": l.at.row + 1, "col": l.at.col + 1, "address": l.address, "subAddress": l.sub_address, "tip": l.tip }))
+                .collect(),
+        ))
+    }
+
+    #[napi]
+    pub fn set_hyperlink(
+        &mut self,
+        i: u32,
+        row: f64,
+        col: f64,
+        address: String,
+        sub_address: String,
+        tip: String,
+    ) -> Result<()> {
+        let i = sheet(&self.inner, i)?;
+        self.inner
+            .set_hyperlink(i, cell(row, col)?, &address, &sub_address, &tip)
+            .map_err(err)
+    }
+
+    /// Takes the hyperlinks of the cells of a range away; returns how many there were.
+    #[napi]
+    pub fn remove_hyperlinks(&mut self, i: u32, r1: f64, c1: f64, r2: f64, c2: f64) -> Result<u32> {
+        let i = sheet(&self.inner, i)?;
+        self.inner
+            .remove_hyperlinks(i, range(r1, c1, r2, c2)?)
+            .map_err(err)
+    }
+
     /// `[{ name, sheet, refersTo }]`: `sheet` is the index of the sheet a name belongs to, or -1.
     #[napi]
     pub fn names(&self) -> Json {

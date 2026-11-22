@@ -713,6 +713,8 @@ module.exports = function createExcel(rt, addon, options) {
         }
         Clear() {
             this.$write((a, b, i) => b.clear(i, ...a.$bounds(), true));
+            // ("すべてクリア" takes the hyperlinks away too.)
+            for (const a of this.$list()) book(() => this.$book.removeHyperlinks(this.$i, ...a.$bounds()));
         }
         ClearFormats() {
             this.$each((a, b, i) => b.clearFormats(i, ...a.$bounds()));
@@ -991,6 +993,15 @@ module.exports = function createExcel(rt, addon, options) {
         }
         Show() {
             return true;
+        }
+
+        // ---- hyperlinks
+        get Hyperlinks() {
+            return new Hyperlinks(this.$sheet, this);
+        }
+        /** The hyperlinks taken away; the look of the cells stays. */
+        ClearHyperlinks() {
+            unlinkCells(this, false);
         }
 
         // ---- formats: kept in the workbook, not drawn
@@ -1333,6 +1344,9 @@ module.exports = function createExcel(rt, addon, options) {
         get Names() {
             return this.$wb.Names;
         }
+        get Hyperlinks() {
+            return new Hyperlinks(this, null);
+        }
         /** `Paste`: what was cut or copied, on `destination` (the selection without one). */
         Paste(destination) {
             if (clip === null) throw new RasError("Worksheet クラスの Paste メソッドが失敗しました。", 1004, "Microsoft Excel");
@@ -1519,6 +1533,199 @@ module.exports = function createExcel(rt, addon, options) {
 
     // ------------------------------------------------------------------------ Names
 
+    // ------------------------------------------------------------------------ hyperlinks
+
+    // The look Excel gives a cell with a hyperlink (the "Hyperlink" style): underlined, in the
+    // theme's colour for links (#0563C1, as a colour number).
+    const LINK_COLOR = 0xc16305;
+    const LINK_UNDERLINE = 2;
+
+    /**
+     * A hyperlink of a cell (`Hyperlink`): read from the workbook each time, so that it is what
+     * the cell has now. One whose cell has lost it raises error 424.
+     */
+    class Hyperlink {
+        constructor(sheet, row, col) {
+            this.$sheet = sheet;
+            this.$row = row;
+            this.$col = col;
+        }
+        get $typeName() {
+            return "Hyperlink";
+        }
+        get $entry() {
+            const i = this.$sheet.$index();
+            const list = book(() => this.$sheet.$wb.$book.hyperlinks(i, this.$row, this.$col, this.$row, this.$col));
+            if (!list.length) rt.raise(424, "ハイパーリンク");
+            return list[0];
+        }
+        $set(address, subAddress, tip) {
+            const e = this.$entry;
+            this.$sheet.$wb.$changed();
+            book(() => this.$sheet.$wb.$book.setHyperlink(this.$sheet.$index(), this.$row, this.$col, address ?? e.address, subAddress ?? e.subAddress, tip ?? e.tip));
+        }
+        get Address() {
+            return this.$entry.address;
+        }
+        set Address(v) {
+            this.$set(rt.cstr(v), undefined, undefined);
+        }
+        get SubAddress() {
+            return this.$entry.subAddress;
+        }
+        set SubAddress(v) {
+            this.$set(undefined, rt.cstr(v), undefined);
+        }
+        get ScreenTip() {
+            return this.$entry.tip;
+        }
+        set ScreenTip(v) {
+            this.$set(undefined, undefined, rt.cstr(v));
+        }
+        /** What the cell shows. */
+        get TextToDisplay() {
+            void this.$entry;
+            return rt.cstr(this.Range.Text);
+        }
+        set TextToDisplay(v) {
+            void this.$entry;
+            this.Range.Value = rt.cstr(v);
+        }
+        get Name() {
+            return this.TextToDisplay;
+        }
+        get EmailSubject() {
+            const m = /^mailto:[^?]*\?(?:.*&)?subject=([^&]*)/i.exec(this.Address);
+            return m ? decodeURIComponent(m[1]) : "";
+        }
+        /** `msoHyperlinkRange`: the link of a cell. */
+        get Type() {
+            return 0;
+        }
+        get Range() {
+            return new Range(this.$sheet, this.$row, this.$col, this.$row, this.$col);
+        }
+        get Parent() {
+            return this.$sheet;
+        }
+        get Application() {
+            return appProxy;
+        }
+        /**
+         * Goes where the link goes: a place in the workbook is selected, an address is not opened
+         * (it is printed). Then `FollowHyperlink` of the link's sheet, as when the link is clicked.
+         */
+        Follow() {
+            const e = this.$entry;
+            follow(this.$sheet, e.address, e.subAddress);
+            sheetEvent(this.$sheet, "FollowHyperlink", [this]);
+        }
+        Delete() {
+            void this.$entry;
+            unlinkCells(this.Range, true);
+        }
+    }
+    /** The hyperlinks of `range`'s cells taken away; `plain`: their look too (`Delete`). */
+    function unlinkCells(range, plain) {
+        const wb = range.$sheet.$wb;
+        wb.$changed();
+        for (const a of range.$list()) {
+            const list = book(() => wb.$book.hyperlinks(range.$sheet.$index(), ...a.$bounds()));
+            book(() => wb.$book.removeHyperlinks(range.$sheet.$index(), ...a.$bounds()));
+            if (!plain) continue;
+            for (const l of list) {
+                const cell = new Range(range.$sheet, l.row, l.col, l.row, l.col);
+                const font = cell.Font;
+                font.Underline = XL.none;
+                font.ColorIndex = XL.automatic;
+            }
+        }
+    }
+    /**
+     * Where a link goes: a place of this workbook (`subAddress` with no address, or the
+     * workbook's own file) is selected; anything else is said, not opened.
+     */
+    function follow(sheet, address, subAddress) {
+        const wb = sheet.$wb;
+        const own = address === "" || sameName(path.basename(address), wb.$name);
+        if (own && subAddress) {
+            const target = evaluate(sheet, subAddress.replace(/^#/, ""));
+            if (!(target instanceof Range)) fail(`参照が正しくありません（${subAddress}）`);
+            target.Select();
+            return;
+        }
+        const where = subAddress ? `${address}#${subAddress}` : address;
+        rt.note(`リンク先 ${where} を開きます（Excel のないデバッグ実行では開きません）`);
+    }
+    /**
+     * `Hyperlinks`: of a sheet (`range` null), or of the cells of a range. Its items are those of
+     * the cells now, by rows.
+     */
+    class Hyperlinks {
+        constructor(sheet, range) {
+            this.$sheet = sheet;
+            this.$range = range;
+        }
+        get $typeName() {
+            return "Hyperlinks";
+        }
+        get $all() {
+            const areas = this.$range ? this.$range.$list().map((a) => a.$bounds()) : [[1, 1, MAX_ROWS, MAX_COLS]];
+            const seen = new Set();
+            const out = [];
+            for (const b of areas) {
+                for (const l of book(() => this.$sheet.$wb.$book.hyperlinks(this.$sheet.$index(), ...b))) {
+                    const key = `${l.row},${l.col}`;
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    out.push(new Hyperlink(this.$sheet, l.row, l.col));
+                }
+            }
+            return out;
+        }
+        get Count() {
+            return this.$all.length;
+        }
+        Item(index) {
+            const all = this.$all;
+            const i = rt.cnum(index);
+            if (!(i >= 1 && i <= all.length)) rt.raise(9);
+            return all[Math.floor(i) - 1];
+        }
+        /**
+         * A hyperlink on the cell `anchor` (the first of a range), in place of the one it had.
+         * The cell shows `textToDisplay`, or — when it is empty — the address; it gets the look of
+         * a link.
+         */
+        Add(anchor, address, subAddress, screenTip, textToDisplay) {
+            if (!(anchor instanceof Range)) fail("Anchor はセル範囲を指定してください（図形のハイパーリンクは使えません）");
+            const cell = anchor.$at(anchor.$r1, anchor.$c1);
+            const sheet = cell.$sheet;
+            const addr = rt.cstr(opt(address) ?? "");
+            const sub = rt.cstr(opt(subAddress) ?? "");
+            if (addr === "" && sub === "") fail("Address か SubAddress を指定してください");
+            sheet.$wb.$changed();
+            book(() => sheet.$wb.$book.setHyperlink(sheet.$index(), cell.$r1, cell.$c1, addr, sub, rt.cstr(opt(screenTip) ?? "")));
+            if (opt(textToDisplay) !== undefined) cell.Value = rt.cstr(textToDisplay);
+            else if (rt.cstr(cell.Formula) === "") cell.Value = addr !== "" ? addr : sub;
+            const font = cell.Font;
+            font.Underline = LINK_UNDERLINE;
+            font.Color = LINK_COLOR;
+            return new Hyperlink(sheet, cell.$r1, cell.$c1);
+        }
+        /** The hyperlinks taken away, with their look. */
+        Delete() {
+            if (this.$range) unlinkCells(this.$range, true);
+            else unlinkCells(new Range(this.$sheet, 1, 1, MAX_ROWS, MAX_COLS), true);
+        }
+        get Parent() {
+            return this.$range || this.$sheet;
+        }
+        *[Symbol.iterator]() {
+            yield* this.$all;
+        }
+    }
+
     class Name {
         constructor(wb, name, sheet) {
             this.$wb = wb;
@@ -1661,6 +1868,19 @@ module.exports = function createExcel(rt, addon, options) {
         }
         get Names() {
             return new Names(this);
+        }
+        /**
+         * `Workbook.FollowHyperlink`: a place of this workbook (`#Sheet2!A1`, or `subAddress`
+         * with no address) is selected; an address is said, not opened. No event: no cell's
+         * link was followed.
+         */
+        FollowHyperlink(address, subAddress) {
+            let addr = rt.cstr(opt(address) ?? "");
+            let sub = rt.cstr(opt(subAddress) ?? "");
+            if (addr.startsWith("#")) [addr, sub] = ["", addr.slice(1)];
+            const sheet = this.ActiveSheet || this.$sheets[0];
+            if (!sheet) fail("シートがありません");
+            follow(sheet, addr, sub);
         }
         get CodeName() {
             return "ThisWorkbook";
@@ -2354,6 +2574,6 @@ module.exports = function createExcel(rt, addon, options) {
     }
 
     // The objects of the stand-in by the name of their Excel class (what `tools/standin/members.js` lists).
-    const classes = { Application, Workbooks, Workbook, Sheets, Worksheet, Range, Names, Name, Sort: SortState };
+    const classes = { Application, Workbooks, Workbook, Sheets, Worksheet, Range, Names, Name, Sort: SortState, Hyperlinks, Hyperlink };
     return { application, global, runMacro, finish, snapshot, restore, useWorkbook, saveAll, saveSnapshot, classes, Range, Worksheet, Workbook };
 };

@@ -1987,6 +1987,11 @@ Excel を COM で操作できない環境でも、Excel を操作するプログ
   * `Range.AutoFilter`: 比較（`"=東京"`、`">=10"`、`"<>"`、ワイルドカード `*` `?`）とその `xlAnd` / `xlOr`、値の一覧（`xlFilterValues`）、上位・下位（`xlTop10Items` / `xlBottom10Items` / `xlTop10Percent` / `xlBottom10Percent`）。等しいかどうかは Excel と同じくセルの表示と比べ、大小は値で比べる。`Worksheet.AutoFilterMode` / `FilterMode` / `ShowAllData` / `AutoFilter`（`Range`、`Filters(i).On`）。フィルターの条件はブックに保存する。色・アイコンによるフィルターは未対応。
   * `Range.AdvancedFilter`: 検索条件範囲（見出しの下の各行が OR、行の中が AND。文字列は前方一致）、`xlFilterInPlace` / `xlFilterCopy`（抽出範囲の見出しで列を選べる）、`Unique`。数式による条件は未対応。
   * `Range.RemoveDuplicates`、行・列の `Hidden`、`Range.SpecialCells`（`xlCellTypeVisible` / `xlCellTypeConstants` / `xlCellTypeFormulas` / `xlCellTypeBlanks` / `xlCellTypeLastCell`。見つからなければ Excel と同じくエラー 1004）。`SUBTOTAL` / `AGGREGATE` は、フィルターで隠れた行（関数番号によっては非表示にした行）を除いて計算する。
+* **ハイパーリンク:** `Worksheet.Hyperlinks` / `Range.Hyperlinks`（`Count`・`Item`・`For Each`・`Add`・`Delete`）、`Hyperlink`（`Address`・`SubAddress`・`ScreenTip`・`TextToDisplay`・`Name`・`EmailSubject`・`Range`・`Type`・`Follow`・`Delete`）、`Range.ClearHyperlinks`、`Workbook.FollowHyperlink`。ハイパーリンクはファイルと同じくセルに持ち（ブックに保存する）、セルの挿入・削除で一緒に動く。
+  * `Hyperlinks.Add`: `Anchor` のセル（範囲なら左上のセル）のリンクを置き換える。`TextToDisplay` があればセルに入力し、無ければ空のセルにだけアドレスを入力する（`Change` が起きる）。Excel の「ハイパーリンク」スタイルと同じく下線と色（`#0563C1`）を付ける。図形のハイパーリンクは作れない。
+  * `Follow`: ブックの中の場所（`SubAddress`。アドレスが無いか、このブックのファイル）なら、その範囲を選択する（シートの切り替えと `SelectionChange` が起きる）。それ以外のアドレス（URL・ほかのファイル）は開かず、開く旨をデバッグ コンソールに表示する。続いてリンクのあるシートの `FollowHyperlink` とブックの `SheetFollowHyperlink` を起こす（下の表）。`Workbook.FollowHyperlink` は場所への移動だけで、イベントは起こさない。
+  * `Hyperlinks.Delete` / `Hyperlink.Delete` はリンクと下線・色を取り除き、`ClearHyperlinks` はリンクだけを取り除く（表示はそのまま）。`Clear` はリンクも取り除き、`ClearContents` は残す。
+  * 並べ替え・切り取り・コピーでは、ハイパーリンクは動かない（コピーもされない）。ファイルの中のアドレスと場所の両方を持つリンクは、umya-spreadsheet が 1 つしか読まないため、場所が落ちる。
 * **書式:** 次の書式はブックに保持し、保存する。セルの挿入・削除、コピー・切り取り、並べ替えで、セルと一緒に動く。`Font`（`Name` / `Size` / `Bold` / `Italic` / `Underline` / `Strikethrough` / `Color` / `ColorIndex` / `Superscript` / `Subscript`）、`Interior`（`Color` / `ColorIndex` / `Pattern` / `PatternColor`）、`Borders`（`LineStyle` / `Weight` / `Color` / `ColorIndex`。`Borders(xlEdgeBottom)` などの各辺と、辺を指定しない `Borders`、`BorderAround`）、`HorizontalAlignment` / `VerticalAlignment` / `WrapText` / `ShrinkToFit` / `IndentLevel` / `Orientation`、`Locked` / `FormulaHidden`、`ColumnWidth` / `RowHeight`、`Hidden`（行全体・列全体）、`Merge` / `UnMerge` / `MergeCells` / `MergeArea`、表示形式 `NumberFormat`、シート見出しの色（`Tab.Color`）。セルによって値の違う範囲から読むと、VBA の `Null` にあたる `null` を返す。行全体・列全体に設定した書式は、その行・列に後から書き込んだセルにも付く。画面が無いので**描画はしない**（`AutoFit` は何もしない）。これ以外の書式のプロパティ（`ThemeColor`、`TintAndShade`、`Style` など）は、どの値でも受け付け、同じ範囲から読むと設定した値を返すが、保存しない。
 * **イベント:** プロジェクトのブックとそのシートの `@on` のハンドラ（`objects/ThisWorkbook.ras` とシートのファイル。§12.2）を、プログラムの操作に応じて呼び出す。順序は Excel が起こす順序に合わせているが、Excel の実機との突き合わせはまだ行っていない。プロジェクトのブック・そのシート・`Application` を指している `WithEvents` の変数のハンドラ（§12.2.2）も、同じ表に従って呼ぶ。シートの上のコントロールのイベント（§12.2.1）は起こさない。
 
@@ -2000,12 +2005,14 @@ Excel を COM で操作できない環境でも、Excel を操作するプログ
   | `Worksheet.Delete` | そのシートの `BeforeDelete` |
   | `Workbook.Save` / `SaveAs` | `BeforeSave`（`cancel` を `true` にすると保存しない）、`AfterSave` |
   | `Workbook.Close` | `BeforeClose`（`cancel` を `true` にすると閉じない） |
+  | `Hyperlink.Follow` | リンク先の選択による `SelectionChange` などの後に、`FollowHyperlink` / `SheetFollowHyperlink`（`target` はその `Hyperlink`） |
   | ほかのブックとの間の `Workbook.Activate` | `Deactivate` / `Activate` |
 
   * `Application.EnableEvents` が `False` の間（`fastMode()` / `suspendEvents()` の間を含む）は起こさない。ハンドラの再入防止（§12.2）は VBA ビルドと同じで、ハンドラの中の書き込みがそのハンドラ自身を呼び直すことはない（`reentrant: true` を除く）。
   * ハンドラで捕捉されなかったエラーは、VBA ビルドの RAS エラーダイアログ（`RAS_EventError`）と同じく実行を止めない。エラーの内容と RAS の位置をデバッグ コンソールに表示して、元の文の続きを実行する。エラーで止めたい場合は、VS Code のブレークポイントの「捕捉された例外」を有効にする。
   * `Calculate` は、数式を書き込んだシートと、書き換えたセルに依存する数式のあるシートで起こす（`NOW` などの揮発性関数だけのシートでは起こさない）。`Calculate` / `SheetCalculate` のハンドラがあるときは、セルを書き換えるたびにその場で計算する。
-  * `Workbook.Open`、ユーザーの操作で起きるイベント（`BeforeDoubleClick` / `BeforeRightClick` / `FollowHyperlink`）、ウィンドウのイベント、`Workbooks.Open` で開いたほかのブックのイベントは起こさない。
+  * `Hyperlink.Follow` で `FollowHyperlink` を起こすこと（Excel の説明はリンクをクリックしたときのもので、リンク先へ移動した後に起こるとされる）は、Excel の実機と突き合わせていない（`tools/standin-check` の `events.links`）。
+  * `Workbook.Open`、ユーザーの操作で起きるイベント（`BeforeDoubleClick` / `BeforeRightClick`、クリックによる `FollowHyperlink`）、ウィンドウのイベント、`Workbooks.Open` で開いたほかのブックのイベントは起こさない。
 * **ファイルと正規表現:** `Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` は、ランタイムの JavaScript 実装を使う（§14.10.5）。ほかの COM オブジェクトは作れない（エラー 429）。
 * **Excel が必要なもの:** 手書き VBA（`Application.Run`）、ほかのアプリケーションとのクリップボードの受け渡し、別のブック・新しいブックへのシートのコピーと移動、ダイアログ（`GetOpenFilename` など）、`Application.OnTime` は、Excel が必要である旨のエラー 445 になる。未実装のメンバーはエラー 438。
 * **保存:** プロジェクトのブックと `Workbooks.Open` で開いたファイルは上書きしない。プログラムが変更したブックは、終了時（および `Save` / 開いたファイルへの `SaveAs` のとき）に `build/debug/workbooks/<ブック名>` に保存し、デバッグ コンソールに表示する。保存は umya-spreadsheet で行うため、VBA プロジェクトは残るが、umya-spreadsheet が読み書きしない要素は落ちることがある。マクロの無いブックは `.xlsx` で保存する。

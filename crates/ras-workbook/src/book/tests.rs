@@ -967,3 +967,64 @@ fn sheets_are_copied() {
     );
     assert_ne!(b.code_name(0), b.code_name(1));
 }
+
+#[test]
+fn hyperlinks_are_kept_with_their_cells() {
+    let mut b = Book::new_book();
+    b.set_values(
+        0,
+        rng("A1:A3"),
+        &[vec![text("a")], vec![text("b")], vec![Val::Num(3.0)]],
+    )
+    .unwrap();
+    b.set_hyperlink(0, CellRef::new(0, 0), "https://example.com/x", "top", "tip")
+        .unwrap();
+    b.set_hyperlink(0, CellRef::new(1, 0), "", "Sheet1!C3", "")
+        .unwrap();
+    assert!(b.set_hyperlink(0, CellRef::new(2, 0), "", "", "").is_err());
+    let all = b.hyperlinks(0, rng("A1:Z9")).unwrap();
+    assert_eq!(
+        all.iter()
+            .map(|l| (
+                l.at.a1(),
+                l.address.clone(),
+                l.sub_address.clone(),
+                l.tip.clone()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "A1".into(),
+                "https://example.com/x".into(),
+                "top".into(),
+                "tip".into()
+            ),
+            (
+                "A2".into(),
+                String::new(),
+                "Sheet1!C3".into(),
+                String::new()
+            ),
+        ]
+    );
+    // Saved with the workbook, read back.
+    let bytes = b.to_bytes().unwrap();
+    let mut b = Book::open_bytes(&bytes).unwrap();
+    assert_eq!(b.hyperlinks(0, rng("A1:Z9")).unwrap(), all);
+    // Taken away: the cell keeps its value and format.
+    b.set_format(0, rng("A2"), "font.bold", &Val::Bool(true))
+        .unwrap();
+    assert_eq!(b.remove_hyperlinks(0, rng("A2:A3")).unwrap(), 1);
+    assert_eq!(b.hyperlinks(0, rng("A1:Z9")).unwrap().len(), 1);
+    let bytes = b.to_bytes().unwrap();
+    let mut b = Book::open_bytes(&bytes).unwrap();
+    assert_eq!(b.hyperlinks(0, rng("A1:Z9")).unwrap().len(), 1);
+    assert_eq!(
+        b.get(0, rng("A2"), Read::Value).unwrap(),
+        vec![vec![text("b")]]
+    );
+    assert_eq!(
+        b.format_of(0, rng("A2"), "font.bold").unwrap(),
+        Some(Val::Bool(true))
+    );
+}
