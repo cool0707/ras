@@ -14,7 +14,7 @@ fn compile(form: &str, src: &[(&str, &str)]) -> (Vec<String>, Vec<ras_compiler::
     let mut config = Config::default();
     config.forms = vec![FormDecl {
         name: "frmInput".into(),
-        controls: vec![control("txtName", "TextBox"), control("cboKind", "ComboBox"), control("btnOK", "CommandButton"), control("pages", "MultiPage"), control("page1", "Page")],
+        controls: vec![control("txtName", "TextBox"), control("cboKind", "ComboBox"), control("btnOK", "CommandButton"), control("btnCancel", "CommandButton"), control("pages", "MultiPage"), control("page1", "Page")],
     }];
     let mut sources: Vec<SourceInput> = src
         .iter()
@@ -431,4 +431,208 @@ fn with_events_in_a_code_behind() {
     assert!(code.contains("Private WithEvents sheet As Worksheet"), "{code}");
     assert!(code.contains("Private Sub sheet_Change(ByVal Target As Range)"), "{code}");
     assert!(code.contains("RAS_EventError \"frmInput.sheet_Change\""), "{code}");
+}
+
+fn file(files: &[ras_compiler::OutputFile], name: &str) -> String {
+    files.iter().find(|f| f.name == name).map(|f| f.code.replace("\r\n", "\n")).unwrap_or_else(|| panic!("no module {name} in {:?}", files.iter().map(|f| &f.name).collect::<Vec<_>>()))
+}
+
+/// `control.on("Click", handler)` (spec §12.2.3): a class with a `WithEvents` variable listens
+/// to the control and calls the closure; the form takes its listeners off when it is unloaded.
+#[test]
+fn handlers_attached_at_run_time() {
+    let (diags, files) = compile(
+        r#"
+let count = 0;
+const LIMIT = 20;
+function bump() { count++; }
+function ok() { this.hide(); }
+function keyDown(keyCode: MSForms.ReturnInteger, shift: short) { if (keyCode.value == 13) bump(); }
+
+@on("UserForm.Initialize")
+function init() {
+    this.btnOK.on("Click", () => { bump(); count += 2; this.caption = `n=${count}/${LIMIT}`; });
+    this.btnOK.addEventListener("click", ok);
+    this.txtName.on("KeyDown", keyDown);
+    for (const c of this.controls) {
+        if (c instanceof MSForms.TextBox) {
+            const l = c.on("Change", () => { c.backColor = c.text == "" ? 255 : 0; });
+            if (count > 3) l.off();
+        }
+    }
+    this.txtName.on("MouseMove", (button, shift, x) => { count = x as int; });
+    this.txtName.on("MouseMove", (button) => { count = button; });
+}
+"#,
+        &[],
+    );
+    assert!(diags.is_empty(), "{diags:?}");
+    let code = form_code(&files);
+    // The form of the code is the owner of its listeners; they go when it is unloaded.
+    assert!(code.contains("RAS_Listen New RAS_On_CommandButton_Click, Me.btnOK, ras_t1, 0&, Me"), "{code}");
+    assert!(code.contains("Dim l As Object") && code.contains("Set l = RAS_Listen(New RAS_On_TextBox_Change, c, ras_t"), "{code}");
+    assert!(code.contains("l.off"), "{code}");
+    assert!(code.contains("Private Sub UserForm_Terminate()") && code.contains("RAS_UnlistenOwner Me"), "{code}");
+    // What the closures use of the form is public: they are other classes.
+    assert!(code.contains("Public count As Long") && code.contains("Public Sub bump()") && code.contains("Public Sub ok()") && code.contains("Public Sub keyDown("), "{code}");
+    assert!(code.contains("Private Const LIMIT As Long = 20&"), "{code}");
+
+    let click = file(&files, "RAS_On_CommandButton_Click");
+    assert!(click.contains("Private WithEvents ras_target As MSForms.CommandButton"), "{click}");
+    assert!(click.contains("Private Sub ras_target_Click()") && click.contains("ras_handler.Apply\n"), "{click}");
+    assert!(click.contains("Public Sub Off()") && click.contains("RAS_Unlisten Me"), "{click}");
+    assert!(click.contains("RAS_EventError \"CommandButton.Click\""), "{click}");
+    // One class for an event, whatever number of arguments its handlers take.
+    let mouse = file(&files, "RAS_On_TextBox_MouseMove");
+    assert!(mouse.contains("Private Sub ras_target_MouseMove(ByVal Button As Integer, ByVal Shift As Integer, ByVal X As Single, ByVal Y As Single)"), "{mouse}");
+    assert!(mouse.contains("Case 1&\n        ras_handler.Apply Button\n") && mouse.contains("Case 3&\n        ras_handler.Apply Button, Shift, X\n"), "{mouse}");
+
+    // The closures reach the form they were created in, not the default instance.
+    let lambdas: Vec<String> = files.iter().filter(|f| f.name.starts_with("RAS_Lambda_")).map(|f| f.code.replace("\r\n", "\n")).collect();
+    let all = lambdas.join("\n");
+    assert!(!all.contains("frmInput."), "{all}");
+    assert!(all.contains("Me.Captured_Me.bump") && all.contains("Me.Captured_Me.count = Me.Captured_Me.count + 2&"), "{all}");
+    assert!(all.contains("Me.Captured_Me.Caption = \"n=\" & CStr(Me.Captured_Me.count) & \"/\" & CStr(20&)"), "{all}");
+    assert!(all.contains("Me.Captured_Me.ok\n") && all.contains("Me.Captured_Me.keyDown a1, a2"), "{all}");
+    assert!(all.contains("Me.Captured_c.BackColor = "), "{all}");
+
+    let runtime = file(&files, "RAS_Runtime");
+    for proc in ["Function RAS_Listen(", "Sub RAS_Unlisten(", "Sub RAS_UnlistenOwner(", "Private ras_listeners As Collection"] {
+        assert!(runtime.contains(proc), "{proc} missing in the runtime");
+    }
+}
+
+#[test]
+fn errors_of_handlers_attached_at_run_time() {
+    let (diags, _) = compile(
+        r#"
+function two(a: int, b: int) {}
+@on("UserForm.Initialize")
+function init() {
+    const event = "Click";
+    this.btnOK.on(event, () => {});                    // E0616: not a literal
+    this.btnOK.on("Change", () => {});                 // E0611: no such event
+    this.txtName.on("Exit", (cancel) => {});           // E0611: raised by the form
+    this.on("Click", () => {});                        // E0616: the form itself
+    this.controls.on("NoSuchEvent", () => {});         // E0611
+    this.controls.on("KeyDown", (c, keyCode, shift, more) => {});   // E0612
+    this.btnOK.on("Click", (a) => {});                 // E0612: too many parameters
+    this.btnOK.on("Click", two);                       // E0612
+    this.btnOK.on("Click", 1);                         // E0301: not a function
+}
+"#,
+        &[],
+    );
+    let codes: Vec<&str> = diags.iter().map(|d| d.split(':').next().unwrap()).collect();
+    assert_eq!(codes, ["E0301", "E0611", "E0611", "E0611", "E0612", "E0612", "E0612", "E0616", "E0616"], "{diags:?}");
+    assert!(diags.iter().any(|d| d.contains("@on(\"<コントロール名>.Exit\")")), "{diags:?}");
+}
+
+/// An arrow function in a form's code-behind is another class: `this` and the functions and
+/// variables of the code-behind are those of the form that created it.
+#[test]
+fn closures_of_a_form_reach_their_form() {
+    let (diags, files) = compile(
+        r#"
+let count = 0;
+function bump() { count++; }
+function each(f: () => void) { f(); }
+@on("UserForm.Initialize")
+function init() {
+    const f = () => { bump(); this.caption = `n=${count}`; };
+    each(f);
+}
+"#,
+        &[],
+    );
+    assert!(diags.iter().all(|d| d.starts_with("I0641")), "{diags:?}");
+    let lambda = file(&files, "RAS_Lambda_001");
+    assert!(lambda.contains("Public Captured_Me As Object"), "{lambda}");
+    assert!(lambda.contains("Me.Captured_Me.bump") && lambda.contains("Me.Captured_Me.Caption = \"n=\" & CStr(Me.Captured_Me.count)"), "{lambda}");
+    let code = form_code(&files);
+    assert!(code.contains("Set ras_t1.Captured_Me = Me"), "{code}");
+    // No listeners: nothing to take off.
+    assert!(!code.contains("UserForm_Terminate"), "{code}");
+}
+
+/// VBA has no public arrays in an object module: a closure, another class, cannot use one.
+#[test]
+fn closures_cannot_use_the_arrays_of_a_form() {
+    let (diags, _) = compile(
+        r#"
+let names: string[] = [];
+const TITLE = "入力";
+@on("UserForm.Initialize")
+function init() {
+    this.btnOK.on("Click", () => { this.caption = `${TITLE} ${names.length}`; });
+}
+"#,
+        &[],
+    );
+    let codes: Vec<&str> = diags.iter().map(|d| d.split(':').next().unwrap()).collect();
+    assert_eq!(codes, ["E0642"], "{diags:?}");
+}
+
+/// The example of spec §12.2.3 (handlers attached at run time).
+#[test]
+fn spec_example_of_on_compiles() {
+    let text = include_str!("../../../docs/RAS_Language_Specification.md").replace("\r\n", "\n");
+    let start = text.find("// forms/frmEdit.ras\n").unwrap();
+    let example = &text[start..start + text[start..].find("```").unwrap()];
+    let (diags, files) = compile(example, &[]);
+    assert!(diags.is_empty(), "{diags:?}");
+    let code = form_code(&files);
+    // What the spec shows of the output.
+    assert!(code.contains("    Set ras_t1 = New RAS_Lambda_001\n    Set ras_t1.Captured_Me = Me\n    RAS_Listen New RAS_On_CommandButton_Click, Me.btnOK, ras_t1, 0&, Me\n"), "{code}");
+    let listener = file(&files, "RAS_On_CommandButton_Click");
+    let shown = &text[text.find("  ' RAS_On_CommandButton_Click.cls\n").unwrap()..];
+    let shown: String = shown[..shown.find("  ```").unwrap()].lines().skip(1).map(|l| format!("{}\n", l.strip_prefix("  ").unwrap_or(l))).collect();
+    assert!(listener.ends_with(&shown), "the spec shows:\n{shown}\nthe compiler writes:\n{listener}");
+}
+
+/// `on` of the collection of the controls, of an array and of a control whose kind is not
+/// known (spec §12.2.3): a generated procedure finds the listener class by the type of each.
+#[test]
+fn handlers_of_collections_and_arrays() {
+    let (diags, files) = compile(
+        r#"
+let edited = 0;
+function pressed(c: MSForms.Control, keyCode: MSForms.ReturnInteger) { edited++; }
+
+@on("UserForm.Initialize")
+function init() {
+    this.controls.on("Change", (c) => { edited++; c.tag = "edited"; });
+    this.controls.addEventListener("KeyDown", pressed);
+    const boxes = [this.txtName];
+    boxes.on("Change", () => { edited++; });
+    for (const c of this.controls) {
+        const l = c.on("Click", () => { edited++; });
+        if (l != null) l.off();
+    }
+}
+"#,
+        &[],
+    );
+    assert!(diags.is_empty(), "{diags:?}");
+    let code = form_code(&files);
+    assert!(code.contains("RAS_OnEach_Change Me.Controls, ras_t1, 256&, Me"), "{code}");
+    assert!(code.contains("RAS_OnEach_KeyDown Me.Controls, ras_t2, 257&, Me"), "{code}");
+    assert!(code.contains("RAS_OnEach_Change boxes, ras_t3, 0&, Me"), "{code}");
+    assert!(code.contains("Set l = RAS_OnAny_Click(c, ras_t4, 0&, Me)"), "{code}");
+    let events = file(&files, "RAS_Events");
+    println!("{events}");
+    assert!(events.contains("Option Private Module"), "{events}");
+    assert!(events.contains("Public Function RAS_OnAny_Change(ByVal target As Object, ByVal handler As Object, ByVal argc As Long, ByVal owner As Object) As Object\n    Select Case TypeName(target)\n    Case \"CheckBox\"\n        Set RAS_OnAny_Change = RAS_Listen(New RAS_On_CheckBox_Change, target, handler, argc, owner)\n"), "{events}");
+    assert!(events.contains("Case \"TextBox\"\n        Set RAS_OnAny_Change = RAS_Listen(New RAS_On_TextBox_Change, target, handler, argc, owner)\n"), "{events}");
+    assert!(events.contains("Public Sub RAS_OnEach_Change(ByRef targets As Variant, ByVal handler As Object, ByVal argc As Long, ByVal owner As Object)") && events.contains("    For Each t In targets\n        RAS_OnAny_Change t, handler, argc, owner\n    Next t\n"), "{events}");
+    // A control without the event (a label has no `Change`) is left alone.
+    assert!(!events.contains("RAS_On_Label_Change") && events.contains("RAS_On_Label_Click"), "{events}");
+    assert!(!events.contains("RAS_OnEach_Click"), "{events}");
+    // The handler of a member gets the member, then the arguments of the event.
+    let change = file(&files, "RAS_On_TextBox_Change");
+    assert!(change.contains("Case 0&\n        ras_handler.Apply\n") && change.contains("Case 256&\n        ras_handler.Apply ras_target\n"), "{change}");
+    let key = file(&files, "RAS_On_TextBox_KeyDown");
+    assert!(key.contains("    ras_handler.Apply ras_target, KeyCode\n"), "{key}");
+    let lambdas: String = files.iter().filter(|f| f.name.starts_with("RAS_Lambda_")).map(|f| f.code.replace("\r\n", "\n")).collect();
+    assert!(lambdas.contains("Public Function Apply(ByVal c As Variant) As Variant") && lambdas.contains("Me.Captured_Me.pressed a1, a2"), "{lambdas}");
 }

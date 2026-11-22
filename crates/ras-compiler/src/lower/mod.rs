@@ -4,6 +4,7 @@
 //! document-module code for event handlers and the generated init glue.
 
 mod bulk;
+mod events;
 pub(crate) mod expr;
 mod fusion;
 mod stmt;
@@ -138,6 +139,8 @@ pub(crate) struct ProcCtx {
     pub stmt_count: usize,
     /// True while lowering the body of a closure class (`Apply`).
     pub in_closure: bool,
+    /// The arrow function being lowered into a closure class.
+    pub closure_span: Option<Span>,
     /// Variable being initialised by its declaration, when the declaration runs only once
     /// (omitted fields of a struct literal need no reset then).
     pub fresh_target: Option<String>,
@@ -175,6 +178,15 @@ pub(crate) struct Lowerer<'p> {
     macros: Vec<String>,
     instance_counts: HashMap<FnId, usize>,
     reported_3d: bool,
+    /// Listener classes of the `on` calls (spec §12.2.3).
+    listeners: Vec<events::ListenerClass>,
+    /// Per event: the classes whose listener is chosen by the type of the target at run time
+    /// (type name, listener class), and whether arrays and collections are listened to.
+    dispatchers: Vec<events::Dispatcher>,
+    /// Forms whose code attaches event handlers: they are detached when the form is unloaded.
+    form_listens: HashSet<ModuleId>,
+    /// No "this arrow function becomes a class" hint (the handler of an `on` call).
+    quiet_closures: bool,
 }
 
 /// Workbook / worksheet event signatures: (name, VBA type, by reference).
@@ -222,7 +234,7 @@ pub(crate) fn sheet_control_event(control_type: &str, event: &str) -> Option<(St
 /// The events an object of the host class `class` raises for a `WithEvents` variable
 /// (spec §12.2.2): name and parameters (name, VBA type, by reference). `None` for a class
 /// whose events are not known.
-fn host_events(prog: &Program, class: ClassId) -> Option<Vec<(String, Vec<(String, String, bool)>)>> {
+pub(crate) fn host_events(prog: &Program, class: ClassId) -> Option<Vec<(String, Vec<(String, String, bool)>)>> {
     type Sig = (&'static str, &'static [(&'static str, &'static str, bool)]);
     const WB: (&str, &str, bool) = ("Wb", "Workbook", false);
     const SH: (&str, &str, bool) = ("Sh", "Object", false);
@@ -304,6 +316,40 @@ fn host_events(prog: &Program, class: ClassId) -> Option<Vec<(String, Vec<(Strin
     }
 }
 
+/// What `target.on(…)` can attach a handler to on an object of a class (spec §12.2.3).
+pub(crate) enum ListenTarget {
+    /// An object with events: the host class a `WithEvents` variable is declared as, and its
+    /// events (name and parameters).
+    Events(ClassId, Vec<(String, Vec<(String, String, bool)>)>),
+    /// An object with an `OnAction` property (a shape, a button of the Forms toolbar).
+    OnAction,
+}
+
+/// How an object of class `class` is listened to: by the events of the class or of the host
+/// class it extends (the class of a sheet's file extends `Excel.Worksheet`), or by `OnAction`.
+/// `None` for a class without either. A form is none: its events are the form module's.
+pub(crate) fn listen_target(prog: &Program, class: ClassId) -> Option<ListenTarget> {
+    let mut cur = Some(class);
+    for _ in 0..16 {
+        let c = cur?;
+        let def = &prog.classes[c];
+        if def.kind != ClassKind::Host || (def.namespace.as_deref() == Some("MSForms") && def.name == "UserForm") {
+            return None;
+        }
+        if let Some(events) = host_events(prog, c) {
+            return Some(ListenTarget::Events(c, events));
+        }
+        if def.fields.iter().any(|f| f.vba_name().eq_ignore_ascii_case("OnAction") && f.ty == Type::Str && !f.readonly) {
+            return Some(ListenTarget::OnAction);
+        }
+        cur = def.extends.iter().find_map(|t| match t {
+            Type::Class(b, _) => Some(*b),
+            _ => None,
+        });
+    }
+    None
+}
+
 /// An event of the workbook or of a sheet with its parameters (name, VBA type, by reference).
 fn document_event_sig(target_is_workbook: bool, event: &str) -> Option<(&'static str, Vec<(&'static str, &'static str, bool)>)> {
     let name = document_event(target_is_workbook, event)?;
@@ -368,6 +414,10 @@ pub fn lower(prog: &Program) -> Lowered {
         macros: Vec::new(),
         instance_counts: HashMap::new(),
         reported_3d: false,
+        listeners: Vec::new(),
+        dispatchers: Vec::new(),
+        form_listens: HashSet::new(),
+        quiet_closures: false,
     };
     lw.run();
     Lowered { modules: lw.out, diagnostics: lw.diags, notes: lw.notes, macros: lw.macros }
@@ -447,6 +497,8 @@ impl<'p> Lowerer<'p> {
                 break;
             }
         }
+        self.emit_dispatchers();
+        self.emit_listeners();
         self.emit_struct_helpers();
         self.emit_std_declares();
         self.emit_events();
@@ -865,7 +917,7 @@ impl<'p> Lowerer<'p> {
         targs.iter().map(|t| self.mangle_one(t)).collect::<Vec<_>>().join("_")
     }
 
-    fn shorten(name: String, max: usize) -> String {
+    pub(crate) fn shorten(name: String, max: usize) -> String {
         if name.chars().count() <= max {
             return name;
         }
@@ -879,6 +931,8 @@ impl<'p> Lowerer<'p> {
         let def = &self.prog.classes[c];
         if def.kind == ClassKind::Host {
             return match def.namespace.as_deref() {
+                // What `on` returns is an instance of one of the listener classes (spec §12.2.3).
+                None if def.name == "RAS_Listener" => "Object".into(),
                 // (`model::referenced_namespace` names the same libraries.)
                 Some("Excel") | Some("VBA") | Some("Office") | None => def.name.clone(),
                 // `StdFont` is stdole's; the rest are qualified (`Label`, `Image` … would be ambiguous).
@@ -958,7 +1012,21 @@ impl<'p> Lowerer<'p> {
         if !def.exported {
             self.force_public.insert(f);
         }
+        if let Some(me) = self.closure_form(def.module) {
+            return me.member(name);
+        }
         VExpr::Name(self.prog.modules[def.module].vba_name.clone()).member(name)
+    }
+
+    /// Inside an arrow function of a form's code-behind, the form the closure was created in:
+    /// the functions and variables of the code-behind are that instance's, not those of the
+    /// form's default instance (which naming the form would load).
+    fn closure_form(&self, module: ModuleId) -> Option<VExpr> {
+        if self.pc.in_closure && self.prog.modules[module].is_form() && self.frame().module == module {
+            self.frame().this.clone()
+        } else {
+            None
+        }
     }
 
     pub(crate) fn var_ref(&mut self, v: VarId) -> VExpr {
@@ -971,8 +1039,25 @@ impl<'p> Lowerer<'p> {
         if same_module {
             return VExpr::Name(name);
         }
+        // A constant of a form (a sheet) stays private there: its value.
+        let object_module = self.prog.modules[d.module].form.is_some();
+        if object_module && !d.exported {
+            if let Some(c) = self.const_literal(v) {
+                return lit(c);
+            }
+            // VBA has no `Public` arrays and structures in an object module.
+            let ty = d.ty.clone();
+            if self.vtype(&ty).1 || ty.has_struct() {
+                let m = self.src_module();
+                let span = self.pc.closure_span.unwrap_or_default();
+                self.diag(Severity::Error, m, span, "E0642", format!("アロー関数の中から、フォーム・シートのファイルの配列・構造体の変数 `{}` は参照できません（アロー関数は別のクラスになり、VBA はオブジェクト モジュールの配列・構造体を公開できないためです）。アロー関数の外で値を取り出すか、関数を通して読み書きしてください", d.name));
+            }
+        }
         if !d.exported {
             self.force_public_vars.insert(v);
+        }
+        if let Some(me) = self.closure_form(d.module) {
+            return me.member(name);
         }
         VExpr::Name(self.prog.modules[d.module].vba_name.clone()).member(name)
     }
@@ -2098,6 +2183,13 @@ impl<'p> Lowerer<'p> {
                 table.insert(0, (("UserForm".to_string(), def), Vec::new()));
             }
         }
+        // The handlers the form's code attached with `on` go with the form (spec §12.2.3).
+        let listens = self.form_listens.contains(&m);
+        if listens && !table.iter().any(|t| t.0 .0 == "UserForm" && t.0 .1.name == "Terminate") {
+            if let Some(def) = crate::userform::find_event("UserForm", "Terminate") {
+                table.push((("UserForm".to_string(), def), Vec::new()));
+            }
+        }
         for ((object, def), handlers) in table {
             let proc_name = format!("{object}_{}", def.name);
             // A function of the code-behind named like the event procedure would clash with it.
@@ -2131,12 +2223,19 @@ impl<'p> Lowerer<'p> {
             for flag in &locals {
                 body.push(VStmt::Raw(format!("Static {flag} As Boolean")));
             }
+            let unlisten = listens && object == "UserForm" && def.name == "Terminate";
             body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
             body.extend(calls);
+            if unlisten {
+                body.push(call_stmt("RAS_UnlistenOwner", vec![lit("Me")]));
+            }
             body.push(VStmt::Exit("Sub"));
             body.push(VStmt::Label("RAS_OnError".into()));
             for flag in &locals {
                 body.push(assign(vname(flag.clone()), lit("False")));
+            }
+            if unlisten {
+                body.push(call_stmt("RAS_UnlistenOwner", vec![lit("Me")]));
             }
             body.push(call_stmt("RAS_EventError", vec![lit(format!("\"{}.{proc_name}\"", decl.name)), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
             let params = def.params.iter().map(|p| VParam { name: p.name.clone(), byref: p.byref, ty: p.vba_type.clone(), is_array: false, optional_default: None }).collect();

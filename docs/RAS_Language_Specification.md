@@ -11,6 +11,7 @@
 > * クラス・インターフェイスの型パラメータに既定の型引数 `T = 型` を書けるようにした（§2.4.1）
 > * テスト（`ras test`）を追加。`test/` の `*.test.ras` に vitest 形式（`describe` / `test` / `expect`）で書き、ブックの代役（§14.10.8）で Excel を起動せずに実行する（§14.12）
 > * RAS のファイルと VBA のモジュールを一対一に対応させる（§12.1.1）。シート・`ThisWorkbook` のコードは `objects/<コード名>.ras`・`objects/ThisWorkbook.ras` に書き、そのファイルがドキュメントモジュール全体になる（§12.2）。シートの上の ActiveX コントロールのイベント（§12.2.1）と `WithEvents` のイベント（§12.2.2）を `@on` で受け取れる。VBE で足したプロシージャは RAS のファイルに取り込む（§14.7.3）。シートのイベントハンドラ（`@on("Sheet1.Change")`）をどのファイルにも書ける方式、`<コード名>Events.ras`、ドキュメントモジュールの RAS 管理領域は廃止した
+> * イベントハンドラを実行時に付ける `on` / `addEventListener` を追加（§12.2.3）。コントロール・シート・ブック・`Application` には、`WithEvents` の変数を持つクラスを生成して付ける。図形には `OnAction` にマクロの名前を設定する。フォーム・シートのファイルのアロー関数が、`this` とそのファイルの関数・変数を正しく参照するようにした（§4.1）
 > * シートの追加・複製・削除・名前の変更を、ブックと `objects/` のファイルに一緒に行う `ras sheet` と VS Code のコマンドを追加（§14.16）。Excel で複製したシートは、同期がコピー元のファイルを複製する（§14.7.2）
 
 > v0.7 からの変更
@@ -573,6 +574,7 @@ MsgBox "完了しました",, "集計"
 * **キャプチャ制約（重要）:**
   * 無名関数内で参照できる外部スコープの変数は**イミュータブル（`const` または読み取り専用変数）のみ**。
   * 無名関数内での外部変数の書き換えはコンパイルエラー。
+  * 例外: `on` / `addEventListener` に渡すイベントハンドラ（§12.2.3）の中では、モジュール変数（フォーム・シートのファイルの変数を含む）を書き換えられる。イベントハンドラは状態を持つのが普通で、モジュール変数は生成時のコピーではなく変数そのものを参照するためである。外側の関数のローカル変数は、イベントハンドラでも書き換えられない。
 
 ### 4.1 トランスパイル仕様（v0.2で変更）
 
@@ -582,6 +584,7 @@ MsgBox "完了しました",, "集計"
    * コールバックが受け取る添字は、JavaScript と同じく「そのメソッドを呼んだ配列の中での位置」である。融合しても変わらない。`filter` の後段（`arr.filter(f).map((x, i) => ...)` の `i`、`arr.filter(f).findIndex(g)` の結果）は、絞り込みを通った要素の中での位置になる。後段が添字を使うときだけ、`filter` ごとに通過した要素を数える。
 2. **クロージャクラス（エスケープ時のみ）:** ラムダが変数に代入される・関数の引数として渡される・戻り値になる等、呼び出し位置で本体を特定できない場合のみ、従来通りクラスモジュール（`RAS_Lambda_001.cls`）を生成する。
    * キャプチャされた定数はパブリックフィールドとし、生成時にワンタイムコピーする。
+   * フォームのコードビハインド・シート（`ThisWorkbook`）のファイルのアロー関数では、`this` はそのフォーム（シート・ブック）を表す（クラスを作ったフォームを `Captured_Me` に持つ）。フォームのコードビハインドの関数・変数は、フォーム名（既定のインスタンス）ではなく、クラスを作ったフォームのものを参照する。参照される関数・変数は `Public` で出力する。VBA はオブジェクト モジュールに `Public` の配列・構造体の変数を置けないので、アロー関数の中からフォーム・シートのファイルの配列・構造体の変数を参照するとエラー（`E0642`）。定数は値を埋め込む。
    * 評価メソッド名は `Apply`。ランタイム（`RAS_Runtime.bas`）から遅延バインディングで呼び出す。`Invoke` は `IDispatch` のメンバー名と衝突し、クラスモジュールではコンパイル エラー（「このメンバー識別子は既にオブジェクト モジュールの中に存在しています」）になるため使えない。
    * リンターは「このラムダはクラスに変換されるため遅い」旨のヒント（Information）を出す。
 
@@ -1199,14 +1202,14 @@ RAS のファイルと VBA のモジュールは一対一に対応させる。�
 * **モジュール名:** ファイル名（ディレクトリと拡張子を除く）から決める。先頭の文字と、`_` / `-` / `.` / 空白の次の文字を大文字にし、これらの区切りは取り除く（`report.ras` → `Report`、`mod_util.ras` → `ModUtil`）。数字で始まる名前には `Mod` を前に付け、31 文字までにする。VBA の予約語と同じ名前には末尾に `_` を付ける。`objects/` のファイルは名前を変えず、ファイル名（拡張子を除く）がそのままシートのコード名（`ThisWorkbook`）である。こうして決めた名前が、大文字小文字を区別せずにほかのファイル・シート・フォームの名前と重なる場合はエラーにする（`src/Sheet1.ras` は、コード名 `Sheet1` のシートと重なるのでエラー。シートのコードは `objects/Sheet1.ras` に書く）。
 * **ファイルを持たないモジュール:** 次のモジュールはコンパイラが生成するもので、対応する `.ras` ファイルを持たない。
   * `class` 宣言ごとのクラスモジュール（`<クラス名>.cls`）。1 つのファイルに複数のクラスを書ける。ジェネリクスは型引数ごとに 1 つ（§2.4）
-  * `RAS_StructMap__…`（§2.5.6）、`RAS_Lambda_…`（§4.1）、`RAS_Runtime`（§7.5）
+  * `RAS_StructMap__…`（§2.5.6）、`RAS_Lambda_…`（§4.1）、`RAS_On_…`・`RAS_Events`（§12.2.3）、`RAS_Runtime`（§7.5）
 * 同期・`ras pack` は、この対応に無いブックのコード（手書きの標準モジュール、シートのモジュールの手書きのコードなど）を RAS のファイルに変換して取り込み、対応を保つ（§14.7.1）。
 
 ### 12.2 シート・`ThisWorkbook` のファイル（ドキュメントモジュール）（v0.9で変更）
 
 ワークシートと `ThisWorkbook` のモジュール（ドキュメントモジュール）のコードは、`objects/<シートのコード名>.ras` と `objects/ThisWorkbook.ras` に書く（`objects/` は、VBE のプロジェクト エクスプローラーの「Microsoft Excel Objects」に当たるディレクトリで、`src/`・`forms/` と並べてプロジェクトの直下に置く）。コンパイラはこのファイルを、標準モジュールではなく**そのドキュメントモジュールのコード全体**として出力する。ドキュメントモジュールは VBE でもファイルとしてインポートできないので、同期（§14.6）と `ras pack`（§14.9）がコードモジュールに直接書き込む。フォームのコードビハインド（§14.11.2）と同じ形である。
 
-> **実装メモ（現行版）:** 本節と §12.1.1、§12.2.1、§12.2.2、§14.6、§14.7.1〜§14.7.3、§14.9 のドキュメントモジュールの扱い、§14.16 の `ras sheet` は実装済み。次は未確認: 複製されたシートのファイルの複製（§14.7.2）と、Excel で開いているブックに対する `ras sheet`（§14.16）は Windows 専用のコードで、実際の Excel での確認をまだ行っていない。
+> **実装メモ（現行版）:** 本節と §12.1.1、§12.2.1〜§12.2.3、§14.6、§14.7.1〜§14.7.3、§14.9 のドキュメントモジュールの扱い、§14.16 の `ras sheet` は実装済み。次は未確認: §12.2.3 の `on` が生成する VBA（リスナーのクラス、フォームを閉じたときの解除、`OnAction` に設定する名前）は、実際の Excel での確認をまだ行っていない（Excel のないデバッグ実行とテストでは動作を確認している）。 複製されたシートのファイルの複製（§14.7.2）と、Excel で開いているブックに対する `ras sheet`（§14.16）は Windows 専用のコードで、実際の Excel での確認をまだ行っていない。
 
 ```typescript
 // objects/Sheet1.ras（コード名 Sheet1 のシートのモジュール）
@@ -1251,6 +1254,7 @@ function onAnySheetChange(sh: object, target: Excel.Range) { ... }
   * `@on` は、そのイベントを起こすもののファイルにだけ書ける。次はエラーにする（`E0610`）: `src/` のファイルの関数に付けた `@on`、シートのファイルに書いた `@on("Workbook.…")`、`ThisWorkbook.ras` に書いた `@on("Worksheet.…")`。v0.9 以前の `@on("Sheet1.Change")`（コード名を書く形）も `E0610` とし、メッセージで `objects/Sheet1.ras` の `@on("Worksheet.Change")` へ移すよう案内する。
   * そのほかのエラーはフォームと共通: ないイベント（`E0611`）、引数が多すぎる（`E0612`）、関数名が生成するイベント プロシージャ名（`Worksheet_Change`）と同じ（`E0614`）。
   * シートの上の ActiveX コントロールのイベントは `@on("<コントロール名>.<イベント>")`（§12.2.1）、`WithEvents` で受け取るイベントは `@on("<変数名>.<イベント>")`（§12.2.2）で受け取る。
+  * `@on` は、どのイベントを受け取るかがコンパイル時に決まる。実行時に決めるとき（同じ処理を多くのコントロールに付ける、条件によって付け外しする）は、`on` / `addEventListener`（§12.2.3）を使う。
 * **変数:** トップレベルの `let` / `const` は、そのモジュールの変数・定数（`Private`）になる。初期値は、標準モジュールの変数と同じ時点で設定する。
 * **公開:** `export function` はそのシート（ブック）の `Public` メンバーになり、ほかのモジュールから `Sheet1.clearInput()` / `thisWorkbook.refresh()` のように呼ぶ（VBA のシートモジュールの `Public` プロシージャと同じ）。シートのコード名と `thisWorkbook` はどこからでも参照できるグローバルなので、`import` は要らない（シート・`ThisWorkbook` のファイルを `import` することはできない。このファイルからほかのモジュールを `import` することはできる）。`export` しない関数は `Private`。
   * 引数なしで呼べる `export function` と `@macro` を付けた関数は、標準モジュールと同じくマクロ入口になる（§12.4 のラップをする）。Excel からは `Sheet1.clearInput` の名前で呼ばれる（ボタンへの登録など）。
@@ -1351,6 +1355,159 @@ export class ButtonWatcher {
   * `Application` を指す変数には、プロジェクトのブックのイベントを起こす。ブックの `Sheet…` のイベントは同じ名前で（`SheetChange`）、ブック自身のイベントは `Workbook` を付けた名前で、ブックを先頭の引数にして起こす（`BeforeSave` → `WorkbookBeforeSave(wb, saveAsUI, cancel)`）。
   * 呼ぶ順序は、ファイルに書いたシート・ブックのハンドラ、続いて変数のハンドラ（登録した順）。変数に `null` を代入すると呼ばれなくなる。使われなくなったクラスのインスタンスのハンドラは呼ばれなくなる。
   * コントロール（`MSForms`）を指す変数のハンドラは呼ばない。
+
+#### 12.2.3 実行時に付けるイベントハンドラ（`on` / `addEventListener`）（v0.9で追加）
+
+`@on` は、ハンドラとイベントの対応をコンパイル時に決める。実行時に決めるとき（フォームのすべてのテキスト ボックスに同じ処理を付ける、条件によって付け外しする、実行時に作ったオブジェクトに付ける）は、オブジェクトの `on` を呼ぶ。DOM の `addEventListener`、jQuery の `on` に当たる。
+
+```typescript
+// forms/frmEdit.ras
+let edited = 0;
+
+@on("UserForm.Initialize")
+function init() {
+    this.btnOK.on("Click", () => { this.hide(); });
+    this.btnCancel.addEventListener("Click", cancel);       // on と同じ。関数の名前も渡せる
+
+    // コレクション・配列に付ける: イベントを持つコントロールすべてに付く。ハンドラは、先頭の引数でどのコントロールかを受け取る
+    this.controls.on("KeyDown", (c, keyCode) => { if (keyCode.value == 27) unload(this); });
+    [this.btnOK, this.btnCancel].on("MouseMove", (button) => { button.backColor = rgb(220, 235, 255); });
+
+    // 種類を絞り込んで、すべてのテキスト ボックスに付ける
+    for (const c of this.controls) {
+        if (c instanceof MSForms.TextBox) {
+            c.on("Change", () => {
+                edited++;                                    // イベントハンドラはモジュール変数を書き換えられる（§4）
+                c.backColor = c.text == "" ? rgb(255, 230, 230) : rgb(255, 255, 255);
+            });
+        }
+    }
+    this.txtName.on("KeyDown", (keyCode, shift) => {         // 引数の型はイベントから決まる
+        if (keyCode.value == 13) this.btnOK.setFocus();
+    });
+}
+
+function cancel() {
+    unload(this);
+}
+```
+
+```typescript
+// src/watch.ras: シート・ブック・Application、図形
+export function start() {
+    const l = Sheet1.on("Change", (target) => { status(`変更: ${target.address}`); });
+    thisWorkbook.on("BeforeClose", () => confirmClose());    // false を返すと取り消す
+    application.on("SheetActivate", (sh) => { console.log(sh.name); });
+    l.off();                                                 // 外す
+
+    // 図形・フォーム コントロールのボタン: OnAction にマクロの名前を設定する
+    Sheet1.shapes("btnReload").on("Click", reload);
+}
+
+function confirmClose(): boolean {
+    return msgBox("閉じますか？", vbYesNo) == vbYes;
+}
+
+export function reload() {
+    Sheet1.calculate();
+}
+```
+
+* **構文:** `<オブジェクト>.on("<イベント>", <ハンドラ>)`。`addEventListener` は `on` の別名で、動作は同じである。
+  * イベントの名前は文字列リテラルで書く（大文字小文字は区別しない）。イベントごとに受け取るクラスを生成するので、実行時に決まる名前は使えない（`E0616`）。
+  * ハンドラは、アロー関数、関数型の変数、関数の名前のどれかを書く（`btn.on("Click", ok)`。関数の名前を値として書けるのは、`on` のハンドラだけである）。
+  * 型定義に同じ名前のメンバー（`on` / `addEventListener`）を持つホストの型では、そちらが使われる。
+* **対象（イベントを持つオブジェクト）:** `@on("<変数名>.<イベント>")`（§12.2.2）で `WithEvents` にできる型の値。
+  * `MSForms.CommandButton` などのコントロール（フォームのコントロール、シートの上の ActiveX コントロール（§12.2.1））、`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`Excel.Chart`・`Excel.QueryTable`。`thisWorkbook` とシートのコード名（`Sheet1`）、シート・`ThisWorkbook` のファイルの `this` も対象になる。
+  * 使えるイベントは §12.2.2 の「イベントの一覧」と同じ。コントロールでは、フォームが起こす `Enter` / `Exit` / `BeforeUpdate` / `AfterUpdate` と、シートが起こす `GotFocus` / `LostFocus` は受け取れない（`@on("<コントロール名>.<イベント>")` で受け取る）。ないイベントは `E0611`。
+  * `MSForms.Control`（`this.controls` の要素）にも付けられる。コントロールの種類は実行時に決まるので、そのイベントを持つ種類のコントロールにだけ付き、持たない種類（`Label` の `Change` など）では何もせず `null` を返す。使えるイベントは、どれかのコントロールが持つもの。ハンドラが受け取れる引数は、そのイベントを持つすべての種類に共通する先頭の部分に限る（`Click` は、`MultiPage` / `TabStrip` だけが `index` を渡すので、引数なし）。
+  * フォーム自身のイベントは `@on("UserForm.<イベント>")` で受け取る。イベントの分からないクラス（`Excel.Range`、`Office` のクラスなど）には付けられない（`E0616`）。`object`・`any` の値の `on(…)` は、ほかのメンバーと同じく遅延バインディングの呼び出しになり、イベントハンドラは付かない（変数に型を書くか、`instanceof` で絞り込む）。
+* **対象（配列・コレクション）:** 上の型のオブジェクトの配列（`MSForms.TextBox[]`、`Excel.Worksheet[]`、`MSForms.Control[]`）と、それを要素とするホストのコレクション（`this.controls`、`book.worksheets`、`ws.shapes`）。すべてのメンバーに付ける（`MSForms.Control` のメンバーは、イベントを持つものだけ）。
+  * ハンドラは、**先頭の引数でそのメンバーを受け取り**、続けてイベントの引数を受け取る（`this.controls.on("KeyDown", (c, keyCode, shift) => …)`）。どちらも後ろから省略できる。`OnAction` のマクロは引数を受け取らない。
+  * 戻り値は無い（`void`）。個別に外すときは、`for...of` でメンバーごとに `on` を呼んで戻り値を取っておく。フォームのコードビハインドで付けたものは、フォームが閉じると外れる。
+  * 付くのは、呼んだ時点のメンバーである。後から足したコントロール・シートには付かない。
+* **対象（`OnAction` を持つオブジェクト）:** `Excel.Shape` のように `onAction` プロパティを持つ型の値（図形、フォーム コントロールのボタン）。イベントは `Click` だけで、ハンドラには**マクロにできる関数の名前**を書く（`src/` か `objects/` のファイルの、引数も戻り値もない `export function`、または `@macro` を付けた関数。§12.4）。アロー関数・関数型の変数・フォームの関数は書けない（`E0617`）。Excel はマクロの名前をブックに保存するためである。戻り値は無い（`void`）。外すには `onAction = ""` を代入する。
+* **ハンドラの引数:** イベントの引数を先頭から順に受け取り、省略できる（`@on` と同じ）。アロー関数の引数の型は、イベントの引数から決まる（`Integer` は `short`、`Range` は `Excel.Range`、`MSForms.ReturnBoolean` はそのまま）。引数が多すぎるとエラー（`E0612`）。`byref` の引数は書けない。
+* **取り消し:** `Cancel As Boolean` を `ByRef` で受け取るイベント（`Workbook.BeforeClose`・`Worksheet.BeforeDoubleClick` など Excel のイベント）は、ハンドラが `false` を返すと取り消す（`Cancel = True`。jQuery と同じ）。`false` 以外の値を返したとき・値を返さないときは、何もしない。`MSForms.ReturnBoolean` を受け取るイベント（コントロールの `DblClick` など）は、`@on` と同じく `cancel.value = true` で取り消す。
+* **戻り値:** 付けたハンドラを表す `RAS_Listener`。`off()` で外す（外したあとは呼ばれない。何度呼んでもよい）。
+* **いつまで呼ばれるか:**
+  * **フォームのコードビハインドで付けたもの**（対象がそのフォームのコントロールでなくても）は、そのフォームが閉じる（`Terminate`）ときに外れる。次にフォームを読み込むと `Initialize` がまた呼ばれるので、そこで付け直す。
+  * **それ以外で付けたもの**は、`off()` を呼ぶか、VBA プロジェクトの状態がリセットされるまで呼ばれる（リセットで変数が消えるのと同じく、付けたハンドラも消える）。ブックを開いている間ずっと受け取るものは、`@on("Workbook.Open")` のハンドラか `@init` の関数で付ける（§12.3）。
+  * 同じオブジェクトの同じイベントに、いくつでも付けられる。同じハンドラを 2 回付けると、2 回呼ばれる。
+  * `OnAction` はブックに保存されるので、ブックを開き直しても残る。
+* **呼ばれる順序・再入・エラー:** デバッグ実行とテストでは、`@on` のハンドラの後に、`on` で付けたハンドラを付けた順に呼ぶ。Excel では、イベントを起こすオブジェクトが決める（通常は接続した順だが、保証されない）。ハンドラの実行中に、そのハンドラ自身が起こした同じイベントは無視する（付けたハンドラごと）。捕捉されなかったエラーは、`@on` と同じく RAS のエラーダイアログで表示する。
+* **`@on` との使い分け:** フォーム・シートの決まったコントロールのイベントは `@on` で書く（宣言なので付け忘れ・外し忘れが無く、クラスも生成しない）。`on` は、対象やイベントが実行時に決まるときに使う。
+* **出力:** 使われた「クラスとイベント」の組ごとに、クラス モジュール `RAS_On_<クラス>_<イベント>`（31 文字を超える名前は、後ろをハッシュに置き換える）を 1 つ生成する。ハンドラは、エスケープするアロー関数（§4.3）と同じクラス（`RAS_Lambda_…`、メソッド `Apply`）のオブジェクトとして渡す（関数の名前を書いたときは、その関数を呼ぶだけのクラスを生成する。「クラスに変換されるため遅い」のヒント `I0641` は出さない）。ランタイム（`RAS_Listen`）が、付けたハンドラを `Collection` に持って生かしておく。フォームのコードで付けたものは、コンパイラが足す `UserForm_Terminate` の `RAS_UnlistenOwner Me` で外す。
+
+  ```vb
+  ' forms/frmEdit.ras の init（抜粋）
+      Set ras_t1 = New RAS_Lambda_001
+      Set ras_t1.Captured_Me = Me
+      RAS_Listen New RAS_On_CommandButton_Click, Me.btnOK, ras_t1, 0&, Me
+  ```
+
+  ```vb
+  ' RAS_On_CommandButton_Click.cls
+  Private WithEvents ras_target As MSForms.CommandButton
+  Private ras_handler As Object
+  Private ras_argc As Long
+  Private ras_busy As Boolean
+  Public RAS_Owner As Object
+
+  Public Sub RAS_Bind(ByVal target As Object, ByVal handler As Object, ByVal argc As Long, ByVal owner As Object)
+      Set ras_target = target
+      Set ras_handler = handler
+      ras_argc = argc
+      Set RAS_Owner = owner
+  End Sub
+
+  Public Sub Off()
+      Set ras_target = Nothing
+      Set ras_handler = Nothing
+      Set RAS_Owner = Nothing
+      RAS_Unlisten Me
+  End Sub
+
+  Private Sub ras_target_Click()
+      If ras_busy Or ras_handler Is Nothing Then Exit Sub
+      On Error GoTo RAS_OnError
+      ras_busy = True
+      ras_handler.Apply
+      ras_busy = False
+      Exit Sub
+  RAS_OnError:
+      ras_busy = False
+      RAS_EventError "CommandButton.Click", Err.Number, Err.Source, Err.Description
+  End Sub
+  ```
+
+  * 受け取る引数の数が違うハンドラが同じ「クラスとイベント」にあるときは、イベント プロシージャの中で `Select Case ras_argc` で呼び分ける。
+  * `Cancel` を `ByRef` で受け取るイベントでは、`If RAS_Cancels(ras_handler.Apply(…)) Then Cancel = True` と呼ぶ。
+  * `MSForms.Control` と配列・コレクションでは、対象のクラスが実行時に決まる。イベントごとに、`TypeName` でリスナーのクラスを選ぶ `RAS_OnAny_<イベント>` と、メンバーを列挙してそれを呼ぶ `RAS_OnEach_<イベント>` を、標準モジュール `RAS_Events` に生成する（`TypeOf … Is` は使わない。`CheckBox`・`OptionButton`・`ToggleButton` はインターフェイスを共有していて区別できない）。メンバーを受け取るハンドラは、`ras_argc` に 256 を足して区別し、`ras_handler.Apply ras_target, KeyCode` のように呼ぶ。
+
+    ```vb
+    ' フォーム:  RAS_OnEach_KeyDown Me.Controls, ras_t1, 257&, Me
+    Public Function RAS_OnAny_KeyDown(ByVal target As Object, ByVal handler As Object, ByVal argc As Long, ByVal owner As Object) As Object
+        Select Case TypeName(target)
+        Case "CheckBox"
+            Set RAS_OnAny_KeyDown = RAS_Listen(New RAS_On_CheckBox_KeyDown, target, handler, argc, owner)
+        Case "ComboBox"
+            …
+        End Select
+    End Function
+
+    Public Sub RAS_OnEach_KeyDown(ByRef targets As Variant, ByVal handler As Object, ByVal argc As Long, ByVal owner As Object)
+        Dim t As Variant
+        If IsArray(targets) Then
+            If RAS_Len(targets) = 0& Then Exit Sub
+        End If
+        For Each t In targets
+            RAS_OnAny_KeyDown t, handler, argc, owner
+        Next t
+    End Sub
+    ```
+  * `OnAction` は `shape.OnAction = RAS_MacroName("Report.reload")` と出力する（配列・コレクションでは `RAS_OnActionEach shapes, RAS_MacroName(…)`）。`RAS_MacroName` は、アクティブなブックがどれでも呼べるように、ブック名を付けた名前（`'Book.xlsm'!Report.reload`）を返す。
+* **デバッグ実行・テスト:** フォームのデバッグ実行（§14.10.7）では、フォームのコントロールに付けたハンドラを、`@on` のハンドラと同じきっかけで呼ぶ。Excel のないデバッグ実行（§14.10.8）とテストでは、プロジェクトのブック・そのシート・`Application` に付けたハンドラを、§12.2.2 の変数のハンドラと同じ規則で呼ぶ。Excel に接続したデバッグ実行では、Excel が起こすイベントは受け取れない（§14.10.5）。`OnAction` には、ブック名を付けない名前（`Report.reload`）を設定する。
 
 ### 12.3 初期化の保証（`@init`）
 
@@ -1797,6 +1954,8 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 | 閉じるボタン（パネルの ✕、パネルのタブを閉じる） | `UserForm.QueryClose`（`closeMode` = `vbFormControlMenu`）。`cancel` に 0 以外を入れると閉じない（タブを閉じた場合はパネルを開き直す）。閉じるときは `UserForm.Terminate` |
 | `unload(this)` | `UserForm.QueryClose`（`closeMode` = `vbFormCode`）、`UserForm.Terminate` |
 
+  `on` でコントロールに付けたハンドラ（§12.2.3）は、そのコントロールの `@on` のハンドラの後に、付けた順に呼ぶ（フォームが起こす `Enter` / `Exit` / `BeforeUpdate` / `AfterUpdate` を除く）。フォームを閉じると外れる。
+
   コードでプロパティを変えたときも、VBA と同じく `Change` などが起きる（`text`・`value`・`listIndex` の変更）。キー入力のイベント（`KeyDown` / `KeyPress` / `KeyUp`）・マウスのイベント（`MouseDown` など）・ドラッグ＆ドロップ・`Deactivate` は起こさない。
 * **エラー:** ハンドラで捕捉されなかったエラーは、VBA ビルドの RAS エラーダイアログ（`RAS_EventError`）と同じく実行を止めない。エラーの内容と RAS の位置をデバッグ コンソールとフォームのパネルに表示し、次の操作を待つ。エラーで止めたい場合は、VS Code のブレークポイントの「捕捉された例外」を有効にする。
 * **MSForms のオブジェクト:** フォーム（`caption`・`width` / `height`・`backColor`・`font`・`controls`・`activeControl`・`show` / `hide`）と組み込みのコントロール（§14.11.1）の主なプロパティとメソッドを JavaScript で実装している（`text` / `value`、`caption`、`enabled` / `visible` / `locked`、位置と大きさ、色とフォント、`ComboBox` / `ListBox` の `addItem` / `removeItem` / `clear` / `list` / `column` / `listIndex` / `listCount` / `selected` / `multiSelect`、`MultiPage` の `pages` / `selectedItem`、`TabStrip` の `tabs`、`Image` などの `picture`・`mouseIcon` と `loadPicture`）。初期値は `.form.json` から読む（`list` / `selectedIndex` を含む）。未実装のメンバーはエラー 438、`controls.add` などの未対応の操作はエラー 445 になる。
@@ -1962,7 +2121,8 @@ export function enteredName(): string {
   * エラー: コントロールがない（`E0613`）、そのコントロールにないイベント（`E0611`。ページのイベントは親の `MultiPage` で受け取る）、引数が多すぎる（`E0612`）、関数名が生成するイベント プロシージャ名（`btnOK_Click`）と同じ（`E0614`）。
 * **変数:** トップレベルの `let` / `const` はフォームのモジュール変数（`Private`）になる。初期値は `UserForm_Initialize` の先頭で設定する（`Initialize` のハンドラが無くても生成する）。フォームのインスタンスごとに持つ。
 * **公開:** `export function` はフォームの `Public` メンバーになり、他のモジュールからフォームの既定のインスタンス経由で `frmInput.enteredName()` のように呼べる。フォーム名はどこからでも参照できるグローバル（既定のインスタンス）で、`frmInput.show()` のように使う。`export` しない関数は `Private`。コードビハインドの関数はマクロ入口にならない（§12.4 のラップもしない）。
-* **`WithEvents`:** トップレベルの変数のイベントは、`@on("<変数名>.<イベント>")` で受け取れる（§12.2.2）。同じ処理を多くのコントロールに付けるときは、コントロールをフィールドに持つクラスを `src/` に書き、そのクラスで `@on` を受け取る。
+* **`WithEvents`:** トップレベルの変数のイベントは、`@on("<変数名>.<イベント>")` で受け取れる（§12.2.2）。
+* **実行時に付けるハンドラ:** 同じ処理を多くのコントロールに付けるときは、`Initialize` のハンドラで `this.controls.on("Change", (c) => …)` / `[this.txtA, this.txtB].on("Change", …)` / `this.btnOK.on("Click", …)` のように付ける（§12.2.3）。フォームが閉じると外れる。
 * **書けないもの（`E0630`・`E0632`）:** トップレベルの文、クラス・インターフェイス・構造体・`declare module`、`export` した変数・列挙型・型エイリアス、`@macro` / `@init` / `@udf` / `@ribbon`、拡張メソッド。共有したいものは `src/` のモジュールに置き、`import` して使う（コードビハインドは `import` できる。コードビハインドを `import` することはできない）。
 * `.form.json` が無い `forms/<Name>.ras` はエラー（`E0631`）。
 * デバッグ実行（§14.10）では、フォームを VS Code のパネルに表示してコードビハインドを動かす（§14.10.7）。Excel 本体でフォームを表示して動かすのは「Excel で実行」（§14.11.8）。
@@ -2091,7 +2251,7 @@ VS Code の「Excel で実行」（フォームのコードビハインドの先
 
 * カスタム ActiveX コントロールは生成できない（エラーになる）。
 * VBE でフォームのデザインやコードを編集しても `forms/` には自動では反映されない。デザインは `ras form pull --force` で取り込める。取り込まない限り、次に `forms/` 側を変更して書き込んだ時点で `forms/` の内容に置き換わる（ドリフト検出は行わない）。
-* コードビハインドの `@on("<コントロール名>.<イベント>")` で扱えるのは、組み込みのコントロールのイベントだけである。同じハンドラを複数のコントロールに付けるとき（コントロールの配列）は、`WithEvents` に当たる書き方（§12.2.2）でクラスに書く。
+* コードビハインドの `@on("<コントロール名>.<イベント>")` で扱えるのは、組み込みのコントロールのイベントだけである。同じハンドラを複数のコントロールに付けるとき（コントロールの配列）は、`on` で付ける（§12.2.3）。
 * ライブ同期でのフォームの取り込み（`VBComponents.Import`）は、Excel の無い環境では自動テストできない。`.frx` の構成は Excel が書き出したファイルと照合している（`crates/ras-form/tests/project.rs`）。
 
 ### 14.12 テスト（`ras test`）（v0.9で追加）

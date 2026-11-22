@@ -645,17 +645,23 @@ impl<'p> Lowerer<'p> {
                 }
             }
         }
-        let outer_this = self.frame().this.clone();
+        // In the code of a form, of a sheet or of the workbook, `this` is the module itself. A
+        // closure of a form always knows its form: the functions and variables of the
+        // code-behind are reached through it (`fn_callee`, `var_ref`).
+        let object_module = self.prog.modules[self.frame().module].form.as_ref().map(|f| f.kind);
+        let outer_this = self.frame().this.clone().or_else(|| (object_module.is_some() && !self.pc.in_closure && !self.pc.in_class).then(|| lit("Me")));
         let body_uses_this = outer_this.is_some()
-            && match &arrow.body {
-                ArrowBody::Expr(b) => any_expr_in(b, &mut |x| matches!(x.kind, ExprKind::This)),
-                ArrowBody::Block(b) => b.stmts.iter().any(|s| crate::astutil::any_expr(s, &mut |x| matches!(x.kind, ExprKind::This))),
-            };
+            && (object_module == Some(ObjectKind::Form)
+                || match &arrow.body {
+                    ArrowBody::Expr(b) => any_expr_in(b, &mut |x| matches!(x.kind, ExprKind::This)),
+                    ArrowBody::Block(b) => b.stmts.iter().any(|s| crate::astutil::any_expr(s, &mut |x| matches!(x.kind, ExprKind::This))),
+                });
 
         let saved = std::mem::take(&mut self.pc);
         let outer = saved.frames.last().unwrap();
         self.pc.emit_module = saved.emit_module;
         self.pc.in_closure = true;
+        self.pc.closure_span = Some(arrow.span);
         self.pc.exit_kw = "Function";
         self.pc.proc_name = "Apply".into();
         self.pc.ret_ty = ret_ty.clone();
@@ -730,7 +736,11 @@ impl<'p> Lowerer<'p> {
         if body_uses_this {
             self.emit(set(t.clone().member("Captured_Me"), outer_this.unwrap()));
         }
-        // spec §4.1: tell the user that this lambda is slow.
+        // spec §4.1: tell the user that this lambda is slow (not the handler of an event: it
+        // has to be an object).
+        if self.quiet_closures {
+            return t;
+        }
         self.diag(Severity::Info, self.src_module(), arrow.span, "I0641", format!("このアロー関数はクラス（{cname}）に変換されるため、呼び出しが遅くなります。配列メソッドの引数に直接書くとループに展開されます"));
         t
     }

@@ -36,6 +36,8 @@ intrinsics! {
     PlatformIs64, PlatformIsVba7,
     // Range helpers (spec §9.4)
     RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, SheetUsedTable, ExcelMatch,
+    // event handlers attached at run time (spec §12.2.3)
+    EventOn,
 }
 
 pub fn array_member(name: &str, dims: usize) -> Option<Intr> {
@@ -227,11 +229,22 @@ pub fn builtin_ns_member(ns: &str, name: &str) -> Option<Intr> {
     }
 }
 
+/// `on` and its DOM spelling: they attach an event handler at run time (spec §12.2.3).
+pub const EVENT_MEMBERS: &[&str] = &["on", "addEventListener"];
+
 /// Members the compiler adds to host types (`Excel.Range.toArray()` …).
 pub fn host_member(prog: &Program, recv: &Type, name: &str) -> Option<Intr> {
     let Type::Class(id, _) = recv else { return None };
     let c = &prog.classes[*id];
-    if c.kind != ClassKind::Host || c.namespace.as_deref() != Some("Excel") {
+    if c.kind != ClassKind::Host {
+        return None;
+    }
+    // `target.on("Click", handler)` on any host object (spec §12.2.3); whether the object
+    // has events is the checker's business.
+    if EVENT_MEMBERS.contains(&name) {
+        return Some(Intr::EventOn);
+    }
+    if c.namespace.as_deref() != Some("Excel") {
         return None;
     }
     match (c.name.as_str(), name) {

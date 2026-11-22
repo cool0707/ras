@@ -179,15 +179,28 @@ module.exports = function createExcel(rt, addon, options) {
             try {
                 h.fn(passed);
             } catch (err) {
-                const e = rt.caught(err);
-                const at = e.rasFile ? `（${e.rasFile}:${e.rasLine}）` : "";
-                if (hooks.eventError) hooks.eventError(e, h);
-                else console.error(`[ras] ${h.target}.${h.event}: 実行時エラー ${e.code}: ${e.description}${at}`);
+                failed(err, h);
             } finally {
                 running.delete(h);
             }
         }
+        // The handlers attached with `on` (spec §12.2.3) to the sheet or the workbook, and to
+        // `Application` for the events of the workbook.
+        if (origin !== undefined) {
+            rt.fireListeners(origin, event, cells, failed);
+            if (origin instanceof Workbook) {
+                const sheetEvent = /^sheet/i.test(event);
+                const passed = sheetEvent ? cells : [{ v: origin }, ...cells];
+                for (const a of new Set([app, appProxy])) rt.fireListeners(a, sheetEvent ? event : `Workbook${event}`, passed, failed);
+            }
+        }
         return cells;
+    }
+    function failed(err, h) {
+        const e = rt.caught(err);
+        const at = e.rasFile ? `（${e.rasFile}:${e.rasLine}）` : "";
+        if (hooks.eventError) hooks.eventError(e, h);
+        else console.error(`[ras] ${h.target}.${h.event}: 実行時エラー ${e.code}: ${e.description}${at}`);
     }
     /** An event of a sheet of the project's workbook, and the workbook's event for it. */
     function sheetEvent(sheet, event, args) {

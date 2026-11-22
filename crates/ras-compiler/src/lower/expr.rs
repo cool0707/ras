@@ -1269,6 +1269,10 @@ impl<'p> Lowerer<'p> {
         }
         // Private members of another module are not visible from the expansion site (spec §8.2).
         let cross = def.module != self.pc.emit_module || self.pc.in_class || self.pc.in_closure;
+        // `this` of a function of a form (a sheet) is the module: not inside a closure class.
+        if self.pc.in_closure && prog.modules[def.module].form.is_some() {
+            return refuse(self, "フォーム・シートのファイルの関数は、アロー関数の中には展開しません");
+        }
         if cross {
             let private_fn = def.calls.iter().any(|&g| prog.fns[g].module == def.module && !prog.fns[g].exported && matches!(prog.fns[g].kind, FnKind::Free | FnKind::Declare { .. }));
             let private_var = def.var_refs.iter().any(|&v| !prog.vars[v].exported && !prog.vars[v].declared);
@@ -1586,7 +1590,11 @@ impl<'p> Lowerer<'p> {
             lw.emit(call_stmt(name, argv));
             None
         };
+        if intr == EventOn {
+            return self.event_on(e, recv?, args, want);
+        }
         let v = match intr {
+            EventOn => unreachable!(),
             ArrLength => {
                 let a = self.expr(recv?);
                 match self.pc.push_caps.get(&a.print()) {

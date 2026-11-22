@@ -1,10 +1,27 @@
 let opened = 0;
+let agreed = 0;
+let firstSpin: RAS_Listener = null;
 
 @on("UserForm.Initialize")
 function init() {
     opened++;
     this.caption = `入力 ${opened}`;
     this.cboKind.addItem("予約", 1);
+    // Handlers attached at run time (spec §12.2.3): called after the `@on` handlers.
+    this.chkAgree.on("Click", () => {
+        agreed++;
+        console.log(`agree ${this.chkAgree.value} ${agreed}`);
+    });
+    firstSpin = this.spnQty.addEventListener("SpinUp", spunOnce);
+    // An array, and the collection of the controls: every member that has the event gets
+    // the handler, which is told the member first.
+    [this.btnOK, this.btnBoom].on("Click", (button) => console.log(`clicked ${button.name}`));
+    this.controls.on("SpinUp", (c) => console.log(`spin ${c.name}`));
+}
+
+function spunOnce() {
+    console.log("first spin");
+    firstSpin.off();
 }
 
 @on("txtName.Change")

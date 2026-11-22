@@ -25,6 +25,9 @@ struct LambdaRet {
 
 #[derive(Default)]
 struct FnCtx {
+    /// Depth of arrow functions that are the handler of an `on` call (spec §12.2.3): they
+    /// may assign to module variables.
+    event_handlers: u32,
     fn_id: Option<FnId>,
     class: Option<ClassId>,
     is_static: bool,
@@ -2161,6 +2164,8 @@ impl Checker<'_> {
             _ => {
                 // user extension methods take priority over built-in members (spec §3.2.4)
                 let builtin = match ot {
+                    // `controls.on("Click", …)` on an array of objects (spec §12.2.3).
+                    Type::Array(_) if ot.dims() == 1 && intrinsics::EVENT_MEMBERS.contains(&name.text.as_str()) && matches!(ot.elem(), Some(Type::Class(..))) => Some(Intr::EventOn),
                     Type::Array(_) => intrinsics::array_member(&name.text, ot.dims()),
                     Type::Str => intrinsics::string_member(&name.text),
                     Type::Map(..) => intrinsics::map_member(&name.text),
@@ -2434,7 +2439,8 @@ impl Checker<'_> {
                         if var.is_const || var.declared {
                             self.err(target.span, "E0323", format!("`{}` は再代入できません", id.text));
                         }
-                        if self.current_lambda().is_some() {
+                        // (The handler of an event keeps its state there: spec §12.2.3.)
+                        if self.current_lambda().is_some() && self.fx.event_handlers == 0 {
                             self.err(target.span, "E0322", format!("アロー関数の中からモジュール変数 `{}` は書き換えられません", id.text));
                         }
                         self.prog.vars[v].reassigned = true;
@@ -2814,6 +2820,7 @@ impl Checker<'_> {
             Access::Intrinsic(i) => {
                 self.info().calls.insert(e.id, CallInfo { target: CallTarget::Intrinsic(i), type_args: Vec::new() });
                 let (robj, rty) = match &recv {
+                    Some((o, t)) if i == Intr::EventOn => (Some(*o), Some(t.clone())),
                     // A host collection is seen as an array of its members.
                     Some((o, t)) => (Some(*o), Some(self.prog.collection_elem(t).map(Type::array).unwrap_or_else(|| t.clone()))),
                     None => (None, None),
@@ -3418,6 +3425,255 @@ impl Checker<'_> {
         }
     }
 
+    /// The RAS type of a VBA type an event declares a parameter with (`MSForms.ReturnBoolean`,
+    /// `Range`, `Integer`); `any` for a class the type definitions do not have.
+    fn event_param_type(&self, vba: &str) -> Type {
+        match vba {
+            "Integer" => Type::Short,
+            "Long" => Type::Int,
+            "Single" => Type::Float,
+            "Double" => Type::Double,
+            "String" => Type::Str,
+            "Boolean" => Type::Bool,
+            "Object" => Type::Object,
+            "Variant" => Type::Any,
+            other => {
+                let (ns, name) = other.split_once('.').unwrap_or(("Excel", other));
+                match self.prog.namespaces.get(ns).and_then(|n| n.get(name)) {
+                    Some(Sym::Class(c)) => Type::Class(*c, Vec::new()),
+                    Some(Sym::Enum(e)) => Type::Enum(*e),
+                    _ => Type::Any,
+                }
+            }
+        }
+    }
+
+    /// The function `e` names, when it is the name of a function of the project (`refresh`,
+    /// `report.refresh`, `Sheet1.refresh`) and not a value.
+    fn function_name(&mut self, e: &Expr) -> Option<FnId> {
+        let p = e.peel();
+        let access = match &p.kind {
+            ExprKind::Name(id) if self.lookup_local(&id.text).is_none() && matches!(self.lookup_sym(&id.text), Some(Sym::Fn(_))) => self.name_access(p, id),
+            ExprKind::Member { object, name, optional: false } => {
+                let o = object.peel();
+                let ExprKind::Name(id) = &o.kind else { return None };
+                if self.lookup_local(&id.text).is_some() || !matches!(self.lookup_sym(&id.text), Some(Sym::Module(_) | Sym::Var(_))) {
+                    return None;
+                }
+                let ot = self.expr(object, None);
+                let is_fn = match &ot {
+                    Type::Ns(NsRef::Module(m)) => matches!(self.prog.modules[*m].exports.get(&name.text), Some(Sym::Fn(_))),
+                    Type::Class(c, _) => self.prog.find_field(*c, &name.text).is_none() && self.prog.find_methods(*c, &name.text).iter().any(|&f| matches!(self.prog.fns[f].kind, FnKind::Free)),
+                    _ => false,
+                };
+                if !is_fn {
+                    return None;
+                }
+                self.member_access(p, object, &ot, name)
+            }
+            _ => return None,
+        };
+        match access {
+            Access::Func { f, .. } if matches!(self.prog.fns[f].kind, FnKind::Free) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Checks the handler of an `on` call that is wrong already, without asking for the types
+    /// of the parameters of an arrow function.
+    fn skip_handler(&mut self, handler: &Expr) {
+        if is_lambda(handler) {
+            let any = Type::Func(Box::new(FuncType { params: vec![Type::Any; 16], ret: Type::Param("?ret".into()) }));
+            self.fx.event_handlers += 1;
+            self.expr(handler, Some(&any));
+            self.fx.event_handlers -= 1;
+        } else if self.function_name(handler).is_none() {
+            self.expr(handler, None);
+        }
+    }
+
+    /// `target.on("<Event>", handler)` / `target.addEventListener(…)` (spec §12.2.3): the
+    /// handler is called for the events of the object from now on. An object with events is
+    /// listened to by a generated class (VBA's `WithEvents`); one with an `OnAction` property
+    /// gets the name of the macro.
+    fn event_on(&mut self, call: &Expr, recv: Option<&Type>, args: &[Expr]) -> Type {
+        let listener = match self.prog.globals.get("RAS_Listener") {
+            Some(Sym::Class(c)) => Type::Class(*c, Vec::new()),
+            _ => Type::Object,
+        };
+        if !self.arg_count(call, args, 2, 2) {
+            return Type::Error;
+        }
+        let event = match &args[0].peel().kind {
+            ExprKind::Str(s) => Some(s.clone()),
+            _ => None,
+        };
+        self.expr(&args[0], Some(&Type::Str));
+        let Some(event) = event else {
+            self.err(args[0].span, "E0616", "`on` のイベントの名前は、文字列リテラルで書きます（`on(\"Click\", …)`。イベントごとに受け取るクラスを生成するため、実行時に決まる名前は使えません）");
+            self.skip_handler(&args[1]);
+            return Type::Error;
+        };
+        // An array or a collection of objects: each member gets the handler.
+        let any_control = |prog: &Program, c: ClassId| prog.classes[c].namespace.as_deref() == Some("MSForms") && prog.classes[c].name == "Control";
+        let (class, each) = match recv {
+            Some(t @ Type::Array(_)) => match t.elem() {
+                Some(Type::Class(c, _)) => (*c, true),
+                _ => {
+                    self.skip_handler(&args[1]);
+                    return Type::Error;
+                }
+            },
+            Some(t @ Type::Class(c, _)) => match self.prog.collection_elem(t) {
+                Some(Type::Class(m, _)) if crate::lower::listen_target(self.prog, *c).is_none() && (any_control(self.prog, m) || crate::lower::listen_target(self.prog, m).is_some()) => (m, true),
+                _ => (*c, false),
+            },
+            _ => {
+                self.skip_handler(&args[1]);
+                return Type::Error;
+            }
+        };
+        let shown = self.prog.class_display(class);
+        // A `MSForms.Control` is any control: the events that controls have, with the
+        // arguments that all of those controls pass.
+        let dynamic = any_control(self.prog, class);
+        let mut control_classes: Vec<(ClassId, Vec<(String, Vec<(String, String, bool)>)>)> = Vec::new();
+        let target = if dynamic {
+            let mut ids: Vec<ClassId> = self.prog.namespaces.get("MSForms").map(|n| n.values().filter_map(|s| if let Sym::Class(c) = s { Some(*c) } else { None }).collect()).unwrap_or_default();
+            ids.sort_by(|a, b| self.prog.classes[*a].name.cmp(&self.prog.classes[*b].name));
+            let mut events: Vec<(String, Vec<(String, String, bool)>)> = Vec::new();
+            for c in ids {
+                let Some(crate::lower::ListenTarget::Events(_, own)) = crate::lower::listen_target(self.prog, c) else { continue };
+                for (name, params) in &own {
+                    match events.iter_mut().find(|e| e.0.eq_ignore_ascii_case(name)) {
+                        Some(e) => {
+                            let common = e.1.iter().zip(params.iter()).take_while(|(a, b)| a.1 == b.1 && a.2 == b.2).count();
+                            e.1.truncate(common);
+                        }
+                        None => events.push((name.clone(), params.clone())),
+                    }
+                }
+                control_classes.push((c, own));
+            }
+            events.sort_by(|a, b| a.0.cmp(&b.0));
+            Some(crate::lower::ListenTarget::Events(class, events))
+        } else {
+            crate::lower::listen_target(self.prog, class)
+        };
+        match target {
+            None => {
+                let def = &self.prog.classes[class];
+                let hint = if self.prog.modules[def.module].is_form() {
+                    "フォーム自身のイベントは、コードビハインドの `@on(\"UserForm.<イベント>\")` で受け取ります".to_string()
+                } else {
+                    "`on` を使えるのは、イベントを持つオブジェクト（`MSForms.CommandButton` などのコントロール、`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`Excel.Chart`・`Excel.QueryTable`）と、`onAction` を持つオブジェクト（`Excel.Shape`）です".to_string()
+                };
+                self.err(call.span, "E0616", format!("`{shown}` にイベントハンドラは付けられません。{hint}"));
+                self.skip_handler(&args[1]);
+                Type::Error
+            }
+            Some(crate::lower::ListenTarget::OnAction) => {
+                if !event.eq_ignore_ascii_case("Click") {
+                    self.err(args[0].span, "E0611", format!("`{shown}` で受け取れるイベントは `Click` だけです（`OnAction` に登録したマクロが、クリックされたときに呼ばれます）"));
+                }
+                match self.function_name(&args[1]) {
+                    Some(f) => {
+                        let d = &self.prog.fns[f];
+                        let home = &self.prog.modules[d.module];
+                        if !d.is_macro_entry() || home.is_form() || home.kind != ModuleKind::User || home.is_test() {
+                            let name = d.name.clone();
+                            self.err(args[1].span, "E0617", format!("関数 `{name}` は `OnAction` に登録できません。登録できるのは、Excel がマクロとして呼べる関数（`src/` か `objects/` のファイルの、引数も戻り値もない `export function`、または `@macro` を付けた関数）です"));
+                        }
+                        let sig = Type::Func(Box::new(FuncType { params: Vec::new(), ret: Type::Void }));
+                        if let Some(slot) = self.info().expr_types.get_mut(args[1].peel().id as usize) {
+                            *slot = sig;
+                        }
+                        self.info().event_binds.insert(call.id, EventBind { kind: EventBindKind::OnAction { each }, handler_fn: Some(f) });
+                    }
+                    None => {
+                        self.skip_handler(&args[1]);
+                        self.err(args[1].span, "E0617", format!("`{shown}` の `on` には、マクロにできる関数の名前を渡します（`shape.on(\"Click\", refresh)`）。Excel はマクロの名前をブックに保存するので、アロー関数や変数に入れた関数は登録できません"));
+                    }
+                }
+                Type::Void
+            }
+            Some(crate::lower::ListenTarget::Events(event_class, events)) => {
+                let Some((name, params)) = events.iter().find(|e| e.0.eq_ignore_ascii_case(&event)).cloned() else {
+                    let form_only = ["Enter", "Exit", "BeforeUpdate", "AfterUpdate"].iter().any(|x| x.eq_ignore_ascii_case(&event)) && self.prog.classes[event_class].namespace.as_deref() == Some("MSForms");
+                    let hint = if form_only {
+                        format!("`{event}` はフォームが起こすイベントで、`on` では受け取れません。コードビハインドの `@on(\"<コントロール名>.{event}\")` で受け取ります")
+                    } else {
+                        format!("使えるイベント: {}", events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>().join(", "))
+                    };
+                    self.err(args[0].span, "E0611", format!("`{shown}` にイベント `{event}` はありません（{hint}）"));
+                    self.skip_handler(&args[1]);
+                    return if each { Type::Void } else { listener };
+                };
+                // Every member is listened to: there is not one listener to give back.
+                let listener = if each { Type::Void } else { listener };
+                let classes: Vec<ClassId> = if dynamic { control_classes.iter().filter(|(_, own)| own.iter().any(|e| e.0.eq_ignore_ascii_case(&name))).map(|(c, _)| *c).collect() } else { vec![event_class] };
+                let mut param_types: Vec<Type> = params.iter().map(|p| self.event_param_type(&p.1)).collect();
+                // The handler of the members of an array or a collection is told which member
+                // the event is of: it comes first, before the arguments of the event.
+                if each {
+                    param_types.insert(0, Type::Class(class, Vec::new()));
+                }
+                let limit = param_types.len();
+                let (argc, handler_fn) = match self.function_name(&args[1]) {
+                    Some(f) => {
+                        self.ensure_fn(f);
+                        let d = &self.prog.fns[f];
+                        let fname = d.name.clone();
+                        let have: Vec<(Type, bool)> = d.params.iter().map(|p| (p.ty.clone(), p.mode == PassMode::ByRef)).collect();
+                        let generic = d.is_generic();
+                        let test = self.prog.modules[d.module].is_test() && !self.prog.modules[self.module].is_test();
+                        if generic || test {
+                            self.err(args[1].span, "E0617", format!("関数 `{fname}` はイベントハンドラにできません（ジェネリック関数・テストの関数は使えません）"));
+                        } else if have.len() > limit {
+                            self.err(args[1].span, "E0612", format!("イベント `{name}` のハンドラに渡される引数は {limit} 個ですが、ハンドラ `{fname}` は {} 個受け取ります", have.len()));
+                        } else {
+                            for (i, (ty, byref)) in have.iter().enumerate() {
+                                if *byref {
+                                    self.err(args[1].span, "E0617", format!("`on` に渡す関数 `{fname}` の引数に `byref` は使えません（イベントの引数は値で渡されます。取り消すには `false` を返します）"));
+                                } else if !self.assignable(&param_types[i], ty) {
+                                    self.err(args[1].span, "E0301", format!("イベント `{name}` の {} 番目の引数 `{}` を、ハンドラ `{fname}` の引数 `{}` に渡せません", i + 1, self.show(&param_types[i]), self.show(ty)));
+                                }
+                            }
+                        }
+                        let sig = Type::Func(Box::new(FuncType { params: have.iter().map(|h| h.0.clone()).collect(), ret: self.prog.fns[f].ret_ty() }));
+                        if let Some(slot) = self.info().expr_types.get_mut(args[1].peel().id as usize) {
+                            *slot = sig;
+                        }
+                        if !self.fx.calls.contains(&f) {
+                            self.fx.calls.push(f);
+                        }
+                        (have.len().min(limit), Some(f))
+                    }
+                    None => {
+                        // (Said once, in the words of events.)
+                        if let ExprKind::Arrow(arrow) = &args[1].peel().kind {
+                            if arrow.params.len() > limit {
+                                self.err(args[1].span, "E0612", format!("イベント `{name}` のハンドラに渡される引数は {limit} 個ですが、ハンドラは {} 個受け取ります", arrow.params.len()));
+                                self.skip_handler(&args[1]);
+                                return listener;
+                            }
+                        }
+                        self.fx.event_handlers += 1;
+                        self.lambda_arg(args, 1, param_types, None);
+                        self.fx.event_handlers -= 1;
+                        let argc = match self.info().ty(args[1].id) {
+                            Type::Func(f) => f.params.len(),
+                            _ => 0,
+                        };
+                        (argc.min(limit), None)
+                    }
+                };
+                self.info().event_binds.insert(call.id, EventBind { kind: EventBindKind::Listener { classes, dynamic, each, event: name, params, argc }, handler_fn });
+                listener
+            }
+        }
+    }
+
     fn intrinsic_call(&mut self, call: &Expr, intr: Intr, recv_expr: Option<&Expr>, recv: Option<&Type>, args: &[Expr], expect: Option<&Type>) -> Type {
         use Intr::*;
         let _ = expect;
@@ -3815,6 +4071,7 @@ impl Checker<'_> {
                 Type::Bool
             }
             PlatformIs64 | PlatformIsVba7 => Type::Bool,
+            EventOn => self.event_on(call, recv, args),
             RangeToArray | SheetUsedTable => {
                 self.arg_count(call, args, 0, 0);
                 Type::array(Type::array(Type::Any))

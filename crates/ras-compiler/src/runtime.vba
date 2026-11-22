@@ -51,6 +51,8 @@ Private ras_savCalc As Long
 Private ras_savAlerts As Boolean
 Private ras_savCursor As Long
 Private ras_savInteractive As Boolean
+'@@ decl ras_listeners
+Private ras_listeners As Collection
 '@@ proc RAS_Len
 ' Length of an array; 0 for an unallocated (erased) array instead of an error (spec 13.3).
 Public Function RAS_Len(ByRef arr As Variant) As Long
@@ -868,3 +870,60 @@ Public rasLine As Long
 Public Property Get message() As String
     message = description
 End Property
+'@@ proc RAS_Listen
+' `target.on("Click", handler)` (spec 12.2.3): the listener, an object with a WithEvents variable,
+' is bound to the target and kept alive here until it is taken off. `owner` is the form whose
+' code attached it.
+Public Function RAS_Listen(ByVal listener As Object, ByVal target As Object, ByVal handler As Object, ByVal argc As Long, ByVal owner As Object) As Object
+    If target Is Nothing Then Err.Raise 91
+    If ras_listeners Is Nothing Then Set ras_listeners = New Collection
+    listener.RAS_Bind target, handler, argc, owner
+    ras_listeners.Add listener
+    Set RAS_Listen = listener
+End Function
+'@@ proc RAS_Unlisten
+' Called by `Off` of a listener: it is not kept alive any more.
+Public Sub RAS_Unlisten(ByVal listener As Object)
+    Dim i As Long
+    If ras_listeners Is Nothing Then Exit Sub
+    For i = ras_listeners.Count To 1& Step -1&
+        If ras_listeners(i) Is listener Then
+            ras_listeners.Remove i
+            Exit Sub
+        End If
+    Next i
+End Sub
+'@@ proc RAS_UnlistenOwner
+' Takes off the listeners the code of a form attached (the form is being unloaded).
+Public Sub RAS_UnlistenOwner(ByVal owner As Object)
+    Dim i As Long
+    Dim l As Object
+    If ras_listeners Is Nothing Then Exit Sub
+    For i = ras_listeners.Count To 1& Step -1&
+        If i <= ras_listeners.Count Then
+            Set l = ras_listeners(i)
+            If l.RAS_Owner Is owner Then l.Off
+        End If
+    Next i
+End Sub
+'@@ proc RAS_Cancels
+' True when an event handler attached with `on` returned `false`: the event is cancelled.
+Public Function RAS_Cancels(ByVal result As Variant) As Boolean
+    If VarType(result) = vbBoolean Then RAS_Cancels = Not CBool(result)
+End Function
+'@@ proc RAS_MacroName
+' The name Excel calls a macro of this workbook by (`OnAction`), whichever workbook is active.
+Public Function RAS_MacroName(ByVal proc As String) As String
+    RAS_MacroName = "'" & Replace(ThisWorkbook.Name, "'", "''") & "'!" & proc
+End Function
+'@@ proc RAS_OnActionEach
+' `shapes.on("Click", macro)`: the macro of every member of an array or a collection.
+Public Sub RAS_OnActionEach(ByRef targets As Variant, ByVal macroName As String)
+    Dim t As Variant
+    If IsArray(targets) Then
+        If RAS_Len(targets) = 0& Then Exit Sub
+    End If
+    For Each t In targets
+        t.OnAction = macroName
+    Next t
+End Sub
