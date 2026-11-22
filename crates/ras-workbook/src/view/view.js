@@ -2158,24 +2158,11 @@
         if (!b) return;
         const on = hasEvents(selectedObj);
         b.disabled = !on;
-        b.textContent = on && selectedObj.activex === undefined ? "マクロ" : "イベント";
+        b.querySelector(".lbl").textContent = on && selectedObj.activex === undefined ? "マクロ" : "コードの表示";
     }
     function enableEvents() {
         events = true;
-        if (!$("event")) {
-            const b = el("button", null, "イベント");
-            b.id = "event";
-            b.type = "button";
-            b.title = "選択した図形・コントロールのイベント（マクロ）を開きます。シートのファイルにハンドラーを追加します（図形をダブルクリックすると既定のイベント）";
-            b.addEventListener("mousedown", (e) => e.preventDefault());
-            b.addEventListener("click", () => {
-                const items = eventItems(selectedObj);
-                if (!items.length) return;
-                const r = b.getBoundingClientRect();
-                showMenu(r.left, r.bottom + 1, items);
-            });
-            $("formulas").before(b);
-        }
+        $("ribbon").showDev();
         refreshEventButton();
     }
     if (editable) vscode.postMessage({ type: "ready" });
@@ -2262,6 +2249,13 @@
         return b;
     }
     const PALETTE = ["#000000", "#ffffff", "#7f7f7f", "#c00000", "#ff0000", "#ffc000", "#ffff00", "#92d050", "#00b050", "#00b0f0", "#0070c0", "#002060", "#7030a0", "#f2f2f2", "#d9d9d9", "#fce4d6", "#fff2cc", "#e2efda", "#ddebf7", "#d9e1f2"];
+    // A color chosen: given to the cells, and kept for the button (as Excel's last color).
+    function useColor(name, color) {
+        lastColor[name] = color;
+        const bar = tools[name] && tools[name].querySelector(".bar");
+        if (bar) bar.style.background = color;
+        format({ [name]: color });
+    }
     // The colors to choose from; `name` is the format ("color", "fill"), `none` what no color is called.
     function openColors(anchor, name, none) {
         const pop = openPop(anchor, "colors");
@@ -2276,7 +2270,7 @@
             b.addEventListener("click", () => {
                 closeMenu();
                 focusGrid();
-                format({ [name]: color.toUpperCase() });
+                useColor(name, color.toUpperCase());
             });
         }
         // Any other color, as #RRGGBB.
@@ -2292,107 +2286,589 @@
             if (!m) return;
             closeMenu();
             focusGrid();
-            format({ [name]: `#${m[1].toUpperCase()}` });
+            useColor(name, `#${m[1].toUpperCase()}`);
         });
     }
-    const BORDERS = [["all", "格子"], ["outline", "外枠"], ["thick", "太い外枠"], ["top", "上"], ["bottom", "下"], ["left", "左"], ["right", "右"], ["none", "枠なし"]];
+    const BORDERS = [["bottom", "下罫線"], ["top", "上罫線"], ["left", "左罫線"], ["right", "右罫線"], ["none", "枠なし"], ["all", "格子"], ["outline", "外枠"], ["thick", "太い外枠"]];
     const NUMBER_FORMATS = [["General", "標準"], ["0.00", "数値"], ["#,##0", "桁区切り"], ["¥#,##0", "通貨"], ["0%", "パーセント"], ["yyyy/m/d", "日付"], ["h:mm", "時刻"], ["@", "文字列"]];
-    const FONT_SIZES = [6, 8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
+    const FONT_SIZES = [6, 8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
+    const FONT_NAMES = ["游ゴシック", "游ゴシック Light", "游明朝", "ＭＳ ゴシック", "ＭＳ Ｐゴシック", "ＭＳ 明朝", "ＭＳ Ｐ明朝", "メイリオ", "Meiryo UI", "BIZ UDゴシック", "BIZ UDPゴシック", "Arial", "Calibri", "Century", "Consolas", "Segoe UI", "Times New Roman", "Verdana"];
 
-    // The toolbar (where cells are edited): its buttons, by what they do.
+    // The number format with one decimal more (fewer): Excel's 小数点以下の表示桁数を増やす (減らす).
+    function stepDecimals(code, up) {
+        if (code === "@") return null;
+        if (code === "General") return up ? "0.0" : "0";
+        return code
+            .split(";")
+            .map((part) => {
+                const m = /\.(0+)/.exec(part);
+                if (m) {
+                    const n = m[1].length + (up ? 1 : -1);
+                    return part.slice(0, m.index) + (n > 0 ? `.${"0".repeat(n)}` : "") + part.slice(m.index + m[0].length);
+                }
+                if (!up) return part;
+                const d = /[0#](?![\s\S]*[0#])/.exec(part);
+                return d ? `${part.slice(0, d.index + 1)}.0${part.slice(d.index + 1)}` : part;
+            })
+            .join(";");
+    }
+    // The font size of the active cell one step up (down): Excel's フォント サイズの拡大 (縮小).
+    function stepFontSize(up) {
+        const now = +((/font-size:([\d.]+)pt/.exec(activeCss()) || [])[1] || 11);
+        const next = up ? FONT_SIZES.find((n) => n > now) : [...FONT_SIZES].reverse().find((n) => n < now);
+        if (next) format({ fontSize: next });
+    }
+    // The whole columns (rows) of the selection, as the ranges `size` and `hide` take.
+    const wholeCols = () => (sel.kind === "all" ? `A:${colName(MAXC - 1)}` : `${colName(sel.c1)}:${colName(sel.c2)}`);
+    const wholeRows = () => `${sel.r1 + 1}:${sel.r2 + 1}`;
+    function hideWhole(cols, hidden) {
+        if (!sel || !view || !oneArea()) return;
+        postEdit([{ op: "hide", sheet: view.sheet.name, range: cols ? wholeCols() : wholeRows(), hidden }]);
+    }
+    // The columns (rows) of the selection as wide (tall) as their contents, each on its own.
+    function autofitSel(cols) {
+        if (!sel || !view || !oneArea()) return;
+        const v = view;
+        const indexes = cols ? v.cols.filter((c) => c >= sel.c1 && c <= sel.c2) : v.rows.map(([r]) => r).filter((r) => r >= sel.r1 && r <= sel.r2);
+        const ops = indexes.map((i) => ({ op: "size", sheet: v.sheet.name, range: cols ? `${colName(i)}:${colName(i)}` : `${i + 1}:${i + 1}`, px: Math.round(fitPx(cols, i)) }));
+        if (ops.length) postEdit(ops);
+    }
+    // Every column of the filter shown again (Excel's データ > クリア).
+    function clearFilters() {
+        if (!view || !view.sheet.filter || !view.filter) return;
+        const sheet = view.sheet;
+        const c1 = view.filter[0][1];
+        const ops = Object.keys(sheet.filterColumns || {}).map((k) => ({ op: "filterBy", sheet: sheet.name, column: colName(c1 + +k), clear: true }));
+        if (ops.length) postEdit(ops);
+    }
+    // The zoom that shows the cells selected in the window (Excel's 選択範囲に合わせて拡大/縮小).
+    function zoomToSelection() {
+        if (!sel || !view || sel.kind !== "cells") return;
+        const b = boxOf(sel.r1, sel.c1, sel.r2, sel.c2);
+        if (!b || !b.w || !b.h) return;
+        const g = $("grid");
+        const head = rowTop(view, 0);
+        const left = columnLeft(view, 0);
+        setZoom(Math.min(((g.clientWidth - left * Z()) / b.w) * 100, ((g.clientHeight - head * Z()) / b.h) * 100, 400), false);
+        reveal(sel.r1, sel.c1);
+    }
+    function openZoomBox(anchor) {
+        const pop = openPop(anchor, "zooms");
+        pop.appendChild(el("div", "phead", "倍率"));
+        for (const pct of [200, 100, 75, 50, 25]) popItem(pop, `${pct}%`, () => setZoom(pct)).classList.toggle("on", Math.round(Z() * 100) === pct);
+        popItem(pop, "選択範囲に合わせる", zoomToSelection);
+    }
+
+    // The icons of the ribbon (16 × 16, drawn larger on the large buttons).
+    const ICON_PATHS = {
+        undo: '<path d="M5 3 2 6l3 3"/><path d="M2 6h8a4 4 0 0 1 0 8H7"/>',
+        redo: '<path d="m11 3 3 3-3 3"/><path d="M14 6H6a4 4 0 0 0 0 8h3"/>',
+        paste: '<rect x="2.5" y="2.5" width="9" height="12" rx="1"/><path d="M5 2.5V1.5h4v1"/><rect x="7.5" y="7.5" width="7" height="7.5" fill="#fff"/><path d="M9 10h4M9 12.5h4"/>',
+        cut: '<circle cx="4.5" cy="12" r="2"/><circle cx="11.5" cy="12" r="2"/><path d="M5.8 10.5 11 2M10.2 10.5 5 2"/>',
+        copy: '<rect x="2.5" y="2.5" width="8" height="9" rx="1"/><rect x="5.5" y="5.5" width="8" height="9" rx="1" fill="#fff"/>',
+        grow: '<path d="M2 13 5.5 4 9 13M3.3 10h4.4"/><path d="m11 6 2-2.5L15 6"/>',
+        shrink: '<path d="M2 13 5.5 4 9 13M3.3 10h4.4"/><path d="m11 4 2 2.5L15 4"/>',
+        border: '<rect x="2.5" y="2.5" width="11" height="11" stroke-dasharray="1.5 1.5"/><path d="M2 13.5h12" stroke-width="2"/>',
+        fill: '<path d="m3 8 5-5 5 5-5 5z"/><path d="M13 9.5c.8 1.2 1.2 2 1.2 2.5a1.2 1.2 0 0 1-2.4 0c0-.5.4-1.3 1.2-2.5z"/>',
+        fontColor: '<path d="M4 12 8 2l4 10M5.5 8.5h5"/>',
+        top: '<path d="M2 2.5h12"/><path d="M8 13V5M5 8l3-3 3 3"/>',
+        middle: '<path d="M2 8h12"/><path d="M8 1v4M6 3.5 8 5l2-1.5M8 15v-4M6 12.5 8 11l2 1.5"/>',
+        bottom: '<path d="M2 13.5h12"/><path d="M8 3v8M5 8l3 3 3-3"/>',
+        left: '<path d="M2 3h12M2 6.3h8M2 9.6h12M2 13h8"/>',
+        center: '<path d="M2 3h12M4 6.3h8M2 9.6h12M4 13h8"/>',
+        right: '<path d="M2 3h12M6 6.3h8M2 9.6h12M6 13h8"/>',
+        wrap: '<path d="M2 3h12M2 7h10a2 2 0 0 1 0 4H8"/><path d="m9.5 9.5-1.5 1.5 1.5 1.5"/><path d="M2 11h3"/>',
+        merge: '<rect x="1.5" y="3.5" width="13" height="9"/><path d="M4 8h8M5.5 6.5 4 8l1.5 1.5M10.5 6.5 12 8l-1.5 1.5"/>',
+        currency: '<path d="M4 2.5 8 8l4-5.5M8 8v6M5 9h6M5 11.5h6"/>',
+        percent: '<circle cx="4.5" cy="4.5" r="2"/><circle cx="11.5" cy="11.5" r="2"/><path d="M13 3 3 13"/>',
+        comma: '<path d="M6 12.5c0 1.5-.8 2.5-2 3"/><circle cx="5" cy="11.5" r="1" fill="currentColor"/><path d="M9 4v8M12 4v8"/>',
+        decUp: '<path d="M1.5 13h1"/><path d="M5 5.5h3v7.5H5zM10.5 5.5h3v7.5h-3z"/><path d="M1.5 3h4M3.5 1v4"/>',
+        decDown: '<path d="M1.5 13h1"/><path d="M5 5.5h3v7.5H5zM10.5 5.5h3v7.5h-3z"/><path d="M1.5 3h4"/>',
+        insert: '<rect x="2.5" y="2.5" width="11" height="11"/><path d="M2.5 8h11M8 2.5v11"/><path d="M11.5 1v4M9.5 3h4" stroke-width="1.6"/>',
+        delete: '<rect x="2.5" y="2.5" width="11" height="11"/><path d="M2.5 8h11M8 2.5v11"/><path d="m10 1 3.5 3.5M13.5 1 10 4.5" stroke-width="1.6"/>',
+        cellFormat: '<rect x="2.5" y="2.5" width="11" height="11"/><path d="M2.5 6h11M6 2.5v11"/><path d="M8.5 12.5 13 8" stroke-width="1.6"/>',
+        fillDown: '<rect x="3.5" y="1.5" width="9" height="4"/><path d="M8 7v7M5 11l3 3 3-3"/>',
+        clear: '<path d="m6 13.5-3-3L10 3.5l4 4-6 6zM6.5 6.5l4 4M3 14.5h11"/>',
+        sortFilter: '<path d="M3.5 2v11M1.5 11l2 2 2-2"/><path d="M7 3h7l-2.8 3.5V11l-1.4 1V6.5z"/>',
+        find: '<circle cx="6.5" cy="6.5" r="4"/><path d="m9.5 9.5 4.5 4.5"/>',
+        sortAsc: '<path d="M12 2v11M10 11l2 2 2-2"/><text x="1" y="7" font-size="6.5" stroke="none" fill="currentColor" font-family="sans-serif">A</text><text x="1" y="14.5" font-size="6.5" stroke="none" fill="currentColor" font-family="sans-serif">Z</text>',
+        sortDesc: '<path d="M12 2v11M10 11l2 2 2-2"/><text x="1" y="7" font-size="6.5" stroke="none" fill="currentColor" font-family="sans-serif">Z</text><text x="1" y="14.5" font-size="6.5" stroke="none" fill="currentColor" font-family="sans-serif">A</text>',
+        sort: '<rect x="1.5" y="2.5" width="7" height="11"/><path d="M1.5 6.2h7M1.5 9.8h7"/><path d="M12 2v11M10 11l2 2 2-2"/>',
+        filter: '<path d="M2 2.5h12L9.5 8v5.5l-3-1.5V8z"/>',
+        filterClear: '<path d="M2 2.5h9L7.5 7v5l-2-1V7z"/><path d="m10 9.5 4 4M14 9.5l-4 4"/>',
+        formulas: '<text x="1" y="12" font-size="10" font-style="italic" stroke="none" fill="currentColor" font-family="serif">fx</text><path d="M11 5h4M11 9h4M11 13h4"/>',
+        zoom: '<circle cx="6.5" cy="6.5" r="4.5"/><path d="m10 10 4.5 4.5M4.5 6.5h4M6.5 4.5v4"/>',
+        zoom100: '<rect x="1.5" y="3.5" width="13" height="9"/><text x="3" y="10.5" font-size="5.5" stroke="none" fill="currentColor" font-family="sans-serif">100</text>',
+        zoomSel: '<rect x="1.5" y="1.5" width="13" height="13" stroke-dasharray="2 1.5"/><rect x="4.5" y="4.5" width="7" height="7"/>',
+        freeze: '<rect x="1.5" y="1.5" width="13" height="13"/><path d="M1.5 5.5h13M5.5 1.5v13" stroke-width="2"/>',
+        code: '<path d="M5 4 1.5 8 5 12M11 4l3.5 4L11 12M9.5 2.5l-3 11"/>',
+        gotoCell: '<path d="M2 8h9M8 4.5 11.5 8 8 11.5"/><path d="M13.5 2v12"/>',
+    };
+    function icon(name, large) {
+        const s = large ? 30 : 16;
+        const span = el("span", "ico");
+        span.innerHTML = `<svg viewBox="0 0 16 16" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="${large ? 1 : 1.2}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ""}</svg>`;
+        return span;
+    }
+
+    // The ribbon, as Excel's: its tabs, their groups, and the buttons (by what they do). The
+    // buttons that edit are off where the workbook cannot be edited.
     const tools = {};
-    function makeTools() {
-        const box = el("div");
-        box.id = "tools";
-        $("bar").after(box);
+    const lastColor = { color: "#FF0000", fill: "#FFFF00" };
+    let lastBorder = "bottom";
+    function makeRibbon() {
+        const ribbon = $("ribbon");
+        const tabs = ribbon.appendChild(el("div", "rtabs"));
+        tabs.setAttribute("role", "tablist");
+        const body = ribbon.appendChild(el("div", "rbody"));
         // The grid keeps the keys: a click on a button does not take them.
-        box.addEventListener("mousedown", (e) => {
-            if (!e.target.closest("select")) e.preventDefault();
+        ribbon.addEventListener("mousedown", (e) => {
+            if (!e.target.closest("select, input")) e.preventDefault();
         });
-        const button = (key, label, title, act, cls) => {
-            const b = box.appendChild(el("button", cls || null, label));
-            b.type = "button";
-            b.title = title;
-            b.dataset.tool = key;
-            b.addEventListener("click", () => {
-                if (busy || !sel) return;
-                if (entry) commit(null);
-                act(b);
+        const panels = {};
+        let shown = saved.ribbonTab || "home";
+        let collapsed = saved.ribbonCollapsed === undefined ? !editable : saved.ribbonCollapsed;
+        const show = (key) => {
+            shown = key;
+            for (const [k, p] of Object.entries(panels)) {
+                p.panel.hidden = k !== key;
+                p.tab.classList.toggle("on", k === key);
+                p.tab.setAttribute("aria-selected", String(k === key));
+            }
+            remember({ ribbonTab: key });
+        };
+        const setCollapsed = (on) => {
+            collapsed = on;
+            ribbon.classList.toggle("collapsed", on);
+            ribbon.classList.remove("open");
+            remember({ ribbonCollapsed: on });
+        };
+        // A collapsed ribbon opens over the grid while a tab is clicked, and closes after a command.
+        const closeOpen = () => ribbon.classList.remove("open");
+        document.addEventListener("mousedown", (e) => {
+            if (ribbon.classList.contains("open") && !ribbon.contains(e.target) && !(menu && menu.contains(e.target))) closeOpen();
+        });
+        const tab = (key, label) => {
+            const t = tabs.appendChild(el("button", "rtab", label));
+            t.type = "button";
+            t.setAttribute("role", "tab");
+            t.dataset.tab = key;
+            t.title = "ダブルクリックでリボンを折りたたむ／展開する";
+            t.addEventListener("click", () => {
+                if (collapsed) ribbon.classList.toggle("open", !(ribbon.classList.contains("open") && shown === key));
+                show(key);
+            });
+            t.addEventListener("dblclick", () => {
+                setCollapsed(!collapsed);
+                show(key);
                 focusGrid();
             });
+            const panel = body.appendChild(el("div", "rpanel"));
+            panel.setAttribute("role", "tabpanel");
+            panel.dataset.tab = key;
+            panels[key] = { tab: t, panel };
+            return panel;
+        };
+        let into = null;
+        const group = (panel, label) => {
+            const g = panel.appendChild(el("div", "rgroup"));
+            into = g.appendChild(el("div", "rcontent"));
+            g.appendChild(el("div", "rlabel", label));
+            return into;
+        };
+        // A column of small buttons (Excel stacks up to three), a row of them.
+        const stack = () => (into = into.closest(".rgroup").querySelector(".rcontent").appendChild(el("div", "rstack")));
+        const row = (where) => (into = (where || into).appendChild(el("div", "rrow")));
+        const run = (b, act, edits) => {
+            if (busy && edits) return;
+            if (edits && !sel) return;
+            if (entry) commit(null);
+            act(b);
+            if (!menu) closeOpen();
+            focusGrid();
+        };
+        // `o`: { label, title, icon, large, edits, menu: (anchor) => fill it, split, cls, text }.
+        const button = (key, o) => {
+            const wrap = o.split ? into.appendChild(el("div", `rsplit${o.large ? " large" : ""}`)) : into;
+            const b = wrap.appendChild(el("button", `rbtn${o.large ? " large" : ""}${o.cls ? ` ${o.cls}` : ""}`));
+            b.type = "button";
+            b.title = o.title || o.label || "";
+            b.dataset.tool = key;
+            if (o.icon) b.appendChild(icon(o.icon, o.large));
+            if (o.text) b.appendChild(el("span", "glyph", o.text));
+            if (o.label && (o.large || o.showLabel)) b.appendChild(el("span", "lbl", o.label));
+            if (o.menu && !o.split) b.appendChild(el("span", "caret", "▾"));
+            if (o.edits && !editable) b.disabled = true;
+            const openMenuOf = (anchor) => {
+                if (o.edits && busy) return;
+                if (entry) commit(null);
+                o.menu(anchor);
+            };
+            if (o.menu && !o.split) b.addEventListener("click", () => openMenuOf(wrap === into ? b : wrap));
+            else b.addEventListener("click", () => run(b, o.act, o.edits));
+            if (o.split) {
+                const more = wrap.appendChild(el("button", "rbtn more", "▾"));
+                more.type = "button";
+                more.title = o.moreTitle || o.title || o.label;
+                more.dataset.tool = `${key}More`;
+                if (o.edits && !editable) more.disabled = true;
+                more.addEventListener("click", () => openMenuOf(wrap));
+                tools[`${key}More`] = more;
+            }
             tools[key] = b;
             return b;
         };
-        const select = (key, title, options) => {
-            const s = box.appendChild(el("select"));
+        const select = (key, title, options, cls) => {
+            const s = into.appendChild(el("select", cls || null));
             s.title = title;
             s.dataset.tool = key;
             for (const [value, label] of options) s.appendChild(el("option", null, label)).value = value;
+            if (!editable) s.disabled = true;
             tools[key] = s;
             return s;
         };
-        const gap = () => box.appendChild(el("span", "gap"));
-        button("bold", "B", "太字（Ctrl+B）", () => toggleFormat("bold"), "b");
-        button("italic", "I", "斜体（Ctrl+I）", () => toggleFormat("italic"), "i");
-        button("underline", "U", "下線（Ctrl+U）", () => toggleFormat("underline"), "u");
-        button("strike", "S", "取り消し線（Ctrl+5）", () => toggleFormat("strike"), "s");
-        const size = select("fontSize", "フォント サイズ", FONT_SIZES.map((n) => [String(n), String(n)]));
+        const sep = () => into.appendChild(el("span", "rsep"));
+        const item = (pop, label, act, kbd) => {
+            const b = popItem(pop, label, () => {
+                act();
+                closeOpen();
+            });
+            if (kbd) b.appendChild(el("kbd", null, kbd));
+            return b;
+        };
+        const head = (pop, text) => pop.appendChild(el("div", "phead", text));
+
+        // ---- ホーム
+        const home = tab("home", "ホーム");
+        group(home, "元に戻す");
+        stack();
+        button("undo", { icon: "undo", label: "元に戻す", title: "元に戻す（Ctrl+Z）", showLabel: true, edits: true, act: () => postHistory("undo") });
+        button("redo", { icon: "redo", label: "やり直し", title: "やり直し（Ctrl+Y）", showLabel: true, edits: true, act: () => postHistory("redo") });
+
+        group(home, "クリップボード");
+        button("paste", {
+            icon: "paste",
+            label: "貼り付け",
+            title: "貼り付け（Ctrl+V）",
+            moreTitle: "貼り付けのオプション",
+            large: true,
+            split: true,
+            edits: true,
+            act: menuPaste,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "pastes");
+                item(pop, "貼り付け", menuPaste, "Ctrl+V");
+                const special = clip && !clip.cut && clip.kind !== "all";
+                item(pop, "値の貼り付け", () => pasteSpecial({ paste: "values", operation: "none", skipBlanks: false, transpose: false })).disabled = !special;
+                item(pop, "書式の貼り付け", () => pasteSpecial({ paste: "formats", operation: "none", skipBlanks: false, transpose: false })).disabled = !special;
+                item(pop, "行列を入れ替える", () => pasteSpecial({ paste: "all", operation: "none", skipBlanks: false, transpose: true })).disabled = !special;
+                pop.appendChild(el("hr"));
+                item(pop, "形式を選択して貼り付け…", askPasteSpecial, "Ctrl+Alt+V").disabled = !special;
+            },
+        });
+        stack();
+        button("cut", { icon: "cut", label: "切り取り", title: "切り取り（Ctrl+X）", showLabel: true, edits: true, act: () => menuCopy(true) });
+        button("copy", { icon: "copy", label: "コピー", title: "コピー（Ctrl+C）", showLabel: true, act: () => menuCopy(false) });
+
+        group(home, "フォント");
+        const fontRows = into.appendChild(el("div", "rstack wide"));
+        row(fontRows);
+        const fontName = into.appendChild(el("input", "fontname"));
+        fontName.type = "text";
+        fontName.title = "フォント";
+        fontName.dataset.tool = "fontName";
+        fontName.setAttribute("list", "fontnames");
+        fontName.spellcheck = false;
+        fontName.autocomplete = "off";
+        const names = into.appendChild(el("datalist"));
+        names.id = "fontnames";
+        for (const n of FONT_NAMES) names.appendChild(el("option")).value = n;
+        if (!editable) fontName.disabled = true;
+        tools.fontName = fontName;
+        const applyFont = () => {
+            const name = fontName.value.trim();
+            if (name && editable && sel) format({ fontName: name });
+            focusGrid();
+        };
+        fontName.addEventListener("change", applyFont);
+        fontName.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                showTools();
+                focusGrid();
+            }
+        });
+        const size = select("fontSize", "フォント サイズ", FONT_SIZES.map((n) => [String(n), String(n)]), "fontsize");
         size.addEventListener("change", () => {
             format({ fontSize: +size.value });
             focusGrid();
         });
-        button("color", "A", "フォントの色", (b) => openColors(b, "color", "自動"), "fc");
-        button("fill", "◧", "塗りつぶしの色", (b) => openColors(b, "fill", "塗りつぶしなし"));
-        button("border", "田", "罫線", (b) => {
-            const pop = openPop(b, "borders");
-            for (const [value, label] of BORDERS) popItem(pop, label, () => format({ border: value })).dataset.border = value;
+        button("fontGrow", { icon: "grow", title: "フォント サイズの拡大", edits: true, act: () => stepFontSize(true) });
+        button("fontShrink", { icon: "shrink", title: "フォント サイズの縮小", edits: true, act: () => stepFontSize(false) });
+        row(fontRows);
+        button("bold", { text: "B", title: "太字（Ctrl+B）", cls: "b", edits: true, act: () => toggleFormat("bold") });
+        button("italic", { text: "I", title: "斜体（Ctrl+I）", cls: "i", edits: true, act: () => toggleFormat("italic") });
+        button("underline", { text: "U", title: "下線（Ctrl+U）", cls: "u", edits: true, act: () => toggleFormat("underline") });
+        sep();
+        button("border", {
+            icon: "border",
+            title: "罫線",
+            moreTitle: "罫線の種類",
+            split: true,
+            edits: true,
+            act: () => format({ border: lastBorder }),
+            menu: (anchor) => {
+                const pop = openPop(anchor, "borders");
+                head(pop, "罫線");
+                for (const [value, label] of BORDERS) {
+                    item(pop, label, () => {
+                        lastBorder = value;
+                        tools.border.title = `罫線（${label}）`;
+                        format({ border: value });
+                    }).dataset.border = value;
+                }
+            },
         });
-        gap();
-        for (const [value, label, title] of [["left", "⇤", "左揃え"], ["center", "↔", "中央揃え"], ["right", "⇥", "右揃え"]]) button(`align-${value}`, label, title, () => format({ align: value }));
-        for (const [value, label, title] of [["top", "⤒", "上揃え"], ["middle", "↕", "上下中央揃え"], ["bottom", "⤓", "下揃え"]]) button(`valign-${value}`, label, title, () => format({ valign: value }));
-        button("wrap", "↵", "折り返して全体を表示する", () => toggleFormat("wrap"));
-        button("merge", "結合", "セルを結合して中央揃え（結合したセルでは結合の解除）", () => merge(sel && single(sel) && mergedIn(sel) ? "unmerge" : "center"));
-        button("mergeMore", "▾", "セルの結合", (b) => {
-            const pop = openPop(b, "merges");
-            for (const [how, label] of [["center", "セルを結合して中央揃え"], ["across", "横方向に結合"], ["merge", "セルの結合"], ["unmerge", "結合の解除"]]) popItem(pop, label, () => merge(how)).dataset.merge = how;
-        }, "more");
-        gap();
-        const number = select("numberFormat", "表示形式", [["", "表示形式"]].concat(NUMBER_FORMATS));
+        sep();
+        const colorButton = (key, iconName, title, none) => {
+            const b = button(key, {
+                icon: iconName,
+                title,
+                moreTitle: `${title}の選択`,
+                split: true,
+                edits: true,
+                cls: "color",
+                act: () => format({ [key]: lastColor[key] }),
+                menu: (anchor) => openColors(anchor, key, none),
+            });
+            b.querySelector(".ico").appendChild(el("span", "bar")).style.background = lastColor[key];
+        };
+        colorButton("fill", "fill", "塗りつぶしの色", "塗りつぶしなし");
+        colorButton("color", "fontColor", "フォントの色", "自動");
+
+        group(home, "配置");
+        const alignRows = into.appendChild(el("div", "rstack wide"));
+        row(alignRows);
+        for (const [value, ic, title] of [["top", "top", "上揃え"], ["middle", "middle", "上下中央揃え"], ["bottom", "bottom", "下揃え"]]) button(`valign-${value}`, { icon: ic, title, edits: true, act: () => format({ valign: value }) });
+        sep();
+        button("wrap", { icon: "wrap", label: "折り返して全体を表示する", showLabel: true, title: "折り返して全体を表示する", edits: true, act: () => toggleFormat("wrap") });
+        row(alignRows);
+        for (const [value, ic, title] of [["left", "left", "左揃え"], ["center", "center", "中央揃え"], ["right", "right", "右揃え"]]) button(`align-${value}`, { icon: ic, title, edits: true, act: () => format({ align: value }) });
+        sep();
+        button("merge", {
+            icon: "merge",
+            label: "セルを結合して中央揃え",
+            showLabel: true,
+            title: "セルを結合して中央揃え（結合したセルでは結合の解除）",
+            moreTitle: "セルの結合",
+            split: true,
+            edits: true,
+            act: () => merge(sel && single(sel) && mergedIn(sel) ? "unmerge" : "center"),
+            menu: (anchor) => {
+                const pop = openPop(anchor, "merges");
+                for (const [how, label] of [["center", "セルを結合して中央揃え"], ["across", "横方向に結合"], ["merge", "セルの結合"], ["unmerge", "セル結合の解除"]]) item(pop, label, () => merge(how)).dataset.merge = how;
+            },
+        });
+
+        group(home, "数値");
+        const numberRows = into.appendChild(el("div", "rstack wide"));
+        row(numberRows);
+        const number = select("numberFormat", "表示形式", [["", "ユーザー定義"]].concat(NUMBER_FORMATS), "numberformat");
         number.addEventListener("change", () => {
             if (number.value) format({ numberFormat: number.value });
             focusGrid();
         });
-        gap();
-        button("sortAsc", "A→Z", "昇順で並べ替え", () => sortBy(false));
-        button("sortDesc", "Z→A", "降順で並べ替え", () => sortBy(true));
-        button("sortMore", "並べ替え…", "ユーザー設定の並べ替え（複数の列で並べ替える）", askSort);
-        button("filter", "フィルター", "フィルター（Ctrl+Shift+L）", toggleFilter);
-        button("freeze", "固定", "ウィンドウ枠の固定", (b) => openFreeze(b));
-        gap();
-        button("find", "検索", "検索と置換（Ctrl+F / Ctrl+H）", () => openFind(false));
-        gap();
-        button("clearFormats", "書式のクリア", "書式のクリア", clearFormats);
+        row(numberRows);
+        button("currency", { icon: "currency", title: "通貨表示形式", edits: true, act: () => format({ numberFormat: "¥#,##0" }) });
+        button("percent", { icon: "percent", title: "パーセント スタイル", edits: true, act: () => format({ numberFormat: "0%" }) });
+        button("comma", { icon: "comma", title: "桁区切りスタイル", edits: true, act: () => format({ numberFormat: "#,##0" }) });
+        sep();
+        const decimals = (up) => {
+            const cell = (activeTd && activeTd.cell) || {};
+            const code = stepDecimals(cell.n || "General", up);
+            if (code) format({ numberFormat: code });
+        };
+        button("decUp", { icon: "decUp", title: "小数点以下の表示桁数を増やす", edits: true, act: () => decimals(true) });
+        button("decDown", { icon: "decDown", title: "小数点以下の表示桁数を減らす", edits: true, act: () => decimals(false) });
+
+        group(home, "セル");
+        button("insert", {
+            icon: "insert",
+            label: "挿入",
+            large: true,
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "inserts");
+                item(pop, "セルの挿入…", () => insertOrDelete(true), "Ctrl++");
+                item(pop, "シートの行を挿入", () => structure(true, "rows"));
+                item(pop, "シートの列を挿入", () => structure(true, "cols"));
+            },
+        });
+        button("delete", {
+            icon: "delete",
+            label: "削除",
+            large: true,
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "deletes");
+                item(pop, "セルの削除…", () => insertOrDelete(false), "Ctrl+-");
+                item(pop, "シートの行を削除", () => structure(false, "rows"));
+                item(pop, "シートの列を削除", () => structure(false, "cols"));
+            },
+        });
+        button("cellFormat", {
+            icon: "cellFormat",
+            label: "書式",
+            large: true,
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "cellformats");
+                head(pop, "セルのサイズ");
+                item(pop, "行の高さ…", () => askSize(false));
+                item(pop, "行の高さの自動調整", () => autofitSel(false));
+                item(pop, "列の幅…", () => askSize(true));
+                item(pop, "列の幅の自動調整", () => autofitSel(true));
+                head(pop, "表示設定");
+                item(pop, "行を表示しない", () => hideWhole(false, true));
+                item(pop, "列を表示しない", () => hideWhole(true, true));
+                item(pop, "行の再表示", () => hideWhole(false, false));
+                item(pop, "列の再表示", () => hideWhole(true, false));
+            },
+        });
+
+        group(home, "編集");
+        stack();
+        button("fillDown", {
+            icon: "fillDown",
+            label: "フィル",
+            showLabel: true,
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "fills");
+                item(pop, "下方向へコピー", () => fill("down"), "Ctrl+D");
+                item(pop, "右方向へコピー", () => fill("right"), "Ctrl+R");
+            },
+        });
+        button("clear", {
+            icon: "clear",
+            label: "クリア",
+            showLabel: true,
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "clears");
+                item(pop, "すべてクリア", () => {
+                    if (sel && view) postEdit(allAreas().flatMap((a) => [{ op: "clear", sheet: view.sheet.name, range: rangeText(a) }, { op: "clearFormats", sheet: view.sheet.name, range: areaText(a) }]));
+                });
+                item(pop, "書式のクリア", clearFormats);
+                item(pop, "数式と値のクリア", clearSel, "Delete");
+            },
+        });
+        into = into.parentNode;
+        button("sortFilter", {
+            icon: "sortFilter",
+            label: "並べ替えとフィルター",
+            large: true,
+            edits: true,
+            cls: "two",
+            menu: (anchor) => {
+                const pop = openPop(anchor, "sorts");
+                item(pop, "昇順", () => sortBy(false));
+                item(pop, "降順", () => sortBy(true));
+                item(pop, "ユーザー設定の並べ替え…", askSort);
+                pop.appendChild(el("hr"));
+                item(pop, "フィルター", toggleFilter, "Ctrl+Shift+L").classList.toggle("on", !!(view && view.sheet.filter));
+                item(pop, "クリア", clearFilters).disabled = !(view && view.sheet.filter && Object.keys(view.sheet.filterColumns || {}).length);
+            },
+        });
+        button("findSelect", {
+            icon: "find",
+            label: "検索と選択",
+            large: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "finds");
+                item(pop, "検索…", () => openFind(false), "Ctrl+F");
+                if (editable) item(pop, "置換…", () => openFind(true), "Ctrl+H");
+                item(pop, "ジャンプ…", askGoTo, "Ctrl+G");
+            },
+        });
+
+        // ---- 数式
+        const formulasTab = tab("formulas", "数式");
+        group(formulasTab, "ワークシート分析");
+        const f = button("formulas", { icon: "formulas", label: "数式の表示", large: true, title: "セルに値ではなく数式を表示します（Ctrl+` / Ctrl+Shift+@）", act: () => showFormulas(!formulas) });
+        f.id = "formulas";
+        f.setAttribute("aria-pressed", "false");
+
+        // ---- データ
+        const dataTab = tab("data", "データ");
+        group(dataTab, "並べ替えとフィルター");
+        stack();
+        button("sortAsc", { icon: "sortAsc", title: "昇順で並べ替え", edits: true, act: () => sortBy(false) });
+        button("sortDesc", { icon: "sortDesc", title: "降順で並べ替え", edits: true, act: () => sortBy(true) });
+        into = into.parentNode;
+        button("sortMore", { icon: "sort", label: "並べ替え", large: true, title: "ユーザー設定の並べ替え（複数の列で並べ替える）", edits: true, act: askSort });
+        button("filter", { icon: "filter", label: "フィルター", large: true, title: "フィルター（Ctrl+Shift+L）", edits: true, act: toggleFilter });
+        stack();
+        button("filterClear", { icon: "filterClear", label: "クリア", showLabel: true, title: "フィルターの条件をすべてクリア", edits: true, act: clearFilters });
+
+        // ---- 表示
+        const viewTab = tab("view", "表示");
+        group(viewTab, "ズーム");
+        button("zoomBox", { icon: "zoom", label: "ズーム", large: true, menu: (anchor) => openZoomBox(anchor) });
+        button("zoom100", { icon: "zoom100", label: "100%", large: true, title: "100% に戻す", act: () => setZoom(100) });
+        button("zoomSel", { icon: "zoomSel", label: "選択範囲に合わせて拡大/縮小", large: true, cls: "two", act: zoomToSelection });
+        group(viewTab, "ウィンドウ");
+        button("freeze", { icon: "freeze", label: "ウィンドウ枠の固定", large: true, cls: "two", edits: true, menu: (anchor) => openFreeze(anchor) });
+
+        // ---- 開発 (where the objects' events open in the sheet's file)
+        const dev = tab("dev", "開発");
+        panels.dev.tab.hidden = true;
+        group(dev, "コントロール");
+        const ev = button("event", {
+            icon: "code",
+            label: "コードの表示",
+            large: true,
+            title: "選択した図形・コントロールのイベント（マクロ）を開きます。シートのファイルにハンドラーを追加します（図形をダブルクリックすると既定のイベント）",
+            menu: (anchor) => {
+                const items = eventItems(selectedObj);
+                if (!items.length) return;
+                const r = anchor.getBoundingClientRect();
+                showMenu(r.left, r.bottom + 1, items);
+            },
+        });
+        ev.id = "event";
+        ev.disabled = true;
+
+        if (!panels[shown] || panels[shown].tab.hidden) shown = "home";
+        show(shown);
+        ribbon.classList.toggle("collapsed", collapsed);
+        ribbon.showDev = () => {
+            panels.dev.tab.hidden = false;
+            if (saved.ribbonTab === "dev") show("dev");
+        };
     }
     // The buttons show the format of the active cell.
     function showTools() {
         if (!tools.bold || !view) return;
         const css = activeCss();
         const cell = (activeTd && activeTd.cell) || {};
-        for (const name of Object.keys(STATE)) tools[name].classList.toggle("on", STATE[name](css));
+        for (const name of ["bold", "italic", "underline", "wrap"]) tools[name].classList.toggle("on", STATE[name](css));
         const align = (/text-align:(\w+)/.exec(css) || [])[1];
         for (const a of ["left", "center", "right"]) tools[`align-${a}`].classList.toggle("on", align === a);
         const valign = (/vertical-align:(\w+)/.exec(css) || [])[1];
-        for (const a of ["top", "middle"]) tools[`valign-${a}`].classList.toggle("on", valign === a);
+        for (const a of ["top", "middle", "bottom"]) tools[`valign-${a}`].classList.toggle("on", valign === a);
         const size = (/font-size:([\d.]+)pt/.exec(css) || [])[1] || "11";
         if (![...tools.fontSize.options].some((o) => o.value === size)) tools.fontSize.appendChild(el("option", null, size)).value = size;
         tools.fontSize.value = size;
+        if (document.activeElement !== tools.fontName) tools.fontName.value = (/font-family:'([^']*)'/.exec(css) || [])[1] || "游ゴシック";
         const code = cell.n || "General";
         tools.numberFormat.value = NUMBER_FORMATS.some(([c]) => c === code) ? code : "";
         tools.merge.classList.toggle("on", !!sel && single(sel) && mergedIn(sel));
         tools.filter.classList.toggle("on", !!view.sheet.filter);
+        tools.filterClear.disabled = !editable || !(view.sheet.filter && Object.keys(view.sheet.filterColumns || {}).length);
         tools.freeze.classList.toggle("on", !!(view.fr || view.fc));
     }
-    if (editable) makeTools();
+    makeRibbon();
 
     // ---- the widths of columns and the heights of rows: the edges of the headers
 
@@ -2458,8 +2934,12 @@
     }
     // As wide as the widest text of the column's cells, as tall as the tallest content of the row's.
     function autofit(edge) {
+        postEdit([{ op: "size", sheet: view.sheet.name, range: sized(edge), px: Math.round(fitPx(edge.cols, edge.index)) }]);
+    }
+    function fitPx(cols, index) {
         const v = view;
         const sheet = v.sheet;
+        const edge = { cols, index };
         let px = 0;
         if (edge.cols) {
             const ctx = document.createElement("canvas").getContext("2d");
@@ -2485,7 +2965,7 @@
             probe.remove();
             px = px > 0 ? px : sheet.defaultHeight;
         }
-        postEdit([{ op: "size", sheet: sheet.name, range: sized(edge), px: Math.round(px) }]);
+        return px;
     }
     // The width (height) of the columns (rows) selected, asked for in px.
     function askSize(cols) {
@@ -2514,7 +2994,8 @@
         dialog.addEventListener("mousedown", (e) => {
             if (e.target === dialog) closeDialog();
         });
-        const range = rangeText(sel);
+        // The whole columns (rows) of the cells selected.
+        const range = sel.kind === (cols ? "cols" : "rows") ? rangeText(sel) : cols ? wholeCols() : wholeRows();
         form.addEventListener("submit", (e) => {
             e.preventDefault();
             const px = Math.round(+input.value);
@@ -4155,7 +4636,6 @@
         }
     }
 
-    $("formulas").addEventListener("click", () => showFormulas(!formulas));
     $("formulas").classList.toggle("on", formulas);
     $("formulas").setAttribute("aria-pressed", String(formulas));
     // Ctrl+` (Ctrl+Shift+@ on a Japanese keyboard), as in Excel.
