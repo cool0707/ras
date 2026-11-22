@@ -69,6 +69,7 @@ ras test                                  # test/**/*.test.ras のテストを E
 ras book dump Book.xlsm                   # ブックの中身（シート・数式・名前・テーブル）をテキストで出力
 ras book diff before.xlsm after.xlsm      # 2 つのブックのセルと構造の差分
 ras book view Book.xlsm                   # シートを Excel のようなグリッドで表示する HTML を作る
+ras book edit Book.xlsm --set B2=100      # セルを Excel と同じように編集してファイルに書き込む（入力・クリア・コピー・行と列とセルの挿入と削除）
 ras explain E0301                         # エラー・警告のコードの説明と直し方
 ras cheatsheet                            # 構文と Excel の操作の早見表
 ```
@@ -262,6 +263,38 @@ ras run Report.rebuildReport --view                            # 実行して、
 
 VS Code では「RAS: ブックを表示（グリッド）」（エクスプローラーのブックの右クリックにもあります）で同じ表示をパネルに出せます。シートのファイル（`objects/Sheet1.ras`）では、エディターのタイトルバーのボタンやエクスプローラーの右クリックの「RAS: シートのグリッドを表示」で、プロジェクトのブックをそのシートで開けます（`ras book view --sheet Sheet1` と同じ）。Excel を使わないデバッグ実行では、ブレークポイントやステップ実行で止まるたびに、そのときのシートをパネルに表示し、前回から変わったセルを強調します（設定 `ras.debug.sheetView`）。
 
+### ブックを編集する（`ras book edit`、VS Code のグリッド）
+
+VS Code のグリッド（「RAS: ブックを表示（グリッド）」「RAS: シートのグリッドを表示」）では、ブックのファイルを Excel と同じ操作で編集できます。
+
+| 操作 | キー・マウス |
+|---|---|
+| セルの入力 | 文字を打つ（上書き）、F2・ダブルクリック・数式バー（今の内容を編集）。Enter / Tab で確定、Ctrl+Enter で選択範囲の全セルに入力、Alt+Enter でセル内の改行、Esc で取り消し |
+| クリア | Delete / Backspace（数式と値。書式は残ります） |
+| コピー・切り取り・貼り付け | Ctrl+C / Ctrl+X / Ctrl+V（数式の参照は Excel と同じにずれ、書式も貼り付きます。ほかのアプリケーションのタブ区切りテキストも貼り付けられます） |
+| 下・右へコピー | Ctrl+D / Ctrl+R |
+| 行・列・セルの挿入と削除 | 行番号・列見出し・セルの右クリックのメニュー、Ctrl++ / Ctrl+-（セルを選んでいるときは、動かす向きを選ぶダイアログが出ます） |
+| 元に戻す・やり直し | Ctrl+Z / Ctrl+Y |
+
+行・列・セルを挿入・削除すると、Excel と同じく、全シートの数式・名前の定義・結合セル・条件付き書式・入力規則・フィルター・メモ・図形やグラフの位置とグラフの参照が付いていき、編集したセルに依存する数式は再計算されます。結合セルの一部だけを動かす挿入など、Excel が拒む操作は理由を表示して何も変えません。
+
+同じ編集をコマンドラインから行えます（AI エージェントがブックのデータを直すときにも使えます）。
+
+```sh
+ras book edit Book.xlsm --sheet Sheet1 --set B2=100 --set "C2==B2*2"   # セルに入力する（数式・日付も Excel の入力と同じに読みます）
+ras book edit Book.xlsm --sheet Sheet1 --clear A1:C3                    # 数式と値をクリアする
+ras book edit Book.xlsm --sheet Sheet1 --insert 3:4                     # 行を挿入する（B:C は列、B2:C3 はセル。--shift right で右へ動かす）
+ras book edit Book.xlsm --sheet Sheet1 --delete B:B                     # 列を削除する
+ras book edit Book.xlsm --op '{"op":"copy","sheet":"Sheet1","from":"A1:B2","to":"D1"}'   # JSON で指定する編集（copy / move / fill / values など）
+ras book edit Book.xlsm --set A1=x -o build/edited.xlsm                 # 別のファイルに書く（元のブックは変えない）
+```
+
+- ファイルは、変わったセルだけを元のブックの XML に書き戻します。VBA プロジェクト（署名も）、図形・画像・コントロール、スタイル、変更のないシートは、元のバイト列のまま残ります。VBA の関数を呼ぶ数式など、Excel なしでは計算できない数式も、数式のまま保ちます。
+- 書き込む前に、書き換えたファイルを読み戻してセルが編集の結果と一致することを確かめます。プロジェクトのブックは、前のファイルを `build/backup/` に残します。
+- Excel で開いているブックは書き換えません（エラーになります。Excel で閉じてから行ってください）。
+- テーブルの列をまたぐ列の挿入・削除と、ピボットテーブルのあるシートでの挿入・削除は、ファイルの書き換えでは行えません（Excel で行ってください）。
+- 書式・行の高さと列の幅・結合・並べ替えとフィルターの変更は、まだ行えません。`ras book view` が作る HTML（ブラウザーで開くもの）は読み取り専用です。
+
 ### エラーを調べる・AI に渡す
 
 ```sh
@@ -303,7 +336,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | `form new` / `form check` / `form pull` | 実装済み |
 | `sync` | 実装済み（Windows のみ。Excel で開いているブックへ、モジュールとユーザーフォームを反映する。`--pull` は未実装） |
 | `setup` / `typegen` / `pack --via-excel` | 未実装（実行するとその旨を表示して終了） |
-| `run` / `book dump` / `book diff` / `book view` | 実装済み（仕様 §14.13、§14.14） |
+| `run` / `book dump` / `book diff` / `book view` / `book edit` | 実装済み（仕様 §14.13、§14.14） |
 | `explain` / `cheatsheet` | 実装済み（仕様 §14.15） |
 | `test` | 実装済み（仕様 §14.12。`--excel` とエディタの連携は未実装） |
 
@@ -334,7 +367,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 | §14.12 テスト（`ras test`） | 一部 | テストの列挙（`--list`）、実行、`expect`、フック、ブックの巻き戻し、`useWorkbook` / `tempDir` / `printed`、置き換え（`mock*`）、タイムアウト、`--reporter pretty / json / junit`、`-t`、`--ci`、`--bail`、`--watch`、失敗したテストのブックの保存、`[test]` の設定は実装。実際の Excel での実行（`--excel`、`[test] excel = "com"`）、エディタの連携（§14.12.10。CodeLens・テスト エクスプローラー、言語サーバーでのテストファイルの型チェックと補完）は未実装。テストファイルは 1 つずつ実行する（並行しない）。`-t` で選ばれなかったテストは結果に出さない。`toBeEmpty` と `toBeNothing` は、ブックの代役では `Empty` と `Nothing` をどちらも成功にする（ランタイムが区別しないため）。`expect` の型は `toBe` の期待値だけを検査する |
 | §14.13 CLI からの実行（`ras run`） | 実装済み | ブックの代役でだけ実行する（実際の Excel に対する実行は VS Code のデバッグ実行を使う）。ユーザーフォームの表示はエラーになる |
 | §14.16 シートの追加・複製・削除・名前の変更（`ras sheet`） | 一部 | ブックのファイルを直接書き換える操作（`.xlsx` / `.xlsm`。`.xlsb` は不可）と、VS Code のコマンドは実装済み。Excel で開いているブックに対する操作は、Windows 専用のコードを書いたが、実際の Excel での確認はまだ行っていない |
-| §14.14 ブックの中身を見る・比べる（`ras book dump` / `diff` / `view`） | 実装済み | 行・列の挿入・削除の推定は、ひとまとまりの挿入・削除だけ（複数箇所は、セルの差分として出る）。`dump` / `diff` は書式（フォント・色・罫線）を扱わない。`view` は条件付き書式・テーブルのスタイル・画像・図形・グラフ・斜線・文字の回転を描かず、列幅は既定のフォントを日本語のフォント（11pt）とみなして計算する |
+| §14.14 ブックの中身を見る・比べる・編集する（`ras book dump` / `diff` / `view` / `edit`） | 実装済み | 行・列の挿入・削除の推定は、ひとまとまりの挿入・削除だけ（複数箇所は、セルの差分として出る）。`dump` / `diff` は書式（フォント・色・罫線）を扱わない。`view` は条件付き書式・テーブルのスタイル・画像・図形・グラフ・斜線・文字の回転を描かず、列幅は既定のフォントを日本語のフォント（11pt）とみなして計算する |
 | §14.15 機械可読の診断・エラーの説明・代役で使えない API の警告 | 一部 | `--message-format json`、`ras explain`（すべてのコード）、`ras check --target stand-in`（W0510〜W0512）は実装。診断の「関連する位置」は、コンパイラが持っていないため出力しない。ユーザーフォームの検査の結果は JSON にならない。代役で使えるかどうかを言語サーバーのクイック情報に表示することは未実装 |
 | §15 プロジェクト構成・`ras.toml`・同梱の型定義 | 一部 | Excel / VBA / Office の型定義を同梱し、メンバーとグローバルを camelCase で参照する（§15.3.1）。`Scripting`（`FileSystemObject`・`Dictionary`）と `VBScript.RegExp` の型定義も同梱し、VBA には遅延バインディングで出力する（§15.3）。`ras typegen` と `vba:` インポートは未実装 |
 | §16.1 JSDoc | 実装済み | 生成 VBA へのコメント・`VB_Description` 出力、`@param` 名の検査 |
@@ -350,6 +383,7 @@ VS Code 拡張を入れた状態で `.ras` ファイルにブレークポイン�
 
 - 自動テスト: `cargo test --workspace`（構文、型チェック、仕様書のコード例と生成 VBA の照合、CLI の一連の流れ、LSP のセッション、`vbaProject.bin` の読み書き）。
 - `ras book view` のページは、自動テストで描画のもとになるデータ（セルの表示・数式・書式の CSS・結合セル・変更の一覧・図形とコントロールの HTML と位置）を確かめ、Chromium（Playwright）で開いて見た目（スクロールで続くグリッド、図形・画像・コントロール・ワードアート）とセルの選択・変更の一覧からの移動を手で確認しています。図形を含むテスト用のブックは、Excel が保存する形をまねて作ったもので、Excel が保存したフォームコントロール・ActiveX コントロール・SmartArt・埋め込みオブジェクトのブックでは未確認です。グラフは xljs のテスト用ブック（12 種類）、EMF は Office が作った EMF（python-pptx の埋め込みオブジェクトのアイコン）で見た目を確かめています。VS Code のパネル（「ブックを表示」、デバッグの一時停止中の表示）と `launch.json` の `answers` は、型チェックと拡張のビルドだけで、実機の VS Code では未確認です。一時停止中にランタイムがブックを書き出す部分（`$rasBookSnapshot`）は自動テストで確かめています。
+- `ras book edit` は、XlsxWriter で作ったブック（数式・VBA の関数を呼ぶ数式・結合セル・条件付き書式・入力規則・フィルター・メモ・ボタン・ハイパーリンク・名前の定義・グラフ・テーブル・VBA プロジェクト）を編集する自動テスト（`crates/ras-workbook/src/patch/tests.rs`）で、書き換えたパートと変えていないパートを確かめ、書き換えたブックを openpyxl で読めることを手で確認しています。**Excel が保存したブックの編集と、書き換えたブックを Excel で開くことは未確認です。** グリッドでの編集は、Chromium（Playwright）でページを操作し、`ras book edit` につないで確認しています（入力・再計算・行の挿入・元に戻す・コピーと貼り付け・エラーの表示）。VS Code のパネルでの編集（キーの受け取り・クリップボード・IME・元に戻す）は、型チェックと拡張のビルドだけで、実機の VS Code では未確認です。
 - `ras run`・`ras test`・`ras book dump` / `diff` は、プロジェクトを作って `ras` を実行する自動テスト（`crates/ras/tests/offline.rs`。Linux の Node 22）で確認しています。Windows・macOS と、VS Code の実行ファイルをランタイムに使う経路は未確認です。`ras book dump` の出力は xljs のテスト用ブック（入力規則・条件付き書式・テーブル）でも確かめています。Excel が保存した大きなブックでの速度は測っていません。
 - `ras pack` が出力したブックは、別実装の `ovba` クレートと oletools（`olevba`）で読み直して確認しています（CI でも実行）。
 - 実機の Excel（Windows 11、Excel 2021 64bit）で次を確認しています（CI には Excel が無いため手動）:
@@ -392,7 +426,7 @@ cd editors/vscode && npm ci && npm test && npm run package
 | `crates/ras-ovba` | MS-OVBA 圧縮、`vbaProject.bin` の読み書き、OPC パッケージ |
 | `crates/ras-lsp` | 言語サーバ |
 | `crates/ras` | CLI |
-| `crates/ras-workbook` | ブックの代役のブック（umya-spreadsheet と GridCraft の計算エンジン）、`ras book dump` / `diff` |
+| `crates/ras-workbook` | ブックの代役のブック（umya-spreadsheet と GridCraft の計算エンジン）、`ras book dump` / `diff` / `view`、`ras book edit`（`patch`: 編集をブックのファイルに書き戻す） |
 | `crates/ras-book` | ブックの代役を Node に渡すアドオン（`ras_book.node`） |
 | `editors/vscode` | VS Code 拡張 |
 | `examples/sales-report` | サンプルプロジェクト |

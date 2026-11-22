@@ -1837,3 +1837,135 @@ fn sheets_are_added_copied_renamed_and_removed() {
     assert_eq!(names(), ["Sheet1=Sheet1", "売上 2026 (2)=Sheet2"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn book_edit_writes_the_cells_into_the_file() {
+    use ras_workbook::book::Read;
+    let mut book = sales();
+    let dir = project("edit", &mut book, &[("src/main.ras", REPORT)]);
+    let file = dir.join("Book.xlsx");
+    let cells = |range: &str, what: Read| -> Vec<Vec<Val>> {
+        Book::open(&file).unwrap().get(0, at(range), what).unwrap()
+    };
+
+    // The project's workbook: cells typed into, the formulas that read them calculated.
+    let (code, out, err) = ras(
+        &dir,
+        &["book", "edit", "--set", "B2=10", "--set", "D2==C2/2"],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("Book.xlsx を書き換えました"), "{out}");
+    assert_eq!(
+        cells("B2:D2", Read::Value),
+        [[Val::Num(10.0), Val::Num(1000.0), Val::Num(500.0)]]
+    );
+    assert_eq!(cells("C5", Read::Value), [[Val::Num(1700.0)]]);
+    // The file as it was is kept in build/backup/.
+    let kept = std::fs::read_dir(dir.join("build/backup")).unwrap().count();
+    assert_eq!(kept, 1);
+
+    // Rows inserted and deleted, cells cleared; edits as JSON, from the standard input too.
+    let (code, out, err) = ras(
+        &dir,
+        &[
+            "book",
+            "edit",
+            "Book.xlsx",
+            "--insert",
+            "3:3",
+            "--clear",
+            "D2",
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(
+        cells("A2:C4", Read::Formula),
+        [
+            [text("りんご"), text("10"), text("=B2*100")],
+            [text(""), text(""), text("")],
+            [text("みかん"), text("5"), text("=B4*100")],
+        ]
+    );
+    assert_eq!(cells("C6", Read::Formula), [[text("=SUM(C2:C5)")]]);
+    let (code, out, err) = ras(
+        &dir,
+        &[
+            "book",
+            "edit",
+            "--sheet",
+            "Sheet1",
+            "--op",
+            r#"[{"op":"delete","range":"3:3"},{"op":"copy","from":"A2:C2","to":"A8"}]"#,
+        ],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(
+        cells("A8:C8", Read::Formula),
+        [[text("りんご"), text("10"), text("=B8*100")]]
+    );
+    assert_eq!(
+        Book::open(&file).unwrap().names()[0].2,
+        "Sheet1!$C$5",
+        "the name is where it was again"
+    );
+
+    // --view: the page of the workbook as it is now, for the editor's panel.
+    let (code, out, err) = ras(
+        &dir,
+        &["book", "edit", "--set", "A9=x", "--view", "--editable"],
+    );
+    assert_eq!(code, 0, "{err}");
+    let data = view_data(&out);
+    assert_eq!(data["editable"], true);
+    assert!(
+        data["sheets"][0]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["r"] == 8 && c["c"] == 0 && c["t"] == "x"),
+        "{}",
+        data["sheets"][0]["cells"]
+    );
+    // (`ras book view` makes a page that is only read, unless asked.)
+    let (_, out, _) = ras(&dir, &["book", "view", "--stdout"]);
+    assert!(view_data(&out).get("editable").is_none());
+
+    // -o: another file; the workbook stays.
+    let before = std::fs::read(&file).unwrap();
+    let (code, out, err) = ras(
+        &dir,
+        &["book", "edit", "--set", "A1=見出し", "-o", "build/out.xlsx"],
+    );
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    assert_eq!(
+        Book::open(&dir.join("build/out.xlsx"))
+            .unwrap()
+            .get(0, at("A1"), Read::Value)
+            .unwrap(),
+        [[text("見出し")]]
+    );
+
+    // What cannot be done says why (exit code 1), and the file is not written.
+    for (args, why) in [
+        (&["book", "edit"][..], "編集が指定されていません"),
+        (&["book", "edit", "--set", "B2"][..], "`=` で区切って"),
+        (
+            &["book", "edit", "--sheet", "Nope", "--set", "A1=x"][..],
+            "シート `Nope` がありません",
+        ),
+        (
+            &["book", "edit", "--op", "{\"op\":\"x\"}"][..],
+            "編集 `x` はありません",
+        ),
+    ] {
+        let (code, out, err) = ras(&dir, args);
+        assert!(code != 0 && err.contains(why), "{args:?}: {out}{err}");
+    }
+    // A workbook open in Excel (its owner file is there) is not written to.
+    std::fs::write(dir.join("~$Book.xlsx"), "").unwrap();
+    let (code, _, err) = ras(&dir, &["book", "edit", "--set", "A1=x"]);
+    assert!(code == 1 && err.contains("Excel で開かれている"), "{err}");
+    assert_eq!(std::fs::read(&file).unwrap(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -20,7 +20,7 @@ use super::{Book, MAX_COLS, MAX_ROWS, Result, coord, layout};
 const TABLE_COLUMN: &str = "列";
 
 /// A formula of the file with the references to `sheet` moved by `edit`; None when none moves.
-fn adjusted(host: Option<&str>, text: &str, sheet: &str, edit: &Edit) -> Option<String> {
+pub(crate) fn adjusted(host: Option<&str>, text: &str, sheet: &str, edit: &Edit) -> Option<String> {
     let body = text.trim();
     let body = body.strip_prefix('=').unwrap_or(body);
     if body.is_empty() {
@@ -33,7 +33,7 @@ fn adjusted(host: Option<&str>, text: &str, sheet: &str, edit: &Edit) -> Option<
 }
 
 /// Where an edit of a sheet moves a range of it (None: all of it is deleted).
-pub(super) fn moved(r: RangeRef, edit: &Edit) -> Option<RangeRef> {
+pub(crate) fn moved(r: RangeRef, edit: &Edit) -> Option<RangeRef> {
     let e = gridcraft_formula::parse(&r.a1()).ok()?;
     match adjust(e, "s", "s", edit) {
         Expr::Ref(x) => Some(x.range()),

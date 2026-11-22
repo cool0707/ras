@@ -543,6 +543,10 @@ fn read_date1904(path: &Path) -> bool {
     let Ok(file) = std::fs::File::open(path) else {
         return false;
     };
+    date1904_of(file)
+}
+
+fn date1904_of<R: std::io::Read + std::io::Seek>(file: R) -> bool {
     let Ok(mut zip) = zip::ZipArchive::new(file) else {
         return false;
     };
@@ -632,7 +636,7 @@ impl Book {
     pub fn open_bytes(data: &[u8]) -> Result<Book> {
         let file = umya_spreadsheet::reader::xlsx::read_reader(Cursor::new(data), true)
             .map_err(|e| format!("ブックを開けません（{e}）"))?;
-        Ok(Book::from_file(file, false))
+        Ok(Book::from_file(file, date1904_of(Cursor::new(data))))
     }
 
     fn from_file(mut file: umya_spreadsheet::Workbook, date1904: bool) -> Book {
@@ -2266,9 +2270,11 @@ mod edit;
 mod format;
 mod inspect;
 mod paste;
+pub mod snapshot;
 mod sort;
 pub mod view;
 
+pub(crate) use edit::{adjusted, moved};
 pub use gridcraft_model::FilterCriterion;
 pub use inspect::{CellInfo, FormulaRegion, RuleInfo, SheetInfo, TableInfo};
 pub use paste::{Paste, PasteOp, PasteWhat};

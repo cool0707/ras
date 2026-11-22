@@ -7,6 +7,7 @@
 pub mod book;
 pub mod diff;
 pub mod dump;
+pub mod patch;
 pub mod view;
 
 pub use gridcraft_core::{CellRef, RangeRef, Value};
