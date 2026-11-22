@@ -1309,8 +1309,11 @@ declare namespace Excel {
         Columns(index?: any): Range;
 
         /**
-         * セル（または行・列）の数。Long の上限を超えるとエラーになる。
-         * @see https://learn.microsoft.com/office/vba/api/excel.range.count
+         * セル（または行・列）の数。
+         * 生成される VBA では `CountLarge` を参照する（`Count` は Long の上限を超える範囲、
+         * たとえばシート全体の `cells` でエラーになるため）。
+         * @emitAs CountLarge
+         * @see https://learn.microsoft.com/office/vba/api/excel.range.countlarge
          */
         readonly Count: int;
 

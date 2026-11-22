@@ -278,11 +278,12 @@ fn describe_res(prog: &Program, m: ModuleId, offset: u32, res: &Res, ty: &Type) 
             let fl = &prog.classes[*c].fields[*i];
             let head = format!("(プロパティ) {}.{}", prog.class_display(*c), fl.name);
             match &fl.host_name {
-                Some(host) => code_block(
+                Some(_) => code_block(
                     &format!(
-                        "{head}: {}\n// VBA: {}.{host}",
+                        "{head}: {}\n// VBA: {}.{}",
                         prog.show(ty),
-                        prog.classes[*c].name
+                        prog.classes[*c].name,
+                        fl.emitted_name()
                     ),
                     fl.doc.as_deref(),
                 ),

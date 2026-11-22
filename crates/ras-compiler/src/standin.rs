@@ -167,7 +167,7 @@ impl<'a> Visit<'a> for Walker<'_> {
                 Some(Res::Field(c, i)) => {
                     if let Some(class) = stand_in_class(&prog.classes[*c]) {
                         let f = &prog.classes[*c].fields[*i];
-                        self.member(name.span, class, f.vba_name(), &f.name);
+                        self.member(name.span, class, f.emitted_name(), &f.name);
                     }
                 }
                 Some(Res::Method(f) | Res::Fn(f)) => self.host_fn(name.span, *f),
