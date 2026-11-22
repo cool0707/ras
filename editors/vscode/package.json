@@ -808,6 +808,29 @@
         "command": "ras.sheet.gridKey",
         "key": "f4",
         "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+k",
+        "mac": "cmd+k",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+t",
+        "mac": "cmd+t",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "shift+f2",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
       }
     ]
   },

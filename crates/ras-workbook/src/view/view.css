@@ -337,6 +337,22 @@ td.fzr.fzc { z-index: 4; }
 table.mv td { cursor: move; }
 body.copying, body.copying td { cursor: copy; }
 .fillbox.moving { border: 3px solid #8a8a8a; border-style: solid; }
+.dlg.tabledlg label:first-of-type { display: block; }
+.dlg.tabledlg label input[type="text"] { display: block; width: 280px; margin-top: 4px; font: inherit; }
+.dlg.linkdlg { width: 420px; }
+.dlg.linkdlg .kinds { display: flex; gap: 16px; margin-bottom: 6px; }
+.dlg.linkdlg label > .lbl { width: 84px; flex: none; }
+.dlg.linkdlg label input[type="text"], .dlg.linkdlg select { flex: 1; min-width: 0; font: inherit; }
+.dlg.notedlg textarea { display: block; width: 320px; font: inherit; resize: vertical; }
+.dlg.symboldlg { width: 430px; }
+.dlg.symboldlg .symtabs { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 6px; }
+.dlg.symboldlg .symtabs button { min-width: 0; padding: 2px 8px; }
+.dlg.symboldlg .symtabs button.on { border-color: var(--accent); background: var(--accent-hover); }
+.dlg.symboldlg .symgrid { display: grid; grid-template-columns: repeat(auto-fill, 26px); gap: 2px; height: 196px; overflow: auto; align-content: start; border: 1px solid var(--line); padding: 2px; }
+.dlg.symboldlg button.sym { min-width: 0; width: 26px; height: 26px; padding: 0; background: #fff; border-color: #ddd; font-size: 15px; }
+.dlg.symboldlg button.sym:hover { background: var(--accent-hover); border-color: var(--accent); }
+.dlg.symboldlg .symrecent { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-top: 6px; min-height: 28px; }
+.dlg.symboldlg .symrecent .lbl { margin-right: 6px; }
 .dlg .msg { margin: 4px 0 8px; }
 
 /* Completing formulas: the functions and names that begin with the word, the arguments. */

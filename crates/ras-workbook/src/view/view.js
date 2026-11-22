@@ -2032,6 +2032,354 @@
         postEdit([{ op: "fill", sheet: view.sheet.name, range, dir }]);
     }
 
+    // ---- 挿入: tables, hyperlinks, notes and symbols, as Excel puts them on a sheet
+
+    const noteAt = (r, c) => (view ? (view.sheet.notes || []).find((n) => n.r === r && n.c === c) : null);
+    const linkAt = (r, c) => (view ? (view.sheet.links || []).find((l) => l.r === r && l.c === c) : null);
+    const cellOf = (r, c) => (view ? view.cells.get(r * KEY + c) : null);
+    const filledAt = (r, c) => {
+        const x = cellOf(r, c);
+        return !!x && ((x.t !== undefined && x.t !== "") || !!x.f);
+    };
+    // The data around a cell (Excel's current region): reached through cells with something in
+    // them, across the diagonals too.
+    function regionAround(r, c) {
+        let [r1, c1, r2, c2] = [r, c, r, c];
+        const any = (a, b, x, y) => {
+            for (let i = Math.max(0, a); i <= x; i++) for (let j = Math.max(0, b); j <= y; j++) if (filledAt(i, j)) return true;
+            return false;
+        };
+        for (let more = true; more; ) {
+            more = false;
+            if (r1 > 0 && any(r1 - 1, c1 - 1, r1 - 1, c2 + 1)) (r1--, (more = true));
+            if (r2 < MAXR - 1 && any(r2 + 1, c1 - 1, r2 + 1, c2 + 1)) (r2++, (more = true));
+            if (c1 > 0 && any(r1 - 1, c1 - 1, r2 + 1, c1 - 1)) (c1--, (more = true));
+            if (c2 < MAXC - 1 && any(r1 - 1, c2 + 1, r2 + 1, c2 + 1)) (c2++, (more = true));
+        }
+        return { r1, c1, r2, c2 };
+    }
+    // A text typed in as it is (a number, a date or a formula would be taken for one).
+    const asText = (text) => (/^[=+\-@']/.test(text) || (text.trim() !== "" && !isNaN(+text.replace(/[,¥$%\s]/g, ""))) || /^\d+[/-]\d+/.test(text) ? `'${text}` : text);
+
+    // A dialog of the page: its form, its buttons (OK and キャンセル), closed by a click beside it.
+    function openDialog(title, cls) {
+        closeMenu();
+        closeDialog();
+        dialog = document.body.appendChild(el("div", "dlgback"));
+        const form = dialog.appendChild(el("form", `dlg${cls ? ` ${cls}` : ""}`));
+        form.setAttribute("role", "dialog");
+        form.appendChild(el("h2", null, title));
+        dialog.addEventListener("mousedown", (e) => {
+            if (e.target === dialog) closeDialog();
+        });
+        return form;
+    }
+    function dialogButtons(form, okText) {
+        const buttons = form.appendChild(el("div", "buttons"));
+        const ok = buttons.appendChild(el("button", "ok", okText || "OK"));
+        ok.type = "submit";
+        const cancel = buttons.appendChild(el("button", null, "キャンセル"));
+        cancel.type = "button";
+        cancel.addEventListener("click", closeDialog);
+        return buttons;
+    }
+    function field(form, label, type) {
+        const line = form.appendChild(el("label"));
+        line.appendChild(el("span", "lbl", label));
+        const input = line.appendChild(el(type === "textarea" ? "textarea" : "input"));
+        if (type !== "textarea") input.type = type || "text";
+        input.spellcheck = false;
+        return input;
+    }
+    function check(form, label, on) {
+        const line = form.appendChild(el("label"));
+        const box = line.appendChild(el("input"));
+        box.type = "checkbox";
+        box.checked = on;
+        line.appendChild(document.createTextNode(label));
+        return box;
+    }
+    const absText = (s) => (s.r1 === s.r2 && s.c1 === s.c2 ? `=$${colName(s.c1)}$${s.r1 + 1}` : `=$${colName(s.c1)}$${s.r1 + 1}:$${colName(s.c2)}$${s.r2 + 1}`);
+
+    // Ctrl+T: "テーブルの作成" — the data (the selection, or the cells around the active cell),
+    // and whether its first row is the headings.
+    function askTable() {
+        if (!editable || busy || !sel || !view || sel.kind === "all" || !oneArea()) return;
+        if (entry) commit(null);
+        // One cell stands for the sheet's filter it is in, else for the data around it.
+        const filter = view.sheet.filter ? parseRef(view.sheet.filter, view.sheet) : null;
+        const inFilter = filter && sel.ar >= filter.r1 && sel.ar <= filter.r2 && sel.ac >= filter.c1 && sel.ac <= filter.c2;
+        const s = sel.kind !== "cells" || !single(sel) ? sel : inFilter ? filter : regionAround(sel.ar, sel.ac);
+        const form = openDialog("テーブルの作成", "tabledlg");
+        const input = field(form, "テーブルに変換するデータ範囲を指定してください:");
+        input.value = sel.kind === "cells" ? absText(s) : `=${rangeText(sel).replace(/([A-Z]+|\d+)/g, "$$$1")}`;
+        // Headings guessed as Excel guesses them: texts over a row that is not all texts.
+        let guess = false;
+        if (sel.kind === "cells" && s.r2 > s.r1) {
+            guess = true;
+            for (let c = s.c1; c <= s.c2; c++) {
+                const x = cellOf(s.r1, c);
+                if (!x || x.k !== "string" || x.f) guess = false;
+            }
+        }
+        const head = check(form, "先頭行をテーブルの見出しとして使用する", guess);
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const ref = parseRef(input.value, view.sheet);
+            if (!ref || ref.sheet !== view.sheet) {
+                input.setCustomValidity("参照が正しくありません");
+                input.reportValidity();
+                return;
+            }
+            closeDialog();
+            postEdit([{ op: "table", sheet: view.sheet.name, range: rangeText(ref), header: head.checked }]);
+        });
+        input.addEventListener("input", () => input.setCustomValidity(""));
+        input.focus();
+        input.select();
+    }
+
+    // Ctrl+K: "ハイパーリンクの挿入" (of a cell that has one, "ハイパーリンクの編集"): a web
+    // page or a file, or a place in the workbook; what the cell shows, and the tip.
+    function askLink() {
+        if (!editable || busy || !sel || !view || sel.kind !== "cells" || !oneArea()) return;
+        if (entry) commit(null);
+        const sheet = view.sheet;
+        const now = linkAt(sel.ar, sel.ac);
+        const cell = cellOf(sel.ar, sel.ac) || {};
+        const one = single(sel);
+        const form = openDialog(now ? "ハイパーリンクの編集" : "ハイパーリンクの挿入", "linkdlg");
+        const kinds = form.appendChild(el("div", "kinds"));
+        const kind = (value, label) => {
+            const line = kinds.appendChild(el("label"));
+            const radio = line.appendChild(el("input"));
+            radio.type = "radio";
+            radio.name = "kind";
+            radio.value = value;
+            line.appendChild(document.createTextNode(label));
+            return radio;
+        };
+        const web = kind("url", "ファイル、Web ページ");
+        const place = kind("to", "このドキュメント内");
+        const shown = field(form, "表示文字列:");
+        shown.value = one ? (cell.f ? "" : cell.t || "") : "<<選択範囲内の文字列>>";
+        shown.disabled = !one || !!cell.f;
+        const addr = field(form, "アドレス:");
+        addr.placeholder = "https://";
+        const where = form.appendChild(el("div", "where"));
+        const sheets = where.appendChild(el("label"));
+        sheets.appendChild(el("span", "lbl", "場所:"));
+        const list = sheets.appendChild(el("select"));
+        for (const s of data.sheets) list.appendChild(el("option", null, s.name)).value = `s:${s.name}`;
+        for (const n of namesOf(sheet)) list.appendChild(el("option", null, `名前: ${n.name}`)).value = `n:${n.name}`;
+        const refLine = where.appendChild(el("label"));
+        refLine.appendChild(el("span", "lbl", "セル参照:"));
+        const ref = refLine.appendChild(el("input"));
+        ref.type = "text";
+        ref.spellcheck = false;
+        ref.value = "A1";
+        const tip = field(form, "ヒント:");
+        if (now) {
+            tip.value = now.tip || "";
+            if (now.to !== undefined) {
+                place.checked = true;
+                const t = now.to;
+                const bang = t.lastIndexOf("!");
+                const named = namesOf(sheet).find((n) => n.name.toLowerCase() === t.toLowerCase());
+                if (named) list.value = `n:${named.name}`;
+                else if (bang >= 0) {
+                    list.value = `s:${t.slice(0, bang).replace(/^'(.*)'$/, "$1").replace(/''/g, "'")}`;
+                    ref.value = t.slice(bang + 1);
+                }
+            } else {
+                web.checked = true;
+                addr.value = now.url || "";
+            }
+        } else {
+            web.checked = true;
+            list.value = `s:${sheet.name}`;
+        }
+        const showKind = () => {
+            addr.closest("label").hidden = !web.checked;
+            where.hidden = web.checked;
+            ref.disabled = list.value.startsWith("n:");
+        };
+        web.addEventListener("change", showKind);
+        place.addEventListener("change", showKind);
+        list.addEventListener("change", showKind);
+        showKind();
+        const buttons = dialogButtons(form);
+        if (now) {
+            const off = buttons.insertBefore(el("button", null, "リンクの解除"), buttons.firstChild);
+            off.type = "button";
+            off.addEventListener("click", () => {
+                closeDialog();
+                removeLinks();
+            });
+        }
+        const range = rangeText(sel);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const op = { op: "link", sheet: sheet.name, range };
+            let target;
+            if (web.checked) {
+                target = addr.value.trim();
+                if (!target) {
+                    addr.setCustomValidity("アドレスを入力してください");
+                    addr.reportValidity();
+                    return;
+                }
+                // A web address typed without its scheme, as Excel takes it.
+                if (/^www\./i.test(target)) target = `http://${target}`;
+                op.url = target;
+            } else if (list.value.startsWith("n:")) {
+                target = list.value.slice(2);
+                op.to = target;
+            } else {
+                const name = list.value.slice(2);
+                const at = ref.value.trim().replace(/\$/g, "").toUpperCase() || "A1";
+                const on = sheetByName(name);
+                const r = on && parseRef(at, on);
+                if (!r) {
+                    ref.setCustomValidity("セル参照が正しくありません");
+                    ref.reportValidity();
+                    return;
+                }
+                target = `${/^[A-Za-z_　-鿿][\w.　-鿿]*$/.test(name) ? name : `'${name.replace(/'/g, "''")}'`}!${at}`;
+                op.to = target;
+            }
+            if (tip.value.trim()) op.tip = tip.value.trim();
+            closeDialog();
+            const ops = [];
+            if (one && !shown.disabled) {
+                const text = shown.value || (cell.t ? "" : target);
+                if (text && text !== (cell.t || "")) ops.push({ op: "set", sheet: sheet.name, range: address(sel.ar, sel.ac), text: asText(text) });
+            }
+            // A new link is shown as Excel's Hyperlink style shows it: blue, underlined.
+            if (!now) ops.push({ op: "format", sheet: sheet.name, range, set: { color: "#0563C1", underline: true } });
+            ops.push(op);
+            postEdit(ops);
+        });
+        addr.addEventListener("input", () => addr.setCustomValidity(""));
+        ref.addEventListener("input", () => ref.setCustomValidity(""));
+        (now && place.checked ? ref : web.checked ? addr : shown).focus();
+    }
+    // "ハイパーリンクの削除": the links of the selection go, and their blue underline.
+    function removeLinks() {
+        if (!editable || busy || !sel || !view) return;
+        const sheet = view.sheet.name;
+        postEdit(allAreas().flatMap((a) => [{ op: "link", sheet, range: rangeText(a), off: true }, { op: "format", sheet, range: areaText(a), set: { color: null, underline: false } }]));
+    }
+    const linksIn = () => allAreas().some((a) => (view.sheet.links || []).some((l) => l.r >= a.r1 && l.r <= a.r2 && l.c >= a.c1 && l.c <= a.c2));
+
+    // Shift+F2: "新しいメモ" (of a cell that has one, "メモの編集").
+    function askNote() {
+        if (!editable || busy || !sel || !view || sel.kind !== "cells") return;
+        if (entry) commit(null);
+        const [r, c] = [sel.ar, sel.ac];
+        const now = noteAt(r, c);
+        const form = openDialog(`${now ? "メモの編集" : "新しいメモ"}（${address(r, c)}）`, "notedlg");
+        const text = form.appendChild(el("textarea"));
+        text.rows = 6;
+        text.value = now ? now.text : "";
+        const buttons = dialogButtons(form);
+        if (now) {
+            const off = buttons.insertBefore(el("button", null, "削除"), buttons.firstChild);
+            off.type = "button";
+            off.addEventListener("click", () => {
+                closeDialog();
+                removeNote();
+            });
+        }
+        const sheet = view.sheet.name;
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            closeDialog();
+            if (now && text.value === now.text) return;
+            postEdit([{ op: "note", sheet, at: address(r, c), text: text.value }]);
+        });
+        // Ctrl+Enter enters the note (Enter starts a new line in it).
+        text.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                form.requestSubmit();
+            }
+        });
+        text.focus();
+        text.setSelectionRange(text.value.length, text.value.length);
+    }
+    // "メモの削除": the notes of the cells selected.
+    function removeNote() {
+        if (!editable || busy || !sel || !view) return;
+        const sheet = view.sheet.name;
+        const ops = (view.sheet.notes || []).filter((n) => allAreas().some((a) => n.r >= a.r1 && n.r <= a.r2 && n.c >= a.c1 && n.c <= a.c2)).map((n) => ({ op: "note", sheet, at: address(n.r, n.c), off: true }));
+        if (ops.length) postEdit(ops);
+    }
+    const notesIn = () => allAreas().some((a) => (view.sheet.notes || []).some((n) => n.r >= a.r1 && n.r <= a.r2 && n.c >= a.c1 && n.c <= a.c2));
+
+    // "記号と特殊文字": a symbol typed where the cell is being typed in (or after what the active
+    // cell has). The dialog stays open, as Excel's.
+    const SYMBOLS = [
+        ["記号", "、。・：；？！゛゜´｀¨＾￣＿ヽヾゝゞ〃仝々〆〇ー―‐／＼～∥｜…‥‘’“”（）〔〕［］｛｝〈〉《》「」『』【】＋－±×÷＝≠＜＞≦≧∞∴♂♀°′″℃￥＄￠￡％＃＆＊＠§☆★○●◎◇◆□■△▲▽▼※〒→←↑↓〓"],
+        ["数学", "∈∋⊆⊇⊂⊃∪∩∧∨￢⇒⇔∀∃∠⊥⌒∂∇≡≒≪≫√∽∝∵∫∬∑∮√⊿∟"],
+        ["ギリシャ", "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψω"],
+        ["単位", "㍉㌔㌢㍍㌘㌧㌃㌶㍑㍗㌍㌦㌣㌫㍊㌻㎜㎝㎞㎎㎏㏄㎡㍻№㏍℡㊤㊥㊦㊧㊨㈱㈲㈹㍾㍽㍼"],
+        ["囲み数字", "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩⅰⅱⅲⅳⅴⅵⅶⅷⅸⅹ"],
+        ["罫線", "─│┌┐┘└├┬┤┴┼━┃┏┓┛┗┣┳┫┻╋┠┯┨┷┿┝┰┥┸╂"],
+    ];
+    let lastSymbols = Array.isArray(saved.symbols) ? saved.symbols : [];
+    function typeSymbol(sym) {
+        if (!entry && !beginEntry("edit", null, "cell")) return;
+        const box = entry.where === "bar" ? bar : ed;
+        const [a, b] = [box.selectionStart ?? box.value.length, box.selectionEnd ?? box.value.length];
+        box.setRangeText(sym, a, b, "end");
+        box.dispatchEvent(new Event("input"));
+        lastSymbols = [sym].concat(lastSymbols.filter((s) => s !== sym)).slice(0, 16);
+        remember({ symbols: lastSymbols });
+    }
+    function askSymbol() {
+        if (!editable || busy || !sel || !view || sel.kind !== "cells") return;
+        const form = openDialog("記号と特殊文字", "symboldlg");
+        const tabs = form.appendChild(el("div", "symtabs"));
+        const grid = form.appendChild(el("div", "symgrid"));
+        const recent = form.appendChild(el("div", "symrecent"));
+        const showRecent = () => {
+            recent.textContent = "";
+            recent.appendChild(el("span", "lbl", "最近使用した記号:"));
+            for (const s of lastSymbols) symbolButton(recent, s);
+        };
+        const symbolButton = (into, s) => {
+            const b = into.appendChild(el("button", "sym", s));
+            b.type = "button";
+            b.title = `U+${s.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`;
+            b.addEventListener("click", () => {
+                typeSymbol(s);
+                showRecent();
+            });
+        };
+        const show = (i) => {
+            grid.textContent = "";
+            [...tabs.children].forEach((t, j) => t.classList.toggle("on", i === j));
+            for (const s of SYMBOLS[i][1]) symbolButton(grid, s);
+        };
+        SYMBOLS.forEach(([name], i) => {
+            const t = tabs.appendChild(el("button", "symtab", name));
+            t.type = "button";
+            t.addEventListener("click", () => show(i));
+        });
+        show(0);
+        showRecent();
+        const buttons = form.appendChild(el("div", "buttons"));
+        const close = buttons.appendChild(el("button", "ok", "閉じる"));
+        close.type = "submit";
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            closeDialog();
+        });
+        close.focus();
+    }
+
     // ---- the menu of the cells and the headers
 
     let menu = null;
@@ -2058,6 +2406,12 @@
             items.push(["数式と値のクリア", clearSel, "Delete"]);
             items.push(["書式のクリア", clearFormats, ""]);
             if (kind === "cells") {
+                items.push(null);
+                const note = noteAt(sel.ar, sel.ac);
+                items.push([note ? "メモの編集" : "新しいメモ", askNote, "Shift+F2"]);
+                if (notesIn()) items.push(["メモの削除", removeNote, ""]);
+                items.push([linkAt(sel.ar, sel.ac) ? "リンクの編集" : "リンク", askLink, "Ctrl+K"]);
+                if (linksIn()) items.push(["リンクの削除", removeLinks, ""]);
                 items.push(null);
                 if (mergedIn(sel)) items.push(["結合の解除", () => merge("unmerge"), ""]);
                 if (!single(sel)) items.push(["セルの結合", () => merge("merge"), ""]);
@@ -2403,6 +2757,10 @@
         freeze: '<rect x="1.5" y="1.5" width="13" height="13"/><path d="M1.5 5.5h13M5.5 1.5v13" stroke-width="2"/>',
         code: '<path d="M5 4 1.5 8 5 12M11 4l3.5 4L11 12M9.5 2.5l-3 11"/>',
         gotoCell: '<path d="M2 8h9M8 4.5 11.5 8 8 11.5"/><path d="M13.5 2v12"/>',
+        table: '<rect x="1.5" y="2.5" width="13" height="11"/><path d="M1.5 6h13" stroke-width="2.2"/><path d="M1.5 9.5h13M6 6v7.5M10.5 6v7.5"/>',
+        link: '<path d="M6.5 9.5 9.5 6.5"/><path d="M7.5 4.5 9 3a2.5 2.5 0 0 1 3.5 3.5L11 8M8.5 11.5 7 13a2.5 2.5 0 0 1-3.5-3.5L5 8"/>',
+        note: '<path d="M2.5 2.5h11v8l-3 3h-8z"/><path d="M10.5 13.5v-3h3"/><path d="M5 6h6M5 8.5h4"/>',
+        symbol: '<path d="M3 13.5h3.2v-1.6A5 5 0 1 1 9.8 11.9v1.6H13"/>',
     };
     function icon(name, large) {
         const s = large ? 30 : 16;
@@ -2479,15 +2837,16 @@
         // A column of small buttons (Excel stacks up to three), a row of them.
         const stack = () => (into = into.closest(".rgroup").querySelector(".rcontent").appendChild(el("div", "rstack")));
         const row = (where) => (into = (where || into).appendChild(el("div", "rrow")));
-        const run = (b, act, edits) => {
+        const run = (b, act, edits, keep) => {
             if (busy && edits) return;
             if (edits && !sel) return;
-            if (entry) commit(null);
+            if (entry && !keep) commit(null);
             act(b);
             if (!menu) closeOpen();
             focusGrid();
         };
-        // `o`: { label, title, icon, large, edits, menu: (anchor) => fill it, split, cls, text }.
+        // `o`: { label, title, icon, large, edits, menu: (anchor) => fill it, split, cls, text,
+        // keepEntry (what is being typed in the cell stays) }.
         const button = (key, o) => {
             const wrap = o.split ? into.appendChild(el("div", `rsplit${o.large ? " large" : ""}`)) : into;
             const b = wrap.appendChild(el("button", `rbtn${o.large ? " large" : ""}${o.cls ? ` ${o.cls}` : ""}`));
@@ -2505,7 +2864,7 @@
                 o.menu(anchor);
             };
             if (o.menu && !o.split) b.addEventListener("click", () => openMenuOf(wrap === into ? b : wrap));
-            else b.addEventListener("click", () => run(b, o.act, o.edits));
+            else b.addEventListener("click", () => run(b, o.act, o.edits, o.keepEntry));
             if (o.split) {
                 const more = wrap.appendChild(el("button", "rbtn more", "▾"));
                 more.type = "button";
@@ -2791,6 +3150,28 @@
                 item(pop, "ジャンプ…", askGoTo, "Ctrl+G");
             },
         });
+
+        // ---- 挿入
+        const insertTab = tab("insert", "挿入");
+        group(insertTab, "テーブル");
+        button("table", { icon: "table", label: "テーブル", large: true, title: "テーブル（Ctrl+T）: データの範囲をテーブルにします", edits: true, act: askTable });
+        group(insertTab, "リンク");
+        button("link", { icon: "link", label: "リンク", large: true, title: "リンク（Ctrl+K）: Web ページ・ファイル・ブック内の場所へのハイパーリンクを挿入します", edits: true, act: askLink });
+        group(insertTab, "メモ");
+        button("note", {
+            icon: "note",
+            label: "メモ",
+            large: true,
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "notes");
+                const has = !!(sel && noteAt(sel.ar, sel.ac));
+                item(pop, has ? "メモの編集" : "新しいメモ", askNote, "Shift+F2");
+                item(pop, "メモの削除", removeNote).disabled = !(sel && view && notesIn());
+            },
+        });
+        group(insertTab, "記号と特殊文字");
+        button("symbol", { icon: "symbol", label: "記号と特殊文字", large: true, cls: "two", title: "記号と特殊文字: 入力中のセル（またはアクティブなセル）に記号を入力します", edits: true, keepEntry: true, act: askSymbol });
 
         // ---- 数式
         const formulasTab = tab("formulas", "数式");
@@ -4401,6 +4782,7 @@
             else setSel(cellSel(r, sel.ac), true);
         } else if (ctrl && (key === "a" || key === "A")) setSel({ kind: "all", nr: 0, nc: 0, fr: 0, fc: 0 }, false);
         else if (key === "Escape") setClip(null);
+        else if (key === "F2" && e.shiftKey && !ctrl) askNote();
         else if (key === "F2") beginEntry("edit", null, "cell");
         else if (key === "Delete" || key === "Backspace") clearSel();
         else if (ctrl && !e.shiftKey && (key === "z" || key === "Z")) postHistory("undo");
@@ -4410,6 +4792,8 @@
         else if (ctrl && !e.shiftKey && (key === "u" || key === "U")) toggleFormat("underline");
         else if (ctrl && !e.shiftKey && (key === "5" || e.code === "Digit5")) toggleFormat("strike");
         else if (ctrl && e.shiftKey && (key === "l" || key === "L")) toggleFilter();
+        else if (ctrl && !e.shiftKey && (key === "t" || key === "T" || key === "l" || key === "L")) askTable();
+        else if (ctrl && !e.shiftKey && (key === "k" || key === "K")) askLink();
         else if (ctrl && !e.shiftKey && (key === "d" || key === "D")) fill("down");
         else if (ctrl && !e.shiftKey && (key === "r" || key === "R")) fill("right");
         else if (ctrl && !e.shiftKey && key === ";") typeNow(false);
