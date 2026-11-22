@@ -12,7 +12,12 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use super::drawing::{Anchor, Ctx, EMU_PX, Env, Obj, Parts, anchor_of, esc, font_family, n};
+use umya_spreadsheet::drawingml::EMU_PX;
+use umya_spreadsheet::drawingml::anchor::{Anchor, anchor_of};
+use umya_spreadsheet::drawingml::color::color_of;
+use umya_spreadsheet::drawingml::package::Package;
+
+use super::drawing::{Ctx, Env, Obj, Parts, esc, font_family, n};
 use super::xml::Node;
 
 /// 1025 of a shape id "_x0000_s1025" (VML, the mirror's compatExt), or of "1025".
@@ -497,9 +502,7 @@ fn mirror_text(tx: &Node, ctx: &Ctx) -> Option<Text> {
                 .filter(|f| !f.is_empty() && !f.starts_with('+'))
                 .map(str::to_string)
         });
-        t.color = r
-            .child("solidFill")
-            .and_then(|f| super::drawing::color_of(f, &ctx.theme));
+        t.color = r.child("solidFill").and_then(|f| color_of(f, &ctx.theme));
     }
     Some(t)
 }

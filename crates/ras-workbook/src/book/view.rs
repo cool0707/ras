@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use serde_json::{Value as Json, json};
 use umya_spreadsheet::EnumTrait;
 use umya_spreadsheet::Style;
+use umya_spreadsheet::drawingml::anchor::Anchor;
 
 use super::*;
 
@@ -400,8 +401,8 @@ impl Sizes {
     }
 
     /// The box of an anchor in pixels: (left, top, right, bottom).
-    fn anchor(&self, an: &crate::view::drawing::Anchor) -> Option<(f64, f64, f64, f64)> {
-        use crate::view::drawing::EMU_PX;
+    fn anchor(&self, an: &Anchor) -> Option<(f64, f64, f64, f64)> {
+        use umya_spreadsheet::drawingml::EMU_PX;
         let at = |m: (u32, i64, u32, i64)| {
             (
                 self.x(m.0) + m.1 as f64 / EMU_PX,
@@ -701,7 +702,7 @@ impl Book {
         let objects: Vec<Json> = objects
             .iter()
             .map(|o| {
-                use crate::view::drawing::EMU_PX;
+                use umya_spreadsheet::drawingml::EMU_PX;
                 let px = |v: i64| (v as f64 / EMU_PX * 100.0).round() / 100.0;
                 let marker = |m: (u32, i64, u32, i64)| json!([m.0, px(m.1), m.2, px(m.3)]);
                 let mut j = json!({ "kind": o.kind, "html": o.html });
@@ -1096,7 +1097,7 @@ impl Book {
                     .collect(),
             )
         };
-        let size = |an: &crate::view::drawing::Anchor| {
+        let size = |an: &Anchor| {
             sizes
                 .anchor(an)
                 .map(|(x, y, x2, y2)| ((x2 - x) * 0.75, (y2 - y) * 0.75))
