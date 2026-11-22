@@ -29,6 +29,9 @@ jobs:
       # The toolchain version is pinned in rust-toolchain.toml (so that clippy is reproducible).
       - name: Install Rust
         run: rustup show active-toolchain || rustup toolchain install
+      - name: Use the umya-spreadsheet fork's branch of the same name
+        shell: bash
+        run: .github/scripts/umya-branch.sh "${{ github.head_ref || github.ref_name }}"
       - uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test --workspace --locked
@@ -115,6 +118,9 @@ jobs:
         run: |
           rustup show active-toolchain || rustup toolchain install
           rustup target add ${{ matrix.target }}
+      - name: Use the umya-spreadsheet fork's branch of the same name
+        shell: bash
+        run: .github/scripts/umya-branch.sh "${{ github.head_ref || github.ref_name }}"
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}

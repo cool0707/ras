@@ -28,6 +28,8 @@ ras-ovba = { path = "crates/ras-ovba" }
 ras-form = { path = "crates/ras-form" }
 ras-sync = { path = "crates/ras-sync" }
 ras-lsp = { path = "crates/ras-lsp" }
+# Patched below with the fork xljs uses.
+umya-spreadsheet = "3.1"
 
 logos = "0.16"
 rowan = "0.16"
@@ -57,3 +59,11 @@ panic = "abort"
 # vendor/gridcraft-core/README.md.
 [patch."https://github.com/cool0707/xljs"]
 gridcraft-core = { path = "vendor/gridcraft-core" }
+
+# umya-spreadsheet: the fork xljs uses, on the same branch (excel-compat), which holds the reading
+# and writing of workbooks that xljs and RAS share. CI builds against the fork's branch of the same
+# name as the RAS branch instead, when there is one (.github/scripts/umya-branch.sh). To try a
+# local checkout: cargo test --config 'patch.crates-io.umya-spreadsheet.path="../umya-spreadsheet"'
+# (Cargo.lock is rewritten then; do not commit it).
+[patch.crates-io]
+umya-spreadsheet = { git = "https://github.com/cool0707/umya-spreadsheet", branch = "excel-compat" }
