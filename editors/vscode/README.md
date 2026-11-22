@@ -1,6 +1,6 @@
-# RAS (Better VBA)
+# RAS
 
-[RAS](https://github.com/cool0707/ras) は、TypeScript ライクな構文から VBA（`.bas` / `.cls`）へトランスパイルする言語です。この拡張機能は、Visual Studio Code に RAS（`.ras` / `.d.ras`）の言語サポートを追加します。
+[RAS](https://github.com/cool0707/ras) は、TypeScript ライクな構文から VBA（`.bas` / `.cls`）へトランスパイルする Better VBA 言語です。この拡張機能は、Visual Studio Code に RAS（`.ras` / `.d.ras`）の言語サポートを追加します。
 
 拡張機能自体は意図的に薄く作られています。行うのは、シンタックスハイライトの提供と、`ras` バイナリを言語サーバー（`ras lsp --stdio`）として起動して接続することだけです。補完・クイック情報・パラメーター情報・診断・定義へ移動・名前の変更・インレイヒント・セマンティックハイライト・CodeLens・フォーマットなどは、すべて言語サーバーが提供します。
 
