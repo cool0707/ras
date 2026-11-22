@@ -1,0 +1,6 @@
+#!/bin/sh
+# Claude Code PreToolUse hook (Bash): runs .githooks/pre-commit when the command commits.
+if grep -Eq 'git( +-C +[^ ]+)? +commit'; then
+  exec "$(dirname "$0")/pre-commit"
+fi
+exit 0
