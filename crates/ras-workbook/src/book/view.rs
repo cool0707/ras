@@ -6,8 +6,8 @@
 //! pixels, the alignment of values without one) follows xljs's printing of sheets
 //! (`src/api/xlsx_print.rs` there), without its pages: this is the screen, not the paper.
 //! The objects of the sheet's drawing (shapes, pictures, charts, controls) are drawn over the
-//! cells (`crate::view::drawing`). Conditional formats and table
-//! styles are not drawn.
+//! cells (`crate::view::drawing`). Of the conditional formats, color scales and data bars are
+//! drawn (`super::cond`); table styles are not.
 
 use std::collections::HashMap;
 
@@ -83,21 +83,68 @@ fn n(v: f64) -> String {
 }
 
 /// The CSS of a cell's formats. `kind`: what its value is (the alignment without one follows it).
+/// The tile of a pattern fill, a row of pixels per string ('1': the pattern's color).
+fn pattern_tile(t: &str) -> Option<&'static [&'static str]> {
+    Some(match t {
+        "gray0625" => &["10000000", "00000000", "00001000", "00000000"],
+        "gray125" => &["1000", "0000", "0010", "0000"],
+        "lightGray" => &["1000", "0010"],
+        "mediumGray" => &["10", "01"],
+        "darkGray" => &["0111", "1101"],
+        "darkHorizontal" => &["1", "1", "0", "0"],
+        "darkVertical" => &["1100"],
+        "darkDown" => &["1100", "0110", "0011", "1001"],
+        "darkUp" => &["0011", "0110", "1100", "1001"],
+        "darkGrid" => &["1100", "1100", "0011", "0011"],
+        "darkTrellis" => &["1100", "1111", "0011", "1111"],
+        "lightHorizontal" => &["1", "0", "0", "0"],
+        "lightVertical" => &["1000"],
+        "lightDown" => &["1000", "0100", "0010", "0001"],
+        "lightUp" => &["0001", "0010", "0100", "1000"],
+        "lightGrid" => &["1111", "1000", "1000", "1000"],
+        "lightTrellis" => &["1001", "0110", "0110", "1001"],
+        _ => return None,
+    })
+}
+
+/// A pattern's tile as a CSS image in `color` (#RRGGBB).
+fn pattern_image(tile: &[&str], color: &str) -> String {
+    let (w, h) = (tile[0].len(), tile.len());
+    let mut d = String::new();
+    for (y, row) in tile.iter().enumerate() {
+        for (x, _) in row.bytes().enumerate().filter(|(_, b)| *b == b'1') {
+            d.push_str(&format!("M{x} {y}h1v1h-1z"));
+        }
+    }
+    format!(
+        "url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='{w}' height='{h}' shape-rendering='crispEdges'><path fill='{}' d='{d}'/></svg>\")",
+        color.replace('#', "%23")
+    )
+}
+
 fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -> String {
     let mut css = String::new();
     if let Some(pf) = st.fill().and_then(|f| f.pattern_fill()) {
         let t = pf.pattern_type().value_string();
         if !(t == "none" || t.is_empty()) {
             let fg = pf.foreground_color().and_then(|c| css_color(c, theme));
-            let color = if t == "solid" {
-                fg
-            } else {
-                fg.or_else(|| pf.background_color().and_then(|c| css_color(c, theme)))
-            };
-            if let Some(c) = color.filter(|_| t != "gray125") {
-                // Over the gridlines around it too, as Excel fills cells.
+            if t == "solid" {
+                if let Some(c) = fg {
+                    // Over the gridlines around it too, as Excel fills cells.
+                    css.push_str(&format!(
+                        "background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};"
+                    ));
+                }
+            } else if let Some(tile) = pattern_tile(t) {
+                // The pattern in its color (black without one) over the cell's color (white).
+                let fg = fg.unwrap_or_else(|| "#000000".into());
+                let bg = pf
+                    .background_color()
+                    .and_then(|c| css_color(c, theme))
+                    .unwrap_or_else(|| "#FFFFFF".into());
                 css.push_str(&format!(
-                    "background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};"
+                    "background:{bg} {};box-shadow:-1px 0 {bg},0 -1px {bg},-1px -1px {bg};",
+                    pattern_image(tile, &fg)
                 ));
             }
         }
@@ -148,11 +195,14 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
         }
     }
     let (mut h, mut v, mut wrap, mut indent) = (String::new(), String::new(), false, 0);
+    let (mut rotation, mut shrink) = (0, false);
     if let Some(a) = st.alignment() {
         h = a.horizontal().value_string().to_string();
         v = a.vertical().value_string().to_string();
         wrap = a.wrap_text();
         indent = a.indent();
+        rotation = a.text_rotation();
+        shrink = a.shrink_to_fit();
     }
     let align = match h.as_str() {
         "center" | "centerContinuous" => "center",
@@ -175,6 +225,16 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
     }
     if wrap {
         css.push_str("white-space:pre-wrap;overflow-wrap:anywhere;");
+    } else if shrink {
+        // The page makes the font smaller until the text fits.
+        css.push_str("--shrink:1;");
+    }
+    // Text at an angle: 1-90 degrees up, 91-180 down (as 1-90), 255 stacked letters.
+    match rotation {
+        255 => css.push_str("writing-mode:vertical-rl;text-orientation:upright;"),
+        1..=90 => css.push_str(&format!("--rot:{rotation};")),
+        91..=180 => css.push_str(&format!("--rot:{};", 90_i64 - i64::from(rotation))),
+        _ => {}
     }
     if indent > 0 {
         css.push_str(&format!(
@@ -294,10 +354,8 @@ impl Book {
         for m in info.merged.iter().filter_map(|m| RangeRef::parse(m)) {
             used = used.union(&m);
         }
-        // Column widths (in characters) to pixels as Excel does, with the widest digit 8 px wide
-        // (the default Japanese fonts at 11pt).
-        let mdw = 8.0_f64;
-        let px = |w: f64| ((256.0 * w + (128.0 / mdw).trunc()) / 256.0 * mdw).trunc();
+        // Column widths are kept as `ColumnWidth` has them (characters, without the padding).
+        let px = super::format::width_px;
         let (sizes, grid_lines) = {
             let Ok(ws) = self.file.sheet(si) else {
                 return Err("シートがありません".into());
@@ -384,6 +442,15 @@ impl Book {
             style_index.insert(css, styles.len() - 1);
             styles.len() - 1
         };
+        // The color scales and data bars of the conditional formats.
+        let cond = self.cond_effects(si, shown, &|c| css_color(c, &theme));
+        // The colors number formats give what the cells show (`[Red]`).
+        let mut format_colors: HashMap<(u32, u32), String> = HashMap::new();
+        for c in &cells {
+            if let Some(color) = self.format_color(si, c.at) {
+                format_colors.insert((c.at.row, c.at.col), color);
+            }
+        }
         let mut out_cells: Vec<Json> = Vec::new();
         let col_w: Vec<f64> = (0..=end.col).map(|c| sizes.w(c)).collect();
         let row_h: Vec<f64> = (0..=end.row).map(|r| sizes.h(r)).collect();
@@ -393,6 +460,13 @@ impl Book {
             };
             // The cells with a value, then those with only formats (a fill, a border).
             let plain = Style::default();
+            // A cell without a format of its own has the Normal style's alignment (umya-spreadsheet
+            // reads it as no format at all).
+            let normal = drawing.and_then(|d| d.parts.normal_alignment()).map(|a| {
+                let mut st = Style::default();
+                st.set_alignment(a);
+                st
+            });
             let mut at: Vec<(u32, u32)> = by_at.keys().copied().collect();
             for c in ws.cells() {
                 let p = at_of(c);
@@ -407,12 +481,39 @@ impl Book {
                 let kind = info
                     .map(|c| crate::dump::type_name(&c.value))
                     .unwrap_or("empty");
-                let style = match ws.cell((col + 1, row + 1)) {
+                let mut style = match ws.cell((col + 1, row + 1)) {
                     Some(c) => c.style().clone(),
                     None => self.style_at(si, CellRef::new(row, col)),
                 };
-                let s = intern(style_css(&style, &theme, kind));
+                if let Some(n) = normal.as_ref().filter(|_| style == plain) {
+                    style = n.clone();
+                }
+                let mut css = style_css(&style, &theme, kind);
+                if let Some(color) = format_colors.get(&(row, col)) {
+                    css.push_str(&format!("color:#{color};"));
+                }
+                let fx = cond.get(&(row, col));
+                if let Some(c) = fx.and_then(|fx| fx.fill.as_ref()) {
+                    css.push_str(&format!(
+                        "background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};"
+                    ));
+                }
+                let s = intern(css);
                 let mut cell = json!({ "r": row, "c": col });
+                if let Some(b) = fx.and_then(|fx| fx.bar.as_ref()) {
+                    // A gradient fades to white at the bar's end, as Excel draws it.
+                    let bg = if b.gradient {
+                        let light = super::cond::mix(&b.fill, "#FFFFFF", 0.9);
+                        let to = if b.leftward { "left" } else { "right" };
+                        format!("linear-gradient(to {to},{},{light})", b.fill)
+                    } else {
+                        b.fill.clone()
+                    };
+                    cell["bar"] = json!({ "x": b.start, "w": b.len, "bg": bg, "axis": b.axis });
+                }
+                if fx.is_some_and(|fx| fx.hide_value) {
+                    cell["hv"] = json!(true);
+                }
                 if s != 0 {
                     cell["s"] = json!(s);
                 }
@@ -423,6 +524,9 @@ impl Book {
                     }
                     if c.number_format != "General" {
                         cell["n"] = json!(c.number_format);
+                    } else if let Val::Num(x) = c.value {
+                        // For the page to fit the number to its column, as Excel does.
+                        cell["x"] = json!(x);
                     }
                     cell["k"] = json!(kind);
                 }

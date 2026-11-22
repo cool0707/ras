@@ -539,7 +539,7 @@ fn sizes_hidden_lines_and_merged_cells() {
     );
     assert_eq!(changed(BOOK, &out), [SHEET1, SHEET2]);
     let sheet = part(&out, SHEET1);
-    assert!(sheet.contains(r#"<cols><col min="1" max="1" width="14.7109375" customWidth="1" hidden="1"/><col min="2" max="3" width="15.625" customWidth="1"/><col min="4" max="4" width="12.7109375" style="1" customWidth="1"/></cols>"#), "{sheet}");
+    assert!(sheet.contains(r#"<cols><col min="1" max="1" width="14.7109375" customWidth="1" hidden="1"/><col min="2" max="3" width="15.00390625" customWidth="1"/><col min="4" max="4" width="12.7109375" style="1" customWidth="1"/></cols>"#), "{sheet}");
     assert!(
         sheet.contains(r#"<row r="3" ht="30" customHeight="1">"#),
         "{sheet}"

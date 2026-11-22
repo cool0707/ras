@@ -36,6 +36,12 @@ td {
     background-size: 1px 100%, 100% 1px; background-position: right top, left bottom; background-repeat: no-repeat;
 }
 table.nogrid td { background-image: none; }
+td .wr { overflow: hidden; }
+td .rot { display: inline-block; white-space: nowrap; }
+/* Data bars of conditional formats: under the value, over the cell's fill. */
+td.cfb { position: relative; z-index: 0; }
+td .cfbar { position: absolute; top: 2px; bottom: 2px; z-index: -1; pointer-events: none; }
+td .cfaxis { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #000; z-index: -1; pointer-events: none; }
 /* Text that runs over the empty cells to its right: their gridlines are under it. */
 td.ov { overflow: visible; }
 td.ov .ovt { overflow: hidden; white-space: nowrap; pointer-events: none; }

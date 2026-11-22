@@ -830,8 +830,8 @@ fn run(
         } => {
             let si = sheet_index(book, sheet)?;
             if *columns {
-                // The grid draws a column of w characters trunc(8w + 0.5) px wide.
-                book.set_format(si, *range, "columnwidth", &Val::Num(px / 8.0))?;
+                let chars = crate::book::width_of_px(*px);
+                book.set_format(si, *range, "columnwidth", &Val::Num(chars))?;
             } else {
                 book.set_format(si, *range, "rowheight", &Val::Num(px * 0.75))?;
             }

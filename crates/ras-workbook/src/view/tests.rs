@@ -703,3 +703,104 @@ fn a_saved_workbook_with_the_drawings_it_was_read_from() {
         html("Check Box 3")
     );
 }
+
+/// A workbook as Japanese Excel saves one with formats the grid draws as Excel does: column
+/// widths, the Normal style centred vertically, a built-in format whose code is Japanese Excel's,
+/// a small number in General, a pattern fill, turned and shrunk text, a color scale and a data bar.
+fn formatted() -> Vec<u8> {
+    let parts = vec![
+        (
+            "[Content_Types].xml".to_string(),
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>"#
+                .to_vec(),
+        ),
+        (
+            "_rels/.rels".to_string(),
+            rels(&[("rId1", &format!("{R}/officeDocument"), "xl/workbook.xml")]).into_bytes(),
+        ),
+        (
+            "xl/workbook.xml".to_string(),
+            format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"{R}\"><sheets><sheet name=\"Grid\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>").into_bytes(),
+        ),
+        (
+            "xl/_rels/workbook.xml.rels".to_string(),
+            rels(&[
+                ("rId1", &format!("{R}/worksheet"), "worksheets/sheet1.xml"),
+                ("rId2", &format!("{R}/styles"), "styles.xml"),
+            ])
+            .into_bytes(),
+        ),
+        (
+            "xl/styles.xml".to_string(),
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><color theme="1"/><name val="游ゴシック"/><family val="2"/><charset val="128"/><scheme val="minor"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="darkGrid"><fgColor rgb="FF00AA00"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"><alignment vertical="center"/></xf></cellStyleXfs><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"><alignment vertical="center"/></xf><xf numFmtId="38" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"><alignment vertical="center"/></xf><xf numFmtId="0" fontId="0" fillId="2" borderId="0" xfId="0" applyFill="1"><alignment vertical="center"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center" textRotation="45"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center" shrinkToFit="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="標準" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#
+                .as_bytes()
+                .to_vec(),
+        ),
+        (
+            "xl/worksheets/sheet1.xml".to_string(),
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetFormatPr defaultRowHeight="18.75"/><cols><col min="1" max="1" width="14.625" customWidth="1"/><col min="2" max="2" width="6.625" customWidth="1"/></cols><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>plain</t></is></c><c r="B1" s="1"><v>-1500</v></c><c r="C1"><v>1.2345E-5</v></c><c r="D1" s="2" t="inlineStr"><is><t>pattern</t></is></c><c r="E1" s="3" t="inlineStr"><is><t>turned</t></is></c><c r="F1" s="4" t="inlineStr"><is><t>shrunk</t></is></c></row><row r="2"><c r="A2"><v>10</v></c><c r="B2"><v>1</v></c></row><row r="3"><c r="A3"><v>50</v></c><c r="B3"><v>5</v></c></row><row r="4"><c r="A4"><v>90</v></c><c r="B4"><v>9</v></c></row></sheetData><conditionalFormatting sqref="A2:A4"><cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar></cfRule></conditionalFormatting><conditionalFormatting sqref="B2:B4"><cfRule type="colorScale" priority="2"><colorScale><cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale></cfRule></conditionalFormatting></worksheet>"#
+                .as_bytes()
+                .to_vec(),
+        ),
+    ];
+    zip_of(parts)
+}
+
+#[test]
+fn formats_as_excel_draws_them() {
+    let data = view_of(&formatted());
+    let sheet = &data["sheets"][0];
+    // Columns 14 and 6 characters wide (the file's widths have the padding in them): 8 px a
+    // digit and 5 px of padding, as Excel shows them at 100%.
+    assert_eq!(sheet["colWidths"][0], json!(117.0));
+    assert_eq!(sheet["colWidths"][1], json!(53.0));
+    let cell = |a: &str| -> Json {
+        let at = gridcraft_core::addr::CellRef::parse(a).unwrap();
+        sheet["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["r"] == json!(at.row) && c["c"] == json!(at.col))
+            .cloned()
+            .unwrap_or(Json::Null)
+    };
+    let css = |a: &str| -> String {
+        let s = cell(a)["s"].as_u64().unwrap_or(0) as usize;
+        sheet["styles"][s].as_str().unwrap_or("").to_string()
+    };
+    // A cell without a format of its own has the Normal style's alignment.
+    assert!(css("A1").contains("vertical-align:middle"), "{}", css("A1"));
+    // Built-in format 38 as Japanese Excel has it, in red.
+    assert_eq!(cell("B1")["t"], json!("-1,500"));
+    assert!(css("B1").contains("color:#FF0000"), "{}", css("B1"));
+    // General: all the digits of a small number when they fit in 11 characters.
+    assert_eq!(cell("C1")["t"], json!("0.000012345"));
+    assert_eq!(cell("C1")["x"], json!(1.2345e-5));
+    // A pattern over white; turned and shrunk text for the page.
+    assert!(
+        css("D1").contains("background:#FFFFFF url(\"data:image/svg+xml,"),
+        "{}",
+        css("D1")
+    );
+    assert!(css("D1").contains("fill='%2300AA00'"), "{}", css("D1"));
+    assert!(css("E1").contains("--rot:45;"), "{}", css("E1"));
+    assert!(css("F1").contains("--shrink:1;"), "{}", css("F1"));
+    // The data bar: 10% to 90% of the cell from the lowest to the highest value.
+    let bar = |a: &str| cell(a)["bar"].clone();
+    assert_eq!(bar("A2")["w"], json!(0.1));
+    assert_eq!(bar("A3")["w"], json!(0.5));
+    assert_eq!(bar("A4")["w"], json!(0.9));
+    assert!(
+        bar("A2")["bg"]
+            .as_str()
+            .unwrap()
+            .starts_with("linear-gradient(to right,#638EC6,")
+    );
+    // The color scale: the lowest, the middle and the highest colors.
+    assert!(css("B2").contains("background:#F8696B;"), "{}", css("B2"));
+    assert!(css("B3").contains("background:#FFEB84;"), "{}", css("B3"));
+    assert!(css("B4").contains("background:#63BE7B;"), "{}", css("B4"));
+}
