@@ -7,12 +7,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use ras_compiler::{Config, ModuleKind, SourceInput, analyze, build_js};
 use ras_workbook::RangeRef;
 use ras_workbook::book::{Book, Read, Val};
-use ras_compiler::{analyze, build_js, Config, ModuleKind, SourceInput};
 
 fn has_node() -> bool {
-    let found = Command::new("node").arg("--version").output().is_ok_and(|o| o.status.success());
+    let found = Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
     if !found {
         eprintln!("skipped: node is not installed");
     }
@@ -27,15 +30,26 @@ fn built_addon() -> &'static Path {
     BUILT.get_or_init(|| {
         let exe = std::env::current_exe().unwrap();
         // <target>/<profile>/deps/excel-<hash>
-        let profile_dir = exe.parent().and_then(Path::parent).expect("the test runs from <target>/<profile>/deps");
-        let target_dir = profile_dir.parent().expect("the profile directory is in the target directory");
+        let profile_dir = exe
+            .parent()
+            .and_then(Path::parent)
+            .expect("the test runs from <target>/<profile>/deps");
+        let target_dir = profile_dir
+            .parent()
+            .expect("the profile directory is in the target directory");
         let mut cmd = Command::new(env!("CARGO"));
-        cmd.args(["build", "-p", "ras-book", "--target-dir"]).arg(target_dir).current_dir(env!("CARGO_MANIFEST_DIR"));
+        cmd.args(["build", "-p", "ras-book", "--target-dir"])
+            .arg(target_dir)
+            .current_dir(env!("CARGO_MANIFEST_DIR"));
         if profile_dir.file_name().is_some_and(|n| n == "release") {
             cmd.arg("--release");
         }
         let out = cmd.output().expect("cargo");
-        assert!(out.status.success(), "cargo build -p ras-book failed:\n{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "cargo build -p ras-book failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         let name = if cfg!(windows) {
             "ras_book.dll"
         } else if cfg!(target_os = "macos") {
@@ -70,7 +84,12 @@ fn project(name: &str, source: &str, book: impl FnOnce(&mut Book)) -> Project {
 }
 
 /// A project of `src/main.ras` and the files of `objects/` (name, text).
-fn project_with(name: &str, source: &str, objects: &[(&str, &str)], book: impl FnOnce(&mut Book)) -> Project {
+fn project_with(
+    name: &str,
+    source: &str,
+    objects: &[(&str, &str)],
+    book: impl FnOnce(&mut Book),
+) -> Project {
     let root = std::env::temp_dir().join(format!("ras-book-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("src")).unwrap();
@@ -82,7 +101,13 @@ fn project_with(name: &str, source: &str, objects: &[(&str, &str)], book: impl F
     let mut cfg = Config::default();
     cfg.project.workbook = Some("Book.xlsx".into());
     cfg.sheet_code_names = vec!["Sheet1".into()];
-    let mut sources = vec![SourceInput { path: root.join("src/main.ras"), rel_path: "src/main.ras".into(), key: "main".into(), kind: ModuleKind::User, text: source.into() }];
+    let mut sources = vec![SourceInput {
+        path: root.join("src/main.ras"),
+        rel_path: "src/main.ras".into(),
+        key: "main".into(),
+        kind: ModuleKind::User,
+        text: source.into(),
+    }];
     for (object, text) in objects {
         let path = root.join(format!("objects/{object}.ras"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -90,7 +115,12 @@ fn project_with(name: &str, source: &str, objects: &[(&str, &str)], book: impl F
         sources.push(ras_compiler::object_source(path, object, text.to_string()));
     }
     let prog = analyze(sources, cfg);
-    let errors: Vec<String> = prog.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
     assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
     let out = build_js(&prog, "../../");
     for f in &out.files {
@@ -114,11 +144,16 @@ impl Project {
             .env("RAS_BOOK_ADDON", addon)
             .output()
             .expect("node");
-        (String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n"), String::from_utf8_lossy(&o.stderr).into_owned(), o.status.success())
+        (
+            String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n"),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+            o.status.success(),
+        )
     }
 
     fn saved(&self) -> Book {
-        Book::open(&self.0.join("build/debug/workbooks/Book.xlsx")).expect("the changed workbook is saved")
+        Book::open(&self.0.join("build/debug/workbooks/Book.xlsx"))
+            .expect("the changed workbook is saved")
     }
 }
 
@@ -232,13 +267,28 @@ fn a_program_runs_on_the_workbook_without_excel() {
             "names=A社;B社;C社; text=250.50",
         ]
     );
-    assert!(stdout.contains("build/debug/workbooks/Book.xlsx"), "{stdout}");
+    assert!(
+        stdout.contains("build/debug/workbooks/Book.xlsx"),
+        "{stdout}"
+    );
     // The workbook itself is not written; the copy has what the program did.
     let mut original = Book::open(&p.0.join("Book.xlsx")).unwrap();
-    assert_eq!(original.get(0, rng("E2"), Read::Value).unwrap(), vec![vec![Val::Empty]]);
+    assert_eq!(
+        original.get(0, rng("E2"), Read::Value).unwrap(),
+        vec![vec![Val::Empty]]
+    );
     let mut saved = p.saved();
-    assert_eq!(saved.get(0, rng("E2:F2"), Read::Formula).unwrap(), vec![vec![Val::Text("=ROUND(C2*D2*1.1,0)".into()), Val::Text("".into())]]);
-    assert_eq!(saved.get(0, rng("F1"), Read::Value).unwrap(), vec![vec![Val::Num(2301.0)]]);
+    assert_eq!(
+        saved.get(0, rng("E2:F2"), Read::Formula).unwrap(),
+        vec![vec![
+            Val::Text("=ROUND(C2*D2*1.1,0)".into()),
+            Val::Text("".into())
+        ]]
+    );
+    assert_eq!(
+        saved.get(0, rng("F1"), Read::Value).unwrap(),
+        vec![vec![Val::Num(2301.0)]]
+    );
 }
 
 #[test]
@@ -249,7 +299,10 @@ fn dates_are_dates() {
     let p = project("dates", REPORT, sales);
     let (stdout, stderr, ok) = p.run("Main.dates");
     assert!(ok, "{stderr}\n{stdout}");
-    assert_eq!(lines(&stdout), vec!["Date 2026/03/04 m/d/yyyy 46085", "2026/2/1 Date"]);
+    assert_eq!(
+        lines(&stdout),
+        vec!["Date 2026/03/04 m/d/yyyy 46085", "2026/2/1 Date"]
+    );
 }
 
 #[test]
@@ -260,7 +313,14 @@ fn sheets_are_added_and_renamed() {
     let p = project("sheets", REPORT, sales);
     let (stdout, stderr, ok) = p.run("Main.sheets");
     assert!(ok, "{stderr}\n{stdout}");
-    assert_eq!(lines(&stdout), vec!["2 2 =SUM(売上!C2:C4) 380.5", "- 売上 (Sheet1)", "- 集計 (Sheet2)"]);
+    assert_eq!(
+        lines(&stdout),
+        vec![
+            "2 2 =SUM(売上!C2:C4) 380.5",
+            "- 売上 (Sheet1)",
+            "- 集計 (Sheet2)"
+        ]
+    );
 }
 
 #[test]
@@ -509,17 +569,35 @@ fn formats_are_saved_with_the_workbook() {
     let mut saved = p.saved();
     let v = |b: &mut Book, a1: &str, prop: &str| b.format_of(0, rng(a1), prop).unwrap();
     assert_eq!(v(&mut saved, "A1:D1", "font.bold"), Some(Val::Bool(true)));
-    assert_eq!(v(&mut saved, "A1:D1", "font.color"), Some(Val::Num(16777215.0)));
-    assert_eq!(v(&mut saved, "B1", "interior.color"), Some(Val::Num(12611584.0)));
-    assert_eq!(v(&mut saved, "C1", "horizontalalignment"), Some(Val::Num(-4108.0)));
-    assert_eq!(v(&mut saved, "A1:D1", "borders.9.weight"), Some(Val::Num(-4138.0)));
-    assert_eq!(v(&mut saved, "A2:D4", "borders.all.linestyle"), Some(Val::Num(1.0)));
+    assert_eq!(
+        v(&mut saved, "A1:D1", "font.color"),
+        Some(Val::Num(16777215.0))
+    );
+    assert_eq!(
+        v(&mut saved, "B1", "interior.color"),
+        Some(Val::Num(12611584.0))
+    );
+    assert_eq!(
+        v(&mut saved, "C1", "horizontalalignment"),
+        Some(Val::Num(-4108.0))
+    );
+    assert_eq!(
+        v(&mut saved, "A1:D1", "borders.9.weight"),
+        Some(Val::Num(-4138.0))
+    );
+    assert_eq!(
+        v(&mut saved, "A2:D4", "borders.all.linestyle"),
+        Some(Val::Num(1.0))
+    );
     assert_eq!(v(&mut saved, "A9", "columnwidth"), Some(Val::Num(20.0)));
     assert_eq!(v(&mut saved, "A1", "rowheight"), Some(Val::Num(24.0)));
     assert_eq!(v(&mut saved, "F1:G1", "mergecells"), Some(Val::Bool(true)));
     assert_eq!(saved.hidden(0, true, 3, 3), Some(true));
     // The number format set before is still there.
-    assert_eq!(saved.get(0, rng("C3"), Read::Text).unwrap(), vec![vec![Val::Text("250.50".into())]]);
+    assert_eq!(
+        saved.get(0, rng("C3"), Read::Text).unwrap(),
+        vec![vec![Val::Text("250.50".into())]]
+    );
 }
 
 #[test]
@@ -612,7 +690,12 @@ fn events_are_raised_for_what_the_program_does() {
     if !has_node() {
         return;
     }
-    let p = project_with("events", EVENTS, &[("Sheet1", EVENTS_SHEET1), ("ThisWorkbook", EVENTS_BOOK)], sales);
+    let p = project_with(
+        "events",
+        EVENTS,
+        &[("Sheet1", EVENTS_SHEET1), ("ThisWorkbook", EVENTS_BOOK)],
+        sales,
+    );
     let (stdout, stderr, ok) = p.run("Main.run");
     assert!(ok, "{stderr}\n{stdout}");
     assert_eq!(
@@ -634,10 +717,22 @@ fn events_are_raised_for_what_the_program_does() {
     assert!(ok, "{stderr}\n{stdout}");
     assert_eq!(
         lines(&stdout),
-        vec!["NewSheet Sheet2", "Deactivate", "SheetChange Sheet2!A1", "Activate", "BeforeSave false", "saved=false", "Deactivate", "left=1"]
+        vec![
+            "NewSheet Sheet2",
+            "Deactivate",
+            "SheetChange Sheet2!A1",
+            "Activate",
+            "BeforeSave false",
+            "saved=false",
+            "Deactivate",
+            "left=1"
+        ]
     );
     // The error of a handler is reported, and the program goes on.
-    assert!(stderr.contains("Sheet1.BeforeDelete: 実行時エラー") && stderr.contains("消せません"), "{stderr}");
+    assert!(
+        stderr.contains("Sheet1.BeforeDelete: 実行時エラー") && stderr.contains("消せません"),
+        "{stderr}"
+    );
 }
 
 /// `objects/ThisWorkbook.ras`: variables whose objects are listened to (spec §12.2.2).

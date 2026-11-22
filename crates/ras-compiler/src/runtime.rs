@@ -22,7 +22,11 @@ fn sections() -> Vec<Section> {
         if let Some(head) = line.strip_prefix("'@@ ") {
             let mut parts = head.split_whitespace();
             let kind = parts.next().unwrap_or("proc");
-            out.push(Section { kind, names: parts.collect(), body: String::new() });
+            out.push(Section {
+                kind,
+                names: parts.collect(),
+                body: String::new(),
+            });
         } else if let Some(s) = out.last_mut() {
             s.body.push_str(line);
             s.body.push('\n');
@@ -96,7 +100,10 @@ pub fn build(used: &HashSet<String>, cfg: &Config, has_init_glue: bool) -> Runti
     let japanese = cfg.target.codepage == 932;
     let msg = |ja: &'static str, en: &'static str| if japanese { ja } else { en };
     let secs = sections();
-    let mut needed: Vec<bool> = secs.iter().map(|s| s.names.iter().any(|n| used.contains(*n))).collect();
+    let mut needed: Vec<bool> = secs
+        .iter()
+        .map(|s| s.names.iter().any(|n| used.contains(*n)))
+        .collect();
     // Transitive closure over references between sections.
     loop {
         let mut changed = false;
@@ -125,18 +132,32 @@ pub fn build(used: &HashSet<String>, cfg: &Config, has_init_glue: bool) -> Runti
         } else {
             String::new()
         };
-        let init_call = if has_init_glue { "    RAS_Glue.RAS_InitAll" } else { "" };
+        let init_call = if has_init_glue {
+            "    RAS_Glue.RAS_InitAll"
+        } else {
+            ""
+        };
         let text = body
             .replace("{{YIELD_MS}}", &cfg.doevents.interval_ms.to_string())
             .replace("{{FIX_EVENTS}}", &fix_events)
             .replace("{{INIT_CALL}}", init_call)
             .replace("{{MSG_BUSY}}", msg("処理中です", "Busy"))
-            .replace("{{MSG_CANCELLED}}", msg("ユーザーにより中断されました", "Cancelled by the user"))
+            .replace(
+                "{{MSG_CANCELLED}}",
+                msg("ユーザーにより中断されました", "Cancelled by the user"),
+            )
             .replace("{{MSG_WHERE}}", msg("場所", "Location"))
             .replace("{{MSG_NUMBER}}", msg("エラー番号", "Error number"));
-        let text = if cfg.target.vba6 { text } else { strip_vba6(&text) };
+        let text = if cfg.target.vba6 {
+            text
+        } else {
+            strip_vba6(&text)
+        };
         // Blank placeholder lines are dropped.
-        text.lines().filter(|l| !l.trim().is_empty() || !body.contains("{{")).map(|l| format!("{l}\n")).collect()
+        text.lines()
+            .filter(|l| !l.trim().is_empty() || !body.contains("{{"))
+            .map(|l| format!("{l}\n"))
+            .collect()
     };
     let mut decls = String::new();
     let mut procs = String::new();
@@ -154,8 +175,15 @@ pub fn build(used: &HashSet<String>, cfg: &Config, has_init_glue: bool) -> Runti
             }
         }
     }
-    let module = if decls.is_empty() && procs.is_empty() { String::new() } else { format!("{decls}{procs}") };
-    Runtime { module, error_class }
+    let module = if decls.is_empty() && procs.is_empty() {
+        String::new()
+    } else {
+        format!("{decls}{procs}")
+    };
+    Runtime {
+        module,
+        error_class,
+    }
 }
 
 #[cfg(test)]
@@ -206,7 +234,10 @@ mod tests {
 
     #[test]
     fn placeholders_are_all_replaced() {
-        let all: HashSet<String> = sections().iter().flat_map(|s| s.names.iter().map(|n| n.to_string())).collect();
+        let all: HashSet<String> = sections()
+            .iter()
+            .flat_map(|s| s.names.iter().map(|n| n.to_string()))
+            .collect();
         let rt = build(&all, &Config::default(), true);
         assert!(!rt.module.contains("{{"), "unreplaced placeholder");
         assert!(rt.module.contains("RAS_Glue.RAS_InitAll"));

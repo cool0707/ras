@@ -119,18 +119,44 @@ pub struct Param {
 
 #[derive(Debug, Clone)]
 pub enum TypeRef {
-    Named { path: Vec<Ident>, args: Vec<TypeRef>, span: Span },
-    Array { elem: Box<TypeRef>, span: Span },
-    Fn { params: Vec<Param>, ret: Box<TypeRef>, span: Span },
+    Named {
+        path: Vec<Ident>,
+        args: Vec<TypeRef>,
+        span: Span,
+    },
+    Array {
+        elem: Box<TypeRef>,
+        span: Span,
+    },
+    Fn {
+        params: Vec<Param>,
+        ret: Box<TypeRef>,
+        span: Span,
+    },
     /// `T | null` / `T | undefined`
-    Nullable { inner: Box<TypeRef>, span: Span },
+    Nullable {
+        inner: Box<TypeRef>,
+        span: Span,
+    },
     /// `A | B | ...` with two or more non-null members; `nullable` when `| null` was also written.
-    Union { elems: Vec<TypeRef>, nullable: bool, span: Span },
+    Union {
+        elems: Vec<TypeRef>,
+        nullable: bool,
+        span: Span,
+    },
     /// `[A, B]` — a tuple: an anonymous struct with positional fields.
-    Tuple { elems: Vec<TypeRef>, span: Span },
+    Tuple {
+        elems: Vec<TypeRef>,
+        span: Span,
+    },
     /// `{ a: A; b: B }` — an anonymous struct.
-    Object { fields: Vec<PropSig>, span: Span },
-    Error { span: Span },
+    Object {
+        fields: Vec<PropSig>,
+        span: Span,
+    },
+    Error {
+        span: Span,
+    },
 }
 
 impl TypeRef {
@@ -220,7 +246,11 @@ pub enum InterfaceMember {
     Prop(PropSig),
     Method(FnDecl),
     /// `[index: K]: V` — the default (indexer) member of a host type.
-    Index { param: Param, ty: TypeRef, span: Span },
+    Index {
+        param: Param,
+        ty: TypeRef,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -320,18 +350,49 @@ pub enum StmtKind {
     Var(VarDecl),
     Expr(Expr),
     Block(Block),
-    If { cond: Expr, then: Box<Stmt>, els: Option<Box<Stmt>> },
-    For { decorators: Vec<Decorator>, init: Vec<Stmt>, cond: Option<Expr>, update: Vec<Expr>, body: Box<Stmt> },
-    ForOf { decorators: Vec<Decorator>, kind: VarKind, name: Ident, ty: Option<TypeRef>, iter: Expr, body: Box<Stmt> },
-    While { decorators: Vec<Decorator>, cond: Expr, body: Box<Stmt> },
-    DoWhile { decorators: Vec<Decorator>, body: Box<Stmt>, cond: Expr },
-    Switch { disc: Expr, cases: Vec<SwitchCase> },
+    If {
+        cond: Expr,
+        then: Box<Stmt>,
+        els: Option<Box<Stmt>>,
+    },
+    For {
+        decorators: Vec<Decorator>,
+        init: Vec<Stmt>,
+        cond: Option<Expr>,
+        update: Vec<Expr>,
+        body: Box<Stmt>,
+    },
+    ForOf {
+        decorators: Vec<Decorator>,
+        kind: VarKind,
+        name: Ident,
+        ty: Option<TypeRef>,
+        iter: Expr,
+        body: Box<Stmt>,
+    },
+    While {
+        decorators: Vec<Decorator>,
+        cond: Expr,
+        body: Box<Stmt>,
+    },
+    DoWhile {
+        decorators: Vec<Decorator>,
+        body: Box<Stmt>,
+        cond: Expr,
+    },
+    Switch {
+        disc: Expr,
+        cases: Vec<SwitchCase>,
+    },
     Try(TryStmt),
     Throw(Expr),
     Return(Option<Expr>),
     Break(Option<Ident>),
     Continue(Option<Ident>),
-    Labeled { label: Ident, body: Box<Stmt> },
+    Labeled {
+        label: Ident,
+        body: Box<Stmt>,
+    },
     /// `resume;` — only valid as the sole statement of a `catch` block (spec §5.2).
     Resume,
     /// Nested function declaration (rejected by the checker, kept for diagnostics).
@@ -369,7 +430,10 @@ impl CatchClause {
     }
 
     pub fn contains_resume(&self) -> bool {
-        self.body.stmts.iter().any(|s| matches!(s.kind, StmtKind::Resume))
+        self.body
+            .stmts
+            .iter()
+            .any(|s| matches!(s.kind, StmtKind::Resume))
     }
 }
 
@@ -396,9 +460,16 @@ pub enum NumSuffix {
 #[derive(Debug, Clone)]
 pub enum ExprKind {
     /// Integer literal: value (parsed, may exceed i64 → clamped and flagged), suffix, is-hex.
-    Int { value: i128, suffix: NumSuffix, hex: bool },
+    Int {
+        value: i128,
+        suffix: NumSuffix,
+        hex: bool,
+    },
     /// Real literal: the normalised digits (no suffix, no `_`).
-    Float { text: String, suffix: NumSuffix },
+    Float {
+        text: String,
+        suffix: NumSuffix,
+    },
     Str(String),
     Template(Vec<TemplatePart>),
     Bool(bool),
@@ -411,22 +482,65 @@ pub enum ExprKind {
     Array(Vec<Expr>),
     Object(Vec<ObjectProp>),
     Arrow(Box<ArrowFn>),
-    Unary { op: UnaryOp, operand: Box<Expr> },
+    Unary {
+        op: UnaryOp,
+        operand: Box<Expr>,
+    },
     /// `x++` / `x--` (postfix) and `++x` / `--x` (prefix)
-    IncDec { inc: bool, prefix: bool, operand: Box<Expr> },
-    Binary { op: BinaryOp, lhs: Box<Expr>, rhs: Box<Expr> },
-    Assign { op: Option<BinaryOp>, target: Box<Expr>, value: Box<Expr> },
-    Ternary { cond: Box<Expr>, then: Box<Expr>, els: Box<Expr> },
-    Call { callee: Box<Expr>, type_args: Vec<TypeRef>, args: Vec<Expr> },
-    New { ty: TypeRef, args: Vec<Expr> },
-    Member { object: Box<Expr>, name: Ident, optional: bool },
-    Index { object: Box<Expr>, index: Box<Expr> },
-    As { expr: Box<Expr>, ty: TypeRef },
-    InstanceOf { expr: Box<Expr>, ty: TypeRef },
+    IncDec {
+        inc: bool,
+        prefix: bool,
+        operand: Box<Expr>,
+    },
+    Binary {
+        op: BinaryOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    Assign {
+        op: Option<BinaryOp>,
+        target: Box<Expr>,
+        value: Box<Expr>,
+    },
+    Ternary {
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        els: Box<Expr>,
+    },
+    Call {
+        callee: Box<Expr>,
+        type_args: Vec<TypeRef>,
+        args: Vec<Expr>,
+    },
+    New {
+        ty: TypeRef,
+        args: Vec<Expr>,
+    },
+    Member {
+        object: Box<Expr>,
+        name: Ident,
+        optional: bool,
+    },
+    Index {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
+    As {
+        expr: Box<Expr>,
+        ty: TypeRef,
+    },
+    InstanceOf {
+        expr: Box<Expr>,
+        ty: TypeRef,
+    },
     NonNull(Box<Expr>),
     /// `name: value` — only directly inside the argument list of a call or `new` (spec §3.3).
     /// `hole` is a spare id for the `undefined` that fills each skipped parameter.
-    NamedArg { name: Ident, value: Box<Expr>, hole: ExprId },
+    NamedArg {
+        name: Ident,
+        value: Box<Expr>,
+        hole: ExprId,
+    },
     Error,
 }
 
@@ -491,11 +605,22 @@ pub enum BinaryOp {
 
 impl BinaryOp {
     pub fn is_comparison(self) -> bool {
-        matches!(self, BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge)
+        matches!(
+            self,
+            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+        )
     }
 
     pub fn is_arithmetic(self) -> bool {
-        matches!(self, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem | BinaryOp::Pow)
+        matches!(
+            self,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Rem
+                | BinaryOp::Pow
+        )
     }
 
     pub fn symbol(self) -> &'static str {

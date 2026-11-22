@@ -76,7 +76,10 @@ impl BookLayout {
             sheets: self
                 .sheets
                 .iter()
-                .map(|s| SheetCodeName { sheet_name: s.name.clone(), code_name: s.code_name.clone() })
+                .map(|s| SheetCodeName {
+                    sheet_name: s.name.clone(),
+                    code_name: s.code_name.clone(),
+                })
                 .collect(),
         }
     }
@@ -178,11 +181,12 @@ impl Package {
             if let Some(data) = replace.get(&name) {
                 let options = {
                     let original = self.archive.by_index_raw(index)?;
-                    let mut options = SimpleFileOptions::default()
-                        .compression_method(match original.compression() {
+                    let mut options = SimpleFileOptions::default().compression_method(
+                        match original.compression() {
                             CompressionMethod::Stored => CompressionMethod::Stored,
                             _ => CompressionMethod::Deflated,
-                        });
+                        },
+                    );
                     if let Some(time) = original.last_modified() {
                         options = options.last_modified_time(time);
                     }
@@ -196,7 +200,8 @@ impl Package {
             }
         }
         for (name, data) in add {
-            let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            let options =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
             writer.start_file(name.as_str(), options)?;
             writer.write_all(data)?;
         }
@@ -236,7 +241,10 @@ pub(crate) fn resolve_target(source_part: &str, target: &str) -> String {
     let mut segments: Vec<&str> = if target.starts_with('/') {
         Vec::new()
     } else {
-        part_dir(source_part).split('/').filter(|s| !s.is_empty()).collect()
+        part_dir(source_part)
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .collect()
     };
     for segment in target.split('/') {
         match segment {
@@ -257,7 +265,9 @@ fn parse_relationships(doc: &str) -> Vec<Relationship> {
             id: t.attr("Id").unwrap_or_default(),
             rel_type: t.attr("Type").unwrap_or_default(),
             target: t.attr("Target").unwrap_or_default(),
-            external: t.attr("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External")),
+            external: t
+                .attr("TargetMode")
+                .is_some_and(|m| m.eq_ignore_ascii_case("External")),
         })
         .collect()
 }
@@ -274,7 +284,10 @@ fn sheet_kind(rel_type: &str) -> Option<SheetKind> {
 }
 
 fn is_signature_type(rel_type: &str) -> bool {
-    rel_type.rsplit('/').next().is_some_and(|last| last.starts_with("vbaProjectSignature"))
+    rel_type
+        .rsplit('/')
+        .next()
+        .is_some_and(|last| last.starts_with("vbaProjectSignature"))
 }
 
 fn is_signature_part_name(name: &str) -> bool {
@@ -306,7 +319,9 @@ fn sheet_code_name_xml(head: &str) -> Option<String> {
 pub(crate) fn analyze(package: &mut Package) -> Result<BookLayout, OvbaError> {
     // Main part: the officeDocument relationship of the package.
     let Some((root_rels, _)) = package.read_text("_rels/.rels")? else {
-        return Err(OvbaError::Format("the package has no _rels/.rels part".into()));
+        return Err(OvbaError::Format(
+            "the package has no _rels/.rels part".into(),
+        ));
     };
     let workbook_target = parse_relationships(&root_rels)
         .into_iter()
@@ -364,7 +379,9 @@ pub(crate) fn analyze(package: &mut Package) -> Result<BookLayout, OvbaError> {
     let mut sheets = Vec::with_capacity(listed.len());
     for (name, rel_id) in listed {
         let relationship = relationships.iter().find(|r| r.id == rel_id && !r.external);
-        let kind = relationship.and_then(|r| sheet_kind(&r.rel_type)).unwrap_or(SheetKind::Worksheet);
+        let kind = relationship
+            .and_then(|r| sheet_kind(&r.rel_type))
+            .unwrap_or(SheetKind::Worksheet);
         let part = relationship
             .map(|r| resolve_target(&workbook_part, &r.target))
             .and_then(|t| package.find(&t).map(|s| s.to_string()))
@@ -380,9 +397,17 @@ pub(crate) fn analyze(package: &mut Package) -> Result<BookLayout, OvbaError> {
                 _ => None,
             }
         } else {
-            package.read_head(&part, 16 * 1024)?.and_then(|head| sheet_code_name_xml(&head))
+            package
+                .read_head(&part, 16 * 1024)?
+                .and_then(|head| sheet_code_name_xml(&head))
         };
-        sheets.push(SheetInfo { name, part, kind, explicit_code_name, code_name: String::new() });
+        sheets.push(SheetInfo {
+            name,
+            part,
+            kind,
+            explicit_code_name,
+            code_name: String::new(),
+        });
     }
 
     // Effective code names: explicit ones, then defaults for the rest.
@@ -442,7 +467,10 @@ pub(crate) fn analyze(package: &mut Package) -> Result<BookLayout, OvbaError> {
         // Signature parts that are not (or wrongly) referenced.
         let dir = part_dir(vba).to_string();
         for name in &package.names {
-            if part_dir(name) == dir && is_signature_part_name(name) && !signature_parts.contains(name) {
+            if part_dir(name) == dir
+                && is_signature_part_name(name)
+                && !signature_parts.contains(name)
+            {
                 signature_parts.push(name.clone());
             }
         }
@@ -512,8 +540,11 @@ pub(crate) fn plan_package_edits(
             }
         }
     };
-    let removed_signatures: Vec<String> =
-        if plan.remove_signatures { layout.signature_parts.clone() } else { Vec::new() };
+    let removed_signatures: Vec<String> = if plan.remove_signatures {
+        layout.signature_parts.clone()
+    } else {
+        Vec::new()
+    };
     remove.extend(removed_signatures.iter().cloned());
 
     // ---- [Content_Types].xml ------------------------------------------------
@@ -538,7 +569,10 @@ pub(crate) fn plan_package_edits(
                 ("Types", TagKind::Close) => types_close_start = Some(tag.start),
                 ("Default", TagKind::Open | TagKind::Empty) => {
                     last_default_end = Some(tag.end);
-                    if tag.attr("Extension").is_some_and(|e| e.eq_ignore_ascii_case("bin")) {
+                    if tag
+                        .attr("Extension")
+                        .is_some_and(|e| e.eq_ignore_ascii_case("bin"))
+                    {
                         bin_default = tag.attr("ContentType");
                     }
                 }
@@ -557,7 +591,11 @@ pub(crate) fn plan_package_edits(
                         vba_override = true;
                         if let Some(attribute) = tag.attribute("ContentType") {
                             if attribute.value() != CT_VBA_PROJECT {
-                                edits.replace(attribute.value_start, attribute.value_end, CT_VBA_PROJECT);
+                                edits.replace(
+                                    attribute.value_start,
+                                    attribute.value_end,
+                                    CT_VBA_PROJECT,
+                                );
                             }
                         }
                     } else if removed_signatures
@@ -571,7 +609,9 @@ pub(crate) fn plan_package_edits(
             }
         }
         let (Some(open_end), Some(close_start)) = (types_open_end, types_close_start) else {
-            return Err(OvbaError::Format("[Content_Types].xml has no Types element".into()));
+            return Err(OvbaError::Format(
+                "[Content_Types].xml has no Types element".into(),
+            ));
         };
         if !vba_override && bin_default.as_deref() != Some(CT_VBA_PROJECT) {
             if bin_default.is_none() {
@@ -636,7 +676,10 @@ pub(crate) fn plan_package_edits(
                     close,
                     format!("<Relationship Id=\"{id}\" Type=\"{REL_VBA_PROJECT}\" Target=\"{target}\"/>"),
                 );
-                replace.insert(layout.workbook_rels_part.clone(), edits.apply(&text).into_bytes());
+                replace.insert(
+                    layout.workbook_rels_part.clone(),
+                    edits.apply(&text).into_bytes(),
+                );
             }
             None => {
                 let text = format!(
@@ -687,10 +730,14 @@ pub(crate) fn plan_package_edits(
                     match tag.local_name() {
                         "workbookPr" => {
                             match tag.attribute("codeName") {
-                                Some(attribute) => {
-                                    edits.replace(attribute.value_start, attribute.value_end, code_name.clone())
+                                Some(attribute) => edits.replace(
+                                    attribute.value_start,
+                                    attribute.value_end,
+                                    code_name.clone(),
+                                ),
+                                None => {
+                                    edits.insert(tag.name_end, format!(" codeName=\"{code_name}\""))
                                 }
-                                None => edits.insert(tag.name_end, format!(" codeName=\"{code_name}\"")),
                             }
                             done = true;
                             break;
@@ -711,7 +758,10 @@ pub(crate) fn plan_package_edits(
                     }
                 }
                 if !edits.is_empty() {
-                    replace.insert(layout.workbook_part.clone(), edits.apply(&text).into_bytes());
+                    replace.insert(
+                        layout.workbook_part.clone(),
+                        edits.apply(&text).into_bytes(),
+                    );
                 }
             }
         }
@@ -734,7 +784,11 @@ pub(crate) fn plan_package_edits(
                 }
                 match &root {
                     None => {
-                        root = Some((tag.end, tag.prefix().to_string(), tag.kind == TagKind::Empty));
+                        root = Some((
+                            tag.end,
+                            tag.prefix().to_string(),
+                            tag.kind == TagKind::Empty,
+                        ));
                         if tag.kind == TagKind::Empty {
                             break;
                         }
@@ -742,13 +796,20 @@ pub(crate) fn plan_package_edits(
                     Some((root_end, prefix, _)) => {
                         if tag.local_name() == "sheetPr" {
                             match tag.attribute("codeName") {
-                                Some(attribute) => {
-                                    edits.replace(attribute.value_start, attribute.value_end, code_name.clone())
+                                Some(attribute) => edits.replace(
+                                    attribute.value_start,
+                                    attribute.value_end,
+                                    code_name.clone(),
+                                ),
+                                None => {
+                                    edits.insert(tag.name_end, format!(" codeName=\"{code_name}\""))
                                 }
-                                None => edits.insert(tag.name_end, format!(" codeName=\"{code_name}\"")),
                             }
                         } else {
-                            edits.insert(*root_end, format!("<{prefix}sheetPr codeName=\"{code_name}\"/>"));
+                            edits.insert(
+                                *root_end,
+                                format!("<{prefix}sheetPr codeName=\"{code_name}\"/>"),
+                            );
                         }
                         break;
                     }
@@ -760,7 +821,12 @@ pub(crate) fn plan_package_edits(
         }
     }
 
-    Ok(PackageEdits { replace, remove, add, vba_part })
+    Ok(PackageEdits {
+        replace,
+        remove,
+        add,
+        vba_part,
+    })
 }
 
 /// Reads the workbook code name and the code name of every sheet.
@@ -797,9 +863,14 @@ fn msforms_class(clsid: &str) -> &'static str {
 }
 
 /// The ActiveX controls of the sheet part `part` (its `<controls>`): name and MSForms class.
-fn sheet_controls(package: &mut Package, part: &str) -> Result<Vec<crate::SheetControl>, OvbaError> {
+fn sheet_controls(
+    package: &mut Package,
+    part: &str,
+) -> Result<Vec<crate::SheetControl>, OvbaError> {
     let mut out: Vec<crate::SheetControl> = Vec::new();
-    let Some((text, _)) = package.read_text(part)? else { return Ok(out) };
+    let Some((text, _)) = package.read_text(part)? else {
+        return Ok(out);
+    };
     if !text.contains("control") {
         return Ok(out);
     }
@@ -807,19 +878,39 @@ fn sheet_controls(package: &mut Package, part: &str) -> Result<Vec<crate::SheetC
         Some((doc, _)) => parse_relationships(&doc),
         None => Vec::new(),
     };
-    for tag in xml::tags(&text).filter(|t| t.kind != TagKind::Close && t.local_name() == "control") {
-        let Some(name) = tag.attr("name").filter(|n| !n.is_empty()) else { continue };
+    for tag in xml::tags(&text).filter(|t| t.kind != TagKind::Close && t.local_name() == "control")
+    {
+        let Some(name) = tag.attr("name").filter(|n| !n.is_empty()) else {
+            continue;
+        };
         if out.iter().any(|c| same_name(&c.name, &name)) {
             continue;
         }
-        let Some(id) = tag.attributes().into_iter().find(|a| a.local_name() == "id").map(|a| a.value()) else { continue };
+        let Some(id) = tag
+            .attributes()
+            .into_iter()
+            .find(|a| a.local_name() == "id")
+            .map(|a| a.value())
+        else {
+            continue;
+        };
         // A form control (`ctrlProp`) is no member of the sheet's module: only ActiveX controls.
-        let Some(rel) = rels.iter().find(|r| r.id == id && !r.external && r.rel_type.ends_with("/control")) else { continue };
+        let Some(rel) = rels
+            .iter()
+            .find(|r| r.id == id && !r.external && r.rel_type.ends_with("/control"))
+        else {
+            continue;
+        };
         let target = resolve_target(part, &rel.target);
         let class = match package.read_text(&target)? {
             Some((doc, _)) => xml::tags(&doc)
                 .find(|t| t.kind != TagKind::Close && t.local_name() == "ocx")
-                .and_then(|t| t.attributes().into_iter().find(|a| a.local_name() == "classid").map(|a| a.value()))
+                .and_then(|t| {
+                    t.attributes()
+                        .into_iter()
+                        .find(|a| a.local_name() == "classid")
+                        .map(|a| a.value())
+                })
                 .map(|clsid| msforms_class(&clsid).to_string())
                 .unwrap_or_default(),
             None => String::new(),
@@ -833,7 +924,9 @@ fn sheet_controls(package: &mut Package, part: &str) -> Result<Vec<crate::SheetC
 /// worksheet (by code name, in sheet order) the name and MSForms class of its controls. They
 /// are the members of the sheet's module that event procedures are written for
 /// (`CommandButton1_Click`). `None` for a binary workbook (`.xlsb`), whose sheets are not read.
-pub fn workbook_sheet_controls(book: &std::path::Path) -> Result<Option<Vec<crate::SheetControls>>, OvbaError> {
+pub fn workbook_sheet_controls(
+    book: &std::path::Path,
+) -> Result<Option<Vec<crate::SheetControls>>, OvbaError> {
     let bytes = std::fs::read(book).map_err(crate::pack::map_open_error)?;
     let mut package = Package::open(bytes)?;
     let layout = analyze(&mut package)?;
@@ -841,8 +934,15 @@ pub fn workbook_sheet_controls(book: &std::path::Path) -> Result<Option<Vec<crat
         return Ok(None);
     }
     let mut out = Vec::new();
-    for sheet in layout.sheets.iter().filter(|s| s.kind == SheetKind::Worksheet && !s.part.is_empty()) {
-        out.push(crate::SheetControls { code_name: sheet.code_name.clone(), controls: sheet_controls(&mut package, &sheet.part)? });
+    for sheet in layout
+        .sheets
+        .iter()
+        .filter(|s| s.kind == SheetKind::Worksheet && !s.part.is_empty())
+    {
+        out.push(crate::SheetControls {
+            code_name: sheet.code_name.clone(),
+            controls: sheet_controls(&mut package, &sheet.part)?,
+        });
     }
     Ok(Some(out))
 }
@@ -874,8 +974,14 @@ mod tests {
         for (name, text) in [
             ("xl/worksheets/sheet1.xml", sheet),
             ("xl/worksheets/_rels/sheet1.xml.rels", rels),
-            ("xl/activeX/activeX1.xml", r#"<ax:ocx ax:classid="{D7053240-CE69-11CD-A777-00DD01143C57}" ax:persistence="persistStreamInit" r:id="rId1" xmlns:ax="a" xmlns:r="r"/>"#),
-            ("xl/activeX/activeX2.xml", r#"<ax:ocx ax:classid="{00000000-0000-0000-0000-000000000001}" xmlns:ax="a"/>"#),
+            (
+                "xl/activeX/activeX1.xml",
+                r#"<ax:ocx ax:classid="{D7053240-CE69-11CD-A777-00DD01143C57}" ax:persistence="persistStreamInit" r:id="rId1" xmlns:ax="a" xmlns:r="r"/>"#,
+            ),
+            (
+                "xl/activeX/activeX2.xml",
+                r#"<ax:ocx ax:classid="{00000000-0000-0000-0000-000000000001}" xmlns:ax="a"/>"#,
+            ),
         ] {
             zip.start_file(name, options).unwrap();
             zip.write_all(text.as_bytes()).unwrap();
@@ -883,16 +989,40 @@ mod tests {
         let mut package = Package::open(zip.finish().unwrap().into_inner()).unwrap();
         let controls = sheet_controls(&mut package, "xl/worksheets/sheet1.xml").unwrap();
         // The ActiveX controls, once each; the form control (a check box) is not one.
-        assert_eq!(controls, vec![crate::SheetControl { name: "CommandButton1".into(), class: "CommandButton".into() }, crate::SheetControl { name: "Other1".into(), class: String::new() }]);
+        assert_eq!(
+            controls,
+            vec![
+                crate::SheetControl {
+                    name: "CommandButton1".into(),
+                    class: "CommandButton".into()
+                },
+                crate::SheetControl {
+                    name: "Other1".into(),
+                    class: String::new()
+                }
+            ]
+        );
     }
 
     #[test]
     fn target_resolution() {
-        assert_eq!(resolve_target("xl/workbook.xml", "worksheets/sheet1.xml"), "xl/worksheets/sheet1.xml");
-        assert_eq!(resolve_target("xl/workbook.xml", "/xl/vbaProject.bin"), "xl/vbaProject.bin");
-        assert_eq!(resolve_target("xl/worksheets/sheet1.xml", "../drawings/d.xml"), "xl/drawings/d.xml");
+        assert_eq!(
+            resolve_target("xl/workbook.xml", "worksheets/sheet1.xml"),
+            "xl/worksheets/sheet1.xml"
+        );
+        assert_eq!(
+            resolve_target("xl/workbook.xml", "/xl/vbaProject.bin"),
+            "xl/vbaProject.bin"
+        );
+        assert_eq!(
+            resolve_target("xl/worksheets/sheet1.xml", "../drawings/d.xml"),
+            "xl/drawings/d.xml"
+        );
         assert_eq!(resolve_target("", "xl/workbook.xml"), "xl/workbook.xml");
-        assert_eq!(rels_part_for("xl/workbook.xml"), "xl/_rels/workbook.xml.rels");
+        assert_eq!(
+            rels_part_for("xl/workbook.xml"),
+            "xl/_rels/workbook.xml.rels"
+        );
         assert_eq!(rels_part_for("workbook.xml"), "_rels/workbook.xml.rels");
     }
 
@@ -900,8 +1030,14 @@ mod tests {
     fn sheet_pr_code_name() {
         let ws = "<?xml version=\"1.0\"?><worksheet xmlns=\"x\"><sheetPr codeName=\"Data\"><tabColor rgb=\"FF\"/></sheetPr><dimension ref=\"A1\"/>";
         assert_eq!(sheet_code_name_xml(ws).as_deref(), Some("Data"));
-        assert_eq!(sheet_code_name_xml("<worksheet><dimension ref=\"A1\"/><sheetPr codeName=\"X\"/>"), None);
-        assert_eq!(sheet_code_name_xml("<x:chartsheet><x:sheetPr codeName=\"Chart1\"/>").as_deref(), Some("Chart1"));
+        assert_eq!(
+            sheet_code_name_xml("<worksheet><dimension ref=\"A1\"/><sheetPr codeName=\"X\"/>"),
+            None
+        );
+        assert_eq!(
+            sheet_code_name_xml("<x:chartsheet><x:sheetPr codeName=\"Chart1\"/>").as_deref(),
+            Some("Chart1")
+        );
         assert_eq!(sheet_code_name_xml("<worksheet><sheetPr/>"), None);
         assert_eq!(sheet_code_name_xml(""), None);
     }
@@ -912,8 +1048,14 @@ mod tests {
         assert!(is_signature_part_name("xl/vbaProjectSignatureAgile.bin"));
         assert!(is_signature_part_name("xl/VBAPROJECTSIGNATUREV3.BIN"));
         assert!(!is_signature_part_name("xl/vbaProject.bin"));
-        assert!(is_signature_type("http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignature"));
-        assert!(is_signature_type("http://schemas.microsoft.com/office/2014/relationships/vbaProjectSignatureAgile"));
-        assert!(!is_signature_type("http://schemas.microsoft.com/office/2006/relationships/vbaProject"));
+        assert!(is_signature_type(
+            "http://schemas.microsoft.com/office/2006/relationships/vbaProjectSignature"
+        ));
+        assert!(is_signature_type(
+            "http://schemas.microsoft.com/office/2014/relationships/vbaProjectSignatureAgile"
+        ));
+        assert!(!is_signature_type(
+            "http://schemas.microsoft.com/office/2006/relationships/vbaProject"
+        ));
     }
 }

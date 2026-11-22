@@ -44,7 +44,13 @@ impl PasteWhat {
     }
 
     fn formulas(self) -> bool {
-        matches!(self, PasteWhat::All | PasteWhat::AllExceptBorders | PasteWhat::Formulas | PasteWhat::FormulasAndNumberFormats)
+        matches!(
+            self,
+            PasteWhat::All
+                | PasteWhat::AllExceptBorders
+                | PasteWhat::Formulas
+                | PasteWhat::FormulasAndNumberFormats
+        )
     }
 
     fn values(self) -> bool {
@@ -52,11 +58,17 @@ impl PasteWhat {
     }
 
     fn styles(self) -> bool {
-        matches!(self, PasteWhat::All | PasteWhat::AllExceptBorders | PasteWhat::Formats)
+        matches!(
+            self,
+            PasteWhat::All | PasteWhat::AllExceptBorders | PasteWhat::Formats
+        )
     }
 
     fn number_formats(self) -> bool {
-        matches!(self, PasteWhat::FormulasAndNumberFormats | PasteWhat::ValuesAndNumberFormats)
+        matches!(
+            self,
+            PasteWhat::FormulasAndNumberFormats | PasteWhat::ValuesAndNumberFormats
+        )
     }
 }
 
@@ -105,7 +117,12 @@ pub struct Paste {
 
 impl Paste {
     pub fn all() -> Paste {
-        Paste { what: PasteWhat::All, op: PasteOp::None, skip_blanks: false, transpose: false }
+        Paste {
+            what: PasteWhat::All,
+            op: PasteOp::None,
+            skip_blanks: false,
+            transpose: false,
+        }
     }
 }
 
@@ -121,17 +138,35 @@ struct Source {
 impl Book {
     /// The formats of the stored cells of `r` (cells with the default format are left out).
     pub(super) fn styles_in(&self, si: usize, r: RangeRef) -> Vec<(CellRef, Style)> {
-        let Ok(ws) = self.file.sheet(si) else { return Vec::new() };
+        let Ok(ws) = self.file.sheet(si) else {
+            return Vec::new();
+        };
         let plain = Style::default();
         if r.count() <= 4096 {
-            return r.iter().filter_map(|at| ws.cell(coord(at)).filter(|c| *c.style() != plain).map(|c| (at, c.style().clone()))).collect();
+            return r
+                .iter()
+                .filter_map(|at| {
+                    ws.cell(coord(at))
+                        .filter(|c| *c.style() != plain)
+                        .map(|c| (at, c.style().clone()))
+                })
+                .collect();
         }
-        ws.cells().iter().map(|c| (super::at_of(c), c)).filter(|(at, c)| r.contains(*at) && *c.style() != plain).map(|(at, c)| (at, c.style().clone())).collect()
+        ws.cells()
+            .iter()
+            .map(|c| (super::at_of(c), c))
+            .filter(|(at, c)| r.contains(*at) && *c.style() != plain)
+            .map(|(at, c)| (at, c.style().clone()))
+            .collect()
     }
 
     /// Gives the stored cells of `r` the default format.
     pub(super) fn reset_styles(&mut self, si: usize, r: RangeRef) {
-        let stored: Vec<CellRef> = self.styles_in(si, r).into_iter().map(|(at, _)| at).collect();
+        let stored: Vec<CellRef> = self
+            .styles_in(si, r)
+            .into_iter()
+            .map(|(at, _)| at)
+            .collect();
         if let Ok(ws) = self.file.sheet_mut(si) {
             for at in stored {
                 ws.cell_mut(coord(at)).set_style(Style::default());
@@ -141,14 +176,22 @@ impl Book {
 
     /// The merged cells of the file that lie within `r`.
     fn merges_in(&self, si: usize, r: RangeRef) -> Vec<RangeRef> {
-        let Ok(ws) = self.file.sheet(si) else { return Vec::new() };
-        ws.merge_cells().iter().filter_map(|m| RangeRef::parse(&m.range().replace('$', ""))).filter(|m| r.contains_range(m)).collect()
+        let Ok(ws) = self.file.sheet(si) else {
+            return Vec::new();
+        };
+        ws.merge_cells()
+            .iter()
+            .filter_map(|m| RangeRef::parse(&m.range().replace('$', "")))
+            .filter(|m| r.contains_range(m))
+            .collect()
     }
 
     /// Takes the merged cells that touch `r` apart.
     pub(super) fn unmerge(&mut self, si: usize, r: RangeRef) {
         if let Ok(ws) = self.file.sheet_mut(si) {
-            ws.merge_cells_mut().retain(|m| RangeRef::parse(&m.range().replace('$', "")).is_none_or(|m| !m.intersects(&r)));
+            ws.merge_cells_mut().retain(|m| {
+                RangeRef::parse(&m.range().replace('$', "")).is_none_or(|m| !m.intersects(&r))
+            });
         }
         if let Some(sh) = self.model.sheet_mut(si) {
             sh.merges.retain(|m| !m.intersects(&r));
@@ -178,17 +221,30 @@ impl Book {
 
     /// Pastes the cells of `from` (on sheet `si`) into the cells from `to` (on sheet `ti`) on,
     /// as `Range.PasteSpecial` does.
-    pub fn paste(&mut self, si: usize, from: RangeRef, ti: usize, to: CellRef, p: &Paste) -> Result<()> {
+    pub fn paste(
+        &mut self,
+        si: usize,
+        from: RangeRef,
+        ti: usize,
+        to: CellRef,
+        p: &Paste,
+    ) -> Result<()> {
         self.check_sheet(si)?;
         self.check_sheet(ti)?;
         let (h, w) = (from.height() as i64, from.width() as i64);
         let (th, tw) = if p.transpose { (w, h) } else { (h, w) };
-        let Some(end) = to.offset(th - 1, tw - 1) else { return Err("貼り付け先がシートの外です".into()) };
+        let Some(end) = to.offset(th - 1, tw - 1) else {
+            return Err("貼り付け先がシートの外です".into());
+        };
         let target = RangeRef::new(to, end);
         // Where a cell of the source goes.
         let place = |at: CellRef| -> CellRef {
             let (dr, dc) = (at.row - from.start.row, at.col - from.start.col);
-            if p.transpose { CellRef::new(to.row + dc, to.col + dr) } else { CellRef::new(to.row + dr, to.col + dc) }
+            if p.transpose {
+                CellRef::new(to.row + dc, to.col + dr)
+            } else {
+                CellRef::new(to.row + dr, to.col + dc)
+            }
         };
         if p.what == PasteWhat::ColumnWidths {
             return self.paste_widths(si, from, ti, to);
@@ -205,7 +261,11 @@ impl Book {
                 e.shown = c.value.clone();
                 e.own = Some(c.clone());
             }
-            for (at, v) in sh.spill.range(from.start..=from.end).filter(|(at, _)| from.contains(**at)) {
+            for (at, v) in sh
+                .spill
+                .range(from.start..=from.end)
+                .filter(|(at, _)| from.contains(**at))
+            {
                 // A spilled value is pasted as a value, unless its formula is pasted too (and
                 // spills again).
                 let anchored = sh.spill_anchor(*at).is_some_and(|a| from.contains(a));
@@ -223,11 +283,19 @@ impl Book {
                 cells.entry(at).or_default().style = Some(style);
             }
         }
-        let merges = if p.what.styles() { self.merges_in(si, from) } else { Vec::new() };
+        let merges = if p.what.styles() {
+            self.merges_in(si, from)
+        } else {
+            Vec::new()
+        };
 
         // The cells pasted on that the source has nothing for.
         if content && p.op == PasteOp::None && !p.skip_blanks {
-            let gone: Vec<CellRef> = self.model.sheet(ti).map(|s| s.cells.iter_range(target).map(|(at, _)| at).collect()).unwrap_or_default();
+            let gone: Vec<CellRef> = self
+                .model
+                .sheet(ti)
+                .map(|s| s.cells.iter_range(target).map(|(at, _)| at).collect())
+                .unwrap_or_default();
             if let Some(sh) = self.model.sheet_mut(ti) {
                 for at in &gone {
                     sh.remove_cell(*at);
@@ -265,7 +333,11 @@ impl Book {
         for (at, src) in cells {
             let t = place(at);
             let (dr, dc) = (t.row as i64 - at.row as i64, t.col as i64 - at.col as i64);
-            let blank = src.own.as_ref().is_none_or(|c| c.formula.is_none() && c.value.is_empty()) && src.shown.is_empty();
+            let blank = src
+                .own
+                .as_ref()
+                .is_none_or(|c| c.formula.is_none() && c.value.is_empty())
+                && src.shown.is_empty();
             if content && !(blank && (p.skip_blanks || p.op != PasteOp::None)) {
                 if p.op != PasteOp::None {
                     self.paste_operation(ti, t, &src.shown, p.op);
@@ -273,7 +345,9 @@ impl Book {
                     match &src.own {
                         Some(c) if p.what.formulas() && c.formula.is_some() => {
                             let f = c.formula.as_ref().expect("checked");
-                            let moved = f.expr().map(|e| gridcraft_formula::adjust::shift_relative(e, dr, dc));
+                            let moved = f
+                                .expr()
+                                .map(|e| gridcraft_formula::adjust::shift_relative(e, dr, dc));
                             let mut formula = match moved {
                                 Some(e) => gm::Formula::from_expr(e),
                                 None => (**f).clone(),
@@ -281,7 +355,15 @@ impl Book {
                             formula.array = None;
                             formula.dynamic = f.dynamic;
                             let style = sh.style_id(t);
-                            sh.set_cell(t, gm::Cell { value: Value::Empty, formula: Some(Arc::new(formula)), style, py: None });
+                            sh.set_cell(
+                                t,
+                                gm::Cell {
+                                    value: Value::Empty,
+                                    formula: Some(Arc::new(formula)),
+                                    style,
+                                    py: None,
+                                },
+                            );
                         }
                         _ if !src.shown.is_empty() => sh.set_value(t, src.shown.scalar()),
                         _ => {
@@ -292,12 +374,22 @@ impl Book {
                 self.touch(ti, t);
             }
             if formats && !(p.skip_blanks && blank && src.style.is_none()) {
-                let Ok(ws) = self.file.sheet_mut(ti) else { continue };
+                let Ok(ws) = self.file.sheet_mut(ti) else {
+                    continue;
+                };
                 match (p.what, src.style) {
-                    (PasteWhat::FormulasAndNumberFormats | PasteWhat::ValuesAndNumberFormats, Some(style)) => {
-                        let code = style.number_format().map(|f| f.format_code().to_string()).unwrap_or_default();
+                    (
+                        PasteWhat::FormulasAndNumberFormats | PasteWhat::ValuesAndNumberFormats,
+                        Some(style),
+                    ) => {
+                        let code = style
+                            .number_format()
+                            .map(|f| f.format_code().to_string())
+                            .unwrap_or_default();
                         if !code.is_empty() {
-                            ws.style_mut(coord(t)).number_format_mut().set_format_code(code);
+                            ws.style_mut(coord(t))
+                                .number_format_mut()
+                                .set_format_code(code);
                         }
                     }
                     (PasteWhat::AllExceptBorders, Some(mut style)) => {
@@ -324,15 +416,30 @@ impl Book {
     /// `PasteSpecial Operation:=`: the number pasted is added to (taken from, ...) what the cell has.
     fn paste_operation(&mut self, ti: usize, t: CellRef, v: &Value, op: PasteOp) {
         let Value::Number(n) = v.scalar() else { return };
-        let Some(sh) = self.model.sheet_mut(ti) else { return };
+        let Some(sh) = self.model.sheet_mut(ti) else {
+            return;
+        };
         let old = sh.cell(t).cloned();
         match old {
             Some(c) if c.formula.is_some() => {
                 let f = c.formula.as_ref().expect("checked");
-                let text = format!("({}){}{}", f.text, op.symbol(), gridcraft_core::number_to_text(n));
+                let text = format!(
+                    "({}){}{}",
+                    f.text,
+                    op.symbol(),
+                    gridcraft_core::number_to_text(n)
+                );
                 let mut formula = gm::Formula::new(&text);
                 formula.dynamic = f.dynamic;
-                sh.set_cell(t, gm::Cell { value: Value::Empty, formula: Some(Arc::new(formula)), style: c.style, py: None });
+                sh.set_cell(
+                    t,
+                    gm::Cell {
+                        value: Value::Empty,
+                        formula: Some(Arc::new(formula)),
+                        style: c.style,
+                        py: None,
+                    },
+                );
             }
             other => {
                 let x = match other.map(|c| c.value) {
@@ -355,8 +462,18 @@ impl Book {
 
     /// `PasteSpecial xlPasteColumnWidths`.
     fn paste_widths(&mut self, si: usize, from: RangeRef, ti: usize, to: CellRef) -> Result<()> {
-        let widths: Vec<Option<f64>> = (from.start.col..=from.end.col).map(|c| self.file.sheet(si).ok().and_then(|ws| ws.column_dimension_by_number(c + 1)).map(|d| d.width())).collect();
-        let Ok(ws) = self.file.sheet_mut(ti) else { return Ok(()) };
+        let widths: Vec<Option<f64>> = (from.start.col..=from.end.col)
+            .map(|c| {
+                self.file
+                    .sheet(si)
+                    .ok()
+                    .and_then(|ws| ws.column_dimension_by_number(c + 1))
+                    .map(|d| d.width())
+            })
+            .collect();
+        let Ok(ws) = self.file.sheet_mut(ti) else {
+            return Ok(());
+        };
         for (i, w) in widths.into_iter().enumerate() {
             let col = to.col + i as u32 + 1;
             if col > super::MAX_COLS {
@@ -367,7 +484,8 @@ impl Book {
                     ws.column_dimension_by_number_mut(col).set_width(w);
                 }
                 None if ws.column_dimension_by_number(col).is_some() => {
-                    ws.column_dimension_by_number_mut(col).set_width(super::format::DEFAULT_COLUMN_WIDTH);
+                    ws.column_dimension_by_number_mut(col)
+                        .set_width(super::format::DEFAULT_COLUMN_WIDTH);
                 }
                 None => {}
             }
@@ -381,22 +499,48 @@ impl Book {
     pub fn move_cells(&mut self, si: usize, from: RangeRef, ti: usize, to: CellRef) -> Result<()> {
         self.check_sheet(si)?;
         self.check_sheet(ti)?;
-        let Some(end) = to.offset(from.height() as i64 - 1, from.width() as i64 - 1) else { return Err("貼り付け先がシートの外です".into()) };
+        let Some(end) = to.offset(from.height() as i64 - 1, from.width() as i64 - 1) else {
+            return Err("貼り付け先がシートの外です".into());
+        };
         let target = RangeRef::new(to, end);
         if si == ti && from == target {
             return Ok(());
         }
-        let (dr, dc) = (to.row as i64 - from.start.row as i64, to.col as i64 - from.start.col as i64);
-        let source = self.model.sheet(si).map(|s| s.name.clone()).unwrap_or_default();
-        let dest = self.model.sheet(ti).map(|s| s.name.clone()).unwrap_or_default();
+        let (dr, dc) = (
+            to.row as i64 - from.start.row as i64,
+            to.col as i64 - from.start.col as i64,
+        );
+        let source = self
+            .model
+            .sheet(si)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        let dest = self
+            .model
+            .sheet(ti)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
         let edit = if si == ti {
-            Edit::Move { from, to_row: to.row, to_col: to.col }
+            Edit::Move {
+                from,
+                to_row: to.row,
+                to_col: to.col,
+            }
         } else {
-            Edit::MoveToSheet { from, to_sheet: dest.clone(), to_row: to.row, to_col: to.col }
+            Edit::MoveToSheet {
+                from,
+                to_sheet: dest.clone(),
+                to_row: to.row,
+                to_col: to.col,
+            }
         };
         self.adjust_refs(&source, &edit);
 
-        let cells = self.model.sheet_mut(si).map(|sh| sh.take_cells(from)).unwrap_or_default();
+        let cells = self
+            .model
+            .sheet_mut(si)
+            .map(|sh| sh.take_cells(from))
+            .unwrap_or_default();
         let styles = self.styles_in(si, from);
         let merges = self.merges_in(si, from);
         self.reset_styles(si, from);
@@ -417,7 +561,9 @@ impl Book {
                         Expr::Ref(mut r) => {
                             r.sheet = match r.sheet {
                                 SheetSel::Current => SheetSel::Named(source.clone()),
-                                SheetSel::Named(n) if n.eq_ignore_ascii_case(&dest) => SheetSel::Current,
+                                SheetSel::Named(n) if n.eq_ignore_ascii_case(&dest) => {
+                                    SheetSel::Current
+                                }
                                 other => other,
                             };
                             Expr::Ref(r)
@@ -433,7 +579,11 @@ impl Book {
                     && let Some(area) = f.array
                 {
                     let mut new = (**f).clone();
-                    new.array = area.start.offset(dr, dc).zip(area.end.offset(dr, dc)).map(|(a, z)| RangeRef::new(a, z));
+                    new.array = area
+                        .start
+                        .offset(dr, dc)
+                        .zip(area.end.offset(dr, dc))
+                        .map(|(a, z)| RangeRef::new(a, z));
                     c.formula = Some(Arc::new(new));
                 }
                 sh.set_cell(t, c);

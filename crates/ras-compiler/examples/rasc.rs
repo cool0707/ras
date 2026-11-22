@@ -13,23 +13,46 @@ fn main() {
             "-O2" => cfg.opt_override = Some(2),
             "--no-erl" => opts.erl = Some(false),
             "--no-doevents" => cfg.doevents.enabled = false,
-            s if s.starts_with("--sheet=") => cfg.sheet_code_names.push(s["--sheet=".len()..].to_string()),
+            s if s.starts_with("--sheet=") => {
+                cfg.sheet_code_names.push(s["--sheet=".len()..].to_string())
+            }
             path => {
                 let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
-                let key = std::path::Path::new(path).file_name().unwrap().to_string_lossy().trim_end_matches(".ras").to_string();
+                let key = std::path::Path::new(path)
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .trim_end_matches(".ras")
+                    .to_string();
                 files.push((key, text));
             }
         }
     }
-    let refs: Vec<(&str, &str)> = files.iter().map(|(k, t)| (k.as_str(), t.as_str())).collect();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(k, t)| (k.as_str(), t.as_str()))
+        .collect();
     let (prog, out) = compile_str(&refs, cfg, &opts);
-    let user: Vec<_> = prog.diagnostics.iter().filter(|d| d.module.is_none_or(|m| prog.modules[m].kind == ras_compiler::ModuleKind::User)).cloned().collect();
+    let user: Vec<_> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            d.module
+                .is_none_or(|m| prog.modules[m].kind == ras_compiler::ModuleKind::User)
+        })
+        .cloned()
+        .collect();
     eprint!("{}", render_diagnostics(&prog, &user));
     let std_errors = prog.diagnostics.len() - user.len();
     if std_errors > 0 {
         eprintln!("({std_errors} diagnostics in bundled files)");
         if std::env::var_os("RAS_SHOW_STD").is_some() {
-            let all: Vec<_> = prog.diagnostics.iter().filter(|d| !user.iter().any(|u| std::ptr::eq(u, *d))).cloned().collect();
+            let all: Vec<_> = prog
+                .diagnostics
+                .iter()
+                .filter(|d| !user.iter().any(|u| std::ptr::eq(u, *d)))
+                .cloned()
+                .collect();
             eprint!("{}", render_diagnostics(&prog, &all));
         }
     }

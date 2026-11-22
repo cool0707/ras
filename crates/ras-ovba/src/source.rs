@@ -95,7 +95,10 @@ fn leading_attributes(source: &str) -> (Vec<(String, String)>, usize) {
 pub(crate) fn attribute_value(source: &str, key: &str) -> Option<String> {
     let normalized = normalize_newlines(source);
     let (attributes, _) = leading_attributes(&normalized);
-    attributes.into_iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v)
+    attributes
+        .into_iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v)
 }
 
 /// Removes the preamble that `File > Export` puts in front of the
@@ -114,7 +117,10 @@ fn strip_export_preamble(source: &str) -> &str {
         return source;
     };
     let first_trim = first.trim();
-    if !first_trim.get(..8).is_some_and(|p| p.eq_ignore_ascii_case("VERSION ")) {
+    if !first_trim
+        .get(..8)
+        .is_some_and(|p| p.eq_ignore_ascii_case("VERSION "))
+    {
         return source;
     }
     let mut consumed = first.len();
@@ -215,7 +221,9 @@ pub(crate) fn prepare_module_source(
         .map(|p| leading_attributes(&normalize_newlines(p)).0)
         .unwrap_or_default();
     let find = |list: &[(String, String)], key: &str| -> Option<String> {
-        list.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.clone())
+        list.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.clone())
     };
     let name_value = format!("\"{name}\"");
     let inherits = matches!(kind, ModuleKind::Document | ModuleKind::Form);
@@ -231,7 +239,13 @@ pub(crate) fn prepare_module_source(
         } else {
             for (key, default) in &required {
                 let value = find(&given, key)
-                    .or_else(|| if inherits { find(&previous_attributes, key) } else { None })
+                    .or_else(|| {
+                        if inherits {
+                            find(&previous_attributes, key)
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap_or_else(|| default.clone());
                 header.push((key.to_string(), value));
             }
@@ -350,17 +364,25 @@ pub fn procedure_names(code: &str) -> Vec<String> {
     for line in split_lines(code) {
         let mut words = line.split_whitespace().peekable();
         while words.peek().is_some_and(|w| {
-            ["public", "private", "friend", "static"].iter().any(|m| w.eq_ignore_ascii_case(m))
+            ["public", "private", "friend", "static"]
+                .iter()
+                .any(|m| w.eq_ignore_ascii_case(m))
         }) {
             words.next();
         }
-        let Some(keyword) = words.next() else { continue };
+        let Some(keyword) = words.next() else {
+            continue;
+        };
         if keyword.eq_ignore_ascii_case("property") {
             let accessor = words.next().unwrap_or("");
-            if !["get", "let", "set"].iter().any(|a| accessor.eq_ignore_ascii_case(a)) {
+            if !["get", "let", "set"]
+                .iter()
+                .any(|a| accessor.eq_ignore_ascii_case(a))
+            {
                 continue;
             }
-        } else if !keyword.eq_ignore_ascii_case("sub") && !keyword.eq_ignore_ascii_case("function") {
+        } else if !keyword.eq_ignore_ascii_case("sub") && !keyword.eq_ignore_ascii_case("function")
+        {
             continue;
         }
         let name = words.next().unwrap_or("").split('(').next().unwrap_or("");
@@ -378,7 +400,10 @@ pub fn procedure_names(code: &str) -> Vec<String> {
 pub fn replace_document_code(existing_source: &str, code: &str) -> String {
     let nl = newline_style(existing_source);
     let mut out = String::with_capacity(existing_source.len() + code.len());
-    for line in split_lines(existing_source).into_iter().take_while(|l| l.starts_with("Attribute ") || l.starts_with("VERSION ")) {
+    for line in split_lines(existing_source)
+        .into_iter()
+        .take_while(|l| l.starts_with("Attribute ") || l.starts_with("VERSION "))
+    {
         out.push_str(line);
         out.push_str(nl);
     }
@@ -409,7 +434,11 @@ pub fn strip_hand_written(source: &str) -> String {
             None => false,
         };
         let trimmed = line.trim_start().to_ascii_lowercase();
-        if in_region || line.starts_with("Attribute ") || line.starts_with("VERSION ") || trimmed.starts_with("option ") {
+        if in_region
+            || line.starts_with("Attribute ")
+            || line.starts_with("VERSION ")
+            || trimmed.starts_with("option ")
+        {
             out.push_str(line);
             out.push_str(nl);
         }
@@ -446,7 +475,10 @@ mod tests {
     #[test]
     fn procedures_are_found() {
         let code = "Option Explicit\r\n' Sub Commented()\r\nPrivate Sub Workbook_Open()\r\nEnd Sub\r\n  public static function F(x) As Long\r\nEnd Function\r\nFriend Property Get P() As Long\r\nEnd Property\r\nProperty Let P(v As Long)\r\nEnd Property\r\nSub NoParens\r\nExit Sub\r\nDim Subtotal As Long\r\n";
-        assert_eq!(procedure_names(code), ["Workbook_Open", "F", "P", "P", "NoParens"]);
+        assert_eq!(
+            procedure_names(code),
+            ["Workbook_Open", "F", "P", "P", "NoParens"]
+        );
     }
 
     #[test]
@@ -502,7 +534,10 @@ mod tests {
         assert_eq!(prepare_module_source(ModuleKind::Class, "C", exported, None, ""), format!("Attribute VB_Name = \"C\"\r\n{base}Attribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = False\r\nAttribute VB_Exposed = False\r\n{tail}Option Explicit\r\n"));
         // A complete header is kept verbatim (order included).
         let full = format!("Attribute VB_Name = \"C\"\r\nAttribute VB_Exposed = True\r\n{base}Attribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\n{tail}Option Explicit\r\n");
-        assert_eq!(prepare_module_source(ModuleKind::Class, "C", &full, None, ""), full);
+        assert_eq!(
+            prepare_module_source(ModuleKind::Class, "C", &full, None, ""),
+            full
+        );
     }
 
     #[test]
@@ -527,16 +562,32 @@ mod tests {
             "Attribute VB_Name = \"ThisWorkbook\"\r\nAttribute VB_Base = \"0{00020819-0000-0000-C000-000000000046}\"\r\nAttribute VB_GlobalNameSpace = False\r\nAttribute VB_Creatable = False\r\nAttribute VB_PredeclaredId = True\r\nAttribute VB_Exposed = True\r\nAttribute VB_TemplateDerived = False\r\nAttribute VB_Customizable = True\r\n"
         );
         // Code without a header inherits the previous header completely.
-        let prev = format!("{s}Attribute VB_Control = \"Btn, 1, 0, MSForms, CommandButton\"\r\nOld\r\n");
-        let s2 = prepare_module_source(ModuleKind::Document, "ThisWorkbook", "New\n", Some(&prev), VB_BASE_WORKSHEET);
-        assert_eq!(s2, format!("{s}Attribute VB_Control = \"Btn, 1, 0, MSForms, CommandButton\"\r\nNew\r\n"));
-        assert_eq!(attribute_value(&s2, "vb_base").as_deref(), Some(VB_BASE_WORKBOOK));
+        let prev =
+            format!("{s}Attribute VB_Control = \"Btn, 1, 0, MSForms, CommandButton\"\r\nOld\r\n");
+        let s2 = prepare_module_source(
+            ModuleKind::Document,
+            "ThisWorkbook",
+            "New\n",
+            Some(&prev),
+            VB_BASE_WORKSHEET,
+        );
+        assert_eq!(
+            s2,
+            format!("{s}Attribute VB_Control = \"Btn, 1, 0, MSForms, CommandButton\"\r\nNew\r\n")
+        );
+        assert_eq!(
+            attribute_value(&s2, "vb_base").as_deref(),
+            Some(VB_BASE_WORKBOOK)
+        );
     }
 
     #[test]
     fn member_attributes_are_not_header() {
         let src = "Attribute VB_Name = \"M\"\r\nSub A()\r\nAttribute A.VB_Description = \"x\"\r\nEnd Sub\r\n";
-        assert_eq!(prepare_module_source(ModuleKind::Standard, "M", src, None, ""), src);
+        assert_eq!(
+            prepare_module_source(ModuleKind::Standard, "M", src, None, ""),
+            src
+        );
         assert!(parse_attribute("Attribute A.VB_Description = \"x\"").is_none());
         assert!(parse_attribute("AttributeVB_Name = 1").is_none());
         assert!(parse_attribute("' Attribute VB_Name = 1").is_none());
@@ -550,9 +601,15 @@ mod tests {
             merged,
             "Attribute VB_Name = \"Sheet1\"\r\nPrivate Sub Hand()\r\nEnd Sub\r\n'--- RAS BEGIN ---\r\nSub Gen()\r\nEnd Sub\r\n'--- RAS END ---\r\n"
         );
-        assert_eq!(extract_managed_region(&merged).as_deref(), Some("Sub Gen()\r\nEnd Sub"));
+        assert_eq!(
+            extract_managed_region(&merged).as_deref(),
+            Some("Sub Gen()\r\nEnd Sub")
+        );
         // Idempotent.
-        assert_eq!(merge_managed_region(&merged, "Sub Gen()\r\nEnd Sub"), merged);
+        assert_eq!(
+            merge_managed_region(&merged, "Sub Gen()\r\nEnd Sub"),
+            merged
+        );
         // Replace in place, keeping code after the region.
         let with_tail = format!("{merged}' tail\r\n");
         let replaced = merge_managed_region(&with_tail, "X = 1");
@@ -569,7 +626,10 @@ mod tests {
 
     #[test]
     fn merge_edge_cases() {
-        assert_eq!(merge_managed_region("", "A"), "'--- RAS BEGIN ---\r\nA\r\n'--- RAS END ---\r\n");
+        assert_eq!(
+            merge_managed_region("", "A"),
+            "'--- RAS BEGIN ---\r\nA\r\n'--- RAS END ---\r\n"
+        );
         // LF-only sources stay LF-only.
         assert_eq!(
             merge_managed_region("x\ny", "A\r\nB"),
@@ -577,7 +637,10 @@ mod tests {
         );
         // Indented markers are recognised.
         let src = "a\r\n   '--- RAS BEGIN ---  \r\nold\r\n\t'--- RAS END ---\r\nb\r\n";
-        assert_eq!(merge_managed_region(src, "new"), "a\r\n'--- RAS BEGIN ---\r\nnew\r\n'--- RAS END ---\r\nb\r\n");
+        assert_eq!(
+            merge_managed_region(src, "new"),
+            "a\r\n'--- RAS BEGIN ---\r\nnew\r\n'--- RAS END ---\r\nb\r\n"
+        );
         // Unterminated region: only the marker line is replaced.
         let broken = "a\r\n'--- RAS BEGIN ---\r\nhand written\r\n";
         assert_eq!(extract_managed_region(broken), None);

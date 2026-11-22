@@ -31,7 +31,10 @@ const MODIFIERS: [&str; 4] = ["public", "private", "friend", "static"];
 /// The kind and name of the procedure a line declares.
 fn procedure_start(line: &str) -> Option<(String, String)> {
     let mut words = strip_line_number(line).split_whitespace().peekable();
-    while words.peek().is_some_and(|w| MODIFIERS.iter().any(|m| w.eq_ignore_ascii_case(m))) {
+    while words
+        .peek()
+        .is_some_and(|w| MODIFIERS.iter().any(|m| w.eq_ignore_ascii_case(m)))
+    {
         words.next();
     }
     let keyword = words.next()?.to_ascii_lowercase();
@@ -42,7 +45,10 @@ fn procedure_start(line: &str) -> Option<(String, String)> {
             if !["get", "let", "set"].contains(&accessor.as_str()) {
                 return None;
             }
-            ("property".to_string(), format!("{}{} ", accessor[..1].to_uppercase(), &accessor[1..]))
+            (
+                "property".to_string(),
+                format!("{}{} ", accessor[..1].to_uppercase(), &accessor[1..]),
+            )
         }
         _ => return None,
     };
@@ -56,7 +62,10 @@ fn procedure_start(line: &str) -> Option<(String, String)> {
 /// A line without the line number RAS puts in front of statements (for `Erl`).
 fn strip_line_number(line: &str) -> &str {
     let trimmed = line.trim_start();
-    let digits = trimmed.len() - trimmed.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let digits = trimmed.len()
+        - trimmed
+            .trim_start_matches(|c: char| c.is_ascii_digit())
+            .len();
     if digits > 0 && trimmed[digits..].starts_with([' ', '\t']) {
         trimmed[digits..].trim_start()
     } else {
@@ -70,8 +79,14 @@ fn is_comment(line: &str) -> bool {
 }
 
 fn first_words(line: &str, count: usize) -> String {
-    let mut words = line.split_whitespace().map(str::to_ascii_lowercase).filter(|w| !MODIFIERS.contains(&w.as_str()));
-    (0..count).filter_map(|_| words.next()).collect::<Vec<_>>().join(" ")
+    let mut words = line
+        .split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .filter(|w| !MODIFIERS.contains(&w.as_str()));
+    (0..count)
+        .filter_map(|_| words.next())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Splits the code of a module (with or without its `Attribute` header).
@@ -101,19 +116,31 @@ pub fn split(code: &str) -> Parts {
             let mut j = i;
             loop {
                 text.push(lines[j]);
-                let done = strip_line_number(lines[j]).to_ascii_lowercase().split('\'').next().unwrap_or_default().trim() == end_line;
+                let done = strip_line_number(lines[j])
+                    .to_ascii_lowercase()
+                    .split('\'')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    == end_line;
                 j += 1;
                 if done || j >= lines.len() {
                     break;
                 }
             }
-            parts.procedures.push(Procedure { name, text: text.iter().map(|l| format!("{l}\n")).collect() });
+            parts.procedures.push(Procedure {
+                name,
+                text: text.iter().map(|l| format!("{l}\n")).collect(),
+            });
             i = j;
             continue;
         }
         comments.clear();
         let lower = trimmed.to_ascii_lowercase();
-        if trimmed.starts_with("Attribute ") || trimmed.starts_with("VERSION ") || lower.starts_with("option ") {
+        if trimmed.starts_with("Attribute ")
+            || trimmed.starts_with("VERSION ")
+            || lower.starts_with("option ")
+        {
             i += 1;
             continue;
         }
@@ -140,7 +167,9 @@ pub fn split(code: &str) -> Parts {
         }
         // Declarations after a procedure do not exist in VBA; whatever is there stays out.
         if parts.procedures.is_empty() {
-            parts.declarations.push(statement.iter().map(|l| format!("{l}\n")).collect());
+            parts
+                .declarations
+                .push(statement.iter().map(|l| format!("{l}\n")).collect());
         }
         i = j;
     }
@@ -219,7 +248,11 @@ impl Diff {
 
     /// The names of what was added, for messages.
     pub fn added_names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self.added_procedures.iter().map(|p| p.name.clone()).collect();
+        let mut names: Vec<String> = self
+            .added_procedures
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
         if !self.added_declarations.is_empty() {
             names.push(format!("宣言 {} 件", self.added_declarations.len()));
         }
@@ -249,14 +282,17 @@ pub fn diff(written: &str, current: &str) -> Diff {
     }
     for (text, key) in base.declarations.iter().zip(&base_declarations) {
         if !now_declarations.contains(key) {
-            out.removed.push(text.lines().next().unwrap_or_default().trim().to_string());
+            out.removed
+                .push(text.lines().next().unwrap_or_default().trim().to_string());
         }
     }
     let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
     for p in &now.procedures {
         match base.procedures.iter().find(|b| same(&b.name, &p.name)) {
             None => out.added_procedures.push(p.clone()),
-            Some(b) if normalized(&b.text) != normalized(&p.text) => out.changed.push(p.name.clone()),
+            Some(b) if normalized(&b.text) != normalized(&p.text) => {
+                out.changed.push(p.name.clone())
+            }
             Some(_) => {}
         }
     }
@@ -277,11 +313,23 @@ mod tests {
     #[test]
     fn a_module_in_parts() {
         let parts = split(WRITTEN);
-        assert_eq!(parts.declarations, ["Private lastEdited As String\n", "Private Const LIMIT As Long = 10&\n"]);
+        assert_eq!(
+            parts.declarations,
+            [
+                "Private lastEdited As String\n",
+                "Private Const LIMIT As Long = 10&\n"
+            ]
+        );
         let names: Vec<&str> = parts.procedures.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["clearInput", "Worksheet_Change"]);
         // The comment above a procedure belongs to it.
-        assert!(parts.procedures[0].text.starts_with("' 入力欄を消す。\nPublic Sub clearInput()\n"), "{}", parts.procedures[0].text);
+        assert!(
+            parts.procedures[0]
+                .text
+                .starts_with("' 入力欄を消す。\nPublic Sub clearInput()\n"),
+            "{}",
+            parts.procedures[0].text
+        );
         // Blocks and continuation lines are one statement; properties are told apart by accessor.
         let parts = split("Private Type Point\n    x As Long\nEnd Type\nPrivate Declare PtrSafe Function GetTickCount _\n    Lib \"kernel32\" () As Long\n#If VBA7 Then\nPrivate p As LongPtr\n#End If\nProperty Get Name() As String\nEnd Property\nProperty Let Name(v As String)\nEnd Property\n");
         assert_eq!(parts.declarations.len(), 3, "{:?}", parts.declarations);
@@ -292,7 +340,11 @@ mod tests {
     #[test]
     fn what_the_vbe_rewrites_is_no_change() {
         // Other case and spacing, no line numbers, another line end.
-        let current = WRITTEN.replace("\r\n", "\n").replace("5   Me.Range", "    me.range").replace("lastEdited As String", "LastEdited  As String").replace("onChange Target", "OnChange  target");
+        let current = WRITTEN
+            .replace("\r\n", "\n")
+            .replace("5   Me.Range", "    me.range")
+            .replace("lastEdited As String", "LastEdited  As String")
+            .replace("onChange Target", "OnChange  target");
         let d = diff(WRITTEN, &current);
         assert_eq!(d, Diff::default());
         // A string is compared as it is.
@@ -302,14 +354,28 @@ mod tests {
 
     #[test]
     fn added_changed_and_removed() {
-        let current = format!("{}\r\nPrivate Sub Worksheet_Activate()\r\n    MsgBox \"hi\"\r\nEnd Sub\r\n", WRITTEN.replace("Private Const LIMIT As Long = 10&\r\n", "Private Const LIMIT As Long = 10&\r\nPrivate counter As Long\r\n"));
+        let current = format!(
+            "{}\r\nPrivate Sub Worksheet_Activate()\r\n    MsgBox \"hi\"\r\nEnd Sub\r\n",
+            WRITTEN.replace(
+                "Private Const LIMIT As Long = 10&\r\n",
+                "Private Const LIMIT As Long = 10&\r\nPrivate counter As Long\r\n"
+            )
+        );
         let d = diff(WRITTEN, &current);
         assert!(d.has_additions() && !d.has_drift(), "{d:?}");
         assert_eq!(d.added_names(), ["Worksheet_Activate", "宣言 1 件"]);
         assert_eq!(d.added_code(), "Private counter As Long\n\nPrivate Sub Worksheet_Activate()\n    MsgBox \"hi\"\nEnd Sub\n");
-        assert_eq!(d.added_hash(), diff(WRITTEN, &current.replace("MsgBox \"hi\"", "msgbox  \"hi\"")).added_hash());
+        assert_eq!(
+            d.added_hash(),
+            diff(WRITTEN, &current.replace("MsgBox \"hi\"", "msgbox  \"hi\"")).added_hash()
+        );
 
-        let current = WRITTEN.replace("    onChange Target\r\n", "    onChange Target\r\n    Beep\r\n").replace("Private lastEdited As String\r\n", "");
+        let current = WRITTEN
+            .replace(
+                "    onChange Target\r\n",
+                "    onChange Target\r\n    Beep\r\n",
+            )
+            .replace("Private lastEdited As String\r\n", "");
         let d = diff(WRITTEN, &current);
         assert!(!d.has_additions() && d.has_drift(), "{d:?}");
         assert_eq!(d.changed, ["Worksheet_Change"]);

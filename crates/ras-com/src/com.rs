@@ -25,22 +25,32 @@ use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 
 use napi::bindgen_prelude::{ClassInstance, FromNapiValue};
-use napi::{Env, Error, JsBoolean, JsNumber, JsObject, JsString, JsUnknown, NapiRaw, NapiValue, Result, Status, ValueType};
+use napi::{
+    Env, Error, JsBoolean, JsNumber, JsObject, JsString, JsUnknown, NapiRaw, NapiValue, Result,
+    Status, ValueType,
+};
 use napi_derive::napi;
 use windows::core::{Interface, BSTR, GUID, HRESULT, PCWSTR};
 use windows::Win32::Foundation::VARIANT_BOOL;
 use windows::Win32::System::Com::{
-    CLSIDFromProgID, CoCreateInstance, CoGetObject, CoInitializeEx, CoTaskMemFree, CreateBindCtx, GetRunningObjectTable, IDispatch, IMoniker, CLSCTX_INPROC_SERVER, CLSCTX_LOCAL_SERVER,
-    COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT, DISPATCH_PROPERTYPUTREF, DISPPARAMS, EXCEPINFO, FUNCDESC, FUNCFLAG_FHIDDEN,
-    FUNCFLAG_FRESTRICTED, IMPLTYPEFLAG_FDEFAULT, IMPLTYPEFLAG_FSOURCE, INVOKE_PROPERTYGET, ITypeInfo, SAFEARRAY, SAFEARRAYBOUND, TKIND_COCLASS, TKIND_ENUM, TKIND_INTERFACE, TYPEATTR, TYPEDESC, VARFLAG_FHIDDEN, VARFLAG_FRESTRICTED, VAR_DISPATCH,
+    CLSIDFromProgID, CoCreateInstance, CoGetObject, CoInitializeEx, CoTaskMemFree, CreateBindCtx,
+    GetRunningObjectTable, IDispatch, IMoniker, ITypeInfo, CLSCTX_INPROC_SERVER,
+    CLSCTX_LOCAL_SERVER, COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD,
+    DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT, DISPATCH_PROPERTYPUTREF, DISPPARAMS, EXCEPINFO,
+    FUNCDESC, FUNCFLAG_FHIDDEN, FUNCFLAG_FRESTRICTED, IMPLTYPEFLAG_FDEFAULT, IMPLTYPEFLAG_FSOURCE,
+    INVOKE_PROPERTYGET, SAFEARRAY, SAFEARRAYBOUND, TKIND_COCLASS, TKIND_ENUM, TKIND_INTERFACE,
+    TYPEATTR, TYPEDESC, VARFLAG_FHIDDEN, VARFLAG_FRESTRICTED, VAR_DISPATCH,
 };
 use windows::Win32::System::Ole::{
-    GetActiveObject, IEnumVARIANT, IProvideClassInfo, SafeArrayCreate, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayGetVartype, SafeArrayPutElement, VarR8FromDec,
-    PARAMFLAG_FLCID, PARAMFLAG_FOPT, PARAMFLAG_FRETVAL, TYPEFLAG_FDUAL,
+    GetActiveObject, IEnumVARIANT, IProvideClassInfo, SafeArrayCreate, SafeArrayGetDim,
+    SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound, SafeArrayGetVartype,
+    SafeArrayPutElement, VarR8FromDec, PARAMFLAG_FLCID, PARAMFLAG_FOPT, PARAMFLAG_FRETVAL,
+    TYPEFLAG_FDUAL,
 };
 use windows::Win32::System::Variant::{
-    VariantClear, VARENUM, VARIANT, VT_ARRAY, VT_BOOL, VT_BSTR, VT_BYREF, VT_CY, VT_DATE, VT_DECIMAL, VT_DISPATCH, VT_ERROR, VT_I1, VT_I2, VT_I4, VT_I8, VT_INT, VT_R4, VT_R8, VT_UI1, VT_UI2, VT_UI4,
-    VT_UI8, VT_UINT, VT_USERDEFINED, VT_VARIANT,
+    VariantClear, VARENUM, VARIANT, VT_ARRAY, VT_BOOL, VT_BSTR, VT_BYREF, VT_CY, VT_DATE,
+    VT_DECIMAL, VT_DISPATCH, VT_ERROR, VT_I1, VT_I2, VT_I4, VT_I8, VT_INT, VT_R4, VT_R8, VT_UI1,
+    VT_UI2, VT_UI4, VT_UI8, VT_UINT, VT_USERDEFINED, VT_VARIANT,
 };
 
 /// Excel interprets names and values by the locale passed to `Invoke`. VBA always uses
@@ -71,7 +81,12 @@ const RPC_E_CALL_REJECTED: i32 = 0x8001_0001_u32 as i32;
 const RPC_E_SERVERCALL_RETRYLATER: i32 = 0x8001_010A_u32 as i32;
 const RPC_E_CHANGED_MODE: i32 = 0x8001_0106_u32 as i32;
 /// The server process is gone: `RPC_E_DISCONNECTED`, `RPC_S_SERVER_UNAVAILABLE`, `RPC_S_CALL_FAILED`, `CO_E_OBJNOTCONNECTED`.
-const SERVER_GONE: [i32; 4] = [0x8001_0108_u32 as i32, 0x8007_06BA_u32 as i32, 0x8007_06BE_u32 as i32, 0x8004_01FD_u32 as i32];
+const SERVER_GONE: [i32; 4] = [
+    0x8001_0108_u32 as i32,
+    0x8007_06BA_u32 as i32,
+    0x8007_06BE_u32 as i32,
+    0x8004_01FD_u32 as i32,
+];
 /// How long a call waits while Excel is busy (cell being edited, modal dialog) before it fails.
 const BUSY_TIMEOUT_MS: u64 = 60_000;
 
@@ -97,7 +112,14 @@ fn json_string(s: &str) -> String {
 
 /// An error in the form the JavaScript run time turns into a RAS error object.
 fn com_error(number: i32, source: &str, description: &str) -> Error {
-    Error::new(Status::GenericFailure, format!("RASCOM{{\"number\":{number},\"source\":{},\"description\":{}}}", json_string(source), json_string(description)))
+    Error::new(
+        Status::GenericFailure,
+        format!(
+            "RASCOM{{\"number\":{number},\"source\":{},\"description\":{}}}",
+            json_string(source),
+            json_string(description)
+        ),
+    )
 }
 
 /// The VBA error number VBA reports for a standard dispatch HRESULT; other values unchanged.
@@ -135,7 +157,15 @@ fn hresult_error(hr: HRESULT, what: &str) -> Error {
     }
     let number = vba_number(hr.0);
     let detail = hr.message();
-    com_error(number, "", &if what.is_empty() { detail } else { format!("{what}: {detail}") })
+    com_error(
+        number,
+        "",
+        &if what.is_empty() {
+            detail
+        } else {
+            format!("{what}: {detail}")
+        },
+    )
 }
 
 fn win(e: windows::core::Error) -> Error {
@@ -192,24 +222,33 @@ fn disp_of(env: Env, obj: &JsObject) -> Result<Option<IDispatch>> {
     if !ComObject::instance_of(env, obj)? {
         return Ok(None);
     }
-    let inst: ClassInstance<ComObject> = unsafe { FromNapiValue::from_napi_value(env.raw(), obj.raw())? };
+    let inst: ClassInstance<ComObject> =
+        unsafe { FromNapiValue::from_napi_value(env.raw(), obj.raw())? };
     Ok(Some(inst.ptr.clone()))
 }
 
 fn to_variant(env: Env, value: JsUnknown) -> Result<Var> {
     Ok(match value.get_type()? {
-        ValueType::Undefined => Var::with(VT_ERROR, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.scode = DISP_E_PARAMNOTFOUND }),
+        ValueType::Undefined => Var::with(VT_ERROR, |v| unsafe {
+            (*v.Anonymous.Anonymous).Anonymous.scode = DISP_E_PARAMNOTFOUND
+        }),
         ValueType::Null => Var::empty(),
         ValueType::Boolean => {
             let b = unsafe { value.cast::<JsBoolean>() }.get_value()?;
-            Var::with(VT_BOOL, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.boolVal = VARIANT_BOOL(if b { -1 } else { 0 }) })
+            Var::with(VT_BOOL, |v| unsafe {
+                (*v.Anonymous.Anonymous).Anonymous.boolVal = VARIANT_BOOL(if b { -1 } else { 0 })
+            })
         }
         ValueType::Number => {
             let f = unsafe { value.cast::<JsNumber>() }.get_double()?;
             if f.fract() == 0.0 && f >= i32::MIN as f64 && f <= i32::MAX as f64 {
-                Var::with(VT_I4, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.lVal = f as i32 })
+                Var::with(VT_I4, |v| unsafe {
+                    (*v.Anonymous.Anonymous).Anonymous.lVal = f as i32
+                })
             } else {
-                Var::with(VT_R8, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.dblVal = f })
+                Var::with(VT_R8, |v| unsafe {
+                    (*v.Anonymous.Anonymous).Anonymous.dblVal = f
+                })
             }
         }
         ValueType::String => {
@@ -218,30 +257,50 @@ fn to_variant(env: Env, value: JsUnknown) -> Result<Var> {
             let units = s.as_slice();
             let units = units.strip_suffix(&[0]).unwrap_or(units);
             let b = BSTR::from_wide(units);
-            Var::with(VT_BSTR, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.bstrVal = ManuallyDrop::new(b) })
+            Var::with(VT_BSTR, |v| unsafe {
+                (*v.Anonymous.Anonymous).Anonymous.bstrVal = ManuallyDrop::new(b)
+            })
         }
         ValueType::Object => {
             let obj = unsafe { value.cast::<JsObject>() };
             if let Some(d) = disp_of(env, &obj)? {
-                Var::with(VT_DISPATCH, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.pdispVal = ManuallyDrop::new(Some(d)) })
+                Var::with(VT_DISPATCH, |v| unsafe {
+                    (*v.Anonymous.Anonymous).Anonymous.pdispVal = ManuallyDrop::new(Some(d))
+                })
             } else if obj.is_array()? {
                 array_to_variant(env, &obj)?
             } else if obj.has_named_property("$t")? {
-                let tag = obj.get_named_property::<JsString>("$t")?.into_utf8()?.into_owned()?;
-                let number = |name: &str| -> Result<f64> { obj.get_named_property::<JsNumber>(name)?.get_double() };
+                let tag = obj
+                    .get_named_property::<JsString>("$t")?
+                    .into_utf8()?
+                    .into_owned()?;
+                let number = |name: &str| -> Result<f64> {
+                    obj.get_named_property::<JsNumber>(name)?.get_double()
+                };
                 match tag.as_str() {
                     "date" => {
                         let d = number("v")?;
-                        Var::with(VT_DATE, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.date = d })
+                        Var::with(VT_DATE, |v| unsafe {
+                            (*v.Anonymous.Anonymous).Anonymous.date = d
+                        })
                     }
                     "error" => {
                         let code = number("v")? as i32;
-                        Var::with(VT_ERROR, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.scode = (0x800A_0000_u32 | (code as u32 & 0xFFFF)) as i32 })
+                        Var::with(VT_ERROR, |v| unsafe {
+                            (*v.Anonymous.Anonymous).Anonymous.scode =
+                                (0x800A_0000_u32 | (code as u32 & 0xFFFF)) as i32
+                        })
                     }
-                    _ => Var::with(VT_DISPATCH, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.pdispVal = ManuallyDrop::new(None) }),
+                    _ => Var::with(VT_DISPATCH, |v| unsafe {
+                        (*v.Anonymous.Anonymous).Anonymous.pdispVal = ManuallyDrop::new(None)
+                    }),
                 }
             } else {
-                return Err(com_error(13, "RAS", "この値は Excel に渡せません（RAS のクラスや Map は COM の値に変換できません）"));
+                return Err(com_error(
+                    13,
+                    "RAS",
+                    "この値は Excel に渡せません（RAS のクラスや Map は COM の値に変換できません）",
+                ));
             }
         }
         _ => return Err(com_error(13, "RAS", "この値は Excel に渡せません")),
@@ -255,26 +314,39 @@ fn array_to_variant(env: Env, arr: &JsObject) -> Result<Var> {
         let first = arr.get_element::<JsUnknown>(0)?;
         if first.get_type()? == ValueType::Object {
             let o = unsafe { first.cast::<JsObject>() };
-            if o.is_array()? { Some(o.get_array_length()?) } else { None }
+            if o.is_array()? {
+                Some(o.get_array_length()?)
+            } else {
+                None
+            }
         } else {
             None
         }
     } else {
         None
     };
-    let mut bounds = vec![SAFEARRAYBOUND { cElements: rows, lLbound: 0 }];
+    let mut bounds = vec![SAFEARRAYBOUND {
+        cElements: rows,
+        lLbound: 0,
+    }];
     if let Some(cols) = first_row {
-        bounds.push(SAFEARRAYBOUND { cElements: cols, lLbound: 0 });
+        bounds.push(SAFEARRAYBOUND {
+            cElements: cols,
+            lLbound: 0,
+        });
     }
     let psa = unsafe { SafeArrayCreate(VT_VARIANT, bounds.len() as u32, bounds.as_ptr()) };
     if psa.is_null() {
         return Err(com_error(7, "RAS", "配列を確保できません"));
     }
     // Owned by the VARIANT from here on (VariantClear destroys it).
-    let out = Var::with(VARENUM(VT_ARRAY.0 | VT_VARIANT.0), |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.parray = psa });
+    let out = Var::with(VARENUM(VT_ARRAY.0 | VT_VARIANT.0), |v| unsafe {
+        (*v.Anonymous.Anonymous).Anonymous.parray = psa
+    });
     let put = |index: &[i32], item: JsUnknown| -> Result<()> {
         let v = to_variant(env, item)?;
-        unsafe { SafeArrayPutElement(psa, index.as_ptr(), &v.0 as *const VARIANT as *const c_void) }.map_err(win)
+        unsafe { SafeArrayPutElement(psa, index.as_ptr(), &v.0 as *const VARIANT as *const c_void) }
+            .map_err(win)
     };
     for r in 0..rows {
         let item = arr.get_element::<JsUnknown>(r)?;
@@ -282,7 +354,11 @@ fn array_to_variant(env: Env, arr: &JsObject) -> Result<Var> {
             None => put(&[r as i32], item)?,
             Some(cols) => {
                 if item.get_type()? != ValueType::Object {
-                    return Err(com_error(13, "RAS", "2 次元配列の各行は配列でなければなりません"));
+                    return Err(com_error(
+                        13,
+                        "RAS",
+                        "2 次元配列の各行は配列でなければなりません",
+                    ));
                 }
                 let row = unsafe { item.cast::<JsObject>() };
                 let n = row.get_array_length()?.min(cols);
@@ -304,7 +380,10 @@ fn tagged(env: Env, tag: &str, value: f64) -> Result<JsUnknown> {
 
 fn object_to_js(env: Env, d: Option<IDispatch>) -> Result<JsUnknown> {
     match d {
-        Some(ptr) => Ok(ComObject { ptr }.into_instance(env)?.as_object(env).into_unknown()),
+        Some(ptr) => Ok(ComObject { ptr }
+            .into_instance(env)?
+            .as_object(env)
+            .into_unknown()),
         None => Ok(env.get_null()?.into_unknown()),
     }
 }
@@ -315,7 +394,11 @@ fn from_variant(env: Env, v: &VARIANT) -> Result<JsUnknown> {
         let vt = inner.vt.0;
         let data = &inner.Anonymous;
         if vt & VT_BYREF.0 != 0 {
-            return if vt == VT_BYREF.0 | VT_VARIANT.0 && !data.pvarVal.is_null() { from_variant(env, &*data.pvarVal) } else { Ok(env.get_null()?.into_unknown()) };
+            return if vt == VT_BYREF.0 | VT_VARIANT.0 && !data.pvarVal.is_null() {
+                from_variant(env, &*data.pvarVal)
+            } else {
+                Ok(env.get_null()?.into_unknown())
+            };
         }
         if vt & VT_ARRAY.0 != 0 {
             return array_to_js(env, data.parray);
@@ -332,7 +415,12 @@ fn from_variant(env: Env, v: &VARIANT) -> Result<JsUnknown> {
             9 => object_to_js(env, (*data.pdispVal).clone()),
             10 => tagged(env, "error", (data.scode & 0xFFFF) as f64),
             11 => Ok(env.get_boolean(data.boolVal.0 != 0)?.into_unknown()),
-            13 => object_to_js(env, (*data.punkVal).as_ref().and_then(|u| u.cast::<IDispatch>().ok())),
+            13 => object_to_js(
+                env,
+                (*data.punkVal)
+                    .as_ref()
+                    .and_then(|u| u.cast::<IDispatch>().ok()),
+            ),
             14 => num(VarR8FromDec(&v.Anonymous.decVal).map_err(win)?),
             16 => num(data.cVal as f64),
             17 => num(data.bVal as f64),
@@ -360,7 +448,8 @@ fn array_to_js(env: Env, psa: *mut SAFEARRAY) -> Result<JsUnknown> {
         let element = |index: &[i32]| -> Result<JsUnknown> {
             let mut v = Var::empty();
             if elem_vt == VT_VARIANT {
-                SafeArrayGetElement(psa, index.as_ptr(), &mut v.0 as *mut VARIANT as *mut c_void).map_err(win)?;
+                SafeArrayGetElement(psa, index.as_ptr(), &mut v.0 as *mut VARIANT as *mut c_void)
+                    .map_err(win)?;
             } else {
                 // Typed array: the element is copied into the data part of a VARIANT of that type.
                 let slot = &mut (*v.0.Anonymous.Anonymous).Anonymous as *mut _ as *mut c_void;
@@ -369,7 +458,10 @@ fn array_to_js(env: Env, psa: *mut SAFEARRAY) -> Result<JsUnknown> {
             }
             from_variant(env, &v.0)
         };
-        let (lb1, ub1) = (SafeArrayGetLBound(psa, 1).map_err(win)?, SafeArrayGetUBound(psa, 1).map_err(win)?);
+        let (lb1, ub1) = (
+            SafeArrayGetLBound(psa, 1).map_err(win)?,
+            SafeArrayGetUBound(psa, 1).map_err(win)?,
+        );
         let rows = (ub1 - lb1 + 1).max(0);
         let mut out = env.create_array_with_length(rows as usize)?;
         if dims == 1 {
@@ -377,7 +469,10 @@ fn array_to_js(env: Env, psa: *mut SAFEARRAY) -> Result<JsUnknown> {
                 out.set_element(i as u32, element(&[lb1 + i])?)?;
             }
         } else {
-            let (lb2, ub2) = (SafeArrayGetLBound(psa, 2).map_err(win)?, SafeArrayGetUBound(psa, 2).map_err(win)?);
+            let (lb2, ub2) = (
+                SafeArrayGetLBound(psa, 2).map_err(win)?,
+                SafeArrayGetUBound(psa, 2).map_err(win)?,
+            );
             let cols = (ub2 - lb2 + 1).max(0);
             for r in 0..rows {
                 let mut row = env.create_array_with_length(cols as usize)?;
@@ -400,20 +495,36 @@ fn dispid(disp: &IDispatch, name: &str) -> Result<i32> {
     let w = wide(name);
     let names = [PCWSTR(w.as_ptr())];
     let mut id = 0i32;
-    unsafe { disp.GetIDsOfNames(&GUID::zeroed(), names.as_ptr(), 1, LCID, &mut id) }.map_err(|e| hresult_error(e.code(), name))?;
+    unsafe { disp.GetIDsOfNames(&GUID::zeroed(), names.as_ptr(), 1, LCID, &mut id) }
+        .map_err(|e| hresult_error(e.code(), name))?;
     Ok(id)
 }
 
 /// `Invoke` with the arguments in call order. Retries while Excel rejects the call because it is busy.
-fn invoke(disp: &IDispatch, id: i32, name: &str, flags: DISPATCH_FLAGS, mut args: Vec<Var>, put: bool) -> Result<Var> {
+fn invoke(
+    disp: &IDispatch,
+    id: i32,
+    name: &str,
+    flags: DISPATCH_FLAGS,
+    mut args: Vec<Var>,
+    put: bool,
+) -> Result<Var> {
     // Arguments are passed last to first. The callee may convert them in place, so the vector
     // handed to it is the one and only owner of the values (`Var` is a transparent VARIANT).
     args.reverse();
     let mut rg = args;
     let mut named = DISPID_PROPERTYPUT;
     let params = DISPPARAMS {
-        rgvarg: if rg.is_empty() { std::ptr::null_mut() } else { rg.as_mut_ptr() as *mut VARIANT },
-        rgdispidNamedArgs: if put { &mut named } else { std::ptr::null_mut() },
+        rgvarg: if rg.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            rg.as_mut_ptr() as *mut VARIANT
+        },
+        rgdispidNamedArgs: if put {
+            &mut named
+        } else {
+            std::ptr::null_mut()
+        },
         cArgs: rg.len() as u32,
         cNamedArgs: if put { 1 } else { 0 },
     };
@@ -425,7 +536,18 @@ fn invoke(disp: &IDispatch, id: i32, name: &str, flags: DISPATCH_FLAGS, mut args
         let mut result = Var::empty();
         let mut ex = EXCEPINFO::default();
         let mut arg_err = 0u32;
-        let r = unsafe { disp.Invoke(id, &GUID::zeroed(), LCID, flags, &params, Some(&mut result.0), Some(&mut ex), Some(&mut arg_err)) };
+        let r = unsafe {
+            disp.Invoke(
+                id,
+                &GUID::zeroed(),
+                LCID,
+                flags,
+                &params,
+                Some(&mut result.0),
+                Some(&mut ex),
+                Some(&mut arg_err),
+            )
+        };
         match r {
             Ok(()) => break Ok(result),
             Err(e) => {
@@ -482,7 +604,11 @@ impl ComObject {
     #[napi]
     pub fn get(&self, env: Env, name: String, args: Vec<JsUnknown>) -> Result<JsUnknown> {
         let id = dispid(&self.ptr, &name)?;
-        let flags = if args.is_empty() { DISPATCH_PROPERTYGET } else { DISPATCH_PROPERTYGET | DISPATCH_METHOD };
+        let flags = if args.is_empty() {
+            DISPATCH_PROPERTYGET
+        } else {
+            DISPATCH_PROPERTYGET | DISPATCH_METHOD
+        };
         let r = invoke(&self.ptr, id, &name, flags, convert_args(env, args)?, false)?;
         from_variant(env, &r.0)
     }
@@ -491,20 +617,37 @@ impl ComObject {
     #[napi]
     pub fn call(&self, env: Env, name: String, args: Vec<JsUnknown>) -> Result<JsUnknown> {
         let id = dispid(&self.ptr, &name)?;
-        let r = invoke(&self.ptr, id, &name, DISPATCH_METHOD | DISPATCH_PROPERTYGET, convert_args(env, args)?, false)?;
+        let r = invoke(
+            &self.ptr,
+            id,
+            &name,
+            DISPATCH_METHOD | DISPATCH_PROPERTYGET,
+            convert_args(env, args)?,
+            false,
+        )?;
         from_variant(env, &r.0)
     }
 
     /// Writes a property (`obj.name(args...) = value`). An empty name is the default member.
     #[napi]
-    pub fn put(&self, env: Env, name: String, args: Vec<JsUnknown>, value: JsUnknown) -> Result<()> {
+    pub fn put(
+        &self,
+        env: Env,
+        name: String,
+        args: Vec<JsUnknown>,
+        value: JsUnknown,
+    ) -> Result<()> {
         let id = dispid(&self.ptr, &name)?;
         let build = |env: Env| -> Result<Vec<Var>> {
             let mut all = Vec::with_capacity(args.len() + 1);
             for a in &args {
-                all.push(to_variant(env, unsafe { JsUnknown::from_raw_unchecked(env.raw(), a.raw()) })?);
+                all.push(to_variant(env, unsafe {
+                    JsUnknown::from_raw_unchecked(env.raw(), a.raw())
+                })?);
             }
-            all.push(to_variant(env, unsafe { JsUnknown::from_raw_unchecked(env.raw(), value.raw()) })?);
+            all.push(to_variant(env, unsafe {
+                JsUnknown::from_raw_unchecked(env.raw(), value.raw())
+            })?);
             Ok(all)
         };
         let all = build(env)?;
@@ -512,7 +655,15 @@ impl ComObject {
         match invoke(&self.ptr, id, &name, DISPATCH_PROPERTYPUT, all, true) {
             Ok(_) => Ok(()),
             // Properties that hold an object reference are set with `Set` (PROPERTYPUTREF).
-            Err(_) if is_object => invoke(&self.ptr, id, &name, DISPATCH_PROPERTYPUTREF, build(env)?, true).map(|_| ()),
+            Err(_) if is_object => invoke(
+                &self.ptr,
+                id,
+                &name,
+                DISPATCH_PROPERTYPUTREF,
+                build(env)?,
+                true,
+            )
+            .map(|_| ()),
             Err(e) => Err(e),
         }
     }
@@ -520,12 +671,23 @@ impl ComObject {
     /// The members of a collection (`For Each`).
     #[napi]
     pub fn enumerate(&self, env: Env) -> Result<Vec<JsUnknown>> {
-        let r = invoke(&self.ptr, DISPID_NEWENUM, "_NewEnum", DISPATCH_METHOD | DISPATCH_PROPERTYGET, Vec::new(), false)?;
+        let r = invoke(
+            &self.ptr,
+            DISPID_NEWENUM,
+            "_NewEnum",
+            DISPATCH_METHOD | DISPATCH_PROPERTYGET,
+            Vec::new(),
+            false,
+        )?;
         let en: IEnumVARIANT = unsafe {
             let data = &r.0.Anonymous.Anonymous.Anonymous;
             match r.vt() {
-                9 => (*data.pdispVal).as_ref().and_then(|d| d.cast::<IEnumVARIANT>().ok()),
-                13 => (*data.punkVal).as_ref().and_then(|u| u.cast::<IEnumVARIANT>().ok()),
+                9 => (*data.pdispVal)
+                    .as_ref()
+                    .and_then(|d| d.cast::<IEnumVARIANT>().ok()),
+                13 => (*data.punkVal)
+                    .as_ref()
+                    .and_then(|u| u.cast::<IEnumVARIANT>().ok()),
                 _ => None,
             }
         }
@@ -550,7 +712,13 @@ impl ComObject {
     pub fn type_name(&self) -> Result<String> {
         unsafe {
             // The class the object says it is, as VBA asks first.
-            if let Some(name) = self.ptr.cast::<IProvideClassInfo>().ok().and_then(|p| p.GetClassInfo().ok()).and_then(|class| type_info_name(&class)) {
+            if let Some(name) = self
+                .ptr
+                .cast::<IProvideClassInfo>()
+                .ok()
+                .and_then(|p| p.GetClassInfo().ok())
+                .and_then(|class| type_info_name(&class))
+            {
                 return Ok(name);
             }
             let info = self.ptr.GetTypeInfo(0, LCID).map_err(win)?;
@@ -559,7 +727,8 @@ impl ComObject {
             if let Some(name) = class_of_interface(&info) {
                 return Ok(name);
             }
-            let name = type_info_name(&info).ok_or_else(|| com_error(438, "RAS", "型の名前を取得できません"))?;
+            let name = type_info_name(&info)
+                .ok_or_else(|| com_error(438, "RAS", "型の名前を取得できません"))?;
             Ok(name.strip_prefix('_').unwrap_or(&name).to_string())
         }
     }
@@ -576,17 +745,28 @@ impl ComObject {
             let mut push = |memid: i32, tdesc: &TYPEDESC| {
                 let mut name = BSTR::default();
                 let mut context = 0u32;
-                if info.GetDocumentation(memid, Some(&mut name), None, &mut context, None).is_err() {
+                if info
+                    .GetDocumentation(memid, Some(&mut name), None, &mut context, None)
+                    .is_err()
+                {
                     return;
                 }
                 let name = name.to_string();
-                if name.is_empty() || name.starts_with('_') || out.iter().any(|m| m.name.eq_ignore_ascii_case(&name)) {
+                if name.is_empty()
+                    || name.starts_with('_')
+                    || out.iter().any(|m| m.name.eq_ignore_ascii_case(&name))
+                {
                     return;
                 }
-                out.push(ComMember { name, scalar: is_scalar(&info, tdesc) });
+                out.push(ComMember {
+                    name,
+                    scalar: is_scalar(&info, tdesc),
+                });
             };
             for i in 0..u32::from(funcs) {
-                let Ok(desc) = info.GetFuncDesc(i) else { continue };
+                let Ok(desc) = info.GetFuncDesc(i) else {
+                    continue;
+                };
                 let f = &*desc;
                 let hidden = f.wFuncFlags.0 & (FUNCFLAG_FHIDDEN.0 | FUNCFLAG_FRESTRICTED.0) != 0;
                 if f.invkind == INVOKE_PROPERTYGET && !hidden && required_params(f) == 0 {
@@ -595,7 +775,9 @@ impl ComObject {
                 info.ReleaseFuncDesc(desc);
             }
             for i in 0..u32::from(vars) {
-                let Ok(desc) = info.GetVarDesc(i) else { continue };
+                let Ok(desc) = info.GetVarDesc(i) else {
+                    continue;
+                };
                 let v = &*desc;
                 let hidden = v.wVarFlags.0 & (VARFLAG_FHIDDEN.0 | VARFLAG_FRESTRICTED.0) != 0;
                 if v.varkind == VAR_DISPATCH && !hidden {
@@ -610,7 +792,10 @@ impl ComObject {
     /// True when both wrap the same COM object (`Is` in VBA).
     #[napi]
     pub fn is_same(&self, other: &ComObject) -> bool {
-        match (self.ptr.cast::<windows::core::IUnknown>(), other.ptr.cast::<windows::core::IUnknown>()) {
+        match (
+            self.ptr.cast::<windows::core::IUnknown>(),
+            other.ptr.cast::<windows::core::IUnknown>(),
+        ) {
             (Ok(a), Ok(b)) => a.as_raw() == b.as_raw(),
             _ => false,
         }
@@ -657,15 +842,28 @@ unsafe fn class_of_interface(info: &ITypeInfo) -> Option<String> {
                 if lib.GetTypeInfoType(i).ok()? != TKIND_COCLASS {
                     continue;
                 }
-                let Ok(class) = lib.GetTypeInfo(i) else { continue };
-                let Ok(attr) = TypeAttr::of(&class) else { continue };
+                let Ok(class) = lib.GetTypeInfo(i) else {
+                    continue;
+                };
+                let Ok(attr) = TypeAttr::of(&class) else {
+                    continue;
+                };
                 for j in 0..u32::from((*attr.0).cImplTypes) {
-                    let Ok(flags) = class.GetImplTypeFlags(j) else { continue };
+                    let Ok(flags) = class.GetImplTypeFlags(j) else {
+                        continue;
+                    };
                     if flags.0 & IMPLTYPEFLAG_FSOURCE.0 != 0 {
                         continue;
                     }
-                    let Ok(implemented) = class.GetRefTypeOfImplType(j).and_then(|r| class.GetRefTypeInfo(r)) else { continue };
-                    let Ok(its) = TypeAttr::of(&implemented) else { continue };
+                    let Ok(implemented) = class
+                        .GetRefTypeOfImplType(j)
+                        .and_then(|r| class.GetRefTypeInfo(r))
+                    else {
+                        continue;
+                    };
+                    let Ok(its) = TypeAttr::of(&implemented) else {
+                        continue;
+                    };
                     if (*its.0).guid != guid {
                         continue;
                     }
@@ -701,11 +899,17 @@ impl Drop for TypeAttr<'_> {
 /// (the vtable view returns `HRESULT` with the value as a `retval` parameter).
 unsafe fn dispatch_info(info: ITypeInfo) -> ITypeInfo {
     unsafe {
-        let Ok(attr) = TypeAttr::of(&info) else { return info };
-        let dual = (*attr.0).typekind == TKIND_INTERFACE && i32::from((*attr.0).wTypeFlags) & TYPEFLAG_FDUAL.0 != 0;
+        let Ok(attr) = TypeAttr::of(&info) else {
+            return info;
+        };
+        let dual = (*attr.0).typekind == TKIND_INTERFACE
+            && i32::from((*attr.0).wTypeFlags) & TYPEFLAG_FDUAL.0 != 0;
         drop(attr);
         if dual {
-            if let Ok(dispatch) = info.GetRefTypeOfImplType(u32::MAX).and_then(|r| info.GetRefTypeInfo(r)) {
+            if let Ok(dispatch) = info
+                .GetRefTypeOfImplType(u32::MAX)
+                .and_then(|r| info.GetRefTypeInfo(r))
+            {
                 return dispatch;
             }
         }
@@ -716,16 +920,24 @@ unsafe fn dispatch_info(info: ITypeInfo) -> ITypeInfo {
 /// Parameters a caller must pass (the locale and return-value parameters are filled in by COM).
 unsafe fn required_params(f: &FUNCDESC) -> usize {
     let n = usize::try_from(f.cParams).unwrap_or(0);
-    let params = if n == 0 || f.lprgelemdescParam.is_null() { &[][..] } else { unsafe { std::slice::from_raw_parts(f.lprgelemdescParam, n) } };
+    let params = if n == 0 || f.lprgelemdescParam.is_null() {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(f.lprgelemdescParam, n) }
+    };
     params.iter().filter(|p| unsafe { p.Anonymous.paramdesc.wParamFlags.0 } & (PARAMFLAG_FLCID.0 | PARAMFLAG_FRETVAL.0 | PARAMFLAG_FOPT.0) == 0).count()
 }
 
 unsafe fn is_scalar(info: &ITypeInfo, tdesc: &TYPEDESC) -> bool {
     match tdesc.vt {
-        VT_I1 | VT_I2 | VT_I4 | VT_I8 | VT_UI1 | VT_UI2 | VT_UI4 | VT_UI8 | VT_INT | VT_UINT | VT_R4 | VT_R8 | VT_CY | VT_DATE | VT_BSTR | VT_BOOL | VT_DECIMAL => true,
+        VT_I1 | VT_I2 | VT_I4 | VT_I8 | VT_UI1 | VT_UI2 | VT_UI4 | VT_UI8 | VT_INT | VT_UINT
+        | VT_R4 | VT_R8 | VT_CY | VT_DATE | VT_BSTR | VT_BOOL | VT_DECIMAL => true,
         // An enumeration (`XlSheetVisibility`); other user-defined types are interfaces.
         VT_USERDEFINED => unsafe {
-            info.GetRefTypeInfo(tdesc.Anonymous.hreftype).ok().and_then(|t| TypeAttr::of(&t).ok().map(|a| (*a.0).typekind == TKIND_ENUM)).unwrap_or(false)
+            info.GetRefTypeInfo(tdesc.Anonymous.hreftype)
+                .ok()
+                .and_then(|t| TypeAttr::of(&t).ok().map(|a| (*a.0).typekind == TKIND_ENUM))
+                .unwrap_or(false)
         },
         _ => false,
     }
@@ -735,7 +947,13 @@ unsafe fn is_scalar(info: &ITypeInfo, tdesc: &TYPEDESC) -> bool {
 
 fn clsid(prog_id: &str) -> Result<GUID> {
     let w = wide(prog_id);
-    unsafe { CLSIDFromProgID(PCWSTR(w.as_ptr())) }.map_err(|_| com_error(429, "RAS", &format!("`{prog_id}` というクラスは登録されていません")))
+    unsafe { CLSIDFromProgID(PCWSTR(w.as_ptr())) }.map_err(|_| {
+        com_error(
+            429,
+            "RAS",
+            &format!("`{prog_id}` というクラスは登録されていません"),
+        )
+    })
 }
 
 /// The running instance of an application (`GetObject(, "Excel.Application")`).
@@ -744,8 +962,11 @@ pub fn get_active_object(prog_id: String) -> Result<ComObject> {
     init_com();
     let id = clsid(&prog_id)?;
     let mut unknown = None;
-    unsafe { GetActiveObject(&id, None, &mut unknown) }.map_err(|_| com_error(429, "RAS", &format!("{prog_id} は起動していません")))?;
-    let ptr = unknown.and_then(|u| u.cast::<IDispatch>().ok()).ok_or_else(|| com_error(429, "RAS", &format!("{prog_id} に接続できません")))?;
+    unsafe { GetActiveObject(&id, None, &mut unknown) }
+        .map_err(|_| com_error(429, "RAS", &format!("{prog_id} は起動していません")))?;
+    let ptr = unknown
+        .and_then(|u| u.cast::<IDispatch>().ok())
+        .ok_or_else(|| com_error(429, "RAS", &format!("{prog_id} に接続できません")))?;
     Ok(ComObject { ptr })
 }
 
@@ -754,7 +975,9 @@ pub fn get_active_object(prog_id: String) -> Result<ComObject> {
 pub fn create_object(prog_id: String) -> Result<ComObject> {
     init_com();
     let id = clsid(&prog_id)?;
-    let ptr: IDispatch = unsafe { CoCreateInstance(&id, None, CLSCTX_LOCAL_SERVER | CLSCTX_INPROC_SERVER) }.map_err(|e| hresult_error(e.code(), &prog_id))?;
+    let ptr: IDispatch =
+        unsafe { CoCreateInstance(&id, None, CLSCTX_LOCAL_SERVER | CLSCTX_INPROC_SERVER) }
+            .map_err(|e| hresult_error(e.code(), &prog_id))?;
     Ok(ComObject { ptr })
 }
 
@@ -765,7 +988,8 @@ pub fn get_object(path: String) -> Result<ComObject> {
     let w = wide(&path);
     // Opening the file can make its application ask questions (links, read-only, macros).
     let _outstanding = crate::watch::CallGuard::new();
-    let ptr: IDispatch = unsafe { CoGetObject(PCWSTR(w.as_ptr()), None) }.map_err(|e| hresult_error(e.code(), &path))?;
+    let ptr: IDispatch = unsafe { CoGetObject(PCWSTR(w.as_ptr()), None) }
+        .map_err(|e| hresult_error(e.code(), &path))?;
     Ok(ComObject { ptr })
 }
 
@@ -780,9 +1004,24 @@ pub fn shell_open(path: String) -> Result<()> {
     init_com();
     let file = wide(&path);
     let verb = wide("open");
-    let instance = unsafe { ShellExecuteW(None, PCWSTR(verb.as_ptr()), PCWSTR(file.as_ptr()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+    let instance = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
     if instance.0 as usize <= 32 {
-        return Err(com_error(429, "RAS", &format!("{path} を開けませんでした（Excel がインストールされているか確認してください）")));
+        return Err(com_error(
+            429,
+            "RAS",
+            &format!(
+                "{path} を開けませんでした（Excel がインストールされているか確認してください）"
+            ),
+        ));
     }
     Ok(())
 }
@@ -807,8 +1046,12 @@ pub fn find_workbook(path: String) -> Result<Option<ComObject>> {
             if monikers.Next(&mut item, Some(&mut fetched)).is_err() || fetched == 0 {
                 return Ok(None);
             }
-            let Some(moniker) = item[0].take() else { continue };
-            let Ok(display) = moniker.GetDisplayName(&ctx, None) else { continue };
+            let Some(moniker) = item[0].take() else {
+                continue;
+            };
+            let Ok(display) = moniker.GetDisplayName(&ctx, None) else {
+                continue;
+            };
             let name = display.to_string().unwrap_or_default();
             CoTaskMemFree(Some(display.0 as *const c_void));
             if !same_path(&name, &path) {

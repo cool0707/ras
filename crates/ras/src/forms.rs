@@ -12,7 +12,11 @@ use ras_form::workspace::{self, Built, PullOutcome};
 /// Loads, validates and generates the forms of `forms/`. Returns their number and the result.
 /// `compiled`: the code the compiler generated for the `.ras` code-behinds (form name → code);
 /// empty when only the designs are checked.
-pub fn build(root: &Path, codepage: u16, compiled: &HashMap<String, String>) -> Result<(usize, Built), String> {
+pub fn build(
+    root: &Path,
+    codepage: u16,
+    compiled: &HashMap<String, String>,
+) -> Result<(usize, Built), String> {
     let loaded = workspace::load(root)?;
     let built = workspace::build(&loaded, root, codepage, compiled);
     Ok((loaded.len(), built))
@@ -20,7 +24,11 @@ pub fn build(root: &Path, codepage: u16, compiled: &HashMap<String, String>) -> 
 
 /// The code of the forms among the compiler's output files (form name → code).
 pub fn compiled_code(files: &[ras_compiler::OutputFile]) -> HashMap<String, String> {
-    files.iter().filter(|f| f.kind == ras_compiler::vba::VModuleKind::Form).map(|f| (f.name.clone(), f.code.clone())).collect()
+    files
+        .iter()
+        .filter(|f| f.kind == ras_compiler::vba::VModuleKind::Form)
+        .map(|f| (f.name.clone(), f.code.clone()))
+        .collect()
 }
 
 /// Prints the problems of the forms; returns the number of errors.
@@ -55,7 +63,8 @@ pub fn new_form(root: &Path, name: &str) -> Result<(PathBuf, PathBuf), String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     std::fs::write(&spec_path, ras_form::FormSpec::new_form(name).to_json())
         .map_err(|e| format!("{}: {e}", spec_path.display()))?;
-    std::fs::write(&code_path, new_code_behind(name)).map_err(|e| format!("{}: {e}", code_path.display()))?;
+    std::fs::write(&code_path, new_code_behind(name))
+        .map_err(|e| format!("{}: {e}", code_path.display()))?;
     Ok((spec_path, code_path))
 }
 
@@ -72,7 +81,10 @@ pub fn new_code_behind(name: &str) -> String {
 }
 
 fn relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/")
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 /// `ras form pull`: writes `forms/` files for forms of the workbook (spec §14.11.6).
@@ -95,7 +107,11 @@ pub fn pull(root: &Path, book: &Path, names: &[String], force: bool) -> Result<E
                 return Err(format!(
                     "{} に `{name}` というユーザーフォームはありません（ブックのフォーム: {}）",
                     book.display(),
-                    if known.is_empty() { "なし".to_string() } else { known.join(", ") }
+                    if known.is_empty() {
+                        "なし".to_string()
+                    } else {
+                        known.join(", ")
+                    }
                 ));
             }
         }
@@ -104,9 +120,15 @@ pub fn pull(root: &Path, book: &Path, names: &[String], force: bool) -> Result<E
         println!("{} にユーザーフォームはありません", book.display());
         return Ok(ExitCode::SUCCESS);
     }
-    let owner = book.file_name().and_then(|n| n.to_str()).map(|n| book.with_file_name(format!("~${n}")));
+    let owner = book
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| book.with_file_name(format!("~${n}")));
     if owner.is_some_and(|o| o.exists()) {
-        eprintln!("warning: {} は Excel で開かれています。最後に保存した時点のフォームを取り出します", book.display());
+        eprintln!(
+            "warning: {} は Excel で開かれています。最後に保存した時点のフォームを取り出します",
+            book.display()
+        );
     }
 
     let (mut written, mut skipped, mut failed, mut hand_made) = (0, 0, 0, Vec::new());
@@ -114,18 +136,34 @@ pub fn pull(root: &Path, book: &Path, names: &[String], force: bool) -> Result<E
         match workspace::pull(root, form, project.codepage, force) {
             Ok(PullOutcome::Written(pulled)) => {
                 written += 1;
-                let pictures = if pulled.pictures.is_empty() { String::new() } else { format!("、画像 {} 個", pulled.pictures.len()) };
+                let pictures = if pulled.pictures.is_empty() {
+                    String::new()
+                } else {
+                    format!("、画像 {} 個", pulled.pictures.len())
+                };
                 if pulled.kept_code {
                     println!("{}: {} を書き出しました{pictures}（コードビハインドは既存の {} を使います）", form.name, relative(root, &pulled.spec_path), relative(root, &pulled.code_path));
                 } else {
-                    println!("{}: {} と {} を書き出しました{pictures}", form.name, relative(root, &pulled.spec_path), relative(root, &pulled.code_path));
+                    println!(
+                        "{}: {} と {} を書き出しました{pictures}",
+                        form.name,
+                        relative(root, &pulled.spec_path),
+                        relative(root, &pulled.code_path)
+                    );
                 }
                 for warning in &pulled.warnings {
-                    let place = if warning.control.is_empty() { form.name.clone() } else { format!("{}.{}", form.name, warning.control) };
+                    let place = if warning.control.is_empty() {
+                        form.name.clone()
+                    } else {
+                        format!("{}.{}", form.name, warning.control)
+                    };
                     eprintln!("warning: {place}: {}", warning.message);
                 }
                 for (line, message) in &pulled.todos {
-                    eprintln!("warning: {}:{line}: VBA から RAS に変換できませんでした: {message}", relative(root, &pulled.code_path));
+                    eprintln!(
+                        "warning: {}:{line}: VBA から RAS に変換できませんでした: {message}",
+                        relative(root, &pulled.code_path)
+                    );
                 }
                 if !pulled.todos.is_empty() {
                     eprintln!("  変換できなかったコードは `// TODO(VBA):` のコメントとして残しています。RAS で書き直してください");
@@ -152,5 +190,9 @@ pub fn pull(root: &Path, book: &Path, names: &[String], force: bool) -> Result<E
             hand_made.join(", ")
         );
     }
-    Ok(if failed > 0 { ExitCode::from(1) } else { ExitCode::SUCCESS })
+    Ok(if failed > 0 {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    })
 }

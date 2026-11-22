@@ -18,7 +18,12 @@ fn fixtures() -> Vec<(String, String)> {
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.to_string_lossy().ends_with(".form.json"))
-        .map(|p| (p.file_name().unwrap().to_string_lossy().to_string(), std::fs::read_to_string(&p).unwrap()))
+        .map(|p| {
+            (
+                p.file_name().unwrap().to_string_lossy().to_string(),
+                std::fs::read_to_string(&p).unwrap(),
+            )
+        })
         .collect();
     out.sort();
     assert!(out.len() >= 20, "fixtures missing");
@@ -43,7 +48,10 @@ fn copy_dir(from: &Path, to: &Path) {
 #[test]
 fn valid_fixtures_survive_generation_and_reading() {
     let mut failures = Vec::new();
-    for (file, text) in fixtures().into_iter().filter(|(f, _)| !f.contains("-error-")) {
+    for (file, text) in fixtures()
+        .into_iter()
+        .filter(|(f, _)| !f.contains("-error-"))
+    {
         let parsed = ras_form::parse(&text);
         let Some(spec) = parsed.spec.as_ref().filter(|_| !parsed.has_errors()) else {
             failures.push(format!("{file}: rejected: {:?}", parsed.issues));
@@ -54,7 +62,12 @@ fn valid_fixtures_survive_generation_and_reading() {
         let first = temp_root(&format!("{name}-a"));
         copy_dir(&fixtures_dir().join("assets"), &first.join("assets"));
         std::fs::write(first.join(format!("forms/{name}.form.json")), &text).unwrap();
-        let built = workspace::build(&workspace::load(&first).unwrap(), &first, 932, &HashMap::new());
+        let built = workspace::build(
+            &workspace::load(&first).unwrap(),
+            &first,
+            932,
+            &HashMap::new(),
+        );
         if built.errors() > 0 {
             failures.push(format!("{file}: {:?}", built.problems));
             continue;
@@ -63,15 +76,24 @@ fn valid_fixtures_survive_generation_and_reading() {
 
         // Read back into another project, and written again.
         let second = temp_root(&format!("{name}-b"));
-        let PullOutcome::Written(pulled) = workspace::pull(&second, &generated, 932, true).unwrap() else {
+        let PullOutcome::Written(pulled) = workspace::pull(&second, &generated, 932, true).unwrap()
+        else {
             panic!("{file}: nothing written");
         };
         if !pulled.warnings.is_empty() {
             failures.push(format!("{file}: lost in reading: {:?}", pulled.warnings));
         }
-        let again = workspace::build(&workspace::load(&second).unwrap(), &second, 932, &HashMap::new());
+        let again = workspace::build(
+            &workspace::load(&second).unwrap(),
+            &second,
+            932,
+            &HashMap::new(),
+        );
         if again.errors() > 0 {
-            failures.push(format!("{file}: the pulled form is not valid: {:?}", again.problems));
+            failures.push(format!(
+                "{file}: the pulled form is not valid: {:?}",
+                again.problems
+            ));
         } else if again.forms[0].streams != generated.streams {
             let differ: Vec<_> = generated
                 .streams
@@ -79,7 +101,9 @@ fn valid_fixtures_survive_generation_and_reading() {
                 .filter(|(k, v)| again.forms[0].streams.get(*k) != Some(v))
                 .map(|(k, _)| k.clone())
                 .collect();
-            failures.push(format!("{file}: written again, the streams {differ:?} differ"));
+            failures.push(format!(
+                "{file}: written again, the streams {differ:?} differ"
+            ));
         } else if again.forms[0].storages != generated.storages {
             failures.push(format!("{file}: written again, the storages differ"));
         }
@@ -91,31 +115,72 @@ fn valid_fixtures_survive_generation_and_reading() {
 
 /// The diagnostic each `9x-error-*` fixture is rejected with: code and part of the message.
 const ERRORS: &[(&str, &str, &str)] = &[
-    ("90-error-picture-format.form.json", "userform_generation_invalid", "画像の形式を判別できません"),
-    ("91-error-parent.form.json", "UFV011", "コンテナーではないコントロール \"txtA\""),
-    ("92-error-duplicate-name.form.json", "userform_generation_invalid", "\"TXTA\""),
-    ("93-error-page-geometry.form.json", "UFV005", "controls[1].left"),
-    ("94-error-custom.form.json", "userform_generation_unsupported", "生成できません"),
-    ("95-error-tab-index.form.json", "UFV019", "タブ名 \"a\" と重複"),
-    ("96-error-unknown-field.form.json", "UFV001", "form.build は廃止"),
-    ("97-error-picture-missing.form.json", "userform_generation_invalid", "を開けません"),
-    ("98-error-picture-outside.form.json", "userform_generation_invalid", "相対パスにしてください"),
+    (
+        "90-error-picture-format.form.json",
+        "userform_generation_invalid",
+        "画像の形式を判別できません",
+    ),
+    (
+        "91-error-parent.form.json",
+        "UFV011",
+        "コンテナーではないコントロール \"txtA\"",
+    ),
+    (
+        "92-error-duplicate-name.form.json",
+        "userform_generation_invalid",
+        "\"TXTA\"",
+    ),
+    (
+        "93-error-page-geometry.form.json",
+        "UFV005",
+        "controls[1].left",
+    ),
+    (
+        "94-error-custom.form.json",
+        "userform_generation_unsupported",
+        "生成できません",
+    ),
+    (
+        "95-error-tab-index.form.json",
+        "UFV019",
+        "タブ名 \"a\" と重複",
+    ),
+    (
+        "96-error-unknown-field.form.json",
+        "UFV001",
+        "form.build は廃止",
+    ),
+    (
+        "97-error-picture-missing.form.json",
+        "userform_generation_invalid",
+        "を開けません",
+    ),
+    (
+        "98-error-picture-outside.form.json",
+        "userform_generation_invalid",
+        "相対パスにしてください",
+    ),
 ];
 
 #[test]
 fn invalid_fixtures_are_rejected() {
     let mut failures = Vec::new();
     let mut seen = 0;
-    for (file, text) in fixtures().into_iter().filter(|(f, _)| f.contains("-error-")) {
+    for (file, text) in fixtures()
+        .into_iter()
+        .filter(|(f, _)| f.contains("-error-"))
+    {
         let parsed = ras_form::parse(&text);
         let (code, message) = match &parsed.spec {
-            Some(spec) if !parsed.has_errors() => match ras_form::compile_in(spec, 932, &fixtures_dir()) {
-                Ok(_) => {
-                    failures.push(format!("{file}: generated"));
-                    continue;
+            Some(spec) if !parsed.has_errors() => {
+                match ras_form::compile_in(spec, 932, &fixtures_dir()) {
+                    Ok(_) => {
+                        failures.push(format!("{file}: generated"));
+                        continue;
+                    }
+                    Err(e) => (e.code.to_string(), e.to_string()),
                 }
-                Err(e) => (e.code.to_string(), e.to_string()),
-            },
+            }
             _ => parsed
                 .issues
                 .iter()
@@ -125,7 +190,9 @@ fn invalid_fixtures_are_rejected() {
         };
         match ERRORS.iter().find(|(f, ..)| *f == file) {
             Some((_, c, m)) if *c == code && message.contains(m) => seen += 1,
-            Some((_, c, m)) => failures.push(format!("{file}: {code} {message:?}, expected {c} with {m:?}")),
+            Some((_, c, m)) => failures.push(format!(
+                "{file}: {code} {message:?}, expected {c} with {m:?}"
+            )),
             None => failures.push(format!("{file}: {code} {message:?}, not listed in ERRORS")),
         }
     }

@@ -170,9 +170,12 @@ fn convert_value(kind: &str, property: &str, value: &Value) -> Result<Converted,
         },
         "value" | "text" => {
             if kind.eq_ignore_ascii_case("CheckBox") || kind.eq_ignore_ascii_case("OptionButton") {
-                return toggle_state(value).map(|stored| Converted::Str(stored.into())).ok_or_else(|| {
-                    "オンオフの状態は真偽値、0 / 1 / -1、\"Null\" のいずれかにしてください".into()
-                });
+                return toggle_state(value)
+                    .map(|stored| Converted::Str(stored.into()))
+                    .ok_or_else(|| {
+                        "オンオフの状態は真偽値、0 / 1 / -1、\"Null\" のいずれかにしてください"
+                            .into()
+                    });
             }
             match value {
                 Value::String(s) => Ok(Converted::Str(s.clone())),
@@ -371,7 +374,10 @@ fn control_definition(
             "VBA の識別子にしてください".into(),
         ));
     }
-    for (field, given) in [("picture", control.picture.is_some()), ("mouseIcon", control.mouse_icon.is_some())] {
+    for (field, given) in [
+        ("picture", control.picture.is_some()),
+        ("mouseIcon", control.mouse_icon.is_some()),
+    ] {
         if !given
             && control
                 .unsupported
@@ -595,9 +601,10 @@ fn control_definition(
             Store::Thumb => put("ProportionalThumb".into(), PValue::Int(raw)),
             Store::Flag(flag, _) => put(flag.into(), PValue::Bool(raw != 0)),
             Store::Site(bit) => put(format!("SiteFlag{bit}"), PValue::Bool(raw != 0)),
-            Store::Text(field) => {
-                put(field.into(), PValue::Str(value.as_str().unwrap_or("").into()))
-            }
+            Store::Text(field) => put(
+                field.into(),
+                PValue::Str(value.as_str().unwrap_or("").into()),
+            ),
             Store::SiteText(field) => {
                 let text = value.as_str().unwrap_or("");
                 if !text.is_empty() {
@@ -623,11 +630,15 @@ fn control_definition(
                 // Flat is what a new one has: nothing to store.
                 item.properties.remove("SpecialEffect");
             } else {
-                item.properties.insert("SpecialEffect".into(), PValue::Int(0));
+                item.properties
+                    .insert("SpecialEffect".into(), PValue::Int(0));
             }
         } else if kind == "Image"
             && control.border_style.is_none()
-            && item.properties.get("SpecialEffect").is_some_and(|e| *e != PValue::Int(0))
+            && item
+                .properties
+                .get("SpecialEffect")
+                .is_some_and(|e| *e != PValue::Int(0))
         {
             // The only control made with a Single border.
             item.properties.insert("BorderStyle".into(), PValue::Int(0));
@@ -656,17 +667,26 @@ fn control_definition(
                 return Err(failure(
                     INVALID,
                     "value",
-                    format!("value は min と max の間（{}〜{}）にしてください", min.min(max), min.max(max)),
+                    format!(
+                        "value は min と max の間（{}〜{}）にしてください",
+                        min.min(max),
+                        min.max(max)
+                    ),
                 ));
             }
         }
     }
     for (field, property) in [("picture", "Picture"), ("mouseIcon", "MouseIcon")] {
-        let action = if field == "picture" { &control.picture } else { &control.mouse_icon };
+        let action = if field == "picture" {
+            &control.picture
+        } else {
+            &control.mouse_icon
+        };
         let raw = picture_action(action.as_ref(), field, root, control.back_color.as_ref())
             .map_err(|(path, reason)| failure(INVALID, &path, reason))?;
         if let Some(raw) = raw {
-            item.properties.insert(property.into(), PValue::Picture(raw));
+            item.properties
+                .insert(property.into(), PValue::Picture(raw));
         }
     }
     Ok(item)
@@ -682,15 +702,23 @@ fn picture_action(
     root: Option<&Path>,
     back_color: Option<&crate::spec::FormSpecColor>,
 ) -> Result<Option<Vec<u8>>, (String, String)> {
-    let Some(action) = action.filter(|a| a.get("remove").and_then(Value::as_bool) != Some(true)) else {
+    let Some(action) = action.filter(|a| a.get("remove").and_then(Value::as_bool) != Some(true))
+    else {
         return Ok(None);
     };
     let path_field = format!("{field}.path");
-    let Some(path) = action.get("path").and_then(Value::as_str).filter(|p| !p.trim().is_empty()) else {
+    let Some(path) = action
+        .get("path")
+        .and_then(Value::as_str)
+        .filter(|p| !p.trim().is_empty())
+    else {
         return Err((path_field, "画像ファイルのパスを指定してください".into()));
     };
     let Some(root) = root else {
-        return Err((path_field, "プロジェクトのルートが分からないため、画像を読めません".into()));
+        return Err((
+            path_field,
+            "プロジェクトのルートが分からないため、画像を読めません".into(),
+        ));
     };
     let picture = if field == "mouseIcon" {
         crate::picture::load_icon(root, path)
@@ -873,7 +901,10 @@ fn form_properties(
     if form.border_style == Some(1) {
         properties.remove("SpecialEffect");
     }
-    for (field, property, action) in [("picture", "Picture", &form.picture), ("mouseIcon", "MouseIcon", &form.mouse_icon)] {
+    for (field, property, action) in [
+        ("picture", "Picture", &form.picture),
+        ("mouseIcon", "MouseIcon", &form.mouse_icon),
+    ] {
         let raw = picture_action(action.as_ref(), field, root, form.back_color.as_ref())
             .map_err(|(path, reason)| fail(INVALID, "", &format!("form.{path}"), reason))?;
         if let Some(raw) = raw {
@@ -881,7 +912,10 @@ fn form_properties(
         }
     }
     // A disabled form: its record, and the designer block as the VBA editor writes it.
-    if properties.get("BooleanProperties").is_some_and(|v| *v == PValue::Int(0)) {
+    if properties
+        .get("BooleanProperties")
+        .is_some_and(|v| *v == PValue::Int(0))
+    {
         frame.push(("Enabled", "0".into()));
     }
     Ok((properties, frame))
@@ -980,15 +1014,16 @@ pub(crate) fn compile_new(
             .enumerate()
         {
             let path = format!("controls[{}]", original_index[control.id.as_str()]);
-            let mut item =
-                control_definition(control, sibling, root).map_err(|(code, property, reason)| {
+            let mut item = control_definition(control, sibling, root).map_err(
+                |(code, property, reason)| {
                     let property = if property.is_empty() {
                         path.clone()
                     } else {
                         format!("{path}.{property}")
                     };
                     fail(code, &control.name, &property, reason)
-                })?;
+                },
+            )?;
             if children
                 .get(control.id.as_str())
                 .is_some_and(|c| !c.is_empty())

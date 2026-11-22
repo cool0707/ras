@@ -29,11 +29,23 @@ pub(crate) struct Node {
 
 impl Node {
     pub(crate) fn stream(path: Vec<String>, data: Vec<u8>) -> Node {
-        Node { path, data: Some(data), meta: None, times: (0, 0), clsid: None }
+        Node {
+            path,
+            data: Some(data),
+            meta: None,
+            times: (0, 0),
+            clsid: None,
+        }
     }
 
     pub(crate) fn storage(path: Vec<String>) -> Node {
-        Node { path, data: None, meta: None, times: (0, 0), clsid: None }
+        Node {
+            path,
+            data: None,
+            meta: None,
+            times: (0, 0),
+            clsid: None,
+        }
     }
 
     pub(crate) fn is_storage(&self) -> bool {
@@ -81,7 +93,9 @@ fn path_of(chain: &[String]) -> Result<PathBuf, OvbaError> {
 pub(crate) fn read_tree(bytes: &[u8]) -> Result<Tree, OvbaError> {
     let mut file = cfb::CompoundFile::open(Cursor::new(bytes)).map_err(cfb_err)?;
     let entries: Vec<cfb::Entry> = file.walk().collect();
-    let raw_times = raw_directory(bytes).map(|d| storage_times(&d)).unwrap_or_default();
+    let raw_times = raw_directory(bytes)
+        .map(|d| storage_times(&d))
+        .unwrap_or_default();
 
     let mut tree = Tree::default();
     for entry in entries {
@@ -108,11 +122,26 @@ pub(crate) fn read_tree(bytes: &[u8]) -> Result<Tree, OvbaError> {
         }
         if entry.is_stream() {
             let mut data = Vec::with_capacity(entry.len() as usize);
-            file.open_stream(entry.path()).map_err(cfb_err)?.read_to_end(&mut data).map_err(cfb_err)?;
-            tree.nodes.push(Node { path: chain, data: Some(data), meta: Some(entry), times: (0, 0), clsid: None });
+            file.open_stream(entry.path())
+                .map_err(cfb_err)?
+                .read_to_end(&mut data)
+                .map_err(cfb_err)?;
+            tree.nodes.push(Node {
+                path: chain,
+                data: Some(data),
+                meta: Some(entry),
+                times: (0, 0),
+                clsid: None,
+            });
         } else {
             let times = raw_times.get(&chain).copied().unwrap_or((0, 0));
-            tree.nodes.push(Node { path: chain, data: None, meta: Some(entry), times, clsid: None });
+            tree.nodes.push(Node {
+                path: chain,
+                data: None,
+                meta: Some(entry),
+                times,
+                clsid: None,
+            });
         }
     }
     Ok(tree)
@@ -153,20 +182,26 @@ pub(crate) fn write_tree(tree: &Tree) -> Result<Vec<u8>, OvbaError> {
         }
     }
 
-    let mut file = cfb::CompoundFile::create_with_version(cfb::Version::V3, Cursor::new(Vec::new()))
-        .map_err(cfb_err)?;
+    let mut file =
+        cfb::CompoundFile::create_with_version(cfb::Version::V3, Cursor::new(Vec::new()))
+            .map_err(cfb_err)?;
     if let Some(meta) = &tree.root_meta {
-        file.set_storage_clsid("/", *meta.clsid()).map_err(cfb_err)?;
-        file.set_state_bits("/", meta.state_bits()).map_err(cfb_err)?;
+        file.set_storage_clsid("/", *meta.clsid())
+            .map_err(cfb_err)?;
+        file.set_state_bits("/", meta.state_bits())
+            .map_err(cfb_err)?;
     } else if let Some(clsid) = tree.root_clsid {
-        file.set_storage_clsid("/", uuid::Uuid::from_bytes_le(clsid)).map_err(cfb_err)?;
+        file.set_storage_clsid("/", uuid::Uuid::from_bytes_le(clsid))
+            .map_err(cfb_err)?;
     }
 
     // Children of every storage, keyed by the parent's path.
     let mut children: HashMap<&[String], Vec<usize>> = HashMap::new();
     for (index, node) in tree.nodes.iter().enumerate() {
         let Some((_, parent)) = node.path.split_last() else {
-            return Err(OvbaError::Format("compound file entry without a name".into()));
+            return Err(OvbaError::Format(
+                "compound file entry without a name".into(),
+            ));
         };
         children.entry(parent).or_default().push(index);
     }
@@ -192,16 +227,19 @@ pub(crate) fn write_tree(tree: &Tree) -> Result<Vec<u8>, OvbaError> {
                 None => {
                     file.create_storage(&path).map_err(cfb_err)?;
                     if let Some(meta) = &node.meta {
-                        file.set_storage_clsid(&path, *meta.clsid()).map_err(cfb_err)?;
+                        file.set_storage_clsid(&path, *meta.clsid())
+                            .map_err(cfb_err)?;
                     } else if let Some(clsid) = node.clsid.filter(|c| *c != [0; 16]) {
-                        file.set_storage_clsid(&path, uuid::Uuid::from_bytes_le(clsid)).map_err(cfb_err)?;
+                        file.set_storage_clsid(&path, uuid::Uuid::from_bytes_le(clsid))
+                            .map_err(cfb_err)?;
                     }
                     pending.push(node.path.clone());
                 }
             }
             if let Some(meta) = &node.meta {
                 if meta.state_bits() != 0 {
-                    file.set_state_bits(&path, meta.state_bits()).map_err(cfb_err)?;
+                    file.set_state_bits(&path, meta.state_bits())
+                        .map_err(cfb_err)?;
                 }
             }
             written += 1;
@@ -325,7 +363,10 @@ fn raw_directory(bytes: &[u8]) -> Option<Vec<RawEntry>> {
     let fat_entry = |sector: u32| -> Option<u32> {
         let per_sector = sector_size / 4;
         let fat_sector = *fat_sectors.get(sector as usize / per_sector)?;
-        le_u32(bytes, sector_offset(fat_sector)? + 4 * (sector as usize % per_sector))
+        le_u32(
+            bytes,
+            sector_offset(fat_sector)? + 4 * (sector as usize % per_sector),
+        )
     };
 
     let mut entries = Vec::new();
@@ -413,7 +454,10 @@ mod tests {
             Node::stream(p(&["PROJECT"]), b"ID=1\r\n".to_vec()),
             Node::storage(p(&["VBA"])),
             Node::stream(p(&["VBA", "dir"]), vec![1, 2, 3]),
-            Node::stream(p(&["VBA", "Big"]), (0..10_000u32).map(|i| (i % 251) as u8).collect()),
+            Node::stream(
+                p(&["VBA", "Big"]),
+                (0..10_000u32).map(|i| (i % 251) as u8).collect(),
+            ),
             Node::stream(p(&["VBA", "Empty"]), Vec::new()),
             Node::storage(p(&["Form1"])),
             Node::stream(p(&["Form1", "\u{1}CompObj"]), vec![9; 97]),
@@ -422,10 +466,18 @@ mod tests {
             Node::stream(p(&["Form1", "i01", "f"]), vec![7; 40]),
         ];
         for i in 0..40 {
-            nodes.push(Node::stream(p(&["VBA", &format!("Module{i}")]), vec![i as u8; 100 + i]));
+            nodes.push(Node::stream(
+                p(&["VBA", &format!("Module{i}")]),
+                vec![i as u8; 100 + i],
+            ));
         }
         nodes[5].times = (131_715_775_748_160_000, 131_715_775_748_190_000);
-        Tree { root_meta: None, root_clsid: None, root_times: (0, 130_595_336_503_470_000), nodes }
+        Tree {
+            root_meta: None,
+            root_clsid: None,
+            root_times: (0, 130_595_336_503_470_000),
+            nodes,
+        }
     }
 
     #[test]
@@ -436,7 +488,11 @@ mod tests {
         let back = read_tree(&bytes).unwrap();
         assert_eq!(back.nodes.len(), tree.nodes.len());
         for node in &tree.nodes {
-            let found = back.nodes.iter().find(|n| n.path == node.path).expect("node exists");
+            let found = back
+                .nodes
+                .iter()
+                .find(|n| n.path == node.path)
+                .expect("node exists");
             assert_eq!(found.data, node.data, "{:?}", node.path);
             assert_eq!(found.times, node.times, "{:?}", node.path);
         }
@@ -453,10 +509,12 @@ mod tests {
         tree.nodes.push(Node::stream(vec!["a/b".into()], vec![]));
         assert!(write_tree(&tree).is_err());
         let mut tree = sample_tree();
-        tree.nodes.push(Node::stream(vec!["Missing".into(), "x".into()], vec![]));
+        tree.nodes
+            .push(Node::stream(vec!["Missing".into(), "x".into()], vec![]));
         assert!(write_tree(&tree).is_err());
         let mut tree = sample_tree();
-        tree.nodes.push(Node::stream(vec!["project".into()], vec![]));
+        tree.nodes
+            .push(Node::stream(vec!["project".into()], vec![]));
         assert!(write_tree(&tree).is_err());
     }
 

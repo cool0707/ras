@@ -68,7 +68,12 @@ pub(crate) struct LoadedProject {
     pub stomped: Vec<String>,
 }
 
-fn find_child<'a>(tree: &'a Tree, parent: &[String], name: &str, storage: bool) -> Option<&'a Node> {
+fn find_child<'a>(
+    tree: &'a Tree,
+    parent: &[String],
+    name: &str,
+    storage: bool,
+) -> Option<&'a Node> {
     tree.nodes.iter().find(|n| {
         n.is_storage() == storage
             && n.path.len() == parent.len() + 1
@@ -113,8 +118,10 @@ impl LoadedProject {
             Some(node) => Some(codepage::decode(cp, node.data.as_deref().unwrap_or(&[]))?),
             None => None,
         };
-        let properties =
-            project_text.as_deref().map(ProjectProperties::parse).unwrap_or_default();
+        let properties = project_text
+            .as_deref()
+            .map(ProjectProperties::parse)
+            .unwrap_or_default();
         let protection =
             Protection::from_properties(properties.cmg.as_deref(), properties.dpb.as_deref());
 
@@ -283,7 +290,9 @@ fn validate_module_name(name: &str) -> Result<(), OvbaError> {
 
 fn validate_project_name(name: &str) -> Result<(), OvbaError> {
     if name.is_empty() || name.chars().any(|c| c.is_control() || c == '"') {
-        return Err(OvbaError::InvalidRequest(format!("`{name}` is not a valid project name")));
+        return Err(OvbaError::InvalidRequest(format!(
+            "`{name}` is not a valid project name"
+        )));
     }
     Ok(())
 }
@@ -386,7 +395,10 @@ pub(crate) fn build_project(
         }
     }
     let old_cp = loaded.map(|p| p.dir.codepage);
-    let cp = edit.codepage.or(old_cp).unwrap_or(codepage::DEFAULT_CODEPAGE);
+    let cp = edit
+        .codepage
+        .or(old_cp)
+        .unwrap_or(codepage::DEFAULT_CODEPAGE);
     if Some(cp) != old_cp {
         codepage::writable_encoding(cp)?;
     }
@@ -394,7 +406,10 @@ pub(crate) fn build_project(
         validate_project_name(name)?;
     }
     let doc_base = |name: &str| -> Option<&'static str> {
-        documents.iter().find(|d| same_name(&d.code_name, name)).map(|d| d.base)
+        documents
+            .iter()
+            .find(|d| same_name(&d.code_name, name))
+            .map(|d| d.base)
     };
 
     // ---- module list ------------------------------------------------------
@@ -407,7 +422,8 @@ pub(crate) fn build_project(
                 module.raw_source.clone()
             } else {
                 let what = format!("source of module `{}`", module.record.name);
-                let text = codepage::decode_strict(project.dir.codepage, &module.raw_source, &what)?;
+                let text =
+                    codepage::decode_strict(project.dir.codepage, &module.raw_source, &what)?;
                 codepage::encode(cp, &text, &what)?
             };
             modules.push(PlannedModule {
@@ -443,16 +459,43 @@ pub(crate) fn build_project(
 
     // A document module follows its sheet's code name.
     for (old, new) in &edit.rename {
-        let Some(index) = modules.iter().position(|m| same_name(&m.name, old)) else { continue };
+        let Some(index) = modules.iter().position(|m| same_name(&m.name, old)) else {
+            continue;
+        };
         validate_module_name(new)?;
-        if modules.iter().enumerate().any(|(i, m)| i != index && same_name(&m.name, new)) {
-            return Err(OvbaError::InvalidRequest(format!("module `{old}` cannot be renamed to `{new}`: a module of that name exists")));
+        if modules
+            .iter()
+            .enumerate()
+            .any(|(i, m)| i != index && same_name(&m.name, new))
+        {
+            return Err(OvbaError::InvalidRequest(format!(
+                "module `{old}` cannot be renamed to `{new}`: a module of that name exists"
+            )));
         }
         let what = format!("source of module `{old}`");
         let text = codepage::decode_strict(cp, &modules[index].bytes, &what)?;
         let renamed: String = text
             .split_inclusive('\n')
-            .map(|line| if line.trim_start().to_ascii_lowercase().starts_with("attribute vb_name") { format!("Attribute VB_Name = \"{new}\"{}", if line.ends_with("\r\n") { "\r\n" } else if line.ends_with('\n') { "\n" } else { "" }) } else { line.to_string() })
+            .map(|line| {
+                if line
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with("attribute vb_name")
+                {
+                    format!(
+                        "Attribute VB_Name = \"{new}\"{}",
+                        if line.ends_with("\r\n") {
+                            "\r\n"
+                        } else if line.ends_with('\n') {
+                            "\n"
+                        } else {
+                            ""
+                        }
+                    )
+                } else {
+                    line.to_string()
+                }
+            })
             .collect();
         modules[index].bytes = codepage::encode(cp, &renamed, &what)?;
         modules[index].name = new.clone();
@@ -462,7 +505,9 @@ pub(crate) fn build_project(
     if let Some(keep) = &edit.keep_documents {
         let mut index = 0;
         while index < modules.len() {
-            if modules[index].kind == ModuleKind::Document && !keep.iter().any(|k| same_name(k, &modules[index].name)) {
+            if modules[index].kind == ModuleKind::Document
+                && !keep.iter().any(|k| same_name(k, &modules[index].name))
+            {
                 modules.remove(index);
                 previous_source.remove(index);
             } else {
@@ -511,7 +556,10 @@ pub(crate) fn build_project(
     }
 
     for (position, upsert) in edit.upsert.iter().enumerate() {
-        if edit.upsert[..position].iter().any(|m| same_name(&m.name, &upsert.name)) {
+        if edit.upsert[..position]
+            .iter()
+            .any(|m| same_name(&m.name, &upsert.name))
+        {
             return Err(OvbaError::InvalidRequest(format!(
                 "module `{}` is listed more than once",
                 upsert.name
@@ -525,7 +573,10 @@ pub(crate) fn build_project(
         }
         validate_module_name(&upsert.name)?;
         let what = format!("source of module `{}`", upsert.name);
-        match modules.iter().position(|m| same_name(&m.name, &upsert.name)) {
+        match modules
+            .iter()
+            .position(|m| same_name(&m.name, &upsert.name))
+        {
             Some(index) => {
                 let old_kind = modules[index].kind;
                 let fixed = |k: ModuleKind| matches!(k, ModuleKind::Document | ModuleKind::Form);
@@ -591,22 +642,35 @@ pub(crate) fn build_project(
     for form in &edit.forms {
         validate_module_name(&form.name)?;
         if ["VBA", "PROJECT", "PROJECTWM"].contains(&form.name.to_ascii_uppercase().as_str()) {
-            return Err(OvbaError::InvalidRequest(format!("`{}` is reserved and cannot name a user form", form.name)));
+            return Err(OvbaError::InvalidRequest(format!(
+                "`{}` is reserved and cannot name a user form",
+                form.name
+            )));
         }
         if designer_names.iter().any(|n| same_name(n, &form.name))
             || edit.upsert.iter().any(|m| same_name(&m.name, &form.name))
             || edit.remove.iter().any(|n| same_name(n, &form.name))
         {
-            return Err(OvbaError::InvalidRequest(format!("user form `{}` is listed more than once", form.name)));
+            return Err(OvbaError::InvalidRequest(format!(
+                "user form `{}` is listed more than once",
+                form.name
+            )));
         }
         let body = source::normalize_newlines(&form.code);
-        if body.split("\r\n").any(|line| line.trim_start().starts_with("Attribute VB_")) {
+        if body
+            .split("\r\n")
+            .any(|line| line.trim_start().starts_with("Attribute VB_"))
+        {
             return Err(OvbaError::InvalidRequest(format!(
                 "the code of user form `{}` must not contain `Attribute VB_` lines",
                 form.name
             )));
         }
-        let body = if body.is_empty() || body.ends_with("\r\n") { body } else { body + "\r\n" };
+        let body = if body.is_empty() || body.ends_with("\r\n") {
+            body
+        } else {
+            body + "\r\n"
+        };
         validate_designer(form)?;
         let what = format!("source of module `{}`", form.name);
         match modules.iter().position(|m| same_name(&m.name, &form.name)) {
@@ -630,7 +694,10 @@ pub(crate) fn build_project(
             }
             None => {
                 let storage_taken = loaded.is_some_and(|p| {
-                    p.tree.nodes.iter().any(|n| !n.path.is_empty() && same_name(&n.path[0], &form.name))
+                    p.tree
+                        .nodes
+                        .iter()
+                        .any(|n| !n.path.is_empty() && same_name(&n.path[0], &form.name))
                 });
                 if storage_taken {
                     return Err(OvbaError::InvalidRequest(format!(
@@ -658,7 +725,10 @@ pub(crate) fn build_project(
 
     // Stream names must be unique within the VBA storage.
     for (i, module) in modules.iter().enumerate() {
-        if modules[..i].iter().any(|m| m.stream.to_uppercase() == module.stream.to_uppercase()) {
+        if modules[..i]
+            .iter()
+            .any(|m| m.stream.to_uppercase() == module.stream.to_uppercase())
+        {
             return Err(OvbaError::InvalidRequest(format!(
                 "two modules would share the stream `{}`",
                 module.stream
@@ -740,11 +810,9 @@ pub(crate) fn build_project(
     let module_list: Vec<(ModuleKind, String)> =
         modules.iter().map(|m| (m.kind, m.name.clone())).collect();
     let project_text = match loaded.and_then(|p| p.project_text.as_deref()) {
-        Some(text) => project::regenerate_project_text(
-            text,
-            &module_list,
-            edit.project_name.as_deref(),
-        ),
+        Some(text) => {
+            project::regenerate_project_text(text, &module_list, edit.project_name.as_deref())
+        }
         None => project::new_project_text(&project_name, &module_list),
     };
     let project_bytes = codepage::encode(cp, &project_text, "PROJECT stream")?;
@@ -752,13 +820,18 @@ pub(crate) fn build_project(
     let project_wm = project::project_wm(&names, cp)?;
 
     // ---- compound file ------------------------------------------------------
-    let vba = loaded.map(|p| p.vba_storage.clone()).unwrap_or_else(|| "VBA".to_string());
+    let vba = loaded
+        .map(|p| p.vba_storage.clone())
+        .unwrap_or_else(|| "VBA".to_string());
     let mut tree = Tree::default();
     if let Some(project) = loaded {
         tree.root_meta = project.tree.root_meta.clone();
         tree.root_times = project.tree.root_times;
-        let old_streams: Vec<String> =
-            project.modules.iter().map(|m| m.stream.to_uppercase()).collect();
+        let old_streams: Vec<String> = project
+            .modules
+            .iter()
+            .map(|m| m.stream.to_uppercase())
+            .collect();
         for node in &project.tree.nodes {
             let top = node.path.len() == 1;
             let in_vba = node.path.len() == 2 && node.path[0] == vba && !node.is_storage();
@@ -785,7 +858,8 @@ pub(crate) fn build_project(
                 // Designer properties are MBCS text in the project code page.
                 if let Some(data) = &node.data {
                     if !data.is_ascii() {
-                        let text = codepage::decode_strict(project.dir.codepage, data, "VBFrame stream")?;
+                        let text =
+                            codepage::decode_strict(project.dir.codepage, data, "VBFrame stream")?;
                         node.data = Some(codepage::encode(cp, &text, "VBFrame stream")?);
                     }
                 }
@@ -793,7 +867,11 @@ pub(crate) fn build_project(
             tree.nodes.push(node);
         }
     }
-    if !tree.nodes.iter().any(|n| n.is_storage() && n.path.len() == 1 && n.path[0] == vba) {
+    if !tree
+        .nodes
+        .iter()
+        .any(|n| n.is_storage() && n.path.len() == 1 && n.path[0] == vba)
+    {
         tree.nodes.push(Node::storage(vec![vba.clone()]));
     }
     let mut changed_designers = Vec::new();
@@ -807,19 +885,26 @@ pub(crate) fn build_project(
         for (path, data) in &form.streams {
             new_nodes.push(Node::stream(designer_path(&form.name, path), data.clone()));
         }
-        let old = loaded.map(|p| designer_snapshot(p.tree.nodes.iter(), &form.name)).unwrap_or_default();
+        let old = loaded
+            .map(|p| designer_snapshot(p.tree.nodes.iter(), &form.name))
+            .unwrap_or_default();
         if old != designer_snapshot(new_nodes.iter(), &form.name) {
             changed_designers.push(form.name.clone());
         }
         tree.nodes.extend(new_nodes);
     }
-    tree.nodes.push(Node::stream(vec!["PROJECT".to_string()], project_bytes));
-    tree.nodes.push(Node::stream(vec!["PROJECTwm".to_string()], project_wm));
+    tree.nodes
+        .push(Node::stream(vec!["PROJECT".to_string()], project_bytes));
+    tree.nodes
+        .push(Node::stream(vec!["PROJECTwm".to_string()], project_wm));
     tree.nodes.push(Node::stream(
         vec![vba.clone(), "_VBA_PROJECT".to_string()],
         VBA_PROJECT_STREAM.to_vec(),
     ));
-    tree.nodes.push(Node::stream(vec![vba.clone(), "dir".to_string()], dir_compressed));
+    tree.nodes.push(Node::stream(
+        vec![vba.clone(), "dir".to_string()],
+        dir_compressed,
+    ));
     let mut built_modules = Vec::with_capacity(modules.len());
     let mut padded = Vec::new();
     for module in modules {
@@ -829,7 +914,9 @@ pub(crate) fn build_project(
             padded.push(module.name.clone());
         }
         if tree.nodes.iter().any(|n| {
-            n.path.len() == 2 && n.path[0] == vba && n.name().to_uppercase() == module.stream.to_uppercase()
+            n.path.len() == 2
+                && n.path[0] == vba
+                && n.name().to_uppercase() == module.stream.to_uppercase()
         }) {
             return Err(OvbaError::InvalidRequest(format!(
                 "module `{}` collides with an existing stream in the VBA storage",
@@ -841,7 +928,8 @@ pub(crate) fn build_project(
             kind: module.kind,
             source: codepage::decode(cp, &stored)?,
         });
-        tree.nodes.push(Node::stream(vec![vba.clone(), module.stream], compressed));
+        tree.nodes
+            .push(Node::stream(vec![vba.clone(), module.stream], compressed));
     }
     let bytes = cfbio::write_tree(&tree)?;
 
@@ -851,23 +939,33 @@ pub(crate) fn build_project(
         .map_err(|e| OvbaError::Verify(format!("the new VBA project cannot be read back: {e}")))?;
     verify_modules(&built_modules, &check.info().modules)?;
     if check.dir.codepage != cp || check.protection.is_protected() {
-        return Err(OvbaError::Verify("project properties did not read back as written".into()));
+        return Err(OvbaError::Verify(
+            "project properties did not read back as written".into(),
+        ));
     }
-    Ok(BuiltProject { bytes, modules: built_modules, padded, changed_designers })
+    Ok(BuiltProject {
+        bytes,
+        modules: built_modules,
+        padded,
+        changed_designers,
+    })
 }
 
 /// LIBID prefix of the Microsoft Forms 2.0 Object Library.
 const MSFORMS_LIBID_PREFIX: &str = "*\\G{0D452EE1-E08F-101A-852E-02608C4D0BB4}#";
 /// Its GUID in wire byte order (`OriginalTypeLib` of a control reference).
-const MSFORMS_GUID_WIRE: [u8; 16] =
-    [0xE1, 0x2E, 0x45, 0x0D, 0x8F, 0xE0, 0x1A, 0x10, 0x85, 0x2E, 0x02, 0x60, 0x8C, 0x4D, 0x0B, 0xB4];
+const MSFORMS_GUID_WIRE: [u8; 16] = [
+    0xE1, 0x2E, 0x45, 0x0D, 0x8F, 0xE0, 0x1A, 0x10, 0x85, 0x2E, 0x02, 0x60, 0x8C, 0x4D, 0x0B, 0xB4,
+];
 
 fn has_msforms_reference(parts: &[dir::ReferencePart]) -> bool {
     parts.iter().any(|part| match part {
-        dir::ReferencePart::Registered { libid, .. } => {
-            String::from_utf8_lossy(libid).to_ascii_uppercase().starts_with(MSFORMS_LIBID_PREFIX)
-        }
-        dir::ReferencePart::Control { original_type_lib, .. } => *original_type_lib == MSFORMS_GUID_WIRE,
+        dir::ReferencePart::Registered { libid, .. } => String::from_utf8_lossy(libid)
+            .to_ascii_uppercase()
+            .starts_with(MSFORMS_LIBID_PREFIX),
+        dir::ReferencePart::Control {
+            original_type_lib, ..
+        } => *original_type_lib == MSFORMS_GUID_WIRE,
         _ => false,
     })
 }
@@ -877,15 +975,26 @@ fn msforms_reference() -> Vec<dir::ReferencePart> {
     let name = "MSForms";
     let libid = "*\\G{0D452EE1-E08F-101A-852E-02608C4D0BB4}#2.0#0#C:\\Windows\\System32\\FM20.DLL#Microsoft Forms 2.0 Object Library";
     vec![
-        dir::ReferencePart::Name { name: name.as_bytes().to_vec(), unicode: Some(codepage::utf16le(name)) },
-        dir::ReferencePart::Registered { libid: libid.as_bytes().to_vec(), reserved1: 0, reserved2: 0 },
+        dir::ReferencePart::Name {
+            name: name.as_bytes().to_vec(),
+            unicode: Some(codepage::utf16le(name)),
+        },
+        dir::ReferencePart::Registered {
+            libid: libid.as_bytes().to_vec(),
+            reserved1: 0,
+            reserved2: 0,
+        },
     ]
 }
 
 /// Attribute header of a new user form module with a fresh component
 /// identity (`VB_Base = "0{guid}{guid}"`).
 fn user_form_header(name: &str) -> String {
-    let guid = || crate::crypto::new_guid().trim_matches(|c| c == '{' || c == '}').to_string();
+    let guid = || {
+        crate::crypto::new_guid()
+            .trim_matches(|c| c == '{' || c == '}')
+            .to_string()
+    };
     let (first, mut second) = (guid(), guid());
     while second == first {
         second = guid();
@@ -906,13 +1015,23 @@ fn user_form_header(name: &str) -> String {
 
 fn designer_path(form: &str, relative: &str) -> Vec<String> {
     let mut path = vec![form.to_string()];
-    path.extend(relative.split('/').filter(|s| !s.is_empty()).map(str::to_string));
+    path.extend(
+        relative
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+    );
     path
 }
 
 /// Checks that a designer storage is complete and well formed.
 fn validate_designer(form: &crate::UserForm) -> Result<(), OvbaError> {
-    let bad = |what: String| Err(OvbaError::InvalidRequest(format!("designer of user form `{}`: {what}", form.name)));
+    let bad = |what: String| {
+        Err(OvbaError::InvalidRequest(format!(
+            "designer of user form `{}`: {what}",
+            form.name
+        )))
+    };
     if !form.storages.contains_key("") {
         return bad("the form storage itself is missing".into());
     }
@@ -922,7 +1041,11 @@ fn validate_designer(form: &crate::UserForm) -> Result<(), OvbaError> {
         }
     }
     for path in form.storages.keys().chain(form.streams.keys()) {
-        if path.split('/').any(|s| s.is_empty() || s.encode_utf16().count() > 31) && !path.is_empty() {
+        if path
+            .split('/')
+            .any(|s| s.is_empty() || s.encode_utf16().count() > 31)
+            && !path.is_empty()
+        {
             return bad(format!("invalid path `{}`", path.escape_debug()));
         }
         let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
@@ -948,7 +1071,11 @@ fn designer_snapshot<'a>(nodes: impl Iterator<Item = &'a Node>, form: &str) -> V
                 None => n.clsid.unwrap_or_default(),
             };
             let path = n.path.iter().map(|s| s.to_uppercase()).collect();
-            (path, n.data.clone(), if n.is_storage() { clsid } else { [0; 16] })
+            (
+                path,
+                n.data.clone(),
+                if n.is_storage() { clsid } else { [0; 16] },
+            )
         })
         .collect();
     entries.sort();
@@ -957,7 +1084,10 @@ fn designer_snapshot<'a>(nodes: impl Iterator<Item = &'a Node>, form: &str) -> V
 
 /// Checks that `actual` (read back from a written project) is exactly
 /// `expected`: same modules in the same order, same kinds, same source text.
-pub(crate) fn verify_modules(expected: &[VbaModule], actual: &[VbaModule]) -> Result<(), OvbaError> {
+pub(crate) fn verify_modules(
+    expected: &[VbaModule],
+    actual: &[VbaModule],
+) -> Result<(), OvbaError> {
     if expected.len() != actual.len() {
         return Err(OvbaError::Verify(format!(
             "expected {} modules, found {}",
@@ -997,7 +1127,18 @@ mod tests {
         for good in ["Module1", "a", "Mod_1", "標準モジュール", "Ｍｏｄ１"] {
             assert!(validate_module_name(good).is_ok(), "{good}");
         }
-        for bad in ["", "1abc", "_x", "a b", "a.b", "a/b", "dir", "_VBA_PROJECT", "__SRP_0", &"x".repeat(32)] {
+        for bad in [
+            "",
+            "1abc",
+            "_x",
+            "a b",
+            "a.b",
+            "a/b",
+            "dir",
+            "_VBA_PROJECT",
+            "__SRP_0",
+            &"x".repeat(32),
+        ] {
             assert!(validate_module_name(bad).is_err(), "{bad}");
         }
     }

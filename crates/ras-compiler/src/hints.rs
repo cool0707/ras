@@ -37,11 +37,21 @@ struct Hints<'p> {
 impl Hints<'_> {
     /// `: T` after a declaration without a type annotation.
     fn type_hint(&mut self, name: &Ident, ty: &Type) {
-        if name.text.is_empty() || name.text.starts_with("ras$") || matches!(ty, Type::Error | Type::Void | Type::Null | Type::Ns(_)) {
+        if name.text.is_empty()
+            || name.text.starts_with("ras$")
+            || matches!(ty, Type::Error | Type::Void | Type::Null | Type::Ns(_))
+        {
             return;
         }
         let tooltip = vba_type(ty).map(|v| format!("推論された型（VBA: {v}）"));
-        self.out.push(InlayHint { offset: name.span.end().into(), label: format!(": {}", self.prog.show(ty)), kind: hint_kind::TYPE, pad_left: false, pad_right: false, tooltip });
+        self.out.push(InlayHint {
+            offset: name.span.end().into(),
+            label: format!(": {}", self.prog.show(ty)),
+            kind: hint_kind::TYPE,
+            pad_left: false,
+            pad_right: false,
+            tooltip,
+        });
     }
 
     /// The type of the local or top-level variable declared at `name`.
@@ -50,17 +60,26 @@ impl Hints<'_> {
         let off: u32 = name.span.start().into();
         if let Some(&l) = md.info.decl_locals.get(&off) {
             let f = fn_at(self.prog, self.m, off)?;
-            return self.prog.fns[f].locals.get(l).filter(|d| d.span == name.span).map(|d| d.ty.clone());
+            return self.prog.fns[f]
+                .locals
+                .get(l)
+                .filter(|d| d.span == name.span)
+                .map(|d| d.ty.clone());
         }
         if let Some(&v) = md.info.decl_globals.get(&off) {
             return Some(self.prog.vars[v].ty.clone());
         }
-        md.vars.iter().map(|&v| &self.prog.vars[v]).find(|v| v.name_span == name.span).map(|v| v.ty.clone())
+        md.vars
+            .iter()
+            .map(|&v| &self.prog.vars[v])
+            .find(|v| v.name_span == name.span)
+            .map(|v| v.ty.clone())
     }
 
     fn var_hint(&mut self, name: &Ident, init: Option<&Expr>) {
         // The type is written right there.
-        if init.is_some_and(|i| matches!(i.peel().kind, ExprKind::New { .. } | ExprKind::As { .. })) {
+        if init.is_some_and(|i| matches!(i.peel().kind, ExprKind::New { .. } | ExprKind::As { .. }))
+        {
             return;
         }
         if let Some(ty) = self.declared(name) {
@@ -87,30 +106,82 @@ impl<'a> Visit<'a> for Hints<'_> {
                     self.var_hint(&p.name, None);
                 }
             }
-            ExprKind::Call { callee, type_args, args } => {
-                let Some(call) = md.info.calls.get(&e.id) else { return };
+            ExprKind::Call {
+                callee,
+                type_args,
+                args,
+            } => {
+                let Some(call) = md.info.calls.get(&e.id) else {
+                    return;
+                };
                 let (f, skip) = match call.target {
-                    CallTarget::Fn(f) | CallTarget::Method(f) | CallTarget::Host(f) | CallTarget::DefaultMember(f) => (f, 0),
+                    CallTarget::Fn(f)
+                    | CallTarget::Method(f)
+                    | CallTarget::Host(f)
+                    | CallTarget::DefaultMember(f) => (f, 0),
                     CallTarget::Ext(f) => (f, 1),
                     _ => return,
                 };
                 // Type arguments inferred for a generic function.
-                if type_args.is_empty() && prog.fns[f].is_generic() && !call.type_args.is_empty() && call.type_args.iter().all(|t| !t.is_error() && !t.contains_param()) {
+                if type_args.is_empty()
+                    && prog.fns[f].is_generic()
+                    && !call.type_args.is_empty()
+                    && call
+                        .type_args
+                        .iter()
+                        .all(|t| !t.is_error() && !t.contains_param())
+                {
                     let end = match &callee.kind {
                         ExprKind::Member { name, .. } => name.span.end(),
                         _ => callee.span.end(),
                     };
-                    let label = format!("<{}>", call.type_args.iter().map(|t| prog.show(t)).collect::<Vec<_>>().join(", "));
-                    self.out.push(InlayHint { offset: end.into(), label, kind: hint_kind::TYPE, pad_left: false, pad_right: false, tooltip: Some("推論された型引数".into()) });
+                    let label = format!(
+                        "<{}>",
+                        call.type_args
+                            .iter()
+                            .map(|t| prog.show(t))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    self.out.push(InlayHint {
+                        offset: end.into(),
+                        label,
+                        kind: hint_kind::TYPE,
+                        pad_left: false,
+                        pad_right: false,
+                        tooltip: Some("推論された型引数".into()),
+                    });
                 }
                 self.byref_hints(e, f, skip, args);
             }
             ExprKind::New { ty, args } => {
-                let Some(call) = md.info.calls.get(&e.id) else { return };
-                let CallTarget::Ctor(c) = call.target else { return };
-                if matches!(ty, TypeRef::Named { args, .. } if args.is_empty()) && !prog.classes[c].type_params.is_empty() && !call.type_args.is_empty() && call.type_args.iter().all(|t| !t.is_error()) {
-                    let label = format!("<{}>", call.type_args.iter().map(|t| prog.show(t)).collect::<Vec<_>>().join(", "));
-                    self.out.push(InlayHint { offset: ty.span().end().into(), label, kind: hint_kind::TYPE, pad_left: false, pad_right: false, tooltip: Some("推論された型引数".into()) });
+                let Some(call) = md.info.calls.get(&e.id) else {
+                    return;
+                };
+                let CallTarget::Ctor(c) = call.target else {
+                    return;
+                };
+                if matches!(ty, TypeRef::Named { args, .. } if args.is_empty())
+                    && !prog.classes[c].type_params.is_empty()
+                    && !call.type_args.is_empty()
+                    && call.type_args.iter().all(|t| !t.is_error())
+                {
+                    let label = format!(
+                        "<{}>",
+                        call.type_args
+                            .iter()
+                            .map(|t| prog.show(t))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    self.out.push(InlayHint {
+                        offset: ty.span().end().into(),
+                        label,
+                        kind: hint_kind::TYPE,
+                        pad_left: false,
+                        pad_right: false,
+                        tooltip: Some("推論された型引数".into()),
+                    });
                 }
                 if let Some(f) = prog.classes[c].ctor {
                     self.byref_hints(e, f, 0, args);
@@ -127,10 +198,25 @@ impl Hints<'_> {
         let md = &self.prog.modules[self.m];
         let d = &self.prog.fns[f];
         for (i, a) in md.info.call_args(call.id, args).iter().enumerate() {
-            let Some(p) = d.params.get(i + skip) else { break };
-            if p.mode == ras_syntax::ast::PassMode::ByRef && !a.span.is_empty() && !matches!(a.kind, ExprKind::Undefined) {
-                let tooltip = format!("`{}` は参照渡し（byref）です。呼び出し先で書き換えられることがあります", p.name);
-                self.out.push(InlayHint { offset: a.span.start().into(), label: "byref".into(), kind: hint_kind::PARAMETER, pad_left: false, pad_right: true, tooltip: Some(tooltip) });
+            let Some(p) = d.params.get(i + skip) else {
+                break;
+            };
+            if p.mode == ras_syntax::ast::PassMode::ByRef
+                && !a.span.is_empty()
+                && !matches!(a.kind, ExprKind::Undefined)
+            {
+                let tooltip = format!(
+                    "`{}` は参照渡し（byref）です。呼び出し先で書き換えられることがあります",
+                    p.name
+                );
+                self.out.push(InlayHint {
+                    offset: a.span.start().into(),
+                    label: "byref".into(),
+                    kind: hint_kind::PARAMETER,
+                    pad_left: false,
+                    pad_right: true,
+                    tooltip: Some(tooltip),
+                });
             }
         }
     }
@@ -141,7 +227,11 @@ impl Hints<'_> {
 /// reference (spec §16.2).
 pub fn inlay_hints(prog: &Program, m: ModuleId, from: u32, to: u32) -> Vec<InlayHint> {
     let md = &prog.modules[m];
-    let mut h = Hints { prog, m, out: Vec::new() };
+    let mut h = Hints {
+        prog,
+        m,
+        out: Vec::new(),
+    };
     for item in md.ast.items.iter() {
         if let Item::Var(v) = item {
             if v.ty.is_none() && !v.declared {
@@ -150,7 +240,11 @@ pub fn inlay_hints(prog: &Program, m: ModuleId, from: u32, to: u32) -> Vec<Inlay
         }
     }
     visit_module(&md.ast, &mut h);
-    let mut out: Vec<InlayHint> = h.out.into_iter().filter(|x| from <= x.offset && x.offset <= to).collect();
+    let mut out: Vec<InlayHint> = h
+        .out
+        .into_iter()
+        .filter(|x| from <= x.offset && x.offset <= to)
+        .collect();
     out.sort_by_key(|x| x.offset);
     out
 }
@@ -158,9 +252,31 @@ pub fn inlay_hints(prog: &Program, m: ModuleId, from: u32, to: u32) -> Vec<Inlay
 // ---------------------------------------------------------------------------- semantic tokens
 
 /// The legend of the semantic tokens: LSP token types…
-pub const TOKEN_TYPES: &[&str] = &["namespace", "type", "class", "enum", "interface", "struct", "typeParameter", "parameter", "variable", "property", "enumMember", "function", "method"];
+pub const TOKEN_TYPES: &[&str] = &[
+    "namespace",
+    "type",
+    "class",
+    "enum",
+    "interface",
+    "struct",
+    "typeParameter",
+    "parameter",
+    "variable",
+    "property",
+    "enumMember",
+    "function",
+    "method",
+];
 /// …and modifiers. `byref` and `extension` are RAS's own (declared by the VS Code extension).
-pub const TOKEN_MODIFIERS: &[&str] = &["declaration", "readonly", "static", "defaultLibrary", "deprecated", "byref", "extension"];
+pub const TOKEN_MODIFIERS: &[&str] = &[
+    "declaration",
+    "readonly",
+    "static",
+    "defaultLibrary",
+    "deprecated",
+    "byref",
+    "extension",
+];
 
 mod tt {
     pub const NAMESPACE: u32 = 0;
@@ -205,12 +321,24 @@ fn classify(prog: &Program, t: &Target) -> (u32, u32) {
     match t {
         Target::Local { func, local } => {
             let l = &prog.fns[*func].locals[*local];
-            let ty = if matches!(l.kind, LocalKind::Param | LocalKind::LambdaParam | LocalKind::This) { tt::PARAMETER } else { tt::VARIABLE };
+            let ty = if matches!(
+                l.kind,
+                LocalKind::Param | LocalKind::LambdaParam | LocalKind::This
+            ) {
+                tt::PARAMETER
+            } else {
+                tt::VARIABLE
+            };
             let mut mods = 0;
             if matches!(l.kind, LocalKind::Const | LocalKind::Iter) {
                 mods |= tm::READONLY;
             }
-            if l.byref || prog.fns[*func].params.iter().any(|p| p.local == *local && p.mode == ras_syntax::ast::PassMode::ByRef) {
+            if l.byref
+                || prog.fns[*func]
+                    .params
+                    .iter()
+                    .any(|p| p.local == *local && p.mode == ras_syntax::ast::PassMode::ByRef)
+            {
                 mods |= tm::BYREF;
             }
             (ty, mods)
@@ -245,7 +373,9 @@ fn classify(prog: &Program, t: &Target) -> (u32, u32) {
                     }
                     tt::PROPERTY
                 }
-                FnKind::Abstract { .. } | FnKind::Host { class: Some(_) } | FnKind::Ctor { .. } => tt::METHOD,
+                FnKind::Abstract { .. } | FnKind::Host { class: Some(_) } | FnKind::Ctor { .. } => {
+                    tt::METHOD
+                }
                 _ if d.is_extension => {
                     mods |= tm::EXTENSION;
                     tt::FUNCTION
@@ -260,12 +390,33 @@ fn classify(prog: &Program, t: &Target) -> (u32, u32) {
             if is_lib(prog, d.module) {
                 mods |= tm::DEFAULT_LIBRARY;
             }
-            (if d.kind == ClassKind::Interface { tt::INTERFACE } else { tt::CLASS }, mods)
+            (
+                if d.kind == ClassKind::Interface {
+                    tt::INTERFACE
+                } else {
+                    tt::CLASS
+                },
+                mods,
+            )
         }
-        Target::Enum(e) => (tt::ENUM, if is_lib(prog, prog.enums[*e].module) { tm::DEFAULT_LIBRARY } else { 0 } | deprecated(prog.enums[*e].doc.as_ref())),
+        Target::Enum(e) => (
+            tt::ENUM,
+            if is_lib(prog, prog.enums[*e].module) {
+                tm::DEFAULT_LIBRARY
+            } else {
+                0
+            } | deprecated(prog.enums[*e].doc.as_ref()),
+        ),
         Target::EnumMember(e, i) => {
-            let lib = if is_lib(prog, prog.enums[*e].module) { tm::DEFAULT_LIBRARY } else { 0 };
-            (tt::ENUM_MEMBER, tm::READONLY | lib | deprecated(prog.enums[*e].members[*i].doc.as_ref()))
+            let lib = if is_lib(prog, prog.enums[*e].module) {
+                tm::DEFAULT_LIBRARY
+            } else {
+                0
+            };
+            (
+                tt::ENUM_MEMBER,
+                tm::READONLY | lib | deprecated(prog.enums[*e].members[*i].doc.as_ref()),
+            )
         }
         Target::Field(c, i) => {
             let f = &prog.classes[*c].fields[*i];
@@ -297,7 +448,9 @@ struct Tokens<'p> {
 impl Tokens<'_> {
     fn push(&mut self, span: Span, ty: u32, mods: u32) {
         if !span.is_empty() {
-            self.out.entry(span.start().into()).or_insert((span.len().into(), ty, mods));
+            self.out
+                .entry(span.start().into())
+                .or_insert((span.len().into(), ty, mods));
         }
     }
 
@@ -338,13 +491,27 @@ impl<'a> Visit<'a> for Tokens<'_> {
             if ext {
                 mods |= tm::EXTENSION;
             }
-            self.push(span, if ext || (is_member && ty == tt::FUNCTION) { tt::METHOD } else { ty }, mods);
+            self.push(
+                span,
+                if ext || (is_member && ty == tt::FUNCTION) {
+                    tt::METHOD
+                } else {
+                    ty
+                },
+                mods,
+            );
             return;
         }
         match md.info.res.get(&e.id) {
             Some(Res::Module(_)) => self.push(span, tt::NAMESPACE, 0),
-            Some(Res::Namespace(_) | Res::Builtin(_)) => self.push(span, tt::NAMESPACE, tm::DEFAULT_LIBRARY),
-            Some(Res::Intrinsic(_)) => self.push(span, if is_member { tt::METHOD } else { tt::FUNCTION }, tm::DEFAULT_LIBRARY),
+            Some(Res::Namespace(_) | Res::Builtin(_)) => {
+                self.push(span, tt::NAMESPACE, tm::DEFAULT_LIBRARY)
+            }
+            Some(Res::Intrinsic(_)) => self.push(
+                span,
+                if is_member { tt::METHOD } else { tt::FUNCTION },
+                tm::DEFAULT_LIBRARY,
+            ),
             Some(Res::Dynamic) if is_member => self.push(span, tt::PROPERTY, 0),
             _ => {}
         }
@@ -359,7 +526,11 @@ impl<'a> Visit<'a> for Tokens<'_> {
             return;
         }
         if path.len() == 2 {
-            let lib = if self.prog.namespaces.contains_key(&path[0].text) { tm::DEFAULT_LIBRARY } else { 0 };
+            let lib = if self.prog.namespaces.contains_key(&path[0].text) {
+                tm::DEFAULT_LIBRARY
+            } else {
+                0
+            };
             self.push(path[0].span, tt::NAMESPACE, lib);
         }
         if let Some(t) = type_target(self.prog, self.m, path, tps) {
@@ -372,7 +543,11 @@ impl<'a> Visit<'a> for Tokens<'_> {
 /// code units, five numbers per token).
 pub fn semantic_tokens(prog: &Program, m: ModuleId) -> Vec<u32> {
     let md = &prog.modules[m];
-    let mut toks = Tokens { prog, m, out: HashMap::new() };
+    let mut toks = Tokens {
+        prog,
+        m,
+        out: HashMap::new(),
+    };
     // Declarations.
     for &f in &md.fns {
         let d = &prog.fns[f];
@@ -380,7 +555,10 @@ pub fn semantic_tokens(prog: &Program, m: ModuleId) -> Vec<u32> {
             toks.target(d.name_span, &Target::Fn(f), true);
         }
         for (l, local) in d.locals.iter().enumerate() {
-            if !local.name.starts_with("ras$") && local.kind != LocalKind::This && md.info.decl_locals.get(&u32::from(local.span.start())) == Some(&l) {
+            if !local.name.starts_with("ras$")
+                && local.kind != LocalKind::This
+                && md.info.decl_locals.get(&u32::from(local.span.start())) == Some(&l)
+            {
                 toks.target(local.span, &Target::Local { func: f, local: l }, true);
             }
         }
@@ -394,7 +572,11 @@ pub fn semantic_tokens(prog: &Program, m: ModuleId) -> Vec<u32> {
     for &e in &md.enums {
         toks.target(prog.enums[e].name_span, &Target::Enum(e), true);
         for i in 0..prog.enums[e].members.len() {
-            toks.target(prog.enums[e].members[i].span, &Target::EnumMember(e, i), true);
+            toks.target(
+                prog.enums[e].members[i].span,
+                &Target::EnumMember(e, i),
+                true,
+            );
         }
     }
     for &v in &md.vars {
@@ -414,9 +596,13 @@ pub fn semantic_tokens(prog: &Program, m: ModuleId) -> Vec<u32> {
             }
             Item::TypeAlias(a) => toks.push(a.name.span, tt::TYPE, tm::DECLARATION),
             Item::Import(imp) => {
-                let Some(t) = crate::collect::import_target(prog, m, &imp.source) else { continue };
+                let Some(t) = crate::collect::import_target(prog, m, &imp.source) else {
+                    continue;
+                };
                 for n in &imp.names {
-                    let Some(sym) = prog.modules[t].exports.get(&n.name.text) else { continue };
+                    let Some(sym) = prog.modules[t].exports.get(&n.name.text) else {
+                        continue;
+                    };
                     let target = match sym {
                         Sym::Alias(_) => {
                             toks.push(n.name.span, tt::TYPE, 0);
@@ -452,13 +638,26 @@ pub fn semantic_tokens(prog: &Program, m: ModuleId) -> Vec<u32> {
         if start < last_end {
             continue; // overlapping
         }
-        let text = md.text.get(start as usize..(start + len) as usize).unwrap_or("");
+        let text = md
+            .text
+            .get(start as usize..(start + len) as usize)
+            .unwrap_or("");
         if text.contains('\n') {
             continue;
         }
         let (line, col) = md.line_col_utf16(start);
-        let delta_col = if line == last_line { col - last_col } else { col };
-        data.extend([line - last_line, delta_col, text.encode_utf16().count() as u32, ty, mods]);
+        let delta_col = if line == last_line {
+            col - last_col
+        } else {
+            col
+        };
+        data.extend([
+            line - last_line,
+            delta_col,
+            text.encode_utf16().count() as u32,
+            ty,
+            mods,
+        ]);
         (last_line, last_col, last_end) = (line, col, start + len);
     }
     data
@@ -486,7 +685,11 @@ pub fn folding_ranges(prog: &Program, m: ModuleId) -> Vec<Fold> {
     let flush = |c: &mut Option<(u32, u32)>, out: &mut Vec<Fold>| {
         if let Some((a, b)) = c.take() {
             if b > a {
-                out.push(Fold { start: a, end: b, kind: Some("comment") });
+                out.push(Fold {
+                    start: a,
+                    end: b,
+                    kind: Some("comment"),
+                });
             }
         }
     };
@@ -498,10 +701,17 @@ pub fn folding_ranges(prog: &Program, m: ModuleId) -> Vec<Fold> {
                 if let Some(open) = stack.pop() {
                     let (a, b) = (line(open), line(t.start));
                     // A closing bracket at the start of its line stays visible.
-                    let leads = md.text[..t.start as usize].rsplit('\n').next().is_some_and(|before| before.trim().is_empty());
+                    let leads = md.text[..t.start as usize]
+                        .rsplit('\n')
+                        .next()
+                        .is_some_and(|before| before.trim().is_empty());
                     let end = if leads { b.saturating_sub(1) } else { b };
                     if end > a {
-                        out.push(Fold { start: a, end, kind: None });
+                        out.push(Fold {
+                            start: a,
+                            end,
+                            kind: None,
+                        });
                     }
                 }
             }
@@ -509,7 +719,11 @@ pub fn folding_ranges(prog: &Program, m: ModuleId) -> Vec<Fold> {
                 flush(&mut comments, &mut out);
                 let (a, b) = (line(t.start), line(t.end));
                 if b > a {
-                    out.push(Fold { start: a, end: b, kind: Some("comment") });
+                    out.push(Fold {
+                        start: a,
+                        end: b,
+                        kind: Some("comment"),
+                    });
                 }
             }
             SyntaxKind::LINE_COMMENT => {
@@ -523,12 +737,19 @@ pub fn folding_ranges(prog: &Program, m: ModuleId) -> Vec<Fold> {
                 if body.starts_with("#endregion") {
                     flush(&mut comments, &mut out);
                     if let Some(a) = regions.pop() {
-                        out.push(Fold { start: a, end: l, kind: Some("region") });
+                        out.push(Fold {
+                            start: a,
+                            end: l,
+                            kind: Some("region"),
+                        });
                     }
                     continue;
                 }
                 // Only comments on lines of their own fold together.
-                let own_line = md.text[..t.start as usize].rsplit('\n').next().is_some_and(|b| b.trim().is_empty());
+                let own_line = md.text[..t.start as usize]
+                    .rsplit('\n')
+                    .next()
+                    .is_some_and(|b| b.trim().is_empty());
                 match comments {
                     Some((a, b)) if own_line && l == b + 1 => comments = Some((a, l)),
                     _ => {
@@ -545,11 +766,29 @@ pub fn folding_ranges(prog: &Program, m: ModuleId) -> Vec<Fold> {
     }
     flush(&mut comments, &mut out);
     // The imports at the top.
-    let imports: Vec<Span> = md.ast.items.iter().filter_map(|i| if let Item::Import(imp) = i { Some(imp.span) } else { None }).collect();
+    let imports: Vec<Span> = md
+        .ast
+        .items
+        .iter()
+        .filter_map(|i| {
+            if let Item::Import(imp) = i {
+                Some(imp.span)
+            } else {
+                None
+            }
+        })
+        .collect();
     if let (Some(first), Some(last)) = (imports.first(), imports.last()) {
-        let (a, b) = (line(first.start().into()), line(u32::from(last.end()).saturating_sub(1)));
+        let (a, b) = (
+            line(first.start().into()),
+            line(u32::from(last.end()).saturating_sub(1)),
+        );
         if b > a {
-            out.push(Fold { start: a, end: b, kind: Some("imports") });
+            out.push(Fold {
+                start: a,
+                end: b,
+                kind: Some("imports"),
+            });
         }
     }
     out.sort_by_key(|f| (f.start, std::cmp::Reverse(f.end)));
@@ -563,7 +802,13 @@ mod tests {
     use std::path::PathBuf;
 
     fn program(text: &str) -> Program {
-        let src = SourceInput { path: PathBuf::from("/p/src/main.ras"), rel_path: "src/main.ras".into(), key: "main".into(), kind: ModuleKind::User, text: text.into() };
+        let src = SourceInput {
+            path: PathBuf::from("/p/src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: text.into(),
+        };
         analyze(vec![src], Config::default())
     }
 
@@ -573,16 +818,37 @@ mod tests {
         let prog = program(src);
         let m = prog.module_by_key("main").unwrap();
         let hints = inlay_hints(&prog, m, 0, src.len() as u32);
-        let shown: Vec<(String, String)> = hints.iter().map(|h| (src[..h.offset as usize].lines().last().unwrap_or("").trim().to_string(), h.label.clone())).collect();
-        let has = |before: &str, label: &str| shown.iter().any(|(b, l)| b.ends_with(before) && l == label);
+        let shown: Vec<(String, String)> = hints
+            .iter()
+            .map(|h| {
+                (
+                    src[..h.offset as usize]
+                        .lines()
+                        .last()
+                        .unwrap_or("")
+                        .trim()
+                        .to_string(),
+                    h.label.clone(),
+                )
+            })
+            .collect();
+        let has = |before: &str, label: &str| {
+            shown.iter().any(|(b, l)| b.ends_with(before) && l == label)
+        };
         assert!(has("const limit", ": int"), "{shown:?}");
         assert!(has("let total", ": int"), "{shown:?}");
-        assert!(!shown.iter().any(|(b, _)| b.ends_with("const p")), "`new` shows its type: {shown:?}");
+        assert!(
+            !shown.iter().any(|(b, _)| b.ends_with("const p")),
+            "`new` shows its type: {shown:?}"
+        );
         assert!(has("const names", ": string[]"), "{shown:?}");
         assert!(has("map(s", ": string"), "lambda parameter: {shown:?}");
         assert!(has("for (const n", ": string"), "{shown:?}");
         assert!(has("bump(", "byref"), "{shown:?}");
-        assert!(has("bump(step: 1, n:", "byref"), "named arguments: {shown:?}");
+        assert!(
+            has("bump(step: 1, n:", "byref"),
+            "named arguments: {shown:?}"
+        );
         assert!(has("first", "<string>"), "{shown:?}");
         assert_eq!(hints.iter().filter(|h| h.label == "byref").count(), 2);
     }
@@ -606,9 +872,19 @@ mod tests {
             col += t[1];
             let start = md.offset_of(line, col) as usize;
             let end = md.offset_of(line, col + t[2]) as usize;
-            out.push((md.text[start..end].to_string(), TOKEN_TYPES[t[3] as usize], t[4]));
+            out.push((
+                md.text[start..end].to_string(),
+                TOKEN_TYPES[t[3] as usize],
+                t[4],
+            ));
         }
-        let find = |text: &str, n: usize| out.iter().filter(|o| o.0 == text).nth(n).cloned().unwrap_or_else(|| panic!("{text}: {out:?}"));
+        let find = |text: &str, n: usize| {
+            out.iter()
+                .filter(|o| o.0 == text)
+                .nth(n)
+                .cloned()
+                .unwrap_or_else(|| panic!("{text}: {out:?}"))
+        };
         assert_eq!(find("acc", 0).1, "parameter");
         assert!(find("acc", 0).2 & tm::BYREF != 0 && find("acc", 0).2 & tm::DECLARATION != 0);
         assert!(find("acc", 1).2 & tm::BYREF != 0 && find("acc", 1).2 & tm::DECLARATION == 0);
@@ -627,7 +903,10 @@ mod tests {
         let src = "// a\n// b\n/**\n * doc\n */\nexport function run() {\n    const xs = [\n        1,\n    ];\n    // #region setup\n    msgBox(\"x\");\n    // #endregion\n}\n";
         let prog = program(src);
         let m = prog.module_by_key("main").unwrap();
-        let folds: Vec<(u32, u32, Option<&str>)> = folding_ranges(&prog, m).into_iter().map(|f| (f.start, f.end, f.kind)).collect();
+        let folds: Vec<(u32, u32, Option<&str>)> = folding_ranges(&prog, m)
+            .into_iter()
+            .map(|f| (f.start, f.end, f.kind))
+            .collect();
         assert!(folds.contains(&(0, 1, Some("comment"))), "{folds:?}");
         assert!(folds.contains(&(2, 4, Some("comment"))), "{folds:?}");
         assert!(folds.contains(&(5, 11, None)), "{folds:?}");

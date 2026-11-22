@@ -74,8 +74,25 @@ pub fn array_member(name: &str, dims: usize) -> Option<Intr> {
 }
 
 pub const ARRAY_MEMBERS: &[&str] = &[
-    "length", "push", "pop", "map", "filter", "forEach", "reduce", "some", "every", "find", "findIndex", "indexOf",
-    "includes", "join", "slice", "sort", "reverse", "concat", "clear",
+    "length",
+    "push",
+    "pop",
+    "map",
+    "filter",
+    "forEach",
+    "reduce",
+    "some",
+    "every",
+    "find",
+    "findIndex",
+    "indexOf",
+    "includes",
+    "join",
+    "slice",
+    "sort",
+    "reverse",
+    "concat",
+    "clear",
 ];
 
 /// Array-style members of a host collection (`worksheets.filter(...)`, spec §4.4).
@@ -96,7 +113,17 @@ pub fn collection_member(name: &str) -> Option<Intr> {
     })
 }
 
-pub const COLLECTION_MEMBERS: &[&str] = &["map", "filter", "forEach", "reduce", "some", "every", "find", "findIndex", "toArray"];
+pub const COLLECTION_MEMBERS: &[&str] = &[
+    "map",
+    "filter",
+    "forEach",
+    "reduce",
+    "some",
+    "every",
+    "find",
+    "findIndex",
+    "toArray",
+];
 
 pub fn string_member(name: &str) -> Option<Intr> {
     use Intr::*;
@@ -129,9 +156,31 @@ pub fn string_member(name: &str) -> Option<Intr> {
 }
 
 pub const STRING_MEMBERS: &[&str] = &[
-    "length", "trim", "trimStart", "trimEnd", "toUpperCase", "toLowerCase", "substring", "substr", "slice", "indexOf",
-    "lastIndexOf", "includes", "startsWith", "endsWith", "padStart", "padEnd", "padLeft", "padRight", "repeat",
-    "replace", "replaceAll", "split", "charAt", "charCodeAt", "toString",
+    "length",
+    "trim",
+    "trimStart",
+    "trimEnd",
+    "toUpperCase",
+    "toLowerCase",
+    "substring",
+    "substr",
+    "slice",
+    "indexOf",
+    "lastIndexOf",
+    "includes",
+    "startsWith",
+    "endsWith",
+    "padStart",
+    "padEnd",
+    "padLeft",
+    "padRight",
+    "repeat",
+    "replace",
+    "replaceAll",
+    "split",
+    "charAt",
+    "charCodeAt",
+    "toString",
 ];
 
 pub fn map_member(name: &str) -> Option<Intr> {
@@ -149,7 +198,9 @@ pub fn map_member(name: &str) -> Option<Intr> {
     })
 }
 
-pub const MAP_MEMBERS: &[&str] = &["get", "set", "has", "delete", "size", "keys", "values", "clear"];
+pub const MAP_MEMBERS: &[&str] = &[
+    "get", "set", "has", "delete", "size", "keys", "values", "clear",
+];
 
 pub fn math_member(name: &str) -> Option<Intr> {
     use Intr::*;
@@ -178,8 +229,25 @@ pub fn math_member(name: &str) -> Option<Intr> {
 }
 
 pub const MATH_MEMBERS: &[&str] = &[
-    "abs", "floor", "ceil", "round", "bankersRound", "trunc", "sqrt", "pow", "min", "max", "sin", "cos", "tan", "atan",
-    "log", "exp", "random", "sign", "PI",
+    "abs",
+    "floor",
+    "ceil",
+    "round",
+    "bankersRound",
+    "trunc",
+    "sqrt",
+    "pow",
+    "min",
+    "max",
+    "sin",
+    "cos",
+    "tan",
+    "atan",
+    "log",
+    "exp",
+    "random",
+    "sign",
+    "PI",
 ];
 
 /// Built-in global functions (resolved after user and host names).
@@ -208,9 +276,23 @@ pub fn global_fn(name: &str) -> Option<Intr> {
 }
 
 pub const GLOBAL_FNS: &[&str] = &[
-    "parseInt", "parseFloat", "fastMode", "suspendScreen", "resumeScreen", "suspendEvents", "resumeEvents",
-    "suspendCalc", "resumeCalc", "suspendAlerts", "resumeAlerts", "suspendAll", "resumeAll", "status", "sleep",
-    "waitUntil", "yieldNow",
+    "parseInt",
+    "parseFloat",
+    "fastMode",
+    "suspendScreen",
+    "resumeScreen",
+    "suspendEvents",
+    "resumeEvents",
+    "suspendCalc",
+    "resumeCalc",
+    "suspendAlerts",
+    "resumeAlerts",
+    "suspendAll",
+    "resumeAll",
+    "status",
+    "sleep",
+    "waitUntil",
+    "yieldNow",
 ];
 
 /// Built-in namespaces usable as `Name.member`.
@@ -219,7 +301,9 @@ pub const BUILTIN_NAMESPACES: &[&str] = &["Math", "console", "Platform"];
 pub fn builtin_ns_member(ns: &str, name: &str) -> Option<Intr> {
     match ns {
         "Math" => math_member(name),
-        "console" => matches!(name, "log" | "debug" | "info" | "warn" | "error").then_some(Intr::ConsoleLog),
+        "console" => {
+            matches!(name, "log" | "debug" | "info" | "warn" | "error").then_some(Intr::ConsoleLog)
+        }
         "Platform" => match name {
             "is64bit" => Some(Intr::PlatformIs64),
             "isVBA7" => Some(Intr::PlatformIsVba7),
@@ -234,7 +318,9 @@ pub const EVENT_MEMBERS: &[&str] = &["on", "addEventListener"];
 
 /// Members the compiler adds to host types (`Excel.Range.toArray()` …).
 pub fn host_member(prog: &Program, recv: &Type, name: &str) -> Option<Intr> {
-    let Type::Class(id, _) = recv else { return None };
+    let Type::Class(id, _) = recv else {
+        return None;
+    };
     let c = &prog.classes[*id];
     if c.kind != ClassKind::Host {
         return None;
@@ -261,12 +347,33 @@ impl Intr {
     /// True for members read without a call (`arr.length`, `Math.PI`).
     pub fn is_property(self) -> bool {
         use Intr::*;
-        matches!(self, ArrLength | ArrRows | ArrCols | StrLength | MapSize | MathPi | PlatformIs64 | PlatformIsVba7)
+        matches!(
+            self,
+            ArrLength
+                | ArrRows
+                | ArrCols
+                | StrLength
+                | MapSize
+                | MathPi
+                | PlatformIs64
+                | PlatformIsVba7
+        )
     }
 
     /// Array methods whose callback can be fused into a loop (spec §4.1).
     pub fn takes_lambda(self) -> bool {
         use Intr::*;
-        matches!(self, ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind | ArrFindIndex | ArrSort)
+        matches!(
+            self,
+            ArrMap
+                | ArrFilter
+                | ArrForEach
+                | ArrReduce
+                | ArrSome
+                | ArrEvery
+                | ArrFind
+                | ArrFindIndex
+                | ArrSort
+        )
     }
 }

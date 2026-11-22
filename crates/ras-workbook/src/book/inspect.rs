@@ -68,7 +68,11 @@ pub struct SheetInfo {
 }
 
 fn sqref(s: &umya_spreadsheet::SequenceOfReferences) -> String {
-    s.range_collection().iter().map(|r| r.range()).collect::<Vec<_>>().join(",")
+    s.range_collection()
+        .iter()
+        .map(|r| r.range())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 impl Book {
@@ -93,16 +97,34 @@ impl Book {
         at.dedup();
         let mut out = Vec::with_capacity(at.len());
         for c in at {
-            let has_formula = self.model.sheet(si).and_then(|s| s.cell(c)).is_some_and(|x| x.formula.is_some());
+            let has_formula = self
+                .model
+                .sheet(si)
+                .and_then(|s| s.cell(c))
+                .is_some_and(|x| x.formula.is_some());
             let text_of = |v: Val| match v {
                 Val::Text(s) => s,
                 _ => String::new(),
             };
             let value = self.read(si, c, Read::Value);
-            let (formula, r1c1) = if has_formula { (Some(text_of(self.read(si, c, Read::Formula2))), Some(text_of(self.read(si, c, Read::FormulaR1C1)))) } else { (None, None) };
+            let (formula, r1c1) = if has_formula {
+                (
+                    Some(text_of(self.read(si, c, Read::Formula2))),
+                    Some(text_of(self.read(si, c, Read::FormulaR1C1))),
+                )
+            } else {
+                (None, None)
+            };
             let number_format = self.number_format_code(si, c);
             let text = text_of(self.read(si, c, Read::Text));
-            out.push(CellInfo { at: c, value, formula, r1c1, number_format, text });
+            out.push(CellInfo {
+                at: c,
+                value,
+                formula,
+                r1c1,
+                number_format,
+                text,
+            });
         }
         Ok(out)
     }
@@ -122,15 +144,23 @@ impl Book {
     /// The formulas of a sheet, those filled down or across written once.
     pub fn formula_regions(&mut self, si: usize) -> Result<Vec<FormulaRegion>> {
         let all = RangeRef::new(CellRef::new(0, 0), CellRef::new(MAX_ROWS - 1, MAX_COLS - 1));
-        let cells: Vec<CellInfo> = self.cells(si, all)?.into_iter().filter(|c| c.formula.is_some()).collect();
-        let by_at: BTreeMap<(u32, u32), &CellInfo> = cells.iter().map(|c| ((c.at.row, c.at.col), c)).collect();
+        let cells: Vec<CellInfo> = self
+            .cells(si, all)?
+            .into_iter()
+            .filter(|c| c.formula.is_some())
+            .collect();
+        let by_at: BTreeMap<(u32, u32), &CellInfo> =
+            cells.iter().map(|c| ((c.at.row, c.at.col), c)).collect();
         let mut taken: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
         let mut out = Vec::new();
         for c in &cells {
             if taken.contains(&(c.at.row, c.at.col)) {
                 continue;
             }
-            let same = |row: u32, col: u32, taken: &std::collections::HashSet<(u32, u32)>| !taken.contains(&(row, col)) && by_at.get(&(row, col)).is_some_and(|o| o.r1c1 == c.r1c1);
+            let same = |row: u32, col: u32, taken: &std::collections::HashSet<(u32, u32)>| {
+                !taken.contains(&(row, col))
+                    && by_at.get(&(row, col)).is_some_and(|o| o.r1c1 == c.r1c1)
+            };
             let mut down = c.at.row;
             while same(down + 1, c.at.col, &taken) {
                 down += 1;
@@ -140,14 +170,23 @@ impl Book {
                 right += 1;
             }
             // The longer run; a block filled both ways comes out as its columns.
-            let end = if down - c.at.row >= right - c.at.col { CellRef::new(down, c.at.col) } else { CellRef::new(c.at.row, right) };
+            let end = if down - c.at.row >= right - c.at.col {
+                CellRef::new(down, c.at.col)
+            } else {
+                CellRef::new(c.at.row, right)
+            };
             for row in c.at.row..=end.row {
                 for col in c.at.col..=end.col {
                     taken.insert((row, col));
                 }
             }
             let range = RangeRef::new(c.at, end);
-            out.push(FormulaRegion { range, formula: c.formula.clone().unwrap_or_default(), r1c1: c.r1c1.clone().unwrap_or_default(), count: range.count() as usize });
+            out.push(FormulaRegion {
+                range,
+                formula: c.formula.clone().unwrap_or_default(),
+                r1c1: c.r1c1.clone().unwrap_or_default(),
+                count: range.count() as usize,
+            });
         }
         Ok(out)
     }
@@ -182,15 +221,25 @@ impl Book {
             validations: Vec::new(),
             conditional: Vec::new(),
         };
-        let Ok(ws) = self.file.sheet(si) else { return Ok(info) };
+        let Ok(ws) = self.file.sheet(si) else {
+            return Ok(info);
+        };
         info.merged = ws.merge_cells().iter().map(|r| r.range()).collect();
         info.filter = ws.auto_filter().map(|f| f.range().range());
         for t in ws.tables() {
             let (a, b) = t.area();
-            let name = if t.display_name().is_empty() { t.name() } else { t.display_name() };
+            let name = if t.display_name().is_empty() {
+                t.name()
+            } else {
+                t.display_name()
+            };
             info.tables.push(TableInfo {
                 name: name.to_string(),
-                range: format!("{}:{}", a.to_string().replace('$', ""), b.to_string().replace('$', "")),
+                range: format!(
+                    "{}:{}",
+                    a.to_string().replace('$', ""),
+                    b.to_string().replace('$', "")
+                ),
                 columns: t.columns().iter().map(|c| c.name().to_string()).collect(),
                 totals_row: t.totals_row_shown(),
             });
@@ -208,15 +257,29 @@ impl Book {
                     }
                 }
                 // `between` is what the file leaves out; it means nothing for a list.
-                let operator = if matches!(kind, "list" | "custom" | "none") { String::new() } else { v.operator().value_string().to_string() };
-                info.validations.push(RuleInfo { ranges: sqref(v.sequence_of_references()), kind: kind.to_string(), operator, formulas });
+                let operator = if matches!(kind, "list" | "custom" | "none") {
+                    String::new()
+                } else {
+                    v.operator().value_string().to_string()
+                };
+                info.validations.push(RuleInfo {
+                    ranges: sqref(v.sequence_of_references()),
+                    kind: kind.to_string(),
+                    operator,
+                    formulas,
+                });
             }
         }
         for cf in ws.conditional_formatting_collection() {
             let ranges = sqref(cf.sequence_of_references());
             for rule in cf.conditional_collection() {
                 let kind = rule.get_type().value_string().to_string();
-                let mut formulas: Vec<String> = rule.formula_collection().iter().map(|f| f.address_str()).filter(|s| !s.is_empty()).collect();
+                let mut formulas: Vec<String> = rule
+                    .formula_collection()
+                    .iter()
+                    .map(|f| f.address_str())
+                    .filter(|s| !s.is_empty())
+                    .collect();
                 if formulas.is_empty() {
                     if let Some(f) = rule.formula() {
                         let s = f.address_str();
@@ -228,8 +291,17 @@ impl Book {
                 if !rule.text().is_empty() {
                     formulas.push(format!("\"{}\"", rule.text()));
                 }
-                let operator = if kind == "cellIs" { rule.operator().value_string().to_string() } else { String::new() };
-                info.conditional.push(RuleInfo { ranges: ranges.clone(), kind, operator, formulas });
+                let operator = if kind == "cellIs" {
+                    rule.operator().value_string().to_string()
+                } else {
+                    String::new()
+                };
+                info.conditional.push(RuleInfo {
+                    ranges: ranges.clone(),
+                    kind,
+                    operator,
+                    formulas,
+                });
             }
         }
         Ok(info)
@@ -241,9 +313,15 @@ impl Book {
             return Some(i);
         }
         let n = self.sheet_count();
-        if let Some(i) = (0..n).find(|&i| self.code_name(i).is_some_and(|c| c.eq_ignore_ascii_case(key))) {
+        if let Some(i) = (0..n).find(|&i| {
+            self.code_name(i)
+                .is_some_and(|c| c.eq_ignore_ascii_case(key))
+        }) {
             return Some(i);
         }
-        key.parse::<usize>().ok().filter(|i| (1..=n).contains(i)).map(|i| i - 1)
+        key.parse::<usize>()
+            .ok()
+            .filter(|i| (1..=n).contains(i))
+            .map(|i| i - 1)
     }
 }

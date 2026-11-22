@@ -92,7 +92,8 @@ fn vba_string(text: &str, codepage: u16) -> String {
     };
     for ch in text.chars() {
         let plain = !ch.is_control()
-            && (ch.is_ascii() || ras_ovba::encode_text(codepage, ch.encode_utf8(&mut [0; 4])).is_ok());
+            && (ch.is_ascii()
+                || ras_ovba::encode_text(codepage, ch.encode_utf8(&mut [0; 4])).is_ok());
         if plain {
             if ch == '"' {
                 literal.push('"');
@@ -296,7 +297,10 @@ pub fn code_behind(source: &str) -> String {
         .lines()
         .skip_while(|l| l.starts_with("Attribute ") || l.starts_with("VERSION "))
         .collect();
-    if lines.first().is_some_and(|l| l.starts_with(RAS_FORM_MARKER)) {
+    if lines
+        .first()
+        .is_some_and(|l| l.starts_with(RAS_FORM_MARKER))
+    {
         lines.remove(0);
     }
     let joined: String = lines.iter().map(|l| format!("{l}\n")).collect();
@@ -333,7 +337,8 @@ mod tests {
         compose("forms/F.form.json", &designer, spec, code, 932).unwrap()
     }
 
-    const COMBO: &str = r#"{"id":"c","name":"cboKind","type":"ComboBox","list":["A","B \"x\""],"selectedIndex":1}"#;
+    const COMBO: &str =
+        r#"{"id":"c","name":"cboKind","type":"ComboBox","list":["A","B \"x\""],"selectedIndex":1}"#;
 
     #[test]
     fn strings_become_vba_expressions() {
@@ -354,17 +359,29 @@ mod tests {
         let code = compose_for(&spec, "Private Sub txt_Change()\nEnd Sub\n");
         let mut lines = code.lines();
         let marker = lines.next().unwrap();
-        assert!(marker.starts_with("' RAS-FORM forms/F.form.json design="), "{marker}");
+        assert!(
+            marker.starts_with("' RAS-FORM forms/F.form.json design="),
+            "{marker}"
+        );
         let fields: Vec<&str> = marker.split(' ').skip(3).collect();
         assert_eq!(fields.len(), 2, "{marker}");
-        assert!(fields[0].starts_with("design=") && fields[0].len() == 7 + 16, "{marker}");
-        assert!(fields[1].starts_with("code=") && fields[1].len() == 5 + 16, "{marker}");
+        assert!(
+            fields[0].starts_with("design=") && fields[0].len() == 7 + 16,
+            "{marker}"
+        );
+        assert!(
+            fields[1].starts_with("code=") && fields[1].len() == 5 + 16,
+            "{marker}"
+        );
         // The code hash follows the code, the design hash does not.
         let other = compose_for(&spec, "Private Sub txt_Change()\n    Beep\nEnd Sub\n");
         let other: Vec<&str> = other.lines().next().unwrap().split(' ').skip(3).collect();
         assert_eq!(other[0], fields[0]);
         assert_ne!(other[1], fields[1]);
-        assert_eq!(lines.collect::<Vec<_>>(), ["Private Sub txt_Change()", "End Sub"]);
+        assert_eq!(
+            lines.collect::<Vec<_>>(),
+            ["Private Sub txt_Change()", "End Sub"]
+        );
         assert_eq!(code_behind(&code), "Private Sub txt_Change()\nEnd Sub\n");
     }
 
@@ -379,7 +396,10 @@ mod tests {
             "Private Sub RAS_FormInit()\n    With Me.lstStaff\n        .AddItem \"001\"\n        .List(.ListCount - 1, 1) = \"山田\"\n        .List(.ListCount - 1, 2) = \"営業\"\n        .AddItem \"002\"\n        .AddItem \"003\"\n        .List(.ListCount - 1, 1) = \"\"\n    End With\nEnd Sub\n"
         );
         // 1 to 10 columns.
-        for bad in [r#"[]"#, r#"["1","2","3","4","5","6","7","8","9","10","11"]"#] {
+        for bad in [
+            r#"[]"#,
+            r#"["1","2","3","4","5","6","7","8","9","10","11"]"#,
+        ] {
             let text = format!(
                 r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{{"id":"l","name":"lst","type":"ListBox","list":[{bad}]}}]}}"#
             );
@@ -424,7 +444,8 @@ mod tests {
         assert!(!compose_for(&spec, elsewhere).contains("UserForm_Initialize"));
 
         // A mention in a comment or a string is not a call.
-        let comment = "Private Sub UserForm_Initialize() ' RAS_FormInit\n    x = \"RAS_FormInit\"\nEnd Sub\n";
+        let comment =
+            "Private Sub UserForm_Initialize() ' RAS_FormInit\n    x = \"RAS_FormInit\"\nEnd Sub\n";
         assert!(compose_for(&spec, comment).contains("RAS_FormInit '--- RAS ---"));
     }
 
@@ -447,7 +468,10 @@ mod tests {
         assert_ne!(design_hash(&a), design_hash(&b));
         // List items are not part of the design.
         let items = COMBO.replace("\"A\"", "\"Z\"");
-        assert_eq!(design_hash(&a), design_hash(&crate::compile(&spec(&items), 932).unwrap()));
+        assert_eq!(
+            design_hash(&a),
+            design_hash(&crate::compile(&spec(&items), 932).unwrap())
+        );
     }
 
     #[test]

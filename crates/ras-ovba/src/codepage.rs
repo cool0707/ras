@@ -132,8 +132,10 @@ pub(crate) fn utf16le(text: &str) -> Vec<u8> {
 
 /// Decodes UTF-16LE bytes (lossy; an odd trailing byte is ignored).
 pub(crate) fn from_utf16le(bytes: &[u8]) -> String {
-    let units: Vec<u16> =
-        bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
     String::from_utf16_lossy(&units)
 }
 
@@ -152,7 +154,9 @@ mod tests {
 
     #[test]
     fn required_code_pages_exist() {
-        for cp in [932u16, 936, 949, 950, 1250, 1251, 1252, 1253, 1254, 1255, 1256, 1257, 1258] {
+        for cp in [
+            932u16, 936, 949, 950, 1250, 1251, 1252, 1253, 1254, 1255, 1256, 1257, 1258,
+        ] {
             assert!(writable_encoding(cp).is_ok(), "code page {cp}");
         }
         assert!(writable_encoding(65001).is_err());

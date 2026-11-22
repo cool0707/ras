@@ -488,7 +488,14 @@ pub fn takes_picture(type_name: &str) -> bool {
     control_type(type_name).is_some_and(|t| {
         matches!(
             t.name,
-            "Image" | "Label" | "CommandButton" | "CheckBox" | "OptionButton" | "ToggleButton" | "Frame" | "Page"
+            "Image"
+                | "Label"
+                | "CommandButton"
+                | "CheckBox"
+                | "OptionButton"
+                | "ToggleButton"
+                | "Frame"
+                | "Page"
         )
     })
 }

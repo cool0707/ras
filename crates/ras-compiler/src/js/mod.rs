@@ -59,12 +59,17 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
     let mut module_names = serde_json::Map::new();
     for m in 0..prog.modules.len() {
         // Bundled library modules with code of their own (the struct map) run as RAS code too.
-        let std_code = prog.modules[m].kind == ModuleKind::Std && !prog.modules[m].classes.is_empty();
+        let std_code =
+            prog.modules[m].kind == ModuleKind::Std && !prog.modules[m].classes.is_empty();
         if prog.modules[m].kind != ModuleKind::User && !std_code {
             continue;
         }
         // A form's code-behind is skipped only when its design is missing (an error already).
-        if prog.modules[m].form.as_ref().is_some_and(|f| f.decl.is_none()) {
+        if prog.modules[m]
+            .form
+            .as_ref()
+            .is_some_and(|f| f.decl.is_none())
+        {
             continue;
         }
         let mut g = Gen::new(prog, m);
@@ -74,11 +79,21 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
         let depth = key.matches('/').count();
         let up = "../".repeat(depth);
         let file_name = format!("{key}.js");
-        let base_name = file_name.rsplit('/').next().unwrap_or(&file_name).to_string();
+        let base_name = file_name
+            .rsplit('/')
+            .next()
+            .unwrap_or(&file_name)
+            .to_string();
         let source = format!("{up}{source_prefix}{}", md.rel_path);
         let (text, map) = finish(&g.assemble(&up), md, &base_name, &source);
-        out.files.push(JsFile { rel_path: file_name.clone(), text: format!("{text}//# sourceMappingURL={base_name}.map\n") });
-        out.files.push(JsFile { rel_path: format!("{file_name}.map"), text: map });
+        out.files.push(JsFile {
+            rel_path: file_name.clone(),
+            text: format!("{text}//# sourceMappingURL={base_name}.map\n"),
+        });
+        out.files.push(JsFile {
+            rel_path: format!("{file_name}.map"),
+            text: map,
+        });
         if md.is_test() {
             // Run by `ras test` (ras-test-main.js), which loads the test file it is given.
             if prog.is_test_file(m) {
@@ -87,22 +102,38 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
             out.diagnostics.append(&mut g.diags);
             continue;
         }
-        module_names.insert(md.vba_name.clone(), serde_json::Value::String(format!("./{file_name}")));
+        module_names.insert(
+            md.vba_name.clone(),
+            serde_json::Value::String(format!("./{file_name}")),
+        );
         module_files.push(file_name);
         if md.is_form() {
             // A form is started by showing it (spec §14.10.7).
             forms.push(format!("{}.show", md.vba_name));
         } else {
             macros.extend(g.macros.iter().map(|n| format!("{}.{n}", md.vba_name)));
-            others.extend(g.entries.iter().filter(|n| !g.macros.contains(n)).map(|n| format!("{}.{n}", md.vba_name)));
+            others.extend(
+                g.entries
+                    .iter()
+                    .filter(|n| !g.macros.contains(n))
+                    .map(|n| format!("{}.{n}", md.vba_name)),
+            );
         }
         out.diagnostics.append(&mut g.diags);
     }
     out.entries = macros;
     out.entries.extend(others);
     out.entries.extend(forms);
-    let list = module_files.iter().map(|f| format!("    {},\n", js_str(&format!("./{f}")))).collect::<String>();
-    let form_names: Vec<&str> = prog.modules.iter().filter(|m| m.is_form() && m.form.as_ref().is_some_and(|f| f.decl.is_some())).map(|m| m.vba_name.as_str()).collect();
+    let list = module_files
+        .iter()
+        .map(|f| format!("    {},\n", js_str(&format!("./{f}"))))
+        .collect::<String>();
+    let form_names: Vec<&str> = prog
+        .modules
+        .iter()
+        .filter(|m| m.is_form() && m.form.as_ref().is_some_and(|f| f.decl.is_some()))
+        .map(|m| m.vba_name.as_str())
+        .collect();
     let manifest = serde_json::json!({
         "project": prog.config.project.name,
         "workbook": prog.config.project.workbook,
@@ -114,17 +145,64 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
         let mut manifest = manifest.clone();
         manifest["tests"] = serde_json::Value::Array(tests);
         manifest["eventErrors"] = serde_json::json!(prog.config.test.event_errors);
-        let main = TEST_MAIN_JS.replace("/*@MODULES@*/", list.trim()).replace("/*@MANIFEST@*/", &manifest.to_string()).replace("/*@ROOT@*/", &js_str(if source_prefix.is_empty() { "." } else { source_prefix }));
-        out.files.push(JsFile { rel_path: "ras-test-main.js".into(), text: main });
-        out.files.push(JsFile { rel_path: "ras-test.js".into(), text: TEST_JS.to_string() });
+        let main = TEST_MAIN_JS
+            .replace("/*@MODULES@*/", list.trim())
+            .replace("/*@MANIFEST@*/", &manifest.to_string())
+            .replace(
+                "/*@ROOT@*/",
+                &js_str(if source_prefix.is_empty() {
+                    "."
+                } else {
+                    source_prefix
+                }),
+            );
+        out.files.push(JsFile {
+            rel_path: "ras-test-main.js".into(),
+            text: main,
+        });
+        out.files.push(JsFile {
+            rel_path: "ras-test.js".into(),
+            text: TEST_JS.to_string(),
+        });
     }
-    let main = MAIN_JS.replace("/*@MODULES@*/", list.trim()).replace("/*@MANIFEST@*/", &manifest.to_string()).replace("/*@ROOT@*/", &js_str(if source_prefix.is_empty() { "." } else { source_prefix }));
-    out.files.push(JsFile { rel_path: "ras-main.js".into(), text: main });
-    out.files.push(JsFile { rel_path: "ras-runtime.js".into(), text: RUNTIME_JS.to_string() });
-    out.files.push(JsFile { rel_path: "ras-forms.js".into(), text: FORMS_JS.to_string() });
-    out.files.push(JsFile { rel_path: "ras-excel.js".into(), text: EXCEL_JS.to_string() });
-    out.files.push(JsFile { rel_path: "ras-scripting.js".into(), text: SCRIPTING_JS.to_string() });
-    out.files.push(JsFile { rel_path: "ras-debug.json".into(), text: format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap_or_default()) });
+    let main = MAIN_JS
+        .replace("/*@MODULES@*/", list.trim())
+        .replace("/*@MANIFEST@*/", &manifest.to_string())
+        .replace(
+            "/*@ROOT@*/",
+            &js_str(if source_prefix.is_empty() {
+                "."
+            } else {
+                source_prefix
+            }),
+        );
+    out.files.push(JsFile {
+        rel_path: "ras-main.js".into(),
+        text: main,
+    });
+    out.files.push(JsFile {
+        rel_path: "ras-runtime.js".into(),
+        text: RUNTIME_JS.to_string(),
+    });
+    out.files.push(JsFile {
+        rel_path: "ras-forms.js".into(),
+        text: FORMS_JS.to_string(),
+    });
+    out.files.push(JsFile {
+        rel_path: "ras-excel.js".into(),
+        text: EXCEL_JS.to_string(),
+    });
+    out.files.push(JsFile {
+        rel_path: "ras-scripting.js".into(),
+        text: SCRIPTING_JS.to_string(),
+    });
+    out.files.push(JsFile {
+        rel_path: "ras-debug.json".into(),
+        text: format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).unwrap_or_default()
+        ),
+    });
     if out.diagnostics.iter().any(|d| d.is_error()) {
         out.files.clear();
     }
@@ -134,7 +212,10 @@ pub fn build_js(prog: &Program, source_prefix: &str) -> JsOutput {
 /// Path of a module's JavaScript file without `.js`: the import key, except for a form's
 /// code-behind (`@forms/frmInput`: its key `<forms>/frmInput` is not a valid file name).
 fn js_key(md: &ModuleData) -> String {
-    match (md.key.strip_prefix(crate::collect::FORM_KEY_PREFIX), md.key.strip_prefix(crate::collect::OBJECT_KEY_PREFIX)) {
+    match (
+        md.key.strip_prefix(crate::collect::FORM_KEY_PREFIX),
+        md.key.strip_prefix(crate::collect::OBJECT_KEY_PREFIX),
+    ) {
         (Some(name), _) => format!("@forms/{name}"),
         (_, Some(name)) => format!("@objects/{name}"),
         _ => md.key.clone(),
@@ -148,10 +229,79 @@ pub(crate) fn js_str(s: &str) -> String {
 
 /// Names that cannot be used as (or would shadow something the generated code needs as) a JS identifier.
 const JS_RESERVED: &[&str] = &[
-    "arguments", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "enum", "eval", "export", "extends", "false", "finally", "for",
-    "function", "if", "implements", "import", "in", "instanceof", "interface", "let", "new", "null", "package", "private", "protected", "public", "return", "static", "super", "switch", "this",
-    "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield", "undefined", "NaN", "Infinity", "Math", "console", "Map", "String", "Number", "Object", "Array", "Error", "Symbol",
-    "require", "exports", "module", "process", "globalThis", "Date", "JSON", "Boolean", "Function", "Promise", "Proxy", "Reflect", "Set",
+    "arguments",
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "eval",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "let",
+    "new",
+    "null",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "static",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
+    "undefined",
+    "NaN",
+    "Infinity",
+    "Math",
+    "console",
+    "Map",
+    "String",
+    "Number",
+    "Object",
+    "Array",
+    "Error",
+    "Symbol",
+    "require",
+    "exports",
+    "module",
+    "process",
+    "globalThis",
+    "Date",
+    "JSON",
+    "Boolean",
+    "Function",
+    "Promise",
+    "Proxy",
+    "Reflect",
+    "Set",
 ];
 
 pub(crate) fn js_ident(name: &str) -> String {
@@ -222,7 +372,11 @@ fn finish(code: &str, md: &ModuleData, file: &str, source: &str) -> (String, Str
 
 fn vlq(out: &mut String, value: i64) {
     const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut v = if value < 0 { ((-value) << 1) | 1 } else { value << 1 } as u64;
+    let mut v = if value < 0 {
+        ((-value) << 1) | 1
+    } else {
+        value << 1
+    } as u64;
     loop {
         let mut digit = (v & 31) as usize;
         v >>= 5;
@@ -292,7 +446,11 @@ impl<'p> Gen<'p> {
 
     /// Writes a line that starts a RAS statement: breakpoints and stepping map to `span`.
     pub(crate) fn wm(&mut self, span: Span, text: impl AsRef<str>) {
-        let marked = format!("{MARK_START}{}{MARK_END}{}", u32::from(span.start()), text.as_ref());
+        let marked = format!(
+            "{MARK_START}{}{MARK_END}{}",
+            u32::from(span.start()),
+            text.as_ref()
+        );
         self.w(marked);
     }
 
@@ -368,7 +526,12 @@ impl<'p> Gen<'p> {
             return a.clone();
         }
         let key = &self.prog.modules[m].key;
-        let mut alias = format!("$m_{}", key.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect::<String>());
+        let mut alias = format!(
+            "$m_{}",
+            key.chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect::<String>()
+        );
         if !self.aliases.insert(alias.clone()) {
             alias = format!("{alias}_{m}");
             self.aliases.insert(alias.clone());
@@ -400,8 +563,14 @@ impl<'p> Gen<'p> {
     pub(crate) fn fn_ref(&mut self, f: FnId) -> String {
         let d = &self.prog.fns[f];
         match &d.kind {
-            FnKind::Method { class, .. } | FnKind::Getter { class, .. } | FnKind::Setter { class, .. } => format!("{}.{}", self.class_ref(*class), d.name),
-            FnKind::Declare { lib, alias } => format!("$rt.declare({}, {})", js_str(lib), js_str(alias.as_deref().unwrap_or(&d.name))),
+            FnKind::Method { class, .. }
+            | FnKind::Getter { class, .. }
+            | FnKind::Setter { class, .. } => format!("{}.{}", self.class_ref(*class), d.name),
+            FnKind::Declare { lib, alias } => format!(
+                "$rt.declare({}, {})",
+                js_str(lib),
+                js_str(alias.as_deref().unwrap_or(&d.name))
+            ),
             _ => self.module_member(d.module, &js_ident(&d.name)),
         }
     }
@@ -422,7 +591,16 @@ impl<'p> Gen<'p> {
     /// Initial value of a variable of type `t`.
     pub(crate) fn zero(&mut self, t: &Type) -> String {
         match t {
-            Type::Byte | Type::Short | Type::Int | Type::Long | Type::Float | Type::Double | Type::Currency | Type::Decimal | Type::Ptr | Type::Enum(_) => "0".into(),
+            Type::Byte
+            | Type::Short
+            | Type::Int
+            | Type::Long
+            | Type::Float
+            | Type::Double
+            | Type::Currency
+            | Type::Decimal
+            | Type::Ptr
+            | Type::Enum(_) => "0".into(),
             Type::Str | Type::WStr | Type::AStr => "\"\"".into(),
             Type::Bool => "false".into(),
             Type::Date => "$rt.date(0)".into(),
@@ -509,7 +687,9 @@ impl<'p> Gen<'p> {
                             sources.push(self.source_handler(ev, f, &source, &call, None));
                         }
                     }
-                    Some(form) if form.kind == ObjectKind::Form => events.push(self.form_handler(form, ev, f)),
+                    Some(form) if form.kind == ObjectKind::Form => {
+                        events.push(self.form_handler(form, ev, f))
+                    }
                     Some(form) => events.extend(self.document_handler(form, ev, f)),
                     // An error already (`E0610`): `@on` is written in the file of the sheet.
                     None => {}
@@ -547,8 +727,18 @@ impl<'p> Gen<'p> {
             self.w("}");
             "$init".to_string()
         };
-        let entries = self.entries.iter().map(|n| format!("{}: {}", js_str(n), js_ident(n))).collect::<Vec<_>>().join(", ");
-        let macros = self.macros.iter().map(|n| js_str(n)).collect::<Vec<_>>().join(", ");
+        let entries = self
+            .entries
+            .iter()
+            .map(|n| format!("{}: {}", js_str(n), js_ident(n)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let macros = self
+            .macros
+            .iter()
+            .map(|n| js_str(n))
+            .collect::<Vec<_>>()
+            .join(", ");
         self.w(format!("$rt.module({}, {{", js_str(&md.vba_name)));
         self.w(format!("    file: {},", js_str(&md.rel_path)));
         self.w(format!("    init: {init},"));
@@ -570,12 +760,33 @@ impl<'p> Gen<'p> {
         let d = &self.prog.fns[f];
         let md = &self.prog.modules[self.module];
         let target = match doc.kind {
-            ObjectKind::Workbook if ev.target.eq_ignore_ascii_case("Workbook") || ev.target.eq_ignore_ascii_case("ThisWorkbook") => "Workbook".to_string(),
-            ObjectKind::Sheet if ev.target.eq_ignore_ascii_case("Worksheet") || ev.target.to_lowercase() == md.vba_name.to_lowercase() => md.vba_name.clone(),
+            ObjectKind::Workbook
+                if ev.target.eq_ignore_ascii_case("Workbook")
+                    || ev.target.eq_ignore_ascii_case("ThisWorkbook") =>
+            {
+                "Workbook".to_string()
+            }
+            ObjectKind::Sheet
+                if ev.target.eq_ignore_ascii_case("Worksheet")
+                    || ev.target.to_lowercase() == md.vba_name.to_lowercase() =>
+            {
+                md.vba_name.clone()
+            }
             _ => return None,
         };
         let event = crate::lower::document_event(doc.kind == ObjectKind::Workbook, &ev.event)?;
-        let args: Vec<String> = d.params.iter().enumerate().map(|(i, p)| if p.mode == PassMode::ByRef { format!("$a[{i}]") } else { format!("$a[{i}].v") }).collect();
+        let args: Vec<String> = d
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if p.mode == PassMode::ByRef {
+                    format!("$a[{i}]")
+                } else {
+                    format!("$a[{i}].v")
+                }
+            })
+            .collect();
         Some(format!(
             "{{ target: {}, event: {}, reentrant: {}, fn: ($a) => {}({}) }}",
             js_str(&target),
@@ -589,9 +800,27 @@ impl<'p> Gen<'p> {
     /// The entry of `$rt.withEvents` for an `@on("<variable>.<Event>")` handler (spec §12.2.2):
     /// `source` gives the object the variable holds, `call` is the handler. The stand-in for
     /// Excel calls it with the arguments of the event as `{ v }` cells, as the other handlers.
-    fn source_handler(&self, ev: &OnEvent, f: FnId, source: &str, call: &str, alive: Option<&str>) -> String {
+    fn source_handler(
+        &self,
+        ev: &OnEvent,
+        f: FnId,
+        source: &str,
+        call: &str,
+        alive: Option<&str>,
+    ) -> String {
         let d = &self.prog.fns[f];
-        let args: Vec<String> = d.params.iter().enumerate().map(|(i, p)| if p.mode == PassMode::ByRef { format!("$a[{i}]") } else { format!("$a[{i}].v") }).collect();
+        let args: Vec<String> = d
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if p.mode == PassMode::ByRef {
+                    format!("$a[{i}]")
+                } else {
+                    format!("$a[{i}].v")
+                }
+            })
+            .collect();
         format!(
             "{{ target: {}, event: {}, reentrant: {}, source: {source}, {}fn: ($a) => {call}({}) }}",
             js_str(&ev.target),
@@ -607,9 +836,28 @@ impl<'p> Gen<'p> {
     /// parameter `byref` gets the cell, the others its value.
     fn form_handler(&self, form: &FormModule, ev: &OnEvent, f: FnId) -> String {
         let d = &self.prog.fns[f];
-        let is_form = ev.target.eq_ignore_ascii_case("UserForm") || form.decl.as_ref().is_some_and(|x| x.name.eq_ignore_ascii_case(&ev.target));
-        let target = if is_form { "UserForm" } else { ev.target.as_str() };
-        let args: Vec<String> = d.params.iter().enumerate().map(|(i, p)| if p.mode == PassMode::ByRef { format!("$a[{i}]") } else { format!("$a[{i}].v") }).collect();
+        let is_form = ev.target.eq_ignore_ascii_case("UserForm")
+            || form
+                .decl
+                .as_ref()
+                .is_some_and(|x| x.name.eq_ignore_ascii_case(&ev.target));
+        let target = if is_form {
+            "UserForm"
+        } else {
+            ev.target.as_str()
+        };
+        let args: Vec<String> = d
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if p.mode == PassMode::ByRef {
+                    format!("$a[{i}]")
+                } else {
+                    format!("$a[{i}].v")
+                }
+            })
+            .collect();
         format!(
             "{{ target: {}, event: {}, reentrant: {}, fn: ($a) => {}({}) }}",
             js_str(target),
@@ -646,13 +894,24 @@ impl<'p> Gen<'p> {
             .fns
             .iter()
             .map(|&f| &prog.fns[f])
-            .filter(|d| d.exported && matches!(d.kind, FnKind::Free) && d.decl.as_ref().is_some_and(|x| x.body.is_some()))
+            .filter(|d| {
+                d.exported
+                    && matches!(d.kind, FnKind::Free)
+                    && d.decl.as_ref().is_some_and(|x| x.body.is_some())
+            })
             .map(|d| format!("{}: {}", js_str(&d.name), js_ident(&d.name)))
             .collect();
-        let dir = md.rel_path.rsplit_once('/').map(|(d, _)| format!("{d}/")).unwrap_or_default();
+        let dir = md
+            .rel_path
+            .rsplit_once('/')
+            .map(|(d, _)| format!("{d}/"))
+            .unwrap_or_default();
         self.w(format!("$rt.form({}, {{", js_str(&md.vba_name)));
         self.w(format!("    file: {},", js_str(&md.rel_path)));
-        self.w(format!("    spec: {},", js_str(&format!("{dir}{}.form.json", md.vba_name))));
+        self.w(format!(
+            "    spec: {},",
+            js_str(&format!("{dir}{}.form.json", md.vba_name))
+        ));
         self.w("    load: $load,");
         self.w(format!("    members: {{ {} }},", members.join(", ")));
         self.w(format!("    events: [{}],", events.join(", ")));
@@ -664,13 +923,21 @@ impl<'p> Gen<'p> {
         let prog = self.prog;
         let md = &prog.modules[self.module];
         let mut head = String::new();
-        head.push_str(&format!("// Generated by ras from {} — debug build, do not edit.\n", md.rel_path));
+        head.push_str(&format!(
+            "// Generated by ras from {} — debug build, do not edit.\n",
+            md.rel_path
+        ));
         head.push_str("\"use strict\";\n");
-        head.push_str(&format!("const $rt = require({});\n", js_str(&format!("./{up}ras-runtime.js"))));
+        head.push_str(&format!(
+            "const $rt = require({});\n",
+            js_str(&format!("./{up}ras-runtime.js"))
+        ));
         // Exports come before the imports so that import cycles between modules work.
         for &f in &md.fns {
             let d = &prog.fns[f];
-            if matches!(d.kind, FnKind::Free | FnKind::Main) && d.decl.as_ref().is_some_and(|x| x.body.is_some()) {
+            if matches!(d.kind, FnKind::Free | FnKind::Main)
+                && d.decl.as_ref().is_some_and(|x| x.body.is_some())
+            {
                 let n = js_ident(&d.name);
                 head.push_str(&format!("exports.{n} = {n};\n"));
             }
@@ -684,7 +951,10 @@ impl<'p> Gen<'p> {
         }
         for (m, alias) in &self.imports {
             let key = js_key(&prog.modules[*m]);
-            head.push_str(&format!("const {alias} = require({});\n", js_str(&format!("./{up}{key}.js"))));
+            head.push_str(&format!(
+                "const {alias} = require({});\n",
+                js_str(&format!("./{up}{key}.js"))
+            ));
         }
         let mut body = std::mem::take(&mut self.bufs[0]);
         // Classes are not hoisted: export them where they are defined.
@@ -720,7 +990,10 @@ impl<'p> Gen<'p> {
                 out.push(name);
                 continue;
             }
-            let default = decl.as_ref().and_then(|d| d.params.get(i)).and_then(|ap| ap.default.as_ref());
+            let default = decl
+                .as_ref()
+                .and_then(|d| d.params.get(i))
+                .and_then(|ap| ap.default.as_ref());
             match default {
                 Some(d) => {
                     let v = self.coerce_store(d, &p.ty);
@@ -741,7 +1014,9 @@ impl<'p> Gen<'p> {
         let prog = self.prog;
         let def = &prog.fns[f];
         let Some(decl) = def.decl.clone() else { return };
-        let Some(body) = decl.body.as_ref() else { return };
+        let Some(body) = decl.body.as_ref() else {
+            return;
+        };
         let (saved_fn, saved_ret, saved_resume) = (self.fn_id, self.ret_ty.take(), self.resume);
         self.fn_id = Some(f);
         self.ret_ty = Some(def.ret_ty());
@@ -762,8 +1037,14 @@ impl<'p> Gen<'p> {
             self.w("}");
         }
         let ret = def.ret_ty();
-        let ends_with_return = matches!(body.stmts.last().map(|s| &s.kind), Some(ast::StmtKind::Return(_) | ast::StmtKind::Throw(_)));
-        if ret != Type::Void && !ends_with_return && !matches!(def.kind, FnKind::Ctor { .. } | FnKind::Setter { .. }) {
+        let ends_with_return = matches!(
+            body.stmts.last().map(|s| &s.kind),
+            Some(ast::StmtKind::Return(_) | ast::StmtKind::Throw(_))
+        );
+        if ret != Type::Void
+            && !ends_with_return
+            && !matches!(def.kind, FnKind::Ctor { .. } | FnKind::Setter { .. })
+        {
             // A VBA function that falls off its end returns the default value of its type.
             let z = self.zero(&ret);
             self.w(format!("return {z};"));
@@ -829,7 +1110,13 @@ impl<'p> Gen<'p> {
                 if let Some(EventSource::Field(_, i)) = prog.event_source(m, &ev.target) {
                     let source = format!("() => $w.deref()?.{}", def.fields[i].name);
                     let call = format!("$w.deref()?.{}", prog.fns[m].name);
-                    sources.push(self.source_handler(ev, m, &source, &call, Some("() => $w.deref() !== undefined")));
+                    sources.push(self.source_handler(
+                        ev,
+                        m,
+                        &source,
+                        &call,
+                        Some("() => $w.deref() !== undefined"),
+                    ));
                 }
             }
         }
@@ -848,16 +1135,26 @@ impl<'p> Gen<'p> {
         for &f in &def.methods {
             let d = &prog.fns[f];
             let prefix = match d.kind {
-                FnKind::Method { is_static, .. } => if is_static { "static " } else { "" }.to_string(),
-                FnKind::Getter { is_static, .. } => format!("{}get ", if is_static { "static " } else { "" }),
-                FnKind::Setter { is_static, .. } => format!("{}set ", if is_static { "static " } else { "" }),
+                FnKind::Method { is_static, .. } => {
+                    if is_static { "static " } else { "" }.to_string()
+                }
+                FnKind::Getter { is_static, .. } => {
+                    format!("{}get ", if is_static { "static " } else { "" })
+                }
+                FnKind::Setter { is_static, .. } => {
+                    format!("{}set ", if is_static { "static " } else { "" })
+                }
                 _ => continue,
             };
             self.emit_fn(f, &prefix, &d.name);
         }
         self.indent -= 1;
         self.w("}");
-        let implemented: Vec<String> = self.implemented(c).into_iter().map(|n| js_str(&n)).collect();
+        let implemented: Vec<String> = self
+            .implemented(c)
+            .into_iter()
+            .map(|n| js_str(&n))
+            .collect();
         self.w(format!("{name}.$impl = [{}];", implemented.join(", ")));
         // Static fields get their default now and their initialiser when the project starts.
         let mut inits = String::new();

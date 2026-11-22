@@ -25,13 +25,34 @@ pub(crate) struct Parser<'a> {
     pub(crate) errors: Vec<SyntaxError>,
 }
 
-const MEMBER_MODIFIERS: &[&str] = &["public", "private", "protected", "static", "readonly", "abstract", "override"];
+const MEMBER_MODIFIERS: &[&str] = &[
+    "public",
+    "private",
+    "protected",
+    "static",
+    "readonly",
+    "abstract",
+    "override",
+];
 
 impl<'a> Parser<'a> {
     pub(crate) fn new(text: &'a str) -> Self {
         let toks = lex(text);
-        let sig = toks.iter().enumerate().filter(|(_, t)| !t.kind.is_trivia()).map(|(i, _)| i).collect();
-        Parser { text, toks, sig, spos: 0, raw: 0, builder: GreenNodeBuilder::new(), errors: Vec::new() }
+        let sig = toks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !t.kind.is_trivia())
+            .map(|(i, _)| i)
+            .collect();
+        Parser {
+            text,
+            toks,
+            sig,
+            spos: 0,
+            raw: 0,
+            builder: GreenNodeBuilder::new(),
+            errors: Vec::new(),
+        }
     }
 
     pub(crate) fn finish_tree(self) -> (GreenNode, Vec<SyntaxError>) {
@@ -43,7 +64,10 @@ impl<'a> Parser<'a> {
     // ------------------------------------------------------------------
 
     fn nth(&self, n: usize) -> SyntaxKind {
-        self.sig.get(self.spos + n).map(|&i| self.toks[i].kind).unwrap_or(EOF)
+        self.sig
+            .get(self.spos + n)
+            .map(|&i| self.toks[i].kind)
+            .unwrap_or(EOF)
     }
 
     fn nth_text(&self, n: usize) -> &'a str {
@@ -83,16 +107,25 @@ impl<'a> Parser<'a> {
 
     /// True when a line break separates significant token `n` from the one before it.
     fn newline_before(&self, n: usize) -> bool {
-        let Some(&cur) = self.sig.get(self.spos + n) else { return true };
-        let prev = if self.spos + n == 0 { 0 } else { self.sig[self.spos + n - 1] + 1 };
-        self.toks[prev..cur].iter().any(|t| self.text[t.start as usize..t.end as usize].contains('\n'))
+        let Some(&cur) = self.sig.get(self.spos + n) else {
+            return true;
+        };
+        let prev = if self.spos + n == 0 {
+            0
+        } else {
+            self.sig[self.spos + n - 1] + 1
+        };
+        self.toks[prev..cur]
+            .iter()
+            .any(|t| self.text[t.start as usize..t.end as usize].contains('\n'))
     }
 
     fn eat_trivia(&mut self) {
         let end = self.sig.get(self.spos).copied().unwrap_or(self.toks.len());
         while self.raw < end {
             let t = self.toks[self.raw];
-            self.builder.token(t.kind.into(), &self.text[t.start as usize..t.end as usize]);
+            self.builder
+                .token(t.kind.into(), &self.text[t.start as usize..t.end as usize]);
             self.raw += 1;
         }
     }
@@ -101,7 +134,8 @@ impl<'a> Parser<'a> {
         self.eat_trivia();
         if let Some(&i) = self.sig.get(self.spos) {
             let t = self.toks[i];
-            self.builder.token(t.kind.into(), &self.text[t.start as usize..t.end as usize]);
+            self.builder
+                .token(t.kind.into(), &self.text[t.start as usize..t.end as usize]);
             self.raw = i + 1;
             self.spos += 1;
         }
@@ -142,7 +176,11 @@ impl<'a> Parser<'a> {
             }
             None => {
                 // Point just after the last significant token.
-                let end = if self.spos == 0 { 0 } else { self.toks[self.sig[self.spos - 1]].end };
+                let end = if self.spos == 0 {
+                    0
+                } else {
+                    self.toks[self.sig[self.spos - 1]].end
+                };
                 TextRange::empty(TextSize::from(end))
             }
         }
@@ -150,10 +188,17 @@ impl<'a> Parser<'a> {
 
     fn error(&mut self, message: impl Into<String>) {
         let range = self.current_range();
-        if self.errors.last().is_some_and(|e| e.range.start() == range.start()) {
+        if self
+            .errors
+            .last()
+            .is_some_and(|e| e.range.start() == range.start())
+        {
             return;
         }
-        self.errors.push(SyntaxError { message: message.into(), range });
+        self.errors.push(SyntaxError {
+            message: message.into(),
+            range,
+        });
     }
 
     fn expect(&mut self, kind: SyntaxKind, what: &str) -> bool {
@@ -318,13 +363,22 @@ impl<'a> Parser<'a> {
                 let word = self.nth_text(k);
                 if word == "abstract" && self.nth(k + 1) == CLASS_KW {
                     self.class_decl();
-                } else if word == "type" && self.nth(k + 1) == IDENT && matches!(self.nth(k + 2), EQ | LT) {
+                } else if word == "type"
+                    && self.nth(k + 1) == IDENT
+                    && matches!(self.nth(k + 2), EQ | LT)
+                {
                     self.type_alias();
                 } else if word == "module" && declared && self.nth(k + 1) == STRING_LIT {
                     self.declare_module();
-                } else if word == "struct" && self.nth(k + 1) == IDENT && (declared || self.nth(k + 2) == L_BRACE) {
+                } else if word == "struct"
+                    && self.nth(k + 1) == IDENT
+                    && (declared || self.nth(k + 2) == L_BRACE)
+                {
                     self.struct_decl();
-                } else if word == "namespace" && self.nth(k + 1) == IDENT && self.nth(k + 2) == L_BRACE {
+                } else if word == "namespace"
+                    && self.nth(k + 1) == IDENT
+                    && self.nth(k + 2) == L_BRACE
+                {
                     self.namespace_decl();
                 } else if k > k0 {
                     self.bad_modifiers(k - k0, k0);
@@ -339,8 +393,12 @@ impl<'a> Parser<'a> {
 
     fn is_declarable(&self, n: usize) -> bool {
         match self.nth(n) {
-            FUNCTION_KW | CLASS_KW | INTERFACE_KW | ENUM_KW | LET_KW | CONST_KW | VAR_KW | INLINE_KW | NOINLINE_KW => true,
-            IDENT => matches!(self.nth_text(n), "module" | "struct" | "namespace" | "abstract" | "type"),
+            FUNCTION_KW | CLASS_KW | INTERFACE_KW | ENUM_KW | LET_KW | CONST_KW | VAR_KW
+            | INLINE_KW | NOINLINE_KW => true,
+            IDENT => matches!(
+                self.nth_text(n),
+                "module" | "struct" | "namespace" | "abstract" | "type"
+            ),
             _ => false,
         }
     }
@@ -384,7 +442,10 @@ impl<'a> Parser<'a> {
             self.bump();
             self.finish();
         } else if self.nth(0).is_keyword() {
-            self.error(format!("`{}` は予約語のため名前に使えません", self.nth_text(0)));
+            self.error(format!(
+                "`{}` は予約語のため名前に使えません",
+                self.nth_text(0)
+            ));
             self.start(NAME);
             self.bump();
             self.finish();
@@ -614,7 +675,12 @@ impl<'a> Parser<'a> {
                 _ => false,
             };
             // A modifier word directly followed by `(`, `:`, `=`, `;`, `?`, `<` is a member *name*.
-            if is_mod && !matches!(self.nth(k + 1), L_PAREN | COLON | EQ | SEMI | QUESTION | LT | R_BRACE) {
+            if is_mod
+                && !matches!(
+                    self.nth(k + 1),
+                    L_PAREN | COLON | EQ | SEMI | QUESTION | LT | R_BRACE
+                )
+            {
                 k += 1;
             } else {
                 break;
@@ -622,7 +688,9 @@ impl<'a> Parser<'a> {
         }
         let kind = if self.nth_word(k, "constructor") && self.nth(k + 1) == L_PAREN {
             CTOR_DECL
-        } else if (self.nth_word(k, "get") || self.nth_word(k, "set")) && self.nth_is_name(k + 1) && self.nth(k + 2) == L_PAREN
+        } else if (self.nth_word(k, "get") || self.nth_word(k, "set"))
+            && self.nth_is_name(k + 1)
+            && self.nth(k + 2) == L_PAREN
         {
             ACCESSOR_DECL
         } else if self.nth_is_name(k) && matches!(self.nth(k + 1), L_PAREN | LT) {
@@ -914,7 +982,11 @@ impl<'a> Parser<'a> {
     fn pattern(&mut self) {
         let object = self.at(L_BRACE);
         let close = if object { R_BRACE } else { R_BRACK };
-        self.start(if object { OBJECT_PATTERN } else { ARRAY_PATTERN });
+        self.start(if object {
+            OBJECT_PATTERN
+        } else {
+            ARRAY_PATTERN
+        });
         self.bump();
         while !self.at(close) && !self.at(EOF) {
             let before = self.spos;
@@ -929,10 +1001,14 @@ impl<'a> Parser<'a> {
                 if self.at(IDENT) {
                     self.name();
                 } else {
-                    self.error("変数名が必要です（分割代入の入れ子・既定値・`...` には対応していません）");
+                    self.error(
+                        "変数名が必要です（分割代入の入れ子・既定値・`...` には対応していません）",
+                    );
                 }
             } else {
-                self.error("変数名が必要です（分割代入の入れ子・既定値・`...` には対応していません）");
+                self.error(
+                    "変数名が必要です（分割代入の入れ子・既定値・`...` には対応していません）",
+                );
             }
             self.finish();
             if !self.eat(COMMA) {
@@ -1094,7 +1170,9 @@ impl<'a> Parser<'a> {
         match self.nth(0) {
             L_BRACE => self.block(),
             LET_KW | CONST_KW | VAR_KW => self.var_decl(true),
-            IDENT if self.at_word("using") && self.nth(1) == IDENT && !self.newline_before(1) => self.var_decl(true),
+            IDENT if self.at_word("using") && self.nth(1) == IDENT && !self.newline_before(1) => {
+                self.var_decl(true)
+            }
             IDENT if self.nth(1) == COLON => {
                 self.start(LABELED_STMT);
                 self.bump();
@@ -1158,7 +1236,11 @@ impl<'a> Parser<'a> {
                 self.finish();
             }
             BREAK_KW | CONTINUE_KW => {
-                let kind = if self.at(BREAK_KW) { BREAK_STMT } else { CONTINUE_STMT };
+                let kind = if self.at(BREAK_KW) {
+                    BREAK_STMT
+                } else {
+                    CONTINUE_STMT
+                };
                 self.start(kind);
                 self.bump();
                 if self.at(IDENT) && !self.newline_before(0) {
@@ -1218,7 +1300,10 @@ impl<'a> Parser<'a> {
             L_BRACE | L_BRACK => self.skip_balanced(k + 3),
             _ => None,
         };
-        if let (true, Some(after_name)) = (self.nth(k + 1) == L_PAREN && matches!(self.nth(k + 2), LET_KW | CONST_KW | VAR_KW), binding_end) {
+        if let (true, Some(after_name)) = (
+            self.nth(k + 1) == L_PAREN && matches!(self.nth(k + 2), LET_KW | CONST_KW | VAR_KW),
+            binding_end,
+        ) {
             let is_iter_kw = |p: &Self, n: usize| p.nth_word(n, "of") || p.nth(n) == IN_KW;
             if is_iter_kw(self, after_name) {
                 is_of = true;
@@ -1341,9 +1426,16 @@ impl<'a> Parser<'a> {
 
     fn assign_op_len(&self) -> usize {
         match self.nth(0) {
-            EQ | PLUSEQ | MINUSEQ | STAREQ | SLASHEQ | PERCENTEQ | AMPEQ | PIPEEQ | CARETEQ | SHLEQ => 1,
+            EQ | PLUSEQ | MINUSEQ | STAREQ | SLASHEQ | PERCENTEQ | AMPEQ | PIPEEQ | CARETEQ
+            | SHLEQ => 1,
             // `>>=`
-            GT if self.nth(1) == GT && self.nth(2) == EQ && self.adjacent(0) && self.adjacent(1) => 3,
+            GT if self.nth(1) == GT
+                && self.nth(2) == EQ
+                && self.adjacent(0)
+                && self.adjacent(1) =>
+            {
+                3
+            }
             _ => 0,
         }
     }
@@ -1441,7 +1533,9 @@ impl<'a> Parser<'a> {
                 self.finish();
                 continue;
             }
-            let Some((bp, n, right)) = self.peek_binop() else { break };
+            let Some((bp, n, right)) = self.peek_binop() else {
+                break;
+            };
             if bp < min_bp {
                 break;
             }
@@ -1508,7 +1602,10 @@ impl<'a> Parser<'a> {
                     _ => break,
                 },
                 BANG if !self.newline_before(0)
-                    && matches!(self.nth(1), DOT | R_PAREN | R_BRACK | SEMI | COMMA | L_BRACK | L_PAREN | EOF | R_BRACE) =>
+                    && matches!(
+                        self.nth(1),
+                        DOT | R_PAREN | R_BRACK | SEMI | COMMA | L_BRACK | L_PAREN | EOF | R_BRACE
+                    ) =>
                 {
                     self.start_at(cp, NON_NULL_EXPR);
                     self.bump();
@@ -1555,7 +1652,8 @@ impl<'a> Parser<'a> {
 
     fn expr_primary(&mut self) {
         match self.nth(0) {
-            INT_LIT | FLOAT_LIT | STRING_LIT | TEMPLATE_LIT | TRUE_KW | FALSE_KW | NULL_KW | UNDEFINED_KW => {
+            INT_LIT | FLOAT_LIT | STRING_LIT | TEMPLATE_LIT | TRUE_KW | FALSE_KW | NULL_KW
+            | UNDEFINED_KW => {
                 self.start(LITERAL);
                 self.bump();
                 self.finish();
@@ -1633,7 +1731,9 @@ impl<'a> Parser<'a> {
                 self.finish();
             }
             FUNCTION_KW => {
-                self.error("`function` 式には対応していません。アロー関数 `(x) => ...` を使ってください");
+                self.error(
+                    "`function` 式には対応していません。アロー関数 `(x) => ...` を使ってください",
+                );
                 self.start(ERROR);
                 self.finish();
             }

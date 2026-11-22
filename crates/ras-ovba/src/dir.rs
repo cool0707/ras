@@ -18,7 +18,10 @@ const ID_TYPE_OBJECT: u16 = 0x0022;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ReferencePart {
     /// REFERENCENAME (0x0016, optional unicode half 0x003E).
-    Name { name: Vec<u8>, unicode: Option<Vec<u8>> },
+    Name {
+        name: Vec<u8>,
+        unicode: Option<Vec<u8>>,
+    },
     /// REFERENCEORIGINAL (0x0033).
     Original { libid: Vec<u8> },
     /// REFERENCECONTROL (0x002F ... 0x0030 ...).
@@ -34,9 +37,18 @@ pub(crate) enum ReferencePart {
         cookie: u32,
     },
     /// REFERENCEREGISTERED (0x000D).
-    Registered { libid: Vec<u8>, reserved1: u32, reserved2: u16 },
+    Registered {
+        libid: Vec<u8>,
+        reserved1: u32,
+        reserved2: u16,
+    },
     /// REFERENCEPROJECT (0x000E).
-    Project { absolute: Vec<u8>, relative: Vec<u8>, major: u32, minor: u16 },
+    Project {
+        absolute: Vec<u8>,
+        relative: Vec<u8>,
+        major: u32,
+        minor: u16,
+    },
 }
 
 /// A MODULE record.
@@ -226,7 +238,9 @@ impl DirStream {
         // PROJECTMODULES
         let id = r.u16()?;
         if id != 0x000F {
-            return format_err(format!("dir stream: expected PROJECTMODULES, found 0x{id:04X}"));
+            return format_err(format!(
+                "dir stream: expected PROJECTMODULES, found 0x{id:04X}"
+            ));
         }
         let count = u16_of(r.sized()?, "PROJECTMODULES")? as usize;
         if r.peek_u16() == Some(0x0013) {
@@ -339,7 +353,11 @@ impl DirStream {
             put_record(&mut out, 0x001E, &module.help_context.to_le_bytes());
             // MODULECOOKIE: "MUST be 0xFFFF on write".
             put_record(&mut out, 0x002C, &0xFFFFu16.to_le_bytes());
-            let type_id = if module.procedural { ID_TYPE_PROCEDURAL } else { ID_TYPE_OBJECT };
+            let type_id = if module.procedural {
+                ID_TYPE_PROCEDURAL
+            } else {
+                ID_TYPE_OBJECT
+            };
             put_record(&mut out, type_id, &[]);
             if module.readonly {
                 put_record(&mut out, 0x0025, &[]);
@@ -438,7 +456,11 @@ fn parse_references(r: &mut Reader<'_>) -> Result<Vec<ReferencePart>, OvbaError>
                 let libid = r.sized()?.to_vec();
                 let reserved1 = r.u32()?;
                 let reserved2 = r.u16()?;
-                parts.push(ReferencePart::Registered { libid, reserved1, reserved2 });
+                parts.push(ReferencePart::Registered {
+                    libid,
+                    reserved1,
+                    reserved2,
+                });
             }
             0x000E => {
                 let _size = r.u32()?;
@@ -446,7 +468,12 @@ fn parse_references(r: &mut Reader<'_>) -> Result<Vec<ReferencePart>, OvbaError>
                 let relative = r.sized()?.to_vec();
                 let major = r.u32()?;
                 let minor = r.u16()?;
-                parts.push(ReferencePart::Project { absolute, relative, major, minor });
+                parts.push(ReferencePart::Project {
+                    absolute,
+                    relative,
+                    major,
+                    minor,
+                });
             }
             other => {
                 return format_err(format!(
@@ -545,13 +572,14 @@ pub(crate) fn serialize_references(
         let text = codepage::decode_strict(from_cp, bytes, "project reference")?;
         codepage::encode(to_cp, &text, "project reference")
     };
-    let put_name = |out: &mut Vec<u8>, name: &[u8], unicode: &Option<Vec<u8>>| -> Result<(), OvbaError> {
-        put_record(out, 0x0016, &conv(name)?);
-        if let Some(unicode) = unicode {
-            put_record(out, 0x003E, unicode);
-        }
-        Ok(())
-    };
+    let put_name =
+        |out: &mut Vec<u8>, name: &[u8], unicode: &Option<Vec<u8>>| -> Result<(), OvbaError> {
+            put_record(out, 0x0016, &conv(name)?);
+            if let Some(unicode) = unicode {
+                put_record(out, 0x003E, unicode);
+            }
+            Ok(())
+        };
 
     let mut out = Vec::new();
     for part in parts {
@@ -589,7 +617,11 @@ pub(crate) fn serialize_references(
                 body.extend_from_slice(&cookie.to_le_bytes());
                 put_record(&mut out, 0x0030, &body);
             }
-            ReferencePart::Registered { libid, reserved1, reserved2 } => {
+            ReferencePart::Registered {
+                libid,
+                reserved1,
+                reserved2,
+            } => {
                 let libid = conv(libid)?;
                 let mut body = Vec::new();
                 body.extend_from_slice(&(libid.len() as u32).to_le_bytes());
@@ -598,7 +630,12 @@ pub(crate) fn serialize_references(
                 body.extend_from_slice(&reserved2.to_le_bytes());
                 put_record(&mut out, 0x000D, &body);
             }
-            ReferencePart::Project { absolute, relative, major, minor } => {
+            ReferencePart::Project {
+                absolute,
+                relative,
+                major,
+                minor,
+            } => {
                 let absolute = conv(absolute)?;
                 let relative = conv(relative)?;
                 let mut body = Vec::new();
@@ -623,7 +660,11 @@ pub(crate) fn default_references() -> Vec<ReferencePart> {
                 name: name.as_bytes().to_vec(),
                 unicode: Some(codepage::utf16le(name)),
             },
-            ReferencePart::Registered { libid: libid.as_bytes().to_vec(), reserved1: 0, reserved2: 0 },
+            ReferencePart::Registered {
+                libid: libid.as_bytes().to_vec(),
+                reserved1: 0,
+                reserved2: 0,
+            },
         ]
     };
     let mut parts = Vec::new();

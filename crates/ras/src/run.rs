@@ -30,7 +30,12 @@ fn runs(program: &Path, electron: bool) -> bool {
     if electron {
         c.env("ELECTRON_RUN_AS_NODE", "1");
     }
-    c.arg("--version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success())
+    c.arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// The run time: `RAS_NODE`, then `node` on PATH, then the one VS Code comes with.
@@ -38,36 +43,68 @@ pub fn find_node() -> Result<Node, String> {
     if let Some(p) = std::env::var_os("RAS_NODE").filter(|p| !p.is_empty()) {
         let program = PathBuf::from(p);
         if runs(&program, false) {
-            return Ok(Node { program, electron: false });
+            return Ok(Node {
+                program,
+                electron: false,
+            });
         }
         if runs(&program, true) {
-            return Ok(Node { program, electron: true });
+            return Ok(Node {
+                program,
+                electron: true,
+            });
         }
-        return Err(format!("RAS_NODE の {} を実行できません", program.display()));
+        return Err(format!(
+            "RAS_NODE の {} を実行できません",
+            program.display()
+        ));
     }
     if runs(Path::new("node"), false) {
-        return Ok(Node { program: PathBuf::from("node"), electron: false });
+        return Ok(Node {
+            program: PathBuf::from("node"),
+            electron: false,
+        });
     }
     let mut candidates: Vec<PathBuf> = Vec::new();
     if cfg!(windows) {
         for var in ["LOCALAPPDATA", "ProgramFiles"] {
             if let Some(base) = std::env::var_os(var) {
                 let base = PathBuf::from(base);
-                candidates.push(base.join("Programs").join("Microsoft VS Code").join("Code.exe"));
+                candidates.push(
+                    base.join("Programs")
+                        .join("Microsoft VS Code")
+                        .join("Code.exe"),
+                );
                 candidates.push(base.join("Microsoft VS Code").join("Code.exe"));
             }
         }
     } else if cfg!(target_os = "macos") {
-        candidates.push(PathBuf::from("/Applications/Visual Studio Code.app/Contents/MacOS/Electron"));
+        candidates.push(PathBuf::from(
+            "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+        ));
         if let Some(home) = std::env::var_os("HOME") {
-            candidates.push(PathBuf::from(home).join("Applications/Visual Studio Code.app/Contents/MacOS/Electron"));
+            candidates.push(
+                PathBuf::from(home)
+                    .join("Applications/Visual Studio Code.app/Contents/MacOS/Electron"),
+            );
         }
     } else {
-        candidates.extend(["/usr/share/code/code", "/usr/lib/code/code", "/opt/visual-studio-code/code", "/snap/code/current/usr/share/code/code"].map(PathBuf::from));
+        candidates.extend(
+            [
+                "/usr/share/code/code",
+                "/usr/lib/code/code",
+                "/opt/visual-studio-code/code",
+                "/snap/code/current/usr/share/code/code",
+            ]
+            .map(PathBuf::from),
+        );
     }
     for program in candidates {
         if program.is_file() && runs(&program, true) {
-            return Ok(Node { program, electron: true });
+            return Ok(Node {
+                program,
+                electron: true,
+            });
         }
     }
     Err("JavaScript のランタイムが見つかりません。Node.js をインストールして PATH を通すか、環境変数 RAS_NODE に node（または VS Code の実行ファイル）のパスを指定してください".into())
@@ -78,7 +115,14 @@ pub fn find_node() -> Result<Node, String> {
 pub fn find_book_addon() -> Result<PathBuf, String> {
     if let Some(p) = std::env::var_os("RAS_BOOK_ADDON").filter(|p| !p.is_empty()) {
         let p = PathBuf::from(p);
-        return if p.is_file() { Ok(p) } else { Err(format!("RAS_BOOK_ADDON の {} が見つかりません", p.display())) };
+        return if p.is_file() {
+            Ok(p)
+        } else {
+            Err(format!(
+                "RAS_BOOK_ADDON の {} が見つかりません",
+                p.display()
+            ))
+        };
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().unwrap_or(Path::new("."));
@@ -91,7 +135,10 @@ pub fn find_book_addon() -> Result<PathBuf, String> {
         "libras_book.so"
     });
     if built.is_file() {
-        let newer = |a: &Path, b: &Path| match (a.metadata().and_then(|m| m.modified()), b.metadata().and_then(|m| m.modified())) {
+        let newer = |a: &Path, b: &Path| match (
+            a.metadata().and_then(|m| m.modified()),
+            b.metadata().and_then(|m| m.modified()),
+        ) {
             (Ok(x), Ok(y)) => x > y,
             _ => true,
         };
@@ -129,7 +176,15 @@ pub fn write_js(dir: &Path, files: &[ras_compiler::JsFile]) -> Result<(), String
 
 /// `vbYes`, `yes` or a number: the value `msgBox` returns.
 pub fn msgbox_answer(text: &str) -> Result<i64, String> {
-    const NAMES: &[(&str, i64)] = &[("ok", 1), ("cancel", 2), ("abort", 3), ("retry", 4), ("ignore", 5), ("yes", 6), ("no", 7)];
+    const NAMES: &[(&str, i64)] = &[
+        ("ok", 1),
+        ("cancel", 2),
+        ("abort", 3),
+        ("retry", 4),
+        ("ignore", 5),
+        ("yes", 6),
+        ("no", 7),
+    ];
     let lower = text.trim().to_lowercase();
     let key = lower.strip_prefix("vb").unwrap_or(&lower);
     if let Some((_, v)) = NAMES.iter().find(|(n, _)| *n == key) {
@@ -193,7 +248,10 @@ const MAX_CELLS: usize = 50;
 pub fn run(root: &Path, out: &ras_compiler::JsOutput, args: &RunArgs) -> Result<ExitCode, String> {
     if args.list {
         if args.json {
-            println!("{}", serde_json::to_string(&out.entries).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string(&out.entries).unwrap_or_default()
+            );
         } else {
             for e in &out.entries {
                 println!("{e}");
@@ -204,8 +262,17 @@ pub fn run(root: &Path, out: &ras_compiler::JsOutput, args: &RunArgs) -> Result<
     let entry = match &args.entry {
         Some(e) => e.clone(),
         None if out.entries.len() == 1 => out.entries[0].clone(),
-        None if out.entries.is_empty() => return Err("実行できる関数がありません（引数なしの関数か、トップレベルの文が必要です）".into()),
-        None => return Err(format!("実行する関数を指定してください（候補: {}）", out.entries.join(", "))),
+        None if out.entries.is_empty() => {
+            return Err(
+                "実行できる関数がありません（引数なしの関数か、トップレベルの文が必要です）".into(),
+            )
+        }
+        None => {
+            return Err(format!(
+                "実行する関数を指定してください（候補: {}）",
+                out.entries.join(", ")
+            ))
+        }
     };
     let mut msgbox = Vec::new();
     for m in &args.msgbox {
@@ -219,7 +286,14 @@ pub fn run(root: &Path, out: &ras_compiler::JsOutput, args: &RunArgs) -> Result<
     let pairs = |list: &[String], option: &str| -> Result<serde_json::Map<String, Json>, String> {
         let mut out = serde_json::Map::new();
         for item in list {
-            let (from, to) = item.split_once('=').filter(|(a, b)| !a.is_empty() && b.contains('.')).ok_or_else(|| format!("{option} `{item}` は `名前=モジュール名.関数名` の形で指定してください"))?;
+            let (from, to) = item
+                .split_once('=')
+                .filter(|(a, b)| !a.is_empty() && b.contains('.'))
+                .ok_or_else(|| {
+                    format!(
+                        "{option} `{item}` は `名前=モジュール名.関数名` の形で指定してください"
+                    )
+                })?;
             out.insert(from.to_string(), json!(to));
         }
         Ok(out)
@@ -229,12 +303,21 @@ pub fn run(root: &Path, out: &ras_compiler::JsOutput, args: &RunArgs) -> Result<
         "run": pairs(&args.replace_run, "--replace-run")?, "createObject": pairs(&args.replace_object, "--replace-object")?,
     });
     let mut cmd = node.command();
-    cmd.arg("--enable-source-maps").arg(dir.join("ras-main.js")).arg(&entry).current_dir(root);
-    cmd.env("RAS_BOOK_ADDON", &addon).env("RAS_RUN_REPORT", &report_path).env("RAS_ANSWERS", answers.to_string());
-    cmd.env_remove("RAS_COM_ADDON").env_remove("RAS_MOCK_HOST").env_remove("RAS_ENTRY");
+    cmd.arg("--enable-source-maps")
+        .arg(dir.join("ras-main.js"))
+        .arg(&entry)
+        .current_dir(root);
+    cmd.env("RAS_BOOK_ADDON", &addon)
+        .env("RAS_RUN_REPORT", &report_path)
+        .env("RAS_ANSWERS", answers.to_string());
+    cmd.env_remove("RAS_COM_ADDON")
+        .env_remove("RAS_MOCK_HOST")
+        .env_remove("RAS_ENTRY");
     cmd.stdin(Stdio::null());
     if args.json {
-        cmd.env("RAS_RUN_QUIET", "1").stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.env("RAS_RUN_QUIET", "1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
     }
     // Without --json the program's output is shown as it runs.
     let launch = |e: std::io::Error| format!("{} を起動できません: {e}", node.program.display());
@@ -244,19 +327,33 @@ pub fn run(root: &Path, out: &ras_compiler::JsOutput, args: &RunArgs) -> Result<
     } else {
         (cmd.status().map_err(launch)?, Vec::new())
     };
-    let report: Option<Json> = std::fs::read_to_string(&report_path).ok().and_then(|t| serde_json::from_str(&t).ok());
+    let report: Option<Json> = std::fs::read_to_string(&report_path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok());
     let Some(mut report) = report else {
         // The process ended without reporting (it crashed, or the launcher failed).
         eprint!("{}", String::from_utf8_lossy(&stderr));
-        return Err(format!("実行が結果を残さずに終了しました（終了コード {}）", status.code().map(|c| c.to_string()).unwrap_or_else(|| "なし".into())));
+        return Err(format!(
+            "実行が結果を残さずに終了しました（終了コード {}）",
+            status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "なし".into())
+        ));
     };
     let _ = std::fs::remove_file(&report_path);
     // What the program changed: each saved workbook against the file it was read from.
     let mut diffs: Vec<(String, String, Result<diff::Diff, String>)> = Vec::new();
     if !args.no_diff {
         for w in report["workbooks"].as_array().cloned().unwrap_or_default() {
-            let (Some(file), Some(source)) = (w["file"].as_str(), w["source"].as_str()) else { continue };
-            diffs.push((source.to_string(), file.to_string(), crate::book::compare(&root.join(source), &root.join(file))));
+            let (Some(file), Some(source)) = (w["file"].as_str(), w["source"].as_str()) else {
+                continue;
+            };
+            diffs.push((
+                source.to_string(),
+                file.to_string(),
+                crate::book::compare(&root.join(source), &root.join(file)),
+            ));
         }
     }
     if args.json {
@@ -275,23 +372,52 @@ pub fn run(root: &Path, out: &ras_compiler::JsOutput, args: &RunArgs) -> Result<
                 e.remove("stack");
             }
         }
-        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).unwrap_or_default()
+        );
     } else {
         if let Some(e) = report["error"].as_object() {
-            let at = match (e.get("file").and_then(Json::as_str), e.get("line").and_then(Json::as_i64)) {
+            let at = match (
+                e.get("file").and_then(Json::as_str),
+                e.get("line").and_then(Json::as_i64),
+            ) {
                 (Some(f), Some(l)) if l > 0 => format!("（{f}:{l}）"),
                 _ => String::new(),
             };
-            eprintln!("実行時エラー {}: {}{at}", e.get("code").and_then(Json::as_i64).unwrap_or(0), e.get("description").and_then(Json::as_str).unwrap_or_default());
+            eprintln!(
+                "実行時エラー {}: {}{at}",
+                e.get("code").and_then(Json::as_i64).unwrap_or(0),
+                e.get("description")
+                    .and_then(Json::as_str)
+                    .unwrap_or_default()
+            );
             // The RAS frames of the stack, when there are more than the one above.
-            let frames: Vec<&str> = e.get("stack").and_then(Json::as_str).unwrap_or_default().lines().filter(|l| l.trim_start().starts_with("at ")).collect();
+            let frames: Vec<&str> = e
+                .get("stack")
+                .and_then(Json::as_str)
+                .unwrap_or_default()
+                .lines()
+                .filter(|l| l.trim_start().starts_with("at "))
+                .collect();
             if frames.len() > 1 {
                 for f in frames {
                     eprintln!("{f}");
                 }
             }
         }
-        let unanswered = report["dialogs"].as_array().map(|d| d.iter().filter(|x| x["answered"] == json!(false) && x["kind"] != json!("getOpenFilename") && x["kind"] != json!("getSaveAsFilename")).count()).unwrap_or(0);
+        let unanswered = report["dialogs"]
+            .as_array()
+            .map(|d| {
+                d.iter()
+                    .filter(|x| {
+                        x["answered"] == json!(false)
+                            && x["kind"] != json!("getOpenFilename")
+                            && x["kind"] != json!("getSaveAsFilename")
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
         if unanswered > 0 {
             println!("ダイアログ {unanswered} 個に既定の応答をしました（--msgbox {} / --inputbox <文字列> で応答を指定できます）", msgbox_name(6));
         }
@@ -308,14 +434,31 @@ pub fn run(root: &Path, out: &ras_compiler::JsOutput, args: &RunArgs) -> Result<
     }
     if args.view && !args.json {
         for w in report["workbooks"].as_array().cloned().unwrap_or_default() {
-            let Some(file) = w["file"].as_str() else { continue };
+            let Some(file) = w["file"].as_str() else {
+                continue;
+            };
             let before = w["source"].as_str().map(|s| root.join(s));
             // The shapes and controls of the workbook the run read: the saved one keeps the cells.
-            match crate::book::write_view(&root.join(file), before.as_deref(), false, None, &root.join("build").join("view"), before.as_deref(), None) {
-                Ok(page) => println!("グリッド表示: {}", page.strip_prefix(root).unwrap_or(&page).display()),
+            match crate::book::write_view(
+                &root.join(file),
+                before.as_deref(),
+                false,
+                None,
+                &root.join("build").join("view"),
+                before.as_deref(),
+                None,
+            ) {
+                Ok(page) => println!(
+                    "グリッド表示: {}",
+                    page.strip_prefix(root).unwrap_or(&page).display()
+                ),
                 Err(e) => eprintln!("warning: {file} のグリッド表示を作れませんでした: {e}"),
             }
         }
     }
-    Ok(if report["ok"] == json!(true) { ExitCode::SUCCESS } else { ExitCode::from(1) })
+    Ok(if report["ok"] == json!(true) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }

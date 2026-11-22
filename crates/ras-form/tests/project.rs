@@ -156,10 +156,9 @@ fn new_project_with_a_generated_form() {
 fn excel_project_gets_a_new_form_and_keeps_its_own() {
     // xl/vbaProject.bin saved by Excel 16 with the hand-made form
     // `MutationForm` (from xlflow's test data).
-    let original = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/mutation.bin"),
-    )
-    .unwrap();
+    let original =
+        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/mutation.bin"))
+            .unwrap();
     let before = streams_under(&original, "MutationForm");
     assert!(before.contains_key("f"));
     let msforms_before = count(
@@ -281,10 +280,9 @@ fn forms_are_read_back_from_a_project() {
     assert!(!ras_ovba::is_generated_form(&forms[0].code));
 
     // The forms of a project saved by Excel.
-    let excel = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/generation.bin"),
-    )
-    .unwrap();
+    let excel =
+        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/generation.bin"))
+            .unwrap();
     let forms = ras_ovba::read_user_forms(&excel).unwrap();
     let names: Vec<&str> = forms.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, ["GenerationBaseline", "EmptyForm"]);
@@ -301,7 +299,10 @@ const FRX_COMPOBJ: &str = "0100feff030a0000fffffffff0692ac6dc16ce119e9800aa00574
 #[test]
 fn a_form_is_exported_as_frm_and_frx() {
     let designer = fixture("04-frames.form.json");
-    let form = user_form(&designer, "Option Explicit\n\nPrivate Sub UserForm_Click()\nEnd Sub\n");
+    let form = user_form(
+        &designer,
+        "Option Explicit\n\nPrivate Sub UserForm_Click()\nEnd Sub\n",
+    );
     let files = ras_ovba::export_user_form(&form, 932).unwrap();
 
     // The text part: designer block, attributes, code.
@@ -309,7 +310,10 @@ fn a_form_is_exported_as_frm_and_frx() {
     assert_eq!(lines[0], "VERSION 5.00");
     assert_eq!(
         lines[1],
-        format!("Begin {{C62A69F0-16DC-11CE-9E98-00AA00574A4F}} {}", form.name)
+        format!(
+            "Begin {{C62A69F0-16DC-11CE-9E98-00AA00574A4F}} {}",
+            form.name
+        )
     );
     let end = lines.iter().position(|l| *l == "End").unwrap();
     let keys: Vec<&str> = lines[2..end]
@@ -318,7 +322,15 @@ fn a_form_is_exported_as_frm_and_frx() {
         .collect();
     assert_eq!(
         keys,
-        ["Caption", "ClientHeight", "ClientLeft", "ClientTop", "ClientWidth", "OleObjectBlob", "StartUpPosition"]
+        [
+            "Caption",
+            "ClientHeight",
+            "ClientLeft",
+            "ClientTop",
+            "ClientWidth",
+            "OleObjectBlob",
+            "StartUpPosition"
+        ]
     );
     assert!(lines[2..end]
         .contains(&format!("   OleObjectBlob   =   \"{}.frx\":0000", form.name).as_str()));
@@ -352,18 +364,27 @@ fn a_form_is_exported_as_frm_and_frx() {
             .unwrap()
     };
     assert_eq!((int(8), int(12)), (0, 0));
-    assert_eq!(int(16), property("ClientWidth") + 2 * property("ClientLeft"));
+    assert_eq!(
+        int(16),
+        property("ClientWidth") + 2 * property("ClientLeft")
+    );
     assert_eq!(
         int(20),
         property("ClientHeight") + property("ClientTop") + property("ClientLeft")
     );
     let compound = frx[24..].to_vec();
-    assert_eq!(&compound[..8], [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    assert_eq!(
+        &compound[..8],
+        [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]
+    );
     let file = cfb::CompoundFile::open(std::io::Cursor::new(compound.clone())).unwrap();
     assert_eq!(file.version(), cfb::Version::V3);
     assert_eq!(
         file.root_entry().clsid().to_bytes_le(),
-        [0xf0, 0x69, 0x2a, 0xc6, 0xdc, 0x16, 0xce, 0x11, 0x9e, 0x98, 0, 0xaa, 0, 0x57, 0x4a, 0x4f]
+        [
+            0xf0, 0x69, 0x2a, 0xc6, 0xdc, 0x16, 0xce, 0x11, 0x9e, 0x98, 0, 0xaa, 0, 0x57, 0x4a,
+            0x4f
+        ]
     );
 
     // Everything of the designer storage except VBFrame, whose properties
@@ -382,7 +403,10 @@ fn a_form_is_exported_as_frm_and_frx() {
             .map(|p| p.to_string_lossy().to_string())
             .collect();
         let mut data = Vec::new();
-        file.open_stream(&path).unwrap().read_to_end(&mut data).unwrap();
+        file.open_stream(&path)
+            .unwrap()
+            .read_to_end(&mut data)
+            .unwrap();
         stored.insert(key.join("/"), data);
     }
     let mut expected = designer.streams.clone();
@@ -394,7 +418,10 @@ fn a_form_is_exported_as_frm_and_frx() {
     assert_eq!(stored, expected);
     for (path, clsid) in designer.storages.iter().filter(|(p, _)| !p.is_empty()) {
         assert_eq!(
-            file.entry(format!("/{path}")).unwrap().clsid().to_bytes_le(),
+            file.entry(format!("/{path}"))
+                .unwrap()
+                .clsid()
+                .to_bytes_le(),
             *clsid,
             "{path}"
         );
@@ -412,17 +439,19 @@ fn a_form_is_exported_as_frm_and_frx() {
 /// storage gives the same header and the same streams.
 #[test]
 fn the_frx_layout_is_the_one_excel_writes() {
-    let original = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/excel-export.frx"),
-    )
-    .unwrap();
+    let original =
+        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/excel-export.frx"))
+            .unwrap();
     let read = |frx: &[u8]| {
         let mut file = cfb::CompoundFile::open(std::io::Cursor::new(frx[24..].to_vec())).unwrap();
         let clsid = file.root_entry().clsid().to_bytes_le();
         let mut streams = BTreeMap::new();
         for name in ["f", "o", "\u{1}CompObj"] {
             let mut data = Vec::new();
-            file.open_stream(format!("/{name}")).unwrap().read_to_end(&mut data).unwrap();
+            file.open_stream(format!("/{name}"))
+                .unwrap()
+                .read_to_end(&mut data)
+                .unwrap();
             streams.insert(name.to_string(), data);
         }
         let count = file.walk().count();
@@ -447,7 +476,9 @@ fn the_frx_layout_is_the_one_excel_writes() {
     let (new_clsid, new_streams, new_count) = read(&files.frx);
     assert_eq!((new_clsid, new_count), (clsid, count));
     assert_eq!(new_streams, expected);
-    assert!(files.frm.contains("   OleObjectBlob   =   \"MazeChaseForm.frx\":0000\r\n"));
+    assert!(files
+        .frm
+        .contains("   OleObjectBlob   =   \"MazeChaseForm.frx\":0000\r\n"));
 }
 
 /// What `VBComponent.Export` writes reads back as the same form: the forms of
@@ -455,25 +486,57 @@ fn the_frx_layout_is_the_one_excel_writes() {
 /// same designer streams and nested storages and give the same FormSpec.
 #[test]
 fn an_exported_form_reads_back() {
-    for file in ["generation.bin", "frame.bin", "multipage.bin", "pictures.bin", "typed.bin"] {
-        let bin = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(file)).unwrap();
+    for file in [
+        "generation.bin",
+        "frame.bin",
+        "multipage.bin",
+        "pictures.bin",
+        "typed.bin",
+    ] {
+        let bin = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/data")
+                .join(file),
+        )
+        .unwrap();
         for form in ras_ovba::read_user_forms(&bin).unwrap() {
             let files = ras_ovba::export_user_form(&form, 932).unwrap();
             let back = ras_ovba::import_user_form(&files.frm, &files.frx, 932).unwrap();
             assert_eq!(back.name, form.name);
             assert_eq!(back.code, form.code, "{file} {}", form.name);
             // The root storage: Excel stores it with or without the form's CLSID; the `.frx` has it.
-            let nested = |s: &BTreeMap<String, [u8; 16]>| s.iter().filter(|(p, _)| !p.is_empty()).map(|(p, c)| (p.clone(), *c)).collect::<Vec<_>>();
-            assert_eq!(nested(&back.storages), nested(&form.storages), "{file} {}", form.name);
+            let nested = |s: &BTreeMap<String, [u8; 16]>| {
+                s.iter()
+                    .filter(|(p, _)| !p.is_empty())
+                    .map(|(p, c)| (p.clone(), *c))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(
+                nested(&back.storages),
+                nested(&form.storages),
+                "{file} {}",
+                form.name
+            );
             assert!(back.storages.contains_key(""));
             for (path, data) in &form.streams {
                 if path != "\u{1}CompObj" && path != "\u{3}VBFrame" {
-                    assert_eq!(back.streams.get(path), Some(data), "{file} {} {path:?}", form.name);
+                    assert_eq!(
+                        back.streams.get(path),
+                        Some(data),
+                        "{file} {} {path:?}",
+                        form.name
+                    );
                 }
             }
-            let original = ras_form::snapshot(&form.name, &form.streams, &form.storages, 932).unwrap();
+            let original =
+                ras_form::snapshot(&form.name, &form.streams, &form.storages, 932).unwrap();
             let read = ras_form::snapshot(&back.name, &back.streams, &back.storages, 932).unwrap();
-            assert_eq!(read.spec.to_json(), original.spec.to_json(), "{file} {}", form.name);
+            assert_eq!(
+                read.spec.to_json(),
+                original.spec.to_json(),
+                "{file} {}",
+                form.name
+            );
         }
     }
     // Not an exported form.

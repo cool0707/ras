@@ -11,10 +11,19 @@ pub(crate) enum Place {
     /// A JavaScript l-value (variable, field, array element).
     Native(String),
     /// Property of a host (COM) or late-bound object.
-    Host { obj: String, name: String },
+    Host {
+        obj: String,
+        name: String,
+    },
     /// Default member of a host object (`coll(i) = v`).
-    Item { obj: String, index: String },
-    MapItem { map: String, key: String },
+    Item {
+        obj: String,
+        index: String,
+    },
+    MapItem {
+        map: String,
+        key: String,
+    },
 }
 
 /// Types whose values are only known at run time (VBA `Variant`).
@@ -54,7 +63,10 @@ fn int_like(t: &Type) -> bool {
 
 /// An expression that names a storage location (its array / struct value must be copied on assignment).
 fn is_place(e: &Expr) -> bool {
-    matches!(e.peel().kind, ExprKind::Name(_) | ExprKind::This | ExprKind::Member { .. } | ExprKind::Index { .. })
+    matches!(
+        e.peel().kind,
+        ExprKind::Name(_) | ExprKind::This | ExprKind::Member { .. } | ExprKind::Index { .. }
+    )
 }
 
 impl<'p> Gen<'p> {
@@ -74,8 +86,16 @@ impl<'p> Gen<'p> {
     pub(crate) fn to_string(&mut self, v: String, ty: &Type) -> String {
         match ty {
             Type::Str => v,
-            Type::Byte | Type::Short | Type::Int | Type::Long | Type::Enum(_) | Type::Ptr | Type::Bool => format!("String({v})"),
-            Type::Float | Type::Double | Type::Currency | Type::Decimal => format!("$rt.numStr({v})"),
+            Type::Byte
+            | Type::Short
+            | Type::Int
+            | Type::Long
+            | Type::Enum(_)
+            | Type::Ptr
+            | Type::Bool => format!("String({v})"),
+            Type::Float | Type::Double | Type::Currency | Type::Decimal => {
+                format!("$rt.numStr({v})")
+            }
             _ => format!("$rt.str({v})"),
         }
     }
@@ -132,7 +152,11 @@ impl<'p> Gen<'p> {
     pub(crate) fn coerce_store(&mut self, e: &Expr, to: &Type) -> String {
         let from = self.ty(e);
         if from == Type::Null {
-            return if to.is_object() || is_dyn(to) { "null".into() } else { self.zero(to) };
+            return if to.is_object() || is_dyn(to) {
+                "null".into()
+            } else {
+                self.zero(to)
+            };
         }
         let v = self.expr(e);
         let v = self.coerce(v, &from, to);
@@ -154,18 +178,39 @@ impl<'p> Gen<'p> {
                     let fields = self.prog.structs[sid].fields.clone();
                     let vals: Vec<String> = props
                         .iter()
-                        .filter_map(|p| fields.iter().find(|f| f.0 == p.key.text).map(|f| (p, f.1.clone())))
-                        .map(|(p, fty)| format!("{}: {}", p.key.text, self.coerce_store(&p.value, &fty)))
+                        .filter_map(|p| {
+                            fields
+                                .iter()
+                                .find(|f| f.0 == p.key.text)
+                                .map(|f| (p, f.1.clone()))
+                        })
+                        .map(|(p, fty)| {
+                            format!("{}: {}", p.key.text, self.coerce_store(&p.value, &fty))
+                        })
                         .collect();
-                    format!("Object.assign(new {}(), {{ {} }})", self.struct_ref(sid), vals.join(", "))
+                    format!(
+                        "Object.assign(new {}(), {{ {} }})",
+                        self.struct_ref(sid),
+                        vals.join(", ")
+                    )
                 }
                 _ => "null".into(),
             },
             ExprKind::Array(items) if matches!(self.ty(e), Type::Struct(_)) => {
-                let Type::Struct(sid) = self.ty(e) else { unreachable!() };
+                let Type::Struct(sid) = self.ty(e) else {
+                    unreachable!()
+                };
                 let fields = self.prog.structs[sid].fields.clone();
-                let vals: Vec<String> = items.iter().zip(fields.iter()).map(|(it, f)| format!("{}: {}", f.0, self.coerce_store(it, &f.1))).collect();
-                format!("Object.assign(new {}(), {{ {} }})", self.struct_ref(sid), vals.join(", "))
+                let vals: Vec<String> = items
+                    .iter()
+                    .zip(fields.iter())
+                    .map(|(it, f)| format!("{}: {}", f.0, self.coerce_store(it, &f.1)))
+                    .collect();
+                format!(
+                    "Object.assign(new {}(), {{ {} }})",
+                    self.struct_ref(sid),
+                    vals.join(", ")
+                )
             }
             ExprKind::Int { value, .. } => value.to_string(),
             ExprKind::Float { text, .. } => match text.parse::<f64>() {
@@ -201,7 +246,10 @@ impl<'p> Gen<'p> {
                 // In a form's code-behind, `this` is the form (its only instance, spec §14.10.7).
                 _ if self.prog.modules[self.module].is_form() => "$me".into(),
                 // In the file of a sheet (of `ThisWorkbook`), `this` is that sheet (workbook).
-                _ if self.prog.modules[self.module].document().is_some() => format!("$rt.global({})", js_str(&self.prog.modules[self.module].vba_name)),
+                _ if self.prog.modules[self.module].document().is_some() => format!(
+                    "$rt.global({})",
+                    js_str(&self.prog.modules[self.module].vba_name)
+                ),
                 _ => "this".into(),
             },
             ExprKind::Paren(inner) => {
@@ -237,7 +285,9 @@ impl<'p> Gen<'p> {
                     },
                 }
             }
-            ExprKind::IncDec { .. } | ExprKind::Assign { .. } => format!("({})", self.effect_ex(e, true)),
+            ExprKind::IncDec { .. } | ExprKind::Assign { .. } => {
+                format!("({})", self.effect_ex(e, true))
+            }
             ExprKind::Binary { op, lhs, rhs } => self.binary(e, *op, lhs, rhs),
             ExprKind::Ternary { cond, then, els } => {
                 let ty = self.ty(e);
@@ -250,12 +300,20 @@ impl<'p> Gen<'p> {
             ExprKind::New { ty, args } => self.new_expr(e, ty, self.info().call_args(e.id, args)),
             // Reordered into the call's arguments by the checker (spec §3.3).
             ExprKind::NamedArg { value, .. } => self.expr(value),
-            ExprKind::Member { object, name, optional } => self.member_expr(e, object, &name.text, *optional),
+            ExprKind::Member {
+                object,
+                name,
+                optional,
+            } => self.member_expr(e, object, &name.text, *optional),
             ExprKind::Index { object, index } => self.index_expr(object, index),
             ExprKind::As { expr, .. } => {
                 let (from, to) = (self.ty(expr), self.ty(e));
                 if from == Type::Null {
-                    return if to.is_object() || is_dyn(&to) { "null".into() } else { self.zero(&to) };
+                    return if to.is_object() || is_dyn(&to) {
+                        "null".into()
+                    } else {
+                        self.zero(&to)
+                    };
                 }
                 let v = self.expr(expr);
                 self.convert(v, &from, &to)
@@ -267,7 +325,9 @@ impl<'p> Gen<'p> {
                         let d = &self.prog.classes[c];
                         match d.kind {
                             ClassKind::Class => format!("({v} instanceof {})", self.class_ref(c)),
-                            ClassKind::Interface => format!("$rt.implements({v}, {})", js_str(&d.name)),
+                            ClassKind::Interface => {
+                                format!("$rt.implements({v}, {})", js_str(&d.name))
+                            }
                             ClassKind::Host => format!("$rt.typeIs({v}, {})", js_str(&d.name)),
                         }
                     }
@@ -286,7 +346,11 @@ impl<'p> Gen<'p> {
     fn effect_ex(&mut self, e: &Expr, want: bool) -> String {
         match &e.kind {
             ExprKind::Assign { op, target, value } => self.assign(*op, target, value),
-            ExprKind::IncDec { inc, prefix, operand } => {
+            ExprKind::IncDec {
+                inc,
+                prefix,
+                operand,
+            } => {
                 let ty = self.ty(operand);
                 let place = self.place(operand);
                 let op = if *inc { "+" } else { "-" };
@@ -318,14 +382,24 @@ impl<'p> Gen<'p> {
     }
 
     fn resolve_class(&self, t: &ast::TypeRef) -> Option<ClassId> {
-        let ast::TypeRef::Named { path, .. } = t else { return None };
+        let ast::TypeRef::Named { path, .. } = t else {
+            return None;
+        };
         let md = &self.prog.modules[self.module];
         let sym = if path.len() == 1 {
-            md.scope.get(&path[0].text).or_else(|| self.prog.globals.get(&path[0].text)).cloned()
+            md.scope
+                .get(&path[0].text)
+                .or_else(|| self.prog.globals.get(&path[0].text))
+                .cloned()
         } else {
             match md.scope.get(&path[0].text) {
                 Some(Sym::Module(t)) => self.prog.modules[*t].exports.get(&path[1].text).cloned(),
-                _ => self.prog.namespaces.get(&path[0].text).and_then(|n| n.get(&path[1].text)).cloned(),
+                _ => self
+                    .prog
+                    .namespaces
+                    .get(&path[0].text)
+                    .and_then(|n| n.get(&path[1].text))
+                    .cloned(),
             }
         };
         match sym {
@@ -370,7 +444,13 @@ impl<'p> Gen<'p> {
         let obj_ty = self.ty(object);
         let obj_is_ns = matches!(obj_ty, Type::Ns(_));
         let dot = if optional { "?." } else { "." };
-        if matches!(obj_ty, Type::Union(_)) && self.is_late_bound(&obj_ty) && matches!(res, Some(Res::Field(..) | Res::Method(_) | Res::Property { .. })) {
+        if matches!(obj_ty, Type::Union(_))
+            && self.is_late_bound(&obj_ty)
+            && matches!(
+                res,
+                Some(Res::Field(..) | Res::Method(_) | Res::Property { .. })
+            )
+        {
             let o = self.expr(object);
             return self.host_get(o, member, optional);
         }
@@ -461,14 +541,29 @@ impl<'p> Gen<'p> {
                 let res = self.info().res.get(&inner.id).cloned();
                 let obj_ty = self.ty(object);
                 if matches!(obj_ty, Type::Union(_)) && self.is_late_bound(&obj_ty) {
-                    return Place::Host { obj: self.expr(object), name: name.text.clone() };
+                    return Place::Host {
+                        obj: self.expr(object),
+                        name: name.text.clone(),
+                    };
                 }
                 match res {
-                    Some(Res::Field(c, idx)) if self.prog.classes[c].kind == ClassKind::Host => Place::Host { obj: self.expr(object), name: self.prog.classes[c].fields[idx].vba_name().to_string() },
-                    Some(Res::Field(c, _)) if matches!(obj_ty, Type::Ns(_)) => Place::Native(format!("{}.{}", self.class_ref(c), name.text)),
+                    Some(Res::Field(c, idx)) if self.prog.classes[c].kind == ClassKind::Host => {
+                        Place::Host {
+                            obj: self.expr(object),
+                            name: self.prog.classes[c].fields[idx].vba_name().to_string(),
+                        }
+                    }
+                    Some(Res::Field(c, _)) if matches!(obj_ty, Type::Ns(_)) => {
+                        Place::Native(format!("{}.{}", self.class_ref(c), name.text))
+                    }
                     Some(Res::Global(v)) => Place::Native(self.global_ref(v)),
-                    Some(Res::Field(..)) | Some(Res::Property { .. }) => Place::Native(format!("{}.{}", self.expr(object), name.text)),
-                    _ if self.is_late_bound(&obj_ty) => Place::Host { obj: self.expr(object), name: name.text.clone() },
+                    Some(Res::Field(..)) | Some(Res::Property { .. }) => {
+                        Place::Native(format!("{}.{}", self.expr(object), name.text))
+                    }
+                    _ if self.is_late_bound(&obj_ty) => Place::Host {
+                        obj: self.expr(object),
+                        name: name.text.clone(),
+                    },
                     _ => Place::Native(format!("{}.{}", self.expr(object), name.text)),
                 }
             }
@@ -506,14 +601,26 @@ impl<'p> Gen<'p> {
                 let vty = self.ty(value);
                 let cur = self.place_get(&place);
                 let v = self.expr(value);
-                let result = if tty == Type::Str { Type::Str } else { tty.clone() };
+                let result = if tty == Type::Str {
+                    Type::Str
+                } else {
+                    tty.clone()
+                };
                 let combined = self.arith(op, cur, &tty, v, &vty, &result);
                 self.place_set(&place, combined)
             }
         }
     }
 
-    fn arith(&mut self, op: BinaryOp, l: String, lt: &Type, r: String, rt: &Type, result: &Type) -> String {
+    fn arith(
+        &mut self,
+        op: BinaryOp,
+        l: String,
+        lt: &Type,
+        r: String,
+        rt: &Type,
+        result: &Type,
+    ) -> String {
         if op == BinaryOp::Add && *result == Type::Str {
             let a = self.to_string(l, lt);
             let b = self.to_string(r, rt);
@@ -521,13 +628,25 @@ impl<'p> Gen<'p> {
         }
         if (*lt == Type::Date || *rt == Type::Date) && matches!(op, BinaryOp::Add | BinaryOp::Sub) {
             let sym = if op == BinaryOp::Add { "+" } else { "-" };
-            return if *result == Type::Date { format!("$rt.date(+{l} {sym} +{r})") } else { format!("(+{l} {sym} +{r})") };
+            return if *result == Type::Date {
+                format!("$rt.date(+{l} {sym} +{r})")
+            } else {
+                format!("(+{l} {sym} +{r})")
+            };
         }
         let dynamic = is_dyn(lt) || is_dyn(rt);
-        if dynamic && (op.is_arithmetic() || matches!(op, BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge)) {
+        if dynamic
+            && (op.is_arithmetic()
+                || matches!(
+                    op,
+                    BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+                ))
+        {
             // Variant arithmetic: the operand types decide at run time.
             return match op {
-                BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => format!("($rt.cmp({l}, {r}) {} 0)", op.symbol()),
+                BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                    format!("($rt.cmp({l}, {r}) {} 0)", op.symbol())
+                }
                 _ => format!("$rt.dyn({}, {l}, {r})", js_str(op.symbol())),
             };
         }
@@ -557,7 +676,9 @@ impl<'p> Gen<'p> {
             BinaryOp::And => format!("({l} && {r})"),
             BinaryOp::Or => format!("({l} || {r})"),
             BinaryOp::Coalesce => format!("({l} ?? {r})"),
-            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => format!("({l} {} {r})", op.symbol()),
+            BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                format!("({l} {} {r})", op.symbol())
+            }
         }
     }
 
@@ -575,7 +696,11 @@ impl<'p> Gen<'p> {
                     if lt == Type::Null && rt == Type::Null {
                         return (!negate).to_string();
                     }
-                    let (other, oty) = if lt == Type::Null { (rhs, &rt) } else { (lhs, &lt) };
+                    let (other, oty) = if lt == Type::Null {
+                        (rhs, &rt)
+                    } else {
+                        (lhs, &lt)
+                    };
                     let v = self.expr(other);
                     return if oty.is_object() || is_dyn(oty) {
                         format!("({v} {} null)", if negate { "!=" } else { "==" })
@@ -604,8 +729,23 @@ impl<'p> Gen<'p> {
     }
 
     fn arrow(&mut self, e: &Expr, a: &ast::ArrowFn) -> String {
-        let locals = self.info().lambda_params.get(&e.id).cloned().unwrap_or_default();
-        let params: Vec<String> = a.params.iter().enumerate().map(|(i, p)| locals.get(i).map(|&l| self.local_name(l)).unwrap_or_else(|| js_ident(&p.name.text))).collect();
+        let locals = self
+            .info()
+            .lambda_params
+            .get(&e.id)
+            .cloned()
+            .unwrap_or_default();
+        let params: Vec<String> = a
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                locals
+                    .get(i)
+                    .map(|&l| self.local_name(l))
+                    .unwrap_or_else(|| js_ident(&p.name.text))
+            })
+            .collect();
         let (saved_ret, saved_resume) = (self.ret_ty.take(), self.resume);
         self.resume = 0;
         let out = match &a.body {
@@ -667,7 +807,11 @@ impl<'p> Gen<'p> {
                 Some(p) if !p.rest && !p.ty.contains_param() => {
                     let from = self.ty(a);
                     if from == Type::Null {
-                        if p.ty.is_object() || is_dyn(&p.ty) { "null".into() } else { self.zero(&p.ty) }
+                        if p.ty.is_object() || is_dyn(&p.ty) {
+                            "null".into()
+                        } else {
+                            self.zero(&p.ty)
+                        }
                     } else {
                         let v = self.expr(a);
                         self.coerce(v, &from, &p.ty)
@@ -684,12 +828,20 @@ impl<'p> Gen<'p> {
     }
 
     /// Call of a host (COM / VBA) function. `recv` is the lowered receiver of a member call.
-    fn host_call(&mut self, recv: Option<String>, f: FnId, args: &[Expr], qualified: bool) -> String {
+    fn host_call(
+        &mut self,
+        recv: Option<String>,
+        f: FnId,
+        args: &[Expr],
+        qualified: bool,
+    ) -> String {
         let prog = self.prog;
         let def = &prog.fns[f];
         let mut vals: Vec<String> = Vec::new();
         for (i, a) in args.iter().enumerate() {
-            let v = if self.ty(a) == Type::Null && def.params.get(i).is_some_and(|p| p.ty.is_object()) {
+            let v = if self.ty(a) == Type::Null
+                && def.params.get(i).is_some_and(|p| p.ty.is_object())
+            {
                 // `Nothing`, not `Empty`.
                 "$rt.Nothing".to_string()
             } else {
@@ -712,16 +864,22 @@ impl<'p> Gen<'p> {
             "vba.d" => format!("$rt.vba.{}({argv})", def.vba_name()),
             "msforms.d" => format!("$rt.msforms.{}({argv})", def.vba_name()),
             "test.d" => format!("$rt.test.{}({argv})", def.vba_name()),
-            "excel.d" | "office.d" => format!("$rt.call($rt.global(\"Application\"), {name}, [{argv}])"),
+            "excel.d" | "office.d" => {
+                format!("$rt.call($rt.global(\"Application\"), {name}, [{argv}])")
+            }
             // Declared in the project's own type definitions: a procedure of the workbook.
             _ => format!("$rt.runMacro({name}, [{argv}])"),
         }
     }
 
     pub(crate) fn call(&mut self, e: &Expr) -> String {
-        let ExprKind::Call { callee, args, .. } = &e.kind else { return "undefined".into() };
+        let ExprKind::Call { callee, args, .. } = &e.kind else {
+            return "undefined".into();
+        };
         let args = self.info().call_args(e.id, args);
-        let Some(ci) = self.info().calls.get(&e.id) else { return "undefined".into() };
+        let Some(ci) = self.info().calls.get(&e.id) else {
+            return "undefined".into();
+        };
         let c = callee.peel();
         let recv = match &c.kind {
             ExprKind::Member { object, .. } => Some(&**object),
@@ -733,7 +891,15 @@ impl<'p> Gen<'p> {
                 if let FnKind::Declare { lib, alias } = &self.prog.fns[f].kind {
                     let name = alias.as_deref().unwrap_or(&self.prog.fns[f].name);
                     let emulated = lib.to_lowercase().trim_end_matches(".dll") == "kernel32"
-                        && matches!(name, "Sleep" | "GetTickCount" | "GetTickCount64" | "GetCurrentProcessId" | "QueryPerformanceCounter" | "QueryPerformanceFrequency");
+                        && matches!(
+                            name,
+                            "Sleep"
+                                | "GetTickCount"
+                                | "GetTickCount64"
+                                | "GetCurrentProcessId"
+                                | "QueryPerformanceCounter"
+                                | "QueryPerformanceFrequency"
+                        );
                     if !emulated {
                         let _ = self.unsupported(e.span, "`declare` 関数（DLL 呼び出し）");
                     }
@@ -743,8 +909,13 @@ impl<'p> Gen<'p> {
                 format!("{target}({argv})")
             }
             CallTarget::Ext(f) => {
-                let Some(r) = recv else { return "undefined".into() };
-                let byref = self.prog.fns[f].params.first().is_some_and(|p| p.mode == PassMode::ByRef);
+                let Some(r) = recv else {
+                    return "undefined".into();
+                };
+                let byref = self.prog.fns[f]
+                    .params
+                    .first()
+                    .is_some_and(|p| p.mode == PassMode::ByRef);
                 let rv = if byref { self.by_ref(r) } else { self.expr(r) };
                 let target = self.fn_ref(f);
                 let mut argv = vec![rv];
@@ -752,9 +923,15 @@ impl<'p> Gen<'p> {
                 format!("{target}({})", argv.join(", "))
             }
             CallTarget::Method(f) => {
-                let Some(r) = recv else { return "undefined".into() };
+                let Some(r) = recv else {
+                    return "undefined".into();
+                };
                 // `Sheet1.clearInput()`: an `export function` of the sheet's file (spec §12.2).
-                if matches!(self.prog.fns[f].kind, FnKind::Free) && self.prog.modules[self.prog.fns[f].module].document().is_some() {
+                if matches!(self.prog.fns[f].kind, FnKind::Free)
+                    && self.prog.modules[self.prog.fns[f].module]
+                        .document()
+                        .is_some()
+                {
                     let target = self.fn_ref(f);
                     let argv = self.ras_args(f, 0, args).join(", ");
                     return format!("{target}({argv})");
@@ -763,7 +940,10 @@ impl<'p> Gen<'p> {
                 let o = self.expr(r);
                 let argv = self.ras_args(f, 0, args).join(", ");
                 if matches!(rt, Type::Union(_)) && self.is_late_bound(&rt) {
-                    return format!("$rt.call({o}, {}, [{argv}])", js_str(&self.prog.fns[f].name));
+                    return format!(
+                        "$rt.call({o}, {}, [{argv}])",
+                        js_str(&self.prog.fns[f].name)
+                    );
                 }
                 format!("{o}.{}({argv})", self.prog.fns[f].name)
             }
@@ -777,7 +957,10 @@ impl<'p> Gen<'p> {
                 let o = self.expr(r);
                 // `ws.Range(Cells(1, 1), Cells(2, 2))`: the inner references follow the receiver (spec §13.4).
                 let info = self.info();
-                let qualifies = self.prog.fns[f].vba_name() == "Range" && args.iter().any(|a| crate::astutil::any_expr_in(a, &mut |x| info.auto_qualified.contains(&x.id)));
+                let qualifies = self.prog.fns[f].vba_name() == "Range"
+                    && args.iter().any(|a| {
+                        crate::astutil::any_expr_in(a, &mut |x| info.auto_qualified.contains(&x.id))
+                    });
                 if qualifies {
                     let q = self.tmp("q");
                     let outer = self.qualifier.replace(q.clone());
@@ -802,7 +985,11 @@ impl<'p> Gen<'p> {
                 let argv = self.plain_args(args);
                 match &c.kind {
                     ExprKind::Super => format!("super({argv})"),
-                    ExprKind::Member { object, name, .. } if matches!(object.kind, ExprKind::Super) => format!("super.{}({argv})", name.text),
+                    ExprKind::Member { object, name, .. }
+                        if matches!(object.kind, ExprKind::Super) =>
+                    {
+                        format!("super.{}({argv})", name.text)
+                    }
                     ExprKind::Member { object, name, .. } => {
                         let o = self.expr(object);
                         format!("$rt.call({o}, {}, [{argv}])", js_str(&name.text))
@@ -836,7 +1023,11 @@ impl<'p> Gen<'p> {
             Some(CallTarget::Ctor(c)) => {
                 let def = &self.prog.classes[c];
                 if def.kind == ClassKind::Host {
-                    return format!("$rt.newHost({}, {})", js_str(def.namespace.as_deref().unwrap_or("")), js_str(&def.name));
+                    return format!(
+                        "$rt.newHost({}, {})",
+                        js_str(def.namespace.as_deref().unwrap_or("")),
+                        js_str(&def.name)
+                    );
                 }
                 let argv = match def.ctor {
                     Some(ctor) => self.ras_args(ctor, 0, args).join(", "),
@@ -857,7 +1048,10 @@ impl<'p> Gen<'p> {
                 if zeros.is_empty() {
                     created
                 } else {
-                    format!("Object.assign({created}, {{ $zero: {{ {} }} }})", zeros.join(", "))
+                    format!(
+                        "Object.assign({created}, {{ $zero: {{ {} }} }})",
+                        zeros.join(", ")
+                    )
                 }
             }
             _ => "null".into(),
@@ -869,31 +1063,63 @@ impl<'p> Gen<'p> {
     /// `target.on("<Event>", handler)` (spec §12.2.3): the run time keeps the handler and the
     /// forms and the stand-in for Excel call it when they raise the event of `target`.
     fn event_on(&mut self, e: &Expr, target: &str, args: &[Expr]) -> String {
-        let Some(bind) = self.info().event_binds.get(&e.id).cloned() else { return "null".into() };
+        let Some(bind) = self.info().event_binds.get(&e.id).cloned() else {
+            return "null".into();
+        };
         match bind.kind {
             EventBindKind::OnAction { each } => match bind.handler_fn {
                 Some(f) => {
                     let d = &self.prog.fns[f];
                     let macro_name = format!("{}.{}", self.prog.modules[d.module].vba_name, d.name);
-                    format!("$rt.{}({target}, {})", if each { "onActionEach" } else { "onAction" }, js_str(&macro_name))
+                    format!(
+                        "$rt.{}({target}, {})",
+                        if each { "onActionEach" } else { "onAction" },
+                        js_str(&macro_name)
+                    )
                 }
                 None => "null".into(),
             },
-            EventBindKind::Listener { classes, dynamic, each, event, params, .. } => {
+            EventBindKind::Listener {
+                classes,
+                dynamic,
+                each,
+                event,
+                params,
+                ..
+            } => {
                 let handler = match (bind.handler_fn, args.get(1)) {
                     (Some(f), _) => self.fn_ref(f),
                     (None, Some(a)) => self.expr(a),
                     (None, None) => "null".into(),
                 };
-                let cancel = params.iter().position(|p| p.2 && p.1 == "Boolean").map(|i| i as i64).unwrap_or(-1);
+                let cancel = params
+                    .iter()
+                    .position(|p| p.2 && p.1 == "Boolean")
+                    .map(|i| i as i64)
+                    .unwrap_or(-1);
                 // The form whose code attaches the handler: it goes when the form is unloaded.
-                let owner = if self.prog.modules[self.module].is_form() { "$me" } else { "null" };
+                let owner = if self.prog.modules[self.module].is_form() {
+                    "$me"
+                } else {
+                    "null"
+                };
                 if dynamic || each {
                     // The members (the target) of the classes that have the event.
-                    let kinds: Vec<String> = classes.iter().map(|c| js_str(&self.prog.classes[*c].name)).collect();
-                    return format!("$rt.{}({target}, [{}], {}, {handler}, {owner}, {cancel})", if each { "listenEach" } else { "listenAny" }, kinds.join(", "), js_str(&event));
+                    let kinds: Vec<String> = classes
+                        .iter()
+                        .map(|c| js_str(&self.prog.classes[*c].name))
+                        .collect();
+                    return format!(
+                        "$rt.{}({target}, [{}], {}, {handler}, {owner}, {cancel})",
+                        if each { "listenEach" } else { "listenAny" },
+                        kinds.join(", "),
+                        js_str(&event)
+                    );
                 }
-                format!("$rt.listen({target}, {}, {handler}, {owner}, {cancel})", js_str(&event))
+                format!(
+                    "$rt.listen({target}, {}, {handler}, {owner}, {cancel})",
+                    js_str(&event)
+                )
             }
         }
     }
@@ -907,7 +1133,22 @@ impl<'p> Gen<'p> {
         };
         // Array-style methods of a host collection work on a copy of its members (spec §4.4).
         let (r, recv_ty) = match self.prog.collection_elem(&recv_ty) {
-            Some(elem) if matches!(intr, ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind | ArrFindIndex | CollToArray) => (format!("Array.from($rt.iter({r}))"), Type::array(elem)),
+            Some(elem)
+                if matches!(
+                    intr,
+                    ArrMap
+                        | ArrFilter
+                        | ArrForEach
+                        | ArrReduce
+                        | ArrSome
+                        | ArrEvery
+                        | ArrFind
+                        | ArrFindIndex
+                        | CollToArray
+                ) =>
+            {
+                (format!("Array.from($rt.iter({r}))"), Type::array(elem))
+            }
             _ => (r, recv_ty),
         };
         if intr == EventOn {
@@ -915,7 +1156,8 @@ impl<'p> Gen<'p> {
         }
         let a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
         let argv = a.join(", ");
-        let arg = |i: usize, default: &str| a.get(i).cloned().unwrap_or_else(|| default.to_string());
+        let arg =
+            |i: usize, default: &str| a.get(i).cloned().unwrap_or_else(|| default.to_string());
         let elem = recv_ty.elem_of();
         match intr {
             EventOn => unreachable!(),
@@ -949,7 +1191,10 @@ impl<'p> Gen<'p> {
             ArrIncludes => format!("{r}.includes({argv})"),
             ArrJoin => format!("$rt.join({r}, {})", arg(0, "\",\"")),
             ArrSlice => format!("{r}.slice({argv})"),
-            ArrSort => format!("$rt.sort({r}{}{argv})", if a.is_empty() { "" } else { ", " }),
+            ArrSort => format!(
+                "$rt.sort({r}{}{argv})",
+                if a.is_empty() { "" } else { ", " }
+            ),
             ArrReverse => format!("{r}.reverse()"),
             ArrConcat => format!("{r}.concat({argv})"),
             ArrClear => format!("{r}.length = 0"),
@@ -1023,10 +1268,14 @@ impl<'p> Gen<'p> {
                 self.to_string(arg(0, "\"\""), &at)
             }
             ConsoleLog => {
-                let parts: Vec<String> = args.iter().zip(a.iter()).map(|(x, v)| {
-                    let at = self.ty(x);
-                    self.to_string(v.clone(), &at)
-                }).collect();
+                let parts: Vec<String> = args
+                    .iter()
+                    .zip(a.iter())
+                    .map(|(x, v)| {
+                        let at = self.ty(x);
+                        self.to_string(v.clone(), &at)
+                    })
+                    .collect();
                 format!("$rt.print({})", parts.join(", "))
             }
             IsNullish => "false".into(),

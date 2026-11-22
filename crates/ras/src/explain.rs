@@ -11,11 +11,26 @@ pub struct Entry {
 }
 
 const fn e(code: &'static str, title: &'static str, body: &'static str) -> Entry {
-    Entry { code, title, body, example: "" }
+    Entry {
+        code,
+        title,
+        body,
+        example: "",
+    }
 }
 
-const fn x(code: &'static str, title: &'static str, body: &'static str, example: &'static str) -> Entry {
-    Entry { code, title, body, example }
+const fn x(
+    code: &'static str,
+    title: &'static str,
+    body: &'static str,
+    example: &'static str,
+) -> Entry {
+    Entry {
+        code,
+        title,
+        body,
+        example,
+    }
 }
 
 pub const ENTRIES: &[Entry] = &[
@@ -254,8 +269,15 @@ pub fn find(code: &str) -> Option<&'static Entry> {
 }
 
 pub fn text(entry: &Entry) -> String {
-    let kind = if entry.code.starts_with('W') { "警告" } else { "エラー" };
-    let mut out = format!("{} — {}（{kind}）\n\n{}\n", entry.code, entry.title, entry.body);
+    let kind = if entry.code.starts_with('W') {
+        "警告"
+    } else {
+        "エラー"
+    };
+    let mut out = format!(
+        "{} — {}（{kind}）\n\n{}\n",
+        entry.code, entry.title, entry.body
+    );
     if !entry.example.is_empty() {
         out.push_str("\n例:\n");
         for line in entry.example.lines() {
@@ -267,7 +289,10 @@ pub fn text(entry: &Entry) -> String {
 
 /// `ras explain` without a code: the codes and what they are about.
 pub fn list() -> String {
-    ENTRIES.iter().map(|e| format!("{}  {}\n", e.code, e.title)).collect()
+    ENTRIES
+        .iter()
+        .map(|e| format!("{}  {}\n", e.code, e.title))
+        .collect()
 }
 
 #[cfg(test)]
@@ -280,11 +305,17 @@ mod tests {
             let path = entry.path();
             if path.is_dir() {
                 codes_in(&path, out);
-            } else if path.extension().is_some_and(|e| e == "rs") && path.file_name().is_some_and(|n| n != "explain.rs") {
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && path.file_name().is_some_and(|n| n != "explain.rs")
+            {
                 let text = std::fs::read_to_string(&path).unwrap();
                 let bytes = text.as_bytes();
                 for i in 0..bytes.len().saturating_sub(6) {
-                    if bytes[i] == b'"' && (bytes[i + 1] == b'E' || bytes[i + 1] == b'W') && bytes[i + 2..i + 6].iter().all(u8::is_ascii_digit) && bytes[i + 6] == b'"' {
+                    if bytes[i] == b'"'
+                        && (bytes[i + 1] == b'E' || bytes[i + 1] == b'W')
+                        && bytes[i + 2..i + 6].iter().all(u8::is_ascii_digit)
+                        && bytes[i + 6] == b'"'
+                    {
                         out.insert(text[i + 1..i + 6].to_string());
                     }
                 }

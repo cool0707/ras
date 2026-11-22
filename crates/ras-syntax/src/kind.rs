@@ -360,7 +360,10 @@ impl SyntaxKind {
     }
 
     pub fn is_type(self) -> bool {
-        matches!(self, NAMED_TYPE | ARRAY_TYPE | FN_TYPE | PAREN_TYPE | UNION_TYPE | TUPLE_TYPE | OBJECT_TYPE)
+        matches!(
+            self,
+            NAMED_TYPE | ARRAY_TYPE | FN_TYPE | PAREN_TYPE | UNION_TYPE | TUPLE_TYPE | OBJECT_TYPE
+        )
     }
 
     pub fn is_stmt(self) -> bool {
@@ -457,7 +460,11 @@ pub fn lex(text: &str) -> Vec<Token> {
                 }
             }
         }
-        out.push(Token { kind, start: span.start as u32, end: span.end as u32 });
+        out.push(Token {
+            kind,
+            start: span.start as u32,
+            end: span.end as u32,
+        });
     }
     out
 }
@@ -467,31 +474,45 @@ mod tests {
     use super::*;
 
     fn kinds(src: &str) -> Vec<SyntaxKind> {
-        lex(src).into_iter().map(|t| t.kind).filter(|k| !k.is_trivia()).collect()
+        lex(src)
+            .into_iter()
+            .map(|t| t.kind)
+            .filter(|k| !k.is_trivia())
+            .collect()
     }
 
     #[test]
     fn numbers() {
-        assert_eq!(kinds("123 123L 0xFF 1.5 1e3 2d 1.5f 1.5m"), vec![
-            INT_LIT, INT_LIT, INT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT
-        ]);
+        assert_eq!(
+            kinds("123 123L 0xFF 1.5 1e3 2d 1.5f 1.5m"),
+            vec![INT_LIT, INT_LIT, INT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT]
+        );
     }
 
     #[test]
     fn keywords_and_idents() {
-        assert_eq!(kinds("byref x inlined 変数 resume"), vec![BYREF_KW, IDENT, IDENT, IDENT, RESUME_KW]);
+        assert_eq!(
+            kinds("byref x inlined 変数 resume"),
+            vec![BYREF_KW, IDENT, IDENT, IDENT, RESUME_KW]
+        );
     }
 
     #[test]
     fn lossless() {
         let src = "let s = \"a\\\"b\"; // c\n/* d */ `t${x}` § @x";
         let toks = lex(src);
-        let joined: String = toks.iter().map(|t| &src[t.start as usize..t.end as usize]).collect();
+        let joined: String = toks
+            .iter()
+            .map(|t| &src[t.start as usize..t.end as usize])
+            .collect();
         assert_eq!(joined, src);
     }
 
     #[test]
     fn member_after_index() {
-        assert_eq!(kinds("a[0].length"), vec![IDENT, L_BRACK, INT_LIT, R_BRACK, DOT, IDENT]);
+        assert_eq!(
+            kinds("a[0].length"),
+            vec![IDENT, L_BRACK, INT_LIT, R_BRACK, DOT, IDENT]
+        );
     }
 }

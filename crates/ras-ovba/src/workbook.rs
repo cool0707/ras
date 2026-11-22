@@ -31,7 +31,13 @@ fn sanitize_sheet_names(names: &[&str]) -> Vec<String> {
     for (index, raw) in names.iter().enumerate() {
         let mut name: String = raw
             .chars()
-            .map(|c| if matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']') || c.is_control() { '_' } else { c })
+            .map(|c| {
+                if matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']') || c.is_control() {
+                    '_'
+                } else {
+                    c
+                }
+            })
             .collect();
         name = name.trim_matches('\'').to_string();
         if name.encode_utf16().count() > 31 {
@@ -49,9 +55,15 @@ fn sanitize_sheet_names(names: &[&str]) -> Vec<String> {
         }
         let base = name.clone();
         let mut n = 2usize;
-        while result.iter().any(|existing| existing.to_lowercase() == name.to_lowercase()) {
+        while result
+            .iter()
+            .any(|existing| existing.to_lowercase() == name.to_lowercase())
+        {
             let suffix = format!(" ({n})");
-            let keep: String = base.chars().take(31usize.saturating_sub(suffix.chars().count())).collect();
+            let keep: String = base
+                .chars()
+                .take(31usize.saturating_sub(suffix.chars().count()))
+                .collect();
             name = format!("{keep}{suffix}");
             n += 1;
         }
@@ -132,7 +144,9 @@ pub fn create_workbook(kind: BookKind, sheet_names: &[&str]) -> Vec<u8> {
     for (name, text) in &entries {
         // Writing into memory cannot fail; should it ever, an empty result
         // is returned instead of panicking.
-        if writer.start_file(name.as_str(), options).is_err() || writer.write_all(text.as_bytes()).is_err() {
+        if writer.start_file(name.as_str(), options).is_err()
+            || writer.write_all(text.as_bytes()).is_err()
+        {
             return Vec::new();
         }
     }
@@ -151,7 +165,13 @@ mod tests {
         assert_eq!(sanitize_sheet_names(&[]), vec!["Sheet1"]);
         assert_eq!(
             sanitize_sheet_names(&["a/b", "A_B", "", "'q'", &"x".repeat(40)]),
-            vec!["a_b".to_string(), "A_B (2)".to_string(), "Sheet3".to_string(), "q".to_string(), "x".repeat(31)]
+            vec![
+                "a_b".to_string(),
+                "A_B (2)".to_string(),
+                "Sheet3".to_string(),
+                "q".to_string(),
+                "x".repeat(31)
+            ]
         );
     }
 }

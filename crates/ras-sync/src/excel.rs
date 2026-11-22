@@ -5,8 +5,12 @@ use std::path::Path;
 
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Globalization::{MultiByteToWideChar, WideCharToMultiByte, CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
-use windows::Win32::System::Com::{CLSIDFromProgID, CoTaskMemFree, CreateBindCtx, GetRunningObjectTable, IDispatch, IMoniker};
+use windows::Win32::Globalization::{
+    MultiByteToWideChar, WideCharToMultiByte, CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS,
+};
+use windows::Win32::System::Com::{
+    CLSIDFromProgID, CoTaskMemFree, CreateBindCtx, GetRunningObjectTable, IDispatch, IMoniker,
+};
 use windows::Win32::System::Ole::GetActiveObject;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, SW_SHOWNORMAL};
@@ -35,7 +39,11 @@ fn same_path(a: &str, b: &str) -> bool {
 }
 
 fn failed(what: &str, e: windows::core::Error) -> SyncError {
-    SyncError::Failed(format!("{what}: {} (0x{:08X})", e.message(), e.code().0 as u32))
+    SyncError::Failed(format!(
+        "{what}: {} (0x{:08X})",
+        e.message(),
+        e.code().0 as u32
+    ))
 }
 
 pub struct Book {
@@ -46,8 +54,11 @@ pub struct Book {
 /// The workbook registered under `path` in the Running Object Table, in any Excel instance.
 fn find_in_rot(path: &str) -> Result<Option<Obj>, SyncError> {
     unsafe {
-        let rot = GetRunningObjectTable(0).map_err(|e| failed("Running Object Table を開けません", e))?;
-        let monikers = rot.EnumRunning().map_err(|e| failed("Running Object Table を列挙できません", e))?;
+        let rot =
+            GetRunningObjectTable(0).map_err(|e| failed("Running Object Table を開けません", e))?;
+        let monikers = rot
+            .EnumRunning()
+            .map_err(|e| failed("Running Object Table を列挙できません", e))?;
         let ctx = CreateBindCtx(0).map_err(|e| failed("CreateBindCtx", e))?;
         loop {
             let mut item: [Option<IMoniker>; 1] = [None];
@@ -55,8 +66,12 @@ fn find_in_rot(path: &str) -> Result<Option<Obj>, SyncError> {
             if monikers.Next(&mut item, Some(&mut fetched)).is_err() || fetched == 0 {
                 return Ok(None);
             }
-            let Some(moniker) = item[0].take() else { continue };
-            let Ok(display) = moniker.GetDisplayName(&ctx, None) else { continue };
+            let Some(moniker) = item[0].take() else {
+                continue;
+            };
+            let Ok(display) = moniker.GetDisplayName(&ctx, None) else {
+                continue;
+            };
             let name = display.to_string().unwrap_or_default();
             CoTaskMemFree(Some(display.0 as *const c_void));
             if !same_path(&name, path) {
@@ -82,7 +97,11 @@ fn find_by_name(path: &Path) -> Option<Obj> {
         GetActiveObject(&clsid, None, &mut unknown).ok()?;
         Obj(unknown?.cast::<IDispatch>().ok()?)
     };
-    let workbook = app.object("Workbooks", &[]).ok()?.object("Item", &[Arg::Str(file_name)]).ok()?;
+    let workbook = app
+        .object("Workbooks", &[])
+        .ok()?
+        .object("Item", &[Arg::Str(file_name)])
+        .ok()?;
     let full_name = workbook.get("FullName", &[]).ok()?.string();
     let is_url = full_name.to_lowercase().starts_with("http");
     (is_url || same_path(&full_name, &path.to_string_lossy())).then_some(workbook)
@@ -95,7 +114,9 @@ pub fn find(path: &Path) -> Result<Option<Book>, SyncError> {
         Some(w) => Some(w),
         None => find_by_name(path),
     };
-    let Some(workbook) = workbook else { return Ok(None) };
+    let Some(workbook) = workbook else {
+        return Ok(None);
+    };
     let app = workbook.object("Application", &[])?;
     Ok(Some(Book { app, workbook }))
 }
@@ -104,13 +125,28 @@ pub fn find(path: &Path) -> Result<Option<Book>, SyncError> {
 pub fn open(path: &Path) -> Result<Book, SyncError> {
     init_com();
     if !path.is_file() {
-        return Err(SyncError::Failed(format!("{} が見つかりません", path.display())));
+        return Err(SyncError::Failed(format!(
+            "{} が見つかりません",
+            path.display()
+        )));
     }
     let file = wide(&path.to_string_lossy());
     let verb = wide("open");
-    let instance = unsafe { ShellExecuteW(None, PCWSTR(verb.as_ptr()), PCWSTR(file.as_ptr()), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+    let instance = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(verb.as_ptr()),
+            PCWSTR(file.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
     if instance.0 as usize <= 32 {
-        return Err(SyncError::Failed(format!("{} を開けませんでした（Excel がインストールされているか確認してください）", path.display())));
+        return Err(SyncError::Failed(format!(
+            "{} を開けませんでした（Excel がインストールされているか確認してください）",
+            path.display()
+        )));
     }
     let started = std::time::Instant::now();
     while started.elapsed().as_millis() < OPEN_WAIT_MS {
@@ -143,14 +179,20 @@ impl Book {
             ))
         })?;
         if project.get("Protection", &[])?.int() == Some(PP_LOCKED) {
-            return Err(SyncError::Failed("VBA プロジェクトがパスワードで保護されているため、同期できません".into()));
+            return Err(SyncError::Failed(
+                "VBA プロジェクトがパスワードで保護されているため、同期できません".into(),
+            ));
         }
         // Rewriting code under a running or halted macro resets its state or crashes it (spec §14.6).
         if project.get("Mode", &[])?.int() != Some(VM_DESIGN) {
             return Err(SyncError::Busy("マクロの実行中か、中断モードです".into()));
         }
         let book = self.workbook.get("Name", &[])?.string();
-        Ok(Project { components: project.object("VBComponents", &[])?, app: self.app.clone(), book })
+        Ok(Project {
+            components: project.object("VBComponents", &[])?,
+            app: self.app.clone(),
+            book,
+        })
     }
 
     /// The code name of the workbook (`ThisWorkbook`).
@@ -165,7 +207,10 @@ impl Book {
         let mut out = Vec::with_capacity(count as usize);
         for i in 1..=count {
             let sheet = sheets.object("Item", &[Arg::Int(i)])?;
-            out.push(ras_form::import::Sheet { code_name: sheet.get("CodeName", &[])?.string(), name: sheet.get("Name", &[])?.string() });
+            out.push(ras_form::import::Sheet {
+                code_name: sheet.get("CodeName", &[])?.string(),
+                name: sheet.get("Name", &[])?.string(),
+            });
         }
         Ok(out)
     }
@@ -194,18 +239,33 @@ impl Book {
             if component.get("Type", &[])?.int() != Some(CT_DOCUMENT) {
                 continue;
             }
-            let Ok(properties) = component.object("Properties", &[]) else { continue };
-            let Ok(property) = properties.object("Item", &[Arg::Str("Name")]) else { continue };
-            if property.get("Value", &[]).map(|v| v.string()).is_ok_and(|v| v == name) {
+            let Ok(properties) = component.object("Properties", &[]) else {
+                continue;
+            };
+            let Ok(property) = properties.object("Item", &[Arg::Str("Name")]) else {
+                continue;
+            };
+            if property
+                .get("Value", &[])
+                .map(|v| v.string())
+                .is_ok_and(|v| v == name)
+            {
                 return Ok(component);
             }
         }
-        Err(SyncError::Failed(format!("シート「{name}」のモジュールが VBA プロジェクトに見つかりません")))
+        Err(SyncError::Failed(format!(
+            "シート「{name}」のモジュールが VBA プロジェクトに見つかりません"
+        )))
     }
 
     /// Deletes a worksheet without Excel asking.
     fn delete_sheet(&self, sheet: &Obj) -> Result<(), SyncError> {
-        let alerts = self.app.get("DisplayAlerts", &[]).ok().and_then(|v| v.int()).is_none_or(|v| v != 0);
+        let alerts = self
+            .app
+            .get("DisplayAlerts", &[])
+            .ok()
+            .and_then(|v| v.int())
+            .is_none_or(|v| v != 0);
         let _ = self.app.put("DisplayAlerts", Arg::Bool(false));
         let result = sheet.call("Delete", &[]);
         let _ = self.app.put("DisplayAlerts", Arg::Bool(alerts));
@@ -214,7 +274,10 @@ impl Book {
 
     /// Adds, copies, removes or renames a worksheet of the open workbook (spec §14.16). The
     /// workbook is not saved. The names are checked by the caller.
-    pub fn edit_sheet(&self, edit: &ras_ovba::SheetEdit) -> Result<ras_ovba::SheetEditReport, SyncError> {
+    pub fn edit_sheet(
+        &self,
+        edit: &ras_ovba::SheetEdit,
+    ) -> Result<ras_ovba::SheetEditReport, SyncError> {
         use ras_ovba::{Place, SheetEdit};
         // A macro that runs, a cell being edited: nothing is changed (spec §14.6).
         self.project()?;
@@ -222,10 +285,19 @@ impl Book {
         let objects = self.worksheet_objects()?;
         let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
         let find = |wanted: &str| -> Result<usize, SyncError> {
-            sheets.iter().position(|s| same(&s.code_name, wanted)).or_else(|| sheets.iter().position(|s| same(&s.name, wanted))).ok_or_else(|| SyncError::Failed(format!("ブックに「{wanted}」というシートがありません")))
+            sheets
+                .iter()
+                .position(|s| same(&s.code_name, wanted))
+                .or_else(|| sheets.iter().position(|s| same(&s.name, wanted)))
+                .ok_or_else(|| {
+                    SyncError::Failed(format!("ブックに「{wanted}」というシートがありません"))
+                })
         };
         // The new sheet gets its names; when that fails, it goes again.
-        let finish = |sheet: Obj, name: Option<&str>, code_name: Option<&str>| -> Result<(String, String), SyncError> {
+        let finish = |sheet: Obj,
+                      name: Option<&str>,
+                      code_name: Option<&str>|
+         -> Result<(String, String), SyncError> {
             let named = (|| {
                 if let Some(name) = name {
                     sheet.put("Name", Arg::Str(name)).map_err(excel_refused)?;
@@ -233,7 +305,9 @@ impl Book {
                 let tab = sheet.get("Name", &[])?.string();
                 let component = self.sheet_component(&tab)?;
                 if let Some(code_name) = code_name {
-                    component.put("Name", Arg::Str(code_name)).map_err(excel_refused)?;
+                    component
+                        .put("Name", Arg::Str(code_name))
+                        .map_err(excel_refused)?;
                 }
                 Ok((tab, component.get("Name", &[])?.string()))
             })();
@@ -244,11 +318,17 @@ impl Book {
         };
         let mut report = ras_ovba::SheetEditReport::default();
         match edit {
-            SheetEdit::Add { name, code_name, place } => {
+            SheetEdit::Add {
+                name,
+                code_name,
+                place,
+            } => {
                 let collection = self.workbook.object("Worksheets", &[])?;
                 let sheet = match place {
                     Place::Before(s) => collection.object("Add", &[Arg::Obj(&objects[find(s)?].0)]),
-                    Place::After(s) => collection.object("Add", &[Arg::Missing, Arg::Obj(&objects[find(s)?].0)]),
+                    Place::After(s) => {
+                        collection.object("Add", &[Arg::Missing, Arg::Obj(&objects[find(s)?].0)])
+                    }
                     Place::End => match objects.last() {
                         Some(last) => collection.object("Add", &[Arg::Missing, Arg::Obj(&last.0)]),
                         None => collection.object("Add", &[]),
@@ -257,22 +337,39 @@ impl Book {
                 .map_err(excel_refused)?;
                 (report.name, report.code_name) = finish(sheet, Some(name), code_name.as_deref())?;
             }
-            SheetEdit::Copy { sheet, name, code_name, place } => {
+            SheetEdit::Copy {
+                sheet,
+                name,
+                code_name,
+                place,
+            } => {
                 let index = find(sheet)?;
                 let source = &objects[index].0;
                 match place {
-                    Some(Place::Before(s)) => source.call("Copy", &[Arg::Obj(&objects[find(s)?].0)]),
-                    Some(Place::After(s)) => source.call("Copy", &[Arg::Missing, Arg::Obj(&objects[find(s)?].0)]),
-                    Some(Place::End) => source.call("Copy", &[Arg::Missing, Arg::Obj(&objects[objects.len() - 1].0)]),
+                    Some(Place::Before(s)) => {
+                        source.call("Copy", &[Arg::Obj(&objects[find(s)?].0)])
+                    }
+                    Some(Place::After(s)) => {
+                        source.call("Copy", &[Arg::Missing, Arg::Obj(&objects[find(s)?].0)])
+                    }
+                    Some(Place::End) => source.call(
+                        "Copy",
+                        &[Arg::Missing, Arg::Obj(&objects[objects.len() - 1].0)],
+                    ),
                     None => source.call("Copy", &[Arg::Missing, Arg::Obj(source)]),
                 }
                 .map_err(excel_refused)?;
                 // The copy is the active sheet of the workbook.
                 let copy = self.workbook.object("ActiveSheet", &[])?;
-                if objects.iter().any(|(_, tab)| copy.get("Name", &[]).map(|v| v.string()).is_ok_and(|v| v == *tab)) {
+                if objects.iter().any(|(_, tab)| {
+                    copy.get("Name", &[])
+                        .map(|v| v.string())
+                        .is_ok_and(|v| v == *tab)
+                }) {
                     return Err(SyncError::Failed("シートを複製できませんでした".into()));
                 }
-                (report.name, report.code_name) = finish(copy, name.as_deref(), code_name.as_deref())?;
+                (report.name, report.code_name) =
+                    finish(copy, name.as_deref(), code_name.as_deref())?;
                 report.before = Some((sheets[index].name.clone(), sheets[index].code_name.clone()));
             }
             SheetEdit::Remove { sheet } => {
@@ -284,7 +381,11 @@ impl Book {
                 report.name = sheets[index].name.clone();
                 report.code_name = sheets[index].code_name.clone();
             }
-            SheetEdit::Rename { sheet, name, code_name } => {
+            SheetEdit::Rename {
+                sheet,
+                name,
+                code_name,
+            } => {
                 let index = find(sheet)?;
                 let old = &sheets[index];
                 report.before = Some((old.name.clone(), old.code_name.clone()));
@@ -292,14 +393,19 @@ impl Book {
                 report.code_name = old.code_name.clone();
                 // The code name first: it is the one Excel may refuse (a module of that name).
                 if let Some(code_name) = code_name.as_ref().filter(|c| **c != old.code_name) {
-                    self.sheet_component(&old.name)?.put("Name", Arg::Str(code_name)).map_err(excel_refused)?;
+                    self.sheet_component(&old.name)?
+                        .put("Name", Arg::Str(code_name))
+                        .map_err(excel_refused)?;
                     report.code_name = code_name.clone();
                 }
                 if let Some(name) = name.as_ref().filter(|n| **n != old.name) {
                     if let Err(e) = objects[index].0.put("Name", Arg::Str(name)) {
                         // Back to the code name it had.
                         if report.code_name != old.code_name {
-                            let _ = self.sheet_component(&old.name).and_then(|c| c.put("Name", Arg::Str(&old.code_name)).map_err(SyncError::from));
+                            let _ = self.sheet_component(&old.name).and_then(|c| {
+                                c.put("Name", Arg::Str(&old.code_name))
+                                    .map_err(SyncError::from)
+                            });
                         }
                         return Err(excel_refused(e));
                     }
@@ -314,13 +420,18 @@ impl Book {
     pub fn run(&self, name: &str) -> Result<(), SyncError> {
         let book = self.workbook.get("Name", &[])?.string();
         let qualified = format!("'{}'!{name}", book.replace('\'', "''"));
-        self.app.call_patiently("Run", &[Arg::Str(&qualified)], RUN_WAIT_MS).map_err(|e| {
-            if e.is_busy() {
-                SyncError::from(e)
-            } else {
-                SyncError::Failed(format!("マクロ `{name}` を実行できませんでした: {}", e.description))
-            }
-        })?;
+        self.app
+            .call_patiently("Run", &[Arg::Str(&qualified)], RUN_WAIT_MS)
+            .map_err(|e| {
+                if e.is_busy() {
+                    SyncError::from(e)
+                } else {
+                    SyncError::Failed(format!(
+                        "マクロ `{name}` を実行できませんでした: {}",
+                        e.description
+                    ))
+                }
+            })?;
         Ok(())
     }
 
@@ -331,13 +442,18 @@ impl Book {
         let book = self.workbook.get("Name", &[])?.string();
         let qualified = format!("'{}'!RAS_Runtime.RAS_ShowForm", book.replace('\'', "''"));
         // A modal form keeps the call waiting for as long as it is open.
-        self.app.call_patiently("Run", &[Arg::Str(&qualified), Arg::Str(name)], RUN_WAIT_MS).map_err(|e| {
-            if e.is_busy() {
-                SyncError::from(e)
-            } else {
-                SyncError::Failed(format!("ユーザーフォーム `{name}` を表示できませんでした: {}", e.description))
-            }
-        })?;
+        self.app
+            .call_patiently("Run", &[Arg::Str(&qualified), Arg::Str(name)], RUN_WAIT_MS)
+            .map_err(|e| {
+                if e.is_busy() {
+                    SyncError::from(e)
+                } else {
+                    SyncError::Failed(format!(
+                        "ユーザーフォーム `{name}` を表示できませんでした: {}",
+                        e.description
+                    ))
+                }
+            })?;
         Ok(())
     }
 
@@ -358,7 +474,10 @@ fn excel_refused(e: ComError) -> SyncError {
     if e.is_busy() {
         SyncError::from(e)
     } else {
-        SyncError::Failed(format!("Excel が操作を受け付けませんでした: {}", e.description))
+        SyncError::Failed(format!(
+            "Excel が操作を受け付けませんでした: {}",
+            e.description
+        ))
     }
 }
 
@@ -376,7 +495,11 @@ const UNLOAD_MODULE: &str = "RAS_SyncUnload";
 /// VBA that unloads every loaded instance of the forms `names` and returns how many are still
 /// loaded (a `QueryClose` handler can refuse to close).
 fn unload_code(names: &[String]) -> String {
-    let test = names.iter().map(|n| format!("n = \"{}\"", n.to_lowercase().replace('"', "\"\""))).collect::<Vec<_>>().join(" Or ");
+    let test = names
+        .iter()
+        .map(|n| format!("n = \"{}\"", n.to_lowercase().replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" Or ");
     format!(
         "Public Function RAS_UnloadForms() As Long\r\n\
          \x20   Dim i As Long, n As String\r\n\
@@ -408,7 +531,14 @@ fn to_ansi(text: &str) -> Vec<u8> {
     unsafe {
         let len = WideCharToMultiByte(CP_ACP, 0, &units, None, windows::core::PCSTR::null(), None);
         let mut out = vec![0u8; len.max(0) as usize];
-        let written = WideCharToMultiByte(CP_ACP, 0, &units, Some(&mut out), windows::core::PCSTR::null(), None);
+        let written = WideCharToMultiByte(
+            CP_ACP,
+            0,
+            &units,
+            Some(&mut out),
+            windows::core::PCSTR::null(),
+            None,
+        );
         out.truncate(written.max(0) as usize);
         out
     }
@@ -422,7 +552,12 @@ fn from_ansi(bytes: &[u8]) -> String {
     unsafe {
         let len = MultiByteToWideChar(CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, None);
         let mut out = vec![0u16; len.max(0) as usize];
-        let written = MultiByteToWideChar(CP_ACP, MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0), bytes, Some(&mut out));
+        let written = MultiByteToWideChar(
+            CP_ACP,
+            MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
+            bytes,
+            Some(&mut out),
+        );
         out.truncate(written.max(0) as usize);
         String::from_utf16_lossy(&out)
     }
@@ -431,23 +566,39 @@ fn from_ansi(bytes: &[u8]) -> String {
 impl Project {
     /// The user form `name` as `VBComponent.Export` writes it (`.frm` / `.frx`), read back with
     /// its designer storage. `codepage` is the code page its designer properties are stored in.
-    pub fn export_form(&mut self, name: &str, codepage: u16) -> Result<ras_ovba::UserForm, SyncError> {
+    pub fn export_form(
+        &mut self,
+        name: &str,
+        codepage: u16,
+    ) -> Result<ras_ovba::UserForm, SyncError> {
         let dir = std::env::temp_dir().join(format!("ras-sync-export-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).map_err(|e| SyncError::Failed(format!("{}: {e}", dir.display())))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| SyncError::Failed(format!("{}: {e}", dir.display())))?;
         let frm = dir.join(format!("{name}.frm"));
         let result = (|| {
-            self.component(name)?.call("Export", &[Arg::Str(&frm.to_string_lossy())]).map_err(|e| {
-                if e.is_busy() {
-                    SyncError::from(e)
-                } else {
-                    SyncError::Failed(format!("ユーザーフォーム `{name}` を書き出せませんでした: {}", e.description))
-                }
-            })?;
-            let text = std::fs::read(&frm).map_err(|e| SyncError::Failed(format!("{}: {e}", frm.display())))?;
+            self.component(name)?
+                .call("Export", &[Arg::Str(&frm.to_string_lossy())])
+                .map_err(|e| {
+                    if e.is_busy() {
+                        SyncError::from(e)
+                    } else {
+                        SyncError::Failed(format!(
+                            "ユーザーフォーム `{name}` を書き出せませんでした: {}",
+                            e.description
+                        ))
+                    }
+                })?;
+            let text = std::fs::read(&frm)
+                .map_err(|e| SyncError::Failed(format!("{}: {e}", frm.display())))?;
             let frx_path = frm.with_extension("frx");
-            let frx = std::fs::read(&frx_path).map_err(|e| SyncError::Failed(format!("{}: {e}", frx_path.display())))?;
-            ras_ovba::import_user_form(&from_ansi(&text), &frx, codepage).map_err(|e| SyncError::Failed(format!("ユーザーフォーム `{name}` を読み取れませんでした: {e}")))
+            let frx = std::fs::read(&frx_path)
+                .map_err(|e| SyncError::Failed(format!("{}: {e}", frx_path.display())))?;
+            ras_ovba::import_user_form(&from_ansi(&text), &frx, codepage).map_err(|e| {
+                SyncError::Failed(format!(
+                    "ユーザーフォーム `{name}` を読み取れませんでした: {e}"
+                ))
+            })
         })();
         let _ = std::fs::remove_dir_all(&dir);
         result
@@ -469,8 +620,18 @@ impl VbProject for Project {
             };
             let module = c.object("CodeModule", &[])?;
             let lines = module.get("CountOfLines", &[])?.int().unwrap_or(0);
-            let code = if lines > 0 { module.get("Lines", &[Arg::Int(1), Arg::Int(lines)])?.string() } else { String::new() };
-            out.push(Component { name: c.get("Name", &[])?.string(), kind, code });
+            let code = if lines > 0 {
+                module
+                    .get("Lines", &[Arg::Int(1), Arg::Int(lines)])?
+                    .string()
+            } else {
+                String::new()
+            };
+            out.push(Component {
+                name: c.get("Name", &[])?.string(),
+                kind,
+                code,
+            });
         }
         Ok(out)
     }
@@ -490,46 +651,75 @@ impl VbProject for Project {
     }
 
     fn add(&mut self, name: &str, kind: Kind) -> Result<(), SyncError> {
-        let component = self.components.object("Add", &[Arg::Int(if kind == Kind::Class { CT_CLASS } else { CT_STANDARD })])?;
+        let component = self.components.object(
+            "Add",
+            &[Arg::Int(if kind == Kind::Class {
+                CT_CLASS
+            } else {
+                CT_STANDARD
+            })],
+        )?;
         if let Err(e) = component.put("Name", Arg::Str(name)) {
             let _ = self.components.call("Remove", &[Arg::Obj(&component)]);
-            return Err(SyncError::Failed(format!("モジュール `{name}` を作成できませんでした: {}", e.description)));
+            return Err(SyncError::Failed(format!(
+                "モジュール `{name}` を作成できませんでした: {}",
+                e.description
+            )));
         }
         Ok(())
     }
 
     fn import(&mut self, name: &str, file_text: &str) -> Result<(), SyncError> {
         let dir = std::env::temp_dir().join(format!("ras-sync-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|e| SyncError::Failed(format!("{}: {e}", dir.display())))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| SyncError::Failed(format!("{}: {e}", dir.display())))?;
         let file = dir.join(format!("{name}.cls"));
         // A `.cls` with LF only is imported as a standard module.
         let text = file_text.replace("\r\n", "\n").replace('\n', "\r\n");
-        std::fs::write(&file, to_ansi(&text)).map_err(|e| SyncError::Failed(format!("{}: {e}", file.display())))?;
-        let imported = self.components.object("Import", &[Arg::Str(&file.to_string_lossy())]);
+        std::fs::write(&file, to_ansi(&text))
+            .map_err(|e| SyncError::Failed(format!("{}: {e}", file.display())))?;
+        let imported = self
+            .components
+            .object("Import", &[Arg::Str(&file.to_string_lossy())]);
         let _ = std::fs::remove_dir_all(&dir);
         let component = imported?;
         let actual = component.get("Name", &[])?.string();
         if actual != name {
             // A component of that name was still there, so the VBE numbered the new one.
             let _ = self.components.call("Remove", &[Arg::Obj(&component)]);
-            return Err(SyncError::Failed(format!("クラス `{name}` を取り込めませんでした（`{actual}` という名前になりました）")));
+            return Err(SyncError::Failed(format!(
+                "クラス `{name}` を取り込めませんでした（`{actual}` という名前になりました）"
+            )));
         }
         Ok(())
     }
 
     fn import_form(&mut self, name: &str, files: &ras_ovba::FormFiles) -> Result<(), SyncError> {
         let dir = std::env::temp_dir().join(format!("ras-sync-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|e| SyncError::Failed(format!("{}: {e}", dir.display())))?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| SyncError::Failed(format!("{}: {e}", dir.display())))?;
         // The `.frm` names its `.frx` by file name: both lie in the same directory.
         let frm = dir.join(format!("{name}.frm"));
-        let written = std::fs::write(&frm, to_ansi(&files.frm)).and_then(|()| std::fs::write(dir.join(format!("{name}.frx")), &files.frx));
+        let written = std::fs::write(&frm, to_ansi(&files.frm))
+            .and_then(|()| std::fs::write(dir.join(format!("{name}.frx")), &files.frx));
         if let Err(e) = written {
             let _ = std::fs::remove_dir_all(&dir);
             return Err(SyncError::Failed(format!("{}: {e}", frm.display())));
         }
-        let imported = self.components.object("Import", &[Arg::Str(&frm.to_string_lossy())]);
+        let imported = self
+            .components
+            .object("Import", &[Arg::Str(&frm.to_string_lossy())]);
         let _ = std::fs::remove_dir_all(&dir);
-        let component = imported.map_err(|e| if e.is_busy() { SyncError::from(e) } else { SyncError::Failed(format!("ユーザーフォーム `{name}` を取り込めませんでした: {}", e.description)) })?;
+        let component = imported.map_err(|e| {
+            if e.is_busy() {
+                SyncError::from(e)
+            } else {
+                SyncError::Failed(format!(
+                    "ユーザーフォーム `{name}` を取り込めませんでした: {}",
+                    e.description
+                ))
+            }
+        })?;
         let actual = component.get("Name", &[])?.string();
         let is_form = component.get("Type", &[])?.int() == Some(CT_FORM);
         if actual != name || !is_form {
@@ -543,8 +733,15 @@ impl VbProject for Project {
     fn unload_forms(&mut self, names: &[String]) -> Result<(), SyncError> {
         // A designer open in the VBE.
         for name in names {
-            let Ok(component) = self.component(name) else { continue };
-            if component.get("HasOpenDesigner", &[]).ok().and_then(|v| v.int()).is_some_and(|v| v != 0) {
+            let Ok(component) = self.component(name) else {
+                continue;
+            };
+            if component
+                .get("HasOpenDesigner", &[])
+                .ok()
+                .and_then(|v| v.int())
+                .is_some_and(|v| v != 0)
+            {
                 if let Ok(window) = component.object("DesignerWindow", &[]) {
                     let _ = window.call("Close", &[]);
                 }
@@ -560,14 +757,23 @@ impl VbProject for Project {
             module.put("Name", Arg::Str(UNLOAD_MODULE))?;
             let code = module.object("CodeModule", &[])?;
             code.call("AddFromString", &[Arg::Str(&unload_code(names))])?;
-            let qualified = format!("'{}'!{UNLOAD_MODULE}.RAS_UnloadForms", self.book.replace('\'', "''"));
-            let left = self.app.call_patiently("Run", &[Arg::Str(&qualified)], RUN_WAIT_MS).map_err(|e| {
-                if e.is_busy() {
-                    SyncError::from(e)
-                } else {
-                    SyncError::Failed(format!("読み込まれているユーザーフォームを閉じられませんでした: {}", e.description))
-                }
-            })?;
+            let qualified = format!(
+                "'{}'!{UNLOAD_MODULE}.RAS_UnloadForms",
+                self.book.replace('\'', "''")
+            );
+            let left = self
+                .app
+                .call_patiently("Run", &[Arg::Str(&qualified)], RUN_WAIT_MS)
+                .map_err(|e| {
+                    if e.is_busy() {
+                        SyncError::from(e)
+                    } else {
+                        SyncError::Failed(format!(
+                            "読み込まれているユーザーフォームを閉じられませんでした: {}",
+                            e.description
+                        ))
+                    }
+                })?;
             Ok(left.int().unwrap_or(0))
         })();
         let _ = self.components.call("Remove", &[Arg::Obj(&module)]);
@@ -581,7 +787,18 @@ impl VbProject for Project {
     }
 
     fn rename(&mut self, name: &str, new_name: &str) -> Result<(), SyncError> {
-        self.component(name)?.put("Name", Arg::Str(new_name)).map_err(|e| if e.is_busy() { SyncError::from(e) } else { SyncError::Failed(format!("`{name}` の名前を変更できませんでした: {}", e.description)) })
+        self.component(name)?
+            .put("Name", Arg::Str(new_name))
+            .map_err(|e| {
+                if e.is_busy() {
+                    SyncError::from(e)
+                } else {
+                    SyncError::Failed(format!(
+                        "`{name}` の名前を変更できませんでした: {}",
+                        e.description
+                    ))
+                }
+            })
     }
 
     fn remove(&mut self, name: &str) -> Result<(), SyncError> {
@@ -598,8 +815,16 @@ mod tests {
     #[test]
     fn unload_code_names_the_forms() {
         let code = unload_code(&["frmInput".to_string(), "UserForm1".to_string()]);
-        assert!(code.contains("If n = \"frminput\" Or n = \"userform1\" Then Unload VBA.UserForms(i)\r\n"), "{code}");
-        assert!(code.starts_with("Public Function RAS_UnloadForms() As Long\r\n    Dim i As Long"), "{code}");
+        assert!(
+            code.contains(
+                "If n = \"frminput\" Or n = \"userform1\" Then Unload VBA.UserForms(i)\r\n"
+            ),
+            "{code}"
+        );
+        assert!(
+            code.starts_with("Public Function RAS_UnloadForms() As Long\r\n    Dim i As Long"),
+            "{code}"
+        );
     }
 
     #[test]

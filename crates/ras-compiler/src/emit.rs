@@ -79,7 +79,11 @@ impl OutputFile {
     /// VBA line (1-based, in `code`) generated from the given RAS line, if any.
     pub fn vba_line_for(&self, source: &str, ras_line: u32) -> Option<u32> {
         let si = self.sources.iter().position(|s| s == source)? as u32;
-        self.mappings.iter().filter(|m| m.1 == si && m.2 >= ras_line).min_by_key(|m| (m.2, m.0)).map(|m| m.0)
+        self.mappings
+            .iter()
+            .filter(|m| m.1 == si && m.2 >= ras_line)
+            .min_by_key(|m| (m.2, m.0))
+            .map(|m| m.0)
     }
 }
 
@@ -110,7 +114,10 @@ fn split_long_line(line: &str) -> Option<Vec<String>> {
             }
             if ch == '"' {
                 in_str = !in_str;
-            } else if !in_str && i > indent.len() + 8 && (rest[i..].starts_with(", ") || rest[i..].starts_with(" & ")) {
+            } else if !in_str
+                && i > indent.len() + 8
+                && (rest[i..].starts_with(", ") || rest[i..].starts_with(" & "))
+            {
                 best = Some(i + if rest[i..].starts_with(", ") { 1 } else { 2 });
             }
         }
@@ -169,13 +176,25 @@ fn file_name(m: &VModule) -> String {
     }
 }
 
-fn finish(m: &VModule, code: String, mappings: Vec<Mapping>, codepage: u16, diags: &mut Vec<Diagnostic>) -> OutputFile {
+fn finish(
+    m: &VModule,
+    code: String,
+    mappings: Vec<Mapping>,
+    codepage: u16,
+    diags: &mut Vec<Diagnostic>,
+) -> OutputFile {
     let mut lines: Vec<String> = Vec::new();
     let mut new_mappings: Vec<Mapping> = Vec::new();
     let mut proc_start: Option<(usize, String)> = None;
     let mut proc_bytes = 0usize;
     let error = |diags: &mut Vec<Diagnostic>, code: &'static str, message: String| {
-        diags.push(Diagnostic { severity: Severity::Error, code, message, module: None, span: Default::default() });
+        diags.push(Diagnostic {
+            severity: Severity::Error,
+            code,
+            message,
+            module: None,
+            span: Default::default(),
+        });
     };
     let mut reported_char = false;
     // Forms carry their own marker line (spec §14.11.3).
@@ -200,13 +219,25 @@ fn finish(m: &VModule, code: String, mappings: Vec<Mapping>, codepage: u16, diag
         }
         // 64KB-per-procedure limit (spec §13.8)
         let t = raw.trim_start();
-        let is_header = ["Public Sub ", "Private Sub ", "Public Function ", "Private Function ", "Public Property ", "Private Property "].iter().any(|p| t.starts_with(p));
+        let is_header = [
+            "Public Sub ",
+            "Private Sub ",
+            "Public Function ",
+            "Private Function ",
+            "Public Property ",
+            "Private Property ",
+        ]
+        .iter()
+        .any(|p| t.starts_with(p));
         if is_header {
             proc_start = Some((i, t.split('(').next().unwrap_or(t).to_string()));
             proc_bytes = 0;
         }
         proc_bytes += raw.len() + 2;
-        if t.starts_with("End Sub") || t.starts_with("End Function") || t.starts_with("End Property") {
+        if t.starts_with("End Sub")
+            || t.starts_with("End Function")
+            || t.starts_with("End Property")
+        {
             if let Some((_, head)) = proc_start.take() {
                 if proc_bytes > MAX_PROC_BYTES {
                     error(diags, "E0903", format!("モジュール `{}`: プロシージャ `{head}` が大きすぎます（約 {proc_bytes} バイト。VBA の上限は 64KB）。関数を分割してください", m.name));
@@ -216,14 +247,29 @@ fn finish(m: &VModule, code: String, mappings: Vec<Mapping>, codepage: u16, diag
     }
     let body: String = lines.iter().map(|l| format!("{l}\r\n")).collect();
     let hash = drift_hash(&body);
-    let code = if no_hash { body } else { format!("' RAS-GENERATED hash={hash:08X}\r\n{body}") };
+    let code = if no_hash {
+        body
+    } else {
+        format!("' RAS-GENERATED hash={hash:08X}\r\n{body}")
+    };
     let full_text = format!("{}{}", file_header(m), code);
-    OutputFile { name: m.name.clone(), kind: m.kind.clone(), file_name: file_name(m), code, full_text, sources: m.sources.clone(), mappings: new_mappings, hash }
+    OutputFile {
+        name: m.name.clone(),
+        kind: m.kind.clone(),
+        file_name: file_name(m),
+        code,
+        full_text,
+        sources: m.sources.clone(),
+        mappings: new_mappings,
+        hash,
+    }
 }
 
 /// Reads the hash recorded in the first line of generated code (`' RAS-GENERATED hash=XXXXXXXX`).
 pub fn recorded_hash(code: &str) -> Option<u32> {
-    let first = code.lines().find(|l| !l.starts_with("Attribute ") && !l.trim().is_empty())?;
+    let first = code
+        .lines()
+        .find(|l| !l.starts_with("Attribute ") && !l.trim().is_empty())?;
     let hex = first.trim().strip_prefix("' RAS-GENERATED hash=")?;
     u32::from_str_radix(hex.trim(), 16).ok()
 }
@@ -231,7 +277,13 @@ pub fn recorded_hash(code: &str) -> Option<u32> {
 /// True when `code` (code-pane text of a generated module) was edited after generation (drift, spec §14.7).
 pub fn has_drifted(code: &str) -> Option<bool> {
     let recorded = recorded_hash(code)?;
-    let normalized: String = code.replace("\r\n", "\n").lines().skip_while(|l| !l.starts_with("' RAS-GENERATED")).skip(1).map(|l| format!("{l}\r\n")).collect();
+    let normalized: String = code
+        .replace("\r\n", "\n")
+        .lines()
+        .skip_while(|l| !l.starts_with("' RAS-GENERATED"))
+        .skip(1)
+        .map(|l| format!("{l}\r\n"))
+        .collect();
     Some(drift_hash(&normalized) != recorded)
 }
 
@@ -240,7 +292,10 @@ pub fn has_drifted(code: &str) -> Option<bool> {
 pub fn same_code(a: &str, b: &str) -> bool {
     fn normalized(code: &str) -> String {
         let text = code.replace("\r\n", "\n").replace('\r', "\n");
-        text.trim_end_matches('\n').split('\n').map(|l| format!("{l}\r\n")).collect()
+        text.trim_end_matches('\n')
+            .split('\n')
+            .map(|l| format!("{l}\r\n"))
+            .collect()
     }
     a == b || drift_hash(&normalized(a)) == drift_hash(&normalized(b))
 }
@@ -268,18 +323,28 @@ fn drift_hash(code: &str) -> u32 {
             } else if c == '\'' {
                 out.extend(&chars[i..]);
                 break;
-            } else if c.is_ascii_digit() && !(i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_')) {
+            } else if c.is_ascii_digit()
+                && !(i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_'))
+            {
                 let start = i;
                 while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '.') {
                     i += 1;
                 }
-                if i < chars.len() && matches!(chars[i], 'E' | 'e' | 'D' | 'd') && chars.get(i + 1).is_some_and(|n| n.is_ascii_digit() || *n == '+' || *n == '-') {
+                if i < chars.len()
+                    && matches!(chars[i], 'E' | 'e' | 'D' | 'd')
+                    && chars
+                        .get(i + 1)
+                        .is_some_and(|n| n.is_ascii_digit() || *n == '+' || *n == '-')
+                {
                     i += 2;
                     while i < chars.len() && chars[i].is_ascii_digit() {
                         i += 1;
                     }
                 }
-                let text: String = chars[start..i].iter().collect::<String>().replace(['D', 'd'], "E");
+                let text: String = chars[start..i]
+                    .iter()
+                    .collect::<String>()
+                    .replace(['D', 'd'], "E");
                 if i < chars.len() && matches!(chars[i], '#' | '!' | '@' | '&' | '%' | '^') {
                     i += 1;
                 }
@@ -303,9 +368,17 @@ pub fn is_empty_module(m: &VModule) -> bool {
     m.kind == VModuleKind::Standard && m.decls.is_empty() && m.procs.is_empty()
 }
 
-pub fn finalize(prog: &Program, lowered: &Lowered, opts: &EmitOptions) -> (Vec<OutputFile>, Vec<Diagnostic>) {
+pub fn finalize(
+    prog: &Program,
+    lowered: &Lowered,
+    opts: &EmitOptions,
+) -> (Vec<OutputFile>, Vec<Diagnostic>) {
     let cfg = &prog.config;
-    let popts = PrintOptions { erl: opts.erl, attributes: opts.attributes, vba6: cfg.target.vba6 };
+    let popts = PrintOptions {
+        erl: opts.erl,
+        attributes: opts.attributes,
+        vba6: cfg.target.vba6,
+    };
     let mut diags = Vec::new();
     let mut files = Vec::new();
     let mut used: HashSet<String> = HashSet::new();
@@ -314,7 +387,13 @@ pub fn finalize(prog: &Program, lowered: &Lowered, opts: &EmitOptions) -> (Vec<O
         for id in runtime::identifiers(&printed.text) {
             used.insert(id.to_string());
         }
-        files.push(finish(m, printed.text, printed.mappings, cfg.target.codepage, &mut diags));
+        files.push(finish(
+            m,
+            printed.text,
+            printed.mappings,
+            cfg.target.codepage,
+            &mut diags,
+        ));
     }
     // "Run in Excel" of a form goes through the runtime (`Application.Run`).
     if lowered.modules.iter().any(|m| m.kind == VModuleKind::Form) {
@@ -325,13 +404,28 @@ pub fn finalize(prog: &Program, lowered: &Lowered, opts: &EmitOptions) -> (Vec<O
     if !rt.module.is_empty() {
         let mut m = VModule::new("RAS_Runtime", VModuleKind::Standard);
         m.private_module = true;
-        let text = format!("Option Explicit\r\nOption Compare Binary\r\nOption Private Module\r\n\r\n{}", rt.module.replace('\n', "\r\n"));
-        files.push(finish(&m, text, Vec::new(), cfg.target.codepage, &mut diags));
+        let text = format!(
+            "Option Explicit\r\nOption Compare Binary\r\nOption Private Module\r\n\r\n{}",
+            rt.module.replace('\n', "\r\n")
+        );
+        files.push(finish(
+            &m,
+            text,
+            Vec::new(),
+            cfg.target.codepage,
+            &mut diags,
+        ));
     }
     if let Some(cls) = rt.error_class {
         let m = VModule::new("RAS_Error", VModuleKind::Class);
         let text = format!("Option Explicit\r\n\r\n{}", cls.replace('\n', "\r\n"));
-        files.push(finish(&m, text, Vec::new(), cfg.target.codepage, &mut diags));
+        files.push(finish(
+            &m,
+            text,
+            Vec::new(),
+            cfg.target.codepage,
+            &mut diags,
+        ));
     }
     files.sort_by(|a, b| a.file_name.cmp(&b.file_name));
     (files, diags)
@@ -366,7 +460,11 @@ mod tests {
         assert!(parts.len() > 1);
         assert!(parts.iter().all(|p| p.len() <= MAX_LINE + 2));
         assert!(parts[..parts.len() - 1].iter().all(|p| p.ends_with(" _")));
-        let rejoined: String = parts.iter().map(|p| p.trim().trim_end_matches(" _").to_string()).collect::<Vec<_>>().join(" ");
+        let rejoined: String = parts
+            .iter()
+            .map(|p| p.trim().trim_end_matches(" _").to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert_eq!(rejoined.replace("  ", " "), line.trim());
     }
 
@@ -381,9 +479,15 @@ mod tests {
 
     #[test]
     fn same_code_ignores_line_ends_and_vbe_rewrites() {
-        assert!(same_code("Sub A()\r\n    x = 0.1#\r\nEnd Sub\r\n", "Sub A()\n    X = 0.1\nEnd Sub"));
+        assert!(same_code(
+            "Sub A()\r\n    x = 0.1#\r\nEnd Sub\r\n",
+            "Sub A()\n    X = 0.1\nEnd Sub"
+        ));
         assert!(same_code("", "\r\n"));
-        assert!(!same_code("Sub A()\r\nEnd Sub\r\n", "Sub B()\r\nEnd Sub\r\n"));
+        assert!(!same_code(
+            "Sub A()\r\nEnd Sub\r\n",
+            "Sub B()\r\nEnd Sub\r\n"
+        ));
     }
 
     #[test]
@@ -396,6 +500,9 @@ mod tests {
         // Real edits are still found: values, string contents, comments.
         assert_eq!(has_drifted(&code.replace("0.1\r\n", "0.2\r\n")), Some(true));
         assert_eq!(has_drifted(&code.replace("\"Msg\"", "\"msg\"")), Some(true));
-        assert_eq!(has_drifted(&code.replace("Sub A()\r\n", "Sub A() ' note\r\n")), Some(true));
+        assert_eq!(
+            has_drifted(&code.replace("Sub A()\r\n", "Sub A() ' note\r\n")),
+            Some(true)
+        );
     }
 }

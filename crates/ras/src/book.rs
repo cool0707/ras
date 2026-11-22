@@ -94,7 +94,10 @@ pub fn open(path: &Path) -> Result<Book, String> {
     if !path.is_file() {
         return Err(format!("{} が見つかりません", path.display()));
     }
-    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
     if matches!(ext.as_str(), "xls" | "xlsb") {
         return Err(format!("{}: .{ext} は読み取れません（.xlsx / .xlsm / .xltx / .xltm / .xlam に保存し直してください）", path.display()));
     }
@@ -106,16 +109,30 @@ fn split_range(text: &str) -> (Option<String>, &str) {
     match text.rsplit_once('!') {
         Some((sheet, range)) => {
             let sheet = sheet.trim();
-            let sheet = sheet.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')).map(|s| s.replace("''", "'")).unwrap_or_else(|| sheet.to_string());
+            let sheet = sheet
+                .strip_prefix('\'')
+                .and_then(|s| s.strip_suffix('\''))
+                .map(|s| s.replace("''", "'"))
+                .unwrap_or_else(|| sheet.to_string());
             (Some(sheet), range)
         }
         None => (None, text),
     }
 }
 
-pub fn dump(file: &Path, sheets: &[String], range: Option<&str>, format: DumpFormat, formats: bool, limits: Option<(u32, u32)>) -> Result<ExitCode, String> {
+pub fn dump(
+    file: &Path,
+    sheets: &[String],
+    range: Option<&str>,
+    format: DumpFormat,
+    formats: bool,
+    limits: Option<(u32, u32)>,
+) -> Result<ExitCode, String> {
     let mut book = open(file)?;
-    let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let name = file
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     let opts = dump::Options {
         format: match format {
             DumpFormat::Text => dump::Format::Text,
@@ -134,7 +151,9 @@ pub fn dump(file: &Path, sheets: &[String], range: Option<&str>, format: DumpFor
         if let Some(s) = sheet {
             sheets = vec![s];
         }
-        area = Some(RangeRef::parse(&r.replace('$', "")).ok_or_else(|| format!("範囲 `{r}` を読み取れません（A1:F20 のように指定してください）"))?);
+        area = Some(RangeRef::parse(&r.replace('$', "")).ok_or_else(|| {
+            format!("範囲 `{r}` を読み取れません（A1:F20 のように指定してください）")
+        })?);
         if sheets.is_empty() {
             return Err("--range には --sheet でシートを指定するか、Sheet1!A1:F20 のようにシート名を付けてください".into());
         }
@@ -149,16 +168,27 @@ pub fn dump(file: &Path, sheets: &[String], range: Option<&str>, format: DumpFor
     let mut parts = Vec::new();
     for key in &sheets {
         let si = book.find_sheet(key).ok_or_else(|| {
-            let all: Vec<String> = (0..book.sheet_count()).filter_map(|i| book.sheet_name(i).map(str::to_string)).collect();
-            format!("シート `{key}` が見つかりません（シート: {}）", all.join(", "))
+            let all: Vec<String> = (0..book.sheet_count())
+                .filter_map(|i| book.sheet_name(i).map(str::to_string))
+                .collect();
+            format!(
+                "シート `{key}` が見つかりません（シート: {}）",
+                all.join(", ")
+            )
         })?;
         parts.push(dump::sheet(&mut book, &name, si, area, &opts)?);
     }
     match format {
         // Several sheets: one JSON document.
         DumpFormat::Json if parts.len() > 1 => {
-            let list: Vec<serde_json::Value> = parts.iter().filter_map(|p| serde_json::from_str(p).ok()).collect();
-            println!("{}", serde_json::to_string_pretty(&list).unwrap_or_default());
+            let list: Vec<serde_json::Value> = parts
+                .iter()
+                .filter_map(|p| serde_json::from_str(p).ok())
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&list).unwrap_or_default()
+            );
         }
         _ => print!("{}", parts.join("\n")),
     }
@@ -173,13 +203,25 @@ pub fn compare(before: &Path, after: &Path) -> Result<diff::Diff, String> {
 }
 
 /// Exit code 0 when the workbooks are the same, 1 when they differ.
-pub fn diff_cmd(before: &Path, after: &Path, format: DiffFormat, max_cells: usize) -> Result<ExitCode, String> {
+pub fn diff_cmd(
+    before: &Path,
+    after: &Path,
+    format: DiffFormat,
+    max_cells: usize,
+) -> Result<ExitCode, String> {
     let d = compare(before, after)?;
     match format {
         DiffFormat::Text => print!("{}", diff::text(&d, max_cells)),
-        DiffFormat::Json => println!("{}", serde_json::to_string_pretty(&diff::to_json(&d)).unwrap_or_default()),
+        DiffFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&diff::to_json(&d)).unwrap_or_default()
+        ),
     }
-    Ok(if d.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+    Ok(if d.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }
 
 /// The page that draws `file` as a grid, with what differs from `before` marked. The objects of
@@ -187,22 +229,57 @@ pub fn diff_cmd(before: &Path, after: &Path, format: DiffFormat, max_cells: usiz
 /// workbook a run saved has lost some of them (the stand-in for Excel saves the cells and the
 /// formats, not the controls), and the run does not change them. `sheet` (a sheet's name or
 /// code name) is the sheet shown first.
-pub fn view_page(file: &Path, before: Option<&Path>, all: bool, title: Option<&str>, drawings: Option<&Path>, sheet: Option<&str>) -> Result<String, String> {
+pub fn view_page(
+    file: &Path,
+    before: Option<&Path>,
+    all: bool,
+    title: Option<&str>,
+    drawings: Option<&Path>,
+    sheet: Option<&str>,
+) -> Result<String, String> {
     let mut book = open(file)?;
     let focus = match sheet {
-        Some(wanted) => Some(sheet_named(&book, wanted).ok_or_else(|| format!("{}: シート `{wanted}` がありません", file.display()))?),
+        Some(wanted) => Some(
+            sheet_named(&book, wanted)
+                .ok_or_else(|| format!("{}: シート `{wanted}` がありません", file.display()))?,
+        ),
         None => None,
     };
-    let name = title.map(str::to_string).unwrap_or_else(|| file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+    let name = title.map(str::to_string).unwrap_or_else(|| {
+        file.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default()
+    });
     let changes = match before {
         // (Compared with a snapshot of itself, it is "the last time".)
-        Some(b) => Some((if title.is_some() { "前回".to_string() } else { b.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default() }, diff::diff(&mut open(b)?, &mut book)?)),
+        Some(b) => Some((
+            if title.is_some() {
+                "前回".to_string()
+            } else {
+                b.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            },
+            diff::diff(&mut open(b)?, &mut book)?,
+        )),
         None => None,
     };
-    let limits = if all { None } else { Some((ras_workbook::book::VIEW_ROWS, ras_workbook::book::VIEW_COLS)) };
+    let limits = if all {
+        None
+    } else {
+        Some((ras_workbook::book::VIEW_ROWS, ras_workbook::book::VIEW_COLS))
+    };
     // The drawings (shapes, pictures, controls) are read from the file itself.
-    let source = drawings.and_then(|d| std::fs::read(d).ok()).or_else(|| std::fs::read(file).ok());
-    let mut data = view::data(&mut book, &name, source.as_deref(), limits, changes.as_ref().map(|(n, d)| (n.as_str(), d)))?;
+    let source = drawings
+        .and_then(|d| std::fs::read(d).ok())
+        .or_else(|| std::fs::read(file).ok());
+    let mut data = view::data(
+        &mut book,
+        &name,
+        source.as_deref(),
+        limits,
+        changes.as_ref().map(|(n, d)| (n.as_str(), d)),
+    )?;
     if let Some(focus) = focus {
         data["active"] = focus.into();
         data["focus"] = true.into();
@@ -215,17 +292,38 @@ pub fn view_page(file: &Path, before: Option<&Path>, all: bool, title: Option<&s
 /// is named "Sheet1"; case does not matter).
 fn sheet_named(book: &Book, wanted: &str) -> Option<String> {
     let count = book.sheet_count();
-    let by_code = (0..count).find(|&si| book.code_name(si).is_some_and(|c| c.eq_ignore_ascii_case(wanted)));
-    let si = by_code.or_else(|| (0..count).find(|&si| book.sheet_name(si).is_some_and(|n| n.eq_ignore_ascii_case(wanted))))?;
+    let by_code = (0..count).find(|&si| {
+        book.code_name(si)
+            .is_some_and(|c| c.eq_ignore_ascii_case(wanted))
+    });
+    let si = by_code.or_else(|| {
+        (0..count).find(|&si| {
+            book.sheet_name(si)
+                .is_some_and(|n| n.eq_ignore_ascii_case(wanted))
+        })
+    })?;
     book.sheet_name(si).map(str::to_string)
 }
 
 /// Writes the page for `file` into `dir` (`<name>.html`); returns its path.
-pub fn write_view(file: &Path, before: Option<&Path>, all: bool, output: Option<&Path>, dir: &Path, drawings: Option<&Path>, sheet: Option<&str>) -> Result<PathBuf, String> {
+pub fn write_view(
+    file: &Path,
+    before: Option<&Path>,
+    all: bool,
+    output: Option<&Path>,
+    dir: &Path,
+    drawings: Option<&Path>,
+    sheet: Option<&str>,
+) -> Result<PathBuf, String> {
     let page = view_page(file, before, all, None, drawings, sheet)?;
     let target = match output {
         Some(o) => o.to_path_buf(),
-        None => dir.join(format!("{}.html", file.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "book".into()))),
+        None => dir.join(format!(
+            "{}.html",
+            file.file_stem()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "book".into())
+        )),
     };
     if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
@@ -245,8 +343,13 @@ pub fn open_in_browser(path: &Path) -> Result<(), String> {
     } else {
         std::process::Command::new("xdg-open")
     };
-    cmd.arg(path).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    cmd.spawn().map(|_| ()).map_err(|e| format!("{} を開けませんでした: {e}", path.display()))
+    cmd.arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("{} を開けませんでした: {e}", path.display()))
 }
 
 #[cfg(test)]

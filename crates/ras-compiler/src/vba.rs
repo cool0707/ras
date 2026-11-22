@@ -47,13 +47,18 @@ impl VExpr {
 
     /// Array element / default-member access; literal indices are printed bare.
     pub fn index(self, args: Vec<VExpr>) -> VExpr {
-        VExpr::Call(Box::new(self), args.into_iter().map(VExpr::bare_index).collect())
+        VExpr::Call(
+            Box::new(self),
+            args.into_iter().map(VExpr::bare_index).collect(),
+        )
     }
 
     pub fn not(self) -> VExpr {
         match self {
             VExpr::Not(inner) => *inner,
-            VExpr::Bin(op, l, r) if negate_cmp(op).is_some() => VExpr::Bin(negate_cmp(op).unwrap(), l, r),
+            VExpr::Bin(op, l, r) if negate_cmp(op).is_some() => {
+                VExpr::Bin(negate_cmp(op).unwrap(), l, r)
+            }
             VExpr::Lit(s) if s == "True" => lit("False"),
             VExpr::Lit(s) if s == "False" => lit("True"),
             other => VExpr::Not(Box::new(other)),
@@ -104,7 +109,11 @@ impl VExpr {
     fn prec(&self) -> u8 {
         match self {
             VExpr::Lit(s) if s.starts_with('-') => 12,
-            VExpr::Lit(_) | VExpr::Name(_) | VExpr::Member(..) | VExpr::Call(..) | VExpr::Missing => 14,
+            VExpr::Lit(_)
+            | VExpr::Name(_)
+            | VExpr::Member(..)
+            | VExpr::Call(..)
+            | VExpr::Missing => 14,
             VExpr::Neg(_) => 12,
             VExpr::Not(_) => 5,
             VExpr::Bin(op, ..) => bin_prec(op),
@@ -208,20 +217,54 @@ fn bin_prec(op: &str) -> u8 {
 pub enum VStmt {
     /// Marks the RAS source line the following statements originate from.
     Pos(u32),
-    Assign { target: VExpr, value: VExpr, set: bool },
+    Assign {
+        target: VExpr,
+        value: VExpr,
+        set: bool,
+    },
     /// Statement call: `target arg1, arg2`.
-    Call { target: VExpr, args: Vec<VExpr> },
-    If { cond: VExpr, then: Vec<VStmt>, elifs: Vec<(VExpr, Vec<VStmt>)>, els: Vec<VStmt> },
-    For { var: String, from: VExpr, to: VExpr, step: Option<VExpr>, body: Vec<VStmt> },
-    ForEach { var: String, coll: VExpr, body: Vec<VStmt> },
+    Call {
+        target: VExpr,
+        args: Vec<VExpr>,
+    },
+    If {
+        cond: VExpr,
+        then: Vec<VStmt>,
+        elifs: Vec<(VExpr, Vec<VStmt>)>,
+        els: Vec<VStmt>,
+    },
+    For {
+        var: String,
+        from: VExpr,
+        to: VExpr,
+        step: Option<VExpr>,
+        body: Vec<VStmt>,
+    },
+    ForEach {
+        var: String,
+        coll: VExpr,
+        body: Vec<VStmt>,
+    },
     /// `Do [While pre] ... Loop [While post]`
-    Do { pre: Option<VExpr>, post: Option<VExpr>, body: Vec<VStmt> },
-    Select { expr: VExpr, cases: Vec<(Vec<VExpr>, Vec<VStmt>)>, els: Option<Vec<VStmt>> },
+    Do {
+        pre: Option<VExpr>,
+        post: Option<VExpr>,
+        body: Vec<VStmt>,
+    },
+    Select {
+        expr: VExpr,
+        cases: Vec<(Vec<VExpr>, Vec<VStmt>)>,
+        els: Option<Vec<VStmt>>,
+    },
     Label(String),
     GoTo(String),
     /// `Exit Sub` / `Exit Function` / `Exit For` / `Exit Do` / `Exit Property`
     Exit(&'static str),
-    ReDim { preserve: bool, target: VExpr, dims: Vec<(VExpr, VExpr)> },
+    ReDim {
+        preserve: bool,
+        target: VExpr,
+        dims: Vec<(VExpr, VExpr)>,
+    },
     Erase(VExpr),
     Comment(String),
     /// Any other single-line statement, printed verbatim (`On Error GoTo 0`).
@@ -229,23 +272,44 @@ pub enum VStmt {
 }
 
 pub fn assign(target: VExpr, value: VExpr) -> VStmt {
-    VStmt::Assign { target, value, set: false }
+    VStmt::Assign {
+        target,
+        value,
+        set: false,
+    }
 }
 
 pub fn set(target: VExpr, value: VExpr) -> VStmt {
-    VStmt::Assign { target, value, set: true }
+    VStmt::Assign {
+        target,
+        value,
+        set: true,
+    }
 }
 
 pub fn call_stmt(f: impl Into<String>, args: Vec<VExpr>) -> VStmt {
-    VStmt::Call { target: VExpr::Name(f.into()), args }
+    VStmt::Call {
+        target: VExpr::Name(f.into()),
+        args,
+    }
 }
 
 pub fn if_then(cond: VExpr, then: Vec<VStmt>) -> VStmt {
-    VStmt::If { cond, then, elifs: Vec::new(), els: Vec::new() }
+    VStmt::If {
+        cond,
+        then,
+        elifs: Vec::new(),
+        els: Vec::new(),
+    }
 }
 
 pub fn if_else(cond: VExpr, then: Vec<VStmt>, els: Vec<VStmt>) -> VStmt {
-    VStmt::If { cond, then, elifs: Vec::new(), els }
+    VStmt::If {
+        cond,
+        then,
+        elifs: Vec::new(),
+        els,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -375,7 +439,11 @@ impl Printer<'_> {
         let width = indent * 4;
         if let Some(pos) = self.cur_pos {
             self.mappings.push((self.line + 1, self.cur_source, pos));
-            if numberable && self.opts.erl && pos <= MAX_LINE_NUMBER && self.used_numbers.insert(pos) {
+            if numberable
+                && self.opts.erl
+                && pos <= MAX_LINE_NUMBER
+                && self.used_numbers.insert(pos)
+            {
                 let num = pos.to_string();
                 let pad = width.saturating_sub(num.len()).max(1);
                 let _ = write!(self.out, "{num}{}", " ".repeat(pad));
@@ -398,7 +466,12 @@ impl Printer<'_> {
         match s {
             VStmt::Pos(line) => self.cur_pos = Some(*line),
             VStmt::Assign { target, value, set } => {
-                let text = format!("{}{} = {}", if *set { "Set " } else { "" }, target.print(), value.print());
+                let text = format!(
+                    "{}{} = {}",
+                    if *set { "Set " } else { "" },
+                    target.print(),
+                    value.print()
+                );
                 self.stmt_line(indent, &text, true);
             }
             VStmt::Call { target, args } => {
@@ -417,7 +490,12 @@ impl Printer<'_> {
                 }
                 self.stmt_line(indent, &text, true);
             }
-            VStmt::If { cond, then, elifs, els } => {
+            VStmt::If {
+                cond,
+                then,
+                elifs,
+                els,
+            } => {
                 self.stmt_line(indent, &format!("If {} Then", cond.print()), true);
                 self.block(indent + 1, then);
                 for (c, body) in elifs {
@@ -430,8 +508,18 @@ impl Printer<'_> {
                 }
                 self.stmt_line(indent, "End If", false);
             }
-            VStmt::For { var, from, to, step, body } => {
-                let mut head = format!("For {var} = {} To {}", from.clone().bare_index().print(), to.clone().bare_index().print());
+            VStmt::For {
+                var,
+                from,
+                to,
+                step,
+                body,
+            } => {
+                let mut head = format!(
+                    "For {var} = {} To {}",
+                    from.clone().bare_index().print(),
+                    to.clone().bare_index().print()
+                );
                 if let Some(st) = step {
                     let _ = write!(head, " Step {}", st.clone().bare_index().print());
                 }
@@ -458,7 +546,11 @@ impl Printer<'_> {
             VStmt::Select { expr, cases, els } => {
                 self.stmt_line(indent, &format!("Select Case {}", expr.print()), true);
                 for (tests, body) in cases {
-                    let list = tests.iter().map(|t| t.print()).collect::<Vec<_>>().join(", ");
+                    let list = tests
+                        .iter()
+                        .map(|t| t.print())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     self.stmt_line(indent, &format!("Case {list}"), false);
                     self.block(indent + 1, body);
                 }
@@ -474,12 +566,28 @@ impl Printer<'_> {
             }
             VStmt::GoTo(l) => self.stmt_line(indent, &format!("GoTo {l}"), true),
             VStmt::Exit(what) => self.stmt_line(indent, &format!("Exit {what}"), true),
-            VStmt::ReDim { preserve, target, dims } => {
-                let d = dims.iter().map(|(lo, hi)| format!("{} To {}", lo.clone().bare_index().print(), hi.clone().bare_index().print())).collect::<Vec<_>>().join(", ");
+            VStmt::ReDim {
+                preserve,
+                target,
+                dims,
+            } => {
+                let d = dims
+                    .iter()
+                    .map(|(lo, hi)| {
+                        format!(
+                            "{} To {}",
+                            lo.clone().bare_index().print(),
+                            hi.clone().bare_index().print()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let p = if *preserve { "Preserve " } else { "" };
                 self.stmt_line(indent, &format!("ReDim {p}{}({d})", target.print()), true);
             }
-            VStmt::Erase(target) => self.stmt_line(indent, &format!("Erase {}", target.print()), true),
+            VStmt::Erase(target) => {
+                self.stmt_line(indent, &format!("Erase {}", target.print()), true)
+            }
             VStmt::Comment(text) => {
                 for l in text.lines() {
                     let saved = self.cur_pos.take();
@@ -528,7 +636,13 @@ impl Printer<'_> {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let vis = if p.friend { "Friend" } else if p.public { "Public" } else { "Private" };
+        let vis = if p.friend {
+            "Friend"
+        } else if p.public {
+            "Public"
+        } else {
+            "Private"
+        };
         let mut head = format!("{vis} {kw} {}({params})", p.name);
         if let Some(r) = &p.ret {
             let _ = write!(head, " As {r}");
@@ -598,12 +712,32 @@ pub fn file_header(m: &VModule) -> String {
     }
     if m.kind == VModuleKind::Class {
         let get = |key: &str, default: &str| {
-            m.class_attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()).unwrap_or_else(|| default.to_string())
+            m.class_attrs
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| default.to_string())
         };
-        let _ = write!(s, "Attribute VB_GlobalNameSpace = {}\r\n", get("VB_GlobalNameSpace", "False"));
-        let _ = write!(s, "Attribute VB_Creatable = {}\r\n", get("VB_Creatable", "False"));
-        let _ = write!(s, "Attribute VB_PredeclaredId = {}\r\n", get("VB_PredeclaredId", "False"));
-        let _ = write!(s, "Attribute VB_Exposed = {}\r\n", get("VB_Exposed", "False"));
+        let _ = write!(
+            s,
+            "Attribute VB_GlobalNameSpace = {}\r\n",
+            get("VB_GlobalNameSpace", "False")
+        );
+        let _ = write!(
+            s,
+            "Attribute VB_Creatable = {}\r\n",
+            get("VB_Creatable", "False")
+        );
+        let _ = write!(
+            s,
+            "Attribute VB_PredeclaredId = {}\r\n",
+            get("VB_PredeclaredId", "False")
+        );
+        let _ = write!(
+            s,
+            "Attribute VB_Exposed = {}\r\n",
+            get("VB_Exposed", "False")
+        );
     }
     s
 }
@@ -648,7 +782,10 @@ pub fn print_module(m: &VModule, opts: &PrintOptions) -> Printed {
         }
         p.proc(proc);
     }
-    Printed { text: p.out, mappings: p.mappings }
+    Printed {
+        text: p.out,
+        mappings: p.mappings,
+    }
 }
 
 #[cfg(test)]
@@ -661,7 +798,11 @@ mod tests {
         assert_eq!(e.print(), "(a + b) * c");
         let e = bin("-", name("a"), bin("-", name("b"), name("c")));
         assert_eq!(e.print(), "a - (b - c)");
-        let e = bin("And", bin("=", name("a"), long(1)), bin("<", name("b"), long(2)).not());
+        let e = bin(
+            "And",
+            bin("=", name("a"), long(1)),
+            bin("<", name("b"), long(2)).not(),
+        );
         assert_eq!(e.print(), "a = 1& And b >= 2&");
         let e = VExpr::Not(Box::new(call("f", vec![name("x")])));
         assert_eq!(e.print(), "Not f(x)");
@@ -681,13 +822,25 @@ mod tests {
 
     #[test]
     fn omitted_arguments() {
-        let e = call("Find", vec![lit("\"x\""), VExpr::Missing, name("xlValues"), VExpr::Missing]);
+        let e = call(
+            "Find",
+            vec![
+                lit("\"x\""),
+                VExpr::Missing,
+                name("xlValues"),
+                VExpr::Missing,
+            ],
+        );
         assert_eq!(e.print(), "Find(\"x\",, xlValues)");
     }
 
     #[test]
     fn call_statement_avoids_paren_trap() {
-        let opts = PrintOptions { erl: false, attributes: true, vba6: true };
+        let opts = PrintOptions {
+            erl: false,
+            attributes: true,
+            vba6: true,
+        };
         let mut m = VModule::new("M", VModuleKind::Standard);
         m.procs.push(VProc {
             kind: ProcKind::Sub,
@@ -698,7 +851,10 @@ mod tests {
             ret: None,
             locals: vec![],
             body: vec![
-                call_stmt("foo", vec![bin("*", bin("+", name("a"), name("b")), long(2)), name("c")]),
+                call_stmt(
+                    "foo",
+                    vec![bin("*", bin("+", name("a"), name("b")), long(2)), name("c")],
+                ),
                 call_stmt("bar", vec![name("a")]),
             ],
             leading_comments: vec![],

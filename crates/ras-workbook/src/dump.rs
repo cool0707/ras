@@ -30,7 +30,12 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Options { format: Format::Text, formats: false, max_rows: Some(200), max_cols: Some(50) }
+        Options {
+            format: Format::Text,
+            formats: false,
+            max_rows: Some(200),
+            max_cols: Some(50),
+        }
     }
 }
 
@@ -49,7 +54,11 @@ pub fn type_name(v: &Val) -> &'static str {
 }
 
 fn number(n: f64) -> String {
-    if n.fract() == 0.0 && n.abs() < 1e15 { format!("{}", n as i64) } else { format!("{n}") }
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else {
+        format!("{n}")
+    }
 }
 
 /// A value as it is written in the text form: `"text"`, `12.5`, `TRUE`, `2026-04-01`, `#N/A`.
@@ -84,7 +93,11 @@ pub fn visible_name(v: i32) -> &'static str {
 }
 
 fn rule_text(r: &RuleInfo, kinds: &[(&str, &str)]) -> String {
-    let kind = kinds.iter().find(|(k, _)| *k == r.kind).map(|(_, v)| *v).unwrap_or(r.kind.as_str());
+    let kind = kinds
+        .iter()
+        .find(|(k, _)| *k == r.kind)
+        .map(|(_, v)| *v)
+        .unwrap_or(r.kind.as_str());
     let mut s = format!("{} {kind}", r.ranges);
     if !r.operator.is_empty() {
         s.push_str(&format!(" {}", r.operator));
@@ -95,9 +108,25 @@ fn rule_text(r: &RuleInfo, kinds: &[(&str, &str)]) -> String {
     s
 }
 
-const VALIDATION_KINDS: &[(&str, &str)] = &[("list", "リスト"), ("whole", "整数"), ("decimal", "小数点数"), ("date", "日付"), ("time", "時刻"), ("textLength", "文字列の長さ"), ("custom", "数式")];
-const CONDITIONAL_KINDS: &[(&str, &str)] =
-    &[("cellIs", "セルの値"), ("expression", "数式"), ("colorScale", "カラー スケール"), ("dataBar", "データ バー"), ("iconSet", "アイコン セット"), ("top10", "上位/下位"), ("duplicateValues", "重複する値"), ("uniqueValues", "一意の値")];
+const VALIDATION_KINDS: &[(&str, &str)] = &[
+    ("list", "リスト"),
+    ("whole", "整数"),
+    ("decimal", "小数点数"),
+    ("date", "日付"),
+    ("time", "時刻"),
+    ("textLength", "文字列の長さ"),
+    ("custom", "数式"),
+];
+const CONDITIONAL_KINDS: &[(&str, &str)] = &[
+    ("cellIs", "セルの値"),
+    ("expression", "数式"),
+    ("colorScale", "カラー スケール"),
+    ("dataBar", "データ バー"),
+    ("iconSet", "アイコン セット"),
+    ("top10", "上位/下位"),
+    ("duplicateValues", "重複する値"),
+    ("uniqueValues", "一意の値"),
+];
 
 fn rule_json(r: &RuleInfo) -> Json {
     let mut o = json!({ "ranges": r.ranges, "type": r.kind });
@@ -136,13 +165,29 @@ fn sheet_extras(s: &SheetInfo, indent: &str, out: &mut String) {
         out.push_str(&format!("{indent}フィルター: {f}\n"));
     }
     for t in &s.tables {
-        out.push_str(&format!("{indent}テーブル: {} {}（列: {}{}）\n", t.name, t.range, t.columns.join(", "), if t.totals_row { "、集計行あり" } else { "" }));
+        out.push_str(&format!(
+            "{indent}テーブル: {} {}（列: {}{}）\n",
+            t.name,
+            t.range,
+            t.columns.join(", "),
+            if t.totals_row {
+                "、集計行あり"
+            } else {
+                ""
+            }
+        ));
     }
     for v in &s.validations {
-        out.push_str(&format!("{indent}入力規則: {}\n", rule_text(v, VALIDATION_KINDS)));
+        out.push_str(&format!(
+            "{indent}入力規則: {}\n",
+            rule_text(v, VALIDATION_KINDS)
+        ));
     }
     for c in &s.conditional {
-        out.push_str(&format!("{indent}条件付き書式: {}\n", rule_text(c, CONDITIONAL_KINDS)));
+        out.push_str(&format!(
+            "{indent}条件付き書式: {}\n",
+            rule_text(c, CONDITIONAL_KINDS)
+        ));
     }
 }
 
@@ -173,7 +218,8 @@ pub fn outline(book: &mut Book, file: &str, opts: &Options) -> Result<String, St
         sheets.push((info, regions));
     }
     let names = book.names();
-    let scope = |book: &Book, s: Option<usize>| s.and_then(|i| book.sheet_name(i).map(str::to_string));
+    let scope =
+        |book: &Book, s: Option<usize>| s.and_then(|i| book.sheet_name(i).map(str::to_string));
     if opts.format == Format::Json {
         let sheets: Vec<Json> = sheets
             .iter()
@@ -184,27 +230,64 @@ pub fn outline(book: &mut Book, file: &str, opts: &Options) -> Result<String, St
             })
             .collect();
         let names: Vec<Json> = names.iter().map(|(name, s, f)| json!({ "name": name, "scope": scope(book, *s), "refersTo": format!("={f}") })).collect();
-        return Ok(format!("{}\n", serde_json::to_string_pretty(&json!({ "file": file, "sheets": sheets, "names": names })).unwrap_or_default()));
+        return Ok(format!(
+            "{}\n",
+            serde_json::to_string_pretty(
+                &json!({ "file": file, "sheets": sheets, "names": names })
+            )
+            .unwrap_or_default()
+        ));
     }
     let mut out = String::new();
     let md = opts.format == Format::Markdown;
-    out.push_str(&if md { format!("# {file}\n\n") } else { format!("{file}\n") });
-    out.push_str(if md { "## シート\n\n" } else { "シート:\n" });
+    out.push_str(&if md {
+        format!("# {file}\n\n")
+    } else {
+        format!("{file}\n")
+    });
+    out.push_str(if md {
+        "## シート\n\n"
+    } else {
+        "シート:\n"
+    });
     for (s, regions) in &sheets {
         let used = match s.used_range {
-            Some(r) => format!("使用範囲 {}、値のあるセル {} 個（うち数式 {} 個）", r.a1(), s.cell_count, s.formula_count),
+            Some(r) => format!(
+                "使用範囲 {}、値のあるセル {} 個（うち数式 {} 個）",
+                r.a1(),
+                s.cell_count,
+                s.formula_count
+            ),
             None => "空".to_string(),
         };
-        let (head, indent) = if md { (format!("- **{}** {used}\n", sheet_title(s)), "  - ") } else { (format!("  {}. {}  {used}\n", s.index + 1, sheet_title(s)), "     ") };
+        let (head, indent) = if md {
+            (format!("- **{}** {used}\n", sheet_title(s)), "  - ")
+        } else {
+            (
+                format!("  {}. {}  {used}\n", s.index + 1, sheet_title(s)),
+                "     ",
+            )
+        };
         out.push_str(&head);
         sheet_extras(s, indent, &mut out);
         for r in regions.iter().take(MAX_REGIONS) {
-            let same = if r.count > 1 { format!("（同じ形の数式 {} 個）", r.count) } else { String::new() };
-            let f = if md { format!("`{}`", r.formula) } else { r.formula.clone() };
+            let same = if r.count > 1 {
+                format!("（同じ形の数式 {} 個）", r.count)
+            } else {
+                String::new()
+            };
+            let f = if md {
+                format!("`{}`", r.formula)
+            } else {
+                r.formula.clone()
+            };
             out.push_str(&format!("{indent}数式: {} {f}{same}\n", r.range.a1()));
         }
         if regions.len() > MAX_REGIONS {
-            out.push_str(&format!("{indent}数式: ほか {} 個のまとまり（--sheet で範囲を指定すると見られます）\n", regions.len() - MAX_REGIONS));
+            out.push_str(&format!(
+                "{indent}数式: ほか {} 個のまとまり（--sheet で範囲を指定すると見られます）\n",
+                regions.len() - MAX_REGIONS
+            ));
         }
     }
     if !names.is_empty() {
@@ -214,7 +297,11 @@ pub fn outline(book: &mut Book, file: &str, opts: &Options) -> Result<String, St
                 Some(sheet) => format!("{sheet}!{name}"),
                 None => name.clone(),
             };
-            out.push_str(&if md { format!("- `{full}` = `{f}`\n") } else { format!("  {full} = {f}\n") });
+            out.push_str(&if md {
+                format!("- `{full}` = `{f}`\n")
+            } else {
+                format!("  {full} = {f}\n")
+            });
         }
     }
     Ok(out)
@@ -237,11 +324,21 @@ fn clip(r: RangeRef, opts: &Options) -> (RangeRef, bool) {
 }
 
 fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() }
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
 }
 
 /// The cells of a sheet: of `range`, or of what the sheet uses.
-pub fn sheet(book: &mut Book, file: &str, si: usize, range: Option<RangeRef>, opts: &Options) -> Result<String, String> {
+pub fn sheet(
+    book: &mut Book,
+    file: &str,
+    si: usize,
+    range: Option<RangeRef>,
+    opts: &Options,
+) -> Result<String, String> {
     let info = book.sheet_summary(si)?;
     let whole = range.or(info.used_range);
     let Some(whole) = whole else {
@@ -284,7 +381,10 @@ pub fn sheet(book: &mut Book, file: &str, si: usize, range: Option<RangeRef>, op
                 list.push(e);
             }
             o["cells"] = Json::Array(list);
-            Ok(format!("{}\n", serde_json::to_string_pretty(&o).unwrap_or_default()))
+            Ok(format!(
+                "{}\n",
+                serde_json::to_string_pretty(&o).unwrap_or_default()
+            ))
         }
         Format::Text => {
             let mut out = format!("{}  {}\n", sheet_title(&info), r.a1());
@@ -299,7 +399,11 @@ pub fn sheet(book: &mut Book, file: &str, si: usize, range: Option<RangeRef>, op
                     None => format!("{}\t{v}", c.at.a1()),
                 };
                 if opts.formats && c.number_format != "General" {
-                    line.push_str(&format!("\t[{}] 表示 {}", c.number_format, serde_json::to_string(&c.text).unwrap_or_default()));
+                    line.push_str(&format!(
+                        "\t[{}] 表示 {}",
+                        c.number_format,
+                        serde_json::to_string(&c.text).unwrap_or_default()
+                    ));
                 }
                 out.push_str(&line);
                 out.push('\n');
@@ -314,15 +418,21 @@ pub fn sheet(book: &mut Book, file: &str, si: usize, range: Option<RangeRef>, op
             let (h, w) = (r.height() as usize, r.width() as usize);
             let mut grid = vec![vec![String::new(); w]; h];
             for c in &cells {
-                grid[(c.at.row - r.start.row) as usize][(c.at.col - r.start.col) as usize] = match (&c.formula, opts.formats) {
-                    (Some(f), true) => format!("{f} → {}", c.text),
-                    _ => c.text.clone(),
-                };
+                grid[(c.at.row - r.start.row) as usize][(c.at.col - r.start.col) as usize] =
+                    match (&c.formula, opts.formats) {
+                        (Some(f), true) => format!("{f} → {}", c.text),
+                        _ => c.text.clone(),
+                    };
             }
             let mut out = String::new();
             if opts.format == Format::Csv {
                 for row in &grid {
-                    out.push_str(&row.iter().map(|s| csv_field(s)).collect::<Vec<_>>().join(","));
+                    out.push_str(
+                        &row.iter()
+                            .map(|s| csv_field(s))
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    );
                     out.push('\n');
                 }
                 return Ok(out);
@@ -347,7 +457,10 @@ pub fn sheet(book: &mut Book, file: &str, si: usize, range: Option<RangeRef>, op
             for (i, row) in grid.iter().enumerate() {
                 out.push_str(&format!("| {} |", r.start.row as usize + i + 1));
                 for s in row {
-                    out.push_str(&format!(" {} |", s.replace('|', "\\|").replace('\n', "<br>")));
+                    out.push_str(&format!(
+                        " {} |",
+                        s.replace('|', "\\|").replace('\n', "<br>")
+                    ));
                 }
                 out.push('\n');
             }

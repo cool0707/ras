@@ -86,8 +86,12 @@ impl<'p> Gen<'p> {
                 match &body.kind {
                     StmtKind::For { .. } => self.for_stmt(body, &prefix),
                     StmtKind::ForOf { .. } => self.for_of_stmt(body, &prefix),
-                    StmtKind::While { cond, body: b, .. } => self.while_stmt(body, cond, b, &prefix),
-                    StmtKind::DoWhile { body: b, cond, .. } => self.do_while_stmt(body, b, cond, &prefix),
+                    StmtKind::While { cond, body: b, .. } => {
+                        self.while_stmt(body, cond, b, &prefix)
+                    }
+                    StmtKind::DoWhile { body: b, cond, .. } => {
+                        self.do_while_stmt(body, b, cond, &prefix)
+                    }
                     _ => {
                         self.w(format!("{prefix}{{"));
                         self.body(body);
@@ -119,7 +123,9 @@ impl<'p> Gen<'p> {
             StmtKind::Throw(e) => {
                 let text = match &e.peel().kind {
                     ExprKind::New { .. } => format!("throw {};", self.expr(e)),
-                    _ if self.ty(e) == Type::Str => format!("throw $rt.makeError({});", self.expr(e)),
+                    _ if self.ty(e) == Type::Str => {
+                        format!("throw $rt.makeError({});", self.expr(e))
+                    }
                     _ => format!("throw {};", self.expr(e)),
                 };
                 self.simple(s, text);
@@ -133,8 +139,26 @@ impl<'p> Gen<'p> {
                 };
                 self.wm(s.span, text);
             }
-            StmtKind::Break(label) => self.wm(s.span, format!("break{};", label.as_ref().map(|l| format!(" {}", js_ident(&l.text))).unwrap_or_default())),
-            StmtKind::Continue(label) => self.wm(s.span, format!("continue{};", label.as_ref().map(|l| format!(" {}", js_ident(&l.text))).unwrap_or_default())),
+            StmtKind::Break(label) => self.wm(
+                s.span,
+                format!(
+                    "break{};",
+                    label
+                        .as_ref()
+                        .map(|l| format!(" {}", js_ident(&l.text)))
+                        .unwrap_or_default()
+                ),
+            ),
+            StmtKind::Continue(label) => self.wm(
+                s.span,
+                format!(
+                    "continue{};",
+                    label
+                        .as_ref()
+                        .map(|l| format!(" {}", js_ident(&l.text)))
+                        .unwrap_or_default()
+                ),
+            ),
         }
     }
 
@@ -146,14 +170,23 @@ impl<'p> Gen<'p> {
             let ty = self.prog.vars[var].ty.clone();
             let target = self.global_ref(var);
             return match &v.init {
-                Some(init) => (String::new(), format!("{target} = {}", self.coerce_store(init, &ty))),
+                Some(init) => (
+                    String::new(),
+                    format!("{target} = {}", self.coerce_store(init, &ty)),
+                ),
                 None => (String::new(), String::new()),
             };
         }
-        let Some(&local) = info.decl_locals.get(&offset) else { return (String::new(), String::new()) };
+        let Some(&local) = info.decl_locals.get(&offset) else {
+            return (String::new(), String::new());
+        };
         let ty = self.local_ty(local);
         let name = self.local_name(local);
-        let kw = if v.kind == VarKind::Let { "let" } else { "const" };
+        let kw = if v.kind == VarKind::Let {
+            "let"
+        } else {
+            "const"
+        };
         let value = match &v.init {
             Some(init) => self.coerce_store(init, &ty),
             None => self.zero(&ty),
@@ -170,7 +203,12 @@ impl<'p> Gen<'p> {
             // The declaration must survive a failing initialiser.
             let name = assign.split(" = ").next().unwrap_or_default().to_string();
             let offset = u32::from(v.name.span.start());
-            let ty = self.info().decl_locals.get(&offset).map(|&l| self.local_ty(l)).unwrap_or(Type::Any);
+            let ty = self
+                .info()
+                .decl_locals
+                .get(&offset)
+                .map(|&l| self.local_ty(l))
+                .unwrap_or(Type::Any);
             let z = self.zero(&ty);
             self.w(format!("let {name} = {z};"));
             self.wm(s.span, format!("try {{ {assign}; }} catch {{}}"));
@@ -180,9 +218,21 @@ impl<'p> Gen<'p> {
     }
 
     fn for_stmt(&mut self, s: &Stmt, label: &str) {
-        let StmtKind::For { init, cond, update, body, .. } = &s.kind else { return };
+        let StmtKind::For {
+            init,
+            cond,
+            update,
+            body,
+            ..
+        } = &s.kind
+        else {
+            return;
+        };
         // Several declarations in the header: hoist them into an enclosing block.
-        let hoist = init.len() > 1 || init.iter().any(|i| !matches!(i.kind, StmtKind::Var(_) | StmtKind::Expr(_)));
+        let hoist = init.len() > 1
+            || init
+                .iter()
+                .any(|i| !matches!(i.kind, StmtKind::Var(_) | StmtKind::Expr(_)));
         if hoist {
             self.w("{");
             self.indent += 1;
@@ -200,7 +250,10 @@ impl<'p> Gen<'p> {
         };
         let c = cond.as_ref().map(|c| self.expr(c)).unwrap_or_default();
         let u: Vec<String> = update.iter().map(|x| self.effect(x.peel())).collect();
-        self.wm(s.span, format!("{label}for ({head_init}; {c}; {}) {{", u.join(", ")));
+        self.wm(
+            s.span,
+            format!("{label}for ({head_init}; {c}; {}) {{", u.join(", ")),
+        );
         self.body(body);
         self.w("}");
         if hoist {
@@ -210,14 +263,32 @@ impl<'p> Gen<'p> {
     }
 
     fn for_of_stmt(&mut self, s: &Stmt, label: &str) {
-        let StmtKind::ForOf { kind, name, iter, body, .. } = &s.kind else { return };
+        let StmtKind::ForOf {
+            kind,
+            name,
+            iter,
+            body,
+            ..
+        } = &s.kind
+        else {
+            return;
+        };
         let info = self.info();
-        let Some(&local) = info.decl_locals.get(&u32::from(name.span.start())) else { return };
+        let Some(&local) = info.decl_locals.get(&u32::from(name.span.start())) else {
+            return;
+        };
         let var_ty = self.local_ty(local);
         let var = self.local_name(local);
         let iter_ty = self.ty(iter);
-        let kw = if *kind == VarKind::Let { "let" } else { "const" };
-        let is_map_iter = matches!(info.calls.get(&iter.peel().id).map(|c| &c.target), Some(CallTarget::Intrinsic(Intr::MapKeys | Intr::MapValues)));
+        let kw = if *kind == VarKind::Let {
+            "let"
+        } else {
+            "const"
+        };
+        let is_map_iter = matches!(
+            info.calls.get(&iter.peel().id).map(|c| &c.target),
+            Some(CallTarget::Intrinsic(Intr::MapKeys | Intr::MapValues))
+        );
         let it = self.expr(iter);
         let (coll, elem_ty) = if iter_ty.is_array() || is_map_iter {
             let elem = match &iter_ty {
@@ -231,7 +302,11 @@ impl<'p> Gen<'p> {
         };
         let converted = self.coerce("$item".into(), &elem_ty, &var_ty);
         // The loop variable of a struct array is a copy of the element (a value type).
-        let converted = if matches!(var_ty, Type::Struct(_)) { format!("$rt.clone({converted})") } else { converted };
+        let converted = if matches!(var_ty, Type::Struct(_)) {
+            format!("$rt.clone({converted})")
+        } else {
+            converted
+        };
         if converted == "$item" {
             self.wm(s.span, format!("{label}for ({kw} {var} of {coll}) {{"));
         } else {
@@ -284,7 +359,12 @@ impl<'p> Gen<'p> {
         if let Some(c) = &t.catch {
             match &c.param {
                 Some(p) => {
-                    let name = self.info().decl_locals.get(&u32::from(p.span.start())).map(|&l| self.local_name(l)).unwrap_or_else(|| js_ident(&p.text));
+                    let name = self
+                        .info()
+                        .decl_locals
+                        .get(&u32::from(p.span.start()))
+                        .map(|&l| self.local_name(l))
+                        .unwrap_or_else(|| js_ident(&p.text));
                     self.w("} catch ($e) {");
                     self.wm(c.span, format!("    const {name} = $rt.caught($e);"));
                 }
@@ -310,7 +390,10 @@ impl<'p> Gen<'p> {
     fn using_stmt(&mut self, s: &Stmt, v: &ast::VarDecl, rest: &[Stmt]) {
         let Some(init) = &v.init else { return };
         let info = self.info();
-        let is_fast = matches!(info.calls.get(&init.peel().id).map(|c| &c.target), Some(CallTarget::Intrinsic(Intr::FastMode)));
+        let is_fast = matches!(
+            info.calls.get(&init.peel().id).map(|c| &c.target),
+            Some(CallTarget::Intrinsic(Intr::FastMode))
+        );
         self.w("{");
         self.indent += 1;
         let cleanup = if is_fast {

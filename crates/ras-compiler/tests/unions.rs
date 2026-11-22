@@ -4,7 +4,10 @@
 
 use std::path::PathBuf;
 
-use ras_compiler::{analyze, compile_str, query, BuildOptions, BuildOutput, Config, ModuleKind, Program, SourceInput};
+use ras_compiler::{
+    analyze, compile_str, query, BuildOptions, BuildOutput, Config, ModuleKind, Program,
+    SourceInput,
+};
 
 fn config() -> Config {
     let mut cfg = Config::default();
@@ -13,16 +16,38 @@ fn config() -> Config {
 }
 
 fn compile(src: &str) -> (Program, BuildOutput) {
-    let (prog, out) = compile_str(&[("m", src)], config(), &BuildOptions { erl: Some(false), ..Default::default() });
-    let errors: Vec<String> = prog.diagnostics.iter().chain(out.diagnostics.iter()).filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    let (prog, out) = compile_str(
+        &[("m", src)],
+        config(),
+        &BuildOptions {
+            erl: Some(false),
+            ..Default::default()
+        },
+    );
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .chain(out.diagnostics.iter())
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
     assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
     (prog, out)
 }
 
 /// Code of a generated module with LF line endings and without the hash line.
 fn code(out: &BuildOutput, module: &str) -> String {
-    let f = out.files.iter().find(|f| f.name == module).unwrap_or_else(|| panic!("no module {module}"));
-    f.code.replace("\r\n", "\n").lines().filter(|l| !l.starts_with("' RAS-GENERATED")).map(|l| format!("{l}\n")).collect()
+    let f = out
+        .files
+        .iter()
+        .find(|f| f.name == module)
+        .unwrap_or_else(|| panic!("no module {module}"));
+    f.code
+        .replace("\r\n", "\n")
+        .lines()
+        .filter(|l| !l.starts_with("' RAS-GENERATED"))
+        .map(|l| format!("{l}\n"))
+        .collect()
 }
 
 /// (code, message) of the errors and warnings reported for the user module.
@@ -30,24 +55,41 @@ fn diagnostics(src: &str) -> Vec<(&'static str, String)> {
     let (prog, _) = compile_str(&[("m", src)], config(), &BuildOptions::default());
     prog.diagnostics
         .iter()
-        .filter(|d| d.module.is_some_and(|m| prog.modules[m].kind == ModuleKind::User) && d.code != "W0401" && d.code != "I0402")
+        .filter(|d| {
+            d.module
+                .is_some_and(|m| prog.modules[m].kind == ModuleKind::User)
+                && d.code != "W0401"
+                && d.code != "I0402"
+        })
         .map(|d| (d.code, d.message.clone()))
         .collect()
 }
 
 #[track_caller]
 fn assert_contains(haystack: &str, needle: &str) {
-    assert!(haystack.contains(needle), "expected to find:\n{needle}\n--- in ---\n{haystack}");
+    assert!(
+        haystack.contains(needle),
+        "expected to find:\n{needle}\n--- in ---\n{haystack}"
+    );
 }
 
 #[track_caller]
 fn assert_reports(src: &str, code: &str, part: &str) {
     let ds = diagnostics(src);
-    assert!(ds.iter().any(|(c, m)| *c == code && m.contains(part)), "expected {code} containing `{part}`, got {ds:#?}");
+    assert!(
+        ds.iter().any(|(c, m)| *c == code && m.contains(part)),
+        "expected {code} containing `{part}`, got {ds:#?}"
+    );
 }
 
 fn analyze_one(src: &str) -> (Program, usize) {
-    let input = SourceInput { path: PathBuf::from("src/m.ras"), rel_path: "src/m.ras".into(), key: "m".into(), kind: ModuleKind::User, text: src.into() };
+    let input = SourceInput {
+        path: PathBuf::from("src/m.ras"),
+        rel_path: "src/m.ras".into(),
+        key: "m".into(),
+        kind: ModuleKind::User,
+        text: src.into(),
+    };
     let prog = analyze(vec![input], config());
     let m = prog.modules.iter().position(|md| md.key == "m").unwrap();
     (prog, m)
@@ -57,7 +99,9 @@ fn analyze_one(src: &str) -> (Program, usize) {
 fn hover_at(src: &str, marker: &str) -> String {
     let (prog, m) = analyze_one(src);
     let offset = src.find(marker).unwrap_or_else(|| panic!("no {marker}")) + marker.len();
-    query::hover(&prog, m, offset as u32).map(|h| h.markdown).unwrap_or_default()
+    query::hover(&prog, m, offset as u32)
+        .map(|h| h.markdown)
+        .unwrap_or_default()
 }
 
 const SPEC_EXAMPLE: &str = r#"
@@ -109,15 +153,31 @@ export function stamp() {
 }
 "#;
     // `Sheets` without its type argument is `Sheets<Worksheet | Chart>` (spec §2.6.5).
-    assert_eq!(hover_at(src, "const first"), "```ras\nfirst: Excel.Worksheet | Excel.Chart\n// VBA: Object\n```");
-    assert!(hover_at(src, "} else {\n            sh.cells(1, 1).value = sh.").contains("Excel.Worksheet"));
+    assert_eq!(
+        hover_at(src, "const first"),
+        "```ras\nfirst: Excel.Worksheet | Excel.Chart\n// VBA: Object\n```"
+    );
+    assert!(
+        hover_at(src, "} else {\n            sh.cells(1, 1).value = sh.")
+            .contains("Excel.Worksheet")
+    );
     let (_, out) = compile(src);
     let m = code(&out, "M");
     assert_contains(&m, "    Dim first As Object\n    Dim sh As Object\n");
     assert_contains(&m, "    For Each sh In ThisWorkbook.Sheets\n        If (TypeOf sh Is Chart) Then\n            sh.ChartTitle.Text = sh.Name\n        Else\n            sh.Cells(1&, 1&).Value = sh.Name\n        End If\n    Next sh\n");
     // `worksheets` keeps its element type.
     let (prog, m) = analyze_one("export function f() { const w = worksheets(1); }");
-    let w = prog.fns.iter().find(|f| f.module == m && f.name == "f").unwrap().locals.iter().find(|l| l.name == "w").unwrap().ty.clone();
+    let w = prog
+        .fns
+        .iter()
+        .find(|f| f.module == m && f.name == "f")
+        .unwrap()
+        .locals
+        .iter()
+        .find(|l| l.name == "w")
+        .unwrap()
+        .ty
+        .clone();
     assert_eq!(prog.show(&w), "Excel.Worksheet");
 }
 
@@ -179,7 +239,10 @@ export function radius(x: Shape): double {
 "#;
     let (_, out) = compile(src);
     let m = code(&out, "M");
-    assert_contains(&m, "Public Function total(ByRef xs() As Object) As Double\n");
+    assert_contains(
+        &m,
+        "Public Function total(ByRef xs() As Object) As Double\n",
+    );
     assert_contains(&m, "        t = t + x.area()\n        x.name = \"seen\"\n");
     assert_contains(&m, "    If (TypeOf x Is Circle_) Then\n        radius = x.r\n    Else\n        radius = 0#\n    End If\n");
 }
@@ -226,7 +289,12 @@ export function fromAny(v: any): string {
 "#;
     let ty = |name: &str| {
         let (prog, m) = analyze_one(src);
-        let f = prog.fns.iter().filter(|f| f.module == m).find(|f| f.locals.iter().any(|l| l.name == name)).unwrap();
+        let f = prog
+            .fns
+            .iter()
+            .filter(|f| f.module == m)
+            .find(|f| f.locals.iter().any(|l| l.name == name))
+            .unwrap();
         prog.show(&f.locals.iter().find(|l| l.name == name).unwrap().ty)
     };
     assert_eq!(ty("ab"), "A | B");
@@ -241,43 +309,106 @@ export function fromAny(v: any): string {
     let ds = diagnostics(src);
     assert!(ds.iter().all(|(c, _)| !c.starts_with('E')), "{ds:#?}");
     // The hover of a narrowed variable shows where it is stored.
-    assert_contains(&hover_at(src, "const onlyC = x"), "x: C\n// VBA: Object（宣言は `A | B | C`。ここでは型が絞り込まれています）");
+    assert_contains(
+        &hover_at(src, "const onlyC = x"),
+        "x: C\n// VBA: Object（宣言は `A | B | C`。ここでは型が絞り込まれています）",
+    );
 }
 
 #[test]
 fn union_errors() {
     let classes = "class A { name: string = \"\"; readonly id: int = 0; go(n: int): int { return n; } }\nclass B { name: string = \"\"; id: int = 0; go(n: int, m: int): int { return n; } }\nclass C { name: int = 0; }\nstruct P { x: int; }\n";
     let with = |body: &str| format!("{classes}{body}");
-    assert_reports(&with("export function f(x: A | C) { x.go(1); }"), "E0202", "`C` に `go` はありません");
-    assert_reports("export function f(v: string | int) { const n = v.length; }", "E0202", "ユニオン型 `string | int` のメンバー `length`");
-    assert_reports("export function f(v: string | int) { const n = v + 1; }", "E0387", "`string | int`");
-    assert_reports("export function f(v: string | int) { const b = v < 3; }", "E0396", "大小比較");
-    assert_reports(&with("export function f(x: A | B) { x.go(1); }"), "E0402", "`B.go` の引数は 2 個です");
-    assert_reports(&with("export function f(x: A | B) { x.id = 3; }"), "E0323", "読み取り専用");
-    assert_reports(&with("export function f(x: A | C) { x.name = 1; }"), "E0325", "型ごとに異なる");
+    assert_reports(
+        &with("export function f(x: A | C) { x.go(1); }"),
+        "E0202",
+        "`C` に `go` はありません",
+    );
+    assert_reports(
+        "export function f(v: string | int) { const n = v.length; }",
+        "E0202",
+        "ユニオン型 `string | int` のメンバー `length`",
+    );
+    assert_reports(
+        "export function f(v: string | int) { const n = v + 1; }",
+        "E0387",
+        "`string | int`",
+    );
+    assert_reports(
+        "export function f(v: string | int) { const b = v < 3; }",
+        "E0396",
+        "大小比較",
+    );
+    assert_reports(
+        &with("export function f(x: A | B) { x.go(1); }"),
+        "E0402",
+        "`B.go` の引数は 2 個です",
+    );
+    assert_reports(
+        &with("export function f(x: A | B) { x.id = 3; }"),
+        "E0323",
+        "読み取り専用",
+    );
+    assert_reports(
+        &with("export function f(x: A | C) { x.name = 1; }"),
+        "E0325",
+        "型ごとに異なる",
+    );
     assert_reports(&with("function f(p: P | int) {}"), "E0170", "構造体 `P`");
     assert_reports("function f<T>(p: T | int) {}", "E0170", "型パラメータ `T`");
-    assert_reports("function f(p: string | int | null) {}", "E0170", "`string | int | null`");
-    assert_reports("export function f() { const t = true ? 1 : \"a\"; }", "E0302", "`string | int`");
-    assert_reports("export function f() { let w: string | int = 1.5; }", "E0301", "`double` を `string | int`");
+    assert_reports(
+        "function f(p: string | int | null) {}",
+        "E0170",
+        "`string | int | null`",
+    );
+    assert_reports(
+        "export function f() { const t = true ? 1 : \"a\"; }",
+        "E0302",
+        "`string | int`",
+    );
+    assert_reports(
+        "export function f() { let w: string | int = 1.5; }",
+        "E0301",
+        "`double` を `string | int`",
+    );
     assert_reports(
         "function g(byref p: string | int) {}\nexport function f(v: string | int) { if (typeof v == \"String\") { g(v); } }",
         "E0415",
         "`v`",
     );
-    assert_reports("export function f(v: string | int) { if (typeof v == \"string\") {} }", "W0312", "\"String\"");
+    assert_reports(
+        "export function f(v: string | int) { if (typeof v == \"string\") {} }",
+        "W0312",
+        "\"String\"",
+    );
     // A host member that only some member types have is typed by those and late-bound, with a warning;
     // one that none has is late-bound as for a single host type.
-    assert_reports("export function f(s: Excel.Worksheet | Excel.Chart) { s.cells(1, 1).value = 1; }", "W0305", "`Excel.Chart`");
-    assert_reports("export function f(s: Excel.Worksheet | Excel.Chart) { s.noSuchMember(); }", "W0301", "`noSuchMember`");
+    assert_reports(
+        "export function f(s: Excel.Worksheet | Excel.Chart) { s.cells(1, 1).value = 1; }",
+        "W0305",
+        "`Excel.Chart`",
+    );
+    assert_reports(
+        "export function f(s: Excel.Worksheet | Excel.Chart) { s.noSuchMember(); }",
+        "W0301",
+        "`noSuchMember`",
+    );
     assert!(diagnostics("function ok(p: string | Excel.Range | null) {}").is_empty());
 }
 
 #[test]
 fn type_parameter_defaults() {
     let src = "class Box<T = string | int> { v: T; constructor(v: T) { this.v = v; } }\nexport function f() { const b: Box = new Box<string | int>(1); }\n";
-    assert!(diagnostics(src).iter().all(|(c, _)| !c.starts_with('E')), "{:#?}", diagnostics(src));
-    assert_reports("function f<T = int>(x: T) {}", "E0171", "クラスとインターフェイス");
+    assert!(
+        diagnostics(src).iter().all(|(c, _)| !c.starts_with('E')),
+        "{:#?}",
+        diagnostics(src)
+    );
+    assert_reports(
+        "function f<T = int>(x: T) {}",
+        "E0171",
+        "クラスとインターフェイス",
+    );
     assert_reports("interface I<T = int, U> {}", "E0171", "`U`");
 }
 
@@ -286,12 +417,21 @@ fn editor_shows_common_members() {
     let src = "export function f(s: Excel.Worksheet | Excel.Chart) {\n    s.\n}\n";
     let (prog, m) = analyze_one(src);
     let offset = src.find("s.\n").unwrap() + 2;
-    let labels: Vec<String> = query::completions(&prog, m, offset as u32).into_iter().map(|c| c.label).collect();
+    let labels: Vec<String> = query::completions(&prog, m, offset as u32)
+        .into_iter()
+        .map(|c| c.label)
+        .collect();
     for want in ["name", "activate", "visible", "protect"] {
-        assert!(labels.contains(&want.to_string()), "{want} missing: {labels:?}");
+        assert!(
+            labels.contains(&want.to_string()),
+            "{want} missing: {labels:?}"
+        );
     }
     for only_one in ["cells", "chartTitle"] {
-        assert!(!labels.contains(&only_one.to_string()), "{only_one} is not common: {labels:?}");
+        assert!(
+            !labels.contains(&only_one.to_string()),
+            "{only_one} is not common: {labels:?}"
+        );
     }
 }
 
@@ -313,7 +453,11 @@ export function members(ws: Excel.Worksheet, ch: Excel.Chart, nm: Excel.Name, sh
 }
 "#;
     let (prog, m) = analyze_one(src);
-    let f = prog.fns.iter().find(|f| f.module == m && f.name == "members").unwrap();
+    let f = prog
+        .fns
+        .iter()
+        .find(|f| f.module == m && f.name == "members")
+        .unwrap();
     let ty = |name: &str| prog.show(&f.locals.iter().find(|l| l.name == name).unwrap().ty);
     for name in ["active", "bookActive", "next", "shapeParent", "added"] {
         assert_eq!(ty(name), "Excel.Worksheet | Excel.Chart", "{name}");
@@ -326,8 +470,15 @@ export function members(ws: Excel.Worksheet, ch: Excel.Chart, nm: Excel.Name, sh
     assert_eq!(ty("open"), "string | boolean | any[]");
     // Members that are not one of a few known types stay as they were.
     let (prog, m) = analyze_one("export function f() { const s = selection; const v = sheet1Value(); }\nfunction sheet1Value(): any { return activeCell.value; }\n");
-    let f = prog.fns.iter().find(|f| f.module == m && f.name == "f").unwrap();
-    assert_eq!(prog.show(&f.locals.iter().find(|l| l.name == "s").unwrap().ty), "object");
+    let f = prog
+        .fns
+        .iter()
+        .find(|f| f.module == m && f.name == "f")
+        .unwrap();
+    assert_eq!(
+        prog.show(&f.locals.iter().find(|l| l.name == "s").unwrap().ty),
+        "object"
+    );
 }
 
 #[test]
@@ -342,9 +493,23 @@ export function legacy() {
 "#;
     let ds = diagnostics(src);
     assert!(ds.iter().all(|(c, _)| !c.starts_with('E')), "{ds:#?}");
-    assert!(ds.iter().any(|(c, m)| *c == "W0306" && m.contains("`Excel.Worksheet | Excel.Chart` を `Excel.Worksheet` として扱います") && m.contains("`Excel.Chart` のときは実行時エラー")), "{ds:#?}");
-    assert!(ds.iter().any(|(c, m)| *c == "W0306" && m.contains("`string | boolean` を `string`") && m.contains("暗黙の型変換")), "{ds:#?}");
-    assert!(ds.iter().any(|(c, m)| *c == "W0305" && m.contains("`cells` は `Excel.Chart` にない")), "{ds:#?}");
+    assert!(
+        ds.iter().any(|(c, m)| *c == "W0306"
+            && m.contains("`Excel.Worksheet | Excel.Chart` を `Excel.Worksheet` として扱います")
+            && m.contains("`Excel.Chart` のときは実行時エラー")),
+        "{ds:#?}"
+    );
+    assert!(
+        ds.iter().any(|(c, m)| *c == "W0306"
+            && m.contains("`string | boolean` を `string`")
+            && m.contains("暗黙の型変換")),
+        "{ds:#?}"
+    );
+    assert!(
+        ds.iter()
+            .any(|(c, m)| *c == "W0305" && m.contains("`cells` は `Excel.Chart` にない")),
+        "{ds:#?}"
+    );
     // The member is typed by the member types that have it.
     assert_contains(&hover_at(src, "activeSheet.cells(2, 1).val"), "value");
     let (_, out) = compile(src);
@@ -353,9 +518,14 @@ export function legacy() {
 
     // What the VBA importer writes for `Set ws = ActiveSheet` (spec §14.7.1) keeps compiling.
     let vba = "Option Explicit\nPublic Sub Test()\n    Dim ws As Worksheet\n    Set ws = ActiveSheet\n    Set ws = ws.Next\n    Application.StatusBar = False\nEnd Sub\n";
-    let converted = ras_compiler::vba2ras::convert(vba, &ras_compiler::vba2ras::Target::Standard, &[]);
+    let converted =
+        ras_compiler::vba2ras::convert(vba, &ras_compiler::vba2ras::Target::Standard, &[]);
     let ds = diagnostics(&converted.text);
-    assert!(ds.iter().all(|(c, _)| !c.starts_with('E')), "{}\n{ds:#?}", converted.text);
+    assert!(
+        ds.iter().all(|(c, _)| !c.starts_with('E')),
+        "{}\n{ds:#?}",
+        converted.text
+    );
 }
 
 #[test]
@@ -378,5 +548,8 @@ export function pick(): int {
     let m = code(&out, "M");
     assert_contains(&m, "    f = RAS_Rebase1(Application.GetOpenFilename(\"Excel,*.xlsx\", 1&, \"選択\", \"開く\", True))\n    If TypeName(f) = \"Boolean\" Then\n");
     assert_contains(&m, "        For ras_i = 0 To RAS_Len(f) - 1&\n");
-    assert_contains(&code(&out, "RAS_Runtime"), "Public Function RAS_Rebase1(ByRef v As Variant) As Variant\n");
+    assert_contains(
+        &code(&out, "RAS_Runtime"),
+        "Public Function RAS_Rebase1(ByRef v As Variant) As Variant\n",
+    );
 }

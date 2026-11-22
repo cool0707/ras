@@ -9,7 +9,10 @@ use ras_ovba::{ModuleKind, VbaModule};
 
 /// Path of a vendored fixture (see `tests/fixtures/README.md`).
 pub fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name)
 }
 
 pub fn fixture_bytes(name: &str) -> Vec<u8> {
@@ -20,14 +23,20 @@ pub fn fixture_bytes(name: &str) -> Vec<u8> {
 /// integration tests. Left in place after the test so that the produced
 /// workbooks can be inspected with external tools.
 pub fn fresh_dir(name: &str) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("ras-ovba").join(name);
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("ras-ovba")
+        .join(name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create test directory");
     dir
 }
 
 pub fn module(kind: ModuleKind, name: &str, source: &str) -> VbaModule {
-    VbaModule { name: name.to_string(), kind, source: source.to_string() }
+    VbaModule {
+        name: name.to_string(),
+        kind,
+        source: source.to_string(),
+    }
 }
 
 pub fn standard(name: &str, source: &str) -> VbaModule {
@@ -41,7 +50,9 @@ pub fn class(name: &str, source: &str) -> VbaModule {
 /// Names of all entries of a zip file, in order.
 pub fn zip_names(path: &Path) -> Vec<String> {
     let archive = zip::ZipArchive::new(Cursor::new(fs::read(path).unwrap())).unwrap();
-    (0..archive.len()).map(|i| archive.name_for_index(i).unwrap().to_string()).collect()
+    (0..archive.len())
+        .map(|i| archive.name_for_index(i).unwrap().to_string())
+        .collect()
 }
 
 /// Decompressed contents of a zip entry.
@@ -54,7 +65,8 @@ pub fn zip_entry(path: &Path, name: &str) -> Option<Vec<u8>> {
 }
 
 pub fn zip_text(path: &Path, name: &str) -> String {
-    String::from_utf8(zip_entry(path, name).unwrap_or_else(|| panic!("entry {name} exists"))).unwrap()
+    String::from_utf8(zip_entry(path, name).unwrap_or_else(|| panic!("entry {name} exists")))
+        .unwrap()
 }
 
 /// `(crc32, compressed bytes exactly as stored)` of a zip entry.
@@ -96,7 +108,10 @@ pub fn patch_zip(bytes: &[u8], changes: &[(&str, Option<Vec<u8>>)]) -> Vec<u8> {
             entries.push((name.to_string(), data.clone()));
         }
     }
-    let refs: Vec<(&str, Vec<u8>)> = entries.iter().map(|(n, d)| (n.as_str(), d.clone())).collect();
+    let refs: Vec<(&str, Vec<u8>)> = entries
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.clone()))
+        .collect();
     build_zip(&refs)
 }
 
@@ -108,7 +123,9 @@ pub fn ovba_modules(bin: &[u8]) -> Vec<(String, String)> {
         .modules
         .iter()
         .map(|m| {
-            let source = project.module_source(&m.name).expect("ovba reads the module source");
+            let source = project
+                .module_source(&m.name)
+                .expect("ovba reads the module source");
             (m.name.clone(), source)
         })
         .collect()
@@ -121,7 +138,10 @@ pub fn cfb_streams(bin: &[u8]) -> Vec<(String, Vec<u8>)> {
     let mut result = Vec::new();
     for entry in entries {
         let mut data = Vec::new();
-        file.open_stream(entry.path()).unwrap().read_to_end(&mut data).unwrap();
+        file.open_stream(entry.path())
+            .unwrap()
+            .read_to_end(&mut data)
+            .unwrap();
         result.push((entry.path().to_string_lossy().replace('\\', "/"), data));
     }
     result.sort();
@@ -134,12 +154,20 @@ pub fn cfb_storages(bin: &[u8]) -> Vec<(String, String)> {
     let mut result: Vec<(String, String)> = file
         .walk()
         .filter(|e| e.is_storage())
-        .map(|e| (e.path().to_string_lossy().replace('\\', "/"), e.clsid().to_string()))
+        .map(|e| {
+            (
+                e.path().to_string_lossy().replace('\\', "/"),
+                e.clsid().to_string(),
+            )
+        })
         .collect();
     result.sort();
     result
 }
 
 pub fn cfb_stream(bin: &[u8], path: &str) -> Option<Vec<u8>> {
-    cfb_streams(bin).into_iter().find(|(p, _)| p == path).map(|(_, d)| d)
+    cfb_streams(bin)
+        .into_iter()
+        .find(|(p, _)| p == path)
+        .map(|(_, d)| d)
 }

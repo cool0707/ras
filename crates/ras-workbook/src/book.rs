@@ -32,7 +32,9 @@ use gridcraft_formula::{Expr, SheetSel};
 use gridcraft_model as gm;
 use gridcraft_numfmt::NumberFormat;
 use gridcraft_xlsx_formulas::{FunctionInfo, Names, SaveAs, apply_legacy, fmla, save_as};
-use umya_spreadsheet::{Cell, CellErrorType, CellFormula, CellFormulaValues, CellRawValue, EnumTrait, Worksheet};
+use umya_spreadsheet::{
+    Cell, CellErrorType, CellFormula, CellFormulaValues, CellRawValue, EnumTrait, Worksheet,
+};
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -44,7 +46,17 @@ const FUNCTIONS: FunctionInfo = FunctionInfo {
 };
 
 /// Functions the engine has only a stand-in for.
-const STAND_INS: &[&str] = &["CUBEKPIMEMBER", "CUBEMEMBER", "CUBEMEMBERPROPERTY", "CUBERANKEDMEMBER", "CUBESET", "CUBESETCOUNT", "CUBEVALUE", "FILTERXML", "WEBSERVICE"];
+const STAND_INS: &[&str] = &[
+    "CUBEKPIMEMBER",
+    "CUBEMEMBER",
+    "CUBEMEMBERPROPERTY",
+    "CUBERANKEDMEMBER",
+    "CUBESET",
+    "CUBESETCOUNT",
+    "CUBEVALUE",
+    "FILTERXML",
+    "WEBSERVICE",
+];
 
 pub const MAX_ROWS: u32 = gridcraft_core::addr::MAX_ROWS;
 pub const MAX_COLS: u32 = gridcraft_core::addr::MAX_COLS;
@@ -167,7 +179,11 @@ fn file_value(c: &Cell, formula: bool) -> Value {
         CellRawValue::Error(e) => Value::Error(error_of(e)),
         other => {
             let s = other.to_string();
-            if s.is_empty() && !formula { Value::Empty } else { Value::text(s) }
+            if s.is_empty() && !formula {
+                Value::Empty
+            } else {
+                Value::text(s)
+            }
         }
     }
 }
@@ -218,7 +234,10 @@ fn set_plain(c: &mut Cell, v: &Value) {
 
 fn at_of(c: &Cell) -> CellRef {
     let co = c.coordinate();
-    CellRef::new(co.row_num().saturating_sub(1), co.col_num().saturating_sub(1))
+    CellRef::new(
+        co.row_num().saturating_sub(1),
+        co.col_num().saturating_sub(1),
+    )
 }
 
 /// umya-spreadsheet's (column, row), 1-based.
@@ -244,8 +263,13 @@ struct Made {
 /// A cell of the file as the engine takes it. A formula the engine cannot read comes back
 /// without one (the saved value stays).
 fn make(c: &Cell) -> Made {
-    let plain = |formula: bool| Made { cell: gm::Cell::value(file_value(c, formula)), kind: Kind::Legacy };
-    let Some(f) = c.formula_obj() else { return plain(false) };
+    let plain = |formula: bool| Made {
+        cell: gm::Cell::value(file_value(c, formula)),
+        kind: Kind::Legacy,
+    };
+    let Some(f) = c.formula_obj() else {
+        return plain(false);
+    };
     let text = f.text().trim();
     if *f.formula_type() == CellFormulaValues::DataTable || text.is_empty() {
         return plain(true);
@@ -258,7 +282,9 @@ fn make(c: &Cell) -> Made {
     let at = at_of(c);
     let dynamic = f.dynamic_array();
     let kind = if *f.formula_type() == CellFormulaValues::Array {
-        let area = RangeRef::parse(f.reference()).filter(|r| r.start == at).unwrap_or(RangeRef::cell(at));
+        let area = RangeRef::parse(f.reference())
+            .filter(|r| r.start == at)
+            .unwrap_or(RangeRef::cell(at));
         if dynamic {
             Kind::Dynamic(area)
         } else {
@@ -271,7 +297,14 @@ fn make(c: &Cell) -> Made {
         Kind::Legacy
     };
     formula.dynamic = dynamic;
-    Made { cell: gm::Cell { value: file_value(c, true), formula: Some(Arc::new(formula)), ..Default::default() }, kind }
+    Made {
+        cell: gm::Cell {
+            value: file_value(c, true),
+            formula: Some(Arc::new(formula)),
+            ..Default::default()
+        },
+        kind,
+    }
 }
 
 /// What a sheet has besides its cells that formulas depend on: tables, merged cells, hidden rows.
@@ -287,18 +320,45 @@ fn layout(ws: &Worksheet, id: &mut u32) -> gm::Sheet {
     for r in ws.row_dimensions() {
         if r.hidden() && r.row_num() >= 1 {
             hidden.push(r.row_num() - 1);
-            sh.rows.insert(r.row_num() - 1, gm::LineInfo { hidden: true, ..Default::default() });
+            sh.rows.insert(
+                r.row_num() - 1,
+                gm::LineInfo {
+                    hidden: true,
+                    ..Default::default()
+                },
+            );
         }
     }
     for c in ws.column_dimensions() {
         if c.hidden() && c.col_num() >= 1 {
-            sh.cols.insert(c.col_num() - 1, gm::LineInfo { hidden: true, ..Default::default() });
+            sh.cols.insert(
+                c.col_num() - 1,
+                gm::LineInfo {
+                    hidden: true,
+                    ..Default::default()
+                },
+            );
         }
     }
     let filtered = |r: &RangeRef| hidden.iter().any(|h| *h > r.start.row && *h <= r.end.row);
-    let criterion = || vec![(0u32, gm::FilterCriterion::Values { values: Vec::new(), blanks: false })];
-    if let Some((f, r)) = ws.auto_filter().and_then(|f| Some((f, range(&f.range().range())?))) {
-        let mut criteria: Vec<(u32, gm::FilterCriterion)> = f.filter_columns().iter().filter_map(|c| Some((c.column_id(), file_criterion(c.criteria()?)?))).collect();
+    let criterion = || {
+        vec![(
+            0u32,
+            gm::FilterCriterion::Values {
+                values: Vec::new(),
+                blanks: false,
+            },
+        )]
+    };
+    if let Some((f, r)) = ws
+        .auto_filter()
+        .and_then(|f| Some((f, range(&f.range().range())?)))
+    {
+        let mut criteria: Vec<(u32, gm::FilterCriterion)> = f
+            .filter_columns()
+            .iter()
+            .filter_map(|c| Some((c.column_id(), file_criterion(c.criteria()?)?)))
+            .collect();
         if criteria.is_empty() && filtered(&r) {
             // Filtered by something the file's reader does not keep (colours, icons): the rows
             // it hides are filtered rows all the same.
@@ -311,18 +371,33 @@ fn layout(ws: &Worksheet, id: &mut u32) -> gm::Sheet {
             continue;
         }
         let (a, z) = t.area();
-        let r = RangeRef::new(CellRef::new(a.row_num() - 1, a.col_num() - 1), CellRef::new(z.row_num() - 1, z.col_num() - 1));
+        let r = RangeRef::new(
+            CellRef::new(a.row_num() - 1, a.col_num() - 1),
+            CellRef::new(z.row_num() - 1, z.col_num() - 1),
+        );
         *id += 1;
         sh.tables.push(gm::Table {
             id: *id,
-            name: (if t.display_name().is_empty() { t.name() } else { t.display_name() }).to_string(),
+            name: (if t.display_name().is_empty() {
+                t.name()
+            } else {
+                t.display_name()
+            })
+            .to_string(),
             range: r,
             header_row: true,
             totals_row: t.totals_row_shown() || t.totals_row_count() > 0,
             columns: t
                 .columns()
                 .iter()
-                .map(|c| gm::TableColumn { name: c.name().to_string(), totals: Default::default(), totals_label: None, formula: None, unique_name: None, xml: None })
+                .map(|c| gm::TableColumn {
+                    name: c.name().to_string(),
+                    totals: Default::default(),
+                    totals_label: None,
+                    formula: None,
+                    unique_name: None,
+                    xml: None,
+                })
                 .collect(),
             style: String::new(),
             banded_rows: false,
@@ -330,7 +405,11 @@ fn layout(ws: &Worksheet, id: &mut u32) -> gm::Sheet {
             first_col: false,
             last_col: false,
             filter_button: true,
-            filter: if filtered(&r) { criterion() } else { Vec::new() },
+            filter: if filtered(&r) {
+                criterion()
+            } else {
+                Vec::new()
+            },
             table_type: None,
             connection_id: None,
         });
@@ -342,32 +421,63 @@ fn layout(ws: &Worksheet, id: &mut u32) -> gm::Sheet {
 fn file_criterion(c: &umya_spreadsheet::FilterCriteria) -> Option<gm::FilterCriterion> {
     use umya_spreadsheet::FilterCriteria as F;
     Some(match c {
-        F::Values { values, blank } => gm::FilterCriterion::Values { values: values.clone(), blanks: *blank },
-        F::Custom { tests, and } => gm::FilterCriterion::Custom { a: tests.first()?.clone(), b: tests.get(1).cloned(), and: *and },
-        F::Top10 { top, percent, val } => gm::FilterCriterion::Top10 { bottom: !*top, percent: *percent, count: *val as u32 },
+        F::Values { values, blank } => gm::FilterCriterion::Values {
+            values: values.clone(),
+            blanks: *blank,
+        },
+        F::Custom { tests, and } => gm::FilterCriterion::Custom {
+            a: tests.first()?.clone(),
+            b: tests.get(1).cloned(),
+            and: *and,
+        },
+        F::Top10 { top, percent, val } => gm::FilterCriterion::Top10 {
+            bottom: !*top,
+            percent: *percent,
+            count: *val as u32,
+        },
     })
 }
 
 /// The workbook for the engine without its cells: sheets, names, calculation options.
 fn outline(file: &umya_spreadsheet::Workbook, date1904: bool) -> gm::Workbook {
     let mut wb = gm::Workbook::new();
-    wb.date_system = if date1904 { DateSystem::D1904 } else { DateSystem::D1900 };
+    wb.date_system = if date1904 {
+        DateSystem::D1904
+    } else {
+        DateSystem::D1900
+    };
     let options = file.calculation_properties();
     wb.calc.iterative = options.iterate();
     wb.calc.set_max_iterations(options.iterate_count());
     wb.calc.set_max_change(options.iterate_delta());
     let sheets = file.sheet_collection();
     let mut id = 0;
-    wb.sheets = sheets.iter().map(|ws| Arc::new(layout(ws, &mut id))).collect();
+    wb.sheets = sheets
+        .iter()
+        .map(|ws| Arc::new(layout(ws, &mut id)))
+        .collect();
     let mut seen: HashSet<(String, Option<usize>)> = HashSet::new();
     let global = file.defined_names().iter().map(|d| (None, d));
-    let local = sheets.iter().enumerate().flat_map(|(i, ws)| ws.defined_names().iter().map(move |d| (d.has_local_sheet_id().then_some(i), d)));
+    let local = sheets.iter().enumerate().flat_map(|(i, ws)| {
+        ws.defined_names()
+            .iter()
+            .map(move |d| (d.has_local_sheet_id().then_some(i), d))
+    });
     for (scope, d) in global.chain(local) {
         let name = d.name();
-        if name.is_empty() || name.to_ascii_lowercase().starts_with("_xlnm.") || !seen.insert((name.to_lowercase(), scope)) {
+        if name.is_empty()
+            || name.to_ascii_lowercase().starts_with("_xlnm.")
+            || !seen.insert((name.to_lowercase(), scope))
+        {
             continue;
         }
-        wb.names.push(gm::DefinedName { name: name.to_string(), scope, formula: fmla::from_file(&d.address()), comment: String::new(), hidden: d.hidden() });
+        wb.names.push(gm::DefinedName {
+            name: name.to_string(),
+            scope,
+            formula: fmla::from_file(&d.address()),
+            comment: String::new(),
+            hidden: d.hidden(),
+        });
     }
     wb
 }
@@ -395,7 +505,8 @@ fn unsupported(wb: &gm::Workbook, sheet: usize, e: &Expr) -> bool {
     let check = |x: &Expr| -> bool {
         match x {
             Expr::Call(name, _) => {
-                let known = gridcraft_calc::is_known_function(name) && !STAND_INS.contains(&name.to_ascii_uppercase().as_str());
+                let known = gridcraft_calc::is_known_function(name)
+                    && !STAND_INS.contains(&name.to_ascii_uppercase().as_str());
                 !(known || local(name) || wb.name(name, sheet).is_some())
             }
             Expr::Ref(r) => match &r.sheet {
@@ -406,7 +517,11 @@ fn unsupported(wb: &gm::Workbook, sheet: usize, e: &Expr) -> bool {
             Expr::Name(n) => {
                 let (scope, bare) = match n.rsplit_once('!') {
                     Some((s, _)) if external(s) => return true,
-                    Some((s, bare)) => (wb.sheet_index(&gridcraft_core::unquote_sheet(s)).unwrap_or(sheet), bare),
+                    Some((s, bare)) => (
+                        wb.sheet_index(&gridcraft_core::unquote_sheet(s))
+                            .unwrap_or(sheet),
+                        bare,
+                    ),
                     None => (sheet, n.as_str()),
                 };
                 !(local(bare) || wb.name(bare, scope).is_some() || wb.table(bare).is_some())
@@ -425,18 +540,29 @@ fn unsupported(wb: &gm::Workbook, sheet: usize, e: &Expr) -> bool {
 }
 
 fn read_date1904(path: &Path) -> bool {
-    let Ok(file) = std::fs::File::open(path) else { return false };
-    let Ok(mut zip) = zip::ZipArchive::new(file) else { return false };
-    let Ok(mut part) = zip.by_name("xl/workbook.xml") else { return false };
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let Ok(mut zip) = zip::ZipArchive::new(file) else {
+        return false;
+    };
+    let Ok(mut part) = zip.by_name("xl/workbook.xml") else {
+        return false;
+    };
     let mut s = String::new();
     if part.read_to_string(&mut s).is_err() {
         return false;
     }
-    s.find("<workbookPr").and_then(|i| s[i..].find('>').map(|j| &s[i..i + j])).is_some_and(|tag| tag.contains("date1904=\"1\"") || tag.contains("date1904=\"true\""))
+    s.find("<workbookPr")
+        .and_then(|i| s[i..].find('>').map(|j| &s[i..i + j]))
+        .is_some_and(|tag| tag.contains("date1904=\"1\"") || tag.contains("date1904=\"true\""))
 }
 
 fn seed() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1)
 }
 
 // ---------------------------------------------------------------------------- the workbook
@@ -498,12 +624,14 @@ impl Book {
     }
 
     pub fn open(path: &Path) -> Result<Book> {
-        let file = umya_spreadsheet::reader::xlsx::read(path).map_err(|e| format!("{} を開けません（{e}）", path.display()))?;
+        let file = umya_spreadsheet::reader::xlsx::read(path)
+            .map_err(|e| format!("{} を開けません（{e}）", path.display()))?;
         Ok(Book::from_file(file, read_date1904(path)))
     }
 
     pub fn open_bytes(data: &[u8]) -> Result<Book> {
-        let file = umya_spreadsheet::reader::xlsx::read_reader(Cursor::new(data), true).map_err(|e| format!("ブックを開けません（{e}）"))?;
+        let file = umya_spreadsheet::reader::xlsx::read_reader(Cursor::new(data), true)
+            .map_err(|e| format!("ブックを開けません（{e}）"))?;
         Ok(Book::from_file(file, false))
     }
 
@@ -511,7 +639,11 @@ impl Book {
         file.read_sheet_collection();
         // A workbook without a VBA project has no code names in its file (umya-spreadsheet writes
         // them with macros only): they are what Excel gives the sheets, Sheet1, Sheet2, ...
-        if file.sheet_collection().iter().all(|ws| ws.code_name().is_none_or(str::is_empty)) {
+        if file
+            .sheet_collection()
+            .iter()
+            .all(|ws| ws.code_name().is_none_or(str::is_empty))
+        {
             for (i, ws) in file.sheet_collection_mut().iter_mut().enumerate() {
                 ws.set_code_name(format!("Sheet{}", i + 1));
             }
@@ -520,7 +652,8 @@ impl Book {
         for ws in file.sheet_collection_mut() {
             let default = ws.sheet_format_properties().default_column_width();
             if default > 0.0 {
-                ws.sheet_format_properties_mut().set_default_column_width(format::width_from_file(default));
+                ws.sheet_format_properties_mut()
+                    .set_default_column_width(format::width_from_file(default));
             }
             for c in ws.column_dimensions_mut() {
                 let w = format::width_from_file(c.width());
@@ -537,12 +670,23 @@ impl Book {
             // cell -> first cell of the array formula that fills it
             let mut cover: HashMap<CellRef, CellRef> = HashMap::new();
             for c in &cells {
-                let Some(f) = c.formula_obj().filter(|f| *f.formula_type() == CellFormulaValues::Array) else { continue };
+                let Some(f) = c
+                    .formula_obj()
+                    .filter(|f| *f.formula_type() == CellFormulaValues::Array)
+                else {
+                    continue;
+                };
                 let at = at_of(c);
-                let Some(r) = RangeRef::parse(f.reference()).filter(|r| r.start == at && !r.is_single()) else { continue };
+                let Some(r) =
+                    RangeRef::parse(f.reference()).filter(|r| r.start == at && !r.is_single())
+                else {
+                    continue;
+                };
                 cover.extend(r.iter().filter(|p| *p != at).map(|p| (p, at)));
             }
-            let Some(sh) = model.sheet_mut(si) else { continue };
+            let Some(sh) = model.sheet_mut(si) else {
+                continue;
+            };
             for c in &cells {
                 let at = at_of(c);
                 if !c.is_formula()
@@ -563,7 +707,17 @@ impl Book {
                 }
             }
         }
-        let mut book = Book { file, model, calc, pending: Vec::new(), rebuild: false, names: Names::default(), formats: HashMap::new(), manual: false, advanced: HashMap::new() };
+        let mut book = Book {
+            file,
+            model,
+            calc,
+            pending: Vec::new(),
+            rebuild: false,
+            names: Names::default(),
+            formats: HashMap::new(),
+            manual: false,
+            advanced: HashMap::new(),
+        };
         let mut legacy: Vec<Vec<CellRef>> = vec![Vec::new(); book.model.sheets.len()];
         let mut fresh = Vec::new();
         for (si, at, kind) in formulas {
@@ -579,19 +733,34 @@ impl Book {
                 }
                 _ => {}
             }
-            if book.model.sheet(si).and_then(|s| s.cell(at)).is_some_and(|c| c.value.is_empty()) {
+            if book
+                .model
+                .sheet(si)
+                .and_then(|s| s.cell(at))
+                .is_some_and(|c| c.value.is_empty())
+            {
                 fresh.push((si, at));
             }
         }
         for (si, at, first, v) in filled {
-            let Some(sh) = book.model.sheet_mut(si) else { continue };
+            let Some(sh) = book.model.sheet_mut(si) else {
+                continue;
+            };
             if sh.spill_ranges.contains_key(&first) {
                 sh.spill.insert(at, v);
             } else {
                 sh.cells.set(at, gm::Cell::value(v));
             }
         }
-        apply_legacy(&mut book.model, legacy.into_iter().enumerate().filter(|(_, v)| !v.is_empty()).collect(), FUNCTIONS);
+        apply_legacy(
+            &mut book.model,
+            legacy
+                .into_iter()
+                .enumerate()
+                .filter(|(_, v)| !v.is_empty())
+                .collect(),
+            FUNCTIONS,
+        );
         // LENB and the like count a full-width character as two bytes, as Japanese Excel does.
         gridcraft_functions::set_dbcs(true);
         book.calc.rebuild(&book.model);
@@ -603,7 +772,15 @@ impl Book {
     /// Checks a formula against the workbook's functions, names and tables. One the engine would
     /// not work out as Excel does loses its formula and keeps its saved value: true then.
     fn settle(&mut self, si: usize, at: CellRef) -> bool {
-        let Some(expr) = self.model.sheet(si).and_then(|s| s.cell(at)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) else { return true };
+        let Some(expr) = self
+            .model
+            .sheet(si)
+            .and_then(|s| s.cell(at))
+            .and_then(|c| c.formula.as_ref())
+            .and_then(|f| f.expr_arc())
+        else {
+            return true;
+        };
         if !unsupported(&self.model, si, &expr) {
             return false;
         }
@@ -642,7 +819,11 @@ impl Book {
 
     /// Whether the workbook was saved with manual calculation.
     pub fn saved_manual(&self) -> bool {
-        self.file.calculation_properties().calc_mode().value_string() == "manual"
+        self.file
+            .calculation_properties()
+            .calc_mode()
+            .value_string()
+            == "manual"
     }
 
     /// The formulas that wait to be calculated again (`Application.Calculate`, and every read
@@ -676,7 +857,12 @@ impl Book {
             let mut seen: HashSet<gridcraft_calc::Key> = HashSet::new();
             let mut queue: Vec<gridcraft_calc::Key> = self.pending.clone();
             for k in &self.pending {
-                if self.model.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.formula.is_some()) {
+                if self
+                    .model
+                    .sheet(k.0)
+                    .and_then(|s| s.cell(k.1))
+                    .is_some_and(|c| c.formula.is_some())
+                {
                     sheets.insert(k.0);
                 }
             }
@@ -716,7 +902,11 @@ impl Book {
     }
 
     fn check_sheet(&self, si: usize) -> Result<()> {
-        if si < self.model.sheets.len() { Ok(()) } else { Err("インデックスが有効範囲にありません".into()) }
+        if si < self.model.sheets.len() {
+            Ok(())
+        } else {
+            Err("インデックスが有効範囲にありません".into())
+        }
     }
 
     pub fn sheet_name(&self, si: usize) -> Option<&str> {
@@ -728,12 +918,22 @@ impl Book {
     }
 
     pub fn code_name(&self, si: usize) -> Option<String> {
-        self.file.sheet(si).ok().and_then(|ws| ws.code_name().map(str::to_string)).filter(|s| !s.is_empty())
+        self.file
+            .sheet(si)
+            .ok()
+            .and_then(|ws| ws.code_name().map(str::to_string))
+            .filter(|s| !s.is_empty())
     }
 
     /// `Worksheet.Visible`: -1 visible, 0 hidden, 2 very hidden.
     pub fn visible(&self, si: usize) -> i32 {
-        match self.file.sheet(si).map(|ws| ws.sheet_state().to_string()).unwrap_or_default().as_str() {
+        match self
+            .file
+            .sheet(si)
+            .map(|ws| ws.sheet_state().to_string())
+            .unwrap_or_default()
+            .as_str()
+        {
             "hidden" => 0,
             "veryHidden" => 2,
             _ => -1,
@@ -747,7 +947,12 @@ impl Book {
             2 => "veryHidden",
             _ => "visible",
         };
-        if state != "visible" && (0..self.sheet_count()).filter(|i| *i != si && self.visible(*i) == -1).count() == 0 {
+        if state != "visible"
+            && (0..self.sheet_count())
+                .filter(|i| *i != si && self.visible(*i) == -1)
+                .count()
+                == 0
+        {
             return Err("ブックのすべてのシートを非表示にすることはできません".into());
         }
         if let Ok(ws) = self.file.sheet_mut(si) {
@@ -758,12 +963,20 @@ impl Book {
 
     pub fn rename_sheet(&mut self, si: usize, name: &str) -> Result<()> {
         self.check_sheet(si)?;
-        let old = self.model.sheet(si).map(|s| s.name.clone()).unwrap_or_default();
+        let old = self
+            .model
+            .sheet(si)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
         if old == name {
             return Ok(());
         }
-        self.model.check_sheet_name(name, Some(si)).map_err(|e| format!("シート名 \"{name}\" は使えません（{e}）"))?;
-        self.file.set_sheet_name(si, name).map_err(|e| format!("シート名 \"{name}\" は使えません（{e}）"))?;
+        self.model
+            .check_sheet_name(name, Some(si))
+            .map_err(|e| format!("シート名 \"{name}\" は使えません（{e}）"))?;
+        self.file
+            .set_sheet_name(si, name)
+            .map_err(|e| format!("シート名 \"{name}\" は使えません（{e}）"))?;
         if let Some(sh) = self.model.sheet_mut(si) {
             sh.name = name.to_string();
         }
@@ -776,7 +989,9 @@ impl Book {
         let at = at.min(self.sheet_count());
         let name = match name {
             Some(n) => {
-                self.model.check_sheet_name(n, None).map_err(|e| format!("シート名 \"{n}\" は使えません（{e}）"))?;
+                self.model
+                    .check_sheet_name(n, None)
+                    .map_err(|e| format!("シート名 \"{n}\" は使えません（{e}）"))?;
                 n.to_string()
             }
             None => {
@@ -792,7 +1007,10 @@ impl Book {
             }
         };
         let code = {
-            let used: HashSet<String> = (0..self.sheet_count()).filter_map(|i| self.code_name(i)).map(|s| s.to_lowercase()).collect();
+            let used: HashSet<String> = (0..self.sheet_count())
+                .filter_map(|i| self.code_name(i))
+                .map(|s| s.to_lowercase())
+                .collect();
             let mut i = 1;
             loop {
                 let n = format!("Sheet{i}");
@@ -802,7 +1020,10 @@ impl Book {
                 i += 1;
             }
         };
-        let ws = self.file.new_sheet(name.clone()).map_err(|e| format!("シートを追加できません（{e}）"))?;
+        let ws = self
+            .file
+            .new_sheet(name.clone())
+            .map_err(|e| format!("シートを追加できません（{e}）"))?;
         ws.set_code_name(code);
         let last = self.file.sheet_collection().len() - 1;
         self.file.sheet_collection_mut()[at..=last].rotate_right(1);
@@ -818,7 +1039,9 @@ impl Book {
         }
         let order: Vec<String> = self.model.sheets.iter().map(|s| s.name.clone()).collect();
         let name = order[si].clone();
-        self.file.remove_sheet(si).map_err(|e| format!("シートを削除できません（{e}）"))?;
+        self.file
+            .remove_sheet(si)
+            .map_err(|e| format!("シートを削除できません（{e}）"))?;
         self.model.sheets.remove(si);
         for n in &mut self.model.names {
             n.scope = match n.scope {
@@ -827,7 +1050,9 @@ impl Book {
                 s => s,
             };
         }
-        self.model.names.retain(|n| n.scope.is_some() || !n.formula.is_empty());
+        self.model
+            .names
+            .retain(|n| n.scope.is_some() || !n.formula.is_empty());
         self.rewrite_formulas(|e| gridcraft_formula::adjust::delete_sheet(e, &name, &order));
         Ok(())
     }
@@ -837,7 +1062,11 @@ impl Book {
     pub fn copy_sheet(&mut self, si: usize, at: usize) -> Result<usize> {
         self.check_sheet(si)?;
         let at = at.min(self.sheet_count());
-        let old = self.model.sheet(si).map(|s| s.name.clone()).unwrap_or_default();
+        let old = self
+            .model
+            .sheet(si)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
         let name = (2..)
             .map(|i| {
                 let suffix = format!(" ({i})");
@@ -849,10 +1078,19 @@ impl Book {
         self.flush();
         self.store();
         let code = {
-            let used: HashSet<String> = (0..self.sheet_count()).filter_map(|i| self.code_name(i)).map(|s| s.to_lowercase()).collect();
-            (1..).map(|i| format!("Sheet{i}")).find(|n| !used.contains(&n.to_lowercase())).unwrap_or_default()
+            let used: HashSet<String> = (0..self.sheet_count())
+                .filter_map(|i| self.code_name(i))
+                .map(|s| s.to_lowercase())
+                .collect();
+            (1..)
+                .map(|i| format!("Sheet{i}"))
+                .find(|n| !used.contains(&n.to_lowercase()))
+                .unwrap_or_default()
         };
-        let ws = self.file.copy_sheet(si, &name, at).map_err(|e| format!("シートをコピーできません（{e}）"))?;
+        let ws = self
+            .file
+            .copy_sheet(si, &name, at)
+            .map_err(|e| format!("シートをコピーできません（{e}）"))?;
         ws.set_code_name(code);
         let mut copy: gm::Sheet = self.model.sheet(si).cloned().expect("checked");
         copy.name = name;
@@ -868,7 +1106,10 @@ impl Book {
                 *s += 1;
             }
             if n.scope == Some(source) {
-                added.push(gm::DefinedName { scope: Some(at), ..n.clone() });
+                added.push(gm::DefinedName {
+                    scope: Some(at),
+                    ..n.clone()
+                });
             }
         }
         self.model.names.extend(added);
@@ -900,7 +1141,9 @@ impl Book {
     /// Rewrites every formula and name (a sheet was renamed or deleted).
     fn rewrite_formulas(&mut self, f: impl Fn(Expr) -> Expr) {
         for si in 0..self.model.sheets.len() {
-            let Some(sh) = self.model.sheet_mut(si) else { continue };
+            let Some(sh) = self.model.sheet_mut(si) else {
+                continue;
+            };
             let changes: Vec<(CellRef, gm::Formula)> = sh
                 .cells
                 .iter()
@@ -932,7 +1175,11 @@ impl Book {
 
     /// The workbook's names: (name, sheet of a sheet's own name, formula without `=`).
     pub fn names(&self) -> Vec<(String, Option<usize>, String)> {
-        self.model.names.iter().map(|n| (n.name.clone(), n.scope, n.formula.clone())).collect()
+        self.model
+            .names
+            .iter()
+            .map(|n| (n.name.clone(), n.scope, n.formula.clone()))
+            .collect()
     }
 
     pub fn add_name(&mut self, name: &str, scope: Option<usize>, formula: &str) -> Result<()> {
@@ -941,15 +1188,25 @@ impl Book {
         if name.is_empty() || name.contains([' ', '!', '"']) || CellRef::parse(name).is_some() {
             return Err(format!("名前 \"{name}\" は使えません"));
         }
-        self.model.names.retain(|n| !(n.scope == scope && gridcraft_formula::same_name(&n.name, name)));
-        self.model.names.push(gm::DefinedName { name: name.to_string(), scope, formula: body, comment: String::new(), hidden: false });
+        self.model
+            .names
+            .retain(|n| !(n.scope == scope && gridcraft_formula::same_name(&n.name, name)));
+        self.model.names.push(gm::DefinedName {
+            name: name.to_string(),
+            scope,
+            formula: body,
+            comment: String::new(),
+            hidden: false,
+        });
         self.names = Names::default();
         self.rebuild = true;
         Ok(())
     }
 
     pub fn delete_name(&mut self, name: &str, scope: Option<usize>) {
-        self.model.names.retain(|n| !(n.scope == scope && gridcraft_formula::same_name(&n.name, name)));
+        self.model
+            .names
+            .retain(|n| !(n.scope == scope && gridcraft_formula::same_name(&n.name, name)));
         self.names = Names::default();
         self.rebuild = true;
     }
@@ -978,7 +1235,10 @@ impl Book {
             Expr::Paren(inner) => self.resolve_expr(si, inner, depth + 1),
             Expr::Name(n) => {
                 let (scope, bare) = match n.rsplit_once('!') {
-                    Some((s, bare)) => (self.model.sheet_index(&gridcraft_core::unquote_sheet(s))?, bare),
+                    Some((s, bare)) => (
+                        self.model.sheet_index(&gridcraft_core::unquote_sheet(s))?,
+                        bare,
+                    ),
                     None => (si, n.as_str()),
                 };
                 let formula = self.model.name(bare, scope)?.formula.clone();
@@ -992,8 +1252,15 @@ impl Book {
     // ---- cells
 
     fn number_format_code(&self, si: usize, at: CellRef) -> String {
-        let Ok(ws) = self.file.sheet(si) else { return "General".into() };
-        let code = |style: &umya_spreadsheet::Style| style.number_format().map(|f| f.format_code().to_string()).filter(|s| !s.is_empty());
+        let Ok(ws) = self.file.sheet(si) else {
+            return "General".into();
+        };
+        let code = |style: &umya_spreadsheet::Style| {
+            style
+                .number_format()
+                .map(|f| f.format_code().to_string())
+                .filter(|s| !s.is_empty())
+        };
         match ws.cell(coord(at)) {
             Some(c) => code(c.style()),
             None => code(&self.style_at(si, at)),
@@ -1003,7 +1270,8 @@ impl Book {
 
     fn format(&mut self, code: &str) -> &NumberFormat {
         if !self.formats.contains_key(code) {
-            self.formats.insert(code.to_string(), NumberFormat::parse(code));
+            self.formats
+                .insert(code.to_string(), NumberFormat::parse(code));
         }
         &self.formats[code]
     }
@@ -1016,7 +1284,10 @@ impl Book {
     /// The value of a cell (what it shows: its own value, or what a formula spilled into it).
     pub fn value(&mut self, si: usize, at: CellRef) -> Value {
         self.flush();
-        self.model.sheet(si).map(|s| s.value(at)).unwrap_or_default()
+        self.model
+            .sheet(si)
+            .map(|s| s.value(at))
+            .unwrap_or_default()
     }
 
     /// Reads the cells of `r` (row by row).
@@ -1038,14 +1309,20 @@ impl Book {
     }
 
     fn read(&mut self, si: usize, at: CellRef, what: Read) -> Val {
-        let value = self.model.sheet(si).map(|s| s.value(at)).unwrap_or_default();
+        let value = self
+            .model
+            .sheet(si)
+            .map(|s| s.value(at))
+            .unwrap_or_default();
         match what {
             Read::Value2 => val_of(&value, false),
             Read::Value => {
                 let date = matches!(value, Value::Number(_)) && self.is_date_format(si, at);
                 val_of(&value, date)
             }
-            Read::Formula | Read::Formula2 => Val::Text(self.formula_text(si, at, what == Read::Formula, &value)),
+            Read::Formula | Read::Formula2 => {
+                Val::Text(self.formula_text(si, at, what == Read::Formula, &value))
+            }
             Read::FormulaR1C1 => {
                 let text = self.formula_text(si, at, true, &value);
                 match text.strip_prefix('=').map(gridcraft_formula::parse) {
@@ -1059,12 +1336,28 @@ impl Book {
     }
 
     fn formula_text(&mut self, si: usize, at: CellRef, legacy: bool, value: &Value) -> String {
-        let formula = self.model.sheet(si).and_then(|s| s.cell(at)).and_then(|c| c.formula.clone());
+        let formula = self
+            .model
+            .sheet(si)
+            .and_then(|s| s.cell(at))
+            .and_then(|c| c.formula.clone());
         let Some(f) = formula else {
             // A cell without a formula: its value as it would be typed.
-            let own = self.model.sheet(si).and_then(|s| s.cell(at)).map(|c| c.value.clone()).unwrap_or_default();
+            let own = self
+                .model
+                .sheet(si)
+                .and_then(|s| s.cell(at))
+                .map(|c| c.value.clone())
+                .unwrap_or_default();
             return match own {
-                Value::Number(n) if self.is_date_format(si, at) => self.display(&Value::Number(n), if n.fract() == 0.0 { DATE_FORMAT } else { DATE_TIME_FORMAT }),
+                Value::Number(n) if self.is_date_format(si, at) => self.display(
+                    &Value::Number(n),
+                    if n.fract() == 0.0 {
+                        DATE_FORMAT
+                    } else {
+                        DATE_TIME_FORMAT
+                    },
+                ),
                 Value::Empty => String::new(),
                 _ => {
                     let _ = value;
@@ -1084,7 +1377,11 @@ impl Book {
 
     fn display(&mut self, v: &Value, code: &str) -> String {
         let sys = self.model.date_system;
-        let code = if code == "General" { code } else { local_format(code) };
+        let code = if code == "General" {
+            code
+        } else {
+            local_format(code)
+        };
         gridcraft_numfmt::format_value(v, self.format(code), sys).text
     }
 
@@ -1111,12 +1408,18 @@ impl Book {
         let array = to_array(rows);
         for row in r.start.row..=r.end.row {
             for col in r.start.col..=r.end.col {
-                let v = array.get_broadcast((row - r.start.row) as usize, (col - r.start.col) as usize);
+                let v =
+                    array.get_broadcast((row - r.start.row) as usize, (col - r.start.col) as usize);
                 let at = CellRef::new(row, col);
                 match v {
                     Value::Text(s) => self.enter(si, at, &s, false)?,
                     _ => {
-                        let date = rows_val(rows, (row - r.start.row) as usize, (col - r.start.col) as usize).is_some_and(|v| matches!(v, Val::Date(_)));
+                        let date = rows_val(
+                            rows,
+                            (row - r.start.row) as usize,
+                            (col - r.start.col) as usize,
+                        )
+                        .is_some_and(|v| matches!(v, Val::Date(_)));
                         self.put_value(si, at, v, date);
                     }
                 }
@@ -1128,7 +1431,13 @@ impl Book {
     /// Writes formulas (or values typed as text) into the cells of `r`, as `Range.Formula = ...`
     /// (`dynamic`: `Range.Formula2`) does. A formula written into a range of several cells is
     /// written into each, with its relative references moved as Excel moves them.
-    pub fn set_formulas(&mut self, si: usize, r: RangeRef, rows: &[Vec<Val>], dynamic: bool) -> Result<()> {
+    pub fn set_formulas(
+        &mut self,
+        si: usize,
+        r: RangeRef,
+        rows: &[Vec<Val>],
+        dynamic: bool,
+    ) -> Result<()> {
         self.set_formulas_as(si, r, rows, dynamic, false)
     }
 
@@ -1137,7 +1446,14 @@ impl Book {
         self.set_formulas_as(si, r, rows, false, true)
     }
 
-    fn set_formulas_as(&mut self, si: usize, r: RangeRef, rows: &[Vec<Val>], dynamic: bool, r1c1: bool) -> Result<()> {
+    fn set_formulas_as(
+        &mut self,
+        si: usize,
+        r: RangeRef,
+        rows: &[Vec<Val>],
+        dynamic: bool,
+        r1c1: bool,
+    ) -> Result<()> {
         self.check_sheet(si)?;
         let single = !r1c1 && rows.len() == 1 && rows[0].len() == 1;
         let array = to_array(rows);
@@ -1149,15 +1465,25 @@ impl Book {
                 match v {
                     Value::Text(s) if single && s.starts_with('=') && (dr, dc) != (0, 0) => {
                         let moved = match gridcraft_formula::parse(&s[1..]) {
-                            Ok(e) => format!("={}", gridcraft_formula::print(&gridcraft_formula::adjust::shift_relative(e, dr as i64, dc as i64))),
+                            Ok(e) => format!(
+                                "={}",
+                                gridcraft_formula::print(
+                                    &gridcraft_formula::adjust::shift_relative(
+                                        e, dr as i64, dc as i64
+                                    )
+                                )
+                            ),
                             Err(_) => s.to_string(),
                         };
                         self.enter(si, at, &moved, dynamic)?
                     }
-                    Value::Text(s) if r1c1 && s.starts_with('=') => self.enter(si, at, &r1c1_to_a1(&s, at)?, dynamic)?,
+                    Value::Text(s) if r1c1 && s.starts_with('=') => {
+                        self.enter(si, at, &r1c1_to_a1(&s, at)?, dynamic)?
+                    }
                     Value::Text(s) => self.enter(si, at, &s, dynamic)?,
                     other => {
-                        let date = rows_val(rows, dr as usize, dc as usize).is_some_and(|v| matches!(v, Val::Date(_)));
+                        let date = rows_val(rows, dr as usize, dc as usize)
+                            .is_some_and(|v| matches!(v, Val::Date(_)));
                         self.put_value(si, at, other, date)
                     }
                 }
@@ -1168,7 +1494,8 @@ impl Book {
 
     /// Whether the engine has a worksheet function (`WorksheetFunction.Name`).
     pub fn is_function(name: &str) -> bool {
-        gridcraft_calc::is_known_function(&name.to_ascii_uppercase()) && !STAND_INS.contains(&name.to_ascii_uppercase().as_str())
+        gridcraft_calc::is_known_function(&name.to_ascii_uppercase())
+            && !STAND_INS.contains(&name.to_ascii_uppercase().as_str())
     }
 
     /// Writes a value (not text to be read) into a cell.
@@ -1186,7 +1513,9 @@ impl Book {
                 self.set_number_format_at(si, at, f);
             }
         }
-        let Some(sh) = self.model.sheet_mut(si) else { return };
+        let Some(sh) = self.model.sheet_mut(si) else {
+            return;
+        };
         if v.is_empty() {
             sh.remove_cell(at);
         } else {
@@ -1203,7 +1532,16 @@ impl Book {
             return self.put_formula(si, at, body, dynamic);
         }
         if as_text {
-            self.put_value(si, at, if text.is_empty() { Value::Empty } else { Value::text(text) }, false);
+            self.put_value(
+                si,
+                at,
+                if text.is_empty() {
+                    Value::Empty
+                } else {
+                    Value::text(text)
+                },
+                false,
+            );
             return Ok(());
         }
         let parsed = gridcraft_core::parse::parse_input(text, self.model.date_system);
@@ -1231,13 +1569,26 @@ impl Book {
         let mut formula = gm::Formula::new(&body);
         formula.dynamic = dynamic;
         if self.number_format_code(si, at) == "General"
-            && let Some(code) = formula.expr.as_deref().and_then(|e| self.implied_format(si, e))
+            && let Some(code) = formula
+                .expr
+                .as_deref()
+                .and_then(|e| self.implied_format(si, e))
         {
             self.set_number_format_at(si, at, &code);
         }
-        let Some(sh) = self.model.sheet_mut(si) else { return Ok(()) };
+        let Some(sh) = self.model.sheet_mut(si) else {
+            return Ok(());
+        };
         let style = sh.style_id(at);
-        sh.set_cell(at, gm::Cell { value: Value::Empty, formula: Some(Arc::new(formula)), style, py: None });
+        sh.set_cell(
+            at,
+            gm::Cell {
+                value: Value::Empty,
+                formula: Some(Arc::new(formula)),
+                style,
+                py: None,
+            },
+        );
         if !dynamic {
             // `Range.Formula`: the formula as Excel without dynamic arrays reads it.
             apply_legacy(&mut self.model, vec![(si, vec![at])], FUNCTIONS);
@@ -1245,11 +1596,20 @@ impl Book {
         if self.manual {
             // Excel works a formula out when it is entered, also in manual calculation; what
             // depends on it waits.
-            let expr = self.model.sheet(si).and_then(|s| s.cell(at)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc());
+            let expr = self
+                .model
+                .sheet(si)
+                .and_then(|s| s.cell(at))
+                .and_then(|c| c.formula.as_ref())
+                .and_then(|f| f.expr_arc());
             if let Some(e) = expr {
                 let v = gridcraft_calc::recalc::evaluate_expr(&self.model, si, at, &e).scalar();
                 if let Some(c) = self.model.sheet_mut(si).and_then(|s| s.cells.get_mut(at)) {
-                    c.value = if v == Value::Error(CellError::Circ) { Value::number(0.0) } else { v };
+                    c.value = if v == Value::Error(CellError::Circ) {
+                        Value::number(0.0)
+                    } else {
+                        v
+                    };
                 }
             }
         }
@@ -1269,7 +1629,8 @@ impl Book {
             }
             match x {
                 Expr::Call(name, _) => match name.as_str() {
-                    "TODAY" | "DATE" | "DATEVALUE" | "EDATE" | "EOMONTH" | "WORKDAY" | "WORKDAY.INTL" => found = Some(DATE_FORMAT.into()),
+                    "TODAY" | "DATE" | "DATEVALUE" | "EDATE" | "EOMONTH" | "WORKDAY"
+                    | "WORKDAY.INTL" => found = Some(DATE_FORMAT.into()),
                     "NOW" => found = Some(DATE_TIME_FORMAT.into()),
                     "TIME" | "TIMEVALUE" => found = Some(TIME_FORMAT.into()),
                     _ => {}
@@ -1305,8 +1666,14 @@ impl Book {
         use gridcraft_formula::ast::{BinOp, UnOp};
         match e {
             Expr::Paren(x) | Expr::Unary(UnOp::Neg | UnOp::Plus, x) => self.inherited_format(si, x),
-            Expr::Binary(BinOp::Add | BinOp::Sub, a, b) => self.inherited_format(si, a).or_else(|| self.inherited_format(si, b)),
-            Expr::Call(name, args) if matches!(name.as_str(), "SUM" | "AVERAGE" | "MIN" | "MAX" | "MEDIAN") => args.iter().find_map(|a| self.inherited_format(si, a)),
+            Expr::Binary(BinOp::Add | BinOp::Sub, a, b) => self
+                .inherited_format(si, a)
+                .or_else(|| self.inherited_format(si, b)),
+            Expr::Call(name, args)
+                if matches!(name.as_str(), "SUM" | "AVERAGE" | "MIN" | "MAX" | "MEDIAN") =>
+            {
+                args.iter().find_map(|a| self.inherited_format(si, a))
+            }
             Expr::Ref(r) => {
                 let sheet = match &r.sheet {
                     SheetSel::Current => si,
@@ -1323,7 +1690,11 @@ impl Book {
     /// `Range.ClearContents` (`formats`: `Range.Clear`, which also clears the number formats).
     pub fn clear(&mut self, si: usize, r: RangeRef, formats: bool) -> Result<()> {
         self.check_sheet(si)?;
-        let cells: Vec<CellRef> = self.model.sheet(si).map(|s| s.cells.iter_range(r).map(|(at, _)| at).collect()).unwrap_or_default();
+        let cells: Vec<CellRef> = self
+            .model
+            .sheet(si)
+            .map(|s| s.cells.iter_range(r).map(|(at, _)| at).collect())
+            .unwrap_or_default();
         if let Some(sh) = self.model.sheet_mut(si) {
             for at in &cells {
                 sh.remove_cell(*at);
@@ -1357,7 +1728,11 @@ impl Book {
     }
 
     fn filled(&self, si: usize, at: CellRef) -> bool {
-        self.model.sheet(si).is_some_and(|s| s.cell(at).is_some_and(|c| c.formula.is_some() || !c.value.is_empty()) || s.spill.get(&at).is_some_and(|v| !v.is_empty()))
+        self.model.sheet(si).is_some_and(|s| {
+            s.cell(at)
+                .is_some_and(|c| c.formula.is_some() || !c.value.is_empty())
+                || s.spill.get(&at).is_some_and(|v| !v.is_empty())
+        })
     }
 
     /// The bounds of the cells with content, for `End` (None when the sheet is empty).
@@ -1390,8 +1765,12 @@ impl Book {
             Dir::Left => CellRef::new(at.row, 0),
             Dir::Right => CellRef::new(at.row, MAX_COLS - 1),
         };
-        let Some(next) = at.offset(dr, dc) else { return at };
-        let Some(bounds) = self.content_bounds(si) else { return edge };
+        let Some(next) = at.offset(dr, dc) else {
+            return at;
+        };
+        let Some(bounds) = self.content_bounds(si) else {
+            return edge;
+        };
         if self.filled(si, at) && self.filled(si, next) {
             let mut cur = next;
             while let Some(n) = cur.offset(dr, dc) {
@@ -1460,7 +1839,9 @@ impl Book {
     fn set_number_format_at(&mut self, si: usize, at: CellRef, code: &str) {
         self.inherit_style(si, at);
         if let Ok(ws) = self.file.sheet_mut(si) {
-            ws.style_mut(coord(at)).number_format_mut().set_format_code(code);
+            ws.style_mut(coord(at))
+                .number_format_mut()
+                .set_format_code(code);
         }
     }
 
@@ -1504,11 +1885,23 @@ impl Book {
         self.store();
         // Excel calculates everything when it opens the file, unless the program left the
         // calculation manual: the values are then the ones it left.
-        self.file.calculation_properties_mut().set_full_calc_on_load(!self.manual);
-        let mode = if self.manual { umya_spreadsheet::CalculateModeValues::Manual } else { umya_spreadsheet::CalculateModeValues::Auto };
+        self.file
+            .calculation_properties_mut()
+            .set_full_calc_on_load(!self.manual);
+        let mode = if self.manual {
+            umya_spreadsheet::CalculateModeValues::Manual
+        } else {
+            umya_spreadsheet::CalculateModeValues::Auto
+        };
         self.file.calculation_properties_mut().set_calc_mode(mode);
-        let macro_ext = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xlsm"));
-        let path = if macro_ext && !self.file.has_macros() { path.with_extension("xlsx") } else { path.to_path_buf() };
+        let macro_ext = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("xlsm"));
+        let path = if macro_ext && !self.file.has_macros() {
+            path.with_extension("xlsx")
+        } else {
+            path.to_path_buf()
+        };
         let kept = self.widths_for_file();
         let written = umya_spreadsheet::writer::xlsx::write(&self.file, &path);
         self.widths_back(kept);
@@ -1528,9 +1921,16 @@ impl Book {
             let columns = ws.column_dimensions().to_vec();
             kept.push((default, columns));
             if default > 0.0 {
-                ws.sheet_format_properties_mut().set_default_column_width(format::width_to_file(default));
+                ws.sheet_format_properties_mut()
+                    .set_default_column_width(format::width_to_file(default));
             }
-            let untouched = |c: &umya_spreadsheet::structs::Column| default <= 0.0 && c.width() == format::DEFAULT_COLUMN_WIDTH && !c.hidden() && !c.best_fit() && *c.style() == umya_spreadsheet::Style::default();
+            let untouched = |c: &umya_spreadsheet::structs::Column| {
+                default <= 0.0
+                    && c.width() == format::DEFAULT_COLUMN_WIDTH
+                    && !c.hidden()
+                    && !c.best_fit()
+                    && *c.style() == umya_spreadsheet::Style::default()
+            };
             let columns = ws.column_dimensions_mut();
             columns.retain(|c| !untouched(c));
             for c in columns.iter_mut() {
@@ -1544,7 +1944,8 @@ impl Book {
     fn widths_back(&mut self, kept: Vec<(f64, Vec<umya_spreadsheet::structs::Column>)>) {
         for (ws, (default, columns)) in self.file.sheet_collection_mut().iter_mut().zip(kept) {
             if default > 0.0 {
-                ws.sheet_format_properties_mut().set_default_column_width(default);
+                ws.sheet_format_properties_mut()
+                    .set_default_column_width(default);
             }
             *ws.column_dimensions_mut() = columns;
         }
@@ -1579,22 +1980,38 @@ impl Book {
             global.push(d);
         }
         // umya keeps the names of the file in two places; they all go into the workbook's list.
-        let builtin: Vec<umya_spreadsheet::DefinedName> = self.file.defined_names().iter().filter(|d| d.name().to_ascii_lowercase().starts_with("_xlnm.")).cloned().collect();
+        let builtin: Vec<umya_spreadsheet::DefinedName> = self
+            .file
+            .defined_names()
+            .iter()
+            .filter(|d| d.name().to_ascii_lowercase().starts_with("_xlnm."))
+            .cloned()
+            .collect();
         for ws in self.file.sheet_collection_mut() {
-            ws.defined_names_mut().retain(|d| d.name().to_ascii_lowercase().starts_with("_xlnm."));
+            ws.defined_names_mut()
+                .retain(|d| d.name().to_ascii_lowercase().starts_with("_xlnm."));
         }
-        self.file.set_defined_names(builtin.into_iter().chain(global).collect::<Vec<_>>());
+        self.file
+            .set_defined_names(builtin.into_iter().chain(global).collect::<Vec<_>>());
 
         for si in 0..sheets {
             let fresh: Vec<CellRef> = match (self.model.sheet(si), self.file.sheet(si)) {
-                (Some(sh), Ok(ws)) => sh.cells.iter().map(|(at, _)| at).chain(sh.spill.keys().copied()).filter(|at| ws.cell(coord(*at)).is_none()).collect(),
+                (Some(sh), Ok(ws)) => sh
+                    .cells
+                    .iter()
+                    .map(|(at, _)| at)
+                    .chain(sh.spill.keys().copied())
+                    .filter(|at| ws.cell(coord(*at)).is_none())
+                    .collect(),
                 _ => Vec::new(),
             };
             for at in fresh {
                 self.inherit_style(si, at);
             }
             self.store_filter(si);
-            let Some(sh) = self.model.sheet(si) else { continue };
+            let Some(sh) = self.model.sheet(si) else {
+                continue;
+            };
             let mut writes: Vec<(CellRef, Option<FileFormula>, Value)> = Vec::new();
             for (at, c) in sh.cells.iter() {
                 let formula = c.formula.as_ref().map(|f| {
@@ -1603,18 +2020,42 @@ impl Book {
                     } else {
                         match save_as(&self.model, si, at, f, FUNCTIONS, &mut self.names) {
                             SaveAs::Unchanged => (fmla::to_file(f), None, false),
-                            SaveAs::Legacy(e) => (fmla::to_file(&gm::Formula::from_expr(e)), None, false),
-                            SaveAs::Dynamic => (fmla::to_file(f), Some(sh.spill_ranges.get(&at).copied().unwrap_or(RangeRef::cell(at))), true),
+                            SaveAs::Legacy(e) => {
+                                (fmla::to_file(&gm::Formula::from_expr(e)), None, false)
+                            }
+                            SaveAs::Dynamic => (
+                                fmla::to_file(f),
+                                Some(
+                                    sh.spill_ranges
+                                        .get(&at)
+                                        .copied()
+                                        .unwrap_or(RangeRef::cell(at)),
+                                ),
+                                true,
+                            ),
                         }
                     }
                 });
                 writes.push((at, formula, c.value.clone()));
             }
-            let spilled: Vec<(CellRef, Value)> = sh.spill.iter().map(|(at, v)| (*at, v.clone())).collect();
-            let present: HashSet<CellRef> = writes.iter().map(|w| w.0).chain(spilled.iter().map(|s| s.0)).collect();
-            let Ok(ws) = self.file.sheet_mut(si) else { continue };
+            let spilled: Vec<(CellRef, Value)> =
+                sh.spill.iter().map(|(at, v)| (*at, v.clone())).collect();
+            let present: HashSet<CellRef> = writes
+                .iter()
+                .map(|w| w.0)
+                .chain(spilled.iter().map(|s| s.0))
+                .collect();
+            let Ok(ws) = self.file.sheet_mut(si) else {
+                continue;
+            };
             // Cells the program emptied.
-            let gone: Vec<CellRef> = ws.cells().iter().filter(|c| !c.raw_value().is_empty() || c.is_formula()).map(|c| at_of(c)).filter(|at| !present.contains(at)).collect();
+            let gone: Vec<CellRef> = ws
+                .cells()
+                .iter()
+                .filter(|c| !c.raw_value().is_empty() || c.is_formula())
+                .map(|c| at_of(c))
+                .filter(|at| !present.contains(at))
+                .collect();
             for at in gone {
                 ws.cell_mut(coord(at)).cell_value_mut().set_blank();
             }
@@ -1655,14 +2096,20 @@ impl Book {
 impl Book {
     /// Writes the filter of a sheet (its range and what it filters by) into the file.
     fn store_filter(&mut self, si: usize) {
-        let Some(filter) = self.model.sheet(si).map(|s| s.autofilter.clone()) else { return };
-        let Ok(ws) = self.file.sheet_mut(si) else { return };
+        let Some(filter) = self.model.sheet(si).map(|s| s.autofilter.clone()) else {
+            return;
+        };
+        let Ok(ws) = self.file.sheet_mut(si) else {
+            return;
+        };
         let Some(f) = filter else {
             ws.remove_auto_filter();
             return;
         };
         ws.set_auto_filter(f.range.a1());
-        let Some(out) = ws.auto_filter_mut() else { return };
+        let Some(out) = ws.auto_filter_mut() else {
+            return;
+        };
         for (offset, criterion) in &f.criteria {
             let mut column = umya_spreadsheet::FilterColumn::default();
             column.set_column_id(*offset);
@@ -1675,7 +2122,11 @@ impl Book {
                     tests.extend(b.iter().cloned());
                     column.set_custom(tests, *and);
                 }
-                gm::FilterCriterion::Top10 { bottom, percent, count } => {
+                gm::FilterCriterion::Top10 {
+                    bottom,
+                    percent,
+                    count,
+                } => {
                     column.set_top10(!*bottom, *percent, f64::from(*count));
                 }
                 // Kept in the file as it was read, when it was.
@@ -1746,9 +2197,18 @@ fn r1c1_to_a1(formula: &str, at: CellRef) -> Result<String> {
             if !next.is_some_and(|n| word(n) || n == '(' || n == '!') {
                 let text: String = chars[i..end].iter().collect();
                 // A whole row (`R2`) or column (`C3`) needs both halves for the conversion.
-                let full = if c_end.is_some() { text.clone() } else { format!("{text}C1") };
+                let full = if c_end.is_some() {
+                    text.clone()
+                } else {
+                    format!("{text}C1")
+                };
                 if let Ok(Some(a1)) = gridcraft_calc::eval::r1c1_to_a1(&full, at) {
-                    let a1 = if c_end.is_some() { a1 } else { a1.trim_start_matches(|ch: char| ch.is_ascii_alphabetic() || ch == '$').to_string() };
+                    let a1 = if c_end.is_some() {
+                        a1
+                    } else {
+                        a1.trim_start_matches(|ch: char| ch.is_ascii_alphabetic() || ch == '$')
+                            .to_string()
+                    };
                     out.push_str(&a1);
                     i = end;
                     continue;
@@ -1760,7 +2220,10 @@ fn r1c1_to_a1(formula: &str, at: CellRef) -> Result<String> {
             if !next.is_some_and(|n| word(n) || n == '(' || n == '!') {
                 let text: String = chars[i..end].iter().collect();
                 if let Ok(Some(a1)) = gridcraft_calc::eval::r1c1_to_a1(&format!("R1{text}"), at) {
-                    out.push_str(a1.trim_end_matches(|ch: char| ch.is_ascii_digit()).trim_end_matches('$'));
+                    out.push_str(
+                        a1.trim_end_matches(|ch: char| ch.is_ascii_digit())
+                            .trim_end_matches('$'),
+                    );
                     i = end;
                     continue;
                 }
@@ -1788,7 +2251,12 @@ fn to_array(rows: &[Vec<Val>]) -> Array {
     let mut data = Vec::with_capacity(height * width);
     for r in 0..height {
         for c in 0..width {
-            data.push(rows.get(r).and_then(|row| row.get(c)).map(value_of_val).unwrap_or(Value::Error(CellError::NA)));
+            data.push(
+                rows.get(r)
+                    .and_then(|row| row.get(c))
+                    .map(value_of_val)
+                    .unwrap_or(Value::Error(CellError::NA)),
+            );
         }
     }
     Array::new(height, width, data).unwrap_or_else(|| Array::scalar(Value::Empty))

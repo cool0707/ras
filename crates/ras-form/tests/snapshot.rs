@@ -46,7 +46,11 @@ fn difference(path: &str, expected: &Value, actual: &Value) -> Option<String> {
         (Value::Number(a), Value::Number(b)) if a.as_f64() == b.as_f64() => None,
         (Value::Array(a), Value::Array(b)) => {
             if a.len() != b.len() {
-                return Some(format!("{path}: {} elements, expected {}", b.len(), a.len()));
+                return Some(format!(
+                    "{path}: {} elements, expected {}",
+                    b.len(),
+                    a.len()
+                ));
             }
             a.iter()
                 .zip(b)
@@ -55,12 +59,13 @@ fn difference(path: &str, expected: &Value, actual: &Value) -> Option<String> {
         }
         (Value::Object(a), Value::Object(b)) => {
             let keys: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
-            keys.into_iter().find_map(|key| match (a.get(key), b.get(key)) {
-                (Some(x), Some(y)) => difference(&format!("{path}.{key}"), x, y),
-                (Some(x), None) => Some(format!("{path}.{key}: missing, expected {x}")),
-                (None, Some(y)) => Some(format!("{path}.{key}: unexpected {y}")),
-                (None, None) => None,
-            })
+            keys.into_iter()
+                .find_map(|key| match (a.get(key), b.get(key)) {
+                    (Some(x), Some(y)) => difference(&format!("{path}.{key}"), x, y),
+                    (Some(x), None) => Some(format!("{path}.{key}: missing, expected {x}")),
+                    (None, Some(y)) => Some(format!("{path}.{key}: unexpected {y}")),
+                    (None, None) => None,
+                })
         }
         _ if expected == actual => None,
         _ => Some(format!("{path}: {actual}, expected {expected}")),
@@ -76,7 +81,10 @@ fn reading(label: &str, name: &str) -> Value {
         .pictures
         .iter()
         .map(|p| {
-            let control = p.control_index.map(|i| snapshot.spec.controls[i].name.clone()).unwrap_or_default();
+            let control = p
+                .control_index
+                .map(|i| snapshot.spec.controls[i].name.clone())
+                .unwrap_or_default();
             serde_json::json!({
                 "control": control, "property": p.property, "format": p.picture.format.extension(),
                 "size": p.picture.data.len(), "width": p.picture.width, "height": p.picture.height,
@@ -99,7 +107,8 @@ fn forms_saved_by_excel_are_read_as_expected() {
             std::fs::write(&path, serde_json::to_string_pretty(&actual).unwrap() + "\n").unwrap();
             continue;
         }
-        let expected: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let expected: Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         if let Some(diff) = difference(&format!("{label}.{name}"), &expected, &actual) {
             failures.push(diff);
         }
@@ -120,10 +129,19 @@ fn the_pictures_of_forms_saved_by_excel_are_extracted() {
         let source = form(&label, &name);
         let snapshot = ras_form::snapshot(&name, &source.streams, &source.storages, 932).unwrap();
         for found in &snapshot.pictures {
-            let Some(index) = found.control_index else { continue };
+            let Some(index) = found.control_index else {
+                continue;
+            };
             // An extracted picture is no longer reported as lost.
             let control = &snapshot.spec.controls[index];
-            assert!(!control.unsupported.iter().flatten().any(|u| u == found.property), "{label}.{name}");
+            assert!(
+                !control
+                    .unsupported
+                    .iter()
+                    .flatten()
+                    .any(|u| u == found.property),
+                "{label}.{name}"
+            );
             seen += 1;
         }
     }
@@ -190,7 +208,10 @@ fn a_pulled_form_is_generated_again_with_the_same_design() {
         let loaded = workspace::load(&dir).unwrap();
         assert_eq!(loaded.len(), 1);
         let first = loaded[0].parsed.spec.clone().unwrap_or_else(|| {
-            panic!("{label}.{name}: pulled spec is not valid: {:?}", loaded[0].parsed.issues)
+            panic!(
+                "{label}.{name}: pulled spec is not valid: {:?}",
+                loaded[0].parsed.issues
+            )
         });
         let built = workspace::build(&loaded, &dir, 932, &HashMap::new());
         assert_eq!(built.errors(), 0, "{label}.{name}: {:?}", built.problems);
@@ -198,7 +219,8 @@ fn a_pulled_form_is_generated_again_with_the_same_design() {
         assert!(ras_ovba::is_generated_form(&generated.code));
 
         // Reading the generated form gives the same design again.
-        let again = ras_form::snapshot(&name, &generated.streams, &generated.storages, 932).unwrap();
+        let again =
+            ras_form::snapshot(&name, &generated.streams, &generated.storages, 932).unwrap();
         let (before, after) = (essence(&first), essence(&again.spec));
         assert_eq!(before.len(), after.len(), "{label}.{name}");
         for (a, b) in before.iter().zip(&after) {
@@ -208,10 +230,23 @@ fn a_pulled_form_is_generated_again_with_the_same_design() {
         assert_eq!(first.form.width, again.spec.form.width);
         assert_eq!(first.form.height, again.spec.form.height);
         assert_eq!(first.form.font, again.spec.form.font, "{label}.{name}");
-        assert_eq!(first.form.back_color, again.spec.form.back_color, "{label}.{name}");
-        assert_eq!(first.form.fore_color, again.spec.form.fore_color, "{label}.{name}");
-        assert_eq!(first.form.border_style, again.spec.form.border_style, "{label}.{name}");
-        assert_eq!(again.pictures.len(), pulled.pictures.len(), "{label}.{name}");
+        assert_eq!(
+            first.form.back_color, again.spec.form.back_color,
+            "{label}.{name}"
+        );
+        assert_eq!(
+            first.form.fore_color, again.spec.form.fore_color,
+            "{label}.{name}"
+        );
+        assert_eq!(
+            first.form.border_style, again.spec.form.border_style,
+            "{label}.{name}"
+        );
+        assert_eq!(
+            again.pictures.len(),
+            pulled.pictures.len(),
+            "{label}.{name}"
+        );
         checked += 1;
     }
     assert!(checked >= 9);
@@ -229,19 +264,33 @@ fn pull_writes_the_files_of_a_form() {
     assert_eq!(pulled.code_path, root.join("forms/PictureForm.ras"));
     assert_eq!(
         pulled.pictures,
-        ["forms/assets/PictureForm.ImageBmp.bmp", "forms/assets/PictureForm.ImageJpeg.bmp"]
+        [
+            "forms/assets/PictureForm.ImageBmp.bmp",
+            "forms/assets/PictureForm.ImageJpeg.bmp"
+        ]
     );
     for picture in &pulled.pictures {
-        assert!(std::fs::read(root.join(picture)).unwrap().starts_with(b"BM"));
+        assert!(std::fs::read(root.join(picture))
+            .unwrap()
+            .starts_with(b"BM"));
     }
     let text = std::fs::read_to_string(&pulled.spec_path).unwrap();
     let spec: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(spec["kind"], "ras.userform");
-    assert!(spec.get("warnings").is_none(), "warnings are reported, not stored");
-    assert_eq!(spec["controls"][0]["picture"]["path"], "forms/assets/PictureForm.ImageBmp.bmp");
+    assert!(
+        spec.get("warnings").is_none(),
+        "warnings are reported, not stored"
+    );
+    assert_eq!(
+        spec["controls"][0]["picture"]["path"],
+        "forms/assets/PictureForm.ImageBmp.bmp"
+    );
     // The code-behind is the code pane converted to RAS.
     let code = std::fs::read_to_string(&pulled.code_path).unwrap();
-    assert!(!code.contains("Attribute VB_") && !code.contains('\r'), "{code}");
+    assert!(
+        !code.contains("Attribute VB_") && !code.contains('\r'),
+        "{code}"
+    );
 
     // Existing files are left alone …
     std::fs::write(&pulled.code_path, "' edited\n").unwrap();
@@ -249,7 +298,10 @@ fn pull_writes_the_files_of_a_form() {
         PullOutcome::Exists(files) => assert_eq!(files.len(), 2),
         PullOutcome::Written(_) => panic!("existing files were replaced"),
     }
-    assert_eq!(std::fs::read_to_string(&pulled.code_path).unwrap(), "' edited\n");
+    assert_eq!(
+        std::fs::read_to_string(&pulled.code_path).unwrap(),
+        "' edited\n"
+    );
     // … unless asked, and the same pictures are not written twice.
     let PullOutcome::Written(again) = workspace::pull(&root, &source, 932, true).unwrap() else {
         panic!("nothing written");
@@ -262,11 +314,30 @@ fn pull_writes_the_files_of_a_form() {
 /// The code the RAS compiler generates for the `.ras` code-behinds of the project at `root`.
 fn compile_forms(root: &Path) -> HashMap<String, String> {
     let (sources, decls) = ras_compiler::load_forms(root).unwrap();
-    let config = ras_compiler::Config { forms: decls, ..Default::default() };
+    let config = ras_compiler::Config {
+        forms: decls,
+        ..Default::default()
+    };
     let prog = ras_compiler::analyze(sources, config);
-    let out = ras_compiler::build(&prog, &ras_compiler::BuildOptions { no_attributes: true, ..Default::default() });
-    assert!(prog.diagnostics.iter().chain(&out.diagnostics).all(|d| !d.is_error()), "{:?}", prog.diagnostics);
-    out.files.iter().map(|f| (f.name.clone(), f.code.clone())).collect()
+    let out = ras_compiler::build(
+        &prog,
+        &ras_compiler::BuildOptions {
+            no_attributes: true,
+            ..Default::default()
+        },
+    );
+    assert!(
+        prog.diagnostics
+            .iter()
+            .chain(&out.diagnostics)
+            .all(|d| !d.is_error()),
+        "{:?}",
+        prog.diagnostics
+    );
+    out.files
+        .iter()
+        .map(|f| (f.name.clone(), f.code.clone()))
+        .collect()
 }
 
 #[test]
@@ -289,22 +360,35 @@ fn pull_keeps_what_only_the_spec_knows() {
     let ras = "@on(\"UserForm.Initialize\")\nfunction userFormInitialize() {\n    this.caption = \"ready\";\n}\n";
     std::fs::write(dir.join("frmList.ras"), ras).unwrap();
 
-    let built = workspace::build(&workspace::load(&root).unwrap(), &root, 932, &compile_forms(&root));
+    let built = workspace::build(
+        &workspace::load(&root).unwrap(),
+        &root,
+        932,
+        &compile_forms(&root),
+    );
     assert_eq!(built.errors(), 0, "{:?}", built.problems);
     let generated = built.forms[0].clone();
     let code = &generated.code;
     assert!(code.contains(".AddItem \"A\""), "{code}");
-    assert!(code.contains("Private Sub UserForm_Initialize()\n    RAS_FormInit '--- RAS ---\n"), "{code}");
+    assert!(
+        code.contains("Private Sub UserForm_Initialize()\n    RAS_FormInit '--- RAS ---\n"),
+        "{code}"
+    );
     assert!(code.contains("Me.Caption = \"ready\""), "{code}");
 
     // As if the form came back from a workbook.
-    let PullOutcome::Written(pulled) = workspace::pull(&root, &generated, 932, true).unwrap() else {
+    let PullOutcome::Written(pulled) = workspace::pull(&root, &generated, 932, true).unwrap()
+    else {
         panic!("nothing written");
     };
     assert_eq!(pulled.warnings, [], "nothing of a generated form is lost");
     assert!(pulled.kept_code, "the code was compiled from the .ras file");
     assert_eq!(std::fs::read_to_string(&pulled.code_path).unwrap(), ras);
-    assert_eq!(pulled.pictures, ["forms/assets/logo.bmp"], "the existing file is reused");
+    assert_eq!(
+        pulled.pictures,
+        ["forms/assets/logo.bmp"],
+        "the existing file is reused"
+    );
     let text = std::fs::read_to_string(&pulled.spec_path).unwrap();
     let spec: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(spec["controls"][0]["list"], serde_json::json!(["A", "B"]));
@@ -313,14 +397,20 @@ fn pull_keeps_what_only_the_spec_knows() {
     assert_eq!(spec["controls"][2]["controlTipText"], "Your name");
 
     // Building the pulled files gives the same form again.
-    let rebuilt = workspace::build(&workspace::load(&root).unwrap(), &root, 932, &compile_forms(&root));
+    let rebuilt = workspace::build(
+        &workspace::load(&root).unwrap(),
+        &root,
+        932,
+        &compile_forms(&root),
+    );
     assert_eq!(rebuilt.errors(), 0, "{:?}", rebuilt.problems);
     assert_eq!(rebuilt.forms[0].streams, generated.streams);
     assert_eq!(rebuilt.forms[0].code, generated.code);
 
     // In a project without the form, its VBA comes back as RAS.
     let other = temp_root("pull-lists-other");
-    let PullOutcome::Written(fresh) = workspace::pull(&other, &generated, 932, false).unwrap() else {
+    let PullOutcome::Written(fresh) = workspace::pull(&other, &generated, 932, false).unwrap()
+    else {
         panic!("nothing written");
     };
     assert!(!fresh.kept_code);
@@ -368,7 +458,11 @@ fn list_items_do_not_change_the_designer() {
         r#","list":[],"selectedIndex":-2"#,
     ] {
         let parsed = spec(bad);
-        assert!(parsed.issues.iter().any(|i| i.code == "UFV020"), "{bad}: {:?}", parsed.issues);
+        assert!(
+            parsed.issues.iter().any(|i| i.code == "UFV020"),
+            "{bad}: {:?}",
+            parsed.issues
+        );
     }
     assert!(!spec(r#","selectedIndex":-1"#).has_errors());
 }
@@ -390,14 +484,29 @@ fn list_properties_go_round_and_default_to_what_excel_writes() {
     let plain = project(
         r#"{"id":"c","name":"cbo","type":"ComboBox"},{"id":"l","name":"lst","type":"ListBox","top":30}"#,
     );
-    let keys = ["style", "multiSelect", "listStyle", "matchEntry", "showDropButtonWhen", "listRows"];
+    let keys = [
+        "style",
+        "multiSelect",
+        "listStyle",
+        "matchEntry",
+        "showDropButtonWhen",
+        "listRows",
+    ];
     for control in &plain {
         let json = serde_json::to_value(control).unwrap();
         for key in keys {
-            assert!(json.get(key).is_none(), "{}: {key} = {}", control.name, json[key]);
+            assert!(
+                json.get(key).is_none(),
+                "{}: {key} = {}",
+                control.name,
+                json[key]
+            );
         }
         let unsupported = control.unsupported.clone().unwrap_or_default();
-        assert!(!unsupported.iter().any(|u| keys.contains(&u.as_str())), "{unsupported:?}");
+        assert!(
+            !unsupported.iter().any(|u| keys.contains(&u.as_str())),
+            "{unsupported:?}"
+        );
     }
     let set = project(
         r#"{"id":"c","name":"cbo","type":"ComboBox","style":2,"listStyle":1,"matchEntry":0,"showDropButtonWhen":1,"listRows":4},
@@ -405,13 +514,28 @@ fn list_properties_go_round_and_default_to_what_excel_writes() {
     );
     let (combo, list) = (&set[0], &set[1]);
     let values = |c: &ras_form::FormSpecControl, names: &[&str]| -> Vec<Value> {
-        names.iter().map(|n| c.scalar(n).cloned().unwrap_or(Value::Null)).collect()
+        names
+            .iter()
+            .map(|n| c.scalar(n).cloned().unwrap_or(Value::Null))
+            .collect()
     };
     assert_eq!(
-        values(combo, &["style", "listStyle", "matchEntry", "showDropButtonWhen", "listRows"]),
+        values(
+            combo,
+            &[
+                "style",
+                "listStyle",
+                "matchEntry",
+                "showDropButtonWhen",
+                "listRows"
+            ]
+        ),
         [2, 1, 0, 1, 4].map(Value::from)
     );
-    assert_eq!(values(list, &["multiSelect", "listStyle", "matchEntry"]), [2, 1, 2].map(Value::from));
+    assert_eq!(
+        values(list, &["multiSelect", "listStyle", "matchEntry"]),
+        [2, 1, 2].map(Value::from)
+    );
 
     // Each belongs to its control type only.
     for bad in [
@@ -433,8 +557,12 @@ fn a_storage_that_is_not_a_designer_is_refused() {
     let mut source = form("mutation", "MutationForm");
     let f = source.streams.get_mut("f").unwrap();
     f.truncate(f.len() - 7);
-    let error = ras_form::snapshot("MutationForm", &source.streams, &source.storages, 932).unwrap_err();
-    assert!(error.to_string().contains("デザイナストレージを読めません"), "{error}");
+    let error =
+        ras_form::snapshot("MutationForm", &source.streams, &source.storages, 932).unwrap_err();
+    assert!(
+        error.to_string().contains("デザイナストレージを読めません"),
+        "{error}"
+    );
 
     let empty: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     assert!(ras_form::snapshot("X", &empty, &BTreeMap::new(), 932).is_err());
@@ -447,10 +575,9 @@ fn other_picture_formats_are_converted_when_the_form_is_written() {
     let root = temp_root("png");
     let assets = root.join("forms/assets");
     std::fs::create_dir_all(&assets).unwrap();
-    let png = std::fs::read(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/assets/logo.png"),
-    )
-    .unwrap();
+    let png =
+        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/assets/logo.png"))
+            .unwrap();
     std::fs::write(assets.join("logo.png"), &png).unwrap();
     let spec = |path: &str, back: &str| {
         format!(
@@ -460,14 +587,20 @@ fn other_picture_formats_are_converted_when_the_form_is_written() {
     };
     let build = |text: &str| {
         std::fs::write(root.join("forms/frmPng.form.json"), text).unwrap();
-        let built = workspace::build(&workspace::load(&root).unwrap(), &root, 932, &HashMap::new());
+        let built = workspace::build(
+            &workspace::load(&root).unwrap(),
+            &root,
+            932,
+            &HashMap::new(),
+        );
         assert_eq!(built.errors(), 0, "{:?}", built.problems);
         built.forms[0].clone()
     };
 
     // The form holds the bitmap the PNG converts to …
     let from_png = build(&spec("forms/assets/logo.png", ""));
-    let converted = ras_form::picture::prepare(&png, ras_form::picture::DEFAULT_BACKGROUND).unwrap();
+    let converted =
+        ras_form::picture::prepare(&png, ras_form::picture::DEFAULT_BACKGROUND).unwrap();
     assert_eq!(converted.converted_from, Some("PNG"));
     assert_eq!((converted.width, converted.height), (24, 16));
     // The transparent frame shows the background, the opaque centre the picture.
@@ -486,7 +619,11 @@ fn other_picture_formats_are_converted_when_the_form_is_written() {
         r##","backColor":{"kind":"rgb","value":"#FF0000"}"##,
     ));
     let stored = ras_form::snapshot("frmPng", &on_red.streams, &on_red.storages, 932).unwrap();
-    assert_eq!(&stored.pictures[0].picture.data[54..57], [0, 0, 255], "blue, green, red");
+    assert_eq!(
+        &stored.pictures[0].picture.data[54..57],
+        [0, 0, 255],
+        "blue, green, red"
+    );
 
     // Pulling the form back keeps the PNG the spec names.
     let PullOutcome::Written(pulled) = workspace::pull(&root, &on_red, 932, true).unwrap() else {
@@ -500,14 +637,29 @@ fn other_picture_formats_are_converted_when_the_form_is_written() {
         panic!("nothing written");
     };
     assert_eq!(pulled.pictures, ["forms/assets/frmPng.imgLogo.bmp"]);
-    assert!(std::fs::read(other.join(&pulled.pictures[0])).unwrap().starts_with(b"BM"));
+    assert!(std::fs::read(other.join(&pulled.pictures[0]))
+        .unwrap()
+        .starts_with(b"BM"));
 
     // A file that is no picture is still an error that names the file.
     std::fs::write(assets.join("notes.png"), "not a picture").unwrap();
-    std::fs::write(root.join("forms/frmPng.form.json"), spec("forms/assets/notes.png", "")).unwrap();
-    let built = workspace::build(&workspace::load(&root).unwrap(), &root, 932, &HashMap::new());
+    std::fs::write(
+        root.join("forms/frmPng.form.json"),
+        spec("forms/assets/notes.png", ""),
+    )
+    .unwrap();
+    let built = workspace::build(
+        &workspace::load(&root).unwrap(),
+        &root,
+        932,
+        &HashMap::new(),
+    );
     assert_eq!(built.errors(), 1);
-    assert!(built.problems[0].message.contains("notes.png"), "{:?}", built.problems);
+    assert!(
+        built.problems[0].message.contains("notes.png"),
+        "{:?}",
+        built.problems
+    );
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&other);
 }
@@ -516,10 +668,15 @@ fn other_picture_formats_are_converted_when_the_form_is_written() {
 /// OptionButtons and two CheckBoxes, the first of each with TripleState True.
 fn triple_state_form() -> (BTreeMap<String, Vec<u8>>, BTreeMap<String, [u8; 16]>) {
     let dir = data_dir().join("triple-state");
-    let streams = [("f", "f"), ("o", "o"), ("\u{1}CompObj", "CompObj"), ("\u{3}VBFrame", "VBFrame")]
-        .into_iter()
-        .map(|(stream, file)| (stream.to_string(), std::fs::read(dir.join(file)).unwrap()))
-        .collect();
+    let streams = [
+        ("f", "f"),
+        ("o", "o"),
+        ("\u{1}CompObj", "CompObj"),
+        ("\u{3}VBFrame", "VBFrame"),
+    ]
+    .into_iter()
+    .map(|(stream, file)| (stream.to_string(), std::fs::read(dir.join(file)).unwrap()))
+    .collect();
     (streams, BTreeMap::from([(String::new(), [0u8; 16])]))
 }
 
@@ -528,8 +685,10 @@ fn triple_state_is_read_from_excel_and_written_back() {
     let (streams, storages) = triple_state_form();
     let snapshot = ras_form::snapshot("UserForm1", &streams, &storages, 932).unwrap();
     let controls = &snapshot.spec.controls;
-    let triple: Vec<(&str, Option<&Value>)> =
-        controls.iter().map(|c| (c.name.as_str(), c.scalar("tripleState"))).collect();
+    let triple: Vec<(&str, Option<&Value>)> = controls
+        .iter()
+        .map(|c| (c.name.as_str(), c.scalar("tripleState")))
+        .collect();
     assert_eq!(
         triple,
         [
@@ -541,14 +700,29 @@ fn triple_state_is_read_from_excel_and_written_back() {
     );
     for control in controls {
         let unsupported = control.unsupported.clone().unwrap_or_default();
-        assert!(!unsupported.contains(&"multiSelect".to_string()), "{}: {unsupported:?}", control.name);
-        assert_eq!(control.value, Some(Value::from("False")), "{}", control.name);
+        assert!(
+            !unsupported.contains(&"multiSelect".to_string()),
+            "{}: {unsupported:?}",
+            control.name
+        );
+        assert_eq!(
+            control.value,
+            Some(Value::from("False")),
+            "{}",
+            control.name
+        );
     }
     // Written again, the toggles hold the same records as Excel's.
     let designer = ras_form::compile(&snapshot.spec, 932).unwrap();
-    let again = ras_form::snapshot("UserForm1", &designer.streams, &designer.storages, 932).unwrap();
+    let again =
+        ras_form::snapshot("UserForm1", &designer.streams, &designer.storages, 932).unwrap();
     for (a, b) in controls.iter().zip(&again.spec.controls) {
-        assert_eq!(a.scalar("tripleState"), b.scalar("tripleState"), "{}", a.name);
+        assert_eq!(
+            a.scalar("tripleState"),
+            b.scalar("tripleState"),
+            "{}",
+            a.name
+        );
     }
 }
 
@@ -564,11 +738,21 @@ fn a_toggle_can_be_null() {
         assert!(!parsed.has_errors(), "{:?}", parsed.issues);
         parsed.spec.unwrap()
     };
-    for (written, read) in [("\"Null\"", "Null"), ("\"null\"", "Null"), ("true", "True"), ("0", "False")] {
+    for (written, read) in [
+        ("\"Null\"", "Null"),
+        ("\"null\"", "Null"),
+        ("true", "True"),
+        ("0", "False"),
+    ] {
         let designer = ras_form::compile(&spec(written), 932).unwrap();
         let snapshot = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap();
         for control in &snapshot.spec.controls {
-            assert_eq!(control.value, Some(Value::from(read)), "{written}: {}", control.name);
+            assert_eq!(
+                control.value,
+                Some(Value::from(read)),
+                "{written}: {}",
+                control.name
+            );
         }
     }
     let error = ras_form::compile(&spec("\"maybe\""), 932).unwrap_err();
@@ -586,8 +770,14 @@ fn controls_are_bound_to_cells() {
     let snapshot = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap();
     let (txt, lst) = (&snapshot.spec.controls[0], &snapshot.spec.controls[1]);
     assert_eq!(txt.scalar("controlSource"), Some(&Value::from("Sheet1!B2")));
-    assert_eq!((txt.tag.as_deref(), txt.control_tip_text.as_deref()), (Some("t"), Some("tip")));
-    assert_eq!(lst.scalar("rowSource"), Some(&Value::from("'売上 2026'!A2:B9")));
+    assert_eq!(
+        (txt.tag.as_deref(), txt.control_tip_text.as_deref()),
+        (Some("t"), Some("tip"))
+    );
+    assert_eq!(
+        lst.scalar("rowSource"),
+        Some(&Value::from("'売上 2026'!A2:B9"))
+    );
     assert_eq!(lst.scalar("controlSource"), Some(&Value::from("Sheet1!C2")));
     for control in [txt, lst] {
         assert_eq!(control.unsupported, None, "{}", control.name);
@@ -617,16 +807,37 @@ fn columns_of_a_list_go_round() {
     let snapshot = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap();
     let (lst, cbo) = (&snapshot.spec.controls[0], &snapshot.spec.controls[1]);
     let values = |c: &ras_form::FormSpecControl, names: &[&str]| -> Vec<Value> {
-        names.iter().map(|n| c.scalar(n).cloned().unwrap_or(Value::Null)).collect()
+        names
+            .iter()
+            .map(|n| c.scalar(n).cloned().unwrap_or(Value::Null))
+            .collect()
     };
-    let names = ["columnCount", "columnWidths", "boundColumn", "textColumn", "columnHeads"];
+    let names = [
+        "columnCount",
+        "columnWidths",
+        "boundColumn",
+        "textColumn",
+        "columnHeads",
+    ];
     assert_eq!(
         values(lst, &names),
-        [Value::from(3), Value::from("36 pt;;72 pt"), Value::from(2), Value::from(3), Value::from(true)]
+        [
+            Value::from(3),
+            Value::from("36 pt;;72 pt"),
+            Value::from(2),
+            Value::from(3),
+            Value::from(true)
+        ]
     );
     assert_eq!(
         values(cbo, &names),
-        [Value::from(-1), Value::from("0 pt;72 pt"), Value::from(0), Value::Null, Value::Null]
+        [
+            Value::from(-1),
+            Value::from("0 pt;72 pt"),
+            Value::from(0),
+            Value::Null,
+            Value::Null
+        ]
     );
     for control in [lst, cbo] {
         assert_eq!(control.unsupported, None, "{}", control.name);
@@ -637,9 +848,16 @@ fn columns_of_a_list_go_round() {
     );
     let bare = ras_form::compile(bare.spec.as_ref().unwrap(), 932).unwrap();
     let again = ras_form::snapshot("F", &bare.streams, &bare.storages, 932).unwrap();
-    assert!(names.iter().all(|n| again.spec.controls[0].scalar(n).is_none()));
+    assert!(names
+        .iter()
+        .all(|n| again.spec.controls[0].scalar(n).is_none()));
 
-    for bad in [r#""columnWidths":"x""#, r#""columnWidths":"-5""#, r#""columnCount":-2"#, r#""textColumn":-2"#] {
+    for bad in [
+        r#""columnWidths":"x""#,
+        r#""columnWidths":"-5""#,
+        r#""columnCount":-2"#,
+        r#""textColumn":-2"#,
+    ] {
         let text = format!(
             r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{{"id":"l","name":"lst","type":"ListBox",{bad}}}]}}"#
         );
@@ -662,15 +880,38 @@ fn properties_of_the_form_go_round() {
     let designer = ras_form::compile(&spec, 932).unwrap();
     // The designer block in the order of [MS-OVBA], booleans as VBABOOL.
     let block = ras_ovba::decode_text(932, &designer.streams["\u{3}VBFrame"]).unwrap();
-    let keys: Vec<&str> = block.lines().filter_map(|l| l.split_once(" = ").map(|(k, _)| k.trim())).collect();
+    let keys: Vec<&str> = block
+        .lines()
+        .filter_map(|l| l.split_once(" = ").map(|(k, _)| k.trim()))
+        .collect();
     assert_eq!(
         keys,
-        ["Caption", "ClientHeight", "ClientWidth", "Enabled", "HelpContextID", "RightToLeft", "ShowModal", "StartUpPosition", "Tag", "WhatsThisButton", "WhatsThisHelp"]
+        [
+            "Caption",
+            "ClientHeight",
+            "ClientWidth",
+            "Enabled",
+            "HelpContextID",
+            "RightToLeft",
+            "ShowModal",
+            "StartUpPosition",
+            "Tag",
+            "WhatsThisButton",
+            "WhatsThisHelp"
+        ]
     );
-    assert!(block.contains("   ShowModal = 0\r\n   StartUpPosition = 2\r\n   Tag = \"メモ \"\"1\"\"\"\r\n"), "{block}");
+    assert!(
+        block.contains(
+            "   ShowModal = 0\r\n   StartUpPosition = 2\r\n   Tag = \"メモ \"\"1\"\"\"\r\n"
+        ),
+        "{block}"
+    );
     let snapshot = ras_form::snapshot("F", &designer.streams, &designer.storages, 932).unwrap();
     let back = &snapshot.spec.form.scalars;
-    assert_eq!(back.keys().collect::<Vec<_>>(), spec.form.scalars.keys().collect::<Vec<_>>());
+    assert_eq!(
+        back.keys().collect::<Vec<_>>(),
+        spec.form.scalars.keys().collect::<Vec<_>>()
+    );
     for (name, value) in &spec.form.scalars {
         match (value.as_f64(), back[name].as_f64()) {
             // Lengths are stored in HIMETRIC.
@@ -681,16 +922,36 @@ fn properties_of_the_form_go_round() {
     assert!(snapshot.warnings.is_empty(), "{:?}", snapshot.warnings);
 
     // A new form, and one the VBA editor made, have none of them.
-    let plain = ras_form::parse(r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F"},"controls":[]}"#);
+    let plain = ras_form::parse(
+        r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F"},"controls":[]}"#,
+    );
     let plain = ras_form::compile(plain.spec.as_ref().unwrap(), 932).unwrap();
     let again = ras_form::snapshot("F", &plain.streams, &plain.storages, 932).unwrap();
-    assert!(again.spec.form.scalars.is_empty(), "{:?}", again.spec.form.scalars);
+    assert!(
+        again.spec.form.scalars.is_empty(),
+        "{:?}",
+        again.spec.form.scalars
+    );
     let (streams, storages) = triple_state_form();
     let excel = ras_form::snapshot("UserForm1", &streams, &storages, 932).unwrap();
-    assert!(excel.spec.form.scalars.is_empty(), "{:?}", excel.spec.form.scalars);
-    assert!(!excel.warnings.iter().any(|w| w.control.is_empty()), "{:?}", excel.warnings);
+    assert!(
+        excel.spec.form.scalars.is_empty(),
+        "{:?}",
+        excel.spec.form.scalars
+    );
+    assert!(
+        !excel.warnings.iter().any(|w| w.control.is_empty()),
+        "{:?}",
+        excel.warnings
+    );
 
-    for bad in [r#""zoom":5"#, r#""startUpPosition":4"#, r#""tag":"a\nb""#, r#""mousePointer":4"#, r#""showModal":0"#] {
+    for bad in [
+        r#""zoom":5"#,
+        r#""startUpPosition":4"#,
+        r#""tag":"a\nb""#,
+        r#""mousePointer":4"#,
+        r#""showModal":0"#,
+    ] {
         let text = format!(
             r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F",{bad}}},"controls":[]}}"#
         );
@@ -726,7 +987,9 @@ fn pictures_and_mouse_icons_of_controls_and_the_form_go_round() {
     let root = temp_root("pictures-all");
     let assets = root.join("forms/assets");
     std::fs::create_dir_all(&assets).unwrap();
-    let logo = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/assets/logo.bmp")).unwrap();
+    let logo =
+        std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/assets/logo.bmp"))
+            .unwrap();
     std::fs::write(assets.join("logo.bmp"), &logo).unwrap();
     std::fs::write(assets.join("hand.cur"), cursor_file()).unwrap();
     let text = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer",
@@ -748,7 +1011,9 @@ fn pictures_and_mouse_icons_of_controls_and_the_form_go_round() {
         .pictures
         .iter()
         .map(|p| {
-            let owner = p.control_index.map_or(String::new(), |i| snapshot.spec.controls[i].name.clone());
+            let owner = p
+                .control_index
+                .map_or(String::new(), |i| snapshot.spec.controls[i].name.clone());
             (owner, p.property, p.picture.format.extension())
         })
         .collect();
@@ -765,19 +1030,43 @@ fn pictures_and_mouse_icons_of_controls_and_the_form_go_round() {
     ];
     let mut found_sorted = found.clone();
     found_sorted.sort();
-    let mut expected_sorted: Vec<(String, &str, &str)> =
-        expected.iter().map(|(o, p, e)| (o.to_string(), *p, *e)).collect();
+    let mut expected_sorted: Vec<(String, &str, &str)> = expected
+        .iter()
+        .map(|(o, p, e)| (o.to_string(), *p, *e))
+        .collect();
     expected_sorted.sort();
     assert_eq!(found_sorted, expected_sorted);
-    let control = |name: &str| snapshot.spec.controls.iter().find(|c| c.name == name).unwrap();
-    assert_eq!(control("btn").scalar("picturePosition"), Some(&Value::from(1)));
-    assert_eq!(control("lbl").scalar("picturePosition"), Some(&Value::from(12)));
-    assert_eq!(control("fra").scalar("pictureTiling"), Some(&Value::from(true)));
+    let control = |name: &str| {
+        snapshot
+            .spec
+            .controls
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap()
+    };
+    assert_eq!(
+        control("btn").scalar("picturePosition"),
+        Some(&Value::from(1))
+    );
+    assert_eq!(
+        control("lbl").scalar("picturePosition"),
+        Some(&Value::from(12))
+    );
+    assert_eq!(
+        control("fra").scalar("pictureTiling"),
+        Some(&Value::from(true))
+    );
     assert_eq!(control("fra").picture_size_mode, Some(1));
     assert_eq!(control("pg").picture_alignment, Some(4));
-    assert_eq!(control("chk").scalar("mousePointer"), Some(&Value::from(99)));
+    assert_eq!(
+        control("chk").scalar("mousePointer"),
+        Some(&Value::from(99))
+    );
     let form = &snapshot.spec.form.scalars;
-    assert_eq!((form.get("pictureAlignment"), form.get("pictureTiling")), (Some(&Value::from(0)), Some(&Value::from(true))));
+    assert_eq!(
+        (form.get("pictureAlignment"), form.get("pictureTiling")),
+        (Some(&Value::from(0)), Some(&Value::from(true)))
+    );
     for c in &snapshot.spec.controls {
         assert_eq!(c.unsupported, None, "{}", c.name);
     }
@@ -790,7 +1079,8 @@ fn pictures_and_mouse_icons_of_controls_and_the_form_go_round() {
         streams: designer.streams.clone(),
         storages: designer.storages.clone(),
     };
-    let PullOutcome::Written(pulled) = workspace::pull(&pulled_root, &source, 932, false).unwrap() else {
+    let PullOutcome::Written(pulled) = workspace::pull(&pulled_root, &source, 932, false).unwrap()
+    else {
         panic!("nothing written");
     };
     let mut files = pulled.pictures.clone();
@@ -818,7 +1108,13 @@ fn pictures_and_mouse_icons_of_controls_and_the_form_go_round() {
         let mut out: Vec<_> = s
             .pictures
             .iter()
-            .map(|p| (p.control_index.map(|i| s.spec.controls[i].name.clone()), p.property, p.picture.data.clone()))
+            .map(|p| {
+                (
+                    p.control_index.map(|i| s.spec.controls[i].name.clone()),
+                    p.property,
+                    p.picture.data.clone(),
+                )
+            })
             .collect();
         out.sort();
         out
@@ -827,7 +1123,12 @@ fn pictures_and_mouse_icons_of_controls_and_the_form_go_round() {
     assert_eq!(reread.spec.form.scalars, snapshot.spec.form.scalars);
     for (a, b) in reread.spec.controls.iter().zip(&snapshot.spec.controls) {
         assert_eq!(a.scalars, b.scalars, "{}", a.name);
-        assert_eq!((a.picture_alignment, a.picture_size_mode), (b.picture_alignment, b.picture_size_mode), "{}", a.name);
+        assert_eq!(
+            (a.picture_alignment, a.picture_size_mode),
+            (b.picture_alignment, b.picture_size_mode),
+            "{}",
+            a.name
+        );
     }
 
     // A mouse icon has to be an icon or a cursor; a TextBox has no picture.
@@ -835,12 +1136,15 @@ fn pictures_and_mouse_icons_of_controls_and_the_form_go_round() {
         r#""controls":[{"id":"t","name":"txt","type":"TextBox","picture":{"path":"forms/assets/logo.bmp"}}]"#,
         r#""controls":[{"id":"m","name":"mp","type":"MultiPage","mouseIcon":{"path":"forms/assets/hand.cur"}}]"#,
     ] {
-        let text = format!(r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},{bad}}}"#);
+        let text = format!(
+            r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},{bad}}}"#
+        );
         assert!(ras_form::parse(&text).has_errors(), "{bad}");
     }
     std::fs::write(assets.join("not-an-icon.png"), b"\x89PNG\r\n\x1a\n").unwrap();
     let text = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F","mouseIcon":{"path":"forms/assets/not-an-icon.png"}},"controls":[]}"#;
-    let error = ras_form::compile_in(ras_form::parse(text).spec.as_ref().unwrap(), 932, &root).unwrap_err();
+    let error =
+        ras_form::compile_in(ras_form::parse(text).spec.as_ref().unwrap(), 932, &root).unwrap_err();
     assert!(error.reason.contains("MouseIcon"), "{error}");
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&pulled_root);

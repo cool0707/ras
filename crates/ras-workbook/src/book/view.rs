@@ -21,7 +21,10 @@ use super::*;
 pub const VIEW_ROWS: u32 = 500;
 pub const VIEW_COLS: u32 = 100;
 
-fn css_color(c: &umya_spreadsheet::Color, theme: &umya_spreadsheet::drawing::Theme) -> Option<String> {
+fn css_color(
+    c: &umya_spreadsheet::Color,
+    theme: &umya_spreadsheet::drawing::Theme,
+) -> Option<String> {
     if c.automatic() {
         return None;
     }
@@ -52,7 +55,11 @@ fn font_family(name: &str) -> String {
         out.push(',');
         out.push_str(&quote(alias));
     }
-    out.push_str(if name.contains("明朝") || name.contains("Mincho") { ",'Yu Mincho',serif" } else { ",'Yu Gothic',Meiryo,sans-serif" });
+    out.push_str(if name.contains("明朝") || name.contains("Mincho") {
+        ",'Yu Mincho',serif"
+    } else {
+        ",'Yu Gothic',Meiryo,sans-serif"
+    });
     out
 }
 
@@ -82,10 +89,16 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
         let t = pf.pattern_type().value_string();
         if !(t == "none" || t.is_empty()) {
             let fg = pf.foreground_color().and_then(|c| css_color(c, theme));
-            let color = if t == "solid" { fg } else { fg.or_else(|| pf.background_color().and_then(|c| css_color(c, theme))) };
+            let color = if t == "solid" {
+                fg
+            } else {
+                fg.or_else(|| pf.background_color().and_then(|c| css_color(c, theme)))
+            };
             if let Some(c) = color.filter(|_| t != "gray125") {
                 // Over the gridlines around it too, as Excel fills cells.
-                css.push_str(&format!("background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};"));
+                css.push_str(&format!(
+                    "background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};"
+                ));
             }
         }
     }
@@ -118,9 +131,18 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
         }
     }
     if let Some(b) = st.borders() {
-        for (side, bd) in [("top", b.top()), ("right", b.right()), ("bottom", b.bottom()), ("left", b.left())] {
+        for (side, bd) in [
+            ("top", b.top()),
+            ("right", b.right()),
+            ("bottom", b.bottom()),
+            ("left", b.left()),
+        ] {
             if let Some((w, line)) = line_css(bd.border_style()) {
-                let color = bd.color().as_ref().and_then(|c| css_color(c, theme)).unwrap_or_else(|| "#000".into());
+                let color = bd
+                    .color()
+                    .as_ref()
+                    .and_then(|c| css_color(c, theme))
+                    .unwrap_or_else(|| "#000".into());
                 css.push_str(&format!("border-{side}:{w}px {line} {color};"));
             }
         }
@@ -155,7 +177,11 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
         css.push_str("white-space:pre-wrap;overflow-wrap:anywhere;");
     }
     if indent > 0 {
-        css.push_str(&format!("padding-{}:{}px;", if align == "right" { "right" } else { "left" }, 3 + indent * 9));
+        css.push_str(&format!(
+            "padding-{}:{}px;",
+            if align == "right" { "right" } else { "left" },
+            3 + indent * 9
+        ));
     }
     css
 }
@@ -183,18 +209,31 @@ impl Sizes {
     }
 
     fn h(&self, r: u32) -> f64 {
-        self.heights.get(&(r + 1)).copied().unwrap_or(self.default_h)
+        self.heights
+            .get(&(r + 1))
+            .copied()
+            .unwrap_or(self.default_h)
     }
 
     /// The left of the column `c`: the widths before it.
     fn x(&self, c: u32) -> f64 {
-        let custom: f64 = self.widths.iter().filter(|(k, _)| **k <= c).map(|(_, w)| *w).sum();
+        let custom: f64 = self
+            .widths
+            .iter()
+            .filter(|(k, _)| **k <= c)
+            .map(|(_, w)| *w)
+            .sum();
         let n = self.widths.keys().filter(|k| **k <= c).count() as f64;
         custom + (c as f64 - n) * self.default_w
     }
 
     fn y(&self, r: u32) -> f64 {
-        let custom: f64 = self.heights.iter().filter(|(k, _)| **k <= r).map(|(_, h)| *h).sum();
+        let custom: f64 = self
+            .heights
+            .iter()
+            .filter(|(k, _)| **k <= r)
+            .map(|(_, h)| *h)
+            .sum();
         let n = self.heights.keys().filter(|k| **k <= r).count() as f64;
         custom + (r as f64 - n) * self.default_h
     }
@@ -202,7 +241,12 @@ impl Sizes {
     /// The box of an anchor in pixels: (left, top, right, bottom).
     fn anchor(&self, an: &crate::view::drawing::Anchor) -> Option<(f64, f64, f64, f64)> {
         use crate::view::drawing::EMU_PX;
-        let at = |m: (u32, i64, u32, i64)| (self.x(m.0) + m.1 as f64 / EMU_PX, self.y(m.2) + m.3 as f64 / EMU_PX);
+        let at = |m: (u32, i64, u32, i64)| {
+            (
+                self.x(m.0) + m.1 as f64 / EMU_PX,
+                self.y(m.2) + m.3 as f64 / EMU_PX,
+            )
+        };
         let (x, y) = match (an.from, an.pos) {
             (Some(f), _) => at(f),
             (None, Some((x, y))) => (x as f64 / EMU_PX, y as f64 / EMU_PX),
@@ -235,9 +279,17 @@ impl Sizes {
 impl Book {
     /// The sheet for the grid: `rows` × `cols` of it at most, from its first cell, with the
     /// objects of its drawing.
-    pub fn sheet_view(&mut self, si: usize, rows: u32, cols: u32, drawing: Option<&Drawing>) -> Result<Json> {
+    pub fn sheet_view(
+        &mut self,
+        si: usize,
+        rows: u32,
+        cols: u32,
+        drawing: Option<&Drawing>,
+    ) -> Result<Json> {
         let info = self.sheet_summary(si)?;
-        let mut used = info.used_range.unwrap_or(RangeRef::cell(CellRef::new(0, 0)));
+        let mut used = info
+            .used_range
+            .unwrap_or(RangeRef::cell(CellRef::new(0, 0)));
         // Merged cells are drawn even when they are empty.
         for m in info.merged.iter().filter_map(|m| RangeRef::parse(m)) {
             used = used.union(&m);
@@ -247,13 +299,32 @@ impl Book {
         let mdw = 8.0_f64;
         let px = |w: f64| ((256.0 * w + (128.0 / mdw).trunc()) / 256.0 * mdw).trunc();
         let (sizes, grid_lines) = {
-            let Ok(ws) = self.file.sheet(si) else { return Err("シートがありません".into()) };
+            let Ok(ws) = self.file.sheet(si) else {
+                return Err("シートがありません".into());
+            };
             let fmt = ws.sheet_format_properties();
-            let default_w = if fmt.default_column_width() > 0.0 { px(fmt.default_column_width()) } else { 72.0 };
-            let default_h = if fmt.default_row_height() > 0.0 { (fmt.default_row_height() * 96.0 / 72.0).round() } else { 25.0 };
+            let default_w = if fmt.default_column_width() > 0.0 {
+                px(fmt.default_column_width())
+            } else {
+                72.0
+            };
+            let default_h = if fmt.default_row_height() > 0.0 {
+                (fmt.default_row_height() * 96.0 / 72.0).round()
+            } else {
+                25.0
+            };
             let mut widths: HashMap<u32, f64> = HashMap::new();
             for c in ws.column_dimensions() {
-                widths.insert(c.col_num(), if c.hidden() { 0.0 } else if c.width() > 0.0 { px(c.width()) } else { default_w });
+                widths.insert(
+                    c.col_num(),
+                    if c.hidden() {
+                        0.0
+                    } else if c.width() > 0.0 {
+                        px(c.width())
+                    } else {
+                        default_w
+                    },
+                );
             }
             let mut heights: HashMap<u32, f64> = HashMap::new();
             for r in ws.row_dimensions() {
@@ -266,8 +337,18 @@ impl Book {
             widths.retain(|_, w| *w != default_w);
             heights.retain(|_, h| *h != default_h);
             // (umya-spreadsheet reads an absent showGridLines as false: the file says it.)
-            let grid = drawing.and_then(|d| d.parts.grid_lines(&info.name)).unwrap_or(true);
-            (Sizes { default_w, default_h, widths, heights }, grid)
+            let grid = drawing
+                .and_then(|d| d.parts.grid_lines(&info.name))
+                .unwrap_or(true);
+            (
+                Sizes {
+                    default_w,
+                    default_h,
+                    widths,
+                    heights,
+                },
+                grid,
+            )
         };
         // The objects of the drawing; the grid reaches to them.
         let objects = match drawing {
@@ -281,11 +362,15 @@ impl Book {
             }
         }
         // From A1, so that the grid reads as the sheet does.
-        let end = CellRef::new(used.end.row.min(rows.saturating_sub(1)), used.end.col.min(cols.saturating_sub(1)));
+        let end = CellRef::new(
+            used.end.row.min(rows.saturating_sub(1)),
+            used.end.col.min(cols.saturating_sub(1)),
+        );
         let shown = RangeRef::new(CellRef::new(0, 0), end);
         let truncated = end != used.end;
         let cells = self.cells(si, shown)?;
-        let mut by_at: HashMap<(u32, u32), &CellInfo> = cells.iter().map(|c| ((c.at.row, c.at.col), c)).collect();
+        let mut by_at: HashMap<(u32, u32), &CellInfo> =
+            cells.iter().map(|c| ((c.at.row, c.at.col), c)).collect();
 
         let theme = self.file.theme().clone();
         let mut styles: Vec<String> = vec![String::new()];
@@ -303,20 +388,25 @@ impl Book {
         let col_w: Vec<f64> = (0..=end.col).map(|c| sizes.w(c)).collect();
         let row_h: Vec<f64> = (0..=end.row).map(|r| sizes.h(r)).collect();
         {
-            let Ok(ws) = self.file.sheet(si) else { return Err("シートがありません".into()) };
+            let Ok(ws) = self.file.sheet(si) else {
+                return Err("シートがありません".into());
+            };
             // The cells with a value, then those with only formats (a fill, a border).
             let plain = Style::default();
             let mut at: Vec<(u32, u32)> = by_at.keys().copied().collect();
             for c in ws.cells() {
                 let p = at_of(c);
-                if shown.contains(p) && !by_at.contains_key(&(p.row, p.col)) && *c.style() != plain {
+                if shown.contains(p) && !by_at.contains_key(&(p.row, p.col)) && *c.style() != plain
+                {
                     at.push((p.row, p.col));
                 }
             }
             at.sort();
             for (row, col) in at {
                 let info = by_at.remove(&(row, col));
-                let kind = info.map(|c| crate::dump::type_name(&c.value)).unwrap_or("empty");
+                let kind = info
+                    .map(|c| crate::dump::type_name(&c.value))
+                    .unwrap_or("empty");
                 let style = match ws.cell((col + 1, row + 1)) {
                     Some(c) => c.style().clone(),
                     None => self.style_at(si, CellRef::new(row, col)),
@@ -340,7 +430,11 @@ impl Book {
             }
         }
         // What is typed into the cells (the formula bar): dates and numbers as values, not as shown.
-        for (cell, c) in out_cells.iter_mut().filter(|c| c.get("t").is_some()).zip(cells.iter()) {
+        for (cell, c) in out_cells
+            .iter_mut()
+            .filter(|c| c.get("t").is_some())
+            .zip(cells.iter())
+        {
             let typed = match &c.value {
                 Val::Date(d) => Some(self.date_text(*d)),
                 Val::Num(x) if c.text != format!("{x}") => Some(format!("{x}")),
@@ -354,7 +448,10 @@ impl Book {
         let beyond = |m: &HashMap<u32, f64>, from: u32| -> serde_json::Map<String, Json> {
             let mut keys: Vec<&u32> = m.keys().filter(|k| **k > from).collect();
             keys.sort();
-            keys.into_iter().take(20_000).map(|k| ((k - 1).to_string(), json!(m[k]))).collect()
+            keys.into_iter()
+                .take(20_000)
+                .map(|k| ((k - 1).to_string(), json!(m[k])))
+                .collect()
         };
         let objects: Vec<Json> = objects
             .iter()
@@ -387,7 +484,20 @@ impl Book {
                 j
             })
             .collect();
-        let merges: Vec<Json> = info.merged.iter().filter_map(|m| RangeRef::parse(m)).filter(|m| shown.contains(m.start)).map(|m| json!([m.start.row, m.start.col, m.end.row.min(end.row), m.end.col.min(end.col)])).collect();
+        let merges: Vec<Json> = info
+            .merged
+            .iter()
+            .filter_map(|m| RangeRef::parse(m))
+            .filter(|m| shown.contains(m.start))
+            .map(|m| {
+                json!([
+                    m.start.row,
+                    m.start.col,
+                    m.end.row.min(end.row),
+                    m.end.col.min(end.col)
+                ])
+            })
+            .collect();
         Ok(json!({
             "name": info.name,
             "codeName": info.code_name,
@@ -416,7 +526,13 @@ impl Book {
     }
 
     /// The objects of the sheet's drawing, with what its controls need of the cells.
-    fn drawn(&mut self, si: usize, sheet: &str, d: &Drawing, sizes: &Sizes) -> Vec<crate::view::drawing::Obj> {
+    fn drawn(
+        &mut self,
+        si: usize,
+        sheet: &str,
+        d: &Drawing,
+        sizes: &Sizes,
+    ) -> Vec<crate::view::drawing::Obj> {
         use crate::view::drawing::{Env, sheet_objects};
         let me = std::cell::RefCell::new(&mut *self);
         // A reference of a control (`$A$1:$A$5`, `Sheet2!A1:A3`): its sheet and its range.
@@ -429,16 +545,35 @@ impl Book {
             Some((at, RangeRef::parse(&body.replace('$', ""))?))
         };
         let texts = |r: &str| -> Vec<String> {
-            let Some((at, range)) = resolve(r).filter(|(_, g)| g.count() <= 1000) else { return Vec::new() };
-            let Ok(cells) = me.borrow_mut().cells(at, range) else { return Vec::new() };
-            let by: HashMap<(u32, u32), String> = cells.into_iter().map(|c| ((c.at.row, c.at.col), c.text)).collect();
-            range.iter().map(|p| by.get(&(p.row, p.col)).cloned().unwrap_or_default()).collect()
+            let Some((at, range)) = resolve(r).filter(|(_, g)| g.count() <= 1000) else {
+                return Vec::new();
+            };
+            let Ok(cells) = me.borrow_mut().cells(at, range) else {
+                return Vec::new();
+            };
+            let by: HashMap<(u32, u32), String> = cells
+                .into_iter()
+                .map(|c| ((c.at.row, c.at.col), c.text))
+                .collect();
+            range
+                .iter()
+                .map(|p| by.get(&(p.row, p.col)).cloned().unwrap_or_default())
+                .collect()
         };
         let value = |r: &str| -> Option<String> {
             let (at, range) = resolve(r)?;
-            let cells = me.borrow_mut().cells(at, RangeRef::cell(range.start)).ok()?;
+            let cells = me
+                .borrow_mut()
+                .cells(at, RangeRef::cell(range.start))
+                .ok()?;
             cells.into_iter().next().map(|c| match c.value {
-                Val::Bool(b) => if b { "TRUE".to_string() } else { "FALSE".to_string() },
+                Val::Bool(b) => {
+                    if b {
+                        "TRUE".to_string()
+                    } else {
+                        "FALSE".to_string()
+                    }
+                }
                 _ => c.text,
             })
         };
@@ -446,7 +581,10 @@ impl Book {
             use crate::view::chart::Point;
             let (at, range) = resolve(r).filter(|(_, g)| g.count() <= 100_000)?;
             let cells = me.borrow_mut().cells(at, range).ok()?;
-            let by: HashMap<(u32, u32), CellInfo> = cells.into_iter().map(|c| ((c.at.row, c.at.col), c)).collect();
+            let by: HashMap<(u32, u32), CellInfo> = cells
+                .into_iter()
+                .map(|c| ((c.at.row, c.at.col), c))
+                .collect();
             Some(
                 (range.start.row..=range.end.row)
                     .map(|row| {
@@ -467,8 +605,18 @@ impl Book {
                     .collect(),
             )
         };
-        let size = |an: &crate::view::drawing::Anchor| sizes.anchor(an).map(|(x, y, x2, y2)| ((x2 - x) * 0.75, (y2 - y) * 0.75)).filter(|(w, h)| *w > 0.0 && *h > 0.0);
-        let env = Env { size: &size, texts: &texts, value: &value, range: &range };
+        let size = |an: &crate::view::drawing::Anchor| {
+            sizes
+                .anchor(an)
+                .map(|(x, y, x2, y2)| ((x2 - x) * 0.75, (y2 - y) * 0.75))
+                .filter(|(w, h)| *w > 0.0 && *h > 0.0)
+        };
+        let env = Env {
+            size: &size,
+            texts: &texts,
+            value: &value,
+            range: &range,
+        };
         sheet_objects(d.parts, sheet, &env, d.ids, d.images)
     }
 }

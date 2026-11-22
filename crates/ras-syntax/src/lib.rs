@@ -77,7 +77,9 @@ mod tests {
     #[test]
     fn class_members() {
         let m = ok("class Stack<T> {\n private items: T[] = [];\n push(x: T): void { this.items.push(x); }\n pop(): T { return this.items.pop(); }\n get size(): int { return this.items.length; }\n constructor(n: int) {}\n}");
-        let Item::Class(c) = &m.items[0] else { panic!() };
+        let Item::Class(c) = &m.items[0] else {
+            panic!()
+        };
         assert_eq!(c.members.len(), 5);
         assert!(matches!(&c.members[0], ClassMember::Field(f) if f.vis == Visibility::Private));
         assert!(matches!(&c.members[3], ClassMember::Accessor(a) if a.kind == AccessorKind::Get));
@@ -88,11 +90,25 @@ mod tests {
     fn generic_call_vs_comparison() {
         let m = ok("const a = f<int>(1);\nconst b = x < y;\nconst s = new Stack<Excel.Range>();\nconst c = a < b && c > (d);");
         let Item::Var(v) = &m.items[0] else { panic!() };
-        assert!(matches!(&v.init.as_ref().unwrap().kind, ExprKind::Call { type_args, .. } if type_args.len() == 1));
+        assert!(
+            matches!(&v.init.as_ref().unwrap().kind, ExprKind::Call { type_args, .. } if type_args.len() == 1)
+        );
         let Item::Var(v) = &m.items[1] else { panic!() };
-        assert!(matches!(&v.init.as_ref().unwrap().kind, ExprKind::Binary { op: BinaryOp::Lt, .. }));
+        assert!(matches!(
+            &v.init.as_ref().unwrap().kind,
+            ExprKind::Binary {
+                op: BinaryOp::Lt,
+                ..
+            }
+        ));
         let Item::Var(v) = &m.items[3] else { panic!() };
-        assert!(matches!(&v.init.as_ref().unwrap().kind, ExprKind::Binary { op: BinaryOp::And, .. }));
+        assert!(matches!(
+            &v.init.as_ref().unwrap().kind,
+            ExprKind::Binary {
+                op: BinaryOp::And,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -100,18 +116,35 @@ mod tests {
         let m = ok("x = a >= b; y = a >> 2; z >>= 1; let q: Map<string, int[]> = w;");
         let Item::Stmt(s) = &m.items[0] else { panic!() };
         let StmtKind::Expr(e) = &s.kind else { panic!() };
-        let ExprKind::Assign { value, .. } = &e.kind else { panic!() };
-        assert!(matches!(value.kind, ExprKind::Binary { op: BinaryOp::Ge, .. }));
+        let ExprKind::Assign { value, .. } = &e.kind else {
+            panic!()
+        };
+        assert!(matches!(
+            value.kind,
+            ExprKind::Binary {
+                op: BinaryOp::Ge,
+                ..
+            }
+        ));
         let Item::Stmt(s) = &m.items[2] else { panic!() };
         let StmtKind::Expr(e) = &s.kind else { panic!() };
-        assert!(matches!(e.kind, ExprKind::Assign { op: Some(BinaryOp::Shr), .. }));
+        assert!(matches!(
+            e.kind,
+            ExprKind::Assign {
+                op: Some(BinaryOp::Shr),
+                ..
+            }
+        ));
     }
 
     #[test]
     fn arrows_and_ternary() {
         let m = ok("let r = arr.filter(x => x > 0).map((x: double): double => { return x * 2; });\nlet t = c ? (a) : b;");
         let Item::Var(v) = &m.items[1] else { panic!() };
-        assert!(matches!(v.init.as_ref().unwrap().kind, ExprKind::Ternary { .. }));
+        assert!(matches!(
+            v.init.as_ref().unwrap().kind,
+            ExprKind::Ternary { .. }
+        ));
     }
 
     #[test]
@@ -119,10 +152,14 @@ mod tests {
         let m = ok("function f() {\n try { ws.Activate(); } catch { resume; }\n using _ = fastMode({ calc: false });\n try { a(); } catch (e) { throw e; } finally { b(); }\n}");
         let Item::Fn(f) = &m.items[0] else { panic!() };
         let body = &f.body.as_ref().unwrap().stmts;
-        let StmtKind::Try(t) = &body[0].kind else { panic!() };
+        let StmtKind::Try(t) = &body[0].kind else {
+            panic!()
+        };
         assert!(t.catch.as_ref().unwrap().is_resume_block());
         assert!(matches!(&body[1].kind, StmtKind::Var(v) if v.kind == VarKind::Using));
-        let StmtKind::Try(t) = &body[2].kind else { panic!() };
+        let StmtKind::Try(t) = &body[2].kind else {
+            panic!()
+        };
         assert!(t.finally.is_some());
     }
 
@@ -132,7 +169,9 @@ mod tests {
         let Item::Fn(f) = &m.items[0] else { panic!() };
         assert_eq!(f.decorators[0].name.text, "on");
         assert_eq!(f.decorators[0].args.len(), 1);
-        let Item::DeclareModule(d) = &m.items[2] else { panic!() };
+        let Item::DeclareModule(d) = &m.items[2] else {
+            panic!()
+        };
         assert_eq!(d.lib, "user32");
         assert_eq!(d.functions.len(), 2);
         assert_eq!(d.functions[1].decorators[0].name.text, "alias");
@@ -145,11 +184,39 @@ mod tests {
             Item::Var(v) => v.init.clone().unwrap().kind,
             _ => panic!(),
         };
-        assert!(matches!(get(0), ExprKind::Int { value: 123, suffix: NumSuffix::L, .. }));
-        assert!(matches!(get(1), ExprKind::Int { value: 255, hex: true, .. }));
-        assert!(matches!(get(2), ExprKind::Float { suffix: NumSuffix::F, .. }));
-        assert!(matches!(get(3), ExprKind::Float { suffix: NumSuffix::M, .. }));
-        let ExprKind::Template(parts) = get(4) else { panic!() };
+        assert!(matches!(
+            get(0),
+            ExprKind::Int {
+                value: 123,
+                suffix: NumSuffix::L,
+                ..
+            }
+        ));
+        assert!(matches!(
+            get(1),
+            ExprKind::Int {
+                value: 255,
+                hex: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            get(2),
+            ExprKind::Float {
+                suffix: NumSuffix::F,
+                ..
+            }
+        ));
+        assert!(matches!(
+            get(3),
+            ExprKind::Float {
+                suffix: NumSuffix::M,
+                ..
+            }
+        ));
+        let ExprKind::Template(parts) = get(4) else {
+            panic!()
+        };
         assert_eq!(parts.len(), 3);
         assert!(matches!(get(5), ExprKind::Str(s) if s == "a\nあ"));
     }
@@ -158,15 +225,22 @@ mod tests {
     fn jsdoc_is_attached() {
         let m = ok("/**\n * 指定列の最終行を返す。\n * @param col 列番号\n */\nexport function lastRow(this: Excel.Worksheet, col: int = 1): int { return 1; }");
         let Item::Fn(f) = &m.items[0] else { panic!() };
-        assert_eq!(f.doc.as_deref(), Some("指定列の最終行を返す。\n@param col 列番号"));
+        assert_eq!(
+            f.doc.as_deref(),
+            Some("指定列の最終行を返す。\n@param col 列番号")
+        );
     }
 
     #[test]
     fn host_typedefs() {
         let m = ok("declare namespace Excel {\n interface Range {\n  Value: any;\n  readonly Row: int;\n  Cells(row?: any, col?: any): Range;\n  [index: any]: Range;\n }\n enum XlDirection { xlDown = -4121, xlUp = -4162 }\n}\ndeclare const Application: Excel.Application;");
-        let Item::Namespace(ns) = &m.items[0] else { panic!() };
+        let Item::Namespace(ns) = &m.items[0] else {
+            panic!()
+        };
         assert_eq!(ns.items.len(), 2);
-        let Item::Interface(i) = &ns.items[0] else { panic!() };
+        let Item::Interface(i) = &ns.items[0] else {
+            panic!()
+        };
         assert_eq!(i.members.len(), 4);
         let Item::Var(v) = &m.items[1] else { panic!() };
         assert!(v.declared);
@@ -174,7 +248,17 @@ mod tests {
 
     #[test]
     fn error_recovery_keeps_tree_lossless() {
-        for src in ["function f( { let x = ; }", "let = 3 +;", "class { foo(: int }", "if (x { y( }", "@@@", "a ? b", "`${`", "for (;;", "x = (1, 2"] {
+        for src in [
+            "function f( { let x = ; }",
+            "let = 3 +;",
+            "class { foo(: int }",
+            "if (x { y( }",
+            "@@@",
+            "a ? b",
+            "`${`",
+            "for (;;",
+            "x = (1, 2",
+        ] {
             let p = parse(src);
             assert!(!p.errors.is_empty(), "expected errors for {src:?}");
             assert_eq!(p.syntax().text().to_string(), src);

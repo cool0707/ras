@@ -34,7 +34,14 @@ impl EventDef {
     pub fn ras_params(&self) -> String {
         self.params
             .iter()
-            .map(|p| format!("{}{}: {}", if p.byref { "byref " } else { "" }, crate::names::js_name(&p.name), ras_type(&p.vba_type)))
+            .map(|p| {
+                format!(
+                    "{}{}: {}",
+                    if p.byref { "byref " } else { "" },
+                    crate::names::js_name(&p.name),
+                    ras_type(&p.vba_type)
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -56,7 +63,9 @@ pub fn ras_type(vba: &str) -> String {
 }
 
 fn parse_params(signature: &str) -> Vec<EventParam> {
-    let Some(open) = signature.find('(') else { return Vec::new() };
+    let Some(open) = signature.find('(') else {
+        return Vec::new();
+    };
     let inner = signature[open + 1..].trim_end().trim_end_matches(')');
     inner
         .split(',')
@@ -68,7 +77,11 @@ fn parse_params(signature: &str) -> Vec<EventParam> {
                 None => (true, p.strip_prefix("ByRef ").unwrap_or(p)),
             };
             let (name, ty) = rest.split_once(" As ")?;
-            Some(EventParam { name: name.trim().to_string(), vba_type: ty.trim().to_string(), byref })
+            Some(EventParam {
+                name: name.trim().to_string(),
+                vba_type: ty.trim().to_string(),
+                byref,
+            })
         })
         .collect()
 }
@@ -77,7 +90,8 @@ fn parse_params(signature: &str) -> Vec<EventParam> {
 pub fn catalogue() -> &'static [EventDef] {
     static CATALOGUE: OnceLock<Vec<EventDef>> = OnceLock::new();
     CATALOGUE.get_or_init(|| {
-        let value: serde_json::Value = serde_json::from_str(include_str!("userform_events.json")).unwrap_or_default();
+        let value: serde_json::Value =
+            serde_json::from_str(include_str!("userform_events.json")).unwrap_or_default();
         value
             .as_array()
             .into_iter()
@@ -87,7 +101,10 @@ pub fn catalogue() -> &'static [EventDef] {
                     host_type: e.get("type")?.as_str()?.to_string(),
                     name: e.get("name")?.as_str()?.to_string(),
                     params: parse_params(e.get("signature")?.as_str()?),
-                    is_default: e.get("isDefault").and_then(|v| v.as_bool()).unwrap_or(false),
+                    is_default: e
+                        .get("isDefault")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
                 })
             })
             .collect()
@@ -97,12 +114,17 @@ pub fn catalogue() -> &'static [EventDef] {
 /// The host type whose events a control raises: a `Page` raises none of its own (its
 /// events go to the `MultiPage`), custom controls have no catalogue entry.
 pub fn events_of(host_type: &str) -> Vec<&'static EventDef> {
-    catalogue().iter().filter(|e| e.host_type.eq_ignore_ascii_case(host_type)).collect()
+    catalogue()
+        .iter()
+        .filter(|e| e.host_type.eq_ignore_ascii_case(host_type))
+        .collect()
 }
 
 /// The event `event` of `host_type` (names compared without case).
 pub fn find_event(host_type: &str, event: &str) -> Option<&'static EventDef> {
-    catalogue().iter().find(|e| e.host_type.eq_ignore_ascii_case(host_type) && e.name.eq_ignore_ascii_case(event))
+    catalogue()
+        .iter()
+        .find(|e| e.host_type.eq_ignore_ascii_case(host_type) && e.name.eq_ignore_ascii_case(event))
 }
 
 #[cfg(test)]
@@ -114,18 +136,35 @@ mod tests {
         let click = find_event("CommandButton", "click").unwrap();
         assert!(click.params.is_empty());
         let exit = find_event("TextBox", "Exit").unwrap();
-        assert_eq!(exit.params, vec![EventParam { name: "Cancel".into(), vba_type: "MSForms.ReturnBoolean".into(), byref: false }]);
+        assert_eq!(
+            exit.params,
+            vec![EventParam {
+                name: "Cancel".into(),
+                vba_type: "MSForms.ReturnBoolean".into(),
+                byref: false
+            }]
+        );
         let close = find_event("UserForm", "QueryClose").unwrap();
-        assert!(close.params.iter().all(|p| p.byref && p.vba_type == "Integer"));
-        assert_eq!(close.ras_params(), "byref cancel: short, byref closeMode: short");
+        assert!(close
+            .params
+            .iter()
+            .all(|p| p.byref && p.vba_type == "Integer"));
+        assert_eq!(
+            close.ras_params(),
+            "byref cancel: short, byref closeMode: short"
+        );
         assert!(events_of("Page").is_empty());
         assert!(events_of("UserForm").iter().any(|e| e.name == "Initialize"));
     }
 
     #[test]
     fn same_catalogue_as_the_vscode_extension() {
-        let ours: serde_json::Value = serde_json::from_str(include_str!("userform_events.json")).unwrap();
-        let theirs: serde_json::Value = serde_json::from_str(include_str!("../../../editors/vscode/src/userForm/eventCatalogue.json")).unwrap();
+        let ours: serde_json::Value =
+            serde_json::from_str(include_str!("userform_events.json")).unwrap();
+        let theirs: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../editors/vscode/src/userForm/eventCatalogue.json"
+        ))
+        .unwrap();
         assert_eq!(ours, theirs);
     }
 }

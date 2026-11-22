@@ -109,13 +109,25 @@ pub fn outcome_json(outcome: &Outcome) -> serde_json::Value {
 }
 
 fn describe(outcome: &Outcome) -> String {
-    let sheet = format!("シート「{}」（コード名 {}）", outcome.name, outcome.code_name);
+    let sheet = format!(
+        "シート「{}」（コード名 {}）",
+        outcome.name, outcome.code_name
+    );
     let mut lines = vec![match outcome.action {
         "add" => format!("{sheet}を追加しました"),
-        "copy" => format!("{sheet}を、シート「{}」の複製として作りました", outcome.before.as_ref().map(|b| b.0.as_str()).unwrap_or_default()),
+        "copy" => format!(
+            "{sheet}を、シート「{}」の複製として作りました",
+            outcome
+                .before
+                .as_ref()
+                .map(|b| b.0.as_str())
+                .unwrap_or_default()
+        ),
         "remove" => format!("{sheet}を削除しました"),
         _ => match &outcome.before {
-            Some((name, code_name)) => format!("シート「{name}」（コード名 {code_name}）を、{sheet}に変えました"),
+            Some((name, code_name)) => {
+                format!("シート「{name}」（コード名 {code_name}）を、{sheet}に変えました")
+            }
             None => format!("{sheet}の名前を変えました"),
         },
     }];
@@ -129,10 +141,16 @@ fn describe(outcome: &Outcome) -> String {
         lines.push(format!("  名前の変更: {from} → {to}"));
     }
     if outcome.references > 0 {
-        lines.push(format!("  ソースの参照を {} 箇所書き換えました", outcome.references));
+        lines.push(format!(
+            "  ソースの参照を {} 箇所書き換えました",
+            outcome.references
+        ));
     }
     if outcome.formulas > 0 {
-        lines.push(format!("  ブックの数式・名前の定義を {} 箇所書き換えました", outcome.formulas));
+        lines.push(format!(
+            "  ブックの数式・名前の定義を {} 箇所書き換えました",
+            outcome.formulas
+        ));
     }
     lines.join("\n")
 }
@@ -156,16 +174,73 @@ pub fn run(root: &Path, command: &SheetCommand) -> Result<ExitCode, String> {
                     if !r.visible {
                         notes.push("非表示".to_string());
                     }
-                    let notes = if notes.is_empty() { String::new() } else { format!("  [{}]", notes.join("・")) };
-                    println!("{:>3}. {}（コード名 {}）  {}{notes}", i + 1, r.name, r.code_name, r.file.as_deref().unwrap_or("ファイルなし"));
+                    let notes = if notes.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  [{}]", notes.join("・"))
+                    };
+                    println!(
+                        "{:>3}. {}（コード名 {}）  {}{notes}",
+                        i + 1,
+                        r.name,
+                        r.code_name,
+                        r.file.as_deref().unwrap_or("ファイルなし")
+                    );
                 }
             }
             return Ok(ExitCode::SUCCESS);
         }
-        SheetCommand::Add { name, code_name, place, json } => (SheetEdit::Add { name: name.clone(), code_name: code_name.clone(), place: place.place().unwrap_or(Place::End) }, false, *json),
-        SheetCommand::Copy { sheet, name, code_name, place, json } => (SheetEdit::Copy { sheet: sheet.clone(), name: name.clone(), code_name: code_name.clone(), place: place.place() }, false, *json),
-        SheetCommand::Remove { sheet, force, json } => (SheetEdit::Remove { sheet: sheet.clone() }, *force, *json),
-        SheetCommand::Rename { sheet, name, code_name, json } => (SheetEdit::Rename { sheet: sheet.clone(), name: name.clone(), code_name: code_name.clone() }, false, *json),
+        SheetCommand::Add {
+            name,
+            code_name,
+            place,
+            json,
+        } => (
+            SheetEdit::Add {
+                name: name.clone(),
+                code_name: code_name.clone(),
+                place: place.place().unwrap_or(Place::End),
+            },
+            false,
+            *json,
+        ),
+        SheetCommand::Copy {
+            sheet,
+            name,
+            code_name,
+            place,
+            json,
+        } => (
+            SheetEdit::Copy {
+                sheet: sheet.clone(),
+                name: name.clone(),
+                code_name: code_name.clone(),
+                place: place.place(),
+            },
+            false,
+            *json,
+        ),
+        SheetCommand::Remove { sheet, force, json } => (
+            SheetEdit::Remove {
+                sheet: sheet.clone(),
+            },
+            *force,
+            *json,
+        ),
+        SheetCommand::Rename {
+            sheet,
+            name,
+            code_name,
+            json,
+        } => (
+            SheetEdit::Rename {
+                sheet: sheet.clone(),
+                name: name.clone(),
+                code_name: code_name.clone(),
+            },
+            false,
+            *json,
+        ),
     };
     match sheets::apply(root, &edit, force) {
         Ok(outcome) => {

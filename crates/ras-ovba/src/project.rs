@@ -109,7 +109,10 @@ impl ProjectProperties {
 
     /// Kind recorded for `name` (module names are case-insensitive).
     pub(crate) fn kind_of(&self, name: &str) -> Option<ModuleKind> {
-        self.modules.iter().find(|(_, n)| same_name(n, name)).map(|(k, _)| *k)
+        self.modules
+            .iter()
+            .find(|(_, n)| same_name(n, name))
+            .map(|(k, _)| *k)
     }
 }
 
@@ -149,16 +152,26 @@ fn join_sections(sections: Vec<Vec<String>>) -> String {
 pub(crate) fn new_project_text(project_name: &str, modules: &[(ModuleKind, String)]) -> String {
     let id = crypto::new_guid();
     let mut header = vec![format!("ID=\"{id}\"")];
-    header.extend(modules.iter().map(|(kind, name)| module_line_for(*kind, name)));
+    header.extend(
+        modules
+            .iter()
+            .map(|(kind, name)| module_line_for(*kind, name)),
+    );
     header.push(format!("Name=\"{project_name}\""));
     header.push("HelpContextID=\"0\"".to_string());
     header.push("VersionCompatible32=\"393222000\"".to_string());
     // Unprotected, no password, visible ([MS-OVBA] 2.3.1.15 - 2.3.1.17).
-    header.push(format!("CMG=\"{}\"", crypto::encrypt_random(&[0, 0, 0, 0], &id)));
+    header.push(format!(
+        "CMG=\"{}\"",
+        crypto::encrypt_random(&[0, 0, 0, 0], &id)
+    ));
     header.push(format!("DPB=\"{}\"", crypto::encrypt_random(&[0x00], &id)));
     header.push(format!("GC=\"{}\"", crypto::encrypt_random(&[0xFF], &id)));
 
-    let host = vec![HOST_EXTENDER_SECTION.to_string(), HOST_EXTENDER_VBE.to_string()];
+    let host = vec![
+        HOST_EXTENDER_SECTION.to_string(),
+        HOST_EXTENDER_VBE.to_string(),
+    ];
     let mut workspace = vec![WORKSPACE_SECTION.to_string()];
     workspace.extend(modules.iter().map(|(_, name)| workspace_line_for(name)));
     join_sections(vec![header, host, workspace])
@@ -179,7 +192,10 @@ pub(crate) fn regenerate_project_text(
     project_name: Option<&str>,
 ) -> String {
     let lines = split_lines(existing);
-    let first_section = lines.iter().position(|l| is_section_header(l)).unwrap_or(lines.len());
+    let first_section = lines
+        .iter()
+        .position(|l| is_section_header(l))
+        .unwrap_or(lines.len());
 
     // --- property section -------------------------------------------------
     let mut header: Vec<String> = Vec::new();
@@ -194,8 +210,9 @@ pub(crate) fn regenerate_project_text(
                 .find(|(i, (_, n))| !emitted[*i] && same_name(n, name));
             if let Some((i, (kind, new_name))) = found {
                 emitted[i] = true;
-                let unchanged =
-                    module_line(line).map(|(k, n)| k == *kind && n == new_name).unwrap_or(false);
+                let unchanged = module_line(line)
+                    .map(|(k, n)| k == *kind && n == new_name)
+                    .unwrap_or(false);
                 header.push(if unchanged {
                     line.to_string()
                 } else {
@@ -254,7 +271,9 @@ pub(crate) fn regenerate_project_text(
             let mut section = vec![WORKSPACE_SECTION.to_string()];
             for (_, name) in modules {
                 let old = body.iter().find(|l| {
-                    l.split_once('=').map(|(k, _)| same_name(k.trim(), name)).unwrap_or(false)
+                    l.split_once('=')
+                        .map(|(k, _)| same_name(k.trim(), name))
+                        .unwrap_or(false)
                 });
                 section.push(match old {
                     Some(l) => match l.split_once('=') {
@@ -267,14 +286,27 @@ pub(crate) fn regenerate_project_text(
             sections.push(section);
         } else {
             let mut section = vec![lines[i].to_string()];
-            section.extend(body.iter().filter(|l| !l.trim().is_empty()).map(|l| l.to_string()));
+            section.extend(
+                body.iter()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(|l| l.to_string()),
+            );
             sections.push(section);
         }
         i = end;
     }
-    if !sections.iter().any(|s| s.first().map(|l| l.trim()) == Some(HOST_EXTENDER_SECTION)) {
+    if !sections
+        .iter()
+        .any(|s| s.first().map(|l| l.trim()) == Some(HOST_EXTENDER_SECTION))
+    {
         // HostExtenders is mandatory in the grammar.
-        sections.insert(1, vec![HOST_EXTENDER_SECTION.to_string(), HOST_EXTENDER_VBE.to_string()]);
+        sections.insert(
+            1,
+            vec![
+                HOST_EXTENDER_SECTION.to_string(),
+                HOST_EXTENDER_VBE.to_string(),
+            ],
+        );
     }
     if !workspace_done {
         let mut section = vec![WORKSPACE_SECTION.to_string()];
@@ -289,7 +321,11 @@ pub(crate) fn regenerate_project_text(
 pub(crate) fn project_wm(module_names: &[String], cp: u16) -> Result<Vec<u8>, OvbaError> {
     let mut out = Vec::new();
     for name in module_names {
-        out.extend_from_slice(&codepage::encode(cp, name, &format!("name of module `{name}`"))?);
+        out.extend_from_slice(&codepage::encode(
+            cp,
+            name,
+            &format!("name of module `{name}`"),
+        )?);
         out.push(0);
         out.extend_from_slice(&codepage::utf16le(name));
         out.extend_from_slice(&[0, 0]);
@@ -311,7 +347,10 @@ mod tests {
     #[test]
     fn parses_properties() {
         let p = ProjectProperties::parse(EXCEL);
-        assert_eq!(p.id.as_deref(), Some("{8D807122-0657-42C8-BC6F-4B5FD08031C9}"));
+        assert_eq!(
+            p.id.as_deref(),
+            Some("{8D807122-0657-42C8-BC6F-4B5FD08031C9}")
+        );
         assert_eq!(p.name.as_deref(), Some("VBAProject"));
         assert_eq!(p.cmg.as_deref(), Some("DBD966ECE4F0E4F0E4F0E4F0"));
         assert_eq!(
@@ -338,7 +377,7 @@ mod tests {
         let modules = mods(&[
             (ModuleKind::Document, "ThisWorkbook"),
             (ModuleKind::Document, "Sheet1"),
-            (ModuleKind::Class, "Module1"), // kind changed
+            (ModuleKind::Class, "Module1"),  // kind changed
             (ModuleKind::Standard, "Extra"), // new
         ]);
         let text = regenerate_project_text(EXCEL, &modules, Some("Renamed"));
@@ -372,9 +411,15 @@ mod tests {
         assert_eq!(p.name.as_deref(), Some("VBAProject"));
         let id = p.id.unwrap();
         assert_eq!(id.len(), 38);
-        assert_eq!(crypto::decrypt(p.cmg.as_deref().unwrap()).unwrap(), vec![0, 0, 0, 0]);
+        assert_eq!(
+            crypto::decrypt(p.cmg.as_deref().unwrap()).unwrap(),
+            vec![0, 0, 0, 0]
+        );
         assert_eq!(crypto::decrypt(p.dpb.as_deref().unwrap()).unwrap(), vec![0]);
-        assert_eq!(crypto::decrypt(p.gc.as_deref().unwrap()).unwrap(), vec![0xFF]);
+        assert_eq!(
+            crypto::decrypt(p.gc.as_deref().unwrap()).unwrap(),
+            vec![0xFF]
+        );
         // The project key embedded in the values is the checksum of the id.
         let cmg = p.cmg.unwrap();
         let seed = u8::from_str_radix(&cmg[0..2], 16).unwrap();
@@ -388,12 +433,18 @@ mod tests {
     #[test]
     fn project_wm_layout() {
         let wm = project_wm(&["A".to_string(), "あ".to_string()], 932).unwrap();
-        assert_eq!(wm, vec![b'A', 0, b'A', 0, 0, 0, 0x82, 0xA0, 0, 0x42, 0x30, 0, 0, 0, 0]);
+        assert_eq!(
+            wm,
+            vec![b'A', 0, b'A', 0, 0, 0, 0x82, 0xA0, 0, 0x42, 0x30, 0, 0, 0, 0]
+        );
     }
 
     #[test]
     fn split_lines_handles_every_terminator() {
-        assert_eq!(split_lines("a\r\nb\nc\rd\n\re"), vec!["a", "b", "c", "d", "e"]);
+        assert_eq!(
+            split_lines("a\r\nb\nc\rd\n\re"),
+            vec!["a", "b", "c", "d", "e"]
+        );
         assert_eq!(split_lines("a\r\n\r\nb\r\n"), vec!["a", "", "b"]);
         assert!(split_lines("").is_empty());
     }
