@@ -776,6 +776,33 @@
         "key": "ctrl+y",
         "mac": "cmd+y",
         "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+f",
+        "mac": "cmd+f",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+h",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+g",
+        "mac": "cmd+g",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "f5",
+        "when": "activeWebviewPanelId == 'ras.sheetView' && !inDebugMode"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "f4",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
       }
     ]
   },

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io::Read as _;
 
+use serde_json::json;
+
 use super::*;
 use crate::book::Read;
 
@@ -689,5 +691,214 @@ fn a_macro_is_assigned_to_a_button_and_a_chart() {
             Some("Data")
         )
         .is_err()
+    );
+}
+
+/// What the grid draws of a workbook file (`ras book view`).
+fn view(bytes: &[u8]) -> Json {
+    let mut book = Book::open_bytes(bytes).unwrap();
+    crate::view::data(&mut book, "edit.xlsm", Some(bytes), None, None).unwrap()
+}
+
+#[test]
+fn panes_frozen_and_no_longer() {
+    // `<sheetView .../>` gets the pane and its selections, as Excel writes them.
+    let out = edit(r#"{"op":"freeze","at":"B2"}"#);
+    assert_eq!(changed(BOOK, &out), ["xl/worksheets/sheet1.xml"]);
+    let doc = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(doc.contains(
+        "<sheetView tabSelected=\"1\" workbookViewId=\"0\"><pane xSplit=\"1\" ySplit=\"1\" topLeftCell=\"B2\" activePane=\"bottomRight\" state=\"frozen\"/><selection pane=\"topRight\"/><selection pane=\"bottomLeft\"/><selection pane=\"bottomRight\" activeCell=\"B2\" sqref=\"B2\"/></sheetView>"
+    ));
+    assert_eq!(view(&out)["sheets"][0]["frozen"], json!([1, 1]));
+    // Frozen again elsewhere: one pane, in place of the other.
+    let rows = apply(&out, &ops(r#"{"op":"freeze","at":"A4"}"#)).unwrap();
+    let doc = part(&rows, "xl/worksheets/sheet1.xml");
+    assert_eq!(doc.matches("<pane ").count(), 1);
+    assert!(doc.contains("<pane ySplit=\"3\" topLeftCell=\"A4\" activePane=\"bottomLeft\" state=\"frozen\"/><selection pane=\"bottomLeft\" activeCell=\"A4\" sqref=\"A4\"/></sheetView>"));
+    assert_eq!(view(&rows)["sheets"][0]["frozen"], json!([3, 0]));
+    // No longer frozen: the pane and its selections go.
+    let off = apply(&rows, &ops(r#"{"op":"freeze","off":true}"#)).unwrap();
+    let doc = part(&off, "xl/worksheets/sheet1.xml");
+    assert!(!doc.contains("<pane") && !doc.contains("<selection"));
+    assert_eq!(view(&off)["sheets"][0]["frozen"], Json::Null);
+    // The cells are those they were; A1 is no pane; a range is refused.
+    assert_eq!(cell(&out, "Data", "D6", Read::Formula), "=SUM(D2:D5)");
+    assert_eq!(
+        apply(BOOK, &ops(r#"{"op":"freeze","at":"A1"}"#)).unwrap(),
+        BOOK
+    );
+    assert!(
+        parse_ops(
+            &serde_json::json!({"op":"freeze","at":"A1:B2"}),
+            Some("Data")
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn notes_lists_and_names_for_the_grid() {
+    // The input rule of C2:C5 made a list of its own, and B2:B5 one of the name `Items`.
+    let sheet = part(BOOK, "xl/worksheets/sheet1.xml").replace(
+        "<dataValidations count=\"1\"><dataValidation type=\"whole\" allowBlank=\"1\" showInputMessage=\"1\" showErrorMessage=\"1\" sqref=\"C2:C5\"><formula1>1</formula1><formula2>100</formula2></dataValidation></dataValidations>",
+        "<dataValidations count=\"2\"><dataValidation type=\"list\" allowBlank=\"1\" showInputMessage=\"1\" showErrorMessage=\"1\" promptTitle=\"数量\" prompt=\"選んでください\" sqref=\"C2:C5\"><formula1>\"1,2, 3\"</formula1></dataValidation><dataValidation type=\"list\" errorStyle=\"warning\" showErrorMessage=\"1\" sqref=\"B2:B5 E7\"><formula1>Items</formula1></dataValidation></dataValidations>",
+    );
+    let mut all = parts(BOOK);
+    all.insert("xl/worksheets/sheet1.xml".into(), sheet.into_bytes());
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, data) in all {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&data).unwrap();
+    }
+    let bytes = zip.finish().unwrap().into_inner();
+    let data = view(&bytes);
+    let sheet = &data["sheets"][0];
+    assert_eq!(
+        sheet["notes"],
+        json!([{ "r": 2, "c": 1, "text": "メモです", "author": "" }])
+    );
+    assert_eq!(
+        sheet["lists"],
+        json!([
+            { "ranges": [[1, 2, 4, 2]], "values": ["1", "2", "3"], "all": ["1", "2", "3"], "stop": "", "title": "数量", "prompt": "選んでください" },
+            { "ranges": [[1, 1, 4, 1], [6, 4, 6, 4]], "values": ["りんご", "みかん", "ぶどう", "もも"] }
+        ])
+    );
+    assert_eq!(
+        data["names"],
+        json!([{ "name": "Items", "ref": "Data!$A$2:$A$5" }, { "name": "Total", "ref": "Data!$D$6" }])
+    );
+    // Numbers keep their value, formatted or not (the status bar sums them).
+    let b2 = sheet["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["r"] == json!(1) && c["c"] == json!(1))
+        .unwrap();
+    assert_eq!(
+        (b2["x"].clone(), b2["n"].clone()),
+        (json!(120.0), json!("#,##0"))
+    );
+}
+
+#[test]
+fn pasted_special_transposed_and_multiplied() {
+    // B2:C3 (120 3 / 80 10) as values, rows made columns.
+    let out = edit(
+        r#"{"op":"pasteSpecial","from":"B2:C3","to":"F10","paste":"values","transpose":true}"#,
+    );
+    assert_eq!(
+        cells(&out, "Data", "F10:G11", Read::Value),
+        [["120", "80"], ["3", "10"]]
+    );
+    // The quantities multiplied into the prices; the formulas of D follow them.
+    let out = edit(
+        r#"{"op":"pasteSpecial","from":"C2:C3","to":"B2:B3","paste":"values","operation":"multiply"}"#,
+    );
+    assert_eq!(
+        cells(&out, "Data", "B2:B3", Read::Value),
+        [["360"], ["800"]]
+    );
+    assert_eq!(cell(&out, "Data", "D2", Read::Value), "1080");
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(
+        wrong(r#"{"op":"pasteSpecial","from":"A1","to":"B1","paste":"notes"}"#).contains("notes")
+    );
+}
+
+#[test]
+fn sorted_by_several_keys_and_filtered_by_comparisons() {
+    let out = edit(
+        r#"{"op":"sort","range":"A1:D5","keys":[{"by":"C","desc":true},{"by":"A"}],"header":true}"#,
+    );
+    assert_eq!(
+        cells(&out, "Data", "A2:A5", Read::Value),
+        [["みかん"], ["もも"], ["りんご"], ["ぶどう"]]
+    );
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(wrong(r#"{"op":"sort","range":"A1:D5","keys":[]}"#).contains("keys"));
+    // Prices from 100 up to 400: the rows of 80 and 500 are hidden.
+    let out = edit(r#"{"op":"filterBy","column":"B","criteria":[[">=","100"],["<","400"]]}"#);
+    let sheet = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<filterColumn colId="1"><customFilters and="1"><customFilter operator="greaterThanOrEqual" val="100"/><customFilter operator="lessThan" val="400"/></customFilters></filterColumn>"#), "{sheet}");
+    let hidden = |doc: &str, r: u32| {
+        doc.split("<row ").any(|row| {
+            row.starts_with(&format!("r=\"{r}\""))
+                && row
+                    .split('>')
+                    .next()
+                    .is_some_and(|t| t.contains("hidden=\"1\""))
+        })
+    };
+    assert!(hidden(&sheet, 3) && hidden(&sheet, 4) && !hidden(&sheet, 2) && !hidden(&sheet, 5));
+    // The largest amount only.
+    let out = edit(r#"{"op":"filterBy","column":"D","top":1}"#);
+    let sheet = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(sheet.contains(r#"<top10 val="1"/>"#));
+    assert!(hidden(&sheet, 2) && hidden(&sheet, 3) && hidden(&sheet, 4) && !hidden(&sheet, 5));
+    assert!(wrong(r#"{"op":"filterBy","column":"B","criteria":[["~","1"]]}"#).contains("~"));
+}
+
+#[test]
+fn links_conditional_formats_tables_and_functions_for_the_grid() {
+    let data = view(BOOK);
+    let sheet = &data["sheets"][0];
+    assert_eq!(
+        sheet["links"],
+        json!([{ "r": 9, "c": 0, "url": "https://example.com" }])
+    );
+    // D2:D5 over 500 (800, 1000, 1200) in the rule's format: bold, filled, with borders.
+    let css = |sheet: &Json, r: u64, c: u64| -> String {
+        let cell = sheet["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["r"] == json!(r) && x["c"] == json!(c))
+            .unwrap();
+        sheet["styles"][cell["s"].as_u64().unwrap_or(0) as usize]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert!(!css(sheet, 1, 3).contains("font-weight:bold"));
+    for r in 2..=4 {
+        let s = css(sheet, r, 3);
+        assert!(
+            s.contains("font-weight:bold") && s.contains("background:#DDEEFF"),
+            "{s}"
+        );
+    }
+    // The table of Tbl (XlsxWriter's Table Style Medium 9): its heading filled, its rows in
+    // stripes of two tints of the accent.
+    let tbl = &data["sheets"][2];
+    let (head, first, second) = (css(tbl, 1, 1), css(tbl, 2, 1), css(tbl, 3, 1));
+    assert!(
+        head.contains("background:#4F81BD") && head.contains("font-weight:bold"),
+        "{head}"
+    );
+    assert!(
+        first.contains("background:#B8CCE4") && second.contains("background:#DCE6F1"),
+        "{first} / {second}"
+    );
+    // The functions to complete formulas with: the evaluator's own too.
+    let functions = crate::view::functions();
+    let find = |n: &str| {
+        functions
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f[0] == json!(n))
+            .cloned()
+    };
+    assert_eq!(
+        find("VLOOKUP").unwrap()[1],
+        json!("VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])")
+    );
+    assert_eq!(
+        find("SUBTOTAL").unwrap()[1],
+        json!("SUBTOTAL(function_num, ref1, [ref2], ...)")
     );
 }

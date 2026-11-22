@@ -93,6 +93,7 @@
    "Close",
    "CodeName",
    "FileFormat",
+   "FollowHyperlink",
    "FullName",
    "Name",
    "Names",
@@ -133,6 +134,7 @@
    "EnableCalculation",
    "Evaluate",
    "FilterMode",
+   "Hyperlinks",
    "Index",
    "Move",
    "Name",
@@ -175,6 +177,7 @@
    "Clear",
    "ClearContents",
    "ClearFormats",
+   "ClearHyperlinks",
    "Column",
    "ColumnWidth",
    "Columns",
@@ -201,6 +204,7 @@
    "HasFormula",
    "Hidden",
    "HorizontalAlignment",
+   "Hyperlinks",
    "IndentLevel",
    "Insert",
    "Interior",
@@ -262,6 +266,33 @@
    "Rng",
    "SetRange",
    "SortFields"
+  ],
+  "excel": []
+ },
+ "Hyperlinks": {
+  "members": [
+   "Add",
+   "Count",
+   "Delete",
+   "Item",
+   "Parent"
+  ],
+  "excel": []
+ },
+ "Hyperlink": {
+  "members": [
+   "Address",
+   "Application",
+   "Delete",
+   "EmailSubject",
+   "Follow",
+   "Name",
+   "Parent",
+   "Range",
+   "ScreenTip",
+   "SubAddress",
+   "TextToDisplay",
+   "Type"
   ],
   "excel": []
  },

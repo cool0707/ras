@@ -1,5 +1,7 @@
 :root { --line: #d4d4d4; --grid: #dadcdd; --head: #f3f3f3; --head-text: #444; --accent: #107c41; --changed: #fff2b3; --changed-line: #e8a200; }
 * { box-sizing: border-box; }
+/* (Elements hidden stay hidden whatever their display.) */
+[hidden] { display: none !important; }
 /* The editor's panel pads the body (VS Code's default styles of webviews): the page fills it. */
 html, body { height: 100%; margin: 0; padding: 0; }
 body { display: flex; flex-direction: column; background: #fff; color: #000; font: 13px/1.3 "Yu Gothic UI", "Meiryo UI", "Segoe UI", sans-serif; }
@@ -7,7 +9,8 @@ body { display: flex; flex-direction: column; background: #fff; color: #000; fon
 #top .file { font-weight: bold; }
 #top .note { opacity: .9; }
 #bar { display: flex; min-height: 25px; border-bottom: 1px solid var(--line); }
-#name { width: 90px; padding: 3px 6px; border-right: 1px solid var(--line); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#name { flex: none; width: 110px; margin: 0; padding: 3px 6px; border: 0; border-right: 1px solid var(--line); border-radius: 0; background: #fff; color: #000; font: inherit; text-align: left; outline: 0; }
+#name:focus { box-shadow: inset 0 0 0 1px var(--accent); }
 #fx { flex: 1; padding: 3px 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; font-family: Consolas, "MS Gothic", monospace; }
 #fx .was { color: #8a6d00; margin-left: 16px; }
 #fx .ref { font-weight: bold; }
@@ -27,10 +30,14 @@ body { display: flex; flex-direction: column; background: #fff; color: #000; fon
 #side .structure { color: #555; margin: 2px 0; }
 .sheetwrap { position: relative; width: max-content; }
 table { border-collapse: collapse; table-layout: fixed; font: 11pt "Yu Gothic", Meiryo, sans-serif; }
-th { position: sticky; background: var(--head); color: var(--head-text); font: 12px "Segoe UI", sans-serif; font-weight: normal; border: 1px solid var(--line); z-index: 2; }
-thead th { top: 0; height: 20px; }
+/* What is drawn over what: the cells, the boxes over them (1), the cells of the panes frozen (2;
+   both ways: 4), the boxes that stay with them (3; both ways: 5), the headers (6 and up). */
+th { position: sticky; background: var(--head); color: var(--head-text); font: 12px "Segoe UI", sans-serif; font-weight: normal; border: 1px solid var(--line); z-index: 6; }
+thead th { top: 0; height: 20px; z-index: 8; }
 tbody th { left: 0; }
-thead th:first-child { left: 0; z-index: 3; }
+tbody th.fzr { z-index: 7; }
+thead th.fzc { z-index: 9; }
+thead th:first-child { left: 0; z-index: 10; }
 /* The gridlines are the cells' backgrounds (right and bottom): a fill hides them, as in Excel. */
 td {
     padding: 0 3px; overflow: hidden; white-space: nowrap; vertical-align: bottom;
@@ -43,6 +50,9 @@ td .rot { display: inline-block; white-space: nowrap; }
 /* Data bars of conditional formats: under the value, over the cell's fill. */
 td.cfb { position: relative; z-index: 0; }
 td .cfbar { position: absolute; top: 2px; bottom: 2px; z-index: -1; pointer-events: none; }
+/* Icons of icon sets: at the left of the cell, the value after them. */
+td.cfi { position: relative; padding-left: 19px; }
+td .cficon { position: absolute; left: 2px; bottom: 3px; width: 14px; height: 14px; pointer-events: none; }
 td .cfaxis { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #000; z-index: -1; pointer-events: none; }
 /* Text that runs over the empty cells to its right: their gridlines are under it. */
 td.ov { overflow: visible; }
@@ -67,12 +77,14 @@ th.gap { border-right: 2px solid #888; }
 /* The formula view: formulas as text in the cells. */
 td.fml { font-family: Consolas, "MS Gothic", monospace; font-size: 10pt; color: #000; }
 /* The references of the selected formula. */
-.refs { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 1; pointer-events: none; }
+.refs { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+.refs > * { z-index: 1; }
 .refbox { position: absolute; box-sizing: border-box; border: 2px solid; }
+.refbox.pointing { border-style: dashed; animation: ants .6s steps(2) infinite; }
 
 /* The objects of the sheet's drawing, over the cells and under the headers. */
-.objs { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 1; }
-.obj { position: absolute; cursor: default; font: 11pt "Yu Gothic", Meiryo, sans-serif; line-height: 1.2; }
+.objs { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.obj { position: absolute; z-index: 1; cursor: default; font: 11pt "Yu Gothic", Meiryo, sans-serif; line-height: 1.2; }
 .obj.on { outline: 1px solid #217346; outline-offset: 1px; box-shadow: 0 0 0 3px rgba(33, 115, 70, .25); }
 .obj img { display: block; }
 .shape { position: absolute; box-sizing: border-box; }
@@ -126,6 +138,9 @@ th.hs { background: #d3e9db; color: #0b5a2e; border-bottom-color: var(--accent);
 tbody th.hs { border-bottom-color: var(--line); border-right-color: var(--accent); }
 th { user-select: none; cursor: default; }
 .selbox { position: absolute; box-sizing: border-box; border: 2px solid var(--accent); background: rgba(16, 124, 65, .08); }
+/* The areas of a selection made with Ctrl: shaded, the last one outlined thinly. */
+.selbox.multi { border-width: 1px; background: rgba(16, 124, 65, .14); }
+.selbox.more { border-color: rgba(16, 124, 65, .5); }
 .clipbox { position: absolute; box-sizing: border-box; border: 2px dashed var(--accent); animation: ants .6s steps(2) infinite; }
 @keyframes ants { 50% { border-style: dotted; } }
 /* The box typed into: on the active cell, seen while something is typed. */
@@ -189,5 +204,109 @@ table.ns th { cursor: row-resize; }
 .guide.h { left: 0; right: 0; height: 1px; width: 100%; }
 .probe { position: absolute; left: 0; top: 0; visibility: hidden; padding: 0 3px; overflow-wrap: anywhere; }
 /* The fill handle and the cells it is drawn out over. */
-.fillhandle { position: absolute; width: 7px; height: 7px; box-sizing: border-box; background: var(--accent); border: 1px solid #fff; cursor: crosshair; pointer-events: auto; z-index: 2; }
+.fillhandle { position: absolute; width: 7px; height: 7px; box-sizing: border-box; background: var(--accent); border: 1px solid #fff; cursor: crosshair; pointer-events: auto; }
 .fillbox { position: absolute; box-sizing: border-box; border: 2px dashed #555; }
+
+/* The status bar. */
+#status { display: flex; align-items: center; gap: 24px; min-height: 22px; padding: 1px 10px; background: var(--head); border-top: 1px solid var(--line); color: #333; font-size: 12px; }
+#stats { display: flex; gap: 24px; margin-left: auto; }
+#zoom { display: flex; align-items: center; gap: 2px; }
+#zoom button { min-width: 20px; padding: 0 4px; border: 0; background: none; color: #333; font: inherit; cursor: pointer; }
+#zoom button:hover { background: #e2e2e2; }
+#zoom button.pct { min-width: 44px; text-align: right; }
+#zoom input { width: 100px; margin: 0 2px; accent-color: #666; }
+
+/* Hyperlinks: the hand over them. */
+td.haslink { cursor: pointer; }
+
+/* Notes: the mark at the corner of the cell, the note while the mouse is on it. */
+td.hasnote { position: relative; }
+td .notemark { position: absolute; top: 0; right: 0; width: 0; height: 0; border-style: solid; border-width: 0 6px 6px 0; border-color: transparent #d00 transparent transparent; pointer-events: none; }
+.notebox { position: fixed; z-index: 12; max-width: 260px; padding: 4px 6px; background: #ffffe1; border: 1px solid #767676; box-shadow: 2px 2px 4px rgba(0, 0, 0, .25); color: #000; font: 9pt "Yu Gothic UI", "Meiryo UI", sans-serif; white-space: pre-wrap; pointer-events: none; }
+.notebox b { display: block; }
+
+/* Lists of input rules: the button beside the active cell, the message under it, the list. */
+.dropbtn { position: absolute; width: 17px; height: 17px; display: flex; align-items: center; justify-content: center; background: #f0f0f0; border: 1px solid #a0a0a0; color: #333; font-size: 10px; line-height: 1; pointer-events: auto; cursor: default; }
+.dropbtn:hover { background: #e5f1fb; border-color: #0078d7; }
+.promptbox { position: absolute; width: max-content; max-width: 240px; padding: 4px 6px; background: #ffffe1; border: 1px solid #767676; color: #000; font: 9pt "Yu Gothic UI", "Meiryo UI", sans-serif; white-space: pre-wrap; }
+.promptbox b { display: block; }
+.menu.listpop { min-width: 120px; max-height: 240px; overflow: auto; }
+.menu.listpop button { padding: 2px 10px; }
+.menu.listpop button.on { background: #cce4f7; }
+.menu.listpop button:focus { outline: 1px dotted #000; outline-offset: -2px; }
+
+/* "ジャンプ". */
+.dlg.goto select { display: block; width: 260px; margin: 2px 0 8px; font: inherit; }
+.dlg.goto .lbl { margin-bottom: 2px; }
+.dlg.goto label input { flex: 1; font: inherit; }
+
+/* Find and replace: a box over the top right of the grid. */
+.findbox { position: fixed; z-index: 18; top: 64px; right: 16px; width: 360px; padding: 6px 10px 8px; background: #fff; border: 1px solid #999; box-shadow: 0 4px 18px rgba(0, 0, 0, .3); font-size: 12px; }
+.findtabs { display: flex; gap: 2px; margin-bottom: 6px; border-bottom: 1px solid var(--line); }
+.findtabs button { padding: 3px 12px; border: 1px solid transparent; border-bottom: 0; background: none; color: #333; font: inherit; cursor: pointer; }
+.findtabs button.on { border-color: var(--line); background: #fff; color: var(--accent); font-weight: bold; margin-bottom: -1px; }
+.findtabs button.x { margin-left: auto; padding: 0 6px; font-size: 14px; }
+.findbox .field { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.findbox .field span { width: 96px; flex: none; }
+.findbox .field input { flex: 1; min-width: 0; font: inherit; }
+.findbox .opts { display: flex; flex-wrap: wrap; gap: 2px 12px; margin: 6px 0; }
+.findbox .opts label { display: flex; align-items: center; gap: 4px; }
+.findbox .opts select { font: inherit; }
+.findbox .buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.findbox .buttons button { padding: 2px 10px; border: 1px solid #adadad; background: #e1e1e1; color: #000; font: inherit; cursor: pointer; }
+.findbox .buttons button.ok { border-color: var(--accent); }
+.findbox .status { margin-top: 6px; color: #555; min-height: 1.2em; }
+.findbox .found { max-height: 180px; overflow: auto; }
+.findbox .found:not(:empty) { margin-top: 4px; border: 1px solid var(--line); }
+.findbox .hit { display: flex; gap: 8px; padding: 1px 6px; cursor: pointer; white-space: nowrap; }
+.findbox .hit:hover { background: #e8f3ec; }
+.findbox .hit .where { flex: none; min-width: 90px; color: #555; }
+.findbox .hit .what { overflow: hidden; text-overflow: ellipsis; }
+
+/* The panes frozen: their cells stay (sticky, over the cells scrolled under them), with a line
+   under the rows and right of the columns. The boxes that stay with them are over them. */
+td.frz { position: sticky; z-index: 2; background-color: #fff; }
+td.fzr.fzc { z-index: 4; }
+.refs > [data-pin], .objs > [data-pin], .sheetwrap > textarea[data-pin] { z-index: 3; }
+.refs > [data-pin="yx"], .objs > [data-pin="yx"], .sheetwrap > textarea[data-pin="yx"] { z-index: 5; }
+.frzline { position: absolute; background: #9b9b9b; pointer-events: none; }
+.frzline.h { left: 0; height: 1px; }
+.frzline.v { top: 0; width: 1px; }
+
+/* "形式を選択して貼り付け". */
+.dlg.pastespecial fieldset { margin: 0 0 8px; padding: 4px 10px 6px; border: 1px solid var(--line); display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
+.dlg.pastespecial legend { padding: 0 4px; }
+.dlg.pastespecial .checks { display: flex; gap: 16px; }
+
+/* The filter's comparisons, the top ten, the sort with several keys. */
+.dlg.customfilter .cond, .dlg.top10 .cond { display: flex; gap: 6px; margin: 4px 0; }
+.dlg.customfilter .cond input { width: 180px; font: inherit; }
+.dlg.customfilter select, .dlg.top10 select, .dlg.sortdlg select, .dlg.top10 input { font: inherit; }
+.dlg.top10 input { width: 70px; }
+.dlg.customfilter .join { display: flex; gap: 16px; margin: 2px 0 2px 12px; }
+.dlg .hint { margin-top: 6px; color: #555; font-size: 12px; }
+.dlg.sortdlg { min-width: 460px; }
+.dlg.sortdlg .sorttools { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.dlg.sortdlg .sorttools label { margin-left: auto; }
+.dlg.sortdlg .sorttools button { min-width: 0; }
+.dlg.sortdlg .levels { max-height: 260px; overflow: auto; border: 1px solid var(--line); padding: 4px; }
+.dlg.sortdlg .level { display: flex; align-items: center; gap: 8px; padding: 3px 4px; }
+.dlg.sortdlg .level.on { background: #e8f3ec; }
+.dlg.sortdlg .level .lbl { width: 120px; }
+.dlg.sortdlg .level select.col { flex: 1; min-width: 0; }
+
+/* The selection's border: moved by dragging (Ctrl: copied). */
+table.mv td { cursor: move; }
+body.copying, body.copying td { cursor: copy; }
+.fillbox.moving { border: 3px solid #8a8a8a; border-style: solid; }
+.dlg .msg { margin: 4px 0 8px; }
+
+/* Completing formulas: the functions and names that begin with the word, the arguments. */
+.fnlist { position: fixed; z-index: 19; width: 280px; max-height: 260px; overflow: auto; background: #fff; border: 1px solid #a0a0a0; box-shadow: 0 2px 8px rgba(0, 0, 0, .2); font-size: 12px; }
+.fnlist .item { display: flex; gap: 6px; align-items: center; padding: 1px 6px; cursor: default; white-space: nowrap; }
+.fnlist .item.on { background: #cce4f7; }
+.fnlist .fx, .fnlist .nm { flex: none; width: 18px; font-size: 10px; color: #fff; text-align: center; border-radius: 2px; background: #5a7fb0; font-style: italic; }
+.fnlist .nm { background: #8a8a8a; font-style: normal; }
+.fnlist .desc { position: sticky; bottom: 0; padding: 4px 6px; border-top: 1px solid var(--line); background: #ffffe1; color: #333; white-space: normal; }
+.fnhint { position: fixed; z-index: 19; max-width: 520px; padding: 2px 6px; background: #ffffe1; border: 1px solid #767676; color: #000; font: 12px Consolas, "MS Gothic", monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fnhint .on { font-weight: bold; }

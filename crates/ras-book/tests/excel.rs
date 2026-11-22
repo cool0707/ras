@@ -8,8 +8,8 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use ras_compiler::{Config, ModuleKind, SourceInput, analyze, build_js};
-use ras_workbook::RangeRef;
 use ras_workbook::book::{Book, Read, Val};
+use ras_workbook::{CellRef, RangeRef};
 
 fn has_node() -> bool {
     let found = Command::new("node")
@@ -948,5 +948,156 @@ fn the_rest_of_the_object_model() {
             "B社 =D3*2 #,##0.00",
             "1 Book.xlsx",
         ]
+    );
+}
+
+/// `objects/Sheet1.ras`: the links of the sheet followed.
+const LINKS_SHEET1: &str = r#"
+@on("Worksheet.FollowHyperlink")
+function followed(target: Excel.Hyperlink) {
+    console.log(`FollowHyperlink ${target.range.address(false, false)} ${target.address}|${target.subAddress}`);
+}
+
+@on("Worksheet.SelectionChange")
+function selected(target: Excel.Range) {
+    console.log(`SelectionChange ${target.address(false, false)}`);
+}
+
+@on("Worksheet.Change")
+function changed(target: Excel.Range) {
+    console.log(`Change ${target.address(false, false)}`);
+}
+"#;
+
+const LINKS_BOOK: &str = r#"
+@on("Workbook.SheetFollowHyperlink")
+function anyLink(sh: object, target: Excel.Hyperlink) {
+    console.log(`SheetFollowHyperlink ${sh.name} ${target.textToDisplay}`);
+}
+"#;
+
+const LINKS: &str = r##"
+export function follow() {
+    const ws = Sheet1;
+    // The link the file has (A1), and one added.
+    ws.hyperlinks.add(ws.range("A6"), "", "Sheet1!D3", "D3 へ", "合計へ");
+    console.log(`count ${ws.hyperlinks.count} ${ws.range("A1:A5").hyperlinks.count}`);
+    for (const h of ws.hyperlinks) {
+        console.log(`${h.range.address(false, false)} ${h.address}|${h.subAddress}|${h.screenTip}|${h.textToDisplay}`);
+    }
+    ws.range("A6").hyperlinks(1).follow();
+    ws.hyperlinks(1).follow();
+    thisWorkbook.followHyperlink("#Sheet1!B2");
+    using _ = fastMode();
+    ws.hyperlinks(2).follow();
+}
+
+export function edit() {
+    const ws = Sheet1;
+    const h = ws.hyperlinks(1);
+    h.address = "https://example.com/b";
+    h.screenTip = "ヒント";
+    ws.range("B6").hyperlinks.delete();
+    ws.hyperlinks.add(ws.range("C6"), "https://example.com/c");
+    ws.range("C6").clearHyperlinks();
+    ws.rows(1).insert();
+    console.log(`after ${ws.hyperlinks.count} ${ws.hyperlinks(1).range.address(false, false)} ${ws.hyperlinks(1).screenTip}`);
+    try {
+        console.log(ws.range("A1").hyperlinks(1).address);
+    } catch (e) {
+        console.log(`error ${e.code}`);
+    }
+}
+"##;
+
+#[test]
+fn hyperlinks_are_followed_with_their_event() {
+    if !has_node() {
+        return;
+    }
+    let p = project_with(
+        "links",
+        LINKS,
+        &[("Sheet1", LINKS_SHEET1), ("ThisWorkbook", LINKS_BOOK)],
+        |b| {
+            sales(b);
+            b.set_hyperlink(0, CellRef::new(0, 0), "https://example.com/a", "", "")
+                .unwrap();
+        },
+    );
+    let (stdout, stderr, ok) = p.run("Main.follow");
+    assert!(ok, "{stderr}\n{stdout}");
+    assert_eq!(
+        lines(&stdout),
+        vec![
+            // The text to display is written into the cell.
+            "Change A6",
+            "count 2 1",
+            "A1 https://example.com/a|||顧客",
+            "A6 |Sheet1!D3|D3 へ|合計へ",
+            // A place in the workbook is selected first, then the event.
+            "SelectionChange D3",
+            "FollowHyperlink A6 |Sheet1!D3",
+            "SheetFollowHyperlink Sheet1 合計へ",
+            // An address is said (a note), not opened.
+            "FollowHyperlink A1 https://example.com/a|",
+            "SheetFollowHyperlink Sheet1 顧客",
+            // `Workbook.FollowHyperlink` follows no cell's link: no event.
+            "SelectionChange B2",
+            // Events off: the link is followed, nothing is raised.
+        ]
+    );
+    assert!(
+        stdout.contains(
+            "[ras] リンク先 https://example.com/a を開きます（Excel のないデバッグ実行では開きません）"
+        ),
+        "{stdout}"
+    );
+    // The links are saved with the workbook.
+    let saved = p.saved();
+    let links = saved.hyperlinks(0, rng("A1:Z100")).unwrap();
+    assert_eq!(
+        links
+            .iter()
+            .map(|l| (
+                l.at.a1(),
+                l.address.clone(),
+                l.sub_address.clone(),
+                l.tip.clone()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "A1".to_string(),
+                "https://example.com/a".to_string(),
+                String::new(),
+                String::new()
+            ),
+            (
+                "A6".to_string(),
+                String::new(),
+                "Sheet1!D3".to_string(),
+                "D3 へ".to_string()
+            )
+        ]
+    );
+
+    let (stdout, stderr, ok) = p.run("Main.edit");
+    assert!(ok, "{stderr}\n{stdout}");
+    // The empty cell of a link added shows its address; the link of A1 changed and moved to A2
+    // with its row; B6 and C6 had none left.
+    assert_eq!(
+        lines(&stdout),
+        vec!["Change C6", "Change 1:1", "after 1 A2 ヒント", "error 9"]
+    );
+    let links = p.saved().hyperlinks(0, rng("A1:Z100")).unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!(
+        (
+            links[0].at.a1(),
+            links[0].address.as_str(),
+            links[0].tip.as_str()
+        ),
+        ("A2".to_string(), "https://example.com/b", "ヒント")
     );
 }

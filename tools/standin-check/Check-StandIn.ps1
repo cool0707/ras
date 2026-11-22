@@ -44,6 +44,7 @@ $scenarios = @(
     # The order of the events: the VBA build in Excel against the stand-in.
     @{ name = "events.run"; project = "events"; entry = "Main.run"; packed = $true }
     @{ name = "events.sheets"; project = "events"; entry = "Main.sheets"; packed = $true }
+    @{ name = "events.links"; project = "events"; entry = "Main.links"; packed = $true }
 )
 $Only = @($Only | ForEach-Object { $_ -split "," } | Where-Object { $_ })   # -File passes `a,b` as one string
 if ($Only.Count -gt 0) { $scenarios = $scenarios | Where-Object { $Only -contains $_.name } }

@@ -32,3 +32,8 @@ function entered() {
 function deleting() {
     log("BeforeDelete");
 }
+
+@on("Worksheet.FollowHyperlink")
+function followed(target: Excel.Hyperlink) {
+    log(`FollowHyperlink ${target.range.address(false, false)} [${target.address}] [${target.subAddress}]`);
+}

@@ -122,6 +122,107 @@ fn pattern_image(tile: &[&str], color: &str) -> String {
     )
 }
 
+/// A border side as CSS (`side`: top, right, bottom, left).
+fn side_css(side: &str, style: &str, color: Option<String>) -> String {
+    match line_css(style) {
+        Some((w, line)) => format!(
+            "border-{side}:{w}px {line} {};",
+            color.unwrap_or_else(|| "#000".into())
+        ),
+        None => String::new(),
+    }
+}
+
+/// What a table's style gives a cell, as CSS put before the cell's own (which wins).
+fn table_css(t: &super::tables::Overlay, theme: &umya_spreadsheet::drawing::Theme) -> String {
+    let mut css = String::new();
+    if let Some(c) = t.fill.as_ref().and_then(|c| css_color(c, theme)) {
+        css.push_str(&format!(
+            "background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};"
+        ));
+    }
+    if t.bold == Some(true) {
+        css.push_str("font-weight:bold;");
+    }
+    if t.italic == Some(true) {
+        css.push_str("font-style:italic;");
+    }
+    if let Some(c) = t.color.as_ref().and_then(|c| css_color(c, theme)) {
+        css.push_str(&format!("color:{c};"));
+    }
+    for (i, name) in ["top", "right", "bottom", "left"].into_iter().enumerate() {
+        if let Some(s) = &t.sides[i] {
+            css.push_str(&side_css(
+                name,
+                &s.style,
+                s.color.as_ref().and_then(|c| css_color(c, theme)),
+            ));
+        }
+    }
+    css
+}
+
+/// What the conditional formats give a cell, as CSS put after the cell's own (which they
+/// change).
+fn cond_css(fx: &super::cond::CondFx, own: &Style) -> String {
+    let mut css = String::new();
+    if let Some(c) = &fx.fill {
+        css.push_str(&format!(
+            "background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};"
+        ));
+    }
+    if let Some(c) = &fx.color {
+        css.push_str(&format!("color:{c};"));
+    }
+    if let Some(b) = fx.bold {
+        css.push_str(if b {
+            "font-weight:bold;"
+        } else {
+            "font-weight:normal;"
+        });
+    }
+    if let Some(i) = fx.italic {
+        css.push_str(if i {
+            "font-style:italic;"
+        } else {
+            "font-style:normal;"
+        });
+    }
+    if fx.underline.is_some() || fx.strike.is_some() {
+        let f = own.font();
+        let underline = fx.underline.unwrap_or_else(|| {
+            f.is_some_and(|f| {
+                let u = f.font_underline().val().value_string();
+                !u.is_empty() && u != "none"
+            })
+        });
+        let strike = fx
+            .strike
+            .unwrap_or_else(|| f.is_some_and(|f| f.strikethrough()));
+        let mut deco = Vec::new();
+        if underline {
+            deco.push("underline");
+        }
+        if strike {
+            deco.push("line-through");
+        }
+        css.push_str(&format!(
+            "text-decoration:{};",
+            if deco.is_empty() {
+                "none".to_string()
+            } else {
+                deco.join(" ")
+            }
+        ));
+    }
+    for (i, name) in ["left", "right", "top", "bottom"].into_iter().enumerate() {
+        if let Some(l) = &fx.sides[i] {
+            css.push_str(&side_css(name, &l.style, l.color.clone()));
+        }
+    }
+    css
+}
+
 fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -> String {
     let mut css = String::new();
     if let Some(pf) = st.fill().and_then(|f| f.pattern_fill()) {
@@ -444,6 +545,20 @@ impl Book {
         };
         // The color scales and data bars of the conditional formats.
         let cond = self.cond_effects(si, shown, &|c| css_color(c, &theme));
+        // What the cells show in the number formats the conditional formats give them.
+        let mut cond_texts: HashMap<(u32, u32), String> = HashMap::new();
+        for ((row, col), fx) in &cond {
+            if let Some(code) = &fx.num_fmt
+                && by_at.contains_key(&(*row, *col))
+            {
+                let v = self.value(si, CellRef::new(*row, *col));
+                cond_texts.insert((*row, *col), self.display(&v, code));
+            }
+        }
+        // The icons of icon sets, once each: "set:index" -> SVG.
+        let mut icons = serde_json::Map::new();
+        // The workbook's own table styles.
+        let custom = drawing.map(|d| d.parts.table_styles()).unwrap_or_default();
         // The colors number formats give what the cells show (`[Red]`).
         let mut format_colors: HashMap<(u32, u32), String> = HashMap::new();
         for c in &cells {
@@ -467,6 +582,9 @@ impl Book {
                 st.set_alignment(a);
                 st
             });
+            // The tables' styles under the cells' own formats.
+            let flags = |name: &str| drawing.and_then(|d| d.parts.table_flags(name));
+            let tables = super::tables::overlays(ws, &custom, &flags);
             let mut at: Vec<(u32, u32)> = by_at.keys().copied().collect();
             for c in ws.cells() {
                 let p = at_of(c);
@@ -475,7 +593,14 @@ impl Book {
                     at.push((p.row, p.col));
                 }
             }
+            // Empty cells a table or a conditional format draws.
+            for (row, col) in tables.keys().chain(cond.keys()) {
+                if shown.contains(CellRef::new(*row, *col)) {
+                    at.push((*row, *col));
+                }
+            }
             at.sort();
+            at.dedup();
             for (row, col) in at {
                 let info = by_at.remove(&(row, col));
                 let kind = info
@@ -488,15 +613,17 @@ impl Book {
                 if let Some(n) = normal.as_ref().filter(|_| style == plain) {
                     style = n.clone();
                 }
-                let mut css = style_css(&style, &theme, kind);
+                let mut css = tables
+                    .get(&(row, col))
+                    .map(|t| table_css(t, &theme))
+                    .unwrap_or_default();
+                css.push_str(&style_css(&style, &theme, kind));
                 if let Some(color) = format_colors.get(&(row, col)) {
                     css.push_str(&format!("color:#{color};"));
                 }
                 let fx = cond.get(&(row, col));
-                if let Some(c) = fx.and_then(|fx| fx.fill.as_ref()) {
-                    css.push_str(&format!(
-                        "background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};"
-                    ));
+                if let Some(fx) = fx {
+                    css.push_str(&cond_css(fx, &style));
                 }
                 let s = intern(css);
                 let mut cell = json!({ "r": row, "c": col });
@@ -510,6 +637,16 @@ impl Book {
                         b.fill.clone()
                     };
                     cell["bar"] = json!({ "x": b.start, "w": b.len, "bg": bg, "axis": b.axis });
+                    if let Some(bd) = &b.border {
+                        cell["bar"]["bd"] = json!(bd);
+                    }
+                }
+                if let Some((set, i)) = fx.and_then(|fx| fx.icon.as_ref())
+                    && let Some(svg) = super::cond::icon_svg(set, *i)
+                {
+                    let key = format!("{set}:{i}");
+                    icons.entry(key.clone()).or_insert_with(|| json!(svg));
+                    cell["ic"] = json!(key);
                 }
                 if fx.is_some_and(|fx| fx.hide_value) {
                     cell["hv"] = json!(true);
@@ -518,14 +655,16 @@ impl Book {
                     cell["s"] = json!(s);
                 }
                 if let Some(c) = info {
-                    cell["t"] = json!(c.text);
+                    cell["t"] = json!(cond_texts.get(&(row, col)).unwrap_or(&c.text));
                     if let Some(f) = &c.formula {
                         cell["f"] = json!(f);
                     }
                     if c.number_format != "General" {
                         cell["n"] = json!(c.number_format);
-                    } else if let Val::Num(x) = c.value {
-                        // For the page to fit the number to its column, as Excel does.
+                    }
+                    // The number (a date's serial): for the page to fit a General number to its
+                    // column, as Excel does, and to sum the cells selected (the status bar).
+                    if let Val::Num(x) | Val::Date(x) = c.value {
                         cell["x"] = json!(x);
                     }
                     cell["k"] = json!(kind);
@@ -624,6 +763,16 @@ impl Book {
                             gridcraft_model::FilterCriterion::Values { values, blanks } => {
                                 json!({ "values": values, "blanks": blanks })
                             }
+                            gridcraft_model::FilterCriterion::Custom { a, b, and } => {
+                                json!({ "custom": { "a": [a.0, a.1], "b": b.as_ref().map(|b| json!([b.0, b.1])), "and": and } })
+                            }
+                            gridcraft_model::FilterCriterion::Top10 {
+                                bottom,
+                                percent,
+                                count,
+                            } => {
+                                json!({ "top": { "bottom": bottom, "percent": percent, "count": count } })
+                            }
                             _ => json!({ "other": true }),
                         };
                         (offset.to_string(), shown)
@@ -631,7 +780,16 @@ impl Book {
                     .collect()
             })
             .unwrap_or_default();
+        let (notes, lists) = self.notes_and_lists(si, &info.name)?;
+        let links = self.links(si);
+        // The panes frozen (rows, columns), as the file keeps them.
+        let frozen = drawing.and_then(|d| d.parts.frozen(&info.name));
         Ok(json!({
+            "frozen": frozen.map(|(r, c)| json!([r, c])),
+            "zoom": drawing.and_then(|d| d.parts.zoom(&info.name)),
+            "notes": notes,
+            "links": links,
+            "lists": lists,
             "name": info.name,
             "codeName": info.code_name,
             "visible": crate::dump::visible_name(info.visible),
@@ -651,12 +809,178 @@ impl Book {
             "gridLines": grid_lines,
             "objects": objects,
             "styles": styles,
+            "icons": icons,
             "cells": out_cells,
             "merges": merges,
             "filter": info.filter,
             "filterColumns": filter_columns,
             "tabColor": self.tab_color(si).map(|c| { let c = c as u32; format!("#{:02x}{:02x}{:02x}", c & 0xff, (c >> 8) & 0xff, (c >> 16) & 0xff) }),
         }))
+    }
+
+    /// The notes (comments) of the sheet: `{ r, c, text, author }`; and its input rules that
+    /// choose from a list, with what the list holds: `{ ranges: [[r1, c1, r2, c2]], values,
+    /// title, prompt, stop, all }` (`values` absent: the list's button is hidden; `stop`: an
+    /// entry not among `all` is refused, with that message, empty for Excel's own).
+    fn notes_and_lists(&mut self, si: usize, sheet: &str) -> Result<(Vec<Json>, Vec<Json>)> {
+        let Ok(ws) = self.file.sheet(si) else {
+            return Err("シートがありません".into());
+        };
+        let notes: Vec<Json> = ws
+            .comments()
+            .iter()
+            .map(|c| {
+                let t = c.text();
+                let text = t
+                    .text()
+                    .map(|t| t.value().to_string())
+                    .or_else(|| t.rich_text().map(|r| r.text().into_owned()))
+                    .unwrap_or_default();
+                json!({
+                    "r": c.coordinate().row_num().saturating_sub(1),
+                    "c": c.coordinate().col_num().saturating_sub(1),
+                    "text": text,
+                    "author": c.author(),
+                })
+            })
+            .collect();
+        // (formula1, ranges, the button shown, title, prompt, the error that stops an entry)
+        type Rule = (String, Vec<RangeRef>, bool, String, String, Option<String>);
+        let mut rules: Vec<Rule> = Vec::new();
+        if let Some(dv) = ws.data_validations() {
+            for v in dv.data_validation_list() {
+                if v.get_type().value_string() != "list" {
+                    continue;
+                }
+                let ranges = v
+                    .sequence_of_references()
+                    .range_collection()
+                    .iter()
+                    .filter_map(|r| RangeRef::parse(&r.range().replace('$', "")))
+                    .collect();
+                let (title, prompt) = if v.show_input_message() {
+                    (v.prompt_title().to_string(), v.prompt().to_string())
+                } else {
+                    (String::new(), String::new())
+                };
+                // An entry not in the list is refused (the style "stop"; the others ask, and
+                // Excel enters it when told to).
+                let stop = (v.show_error_message() && v.error_style().value_string() == "stop")
+                    .then(|| v.error_message().to_string());
+                // (`showDropDown` is true when the button is *not* shown.)
+                rules.push((
+                    v.formula1().to_string(),
+                    ranges,
+                    !v.show_drop_down(),
+                    title,
+                    prompt,
+                    stop,
+                ));
+            }
+        }
+        let mut lists = Vec::new();
+        for (formula, ranges, button, title, prompt, stop) in rules {
+            let mut j = json!({
+                "ranges": ranges
+                    .iter()
+                    .map(|r| json!([r.start.row, r.start.col, r.end.row, r.end.col]))
+                    .collect::<Vec<_>>(),
+            });
+            let values = self.list_values(si, sheet, &formula);
+            if let Some(message) = stop {
+                j["stop"] = json!(message);
+                j["all"] = json!(values);
+            }
+            if button {
+                j["values"] = json!(values);
+            }
+            if !title.is_empty() {
+                j["title"] = json!(title);
+            }
+            if !prompt.is_empty() {
+                j["prompt"] = json!(prompt);
+            }
+            lists.push(j);
+        }
+        Ok((notes, lists))
+    }
+
+    /// The hyperlinks of the sheet's cells: `{ r, c, url, tip }`, or `{ r, c, to, tip }` for a
+    /// place in the workbook (`Sheet2!A1`, a name).
+    fn links(&self, si: usize) -> Vec<Json> {
+        let Ok(ws) = self.file.sheet(si) else {
+            return Vec::new();
+        };
+        let mut out: Vec<Json> = ws
+            .cells()
+            .iter()
+            .filter_map(|c| {
+                let h = c.hyperlink()?;
+                if h.url().is_empty() {
+                    return None;
+                }
+                let at = at_of(c);
+                let mut j = json!({ "r": at.row, "c": at.col });
+                j[if h.location() { "to" } else { "url" }] = json!(h.url());
+                if !h.tooltip().is_empty() {
+                    j["tip"] = json!(h.tooltip());
+                }
+                Some(j)
+            })
+            .collect();
+        out.sort_by_key(|j| (j["r"].as_u64(), j["c"].as_u64()));
+        out
+    }
+
+    /// What a list of an input rule offers: `"a,b,c"`, or the cells of a reference or a name
+    /// (`$A$1:$A$5`, `Sheet2!$A$1:$A$3`, `Items`), at most 1000 of them, empty ones left out.
+    fn list_values(&mut self, si: usize, sheet: &str, formula: &str) -> Vec<String> {
+        let f = formula.trim().trim_start_matches('=');
+        if let Some(inner) = f.strip_prefix('"') {
+            let inner = inner
+                .strip_suffix('"')
+                .unwrap_or(inner)
+                .replace("\"\"", "\"");
+            return inner
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+        // A name: what it refers to (the sheet's own first).
+        let mut text = f.to_string();
+        let names = self.names();
+        let named = names
+            .iter()
+            .filter(|(n, _, _)| n.eq_ignore_ascii_case(f))
+            .min_by_key(|(_, scope, _)| if *scope == Some(si) { 0 } else { 1 });
+        if let Some((_, _, refers)) = named {
+            text = refers.trim().trim_start_matches('=').to_string();
+        }
+        let (on, body) = gridcraft_core::split_sheet(&text);
+        let at = match on {
+            Some(s) => match self.sheet_index(s.trim_start_matches("[0]")) {
+                Some(i) => i,
+                None => return Vec::new(),
+            },
+            None => self.sheet_index(sheet).unwrap_or(si),
+        };
+        let Some(range) = RangeRef::parse(&body.replace('$', "")).filter(|r| r.count() <= 100_000)
+        else {
+            return Vec::new();
+        };
+        let Ok(cells) = self.cells(at, range) else {
+            return Vec::new();
+        };
+        let mut cells: Vec<CellInfo> = cells;
+        cells.sort_by_key(|c| (c.at.row, c.at.col));
+        cells
+            .into_iter()
+            .map(|c| c.text)
+            .filter(|t| !t.is_empty())
+            .take(1000)
+            .collect()
     }
 
     /// The objects of the sheet's drawing, with what its controls need of the cells.

@@ -67,6 +67,48 @@ impl Parts {
                     format!("{name}#view"),
                     format!("{}/>", head[start..i + j].trim_end_matches('/')).into_bytes(),
                 );
+                // Its pane (the rows and columns frozen), the first element in it.
+                let rest = if head[..i + j].ends_with('/') {
+                    ""
+                } else {
+                    &head[i + j..]
+                };
+                let end = rest.find("sheetView>").unwrap_or(rest.len());
+                if let Some(p) = rest[..end].find("pane ")
+                    && rest[..p].ends_with(['<', ':'])
+                    && let Some(q) = rest[p..].find('>')
+                {
+                    let open = rest[..p].rfind('<').unwrap_or(p);
+                    files.insert(
+                        format!("{name}#pane"),
+                        format!("{}/>", rest[open..p + q].trim_end_matches('/')).into_bytes(),
+                    );
+                }
+            }
+        }
+        // What the tables show of their style (`tableStyleInfo`), by the table's name.
+        for name in names
+            .iter()
+            .filter(|n| n.starts_with("xl/tables/") && n.ends_with(".xml"))
+        {
+            let Some(b) = read_part(&mut zr, name) else {
+                continue;
+            };
+            let xml = String::from_utf8_lossy(&b);
+            let Some(root) = parse(xml.as_bytes()) else {
+                continue;
+            };
+            if let (Some(table), Some(info)) = (root.attr("name"), root.child("tableStyleInfo")) {
+                let on = |a: &str| u8::from(matches!(info.attr(a), Some("1" | "true")));
+                files.insert(
+                    format!("#table:{table}"),
+                    vec![
+                        on("showFirstColumn"),
+                        on("showLastColumn"),
+                        on("showRowStripes"),
+                        on("showColumnStripes"),
+                    ],
+                );
             }
         }
         for name in ["xl/workbook.xml", "xl/_rels/workbook.xml.rels"] {
@@ -83,6 +125,16 @@ impl Parts {
             }
             if let Some(xf) = element_text(&styles, "cellXfs").and_then(|xfs| first_xf(&xfs)) {
                 files.insert("#xf0".into(), xf.into_bytes());
+            }
+            // The workbook's own table styles, with the formats they use.
+            if let Some(ts) =
+                element_text(&styles, "tableStyles").filter(|t| t.contains("tableStyleElement"))
+            {
+                let dxfs = element_text(&styles, "dxfs").unwrap_or_default();
+                files.insert(
+                    "#tableStyles".into(),
+                    format!("<styleSheet>{dxfs}{ts}</styleSheet>").into_bytes(),
+                );
             }
         }
         if !names.iter().any(|n| n.starts_with("xl/drawings/")) {
@@ -204,6 +256,59 @@ impl Parts {
     pub fn grid_lines(&self, sheet: &str) -> Option<bool> {
         let view = self.xml(&format!("{}#view", self.sheet_part(sheet)?))?;
         Some(!matches!(view.attr("showGridLines"), Some("0" | "false")))
+    }
+
+    /// What a table (by its name) shows of its style: first column, last column, row stripes,
+    /// column stripes.
+    pub(crate) fn table_flags(&self, table: &str) -> Option<crate::book::tables::Shown> {
+        let f = self.files.get(&format!("#table:{table}"))?;
+        (f.len() == 4).then(|| (f[0] == 1, f[1] == 1, f[2] == 1, f[3] == 1))
+    }
+
+    /// The workbook's own table styles by name.
+    pub(crate) fn table_styles(&self) -> HashMap<String, crate::book::tables::StyleDef> {
+        self.xml("#tableStyles")
+            .map(|root| crate::book::tables::custom_styles(&root))
+            .unwrap_or_default()
+    }
+
+    /// The zoom (%) the sheet named `sheet` is shown at, when the file says (and it is not 100).
+    pub fn zoom(&self, sheet: &str) -> Option<u32> {
+        let view = self.xml(&format!("{}#view", self.sheet_part(sheet)?))?;
+        view.attr("zoomScale")
+            .and_then(|v| v.parse::<u32>().ok())
+            .filter(|z| (10..=400).contains(z) && *z != 100)
+    }
+
+    /// The rows and columns the sheet named `sheet` keeps on the screen (its panes frozen): as
+    /// many as are above and to the left of the pane, counted from A1 (rows scrolled away above
+    /// a frozen pane count as frozen too).
+    pub fn frozen(&self, sheet: &str) -> Option<(u32, u32)> {
+        let part = self.sheet_part(sheet)?;
+        let pane = self.xml(&format!("{part}#pane"))?;
+        if !matches!(pane.attr("state"), Some("frozen" | "frozenSplit")) {
+            return None;
+        }
+        let split = |name: &str| {
+            pane.attr(name)
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| *v > 0.0)
+                .map(|v| v.round() as u32)
+                .unwrap_or(0)
+        };
+        let (rows, cols) = (split("ySplit"), split("xSplit"));
+        if rows == 0 && cols == 0 {
+            return None;
+        }
+        let top = self
+            .xml(&format!("{part}#view"))
+            .and_then(|v| v.attr("topLeftCell").map(str::to_string))
+            .and_then(|a| gridcraft_core::CellRef::parse(&a.replace('$', "")))
+            .unwrap_or(gridcraft_core::CellRef::new(0, 0));
+        Some((
+            if rows > 0 { top.row + rows } else { 0 },
+            if cols > 0 { top.col + cols } else { 0 },
+        ))
     }
 
     /// The alignment of the cells without a format of their own (the first of cellXfs), when

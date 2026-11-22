@@ -332,6 +332,8 @@ pub fn view_page(
     }
     if editable {
         data["editable"] = true.into();
+        // For the completion of formulas typed into the cells.
+        data["functions"] = view::functions();
     }
     Ok(view::page(&data))
 }

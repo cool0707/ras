@@ -1,11 +1,13 @@
-//! The color scales and data bars of a sheet's conditional formats, worked out for the grid as
-//! xljs works them out for printing (`src/api/xlsx_cond.rs` there). The rules that give a
-//! format (cellIs, expression, top10, ...) and icon sets are not drawn.
+//! The conditional formats of a sheet worked out for the grid, as xljs works them out for
+//! printing (`src/api/xlsx_cond.rs` there): the rules that give a format (cell values, formulas,
+//! top / bottom, above / below average, duplicates, text, blanks, errors, dates), color scales,
+//! data bars and icon sets. The rules are those umya-spreadsheet reads, the Excel 2010 ones
+//! (x14) too, in priority order; a rule with "stop if true" stops the later ones of its cells.
 
 use std::collections::HashMap;
 
 use umya_spreadsheet::{
-    Color, ConditionalFormatValueObject, ConditionalFormattingRule, EnumTrait, Worksheet,
+    Color, ConditionalFormatValueObject, ConditionalFormattingRule, EnumTrait, Style, Worksheet,
 };
 
 use super::*;
@@ -17,29 +19,115 @@ pub struct Bar {
     pub len: f64,
     /// #RRGGBB.
     pub fill: String,
+    pub border: Option<String>,
     pub gradient: bool,
-    /// The bar grows to the left (a negative value).
+    /// The bar grows to the left (a negative value, or right to left).
     pub leftward: bool,
     /// The axis between negative and positive values, in fractions of the cell's width.
     pub axis: Option<f64>,
 }
 
-/// What the color scales and data bars give a cell.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct CondFx {
-    /// The color of a color scale, #RRGGBB.
-    pub fill: Option<String>,
-    pub bar: Option<Bar>,
-    /// The data bar is shown without the value.
-    pub hide_value: bool,
+/// A border line a format gives: its style (`thin`, `double`, ...) and #RRGGBB (None: black).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Line {
+    pub style: String,
+    pub color: Option<String>,
 }
 
-struct Rule<'a> {
+/// What the conditional formats give a cell.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CondFx {
+    /// A fill (a color scale's or a format's), #RRGGBB.
+    pub fill: Option<String>,
+    pub color: Option<String>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub strike: Option<bool>,
+    pub underline: Option<bool>,
+    pub num_fmt: Option<String>,
+    /// left, right, top, bottom.
+    pub sides: [Option<Line>; 4],
+    pub bar: Option<Bar>,
+    /// An icon: its set and its index in the set, from the lowest values.
+    pub icon: Option<(String, usize)>,
+    /// The value is not shown (a data bar or an icon set that shows only the bar / the icon).
+    pub hide_value: bool,
+    stopped: bool,
+}
+
+/// A threshold of a color scale, data bar or icon set.
+#[derive(Debug, Clone, Default)]
+struct Cfvo {
+    /// min, max, num, percent, percentile, formula, autoMin, autoMax.
+    kind: String,
+    val: String,
+    /// The value itself reaches the threshold (icon sets).
+    gte: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct BarDef {
+    color: Option<Color>,
+    /// Lengths in percent of the cell for the lowest and the highest values.
+    min_len: f64,
+    max_len: f64,
+    gradient: bool,
+    border: Option<Color>,
+    negative: Option<Color>,
+    negative_border: Option<Color>,
+    negative_same: bool,
+    negative_border_same: bool,
+    /// automatic, middle, none.
+    axis: String,
+    rtl: bool,
+    /// Written with the Excel 2010 extension (negative values grow from an axis).
+    ext: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct IconDef {
+    set: String,
+    reverse: bool,
+    /// Icons chosen one by one (set, index), from the lowest values.
+    custom: Vec<(String, usize)>,
+}
+
+/// A differential format: what a rule's format changes.
+#[derive(Debug, Clone, Default)]
+struct Dxf {
+    fill: Option<Color>,
+    color: Option<Color>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    strike: Option<bool>,
+    underline: Option<bool>,
+    num_fmt: Option<String>,
+    /// left, right, top, bottom.
+    sides: [Option<(String, Option<Color>)>; 4],
+}
+
+#[derive(Debug, Clone, Default)]
+struct Rule {
     ranges: Vec<RangeRef>,
+    kind: String,
     priority: i32,
-    rule: &'a ConditionalFormattingRule,
-    /// The Excel 2010 rule of a data bar (its lengths, axis, gradient).
-    ext: Option<&'a ConditionalFormattingRule>,
+    stop: bool,
+    operator: String,
+    text: String,
+    formulas: Vec<String>,
+    rank: u32,
+    percent: bool,
+    bottom: bool,
+    above_average: bool,
+    equal_average: bool,
+    std_dev: u32,
+    time_period: String,
+    dxf: Option<Dxf>,
+    cfvo: Vec<Cfvo>,
+    colors: Vec<Color>,
+    bar: Option<BarDef>,
+    icons: Option<IconDef>,
+    show_value: bool,
 }
 
 fn ranges(sqref: &str) -> Vec<RangeRef> {
@@ -49,8 +137,154 @@ fn ranges(sqref: &str) -> Vec<RangeRef> {
         .collect()
 }
 
-/// The color scale and data bar rules of a sheet, in priority order.
-fn rules(ws: &Worksheet) -> Vec<Rule<'_>> {
+/// A color that is given (not automatic, not the system foreground).
+fn given(c: &Color) -> Option<Color> {
+    (c.has_value() && !c.automatic() && c.indexed() != 64).then(|| c.clone())
+}
+
+fn cfvo(v: &ConditionalFormatValueObject) -> Cfvo {
+    Cfvo {
+        kind: v.get_type().value_string().to_string(),
+        val: v.val().to_string(),
+        gte: v.gte(),
+    }
+}
+
+fn style_dxf(st: &Style) -> Dxf {
+    let mut d = Dxf::default();
+    if let Some(f) = st.font() {
+        d.bold = f.bold().then_some(true);
+        d.italic = f.italic().then_some(true);
+        d.strike = f.strikethrough().then_some(true);
+        d.underline = (f.font_underline().val().value_string() != "none").then_some(true);
+        d.color = given(f.color());
+    }
+    d.num_fmt = st.numbering_format().map(|n| n.format_code().to_string());
+    // A dxf's solid fill is its background color (and its pattern type is not given).
+    if let Some(p) = st.fill().and_then(|f| f.pattern_fill()) {
+        d.fill = p
+            .background_color()
+            .and_then(given)
+            .or_else(|| p.foreground_color().and_then(given));
+    }
+    if let Some(b) = st.borders() {
+        for (i, s) in [b.left(), b.right(), b.top(), b.bottom()]
+            .into_iter()
+            .enumerate()
+        {
+            let style = s.border_style();
+            if !style.is_empty() && style != "none" {
+                d.sides[i] = Some((style.to_string(), s.color().as_ref().and_then(given)));
+            }
+        }
+    }
+    d
+}
+
+fn read_rule(r: &ConditionalFormattingRule, x14: bool) -> Rule {
+    let kind = r.get_type().value_string().to_string();
+    let mut rule = Rule {
+        operator: if kind == "cellIs" {
+            r.operator().value_string().to_string()
+        } else {
+            String::new()
+        },
+        time_period: if kind == "timePeriod" {
+            r.time_period().value_string().to_string()
+        } else {
+            String::new()
+        },
+        kind,
+        // Excel numbers its rules from 1; none comes last.
+        priority: match r.priority() {
+            0 => i32::MAX,
+            p => p,
+        },
+        stop: r.stop_if_true(),
+        text: r.text().to_string(),
+        rank: match r.rank() {
+            0 => 10,
+            n => n,
+        },
+        percent: r.percent(),
+        bottom: r.bottom(),
+        above_average: r.above_average(),
+        equal_average: r.equal_average(),
+        std_dev: r.std_dev().max(0) as u32,
+        formulas: r
+            .formula_collection()
+            .iter()
+            .map(|f| f.address_str().trim().to_string())
+            .collect(),
+        dxf: r.style().map(style_dxf),
+        show_value: true,
+        ..Default::default()
+    };
+    if rule.formulas.is_empty()
+        && let Some(f) = r.formula()
+    {
+        let s = f.address_str();
+        if !s.trim().is_empty() {
+            rule.formulas.push(s.trim().to_string());
+        }
+    }
+    if let Some(cs) = r.color_scale() {
+        rule.cfvo = cs.cfvo_collection().iter().map(cfvo).collect();
+        rule.colors = cs.color_collection().iter().filter_map(given).collect();
+    }
+    if let Some(db) = r.data_bar() {
+        rule.cfvo = db.cfvo_collection().iter().map(cfvo).collect();
+        rule.show_value = db.show_value();
+        rule.bar = Some(BarDef {
+            color: db
+                .color_collection()
+                .first()
+                .and_then(given)
+                .or_else(|| db.fill_color().and_then(given)),
+            // Excel 2007 bars run from 10% to 90% of the cell; Excel 2010 ones say.
+            min_len: db.min_length().map_or(10.0, f64::from),
+            max_len: db.max_length().map_or(90.0, f64::from),
+            gradient: db.gradient(),
+            border: if x14 && db.border() {
+                db.border_color().and_then(given)
+            } else {
+                None
+            },
+            negative: db.negative_fill_color().and_then(given),
+            negative_border: db.negative_border_color().and_then(given),
+            negative_same: db.negative_bar_color_same_as_positive(),
+            negative_border_same: db.negative_bar_border_color_same_as_positive(),
+            axis: match db.axis_position() {
+                "" => "automatic".to_string(),
+                a => a.to_string(),
+            },
+            rtl: db.direction() == "rightToLeft",
+            ext: x14,
+        });
+    }
+    if let Some(is) = r.icon_set() {
+        rule.cfvo = is.cfvo_collection().iter().map(cfvo).collect();
+        rule.show_value = is.show_value();
+        let custom = if is.custom() {
+            is.cf_icon_collection()
+                .iter()
+                .map(|i| (i.icon_set().to_string(), i.icon_id() as usize))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        rule.icons = Some(IconDef {
+            set: is.icon_set().to_string(),
+            reverse: is.reverse(),
+            custom,
+        });
+    }
+    rule
+}
+
+/// The rules of a sheet (the Excel 2010 ones too), in priority order.
+fn sheet_rules(ws: &Worksheet) -> Vec<Rule> {
+    // The Excel 2010 rules, to join the data bars written in both places by their id.
     let mut ext: Vec<Option<(&ConditionalFormattingRule, Vec<RangeRef>)>> = Vec::new();
     for cf in ws.conditional_formatting_2010_collection() {
         let rs = ranges(&cf.sequence_of_references().get_sqref());
@@ -58,52 +292,80 @@ fn rules(ws: &Worksheet) -> Vec<Rule<'_>> {
             ext.push(Some((r, rs.clone())));
         }
     }
-    let mut out = Vec::new();
+    let mut rules = Vec::new();
     for cf in ws.conditional_formatting_collection() {
         let rs = ranges(&cf.sequence_of_references().get_sqref());
         for r in cf.conditional_collection() {
+            let mut rule = read_rule(r, false);
+            rule.ranges = rs.clone();
             let id = r.ext_id();
-            let x = (!id.is_empty())
-                .then(|| {
-                    ext.iter_mut()
-                        .find(|e| e.as_ref().is_some_and(|(x, _)| x.id() == id))
-                        .and_then(Option::take)
-                        .map(|(x, _)| x)
-                })
-                .flatten();
-            out.push(Rule {
-                ranges: rs.clone(),
-                priority: r.priority(),
-                rule: r,
-                ext: x,
-            });
+            if !id.is_empty()
+                && let Some((x, _)) = ext
+                    .iter_mut()
+                    .find(|e| e.as_ref().is_some_and(|(x, _)| x.id() == id))
+                    .and_then(Option::take)
+            {
+                let more = read_rule(x, true);
+                if let Some(mut bar) = more.bar {
+                    // The color stays in the first rule unless the extension has one.
+                    if bar.color.is_none() {
+                        bar.color = rule.bar.as_ref().and_then(|b| b.color.clone());
+                    }
+                    rule.bar = Some(bar);
+                    rule.cfvo = more.cfvo;
+                }
+            }
+            rules.push(rule);
         }
     }
     for (x, rs) in ext.into_iter().flatten() {
-        out.push(Rule {
-            ranges: rs,
-            priority: x.priority(),
-            rule: x,
-            ext: Some(x),
-        });
+        let mut rule = read_rule(x, true);
+        rule.ranges = rs;
+        rules.push(rule);
     }
-    out.retain(|r| {
-        !r.ranges.is_empty() && matches!(r.rule.get_type().value_string(), "colorScale" | "dataBar")
-    });
-    // Excel numbers its rules from 1; none comes last.
-    out.sort_by_key(|r| {
-        if r.priority == 0 {
-            i32::MAX
-        } else {
-            r.priority
-        }
-    });
-    out
+    rules.retain(|r| !r.ranges.is_empty());
+    rules.sort_by_key(|r| r.priority);
+    rules
 }
 
-/// A color that is given (not automatic, not the system foreground).
-fn given(c: &Color) -> bool {
-    c.has_value() && !c.automatic() && c.indexed() != 64
+fn num(v: &Value) -> Option<f64> {
+    match v {
+        Value::Number(n) => Some(*n),
+        _ => None,
+    }
+}
+
+fn truthy(v: &Value) -> bool {
+    match v {
+        Value::Bool(b) => *b,
+        Value::Number(n) => *n != 0.0,
+        Value::Text(s) => s.eq_ignore_ascii_case("true"),
+        _ => false,
+    }
+}
+
+/// Excel's comparison of a cell's value with an operand: numbers below text below booleans,
+/// text without case; an empty cell is 0 or "".
+fn cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
+    use Value::*;
+    let rank = |v: &Value| match v {
+        Number(_) => 0,
+        Text(_) => 1,
+        Bool(_) => 2,
+        _ => 3,
+    };
+    match (a, b) {
+        (Error(_), _) | (_, Error(_)) | (Array(_), _) | (_, Array(_)) => None,
+        (Empty, Empty) => Some(std::cmp::Ordering::Equal),
+        (Empty, Number(_)) => cmp(&Number(0.0), b),
+        (Empty, Text(_)) => cmp(&Value::Text("".into()), b),
+        (Empty, Bool(_)) => cmp(&Bool(false), b),
+        (_, Empty) => cmp(b, a).map(|o| o.reverse()),
+        (Number(x), Number(y)) => x.partial_cmp(y),
+        (Text(x), Text(y)) => Some(x.to_lowercase().cmp(&y.to_lowercase())),
+        (Bool(x), Bool(y)) => Some(x.cmp(y)),
+        _ => Some(rank(a).cmp(&rank(b))),
+    }
 }
 
 /// PERCENTILE.INC of sorted values.
@@ -119,21 +381,6 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
     } else {
         sorted[i]
     }
-}
-
-/// A threshold's value among the numbers of a rule (sorted); None for a formula.
-fn threshold(v: &ConditionalFormatValueObject, nums: &[f64]) -> Option<f64> {
-    let (min, max) = (*nums.first()?, *nums.last()?);
-    let given = || v.val().trim().parse::<f64>().ok();
-    Some(match v.get_type().value_string() {
-        "min" => min,
-        "max" => max,
-        "autoMin" => min.min(0.0),
-        "autoMax" => max.max(0.0),
-        "percent" => min + given()? / 100.0 * (max - min),
-        "percentile" => percentile(nums, given()? / 100.0),
-        _ => given()?,
-    })
 }
 
 fn rgb(css: &str) -> Option<(f64, f64, f64)> {
@@ -156,9 +403,42 @@ pub fn mix(a: &str, b: &str, t: f64) -> String {
     }
 }
 
+/// Whether the date `d` (days since 1970-01-01) is in the period `period` of today's `t`.
+fn in_period(d: i64, t: i64, period: &str) -> bool {
+    use gridcraft_core::date::civil_from_days;
+    // Weeks start on Sunday (1970-01-01 was a Thursday).
+    let week = |x: i64| x - (x + 4).rem_euclid(7);
+    let month = |x: i64, add: i32| {
+        let (y, m, _) = civil_from_days(x);
+        let n = y * 12 + m as i32 - 1 + add;
+        (n.div_euclid(12), n.rem_euclid(12) as u32 + 1)
+    };
+    let (dy, dm, _) = civil_from_days(d);
+    match period {
+        "today" => d == t,
+        "yesterday" => d == t - 1,
+        "tomorrow" => d == t + 1,
+        "last7Days" => (t - 6..=t).contains(&d),
+        "thisWeek" => week(d) == week(t),
+        "lastWeek" => week(d) == week(t) - 7,
+        "nextWeek" => week(d) == week(t) + 7,
+        "thisMonth" => (dy, dm) == month(t, 0),
+        "lastMonth" => (dy, dm) == month(t, -1),
+        "nextMonth" => (dy, dm) == month(t, 1),
+        _ => false,
+    }
+}
+
+enum Eff {
+    Dxf,
+    Fill(String),
+    Bar(Bar),
+    Icon(Option<(String, usize)>),
+}
+
 impl Book {
-    /// What the color scales and data bars of sheet `si` give its cells within `shown`.
-    /// `css` turns a color into #RRGGBB.
+    /// What the conditional formats of sheet `si` give its cells within `shown`. `css` turns a
+    /// color into #RRGGBB.
     pub(super) fn cond_effects(
         &mut self,
         si: usize,
@@ -171,176 +451,641 @@ impl Book {
             .ok()
             .and_then(|s| s.used_range)
             .unwrap_or(RangeRef::cell(CellRef::new(0, 0)));
-        let Ok(ws) = self.file.sheet(si) else {
-            return out;
+        let rules = match self.file.sheet(si) {
+            Ok(ws) => sheet_rules(ws),
+            Err(_) => return out,
         };
-        // The rules, read first: the values are read from the book afterwards.
-        struct Work {
-            cells: Vec<CellRef>,
-            kind: String,
-            cfvo: Vec<ConditionalFormatValueObject>,
-            colors: Vec<String>,
-            bar: Option<(String, f64, f64, bool, String, bool)>,
-        }
-        let mut work = Vec::new();
-        for r in rules(ws) {
-            let mut cells = Vec::new();
-            for range in &r.ranges {
-                // Clipped to the used part of the sheet (a whole column holds no more).
+        let mut values: HashMap<CellRef, Value> = HashMap::new();
+        for rule in &rules {
+            // The cells of the rule, clipped to the used part of the sheet (and to 200,000).
+            let mut cells: Vec<CellRef> = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for range in &rule.ranges {
                 let Some(clip) = range.intersection(&used) else {
                     continue;
                 };
-                for row in clip.start.row..=clip.end.row {
-                    for col in clip.start.col..=clip.end.col {
-                        cells.push(CellRef::new(row, col));
+                for at in clip.iter() {
+                    if cells.len() >= 200_000 {
+                        break;
+                    }
+                    if seen.insert(at) {
+                        cells.push(at);
                     }
                 }
             }
-            let kind = r.rule.get_type().value_string().to_string();
-            let mut w = Work {
-                cells,
-                kind,
-                cfvo: Vec::new(),
-                colors: Vec::new(),
-                bar: None,
-            };
-            if let Some(cs) = r.rule.color_scale() {
-                w.cfvo = cs.cfvo_collection().to_vec();
-                w.colors = cs
-                    .color_collection()
-                    .iter()
-                    .filter(|c| given(c))
-                    .filter_map(css)
-                    .collect();
+            if cells.is_empty() {
+                continue;
             }
-            if let Some(db) = r.rule.data_bar() {
-                let x = r.ext.and_then(|x| x.data_bar());
-                let ext = x.is_some();
-                let x = x.unwrap_or(db);
-                w.cfvo = x.cfvo_collection().to_vec();
-                let color = db
-                    .color_collection()
-                    .first()
-                    .or_else(|| x.color_collection().first())
-                    .filter(|c| given(c))
-                    .and_then(css)
-                    .unwrap_or_else(|| "#638EC6".into());
-                // Excel 2007 bars run from 10% to 90% of the cell; Excel 2010 ones say.
-                let min_len = x.min_length().map_or(10.0, f64::from) / 100.0;
-                let max_len = x.max_length().map_or(90.0, f64::from) / 100.0;
-                let axis = match x.axis_position() {
-                    "" => "automatic".to_string(),
-                    a => a.to_string(),
-                };
-                w.bar = Some((color, min_len, max_len, x.gradient(), axis, ext));
-                if !db.show_value() {
-                    w.kind = "dataBar-only".into();
-                }
-            }
-            work.push(w);
-        }
-        for w in work {
-            let vals: Vec<Option<f64>> = w
-                .cells
+            let vals: Vec<Value> = cells
                 .iter()
-                .map(|c| match self.value(si, *c) {
-                    gridcraft_core::Value::Number(n) => Some(n),
-                    _ => None,
+                .map(|at| {
+                    values
+                        .entry(*at)
+                        .or_insert_with(|| self.value(si, *at).scalar())
+                        .clone()
                 })
                 .collect();
-            let mut nums: Vec<f64> = vals.iter().flatten().copied().collect();
+            let mut nums: Vec<f64> = vals.iter().filter_map(num).collect();
             nums.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            if w.kind == "colorScale" {
-                let th: Option<Vec<f64>> = w.cfvo.iter().map(|v| threshold(v, &nums)).collect();
-                let Some(th) = th else { continue };
-                if th.len() < 2 || w.colors.len() != th.len() {
+            let base = rule.ranges[0].start;
+            for (at, eff) in self.hits(si, rule, &cells, &vals, &nums, base, css) {
+                let fx = out.entry((at.row, at.col)).or_default();
+                if fx.stopped {
                     continue;
                 }
+                match eff {
+                    Eff::Dxf => {
+                        if let Some(d) = &rule.dxf {
+                            add_dxf(fx, d, css);
+                        }
+                    }
+                    Eff::Fill(c) => {
+                        if fx.fill.is_none() {
+                            fx.fill = Some(c);
+                        }
+                    }
+                    Eff::Bar(bar) => {
+                        if fx.bar.is_none() && fx.icon.is_none() {
+                            fx.bar = Some(bar);
+                            fx.hide_value |= !rule.show_value;
+                        }
+                    }
+                    Eff::Icon(i) => {
+                        if fx.icon.is_none() && fx.bar.is_none() {
+                            fx.icon = i;
+                            fx.hide_value |= !rule.show_value;
+                        }
+                    }
+                }
+                if rule.stop {
+                    fx.stopped = true;
+                }
+            }
+        }
+        out.retain(|(r, c), f| {
+            shown.contains(CellRef::new(*r, *c))
+                && *f
+                    != CondFx {
+                        stopped: f.stopped,
+                        ..Default::default()
+                    }
+        });
+        out
+    }
+
+    /// A threshold's value among the numbers of a rule (sorted).
+    fn threshold(&mut self, si: usize, v: &Cfvo, nums: &[f64]) -> Option<f64> {
+        let (min, max) = (*nums.first()?, *nums.last()?);
+        let mut given = || -> Option<f64> {
+            v.val
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .or_else(|| num(&self.evaluate(si, &v.val).scalar()))
+        };
+        Some(match v.kind.as_str() {
+            "min" => min,
+            "max" => max,
+            "autoMin" => min.min(0.0),
+            "autoMax" => max.max(0.0),
+            "percent" => min + given()? / 100.0 * (max - min),
+            "percentile" => percentile(nums, given()? / 100.0),
+            _ => given()?,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn hits(
+        &mut self,
+        si: usize,
+        rule: &Rule,
+        cells: &[CellRef],
+        vals: &[Value],
+        nums: &[f64],
+        base: CellRef,
+        css: &dyn Fn(&Color) -> Option<String>,
+    ) -> Vec<(CellRef, Eff)> {
+        let mut out = Vec::new();
+        match rule.kind.as_str() {
+            "colorScale" => {
+                let th: Option<Vec<f64>> = rule
+                    .cfvo
+                    .iter()
+                    .map(|v| self.threshold(si, v, nums))
+                    .collect();
+                let colors: Vec<String> = rule.colors.iter().filter_map(css).collect();
+                let Some(th) = th else { return out };
+                if th.len() < 2 || colors.len() != th.len() {
+                    return out;
+                }
                 let k = th.len() - 1;
-                for (c, x) in w.cells.iter().zip(&vals) {
-                    let Some(x) = *x else { continue };
-                    let color = if x <= th[0] {
-                        w.colors[0].clone()
+                for (at, v) in cells.iter().zip(vals) {
+                    let Some(x) = num(v) else { continue };
+                    let c = if x <= th[0] {
+                        colors[0].clone()
                     } else if x >= th[k] {
-                        w.colors[k].clone()
+                        colors[k].clone()
                     } else {
                         let i = (0..k).find(|&i| x <= th[i + 1]).unwrap_or(k - 1);
                         let span = th[i + 1] - th[i];
                         let t = if span > 0.0 { (x - th[i]) / span } else { 0.0 };
-                        mix(&w.colors[i], &w.colors[i + 1], t)
+                        mix(&colors[i], &colors[i + 1], t)
                     };
-                    let fx = out.entry((c.row, c.col)).or_default();
-                    if fx.fill.is_none() {
-                        fx.fill = Some(color);
-                    }
+                    out.push((*at, Eff::Fill(c)));
                 }
-            } else if let Some((fill, min_l, max_l, gradient, axis, ext)) = &w.bar {
-                let lo = w.cfvo.first().and_then(|v| threshold(v, &nums));
-                let hi = w.cfvo.get(1).and_then(|v| threshold(v, &nums));
+            }
+            "dataBar" => {
+                let Some(def) = &rule.bar else { return out };
+                let lo = rule.cfvo.first().and_then(|v| self.threshold(si, v, nums));
+                let hi = rule.cfvo.get(1).and_then(|v| self.threshold(si, v, nums));
                 let (Some(lo), Some(hi)) = (lo, hi) else {
-                    continue;
+                    return out;
                 };
-                for (c, x) in w.cells.iter().zip(&vals) {
-                    let Some(x) = *x else { continue };
-                    let bar = if *ext && axis != "none" && (lo < 0.0 || axis == "middle") {
-                        // Bars grow both ways from the axis (negative ones in red).
-                        let (a, neg, pos) = if axis == "middle" {
-                            let m = lo.abs().max(hi.abs());
-                            (0.5, m, m)
+                let fill = def
+                    .color
+                    .as_ref()
+                    .and_then(css)
+                    .unwrap_or_else(|| "#638EC6".into());
+                let neg_fill = if def.negative_same {
+                    fill.clone()
+                } else {
+                    def.negative
+                        .as_ref()
+                        .and_then(css)
+                        .unwrap_or_else(|| "#FF0000".into())
+                };
+                let border = def.border.as_ref().and_then(css);
+                let neg_border = if def.negative_border_same {
+                    border.clone()
+                } else {
+                    def.negative_border
+                        .as_ref()
+                        .and_then(css)
+                        .or(border.clone())
+                };
+                let (min_l, max_l) = (def.min_len / 100.0, def.max_len / 100.0);
+                for (at, v) in cells.iter().zip(vals) {
+                    let Some(x) = num(v) else { continue };
+                    let mut bar =
+                        if def.ext && def.axis != "none" && (lo < 0.0 || def.axis == "middle") {
+                            // Bars grow both ways from the axis.
+                            let (a, neg, pos) = if def.axis == "middle" {
+                                let m = lo.abs().max(hi.abs());
+                                (0.5, m, m)
+                            } else {
+                                let (n, p) = (-lo.min(0.0), hi.max(0.0));
+                                (if n + p > 0.0 { n / (n + p) } else { 0.5 }, n, p)
+                            };
+                            let x = x.clamp(lo.min(0.0), hi.max(0.0));
+                            if x >= 0.0 {
+                                let len = if pos > 0.0 {
+                                    (1.0 - a) * (x / pos)
+                                } else {
+                                    0.0
+                                };
+                                Bar {
+                                    start: a,
+                                    len,
+                                    fill: fill.clone(),
+                                    border: border.clone(),
+                                    gradient: def.gradient,
+                                    leftward: false,
+                                    axis: Some(a),
+                                }
+                            } else {
+                                let len = if neg > 0.0 { a * (-x / neg) } else { 0.0 };
+                                Bar {
+                                    start: a - len,
+                                    len,
+                                    fill: neg_fill.clone(),
+                                    border: neg_border.clone(),
+                                    gradient: def.gradient,
+                                    leftward: true,
+                                    axis: Some(a),
+                                }
+                            }
                         } else {
-                            let (n, p) = (-lo.min(0.0), hi.max(0.0));
-                            (if n + p > 0.0 { n / (n + p) } else { 0.5 }, n, p)
-                        };
-                        let x = x.clamp(lo.min(0.0), hi.max(0.0));
-                        if x >= 0.0 {
-                            let len = if pos > 0.0 {
-                                (1.0 - a) * (x / pos)
+                            let t = if hi > lo {
+                                ((x - lo) / (hi - lo)).clamp(0.0, 1.0)
                             } else {
                                 0.0
                             };
                             Bar {
-                                start: a,
-                                len,
+                                start: 0.0,
+                                len: min_l + t * (max_l - min_l),
                                 fill: fill.clone(),
-                                gradient: *gradient,
+                                border: border.clone(),
+                                gradient: def.gradient,
                                 leftward: false,
-                                axis: Some(a),
+                                axis: None,
                             }
-                        } else {
-                            let len = if neg > 0.0 { a * (-x / neg) } else { 0.0 };
-                            Bar {
-                                start: a - len,
-                                len,
-                                fill: "#FF0000".into(),
-                                gradient: *gradient,
-                                leftward: true,
-                                axis: Some(a),
-                            }
-                        }
-                    } else {
-                        let t = if hi > lo {
-                            ((x - lo) / (hi - lo)).clamp(0.0, 1.0)
-                        } else {
-                            0.0
                         };
-                        Bar {
-                            start: 0.0,
-                            len: min_l + t * (max_l - min_l),
-                            fill: fill.clone(),
-                            gradient: *gradient,
-                            leftward: false,
-                            axis: None,
+                    if def.rtl {
+                        bar.start = 1.0 - bar.start - bar.len;
+                        bar.leftward = !bar.leftward;
+                        bar.axis = bar.axis.map(|a| 1.0 - a);
+                    }
+                    out.push((*at, Eff::Bar(bar)));
+                }
+            }
+            "iconSet" => {
+                let Some(def) = &rule.icons else { return out };
+                let th: Vec<Option<f64>> = rule
+                    .cfvo
+                    .iter()
+                    .map(|v| self.threshold(si, v, nums))
+                    .collect();
+                let n = th.len();
+                if n == 0 {
+                    return out;
+                }
+                for (at, v) in cells.iter().zip(vals) {
+                    let Some(x) = num(v) else { continue };
+                    let mut idx = 0;
+                    for i in (1..n).rev() {
+                        if let Some(t) = th[i]
+                            && (if rule.cfvo[i].gte { x >= t } else { x > t })
+                        {
+                            idx = i;
+                            break;
+                        }
+                    }
+                    if def.reverse {
+                        idx = n - 1 - idx;
+                    }
+                    let icon = match def.custom.get(idx) {
+                        Some((set, _)) if set == "NoIcons" => None,
+                        Some((set, i)) => Some((set.clone(), *i)),
+                        None if def.set == "NoIcons" => None,
+                        None => Some((def.set.clone(), idx)),
+                    };
+                    out.push((*at, Eff::Icon(icon)));
+                }
+            }
+            _ => {
+                // The rules that give the format of the rule.
+                let formulas: Vec<Option<Expr>> = rule
+                    .formulas
+                    .iter()
+                    .map(|f| {
+                        gridcraft_formula::parse(&fmla::from_file(f.trim_start_matches('='))).ok()
+                    })
+                    .collect();
+                let avg = if nums.is_empty() {
+                    0.0
+                } else {
+                    nums.iter().sum::<f64>() / nums.len() as f64
+                };
+                let sd = if nums.len() > 1 {
+                    (nums.iter().map(|x| (x - avg).powi(2)).sum::<f64>() / (nums.len() - 1) as f64)
+                        .sqrt()
+                } else {
+                    0.0
+                };
+                let cut = (rule.kind == "top10" && !nums.is_empty()).then(|| {
+                    let k = if rule.percent {
+                        ((nums.len() as f64 * rule.rank as f64 / 100.0).floor() as usize).max(1)
+                    } else {
+                        rule.rank.max(1) as usize
+                    };
+                    let k = k.min(nums.len());
+                    if rule.bottom {
+                        nums[k - 1]
+                    } else {
+                        nums[nums.len() - k]
+                    }
+                });
+                let key = |v: &Value| match v {
+                    Value::Number(n) => Some(format!("n{n}")),
+                    Value::Text(s) if !s.is_empty() => Some(format!("s{}", s.to_lowercase())),
+                    Value::Bool(b) => Some(format!("b{b}")),
+                    _ => None,
+                };
+                let mut counts: HashMap<String, usize> = HashMap::new();
+                if matches!(rule.kind.as_str(), "duplicateValues" | "uniqueValues") {
+                    for v in vals {
+                        if let Some(k) = key(v) {
+                            *counts.entry(k).or_default() += 1;
+                        }
+                    }
+                }
+                let needle = rule.text.to_lowercase();
+                let today = (gridcraft_calc::now_serial().floor() as i64) - 25569;
+                let date1904 = self.model.date_system == DateSystem::D1904;
+                for (at, v) in cells.iter().zip(vals) {
+                    let mut operand = |i: usize| -> Value {
+                        match formulas.get(i) {
+                            Some(Some(e)) => {
+                                let dr = at.row as i64 - base.row as i64;
+                                let dc = at.col as i64 - base.col as i64;
+                                let e = gridcraft_formula::adjust::shift_relative_wrapping(
+                                    e.clone(),
+                                    dr,
+                                    dc,
+                                );
+                                self.flush();
+                                gridcraft_calc::recalc::evaluate_expr(&self.model, si, *at, &e)
+                                    .scalar()
+                            }
+                            _ => Value::Error(CellError::Value),
                         }
                     };
-                    let fx = out.entry((c.row, c.col)).or_default();
-                    if fx.bar.is_none() {
-                        fx.bar = Some(bar);
-                        fx.hide_value |= w.kind == "dataBar-only";
+                    let text = || match v {
+                        Value::Empty | Value::Error(_) => String::new(),
+                        other => other.display().to_lowercase(),
+                    };
+                    let blank = matches!(v, Value::Empty)
+                        || matches!(v, Value::Text(s) if s.trim().is_empty());
+                    let hit = match rule.kind.as_str() {
+                        "cellIs" => {
+                            use std::cmp::Ordering::*;
+                            let a = operand(0);
+                            let o = cmp(v, &a);
+                            match rule.operator.as_str() {
+                                "lessThan" => o == Some(Less),
+                                "lessThanOrEqual" => matches!(o, Some(Less | Equal)),
+                                "equal" => o == Some(Equal),
+                                "notEqual" => o.is_some_and(|o| o != Equal),
+                                "greaterThanOrEqual" => matches!(o, Some(Greater | Equal)),
+                                "greaterThan" => o == Some(Greater),
+                                "between" | "notBetween" => {
+                                    let z = operand(1);
+                                    // The two bounds in either order.
+                                    let (lo, hi) = if cmp(&a, &z) == Some(Greater) {
+                                        (z, a)
+                                    } else {
+                                        (a, z)
+                                    };
+                                    let inside = matches!(cmp(v, &lo), Some(Greater | Equal))
+                                        && matches!(cmp(v, &hi), Some(Less | Equal));
+                                    if rule.operator == "between" {
+                                        inside
+                                    } else {
+                                        cmp(v, &lo).is_some() && !inside
+                                    }
+                                }
+                                _ => false,
+                            }
+                        }
+                        "expression" => truthy(&operand(0)),
+                        "containsText" => text().contains(&needle),
+                        "notContainsText" => !text().contains(&needle),
+                        "beginsWith" => text().starts_with(&needle),
+                        "endsWith" => text().ends_with(&needle),
+                        "containsBlanks" => blank,
+                        "notContainsBlanks" => !blank,
+                        "containsErrors" => matches!(v, Value::Error(_)),
+                        "notContainsErrors" => !matches!(v, Value::Error(_)),
+                        "top10" => match (num(v), cut) {
+                            (Some(x), Some(k)) => {
+                                if rule.bottom {
+                                    x <= k
+                                } else {
+                                    x >= k
+                                }
+                            }
+                            _ => false,
+                        },
+                        "aboveAverage" => match num(v) {
+                            Some(x) if !nums.is_empty() => {
+                                let d = rule.std_dev as f64 * sd;
+                                match (rule.above_average, rule.equal_average) {
+                                    (true, false) => x > avg + d,
+                                    (true, true) => x >= avg + d,
+                                    (false, false) => x < avg - d,
+                                    (false, true) => x <= avg - d,
+                                }
+                            }
+                            _ => false,
+                        },
+                        "duplicateValues" => {
+                            key(v).is_some_and(|k| counts.get(&k).copied().unwrap_or(0) > 1)
+                        }
+                        "uniqueValues" => {
+                            key(v).is_some_and(|k| counts.get(&k).copied().unwrap_or(0) == 1)
+                        }
+                        "timePeriod" => num(v).is_some_and(|x| {
+                            // Days since 1970-01-01 (serial 25569 in the 1900 system).
+                            let d = x.floor() as i64 + if date1904 { 1462 } else { 0 } - 25569;
+                            in_period(d, today, &rule.time_period)
+                        }),
+                        _ => false,
+                    };
+                    if hit {
+                        out.push((*at, Eff::Dxf));
                     }
                 }
             }
         }
-        out.retain(|(r, c), _| shown.contains(CellRef::new(*r, *c)));
         out
     }
+}
+
+fn add_dxf(fx: &mut CondFx, d: &Dxf, css: &dyn Fn(&Color) -> Option<String>) {
+    if fx.fill.is_none() {
+        fx.fill = d.fill.as_ref().and_then(css);
+    }
+    if fx.color.is_none() {
+        fx.color = d.color.as_ref().and_then(css);
+    }
+    fx.bold = fx.bold.or(d.bold);
+    fx.italic = fx.italic.or(d.italic);
+    fx.strike = fx.strike.or(d.strike);
+    fx.underline = fx.underline.or(d.underline);
+    if fx.num_fmt.is_none() {
+        fx.num_fmt = d.num_fmt.clone();
+    }
+    for i in 0..4 {
+        if fx.sides[i].is_none() {
+            fx.sides[i] = d.sides[i].as_ref().map(|(style, c)| Line {
+                style: style.clone(),
+                color: c.as_ref().and_then(css),
+            });
+        }
+    }
+}
+
+// ---- icons (as xljs draws them)
+
+const GREEN: &str = "#33A02C";
+const YELLOW: &str = "#F2B400";
+const RED: &str = "#D93025";
+const GRAY: &str = "#8C8C8C";
+const BLACK: &str = "#262626";
+
+fn arrow(deg: i32, c: &str) -> String {
+    format!(
+        "<path transform=\"rotate({deg} 8 8)\" d=\"M8 1.5L14 8H10.2V14.5H5.8V8H2Z\" fill=\"{c}\"/>"
+    )
+}
+
+fn circle(c: &str) -> String {
+    format!("<circle cx=\"8\" cy=\"8\" r=\"6.5\" fill=\"{c}\"/>")
+}
+
+fn mark(kind: char, c: &str, circled: bool) -> String {
+    let (bg, fg) = if circled { (c, "#fff") } else { ("none", c) };
+    let w = if circled { "2" } else { "2.6" };
+    let body = match kind {
+        'v' => format!(
+            "<path d=\"M4.5 8.3L7 10.8L11.6 5.4\" fill=\"none\" stroke=\"{fg}\" stroke-width=\"{w}\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>"
+        ),
+        '!' => format!(
+            "<path d=\"M8 4V9\" stroke=\"{fg}\" stroke-width=\"{w}\" stroke-linecap=\"round\"/><circle cx=\"8\" cy=\"12\" r=\"1.2\" fill=\"{fg}\"/>"
+        ),
+        _ => format!(
+            "<path d=\"M5.2 5.2L10.8 10.8M10.8 5.2L5.2 10.8\" stroke=\"{fg}\" stroke-width=\"{w}\" stroke-linecap=\"round\"/>"
+        ),
+    };
+    if circled {
+        format!("<circle cx=\"8\" cy=\"8\" r=\"7\" fill=\"{bg}\"/>{body}")
+    } else {
+        body
+    }
+}
+
+fn bars(on: usize) -> String {
+    (0..4)
+        .map(|i| {
+            let h = 3.0 + i as f64 * 3.5;
+            let c = if i < on { "#3C78C8" } else { "#D0D0D0" };
+            format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"2.6\" height=\"{h}\" fill=\"{c}\"/>",
+                1.5 + i as f64 * 3.5,
+                14.5 - h
+            )
+        })
+        .collect()
+}
+
+fn quarters(q: usize) -> String {
+    let c = "#4A4A4A";
+    let ring = format!(
+        "<circle cx=\"8\" cy=\"8\" r=\"6.3\" fill=\"#fff\" stroke=\"{c}\" stroke-width=\"1.2\"/>"
+    );
+    let fill = match q {
+        0 => String::new(),
+        4 => format!("<circle cx=\"8\" cy=\"8\" r=\"6.3\" fill=\"{c}\"/>"),
+        _ => {
+            let a = q as f64 * std::f64::consts::FRAC_PI_2;
+            let (x, y) = (8.0 + 6.3 * a.sin(), 8.0 - 6.3 * a.cos());
+            format!(
+                "<path d=\"M8 8V1.7A6.3 6.3 0 {} 1 {x:.2} {y:.2}Z\" fill=\"{c}\"/>",
+                if q > 2 { 1 } else { 0 }
+            )
+        }
+    };
+    ring + &fill
+}
+
+fn star(fill: f64, id: &str) -> String {
+    let d = "M8 1.2L10 5.8L15 6.2L11.2 9.4L12.4 14.4L8 11.7L3.6 14.4L4.8 9.4L1 6.2L6 5.8Z";
+    let c = "#F2B400";
+    match fill {
+        f if f >= 1.0 => {
+            format!("<path d=\"{d}\" fill=\"{c}\" stroke=\"{c}\" stroke-width=\".6\"/>")
+        }
+        f if f > 0.0 => format!(
+            "<clipPath id=\"{id}\"><rect width=\"8\" height=\"16\"/></clipPath><path d=\"{d}\" fill=\"#fff\" stroke=\"{c}\" stroke-width=\".8\"/><path d=\"{d}\" fill=\"{c}\" clip-path=\"url(#{id})\"/>"
+        ),
+        _ => format!("<path d=\"{d}\" fill=\"#fff\" stroke=\"{c}\" stroke-width=\".8\"/>"),
+    }
+}
+
+fn boxes(on: usize) -> String {
+    (0..4)
+        .map(|i| {
+            let (x, y) = (1.5 + (i % 2) as f64 * 7.0, 1.5 + (i / 2) as f64 * 7.0);
+            let c = if i < on { "#3C78C8" } else { "#D0D0D0" };
+            format!("<rect x=\"{x}\" y=\"{y}\" width=\"6\" height=\"6\" fill=\"{c}\"/>")
+        })
+        .collect()
+}
+
+/// The icon of a set (its index from the lowest values) as SVG; None for an unknown set.
+pub fn icon_svg(set: &str, i: usize) -> Option<String> {
+    let pick = |v: &[String]| v.get(i).cloned();
+    let body = match set {
+        "3Arrows" => pick(&[arrow(180, RED), arrow(90, YELLOW), arrow(0, GREEN)]),
+        "3ArrowsGray" => pick(&[arrow(180, GRAY), arrow(90, GRAY), arrow(0, GRAY)]),
+        "4Arrows" => pick(&[
+            arrow(180, RED),
+            arrow(135, YELLOW),
+            arrow(45, YELLOW),
+            arrow(0, GREEN),
+        ]),
+        "4ArrowsGray" => pick(&[
+            arrow(180, GRAY),
+            arrow(135, GRAY),
+            arrow(45, GRAY),
+            arrow(0, GRAY),
+        ]),
+        "5Arrows" => pick(&[
+            arrow(180, RED),
+            arrow(135, YELLOW),
+            arrow(90, YELLOW),
+            arrow(45, YELLOW),
+            arrow(0, GREEN),
+        ]),
+        "5ArrowsGray" => pick(&[
+            arrow(180, GRAY),
+            arrow(135, GRAY),
+            arrow(90, GRAY),
+            arrow(45, GRAY),
+            arrow(0, GRAY),
+        ]),
+        "3Flags" => pick(&[RED, YELLOW, GREEN].map(|c| {
+            format!(
+                "<path d=\"M3.5 1.5V15\" stroke=\"#555\" stroke-width=\"1.3\"/><path d=\"M4 2H13.5L11 5.5L13.5 9H4Z\" fill=\"{c}\"/>"
+            )
+        })),
+        "3TrafficLights1" => pick(&[circle(RED), circle(YELLOW), circle(GREEN)]),
+        "3TrafficLights2" => pick(&[RED, YELLOW, GREEN].map(|c| {
+            format!(
+                "<rect x=\"1\" y=\"1\" width=\"14\" height=\"14\" rx=\"3\" fill=\"{BLACK}\"/><circle cx=\"8\" cy=\"8\" r=\"5\" fill=\"{c}\"/>"
+            )
+        })),
+        "4TrafficLights" => pick(&[circle(BLACK), circle(RED), circle(YELLOW), circle(GREEN)]),
+        "4RedToBlack" => pick(&[
+            circle(BLACK),
+            circle(GRAY),
+            circle("#F4A6A6"),
+            circle(RED),
+        ]),
+        "3Signs" => pick(&[
+            format!("<path d=\"M8 1L15 8L8 15L1 8Z\" fill=\"{RED}\"/>"),
+            format!("<path d=\"M8 1.5L15 14.5H1Z\" fill=\"{YELLOW}\"/>"),
+            circle(GREEN),
+        ]),
+        "3Symbols" => pick(&[
+            mark('x', RED, true),
+            mark('!', YELLOW, true),
+            mark('v', GREEN, true),
+        ]),
+        "3Symbols2" => pick(&[
+            mark('x', RED, false),
+            mark('!', YELLOW, false),
+            mark('v', GREEN, false),
+        ]),
+        "4Rating" => pick(&[bars(1), bars(2), bars(3), bars(4)]),
+        "5Rating" => pick(&[bars(0), bars(1), bars(2), bars(3), bars(4)]),
+        "5Quarters" => pick(&[
+            quarters(0),
+            quarters(1),
+            quarters(2),
+            quarters(3),
+            quarters(4),
+        ]),
+        "3Stars" => pick(&[star(0.0, ""), star(0.5, "half"), star(1.0, "")]),
+        "3Triangles" => pick(&[
+            format!("<path d=\"M2 4.5H14L8 13Z\" fill=\"{RED}\"/>"),
+            format!("<rect x=\"2.5\" y=\"6.5\" width=\"11\" height=\"3\" fill=\"{YELLOW}\"/>"),
+            format!("<path d=\"M2 11.5H14L8 3Z\" fill=\"{GREEN}\"/>"),
+        ]),
+        "5Boxes" => pick(&[boxes(0), boxes(1), boxes(2), boxes(3), boxes(4)]),
+        _ => None,
+    }?;
+    Some(format!(
+        "<svg viewBox=\"0 0 16 16\" width=\"100%\" height=\"100%\">{body}</svg>"
+    ))
 }

@@ -2384,14 +2384,17 @@ mod edit;
 mod format;
 pub(crate) use format::width_of_px;
 mod inspect;
+mod links;
 mod paste;
 pub mod snapshot;
 mod sort;
+pub(crate) mod tables;
 pub mod view;
 
 pub(crate) use edit::{adjusted, moved};
 pub use gridcraft_model::FilterCriterion;
 pub use inspect::{CellInfo, FormulaRegion, RuleInfo, SheetInfo, TableInfo};
+pub use links::LinkInfo;
 pub use paste::{Paste, PasteOp, PasteWhat};
 pub use sort::{SortKey, Special, split_criterion};
 pub use view::{VIEW_COLS, VIEW_ROWS};
