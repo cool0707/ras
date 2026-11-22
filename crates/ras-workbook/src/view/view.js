@@ -346,7 +346,7 @@
             nrows: 0,
             width: 0, // of the cells (without the row headers)
             refs, // the boxes of the references of the selected formula
-            head: 40, // the width of the row headers
+            head: 28, // the width of the row headers
             byAddress: new Map(),
             // Right gridlines hidden under text that runs over empty cells: key -> true.
             noRight: new Set(),
@@ -463,10 +463,11 @@
             for (const [r, tr] of v.rows) makeCell(tr, r, c, i);
         }
 
-        // The row headers as wide as the largest row number needs.
+        // The row headers as wide as Excel draws them for the largest row number: 29 px with their
+        // line up to 3 digits, 8 px more for each digit after that (Excel 2021 at 100%).
         function sizeHead() {
             const digits = String(v.nrows).length;
-            v.head = Math.max(40, digits * 8 + 12);
+            v.head = 28 + 8 * Math.max(0, digits - 3);
             corner.style.width = `${v.head}px`;
             table.style.width = `${v.head + v.width}px`;
         }
