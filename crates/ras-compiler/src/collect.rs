@@ -11,6 +11,7 @@ use crate::config::Config;
 use crate::diag::{Diagnostic, Severity};
 use crate::model::*;
 
+#[derive(Clone)]
 pub struct SourceInput {
     pub path: PathBuf,
     pub rel_path: String,

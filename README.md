@@ -29,6 +29,17 @@ export function visibleSheetNames(): string[] {
 
 Excel / VBA のメンバーとグローバルは、JavaScript の命名規則（camelCase）で書きます（`ws.cells(r, 1).value`、`msgBox(...)`）。生成される VBA には本来の綴り（`ws.Cells(r, 1).Value`）が出力されます。VBA の綴りのままでも動きますが警告になり、`ras check --fix` で一括して書き換えられます（仕様 §15.3.1）。
 
+## ブラウザで試す（プレイグラウンド）
+
+**https://cool0707.github.io/ras/** で、インストールせずに RAS を書いて動かせます。コンパイラーとブックの代役を WebAssembly にしたもので、すべてブラウザの中で動きます（ソースもブックも外へ送りません）。
+
+- 書いたそばから VBA に変換して表示し、エラー・警告をエディタに出します（「問題」でコードを選ぶと `ras explain` の説明を表示）。
+- ▶ 実行 / テスト で、`ras run` / `ras test` と同じように Excel なしで実行します。`msgBox` / `inputBox` はダイアログとして表示し、変更されたセルとブックのグリッド（`ras book view`）を表示します。
+- 「.xlsm に書き込んで保存」で、生成した VBA を書き込んだマクロ有効ブックを保存できます（`ras pack`。「ブックを読み込む」で手元の .xlsx / .xlsm に書き込めます）。モジュールごとの `.bas` / `.cls` も保存できます。
+- 「共有」で、プロジェクトのファイルを URL にして渡せます。
+
+ユーザーフォーム、Excel 本体との同期（`ras sync`）、Excel を使った実行は VS Code 拡張・CLI だけです。開発の仕方は [web/README.md](web/README.md) を参照してください。
+
 ## ダウンロード
 
 ビルド済みのバイナリと VS Code 拡張は GitHub Actions の成果物として取得できます。
@@ -440,6 +451,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p ras -- --project path/to/project build
 
 cd editors/vscode && npm ci && npm test && npm run package
+
+cd web && npm ci && npm run wasm && npm test && npm run serve   # プレイグラウンド（web/README.md）
 ```
 
 | ディレクトリ | 内容 |
@@ -451,5 +464,8 @@ cd editors/vscode && npm ci && npm test && npm run package
 | `crates/ras` | CLI |
 | `crates/ras-workbook` | ブックの代役のブック（umya-spreadsheet と GridCraft の計算エンジン）、`ras book dump` / `diff` / `view`、`ras book edit`（`patch`: 編集をブックのファイルに書き戻す） |
 | `crates/ras-book` | ブックの代役を Node に渡すアドオン（`ras_book.node`） |
+| `crates/ras-wasm` | コンパイラーとブックの代役の WebAssembly 版（プレイグラウンド用） |
 | `editors/vscode` | VS Code 拡張 |
+| `web` | プレイグラウンド（GitHub Pages） |
+| `vendor/gridcraft-core` | wasm でビルドできるようにした xljs の `gridcraft-core`（[README](vendor/gridcraft-core/README.md)） |
 | `examples/sales-report` | サンプルプロジェクト |

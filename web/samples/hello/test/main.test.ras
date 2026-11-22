@@ -1,0 +1,19 @@
+// 「テスト」を押すと、vitest と同じ形で書いたテストを実行します。
+import { makeReport, sumTo } from "../src/main";
+
+describe("sumTo", () => {
+    test("1 から 10 までの和は 55", () => {
+        expect(sumTo(10)).toBe(55);
+    });
+    test("0 なら 0", () => {
+        expect(sumTo(0)).toBe(0);
+    });
+});
+
+describe("makeReport", () => {
+    test("合計の行に SUM の数式を書く", () => {
+        makeReport();
+        expect(Sheet1.range("D5").formula).toBe("=SUM(D2:D4)");
+        expect(Sheet1.range("D5").value).toBe(2060);
+    });
+});

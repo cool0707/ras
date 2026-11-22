@@ -262,6 +262,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfb"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fef29b910ef2b9dbecc60168d1568d643c633b0518af970c17e83bd5f6e2c94f"
+dependencies = [
+ "fnv",
+ "uuid",
+ "web-time",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -617,9 +628,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "rand_core",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -648,9 +661,9 @@ dependencies = [
 [[package]]
 name = "gridcraft-core"
 version = "0.19.1"
-source = "git+https://github.com/cool0707/xljs?rev=60e7e7f#60e7e7fc08ba774e07ee25989937f7d574ee430c"
 dependencies = [
  "chrono",
+ "js-sys",
  "serde",
  "thiserror",
 ]
@@ -1471,7 +1484,7 @@ dependencies = [
 name = "ras-form"
 version = "0.1.0"
 dependencies = [
- "cfb 0.10.0",
+ "cfb 0.16.0",
  "image",
  "ras-compiler",
  "ras-ovba",
@@ -1496,12 +1509,13 @@ dependencies = [
 name = "ras-ovba"
 version = "0.1.0"
 dependencies = [
- "cfb 0.10.0",
+ "cfb 0.16.0",
  "crc32fast",
  "encoding_rs",
  "ovba",
  "proptest",
  "uuid",
+ "web-time",
  "zip 2.6.1",
 ]
 
@@ -1522,6 +1536,20 @@ dependencies = [
  "logos",
  "proptest",
  "rowan",
+]
+
+[[package]]
+name = "ras-wasm"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "getrandom",
+ "ras-compiler",
+ "ras-ovba",
+ "ras-syntax",
+ "ras-workbook",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

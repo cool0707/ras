@@ -1,0 +1,44 @@
+// RAS プレイグラウンドへようこそ。
+//
+// ・右の「VBA」に、このコードから生成された VBA が表示されます（書き換えるとすぐ変わります）。
+// ・上の ▶ 実行 で、Excel を使わずにブラウザの中で実行します。結果は「実行結果」と「ブック」に出ます。
+// ・ファイルを足すときはタブの ＋ を押します（src/ が標準モジュール、test/*.test.ras がテスト）。
+
+/** 売上の 1 行。 */
+struct Sale {
+    item: string;
+    price: int;
+    qty: int;
+}
+
+/** 表を書いて、税込みの合計を数式で出す。 */
+export function makeReport() {
+    const ws = Sheet1;
+    const sales: Sale[] = [
+        { item: "りんご", price: 120, qty: 3 },
+        { item: "みかん", price: 80, qty: 10 },
+        { item: "ぶどう", price: 450, qty: 2 },
+    ];
+    ws.range("A1:D1").value = ["品名", "単価", "数量", "金額"];
+    let r = 2;
+    for (const s of sales) {
+        ws.cells(r, 1).value = s.item;
+        ws.cells(r, 2).value = s.price;
+        ws.cells(r, 3).value = s.qty;
+        ws.cells(r, 4).formula = `=B${r}*C${r}`;
+        r++;
+    }
+    ws.cells(r, 3).value = "合計";
+    ws.cells(r, 4).formula = `=SUM(D2:D${r - 1})`;
+    ws.range("A1:D1").font.bold = true;
+    debug.print(`合計: ${ws.cells(r, 4).value} 円（${sales.length} 品）`);
+}
+
+/** 1 から n までの和。テスト（test/main.test.ras）で確かめています。 */
+export function sumTo(n: int): int {
+    let total = 0;
+    for (let i = 1; i <= n; i++) {
+        total += i;
+    }
+    return total;
+}

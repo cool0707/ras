@@ -135,6 +135,11 @@ fn same_file(a: &Path, b: &Path) -> bool {
 pub fn unpack(book: &Path) -> Result<UnpackedBook, OvbaError> {
     book_type(book)?;
     let bytes = fs::read(book).map_err(map_open_error)?;
+    unpack_bytes(bytes)
+}
+
+/// [`unpack`] of the bytes of a workbook.
+pub fn unpack_bytes(bytes: Vec<u8>) -> Result<UnpackedBook, OvbaError> {
     let mut package = Package::open(bytes)?;
     let layout = opc::analyze(&mut package)?;
     let project = match &layout.vba_part {
@@ -429,6 +434,88 @@ pub(crate) fn document_plan(layout: &BookLayout) -> DocumentPlan {
 /// user forms, ...), [`OvbaError::Encoding`] (text not representable in the
 /// code page), [`OvbaError::Verify`] (the written file did not read back).
 pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
+    let (output, output_type) = pack_target(req)?;
+    let in_place = same_file(&req.book, &output);
+
+    // ---- never touch a workbook that is open in Excel ---------------------
+    check_not_locked(&req.book, false)?;
+    check_not_locked(&output, true)?;
+
+    let bytes = fs::read(&req.book).map_err(map_open_error)?;
+    let packed = pack_package(bytes, output.clone(), output_type, in_place, req)?;
+    let mut report = packed.report;
+    let Some(new_package) = packed.bytes else {
+        return Ok(report);
+    };
+
+    // ---- write, verify, back up, replace ---------------------------------------
+    let mut temp = write_temp_file(&output, &new_package)?;
+    verify_package(
+        fs::read(&temp.path)?,
+        &packed.expected_bin,
+        &packed.expected_modules,
+        req.codepage,
+        packed.project_changed,
+    )?;
+    if let Some(dir) = &req.backup_dir {
+        back_up(&output, dir, req.backup_generations)?;
+    }
+    // The replacement keeps the permissions of the file it replaces.
+    if let Ok(metadata) = fs::metadata(&output) {
+        let _ = fs::set_permissions(&temp.path, metadata.permissions());
+    }
+    // Re-check right before the switch: Excel may have opened the file since.
+    check_not_locked(&output, true)?;
+    fs::rename(&temp.path, &output).map_err(|e| {
+        if is_sharing_violation(&e) || e.kind() == io::ErrorKind::PermissionDenied {
+            OvbaError::Locked
+        } else {
+            OvbaError::Io(e)
+        }
+    })?;
+    temp.keep = true;
+    report.output = output;
+    Ok(report)
+}
+
+/// [`pack`] without files: writes the project into the bytes of a workbook and returns the
+/// bytes of the new one (the playground in the browser). `req.book` and `req.output` give only
+/// the names, for the types of the workbooks; nothing is read, written or backed up.
+pub fn pack_bytes(req: &PackRequest, bytes: Vec<u8>) -> Result<(Vec<u8>, PackReport), OvbaError> {
+    let (output, output_type) = pack_target(req)?;
+    let in_place = same_name_path(&req.book, &output);
+    let original = bytes.clone();
+    let packed = pack_package(bytes, output, output_type, in_place, req)?;
+    let Some(new_package) = packed.bytes else {
+        return Ok((original, packed.report));
+    };
+    verify_package(
+        new_package.clone(),
+        &packed.expected_bin,
+        &packed.expected_modules,
+        req.codepage,
+        packed.project_changed,
+    )?;
+    Ok((new_package, packed.report))
+}
+
+fn same_name_path(a: &Path, b: &Path) -> bool {
+    a.to_string_lossy()
+        .eq_ignore_ascii_case(&b.to_string_lossy())
+}
+
+/// The new package (`None`: the workbook is written in place and nothing changes) and what it
+/// must read back as.
+struct Packed {
+    bytes: Option<Vec<u8>>,
+    report: PackReport,
+    expected_bin: Vec<u8>,
+    expected_modules: Vec<VbaModule>,
+    project_changed: bool,
+}
+
+/// Where [`pack`] writes, and its type.
+fn pack_target(req: &PackRequest) -> Result<(PathBuf, BookType), OvbaError> {
     // ---- what goes where ---------------------------------------------------
     let input_type = book_type(&req.book)?;
     if !input_type.can_hold_macros() && !req.convert {
@@ -453,13 +540,17 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
         )));
     }
     codepage::writable_encoding(req.codepage)?;
-    let in_place = same_file(&req.book, &output);
+    Ok((output, output_type))
+}
 
-    // ---- never touch a workbook that is open in Excel ---------------------
-    check_not_locked(&req.book, false)?;
-    check_not_locked(&output, true)?;
-
-    let bytes = fs::read(&req.book).map_err(map_open_error)?;
+/// Writes the project of `req` into the package `bytes`.
+fn pack_package(
+    bytes: Vec<u8>,
+    output: PathBuf,
+    output_type: BookType,
+    in_place: bool,
+    req: &PackRequest,
+) -> Result<Packed, OvbaError> {
     let mut package = Package::open(bytes)?;
     let layout = opc::analyze(&mut package)?;
     if layout.binary != (output_type == BookType::Xlsb) {
@@ -647,7 +738,13 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
         || !edits.add.is_empty();
     if !package_changed && in_place {
         report.warnings = warnings;
-        return Ok(report);
+        return Ok(Packed {
+            bytes: None,
+            report,
+            expected_bin: Vec::new(),
+            expected_modules: Vec::new(),
+            project_changed,
+        });
     }
 
     if project_changed {
@@ -689,49 +786,26 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
         }
     }
     let new_package = package.rewrite(&edits.replace, &edits.remove, &edits.add)?;
-
-    // ---- write, verify, back up, replace ---------------------------------------
-    let mut temp = write_temp_file(&output, &new_package)?;
-    verify_written_package(
-        &temp.path,
-        &expected_bin,
-        &expected_modules,
-        req.codepage,
-        project_changed,
-    )?;
-    if let Some(dir) = &req.backup_dir {
-        back_up(&output, dir, req.backup_generations)?;
-    }
-    // The replacement keeps the permissions of the file it replaces.
-    if let Ok(metadata) = fs::metadata(&output) {
-        let _ = fs::set_permissions(&temp.path, metadata.permissions());
-    }
-    // Re-check right before the switch: Excel may have opened the file since.
-    check_not_locked(&output, true)?;
-    fs::rename(&temp.path, &output).map_err(|e| {
-        if is_sharing_violation(&e) || e.kind() == io::ErrorKind::PermissionDenied {
-            OvbaError::Locked
-        } else {
-            OvbaError::Io(e)
-        }
-    })?;
-    temp.keep = true;
-
     report.warnings = warnings;
-    Ok(report)
+    Ok(Packed {
+        bytes: Some(new_package),
+        report,
+        expected_bin,
+        expected_modules,
+        project_changed,
+    })
 }
 
-/// Re-opens the package that was just written and checks that it carries
+/// Re-opens the package that was just written (its bytes) and checks that it carries
 /// exactly the intended project.
-fn verify_written_package(
-    path: &Path,
+fn verify_package(
+    bytes: Vec<u8>,
     expected_bin: &[u8],
     expected_modules: &[VbaModule],
     codepage: u16,
     project_changed: bool,
 ) -> Result<(), OvbaError> {
     let fail = |what: String| OvbaError::Verify(what);
-    let bytes = fs::read(path)?;
     let mut package =
         Package::open(bytes).map_err(|e| fail(format!("the new package cannot be opened: {e}")))?;
     let layout = opc::analyze(&mut package)

@@ -1,0 +1,24 @@
+// msgBox と inputBox は、ブラウザの中でダイアログとして表示されます。
+
+export function ask() {
+    const name = inputBox("お名前は？", "RAS", "ゲスト");
+    if (name == "") {
+        msgBox("キャンセルしました");
+        return;
+    }
+    const answer = msgBox(`${name} さん、セル A1 に書き込みますか？`, vbYesNo + vbQuestion, "確認");
+    if (answer == vbYes) {
+        Sheet1.range("A1").value = `こんにちは、${name} さん`;
+        debug.print("書き込みました");
+    } else {
+        debug.print("書き込みませんでした");
+    }
+}
+
+/** 実行時エラーは、RAS のファイルと行番号つきで表示されます。 */
+export function oops() {
+    const xs: int[] = [1, 2, 3];
+    for (let i = 0; i <= xs.length; i++) {
+        debug.print(xs[i]);
+    }
+}

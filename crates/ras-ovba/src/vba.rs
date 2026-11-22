@@ -1,6 +1,7 @@
 //! Reading and writing `vbaProject.bin` (\[MS-OVBA\] 2.2).
 
-use std::time::{SystemTime, UNIX_EPOCH};
+// `web_time`: the browser's clock on wasm32, where `std::time::SystemTime::now` panics.
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::cfbio::{self, Node, Tree};
 use crate::codepage;
