@@ -658,8 +658,8 @@ fn parts_of(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
-/// A workbook the stand-in saved keeps its cells, not its controls: drawn with the drawings of
-/// the workbook it was read from, the controls follow the cells as they are now.
+/// A workbook the stand-in saved, drawn with the drawings of the workbook it was read from: the
+/// controls follow the cells as they are now.
 #[test]
 fn a_saved_workbook_with_the_drawings_it_was_read_from() {
     let bytes = sample();
@@ -674,10 +674,10 @@ fn a_saved_workbook_with_the_drawings_it_was_read_from() {
     book.save(&path).unwrap();
     let saved = std::fs::read(&path).unwrap();
     let _ = std::fs::remove_file(&path);
-    // Its own drawing has lost the ActiveX control.
+    // It keeps the ActiveX control (umya-spreadsheet keeps `xl/activeX`).
     let own = view_of(&saved);
     assert!(
-        !own["sheets"][0]["objects"]
+        own["sheets"][0]["objects"]
             .as_array()
             .unwrap()
             .iter()
