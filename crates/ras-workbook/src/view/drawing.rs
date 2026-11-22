@@ -600,6 +600,13 @@ pub struct Obj {
     pub kind: &'static str,
     /// What the page draws of a chart (`chart::chart_spec`).
     pub chart: Option<serde_json::Value>,
+    /// An ActiveX control: its class (`CommandButton`; empty when it is not one of Microsoft
+    /// Forms 2.0), whose events the sheet's module receives.
+    pub activex: Option<&'static str>,
+    /// A macro can be assigned to it (`OnAction`): a shape, a picture, a chart, a form control.
+    pub assignable: bool,
+    /// A control's shape (`_x0000_s1025` in the VML drawing: 1025).
+    pub shape_id: Option<u32>,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -819,6 +826,9 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 macro_name,
                 kind: "group",
                 chart: None,
+                activex: None,
+                assignable: true,
+                shape_id: None,
             });
             return;
         }
@@ -832,6 +842,9 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 macro_name,
                 kind: "chart",
                 chart,
+                activex: None,
+                assignable: true,
+                shape_id: None,
             });
         }
         return;
@@ -854,6 +867,10 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
             macro_name,
             kind,
             chart: None,
+            activex: None,
+            // (A group has no macro of its own in the file.)
+            assignable: obj.name != "grpSp",
+            shape_id: None,
         });
     }
 }

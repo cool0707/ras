@@ -20,6 +20,7 @@ use serde_json::Value as Json;
 use crate::book::snapshot::{CellState, Raw, Snapshot, Styles};
 use crate::book::{Book, MAX_COLS, MAX_ROWS, SortKey, Val};
 
+mod macros;
 mod scan;
 mod structure;
 mod styles;
@@ -142,11 +143,23 @@ pub enum Op {
         from: RangeRef,
         to: RangeRef,
     },
+    /// The macro (`Sheet1.button1Click`) a shape or a form control runs when it is clicked:
+    /// Excel's "マクロの登録". The object by its name, or a form control by its shape (`shape`:
+    /// 1025 for `_x0000_s1025`).
+    Macro {
+        sheet: String,
+        object: String,
+        shape: Option<u32>,
+        name: String,
+    },
 }
 
 impl Op {
     fn structural(&self) -> bool {
-        matches!(self, Op::Insert { .. } | Op::Delete { .. })
+        matches!(
+            self,
+            Op::Insert { .. } | Op::Delete { .. } | Op::Macro { .. }
+        )
     }
 }
 
@@ -375,7 +388,31 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 from: range_of(o, "from")?,
                 to: range_of(o, "to")?,
             },
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy）")),
+            "macro" => {
+                let name = text("macro").unwrap_or_default();
+                let fine = !name.is_empty()
+                    && name
+                        .split('.')
+                        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_'));
+                if !fine {
+                    return Err(format!("マクロの名前 `{name}` は指定できません（Module1.macro1 のように指定してください）"));
+                }
+                let object = text("object").unwrap_or_default();
+                let shape = o
+                    .get("shape")
+                    .and_then(Json::as_u64)
+                    .and_then(|n| u32::try_from(n).ok());
+                if object.is_empty() && shape.is_none() {
+                    return Err("`object`（オブジェクトの名前）か `shape` がありません".into());
+                }
+                Op::Macro {
+                    sheet,
+                    object,
+                    shape,
+                    name,
+                }
+            }
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro）")),
         });
     }
     Ok(out)
@@ -394,7 +431,16 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 end += 1;
             }
         }
-        bytes = apply_group(&bytes, &ops[at..end])?;
+        bytes = match &ops[at] {
+            // The drawing, not the cells.
+            Op::Macro {
+                sheet,
+                object,
+                shape,
+                name,
+            } => macros::assign(&bytes, sheet, object, *shape, name)?,
+            _ => apply_group(&bytes, &ops[at..end])?,
+        };
         at = end;
     }
     Ok(bytes)
@@ -963,6 +1009,8 @@ fn run(
             autofill(book, si, *from, *to)?;
             written.push((si, *to));
         }
+        // (Made on the file by `apply`: it changes no cell.)
+        Op::Macro { .. } => {}
         Op::Fill {
             sheet,
             range,

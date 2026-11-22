@@ -11,8 +11,10 @@ body { display: flex; flex-direction: column; background: #fff; color: #000; fon
 #fx { flex: 1; padding: 3px 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; font-family: Consolas, "MS Gothic", monospace; }
 #fx .was { color: #8a6d00; margin-left: 16px; }
 #fx .ref { font-weight: bold; }
-#formulas { flex: none; margin: 2px 6px; padding: 0 10px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #333; font: inherit; cursor: pointer; }
-#formulas:hover { background: #f0f0f0; }
+#formulas, #event { flex: none; margin: 2px 6px; padding: 0 10px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #333; font: inherit; cursor: pointer; }
+#formulas:hover:not(:disabled), #event:hover:not(:disabled) { background: #f0f0f0; }
+#event { margin-right: 0; }
+#event:disabled { color: #999; cursor: default; }
 #formulas.on { background: #d3e9db; border-color: var(--accent); color: #0b5a2e; }
 #main { flex: 1; display: flex; min-height: 0; }
 #grid { flex: 1; overflow: auto; }

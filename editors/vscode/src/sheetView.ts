@@ -9,6 +9,11 @@
 //   edited in the panel as in Excel: the page posts what was done (`edit`: cells typed into,
 //   cleared, inserted, deleted, pasted, ...), `ras book edit` writes the workbook file and makes
 //   the page again. Undo and redo put back the bytes the file had.
+// - On the project's workbook, the shapes and controls of a sheet get their events as the form
+//   designer's controls do (the page's menu and button, a double click): an ActiveX control's
+//   handler is an `@on("CommandButton1.Click")` function of the sheet's file; a shape or a form
+//   control gets an `export function` of the sheet's file as its macro (`ras book edit`'s `macro`
+//   writes `OnAction` into the workbook file).
 // - "RAS: シートのグリッドを表示" on the RAS file of a worksheet (`objects/Sheet1.ras`) shows the
 //   project's workbook at that sheet: from the editor's title bar and context menu, and from
 //   the Explorer's context menu.
@@ -20,6 +25,9 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { sheetOfRasFile } from "./sheetFile";
 import { findServerExecutable } from "./serverPath";
+import { macrosOf, moduleName, newMacroName, sheetControlEvents } from "./sheetEvents";
+import { bodyIndent, findHandler, handlerText, rasParams } from "./userForm/events";
+import type { EventDescriptor } from "./userForm/events";
 
 let panel: vscode.WebviewPanel | undefined;
 
@@ -235,7 +243,14 @@ let queue: Promise<void> = Promise.resolve();
 
 function receive(message: unknown): void {
 	const type = typeof message === "object" && message !== null ? (message as { type?: unknown }).type : undefined;
-	if (type !== "edit" && type !== "undo" && type !== "redo") {
+	if (type === "ready") {
+		// The page asks whether its objects have events: those of the project's workbook do.
+		if (panel !== undefined && shown !== undefined && shown.editable && sheetFolder(shown) !== undefined) {
+			void panel.webview.postMessage({ type: "events", on: true });
+		}
+		return;
+	}
+	if (type !== "edit" && type !== "undo" && type !== "redo" && type !== "event") {
 		return;
 	}
 	queue = queue.then(async () => {
@@ -247,9 +262,14 @@ function receive(message: unknown): void {
 			if (!what.editable) {
 				throw new Error("このブックは、この表示では編集できません。");
 			}
-			const html = type === "edit" ? await edit(what, (message as { ops?: unknown }).ops ?? []) : await travel(what, type === "redo");
+			const html =
+				type === "event"
+					? await openObjectEvent(what, message as ObjectEvent)
+					: type === "edit"
+						? await edit(what, (message as { ops?: unknown }).ops ?? [])
+						: await travel(what, type === "redo");
 			// (Another workbook may be shown by now.)
-			if (panel !== undefined && shown === what) {
+			if (html !== undefined && panel !== undefined && shown === what) {
 				panel.webview.html = html;
 			}
 		} catch (error) {
@@ -258,6 +278,218 @@ function receive(message: unknown): void {
 			}
 		}
 	});
+}
+
+// ---- the events of the shapes and controls of a sheet
+
+/** What the page posts for the events of an object (`choose`: the menu's "…", not the default). */
+interface ObjectEvent {
+	sheet: string;
+	codeName: string;
+	/** Its name, as the name box shows it (none for some form controls). */
+	object: string;
+	/** A form control's VML shape (1025 for `_x0000_s1025`). */
+	shape?: number;
+	/** An ActiveX control: its Microsoft Forms type (`CommandButton`; empty for another control). */
+	activex?: string;
+	/** The macro assigned to it (`Sheet1.button1Click`). */
+	macro: string;
+	choose: boolean;
+}
+
+const samePath = (a: string, b: string): boolean => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+/** The `objects/` folder of the project whose workbook is shown (its sheets' files), if it is. */
+function sheetFolder(what: Shown): string | undefined {
+	if (what.root === undefined) {
+		return undefined;
+	}
+	const book = projectWorkbook(what.root);
+	return book !== undefined && samePath(path.resolve(book), path.resolve(what.file)) ? path.join(what.root, "objects") : undefined;
+}
+
+/** The RAS files that hold macros: the sheets' files and the standard modules, with their modules. */
+async function macroFiles(root: string): Promise<{ file: string; module: string }[]> {
+	const base = new vscode.RelativePattern(root, "{objects/*.ras,src/**/*.ras}");
+	const found = await vscode.workspace.findFiles(base, "**/{node_modules,.git,build,vba}/**", 2000);
+	return found
+		.map((uri) => uri.fsPath)
+		.filter((file) => !/\.d\.ras$/i.test(file) && !/^ThisWorkbook\.ras$/i.test(path.basename(file)))
+		.map((file) => ({ file, module: sheetOfRasFile(file) ?? moduleName(file) }))
+		.sort((a, b) => a.module.localeCompare(b.module));
+}
+
+async function textOf(file: string): Promise<string> {
+	const open = vscode.workspace.textDocuments.find((d) => samePath(d.uri.fsPath, file));
+	if (open !== undefined) {
+		return open.getText();
+	}
+	try {
+		return await fs.promises.readFile(file, "utf8");
+	} catch {
+		return "";
+	}
+}
+
+/** The document of a RAS file, made when there is none. */
+async function documentOf(file: string): Promise<vscode.TextDocument> {
+	const uri = vscode.Uri.file(file);
+	try {
+		return await vscode.workspace.openTextDocument(uri);
+	} catch {
+		const create = new vscode.WorkspaceEdit();
+		create.createFile(uri, { ignoreIfExists: true });
+		await vscode.workspace.applyEdit(create);
+		return vscode.workspace.openTextDocument(uri);
+	}
+}
+
+/** Adds text at the end of a document: `make` is given its text, the indentation and the newline. */
+async function append(code: vscode.TextDocument, make: (text: string, indent: string, newline: string) => string): Promise<void> {
+	const text = code.getText();
+	const config = vscode.workspace.getConfiguration("editor", code.uri);
+	const tabSize = config.get<number>("tabSize", 4);
+	const fallback = config.get<boolean>("insertSpaces", true) ? " ".repeat(tabSize > 0 ? tabSize : 4) : "\t";
+	const newline = code.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n";
+	const edit = new vscode.WorkspaceEdit();
+	edit.insert(code.uri, code.positionAt(text.length), make(text, bodyIndent(text, fallback), newline));
+	await vscode.workspace.applyEdit(edit);
+}
+
+/** Shows a line of a document beside the grid, the cursor at its end. */
+async function reveal(code: vscode.TextDocument, line: number): Promise<void> {
+	const at = Math.min(Math.max(line, 0), code.lineCount - 1);
+	const position = new vscode.Position(at, code.lineAt(at).text.length);
+	await vscode.window.showTextDocument(code, { viewColumn: vscode.ViewColumn.Beside, selection: new vscode.Range(position, position) });
+}
+
+/** The first body line of the function `name` of a document (its declaration when it has none). */
+function bodyLineOf(code: vscode.TextDocument, name: string): number | undefined {
+	const found = macrosOf(code.getText()).find((m) => m.name.toLowerCase() === name.toLowerCase());
+	if (found === undefined) {
+		return undefined;
+	}
+	for (let line = found.line; line < code.lineCount; line++) {
+		if (/\{\s*(\/\/.*)?$/.test(code.lineAt(line).text)) {
+			return Math.min(line + 1, code.lineCount - 1);
+		}
+	}
+	return found.line;
+}
+
+/** Opens (or adds) the handler of an event of an object; the page made again when its macro changed. */
+async function openObjectEvent(what: Shown, m: ObjectEvent): Promise<string | undefined> {
+	const folder = sheetFolder(what);
+	if (folder === undefined || what.root === undefined) {
+		throw new Error("イベントは、ras.toml の project.workbook のブックで追加できます。");
+	}
+	if (!m.codeName) {
+		throw new Error(`シート ${m.sheet} のコード名が分かりません。`);
+	}
+	const sheetFile = path.join(folder, `${m.codeName}.ras`);
+	if (m.activex !== undefined) {
+		await openControlEvent(sheetFile, m);
+		return undefined;
+	}
+	return assignMacro(what, what.root, sheetFile, m);
+}
+
+/** An ActiveX control's event: its `@on("<control>.<event>")` function in the sheet's file. */
+async function openControlEvent(sheetFile: string, m: ObjectEvent): Promise<void> {
+	const events = m.activex && m.object ? sheetControlEvents(m.activex, m.object) : [];
+	if (events.length === 0) {
+		throw new Error(`${m.object || "このコントロール"} は Microsoft Forms 2.0 のコントロールではないため、イベントを選べません。ハンドラー（@on("${m.object || "<名前>"}.<イベント>")）は、VBE が作るイベント プロシージャの宣言どおりの引数で手で書いてください。`);
+	}
+	let event: EventDescriptor | undefined = events.find((e) => e.isDefault) ?? events[0];
+	if (m.choose) {
+		const text = await textOf(sheetFile);
+		const items = [...events]
+			.sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+			.map((e) => ({ label: e.name, description: `(${rasParams(e.signature)})`, detail: findHandler(text, m.object, e.name) ? "ハンドラーがあります" : undefined, event: e }));
+		const picked = await vscode.window.showQuickPick(items, { placeHolder: `${m.object} の開くイベントを選んでください` });
+		event = picked?.event;
+	}
+	if (event === undefined) {
+		return;
+	}
+	const chosen = event;
+	const code = await documentOf(sheetFile);
+	let handler = findHandler(code.getText(), m.object, chosen.name);
+	if (handler === undefined) {
+		await append(code, (text, indent, newline) => handlerText(text, m.object, chosen, indent, newline));
+		handler = findHandler(code.getText(), m.object, chosen.name);
+	}
+	await reveal(code, handler?.bodyLine ?? 0);
+}
+
+/** The file and line of a macro (`Sheet1.go`, `Report.reload`, `go`), if it is in a RAS file. */
+async function findMacro(root: string, macro: string): Promise<{ file: string; name: string } | undefined> {
+	// `'Book.xlsm'!Module.name`: the workbook's own.
+	const bare = macro.replace(/^.*!/, "");
+	const dot = bare.lastIndexOf(".");
+	const [module, name] = dot < 0 ? [undefined, bare] : [bare.slice(0, dot), bare.slice(dot + 1)];
+	for (const f of await macroFiles(root)) {
+		if (module !== undefined && f.module.toLowerCase() !== module.toLowerCase()) {
+			continue;
+		}
+		if (macrosOf(await textOf(f.file)).some((x) => x.name.toLowerCase() === name.toLowerCase())) {
+			return { file: f.file, name };
+		}
+	}
+	return undefined;
+}
+
+/** A shape's or a form control's macro: opened, or a new one (or one chosen) assigned to it. */
+async function assignMacro(what: Shown, root: string, sheetFile: string, m: ObjectEvent): Promise<string | undefined> {
+	const label = m.object || "このコントロール";
+	const open = async (file: string, name: string) => {
+		const code = await documentOf(file);
+		await reveal(code, bodyLineOf(code, name) ?? 0);
+	};
+	if (!m.choose && m.macro) {
+		const found = await findMacro(root, m.macro);
+		if (found === undefined) {
+			throw new Error(`${label} のマクロ ${m.macro} は、プロジェクトの RAS のファイルにありません（ブックの VBA だけにあるマクロかもしれません）。`);
+		}
+		await open(found.file, found.name);
+		return undefined;
+	}
+	const fresh = newMacroName(await textOf(sheetFile), m.object, m.shape);
+	let chosen: { file: string; module: string; name: string } | undefined = { file: sheetFile, module: m.codeName, name: fresh };
+	let create = true;
+	if (m.choose) {
+		type Item = vscode.QuickPickItem & { target?: { file: string; module: string; name: string }; create?: boolean };
+		const items: Item[] = [{ label: `$(add) 新しいマクロ: ${m.codeName}.${fresh}`, description: path.basename(sheetFile), target: chosen, create: true }];
+		for (const f of await macroFiles(root)) {
+			const macros = macrosOf(await textOf(f.file));
+			if (macros.length > 0) {
+				items.push({ label: f.module, kind: vscode.QuickPickItemKind.Separator });
+			}
+			for (const x of macros) {
+				const full = `${f.module}.${x.name}`;
+				items.push({ label: full, description: vscode.workspace.asRelativePath(f.file), detail: m.macro.toLowerCase() === full.toLowerCase() ? "登録されています" : undefined, target: { file: f.file, module: f.module, name: x.name } });
+			}
+		}
+		const picked = await vscode.window.showQuickPick(items, { placeHolder: `${label} に登録するマクロを選んでください（クリックすると実行されます）` });
+		if (picked?.target === undefined) {
+			return undefined;
+		}
+		chosen = picked.target;
+		create = picked.create === true;
+	}
+	const target = chosen;
+	if (create) {
+		const code = await documentOf(target.file);
+		await append(code, (text, indent, newline) => {
+			const separator = !text.trim() ? "" : /(\r\n|\r|\n)$/.test(text) ? newline : newline + newline;
+			return `${separator}export function ${target.name}() {${newline}${indent}${newline}}${newline}`;
+		});
+		await code.save();
+	}
+	const full = `${target.module}.${target.name}`;
+	const html = full.toLowerCase() === m.macro.toLowerCase() ? undefined : await edit(what, [{ op: "macro", sheet: m.sheet, object: m.object, shape: m.shape, macro: full }]);
+	await open(target.file, target.name);
+	return html;
 }
 
 /** Shows a workbook file. One a run saved is compared with the project's workbook it was read from. */
