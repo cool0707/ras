@@ -16,7 +16,11 @@ use ras_compiler::vba::VModuleKind;
 use ras_compiler::{BuildOptions, BuildOutput, Config, Diagnostic, ModuleKind, Program, Severity};
 
 #[derive(Parser)]
-#[command(name = "ras", version, about = "RAS: TypeScript ライクな構文から VBA へトランスパイルする Better VBA")]
+#[command(
+    name = "ras",
+    version,
+    about = "RAS: TypeScript ライクな構文から VBA へトランスパイルする Better VBA"
+)]
 struct Cli {
     /// プロジェクトのルート（ras.toml のあるディレクトリ）。省略時はカレントディレクトリから上へ探す
     #[arg(long, global = true, value_name = "DIR")]
@@ -198,7 +202,10 @@ struct BuildArgs {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    JSON_MESSAGES.store(cli.message_format == MessageFormat::Json, std::sync::atomic::Ordering::Relaxed);
+    JSON_MESSAGES.store(
+        cli.message_format == MessageFormat::Json,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     match run(cli) {
         Ok(code) => code,
         Err(msg) => {
@@ -226,7 +233,9 @@ fn find_root(explicit: Option<&Path>) -> Result<PathBuf, String> {
 }
 
 fn workbook_path(root: &Path, cfg: &Config, explicit: Option<&Path>) -> Option<PathBuf> {
-    let p = explicit.map(Path::to_path_buf).or_else(|| cfg.project.workbook.as_ref().map(PathBuf::from))?;
+    let p = explicit
+        .map(Path::to_path_buf)
+        .or_else(|| cfg.project.workbook.as_ref().map(PathBuf::from))?;
     Some(if p.is_absolute() { p } else { root.join(p) })
 }
 
@@ -241,9 +250,22 @@ fn analyze_with_tests(root: &Path) -> Result<Program, String> {
     analyze_project(root, &BuildArgs::default(), None, true)
 }
 
-fn analyze_project(root: &Path, args: &BuildArgs, book: Option<&Path>, tests: bool) -> Result<Program, String> {
-    let (mut cfg, sources) = if tests { ras_compiler::load_project_with_tests(root)? } else { ras_compiler::load_project(root)? };
-    cfg.opt_override = args.opt.or(if args.release { Some(cfg.build.opt_level.max(2)) } else { None });
+fn analyze_project(
+    root: &Path,
+    args: &BuildArgs,
+    book: Option<&Path>,
+    tests: bool,
+) -> Result<Program, String> {
+    let (mut cfg, sources) = if tests {
+        ras_compiler::load_project_with_tests(root)?
+    } else {
+        ras_compiler::load_project(root)?
+    };
+    cfg.opt_override = args.opt.or(if args.release {
+        Some(cfg.build.opt_level.max(2))
+    } else {
+        None
+    });
     let book = match book {
         Some(b) => Some(b.to_path_buf()),
         None => workbook_path(root, &cfg, None),
@@ -251,7 +273,10 @@ fn analyze_project(root: &Path, args: &BuildArgs, book: Option<&Path>, tests: bo
     if let Some(book) = book {
         if book.is_file() {
             if let Err(e) = ras_sync::read_workbook(&mut cfg, root, &book) {
-                eprintln!("warning: {} のシート名を読み取れませんでした: {e}", book.display());
+                eprintln!(
+                    "warning: {} のシート名を読み取れませんでした: {e}",
+                    book.display()
+                );
             }
         }
     }
@@ -262,7 +287,8 @@ fn analyze_project(root: &Path, args: &BuildArgs, book: Option<&Path>, tests: bo
 fn apply_fixes(prog: &Program) -> Result<usize, String> {
     let mut count = 0;
     for md in prog.modules.iter().filter(|m| m.kind == ModuleKind::User) {
-        let fixes: Vec<&ras_compiler::Fix> = prog.fixes.iter().filter(|f| f.module == md.id).collect();
+        let fixes: Vec<&ras_compiler::Fix> =
+            prog.fixes.iter().filter(|f| f.module == md.id).collect();
         if fixes.is_empty() {
             continue;
         }
@@ -277,7 +303,11 @@ fn apply_fixes(prog: &Program) -> Result<usize, String> {
         count += places.len();
         // `load_project` drops a byte-order mark: keep the one the file has.
         let had_bom = std::fs::read(&md.path).is_ok_and(|b| b.starts_with(&[0xEF, 0xBB, 0xBF]));
-        let out = if had_bom { format!("\u{feff}{fixed}") } else { fixed };
+        let out = if had_bom {
+            format!("\u{feff}{fixed}")
+        } else {
+            fixed
+        };
         std::fs::write(&md.path, out).map_err(|e| format!("{}: {e}", md.path.display()))?;
     }
     Ok(count)
@@ -288,7 +318,11 @@ fn report(prog: &Program, diags: &[Diagnostic], show_hints: bool) -> usize {
     let mut items: Vec<&Diagnostic> = diags
         .iter()
         .filter(|d| show_hints || d.severity <= Severity::Warning)
-        .filter(|d| d.module.is_none_or(|m| prog.modules[m].kind == ModuleKind::User) || d.is_error())
+        .filter(|d| {
+            d.module
+                .is_none_or(|m| prog.modules[m].kind == ModuleKind::User)
+                || d.is_error()
+        })
         .collect();
     items.sort_by_key(|d| (d.module, u32::from(d.span.start())));
     if JSON_MESSAGES.load(std::sync::atomic::Ordering::Relaxed) {
@@ -313,16 +347,36 @@ fn report(prog: &Program, diags: &[Diagnostic], show_hints: bool) -> usize {
             let ls = md.line_starts[line as usize] as usize;
             let le = md.text[ls..].find('\n').map_or(md.text.len(), |i| ls + i);
             let src = md.text[ls..le].trim_end_matches('\r');
-            let prefix: String = md.text[ls..(start as usize).min(le)].chars().map(|c| if c == '\t' { '\t' } else { ' ' }).collect();
-            let width = md.text[(start as usize).min(le)..(u32::from(d.span.end()) as usize).clamp(start as usize, le)].chars().count().max(1);
-            eprintln!("   |\n{:>3}| {src}\n   | {prefix}{}", line + 1, "^".repeat(width));
+            let prefix: String = md.text[ls..(start as usize).min(le)]
+                .chars()
+                .map(|c| if c == '\t' { '\t' } else { ' ' })
+                .collect();
+            let width = md.text[(start as usize).min(le)
+                ..(u32::from(d.span.end()) as usize).clamp(start as usize, le)]
+                .chars()
+                .count()
+                .max(1);
+            eprintln!(
+                "   |\n{:>3}| {src}\n   | {prefix}{}",
+                line + 1,
+                "^".repeat(width)
+            );
         }
         eprintln!();
     }
     let errors = items.iter().filter(|d| d.is_error()).count();
     static HINTED: std::sync::Once = std::sync::Once::new();
     if errors > 0 {
-        HINTED.call_once(|| eprintln!("（エラーの説明と直し方: ras explain <コード>。例: ras explain {}）", items.iter().find(|d| d.is_error()).map(|d| d.code).unwrap_or("E0301")));
+        HINTED.call_once(|| {
+            eprintln!(
+                "（エラーの説明と直し方: ras explain <コード>。例: ras explain {}）",
+                items
+                    .iter()
+                    .find(|d| d.is_error())
+                    .map(|d| d.code)
+                    .unwrap_or("E0301")
+            )
+        });
     }
     errors
 }
@@ -337,7 +391,8 @@ fn diagnostic_json(prog: &Program, d: &Diagnostic) -> serde_json::Value {
         Severity::Info => "info",
         Severity::Hint => "hint",
     };
-    let mut out = json!({ "type": "diagnostic", "code": d.code, "severity": severity, "message": d.message });
+    let mut out =
+        json!({ "type": "diagnostic", "code": d.code, "severity": severity, "message": d.message });
     let range = |m: usize, span: ras_syntax::ast::Span| {
         let md = &prog.modules[m];
         let (l1, c1) = md.line_col_utf16(u32::from(span.start()));
@@ -385,19 +440,35 @@ fn encode(text: &str, codepage: u16) -> Vec<u8> {
 }
 
 /// Compiles the project; `None` when there were errors.
-fn compile(root: &Path, args: &BuildArgs, book: Option<&Path>) -> Result<Option<(Program, BuildOutput)>, String> {
+fn compile(
+    root: &Path,
+    args: &BuildArgs,
+    book: Option<&Path>,
+) -> Result<Option<(Program, BuildOutput)>, String> {
     compile_with(root, args, book, false)
 }
 
 /// `no_attributes`: for code that goes through `CodeModule.AddFromString`, which rejects `Attribute` lines (spec §16.1.3).
-fn compile_with(root: &Path, args: &BuildArgs, book: Option<&Path>, no_attributes: bool) -> Result<Option<(Program, BuildOutput)>, String> {
+fn compile_with(
+    root: &Path,
+    args: &BuildArgs,
+    book: Option<&Path>,
+    no_attributes: bool,
+) -> Result<Option<(Program, BuildOutput)>, String> {
     let prog = analyze(root, args, book)?;
     let errors = report(&prog, &prog.diagnostics, false);
     if errors > 0 {
         eprintln!("{errors} 件のエラーがあります");
         return Ok(None);
     }
-    let out = ras_compiler::build(&prog, &BuildOptions { release: args.release, erl: args.erl, no_attributes });
+    let out = ras_compiler::build(
+        &prog,
+        &BuildOptions {
+            release: args.release,
+            erl: args.erl,
+            no_attributes,
+        },
+    );
     let errors = report(&prog, &out.diagnostics, false);
     if errors > 0 {
         eprintln!("{errors} 件のエラーがあります");
@@ -414,7 +485,8 @@ fn write_build(root: &Path, prog: &Program, out: &BuildOutput) -> Result<PathBuf
     for f in out.files.iter().filter(|f| f.kind != VModuleKind::Form) {
         // Module files are stored in the target code page, as the VBE expects (spec §13.7).
         let path = dir.join(&f.file_name);
-        std::fs::write(&path, encode(&f.full_text, prog.config.target.codepage)).map_err(|e| format!("{}: {e}", path.display()))?;
+        std::fs::write(&path, encode(&f.full_text, prog.config.target.codepage))
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         keep.insert(f.file_name.clone());
         let map = format!("{}.rasmap", f.name);
         std::fs::write(dir.join(&map), f.rasmap()).map_err(|e| e.to_string())?;
@@ -423,7 +495,9 @@ fn write_build(root: &Path, prog: &Program, out: &BuildOutput) -> Result<PathBuf
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            let generated = [".bas", ".cls", ".doccls", ".rasmap"].iter().any(|ext| name.ends_with(ext));
+            let generated = [".bas", ".cls", ".doccls", ".rasmap"]
+                .iter()
+                .any(|ext| name.ends_with(ext));
             if generated && !keep.contains(&name) {
                 let _ = std::fs::remove_file(e.path());
             }
@@ -433,22 +507,41 @@ fn write_build(root: &Path, prog: &Program, out: &BuildOutput) -> Result<PathBuf
 }
 
 fn cmd_build(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
-    let Some((prog, out)) = compile(root, args, None)? else { return Ok(ExitCode::from(1)) };
+    let Some((prog, out)) = compile(root, args, None)? else {
+        return Ok(ExitCode::from(1));
+    };
     if load_forms(root, prog.config.target.codepage, &out)?.is_none() {
         return Ok(ExitCode::from(1));
     }
     let dir = write_build(root, &prog, &out)?;
-    let modules = out.files.iter().filter(|f| f.kind != VModuleKind::Form).count();
-    println!("{modules} 個のモジュールを {} に出力しました", dir.display());
+    let modules = out
+        .files
+        .iter()
+        .filter(|f| f.kind != VModuleKind::Form)
+        .count();
+    println!(
+        "{modules} 個のモジュールを {} に出力しました",
+        dir.display()
+    );
     Ok(ExitCode::SUCCESS)
 }
 
 /// `ras build --target js`: the debug build (spec §14.10). Runs the program as written,
 /// so the optimisation options of the VBA build do not apply.
 fn cmd_build_js(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
-    let Some(out) = build_debug(root, args)? else { return Ok(ExitCode::from(1)) };
+    let Some(out) = build_debug(root, args)? else {
+        return Ok(ExitCode::from(1));
+    };
     let dir = root.join("build").join("debug");
-    println!("デバッグ用の JavaScript を {} に出力しました（実行できる関数: {}）", dir.display(), if out.entries.is_empty() { "なし".to_string() } else { out.entries.join(", ") });
+    println!(
+        "デバッグ用の JavaScript を {} に出力しました（実行できる関数: {}）",
+        dir.display(),
+        if out.entries.is_empty() {
+            "なし".to_string()
+        } else {
+            out.entries.join(", ")
+        }
+    );
     Ok(ExitCode::SUCCESS)
 }
 
@@ -474,13 +567,19 @@ fn build_debug(root: &Path, args: &BuildArgs) -> Result<Option<ras_compiler::JsO
 /// `ras run`: builds the debug build and runs an entry point of it under Node, on the
 /// stand-in for Excel.
 fn cmd_run(root: &Path, args: &run::RunArgs) -> Result<ExitCode, String> {
-    let Some(out) = build_debug(root, &BuildArgs::default())? else { return Ok(ExitCode::from(2)) };
+    let Some(out) = build_debug(root, &BuildArgs::default())? else {
+        return Ok(ExitCode::from(2));
+    };
     run::run(root, &out, args)
 }
 
 /// Loads, validates and generates the forms of `forms/` with the code compiled from their
 /// `.ras` code-behinds; `None` (after printing the problems) when there are errors.
-fn load_forms(root: &Path, codepage: u16, out: &BuildOutput) -> Result<Option<Vec<ras_ovba::UserForm>>, String> {
+fn load_forms(
+    root: &Path,
+    codepage: u16,
+    out: &BuildOutput,
+) -> Result<Option<Vec<ras_ovba::UserForm>>, String> {
     let (_, built) = forms::build(root, codepage, &forms::compiled_code(&out.files))?;
     let errors = forms::report(&built);
     if errors > 0 {
@@ -512,24 +611,47 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         return Err("対象ブックが指定されていません。`ras pack <book>` か ras.toml の project.workbook で指定してください".into());
     };
     if !book.is_file() {
-        return Err(format!("{} が見つかりません（`ras init --workbook` で空のブックを作成できます）", book.display()));
+        return Err(format!(
+            "{} が見つかりません（`ras init --workbook` で空のブックを作成できます）",
+            book.display()
+        ));
     }
     // The hand-written VBA of the workbook is taken over into the project first (spec §14.7.1).
-    let prepared = if cfg.sync.pull_unmanaged && p.output.is_none() && !is_open_in_excel(&book) { take_over_offline(root, &book, cfg.target.codepage)? } else { ras_sync::Prepared::default() };
+    let prepared = if cfg.sync.pull_unmanaged && p.output.is_none() && !is_open_in_excel(&book) {
+        take_over_offline(root, &book, cfg.target.codepage)?
+    } else {
+        ras_sync::Prepared::default()
+    };
     report_take_over(&prepared);
-    let Some((prog, out)) = compile(root, args, Some(&book))? else { return Ok(ExitCode::from(1)) };
+    let Some((prog, out)) = compile(root, args, Some(&book))? else {
+        return Ok(ExitCode::from(1));
+    };
     write_build(root, &prog, &out)?;
-    let Some(user_forms) = load_forms(root, prog.config.target.codepage, &out)? else { return Ok(ExitCode::from(1)) };
+    let Some(user_forms) = load_forms(root, prog.config.target.codepage, &out)? else {
+        return Ok(ExitCode::from(1));
+    };
     let opts = ras_sync::options(root, &prepared, p.overwrite);
-    let pending = |name: &str| opts.pending.iter().any(|(c, g)| c.eq_ignore_ascii_case(name) || g.eq_ignore_ascii_case(name));
+    let pending = |name: &str| {
+        opts.pending
+            .iter()
+            .any(|(c, g)| c.eq_ignore_ascii_case(name) || g.eq_ignore_ascii_case(name))
+    };
     let adopted = |name: &str| opts.adopt.iter().any(|n| n.eq_ignore_ascii_case(name));
     // What a pending take-over generates is not written yet.
-    let user_forms: Vec<ras_ovba::UserForm> = user_forms.into_iter().filter(|f| !pending(&f.name)).collect();
-    let files: Vec<&ras_compiler::OutputFile> = out.files.iter().filter(|f| !pending(&f.name)).collect();
+    let user_forms: Vec<ras_ovba::UserForm> = user_forms
+        .into_iter()
+        .filter(|f| !pending(&f.name))
+        .collect();
+    let files: Vec<&ras_compiler::OutputFile> =
+        out.files.iter().filter(|f| !pending(&f.name)).collect();
 
     // Modules that RAS generated earlier but that no longer exist are removed; hand-edited ones are reported (spec §14.7).
     let existing = ras_ovba::unpack(&book).map_err(|e| format!("{}: {e}", book.display()))?;
-    let generated: HashSet<&str> = files.iter().filter(|f| f.kind != VModuleKind::Form).map(|f| f.name.as_str()).collect();
+    let generated: HashSet<&str> = files
+        .iter()
+        .filter(|f| f.kind != VModuleKind::Form)
+        .map(|f| f.name.as_str())
+        .collect();
     let mut remove = Vec::new();
     let mut drifted = Vec::new();
     if let Some(project) = &existing.project {
@@ -540,7 +662,10 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
             }
             let Some(is_drifted) = ras_compiler::emit::has_drifted(&m.source) else {
                 // Taken over into a RAS module of another name (`mod_Main` → `ModMain`).
-                if m.kind == ras_ovba::ModuleKind::Standard && adopted(&m.name) && !generated.iter().any(|g| g.eq_ignore_ascii_case(&m.name)) {
+                if m.kind == ras_ovba::ModuleKind::Standard
+                    && adopted(&m.name)
+                    && !generated.iter().any(|g| g.eq_ignore_ascii_case(&m.name))
+                {
                     remove.push(m.name.clone());
                 }
                 continue;
@@ -549,7 +674,12 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
             if is_drifted && !adopted(&m.name) {
                 drifted.push(m.name.clone());
             }
-            if !generated.contains(m.name.as_str()) && matches!(m.kind, ras_ovba::ModuleKind::Standard | ras_ovba::ModuleKind::Class) {
+            if !generated.contains(m.name.as_str())
+                && matches!(
+                    m.kind,
+                    ras_ovba::ModuleKind::Standard | ras_ovba::ModuleKind::Class
+                )
+            {
                 remove.push(m.name.clone());
             }
         }
@@ -559,16 +689,33 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         .project
         .iter()
         .flat_map(|project| &project.modules)
-        .filter(|m| matches!(m.kind, ras_ovba::ModuleKind::Standard | ras_ovba::ModuleKind::Class | ras_ovba::ModuleKind::Form))
-        .filter(|m| ras_compiler::emit::has_drifted(&m.source).is_none() && has_code(&m.source) && !adopted(&m.name))
-        .filter(|m| generated.iter().any(|g| g.to_lowercase() == m.name.to_lowercase()))
+        .filter(|m| {
+            matches!(
+                m.kind,
+                ras_ovba::ModuleKind::Standard
+                    | ras_ovba::ModuleKind::Class
+                    | ras_ovba::ModuleKind::Form
+            )
+        })
+        .filter(|m| {
+            ras_compiler::emit::has_drifted(&m.source).is_none()
+                && has_code(&m.source)
+                && !adopted(&m.name)
+        })
+        .filter(|m| {
+            generated
+                .iter()
+                .any(|g| g.to_lowercase() == m.name.to_lowercase())
+        })
         .map(|m| m.name.clone())
         .collect();
-    let locked = || format!(
+    let locked = || {
+        format!(
             "{} は Excel で開かれているため、オフライン書き込みはできません。開いたまま反映するには `ras sync` を使ってください（Windows のみ）。または、ブックを閉じてから再実行してください{}",
             book.display(),
             stale_owner_hint(&book)
-        );
+        )
+    };
     // A workbook open in Excel is not written to, whatever else is wrong (spec §14.9.3).
     if is_open_in_excel(&book) {
         return Err(locked());
@@ -577,21 +724,56 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
     // (spec §12.2, §14.6).
     let mut document_code = Vec::new();
     let mut document_names = vec![existing.code_names.workbook.clone()];
-    document_names.extend(existing.code_names.sheets.iter().map(|s| s.code_name.clone()));
+    document_names.extend(
+        existing
+            .code_names
+            .sheets
+            .iter()
+            .map(|s| s.code_name.clone()),
+    );
     for f in files.iter().filter(|f| f.kind == VModuleKind::Document) {
-        let name = if f.name.eq_ignore_ascii_case("ThisWorkbook") { existing.code_names.workbook.as_str() } else { f.name.as_str() };
-        if !document_names.iter().any(|n| n.to_lowercase() == name.to_lowercase()) {
+        let name = if f.name.eq_ignore_ascii_case("ThisWorkbook") {
+            existing.code_names.workbook.as_str()
+        } else {
+            f.name.as_str()
+        };
+        if !document_names
+            .iter()
+            .any(|n| n.to_lowercase() == name.to_lowercase())
+        {
             return Err(format!("{}: ブックに `{}` というコード名のシートがありません（objects/{}.ras）。シートのコード名を変えたときは、ファイル名も変えてください", book.display(), f.name, f.name));
         }
     }
     for name in document_names.iter().filter(|n| !n.is_empty()) {
-        let generated_name = if name.to_lowercase() == existing.code_names.workbook.to_lowercase() { "ThisWorkbook" } else { name.as_str() };
+        let generated_name = if name.to_lowercase() == existing.code_names.workbook.to_lowercase() {
+            "ThisWorkbook"
+        } else {
+            name.as_str()
+        };
         if pending(name) || pending(generated_name) {
             continue;
         }
-        let current = existing.project.iter().flat_map(|project| &project.modules).find(|m| m.kind == ras_ovba::ModuleKind::Document && m.name.to_lowercase() == name.to_lowercase()).map(|m| m.source.as_str()).unwrap_or("");
-        let code = files.iter().find(|f| f.kind == VModuleKind::Document && f.name.to_lowercase() == generated_name.to_lowercase()).map(|f| f.code.as_str());
-        let own = opts.written.iter().any(|n| n.to_lowercase() == generated_name.to_lowercase());
+        let current = existing
+            .project
+            .iter()
+            .flat_map(|project| &project.modules)
+            .find(|m| {
+                m.kind == ras_ovba::ModuleKind::Document
+                    && m.name.to_lowercase() == name.to_lowercase()
+            })
+            .map(|m| m.source.as_str())
+            .unwrap_or("");
+        let code = files
+            .iter()
+            .find(|f| {
+                f.kind == VModuleKind::Document
+                    && f.name.to_lowercase() == generated_name.to_lowercase()
+            })
+            .map(|f| f.code.as_str());
+        let own = opts
+            .written
+            .iter()
+            .any(|n| n.to_lowercase() == generated_name.to_lowercase());
         match ras_sync::plan::document_action(current, code, adopted(name), p.overwrite, own) {
             ras_sync::plan::DocumentAction::Write(code) => document_code.push(ras_ovba::DocumentCode { code_name: name.clone(), code }),
             ras_sync::plan::DocumentAction::Drifted => drifted.push(name.clone()),
@@ -618,7 +800,14 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         if generated.iter().any(|g| g.eq_ignore_ascii_case(&form.name)) {
             return Err(format!("ユーザーフォーム `{}` と同じ名前の RAS モジュールがあります。どちらかの名前を変えてください", form.name));
         }
-        let Some(m) = existing.project.iter().flat_map(|project| &project.modules).find(|m| m.name.eq_ignore_ascii_case(&form.name)) else { continue };
+        let Some(m) = existing
+            .project
+            .iter()
+            .flat_map(|project| &project.modules)
+            .find(|m| m.name.eq_ignore_ascii_case(&form.name))
+        else {
+            continue;
+        };
         if m.kind != ras_ovba::ModuleKind::Form {
             return Err(format!("ブックには `{}` という名前のフォームではないモジュールがあります。フォーム名を変えてください", m.name));
         }
@@ -637,7 +826,11 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
         match f.kind {
             // Written with the form's designer (`user_forms`); the document modules: above.
             VModuleKind::Form | VModuleKind::Document => {}
-            _ => modules.push(ras_ovba::VbaModule { name: f.name.clone(), kind: to_ovba_kind(&f.kind), source: f.stream_text() }),
+            _ => modules.push(ras_ovba::VbaModule {
+                name: f.name.clone(),
+                kind: to_ovba_kind(&f.kind),
+                source: f.stream_text(),
+            }),
         }
     }
     let req = ras_ovba::PackRequest {
@@ -691,7 +884,10 @@ fn cmd_pack(root: &Path, args: &BuildArgs, p: &PackArgs) -> Result<ExitCode, Str
 fn live_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<Option<ExitCode>, String> {
     let (cfg, _) = ras_compiler::load_project(root)?;
     let Some(book) = workbook_path(root, &cfg, None) else {
-        return Err("同期先のブックが指定されていません。ras.toml の project.workbook で指定してください".into());
+        return Err(
+            "同期先のブックが指定されていません。ras.toml の project.workbook で指定してください"
+                .into(),
+        );
     };
     let mut session = ras_sync::Session::new(&book);
     match session.connect() {
@@ -701,13 +897,32 @@ fn live_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<Option<Ex
     }
     // The hand-written VBA of the workbook is taken over into the project first (spec §14.7.1),
     // and the sheets without a file get one (spec §14.7.2).
-    let prepared = if cfg.sync.pull_unmanaged || cfg.sync.sheet_files { session.take_over(root, cfg.target.codepage, &cfg.sync).map_err(|e| e.to_string())? } else { ras_sync::Prepared::default() };
+    let prepared = if cfg.sync.pull_unmanaged || cfg.sync.sheet_files {
+        session
+            .take_over(root, cfg.target.codepage, &cfg.sync)
+            .map_err(|e| e.to_string())?
+    } else {
+        ras_sync::Prepared::default()
+    };
     report_take_over(&prepared);
-    let Some((prog, out)) = compile_with(root, args, Some(&book), true)? else { return Ok(Some(ExitCode::from(1))) };
+    let Some((prog, out)) = compile_with(root, args, Some(&book), true)? else {
+        return Ok(Some(ExitCode::from(1)));
+    };
     write_build(root, &prog, &out)?;
     let codepage = prog.config.target.codepage;
-    let Some(user_forms) = load_forms(root, codepage, &out)? else { return Ok(Some(ExitCode::from(1))) };
-    let rep = session.apply(&out.files, ras_sync::Forms { forms: &user_forms, codepage }, &ras_sync::options(root, &prepared, overwrite)).map_err(|e| e.to_string())?;
+    let Some(user_forms) = load_forms(root, codepage, &out)? else {
+        return Ok(Some(ExitCode::from(1)));
+    };
+    let rep = session
+        .apply(
+            &out.files,
+            ras_sync::Forms {
+                forms: &user_forms,
+                codepage,
+            },
+            &ras_sync::options(root, &prepared, overwrite),
+        )
+        .map_err(|e| e.to_string())?;
     ras_form::import::finish(&prepared)?;
     // What was written, to tell later what was added in the VBE (spec §14.7.3).
     let mut not_written = rep.drifted.clone();
@@ -738,22 +953,52 @@ fn cmd_sync(root: &Path, args: &BuildArgs, overwrite: bool) -> Result<ExitCode, 
 
 /// Takes over the hand-written VBA of the workbook file `book` into the project (spec §14.7.1),
 /// as the live sync does with the open workbook.
-fn take_over_offline(root: &Path, book: &Path, codepage: u16) -> Result<ras_sync::Prepared, String> {
+fn take_over_offline(
+    root: &Path,
+    book: &Path,
+    codepage: u16,
+) -> Result<ras_sync::Prepared, String> {
     let at = |e: ras_ovba::OvbaError| format!("{}: {e}", book.display());
     let unpacked = ras_ovba::unpack(book).map_err(at)?;
-    let Some(project) = unpacked.project else { return Ok(ras_sync::Prepared::default()) };
-    let modules: Vec<ras_form::import::BookModule> = project.modules.iter().map(|m| ras_form::import::BookModule { name: m.name.clone(), kind: m.kind, code: m.source.clone() }).collect();
+    let Some(project) = unpacked.project else {
+        return Ok(ras_sync::Prepared::default());
+    };
+    let modules: Vec<ras_form::import::BookModule> = project
+        .modules
+        .iter()
+        .map(|m| ras_form::import::BookModule {
+            name: m.name.clone(),
+            kind: m.kind,
+            code: m.source.clone(),
+        })
+        .collect();
     let mut forms: Option<Vec<ras_ovba::UserForm>> = None;
     let mut form = |name: &str| -> Result<ras_ovba::UserForm, String> {
         if forms.is_none() {
             forms = Some(ras_ovba::unpack_user_forms(book).map_err(at)?);
         }
-        forms.iter().flatten().find(|f| f.name.eq_ignore_ascii_case(name)).cloned().ok_or_else(|| format!("{} にフォーム `{name}` のデザイナがありません", book.display()))
+        forms
+            .iter()
+            .flatten()
+            .find(|f| f.name.eq_ignore_ascii_case(name))
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "{} にフォーム `{name}` のデザイナがありません",
+                    book.display()
+                )
+            })
     };
     let sheet_controls = ras_sync::sheet_controls(book).unwrap_or_default();
     let mut written = ras_sync::Written::new(root);
     let mut written = |name: &str| written.code(name);
-    let mut taken = ras_form::import::Book { modules: &modules, workbook_code_name: &unpacked.code_names.workbook, sheet_controls: &sheet_controls, form: &mut form, written: &mut written };
+    let mut taken = ras_form::import::Book {
+        modules: &modules,
+        workbook_code_name: &unpacked.code_names.workbook,
+        sheet_controls: &sheet_controls,
+        form: &mut form,
+        written: &mut written,
+    };
     let mut prepared = ras_form::import::prepare(root, &mut taken, codepage)?;
     // Code added in the VBE that does not compile as RAS goes back out of the file (spec §14.7.3).
     ras_sync::settle_appended(root, &mut prepared)?;
@@ -769,17 +1014,27 @@ fn report_take_over(prepared: &ras_sync::Prepared) {
 
 /// Whether Excel has the workbook open (its owner file `~$Book.xlsm` exists).
 fn is_open_in_excel(book: &Path) -> bool {
-    book.file_name().and_then(|n| n.to_str()).is_some_and(|n| book.with_file_name(format!("~${n}")).exists())
+    book.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| book.with_file_name(format!("~${n}")).exists())
 }
 
 /// Whether a module holds anything besides its `Attribute` header, `Option` statements and blank lines.
 fn has_code(source: &str) -> bool {
-    source.lines().map(str::trim).any(|l| !l.is_empty() && !l.starts_with("Attribute ") && !l.starts_with("VERSION ") && !l.to_ascii_lowercase().starts_with("option "))
+    source.lines().map(str::trim).any(|l| {
+        !l.is_empty()
+            && !l.starts_with("Attribute ")
+            && !l.starts_with("VERSION ")
+            && !l.to_ascii_lowercase().starts_with("option ")
+    })
 }
 
 /// Excel leaves its owner file (`~$Book.xlsm`) behind when it crashes; the workbook then looks open for ever.
 fn stale_owner_hint(book: &Path) -> String {
-    let owner = book.file_name().and_then(|n| n.to_str()).map(|n| book.with_file_name(format!("~${n}")));
+    let owner = book
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| book.with_file_name(format!("~${n}")));
     match owner {
         Some(owner) if owner.exists() => format!("\n  Excel で開いていないのにこのエラーになる場合は、Excel の異常終了で残った {} を削除してください", owner.display()),
         _ => String::new(),
@@ -804,17 +1059,28 @@ fn cmd_unpack(root: &Path, book: Option<&Path>) -> Result<ExitCode, String> {
     let (mut written, mut managed, mut drifted) = (0, 0, 0);
     for m in &project.modules {
         // The Attribute header is not part of the code pane.
-        let code: String = m.source.replace("\r\n", "\n").lines().skip_while(|l| l.starts_with("Attribute ") || l.starts_with("VERSION ")).map(|l| format!("{l}\n")).collect();
+        let code: String = m
+            .source
+            .replace("\r\n", "\n")
+            .lines()
+            .skip_while(|l| l.starts_with("Attribute ") || l.starts_with("VERSION "))
+            .map(|l| format!("{l}\n"))
+            .collect();
         match ras_compiler::emit::has_drifted(&m.source) {
             Some(false) => managed += 1,
             Some(true) => {
                 // RAS-managed module edited in the VBE: keep the VBE side for the user to compare.
                 std::fs::create_dir_all(&drift_dir).map_err(|e| e.to_string())?;
-                std::fs::write(drift_dir.join(format!("{}.vba", m.name)), &code).map_err(|e| e.to_string())?;
+                std::fs::write(drift_dir.join(format!("{}.vba", m.name)), &code)
+                    .map_err(|e| e.to_string())?;
                 eprintln!("warning: RAS 管理モジュール `{}` は VBE 上で編集されています。VBE 側の内容を build/drift/{}.vba に保存しました", m.name, m.name);
                 drifted += 1;
             }
-            None if m.kind == ras_ovba::ModuleKind::Form && ras_ovba::is_generated_form(&m.source) => managed += 1,
+            None if m.kind == ras_ovba::ModuleKind::Form
+                && ras_ovba::is_generated_form(&m.source) =>
+            {
+                managed += 1
+            }
             None => {
                 let ext = match m.kind {
                     ras_ovba::ModuleKind::Standard => "bas",
@@ -822,12 +1088,21 @@ fn cmd_unpack(root: &Path, book: Option<&Path>) -> Result<ExitCode, String> {
                     _ => "cls",
                 };
                 // Document modules: only the hand-written part outside the RAS-managed region.
-                let text = if m.kind == ras_ovba::ModuleKind::Document { ras_ovba::merge_managed_region(&m.source, "").replace("\r\n", "\n") } else { m.source.replace("\r\n", "\n") };
-                if m.kind == ras_ovba::ModuleKind::Document && text.lines().all(|l| l.starts_with("Attribute ") || l.trim().is_empty()) {
+                let text = if m.kind == ras_ovba::ModuleKind::Document {
+                    ras_ovba::merge_managed_region(&m.source, "").replace("\r\n", "\n")
+                } else {
+                    m.source.replace("\r\n", "\n")
+                };
+                if m.kind == ras_ovba::ModuleKind::Document
+                    && text
+                        .lines()
+                        .all(|l| l.starts_with("Attribute ") || l.trim().is_empty())
+                {
                     continue;
                 }
                 std::fs::create_dir_all(&vba_dir).map_err(|e| e.to_string())?;
-                std::fs::write(vba_dir.join(format!("{}.{ext}", m.name)), text).map_err(|e| e.to_string())?;
+                std::fs::write(vba_dir.join(format!("{}.{ext}", m.name)), text)
+                    .map_err(|e| e.to_string())?;
                 written += 1;
             }
         }
@@ -853,7 +1128,11 @@ fn cmd_init(dir: &Path, workbook: Option<&str>) -> Result<ExitCode, String> {
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '_')
         .collect();
-    let name = if name.is_empty() { "RASProject".to_string() } else { name };
+    let name = if name.is_empty() {
+        "RASProject".to_string()
+    } else {
+        name
+    };
     let wb_line = match workbook {
         Some(w) => format!("workbook = \"{w}\""),
         None => "# workbook = \"Book.xlsm\"    # `ras pack` / 同期の対象ブック".to_string(),
@@ -881,11 +1160,19 @@ fn cmd_init(dir: &Path, workbook: Option<&str>) -> Result<ExitCode, String> {
         if path.exists() {
             eprintln!("warning: {} は既に存在するため作成しません", path.display());
         } else {
-            let kind = if w.to_lowercase().ends_with(".xlam") { ras_ovba::BookKind::Xlam } else { ras_ovba::BookKind::Xlsm };
-            std::fs::write(&path, ras_ovba::create_workbook(kind, &["Sheet1"])).map_err(|e| e.to_string())?;
+            let kind = if w.to_lowercase().ends_with(".xlam") {
+                ras_ovba::BookKind::Xlam
+            } else {
+                ras_ovba::BookKind::Xlsm
+            };
+            std::fs::write(&path, ras_ovba::create_workbook(kind, &["Sheet1"]))
+                .map_err(|e| e.to_string())?;
         }
     }
-    println!("{} を作成しました。`ras build` で VBA を生成できます", toml_path.display());
+    println!(
+        "{} を作成しました。`ras build` で VBA を生成できます",
+        toml_path.display()
+    );
     Ok(ExitCode::SUCCESS)
 }
 
@@ -894,7 +1181,11 @@ fn cmd_fmt(root: Option<&Path>, files: &[PathBuf], check: bool) -> Result<ExitCo
     if targets.is_empty() {
         let root = find_root(root)?;
         let (_, sources) = ras_compiler::load_project(&root)?;
-        targets = sources.into_iter().filter(|s| s.kind == ModuleKind::User).map(|s| s.path).collect();
+        targets = sources
+            .into_iter()
+            .filter(|s| s.kind == ModuleKind::User)
+            .map(|s| s.path)
+            .collect();
     }
     let (mut changed, mut failed) = (0, 0);
     for path in &targets {
@@ -916,7 +1207,11 @@ fn cmd_fmt(root: Option<&Path>, files: &[PathBuf], check: bool) -> Result<ExitCo
             Some(_) => {}
         }
     }
-    Ok(if failed > 0 || (check && changed > 0) { ExitCode::from(1) } else { ExitCode::SUCCESS })
+    Ok(if failed > 0 || (check && changed > 0) {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 fn cmd_watch(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
@@ -931,7 +1226,9 @@ fn cmd_watch(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
     for sub in ["src", "types", "forms", "ras.toml"] {
         let p = root.join(sub);
         if p.exists() {
-            watcher.watch(&p, RecursiveMode::Recursive).map_err(|e| e.to_string())?;
+            watcher
+                .watch(&p, RecursiveMode::Recursive)
+                .map_err(|e| e.to_string())?;
         }
     }
     let rebuild = || {
@@ -944,7 +1241,16 @@ fn cmd_watch(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
             // Open in Excel: live sync. Closed: the file is updated directly (spec §14.9).
             match live_sync(root, args, false) {
                 Ok(Some(code)) => Ok(code),
-                Ok(None) => cmd_pack(root, args, &PackArgs { book: None, convert: false, output: None, overwrite: false }),
+                Ok(None) => cmd_pack(
+                    root,
+                    args,
+                    &PackArgs {
+                        book: None,
+                        convert: false,
+                        output: None,
+                        overwrite: false,
+                    },
+                ),
                 Err(e) => Err(e),
             }
         } else {
@@ -960,7 +1266,9 @@ fn cmd_watch(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
         // Debounce: editors write files in several steps.
         let mut relevant = is_source_event(&first);
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
-        while let Ok(ev) = rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+        while let Ok(ev) =
+            rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        {
             relevant |= is_source_event(&ev);
         }
         if relevant {
@@ -971,7 +1279,17 @@ fn cmd_watch(root: &Path, args: &BuildArgs) -> Result<ExitCode, String> {
 }
 
 fn is_source_event(ev: &notify::Event) -> bool {
-    !matches!(ev.kind, notify::EventKind::Access(_)) && ev.paths.iter().any(|p| p.extension().is_some_and(|e| ["ras", "toml", "json", "bmp", "jpg", "jpeg", "png", "gif", "webp", "tif", "tiff", "ico"].iter().any(|known| e.eq_ignore_ascii_case(known))))
+    !matches!(ev.kind, notify::EventKind::Access(_))
+        && ev.paths.iter().any(|p| {
+            p.extension().is_some_and(|e| {
+                [
+                    "ras", "toml", "json", "bmp", "jpg", "jpeg", "png", "gif", "webp", "tif",
+                    "tiff", "ico",
+                ]
+                .iter()
+                .any(|known| e.eq_ignore_ascii_case(known))
+            })
+        })
 }
 
 fn unimplemented_cmd(what: &str, detail: &str) -> Result<ExitCode, String> {

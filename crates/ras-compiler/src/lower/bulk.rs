@@ -80,37 +80,60 @@ fn diff(hi: VExpr, lo: &VExpr) -> VExpr {
 
 impl<'p> Lowerer<'p> {
     fn refuse_bulk(&mut self, s: &Stmt, why: &str) -> Option<BulkPlan> {
-        self.note(ast::Span::at(s.span.start(), 3.into()), false, "bulk", format!("セルアクセスを一括転送に変換しません: {why}"));
+        self.note(
+            ast::Span::at(s.span.start(), 3.into()),
+            false,
+            "bulk",
+            format!("セルアクセスを一括転送に変換しません: {why}"),
+        );
         None
     }
 
     /// `X.Cells(row, col).Prop` → (sheet expr, row, col, prop)
     fn cell_access<'a>(&self, e: &'a Expr) -> Option<(&'a Expr, &'a Expr, &'a Expr, &'p str)> {
         let info = self.info();
-        let ExprKind::Member { object, .. } = &e.kind else { return None };
+        let ExprKind::Member { object, .. } = &e.kind else {
+            return None;
+        };
         // The property by its type-library name (`value` in the source is `Value`).
-        let Some(Res::Field(fc, fi)) = info.res.get(&e.id) else { return None };
+        let Some(Res::Field(fc, fi)) = info.res.get(&e.id) else {
+            return None;
+        };
         let prog: &'p Program = self.prog;
         let prop = prog.classes[*fc].fields[*fi].vba_name();
         if prog.classes[*fc].kind != ClassKind::Host || !PROPS.contains(&prop) {
             return None;
         }
-        let ExprKind::Call { callee, args, .. } = &object.peel().kind else { return None };
+        let ExprKind::Call { callee, args, .. } = &object.peel().kind else {
+            return None;
+        };
         if info.positional_args.contains_key(&object.peel().id) {
             // `cells(row: r, columnIndex: c)`: left to the ordinary per-cell access.
             return None;
         }
-        let Some(CallTarget::Host(f)) = info.calls.get(&object.peel().id).map(|c| &c.target) else { return None };
+        let Some(CallTarget::Host(f)) = info.calls.get(&object.peel().id).map(|c| &c.target) else {
+            return None;
+        };
         let def = &self.prog.fns[*f];
-        let FnKind::Host { class: Some(c) } = def.kind else { return None };
-        if def.vba_name() != "Cells" || self.prog.classes[c].name != "Worksheet" || args.len() != 2 {
+        let FnKind::Host { class: Some(c) } = def.kind else {
+            return None;
+        };
+        if def.vba_name() != "Cells" || self.prog.classes[c].name != "Worksheet" || args.len() != 2
+        {
             return None;
         }
-        let ExprKind::Member { object: sheet, .. } = &callee.peel().kind else { return None };
+        let ExprKind::Member { object: sheet, .. } = &callee.peel().kind else {
+            return None;
+        };
         Some((sheet, &args[0], &args[1], prop))
     }
 
-    fn affine<'a>(&self, e: &'a Expr, loops: &[LoopInfo], whole: &Stmt) -> Option<(Axis, i64, Option<&'a Expr>)> {
+    fn affine<'a>(
+        &self,
+        e: &'a Expr,
+        loops: &[LoopInfo],
+        whole: &Stmt,
+    ) -> Option<(Axis, i64, Option<&'a Expr>)> {
         let p = e.peel();
         match &p.kind {
             ExprKind::Int { value, .. } => Some((Axis::Lit, i64::try_from(*value).ok()?, None)),
@@ -121,9 +144,14 @@ impl<'p> Lowerer<'p> {
                         return Some((Axis::Var(l), 0, None));
                     }
                 }
-                self.is_invariant(p, whole).then(|| (Axis::Base(id.text.clone()), 0, Some(p)))
+                self.is_invariant(p, whole)
+                    .then(|| (Axis::Base(id.text.clone()), 0, Some(p)))
             }
-            ExprKind::Binary { op: op @ (BinaryOp::Add | BinaryOp::Sub), lhs, rhs } => {
+            ExprKind::Binary {
+                op: op @ (BinaryOp::Add | BinaryOp::Sub),
+                lhs,
+                rhs,
+            } => {
                 let k = |x: &Expr| match &x.peel().kind {
                     ExprKind::Int { value, .. } => i64::try_from(*value).ok(),
                     _ => None,
@@ -133,7 +161,15 @@ impl<'p> Lowerer<'p> {
                     if axis == Axis::Lit {
                         return None;
                     }
-                    return Some((axis, if *op == BinaryOp::Add { off + c } else { off - c }, base));
+                    return Some((
+                        axis,
+                        if *op == BinaryOp::Add {
+                            off + c
+                        } else {
+                            off - c
+                        },
+                        base,
+                    ));
                 }
                 if let (BinaryOp::Add, Some(c)) = (op, k(lhs)) {
                     let (axis, off, base) = self.affine(rhs, loops, whole)?;
@@ -166,7 +202,16 @@ impl<'p> Lowerer<'p> {
         if self.opt == 0 {
             return None;
         }
-        let StmtKind::For { decorators, init, cond, update, body } = &s.kind else { return None };
+        let StmtKind::For {
+            decorators,
+            init,
+            cond,
+            update,
+            body,
+        } = &s.kind
+        else {
+            return None;
+        };
         if decorators.iter().any(|d| d.name.text == "nobulk") {
             return None;
         }
@@ -198,17 +243,28 @@ impl<'p> Lowerer<'p> {
         }
 
         // 2. loop nest: `for (let r = a; r <= b; r++)`, optionally with one inner loop of the same shape
-        let ok_shape = |sh: &super::stmt::ForShape| sh.decl.is_some() && sh.step == 1 && matches!(sh.op, BinaryOp::Lt | BinaryOp::Le);
+        let ok_shape = |sh: &super::stmt::ForShape| {
+            sh.decl.is_some() && sh.step == 1 && matches!(sh.op, BinaryOp::Lt | BinaryOp::Le)
+        };
         let outer = match self.for_shape(init, cond.as_ref(), update, body) {
             Some(sh) if ok_shape(&sh) => sh,
             _ => return self.refuse_bulk(s, "ループが `for (let r = a; r <= b; r++)` の形ではないか、範囲がループ内で変化します"),
         };
-        let mut loops = vec![LoopInfo { local: outer.local, name: &outer.decl.unwrap().name.text, from: outer.from, bound: outer.bound, inclusive: outer.op == BinaryOp::Le }];
+        let mut loops = vec![LoopInfo {
+            local: outer.local,
+            name: &outer.decl.unwrap().name.text,
+            from: outer.from,
+            bound: outer.bound,
+            inclusive: outer.op == BinaryOp::Le,
+        }];
         let mut unconditional: HashSet<ExprId> = HashSet::new();
         let collect_direct = |stmts: &[Stmt], set: &mut HashSet<ExprId>| {
             for st in stmts {
                 if let StmtKind::Expr(e) = &st.kind {
-                    if let ExprKind::Assign { op: None, target, .. } = &e.peel().kind {
+                    if let ExprKind::Assign {
+                        op: None, target, ..
+                    } = &e.peel().kind
+                    {
                         set.insert(target.peel().id);
                     }
                 }
@@ -216,11 +272,32 @@ impl<'p> Lowerer<'p> {
         };
         collect_direct(block_stmts(body), &mut unconditional);
         for st in block_stmts(body) {
-            let StmtKind::For { init: i2, cond: c2, update: u2, body: b2, .. } = &st.kind else { continue };
+            let StmtKind::For {
+                init: i2,
+                cond: c2,
+                update: u2,
+                body: b2,
+                ..
+            } = &st.kind
+            else {
+                continue;
+            };
             if let Some(sh) = self.for_shape(i2, c2.as_ref(), u2, b2) {
-                let depends_on_outer = [sh.from, sh.bound].iter().any(|x| crate::astutil::any_expr_in(x, &mut |y| self.local_of(y) == Some(outer.local)));
-                if ok_shape(&sh) && !depends_on_outer && self.is_invariant(sh.from, body) && self.is_invariant(sh.bound, body) {
-                    loops.push(LoopInfo { local: sh.local, name: &sh.decl.unwrap().name.text, from: sh.from, bound: sh.bound, inclusive: sh.op == BinaryOp::Le });
+                let depends_on_outer = [sh.from, sh.bound].iter().any(|x| {
+                    crate::astutil::any_expr_in(x, &mut |y| self.local_of(y) == Some(outer.local))
+                });
+                if ok_shape(&sh)
+                    && !depends_on_outer
+                    && self.is_invariant(sh.from, body)
+                    && self.is_invariant(sh.bound, body)
+                {
+                    loops.push(LoopInfo {
+                        local: sh.local,
+                        name: &sh.decl.unwrap().name.text,
+                        from: sh.from,
+                        bound: sh.bound,
+                        inclusive: sh.op == BinaryOp::Le,
+                    });
                     collect_direct(block_stmts(b2), &mut unconditional);
                     break;
                 }
@@ -242,14 +319,23 @@ impl<'p> Lowerer<'p> {
                 return self.refuse_bulk(s, "同じセルを読んで書き戻しています（`+=` / `++`）");
             }
             // Condition 2: indices are `induction variable ± constant` or invariant.
-            let (Some(row), Some(col)) = (self.affine(r, &loops, s), self.affine(c, &loops, s)) else {
+            let (Some(row), Some(col)) = (self.affine(r, &loops, s), self.affine(c, &loops, s))
+            else {
                 return self.refuse_bulk(s, "行・列の添字が「誘導変数 ± 定数」の形ではありません");
             };
             if let ExprKind::Member { object, .. } = &e.kind {
                 cells_calls.insert(object.peel().id);
             }
             sheet_uses.insert(sheet.peel().id);
-            accesses.push(Access { id: e.id, sheet: sheet_name, sheet_expr: sheet, prop: prop.to_string(), row, col, write: write_targets.contains(&e.id) });
+            accesses.push(Access {
+                id: e.id,
+                sheet: sheet_name,
+                sheet_expr: sheet,
+                prop: prop.to_string(),
+                row,
+                col,
+                write: write_targets.contains(&e.id),
+            });
         }
 
         // Condition 4: nothing else may touch the sheet.
@@ -259,17 +345,22 @@ impl<'p> Lowerer<'p> {
             let mut unknown_call = false;
             walk_stmt(s, &mut |_| true, &mut |e| {
                 match &e.kind {
-                    ExprKind::Name(id) if sheets.contains(id.text.as_str()) && !sheet_uses.contains(&e.id) => {
+                    ExprKind::Name(id)
+                        if sheets.contains(id.text.as_str()) && !sheet_uses.contains(&e.id) =>
+                    {
                         if matches!(info.res.get(&e.id), Some(Res::Local(_) | Res::Global(_))) {
                             other_use = true;
                         }
                     }
-                    ExprKind::Call { .. } if !cells_calls.contains(&e.id) => match info.calls.get(&e.id).map(|c| &c.target) {
-                        Some(CallTarget::Intrinsic(_)) => {}
-                        // Calls that will be expanded in place and call nothing themselves cannot touch the sheet.
-                        Some(CallTarget::Fn(f) | CallTarget::Ext(f)) if self.expands_harmlessly(*f) => {}
-                        _ => unknown_call = true,
-                    },
+                    ExprKind::Call { .. } if !cells_calls.contains(&e.id) => {
+                        match info.calls.get(&e.id).map(|c| &c.target) {
+                            Some(CallTarget::Intrinsic(_)) => {}
+                            // Calls that will be expanded in place and call nothing themselves cannot touch the sheet.
+                            Some(CallTarget::Fn(f) | CallTarget::Ext(f))
+                                if self.expands_harmlessly(*f) => {}
+                            _ => unknown_call = true,
+                        }
+                    }
                     ExprKind::New { .. } => unknown_call = true,
                     _ => {}
                 }
@@ -283,17 +374,38 @@ impl<'p> Lowerer<'p> {
             }
         }
         // Condition 6: no reading back of written sheets.
-        let written: HashSet<&str> = accesses.iter().filter(|a| a.write).map(|a| a.sheet.as_str()).collect();
-        if accesses.iter().any(|a| !a.write && written.contains(a.sheet.as_str())) {
+        let written: HashSet<&str> = accesses
+            .iter()
+            .filter(|a| a.write)
+            .map(|a| a.sheet.as_str())
+            .collect();
+        if accesses
+            .iter()
+            .any(|a| !a.write && written.contains(a.sheet.as_str()))
+        {
             return self.refuse_bulk(s, "書き込むシートを同じループ内で読み出しています");
         }
         let has_write = !written.is_empty();
         if has_write {
             // Conditions 5 and 7.
-            if any_stmt(s, &mut |x| matches!(x.kind, StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Return(_) | StmtKind::Throw(_))) {
-                return self.refuse_bulk(s, "書き込みループに途中脱出（break / continue / return / throw）があります");
+            if any_stmt(s, &mut |x| {
+                matches!(
+                    x.kind,
+                    StmtKind::Break(_)
+                        | StmtKind::Continue(_)
+                        | StmtKind::Return(_)
+                        | StmtKind::Throw(_)
+                )
+            }) {
+                return self.refuse_bulk(
+                    s,
+                    "書き込みループに途中脱出（break / continue / return / throw）があります",
+                );
             }
-            if accesses.iter().any(|a| a.write && !unconditional.contains(&a.id)) {
+            if accesses
+                .iter()
+                .any(|a| a.write && !unconditional.contains(&a.id))
+            {
                 return self.refuse_bulk(s, "条件付きの書き込みがあります（矩形内の全セルに無条件で書き込む必要があります）");
             }
         }
@@ -318,10 +430,19 @@ impl<'p> Lowerer<'p> {
             let idxs = &by_key[key];
             let mut axes = Vec::new();
             for pick in [0usize, 1] {
-                let get = |a: &Access| if pick == 0 { (a.row.0.clone(), a.row.1) } else { (a.col.0.clone(), a.col.1) };
+                let get = |a: &Access| {
+                    if pick == 0 {
+                        (a.row.0.clone(), a.row.1)
+                    } else {
+                        (a.col.0.clone(), a.col.1)
+                    }
+                };
                 let (first_axis, _) = get(&accesses[idxs[0]]);
                 if idxs.iter().any(|&i| get(&accesses[i]).0 != first_axis) {
-                    return self.refuse_bulk(s, "同じシートへのアクセスで行・列の添字の形が揃っていません");
+                    return self.refuse_bulk(
+                        s,
+                        "同じシートへのアクセスで行・列の添字の形が揃っていません",
+                    );
                 }
                 let offs: Vec<i64> = idxs.iter().map(|&i| get(&accesses[i]).1).collect();
                 let (kmin, kmax) = (*offs.iter().min().unwrap(), *offs.iter().max().unwrap());
@@ -338,7 +459,11 @@ impl<'p> Lowerer<'p> {
                 if kmax - kmin > 16_384 {
                     return self.refuse_bulk(s, "対象範囲が広すぎます");
                 }
-                axes.push(AxisPlan { axis: first_axis, kmin, kmax });
+                axes.push(AxisPlan {
+                    axis: first_axis,
+                    kmin,
+                    kmax,
+                });
             }
             let col = axes.pop().unwrap();
             let row = axes.pop().unwrap();
@@ -354,7 +479,11 @@ impl<'p> Lowerer<'p> {
             self.bind(l.local, Binding::Var(n.clone()));
             let from = self.expr(l.from);
             let bound = self.expr(l.bound);
-            let last = if l.inclusive { bound.clone() } else { bound.clone().plus(-1) };
+            let last = if l.inclusive {
+                bound.clone()
+            } else {
+                bound.clone().plus(-1)
+            };
             // The transfer only happens when the loops run at least once (spec §9.1).
             let c = match (bound.as_long(), from.as_long()) {
                 (Some(b), Some(f)) => {
@@ -363,7 +492,11 @@ impl<'p> Lowerer<'p> {
                     }
                     None
                 }
-                _ => Some(bin(if l.inclusive { ">=" } else { ">" }, bound, from.clone())),
+                _ => Some(bin(
+                    if l.inclusive { ">=" } else { ">" },
+                    bound,
+                    from.clone(),
+                )),
             };
             if let Some(c) = c {
                 guard = Some(match guard {
@@ -412,29 +545,66 @@ impl<'p> Lowerer<'p> {
                 .iter()
                 .map(|&i| {
                     let a = &accesses[i];
-                    (a.id, name(buf.clone()).index(vec![index(&row, a.row.1), index(&col, a.col.1)]))
+                    (
+                        a.id,
+                        name(buf.clone()).index(vec![index(&row, a.row.1), index(&col, a.col.1)]),
+                    )
                 })
                 .collect();
-            groups.push(Group { write: key.2, sheet, prop: key.1.clone(), buf, rlo, rhi, clo, chi, slots });
+            groups.push(Group {
+                write: key.2,
+                sheet,
+                prop: key.1.clone(),
+                buf,
+                rlo,
+                rhi,
+                clo,
+                chi,
+                slots,
+            });
         }
         Some(BulkPlan { groups, guard })
     }
 
     pub(crate) fn emit_bulk(&mut self, s: &Stmt, plan: BulkPlan, label: Option<String>) {
         let range_of = |g: &Group| {
-            let cells = |r: &VExpr, c: &VExpr| g.sheet.clone().member("Cells").index(vec![r.clone(), c.clone()]);
-            g.sheet.clone().member("Range").index(vec![cells(&g.rlo, &g.clo), cells(&g.rhi, &g.chi)])
+            let cells = |r: &VExpr, c: &VExpr| {
+                g.sheet
+                    .clone()
+                    .member("Cells")
+                    .index(vec![r.clone(), c.clone()])
+            };
+            g.sheet
+                .clone()
+                .member("Range")
+                .index(vec![cells(&g.rlo, &g.clo), cells(&g.rhi, &g.chi)])
         };
         let (inner, _) = self.capture(|lw| {
             for g in &plan.groups {
                 if g.write {
-                    lw.emit(VStmt::ReDim { preserve: false, target: name(g.buf.clone()), dims: vec![(long(0), diff(g.rhi.clone(), &g.rlo)), (long(0), diff(g.chi.clone(), &g.clo))] });
+                    lw.emit(VStmt::ReDim {
+                        preserve: false,
+                        target: name(g.buf.clone()),
+                        dims: vec![
+                            (long(0), diff(g.rhi.clone(), &g.rlo)),
+                            (long(0), diff(g.chi.clone(), &g.clo)),
+                        ],
+                    });
                 } else {
-                    let value = if g.prop == "Value" { call("RAS_Read2D", vec![range_of(g)]) } else { call("RAS_Rebase", vec![range_of(g).member(g.prop.clone())]) };
+                    let value = if g.prop == "Value" {
+                        call("RAS_Read2D", vec![range_of(g)])
+                    } else {
+                        call("RAS_Rebase", vec![range_of(g).member(g.prop.clone())])
+                    };
                     lw.emit(assign(name(g.buf.clone()), value));
                 }
                 for (id, element) in &g.slots {
-                    lw.pc.bulk.insert(*id, BulkSlot { element: element.clone() });
+                    lw.pc.bulk.insert(
+                        *id,
+                        BulkSlot {
+                            element: element.clone(),
+                        },
+                    );
                 }
             }
             lw.pc.bulk_depth = lw.pc.frames.len();
@@ -443,7 +613,10 @@ impl<'p> Lowerer<'p> {
             lw.pc.suppress_yield = false;
             lw.pc.bulk.clear();
             for g in plan.groups.iter().filter(|g| g.write) {
-                lw.emit(assign(range_of(g).member(g.prop.clone()), name(g.buf.clone())));
+                lw.emit(assign(
+                    range_of(g).member(g.prop.clone()),
+                    name(g.buf.clone()),
+                ));
             }
         });
         match plan.guard {

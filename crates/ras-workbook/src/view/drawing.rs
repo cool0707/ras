@@ -43,21 +43,30 @@ impl Parts {
     /// The parts of the workbook file `data` (the bytes of an .xlsx / .xlsm).
     pub fn read(data: &[u8]) -> Parts {
         let mut files = HashMap::new();
-        let Ok(mut zr) = zip::ZipArchive::new(Cursor::new(data)) else { return Parts { files } };
+        let Ok(mut zr) = zip::ZipArchive::new(Cursor::new(data)) else {
+            return Parts { files };
+        };
         let names: Vec<String> = zr.file_names().map(str::to_string).collect();
         // How each sheet is shown (its gridlines): the start of its XML.
-        for name in names.iter().filter(|n| n.starts_with("xl/worksheets/") && n.ends_with(".xml") && !n.contains("/_rels/")) {
+        for name in names.iter().filter(|n| {
+            n.starts_with("xl/worksheets/") && n.ends_with(".xml") && !n.contains("/_rels/")
+        }) {
             let Ok(f) = zr.by_name(name) else { continue };
             let mut head = Vec::new();
             if f.take(16 << 10).read_to_end(&mut head).is_err() {
                 continue;
             }
             let head = String::from_utf8_lossy(&head);
-            if let Some(i) = head.find("<sheetView ").or_else(|| head.find(":sheetView "))
+            if let Some(i) = head
+                .find("<sheetView ")
+                .or_else(|| head.find(":sheetView "))
                 && let Some(j) = head[i..].find('>')
             {
                 let start = head[..i + 1].rfind('<').unwrap_or(i);
-                files.insert(format!("{name}#view"), format!("{}/>", head[start..i + j].trim_end_matches('/')).into_bytes());
+                files.insert(
+                    format!("{name}#view"),
+                    format!("{}/>", head[start..i + j].trim_end_matches('/')).into_bytes(),
+                );
             }
         }
         for name in ["xl/workbook.xml", "xl/_rels/workbook.xml.rels"] {
@@ -92,11 +101,25 @@ impl Parts {
         let sheets: Vec<String> = names
             .iter()
             .filter(|n| n.starts_with("xl/worksheets/_rels/"))
-            .filter(|n| files.get(*n).is_some_and(|r| ["/ctrlProp\"", "/control\"", "/oleObject\""].iter().any(|k| String::from_utf8_lossy(r).contains(k))))
-            .map(|n| format!("xl/worksheets/{}", n.trim_start_matches("xl/worksheets/_rels/").trim_end_matches(".rels")))
+            .filter(|n| {
+                files.get(*n).is_some_and(|r| {
+                    ["/ctrlProp\"", "/control\"", "/oleObject\""]
+                        .iter()
+                        .any(|k| String::from_utf8_lossy(r).contains(k))
+                })
+            })
+            .map(|n| {
+                format!(
+                    "xl/worksheets/{}",
+                    n.trim_start_matches("xl/worksheets/_rels/")
+                        .trim_end_matches(".rels")
+                )
+            })
             .collect();
         for sheet in sheets {
-            let Some(xml) = read_part(&mut zr, &sheet) else { continue };
+            let Some(xml) = read_part(&mut zr, &sheet) else {
+                continue;
+            };
             let xml = String::from_utf8_lossy(&xml);
             if let Some(c) = element_text(&xml, "controls") {
                 files.insert(format!("{sheet}#controls"), c.into_bytes());
@@ -120,13 +143,23 @@ impl Parts {
     pub(crate) fn rels(&self, part: &str) -> HashMap<String, (String, String)> {
         let (dir, file) = part.rsplit_once('/').unwrap_or(("", part));
         let mut out = HashMap::new();
-        let Some(root) = self.xml(&format!("{dir}/_rels/{file}.rels")) else { return out };
+        let Some(root) = self.xml(&format!("{dir}/_rels/{file}.rels")) else {
+            return out;
+        };
         for r in root.all("Relationship") {
-            let (Some(id), Some(target)) = (r.attr("Id"), r.attr("Target")) else { continue };
+            let (Some(id), Some(target)) = (r.attr("Id"), r.attr("Target")) else {
+                continue;
+            };
             if r.attr("TargetMode") == Some("External") {
                 continue;
             }
-            out.insert(id.to_string(), (r.attr("Type").unwrap_or("").to_string(), resolve(dir, target)));
+            out.insert(
+                id.to_string(),
+                (
+                    r.attr("Type").unwrap_or("").to_string(),
+                    resolve(dir, target),
+                ),
+            );
         }
         out
     }
@@ -134,7 +167,10 @@ impl Parts {
     /// The part of the worksheet named `sheet`.
     pub(crate) fn sheet_part(&self, sheet: &str) -> Option<String> {
         let wb = self.xml("xl/workbook.xml")?;
-        let s = wb.child("sheets")?.all("sheet").find(|s| s.attr("name") == Some(sheet))?;
+        let s = wb
+            .child("sheets")?
+            .all("sheet")
+            .find(|s| s.attr("name") == Some(sheet))?;
         let id = s.attr("id")?;
         self.rels("xl/workbook.xml").remove(id).map(|(_, p)| p)
     }
@@ -142,10 +178,15 @@ impl Parts {
     /// The theme's colors by name (accent1, dk1, ...) as RRGGBB.
     pub(crate) fn theme(&self) -> HashMap<String, String> {
         let mut out = HashMap::new();
-        let Some(t) = self.xml("xl/theme/theme1.xml") else { return out };
+        let Some(t) = self.xml("xl/theme/theme1.xml") else {
+            return out;
+        };
         if let Some(cs) = t.find("clrScheme") {
             for c in &cs.children {
-                let v = c.child("srgbClr").and_then(|x| x.attr("val")).or_else(|| c.child("sysClr").and_then(|x| x.attr("lastClr")));
+                let v = c
+                    .child("srgbClr")
+                    .and_then(|x| x.attr("val"))
+                    .or_else(|| c.child("sysClr").and_then(|x| x.attr("lastClr")));
                 if let Some(v) = v {
                     out.insert(c.name.clone(), v.to_uppercase());
                 }
@@ -163,8 +204,20 @@ impl Parts {
     /// The workbook's default font (name, size).
     pub(crate) fn default_font(&self) -> (String, f64) {
         let font = self.xml("#font").and_then(|f| f.find("font").cloned());
-        let name = font.as_ref().and_then(|f| f.child("name")).and_then(|n| n.attr("val")).filter(|s| !s.is_empty()).unwrap_or("游ゴシック").to_string();
-        let size = font.as_ref().and_then(|f| f.child("sz")).and_then(|n| n.attr("val")).and_then(|v| v.parse::<f64>().ok()).filter(|v| *v > 0.0).unwrap_or(11.0);
+        let name = font
+            .as_ref()
+            .and_then(|f| f.child("name"))
+            .and_then(|n| n.attr("val"))
+            .filter(|s| !s.is_empty())
+            .unwrap_or("游ゴシック")
+            .to_string();
+        let size = font
+            .as_ref()
+            .and_then(|f| f.child("sz"))
+            .and_then(|n| n.attr("val"))
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| *v > 0.0)
+            .unwrap_or(11.0);
         (name, size)
     }
 }
@@ -175,10 +228,20 @@ fn element_text(xml: &str, name: &str) -> Option<String> {
     let open = xml.match_indices(name).map(|(i, _)| i).find(|&i| {
         let lt = xml[..i].rfind('<').unwrap_or(0);
         let before = &xml[lt + 1..i];
-        !before.starts_with('/') && before.chars().all(|c| c.is_alphanumeric() || c == ':') && xml[i + name.len()..].starts_with(['>', ' ', '/'])
+        !before.starts_with('/')
+            && before.chars().all(|c| c.is_alphanumeric() || c == ':')
+            && xml[i + name.len()..].starts_with(['>', ' ', '/'])
     })?;
     let start = xml[..open].rfind('<')?;
-    let close = xml[open..].match_indices(name).map(|(i, _)| open + i).find(|&i| xml[..i].rfind('<').is_some_and(|lt| xml[lt..].starts_with("</")) && xml[i + name.len()..].starts_with('>'));
+    let close = xml[open..]
+        .match_indices(name)
+        .map(|(i, _)| open + i)
+        .find(|&i| {
+            xml[..i]
+                .rfind('<')
+                .is_some_and(|lt| xml[lt..].starts_with("</"))
+                && xml[i + name.len()..].starts_with('>')
+        });
     Some(match close {
         Some(c) => xml[start..c + name.len() + 1].to_string(),
         None => xml[start..].to_string(),
@@ -197,7 +260,11 @@ pub(crate) fn resolve(dir: &str, target: &str) -> String {
     if let Some(t) = target.strip_prefix('/') {
         return t.to_string();
     }
-    let mut parts: Vec<&str> = if dir.is_empty() { vec![] } else { dir.split('/').collect() };
+    let mut parts: Vec<&str> = if dir.is_empty() {
+        vec![]
+    } else {
+        dir.split('/').collect()
+    };
     for seg in target.split('/') {
         match seg {
             ".." => {
@@ -308,7 +375,10 @@ pub(crate) fn base_color(c: &Node, theme: &HashMap<String, String>) -> Option<St
                 "bg2" => "lt2",
                 v => v,
             };
-            theme.get(name).cloned().or_else(|| office_color(name).map(str::to_string))?
+            theme
+                .get(name)
+                .cloned()
+                .or_else(|| office_color(name).map(str::to_string))?
         }
         _ => return None,
     })
@@ -319,7 +389,12 @@ pub(crate) fn mods_of(n: &Node) -> Vec<(String, f64)> {
     n.children
         .iter()
         .filter(|c| matches!(c.name.as_str(), "lumMod" | "lumOff" | "shade" | "tint"))
-        .filter_map(|c| Some((c.name.clone(), c.attr("val")?.parse::<f64>().ok()? / 100000.0)))
+        .filter_map(|c| {
+            Some((
+                c.name.clone(),
+                c.attr("val")?.parse::<f64>().ok()? / 100000.0,
+            ))
+        })
         .collect()
 }
 
@@ -327,7 +402,11 @@ pub(crate) fn mods_of(n: &Node) -> Vec<(String, f64)> {
 /// (HSL), as Office does; shade / tint darken and lighten.
 pub(crate) fn modified(rgb: &str, mods: &[(String, f64)]) -> Option<String> {
     let v = u32::from_str_radix(rgb, 16).ok()?;
-    let (mut r, mut g, mut b) = (((v >> 16) & 255) as f64 / 255.0, ((v >> 8) & 255) as f64 / 255.0, (v & 255) as f64 / 255.0);
+    let (mut r, mut g, mut b) = (
+        ((v >> 16) & 255) as f64 / 255.0,
+        ((v >> 8) & 255) as f64 / 255.0,
+        (v & 255) as f64 / 255.0,
+    );
     let get = |k: &str| mods.iter().find(|(n, _)| n == k).map(|(_, x)| *x);
     if get("lumMod").is_some() || get("lumOff").is_some() {
         let (h, s, l) = to_hsl(r, g, b);
@@ -338,7 +417,11 @@ pub(crate) fn modified(rgb: &str, mods: &[(String, f64)]) -> Option<String> {
         (r, g, b) = (r * x, g * x, b * x);
     }
     if let Some(x) = get("tint") {
-        (r, g, b) = (1.0 - (1.0 - r) * x, 1.0 - (1.0 - g) * x, 1.0 - (1.0 - b) * x);
+        (r, g, b) = (
+            1.0 - (1.0 - r) * x,
+            1.0 - (1.0 - g) * x,
+            1.0 - (1.0 - b) * x,
+        );
     }
     let f = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) as u8;
     Some(format!("#{:02X}{:02X}{:02X}", f(r), f(g), f(b)))
@@ -351,7 +434,11 @@ fn to_hsl(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
         return (0.0, 0.0, l);
     }
     let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if max == r {
         (g - b) / d + if g < b { 6.0 } else { 0.0 }
     } else if max == g {
@@ -366,7 +453,11 @@ fn from_hsl(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
     if s == 0.0 {
         return (l, l, l);
     }
-    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
     let p = 2.0 * l - q;
     let hue = |mut t: f64| {
         if t < 0.0 {
@@ -390,7 +481,12 @@ fn from_hsl(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
 
 /// A color of a fill (a:solidFill and the like) as "#RRGGBB".
 pub(crate) fn color_of(fill: &Node, theme: &HashMap<String, String>) -> Option<String> {
-    let c = fill.children.iter().find(|c| matches!(c.name.as_str(), "srgbClr" | "schemeClr" | "sysClr" | "prstClr"))?;
+    let c = fill.children.iter().find(|c| {
+        matches!(
+            c.name.as_str(),
+            "srgbClr" | "schemeClr" | "sysClr" | "prstClr"
+        )
+    })?;
     modified(&base_color(c, theme)?, &mods_of(c))
 }
 
@@ -428,14 +524,27 @@ pub struct Anchor {
 pub(crate) fn anchor_of(a: &Node) -> Anchor {
     let marker = |n: &str| -> Option<(u32, i64, u32, i64)> {
         let m = a.child(n)?;
-        let num = |k: &str| m.child(k).and_then(|c| c.all_text().trim().parse::<i64>().ok());
-        Some((num("col")?.clamp(0, u32::MAX as i64) as u32, num("colOff").unwrap_or(0), num("row")?.clamp(0, u32::MAX as i64) as u32, num("rowOff").unwrap_or(0)))
+        let num = |k: &str| {
+            m.child(k)
+                .and_then(|c| c.all_text().trim().parse::<i64>().ok())
+        };
+        Some((
+            num("col")?.clamp(0, u32::MAX as i64) as u32,
+            num("colOff").unwrap_or(0),
+            num("row")?.clamp(0, u32::MAX as i64) as u32,
+            num("rowOff").unwrap_or(0),
+        ))
     };
     let pair = |n: &str, x: &str, y: &str| -> Option<(i64, i64)> {
         let e = a.child(n)?;
         Some((e.attr(x)?.parse().ok()?, e.attr(y)?.parse().ok()?))
     };
-    Anchor { from: marker("from"), to: marker("to"), ext: pair("ext", "cx", "cy"), pos: pair("pos", "x", "y") }
+    Anchor {
+        from: marker("from"),
+        to: marker("to"),
+        ext: pair("ext", "cx", "cy"),
+        pos: pair("pos", "x", "y"),
+    }
 }
 
 // ------------------------------------------------------------------------------------- objects
@@ -468,7 +577,8 @@ impl Images {
         if let Some(i) = self.by_part.get(part) {
             return *i;
         }
-        self.list.push(format!("data:{mime};base64,{}", base64(data)));
+        self.list
+            .push(format!("data:{mime};base64,{}", base64(data)));
         self.by_part.insert(part.to_string(), self.list.len() - 1);
         self.list.len() - 1
     }
@@ -482,8 +592,16 @@ pub(crate) fn base64(data: &[u8]) -> String {
         let v = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
         out.push(T[(v >> 18) as usize & 63] as char);
         out.push(T[(v >> 12) as usize & 63] as char);
-        out.push(if c.len() > 1 { T[(v >> 6) as usize & 63] as char } else { '=' });
-        out.push(if c.len() > 2 { T[v as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 1 {
+            T[(v >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if c.len() > 2 {
+            T[v as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -531,79 +649,159 @@ pub(crate) struct Ctx<'a> {
 const OBJECTS: [&str; 5] = ["sp", "cxnSp", "grpSp", "pic", "graphicFrame"];
 
 /// The objects of a sheet's drawing in drawing order (later ones on top), with its controls.
-pub fn sheet_objects(parts: &Parts, sheet: &str, env: &Env, ids: &Cell<usize>, images: &RefCell<Images>) -> Vec<Obj> {
+pub fn sheet_objects(
+    parts: &Parts,
+    sheet: &str,
+    env: &Env,
+    ids: &Cell<usize>,
+    images: &RefCell<Images>,
+) -> Vec<Obj> {
     let mut out = Vec::new();
-    let Some(sheet_part) = parts.sheet_part(sheet) else { return out };
+    let Some(sheet_part) = parts.sheet_part(sheet) else {
+        return out;
+    };
     let theme = parts.theme();
     let font = parts.default_font();
     let mut controls = Controls::read(parts, &sheet_part, &font);
-    let mut drawings: Vec<String> = parts.rels(&sheet_part).into_values().filter(|(t, _)| t.ends_with("/drawing")).map(|(_, p)| p).collect();
+    let mut drawings: Vec<String> = parts
+        .rels(&sheet_part)
+        .into_values()
+        .filter(|(t, _)| t.ends_with("/drawing"))
+        .map(|(_, p)| p)
+        .collect();
     drawings.sort();
     for d in drawings {
-        let Some(drawing) = parts.xml(&d) else { continue };
-        let ctx = Ctx { parts, rels: parts.rels(&d), theme: theme.clone(), font: font.clone(), ids, images };
+        let Some(drawing) = parts.xml(&d) else {
+            continue;
+        };
+        let ctx = Ctx {
+            parts,
+            rels: parts.rels(&d),
+            theme: theme.clone(),
+            font: font.clone(),
+            ids,
+            images,
+        };
         for a in &drawing.children {
             if a.name.ends_with("Anchor") {
                 anchor_object(&ctx, a, env, &mut controls, &mut out);
             } else if a.name == "AlternateContent" {
                 // What newer Excel wraps: the mirror of a form or ActiveX control (drawn from the
                 // control), a slicer, a 3D model (the fallback, a picture).
-                let choice: Vec<&Node> = a.all("Choice").flat_map(|c| c.children.iter().filter(|x| x.name.ends_with("Anchor"))).collect();
-                let mirror = choice.iter().find_map(|x| x.find("compatExt").and_then(|c| c.attr("spid")).and_then(controls::spid_number).map(|id| (*x, id)));
+                let choice: Vec<&Node> = a
+                    .all("Choice")
+                    .flat_map(|c| c.children.iter().filter(|x| x.name.ends_with("Anchor")))
+                    .collect();
+                let mirror = choice.iter().find_map(|x| {
+                    x.find("compatExt")
+                        .and_then(|c| c.attr("spid"))
+                        .and_then(controls::spid_number)
+                        .map(|id| (*x, id))
+                });
                 if let Some((x, id)) = mirror {
-                    let sp = x.children.iter().find(|c| OBJECTS.contains(&c.name.as_str()));
+                    let sp = x
+                        .children
+                        .iter()
+                        .find(|c| OBJECTS.contains(&c.name.as_str()));
                     if let Some(o) = controls.take(id, Some(anchor_of(x)), sp, env, &ctx) {
                         out.push(o);
                     }
                     continue;
                 }
-                for x in a.all("Fallback").flat_map(|f| f.children.iter().filter(|x| x.name.ends_with("Anchor"))) {
+                for x in a
+                    .all("Fallback")
+                    .flat_map(|f| f.children.iter().filter(|x| x.name.ends_with("Anchor")))
+                {
                     anchor_object(&ctx, x, env, &mut controls, &mut out);
                 }
             }
         }
     }
     // The controls without a mirror in the drawing (files of Excel 2007, ActiveX controls).
-    let ctx = Ctx { parts, rels: HashMap::new(), theme: theme.clone(), font: font.clone(), ids, images };
+    let ctx = Ctx {
+        parts,
+        rels: HashMap::new(),
+        theme: theme.clone(),
+        font: font.clone(),
+        ids,
+        images,
+    };
     out.extend(controls.rest(env, &ctx));
     out
 }
 
 fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &mut Vec<Obj>) {
-    let Some(obj) = a.children.iter().find(|c| OBJECTS.contains(&c.name.as_str())).or_else(|| {
-        // Shapes that newer Excel wraps in mc:AlternateContent.
-        a.find("Fallback").and_then(|f| f.children.iter().find(|c| OBJECTS.contains(&c.name.as_str())))
-    }) else {
+    let Some(obj) = a
+        .children
+        .iter()
+        .find(|c| OBJECTS.contains(&c.name.as_str()))
+        .or_else(|| {
+            // Shapes that newer Excel wraps in mc:AlternateContent.
+            a.find("Fallback").and_then(|f| {
+                f.children
+                    .iter()
+                    .find(|c| OBJECTS.contains(&c.name.as_str()))
+            })
+        })
+    else {
         return;
     };
     let anchor = anchor_of(a);
-    let nv = obj.children.iter().find(|c| c.name.starts_with("nv")).and_then(|c| c.child("cNvPr"));
+    let nv = obj
+        .children
+        .iter()
+        .find(|c| c.name.starts_with("nv"))
+        .and_then(|c| c.child("cNvPr"));
     let name = nv.and_then(|c| c.attr("name")).unwrap_or("").to_string();
     // A control's mirror without mc:AlternateContent.
-    if let Some(id) = nv.and_then(|c| c.find("compatExt")).and_then(|c| c.attr("spid")).and_then(controls::spid_number) {
+    if let Some(id) = nv
+        .and_then(|c| c.find("compatExt"))
+        .and_then(|c| c.attr("spid"))
+        .and_then(controls::spid_number)
+    {
         if let Some(o) = controls.take(id, Some(anchor.clone()), Some(obj), env, ctx) {
             out.push(o);
         }
         return;
     }
     // "[0]!Macro1": a macro of this workbook.
-    let macro_name = obj.attr("macro").unwrap_or("").trim_start_matches("[0]!").to_string();
+    let macro_name = obj
+        .attr("macro")
+        .unwrap_or("")
+        .trim_start_matches("[0]!")
+        .to_string();
     if obj.name == "graphicFrame" {
         let size = (env.size)(&anchor);
         // SmartArt: the shapes Excel keeps drawn.
         if let Some(html) = diagram_html(ctx, obj, size) {
-            out.push(Obj { anchor, html, name, macro_name, kind: "group", chart: None });
+            out.push(Obj {
+                anchor,
+                html,
+                name,
+                macro_name,
+                kind: "group",
+                chart: None,
+            });
             return;
         }
         // A chart: drawn by the page; one the page does not draw is a box with its title.
         let (html, chart) = chart_html(ctx, obj, &name, env);
         if !html.is_empty() {
-            out.push(Obj { anchor, html, name, macro_name, kind: "chart", chart });
+            out.push(Obj {
+                anchor,
+                html,
+                name,
+                macro_name,
+                kind: "chart",
+                chart,
+            });
         }
         return;
     }
     // The box comes from the anchor (the shape's xfrm says the same in EMU).
-    let ext = (env.size)(&anchor).or_else(|| xfrm(obj).map(|x| x.ext)).filter(|e| e.0 > 0.0 && e.1 > 0.0);
+    let ext = (env.size)(&anchor)
+        .or_else(|| xfrm(obj).map(|x| x.ext))
+        .filter(|e| e.0 > 0.0 && e.1 > 0.0);
     let html = object_html(ctx, obj, None, ext);
     if !html.is_empty() {
         let kind = match obj.name.as_str() {
@@ -611,18 +809,41 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
             "grpSp" => "group",
             _ => "shape",
         };
-        out.push(Obj { anchor, html, name, macro_name, kind, chart: None });
+        out.push(Obj {
+            anchor,
+            html,
+            name,
+            macro_name,
+            kind,
+            chart: None,
+        });
     }
 }
 
 /// A chart: its spec for the page, or a box with its title when the page does not draw it (the
 /// newer kinds: waterfall, treemap, ...; other graphics).
-fn chart_html(ctx: &Ctx, frame: &Node, name: &str, env: &Env) -> (String, Option<serde_json::Value>) {
-    if frame.find("cNvPr").and_then(|c| c.attr("hidden")).is_some_and(|h| h == "1" || h == "true") {
+fn chart_html(
+    ctx: &Ctx,
+    frame: &Node,
+    name: &str,
+    env: &Env,
+) -> (String, Option<serde_json::Value>) {
+    if frame
+        .find("cNvPr")
+        .and_then(|c| c.attr("hidden"))
+        .is_some_and(|h| h == "1" || h == "true")
+    {
         return (String::new(), None);
     }
-    let Some(data) = frame.find("graphicData") else { return (String::new(), None) };
-    let chart = data.children.iter().find(|c| c.name == "chart").and_then(|c| c.attr("id")).and_then(|id| ctx.rels.get(id));
+    let Some(data) = frame.find("graphicData") else {
+        return (String::new(), None);
+    };
+    let chart = data
+        .children
+        .iter()
+        .find(|c| c.name == "chart")
+        .and_then(|c| c.attr("id"))
+        .and_then(|id| ctx.rels.get(id));
     if let Some((_, part)) = chart
         && let Some(spec) = super::chart::chart_spec(ctx.parts, part, &ctx.theme, env)
     {
@@ -640,7 +861,11 @@ fn chart_html(ctx: &Ctx, frame: &Node, name: &str, env: &Env) -> (String, Option
         let s: String = runs.iter().map(|r| r.text.as_str()).collect();
         (!s.trim().is_empty()).then(|| s.trim().to_string())
     });
-    let what = if chart.is_some() || data.attr("uri").is_some_and(|u| u.contains("chart")) { "このグラフ" } else { "この図表" };
+    let what = if chart.is_some() || data.attr("uri").is_some_and(|u| u.contains("chart")) {
+        "このグラフ"
+    } else {
+        "この図表"
+    };
     let title = title.unwrap_or_else(|| name.to_string());
     let html = format!(
         "<div class=\"chartnote\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M3 21h18M6 18V11M11 18V6M16 18v-9M21 18v-4\"/></svg><b>{}</b><span>{what}の種類は表示できません</span></div>",
@@ -656,15 +881,33 @@ fn diagram_html(ctx: &Ctx, frame: &Node, size: Option<(f64, f64)>) -> Option<Str
     let ids = frame.find("relIds")?;
     let (_, data) = ctx.rels.get(ids.attr("dm")?)?;
     let model = ctx.parts.xml(data)?;
-    let drawing = model.find("dataModelExt").and_then(|e| e.attr("relId")).and_then(|id| ctx.rels.get(id)).map(|(_, p)| p.clone()).or_else(|| {
-        // Without the extension: the diagram drawing of the data part, by its name.
-        let n = data.rsplit('/').next()?.trim_start_matches("data").trim_end_matches(".xml").to_string();
-        Some(format!("xl/diagrams/drawing{n}.xml"))
-    })?;
+    let drawing = model
+        .find("dataModelExt")
+        .and_then(|e| e.attr("relId"))
+        .and_then(|id| ctx.rels.get(id))
+        .map(|(_, p)| p.clone())
+        .or_else(|| {
+            // Without the extension: the diagram drawing of the data part, by its name.
+            let n = data
+                .rsplit('/')
+                .next()?
+                .trim_start_matches("data")
+                .trim_end_matches(".xml")
+                .to_string();
+            Some(format!("xl/diagrams/drawing{n}.xml"))
+        })?;
     let tree = ctx.parts.xml(&drawing)?;
     let tree = tree.find("spTree")?;
     // The frame's size in the diagram's coordinates (pt): its xfrm, else its box.
-    let ext = frame.child("xfrm").and_then(|x| x.child("ext")).and_then(|e| Some((e.attr("cx")?.parse::<f64>().ok()? / EMU_PT, e.attr("cy")?.parse::<f64>().ok()? / EMU_PT)));
+    let ext = frame
+        .child("xfrm")
+        .and_then(|x| x.child("ext"))
+        .and_then(|e| {
+            Some((
+                e.attr("cx")?.parse::<f64>().ok()? / EMU_PT,
+                e.attr("cy")?.parse::<f64>().ok()? / EMU_PT,
+            ))
+        });
     let (w, h) = size.or(ext)?;
     let (fw, fh) = ext.unwrap_or((w, h));
     if fw <= 0.0 || fh <= 0.0 {
@@ -674,22 +917,52 @@ fn diagram_html(ctx: &Ctx, frame: &Node, size: Option<(f64, f64)>) -> Option<Str
     let mut put = |c: &Node| {
         let Some(cx) = xfrm(c) else { return };
         let place = (cx.off.0 / fw, cx.off.1 / fh, cx.ext.0 / fw, cx.ext.1 / fh);
-        out.push_str(&object_html(ctx, c, Some(place), Some((cx.ext.0 * w / fw, cx.ext.1 * h / fh))));
+        out.push_str(&object_html(
+            ctx,
+            c,
+            Some(place),
+            Some((cx.ext.0 * w / fw, cx.ext.1 * h / fh)),
+        ));
     };
-    for c in tree.children.iter().filter(|c| matches!(c.name.as_str(), "sp" | "cxnSp" | "grpSp" | "pic")) {
+    for c in tree
+        .children
+        .iter()
+        .filter(|c| matches!(c.name.as_str(), "sp" | "cxnSp" | "grpSp" | "pic"))
+    {
         // The text in the box SmartArt gives it (txXfrm), not in the shape's own text box.
         match (c.child("txXfrm"), c.child("txBody")) {
             (Some(tx), Some(body)) => {
                 let mut shape = c.clone();
-                shape.children.retain(|x| x.name != "txBody" && x.name != "txXfrm");
+                shape
+                    .children
+                    .retain(|x| x.name != "txBody" && x.name != "txXfrm");
                 put(&shape);
-                let props = Node { name: "spPr".into(), children: vec![Node { name: "xfrm".into(), ..tx.clone() }, Node { name: "noFill".into(), ..Default::default() }], ..Default::default() };
-                put(&Node { name: "sp".into(), children: vec![props, body.clone()], ..Default::default() });
+                let props = Node {
+                    name: "spPr".into(),
+                    children: vec![
+                        Node {
+                            name: "xfrm".into(),
+                            ..tx.clone()
+                        },
+                        Node {
+                            name: "noFill".into(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                };
+                put(&Node {
+                    name: "sp".into(),
+                    children: vec![props, body.clone()],
+                    ..Default::default()
+                });
             }
             _ => put(c),
         }
     }
-    (!out.is_empty()).then(|| format!("<div class=\"shape\" style=\"left:0;top:0;width:100%;height:100%\">{out}</div>"))
+    (!out.is_empty()).then(|| {
+        format!("<div class=\"shape\" style=\"left:0;top:0;width:100%;height:100%\">{out}</div>")
+    })
 }
 
 /// The transform of a shape, picture or group (pt).
@@ -705,12 +978,16 @@ struct Xfrm {
 }
 
 fn xfrm(obj: &Node) -> Option<Xfrm> {
-    let props = obj.children.iter().find(|c| matches!(c.name.as_str(), "spPr" | "grpSpPr"))?;
+    let props = obj
+        .children
+        .iter()
+        .find(|c| matches!(c.name.as_str(), "spPr" | "grpSpPr"))?;
     let x = props.child("xfrm")?;
     let pair = |n: &str, a: &str, b: &str| -> (f64, f64) {
         x.child(n)
             .map(|e| {
-                let g = |k: &str| e.attr(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / EMU_PT;
+                let g =
+                    |k: &str| e.attr(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / EMU_PT;
                 (g(a), g(b))
             })
             .unwrap_or((0.0, 0.0))
@@ -721,7 +998,11 @@ fn xfrm(obj: &Node) -> Option<Xfrm> {
         ext: pair("ext", "cx", "cy"),
         ch_off: pair("chOff", "x", "y"),
         ch_ext: pair("chExt", "cx", "cy"),
-        rot: x.attr("rot").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / 60000.0,
+        rot: x
+            .attr("rot")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0)
+            / 60000.0,
         flip_h: flag("flipH"),
         flip_v: flag("flipV"),
     })
@@ -730,16 +1011,34 @@ fn xfrm(obj: &Node) -> Option<Xfrm> {
 /// The HTML of a shape, connector, picture or group. Without `place` it fills its container (a
 /// top-level object, sized by its anchor); in a group, `place` is its box as fractions of the
 /// group's box. `size` is the object's size in pt.
-pub(crate) fn object_html(ctx: &Ctx, obj: &Node, place: Option<(f64, f64, f64, f64)>, size: Option<(f64, f64)>) -> String {
-    let nv = obj.children.iter().find(|c| c.name.starts_with("nv")).and_then(|c| c.child("cNvPr"));
-    if nv.and_then(|c| c.attr("hidden")).is_some_and(|h| h == "1" || h == "true") {
+pub(crate) fn object_html(
+    ctx: &Ctx,
+    obj: &Node,
+    place: Option<(f64, f64, f64, f64)>,
+    size: Option<(f64, f64)>,
+) -> String {
+    let nv = obj
+        .children
+        .iter()
+        .find(|c| c.name.starts_with("nv"))
+        .and_then(|c| c.child("cNvPr"));
+    if nv
+        .and_then(|c| c.attr("hidden"))
+        .is_some_and(|h| h == "1" || h == "true")
+    {
         return String::new();
     }
     let x = xfrm(obj).unwrap_or_default();
     let (w, h) = size.unwrap_or(x.ext);
     let pct = |v: f64| n(v * 100.0);
     let mut style = match place {
-        Some((l, t, pw, ph)) => format!("left:{}%;top:{}%;width:{}%;height:{}%;", pct(l), pct(t), pct(pw), pct(ph)),
+        Some((l, t, pw, ph)) => format!(
+            "left:{}%;top:{}%;width:{}%;height:{}%;",
+            pct(l),
+            pct(t),
+            pct(pw),
+            pct(ph)
+        ),
         None => "left:0;top:0;width:100%;height:100%;".to_string(),
     };
     if x.rot != 0.0 {
@@ -766,15 +1065,44 @@ pub(crate) fn object_html(ctx: &Ctx, obj: &Node, place: Option<(f64, f64, f64, f
 
 fn group_html(ctx: &Ctx, g: &Node, x: &Xfrm, w: f64, h: f64) -> String {
     // Children are in the group's child coordinates (chOff, chExt).
-    let (cw, ch) = (if x.ch_ext.0 > 0.0 { x.ch_ext.0 } else { x.ext.0.max(0.01) }, if x.ch_ext.1 > 0.0 { x.ch_ext.1 } else { x.ext.1.max(0.01) });
+    let (cw, ch) = (
+        if x.ch_ext.0 > 0.0 {
+            x.ch_ext.0
+        } else {
+            x.ext.0.max(0.01)
+        },
+        if x.ch_ext.1 > 0.0 {
+            x.ch_ext.1
+        } else {
+            x.ext.1.max(0.01)
+        },
+    );
     let mut out = String::new();
-    for c in g.children.iter().filter(|c| matches!(c.name.as_str(), "sp" | "cxnSp" | "grpSp" | "pic")) {
+    for c in g
+        .children
+        .iter()
+        .filter(|c| matches!(c.name.as_str(), "sp" | "cxnSp" | "grpSp" | "pic"))
+    {
         let Some(cx) = xfrm(c) else { continue };
-        let place = ((cx.off.0 - x.ch_off.0) / cw, (cx.off.1 - x.ch_off.1) / ch, cx.ext.0 / cw, cx.ext.1 / ch);
-        out.push_str(&object_html(ctx, c, Some(place), Some((cx.ext.0 * w / cw, cx.ext.1 * h / ch))));
+        let place = (
+            (cx.off.0 - x.ch_off.0) / cw,
+            (cx.off.1 - x.ch_off.1) / ch,
+            cx.ext.0 / cw,
+            cx.ext.1 / ch,
+        );
+        out.push_str(&object_html(
+            ctx,
+            c,
+            Some(place),
+            Some((cx.ext.0 * w / cw, cx.ext.1 * h / ch)),
+        ));
     }
     if x.flip_h || x.flip_v {
-        return format!("<div style=\"position:absolute;inset:0;transform:scale({},{})\">{out}</div>", if x.flip_h { -1 } else { 1 }, if x.flip_v { -1 } else { 1 });
+        return format!(
+            "<div style=\"position:absolute;inset:0;transform:scale({},{})\">{out}</div>",
+            if x.flip_h { -1 } else { 1 },
+            if x.flip_v { -1 } else { 1 }
+        );
     }
     out
 }
@@ -788,8 +1116,19 @@ fn picture_html(ctx: &Ctx, pic: &Node, x: &Xfrm) -> String {
         let (_, part) = ctx.rels.get(id)?;
         Some((part.clone(), ctx.parts.bytes(part)?))
     };
-    let Some((part, data)) = found(blip.and_then(|b| b.find("svgBlip"))).or_else(|| found(blip)) else { return String::new() };
-    let flip = if x.flip_h || x.flip_v { format!("transform:scale({},{});", if x.flip_h { -1 } else { 1 }, if x.flip_v { -1 } else { 1 }) } else { String::new() };
+    let Some((part, data)) = found(blip.and_then(|b| b.find("svgBlip"))).or_else(|| found(blip))
+    else {
+        return String::new();
+    };
+    let flip = if x.flip_h || x.flip_v {
+        format!(
+            "transform:scale({},{});",
+            if x.flip_h { -1 } else { 1 },
+            if x.flip_v { -1 } else { 1 }
+        )
+    } else {
+        String::new()
+    };
     picture_of(ctx, &part, data, &flip)
 }
 
@@ -799,12 +1138,20 @@ pub(crate) fn picture_of(ctx: &Ctx, part: &str, data: &[u8], style: &str) -> Str
     if part.to_ascii_lowercase().ends_with(".emf")
         && let Some(svg) = super::emf::to_svg(data)
     {
-        let i = ctx.images.borrow_mut().add(part, svg.as_bytes(), "image/svg+xml");
-        return format!("<img alt=\"\" data-img=\"{i}\" style=\"position:absolute;inset:0;width:100%;height:100%;{style}\">");
+        let i = ctx
+            .images
+            .borrow_mut()
+            .add(part, svg.as_bytes(), "image/svg+xml");
+        return format!(
+            "<img alt=\"\" data-img=\"{i}\" style=\"position:absolute;inset:0;width:100%;height:100%;{style}\">"
+        );
     }
     let Some(mime) = image_mime(part) else {
         let kind = part.rsplit('.').next().unwrap_or("").to_ascii_uppercase();
-        return format!("<div class=\"noimage\">表示できない形式の画像（{}）</div>", esc(&kind));
+        return format!(
+            "<div class=\"noimage\">表示できない形式の画像（{}）</div>",
+            esc(&kind)
+        );
     };
     let svg;
     let data = if mime == "image/svg+xml" {
@@ -814,7 +1161,9 @@ pub(crate) fn picture_of(ctx: &Ctx, part: &str, data: &[u8], style: &str) -> Str
         data
     };
     let i = ctx.images.borrow_mut().add(part, data, mime);
-    format!("<img alt=\"\" data-img=\"{i}\" style=\"position:absolute;inset:0;width:100%;height:100%;{style}\">")
+    format!(
+        "<img alt=\"\" data-img=\"{i}\" style=\"position:absolute;inset:0;width:100%;height:100%;{style}\">"
+    )
 }
 
 /// An SVG that fills the picture's box as Excel draws it: stretched (preserveAspectRatio="none")
@@ -822,24 +1171,37 @@ pub(crate) fn picture_of(ctx: &Ctx, part: &str, data: &[u8], style: &str) -> Str
 /// at its own size).
 fn svg_stretched(data: &[u8]) -> Vec<u8> {
     let s = String::from_utf8_lossy(data);
-    let Some(start) = s.match_indices("<svg").map(|(i, _)| i).find(|&i| s[i + 4..].starts_with(|c: char| c.is_whitespace() || c == '>' || c == '/')) else {
+    let Some(start) = s
+        .match_indices("<svg")
+        .map(|(i, _)| i)
+        .find(|&i| s[i + 4..].starts_with(|c: char| c.is_whitespace() || c == '>' || c == '/'))
+    else {
         return data.to_vec();
     };
-    let Some(len) = s[start..].find('>') else { return data.to_vec() };
+    let Some(len) = s[start..].find('>') else {
+        return data.to_vec();
+    };
     let mut end = start + len;
     if s[..end].ends_with('/') {
         end -= 1;
     }
     let tag = &s[start..end];
     let attr = |name: &str| {
-        let i = tag.match_indices(name).map(|(i, _)| i).find(|&i| tag[..i].ends_with(char::is_whitespace) && tag[i + name.len()..].trim_start().starts_with('='))?;
+        let i = tag.match_indices(name).map(|(i, _)| i).find(|&i| {
+            tag[..i].ends_with(char::is_whitespace)
+                && tag[i + name.len()..].trim_start().starts_with('=')
+        })?;
         let rest = tag[i + name.len()..].trim_start()[1..].trim_start();
         let q = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
         rest[1..].split(q).next()
     };
     let mut add = String::new();
     if attr("viewBox").is_none() {
-        let size = |name| attr(name).and_then(|v| v.trim().trim_end_matches("px").trim().parse::<f64>().ok()).filter(|v| *v > 0.0);
+        let size = |name| {
+            attr(name)
+                .and_then(|v| v.trim().trim_end_matches("px").trim().parse::<f64>().ok())
+                .filter(|v| *v > 0.0)
+        };
         if let (Some(w), Some(h)) = (size("width"), size("height")) {
             let _ = write!(add, " viewBox=\"0 0 {} {}\"", n(w), n(h));
         }
@@ -856,16 +1218,28 @@ fn paint(props: Option<&Node>, theme: &HashMap<String, String>) -> Option<(Strin
     if p.child("noFill").is_some() {
         return Some(("none".into(), 1.0));
     }
-    let fill = p.child("solidFill").or_else(|| p.child("gradFill").and_then(|g| g.find("gs")))?;
+    let fill = p
+        .child("solidFill")
+        .or_else(|| p.child("gradFill").and_then(|g| g.find("gs")))?;
     let color = color_of(fill, theme)?;
-    let alpha = fill.children.first().and_then(|c| c.child("alpha")).and_then(|a| a.attr("val")).and_then(|v| v.parse::<f64>().ok()).map(|v| v / 100000.0).unwrap_or(1.0);
+    let alpha = fill
+        .children
+        .first()
+        .and_then(|c| c.child("alpha"))
+        .and_then(|a| a.attr("val"))
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| v / 100000.0)
+        .unwrap_or(1.0);
     Some((color, alpha))
 }
 
 /// The color of a style reference (lnRef, fillRef, fontRef) when its index is not 0.
 fn style_ref(sp: &Node, name: &str, theme: &HashMap<String, String>) -> Option<(String, usize)> {
     let r = sp.child("style")?.child(name)?;
-    let idx = r.attr("idx").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+    let idx = r
+        .attr("idx")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
     let color = color_of(r, theme)?;
     if name != "fontRef" && idx == 0 {
         return None;
@@ -888,12 +1262,18 @@ fn marker(end: Option<&Node>, color: &str, id: &str, width: f64) -> Option<Strin
     let shape = match kind {
         "triangle" => "<path d=\"M0,0 L10,5 L0,10 Z\"/>".to_string(),
         "stealth" => "<path d=\"M0,0 L10,5 L0,10 L3,5 Z\"/>".to_string(),
-        "arrow" => format!("<path d=\"M0,0 L10,5 L0,10\" fill=\"none\" stroke=\"{color}\" stroke-width=\"1.5\"/>"),
+        "arrow" => format!(
+            "<path d=\"M0,0 L10,5 L0,10\" fill=\"none\" stroke=\"{color}\" stroke-width=\"1.5\"/>"
+        ),
         "diamond" => "<path d=\"M0,5 L5,0 L10,5 L5,10 Z\"/>".to_string(),
         "oval" => "<circle cx=\"5\" cy=\"5\" r=\"5\"/>".to_string(),
         _ => return None,
     };
-    let refx = if matches!(kind, "diamond" | "oval") { 5 } else { 9 };
+    let refx = if matches!(kind, "diamond" | "oval") {
+        5
+    } else {
+        9
+    };
     Some(format!(
         "<marker id=\"{id}\" viewBox=\"0 0 10 10\" refX=\"{refx}\" refY=\"5\" markerWidth=\"{}\" markerHeight=\"{}\" orient=\"auto-start-reverse\" markerUnits=\"userSpaceOnUse\" fill=\"{color}\" overflow=\"visible\">{shape}</marker>",
         n(mh),
@@ -902,7 +1282,12 @@ fn marker(end: Option<&Node>, color: &str, id: &str, width: f64) -> Option<Strin
 }
 
 fn dash(ln: Option<&Node>, width: f64) -> String {
-    let Some(d) = ln.and_then(|l| l.child("prstDash")).and_then(|p| p.attr("val")) else { return String::new() };
+    let Some(d) = ln
+        .and_then(|l| l.child("prstDash"))
+        .and_then(|p| p.attr("val"))
+    else {
+        return String::new();
+    };
     let k = width.max(0.5);
     let pattern: &[f64] = match d {
         "dash" => &[4.0, 3.0],
@@ -922,7 +1307,8 @@ fn shape_html(ctx: &Ctx, sp: &Node, x: &Xfrm, w: f64, h: f64) -> String {
     let props = sp.child("spPr");
     let geom = if let Some(g) = props.and_then(|p| p.child("prstGeom")) {
         // Presets that are not defined are drawn as their rectangle.
-        geom::preset(g.attr("prst").unwrap_or("rect"), Some(g), w, h).or_else(|| geom::preset("rect", None, w, h))
+        geom::preset(g.attr("prst").unwrap_or("rect"), Some(g), w, h)
+            .or_else(|| geom::preset("rect", None, w, h))
     } else if let Some(g) = props.and_then(|p| p.child("custGeom")) {
         Some(geom::custom(g, w, h))
     } else if sp.name == "cxnSp" {
@@ -930,24 +1316,47 @@ fn shape_html(ctx: &Ctx, sp: &Node, x: &Xfrm, w: f64, h: f64) -> String {
     } else {
         None
     };
-    let paths = geom.as_ref().map(|g| g.paths.as_slice()).unwrap_or_default();
+    let paths = geom
+        .as_ref()
+        .map(|g| g.paths.as_slice())
+        .unwrap_or_default();
     let ln = props.and_then(|p| p.child("ln"));
     // Fill: the shape's own, else the theme's by its style.
-    let fill = paint(props, &ctx.theme).or_else(|| style_ref(sp, "fillRef", &ctx.theme).map(|(c, _)| (c, 1.0))).unwrap_or(("none".into(), 1.0));
-    let stroke = paint(ln, &ctx.theme).or_else(|| style_ref(sp, "lnRef", &ctx.theme).map(|(c, _)| (c, 1.0))).unwrap_or(("none".into(), 1.0));
-    let width = ln.and_then(|l| l.attr("w")).and_then(|v| v.parse::<f64>().ok()).map(|v| v / EMU_PT).unwrap_or_else(|| match style_ref(sp, "lnRef", &ctx.theme).map(|(_, i)| i) {
-        Some(1) => 0.5,
-        Some(3) => 1.5,
-        Some(_) => 1.0,
-        None => 0.75,
-    });
-    let op = |name: &str, a: f64| if a < 1.0 { format!(" {name}-opacity=\"{}\"", n(a)) } else { String::new() };
+    let fill = paint(props, &ctx.theme)
+        .or_else(|| style_ref(sp, "fillRef", &ctx.theme).map(|(c, _)| (c, 1.0)))
+        .unwrap_or(("none".into(), 1.0));
+    let stroke = paint(ln, &ctx.theme)
+        .or_else(|| style_ref(sp, "lnRef", &ctx.theme).map(|(c, _)| (c, 1.0)))
+        .unwrap_or(("none".into(), 1.0));
+    let width = ln
+        .and_then(|l| l.attr("w"))
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| v / EMU_PT)
+        .unwrap_or_else(
+            || match style_ref(sp, "lnRef", &ctx.theme).map(|(_, i)| i) {
+                Some(1) => 0.5,
+                Some(3) => 1.5,
+                Some(_) => 1.0,
+                None => 0.75,
+            },
+        );
+    let op = |name: &str, a: f64| {
+        if a < 1.0 {
+            format!(" {name}-opacity=\"{}\"", n(a))
+        } else {
+            String::new()
+        }
+    };
     let mut body = String::new();
     let mut defs = String::new();
     // The arrowheads (made once, for the open paths).
     let mut ends: Option<String> = None;
     for p in paths {
-        let f = if p.fill == geom::Fill::None || fill.0 == "none" { "none".to_string() } else { geom::shade(&fill.0, p.fill) };
+        let f = if p.fill == geom::Fill::None || fill.0 == "none" {
+            "none".to_string()
+        } else {
+            geom::shade(&fill.0, p.fill)
+        };
         let s = if p.stroke { stroke.0.as_str() } else { "none" };
         if p.d.is_empty() || (f == "none" && s == "none") {
             continue;
@@ -959,7 +1368,13 @@ fn shape_html(ctx: &Ctx, sp: &Node, x: &Xfrm, w: f64, h: f64) -> String {
         if s == "none" {
             body.push_str(" stroke=\"none\"");
         } else {
-            let _ = write!(body, " stroke=\"{s}\" stroke-width=\"{}\"{}{} stroke-linejoin=\"round\"", n(width), op("stroke", stroke.1), dash(ln, width));
+            let _ = write!(
+                body,
+                " stroke=\"{s}\" stroke-width=\"{}\"{}{} stroke-linejoin=\"round\"",
+                n(width),
+                op("stroke", stroke.1),
+                dash(ln, width)
+            );
             if p.open {
                 let e = ends.get_or_insert_with(|| {
                     let id = ctx.ids.get();
@@ -982,14 +1397,24 @@ fn shape_html(ctx: &Ctx, sp: &Node, x: &Xfrm, w: f64, h: f64) -> String {
     let mut svg = String::new();
     if !body.is_empty() {
         let flip = if x.flip_h || x.flip_v {
-            format!(" transform=\"translate({},{}) scale({},{})\"", if x.flip_h { n(w) } else { "0".into() }, if x.flip_v { n(h) } else { "0".into() }, if x.flip_h { -1 } else { 1 }, if x.flip_v { -1 } else { 1 })
+            format!(
+                " transform=\"translate({},{}) scale({},{})\"",
+                if x.flip_h { n(w) } else { "0".into() },
+                if x.flip_v { n(h) } else { "0".into() },
+                if x.flip_h { -1 } else { 1 },
+                if x.flip_v { -1 } else { 1 }
+            )
         } else {
             String::new()
         };
         let _ = write!(
             svg,
             "<svg viewBox=\"0 0 {w} {h}\" preserveAspectRatio=\"none\" style=\"position:absolute;inset:0;width:100%;height:100%;overflow:visible\">{}<g{flip}>{body}</g></svg>",
-            if defs.is_empty() { String::new() } else { format!("<defs>{defs}</defs>") },
+            if defs.is_empty() {
+                String::new()
+            } else {
+                format!("<defs>{defs}</defs>")
+            },
             w = n(w.max(0.01)),
             h = n(h.max(0.01)),
         );
@@ -1000,7 +1425,10 @@ fn shape_html(ctx: &Ctx, sp: &Node, x: &Xfrm, w: f64, h: f64) -> String {
         let (t, b) = if x.flip_v { (h - b, h - t) } else { (t, b) };
         (l.max(0.0), t.max(0.0), (w - r).max(0.0), (h - b).max(0.0))
     });
-    let text = sp.child("txBody").map(|t| text_html(ctx, sp, t, rect.unwrap_or_default(), (w, h), x.rot)).unwrap_or_default();
+    let text = sp
+        .child("txBody")
+        .map(|t| text_html(ctx, sp, t, rect.unwrap_or_default(), (w, h), x.rot))
+        .unwrap_or_default();
     format!("{svg}{text}")
 }
 
@@ -1011,18 +1439,40 @@ fn shape_html(ctx: &Ctx, sp: &Node, x: &Xfrm, w: f64, h: f64) -> String {
 /// WordArt is text with effects (text_fill, the outline, effect_css) and maybe a text warp
 /// (bodyPr's prstTxWarp): its lines are put in a .warp box with the warp's paths, and the page
 /// lays the characters out along them (`warpText` in view.js).
-pub(crate) fn text_html(ctx: &Ctx, sp: &Node, tx: &Node, bx: (f64, f64, f64, f64), size: (f64, f64), rot: f64) -> String {
+pub(crate) fn text_html(
+    ctx: &Ctx,
+    sp: &Node,
+    tx: &Node,
+    bx: (f64, f64, f64, f64),
+    size: (f64, f64),
+    rot: f64,
+) -> String {
     let body = tx.child("bodyPr");
-    let ins = |k: &str, d: f64| body.and_then(|b| b.attr(k)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(d) / EMU_PT;
-    let (l, t, r, b) = (bx.0 + ins("lIns", 91440.0), bx.1 + ins("tIns", 45720.0), bx.2 + ins("rIns", 91440.0), bx.3 + ins("bIns", 45720.0));
+    let ins = |k: &str, d: f64| {
+        body.and_then(|b| b.attr(k))
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(d)
+            / EMU_PT
+    };
+    let (l, t, r, b) = (
+        bx.0 + ins("lIns", 91440.0),
+        bx.1 + ins("tIns", 45720.0),
+        bx.2 + ins("rIns", 91440.0),
+        bx.3 + ins("bIns", 45720.0),
+    );
     let anchor = match body.and_then(|b| b.attr("anchor")) {
         Some("ctr") => "center",
         Some("b") => "flex-end",
         _ => "flex-start",
     };
-    let vert = matches!(body.and_then(|b| b.attr("vert")), Some("vert" | "eaVert" | "wordArtVert" | "mongolianVert"));
+    let vert = matches!(
+        body.and_then(|b| b.attr("vert")),
+        Some("vert" | "eaVert" | "wordArtVert" | "mongolianVert")
+    );
     let nowrap = body.and_then(|b| b.attr("wrap")) == Some("none");
-    let base_color = style_ref(sp, "fontRef", &ctx.theme).map(|(c, _)| c).unwrap_or_else(|| "#000000".into());
+    let base_color = style_ref(sp, "fontRef", &ctx.theme)
+        .map(|(c, _)| c)
+        .unwrap_or_else(|| "#000000".into());
     // Defaults from the list style (lvl1pPr/defRPr).
     let lst = tx.child("lstStyle").and_then(|l| l.child("lvl1pPr"));
     let mut paras = String::new();
@@ -1031,19 +1481,29 @@ pub(crate) fn text_html(ctx: &Ctx, sp: &Node, tx: &Node, bx: (f64, f64, f64, f64
     let mut reflect = String::new();
     for p in tx.all("p") {
         let ppr = p.child("pPr");
-        let algn = ppr.and_then(|x| x.attr("algn")).or_else(|| lst.and_then(|x| x.attr("algn")));
+        let algn = ppr
+            .and_then(|x| x.attr("algn"))
+            .or_else(|| lst.and_then(|x| x.attr("algn")));
         let align = match algn {
             Some("ctr") => "center",
             Some("r") => "right",
             Some("just") | Some("dist") => "justify",
             _ => "left",
         };
-        let def = ppr.and_then(|x| x.child("defRPr")).or_else(|| lst.and_then(|x| x.child("defRPr")));
+        let def = ppr
+            .and_then(|x| x.child("defRPr"))
+            .or_else(|| lst.and_then(|x| x.child("defRPr")));
         let mut runs = String::new();
-        if let Some(bu) = ppr.and_then(|x| x.child("buChar")).and_then(|c| c.attr("char")) {
+        if let Some(bu) = ppr
+            .and_then(|x| x.child("buChar"))
+            .and_then(|c| c.attr("char"))
+        {
             let _ = write!(runs, "{}&nbsp;", esc(bu));
         }
-        let mut size_last = def.and_then(|d| d.attr("sz")).and_then(|v| v.parse::<f64>().ok()).map(|v| v / 100.0);
+        let mut size_last = def
+            .and_then(|d| d.attr("sz"))
+            .and_then(|v| v.parse::<f64>().ok())
+            .map(|v| v / 100.0);
         for c in &p.children {
             match c.name.as_str() {
                 "r" | "fld" => {
@@ -1055,9 +1515,15 @@ pub(crate) fn text_html(ctx: &Ctx, sp: &Node, tx: &Node, bx: (f64, f64, f64, f64
                     let rpr = c.child("rPr");
                     let css = run_css(ctx, rpr, def, &base_color, rot);
                     if reflect.is_empty() {
-                        reflect = reflect_css(rpr.and_then(|r| r.child("effectLst")).or_else(|| def.and_then(|d| d.child("effectLst"))));
+                        reflect = reflect_css(
+                            rpr.and_then(|r| r.child("effectLst"))
+                                .or_else(|| def.and_then(|d| d.child("effectLst"))),
+                        );
                     }
-                    if let Some(sz) = rpr.and_then(|x| x.attr("sz")).and_then(|v| v.parse::<f64>().ok()) {
+                    if let Some(sz) = rpr
+                        .and_then(|x| x.attr("sz"))
+                        .and_then(|v| v.parse::<f64>().ok())
+                    {
                         size_last = Some(sz / 100.0);
                     }
                     let _ = write!(runs, "<span style=\"{css}\">{}</span>", esc(&s));
@@ -1068,7 +1534,13 @@ pub(crate) fn text_html(ctx: &Ctx, sp: &Node, tx: &Node, bx: (f64, f64, f64, f64
         }
         if runs.is_empty() {
             // An empty paragraph keeps its line.
-            let sz = p.child("endParaRPr").and_then(|x| x.attr("sz")).and_then(|v| v.parse::<f64>().ok()).map(|v| v / 100.0).or(size_last).unwrap_or(11.0);
+            let sz = p
+                .child("endParaRPr")
+                .and_then(|x| x.attr("sz"))
+                .and_then(|v| v.parse::<f64>().ok())
+                .map(|v| v / 100.0)
+                .or(size_last)
+                .unwrap_or(11.0);
             runs = format!("<span style=\"font-size:{}pt\">&nbsp;</span>", n(sz));
         }
         let _ = write!(paras, "<p style=\"margin:0;text-align:{align}\">{runs}</p>");
@@ -1084,8 +1556,24 @@ pub(crate) fn text_html(ctx: &Ctx, sp: &Node, tx: &Node, bx: (f64, f64, f64, f64
         && wh > 0.0
         && let Some(paths) = geom::text_warp(warp.attr("prst").unwrap_or(""), Some(warp), ww, wh)
     {
-        let paths: Vec<String> = paths.iter().map(|p| format!("[{}]", p.iter().map(|(x, y)| format!("{},{}", n(*x), n(*y))).collect::<Vec<_>>().join(","))).collect();
-        let spec = format!("{{\"w\":{},\"h\":{},\"paths\":[{}]}}", n(ww), n(wh), paths.join(","));
+        let paths: Vec<String> = paths
+            .iter()
+            .map(|p| {
+                format!(
+                    "[{}]",
+                    p.iter()
+                        .map(|(x, y)| format!("{},{}", n(*x), n(*y)))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            })
+            .collect();
+        let spec = format!(
+            "{{\"w\":{},\"h\":{},\"paths\":[{}]}}",
+            n(ww),
+            n(wh),
+            paths.join(",")
+        );
         return format!(
             "<div class=\"warp\" data-warp=\"{}\" style=\"position:absolute;left:{}pt;top:{}pt;width:{}pt;height:{}pt;overflow:visible;line-height:1.2;white-space:pre;font-family:{family};font-size:11pt;color:{base_color};{reflect}\">{paras}</div>",
             esc(&spec),
@@ -1107,15 +1595,28 @@ pub(crate) fn text_html(ctx: &Ctx, sp: &Node, tx: &Node, bx: (f64, f64, f64, f64
         n(l),
         family
     );
-    style.push_str(if nowrap { "white-space:pre;" } else { "white-space:pre-wrap;overflow-wrap:anywhere;" });
+    style.push_str(if nowrap {
+        "white-space:pre;"
+    } else {
+        "white-space:pre-wrap;overflow-wrap:anywhere;"
+    });
     if vert {
         style.push_str("writing-mode:vertical-rl;");
     }
     format!("<div style=\"{style}\">{paras}</div>")
 }
 
-fn run_css(ctx: &Ctx, rpr: Option<&Node>, def: Option<&Node>, base_color: &str, rot: f64) -> String {
-    let get = |k: &str| rpr.and_then(|x| x.attr(k)).or_else(|| def.and_then(|x| x.attr(k)));
+fn run_css(
+    ctx: &Ctx,
+    rpr: Option<&Node>,
+    def: Option<&Node>,
+    base_color: &str,
+    rot: f64,
+) -> String {
+    let get = |k: &str| {
+        rpr.and_then(|x| x.attr(k))
+            .or_else(|| def.and_then(|x| x.attr(k)))
+    };
     let mut css = String::new();
     if let Some(sz) = get("sz").and_then(|v| v.parse::<f64>().ok()) {
         let _ = write!(css, "font-size:{}pt;", n(sz / 100.0));
@@ -1141,7 +1642,10 @@ fn run_css(ctx: &Ctx, rpr: Option<&Node>, def: Option<&Node>, base_color: &str, 
         Some("small") => css.push_str("font-variant:small-caps;"),
         _ => {}
     }
-    if let Some(spc) = get("spc").and_then(|v| v.parse::<f64>().ok()).filter(|v| *v != 0.0) {
+    if let Some(spc) = get("spc")
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v != 0.0)
+    {
         let _ = write!(css, "letter-spacing:{}pt;", n(spc / 100.0));
     }
     let face = |n0: Option<&Node>| -> Option<String> {
@@ -1161,33 +1665,62 @@ fn run_css(ctx: &Ctx, rpr: Option<&Node>, def: Option<&Node>, base_color: &str, 
     }
     css.push_str(&text_fill(rpr, def, &ctx.theme, base_color));
     // The outline of the characters.
-    let ln = rpr.and_then(|x| x.child("ln")).or_else(|| def.and_then(|x| x.child("ln")));
+    let ln = rpr
+        .and_then(|x| x.child("ln"))
+        .or_else(|| def.and_then(|x| x.child("ln")));
     if let Some((c, a)) = paint(ln, &ctx.theme).filter(|(c, _)| c != "none") {
-        let w = ln.and_then(|l| l.attr("w")).and_then(|v| v.parse::<f64>().ok()).map(|v| v / EMU_PT).unwrap_or(0.75).max(0.25);
+        let w = ln
+            .and_then(|l| l.attr("w"))
+            .and_then(|v| v.parse::<f64>().ok())
+            .map(|v| v / EMU_PT)
+            .unwrap_or(0.75)
+            .max(0.25);
         let _ = write!(css, "-webkit-text-stroke:{}pt {};", n(w), rgba(&c, a));
     }
-    let fx = rpr.and_then(|x| x.child("effectLst")).or_else(|| def.and_then(|x| x.child("effectLst")));
+    let fx = rpr
+        .and_then(|x| x.child("effectLst"))
+        .or_else(|| def.and_then(|x| x.child("effectLst")));
     css.push_str(&effect_css(fx, &ctx.theme, rot));
     css
 }
 
 /// The fill of a run's characters: a color, a gradient (as the background of the text) or none
 /// (only the outline shows).
-fn text_fill(rpr: Option<&Node>, def: Option<&Node>, theme: &HashMap<String, String>, base_color: &str) -> String {
+fn text_fill(
+    rpr: Option<&Node>,
+    def: Option<&Node>,
+    theme: &HashMap<String, String>,
+    base_color: &str,
+) -> String {
     fn fill(r: Option<&Node>) -> Option<&Node> {
-        r?.children.iter().find(|c| matches!(c.name.as_str(), "solidFill" | "gradFill" | "noFill" | "pattFill"))
+        r?.children.iter().find(|c| {
+            matches!(
+                c.name.as_str(),
+                "solidFill" | "gradFill" | "noFill" | "pattFill"
+            )
+        })
     }
-    let Some(f) = fill(rpr).or_else(|| fill(def)) else { return String::new() };
+    let Some(f) = fill(rpr).or_else(|| fill(def)) else {
+        return String::new();
+    };
     match f.name.as_str() {
         "noFill" => "color:transparent;".into(),
         "gradFill" => match gradient_css(f, theme) {
-            Some(g) => format!("background-image:{g};-webkit-background-clip:text;background-clip:text;color:transparent;"),
+            Some(g) => format!(
+                "background-image:{g};-webkit-background-clip:text;background-clip:text;color:transparent;"
+            ),
             None => String::new(),
         },
         _ => {
-            let f = if f.name == "pattFill" { f.child("fgClr").unwrap_or(f) } else { f };
+            let f = if f.name == "pattFill" {
+                f.child("fgClr").unwrap_or(f)
+            } else {
+                f
+            };
             match color_of(f, theme) {
-                Some(c) if c != base_color || alpha_of(f) < 1.0 => format!("color:{};", rgba(&c, alpha_of(f))),
+                Some(c) if c != base_color || alpha_of(f) < 1.0 => {
+                    format!("color:{};", rgba(&c, alpha_of(f)))
+                }
                 _ => String::new(),
             }
         }
@@ -1198,7 +1731,12 @@ fn text_fill(rpr: Option<&Node>, def: Option<&Node>, theme: &HashMap<String, Str
 fn alpha_of(fill: &Node) -> f64 {
     fill.children
         .iter()
-        .find(|c| matches!(c.name.as_str(), "srgbClr" | "schemeClr" | "sysClr" | "prstClr"))
+        .find(|c| {
+            matches!(
+                c.name.as_str(),
+                "srgbClr" | "schemeClr" | "sysClr" | "prstClr"
+            )
+        })
         .and_then(|c| c.child("alpha"))
         .and_then(|a| a.attr("val"))
         .and_then(|v| v.parse::<f64>().ok())
@@ -1211,8 +1749,17 @@ fn rgba(color: &str, alpha: f64) -> String {
     if alpha >= 1.0 {
         return color.to_string();
     }
-    let v = color.strip_prefix('#').and_then(|h| u32::from_str_radix(h, 16).ok()).unwrap_or(0);
-    format!("rgba({},{},{},{})", (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff, n(alpha))
+    let v = color
+        .strip_prefix('#')
+        .and_then(|h| u32::from_str_radix(h, 16).ok())
+        .unwrap_or(0);
+    format!(
+        "rgba({},{},{},{})",
+        (v >> 16) & 0xff,
+        (v >> 8) & 0xff,
+        v & 0xff,
+        n(alpha)
+    )
 }
 
 /// The CSS color of a node with a color (a fill, a gradient stop, an effect).
@@ -1223,22 +1770,58 @@ fn css_color(node: &Node, theme: &HashMap<String, String>) -> Option<String> {
 /// A gradient fill (gradFill) as a CSS gradient: linear at its angle, or radial from the center
 /// of its fillToRect.
 fn gradient_css(g: &Node, theme: &HashMap<String, String>) -> Option<String> {
-    let mut stops: Vec<(f64, String)> =
-        g.child("gsLst")?.all("gs").filter_map(|s| Some((s.attr("pos").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / 1000.0, css_color(s, theme)?))).collect();
+    let mut stops: Vec<(f64, String)> = g
+        .child("gsLst")?
+        .all("gs")
+        .filter_map(|s| {
+            Some((
+                s.attr("pos")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or(0.0)
+                    / 1000.0,
+                css_color(s, theme)?,
+            ))
+        })
+        .collect();
     if stops.is_empty() {
         return None;
     }
     stops.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let list = stops.iter().map(|(p, c)| format!("{c} {}%", n(*p))).collect::<Vec<_>>().join(",");
+    let list = stops
+        .iter()
+        .map(|(p, c)| format!("{c} {}%", n(*p)))
+        .collect::<Vec<_>>()
+        .join(",");
     if let Some(path) = g.child("path") {
         let r = path.child("fillToRect");
-        let v = |k: &str| r.and_then(|r| r.attr(k)).and_then(|v| v.parse::<f64>().ok()).unwrap_or(50000.0) / 1000.0;
-        let (cx, cy) = ((v("l") + 100.0 - v("r")) / 2.0, (v("t") + 100.0 - v("b")) / 2.0);
-        let shape = if path.attr("path") == Some("circle") { "circle" } else { "ellipse" };
-        return Some(format!("radial-gradient({shape} farthest-corner at {}% {}%,{list})", n(cx), n(cy)));
+        let v = |k: &str| {
+            r.and_then(|r| r.attr(k))
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(50000.0)
+                / 1000.0
+        };
+        let (cx, cy) = (
+            (v("l") + 100.0 - v("r")) / 2.0,
+            (v("t") + 100.0 - v("b")) / 2.0,
+        );
+        let shape = if path.attr("path") == Some("circle") {
+            "circle"
+        } else {
+            "ellipse"
+        };
+        return Some(format!(
+            "radial-gradient({shape} farthest-corner at {}% {}%,{list})",
+            n(cx),
+            n(cy)
+        ));
     }
     // DrawingML: 0 is left to right, clockwise; CSS: 90deg is left to right.
-    let ang = g.child("lin").and_then(|l| l.attr("ang")).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / 60000.0;
+    let ang = g
+        .child("lin")
+        .and_then(|l| l.attr("ang"))
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.0)
+        / 60000.0;
     Some(format!("linear-gradient({}deg,{list})", n(ang + 90.0)))
 }
 
@@ -1246,34 +1829,57 @@ fn gradient_css(g: &Node, theme: &HashMap<String, String>) -> Option<String> {
 /// shape (a shadow that does not turn with it is turned back).
 fn effect_css(fx: Option<&Node>, theme: &HashMap<String, String>, rot: f64) -> String {
     let Some(fx) = fx else { return String::new() };
-    let emu = |e: &Node, k: &str| e.attr(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / EMU_PT;
+    let emu =
+        |e: &Node, k: &str| e.attr(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / EMU_PT;
     let mut f = Vec::new();
     // The glow first: the shadow falls from the glowing text.
     if let Some(g) = fx.child("glow")
         && let Some(c) = css_color(g, theme)
     {
         let r = n(emu(g, "rad") / 2.0);
-        f.push(format!("drop-shadow(0 0 {r}pt {c}) drop-shadow(0 0 {r}pt {c})"));
+        f.push(format!(
+            "drop-shadow(0 0 {r}pt {c}) drop-shadow(0 0 {r}pt {c})"
+        ));
     }
     if let Some(s) = fx.child("outerShdw")
         && let Some(c) = css_color(s, theme)
     {
-        let mut dir = s.attr("dir").and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / 60000.0;
+        let mut dir = s
+            .attr("dir")
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0)
+            / 60000.0;
         if matches!(s.attr("rotWithShape"), Some("0" | "false")) {
             dir -= rot;
         }
         let (dist, dir) = (emu(s, "dist"), dir.to_radians());
-        f.push(format!("drop-shadow({}pt {}pt {}pt {c})", n(dist * dir.cos()), n(dist * dir.sin()), n(emu(s, "blurRad") / 2.0)));
+        f.push(format!(
+            "drop-shadow({}pt {}pt {}pt {c})",
+            n(dist * dir.cos()),
+            n(dist * dir.sin()),
+            n(emu(s, "blurRad") / 2.0)
+        ));
     }
-    if f.is_empty() { String::new() } else { format!("filter:{};", f.join(" ")) }
+    if f.is_empty() {
+        String::new()
+    } else {
+        format!("filter:{};", f.join(" "))
+    }
 }
 
 /// The reflection of an effect list as -webkit-box-reflect (below, fading from stA at stPos to
 /// endA at endPos).
 fn reflect_css(fx: Option<&Node>) -> String {
-    let Some(r) = fx.and_then(|f| f.child("reflection")) else { return String::new() };
+    let Some(r) = fx.and_then(|f| f.child("reflection")) else {
+        return String::new();
+    };
     let num = |k: &str, d: f64| r.attr(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(d);
-    let (st_a, st_pos, end_a, end_pos) = (num("stA", 100000.0) / 100000.0, num("stPos", 0.0) / 1000.0, num("endA", 0.0) / 100000.0, num("endPos", 100000.0) / 1000.0);
+    let (st_a, st_pos, end_a, end_pos) = (
+        num("stA", 100000.0) / 100000.0,
+        num("stPos", 0.0) / 1000.0,
+        num("endA", 0.0) / 100000.0,
+        num("endPos", 100000.0) / 1000.0,
+    );
     format!(
         "-webkit-box-reflect:below {}pt linear-gradient(rgba(0,0,0,{}) {}%,rgba(0,0,0,{}) {}%,transparent {}%);",
         n(num("dist", 0.0) / EMU_PT),
@@ -1289,17 +1895,42 @@ fn reflect_css(fx: Option<&Node>) -> String {
 mod tests {
     use super::*;
 
-    fn ctx<'a>(parts: &'a Parts, rels: HashMap<String, (String, String)>, ids: &'a Cell<usize>, images: &'a RefCell<Images>) -> Ctx<'a> {
-        Ctx { parts, rels, theme: HashMap::new(), font: ("Calibri".into(), 11.0), ids, images }
+    fn ctx<'a>(
+        parts: &'a Parts,
+        rels: HashMap<String, (String, String)>,
+        ids: &'a Cell<usize>,
+        images: &'a RefCell<Images>,
+    ) -> Ctx<'a> {
+        Ctx {
+            parts,
+            rels,
+            theme: HashMap::new(),
+            font: ("Calibri".into(), 11.0),
+            ids,
+            images,
+        }
     }
 
     #[test]
     fn color_modifiers() {
-        let m = |v: &[(&str, f64)]| v.iter().map(|(k, x)| (k.to_string(), *x)).collect::<Vec<_>>();
+        let m = |v: &[(&str, f64)]| {
+            v.iter()
+                .map(|(k, x)| (k.to_string(), *x))
+                .collect::<Vec<_>>()
+        };
         // As Excel shows them (Office 2013+ theme): accent1 darker 40% / lighter 40%, accent2 darker 25%.
-        assert_eq!(modified("4472C4", &m(&[("lumMod", 0.6)])).unwrap(), "#264478");
-        assert_eq!(modified("4472C4", &m(&[("lumMod", 0.6), ("lumOff", 0.4)])).unwrap(), "#8FAADC");
-        assert_eq!(modified("ED7D31", &m(&[("lumMod", 0.75)])).unwrap(), "#C55A11");
+        assert_eq!(
+            modified("4472C4", &m(&[("lumMod", 0.6)])).unwrap(),
+            "#264478"
+        );
+        assert_eq!(
+            modified("4472C4", &m(&[("lumMod", 0.6), ("lumOff", 0.4)])).unwrap(),
+            "#8FAADC"
+        );
+        assert_eq!(
+            modified("ED7D31", &m(&[("lumMod", 0.75)])).unwrap(),
+            "#C55A11"
+        );
     }
 
     #[test]
@@ -1315,12 +1946,21 @@ mod tests {
     #[test]
     fn svg_picture() {
         let svg = br#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="20px" height="10"><rect width="20" height="10"/></svg>"#;
-        let files = HashMap::from([("xl/media/image1.png".to_string(), b"PNG".to_vec()), ("xl/media/image2.svg".to_string(), svg.to_vec())]);
+        let files = HashMap::from([
+            ("xl/media/image1.png".to_string(), b"PNG".to_vec()),
+            ("xl/media/image2.svg".to_string(), svg.to_vec()),
+        ]);
         let parts = Parts { files };
         let (ids, images) = (Cell::new(0), RefCell::new(Images::default()));
         let rels = HashMap::from([
-            ("rId1".to_string(), ("image".to_string(), "xl/media/image1.png".to_string())),
-            ("rId2".to_string(), ("image".to_string(), "xl/media/image2.svg".to_string())),
+            (
+                "rId1".to_string(),
+                ("image".to_string(), "xl/media/image1.png".to_string()),
+            ),
+            (
+                "rId2".to_string(),
+                ("image".to_string(), "xl/media/image2.svg".to_string()),
+            ),
         ]);
         let ctx = ctx(&parts, rels, &ids, &images);
         let pic = parse(br#"<xdr:pic xmlns:xdr="x" xmlns:a="a" xmlns:r="r" xmlns:asvg="s"><xdr:blipFill><a:blip r:embed="rId1"><a:extLst><a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}"><asvg:svgBlip r:embed="rId2"/></a:ext></a:extLst></a:blip></xdr:blipFill></xdr:pic>"#).unwrap();
@@ -1328,7 +1968,10 @@ mod tests {
         assert!(html.contains("data-img=\"0\""), "{html}");
         assert!(images.borrow().list[0].starts_with("data:image/svg+xml;base64,"));
         // Without the extension: the PNG; the same picture again is the same entry.
-        let pic = parse(br#"<xdr:pic xmlns:xdr="x" xmlns:a="a" xmlns:r="r"><a:blip r:embed="rId1"/></xdr:pic>"#).unwrap();
+        let pic = parse(
+            br#"<xdr:pic xmlns:xdr="x" xmlns:a="a" xmlns:r="r"><a:blip r:embed="rId1"/></xdr:pic>"#,
+        )
+        .unwrap();
         assert!(picture_html(&ctx, &pic, &Xfrm::default()).contains("data-img=\"1\""));
         assert!(picture_html(&ctx, &pic, &Xfrm::default()).contains("data-img=\"1\""));
         assert_eq!(images.borrow().list.len(), 2);
@@ -1337,7 +1980,10 @@ mod tests {
         let keep = br#"<svg viewBox="0 0 1 1" preserveAspectRatio="xMidYMid"/>"#;
         assert_eq!(svg_stretched(keep), keep.to_vec());
         // What a browser cannot show is said.
-        assert!(picture_of(&ctx, "xl/media/image3.emf", b"", "").contains("表示できない形式の画像（EMF）"));
+        assert!(
+            picture_of(&ctx, "xl/media/image3.emf", b"", "")
+                .contains("表示できない形式の画像（EMF）")
+        );
     }
 
     /// An oval as Excel makes it: the theme's fill and line by its style, its text in the
@@ -1352,7 +1998,17 @@ mod tests {
         )
         .unwrap();
         let html = object_html(&ctx, &sp, None, Some((100.0, 50.0)));
-        assert!(html.contains("<path d=\"M0,25 A50,25") && html.contains("fill=\"#4472C4\"") && html.contains("stroke=\"#223962\""), "{html}");
-        assert!(html.contains("justify-content:center") && html.contains("color:#FFFFFF") && html.contains(">OK</span>"), "{html}");
+        assert!(
+            html.contains("<path d=\"M0,25 A50,25")
+                && html.contains("fill=\"#4472C4\"")
+                && html.contains("stroke=\"#223962\""),
+            "{html}"
+        );
+        assert!(
+            html.contains("justify-content:center")
+                && html.contains("color:#FFFFFF")
+                && html.contains(">OK</span>"),
+            "{html}"
+        );
     }
 }

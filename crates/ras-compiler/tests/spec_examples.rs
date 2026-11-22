@@ -12,38 +12,84 @@ fn config() -> Config {
 }
 
 fn compile_with(files: &[(&str, &str)], cfg: Config) -> (Program, BuildOutput) {
-    compile_str(files, cfg, &BuildOptions { erl: Some(false), ..Default::default() })
+    compile_str(
+        files,
+        cfg,
+        &BuildOptions {
+            erl: Some(false),
+            ..Default::default()
+        },
+    )
 }
 
 fn compile(files: &[(&str, &str)]) -> (Program, BuildOutput) {
     let (prog, out) = compile_with(files, config());
-    let errors: Vec<String> = prog.diagnostics.iter().chain(out.diagnostics.iter()).filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .chain(out.diagnostics.iter())
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
     assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
     (prog, out)
 }
 
 /// Code of a generated module with LF line endings and without the hash line.
 fn code(out: &BuildOutput, module: &str) -> String {
-    let f = out.files.iter().find(|f| f.name == module).unwrap_or_else(|| panic!("no module {module}; have {:?}", out.files.iter().map(|f| &f.name).collect::<Vec<_>>()));
-    f.code.replace("\r\n", "\n").lines().filter(|l| !l.starts_with("' RAS-GENERATED")).map(|l| format!("{l}\n")).collect()
+    let f = out
+        .files
+        .iter()
+        .find(|f| f.name == module)
+        .unwrap_or_else(|| {
+            panic!(
+                "no module {module}; have {:?}",
+                out.files.iter().map(|f| &f.name).collect::<Vec<_>>()
+            )
+        });
+    f.code
+        .replace("\r\n", "\n")
+        .lines()
+        .filter(|l| !l.starts_with("' RAS-GENERATED"))
+        .map(|l| format!("{l}\n"))
+        .collect()
 }
 
 /// Error codes reported for user modules.
 fn error_codes(files: &[(&str, &str)]) -> Vec<&'static str> {
     let (prog, out) = compile_with(files, config());
-    assert!(out.files.is_empty(), "no code must be generated when there are errors");
-    prog.diagnostics.iter().filter(|d| d.is_error() && d.module.is_some_and(|m| prog.modules[m].kind == ModuleKind::User)).map(|d| d.code).collect()
+    assert!(
+        out.files.is_empty(),
+        "no code must be generated when there are errors"
+    );
+    prog.diagnostics
+        .iter()
+        .filter(|d| {
+            d.is_error()
+                && d.module
+                    .is_some_and(|m| prog.modules[m].kind == ModuleKind::User)
+        })
+        .map(|d| d.code)
+        .collect()
 }
 
 #[track_caller]
 fn assert_contains(haystack: &str, needle: &str) {
-    assert!(haystack.contains(needle), "expected to find:\n{needle}\n--- in ---\n{haystack}");
+    assert!(
+        haystack.contains(needle),
+        "expected to find:\n{needle}\n--- in ---\n{haystack}"
+    );
 }
 
 #[test]
 fn bundled_type_definitions_are_clean() {
     let (prog, _) = compile(&[("empty", "")]);
-    let problems: Vec<String> = prog.diagnostics.iter().filter(|d| d.severity <= Severity::Warning).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    let problems: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity <= Severity::Warning)
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
     assert!(problems.is_empty(), "{problems:#?}");
     assert!(prog.namespaces["Excel"].contains_key("Range"));
     assert!(prog.globals.contains_key("xlUp"));
@@ -101,12 +147,22 @@ function demo(name: string, id: string): int {
 "#;
     let mut cfg = config();
     cfg.opt_override = Some(0);
-    let (_, out) = compile_with(&[("StrUtil", STRUTIL), ("ExcelUtil", EXCELUTIL), ("main", main)], cfg);
+    let (_, out) = compile_with(
+        &[
+            ("StrUtil", STRUTIL),
+            ("ExcelUtil", EXCELUTIL),
+            ("main", main),
+        ],
+        cfg,
+    );
     let m = code(&out, "Main");
     assert_contains(&m, "    If Not StrUtil.isBlank(name_) Then\n        code = StrUtil.padLeft(id, 6&, \"0\")\n    End If\n    last = ExcelUtil.lastRow(Sheet1, 1&)\n");
     let x = code(&out, "ExcelUtil");
     assert_contains(&x, "Public Function lastRow(ByVal this_ As Worksheet, Optional ByVal col As Long = 1&) As Long\n    lastRow = this_.Cells(this_.Rows.Count, col).End(xlUp).Row\nEnd Function\n");
-    assert_contains(&x, "Public Function sum(ByRef this_() As Double) As Double\n");
+    assert_contains(
+        &x,
+        "Public Function sum(ByRef this_() As Double) As Double\n",
+    );
     let s = code(&out, "StrUtil");
     assert_contains(&s, "    isBlank = Len(Trim$(this_)) = 0&\n");
 }
@@ -141,11 +197,20 @@ export function demo() {
     let (_, out) = compile_with(&[("main", src)], cfg);
     let m = code(&out, "Main");
     // Skipped parameters of RAS functions get their defaults; host members get an empty slot.
-    assert_contains(&m, "    s1 = label(123&, 2&, \"abc\")\n    s2 = label(1&, 2&, \"z\")\n");
+    assert_contains(
+        &m,
+        "    s1 = label(123&, 2&, \"abc\")\n    s2 = label(1&, 2&, \"z\")\n",
+    );
     assert_contains(&m, "    bump k, 3&\n");
-    assert_contains(&m, "    Set bx = Main.New_Box(1&, 2&)\n    bx.resize 2&, 5&\n");
+    assert_contains(
+        &m,
+        "    Set bx = Main.New_Box(1&, 2&)\n    bx.resize 2&, 5&\n",
+    );
     assert_contains(&m, "    n = lastRow(Sheet1, 1&, 5&)\n");
-    assert_contains(&m, "    Set r = Sheet1.Range(\"A:A\").Find(\"x\",,, xlWhole,,, True)\n");
+    assert_contains(
+        &m,
+        "    Set r = Sheet1.Range(\"A:A\").Find(\"x\",,, xlWhole,,, True)\n",
+    );
     assert_contains(&m, "    MsgBox \"hi\",, \"t\"\n");
 
     let decl = "function f(a: int, b: int = 2, c: string = \"x\"): string { return c; }\nfunction g(): void {}\n";
@@ -164,7 +229,10 @@ export function demo() {
     for (body, want) in cases {
         let text = format!("{decl}export function t() {{ {body} }}\n");
         let codes = error_codes(&[("main", &text)]);
-        assert!(codes.contains(want), "{body}: expected {want}, got {codes:?}");
+        assert!(
+            codes.contains(want),
+            "{body}: expected {want}, got {codes:?}"
+        );
     }
 }
 
@@ -193,9 +261,18 @@ function demo(ints: int[], names: string[]): string {
 "#;
     let (_, out) = compile(&[("gen", src)]);
     let m = code(&out, "Gen");
-    assert_contains(&m, "Public Function maxOf__Long(ByRef this_() As Long) As Long\n");
-    assert_contains(&m, "Public Function maxOf__String(ByRef this_() As String) As String\n");
-    assert_contains(&m, "    a = maxOf__Long(ints)\n    b = maxOf__String(names_)\n");
+    assert_contains(
+        &m,
+        "Public Function maxOf__Long(ByRef this_() As Long) As Long\n",
+    );
+    assert_contains(
+        &m,
+        "Public Function maxOf__String(ByRef this_() As String) As String\n",
+    );
+    assert_contains(
+        &m,
+        "    a = maxOf__Long(ints)\n    b = maxOf__String(names_)\n",
+    );
     let cls = code(&out, "Stack__Range");
     assert_contains(&cls, "Private items() As Range\n");
     assert_contains(&cls, "Public Sub push(ByVal x As Range)\n");
@@ -204,12 +281,17 @@ function demo(ints: int[], names: string[]): string {
     // The class file carries the standard class header.
     let file = out.files.iter().find(|f| f.name == "Stack__Range").unwrap();
     assert!(file.full_text.starts_with("VERSION 1.0 CLASS\r\nBEGIN\r\n  MultiUse = -1  'True\r\nEND\r\nAttribute VB_Name = \"Stack__Range\"\r\n"));
-    assert!(file.stream_text().starts_with("Attribute VB_Name = \"Stack__Range\"\r\n"));
+    assert!(file
+        .stream_text()
+        .starts_with("Attribute VB_Name = \"Stack__Range\"\r\n"));
 }
 
 #[test]
 fn spec_2_4_unused_generic_emits_nothing_and_constraints_are_checked() {
-    let (prog, out) = compile(&[("g", "export function first<T>(this: T[]): T { return this[0]; }\n")]);
+    let (prog, out) = compile(&[(
+        "g",
+        "export function first<T>(this: T[]): T { return this[0]; }\n",
+    )]);
     assert!(out.files.is_empty());
     let _ = prog;
     let codes = error_codes(&[("g", "function maxOf<T extends Comparable>(a: T, b: T): T { return a > b ? a : b; }\nfunction f(x: object, y: object) { maxOf(x, y); }\n")]);
@@ -218,7 +300,10 @@ fn spec_2_4_unused_generic_emits_nothing_and_constraints_are_checked() {
 
 #[test]
 fn spec_4_2_loop_fusion() {
-    let (_, out) = compile(&[("fusion", "const base = 10;\nlet arr = [1, 2, 3];\nlet result = arr.map(x => x * base);\n")]);
+    let (_, out) = compile(&[(
+        "fusion",
+        "const base = 10;\nlet arr = [1, 2, 3];\nlet result = arr.map(x => x * base);\n",
+    )]);
     let m = code(&out, "Fusion");
     assert_contains(&m, "Public Sub Main()\n    Dim base As Long\n    Dim arr() As Long\n    Dim result() As Long\n    Dim ras_i As Long\n");
     assert_contains(
@@ -231,7 +316,8 @@ fn spec_4_2_loop_fusion() {
 
 #[test]
 fn spec_4_1_filter_map_chain_is_one_loop() {
-    let src = "function f(a: int[]): int[] {\n    return a.filter(x => x > 0).map(x => x * 2);\n}\n";
+    let src =
+        "function f(a: int[]): int[] {\n    return a.filter(x => x > 0).map(x => x * 2);\n}\n";
     let mut cfg = config();
     cfg.doevents.enabled = false;
     let (_, out) = compile_with(&[("m", src)], cfg);
@@ -257,10 +343,17 @@ function demo(arr: double[]): double[] {
     assert_contains(&cls, "Public Captured_base As Long\n");
     assert_contains(&cls, "Public Function Apply(ByVal x As Variant) As Variant\n    Apply = x * Me.Captured_base\nEnd Function\n");
     let m = code(&out, "M");
-    assert_contains(&m, "    Set ras_t1 = New RAS_Lambda_001\n    ras_t1.Captured_base = base\n");
+    assert_contains(
+        &m,
+        "    Set ras_t1 = New RAS_Lambda_001\n    ras_t1.Captured_base = base\n",
+    );
     assert_contains(&m, "f.Apply(arr(ras_i))");
     // The user is told that this lambda is slow.
-    assert!(prog.diagnostics.iter().chain(out.diagnostics.iter()).any(|d| d.code == "I0641"));
+    assert!(prog
+        .diagnostics
+        .iter()
+        .chain(out.diagnostics.iter())
+        .any(|d| d.code == "I0641"));
 }
 
 #[test]
@@ -271,8 +364,17 @@ fn spec_5_2_resume_block() {
         &code(&out, "M"),
         "Private Sub ignore()\n    Dim ws As Worksheet\n\n    On Error Resume Next\n    Set ws = Worksheets(\"NonExistent\")\n    ws.Activate\n    On Error GoTo 0\nEnd Sub\n",
     );
-    assert_eq!(error_codes(&[("m", "function f() { try { g(); } catch { g(); resume; } }\nfunction g() {}\n")]), vec!["E0350"]);
-    assert_eq!(error_codes(&[("m", "function f() { resume; }\n")]), vec!["E0350"]);
+    assert_eq!(
+        error_codes(&[(
+            "m",
+            "function f() { try { g(); } catch { g(); resume; } }\nfunction g() {}\n"
+        )]),
+        vec!["E0350"]
+    );
+    assert_eq!(
+        error_codes(&[("m", "function f() { resume; }\n")]),
+        vec!["E0350"]
+    );
 }
 
 #[test]
@@ -298,11 +400,17 @@ function safe(n: int): int {
 "#;
     let (_, out) = compile(&[("m", src)]);
     let m = code(&out, "M");
-    assert_contains(&m, "        Err.Raise vbObjectError + 513&, \"M.risky\", \"negative\"\n");
+    assert_contains(
+        &m,
+        "        Err.Raise vbObjectError + 513&, \"M.risky\", \"negative\"\n",
+    );
     // One handler per procedure dispatching on the active try block.
     assert_contains(&m, "RAS_Handler:\n    RAS_ErrCapture Err.Number, Err.Source, Err.Description, Erl, \"src/m.ras\"\n    Select Case ras_tryId\n    Case 1&\n        Resume RAS_Catch_2\n");
     // The catch body runs after `Resume`, so the handler is active again; rethrow reaches `finally`.
-    assert_contains(&m, "RAS_Catch_2:\n    ras_tryId = 2&\n    Set e = RAS_CaughtError()\n    result = -1&\n");
+    assert_contains(
+        &m,
+        "RAS_Catch_2:\n    ras_tryId = 2&\n    Set e = RAS_CaughtError()\n    result = -1&\n",
+    );
     assert_contains(&m, "    RAS_Throw e\n");
     assert_contains(&m, "RAS_Finally_1:\n    ras_tryId = 0&\n    RAS_Status \"done\"\n    Select Case ras_exit1\n    Case 1&\n        RAS_Throw ras_pend1\n    End Select\n");
     assert!(out.files.iter().any(|f| f.name == "RAS_Error"));
@@ -333,7 +441,10 @@ export function g() {
     let (_, out) = compile_with(&[("m", src)], cfg);
     let m = code(&out, "M");
     // Every exit path goes through the finally block and continues afterwards.
-    assert_contains(&m, "            f = x\n            ras_exit1 = 2&\n            GoTo RAS_Finally_1\n");
+    assert_contains(
+        &m,
+        "            f = x\n            ras_exit1 = 2&\n            GoTo RAS_Finally_1\n",
+    );
     assert_contains(&m, "    Case 2&\n            Exit Function\n");
     assert_contains(&m, "            GoTo RAS_Continue_");
     assert_contains(&m, "            GoTo RAS_Break_");
@@ -370,9 +481,18 @@ export function total(values: double[], n: int): double {
     let mut cfg = config();
     cfg.opt_override = Some(0);
     let (_, out) = compile_with(&[("util", src)], cfg);
-    assert_contains(&code(&out, "Util"), "acc = acc + clamp(values(i), 0&, 100&)");
+    assert_contains(
+        &code(&out, "Util"),
+        "acc = acc + clamp(values(i), 0&, 100&)",
+    );
     // Recursive inline functions are rejected.
-    assert_eq!(error_codes(&[("m", "inline function f(n: int): int { return n <= 0 ? 0 : f(n - 1); }\n")]), vec!["E0420"]);
+    assert_eq!(
+        error_codes(&[(
+            "m",
+            "inline function f(n: int): int { return n <= 0 ? 0 : f(n - 1); }\n"
+        )]),
+        vec!["E0420"]
+    );
 }
 
 #[test]
@@ -415,12 +535,18 @@ export function conditional(last: int) {
     assert_contains(&m, "            ws.Cells(r, 1&).Value = r\n");
     assert!(out.notes.iter().any(|n| n.1.kind == "bulk" && !n.1.applied));
     // The runtime that rebases the array comes along.
-    assert_contains(&code(&out, "RAS_Runtime"), "Public Function RAS_Read2D(ByVal rng As Object) As Variant\n");
+    assert_contains(
+        &code(&out, "RAS_Runtime"),
+        "Public Function RAS_Read2D(ByVal rng As Object) As Variant\n",
+    );
 }
 
 #[test]
 fn spec_10_3_fast_macro_entry() {
-    let (_, out) = compile(&[("report", "@fast\nexport function rebuildReport() {\n    status(\"x\");\n}\n")]);
+    let (_, out) = compile(&[(
+        "report",
+        "@fast\nexport function rebuildReport() {\n    status(\"x\");\n}\n",
+    )]);
     let m = code(&out, "Report");
     assert_contains(
         &m,
@@ -461,8 +587,14 @@ export function inCell(n: int): int {
     assert_eq!(m.matches("RAS_Yield").count(), 1, "{m}");
     assert_contains(&m, "        Next c\n        ras_y1 = ras_y1 + 1&\n        If (ras_y1 And ras_yieldMask) = 0& Then RAS_Yield\n    Loop\n");
     let rt = code(&out, "RAS_Runtime");
-    assert_contains(&rt, "Declare PtrSafe Function GetInputState Lib \"user32\" () As Long");
-    assert_contains(&rt, "    If GetInputState() <> 0& Or now_ - ras_lastYield >= RAS_YIELD_MS Then\n");
+    assert_contains(
+        &rt,
+        "Declare PtrSafe Function GetInputState Lib \"user32\" () As Long",
+    );
+    assert_contains(
+        &rt,
+        "    If GetInputState() <> 0& Or now_ - ras_lastYield >= RAS_YIELD_MS Then\n",
+    );
 }
 
 #[test]
@@ -498,10 +630,16 @@ function title(): int {
 
 #[test]
 fn spec_11_standard_win32_module_is_tree_shaken() {
-    let (_, out) = compile(&[("m", "import { Sleep } from \"win32\";\nexport function nap() { Sleep(10); }\n")]);
+    let (_, out) = compile(&[(
+        "m",
+        "import { Sleep } from \"win32\";\nexport function nap() { Sleep(10); }\n",
+    )]);
     assert_contains(&code(&out, "M"), "    Win32.Sleep 10&\n");
     let w = code(&out, "Win32");
-    assert_contains(&w, "Public Declare PtrSafe Sub Sleep Lib \"kernel32\" (ByVal dwMilliseconds As Long)");
+    assert_contains(
+        &w,
+        "Public Declare PtrSafe Sub Sleep Lib \"kernel32\" (ByVal dwMilliseconds As Long)",
+    );
     assert!(!w.contains("GetTickCount"), "{w}");
 }
 
@@ -516,14 +654,21 @@ function prepare() { cache.set("a", 1); }
 "#;
     let book = "@on(\"Workbook.Open\")\nfunction setup() { status(\"ready\"); }\n";
     let sheet1 = "@on(\"Worksheet.Change\")\nfunction onSheet1Change(target: Excel.Range) { target.interior.color = 255; }\n";
-    let (_, out) = compile(&[("report", src), ("objects/ThisWorkbook", book), ("objects/Sheet1", sheet1)]);
+    let (_, out) = compile(&[
+        ("report", src),
+        ("objects/ThisWorkbook", book),
+        ("objects/Sheet1", sheet1),
+    ]);
     let sheet = code(&out, "Sheet1");
     assert_contains(
         &sheet,
         "Private Sub Worksheet_Change(ByVal Target As Range)\n    Static ras_busy1 As Boolean\n    On Error GoTo RAS_OnError\n    RAS_EnsureInit\n    If Not ras_busy1 Then\n        ras_busy1 = True\n        onSheet1Change Target\n        ras_busy1 = False\n    End If\n    Exit Sub\nRAS_OnError:\n    ras_busy1 = False\n    RAS_EventError \"Sheet1.Change\", Err.Number, Err.Source, Err.Description\nEnd Sub\n",
     );
     let wb = code(&out, "ThisWorkbook");
-    assert_contains(&wb, "Private Sub Workbook_Open()\n    RAS_WorkbookOpen\nEnd Sub\n");
+    assert_contains(
+        &wb,
+        "Private Sub Workbook_Open()\n    RAS_WorkbookOpen\nEnd Sub\n",
+    );
     // The handlers of `Open`, called once the workbook is ready.
     assert_contains(&wb, "Public Sub RAS_WorkbookOpened(Optional ByVal ras_dummy As Long = 0&)\n    setup\nEnd Sub\n");
     // What `Workbook_Open` left while the workbook was leaving the protected view.
@@ -537,21 +682,34 @@ function prepare() { cache.set("a", 1); }
     assert_contains(&glue, "Public Sub RAS_WorkbookOpen()\n    If RAS_InProtectedView() Then\n        ras_open_deferred = True\n    Else\n        RAS_DeferredInit\n    End If\nEnd Sub\n");
     assert_contains(&glue, "Public Sub RAS_OpenDeferred()\n    If Not ras_open_deferred Then Exit Sub\n    ras_open_deferred = False\n    RAS_DeferredInit\nEnd Sub\n");
     assert_contains(&glue, "    Set w = app.ProtectedViewWindows.Item(ThisWorkbook.Name)\n    RAS_InProtectedView = Not w Is Nothing\nEnd Function\n");
-    assert_contains(&glue, "Public Sub Auto_Open()\n    RAS_EnsureInit\nEnd Sub\n");
+    assert_contains(
+        &glue,
+        "Public Sub Auto_Open()\n    RAS_EnsureInit\nEnd Sub\n",
+    );
     assert_contains(&code(&out, "RAS_Runtime"), "    RAS_Glue.RAS_InitAll\n");
     // Document modules are generated whole, with the hash line of every module (spec §12.2).
     let f = out.files.iter().find(|f| f.name == "Sheet1").unwrap();
     assert!(f.code.starts_with("' RAS-GENERATED hash="));
     assert!(f.code.contains("Option Explicit"));
     // `@on` is written in the file of the sheet; a file needs a sheet of the workbook.
-    assert_eq!(error_codes_build(&[("m", "@on(\"Sheet1.Change\")\nfunction h() {}\n")]), vec!["E0610"]);
-    assert_eq!(error_codes(&[("objects/Sheet9", "function h() {}\n")]), vec!["E0610"]);
+    assert_eq!(
+        error_codes_build(&[("m", "@on(\"Sheet1.Change\")\nfunction h() {}\n")]),
+        vec!["E0610"]
+    );
+    assert_eq!(
+        error_codes(&[("objects/Sheet9", "function h() {}\n")]),
+        vec!["E0610"]
+    );
 }
 
 /// Error codes reported by code generation.
 fn error_codes_build(files: &[(&str, &str)]) -> Vec<&'static str> {
     let (_, out) = compile_with(files, config());
-    out.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.code).collect()
+    out.diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| d.code)
+        .collect()
 }
 
 #[test]
@@ -581,11 +739,20 @@ function logic(a: int[], i: int, s: string, o: object): int {
     let (_, out) = compile_with(&[("m", src)], cfg);
     let m = code(&out, "M");
     // && short-circuits (VBA's And does not)
-    assert_contains(&m, "    ras_t1 = i < RAS_Len(a)\n    If ras_t1 Then\n        ras_t1 = a(i) > 0&\n    End If\n");
+    assert_contains(
+        &m,
+        "    ras_t1 = i < RAS_Len(a)\n    If ras_t1 Then\n        ras_t1 = a(i) > 0&\n    End If\n",
+    );
     // integer division and modulo
-    assert_contains(&m, "    q = 7& \\ 2&\n    mod3 = 7& Mod 3&\n    d = RAS_FMod(7.5#, 2&)\n");
+    assert_contains(
+        &m,
+        "    q = 7& \\ 2&\n    mod3 = 7& Mod 3&\n    d = RAS_FMod(7.5#, 2&)\n",
+    );
     // truncation toward zero, 0-based string index
-    assert_contains(&m, "    k = CLng(Fix(d)) + (InStr(1&, s, \"b\", vbBinaryCompare) - 1&)\n");
+    assert_contains(
+        &m,
+        "    k = CLng(Fix(d)) + (InStr(1&, s, \"b\", vbBinaryCompare) - 1&)\n",
+    );
     // ternary never becomes IIf
     assert!(!m.contains("IIf"));
     assert_contains(&m, "    If i > 0& Then\n        label = \"pos\"\n    Else\n        label = \"neg\"\n    End If\n");
@@ -606,39 +773,85 @@ fn spec_13_6_identifiers_and_13_7_code_page() {
     let (_, out) = compile(&[("m", src)]);
     let m = code(&out, "M");
     // built-in member names are renamed; characters outside CP932 are escaped
-    assert_contains(&m, "Public Function show(ByVal value_ As String, ByVal count_ As Long) As String\n");
+    assert_contains(
+        &m,
+        "Public Function show(ByVal value_ As String, ByVal count_ As Long) As String\n",
+    );
     assert_contains(&m, "' 絵文字 \\u{1F600} のコメント\n");
-    assert_contains(&m, "    text_ = \"a\" & (ChrW(&HD83D&) & ChrW(&HDE00&)) & \"b\" & vbLf & value_\n");
-    assert_contains(&out.files.iter().find(|f| f.name == "M").unwrap().full_text, "Attribute show.VB_Description = \"絵文字  のコメント\"");
+    assert_contains(
+        &m,
+        "    text_ = \"a\" & (ChrW(&HD83D&) & ChrW(&HDE00&)) & \"b\" & vbLf & value_\n",
+    );
+    assert_contains(
+        &out.files.iter().find(|f| f.name == "M").unwrap().full_text,
+        "Attribute show.VB_Description = \"絵文字  のコメント\"",
+    );
     // identifiers that differ only by case collide in VBA
-    assert_eq!(error_codes(&[("m", "function foo() {}\nfunction Foo() {}\n")]), vec!["E0430"]);
+    assert_eq!(
+        error_codes(&[("m", "function foo() {}\nfunction Foo() {}\n")]),
+        vec!["E0430"]
+    );
 }
 
 #[test]
 fn lint_rules_of_section_6() {
     // 2: const reassignment
-    assert_eq!(error_codes(&[("m", "function f() { const a = 1; a = 2; }\n")]), vec!["E0323"]);
+    assert_eq!(
+        error_codes(&[("m", "function f() { const a = 1; a = 2; }\n")]),
+        vec!["E0323"]
+    );
     // 3: lambda capture of a reassigned variable / writing an outer variable
-    assert_eq!(error_codes(&[("m", "function f(xs: int[]): int { let t = 0; t = 1; return xs.map(x => x + t).length; }\n")]), vec!["E0320"]);
-    assert!(error_codes(&[("m", "function f(xs: int[]) { let t = 0; xs.forEach(x => { t += x; }); }\n")]).contains(&"E0322"));
+    assert_eq!(
+        error_codes(&[(
+            "m",
+            "function f(xs: int[]): int { let t = 0; t = 1; return xs.map(x => x + t).length; }\n"
+        )]),
+        vec!["E0320"]
+    );
+    assert!(error_codes(&[(
+        "m",
+        "function f(xs: int[]) { let t = 0; xs.forEach(x => { t += x; }); }\n"
+    )])
+    .contains(&"E0322"));
     // 5: literal passed to byref
-    assert_eq!(error_codes(&[("m", "function g(byref x: int) { x = 1; }\nfunction f() { g(5); }\n")]), vec!["E0406"]);
+    assert_eq!(
+        error_codes(&[(
+            "m",
+            "function g(byref x: int) { x = 1; }\nfunction f() { g(5); }\n"
+        )]),
+        vec!["E0406"]
+    );
     // `number` does not exist
-    assert_eq!(error_codes(&[("m", "function f(x: number) {}\n")]), vec!["E0170"]);
+    assert_eq!(
+        error_codes(&[("m", "function f(x: number) {}\n")]),
+        vec!["E0170"]
+    );
     // narrowing needs `as`, constant overflow is a compile error
-    assert_eq!(error_codes(&[("m", "function f(d: double): int { return d; }\n")]), vec!["E0301"]);
-    assert_eq!(error_codes(&[("m", "const big = 300000 * 200000;\nfunction f() {}\n")]), vec!["E0397"]);
+    assert_eq!(
+        error_codes(&[("m", "function f(d: double): int { return d; }\n")]),
+        vec!["E0301"]
+    );
+    assert_eq!(
+        error_codes(&[("m", "const big = 300000 * 200000;\nfunction f() {}\n")]),
+        vec!["E0397"]
+    );
     // 9 / 10: unqualified Range and .Select are reported but do not block the build
     let (prog, out) = compile(&[("m", "export function f() { range(\"A1\").select(); }\n")]);
     let codes: Vec<&str> = prog.diagnostics.iter().map(|d| d.code).collect();
-    assert!(codes.contains(&"W0401") && codes.contains(&"I0402"), "{codes:?}");
+    assert!(
+        codes.contains(&"W0401") && codes.contains(&"I0402"),
+        "{codes:?}"
+    );
     assert!(!out.files.is_empty());
 }
 
 #[test]
 fn spec_13_4_cells_inside_range_are_qualified() {
     let (prog, out) = compile(&[("m", "function f(ws: Excel.Worksheet): Excel.Range {\n    return ws.range(cells(1, 1), cells(2, 2));\n}\n")]);
-    assert_contains(&code(&out, "M"), "    Set f = ws.Range(ws.Cells(1&, 1&), ws.Cells(2&, 2&))\n");
+    assert_contains(
+        &code(&out, "M"),
+        "    Set f = ws.Range(ws.Cells(1&, 1&), ws.Cells(2&, 2&))\n",
+    );
     assert!(!prog.diagnostics.iter().any(|d| d.code == "W0401"));
 }
 
@@ -670,10 +883,19 @@ export function demo(): double {
     let cls = code(&out, "Circle_");
     assert_contains(&cls, "Implements Shape\n");
     assert_contains(&cls, "Public radius As Double\n");
-    assert_contains(&cls, "Private Sub Class_Initialize()\n    radius = 1#\nEnd Sub\n");
+    assert_contains(
+        &cls,
+        "Private Sub Class_Initialize()\n    radius = 1#\nEnd Sub\n",
+    );
     assert_contains(&cls, "Public Sub RAS_Init(ByVal r As Double)\n    radius = r\n    Shapes.Circle__count = Shapes.Circle__count + 1&\nEnd Sub\n");
-    assert_contains(&cls, "Public Property Get diameter() As Double\n    diameter = radius * 2&\nEnd Property\n");
-    assert_contains(&cls, "Private Function Shape_area() As Double\n    Shape_area = Me.area\nEnd Function\n");
+    assert_contains(
+        &cls,
+        "Public Property Get diameter() As Double\n    diameter = radius * 2&\nEnd Property\n",
+    );
+    assert_contains(
+        &cls,
+        "Private Function Shape_area() As Double\n    Shape_area = Me.area\nEnd Function\n",
+    );
     let iface = code(&out, "Shape");
     assert_contains(&iface, "Public Function area() As Double\nEnd Function\n");
     let m = code(&out, "Shapes");
@@ -681,9 +903,18 @@ export function demo(): double {
     assert_contains(&m, "Public Circle__count As Long\n");
     assert_contains(&m, "Public Function New_Circle_(ByVal r As Double) As Circle_\n    Set New_Circle_ = New Circle_\n    New_Circle_.RAS_Init r\nEnd Function\n");
     assert_contains(&m, "Public Function Circle__made() As Long\n    Circle__made = Shapes.Circle__count\nEnd Function\n");
-    assert_contains(&m, "    demo = total + c.diameter + Shapes.Circle__made() + 6&\n");
+    assert_contains(
+        &m,
+        "    demo = total + c.diameter + Shapes.Circle__made() + 6&\n",
+    );
     // Missing interface members are reported.
-    assert_eq!(error_codes(&[("m", "interface A { run(): void; }\nclass B implements A {}\n")]), vec!["E0340"]);
+    assert_eq!(
+        error_codes(&[(
+            "m",
+            "interface A { run(): void; }\nclass B implements A {}\n"
+        )]),
+        vec!["E0340"]
+    );
 }
 
 #[test]
@@ -708,10 +939,20 @@ fn erl_line_numbers_and_source_map() {
     // The VBA line number is the RAS source line, so `Erl` reports RAS positions (spec §14.8).
     assert_contains(&text, "\n2   t = 0&\n3   t = t + n\n4   f = t\n");
     let line3 = file.vba_line_for("src/m.ras", 3).unwrap();
-    assert_eq!(text.lines().nth(line3 as usize - 1).unwrap(), "3   t = t + n");
+    assert_eq!(
+        text.lines().nth(line3 as usize - 1).unwrap(),
+        "3   t = t + n"
+    );
     assert!(file.rasmap().contains("\"sources\":[\"src/m.ras\"]"));
     // --release: no line numbers.
-    let (_, out) = compile_str(&[("m", src)], config(), &BuildOptions { release: true, ..Default::default() });
+    let (_, out) = compile_str(
+        &[("m", src)],
+        config(),
+        &BuildOptions {
+            release: true,
+            ..Default::default()
+        },
+    );
     assert_contains(&code(&out, "M"), "    t = t + n\n");
 }
 
@@ -720,8 +961,14 @@ fn drift_hash_round_trips() {
     let (_, out) = compile(&[("m", "export function f(): int { return 1; }\n")]);
     let f = out.files.iter().find(|f| f.name == "M").unwrap();
     assert_eq!(ras_compiler::emit::recorded_hash(&f.code), Some(f.hash));
-    assert_eq!(ras_compiler::emit::has_drifted(&f.stream_text()), Some(false));
-    assert_eq!(ras_compiler::emit::has_drifted(&f.stream_text().replace("f = 1&", "f = 2&")), Some(true));
+    assert_eq!(
+        ras_compiler::emit::has_drifted(&f.stream_text()),
+        Some(false)
+    );
+    assert_eq!(
+        ras_compiler::emit::has_drifted(&f.stream_text().replace("f = 1&", "f = 2&")),
+        Some(true)
+    );
 }
 
 #[test]
@@ -739,14 +986,23 @@ fn spec_2_5_struct_literals_are_written_in_place() {
     );
     let (_, out) = compile(&[("geo", &src)]);
     let m = code(&out, "Geo");
-    assert_contains(&m, "Public Type Point\n    x As Long\n    y As Long\n    name As String\nEnd Type\n");
+    assert_contains(
+        &m,
+        "Public Type Point\n    x As Long\n    y As Long\n    name As String\nEnd Type\n",
+    );
     // `return { ... }` fills the return value; omitted fields of a fresh value need no reset.
     assert_contains(&m, "Private Function make(ByVal x As Long, ByVal y As Long) As Point\n    make.x = x\n    make.y = y\nEnd Function\n");
     assert_contains(&m, "    p.x = 1&\n    p.y = 2&\n    p.name = \"a\"\n");
     // The right-hand side reads the target: built in a temporary, then copied.
-    assert_contains(&m, "    ras_t1.x = p.y\n    ras_t1.y = p.x\n    p = ras_t1\n");
+    assert_contains(
+        &m,
+        "    ras_t1.x = p.y\n    ras_t1.y = p.x\n    p = ras_t1\n",
+    );
     // Anonymous object types are identified by their fields, whatever the order.
-    assert_contains(&m, "Public Type RAS_Obj1\n    count As Long\n    label As String\nEnd Type\n");
+    assert_contains(
+        &m,
+        "Public Type RAS_Obj1\n    count As Long\n    label As String\nEnd Type\n",
+    );
     assert!(!m.contains("RAS_Obj2"));
     assert_contains(&m, "    o2.label = \"x\"\n    o2.count = 2&\n");
 }
@@ -758,10 +1014,19 @@ fn spec_2_5_tuples_and_destructuring() {
     );
     let (_, out) = compile(&[("m", &src)]);
     let m = code(&out, "M");
-    assert_contains(&m, "Public Type RAS_Tup1\n    item0 As Long\n    item1 As Long\nEnd Type\n");
+    assert_contains(
+        &m,
+        "Public Type RAS_Tup1\n    item0 As Long\n    item1 As Long\nEnd Type\n",
+    );
     assert_contains(&m, "Private Function divmod(ByVal a As Long, ByVal b As Long) As RAS_Tup1\n    divmod.item0 = a \\ b\n    divmod.item1 = a Mod b\nEnd Function\n");
-    assert_contains(&m, "    ras_d1 = make(1&, 2&)\n    x = ras_d1.x\n    py = ras_d1.y\n");
-    assert_contains(&m, "    ras_d2 = divmod(17&, 5&)\n    q = ras_d2.item0\n    r = ras_d2.item1\n");
+    assert_contains(
+        &m,
+        "    ras_d1 = make(1&, 2&)\n    x = ras_d1.x\n    py = ras_d1.y\n",
+    );
+    assert_contains(
+        &m,
+        "    ras_d2 = divmod(17&, 5&)\n    q = ras_d2.item0\n    r = ras_d2.item1\n",
+    );
     // A plain variable on the right is read directly; holes skip an element.
     assert_contains(&m, "    first = xs(0)\n    third = xs(2)\n");
     assert_contains(&m, "t.item1");
@@ -775,15 +1040,25 @@ fn spec_2_5_struct_arrays() {
     let mut cfg = config();
     cfg.doevents.enabled = false;
     let (prog, out) = compile_with(&[("m", &src)], cfg);
-    assert!(!prog.diagnostics.iter().any(|d| d.is_error()), "{:?}", prog.diagnostics);
+    assert!(
+        !prog.diagnostics.iter().any(|d| d.is_error()),
+        "{:?}",
+        prog.diagnostics
+    );
     let m = code(&out, "M");
     // The literal is built in the array element.
     assert_contains(&m, "        ps(ras_len_ps).x = i\n        ps(ras_len_ps).y = i * 2&\n        ps(ras_len_ps).name = vbNullString\n        ras_len_ps = ras_len_ps + 1&\n");
     // Field reads go to the element: no copy into the loop variable.
     assert_contains(&m, "    For ras_i = 0 To RAS_Len_Point(ps) - 1&\n        total = total + (ps(ras_i).x + ps(ras_i).y)\n    Next ras_i\n");
-    assert_contains(&m, "        x = ps(ras_i_2).x\n        y = ps(ras_i_2).y\n        total = total + x * y\n");
+    assert_contains(
+        &m,
+        "        x = ps(ras_i_2).x\n        y = ps(ras_i_2).y\n        total = total + x * y\n",
+    );
     // The variable is used as a whole: it stays a copy.
-    assert_contains(&m, "        p = ps(ras_i_3)\n        c = p\n        c.x = 0&\n");
+    assert_contains(
+        &m,
+        "        p = ps(ras_i_3)\n        c = p\n        c.x = 0&\n",
+    );
     // An array of structs cannot be passed to the run time as a Variant.
     assert!(!m.contains("RAS_Len("));
     assert_contains(&m, "Public Function RAS_Len_Point(ByRef arr() As Point) As Long\n    On Error Resume Next\n    RAS_Len_Point = UBound(arr) - LBound(arr) + 1&\nEnd Function\n");
@@ -799,36 +1074,72 @@ fn spec_2_5_map_of_structs_becomes_a_class() {
     assert_contains(&m, "    Dim pm As RAS_StructMap__String_Point\n");
     assert_contains(&m, "    Set pm = RasCollections.New_RAS_StructMap__String_Point()\n    ras_t1.x = 1&\n    ras_t1.y = 2&\n    pm.set_ \"a\", ras_t1\n");
     // Other maps stay dictionaries.
-    assert_contains(&m, "    Set plain = CreateObject(\"Scripting.Dictionary\")\n");
+    assert_contains(
+        &m,
+        "    Set plain = CreateObject(\"Scripting.Dictionary\")\n",
+    );
     let class = code(&out, "RAS_StructMap__String_Point");
     assert_contains(&class, "Private slots() As Point\n");
     // Members whose signature mentions a `Type` cannot be Public in a class module.
-    assert_contains(&class, "Friend Function get_(ByVal key As String) As Point\n");
-    assert_contains(&class, "Friend Sub set_(ByVal key As String, ByRef value_ As Point)\n");
-    assert_contains(&class, "Public Function has(ByVal key As String) As Boolean\n");
+    assert_contains(
+        &class,
+        "Friend Function get_(ByVal key As String) As Point\n",
+    );
+    assert_contains(
+        &class,
+        "Friend Sub set_(ByVal key As String, ByRef value_ As Point)\n",
+    );
+    assert_contains(
+        &class,
+        "Public Function has(ByVal key As String) As Boolean\n",
+    );
     let holder = code(&out, "Holder");
     assert_contains(&holder, "Private pos As Point\n");
     assert_contains(&holder, "Friend Function where() As Point\n");
     assert_contains(&holder, "Friend Sub RAS_Init(ByRef p As Point)\n");
     // Locals of user code are not renamed because of the members of the bundled class.
     let (_, out) = compile(&[("m", "export function f(values: int[]): int {\n    const keys = values.length;\n    return keys;\n}\n")]);
-    assert_contains(&code(&out, "M"), "Public Function f(ByRef values() As Long) As Long\n");
+    assert_contains(
+        &code(&out, "M"),
+        "Public Function f(ByRef values() As Long) As Long\n",
+    );
 }
 
 #[test]
 fn spec_2_5_structs_cannot_leave_typed_code() {
     let errs = |body: &str| error_codes(&[("m", &format!("{POINT}{body}"))]);
-    assert_eq!(errs("export function f() {\n    const p: Point = { x: 1 };\n}\n"), vec!["E0392"]);
-    assert_eq!(errs("export function f() {\n    const p: Point = { x: 1, y: 2, z: 3 };\n}\n"), vec!["E0202"]);
-    assert_eq!(errs("export function f(p: Point) {\n    const a: any = p;\n}\n"), vec!["E0301"]);
-    assert_eq!(errs("export function f(p: Point) {\n    console.log(p);\n}\n"), vec!["E0301"]);
+    assert_eq!(
+        errs("export function f() {\n    const p: Point = { x: 1 };\n}\n"),
+        vec!["E0392"]
+    );
+    assert_eq!(
+        errs("export function f() {\n    const p: Point = { x: 1, y: 2, z: 3 };\n}\n"),
+        vec!["E0202"]
+    );
+    assert_eq!(
+        errs("export function f(p: Point) {\n    const a: any = p;\n}\n"),
+        vec!["E0301"]
+    );
+    assert_eq!(
+        errs("export function f(p: Point) {\n    console.log(p);\n}\n"),
+        vec!["E0301"]
+    );
     assert_eq!(errs("export function f(p: Point) {\n    const o = { x: 1, y: 2 };\n    const q: Point = o;\n}\n"), vec!["E0301"]);
-    assert_eq!(errs("export function f(ps: Point[], p: Point): int {\n    return ps.indexOf(p);\n}\n"), vec!["E0393"]);
+    assert_eq!(
+        errs("export function f(ps: Point[], p: Point): int {\n    return ps.indexOf(p);\n}\n"),
+        vec!["E0393"]
+    );
     assert_eq!(errs("class C { pos: Point; }\n"), vec!["E0394"]);
     assert_eq!(errs("interface I { where(): Point; }\n"), vec!["E0394"]);
-    assert_eq!(errs("export function f(m: Map<string, Point>) {\n    m.get(\"a\").x = 1;\n}\n"), vec!["E0325"]);
+    assert_eq!(
+        errs("export function f(m: Map<string, Point>) {\n    m.get(\"a\").x = 1;\n}\n"),
+        vec!["E0325"]
+    );
     assert_eq!(errs("export function f(): int {\n    const t: [int, string] = [1, \"a\"];\n    return t[2];\n}\n"), vec!["E0389"]);
-    assert_eq!(errs("export function f(): int {\n    const { nope } = { a: 1 };\n    return nope;\n}\n"), vec!["E0202"]);
+    assert_eq!(
+        errs("export function f(): int {\n    const { nope } = { a: 1 };\n    return nope;\n}\n"),
+        vec!["E0202"]
+    );
     // A lambda that becomes a class cannot take a struct.
     let src = format!("{POINT}export function f(p: Point): int {{\n    const g = (v: Point) => v.x;\n    return g(p);\n}}\n");
     assert!(error_codes_build(&[("m", &src)]).contains(&"E0395"));
@@ -851,25 +1162,47 @@ export function touch(ws: Excel.Worksheet): string {
     let (prog, out) = compile_with(&[("m", src)], cfg);
     // The qualified-reference lint (rule 9) still fires for `activeSheet`, and `cells` is not a member of a
     // chart sheet (`activeSheet` is `Excel.Worksheet | Excel.Chart`, spec §2.6.5); nothing complains about the spelling.
-    let codes: Vec<&str> = prog.diagnostics.iter().filter(|d| d.severity <= Severity::Warning).map(|d| d.code).collect();
+    let codes: Vec<&str> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity <= Severity::Warning)
+        .map(|d| d.code)
+        .collect();
     assert_eq!(codes, vec!["W0401", "W0305"]);
     let m = code(&out, "M");
     // The generated VBA carries the type library's spelling; a local named like a host global is renamed.
     assert_contains(&m, "    Dim range_ As Range\n");
-    assert_contains(&m, "    Set range_ = ws.Range(\"A1\")\n    range_.Interior.Color = RGB(255&, 0&, 0&)\n");
+    assert_contains(
+        &m,
+        "    Set range_ = ws.Range(\"A1\")\n    range_.Interior.Color = RGB(255&, 0&, 0&)\n",
+    );
     assert_contains(&m, "    range_.Delete");
     // Late-bound members (`activeSheet` is stored in an Object) are spelled like the bundled definitions too.
     assert_contains(&m, "    ActiveSheet.Cells(1&, 1&).Value2 = 1&\n");
     // `switch` is a keyword, so that global keeps its VBA name.
-    assert_contains(&m, "    Debug.Print UBound(Split(\"a,b\", \",\")), Switch(True, 1&)\n");
+    assert_contains(
+        &m,
+        "    Debug.Print UBound(Split(\"a,b\", \",\")), Switch(True, 1&)\n",
+    );
     assert_contains(&m, "    touch = Application.Name & ws.Name\n");
 
     // The type library's spelling is still understood (VBA is not case-sensitive), with a warning and a fix.
     let old = "export function f(ws: Excel.Worksheet) {\n    ws.Cells(1, 1).Value = Application.Name;\n    MsgBox(\"x\");\n}\n";
     let (prog, out) = compile(&[("m", old)]);
-    let warned: Vec<&str> = prog.diagnostics.iter().filter(|d| d.code == "W0304").map(|d| d.message.split('`').nth(3).unwrap()).collect();
-    assert_eq!(warned, vec!["cells", "value", "application", "name", "msgBox"]);
-    assert_contains(&code(&out, "M"), "    ws.Cells(1&, 1&).Value = Application.Name\n    MsgBox \"x\"\n");
+    let warned: Vec<&str> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.code == "W0304")
+        .map(|d| d.message.split('`').nth(3).unwrap())
+        .collect();
+    assert_eq!(
+        warned,
+        vec!["cells", "value", "application", "name", "msgBox"]
+    );
+    assert_contains(
+        &code(&out, "M"),
+        "    ws.Cells(1&, 1&).Value = Application.Name\n    MsgBox \"x\"\n",
+    );
     let fixes: Vec<&ras_compiler::Fix> = prog.fixes.iter().collect();
     assert_eq!(
         ras_compiler::apply_fixes(old, &fixes),
@@ -877,10 +1210,20 @@ export function touch(ws: Excel.Worksheet): string {
     );
 
     // Names the project declares itself (sheet code names, `types/*.d.ras`) are used as written.
-    let decl = "declare const Summary: Excel.Worksheet;\ndeclare function LegacyMacro(n: int): void;\n";
-    let (prog, out) = compile(&[("sheets.d", decl), ("m", "export function f() {\n    LegacyMacro(Summary.index + Sheet1.index);\n}\n")]);
+    let decl =
+        "declare const Summary: Excel.Worksheet;\ndeclare function LegacyMacro(n: int): void;\n";
+    let (prog, out) = compile(&[
+        ("sheets.d", decl),
+        (
+            "m",
+            "export function f() {\n    LegacyMacro(Summary.index + Sheet1.index);\n}\n",
+        ),
+    ]);
     assert!(prog.diagnostics.iter().all(|d| d.code != "W0304"));
-    assert_contains(&code(&out, "M"), "    LegacyMacro Summary.Index + Sheet1.Index\n");
+    assert_contains(
+        &code(&out, "M"),
+        "    LegacyMacro Summary.Index + Sheet1.Index\n",
+    );
 }
 
 #[test]
@@ -906,7 +1249,12 @@ export function lookup(book: Excel.Workbook): Excel.Worksheet {
     let mut cfg = config();
     cfg.doevents.enabled = false;
     let (prog, out) = compile_with(&[("m", src)], cfg);
-    let problems: Vec<String> = prog.diagnostics.iter().filter(|d| d.severity <= Severity::Warning).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    let problems: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity <= Severity::Warning)
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
     assert!(problems.is_empty(), "{problems:#?}");
     let m = code(&out, "M");
     // `filter` + `map` are one `For Each` loop; the members of `worksheets` are typed as `Worksheet`.
@@ -927,11 +1275,20 @@ export function lookup(book: Excel.Workbook): Excel.Worksheet {
     assert_contains(&m, "        Set ras_t7 = Nothing\n        For Each ras_e_5 In Worksheets\n            If ras_e_5.Name = \"Data\" Then\n                Set ras_t7 = ras_e_5\n                Exit For\n            End If\n        Next ras_e_5\n");
 
     // A member of the type wins over the array-style method of the same name (`Range.Find`).
-    let (_, out) = compile(&[("m", "export function f(r: Excel.Range): Excel.Range {\n    return r.find(\"x\");\n}\n")]);
+    let (_, out) = compile(&[(
+        "m",
+        "export function f(r: Excel.Range): Excel.Range {\n    return r.find(\"x\");\n}\n",
+    )]);
     assert_contains(&code(&out, "M"), "    Set f = r.Find(\"x\")\n");
     // A host object without a default member and `Count` is not a collection.
-    let (prog, _) = compile(&[("m", "export function f(ws: Excel.Worksheet) {\n    ws.toArray();\n}\n")]);
-    assert!(prog.diagnostics.iter().any(|d| d.code == "W0301"), "late binding is reported");
+    let (prog, _) = compile(&[(
+        "m",
+        "export function f(ws: Excel.Worksheet) {\n    ws.toArray();\n}\n",
+    )]);
+    assert!(
+        prog.diagnostics.iter().any(|d| d.code == "W0301"),
+        "late binding is reported"
+    );
 }
 
 #[test]
@@ -980,15 +1337,33 @@ export function sheets(): string[] {
 #[test]
 fn spec_12_1_files_without_code_are_no_modules() {
     let files = [
-        ("Sheet1Events", "// シート Sheet1 のイベント処理を書くファイルです。\n\n/* まだ何もない */\n"),
-        ("onlyImports", "import { twice } from \"./util\";\n// twice を使う予定\n"),
-        ("util", "export function twice(x: int): int { return x * 2; }\n"),
+        (
+            "Sheet1Events",
+            "// シート Sheet1 のイベント処理を書くファイルです。\n\n/* まだ何もない */\n",
+        ),
+        (
+            "onlyImports",
+            "import { twice } from \"./util\";\n// twice を使う予定\n",
+        ),
+        (
+            "util",
+            "export function twice(x: int): int { return x * 2; }\n",
+        ),
         ("onlyConst", "const LIMIT = 10;\n"),
     ];
     let (_, out) = compile(&files);
     let names: Vec<&str> = out.files.iter().map(|f| f.name.as_str()).collect();
-    assert!(!names.contains(&"Sheet1Events") && !names.contains(&"OnlyImports"), "{names:?}");
-    assert!(names.contains(&"Util") && names.contains(&"OnlyConst"), "{names:?}");
+    assert!(
+        !names.contains(&"Sheet1Events") && !names.contains(&"OnlyImports"),
+        "{names:?}"
+    );
+    assert!(
+        names.contains(&"Util") && names.contains(&"OnlyConst"),
+        "{names:?}"
+    );
     // Nothing refers to the modules left out.
-    assert!(!out.files.iter().any(|f| f.code.contains("Sheet1Events") || f.code.contains("OnlyImports")));
+    assert!(!out
+        .files
+        .iter()
+        .any(|f| f.code.contains("Sheet1Events") || f.code.contains("OnlyImports")));
 }

@@ -3,7 +3,11 @@
 use ras_syntax::ast::*;
 
 /// Pre-order walk. `fs` / `fe` return `false` to skip the children of a node.
-pub fn walk_stmt<'a>(s: &'a Stmt, fs: &mut dyn FnMut(&'a Stmt) -> bool, fe: &mut dyn FnMut(&'a Expr) -> bool) {
+pub fn walk_stmt<'a>(
+    s: &'a Stmt,
+    fs: &mut dyn FnMut(&'a Stmt) -> bool,
+    fe: &mut dyn FnMut(&'a Expr) -> bool,
+) {
     if !fs(s) {
         return;
     }
@@ -22,7 +26,13 @@ pub fn walk_stmt<'a>(s: &'a Stmt, fs: &mut dyn FnMut(&'a Stmt) -> bool, fe: &mut
                 walk_stmt(e, fs, fe);
             }
         }
-        StmtKind::For { init, cond, update, body, .. } => {
+        StmtKind::For {
+            init,
+            cond,
+            update,
+            body,
+            ..
+        } => {
             walk_stmts(init, fs, fe);
             if let Some(c) = cond {
                 walk_expr(c, fs, fe);
@@ -70,13 +80,21 @@ pub fn walk_stmt<'a>(s: &'a Stmt, fs: &mut dyn FnMut(&'a Stmt) -> bool, fe: &mut
     }
 }
 
-pub fn walk_stmts<'a>(stmts: &'a [Stmt], fs: &mut dyn FnMut(&'a Stmt) -> bool, fe: &mut dyn FnMut(&'a Expr) -> bool) {
+pub fn walk_stmts<'a>(
+    stmts: &'a [Stmt],
+    fs: &mut dyn FnMut(&'a Stmt) -> bool,
+    fe: &mut dyn FnMut(&'a Expr) -> bool,
+) {
     for s in stmts {
         walk_stmt(s, fs, fe);
     }
 }
 
-pub fn walk_expr<'a>(e: &'a Expr, fs: &mut dyn FnMut(&'a Stmt) -> bool, fe: &mut dyn FnMut(&'a Expr) -> bool) {
+pub fn walk_expr<'a>(
+    e: &'a Expr,
+    fs: &mut dyn FnMut(&'a Stmt) -> bool,
+    fe: &mut dyn FnMut(&'a Expr) -> bool,
+) {
     if !fe(e) {
         return;
     }
@@ -88,7 +106,9 @@ pub fn walk_expr<'a>(e: &'a Expr, fs: &mut dyn FnMut(&'a Stmt) -> bool, fe: &mut
                 }
             }
         }
-        ExprKind::Paren(x) | ExprKind::NonNull(x) | ExprKind::NamedArg { value: x, .. } => walk_expr(x, fs, fe),
+        ExprKind::Paren(x) | ExprKind::NonNull(x) | ExprKind::NamedArg { value: x, .. } => {
+            walk_expr(x, fs, fe)
+        }
         ExprKind::Array(items) => {
             for i in items {
                 walk_expr(i, fs, fe);
@@ -103,7 +123,9 @@ pub fn walk_expr<'a>(e: &'a Expr, fs: &mut dyn FnMut(&'a Stmt) -> bool, fe: &mut
             ArrowBody::Expr(x) => walk_expr(x, fs, fe),
             ArrowBody::Block(b) => walk_stmts(&b.stmts, fs, fe),
         },
-        ExprKind::Unary { operand, .. } | ExprKind::IncDec { operand, .. } => walk_expr(operand, fs, fe),
+        ExprKind::Unary { operand, .. } | ExprKind::IncDec { operand, .. } => {
+            walk_expr(operand, fs, fe)
+        }
         ExprKind::Binary { lhs, rhs, .. } => {
             walk_expr(lhs, fs, fe);
             walk_expr(rhs, fs, fe);
@@ -366,7 +388,13 @@ fn visit_stmt<'a>(s: &'a Stmt, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>) {
                 visit_stmt(e, v, tps);
             }
         }
-        StmtKind::For { decorators, init, cond, update, body } => {
+        StmtKind::For {
+            decorators,
+            init,
+            cond,
+            update,
+            body,
+        } => {
             for d in decorators {
                 visit_decorator(d, v, tps);
             }
@@ -379,7 +407,13 @@ fn visit_stmt<'a>(s: &'a Stmt, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>) {
             }
             visit_stmt(body, v, tps);
         }
-        StmtKind::ForOf { decorators, ty, iter, body, .. } => {
+        StmtKind::ForOf {
+            decorators,
+            ty,
+            iter,
+            body,
+            ..
+        } => {
             for d in decorators {
                 visit_decorator(d, v, tps);
             }
@@ -389,7 +423,16 @@ fn visit_stmt<'a>(s: &'a Stmt, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>) {
             visit_expr(iter, v, tps);
             visit_stmt(body, v, tps);
         }
-        StmtKind::While { decorators, cond, body } | StmtKind::DoWhile { decorators, body, cond } => {
+        StmtKind::While {
+            decorators,
+            cond,
+            body,
+        }
+        | StmtKind::DoWhile {
+            decorators,
+            body,
+            cond,
+        } => {
             for d in decorators {
                 visit_decorator(d, v, tps);
             }
@@ -416,7 +459,12 @@ fn visit_stmt<'a>(s: &'a Stmt, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>) {
         }
         StmtKind::Labeled { body, .. } => visit_stmt(body, v, tps),
         StmtKind::Fn(d) => visit_fn(d, v, tps),
-        StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Resume | StmtKind::Empty | StmtKind::Error => {}
+        StmtKind::Return(None)
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
+        | StmtKind::Resume
+        | StmtKind::Empty
+        | StmtKind::Error => {}
     }
 }
 
@@ -430,7 +478,9 @@ fn visit_expr<'a>(e: &'a Expr, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>) {
                 }
             }
         }
-        ExprKind::Paren(x) | ExprKind::NonNull(x) | ExprKind::NamedArg { value: x, .. } => visit_expr(x, v, tps),
+        ExprKind::Paren(x) | ExprKind::NonNull(x) | ExprKind::NamedArg { value: x, .. } => {
+            visit_expr(x, v, tps)
+        }
         ExprKind::Array(items) => {
             for i in items {
                 visit_expr(i, v, tps);
@@ -453,7 +503,9 @@ fn visit_expr<'a>(e: &'a Expr, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>) {
                 ArrowBody::Block(b) => visit_stmts(&b.stmts, v, tps),
             }
         }
-        ExprKind::Unary { operand, .. } | ExprKind::IncDec { operand, .. } => visit_expr(operand, v, tps),
+        ExprKind::Unary { operand, .. } | ExprKind::IncDec { operand, .. } => {
+            visit_expr(operand, v, tps)
+        }
         ExprKind::Binary { lhs, rhs, .. } => {
             visit_expr(lhs, v, tps);
             visit_expr(rhs, v, tps);
@@ -467,7 +519,11 @@ fn visit_expr<'a>(e: &'a Expr, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>) {
             visit_expr(then, v, tps);
             visit_expr(els, v, tps);
         }
-        ExprKind::Call { callee, type_args, args } => {
+        ExprKind::Call {
+            callee,
+            type_args,
+            args,
+        } => {
             visit_expr(callee, v, tps);
             for t in type_args {
                 visit_type(t, v, tps);

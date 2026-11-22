@@ -42,7 +42,11 @@ impl std::fmt::Display for ReadError {
             (false, true) => format!("{}: ", self.storage),
             (false, false) => format!("{}/{}: ", self.storage, printable(&self.stream)),
         };
-        write!(f, "デザイナストレージを読めません（{place}{}）", self.detail)
+        write!(
+            f,
+            "デザイナストレージを読めません（{place}{}）",
+            self.detail
+        )
     }
 }
 
@@ -415,7 +419,9 @@ fn parse_site_data(data: &[u8], start: usize, class_table_stored: bool) -> Resul
     if class_table_stored {
         let count = r.u16()? as usize;
         if count > r.remaining() / 4 {
-            return Err(format!("クラス情報の数 {count} が残りのバイト数を超えています"));
+            return Err(format!(
+                "クラス情報の数 {count} が残りのバイト数を超えています"
+            ));
         }
         for _ in 0..count {
             let version = r.u16()?;
@@ -430,7 +436,9 @@ fn parse_site_data(data: &[u8], start: usize, class_table_stored: bool) -> Resul
     }
     let count = r.u32()? as usize;
     if count > MAX_SITES {
-        return Err(format!("サイト数 {count} が上限 {MAX_SITES} を超えています"));
+        return Err(format!(
+            "サイト数 {count} が上限 {MAX_SITES} を超えています"
+        ));
     }
     let count_of_bytes = r.u32()? as usize;
     if count_of_bytes > r.remaining() {
@@ -487,7 +495,9 @@ fn read_font_blob(r: &mut Reader) -> Result<Vec<u8>> {
         GUID_STD_FONT => {
             let version = r.u8()?;
             if version != 1 {
-                return Err(format!("StdFont のバージョン {version} には対応していません"));
+                return Err(format!(
+                    "StdFont のバージョン {version} には対応していません"
+                ));
             }
             r.take(9)?;
             let name_length = r.u8()? as usize;
@@ -746,8 +756,9 @@ fn parse_tab_strip(record: &Record) -> Result<TabStripState> {
                 if size != Some(raw.len() as i64) {
                     return Err(format!("TabStrip: {name} のサイズが合いません"));
                 }
-                decoded
-                    .push(Some(decode_array(raw).map_err(|e| format!("TabStrip {name}: {e}"))?));
+                decoded.push(Some(
+                    decode_array(raw).map_err(|e| format!("TabStrip {name}: {e}"))?,
+                ));
             }
         }
     }
@@ -843,7 +854,12 @@ impl<'a> State<'a> {
             .map(|(_, data)| data.as_slice())
     }
 
-    fn fail<T>(&self, storage: &str, stream: &str, detail: String) -> std::result::Result<T, ReadError> {
+    fn fail<T>(
+        &self,
+        storage: &str,
+        stream: &str,
+        detail: String,
+    ) -> std::result::Result<T, ReadError> {
         Err(ReadError {
             storage: storage.to_string(),
             stream: stream.to_string(),
@@ -852,7 +868,10 @@ impl<'a> State<'a> {
     }
 
     /// Child storages `i<ID>` of `storage`, keyed by the site ID.
-    fn child_storages(&self, storage: &str) -> std::result::Result<HashMap<i32, String>, ReadError> {
+    fn child_storages(
+        &self,
+        storage: &str,
+    ) -> std::result::Result<HashMap<i32, String>, ReadError> {
         let mut children = HashMap::new();
         for path in self.storages.keys() {
             let Some(name) = direct_child(storage, path) else {
@@ -863,10 +882,18 @@ impl<'a> State<'a> {
                 .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
                 .and_then(|digits| digits.parse::<i32>().ok());
             let Some(id) = id else {
-                return self.fail(storage, "", format!("見慣れない子ストレージ {name:?} があります"));
+                return self.fail(
+                    storage,
+                    "",
+                    format!("見慣れない子ストレージ {name:?} があります"),
+                );
             };
             if children.insert(id, path.clone()).is_some() {
-                return self.fail(storage, "", format!("ID {id} の子ストレージが重複しています"));
+                return self.fail(
+                    storage,
+                    "",
+                    format!("ID {id} の子ストレージが重複しています"),
+                );
             }
         }
         Ok(children)
@@ -879,7 +906,11 @@ impl<'a> State<'a> {
         root: bool,
     ) -> std::result::Result<(Level, Vec<Control>), ReadError> {
         if depth >= MAX_NESTING_DEPTH {
-            return self.fail(storage, "", format!("入れ子が {MAX_NESTING_DEPTH} 段を超えています"));
+            return self.fail(
+                storage,
+                "",
+                format!("入れ子が {MAX_NESTING_DEPTH} 段を超えています"),
+            );
         }
         let Some(f) = self.stream(storage, "f") else {
             return self.fail(storage, "f", "ストリームがありません".into());
@@ -922,7 +953,11 @@ impl<'a> State<'a> {
 
         self.total_sites += sites.len();
         if self.total_sites > MAX_SITES {
-            return self.fail(storage, "f", format!("サイトが {MAX_SITES} 個を超えています"));
+            return self.fail(
+                storage,
+                "f",
+                format!("サイトが {MAX_SITES} 個を超えています"),
+            );
         }
         let mut child_paths = self.child_storages(storage)?;
         let mut offset = 0usize;
@@ -932,7 +967,11 @@ impl<'a> State<'a> {
             let name = site.strings.get("Name").cloned().unwrap_or_default();
             let size = site.values.get("ObjectStreamSize").copied().unwrap_or(0) as u32 as usize;
             if offset + size > o.len() {
-                return self.fail(storage, "o", format!("サイト {name:?} のサイズ {size} がストリームを超えています"));
+                return self.fail(
+                    storage,
+                    "o",
+                    format!("サイト {name:?} のサイズ {size} がストリームを超えています"),
+                );
             }
             let id = site.values.get("ID").copied().unwrap_or(0) as i32;
             if !claimed.insert(id) {
@@ -960,11 +999,19 @@ impl<'a> State<'a> {
                     return self.fail(storage, "f", format!("コンテナーではないサイト {name:?} が子ストレージ {path:?} を持っています"));
                 }
                 None if container => {
-                    return self.fail(storage, "f", format!("コンテナーのサイト {name:?}（ID {id}）に子ストレージがありません"));
+                    return self.fail(
+                        storage,
+                        "f",
+                        format!("コンテナーのサイト {name:?}（ID {id}）に子ストレージがありません"),
+                    );
                 }
                 Some(path) => {
                     if size != 0 {
-                        return self.fail(storage, "o", format!("コンテナーのサイト {name:?} にオブジェクト データがあります"));
+                        return self.fail(
+                            storage,
+                            "o",
+                            format!("コンテナーのサイト {name:?} にオブジェクト データがあります"),
+                        );
                     }
                     let (child_level, children) = self.level(&path, depth + 1, false)?;
                     control.level = Some(child_level);
@@ -982,7 +1029,9 @@ impl<'a> State<'a> {
                         Some(spec) => {
                             let record = match parse_record(payload, spec, payload.len()) {
                                 Ok((record, _)) => record,
-                                Err(detail) => return self.fail(storage, "o", format!("{name}: {detail}")),
+                                Err(detail) => {
+                                    return self.fail(storage, "o", format!("{name}: {detail}"))
+                                }
                             };
                             control.kind = control_kind(class, Some(&record));
                             if class == 18 {
@@ -1001,10 +1050,21 @@ impl<'a> State<'a> {
             controls.push(control);
         }
         if offset != o.len() {
-            return self.fail(storage, "o", format!("サイトの合計 {offset} バイトがストリームの {} バイトと合いません", o.len()));
+            return self.fail(
+                storage,
+                "o",
+                format!(
+                    "サイトの合計 {offset} バイトがストリームの {} バイトと合いません",
+                    o.len()
+                ),
+            );
         }
         if let Some(path) = child_paths.values().min() {
-            return self.fail(storage, "", format!("どのサイトにも属さない子ストレージ {path:?} があります"));
+            return self.fail(
+                storage,
+                "",
+                format!("どのサイトにも属さない子ストレージ {path:?} があります"),
+            );
         }
         Ok((level, controls))
     }
@@ -1032,7 +1092,10 @@ fn parse_form_stream(data: &[u8]) -> Result<(Level, Vec<Site>)> {
         record,
     };
     if level.record.mask & FORM_MASK_MOUSE_ICON != 0 {
-        level.mouse_icon = Some(r.guid_and_picture().map_err(|e| format!("MouseIcon: {e}"))?);
+        level.mouse_icon = Some(
+            r.guid_and_picture()
+                .map_err(|e| format!("MouseIcon: {e}"))?,
+        );
     }
     if level.record.mask & FORM_MASK_FONT != 0 {
         level.font_raw = read_font_blob(&mut r).map_err(|e| format!("Font: {e}"))?;
@@ -1101,7 +1164,9 @@ fn bind_multi_page(control: &mut Control, x: Option<&[u8]>) -> Result<()> {
         let at = offset + 4 * index;
         let id = i32::from_le_bytes([raw[at], raw[at + 1], raw[at + 2], raw[at + 3]]);
         let Some(position) = pages.iter().position(|p| p.id == id) else {
-            return Err(format!("MultiPage のページ ID {id} が重複しているか、ありません"));
+            return Err(format!(
+                "MultiPage のページ ID {id} が重複しているか、ありません"
+            ));
         };
         ordered.push(pages.remove(position));
     }

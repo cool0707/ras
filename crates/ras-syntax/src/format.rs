@@ -69,7 +69,10 @@ pub fn format(text: &str) -> Option<String> {
         match t.kind {
             BLOCK_COMMENT => {
                 // Re-indent the continuation lines of a JSDoc / block comment.
-                let level = out.rsplit('\n').next().map_or(0, |l| l.len() - l.trim_start().len());
+                let level = out
+                    .rsplit('\n')
+                    .next()
+                    .map_or(0, |l| l.len() - l.trim_start().len());
                 let mut lines = s.lines();
                 out.push_str(lines.next().unwrap_or(""));
                 for l in lines {

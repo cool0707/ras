@@ -20,7 +20,10 @@ pub(crate) struct Node {
 
 impl Node {
     pub fn attr(&self, name: &str) -> Option<&str> {
-        self.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+        self.attrs
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
     }
 
     pub fn child(&self, name: &str) -> Option<&Node> {
@@ -66,8 +69,23 @@ fn local(b: &[u8]) -> String {
 
 fn element(e: &BytesStart) -> Node {
     #[allow(deprecated)]
-    let attrs = e.attributes().flatten().map(|a| (local(a.key.as_ref()), a.unescape_value().map(|v| v.into_owned()).unwrap_or_default())).collect();
-    Node { name: local(e.name().as_ref()), attrs, ..Default::default() }
+    let attrs = e
+        .attributes()
+        .flatten()
+        .map(|a| {
+            (
+                local(a.key.as_ref()),
+                a.unescape_value()
+                    .map(|v| v.into_owned())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+    Node {
+        name: local(e.name().as_ref()),
+        attrs,
+        ..Default::default()
+    }
 }
 
 fn text_of(ev: &Event) -> Option<String> {
@@ -169,7 +187,10 @@ mod tests {
 
     #[test]
     fn trees() {
-        let n = parse(br#"<?xml version="1.0"?><a:r x:k="v &amp; w"><b val="0"/><c>t&lt;<d>u</d></c></a:r>"#).unwrap();
+        let n = parse(
+            br#"<?xml version="1.0"?><a:r x:k="v &amp; w"><b val="0"/><c>t&lt;<d>u</d></c></a:r>"#,
+        )
+        .unwrap();
         assert_eq!((n.name.as_str(), n.attr("k")), ("r", Some("v & w")));
         assert_eq!(n.child("c").unwrap().all_text(), "t<u");
         assert_eq!(n.find("d").map(|d| d.text.as_str()), Some("u"));
@@ -189,6 +210,9 @@ mod tests {
             depth += 1;
         }
         assert_eq!(depth, MAX_DEPTH - 1);
-        assert!(root.child("after").is_some(), "what follows the deep part is kept");
+        assert!(
+            root.child("after").is_some(),
+            "what follows the deep part is kept"
+        );
     }
 }

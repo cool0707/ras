@@ -52,7 +52,10 @@ fn wide_string(data: &[u8], at: usize) -> Option<(String, usize)> {
     let byte_len = (count as usize).checked_mul(2)?;
     let start = at + 4;
     let bytes = data.get(start..start.checked_add(byte_len)?)?;
-    let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
     Some((String::from_utf16_lossy(&units), start + byte_len))
 }
 
@@ -160,7 +163,13 @@ mod tests {
         let (code_name, sheets) = workbook_info(&data);
         assert_eq!(code_name.as_deref(), Some("ThisWorkbook"));
         assert_eq!(sheets.len(), 2);
-        assert_eq!(sheets[0], BinarySheet { name: "データ".into(), rel_id: "rId1".into() });
+        assert_eq!(
+            sheets[0],
+            BinarySheet {
+                name: "データ".into(),
+                rel_id: "rId1".into()
+            }
+        );
         assert_eq!(sheets[1].name.len(), 100);
     }
 
@@ -180,7 +189,10 @@ mod tests {
         empty.extend([0, 0, 0, 0]);
         assert_eq!(worksheet_code_name(&record(BRT_WS_PROP, &empty)), None);
         // Garbage does not panic.
-        assert_eq!(worksheet_code_name(&[0x93, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]), None);
+        assert_eq!(
+            worksheet_code_name(&[0x93, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x00]),
+            None
+        );
         assert_eq!(workbook_info(&[0x9C, 0x01, 0x04, 1, 2]).1.len(), 0);
     }
 }

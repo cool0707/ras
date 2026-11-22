@@ -6,29 +6,60 @@
 use std::path::PathBuf;
 
 use ras_compiler::vba2ras::{convert, public_names, Peer, Target};
-use ras_compiler::{analyze, build, object_source, BuildOptions, Config, FormControl, ModuleKind, SourceInput};
+use ras_compiler::{
+    analyze, build, object_source, BuildOptions, Config, FormControl, ModuleKind, SourceInput,
+};
 
 /// Compiles `src/<key>.ras` files (and `objects/<name>.ras`, for a key `objects/<name>`) with
 /// the sheet code names `Sheet1` and `Sheet2`.
 fn compile(src: &[(&str, &str)]) -> (Vec<String>, Vec<ras_compiler::OutputFile>) {
     let mut config = Config::default();
     config.sheet_code_names = vec!["Sheet1".into(), "Sheet2".into()];
-    config.sheet_controls = vec![ras_compiler::FormDecl { name: "Sheet2".into(), controls: controls() }];
+    config.sheet_controls = vec![ras_compiler::FormDecl {
+        name: "Sheet2".into(),
+        controls: controls(),
+    }];
     let sources: Vec<SourceInput> = src
         .iter()
         .map(|(key, text)| match key.strip_prefix("objects/") {
-            Some(name) => object_source(PathBuf::from(format!("objects/{name}.ras")), name, text.to_string()),
-            None => SourceInput { path: PathBuf::from(format!("src/{key}.ras")), rel_path: format!("src/{key}.ras"), key: key.to_string(), kind: ModuleKind::User, text: text.to_string() },
+            Some(name) => object_source(
+                PathBuf::from(format!("objects/{name}.ras")),
+                name,
+                text.to_string(),
+            ),
+            None => SourceInput {
+                path: PathBuf::from(format!("src/{key}.ras")),
+                rel_path: format!("src/{key}.ras"),
+                key: key.to_string(),
+                kind: ModuleKind::User,
+                text: text.to_string(),
+            },
         })
         .collect();
     let prog = analyze(sources, config);
-    let out = build(&prog, &BuildOptions { erl: Some(false), ..Default::default() });
-    let diags: Vec<String> = prog.diagnostics.iter().chain(out.diagnostics.iter()).filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    let out = build(
+        &prog,
+        &BuildOptions {
+            erl: Some(false),
+            ..Default::default()
+        },
+    );
+    let diags: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .chain(out.diagnostics.iter())
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
     (diags, out.files)
 }
 
 fn code(files: &[ras_compiler::OutputFile], name: &str) -> String {
-    files.iter().find(|f| f.name == name).map(|f| f.code.replace("\r\n", "\n")).unwrap_or_else(|| panic!("no module {name}"))
+    files
+        .iter()
+        .find(|f| f.name == name)
+        .map(|f| f.code.replace("\r\n", "\n"))
+        .unwrap_or_else(|| panic!("no module {name}"))
 }
 
 const MODULE1: &str = r#"Option Explicit
@@ -99,26 +130,60 @@ Private Sub Workbook_SheetPivotTableUpdate(ByVal Sh As Object, ByVal Target As P
 End Sub
 "#;
 
-const SHEET1_TARGET: Target = Target::Document { code_name: "Sheet1", workbook: false, controls: &[] };
+const SHEET1_TARGET: Target = Target::Document {
+    code_name: "Sheet1",
+    workbook: false,
+    controls: &[],
+};
 
 fn controls() -> Vec<FormControl> {
-    vec![FormControl { name: "CommandButton1".into(), control_type: "CommandButton".into() }, FormControl { name: "TextBox1".into(), control_type: "TextBox".into() }]
+    vec![
+        FormControl {
+            name: "CommandButton1".into(),
+            control_type: "CommandButton".into(),
+        },
+        FormControl {
+            name: "TextBox1".into(),
+            control_type: "TextBox".into(),
+        },
+    ]
 }
 
 fn peers() -> Vec<Peer> {
     vec![
-        Peer { vba_name: "Module1".into(), key: "Module1".into(), document: false, names: public_names(MODULE1, &Target::Standard) },
-        Peer { vba_name: "Module2".into(), key: "Module2".into(), document: false, names: public_names(MODULE2, &Target::Standard) },
-        Peer { vba_name: "Sheet1".into(), key: "Sheet1".into(), document: true, names: public_names(SHEET1, &SHEET1_TARGET) },
+        Peer {
+            vba_name: "Module1".into(),
+            key: "Module1".into(),
+            document: false,
+            names: public_names(MODULE1, &Target::Standard),
+        },
+        Peer {
+            vba_name: "Module2".into(),
+            key: "Module2".into(),
+            document: false,
+            names: public_names(MODULE2, &Target::Standard),
+        },
+        Peer {
+            vba_name: "Sheet1".into(),
+            key: "Sheet1".into(),
+            document: true,
+            names: public_names(SHEET1, &SHEET1_TARGET),
+        },
     ]
 }
 
 #[test]
 fn public_names_of_a_module() {
-    let names: Vec<String> = public_names(MODULE1, &Target::Standard).into_iter().map(|n| n.ras).collect();
+    let names: Vec<String> = public_names(MODULE1, &Target::Standard)
+        .into_iter()
+        .map(|n| n.ras)
+        .collect();
     assert_eq!(names, ["TAX_RATE", "gCount", "Level", "Total", "Report"]);
     // Event procedures of a sheet are not public names; a Public procedure is.
-    let sheet: Vec<String> = public_names(SHEET1, &SHEET1_TARGET).into_iter().map(|n| n.ras).collect();
+    let sheet: Vec<String> = public_names(SHEET1, &SHEET1_TARGET)
+        .into_iter()
+        .map(|n| n.ras)
+        .collect();
     assert_eq!(sheet, ["ClearMarks"]);
 }
 
@@ -132,30 +197,82 @@ fn modules_and_a_sheet_convert_to_ras_that_compiles() {
         println!("--- {name}\n{}", c.text);
         assert!(c.todos.is_empty(), "{name}: {:?}", c.todos);
     }
-    assert!(m1.text.contains("export const TAX_RATE: double = 0.1;"), "{}", m1.text);
+    assert!(
+        m1.text.contains("export const TAX_RATE: double = 0.1;"),
+        "{}",
+        m1.text
+    );
     assert!(m1.text.contains("export let gCount: int;"), "{}", m1.text);
     assert!(m1.text.contains("\nlet mName: string;"), "{}", m1.text);
     assert!(m1.text.contains("export enum Level {"), "{}", m1.text);
-    assert!(m1.text.contains("export function Total(price: double, qty: int): double {"), "{}", m1.text);
-    assert!(m1.text.contains("export function Report() {"), "{}", m1.text);
+    assert!(
+        m1.text
+            .contains("export function Total(price: double, qty: int): double {"),
+        "{}",
+        m1.text
+    );
+    assert!(
+        m1.text.contains("export function Report() {"),
+        "{}",
+        m1.text
+    );
     assert!(m1.text.contains("\nfunction Helper() {"), "{}", m1.text);
     // Names of the other modules are imported; the members of a sheet stay its members.
     assert!(m2.text.starts_with("import { Report, TAX_RATE, Total } from \"./Module1\";\nimport * as Module1 from \"./Module1\";\n\n"), "{}", m2.text);
     assert!(m2.text.contains("Sheet1.ClearMarks();"), "{}", m2.text);
     // The sheet is `this`; the events are handlers of the sheet's file.
-    assert!(sheet.text.contains("@on(\"Worksheet.Change\")\nfunction onChange(Target: Excel.Range) {"), "{}", sheet.text);
+    assert!(
+        sheet
+            .text
+            .contains("@on(\"Worksheet.Change\")\nfunction onChange(Target: Excel.Range) {"),
+        "{}",
+        sheet.text
+    );
     assert!(sheet.text.contains("@on(\"Worksheet.BeforeDoubleClick\")\nfunction onBeforeDoubleClick(Target: Excel.Range, byref Cancel: boolean) {"), "{}", sheet.text);
-    assert!(sheet.text.contains("this.range(\"A1:A10\")"), "{}", sheet.text);
-    assert!(sheet.text.contains("this.cells(1, 2).value = Target.count;"), "{}", sheet.text);
-    assert!(sheet.text.contains("this.cells(Target.row, 3).value = this.name;"), "{}", sheet.text);
-    assert!(sheet.text.contains("import { Report } from \"../Module1\";"), "{}", sheet.text);
-    assert!(sheet.text.contains("export function ClearMarks() {"), "{}", sheet.text);
+    assert!(
+        sheet.text.contains("this.range(\"A1:A10\")"),
+        "{}",
+        sheet.text
+    );
+    assert!(
+        sheet
+            .text
+            .contains("this.cells(1, 2).value = Target.count;"),
+        "{}",
+        sheet.text
+    );
+    assert!(
+        sheet
+            .text
+            .contains("this.cells(Target.row, 3).value = this.name;"),
+        "{}",
+        sheet.text
+    );
+    assert!(
+        sheet
+            .text
+            .contains("import { Report } from \"../Module1\";"),
+        "{}",
+        sheet.text
+    );
+    assert!(
+        sheet.text.contains("export function ClearMarks() {"),
+        "{}",
+        sheet.text
+    );
 
-    let (diags, files) = compile(&[("Module1", &m1.text), ("Module2", &m2.text), ("objects/Sheet1", &sheet.text)]);
+    let (diags, files) = compile(&[
+        ("Module1", &m1.text),
+        ("Module2", &m2.text),
+        ("objects/Sheet1", &sheet.text),
+    ]);
     assert!(diags.is_empty(), "{diags:?}");
     let doc = code(&files, "Sheet1");
     println!("{doc}");
-    assert!(doc.contains("Private Sub Worksheet_Change(ByVal Target As Range)"), "{doc}");
+    assert!(
+        doc.contains("Private Sub Worksheet_Change(ByVal Target As Range)"),
+        "{doc}"
+    );
     assert!(doc.contains("Private Sub Worksheet_BeforeDoubleClick(ByVal Target As Range, ByRef Cancel As Boolean)"), "{doc}");
     // The public procedure stays a member of the sheet: `Sheet1.ClearMarks` as before.
     assert!(doc.contains("Public Sub ClearMarks("), "{doc}");
@@ -168,11 +285,29 @@ fn modules_and_a_sheet_convert_to_ras_that_compiles() {
 fn controls_and_public_declarations_of_a_sheet() {
     let vba = "Public Total As Long\n\nPrivate Sub CommandButton1_Click()\n    TextBox1.Text = \"\"\n    Me.CommandButton1.Caption = Range(\"A1\").Value\n    Total = Total + 1\nEnd Sub\n\nPrivate Sub TextBox1_KeyDown(ByVal KeyCode As MSForms.ReturnInteger, ByVal Shift As Integer)\n    If KeyCode = 13 Then Me.Activate\nEnd Sub\n\nPrivate Sub TextBox1_LostFocus()\nEnd Sub\n";
     let list = controls();
-    let c = convert(vba, &Target::Document { code_name: "Sheet2", workbook: false, controls: &list }, &[]);
+    let c = convert(
+        vba,
+        &Target::Document {
+            code_name: "Sheet2",
+            workbook: false,
+            controls: &list,
+        },
+        &[],
+    );
     println!("{}\n{:?}", c.text, c.todos);
-    assert!(c.text.contains("@on(\"CommandButton1.Click\")\nfunction commandButton1Click() {"), "{}", c.text);
+    assert!(
+        c.text
+            .contains("@on(\"CommandButton1.Click\")\nfunction commandButton1Click() {"),
+        "{}",
+        c.text
+    );
     assert!(c.text.contains("this.TextBox1.text = \"\";"), "{}", c.text);
-    assert!(c.text.contains("this.CommandButton1.caption = this.range(\"A1\").value;"), "{}", c.text);
+    assert!(
+        c.text
+            .contains("this.CommandButton1.caption = this.range(\"A1\").value;"),
+        "{}",
+        c.text
+    );
     assert!(c.text.contains("@on(\"TextBox1.KeyDown\")"), "{}", c.text);
     assert!(c.text.contains("@on(\"TextBox1.LostFocus\")"), "{}", c.text);
     // A Public variable cannot be a member of the sheet: a note to see to.
@@ -182,40 +317,97 @@ fn controls_and_public_declarations_of_a_sheet() {
     let (diags, files) = compile(&[("objects/Sheet2", &c.text)]);
     assert!(diags.is_empty(), "{diags:?}");
     let doc = code(&files, "Sheet2");
-    assert!(doc.contains("Private Sub CommandButton1_Click()") && doc.contains("Private Sub TextBox1_LostFocus()"), "{doc}");
+    assert!(
+        doc.contains("Private Sub CommandButton1_Click()")
+            && doc.contains("Private Sub TextBox1_LostFocus()"),
+        "{doc}"
+    );
 }
 
 /// `WithEvents` variables (spec §12.2.2) and controls whose events are not known.
 #[test]
 fn with_events_and_other_controls() {
     let vba = "Private WithEvents App As Application\n\nPrivate Sub Workbook_Open()\n    Set App = Application\nEnd Sub\n\nPrivate Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)\n    Debug.Print Target.Address\nEnd Sub\n\nPrivate Sub app_WorkbookBeforeClose(ByVal Wb As Workbook, Cancel As Boolean)\n    Cancel = True\nEnd Sub\n";
-    let c = convert(vba, &Target::Document { code_name: "ThisWorkbook", workbook: true, controls: &[] }, &[]);
+    let c = convert(
+        vba,
+        &Target::Document {
+            code_name: "ThisWorkbook",
+            workbook: true,
+            controls: &[],
+        },
+        &[],
+    );
     println!("{}\n{:?}", c.text, c.todos);
     assert!(c.todos.is_empty(), "{:?}", c.todos);
     assert!(c.text.contains("let App: Excel.Application;"), "{}", c.text);
-    assert!(c.text.contains("@on(\"App.SheetChange\")\nfunction appSheetChange(Sh: object, Target: Excel.Range) {"), "{}", c.text);
+    assert!(
+        c.text.contains(
+            "@on(\"App.SheetChange\")\nfunction appSheetChange(Sh: object, Target: Excel.Range) {"
+        ),
+        "{}",
+        c.text
+    );
     assert!(c.text.contains("@on(\"App.WorkbookBeforeClose\")\nfunction appWorkbookBeforeClose(Wb: Excel.Workbook, byref Cancel: boolean) {"), "{}", c.text);
     let (diags, files) = compile(&[("objects/ThisWorkbook", &c.text)]);
     assert!(diags.is_empty(), "{diags:?}");
     let doc = code(&files, "ThisWorkbook");
-    assert!(doc.contains("Private WithEvents App As Application") && doc.contains("Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)"), "{doc}");
+    assert!(
+        doc.contains("Private WithEvents App As Application")
+            && doc
+                .contains("Private Sub App_SheetChange(ByVal Sh As Object, ByVal Target As Range)"),
+        "{doc}"
+    );
 
     // A control that is not an MSForms one: the handler keeps the declaration of the procedure.
-    let list = vec![FormControl { name: "Calendar1".into(), control_type: String::new() }];
+    let list = vec![FormControl {
+        name: "Calendar1".into(),
+        control_type: String::new(),
+    }];
     let c = convert("Private Sub Calendar1_DateClick(ByVal DateClicked As Date)\n    Range(\"A1\").Value = DateClicked\nEnd Sub\n", &Target::Document { code_name: "Sheet2", workbook: false, controls: &list }, &[]);
     assert!(c.todos.is_empty(), "{:?}", c.todos);
-    assert!(c.text.contains("@on(\"Calendar1.DateClick\")\nfunction calendar1DateClick(DateClicked: date) {"), "{}", c.text);
+    assert!(
+        c.text.contains(
+            "@on(\"Calendar1.DateClick\")\nfunction calendar1DateClick(DateClicked: date) {"
+        ),
+        "{}",
+        c.text
+    );
 }
 
 #[test]
 fn this_workbook_converts_and_unknown_events_are_todos() {
-    let wb = convert(THIS_WORKBOOK, &Target::Document { code_name: "ThisWorkbook", workbook: true, controls: &[] }, &[]);
+    let wb = convert(
+        THIS_WORKBOOK,
+        &Target::Document {
+            code_name: "ThisWorkbook",
+            workbook: true,
+            controls: &[],
+        },
+        &[],
+    );
     println!("{}\n{:?}", wb.text, wb.todos);
-    assert!(wb.text.contains("@on(\"Workbook.Open\")\nfunction onOpen() {"), "{}", wb.text);
-    assert!(wb.text.contains("this.worksheets(1).activate();"), "{}", wb.text);
-    assert!(wb.text.contains("application.statusBar = this.name;"), "{}", wb.text);
+    assert!(
+        wb.text
+            .contains("@on(\"Workbook.Open\")\nfunction onOpen() {"),
+        "{}",
+        wb.text
+    );
+    assert!(
+        wb.text.contains("this.worksheets(1).activate();"),
+        "{}",
+        wb.text
+    );
+    assert!(
+        wb.text.contains("application.statusBar = this.name;"),
+        "{}",
+        wb.text
+    );
     assert_eq!(wb.todos.len(), 1, "{:?}", wb.todos);
-    assert!(wb.todos[0].1.contains("対応していないイベント"), "{:?}", wb.todos);
+    assert!(
+        wb.todos[0].1.contains("対応していないイベント"),
+        "{:?}",
+        wb.todos
+    );
     let lines: Vec<&str> = wb.text.lines().collect();
     assert!(lines[wb.todos[0].0 - 1].starts_with("// TODO(VBA):"));
     let (diags, files) = compile(&[("objects/ThisWorkbook", &wb.text)]);
@@ -273,6 +465,13 @@ fn scripting_types_convert_and_stay_late_bound() {
     let (diags, files) = compile(&[("Module1", &m.text)]);
     assert!(diags.is_empty(), "{diags:?}");
     let vba = code(&files, "Module1");
-    assert!(vba.contains("CreateObject(\"Scripting.FileSystemObject\")") && vba.contains("CreateObject(\"VBScript.RegExp\")"), "{vba}");
-    assert!(vba.contains("fso.OpenTextFile(path_, 1&)") && !vba.contains("As TextStream"), "{vba}");
+    assert!(
+        vba.contains("CreateObject(\"Scripting.FileSystemObject\")")
+            && vba.contains("CreateObject(\"VBScript.RegExp\")"),
+        "{vba}"
+    );
+    assert!(
+        vba.contains("fso.OpenTextFile(path_, 1&)") && !vba.contains("As TextStream"),
+        "{vba}"
+    );
 }

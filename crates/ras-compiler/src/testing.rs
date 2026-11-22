@@ -53,7 +53,9 @@ pub struct TestFile {
 impl TestFile {
     pub fn has_only(&self) -> bool {
         fn any(nodes: &[TestNode]) -> bool {
-            nodes.iter().any(|n| n.mode == Mode::Only || any(&n.children))
+            nodes
+                .iter()
+                .any(|n| n.mode == Mode::Only || any(&n.children))
         }
         any(&self.nodes)
     }
@@ -62,7 +64,13 @@ impl TestFile {
 /// What a call at the level of declarations is.
 enum Decl<'a> {
     /// `describe(...)`, `test(...)` and their `.skip` / `.only` / `.todo` / `.each(table)(...)`.
-    Node { suite: bool, mode: Mode, table: Option<&'a Expr>, args: &'a [Expr], span: Span },
+    Node {
+        suite: bool,
+        mode: Mode,
+        table: Option<&'a Expr>,
+        args: &'a [Expr],
+        span: Span,
+    },
     /// `beforeAll(...)` and the other hooks.
     Hook,
 }
@@ -77,15 +85,26 @@ fn base(e: &Expr) -> Option<bool> {
 
 fn classify(e: &Expr) -> Option<Decl<'_>> {
     let e = e.peel();
-    let ExprKind::Call { callee, args, .. } = &e.kind else { return None };
+    let ExprKind::Call { callee, args, .. } = &e.kind else {
+        return None;
+    };
     let c = callee.peel();
     if let ExprKind::Name(id) = &c.kind {
-        if matches!(id.text.as_str(), "beforeAll" | "afterAll" | "beforeEach" | "afterEach") {
+        if matches!(
+            id.text.as_str(),
+            "beforeAll" | "afterAll" | "beforeEach" | "afterEach"
+        ) {
             return Some(Decl::Hook);
         }
     }
     if let Some(suite) = base(c) {
-        return Some(Decl::Node { suite, mode: Mode::Run, table: None, args, span: e.span });
+        return Some(Decl::Node {
+            suite,
+            mode: Mode::Run,
+            table: None,
+            args,
+            span: e.span,
+        });
     }
     match &c.kind {
         ExprKind::Member { object, name, .. } => {
@@ -96,16 +115,34 @@ fn classify(e: &Expr) -> Option<Decl<'_>> {
                 "todo" if !suite => Mode::Todo,
                 _ => return None,
             };
-            Some(Decl::Node { suite, mode, table: None, args, span: e.span })
+            Some(Decl::Node {
+                suite,
+                mode,
+                table: None,
+                args,
+                span: e.span,
+            })
         }
         // test.each(table)(name, body)
-        ExprKind::Call { callee: inner, args: table, .. } => {
-            let ExprKind::Member { object, name, .. } = &inner.peel().kind else { return None };
+        ExprKind::Call {
+            callee: inner,
+            args: table,
+            ..
+        } => {
+            let ExprKind::Member { object, name, .. } = &inner.peel().kind else {
+                return None;
+            };
             if name.text != "each" {
                 return None;
             }
             let suite = base(object)?;
-            Some(Decl::Node { suite, mode: Mode::Run, table: table.first(), args, span: e.span })
+            Some(Decl::Node {
+                suite,
+                mode: Mode::Run,
+                table: table.first(),
+                args,
+                span: e.span,
+            })
         }
         _ => None,
     }
@@ -118,7 +155,10 @@ fn literal_text(e: &Expr) -> Option<String> {
         ExprKind::Float { text, .. } => Some(text.clone()),
         ExprKind::Str(s) => Some(s.clone()),
         ExprKind::Bool(b) => Some(if *b { "True" } else { "False" }.to_string()),
-        ExprKind::Unary { op: ast::UnaryOp::Neg, operand } => literal_text(operand).map(|t| format!("-{t}")),
+        ExprKind::Unary {
+            op: ast::UnaryOp::Neg,
+            operand,
+        } => literal_text(operand).map(|t| format!("-{t}")),
         _ => None,
     }
 }
@@ -128,8 +168,17 @@ fn literal_text(e: &Expr) -> Option<String> {
 /// (`ras-test.js`) does the same with the values.
 fn case_name(template: &str, row: &Expr) -> Option<String> {
     let (values, fields): (Vec<String>, Vec<(String, String)>) = match &row.peel().kind {
-        ExprKind::Array(items) => (items.iter().map(literal_text).collect::<Option<_>>()?, Vec::new()),
-        ExprKind::Object(props) => (Vec::new(), props.iter().map(|p| literal_text(&p.value).map(|v| (p.key.text.clone(), v))).collect::<Option<_>>()?),
+        ExprKind::Array(items) => (
+            items.iter().map(literal_text).collect::<Option<_>>()?,
+            Vec::new(),
+        ),
+        ExprKind::Object(props) => (
+            Vec::new(),
+            props
+                .iter()
+                .map(|p| literal_text(&p.value).map(|v| (p.key.text.clone(), v)))
+                .collect::<Option<_>>()?,
+        ),
         _ => (vec![literal_text(row)?], Vec::new()),
     };
     let mut out = String::new();
@@ -158,7 +207,10 @@ fn case_name(template: &str, row: &Expr) -> Option<String> {
             continue;
         }
         if c == '$' {
-            let name: String = chars[i + 1..].iter().take_while(|c| c.is_alphanumeric() || **c == '_').collect();
+            let name: String = chars[i + 1..]
+                .iter()
+                .take_while(|c| c.is_alphanumeric() || **c == '_')
+                .collect();
             if let Some((_, v)) = fields.iter().find(|(k, _)| *k == name) {
                 out.push_str(v);
                 i += 1 + name.chars().count();
@@ -179,7 +231,13 @@ struct Walker<'p> {
 
 impl Walker<'_> {
     fn err(&mut self, span: Span, code: &'static str, message: impl Into<String>) {
-        self.diags.push(Diagnostic { severity: Severity::Error, code, message: message.into(), module: Some(self.module), span });
+        self.diags.push(Diagnostic {
+            severity: Severity::Error,
+            code,
+            message: message.into(),
+            module: Some(self.module),
+            span,
+        });
     }
 
     /// A statement at the level of declarations: `out` gets the tests it declares.
@@ -192,13 +250,28 @@ impl Walker<'_> {
     }
 
     fn not_allowed(&mut self, span: Span, top: bool) {
-        let place = if top { "テストファイルのトップレベル" } else { "`describe` の本体" };
+        let place = if top {
+            "テストファイルのトップレベル"
+        } else {
+            "`describe` の本体"
+        };
         self.err(span, "E0702", format!("{place}に書けるのは、`const` / `let` の宣言と `describe` / `test` / フックの呼び出しだけです。準備の処理は `beforeAll` / `beforeEach` かテストの本体に書いてください"));
     }
 
     fn expr(&mut self, e: &Expr, span: Span, top: bool, out: &mut Vec<TestNode>) {
-        let Some(decl) = classify(e) else { return self.not_allowed(span, top) };
-        let Decl::Node { suite, mode, table, args, span } = decl else { return };
+        let Some(decl) = classify(e) else {
+            return self.not_allowed(span, top);
+        };
+        let Decl::Node {
+            suite,
+            mode,
+            table,
+            args,
+            span,
+        } = decl
+        else {
+            return;
+        };
         let what = if suite { "describe" } else { "test" };
         let name = match args.first().map(|a| &a.peel().kind) {
             Some(ExprKind::Str(s)) => s.clone(),
@@ -220,20 +293,37 @@ impl Walker<'_> {
                     }
                     ArrowBody::Expr(x) => self.expr(x, x.span, false, &mut children),
                 },
-                Some(_) => self.err(args[1].span, "E0702", "`describe` の本体はラムダ（`() => { ... }`）で書いてください"),
+                Some(_) => self.err(
+                    args[1].span,
+                    "E0702",
+                    "`describe` の本体はラムダ（`() => { ... }`）で書いてください",
+                ),
                 None => {}
             }
         }
-        let node = |name: String, template: bool, children: Vec<TestNode>| TestNode { suite, name, line: line + 1, column: column + 1, mode, template, children };
+        let node = |name: String, template: bool, children: Vec<TestNode>| TestNode {
+            suite,
+            name,
+            line: line + 1,
+            column: column + 1,
+            mode,
+            template,
+            children,
+        };
         match table {
             None => out.push(node(name, false, children)),
             Some(t) => {
                 let rows = match &t.peel().kind {
-                    ExprKind::Array(rows) => rows.iter().map(|r| case_name(&name, r)).collect::<Option<Vec<String>>>(),
+                    ExprKind::Array(rows) => rows
+                        .iter()
+                        .map(|r| case_name(&name, r))
+                        .collect::<Option<Vec<String>>>(),
                     _ => None,
                 };
                 match rows {
-                    Some(names) => out.extend(names.into_iter().map(|n| node(n, false, children.clone()))),
+                    Some(names) => {
+                        out.extend(names.into_iter().map(|n| node(n, false, children.clone())))
+                    }
                     // The cases are only known when the table is evaluated.
                     None => out.push(node(name, true, children)),
                 }
@@ -244,14 +334,21 @@ impl Walker<'_> {
 
 fn walk(prog: &Program, m: ModuleId) -> (TestFile, Vec<Diagnostic>) {
     let md = &prog.modules[m];
-    let mut w = Walker { md, module: m, diags: Vec::new() };
+    let mut w = Walker {
+        md,
+        module: m,
+        diags: Vec::new(),
+    };
     let mut nodes = Vec::new();
     for item in &md.ast.items {
         match item {
             Item::Stmt(s) => w.stmt(s, true, &mut nodes),
             Item::Fn(f) => {
                 for d in &f.decorators {
-                    if matches!(d.name.text.as_str(), "macro" | "init" | "udf" | "on" | "ribbon") {
+                    if matches!(
+                        d.name.text.as_str(),
+                        "macro" | "init" | "udf" | "on" | "ribbon"
+                    ) {
                         w.err(d.span, "E0704", format!("テストファイルには `@{}` を書けません（テストはブックに入りません）", d.name.text));
                     }
                 }
@@ -259,12 +356,22 @@ fn walk(prog: &Program, m: ModuleId) -> (TestFile, Vec<Diagnostic>) {
             _ => {}
         }
     }
-    (TestFile { module: m, file: md.rel_path.clone(), nodes }, w.diags)
+    (
+        TestFile {
+            module: m,
+            file: md.rel_path.clone(),
+            nodes,
+        },
+        w.diags,
+    )
 }
 
 /// The tests of every test file, in the order of their paths.
 pub fn list(prog: &Program) -> Vec<TestFile> {
-    let mut files: Vec<TestFile> = (0..prog.modules.len()).filter(|&m| prog.is_test_file(m)).map(|m| walk(prog, m).0).collect();
+    let mut files: Vec<TestFile> = (0..prog.modules.len())
+        .filter(|&m| prog.is_test_file(m))
+        .map(|m| walk(prog, m).0)
+        .collect();
     files.sort_by(|a, b| a.file.cmp(&b.file));
     files
 }

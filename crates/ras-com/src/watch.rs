@@ -14,11 +14,17 @@ use napi::Result;
 use napi_derive::napi;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
-use windows::Win32::UI::Accessibility::{CUIAutomation, IUIAutomation, TreeScope_Descendants, UIA_ButtonControlTypeId, UIA_TextControlTypeId};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+};
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation, IUIAutomation, TreeScope_Descendants, UIA_ButtonControlTypeId,
+    UIA_TextControlTypeId,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, EnumWindows, GetClassNameW, GetDlgCtrlID, GetWindow, GetWindowTextW, GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, SendMessageTimeoutW,
+    EnumChildWindows, EnumWindows, GetClassNameW, GetDlgCtrlID, GetWindow, GetWindowTextW,
+    GetWindowThreadProcessId, IsWindow, IsWindowVisible, PostMessageW, SendMessageTimeoutW,
     SetForegroundWindow, BM_CLICK, GW_OWNER, SMTO_ABORTIFHUNG, WM_CLOSE, WM_COMMAND, WM_GETTEXT,
 };
 
@@ -38,7 +44,10 @@ struct Config {
     mode: Mode,
 }
 
-static CONFIG: Mutex<Config> = Mutex::new(Config { pids: Vec::new(), mode: Mode::Notify });
+static CONFIG: Mutex<Config> = Mutex::new(Config {
+    pids: Vec::new(),
+    mode: Mode::Notify,
+});
 /// Start of the outstanding call in milliseconds since `epoch()`, plus one; 0 when no call is outstanding.
 static CALL_SINCE: AtomicU64 = AtomicU64::new(0);
 static CALL_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -111,7 +120,17 @@ fn window_text(window: HWND, control: bool) -> String {
         return String::from_utf16_lossy(&buf[..n.max(0) as usize]);
     }
     let mut copied = 0usize;
-    let sent = unsafe { SendMessageTimeoutW(window, WM_GETTEXT, WPARAM(buf.len()), LPARAM(buf.as_mut_ptr() as isize), SMTO_ABORTIFHUNG, 200, Some(&mut copied)) };
+    let sent = unsafe {
+        SendMessageTimeoutW(
+            window,
+            WM_GETTEXT,
+            WPARAM(buf.len()),
+            LPARAM(buf.as_mut_ptr() as isize),
+            SMTO_ABORTIFHUNG,
+            200,
+            Some(&mut copied),
+        )
+    };
     if sent.0 == 0 {
         return String::new();
     }
@@ -135,7 +154,11 @@ fn describe(window: HWND, uia: Option<&IUIAutomation>) -> Dialog {
     };
     let mut children: Vec<isize> = Vec::new();
     unsafe {
-        let _ = EnumChildWindows(Some(window), Some(collect), LPARAM(&mut children as *mut Vec<isize> as isize));
+        let _ = EnumChildWindows(
+            Some(window),
+            Some(collect),
+            LPARAM(&mut children as *mut Vec<isize> as isize),
+        );
     }
     for child in children.into_iter().take(64).map(hwnd) {
         let class = class_name(child);
@@ -143,14 +166,21 @@ fn describe(window: HWND, uia: Option<&IUIAutomation>) -> Dialog {
             let text = window_text(child, true);
             // Group boxes and unlabeled owner-drawn buttons are not answers.
             if !text.trim().is_empty() {
-                d.buttons.push(Button { handle: child.0 as isize, text, id: unsafe { GetDlgCtrlID(child) }, enabled: unsafe { IsWindowEnabled(child) }.as_bool() });
+                d.buttons.push(Button {
+                    handle: child.0 as isize,
+                    text,
+                    id: unsafe { GetDlgCtrlID(child) },
+                    enabled: unsafe { IsWindowEnabled(child) }.as_bool(),
+                });
             }
         } else if class.eq_ignore_ascii_case("Static") {
             let text = window_text(child, true);
             if !text.trim().is_empty() {
                 d.texts.push(text);
             }
-        } else if class.eq_ignore_ascii_case("Edit") || class.to_ascii_lowercase().starts_with("richedit") {
+        } else if class.eq_ignore_ascii_case("Edit")
+            || class.to_ascii_lowercase().starts_with("richedit")
+        {
             d.has_edit = true;
         }
     }
@@ -163,13 +193,21 @@ fn describe(window: HWND, uia: Option<&IUIAutomation>) -> Dialog {
     d
 }
 
-fn describe_by_automation(uia: &IUIAutomation, window: HWND, d: &mut Dialog) -> windows::core::Result<()> {
+fn describe_by_automation(
+    uia: &IUIAutomation,
+    window: HWND,
+    d: &mut Dialog,
+) -> windows::core::Result<()> {
     unsafe {
         let element = uia.ElementFromHandle(window)?;
         let all = element.FindAll(TreeScope_Descendants, &uia.CreateTrueCondition()?)?;
         for i in 0..all.Length()?.min(200) {
-            let Ok(item) = all.GetElement(i) else { continue };
-            let (Ok(kind), Ok(name)) = (item.CurrentControlType(), item.CurrentName()) else { continue };
+            let Ok(item) = all.GetElement(i) else {
+                continue;
+            };
+            let (Ok(kind), Ok(name)) = (item.CurrentControlType(), item.CurrentName()) else {
+                continue;
+            };
             let name = name.to_string();
             if name.trim().is_empty() {
                 continue;
@@ -177,7 +215,12 @@ fn describe_by_automation(uia: &IUIAutomation, window: HWND, d: &mut Dialog) -> 
             if kind == UIA_TextControlTypeId && d.texts.len() < 8 {
                 d.texts.push(name);
             } else if kind == UIA_ButtonControlTypeId && d.buttons.len() < 8 {
-                d.buttons.push(Button { handle: 0, text: name, id: 0, enabled: true });
+                d.buttons.push(Button {
+                    handle: 0,
+                    text: name,
+                    id: 0,
+                    enabled: true,
+                });
             }
         }
     }
@@ -188,12 +231,19 @@ fn describe_by_automation(uia: &IUIAutomation, window: HWND, d: &mut Dialog) -> 
 fn scan(pids: &[u32], uia: Option<&IUIAutomation>) -> Vec<Dialog> {
     let mut windows: Vec<isize> = Vec::new();
     unsafe {
-        let _ = EnumWindows(Some(collect), LPARAM(&mut windows as *mut Vec<isize> as isize));
+        let _ = EnumWindows(
+            Some(collect),
+            LPARAM(&mut windows as *mut Vec<isize> as isize),
+        );
     }
     windows
         .into_iter()
         .map(hwnd)
-        .filter(|w| pids.contains(&process_of(*w)) && is_dialog_class(&class_name(*w)) && unsafe { IsWindowEnabled(*w) }.as_bool())
+        .filter(|w| {
+            pids.contains(&process_of(*w))
+                && is_dialog_class(&class_name(*w))
+                && unsafe { IsWindowEnabled(*w) }.as_bool()
+        })
         .map(|w| describe(w, uia))
         .filter(Dialog::is_waiting)
         .collect()
@@ -203,10 +253,23 @@ fn click(dialog: &Dialog, button: &Button, attempt: u32) {
     let target = hwnd(button.handle);
     unsafe {
         if attempt % 2 == 1 {
-            let _ = SendMessageTimeoutW(target, BM_CLICK, WPARAM(0), LPARAM(0), SMTO_ABORTIFHUNG, 1000, None);
+            let _ = SendMessageTimeoutW(
+                target,
+                BM_CLICK,
+                WPARAM(0),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG,
+                1000,
+                None,
+            );
         } else {
             // BM_CLICK is ignored by a dialog that is not active; the notification it would send is not.
-            let _ = PostMessageW(Some(hwnd(dialog.handle)), WM_COMMAND, WPARAM(button.id as u16 as usize), LPARAM(button.handle));
+            let _ = PostMessageW(
+                Some(hwnd(dialog.handle)),
+                WM_COMMAND,
+                WPARAM(button.id as u16 as usize),
+                LPARAM(button.handle),
+            );
         }
     }
 }
@@ -234,7 +297,8 @@ fn run() {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
-    let uia: Option<IUIAutomation> = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.ok();
+    let uia: Option<IUIAutomation> =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.ok();
     let mut seq = 0u64;
     let mut seen: Vec<Seen> = Vec::new();
     let mut hinted = false;
@@ -272,10 +336,19 @@ fn run() {
             continue;
         }
         for d in &dialogs {
-            let action = if mode == Mode::Dismiss { d.dismissal() } else { Action::Leave };
+            let action = if mode == Mode::Dismiss {
+                d.dismissal()
+            } else {
+                Action::Leave
+            };
             match seen.iter_mut().find(|s| s.handle == d.handle) {
                 None => {
-                    seen.push(Seen { handle: d.handle, attempts: 1, last_ms: now, gave_up: false });
+                    seen.push(Seen {
+                        handle: d.handle,
+                        attempts: 1,
+                        last_ms: now,
+                        gave_up: false,
+                    });
                     if mode == Mode::Dismiss {
                         eprintln!("{}", d.dismissed_report(&action));
                         act(d, &action, 1);
@@ -288,7 +361,10 @@ fn run() {
                     }
                 }
                 Some(s) => {
-                    if action == Action::Leave || s.gave_up || now.saturating_sub(s.last_ms) < RETRY_MS {
+                    if action == Action::Leave
+                        || s.gave_up
+                        || now.saturating_sub(s.last_ms) < RETRY_MS
+                    {
                         continue;
                     }
                     if s.attempts >= MAX_ATTEMPTS {
@@ -315,7 +391,13 @@ pub(crate) fn open_dialog_summary() -> Option<String> {
     if dialogs.is_empty() {
         return None;
     }
-    Some(dialogs.iter().map(Dialog::summary).collect::<Vec<_>>().join("、"))
+    Some(
+        dialogs
+            .iter()
+            .map(Dialog::summary)
+            .collect::<Vec<_>>()
+            .join("、"),
+    )
 }
 
 // ---------------------------------------------------------------------------- JavaScript API
@@ -325,7 +407,11 @@ pub(crate) fn open_dialog_summary() -> Option<String> {
 /// The mode applies to every watched process.
 #[napi]
 pub fn watch_dialogs(pid: u32, mode: String) -> Result<()> {
-    let mode = Mode::parse(&mode).ok_or_else(|| napi::Error::from_reason(format!("unknown dialog mode `{mode}` (notify, dismiss or off)")))?;
+    let mode = Mode::parse(&mode).ok_or_else(|| {
+        napi::Error::from_reason(format!(
+            "unknown dialog mode `{mode}` (notify, dismiss or off)"
+        ))
+    })?;
     {
         let mut c = CONFIG.lock().unwrap_or_else(|e| e.into_inner());
         c.mode = mode;
@@ -336,7 +422,9 @@ pub fn watch_dialogs(pid: u32, mode: String) -> Result<()> {
     if mode != Mode::Off {
         STARTED.call_once(|| {
             epoch();
-            let _ = std::thread::Builder::new().name("ras-dialog-watcher".into()).spawn(run);
+            let _ = std::thread::Builder::new()
+                .name("ras-dialog-watcher".into())
+                .spawn(run);
         });
     }
     Ok(())

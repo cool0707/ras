@@ -8,7 +8,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use ras_compiler::{analyze, build_js, form_source, Config, FormDecl, JsOutput, ModuleKind, Program, SourceInput};
+use ras_compiler::{
+    analyze, build_js, form_source, Config, FormDecl, JsOutput, ModuleKind, Program, SourceInput,
+};
 
 fn compile(files: &[(&str, &str)]) -> (Program, JsOutput) {
     let mut cfg = Config::default();
@@ -24,7 +26,12 @@ fn compile(files: &[(&str, &str)]) -> (Program, JsOutput) {
         })
         .collect();
     let prog = analyze(sources, cfg);
-    let errors: Vec<String> = prog.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
     assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
     let out = build_js(&prog, "../../");
     assert!(!out.files.is_empty(), "no output: {:?}", out.diagnostics);
@@ -32,7 +39,10 @@ fn compile(files: &[(&str, &str)]) -> (Program, JsOutput) {
 }
 
 fn has_node() -> bool {
-    let found = Command::new("node").arg("--version").output().is_ok_and(|o| o.status.success());
+    let found = Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
     if !found {
         eprintln!("skipped: node is not installed");
     }
@@ -62,13 +72,20 @@ impl Project {
     /// Runs an entry point; returns (stdout, stderr, success).
     fn run(&self, entry: &str, mock: Option<&Path>) -> (String, String, bool) {
         let mut cmd = Command::new("node");
-        cmd.arg("--enable-source-maps").arg(self.0.join("build").join("debug").join("ras-main.js")).arg(entry).current_dir(&self.0);
+        cmd.arg("--enable-source-maps")
+            .arg(self.0.join("build").join("debug").join("ras-main.js"))
+            .arg(entry)
+            .current_dir(&self.0);
         cmd.env_remove("RAS_COM_ADDON").env_remove("RAS_MOCK_HOST");
         if let Some(m) = mock {
             cmd.env("RAS_MOCK_HOST", m);
         }
         let o = cmd.output().expect("node");
-        (String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n"), String::from_utf8_lossy(&o.stderr).into_owned(), o.status.success())
+        (
+            String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n"),
+            String::from_utf8_lossy(&o.stderr).into_owned(),
+            o.status.success(),
+        )
     }
 }
 
@@ -79,12 +96,18 @@ impl Drop for Project {
 }
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("js").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("js")
+        .join(name)
 }
 
 #[test]
 fn language_semantics_match_the_vba_build() {
-    let files = [("main", include_str!("js/semantics.ras")), ("lib", include_str!("js/lib.ras"))];
+    let files = [
+        ("main", include_str!("js/semantics.ras")),
+        ("lib", include_str!("js/lib.ras")),
+    ];
     let (_, out) = compile(&files);
     assert_eq!(out.entries, vec!["Main.run"]);
     if !has_node() {
@@ -93,7 +116,10 @@ fn language_semantics_match_the_vba_build() {
     let p = Project::new("semantics", &files, &out);
     let (stdout, stderr, ok) = p.run("Main.run", None);
     assert!(ok, "{stderr}");
-    assert_eq!(stdout, include_str!("js/semantics.out").replace("\r\n", "\n"));
+    assert_eq!(
+        stdout,
+        include_str!("js/semantics.out").replace("\r\n", "\n")
+    );
 }
 
 const REPORT: &str = r#"import { lastRow } from "./sheetutil";
@@ -144,10 +170,28 @@ fn host_access_goes_through_the_run_time() {
     let files = [("report", REPORT), ("sheetutil", SHEETUTIL)];
     let (_, out) = compile(&files);
     // Macro entries first, then every other function that can be started without arguments.
-    assert_eq!(out.entries, vec!["Report.rebuildReport", "Report.listSheets", "Report.countCustomers"]);
-    let js = &out.files.iter().find(|f| f.rel_path == "report.js").unwrap().text;
-    assert!(js.contains("$rt.cnum($rt.get($rt.call(ws, \"Cells\", [r, 3]), \"Value\"))"), "{js}");
-    assert!(js.contains("$rt.put($rt.call(ws, \"Cells\", [r, 5]), \"Formula\","), "{js}");
+    assert_eq!(
+        out.entries,
+        vec![
+            "Report.rebuildReport",
+            "Report.listSheets",
+            "Report.countCustomers"
+        ]
+    );
+    let js = &out
+        .files
+        .iter()
+        .find(|f| f.rel_path == "report.js")
+        .unwrap()
+        .text;
+    assert!(
+        js.contains("$rt.cnum($rt.get($rt.call(ws, \"Cells\", [r, 3]), \"Value\"))"),
+        "{js}"
+    );
+    assert!(
+        js.contains("$rt.put($rt.call(ws, \"Cells\", [r, 5]), \"Formula\","),
+        "{js}"
+    );
     assert!(js.contains("$m_sheetutil.lastRow(ws)"), "{js}");
     if !has_node() {
         return;
@@ -163,14 +207,23 @@ fn host_access_goes_through_the_run_time() {
     assert!(ok, "{stderr}");
     assert!(stdout.starts_with("customers=2 sheet=Data\n"), "{stdout}");
     // Array-style methods of a host collection (spec §4.4).
-    assert!(js.contains("Array.from($rt.iter($rt.global(\"Worksheets\"))).filter("), "{js}");
+    assert!(
+        js.contains("Array.from($rt.iter($rt.global(\"Worksheets\"))).filter("),
+        "{js}"
+    );
     let (stdout, stderr, ok) = p.run("listSheets", Some(&mock));
     assert!(ok, "{stderr}");
-    assert!(stdout.starts_with("2 Summary\n0:Data,1:Summary Hidden 3 true Data\n"), "{stdout}");
+    assert!(
+        stdout.starts_with("2 Summary\n0:Data,1:Summary Hidden 3 true Data\n"),
+        "{stdout}"
+    );
     // Without Excel, the first host access fails with an explanation and a RAS source position.
     let (_, stderr, ok) = p.run("Report.rebuildReport", None);
     assert!(!ok);
-    assert!(stderr.contains("ras_com") && stderr.contains("report.ras:6"), "{stderr}");
+    assert!(
+        stderr.contains("ras_com") && stderr.contains("report.ras:6"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -178,13 +231,28 @@ fn source_maps_lead_back_to_ras_lines() {
     let src = "function f(z: int): int {\n    return 10 / z;\n}\nexport function run() {\n    try {\n        f(0);\n    } catch (e) {\n        console.log(e.code, e.rasLine, e.rasFile.endsWith(\"m.ras\"));\n    }\n}\n";
     let files = [("m", src)];
     let (_, out) = compile(&files);
-    let map: serde_json::Value = serde_json::from_str(&out.files.iter().find(|f| f.rel_path == "m.js.map").unwrap().text).unwrap();
+    let map: serde_json::Value = serde_json::from_str(
+        &out.files
+            .iter()
+            .find(|f| f.rel_path == "m.js.map")
+            .unwrap()
+            .text,
+    )
+    .unwrap();
     assert_eq!(map["version"], 3);
     assert_eq!(map["sources"][0], "../../src/m.ras");
     assert!(map["mappings"].as_str().unwrap().len() > 10);
-    let js = &out.files.iter().find(|f| f.rel_path == "m.js").unwrap().text;
+    let js = &out
+        .files
+        .iter()
+        .find(|f| f.rel_path == "m.js")
+        .unwrap()
+        .text;
     assert!(js.ends_with("//# sourceMappingURL=m.js.map\n"));
-    assert!(!js.contains('\u{1}') && !js.contains('\u{2}'), "position markers must be stripped");
+    assert!(
+        !js.contains('\u{1}') && !js.contains('\u{2}'),
+        "position markers must be stripped"
+    );
     if !has_node() {
         return;
     }
@@ -205,10 +273,27 @@ fn uncaught_errors_show_only_ras_frames() {
     let p = Project::new("uncaught", &files, &out);
     let (_, stderr, ok) = p.run("run", None);
     assert!(!ok);
-    let frames: Vec<&str> = stderr.lines().filter(|l| l.trim_start().starts_with("at ")).collect();
-    assert_eq!(frames, ["    at f (src/m.ras:2:5)", "    at g (src/m.ras:5:5)", "    at run (src/m.ras:8:5) {"], "{stderr}");
-    assert!(stderr.contains("rasFile: 'src/m.ras'") && stderr.contains("rasLine: 2"), "{stderr}");
-    assert!(!stderr.contains("ras-runtime.js") && !stderr.contains("node:internal"), "{stderr}");
+    let frames: Vec<&str> = stderr
+        .lines()
+        .filter(|l| l.trim_start().starts_with("at "))
+        .collect();
+    assert_eq!(
+        frames,
+        [
+            "    at f (src/m.ras:2:5)",
+            "    at g (src/m.ras:5:5)",
+            "    at run (src/m.ras:8:5) {"
+        ],
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("rasFile: 'src/m.ras'") && stderr.contains("rasLine: 2"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("ras-runtime.js") && !stderr.contains("node:internal"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -217,7 +302,14 @@ fn modules_in_subdirectories_and_import_cycles() {
     let b = "import { ping } from \"../a\";\nexport function pong(n: int): int {\n    return n <= 0 ? 0 : ping(n - 1) + 1;\n}\n";
     let files = [("a", a), ("util/b", b)];
     let (_, out) = compile(&files);
-    let map: serde_json::Value = serde_json::from_str(&out.files.iter().find(|f| f.rel_path == "util/b.js.map").unwrap().text).unwrap();
+    let map: serde_json::Value = serde_json::from_str(
+        &out.files
+            .iter()
+            .find(|f| f.rel_path == "util/b.js.map")
+            .unwrap()
+            .text,
+    )
+    .unwrap();
     assert_eq!(map["sources"][0], "../../../src/util/b.ras");
     if !has_node() {
         return;
@@ -254,24 +346,63 @@ fn forms_run_with_a_host() {
     let mut cfg = Config::default();
     cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
     let sources = vec![
-        SourceInput { path: PathBuf::from("src/main.ras"), rel_path: "src/main.ras".into(), key: "main".into(), kind: ModuleKind::User, text: FORM_MAIN.into() },
-        form_source(PathBuf::from("forms/frmInput.ras"), "frmInput", code.to_string()),
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: FORM_MAIN.into(),
+        },
+        form_source(
+            PathBuf::from("forms/frmInput.ras"),
+            "frmInput",
+            code.to_string(),
+        ),
     ];
     let prog = analyze(sources, cfg);
-    let errors: Vec<String> = prog.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
     assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
     let out = build_js(&prog, "../../");
     assert!(!out.files.is_empty(), "no output: {:?}", out.diagnostics);
     assert_eq!(out.entries, vec!["Main.run", "frmInput.show"]);
-    let js = &out.files.iter().find(|f| f.rel_path == "@forms/frmInput.js").expect("the form's module").text;
+    let js = &out
+        .files
+        .iter()
+        .find(|f| f.rel_path == "@forms/frmInput.js")
+        .expect("the form's module")
+        .text;
     assert!(js.contains("$rt.form(\"frmInput\", {"), "{js}");
     assert!(js.contains("$rt.put($me, \"Caption\","), "{js}");
-    assert!(js.contains("fn: ($a) => closing($a[0], $a[1].v)"), "byref parameters get the cell: {js}");
+    assert!(
+        js.contains("fn: ($a) => closing($a[0], $a[1].v)"),
+        "byref parameters get the cell: {js}"
+    );
     // Handlers attached at run time (spec §12.2.3): the form is their owner.
-    assert!(js.contains("$rt.listen($rt.get($me, \"chkAgree\"), \"Click\", "), "{js}");
-    assert!(js.contains("firstSpin = $rt.listen($rt.get($me, \"spnQty\"), \"SpinUp\", spunOnce, $me, -1)"), "{js}");
-    let manifest = &out.files.iter().find(|f| f.rel_path == "ras-debug.json").unwrap().text;
-    assert!(manifest.contains("\"forms\": [\n    \"frmInput\"\n  ]"), "{manifest}");
+    assert!(
+        js.contains("$rt.listen($rt.get($me, \"chkAgree\"), \"Click\", "),
+        "{js}"
+    );
+    assert!(
+        js.contains(
+            "firstSpin = $rt.listen($rt.get($me, \"spnQty\"), \"SpinUp\", spunOnce, $me, -1)"
+        ),
+        "{js}"
+    );
+    let manifest = &out
+        .files
+        .iter()
+        .find(|f| f.rel_path == "ras-debug.json")
+        .unwrap()
+        .text;
+    assert!(
+        manifest.contains("\"forms\": [\n    \"frmInput\"\n  ]"),
+        "{manifest}"
+    );
     if !has_node() {
         return;
     }
@@ -341,7 +472,10 @@ Terminate
 B2=false
 ";
     assert_eq!(stdout, expected, "{stderr}");
-    assert!(stderr.contains("[ras] frmInput.btnBoom_Click: 実行時エラー 9"), "{stderr}");
+    assert!(
+        stderr.contains("[ras] frmInput.btnBoom_Click: 実行時エラー 9"),
+        "{stderr}"
+    );
     // Without a host (outside VS Code), showing a form explains where it can be shown.
     let (_, stderr, ok) = p.run("frmInput.show", None);
     assert!(!ok);
@@ -391,7 +525,12 @@ export function run() {
 fn union_types_narrow_like_the_vba_build() {
     let files = [("main", UNIONS)];
     let (_, out) = compile(&files);
-    let js = &out.files.iter().find(|f| f.rel_path == "main.js").unwrap().text;
+    let js = &out
+        .files
+        .iter()
+        .find(|f| f.rel_path == "main.js")
+        .unwrap()
+        .text;
     // Values of different kinds are not equal; a number's `TypeName` follows the static type when it can.
     assert!(js.contains("$rt.eq(v, \"abc\")"), "{js}");
     assert!(js.contains("$rt.typeName(w, \"Double\")"), "{js}");
@@ -401,7 +540,10 @@ fn union_types_narrow_like_the_vba_build() {
     let p = Project::new("unions", &files, &out);
     let (stdout, stderr, ok) = p.run("Main.run", None);
     assert!(ok, "{stderr}");
-    assert_eq!(stdout, "circle r=1 a=3 3\nsquare s=2 a=4 4\ns:3 true false\ni:8 true false\nb:true\nDouble\n");
+    assert_eq!(
+        stdout,
+        "circle r=1 a=3 3\nsquare s=2 a=4 4\ns:3 true false\ni:8 true false\nb:true\nDouble\n"
+    );
 }
 
 const SCRIPTING: &str = r#"
@@ -512,7 +654,12 @@ fn scripting_objects_run_without_com() {
     let (prog, out) = compile(&files);
     // The VBA build creates them by their ProgID, late-bound: no reference to their libraries.
     let vba = ras_compiler::build(&prog, &ras_compiler::BuildOptions::default());
-    let bas = &vba.files.iter().find(|f| f.file_name == "Tools.bas").expect("Tools.bas").code;
+    let bas = &vba
+        .files
+        .iter()
+        .find(|f| f.file_name == "Tools.bas")
+        .expect("Tools.bas")
+        .code;
     for want in [
         "Dim fso As Object",
         "Set fso = CreateObject(\"Scripting.FileSystemObject\")",
@@ -546,10 +693,28 @@ fn scripting_objects_run_without_com() {
     );
     let (stdout, stderr, ok) = p.run("Tools.dictionary", None);
     assert!(ok, "{stderr}");
-    assert_eq!(stdout.lines().collect::<Vec<_>>(), vec!["3 true false 10 2 b,a,c 2,10,3", "bac 457", "3 Empty", "true Dictionary"]);
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec![
+            "3 true false 10 2 b,a,c 2,10,3",
+            "bac 457",
+            "3 Empty",
+            "true Dictionary"
+        ]
+    );
     let (stdout, stderr, ok) = p.run("Tools.regex", None);
     assert!(ok, "{stderr}");
-    assert_eq!(stdout.lines().collect::<Vec<_>>(), vec!["true 2 2025/12 9 3 6", "2026;2025; 3月 と 12月", "2026年 と 2025/12 1", "true", "5020", "429"]);
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec![
+            "true 2 2025/12 9 3 6",
+            "2026;2025; 3月 と 12月",
+            "2026年 と 2025/12 1",
+            "true",
+            "5020",
+            "429"
+        ]
+    );
 }
 
 /// A function of a module named as one of VBA's would hide it for the whole project:
@@ -559,8 +724,18 @@ fn a_function_named_as_one_of_vba_is_renamed_in_the_vba_build() {
     let source = "let trim = 0;\n\n@macro\nfunction left() {\n    trim += 1;\n}\n\nexport function format(): int {\n    left();\n    return trim;\n}\n";
     let (prog, _) = compile(&[("main", source)]);
     let vba = ras_compiler::build(&prog, &ras_compiler::BuildOptions::default());
-    let all: String = vba.files.iter().map(|f| f.code.as_str()).collect::<Vec<_>>().join("\n");
-    let main = &vba.files.iter().find(|f| f.file_name == "Main.bas").expect("Main.bas").code;
+    let all: String = vba
+        .files
+        .iter()
+        .map(|f| f.code.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let main = &vba
+        .files
+        .iter()
+        .find(|f| f.file_name == "Main.bas")
+        .expect("Main.bas")
+        .code;
     for want in ["Sub left_()", "Function format_() As Long", "trim_ As Long"] {
         assert!(all.contains(want), "{want}\n{all}");
     }

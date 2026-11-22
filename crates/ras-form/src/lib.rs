@@ -31,7 +31,6 @@ pub mod codebehind;
 mod compile;
 pub mod contract;
 pub mod import;
-pub mod vbdiff;
 mod oforms;
 pub mod picture;
 mod reader;
@@ -39,6 +38,7 @@ mod scalars;
 mod snapshot;
 pub mod spec;
 mod validate;
+pub mod vbdiff;
 pub mod workspace;
 
 pub use compile::CompileError;

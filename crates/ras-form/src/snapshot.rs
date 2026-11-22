@@ -76,7 +76,9 @@ impl std::fmt::Display for SnapshotError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SnapshotError::Read(e) => write!(f, "{e}"),
-            SnapshotError::Inconsistent(m) => write!(f, "デザイナストレージの内容が矛盾しています（{m}）"),
+            SnapshotError::Inconsistent(m) => {
+                write!(f, "デザイナストレージの内容が矛盾しています（{m}）")
+            }
         }
     }
 }
@@ -100,19 +102,31 @@ fn lower_first(name: &str) -> String {
 const IDENTITIES: &[(&str, &str, &str)] = &[
     ("MSForms.CheckBox", "CheckBox", "Forms.CheckBox.1"),
     ("MSForms.ComboBox", "ComboBox", "Forms.ComboBox.1"),
-    ("MSForms.CommandButton", "CommandButton", "Forms.CommandButton.1"),
+    (
+        "MSForms.CommandButton",
+        "CommandButton",
+        "Forms.CommandButton.1",
+    ),
     ("MSForms.Form", "Page", "Forms.Page.1"),
     ("MSForms.Frame", "Frame", "Forms.Frame.1"),
     ("MSForms.Image", "Image", "Forms.Image.1"),
     ("MSForms.Label", "Label", "Forms.Label.1"),
     ("MSForms.ListBox", "ListBox", "Forms.ListBox.1"),
     ("MSForms.MultiPage", "MultiPage", "Forms.MultiPage.1"),
-    ("MSForms.OptionButton", "OptionButton", "Forms.OptionButton.1"),
+    (
+        "MSForms.OptionButton",
+        "OptionButton",
+        "Forms.OptionButton.1",
+    ),
     ("MSForms.ScrollBar", "ScrollBar", "Forms.ScrollBar.1"),
     ("MSForms.SpinButton", "SpinButton", "Forms.SpinButton.1"),
     ("MSForms.TabStrip", "TabStrip", "Forms.TabStrip.1"),
     ("MSForms.TextBox", "TextBox", "Forms.TextBox.1"),
-    ("MSForms.ToggleButton", "ToggleButton", "Forms.ToggleButton.1"),
+    (
+        "MSForms.ToggleButton",
+        "ToggleButton",
+        "Forms.ToggleButton.1",
+    ),
 ];
 
 /// Scalar record fields without a FormSpec counterpart and their public name.
@@ -240,8 +254,12 @@ fn text_props_carried(record: &Record, control_type: &str, enabled: bool) -> boo
     };
     record.mask & !known == 0
         && align
-        && record.value("FontWeight").is_none_or(|w| w == 400 || w == 700)
-        && (effects == 0 || (grayed && effects | crate::oforms::CFE_AUTOCOLOR == crate::oforms::DISABLED_TEXT_EFFECTS))
+        && record
+            .value("FontWeight")
+            .is_none_or(|w| w == 400 || w == 700)
+        && (effects == 0
+            || (grayed
+                && effects | crate::oforms::CFE_AUTOCOLOR == crate::oforms::DISABLED_TEXT_EFFECTS))
         && record.tail.is_empty()
 }
 
@@ -332,7 +350,13 @@ fn unsupported_control_properties(control: &Control, control_type: &str) -> Vec<
             out.push("siteFlags".into());
         }
     }
-    for name in ["Tag", "ControlTipText", "RuntimeLicKey", "ControlSource", "RowSource"] {
+    for name in [
+        "Tag",
+        "ControlTipText",
+        "RuntimeLicKey",
+        "ControlSource",
+        "RowSource",
+    ] {
         if control_type == "Page" && (name == "Tag" || name == "ControlTipText") {
             continue;
         }
@@ -346,7 +370,8 @@ fn unsupported_control_properties(control: &Control, control_type: &str) -> Vec<
     if let Some(record) = control.properties() {
         let mut projected = vec!["DisplayedSize", "Size", "VariousPropertyBits"];
         // An empty stored caption is a default, not state that gets lost.
-        if has_property(control_type, "caption") || record.text("Caption").unwrap_or("").is_empty() {
+        if has_property(control_type, "caption") || record.text("Caption").unwrap_or("").is_empty()
+        {
             projected.push("Caption");
         }
         if supports_selected_index(control_type) {
@@ -363,7 +388,10 @@ fn unsupported_control_properties(control: &Control, control_type: &str) -> Vec<
                 projected.push(name);
             }
         }
-        if is_default_boolean_properties(control_type, record.value("BooleanProperties").unwrap_or(0)) {
+        if is_default_boolean_properties(
+            control_type,
+            record.value("BooleanProperties").unwrap_or(0),
+        ) {
             projected.push("BooleanProperties");
         }
         if matches!(control_type, "Image" | "Frame" | "Page") {
@@ -478,7 +506,10 @@ fn project_typed_control(source: &Control, target: &mut FormSpecControl) {
     let face_colored = scalars::class_of(&control_type)
         .is_some_and(|class| crate::oforms::FACE_COLORED_CLASSES.contains(&class));
     let fresh_color = |name: &str, fresh: i64| {
-        record.value(name).filter(|v| !(face_colored && *v == fresh)).map(color)
+        record
+            .value(name)
+            .filter(|v| !(face_colored && *v == fresh))
+            .map(color)
     };
     if has_property(&control_type, "backColor") {
         target.back_color = fresh_color("BackColor", crate::oforms::BUTTON_FACE);
@@ -490,7 +521,10 @@ fn project_typed_control(source: &Control, target: &mut FormSpecControl) {
         target.border_style = record.value("BorderStyle");
     }
     if has_property(&control_type, "textAlign") {
-        let stored = record.text_props.as_ref().and_then(|t| t.value("ParagraphAlign"));
+        let stored = record
+            .text_props
+            .as_ref()
+            .and_then(|t| t.value("ParagraphAlign"));
         // PARAFORMAT uses right = 2 / center = 3; MSForms the reverse.
         target.text_align = stored.map(|align| match align {
             2 => 3,
@@ -515,7 +549,12 @@ fn project_typed_control(source: &Control, target: &mut FormSpecControl) {
 
 /// The plain properties (scalars.rs), each only where it differs from what
 /// Excel stores for a new control (which is what the compiler writes).
-fn project_scalars(source: &Control, control_type: &str, record: &Record, target: &mut FormSpecControl) {
+fn project_scalars(
+    source: &Control,
+    control_type: &str,
+    record: &Record,
+    target: &mut FormSpecControl,
+) {
     let Some(class) = scalars::class_of(control_type) else {
         return;
     };
@@ -547,15 +586,18 @@ fn project_scalars(source: &Control, control_type: &str, record: &Record, target
             }
             Store::SiteText(field) => {
                 if let Some(text) = source.site.strings.get(field).filter(|t| !t.is_empty()) {
-                    target.scalars.insert(p.name.into(), Value::from(text.as_str()));
+                    target
+                        .scalars
+                        .insert(p.name.into(), Value::from(text.as_str()));
                 }
                 continue;
             }
             Store::Columns => {
                 if let Some(widths) = column_widths(record).filter(|w| !w.is_empty()) {
-                    target
-                        .scalars
-                        .insert(p.name.into(), Value::from(scalars::format_column_widths(&widths)));
+                    target.scalars.insert(
+                        p.name.into(),
+                        Value::from(scalars::format_column_widths(&widths)),
+                    );
                 }
                 continue;
             }
@@ -565,7 +607,9 @@ fn project_scalars(source: &Control, control_type: &str, record: &Record, target
             ),
         };
         if raw != fresh {
-            target.scalars.insert(p.name.into(), scalars::from_raw(p, raw));
+            target
+                .scalars
+                .insert(p.name.into(), scalars::from_raw(p, raw));
         }
     }
 }
@@ -597,7 +641,10 @@ fn project_control(source: &Control, target: &mut FormSpecControl) {
             target.caption = Some(caption.to_string());
         }
     }
-    if let Some(value) = record.text("Value").filter(|_| supports_value(&control_type)) {
+    if let Some(value) = record
+        .text("Value")
+        .filter(|_| supports_value(&control_type))
+    {
         let state = match control_type.as_str() {
             "CheckBox" | "OptionButton" | "ToggleButton" => {
                 match value.trim().to_lowercase().as_str() {
@@ -710,11 +757,15 @@ impl Projection {
         let Some(record) = source.properties() else {
             return;
         };
-        if matches!(control_type.as_str(), "CheckBox" | "OptionButton" | "ToggleButton")
-            && record.text("Value").is_some_and(|v| {
-                !matches!(v.trim().to_lowercase().as_str(), "0" | "1" | "-1" | "true" | "false")
-            })
-        {
+        if matches!(
+            control_type.as_str(),
+            "CheckBox" | "OptionButton" | "ToggleButton"
+        ) && record.text("Value").is_some_and(|v| {
+            !matches!(
+                v.trim().to_lowercase().as_str(),
+                "0" | "1" | "-1" | "true" | "false"
+            )
+        }) {
             // Any other stored string is neither on nor off: Null.
             control.value = Some(Value::from("Null"));
         }
@@ -729,7 +780,11 @@ impl Projection {
                 bag.insert("maxLength".into(), Value::from(max));
             }
         }
-        if control_type == "ComboBox" && record.value("VariousPropertyBits").is_some_and(|b| b & !2 == 0x2c80_4819) {
+        if control_type == "ComboBox"
+            && record
+                .value("VariousPropertyBits")
+                .is_some_and(|b| b & !2 == 0x2c80_4819)
+        {
             // What generation writes for a ComboBox; nothing is lost.
             take("variousPropertyBits");
         }
@@ -768,20 +823,34 @@ impl Projection {
                 take("opaqueRecordTail");
             }
         }
-        if source.level.as_ref().is_some_and(|l| l.record.sizes.get("LogicalSize") == Some(&(0, 0))) {
+        if source
+            .level
+            .as_ref()
+            .is_some_and(|l| l.record.sizes.get("LogicalSize") == Some(&(0, 0)))
+        {
             // An empty scroll area is what generation writes for a Frame, MultiPage or Page.
             take("logicalSize");
         }
         // The picture and the mouse icon: of the record, or of the level of a Frame or Page.
         let stored = |name: &str| -> Option<&Vec<u8>> {
             match &source.level {
-                Some(level) => if name == "Picture" { level.picture.as_ref() } else { level.mouse_icon.as_ref() },
+                Some(level) => {
+                    if name == "Picture" {
+                        level.picture.as_ref()
+                    } else {
+                        level.mouse_icon.as_ref()
+                    }
+                }
                 None => record.pictures.get(name),
             }
         };
         for (field, property, takes) in [
             ("picture", "Picture", contract::takes_picture(&control_type)),
-            ("mouseIcon", "MouseIcon", contract::takes_mouse_icon(&control_type)),
+            (
+                "mouseIcon",
+                "MouseIcon",
+                contract::takes_mouse_icon(&control_type),
+            ),
         ] {
             let Some(raw) = stored(property).filter(|_| takes && source.multipage.is_none()) else {
                 continue;
@@ -857,7 +926,9 @@ impl Projection {
                 self.warnings.push(SnapshotWarning {
                     code: "unnamed_control_placeholder",
                     control: control.name.clone(),
-                    message: "名前のないコントロールに仮の名前を付けました。VBA の識別子に直してください".into(),
+                    message:
+                        "名前のないコントロールに仮の名前を付けました。VBA の識別子に直してください"
+                            .into(),
                 });
             }
             let identity = IDENTITIES.iter().find(|(kind, _, _)| *kind == source.kind);
@@ -889,7 +960,8 @@ impl Projection {
                 };
                 control.caption = Some(tab.caption.clone());
                 // No tip or accelerator is stored as an empty string: as for the other controls, none.
-                control.control_tip_text = Some(tab.control_tip_text.clone()).filter(|s| !s.is_empty());
+                control.control_tip_text =
+                    Some(tab.control_tip_text.clone()).filter(|s| !s.is_empty());
                 control.accelerator = Some(tab.accelerator.clone()).filter(|s| !s.is_empty());
                 control.enabled = Some(tab.enabled);
                 control.visible = Some(tab.visible);
@@ -906,8 +978,11 @@ impl Projection {
                             .as_ref()
                             .and_then(|r| r.value("ListIndex"))
                             .unwrap_or(0);
-                        control.selected_index =
-                            Some(if multipage.pages.is_empty() { -1 } else { stored });
+                        control.selected_index = Some(if multipage.pages.is_empty() {
+                            -1
+                        } else {
+                            stored
+                        });
                         control.enabled = Some(multipage.properties.mask & (1 << 3) == 0);
                     }
                     None => {
@@ -924,7 +999,10 @@ impl Projection {
             let mut unsupported = unsupported_control_properties(source, &control.control_type);
             unsupported.extend(unsupported_level_properties(source.level.as_ref()));
             if control.control_type == "Page"
-                && source.level.as_ref().is_some_and(|l| !l.font_raw.is_empty())
+                && source
+                    .level
+                    .as_ref()
+                    .is_some_and(|l| !l.font_raw.is_empty())
             {
                 // A Page has no Font property; its stored font is not modelled.
                 unsupported.push("font".into());
@@ -987,7 +1065,9 @@ fn frame_lines(streams: &BTreeMap<String, Vec<u8>>, codepage: u16) -> Vec<(Strin
 
 /// The `Caption` property of the designer block in the `VBFrame` stream.
 fn frame_caption(lines: &[(String, String)]) -> Option<String> {
-    let (_, value) = lines.iter().find(|(key, _)| key.eq_ignore_ascii_case("Caption"))?;
+    let (_, value) = lines
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("Caption"))?;
     let value = value.strip_prefix('"')?.strip_suffix('"')?;
     Some(value.replace("\"\"", "\""))
 }
@@ -998,14 +1078,16 @@ fn project_form_scalars(record: &Record, lines: &[(String, String)], form: &mut 
         let fresh = p.fresh.unwrap_or(p.omitted);
         let value = match p.store {
             Store::Frame(key) => {
-                let Some((_, text)) = lines.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)) else {
+                let Some((_, text)) = lines.iter().find(|(k, _)| k.eq_ignore_ascii_case(key))
+                else {
                     // A line the block does not have holds the file-format default: the VBA
                     // editor leaves out StartUpPosition = 0 (Manual), a new form's being 1.
                     // Without a block it stays unknown (generation writes its default).
                     if lines.is_empty() || p.omitted == fresh {
                         continue;
                     }
-                    form.scalars.insert(p.name.into(), scalars::from_raw(p, p.omitted));
+                    form.scalars
+                        .insert(p.name.into(), scalars::from_raw(p, p.omitted));
                     continue;
                 };
                 let Some(value) = scalars::frame_value(p, text) else {
@@ -1044,7 +1126,9 @@ fn project_form_scalars(record: &Record, lines: &[(String, String)], form: &mut 
             }
             Store::Extent(name, index) => {
                 let size = record.sizes.get(name).copied();
-                let raw = size.map_or(p.omitted, |(w, h)| i64::from(if index == 0 { w } else { h }));
+                let raw = size.map_or(p.omitted, |(w, h)| {
+                    i64::from(if index == 0 { w } else { h })
+                });
                 if raw == fresh {
                     continue;
                 }
@@ -1091,7 +1175,9 @@ pub fn snapshot(
         spec.form.caption = Some(frame_caption(&lines).unwrap_or_default());
     }
     project_form_scalars(record, &lines, &mut spec.form);
-    if let (Ok(Some(font)), Some(target)) = (reader::level_font(&form.root), spec.form.font.as_mut()) {
+    if let (Ok(Some(font)), Some(target)) =
+        (reader::level_font(&form.root), spec.form.font.as_mut())
+    {
         target.pitch_and_family = font.pitch_and_family;
         if !font.weight_stored && target.bold == Some(false) {
             target.bold = None;
@@ -1109,7 +1195,13 @@ pub fn snapshot(
         next_id: 0,
         unnamed: 0,
     };
-    let mut projected = vec!["Caption", "DisplayedSize", "BackColor", "ForeColor", "BorderStyle"];
+    let mut projected = vec![
+        "Caption",
+        "DisplayedSize",
+        "BackColor",
+        "ForeColor",
+        "BorderStyle",
+    ];
     if is_default_boolean_properties("Form", record.value("BooleanProperties").unwrap_or(0)) {
         projected.push("BooleanProperties");
     }
@@ -1132,7 +1224,10 @@ pub fn snapshot(
     unsupported.sort();
     unsupported.dedup();
     // The form's background picture and mouse icon.
-    for (field, raw) in [("picture", &form.root.picture), ("mouseIcon", &form.root.mouse_icon)] {
+    for (field, raw) in [
+        ("picture", &form.root.picture),
+        ("mouseIcon", &form.root.mouse_icon),
+    ] {
         let Some(raw) = raw else { continue };
         match picture::decode(raw) {
             Ok(picture) => {
@@ -1189,13 +1284,21 @@ mod text_props_tests {
     type Font = (u64, Vec<(String, i64)>, Vec<(String, String)>);
 
     /// The TextProps of every control (by name) of a designer storage.
-    fn fonts(streams: &BTreeMap<String, Vec<u8>>, storages: &BTreeMap<String, [u8; 16]>) -> BTreeMap<String, Font> {
+    fn fonts(
+        streams: &BTreeMap<String, Vec<u8>>,
+        storages: &BTreeMap<String, [u8; 16]>,
+    ) -> BTreeMap<String, Font> {
         fn walk(controls: &[Control], out: &mut BTreeMap<String, Font>) {
             for c in controls {
                 if let Some(t) = c.record.as_ref().and_then(|r| r.text_props.as_deref()) {
-                    let mut values: Vec<_> = t.values.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+                    let mut values: Vec<_> =
+                        t.values.iter().map(|(k, v)| (k.to_string(), *v)).collect();
                     values.sort();
-                    let mut strings: Vec<_> = t.strings.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+                    let mut strings: Vec<_> = t
+                        .strings
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.clone()))
+                        .collect();
                     strings.sort();
                     out.insert(c.name.clone(), (t.mask, values, strings));
                 }
@@ -1229,23 +1332,43 @@ mod text_props_tests {
             ("typed", "TypedProperties"),
         ] {
             let bin = std::fs::read(data.join(format!("{label}.bin"))).unwrap();
-            let form = ras_ovba::read_user_forms(&bin).unwrap().into_iter().find(|f| f.name == name).unwrap();
+            let form = ras_ovba::read_user_forms(&bin)
+                .unwrap()
+                .into_iter()
+                .find(|f| f.name == name)
+                .unwrap();
             forms.push((label.to_string(), form.streams, form.storages));
         }
         let dir = data.join("triple-state");
-        let streams = [("f", "f"), ("o", "o"), ("\u{1}CompObj", "CompObj"), ("\u{3}VBFrame", "VBFrame")]
-            .into_iter()
-            .map(|(s, f)| (s.to_string(), std::fs::read(dir.join(f)).unwrap()))
-            .collect();
-        forms.push(("triple-state".into(), streams, BTreeMap::from([(String::new(), [0u8; 16])])));
+        let streams = [
+            ("f", "f"),
+            ("o", "o"),
+            ("\u{1}CompObj", "CompObj"),
+            ("\u{3}VBFrame", "VBFrame"),
+        ]
+        .into_iter()
+        .map(|(s, f)| (s.to_string(), std::fs::read(dir.join(f)).unwrap()))
+        .collect();
+        forms.push((
+            "triple-state".into(),
+            streams,
+            BTreeMap::from([(String::new(), [0u8; 16])]),
+        ));
         for (label, streams, storages) in forms {
             let snapshot = super::snapshot("F", &streams, &storages, 932).unwrap();
             for control in &snapshot.spec.controls {
                 let unsupported = control.unsupported.clone().unwrap_or_default();
-                assert!(!unsupported.contains(&"textProps".to_string()), "{label}: {}: {unsupported:?}", control.name);
+                assert!(
+                    !unsupported.contains(&"textProps".to_string()),
+                    "{label}: {}: {unsupported:?}",
+                    control.name
+                );
             }
             let designer = crate::compile(&snapshot.spec, 932).unwrap();
-            let (before, after) = (fonts(&streams, &storages), fonts(&designer.streams, &designer.storages));
+            let (before, after) = (
+                fonts(&streams, &storages),
+                fonts(&designer.streams, &designer.storages),
+            );
             assert!(!before.is_empty());
             for (name, font) in &before {
                 let (mut font, mut written) = (font.clone(), after.get(name).cloned());
@@ -1256,7 +1379,12 @@ mod text_props_tests {
                         *value |= crate::oforms::CFE_AUTOCOLOR;
                     }
                 }
-                if snapshot.spec.controls.iter().any(|c| &c.name == name && c.control_type == "CommandButton") {
+                if snapshot
+                    .spec
+                    .controls
+                    .iter()
+                    .any(|c| &c.name == name && c.control_type == "CommandButton")
+                {
                     // A CommandButton's caption is centred whether or not the alignment is stored
                     // (Excel stores it for a new one, older forms may not).
                     for font in std::iter::once(&mut font).chain(written.as_mut()) {

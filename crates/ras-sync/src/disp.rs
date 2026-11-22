@@ -4,8 +4,13 @@ use std::mem::ManuallyDrop;
 
 use windows::core::{BSTR, GUID, PCWSTR};
 use windows::Win32::Foundation::VARIANT_BOOL;
-use windows::Win32::System::Com::{CoInitializeEx, IDispatch, COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD, DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT, DISPPARAMS, EXCEPINFO};
-use windows::Win32::System::Variant::{VariantClear, VARENUM, VARIANT, VT_BOOL, VT_BSTR, VT_DISPATCH, VT_ERROR, VT_I4};
+use windows::Win32::System::Com::{
+    CoInitializeEx, IDispatch, COINIT_APARTMENTTHREADED, DISPATCH_FLAGS, DISPATCH_METHOD,
+    DISPATCH_PROPERTYGET, DISPATCH_PROPERTYPUT, DISPPARAMS, EXCEPINFO,
+};
+use windows::Win32::System::Variant::{
+    VariantClear, VARENUM, VARIANT, VT_BOOL, VT_BSTR, VT_DISPATCH, VT_ERROR, VT_I4,
+};
 
 use crate::SyncError;
 
@@ -15,7 +20,11 @@ const DISPID_PROPERTYPUT: i32 = -3;
 const DISP_E_EXCEPTION: i32 = 0x8002_0009_u32 as i32;
 /// Excel refuses calls while a cell is edited or a dialog is open: `RPC_E_CALL_REJECTED`,
 /// `RPC_E_SERVERCALL_RETRYLATER`, and `VBA_E_IGNORE` from the object model itself.
-const BUSY: [i32; 3] = [0x8001_0001_u32 as i32, 0x8001_010A_u32 as i32, 0x800A_C472_u32 as i32];
+const BUSY: [i32; 3] = [
+    0x8001_0001_u32 as i32,
+    0x8001_010A_u32 as i32,
+    0x800A_C472_u32 as i32,
+];
 /// How long a call is retried while Excel is busy before the sync is put off.
 const BUSY_TIMEOUT_MS: u128 = 3_000;
 
@@ -45,7 +54,11 @@ impl From<ComError> for SyncError {
 
 impl From<windows::core::Error> for ComError {
     fn from(e: windows::core::Error) -> ComError {
-        ComError { hr: e.code().0, number: 0, description: format!("{} (0x{:08X})", e.message(), e.code().0 as u32) }
+        ComError {
+            hr: e.code().0,
+            number: 0,
+            description: format!("{} (0x{:08X})", e.message(), e.code().0 as u32),
+        }
     }
 }
 
@@ -116,7 +129,11 @@ impl Value {
         if self.vt() != VT_DISPATCH.0 {
             return None;
         }
-        unsafe { (*self.0.Anonymous.Anonymous.Anonymous.pdispVal).clone().map(Obj) }
+        unsafe {
+            (*self.0.Anonymous.Anonymous.Anonymous.pdispVal)
+                .clone()
+                .map(Obj)
+        }
     }
 }
 
@@ -134,16 +151,26 @@ impl Arg<'_> {
         match self {
             Arg::Str(s) => {
                 let b = BSTR::from(*s);
-                Value::with(VT_BSTR, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.bstrVal = ManuallyDrop::new(b) })
+                Value::with(VT_BSTR, |v| unsafe {
+                    (*v.Anonymous.Anonymous).Anonymous.bstrVal = ManuallyDrop::new(b)
+                })
             }
-            Arg::Int(i) => Value::with(VT_I4, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.lVal = *i }),
-            Arg::Bool(b) => Value::with(VT_BOOL, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.boolVal = VARIANT_BOOL(if *b { -1 } else { 0 }) }),
+            Arg::Int(i) => Value::with(VT_I4, |v| unsafe {
+                (*v.Anonymous.Anonymous).Anonymous.lVal = *i
+            }),
+            Arg::Bool(b) => Value::with(VT_BOOL, |v| unsafe {
+                (*v.Anonymous.Anonymous).Anonymous.boolVal = VARIANT_BOOL(if *b { -1 } else { 0 })
+            }),
             Arg::Obj(o) => {
                 let d = o.0.clone();
-                Value::with(VT_DISPATCH, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.pdispVal = ManuallyDrop::new(Some(d)) })
+                Value::with(VT_DISPATCH, |v| unsafe {
+                    (*v.Anonymous.Anonymous).Anonymous.pdispVal = ManuallyDrop::new(Some(d))
+                })
             }
             // `DISP_E_PARAMNOTFOUND`: how a caller leaves an optional argument out.
-            Arg::Missing => Value::with(VT_ERROR, |v| unsafe { (*v.Anonymous.Anonymous).Anonymous.scode = 0x8002_0004_u32 as i32 }),
+            Arg::Missing => Value::with(VT_ERROR, |v| unsafe {
+                (*v.Anonymous.Anonymous).Anonymous.scode = 0x8002_0004_u32 as i32
+            }),
         }
     }
 }
@@ -154,38 +181,88 @@ pub struct Obj(pub IDispatch);
 
 impl Obj {
     pub fn get(&self, name: &str, args: &[Arg]) -> Result<Value, ComError> {
-        self.invoke(name, DISPATCH_PROPERTYGET | DISPATCH_METHOD, args, false, BUSY_TIMEOUT_MS)
+        self.invoke(
+            name,
+            DISPATCH_PROPERTYGET | DISPATCH_METHOD,
+            args,
+            false,
+            BUSY_TIMEOUT_MS,
+        )
     }
 
     /// The property as an object; an error when it is `Nothing` or not an object.
     pub fn object(&self, name: &str, args: &[Arg]) -> Result<Obj, ComError> {
-        self.get(name, args)?.object().ok_or_else(|| ComError { hr: 0, number: 91, description: format!("`{name}` はオブジェクトを返しませんでした") })
+        self.get(name, args)?.object().ok_or_else(|| ComError {
+            hr: 0,
+            number: 91,
+            description: format!("`{name}` はオブジェクトを返しませんでした"),
+        })
     }
 
     pub fn call(&self, name: &str, args: &[Arg]) -> Result<Value, ComError> {
-        self.invoke(name, DISPATCH_METHOD | DISPATCH_PROPERTYGET, args, false, BUSY_TIMEOUT_MS)
+        self.invoke(
+            name,
+            DISPATCH_METHOD | DISPATCH_PROPERTYGET,
+            args,
+            false,
+            BUSY_TIMEOUT_MS,
+        )
     }
 
     /// A call that is retried for as long as `wait_ms` while Excel is busy.
-    pub fn call_patiently(&self, name: &str, args: &[Arg], wait_ms: u128) -> Result<Value, ComError> {
-        self.invoke(name, DISPATCH_METHOD | DISPATCH_PROPERTYGET, args, false, wait_ms)
+    pub fn call_patiently(
+        &self,
+        name: &str,
+        args: &[Arg],
+        wait_ms: u128,
+    ) -> Result<Value, ComError> {
+        self.invoke(
+            name,
+            DISPATCH_METHOD | DISPATCH_PROPERTYGET,
+            args,
+            false,
+            wait_ms,
+        )
     }
 
     pub fn put(&self, name: &str, value: Arg) -> Result<(), ComError> {
-        self.invoke(name, DISPATCH_PROPERTYPUT, &[value], true, BUSY_TIMEOUT_MS).map(|_| ())
+        self.invoke(name, DISPATCH_PROPERTYPUT, &[value], true, BUSY_TIMEOUT_MS)
+            .map(|_| ())
     }
 
-    fn invoke(&self, name: &str, flags: DISPATCH_FLAGS, args: &[Arg], put: bool, wait_ms: u128) -> Result<Value, ComError> {
+    fn invoke(
+        &self,
+        name: &str,
+        flags: DISPATCH_FLAGS,
+        args: &[Arg],
+        put: bool,
+        wait_ms: u128,
+    ) -> Result<Value, ComError> {
         let w = wide(name);
         let names = [PCWSTR(w.as_ptr())];
         let mut id = 0i32;
-        unsafe { self.0.GetIDsOfNames(&GUID::zeroed(), names.as_ptr(), 1, LCID, &mut id) }.map_err(|e| ComError { description: format!("{name}: {}", e.message()), ..ComError::from(e) })?;
+        unsafe {
+            self.0
+                .GetIDsOfNames(&GUID::zeroed(), names.as_ptr(), 1, LCID, &mut id)
+        }
+        .map_err(|e| ComError {
+            description: format!("{name}: {}", e.message()),
+            ..ComError::from(e)
+        })?;
         // Arguments are passed last to first; the vector owns them for the duration of the call.
         let mut rg: Vec<Value> = args.iter().rev().map(Arg::to_value).collect();
         let mut named = DISPID_PROPERTYPUT;
         let params = DISPPARAMS {
-            rgvarg: if rg.is_empty() { std::ptr::null_mut() } else { rg.as_mut_ptr() as *mut VARIANT },
-            rgdispidNamedArgs: if put { &mut named } else { std::ptr::null_mut() },
+            rgvarg: if rg.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                rg.as_mut_ptr() as *mut VARIANT
+            },
+            rgdispidNamedArgs: if put {
+                &mut named
+            } else {
+                std::ptr::null_mut()
+            },
             cArgs: rg.len() as u32,
             cNamedArgs: if put { 1 } else { 0 },
         };
@@ -195,7 +272,18 @@ impl Obj {
             let mut result = Value(VARIANT::default());
             let mut ex = EXCEPINFO::default();
             let mut arg_err = 0u32;
-            let r = unsafe { self.0.Invoke(id, &GUID::zeroed(), LCID, flags, &params, Some(&mut result.0), Some(&mut ex), Some(&mut arg_err)) };
+            let r = unsafe {
+                self.0.Invoke(
+                    id,
+                    &GUID::zeroed(),
+                    LCID,
+                    flags,
+                    &params,
+                    Some(&mut result.0),
+                    Some(&mut ex),
+                    Some(&mut arg_err),
+                )
+            };
             let e = match r {
                 Ok(()) => return Ok(result),
                 Err(e) => e,
@@ -213,17 +301,33 @@ impl Obj {
                 };
                 let error = ComError {
                     hr: scode,
-                    number: if ex.wCode != 0 { ex.wCode as i32 } else { scode & 0xFFFF },
-                    description: if description.is_empty() { format!("{name}: {source} (0x{:08X})", scode as u32) } else { description },
+                    number: if ex.wCode != 0 {
+                        ex.wCode as i32
+                    } else {
+                        scode & 0xFFFF
+                    },
+                    description: if description.is_empty() {
+                        format!("{name}: {source} (0x{:08X})", scode as u32)
+                    } else {
+                        description
+                    },
                 };
                 if !error.is_busy() {
                     return Err(error);
                 }
             } else if !BUSY.contains(&hr) {
-                return Err(ComError { description: format!("{name}: {}", e.message()), ..ComError::from(e) });
+                return Err(ComError {
+                    description: format!("{name}: {}", e.message()),
+                    ..ComError::from(e)
+                });
             }
             if started.elapsed().as_millis() >= wait_ms {
-                return Err(ComError { hr: BUSY[0], number: 0, description: "Excel が応答しません（セルの編集中か、ダイアログが開いています）".into() });
+                return Err(ComError {
+                    hr: BUSY[0],
+                    number: 0,
+                    description: "Excel が応答しません（セルの編集中か、ダイアログが開いています）"
+                        .into(),
+                });
             }
             std::thread::sleep(std::time::Duration::from_millis(delay));
             delay = (delay * 2).min(400);
@@ -249,14 +353,24 @@ mod tests {
         empty.put("CompareMode", Arg::Int(1)).unwrap();
         assert_eq!(empty.get("CompareMode", &[]).unwrap().int(), Some(1));
         let dict = create();
-        dict.call("Add", &[Arg::Str("名前"), Arg::Str("値 ①")]).unwrap();
+        dict.call("Add", &[Arg::Str("名前"), Arg::Str("値 ①")])
+            .unwrap();
         dict.call("Add", &[Arg::Str("n"), Arg::Int(42)]).unwrap();
         assert_eq!(dict.get("Count", &[]).unwrap().int(), Some(2));
-        assert_eq!(dict.get("Item", &[Arg::Str("名前")]).unwrap().string(), "値 ①");
+        assert_eq!(
+            dict.get("Item", &[Arg::Str("名前")]).unwrap().string(),
+            "値 ①"
+        );
         assert_eq!(dict.get("Item", &[Arg::Str("n")]).unwrap().int(), Some(42));
-        assert_eq!(dict.call("Exists", &[Arg::Str("n")]).unwrap().int(), Some(-1));
+        assert_eq!(
+            dict.call("Exists", &[Arg::Str("n")]).unwrap().int(),
+            Some(-1)
+        );
         let missing = dict.call("NoSuchMember", &[]).err().unwrap();
-        assert!(!missing.is_busy() && missing.description.contains("NoSuchMember"), "{missing:?}");
+        assert!(
+            !missing.is_busy() && missing.description.contains("NoSuchMember"),
+            "{missing:?}"
+        );
         assert!(dict.call("Remove", &[Arg::Str("missing key")]).is_err());
         assert!(dict.object("Count", &[]).is_err());
     }

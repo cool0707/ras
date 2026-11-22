@@ -39,7 +39,10 @@ pub fn apply_fixes(text: &str, fixes: &[&Fix]) -> String {
     let mut out = String::with_capacity(text.len());
     let mut pos = 0usize;
     for f in sorted {
-        let (start, end) = (u32::from(f.span.start()) as usize, u32::from(f.span.end()) as usize);
+        let (start, end) = (
+            u32::from(f.span.start()) as usize,
+            u32::from(f.span.end()) as usize,
+        );
         if start < pos || end > text.len() {
             continue;
         }

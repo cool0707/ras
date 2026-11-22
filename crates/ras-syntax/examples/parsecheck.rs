@@ -18,7 +18,11 @@ fn main() {
             println!("{path}:{line}:{col}: {}", e.message);
             failed = true;
         }
-        println!("{path}: {} top-level items, {} errors", parse.ast.items.len(), parse.errors.len());
+        println!(
+            "{path}: {} top-level items, {} errors",
+            parse.ast.items.len(),
+            parse.errors.len()
+        );
     }
     if failed {
         std::process::exit(1);

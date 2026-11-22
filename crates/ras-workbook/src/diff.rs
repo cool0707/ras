@@ -32,7 +32,8 @@ impl Side {
     }
 
     fn json(&self) -> Json {
-        let mut o = json!({ "value": self.value, "type": self.kind, "numberFormat": self.number_format });
+        let mut o =
+            json!({ "value": self.value, "type": self.kind, "numberFormat": self.number_format });
         if let Some(f) = &self.formula {
             o["formula"] = json!(f);
         }
@@ -53,9 +54,18 @@ pub struct CellChange {
 pub enum Structure {
     SheetAdded(String),
     SheetRemoved(String),
-    SheetRenamed { from: String, to: String },
+    SheetRenamed {
+        from: String,
+        to: String,
+    },
     /// Rows or columns inserted (`count` of them before the 0-based `at`) or deleted.
-    Lines { sheet: String, columns: bool, inserted: bool, at: u32, count: u32 },
+    Lines {
+        sheet: String,
+        columns: bool,
+        inserted: bool,
+        at: u32,
+        count: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -85,12 +95,24 @@ impl Diff {
 type Cells = BTreeMap<(u32, u32), Side>;
 
 fn read_sheet(book: &mut Book, si: usize) -> Result<Cells, String> {
-    let all = RangeRef::new(CellRef::new(0, 0), CellRef::new(crate::book::MAX_ROWS - 1, crate::book::MAX_COLS - 1));
+    let all = RangeRef::new(
+        CellRef::new(0, 0),
+        CellRef::new(crate::book::MAX_ROWS - 1, crate::book::MAX_COLS - 1),
+    );
     let cells: Vec<CellInfo> = book.cells(si, all)?;
     let mut out = Cells::new();
     for c in cells {
         let value = literal(book, &c);
-        out.insert((c.at.row, c.at.col), Side { value, kind: type_name(&c.value), formula: c.formula, number_format: c.number_format, r1c1: c.r1c1 });
+        out.insert(
+            (c.at.row, c.at.col),
+            Side {
+                value,
+                kind: type_name(&c.value),
+                formula: c.formula,
+                number_format: c.number_format,
+                r1c1: c.r1c1,
+            },
+        );
     }
     Ok(out)
 }
@@ -126,7 +148,9 @@ fn signatures(cells: &Cells, columns: bool) -> Vec<u64> {
     if cells.is_empty() {
         return Vec::new();
     }
-    (0..=last).map(|i| lines.get(&i).map(|h| h.finish()).unwrap_or(0)).collect()
+    (0..=last)
+        .map(|i| lines.get(&i).map(|h| h.finish()).unwrap_or(0))
+        .collect()
 }
 
 /// One block of lines inserted or deleted between `a` and `b`: (inserted, at, count).
@@ -134,10 +158,19 @@ fn one_block(a: &[u64], b: &[u64]) -> Option<(bool, u32, u32)> {
     if a.len() == b.len() {
         return None;
     }
-    let (short, long, inserted) = if a.len() < b.len() { (a, b, true) } else { (b, a, false) };
+    let (short, long, inserted) = if a.len() < b.len() {
+        (a, b, true)
+    } else {
+        (b, a, false)
+    };
     let count = long.len() - short.len();
     let prefix = short.iter().zip(long).take_while(|(x, y)| x == y).count();
-    let suffix = short[prefix..].iter().rev().zip(long.iter().rev()).take_while(|(x, y)| x == y).count();
+    let suffix = short[prefix..]
+        .iter()
+        .rev()
+        .zip(long.iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count();
     // Lines added after the last one are new cells, not an insertion: something has to follow
     // the block. Lines that differ besides the block are told as changed cells; the block is
     // taken when most of the shorter side matches around it.
@@ -154,8 +187,19 @@ fn shift(cells: &Cells, columns: bool, at: u32, by: i64) -> Cells {
         if by < 0 && line >= at && (line as i64) < at as i64 - by {
             continue;
         }
-        let moved = if line >= at { (line as i64 + by) as u32 } else { line };
-        out.insert(if columns { (*row, moved) } else { (moved, *col) }, c.clone());
+        let moved = if line >= at {
+            (line as i64 + by) as u32
+        } else {
+            line
+        };
+        out.insert(
+            if columns {
+                (*row, moved)
+            } else {
+                (moved, *col)
+            },
+            c.clone(),
+        );
     }
     out
 }
@@ -178,14 +222,43 @@ fn sheet_diff(name: &str, a: &Cells, b: &Cells, out: &mut Diff) {
         if direct == 0 {
             break;
         }
-        let Some((inserted, at, count)) = one_block(&signatures(&a, columns), &signatures(b, columns)) else { continue };
+        let Some((inserted, at, count)) =
+            one_block(&signatures(&a, columns), &signatures(b, columns))
+        else {
+            continue;
+        };
         // The cells of the first workbook, moved to where they are in the second one.
-        let candidate = shift(&a, columns, at, if inserted { count as i64 } else { -(count as i64) });
-        let removed: usize = if inserted { 0 } else { a.len() - candidate.len() };
-        let added_in_block = if inserted { b.keys().filter(|(r, c)| (at..at + count).contains(if columns { c } else { r })).count() } else { 0 };
+        let candidate = shift(
+            &a,
+            columns,
+            at,
+            if inserted {
+                count as i64
+            } else {
+                -(count as i64)
+            },
+        );
+        let removed: usize = if inserted {
+            0
+        } else {
+            a.len() - candidate.len()
+        };
+        let added_in_block = if inserted {
+            b.keys()
+                .filter(|(r, c)| (at..at + count).contains(if columns { c } else { r }))
+                .count()
+        } else {
+            0
+        };
         let aligned = count_changes(&candidate, b, true).saturating_sub(added_in_block);
         if aligned * 2 < direct.saturating_sub(removed).max(1) {
-            out.structure.push(Structure::Lines { sheet: name.to_string(), columns, inserted, at, count });
+            out.structure.push(Structure::Lines {
+                sheet: name.to_string(),
+                columns,
+                inserted,
+                at,
+                count,
+            });
             // The cells of inserted lines are told as new cells.
             a = candidate;
             moved = true;
@@ -201,14 +274,23 @@ fn sheet_diff(name: &str, a: &Cells, b: &Cells, out: &mut Diff) {
                 continue;
             }
         }
-        out.cells.push(CellChange { sheet: name.to_string(), at: CellRef::new(k.0, k.1), before: x.cloned(), after: y.cloned() });
+        out.cells.push(CellChange {
+            sheet: name.to_string(),
+            at: CellRef::new(k.0, k.1),
+            before: x.cloned(),
+            after: y.cloned(),
+        });
     }
 }
 
 /// Compares two workbooks.
 pub fn diff(a: &mut Book, b: &mut Book) -> Result<Diff, String> {
     let mut out = Diff::default();
-    let names = |book: &Book| (0..book.sheet_count()).map(|i| book.sheet_name(i).unwrap_or_default().to_string()).collect::<Vec<_>>();
+    let names = |book: &Book| {
+        (0..book.sheet_count())
+            .map(|i| book.sheet_name(i).unwrap_or_default().to_string())
+            .collect::<Vec<_>>()
+    };
     let (an, bn) = (names(a), names(b));
     let mut cells_a: HashMap<String, Cells> = HashMap::new();
     for (i, n) in an.iter().enumerate() {
@@ -222,12 +304,22 @@ pub fn diff(a: &mut Book, b: &mut Book) -> Result<Diff, String> {
     let mut added: Vec<&String> = bn.iter().filter(|n| !an.contains(n)).collect();
     // A sheet that is gone and a new one with the same cells (or, when there is one of each,
     // at the same place) are one sheet with a new name.
-    let mut pairs: Vec<(String, String)> = an.iter().filter(|n| bn.contains(n)).map(|n| (n.clone(), n.clone())).collect();
+    let mut pairs: Vec<(String, String)> = an
+        .iter()
+        .filter(|n| bn.contains(n))
+        .map(|n| (n.clone(), n.clone()))
+        .collect();
     let mut renamed = Vec::new();
     for r in removed.clone() {
-        let hit = added.iter().position(|x| count_changes(&cells_a[r], &cells_b[*x], false) == 0).or_else(|| {
-            (removed.len() == 1 && added.len() == 1 && an.iter().position(|n| n == r) == bn.iter().position(|n| n == added[0])).then_some(0)
-        });
+        let hit = added
+            .iter()
+            .position(|x| count_changes(&cells_a[r], &cells_b[*x], false) == 0)
+            .or_else(|| {
+                (removed.len() == 1
+                    && added.len() == 1
+                    && an.iter().position(|n| n == r) == bn.iter().position(|n| n == added[0]))
+                .then_some(0)
+            });
         if let Some(i) = hit {
             let to = added.remove(i);
             removed.retain(|x| *x != r);
@@ -241,7 +333,10 @@ pub fn diff(a: &mut Book, b: &mut Book) -> Result<Diff, String> {
         out.structure.push(Structure::SheetAdded((*n).clone()));
     }
     for (from, to) in &renamed {
-        out.structure.push(Structure::SheetRenamed { from: from.clone(), to: to.clone() });
+        out.structure.push(Structure::SheetRenamed {
+            from: from.clone(),
+            to: to.clone(),
+        });
         pairs.push((from.clone(), to.clone()));
     }
     // In the order of the sheets of the second workbook.
@@ -253,7 +348,18 @@ pub fn diff(a: &mut Book, b: &mut Book) -> Result<Diff, String> {
         sheet_diff(n, &Cells::new(), &cells_b[*n], &mut out);
     }
     let scoped = |book: &Book| {
-        book.names().into_iter().map(|(name, scope, f)| (scope.and_then(|i| book.sheet_name(i)).map(|s| format!("{s}!{name}")).unwrap_or(name), format!("={f}"))).collect::<BTreeMap<String, String>>()
+        book.names()
+            .into_iter()
+            .map(|(name, scope, f)| {
+                (
+                    scope
+                        .and_then(|i| book.sheet_name(i))
+                        .map(|s| format!("{s}!{name}"))
+                        .unwrap_or(name),
+                    format!("={f}"),
+                )
+            })
+            .collect::<BTreeMap<String, String>>()
     };
     let (na, nb) = (scoped(a), scoped(b));
     let mut keys: Vec<&String> = na.keys().chain(nb.keys()).collect();
@@ -261,7 +367,11 @@ pub fn diff(a: &mut Book, b: &mut Book) -> Result<Diff, String> {
     keys.dedup();
     for k in keys {
         if na.get(k) != nb.get(k) {
-            out.names.push(NameChange { name: k.clone(), before: na.get(k).cloned(), after: nb.get(k).cloned() });
+            out.names.push(NameChange {
+                name: k.clone(),
+                before: na.get(k).cloned(),
+                after: nb.get(k).cloned(),
+            });
         }
     }
     Ok(out)
@@ -278,7 +388,10 @@ fn lines_text(columns: bool, inserted: bool, at: u32, count: u32) -> String {
         (true, 1) => format!("列 {}", col_name(at)),
         (true, _) => format!("列 {}〜{}", col_name(at), col_name(at + count - 1)),
     };
-    format!("{span} を{}（推定）", if inserted { "挿入" } else { "削除" })
+    format!(
+        "{span} を{}（推定）",
+        if inserted { "挿入" } else { "削除" }
+    )
 }
 
 /// The changes of structure, a line each.
@@ -288,8 +401,19 @@ pub fn structure_lines(d: &Diff) -> Vec<String> {
         .map(|s| match s {
             Structure::SheetAdded(n) => format!("+ シート「{n}」を追加"),
             Structure::SheetRemoved(n) => format!("- シート「{n}」を削除"),
-            Structure::SheetRenamed { from, to } => format!("~ シート「{from}」の名前を「{to}」に変更"),
-            Structure::Lines { sheet, columns, inserted, at, count } => format!("~ {sheet}: {}", lines_text(*columns, *inserted, *at, *count)),
+            Structure::SheetRenamed { from, to } => {
+                format!("~ シート「{from}」の名前を「{to}」に変更")
+            }
+            Structure::Lines {
+                sheet,
+                columns,
+                inserted,
+                at,
+                count,
+            } => format!(
+                "~ {sheet}: {}",
+                lines_text(*columns, *inserted, *at, *count)
+            ),
         })
         .collect()
 }
@@ -306,11 +430,18 @@ pub fn text(d: &Diff, max_cells: usize) -> String {
             sheet = &c.sheet;
             out.push_str(&format!("{sheet}:\n"));
         }
-        let side = |s: &Option<Side>| s.as_ref().map(Side::shown).unwrap_or_else(|| "（空）".into());
+        let side = |s: &Option<Side>| {
+            s.as_ref()
+                .map(Side::shown)
+                .unwrap_or_else(|| "（空）".into())
+        };
         let mut line = format!("  {}\t{} → {}", c.at.a1(), side(&c.before), side(&c.after));
         if let (Some(x), Some(y)) = (&c.before, &c.after) {
             if x.number_format != y.number_format {
-                line.push_str(&format!("\t表示形式 {} → {}", x.number_format, y.number_format));
+                line.push_str(&format!(
+                    "\t表示形式 {} → {}",
+                    x.number_format, y.number_format
+                ));
             }
         } else if let Some(y) = c.after.as_ref().filter(|y| y.number_format != "General") {
             line.push_str(&format!("\t表示形式 {}", y.number_format));
@@ -325,10 +456,21 @@ pub fn text(d: &Diff, max_cells: usize) -> String {
         out.push_str(&match (&n.before, &n.after) {
             (None, Some(a)) => format!("+ 名前 {} {a}\n", n.name),
             (Some(b), None) => format!("- 名前 {} {b}\n", n.name),
-            (b, a) => format!("~ 名前 {} {} → {}\n", n.name, b.clone().unwrap_or_default(), a.clone().unwrap_or_default()),
+            (b, a) => format!(
+                "~ 名前 {} {} → {}\n",
+                n.name,
+                b.clone().unwrap_or_default(),
+                a.clone().unwrap_or_default()
+            ),
         });
     }
-    out.push_str(&format!("差分 {} 件（構造 {}、セル {}、名前 {}）\n", d.total(), d.structure.len(), d.cells.len(), d.names.len()));
+    out.push_str(&format!(
+        "差分 {} 件（構造 {}、セル {}、名前 {}）\n",
+        d.total(),
+        d.structure.len(),
+        d.cells.len(),
+        d.names.len()
+    ));
     out
 }
 
@@ -348,7 +490,11 @@ pub fn to_json(d: &Diff) -> Json {
         .collect();
     let cells: Vec<Json> =
         d.cells.iter().map(|c| json!({ "sheet": c.sheet, "address": c.at.a1(), "before": c.before.as_ref().map(Side::json), "after": c.after.as_ref().map(Side::json) })).collect();
-    let names: Vec<Json> = d.names.iter().map(|n| json!({ "name": n.name, "before": n.before, "after": n.after })).collect();
+    let names: Vec<Json> = d
+        .names
+        .iter()
+        .map(|n| json!({ "name": n.name, "before": n.before, "after": n.after }))
+        .collect();
     json!({
         "summary": { "structure": d.structure.len(), "cells": d.cells.len(), "names": d.names.len(), "total": d.total() },
         "structure": structure,

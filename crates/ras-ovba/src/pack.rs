@@ -13,9 +13,7 @@ use crate::opc::{self, BookLayout, Package, PackagePlan, SheetKind};
 use crate::project::same_name;
 use crate::source;
 use crate::vba::{self, DocSpec, LoadedProject};
-use crate::{
-    ModuleKind, PackReport, PackRequest, ProjectEdit, UnpackedBook, VbaModule,
-};
+use crate::{ModuleKind, PackReport, PackRequest, ProjectEdit, UnpackedBook, VbaModule};
 
 /// Workbook file types, by extension.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -173,7 +171,10 @@ impl Drop for TempFile {
 
 /// `YYYYMMDD-HHMMSS` (UTC) for a point in time.
 fn timestamp(time: SystemTime) -> String {
-    let secs = time.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let secs = time
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     // Civil-from-days (proleptic Gregorian calendar).
@@ -207,7 +208,10 @@ fn backup_key(file_name: &str, stem: &str, extension: &str) -> Option<(String, u
     let bytes = stamp.as_bytes();
     let well_formed = bytes.len() == 15
         && bytes[8] == b'-'
-        && bytes.iter().enumerate().all(|(i, b)| i == 8 || b.is_ascii_digit());
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(i, b)| i == 8 || b.is_ascii_digit());
     well_formed.then(|| (stamp.to_string(), counter))
 }
 
@@ -230,19 +234,32 @@ fn list_backups(dir: &Path, stem: &str, extension: &str) -> Result<Vec<BackupEnt
 
 /// Copies `target` into `dir` under a timestamped name and keeps only the
 /// newest `generations` backups of that workbook.
-pub(crate) fn back_up(target: &Path, dir: &Path, generations: usize) -> Result<Option<PathBuf>, OvbaError> {
+pub(crate) fn back_up(
+    target: &Path,
+    dir: &Path,
+    generations: usize,
+) -> Result<Option<PathBuf>, OvbaError> {
     if generations == 0 || !target.exists() {
         return Ok(None);
     }
-    let stem = target.file_stem().and_then(|s| s.to_str()).unwrap_or("workbook").to_string();
-    let extension = target.extension().and_then(|s| s.to_str()).unwrap_or("bak").to_string();
+    let stem = target
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("workbook")
+        .to_string();
+    let extension = target
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bak")
+        .to_string();
     fs::create_dir_all(dir)?;
 
     // The new backup must sort after every existing one, also when several
     // are taken within one second or the clock was set back.
     let mut stamp = timestamp(SystemTime::now());
     let mut counter = 0u32;
-    if let Some(((newest_stamp, newest_counter), _)) = list_backups(dir, &stem, &extension)?.last() {
+    if let Some(((newest_stamp, newest_counter), _)) = list_backups(dir, &stem, &extension)?.last()
+    {
         if *newest_stamp >= stamp {
             stamp = newest_stamp.clone();
             counter = newest_counter + 1;
@@ -275,14 +292,21 @@ pub(crate) fn write_temp_file(target: &Path, bytes: &[u8]) -> Result<TempFile, O
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("workbook");
+    let name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workbook");
     for _ in 0..16 {
         let path = dir.join(format!(
             ".{name}.{}-{:08x}.ras-tmp",
             std::process::id(),
             crypto::random_u64() as u32
         ));
-        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
             Ok(mut file) => {
                 let temp = TempFile { path, keep: false };
                 file.write_all(bytes)?;
@@ -309,13 +333,20 @@ pub(crate) struct DocumentPlan {
 }
 
 pub(crate) fn document_plan(layout: &BookLayout) -> DocumentPlan {
-    let mut plan = DocumentPlan { ensure: Vec::new(), known: Vec::new() };
+    let mut plan = DocumentPlan {
+        ensure: Vec::new(),
+        known: Vec::new(),
+    };
     // In a binary workbook a missing code name cannot be written into the
     // part, so only recorded code names may get a module created.
     let creatable = |explicit: bool| !layout.binary || explicit;
     let workbook_base =
         creatable(layout.explicit_workbook_code_name.is_some()).then_some(source::VB_BASE_WORKBOOK);
-    plan.known.push((layout.workbook_code_name.clone(), "the workbook", workbook_base));
+    plan.known.push((
+        layout.workbook_code_name.clone(),
+        "the workbook",
+        workbook_base,
+    ));
     for sheet in &layout.sheets {
         let (what, base) = match sheet.kind {
             SheetKind::Worksheet => ("a worksheet", Some(source::VB_BASE_WORKSHEET)),
@@ -328,7 +359,10 @@ pub(crate) fn document_plan(layout: &BookLayout) -> DocumentPlan {
     }
     for (name, _, base) in &plan.known {
         if let Some(base) = base {
-            plan.ensure.push(DocSpec { code_name: name.clone(), base });
+            plan.ensure.push(DocSpec {
+                code_name: name.clone(),
+                base,
+            });
         }
     }
     plan
@@ -420,16 +454,21 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
 
     // ---- document modules ---------------------------------------------------
     let documents = document_plan(&layout);
-    if layout.binary && loaded_project.is_none() && documents.ensure.len() != documents.known.len() {
+    if layout.binary && loaded_project.is_none() && documents.ensure.len() != documents.known.len()
+    {
         return Err(OvbaError::UnsupportedFormat(
             "this .xlsb workbook has no VBA project and does not record code names for all sheets; a new project cannot be created offline (save it once from Excel with a macro, or use .xlsm)".into(),
         ));
     }
     let mut warnings: Vec<String> = Vec::new();
-    let mut upsert: Vec<VbaModule> = Vec::with_capacity(req.modules.len() + req.document_code.len());
+    let mut upsert: Vec<VbaModule> =
+        Vec::with_capacity(req.modules.len() + req.document_code.len());
     for module in &req.modules {
         if module.kind == ModuleKind::Document
-            && !documents.known.iter().any(|(name, _, _)| same_name(name, &module.name))
+            && !documents
+                .known
+                .iter()
+                .any(|(name, _, _)| same_name(name, &module.name))
         {
             return Err(OvbaError::UnknownCodeName(module.name.clone()));
         }
@@ -437,13 +476,20 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
     }
     let document_code = &req.document_code;
     for (index, code) in document_code.iter().enumerate() {
-        let Some((code_name, what, base)) =
-            documents.known.iter().find(|(name, _, _)| same_name(name, &code.code_name))
+        let Some((code_name, what, base)) = documents
+            .known
+            .iter()
+            .find(|(name, _, _)| same_name(name, &code.code_name))
         else {
             return Err(OvbaError::UnknownCodeName(code.code_name.clone()));
         };
-        if document_code[..index].iter().any(|c| same_name(&c.code_name, &code.code_name))
-            || req.modules.iter().any(|m| same_name(&m.name, &code.code_name))
+        if document_code[..index]
+            .iter()
+            .any(|c| same_name(&c.code_name, &code.code_name))
+            || req
+                .modules
+                .iter()
+                .any(|m| same_name(&m.name, &code.code_name))
         {
             return Err(OvbaError::InvalidRequest(format!(
                 "code for `{}` is given more than once",
@@ -479,23 +525,38 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
         upsert,
         remove: req.remove_modules.clone(),
         rename: req.rename_modules.clone(),
-        keep_documents: req.prune_documents.then(|| documents.known.iter().map(|(name, _, _)| name.clone()).collect()),
+        keep_documents: req.prune_documents.then(|| {
+            documents
+                .known
+                .iter()
+                .map(|(name, _, _)| name.clone())
+                .collect()
+        }),
         codepage: Some(req.codepage),
         project_name: req.project_name.clone(),
         forms: req.forms.clone(),
     };
     let built = vba::build_project(loaded_project, &documents.ensure, &edit)?;
 
-    let mut report = PackReport { output: output.clone(), ..PackReport::default() };
+    let mut report = PackReport {
+        output: output.clone(),
+        ..PackReport::default()
+    };
     let old_modules: Vec<VbaModule> = loaded_project.map(|p| p.info().modules).unwrap_or_default();
     for module in &built.modules {
-        match old_modules.iter().find(|m| same_name(&m.name, &module.name)) {
+        match old_modules
+            .iter()
+            .find(|m| same_name(&m.name, &module.name))
+        {
             None => report.created.push(module.name.clone()),
             Some(old) => {
                 if old.kind == module.kind
                     && old.name == module.name
                     && source::sources_equivalent(&old.source, &module.source)
-                    && !built.changed_designers.iter().any(|n| same_name(n, &module.name))
+                    && !built
+                        .changed_designers
+                        .iter()
+                        .any(|n| same_name(n, &module.name))
                 {
                     report.unchanged.push(module.name.clone());
                 } else {
@@ -516,7 +577,10 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
                 || !report.updated.is_empty()
                 || !report.removed.is_empty()
                 || project.dir.codepage != req.codepage
-                || req.project_name.as_ref().is_some_and(|name| *name != project.dir.name)
+                || req
+                    .project_name
+                    .as_ref()
+                    .is_some_and(|name| *name != project.dir.name)
         }
     };
     if let Some(project) = loaded_project {
@@ -581,8 +645,11 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
         (Some((_, original)), false) => original.clone(),
         _ => built.bytes.clone(),
     };
-    let expected_modules: Vec<VbaModule> =
-        if project_changed { built.modules.clone() } else { old_modules.clone() };
+    let expected_modules: Vec<VbaModule> = if project_changed {
+        built.modules.clone()
+    } else {
+        old_modules.clone()
+    };
     if project_changed {
         if layout.vba_part.is_some() {
             edits.replace.insert(edits.vba_part.clone(), built.bytes);
@@ -594,7 +661,13 @@ pub fn pack(req: &PackRequest) -> Result<PackReport, OvbaError> {
 
     // ---- write, verify, back up, replace ---------------------------------------
     let mut temp = write_temp_file(&output, &new_package)?;
-    verify_written_package(&temp.path, &expected_bin, &expected_modules, req.codepage, project_changed)?;
+    verify_written_package(
+        &temp.path,
+        &expected_bin,
+        &expected_modules,
+        req.codepage,
+        project_changed,
+    )?;
     if let Some(dir) = &req.backup_dir {
         back_up(&output, dir, req.backup_generations)?;
     }
@@ -640,14 +713,18 @@ fn verify_written_package(
         .map_err(|e| fail(format!("the VBA project part cannot be read: {e}")))?
         .unwrap_or_default();
     if bin != expected_bin {
-        return Err(fail("the VBA project part differs from what was written".into()));
+        return Err(fail(
+            "the VBA project part differs from what was written".into(),
+        ));
     }
     let info = vba::read_project_bin(&bin)
         .map_err(|e| fail(format!("the VBA project cannot be read back: {e}")))?;
     vba::verify_modules(expected_modules, &info.modules)?;
     if project_changed {
         if info.codepage != codepage {
-            return Err(fail("the project code page did not read back as written".into()));
+            return Err(fail(
+                "the project code page did not read back as written".into(),
+            ));
         }
         if !layout.signature_parts.is_empty() {
             return Err(fail("signature parts are still present".into()));
@@ -680,10 +757,22 @@ mod tests {
             Some(("20261118-145501".to_string(), 12))
         );
         assert_eq!(backup_key("Book.xlsm", "Book", "xlsm"), None);
-        assert_eq!(backup_key("Book2.20261118-145501.xlsm", "Book", "xlsm"), None);
-        assert_eq!(backup_key("Book.20261118-145501.xlsb", "Book", "xlsm"), None);
-        assert_eq!(backup_key("Book.2026111x-145501.xlsm", "Book", "xlsm"), None);
-        assert_eq!(backup_key("Book.20261118-145501x.xlsm", "Book", "xlsm"), None);
+        assert_eq!(
+            backup_key("Book2.20261118-145501.xlsm", "Book", "xlsm"),
+            None
+        );
+        assert_eq!(
+            backup_key("Book.20261118-145501.xlsb", "Book", "xlsm"),
+            None
+        );
+        assert_eq!(
+            backup_key("Book.2026111x-145501.xlsm", "Book", "xlsm"),
+            None
+        );
+        assert_eq!(
+            backup_key("Book.20261118-145501x.xlsm", "Book", "xlsm"),
+            None
+        );
     }
 
     fn scratch_dir(name: &str) -> PathBuf {
@@ -702,7 +791,11 @@ mod tests {
         let mut package = Package::open(fs::read(book).unwrap()).unwrap();
         let bin = package.read("xl/vbaProject.bin").unwrap().unwrap();
         let mut tree = crate::cfbio::read_tree(&bin).unwrap();
-        let node = tree.nodes.iter_mut().find(|n| n.path == ["PROJECT"]).unwrap();
+        let node = tree
+            .nodes
+            .iter_mut()
+            .find(|n| n.path == ["PROJECT"])
+            .unwrap();
         let text = String::from_utf8(node.data.clone().unwrap()).unwrap();
         // A locked project stores the all-zero id and a 29-byte password
         // hash structure ([MS-OVBA] 2.3.1.2, 2.4.4.1).
@@ -718,7 +811,10 @@ mod tests {
             let line = if line.starts_with("ID=") {
                 format!("ID=\"{id}\"")
             } else if line.starts_with("CMG=") {
-                format!("CMG=\"{}\"", crypto::encrypt(&[1, 0, 0, 0], id, 0x3C, &[1, 2, 3]))
+                format!(
+                    "CMG=\"{}\"",
+                    crypto::encrypt(&[1, 0, 0, 0], id, 0x3C, &[1, 2, 3])
+                )
             } else if line.starts_with("DPB=") {
                 format!("DPB=\"{}\"", crypto::encrypt(&hash, id, 0x5A, &[4, 5, 6]))
             } else {
@@ -739,7 +835,11 @@ mod tests {
     fn protected_projects_are_refused() {
         let dir = scratch_dir("protected");
         let book = dir.join("book.xlsm");
-        fs::write(&book, crate::create_workbook(crate::BookKind::Xlsm, &["Sheet1"])).unwrap();
+        fs::write(
+            &book,
+            crate::create_workbook(crate::BookKind::Xlsm, &["Sheet1"]),
+        )
+        .unwrap();
         let request = PackRequest {
             book: book.clone(),
             modules: vec![VbaModule {
@@ -756,7 +856,10 @@ mod tests {
         let locked = fs::read(&book).unwrap();
         assert!(matches!(unpack(&book), Err(OvbaError::Protected)));
         assert!(matches!(pack(&request), Err(OvbaError::Protected)));
-        let other = PackRequest { output: Some(dir.join("copy.xlsm")), ..request.clone() };
+        let other = PackRequest {
+            output: Some(dir.join("copy.xlsm")),
+            ..request.clone()
+        };
         assert!(matches!(pack(&other), Err(OvbaError::Protected)));
         assert_eq!(fs::read(&book).unwrap(), locked, "nothing was written");
         assert!(!dir.join("copy.xlsm").exists());
@@ -777,25 +880,49 @@ mod tests {
     fn document_code_replaces_the_whole_module() {
         let dir = scratch_dir("doc");
         let book = dir.join("book.xlsm");
-        fs::write(&book, crate::create_workbook(crate::BookKind::Xlsm, &["Sheet1"])).unwrap();
+        fs::write(
+            &book,
+            crate::create_workbook(crate::BookKind::Xlsm, &["Sheet1"]),
+        )
+        .unwrap();
         let hand = "Private Sub workbook_open()\r\n    MsgBox \"hi\"\r\nEnd Sub\r\n";
         pack(&PackRequest {
             book: book.clone(),
-            modules: vec![VbaModule { name: "ThisWorkbook".into(), kind: ModuleKind::Document, source: hand.into() }],
+            modules: vec![VbaModule {
+                name: "ThisWorkbook".into(),
+                kind: ModuleKind::Document,
+                source: hand.into(),
+            }],
             ..PackRequest::default()
         })
         .unwrap();
         let generated = |code: &str| PackRequest {
             book: book.clone(),
-            document_code: vec![crate::DocumentCode { code_name: "ThisWorkbook".into(), code: code.into() }],
+            document_code: vec![crate::DocumentCode {
+                code_name: "ThisWorkbook".into(),
+                code: code.into(),
+            }],
             ..PackRequest::default()
         };
         let code = "Option Explicit\r\nPrivate Sub Workbook_Open()\r\nEnd Sub\r\n";
         pack(&generated(code)).unwrap();
-        let module = |name: &str| crate::unpack(&book).unwrap().project.unwrap().modules.into_iter().find(|m| m.name == name).unwrap().source;
+        let module = |name: &str| {
+            crate::unpack(&book)
+                .unwrap()
+                .project
+                .unwrap()
+                .modules
+                .into_iter()
+                .find(|m| m.name == name)
+                .unwrap()
+                .source
+        };
         let source = module("ThisWorkbook");
         // The header of the document module stays; what was there before is gone.
-        assert!(source.starts_with("Attribute VB_Name = \"ThisWorkbook\""), "{source}");
+        assert!(
+            source.starts_with("Attribute VB_Name = \"ThisWorkbook\""),
+            "{source}"
+        );
         assert!(source.ends_with(code), "{source}");
         assert!(!source.contains("MsgBox"), "{source}");
         let report = pack(&generated(code)).unwrap();
@@ -803,7 +930,10 @@ mod tests {
         // Empty code: a module without code.
         pack(&generated("")).unwrap();
         let source = module("ThisWorkbook");
-        assert!(source.lines().all(|l| l.starts_with("Attribute ")), "{source}");
+        assert!(
+            source.lines().all(|l| l.starts_with("Attribute ")),
+            "{source}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -811,11 +941,21 @@ mod tests {
     fn locked_output_is_detected_before_anything_is_written() {
         let dir = scratch_dir("lock");
         let book = dir.join("Book.xlsm");
-        fs::write(&book, crate::create_workbook(crate::BookKind::Xlsm, &["Sheet1"])).unwrap();
+        fs::write(
+            &book,
+            crate::create_workbook(crate::BookKind::Xlsm, &["Sheet1"]),
+        )
+        .unwrap();
         assert!(check_not_locked(&book, true).is_ok());
         fs::write(dir.join("~$Book.xlsm"), b"").unwrap();
-        assert!(matches!(check_not_locked(&book, false), Err(OvbaError::Locked)));
-        assert!(matches!(check_not_locked(&book, true), Err(OvbaError::Locked)));
+        assert!(matches!(
+            check_not_locked(&book, false),
+            Err(OvbaError::Locked)
+        ));
+        assert!(matches!(
+            check_not_locked(&book, true),
+            Err(OvbaError::Locked)
+        ));
         // A workbook that does not exist yet is not locked.
         assert!(check_not_locked(&dir.join("new.xlsm"), true).is_ok());
         let _ = fs::remove_dir_all(&dir);
@@ -836,12 +976,17 @@ mod tests {
         fs::write(&target, b"two").unwrap();
         let second = back_up(&target, &backups, 2).unwrap().unwrap();
         assert_eq!(second.file_name().unwrap(), "b.29991231-235959-2.xlsm");
-        assert!(!backups.join("b.29991231-235959.xlsm").exists(), "oldest pruned");
+        assert!(
+            !backups.join("b.29991231-235959.xlsm").exists(),
+            "oldest pruned"
+        );
         assert_eq!(fs::read(&first).unwrap(), b"one");
         assert_eq!(fs::read(&second).unwrap(), b"two");
         assert!(backups.join("unrelated.txt").exists());
         assert!(back_up(&target, &backups, 0).unwrap().is_none());
-        assert!(back_up(&dir.join("missing.xlsm"), &backups, 3).unwrap().is_none());
+        assert!(back_up(&dir.join("missing.xlsm"), &backups, 3)
+            .unwrap()
+            .is_none());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -849,9 +994,21 @@ mod tests {
     fn book_types() {
         assert_eq!(book_type(Path::new("a/b.XLSM")).unwrap(), BookType::Xlsm);
         assert_eq!(book_type(Path::new("b.xlsb")).unwrap(), BookType::Xlsb);
-        assert!(matches!(book_type(Path::new("b.xls")), Err(OvbaError::UnsupportedFormat(_))));
-        assert!(matches!(book_type(Path::new("b.docm")), Err(OvbaError::UnsupportedFormat(_))));
-        assert!(matches!(book_type(Path::new("noext")), Err(OvbaError::UnsupportedFormat(_))));
-        assert_eq!(owner_file(Path::new("dir/Book.xlsm")).unwrap(), Path::new("dir/~$Book.xlsm"));
+        assert!(matches!(
+            book_type(Path::new("b.xls")),
+            Err(OvbaError::UnsupportedFormat(_))
+        ));
+        assert!(matches!(
+            book_type(Path::new("b.docm")),
+            Err(OvbaError::UnsupportedFormat(_))
+        ));
+        assert!(matches!(
+            book_type(Path::new("noext")),
+            Err(OvbaError::UnsupportedFormat(_))
+        ));
+        assert_eq!(
+            owner_file(Path::new("dir/Book.xlsm")).unwrap(),
+            Path::new("dir/~$Book.xlsm")
+        );
     }
 }

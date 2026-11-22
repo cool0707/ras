@@ -121,13 +121,26 @@ pub fn signature(prog: &Program, f: FnId) -> String {
     s.push_str(match d.kind {
         FnKind::Getter { .. } => "get ",
         FnKind::Setter { .. } => "set ",
-        FnKind::Method { .. } | FnKind::Ctor { .. } | FnKind::Abstract { .. } | FnKind::Host { class: Some(_) } => "",
+        FnKind::Method { .. }
+        | FnKind::Ctor { .. }
+        | FnKind::Abstract { .. }
+        | FnKind::Host { class: Some(_) } => "",
         _ => "function ",
     });
-    s.push_str(if d.name.is_empty() { "(既定メンバー)" } else { &d.name });
+    s.push_str(if d.name.is_empty() {
+        "(既定メンバー)"
+    } else {
+        &d.name
+    });
     if !d.type_params.is_empty() {
         s.push('<');
-        s.push_str(&d.type_params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", "));
+        s.push_str(
+            &d.type_params
+                .iter()
+                .map(|p| p.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
         s.push('>');
     }
     s.push('(');
@@ -147,7 +160,16 @@ fn param_text(prog: &Program, d: &FnDef, p: &ParamDef) -> String {
     if p.rest {
         t.push_str("...");
     }
-    t.push_str(if d.locals.get(p.local).is_some_and(|l| l.kind == LocalKind::This) { "this" } else { &p.name });
+    t.push_str(
+        if d.locals
+            .get(p.local)
+            .is_some_and(|l| l.kind == LocalKind::This)
+        {
+            "this"
+        } else {
+            &p.name
+        },
+    );
     if p.optional || p.default.is_some() {
         t.push('?');
     }
@@ -190,7 +212,14 @@ fn describe_res(prog: &Program, m: ModuleId, offset: u32, res: &Res, ty: &Type) 
             // A narrowed local (spec §2.6.4) is still stored in its declared type.
             let head = format!("{kw} {}", d.name);
             match vba_type(&d.ty) {
-                Some(v) if *ty != d.ty => code_block(&format!("{head}: {}\n// VBA: {v}（宣言は `{}`。ここでは型が絞り込まれています）", prog.show(ty), prog.show(&d.ty)), None),
+                Some(v) if *ty != d.ty => code_block(
+                    &format!(
+                        "{head}: {}\n// VBA: {v}（宣言は `{}`。ここでは型が絞り込まれています）",
+                        prog.show(ty),
+                        prog.show(&d.ty)
+                    ),
+                    None,
+                ),
                 _ => code_block(&with_vba(prog, &head, ty), None),
             }
         }
@@ -199,50 +228,107 @@ fn describe_res(prog: &Program, m: ModuleId, offset: u32, res: &Res, ty: &Type) 
             let head = format!("{} {}", if d.is_const { "const" } else { "let" }, d.name);
             match &d.host_name {
                 // A host global: the VBA line shows its spelling there instead of the type.
-                Some(host) => code_block(&format!("{head}: {}\n// VBA: {host}", prog.show(&d.ty)), d.doc.as_deref()),
+                Some(host) => code_block(
+                    &format!("{head}: {}\n// VBA: {host}", prog.show(&d.ty)),
+                    d.doc.as_deref(),
+                ),
                 None => code_block(&with_vba(prog, &head, &d.ty), d.doc.as_deref()),
             }
         }
         Res::Fn(f) | Res::Method(f) => {
             let d = &prog.fns[*f];
             match (&d.host_name, d.kind.clone()) {
-                (Some(host), FnKind::Host { class: Some(c) }) => code_block(&format!("{}\n// VBA: {}.{host}", signature(prog, *f), prog.classes[c].name), d.doc.as_deref()),
-                (Some(host), _) => code_block(&format!("{}\n// VBA: {host}", signature(prog, *f)), d.doc.as_deref()),
+                (Some(host), FnKind::Host { class: Some(c) }) => code_block(
+                    &format!(
+                        "{}\n// VBA: {}.{host}",
+                        signature(prog, *f),
+                        prog.classes[c].name
+                    ),
+                    d.doc.as_deref(),
+                ),
+                (Some(host), _) => code_block(
+                    &format!("{}\n// VBA: {host}", signature(prog, *f)),
+                    d.doc.as_deref(),
+                ),
                 _ => code_block(&signature(prog, *f), d.doc.as_deref()),
             }
         }
         Res::ExtMethod(f) => {
             let d = &prog.fns[*f];
             let md = &prog.modules[d.module];
-            code_block(&format!("{}\n// 拡張メソッド（{}）→ VBA: {}.{}(…)", signature(prog, *f), md.key, md.vba_name, d.name), d.doc.as_deref())
+            code_block(
+                &format!(
+                    "{}\n// 拡張メソッド（{}）→ VBA: {}.{}(…)",
+                    signature(prog, *f),
+                    md.key,
+                    md.vba_name,
+                    d.name
+                ),
+                d.doc.as_deref(),
+            )
         }
         Res::Property { get, set } => {
             let f = get.or(*set)?;
-            code_block(&format!("(プロパティ) {}: {}", prog.fns[f].name, prog.show(ty)), prog.fns[f].doc.as_deref())
+            code_block(
+                &format!("(プロパティ) {}: {}", prog.fns[f].name, prog.show(ty)),
+                prog.fns[f].doc.as_deref(),
+            )
         }
         Res::Field(c, i) => {
             let fl = &prog.classes[*c].fields[*i];
             let head = format!("(プロパティ) {}.{}", prog.class_display(*c), fl.name);
             match &fl.host_name {
-                Some(host) => code_block(&format!("{head}: {}\n// VBA: {}.{host}", prog.show(ty), prog.classes[*c].name), fl.doc.as_deref()),
+                Some(host) => code_block(
+                    &format!(
+                        "{head}: {}\n// VBA: {}.{host}",
+                        prog.show(ty),
+                        prog.classes[*c].name
+                    ),
+                    fl.doc.as_deref(),
+                ),
                 None => code_block(&with_vba(prog, &head, ty), fl.doc.as_deref()),
             }
         }
         Res::Class(c) => {
             let d = &prog.classes[*c];
-            let kw = if d.kind == ClassKind::Class { "class" } else { "interface" };
-            code_block(&format!("{kw} {}", prog.class_display(*c)), d.doc.as_deref())
+            let kw = if d.kind == ClassKind::Class {
+                "class"
+            } else {
+                "interface"
+            };
+            code_block(
+                &format!("{kw} {}", prog.class_display(*c)),
+                d.doc.as_deref(),
+            )
         }
-        Res::Enum(e) => code_block(&format!("enum {}", prog.enums[*e].name), prog.enums[*e].doc.as_deref()),
+        Res::Enum(e) => code_block(
+            &format!("enum {}", prog.enums[*e].name),
+            prog.enums[*e].doc.as_deref(),
+        ),
         Res::EnumMember(e, i) => {
             let d = &prog.enums[*e];
-            code_block(&format!("{}.{} = {}", d.name, d.members[*i].name, d.members[*i].value), d.members[*i].doc.as_deref())
+            code_block(
+                &format!(
+                    "{}.{} = {}",
+                    d.name, d.members[*i].name, d.members[*i].value
+                ),
+                d.members[*i].doc.as_deref(),
+            )
         }
-        Res::Module(t) => code_block(&format!("module \"{}\"  // VBA: {}", prog.modules[*t].key, prog.modules[*t].vba_name), None),
+        Res::Module(t) => code_block(
+            &format!(
+                "module \"{}\"  // VBA: {}",
+                prog.modules[*t].key, prog.modules[*t].vba_name
+            ),
+            None,
+        ),
         Res::Namespace(n) => code_block(&format!("namespace {n}"), None),
         Res::Builtin(n) => code_block(&format!("(組み込み) {n}"), None),
         Res::Intrinsic(_) => code_block(&format!("(組み込み): {}", prog.show(ty)), None),
-        Res::Dynamic => code_block("(遅延バインディング): any", Some("静的な型が無いため、実行時に解決されます。")),
+        Res::Dynamic => code_block(
+            "(遅延バインディング): any",
+            Some("静的な型が無いため、実行時に解決されます。"),
+        ),
     })
 }
 
@@ -251,21 +337,35 @@ pub fn hover(prog: &Program, m: ModuleId, offset: u32) -> Option<Hover> {
     // Declarations first: function names and local declarations are not expressions.
     for &f in &md.fns {
         let d = &prog.fns[f];
-        if d.name_span.contains_inclusive(offset.into()) && !d.name_span.is_empty() && !matches!(d.kind, FnKind::Main | FnKind::ModInit) {
-            return Some(Hover { span: d.name_span, markdown: code_block(&signature(prog, f), d.doc.as_deref()) });
+        if d.name_span.contains_inclusive(offset.into())
+            && !d.name_span.is_empty()
+            && !matches!(d.kind, FnKind::Main | FnKind::ModInit)
+        {
+            return Some(Hover {
+                span: d.name_span,
+                markdown: code_block(&signature(prog, f), d.doc.as_deref()),
+            });
         }
     }
     if let Some(f) = fn_at(prog, m, offset) {
         for l in &prog.fns[f].locals {
-            if l.span.contains_inclusive(offset.into()) && !l.span.is_empty() && !l.name.starts_with("ras$") {
-                return Some(Hover { span: l.span, markdown: code_block(&with_vba(prog, &l.name, &l.ty), None) });
+            if l.span.contains_inclusive(offset.into())
+                && !l.span.is_empty()
+                && !l.name.starts_with("ras$")
+            {
+                return Some(Hover {
+                    span: l.span,
+                    markdown: code_block(&with_vba(prog, &l.name, &l.ty), None),
+                });
             }
         }
     }
     let e = expr_at(&md.ast, offset)?;
     let ty = md.info.ty(e.id);
     let (span, target) = match &e.kind {
-        ExprKind::Member { name, .. } if name.span.contains_inclusive(offset.into()) => (name.span, e),
+        ExprKind::Member { name, .. } if name.span.contains_inclusive(offset.into()) => {
+            (name.span, e)
+        }
         ExprKind::Name(_) | ExprKind::This => (e.span, e),
         _ => (e.span, e),
     };
@@ -287,7 +387,9 @@ pub fn definition(prog: &Program, m: ModuleId, offset: u32) -> Option<(ModuleId,
             Some((m, prog.fns[f].locals.get(*l)?.span))
         }
         Res::Global(v) => Some((prog.vars[*v].module, prog.vars[*v].name_span)),
-        Res::Fn(f) | Res::Method(f) | Res::ExtMethod(f) => Some((prog.fns[*f].module, prog.fns[*f].name_span)),
+        Res::Fn(f) | Res::Method(f) | Res::ExtMethod(f) => {
+            Some((prog.fns[*f].module, prog.fns[*f].name_span))
+        }
         Res::Property { get, set } => {
             let f = get.or(*set)?;
             Some((prog.fns[f].module, prog.fns[f].name_span))
@@ -332,21 +434,76 @@ pub struct Completion {
     pub import: Option<(Span, String)>,
 }
 
-fn item(label: &str, kind: u32, detail: impl Into<String>, doc: Option<&String>, sort: u8) -> Completion {
-    Completion { label: label.to_string(), kind, detail: detail.into(), doc: doc.cloned(), sort, insert: None, filter: None, import: None }
+fn item(
+    label: &str,
+    kind: u32,
+    detail: impl Into<String>,
+    doc: Option<&String>,
+    sort: u8,
+) -> Completion {
+    Completion {
+        label: label.to_string(),
+        kind,
+        detail: detail.into(),
+        doc: doc.cloned(),
+        sort,
+        insert: None,
+        filter: None,
+        import: None,
+    }
 }
 
 fn sym_item(prog: &Program, name: &str, sym: &Sym, sort: u8) -> Option<Completion> {
     Some(match sym {
-        Sym::Fn(f) => item(name, kind::FUNCTION, signature(prog, *f), prog.fns[*f].doc.as_ref(), sort),
-        Sym::Class(c) => item(name, kind::CLASS, prog.class_display(*c), prog.classes[*c].doc.as_ref(), sort),
-        Sym::Enum(e) => item(name, kind::ENUM, format!("enum {}", prog.enums[*e].name), prog.enums[*e].doc.as_ref(), sort),
+        Sym::Fn(f) => item(
+            name,
+            kind::FUNCTION,
+            signature(prog, *f),
+            prog.fns[*f].doc.as_ref(),
+            sort,
+        ),
+        Sym::Class(c) => item(
+            name,
+            kind::CLASS,
+            prog.class_display(*c),
+            prog.classes[*c].doc.as_ref(),
+            sort,
+        ),
+        Sym::Enum(e) => item(
+            name,
+            kind::ENUM,
+            format!("enum {}", prog.enums[*e].name),
+            prog.enums[*e].doc.as_ref(),
+            sort,
+        ),
         Sym::EnumMember(e, i) => {
             let d = &prog.enums[*e];
-            item(name, kind::ENUM_MEMBER, format!("{} = {}", d.name, d.members[*i].value), d.members[*i].doc.as_ref(), sort)
+            item(
+                name,
+                kind::ENUM_MEMBER,
+                format!("{} = {}", d.name, d.members[*i].value),
+                d.members[*i].doc.as_ref(),
+                sort,
+            )
         }
-        Sym::Var(v) => item(name, if prog.vars[*v].is_const { kind::CONSTANT } else { kind::VARIABLE }, prog.show(&prog.vars[*v].ty), prog.vars[*v].doc.as_ref(), sort),
-        Sym::Module(t) => item(name, kind::MODULE, format!("module \"{}\"", prog.modules[*t].key), None, sort),
+        Sym::Var(v) => item(
+            name,
+            if prog.vars[*v].is_const {
+                kind::CONSTANT
+            } else {
+                kind::VARIABLE
+            },
+            prog.show(&prog.vars[*v].ty),
+            prog.vars[*v].doc.as_ref(),
+            sort,
+        ),
+        Sym::Module(t) => item(
+            name,
+            kind::MODULE,
+            format!("module \"{}\"", prog.modules[*t].key),
+            None,
+            sort,
+        ),
         Sym::Namespace(n) => item(name, kind::MODULE, format!("namespace {n}"), None, sort),
         Sym::Struct(_) | Sym::Alias(_) => item(name, kind::CLASS, "型", None, sort),
     })
@@ -356,16 +513,38 @@ fn class_members(prog: &Program, c: ClassId, statics: bool, out: &mut Vec<Comple
     let d = &prog.classes[c];
     for f in &d.fields {
         if f.is_static == statics && !out.iter().any(|o| o.label == f.name) {
-            out.push(item(&f.name, kind::FIELD, prog.show(&f.ty), f.doc.as_ref(), 0));
+            out.push(item(
+                &f.name,
+                kind::FIELD,
+                prog.show(&f.ty),
+                f.doc.as_ref(),
+                0,
+            ));
         }
     }
     for &m in &d.methods {
         let fd = &prog.fns[m];
-        let is_static = matches!(fd.kind, FnKind::Method { is_static: true, .. } | FnKind::Getter { is_static: true, .. } | FnKind::Setter { is_static: true, .. });
+        let is_static = matches!(
+            fd.kind,
+            FnKind::Method {
+                is_static: true,
+                ..
+            } | FnKind::Getter {
+                is_static: true,
+                ..
+            } | FnKind::Setter {
+                is_static: true,
+                ..
+            }
+        );
         if is_static != statics || out.iter().any(|o| o.label == fd.name) {
             continue;
         }
-        let k = if matches!(fd.kind, FnKind::Getter { .. } | FnKind::Setter { .. }) { kind::PROPERTY } else { kind::METHOD };
+        let k = if matches!(fd.kind, FnKind::Getter { .. } | FnKind::Setter { .. }) {
+            kind::PROPERTY
+        } else {
+            kind::METHOD
+        };
         out.push(item(&fd.name, k, signature(prog, m), fd.doc.as_ref(), 0));
     }
     for base in &d.extends {
@@ -388,7 +567,10 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
             let mut lists = ms.iter().map(|t| members_of(prog, m, t));
             let first = lists.next().unwrap_or_default();
             let rest: Vec<Vec<Completion>> = lists.collect();
-            out = first.into_iter().filter(|c| rest.iter().all(|l| l.iter().any(|o| o.label == c.label))).collect();
+            out = first
+                .into_iter()
+                .filter(|c| rest.iter().all(|l| l.iter().any(|o| o.label == c.label)))
+                .collect();
         }
         Type::Class(c, _) => {
             class_members(prog, *c, false, &mut out);
@@ -441,7 +623,13 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
         }
         Type::Ns(NsRef::Enum(e)) => {
             for mem in &prog.enums[*e].members {
-                out.push(item(&mem.name, kind::ENUM_MEMBER, mem.value.to_string(), mem.doc.as_ref(), 0));
+                out.push(item(
+                    &mem.name,
+                    kind::ENUM_MEMBER,
+                    mem.value.to_string(),
+                    mem.doc.as_ref(),
+                    0,
+                ));
             }
         }
         Type::Ns(NsRef::Class(c)) => class_members(prog, *c, true, &mut out),
@@ -461,23 +649,44 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
         for &f in &prog.modules[m].ext_methods {
             let d = &prog.fns[f];
             let Some(p0) = d.params.first() else { continue };
-            let fits = p0.ty == *ty || (p0.ty.contains_param() && p0.ty.is_array() == ty.is_array()) || matches!((&p0.ty, ty), (Type::Class(a, _), Type::Class(b, _)) if prog.class_conforms(*b, *a));
+            let fits = p0.ty == *ty
+                || (p0.ty.contains_param() && p0.ty.is_array() == ty.is_array())
+                || matches!((&p0.ty, ty), (Type::Class(a, _), Type::Class(b, _)) if prog.class_conforms(*b, *a));
             if fits && !out.iter().any(|o| o.label == d.name && o.sort == 1) {
-                out.push(item(&d.name, kind::METHOD, format!("(拡張) {}", signature(prog, f)), d.doc.as_ref(), 1));
+                out.push(item(
+                    &d.name,
+                    kind::METHOD,
+                    format!("(拡張) {}", signature(prog, f)),
+                    d.doc.as_ref(),
+                    1,
+                ));
             }
         }
         // Extension methods of modules not imported yet: accepting one adds the import.
         for (t, name, sym) in importable(prog, m) {
             let Sym::Fn(f) = sym else { continue };
             let d = &prog.fns[*f];
-            let Some(p0) = d.params.first().filter(|_| d.is_extension) else { continue };
+            let Some(p0) = d.params.first().filter(|_| d.is_extension) else {
+                continue;
+            };
             if prog.modules[m].ext_methods.contains(f) || out.iter().any(|o| o.label == *name) {
                 continue;
             }
-            let fits = p0.ty == *ty || (p0.ty.contains_param() && p0.ty.is_array() == ty.is_array()) || matches!((&p0.ty, ty), (Type::Class(a, _), Type::Class(b, _)) if prog.class_conforms(*b, *a));
+            let fits = p0.ty == *ty
+                || (p0.ty.contains_param() && p0.ty.is_array() == ty.is_array())
+                || matches!((&p0.ty, ty), (Type::Class(a, _), Type::Class(b, _)) if prog.class_conforms(*b, *a));
             if fits {
                 let source = import_source(prog, m, t);
-                let mut c = item(name, kind::METHOD, format!("(拡張) {}  — \"{source}\" からインポート", signature(prog, *f)), d.doc.as_ref(), 2);
+                let mut c = item(
+                    name,
+                    kind::METHOD,
+                    format!(
+                        "(拡張) {}  — \"{source}\" からインポート",
+                        signature(prog, *f)
+                    ),
+                    d.doc.as_ref(),
+                    2,
+                );
                 c.import = import_edit(prog, m, t, name);
                 out.push(c);
             }
@@ -508,7 +717,12 @@ pub fn import_source(prog: &Program, m: ModuleId, t: ModuleId) -> String {
     let from: Vec<&str> = prog.modules[m].key.split('/').collect();
     let from = &from[..from.len() - 1];
     let to: Vec<&str> = prog.modules[t].key.split('/').collect();
-    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count().min(to.len() - 1);
+    let common = from
+        .iter()
+        .zip(&to)
+        .take_while(|(a, b)| a == b)
+        .count()
+        .min(to.len() - 1);
     let ups = from.len() - common;
     let rest = to[common..].join("/");
     if ups == 0 {
@@ -522,7 +736,18 @@ pub fn import_source(prog: &Program, m: ModuleId, t: ModuleId) -> String {
 /// `import { … } from` of that module, or a new `import` line after the others.
 pub fn import_edit(prog: &Program, m: ModuleId, t: ModuleId, name: &str) -> Option<(Span, String)> {
     let md = &prog.modules[m];
-    let imports: Vec<&ast::Import> = md.ast.items.iter().filter_map(|i| if let Item::Import(imp) = i { Some(imp) } else { None }).collect();
+    let imports: Vec<&ast::Import> = md
+        .ast
+        .items
+        .iter()
+        .filter_map(|i| {
+            if let Item::Import(imp) = i {
+                Some(imp)
+            } else {
+                None
+            }
+        })
+        .collect();
     for imp in &imports {
         if crate::collect::import_target(prog, m, &imp.source) != Some(t) {
             continue;
@@ -532,16 +757,26 @@ pub fn import_edit(prog: &Program, m: ModuleId, t: ModuleId, name: &str) -> Opti
             return Some((Span::empty(end), format!(", {name}")));
         }
     }
-    let line = format!("import {{ {name} }} from \"{}\";\n", import_source(prog, m, t));
+    let line = format!(
+        "import {{ {name} }} from \"{}\";\n",
+        import_source(prog, m, t)
+    );
     let at = match imports.last() {
         // The start of the line after the last import.
         Some(last) => {
             let end = u32::from(last.span.end()) as usize;
-            md.text[end..].find('\n').map(|i| end + i + 1).unwrap_or(md.text.len())
+            md.text[end..]
+                .find('\n')
+                .map(|i| end + i + 1)
+                .unwrap_or(md.text.len())
         }
         None => 0,
     };
-    let text = if at == md.text.len() && !md.text.is_empty() && !md.text.ends_with('\n') { format!("\n{line}") } else { line };
+    let text = if at == md.text.len() && !md.text.is_empty() && !md.text.ends_with('\n') {
+        format!("\n{line}")
+    } else {
+        line
+    };
     Some((Span::empty((at as u32).into()), text))
 }
 
@@ -557,16 +792,27 @@ pub struct ImportFix {
 pub fn import_fixes(prog: &Program, m: ModuleId, from: u32, to: u32) -> Vec<ImportFix> {
     let md = &prog.modules[m];
     let mut out: Vec<ImportFix> = Vec::new();
-    for d in prog.diagnostics.iter().filter(|d| d.module == Some(m) && matches!(d.code, "E0201" | "E0170" | "E0202")) {
+    for d in prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.module == Some(m) && matches!(d.code, "E0201" | "E0170" | "E0202"))
+    {
         let (s, e) = (u32::from(d.span.start()), u32::from(d.span.end()));
         if e < from || to < s {
             continue;
         }
         let written = md.text.get(s as usize..e as usize).unwrap_or("");
         // The name: the identifier the span starts with (a type) or ends with (a member).
-        let ident = |t: &str| t.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$') && !t.is_empty();
+        let ident = |t: &str| {
+            t.chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                && !t.is_empty()
+        };
         let name = match d.code {
-            "E0170" if d.message.starts_with("型 `") => written.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).next().unwrap_or(""),
+            "E0170" if d.message.starts_with("型 `") => written
+                .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$'))
+                .next()
+                .unwrap_or(""),
             "E0201" => written,
             "E0202" => written,
             _ => continue,
@@ -580,15 +826,26 @@ pub fn import_fixes(prog: &Program, m: ModuleId, from: u32, to: u32) -> Vec<Impo
             }
             let is_ext = matches!(sym, Sym::Fn(f) if prog.fns[*f].is_extension);
             let wanted = match d.code {
-                "E0201" => matches!(sym, Sym::Fn(_) | Sym::Var(_) | Sym::Class(_) | Sym::Enum(_)) && !is_ext,
-                "E0170" => matches!(sym, Sym::Class(_) | Sym::Enum(_) | Sym::Struct(_) | Sym::Alias(_)),
+                "E0201" => {
+                    matches!(sym, Sym::Fn(_) | Sym::Var(_) | Sym::Class(_) | Sym::Enum(_))
+                        && !is_ext
+                }
+                "E0170" => matches!(
+                    sym,
+                    Sym::Class(_) | Sym::Enum(_) | Sym::Struct(_) | Sym::Alias(_)
+                ),
                 _ => is_ext,
             };
             if !wanted {
                 continue;
             }
-            let Some((span, text)) = import_edit(prog, m, t, name) else { continue };
-            let title = format!("\"{}\" から `{name}` をインポート", import_source(prog, m, t));
+            let Some((span, text)) = import_edit(prog, m, t, name) else {
+                continue;
+            };
+            let title = format!(
+                "\"{}\" から `{name}` をインポート",
+                import_source(prog, m, t)
+            );
             if !out.iter().any(|o| o.title == title) {
                 out.push(ImportFix { title, span, text });
             }
@@ -598,16 +855,56 @@ pub fn import_fixes(prog: &Program, m: ModuleId, from: u32, to: u32) -> Vec<Impo
 }
 
 pub(crate) const KEYWORDS: &[&str] = &[
-    "let", "const", "function", "return", "if", "else", "for", "of", "while", "do", "break", "continue", "switch", "case", "default",
-    "try", "catch", "finally", "throw", "new", "class", "interface", "enum", "implements", "import", "export", "from", "as", "this",
-    "null", "true", "false", "byref", "byval", "inline", "noinline", "resume", "using", "declare", "instanceof", "typeof",
+    "let",
+    "const",
+    "function",
+    "return",
+    "if",
+    "else",
+    "for",
+    "of",
+    "while",
+    "do",
+    "break",
+    "continue",
+    "switch",
+    "case",
+    "default",
+    "try",
+    "catch",
+    "finally",
+    "throw",
+    "new",
+    "class",
+    "interface",
+    "enum",
+    "implements",
+    "import",
+    "export",
+    "from",
+    "as",
+    "this",
+    "null",
+    "true",
+    "false",
+    "byref",
+    "byval",
+    "inline",
+    "noinline",
+    "resume",
+    "using",
+    "declare",
+    "instanceof",
+    "typeof",
 ];
 
 /// Start of the identifier that ends at `offset`.
 fn ident_start(text: &str, offset: usize) -> usize {
     let mut p = offset;
     while p > 0 {
-        let Some(c) = text[..p].chars().next_back() else { break };
+        let Some(c) = text[..p].chars().next_back() else {
+            break;
+        };
         if c.is_alphanumeric() || c == '_' || c == '$' {
             p -= c.len_utf8();
         } else {
@@ -658,7 +955,9 @@ fn enclosing_args(text: &str, p: usize) -> Option<(usize, Vec<&str>)> {
             q @ (b'"' | b'\'' | b'`') => {
                 // Skip a string literal on the same line.
                 let line_start = text[..i].rfind('\n').map_or(0, |n| n + 1);
-                i = text[line_start..i].rfind(q as char).map(|j| line_start + j)?;
+                i = text[line_start..i]
+                    .rfind(q as char)
+                    .map(|j| line_start + j)?;
             }
             _ => {}
         }
@@ -669,14 +968,18 @@ fn enclosing_args(text: &str, p: usize) -> Option<(usize, Vec<&str>)> {
 /// `name` of an argument written as `name: value`.
 fn arg_name(arg: &str) -> Option<&str> {
     let a = arg.trim_start();
-    let n = a.len() - a.trim_start_matches(|c: char| c.is_alphanumeric() || c == '_' || c == '$').len();
+    let n = a.len()
+        - a.trim_start_matches(|c: char| c.is_alphanumeric() || c == '_' || c == '$')
+            .len();
     (n > 0 && a[n..].trim_start().starts_with(':')).then(|| &a[..n])
 }
 
 /// `f<T>(`: the type arguments sit between the callee and the `(`.
 fn generic_callee(text: &str, callee: Span, paren: u32) -> bool {
     let (end, paren) = (u32::from(callee.end()) as usize, paren as usize);
-    end < paren && text[end..paren].trim_start().starts_with('<') && text[..paren].trim_end().ends_with('>')
+    end < paren
+        && text[end..paren].trim_start().starts_with('<')
+        && text[..paren].trim_end().ends_with('>')
 }
 
 /// Function (and the leading parameters not written in the argument list) whose argument
@@ -687,13 +990,25 @@ fn callee_at(prog: &Program, m: ModuleId, paren: u32) -> Option<(FnId, usize)> {
     let mut fallback: Option<&Expr> = None;
     let mut ctor: Option<FnId> = None;
     walk_module(&md.ast, &mut |e| match &e.kind {
-        ExprKind::Call { callee: c, type_args, .. } if u32::from(c.span.end()) == paren || (!type_args.is_empty() && generic_callee(&md.text, c.span, paren)) => callee = Some(c),
+        ExprKind::Call {
+            callee: c,
+            type_args,
+            ..
+        } if u32::from(c.span.end()) == paren
+            || (!type_args.is_empty() && generic_callee(&md.text, c.span, paren)) =>
+        {
+            callee = Some(c)
+        }
         ExprKind::New { ty, .. } if u32::from(ty.span().end()) == paren => {
             if let Type::Class(c, _) = md.info.ty(e.id) {
                 ctor = prog.classes[c].ctor;
             }
         }
-        _ if u32::from(e.span.end()) == paren && fallback.is_none_or(|f| e.span.len() >= f.span.len()) => fallback = Some(e),
+        _ if u32::from(e.span.end()) == paren
+            && fallback.is_none_or(|f| e.span.len() >= f.span.len()) =>
+        {
+            fallback = Some(e)
+        }
         _ => {}
     });
     if let Some(f) = ctor {
@@ -723,8 +1038,16 @@ fn named_arg_items(prog: &Program, m: ModuleId, p: usize) -> Option<(Vec<Complet
     let positional = args.iter().take_while(|a| arg_name(a).is_none()).count();
     let mut out = Vec::new();
     for (i, pd) in d.params.iter().enumerate().skip(skip) {
-        let is_this = d.locals.get(pd.local).is_some_and(|l| l.kind == LocalKind::This);
-        if pd.rest || is_this || pd.name.is_empty() || i - skip < positional || names.contains(&pd.name.as_str()) {
+        let is_this = d
+            .locals
+            .get(pd.local)
+            .is_some_and(|l| l.kind == LocalKind::This);
+        if pd.rest
+            || is_this
+            || pd.name.is_empty()
+            || i - skip < positional
+            || names.contains(&pd.name.as_str())
+        {
             continue;
         }
         let mut detail = prog.show(&pd.ty);
@@ -749,7 +1072,9 @@ fn named_arg_items(prog: &Program, m: ModuleId, p: usize) -> Option<(Vec<Complet
 pub fn named_arg_completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> {
     let text: &str = &prog.modules[m].text;
     let offset = (offset as usize).min(text.len());
-    named_arg_items(prog, m, ident_start(text, offset)).map(|x| x.0).unwrap_or_default()
+    named_arg_items(prog, m, ident_start(text, offset))
+        .map(|x| x.0)
+        .unwrap_or_default()
 }
 
 /// A documentation comment without its `@param` lines, and the description of each parameter.
@@ -767,7 +1092,11 @@ pub fn split_doc(doc: &str) -> (String, Vec<(String, String)>) {
             }
             let (name, desc) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
             // `[name]` / `[name=default]`: an optional parameter.
-            let name = name.trim_start_matches('[').split(['=', ']']).next().unwrap_or("");
+            let name = name
+                .trim_start_matches('[')
+                .split(['=', ']'])
+                .next()
+                .unwrap_or("");
             let desc = desc.trim_start();
             let desc = desc.strip_prefix("- ").unwrap_or(desc);
             params.push((name.to_string(), desc.to_string()));
@@ -813,11 +1142,21 @@ pub fn signature_help(prog: &Program, m: ModuleId, offset: u32) -> Option<Signat
             label.push_str("new ");
             label.push_str(&prog.class_display(class));
         }
-        _ => label.push_str(if d.name.is_empty() { "(既定メンバー)" } else { &d.name }),
+        _ => label.push_str(if d.name.is_empty() {
+            "(既定メンバー)"
+        } else {
+            &d.name
+        }),
     }
     if !d.type_params.is_empty() {
         label.push('<');
-        label.push_str(&d.type_params.iter().map(|p| p.name.clone()).collect::<Vec<_>>().join(", "));
+        label.push_str(
+            &d.type_params
+                .iter()
+                .map(|p| p.name.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
         label.push('>');
     }
     label.push('(');
@@ -829,7 +1168,11 @@ pub fn signature_help(prog: &Program, m: ModuleId, offset: u32) -> Option<Signat
         }
         let start = utf16(&label);
         label.push_str(&param_text(prog, d, pd));
-        let doc = pdocs.iter().find(|(n, _)| *n == pd.name).map(|x| x.1.clone()).filter(|s| !s.is_empty());
+        let doc = pdocs
+            .iter()
+            .find(|(n, _)| *n == pd.name)
+            .map(|x| x.1.clone())
+            .filter(|s| !s.is_empty());
         params.push(((start, utf16(&label)), doc));
     }
     label.push(')');
@@ -850,9 +1193,19 @@ pub fn signature_help(prog: &Program, m: ModuleId, offset: u32) -> Option<Signat
     if skip == 1 {
         let recv = prog.show(&d.params[0].ty);
         let md = &prog.modules[d.module];
-        doc = format!("（拡張メソッド: `{recv}` に対する `{}` の関数）\n\n{doc}", md.key).trim_end().to_string();
+        doc = format!(
+            "（拡張メソッド: `{recv}` に対する `{}` の関数）\n\n{doc}",
+            md.key
+        )
+        .trim_end()
+        .to_string();
     }
-    Some(SignatureHelp { label, doc: (!doc.is_empty()).then_some(doc), params, active: active.map(|a| a as u32) })
+    Some(SignatureHelp {
+        label,
+        doc: (!doc.is_empty()).then_some(doc),
+        params,
+        active: active.map(|a| a as u32),
+    })
 }
 
 /// The declaration of the type of what is named at `offset` (`textDocument/typeDefinition`).
@@ -863,7 +1216,11 @@ pub fn type_definition(prog: &Program, m: ModuleId, offset: u32) -> Option<(Modu
         Target::Local { func, local } => prog.fns[*func].locals[*local].ty.clone(),
         Target::Global(v) => prog.vars[*v].ty.clone(),
         Target::Fn(f) => match prog.fns[*f].kind {
-            FnKind::Setter { .. } => prog.fns[*f].params.first().map(|p| p.ty.clone()).unwrap_or(Type::Void),
+            FnKind::Setter { .. } => prog.fns[*f]
+                .params
+                .first()
+                .map(|p| p.ty.clone())
+                .unwrap_or(Type::Void),
             FnKind::Ctor { class } => Type::Class(class, Vec::new()),
             _ => prog.fns[*f].ret_ty(),
         },
@@ -883,9 +1240,15 @@ pub fn type_definition(prog: &Program, m: ModuleId, offset: u32) -> Option<(Modu
         };
     }
     match t {
-        Type::Class(c, _) | Type::Ns(NsRef::Class(c)) => Some((prog.classes[*c].module, prog.classes[*c].name_span)),
-        Type::Enum(e) | Type::Ns(NsRef::Enum(e)) => Some((prog.enums[*e].module, prog.enums[*e].name_span)),
-        Type::Struct(s) if prog.structs[*s].kind == StructKind::Named => Some((prog.structs[*s].module, prog.structs[*s].name_span)),
+        Type::Class(c, _) | Type::Ns(NsRef::Class(c)) => {
+            Some((prog.classes[*c].module, prog.classes[*c].name_span))
+        }
+        Type::Enum(e) | Type::Ns(NsRef::Enum(e)) => {
+            Some((prog.enums[*e].module, prog.enums[*e].name_span))
+        }
+        Type::Struct(s) if prog.structs[*s].kind == StructKind::Named => {
+            Some((prog.structs[*s].module, prog.structs[*s].name_span))
+        }
         _ => None,
     }
 }
@@ -893,7 +1256,10 @@ pub fn type_definition(prog: &Program, m: ModuleId, offset: u32) -> Option<(Modu
 /// `query` matches `name` when its characters appear in it in order, ignoring case.
 fn fuzzy(name: &str, query: &str) -> bool {
     let mut chars = name.chars().flat_map(char::to_lowercase);
-    query.chars().flat_map(char::to_lowercase).all(|q| chars.any(|c| c == q))
+    query
+        .chars()
+        .flat_map(char::to_lowercase)
+        .all(|q| chars.any(|c| c == q))
 }
 
 /// The declarations of the project's modules whose name matches `query`
@@ -927,10 +1293,17 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
         walk_module(&md.ast, &mut |e| {
             let end = match &e.kind {
                 // error recovery: `obj.` parses as a member access with an empty name
-                ExprKind::Member { object, name, .. } if name.text.is_empty() || u32::from(name.span.start()) > dot => u32::from(object.span.end()),
+                ExprKind::Member { object, name, .. }
+                    if name.text.is_empty() || u32::from(name.span.start()) > dot =>
+                {
+                    u32::from(object.span.end())
+                }
                 _ => u32::from(e.span.end()),
             };
-            if end == dot && !matches!(&e.kind, ExprKind::Member { name, .. } if name.text.is_empty()) && recv.is_none_or(|r| e.span.len() >= r.span.len()) {
+            if end == dot
+                && !matches!(&e.kind, ExprKind::Member { name, .. } if name.text.is_empty())
+                && recv.is_none_or(|r| e.span.len() >= r.span.len())
+            {
                 recv = Some(e);
             }
         });
@@ -949,7 +1322,12 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
     }
     if let Some(f) = fn_at(prog, m, offset as u32) {
         for l in &prog.fns[f].locals {
-            if !l.name.is_empty() && !l.name.starts_with("ras$") && u32::from(l.span.start()) < offset as u32 && !out.iter().any(|o: &Completion| o.label == l.name) && l.kind != LocalKind::This {
+            if !l.name.is_empty()
+                && !l.name.starts_with("ras$")
+                && u32::from(l.span.start()) < offset as u32
+                && !out.iter().any(|o: &Completion| o.label == l.name)
+                && l.kind != LocalKind::This
+            {
                 out.push(item(&l.name, kind::VARIABLE, prog.show(&l.ty), None, 0));
             }
         }
@@ -968,11 +1346,18 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
     // Exports of modules not imported yet (spec §16.2.1): accepting one adds the import.
     let mut offered: Vec<&str> = Vec::new();
     for (t, name, sym) in importable(prog, m) {
-        if md.scope.contains_key(name) || offered.contains(&name.as_str()) || matches!(sym, Sym::Fn(f) if prog.fns[*f].is_extension) {
+        if md.scope.contains_key(name)
+            || offered.contains(&name.as_str())
+            || matches!(sym, Sym::Fn(f) if prog.fns[*f].is_extension)
+        {
             continue;
         }
         if let Some(mut c) = sym_item(prog, name, sym, 3) {
-            c.detail = format!("{}  — \"{}\" からインポート", c.detail, import_source(prog, m, t));
+            c.detail = format!(
+                "{}  — \"{}\" からインポート",
+                c.detail,
+                import_source(prog, m, t)
+            );
             c.import = import_edit(prog, m, t, name);
             offered.push(name);
             out.push(c);
@@ -987,7 +1372,10 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
     for f in intrinsics::GLOBAL_FNS {
         out.push(item(f, kind::FUNCTION, "(組み込み)", None, 2));
     }
-    for k in KEYWORDS.iter().chain(crate::collect::PRIMITIVE_NAMES.iter()) {
+    for k in KEYWORDS
+        .iter()
+        .chain(crate::collect::PRIMITIVE_NAMES.iter())
+    {
         out.push(item(k, kind::KEYWORD, "", None, 4));
     }
     out
@@ -1023,31 +1411,83 @@ pub fn symbols(prog: &Program, m: ModuleId) -> Vec<Symbol> {
             continue;
         }
         let span = d.decl.as_ref().map(|x| x.span).unwrap_or(d.name_span);
-        out.push(Symbol { name: d.name.clone(), kind: symbol_kind::FUNCTION, detail: signature(prog, f), span, name_span: d.name_span, children: Vec::new() });
+        out.push(Symbol {
+            name: d.name.clone(),
+            kind: symbol_kind::FUNCTION,
+            detail: signature(prog, f),
+            span,
+            name_span: d.name_span,
+            children: Vec::new(),
+        });
     }
     for &c in &md.classes {
         let d = &prog.classes[c];
         let mut children = Vec::new();
         for fl in &d.fields {
-            children.push(Symbol { name: fl.name.clone(), kind: symbol_kind::FIELD, detail: prog.show(&fl.ty), span: fl.span, name_span: fl.span, children: Vec::new() });
+            children.push(Symbol {
+                name: fl.name.clone(),
+                kind: symbol_kind::FIELD,
+                detail: prog.show(&fl.ty),
+                span: fl.span,
+                name_span: fl.span,
+                children: Vec::new(),
+            });
         }
         for &me in d.methods.iter().chain(d.ctor.iter()) {
             let fd = &prog.fns[me];
             let span = fd.decl.as_ref().map(|x| x.span).unwrap_or(fd.name_span);
-            children.push(Symbol { name: fd.name.clone(), kind: symbol_kind::METHOD, detail: signature(prog, me), span, name_span: fd.name_span, children: Vec::new() });
+            children.push(Symbol {
+                name: fd.name.clone(),
+                kind: symbol_kind::METHOD,
+                detail: signature(prog, me),
+                span,
+                name_span: fd.name_span,
+                children: Vec::new(),
+            });
         }
-        let span = children.iter().fold(d.name_span, |acc, ch| acc.cover(ch.span));
-        let kind = if d.kind == ClassKind::Class { symbol_kind::CLASS } else { symbol_kind::INTERFACE };
-        out.push(Symbol { name: d.name.clone(), kind, detail: String::new(), span, name_span: d.name_span, children });
+        let span = children
+            .iter()
+            .fold(d.name_span, |acc, ch| acc.cover(ch.span));
+        let kind = if d.kind == ClassKind::Class {
+            symbol_kind::CLASS
+        } else {
+            symbol_kind::INTERFACE
+        };
+        out.push(Symbol {
+            name: d.name.clone(),
+            kind,
+            detail: String::new(),
+            span,
+            name_span: d.name_span,
+            children,
+        });
     }
     for &e in &md.enums {
         let d = &prog.enums[e];
-        out.push(Symbol { name: d.name.clone(), kind: symbol_kind::ENUM, detail: String::new(), span: d.name_span, name_span: d.name_span, children: Vec::new() });
+        out.push(Symbol {
+            name: d.name.clone(),
+            kind: symbol_kind::ENUM,
+            detail: String::new(),
+            span: d.name_span,
+            name_span: d.name_span,
+            children: Vec::new(),
+        });
     }
     for &v in &md.vars {
         let d = &prog.vars[v];
-        let kind = if d.is_const { symbol_kind::CONSTANT } else { symbol_kind::VARIABLE };
-        out.push(Symbol { name: d.name.clone(), kind, detail: prog.show(&d.ty), span: d.name_span, name_span: d.name_span, children: Vec::new() });
+        let kind = if d.is_const {
+            symbol_kind::CONSTANT
+        } else {
+            symbol_kind::VARIABLE
+        };
+        out.push(Symbol {
+            name: d.name.clone(),
+            kind,
+            detail: prog.show(&d.ty),
+            span: d.name_span,
+            name_span: d.name_span,
+            children: Vec::new(),
+        });
     }
     out.sort_by_key(|s| u32::from(s.span.start()));
     out

@@ -3,7 +3,10 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use ras_syntax::ast::{self, BinaryOp, Expr, ExprId, ExprKind, Ident, PassMode, Span, Stmt, StmtKind, UnaryOp, Visibility};
+use ras_syntax::ast::{
+    self, BinaryOp, Expr, ExprId, ExprKind, Ident, PassMode, Span, Stmt, StmtKind, UnaryOp,
+    Visibility,
+};
 
 use crate::collect::{const_int, resolve_type};
 use crate::diag::{Diagnostic, Severity};
@@ -67,8 +70,19 @@ type Facts = Vec<(LocalId, Type)>;
 
 /// A member found on one member type of a union.
 enum UnionMember {
-    Value { res: Res, ty: Type, writable: bool, owner: ClassId, public: bool },
-    Method { f: FnId, env: HashMap<String, Type>, owner: ClassId, public: bool },
+    Value {
+        res: Res,
+        ty: Type,
+        writable: bool,
+        owner: ClassId,
+        public: bool,
+    },
+    Method {
+        f: FnId,
+        env: HashMap<String, Type>,
+        owner: ClassId,
+        public: bool,
+    },
 }
 
 pub(crate) struct Checker<'a> {
@@ -83,7 +97,11 @@ enum Access {
     /// Has a value of this type (variable, field, property, enum member).
     Value(Type),
     /// A function or method; `recv` tells how the receiver is passed.
-    Func { f: FnId, env: HashMap<String, Type>, recv: Recv },
+    Func {
+        f: FnId,
+        env: HashMap<String, Type>,
+        recv: Recv,
+    },
     Intrinsic(Intr),
     Dynamic,
     Error,
@@ -97,7 +115,12 @@ enum Recv {
 }
 
 pub fn check(prog: &mut Program) {
-    let mut ck = Checker { prog, module: 0, fx: FnCtx::default(), in_progress: HashSet::new() };
+    let mut ck = Checker {
+        prog,
+        module: 0,
+        fx: FnCtx::default(),
+        in_progress: HashSet::new(),
+    };
     for f in 0..ck.prog.fns.len() {
         if matches!(ck.prog.fns[f].kind, FnKind::Main | FnKind::ModInit) {
             ck.ensure_fn(f);
@@ -117,7 +140,8 @@ pub fn check(prog: &mut Program) {
 }
 
 fn has_named(args: &[Expr]) -> bool {
-    args.iter().any(|a| matches!(a.kind, ExprKind::NamedArg { .. }))
+    args.iter()
+        .any(|a| matches!(a.kind, ExprKind::NamedArg { .. }))
 }
 
 /// The value of an argument, without its name.
@@ -135,13 +159,25 @@ fn is_lambda(e: &Expr) -> bool {
 impl Checker<'_> {
     // ------------------------------------------------------------------ plumbing
 
-    fn diag(&mut self, severity: Severity, span: Span, code: &'static str, message: impl Into<String>) {
+    fn diag(
+        &mut self,
+        severity: Severity,
+        span: Span,
+        code: &'static str,
+        message: impl Into<String>,
+    ) {
         // Tests only run as JavaScript, where an arrow function is a closure: the hooks and
         // tests of a `describe` share its variables (spec §14.12.3).
         if matches!(code, "E0320" | "E0322") && self.prog.modules[self.module].is_test() {
             return;
         }
-        self.prog.diagnostics.push(Diagnostic { severity, code, message: message.into(), module: Some(self.module), span });
+        self.prog.diagnostics.push(Diagnostic {
+            severity,
+            code,
+            message: message.into(),
+            module: Some(self.module),
+            span,
+        });
     }
 
     fn err(&mut self, span: Span, code: &'static str, message: impl Into<String>) {
@@ -164,7 +200,6 @@ impl Checker<'_> {
         self.info().res.insert(id, res);
     }
 
-
     // ------------------------------------------------------------------ type relations
 
     pub(crate) fn assignable(&self, from: &Type, to: &Type) -> bool {
@@ -183,7 +218,10 @@ impl Checker<'_> {
             (Union(fs), _) => fs.iter().all(|f| self.assignable(f, to)),
             (Null, Union(ts)) => ts.iter().any(|t| t.is_object()),
             (_, Union(ts)) => ts.iter().any(|t| self.assignable(from, t)),
-            (Null, t) => t.is_object() || matches!(t, Param(p) if self.constraint_of(p) == Constraint::ObjectType),
+            (Null, t) => {
+                t.is_object()
+                    || matches!(t, Param(p) if self.constraint_of(p) == Constraint::ObjectType)
+            }
             (Byte, Short | Int | Long | Float | Double | Currency | Decimal) => true,
             (Short, Int | Long | Float | Double | Currency | Decimal) => true,
             (Int, Long | Float | Double | Currency | Decimal | Ptr) => true,
@@ -193,14 +231,23 @@ impl Checker<'_> {
             (Byte | Short | Int, Enum(_)) => true,
             (Str, WStr | AStr) => true,
             // The element type of a host collection (`Excel.Sheets<T>`) is a typing aid: the COM interface is the same.
-            (Class(a, _), Class(b, _)) if a == b && self.prog.classes[*a].kind == ClassKind::Host => true,
-            (Class(a, aa), Class(b, bb)) => (a == b && aa == bb) || (a != b && self.prog.class_conforms(*a, *b)),
+            (Class(a, _), Class(b, _))
+                if a == b && self.prog.classes[*a].kind == ClassKind::Host =>
+            {
+                true
+            }
+            (Class(a, aa), Class(b, bb)) => {
+                (a == b && aa == bb) || (a != b && self.prog.class_conforms(*a, *b))
+            }
             (Class(..) | Map(..) | Func(_), Object) => true,
             (Object, Class(..) | Map(..) | Func(_)) => true,
             (Array(a), Array(b)) => a.is_error() || b.is_error(),
             (Func(a), Func(b)) => {
                 a.params.len() <= b.params.len()
-                    && a.params.iter().zip(b.params.iter()).all(|(x, y)| self.assignable(y, x))
+                    && a.params
+                        .iter()
+                        .zip(b.params.iter())
+                        .all(|(x, y)| self.assignable(y, x))
                     && (b.ret == Void || self.assignable(&a.ret, &b.ret))
             }
             _ => false,
@@ -208,7 +255,12 @@ impl Checker<'_> {
     }
 
     fn constraint_of(&self, param: &str) -> Constraint {
-        self.fx.type_params.iter().find(|p| p.name == param).map(|p| p.constraint.clone()).unwrap_or(Constraint::None)
+        self.fx
+            .type_params
+            .iter()
+            .find(|p| p.name == param)
+            .map(|p| p.constraint.clone())
+            .unwrap_or(Constraint::None)
     }
 
     fn satisfies(&self, ty: &Type, c: &Constraint) -> bool {
@@ -221,16 +273,22 @@ impl Checker<'_> {
                 (ty.is_numeric() || matches!(ty, Type::Str | Type::Date))
                     || matches!(ty, Type::Param(p) if matches!(self.constraint_of(p), Constraint::Comparable | Constraint::Numeric))
             }
-            Constraint::Numeric => ty.is_numeric() || matches!(ty, Type::Param(p) if self.constraint_of(p) == Constraint::Numeric),
+            Constraint::Numeric => {
+                ty.is_numeric()
+                    || matches!(ty, Type::Param(p) if self.constraint_of(p) == Constraint::Numeric)
+            }
             Constraint::ObjectType => {
-                (ty.is_object() && *ty != Type::Null) || matches!(ty, Type::Param(p) if self.constraint_of(p) == Constraint::ObjectType)
+                (ty.is_object() && *ty != Type::Null)
+                    || matches!(ty, Type::Param(p) if self.constraint_of(p) == Constraint::ObjectType)
             }
             Constraint::Type(t) => self.assignable(ty, t),
         }
     }
 
     fn is_numeric(&self, t: &Type) -> bool {
-        t.is_numeric() || matches!(t, Type::Any | Type::Error) || matches!(t, Type::Param(p) if self.constraint_of(p) == Constraint::Numeric)
+        t.is_numeric()
+            || matches!(t, Type::Any | Type::Error)
+            || matches!(t, Type::Param(p) if self.constraint_of(p) == Constraint::Numeric)
     }
 
     /// C#-style binary numeric promotion (spec §2.3). `None` when the mix needs an explicit cast.
@@ -269,7 +327,13 @@ impl Checker<'_> {
         })
     }
 
-    fn unify(&self, pattern: &Type, actual: &Type, env: &mut HashMap<String, Type>, tparams: &[TypeParamDef]) {
+    fn unify(
+        &self,
+        pattern: &Type,
+        actual: &Type,
+        env: &mut HashMap<String, Type>,
+        tparams: &[TypeParamDef],
+    ) {
         match (pattern, actual) {
             (Type::Param(n), a) if tparams.iter().any(|p| &p.name == n) => {
                 if matches!(a, Type::Null | Type::Error | Type::Void | Type::Ns(_)) {
@@ -324,8 +388,13 @@ impl Checker<'_> {
             }
         }
         let hint = if from.is_numeric() && to.is_numeric() {
-            format!("（縮小変換です。`as {}` で明示的に変換してください）", self.show(to))
-        } else if matches!(to, Type::Str) && (from.is_numeric() || matches!(from, Type::Bool | Type::Date)) {
+            format!(
+                "（縮小変換です。`as {}` で明示的に変換してください）",
+                self.show(to)
+            )
+        } else if matches!(to, Type::Str)
+            && (from.is_numeric() || matches!(from, Type::Bool | Type::Date))
+        {
             "（`.toString()` かテンプレート文字列 `${x}` で文字列に変換してください）".to_string()
         } else if from.has_struct() && matches!(to, Type::Any | Type::Object) {
             "（構造体は `any` に入れられません。フィールドを個別に渡すか、参照が必要なら `class` を使ってください）".to_string()
@@ -334,21 +403,39 @@ impl Checker<'_> {
         } else {
             String::new()
         };
-        self.err(e.span, "E0301", format!("型 `{}` を `{}` に代入できません{hint}", self.show(from), self.show(to)));
+        self.err(
+            e.span,
+            "E0301",
+            format!(
+                "型 `{}` を `{}` に代入できません{hint}",
+                self.show(from),
+                self.show(to)
+            ),
+        );
     }
 
     /// A union stored where only some of its members fit (`const ws: Excel.Worksheet = activeSheet`):
     /// allowed like VBA's `Set ws = ActiveSheet`, which checks at run time, with a warning (spec §2.6.2).
     fn implicit_narrowing(&mut self, span: Span, from: &Type, to: &Type) -> bool {
-        let Some(ms) = from.union_members() else { return false };
+        let Some(ms) = from.union_members() else {
+            return false;
+        };
         if to.has_struct() || matches!(to, Type::Void | Type::Ns(_)) {
             return false;
         }
-        let rest: Vec<String> = ms.iter().filter(|m| !self.assignable(m, to)).map(|m| self.show(m)).collect();
+        let rest: Vec<String> = ms
+            .iter()
+            .filter(|m| !self.assignable(m, to))
+            .map(|m| self.show(m))
+            .collect();
         if rest.len() == ms.len() {
             return false;
         }
-        let what = if to.is_object() { "実行時エラー（型が一致しません）になります" } else { "VBA の暗黙の型変換になり、変換できなければ実行時エラーになります" };
+        let what = if to.is_object() {
+            "実行時エラー（型が一致しません）になります"
+        } else {
+            "VBA の暗黙の型変換になり、変換できなければ実行時エラーになります"
+        };
         let (shown_from, shown_to) = (self.show(from), self.show(to));
         self.warn(
             span,
@@ -366,13 +453,29 @@ impl Checker<'_> {
         } else if let Some(p) = self.promote(a, b) {
             p
         } else {
-            let unionable = |t: &Type| t.is_value() && !t.has_struct() && !t.contains_param() && !matches!(t, Type::Null | Type::WStr | Type::AStr);
+            let unionable = |t: &Type| {
+                t.is_value()
+                    && !t.has_struct()
+                    && !t.contains_param()
+                    && !matches!(t, Type::Null | Type::WStr | Type::AStr)
+            };
             let hint = if unionable(a) && unionable(b) {
-                format!("（どちらの型も受けるには `{}` のようにユニオン型の型注釈を付けてください）", self.show(&Type::union([a.clone(), b.clone()])))
+                format!(
+                    "（どちらの型も受けるには `{}` のようにユニオン型の型注釈を付けてください）",
+                    self.show(&Type::union([a.clone(), b.clone()]))
+                )
             } else {
                 String::new()
             };
-            self.err(span, "E0302", format!("型が一致しません: `{}` と `{}`{hint}", self.show(a), self.show(b)));
+            self.err(
+                span,
+                "E0302",
+                format!(
+                    "型が一致しません: `{}` と `{}`{hint}",
+                    self.show(a),
+                    self.show(b)
+                ),
+            );
             Type::Error
         }
     }
@@ -389,13 +492,30 @@ impl Checker<'_> {
 
     fn declare_local(&mut self, name: &Ident, ty: Type, kind: LocalKind) -> LocalId {
         let id = self.fx.locals.len();
-        self.fx.locals.push(LocalDef { name: name.text.clone(), ty, kind, byref: false, reassigned: false, captured: false, span: name.span, used: false });
+        self.fx.locals.push(LocalDef {
+            name: name.text.clone(),
+            ty,
+            kind,
+            byref: false,
+            reassigned: false,
+            captured: false,
+            span: name.span,
+            used: false,
+        });
         if name.text.is_empty() {
             return id;
         }
-        let dup = self.fx.scopes.last().is_some_and(|s| s.names.contains_key(&name.text));
+        let dup = self
+            .fx
+            .scopes
+            .last()
+            .is_some_and(|s| s.names.contains_key(&name.text));
         if dup {
-            self.err(name.span, "E0101", format!("`{}` はこのスコープで既に宣言されています", name.text));
+            self.err(
+                name.span,
+                "E0101",
+                format!("`{}` はこのスコープで既に宣言されています", name.text),
+            );
         }
         if let Some(s) = self.fx.scopes.last_mut() {
             s.names.insert(name.text.clone(), id);
@@ -420,7 +540,11 @@ impl Checker<'_> {
     }
 
     fn lookup_sym(&self, name: &str) -> Option<Sym> {
-        self.prog.modules[self.module].scope.get(name).or_else(|| self.prog.globals.get(name)).cloned()
+        self.prog.modules[self.module]
+            .scope
+            .get(name)
+            .or_else(|| self.prog.globals.get(name))
+            .cloned()
     }
 
     fn current_lambda(&self) -> Option<ExprId> {
@@ -447,13 +571,23 @@ impl Checker<'_> {
         let def = self.prog.fns[f].clone();
         self.module = def.module;
         let (class, is_static) = match def.kind {
-            FnKind::Method { class, is_static } | FnKind::Getter { class, is_static } | FnKind::Setter { class, is_static } => (Some(class), is_static),
+            FnKind::Method { class, is_static }
+            | FnKind::Getter { class, is_static }
+            | FnKind::Setter { class, is_static } => (Some(class), is_static),
             FnKind::Ctor { class } => (Some(class), false),
             // A form's code-behind: `this` is the form (spec §14.11.2).
-            FnKind::Free | FnKind::ModInit if !def.is_extension => (self.prog.modules[def.module].form.as_ref().and_then(|f| f.class), false),
+            FnKind::Free | FnKind::ModInit if !def.is_extension => (
+                self.prog.modules[def.module]
+                    .form
+                    .as_ref()
+                    .and_then(|f| f.class),
+                false,
+            ),
             _ => (None, false),
         };
-        let mut type_params = class.map(|c| self.prog.classes[c].type_params.clone()).unwrap_or_default();
+        let mut type_params = class
+            .map(|c| self.prog.classes[c].type_params.clone())
+            .unwrap_or_default();
         type_params.extend(def.type_params.iter().cloned());
         self.fx = FnCtx {
             fn_id: Some(f),
@@ -470,9 +604,17 @@ impl Checker<'_> {
             if p.is_this {
                 self.fx.this_local = Some(i);
             } else if !p.name.text.is_empty()
-                && self.fx.scopes[0].names.insert(p.name.text.clone(), i).is_some() {
-                    self.err(p.name.span, "E0101", format!("引数 `{}` が重複しています", p.name.text));
-                }
+                && self.fx.scopes[0]
+                    .names
+                    .insert(p.name.text.clone(), i)
+                    .is_some()
+            {
+                self.err(
+                    p.name.span,
+                    "E0101",
+                    format!("引数 `{}` が重複しています", p.name.text),
+                );
+            }
             let offset = u32::from(p.name.span.start());
             self.info().decl_locals.insert(offset, i);
         }
@@ -490,8 +632,19 @@ impl Checker<'_> {
             Some(t) => t.clone(),
             None => self.fx.inferred.clone().unwrap_or(Type::Void),
         };
-        if ret != Type::Void && !ret.is_error() && !matches!(def.kind, FnKind::Ctor { .. }) && !always_returns(&body.stmts) {
-            self.warn(def.name_span, "W0310", format!("`{}`: 値を返さずに終了する経路があります（その場合は型の既定値が返ります）", def.name));
+        if ret != Type::Void
+            && !ret.is_error()
+            && !matches!(def.kind, FnKind::Ctor { .. })
+            && !always_returns(&body.stmts)
+        {
+            self.warn(
+                def.name_span,
+                "W0310",
+                format!(
+                    "`{}`: 値を返さずに終了する経路があります（その場合は型の既定値が返ります）",
+                    def.name
+                ),
+            );
         }
         for (local, span) in std::mem::take(&mut self.fx.captures) {
             let l = &self.fx.locals[local];
@@ -522,7 +675,11 @@ impl Checker<'_> {
         if self.prog.fns[f].ret.is_none() {
             if self.in_progress.contains(&f) {
                 let name = self.prog.fns[f].name.clone();
-                self.err(span, "E0330", format!("再帰する関数 `{name}` には戻り値の型注釈が必要です"));
+                self.err(
+                    span,
+                    "E0330",
+                    format!("再帰する関数 `{name}` には戻り値の型注釈が必要です"),
+                );
                 return Type::Error;
             }
             self.ensure_fn(f);
@@ -534,7 +691,9 @@ impl Checker<'_> {
         if self.prog.vars[v].ty == Type::Void {
             // Inferred from the initializer, which runs in the module's Main / initializer.
             let m = self.prog.vars[v].module;
-            let init = self.prog.modules[m].main_fn.or(self.prog.modules[m].init_fn);
+            let init = self.prog.modules[m]
+                .main_fn
+                .or(self.prog.modules[m].init_fn);
             match init {
                 Some(f) if !self.in_progress.contains(&f) => self.ensure_fn(f),
                 _ => {}
@@ -556,7 +715,13 @@ impl Checker<'_> {
         self.module = class.module;
         for (i, field) in class.fields.iter().enumerate() {
             let Some(init) = &field.init else { continue };
-            self.fx = FnCtx { class: Some(c), is_static: field.is_static, type_params: class.type_params.clone(), in_field_init: true, ..Default::default() };
+            self.fx = FnCtx {
+                class: Some(c),
+                is_static: field.is_static,
+                type_params: class.type_params.clone(),
+                in_field_init: true,
+                ..Default::default()
+            };
             self.push_scope();
             let expect = (field.ty != Type::Void).then(|| field.ty.clone());
             let t = self.value(init, expect.as_ref());
@@ -564,9 +729,14 @@ impl Checker<'_> {
                 Some(e) => self.coerce(init, &t, &e),
                 None => {
                     if t == Type::Null {
-                        self.err(init.span, "E0132", "`null` で初期化するフィールドには型注釈が必要です");
+                        self.err(
+                            init.span,
+                            "E0132",
+                            "`null` で初期化するフィールドには型注釈が必要です",
+                        );
                     }
-                    self.prog.classes[c].fields[i].ty = if t == Type::Null { Type::Error } else { t };
+                    self.prog.classes[c].fields[i].ty =
+                        if t == Type::Null { Type::Error } else { t };
                 }
             }
             self.fx = FnCtx::default();
@@ -611,14 +781,23 @@ impl Checker<'_> {
         }
         self.module = class.module;
         for iface in &class.implements {
-            let Type::Class(i, iargs) = iface else { continue };
+            let Type::Class(i, iargs) = iface else {
+                continue;
+            };
             let env = self.prog.class_env(*i, iargs);
             let idef = self.prog.classes[*i].clone();
             for &m in &idef.methods {
                 let want = self.prog.fns[m].clone();
                 let found = class.methods.iter().copied().find(|&f| {
                     let d = &self.prog.fns[f];
-                    d.name == want.name && matches!(d.kind, FnKind::Method { is_static: false, .. })
+                    d.name == want.name
+                        && matches!(
+                            d.kind,
+                            FnKind::Method {
+                                is_static: false,
+                                ..
+                            }
+                        )
                 });
                 match found {
                     None => self.err(class.name_span, "E0340", format!("クラス `{}` はインターフェイス `{}` のメソッド `{}` を実装していません", class.name, idef.name, want.name)),
@@ -637,8 +816,14 @@ impl Checker<'_> {
                 }
             }
             for field in &idef.fields {
-                let ok = class.fields.iter().any(|f| f.name == field.name && f.ty == field.ty.subst(&env) && f.vis == Visibility::Public)
-                    || class.methods.iter().any(|&f| self.prog.fns[f].name == field.name && matches!(self.prog.fns[f].kind, FnKind::Getter { .. }));
+                let ok = class.fields.iter().any(|f| {
+                    f.name == field.name
+                        && f.ty == field.ty.subst(&env)
+                        && f.vis == Visibility::Public
+                }) || class.methods.iter().any(|&f| {
+                    self.prog.fns[f].name == field.name
+                        && matches!(self.prog.fns[f].kind, FnKind::Getter { .. })
+                });
                 if !ok {
                     self.err(class.name_span, "E0340", format!("クラス `{}` はインターフェイス `{}` のプロパティ `{}` を実装していません", class.name, idef.name, field.name));
                 }
@@ -666,7 +851,9 @@ impl Checker<'_> {
                     let (t, f) = self.guard_facts(cond, &Vec::new());
                     let facts = if then_exits { f } else { t };
                     let rest = &stmts[i + 1..];
-                    let facts = self.stable_facts(facts, &mut |name| rest.iter().any(|r| assigns_in_stmt(r, name)));
+                    let facts = self.stable_facts(facts, &mut |name| {
+                        rest.iter().any(|r| assigns_in_stmt(r, name))
+                    });
                     self.fx.narrowed.extend(facts);
                 }
             }
@@ -675,7 +862,12 @@ impl Checker<'_> {
     }
 
     /// Runs `f` with `facts` in effect (those whose local `region` does not assign).
-    fn with_facts<R>(&mut self, facts: Facts, assigned: &mut dyn FnMut(&str) -> bool, f: impl FnOnce(&mut Self) -> R) -> R {
+    fn with_facts<R>(
+        &mut self,
+        facts: Facts,
+        assigned: &mut dyn FnMut(&str) -> bool,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
         let facts = self.stable_facts(facts, assigned);
         let mark = self.fx.narrowed.len();
         self.fx.narrowed.extend(facts);
@@ -686,18 +878,31 @@ impl Checker<'_> {
 
     /// Drops the facts about locals that are assigned in the region they would apply to.
     fn stable_facts(&self, facts: Facts, assigned: &mut dyn FnMut(&str) -> bool) -> Facts {
-        facts.into_iter().filter(|(l, _)| !assigned(&self.fx.locals[*l].name)).collect()
+        facts
+            .into_iter()
+            .filter(|(l, _)| !assigned(&self.fx.locals[*l].name))
+            .collect()
     }
 
     // ------------------------------------------------------------------ narrowing (spec §2.6.4)
 
     /// The current type of a local: its declared type unless narrowed here.
     fn local_ty(&self, l: LocalId) -> Type {
-        self.fx.narrowed.iter().rev().find(|(x, _)| *x == l).map(|(_, t)| t.clone()).unwrap_or_else(|| self.fx.locals[l].ty.clone())
+        self.fx
+            .narrowed
+            .iter()
+            .rev()
+            .find(|(x, _)| *x == l)
+            .map(|(_, t)| t.clone())
+            .unwrap_or_else(|| self.fx.locals[l].ty.clone())
     }
 
     fn fact_ty(&self, env: &Facts, l: LocalId) -> Type {
-        env.iter().rev().find(|(x, _)| *x == l).map(|(_, t)| t.clone()).unwrap_or_else(|| self.local_ty(l))
+        env.iter()
+            .rev()
+            .find(|(x, _)| *x == l)
+            .map(|(_, t)| t.clone())
+            .unwrap_or_else(|| self.local_ty(l))
     }
 
     /// A local variable or parameter that a type guard can narrow.
@@ -707,7 +912,15 @@ impl Checker<'_> {
             return None;
         }
         match self.prog.modules[self.module].info.res.get(&inner.id) {
-            Some(Res::Local(l)) if self.fx.locals.get(*l).is_some_and(|d| d.kind != LocalKind::This) => Some(*l),
+            Some(Res::Local(l))
+                if self
+                    .fx
+                    .locals
+                    .get(*l)
+                    .is_some_and(|d| d.kind != LocalKind::This) =>
+            {
+                Some(*l)
+            }
             _ => None,
         }
     }
@@ -717,17 +930,28 @@ impl Checker<'_> {
         let none = || (Vec::new(), Vec::new());
         match &cond.kind {
             ExprKind::Paren(inner) => self.guard_facts(inner, env),
-            ExprKind::Unary { op: UnaryOp::Not, operand } => {
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => {
                 let (t, f) = self.guard_facts(operand, env);
                 (f, t)
             }
-            ExprKind::Binary { op: BinaryOp::And, lhs, rhs } => {
+            ExprKind::Binary {
+                op: BinaryOp::And,
+                lhs,
+                rhs,
+            } => {
                 let (ta, _) = self.guard_facts(lhs, env);
                 let env2: Facts = env.iter().cloned().chain(ta.iter().cloned()).collect();
                 let (tb, _) = self.guard_facts(rhs, &env2);
                 (ta.into_iter().chain(tb).collect(), Vec::new())
             }
-            ExprKind::Binary { op: BinaryOp::Or, lhs, rhs } => {
+            ExprKind::Binary {
+                op: BinaryOp::Or,
+                lhs,
+                rhs,
+            } => {
                 let (ta, fa) = self.guard_facts(lhs, env);
                 let env2: Facts = env.iter().cloned().chain(fa.iter().cloned()).collect();
                 let (tb, fb) = self.guard_facts(rhs, &env2);
@@ -741,32 +965,71 @@ impl Checker<'_> {
                 let t = locals
                     .into_iter()
                     .map(|l| {
-                        let a = ta.iter().rev().find(|(x, _)| *x == l).map(|(_, t)| t.clone()).unwrap_or_else(|| self.fact_ty(env, l));
-                        let b = tb.iter().rev().find(|(x, _)| *x == l).map(|(_, t)| t.clone()).unwrap_or_else(|| self.fact_ty(&env2, l));
+                        let a = ta
+                            .iter()
+                            .rev()
+                            .find(|(x, _)| *x == l)
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or_else(|| self.fact_ty(env, l));
+                        let b = tb
+                            .iter()
+                            .rev()
+                            .find(|(x, _)| *x == l)
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or_else(|| self.fact_ty(&env2, l));
                         (l, Type::union([a, b]))
                     })
                     .collect();
                 (t, fa.into_iter().chain(fb).collect())
             }
             ExprKind::InstanceOf { expr, .. } => {
-                let (Some(l), Some(target)) = (self.guarded_local(expr), self.fx.instanceof_types.get(&cond.id)) else { return none() };
+                let (Some(l), Some(target)) = (
+                    self.guarded_local(expr),
+                    self.fx.instanceof_types.get(&cond.id),
+                ) else {
+                    return none();
+                };
                 if !matches!(target, Type::Class(..)) {
                     return none();
                 }
                 let cur = self.fact_ty(env, l);
                 let t = vec![(l, self.narrow_to(&cur, target))];
-                let f = self.narrow_away(&cur, |m| self.is_subtype(m, target)).map(|ty| vec![(l, ty)]).unwrap_or_default();
+                let f = self
+                    .narrow_away(&cur, |m| self.is_subtype(m, target))
+                    .map(|ty| vec![(l, ty)])
+                    .unwrap_or_default();
                 (t, f)
             }
-            ExprKind::Binary { op: op @ (BinaryOp::Eq | BinaryOp::Ne), lhs, rhs } => {
+            ExprKind::Binary {
+                op: op @ (BinaryOp::Eq | BinaryOp::Ne),
+                lhs,
+                rhs,
+            } => {
                 let guard = |a: &Expr, b: &Expr| match (&a.peel().kind, &b.peel().kind) {
-                    (ExprKind::Unary { op: UnaryOp::TypeOf, operand }, ExprKind::Str(name)) => self.guarded_local(operand).map(|l| (l, name.clone())),
+                    (
+                        ExprKind::Unary {
+                            op: UnaryOp::TypeOf,
+                            operand,
+                        },
+                        ExprKind::Str(name),
+                    ) => self.guarded_local(operand).map(|l| (l, name.clone())),
                     _ => None,
                 };
-                let Some((l, name)) = guard(lhs, rhs).or_else(|| guard(rhs, lhs)) else { return none() };
+                let Some((l, name)) = guard(lhs, rhs).or_else(|| guard(rhs, lhs)) else {
+                    return none();
+                };
                 let cur = self.fact_ty(env, l);
-                let t = self.narrow_typeof(&cur, &name).map(|ty| vec![(l, ty)]).unwrap_or_default();
-                let f = self.narrow_away(&cur, |m| self.type_name_of(m).is_some_and(|n| n.eq_ignore_ascii_case(&name))).map(|ty| vec![(l, ty)]).unwrap_or_default();
+                let t = self
+                    .narrow_typeof(&cur, &name)
+                    .map(|ty| vec![(l, ty)])
+                    .unwrap_or_default();
+                let f = self
+                    .narrow_away(&cur, |m| {
+                        self.type_name_of(m)
+                            .is_some_and(|n| n.eq_ignore_ascii_case(&name))
+                    })
+                    .map(|ty| vec![(l, ty)])
+                    .unwrap_or_default();
                 if *op == BinaryOp::Eq {
                     (t, f)
                 } else {
@@ -824,7 +1087,14 @@ impl Checker<'_> {
     fn narrow_typeof(&self, cur: &Type, name: &str) -> Option<Type> {
         match cur {
             Type::Union(ms) => {
-                let kept: Vec<Type> = ms.iter().filter(|m| self.type_name_of(m).is_some_and(|n| n.eq_ignore_ascii_case(name))).cloned().collect();
+                let kept: Vec<Type> = ms
+                    .iter()
+                    .filter(|m| {
+                        self.type_name_of(m)
+                            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+                    })
+                    .cloned()
+                    .collect();
                 (!kept.is_empty()).then(|| Type::union(kept))
             }
             Type::Any => type_of_type_name(name),
@@ -836,7 +1106,9 @@ impl Checker<'_> {
     fn type_name_of(&self, t: &Type) -> Option<String> {
         Some(match t {
             // Only a host type's name is fixed: a RAS class may be renamed in VBA (`Circle` → `Circle_`).
-            Type::Class(c, _) if self.prog.classes[*c].kind == ClassKind::Host => self.prog.classes[*c].name.clone(),
+            Type::Class(c, _) if self.prog.classes[*c].kind == ClassKind::Host => {
+                self.prog.classes[*c].name.clone()
+            }
             Type::Class(..) => return None,
             Type::Map(..) => "Dictionary".into(),
             Type::Enum(_) => "Long".into(),
@@ -844,16 +1116,19 @@ impl Checker<'_> {
             // `TypeName` of an array: the element type and `()` (`"Variant()"`, `"String()"`).
             Type::Array(e) if !e.is_array() => {
                 let elem = match &**e {
-                    Type::Any | Type::Decimal | Type::Error | Type::Union(_) => "Variant".to_string(),
+                    Type::Any | Type::Decimal | Type::Error | Type::Union(_) => {
+                        "Variant".to_string()
+                    }
                     Type::Object | Type::Map(..) | Type::Func(_) => "Object".to_string(),
                     other => self.type_name_of(other)?,
                 };
                 format!("{elem}()")
             }
-            other => crate::query::vba_type(other).filter(|n| !matches!(*n, "Variant" | "Object" | "LongPtr"))?.to_string(),
+            other => crate::query::vba_type(other)
+                .filter(|n| !matches!(*n, "Variant" | "Object" | "LongPtr"))?
+                .to_string(),
         })
     }
-
 
     fn scoped_stmt(&mut self, s: &Stmt) {
         match &s.kind {
@@ -875,8 +1150,15 @@ impl Checker<'_> {
 
     fn loop_decorators(&mut self, decorators: &[ast::Decorator]) {
         for d in decorators {
-            if !matches!(d.name.text.as_str(), "bulk" | "nobulk" | "doevents" | "nodoevents") {
-                self.warn(d.span, "W0110", format!("不明なループデコレータ `@{}` は無視されます", d.name.text));
+            if !matches!(
+                d.name.text.as_str(),
+                "bulk" | "nobulk" | "doevents" | "nodoevents"
+            ) {
+                self.warn(
+                    d.span,
+                    "W0110",
+                    format!("不明なループデコレータ `@{}` は無視されます", d.name.text),
+                );
             }
         }
     }
@@ -888,7 +1170,14 @@ impl Checker<'_> {
             StmtKind::Var(v) => self.var_stmt(v),
             StmtKind::Expr(e) => {
                 let t = self.expr(e, None);
-                let effectful = matches!(e.peel().kind, ExprKind::Call { .. } | ExprKind::Assign { .. } | ExprKind::IncDec { .. } | ExprKind::New { .. } | ExprKind::Error);
+                let effectful = matches!(
+                    e.peel().kind,
+                    ExprKind::Call { .. }
+                        | ExprKind::Assign { .. }
+                        | ExprKind::IncDec { .. }
+                        | ExprKind::New { .. }
+                        | ExprKind::Error
+                );
                 if !effectful && !t.is_error() {
                     self.warn(e.span, "W0311", "この式の値は使われていません");
                 }
@@ -897,12 +1186,20 @@ impl Checker<'_> {
             StmtKind::If { cond, then, els } => {
                 self.cond(cond);
                 let (t, f) = self.guard_facts(cond, &Vec::new());
-                self.with_facts(t, &mut |n| assigns_in_stmt(then, n), |ck| ck.scoped_stmt(then));
+                self.with_facts(t, &mut |n| assigns_in_stmt(then, n), |ck| {
+                    ck.scoped_stmt(then)
+                });
                 if let Some(e) = els {
                     self.with_facts(f, &mut |n| assigns_in_stmt(e, n), |ck| ck.scoped_stmt(e));
                 }
             }
-            StmtKind::For { decorators, init, cond, update, body } => {
+            StmtKind::For {
+                decorators,
+                init,
+                cond,
+                update,
+                body,
+            } => {
                 self.loop_decorators(decorators);
                 self.fx.has_loops = true;
                 self.push_scope();
@@ -915,13 +1212,29 @@ impl Checker<'_> {
                 for u in update {
                     self.expr(u, None);
                 }
-                let facts = cond.as_ref().map(|c| self.guard_facts(c, &Vec::new()).0).unwrap_or_default();
+                let facts = cond
+                    .as_ref()
+                    .map(|c| self.guard_facts(c, &Vec::new()).0)
+                    .unwrap_or_default();
                 self.fx.loops.push(None);
-                self.with_facts(facts, &mut |n| assigns_in_stmt(body, n) || update.iter().any(|u| assigns_in_expr(u, n)), |ck| ck.scoped_stmt(body));
+                self.with_facts(
+                    facts,
+                    &mut |n| {
+                        assigns_in_stmt(body, n) || update.iter().any(|u| assigns_in_expr(u, n))
+                    },
+                    |ck| ck.scoped_stmt(body),
+                );
                 self.fx.loops.pop();
                 self.pop_scope();
             }
-            StmtKind::ForOf { decorators, kind, name, ty, iter, body } => {
+            StmtKind::ForOf {
+                decorators,
+                kind,
+                name,
+                ty,
+                iter,
+                body,
+            } => {
                 self.loop_decorators(decorators);
                 self.fx.has_loops = true;
                 let it = self.value(iter, None);
@@ -932,18 +1245,28 @@ impl Checker<'_> {
                     }
                     Type::Array(e) => (**e).clone(),
                     Type::Any | Type::Object => Type::Any,
-                    Type::Class(c, args) if self.prog.classes[*c].kind == ClassKind::Host => match self.prog.classes[*c].call_sig {
-                        Some(sig) => {
-                            let env = self.prog.class_env(*c, args);
-                            self.prog.fns[sig].ret_ty().subst(&env)
+                    Type::Class(c, args) if self.prog.classes[*c].kind == ClassKind::Host => {
+                        match self.prog.classes[*c].call_sig {
+                            Some(sig) => {
+                                let env = self.prog.class_env(*c, args);
+                                self.prog.fns[sig].ret_ty().subst(&env)
+                            }
+                            None => Type::Any,
                         }
-                        None => Type::Any,
-                    },
+                    }
                     Type::Error => Type::Error,
                     other => {
                         let shown = self.show(other);
-                        let hint = if matches!(other, Type::Map(..)) { "（`map.keys()` を列挙してください）" } else { "" };
-                        self.err(iter.span, "E0304", format!("`{shown}` は `for...of` で列挙できません{hint}"));
+                        let hint = if matches!(other, Type::Map(..)) {
+                            "（`map.keys()` を列挙してください）"
+                        } else {
+                            ""
+                        };
+                        self.err(
+                            iter.span,
+                            "E0304",
+                            format!("`{shown}` は `for...of` で列挙できません{hint}"),
+                        );
                         Type::Error
                     }
                 };
@@ -951,8 +1274,18 @@ impl Checker<'_> {
                     Some(t) => {
                         let tps = self.fx.type_params.clone();
                         let declared = resolve_type(self.prog, self.module, &tps, t);
-                        if !self.assignable(&elem, &declared) && !self.implicit_narrowing(t.span(), &elem, &declared) {
-                            self.err(t.span(), "E0301", format!("要素の型 `{}` を `{}` に代入できません", self.show(&elem), self.show(&declared)));
+                        if !self.assignable(&elem, &declared)
+                            && !self.implicit_narrowing(t.span(), &elem, &declared)
+                        {
+                            self.err(
+                                t.span(),
+                                "E0301",
+                                format!(
+                                    "要素の型 `{}` を `{}` に代入できません",
+                                    self.show(&elem),
+                                    self.show(&declared)
+                                ),
+                            );
                         }
                         declared
                     }
@@ -966,16 +1299,26 @@ impl Checker<'_> {
                 self.fx.loops.pop();
                 self.pop_scope();
             }
-            StmtKind::While { decorators, cond, body } => {
+            StmtKind::While {
+                decorators,
+                cond,
+                body,
+            } => {
                 self.loop_decorators(decorators);
                 self.fx.has_loops = true;
                 self.cond(cond);
                 let (t, _) = self.guard_facts(cond, &Vec::new());
                 self.fx.loops.push(None);
-                self.with_facts(t, &mut |n| assigns_in_stmt(body, n), |ck| ck.scoped_stmt(body));
+                self.with_facts(t, &mut |n| assigns_in_stmt(body, n), |ck| {
+                    ck.scoped_stmt(body)
+                });
                 self.fx.loops.pop();
             }
-            StmtKind::DoWhile { decorators, body, cond } => {
+            StmtKind::DoWhile {
+                decorators,
+                body,
+                cond,
+            } => {
                 self.loop_decorators(decorators);
                 self.fx.has_loops = true;
                 self.fx.loops.push(None);
@@ -1014,13 +1357,25 @@ impl Checker<'_> {
                     if c.contains_resume() {
                         // spec §5.2 / §6 rule 4: `catch { resume; }` must contain nothing else.
                         if !c.is_resume_block() {
-                            self.err(c.span, "E0350", "`resume;` を書いた `catch` ブロックには他の文を書けません");
+                            self.err(
+                                c.span,
+                                "E0350",
+                                "`resume;` を書いた `catch` ブロックには他の文を書けません",
+                            );
                         }
                         if c.param.is_some() {
-                            self.err(c.span, "E0350", "`catch { resume; }` ではエラー変数を受け取れません");
+                            self.err(
+                                c.span,
+                                "E0350",
+                                "`catch { resume; }` ではエラー変数を受け取れません",
+                            );
                         }
                         if t.finally.is_some() {
-                            self.err(c.span, "E0350", "`catch { resume; }` に `finally` は付けられません");
+                            self.err(
+                                c.span,
+                                "E0350",
+                                "`catch { resume; }` に `finally` は付けられません",
+                            );
                         }
                         self.fx.blockers.push("resume");
                     } else {
@@ -1073,7 +1428,11 @@ impl Checker<'_> {
                     (Some(Type::Void), Some(v)) => {
                         let t = self.expr(v, None);
                         if t != Type::Void && !t.is_error() {
-                            self.err(v.span, "E0307", "戻り値のない関数（`void`）から値は返せません");
+                            self.err(
+                                v.span,
+                                "E0307",
+                                "戻り値のない関数（`void`）から値は返せません",
+                            );
                         }
                     }
                     (Some(d), Some(v)) => {
@@ -1082,7 +1441,11 @@ impl Checker<'_> {
                     }
                     (Some(d), None) => {
                         if d != Type::Void && !d.is_error() {
-                            self.err(s.span, "E0307", format!("`{}` 型の値を返す必要があります", self.show(&d)));
+                            self.err(
+                                s.span,
+                                "E0307",
+                                format!("`{}` 型の値を返す必要があります", self.show(&d)),
+                            );
                         }
                     }
                     (None, Some(v)) => {
@@ -1091,7 +1454,11 @@ impl Checker<'_> {
                             Some(p) => self.unify_branches(v.span, &p, &t),
                             None => {
                                 if t == Type::Null {
-                                    self.err(v.span, "E0308", "`null` を返す関数には戻り値の型注釈が必要です");
+                                    self.err(
+                                        v.span,
+                                        "E0308",
+                                        "`null` を返す関数には戻り値の型注釈が必要です",
+                                    );
                                     Type::Error
                                 } else {
                                     t
@@ -1109,41 +1476,90 @@ impl Checker<'_> {
             }
             StmtKind::Break(label) => {
                 if self.current_lambda().is_some() {
-                    self.err(s.span, "E0309", "アロー関数の中から外側のループを `break` できません");
+                    self.err(
+                        s.span,
+                        "E0309",
+                        "アロー関数の中から外側のループを `break` できません",
+                    );
                 } else if let Some(l) = label {
-                    if !self.fx.loops.iter().any(|x| x.as_deref() == Some(l.text.as_str())) {
-                        self.err(l.span, "E0309", format!("ラベル `{}` の付いたループがありません", l.text));
+                    if !self
+                        .fx
+                        .loops
+                        .iter()
+                        .any(|x| x.as_deref() == Some(l.text.as_str()))
+                    {
+                        self.err(
+                            l.span,
+                            "E0309",
+                            format!("ラベル `{}` の付いたループがありません", l.text),
+                        );
                     }
                 } else if self.fx.loops.is_empty() && self.fx.switch_depth == 0 {
-                    self.err(s.span, "E0309", "`break` はループか `switch` の中でのみ使えます");
+                    self.err(
+                        s.span,
+                        "E0309",
+                        "`break` はループか `switch` の中でのみ使えます",
+                    );
                 }
             }
             StmtKind::Continue(label) => {
                 if self.current_lambda().is_some() {
-                    self.err(s.span, "E0309", "アロー関数の中から外側のループを `continue` できません");
+                    self.err(
+                        s.span,
+                        "E0309",
+                        "アロー関数の中から外側のループを `continue` できません",
+                    );
                 } else if let Some(l) = label {
-                    if !self.fx.loops.iter().any(|x| x.as_deref() == Some(l.text.as_str())) {
-                        self.err(l.span, "E0309", format!("ラベル `{}` の付いたループがありません", l.text));
+                    if !self
+                        .fx
+                        .loops
+                        .iter()
+                        .any(|x| x.as_deref() == Some(l.text.as_str()))
+                    {
+                        self.err(
+                            l.span,
+                            "E0309",
+                            format!("ラベル `{}` の付いたループがありません", l.text),
+                        );
                     }
                 } else if self.fx.loops.is_empty() {
                     self.err(s.span, "E0309", "`continue` はループの中でのみ使えます");
                 }
             }
             StmtKind::Labeled { label, body } => {
-                let is_loop = matches!(body.kind, StmtKind::For { .. } | StmtKind::ForOf { .. } | StmtKind::While { .. } | StmtKind::DoWhile { .. });
+                let is_loop = matches!(
+                    body.kind,
+                    StmtKind::For { .. }
+                        | StmtKind::ForOf { .. }
+                        | StmtKind::While { .. }
+                        | StmtKind::DoWhile { .. }
+                );
                 if !is_loop {
                     self.err(label.span, "E0309", "ラベルはループにのみ付けられます");
                     self.stmt(body);
                     return;
                 }
-                if self.fx.loops.iter().any(|x| x.as_deref() == Some(label.text.as_str())) {
-                    self.err(label.span, "E0101", format!("ラベル `{}` は既に使われています", label.text));
+                if self
+                    .fx
+                    .loops
+                    .iter()
+                    .any(|x| x.as_deref() == Some(label.text.as_str()))
+                {
+                    self.err(
+                        label.span,
+                        "E0101",
+                        format!("ラベル `{}` は既に使われています", label.text),
+                    );
                 }
                 // The loop statement pushes its own (unlabelled) entry; label it afterwards.
                 self.labeled_loop(label, body);
             }
             StmtKind::Resume => {
-                self.err(s.span, "E0350", "`resume;` は `catch { resume; }` の形でのみ使えます");
+                self.err(
+                    s.span,
+                    "E0350",
+                    "`resume;` は `catch { resume; }` の形でのみ使えます",
+                );
             }
             StmtKind::Fn(f) => {
                 self.err(f.name.span, "E0352", "関数の中に関数は宣言できません。アロー関数を変数に代入するか、モジュールの最上位に宣言してください");
@@ -1169,7 +1585,9 @@ impl Checker<'_> {
 
     fn var_stmt(&mut self, v: &ast::VarDecl) {
         let tps = self.fx.type_params.clone();
-        let declared = v.ty.as_ref().map(|t| resolve_type(self.prog, self.module, &tps, t));
+        let declared =
+            v.ty.as_ref()
+                .map(|t| resolve_type(self.prog, self.module, &tps, t));
         if declared == Some(Type::Void) {
             self.err(v.span, "E0360", "`void` 型の変数は宣言できません");
         }
@@ -1199,7 +1617,11 @@ impl Checker<'_> {
         let ty = match (declared, init_ty) {
             (Some(d), _) => d,
             (None, Some(Type::Null)) => {
-                self.err(v.name.span, "E0132", "`null` で初期化する変数には型注釈が必要です");
+                self.err(
+                    v.name.span,
+                    "E0132",
+                    "`null` で初期化する変数には型注釈が必要です",
+                );
                 Type::Error
             }
             (None, Some(t)) => t,
@@ -1216,7 +1638,12 @@ impl Checker<'_> {
         if v.kind == ast::VarKind::Using {
             let ok = match &ty {
                 Type::Class(c, _) => !self.prog.find_methods(*c, "dispose").is_empty(),
-                Type::Int => v.init.as_ref().is_some_and(|i| matches!(self.info().calls.get(&i.peel().id).map(|c| &c.target), Some(CallTarget::Intrinsic(Intr::FastMode)))),
+                Type::Int => v.init.as_ref().is_some_and(|i| {
+                    matches!(
+                        self.info().calls.get(&i.peel().id).map(|c| &c.target),
+                        Some(CallTarget::Intrinsic(Intr::FastMode))
+                    )
+                }),
                 Type::Error | Type::Any | Type::Object => true,
                 _ => false,
             };
@@ -1230,7 +1657,11 @@ impl Checker<'_> {
                     self.prog.vars[id].ty = ty;
                 }
                 if let Some(init) = &v.init {
-                    self.prog.vars[id].const_value = if v.kind == ast::VarKind::Const { const_value(init) } else { None };
+                    self.prog.vars[id].const_value = if v.kind == ast::VarKind::Const {
+                        const_value(init)
+                    } else {
+                        None
+                    };
                 }
                 self.info().decl_globals.insert(offset, id);
             }
@@ -1256,7 +1687,11 @@ impl Checker<'_> {
                 Type::Error
             }
             Type::Ns(_) => {
-                self.err(e.span, "E0370", "ここには値が必要です（モジュール・名前空間・型は値として使えません）");
+                self.err(
+                    e.span,
+                    "E0370",
+                    "ここには値が必要です（モジュール・名前空間・型は値として使えません）",
+                );
                 Type::Error
             }
             _ => t,
@@ -1280,10 +1715,18 @@ impl Checker<'_> {
         }
         // A union equals a value when one of its members can; ordering needs every member to be ordered.
         if let Some(ms) = a.union_members() {
-            return if equality { ms.iter().any(|m| self.comparable(m, b, true)) } else { ms.iter().all(|m| self.comparable(m, b, false)) };
+            return if equality {
+                ms.iter().any(|m| self.comparable(m, b, true))
+            } else {
+                ms.iter().all(|m| self.comparable(m, b, false))
+            };
         }
         if let Some(ms) = b.union_members() {
-            return if equality { ms.iter().any(|m| self.comparable(a, m, true)) } else { ms.iter().all(|m| self.comparable(a, m, false)) };
+            return if equality {
+                ms.iter().any(|m| self.comparable(a, m, true))
+            } else {
+                ms.iter().all(|m| self.comparable(a, m, false))
+            };
         }
         if a.is_numeric() && b.is_numeric() {
             return true;
@@ -1291,7 +1734,14 @@ impl Checker<'_> {
         match (a, b) {
             (Str, Str) | (Date, Date) => true,
             (Bool, Bool) => equality,
-            (Param(x), Param(y)) => x == y && (equality || matches!(self.constraint_of(x), Constraint::Comparable | Constraint::Numeric)),
+            (Param(x), Param(y)) => {
+                x == y
+                    && (equality
+                        || matches!(
+                            self.constraint_of(x),
+                            Constraint::Comparable | Constraint::Numeric
+                        ))
+            }
             (Param(x), other) | (other, Param(x)) => match self.constraint_of(x) {
                 Constraint::Numeric => other.is_numeric(),
                 Constraint::ObjectType => equality && (other.is_object()),
@@ -1308,7 +1758,11 @@ impl Checker<'_> {
             ExprKind::Int { value, suffix, .. } => {
                 if *suffix == ast::NumSuffix::L {
                     if i64::try_from(*value).is_err() {
-                        self.err(e.span, "E0380", "整数リテラルが `long` の範囲を超えています");
+                        self.err(
+                            e.span,
+                            "E0380",
+                            "整数リテラルが `long` の範囲を超えています",
+                        );
                     }
                     Type::Long
                 } else if i32::try_from(*value).is_ok() {
@@ -1316,7 +1770,11 @@ impl Checker<'_> {
                 } else if i64::try_from(*value).is_ok() {
                     Type::Long
                 } else {
-                    self.err(e.span, "E0380", "整数リテラルが `long` の範囲を超えています");
+                    self.err(
+                        e.span,
+                        "E0380",
+                        "整数リテラルが `long` の範囲を超えています",
+                    );
                     Type::Error
                 }
             }
@@ -1331,7 +1789,11 @@ impl Checker<'_> {
                     if let ast::TemplatePart::Expr(x) = p {
                         let t = self.value(x, None);
                         if !self.stringifiable(&t) {
-                            self.err(x.span, "E0381", format!("`{}` は文字列に埋め込めません", self.show(&t)));
+                            self.err(
+                                x.span,
+                                "E0381",
+                                format!("`{}` は文字列に埋め込めません", self.show(&t)),
+                            );
                         }
                     }
                 }
@@ -1343,7 +1805,10 @@ impl Checker<'_> {
                 Access::Value(t) => t,
                 Access::Func { f, .. } => {
                     let def = &self.prog.fns[f];
-                    if matches!(def.kind, FnKind::Host { .. }) && def.required_params() == 0 && def.ret_ty() != Type::Void {
+                    if matches!(def.kind, FnKind::Host { .. })
+                        && def.required_params() == 0
+                        && def.ret_ty() != Type::Void
+                    {
                         // Host functions without required arguments read like properties (`Now`, `Cells`).
                         def.ret_ty()
                     } else {
@@ -1355,7 +1820,11 @@ impl Checker<'_> {
                     if i.is_property() {
                         self.intrinsic_call(e, i, None, None, &[], expect)
                     } else {
-                        self.err(e.span, "E0382", format!("組み込み関数 `{}` は呼び出して使ってください", id.text));
+                        self.err(
+                            e.span,
+                            "E0382",
+                            format!("組み込み関数 `{}` は呼び出して使ってください", id.text),
+                        );
                         Type::Error
                     }
                 }
@@ -1372,7 +1841,11 @@ impl Checker<'_> {
                 }
                 match self.fx.class {
                     Some(c) if !self.fx.is_static => {
-                        let args = self.prog.classes[c].type_params.iter().map(|p| Type::Param(p.name.clone())).collect();
+                        let args = self.prog.classes[c]
+                            .type_params
+                            .iter()
+                            .map(|p| Type::Param(p.name.clone()))
+                            .collect();
                         Type::Class(c, args)
                     }
                     _ => {
@@ -1382,15 +1855,31 @@ impl Checker<'_> {
                 }
             }
             ExprKind::Super => {
-                self.err(e.span, "E0140", "`super` には対応していません（クラスの継承は未対応です）");
+                self.err(
+                    e.span,
+                    "E0140",
+                    "`super` には対応していません（クラスの継承は未対応です）",
+                );
                 Type::Error
             }
             ExprKind::Paren(inner) | ExprKind::NonNull(inner) => self.expr(inner, expect),
-            ExprKind::Array(items) if matches!(expect, Some(Type::Struct(s)) if self.prog.structs[*s].kind == StructKind::Tuple) => {
-                let Some(Type::Struct(s)) = expect else { unreachable!() };
+            ExprKind::Array(items) if matches!(expect, Some(Type::Struct(s)) if self.prog.structs[*s].kind == StructKind::Tuple) =>
+            {
+                let Some(Type::Struct(s)) = expect else {
+                    unreachable!()
+                };
                 let fields = self.prog.structs[*s].fields.clone();
                 if items.len() != fields.len() {
-                    self.err(e.span, "E0392", format!("`{}` には {} 個の要素が必要です（{} 個あります）", self.show(&Type::Struct(*s)), fields.len(), items.len()));
+                    self.err(
+                        e.span,
+                        "E0392",
+                        format!(
+                            "`{}` には {} 個の要素が必要です（{} 個あります）",
+                            self.show(&Type::Struct(*s)),
+                            fields.len(),
+                            items.len()
+                        ),
+                    );
                 }
                 for (i, it) in items.iter().enumerate() {
                     let want = fields.get(i).map(|f| f.1.clone());
@@ -1403,7 +1892,9 @@ impl Checker<'_> {
             }
             ExprKind::Array(items) => {
                 let elem_expect = match expect {
-                    Some(Type::Array(el)) if !matches!(**el, Type::Array(_)) => Some((**el).clone()),
+                    Some(Type::Array(el)) if !matches!(**el, Type::Array(_)) => {
+                        Some((**el).clone())
+                    }
                     _ => None,
                 };
                 if let Some(Type::Array(el)) = expect {
@@ -1425,16 +1916,14 @@ impl Checker<'_> {
                     }
                 }
                 match elem {
-                    Some(Type::Null) | None => {
-                        match expect {
-                            Some(t @ Type::Array(_)) => t.clone(),
-                            Some(Type::Any) => Type::array(Type::Any),
-                            _ => {
-                                self.err(e.span, "E0385", "配列リテラルの要素の型を決められません。`let a: int[] = []` のように型注釈を付けてください");
-                                Type::Error
-                            }
+                    Some(Type::Null) | None => match expect {
+                        Some(t @ Type::Array(_)) => t.clone(),
+                        Some(Type::Any) => Type::array(Type::Any),
+                        _ => {
+                            self.err(e.span, "E0385", "配列リテラルの要素の型を決められません。`let a: int[] = []` のように型注釈を付けてください");
+                            Type::Error
                         }
-                    }
+                    },
                     Some(t) => Type::array(t),
                 }
             }
@@ -1445,18 +1934,38 @@ impl Checker<'_> {
                 match op {
                     UnaryOp::Not => {
                         if !matches!(t, Type::Bool | Type::Any | Type::Error) {
-                            self.err(operand.span, "E0303", format!("`!` は `boolean` にのみ使えます（`{}` です）", self.show(&t)));
+                            self.err(
+                                operand.span,
+                                "E0303",
+                                format!(
+                                    "`!` は `boolean` にのみ使えます（`{}` です）",
+                                    self.show(&t)
+                                ),
+                            );
                         }
                         Type::Bool
                     }
                     UnaryOp::Neg | UnaryOp::Plus => {
                         if !self.is_numeric(&t) {
-                            self.err(operand.span, "E0387", format!("数値が必要です（`{}` です）", self.show(&t)));
+                            self.err(
+                                operand.span,
+                                "E0387",
+                                format!("数値が必要です（`{}` です）", self.show(&t)),
+                            );
                             return Type::Error;
                         }
                         if let (UnaryOp::Neg, Some(v)) = (op, const_int(e)) {
                             // `-2147483648` is an int even though the digits alone are not.
-                            if i32::try_from(v).is_ok() && t == Type::Long && !matches!(operand.peel().kind, ExprKind::Int { suffix: ast::NumSuffix::L, .. }) {
+                            if i32::try_from(v).is_ok()
+                                && t == Type::Long
+                                && !matches!(
+                                    operand.peel().kind,
+                                    ExprKind::Int {
+                                        suffix: ast::NumSuffix::L,
+                                        ..
+                                    }
+                                )
+                            {
                                 return Type::Int;
                             }
                         }
@@ -1466,7 +1975,8 @@ impl Checker<'_> {
                         }
                     }
                     UnaryOp::BitNot => {
-                        if !(t.is_integer() || matches!(t, Type::Any | Type::Error | Type::Enum(_))) {
+                        if !(t.is_integer() || matches!(t, Type::Any | Type::Error | Type::Enum(_)))
+                        {
                             self.err(operand.span, "E0387", "`~` は整数にのみ使えます");
                             return Type::Error;
                         }
@@ -1481,7 +1991,14 @@ impl Checker<'_> {
             ExprKind::IncDec { operand, .. } => {
                 let t = self.lvalue(operand);
                 if !self.is_numeric(&t) {
-                    self.err(operand.span, "E0387", format!("`++` / `--` は数値にのみ使えます（`{}` です）", self.show(&t)));
+                    self.err(
+                        operand.span,
+                        "E0387",
+                        format!(
+                            "`++` / `--` は数値にのみ使えます（`{}` です）",
+                            self.show(&t)
+                        ),
+                    );
                     return Type::Error;
                 }
                 t
@@ -1498,7 +2015,16 @@ impl Checker<'_> {
                         let vt = self.value(value, None);
                         let rt = self.binary_types(e.span, *op, &tt, &vt, target, value);
                         if !rt.is_error() && !self.assignable(&rt, &tt) {
-                            self.err(e.span, "E0301", format!("`{}=` の結果（`{}`）を `{}` に代入できません", op.symbol(), self.show(&rt), self.show(&tt)));
+                            self.err(
+                                e.span,
+                                "E0301",
+                                format!(
+                                    "`{}=` の結果（`{}`）を `{}` に代入できません",
+                                    op.symbol(),
+                                    self.show(&rt),
+                                    self.show(&tt)
+                                ),
+                            );
                         }
                     }
                 }
@@ -1507,21 +2033,39 @@ impl Checker<'_> {
             ExprKind::Ternary { cond, then, els } => {
                 self.cond(cond);
                 let (t, f) = self.guard_facts(cond, &Vec::new());
-                let a = self.with_facts(t, &mut |n| assigns_in_expr(then, n), |ck| ck.value(then, expect));
-                let b = self.with_facts(f, &mut |n| assigns_in_expr(els, n), |ck| ck.value(els, expect.or(Some(&a))));
+                let a = self.with_facts(t, &mut |n| assigns_in_expr(then, n), |ck| {
+                    ck.value(then, expect)
+                });
+                let b = self.with_facts(f, &mut |n| assigns_in_expr(els, n), |ck| {
+                    ck.value(els, expect.or(Some(&a)))
+                });
                 match expect {
-                    Some(want) if self.assignable(&a, want) && self.assignable(&b, want) && *want != Type::Any => want.clone(),
+                    Some(want)
+                        if self.assignable(&a, want)
+                            && self.assignable(&b, want)
+                            && *want != Type::Any =>
+                    {
+                        want.clone()
+                    }
                     _ => self.unify_branches(e.span, &a, &b),
                 }
             }
-            ExprKind::Call { callee, type_args, args } => self.call(e, callee, type_args, args, expect),
+            ExprKind::Call {
+                callee,
+                type_args,
+                args,
+            } => self.call(e, callee, type_args, args, expect),
             ExprKind::New { ty, args } => self.new_expr(e, ty, args),
             ExprKind::NamedArg { value, .. } => {
                 self.err(e.span, "E0411", "名前付き引数は、宣言された関数・メソッド・コンストラクタの呼び出しにだけ書けます");
                 self.expr(value, None);
                 Type::Error
             }
-            ExprKind::Member { object, name, optional } => {
+            ExprKind::Member {
+                object,
+                name,
+                optional,
+            } => {
                 if *optional {
                     self.err(e.span, "E0388", "オプショナルチェーン（`?.`）には対応していません。`!= null` で判定してください");
                 }
@@ -1531,12 +2075,27 @@ impl Checker<'_> {
                     Access::Func { f, env, recv } => {
                         let def = &self.prog.fns[f];
                         let host = matches!(def.kind, FnKind::Host { .. });
-                        let union_ok = self.fx.union_calls.get(&e.id).is_none_or(|o| o.iter().all(|(g, _)| self.prog.fns[*g].required_params() == 0));
-                        if host && def.required_params() == 0 && def.ret_ty() != Type::Void && recv != Recv::Extension && union_ok {
+                        let union_ok = self.fx.union_calls.get(&e.id).is_none_or(|o| {
+                            o.iter()
+                                .all(|(g, _)| self.prog.fns[*g].required_params() == 0)
+                        });
+                        if host
+                            && def.required_params() == 0
+                            && def.ret_ty() != Type::Void
+                            && recv != Recv::Extension
+                            && union_ok
+                        {
                             let ret = def.ret_ty().subst(&env);
                             self.union_call_ret(e.id, ret)
                         } else {
-                            self.err(name.span, "E0382", format!("メソッド `{}` は呼び出して使ってください（`()` が必要です）", name.text));
+                            self.err(
+                                name.span,
+                                "E0382",
+                                format!(
+                                    "メソッド `{}` は呼び出して使ってください（`()` が必要です）",
+                                    name.text
+                                ),
+                            );
                             Type::Error
                         }
                     }
@@ -1544,7 +2103,14 @@ impl Checker<'_> {
                         if i.is_property() {
                             self.intrinsic_call(e, i, Some(object), Some(&ot), &[], expect)
                         } else {
-                            self.err(name.span, "E0382", format!("メソッド `{}` は呼び出して使ってください（`()` が必要です）", name.text));
+                            self.err(
+                                name.span,
+                                "E0382",
+                                format!(
+                                    "メソッド `{}` は呼び出して使ってください（`()` が必要です）",
+                                    name.text
+                                ),
+                            );
                             Type::Error
                         }
                     }
@@ -1557,8 +2123,17 @@ impl Checker<'_> {
                 match &ot {
                     Type::Array(el) => {
                         let it = self.value(index, Some(&Type::Int));
-                        if !(it.is_integer() || matches!(it, Type::Any | Type::Error | Type::Enum(_))) {
-                            self.err(index.span, "E0389", format!("配列の添字は整数である必要があります（`{}` です）", self.show(&it)));
+                        if !(it.is_integer()
+                            || matches!(it, Type::Any | Type::Error | Type::Enum(_)))
+                        {
+                            self.err(
+                                index.span,
+                                "E0389",
+                                format!(
+                                    "配列の添字は整数である必要があります（`{}` です）",
+                                    self.show(&it)
+                                ),
+                            );
                         }
                         if matches!(**el, Type::Array(_)) {
                             // `a[r]` of a 2-D array is only valid as the object of another index.
@@ -1570,7 +2145,11 @@ impl Checker<'_> {
                     Type::Str => {
                         let it = self.value(index, Some(&Type::Int));
                         if !(it.is_integer() || matches!(it, Type::Any | Type::Error)) {
-                            self.err(index.span, "E0389", "文字列の添字は整数である必要があります");
+                            self.err(
+                                index.span,
+                                "E0389",
+                                "文字列の添字は整数である必要があります",
+                            );
                         }
                         Type::Str
                     }
@@ -1583,14 +2162,26 @@ impl Checker<'_> {
                         self.value(index, Some(&Type::Int));
                         let fields = &self.prog.structs[*s].fields;
                         match &index.peel().kind {
-                            ExprKind::Int { value, .. } if (*value as usize) < fields.len() && *value >= 0 => fields[*value as usize].1.clone(),
+                            ExprKind::Int { value, .. }
+                                if (*value as usize) < fields.len() && *value >= 0 =>
+                            {
+                                fields[*value as usize].1.clone()
+                            }
                             ExprKind::Int { .. } => {
                                 let (n, shown) = (fields.len(), self.show(&ot));
-                                self.err(index.span, "E0389", format!("`{shown}` の要素は {n} 個です"));
+                                self.err(
+                                    index.span,
+                                    "E0389",
+                                    format!("`{shown}` の要素は {n} 個です"),
+                                );
                                 Type::Error
                             }
                             _ => {
-                                self.err(index.span, "E0389", "タプルの添字は整数リテラル（`t[0]`）で書いてください");
+                                self.err(
+                                    index.span,
+                                    "E0389",
+                                    "タプルの添字は整数リテラル（`t[0]`）で書いてください",
+                                );
                                 Type::Error
                             }
                         }
@@ -1599,7 +2190,13 @@ impl Checker<'_> {
                         let sig = self.prog.classes[*c].call_sig.unwrap();
                         let env = self.prog.class_env(*c, args);
                         self.value(index, None);
-                        self.info().calls.insert(e.id, CallInfo { target: CallTarget::DefaultMember(sig), type_args: Vec::new() });
+                        self.info().calls.insert(
+                            e.id,
+                            CallInfo {
+                                target: CallTarget::DefaultMember(sig),
+                                type_args: Vec::new(),
+                            },
+                        );
                         self.prog.fns[sig].ret_ty().subst(&env)
                     }
                     Type::Any | Type::Object => {
@@ -1623,7 +2220,15 @@ impl Checker<'_> {
                 let target = resolve_type(self.prog, self.module, &tps, ty);
                 let from = self.value(expr, Some(&target));
                 if !self.castable(&from, &target) {
-                    self.err(e.span, "E0390", format!("`{}` を `{}` に変換できません", self.show(&from), self.show(&target)));
+                    self.err(
+                        e.span,
+                        "E0390",
+                        format!(
+                            "`{}` を `{}` に変換できません",
+                            self.show(&from),
+                            self.show(&target)
+                        ),
+                    );
                 }
                 target
             }
@@ -1632,11 +2237,22 @@ impl Checker<'_> {
                 let tps = self.fx.type_params.clone();
                 let target = resolve_type(self.prog, self.module, &tps, ty);
                 self.fx.instanceof_types.insert(e.id, target.clone());
-                if !(from.is_object() || from.is_mixed_union() || matches!(from, Type::Any | Type::Error)) {
-                    self.err(expr.span, "E0391", "`instanceof` の左辺はオブジェクトである必要があります");
+                if !(from.is_object()
+                    || from.is_mixed_union()
+                    || matches!(from, Type::Any | Type::Error))
+                {
+                    self.err(
+                        expr.span,
+                        "E0391",
+                        "`instanceof` の左辺はオブジェクトである必要があります",
+                    );
                 }
                 if !matches!(target, Type::Class(..) | Type::Error) {
-                    self.err(ty.span(), "E0391", "`instanceof` の右辺はクラスかインターフェイスである必要があります");
+                    self.err(
+                        ty.span(),
+                        "E0391",
+                        "`instanceof` の右辺はクラスかインターフェイスである必要があります",
+                    );
                 }
                 Type::Bool
             }
@@ -1645,11 +2261,23 @@ impl Checker<'_> {
 
     /// `{ a: 1, b: "x" }`: a value of the expected struct type, or of the anonymous
     /// struct with these fields when nothing more specific is expected.
-    fn struct_literal(&mut self, e: &Expr, props: &[ast::ObjectProp], expect: Option<&Type>) -> Type {
+    fn struct_literal(
+        &mut self,
+        e: &Expr,
+        props: &[ast::ObjectProp],
+        expect: Option<&Type>,
+    ) -> Type {
         let mut ok = true;
         for (i, p) in props.iter().enumerate() {
-            if props[..i].iter().any(|q| q.key.text.eq_ignore_ascii_case(&p.key.text)) {
-                self.err(p.key.span, "E0392", format!("フィールド `{}` が重複しています", p.key.text));
+            if props[..i]
+                .iter()
+                .any(|q| q.key.text.eq_ignore_ascii_case(&p.key.text))
+            {
+                self.err(
+                    p.key.span,
+                    "E0392",
+                    format!("フィールド `{}` が重複しています", p.key.text),
+                );
                 ok = false;
             }
         }
@@ -1672,12 +2300,25 @@ impl Checker<'_> {
                         }
                         None => {
                             self.value(&p.value, None);
-                            self.err(p.key.span, "E0202", format!("`{}` にフィールド `{}` はありません", self.show(&Type::Struct(s)), p.key.text));
+                            self.err(
+                                p.key.span,
+                                "E0202",
+                                format!(
+                                    "`{}` にフィールド `{}` はありません",
+                                    self.show(&Type::Struct(s)),
+                                    p.key.text
+                                ),
+                            );
                         }
                     }
                 }
-                let missing: Vec<String> =
-                    def.fields.iter().zip(&def.optional).filter(|(f, opt)| !**opt && !props.iter().any(|p| p.key.text == f.0)).map(|(f, _)| format!("`{}`", f.0)).collect();
+                let missing: Vec<String> = def
+                    .fields
+                    .iter()
+                    .zip(&def.optional)
+                    .filter(|(f, opt)| !**opt && !props.iter().any(|p| p.key.text == f.0))
+                    .map(|(f, _)| format!("`{}`", f.0))
+                    .collect();
                 if !missing.is_empty() {
                     self.err(e.span, "E0392", format!("フィールド {} がありません（省略できるのは `name?: T` と宣言したフィールドだけです）", missing.join("、")));
                 }
@@ -1704,7 +2345,10 @@ impl Checker<'_> {
                 if !ok {
                     return Type::Error;
                 }
-                Type::Struct(self.prog.intern_struct(self.module, StructKind::Object, fields))
+                Type::Struct(
+                    self.prog
+                        .intern_struct(self.module, StructKind::Object, fields),
+                )
             }
         }
     }
@@ -1713,7 +2357,11 @@ impl Checker<'_> {
         if let Some(ms) = t.union_members() {
             return ms.iter().all(|m| self.stringifiable(m));
         }
-        t.is_numeric() || matches!(t, Type::Str | Type::Bool | Type::Date | Type::Any | Type::Error | Type::Param(_))
+        t.is_numeric()
+            || matches!(
+                t,
+                Type::Str | Type::Bool | Type::Date | Type::Any | Type::Error | Type::Param(_)
+            )
     }
 
     fn castable(&self, from: &Type, to: &Type) -> bool {
@@ -1762,7 +2410,9 @@ impl Checker<'_> {
                 let ty = self.var_type(v, e.span);
                 let owner = self.prog.vars[v].module;
                 // Constants may also be read from arrow functions (they are copied when a closure is created).
-                let in_own_main = self.fx.is_toplevel && owner == self.module && (self.current_lambda().is_none() || self.prog.vars[v].is_const);
+                let in_own_main = self.fx.is_toplevel
+                    && owner == self.module
+                    && (self.current_lambda().is_none() || self.prog.vars[v].is_const);
                 if !in_own_main {
                     self.prog.vars[v].used_outside_main = true;
                 }
@@ -1782,7 +2432,11 @@ impl Checker<'_> {
                     let host = self.prog.fns[f].vba_name().to_string();
                     self.lint_host_global(e, &host, &id.text);
                 }
-                Access::Func { f, env: HashMap::new(), recv: Recv::None }
+                Access::Func {
+                    f,
+                    env: HashMap::new(),
+                    recv: Recv::None,
+                }
             }
             Some(Sym::Class(c)) => {
                 self.set_res(e.id, Res::Class(c));
@@ -1805,7 +2459,11 @@ impl Checker<'_> {
                 Access::Value(Type::Ns(NsRef::Host(n)))
             }
             Some(Sym::Struct(_) | Sym::Alias(_)) => {
-                self.err(e.span, "E0370", format!("`{}` は型です。値として使うことはできません", id.text));
+                self.err(
+                    e.span,
+                    "E0370",
+                    format!("`{}` は型です。値として使うことはできません", id.text),
+                );
                 Access::Error
             }
             None => {
@@ -1813,7 +2471,10 @@ impl Checker<'_> {
                     self.set_res(e.id, Res::Namespace(id.text.clone()));
                     return Access::Value(Type::Ns(NsRef::Host(id.text.clone())));
                 }
-                if let Some(ns) = intrinsics::BUILTIN_NAMESPACES.iter().find(|n| **n == id.text) {
+                if let Some(ns) = intrinsics::BUILTIN_NAMESPACES
+                    .iter()
+                    .find(|n| **n == id.text)
+                {
                     self.set_res(e.id, Res::Builtin(ns));
                     return Access::Value(Type::Ns(NsRef::Builtin(ns)));
                 }
@@ -1822,16 +2483,35 @@ impl Checker<'_> {
                     return Access::Intrinsic(i);
                 }
                 // VBA does not distinguish case: `Cells` is the bundled `cells`.
-                if let Some(js) = self.prog.host_global_names.get(&id.text.to_lowercase()).cloned() {
+                if let Some(js) = self
+                    .prog
+                    .host_global_names
+                    .get(&id.text.to_lowercase())
+                    .cloned()
+                {
                     if js != id.text && self.lookup_sym(&js).is_some_and(|s| self.is_host_sym(&s)) {
                         self.warn_host_case(id, &js);
-                        return self.name_access(e, &Ident { text: js, span: id.span });
+                        return self.name_access(
+                            e,
+                            &Ident {
+                                text: js,
+                                span: id.span,
+                            },
+                        );
                     }
                 }
                 if id.text == "Error" {
-                    self.err(e.span, "E0201", "`Error` は `throw new Error(\"...\")` の形で使ってください");
+                    self.err(
+                        e.span,
+                        "E0201",
+                        "`Error` は `throw new Error(\"...\")` の形で使ってください",
+                    );
                 } else if !id.text.is_empty() {
-                    self.err(e.span, "E0201", format!("名前 `{}` が見つかりません", id.text));
+                    self.err(
+                        e.span,
+                        "E0201",
+                        format!("名前 `{}` が見つかりません", id.text),
+                    );
                 }
                 Access::Error
             }
@@ -1855,7 +2535,12 @@ impl Checker<'_> {
 
     fn warn_host_case(&mut self, written: &Ident, js: &str) {
         self.warn(written.span, "W0304", format!("`{}` は RAS では `{js}` と書きます（Excel / VBA のメンバーは camelCase で参照します）", written.text));
-        self.prog.fixes.push(crate::diag::Fix { module: self.module, span: written.span, replacement: js.to_string(), code: "W0304" });
+        self.prog.fixes.push(crate::diag::Fix {
+            module: self.module,
+            span: written.span,
+            replacement: js.to_string(),
+            code: "W0304",
+        });
     }
 
     /// The RAS name of the member of host class `c` that VBA would find for `name` (ignoring case).
@@ -1864,11 +2549,16 @@ impl Checker<'_> {
         if def.kind != ClassKind::Host {
             return None;
         }
-        let hit = |n: &str, host: &str| n.eq_ignore_ascii_case(name) || host.eq_ignore_ascii_case(name);
+        let hit =
+            |n: &str, host: &str| n.eq_ignore_ascii_case(name) || host.eq_ignore_ascii_case(name);
         if let Some(f) = def.fields.iter().find(|f| hit(&f.name, f.vba_name())) {
             return Some(f.name.clone());
         }
-        if let Some(&m) = def.methods.iter().find(|&&m| hit(&self.prog.fns[m].name, self.prog.fns[m].vba_name())) {
+        if let Some(&m) = def
+            .methods
+            .iter()
+            .find(|&&m| hit(&self.prog.fns[m].name, self.prog.fns[m].vba_name()))
+        {
             return Some(self.prog.fns[m].name.clone());
         }
         def.extends.iter().find_map(|b| match b {
@@ -1879,30 +2569,59 @@ impl Checker<'_> {
 
     /// Lint rules 9 and 10 of spec §6. `name` is the type library's spelling, `shown` the one in the source.
     fn lint_host_global(&mut self, e: &Expr, name: &str, shown: &str) {
-        let shown = self.prog.host_global_names.get(&shown.to_lowercase()).cloned().unwrap_or_else(|| shown.to_string());
+        let shown = self
+            .prog
+            .host_global_names
+            .get(&shown.to_lowercase())
+            .cloned()
+            .unwrap_or_else(|| shown.to_string());
         match name {
-            "Range" | "Cells" | "Rows" | "Columns" | "ActiveSheet" | "ActiveCell" | "ActiveWorkbook" => {
+            "Range" | "Cells" | "Rows" | "Columns" | "ActiveSheet" | "ActiveCell"
+            | "ActiveWorkbook" => {
                 if self.fx.qualify_depth > 0 && matches!(name, "Range" | "Cells") {
                     self.info().auto_qualified.insert(e.id);
                 } else {
                     self.warn(e.span, "W0401", format!("修飾されていない `{shown}` はアクティブなシート／ブックに依存します。`ws.{shown}` のようにシートを明示してください"));
                 }
             }
-            "Selection" => self.diag(Severity::Info, e.span, "I0402", format!("`{shown}` への依存は遅く不安定です。対象の Range を直接操作してください")),
+            "Selection" => self.diag(
+                Severity::Info,
+                e.span,
+                "I0402",
+                format!("`{shown}` への依存は遅く不安定です。対象の Range を直接操作してください"),
+            ),
             _ => {}
         }
     }
 
-    fn class_member(&mut self, e: &Expr, c: ClassId, targs: &[Type], name: &Ident, static_access: bool) -> Option<Access> {
+    fn class_member(
+        &mut self,
+        e: &Expr,
+        c: ClassId,
+        targs: &[Type],
+        name: &Ident,
+        static_access: bool,
+    ) -> Option<Access> {
         let env = self.prog.class_env(c, targs);
         if let Some((owner, idx)) = self.prog.find_field(c, &name.text) {
             let field = self.prog.classes[owner].fields[idx].clone();
             if field.is_static == static_access {
                 if field.vis != Visibility::Public && self.fx.class != Some(owner) {
-                    self.err(name.span, "E0392", format!("`{}` は private なのでクラスの外からは参照できません", name.text));
+                    self.err(
+                        name.span,
+                        "E0392",
+                        format!(
+                            "`{}` は private なのでクラスの外からは参照できません",
+                            name.text
+                        ),
+                    );
                 }
                 self.set_res(e.id, Res::Field(owner, idx));
-                let ty = if field.ty == Type::Void { Type::Error } else { field.ty.subst(&env) };
+                let ty = if field.ty == Type::Void {
+                    Type::Error
+                } else {
+                    field.ty.subst(&env)
+                };
                 return Some(Access::Value(ty));
             }
         }
@@ -1921,23 +2640,44 @@ impl Checker<'_> {
                 continue;
             }
             if def.vis != Visibility::Public && self.fx.class != Some(c) {
-                self.err(name.span, "E0392", format!("`{}` は private なのでクラスの外からは参照できません", name.text));
+                self.err(
+                    name.span,
+                    "E0392",
+                    format!(
+                        "`{}` は private なのでクラスの外からは参照できません",
+                        name.text
+                    ),
+                );
             }
             match kind {
                 1 => getter = Some(m),
                 2 => setter = Some(m),
                 _ => {
                     self.set_res(e.id, Res::Method(m));
-                    let recv = if static_access { Recv::None } else { Recv::Instance };
+                    let recv = if static_access {
+                        Recv::None
+                    } else {
+                        Recv::Instance
+                    };
                     return Some(Access::Func { f: m, env, recv });
                 }
             }
         }
         if getter.is_some() || setter.is_some() {
-            self.set_res(e.id, Res::Property { get: getter, set: setter });
+            self.set_res(
+                e.id,
+                Res::Property {
+                    get: getter,
+                    set: setter,
+                },
+            );
             let ty = match (getter, setter) {
                 (Some(g), _) => self.fn_ret(g, name.span).subst(&env),
-                (None, Some(s)) => self.prog.fns[s].params.first().map(|p| p.ty.subst(&env)).unwrap_or(Type::Error),
+                (None, Some(s)) => self.prog.fns[s]
+                    .params
+                    .first()
+                    .map(|p| p.ty.subst(&env))
+                    .unwrap_or(Type::Error),
                 _ => Type::Error,
             };
             return Some(Access::Value(ty));
@@ -1947,11 +2687,18 @@ impl Checker<'_> {
 
     /// Finds the best extension method `name` applicable to a receiver of type `recv` (spec §3.2.3).
     fn find_ext(&mut self, recv: &Type, name: &Ident) -> Option<(FnId, HashMap<String, Type>)> {
-        let candidates: Vec<FnId> = self.prog.modules[self.module].ext_methods.iter().copied().filter(|&f| self.prog.fns[f].name == name.text).collect();
+        let candidates: Vec<FnId> = self.prog.modules[self.module]
+            .ext_methods
+            .iter()
+            .copied()
+            .filter(|&f| self.prog.fns[f].name == name.text)
+            .collect();
         let mut best: Vec<(u8, FnId, HashMap<String, Type>)> = Vec::new();
         for f in candidates {
             let def = &self.prog.fns[f];
-            let Some(p0) = def.params.first() else { continue };
+            let Some(p0) = def.params.first() else {
+                continue;
+            };
             let mut env = HashMap::new();
             self.unify(&p0.ty, recv, &mut env, &def.type_params);
             let want = p0.ty.subst(&env);
@@ -1974,7 +2721,14 @@ impl Checker<'_> {
             1 => best.pop().map(|(_, f, env)| (f, env)),
             _ => {
                 if best[0].0 == best[1].0 {
-                    self.err(name.span, "E0393", format!("拡張メソッド `{}` の候補が複数あり、どれを呼ぶか決められません", name.text));
+                    self.err(
+                        name.span,
+                        "E0393",
+                        format!(
+                            "拡張メソッド `{}` の候補が複数あり、どれを呼ぶか決められません",
+                            name.text
+                        ),
+                    );
                 }
                 let (_, f, env) = best.swap_remove(0);
                 Some((f, env))
@@ -1985,7 +2739,11 @@ impl Checker<'_> {
     fn ext_access(&mut self, e: &Expr, recv: &Type, name: &Ident) -> Option<Access> {
         let (f, env) = self.find_ext(recv, name)?;
         self.set_res(e.id, Res::ExtMethod(f));
-        Some(Access::Func { f, env, recv: Recv::Extension })
+        Some(Access::Func {
+            f,
+            env,
+            recv: Recv::Extension,
+        })
     }
 
     fn member_access(&mut self, e: &Expr, object: &Expr, ot: &Type, name: &Ident) -> Access {
@@ -1994,37 +2752,56 @@ impl Checker<'_> {
         }
         match ot {
             Type::Error => Access::Error,
-            Type::Ns(NsRef::Module(m)) => match self.prog.modules[*m].exports.get(&name.text).cloned() {
-                Some(Sym::Fn(f)) => {
-                    self.set_res(e.id, Res::Fn(f));
-                    Access::Func { f, env: HashMap::new(), recv: Recv::None }
+            Type::Ns(NsRef::Module(m)) => {
+                match self.prog.modules[*m].exports.get(&name.text).cloned() {
+                    Some(Sym::Fn(f)) => {
+                        self.set_res(e.id, Res::Fn(f));
+                        Access::Func {
+                            f,
+                            env: HashMap::new(),
+                            recv: Recv::None,
+                        }
+                    }
+                    Some(Sym::Var(v)) => {
+                        let ty = self.var_type(v, e.span);
+                        self.prog.vars[v].used_outside_main = true;
+                        self.set_res(e.id, Res::Global(v));
+                        Access::Value(ty)
+                    }
+                    Some(Sym::Class(c)) => {
+                        self.set_res(e.id, Res::Class(c));
+                        Access::Value(Type::Ns(NsRef::Class(c)))
+                    }
+                    Some(Sym::Enum(en)) => {
+                        self.set_res(e.id, Res::Enum(en));
+                        Access::Value(Type::Ns(NsRef::Enum(en)))
+                    }
+                    _ => {
+                        let key = self.prog.modules[*m].key.clone();
+                        self.err(
+                            name.span,
+                            "E0123",
+                            format!(
+                                "モジュール `{key}` に `export` された `{}` はありません",
+                                name.text
+                            ),
+                        );
+                        Access::Error
+                    }
                 }
-                Some(Sym::Var(v)) => {
-                    let ty = self.var_type(v, e.span);
-                    self.prog.vars[v].used_outside_main = true;
-                    self.set_res(e.id, Res::Global(v));
-                    Access::Value(ty)
-                }
-                Some(Sym::Class(c)) => {
-                    self.set_res(e.id, Res::Class(c));
-                    Access::Value(Type::Ns(NsRef::Class(c)))
-                }
-                Some(Sym::Enum(en)) => {
-                    self.set_res(e.id, Res::Enum(en));
-                    Access::Value(Type::Ns(NsRef::Enum(en)))
-                }
-                _ => {
-                    let key = self.prog.modules[*m].key.clone();
-                    self.err(name.span, "E0123", format!("モジュール `{key}` に `export` された `{}` はありません", name.text));
-                    Access::Error
-                }
-            },
+            }
             Type::Ns(NsRef::Host(ns)) => {
                 if ns == "Excel" && name.text == "match" {
                     self.set_res(e.id, Res::Intrinsic(Intr::ExcelMatch));
                     return Access::Intrinsic(Intr::ExcelMatch);
                 }
-                match self.prog.namespaces.get(ns).and_then(|n| n.get(&name.text)).cloned() {
+                match self
+                    .prog
+                    .namespaces
+                    .get(ns)
+                    .and_then(|n| n.get(&name.text))
+                    .cloned()
+                {
                     Some(Sym::Class(c)) => {
                         self.set_res(e.id, Res::Class(c));
                         Access::Value(Type::Ns(NsRef::Class(c)))
@@ -2035,7 +2812,11 @@ impl Checker<'_> {
                     }
                     Some(Sym::Fn(f)) => {
                         self.set_res(e.id, Res::Fn(f));
-                        Access::Func { f, env: HashMap::new(), recv: Recv::None }
+                        Access::Func {
+                            f,
+                            env: HashMap::new(),
+                            recv: Recv::None,
+                        }
                     }
                     Some(Sym::Var(v)) => {
                         self.set_res(e.id, Res::Global(v));
@@ -2043,23 +2824,48 @@ impl Checker<'_> {
                     }
                     _ => {
                         let js = crate::names::js_name(&name.text);
-                        if js != name.text && matches!(self.prog.namespaces.get(ns).and_then(|n| n.get(&js)), Some(Sym::Fn(_) | Sym::Var(_))) {
+                        if js != name.text
+                            && matches!(
+                                self.prog.namespaces.get(ns).and_then(|n| n.get(&js)),
+                                Some(Sym::Fn(_) | Sym::Var(_))
+                            )
+                        {
                             self.warn_host_case(name, &js);
-                            return self.member_access(e, object, ot, &Ident { text: js, span: name.span });
+                            return self.member_access(
+                                e,
+                                object,
+                                ot,
+                                &Ident {
+                                    text: js,
+                                    span: name.span,
+                                },
+                            );
                         }
-                        self.err(name.span, "E0202", format!("名前空間 `{ns}` に `{}` はありません", name.text));
+                        self.err(
+                            name.span,
+                            "E0202",
+                            format!("名前空間 `{ns}` に `{}` はありません", name.text),
+                        );
                         Access::Error
                     }
                 }
             }
-            Type::Ns(NsRef::Enum(en)) => match self.prog.enums[*en].members.iter().position(|m| m.name == name.text) {
+            Type::Ns(NsRef::Enum(en)) => match self.prog.enums[*en]
+                .members
+                .iter()
+                .position(|m| m.name == name.text)
+            {
                 Some(i) => {
                     self.set_res(e.id, Res::EnumMember(*en, i));
                     Access::Value(Type::Enum(*en))
                 }
                 None => {
                     let ename = self.prog.enums[*en].name.clone();
-                    self.err(name.span, "E0202", format!("列挙型 `{ename}` に `{}` はありません", name.text));
+                    self.err(
+                        name.span,
+                        "E0202",
+                        format!("列挙型 `{ename}` に `{}` はありません", name.text),
+                    );
                     Access::Error
                 }
             },
@@ -2067,7 +2873,14 @@ impl Checker<'_> {
                 Some(a) => a,
                 None => {
                     let cname = self.prog.classes[*c].name.clone();
-                    self.err(name.span, "E0202", format!("クラス `{cname}` に static メンバー `{}` はありません", name.text));
+                    self.err(
+                        name.span,
+                        "E0202",
+                        format!(
+                            "クラス `{cname}` に static メンバー `{}` はありません",
+                            name.text
+                        ),
+                    );
                     Access::Error
                 }
             },
@@ -2077,7 +2890,11 @@ impl Checker<'_> {
                     Access::Intrinsic(i)
                 }
                 None => {
-                    self.err(name.span, "E0202", format!("`{ns}` に `{}` はありません", name.text));
+                    self.err(
+                        name.span,
+                        "E0202",
+                        format!("`{ns}` に `{}` はありません", name.text),
+                    );
                     Access::Error
                 }
             },
@@ -2100,13 +2917,28 @@ impl Checker<'_> {
                         return Access::Intrinsic(i);
                     }
                 }
-                if let Some(js) = self.host_member_ci(*c, &name.text).filter(|js| *js != name.text) {
+                if let Some(js) = self
+                    .host_member_ci(*c, &name.text)
+                    .filter(|js| *js != name.text)
+                {
                     self.warn_host_case(name, &js);
-                    return self.member_access(e, object, ot, &Ident { text: js, span: name.span });
+                    return self.member_access(
+                        e,
+                        object,
+                        ot,
+                        &Ident {
+                            text: js,
+                            span: name.span,
+                        },
+                    );
                 }
                 let def = &self.prog.classes[*c];
                 // A form's members are all known: its controls, the UserForm members, its exports.
-                let object = self.prog.modules[def.module].form.as_ref().filter(|f| f.class == Some(*c)).map(|f| f.kind);
+                let object = self.prog.modules[def.module]
+                    .form
+                    .as_ref()
+                    .filter(|f| f.class == Some(*c))
+                    .map(|f| f.kind);
                 if object == Some(ObjectKind::Form) {
                     let shown = self.prog.class_display(*c);
                     self.err(name.span, "E0202", format!("フォーム `{shown}` にコントロールやメンバー `{}` はありません（コントロールは forms/{shown}.form.json に、公開する関数は export して書きます）", name.text));
@@ -2115,7 +2947,11 @@ impl Checker<'_> {
                     // A sheet's members are all known too: those of the worksheet, the controls
                     // on it and the exports of its file (spec §12.2).
                     let shown = self.prog.class_display(*c);
-                    let what = if object == Some(ObjectKind::Workbook) { "ブック".to_string() } else { format!("シート `{shown}` ") };
+                    let what = if object == Some(ObjectKind::Workbook) {
+                        "ブック".to_string()
+                    } else {
+                        format!("シート `{shown}` ")
+                    };
                     self.err(name.span, "E0202", format!("{what}にメンバーやコントロール `{}` はありません（公開する関数は objects/{shown}.ras に export して書きます。Excel で足したコントロールは、ブックを保存すると使えます）", name.text));
                     Access::Error
                 } else if def.kind == ClassKind::Host {
@@ -2125,24 +2961,40 @@ impl Checker<'_> {
                     Access::Dynamic
                 } else {
                     let shown = self.prog.class_display(*c);
-                    self.err(name.span, "E0202", format!("`{shown}` にメンバー `{}` はありません", name.text));
+                    self.err(
+                        name.span,
+                        "E0202",
+                        format!("`{shown}` にメンバー `{}` はありません", name.text),
+                    );
                     Access::Error
                 }
             }
             Type::Union(members) => self.union_member_access(e, object, ot, members, name),
-            Type::Struct(s) => match self.prog.structs[*s].fields.iter().find(|f| f.0 == name.text).map(|f| f.1.clone()) {
+            Type::Struct(s) => match self.prog.structs[*s]
+                .fields
+                .iter()
+                .find(|f| f.0 == name.text)
+                .map(|f| f.1.clone())
+            {
                 Some(ty) => {
                     self.set_res(e.id, Res::Dynamic);
                     Access::Value(ty)
                 }
                 None => {
-                    self.err(name.span, "E0202", format!("構造体にフィールド `{}` はありません", name.text));
+                    self.err(
+                        name.span,
+                        "E0202",
+                        format!("構造体にフィールド `{}` はありません", name.text),
+                    );
                     Access::Error
                 }
             },
             Type::Any | Type::Object => {
                 // spec §3.2.3 rule 5
-                let has_ext = self.prog.modules[self.module].ext_methods.iter().any(|&f| self.prog.fns[f].name == name.text);
+                let has_ext = self.prog.modules[self.module]
+                    .ext_methods
+                    .iter()
+                    .any(|&f| self.prog.fns[f].name == name.text);
                 if has_ext {
                     self.warn(name.span, "W0302", format!("レシーバが `{}` 型のため、拡張メソッド `{}` は使われず遅延バインディングの呼び出しになります", self.show(ot), name.text));
                 }
@@ -2165,7 +3017,13 @@ impl Checker<'_> {
                 // user extension methods take priority over built-in members (spec §3.2.4)
                 let builtin = match ot {
                     // `controls.on("Click", …)` on an array of objects (spec §12.2.3).
-                    Type::Array(_) if ot.dims() == 1 && intrinsics::EVENT_MEMBERS.contains(&name.text.as_str()) && matches!(ot.elem(), Some(Type::Class(..))) => Some(Intr::EventOn),
+                    Type::Array(_)
+                        if ot.dims() == 1
+                            && intrinsics::EVENT_MEMBERS.contains(&name.text.as_str())
+                            && matches!(ot.elem(), Some(Type::Class(..))) =>
+                    {
+                        Some(Intr::EventOn)
+                    }
                     Type::Array(_) => intrinsics::array_member(&name.text, ot.dims()),
                     Type::Str => intrinsics::string_member(&name.text),
                     Type::Map(..) => intrinsics::map_member(&name.text),
@@ -2191,7 +3049,15 @@ impl Checker<'_> {
                         Access::Intrinsic(i)
                     }
                     None => {
-                        self.err(name.span, "E0202", format!("`{}` にメンバー `{}` はありません", self.show(ot), name.text));
+                        self.err(
+                            name.span,
+                            "E0202",
+                            format!(
+                                "`{}` にメンバー `{}` はありません",
+                                self.show(ot),
+                                name.text
+                            ),
+                        );
                         Access::Error
                     }
                 }
@@ -2200,13 +3066,28 @@ impl Checker<'_> {
     }
 
     /// Instance member `name` of a class (or host interface), without reporting anything.
-    fn lookup_instance_member(&mut self, c: ClassId, targs: &[Type], name: &str) -> Option<UnionMember> {
+    fn lookup_instance_member(
+        &mut self,
+        c: ClassId,
+        targs: &[Type],
+        name: &str,
+    ) -> Option<UnionMember> {
         let env = self.prog.class_env(c, targs);
         if let Some((owner, idx)) = self.prog.find_field(c, name) {
             let field = &self.prog.classes[owner].fields[idx];
             if !field.is_static {
-                let ty = if field.ty == Type::Void { Type::Error } else { field.ty.subst(&env) };
-                return Some(UnionMember::Value { res: Res::Field(owner, idx), ty, writable: !field.readonly, owner, public: field.vis == Visibility::Public });
+                let ty = if field.ty == Type::Void {
+                    Type::Error
+                } else {
+                    field.ty.subst(&env)
+                };
+                return Some(UnionMember::Value {
+                    res: Res::Field(owner, idx),
+                    ty,
+                    writable: !field.readonly,
+                    owner,
+                    public: field.vis == Visibility::Public,
+                });
             }
         }
         let mut getter = None;
@@ -2215,24 +3096,59 @@ impl Checker<'_> {
             let def = &self.prog.fns[m];
             let public = def.vis == Visibility::Public;
             match def.kind {
-                FnKind::Getter { is_static: false, .. } => getter = Some(m),
-                FnKind::Setter { is_static: false, .. } => setter = Some(m),
-                FnKind::Method { is_static: true, .. } | FnKind::Getter { .. } | FnKind::Setter { .. } => {}
-                _ => return Some(UnionMember::Method { f: m, env, owner: c, public }),
+                FnKind::Getter {
+                    is_static: false, ..
+                } => getter = Some(m),
+                FnKind::Setter {
+                    is_static: false, ..
+                } => setter = Some(m),
+                FnKind::Method {
+                    is_static: true, ..
+                }
+                | FnKind::Getter { .. }
+                | FnKind::Setter { .. } => {}
+                _ => {
+                    return Some(UnionMember::Method {
+                        f: m,
+                        env,
+                        owner: c,
+                        public,
+                    })
+                }
             }
         }
         let f = getter.or(setter)?;
         let public = self.prog.fns[f].vis == Visibility::Public;
         let ty = match (getter, setter) {
             (Some(g), _) => self.fn_ret(g, Span::default()).subst(&env),
-            (None, Some(st)) => self.prog.fns[st].params.first().map(|p| p.ty.subst(&env)).unwrap_or(Type::Error),
+            (None, Some(st)) => self.prog.fns[st]
+                .params
+                .first()
+                .map(|p| p.ty.subst(&env))
+                .unwrap_or(Type::Error),
             _ => Type::Error,
         };
-        Some(UnionMember::Value { res: Res::Property { get: getter, set: setter }, ty, writable: setter.is_some(), owner: c, public })
+        Some(UnionMember::Value {
+            res: Res::Property {
+                get: getter,
+                set: setter,
+            },
+            ty,
+            writable: setter.is_some(),
+            owner: c,
+            public,
+        })
     }
 
     /// `x.name` where `x` is a union: a member that every member type has (spec §2.6.3).
-    fn union_member_access(&mut self, e: &Expr, object: &Expr, ot: &Type, members: &[Type], name: &Ident) -> Access {
+    fn union_member_access(
+        &mut self,
+        e: &Expr,
+        object: &Expr,
+        ot: &Type,
+        members: &[Type],
+        name: &Ident,
+    ) -> Access {
         let shown = self.show(ot);
         let classes: Vec<(ClassId, Vec<Type>)> = members
             .iter()
@@ -2261,18 +3177,44 @@ impl Checker<'_> {
                 return a;
             }
             // VBA spelling of a host member (`s.Name`).
-            let js = classes.iter().find_map(|(c, _)| self.host_member_ci(*c, &name.text)).filter(|js| *js != name.text);
+            let js = classes
+                .iter()
+                .find_map(|(c, _)| self.host_member_ci(*c, &name.text))
+                .filter(|js| *js != name.text);
             if let Some(js) = js {
                 self.warn_host_case(name, &js);
-                return self.member_access(e, object, ot, &Ident { text: js, span: name.span });
+                return self.member_access(
+                    e,
+                    object,
+                    ot,
+                    &Ident {
+                        text: js,
+                        span: name.span,
+                    },
+                );
             }
-            let names: Vec<String> = missing.iter().map(|c| self.prog.class_display(*c)).collect();
+            let names: Vec<String> = missing
+                .iter()
+                .map(|c| self.prog.class_display(*c))
+                .collect();
             let hosts_only = missing.iter().all(|c| {
                 let d = &self.prog.classes[*c];
-                d.kind == ClassKind::Host && !self.prog.modules[d.module].form.as_ref().is_some_and(|f| f.class == Some(*c))
+                d.kind == ClassKind::Host
+                    && !self.prog.modules[d.module]
+                        .form
+                        .as_ref()
+                        .is_some_and(|f| f.class == Some(*c))
             });
             if hosts_only && found.is_empty() {
-                self.warn(name.span, "W0301", format!("`{}` の型定義に `{}` はありません。遅延バインディングとして扱います", names.join("` / `"), name.text));
+                self.warn(
+                    name.span,
+                    "W0301",
+                    format!(
+                        "`{}` の型定義に `{}` はありません。遅延バインディングとして扱います",
+                        names.join("` / `"),
+                        name.text
+                    ),
+                );
                 self.set_res(e.id, Res::Dynamic);
                 return Access::Dynamic;
             }
@@ -2294,10 +3236,18 @@ impl Checker<'_> {
         }
         for m in &found {
             let (owner, public) = match m {
-                UnionMember::Value { owner, public, .. } | UnionMember::Method { owner, public, .. } => (*owner, *public),
+                UnionMember::Value { owner, public, .. }
+                | UnionMember::Method { owner, public, .. } => (*owner, *public),
             };
             if !public && self.fx.class != Some(owner) {
-                self.err(name.span, "E0392", format!("`{}` は private なのでクラスの外からは参照できません", name.text));
+                self.err(
+                    name.span,
+                    "E0392",
+                    format!(
+                        "`{}` は private なのでクラスの外からは参照できません",
+                        name.text
+                    ),
+                );
                 return Access::Error;
             }
         }
@@ -2306,7 +3256,13 @@ impl Checker<'_> {
             let mut tys = Vec::new();
             let mut writable = true;
             for m in found {
-                if let UnionMember::Value { res: r, ty, writable: w, .. } = m {
+                if let UnionMember::Value {
+                    res: r,
+                    ty,
+                    writable: w,
+                    ..
+                } = m
+                {
                     res.get_or_insert(r);
                     tys.push(ty);
                     writable &= w;
@@ -2315,7 +3271,10 @@ impl Checker<'_> {
             let same = tys.windows(2).all(|w| w[0] == w[1]).then(|| tys[0].clone());
             let ty = match &same {
                 Some(t) => t.clone(),
-                None if tys.iter().any(|t| matches!(t, Type::Void | Type::Ns(_)) || t.has_struct()) => {
+                None if tys
+                    .iter()
+                    .any(|t| matches!(t, Type::Void | Type::Ns(_)) || t.has_struct()) =>
+                {
                     self.err(name.span, "E0202", format!("`{}` の型が型ごとに異なるため、ユニオン型 `{shown}` からは参照できません", name.text));
                     return Access::Error;
                 }
@@ -2325,7 +3284,10 @@ impl Checker<'_> {
             self.fx.union_props.insert(e.id, (writable, same));
             return Access::Value(ty);
         }
-        if found.iter().all(|m| matches!(m, UnionMember::Method { .. })) {
+        if found
+            .iter()
+            .all(|m| matches!(m, UnionMember::Method { .. }))
+        {
             let mut methods: Vec<(FnId, HashMap<String, Type>)> = found
                 .into_iter()
                 .filter_map(|m| match m {
@@ -2333,16 +3295,28 @@ impl Checker<'_> {
                     _ => None,
                 })
                 .collect();
-            if methods.iter().any(|(f, _)| !self.prog.fns[*f].type_params.is_empty()) {
+            if methods
+                .iter()
+                .any(|(f, _)| !self.prog.fns[*f].type_params.is_empty())
+            {
                 self.err(name.span, "E0202", format!("ジェネリックなメソッド `{}` はユニオン型 `{shown}` からは呼び出せません。`instanceof` で型を絞り込んでください", name.text));
                 return Access::Error;
             }
             // The signature with the fewest parameters checks the call; the others are compared with it.
-            let primary = methods.iter().enumerate().min_by_key(|(_, (f, _))| self.prog.fns[*f].params.len()).map(|(i, _)| i).unwrap_or(0);
+            let primary = methods
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, (f, _))| self.prog.fns[*f].params.len())
+                .map(|(i, _)| i)
+                .unwrap_or(0);
             let (f, env) = methods.remove(primary);
             self.set_res(e.id, Res::Method(f));
             self.fx.union_calls.insert(e.id, methods);
-            return Access::Func { f, env, recv: Recv::Instance };
+            return Access::Func {
+                f,
+                env,
+                recv: Recv::Instance,
+            };
         }
         self.err(name.span, "E0202", format!("`{}` は型によってプロパティとメソッドが異なるため、ユニオン型 `{shown}` からは参照できません", name.text));
         Access::Error
@@ -2350,9 +3324,15 @@ impl Checker<'_> {
 
     /// Return type of a method reached through a union (the union of the members' return types).
     fn union_call_ret(&self, callee: ExprId, ret: Type) -> Type {
-        let Some(others) = self.fx.union_calls.get(&callee) else { return ret };
+        let Some(others) = self.fx.union_calls.get(&callee) else {
+            return ret;
+        };
         let mut rets = vec![ret];
-        rets.extend(others.iter().map(|(g, env)| self.prog.fns[*g].ret_ty().subst(env)));
+        rets.extend(
+            others
+                .iter()
+                .map(|(g, env)| self.prog.fns[*g].ret_ty().subst(env)),
+        );
         if rets.contains(&Type::Void) {
             Type::Void
         } else {
@@ -2361,8 +3341,17 @@ impl Checker<'_> {
     }
 
     /// Arguments of a call through a union-typed receiver, against the methods of the other members.
-    fn check_union_call(&mut self, call: &Expr, callee: &Expr, name: &str, named: bool, args: &[Expr]) {
-        let Some(others) = self.fx.union_calls.get(&callee.id).cloned() else { return };
+    fn check_union_call(
+        &mut self,
+        call: &Expr,
+        callee: &Expr,
+        name: &str,
+        named: bool,
+        args: &[Expr],
+    ) {
+        let Some(others) = self.fx.union_calls.get(&callee.id).cloned() else {
+            return;
+        };
         let primary = match self.info().res.get(&callee.id) {
             Some(Res::Method(f)) => Some(*f),
             _ => None,
@@ -2370,13 +3359,21 @@ impl Checker<'_> {
         for (g, env) in others {
             let d = self.prog.fns[g].clone();
             let owner = match d.kind {
-                FnKind::Method { class, .. } | FnKind::Abstract { class } | FnKind::Host { class: Some(class) } => self.prog.class_display(class),
+                FnKind::Method { class, .. }
+                | FnKind::Abstract { class }
+                | FnKind::Host { class: Some(class) } => self.prog.class_display(class),
                 _ => d.name.clone(),
             };
             let rest = d.params.last().is_some_and(|p| p.rest);
             let (min, max) = (d.required_params(), d.params.len());
             if args.len() < min || (args.len() > max && !rest) {
-                let count = if rest { format!("{min} 個以上") } else if min == max { format!("{min} 個") } else { format!("{min}〜{max} 個") };
+                let count = if rest {
+                    format!("{min} 個以上")
+                } else if min == max {
+                    format!("{min} 個")
+                } else {
+                    format!("{min}〜{max} 個")
+                };
                 self.err(call.span, "E0402", format!("`{owner}.{name}` の引数は {count}です（ユニオン型のすべての型で呼び出せる必要があります）"));
                 continue;
             }
@@ -2397,10 +3394,24 @@ impl Checker<'_> {
                 if matches!(a.kind, ExprKind::Undefined) {
                     continue;
                 }
-                let Some(p) = d.params.get(i).or(if rest { d.params.last() } else { None }) else { continue };
-                let want = if p.rest && i + 1 >= d.params.len() { p.ty.elem().cloned().unwrap_or(Type::Any).subst(&env) } else { p.ty.subst(&env) };
+                let Some(p) = d
+                    .params
+                    .get(i)
+                    .or(if rest { d.params.last() } else { None })
+                else {
+                    continue;
+                };
+                let want = if p.rest && i + 1 >= d.params.len() {
+                    p.ty.elem().cloned().unwrap_or(Type::Any).subst(&env)
+                } else {
+                    p.ty.subst(&env)
+                };
                 let at = self.info().ty(a.id);
-                let ok = if p.mode == PassMode::ByRef { at == want || want == Type::Any || at.is_error() } else { self.assignable(&at, &want) };
+                let ok = if p.mode == PassMode::ByRef {
+                    at == want || want == Type::Any || at.is_error()
+                } else {
+                    self.assignable(&at, &want)
+                };
                 if !ok {
                     self.err(a.span, "E0301", format!("`{owner}.{name}` の引数 `{}` には `{}` 型が必要です（`{}` は渡せません）", p.name, self.show(&want), self.show(&at)));
                 }
@@ -2417,7 +3428,10 @@ impl Checker<'_> {
                 let res = self.info().res.get(&inner.id).cloned();
                 match res {
                     Some(Res::Local(l)) => {
-                        let (kind, crossed) = (self.fx.locals[l].kind.clone(), self.lookup_local(&id.text).map(|x| x.1).unwrap_or_default());
+                        let (kind, crossed) = (
+                            self.fx.locals[l].kind.clone(),
+                            self.lookup_local(&id.text).map(|x| x.1).unwrap_or_default(),
+                        );
                         if !crossed.is_empty() {
                             self.err(target.span, "E0322", format!("アロー関数の中から外側の変数 `{}` は書き換えられません。`for...of` を使ってください", id.text));
                         }
@@ -2437,24 +3451,39 @@ impl Checker<'_> {
                     Some(Res::Global(v)) => {
                         let var = &self.prog.vars[v];
                         if var.is_const || var.declared {
-                            self.err(target.span, "E0323", format!("`{}` は再代入できません", id.text));
+                            self.err(
+                                target.span,
+                                "E0323",
+                                format!("`{}` は再代入できません", id.text),
+                            );
                         }
                         // (The handler of an event keeps its state there: spec §12.2.3.)
                         if self.current_lambda().is_some() && self.fx.event_handlers == 0 {
-                            self.err(target.span, "E0322", format!("アロー関数の中からモジュール変数 `{}` は書き換えられません", id.text));
+                            self.err(
+                                target.span,
+                                "E0322",
+                                format!(
+                                    "アロー関数の中からモジュール変数 `{}` は書き換えられません",
+                                    id.text
+                                ),
+                            );
                         }
                         self.prog.vars[v].reassigned = true;
                     }
-                    Some(_) if !t.is_error() => self.err(target.span, "E0325", "ここには代入できません"),
+                    Some(_) if !t.is_error() => {
+                        self.err(target.span, "E0325", "ここには代入できません")
+                    }
                     _ => {}
                 }
             }
-            ExprKind::This => {
-                match self.fx.this_local {
-                    Some(l) if self.fx.locals[l].byref => self.fx.locals[l].reassigned = true,
-                    _ => self.err(target.span, "E0325", "`this` に代入するには `byref this: T` と宣言してください"),
-                }
-            }
+            ExprKind::This => match self.fx.this_local {
+                Some(l) if self.fx.locals[l].byref => self.fx.locals[l].reassigned = true,
+                _ => self.err(
+                    target.span,
+                    "E0325",
+                    "`this` に代入するには `byref this: T` と宣言してください",
+                ),
+            },
             ExprKind::Member { name, object, .. } => {
                 // A struct returned by a call is a copy: writing to its field would be lost.
                 let mut root: &Expr = object.peel();
@@ -2471,7 +3500,14 @@ impl Checker<'_> {
                 }
                 if let Some((writable, same)) = self.fx.union_props.get(&inner.id).cloned() {
                     if !writable {
-                        self.err(name.span, "E0323", format!("`{}` はユニオン型のいずれかの型で読み取り専用です", name.text));
+                        self.err(
+                            name.span,
+                            "E0323",
+                            format!(
+                                "`{}` はユニオン型のいずれかの型で読み取り専用です",
+                                name.text
+                            ),
+                        );
                     } else if same.is_none() {
                         self.err(name.span, "E0325", format!("`{}` の型がユニオン型の型ごとに異なるため代入できません。`instanceof` で型を絞り込んでください", name.text));
                     }
@@ -2481,27 +3517,51 @@ impl Checker<'_> {
                 match res {
                     Some(Res::Field(c, i)) => {
                         let f = &self.prog.classes[c].fields[i];
-                        let in_ctor = self.fx.class == Some(c) && self.fx.fn_id.is_some_and(|f| matches!(self.prog.fns[f].kind, FnKind::Ctor { .. }));
+                        let in_ctor = self.fx.class == Some(c)
+                            && self.fx.fn_id.is_some_and(|f| {
+                                matches!(self.prog.fns[f].kind, FnKind::Ctor { .. })
+                            });
                         if f.readonly && !in_ctor {
-                            self.err(name.span, "E0323", format!("`{}` は読み取り専用です", name.text));
+                            self.err(
+                                name.span,
+                                "E0323",
+                                format!("`{}` は読み取り専用です", name.text),
+                            );
                         }
                     }
-                    Some(Res::Property { set: None, .. }) => self.err(name.span, "E0323", format!("`{}` には setter がありません", name.text)),
+                    Some(Res::Property { set: None, .. }) => self.err(
+                        name.span,
+                        "E0323",
+                        format!("`{}` には setter がありません", name.text),
+                    ),
                     Some(Res::Property { .. } | Res::Dynamic | Res::Global(_)) => {}
-                    Some(_) if !t.is_error() => self.err(target.span, "E0325", "ここには代入できません"),
+                    Some(_) if !t.is_error() => {
+                        self.err(target.span, "E0325", "ここには代入できません")
+                    }
                     _ => {}
                 }
             }
             ExprKind::Index { object, .. } => {
                 let ot = self.info().ty(object.id);
                 if ot == Type::Str {
-                    self.err(target.span, "E0325", "文字列の 1 文字を書き換えることはできません");
+                    self.err(
+                        target.span,
+                        "E0325",
+                        "文字列の 1 文字を書き換えることはできません",
+                    );
                 }
                 // Writing an element of a captured array from a lambda mutates outer state.
                 if let ExprKind::Name(id) = &object.peel().kind {
                     if let Some((l, crossed)) = self.lookup_local(&id.text) {
                         if !crossed.is_empty() {
-                            self.err(target.span, "E0322", format!("アロー関数の中から外側の配列 `{}` は書き換えられません", id.text));
+                            self.err(
+                                target.span,
+                                "E0322",
+                                format!(
+                                    "アロー関数の中から外側の配列 `{}` は書き換えられません",
+                                    id.text
+                                ),
+                            );
                         }
                         self.fx.locals[l].reassigned |= false;
                     }
@@ -2553,8 +3613,20 @@ impl Checker<'_> {
     /// `typeof x == "string"`: RAS's `typeof` is VBA's `TypeName` (`"String"`, `"Long"`, `"Worksheet"` ...).
     fn lint_typeof_name(&mut self, lhs: &Expr, rhs: &Expr) {
         let (lit, other) = match (&lhs.peel().kind, &rhs.peel().kind) {
-            (ExprKind::Unary { op: UnaryOp::TypeOf, .. }, ExprKind::Str(s)) => (rhs, s),
-            (ExprKind::Str(s), ExprKind::Unary { op: UnaryOp::TypeOf, .. }) => (lhs, s),
+            (
+                ExprKind::Unary {
+                    op: UnaryOp::TypeOf,
+                    ..
+                },
+                ExprKind::Str(s),
+            ) => (rhs, s),
+            (
+                ExprKind::Str(s),
+                ExprKind::Unary {
+                    op: UnaryOp::TypeOf,
+                    ..
+                },
+            ) => (lhs, s),
             _ => return,
         };
         let hint = match other.as_str() {
@@ -2569,24 +3641,50 @@ impl Checker<'_> {
         self.warn(lit.span, "W0312", format!("`typeof` は VBA の `TypeName` と同じ型名を返すため、`\"{other}\"` とは一致しません。{hint} と比較してください"));
     }
 
-    fn binary_types(&mut self, span: Span, op: BinaryOp, a: &Type, b: &Type, lhs: &Expr, rhs: &Expr) -> Type {
+    fn binary_types(
+        &mut self,
+        span: Span,
+        op: BinaryOp,
+        a: &Type,
+        b: &Type,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) -> Type {
         if a.is_error() || b.is_error() {
-            return if op.is_comparison() { Type::Bool } else { Type::Error };
+            return if op.is_comparison() {
+                Type::Bool
+            } else {
+                Type::Error
+            };
         }
         match op {
             BinaryOp::Add if *a == Type::Str || *b == Type::Str => {
                 let other = if *a == Type::Str { b } else { a };
                 if !self.stringifiable(other) {
-                    self.err(span, "E0381", format!("`{}` は文字列と連結できません", self.show(other)));
+                    self.err(
+                        span,
+                        "E0381",
+                        format!("`{}` は文字列と連結できません", self.show(other)),
+                    );
                 }
                 Type::Str
             }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem => {
                 if (!self.is_numeric(a) || !self.is_numeric(b))
-                    && !(matches!(a, Type::Date) || matches!(b, Type::Date)) {
-                        self.err(span, "E0387", format!("演算子 `{}` は `{}` と `{}` には使えません", op.symbol(), self.show(a), self.show(b)));
-                        return Type::Error;
-                    }
+                    && !(matches!(a, Type::Date) || matches!(b, Type::Date))
+                {
+                    self.err(
+                        span,
+                        "E0387",
+                        format!(
+                            "演算子 `{}` は `{}` と `{}` には使えません",
+                            op.symbol(),
+                            self.show(a),
+                            self.show(b)
+                        ),
+                    );
+                    return Type::Error;
+                }
                 if op == BinaryOp::Sub && *a == Type::Date && *b == Type::Date {
                     return Type::Double;
                 }
@@ -2596,7 +3694,15 @@ impl Checker<'_> {
                         t
                     }
                     None => {
-                        self.err(span, "E0395", format!("`{}` と `{}` の混在した演算には明示的な型変換（`as`）が必要です", self.show(a), self.show(b)));
+                        self.err(
+                            span,
+                            "E0395",
+                            format!(
+                                "`{}` と `{}` の混在した演算には明示的な型変換（`as`）が必要です",
+                                self.show(a),
+                                self.show(b)
+                            ),
+                        );
                         Type::Error
                     }
                 }
@@ -2609,24 +3715,48 @@ impl Checker<'_> {
             }
             BinaryOp::Eq | BinaryOp::Ne => {
                 if !self.comparable(a, b, true) {
-                    self.err(span, "E0396", format!("`{}` と `{}` は比較できません", self.show(a), self.show(b)));
+                    self.err(
+                        span,
+                        "E0396",
+                        format!("`{}` と `{}` は比較できません", self.show(a), self.show(b)),
+                    );
                 }
                 Type::Bool
             }
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                 if !self.comparable(a, b, false) {
-                    self.err(span, "E0396", format!("`{}` と `{}` は大小比較できません", self.show(a), self.show(b)));
+                    self.err(
+                        span,
+                        "E0396",
+                        format!(
+                            "`{}` と `{}` は大小比較できません",
+                            self.show(a),
+                            self.show(b)
+                        ),
+                    );
                 }
                 Type::Bool
             }
-            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr => {
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
                 let int_like = |t: &Type| t.is_integer() || matches!(t, Type::Enum(_) | Type::Any);
                 if !int_like(a) || !int_like(b) {
-                    self.err(span, "E0387", format!("ビット演算子 `{}` は整数にのみ使えます", op.symbol()));
+                    self.err(
+                        span,
+                        "E0387",
+                        format!("ビット演算子 `{}` は整数にのみ使えます", op.symbol()),
+                    );
                     return Type::Error;
                 }
                 if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
-                    return if *a == Type::Long { Type::Long } else { Type::Int };
+                    return if *a == Type::Long {
+                        Type::Long
+                    } else {
+                        Type::Int
+                    };
                 }
                 self.promote(a, b).unwrap_or(Type::Int)
             }
@@ -2635,8 +3765,17 @@ impl Checker<'_> {
     }
 
     /// Constant integer expressions that overflow are compile errors (spec §2.3).
-    fn check_const_overflow(&mut self, span: Span, op: BinaryOp, ty: &Type, lhs: &Expr, rhs: &Expr) {
-        let (Some(a), Some(b)) = (const_int(lhs), const_int(rhs)) else { return };
+    fn check_const_overflow(
+        &mut self,
+        span: Span,
+        op: BinaryOp,
+        ty: &Type,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) {
+        let (Some(a), Some(b)) = (const_int(lhs), const_int(rhs)) else {
+            return;
+        };
         let r = match op {
             BinaryOp::Add => a.checked_add(b),
             BinaryOp::Sub => a.checked_sub(b),
@@ -2669,14 +3808,26 @@ impl Checker<'_> {
             _ => None,
         };
         let tps = self.fx.type_params.clone();
-        self.fx.scopes.push(Scope { names: HashMap::new(), lambda: Some(e.id) });
+        self.fx.scopes.push(Scope {
+            names: HashMap::new(),
+            lambda: Some(e.id),
+        });
         let mut param_types = Vec::new();
         let mut locals = Vec::new();
         for (i, p) in arrow.params.iter().enumerate() {
             let ty = match &p.ty {
                 Some(t) => resolve_type(self.prog, self.module, &tps, t),
                 None => match expected.as_ref().and_then(|f| f.params.get(i)) {
-                    Some(t) if !t.contains_param() || self.fx.type_params.iter().any(|tp| matches!(t, Type::Param(n) if *n == tp.name)) => t.clone(),
+                    Some(t)
+                        if !t.contains_param()
+                            || self
+                                .fx
+                                .type_params
+                                .iter()
+                                .any(|tp| matches!(t, Type::Param(n) if *n == tp.name)) =>
+                    {
+                        t.clone()
+                    }
                     Some(t) if !t.contains_param() => t.clone(),
                     _ => {
                         self.err(p.name.span, "E0150", format!("引数 `{}` の型を推論できません。`({}: 型) => ...` のように型注釈を付けてください", p.name.text, p.name.text));
@@ -2693,13 +3844,29 @@ impl Checker<'_> {
         }
         if let Some(f) = &expected {
             if arrow.params.len() > f.params.len() {
-                self.err(arrow.span, "E0400", format!("アロー関数の引数が多すぎます（最大 {} 個）", f.params.len()));
+                self.err(
+                    arrow.span,
+                    "E0400",
+                    format!("アロー関数の引数が多すぎます（最大 {} 個）", f.params.len()),
+                );
             }
         }
         self.info().lambda_params.insert(e.id, locals);
         self.info().lambda_captures.entry(e.id).or_default();
-        let declared_ret = arrow.ret.as_ref().map(|t| resolve_type(self.prog, self.module, &tps, t));
-        let expected_ret = declared_ret.clone().or_else(|| expected.as_ref().map(|f| f.ret.clone()).filter(|r| !r.contains_param() || self.fx.type_params.iter().any(|tp| matches!(r, Type::Param(n) if *n == tp.name))));
+        let declared_ret = arrow
+            .ret
+            .as_ref()
+            .map(|t| resolve_type(self.prog, self.module, &tps, t));
+        let expected_ret = declared_ret.clone().or_else(|| {
+            expected.as_ref().map(|f| f.ret.clone()).filter(|r| {
+                !r.contains_param()
+                    || self
+                        .fx
+                        .type_params
+                        .iter()
+                        .any(|tp| matches!(r, Type::Param(n) if *n == tp.name))
+            })
+        });
         let saved_loops = std::mem::take(&mut self.fx.loops);
         let saved_switch = std::mem::replace(&mut self.fx.switch_depth, 0);
         let ret = match &arrow.body {
@@ -2726,7 +3893,10 @@ impl Checker<'_> {
                 }
             }
             ast::ArrowBody::Block(b) => {
-                self.fx.lambda_rets.push(LambdaRet { expected: expected_ret.clone(), inferred: None });
+                self.fx.lambda_rets.push(LambdaRet {
+                    expected: expected_ret.clone(),
+                    inferred: None,
+                });
                 self.block(b);
                 let lr = self.fx.lambda_rets.pop().unwrap();
                 expected_ret.clone().or(lr.inferred).unwrap_or(Type::Void)
@@ -2735,12 +3905,22 @@ impl Checker<'_> {
         self.fx.loops = saved_loops;
         self.fx.switch_depth = saved_switch;
         self.fx.scopes.pop();
-        Type::Func(Box::new(FuncType { params: param_types, ret }))
+        Type::Func(Box::new(FuncType {
+            params: param_types,
+            ret,
+        }))
     }
 
     // ------------------------------------------------------------------ calls
 
-    fn call(&mut self, e: &Expr, callee: &Expr, type_args: &[ast::TypeRef], args: &[Expr], expect: Option<&Type>) -> Type {
+    fn call(
+        &mut self,
+        e: &Expr,
+        callee: &Expr,
+        type_args: &[ast::TypeRef],
+        args: &[Expr],
+        expect: Option<&Type>,
+    ) -> Type {
         let orig_args = args;
         let c = callee.peel();
         let (access, recv): (Access, Option<(&Expr, Type)>) = match &c.kind {
@@ -2754,9 +3934,17 @@ impl Checker<'_> {
                 }
                 (a, None)
             }
-            ExprKind::Member { object, name, optional } => {
+            ExprKind::Member {
+                object,
+                name,
+                optional,
+            } => {
                 if *optional {
-                    self.err(c.span, "E0388", "オプショナルチェーン（`?.`）には対応していません");
+                    self.err(
+                        c.span,
+                        "E0388",
+                        "オプショナルチェーン（`?.`）には対応していません",
+                    );
                 }
                 let ot = self.expr(object, None);
                 let a = self.member_access(c, object, &ot, name);
@@ -2771,13 +3959,19 @@ impl Checker<'_> {
             _ => (Access::Value(self.value(callee, None)), None),
         };
         if !type_args.is_empty() && !matches!(access, Access::Func { .. }) {
-            self.err(e.span, "E0401", "型引数はジェネリック関数の呼び出しにのみ指定できます");
+            self.err(
+                e.span,
+                "E0401",
+                "型引数はジェネリック関数の呼び出しにのみ指定できます",
+            );
         }
         let positional;
         let args: &[Expr] = if has_named(args) {
             let sig = match &access {
                 Access::Func { f, recv, .. } => Some((*f, usize::from(*recv == Recv::Extension))),
-                Access::Value(Type::Class(cid, _)) => self.prog.classes[*cid].call_sig.map(|f| (f, 0)),
+                Access::Value(Type::Class(cid, _)) => {
+                    self.prog.classes[*cid].call_sig.map(|f| (f, 0))
+                }
                 _ => None,
             };
             match sig {
@@ -2814,15 +4008,35 @@ impl Checker<'_> {
                         self.value(a, None);
                     }
                 }
-                self.info().calls.insert(e.id, CallInfo { target: CallTarget::Dynamic, type_args: Vec::new() });
+                self.info().calls.insert(
+                    e.id,
+                    CallInfo {
+                        target: CallTarget::Dynamic,
+                        type_args: Vec::new(),
+                    },
+                );
                 Type::Any
             }
             Access::Intrinsic(i) => {
-                self.info().calls.insert(e.id, CallInfo { target: CallTarget::Intrinsic(i), type_args: Vec::new() });
+                self.info().calls.insert(
+                    e.id,
+                    CallInfo {
+                        target: CallTarget::Intrinsic(i),
+                        type_args: Vec::new(),
+                    },
+                );
                 let (robj, rty) = match &recv {
                     Some((o, t)) if i == Intr::EventOn => (Some(*o), Some(t.clone())),
                     // A host collection is seen as an array of its members.
-                    Some((o, t)) => (Some(*o), Some(self.prog.collection_elem(t).map(Type::array).unwrap_or_else(|| t.clone()))),
+                    Some((o, t)) => (
+                        Some(*o),
+                        Some(
+                            self.prog
+                                .collection_elem(t)
+                                .map(Type::array)
+                                .unwrap_or_else(|| t.clone()),
+                        ),
+                    ),
                     None => (None, None),
                 };
                 self.intrinsic_call(e, i, robj, rty.as_ref(), args, expect)
@@ -2835,7 +4049,8 @@ impl Checker<'_> {
                     (_, Recv::Instance) => CallTarget::Method(f),
                     _ => CallTarget::Fn(f),
                 };
-                let qualify = matches!(&def_kind, FnKind::Host { class: Some(_) }) && self.prog.fns[f].vba_name() == "Range";
+                let qualify = matches!(&def_kind, FnKind::Host { class: Some(_) })
+                    && self.prog.fns[f].vba_name() == "Range";
                 if qualify {
                     self.fx.qualify_depth += 1;
                 }
@@ -2862,13 +4077,27 @@ impl Checker<'_> {
                     }
                 }
                 self.lint_member_call(c);
-                self.info().calls.insert(e.id, CallInfo { target, type_args: targs });
+                self.info().calls.insert(
+                    e.id,
+                    CallInfo {
+                        target,
+                        type_args: targs,
+                    },
+                );
                 ret
             }
             Access::Value(t) => match &t {
                 Type::Func(ft) => {
                     if args.len() != ft.params.len() {
-                        self.err(e.span, "E0402", format!("引数の数が合いません（{} 個必要ですが {} 個渡されています）", ft.params.len(), args.len()));
+                        self.err(
+                            e.span,
+                            "E0402",
+                            format!(
+                                "引数の数が合いません（{} 個必要ですが {} 個渡されています）",
+                                ft.params.len(),
+                                args.len()
+                            ),
+                        );
                     }
                     for (i, a) in args.iter().enumerate() {
                         let pt = ft.params.get(i).cloned();
@@ -2877,21 +4106,39 @@ impl Checker<'_> {
                             self.coerce(a, &at, &pt);
                         }
                     }
-                    self.info().calls.insert(e.id, CallInfo { target: CallTarget::Closure, type_args: Vec::new() });
+                    self.info().calls.insert(
+                        e.id,
+                        CallInfo {
+                            target: CallTarget::Closure,
+                            type_args: Vec::new(),
+                        },
+                    );
                     ft.ret.clone()
                 }
                 Type::Class(cid, cargs) if self.prog.classes[*cid].call_sig.is_some() => {
                     let sig = self.prog.classes[*cid].call_sig.unwrap();
                     let env = self.prog.class_env(*cid, cargs);
                     let (ret, _) = self.check_fn_call(e, sig, env, None, &[], args);
-                    self.info().calls.insert(e.id, CallInfo { target: CallTarget::DefaultMember(sig), type_args: Vec::new() });
+                    self.info().calls.insert(
+                        e.id,
+                        CallInfo {
+                            target: CallTarget::DefaultMember(sig),
+                            type_args: Vec::new(),
+                        },
+                    );
                     ret
                 }
                 Type::Any | Type::Object => {
                     for a in args {
                         self.value(a, None);
                     }
-                    self.info().calls.insert(e.id, CallInfo { target: CallTarget::Dynamic, type_args: Vec::new() });
+                    self.info().calls.insert(
+                        e.id,
+                        CallInfo {
+                            target: CallTarget::Dynamic,
+                            type_args: Vec::new(),
+                        },
+                    );
                     Type::Any
                 }
                 Type::Ns(NsRef::Class(cid)) => {
@@ -2899,7 +4146,13 @@ impl Checker<'_> {
                     for a in args {
                         self.expr(a, None);
                     }
-                    self.err(e.span, "E0403", format!("クラスのインスタンスを作るには `new {name}(...)` と書いてください"));
+                    self.err(
+                        e.span,
+                        "E0403",
+                        format!(
+                            "クラスのインスタンスを作るには `new {name}(...)` と書いてください"
+                        ),
+                    );
                     Type::Error
                 }
                 Type::Error => {
@@ -2923,10 +4176,20 @@ impl Checker<'_> {
     /// Lint rule 10: `.Select` / `.Activate`.
     fn lint_member_call(&mut self, callee: &Expr) {
         if let ExprKind::Member { name, .. } = &callee.kind {
-            let Some(Res::Method(m)) = self.info().res.get(&callee.id).cloned() else { return };
+            let Some(Res::Method(m)) = self.info().res.get(&callee.id).cloned() else {
+                return;
+            };
             let host = self.prog.fns[m].vba_name().to_string();
             if matches!(host.as_str(), "Select" | "Activate") {
-                self.diag(Severity::Info, name.span, "I0402", format!("`.{}` は遅く不安定です。対象のオブジェクトを直接操作してください", name.text));
+                self.diag(
+                    Severity::Info,
+                    name.span,
+                    "I0402",
+                    format!(
+                        "`.{}` は遅く不安定です。対象のオブジェクトを直接操作してください",
+                        name.text
+                    ),
+                );
             }
         }
     }
@@ -2945,7 +4208,16 @@ impl Checker<'_> {
         let tparams = def.type_params.clone();
         if !explicit.is_empty() {
             if explicit.len() != tparams.len() {
-                self.err(call.span, "E0401", format!("`{}` の型引数は {} 個です（{} 個指定されています）", def.name, tparams.len(), explicit.len()));
+                self.err(
+                    call.span,
+                    "E0401",
+                    format!(
+                        "`{}` の型引数は {} 個です（{} 個指定されています）",
+                        def.name,
+                        tparams.len(),
+                        explicit.len()
+                    ),
+                );
             }
             let tps = self.fx.type_params.clone();
             for (tp, t) in tparams.iter().zip(explicit.iter()) {
@@ -2962,11 +4234,29 @@ impl Checker<'_> {
             }
             params = &params[1..];
         }
-        let required = params.iter().filter(|p| !p.optional && p.default.is_none()).count();
+        let required = params
+            .iter()
+            .filter(|p| !p.optional && p.default.is_none())
+            .count();
         if args.len() < required || args.len() > params.len() {
-            let want = if required == params.len() { format!("{required}") } else { format!("{required}〜{}", params.len()) };
-            let shown = if def.name.is_empty() { "既定メンバー".to_string() } else { format!("`{}`", def.name) };
-            self.err(call.span, "E0402", format!("{shown} の引数の数が合いません（{want} 個必要ですが {} 個渡されています）", args.len()));
+            let want = if required == params.len() {
+                format!("{required}")
+            } else {
+                format!("{required}〜{}", params.len())
+            };
+            let shown = if def.name.is_empty() {
+                "既定メンバー".to_string()
+            } else {
+                format!("`{}`", def.name)
+            };
+            self.err(
+                call.span,
+                "E0402",
+                format!(
+                    "{shown} の引数の数が合いません（{want} 個必要ですが {} 個渡されています）",
+                    args.len()
+                ),
+            );
         }
         let mut arg_types: Vec<Option<Type>> = vec![None; args.len()];
         // pass 1: everything except lambdas, so that their parameter types can be inferred
@@ -3011,7 +4301,15 @@ impl Checker<'_> {
                             Constraint::Type(t) => self.show(t),
                             Constraint::None => String::new(),
                         };
-                        self.err(call.span, "E0404", format!("型引数 `{} = {}` は制約 `{c}` を満たしません", tp.name, self.show(t)));
+                        self.err(
+                            call.span,
+                            "E0404",
+                            format!(
+                                "型引数 `{} = {}` は制約 `{c}` を満たしません",
+                                tp.name,
+                                self.show(t)
+                            ),
+                        );
                     }
                     targs.push(t.clone());
                 }
@@ -3030,11 +4328,21 @@ impl Checker<'_> {
         if let Some((robj, rty)) = &recv {
             let want = def.params[0].ty.subst(&env);
             if !self.assignable(rty, &want) {
-                self.err(robj.span, "E0301", format!("レシーバの型 `{}` は `{}` ではありません", self.show(rty), self.show(&want)));
+                self.err(
+                    robj.span,
+                    "E0301",
+                    format!(
+                        "レシーバの型 `{}` は `{}` ではありません",
+                        self.show(rty),
+                        self.show(&want)
+                    ),
+                );
             }
         }
         for (i, a) in args.iter().enumerate() {
-            let (Some(p), Some(at)) = (params.get(i), &arg_types[i]) else { continue };
+            let (Some(p), Some(at)) = (params.get(i), &arg_types[i]) else {
+                continue;
+            };
             let want = p.ty.subst(&env);
             if p.mode == PassMode::ByRef {
                 self.byref_arg(a, at, &want, &format!("`byref` 引数 `{}`", p.name));
@@ -3049,7 +4357,11 @@ impl Checker<'_> {
         }
         let ret = self.fn_ret(f, call.span).subst(&env);
         // `createObject("Scripting.FileSystemObject")`: the type of what a ProgID written out creates.
-        if def.host_name.as_deref() == Some("CreateObject") && self.prog.modules[def.module].rel_path.starts_with("<stdlib>/") {
+        if def.host_name.as_deref() == Some("CreateObject")
+            && self.prog.modules[def.module]
+                .rel_path
+                .starts_with("<stdlib>/")
+        {
             if let [arg] = args {
                 if let ExprKind::Str(id) = &arg.peel().kind {
                     if let Some(c) = self.prog.class_of_prog_id(id) {
@@ -3066,8 +4378,13 @@ impl Checker<'_> {
             Type::Param(n) => tparams.iter().any(|p| &p.name == n) && !env.contains_key(n),
             Type::Array(e) => self.has_unbound(e, tparams, env),
             Type::Class(_, args) => args.iter().any(|a| self.has_unbound(a, tparams, env)),
-            Type::Map(k, v) => self.has_unbound(k, tparams, env) || self.has_unbound(v, tparams, env),
-            Type::Func(f) => f.params.iter().any(|p| self.has_unbound(p, tparams, env)) || self.has_unbound(&f.ret, tparams, env),
+            Type::Map(k, v) => {
+                self.has_unbound(k, tparams, env) || self.has_unbound(v, tparams, env)
+            }
+            Type::Func(f) => {
+                f.params.iter().any(|p| self.has_unbound(p, tparams, env))
+                    || self.has_unbound(&f.ret, tparams, env)
+            }
             _ => false,
         }
     }
@@ -3075,12 +4392,26 @@ impl Checker<'_> {
     /// Substitutes bound type parameters; unbound ones of the callee become `Error` (to be inferred).
     fn subst_bound(&self, t: &Type, tparams: &[TypeParamDef], env: &HashMap<String, Type>) -> Type {
         match t {
-            Type::Param(n) if tparams.iter().any(|p| &p.name == n) => env.get(n).cloned().unwrap_or(Type::Param(format!("?{n}"))),
+            Type::Param(n) if tparams.iter().any(|p| &p.name == n) => {
+                env.get(n).cloned().unwrap_or(Type::Param(format!("?{n}")))
+            }
             Type::Array(e) => Type::Array(Box::new(self.subst_bound(e, tparams, env))),
-            Type::Class(c, args) => Type::Class(*c, args.iter().map(|a| self.subst_bound(a, tparams, env)).collect()),
-            Type::Map(k, v) => Type::Map(Box::new(self.subst_bound(k, tparams, env)), Box::new(self.subst_bound(v, tparams, env))),
+            Type::Class(c, args) => Type::Class(
+                *c,
+                args.iter()
+                    .map(|a| self.subst_bound(a, tparams, env))
+                    .collect(),
+            ),
+            Type::Map(k, v) => Type::Map(
+                Box::new(self.subst_bound(k, tparams, env)),
+                Box::new(self.subst_bound(v, tparams, env)),
+            ),
             Type::Func(f) => Type::Func(Box::new(FuncType {
-                params: f.params.iter().map(|p| self.subst_bound(p, tparams, env)).collect(),
+                params: f
+                    .params
+                    .iter()
+                    .map(|p| self.subst_bound(p, tparams, env))
+                    .collect(),
                 ret: self.subst_bound(&f.ret, tparams, env),
             })),
             other => other.subst(env),
@@ -3091,14 +4422,24 @@ impl Checker<'_> {
     fn byref_arg(&mut self, a: &Expr, at: &Type, want: &Type, what: &str) {
         let inner = a.peel();
         let is_lvalue = match &inner.kind {
-            ExprKind::Name(_) => matches!(self.info().res.get(&inner.id), Some(Res::Local(_) | Res::Global(_))),
-            ExprKind::Member { .. } => matches!(self.info().res.get(&inner.id), Some(Res::Field(..) | Res::Dynamic | Res::Global(_))),
+            ExprKind::Name(_) => matches!(
+                self.info().res.get(&inner.id),
+                Some(Res::Local(_) | Res::Global(_))
+            ),
+            ExprKind::Member { .. } => matches!(
+                self.info().res.get(&inner.id),
+                Some(Res::Field(..) | Res::Dynamic | Res::Global(_))
+            ),
             ExprKind::Index { .. } | ExprKind::This => true,
             ExprKind::Error => true,
             _ => false,
         };
         if !is_lvalue {
-            self.err(a.span, "E0406", format!("{what} にはリテラルや式ではなく変数を渡してください（参照渡しです）"));
+            self.err(
+                a.span,
+                "E0406",
+                format!("{what} にはリテラルや式ではなく変数を渡してください（参照渡しです）"),
+            );
             return;
         }
         if let Some(l) = self.guarded_local(a) {
@@ -3115,9 +4456,16 @@ impl Checker<'_> {
         if let ExprKind::Name(id) = &inner.kind {
             match self.info().res.get(&inner.id).cloned() {
                 Some(Res::Local(l)) => {
-                    let (kind, crossed) = (self.fx.locals[l].kind.clone(), self.lookup_local(&id.text).map(|x| x.1).unwrap_or_default());
+                    let (kind, crossed) = (
+                        self.fx.locals[l].kind.clone(),
+                        self.lookup_local(&id.text).map(|x| x.1).unwrap_or_default(),
+                    );
                     if kind == LocalKind::Const {
-                        self.err(a.span, "E0323", format!("`const` の `{}` は `byref` 引数に渡せません", id.text));
+                        self.err(
+                            a.span,
+                            "E0323",
+                            format!("`const` の `{}` は `byref` 引数に渡せません", id.text),
+                        );
                     }
                     if !crossed.is_empty() {
                         self.err(a.span, "E0322", format!("アロー関数の中から外側の変数 `{}` を `byref` で渡すことはできません", id.text));
@@ -3126,7 +4474,11 @@ impl Checker<'_> {
                 }
                 Some(Res::Global(v)) => {
                     if self.prog.vars[v].is_const {
-                        self.err(a.span, "E0323", format!("`const` の `{}` は `byref` 引数に渡せません", id.text));
+                        self.err(
+                            a.span,
+                            "E0323",
+                            format!("`const` の `{}` は `byref` 引数に渡せません", id.text),
+                        );
                     }
                     self.prog.vars[v].reassigned = true;
                 }
@@ -3151,7 +4503,9 @@ impl Checker<'_> {
             Some(t)
         };
         let ctor = match &resolved {
-            Some(Type::Class(c, _)) if self.prog.classes[*c].kind == ClassKind::Class => self.prog.classes[*c].ctor,
+            Some(Type::Class(c, _)) if self.prog.classes[*c].kind == ClassKind::Class => {
+                self.prog.classes[*c].ctor
+            }
             _ => None,
         };
         match ctor {
@@ -3173,18 +4527,37 @@ impl Checker<'_> {
     /// Puts the arguments of a call with named arguments into parameter order (spec §3.3).
     /// `skip` leading parameters are not written in the argument list (the receiver of an
     /// extension method). Returns `None` after reporting an error; every value is then checked.
-    fn reorder_named(&mut self, call: &Expr, f: FnId, skip: usize, args: &[Expr]) -> Option<Rc<[Expr]>> {
+    fn reorder_named(
+        &mut self,
+        call: &Expr,
+        f: FnId,
+        skip: usize,
+        args: &[Expr],
+    ) -> Option<Rc<[Expr]>> {
         let def = &self.prog.fns[f];
         let params: Vec<ParamDef> = def.params.iter().skip(skip).cloned().collect();
-        let shown = if def.name.is_empty() { "既定メンバー".to_string() } else { format!("`{}`", def.name) };
+        let shown = if def.name.is_empty() {
+            "既定メンバー".to_string()
+        } else {
+            format!("`{}`", def.name)
+        };
         let mut slots: Vec<Option<Expr>> = Vec::new();
         let mut hole = None;
         let mut ok = true;
         let mut named_seen = false;
         for (i, a) in args.iter().enumerate() {
-            let ExprKind::NamedArg { name, value, hole: h } = &a.kind else {
+            let ExprKind::NamedArg {
+                name,
+                value,
+                hole: h,
+            } = &a.kind
+            else {
                 if named_seen {
-                    self.err(a.span, "E0413", "名前付き引数の後ろに、名前のない引数は書けません");
+                    self.err(
+                        a.span,
+                        "E0413",
+                        "名前付き引数の後ろに、名前のない引数は書けません",
+                    );
                     ok = false;
                 } else {
                     slots.resize(slots.len().max(i + 1), None);
@@ -3196,25 +4569,46 @@ impl Checker<'_> {
             hole.get_or_insert(*h);
             match params.iter().position(|p| p.name == name.text) {
                 Some(j) if params[j].rest => {
-                    self.err(name.span, "E0412", format!("可変長引数 `...{}` には名前を付けて渡せません", name.text));
+                    self.err(
+                        name.span,
+                        "E0412",
+                        format!("可変長引数 `...{}` には名前を付けて渡せません", name.text),
+                    );
                     ok = false;
                 }
                 Some(j) => {
                     slots.resize(slots.len().max(j + 1), None);
                     if slots[j].is_some() {
-                        self.err(name.span, "E0413", format!("引数 `{}` が二重に指定されています", name.text));
+                        self.err(
+                            name.span,
+                            "E0413",
+                            format!("引数 `{}` が二重に指定されています", name.text),
+                        );
                         ok = false;
                     } else {
                         slots[j] = Some((**value).clone());
                     }
                 }
                 None => {
-                    let msg = match params.iter().find(|p| p.name.eq_ignore_ascii_case(&name.text)) {
-                        Some(p) => format!("{shown} に引数 `{}` はありません。`{}` ではありませんか", name.text, p.name),
+                    let msg = match params
+                        .iter()
+                        .find(|p| p.name.eq_ignore_ascii_case(&name.text))
+                    {
+                        Some(p) => format!(
+                            "{shown} に引数 `{}` はありません。`{}` ではありませんか",
+                            name.text, p.name
+                        ),
                         None if params.is_empty() => format!("{shown} は引数を取りません"),
                         None => {
-                            let list = params.iter().map(|p| format!("`{}`", p.name)).collect::<Vec<_>>().join(", ");
-                            format!("{shown} に引数 `{}` はありません（引数: {list}）", name.text)
+                            let list = params
+                                .iter()
+                                .map(|p| format!("`{}`", p.name))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!(
+                                "{shown} に引数 `{}` はありません（引数: {list}）",
+                                name.text
+                            )
                         }
                     };
                     self.err(name.span, "E0412", msg);
@@ -3226,11 +4620,23 @@ impl Checker<'_> {
             let missing: Vec<String> = params
                 .iter()
                 .enumerate()
-                .filter(|(j, p)| !p.optional && p.default.is_none() && !p.rest && slots.get(*j).is_none_or(|s| s.is_none()))
+                .filter(|(j, p)| {
+                    !p.optional
+                        && p.default.is_none()
+                        && !p.rest
+                        && slots.get(*j).is_none_or(|s| s.is_none())
+                })
                 .map(|(_, p)| format!("`{}`", p.name))
                 .collect();
             if !missing.is_empty() {
-                self.err(call.span, "E0414", format!("{shown} の必須の引数 {} が指定されていません", missing.join(", ")));
+                self.err(
+                    call.span,
+                    "E0414",
+                    format!(
+                        "{shown} の必須の引数 {} が指定されていません",
+                        missing.join(", ")
+                    ),
+                );
                 ok = false;
             }
         }
@@ -3242,19 +4648,35 @@ impl Checker<'_> {
         }
         let hole = hole.expect("a named argument");
         let span = Span::empty(call.span.end());
-        let v: Rc<[Expr]> = slots.into_iter().map(|s| s.unwrap_or(Expr { id: hole, kind: ExprKind::Undefined, span })).collect();
+        let v: Rc<[Expr]> = slots
+            .into_iter()
+            .map(|s| {
+                s.unwrap_or(Expr {
+                    id: hole,
+                    kind: ExprKind::Undefined,
+                    span,
+                })
+            })
+            .collect();
         self.info().positional_args.insert(call.id, v.clone());
         Some(v)
     }
 
     fn new_expr_inner(&mut self, e: &Expr, ty: &ast::TypeRef, args: &[Expr]) -> Type {
         // Built-in constructors.
-        if let ast::TypeRef::Named { path, args: targs, .. } = ty {
+        if let ast::TypeRef::Named {
+            path, args: targs, ..
+        } = ty
+        {
             if path.len() == 1 {
                 match path[0].text.as_str() {
                     "Error" => {
                         if args.is_empty() || args.len() > 2 {
-                            self.err(e.span, "E0402", "`new Error(message, code?)` の形で使ってください");
+                            self.err(
+                                e.span,
+                                "E0402",
+                                "`new Error(message, code?)` の形で使ってください",
+                            );
                         }
                         for (i, a) in args.iter().enumerate() {
                             let want = if i == 0 { Type::Str } else { Type::Int };
@@ -3266,9 +4688,15 @@ impl Checker<'_> {
                     "Array" => {
                         let tps = self.fx.type_params.clone();
                         let elem = match targs.first() {
-                            Some(t) if targs.len() == 1 => resolve_type(self.prog, self.module, &tps, t),
+                            Some(t) if targs.len() == 1 => {
+                                resolve_type(self.prog, self.module, &tps, t)
+                            }
                             _ => {
-                                self.err(e.span, "E0401", "`new Array<T>(長さ)` のように要素の型を指定してください");
+                                self.err(
+                                    e.span,
+                                    "E0401",
+                                    "`new Array<T>(長さ)` のように要素の型を指定してください",
+                                );
                                 Type::Error
                             }
                         };
@@ -3281,12 +4709,20 @@ impl Checker<'_> {
                                 self.err(a.span, "E0389", "配列の長さは整数である必要があります");
                             }
                         }
-                        return if args.len() == 2 { Type::array(Type::array(elem)) } else { Type::array(elem) };
+                        return if args.len() == 2 {
+                            Type::array(Type::array(elem))
+                        } else {
+                            Type::array(elem)
+                        };
                     }
                     "Map" => {
                         let tps = self.fx.type_params.clone();
                         if targs.len() != 2 {
-                            self.err(e.span, "E0401", "`new Map<K, V>()` のようにキーと値の型を指定してください");
+                            self.err(
+                                e.span,
+                                "E0401",
+                                "`new Map<K, V>()` のようにキーと値の型を指定してください",
+                            );
                             return Type::Error;
                         }
                         let k = resolve_type(self.prog, self.module, &tps, &targs[0]);
@@ -3294,13 +4730,30 @@ impl Checker<'_> {
                         if !args.is_empty() {
                             self.err(e.span, "E0402", "`new Map<K, V>()` は引数を取りません");
                         }
-                        if !(k.is_numeric() || matches!(k, Type::Str | Type::Any | Type::Date | Type::Error | Type::Param(_))) {
-                            self.err(targs[0].span(), "E0408", "`Map` のキーには数値・文字列・日付のいずれかを使ってください");
+                        if !(k.is_numeric()
+                            || matches!(
+                                k,
+                                Type::Str | Type::Any | Type::Date | Type::Error | Type::Param(_)
+                            ))
+                        {
+                            self.err(
+                                targs[0].span(),
+                                "E0408",
+                                "`Map` のキーには数値・文字列・日付のいずれかを使ってください",
+                            );
                         }
                         // A map of structs is an instance of the bundled class (see `resolve_type`).
-                        if let (Type::Struct(_), Some(c)) = (&v, crate::collect::struct_map_class(self.prog)) {
+                        if let (Type::Struct(_), Some(c)) =
+                            (&v, crate::collect::struct_map_class(self.prog))
+                        {
                             let targs = vec![k, v];
-                            self.info().calls.insert(e.id, CallInfo { target: CallTarget::Ctor(c), type_args: targs.clone() });
+                            self.info().calls.insert(
+                                e.id,
+                                CallInfo {
+                                    target: CallTarget::Ctor(c),
+                                    type_args: targs.clone(),
+                                },
+                            );
                             return Type::Class(c, targs);
                         }
                         return Type::Map(Box::new(k), Box::new(v));
@@ -3316,16 +4769,35 @@ impl Checker<'_> {
                 let def = self.prog.classes[*c].clone();
                 match def.kind {
                     ClassKind::Interface => {
-                        self.err(e.span, "E0409", format!("インターフェイス `{}` のインスタンスは作れません", def.name));
+                        self.err(
+                            e.span,
+                            "E0409",
+                            format!("インターフェイス `{}` のインスタンスは作れません", def.name),
+                        );
                     }
                     ClassKind::Host => {
-                        if def.namespace.as_deref() != Some("VBA") && crate::model::prog_id(def.namespace.as_deref(), &def.name).is_none() {
-                            self.err(e.span, "E0409", format!("`{}` は `new` で作成できません", self.prog.class_display(*c)));
+                        if def.namespace.as_deref() != Some("VBA")
+                            && crate::model::prog_id(def.namespace.as_deref(), &def.name).is_none()
+                        {
+                            self.err(
+                                e.span,
+                                "E0409",
+                                format!(
+                                    "`{}` は `new` で作成できません",
+                                    self.prog.class_display(*c)
+                                ),
+                            );
                         }
                         for a in args {
                             self.value(a, None);
                         }
-                        self.info().calls.insert(e.id, CallInfo { target: CallTarget::Ctor(*c), type_args: targs.clone() });
+                        self.info().calls.insert(
+                            e.id,
+                            CallInfo {
+                                target: CallTarget::Ctor(*c),
+                                type_args: targs.clone(),
+                            },
+                        );
                         return t;
                     }
                     ClassKind::Class => {}
@@ -3340,14 +4812,27 @@ impl Checker<'_> {
                     }
                     None => {
                         if !args.is_empty() {
-                            self.err(e.span, "E0402", format!("クラス `{}` にはコンストラクタがないため、引数は渡せません", def.name));
+                            self.err(
+                                e.span,
+                                "E0402",
+                                format!(
+                                    "クラス `{}` にはコンストラクタがないため、引数は渡せません",
+                                    def.name
+                                ),
+                            );
                         }
                         for a in args {
                             self.expr(a, None);
                         }
                     }
                 }
-                self.info().calls.insert(e.id, CallInfo { target: CallTarget::Ctor(*c), type_args: targs.clone() });
+                self.info().calls.insert(
+                    e.id,
+                    CallInfo {
+                        target: CallTarget::Ctor(*c),
+                        type_args: targs.clone(),
+                    },
+                );
                 t
             }
             Type::Error => {
@@ -3361,7 +4846,11 @@ impl Checker<'_> {
                 for a in args {
                     self.expr(a, None);
                 }
-                self.err(e.span, "E0409", format!("`{shown}` は `new` で作成できません"));
+                self.err(
+                    e.span,
+                    "E0409",
+                    format!("`{shown}` は `new` で作成できません"),
+                );
                 Type::Error
             }
         }
@@ -3371,8 +4860,19 @@ impl Checker<'_> {
 
     fn arg_count(&mut self, call: &Expr, args: &[Expr], min: usize, max: usize) -> bool {
         if args.len() < min || args.len() > max {
-            let want = if min == max { format!("{min}") } else { format!("{min}〜{max}") };
-            self.err(call.span, "E0402", format!("引数の数が合いません（{want} 個必要ですが {} 個渡されています）", args.len()));
+            let want = if min == max {
+                format!("{min}")
+            } else {
+                format!("{min}〜{max}")
+            };
+            self.err(
+                call.span,
+                "E0402",
+                format!(
+                    "引数の数が合いません（{want} 個必要ですが {} 個渡されています）",
+                    args.len()
+                ),
+            );
             for a in args {
                 self.expr(a, None);
             }
@@ -3394,24 +4894,55 @@ impl Checker<'_> {
     }
 
     /// Checks a callback argument; returns its return type.
-    fn lambda_arg(&mut self, args: &[Expr], i: usize, params: Vec<Type>, ret: Option<Type>) -> Type {
-        let Some(a) = args.get(i) else { return Type::Error };
+    fn lambda_arg(
+        &mut self,
+        args: &[Expr],
+        i: usize,
+        params: Vec<Type>,
+        ret: Option<Type>,
+    ) -> Type {
+        let Some(a) = args.get(i) else {
+            return Type::Error;
+        };
         let unknown = Type::Param("?ret".into());
-        let expect = Type::Func(Box::new(FuncType { params: params.clone(), ret: ret.clone().unwrap_or(unknown) }));
+        let expect = Type::Func(Box::new(FuncType {
+            params: params.clone(),
+            ret: ret.clone().unwrap_or(unknown),
+        }));
         let t = self.value(a, Some(&expect));
         match t {
             Type::Func(f) => {
                 if f.params.len() > params.len() {
-                    self.err(a.span, "E0400", format!("コールバックの引数が多すぎます（最大 {} 個）", params.len()));
+                    self.err(
+                        a.span,
+                        "E0400",
+                        format!("コールバックの引数が多すぎます（最大 {} 個）", params.len()),
+                    );
                 }
                 for (have, want) in f.params.iter().zip(params.iter()) {
                     if !self.assignable(want, have) {
-                        self.err(a.span, "E0301", format!("コールバックの引数の型 `{}` に `{}` を渡せません", self.show(have), self.show(want)));
+                        self.err(
+                            a.span,
+                            "E0301",
+                            format!(
+                                "コールバックの引数の型 `{}` に `{}` を渡せません",
+                                self.show(have),
+                                self.show(want)
+                            ),
+                        );
                     }
                 }
                 if let Some(r) = &ret {
                     if *r != Type::Void && !self.assignable(&f.ret, r) {
-                        self.err(a.span, "E0301", format!("コールバックは `{}` を返す必要があります（`{}` を返しています）", self.show(r), self.show(&f.ret)));
+                        self.err(
+                            a.span,
+                            "E0301",
+                            format!(
+                                "コールバックは `{}` を返す必要があります（`{}` を返しています）",
+                                self.show(r),
+                                self.show(&f.ret)
+                            ),
+                        );
                     }
                 }
                 f.ret
@@ -3419,7 +4950,11 @@ impl Checker<'_> {
             Type::Error => Type::Error,
             other => {
                 let shown = self.show(&other);
-                self.err(a.span, "E0301", format!("ここには関数が必要です（`{shown}` です）"));
+                self.err(
+                    a.span,
+                    "E0301",
+                    format!("ここには関数が必要です（`{shown}` です）"),
+                );
                 Type::Error
             }
         }
@@ -3453,17 +4988,43 @@ impl Checker<'_> {
     fn function_name(&mut self, e: &Expr) -> Option<FnId> {
         let p = e.peel();
         let access = match &p.kind {
-            ExprKind::Name(id) if self.lookup_local(&id.text).is_none() && matches!(self.lookup_sym(&id.text), Some(Sym::Fn(_))) => self.name_access(p, id),
-            ExprKind::Member { object, name, optional: false } => {
+            ExprKind::Name(id)
+                if self.lookup_local(&id.text).is_none()
+                    && matches!(self.lookup_sym(&id.text), Some(Sym::Fn(_))) =>
+            {
+                self.name_access(p, id)
+            }
+            ExprKind::Member {
+                object,
+                name,
+                optional: false,
+            } => {
                 let o = object.peel();
-                let ExprKind::Name(id) = &o.kind else { return None };
-                if self.lookup_local(&id.text).is_some() || !matches!(self.lookup_sym(&id.text), Some(Sym::Module(_) | Sym::Var(_))) {
+                let ExprKind::Name(id) = &o.kind else {
+                    return None;
+                };
+                if self.lookup_local(&id.text).is_some()
+                    || !matches!(
+                        self.lookup_sym(&id.text),
+                        Some(Sym::Module(_) | Sym::Var(_))
+                    )
+                {
                     return None;
                 }
                 let ot = self.expr(object, None);
                 let is_fn = match &ot {
-                    Type::Ns(NsRef::Module(m)) => matches!(self.prog.modules[*m].exports.get(&name.text), Some(Sym::Fn(_))),
-                    Type::Class(c, _) => self.prog.find_field(*c, &name.text).is_none() && self.prog.find_methods(*c, &name.text).iter().any(|&f| matches!(self.prog.fns[f].kind, FnKind::Free)),
+                    Type::Ns(NsRef::Module(m)) => matches!(
+                        self.prog.modules[*m].exports.get(&name.text),
+                        Some(Sym::Fn(_))
+                    ),
+                    Type::Class(c, _) => {
+                        self.prog.find_field(*c, &name.text).is_none()
+                            && self
+                                .prog
+                                .find_methods(*c, &name.text)
+                                .iter()
+                                .any(|&f| matches!(self.prog.fns[f].kind, FnKind::Free))
+                    }
                     _ => false,
                 };
                 if !is_fn {
@@ -3483,7 +5044,10 @@ impl Checker<'_> {
     /// of the parameters of an arrow function.
     fn skip_handler(&mut self, handler: &Expr) {
         if is_lambda(handler) {
-            let any = Type::Func(Box::new(FuncType { params: vec![Type::Any; 16], ret: Type::Param("?ret".into()) }));
+            let any = Type::Func(Box::new(FuncType {
+                params: vec![Type::Any; 16],
+                ret: Type::Param("?ret".into()),
+            }));
             self.fx.event_handlers += 1;
             self.expr(handler, Some(&any));
             self.fx.event_handlers -= 1;
@@ -3515,7 +5079,10 @@ impl Checker<'_> {
             return Type::Error;
         };
         // An array or a collection of objects: each member gets the handler.
-        let any_control = |prog: &Program, c: ClassId| prog.classes[c].namespace.as_deref() == Some("MSForms") && prog.classes[c].name == "Control";
+        let any_control = |prog: &Program, c: ClassId| {
+            prog.classes[c].namespace.as_deref() == Some("MSForms")
+                && prog.classes[c].name == "Control"
+        };
         let (class, each) = match recv {
             Some(t @ Type::Array(_)) => match t.elem() {
                 Some(Type::Class(c, _)) => (*c, true),
@@ -3525,7 +5092,13 @@ impl Checker<'_> {
                 }
             },
             Some(t @ Type::Class(c, _)) => match self.prog.collection_elem(t) {
-                Some(Type::Class(m, _)) if crate::lower::listen_target(self.prog, *c).is_none() && (any_control(self.prog, m) || crate::lower::listen_target(self.prog, m).is_some()) => (m, true),
+                Some(Type::Class(m, _))
+                    if crate::lower::listen_target(self.prog, *c).is_none()
+                        && (any_control(self.prog, m)
+                            || crate::lower::listen_target(self.prog, m).is_some()) =>
+                {
+                    (m, true)
+                }
                 _ => (*c, false),
             },
             _ => {
@@ -3537,17 +5110,41 @@ impl Checker<'_> {
         // A `MSForms.Control` is any control: the events that controls have, with the
         // arguments that all of those controls pass.
         let dynamic = any_control(self.prog, class);
-        let mut control_classes: Vec<(ClassId, Vec<(String, Vec<(String, String, bool)>)>)> = Vec::new();
+        let mut control_classes: Vec<(ClassId, Vec<(String, Vec<(String, String, bool)>)>)> =
+            Vec::new();
         let target = if dynamic {
-            let mut ids: Vec<ClassId> = self.prog.namespaces.get("MSForms").map(|n| n.values().filter_map(|s| if let Sym::Class(c) = s { Some(*c) } else { None }).collect()).unwrap_or_default();
+            let mut ids: Vec<ClassId> = self
+                .prog
+                .namespaces
+                .get("MSForms")
+                .map(|n| {
+                    n.values()
+                        .filter_map(|s| {
+                            if let Sym::Class(c) = s {
+                                Some(*c)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             ids.sort_by(|a, b| self.prog.classes[*a].name.cmp(&self.prog.classes[*b].name));
             let mut events: Vec<(String, Vec<(String, String, bool)>)> = Vec::new();
             for c in ids {
-                let Some(crate::lower::ListenTarget::Events(_, own)) = crate::lower::listen_target(self.prog, c) else { continue };
+                let Some(crate::lower::ListenTarget::Events(_, own)) =
+                    crate::lower::listen_target(self.prog, c)
+                else {
+                    continue;
+                };
                 for (name, params) in &own {
                     match events.iter_mut().find(|e| e.0.eq_ignore_ascii_case(name)) {
                         Some(e) => {
-                            let common = e.1.iter().zip(params.iter()).take_while(|(a, b)| a.1 == b.1 && a.2 == b.2).count();
+                            let common =
+                                e.1.iter()
+                                    .zip(params.iter())
+                                    .take_while(|(a, b)| a.1 == b.1 && a.2 == b.2)
+                                    .count();
                             e.1.truncate(common);
                         }
                         None => events.push((name.clone(), params.clone())),
@@ -3568,7 +5165,11 @@ impl Checker<'_> {
                 } else {
                     "`on` を使えるのは、イベントを持つオブジェクト（`MSForms.CommandButton` などのコントロール、`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`Excel.Chart`・`Excel.QueryTable`）と、`onAction` を持つオブジェクト（`Excel.Shape`）です".to_string()
                 };
-                self.err(call.span, "E0616", format!("`{shown}` にイベントハンドラは付けられません。{hint}"));
+                self.err(
+                    call.span,
+                    "E0616",
+                    format!("`{shown}` にイベントハンドラは付けられません。{hint}"),
+                );
                 self.skip_handler(&args[1]);
                 Type::Error
             }
@@ -3580,15 +5181,30 @@ impl Checker<'_> {
                     Some(f) => {
                         let d = &self.prog.fns[f];
                         let home = &self.prog.modules[d.module];
-                        if !d.is_macro_entry() || home.is_form() || home.kind != ModuleKind::User || home.is_test() {
+                        if !d.is_macro_entry()
+                            || home.is_form()
+                            || home.kind != ModuleKind::User
+                            || home.is_test()
+                        {
                             let name = d.name.clone();
                             self.err(args[1].span, "E0617", format!("関数 `{name}` は `OnAction` に登録できません。登録できるのは、Excel がマクロとして呼べる関数（`src/` か `objects/` のファイルの、引数も戻り値もない `export function`、または `@macro` を付けた関数）です"));
                         }
-                        let sig = Type::Func(Box::new(FuncType { params: Vec::new(), ret: Type::Void }));
-                        if let Some(slot) = self.info().expr_types.get_mut(args[1].peel().id as usize) {
+                        let sig = Type::Func(Box::new(FuncType {
+                            params: Vec::new(),
+                            ret: Type::Void,
+                        }));
+                        if let Some(slot) =
+                            self.info().expr_types.get_mut(args[1].peel().id as usize)
+                        {
                             *slot = sig;
                         }
-                        self.info().event_binds.insert(call.id, EventBind { kind: EventBindKind::OnAction { each }, handler_fn: Some(f) });
+                        self.info().event_binds.insert(
+                            call.id,
+                            EventBind {
+                                kind: EventBindKind::OnAction { each },
+                                handler_fn: Some(f),
+                            },
+                        );
                     }
                     None => {
                         self.skip_handler(&args[1]);
@@ -3598,21 +5214,48 @@ impl Checker<'_> {
                 Type::Void
             }
             Some(crate::lower::ListenTarget::Events(event_class, events)) => {
-                let Some((name, params)) = events.iter().find(|e| e.0.eq_ignore_ascii_case(&event)).cloned() else {
-                    let form_only = ["Enter", "Exit", "BeforeUpdate", "AfterUpdate"].iter().any(|x| x.eq_ignore_ascii_case(&event)) && self.prog.classes[event_class].namespace.as_deref() == Some("MSForms");
+                let Some((name, params)) = events
+                    .iter()
+                    .find(|e| e.0.eq_ignore_ascii_case(&event))
+                    .cloned()
+                else {
+                    let form_only = ["Enter", "Exit", "BeforeUpdate", "AfterUpdate"]
+                        .iter()
+                        .any(|x| x.eq_ignore_ascii_case(&event))
+                        && self.prog.classes[event_class].namespace.as_deref() == Some("MSForms");
                     let hint = if form_only {
                         format!("`{event}` はフォームが起こすイベントで、`on` では受け取れません。コードビハインドの `@on(\"<コントロール名>.{event}\")` で受け取ります")
                     } else {
-                        format!("使えるイベント: {}", events.iter().map(|e| e.0.as_str()).collect::<Vec<_>>().join(", "))
+                        format!(
+                            "使えるイベント: {}",
+                            events
+                                .iter()
+                                .map(|e| e.0.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
                     };
-                    self.err(args[0].span, "E0611", format!("`{shown}` にイベント `{event}` はありません（{hint}）"));
+                    self.err(
+                        args[0].span,
+                        "E0611",
+                        format!("`{shown}` にイベント `{event}` はありません（{hint}）"),
+                    );
                     self.skip_handler(&args[1]);
                     return if each { Type::Void } else { listener };
                 };
                 // Every member is listened to: there is not one listener to give back.
                 let listener = if each { Type::Void } else { listener };
-                let classes: Vec<ClassId> = if dynamic { control_classes.iter().filter(|(_, own)| own.iter().any(|e| e.0.eq_ignore_ascii_case(&name))).map(|(c, _)| *c).collect() } else { vec![event_class] };
-                let mut param_types: Vec<Type> = params.iter().map(|p| self.event_param_type(&p.1)).collect();
+                let classes: Vec<ClassId> = if dynamic {
+                    control_classes
+                        .iter()
+                        .filter(|(_, own)| own.iter().any(|e| e.0.eq_ignore_ascii_case(&name)))
+                        .map(|(c, _)| *c)
+                        .collect()
+                } else {
+                    vec![event_class]
+                };
+                let mut param_types: Vec<Type> =
+                    params.iter().map(|p| self.event_param_type(&p.1)).collect();
                 // The handler of the members of an array or a collection is told which member
                 // the event is of: it comes first, before the arguments of the event.
                 if each {
@@ -3624,9 +5267,14 @@ impl Checker<'_> {
                         self.ensure_fn(f);
                         let d = &self.prog.fns[f];
                         let fname = d.name.clone();
-                        let have: Vec<(Type, bool)> = d.params.iter().map(|p| (p.ty.clone(), p.mode == PassMode::ByRef)).collect();
+                        let have: Vec<(Type, bool)> = d
+                            .params
+                            .iter()
+                            .map(|p| (p.ty.clone(), p.mode == PassMode::ByRef))
+                            .collect();
                         let generic = d.is_generic();
-                        let test = self.prog.modules[d.module].is_test() && !self.prog.modules[self.module].is_test();
+                        let test = self.prog.modules[d.module].is_test()
+                            && !self.prog.modules[self.module].is_test();
                         if generic || test {
                             self.err(args[1].span, "E0617", format!("関数 `{fname}` はイベントハンドラにできません（ジェネリック関数・テストの関数は使えません）"));
                         } else if have.len() > limit {
@@ -3640,8 +5288,13 @@ impl Checker<'_> {
                                 }
                             }
                         }
-                        let sig = Type::Func(Box::new(FuncType { params: have.iter().map(|h| h.0.clone()).collect(), ret: self.prog.fns[f].ret_ty() }));
-                        if let Some(slot) = self.info().expr_types.get_mut(args[1].peel().id as usize) {
+                        let sig = Type::Func(Box::new(FuncType {
+                            params: have.iter().map(|h| h.0.clone()).collect(),
+                            ret: self.prog.fns[f].ret_ty(),
+                        }));
+                        if let Some(slot) =
+                            self.info().expr_types.get_mut(args[1].peel().id as usize)
+                        {
                             *slot = sig;
                         }
                         if !self.fx.calls.contains(&f) {
@@ -3668,20 +5321,44 @@ impl Checker<'_> {
                         (argc.min(limit), None)
                     }
                 };
-                self.info().event_binds.insert(call.id, EventBind { kind: EventBindKind::Listener { classes, dynamic, each, event: name, params, argc }, handler_fn });
+                self.info().event_binds.insert(
+                    call.id,
+                    EventBind {
+                        kind: EventBindKind::Listener {
+                            classes,
+                            dynamic,
+                            each,
+                            event: name,
+                            params,
+                            argc,
+                        },
+                        handler_fn,
+                    },
+                );
                 listener
             }
         }
     }
 
-    fn intrinsic_call(&mut self, call: &Expr, intr: Intr, recv_expr: Option<&Expr>, recv: Option<&Type>, args: &[Expr], expect: Option<&Type>) -> Type {
+    fn intrinsic_call(
+        &mut self,
+        call: &Expr,
+        intr: Intr,
+        recv_expr: Option<&Expr>,
+        recv: Option<&Type>,
+        args: &[Expr],
+        expect: Option<&Type>,
+    ) -> Type {
         use Intr::*;
         let _ = expect;
         let elem = recv.and_then(|t| t.elem().cloned()).unwrap_or(Type::Error);
         let arr = || Type::array(elem.clone());
         if recv.is_some_and(|t| t.is_array()) && elem.has_struct() {
             // These go through run-time helpers that take the array as a Variant.
-            if matches!(intr, ArrIndexOf | ArrIncludes | ArrJoin | ArrSort | ArrReverse) {
+            if matches!(
+                intr,
+                ArrIndexOf | ArrIncludes | ArrJoin | ArrSort | ArrReverse
+            ) {
                 self.err(call.span, "E0393", "構造体の配列では `indexOf` / `includes` / `join` / `sort` / `reverse` を使えません。ループか `findIndex` などのコールバック付きメソッドを使ってください");
                 for a in args {
                     self.expr(a, None);
@@ -3720,7 +5397,11 @@ impl Checker<'_> {
                 }
                 let r = self.lambda_arg(args, 0, vec![elem, Type::Int], None);
                 if r == Type::Void {
-                    self.err(args[0].span, "E0370", "`map` のコールバックは値を返す必要があります");
+                    self.err(
+                        args[0].span,
+                        "E0370",
+                        "`map` のコールバックは値を返す必要があります",
+                    );
                     return Type::Error;
                 }
                 Type::array(r)
@@ -3743,7 +5424,12 @@ impl Checker<'_> {
                 }
                 let acc = self.value(&args[1], None);
                 let acc = if acc == Type::Null { Type::Any } else { acc };
-                self.lambda_arg(args, 0, vec![acc.clone(), elem, Type::Int], Some(acc.clone()));
+                self.lambda_arg(
+                    args,
+                    0,
+                    vec![acc.clone(), elem, Type::Int],
+                    Some(acc.clone()),
+                );
                 acc
             }
             ArrSome | ArrEvery => {
@@ -3782,7 +5468,11 @@ impl Checker<'_> {
                     self.arg(args, 0, &Type::Str);
                 }
                 if !self.stringifiable(&elem) {
-                    self.err(call.span, "E0381", "`join` は数値・文字列などの配列にのみ使えます");
+                    self.err(
+                        call.span,
+                        "E0381",
+                        "`join` は数値・文字列などの配列にのみ使えます",
+                    );
                 }
                 Type::Str
             }
@@ -3795,7 +5485,12 @@ impl Checker<'_> {
             }
             ArrSort => {
                 if self.arg_count(call, args, 0, 1) && !args.is_empty() {
-                    self.lambda_arg(args, 0, vec![elem.clone(), elem.clone()], Some(Type::Double));
+                    self.lambda_arg(
+                        args,
+                        0,
+                        vec![elem.clone(), elem.clone()],
+                        Some(Type::Double),
+                    );
                 } else if !self.satisfies(&elem, &Constraint::Comparable) {
                     self.err(call.span, "E0404", "この配列の要素は大小比較できません。`sort((a, b) => ...)` のように比較関数を渡してください");
                 }
@@ -3809,7 +5504,11 @@ impl Checker<'_> {
                 if self.arg_count(call, args, 1, 1) {
                     let t = self.value(&args[0], Some(&arr()));
                     if t != arr() && !t.is_error() {
-                        self.err(args[0].span, "E0301", "`concat` には同じ要素型の配列を渡してください");
+                        self.err(
+                            args[0].span,
+                            "E0301",
+                            "`concat` には同じ要素型の配列を渡してください",
+                        );
                     }
                 }
                 arr()
@@ -3914,7 +5613,11 @@ impl Checker<'_> {
             MapKeys | MapValues => {
                 self.arg_count(call, args, 0, 0);
                 match recv {
-                    Some(Type::Map(k, v)) => Type::array(if intr == MapKeys { (**k).clone() } else { (**v).clone() }),
+                    Some(Type::Map(k, v)) => Type::array(if intr == MapKeys {
+                        (**k).clone()
+                    } else {
+                        (**v).clone()
+                    }),
                     _ => Type::Error,
                 }
             }
@@ -3936,7 +5639,8 @@ impl Checker<'_> {
                     other => other,
                 }
             }
-            MathFloor | MathCeil | MathTrunc | MathSqrt | MathSin | MathCos | MathTan | MathAtan | MathLog | MathExp => {
+            MathFloor | MathCeil | MathTrunc | MathSqrt | MathSin | MathCos | MathTan
+            | MathAtan | MathLog | MathExp => {
                 if self.arg_count(call, args, 1, 1) {
                     self.arg(args, 0, &Type::Double);
                 }
@@ -3976,7 +5680,11 @@ impl Checker<'_> {
                         Some(p) => match self.promote(&p, &t) {
                             Some(x) => x,
                             None => {
-                                self.err(a.span, "E0395", "型の混在した比較には明示的な型変換（`as`）が必要です");
+                                self.err(
+                                    a.span,
+                                    "E0395",
+                                    "型の混在した比較には明示的な型変換（`as`）が必要です",
+                                );
                                 Type::Error
                             }
                         },
@@ -4011,7 +5719,11 @@ impl Checker<'_> {
                 if self.arg_count(call, args, 1, 1) {
                     let t = self.value(&args[0], None);
                     if !self.stringifiable(&t) {
-                        self.err(args[0].span, "E0381", format!("`{}` は文字列に変換できません", self.show(&t)));
+                        self.err(
+                            args[0].span,
+                            "E0381",
+                            format!("`{}` は文字列に変換できません", self.show(&t)),
+                        );
                     }
                 }
                 Type::Str
@@ -4020,7 +5732,14 @@ impl Checker<'_> {
                 for a in args {
                     let t = self.value(a, None);
                     if t.has_struct() {
-                        self.err(a.span, "E0301", format!("`{}` はそのまま出力できません。フィールドを個別に渡してください", self.show(&t)));
+                        self.err(
+                            a.span,
+                            "E0301",
+                            format!(
+                                "`{}` はそのまま出力できません。フィールドを個別に渡してください",
+                                self.show(&t)
+                            ),
+                        );
                     }
                 }
                 Type::Void
@@ -4047,7 +5766,8 @@ impl Checker<'_> {
                 }
                 Type::Int
             }
-            SuspendScreen | ResumeScreen | SuspendEvents | ResumeEvents | SuspendCalc | ResumeCalc | SuspendAlerts | ResumeAlerts | SuspendAll | ResumeAll | YieldNow => {
+            SuspendScreen | ResumeScreen | SuspendEvents | ResumeEvents | SuspendCalc
+            | ResumeCalc | SuspendAlerts | ResumeAlerts | SuspendAll | ResumeAll | YieldNow => {
                 self.arg_count(call, args, 0, 0);
                 Type::Void
             }
@@ -4084,7 +5804,11 @@ impl Checker<'_> {
                 if self.arg_count(call, args, 1, 1) {
                     let t = self.value(&args[0], None);
                     if !matches!(t, Type::Array(_) | Type::Any | Type::Error) {
-                        self.err(args[0].span, "E0301", "`fromArray` には配列を渡してください");
+                        self.err(
+                            args[0].span,
+                            "E0301",
+                            "`fromArray` には配列を渡してください",
+                        );
                     }
                 }
                 Type::Void
@@ -4105,15 +5829,29 @@ impl Checker<'_> {
         if let ExprKind::Name(id) = &inner.kind {
             if let Some((l, crossed)) = self.lookup_local(&id.text) {
                 if !crossed.is_empty() {
-                    self.err(recv.span, "E0322", format!("アロー関数の中から外側の配列 `{}` は書き換えられません", id.text));
+                    self.err(
+                        recv.span,
+                        "E0322",
+                        format!(
+                            "アロー関数の中から外側の配列 `{}` は書き換えられません",
+                            id.text
+                        ),
+                    );
                 }
                 let _ = l;
             }
             if let Some(Res::Global(v)) = self.info().res.get(&inner.id).cloned() {
                 self.prog.vars[v].reassigned = true;
             }
-        } else if !matches!(inner.kind, ExprKind::Member { .. } | ExprKind::This | ExprKind::Index { .. } | ExprKind::Error) {
-            self.err(recv.span, "E0325", "配列を書き換えるメソッドは、変数かフィールドに対して呼んでください");
+        } else if !matches!(
+            inner.kind,
+            ExprKind::Member { .. } | ExprKind::This | ExprKind::Index { .. } | ExprKind::Error
+        ) {
+            self.err(
+                recv.span,
+                "E0325",
+                "配列を書き換えるメソッドは、変数かフィールドに対して呼んでください",
+            );
         }
     }
 
@@ -4162,7 +5900,10 @@ impl Checker<'_> {
             }
             for &f in &m.fns {
                 let d = &self.prog.fns[f];
-                if !matches!(d.kind, FnKind::Main | FnKind::ModInit) && !d.name.is_empty() && d.name != "constructor" {
+                if !matches!(d.kind, FnKind::Main | FnKind::ModInit)
+                    && !d.name.is_empty()
+                    && d.name != "constructor"
+                {
                     items.push((m.id, d.name_span, d.name.clone()));
                 }
                 for l in &d.locals {
@@ -4215,7 +5956,9 @@ impl Checker<'_> {
         let require = self.prog.config.lint.require_docs;
         for f in 0..self.prog.fns.len() {
             let d = &self.prog.fns[f];
-            if self.prog.modules[d.module].kind != ModuleKind::User || matches!(d.kind, FnKind::Main | FnKind::ModInit) {
+            if self.prog.modules[d.module].kind != ModuleKind::User
+                || matches!(d.kind, FnKind::Main | FnKind::ModInit)
+            {
                 continue;
             }
             let (m, span, name, exported) = (d.module, d.name_span, d.name.clone(), d.exported);
@@ -4223,7 +5966,9 @@ impl Checker<'_> {
                 Some(doc) => {
                     let params: Vec<String> = d.params.iter().map(|p| p.name.clone()).collect();
                     for line in doc.lines() {
-                        let Some(rest) = line.trim().strip_prefix("@param") else { continue };
+                        let Some(rest) = line.trim().strip_prefix("@param") else {
+                            continue;
+                        };
                         let mut rest = rest.trim_start();
                         // JSDoc type annotations (`{string}`) are ignored.
                         if rest.starts_with('{') {
@@ -4238,7 +5983,11 @@ impl Checker<'_> {
                 }
                 None if require && exported => {
                     self.module = m;
-                    self.warn(span, "W0441", format!("`export` された `{name}` にドキュメントコメントがありません"));
+                    self.warn(
+                        span,
+                        "W0441",
+                        format!("`export` された `{name}` にドキュメントコメントがありません"),
+                    );
                 }
                 None => {}
             }
@@ -4249,9 +5998,18 @@ impl Checker<'_> {
 /// Compile-time constant value of an initializer (for VBA `Const`).
 pub fn const_value(e: &Expr) -> Option<ConstVal> {
     match &e.peel().kind {
-        ExprKind::Int { .. } | ExprKind::Unary { .. } | ExprKind::Binary { .. } if const_int(e).is_some() => const_int(e).map(ConstVal::Int),
-        ExprKind::Float { text, suffix } if *suffix != ast::NumSuffix::M => text.parse().ok().map(ConstVal::Float),
-        ExprKind::Unary { op: UnaryOp::Neg, operand } => match const_value(operand) {
+        ExprKind::Int { .. } | ExprKind::Unary { .. } | ExprKind::Binary { .. }
+            if const_int(e).is_some() =>
+        {
+            const_int(e).map(ConstVal::Int)
+        }
+        ExprKind::Float { text, suffix } if *suffix != ast::NumSuffix::M => {
+            text.parse().ok().map(ConstVal::Float)
+        }
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => match const_value(operand) {
             Some(ConstVal::Float(f)) => Some(ConstVal::Float(-f)),
             _ => None,
         },
@@ -4270,14 +6028,31 @@ fn stmt_returns(s: &Stmt) -> bool {
     match &s.kind {
         StmtKind::Return(_) | StmtKind::Throw(_) => true,
         StmtKind::Block(b) => always_returns(&b.stmts),
-        StmtKind::If { then, els: Some(els), .. } => stmt_returns(then) && stmt_returns(els),
+        StmtKind::If {
+            then,
+            els: Some(els),
+            ..
+        } => stmt_returns(then) && stmt_returns(els),
         StmtKind::Try(t) => {
             t.finally.as_ref().is_some_and(|f| always_returns(&f.stmts))
-                || (always_returns(&t.block.stmts) && t.catch.as_ref().is_none_or(|c| always_returns(&c.body.stmts)))
+                || (always_returns(&t.block.stmts)
+                    && t.catch
+                        .as_ref()
+                        .is_none_or(|c| always_returns(&c.body.stmts)))
         }
-        StmtKind::Switch { cases, .. } => cases.iter().any(|c| c.test.is_none()) && cases.iter().all(|c| always_returns(&c.body) || c.body.is_empty()) && cases.last().is_some_and(|c| always_returns(&c.body)),
-        StmtKind::While { cond, body, .. } => matches!(cond.peel().kind, ExprKind::Bool(true)) && !contains_break(body),
-        StmtKind::For { cond: None, body, .. } => !contains_break(body),
+        StmtKind::Switch { cases, .. } => {
+            cases.iter().any(|c| c.test.is_none())
+                && cases
+                    .iter()
+                    .all(|c| always_returns(&c.body) || c.body.is_empty())
+                && cases.last().is_some_and(|c| always_returns(&c.body))
+        }
+        StmtKind::While { cond, body, .. } => {
+            matches!(cond.peel().kind, ExprKind::Bool(true)) && !contains_break(body)
+        }
+        StmtKind::For {
+            cond: None, body, ..
+        } => !contains_break(body),
         StmtKind::DoWhile { body, .. } => stmt_returns(body),
         StmtKind::Labeled { body, .. } => stmt_returns(body),
         _ => false,
@@ -4287,9 +6062,15 @@ fn stmt_returns(s: &Stmt) -> bool {
 /// Control never reaches the statement after `s`.
 fn stmt_exits(s: &Stmt) -> bool {
     match &s.kind {
-        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break(_) | StmtKind::Continue(_) => true,
+        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break(_) | StmtKind::Continue(_) => {
+            true
+        }
         StmtKind::Block(b) => b.stmts.iter().any(stmt_exits),
-        StmtKind::If { then, els: Some(els), .. } => stmt_exits(then) && stmt_exits(els),
+        StmtKind::If {
+            then,
+            els: Some(els),
+            ..
+        } => stmt_exits(then) && stmt_exits(els),
         _ => stmt_returns(s),
     }
 }
@@ -4323,7 +6104,11 @@ fn assigns_in_stmt(s: &Stmt, name: &str) -> bool {
 /// The type whose values `TypeName` reports as `name` (`"String"` → `string`, `"Variant()"` → `any[]`).
 fn type_of_type_name(name: &str) -> Option<Type> {
     if let Some(elem) = name.strip_suffix("()") {
-        return Some(Type::array(if elem == "Variant" { Type::Any } else { type_of_type_name(elem)? }));
+        return Some(Type::array(if elem == "Variant" {
+            Type::Any
+        } else {
+            type_of_type_name(elem)?
+        }));
     }
     Some(match name {
         "String" => Type::Str,
@@ -4345,11 +6130,17 @@ fn contains_break(s: &Stmt) -> bool {
     match &s.kind {
         StmtKind::Break(_) => true,
         StmtKind::Block(b) => b.stmts.iter().any(contains_break),
-        StmtKind::If { then, els, .. } => contains_break(then) || els.as_ref().is_some_and(|e| contains_break(e)),
+        StmtKind::If { then, els, .. } => {
+            contains_break(then) || els.as_ref().is_some_and(|e| contains_break(e))
+        }
         StmtKind::Try(t) => {
             t.block.stmts.iter().any(contains_break)
-                || t.catch.as_ref().is_some_and(|c| c.body.stmts.iter().any(contains_break))
-                || t.finally.as_ref().is_some_and(|f| f.stmts.iter().any(contains_break))
+                || t.catch
+                    .as_ref()
+                    .is_some_and(|c| c.body.stmts.iter().any(contains_break))
+                || t.finally
+                    .as_ref()
+                    .is_some_and(|f| f.stmts.iter().any(contains_break))
         }
         StmtKind::Labeled { body, .. } => contains_break(body),
         // `break` inside a nested loop / switch belongs to that construct.

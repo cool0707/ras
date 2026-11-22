@@ -113,7 +113,13 @@ impl std::fmt::Display for Problem {
     }
 }
 
-fn problem(form: &LoadedForm, severity: Severity, code: &str, message: &str, field: &str) -> Problem {
+fn problem(
+    form: &LoadedForm,
+    severity: Severity,
+    code: &str,
+    message: &str,
+    field: &str,
+) -> Problem {
     Problem {
         rel_path: form.rel_path.clone(),
         position: crate::locate(&form.text, field),
@@ -149,7 +155,12 @@ impl Built {
 /// code-behinds (form name → code, the `OutputFile::code` of the form's
 /// module). A `.ras` form missing from it gets no code: enough to check the
 /// design (`ras check`), not to write the form.
-pub fn build(forms: &[LoadedForm], root: &Path, codepage: u16, compiled: &HashMap<String, String>) -> Built {
+pub fn build(
+    forms: &[LoadedForm],
+    root: &Path,
+    codepage: u16,
+    compiled: &HashMap<String, String>,
+) -> Built {
     let mut built = Built {
         forms: Vec::new(),
         problems: Vec::new(),
@@ -164,15 +175,24 @@ pub fn build(forms: &[LoadedForm], root: &Path, codepage: u16, compiled: &HashMa
                 &issue.field,
             ));
         }
-        let Some(spec) = form.parsed.spec.as_ref().filter(|_| !form.parsed.has_errors()) else {
+        let Some(spec) = form
+            .parsed
+            .spec
+            .as_ref()
+            .filter(|_| !form.parsed.has_errors())
+        else {
             continue;
         };
         let designer = match crate::compile_in(spec, codepage, root) {
             Ok(designer) => designer,
             Err(e) => {
-                built
-                    .problems
-                    .push(problem(form, Severity::Error, e.code, &e.to_string(), &e.property));
+                built.problems.push(problem(
+                    form,
+                    Severity::Error,
+                    e.code,
+                    &e.to_string(),
+                    &e.property,
+                ));
                 continue;
             }
         };
@@ -189,9 +209,13 @@ pub fn build(forms: &[LoadedForm], root: &Path, codepage: u16, compiled: &HashMa
                 streams: designer.streams,
                 storages: designer.storages,
             }),
-            Err(message) => built
-                .problems
-                .push(problem(form, Severity::Error, "userform_code", &message, "")),
+            Err(message) => built.problems.push(problem(
+                form,
+                Severity::Error,
+                "userform_code",
+                &message,
+                "",
+            )),
         }
     }
     built
@@ -295,16 +319,28 @@ pub fn pull_with(
         .ok()
         .and_then(|text| crate::parse(&text).spec);
     let previous_control = |name: &str| {
-        previous
-            .as_ref()
-            .and_then(|p| p.controls.iter().find(|c| c.name.eq_ignore_ascii_case(name)))
+        previous.as_ref().and_then(|p| {
+            p.controls
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(name))
+        })
     };
-    for control in spec.controls.iter_mut().filter(|c| is_list_control(&c.control_type)) {
+    for control in spec
+        .controls
+        .iter_mut()
+        .filter(|c| is_list_control(&c.control_type))
+    {
         // A list that comes from cells (RowSource) has no items of its own.
-        if control.scalar("rowSource").and_then(serde_json::Value::as_str).is_some_and(|s| !s.is_empty()) {
+        if control
+            .scalar("rowSource")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|s| !s.is_empty())
+        {
             continue;
         }
-        if let Some(old) = previous_control(&control.name).filter(|o| is_list_control(&o.control_type)) {
+        if let Some(old) =
+            previous_control(&control.name).filter(|o| is_list_control(&o.control_type))
+        {
             control.list = old.list.clone();
             control.selected_index = old.selected_index;
         }
@@ -319,13 +355,31 @@ pub fn pull_with(
         let (previous, owner) = match found.control_index {
             Some(index) => {
                 let old = previous_control(&spec.controls[index].name);
-                let action = old.and_then(|o| if icon { o.mouse_icon.clone() } else { o.picture.clone() });
-                (action.zip(Some(old.and_then(|o| o.back_color.clone()))), spec.controls[index].name.clone())
+                let action = old.and_then(|o| {
+                    if icon {
+                        o.mouse_icon.clone()
+                    } else {
+                        o.picture.clone()
+                    }
+                });
+                (
+                    action.zip(Some(old.and_then(|o| o.back_color.clone()))),
+                    spec.controls[index].name.clone(),
+                )
             }
             None => {
                 let old = previous.as_ref().map(|p| &p.form);
-                let action = old.and_then(|o| if icon { o.mouse_icon.clone() } else { o.picture.clone() });
-                (action.zip(Some(old.and_then(|o| o.back_color.clone()))), String::new())
+                let action = old.and_then(|o| {
+                    if icon {
+                        o.mouse_icon.clone()
+                    } else {
+                        o.picture.clone()
+                    }
+                });
+                (
+                    action.zip(Some(old.and_then(|o| o.back_color.clone()))),
+                    String::new(),
+                )
             }
         };
         // Keep the file the previous spec points to when the form holds
@@ -335,7 +389,12 @@ pub fn pull_with(
             let stored = if icon {
                 crate::picture::load_icon(root, &path).ok()?
             } else {
-                crate::picture::load_with(root, &path, crate::picture::background_of(back_color.as_ref())).ok()?
+                crate::picture::load_with(
+                    root,
+                    &path,
+                    crate::picture::background_of(back_color.as_ref()),
+                )
+                .ok()?
             };
             (stored.data == *data).then_some(path)
         });
@@ -384,7 +443,10 @@ pub fn pull_with(
         controls: spec
             .controls
             .iter()
-            .map(|c| ras_compiler::FormControl { name: c.name.clone(), control_type: c.control_type.trim().to_string() })
+            .map(|c| ras_compiler::FormControl {
+                name: c.name.clone(),
+                control_type: c.control_type.trim().to_string(),
+            })
             .collect(),
     };
     // A form written from `forms/` was compiled from the `.ras` file: that file is the source
@@ -393,7 +455,11 @@ pub fn pull_with(
     let mut converted = if keep_code {
         ras_compiler::vba2ras::Converted::default()
     } else {
-        ras_compiler::vba2ras::convert(&codebehind::code_behind(&form.code), &ras_compiler::vba2ras::Target::Form(&decl), peers)
+        ras_compiler::vba2ras::convert(
+            &codebehind::code_behind(&form.code),
+            &ras_compiler::vba2ras::Target::Form(&decl),
+            peers,
+        )
     };
     if let Some(header) = header.filter(|_| !keep_code) {
         let shift = header.lines().count();

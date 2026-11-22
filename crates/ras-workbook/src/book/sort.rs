@@ -75,7 +75,9 @@ fn wildcard(pattern: &str, text: &str) -> bool {
             None => t.is_empty(),
             Some('*') => (0..=t.len()).any(|i| go(&p[1..], &t[i..])),
             Some('?') => !t.is_empty() && go(&p[1..], &t[1..]),
-            Some('~') if p.len() > 1 && matches!(p[1], '*' | '?' | '~') => t.first() == Some(&p[1]) && go(&p[2..], &t[1..]),
+            Some('~') if p.len() > 1 && matches!(p[1], '*' | '?' | '~') => {
+                t.first() == Some(&p[1]) && go(&p[2..], &t[1..])
+            }
             Some(c) => t.first() == Some(c) && go(&p[1..], &t[1..]),
         }
     }
@@ -102,7 +104,11 @@ struct Shown {
 
 impl Book {
     fn shown(&mut self, si: usize, at: CellRef) -> Shown {
-        let value = self.model.sheet(si).map(|s| s.value(at)).unwrap_or_default();
+        let value = self
+            .model
+            .sheet(si)
+            .map(|s| s.value(at))
+            .unwrap_or_default();
         let text = self.text(si, at, &value);
         Shown { value, text }
     }
@@ -129,7 +135,11 @@ impl Book {
                 {
                     return true;
                 }
-                if op.is_empty() && prefix && number.is_none() { wildcard(&format!("{val}*"), &cell.text) } else { wildcard(val, &cell.text) }
+                if op.is_empty() && prefix && number.is_none() {
+                    wildcard(&format!("{val}*"), &cell.text)
+                } else {
+                    wildcard(val, &cell.text)
+                }
             }
             "<>" => {
                 if val.is_empty() {
@@ -156,7 +166,9 @@ impl Book {
     // ---- hidden rows and columns
 
     fn hide(&mut self, si: usize, columns: bool, index: u32, hidden: bool) -> bool {
-        let Some(sh) = self.model.sheet_mut(si) else { return false };
+        let Some(sh) = self.model.sheet_mut(si) else {
+            return false;
+        };
         let lines = if columns { &mut sh.cols } else { &mut sh.rows };
         let was = lines.get(&index).is_some_and(|l| l.hidden);
         if was == hidden {
@@ -172,7 +184,8 @@ impl Book {
         }
         if let Ok(ws) = self.file.sheet_mut(si) {
             if columns {
-                ws.column_dimension_by_number_mut(index + 1).set_hidden(hidden);
+                ws.column_dimension_by_number_mut(index + 1)
+                    .set_hidden(hidden);
             } else {
                 ws.row_dimension_mut(index + 1).set_hidden(hidden);
             }
@@ -182,16 +195,29 @@ impl Book {
 
     /// `Rows.Hidden = hidden` (`columns`: `Columns.Hidden`) for the lines `lo..=hi`. Hiding goes
     /// no further than the used range: there is nothing to hide below it.
-    pub fn set_hidden(&mut self, si: usize, columns: bool, lo: u32, hi: u32, hidden: bool) -> Result<()> {
+    pub fn set_hidden(
+        &mut self,
+        si: usize,
+        columns: bool,
+        lo: u32,
+        hi: u32,
+        hidden: bool,
+    ) -> Result<()> {
         self.check_sheet(si)?;
         let lines: Vec<u32> = if hidden {
             let used = self.used_range(si);
-            let last = used.map_or(lo, |u| if columns { u.end.col } else { u.end.row }).max(lo);
+            let last = used
+                .map_or(lo, |u| if columns { u.end.col } else { u.end.row })
+                .max(lo);
             (lo..=hi.min(last)).collect()
         } else {
             let sh = self.model.sheet(si).expect("checked");
             let lines = if columns { &sh.cols } else { &sh.rows };
-            lines.range(lo..=hi).filter(|(_, l)| l.hidden).map(|(i, _)| *i).collect()
+            lines
+                .range(lo..=hi)
+                .filter(|(_, l)| l.hidden)
+                .map(|(i, _)| *i)
+                .collect()
         };
         let mut changed = false;
         for i in lines {
@@ -220,8 +246,14 @@ impl Book {
 
     /// The cells of `r` in rows and columns that are not hidden, as rectangles.
     pub fn visible_areas(&self, si: usize, r: RangeRef) -> Vec<RangeRef> {
-        let Some(sh) = self.model.sheet(si) else { return vec![r] };
-        fn bands(hidden: &std::collections::BTreeMap<u32, gm::LineInfo>, lo: u32, hi: u32) -> Vec<(u32, u32)> {
+        let Some(sh) = self.model.sheet(si) else {
+            return vec![r];
+        };
+        fn bands(
+            hidden: &std::collections::BTreeMap<u32, gm::LineInfo>,
+            lo: u32,
+            hi: u32,
+        ) -> Vec<(u32, u32)> {
             let mut out = Vec::new();
             let mut from = lo;
             for (i, _) in hidden.range(lo..=hi).filter(|(_, l)| l.hidden) {
@@ -237,19 +269,34 @@ impl Book {
         }
         let rows = bands(&sh.rows, r.start.row, r.end.row);
         let cols = bands(&sh.cols, r.start.col, r.end.col);
-        rows.iter().flat_map(|(r0, r1)| cols.iter().map(move |(c0, c1)| RangeRef::new(CellRef::new(*r0, *c0), CellRef::new(*r1, *c1)))).collect()
+        rows.iter()
+            .flat_map(|(r0, r1)| {
+                cols.iter().map(move |(c0, c1)| {
+                    RangeRef::new(CellRef::new(*r0, *c0), CellRef::new(*r1, *c1))
+                })
+            })
+            .collect()
     }
 
     /// `Range.SpecialCells`: the cells of `r` of a kind, as rectangles (empty when there are none).
-    pub fn special_cells(&mut self, si: usize, r: RangeRef, what: Special) -> Result<Vec<RangeRef>> {
+    pub fn special_cells(
+        &mut self,
+        si: usize,
+        r: RangeRef,
+        what: Special,
+    ) -> Result<Vec<RangeRef>> {
         self.check_sheet(si)?;
         self.flush();
         let used = self.used_range(si);
         Ok(match what {
             Special::Visible => self.visible_areas(si, r),
-            Special::LastCell => used.map(|u| vec![RangeRef::cell(u.end)]).unwrap_or_else(|| vec![RangeRef::cell(CellRef::new(0, 0))]),
+            Special::LastCell => used
+                .map(|u| vec![RangeRef::cell(u.end)])
+                .unwrap_or_else(|| vec![RangeRef::cell(CellRef::new(0, 0))]),
             Special::Blanks => {
-                let Some(r) = used.and_then(|u| u.intersection(&r)) else { return Ok(Vec::new()) };
+                let Some(r) = used.and_then(|u| u.intersection(&r)) else {
+                    return Ok(Vec::new());
+                };
                 if r.count() > 5_000_000 {
                     return Err("範囲が大きすぎます".into());
                 }
@@ -258,7 +305,16 @@ impl Book {
             Special::Constants(mask) | Special::Formulas(mask) => {
                 let formulas = matches!(what, Special::Formulas(_));
                 let sh = self.model.sheet(si).expect("checked");
-                areas(sh.cells.iter_range(r).filter(|(_, c)| c.formula.is_some() == formulas && (formulas || !c.value.is_empty()) && kind_bit(&c.value.scalar()) & mask != 0).map(|(at, _)| at))
+                areas(
+                    sh.cells
+                        .iter_range(r)
+                        .filter(|(_, c)| {
+                            c.formula.is_some() == formulas
+                                && (formulas || !c.value.is_empty())
+                                && kind_bit(&c.value.scalar()) & mask != 0
+                        })
+                        .map(|(at, _)| at),
+                )
             }
         })
     }
@@ -269,8 +325,18 @@ impl Book {
     /// of `order` puts what was in line `source` into line `target` (None: nothing). The relative
     /// references of formulas move with them, as when Excel sorts, and the formats of the cells.
     fn rearrange(&mut self, si: usize, r: RangeRef, order: &[(u32, Option<u32>)], across: bool) {
-        let line = |i: u32| if across { RangeRef::new(CellRef::new(r.start.row, i), CellRef::new(r.end.row, i)) } else { RangeRef::new(CellRef::new(i, r.start.col), CellRef::new(i, r.end.col)) };
-        let order: Vec<(u32, Option<u32>)> = order.iter().copied().filter(|(t, s)| Some(*t) != *s).collect();
+        let line = |i: u32| {
+            if across {
+                RangeRef::new(CellRef::new(r.start.row, i), CellRef::new(r.end.row, i))
+            } else {
+                RangeRef::new(CellRef::new(i, r.start.col), CellRef::new(i, r.end.col))
+            }
+        };
+        let order: Vec<(u32, Option<u32>)> = order
+            .iter()
+            .copied()
+            .filter(|(t, s)| Some(*t) != *s)
+            .collect();
         // Read first: lines are sources and targets.
         let mut cells: HashMap<u32, Vec<(CellRef, gm::Cell)>> = HashMap::new();
         let mut styles: HashMap<u32, Vec<(CellRef, Style)>> = HashMap::new();
@@ -279,11 +345,26 @@ impl Book {
             if cells.contains_key(&s) {
                 continue;
             }
-            cells.insert(s, self.model.sheet(si).map(|sh| sh.cells.iter_range(line(s)).map(|(at, c)| (at, c.clone())).collect()).unwrap_or_default());
+            cells.insert(
+                s,
+                self.model
+                    .sheet(si)
+                    .map(|sh| {
+                        sh.cells
+                            .iter_range(line(s))
+                            .map(|(at, c)| (at, c.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            );
             styles.insert(s, self.styles_in(si, line(s)));
         }
         for (t, s) in order {
-            let gone = self.model.sheet_mut(si).map(|sh| sh.take_cells(line(t))).unwrap_or_default();
+            let gone = self
+                .model
+                .sheet_mut(si)
+                .map(|sh| sh.take_cells(line(t)))
+                .unwrap_or_default();
             for (at, _) in gone {
                 self.touch(si, at);
             }
@@ -292,11 +373,15 @@ impl Book {
             let d = t as i64 - s as i64;
             let (dr, dc) = if across { (0, d) } else { (d, 0) };
             for (at, c) in cells.get(&s).into_iter().flatten() {
-                let Some(to) = at.offset(dr, dc) else { continue };
+                let Some(to) = at.offset(dr, dc) else {
+                    continue;
+                };
                 let mut c = c.clone();
                 if let Some(f) = c.formula.as_ref() {
                     let mut new = match f.expr() {
-                        Some(e) => gm::Formula::from_expr(gridcraft_formula::adjust::shift_relative(e, dr, dc)),
+                        Some(e) => gm::Formula::from_expr(
+                            gridcraft_formula::adjust::shift_relative(e, dr, dc),
+                        ),
                         None => (**f).clone(),
                     };
                     new.array = None;
@@ -325,7 +410,9 @@ impl Book {
         if r.height() < 2 {
             return false;
         }
-        let Some(sh) = self.model.sheet(si) else { return false };
+        let Some(sh) = self.model.sheet(si) else {
+            return false;
+        };
         let mut differs = false;
         for col in r.start.col..=r.end.col {
             let head = sh.value(CellRef::new(r.start.row, col));
@@ -342,25 +429,61 @@ impl Book {
     /// `Range.Sort`: sorts the rows of `r` (the columns, when `across`) by `keys`, as Excel orders
     /// them: numbers, text, FALSE and TRUE, errors; empty cells last either way. Hidden rows stay
     /// where they are. `r` is without the row of headings.
-    pub fn sort(&mut self, si: usize, r: RangeRef, keys: &[SortKey], across: bool, match_case: bool) -> Result<()> {
+    pub fn sort(
+        &mut self,
+        si: usize,
+        r: RangeRef,
+        keys: &[SortKey],
+        across: bool,
+        match_case: bool,
+    ) -> Result<()> {
         self.check_sheet(si)?;
         self.flush();
         // Nothing lies below the used range.
-        let Some(r) = self.used_range(si).and_then(|u| u.intersection(&r)) else { return Ok(()) };
+        let Some(r) = self.used_range(si).and_then(|u| u.intersection(&r)) else {
+            return Ok(());
+        };
         let sh = self.model.sheet(si).expect("checked");
         if sh.merges.iter().any(|m| m.intersects(&r)) {
-            return Err("この操作を行うには、すべての結合セルを同じサイズにする必要があります。".into());
+            return Err(
+                "この操作を行うには、すべての結合セルを同じサイズにする必要があります。".into(),
+            );
         }
-        if sh.cells.iter_range(r).any(|(at, c)| c.formula.as_ref().and_then(|f| f.array).is_some_and(|a| !a.is_single() && a.start == at)) {
+        if sh.cells.iter_range(r).any(|(at, c)| {
+            c.formula
+                .as_ref()
+                .and_then(|f| f.array)
+                .is_some_and(|a| !a.is_single() && a.start == at)
+        }) {
             return Err("配列の一部を変更することはできません。".into());
         }
         let lines: Vec<u32> = if across {
-            (r.start.col..=r.end.col).filter(|c| !sh.is_col_hidden(*c)).collect()
+            (r.start.col..=r.end.col)
+                .filter(|c| !sh.is_col_hidden(*c))
+                .collect()
         } else {
-            (r.start.row..=r.end.row).filter(|row| !sh.is_row_hidden(*row)).collect()
+            (r.start.row..=r.end.row)
+                .filter(|row| !sh.is_row_hidden(*row))
+                .collect()
         };
-        let at = |line: u32, key: u32| if across { CellRef::new(key, line) } else { CellRef::new(line, key) };
-        let values: HashMap<u32, Vec<Value>> = lines.iter().map(|l| (*l, keys.iter().map(|k| sh.value(at(*l, k.index)).scalar()).collect())).collect();
+        let at = |line: u32, key: u32| {
+            if across {
+                CellRef::new(key, line)
+            } else {
+                CellRef::new(line, key)
+            }
+        };
+        let values: HashMap<u32, Vec<Value>> = lines
+            .iter()
+            .map(|l| {
+                (
+                    *l,
+                    keys.iter()
+                        .map(|k| sh.value(at(*l, k.index)).scalar())
+                        .collect(),
+                )
+            })
+            .collect();
         let mut sorted = lines.clone();
         sorted.sort_by(|a, b| {
             for (i, k) in keys.iter().enumerate() {
@@ -382,7 +505,10 @@ impl Book {
             }
             Ordering::Equal
         });
-        let order: Vec<(u32, Option<u32>)> = lines.into_iter().zip(sorted.into_iter().map(Some)).collect();
+        let order: Vec<(u32, Option<u32>)> = lines
+            .into_iter()
+            .zip(sorted.into_iter().map(Some))
+            .collect();
         self.rearrange(si, r, &order, across);
         Ok(())
     }
@@ -393,7 +519,18 @@ impl Book {
     pub fn remove_duplicates(&mut self, si: usize, r: RangeRef, columns: &[u32]) -> Result<u32> {
         self.check_sheet(si)?;
         self.flush();
-        let Some(r) = self.used_range(si).and_then(|u| u.intersection(&r)).map(|x| RangeRef::new(CellRef::new(r.start.row, r.start.col), CellRef::new(x.end.row, r.end.col))) else { return Ok(0) };
+        let Some(r) = self
+            .used_range(si)
+            .and_then(|u| u.intersection(&r))
+            .map(|x| {
+                RangeRef::new(
+                    CellRef::new(r.start.row, r.start.col),
+                    CellRef::new(x.end.row, r.end.col),
+                )
+            })
+        else {
+            return Ok(0);
+        };
         let sh = self.model.sheet(si).expect("checked");
         let mut seen: HashSet<Vec<String>> = HashSet::new();
         let mut kept: Vec<u32> = Vec::new();
@@ -412,7 +549,10 @@ impl Book {
         }
         let removed = r.height() - kept.len() as u32;
         if removed > 0 {
-            let order: Vec<(u32, Option<u32>)> = (r.start.row..=r.end.row).enumerate().map(|(i, t)| (t, kept.get(i).copied())).collect();
+            let order: Vec<(u32, Option<u32>)> = (r.start.row..=r.end.row)
+                .enumerate()
+                .map(|(i, t)| (t, kept.get(i).copied()))
+                .collect();
             self.rearrange(si, r, &order, false);
         }
         Ok(removed)
@@ -432,16 +572,26 @@ impl Book {
         self.check_sheet(si)?;
         self.show_all(si)?;
         if let Some(sh) = self.model.sheet_mut(si) {
-            sh.autofilter = r.map(|range| gm::AutoFilter { range, criteria: Vec::new() });
+            sh.autofilter = r.map(|range| gm::AutoFilter {
+                range,
+                criteria: Vec::new(),
+            });
         }
         Ok(())
     }
 
     /// Filters by a column of the filter (`offset` from its first column), or no longer (None),
     /// and hides the rows that do not pass.
-    pub fn set_filter(&mut self, si: usize, offset: u32, criterion: Option<gm::FilterCriterion>) -> Result<()> {
+    pub fn set_filter(
+        &mut self,
+        si: usize,
+        offset: u32,
+        criterion: Option<gm::FilterCriterion>,
+    ) -> Result<()> {
         self.check_sheet(si)?;
-        let Some(f) = self.model.sheet_mut(si).and_then(|s| s.autofilter.as_mut()) else { return Err("オートフィルターが設定されていません。".into()) };
+        let Some(f) = self.model.sheet_mut(si).and_then(|s| s.autofilter.as_mut()) else {
+            return Err("オートフィルターが設定されていません。".into());
+        };
         if offset >= f.range.width() {
             return Err("AutoFilter の Field がフィルターの範囲の外です。".into());
         }
@@ -456,22 +606,35 @@ impl Book {
 
     /// Whether rows of the sheet are filtered (`Worksheet.FilterMode`).
     pub fn filter_mode(&self, si: usize) -> bool {
-        let Some(sh) = self.model.sheet(si) else { return false };
-        sh.autofilter.as_ref().is_some_and(|f| !f.criteria.is_empty()) || self.advanced.contains_key(&sh.uid.get())
+        let Some(sh) = self.model.sheet(si) else {
+            return false;
+        };
+        sh.autofilter
+            .as_ref()
+            .is_some_and(|f| !f.criteria.is_empty())
+            || self.advanced.contains_key(&sh.uid.get())
     }
 
     /// `Worksheet.ShowAllData`: the rows filters hide show again; the filter stays.
     pub fn show_all(&mut self, si: usize) -> Result<()> {
         self.check_sheet(si)?;
-        let uid = self.model.sheet(si).map(|s| s.uid.get()).unwrap_or_default();
+        let uid = self
+            .model
+            .sheet(si)
+            .map(|s| s.uid.get())
+            .unwrap_or_default();
         if let Some(r) = self.advanced.remove(&uid) {
             self.set_hidden(si, false, r.start.row, r.end.row, false)?;
         }
-        let filtered = self.model.sheet_mut(si).and_then(|s| s.autofilter.as_mut()).is_some_and(|f| {
-            let any = !f.criteria.is_empty();
-            f.criteria.clear();
-            any
-        });
+        let filtered = self
+            .model
+            .sheet_mut(si)
+            .and_then(|s| s.autofilter.as_mut())
+            .is_some_and(|f| {
+                let any = !f.criteria.is_empty();
+                f.criteria.clear();
+                any
+            });
         if filtered {
             self.apply_filter(si);
         }
@@ -481,18 +644,30 @@ impl Book {
     /// Hides the rows of the filter that do not pass what it filters by, and shows the others.
     fn apply_filter(&mut self, si: usize) {
         self.flush();
-        let Some(f) = self.model.sheet(si).and_then(|s| s.autofilter.clone()) else { return };
-        let last = self.used_range(si).map_or(f.range.start.row, |u| u.end.row).min(f.range.end.row);
+        let Some(f) = self.model.sheet(si).and_then(|s| s.autofilter.clone()) else {
+            return;
+        };
+        let last = self
+            .used_range(si)
+            .map_or(f.range.start.row, |u| u.end.row)
+            .min(f.range.end.row);
         let rows: Vec<u32> = (f.range.start.row + 1..=last).collect();
         let mut pass = vec![true; rows.len()];
         for (offset, criterion) in &f.criteria {
             let col = f.range.start.col + offset;
-            let cells: Vec<Shown> = rows.iter().map(|row| self.shown(si, CellRef::new(*row, col))).collect();
+            let cells: Vec<Shown> = rows
+                .iter()
+                .map(|row| self.shown(si, CellRef::new(*row, col)))
+                .collect();
             match criterion {
                 gm::FilterCriterion::Values { values, blanks } => {
                     let wanted: HashSet<String> = values.iter().map(|v| v.to_lowercase()).collect();
                     for (i, c) in cells.iter().enumerate() {
-                        pass[i] &= if c.text.is_empty() { *blanks } else { wanted.contains(&c.text.to_lowercase()) };
+                        pass[i] &= if c.text.is_empty() {
+                            *blanks
+                        } else {
+                            wanted.contains(&c.text.to_lowercase())
+                        };
                     }
                 }
                 gm::FilterCriterion::Custom { a, b, and } => {
@@ -505,21 +680,55 @@ impl Book {
                         };
                     }
                 }
-                gm::FilterCriterion::Top10 { bottom, percent, count } => {
-                    let mut numbers: Vec<f64> = cells.iter().filter_map(|c| if let Value::Number(n) = c.value { Some(n) } else { None }).collect();
-                    numbers.sort_by(|x, y| if *bottom { compare_numbers(*x, *y) } else { compare_numbers(*y, *x) });
-                    let n = if *percent { (numbers.len() as u64 * *count as u64 / 100).max(1) as usize } else { *count as usize };
+                gm::FilterCriterion::Top10 {
+                    bottom,
+                    percent,
+                    count,
+                } => {
+                    let mut numbers: Vec<f64> = cells
+                        .iter()
+                        .filter_map(|c| {
+                            if let Value::Number(n) = c.value {
+                                Some(n)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    numbers.sort_by(|x, y| {
+                        if *bottom {
+                            compare_numbers(*x, *y)
+                        } else {
+                            compare_numbers(*y, *x)
+                        }
+                    });
+                    let n = if *percent {
+                        (numbers.len() as u64 * *count as u64 / 100).max(1) as usize
+                    } else {
+                        *count as usize
+                    };
                     let limit = numbers.get(n.clamp(1, numbers.len().max(1)) - 1).copied();
                     for (i, c) in cells.iter().enumerate() {
                         pass[i] &= match (&c.value, limit) {
-                            (Value::Number(x), Some(l)) if *bottom => compare_numbers(*x, l) != Ordering::Greater,
+                            (Value::Number(x), Some(l)) if *bottom => {
+                                compare_numbers(*x, l) != Ordering::Greater
+                            }
                             (Value::Number(x), Some(l)) => compare_numbers(*x, l) != Ordering::Less,
                             _ => false,
                         };
                     }
                 }
                 gm::FilterCriterion::AboveAverage(above) => {
-                    let numbers: Vec<f64> = cells.iter().filter_map(|c| if let Value::Number(n) = c.value { Some(n) } else { None }).collect();
+                    let numbers: Vec<f64> = cells
+                        .iter()
+                        .filter_map(|c| {
+                            if let Value::Number(n) = c.value {
+                                Some(n)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
                     let mean = numbers.iter().sum::<f64>() / numbers.len().max(1) as f64;
                     for (i, c) in cells.iter().enumerate() {
                         pass[i] &= matches!(c.value, Value::Number(x) if (x > mean) == *above && x != mean);
@@ -534,7 +743,17 @@ impl Book {
         }
         // Rows below what is used are shown.
         if last < f.range.end.row {
-            let below: Vec<u32> = self.model.sheet(si).map(|s| s.rows.range(last + 1..=f.range.end.row).filter(|(_, l)| l.hidden).map(|(i, _)| *i).collect()).unwrap_or_default();
+            let below: Vec<u32> = self
+                .model
+                .sheet(si)
+                .map(|s| {
+                    s.rows
+                        .range(last + 1..=f.range.end.row)
+                        .filter(|(_, l)| l.hidden)
+                        .map(|(i, _)| *i)
+                        .collect()
+                })
+                .unwrap_or_default();
             for row in below {
                 changed |= self.hide(si, false, row, false);
             }
@@ -549,22 +768,52 @@ impl Book {
     /// passes when every comparison of one of them holds), and only the first of rows that show
     /// the same when `unique`. They are copied to `copy_to` (all columns, or the ones its first
     /// row names), or the other rows of the list are hidden.
-    pub fn advanced_filter(&mut self, si: usize, list: RangeRef, criteria: Option<(usize, RangeRef)>, copy_to: Option<(usize, RangeRef)>, unique: bool) -> Result<()> {
+    pub fn advanced_filter(
+        &mut self,
+        si: usize,
+        list: RangeRef,
+        criteria: Option<(usize, RangeRef)>,
+        copy_to: Option<(usize, RangeRef)>,
+        unique: bool,
+    ) -> Result<()> {
         self.check_sheet(si)?;
         self.flush();
         let used = self.used_range(si).unwrap_or(list);
-        let list = RangeRef::new(list.start, CellRef::new(list.end.row.min(used.end.row.max(list.start.row)), list.end.col.min(used.end.col.max(list.start.col))));
-        let heads: Vec<String> = (list.start.col..=list.end.col).map(|c| self.shown(si, CellRef::new(list.start.row, c)).text.to_lowercase()).collect();
+        let list = RangeRef::new(
+            list.start,
+            CellRef::new(
+                list.end.row.min(used.end.row.max(list.start.row)),
+                list.end.col.min(used.end.col.max(list.start.col)),
+            ),
+        );
+        let heads: Vec<String> = (list.start.col..=list.end.col)
+            .map(|c| {
+                self.shown(si, CellRef::new(list.start.row, c))
+                    .text
+                    .to_lowercase()
+            })
+            .collect();
         // Rows of (column of the list, operator, what it compares with).
         let mut wanted: Vec<Vec<(u32, String, String)>> = Vec::new();
         if let Some((ci, cr)) = criteria {
             self.check_sheet(ci)?;
             let cused = self.used_range(ci).unwrap_or(cr);
-            let cr = RangeRef::new(cr.start, CellRef::new(cr.end.row.min(cused.end.row.max(cr.start.row)), cr.end.col));
+            let cr = RangeRef::new(
+                cr.start,
+                CellRef::new(cr.end.row.min(cused.end.row.max(cr.start.row)), cr.end.col),
+            );
             let mut columns: Vec<Option<u32>> = Vec::new();
             for c in cr.start.col..=cr.end.col {
-                let name = self.shown(ci, CellRef::new(cr.start.row, c)).text.to_lowercase();
-                columns.push(heads.iter().position(|h| !name.is_empty() && *h == name).map(|i| list.start.col + i as u32));
+                let name = self
+                    .shown(ci, CellRef::new(cr.start.row, c))
+                    .text
+                    .to_lowercase();
+                columns.push(
+                    heads
+                        .iter()
+                        .position(|h| !name.is_empty() && *h == name)
+                        .map(|i| list.start.col + i as u32),
+                );
             }
             for row in cr.start.row + 1..=cr.end.row {
                 let mut tests = Vec::new();
@@ -573,7 +822,9 @@ impl Book {
                     if text.is_empty() {
                         continue;
                     }
-                    let Some(col) = columns[i] else { return Err("AdvancedFilter の検索条件範囲の見出しが、リストの見出しにありません（数式による条件には対応していません）。".into()) };
+                    let Some(col) = columns[i] else {
+                        return Err("AdvancedFilter の検索条件範囲の見出しが、リストの見出しにありません（数式による条件には対応していません）。".into());
+                    };
                     let (op, val) = split_criterion(&text);
                     tests.push((col, op.to_string(), val.to_string()));
                 }
@@ -596,7 +847,9 @@ impl Book {
                 }
             }
             if pass && unique {
-                let key: Vec<String> = (list.start.col..=list.end.col).map(|c| self.shown(si, CellRef::new(row, c)).text).collect();
+                let key: Vec<String> = (list.start.col..=list.end.col)
+                    .map(|c| self.shown(si, CellRef::new(row, c)).text)
+                    .collect();
                 pass = seen.insert(key);
             }
             rows.push((row, pass));
@@ -608,7 +861,10 @@ impl Book {
                 changed |= self.hide(si, false, row, !pass);
             }
             if let Some(sh) = self.model.sheet(si) {
-                self.advanced.insert(sh.uid.get(), RangeRef::new(CellRef::new(list.start.row + 1, list.start.col), list.end));
+                self.advanced.insert(
+                    sh.uid.get(),
+                    RangeRef::new(CellRef::new(list.start.row + 1, list.start.col), list.end),
+                );
             }
             if changed {
                 self.rebuild = true;
@@ -617,24 +873,46 @@ impl Book {
         };
         self.check_sheet(ti)?;
         // The columns to copy: those the first row of the target names, or all of them.
-        let named: Vec<String> = (to.start.col..=to.end.col).map(|c| self.shown(ti, CellRef::new(to.start.row, c)).text.to_lowercase()).collect();
+        let named: Vec<String> = (to.start.col..=to.end.col)
+            .map(|c| {
+                self.shown(ti, CellRef::new(to.start.row, c))
+                    .text
+                    .to_lowercase()
+            })
+            .collect();
         let columns: Vec<u32> = if named.iter().all(String::is_empty) {
             (list.start.col..=list.end.col).collect()
         } else {
             let mut out = Vec::new();
             for name in named.iter().filter(|n| !n.is_empty()) {
-                let Some(i) = heads.iter().position(|h| h == name) else { return Err("AdvancedFilter の抽出範囲の見出しが、リストの見出しにありません。".into()) };
+                let Some(i) = heads.iter().position(|h| h == name) else {
+                    return Err(
+                        "AdvancedFilter の抽出範囲の見出しが、リストの見出しにありません。".into(),
+                    );
+                };
                 out.push(list.start.col + i as u32);
             }
             out
         };
-        let values = Paste { what: PasteWhat::Values, op: PasteOp::None, skip_blanks: false, transpose: false };
-        let formats = Paste { what: PasteWhat::Formats, ..values };
+        let values = Paste {
+            what: PasteWhat::Values,
+            op: PasteOp::None,
+            skip_blanks: false,
+            transpose: false,
+        };
+        let formats = Paste {
+            what: PasteWhat::Formats,
+            ..values
+        };
         let mut target = to.start.row;
-        for row in std::iter::once(list.start.row).chain(rows.into_iter().filter(|(_, p)| *p).map(|(r, _)| r)) {
+        for row in std::iter::once(list.start.row)
+            .chain(rows.into_iter().filter(|(_, p)| *p).map(|(r, _)| r))
+        {
             for (i, col) in columns.iter().enumerate() {
                 let from = RangeRef::cell(CellRef::new(row, *col));
-                let Some(at) = CellRef::new(target, to.start.col).offset(0, i as i64) else { continue };
+                let Some(at) = CellRef::new(target, to.start.col).offset(0, i as i64) else {
+                    continue;
+                };
                 self.paste(si, from, ti, at, &values)?;
                 self.paste(si, from, ti, at, &formats)?;
             }

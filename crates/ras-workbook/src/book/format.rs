@@ -8,8 +8,8 @@
 
 use gridcraft_core::{CellRef, RangeRef};
 use umya_spreadsheet::{
-    Border, BorderStyleValues, Color, EnumTrait, HorizontalAlignmentValues, PatternValues, Style, UnderlineValues, VerticalAlignmentRunValues,
-    VerticalAlignmentValues,
+    Border, BorderStyleValues, Color, EnumTrait, HorizontalAlignmentValues, PatternValues, Style,
+    UnderlineValues, VerticalAlignmentRunValues, VerticalAlignmentValues,
 };
 
 use super::{Book, MAX_COLS, MAX_ROWS, Result, Val, at_of, coord};
@@ -37,10 +37,13 @@ const AUTOMATIC: f64 = -4105.0;
 
 /// Excel's default palette (`ColorIndex` 1 to 56), as RGB.
 const PALETTE: [u32; 56] = [
-    0x000000, 0xFFFFFF, 0xFF0000, 0x00FF00, 0x0000FF, 0xFFFF00, 0xFF00FF, 0x00FFFF, 0x800000, 0x008000, 0x000080, 0x808000, 0x800080, 0x008080, 0xC0C0C0,
-    0x808080, 0x9999FF, 0x993366, 0xFFFFCC, 0xCCFFFF, 0x660066, 0xFF8080, 0x0066CC, 0xCCCCFF, 0x000080, 0xFF00FF, 0xFFFF00, 0x00FFFF, 0x800080, 0x800000,
-    0x008080, 0x0000FF, 0x00CCFF, 0xCCFFFF, 0xCCFFCC, 0xFFFF99, 0x99CCFF, 0xFF99CC, 0xCC99FF, 0xFFCC99, 0x3366FF, 0x33CCCC, 0x99CC00, 0xFFCC00, 0xFF9900,
-    0xFF6600, 0x666699, 0x969696, 0x003366, 0x339966, 0x003300, 0x333300, 0x993300, 0x993366, 0x333399, 0x333333,
+    0x000000, 0xFFFFFF, 0xFF0000, 0x00FF00, 0x0000FF, 0xFFFF00, 0xFF00FF, 0x00FFFF, 0x800000,
+    0x008000, 0x000080, 0x808000, 0x800080, 0x008080, 0xC0C0C0, 0x808080, 0x9999FF, 0x993366,
+    0xFFFFCC, 0xCCFFFF, 0x660066, 0xFF8080, 0x0066CC, 0xCCCCFF, 0x000080, 0xFF00FF, 0xFFFF00,
+    0x00FFFF, 0x800080, 0x800000, 0x008080, 0x0000FF, 0x00CCFF, 0xCCFFFF, 0xCCFFCC, 0xFFFF99,
+    0x99CCFF, 0xFF99CC, 0xCC99FF, 0xFFCC99, 0x3366FF, 0x33CCCC, 0x99CC00, 0xFFCC00, 0xFF9900,
+    0xFF6600, 0x666699, 0x969696, 0x003366, 0x339966, 0x003300, 0x333300, 0x993300, 0x993366,
+    0x333399, 0x333333,
 ];
 
 /// VBA's colour number (`RGB(r, g, b)`: red in the low byte) of RGB.
@@ -58,7 +61,10 @@ fn num(v: &Val) -> Result<f64> {
         Val::Num(n) | Val::Date(n) => Ok(*n),
         Val::Bool(b) => Ok(if *b { -1.0 } else { 0.0 }),
         Val::Empty => Ok(0.0),
-        Val::Text(s) => s.trim().parse().map_err(|_| "型が一致しません。".to_string()),
+        Val::Text(s) => s
+            .trim()
+            .parse()
+            .map_err(|_| "型が一致しません。".to_string()),
         Val::Err(_) => Err("型が一致しません。".into()),
     }
 }
@@ -188,19 +194,30 @@ impl Book {
     fn colour(&self, c: &Color) -> u32 {
         let hex = c.argb_with_theme(self.file.theme());
         let hex = hex.trim_start_matches('#');
-        let hex = if hex.len() > 6 { &hex[hex.len() - 6..] } else { hex };
+        let hex = if hex.len() > 6 {
+            &hex[hex.len() - 6..]
+        } else {
+            hex
+        };
         u32::from_str_radix(hex, 16).unwrap_or(0)
     }
 
     fn colour_index(&self, c: Option<&Color>, none: f64) -> f64 {
-        let Some(c) = c.filter(|c| c.has_value()) else { return none };
+        let Some(c) = c.filter(|c| c.has_value()) else {
+            return none;
+        };
         let rgb = self.colour(c);
-        PALETTE.iter().position(|p| *p == rgb).map_or(none, |i| (i + 1) as f64)
+        PALETTE
+            .iter()
+            .position(|p| *p == rgb)
+            .map_or(none, |i| (i + 1) as f64)
     }
 
     /// The style of a cell: its own, or its row's or column's when the cell is not stored.
     pub(super) fn style_at(&self, si: usize, at: CellRef) -> Style {
-        let Ok(ws) = self.file.sheet(si) else { return Style::default() };
+        let Ok(ws) = self.file.sheet(si) else {
+            return Style::default();
+        };
         if let Some(c) = ws.cell(coord(at)) {
             return c.style().clone();
         }
@@ -208,7 +225,9 @@ impl Book {
         if let Some(r) = ws.row_dimension(at.row + 1).filter(|r| *r.style() != plain) {
             return r.style().clone();
         }
-        ws.column_dimension_by_number(at.col + 1).map(|c| c.style().clone()).unwrap_or(plain)
+        ws.column_dimension_by_number(at.col + 1)
+            .map(|c| c.style().clone())
+            .unwrap_or(plain)
     }
 
     /// The styles of the cells of `r` that may differ: every cell of a small range; of a large
@@ -219,7 +238,12 @@ impl Book {
         }
         let mut out = vec![self.style_at(si, r.start)];
         if let Ok(ws) = self.file.sheet(si) {
-            out.extend(ws.cells().iter().filter(|c| r.contains(at_of(c))).map(|c| c.style().clone()));
+            out.extend(
+                ws.cells()
+                    .iter()
+                    .filter(|c| r.contains(at_of(c)))
+                    .map(|c| c.style().clone()),
+            );
         }
         out
     }
@@ -233,9 +257,18 @@ impl Book {
             return Err("範囲が大きすぎます".into());
         }
         let cells: Vec<CellRef> = if whole_cols || whole_rows {
-            let mut cells: Vec<CellRef> = self.model.sheet(si).map(|s| s.cells.iter_range(r).map(|(at, _)| at).collect()).unwrap_or_default();
+            let mut cells: Vec<CellRef> = self
+                .model
+                .sheet(si)
+                .map(|s| s.cells.iter_range(r).map(|(at, _)| at).collect())
+                .unwrap_or_default();
             if let Ok(ws) = self.file.sheet(si) {
-                cells.extend(ws.cells().iter().map(|c| at_of(c)).filter(|at| r.contains(*at)));
+                cells.extend(
+                    ws.cells()
+                        .iter()
+                        .map(|c| at_of(c))
+                        .filter(|at| r.contains(*at)),
+                );
             }
             cells.sort_by_key(|at| (at.row, at.col));
             cells.dedup();
@@ -243,7 +276,9 @@ impl Book {
         } else {
             r.iter().collect()
         };
-        let Ok(ws) = self.file.sheet_mut(si) else { return Ok(()) };
+        let Ok(ws) = self.file.sheet_mut(si) else {
+            return Ok(());
+        };
         if whole_cols {
             for col in r.start.col..=r.end.col {
                 f(ws.column_dimension_by_number_mut(col + 1).style_mut());
@@ -277,68 +312,115 @@ impl Book {
     fn style_prop(&self, style: &Style, prop: &str) -> Result<Val> {
         let n = Val::Num;
         Ok(match prop {
-            "font.name" => Val::Text(style.font().map(|f| f.name().to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| DEFAULT_FONT.into())),
-            "font.size" => n(style.font().map(|f| f.size()).filter(|s| *s > 0.0).unwrap_or(11.0)),
+            "font.name" => Val::Text(
+                style
+                    .font()
+                    .map(|f| f.name().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| DEFAULT_FONT.into()),
+            ),
+            "font.size" => n(style
+                .font()
+                .map(|f| f.size())
+                .filter(|s| *s > 0.0)
+                .unwrap_or(11.0)),
             "font.bold" => Val::Bool(style.font().is_some_and(|f| f.bold())),
             "font.italic" => Val::Bool(style.font().is_some_and(|f| f.italic())),
             "font.strikethrough" => Val::Bool(style.font().is_some_and(|f| f.strikethrough())),
-            "font.underline" => n(match style.font().map(|f| f.underline()).unwrap_or("none") {
-                "single" => 2.0,
-                "double" => -4119.0,
-                "singleAccounting" => 4.0,
-                "doubleAccounting" => 5.0,
-                _ => NONE,
-            }),
-            "font.superscript" => Val::Bool(style.font().is_some_and(|f| *f.vertical_text_alignment().val() == VerticalAlignmentRunValues::Superscript)),
-            "font.subscript" => Val::Bool(style.font().is_some_and(|f| *f.vertical_text_alignment().val() == VerticalAlignmentRunValues::Subscript)),
-            "font.color" => n(bgr(style.font().map(|f| f.color()).filter(|c| c.has_value()).map_or(0, |c| self.colour(c)))),
+            "font.underline" => n(
+                match style.font().map(|f| f.underline()).unwrap_or("none") {
+                    "single" => 2.0,
+                    "double" => -4119.0,
+                    "singleAccounting" => 4.0,
+                    "doubleAccounting" => 5.0,
+                    _ => NONE,
+                },
+            ),
+            "font.superscript" => Val::Bool(style.font().is_some_and(|f| {
+                *f.vertical_text_alignment().val() == VerticalAlignmentRunValues::Superscript
+            })),
+            "font.subscript" => Val::Bool(style.font().is_some_and(|f| {
+                *f.vertical_text_alignment().val() == VerticalAlignmentRunValues::Subscript
+            })),
+            "font.color" => n(bgr(style
+                .font()
+                .map(|f| f.color())
+                .filter(|c| c.has_value())
+                .map_or(0, |c| self.colour(c)))),
             "font.colorindex" => n(self.colour_index(style.font().map(|f| f.color()), AUTOMATIC)),
             "interior.color" => n(bgr(self.fill_colour(style).unwrap_or(0xFFFFFF))),
             "interior.colorindex" => n(match self.fill_colour(style) {
-                Some(rgb) => PALETTE.iter().position(|p| *p == rgb).map_or(NONE, |i| (i + 1) as f64),
+                Some(rgb) => PALETTE
+                    .iter()
+                    .position(|p| *p == rgb)
+                    .map_or(NONE, |i| (i + 1) as f64),
                 None => NONE,
             }),
-            "interior.pattern" => n(match style.fill().and_then(|f| f.pattern_fill()).map(|p| p.pattern_type().value_string().to_string()).as_deref() {
-                None | Some("none") => NONE,
-                Some("solid") => 1.0,
-                Some("mediumGray") => -4124.0,
-                Some("darkGray") => -4125.0,
-                Some("lightGray") => -4126.0,
-                Some("gray125") => 17.0,
-                Some("gray0625") => 18.0,
-                Some("darkHorizontal") => -4128.0,
-                Some("darkVertical") => -4166.0,
-                Some("darkDown") => -4121.0,
-                Some("darkUp") => -4162.0,
-                Some("darkGrid") => 9.0,
-                Some("darkTrellis") => 10.0,
-                Some("lightHorizontal") => 11.0,
-                Some("lightVertical") => 12.0,
-                Some("lightDown") => 13.0,
-                Some("lightUp") => 14.0,
-                Some("lightGrid") => 15.0,
-                Some(_) => 16.0,
-            }),
-            "interior.patterncolor" => n(bgr(style.fill().and_then(|f| f.pattern_fill()).and_then(|p| p.background_color()).filter(|c| c.has_value()).map_or(0, |c| self.colour(c)))),
-            "horizontalalignment" => n(match style.alignment().map(|a| a.horizontal().value_string().to_string()).as_deref() {
-                Some("left") => -4131.0,
-                Some("center") => -4108.0,
-                Some("right") => -4152.0,
-                Some("fill") => 5.0,
-                Some("justify") => -4130.0,
-                Some("centerContinuous") => 7.0,
-                Some("distributed") => -4117.0,
-                _ => 1.0,
-            }),
-            "verticalalignment" => n(match style.alignment().map(|a| a.vertical().value_string().to_string()).as_deref() {
-                Some("top") => -4160.0,
-                Some("center") => -4108.0,
-                Some("justify") => -4130.0,
-                Some("distributed") => -4117.0,
-                // What Japanese Excel gives new workbooks; files say when it is the bottom.
-                None => -4108.0,
-                _ => -4107.0,
-            }),
+            "interior.pattern" => n(
+                match style
+                    .fill()
+                    .and_then(|f| f.pattern_fill())
+                    .map(|p| p.pattern_type().value_string().to_string())
+                    .as_deref()
+                {
+                    None | Some("none") => NONE,
+                    Some("solid") => 1.0,
+                    Some("mediumGray") => -4124.0,
+                    Some("darkGray") => -4125.0,
+                    Some("lightGray") => -4126.0,
+                    Some("gray125") => 17.0,
+                    Some("gray0625") => 18.0,
+                    Some("darkHorizontal") => -4128.0,
+                    Some("darkVertical") => -4166.0,
+                    Some("darkDown") => -4121.0,
+                    Some("darkUp") => -4162.0,
+                    Some("darkGrid") => 9.0,
+                    Some("darkTrellis") => 10.0,
+                    Some("lightHorizontal") => 11.0,
+                    Some("lightVertical") => 12.0,
+                    Some("lightDown") => 13.0,
+                    Some("lightUp") => 14.0,
+                    Some("lightGrid") => 15.0,
+                    Some(_) => 16.0,
+                },
+            ),
+            "interior.patterncolor" => n(bgr(style
+                .fill()
+                .and_then(|f| f.pattern_fill())
+                .and_then(|p| p.background_color())
+                .filter(|c| c.has_value())
+                .map_or(0, |c| self.colour(c)))),
+            "horizontalalignment" => n(
+                match style
+                    .alignment()
+                    .map(|a| a.horizontal().value_string().to_string())
+                    .as_deref()
+                {
+                    Some("left") => -4131.0,
+                    Some("center") => -4108.0,
+                    Some("right") => -4152.0,
+                    Some("fill") => 5.0,
+                    Some("justify") => -4130.0,
+                    Some("centerContinuous") => 7.0,
+                    Some("distributed") => -4117.0,
+                    _ => 1.0,
+                },
+            ),
+            "verticalalignment" => n(
+                match style
+                    .alignment()
+                    .map(|a| a.vertical().value_string().to_string())
+                    .as_deref()
+                {
+                    Some("top") => -4160.0,
+                    Some("center") => -4108.0,
+                    Some("justify") => -4130.0,
+                    Some("distributed") => -4117.0,
+                    // What Japanese Excel gives new workbooks; files say when it is the bottom.
+                    None => -4108.0,
+                    _ => -4107.0,
+                },
+            ),
             "wraptext" => Val::Bool(style.alignment().is_some_and(|a| a.wrap_text())),
             "shrinktofit" => Val::Bool(style.alignment().is_some_and(|a| a.shrink_to_fit())),
             "indentlevel" => n(style.alignment().map_or(0.0, |a| a.indent() as f64)),
@@ -349,7 +431,9 @@ impl Book {
                 d => 90.0 - d as f64,
             }),
             "locked" => Val::Bool(style.protection().is_none_or(|p| p.locked())),
-            "formulahidden" => Val::Bool(style.protection().cloned().is_some_and(|mut p| p.hidden())),
+            "formulahidden" => {
+                Val::Bool(style.protection().cloned().is_some_and(|mut p| p.hidden()))
+            }
             _ => return Err(format!("書式 {prop} には対応していません")),
         })
     }
@@ -359,7 +443,9 @@ impl Book {
         if *p.pattern_type() == PatternValues::None {
             return None;
         }
-        p.foreground_color().filter(|c| c.has_value()).map(|c| self.colour(c))
+        p.foreground_color()
+            .filter(|c| c.has_value())
+            .map(|c| self.colour(c))
     }
 
     fn set_style_prop(style: &mut Style, prop: &str, v: &Val) -> Result<()> {
@@ -369,7 +455,11 @@ impl Book {
         };
         let indexed = |v: &Val| -> Result<Option<u32>> {
             let i = num(v)?;
-            Ok(if (1.0..=56.0).contains(&i) { Some(PALETTE[i as usize - 1]) } else { None })
+            Ok(if (1.0..=56.0).contains(&i) {
+                Some(PALETTE[i as usize - 1])
+            } else {
+                None
+            })
         };
         match prop {
             "font.name" => {
@@ -402,14 +492,28 @@ impl Book {
                 style.font_mut().set_underline(u.value_string());
             }
             "font.superscript" | "font.subscript" => {
-                let on = if prop == "font.superscript" { VerticalAlignmentRunValues::Superscript } else { VerticalAlignmentRunValues::Subscript };
-                let value = if flag(v)? { on } else { VerticalAlignmentRunValues::Baseline };
-                style.font_mut().vertical_text_alignment_mut().set_val(value);
+                let on = if prop == "font.superscript" {
+                    VerticalAlignmentRunValues::Superscript
+                } else {
+                    VerticalAlignmentRunValues::Subscript
+                };
+                let value = if flag(v)? {
+                    on
+                } else {
+                    VerticalAlignmentRunValues::Baseline
+                };
+                style
+                    .font_mut()
+                    .vertical_text_alignment_mut()
+                    .set_val(value);
             }
             "font.color" => colour(style.font_mut().color_mut(), v)?,
             "font.colorindex" => {
                 let rgb = indexed(v)?.unwrap_or(0);
-                style.font_mut().color_mut().set_argb_str(format!("FF{rgb:06X}"));
+                style
+                    .font_mut()
+                    .color_mut()
+                    .set_argb_str(format!("FF{rgb:06X}"));
             }
             "interior.color" => {
                 let p = style.fill_mut().pattern_fill_mut();
@@ -424,7 +528,8 @@ impl Book {
                     if matches!(*p.pattern_type(), PatternValues::None) {
                         p.set_pattern_type(PatternValues::Solid);
                     }
-                    p.foreground_color_mut().set_argb_str(format!("FF{rgb:06X}"));
+                    p.foreground_color_mut()
+                        .set_argb_str(format!("FF{rgb:06X}"));
                 }
                 None => {
                     style.remove_fill();
@@ -462,7 +567,10 @@ impl Book {
                     }
                 }
             }
-            "interior.patterncolor" => colour(style.fill_mut().pattern_fill_mut().background_color_mut(), v)?,
+            "interior.patterncolor" => colour(
+                style.fill_mut().pattern_fill_mut().background_color_mut(),
+                v,
+            )?,
             "horizontalalignment" => {
                 use HorizontalAlignmentValues as H;
                 style.alignment_mut().set_horizontal(match num(v)? as i32 {
@@ -488,7 +596,9 @@ impl Book {
             }
             "wraptext" => style.alignment_mut().set_wrap_text(flag(v)?),
             "shrinktofit" => style.alignment_mut().set_shrink_to_fit(flag(v)?),
-            "indentlevel" => style.alignment_mut().set_indent(num(v)?.clamp(0.0, 250.0) as u32),
+            "indentlevel" => style
+                .alignment_mut()
+                .set_indent(num(v)?.clamp(0.0, 250.0) as u32),
             "orientation" => {
                 let d = num(v)?;
                 style.alignment_mut().set_text_rotation(match d as i32 {
@@ -511,24 +621,43 @@ impl Book {
     /// The sides of the cells of `r` a `Borders(index)` is: (cells, side) pairs. `index` is
     /// `XlBordersIndex`, or the side of every cell (`xlLeft` and the like), or `all`.
     fn border_parts(r: RangeRef, index: &str) -> Result<Vec<(RangeRef, Side)>> {
-        let row = |row: u32| RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col));
-        let col = |col: u32| RangeRef::new(CellRef::new(r.start.row, col), CellRef::new(r.end.row, col));
+        let row =
+            |row: u32| RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col));
+        let col =
+            |col: u32| RangeRef::new(CellRef::new(r.start.row, col), CellRef::new(r.end.row, col));
         Ok(match index {
-            "all" => vec![(r, Side::Left), (r, Side::Right), (r, Side::Top), (r, Side::Bottom)],
+            "all" => vec![
+                (r, Side::Left),
+                (r, Side::Right),
+                (r, Side::Top),
+                (r, Side::Bottom),
+            ],
             "7" => vec![(col(r.start.col), Side::Left)],
             "10" => vec![(col(r.end.col), Side::Right)],
             "8" => vec![(row(r.start.row), Side::Top)],
             "9" => vec![(row(r.end.row), Side::Bottom)],
             "11" if r.width() > 1 => {
                 vec![
-                    (RangeRef::new(CellRef::new(r.start.row, r.start.col + 1), r.end), Side::Left),
-                    (RangeRef::new(r.start, CellRef::new(r.end.row, r.end.col - 1)), Side::Right),
+                    (
+                        RangeRef::new(CellRef::new(r.start.row, r.start.col + 1), r.end),
+                        Side::Left,
+                    ),
+                    (
+                        RangeRef::new(r.start, CellRef::new(r.end.row, r.end.col - 1)),
+                        Side::Right,
+                    ),
                 ]
             }
             "12" if r.height() > 1 => {
                 vec![
-                    (RangeRef::new(CellRef::new(r.start.row + 1, r.start.col), r.end), Side::Top),
-                    (RangeRef::new(r.start, CellRef::new(r.end.row - 1, r.end.col)), Side::Bottom),
+                    (
+                        RangeRef::new(CellRef::new(r.start.row + 1, r.start.col), r.end),
+                        Side::Top,
+                    ),
+                    (
+                        RangeRef::new(r.start, CellRef::new(r.end.row - 1, r.end.col)),
+                        Side::Bottom,
+                    ),
                 ]
             }
             "11" | "12" => Vec::new(),
@@ -547,9 +676,14 @@ impl Book {
         Ok(Val::Num(match what {
             "linestyle" => line,
             "weight" => weight,
-            "color" => bgr(b.and_then(|b| b.color()).filter(|c| c.has_value()).map_or(0, |c| self.colour(&c))),
+            "color" => bgr(b
+                .and_then(|b| b.color())
+                .filter(|c| c.has_value())
+                .map_or(0, |c| self.colour(&c))),
             "colorindex" => match b {
-                Some(b) if *b.style() != BorderStyleValues::None => self.colour_index(b.color().as_ref(), AUTOMATIC),
+                Some(b) if *b.style() != BorderStyleValues::None => {
+                    self.colour_index(b.color().as_ref(), AUTOMATIC)
+                }
                 _ => NONE,
             },
             _ => return Err(format!("罫線の {what} には対応していません")),
@@ -568,7 +702,10 @@ impl Book {
                 b.set_style(style_of_line(num(v)?, weight));
             }
             "weight" => {
-                b.set_style(style_of_line(if line == NONE { 1.0 } else { line }, num(v)?));
+                b.set_style(style_of_line(
+                    if line == NONE { 1.0 } else { line },
+                    num(v)?,
+                ));
             }
             "color" => {
                 if line == NONE {
@@ -584,7 +721,11 @@ impl Book {
                     if line == NONE {
                         b.set_style(BorderStyleValues::Thin);
                     }
-                    b.set_color(rgb(if (1.0..=56.0).contains(&i) { PALETTE[i as usize - 1] } else { 0 }));
+                    b.set_color(rgb(if (1.0..=56.0).contains(&i) {
+                        PALETTE[i as usize - 1]
+                    } else {
+                        0
+                    }));
                 }
             }
             _ => return Err(format!("罫線の {what} には対応していません")),
@@ -599,8 +740,15 @@ impl Book {
         match prop {
             "columnwidth" => {
                 let ws = self.file.sheet(si).map_err(|e| e.to_string())?;
-                let default = Some(ws.sheet_format_properties().default_column_width()).filter(|w| *w > 0.0).unwrap_or(DEFAULT_COLUMN_WIDTH);
-                let stored: Vec<f64> = ws.column_dimensions().iter().filter(|c| (r.start.col + 1..=r.end.col + 1).contains(&c.col_num())).map(|c| c.width()).collect();
+                let default = Some(ws.sheet_format_properties().default_column_width())
+                    .filter(|w| *w > 0.0)
+                    .unwrap_or(DEFAULT_COLUMN_WIDTH);
+                let stored: Vec<f64> = ws
+                    .column_dimensions()
+                    .iter()
+                    .filter(|c| (r.start.col + 1..=r.end.col + 1).contains(&c.col_num()))
+                    .map(|c| c.width())
+                    .collect();
                 if (stored.len() as u32) < r.width() {
                     values.push(Val::Num(default));
                 }
@@ -608,8 +756,21 @@ impl Book {
             }
             "rowheight" => {
                 let ws = self.file.sheet(si).map_err(|e| e.to_string())?;
-                let default = Some(ws.sheet_format_properties().default_row_height()).filter(|h| *h > 0.0).unwrap_or(DEFAULT_ROW_HEIGHT);
-                let stored: Vec<f64> = ws.row_dimensions().iter().filter(|x| (r.start.row + 1..=r.end.row + 1).contains(&x.row_num())).map(|x| if x.height() > 0.0 { x.height() } else { default }).collect();
+                let default = Some(ws.sheet_format_properties().default_row_height())
+                    .filter(|h| *h > 0.0)
+                    .unwrap_or(DEFAULT_ROW_HEIGHT);
+                let stored: Vec<f64> = ws
+                    .row_dimensions()
+                    .iter()
+                    .filter(|x| (r.start.row + 1..=r.end.row + 1).contains(&x.row_num()))
+                    .map(|x| {
+                        if x.height() > 0.0 {
+                            x.height()
+                        } else {
+                            default
+                        }
+                    })
+                    .collect();
                 if (stored.len() as u32) < r.height() {
                     values.push(Val::Num(default));
                 }
@@ -627,7 +788,8 @@ impl Book {
             }
             _ => {
                 if let Some(rest) = prop.strip_prefix("borders.") {
-                    let (index, what) = rest.split_once('.').ok_or("罫線の指定が正しくありません")?;
+                    let (index, what) =
+                        rest.split_once('.').ok_or("罫線の指定が正しくありません")?;
                     for (cells, side) in Self::border_parts(r, index)? {
                         for style in self.styles_of(si, cells) {
                             values.push(self.border_prop(border(&style, side), what)?);
@@ -659,7 +821,8 @@ impl Book {
                 let ws = self.file.sheet_mut(si).map_err(|e| e.to_string())?;
                 if r.width() == MAX_COLS {
                     ws.sheet_format_properties_mut().set_default_column_width(w);
-                    let stored: Vec<u32> = ws.column_dimensions().iter().map(|c| c.col_num()).collect();
+                    let stored: Vec<u32> =
+                        ws.column_dimensions().iter().map(|c| c.col_num()).collect();
                     for col in stored {
                         ws.column_dimension_by_number_mut(col).set_width(w);
                     }
@@ -677,13 +840,18 @@ impl Book {
                 let ws = self.file.sheet_mut(si).map_err(|e| e.to_string())?;
                 if r.height() == MAX_ROWS {
                     ws.sheet_format_properties_mut().set_default_row_height(h);
-                    let stored: Vec<u32> = ws.row_dimensions().iter().map(|x| x.row_num()).collect();
+                    let stored: Vec<u32> =
+                        ws.row_dimensions().iter().map(|x| x.row_num()).collect();
                     for row in stored {
-                        ws.row_dimension_mut(row).set_height(h).set_custom_height(true);
+                        ws.row_dimension_mut(row)
+                            .set_height(h)
+                            .set_custom_height(true);
                     }
                 } else {
                     for row in r.start.row..=r.end.row {
-                        ws.row_dimension_mut(row + 1).set_height(h).set_custom_height(true);
+                        ws.row_dimension_mut(row + 1)
+                            .set_height(h)
+                            .set_custom_height(true);
                     }
                 }
             }
@@ -696,7 +864,8 @@ impl Book {
             }
             _ => {
                 if let Some(rest) = prop.strip_prefix("borders.") {
-                    let (index, what) = rest.split_once('.').ok_or("罫線の指定が正しくありません")?;
+                    let (index, what) =
+                        rest.split_once('.').ok_or("罫線の指定が正しくありません")?;
                     let what = what.to_string();
                     for (cells, side) in Self::border_parts(r, index)? {
                         // Checked on a scratch border first: `restyle` cannot fail half way.
@@ -725,7 +894,8 @@ impl Book {
             if r.is_full_cols() {
                 for col in r.start.col..=r.end.col {
                     if ws.column_dimension_by_number(col + 1).is_some() {
-                        ws.column_dimension_by_number_mut(col + 1).set_style(Style::default());
+                        ws.column_dimension_by_number_mut(col + 1)
+                            .set_style(Style::default());
                     }
                 }
             } else if r.is_full_rows() {
@@ -741,7 +911,10 @@ impl Book {
 
     /// `Range.MergeArea`: the merged cell a cell is part of (the cell itself when it is not).
     pub fn merge_area(&self, si: usize, at: CellRef) -> RangeRef {
-        self.model.sheet(si).and_then(|s| s.merge_at(at)).unwrap_or(RangeRef::cell(at))
+        self.model
+            .sheet(si)
+            .and_then(|s| s.merge_at(at))
+            .unwrap_or(RangeRef::cell(at))
     }
 
     /// `Range.Merge`: `across` merges each row of `r` on its own.
@@ -749,7 +922,10 @@ impl Book {
         self.check_sheet(si)?;
         if across {
             for row in r.start.row..=r.end.row {
-                self.merge(si, RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col)));
+                self.merge(
+                    si,
+                    RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col)),
+                );
             }
         } else {
             self.merge(si, r);
@@ -760,14 +936,19 @@ impl Book {
     /// `Worksheet.Tab.Color` as VBA's colour number, None when the tab has no colour.
     pub fn tab_color(&self, si: usize) -> Option<f64> {
         let ws = self.file.sheet(si).ok()?;
-        ws.tab_color().filter(|c| c.has_value()).map(|c| bgr(self.colour(c)))
+        ws.tab_color()
+            .filter(|c| c.has_value())
+            .map(|c| bgr(self.colour(c)))
     }
 
     pub fn set_tab_color(&mut self, si: usize, color: Option<f64>) {
-        let Ok(ws) = self.file.sheet_mut(si) else { return };
+        let Ok(ws) = self.file.sheet_mut(si) else {
+            return;
+        };
         match color {
             Some(c) => {
-                ws.tab_color_mut().set_argb_str(format!("FF{:06X}", rgb_of(c)));
+                ws.tab_color_mut()
+                    .set_argb_str(format!("FF{:06X}", rgb_of(c)));
             }
             None => {
                 ws.remove_tab_color();

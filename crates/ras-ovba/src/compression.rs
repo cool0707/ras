@@ -153,7 +153,10 @@ struct MatchFinder {
 
 impl MatchFinder {
     fn new() -> Self {
-        MatchFinder { head: vec![NO_POS; 1 << HASH_BITS], prev: vec![NO_POS; CHUNK_SIZE] }
+        MatchFinder {
+            head: vec![NO_POS; 1 << HASH_BITS],
+            prev: vec![NO_POS; CHUNK_SIZE],
+        }
     }
 
     fn reset(&mut self) {
@@ -161,7 +164,8 @@ impl MatchFinder {
     }
 
     fn hash(chunk: &[u8], pos: usize) -> usize {
-        let v = (chunk[pos] as u32) | ((chunk[pos + 1] as u32) << 8) | ((chunk[pos + 2] as u32) << 16);
+        let v =
+            (chunk[pos] as u32) | ((chunk[pos + 1] as u32) << 8) | ((chunk[pos + 2] as u32) << 16);
         (v.wrapping_mul(0x9E37_79B1) >> (32 - HASH_BITS)) as usize
     }
 

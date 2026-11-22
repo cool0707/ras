@@ -53,7 +53,13 @@ pub(crate) enum RetMode {
     /// Assign to the procedure name, then `Exit` (or jump to the exit label).
     Proc,
     /// Inlined body / fused lambda block: assign to `var`, jump to `label` unless in tail position.
-    Inline { var: Option<String>, ty: Type, label: String, used: bool, tries_base: usize },
+    Inline {
+        var: Option<String>,
+        ty: Type,
+        label: String,
+        used: bool,
+        tries_base: usize,
+    },
 }
 
 #[derive(Clone, PartialEq)]
@@ -85,7 +91,11 @@ pub(crate) enum TryKind {
     /// try/catch without finally (only `ras_tryId` needs restoring).
     Catch,
     /// A region whose exits must run a `finally` block first.
-    Finally { label: String, exit_var: String, pending: Vec<PendingExit> },
+    Finally {
+        label: String,
+        exit_var: String,
+        pending: Vec<PendingExit>,
+    },
 }
 
 pub(crate) struct TryCtx {
@@ -192,24 +202,65 @@ pub(crate) struct Lowerer<'p> {
 /// Workbook / worksheet event signatures: (name, VBA type, by reference).
 /// Events of the workbook and of a sheet that `@on` handles (spec §12.2), as `event_params` names them.
 const WORKBOOK_EVENTS: &[&str] = &[
-    "Open", "Activate", "Deactivate", "AddinInstall", "AddinUninstall", "AfterXmlExport", "BeforeClose", "BeforeSave", "AfterSave", "BeforePrint",
-    "NewSheet", "SheetActivate", "SheetDeactivate", "SheetCalculate", "SheetChange", "SheetSelectionChange", "SheetBeforeDoubleClick",
-    "SheetBeforeRightClick", "SheetFollowHyperlink", "WindowActivate", "WindowDeactivate", "WindowResize",
+    "Open",
+    "Activate",
+    "Deactivate",
+    "AddinInstall",
+    "AddinUninstall",
+    "AfterXmlExport",
+    "BeforeClose",
+    "BeforeSave",
+    "AfterSave",
+    "BeforePrint",
+    "NewSheet",
+    "SheetActivate",
+    "SheetDeactivate",
+    "SheetCalculate",
+    "SheetChange",
+    "SheetSelectionChange",
+    "SheetBeforeDoubleClick",
+    "SheetBeforeRightClick",
+    "SheetFollowHyperlink",
+    "WindowActivate",
+    "WindowDeactivate",
+    "WindowResize",
 ];
-const SHEET_EVENTS: &[&str] = &["Activate", "Deactivate", "Calculate", "Change", "SelectionChange", "BeforeDoubleClick", "BeforeRightClick", "FollowHyperlink", "BeforeDelete"];
+const SHEET_EVENTS: &[&str] = &[
+    "Activate",
+    "Deactivate",
+    "Calculate",
+    "Change",
+    "SelectionChange",
+    "BeforeDoubleClick",
+    "BeforeRightClick",
+    "FollowHyperlink",
+    "BeforeDelete",
+];
 
 /// The event `event` (any case) of the workbook or of a sheet, spelled as `@on` takes it;
 /// `None` when `@on` does not handle it.
 pub(crate) fn document_event(target_is_workbook: bool, event: &str) -> Option<&'static str> {
-    let events = if target_is_workbook { WORKBOOK_EVENTS } else { SHEET_EVENTS };
-    events.iter().copied().find(|e| e.eq_ignore_ascii_case(event)).filter(|e| event_params(target_is_workbook, e).is_some())
+    let events = if target_is_workbook {
+        WORKBOOK_EVENTS
+    } else {
+        SHEET_EVENTS
+    };
+    events
+        .iter()
+        .copied()
+        .find(|e| e.eq_ignore_ascii_case(event))
+        .filter(|e| event_params(target_is_workbook, e).is_some())
 }
 
 /// The events of a control on a sheet (spec §12.2.1): those of the control on a form, without
 /// what a form raises (`Enter`, `Exit`, `BeforeUpdate`, `AfterUpdate`) and with what a sheet
 /// raises (`GotFocus`, `LostFocus`).
 fn sheet_control_events(control_type: &str) -> Vec<String> {
-    let mut names: Vec<String> = crate::userform::events_of(control_type).iter().map(|e| e.name.clone()).filter(|n| !FORM_ONLY_EVENTS.iter().any(|x| x.eq_ignore_ascii_case(n))).collect();
+    let mut names: Vec<String> = crate::userform::events_of(control_type)
+        .iter()
+        .map(|e| e.name.clone())
+        .filter(|n| !FORM_ONLY_EVENTS.iter().any(|x| x.eq_ignore_ascii_case(n)))
+        .collect();
     if !names.is_empty() {
         names.extend(SHEET_ONLY_EVENTS.iter().map(|s| s.to_string()));
     }
@@ -220,21 +271,43 @@ const FORM_ONLY_EVENTS: [&str; 4] = ["Enter", "Exit", "BeforeUpdate", "AfterUpda
 const SHEET_ONLY_EVENTS: [&str; 2] = ["GotFocus", "LostFocus"];
 
 /// Name and parameters (name, VBA type, by reference) of an event of a control on a sheet.
-pub(crate) fn sheet_control_event(control_type: &str, event: &str) -> Option<(String, Vec<(String, String, bool)>)> {
-    if FORM_ONLY_EVENTS.iter().any(|x| x.eq_ignore_ascii_case(event)) {
+pub(crate) fn sheet_control_event(
+    control_type: &str,
+    event: &str,
+) -> Option<(String, Vec<(String, String, bool)>)> {
+    if FORM_ONLY_EVENTS
+        .iter()
+        .any(|x| x.eq_ignore_ascii_case(event))
+    {
         return None;
     }
-    if let Some(name) = SHEET_ONLY_EVENTS.iter().find(|x| x.eq_ignore_ascii_case(event)) {
-        return if crate::userform::events_of(control_type).is_empty() { None } else { Some((name.to_string(), Vec::new())) };
+    if let Some(name) = SHEET_ONLY_EVENTS
+        .iter()
+        .find(|x| x.eq_ignore_ascii_case(event))
+    {
+        return if crate::userform::events_of(control_type).is_empty() {
+            None
+        } else {
+            Some((name.to_string(), Vec::new()))
+        };
     }
     let def = crate::userform::find_event(control_type, event)?;
-    Some((def.name.clone(), def.params.iter().map(|p| (p.name.clone(), p.vba_type.clone(), p.byref)).collect()))
+    Some((
+        def.name.clone(),
+        def.params
+            .iter()
+            .map(|p| (p.name.clone(), p.vba_type.clone(), p.byref))
+            .collect(),
+    ))
 }
 
 /// The events an object of the host class `class` raises for a `WithEvents` variable
 /// (spec §12.2.2): name and parameters (name, VBA type, by reference). `None` for a class
 /// whose events are not known.
-pub(crate) fn host_events(prog: &Program, class: ClassId) -> Option<Vec<(String, Vec<(String, String, bool)>)>> {
+pub(crate) fn host_events(
+    prog: &Program,
+    class: ClassId,
+) -> Option<Vec<(String, Vec<(String, String, bool)>)>> {
     type Sig = (&'static str, &'static [(&'static str, &'static str, bool)]);
     const WB: (&str, &str, bool) = ("Wb", "Workbook", false);
     const SH: (&str, &str, bool) = ("Sh", "Object", false);
@@ -252,8 +325,14 @@ pub(crate) fn host_events(prog: &Program, class: ClassId) -> Option<Vec<(String,
         ("SheetSelectionChange", &[SH, TARGET]),
         ("SheetBeforeDoubleClick", &[SH, TARGET, CANCEL]),
         ("SheetBeforeRightClick", &[SH, TARGET, CANCEL]),
-        ("SheetFollowHyperlink", &[SH, ("Target", "Hyperlink", false)]),
-        ("SheetPivotTableUpdate", &[SH, ("Target", "PivotTable", false)]),
+        (
+            "SheetFollowHyperlink",
+            &[SH, ("Target", "Hyperlink", false)],
+        ),
+        (
+            "SheetPivotTableUpdate",
+            &[SH, ("Target", "PivotTable", false)],
+        ),
         ("WindowActivate", &[WB, WN]),
         ("WindowDeactivate", &[WB, WN]),
         ("WindowResize", &[WB, WN]),
@@ -264,7 +343,10 @@ pub(crate) fn host_events(prog: &Program, class: ClassId) -> Option<Vec<(String,
         ("WorkbookAddinUninstall", &[WB]),
         ("WorkbookBeforeClose", &[WB, CANCEL]),
         ("WorkbookBeforePrint", &[WB, CANCEL]),
-        ("WorkbookBeforeSave", &[WB, ("SaveAsUI", "Boolean", false), CANCEL]),
+        (
+            "WorkbookBeforeSave",
+            &[WB, ("SaveAsUI", "Boolean", false), CANCEL],
+        ),
         ("WorkbookAfterSave", &[WB, ("Success", "Boolean", false)]),
         ("WorkbookNewSheet", &[WB, SH]),
         ("WorkbookNewChart", &[WB, ("Ch", "Chart", false)]),
@@ -275,26 +357,75 @@ pub(crate) fn host_events(prog: &Program, class: ClassId) -> Option<Vec<(String,
         ("ProtectedViewWindowResize", &[PVW]),
         ("ProtectedViewWindowBeforeEdit", &[PVW, CANCEL]),
     ];
-    const ELEMENT: [(&str, &str, bool); 3] = [("ElementID", "Long", false), ("Arg1", "Long", false), ("Arg2", "Long", false)];
-    const MOUSE: &[(&str, &str, bool)] = &[("Button", "Long", false), ("Shift", "Long", false), ("x", "Long", false), ("y", "Long", false)];
+    const ELEMENT: [(&str, &str, bool); 3] = [
+        ("ElementID", "Long", false),
+        ("Arg1", "Long", false),
+        ("Arg2", "Long", false),
+    ];
+    const MOUSE: &[(&str, &str, bool)] = &[
+        ("Button", "Long", false),
+        ("Shift", "Long", false),
+        ("x", "Long", false),
+        ("y", "Long", false),
+    ];
     const CHART: &[Sig] = &[
         ("Activate", &[]),
         ("Deactivate", &[]),
         ("Calculate", &[]),
         ("Resize", &[]),
-        ("BeforeDoubleClick", &[ELEMENT[0], ELEMENT[1], ELEMENT[2], CANCEL]),
+        (
+            "BeforeDoubleClick",
+            &[ELEMENT[0], ELEMENT[1], ELEMENT[2], CANCEL],
+        ),
         ("BeforeRightClick", &[CANCEL]),
         ("Select", &ELEMENT),
-        ("SeriesChange", &[("SeriesIndex", "Long", false), ("PointIndex", "Long", false)]),
+        (
+            "SeriesChange",
+            &[
+                ("SeriesIndex", "Long", false),
+                ("PointIndex", "Long", false),
+            ],
+        ),
         ("MouseDown", MOUSE),
         ("MouseMove", MOUSE),
         ("MouseUp", MOUSE),
     ];
-    const QUERY_TABLE: &[Sig] = &[("BeforeRefresh", &[CANCEL]), ("AfterRefresh", &[("Success", "Boolean", false)])];
-    let own = |list: &[Sig]| list.iter().map(|(name, params)| (name.to_string(), params.iter().map(|p| (p.0.to_string(), p.1.to_string(), p.2)).collect())).collect();
+    const QUERY_TABLE: &[Sig] = &[
+        ("BeforeRefresh", &[CANCEL]),
+        ("AfterRefresh", &[("Success", "Boolean", false)]),
+    ];
+    let own = |list: &[Sig]| {
+        list.iter()
+            .map(|(name, params)| {
+                (
+                    name.to_string(),
+                    params
+                        .iter()
+                        .map(|p| (p.0.to_string(), p.1.to_string(), p.2))
+                        .collect(),
+                )
+            })
+            .collect()
+    };
     let document = |workbook: bool| {
-        let names = if workbook { WORKBOOK_EVENTS } else { SHEET_EVENTS };
-        names.iter().filter_map(|name| event_params(workbook, name).map(|sig| (name.to_string(), sig.into_iter().map(|p| (p.0.to_string(), p.1.to_string(), p.2)).collect()))).collect()
+        let names = if workbook {
+            WORKBOOK_EVENTS
+        } else {
+            SHEET_EVENTS
+        };
+        names
+            .iter()
+            .filter_map(|name| {
+                event_params(workbook, name).map(|sig| {
+                    (
+                        name.to_string(),
+                        sig.into_iter()
+                            .map(|p| (p.0.to_string(), p.1.to_string(), p.2))
+                            .collect(),
+                    )
+                })
+            })
+            .collect()
     };
     let def = &prog.classes[class];
     match (def.namespace.as_deref(), def.name.as_str()) {
@@ -305,12 +436,29 @@ pub(crate) fn host_events(prog: &Program, class: ClassId) -> Option<Vec<(String,
         (Some("Excel"), "QueryTable") => Some(own(QUERY_TABLE)),
         // What a form raises for its controls (`Enter`, `Exit` …) does not reach a variable.
         (Some("MSForms"), name) => {
-            let events: Vec<(String, Vec<(String, String, bool)>)> = crate::userform::events_of(name)
-                .into_iter()
-                .filter(|e| !FORM_ONLY_EVENTS.iter().any(|x| x.eq_ignore_ascii_case(&e.name)))
-                .map(|e| (e.name.clone(), e.params.iter().map(|p| (p.name.clone(), p.vba_type.clone(), p.byref)).collect()))
-                .collect();
-            if events.is_empty() { None } else { Some(events) }
+            let events: Vec<(String, Vec<(String, String, bool)>)> =
+                crate::userform::events_of(name)
+                    .into_iter()
+                    .filter(|e| {
+                        !FORM_ONLY_EVENTS
+                            .iter()
+                            .any(|x| x.eq_ignore_ascii_case(&e.name))
+                    })
+                    .map(|e| {
+                        (
+                            e.name.clone(),
+                            e.params
+                                .iter()
+                                .map(|p| (p.name.clone(), p.vba_type.clone(), p.byref))
+                                .collect(),
+                        )
+                    })
+                    .collect();
+            if events.is_empty() {
+                None
+            } else {
+                Some(events)
+            }
         }
         _ => None,
     }
@@ -333,13 +481,17 @@ pub(crate) fn listen_target(prog: &Program, class: ClassId) -> Option<ListenTarg
     for _ in 0..16 {
         let c = cur?;
         let def = &prog.classes[c];
-        if def.kind != ClassKind::Host || (def.namespace.as_deref() == Some("MSForms") && def.name == "UserForm") {
+        if def.kind != ClassKind::Host
+            || (def.namespace.as_deref() == Some("MSForms") && def.name == "UserForm")
+        {
             return None;
         }
         if let Some(events) = host_events(prog, c) {
             return Some(ListenTarget::Events(c, events));
         }
-        if def.fields.iter().any(|f| f.vba_name().eq_ignore_ascii_case("OnAction") && f.ty == Type::Str && !f.readonly) {
+        if def.fields.iter().any(|f| {
+            f.vba_name().eq_ignore_ascii_case("OnAction") && f.ty == Type::Str && !f.readonly
+        }) {
             return Some(ListenTarget::OnAction);
         }
         cur = def.extends.iter().find_map(|t| match t {
@@ -351,34 +503,58 @@ pub(crate) fn listen_target(prog: &Program, class: ClassId) -> Option<ListenTarg
 }
 
 /// An event of the workbook or of a sheet with its parameters (name, VBA type, by reference).
-fn document_event_sig(target_is_workbook: bool, event: &str) -> Option<(&'static str, Vec<(&'static str, &'static str, bool)>)> {
+fn document_event_sig(
+    target_is_workbook: bool,
+    event: &str,
+) -> Option<(&'static str, Vec<(&'static str, &'static str, bool)>)> {
     let name = document_event(target_is_workbook, event)?;
     Some((name, event_params(target_is_workbook, name)?))
 }
 
-fn event_params(target_is_workbook: bool, event: &str) -> Option<Vec<(&'static str, &'static str, bool)>> {
+fn event_params(
+    target_is_workbook: bool,
+    event: &str,
+) -> Option<Vec<(&'static str, &'static str, bool)>> {
     let p = |n, t, r| (n, t, r);
     Some(if target_is_workbook {
         match event {
-            "Open" | "Activate" | "Deactivate" | "AddinInstall" | "AddinUninstall" | "AfterXmlExport" => vec![],
+            "Open" | "Activate" | "Deactivate" | "AddinInstall" | "AddinUninstall"
+            | "AfterXmlExport" => vec![],
             "BeforeClose" => vec![p("Cancel", "Boolean", true)],
-            "BeforeSave" => vec![p("SaveAsUI", "Boolean", false), p("Cancel", "Boolean", true)],
+            "BeforeSave" => vec![
+                p("SaveAsUI", "Boolean", false),
+                p("Cancel", "Boolean", true),
+            ],
             "AfterSave" => vec![p("Success", "Boolean", false)],
             "BeforePrint" => vec![p("Cancel", "Boolean", true)],
-            "NewSheet" | "SheetActivate" | "SheetDeactivate" | "SheetCalculate" => vec![p("Sh", "Object", false)],
-            "SheetChange" | "SheetSelectionChange" => vec![p("Sh", "Object", false), p("Target", "Range", false)],
-            "SheetBeforeDoubleClick" | "SheetBeforeRightClick" => {
-                vec![p("Sh", "Object", false), p("Target", "Range", false), p("Cancel", "Boolean", true)]
+            "NewSheet" | "SheetActivate" | "SheetDeactivate" | "SheetCalculate" => {
+                vec![p("Sh", "Object", false)]
             }
-            "SheetFollowHyperlink" => vec![p("Sh", "Object", false), p("Target", "Hyperlink", false)],
-            "WindowActivate" | "WindowDeactivate" | "WindowResize" => vec![p("Wn", "Window", false)],
+            "SheetChange" | "SheetSelectionChange" => {
+                vec![p("Sh", "Object", false), p("Target", "Range", false)]
+            }
+            "SheetBeforeDoubleClick" | "SheetBeforeRightClick" => {
+                vec![
+                    p("Sh", "Object", false),
+                    p("Target", "Range", false),
+                    p("Cancel", "Boolean", true),
+                ]
+            }
+            "SheetFollowHyperlink" => {
+                vec![p("Sh", "Object", false), p("Target", "Hyperlink", false)]
+            }
+            "WindowActivate" | "WindowDeactivate" | "WindowResize" => {
+                vec![p("Wn", "Window", false)]
+            }
             _ => return None,
         }
     } else {
         match event {
             "Activate" | "Deactivate" | "Calculate" => vec![],
             "Change" | "SelectionChange" => vec![p("Target", "Range", false)],
-            "BeforeDoubleClick" | "BeforeRightClick" => vec![p("Target", "Range", false), p("Cancel", "Boolean", true)],
+            "BeforeDoubleClick" | "BeforeRightClick" => {
+                vec![p("Target", "Range", false), p("Cancel", "Boolean", true)]
+            }
             "FollowHyperlink" => vec![p("Target", "Hyperlink", false)],
             "BeforeDelete" => vec![],
             _ => return None,
@@ -420,14 +596,32 @@ pub fn lower(prog: &Program) -> Lowered {
         quiet_closures: false,
     };
     lw.run();
-    Lowered { modules: lw.out, diagnostics: lw.diags, notes: lw.notes, macros: lw.macros }
+    Lowered {
+        modules: lw.out,
+        diagnostics: lw.diags,
+        notes: lw.notes,
+        macros: lw.macros,
+    }
 }
 
 impl<'p> Lowerer<'p> {
     // ------------------------------------------------------------------ diagnostics
 
-    pub(crate) fn diag(&mut self, severity: Severity, module: ModuleId, span: Span, code: &'static str, message: impl Into<String>) {
-        self.diags.push(Diagnostic { severity, code, message: message.into(), module: Some(module), span });
+    pub(crate) fn diag(
+        &mut self,
+        severity: Severity,
+        module: ModuleId,
+        span: Span,
+        code: &'static str,
+        message: impl Into<String>,
+    ) {
+        self.diags.push(Diagnostic {
+            severity,
+            code,
+            message: message.into(),
+            module: Some(module),
+            span,
+        });
     }
 
     pub(crate) fn err(&mut self, span: Span, code: &'static str, message: impl Into<String>) {
@@ -436,9 +630,23 @@ impl<'p> Lowerer<'p> {
     }
 
     /// Records an optimisation note (spec §6 rule 13) for hints / CodeLens.
-    pub(crate) fn note(&mut self, span: Span, applied: bool, kind: &'static str, message: impl Into<String>) {
+    pub(crate) fn note(
+        &mut self,
+        span: Span,
+        applied: bool,
+        kind: &'static str,
+        message: impl Into<String>,
+    ) {
         let m = self.src_module();
-        self.notes.push((m, OptNote { span, applied, kind, message: message.into() }));
+        self.notes.push((
+            m,
+            OptNote {
+                span,
+                applied,
+                kind,
+                message: message.into(),
+            },
+        ));
     }
 
     // ------------------------------------------------------------------ driver
@@ -453,7 +661,13 @@ impl<'p> Lowerer<'p> {
             self.global_names.insert(m.vba_name.to_lowercase());
             for &f in &m.fns {
                 // Members of bundled classes (`keys`, `values`, `size` …) are not module-level names.
-                let member = matches!(prog.fns[f].kind, FnKind::Method { .. } | FnKind::Getter { .. } | FnKind::Setter { .. } | FnKind::Ctor { .. });
+                let member = matches!(
+                    prog.fns[f].kind,
+                    FnKind::Method { .. }
+                        | FnKind::Getter { .. }
+                        | FnKind::Setter { .. }
+                        | FnKind::Ctor { .. }
+                );
                 if m.kind == ModuleKind::Std && member {
                     continue;
                 }
@@ -463,7 +677,8 @@ impl<'p> Lowerer<'p> {
                 self.global_names.insert(prog.vars[v].name.to_lowercase());
             }
             for &c in &m.classes {
-                self.global_names.insert(prog.classes[c].name.to_lowercase());
+                self.global_names
+                    .insert(prog.classes[c].name.to_lowercase());
             }
             for &e in &m.enums {
                 self.global_names.insert(prog.enums[e].name.to_lowercase());
@@ -473,7 +688,12 @@ impl<'p> Lowerer<'p> {
         let mut stack: Vec<FnId> = prog
             .fns
             .iter()
-            .filter(|f| f.attrs.udf || !f.attrs.on_events.is_empty() || f.attrs.init || matches!(f.kind, FnKind::ModInit))
+            .filter(|f| {
+                f.attrs.udf
+                    || !f.attrs.on_events.is_empty()
+                    || f.attrs.init
+                    || matches!(f.kind, FnKind::ModInit)
+            })
             .map(|f| f.id)
             .collect();
         while let Some(f) = stack.pop() {
@@ -517,16 +737,42 @@ impl<'p> Lowerer<'p> {
         for (f, n) in self.instance_counts.clone() {
             if n > limit {
                 let d = &prog.fns[f];
-                self.diag(Severity::Warning, d.module, d.name_span, "W0501", format!("ジェネリック関数 `{}` から {n} 個の実装が出力されます（閾値 {limit}）", d.name));
+                self.diag(
+                    Severity::Warning,
+                    d.module,
+                    d.name_span,
+                    "W0501",
+                    format!(
+                        "ジェネリック関数 `{}` から {n} 個の実装が出力されます（閾値 {limit}）",
+                        d.name
+                    ),
+                );
             }
         }
         for f in &prog.fns {
-            if f.is_generic() && f.exported && !self.instance_counts.contains_key(&f.id) && prog.modules[f.module].kind == ModuleKind::User {
-                self.diag(Severity::Info, f.module, f.name_span, "I0502", format!("ジェネリック関数 `{}` は一度も呼ばれていないため、何も出力されません", f.name));
+            if f.is_generic()
+                && f.exported
+                && !self.instance_counts.contains_key(&f.id)
+                && prog.modules[f.module].kind == ModuleKind::User
+            {
+                self.diag(
+                    Severity::Info,
+                    f.module,
+                    f.name_span,
+                    "I0502",
+                    format!(
+                        "ジェネリック関数 `{}` は一度も呼ばれていないため、何も出力されません",
+                        f.name
+                    ),
+                );
             }
         }
         // A sheet's file without code leaves the module of the sheet without code (spec §12.2).
-        self.out.retain(|m| !(m.decls.is_empty() && m.procs.is_empty() && matches!(m.kind, VModuleKind::Standard | VModuleKind::Document)));
+        self.out.retain(|m| {
+            !(m.decls.is_empty()
+                && m.procs.is_empty()
+                && matches!(m.kind, VModuleKind::Standard | VModuleKind::Document))
+        });
     }
 
     pub(crate) fn vmodule(&mut self, name: &str, kind: VModuleKind) -> usize {
@@ -544,7 +790,11 @@ impl<'p> Lowerer<'p> {
         if let Some(form) = &md.form {
             // A form's code-behind is the form's code module (spec §14.11); the file of a sheet
             // or of `ThisWorkbook` is that document module (spec §12.2).
-            let kind = if form.kind == ObjectKind::Form { VModuleKind::Form } else { VModuleKind::Document };
+            let kind = if form.kind == ObjectKind::Form {
+                VModuleKind::Form
+            } else {
+                VModuleKind::Document
+            };
             let i = self.vmodule(&md.vba_name.clone(), kind);
             if self.out[i].sources.is_empty() {
                 self.out[i].sources.push(md.rel_path.clone());
@@ -573,14 +823,24 @@ impl<'p> Lowerer<'p> {
             let vis = if d.exported { "Public" } else { "Private" };
             let mut s = format!("{vis} Enum {}\n", names::member_ident(&d.name));
             for mem in &d.members {
-                s.push_str(&format!("    {} = {}\n", self.enum_member_name(e, &mem.name), mem.value));
+                s.push_str(&format!(
+                    "    {} = {}\n",
+                    self.enum_member_name(e, &mem.name),
+                    mem.value
+                ));
             }
             s.push_str("End Enum");
             self.out[mi].decls.push(s);
         }
         // A `Type` must be declared before the types that contain it ("forward reference" error).
         let mut order: Vec<StructId> = Vec::new();
-        fn visit(prog: &Program, home: &[StructId], s: StructId, order: &mut Vec<StructId>, depth: usize) {
+        fn visit(
+            prog: &Program,
+            home: &[StructId],
+            s: StructId,
+            order: &mut Vec<StructId>,
+            depth: usize,
+        ) {
             if order.contains(&s) || !home.contains(&s) || depth > 64 {
                 return;
             }
@@ -607,23 +867,39 @@ impl<'p> Lowerer<'p> {
             let mut s = format!("Public Type {}\n", self.struct_name(sid));
             for (fname, fty) in &d.fields {
                 let (t, arr) = self.vtype(fty);
-                s.push_str(&format!("    {}{} As {t}\n", names::member_ident(fname), if arr { "()" } else { "" }));
+                s.push_str(&format!(
+                    "    {}{} As {t}\n",
+                    names::member_ident(fname),
+                    if arr { "()" } else { "" }
+                ));
             }
             s.push_str("End Type");
             self.out[mi].decls.push(s);
         }
-        let declares: Vec<FnId> = md.fns.iter().copied().filter(|&f| matches!(prog.fns[f].kind, FnKind::Declare { .. })).collect();
+        let declares: Vec<FnId> = md
+            .fns
+            .iter()
+            .copied()
+            .filter(|&f| matches!(prog.fns[f].kind, FnKind::Declare { .. }))
+            .collect();
         if !declares.is_empty() {
             let block = self.declare_block(&declares, false);
             self.out[mi].decls.push(block);
         }
         for &f in &md.fns {
             let d = &prog.fns[f];
-            if !matches!(d.kind, FnKind::Free | FnKind::Main | FnKind::ModInit) || d.is_generic() || d.decl.as_ref().is_none_or(|x| x.body.is_none()) {
+            if !matches!(d.kind, FnKind::Free | FnKind::Main | FnKind::ModInit)
+                || d.is_generic()
+                || d.decl.as_ref().is_none_or(|x| x.body.is_none())
+            {
                 continue;
             }
             // Non-exported `inline` functions are fully expanded and not emitted (spec §8.1).
-            if d.inline == InlineMode::Inline && !d.exported && self.opt > 0 && d.inline_blockers.is_empty() {
+            if d.inline == InlineMode::Inline
+                && !d.exported
+                && self.opt > 0
+                && d.inline_blockers.is_empty()
+            {
                 continue;
             }
             self.emit_fn_instance(f, &[]);
@@ -641,11 +917,13 @@ impl<'p> Lowerer<'p> {
         // The events of a sheet's (the workbook's) file are generated by `emit_events`; its
         // variables are initialised with those of the standard modules.
         if let Some(f) = md.init_fn {
-            self.init_calls.push(format!("{}.{}", md.vba_name, prog.fns[f].name));
+            self.init_calls
+                .push(format!("{}.{}", md.vba_name, prog.fns[f].name));
         }
         for &f in &md.fns {
             if prog.fns[f].attrs.init {
-                self.init_calls.push(format!("{}.{}", md.vba_name, prog.fns[f].proc_ident()));
+                self.init_calls
+                    .push(format!("{}.{}", md.vba_name, prog.fns[f].proc_ident()));
                 self.force_public.insert(f);
             }
         }
@@ -668,8 +946,14 @@ impl<'p> Lowerer<'p> {
         let mut win64 = Vec::new();
         for &f in fns {
             let d = &prog.fns[f];
-            let FnKind::Declare { lib, alias } = &d.kind else { continue };
-            let vis = if d.exported || force_public { "Public" } else { "Private" };
+            let FnKind::Declare { lib, alias } = &d.kind else {
+                continue;
+            };
+            let vis = if d.exported || force_public {
+                "Public"
+            } else {
+                "Private"
+            };
             let uses_long = d.params.iter().any(|p| p.ty == Type::Long) || d.ret_ty() == Type::Long;
             let line = |ptr: &str, ptrsafe: bool| {
                 let params = d
@@ -681,20 +965,37 @@ impl<'p> Lowerer<'p> {
                             Type::Array(e) => (decl_scalar(e, ptr), true),
                             other => (decl_scalar(other, ptr), false),
                         };
-                        let byref = p.mode == PassMode::ByRef || arr || matches!(p.ty, Type::Struct(_));
+                        let byref =
+                            p.mode == PassMode::ByRef || arr || matches!(p.ty, Type::Struct(_));
                         let ty = match &p.ty {
                             Type::Struct(s) => self.struct_name(*s),
                             _ => ty,
                         };
-                        format!("{} {}{} As {ty}", if byref { "ByRef" } else { "ByVal" }, names::member_ident(&p.name), if arr { "()" } else { "" })
+                        format!(
+                            "{} {}{} As {ty}",
+                            if byref { "ByRef" } else { "ByVal" },
+                            names::member_ident(&p.name),
+                            if arr { "()" } else { "" }
+                        )
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
                 let ret = d.ret_ty();
                 let kw = if ret == Type::Void { "Sub" } else { "Function" };
-                let alias = alias.as_ref().map(|a| format!(" Alias \"{a}\"")).unwrap_or_default();
-                let ret_s = if ret == Type::Void { String::new() } else { format!(" As {}", decl_scalar(&ret, ptr)) };
-                format!("{vis} Declare {}{kw} {} Lib \"{lib}\"{alias} ({params}){ret_s}", if ptrsafe { "PtrSafe " } else { "" }, names::member_ident(&d.name))
+                let alias = alias
+                    .as_ref()
+                    .map(|a| format!(" Alias \"{a}\""))
+                    .unwrap_or_default();
+                let ret_s = if ret == Type::Void {
+                    String::new()
+                } else {
+                    format!(" As {}", decl_scalar(&ret, ptr))
+                };
+                format!(
+                    "{vis} Declare {}{kw} {} Lib \"{lib}\"{alias} ({params}){ret_s}",
+                    if ptrsafe { "PtrSafe " } else { "" },
+                    names::member_ident(&d.name)
+                )
             };
             if uses_long {
                 win64.push(line("LongPtr", true));
@@ -740,12 +1041,29 @@ impl<'p> Lowerer<'p> {
                 public: true,
                 friend: false,
                 name: fname.clone(),
-                params: vec![VParam { name: "arr".into(), byref: true, ty: tname, is_array: true, optional_default: None }],
+                params: vec![VParam {
+                    name: "arr".into(),
+                    byref: true,
+                    ty: tname,
+                    is_array: true,
+                    optional_default: None,
+                }],
                 ret: Some("Long".into()),
                 locals: vec![],
                 body: vec![
                     VStmt::Raw("On Error Resume Next".into()),
-                    assign(vname(fname), bin("+", bin("-", call("UBound", vec![arr()]), call("LBound", vec![arr()])), long(1))),
+                    assign(
+                        vname(fname),
+                        bin(
+                            "+",
+                            bin(
+                                "-",
+                                call("UBound", vec![arr()]),
+                                call("LBound", vec![arr()]),
+                            ),
+                            long(1),
+                        ),
+                    ),
                 ],
                 leading_comments: vec![],
                 attributes: vec![],
@@ -773,7 +1091,10 @@ impl<'p> Lowerer<'p> {
 
     pub(crate) fn is_demoted(&self, v: VarId) -> bool {
         let d = &self.prog.vars[v];
-        self.prog.modules[d.module].main_fn.is_some() && !d.used_outside_main && !d.exported && !d.declared
+        self.prog.modules[d.module].main_fn.is_some()
+            && !d.used_outside_main
+            && !d.exported
+            && !d.declared
     }
 
     /// VBA `Const` text for a constant variable, when it can be one.
@@ -782,16 +1103,25 @@ impl<'p> Lowerer<'p> {
         if !d.is_const || d.declared {
             return None;
         }
-        let val = d.const_value.clone().or_else(|| d.init.as_ref().and_then(|i| const_value(i)))?;
+        let val = d
+            .const_value
+            .clone()
+            .or_else(|| d.init.as_ref().and_then(|i| const_value(i)))?;
         match (&val, &d.ty) {
-            (ConstVal::Int(i), Type::Int | Type::Enum(_)) => i32::try_from(*i).ok().filter(|x| *x != i32::MIN).map(|x| format!("{x}&")),
+            (ConstVal::Int(i), Type::Int | Type::Enum(_)) => i32::try_from(*i)
+                .ok()
+                .filter(|x| *x != i32::MIN)
+                .map(|x| format!("{x}&")),
             (ConstVal::Int(i), Type::Short | Type::Byte) => Some(format!("{i}")),
             (ConstVal::Int(i), Type::Double) => Some(format!("{i}#")),
             (ConstVal::Int(i), Type::Float) => Some(format!("{i}!")),
             (ConstVal::Float(f), Type::Double) => Some(expr::double_lit(*f)),
-            (ConstVal::Bool(b), Type::Bool) => Some(if *b { "True".into() } else { "False".into() }),
+            (ConstVal::Bool(b), Type::Bool) => {
+                Some(if *b { "True".into() } else { "False".into() })
+            }
             (ConstVal::Str(s), Type::Str) => {
-                let plain = s.chars().all(|c| !c.is_control()) && s.len() < 500 && self.encodable(s);
+                let plain =
+                    s.chars().all(|c| !c.is_control()) && s.len() < 500 && self.encodable(s);
                 plain.then(|| format!("\"{}\"", s.replace('"', "\"\"")))
             }
             _ => None,
@@ -824,11 +1154,16 @@ impl<'p> Lowerer<'p> {
                 } else if let Some(c) = self.const_literal(v) {
                     lines.push(format!("{vis} Const {name} As {ty} = {c}"));
                 } else {
-                    lines.push(ptr_conditional(&format!("{vis} {name}{} As {ty}", if arr { "()" } else { "" }), self.cfg.target.vba6));
+                    lines.push(ptr_conditional(
+                        &format!("{vis} {name}{} As {ty}", if arr { "()" } else { "" }),
+                        self.cfg.target.vba6,
+                    ));
                 }
             }
             if !lines.is_empty() {
-                if prog.modules[m].kind == ModuleKind::Std && !self.index.contains_key(&prog.modules[m].vba_name) {
+                if prog.modules[m].kind == ModuleKind::Std
+                    && !self.index.contains_key(&prog.modules[m].vba_name)
+                {
                     continue;
                 }
                 let mi = self.std_vmodule(m);
@@ -847,7 +1182,13 @@ impl<'p> Lowerer<'p> {
                 if elem.is_array() && !self.reported_3d {
                     self.reported_3d = true;
                     let m = self.src_module();
-                    self.diag(Severity::Error, m, Span::default(), "E0603", "3 次元以上の配列には対応していません（`T[][]` までです）");
+                    self.diag(
+                        Severity::Error,
+                        m,
+                        Span::default(),
+                        "E0603",
+                        "3 次元以上の配列には対応していません（`T[][]` までです）",
+                    );
                 }
                 // Arrays of `any` live in a plain Variant so that Range data is never copied (spec §9.2.1).
                 if matches!(elem, Type::Any | Type::Error | Type::Null | Type::Decimal) {
@@ -896,7 +1237,12 @@ impl<'p> Lowerer<'p> {
     pub(crate) fn struct_name(&self, s: StructId) -> String {
         let d = &self.prog.structs[s];
         let base = names::member_ident(&d.name);
-        let first = self.prog.structs.iter().find(|o| o.name.eq_ignore_ascii_case(&d.name)).map(|o| o.id);
+        let first = self
+            .prog
+            .structs
+            .iter()
+            .find(|o| o.name.eq_ignore_ascii_case(&d.name))
+            .map(|o| o.id);
         if first == Some(s) {
             base
         } else {
@@ -914,7 +1260,11 @@ impl<'p> Lowerer<'p> {
     }
 
     pub(crate) fn mangle(&mut self, targs: &[Type]) -> String {
-        targs.iter().map(|t| self.mangle_one(t)).collect::<Vec<_>>().join("_")
+        targs
+            .iter()
+            .map(|t| self.mangle_one(t))
+            .collect::<Vec<_>>()
+            .join("_")
     }
 
     pub(crate) fn shorten(name: String, max: usize) -> String {
@@ -947,7 +1297,11 @@ impl<'p> Lowerer<'p> {
             return n.clone();
         }
         let base = names::member_ident(&def.name);
-        let name = if args.is_empty() { base } else { format!("{base}__{mangled}") };
+        let name = if args.is_empty() {
+            base
+        } else {
+            format!("{base}__{mangled}")
+        };
         // Class module names are limited to 31 characters.
         let name = Self::shorten(name, 31);
         self.class_insts.insert((c, mangled), name.clone());
@@ -960,8 +1314,23 @@ impl<'p> Lowerer<'p> {
         let def = &self.prog.fns[f];
         let base = match &def.kind {
             FnKind::Ctor { .. } => "RAS_Init".to_string(),
-            FnKind::Method { class, is_static: true } | FnKind::Getter { class, is_static: true } | FnKind::Setter { class, is_static: true } => {
-                format!("{}_{}", names::member_ident(&self.prog.classes[*class].name), def.name)
+            FnKind::Method {
+                class,
+                is_static: true,
+            }
+            | FnKind::Getter {
+                class,
+                is_static: true,
+            }
+            | FnKind::Setter {
+                class,
+                is_static: true,
+            } => {
+                format!(
+                    "{}_{}",
+                    names::member_ident(&self.prog.classes[*class].name),
+                    def.name
+                )
             }
             FnKind::Host { .. } => def.vba_name().to_string(),
             _ => def.proc_ident(),
@@ -980,7 +1349,11 @@ impl<'p> Lowerer<'p> {
         if let Some(n) = self.fn_insts.get(&(f, mangled.clone())) {
             return n.clone();
         }
-        let name = if targs.is_empty() { base } else { Self::shorten(format!("{base}__{mangled}"), 255) };
+        let name = if targs.is_empty() {
+            base
+        } else {
+            Self::shorten(format!("{base}__{mangled}"), 255)
+        };
         self.fn_insts.insert((f, mangled), name.clone());
         if matches!(def.kind, FnKind::Free) {
             let count = {
@@ -1005,7 +1378,8 @@ impl<'p> Lowerer<'p> {
     pub(crate) fn fn_callee(&mut self, f: FnId, targs: &[Type]) -> VExpr {
         let name = self.fn_name(f, targs);
         let def = &self.prog.fns[f];
-        let same_module = def.module == self.pc.emit_module && !self.pc.in_class && !self.pc.in_closure;
+        let same_module =
+            def.module == self.pc.emit_module && !self.pc.in_class && !self.pc.in_closure;
         if same_module {
             return VExpr::Name(name);
         }
@@ -1022,7 +1396,10 @@ impl<'p> Lowerer<'p> {
     /// the functions and variables of the code-behind are that instance's, not those of the
     /// form's default instance (which naming the form would load).
     fn closure_form(&self, module: ModuleId) -> Option<VExpr> {
-        if self.pc.in_closure && self.prog.modules[module].is_form() && self.frame().module == module {
+        if self.pc.in_closure
+            && self.prog.modules[module].is_form()
+            && self.frame().module == module
+        {
             self.frame().this.clone()
         } else {
             None
@@ -1035,7 +1412,8 @@ impl<'p> Lowerer<'p> {
             return VExpr::Name(d.vba_name().to_string());
         }
         let name = names::module_ident(&d.name);
-        let same_module = d.module == self.pc.emit_module && !self.pc.in_class && !self.pc.in_closure;
+        let same_module =
+            d.module == self.pc.emit_module && !self.pc.in_class && !self.pc.in_closure;
         if same_module {
             return VExpr::Name(name);
         }
@@ -1091,7 +1469,11 @@ impl<'p> Lowerer<'p> {
     }
 
     pub(crate) fn src_module(&self) -> ModuleId {
-        self.pc.frames.last().map(|f| f.module).unwrap_or(self.pc.emit_module)
+        self.pc
+            .frames
+            .last()
+            .map(|f| f.module)
+            .unwrap_or(self.pc.emit_module)
     }
 
     pub(crate) fn info(&self) -> &'p TypeInfo {
@@ -1177,7 +1559,12 @@ impl<'p> Lowerer<'p> {
     /// and the VBE would rewrite the casing of every use of it (spec §13.6).
     pub(crate) fn local_ident(&self, name: &str) -> String {
         let base = names::local_ident(name);
-        if base == name && self.prog.host_global_names.contains_key(&name.to_lowercase()) {
+        if base == name
+            && self
+                .prog
+                .host_global_names
+                .contains_key(&name.to_lowercase())
+        {
             format!("{base}_")
         } else {
             base
@@ -1207,7 +1594,11 @@ impl<'p> Lowerer<'p> {
     pub(crate) fn local_ty(&self, local: LocalId) -> Type {
         let f = self.frame();
         match f.fn_id {
-            Some(id) => self.prog.fns[id].locals.get(local).map(|l| l.ty.subst(&f.env)).unwrap_or(Type::Error),
+            Some(id) => self.prog.fns[id]
+                .locals
+                .get(local)
+                .map(|l| l.ty.subst(&f.env))
+                .unwrap_or(Type::Error),
             None => Type::Error,
         }
     }
@@ -1224,7 +1615,9 @@ impl<'p> Lowerer<'p> {
         }
         let def = &self.prog.fns[f];
         let mut set = HashSet::new();
-        let enabled = self.cfg.doevents.enabled && !def.attrs.nodoevents && (!self.no_yield.contains(&f) || def.attrs.doevents);
+        let enabled = self.cfg.doevents.enabled
+            && !def.attrs.nodoevents
+            && (!self.no_yield.contains(&f) || def.attrs.doevents);
         if let Some(body) = def.decl.as_ref().and_then(|d| d.body.as_ref()) {
             stmt::plan_yields(self, f, &body.stmts, enabled, &mut set);
         }
@@ -1241,14 +1634,22 @@ impl<'p> Lowerer<'p> {
     }
 
     fn doc_lines(doc: &Option<String>) -> (Vec<String>, Option<String>) {
-        let Some(doc) = doc else { return (Vec::new(), None) };
+        let Some(doc) = doc else {
+            return (Vec::new(), None);
+        };
         // The summary is the first paragraph (spec §16.1.3).
-        let summary: Vec<&str> = doc.lines().take_while(|l| !l.trim().is_empty() && !l.trim_start().starts_with('@')).collect();
+        let summary: Vec<&str> = doc
+            .lines()
+            .take_while(|l| !l.trim().is_empty() && !l.trim_start().starts_with('@'))
+            .collect();
         if summary.is_empty() {
             return (Vec::new(), None);
         }
         let one_line = summary.join(" ");
-        (summary.iter().map(|s| s.to_string()).collect(), Some(one_line))
+        (
+            summary.iter().map(|s| s.to_string()).collect(),
+            Some(one_line),
+        )
     }
 
     fn emit_fn_instance(&mut self, f: FnId, targs: &[Type]) {
@@ -1256,21 +1657,41 @@ impl<'p> Lowerer<'p> {
         let def = &prog.fns[f];
         let mi = self.std_vmodule(def.module);
         let name = self.fn_name(f, targs);
-        let env: HashMap<String, Type> = def.type_params.iter().zip(targs.iter()).map(|(p, a)| (p.name.clone(), a.clone())).collect();
+        let env: HashMap<String, Type> = def
+            .type_params
+            .iter()
+            .zip(targs.iter())
+            .map(|(p, a)| (p.name.clone(), a.clone()))
+            .collect();
         // In a form, only `export` makes a member public: handlers are called from the form itself.
         // In a sheet's file too, where the handlers are called from the sheet's own module.
-        let public = def.exported || (!def.attrs.form_member && (def.attrs.macro_entry || (!def.attrs.on_events.is_empty() && !def.attrs.doc_member) || matches!(def.kind, FnKind::Main | FnKind::ModInit)));
+        let public = def.exported
+            || (!def.attrs.form_member
+                && (def.attrs.macro_entry
+                    || (!def.attrs.on_events.is_empty() && !def.attrs.doc_member)
+                    || matches!(def.kind, FnKind::Main | FnKind::ModInit)));
         if let Some(p) = self.build_proc(f, env, None, name.clone(), public) {
             self.fn_procs.entry(f).or_default().push((mi, name));
             self.out[mi].procs.push(p);
         }
         if def.is_macro_entry() {
-            self.macros.push(format!("{}.{}", prog.modules[def.module].vba_name, def.proc_ident()));
+            self.macros.push(format!(
+                "{}.{}",
+                prog.modules[def.module].vba_name,
+                def.proc_ident()
+            ));
         }
     }
 
     /// Builds the VBA procedure for function `f` instantiated with `env`.
-    pub(crate) fn build_proc(&mut self, f: FnId, env: HashMap<String, Type>, class: Option<(ClassId, Vec<Type>)>, name: String, public: bool) -> Option<VProc> {
+    pub(crate) fn build_proc(
+        &mut self,
+        f: FnId,
+        env: HashMap<String, Type>,
+        class: Option<(ClassId, Vec<Type>)>,
+        name: String,
+        public: bool,
+    ) -> Option<VProc> {
         let prog = self.prog;
         let def = &prog.fns[f];
         let decl = def.decl.clone()?;
@@ -1291,12 +1712,35 @@ impl<'p> Lowerer<'p> {
         }
         let ret_ty = def.ret_ty().subst(&env);
         let env_copy = env.clone();
-        let is_instance = matches!(def.kind, FnKind::Method { is_static: false, .. } | FnKind::Getter { is_static: false, .. } | FnKind::Setter { is_static: false, .. } | FnKind::Ctor { .. });
-        let mut frame = Frame { module: def.module, fn_id: Some(f), env, locals: HashMap::new(), this: is_instance.then(|| lit("Me")), inl: None };
+        let is_instance = matches!(
+            def.kind,
+            FnKind::Method {
+                is_static: false,
+                ..
+            } | FnKind::Getter {
+                is_static: false,
+                ..
+            } | FnKind::Setter {
+                is_static: false,
+                ..
+            } | FnKind::Ctor { .. }
+        );
+        let mut frame = Frame {
+            module: def.module,
+            fn_id: Some(f),
+            env,
+            locals: HashMap::new(),
+            this: is_instance.then(|| lit("Me")),
+            inl: None,
+        };
         let mut params = Vec::new();
         for p in &def.params {
             let pty = p.ty.subst(&frame.env);
-            let base = if def.locals[p.local].kind == LocalKind::This { "this_".to_string() } else { self.local_ident(&p.name) };
+            let base = if def.locals[p.local].kind == LocalKind::This {
+                "this_".to_string()
+            } else {
+                self.local_ident(&p.name)
+            };
             let pname = self.unique(&base);
             let (ty, is_array) = self.vtype(&pty);
             let byref = p.mode == PassMode::ByRef || is_array || matches!(pty, Type::Struct(_));
@@ -1306,16 +1750,31 @@ impl<'p> Lowerer<'p> {
             } else {
                 match &p.default {
                     Some(d) => expr::literal_default(d, &pty),
-                    None if p.optional => self.default_value(&pty).map(|v| v.print()).filter(|s| s != "Nothing" && !s.starts_with("CDate")),
+                    None if p.optional => self
+                        .default_value(&pty)
+                        .map(|v| v.print())
+                        .filter(|s| s != "Nothing" && !s.starts_with("CDate")),
                     None => None,
                 }
             };
             frame.locals.insert(p.local, Binding::Var(pname.clone()));
-            params.push(VParam { name: pname, byref, ty, is_array, optional_default });
+            params.push(VParam {
+                name: pname,
+                byref,
+                ty,
+                is_array,
+                optional_default,
+            });
         }
         if matches!(def.kind, FnKind::ModInit) && !def.attrs.form_member {
             // A dummy parameter keeps the initializer out of Excel's macro list.
-            params.push(VParam { name: "ras_dummy".into(), byref: false, ty: "Long".into(), is_array: false, optional_default: Some("0&".into()) });
+            params.push(VParam {
+                name: "ras_dummy".into(),
+                byref: false,
+                ty: "Long".into(),
+                is_array: false,
+                optional_default: Some("0&".into()),
+            });
         }
         // `Optional` parameters must be trailing in VBA.
         let mut seen_required = false;
@@ -1329,8 +1788,18 @@ impl<'p> Lowerer<'p> {
         let (kind, exit_kw) = match (&def.kind, &ret_ty) {
             (FnKind::Getter { .. }, _) => (ProcKind::PropertyGet, "Property"),
             (FnKind::Setter { .. }, _) => {
-                let obj = def.params.first().is_some_and(|p| p.ty.subst(&frame.env).is_object());
-                (if obj { ProcKind::PropertySet } else { ProcKind::PropertyLet }, "Property")
+                let obj = def
+                    .params
+                    .first()
+                    .is_some_and(|p| p.ty.subst(&frame.env).is_object());
+                (
+                    if obj {
+                        ProcKind::PropertySet
+                    } else {
+                        ProcKind::PropertyLet
+                    },
+                    "Property",
+                )
             }
             (_, Type::Void) => (ProcKind::Sub, "Sub"),
             _ => (ProcKind::Function, "Function"),
@@ -1367,7 +1836,10 @@ impl<'p> Lowerer<'p> {
             if flags != 0 {
                 args.push(long(flags));
             }
-            prologue.push(VStmt::Raw(format!("If Not {} Then Exit {exit_kw}", call("RAS_Enter", args).print())));
+            prologue.push(VStmt::Raw(format!(
+                "If Not {} Then Exit {exit_kw}",
+                call("RAS_Enter", args).print()
+            )));
         }
         if self.pc.uses_handler {
             prologue.push(VStmt::Raw("On Error GoTo RAS_Handler".into()));
@@ -1399,12 +1871,25 @@ impl<'p> Lowerer<'p> {
             let file = lit(format!("\"{}\"", md.rel_path.replace('"', "")));
             self.emit(call_stmt(
                 "RAS_ErrCapture",
-                vec![name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description"), lit("Erl"), file],
+                vec![
+                    name_member("Err", "Number"),
+                    name_member("Err", "Source"),
+                    name_member("Err", "Description"),
+                    lit("Erl"),
+                    file,
+                ],
             ));
             let arms = std::mem::take(&mut self.pc.handler_arms);
             if !arms.is_empty() {
-                let cases = arms.into_iter().map(|(id, body)| (vec![long(id as i64)], body)).collect();
-                self.emit(VStmt::Select { expr: vname("ras_tryId"), cases, els: None });
+                let cases = arms
+                    .into_iter()
+                    .map(|(id, body)| (vec![long(id as i64)], body))
+                    .collect();
+                self.emit(VStmt::Select {
+                    expr: vname("ras_tryId"),
+                    cases,
+                    els: None,
+                });
             }
             if entry {
                 // Outermost entry: restore application state and report; nested: propagate to the caller.
@@ -1413,7 +1898,10 @@ impl<'p> Lowerer<'p> {
                 if let Some(h) = &def.attrs.on_error {
                     fail_args.push(lit(format!("\"{}\"", h.replace('"', ""))));
                 }
-                self.emit(VStmt::Raw(format!("If {} Then Resume {exit_label}", call("RAS_Fail", fail_args).print())));
+                self.emit(VStmt::Raw(format!(
+                    "If {} Then Resume {exit_label}",
+                    call("RAS_Fail", fail_args).print()
+                )));
             }
             for s in epilogue {
                 self.emit(s);
@@ -1421,7 +1909,9 @@ impl<'p> Lowerer<'p> {
             self.emit(call_stmt("RAS_Rethrow", vec![]));
         }
         if self.pc.uses_try_id {
-            self.pc.locals.insert(0, ("ras_tryId".into(), "Long".into(), false));
+            self.pc
+                .locals
+                .insert(0, ("ras_tryId".into(), "Long".into(), false));
         }
         let body_stmts = self.pc.blocks.pop().unwrap();
         let locals = std::mem::take(&mut self.pc.locals);
@@ -1431,19 +1921,46 @@ impl<'p> Lowerer<'p> {
         let mut attributes = Vec::new();
         if let (true, Some(s)) = (public, summary) {
             // Characters outside the target code page cannot appear in an Attribute line.
-            let text: String = s.chars().filter(|c| !c.is_control() && self.encodable(c.encode_utf8(&mut [0; 4]))).take(240).collect();
+            let text: String = s
+                .chars()
+                .filter(|c| !c.is_control() && self.encodable(c.encode_utf8(&mut [0; 4])))
+                .take(240)
+                .collect();
             if !text.trim().is_empty() {
-                attributes.push(format!("Attribute {name}.VB_Description = \"{}\"", text.replace('"', "\"\"")));
+                attributes.push(format!(
+                    "Attribute {name}.VB_Description = \"{}\"",
+                    text.replace('"', "\"\"")
+                ));
             }
         }
         let (rt, rarr) = self.vtype(&ret_ty);
         let ret = match kind {
-            ProcKind::Function | ProcKind::PropertyGet => Some(if rarr { format!("{rt}()") } else { rt }),
+            ProcKind::Function | ProcKind::PropertyGet => {
+                Some(if rarr { format!("{rt}()") } else { rt })
+            }
             _ => None,
         };
         // A class module cannot expose a `Type` of a standard module through a public member.
-        let friend = class.is_some() && public && (ret_ty.has_struct() || def.params.iter().any(|p| p.ty.subst(&env_copy).has_struct()));
-        Some(VProc { kind, public, friend, name, params, ret, locals, body: body_stmts, leading_comments, attributes, source: Some(0) })
+        let friend = class.is_some()
+            && public
+            && (ret_ty.has_struct()
+                || def
+                    .params
+                    .iter()
+                    .any(|p| p.ty.subst(&env_copy).has_struct()));
+        Some(VProc {
+            kind,
+            public,
+            friend,
+            name,
+            params,
+            ret,
+            locals,
+            body: body_stmts,
+            leading_comments,
+            attributes,
+            source: Some(0),
+        })
     }
 
     // ------------------------------------------------------------------ classes
@@ -1457,7 +1974,9 @@ impl<'p> Lowerer<'p> {
         let ci = self.vmodule(&name, VModuleKind::Class);
         self.out[ci].sources.push(md.rel_path.clone());
         if def.predeclared {
-            self.out[ci].class_attrs.push(("VB_PredeclaredId".into(), "True".into()));
+            self.out[ci]
+                .class_attrs
+                .push(("VB_PredeclaredId".into(), "True".into()));
         }
         let (doc, _) = Self::doc_lines(&def.doc);
         self.out[ci].leading_comments = doc;
@@ -1466,7 +1985,9 @@ impl<'p> Lowerer<'p> {
             for fld in &def.fields {
                 let (ty, arr) = self.vtype(&fld.ty.subst(&env));
                 let ty = if arr { "Variant".to_string() } else { ty };
-                self.out[ci].decls.push(format!("Public {} As {ty}", names::member_ident(&fld.name)));
+                self.out[ci]
+                    .decls
+                    .push(format!("Public {} As {ty}", names::member_ident(&fld.name)));
             }
             for &m in &def.methods {
                 let p = self.signature_stub(m, &env, names::member_ident(&prog.fns[m].name), true);
@@ -1490,10 +2011,15 @@ impl<'p> Lowerer<'p> {
             if fld.is_static {
                 let vis = "Public";
                 let sname = format!("{}_{}", names::member_ident(&def.name), fld.name);
-                self.out[mi].decls.push(ptr_conditional(&format!("{vis} {sname}{} As {ty}", if arr { "()" } else { "" }), self.cfg.target.vba6));
+                self.out[mi].decls.push(ptr_conditional(
+                    &format!("{vis} {sname}{} As {ty}", if arr { "()" } else { "" }),
+                    self.cfg.target.vba6,
+                ));
             } else if arr && fld.vis == Visibility::Public {
                 // VBA does not allow public array fields: private backing field + Variant property.
-                self.out[ci].decls.push(format!("Private f_{fname}() As {ty}"));
+                self.out[ci]
+                    .decls
+                    .push(format!("Private f_{fname}() As {ty}"));
                 self.out[ci].procs.push(VProc {
                     kind: ProcKind::PropertyGet,
                     public: true,
@@ -1512,7 +2038,13 @@ impl<'p> Lowerer<'p> {
                     public: true,
                     friend: false,
                     name: fname.clone(),
-                    params: vec![VParam { name: "ras_v".into(), byref: false, ty: "Variant".into(), is_array: false, optional_default: None }],
+                    params: vec![VParam {
+                        name: "ras_v".into(),
+                        byref: false,
+                        ty: "Variant".into(),
+                        is_array: false,
+                        optional_default: None,
+                    }],
                     ret: None,
                     locals: vec![],
                     body: vec![assign(vname(format!("f_{fname}")), vname("ras_v"))],
@@ -1521,9 +2053,23 @@ impl<'p> Lowerer<'p> {
                     source: None,
                 });
             } else {
-                let vis = if fld.vis == Visibility::Public { "Public" } else { "Private" };
-                let with_events = if self.with_events.contains(&EventSource::Field(c, idx)) { "WithEvents " } else { "" };
-                self.out[ci].decls.push(ptr_conditional(&format!("{vis} {with_events}{fname}{} As {ty}", if arr { "()" } else { "" }), self.cfg.target.vba6));
+                let vis = if fld.vis == Visibility::Public {
+                    "Public"
+                } else {
+                    "Private"
+                };
+                let with_events = if self.with_events.contains(&EventSource::Field(c, idx)) {
+                    "WithEvents "
+                } else {
+                    ""
+                };
+                self.out[ci].decls.push(ptr_conditional(
+                    &format!(
+                        "{vis} {with_events}{fname}{} As {ty}",
+                        if arr { "()" } else { "" }
+                    ),
+                    self.cfg.target.vba6,
+                ));
             }
             if fld.init.is_some() {
                 init_stmts.push((idx, fld.is_static));
@@ -1531,7 +2077,11 @@ impl<'p> Lowerer<'p> {
         }
         // Field initializers run in Class_Initialize (instance) / the init glue (static).
         for is_static in [false, true] {
-            let fields: Vec<usize> = init_stmts.iter().filter(|x| x.1 == is_static).map(|x| x.0).collect();
+            let fields: Vec<usize> = init_stmts
+                .iter()
+                .filter(|x| x.1 == is_static)
+                .map(|x| x.0)
+                .collect();
             if fields.is_empty() {
                 continue;
             }
@@ -1540,7 +2090,14 @@ impl<'p> Lowerer<'p> {
             self.pc.in_class = !is_static;
             self.pc.blocks.push(Vec::new());
             self.pc.exit_kw = "Sub";
-            self.pc.frames.push(Frame { module: def.module, fn_id: None, env: env.clone(), locals: HashMap::new(), this: (!is_static).then(|| lit("Me")), inl: None });
+            self.pc.frames.push(Frame {
+                module: def.module,
+                fn_id: None,
+                env: env.clone(),
+                locals: HashMap::new(),
+                this: (!is_static).then(|| lit("Me")),
+                inl: None,
+            });
             self.pc.rets.push(RetMode::Proc);
             for idx in fields {
                 let fld = &def.fields[idx];
@@ -1559,7 +2116,13 @@ impl<'p> Lowerer<'p> {
                     public: true,
                     friend: false,
                     name: pname.clone(),
-                    params: vec![VParam { name: "ras_dummy".into(), byref: false, ty: "Long".into(), is_array: false, optional_default: Some("0&".into()) }],
+                    params: vec![VParam {
+                        name: "ras_dummy".into(),
+                        byref: false,
+                        ty: "Long".into(),
+                        is_array: false,
+                        optional_default: Some("0&".into()),
+                    }],
                     ret: None,
                     locals,
                     body,
@@ -1585,7 +2148,12 @@ impl<'p> Lowerer<'p> {
             }
         }
         // Event procedures of the fields whose objects are listened to (spec §12.2.2).
-        let handlers: Vec<FnId> = def.methods.iter().copied().filter(|&m| !prog.fns[m].attrs.on_events.is_empty()).collect();
+        let handlers: Vec<FnId> = def
+            .methods
+            .iter()
+            .copied()
+            .filter(|&m| !prog.fns[m].attrs.on_events.is_empty())
+            .collect();
         self.emit_with_events(ci, &name, &handlers, true);
         for &m in &def.methods {
             let d = &prog.fns[m];
@@ -1593,13 +2161,31 @@ impl<'p> Lowerer<'p> {
                 self.diag(Severity::Error, d.module, d.name_span, "E0601", "クラスのジェネリックメソッドにはまだ対応していません。モジュールのジェネリック関数（拡張メソッド）を使ってください");
                 continue;
             }
-            let is_static = matches!(d.kind, FnKind::Method { is_static: true, .. } | FnKind::Getter { is_static: true, .. } | FnKind::Setter { is_static: true, .. });
+            let is_static = matches!(
+                d.kind,
+                FnKind::Method {
+                    is_static: true,
+                    ..
+                } | FnKind::Getter {
+                    is_static: true,
+                    ..
+                } | FnKind::Setter {
+                    is_static: true,
+                    ..
+                }
+            );
             let pname = self.fn_name(m, &[]);
             if is_static {
                 if let Some(p) = self.build_proc(m, env.clone(), None, pname, true) {
                     self.out[mi].procs.push(p);
                 }
-            } else if let Some(p) = self.build_proc(m, env.clone(), Some((c, targs.to_vec())), pname, d.vis == Visibility::Public) {
+            } else if let Some(p) = self.build_proc(
+                m,
+                env.clone(),
+                Some((c, targs.to_vec())),
+                pname,
+                d.vis == Visibility::Public,
+            ) {
                 self.out[ci].procs.push(p);
             }
         }
@@ -1607,7 +2193,13 @@ impl<'p> Lowerer<'p> {
         let mut factory_params = Vec::new();
         let mut factory_args = Vec::new();
         if let Some(ctor) = def.ctor {
-            if let Some(p) = self.build_proc(ctor, env.clone(), Some((c, targs.to_vec())), "RAS_Init".into(), true) {
+            if let Some(p) = self.build_proc(
+                ctor,
+                env.clone(),
+                Some((c, targs.to_vec())),
+                "RAS_Init".into(),
+                true,
+            ) {
                 factory_params = p.params.clone();
                 factory_args = p.params.iter().map(|x| vname(x.name.clone())).collect();
                 self.out[ci].procs.push(p);
@@ -1616,7 +2208,10 @@ impl<'p> Lowerer<'p> {
         let fname = format!("New_{name}");
         let mut body = vec![set(vname(fname.clone()), lit(format!("New {name}")))];
         if def.ctor.is_some() {
-            body.push(VStmt::Call { target: vname(fname.clone()).member("RAS_Init"), args: factory_args });
+            body.push(VStmt::Call {
+                target: vname(fname.clone()).member("RAS_Init"),
+                args: factory_args,
+            });
         }
         self.out[mi].procs.push(VProc {
             kind: ProcKind::Function,
@@ -1633,7 +2228,9 @@ impl<'p> Lowerer<'p> {
         });
         // Interface forwarding stubs: `Private Function IShape_area() ...`.
         for iface in &def.implements {
-            let Type::Class(i, iargs) = iface.subst(&env) else { continue };
+            let Type::Class(i, iargs) = iface.subst(&env) else {
+                continue;
+            };
             let iname = self.class_name(i, &iargs);
             let ienv = prog.class_env(i, &iargs);
             let idef = &prog.classes[i];
@@ -1646,8 +2243,16 @@ impl<'p> Lowerer<'p> {
                 p.body = if ret == Type::Void {
                     vec![VStmt::Call { target, args }]
                 } else {
-                    let value = if args.is_empty() { target } else { target.index(args) };
-                    vec![VStmt::Assign { target: vname(p.name.clone()), value, set: ret.is_object() }]
+                    let value = if args.is_empty() {
+                        target
+                    } else {
+                        target.index(args)
+                    };
+                    vec![VStmt::Assign {
+                        target: vname(p.name.clone()),
+                        value,
+                        set: ret.is_object(),
+                    }]
                 };
                 self.out[ci].procs.push(p);
             }
@@ -1666,21 +2271,39 @@ impl<'p> Lowerer<'p> {
                     params: vec![],
                     ret: Some(ty.clone()),
                     locals: vec![],
-                    body: vec![VStmt::Assign { target: vname(pname.clone()), value: me.clone(), set: obj }],
+                    body: vec![VStmt::Assign {
+                        target: vname(pname.clone()),
+                        value: me.clone(),
+                        set: obj,
+                    }],
                     leading_comments: vec![],
                     attributes: vec![],
                     source: None,
                 });
                 if !fld.readonly {
                     self.out[ci].procs.push(VProc {
-                        kind: if obj { ProcKind::PropertySet } else { ProcKind::PropertyLet },
+                        kind: if obj {
+                            ProcKind::PropertySet
+                        } else {
+                            ProcKind::PropertyLet
+                        },
                         public: false,
                         friend: false,
                         name: pname,
-                        params: vec![VParam { name: "ras_v".into(), byref: false, ty, is_array: false, optional_default: None }],
+                        params: vec![VParam {
+                            name: "ras_v".into(),
+                            byref: false,
+                            ty,
+                            is_array: false,
+                            optional_default: None,
+                        }],
                         ret: None,
                         locals: vec![],
-                        body: vec![VStmt::Assign { target: me, value: vname("ras_v"), set: obj }],
+                        body: vec![VStmt::Assign {
+                            target: me,
+                            value: vname("ras_v"),
+                            set: obj,
+                        }],
                         leading_comments: vec![],
                         attributes: vec![],
                         source: None,
@@ -1691,24 +2314,61 @@ impl<'p> Lowerer<'p> {
     }
 
     /// An empty procedure with the signature of `f` (interface members and forwarding stubs).
-    fn signature_stub(&mut self, f: FnId, env: &HashMap<String, Type>, name: String, public: bool) -> VProc {
+    fn signature_stub(
+        &mut self,
+        f: FnId,
+        env: &HashMap<String, Type>,
+        name: String,
+        public: bool,
+    ) -> VProc {
         let def = &self.prog.fns[f];
         let mut params = Vec::new();
         for p in &def.params {
             let pty = p.ty.subst(env);
             let (ty, is_array) = self.vtype(&pty);
             let byref = p.mode == PassMode::ByRef || is_array;
-            params.push(VParam { name: self.local_ident(&p.name), byref, ty, is_array, optional_default: None });
+            params.push(VParam {
+                name: self.local_ident(&p.name),
+                byref,
+                ty,
+                is_array,
+                optional_default: None,
+            });
         }
         let ret_ty = def.ret_ty().subst(env);
         let (rt, rarr) = self.vtype(&ret_ty);
-        let (kind, ret) = if ret_ty == Type::Void { (ProcKind::Sub, None) } else { (ProcKind::Function, Some(if rarr { format!("{rt}()") } else { rt })) };
+        let (kind, ret) = if ret_ty == Type::Void {
+            (ProcKind::Sub, None)
+        } else {
+            (
+                ProcKind::Function,
+                Some(if rarr { format!("{rt}()") } else { rt }),
+            )
+        };
         let (leading_comments, _) = Self::doc_lines(&def.doc);
-        VProc { kind, public, friend: false, name, params, ret, locals: vec![], body: vec![], leading_comments, attributes: vec![], source: None }
+        VProc {
+            kind,
+            public,
+            friend: false,
+            name,
+            params,
+            ret,
+            locals: vec![],
+            body: vec![],
+            leading_comments,
+            attributes: vec![],
+            source: None,
+        }
     }
 
     /// Assignment target for a field of class `c` (`obj.field`, bare `field` inside the class, or the static variable).
-    pub(crate) fn field_target(&mut self, c: ClassId, idx: usize, fty: &Type, object: Option<VExpr>) -> VExpr {
+    pub(crate) fn field_target(
+        &mut self,
+        c: ClassId,
+        idx: usize,
+        fty: &Type,
+        object: Option<VExpr>,
+    ) -> VExpr {
         let def = &self.prog.classes[c];
         let fld = &def.fields[idx];
         if def.kind == ClassKind::Host {
@@ -1728,8 +2388,16 @@ impl<'p> Lowerer<'p> {
         let public_array = fld.vis == Visibility::Public && self.vtype(fty).1;
         match object {
             // Inside the class the (backing) field is addressed directly.
-            None => VExpr::Name(if public_array { format!("f_{fname}") } else { fname }),
-            Some(o) if o.is_lit("Me") => VExpr::Name(if public_array { format!("f_{fname}") } else { fname }),
+            None => VExpr::Name(if public_array {
+                format!("f_{fname}")
+            } else {
+                fname
+            }),
+            Some(o) if o.is_lit("Me") => VExpr::Name(if public_array {
+                format!("f_{fname}")
+            } else {
+                fname
+            }),
             Some(o) => o.member(fname),
         }
     }
@@ -1745,7 +2413,9 @@ impl<'p> Lowerer<'p> {
         let prog = self.prog;
         // `@on` belongs to the file of what raises the event.
         for f in &prog.fns {
-            if prog.modules[f.module].form.is_some() || prog.modules[f.module].kind != ModuleKind::User {
+            if prog.modules[f.module].form.is_some()
+                || prog.modules[f.module].kind != ModuleKind::User
+            {
                 continue;
             }
             // (Methods of a class: `emit_with_events`.)
@@ -1757,9 +2427,20 @@ impl<'p> Lowerer<'p> {
                     self.diag(Severity::Error, f.module, ev.span, "E0610", format!("`@on(\"{}.{}\")`: 標準モジュールの変数 `{}` のイベントは受け取れません（VBA の `WithEvents` は、標準モジュールに置けません）。変数とハンドラを、クラスのフィールドとメソッドにするか、`objects/` のシート・`ThisWorkbook` のファイルに移してください", ev.target, ev.event, prog.vars[v].name));
                     continue;
                 }
-                let wb = ev.target.eq_ignore_ascii_case("Workbook") || ev.target.eq_ignore_ascii_case("ThisWorkbook");
-                let file = if wb { "objects/ThisWorkbook.ras".to_string() } else if ev.target.eq_ignore_ascii_case("Worksheet") { "objects/<シートのコード名>.ras".to_string() } else { format!("objects/{}.ras", ev.target) };
-                let on = if wb { format!("Workbook.{}", ev.event) } else { format!("Worksheet.{}", ev.event) };
+                let wb = ev.target.eq_ignore_ascii_case("Workbook")
+                    || ev.target.eq_ignore_ascii_case("ThisWorkbook");
+                let file = if wb {
+                    "objects/ThisWorkbook.ras".to_string()
+                } else if ev.target.eq_ignore_ascii_case("Worksheet") {
+                    "objects/<シートのコード名>.ras".to_string()
+                } else {
+                    format!("objects/{}.ras", ev.target)
+                };
+                let on = if wb {
+                    format!("Workbook.{}", ev.event)
+                } else {
+                    format!("Worksheet.{}", ev.event)
+                };
                 self.diag(Severity::Error, f.module, ev.span, "E0610", format!("`@on(\"{}.{}\")`: イベントハンドラは、そのイベントを起こすシート・ブックのファイルに書きます。`{file}` に `@on(\"{on}\")` として書いてください（`src/` のファイルは標準モジュールで、イベントを受け取れません）", ev.target, ev.event));
             }
         }
@@ -1772,7 +2453,9 @@ impl<'p> Lowerer<'p> {
             handlers: Vec<(FnId, bool)>,
         }
         let mut table: Vec<Proc> = Vec::new();
-        let docs: Vec<ModuleId> = (0..prog.modules.len()).filter(|&m| prog.modules[m].document().is_some()).collect();
+        let docs: Vec<ModuleId> = (0..prog.modules.len())
+            .filter(|&m| prog.modules[m].document().is_some())
+            .collect();
         for &m in &docs {
             let md = &prog.modules[m];
             let Some(doc) = md.document() else { continue };
@@ -1786,7 +2469,9 @@ impl<'p> Lowerer<'p> {
                         continue;
                     }
                     let other = if is_wb { "Worksheet" } else { "Workbook" };
-                    if ev.target.eq_ignore_ascii_case(other) || (!is_wb && ev.target.eq_ignore_ascii_case("ThisWorkbook")) {
+                    if ev.target.eq_ignore_ascii_case(other)
+                        || (!is_wb && ev.target.eq_ignore_ascii_case("ThisWorkbook"))
+                    {
                         let msg = if is_wb {
                             format!("`@on(\"{}.{}\")`: シートのイベントは、そのシートのファイル（`objects/<シートのコード名>.ras`）に書きます。すべてのシートのイベントをブックで受け取るには `@on(\"Workbook.Sheet{}\")` を使います", ev.target, ev.event, ev.event)
                         } else {
@@ -1795,43 +2480,95 @@ impl<'p> Lowerer<'p> {
                         self.diag(Severity::Error, m, ev.span, "E0610", msg);
                         continue;
                     }
-                    let own_event = ev.target.eq_ignore_ascii_case(own) || (is_wb && ev.target.eq_ignore_ascii_case("ThisWorkbook")) || (!is_wb && ev.target.to_lowercase() == md.vba_name.to_lowercase());
-                    let (object, event, params): (String, String, Vec<(String, String, bool)>) = if own_event {
-                        match document_event_sig(is_wb, &ev.event) {
-                            Some((name, sig)) => (own.to_string(), name.to_string(), sig.into_iter().map(|p| (p.0.to_string(), p.1.to_string(), p.2)).collect()),
-                            None => {
-                                self.diag(Severity::Error, m, ev.span, "E0611", format!("`@on(\"{}.{}\")`: イベント `{}` には対応していません", ev.target, ev.event, ev.event));
-                                continue;
+                    let own_event = ev.target.eq_ignore_ascii_case(own)
+                        || (is_wb && ev.target.eq_ignore_ascii_case("ThisWorkbook"))
+                        || (!is_wb && ev.target.to_lowercase() == md.vba_name.to_lowercase());
+                    let (object, event, params): (String, String, Vec<(String, String, bool)>) =
+                        if own_event {
+                            match document_event_sig(is_wb, &ev.event) {
+                                Some((name, sig)) => (
+                                    own.to_string(),
+                                    name.to_string(),
+                                    sig.into_iter()
+                                        .map(|p| (p.0.to_string(), p.1.to_string(), p.2))
+                                        .collect(),
+                                ),
+                                None => {
+                                    self.diag(
+                                        Severity::Error,
+                                        m,
+                                        ev.span,
+                                        "E0611",
+                                        format!(
+                                            "`@on(\"{}.{}\")`: イベント `{}` には対応していません",
+                                            ev.target, ev.event, ev.event
+                                        ),
+                                    );
+                                    continue;
+                                }
                             }
-                        }
-                    } else if let Some(name) = self.untyped_control(doc, &ev.target) {
-                        // A control whose events are not known (not an MSForms control, or no
-                        // workbook to read the controls from): the event procedure is declared
-                        // as the handler is (spec §12.2.1).
-                        let params = self.fn_procs.get(&f).and_then(|procs| procs.first()).and_then(|(mi, proc)| self.out[*mi].procs.iter().find(|p| &p.name == proc)).map(|p| p.params.iter().map(|x| (x.name.clone(), x.ty.clone(), x.byref)).collect()).unwrap_or_default();
-                        (name, ev.event.clone(), params)
-                    } else if let Some(control) = doc.decl.as_ref().and_then(|x| x.controls.iter().find(|c| c.name.eq_ignore_ascii_case(&ev.target))) {
-                        match sheet_control_event(&control.control_type, &ev.event) {
-                            Some((name, params)) => (control.name.clone(), name, params),
-                            None => {
-                                let known = sheet_control_events(&control.control_type);
-                                let hint = if known.is_empty() { format!("{} のイベントは扱えません", control.control_type) } else { format!("使えるイベント: {}", known.join(", ")) };
-                                self.diag(Severity::Error, m, ev.span, "E0611", format!("`@on(\"{}.{}\")`: {} にイベント `{}` はありません（{hint}）", ev.target, ev.event, control.name, ev.event));
-                                continue;
+                        } else if let Some(name) = self.untyped_control(doc, &ev.target) {
+                            // A control whose events are not known (not an MSForms control, or no
+                            // workbook to read the controls from): the event procedure is declared
+                            // as the handler is (spec §12.2.1).
+                            let params = self
+                                .fn_procs
+                                .get(&f)
+                                .and_then(|procs| procs.first())
+                                .and_then(|(mi, proc)| {
+                                    self.out[*mi].procs.iter().find(|p| &p.name == proc)
+                                })
+                                .map(|p| {
+                                    p.params
+                                        .iter()
+                                        .map(|x| (x.name.clone(), x.ty.clone(), x.byref))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            (name, ev.event.clone(), params)
+                        } else if let Some(control) = doc.decl.as_ref().and_then(|x| {
+                            x.controls
+                                .iter()
+                                .find(|c| c.name.eq_ignore_ascii_case(&ev.target))
+                        }) {
+                            match sheet_control_event(&control.control_type, &ev.event) {
+                                Some((name, params)) => (control.name.clone(), name, params),
+                                None => {
+                                    let known = sheet_control_events(&control.control_type);
+                                    let hint = if known.is_empty() {
+                                        format!("{} のイベントは扱えません", control.control_type)
+                                    } else {
+                                        format!("使えるイベント: {}", known.join(", "))
+                                    };
+                                    self.diag(Severity::Error, m, ev.span, "E0611", format!("`@on(\"{}.{}\")`: {} にイベント `{}` はありません（{hint}）", ev.target, ev.event, control.name, ev.event));
+                                    continue;
+                                }
                             }
-                        }
-                    } else {
-                        let what = if is_wb { "ブック".to_string() } else { format!("シート `{}` ", md.vba_name) };
-                        self.diag(Severity::Error, m, ev.span, "E0613", format!("`@on(\"{}.{}\")`: {what}にコントロール `{}` がありません（{}自身のイベントは `{own}.イベント`）", ev.target, ev.event, ev.target, if is_wb { "ブック" } else { "シート" }));
-                        continue;
-                    };
+                        } else {
+                            let what = if is_wb {
+                                "ブック".to_string()
+                            } else {
+                                format!("シート `{}` ", md.vba_name)
+                            };
+                            self.diag(Severity::Error, m, ev.span, "E0613", format!("`@on(\"{}.{}\")`: {what}にコントロール `{}` がありません（{}自身のイベントは `{own}.イベント`）", ev.target, ev.event, ev.target, if is_wb { "ブック" } else { "シート" }));
+                            continue;
+                        };
                     if d.params.len() > params.len() {
                         self.diag(Severity::Error, m, ev.span, "E0612", format!("イベント `{object}_{event}` の引数は {} 個ですが、ハンドラ `{}` は {} 個受け取ります", params.len(), d.name, d.params.len()));
                         continue;
                     }
-                    match table.iter_mut().find(|t| t.module == m && t.object == object && t.event == event) {
+                    match table
+                        .iter_mut()
+                        .find(|t| t.module == m && t.object == object && t.event == event)
+                    {
                         Some(t) => t.handlers.push((f, ev.reentrant)),
-                        None => table.push(Proc { module: m, object, event, params, handlers: vec![(f, ev.reentrant)] }),
+                        None => table.push(Proc {
+                            module: m,
+                            object,
+                            event,
+                            params,
+                            handlers: vec![(f, ev.reentrant)],
+                        }),
                     }
                 }
             }
@@ -1842,16 +2579,42 @@ impl<'p> Lowerer<'p> {
             let handlers = prog.modules[m].fns.clone();
             self.emit_with_events(vi, &name, &handlers, true);
         }
-        let needs_init = !self.init_calls.is_empty() || !table.is_empty() || docs.iter().any(|&m| prog.modules[m].fns.iter().any(|&f| !prog.fns[f].attrs.on_events.is_empty()));
+        let needs_init = !self.init_calls.is_empty()
+            || !table.is_empty()
+            || docs.iter().any(|&m| {
+                prog.modules[m]
+                    .fns
+                    .iter()
+                    .any(|&f| !prog.fns[f].attrs.on_events.is_empty())
+            });
         // Initialisation must run from every entry path (spec §12.3).
-        let wb_module = docs.iter().copied().find(|&m| prog.modules[m].document().is_some_and(|d| d.kind == ObjectKind::Workbook));
+        let wb_module = docs.iter().copied().find(|&m| {
+            prog.modules[m]
+                .document()
+                .is_some_and(|d| d.kind == ObjectKind::Workbook)
+        });
         // `usize::MAX`: `ThisWorkbook` of a project without `objects/ThisWorkbook.ras`.
         let wb_key = wb_module.unwrap_or(usize::MAX);
         if needs_init {
             for ev in ["Open", "Activate", "WindowActivate"] {
-                if !table.iter().any(|t| t.module == wb_key && t.object == "Workbook" && t.event == ev) {
-                    let params = document_event_sig(true, ev).map(|(_, sig)| sig.into_iter().map(|p| (p.0.to_string(), p.1.to_string(), p.2)).collect()).unwrap_or_default();
-                    table.push(Proc { module: wb_key, object: "Workbook".into(), event: ev.to_string(), params, handlers: Vec::new() });
+                if !table
+                    .iter()
+                    .any(|t| t.module == wb_key && t.object == "Workbook" && t.event == ev)
+                {
+                    let params = document_event_sig(true, ev)
+                        .map(|(_, sig)| {
+                            sig.into_iter()
+                                .map(|p| (p.0.to_string(), p.1.to_string(), p.2))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    table.push(Proc {
+                        module: wb_key,
+                        object: "Workbook".into(),
+                        event: ev.to_string(),
+                        params,
+                        handlers: Vec::new(),
+                    });
                 }
             }
         }
@@ -1859,9 +2622,15 @@ impl<'p> Lowerer<'p> {
         for t in table {
             let is_wb = t.module == wb_key;
             let (di, doc) = if t.module == usize::MAX {
-                (self.vmodule("ThisWorkbook", VModuleKind::Document), "ThisWorkbook".to_string())
+                (
+                    self.vmodule("ThisWorkbook", VModuleKind::Document),
+                    "ThisWorkbook".to_string(),
+                )
             } else {
-                (self.std_vmodule(t.module), prog.modules[t.module].vba_name.clone())
+                (
+                    self.std_vmodule(t.module),
+                    prog.modules[t.module].vba_name.clone(),
+                )
             };
             let proc_name = format!("{}_{}", t.object, t.event);
             if t.module != usize::MAX {
@@ -1878,19 +2647,46 @@ impl<'p> Lowerer<'p> {
             let mut locals = Vec::new();
             for (i, (h, reentrant)) in t.handlers.iter().enumerate() {
                 let d = &prog.fns[*h];
-                let args: Vec<VExpr> = t.params.iter().take(d.params.len()).map(|p| vname(p.0.clone())).collect();
-                let call = VStmt::Call { target: VExpr::Name(d.proc_ident()), args };
+                let args: Vec<VExpr> = t
+                    .params
+                    .iter()
+                    .take(d.params.len())
+                    .map(|p| vname(p.0.clone()))
+                    .collect();
+                let call = VStmt::Call {
+                    target: VExpr::Name(d.proc_ident()),
+                    args,
+                };
                 if *reentrant || open {
                     calls.push(call);
                 } else {
                     // Re-entrancy guard: ignore events raised by the handler itself (spec §12.2).
                     let flag = format!("ras_busy{}", i + 1);
                     locals.push(flag.clone());
-                    calls.push(if_then(vname(flag.clone()).not(), vec![assign(vname(flag.clone()), lit("True")), call, assign(vname(flag), lit("False"))]));
+                    calls.push(if_then(
+                        vname(flag.clone()).not(),
+                        vec![
+                            assign(vname(flag.clone()), lit("True")),
+                            call,
+                            assign(vname(flag), lit("False")),
+                        ],
+                    ));
                 }
             }
-            let event_name = if t.object == "Workbook" || t.object == "Worksheet" { format!("{doc}.{}", t.event) } else { format!("{doc}.{proc_name}") };
-            let error = call_stmt("RAS_EventError", vec![lit(format!("\"{event_name}\"")), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]);
+            let event_name = if t.object == "Workbook" || t.object == "Worksheet" {
+                format!("{doc}.{}", t.event)
+            } else {
+                format!("{doc}.{proc_name}")
+            };
+            let error = call_stmt(
+                "RAS_EventError",
+                vec![
+                    lit(format!("\"{event_name}\"")),
+                    name_member("Err", "Number"),
+                    name_member("Err", "Source"),
+                    name_member("Err", "Description"),
+                ],
+            );
             let mut body = Vec::new();
             if open {
                 // At once, or when the workbook is activated if it is leaving the protected
@@ -1898,8 +2694,26 @@ impl<'p> Lowerer<'p> {
                 body.push(call_stmt("RAS_WorkbookOpen", vec![]));
                 if !calls.is_empty() {
                     has_open_handlers = true;
-                    let params = vec![VParam { name: "ras_dummy".into(), byref: false, ty: "Long".into(), is_array: false, optional_default: Some("0&".into()) }];
-                    self.out[di].procs.push(VProc { kind: ProcKind::Sub, public: true, friend: false, name: "RAS_WorkbookOpened".into(), params, ret: None, locals: vec![], body: calls, leading_comments: vec![], attributes: vec![], source: None });
+                    let params = vec![VParam {
+                        name: "ras_dummy".into(),
+                        byref: false,
+                        ty: "Long".into(),
+                        is_array: false,
+                        optional_default: Some("0&".into()),
+                    }];
+                    self.out[di].procs.push(VProc {
+                        kind: ProcKind::Sub,
+                        public: true,
+                        friend: false,
+                        name: "RAS_WorkbookOpened".into(),
+                        params,
+                        ret: None,
+                        locals: vec![],
+                        body: calls,
+                        leading_comments: vec![],
+                        attributes: vec![],
+                        source: None,
+                    });
                 }
             } else {
                 for flag in &locals {
@@ -1907,7 +2721,11 @@ impl<'p> Lowerer<'p> {
                 }
                 body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
                 body.push(call_stmt("RAS_EnsureInit", vec![]));
-                if is_wb && needs_init && t.object == "Workbook" && (t.event == "Activate" || t.event == "WindowActivate") {
+                if is_wb
+                    && needs_init
+                    && t.object == "Workbook"
+                    && (t.event == "Activate" || t.event == "WindowActivate")
+                {
                     // What `Workbook_Open` left for now (the workbook was in the protected view).
                     body.push(call_stmt("RAS_OpenDeferred", vec![]));
                 }
@@ -1919,19 +2737,71 @@ impl<'p> Lowerer<'p> {
                 }
                 body.push(error);
             }
-            let params = t.params.iter().map(|p| VParam { name: p.0.clone(), byref: p.2, ty: p.1.clone(), is_array: false, optional_default: None }).collect();
-            self.out[di].procs.push(VProc { kind: ProcKind::Sub, public: false, friend: false, name: proc_name, params, ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None });
+            let params = t
+                .params
+                .iter()
+                .map(|p| VParam {
+                    name: p.0.clone(),
+                    byref: p.2,
+                    ty: p.1.clone(),
+                    is_array: false,
+                    optional_default: None,
+                })
+                .collect();
+            self.out[di].procs.push(VProc {
+                kind: ProcKind::Sub,
+                public: false,
+                friend: false,
+                name: proc_name,
+                params,
+                ret: None,
+                locals: vec![],
+                body,
+                leading_comments: vec![],
+                attributes: vec![],
+                source: None,
+            });
         }
-        let deferred_open: Vec<VStmt> = if has_open_handlers { vec![VStmt::Call { target: vname("ThisWorkbook").member("RAS_WorkbookOpened"), args: vec![] }] } else { Vec::new() };
+        let deferred_open: Vec<VStmt> = if has_open_handlers {
+            vec![VStmt::Call {
+                target: vname("ThisWorkbook").member("RAS_WorkbookOpened"),
+                args: vec![],
+            }]
+        } else {
+            Vec::new()
+        };
         if needs_init {
             let ri = self.vmodule("RAS_Glue", VModuleKind::Standard);
             self.out[ri].private_module = true;
-            let mut body = vec![VStmt::Raw("On Error GoTo RAS_OnError".into()), call_stmt("RAS_EnsureInit", vec![])];
+            let mut body = vec![
+                VStmt::Raw("On Error GoTo RAS_OnError".into()),
+                call_stmt("RAS_EnsureInit", vec![]),
+            ];
             body.extend(deferred_open);
             body.push(VStmt::Exit("Sub"));
             body.push(VStmt::Label("RAS_OnError".into()));
-            body.push(call_stmt("RAS_EventError", vec![lit("\"Workbook.Open\""), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
-            let simple = |name: &str, body: Vec<VStmt>| VProc { kind: ProcKind::Sub, public: true, friend: false, name: name.into(), params: vec![], ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None };
+            body.push(call_stmt(
+                "RAS_EventError",
+                vec![
+                    lit("\"Workbook.Open\""),
+                    name_member("Err", "Number"),
+                    name_member("Err", "Source"),
+                    name_member("Err", "Description"),
+                ],
+            ));
+            let simple = |name: &str, body: Vec<VStmt>| VProc {
+                kind: ProcKind::Sub,
+                public: true,
+                friend: false,
+                name: name.into(),
+                params: vec![],
+                ret: None,
+                locals: vec![],
+                body,
+                leading_comments: vec![],
+                attributes: vec![],
+                source: None,
+            };
             self.out[ri].procs.push(simple("RAS_DeferredInit", body));
             // `Workbook_Open` while the workbook leaves the protected view ("Enable Editing") comes
             // before Excel is ready for it: calls of the object model fail with error 1004. As
@@ -1940,10 +2810,22 @@ impl<'p> Lowerer<'p> {
             // `Application.OnTime`: Excel opens a workbook again to make a call it was asked for,
             // when the workbook is closed before it, and the call cannot be taken back while the
             // workbook closes (seen with Excel 2021).
-            self.out[ri].decls.push("Private ras_open_deferred As Boolean".into());
-            let open = vec![VStmt::Raw("If RAS_InProtectedView() Then".into()), VStmt::Raw("    ras_open_deferred = True".into()), VStmt::Raw("Else".into()), VStmt::Raw("    RAS_DeferredInit".into()), VStmt::Raw("End If".into())];
+            self.out[ri]
+                .decls
+                .push("Private ras_open_deferred As Boolean".into());
+            let open = vec![
+                VStmt::Raw("If RAS_InProtectedView() Then".into()),
+                VStmt::Raw("    ras_open_deferred = True".into()),
+                VStmt::Raw("Else".into()),
+                VStmt::Raw("    RAS_DeferredInit".into()),
+                VStmt::Raw("End If".into()),
+            ];
             self.out[ri].procs.push(simple("RAS_WorkbookOpen", open));
-            let later = vec![VStmt::Raw("If Not ras_open_deferred Then Exit Sub".into()), VStmt::Raw("ras_open_deferred = False".into()), VStmt::Raw("RAS_DeferredInit".into())];
+            let later = vec![
+                VStmt::Raw("If Not ras_open_deferred Then Exit Sub".into()),
+                VStmt::Raw("ras_open_deferred = False".into()),
+                VStmt::Raw("RAS_DeferredInit".into()),
+            ];
             self.out[ri].procs.push(simple("RAS_OpenDeferred", later));
             // Late-bound: Excel 2007 has no protected view (and no `ProtectedViewWindows`).
             let in_view = vec![
@@ -1960,7 +2842,10 @@ impl<'p> Lowerer<'p> {
             f.ret = Some("Boolean".into());
             self.out[ri].procs.push(f);
             // spec §12.3 path 2
-            self.out[ri].procs.push(simple("Auto_Open", vec![call_stmt("RAS_EnsureInit", vec![])]));
+            self.out[ri].procs.push(simple(
+                "Auto_Open",
+                vec![call_stmt("RAS_EnsureInit", vec![])],
+            ));
         }
     }
 
@@ -1968,7 +2853,13 @@ impl<'p> Lowerer<'p> {
     /// VBA can declare by name (a late-bound one is an `Object`, which has no events).
     fn event_class(&mut self, t: &Type) -> Option<ClassId> {
         match t {
-            Type::Class(c, args) if args.is_empty() && self.prog.classes[*c].kind == ClassKind::Host && self.class_name(*c, &[]) != "Object" => Some(*c),
+            Type::Class(c, args)
+                if args.is_empty()
+                    && self.prog.classes[*c].kind == ClassKind::Host
+                    && self.class_name(*c, &[]) != "Object" =>
+            {
+                Some(*c)
+            }
             _ => None,
         }
     }
@@ -1982,7 +2873,9 @@ impl<'p> Lowerer<'p> {
                 continue;
             }
             for ev in &f.attrs.on_events {
-                let Some(source) = prog.event_source(f.id, &ev.target) else { continue };
+                let Some(source) = prog.event_source(f.id, &ev.target) else {
+                    continue;
+                };
                 if self.with_events.contains(&source) {
                     continue;
                 }
@@ -1993,12 +2886,22 @@ impl<'p> Lowerer<'p> {
                         if prog.modules[f.module].form.is_none() {
                             continue;
                         }
-                        let problem = if d.is_const { Some("`const` にはできません（代入したオブジェクトのイベントを受け取るため、`let` で宣言します）") } else if d.exported { Some("`export` できません") } else { None };
+                        let problem = if d.is_const {
+                            Some("`const` にはできません（代入したオブジェクトのイベントを受け取るため、`let` で宣言します）")
+                        } else if d.exported {
+                            Some("`export` できません")
+                        } else {
+                            None
+                        };
                         (d.name.clone(), d.ty.clone(), problem)
                     }
                     EventSource::Field(c, i) => {
                         let fld = &prog.classes[c].fields[i];
-                        let problem = if !prog.classes[c].type_params.is_empty() { Some("ジェネリック クラスのフィールドにはできません") } else { None };
+                        let problem = if !prog.classes[c].type_params.is_empty() {
+                            Some("ジェネリック クラスのフィールドにはできません")
+                        } else {
+                            None
+                        };
                         (fld.name.clone(), fld.ty.clone(), problem)
                     }
                 };
@@ -2008,7 +2911,16 @@ impl<'p> Lowerer<'p> {
                     None => None,
                 };
                 match problem {
-                    Some(p) => self.diag(Severity::Error, f.module, ev.span, "E0615", format!("`@on(\"{}.{}\")`: `{name}` のイベントは受け取れません: {p}", ev.target, ev.event)),
+                    Some(p) => self.diag(
+                        Severity::Error,
+                        f.module,
+                        ev.span,
+                        "E0615",
+                        format!(
+                            "`@on(\"{}.{}\")`: `{name}` のイベントは受け取れません: {p}",
+                            ev.target, ev.event
+                        ),
+                    ),
                     None => {
                         self.with_events.insert(source);
                     }
@@ -2033,17 +2945,30 @@ impl<'p> Lowerer<'p> {
         for &f in fns {
             let d = &prog.fns[f];
             for ev in &d.attrs.on_events {
-                let Some(source) = prog.event_source(f, &ev.target) else { continue };
+                let Some(source) = prog.event_source(f, &ev.target) else {
+                    continue;
+                };
                 if !self.with_events.contains(&source) {
                     continue;
                 }
                 let (object, ty) = match source {
-                    EventSource::Var(v) => (names::module_ident(&prog.vars[v].name), prog.vars[v].ty.clone()),
-                    EventSource::Field(c, i) => (names::member_ident(&prog.classes[c].fields[i].name), prog.classes[c].fields[i].ty.clone()),
+                    EventSource::Var(v) => (
+                        names::module_ident(&prog.vars[v].name),
+                        prog.vars[v].ty.clone(),
+                    ),
+                    EventSource::Field(c, i) => (
+                        names::member_ident(&prog.classes[c].fields[i].name),
+                        prog.classes[c].fields[i].ty.clone(),
+                    ),
                 };
-                let Some(class) = self.event_class(&ty) else { continue };
+                let Some(class) = self.event_class(&ty) else {
+                    continue;
+                };
                 let (event, params) = match host_events(prog, class) {
-                    Some(events) => match events.into_iter().find(|e| e.0.eq_ignore_ascii_case(&ev.event)) {
+                    Some(events) => match events
+                        .into_iter()
+                        .find(|e| e.0.eq_ignore_ascii_case(&ev.event))
+                    {
                         Some(e) => e,
                         None => {
                             self.diag(Severity::Error, d.module, ev.span, "E0611", format!("`@on(\"{}.{}\")`: `{}` にイベント `{}` はありません（または対応していません）", ev.target, ev.event, prog.class_display(class), ev.event));
@@ -2055,7 +2980,11 @@ impl<'p> Lowerer<'p> {
                         let mut params = Vec::new();
                         for p in &d.params {
                             let (ty, is_array) = self.vtype(&p.ty);
-                            params.push((names::member_ident(&p.name), ty, p.mode == PassMode::ByRef || is_array));
+                            params.push((
+                                names::member_ident(&p.name),
+                                ty,
+                                p.mode == PassMode::ByRef || is_array,
+                            ));
                         }
                         (ev.event.clone(), params)
                     }
@@ -2064,9 +2993,17 @@ impl<'p> Lowerer<'p> {
                     self.diag(Severity::Error, d.module, ev.span, "E0612", format!("イベント `{object}_{event}` の引数は {} 個ですが、ハンドラ `{}` は {} 個受け取ります", params.len(), d.name, d.params.len()));
                     continue;
                 }
-                match table.iter_mut().find(|t| t.object.eq_ignore_ascii_case(&object) && t.event == event) {
+                match table
+                    .iter_mut()
+                    .find(|t| t.object.eq_ignore_ascii_case(&object) && t.event == event)
+                {
                     Some(t) => t.handlers.push((f, ev.reentrant)),
-                    None => table.push(Proc { object, event, params, handlers: vec![(f, ev.reentrant)] }),
+                    None => table.push(Proc {
+                        object,
+                        event,
+                        params,
+                        handlers: vec![(f, ev.reentrant)],
+                    }),
                 }
             }
         }
@@ -2082,14 +3019,29 @@ impl<'p> Lowerer<'p> {
             let mut locals = Vec::new();
             for (i, (h, reentrant)) in t.handlers.iter().enumerate() {
                 let d = &prog.fns[*h];
-                let args: Vec<VExpr> = t.params.iter().take(d.params.len()).map(|p| vname(p.0.clone())).collect();
-                let call = VStmt::Call { target: VExpr::Name(d.proc_ident()), args };
+                let args: Vec<VExpr> = t
+                    .params
+                    .iter()
+                    .take(d.params.len())
+                    .map(|p| vname(p.0.clone()))
+                    .collect();
+                let call = VStmt::Call {
+                    target: VExpr::Name(d.proc_ident()),
+                    args,
+                };
                 if *reentrant {
                     calls.push(call);
                 } else {
                     let flag = format!("ras_busy{}", i + 1);
                     locals.push(flag.clone());
-                    calls.push(if_then(vname(flag.clone()).not(), vec![assign(vname(flag.clone()), lit("True")), call, assign(vname(flag), lit("False"))]));
+                    calls.push(if_then(
+                        vname(flag.clone()).not(),
+                        vec![
+                            assign(vname(flag.clone()), lit("True")),
+                            call,
+                            assign(vname(flag), lit("False")),
+                        ],
+                    ));
                 }
             }
             let mut body = Vec::new();
@@ -2106,9 +3058,39 @@ impl<'p> Lowerer<'p> {
             for flag in &locals {
                 body.push(assign(vname(flag.clone()), lit("False")));
             }
-            body.push(call_stmt("RAS_EventError", vec![lit(format!("\"{owner}.{proc_name}\"")), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
-            let params = t.params.iter().map(|p| VParam { name: p.0.clone(), byref: p.2, ty: p.1.clone(), is_array: false, optional_default: None }).collect();
-            self.out[vi].procs.push(VProc { kind: ProcKind::Sub, public: false, friend: false, name: proc_name, params, ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None });
+            body.push(call_stmt(
+                "RAS_EventError",
+                vec![
+                    lit(format!("\"{owner}.{proc_name}\"")),
+                    name_member("Err", "Number"),
+                    name_member("Err", "Source"),
+                    name_member("Err", "Description"),
+                ],
+            ));
+            let params = t
+                .params
+                .iter()
+                .map(|p| VParam {
+                    name: p.0.clone(),
+                    byref: p.2,
+                    ty: p.1.clone(),
+                    is_array: false,
+                    optional_default: None,
+                })
+                .collect();
+            self.out[vi].procs.push(VProc {
+                kind: ProcKind::Sub,
+                public: false,
+                friend: false,
+                name: proc_name,
+                params,
+                ret: None,
+                locals: vec![],
+                body,
+                leading_comments: vec![],
+                attributes: vec![],
+                source: None,
+            });
         }
     }
 
@@ -2118,8 +3100,14 @@ impl<'p> Lowerer<'p> {
         if doc.kind != ObjectKind::Sheet {
             return None;
         }
-        match doc.decl.as_ref().and_then(|x| x.controls.iter().find(|c| c.name.eq_ignore_ascii_case(target))) {
-            Some(c) if crate::userform::events_of(&c.control_type).is_empty() => Some(c.name.clone()),
+        match doc.decl.as_ref().and_then(|x| {
+            x.controls
+                .iter()
+                .find(|c| c.name.eq_ignore_ascii_case(target))
+        }) {
+            Some(c) if crate::userform::events_of(&c.control_type).is_empty() => {
+                Some(c.name.clone())
+            }
             Some(_) => None,
             None if !self.cfg.sheet_controls_known => Some(target.to_string()),
             None => None,
@@ -2137,7 +3125,10 @@ impl<'p> Lowerer<'p> {
         let Some(decl) = &form.decl else { return };
         let fi = self.std_vmodule(m);
         // (object, event) → handlers in declaration order.
-        let mut table: Vec<((String, &'static crate::userform::EventDef), Vec<(FnId, bool)>)> = Vec::new();
+        let mut table: Vec<(
+            (String, &'static crate::userform::EventDef),
+            Vec<(FnId, bool)>,
+        )> = Vec::new();
         for &f in &md.fns {
             let d = &prog.fns[f];
             for ev in &d.attrs.on_events {
@@ -2145,23 +3136,44 @@ impl<'p> Lowerer<'p> {
                 if prog.event_source(f, &ev.target).is_some() {
                     continue;
                 }
-                let host_type = if ev.target.eq_ignore_ascii_case("UserForm") || ev.target.eq_ignore_ascii_case(&decl.name) {
+                let host_type = if ev.target.eq_ignore_ascii_case("UserForm")
+                    || ev.target.eq_ignore_ascii_case(&decl.name)
+                {
                     Some(("UserForm".to_string(), "UserForm".to_string()))
                 } else {
-                    decl.controls.iter().find(|c| c.name.eq_ignore_ascii_case(&ev.target)).map(|c| (c.control_type.clone(), c.name.clone()))
+                    decl.controls
+                        .iter()
+                        .find(|c| c.name.eq_ignore_ascii_case(&ev.target))
+                        .map(|c| (c.control_type.clone(), c.name.clone()))
                 };
                 let Some((host_type, object)) = host_type else {
                     self.diag(Severity::Error, m, ev.span, "E0613", format!("`@on(\"{}.{}\")`: フォーム `{}` にコントロール `{}` がありません（フォーム自身のイベントは `UserForm.イベント`）", ev.target, ev.event, decl.name, ev.target));
                     continue;
                 };
                 let Some(def) = crate::userform::find_event(&host_type, &ev.event) else {
-                    let known: Vec<&str> = crate::userform::events_of(&host_type).iter().map(|e| e.name.as_str()).collect();
+                    let known: Vec<&str> = crate::userform::events_of(&host_type)
+                        .iter()
+                        .map(|e| e.name.as_str())
+                        .collect();
                     let hint = if known.is_empty() {
-                        if host_type.eq_ignore_ascii_case("Page") { "ページのイベントは親の MultiPage で受け取ります".to_string() } else { format!("{host_type} のイベントは扱えません") }
+                        if host_type.eq_ignore_ascii_case("Page") {
+                            "ページのイベントは親の MultiPage で受け取ります".to_string()
+                        } else {
+                            format!("{host_type} のイベントは扱えません")
+                        }
                     } else {
                         format!("使えるイベント: {}", known.join(", "))
                     };
-                    self.diag(Severity::Error, m, ev.span, "E0611", format!("`@on(\"{}.{}\")`: {} にイベント `{}` はありません（{hint}）", ev.target, ev.event, object, ev.event));
+                    self.diag(
+                        Severity::Error,
+                        m,
+                        ev.span,
+                        "E0611",
+                        format!(
+                            "`@on(\"{}.{}\")`: {} にイベント `{}` はありません（{hint}）",
+                            ev.target, ev.event, object, ev.event
+                        ),
+                    );
                     continue;
                 };
                 if d.params.len() > def.params.len() {
@@ -2169,7 +3181,10 @@ impl<'p> Lowerer<'p> {
                     continue;
                 }
                 let key = (object, def);
-                match table.iter_mut().find(|t| t.0 .0 == key.0 && t.0 .1.name == key.1.name) {
+                match table
+                    .iter_mut()
+                    .find(|t| t.0 .0 == key.0 && t.0 .1.name == key.1.name)
+                {
                     Some(t) => t.1.push((f, ev.reentrant)),
                     None => table.push((key, vec![(f, ev.reentrant)])),
                 }
@@ -2178,14 +3193,22 @@ impl<'p> Lowerer<'p> {
         let handlers = md.fns.clone();
         self.emit_with_events(fi, &decl.name, &handlers, false);
         let init_fn = md.init_fn;
-        if init_fn.is_some() && !table.iter().any(|t| t.0 .0 == "UserForm" && t.0 .1.name == "Initialize") {
+        if init_fn.is_some()
+            && !table
+                .iter()
+                .any(|t| t.0 .0 == "UserForm" && t.0 .1.name == "Initialize")
+        {
             if let Some(def) = crate::userform::find_event("UserForm", "Initialize") {
                 table.insert(0, (("UserForm".to_string(), def), Vec::new()));
             }
         }
         // The handlers the form's code attached with `on` go with the form (spec §12.2.3).
         let listens = self.form_listens.contains(&m);
-        if listens && !table.iter().any(|t| t.0 .0 == "UserForm" && t.0 .1.name == "Terminate") {
+        if listens
+            && !table
+                .iter()
+                .any(|t| t.0 .0 == "UserForm" && t.0 .1.name == "Terminate")
+        {
             if let Some(def) = crate::userform::find_event("UserForm", "Terminate") {
                 table.push((("UserForm".to_string(), def), Vec::new()));
             }
@@ -2209,15 +3232,30 @@ impl<'p> Lowerer<'p> {
             }
             for (i, (h, reentrant)) in handlers.iter().enumerate() {
                 let d = &prog.fns[*h];
-                let args: Vec<VExpr> = def.params.iter().take(d.params.len()).map(|p| vname(p.name.clone())).collect();
-                let call = VStmt::Call { target: VExpr::Name(d.proc_ident()), args };
+                let args: Vec<VExpr> = def
+                    .params
+                    .iter()
+                    .take(d.params.len())
+                    .map(|p| vname(p.name.clone()))
+                    .collect();
+                let call = VStmt::Call {
+                    target: VExpr::Name(d.proc_ident()),
+                    args,
+                };
                 if *reentrant {
                     calls.push(call);
                 } else {
                     // Re-entrancy guard: ignore events raised by the handler itself (spec §12.2).
                     let flag = format!("ras_busy{}", i + 1);
                     locals.push(flag.clone());
-                    calls.push(if_then(vname(flag.clone()).not(), vec![assign(vname(flag.clone()), lit("True")), call, assign(vname(flag), lit("False"))]));
+                    calls.push(if_then(
+                        vname(flag.clone()).not(),
+                        vec![
+                            assign(vname(flag.clone()), lit("True")),
+                            call,
+                            assign(vname(flag), lit("False")),
+                        ],
+                    ));
                 }
             }
             for flag in &locals {
@@ -2237,9 +3275,39 @@ impl<'p> Lowerer<'p> {
             if unlisten {
                 body.push(call_stmt("RAS_UnlistenOwner", vec![lit("Me")]));
             }
-            body.push(call_stmt("RAS_EventError", vec![lit(format!("\"{}.{proc_name}\"", decl.name)), name_member("Err", "Number"), name_member("Err", "Source"), name_member("Err", "Description")]));
-            let params = def.params.iter().map(|p| VParam { name: p.name.clone(), byref: p.byref, ty: p.vba_type.clone(), is_array: false, optional_default: None }).collect();
-            self.out[fi].procs.push(VProc { kind: ProcKind::Sub, public: false, friend: false, name: proc_name, params, ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None });
+            body.push(call_stmt(
+                "RAS_EventError",
+                vec![
+                    lit(format!("\"{}.{proc_name}\"", decl.name)),
+                    name_member("Err", "Number"),
+                    name_member("Err", "Source"),
+                    name_member("Err", "Description"),
+                ],
+            ));
+            let params = def
+                .params
+                .iter()
+                .map(|p| VParam {
+                    name: p.name.clone(),
+                    byref: p.byref,
+                    ty: p.vba_type.clone(),
+                    is_array: false,
+                    optional_default: None,
+                })
+                .collect();
+            self.out[fi].procs.push(VProc {
+                kind: ProcKind::Sub,
+                public: false,
+                friend: false,
+                name: proc_name,
+                params,
+                ret: None,
+                locals: vec![],
+                body,
+                leading_comments: vec![],
+                attributes: vec![],
+                source: None,
+            });
         }
     }
 
@@ -2250,7 +3318,10 @@ impl<'p> Lowerer<'p> {
         let mut body: Vec<VStmt> = Vec::new();
         for c in std::mem::take(&mut self.init_calls) {
             let (m, p) = c.split_once('.').unwrap();
-            body.push(VStmt::Call { target: vname(m).member(p), args: vec![] });
+            body.push(VStmt::Call {
+                target: vname(m).member(p),
+                args: vec![],
+            });
         }
         if body.is_empty() && self.out[ri].procs.is_empty() {
             // Nothing to initialise: the runtime gets an empty stub only if something refers to it.
@@ -2265,7 +3336,25 @@ impl<'p> Lowerer<'p> {
         }
         self.out[ri].procs.insert(
             0,
-            VProc { kind: ProcKind::Sub, public: true, friend: false, name: "RAS_InitAll".into(), params: vec![VParam { name: "ras_dummy".into(), byref: false, ty: "Long".into(), is_array: false, optional_default: Some("0&".into()) }], ret: None, locals: vec![], body, leading_comments: vec![], attributes: vec![], source: None },
+            VProc {
+                kind: ProcKind::Sub,
+                public: true,
+                friend: false,
+                name: "RAS_InitAll".into(),
+                params: vec![VParam {
+                    name: "ras_dummy".into(),
+                    byref: false,
+                    ty: "Long".into(),
+                    is_array: false,
+                    optional_default: Some("0&".into()),
+                }],
+                ret: None,
+                locals: vec![],
+                body,
+                leading_comments: vec![],
+                attributes: vec![],
+                source: None,
+            },
         );
     }
 }
@@ -2296,7 +3385,10 @@ fn decl_scalar(t: &Type, ptr: &str) -> String {
 /// Wraps a declaration that mentions `LongPtr` in `#If VBA7` when VBA6 output is enabled (spec §11.3).
 pub(crate) fn ptr_conditional(decl: &str, vba6: bool) -> String {
     if vba6 && decl.contains("LongPtr") {
-        format!("#If VBA7 Then\n{decl}\n#Else\n{}\n#End If", decl.replace("LongPtr", "Long"))
+        format!(
+            "#If VBA7 Then\n{decl}\n#Else\n{}\n#End If",
+            decl.replace("LongPtr", "Long")
+        )
     } else if decl.contains("LongLong") {
         format!("#If Win64 Then\n{decl}\n#End If")
     } else {

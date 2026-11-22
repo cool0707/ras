@@ -119,7 +119,12 @@ impl<'a> Tag<'a> {
             if j >= limit {
                 break;
             }
-            result.push(Attribute { name, value_start, value_end: j, doc: self.doc });
+            result.push(Attribute {
+                name,
+                value_start,
+                value_end: j,
+                doc: self.doc,
+            });
             i = j + 1;
         }
         result
@@ -239,13 +244,14 @@ pub(crate) fn unescape(text: &str) -> String {
             "quot" => Some('"'),
             "apos" => Some('\''),
             _ => {
-                let code = if let Some(hex) = entity.strip_prefix("#x").or(entity.strip_prefix("#X")) {
-                    u32::from_str_radix(hex, 16).ok()
-                } else if let Some(dec) = entity.strip_prefix('#') {
-                    dec.parse::<u32>().ok()
-                } else {
-                    None
-                };
+                let code =
+                    if let Some(hex) = entity.strip_prefix("#x").or(entity.strip_prefix("#X")) {
+                        u32::from_str_radix(hex, 16).ok()
+                    } else if let Some(dec) = entity.strip_prefix('#') {
+                        dec.parse::<u32>().ok()
+                    } else {
+                        None
+                    };
                 code.and_then(char::from_u32)
             }
         };
@@ -287,13 +293,21 @@ pub(crate) fn decode_part(bytes: &[u8], part: &str) -> Result<(String, bool), Ov
         let big_endian = bytes[0] == 0xFE;
         let units: Vec<u16> = bytes[2..]
             .chunks_exact(2)
-            .map(|c| if big_endian { u16::from_be_bytes([c[0], c[1]]) } else { u16::from_le_bytes([c[0], c[1]]) })
+            .map(|c| {
+                if big_endian {
+                    u16::from_be_bytes([c[0], c[1]])
+                } else {
+                    u16::from_le_bytes([c[0], c[1]])
+                }
+            })
             .collect();
         return Ok((String::from_utf16_lossy(&units), false));
     }
     match std::str::from_utf8(bytes) {
         Ok(text) => Ok((text.to_string(), true)),
-        Err(_) => Err(OvbaError::Format(format!("package part `{part}` is not valid UTF-8 XML"))),
+        Err(_) => Err(OvbaError::Format(format!(
+            "package part `{part}` is not valid UTF-8 XML"
+        ))),
     }
 }
 
@@ -324,7 +338,11 @@ impl Edits {
         let mut out = String::with_capacity(doc.len() + 256);
         let mut pos = 0usize;
         for (start, end, text) in self.edits {
-            if start < pos || end > doc.len() || !doc.is_char_boundary(start) || !doc.is_char_boundary(end) {
+            if start < pos
+                || end > doc.len()
+                || !doc.is_char_boundary(start)
+                || !doc.is_char_boundary(end)
+            {
                 continue;
             }
             out.push_str(&doc[pos..start]);
@@ -361,12 +379,24 @@ mod tests {
         assert_eq!(all[0].attr("xmlns:a").as_deref(), Some("u"));
         assert_eq!(all[1].attr("k").as_deref(), Some("<&AB"));
         assert_eq!(all[1].attr("missing"), None);
-        assert_eq!(&doc[all[1].start..all[1].end], "<b k=\"&lt;&amp;&#x41;&#66;\" />");
+        assert_eq!(
+            &doc[all[1].start..all[1].end],
+            "<b k=\"&lt;&amp;&#x41;&#66;\" />"
+        );
     }
 
     #[test]
     fn broken_documents_do_not_panic() {
-        for doc in ["<", "<a", "<a b=\"", "<!-- x", "<a b=c>", "</>", "<a 日本=\"x\"/>", "&#xZZ;"] {
+        for doc in [
+            "<",
+            "<a",
+            "<a b=\"",
+            "<!-- x",
+            "<a b=c>",
+            "</>",
+            "<a 日本=\"x\"/>",
+            "&#xZZ;",
+        ] {
             let _: usize = tags(doc).map(|t| t.attributes().len()).sum();
             let _ = unescape(doc);
         }

@@ -27,8 +27,16 @@ pub(crate) fn double_lit(f: f64) -> String {
         let e = format!("{f:E}");
         match e.split_once('E') {
             Some((m, x)) => {
-                let m = if m.contains('.') { m.to_string() } else { format!("{m}.0") };
-                let x = if x.starts_with('-') { x.to_string() } else { format!("+{x}") };
+                let m = if m.contains('.') {
+                    m.to_string()
+                } else {
+                    format!("{m}.0")
+                };
+                let x = if x.starts_with('-') {
+                    x.to_string()
+                } else {
+                    format!("+{x}")
+                };
                 format!("{m}E{x}")
             }
             None => format!("{s}#"),
@@ -78,13 +86,27 @@ pub(crate) fn literal_default(d: &Expr, ty: &Type) -> Option<String> {
             Type::Byte | Type::Short => format!("{value}"),
             _ => i32::try_from(*value).ok().map(|v| format!("{v}&"))?,
         }),
-        ExprKind::Unary { op: UnaryOp::Neg, operand } => match &operand.peel().kind {
-            ExprKind::Int { value, .. } if *value < i32::MAX as i128 => Some(format!("-{value}{}", if *ty == Type::Double { "#" } else { "&" })),
-            ExprKind::Float { text, suffix: NumSuffix::None | NumSuffix::D } => Some(double_lit(-text.parse::<f64>().ok()?)),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => match &operand.peel().kind {
+            ExprKind::Int { value, .. } if *value < i32::MAX as i128 => Some(format!(
+                "-{value}{}",
+                if *ty == Type::Double { "#" } else { "&" }
+            )),
+            ExprKind::Float {
+                text,
+                suffix: NumSuffix::None | NumSuffix::D,
+            } => Some(double_lit(-text.parse::<f64>().ok()?)),
             _ => None,
         },
-        ExprKind::Float { text, suffix: NumSuffix::None | NumSuffix::D } => Some(double_lit(text.parse().ok()?)),
-        ExprKind::Str(s) if s.chars().all(|c| !c.is_control() && c.is_ascii()) => Some(format!("\"{}\"", s.replace('"', "\"\""))),
+        ExprKind::Float {
+            text,
+            suffix: NumSuffix::None | NumSuffix::D,
+        } => Some(double_lit(text.parse().ok()?)),
+        ExprKind::Str(s) if s.chars().all(|c| !c.is_control() && c.is_ascii()) => {
+            Some(format!("\"{}\"", s.replace('"', "\"\"")))
+        }
         ExprKind::Bool(b) => Some(if *b { "True".into() } else { "False".into() }),
         _ => None,
     }
@@ -122,7 +144,8 @@ pub(crate) fn fast_mode_mask(call_expr: &Expr) -> i64 {
 
 /// VBA functions that have a faster `$` variant returning `String` (spec §8.5).
 const DOLLAR_FUNCS: &[&str] = &[
-    "Left", "Right", "Mid", "Trim", "LTrim", "RTrim", "UCase", "LCase", "Space", "String", "Chr", "ChrW", "Hex", "Oct", "Str", "Format", "Environ", "Dir", "CurDir",
+    "Left", "Right", "Mid", "Trim", "LTrim", "RTrim", "UCase", "LCase", "Space", "String", "Chr",
+    "ChrW", "Hex", "Oct", "Str", "Format", "Environ", "Dir", "CurDir",
 ];
 
 fn simple(v: &VExpr) -> bool {
@@ -287,7 +310,11 @@ impl<'p> Lowerer<'p> {
             } else {
                 let t = VExpr::Name(self.temp(&Type::Any));
                 self.emit(call_stmt("RAS_Assign", vec![t.clone(), value]));
-                self.emit(if_else(call("IsObject", vec![t.clone()]), vec![set(target.clone(), t.clone())], vec![assign(target.clone(), t)]));
+                self.emit(if_else(
+                    call("IsObject", vec![t.clone()]),
+                    vec![set(target.clone(), t.clone())],
+                    vec![assign(target.clone(), t)],
+                ));
             }
         } else {
             self.emit(assign(target.clone(), value));
@@ -296,17 +323,46 @@ impl<'p> Lowerer<'p> {
 
     /// Converts a value that is not one of the members of the value union `tty` to the member it widens to.
     pub(crate) fn to_union_member(&mut self, v: VExpr, vty: &Type, tty: &Type) -> VExpr {
-        let Some(ms) = tty.union_members() else { return v };
-        if vty.union_members().is_some() || vty.is_dynamic() || vty.is_object() || ms.contains(vty) || !tty.is_value_union() {
+        let Some(ms) = tty.union_members() else {
+            return v;
+        };
+        if vty.union_members().is_some()
+            || vty.is_dynamic()
+            || vty.is_object()
+            || ms.contains(vty)
+            || !tty.is_value_union()
+        {
             return v;
         }
         let widened = |m: &Type| {
             matches!(
                 (vty, m),
-                (Type::Byte, Type::Short | Type::Int | Type::Long | Type::Float | Type::Double | Type::Currency | Type::Decimal)
-                    | (Type::Short, Type::Int | Type::Long | Type::Float | Type::Double | Type::Currency | Type::Decimal)
-                    | (Type::Int | Type::Enum(_), Type::Long | Type::Float | Type::Double | Type::Currency | Type::Decimal | Type::Ptr)
-                    | (Type::Long, Type::Float | Type::Double | Type::Decimal)
+                (
+                    Type::Byte,
+                    Type::Short
+                        | Type::Int
+                        | Type::Long
+                        | Type::Float
+                        | Type::Double
+                        | Type::Currency
+                        | Type::Decimal
+                ) | (
+                    Type::Short,
+                    Type::Int
+                        | Type::Long
+                        | Type::Float
+                        | Type::Double
+                        | Type::Currency
+                        | Type::Decimal
+                ) | (
+                    Type::Int | Type::Enum(_),
+                    Type::Long
+                        | Type::Float
+                        | Type::Double
+                        | Type::Currency
+                        | Type::Decimal
+                        | Type::Ptr
+                ) | (Type::Long, Type::Float | Type::Double | Type::Decimal)
                     | (Type::Float, Type::Double)
                     | (Type::Byte | Type::Short, Type::Enum(_))
                     | (Type::Enum(_), Type::Int)
@@ -352,7 +408,9 @@ impl<'p> Lowerer<'p> {
         let ty = self.ty(e);
         let is_place = match &e.peel().kind {
             ExprKind::Name(_) | ExprKind::This => true,
-            ExprKind::Member { .. } => matches!(self.info().res.get(&e.peel().id), Some(Res::Field(..))),
+            ExprKind::Member { .. } => {
+                matches!(self.info().res.get(&e.peel().id), Some(Res::Field(..)))
+            }
             _ => false,
         };
         let v = self.expr(e);
@@ -368,8 +426,16 @@ impl<'p> Lowerer<'p> {
     fn to_string(&mut self, v: VExpr, ty: &Type) -> VExpr {
         match ty {
             Type::Str => v,
-            Type::Byte | Type::Short | Type::Int | Type::Long | Type::Enum(_) | Type::Ptr | Type::Date => call("CStr", vec![v]),
-            Type::Float | Type::Double | Type::Currency | Type::Decimal => call("RAS_NumStr", vec![v]),
+            Type::Byte
+            | Type::Short
+            | Type::Int
+            | Type::Long
+            | Type::Enum(_)
+            | Type::Ptr
+            | Type::Date => call("CStr", vec![v]),
+            Type::Float | Type::Double | Type::Currency | Type::Decimal => {
+                call("RAS_NumStr", vec![v])
+            }
             Type::Bool => call("RAS_BoolStr", vec![v]),
             _ => call("RAS_Str", vec![v]),
         }
@@ -380,9 +446,19 @@ impl<'p> Lowerer<'p> {
         if from == to || matches!(to, Any | Error) {
             return v;
         }
-        let fix = |v: VExpr| if from.is_integer() || matches!(from, Enum(_) | Bool) { v } else { call("Fix", vec![v]) };
+        let fix = |v: VExpr| {
+            if from.is_integer() || matches!(from, Enum(_) | Bool) {
+                v
+            } else {
+                call("Fix", vec![v])
+            }
+        };
         // `True` is -1 in VBA: booleans convert to 1 / 0 (spec §13.2).
-        let v = if *from == Bool && to.is_numeric() { VExpr::Neg(Box::new(call("CLng", vec![v]))) } else { v };
+        let v = if *from == Bool && to.is_numeric() {
+            VExpr::Neg(Box::new(call("CLng", vec![v])))
+        } else {
+            v
+        };
         match to {
             Int | Enum(_) => {
                 if matches!(from, Bool | Enum(_) | Byte | Short) {
@@ -439,7 +515,11 @@ impl<'p> Lowerer<'p> {
             ExprKind::Float { text, suffix } => match suffix {
                 NumSuffix::F => {
                     let f: f64 = text.parse().unwrap_or(0.0);
-                    lit(if f == f.trunc() && f.abs() < 1e7 { format!("{f:.0}!") } else { format!("{f}!") })
+                    lit(if f == f.trunc() && f.abs() < 1e7 {
+                        format!("{f:.0}!")
+                    } else {
+                        format!("{f}!")
+                    })
                 }
                 NumSuffix::M => decimal_lit(text),
                 _ => lit(double_lit(text.parse().unwrap_or(0.0))),
@@ -481,7 +561,14 @@ impl<'p> Lowerer<'p> {
                 match op {
                     UnaryOp::Not => v.not(),
                     UnaryOp::Neg => match v {
-                        VExpr::Lit(s) if !s.starts_with('-') && !s.starts_with('(') && !s.starts_with('"') && !s.starts_with('&') => lit(format!("-{s}")),
+                        VExpr::Lit(s)
+                            if !s.starts_with('-')
+                                && !s.starts_with('(')
+                                && !s.starts_with('"')
+                                && !s.starts_with('&') =>
+                        {
+                            lit(format!("-{s}"))
+                        }
                         other => VExpr::Neg(Box::new(other)),
                     },
                     UnaryOp::Plus => v,
@@ -489,7 +576,11 @@ impl<'p> Lowerer<'p> {
                     UnaryOp::TypeOf => call("TypeName", vec![v]),
                 }
             }
-            ExprKind::IncDec { inc, prefix, operand } => {
+            ExprKind::IncDec {
+                inc,
+                prefix,
+                operand,
+            } => {
                 let (t, ty) = self.lvalue_ex(operand, true);
                 let one = self.one_for(&ty);
                 let next = bin(if *inc { "+" } else { "-" }, t.clone(), one);
@@ -542,17 +633,28 @@ impl<'p> Lowerer<'p> {
 
     /// Resolves a type written in an expression (`x instanceof T`) in the current instantiation.
     fn resolve_static_type(&mut self, t: &ast::TypeRef) -> Type {
-        let ast::TypeRef::Named { path, args, .. } = t else { return Type::Error };
+        let ast::TypeRef::Named { path, args, .. } = t else {
+            return Type::Error;
+        };
         let m = self.src_module();
         let sym = if path.len() == 1 {
             if let Some(b) = self.frame().env.get(&path[0].text) {
                 return b.clone();
             }
-            self.prog.modules[m].scope.get(&path[0].text).or_else(|| self.prog.globals.get(&path[0].text)).cloned()
+            self.prog.modules[m]
+                .scope
+                .get(&path[0].text)
+                .or_else(|| self.prog.globals.get(&path[0].text))
+                .cloned()
         } else {
             match self.prog.modules[m].scope.get(&path[0].text) {
                 Some(Sym::Module(t)) => self.prog.modules[*t].exports.get(&path[1].text).cloned(),
-                _ => self.prog.namespaces.get(&path[0].text).and_then(|n| n.get(&path[1].text)).cloned(),
+                _ => self
+                    .prog
+                    .namespaces
+                    .get(&path[0].text)
+                    .and_then(|n| n.get(&path[1].text))
+                    .cloned(),
             }
         };
         match sym {
@@ -584,13 +686,18 @@ impl<'p> Lowerer<'p> {
             Some(Res::Fn(f)) => {
                 // Host function read like a property (`Now`, `Cells`).
                 let n = VExpr::Name(self.prog.fns[*f].vba_name().to_string());
-                match (&self.pc.qualifier, self.info().auto_qualified.contains(&e.id)) {
+                match (
+                    &self.pc.qualifier,
+                    self.info().auto_qualified.contains(&e.id),
+                ) {
                     (Some(q), true) => q.clone().member(self.prog.fns[*f].vba_name().to_string()),
                     _ => n,
                 }
             }
             Some(Res::EnumMember(en, i)) => self.enum_value(*en, *i),
-            Some(Res::Intrinsic(i)) => self.intrinsic(e, *i, None, &[], true).unwrap_or_else(|| lit("Empty")),
+            Some(Res::Intrinsic(i)) => self
+                .intrinsic(e, *i, None, &[], true)
+                .unwrap_or_else(|| lit("Empty")),
             _ => VExpr::Name(names::valid_ident(text)),
         }
     }
@@ -612,12 +719,18 @@ impl<'p> Lowerer<'p> {
         match res {
             Some(Res::Field(c, idx)) => {
                 let fty = self.ty(e);
-                let o = if obj_is_ns { None } else { Some(self.expr(object)) };
+                let o = if obj_is_ns {
+                    None
+                } else {
+                    Some(self.expr(object))
+                };
                 self.field_target(c, idx, &fty, o)
             }
             Some(Res::Global(v)) => self.var_ref(v),
             Some(Res::EnumMember(en, i)) => self.enum_value(en, i),
-            Some(Res::Intrinsic(i)) => self.intrinsic(e, i, Some(object), &[], true).unwrap_or_else(|| lit("Empty")),
+            Some(Res::Intrinsic(i)) => self
+                .intrinsic(e, i, Some(object), &[], true)
+                .unwrap_or_else(|| lit("Empty")),
             Some(Res::Fn(f)) => VExpr::Name(self.prog.fns[f].vba_name().to_string()),
             Some(Res::Property { get: Some(g), .. }) if obj_is_ns => {
                 // static getter
@@ -635,7 +748,10 @@ impl<'p> Lowerer<'p> {
                     // Private members cannot be reached through `Me.`.
                     VExpr::Name(names::member_ident(member))
                 } else {
-                    o.member(self.late_member_name(object, member).unwrap_or_else(|| names::member_ident(member)))
+                    o.member(
+                        self.late_member_name(object, member)
+                            .unwrap_or_else(|| names::member_ident(member)),
+                    )
                 }
             }
         }
@@ -653,7 +769,10 @@ impl<'p> Lowerer<'p> {
         if !late {
             return None;
         }
-        self.prog.host_member_spelling.get(&written.to_lowercase()).cloned()
+        self.prog
+            .host_member_spelling
+            .get(&written.to_lowercase())
+            .cloned()
     }
 
     fn static_callee(&mut self, f: FnId) -> VExpr {
@@ -667,7 +786,11 @@ impl<'p> Lowerer<'p> {
         match &ot {
             Type::Array(_) => {
                 // `a[r][c]` on a 2-D array is one access `a(r, c)`.
-                if let ExprKind::Index { object: base, index: row } = &object.peel().kind {
+                if let ExprKind::Index {
+                    object: base,
+                    index: row,
+                } = &object.peel().kind
+                {
                     if self.ty(base).dims() == 2 {
                         let b = self.expr(base);
                         let ix = self.operands(&[row, index]);
@@ -746,7 +869,11 @@ impl<'p> Lowerer<'p> {
             ExprKind::Index { object, index } => {
                 let ot = self.ty(object);
                 if ot.is_array() {
-                    if let ExprKind::Index { object: base, index: row } = &object.peel().kind {
+                    if let ExprKind::Index {
+                        object: base,
+                        index: row,
+                    } = &object.peel().kind
+                    {
                         if self.ty(base).dims() == 2 {
                             let (b, _) = self.lvalue_ex(base, stable);
                             let r = self.expr(row);
@@ -794,7 +921,10 @@ impl<'p> Lowerer<'p> {
                         if o.is_lit("Me") {
                             VExpr::Name(names::member_ident(&name.text))
                         } else {
-                            o.member(self.late_member_name(object, &name.text).unwrap_or_else(|| names::member_ident(&name.text)))
+                            o.member(
+                                self.late_member_name(object, &name.text)
+                                    .unwrap_or_else(|| names::member_ident(&name.text)),
+                            )
                         }
                     }
                 }
@@ -822,10 +952,22 @@ impl<'p> Lowerer<'p> {
         }
     }
 
-    fn arith(&mut self, op: BinaryOp, l: VExpr, lt: &Type, r: VExpr, rt: &Type, result: &Type) -> VExpr {
+    fn arith(
+        &mut self,
+        op: BinaryOp,
+        l: VExpr,
+        lt: &Type,
+        r: VExpr,
+        rt: &Type,
+        result: &Type,
+    ) -> VExpr {
         let small = |t: &Type| matches!(t, Type::Byte | Type::Short);
         // `Integer * Integer` overflows as Integer in VBA: promote to Long (spec §2.3).
-        let l = if small(lt) && small(rt) && op.is_arithmetic() { call("CLng", vec![l]) } else { l };
+        let l = if small(lt) && small(rt) && op.is_arithmetic() {
+            call("CLng", vec![l])
+        } else {
+            l
+        };
         let int_like = |t: &Type| t.is_integer() || matches!(t, Type::Enum(_));
         match op {
             BinaryOp::Add if *result == Type::Str => {
@@ -862,9 +1004,19 @@ impl<'p> Lowerer<'p> {
     /// Operands that can be evaluated eagerly without raising or side effects.
     fn is_safe_operand(&self, e: &Expr) -> bool {
         match &e.peel().kind {
-            ExprKind::Int { .. } | ExprKind::Float { .. } | ExprKind::Str(_) | ExprKind::Bool(_) | ExprKind::Null => true,
-            ExprKind::Name(_) => matches!(self.info().res.get(&e.peel().id), Some(Res::Local(_) | Res::EnumMember(..))),
-            ExprKind::Unary { op: UnaryOp::Not, operand } => self.is_safe_operand(operand),
+            ExprKind::Int { .. }
+            | ExprKind::Float { .. }
+            | ExprKind::Str(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Null => true,
+            ExprKind::Name(_) => matches!(
+                self.info().res.get(&e.peel().id),
+                Some(Res::Local(_) | Res::EnumMember(..))
+            ),
+            ExprKind::Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => self.is_safe_operand(operand),
             ExprKind::Binary { op, lhs, rhs } => {
                 (op.is_comparison() || matches!(op, BinaryOp::And | BinaryOp::Or))
                     && self.is_safe_operand(lhs)
@@ -891,7 +1043,11 @@ impl<'p> Lowerer<'p> {
                 self.emit(assign(t.clone(), l));
                 let mut body = pre;
                 body.push(assign(t.clone(), r));
-                let c = if op == BinaryOp::And { t.clone() } else { t.clone().not() };
+                let c = if op == BinaryOp::And {
+                    t.clone()
+                } else {
+                    t.clone().not()
+                };
                 self.emit(if_then(c, body));
                 t
             }
@@ -900,7 +1056,11 @@ impl<'p> Lowerer<'p> {
                 let l = self.expr(lhs);
                 let l = self.spill(l, &lt);
                 let t = VExpr::Name(self.temp(&ty));
-                let test = if lt.is_object() { bin("Is", l.clone(), lit("Nothing")) } else { call("RAS_IsNullish", vec![l.clone()]) };
+                let test = if lt.is_object() {
+                    bin("Is", l.clone(), lit("Nothing"))
+                } else {
+                    call("RAS_IsNullish", vec![l.clone()])
+                };
                 let (then_b, _) = self.capture(|lw| lw.expr_into(rhs, &t, &ty));
                 let (else_b, _) = self.capture(|lw| lw.store(&t, &ty, l, &lt));
                 self.emit(if_else(test, then_b, else_b));
@@ -911,7 +1071,11 @@ impl<'p> Lowerer<'p> {
                 let v = if lt == Type::Null && rt == Type::Null {
                     lit("True")
                 } else if lt == Type::Null || rt == Type::Null {
-                    let (other, oty) = if lt == Type::Null { (rhs, &rt) } else { (lhs, &lt) };
+                    let (other, oty) = if lt == Type::Null {
+                        (rhs, &rt)
+                    } else {
+                        (lhs, &lt)
+                    };
                     let v = self.expr(other);
                     if oty.is_object() {
                         bin("Is", v, lit("Nothing"))
@@ -971,7 +1135,11 @@ impl<'p> Lowerer<'p> {
             Some(op) => {
                 let vty = self.ty(value);
                 let v = self.expr(value);
-                let result = if tty == Type::Str { Type::Str } else { tty.clone() };
+                let result = if tty == Type::Str {
+                    Type::Str
+                } else {
+                    tty.clone()
+                };
                 let combined = self.arith(op, t.clone(), &tty, v, &vty, &result);
                 self.store(&t, &tty, combined, &result);
             }
@@ -990,10 +1158,15 @@ impl<'p> Lowerer<'p> {
                 let (eb, _) = self.capture(|lw| lw.expr_into(els, target, ty));
                 self.emit(flatten_if(c, tb, eb));
             }
-            ExprKind::Object(_) | ExprKind::Array(_) if matches!(self.ty(inner), Type::Struct(_)) => self.struct_lit_into(inner, target),
+            ExprKind::Object(_) | ExprKind::Array(_)
+                if matches!(self.ty(inner), Type::Struct(_)) =>
+            {
+                self.struct_lit_into(inner, target)
+            }
             // (`f(i) = x` inside function `f` would be a recursive call, so the return variable is excluded)
             ExprKind::Array(_) | ExprKind::New { .. } | ExprKind::Call { .. }
-                if self.ty(inner).is_array() && matches!(target, VExpr::Name(n) if *n != self.pc.proc_name || self.pc.rets.len() > 1) =>
+                if self.ty(inner).is_array()
+                    && matches!(target, VExpr::Name(n) if *n != self.pc.proc_name || self.pc.rets.len() > 1) =>
             {
                 if !self.array_into(inner, target, ty) {
                     let v = self.expr(inner);
@@ -1003,7 +1176,11 @@ impl<'p> Lowerer<'p> {
             }
             _ => {
                 let vt = self.ty(inner);
-                let v = if vt == Type::Null { lit("Nothing") } else { self.expr(inner) };
+                let v = if vt == Type::Null {
+                    lit("Nothing")
+                } else {
+                    self.expr(inner)
+                };
                 self.store(target, ty, v, &vt);
             }
         }
@@ -1028,13 +1205,22 @@ impl<'p> Lowerer<'p> {
         };
         let direct = match root(target) {
             // The return variable cannot be read back (`f.x` on the right would be a call).
-            Some(r) if *r == self.pc.proc_name && matches!(target, VExpr::Name(_)) => self.pc.rets.len() == 1,
-            Some(r) => self.pc.locals.iter().any(|l| l.0 == r) && !values.iter().any(|v| self.ast_mentions(v, r)) && !target_index_mentions(target, r),
+            Some(r) if *r == self.pc.proc_name && matches!(target, VExpr::Name(_)) => {
+                self.pc.rets.len() == 1
+            }
+            Some(r) => {
+                self.pc.locals.iter().any(|l| l.0 == r)
+                    && !values.iter().any(|v| self.ast_mentions(v, r))
+                    && !target_index_mentions(target, r)
+            }
             None => false,
         };
         if direct {
             let fresh = match target {
-                VExpr::Name(n) => (*n == self.pc.proc_name && self.pc.rets.len() == 1) || self.pc.fresh_target.as_deref() == Some(n.as_str()),
+                VExpr::Name(n) => {
+                    (*n == self.pc.proc_name && self.pc.rets.len() == 1)
+                        || self.pc.fresh_target.as_deref() == Some(n.as_str())
+                }
                 _ => false,
             };
             self.pc.fresh_target = None;
@@ -1060,7 +1246,15 @@ impl<'p> Lowerer<'p> {
         let Type::Struct(s) = self.ty(e) else { return };
         let def = &self.prog.structs[s];
         let parts: Vec<(usize, &Expr)> = match &e.kind {
-            ExprKind::Object(props) => props.iter().filter_map(|p| def.fields.iter().position(|f| f.0 == p.key.text).map(|i| (i, &p.value))).collect(),
+            ExprKind::Object(props) => props
+                .iter()
+                .filter_map(|p| {
+                    def.fields
+                        .iter()
+                        .position(|f| f.0 == p.key.text)
+                        .map(|i| (i, &p.value))
+                })
+                .collect(),
             ExprKind::Array(items) => items.iter().enumerate().take(def.fields.len()).collect(),
             _ => Vec::new(),
         };
@@ -1108,8 +1302,16 @@ impl<'p> Lowerer<'p> {
                 // The elements may read the old contents of `dest`.
                 let dest_name = dest.print();
                 let aliased = vals.iter().any(|v| mentions(v, &dest_name));
-                let real = if aliased { VExpr::Name(self.temp(ty)) } else { dest.clone() };
-                self.emit(VStmt::ReDim { preserve: false, target: real.clone(), dims: vec![(long(0), long(items.len() as i64 - 1))] });
+                let real = if aliased {
+                    VExpr::Name(self.temp(ty))
+                } else {
+                    dest.clone()
+                };
+                self.emit(VStmt::ReDim {
+                    preserve: false,
+                    target: real.clone(),
+                    dims: vec![(long(0), long(items.len() as i64 - 1))],
+                });
                 let elem_ty = ty.elem().cloned().unwrap_or(Type::Any);
                 for (i, (v, item)) in vals.into_iter().zip(items.iter()).enumerate() {
                     let vt = self.ty(item);
@@ -1120,11 +1322,21 @@ impl<'p> Lowerer<'p> {
                 }
                 true
             }
-            ExprKind::New { ty: ast::TypeRef::Named { path, .. }, args } if path.len() == 1 && path[0].text == "Array" => {
+            ExprKind::New {
+                ty: ast::TypeRef::Named { path, .. },
+                args,
+            } if path.len() == 1 && path[0].text == "Array" => {
                 let refs: Vec<&Expr> = args.iter().collect();
                 let sizes = self.operands(&refs);
-                let dims: Vec<(VExpr, VExpr)> = sizes.iter().map(|s| (long(0), s.clone().plus(-1))).collect();
-                let redim = VStmt::ReDim { preserve: false, target: dest.clone(), dims };
+                let dims: Vec<(VExpr, VExpr)> = sizes
+                    .iter()
+                    .map(|s| (long(0), s.clone().plus(-1)))
+                    .collect();
+                let redim = VStmt::ReDim {
+                    preserve: false,
+                    target: dest.clone(),
+                    dims,
+                };
                 let consts: Vec<Option<i64>> = sizes.iter().map(|s| s.as_long()).collect();
                 if consts.iter().all(|c| matches!(c, Some(n) if *n > 0)) {
                     self.emit(redim);
@@ -1148,8 +1360,14 @@ impl<'p> Lowerer<'p> {
                 true
             }
             ExprKind::Call { callee, args, .. } => {
-                let Some(CallTarget::Intrinsic(i)) = self.info().calls.get(&e.id).map(|c| c.target.clone()) else { return false };
-                let ExprKind::Member { object, .. } = &callee.peel().kind else { return false };
+                let Some(CallTarget::Intrinsic(i)) =
+                    self.info().calls.get(&e.id).map(|c| c.target.clone())
+                else {
+                    return false;
+                };
+                let ExprKind::Member { object, .. } = &callee.peel().kind else {
+                    return false;
+                };
                 self.array_intrinsic(e, i, object, args, dest, ty)
             }
             _ => false,
@@ -1186,9 +1404,19 @@ impl<'p> Lowerer<'p> {
 
     // ------------------------------------------------------------------ calls
 
-    fn finish_call(&mut self, target: VExpr, args: Vec<VExpr>, want: bool, bare_when_empty: bool) -> Option<VExpr> {
+    fn finish_call(
+        &mut self,
+        target: VExpr,
+        args: Vec<VExpr>,
+        want: bool,
+        bare_when_empty: bool,
+    ) -> Option<VExpr> {
         if want {
-            Some(if args.is_empty() && bare_when_empty { target } else { VExpr::Call(Box::new(target), args) })
+            Some(if args.is_empty() && bare_when_empty {
+                target
+            } else {
+                VExpr::Call(Box::new(target), args)
+            })
         } else {
             self.emit(VStmt::Call { target, args });
             None
@@ -1198,23 +1426,47 @@ impl<'p> Lowerer<'p> {
     /// Lowers the arguments of a call to `f` (parameters from `skip` on), filling in defaults.
     fn call_args(&mut self, f: FnId, skip: usize, args: &[Expr], targs: &[Type]) -> Vec<VExpr> {
         let def = &self.prog.fns[f];
-        let env: HashMap<String, Type> = def.type_params.iter().zip(targs.iter()).map(|(p, a)| (p.name.clone(), a.clone())).collect();
+        let env: HashMap<String, Type> = def
+            .type_params
+            .iter()
+            .zip(targs.iter())
+            .map(|(p, a)| (p.name.clone(), a.clone()))
+            .collect();
         let host = matches!(def.kind, FnKind::Host { .. } | FnKind::Declare { .. });
         let params = &def.params[skip.min(def.params.len())..];
         // By-value arguments are lowered together so that evaluation order is preserved.
-        let byval: Vec<&Expr> = args.iter().enumerate().filter(|(i, a)| !matches!(a.kind, ExprKind::Undefined) && params.get(*i).is_none_or(|p| p.mode == PassMode::ByVal)).map(|(_, a)| a).collect();
+        let byval: Vec<&Expr> = args
+            .iter()
+            .enumerate()
+            .filter(|(i, a)| {
+                !matches!(a.kind, ExprKind::Undefined)
+                    && params.get(*i).is_none_or(|p| p.mode == PassMode::ByVal)
+            })
+            .map(|(_, a)| a)
+            .collect();
         let mut vals = self.operands(&byval).into_iter();
         let mut out = Vec::new();
         for (i, p) in params.iter().enumerate() {
             let pty = p.ty.subst(&env);
-            match args.get(i).filter(|a| !matches!(a.kind, ExprKind::Undefined)) {
+            match args
+                .get(i)
+                .filter(|a| !matches!(a.kind, ExprKind::Undefined))
+            {
                 Some(a) if p.mode == PassMode::ByRef => out.push(self.lvalue(a).0),
                 Some(a) => {
                     let v = vals.next().unwrap_or(VExpr::Missing);
                     let at = self.ty(a);
-                    let v = if at == Type::Null { self.null_for(&pty) } else { self.to_union_member(v, &at, &pty) };
+                    let v = if at == Type::Null {
+                        self.null_for(&pty)
+                    } else {
+                        self.to_union_member(v, &at, &pty)
+                    };
                     // W-API strings are passed as pointers (spec §11.2).
-                    out.push(if pty == Type::WStr { call("StrPtr", vec![v]) } else { v });
+                    out.push(if pty == Type::WStr {
+                        call("StrPtr", vec![v])
+                    } else {
+                        v
+                    });
                 }
                 None if host => out.push(VExpr::Missing),
                 None => {
@@ -1223,7 +1475,14 @@ impl<'p> Lowerer<'p> {
                             Some(text) => lit(text),
                             None => {
                                 // Lower the default in the callee's own context.
-                                self.pc.frames.push(Frame { module: def.module, fn_id: Some(f), env: env.clone(), locals: HashMap::new(), this: None, inl: None });
+                                self.pc.frames.push(Frame {
+                                    module: def.module,
+                                    fn_id: Some(f),
+                                    env: env.clone(),
+                                    locals: HashMap::new(),
+                                    this: None,
+                                    inl: None,
+                                });
                                 let v = self.expr(d);
                                 self.pc.frames.pop();
                                 v
@@ -1246,8 +1505,11 @@ impl<'p> Lowerer<'p> {
     fn should_inline(&mut self, f: FnId, span: ast::Span) -> bool {
         let prog = self.prog;
         let def = &prog.fns[f];
-        let Some(body) = def.decl.as_ref().and_then(|d| d.body.as_ref()) else { return false };
-        if self.opt == 0 || def.inline == InlineMode::NoInline || !matches!(def.kind, FnKind::Free) {
+        let Some(body) = def.decl.as_ref().and_then(|d| d.body.as_ref()) else {
+            return false;
+        };
+        if self.opt == 0 || def.inline == InlineMode::NoInline || !matches!(def.kind, FnKind::Free)
+        {
             return false;
         }
         if self.pc.inline_stack.contains(&f) {
@@ -1260,35 +1522,66 @@ impl<'p> Lowerer<'p> {
         }
         let refuse = |lw: &mut Self, why: &str| {
             if explicit || in_loop {
-                lw.note(span, false, "inline", format!("`{}` はインライン展開されません: {why}", def.name));
+                lw.note(
+                    span,
+                    false,
+                    "inline",
+                    format!("`{}` はインライン展開されません: {why}", def.name),
+                );
             }
             false
         };
         if !def.inline_blockers.is_empty() || needs_handler(&body.stmts) {
-            return refuse(self, "`try` / `using` を含むため、展開するとエラー状態が呼び出し元に漏れます");
+            return refuse(
+                self,
+                "`try` / `using` を含むため、展開するとエラー状態が呼び出し元に漏れます",
+            );
         }
         // Private members of another module are not visible from the expansion site (spec §8.2).
         let cross = def.module != self.pc.emit_module || self.pc.in_class || self.pc.in_closure;
         // `this` of a function of a form (a sheet) is the module: not inside a closure class.
         if self.pc.in_closure && prog.modules[def.module].form.is_some() {
-            return refuse(self, "フォーム・シートのファイルの関数は、アロー関数の中には展開しません");
+            return refuse(
+                self,
+                "フォーム・シートのファイルの関数は、アロー関数の中には展開しません",
+            );
         }
         if cross {
-            let private_fn = def.calls.iter().any(|&g| prog.fns[g].module == def.module && !prog.fns[g].exported && matches!(prog.fns[g].kind, FnKind::Free | FnKind::Declare { .. }));
-            let private_var = def.var_refs.iter().any(|&v| !prog.vars[v].exported && !prog.vars[v].declared);
+            let private_fn = def.calls.iter().any(|&g| {
+                prog.fns[g].module == def.module
+                    && !prog.fns[g].exported
+                    && matches!(prog.fns[g].kind, FnKind::Free | FnKind::Declare { .. })
+            });
+            let private_var = def
+                .var_refs
+                .iter()
+                .any(|&v| !prog.vars[v].exported && !prog.vars[v].declared);
             if private_fn || private_var {
                 return refuse(self, "別モジュールの非公開の関数・変数を参照しています");
             }
         }
         if self.pc.stmt_count > 3000 {
-            return refuse(self, "呼び出し元プロシージャが大きくなりすぎるため打ち切りました（VBA の 64KB 制限）");
+            return refuse(
+                self,
+                "呼び出し元プロシージャが大きくなりすぎるため打ち切りました（VBA の 64KB 制限）",
+            );
         }
         if explicit {
             return true;
         }
-        let threshold = if in_loop { self.cfg.inline_threshold() } else { 10 };
+        let threshold = if in_loop {
+            self.cfg.inline_threshold()
+        } else {
+            10
+        };
         if def.cost > threshold {
-            return refuse(self, &format!("本体のコスト {} が閾値 {threshold} を超えています", def.cost));
+            return refuse(
+                self,
+                &format!(
+                    "本体のコスト {} が閾値 {threshold} を超えています",
+                    def.cost
+                ),
+            );
         }
         true
     }
@@ -1297,8 +1590,17 @@ impl<'p> Lowerer<'p> {
     fn is_simple_arg(&self, a: &Expr) -> bool {
         let info = self.info();
         match &a.peel().kind {
-            ExprKind::Int { .. } | ExprKind::Float { .. } | ExprKind::Str(_) | ExprKind::Bool(_) => true,
-            ExprKind::Unary { op: UnaryOp::Neg, operand } => matches!(operand.peel().kind, ExprKind::Int { .. } | ExprKind::Float { .. }),
+            ExprKind::Int { .. }
+            | ExprKind::Float { .. }
+            | ExprKind::Str(_)
+            | ExprKind::Bool(_) => true,
+            ExprKind::Unary {
+                op: UnaryOp::Neg,
+                operand,
+            } => matches!(
+                operand.peel().kind,
+                ExprKind::Int { .. } | ExprKind::Float { .. }
+            ),
             ExprKind::Name(_) | ExprKind::This => match info.res.get(&a.peel().id) {
                 Some(Res::Local(_)) | Some(Res::EnumMember(..)) => true,
                 Some(Res::Global(v)) => self.prog.vars[*v].is_const,
@@ -1308,14 +1610,23 @@ impl<'p> Lowerer<'p> {
                 self.ty(object).dims() == 1
                     && matches!(info.res.get(&object.peel().id), Some(Res::Local(_)))
                     && matches!(&index.peel().kind, ExprKind::Int { .. } | ExprKind::Name(_))
-                    && (matches!(index.peel().kind, ExprKind::Int { .. }) || matches!(info.res.get(&index.peel().id), Some(Res::Local(_))))
+                    && (matches!(index.peel().kind, ExprKind::Int { .. })
+                        || matches!(info.res.get(&index.peel().id), Some(Res::Local(_))))
             }
             _ => false,
         }
     }
 
     /// Expands a call to `f` in place (spec §8).
-    fn inline_call(&mut self, e: &Expr, f: FnId, targs: &[Type], recv: Option<&Expr>, args: &[Expr], want: bool) -> Option<VExpr> {
+    fn inline_call(
+        &mut self,
+        e: &Expr,
+        f: FnId,
+        targs: &[Type],
+        recv: Option<&Expr>,
+        args: &[Expr],
+        want: bool,
+    ) -> Option<VExpr> {
         let prog = self.prog;
         let def = &prog.fns[f];
         let decl = def.decl.clone().unwrap();
@@ -1323,22 +1634,38 @@ impl<'p> Lowerer<'p> {
         self.pc.inl_n += 1;
         let n = self.pc.inl_n;
         let md = &prog.modules[def.module];
-        self.emit(VStmt::Comment(format!("@inline {} ({}:{})", def.name, md.rel_path, md.line_of(u32::from(def.name_span.start())))));
-        let env: HashMap<String, Type> = def.type_params.iter().zip(targs.iter()).map(|(p, a)| (p.name.clone(), a.clone())).collect();
+        self.emit(VStmt::Comment(format!(
+            "@inline {} ({}:{})",
+            def.name,
+            md.rel_path,
+            md.line_of(u32::from(def.name_span.start()))
+        )));
+        let env: HashMap<String, Type> = def
+            .type_params
+            .iter()
+            .zip(targs.iter())
+            .map(|(p, a)| (p.name.clone(), a.clone()))
+            .collect();
         let all: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
         let mut locals: HashMap<LocalId, Binding> = HashMap::new();
         for (i, p) in def.params.iter().enumerate() {
             let pty = p.ty.subst(&env);
             let reassigned = def.locals[p.local].reassigned;
-            let arg = all.get(i).copied().filter(|a| !matches!(a.kind, ExprKind::Undefined));
+            let arg = all
+                .get(i)
+                .copied()
+                .filter(|a| !matches!(a.kind, ExprKind::Undefined));
             let binding = match arg {
                 Some(a) if p.mode == PassMode::ByRef => Binding::Expr(self.lvalue(a).0),
                 Some(a) => {
                     let at = self.ty(a);
-                    if (self.is_simple_arg(a) && !reassigned) || (pty.is_array() && matches!(a.peel().kind, ExprKind::Name(_))) {
+                    if (self.is_simple_arg(a) && !reassigned)
+                        || (pty.is_array() && matches!(a.peel().kind, ExprKind::Name(_)))
+                    {
                         Binding::Expr(self.expr(a))
                     } else {
-                        let t = self.declare(&format!("ras_inl{n}_{}", names::valid_ident(&p.name)), &pty);
+                        let t = self
+                            .declare(&format!("ras_inl{n}_{}", names::valid_ident(&p.name)), &pty);
                         if at == Type::Null {
                             self.store(&VExpr::Name(t.clone()), &pty, lit("Nothing"), &Type::Null);
                         } else {
@@ -1352,7 +1679,14 @@ impl<'p> Lowerer<'p> {
                         Some(d) => match literal_default(d, &pty) {
                             Some(text) => lit(text),
                             None => {
-                                self.pc.frames.push(Frame { module: def.module, fn_id: Some(f), env: env.clone(), locals: HashMap::new(), this: None, inl: None });
+                                self.pc.frames.push(Frame {
+                                    module: def.module,
+                                    fn_id: Some(f),
+                                    env: env.clone(),
+                                    locals: HashMap::new(),
+                                    this: None,
+                                    inl: None,
+                                });
                                 let v = self.expr(d);
                                 self.pc.frames.pop();
                                 v
@@ -1361,7 +1695,8 @@ impl<'p> Lowerer<'p> {
                         None => self.null_for(&pty),
                     };
                     if reassigned || !simple(&v) {
-                        let t = self.declare(&format!("ras_inl{n}_{}", names::valid_ident(&p.name)), &pty);
+                        let t = self
+                            .declare(&format!("ras_inl{n}_{}", names::valid_ident(&p.name)), &pty);
                         self.store(&VExpr::Name(t.clone()), &pty, v, &pty);
                         Binding::Var(t)
                     } else {
@@ -1372,11 +1707,25 @@ impl<'p> Lowerer<'p> {
             locals.insert(p.local, binding);
         }
         let ret_ty = def.ret_ty().subst(&env);
-        let ret_var = (ret_ty != Type::Void).then(|| self.declare(&format!("ras_inl{n}_ret"), &ret_ty));
+        let ret_var =
+            (ret_ty != Type::Void).then(|| self.declare(&format!("ras_inl{n}_ret"), &ret_ty));
         let end_label = self.unique(&format!("RAS_InlEnd_{n}"));
         let tries_base = self.pc.tries.len();
-        self.pc.frames.push(Frame { module: def.module, fn_id: Some(f), env, locals, this: None, inl: Some(n) });
-        self.pc.rets.push(RetMode::Inline { var: ret_var.clone(), ty: ret_ty.clone(), label: end_label.clone(), used: false, tries_base });
+        self.pc.frames.push(Frame {
+            module: def.module,
+            fn_id: Some(f),
+            env,
+            locals,
+            this: None,
+            inl: Some(n),
+        });
+        self.pc.rets.push(RetMode::Inline {
+            var: ret_var.clone(),
+            ty: ret_ty.clone(),
+            label: end_label.clone(),
+            used: false,
+            tries_base,
+        });
         self.pc.inline_stack.push(f);
         self.stmts(&body.stmts, true);
         self.pc.inline_stack.pop();
@@ -1384,7 +1733,12 @@ impl<'p> Lowerer<'p> {
         if let Some(RetMode::Inline { used: true, .. }) = self.pc.rets.pop() {
             self.emit(VStmt::Label(end_label));
         }
-        self.note(e.span, true, "inline", format!("`{}` をインライン展開しました", def.name));
+        self.note(
+            e.span,
+            true,
+            "inline",
+            format!("`{}` をインライン展開しました", def.name),
+        );
         if want {
             Some(ret_var.map(VExpr::Name).unwrap_or_else(|| lit("Empty")))
         } else {
@@ -1393,7 +1747,9 @@ impl<'p> Lowerer<'p> {
     }
 
     pub(crate) fn call(&mut self, e: &Expr, want: bool) -> Option<VExpr> {
-        let ExprKind::Call { callee, args, .. } = &e.kind else { return None };
+        let ExprKind::Call { callee, args, .. } = &e.kind else {
+            return None;
+        };
         let info = self.info();
         let args = info.call_args(e.id, args);
         let Some(ci) = info.calls.get(&e.id) else {
@@ -1413,7 +1769,9 @@ impl<'p> Lowerer<'p> {
                 }
                 let def = &self.prog.fns[f];
                 let target = match def.kind {
-                    FnKind::Method { .. } | FnKind::Getter { .. } | FnKind::Setter { .. } => self.static_callee(f),
+                    FnKind::Method { .. } | FnKind::Getter { .. } | FnKind::Setter { .. } => {
+                        self.static_callee(f)
+                    }
                     _ => self.fn_callee(f, &targs),
                 };
                 let argv = self.call_args(f, 0, args, &targs);
@@ -1428,7 +1786,10 @@ impl<'p> Lowerer<'p> {
                 }
                 let def = &self.prog.fns[f];
                 // The receiver is evaluated first, exactly once (spec §3.2.2).
-                let byref = def.params.first().is_some_and(|p| p.mode == PassMode::ByRef);
+                let byref = def
+                    .params
+                    .first()
+                    .is_some_and(|p| p.mode == PassMode::ByRef);
                 let rv = if byref {
                     self.lvalue(r).0
                 } else {
@@ -1452,14 +1813,19 @@ impl<'p> Lowerer<'p> {
                 };
                 let o = self.expr(r);
                 let name = self.fn_name(f, &[]);
-                let target = if o.is_lit("Me") { VExpr::Name(name) } else { o.member(name) };
+                let target = if o.is_lit("Me") {
+                    VExpr::Name(name)
+                } else {
+                    o.member(name)
+                };
                 let argv = self.call_args(f, 0, args, &[]);
                 self.finish_call(target, argv, want, false)
             }
             CallTarget::Host(f) => {
                 let def = &self.prog.fns[f];
                 // An array in a host result (`getOpenFilename(..., true)`) is 1-based: RAS arrays are 0-based.
-                let rebase = matches!(def.ret_ty(), Type::Union(ms) if ms.iter().any(|m| m.is_array()));
+                let rebase =
+                    matches!(def.ret_ty(), Type::Union(ms) if ms.iter().any(|m| m.is_array()));
                 let mut fname = def.vba_name().to_string();
                 let outer_qualifier = self.pc.qualifier.clone();
                 let target = match (recv, &def.kind) {
@@ -1468,7 +1834,12 @@ impl<'p> Lowerer<'p> {
                         let mut o = self.expr(r);
                         // `ws.Range(Cells(1, 1), Cells(2, 2))`: inner references follow the receiver (spec §13.4).
                         let info = self.info();
-                        let qualifies = fname == "Range" && args.iter().any(|a| crate::astutil::any_expr_in(a, &mut |x| info.auto_qualified.contains(&x.id)));
+                        let qualifies = fname == "Range"
+                            && args.iter().any(|a| {
+                                crate::astutil::any_expr_in(a, &mut |x| {
+                                    info.auto_qualified.contains(&x.id)
+                                })
+                            });
                         if qualifies {
                             o = self.spill_object(o, &rt);
                             self.pc.qualifier = Some(o.clone());
@@ -1479,7 +1850,10 @@ impl<'p> Lowerer<'p> {
                         if def.ret_ty() == Type::Str && DOLLAR_FUNCS.contains(&fname.as_str()) {
                             fname.push('$');
                         }
-                        match (&self.pc.qualifier, self.info().auto_qualified.contains(&c.id)) {
+                        match (
+                            &self.pc.qualifier,
+                            self.info().auto_qualified.contains(&c.id),
+                        ) {
                             (Some(q), true) => q.clone().member(fname),
                             _ => VExpr::Name(fname),
                         }
@@ -1510,13 +1884,28 @@ impl<'p> Lowerer<'p> {
                 let target = match &c.kind {
                     ExprKind::Member { object, name, .. } => {
                         let o = self.expr(object);
-                        o.member(self.late_member_name(object, &name.text).unwrap_or_else(|| name.text.clone()))
+                        o.member(
+                            self.late_member_name(object, &name.text)
+                                .unwrap_or_else(|| name.text.clone()),
+                        )
                     }
                     _ => self.expr(callee),
                 };
-                let refs: Vec<&Expr> = args.iter().filter(|a| !matches!(a.kind, ExprKind::Undefined)).collect();
+                let refs: Vec<&Expr> = args
+                    .iter()
+                    .filter(|a| !matches!(a.kind, ExprKind::Undefined))
+                    .collect();
                 let mut vals = self.operands(&refs).into_iter();
-                let argv: Vec<VExpr> = args.iter().map(|a| if matches!(a.kind, ExprKind::Undefined) { VExpr::Missing } else { vals.next().unwrap_or(VExpr::Missing) }).collect();
+                let argv: Vec<VExpr> = args
+                    .iter()
+                    .map(|a| {
+                        if matches!(a.kind, ExprKind::Undefined) {
+                            VExpr::Missing
+                        } else {
+                            vals.next().unwrap_or(VExpr::Missing)
+                        }
+                    })
+                    .collect();
                 self.finish_call(target, argv, want, true)
             }
         }
@@ -1531,7 +1920,9 @@ impl<'p> Lowerer<'p> {
                         let argv = self.operands(&refs);
                         return call("RAS_MakeError", argv);
                     }
-                    "Map" if matches!(self.ty(e), Type::Map(..)) => return call("CreateObject", vec![lit("\"Scripting.Dictionary\"")]),
+                    "Map" if matches!(self.ty(e), Type::Map(..)) => {
+                        return call("CreateObject", vec![lit("\"Scripting.Dictionary\"")])
+                    }
                     "Array" => return self.array_value(e),
                     _ => {}
                 }
@@ -1552,7 +1943,8 @@ impl<'p> Lowerer<'p> {
                     }
                     return lit(format!("New {cname}"));
                 }
-                let factory = VExpr::Name(self.prog.modules[def.module].vba_name.clone()).member(format!("New_{cname}"));
+                let factory = VExpr::Name(self.prog.modules[def.module].vba_name.clone())
+                    .member(format!("New_{cname}"));
                 let argv = match def.ctor {
                     Some(ctor) => self.call_args(ctor, 0, args, &[]),
                     None => Vec::new(),
@@ -1572,11 +1964,33 @@ impl<'p> Lowerer<'p> {
         }
     }
 
-    pub(crate) fn intrinsic(&mut self, e: &Expr, intr: Intr, recv: Option<&Expr>, args: &[Expr], want: bool) -> Option<VExpr> {
+    pub(crate) fn intrinsic(
+        &mut self,
+        e: &Expr,
+        intr: Intr,
+        recv: Option<&Expr>,
+        args: &[Expr],
+        want: bool,
+    ) -> Option<VExpr> {
         use Intr::*;
         let recv_ty = recv.map(|r| self.ty(r)).unwrap_or(Type::Error);
         // Array-producing and callback-taking members are expanded as loops.
-        if matches!(intr, ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind | ArrFindIndex | ArrSlice | ArrConcat | MapKeys | MapValues | CollToArray) {
+        if matches!(
+            intr,
+            ArrMap
+                | ArrFilter
+                | ArrForEach
+                | ArrReduce
+                | ArrSome
+                | ArrEvery
+                | ArrFind
+                | ArrFindIndex
+                | ArrSlice
+                | ArrConcat
+                | MapKeys
+                | MapValues
+                | CollToArray
+        ) {
             let r = recv?;
             let ty = self.ty(e);
             if ty.is_array() {
@@ -1611,14 +2025,27 @@ impl<'p> Lowerer<'p> {
                 let (arr, _) = self.lvalue(r);
                 let elem_ty = recv_ty.elem().cloned().unwrap_or(Type::Any);
                 let vt = self.ty(&args[0]);
-                let is_struct_lit = matches!(vt, Type::Struct(_)) && matches!(args[0].peel().kind, ExprKind::Object(_) | ExprKind::Array(_));
-                if let (true, Some((len, cap))) = (is_struct_lit, self.pc.push_caps.get(&arr.print()).cloned()) {
+                let is_struct_lit = matches!(vt, Type::Struct(_))
+                    && matches!(
+                        args[0].peel().kind,
+                        ExprKind::Object(_) | ExprKind::Array(_)
+                    );
+                if let (true, Some((len, cap))) =
+                    (is_struct_lit, self.pc.push_caps.get(&arr.print()).cloned())
+                {
                     // The literal is built in place: no temporary and no copy of the struct.
                     self.emit(if_then(
                         bin(">=", name(len.clone()), name(cap.clone())),
                         vec![
-                            assign(name(cap.clone()), bin("+", bin("*", name(cap.clone()), long(2)), long(8))),
-                            VStmt::ReDim { preserve: true, target: arr.clone(), dims: vec![(long(0), name(cap).plus(-1))] },
+                            assign(
+                                name(cap.clone()),
+                                bin("+", bin("*", name(cap.clone()), long(2)), long(8)),
+                            ),
+                            VStmt::ReDim {
+                                preserve: true,
+                                target: arr.clone(),
+                                dims: vec![(long(0), name(cap).plus(-1))],
+                            },
                         ],
                     ));
                     self.struct_lit_into(args[0].peel(), &arr.index(vec![name(len.clone())]));
@@ -1631,8 +2058,15 @@ impl<'p> Lowerer<'p> {
                     self.emit(if_then(
                         bin(">=", name(len.clone()), name(cap.clone())),
                         vec![
-                            assign(name(cap.clone()), bin("+", bin("*", name(cap.clone()), long(2)), long(8))),
-                            VStmt::ReDim { preserve: true, target: arr.clone(), dims: vec![(long(0), name(cap).plus(-1))] },
+                            assign(
+                                name(cap.clone()),
+                                bin("+", bin("*", name(cap.clone()), long(2)), long(8)),
+                            ),
+                            VStmt::ReDim {
+                                preserve: true,
+                                target: arr.clone(),
+                                dims: vec![(long(0), name(cap).plus(-1))],
+                            },
                         ],
                     ));
                     self.store(&arr.index(vec![name(len.clone())]), &elem_ty, v, &vt);
@@ -1642,7 +2076,11 @@ impl<'p> Lowerer<'p> {
                     let n = VExpr::Name(self.temp(&Type::Int));
                     let len = self.len_of(arr.clone(), &recv_ty);
                     self.emit(assign(n.clone(), len));
-                    self.emit(VStmt::ReDim { preserve: true, target: arr.clone(), dims: vec![(long(0), n.clone())] });
+                    self.emit(VStmt::ReDim {
+                        preserve: true,
+                        target: arr.clone(),
+                        dims: vec![(long(0), n.clone())],
+                    });
                     self.store(&arr.index(vec![n]), &elem_ty, v, &vt);
                     if self.pc.loop_depth > 0 {
                         self.note(e.span, false, "push", "このループ内の `push` は 1 要素ごとに `ReDim Preserve` します（配列がループ内で他の用途にも使われているため、容量倍増方式にできません）");
@@ -1658,9 +2096,19 @@ impl<'p> Lowerer<'p> {
                 let len = self.len_of(arr.clone(), &recv_ty);
                 self.emit(assign(n.clone(), len.plus(-1)));
                 self.reset_var(&out, &elem_ty);
-                let (mut body, _) = self.capture(|lw| lw.store(&out, &elem_ty, arr.clone().index(vec![n.clone()]), &elem_ty));
+                let (mut body, _) = self.capture(|lw| {
+                    lw.store(&out, &elem_ty, arr.clone().index(vec![n.clone()]), &elem_ty)
+                });
                 let (clear, _) = self.capture(|lw| lw.clear_array(&arr, &recv_ty));
-                body.push(if_else(bin("=", n.clone(), long(0)), clear, vec![VStmt::ReDim { preserve: true, target: arr.clone(), dims: vec![(long(0), n.clone().plus(-1))] }]));
+                body.push(if_else(
+                    bin("=", n.clone(), long(0)),
+                    clear,
+                    vec![VStmt::ReDim {
+                        preserve: true,
+                        target: arr.clone(),
+                        dims: vec![(long(0), n.clone().plus(-1))],
+                    }],
+                ));
                 self.emit(if_then(bin(">=", n, long(0)), body));
                 return want.then_some(out);
             }
@@ -1742,21 +2190,59 @@ impl<'p> Lowerer<'p> {
                 all.extend(args.iter());
                 let ops = self.operands(&all);
                 let from = ops.get(2).cloned().map(|f| f.plus(1)).unwrap_or(long(1));
-                call("InStr", vec![from, ops[0].clone(), ops[1].clone(), name("vbBinaryCompare")]).plus(-1)
+                call(
+                    "InStr",
+                    vec![
+                        from,
+                        ops[0].clone(),
+                        ops[1].clone(),
+                        name("vbBinaryCompare"),
+                    ],
+                )
+                .plus(-1)
             }
             StrLastIndexOf => {
                 let ops = self.operands(&[recv?, &args[0]]);
-                call("InStrRev", vec![ops[0].clone(), ops[1].clone(), lit("-1"), name("vbBinaryCompare")]).plus(-1)
+                call(
+                    "InStrRev",
+                    vec![
+                        ops[0].clone(),
+                        ops[1].clone(),
+                        lit("-1"),
+                        name("vbBinaryCompare"),
+                    ],
+                )
+                .plus(-1)
             }
             StrIncludes => {
                 let ops = self.operands(&[recv?, &args[0]]);
-                bin(">", call("InStr", vec![long(1), ops[0].clone(), ops[1].clone(), name("vbBinaryCompare")]), long(0))
+                bin(
+                    ">",
+                    call(
+                        "InStr",
+                        vec![
+                            long(1),
+                            ops[0].clone(),
+                            ops[1].clone(),
+                            name("vbBinaryCompare"),
+                        ],
+                    ),
+                    long(0),
+                )
             }
             StrStartsWith | StrEndsWith => {
                 let ops = self.operands(&[recv?, &args[0]]);
                 let p = self.spill(ops[1].clone(), &Type::Str);
-                let f = if intr == StrStartsWith { "Left$" } else { "Right$" };
-                bin("=", call(f, vec![ops[0].clone(), call("Len", vec![p.clone()])]), p)
+                let f = if intr == StrStartsWith {
+                    "Left$"
+                } else {
+                    "Right$"
+                };
+                bin(
+                    "=",
+                    call(f, vec![ops[0].clone(), call("Len", vec![p.clone()])]),
+                    p,
+                )
             }
             StrPadStart | StrPadEnd => {
                 let mut all = vec![recv?];
@@ -1765,12 +2251,27 @@ impl<'p> Lowerer<'p> {
                 if ops.len() == 2 {
                     ops.push(lit("\" \""));
                 }
-                call(if intr == StrPadStart { "RAS_PadStart" } else { "RAS_PadEnd" }, ops)
+                call(
+                    if intr == StrPadStart {
+                        "RAS_PadStart"
+                    } else {
+                        "RAS_PadEnd"
+                    },
+                    ops,
+                )
             }
             StrRepeat => call("RAS_Repeat", self.operands(&[recv?, &args[0]])),
             StrReplace | StrReplaceAll => {
                 let mut ops = self.operands(&[recv?, &args[0], &args[1]]);
-                ops.extend([long(1), if intr == StrReplace { long(1) } else { lit("-1") }, name("vbBinaryCompare")]);
+                ops.extend([
+                    long(1),
+                    if intr == StrReplace {
+                        long(1)
+                    } else {
+                        lit("-1")
+                    },
+                    name("vbBinaryCompare"),
+                ]);
                 call("Replace", ops)
             }
             StrSplit => {
@@ -1780,12 +2281,25 @@ impl<'p> Lowerer<'p> {
             }
             StrCharAt => {
                 let ops = self.operands(&[recv?, &args[0]]);
-                call("Mid$", vec![ops[0].clone(), ops[1].clone().plus(1), long(1)])
+                call(
+                    "Mid$",
+                    vec![ops[0].clone(), ops[1].clone().plus(1), long(1)],
+                )
             }
             StrCharCodeAt => {
                 let ops = self.operands(&[recv?, &args[0]]);
                 // AscW returns a signed Integer.
-                bin("And", call("AscW", vec![call("Mid$", vec![ops[0].clone(), ops[1].clone().plus(1), long(1)])]), lit("&HFFFF&"))
+                bin(
+                    "And",
+                    call(
+                        "AscW",
+                        vec![call(
+                            "Mid$",
+                            vec![ops[0].clone(), ops[1].clone().plus(1), long(1)],
+                        )],
+                    ),
+                    lit("&HFFFF&"),
+                )
             }
             NumToString | BoolToString | DateToString => {
                 let v = self.expr(recv?);
@@ -1811,7 +2325,12 @@ impl<'p> Lowerer<'p> {
                     _ => Type::Any,
                 };
                 let at = self.ty(&args[1]);
-                self.store(&ops[0].clone().index(vec![ops[1].clone()]), &vty, ops[2].clone(), &at);
+                self.store(
+                    &ops[0].clone().index(vec![ops[1].clone()]),
+                    &vty,
+                    ops[2].clone(),
+                    &at,
+                );
                 return None;
             }
             MapHas => {
@@ -1822,12 +2341,21 @@ impl<'p> Lowerer<'p> {
                 let ops = self.operands(&[recv?, &args[0]]);
                 let kt = self.ty(&args[0]);
                 let k = self.spill(ops[1].clone(), &kt);
-                self.emit(if_then(ops[0].clone().member("Exists").index(vec![k.clone()]), vec![VStmt::Call { target: ops[0].clone().member("Remove"), args: vec![k] }]));
+                self.emit(if_then(
+                    ops[0].clone().member("Exists").index(vec![k.clone()]),
+                    vec![VStmt::Call {
+                        target: ops[0].clone().member("Remove"),
+                        args: vec![k],
+                    }],
+                ));
                 return None;
             }
             MapClear => {
                 let d = self.expr(recv?);
-                self.emit(VStmt::Call { target: d.member("RemoveAll"), args: vec![] });
+                self.emit(VStmt::Call {
+                    target: d.member("RemoveAll"),
+                    args: vec![],
+                });
                 return None;
             }
             MathAbs => call("Abs", vec![self.expr(&args[0])]),
@@ -1869,12 +2397,19 @@ impl<'p> Lowerer<'p> {
                     let at = self.ty(a);
                     let v = self.expr(a);
                     let v = self.spill(v, &at);
-                    let cmp = bin(if intr == MathMin { "<" } else { ">" }, v.clone(), t.clone());
+                    let cmp = bin(
+                        if intr == MathMin { "<" } else { ">" },
+                        v.clone(),
+                        t.clone(),
+                    );
                     self.emit(if_then(cmp, vec![assign(t.clone(), v)]));
                 }
                 t
             }
-            ParseInt => call("CLng", vec![call("Fix", vec![call("Val", vec![self.expr(&args[0])])])]),
+            ParseInt => call(
+                "CLng",
+                vec![call("Fix", vec![call("Val", vec![self.expr(&args[0])])])],
+            ),
             ParseFloat => call("Val", vec![self.expr(&args[0])]),
             ToStr => {
                 let at = self.ty(&args[0]);
@@ -1892,7 +2427,10 @@ impl<'p> Lowerer<'p> {
                         Some(p) => bin("&", bin("&", p, lit("\" \"")), s),
                     });
                 }
-                self.emit(VStmt::Call { target: name("Debug").member("Print"), args: acc.into_iter().collect() });
+                self.emit(VStmt::Call {
+                    target: name("Debug").member("Print"),
+                    args: acc.into_iter().collect(),
+                });
                 return None;
             }
             IsNullish => lit("False"),
@@ -1923,10 +2461,13 @@ impl<'p> Lowerer<'p> {
                 let timeout = self.arg_or(args, 1, lit("-1&"));
                 let c = call("RAS_WaitUntil", vec![f, timeout]);
                 if !want {
-                    self.emit(VStmt::Call { target: name("RAS_WaitUntil"), args: match c {
-                        VExpr::Call(_, a) => a,
-                        _ => vec![],
-                    } });
+                    self.emit(VStmt::Call {
+                        target: name("RAS_WaitUntil"),
+                        args: match c {
+                            VExpr::Call(_, a) => a,
+                            _ => vec![],
+                        },
+                    });
                     return None;
                 }
                 c
@@ -1950,7 +2491,10 @@ impl<'p> Lowerer<'p> {
                 }
                 call("RAS_Match", ops)
             }
-            ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind | ArrFindIndex | ArrSlice | ArrConcat | MapKeys | MapValues | CollToArray => unreachable!(),
+            ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind
+            | ArrFindIndex | ArrSlice | ArrConcat | MapKeys | MapValues | CollToArray => {
+                unreachable!()
+            }
         };
         if want {
             Some(v)
@@ -1973,7 +2517,9 @@ pub(crate) fn tuple_field(index: &Expr) -> String {
 fn target_index_mentions(v: &VExpr, name: &str) -> bool {
     match v {
         VExpr::Member(o, _) => target_index_mentions(o, name),
-        VExpr::Call(f, args) => target_index_mentions(f, name) || args.iter().any(|a| mentions(a, name)),
+        VExpr::Call(f, args) => {
+            target_index_mentions(f, name) || args.iter().any(|a| mentions(a, name))
+        }
         _ => false,
     }
 }
@@ -2012,7 +2558,10 @@ mod tests {
 
     #[test]
     fn int_min() {
-        assert_eq!(int_lit(-2147483648, &Type::Int, false).print(), "(-2147483647& - 1&)");
+        assert_eq!(
+            int_lit(-2147483648, &Type::Int, false).print(),
+            "(-2147483647& - 1&)"
+        );
         assert_eq!(int_lit(255, &Type::Int, true).print(), "&HFF&");
         assert_eq!(int_lit(123, &Type::Long, false).print(), "123^");
     }

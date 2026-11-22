@@ -237,7 +237,10 @@ mod tests {
     #[test]
     fn decrypts_values_written_by_excel() {
         // From a workbook saved by Excel (XlsxWriter's example vbaProject.bin).
-        assert_eq!(decrypt("DBD966ECE4F0E4F0E4F0E4F0").unwrap(), vec![0, 0, 0, 0]);
+        assert_eq!(
+            decrypt("DBD966ECE4F0E4F0E4F0E4F0").unwrap(),
+            vec![0, 0, 0, 0]
+        );
         assert_eq!(decrypt("5557E86E18E919E919E9").unwrap(), vec![0]);
         assert_eq!(decrypt("CFCD72F0961011111111EE").unwrap(), vec![0xFF]);
         // The project key is the checksum of the ID string.
@@ -249,7 +252,12 @@ mod tests {
     fn round_trips_for_every_seed() {
         let id = "{21270BA8-1724-4E42-9E4C-C761C3E756EB}";
         for seed in 0..=255u8 {
-            for data in [&[0u8][..], &[0xFF], &[0, 0, 0, 0], &[1, 2, 3, 4, 5, 6, 7, 8, 9]] {
+            for data in [
+                &[0u8][..],
+                &[0xFF],
+                &[0, 0, 0, 0],
+                &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+            ] {
                 let hex = encrypt(data, id, seed, &[0xAA, 0xBB, 0xCC]);
                 assert_eq!(decrypt(&hex).as_deref(), Some(data), "seed {seed}");
             }
@@ -280,7 +288,8 @@ mod tests {
         );
         assert!(locked.user_protected && locked.has_password && locked.is_protected());
 
-        let password_only = Protection::from_properties(None, Some(&encrypt(b"abc\0", id, 3, &[9])));
+        let password_only =
+            Protection::from_properties(None, Some(&encrypt(b"abc\0", id, 3, &[9])));
         assert!(password_only.is_protected());
 
         let broken = Protection::from_properties(Some("nonsense"), None);

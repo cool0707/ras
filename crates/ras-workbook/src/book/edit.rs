@@ -46,17 +46,42 @@ impl Book {
     /// cells there and to their right moving right). Whole rows (columns) when `r` spans the
     /// sheet. The new cells get the format of the cells above or to the left (`from_after`:
     /// below or to the right), as Excel gives them.
-    pub fn insert_cells(&mut self, si: usize, r: RangeRef, right: bool, from_after: bool) -> Result<()> {
-        self.restructure(si, r, if right { Axis::Cols } else { Axis::Rows }, true, from_after)
+    pub fn insert_cells(
+        &mut self,
+        si: usize,
+        r: RangeRef,
+        right: bool,
+        from_after: bool,
+    ) -> Result<()> {
+        self.restructure(
+            si,
+            r,
+            if right { Axis::Cols } else { Axis::Rows },
+            true,
+            from_after,
+        )
     }
 
     /// `Range.Delete`: the cells of `r` go, the cells below moving up (`left`: those to the right
     /// moving left).
     pub fn delete_cells(&mut self, si: usize, r: RangeRef, left: bool) -> Result<()> {
-        self.restructure(si, r, if left { Axis::Cols } else { Axis::Rows }, false, false)
+        self.restructure(
+            si,
+            r,
+            if left { Axis::Cols } else { Axis::Rows },
+            false,
+            false,
+        )
     }
 
-    fn restructure(&mut self, si: usize, r: RangeRef, axis: Axis, insert: bool, from_after: bool) -> Result<()> {
+    fn restructure(
+        &mut self,
+        si: usize,
+        r: RangeRef,
+        axis: Axis,
+        insert: bool,
+        from_after: bool,
+    ) -> Result<()> {
         self.check_sheet(si)?;
         let whole = match axis {
             Axis::Rows => r.is_full_rows(),
@@ -78,7 +103,11 @@ impl Book {
         };
         self.check_edit(si, r, reach, axis, insert, whole)?;
 
-        let name = self.model.sheet(si).map(|s| s.name.clone()).unwrap_or_default();
+        let name = self
+            .model
+            .sheet(si)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
         let edit = match (whole, insert) {
             (true, true) => Edit::Insert { axis, at, count },
             (true, false) => Edit::Delete { axis, at, count },
@@ -147,11 +176,26 @@ impl Book {
             (Axis::Cols, true) => LineEdit::insert_columns(at + 1, count),
             (Axis::Cols, false) => LineEdit::remove_columns(at + 1, count),
         };
-        let line = if whole { line } else { line.within(band.0 + 1, band.1 + 1) };
+        let line = if whole {
+            line
+        } else {
+            line.within(band.0 + 1, band.1 + 1)
+        };
         let line = line.with_table_column(TABLE_COLUMN);
-        self.file.edit_lines(&name, &line, &mut |host, text| adjusted(host, text, &name, &edit)).map_err(|e| format!("セルを移動できません（{e}）"))?;
+        self.file
+            .edit_lines(&name, &line, &mut |host, text| {
+                adjusted(host, text, &name, &edit)
+            })
+            .map_err(|e| format!("セルを移動できません（{e}）"))?;
         if insert {
-            self.format_inserted(si, axis, at, count, if whole { None } else { Some(band) }, from_after);
+            self.format_inserted(
+                si,
+                axis,
+                at,
+                count,
+                if whole { None } else { Some(band) },
+                from_after,
+            );
         }
         self.relayout(si);
         self.names = Names::default();
@@ -162,14 +206,34 @@ impl Book {
 
     /// What Excel refuses: cells with content pushed off the sheet, and array formulas, merged
     /// cells and tables cut apart.
-    fn check_edit(&self, si: usize, r: RangeRef, reach: RangeRef, axis: Axis, insert: bool, whole: bool) -> Result<()> {
-        let Some(sh) = self.model.sheet(si) else { return Ok(()) };
+    fn check_edit(
+        &self,
+        si: usize,
+        r: RangeRef,
+        reach: RangeRef,
+        axis: Axis,
+        insert: bool,
+        whole: bool,
+    ) -> Result<()> {
+        let Some(sh) = self.model.sheet(si) else {
+            return Ok(());
+        };
         if insert {
             let tail = match axis {
-                Axis::Rows => RangeRef::new(CellRef::new(MAX_ROWS - r.height().min(MAX_ROWS), reach.start.col), reach.end),
-                Axis::Cols => RangeRef::new(CellRef::new(reach.start.row, MAX_COLS - r.width().min(MAX_COLS)), reach.end),
+                Axis::Rows => RangeRef::new(
+                    CellRef::new(MAX_ROWS - r.height().min(MAX_ROWS), reach.start.col),
+                    reach.end,
+                ),
+                Axis::Cols => RangeRef::new(
+                    CellRef::new(reach.start.row, MAX_COLS - r.width().min(MAX_COLS)),
+                    reach.end,
+                ),
             };
-            if sh.cells.iter_range(tail).any(|(_, c)| c.formula.is_some() || !c.value.is_empty()) {
+            if sh
+                .cells
+                .iter_range(tail)
+                .any(|(_, c)| c.formula.is_some() || !c.value.is_empty())
+            {
                 return Err("空でないセルをワークシートの外に押し出すことはできません。".into());
             }
         }
@@ -184,23 +248,46 @@ impl Book {
                     Axis::Rows => (area.start.row, area.end.row),
                     Axis::Cols => (area.start.col, area.end.col),
                 };
-                if insert { at > lo && at <= hi } else { at <= hi && end >= lo && !(at <= lo && end >= hi) }
+                if insert {
+                    at > lo && at <= hi
+                } else {
+                    at <= hi && end >= lo && !(at <= lo && end >= hi)
+                }
             } else {
-                area.intersects(&reach) && (!reach.contains_range(area) || (!insert && area.intersects(&r) && !r.contains_range(area)))
+                area.intersects(&reach)
+                    && (!reach.contains_range(area)
+                        || (!insert && area.intersects(&r) && !r.contains_range(area)))
             }
         };
         for (at, c) in sh.cells.iter() {
-            let Some(area) = c.formula.as_ref().and_then(|f| f.array).filter(|a| !a.is_single() && a.start == at) else { continue };
+            let Some(area) = c
+                .formula
+                .as_ref()
+                .and_then(|f| f.array)
+                .filter(|a| !a.is_single() && a.start == at)
+            else {
+                continue;
+            };
             if apart(&area) {
                 return Err("配列の一部を変更することはできません。".into());
             }
         }
         if !whole {
-            if sh.merges.iter().any(|m| m.intersects(&reach) && !reach.contains_range(m)) {
+            if sh
+                .merges
+                .iter()
+                .any(|m| m.intersects(&reach) && !reach.contains_range(m))
+            {
                 return Err("この操作は結合したセルには行えません。".into());
             }
-            if sh.tables.iter().any(|t| t.range.intersects(&reach) && !reach.contains_range(&t.range)) {
-                return Err("テーブル内のセルを移動しようとしているため、この操作は実行できません。".into());
+            if sh
+                .tables
+                .iter()
+                .any(|t| t.range.intersects(&reach) && !reach.contains_range(&t.range))
+            {
+                return Err(
+                    "テーブル内のセルを移動しようとしているため、この操作は実行できません。".into(),
+                );
             }
         }
         Ok(())
@@ -211,7 +298,9 @@ impl Book {
     pub(super) fn adjust_refs(&mut self, target: &str, edit: &Edit) {
         let names: Vec<String> = self.model.sheets.iter().map(|s| s.name.clone()).collect();
         for (si, host) in names.iter().enumerate() {
-            let Some(sh) = self.model.sheet_mut(si) else { continue };
+            let Some(sh) = self.model.sheet_mut(si) else {
+                continue;
+            };
             let changes: Vec<(CellRef, gm::Formula)> = sh
                 .cells
                 .iter()
@@ -231,7 +320,11 @@ impl Book {
             }
         }
         for n in &mut self.model.names {
-            let host = n.scope.and_then(|s| names.get(s)).map(String::as_str).unwrap_or("\u{0}");
+            let host = n
+                .scope
+                .and_then(|s| names.get(s))
+                .map(String::as_str)
+                .unwrap_or("\u{0}");
             if let Ok(e) = gridcraft_formula::parse(&n.formula)
                 && let Some(new) = adjust_if_changed(&e, host, target, edit)
             {
@@ -244,23 +337,52 @@ impl Book {
 
     /// Gives the cells inserted the format of the line before them (above, or to the left), or
     /// of the line after them (`from_after`, and when they are first), as Excel does.
-    fn format_inserted(&mut self, si: usize, axis: Axis, at: u32, count: u32, band: Option<(u32, u32)>, from_after: bool) {
-        let max = if axis == Axis::Rows { MAX_ROWS } else { MAX_COLS };
-        let from = if from_after || at == 0 { at + count } else { at - 1 };
+    fn format_inserted(
+        &mut self,
+        si: usize,
+        axis: Axis,
+        at: u32,
+        count: u32,
+        band: Option<(u32, u32)>,
+        from_after: bool,
+    ) {
+        let max = if axis == Axis::Rows {
+            MAX_ROWS
+        } else {
+            MAX_COLS
+        };
+        let from = if from_after || at == 0 {
+            at + count
+        } else {
+            at - 1
+        };
         if from >= max {
             return;
         }
-        let Ok(ws) = self.file.sheet_mut(si) else { return };
+        let Ok(ws) = self.file.sheet_mut(si) else {
+            return;
+        };
         let inside = |other: u32| band.is_none_or(|(lo, hi)| lo <= other && other <= hi);
         // (row, column) of a line and its place along it.
-        let cell = |line: u32, other: u32| if axis == Axis::Rows { CellRef::new(line, other) } else { CellRef::new(other, line) };
+        let cell = |line: u32, other: u32| {
+            if axis == Axis::Rows {
+                CellRef::new(line, other)
+            } else {
+                CellRef::new(other, line)
+            }
+        };
         let styles: Vec<(u32, umya_spreadsheet::Style)> = ws
             .cells()
             .iter()
             .filter_map(|c| {
                 let (row, col) = (c.coordinate().row_num() - 1, c.coordinate().col_num() - 1);
-                let (line, other) = if axis == Axis::Rows { (row, col) } else { (col, row) };
-                (line == from && inside(other) && *c.style() != umya_spreadsheet::Style::default()).then(|| (other, c.style().clone()))
+                let (line, other) = if axis == Axis::Rows {
+                    (row, col)
+                } else {
+                    (col, row)
+                };
+                (line == from && inside(other) && *c.style() != umya_spreadsheet::Style::default())
+                    .then(|| (other, c.style().clone()))
             })
             .collect();
         for n in at..at + count {
@@ -301,8 +423,16 @@ impl Book {
         let Ok(ws) = self.file.sheet(si) else { return };
         let mut id = 0;
         let fresh = layout(ws, &mut id);
-        let mut next = self.model.sheets.iter().flat_map(|s| s.tables.iter().map(|t| t.id)).max().unwrap_or(0);
-        let Some(sh) = self.model.sheet_mut(si) else { return };
+        let mut next = self
+            .model
+            .sheets
+            .iter()
+            .flat_map(|s| s.tables.iter().map(|t| t.id))
+            .max()
+            .unwrap_or(0);
+        let Some(sh) = self.model.sheet_mut(si) else {
+            return;
+        };
         sh.merges = fresh.merges;
         sh.rows = fresh.rows;
         sh.cols = fresh.cols;

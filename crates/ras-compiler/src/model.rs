@@ -16,8 +16,7 @@ pub type StructId = usize;
 pub type VarId = usize;
 pub type LocalId = usize;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub enum Type {
     /// Poison type: produced after an error, compatible with everything.
     Error,
@@ -75,7 +74,6 @@ pub struct FuncType {
     pub ret: Type,
 }
 
-
 impl Type {
     pub fn array(elem: Type) -> Type {
         Type::Array(Box::new(elem))
@@ -94,7 +92,12 @@ impl Type {
     }
 
     pub fn is_numeric(&self) -> bool {
-        self.is_integer() || self.is_float() || matches!(self, Type::Currency | Type::Decimal | Type::Enum(_) | Type::Ptr)
+        self.is_integer()
+            || self.is_float()
+            || matches!(
+                self,
+                Type::Currency | Type::Decimal | Type::Enum(_) | Type::Ptr
+            )
     }
 
     /// Position in the C#-style promotion order `int < long < float < double`.
@@ -112,7 +115,10 @@ impl Type {
     pub fn is_object(&self) -> bool {
         match self {
             Type::Union(ms) => ms.iter().all(|m| m.is_object()),
-            _ => matches!(self, Type::Object | Type::Class(..) | Type::Map(..) | Type::Func(_) | Type::Null),
+            _ => matches!(
+                self,
+                Type::Object | Type::Class(..) | Type::Map(..) | Type::Func(_) | Type::Null
+            ),
         }
     }
 
@@ -313,16 +319,34 @@ pub struct ParamDef {
 #[derive(Clone, Debug, PartialEq)]
 pub enum FnKind {
     Free,
-    Method { class: ClassId, is_static: bool },
-    Ctor { class: ClassId },
-    Getter { class: ClassId, is_static: bool },
-    Setter { class: ClassId, is_static: bool },
+    Method {
+        class: ClassId,
+        is_static: bool,
+    },
+    Ctor {
+        class: ClassId,
+    },
+    Getter {
+        class: ClassId,
+        is_static: bool,
+    },
+    Setter {
+        class: ClassId,
+        is_static: bool,
+    },
     /// `declare module "lib" { function ... }`
-    Declare { lib: String, alias: Option<String> },
+    Declare {
+        lib: String,
+        alias: Option<String>,
+    },
     /// Member of a host (COM) interface or a declared global host function.
-    Host { class: Option<ClassId> },
+    Host {
+        class: Option<ClassId>,
+    },
     /// Interface method signature (RAS interface).
-    Abstract { class: ClassId },
+    Abstract {
+        class: ClassId,
+    },
     /// The synthesized `Main` holding a module's top-level statements.
     Main,
     /// The synthesized initializer of a module's top-level variables.
@@ -449,17 +473,28 @@ impl FnDef {
     }
 
     pub fn required_params(&self) -> usize {
-        self.params.iter().filter(|p| !p.optional && p.default.is_none() && !p.rest).count()
+        self.params
+            .iter()
+            .filter(|p| !p.optional && p.default.is_none() && !p.rest)
+            .count()
     }
 
     /// A macro of the workbook: shown in Excel's macro dialog and runnable with `Application.Run`.
     pub fn is_macro_entry(&self) -> bool {
-        if self.is_generic() || !self.attrs.on_events.is_empty() || self.attrs.init || self.attrs.udf || self.attrs.form_member {
+        if self.is_generic()
+            || !self.attrs.on_events.is_empty()
+            || self.attrs.init
+            || self.attrs.udf
+            || self.attrs.form_member
+        {
             return false;
         }
         match self.kind {
             FnKind::Main => true,
-            FnKind::Free => self.attrs.macro_entry || (self.exported && self.params.is_empty() && self.ret_ty() == Type::Void),
+            FnKind::Free => {
+                self.attrs.macro_entry
+                    || (self.exported && self.params.is_empty() && self.ret_ty() == Type::Void)
+            }
             _ => false,
         }
     }
@@ -467,7 +502,11 @@ impl FnDef {
     /// A function the debugger can start (spec §14.10): one without required arguments that
     /// Excel does not call by itself. Only meaningful for functions with a body.
     pub fn is_debug_entry(&self) -> bool {
-        matches!(self.kind, FnKind::Free | FnKind::Main) && self.required_params() == 0 && !self.is_extension && !self.is_generic() && self.attrs.on_events.is_empty()
+        matches!(self.kind, FnKind::Free | FnKind::Main)
+            && self.required_params() == 0
+            && !self.is_extension
+            && !self.is_generic()
+            && self.attrs.on_events.is_empty()
     }
 }
 
@@ -621,20 +660,30 @@ pub enum Sym {
 /// The host classes `new` and `CreateObject` create by their ProgID: (ProgID, namespace, name).
 /// The generated VBA creates them with `CreateObject`, without a reference to their library.
 pub const PROG_IDS: &[(&str, &str, &str)] = &[
-    ("Scripting.FileSystemObject", "Scripting", "FileSystemObject"),
+    (
+        "Scripting.FileSystemObject",
+        "Scripting",
+        "FileSystemObject",
+    ),
     ("Scripting.Dictionary", "Scripting", "Dictionary"),
     ("VBScript.RegExp", "VBScript", "RegExp"),
 ];
 
 /// The ProgID of a host class of namespace `namespace`, when it has one.
 pub fn prog_id(namespace: Option<&str>, name: &str) -> Option<&'static str> {
-    PROG_IDS.iter().find(|(_, ns, n)| Some(*ns) == namespace && *n == name).map(|(id, ..)| *id)
+    PROG_IDS
+        .iter()
+        .find(|(_, ns, n)| Some(*ns) == namespace && *n == name)
+        .map(|(id, ..)| *id)
 }
 
 /// Whether the types of a host namespace are those of a library the VBA project references
 /// (the others are late-bound: `Object`, and numbers for their enums; spec §15.3).
 pub fn referenced_namespace(namespace: Option<&str>) -> bool {
-    matches!(namespace, None | Some("Excel" | "VBA" | "Office" | "MSForms"))
+    matches!(
+        namespace,
+        None | Some("Excel" | "VBA" | "Office" | "MSForms")
+    )
 }
 
 /// What a name / member / call expression resolved to.
@@ -653,7 +702,10 @@ pub enum Res {
     Field(ClassId, usize),
     /// Method of a class / host interface referenced through member access.
     Method(FnId),
-    Property { get: Option<FnId>, set: Option<FnId> },
+    Property {
+        get: Option<FnId>,
+        set: Option<FnId>,
+    },
     ExtMethod(FnId),
     Intrinsic(crate::intrinsics::Intr),
     /// Late-bound member of an `any` / `object` value.
@@ -735,20 +787,33 @@ pub enum EventBindKind {
     /// `classes` is the class of the target, or — `dynamic`, for a `MSForms.Control` — the
     /// classes of controls that have the event: the one of the control is found at run time.
     /// `each`: the target is an array or a collection, every member of which is listened to.
-    Listener { classes: Vec<ClassId>, dynamic: bool, each: bool, event: String, params: Vec<(String, String, bool)>, argc: usize },
+    Listener {
+        classes: Vec<ClassId>,
+        dynamic: bool,
+        each: bool,
+        event: String,
+        params: Vec<(String, String, bool)>,
+        argc: usize,
+    },
     /// The target's `OnAction` property (of each member of the target) gets the name of the macro.
     OnAction { each: bool },
 }
 
 impl TypeInfo {
     pub fn ty(&self, id: ExprId) -> Type {
-        self.expr_types.get(id as usize).cloned().unwrap_or(Type::Error)
+        self.expr_types
+            .get(id as usize)
+            .cloned()
+            .unwrap_or(Type::Error)
     }
 
     /// The arguments of call (or `new`) `call` in parameter order: `args` unless named
     /// arguments were reordered (spec §3.3).
     pub fn call_args<'a>(&'a self, call: ExprId, args: &'a [ast::Expr]) -> &'a [ast::Expr] {
-        self.positional_args.get(&call).map(|v| &v[..]).unwrap_or(args)
+        self.positional_args
+            .get(&call)
+            .map(|v| &v[..])
+            .unwrap_or(args)
     }
 }
 
@@ -835,17 +900,39 @@ impl Program {
     pub fn event_source(&self, f: FnId, target: &str) -> Option<EventSource> {
         let d = &self.fns[f];
         match d.kind {
-            FnKind::Method { class, is_static: false } => self.classes[class].fields.iter().position(|x| !x.is_static && x.name.eq_ignore_ascii_case(target)).map(|i| EventSource::Field(class, i)),
+            FnKind::Method {
+                class,
+                is_static: false,
+            } => self.classes[class]
+                .fields
+                .iter()
+                .position(|x| !x.is_static && x.name.eq_ignore_ascii_case(target))
+                .map(|i| EventSource::Field(class, i)),
             FnKind::Free => {
                 let md = &self.modules[d.module];
                 if let Some(form) = &md.form {
-                    let reserved = ["UserForm", "Worksheet", "Workbook", "ThisWorkbook"].iter().any(|r| r.eq_ignore_ascii_case(target)) || md.vba_name.eq_ignore_ascii_case(target);
-                    let control = form.decl.as_ref().is_some_and(|x| x.controls.iter().any(|c| c.name.eq_ignore_ascii_case(target)));
+                    let reserved = ["UserForm", "Worksheet", "Workbook", "ThisWorkbook"]
+                        .iter()
+                        .any(|r| r.eq_ignore_ascii_case(target))
+                        || md.vba_name.eq_ignore_ascii_case(target);
+                    let control = form.decl.as_ref().is_some_and(|x| {
+                        x.controls
+                            .iter()
+                            .any(|c| c.name.eq_ignore_ascii_case(target))
+                    });
                     if reserved || control {
                         return None;
                     }
                 }
-                md.vars.iter().copied().find(|&v| !self.vars[v].declared && self.vars[v].module == d.module && self.vars[v].name.eq_ignore_ascii_case(target)).map(EventSource::Var)
+                md.vars
+                    .iter()
+                    .copied()
+                    .find(|&v| {
+                        !self.vars[v].declared
+                            && self.vars[v].module == d.module
+                            && self.vars[v].name.eq_ignore_ascii_case(target)
+                    })
+                    .map(EventSource::Var)
             }
             _ => None,
         }
@@ -855,7 +942,9 @@ impl Program {
 impl ModuleData {
     /// A form's code-behind (`forms/<Name>.ras`).
     pub fn is_form(&self) -> bool {
-        self.form.as_ref().is_some_and(|f| f.kind == ObjectKind::Form)
+        self.form
+            .as_ref()
+            .is_some_and(|f| f.kind == ObjectKind::Form)
     }
 
     /// The file of a sheet or of `ThisWorkbook` (`objects/<CodeName>.ras`): a document module.
@@ -876,14 +965,24 @@ impl ModuleData {
         let line = self.line_of(offset) - 1;
         let start = self.line_starts[line as usize] as usize;
         let end = (offset as usize).min(self.text.len());
-        let col: usize = self.text.get(start..end).map(|s| s.chars().map(|c| c.len_utf16()).sum()).unwrap_or(0);
+        let col: usize = self
+            .text
+            .get(start..end)
+            .map(|s| s.chars().map(|c| c.len_utf16()).sum())
+            .unwrap_or(0);
         (line, col as u32)
     }
 
     /// Byte offset of a 0-based (line, UTF-16 column) position.
     pub fn offset_of(&self, line: u32, col_utf16: u32) -> u32 {
-        let Some(&start) = self.line_starts.get(line as usize) else { return self.text.len() as u32 };
-        let line_end = self.line_starts.get(line as usize + 1).copied().unwrap_or(self.text.len() as u32);
+        let Some(&start) = self.line_starts.get(line as usize) else {
+            return self.text.len() as u32;
+        };
+        let line_end = self
+            .line_starts
+            .get(line as usize + 1)
+            .copied()
+            .unwrap_or(self.text.len() as u32);
         let mut units = 0u32;
         let mut off = start;
         for c in self.text[start as usize..line_end as usize].chars() {
@@ -948,7 +1047,12 @@ impl ModuleData {
 impl Program {
     /// A test file (matching `[test] include`), as opposed to a helper module.
     pub fn is_test_file(&self, m: ModuleId) -> bool {
-        self.modules[m].is_test() && self.config.test_files.iter().any(|f| *f == self.modules[m].rel_path)
+        self.modules[m].is_test()
+            && self
+                .config
+                .test_files
+                .iter()
+                .any(|f| *f == self.modules[m].rel_path)
     }
 
     pub fn module_by_key(&self, key: &str) -> Option<ModuleId> {
@@ -957,7 +1061,9 @@ impl Program {
 
     /// The bundled host class a ProgID creates (`Scripting.FileSystemObject`), in any case.
     pub fn class_of_prog_id(&self, id: &str) -> Option<ClassId> {
-        let (_, ns, name) = PROG_IDS.iter().find(|(p, ..)| p.eq_ignore_ascii_case(id.trim()))?;
+        let (_, ns, name) = PROG_IDS
+            .iter()
+            .find(|(p, ..)| p.eq_ignore_ascii_case(id.trim()))?;
         match self.namespaces.get(*ns)?.get(*name)? {
             Sym::Class(c) => Some(*c),
             _ => None,
@@ -1010,7 +1116,13 @@ impl Program {
                 let mut s = self.class_display(*id);
                 if !args.is_empty() {
                     s.push('<');
-                    s.push_str(&args.iter().map(|a| self.show(a)).collect::<Vec<_>>().join(", "));
+                    s.push_str(
+                        &args
+                            .iter()
+                            .map(|a| self.show(a))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    );
                     s.push('>');
                 }
                 s
@@ -1020,16 +1132,35 @@ impl Program {
                 let d = &self.structs[*id];
                 match d.kind {
                     StructKind::Named => d.name.clone(),
-                    StructKind::Tuple => format!("[{}]", d.fields.iter().map(|f| self.show(&f.1)).collect::<Vec<_>>().join(", ")),
+                    StructKind::Tuple => format!(
+                        "[{}]",
+                        d.fields
+                            .iter()
+                            .map(|f| self.show(&f.1))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                     StructKind::Object => {
-                        let fs: Vec<String> = d.fields.iter().zip(&d.optional).map(|(f, o)| format!("{}{}: {}", f.0, if *o { "?" } else { "" }, self.show(&f.1))).collect();
+                        let fs: Vec<String> = d
+                            .fields
+                            .iter()
+                            .zip(&d.optional)
+                            .map(|(f, o)| {
+                                format!("{}{}: {}", f.0, if *o { "?" } else { "" }, self.show(&f.1))
+                            })
+                            .collect();
                         format!("{{ {} }}", fs.join("; "))
                     }
                 }
             }
             Type::Map(k, v) => format!("Map<{}, {}>", self.show(k), self.show(v)),
             Type::Func(f) => {
-                let ps = f.params.iter().enumerate().map(|(i, p)| format!("a{}: {}", i + 1, self.show(p))).collect::<Vec<_>>();
+                let ps = f
+                    .params
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| format!("a{}: {}", i + 1, self.show(p)))
+                    .collect::<Vec<_>>();
                 format!("({}) => {}", ps.join(", "), self.show(&f.ret))
             }
             Type::Param(n) => n.clone(),
@@ -1043,21 +1174,46 @@ impl Program {
 
     /// The anonymous struct with these fields (created in module `m` on first use).
     /// Object types ignore the order of their fields; tuples do not.
-    pub fn intern_struct(&mut self, m: ModuleId, kind: StructKind, mut fields: Vec<(String, Type, bool)>) -> StructId {
+    pub fn intern_struct(
+        &mut self,
+        m: ModuleId,
+        kind: StructKind,
+        mut fields: Vec<(String, Type, bool)>,
+    ) -> StructId {
         if kind == StructKind::Object {
             fields.sort_by(|a, b| a.0.cmp(&b.0));
         }
         let found = self.structs.iter().position(|d| {
-            d.kind == kind && d.fields.len() == fields.len() && d.fields.iter().zip(&d.optional).zip(&fields).all(|((f, o), g)| f.0 == g.0 && f.1 == g.1 && *o == g.2)
+            d.kind == kind
+                && d.fields.len() == fields.len()
+                && d.fields
+                    .iter()
+                    .zip(&d.optional)
+                    .zip(&fields)
+                    .all(|((f, o), g)| f.0 == g.0 && f.1 == g.1 && *o == g.2)
         });
         if let Some(id) = found {
             return id;
         }
         let id = self.structs.len();
         let n = self.structs.iter().filter(|d| d.kind == kind).count() + 1;
-        let name = format!("{}{n}", if kind == StructKind::Tuple { "RAS_Tup" } else { "RAS_Obj" });
+        let name = format!(
+            "{}{n}",
+            if kind == StructKind::Tuple {
+                "RAS_Tup"
+            } else {
+                "RAS_Obj"
+            }
+        );
         // Generated code needs a standard module to hold the `Type`: a user module.
-        let home = if self.modules[m].kind == ModuleKind::User { m } else { self.modules.iter().position(|x| x.kind == ModuleKind::User).unwrap_or(m) };
+        let home = if self.modules[m].kind == ModuleKind::User {
+            m
+        } else {
+            self.modules
+                .iter()
+                .position(|x| x.kind == ModuleKind::User)
+                .unwrap_or(m)
+        };
         self.structs.push(StructDef {
             id,
             module: home,
@@ -1090,7 +1246,12 @@ impl Program {
 
     pub fn find_methods(&self, class: ClassId, name: &str) -> Vec<FnId> {
         let c = &self.classes[class];
-        let mut out: Vec<FnId> = c.methods.iter().copied().filter(|&f| self.fns[f].name == name).collect();
+        let mut out: Vec<FnId> = c
+            .methods
+            .iter()
+            .copied()
+            .filter(|&f| self.fns[f].name == name)
+            .collect();
         if out.is_empty() {
             for base in c.extends.iter() {
                 if let Type::Class(b, _) = base {
@@ -1110,7 +1271,10 @@ impl Program {
             return true;
         }
         let c = &self.classes[class];
-        c.extends.iter().chain(c.implements.iter()).any(|t| matches!(t, Type::Class(b, _) if self.class_conforms(*b, target)))
+        c.extends
+            .iter()
+            .chain(c.implements.iter())
+            .any(|t| matches!(t, Type::Class(b, _) if self.class_conforms(*b, target)))
     }
 
     /// Element type of a host collection: a host interface with a default member
@@ -1122,12 +1286,18 @@ impl Program {
             return None;
         }
         let sig = def.call_sig?;
-        self.find_field(*c, "count").or_else(|| self.find_field(*c, "Count"))?;
+        self.find_field(*c, "count")
+            .or_else(|| self.find_field(*c, "Count"))?;
         Some(self.fns[sig].ret_ty().subst(&self.class_env(*c, args)))
     }
 
     /// Type-parameter substitution environment for a class instantiation.
     pub fn class_env(&self, class: ClassId, args: &[Type]) -> HashMap<String, Type> {
-        self.classes[class].type_params.iter().zip(args.iter()).map(|(p, a)| (p.name.clone(), a.clone())).collect()
+        self.classes[class]
+            .type_params
+            .iter()
+            .zip(args.iter())
+            .map(|(p, a)| (p.name.clone(), a.clone()))
+            .collect()
     }
 }

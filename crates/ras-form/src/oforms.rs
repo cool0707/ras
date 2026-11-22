@@ -354,7 +354,11 @@ pub(crate) static TAB_STRIP: RecordSpec = RecordSpec {
     text_props: true,
     raw_tail: true,
     stream: &[(24, "MouseIcon")],
-    flags: &[(10, "MultiRow", 1), (13, "Tooltips", 0), (19, "NewVersion", 1)],
+    flags: &[
+        (10, "MultiRow", 1),
+        (13, "Tooltips", 0),
+        (19, "NewVersion", 1),
+    ],
     data: &[
         d(0, "ListIndex", 4, S),
         d(1, "BackColor", 4, U),
@@ -448,7 +452,10 @@ pub(crate) static PAGE_PROPERTIES: RecordSpec = RecordSpec {
     raw_tail: false,
     stream: &[],
     flags: &[],
-    data: &[d(1, "TransitionEffect", 4, U), d(2, "TransitionPeriod", 4, U)],
+    data: &[
+        d(1, "TransitionEffect", 4, U),
+        d(2, "TransitionPeriod", 4, U),
+    ],
     extra: &[],
 };
 
@@ -847,7 +854,10 @@ impl Site {
             b.extend_from_slice(&self.position.0.to_le_bytes());
             b.extend_from_slice(&self.position.1.to_le_bytes());
         }
-        for text in [&self.tip, &self.sources[0], &self.sources[1]].into_iter().flatten() {
+        for text in [&self.tip, &self.sources[0], &self.sources[1]]
+            .into_iter()
+            .flatten()
+        {
             b.extend_from_slice(&text.raw);
             pad(&mut b, 4);
         }
@@ -1046,7 +1056,8 @@ fn generated_vbframe(
         lines.push((key, value.clone()));
     }
     lines.sort_by_key(|(key, _)| DESIGNER_PROPERTIES.iter().position(|k| k == key));
-    let mut text = format!("VERSION 5.00\r\nBegin {{C62A69F0-16DC-11CE-9E98-00AA00574A4F}} {name}\r\n");
+    let mut text =
+        format!("VERSION 5.00\r\nBegin {{C62A69F0-16DC-11CE-9E98-00AA00574A4F}} {name}\r\n");
     for (key, value) in lines {
         text.push_str(&format!("   {key} = {value}\r\n"));
     }
@@ -1174,7 +1185,13 @@ pub(crate) fn new_form(input: &Definition, codepage: u16) -> Result<Form> {
     if input.size.0 < 0 || input.size.1 < 0 || input.controls.len() > i16::MAX as usize + 1 {
         return invalid("サイズまたはコントロール数が不正です");
     }
-    let vbframe = generated_vbframe(&input.name, &input.caption, input.size, &input.frame, codepage)?;
+    let vbframe = generated_vbframe(
+        &input.name,
+        &input.caption,
+        input.size,
+        &input.frame,
+        codepage,
+    )?;
     let mut g = Generation {
         levels: Vec::new(),
         names: Default::default(),
@@ -1285,7 +1302,9 @@ impl Generation {
                     // The tab settings of the MultiPage are the TabStrip's.
                     properties: properties
                         .iter()
-                        .filter(|(name, _)| crate::scalars::TAB_STRIP_FIELDS.contains(&name.as_str()))
+                        .filter(|(name, _)| {
+                            crate::scalars::TAB_STRIP_FIELDS.contains(&name.as_str())
+                        })
                         .map(|(name, value)| (name.clone(), value.clone()))
                         .collect(),
                     controls: Vec::new(),
@@ -1414,9 +1433,10 @@ impl Generation {
                     }
                 })?;
             }
-            if let (Some(text_props), Some(PValue::Int(bits))) =
-                (record.text_props.as_mut(), control.properties.get("VariousPropertyBits"))
-            {
+            if let (Some(text_props), Some(PValue::Int(bits))) = (
+                record.text_props.as_mut(),
+                control.properties.get("VariousPropertyBits"),
+            ) {
                 if bits & 2 == 0 && DISABLED_TEXT_CLASSES.contains(&control.class) {
                     // A disabled control: Excel keeps its text grayed in the font effects.
                     let effects = text_props.values.get("FontEffects").copied().unwrap_or(0);
@@ -1426,7 +1446,10 @@ impl Generation {
             if let Some(PValue::Str(text)) = control.properties.get("ColumnWidths") {
                 // The widths go to the MorphDataColumnInfo array after the TextProps.
                 let widths = crate::scalars::parse_column_widths(text).map_err(|e| {
-                    PersistError::Invalid(format!("コントロール {:?}: columnWidths: {e}", control.name))
+                    PersistError::Invalid(format!(
+                        "コントロール {:?}: columnWidths: {e}",
+                        control.name
+                    ))
                 })?;
                 if !widths.is_empty() {
                     record.set_int("cColumnInfo", widths.len() as i64)?;

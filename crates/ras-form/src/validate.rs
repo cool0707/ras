@@ -85,7 +85,10 @@ fn matches_type(value: &Value, value_type: ValueType) -> bool {
         (ValueType::Boolean, v) => v.is_boolean(),
         (ValueType::StringArray, Value::Array(items)) => items.iter().all(Value::is_string),
         (ValueType::ListItems, Value::Array(items)) => items.iter().all(|item| {
-            item.is_string() || item.as_array().is_some_and(|row| row.iter().all(Value::is_string))
+            item.is_string()
+                || item
+                    .as_array()
+                    .is_some_and(|row| row.iter().all(Value::is_string))
         }),
         (ValueType::Object, v) => v.is_object(),
         (ValueType::ObjectArray, Value::Array(items)) => items.iter().all(Value::is_object),
@@ -229,7 +232,12 @@ pub(crate) fn validate_raw(root: &Value) -> Vec<Issue> {
         issues.extend(validate_object(form, &contract::form_properties(), "form"));
         for field in ["picture", "mouseIcon"] {
             if let Some(value) = lookup_raw(form, field) {
-                issues.extend(validate_raw_picture(value, "UserForm", true, &format!("form.{field}")));
+                issues.extend(validate_raw_picture(
+                    value,
+                    "UserForm",
+                    true,
+                    &format!("form.{field}"),
+                ));
             }
         }
         if let Some(observed) = form.get("observed").and_then(Value::as_object) {
@@ -467,7 +475,12 @@ fn validate_raw_control_properties(
         ("mouseIcon", contract::takes_mouse_icon(control_type)),
     ] {
         if let Some(value) = lookup_raw(control, field) {
-            issues.extend(validate_raw_picture(value, control_type, takes, &format!("{path}.{field}")));
+            issues.extend(validate_raw_picture(
+                value,
+                control_type,
+                takes,
+                &format!("{path}.{field}"),
+            ));
         }
     }
     if let Some(tabs) = lookup_raw(control, "tabs") {
@@ -889,7 +902,10 @@ fn validate_font(font: Option<&FormSpecFont>, path: &str) -> Vec<Issue> {
             ));
         }
     }
-    for (name, value) in [("charset", font.charset), ("pitchAndFamily", font.pitch_and_family)] {
+    for (name, value) in [
+        ("charset", font.charset),
+        ("pitchAndFamily", font.pitch_and_family),
+    ] {
         if value.is_some_and(|v| !(0..=255).contains(&v)) {
             issues.push(appearance_issue(
                 &format!("{path}.{name}"),
@@ -995,7 +1011,11 @@ fn validate_scalars(control: &FormSpecControl, path: &str) -> Vec<Issue> {
         if let Err(message) = scalars::to_raw(p, value) {
             issues.push(appearance_issue(&field, format!("{message}。")));
         }
-        if let Some(legacy) = control.properties.as_ref().and_then(|bag| lookup_raw(bag, name)) {
+        if let Some(legacy) = control
+            .properties
+            .as_ref()
+            .and_then(|bag| lookup_raw(bag, name))
+        {
             if !legacy_equal(name, value, legacy) {
                 issues.push(appearance_issue(
                     &field,
@@ -1005,7 +1025,10 @@ fn validate_scalars(control: &FormSpecControl, path: &str) -> Vec<Issue> {
         }
     }
     if builtin
-        && control.scalar("rowSource").and_then(Value::as_str).is_some_and(|s| !s.is_empty())
+        && control
+            .scalar("rowSource")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
         && control.list.as_ref().is_some_and(|l| !l.is_empty())
     {
         // MSForms refuses AddItem on a list that comes from cells.
@@ -1017,7 +1040,10 @@ fn validate_scalars(control: &FormSpecControl, path: &str) -> Vec<Issue> {
     if builtin && matches!(control.control_type.as_str(), "SpinButton" | "ScrollBar") {
         let bound = |name: &str| {
             let p = scalars::find(&control.control_type, name).expect("min / max");
-            control.scalar(name).and_then(Value::as_i64).unwrap_or(p.omitted)
+            control
+                .scalar(name)
+                .and_then(Value::as_i64)
+                .unwrap_or(p.omitted)
         };
         let (min, max) = (bound("min"), bound("max"));
         let (lo, hi) = (min.min(max), min.max(max));
@@ -1166,7 +1192,10 @@ fn validate_selected_index(
 /// grow an edit field to its font: a lower one clips the text and leaves parts of
 /// glyphs and of the caret as stray lines along the edge.
 fn minimum_edit_height(control: &FormSpecControl) -> Option<f64> {
-    if !matches!(control.control_type.to_lowercase().as_str(), "textbox" | "combobox") {
+    if !matches!(
+        control.control_type.to_lowercase().as_str(),
+        "textbox" | "combobox"
+    ) {
         return None;
     }
     let bag = control.properties.as_ref();
@@ -1190,7 +1219,8 @@ fn minimum_edit_height(control: &FormSpecControl) -> Option<f64> {
     // Line height (ascent + descent) per point of size.
     let starts = |prefixes: &[&str]| prefixes.iter().any(|p| name.starts_with(p));
     let has = |parts: &[&str]| parts.iter().any(|p| name.contains(p));
-    let factor = if starts(&["ms", "ｍｓ"]) && has(&["gothic", "ゴシック", "mincho", "明朝"]) {
+    let factor = if starts(&["ms", "ｍｓ"]) && has(&["gothic", "ゴシック", "mincho", "明朝"])
+    {
         1.0
     } else if starts(&["meiryo ui", "メイリオ ui"]) {
         1.33
@@ -1235,7 +1265,11 @@ fn edge_issue(border_style: Option<i64>, effect: Option<&Value>, path: &str) -> 
 fn validate_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
     let mut issues = validate_typed_control(control, path);
     issues.extend(validate_scalars(control, path));
-    issues.extend(edge_issue(control.border_style, control.scalar("specialEffect"), path));
+    issues.extend(edge_issue(
+        control.border_style,
+        control.scalar("specialEffect"),
+        path,
+    ));
     if let (Some(minimum), Some(height)) = (minimum_edit_height(control), control.height) {
         if height < minimum {
             issues.push(issue(
@@ -1288,11 +1322,22 @@ fn validate_control(control: &FormSpecControl, path: &str) -> Vec<Issue> {
     }
     let is = |name: &str| control.control_type.trim().eq_ignore_ascii_case(name);
     for (field, given, takes) in [
-        ("picture", control.picture.is_some(), contract::takes_picture(&control.control_type)),
-        ("mouseIcon", control.mouse_icon.is_some(), contract::takes_mouse_icon(&control.control_type)),
+        (
+            "picture",
+            control.picture.is_some(),
+            contract::takes_picture(&control.control_type),
+        ),
+        (
+            "mouseIcon",
+            control.mouse_icon.is_some(),
+            contract::takes_mouse_icon(&control.control_type),
+        ),
     ] {
         if given && !takes {
-            issues.push(invalid_property_issue(&format!("{path}.{field}"), &control.control_type));
+            issues.push(invalid_property_issue(
+                &format!("{path}.{field}"),
+                &control.control_type,
+            ));
         }
     }
     if is("Page") {
@@ -1385,7 +1430,11 @@ pub(crate) fn validate_strict(spec: &FormSpec) -> Vec<Issue> {
         }
     }
     issues.extend(validate_typed_form(&spec.form));
-    issues.extend(edge_issue(spec.form.border_style, spec.form.scalar("specialEffect"), "form"));
+    issues.extend(edge_issue(
+        spec.form.border_style,
+        spec.form.scalar("specialEffect"),
+        "form",
+    ));
     let mut by_id: HashMap<&str, &FormSpecControl> = HashMap::new();
     for (i, control) in spec.controls.iter().enumerate() {
         let path = format!("controls[{i}]");

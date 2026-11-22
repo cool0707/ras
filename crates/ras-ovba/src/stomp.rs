@@ -109,7 +109,13 @@ mod tests {
         assert_eq!(pcode_line_count(&cache, 0x97), Some(3));
         let three = "Attribute VB_Name = \"M\"\r\nSub A()\r\nx = 1\r\nEnd Sub\r\n";
         assert_eq!(is_stomped(&cache, 0x97, three), Some(false));
-        assert_eq!(is_stomped(&cache, 0x97, "Attribute VB_Name = \"M\"\r\n"), Some(true));
-        assert_eq!(is_stomped(&cache, 0x97, "a\r\nb\r\nc\r\nd\r\ne\r\n"), Some(true));
+        assert_eq!(
+            is_stomped(&cache, 0x97, "Attribute VB_Name = \"M\"\r\n"),
+            Some(true)
+        );
+        assert_eq!(
+            is_stomped(&cache, 0x97, "a\r\nb\r\nc\r\nd\r\ne\r\n"),
+            Some(true)
+        );
     }
 }

@@ -4,32 +4,74 @@
 
 use std::path::PathBuf;
 
-use ras_compiler::{analyze, build, form_source, BuildOptions, Config, FormControl, FormDecl, ModuleKind, SourceInput};
+use ras_compiler::{
+    analyze, build, form_source, BuildOptions, Config, FormControl, FormDecl, ModuleKind,
+    SourceInput,
+};
 
 fn control(name: &str, ty: &str) -> FormControl {
-    FormControl { name: name.into(), control_type: ty.into() }
+    FormControl {
+        name: name.into(),
+        control_type: ty.into(),
+    }
 }
 
 fn compile(form: &str, src: &[(&str, &str)]) -> (Vec<String>, Vec<ras_compiler::OutputFile>) {
     let mut config = Config::default();
     config.forms = vec![FormDecl {
         name: "frmInput".into(),
-        controls: vec![control("txtName", "TextBox"), control("cboKind", "ComboBox"), control("btnOK", "CommandButton"), control("btnCancel", "CommandButton"), control("pages", "MultiPage"), control("page1", "Page")],
+        controls: vec![
+            control("txtName", "TextBox"),
+            control("cboKind", "ComboBox"),
+            control("btnOK", "CommandButton"),
+            control("btnCancel", "CommandButton"),
+            control("pages", "MultiPage"),
+            control("page1", "Page"),
+        ],
     }];
     let mut sources: Vec<SourceInput> = src
         .iter()
-        .map(|(key, text)| SourceInput { path: PathBuf::from(format!("src/{key}.ras")), rel_path: format!("src/{key}.ras"), key: key.to_string(), kind: ModuleKind::User, text: text.to_string() })
+        .map(|(key, text)| SourceInput {
+            path: PathBuf::from(format!("src/{key}.ras")),
+            rel_path: format!("src/{key}.ras"),
+            key: key.to_string(),
+            kind: ModuleKind::User,
+            text: text.to_string(),
+        })
         .collect();
-    sources.push(form_source(PathBuf::from("forms/frmInput.ras"), "frmInput", form.to_string()));
+    sources.push(form_source(
+        PathBuf::from("forms/frmInput.ras"),
+        "frmInput",
+        form.to_string(),
+    ));
     let prog = analyze(sources, config);
-    let out = build(&prog, &BuildOptions { erl: Some(false), ..Default::default() });
-    let mut diags: Vec<String> = prog.diagnostics.iter().chain(out.diagnostics.iter()).filter(|d| d.module.is_none_or(|m| prog.modules[m].kind == ModuleKind::User)).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    let out = build(
+        &prog,
+        &BuildOptions {
+            erl: Some(false),
+            ..Default::default()
+        },
+    );
+    let mut diags: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .chain(out.diagnostics.iter())
+        .filter(|d| {
+            d.module
+                .is_none_or(|m| prog.modules[m].kind == ModuleKind::User)
+        })
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
     diags.sort();
     (diags, out.files)
 }
 
 fn form_code(files: &[ras_compiler::OutputFile]) -> String {
-    files.iter().find(|f| f.name == "frmInput").map(|f| f.code.replace("\r\n", "\n")).unwrap_or_default()
+    files
+        .iter()
+        .find(|f| f.name == "frmInput")
+        .map(|f| f.code.replace("\r\n", "\n"))
+        .unwrap_or_default()
 }
 
 #[test]
@@ -59,22 +101,46 @@ export function selected(): string {
     return this.cboKind.text;
 }
 "#,
-        &[("main", "export function run() {\n    frmInput.show();\n    msgBox(frmInput.selected());\n}\n")],
+        &[(
+            "main",
+            "export function run() {\n    frmInput.show();\n    msgBox(frmInput.selected());\n}\n",
+        )],
     );
     assert!(diags.is_empty(), "{diags:?}");
     let code = form_code(&files);
     println!("{code}");
     assert!(code.contains("Private Sub btnOK_Click()"), "{code}");
-    assert!(code.contains("Private Sub txtName_Exit(ByVal Cancel As MSForms.ReturnBoolean)"), "{code}");
-    assert!(code.contains("Private Sub UserForm_QueryClose(ByRef Cancel As Integer, ByRef CloseMode As Integer)"), "{code}");
+    assert!(
+        code.contains("Private Sub txtName_Exit(ByVal Cancel As MSForms.ReturnBoolean)"),
+        "{code}"
+    );
+    assert!(
+        code.contains(
+            "Private Sub UserForm_QueryClose(ByRef Cancel As Integer, ByRef CloseMode As Integer)"
+        ),
+        "{code}"
+    );
     assert!(code.contains("Private Sub UserForm_Initialize()"), "{code}");
     assert!(code.contains("Me.txtName.Text = "), "{code}");
     assert!(code.contains("Unload Me"), "{code}");
-    assert!(code.contains("Public Function selected() As String"), "{code}");
+    assert!(
+        code.contains("Public Function selected() As String"),
+        "{code}"
+    );
     assert!(!code.contains("Attribute VB_Name"));
     // "Run in Excel" of a form calls the runtime's helper through Application.Run.
-    let runtime = files.iter().find(|f| f.name == "RAS_Runtime").expect("runtime module");
-    assert!(runtime.code.contains("Public Sub RAS_ShowForm(ByVal name As String)") && runtime.code.contains("VBA.UserForms.Add(name).Show"), "{}", runtime.code);
+    let runtime = files
+        .iter()
+        .find(|f| f.name == "RAS_Runtime")
+        .expect("runtime module");
+    assert!(
+        runtime
+            .code
+            .contains("Public Sub RAS_ShowForm(ByVal name As String)")
+            && runtime.code.contains("VBA.UserForms.Add(name).Show"),
+        "{}",
+        runtime.code
+    );
     let main = files.iter().find(|f| f.name == "Main").unwrap();
     println!("{}", main.code);
     assert!(main.code.contains("frmInput.Show"), "{}", main.code);
@@ -83,7 +149,10 @@ export function selected(): string {
 
 #[test]
 fn errors_in_code_behind() {
-    let (diags, _) = compile("class Foo {}\nconsole.log(1);\n@macro\nfunction m() {}\nexport let x = 1;\n", &[]);
+    let (diags, _) = compile(
+        "class Foo {}\nconsole.log(1);\n@macro\nfunction m() {}\nexport let x = 1;\n",
+        &[],
+    );
     let codes: Vec<&str> = diags.iter().map(|d| d.split(':').next().unwrap()).collect();
     assert_eq!(codes, ["E0630", "E0630", "E0630", "E0632"], "{diags:?}");
 }
@@ -116,7 +185,14 @@ function e() {}
 fn missing_design() {
     let mut config = Config::default();
     config.forms.clear();
-    let prog = analyze(vec![form_source(PathBuf::from("forms/frmX.ras"), "frmX", "function f() {}\n".into())], config);
+    let prog = analyze(
+        vec![form_source(
+            PathBuf::from("forms/frmX.ras"),
+            "frmX",
+            "function f() {}\n".into(),
+        )],
+        config,
+    );
     assert!(prog.diagnostics.iter().any(|d| d.code == "E0631"));
 }
 
@@ -195,7 +271,13 @@ End Sub
 fn vba_code_behind_converts_to_ras_that_compiles() {
     let decl = FormDecl {
         name: "frmInput".into(),
-        controls: vec![control("txtName", "TextBox"), control("cboKind", "ComboBox"), control("btnOK", "CommandButton"), control("pages", "MultiPage"), control("page1", "Page")],
+        controls: vec![
+            control("txtName", "TextBox"),
+            control("cboKind", "ComboBox"),
+            control("btnOK", "CommandButton"),
+            control("pages", "MultiPage"),
+            control("page1", "Page"),
+        ],
     };
     let converted = ras_compiler::vba2ras::convert_form(SAMPLE_VBA, &decl);
     println!("{}", converted.text);
@@ -204,7 +286,13 @@ fn vba_code_behind_converts_to_ras_that_compiles() {
     assert!(diags.iter().all(|d| !d.starts_with('E')), "{diags:?}");
     let code = form_code(&files);
     println!("{code}");
-    for proc in ["Private Sub UserForm_Initialize()", "Private Sub btnOK_Click()", "Private Sub txtName_Exit(ByVal Cancel As MSForms.ReturnBoolean)", "Private Sub UserForm_QueryClose(", "Public Function Total("] {
+    for proc in [
+        "Private Sub UserForm_Initialize()",
+        "Private Sub btnOK_Click()",
+        "Private Sub txtName_Exit(ByVal Cancel As MSForms.ReturnBoolean)",
+        "Private Sub UserForm_QueryClose(",
+        "Public Function Total(",
+    ] {
         assert!(code.contains(proc), "{proc} missing:\n{code}");
     }
 }
@@ -254,24 +342,55 @@ End Property
 fn unsupported_vba_is_kept_as_todo() {
     let decl = FormDecl {
         name: "frmInput".into(),
-        controls: vec![control("txtName", "TextBox"), control("cboKind", "ComboBox"), control("btnOK", "CommandButton"), control("chk", "CheckBox")],
+        controls: vec![
+            control("txtName", "TextBox"),
+            control("cboKind", "ComboBox"),
+            control("btnOK", "CommandButton"),
+            control("chk", "CheckBox"),
+        ],
     };
     let converted = ras_compiler::vba2ras::convert_form(HARD_VBA, &decl);
     println!("{}", converted.text);
     println!("{:?}", converted.todos);
     let reasons: Vec<&str> = converted.todos.iter().map(|t| t.1.as_str()).collect();
-    for needle in ["ユーザー定義型", "Like", "ReDim", "GoTo", "行ラベル", "Property"] {
-        assert!(reasons.iter().any(|r| r.contains(needle)), "{needle} not reported: {reasons:?}");
+    for needle in [
+        "ユーザー定義型",
+        "Like",
+        "ReDim",
+        "GoTo",
+        "行ラベル",
+        "Property",
+    ] {
+        assert!(
+            reasons.iter().any(|r| r.contains(needle)),
+            "{needle} not reported: {reasons:?}"
+        );
     }
     // Every TODO line points at the comment.
     let lines: Vec<&str> = converted.text.lines().collect();
     for (line, _) in &converted.todos {
-        assert!(lines[line - 1].trim_start().starts_with("// TODO(VBA):"), "{}", lines[line - 1]);
+        assert!(
+            lines[line - 1].trim_start().starts_with("// TODO(VBA):"),
+            "{}",
+            lines[line - 1]
+        );
     }
     let mut config = Config::default();
     config.forms = vec![decl];
-    let prog = analyze(vec![form_source(PathBuf::from("forms/frmInput.ras"), "frmInput", converted.text.clone())], config);
-    let errors: Vec<String> = prog.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{}: {}", d.code, d.message)).collect();
+    let prog = analyze(
+        vec![form_source(
+            PathBuf::from("forms/frmInput.ras"),
+            "frmInput",
+            converted.text.clone(),
+        )],
+        config,
+    );
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
     assert!(errors.is_empty(), "{errors:?}");
 }
 
@@ -295,19 +414,62 @@ function changed() {
     assert!(diags.is_empty(), "{diags:?}");
     // With `Erl` line numbers, as `ras pack` writes the form.
     let mut config = Config::default();
-    config.forms = vec![FormDecl { name: "frmInput".into(), controls: vec![control("txtName", "TextBox"), control("btnOK", "CommandButton")] }];
-    let prog = analyze(vec![form_source(PathBuf::from("forms/frmInput.ras"), "frmInput", source.to_string())], config.clone());
+    config.forms = vec![FormDecl {
+        name: "frmInput".into(),
+        controls: vec![
+            control("txtName", "TextBox"),
+            control("btnOK", "CommandButton"),
+        ],
+    }];
+    let prog = analyze(
+        vec![form_source(
+            PathBuf::from("forms/frmInput.ras"),
+            "frmInput",
+            source.to_string(),
+        )],
+        config.clone(),
+    );
     let out = build(&prog, &BuildOptions::default());
-    let vba = out.files.iter().find(|f| f.name == "frmInput").unwrap().code.clone();
-    assert!(vba.lines().any(|l| l.starts_with(|c: char| c.is_ascii_digit())), "{vba}");
+    let vba = out
+        .files
+        .iter()
+        .find(|f| f.name == "frmInput")
+        .unwrap()
+        .code
+        .clone();
+    assert!(
+        vba.lines()
+            .any(|l| l.starts_with(|c: char| c.is_ascii_digit())),
+        "{vba}"
+    );
     let _ = files;
     let converted = ras_compiler::vba2ras::convert_form(&vba, &config.forms[0]);
     println!("{}", converted.text);
     assert!(converted.todos.is_empty(), "{:?}", converted.todos);
-    assert!(converted.text.contains("let count: int = 5;"), "{}", converted.text);
-    assert!(converted.text.contains("@on(\"btnOK.Click\")\nfunction ok() {"), "{}", converted.text);
-    assert!(converted.text.contains("@on(\"txtName.Change\", { reentrant: true })\nfunction changed() {"), "{}", converted.text);
-    assert!(!converted.text.contains("RAS_EventError") && !converted.text.contains("ras_busy"), "{}", converted.text);
+    assert!(
+        converted.text.contains("let count: int = 5;"),
+        "{}",
+        converted.text
+    );
+    assert!(
+        converted
+            .text
+            .contains("@on(\"btnOK.Click\")\nfunction ok() {"),
+        "{}",
+        converted.text
+    );
+    assert!(
+        converted
+            .text
+            .contains("@on(\"txtName.Change\", { reentrant: true })\nfunction changed() {"),
+        "{}",
+        converted.text
+    );
+    assert!(
+        !converted.text.contains("RAS_EventError") && !converted.text.contains("ras_busy"),
+        "{}",
+        converted.text
+    );
     let (diags, _) = compile(&converted.text, &[]);
     assert!(diags.is_empty(), "{diags:?}");
 }
@@ -316,12 +478,25 @@ function changed() {
 fn editor_completes_controls_and_form_members() {
     let labels = |line: &str| -> Vec<String> {
         let mut config = Config::default();
-        config.forms = vec![FormDecl { name: "frmInput".into(), controls: vec![control("txtName", "TextBox")] }];
+        config.forms = vec![FormDecl {
+            name: "frmInput".into(),
+            controls: vec![control("txtName", "TextBox")],
+        }];
         let text = format!("@on(\"UserForm.Initialize\")\nfunction init() {{\n    {line}\n}}\n");
-        let prog = analyze(vec![form_source(PathBuf::from("forms/frmInput.ras"), "frmInput", text.clone())], config);
+        let prog = analyze(
+            vec![form_source(
+                PathBuf::from("forms/frmInput.ras"),
+                "frmInput",
+                text.clone(),
+            )],
+            config,
+        );
         let m = prog.modules.iter().position(|m| m.form.is_some()).unwrap();
         let offset = text.find(line).unwrap() + line.len();
-        ras_compiler::query::completions(&prog, m, offset as u32).into_iter().map(|c| c.label).collect()
+        ras_compiler::query::completions(&prog, m, offset as u32)
+            .into_iter()
+            .map(|c| c.label)
+            .collect()
     };
     let this = labels("this.");
     for want in ["txtName", "caption", "hide", "controls"] {
@@ -392,17 +567,51 @@ End Function
 fn common_form_code_converts() {
     let decl = FormDecl {
         name: "frmList".into(),
-        controls: vec![control("lstItems", "ListBox"), control("lblCount", "Label"), control("txtQty", "TextBox"), control("chkAll", "CheckBox"), control("btnClose", "CommandButton")],
+        controls: vec![
+            control("lstItems", "ListBox"),
+            control("lblCount", "Label"),
+            control("txtQty", "TextBox"),
+            control("chkAll", "CheckBox"),
+            control("btnClose", "CommandButton"),
+        ],
     };
     let converted = ras_compiler::vba2ras::convert_form(COMMON_VBA, &decl);
     println!("{}", converted.text);
     println!("{:?}", converted.todos);
     let mut config = Config::default();
     config.forms = vec![decl];
-    let prog = analyze(vec![form_source(PathBuf::from("forms/frmList.ras"), "frmList", converted.text.clone())], config);
-    let errors: Vec<String> = prog.diagnostics.iter().filter(|d| d.is_error()).map(|d| format!("{}:{}: {}", d.code, prog.modules[d.module.unwrap()].line_col_utf16(d.span.start().into()).0 + 1, d.message)).collect();
+    let prog = analyze(
+        vec![form_source(
+            PathBuf::from("forms/frmList.ras"),
+            "frmList",
+            converted.text.clone(),
+        )],
+        config,
+    );
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| {
+            format!(
+                "{}:{}: {}",
+                d.code,
+                prog.modules[d.module.unwrap()]
+                    .line_col_utf16(d.span.start().into())
+                    .0
+                    + 1,
+                d.message
+            )
+        })
+        .collect();
     assert!(errors.is_empty(), "{errors:?}");
-    assert!(converted.text.contains("if (KeyAscii.value >= asc(\"0\") && KeyAscii.value <= asc(\"9\")) {"), "{}", converted.text);
+    assert!(
+        converted
+            .text
+            .contains("if (KeyAscii.value >= asc(\"0\") && KeyAscii.value <= asc(\"9\")) {"),
+        "{}",
+        converted.text
+    );
     assert_eq!(converted.todos.len(), 1, "{:?}", converted.todos);
     assert!(converted.todos[0].1.contains("引数を取るプロパティ"));
 }
@@ -428,13 +637,31 @@ fn with_events_in_a_code_behind() {
     );
     assert!(diags.iter().all(|d| !d.starts_with('E')), "{diags:#?}");
     let code = form_code(&files);
-    assert!(code.contains("Private WithEvents sheet As Worksheet"), "{code}");
-    assert!(code.contains("Private Sub sheet_Change(ByVal Target As Range)"), "{code}");
-    assert!(code.contains("RAS_EventError \"frmInput.sheet_Change\""), "{code}");
+    assert!(
+        code.contains("Private WithEvents sheet As Worksheet"),
+        "{code}"
+    );
+    assert!(
+        code.contains("Private Sub sheet_Change(ByVal Target As Range)"),
+        "{code}"
+    );
+    assert!(
+        code.contains("RAS_EventError \"frmInput.sheet_Change\""),
+        "{code}"
+    );
 }
 
 fn file(files: &[ras_compiler::OutputFile], name: &str) -> String {
-    files.iter().find(|f| f.name == name).map(|f| f.code.replace("\r\n", "\n")).unwrap_or_else(|| panic!("no module {name} in {:?}", files.iter().map(|f| &f.name).collect::<Vec<_>>()))
+    files
+        .iter()
+        .find(|f| f.name == name)
+        .map(|f| f.code.replace("\r\n", "\n"))
+        .unwrap_or_else(|| {
+            panic!(
+                "no module {name} in {:?}",
+                files.iter().map(|f| &f.name).collect::<Vec<_>>()
+            )
+        })
 }
 
 /// `control.on("Click", handler)` (spec §12.2.3): a class with a `WithEvents` variable listens
@@ -469,35 +696,88 @@ function init() {
     assert!(diags.is_empty(), "{diags:?}");
     let code = form_code(&files);
     // The form of the code is the owner of its listeners; they go when it is unloaded.
-    assert!(code.contains("RAS_Listen New RAS_On_CommandButton_Click, Me.btnOK, ras_t1, 0&, Me"), "{code}");
-    assert!(code.contains("Dim l As Object") && code.contains("Set l = RAS_Listen(New RAS_On_TextBox_Change, c, ras_t"), "{code}");
+    assert!(
+        code.contains("RAS_Listen New RAS_On_CommandButton_Click, Me.btnOK, ras_t1, 0&, Me"),
+        "{code}"
+    );
+    assert!(
+        code.contains("Dim l As Object")
+            && code.contains("Set l = RAS_Listen(New RAS_On_TextBox_Change, c, ras_t"),
+        "{code}"
+    );
     assert!(code.contains("l.off"), "{code}");
-    assert!(code.contains("Private Sub UserForm_Terminate()") && code.contains("RAS_UnlistenOwner Me"), "{code}");
+    assert!(
+        code.contains("Private Sub UserForm_Terminate()") && code.contains("RAS_UnlistenOwner Me"),
+        "{code}"
+    );
     // What the closures use of the form is public: they are other classes.
-    assert!(code.contains("Public count As Long") && code.contains("Public Sub bump()") && code.contains("Public Sub ok()") && code.contains("Public Sub keyDown("), "{code}");
+    assert!(
+        code.contains("Public count As Long")
+            && code.contains("Public Sub bump()")
+            && code.contains("Public Sub ok()")
+            && code.contains("Public Sub keyDown("),
+        "{code}"
+    );
     assert!(code.contains("Private Const LIMIT As Long = 20&"), "{code}");
 
     let click = file(&files, "RAS_On_CommandButton_Click");
-    assert!(click.contains("Private WithEvents ras_target As MSForms.CommandButton"), "{click}");
-    assert!(click.contains("Private Sub ras_target_Click()") && click.contains("ras_handler.Apply\n"), "{click}");
-    assert!(click.contains("Public Sub Off()") && click.contains("RAS_Unlisten Me"), "{click}");
-    assert!(click.contains("RAS_EventError \"CommandButton.Click\""), "{click}");
+    assert!(
+        click.contains("Private WithEvents ras_target As MSForms.CommandButton"),
+        "{click}"
+    );
+    assert!(
+        click.contains("Private Sub ras_target_Click()") && click.contains("ras_handler.Apply\n"),
+        "{click}"
+    );
+    assert!(
+        click.contains("Public Sub Off()") && click.contains("RAS_Unlisten Me"),
+        "{click}"
+    );
+    assert!(
+        click.contains("RAS_EventError \"CommandButton.Click\""),
+        "{click}"
+    );
     // One class for an event, whatever number of arguments its handlers take.
     let mouse = file(&files, "RAS_On_TextBox_MouseMove");
     assert!(mouse.contains("Private Sub ras_target_MouseMove(ByVal Button As Integer, ByVal Shift As Integer, ByVal X As Single, ByVal Y As Single)"), "{mouse}");
-    assert!(mouse.contains("Case 1&\n        ras_handler.Apply Button\n") && mouse.contains("Case 3&\n        ras_handler.Apply Button, Shift, X\n"), "{mouse}");
+    assert!(
+        mouse.contains("Case 1&\n        ras_handler.Apply Button\n")
+            && mouse.contains("Case 3&\n        ras_handler.Apply Button, Shift, X\n"),
+        "{mouse}"
+    );
 
     // The closures reach the form they were created in, not the default instance.
-    let lambdas: Vec<String> = files.iter().filter(|f| f.name.starts_with("RAS_Lambda_")).map(|f| f.code.replace("\r\n", "\n")).collect();
+    let lambdas: Vec<String> = files
+        .iter()
+        .filter(|f| f.name.starts_with("RAS_Lambda_"))
+        .map(|f| f.code.replace("\r\n", "\n"))
+        .collect();
     let all = lambdas.join("\n");
     assert!(!all.contains("frmInput."), "{all}");
-    assert!(all.contains("Me.Captured_Me.bump") && all.contains("Me.Captured_Me.count = Me.Captured_Me.count + 2&"), "{all}");
-    assert!(all.contains("Me.Captured_Me.Caption = \"n=\" & CStr(Me.Captured_Me.count) & \"/\" & CStr(20&)"), "{all}");
-    assert!(all.contains("Me.Captured_Me.ok\n") && all.contains("Me.Captured_Me.keyDown a1, a2"), "{all}");
+    assert!(
+        all.contains("Me.Captured_Me.bump")
+            && all.contains("Me.Captured_Me.count = Me.Captured_Me.count + 2&"),
+        "{all}"
+    );
+    assert!(
+        all.contains(
+            "Me.Captured_Me.Caption = \"n=\" & CStr(Me.Captured_Me.count) & \"/\" & CStr(20&)"
+        ),
+        "{all}"
+    );
+    assert!(
+        all.contains("Me.Captured_Me.ok\n") && all.contains("Me.Captured_Me.keyDown a1, a2"),
+        "{all}"
+    );
     assert!(all.contains("Me.Captured_c.BackColor = "), "{all}");
 
     let runtime = file(&files, "RAS_Runtime");
-    for proc in ["Function RAS_Listen(", "Sub RAS_Unlisten(", "Sub RAS_UnlistenOwner(", "Private ras_listeners As Collection"] {
+    for proc in [
+        "Function RAS_Listen(",
+        "Sub RAS_Unlisten(",
+        "Sub RAS_UnlistenOwner(",
+        "Private ras_listeners As Collection",
+    ] {
         assert!(runtime.contains(proc), "{proc} missing in the runtime");
     }
 }
@@ -524,8 +804,17 @@ function init() {
         &[],
     );
     let codes: Vec<&str> = diags.iter().map(|d| d.split(':').next().unwrap()).collect();
-    assert_eq!(codes, ["E0301", "E0611", "E0611", "E0611", "E0612", "E0612", "E0612", "E0616", "E0616"], "{diags:?}");
-    assert!(diags.iter().any(|d| d.contains("@on(\"<コントロール名>.Exit\")")), "{diags:?}");
+    assert_eq!(
+        codes,
+        ["E0301", "E0611", "E0611", "E0611", "E0612", "E0612", "E0612", "E0616", "E0616"],
+        "{diags:?}"
+    );
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.contains("@on(\"<コントロール名>.Exit\")")),
+        "{diags:?}"
+    );
 }
 
 /// An arrow function in a form's code-behind is another class: `this` and the functions and
@@ -548,7 +837,11 @@ function init() {
     assert!(diags.iter().all(|d| d.starts_with("I0641")), "{diags:?}");
     let lambda = file(&files, "RAS_Lambda_001");
     assert!(lambda.contains("Public Captured_Me As Object"), "{lambda}");
-    assert!(lambda.contains("Me.Captured_Me.bump") && lambda.contains("Me.Captured_Me.Caption = \"n=\" & CStr(Me.Captured_Me.count)"), "{lambda}");
+    assert!(
+        lambda.contains("Me.Captured_Me.bump")
+            && lambda.contains("Me.Captured_Me.Caption = \"n=\" & CStr(Me.Captured_Me.count)"),
+        "{lambda}"
+    );
     let code = form_code(&files);
     assert!(code.contains("Set ras_t1.Captured_Me = Me"), "{code}");
     // No listeners: nothing to take off.
@@ -586,8 +879,15 @@ fn spec_example_of_on_compiles() {
     assert!(code.contains("    Set ras_t1 = New RAS_Lambda_001\n    Set ras_t1.Captured_Me = Me\n    RAS_Listen New RAS_On_CommandButton_Click, Me.btnOK, ras_t1, 0&, Me\n"), "{code}");
     let listener = file(&files, "RAS_On_CommandButton_Click");
     let shown = &text[text.find("  ' RAS_On_CommandButton_Click.cls\n").unwrap()..];
-    let shown: String = shown[..shown.find("  ```").unwrap()].lines().skip(1).map(|l| format!("{}\n", l.strip_prefix("  ").unwrap_or(l))).collect();
-    assert!(listener.ends_with(&shown), "the spec shows:\n{shown}\nthe compiler writes:\n{listener}");
+    let shown: String = shown[..shown.find("  ```").unwrap()]
+        .lines()
+        .skip(1)
+        .map(|l| format!("{}\n", l.strip_prefix("  ").unwrap_or(l)))
+        .collect();
+    assert!(
+        listener.ends_with(&shown),
+        "the spec shows:\n{shown}\nthe compiler writes:\n{listener}"
+    );
 }
 
 /// `on` of the collection of the controls, of an array and of a control whose kind is not
@@ -615,10 +915,22 @@ function init() {
     );
     assert!(diags.is_empty(), "{diags:?}");
     let code = form_code(&files);
-    assert!(code.contains("RAS_OnEach_Change Me.Controls, ras_t1, 256&, Me"), "{code}");
-    assert!(code.contains("RAS_OnEach_KeyDown Me.Controls, ras_t2, 257&, Me"), "{code}");
-    assert!(code.contains("RAS_OnEach_Change boxes, ras_t3, 0&, Me"), "{code}");
-    assert!(code.contains("Set l = RAS_OnAny_Click(c, ras_t4, 0&, Me)"), "{code}");
+    assert!(
+        code.contains("RAS_OnEach_Change Me.Controls, ras_t1, 256&, Me"),
+        "{code}"
+    );
+    assert!(
+        code.contains("RAS_OnEach_KeyDown Me.Controls, ras_t2, 257&, Me"),
+        "{code}"
+    );
+    assert!(
+        code.contains("RAS_OnEach_Change boxes, ras_t3, 0&, Me"),
+        "{code}"
+    );
+    assert!(
+        code.contains("Set l = RAS_OnAny_Click(c, ras_t4, 0&, Me)"),
+        "{code}"
+    );
     let events = file(&files, "RAS_Events");
     println!("{events}");
     assert!(events.contains("Option Private Module"), "{events}");
@@ -626,13 +938,31 @@ function init() {
     assert!(events.contains("Case \"TextBox\"\n        Set RAS_OnAny_Change = RAS_Listen(New RAS_On_TextBox_Change, target, handler, argc, owner)\n"), "{events}");
     assert!(events.contains("Public Sub RAS_OnEach_Change(ByRef targets As Variant, ByVal handler As Object, ByVal argc As Long, ByVal owner As Object)") && events.contains("    For Each t In targets\n        RAS_OnAny_Change t, handler, argc, owner\n    Next t\n"), "{events}");
     // A control without the event (a label has no `Change`) is left alone.
-    assert!(!events.contains("RAS_On_Label_Change") && events.contains("RAS_On_Label_Click"), "{events}");
+    assert!(
+        !events.contains("RAS_On_Label_Change") && events.contains("RAS_On_Label_Click"),
+        "{events}"
+    );
     assert!(!events.contains("RAS_OnEach_Click"), "{events}");
     // The handler of a member gets the member, then the arguments of the event.
     let change = file(&files, "RAS_On_TextBox_Change");
-    assert!(change.contains("Case 0&\n        ras_handler.Apply\n") && change.contains("Case 256&\n        ras_handler.Apply ras_target\n"), "{change}");
+    assert!(
+        change.contains("Case 0&\n        ras_handler.Apply\n")
+            && change.contains("Case 256&\n        ras_handler.Apply ras_target\n"),
+        "{change}"
+    );
     let key = file(&files, "RAS_On_TextBox_KeyDown");
-    assert!(key.contains("    ras_handler.Apply ras_target, KeyCode\n"), "{key}");
-    let lambdas: String = files.iter().filter(|f| f.name.starts_with("RAS_Lambda_")).map(|f| f.code.replace("\r\n", "\n")).collect();
-    assert!(lambdas.contains("Public Function Apply(ByVal c As Variant) As Variant") && lambdas.contains("Me.Captured_Me.pressed a1, a2"), "{lambdas}");
+    assert!(
+        key.contains("    ras_handler.Apply ras_target, KeyCode\n"),
+        "{key}"
+    );
+    let lambdas: String = files
+        .iter()
+        .filter(|f| f.name.starts_with("RAS_Lambda_"))
+        .map(|f| f.code.replace("\r\n", "\n"))
+        .collect();
+    assert!(
+        lambdas.contains("Public Function Apply(ByVal c As Variant) As Variant")
+            && lambdas.contains("Me.Captured_Me.pressed a1, a2"),
+        "{lambdas}"
+    );
 }

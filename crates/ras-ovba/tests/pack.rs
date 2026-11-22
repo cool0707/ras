@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use common::*;
 use ras_ovba::{
-    create_workbook, pack, read_project_bin, unpack, workbook_code_names,
-    BookKind, DocumentCode, ModuleKind, OvbaError, PackReport, PackRequest, VbaModule,
+    create_workbook, pack, read_project_bin, unpack, workbook_code_names, BookKind, DocumentCode,
+    ModuleKind, OvbaError, PackReport, PackRequest, VbaModule,
 };
 
 const CT_VBA: &str = "application/vnd.ms-office.vbaProject";
@@ -41,7 +41,10 @@ fn new_book(dir: &Path, file: &str, kind: BookKind, sheets: &[&str]) -> PathBuf 
 }
 
 fn request(book: &Path) -> PackRequest {
-    PackRequest { book: book.to_path_buf(), ..PackRequest::default() }
+    PackRequest {
+        book: book.to_path_buf(),
+        ..PackRequest::default()
+    }
 }
 
 fn base_request(book: &Path) -> PackRequest {
@@ -62,11 +65,19 @@ fn base_request(book: &Path) -> PackRequest {
 }
 
 fn sources(book: &Path) -> Vec<VbaModule> {
-    unpack(book).unwrap().project.expect("workbook has a project").modules
+    unpack(book)
+        .unwrap()
+        .project
+        .expect("workbook has a project")
+        .modules
 }
 
 fn source_of(book: &Path, name: &str) -> String {
-    sources(book).into_iter().find(|m| m.name == name).unwrap_or_else(|| panic!("module {name}")).source
+    sources(book)
+        .into_iter()
+        .find(|m| m.name == name)
+        .unwrap_or_else(|| panic!("module {name}"))
+        .source
 }
 
 fn sorted(mut names: Vec<String>) -> Vec<String> {
@@ -104,11 +115,15 @@ fn created_workbook_is_a_valid_empty_package() {
         ]
     );
     assert!(zip_text(&path, "[Content_Types].xml").contains(CT_XLSM));
-    assert!(zip_text(&path, "xl/workbook.xml").contains("<sheet name=\"Sheet &lt;2&gt;\" sheetId=\"2\" r:id=\"rId2\"/>"));
+    assert!(zip_text(&path, "xl/workbook.xml")
+        .contains("<sheet name=\"Sheet &lt;2&gt;\" sheetId=\"2\" r:id=\"rId2\"/>"));
     let code_names = workbook_code_names(&path).unwrap();
     assert_eq!(code_names.workbook, "ThisWorkbook");
-    let listed: Vec<(&str, &str)> =
-        code_names.sheets.iter().map(|s| (s.sheet_name.as_str(), s.code_name.as_str())).collect();
+    let listed: Vec<(&str, &str)> = code_names
+        .sheets
+        .iter()
+        .map(|s| (s.sheet_name.as_str(), s.code_name.as_str()))
+        .collect();
     assert_eq!(listed, vec![("データ", "Sheet1"), ("Sheet <2>", "Sheet2")]);
 
     let unpacked = unpack(&path).unwrap();
@@ -149,22 +164,34 @@ fn pack_creates_a_project_and_unpack_returns_it() {
         module(
             ModuleKind::Document,
             "ThisWorkbook",
-            &format!("{}Private Sub Workbook_Open()\r\n    Call 起動\r\nEnd Sub\r\n", workbook_header()),
+            &format!(
+                "{}Private Sub Workbook_Open()\r\n    Call 起動\r\nEnd Sub\r\n",
+                workbook_header()
+            ),
         ),
         module(
             ModuleKind::Document,
             "Sheet1",
-            &format!("{}Private Sub Worksheet_Activate()\r\nEnd Sub\r\n", sheet_header("Sheet1")),
+            &format!(
+                "{}Private Sub Worksheet_Activate()\r\nEnd Sub\r\n",
+                sheet_header("Sheet1")
+            ),
         ),
         module(ModuleKind::Document, "Sheet2", &sheet_header("Sheet2")),
-        standard("集計", &format!("Attribute VB_Name = \"集計\"\r\n{JP_SOURCE}")),
+        standard(
+            "集計",
+            &format!("Attribute VB_Name = \"集計\"\r\n{JP_SOURCE}"),
+        ),
         class("Counter", CLASS_SOURCE),
     ];
     assert_eq!(project.modules, expected);
 
     // --- the independent `ovba` crate reads the same thing ------------------
     let bin = zip_entry(&book, "xl/vbaProject.bin").unwrap();
-    let ours: Vec<(String, String)> = expected.iter().map(|m| (m.name.clone(), m.source.clone())).collect();
+    let ours: Vec<(String, String)> = expected
+        .iter()
+        .map(|m| (m.name.clone(), m.source.clone()))
+        .collect();
     assert_eq!(ovba_modules(&bin), ours);
     let project = ovba::open_project(bin.clone()).unwrap();
     assert_eq!(project.information.code_page, 932);
@@ -172,16 +199,31 @@ fn pack_creates_a_project_and_unpack_returns_it() {
 
     // --- package plumbing ------------------------------------------------------
     let content_types = zip_text(&book, "[Content_Types].xml");
-    assert!(content_types.contains(&format!("<Default Extension=\"bin\" ContentType=\"{CT_VBA}\"/>")));
-    assert!(content_types.contains(&format!("<Override PartName=\"/xl/workbook.xml\" ContentType=\"{CT_XLSM}\"/>")));
+    assert!(content_types.contains(&format!(
+        "<Default Extension=\"bin\" ContentType=\"{CT_VBA}\"/>"
+    )));
+    assert!(content_types.contains(&format!(
+        "<Override PartName=\"/xl/workbook.xml\" ContentType=\"{CT_XLSM}\"/>"
+    )));
     let rels = zip_text(&book, "xl/_rels/workbook.xml.rels");
-    assert!(rels.contains(&format!("<Relationship Id=\"rId4\" Type=\"{REL_VBA}\" Target=\"vbaProject.bin\"/></Relationships>")));
-    assert_eq!(zip_names(&book).last().map(String::as_str), Some("xl/vbaProject.bin"));
+    assert!(rels.contains(&format!(
+        "<Relationship Id=\"rId4\" Type=\"{REL_VBA}\" Target=\"vbaProject.bin\"/></Relationships>"
+    )));
+    assert_eq!(
+        zip_names(&book).last().map(String::as_str),
+        Some("xl/vbaProject.bin")
+    );
 
     // --- everything else is copied raw, without recompression --------------
     let original = dir.join("original.zip");
     fs::write(&original, &before).unwrap();
-    for name in ["_rels/.rels", "xl/workbook.xml", "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml", "xl/styles.xml"] {
+    for name in [
+        "_rels/.rels",
+        "xl/workbook.xml",
+        "xl/worksheets/sheet1.xml",
+        "xl/worksheets/sheet2.xml",
+        "xl/styles.xml",
+    ] {
         assert_eq!(zip_raw(&book, name), zip_raw(&original, name), "{name}");
     }
     // No temporary files are left behind.
@@ -198,13 +240,20 @@ fn pack_is_idempotent() {
     let dir = fresh_dir("idempotent");
     let book = new_book(&dir, "book.xlsm", BookKind::Xlsm, &["Sheet1", "Sheet2"]);
     let backups = dir.join("backup");
-    let req = PackRequest { backup_dir: Some(backups.clone()), backup_generations: 5, ..base_request(&book) };
+    let req = PackRequest {
+        backup_dir: Some(backups.clone()),
+        backup_generations: 5,
+        ..base_request(&book)
+    };
     pack(&req).unwrap();
     let after_first = fs::read(&book).unwrap();
     assert_eq!(fs::read_dir(&backups).unwrap().count(), 1); // the empty workbook
 
     let report = pack(&req).unwrap();
-    assert_no_changes(&report, &["ThisWorkbook", "Sheet1", "Sheet2", "集計", "Counter"]);
+    assert_no_changes(
+        &report,
+        &["ThisWorkbook", "Sheet1", "Sheet2", "集計", "Counter"],
+    );
     assert!(report.warnings.is_empty());
     // Nothing was rewritten and no further backup was taken.
     assert_eq!(fs::read(&book).unwrap(), after_first);
@@ -214,7 +263,10 @@ fn pack_is_idempotent() {
     let mut relaxed = req.clone();
     relaxed.modules[0].source = JP_SOURCE.replace("\r\n", "\n").trim_end().to_string();
     let report = pack(&relaxed).unwrap();
-    assert_no_changes(&report, &["ThisWorkbook", "Sheet1", "Sheet2", "集計", "Counter"]);
+    assert_no_changes(
+        &report,
+        &["ThisWorkbook", "Sheet1", "Sheet2", "集計", "Counter"],
+    );
     assert_eq!(fs::read(&book).unwrap(), after_first);
 }
 
@@ -223,7 +275,9 @@ fn update_and_remove_are_classified() {
     let dir = fresh_dir("update_remove");
     let book = new_book(&dir, "book.xlsm", BookKind::Xlsm, &["Sheet1"]);
     let mut first = base_request(&book);
-    first.modules.push(standard("Old", "Sub Legacy()\r\nEnd Sub\r\n"));
+    first
+        .modules
+        .push(standard("Old", "Sub Legacy()\r\nEnd Sub\r\n"));
     pack(&first).unwrap();
 
     let second = PackRequest {
@@ -239,11 +293,17 @@ fn update_and_remove_are_classified() {
     assert_eq!(report.created, vec!["Extra".to_string()]);
     assert_eq!(report.updated, vec!["集計".to_string()]);
     assert_eq!(report.removed, vec!["Old".to_string()]);
-    assert_eq!(sorted(report.unchanged.clone()), names(&["ThisWorkbook", "Sheet1", "Counter"]));
+    assert_eq!(
+        sorted(report.unchanged.clone()),
+        names(&["ThisWorkbook", "Sheet1", "Counter"])
+    );
 
     let modules = sources(&book);
     let listed: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(listed, vec!["ThisWorkbook", "Sheet1", "集計", "Counter", "Extra"]);
+    assert_eq!(
+        listed,
+        vec!["ThisWorkbook", "Sheet1", "集計", "Counter", "Extra"]
+    );
     assert!(source_of(&book, "集計").contains("WorksheetFunction.Average(範囲)"));
     assert_eq!(source_of(&book, "Counter"), CLASS_SOURCE);
     // Document code that is not mentioned in a request stays as it is.
@@ -260,8 +320,14 @@ fn document_code_replaces_the_whole_module() {
     let book = new_book(&dir, "book.xlsm", BookKind::Xlsm, &["Sheet1"]);
     pack(&base_request(&book)).unwrap();
     // Code written in the VBA editor.
-    let hand_written = format!("{}Private Sub 手書き()\r\n    Debug.Print \"before\"\r\nEnd Sub\r\n", sheet_header("Sheet1"));
-    let edit = PackRequest { modules: vec![module(ModuleKind::Document, "Sheet1", &hand_written)], ..request(&book) };
+    let hand_written = format!(
+        "{}Private Sub 手書き()\r\n    Debug.Print \"before\"\r\nEnd Sub\r\n",
+        sheet_header("Sheet1")
+    );
+    let edit = PackRequest {
+        modules: vec![module(ModuleKind::Document, "Sheet1", &hand_written)],
+        ..request(&book)
+    };
     let report = pack(&edit).unwrap();
     assert_eq!(report.updated, vec!["Sheet1".to_string()]);
     assert_eq!(source_of(&book, "Sheet1"), hand_written);
@@ -270,19 +336,33 @@ fn document_code_replaces_the_whole_module() {
     let regen = PackRequest {
         document_code: vec![DocumentCode {
             code_name: "sheet1".into(), // code names are case-insensitive
-            code: "Private Sub Worksheet_Change(ByVal Target As Range)\r\n    ' 変更\r\nEnd Sub\r\n".into(),
+            code:
+                "Private Sub Worksheet_Change(ByVal Target As Range)\r\n    ' 変更\r\nEnd Sub\r\n"
+                    .into(),
         }],
         ..request(&book)
     };
     let report = pack(&regen).unwrap();
     assert_eq!(report.updated, vec!["Sheet1".to_string()]);
-    assert_eq!(source_of(&book, "Sheet1"), format!("{}Private Sub Worksheet_Change(ByVal Target As Range)\r\n    ' 変更\r\nEnd Sub\r\n", sheet_header("Sheet1")));
+    assert_eq!(
+        source_of(&book, "Sheet1"),
+        format!(
+            "{}Private Sub Worksheet_Change(ByVal Target As Range)\r\n    ' 変更\r\nEnd Sub\r\n",
+            sheet_header("Sheet1")
+        )
+    );
     // Same code again: unchanged.
     let report = pack(&regen).unwrap();
     assert!(report.updated.is_empty() && report.unchanged.contains(&"Sheet1".to_string()));
 
     // Empty code: a module without code.
-    let clear = PackRequest { document_code: vec![DocumentCode { code_name: "Sheet1".into(), code: String::new() }], ..request(&book) };
+    let clear = PackRequest {
+        document_code: vec![DocumentCode {
+            code_name: "Sheet1".into(),
+            code: String::new(),
+        }],
+        ..request(&book)
+    };
     pack(&clear).unwrap();
     assert_eq!(source_of(&book, "Sheet1"), sheet_header("Sheet1"));
 }
@@ -293,7 +373,10 @@ fn unknown_code_name_is_an_error() {
     let book = new_book(&dir, "book.xlsm", BookKind::Xlsm, &["Sheet1"]);
     let before = fs::read(&book).unwrap();
     let req = PackRequest {
-        document_code: vec![DocumentCode { code_name: "Sheet9".into(), code: "' x".into() }],
+        document_code: vec![DocumentCode {
+            code_name: "Sheet9".into(),
+            code: "' x".into(),
+        }],
         ..base_request(&book)
     };
     match pack(&req) {
@@ -324,7 +407,10 @@ fn a_workbook_open_in_excel_is_not_touched() {
 
     // The output being open is just as bad.
     let source = new_book(&dir, "source.xlsm", BookKind::Xlsm, &["Sheet1"]);
-    let req = PackRequest { output: Some(book.clone()), ..base_request(&source) };
+    let req = PackRequest {
+        output: Some(book.clone()),
+        ..base_request(&source)
+    };
     assert!(matches!(pack(&req), Err(OvbaError::Locked)));
     assert_eq!(fs::read(&book).unwrap(), before);
 
@@ -349,13 +435,21 @@ fn backups_are_kept_and_pruned() {
         assert!(report.warnings.is_empty());
         versions.push(fs::read(&book).unwrap());
     }
-    let mut files: Vec<PathBuf> = fs::read_dir(&backups).unwrap().map(|e| e.unwrap().path()).collect();
+    let mut files: Vec<PathBuf> = fs::read_dir(&backups)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
     files.sort_by_key(|p| {
         // `<stem>.<stamp>[-n].<ext>`: order by stamp, then by counter.
         let name = p.file_name().unwrap().to_string_lossy().into_owned();
-        let middle = name.trim_start_matches("book.").trim_end_matches(".xlsm").to_string();
+        let middle = name
+            .trim_start_matches("book.")
+            .trim_end_matches(".xlsm")
+            .to_string();
         let (stamp, counter) = match middle.get(15..) {
-            Some(tail) if !tail.is_empty() => (middle[..15].to_string(), tail[1..].parse::<u32>().unwrap()),
+            Some(tail) if !tail.is_empty() => {
+                (middle[..15].to_string(), tail[1..].parse::<u32>().unwrap())
+            }
             _ => (middle.clone(), 0),
         };
         (stamp, counter)
@@ -363,12 +457,18 @@ fn backups_are_kept_and_pruned() {
     assert_eq!(files.len(), 2, "{files:?}");
     for file in &files {
         let name = file.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(name.starts_with("book.20") && name.ends_with(".xlsm"), "{name}");
+        assert!(
+            name.starts_with("book.20") && name.ends_with(".xlsm"),
+            "{name}"
+        );
     }
     // The two newest backups are the files that the last two packs replaced.
     assert_eq!(fs::read(&files[0]).unwrap(), versions[3]);
     assert_eq!(fs::read(&files[1]).unwrap(), versions[4]);
-    assert_eq!(source_of(&book, "M"), "Attribute VB_Name = \"M\"\r\nPublic Const Round = 4\r\n");
+    assert_eq!(
+        source_of(&book, "M"),
+        "Attribute VB_Name = \"M\"\r\nPublic Const Round = 4\r\n"
+    );
 
     // generations = 0 disables backups.
     let none = dir.join("none");
@@ -392,10 +492,18 @@ fn signed_project_loses_its_signature_with_a_warning() {
     let unpacked = unpack(&book).unwrap();
     assert!(unpacked.has_signature);
     let project = unpacked.project.unwrap();
-    let listed: Vec<(&str, ModuleKind)> = project.modules.iter().map(|m| (m.name.as_str(), m.kind)).collect();
+    let listed: Vec<(&str, ModuleKind)> = project
+        .modules
+        .iter()
+        .map(|m| (m.name.as_str(), m.kind))
+        .collect();
     assert_eq!(
         listed,
-        vec![("Module1", ModuleKind::Standard), ("ThisWorkbook", ModuleKind::Document), ("Sheet1", ModuleKind::Document)]
+        vec![
+            ("Module1", ModuleKind::Standard),
+            ("ThisWorkbook", ModuleKind::Document),
+            ("Sheet1", ModuleKind::Document)
+        ]
     );
     let module1 = project.modules[0].source.clone();
 
@@ -413,16 +521,27 @@ fn signed_project_loses_its_signature_with_a_warning() {
     // A real change invalidates the signature: it is removed, with a warning.
     let change = PackRequest {
         codepage: 1252,
-        modules: vec![standard("Module1", &module1.replace("End Sub", "    Beep\r\nEnd Sub"))],
+        modules: vec![standard(
+            "Module1",
+            &module1.replace("End Sub", "    Beep\r\nEnd Sub"),
+        )],
         ..request(&book)
     };
     let report = pack(&change).unwrap();
     assert_eq!(report.updated, vec!["Module1".to_string()]);
     assert_eq!(report.warnings.len(), 1, "{:?}", report.warnings);
-    assert!(report.warnings[0].contains("signature") && report.warnings[0].contains("xl/vbaProjectSignature.bin"));
+    assert!(
+        report.warnings[0].contains("signature")
+            && report.warnings[0].contains("xl/vbaProjectSignature.bin")
+    );
 
     let entries = zip_names(&book);
-    assert!(!entries.iter().any(|n| n.to_lowercase().contains("signature")), "{entries:?}");
+    assert!(
+        !entries
+            .iter()
+            .any(|n| n.to_lowercase().contains("signature")),
+        "{entries:?}"
+    );
     assert!(!entries.contains(&"xl/_rels/vbaProject.bin.rels".to_string()));
     let content_types = zip_text(&book, "[Content_Types].xml");
     assert!(!content_types.contains("vbaProjectSignature"));
@@ -442,13 +561,19 @@ fn signed_project_loses_its_signature_with_a_warning() {
 
     let after = unpack(&book).unwrap();
     assert!(!after.has_signature);
-    assert!(after.project.unwrap().modules[0].source.contains("    Beep\r\nEnd Sub"));
+    assert!(after.project.unwrap().modules[0]
+        .source
+        .contains("    Beep\r\nEnd Sub"));
 
     // The rewritten project no longer carries Excel's p-code or caches.
     let bin = zip_entry(&book, "xl/vbaProject.bin").unwrap();
     assert_eq!(cfb_stream(&bin, "/VBA/_VBA_PROJECT").unwrap().len(), 7);
     assert!(cfb_streams(&bin).iter().all(|(p, _)| !p.contains("__SRP_")));
-    assert!(ovba::open_project(bin).unwrap().modules.iter().all(|m| m.text_offset == 0));
+    assert!(ovba::open_project(bin)
+        .unwrap()
+        .modules
+        .iter()
+        .all(|m| m.text_offset == 0));
 }
 
 #[test]
@@ -457,22 +582,38 @@ fn xlsx_needs_convert_and_is_written_to_a_sibling_xlsm() {
     let book = new_book(&dir, "plain.xlsx", BookKind::Xlsx, &["Sheet1"]);
     let before = fs::read(&book).unwrap();
 
-    assert!(matches!(pack(&base_request(&book)), Err(OvbaError::UnsupportedFormat(_))));
+    assert!(matches!(
+        pack(&base_request(&book)),
+        Err(OvbaError::UnsupportedFormat(_))
+    ));
     assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
 
-    let req = PackRequest { convert: true, ..base_request(&book) };
+    let req = PackRequest {
+        convert: true,
+        ..base_request(&book)
+    };
     let report = pack(&req).unwrap();
     let output = dir.join("plain.xlsm");
     assert_eq!(report.output, output);
-    assert_eq!(fs::read(&book).unwrap(), before, "the original .xlsx is untouched");
+    assert_eq!(
+        fs::read(&book).unwrap(),
+        before,
+        "the original .xlsx is untouched"
+    );
     let content_types = zip_text(&output, "[Content_Types].xml");
-    assert!(content_types.contains(&format!("<Override PartName=\"/xl/workbook.xml\" ContentType=\"{CT_XLSM}\"/>")));
+    assert!(content_types.contains(&format!(
+        "<Override PartName=\"/xl/workbook.xml\" ContentType=\"{CT_XLSM}\"/>"
+    )));
     assert!(!content_types.contains(CT_XLSX));
     assert!(content_types.contains(CT_VBA));
     assert_eq!(sources(&output).len(), 4);
 
     // An .xlsx output can never hold macros.
-    let bad = PackRequest { convert: true, output: Some(dir.join("out.xlsx")), ..base_request(&book) };
+    let bad = PackRequest {
+        convert: true,
+        output: Some(dir.join("out.xlsx")),
+        ..base_request(&book)
+    };
     assert!(matches!(pack(&bad), Err(OvbaError::UnsupportedFormat(_))));
     // Converting again onto the existing .xlsm: the modules are unchanged
     // relative to the *input*, which has none, so they count as created.
@@ -485,33 +626,69 @@ fn unsupported_inputs() {
     let dir = fresh_dir("unsupported");
     let xls = dir.join("legacy.xls");
     fs::write(&xls, b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1 not really").unwrap();
-    assert!(matches!(pack(&request(&xls)), Err(OvbaError::UnsupportedFormat(_))));
+    assert!(matches!(
+        pack(&request(&xls)),
+        Err(OvbaError::UnsupportedFormat(_))
+    ));
     assert!(matches!(unpack(&xls), Err(OvbaError::UnsupportedFormat(_))));
-    assert!(matches!(unpack(&dir.join("notes.txt")), Err(OvbaError::UnsupportedFormat(_))));
+    assert!(matches!(
+        unpack(&dir.join("notes.txt")),
+        Err(OvbaError::UnsupportedFormat(_))
+    ));
 
     // A password-encrypted workbook is a compound file with an .xlsm name.
     let encrypted = dir.join("encrypted.xlsm");
     fs::write(&encrypted, b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1\0\0\0\0").unwrap();
-    assert!(matches!(unpack(&encrypted), Err(OvbaError::UnsupportedFormat(_))));
-    assert!(matches!(pack(&request(&encrypted)), Err(OvbaError::UnsupportedFormat(_))));
-    assert!(matches!(workbook_code_names(&encrypted), Err(OvbaError::UnsupportedFormat(_))));
+    assert!(matches!(
+        unpack(&encrypted),
+        Err(OvbaError::UnsupportedFormat(_))
+    ));
+    assert!(matches!(
+        pack(&request(&encrypted)),
+        Err(OvbaError::UnsupportedFormat(_))
+    ));
+    assert!(matches!(
+        workbook_code_names(&encrypted),
+        Err(OvbaError::UnsupportedFormat(_))
+    ));
 
     // Not a zip at all / missing file.
     let junk = dir.join("junk.xlsm");
     fs::write(&junk, b"this is not a workbook").unwrap();
-    assert!(matches!(unpack(&junk), Err(OvbaError::Zip(_) | OvbaError::Io(_))));
-    assert!(matches!(unpack(&dir.join("missing.xlsm")), Err(OvbaError::Io(_))));
-    assert!(matches!(pack(&request(&dir.join("missing.xlsm"))), Err(OvbaError::Io(_))));
+    assert!(matches!(
+        unpack(&junk),
+        Err(OvbaError::Zip(_) | OvbaError::Io(_))
+    ));
+    assert!(matches!(
+        unpack(&dir.join("missing.xlsm")),
+        Err(OvbaError::Io(_))
+    ));
+    assert!(matches!(
+        pack(&request(&dir.join("missing.xlsm"))),
+        Err(OvbaError::Io(_))
+    ));
 
     // New user forms and invalid code pages.
     let book = new_book(&dir, "book.xlsm", BookKind::Xlsm, &["Sheet1"]);
-    let form = PackRequest { modules: vec![module(ModuleKind::Form, "UserForm1", "")], ..request(&book) };
+    let form = PackRequest {
+        modules: vec![module(ModuleKind::Form, "UserForm1", "")],
+        ..request(&book)
+    };
     assert!(matches!(pack(&form), Err(OvbaError::UnsupportedFormat(_))));
-    let utf8 = PackRequest { codepage: 65001, ..request(&book) };
+    let utf8 = PackRequest {
+        codepage: 65001,
+        ..request(&book)
+    };
     assert!(matches!(pack(&utf8), Err(OvbaError::Encoding(_))));
-    let emoji = PackRequest { modules: vec![standard("M", "' 🎉")], ..request(&book) };
+    let emoji = PackRequest {
+        modules: vec![standard("M", "' 🎉")],
+        ..request(&book)
+    };
     assert!(matches!(pack(&emoji), Err(OvbaError::Encoding(_))));
-    assert_eq!(fs::read(&book).unwrap(), create_workbook(BookKind::Xlsm, &["Sheet1"]));
+    assert_eq!(
+        fs::read(&book).unwrap(),
+        create_workbook(BookKind::Xlsm, &["Sheet1"])
+    );
 }
 
 #[test]
@@ -522,14 +699,26 @@ fn output_path_and_content_type_follow_the_extension() {
 
     let template = dir.join("out").join("template.xltm");
     fs::create_dir_all(template.parent().unwrap()).unwrap();
-    let report = pack(&PackRequest { output: Some(template.clone()), ..base_request(&book) }).unwrap();
+    let report = pack(&PackRequest {
+        output: Some(template.clone()),
+        ..base_request(&book)
+    })
+    .unwrap();
     assert_eq!(report.output, template);
-    assert_eq!(fs::read(&book).unwrap(), before, "the input is not modified");
+    assert_eq!(
+        fs::read(&book).unwrap(),
+        before,
+        "the input is not modified"
+    );
     assert!(zip_text(&template, "[Content_Types].xml").contains(CT_XLTM));
     assert_eq!(sources(&template).len(), 4);
 
     let addin = dir.join("addin.xlam");
-    pack(&PackRequest { output: Some(addin.clone()), ..base_request(&book) }).unwrap();
+    pack(&PackRequest {
+        output: Some(addin.clone()),
+        ..base_request(&book)
+    })
+    .unwrap();
     assert!(zip_text(&addin, "[Content_Types].xml").contains(CT_XLAM));
 
     // An add-in created as such keeps its type.
@@ -539,8 +728,14 @@ fn output_path_and_content_type_follow_the_extension() {
     assert!(content_types.contains(CT_XLAM) && content_types.contains(CT_VBA));
 
     // XML <-> binary conversion is not offered.
-    let binary = PackRequest { output: Some(dir.join("book.xlsb")), ..base_request(&book) };
-    assert!(matches!(pack(&binary), Err(OvbaError::UnsupportedFormat(_))));
+    let binary = PackRequest {
+        output: Some(dir.join("book.xlsb")),
+        ..base_request(&book)
+    };
+    assert!(matches!(
+        pack(&binary),
+        Err(OvbaError::UnsupportedFormat(_))
+    ));
 }
 
 /// A workbook as third-party libraries write it: no code names anywhere,
@@ -558,7 +753,10 @@ fn book_without_code_names() -> Vec<u8> {
         ("[Content_Types].xml", types.as_bytes().to_vec()),
         ("_rels/.rels", root_rels.as_bytes().to_vec()),
         ("xl/workbook.xml", workbook.as_bytes().to_vec()),
-        ("xl/_rels/workbook.xml.rels", workbook_rels.as_bytes().to_vec()),
+        (
+            "xl/_rels/workbook.xml.rels",
+            workbook_rels.as_bytes().to_vec(),
+        ),
         ("xl/worksheets/sheet1.xml", sheet1.as_bytes().to_vec()),
         ("xl/worksheets/sheet2.xml", sheet2.as_bytes().to_vec()),
         ("xl/chartsheets/sheet1.xml", chart.as_bytes().to_vec()),
@@ -574,15 +772,28 @@ fn missing_code_names_are_assigned_and_written() {
 
     let code_names = workbook_code_names(&book).unwrap();
     assert_eq!(code_names.workbook, "ThisWorkbook");
-    let listed: Vec<(&str, &str)> =
-        code_names.sheets.iter().map(|s| (s.sheet_name.as_str(), s.code_name.as_str())).collect();
-    assert_eq!(listed, vec![("First", "Sheet1"), ("Sheet1", "Sheet2"), ("Graph", "Chart1")]);
+    let listed: Vec<(&str, &str)> = code_names
+        .sheets
+        .iter()
+        .map(|s| (s.sheet_name.as_str(), s.code_name.as_str()))
+        .collect();
+    assert_eq!(
+        listed,
+        vec![
+            ("First", "Sheet1"),
+            ("Sheet1", "Sheet2"),
+            ("Graph", "Chart1")
+        ]
+    );
 
     let req = PackRequest {
         convert: true,
         codepage: 1252,
         modules: vec![standard("Main", "Sub Main()\r\nEnd Sub\r\n")],
-        document_code: vec![DocumentCode { code_name: "Sheet2".into(), code: "' on sheet 2".into() }],
+        document_code: vec![DocumentCode {
+            code_name: "Sheet2".into(),
+            code: "' on sheet 2".into(),
+        }],
         ..request(&book)
     };
     let report = pack(&req).unwrap();
@@ -593,7 +804,10 @@ fn missing_code_names_are_assigned_and_written() {
         names(&["ThisWorkbook", "Sheet1", "Sheet2", "Chart1", "Main"])
     );
     assert_eq!(report.warnings.len(), 1);
-    assert!(report.warnings[0].contains("`First` -> Sheet1") && report.warnings[0].contains("`Graph` -> Chart1"));
+    assert!(
+        report.warnings[0].contains("`First` -> Sheet1")
+            && report.warnings[0].contains("`Graph` -> Chart1")
+    );
 
     // The code names are now recorded in the parts, everything else is intact.
     assert_eq!(
@@ -604,31 +818,55 @@ fn missing_code_names_are_assigned_and_written() {
         zip_text(&output, "xl/worksheets/sheet1.xml"),
         "<?xml version=\"1.0\"?><x:worksheet xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><x:sheetPr codeName=\"Sheet1\"/><x:dimension ref=\"A1\"/><x:sheetData/></x:worksheet>"
     );
-    assert!(zip_text(&output, "xl/worksheets/sheet2.xml").contains("<sheetPr codeName=\"Sheet2\" filterMode=\"1\"><tabColor rgb=\"FFFF0000\"/></sheetPr>"));
+    assert!(zip_text(&output, "xl/worksheets/sheet2.xml").contains(
+        "<sheetPr codeName=\"Sheet2\" filterMode=\"1\"><tabColor rgb=\"FFFF0000\"/></sheetPr>"
+    ));
     assert!(zip_text(&output, "xl/chartsheets/sheet1.xml").contains("<chartsheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetPr codeName=\"Chart1\"/>"));
 
     // `bin` already meant printer settings: the project gets an Override.
     let content_types = zip_text(&output, "[Content_Types].xml");
     assert!(content_types.contains("<Default Extension=\"bin\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.printerSettings\"/>"));
-    assert!(content_types.ends_with(&format!("<Override PartName=\"/xl/vbaProject.bin\" ContentType=\"{CT_VBA}\"/></Types>")));
-    assert!(content_types.contains(&format!("<Override PartName=\"/xl/workbook.xml\" ContentType=\"{CT_XLSM}\"/>")));
+    assert!(content_types.ends_with(&format!(
+        "<Override PartName=\"/xl/vbaProject.bin\" ContentType=\"{CT_VBA}\"/></Types>"
+    )));
+    assert!(content_types.contains(&format!(
+        "<Override PartName=\"/xl/workbook.xml\" ContentType=\"{CT_XLSM}\"/>"
+    )));
     assert!(zip_text(&output, "xl/_rels/workbook.xml.rels").contains(&format!("<Relationship Id=\"rId4\" Type=\"{REL_VBA}\" Target=\"vbaProject.bin\"/></Relationships>")));
 
     // Document modules: worksheet and chart sheet classes.
     let modules = sources(&output);
     let listed: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(listed, vec!["ThisWorkbook", "Sheet1", "Sheet2", "Chart1", "Main"]);
+    assert_eq!(
+        listed,
+        vec!["ThisWorkbook", "Sheet1", "Sheet2", "Chart1", "Main"]
+    );
     assert_eq!(modules[1].source, sheet_header("Sheet1"));
-    assert_eq!(modules[2].source, format!("{}' on sheet 2\r\n", sheet_header("Sheet2")));
+    assert_eq!(
+        modules[2].source,
+        format!("{}' on sheet 2\r\n", sheet_header("Sheet2"))
+    );
     assert_eq!(modules[3].source, doc_header("Chart1", "00020821"));
     assert!(modules[..4].iter().all(|m| m.kind == ModuleKind::Document));
 
     // After the first pack the names are explicit and a second pack is a no-op.
-    let again = PackRequest { book: output.clone(), convert: false, ..req };
+    let again = PackRequest {
+        book: output.clone(),
+        convert: false,
+        ..req
+    };
     let report = pack(&again).unwrap();
-    assert_no_changes(&report, &["ThisWorkbook", "Sheet1", "Sheet2", "Chart1", "Main"]);
+    assert_no_changes(
+        &report,
+        &["ThisWorkbook", "Sheet1", "Sheet2", "Chart1", "Main"],
+    );
     assert!(report.warnings.is_empty());
-    let listed: Vec<String> = workbook_code_names(&output).unwrap().sheets.into_iter().map(|s| s.code_name).collect();
+    let listed: Vec<String> = workbook_code_names(&output)
+        .unwrap()
+        .sheets
+        .into_iter()
+        .map(|s| s.code_name)
+        .collect();
     assert_eq!(listed, vec!["Sheet1", "Sheet2", "Chart1"]);
 }
 
@@ -660,13 +898,25 @@ fn excel_made_project_inside_a_workbook_is_updated_in_place() {
     assert_eq!(before.len(), 5);
     let req = PackRequest {
         codepage: 1252,
-        modules: vec![standard("Module1", "Sub say_hello()\r\n    MsgBox \"Hello from RAS!\"\r\nEnd Sub\r\n")],
-        document_code: vec![DocumentCode { code_name: "Sheet2".into(), code: "' generated".into() }],
+        modules: vec![standard(
+            "Module1",
+            "Sub say_hello()\r\n    MsgBox \"Hello from RAS!\"\r\nEnd Sub\r\n",
+        )],
+        document_code: vec![DocumentCode {
+            code_name: "Sheet2".into(),
+            code: "' generated".into(),
+        }],
         ..request(&book)
     };
     let report = pack(&req).unwrap();
-    assert_eq!(sorted(report.updated.clone()), names(&["Module1", "Sheet2"]));
-    assert_eq!(sorted(report.unchanged.clone()), names(&["ThisWorkbook", "Sheet1", "ThisWorkbook1"]));
+    assert_eq!(
+        sorted(report.updated.clone()),
+        names(&["Module1", "Sheet2"])
+    );
+    assert_eq!(
+        sorted(report.unchanged.clone()),
+        names(&["ThisWorkbook", "Sheet1", "ThisWorkbook1"])
+    );
     assert!(report.created.is_empty() && report.removed.is_empty());
 
     let after = sources(&book);
@@ -674,17 +924,33 @@ fn excel_made_project_inside_a_workbook_is_updated_in_place() {
     assert_eq!(after[1], before[1]);
     assert_eq!(after[3], before[3]);
     assert_eq!(after[2].source, "Attribute VB_Name = \"Module1\"\r\nSub say_hello()\r\n    MsgBox \"Hello from RAS!\"\r\nEnd Sub\r\n");
-    assert_eq!(after[4].source, format!("{}' generated\r\n", before[4].source));
+    assert_eq!(
+        after[4].source,
+        format!("{}' generated\r\n", before[4].source)
+    );
     // The content type for the part was missing in this hand-made package.
     assert!(zip_text(&book, "[Content_Types].xml").contains(CT_VBA));
-    assert_no_changes(&pack(&req).unwrap(), &["ThisWorkbook", "Sheet1", "Module1", "ThisWorkbook1", "Sheet2"]);
+    assert_no_changes(
+        &pack(&req).unwrap(),
+        &[
+            "ThisWorkbook",
+            "Sheet1",
+            "Module1",
+            "ThisWorkbook1",
+            "Sheet2",
+        ],
+    );
 }
 
 fn zip_entry_bytes(zip: &[u8], name: &str) -> Vec<u8> {
     use std::io::Read;
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip.to_vec())).unwrap();
     let mut data = Vec::new();
-    archive.by_name(name).unwrap().read_to_end(&mut data).unwrap();
+    archive
+        .by_name(name)
+        .unwrap()
+        .read_to_end(&mut data)
+        .unwrap();
     data
 }
 
@@ -739,7 +1005,10 @@ fn xlsb(workbook_code_name: &str, sheets: &[(&str, &str)], project: Option<Vec<u
         workbook.extend(biff12_record(156, &bundle)); // BrtBundleSh
         rels.push_str(&format!("<Relationship Id=\"rId{n}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{n}.bin\"/>"));
         let mut sheet = biff12_record(129, &[]); // BrtBeginSheet
-        let mut ws_prop = vec![0xC9, 0x04, 0x02, 0x00, 0x40, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+        let mut ws_prop = vec![
+            0xC9, 0x04, 0x02, 0x00, 0x40, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF,
+        ];
         ws_prop.extend(wide(code_name));
         sheet.extend(biff12_record(147, &ws_prop)); // BrtWsProp
         sheet.extend(biff12_record(145, &[])); // BrtBeginSheetData
@@ -750,7 +1019,9 @@ fn xlsb(workbook_code_name: &str, sheets: &[(&str, &str)], project: Option<Vec<u
     workbook.extend(biff12_record(144, &[])); // BrtEndBundleShs
     workbook.extend(biff12_record(132, &[])); // BrtEndBook
     if project.is_some() {
-        rels.push_str(&format!("<Relationship Id=\"rId99\" Type=\"{REL_VBA}\" Target=\"vbaProject.bin\"/>"));
+        rels.push_str(&format!(
+            "<Relationship Id=\"rId99\" Type=\"{REL_VBA}\" Target=\"vbaProject.bin\"/>"
+        ));
     }
     rels.push_str("</Relationships>");
     let types = "<?xml version=\"1.0\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"bin\" ContentType=\"application/vnd.ms-excel.sheet.binary.macroEnabled.main\"/><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/worksheets/sheet1.bin\" ContentType=\"application/vnd.ms-excel.worksheet\"/></Types>";
@@ -774,12 +1045,23 @@ fn xlsb(workbook_code_name: &str, sheets: &[(&str, &str)], project: Option<Vec<u
 fn xlsb_with_code_names() {
     let dir = fresh_dir("xlsb");
     let book = dir.join("book.xlsb");
-    fs::write(&book, xlsb("ThisWorkbook", &[("データ", "Sheet1"), ("Other", "Sheet2")], None)).unwrap();
+    fs::write(
+        &book,
+        xlsb(
+            "ThisWorkbook",
+            &[("データ", "Sheet1"), ("Other", "Sheet2")],
+            None,
+        ),
+    )
+    .unwrap();
 
     let code_names = workbook_code_names(&book).unwrap();
     assert_eq!(code_names.workbook, "ThisWorkbook");
-    let listed: Vec<(&str, &str)> =
-        code_names.sheets.iter().map(|s| (s.sheet_name.as_str(), s.code_name.as_str())).collect();
+    let listed: Vec<(&str, &str)> = code_names
+        .sheets
+        .iter()
+        .map(|s| (s.sheet_name.as_str(), s.code_name.as_str()))
+        .collect();
     assert_eq!(listed, vec![("データ", "Sheet1"), ("Other", "Sheet2")]);
     assert!(unpack(&book).unwrap().project.is_none());
 
@@ -791,15 +1073,25 @@ fn xlsb_with_code_names() {
     assert_eq!(zip_raw(&book, "xl/workbook.bin"), workbook_before);
     assert_eq!(zip_raw(&book, "xl/worksheets/sheet1.bin"), sheet_before);
     let content_types = zip_text(&book, "[Content_Types].xml");
-    assert!(content_types.contains(&format!("<Override PartName=\"/xl/vbaProject.bin\" ContentType=\"{CT_VBA}\"/>")));
+    assert!(content_types.contains(&format!(
+        "<Override PartName=\"/xl/vbaProject.bin\" ContentType=\"{CT_VBA}\"/>"
+    )));
     assert!(content_types.contains("application/vnd.ms-excel.sheet.binary.macroEnabled.main"));
     assert!(zip_text(&book, "xl/_rels/workbook.bin.rels").contains(REL_VBA));
 
     let modules = sources(&book);
     let listed: Vec<&str> = modules.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(listed, vec!["ThisWorkbook", "Sheet1", "Sheet2", "集計", "Counter"]);
-    assert!(modules[1].source.contains("\r\nPrivate Sub Worksheet_Activate()"));
-    assert_no_changes(&pack(&base_request(&book)).unwrap(), &["ThisWorkbook", "Sheet1", "Sheet2", "集計", "Counter"]);
+    assert_eq!(
+        listed,
+        vec!["ThisWorkbook", "Sheet1", "Sheet2", "集計", "Counter"]
+    );
+    assert!(modules[1]
+        .source
+        .contains("\r\nPrivate Sub Worksheet_Activate()"));
+    assert_no_changes(
+        &pack(&base_request(&book)).unwrap(),
+        &["ThisWorkbook", "Sheet1", "Sheet2", "集計", "Counter"],
+    );
 }
 
 #[test]
@@ -808,8 +1100,14 @@ fn xlsb_without_code_names() {
     // No project and no recorded code names: a project cannot be created.
     let bare = dir.join("bare.xlsb");
     fs::write(&bare, xlsb("", &[("Tabelle1", "")], None)).unwrap();
-    assert_eq!(workbook_code_names(&bare).unwrap().sheets[0].code_name, "Sheet1");
-    let req = PackRequest { modules: vec![standard("M", "' m")], ..request(&bare) };
+    assert_eq!(
+        workbook_code_names(&bare).unwrap().sheets[0].code_name,
+        "Sheet1"
+    );
+    let req = PackRequest {
+        modules: vec![standard("M", "' m")],
+        ..request(&bare)
+    };
     assert!(matches!(pack(&req), Err(OvbaError::UnsupportedFormat(_))));
 
     // With an existing project standard and class modules can be written;
@@ -820,31 +1118,74 @@ fn xlsb_without_code_names() {
         zip_entry(&book, "xl/vbaProject.bin").unwrap()
     };
     let book = dir.join("book.xlsb");
-    fs::write(&book, xlsb("", &[("Tabelle1", ""), ("Tabelle2", "")], Some(project))).unwrap();
+    fs::write(
+        &book,
+        xlsb("", &[("Tabelle1", ""), ("Tabelle2", "")], Some(project)),
+    )
+    .unwrap();
     let report = pack(&req_with(&book, vec![standard("M", "' m")], vec![])).unwrap();
     assert_eq!(report.created, vec!["M".to_string()]);
-    assert_eq!(sorted(report.unchanged.clone()), names(&["ThisWorkbook", "Sheet1"]));
+    assert_eq!(
+        sorted(report.unchanged.clone()),
+        names(&["ThisWorkbook", "Sheet1"])
+    );
     // Sheet1 exists as a module: its region can be managed.
-    let ok = req_with(&book, vec![], vec![DocumentCode { code_name: "Sheet1".into(), code: "' x".into() }]);
+    let ok = req_with(
+        &book,
+        vec![],
+        vec![DocumentCode {
+            code_name: "Sheet1".into(),
+            code: "' x".into(),
+        }],
+    );
     assert_eq!(pack(&ok).unwrap().updated, vec!["Sheet1".to_string()]);
     // Sheet2 would have to be created, which needs a recorded code name.
-    let missing = req_with(&book, vec![], vec![DocumentCode { code_name: "Sheet2".into(), code: "' x".into() }]);
-    assert!(matches!(pack(&missing), Err(OvbaError::UnsupportedFormat(_))));
-    let unknown = req_with(&book, vec![], vec![DocumentCode { code_name: "Sheet3".into(), code: "' x".into() }]);
+    let missing = req_with(
+        &book,
+        vec![],
+        vec![DocumentCode {
+            code_name: "Sheet2".into(),
+            code: "' x".into(),
+        }],
+    );
+    assert!(matches!(
+        pack(&missing),
+        Err(OvbaError::UnsupportedFormat(_))
+    ));
+    let unknown = req_with(
+        &book,
+        vec![],
+        vec![DocumentCode {
+            code_name: "Sheet3".into(),
+            code: "' x".into(),
+        }],
+    );
     assert!(matches!(pack(&unknown), Err(OvbaError::UnknownCodeName(_))));
 }
 
 fn req_with(book: &Path, modules: Vec<VbaModule>, document_code: Vec<DocumentCode>) -> PackRequest {
-    PackRequest { modules, document_code, ..request(book) }
+    PackRequest {
+        modules,
+        document_code,
+        ..request(book)
+    }
 }
 
 #[test]
 fn project_name_and_code_page_changes_are_applied() {
     let dir = fresh_dir("project_name");
     let book = new_book(&dir, "book.xlsm", BookKind::Xlsm, &["Sheet1"]);
-    pack(&PackRequest { codepage: 1252, modules: vec![standard("M", "' ascii only\r\n")], ..request(&book) }).unwrap();
+    pack(&PackRequest {
+        codepage: 1252,
+        modules: vec![standard("M", "' ascii only\r\n")],
+        ..request(&book)
+    })
+    .unwrap();
     let project = unpack(&book).unwrap().project.unwrap();
-    assert_eq!((project.name.as_str(), project.codepage), ("VBAProject", 1252));
+    assert_eq!(
+        (project.name.as_str(), project.codepage),
+        ("VBAProject", 1252)
+    );
 
     // Same modules, new project name and code page: nothing "updated", but
     // the file is rewritten.

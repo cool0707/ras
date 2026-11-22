@@ -140,7 +140,11 @@ fn plain_label(text: &str) -> String {
     // `終了(E)` → `終了`
     if let Some(open) = s.rfind(['(', '（']) {
         let tail: Vec<char> = s[open..].chars().collect();
-        if open > 0 && tail.len() == 3 && (tail[1].is_ascii_uppercase() || tail[1].is_ascii_digit()) && (tail[2] == ')' || tail[2] == '）') {
+        if open > 0
+            && tail.len() == 3
+            && (tail[1].is_ascii_uppercase() || tail[1].is_ascii_digit())
+            && (tail[2] == ')' || tail[2] == '）')
+        {
             s.truncate(open);
         }
     }
@@ -149,7 +153,9 @@ fn plain_label(text: &str) -> String {
 
 /// Whether a window of this class is a dialog at all.
 pub fn is_dialog_class(class: &str) -> bool {
-    class == "#32770" || class.eq_ignore_ascii_case("NUIDialog") || class.to_ascii_lowercase().starts_with("bosa_sdm_")
+    class == "#32770"
+        || class.eq_ignore_ascii_case("NUIDialog")
+        || class.to_ascii_lowercase().starts_with("bosa_sdm_")
 }
 
 impl Dialog {
@@ -162,13 +168,17 @@ impl Dialog {
         if !is_dialog_class(&self.class) {
             return false;
         }
-        self.visible || (self.class == "#32770" && self.owned && self.buttons.iter().any(|b| b.handle != 0))
+        self.visible
+            || (self.class == "#32770" && self.owned && self.buttons.iter().any(|b| b.handle != 0))
     }
 
     pub fn kind(&self) -> Kind {
         let standard = self.class == "#32770";
         let keys: Vec<char> = self.buttons.iter().filter_map(Button::access_key).collect();
-        if standard && (3..=4).contains(&self.buttons.len()) && ['C', 'E', 'D'].iter().all(|k| keys.contains(k)) {
+        if standard
+            && (3..=4).contains(&self.buttons.len())
+            && ['C', 'E', 'D'].iter().all(|k| keys.contains(k))
+        {
             return Kind::RuntimeError;
         }
         if standard && self.title.contains("Microsoft Visual Basic") && !self.has_edit {
@@ -185,8 +195,16 @@ impl Dialog {
 
     /// The answer `Mode::Dismiss` gives.
     pub fn dismissal(&self) -> Action {
-        let by_key = |key: char| self.buttons.iter().position(|b| b.clickable() && b.access_key() == Some(key));
-        let by_id = |id: i32| self.buttons.iter().position(|b| b.clickable() && b.id == id);
+        let by_key = |key: char| {
+            self.buttons
+                .iter()
+                .position(|b| b.clickable() && b.access_key() == Some(key))
+        };
+        let by_id = |id: i32| {
+            self.buttons
+                .iter()
+                .position(|b| b.clickable() && b.id == id)
+        };
         if self.kind() == Kind::RuntimeError {
             // End stops the macro; Debug would leave the VBE in break mode and Excel unusable for COM.
             return by_key('E').map(Action::Click).unwrap_or(Action::Leave);
@@ -198,7 +216,11 @@ impl Dialog {
             return Action::Close;
         }
         // A single answer (apart from Help) is no choice: an information box, a compile error.
-        let mut answers = self.buttons.iter().enumerate().filter(|(_, b)| b.clickable() && !b.is_help());
+        let mut answers = self
+            .buttons
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.clickable() && !b.is_help());
         match (answers.next(), answers.next()) {
             (Some((i, _)), None) => Action::Click(i),
             _ => Action::Leave,
@@ -209,7 +231,12 @@ impl Dialog {
     pub fn summary(&self) -> String {
         let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
         let mut out = format!("「{}」", one_line(&self.title));
-        let texts: Vec<String> = self.texts.iter().map(|t| one_line(t)).filter(|t| !t.is_empty()).collect();
+        let texts: Vec<String> = self
+            .texts
+            .iter()
+            .map(|t| one_line(t))
+            .filter(|t| !t.is_empty())
+            .collect();
         if !texts.is_empty() {
             out.push(' ');
             out.push_str(&texts.join(" / "));
@@ -231,7 +258,11 @@ impl Dialog {
 
     /// The line printed when the dialog is found while a call is waiting.
     pub fn report(&self) -> String {
-        format!("{LOG_PREFIX}Excel が{}を表示して応答を待っています: {}  — Excel 側で応答してください", self.what(), self.summary())
+        format!(
+            "{LOG_PREFIX}Excel が{}を表示して応答を待っています: {}  — Excel 側で応答してください",
+            self.what(),
+            self.summary()
+        )
     }
 
     /// The line printed when `Mode::Dismiss` has answered (or could not answer) the dialog.
@@ -249,11 +280,25 @@ mod tests {
     use super::*;
 
     fn button(handle: isize, text: &str, id: i32) -> Button {
-        Button { handle, text: text.into(), id, enabled: true }
+        Button {
+            handle,
+            text: text.into(),
+            id,
+            enabled: true,
+        }
     }
 
     fn dialog(class: &str, title: &str, buttons: Vec<Button>) -> Dialog {
-        Dialog { handle: 1, class: class.into(), title: title.into(), visible: true, owned: true, texts: vec![], buttons, has_edit: false }
+        Dialog {
+            handle: 1,
+            class: class.into(),
+            title: title.into(),
+            visible: true,
+            owned: true,
+            texts: vec![],
+            buttons,
+            has_edit: false,
+        }
     }
 
     #[test]
@@ -267,7 +312,11 @@ mod tests {
         assert_eq!(plain_label("終了(&E)"), "終了");
         assert_eq!(plain_label("&Debug"), "Debug");
         assert_eq!(plain_label("ヘルプ(H)"), "ヘルプ");
-        assert_eq!(plain_label("f(x)"), "f(x)", "only a trailing access key is removed");
+        assert_eq!(
+            plain_label("f(x)"),
+            "f(x)",
+            "only a trailing access key is removed"
+        );
         assert_eq!(plain_label("OK"), "OK");
     }
 
@@ -281,16 +330,41 @@ mod tests {
 
     #[test]
     fn runtime_error_is_ended_not_debugged() {
-        let en = dialog("#32770", "Microsoft Visual Basic", vec![button(10, "&Continue", 4800), button(11, "&End", 4801), button(12, "&Debug", 4802), button(13, "&Help", 4803)]);
+        let en = dialog(
+            "#32770",
+            "Microsoft Visual Basic",
+            vec![
+                button(10, "&Continue", 4800),
+                button(11, "&End", 4801),
+                button(12, "&Debug", 4802),
+                button(13, "&Help", 4803),
+            ],
+        );
         assert_eq!(en.kind(), Kind::RuntimeError);
         assert_eq!(en.dismissal(), Action::Click(1));
-        let mut ja = dialog("#32770", "Microsoft Visual Basic", vec![button(10, "継続(&C)", 0), button(11, "終了(&E)", 0), button(12, "デバッグ(&D)", 0), button(13, "ヘルプ(&H)", 0)]);
-        ja.texts = vec!["実行時エラー '9':".into(), "インデックスが有効範囲にありません。".into()];
+        let mut ja = dialog(
+            "#32770",
+            "Microsoft Visual Basic",
+            vec![
+                button(10, "継続(&C)", 0),
+                button(11, "終了(&E)", 0),
+                button(12, "デバッグ(&D)", 0),
+                button(13, "ヘルプ(&H)", 0),
+            ],
+        );
+        ja.texts = vec![
+            "実行時エラー '9':".into(),
+            "インデックスが有効範囲にありません。".into(),
+        ];
         assert_eq!(ja.kind(), Kind::RuntimeError);
         assert_eq!(ja.dismissal(), Action::Click(1));
         assert_eq!(ja.summary(), "「Microsoft Visual Basic」 実行時エラー '9': / インデックスが有効範囲にありません。 [継続] [終了] [デバッグ] [ヘルプ]");
-        assert!(ja.report().starts_with("[ras] Excel がVBA の実行時エラーのダイアログを表示して応答を待っています: "));
-        assert!(ja.dismissed_report(&Action::Click(1)).contains("「終了」で閉じました"));
+        assert!(ja.report().starts_with(
+            "[ras] Excel がVBA の実行時エラーのダイアログを表示して応答を待っています: "
+        ));
+        assert!(ja
+            .dismissed_report(&Action::Click(1))
+            .contains("「終了」で閉じました"));
         // With End disabled nothing else is pressed.
         ja.buttons[1].enabled = false;
         assert_eq!(ja.dismissal(), Action::Leave);
@@ -298,7 +372,11 @@ mod tests {
 
     #[test]
     fn compile_error_and_information_boxes_have_one_answer() {
-        let compile = dialog("#32770", "Microsoft Visual Basic for Applications", vec![button(10, "OK", ID_OK), button(11, "ヘルプ", ID_HELP)]);
+        let compile = dialog(
+            "#32770",
+            "Microsoft Visual Basic for Applications",
+            vec![button(10, "OK", ID_OK), button(11, "ヘルプ", ID_HELP)],
+        );
         assert_eq!(compile.kind(), Kind::VbeMessage);
         assert_eq!(compile.dismissal(), Action::Click(0));
         let info = dialog("#32770", "Book1", vec![button(10, "OK", ID_OK)]);
@@ -308,12 +386,26 @@ mod tests {
 
     #[test]
     fn cancel_is_preferred_and_a_real_choice_is_left_alone() {
-        let ok_cancel = dialog("#32770", "Microsoft Excel", vec![button(10, "OK", ID_OK), button(11, "キャンセル", ID_CANCEL)]);
+        let ok_cancel = dialog(
+            "#32770",
+            "Microsoft Excel",
+            vec![button(10, "OK", ID_OK), button(11, "キャンセル", ID_CANCEL)],
+        );
         assert_eq!(ok_cancel.dismissal(), Action::Click(1));
-        let yes_no = dialog("#32770", "Microsoft Excel", vec![button(10, "はい(&Y)", 6), button(11, "いいえ(&N)", 7)]);
+        let yes_no = dialog(
+            "#32770",
+            "Microsoft Excel",
+            vec![button(10, "はい(&Y)", 6), button(11, "いいえ(&N)", 7)],
+        );
         assert_eq!(yes_no.dismissal(), Action::Leave);
-        assert!(yes_no.dismissed_report(&Action::Leave).contains("自動では閉じられません"));
-        let mut input = dialog("#32770", "入力", vec![button(10, "OK", ID_OK), button(11, "キャンセル", ID_CANCEL)]);
+        assert!(yes_no
+            .dismissed_report(&Action::Leave)
+            .contains("自動では閉じられません"));
+        let mut input = dialog(
+            "#32770",
+            "入力",
+            vec![button(10, "OK", ID_OK), button(11, "キャンセル", ID_CANCEL)],
+        );
         input.has_edit = true;
         assert_eq!(input.kind(), Kind::Input);
         assert_eq!(input.dismissal(), Action::Click(1));
@@ -322,15 +414,30 @@ mod tests {
     #[test]
     fn office_dialogs_without_child_windows_are_closed() {
         // Buttons known through UI Automation only have no handle.
-        let alert = dialog("NUIDialog", "Microsoft Excel", vec![button(0, "保存", 0), button(0, "保存しない", 0), button(0, "キャンセル", 0)]);
+        let alert = dialog(
+            "NUIDialog",
+            "Microsoft Excel",
+            vec![
+                button(0, "保存", 0),
+                button(0, "保存しない", 0),
+                button(0, "キャンセル", 0),
+            ],
+        );
         assert_eq!(alert.kind(), Kind::Other);
         assert_eq!(alert.dismissal(), Action::Close);
-        assert_eq!(alert.summary(), "「Microsoft Excel」 [保存] [保存しない] [キャンセル]");
+        assert_eq!(
+            alert.summary(),
+            "「Microsoft Excel」 [保存] [保存しない] [キャンセル]"
+        );
     }
 
     #[test]
     fn which_windows_count() {
-        let mut d = dialog("#32770", "Microsoft Visual Basic", vec![button(10, "&End", 0)]);
+        let mut d = dialog(
+            "#32770",
+            "Microsoft Visual Basic",
+            vec![button(10, "&End", 0)],
+        );
         assert!(d.is_waiting());
         // Not painted yet (Excel in the background): still a dialog that blocks.
         d.visible = false;

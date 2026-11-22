@@ -77,11 +77,20 @@ mod workbook;
 mod xml;
 
 pub use error::OvbaError;
-pub use forms::{export_user_form, import_user_form, is_generated_form, read_user_forms, unpack_user_forms, FormFiles, RAS_FORM_MARKER};
+pub use forms::{
+    export_user_form, import_user_form, is_generated_form, read_user_forms, unpack_user_forms,
+    FormFiles, RAS_FORM_MARKER,
+};
 pub use opc::{workbook_code_names, workbook_sheet_controls};
-pub use sheets::{edit_sheets, sheet_references, valid_code_name, valid_sheet_name, workbook_sheets, Place, SheetEdit, SheetEditReport, SheetEditRequest, SheetError, SheetInfo};
 pub use pack::{pack, unpack};
-pub use source::{extract_managed_region, merge_managed_region, procedure_names, replace_document_code, strip_hand_written, RAS_BEGIN_MARKER, RAS_END_MARKER};
+pub use sheets::{
+    edit_sheets, sheet_references, valid_code_name, valid_sheet_name, workbook_sheets, Place,
+    SheetEdit, SheetEditReport, SheetEditRequest, SheetError, SheetInfo,
+};
+pub use source::{
+    extract_managed_region, merge_managed_region, procedure_names, replace_document_code,
+    strip_hand_written, RAS_BEGIN_MARKER, RAS_END_MARKER,
+};
 pub use vba::{read_project_bin, write_project_bin};
 pub use workbook::{create_workbook, BookKind};
 

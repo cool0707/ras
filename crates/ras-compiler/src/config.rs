@@ -59,7 +59,8 @@ impl FormDecl {
     /// Reads the name and controls from the text of a `.form.json` file (FormSpec);
     /// `None` when the text is not JSON with a `form.name`.
     pub fn from_form_json(text: &str) -> Option<FormDecl> {
-        let value: serde_json::Value = serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text)).ok()?;
+        let value: serde_json::Value =
+            serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text)).ok()?;
         let name = value.get("form")?.get("name")?.as_str()?.to_string();
         let mut controls = Vec::new();
         fn walk(list: Option<&serde_json::Value>, out: &mut Vec<FormControl>) {
@@ -67,7 +68,10 @@ impl FormDecl {
                 let name = c.get("name").and_then(|v| v.as_str()).unwrap_or_default();
                 let ty = c.get("type").and_then(|v| v.as_str()).unwrap_or_default();
                 if !name.is_empty() {
-                    out.push(FormControl { name: name.to_string(), control_type: ty.trim().to_string() });
+                    out.push(FormControl {
+                        name: name.to_string(),
+                        control_type: ty.trim().to_string(),
+                    });
                 }
                 // Legacy nested specs keep children inside their container.
                 walk(c.get("controls"), out);
@@ -87,7 +91,10 @@ pub struct ProjectCfg {
 
 impl Default for ProjectCfg {
     fn default() -> Self {
-        ProjectCfg { name: "RASProject".into(), workbook: None }
+        ProjectCfg {
+            name: "RASProject".into(),
+            workbook: None,
+        }
     }
 }
 
@@ -102,7 +109,11 @@ pub struct TargetCfg {
 
 impl Default for TargetCfg {
     fn default() -> Self {
-        TargetCfg { host: "excel".into(), vba6: true, codepage: 932 }
+        TargetCfg {
+            host: "excel".into(),
+            vba6: true,
+            codepage: 932,
+        }
     }
 }
 
@@ -121,7 +132,13 @@ pub struct BuildCfg {
 
 impl Default for BuildCfg {
     fn default() -> Self {
-        BuildCfg { opt_level: 1, inline_threshold: None, erl: true, keep_comments: true, generic_instance_limit: 16 }
+        BuildCfg {
+            opt_level: 1,
+            inline_threshold: None,
+            erl: true,
+            keep_comments: true,
+            generic_instance_limit: 16,
+        }
     }
 }
 
@@ -149,7 +166,10 @@ pub struct PackCfg {
 
 impl Default for PackCfg {
     fn default() -> Self {
-        PackCfg { backup_generations: 5, sign: None }
+        PackCfg {
+            backup_generations: 5,
+            sign: None,
+        }
     }
 }
 
@@ -165,7 +185,11 @@ pub struct DoEventsCfg {
 
 impl Default for DoEventsCfg {
     fn default() -> Self {
-        DoEventsCfg { enabled: true, interval_ms: 100, loop_threshold: 10_000 }
+        DoEventsCfg {
+            enabled: true,
+            interval_ms: 100,
+            loop_threshold: 10_000,
+        }
     }
 }
 
@@ -184,7 +208,13 @@ pub struct SyncCfg {
 
 impl Default for SyncCfg {
     fn default() -> Self {
-        SyncCfg { enabled: true, compile_check: true, shared_memory_mb: 64, pull_unmanaged: true, sheet_files: true }
+        SyncCfg {
+            enabled: true,
+            compile_check: true,
+            shared_memory_mb: 64,
+            pull_unmanaged: true,
+            sheet_files: true,
+        }
     }
 }
 
@@ -205,7 +235,9 @@ pub struct InitCfg {
 
 impl Default for InitCfg {
     fn default() -> Self {
-        InitCfg { fix_enable_events: true }
+        InitCfg {
+            fix_enable_events: true,
+        }
     }
 }
 
@@ -227,7 +259,13 @@ pub struct TestCfg {
 
 impl Default for TestCfg {
     fn default() -> Self {
-        TestCfg { include: vec!["test/**/*.test.ras".into()], timeout_ms: 10_000, excel: "standIn".into(), save_workbooks: "failed".into(), event_errors: "fail".into() }
+        TestCfg {
+            include: vec!["test/**/*.test.ras".into()],
+            timeout_ms: 10_000,
+            excel: "standIn".into(),
+            save_workbooks: "failed".into(),
+            event_errors: "fail".into(),
+        }
     }
 }
 
@@ -244,7 +282,9 @@ pub fn glob_match(pattern: &str, path: &str) -> bool {
         match p.split_first() {
             None => s.is_empty(),
             Some((&"**", rest)) => (0..=s.len()).any(|i| segs(rest, &s[i..])),
-            Some((first, rest)) => s.split_first().is_some_and(|(name, more)| seg(first.as_bytes(), name.as_bytes()) && segs(rest, more)),
+            Some((first, rest)) => s.split_first().is_some_and(|(name, more)| {
+                seg(first.as_bytes(), name.as_bytes()) && segs(rest, more)
+            }),
         }
     }
     fn seg(p: &[u8], s: &[u8]) -> bool {
@@ -265,15 +305,29 @@ impl Config {
         let cfg: Config = toml::from_str(text).map_err(|e| e.to_string())?;
         for (key, value, allowed) in [
             ("excel", &cfg.test.excel, &["standIn", "com"][..]),
-            ("save-workbooks", &cfg.test.save_workbooks, &["failed", "always", "never"][..]),
-            ("event-errors", &cfg.test.event_errors, &["fail", "ignore"][..]),
+            (
+                "save-workbooks",
+                &cfg.test.save_workbooks,
+                &["failed", "always", "never"][..],
+            ),
+            (
+                "event-errors",
+                &cfg.test.event_errors,
+                &["fail", "ignore"][..],
+            ),
         ] {
             if !allowed.contains(&value.as_str()) {
-                return Err(format!("test.{key} = \"{value}\" は指定できません（{}）", allowed.join(" / ")));
+                return Err(format!(
+                    "test.{key} = \"{value}\" は指定できません（{}）",
+                    allowed.join(" / ")
+                ));
             }
         }
         if cfg.target.host != "excel" {
-            return Err(format!("target.host = \"{}\" には対応していません（現状 \"excel\" のみ）", cfg.target.host));
+            return Err(format!(
+                "target.host = \"{}\" には対応していません（現状 \"excel\" のみ）",
+                cfg.target.host
+            ));
         }
         Ok(cfg)
     }

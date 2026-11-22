@@ -463,13 +463,10 @@ fn read_file(root: &Path, path: &str) -> Result<Vec<u8>, String> {
     // A link must not lead out of the project.
     if let (Ok(real_root), Ok(real_file)) = (root.canonicalize(), file.canonicalize()) {
         if !real_file.starts_with(&real_root) {
-            return Err(format!(
-                "画像 {path:?} はプロジェクトの外を指しています"
-            ));
+            return Err(format!("画像 {path:?} はプロジェクトの外を指しています"));
         }
     }
-    let meta =
-        std::fs::metadata(&file).map_err(|e| format!("画像 {path:?} を開けません: {e}"))?;
+    let meta = std::fs::metadata(&file).map_err(|e| format!("画像 {path:?} を開けません: {e}"))?;
     if !meta.is_file() {
         return Err(format!("画像 {path:?} は通常のファイルではありません"));
     }
@@ -592,7 +589,9 @@ mod tests {
         let mut no_frame = vec![0xff, 0xd8];
         no_frame.extend_from_slice(&[0xff, 0xda, 0, 2, 0xff, 0xd9]);
         assert!(inspect(&no_frame).is_err());
-        assert!(inspect(b"\x89PNG\r\n\x1a\n").unwrap_err().contains("BMP か JPEG"));
+        assert!(inspect(b"\x89PNG\r\n\x1a\n")
+            .unwrap_err()
+            .contains("BMP か JPEG"));
         assert!(inspect(b"").is_err());
     }
 
@@ -619,10 +618,16 @@ mod tests {
         // 3x2, opaque red: rows are padded to 4 bytes, stored bottom up as B, G, R.
         let picture = prepare(&png(3, 2, [255, 0, 0, 255]), DEFAULT_BACKGROUND).unwrap();
         assert_eq!(picture.converted_from, Some("PNG"));
-        assert_eq!((picture.format, picture.width, picture.height), (Format::Bmp, 3, 2));
+        assert_eq!(
+            (picture.format, picture.width, picture.height),
+            (Format::Bmp, 3, 2)
+        );
         assert_eq!(picture.data.len(), 54 + 12 * 2);
         assert_eq!(inspect(&picture.data), Ok((Format::Bmp, 3, 2)));
-        assert_eq!(&picture.data[54..66], [0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0]);
+        assert_eq!(
+            &picture.data[54..66],
+            [0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0]
+        );
         assert!(encode(&picture.data).is_ok());
 
         // Transparency is blended onto the background.
@@ -632,7 +637,10 @@ mod tests {
         assert_eq!(&half.data[54..57], [128, 128, 128]);
 
         // The same picture gives the same bytes every time.
-        assert_eq!(prepare(&png(3, 2, [1, 2, 3, 255]), [0; 3]), prepare(&png(3, 2, [1, 2, 3, 255]), [0; 3]));
+        assert_eq!(
+            prepare(&png(3, 2, [1, 2, 3, 255]), [0; 3]),
+            prepare(&png(3, 2, [1, 2, 3, 255]), [0; 3])
+        );
 
         // The orientation survives: top-left pixel of the source is in the last stored row.
         let mut image = image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 0, 255]));
@@ -646,12 +654,17 @@ mod tests {
 
     #[test]
     fn every_convertible_format_is_read() {
-        let source = image::RgbaImage::from_fn(4, 3, |x, y| image::Rgba([x as u8 * 60, y as u8 * 80, 7, 255]));
-        let expected = prepare(&{
-            let mut data = std::io::Cursor::new(Vec::new());
-            source.write_to(&mut data, image::ImageFormat::Png).unwrap();
-            data.into_inner()
-        }, [0; 3])
+        let source = image::RgbaImage::from_fn(4, 3, |x, y| {
+            image::Rgba([x as u8 * 60, y as u8 * 80, 7, 255])
+        });
+        let expected = prepare(
+            &{
+                let mut data = std::io::Cursor::new(Vec::new());
+                source.write_to(&mut data, image::ImageFormat::Png).unwrap();
+                data.into_inner()
+            },
+            [0; 3],
+        )
         .unwrap();
         // Lossless formats give the same bitmap as the PNG.
         for (format, name) in [
@@ -662,7 +675,8 @@ mod tests {
         ] {
             let mut data = std::io::Cursor::new(Vec::new());
             source.write_to(&mut data, format).unwrap();
-            let picture = prepare(&data.into_inner(), [0; 3]).unwrap_or_else(|e| panic!("{name}: {e}"));
+            let picture =
+                prepare(&data.into_inner(), [0; 3]).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(picture.converted_from, Some(name));
             assert_eq!(picture.data, expected.data, "{name}");
         }
@@ -686,27 +700,51 @@ mod tests {
 
     #[test]
     fn pictures_that_cannot_be_converted() {
-        assert!(prepare(b"plain text, not a picture", DEFAULT_BACKGROUND).unwrap_err().contains("判別できません"));
+        assert!(prepare(b"plain text, not a picture", DEFAULT_BACKGROUND)
+            .unwrap_err()
+            .contains("判別できません"));
         assert!(prepare(b"", DEFAULT_BACKGROUND).is_err());
         // A PNG that is cut off.
         let mut cut = png(8, 8, [1, 2, 3, 255]);
         cut.truncate(cut.len() - 20);
-        assert!(prepare(&cut, DEFAULT_BACKGROUND).unwrap_err().contains("PNG として読めません"));
+        assert!(prepare(&cut, DEFAULT_BACKGROUND)
+            .unwrap_err()
+            .contains("PNG として読めません"));
         // 3000x2000 pixels would be an 18 MB bitmap.
         let large = png(3000, 2000, [0, 0, 0, 255]);
         assert!(large.len() < MAX_BYTES);
-        assert!(prepare(&large, DEFAULT_BACKGROUND).unwrap_err().contains("BMP に変換すると"));
+        assert!(prepare(&large, DEFAULT_BACKGROUND)
+            .unwrap_err()
+            .contains("BMP に変換すると"));
     }
 
     #[test]
     fn backgrounds() {
-        let color = |kind: &str, value: &str| crate::FormSpecColor { kind: kind.into(), value: value.into() };
+        let color = |kind: &str, value: &str| crate::FormSpecColor {
+            kind: kind.into(),
+            value: value.into(),
+        };
         assert_eq!(background_of(None), DEFAULT_BACKGROUND);
-        assert_eq!(background_of(Some(&color("rgb", "#102030"))), [0x10, 0x20, 0x30]);
-        assert_eq!(background_of(Some(&color("system", "window"))), [255, 255, 255]);
-        assert_eq!(background_of(Some(&color("system", "buttonFace"))), [0xf0, 0xf0, 0xf0]);
-        assert_eq!(background_of(Some(&color("ole", "0x00302010"))), [0x10, 0x20, 0x30]);
-        assert_eq!(background_of(Some(&color("ole", "0x02000000"))), DEFAULT_BACKGROUND);
+        assert_eq!(
+            background_of(Some(&color("rgb", "#102030"))),
+            [0x10, 0x20, 0x30]
+        );
+        assert_eq!(
+            background_of(Some(&color("system", "window"))),
+            [255, 255, 255]
+        );
+        assert_eq!(
+            background_of(Some(&color("system", "buttonFace"))),
+            [0xf0, 0xf0, 0xf0]
+        );
+        assert_eq!(
+            background_of(Some(&color("ole", "0x00302010"))),
+            [0x10, 0x20, 0x30]
+        );
+        assert_eq!(
+            background_of(Some(&color("ole", "0x02000000"))),
+            DEFAULT_BACKGROUND
+        );
     }
 
     #[test]
@@ -730,7 +768,15 @@ mod tests {
             resolve(root, "forms\\assets\\a.bmp").unwrap(),
             root.join("forms/assets/a.bmp")
         );
-        for bad in ["", " ", "/etc/a.bmp", "C:/a.bmp", "../a.bmp", "forms/../../a.bmp", "."] {
+        for bad in [
+            "",
+            " ",
+            "/etc/a.bmp",
+            "C:/a.bmp",
+            "../a.bmp",
+            "forms/../../a.bmp",
+            ".",
+        ] {
             assert!(resolve(root, bad).is_err(), "{bad:?}");
         }
     }

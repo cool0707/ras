@@ -14,7 +14,9 @@ use crate::vba::*;
 pub(crate) fn needs_handler(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|s| {
         any_stmt(s, &mut |x| match &x.kind {
-            StmtKind::Try(t) => t.finally.is_some() || t.catch.as_ref().is_some_and(|c| !c.is_resume_block()),
+            StmtKind::Try(t) => {
+                t.finally.is_some() || t.catch.as_ref().is_some_and(|c| !c.is_resume_block())
+            }
             StmtKind::Var(v) => v.kind == VarKind::Using,
             _ => false,
         })
@@ -23,10 +25,26 @@ pub(crate) fn needs_handler(stmts: &[Stmt]) -> bool {
 
 /// Constant trip count of `for (let i = A; i < B; i++)` with literal bounds.
 fn const_trip_count(s: &Stmt) -> Option<i128> {
-    let StmtKind::For { init, cond: Some(cond), update, .. } = &s.kind else { return None };
-    let [ast::Stmt { kind: StmtKind::Var(v), .. }] = init.as_slice() else { return None };
+    let StmtKind::For {
+        init,
+        cond: Some(cond),
+        update,
+        ..
+    } = &s.kind
+    else {
+        return None;
+    };
+    let [ast::Stmt {
+        kind: StmtKind::Var(v),
+        ..
+    }] = init.as_slice()
+    else {
+        return None;
+    };
     let from = crate::collect::const_int(v.init.as_ref()?)?;
-    let ExprKind::Binary { op, rhs, .. } = &cond.peel().kind else { return None };
+    let ExprKind::Binary { op, rhs, .. } = &cond.peel().kind else {
+        return None;
+    };
     let to = crate::collect::const_int(rhs)?;
     if update.len() != 1 {
         return None;
@@ -42,7 +60,10 @@ fn const_trip_count(s: &Stmt) -> Option<i128> {
 
 fn loop_decorator(s: &Stmt, name: &str) -> bool {
     let decorators = match &s.kind {
-        StmtKind::For { decorators, .. } | StmtKind::ForOf { decorators, .. } | StmtKind::While { decorators, .. } | StmtKind::DoWhile { decorators, .. } => decorators,
+        StmtKind::For { decorators, .. }
+        | StmtKind::ForOf { decorators, .. }
+        | StmtKind::While { decorators, .. }
+        | StmtKind::DoWhile { decorators, .. } => decorators,
         StmtKind::Labeled { body, .. } => return loop_decorator(body, name),
         _ => return false,
     };
@@ -51,19 +72,35 @@ fn loop_decorator(s: &Stmt, name: &str) -> bool {
 
 fn loop_body(s: &Stmt) -> Option<&Stmt> {
     match &s.kind {
-        StmtKind::For { body, .. } | StmtKind::ForOf { body, .. } | StmtKind::While { body, .. } | StmtKind::DoWhile { body, .. } => Some(body),
+        StmtKind::For { body, .. }
+        | StmtKind::ForOf { body, .. }
+        | StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. } => Some(body),
         _ => None,
     }
 }
 
 /// Chooses the loops that get a `DoEvents` yield point (spec §10.4.1): the innermost
 /// loop of each nest whose trip count is not a small constant.
-pub(crate) fn plan_yields(lw: &Lowerer, f: FnId, stmts: &[Stmt], enabled: bool, out: &mut HashSet<u32>) {
+pub(crate) fn plan_yields(
+    lw: &Lowerer,
+    f: FnId,
+    stmts: &[Stmt],
+    enabled: bool,
+    out: &mut HashSet<u32>,
+) {
     let module = lw.prog.fns[f].module;
     let info = &lw.prog.modules[module].info;
     let threshold = lw.cfg.doevents.loop_threshold as i128;
     // Returns true when a loop inside `s` was chosen.
-    fn visit(lw: &Lowerer, info: &TypeInfo, s: &Stmt, enabled: bool, threshold: i128, out: &mut HashSet<u32>) -> bool {
+    fn visit(
+        lw: &Lowerer,
+        info: &TypeInfo,
+        s: &Stmt,
+        enabled: bool,
+        threshold: i128,
+        out: &mut HashSet<u32>,
+    ) -> bool {
         let Some(body) = loop_body(s) else {
             let mut chosen = false;
             match &s.kind {
@@ -100,12 +137,15 @@ pub(crate) fn plan_yields(lw: &Lowerer, f: FnId, stmts: &[Stmt], enabled: bool, 
                         }
                     }
                 }
-                StmtKind::Labeled { body, .. } => chosen |= visit(lw, info, body, enabled, threshold, out),
+                StmtKind::Labeled { body, .. } => {
+                    chosen |= visit(lw, info, body, enabled, threshold, out)
+                }
                 _ => {}
             }
             return chosen;
         };
-        let enabled_here = (enabled || loop_decorator(s, "doevents")) && !loop_decorator(s, "nodoevents");
+        let enabled_here =
+            (enabled || loop_decorator(s, "doevents")) && !loop_decorator(s, "nodoevents");
         let inner = visit(lw, info, body, enabled_here, threshold, out);
         if !enabled_here || inner {
             return inner;
@@ -177,8 +217,12 @@ impl<'p> Lowerer<'p> {
             StmtKind::Labeled { label, body } => match &body.kind {
                 StmtKind::For { .. } => self.for_stmt(body, Some(label.text.clone())),
                 StmtKind::ForOf { .. } => self.for_of_stmt(body, Some(label.text.clone())),
-                StmtKind::While { cond, body: b, .. } => self.while_stmt(body, cond, b, Some(label.text.clone())),
-                StmtKind::DoWhile { body: b, cond, .. } => self.do_while_stmt(body, b, cond, Some(label.text.clone())),
+                StmtKind::While { cond, body: b, .. } => {
+                    self.while_stmt(body, cond, b, Some(label.text.clone()))
+                }
+                StmtKind::DoWhile { body: b, cond, .. } => {
+                    self.do_while_stmt(body, b, cond, Some(label.text.clone()))
+                }
                 _ => self.stmt(body, tail),
             },
             StmtKind::Switch { disc, cases } => self.switch_stmt(disc, cases),
@@ -186,7 +230,9 @@ impl<'p> Lowerer<'p> {
             StmtKind::Throw(e) => self.throw_stmt(e),
             StmtKind::Return(v) => self.return_stmt(v.as_ref(), tail),
             StmtKind::Break(label) => self.break_stmt(label.as_ref().map(|l| l.text.as_str())),
-            StmtKind::Continue(label) => self.continue_stmt(label.as_ref().map(|l| l.text.as_str())),
+            StmtKind::Continue(label) => {
+                self.continue_stmt(label.as_ref().map(|l| l.text.as_str()))
+            }
         }
     }
 
@@ -212,19 +258,24 @@ impl<'p> Lowerer<'p> {
             }
             return;
         }
-        let Some(&local) = info.decl_locals.get(&offset) else { return };
+        let Some(&local) = info.decl_locals.get(&offset) else {
+            return;
+        };
         let ty = self.local_ty(local);
         let n = self.local_name(&v.name.text, &ty);
         self.bind(local, Binding::Var(n.clone()));
         match &v.init {
             Some(init) => {
                 // Runs once per call: the variable still has its zero value.
-                self.pc.fresh_target = (self.pc.loop_depth == 0 && self.frame().inl.is_none()).then(|| n.clone());
+                self.pc.fresh_target =
+                    (self.pc.loop_depth == 0 && self.frame().inl.is_none()).then(|| n.clone());
                 self.expr_into(init, &VExpr::Name(n), &ty);
                 self.pc.fresh_target = None;
             }
             // `Dim` runs once per procedure: re-initialise explicitly where the declaration can run again (spec §13.1).
-            None if self.pc.loop_depth > 0 || self.frame().inl.is_some() => self.reset_var(&VExpr::Name(n), &ty),
+            None if self.pc.loop_depth > 0 || self.frame().inl.is_some() => {
+                self.reset_var(&VExpr::Name(n), &ty)
+            }
             None => {}
         }
     }
@@ -235,7 +286,10 @@ impl<'p> Lowerer<'p> {
 
     fn if_stmt(&mut self, cond: &Expr, then: &Stmt, els: Option<&Stmt>, tail: bool) {
         // `if (Platform.is64bit)` must be conditional compilation: `LongLong` does not compile on 32-bit Office.
-        if matches!(self.info().res.get(&cond.peel().id), Some(Res::Intrinsic(Intr::PlatformIs64))) {
+        if matches!(
+            self.info().res.get(&cond.peel().id),
+            Some(Res::Intrinsic(Intr::PlatformIs64))
+        ) {
             self.emit(VStmt::Raw("#If Win64 Then".into()));
             let t = self.scoped(then, tail);
             for x in t {
@@ -269,23 +323,41 @@ impl<'p> Lowerer<'p> {
         }
         self.pc.yield_n += 1;
         let counter = self.declare_raw(&format!("ras_y{}", self.pc.yield_n), "Long", false);
-        self.note(ast::Span::at(s.span.start(), 3.into()), true, "doevents", "DoEvents を自動挿入しました（間引き付き）");
+        self.note(
+            ast::Span::at(s.span.start(), 3.into()),
+            true,
+            "doevents",
+            "DoEvents を自動挿入しました（間引き付き）",
+        );
         vec![
             assign(name(counter.clone()), name(counter.clone()).plus(1)),
-            VStmt::Raw(format!("If ({counter} And ras_yieldMask) = 0& Then RAS_Yield")),
+            VStmt::Raw(format!(
+                "If ({counter} And ras_yieldMask) = 0& Then RAS_Yield"
+            )),
         ]
     }
 
     pub(crate) fn enter_loop(&mut self, kind: LoopKind, label: Option<String>) {
         let tries_base = self.pc.tries.len();
-        self.pc.breakables.push(Breakable { kind, label, break_label: None, continue_label: None, tries_base });
+        self.pc.breakables.push(Breakable {
+            kind,
+            label,
+            break_label: None,
+            continue_label: None,
+            tries_base,
+        });
         self.pc.loop_depth += 1;
     }
 
     /// Lowers a loop body; appends the `continue` label when it was used.
     fn loop_body(&mut self, body: &Stmt) -> Vec<VStmt> {
         let mut b = self.scoped(body, false);
-        if let Some(l) = self.pc.breakables.last().and_then(|x| x.continue_label.clone()) {
+        if let Some(l) = self
+            .pc
+            .breakables
+            .last()
+            .and_then(|x| x.continue_label.clone())
+        {
             b.push(VStmt::Label(l));
         }
         b
@@ -307,15 +379,27 @@ impl<'p> Lowerer<'p> {
         let mut b = self.loop_body(body);
         b.extend(self.yield_point(s));
         if always {
-            self.emit(VStmt::Do { pre: None, post: None, body: b });
+            self.emit(VStmt::Do {
+                pre: None,
+                post: None,
+                body: b,
+            });
         } else if pre.is_empty() {
-            self.emit(VStmt::Do { pre: Some(c), post: None, body: b });
+            self.emit(VStmt::Do {
+                pre: Some(c),
+                post: None,
+                body: b,
+            });
         } else {
             // The condition needs statements: evaluate it inside the loop (spec §8.3).
             let mut full = pre;
             full.push(if_then(c.not(), vec![VStmt::Exit("Do")]));
             full.extend(b);
-            self.emit(VStmt::Do { pre: None, post: None, body: full });
+            self.emit(VStmt::Do {
+                pre: None,
+                post: None,
+                body: full,
+            });
         }
         self.leave_loop();
         self.finish_push_plan(caps);
@@ -328,7 +412,11 @@ impl<'p> Lowerer<'p> {
         b.extend(self.yield_point(s));
         let (pre, c) = self.capture(|lw| lw.cond(cond));
         b.extend(pre);
-        self.emit(VStmt::Do { pre: None, post: Some(c), body: b });
+        self.emit(VStmt::Do {
+            pre: None,
+            post: Some(c),
+            body: b,
+        });
         self.leave_loop();
         self.finish_push_plan(caps);
     }
@@ -352,22 +440,41 @@ impl<'p> Lowerer<'p> {
                 // byref arguments and mutating methods (`arr.push`)
                 let target = info.calls.get(&e.id).map(|c| &c.target);
                 let byref_arg = match target {
-                    Some(CallTarget::Fn(f) | CallTarget::Method(f) | CallTarget::Ext(f) | CallTarget::Host(f)) => {
+                    Some(
+                        CallTarget::Fn(f)
+                        | CallTarget::Method(f)
+                        | CallTarget::Ext(f)
+                        | CallTarget::Host(f),
+                    ) => {
                         let def = &self.prog.fns[*f];
                         let skip = usize::from(matches!(target, Some(CallTarget::Ext(_))));
                         let recv_byref = matches!(target, Some(CallTarget::Ext(_)))
-                            && def.params.first().is_some_and(|p| p.mode == ast::PassMode::ByRef || p.ty.is_array())
+                            && def
+                                .params
+                                .first()
+                                .is_some_and(|p| p.mode == ast::PassMode::ByRef || p.ty.is_array())
                             && matches!(&callee.peel().kind, ExprKind::Member { object, .. } if is_local(object));
                         recv_byref
                             || args.iter().enumerate().any(|(i, a)| {
-                                is_local(a) && def.params.get(i + skip).is_none_or(|p| p.mode == ast::PassMode::ByRef || p.ty.is_array())
+                                is_local(a)
+                                    && def.params.get(i + skip).is_none_or(|p| {
+                                        p.mode == ast::PassMode::ByRef || p.ty.is_array()
+                                    })
                             })
                     }
                     Some(CallTarget::Intrinsic(i)) => {
-                        matches!(i, Intr::ArrPush | Intr::ArrPop | Intr::ArrSort | Intr::ArrReverse | Intr::ArrClear)
-                            && matches!(&callee.peel().kind, ExprKind::Member { object, .. } if is_local(object))
+                        matches!(
+                            i,
+                            Intr::ArrPush
+                                | Intr::ArrPop
+                                | Intr::ArrSort
+                                | Intr::ArrReverse
+                                | Intr::ArrClear
+                        ) && matches!(&callee.peel().kind, ExprKind::Member { object, .. } if is_local(object))
                     }
-                    Some(CallTarget::Dynamic | CallTarget::Closure | CallTarget::DefaultMember(_)) => args.iter().any(&is_local),
+                    Some(
+                        CallTarget::Dynamic | CallTarget::Closure | CallTarget::DefaultMember(_),
+                    ) => args.iter().any(&is_local),
                     _ => false,
                 };
                 byref_arg
@@ -376,14 +483,15 @@ impl<'p> Lowerer<'p> {
         })
     }
 
-
     /// Is `e` guaranteed to keep its value while `body` runs?
     pub(crate) fn is_invariant(&self, e: &Expr, body: &Stmt) -> bool {
         let info = self.info();
         match &e.peel().kind {
             ExprKind::Int { .. } | ExprKind::Float { .. } => true,
             ExprKind::Name(_) => match info.res.get(&e.peel().id) {
-                Some(Res::Local(l)) => !self.modifies_local(body, *l) && !self.frame_local_is_byref(*l),
+                Some(Res::Local(l)) => {
+                    !self.modifies_local(body, *l) && !self.frame_local_is_byref(*l)
+                }
                 Some(Res::Global(v)) => {
                     let d = &self.prog.vars[*v];
                     (d.is_const && !d.declared) || (!d.declared && !d.reassigned)
@@ -393,23 +501,41 @@ impl<'p> Lowerer<'p> {
             },
             ExprKind::Member { object, .. } => {
                 // `arr.length` of a local array that the body does not touch otherwise
-                matches!(info.res.get(&e.peel().id), Some(Res::Intrinsic(Intr::ArrLength | Intr::StrLength)))
-                    && match self.local_of(object) {
-                        Some(l) => !self.modifies_local(body, l) && !self.frame_local_is_byref(l),
-                        None => false,
-                    }
+                matches!(
+                    info.res.get(&e.peel().id),
+                    Some(Res::Intrinsic(Intr::ArrLength | Intr::StrLength))
+                ) && match self.local_of(object) {
+                    Some(l) => !self.modifies_local(body, l) && !self.frame_local_is_byref(l),
+                    None => false,
+                }
             }
-            ExprKind::Unary { op: ast::UnaryOp::Neg, operand } => self.is_invariant(operand, body),
-            ExprKind::Binary { op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul, lhs, rhs } => self.is_invariant(lhs, body) && self.is_invariant(rhs, body),
+            ExprKind::Unary {
+                op: ast::UnaryOp::Neg,
+                operand,
+            } => self.is_invariant(operand, body),
+            ExprKind::Binary {
+                op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul,
+                lhs,
+                rhs,
+            } => self.is_invariant(lhs, body) && self.is_invariant(rhs, body),
             _ => false,
         }
     }
 
     fn frame_local_is_byref(&self, l: LocalId) -> bool {
-        self.frame().fn_id.and_then(|f| self.prog.fns[f].locals.get(l)).is_some_and(|d| d.byref)
+        self.frame()
+            .fn_id
+            .and_then(|f| self.prog.fns[f].locals.get(l))
+            .is_some_and(|d| d.byref)
     }
 
-    pub(crate) fn for_shape<'a>(&self, init: &'a [Stmt], cond: Option<&'a Expr>, update: &'a [Expr], body: &'a Stmt) -> Option<ForShape<'a>> {
+    pub(crate) fn for_shape<'a>(
+        &self,
+        init: &'a [Stmt],
+        cond: Option<&'a Expr>,
+        update: &'a [Expr],
+        body: &'a Stmt,
+    ) -> Option<ForShape<'a>> {
         let info = self.info();
         let [first] = init else { return None };
         let (local, decl, from) = match &first.kind {
@@ -418,7 +544,11 @@ impl<'p> Lowerer<'p> {
                 (l, Some(v), v.init.as_ref()?)
             }
             StmtKind::Expr(e) => match &e.kind {
-                ExprKind::Assign { op: None, target, value } => (self.local_of(target)?, None, &**value),
+                ExprKind::Assign {
+                    op: None,
+                    target,
+                    value,
+                } => (self.local_of(target)?, None, &**value),
                 _ => return None,
             },
             _ => return None,
@@ -426,8 +556,15 @@ impl<'p> Lowerer<'p> {
         if !self.local_ty(local).is_integer() {
             return None;
         }
-        let ExprKind::Binary { op, lhs, rhs } = &cond?.peel().kind else { return None };
-        if self.local_of(lhs)? != local || !matches!(op, BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge) {
+        let ExprKind::Binary { op, lhs, rhs } = &cond?.peel().kind else {
+            return None;
+        };
+        if self.local_of(lhs)? != local
+            || !matches!(
+                op,
+                BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+            )
+        {
             return None;
         }
         let [upd] = update else { return None };
@@ -439,7 +576,11 @@ impl<'p> Lowerer<'p> {
                     -1
                 }
             }
-            ExprKind::Assign { op: Some(o @ (BinaryOp::Add | BinaryOp::Sub)), target, value } if self.local_of(target)? == local => {
+            ExprKind::Assign {
+                op: Some(o @ (BinaryOp::Add | BinaryOp::Sub)),
+                target,
+                value,
+            } if self.local_of(target)? == local => {
                 let k = i64::try_from(crate::collect::const_int(value)?).ok()?;
                 if k <= 0 {
                     return None;
@@ -464,7 +605,14 @@ impl<'p> Lowerer<'p> {
         if any_expr_in(rhs, &mut |x| self.local_of(x) == Some(local)) {
             return None;
         }
-        Some(ForShape { local, decl, from, bound: rhs, op: *op, step })
+        Some(ForShape {
+            local,
+            decl,
+            from,
+            bound: rhs,
+            op: *op,
+            step,
+        })
     }
 
     fn for_stmt(&mut self, s: &Stmt, label: Option<String>) {
@@ -479,7 +627,16 @@ impl<'p> Lowerer<'p> {
     }
 
     pub(crate) fn for_stmt_plain(&mut self, s: &Stmt, label: Option<String>) {
-        let StmtKind::For { init, cond, update, body, .. } = &s.kind else { return };
+        let StmtKind::For {
+            init,
+            cond,
+            update,
+            body,
+            ..
+        } = &s.kind
+        else {
+            return;
+        };
         let caps = self.push_plan(s);
         if let Some(shape) = self.for_shape(init, cond.as_ref(), update, body) {
             let from = self.expr(shape.from);
@@ -506,7 +663,13 @@ impl<'p> Lowerer<'p> {
             let mut b = self.loop_body(body);
             b.extend(self.yield_point(s));
             let step = (shape.step != 1).then(|| long(shape.step));
-            self.emit(VStmt::For { var, from, to, step, body: b });
+            self.emit(VStmt::For {
+                var,
+                from,
+                to,
+                step,
+                body: b,
+            });
             self.leave_loop();
             self.finish_push_plan(caps);
             return;
@@ -532,13 +695,25 @@ impl<'p> Lowerer<'p> {
         b.extend(upd);
         b.extend(self.yield_point(s));
         match c {
-            None => self.emit(VStmt::Do { pre: None, post: None, body: b }),
-            Some(c) if pre.is_empty() => self.emit(VStmt::Do { pre: Some(c), post: None, body: b }),
+            None => self.emit(VStmt::Do {
+                pre: None,
+                post: None,
+                body: b,
+            }),
+            Some(c) if pre.is_empty() => self.emit(VStmt::Do {
+                pre: Some(c),
+                post: None,
+                body: b,
+            }),
             Some(c) => {
                 let mut full = pre;
                 full.push(if_then(c.not(), vec![VStmt::Exit("Do")]));
                 full.extend(b);
-                self.emit(VStmt::Do { pre: None, post: None, body: full });
+                self.emit(VStmt::Do {
+                    pre: None,
+                    post: None,
+                    body: full,
+                });
             }
         }
         self.leave_loop();
@@ -546,15 +721,31 @@ impl<'p> Lowerer<'p> {
     }
 
     fn for_of_stmt(&mut self, s: &Stmt, label: Option<String>) {
-        let StmtKind::ForOf { name: var_name, iter, body, .. } = &s.kind else { return };
+        let StmtKind::ForOf {
+            name: var_name,
+            iter,
+            body,
+            ..
+        } = &s.kind
+        else {
+            return;
+        };
         let info = self.info();
-        let Some(&local) = info.decl_locals.get(&u32::from(var_name.span.start())) else { return };
+        let Some(&local) = info.decl_locals.get(&u32::from(var_name.span.start())) else {
+            return;
+        };
         let var_ty = self.local_ty(local);
         let iter_ty = self.ty(iter);
         let caps = self.push_plan(s);
         // `for (const k of map.keys())` enumerates the dictionary directly.
-        let map_iter = match (&iter.peel().kind, info.calls.get(&iter.peel().id).map(|c| &c.target)) {
-            (ExprKind::Call { callee, .. }, Some(CallTarget::Intrinsic(i @ (Intr::MapKeys | Intr::MapValues)))) => match &callee.peel().kind {
+        let map_iter = match (
+            &iter.peel().kind,
+            info.calls.get(&iter.peel().id).map(|c| &c.target),
+        ) {
+            (
+                ExprKind::Call { callee, .. },
+                Some(CallTarget::Intrinsic(i @ (Intr::MapKeys | Intr::MapValues))),
+            ) => match &callee.peel().kind {
                 ExprKind::Member { object, .. } => Some((*i, &**object)),
                 _ => None,
             },
@@ -564,11 +755,17 @@ impl<'p> Lowerer<'p> {
             let elem_ty = iter_ty.elem().cloned().unwrap_or(Type::Any);
             // A struct element that the body only reads field by field is not copied into the
             // loop variable: `p.x` becomes `ps(i).x`.
-            let alias = self.opt > 0 && matches!(elem_ty, Type::Struct(_)) && var_ty == elem_ty && self.can_alias_element(local, iter, body);
+            let alias = self.opt > 0
+                && matches!(elem_ty, Type::Struct(_))
+                && var_ty == elem_ty
+                && self.can_alias_element(local, iter, body);
             let src = self.stable_array(iter);
             let idx = self.declare_raw("ras_i", "Long", false);
             let n = if alias {
-                self.bind(local, Binding::Expr(src.clone().index(vec![name(idx.clone())])));
+                self.bind(
+                    local,
+                    Binding::Expr(src.clone().index(vec![name(idx.clone())])),
+                );
                 None
             } else {
                 let n = self.local_name(&var_name.text, &var_ty);
@@ -578,13 +775,24 @@ impl<'p> Lowerer<'p> {
             self.enter_loop(LoopKind::For, label);
             let (mut b, _) = self.capture(|lw| {
                 if let Some(n) = &n {
-                    lw.store(&VExpr::Name(n.clone()), &var_ty, src.clone().index(vec![name(idx.clone())]), &elem_ty);
+                    lw.store(
+                        &VExpr::Name(n.clone()),
+                        &var_ty,
+                        src.clone().index(vec![name(idx.clone())]),
+                        &elem_ty,
+                    );
                 }
             });
             b.extend(self.loop_body(body));
             b.extend(self.yield_point(s));
             let len = self.len_of(src, &iter_ty);
-            self.emit(VStmt::For { var: idx, from: long(0), to: len.plus(-1), step: None, body: b });
+            self.emit(VStmt::For {
+                var: idx,
+                from: long(0),
+                to: len.plus(-1),
+                step: None,
+                body: b,
+            });
             self.leave_loop();
             self.finish_push_plan(caps);
             return;
@@ -599,18 +807,30 @@ impl<'p> Lowerer<'p> {
         };
         let n = self.local_name(&var_name.text, &var_ty);
         self.bind(local, Binding::Var(n.clone()));
-        let direct = var_ty.is_object() || matches!(var_ty, Type::Any) || self.vtype(&var_ty).0 == "Variant";
+        let direct =
+            var_ty.is_object() || matches!(var_ty, Type::Any) || self.vtype(&var_ty).0 == "Variant";
         self.enter_loop(LoopKind::For, label);
         let (control, mut b) = if direct && !var_ty.is_array() {
             (n, Vec::new())
         } else {
             let tmp = self.declare_raw("ras_v", "Variant", false);
-            let (pre, _) = self.capture(|lw| lw.store(&VExpr::Name(n.clone()), &var_ty, name(tmp.clone()), &Type::Any));
+            let (pre, _) = self.capture(|lw| {
+                lw.store(
+                    &VExpr::Name(n.clone()),
+                    &var_ty,
+                    name(tmp.clone()),
+                    &Type::Any,
+                )
+            });
             (tmp, pre)
         };
         b.extend(self.loop_body(body));
         b.extend(self.yield_point(s));
-        self.emit(VStmt::ForEach { var: control, coll, body: b });
+        self.emit(VStmt::ForEach {
+            var: control,
+            coll,
+            body: b,
+        });
         self.leave_loop();
         self.finish_push_plan(caps);
     }
@@ -630,7 +850,10 @@ impl<'p> Lowerer<'p> {
                 ExprKind::Member { object, .. } if is_var(object) => {
                     field_reads.insert(object.peel().id);
                 }
-                ExprKind::Assign { target, .. } | ExprKind::IncDec { operand: target, .. } => {
+                ExprKind::Assign { target, .. }
+                | ExprKind::IncDec {
+                    operand: target, ..
+                } => {
                     // `p.x = 1`, `p.a.b++`, `p.items[0] = 1`
                     if is_var(chain_root(target)) {
                         written = true;
@@ -649,18 +872,41 @@ impl<'p> Lowerer<'p> {
                     };
                     match target {
                         Some(CallTarget::Intrinsic(i)) => {
-                            if matches!(i, Intr::ArrPush | Intr::ArrPop | Intr::ArrSort | Intr::ArrReverse | Intr::ArrClear) && recv.is_some_and(rooted) {
+                            if matches!(
+                                i,
+                                Intr::ArrPush
+                                    | Intr::ArrPop
+                                    | Intr::ArrSort
+                                    | Intr::ArrReverse
+                                    | Intr::ArrClear
+                            ) && recv.is_some_and(rooted)
+                            {
                                 written = true;
                             }
                         }
-                        Some(CallTarget::Fn(f) | CallTarget::Method(f) | CallTarget::Ext(f) | CallTarget::Host(f)) => {
+                        Some(
+                            CallTarget::Fn(f)
+                            | CallTarget::Method(f)
+                            | CallTarget::Ext(f)
+                            | CallTarget::Host(f),
+                        ) => {
                             let def = &self.prog.fns[*f];
                             let skip = usize::from(matches!(target, Some(CallTarget::Ext(_))));
-                            let by_ref = |p: Option<&ParamDef>| p.is_none_or(|p| p.mode == ast::PassMode::ByRef || p.ty.is_array() || matches!(p.ty, Type::Struct(_) | Type::Param(_)));
+                            let by_ref = |p: Option<&ParamDef>| {
+                                p.is_none_or(|p| {
+                                    p.mode == ast::PassMode::ByRef
+                                        || p.ty.is_array()
+                                        || matches!(p.ty, Type::Struct(_) | Type::Param(_))
+                                })
+                            };
                             if skip == 1 && recv.is_some_and(rooted) && by_ref(def.params.first()) {
                                 written = true;
                             }
-                            if args.iter().enumerate().any(|(i, a)| rooted(a) && by_ref(def.params.get(i + skip))) {
+                            if args
+                                .iter()
+                                .enumerate()
+                                .any(|(i, a)| rooted(a) && by_ref(def.params.get(i + skip)))
+                            {
                                 written = true;
                             }
                         }
@@ -678,15 +924,28 @@ impl<'p> Lowerer<'p> {
         if written {
             return false;
         }
-        let bare_use = any_expr(body, &mut |e| matches!(e.kind, ExprKind::Name(_)) && is_var(e) && !field_reads.contains(&e.id));
+        let bare_use = any_expr(body, &mut |e| {
+            matches!(e.kind, ExprKind::Name(_)) && is_var(e) && !field_reads.contains(&e.id)
+        });
         if bare_use {
             return false;
         }
         match self.local_of(iter) {
             Some(arr) => {
-                let Some(def) = self.frame().fn_id.and_then(|f| self.prog.fns[f].locals.get(arr)) else { return false };
-                let untouched = !any_expr(body, &mut |e| matches!(e.kind, ExprKind::Name(_)) && self.local_of(e) == Some(arr));
-                if def.captured || !untouched || !matches!(self.frame().locals.get(&arr), Some(Binding::Var(_))) {
+                let Some(def) = self
+                    .frame()
+                    .fn_id
+                    .and_then(|f| self.prog.fns[f].locals.get(arr))
+                else {
+                    return false;
+                };
+                let untouched = !any_expr(body, &mut |e| {
+                    matches!(e.kind, ExprKind::Name(_)) && self.local_of(e) == Some(arr)
+                });
+                if def.captured
+                    || !untouched
+                    || !matches!(self.frame().locals.get(&arr), Some(Binding::Var(_)))
+                {
                     return false;
                 }
                 match def.kind {
@@ -699,14 +958,20 @@ impl<'p> Lowerer<'p> {
                             info.calls.get(&e.id).map(|c| &c.target),
                             Some(CallTarget::Intrinsic(i)) if !matches!(i, Intr::ArrPush | Intr::ArrPop | Intr::ArrSort | Intr::ArrReverse | Intr::ArrClear)
                         ),
-                        ExprKind::Assign { target, .. } | ExprKind::IncDec { operand: target, .. } => self.local_of(target).is_none(),
+                        ExprKind::Assign { target, .. }
+                        | ExprKind::IncDec {
+                            operand: target, ..
+                        } => self.local_of(target).is_none(),
                         _ => false,
                     }),
                     _ => false,
                 }
             }
             // Anything that is not a variable or field is evaluated into a temporary array.
-            None => !matches!(&iter.peel().kind, ExprKind::Name(_) | ExprKind::This | ExprKind::Member { .. }),
+            None => !matches!(
+                &iter.peel().kind,
+                ExprKind::Name(_) | ExprKind::This | ExprKind::Member { .. }
+            ),
         }
     }
 
@@ -721,7 +986,9 @@ impl<'p> Lowerer<'p> {
         let info = self.info();
         let mut pushed: Vec<LocalId> = Vec::new();
         any_expr(s, &mut |e| {
-            if let (ExprKind::Call { callee, .. }, Some(CallTarget::Intrinsic(Intr::ArrPush))) = (&e.kind, info.calls.get(&e.id).map(|c| &c.target)) {
+            if let (ExprKind::Call { callee, .. }, Some(CallTarget::Intrinsic(Intr::ArrPush))) =
+                (&e.kind, info.calls.get(&e.id).map(|c| &c.target))
+            {
                 if let ExprKind::Member { object, .. } = &callee.peel().kind {
                     if let Some(l) = self.local_of(object) {
                         if !pushed.contains(&l) {
@@ -736,14 +1003,27 @@ impl<'p> Lowerer<'p> {
             return Vec::new();
         }
         // An early exit would leave the array over-allocated.
-        let escapes = any_stmt(s, &mut |x| matches!(x.kind, StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Try(_)));
+        let escapes = any_stmt(s, &mut |x| {
+            matches!(
+                x.kind,
+                StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Try(_)
+            )
+        });
         if escapes || self.has_escaping_calls(s) {
             return Vec::new();
         }
         let mut out = Vec::new();
         for l in pushed {
-            let Some(Binding::Var(arr)) = self.frame().locals.get(&l).cloned() else { continue };
-            let def_ok = self.frame().fn_id.and_then(|f| self.prog.fns[f].locals.get(l)).is_some_and(|d| matches!(d.kind, LocalKind::Let | LocalKind::Const) && !d.captured);
+            let Some(Binding::Var(arr)) = self.frame().locals.get(&l).cloned() else {
+                continue;
+            };
+            let def_ok = self
+                .frame()
+                .fn_id
+                .and_then(|f| self.prog.fns[f].locals.get(l))
+                .is_some_and(|d| {
+                    matches!(d.kind, LocalKind::Let | LocalKind::Const) && !d.captured
+                });
             if !def_ok || self.pc.push_caps.contains_key(&arr) {
                 continue;
             }
@@ -753,14 +1033,21 @@ impl<'p> Lowerer<'p> {
             crate::astutil::walk_stmt(s, &mut |_| true, &mut |e| {
                 match &e.kind {
                     ExprKind::Member { object, .. } if self.local_of(object) == Some(l) => {
-                        if matches!(info.res.get(&e.id), Some(Res::Intrinsic(Intr::ArrPush | Intr::ArrLength))) {
+                        if matches!(
+                            info.res.get(&e.id),
+                            Some(Res::Intrinsic(Intr::ArrPush | Intr::ArrLength))
+                        ) {
                             allowed.insert(object.peel().id);
                         }
                     }
                     ExprKind::Index { object, .. } if self.local_of(object) == Some(l) => {
                         allowed.insert(object.peel().id);
                     }
-                    ExprKind::Name(_) if self.local_of(e) == Some(l) && !allowed.contains(&e.id) => ok = false,
+                    ExprKind::Name(_)
+                        if self.local_of(e) == Some(l) && !allowed.contains(&e.id) =>
+                    {
+                        ok = false
+                    }
                     _ => {}
                 }
                 true
@@ -774,7 +1061,9 @@ impl<'p> Lowerer<'p> {
             let cur = self.len_of(name(arr.clone()), &ty);
             self.emit(assign(name(len.clone()), cur));
             self.emit(assign(name(cap.clone()), name(len.clone())));
-            self.pc.push_caps.insert(arr.clone(), (len.clone(), cap.clone()));
+            self.pc
+                .push_caps
+                .insert(arr.clone(), (len.clone(), cap.clone()));
             out.push((arr, len, cap, ty));
         }
         out
@@ -783,7 +1072,14 @@ impl<'p> Lowerer<'p> {
     /// Calls that could raise or re-enter and observe the over-allocated array.
     fn has_escaping_calls(&self, s: &Stmt) -> bool {
         let info = self.info();
-        any_expr(s, &mut |e| matches!(&e.kind, ExprKind::Arrow(_)) || (matches!(e.kind, ExprKind::Call { .. }) && matches!(info.calls.get(&e.id).map(|c| &c.target), Some(CallTarget::Closure))))
+        any_expr(s, &mut |e| {
+            matches!(&e.kind, ExprKind::Arrow(_))
+                || (matches!(e.kind, ExprKind::Call { .. })
+                    && matches!(
+                        info.calls.get(&e.id).map(|c| &c.target),
+                        Some(CallTarget::Closure)
+                    ))
+        })
     }
 
     fn finish_push_plan(&mut self, caps: Vec<(String, String, String, Type)>) {
@@ -791,11 +1087,22 @@ impl<'p> Lowerer<'p> {
             self.pc.push_caps.remove(&arr);
             // Trim to the real size after the loop.
             let (_, is_typed_array) = self.vtype(&ty);
-            let clear = if is_typed_array { VStmt::Erase(name(arr.clone())) } else { assign(name(arr.clone()), lit("Empty")) };
+            let clear = if is_typed_array {
+                VStmt::Erase(name(arr.clone()))
+            } else {
+                assign(name(arr.clone()), lit("Empty"))
+            };
             self.emit(VStmt::If {
                 cond: bin("=", name(len.clone()), long(0)),
                 then: vec![clear],
-                elifs: vec![(bin("<", name(len.clone()), name(cap)), vec![VStmt::ReDim { preserve: true, target: name(arr), dims: vec![(long(0), name(len).plus(-1))] }])],
+                elifs: vec![(
+                    bin("<", name(len.clone()), name(cap)),
+                    vec![VStmt::ReDim {
+                        preserve: true,
+                        target: name(arr),
+                        dims: vec![(long(0), name(len).plus(-1))],
+                    }],
+                )],
                 els: vec![],
             });
         }
@@ -806,7 +1113,13 @@ impl<'p> Lowerer<'p> {
     fn switch_stmt(&mut self, disc: &Expr, cases: &[ast::SwitchCase]) {
         let d = self.expr(disc);
         let tries_base = self.pc.tries.len();
-        self.pc.breakables.push(Breakable { kind: LoopKind::Switch, label: None, break_label: None, continue_label: None, tries_base });
+        self.pc.breakables.push(Breakable {
+            kind: LoopKind::Switch,
+            label: None,
+            break_label: None,
+            continue_label: None,
+            tries_base,
+        });
         let mut out_cases: Vec<(Vec<VExpr>, Vec<VStmt>)> = Vec::new();
         let mut default: Option<Vec<VStmt>> = None;
         let mut pending_tests: Vec<VExpr> = Vec::new();
@@ -825,11 +1138,21 @@ impl<'p> Lowerer<'p> {
                 continue;
             }
             let mut body = c.body.as_slice();
-            let ends_with_break = matches!(body.last().map(|s| &s.kind), Some(StmtKind::Break(None)));
+            let ends_with_break =
+                matches!(body.last().map(|s| &s.kind), Some(StmtKind::Break(None)));
             if ends_with_break {
                 body = &body[..body.len() - 1];
             }
-            let terminates = ends_with_break || matches!(body.last().map(|s| &s.kind), Some(StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Continue(_) | StmtKind::Break(Some(_))));
+            let terminates = ends_with_break
+                || matches!(
+                    body.last().map(|s| &s.kind),
+                    Some(
+                        StmtKind::Return(_)
+                            | StmtKind::Throw(_)
+                            | StmtKind::Continue(_)
+                            | StmtKind::Break(Some(_))
+                    )
+                );
             let incoming = fall_label.take();
             let (mut b, _) = self.capture(|lw| {
                 if let Some(l) = incoming {
@@ -845,7 +1168,11 @@ impl<'p> Lowerer<'p> {
             }
             if pending_default {
                 if i + 1 != cases.len() {
-                    self.err(c.span, "E0620", "`default` は `switch` の最後に書いてください");
+                    self.err(
+                        c.span,
+                        "E0620",
+                        "`default` は `switch` の最後に書いてください",
+                    );
                 }
                 default = Some(b);
             } else {
@@ -854,7 +1181,11 @@ impl<'p> Lowerer<'p> {
             pending_tests.clear();
             pending_default = false;
         }
-        self.emit(VStmt::Select { expr: d, cases: out_cases, els: default });
+        self.emit(VStmt::Select {
+            expr: d,
+            cases: out_cases,
+            els: default,
+        });
         let b = self.pc.breakables.pop().unwrap();
         if let Some(l) = b.break_label {
             self.emit(VStmt::Label(l));
@@ -864,7 +1195,11 @@ impl<'p> Lowerer<'p> {
     // ------------------------------------------------------------------ try / catch / finally (spec §5)
 
     fn restore_on_error(&self) -> VStmt {
-        VStmt::Raw(if self.pc.uses_handler { "On Error GoTo RAS_Handler".into() } else { "On Error GoTo 0".into() })
+        VStmt::Raw(if self.pc.uses_handler {
+            "On Error GoTo RAS_Handler".into()
+        } else {
+            "On Error GoTo 0".into()
+        })
     }
 
     fn set_try_id(&mut self, id: u32) {
@@ -884,7 +1219,10 @@ impl<'p> Lowerer<'p> {
                 // spec §5.2: errors inside the block are ignored.
                 self.emit(VStmt::Raw("On Error Resume Next".into()));
                 let outer_id = self.pc.cur_try_id;
-                self.pc.tries.push(TryCtx { kind: TryKind::ResumeNext, outer_id });
+                self.pc.tries.push(TryCtx {
+                    kind: TryKind::ResumeNext,
+                    outer_id,
+                });
                 self.stmts(&t.block.stmts, false);
                 self.pc.tries.pop();
                 let restore = self.restore_on_error();
@@ -898,8 +1236,14 @@ impl<'p> Lowerer<'p> {
 
     fn bind_catch_param(&mut self, c: &ast::CatchClause) {
         let Some(p) = &c.param else { return };
-        let Some(&local) = self.info().decl_locals.get(&u32::from(p.span.start())) else { return };
-        let used = self.frame().fn_id.and_then(|f| self.prog.fns[f].locals.get(local)).is_none_or(|l| l.used);
+        let Some(&local) = self.info().decl_locals.get(&u32::from(p.span.start())) else {
+            return;
+        };
+        let used = self
+            .frame()
+            .fn_id
+            .and_then(|f| self.prog.fns[f].locals.get(local))
+            .is_none_or(|l| l.used);
         let ty = self.local_ty(local);
         let n = self.local_name(&p.text, &ty);
         self.bind(local, Binding::Var(n.clone()));
@@ -912,7 +1256,10 @@ impl<'p> Lowerer<'p> {
         let outer = self.pc.cur_try_id;
         let id = self.new_try_id();
         self.set_try_id(id);
-        self.pc.tries.push(TryCtx { kind: TryKind::Catch, outer_id: outer });
+        self.pc.tries.push(TryCtx {
+            kind: TryKind::Catch,
+            outer_id: outer,
+        });
         self.stmts(&block.stmts, false);
         self.pc.tries.pop();
         self.set_try_id(outer);
@@ -925,7 +1272,9 @@ impl<'p> Lowerer<'p> {
         self.bind_catch_param(c);
         self.stmts(&c.body.stmts, false);
         self.emit(VStmt::Label(end));
-        self.pc.handler_arms.push((id, vec![VStmt::Raw(format!("Resume {catch}"))]));
+        self.pc
+            .handler_arms
+            .push((id, vec![VStmt::Raw(format!("Resume {catch}"))]));
     }
 
     fn try_finally(&mut self, body: &[Stmt], catch: Option<&ast::CatchClause>, fin: Fin) {
@@ -937,10 +1286,24 @@ impl<'p> Lowerer<'p> {
         self.emit(assign(name(exit_var.clone()), long(0)));
         self.set_try_id(id);
         // Exit code 1 is always "re-raise the pending error".
-        self.pc.tries.push(TryCtx { kind: TryKind::Finally { label: fin_label.clone(), exit_var: exit_var.clone(), pending: vec![PendingExit::Rethrow] }, outer_id: outer });
+        self.pc.tries.push(TryCtx {
+            kind: TryKind::Finally {
+                label: fin_label.clone(),
+                exit_var: exit_var.clone(),
+                pending: vec![PendingExit::Rethrow],
+            },
+            outer_id: outer,
+        });
         self.stmts(body, false);
         let to_finally = |id: u32| {
-            (id, vec![assign(name(exit_var.clone()), long(1)), set(name(pend.clone()), call("RAS_CaughtError", vec![])), VStmt::Raw(format!("Resume {fin_label}"))])
+            (
+                id,
+                vec![
+                    assign(name(exit_var.clone()), long(1)),
+                    set(name(pend.clone()), call("RAS_CaughtError", vec![])),
+                    VStmt::Raw(format!("Resume {fin_label}")),
+                ],
+            )
         };
         if let Some(c) = catch {
             let catch_label = self.label("RAS_Catch");
@@ -950,7 +1313,9 @@ impl<'p> Lowerer<'p> {
             self.set_try_id(catch_id);
             self.bind_catch_param(c);
             self.stmts(&c.body.stmts, false);
-            self.pc.handler_arms.push((id, vec![VStmt::Raw(format!("Resume {catch_label}"))]));
+            self.pc
+                .handler_arms
+                .push((id, vec![VStmt::Raw(format!("Resume {catch_label}"))]));
             self.pc.handler_arms.push(to_finally(catch_id));
         } else {
             self.pc.handler_arms.push(to_finally(id));
@@ -967,7 +1332,9 @@ impl<'p> Lowerer<'p> {
             }
         }
         // Continue with whatever left the try block.
-        let TryKind::Finally { pending, .. } = ctx.kind else { return };
+        let TryKind::Finally { pending, .. } = ctx.kind else {
+            return;
+        };
         let mut cases = Vec::new();
         for (i, p) in pending.into_iter().enumerate() {
             let (b, _) = self.capture(|lw| match p {
@@ -977,13 +1344,20 @@ impl<'p> Lowerer<'p> {
             });
             cases.push((vec![long(i as i64 + 1)], b));
         }
-        self.emit(VStmt::Select { expr: name(exit_var), cases, els: None });
+        self.emit(VStmt::Select {
+            expr: name(exit_var),
+            cases,
+            els: None,
+        });
     }
 
     fn using_stmt(&mut self, v: &ast::VarDecl, rest: &[Stmt]) {
         let Some(init) = &v.init else { return };
         let info = self.info();
-        let is_fast = matches!(info.calls.get(&init.peel().id).map(|c| &c.target), Some(CallTarget::Intrinsic(Intr::FastMode)));
+        let is_fast = matches!(
+            info.calls.get(&init.peel().id).map(|c| &c.target),
+            Some(CallTarget::Intrinsic(Intr::FastMode))
+        );
         let fin = if is_fast {
             let mask = super::expr::fast_mode_mask(init);
             if mask == 63 {
@@ -994,12 +1368,20 @@ impl<'p> Lowerer<'p> {
                 vec![call_stmt("RAS_Resume", vec![long(mask)])]
             }
         } else {
-            let Some(&local) = info.decl_locals.get(&u32::from(v.name.span.start())) else { return };
+            let Some(&local) = info.decl_locals.get(&u32::from(v.name.span.start())) else {
+                return;
+            };
             let ty = self.local_ty(local);
             let n = self.local_name(&v.name.text, &ty);
             self.bind(local, Binding::Var(n.clone()));
             self.expr_into(init, &VExpr::Name(n.clone()), &ty);
-            vec![if_then(bin("Is", name(n.clone()), lit("Nothing")).not_is(), vec![VStmt::Call { target: name(n).member("dispose"), args: vec![] }])]
+            vec![if_then(
+                bin("Is", name(n.clone()), lit("Nothing")).not_is(),
+                vec![VStmt::Call {
+                    target: name(n).member("dispose"),
+                    args: vec![],
+                }],
+            )]
         };
         self.try_finally(rest, None, Fin::Vba(fin));
     }
@@ -1009,14 +1391,26 @@ impl<'p> Lowerer<'p> {
         let raise = VExpr::Name("Err".into()).member("Raise");
         let default_code = bin("+", name("vbObjectError"), long(513));
         match &e.peel().kind {
-            ExprKind::New { ty: ast::TypeRef::Named { path, .. }, args } if path.len() == 1 && path[0].text == "Error" => {
-                let msg = args.first().map(|a| self.expr(a)).unwrap_or_else(|| lit("\"\""));
+            ExprKind::New {
+                ty: ast::TypeRef::Named { path, .. },
+                args,
+            } if path.len() == 1 && path[0].text == "Error" => {
+                let msg = args
+                    .first()
+                    .map(|a| self.expr(a))
+                    .unwrap_or_else(|| lit("\"\""));
                 let code = args.get(1).map(|a| self.expr(a)).unwrap_or(default_code);
-                self.emit(VStmt::Call { target: raise, args: vec![code, src, msg] });
+                self.emit(VStmt::Call {
+                    target: raise,
+                    args: vec![code, src, msg],
+                });
             }
             _ if self.ty(e) == Type::Str => {
                 let msg = self.expr(e);
-                self.emit(VStmt::Call { target: raise, args: vec![default_code, src, msg] });
+                self.emit(VStmt::Call {
+                    target: raise,
+                    args: vec![default_code, src, msg],
+                });
             }
             _ => {
                 let v = self.expr(e);
@@ -1030,7 +1424,9 @@ impl<'p> Lowerer<'p> {
     fn return_stmt(&mut self, value: Option<&Expr>, tail: bool) {
         if let Some(v) = value {
             match self.pc.rets.last() {
-                Some(RetMode::Inline { var: Some(var), ty, .. }) => {
+                Some(RetMode::Inline {
+                    var: Some(var), ty, ..
+                }) => {
                     let (var, ret_ty) = (var.clone(), ty.clone());
                     self.expr_into(v, &VExpr::Name(var), &ret_ty);
                 }
@@ -1090,9 +1486,14 @@ impl<'p> Lowerer<'p> {
             match &mut self.pc.tries[i].kind {
                 TryKind::ResumeNext => resume_next = true,
                 TryKind::Catch => {}
-                TryKind::Finally { label, exit_var, pending } => {
+                TryKind::Finally {
+                    label,
+                    exit_var,
+                    pending,
+                } => {
                     pending.push(make());
-                    let (code, label, exit_var) = (pending.len() as i64, label.clone(), exit_var.clone());
+                    let (code, label, exit_var) =
+                        (pending.len() as i64, label.clone(), exit_var.clone());
                     if resume_next {
                         let r = self.restore_on_error();
                         self.emit(r);
@@ -1111,12 +1512,18 @@ impl<'p> Lowerer<'p> {
         if self.pc.tries.len() <= base {
             return;
         }
-        if self.pc.tries[base..].iter().any(|t| matches!(t.kind, TryKind::ResumeNext)) {
+        if self.pc.tries[base..]
+            .iter()
+            .any(|t| matches!(t.kind, TryKind::ResumeNext))
+        {
             let r = self.restore_on_error();
             self.emit(r);
         }
         let outer = self.pc.tries[base].outer_id;
-        if self.pc.tries[base..].iter().any(|t| !matches!(t.kind, TryKind::ResumeNext)) {
+        if self.pc.tries[base..]
+            .iter()
+            .any(|t| !matches!(t.kind, TryKind::ResumeNext))
+        {
             self.emit(assign(name("ras_tryId"), long(outer as i64)));
         }
     }
@@ -1134,24 +1541,42 @@ impl<'p> Lowerer<'p> {
 
     fn break_stmt(&mut self, label: Option<&str>) {
         let idx = match label {
-            Some(l) => self.pc.breakables.iter().rposition(|b| b.label.as_deref() == Some(l)),
+            Some(l) => self
+                .pc
+                .breakables
+                .iter()
+                .rposition(|b| b.label.as_deref() == Some(l)),
             None => self.pc.breakables.len().checked_sub(1),
         };
         let Some(idx) = idx else { return };
-        let innermost_loop = self.pc.breakables.iter().rposition(|b| b.kind != LoopKind::Switch);
+        let innermost_loop = self
+            .pc
+            .breakables
+            .iter()
+            .rposition(|b| b.kind != LoopKind::Switch);
         let base = self.pc.breakables[idx].tries_base;
-        let has_finally = self.pc.tries[base.min(self.pc.tries.len())..].iter().any(|t| matches!(t.kind, TryKind::Finally { .. }));
+        let has_finally = self.pc.tries[base.min(self.pc.tries.len())..]
+            .iter()
+            .any(|t| matches!(t.kind, TryKind::Finally { .. }));
         let kind = self.pc.breakables[idx].kind.clone();
         if kind != LoopKind::Switch && Some(idx) == innermost_loop && !has_finally {
             self.restore_try_state(base);
-            self.emit(VStmt::Exit(if kind == LoopKind::For { "For" } else { "Do" }));
+            self.emit(VStmt::Exit(if kind == LoopKind::For {
+                "For"
+            } else {
+                "Do"
+            }));
             return;
         }
         // `Exit For` only leaves one level: use GoTo for outer loops (spec §13.5).
         let l = match &self.pc.breakables[idx].break_label {
             Some(l) => l.clone(),
             None => {
-                let l = self.label(if kind == LoopKind::Switch { "RAS_EndSwitch" } else { "RAS_Break" });
+                let l = self.label(if kind == LoopKind::Switch {
+                    "RAS_EndSwitch"
+                } else {
+                    "RAS_Break"
+                });
                 self.pc.breakables[idx].break_label = Some(l.clone());
                 l
             }
@@ -1161,8 +1586,16 @@ impl<'p> Lowerer<'p> {
 
     fn continue_stmt(&mut self, label: Option<&str>) {
         let idx = match label {
-            Some(l) => self.pc.breakables.iter().rposition(|b| b.label.as_deref() == Some(l)),
-            None => self.pc.breakables.iter().rposition(|b| b.kind != LoopKind::Switch),
+            Some(l) => self
+                .pc
+                .breakables
+                .iter()
+                .rposition(|b| b.label.as_deref() == Some(l)),
+            None => self
+                .pc
+                .breakables
+                .iter()
+                .rposition(|b| b.kind != LoopKind::Switch),
         };
         let Some(idx) = idx else { return };
         let base = self.pc.breakables[idx].tries_base;
@@ -1176,7 +1609,6 @@ impl<'p> Lowerer<'p> {
         };
         self.exit_through(base, Some(l));
     }
-
 }
 
 /// Builds `If c Then ... ElseIf ... Else ... End If`, folding `else { if ... }` chains.
@@ -1190,16 +1622,39 @@ fn chain_root(e: &Expr) -> &Expr {
 }
 
 pub(crate) fn flatten_if(cond: VExpr, then: Vec<VStmt>, mut els: Vec<VStmt>) -> VStmt {
-    let significant: Vec<usize> = els.iter().enumerate().filter(|(_, s)| !matches!(s, VStmt::Pos(_))).map(|(i, _)| i).collect();
+    let significant: Vec<usize> = els
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !matches!(s, VStmt::Pos(_)))
+        .map(|(i, _)| i)
+        .collect();
     if significant.len() == 1 {
         if let VStmt::If { .. } = &els[significant[0]] {
-            let VStmt::If { cond: c2, then: t2, elifs: e2, els: l2 } = els.remove(significant[0]) else { unreachable!() };
+            let VStmt::If {
+                cond: c2,
+                then: t2,
+                elifs: e2,
+                els: l2,
+            } = els.remove(significant[0])
+            else {
+                unreachable!()
+            };
             let mut elifs = vec![(c2, t2)];
             elifs.extend(e2);
-            return VStmt::If { cond, then, elifs, els: l2 };
+            return VStmt::If {
+                cond,
+                then,
+                elifs,
+                els: l2,
+            };
         }
     }
-    VStmt::If { cond, then, elifs: Vec::new(), els }
+    VStmt::If {
+        cond,
+        then,
+        elifs: Vec::new(),
+        els,
+    }
 }
 
 trait NotIs {

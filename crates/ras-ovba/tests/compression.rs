@@ -27,7 +27,10 @@ const MAXIMUM_BYTES: &[u8] = &[0x01, 0x03, 0xB0, 0x02, 0x61, 0x45, 0x00];
 
 #[test]
 fn specification_examples_decompress() {
-    assert_eq!(decompress(NO_COMPRESSION_BYTES).unwrap(), NO_COMPRESSION_TEXT);
+    assert_eq!(
+        decompress(NO_COMPRESSION_BYTES).unwrap(),
+        NO_COMPRESSION_TEXT
+    );
     assert_eq!(decompress(NORMAL_BYTES).unwrap(), NORMAL_TEXT);
     assert_eq!(MAXIMUM_TEXT.len(), 73);
     assert_eq!(decompress(MAXIMUM_BYTES).unwrap(), MAXIMUM_TEXT);
@@ -151,7 +154,10 @@ fn incompressible_partial_last_chunk_is_zero_padded() {
 fn multi_chunk_text_round_trips() {
     let mut text = String::new();
     for i in 0..2000 {
-        text.push_str(&format!("    Cells({i}, {}).Value = \"行{i}\" & vbCrLf\r\n", i % 7));
+        text.push_str(&format!(
+            "    Cells({i}, {}).Value = \"行{i}\" & vbCrLf\r\n",
+            i % 7
+        ));
     }
     let data = text.into_bytes();
     assert!(data.len() > 3 * 4096);
@@ -189,12 +195,21 @@ fn decompress_rejects_or_survives_arbitrary_garbage() {
 fn mixed_bytes() -> impl Strategy<Value = Vec<u8>> {
     let piece = prop_oneof![
         // repeated short pattern
-        (proptest::collection::vec(any::<u8>(), 1..12), 1usize..600)
-            .prop_map(|(pattern, times)| pattern.iter().cycle().take(pattern.len() * times).copied().collect::<Vec<u8>>()),
+        (proptest::collection::vec(any::<u8>(), 1..12), 1usize..600).prop_map(
+            |(pattern, times)| pattern
+                .iter()
+                .cycle()
+                .take(pattern.len() * times)
+                .copied()
+                .collect::<Vec<u8>>()
+        ),
         // noise
         (0usize..5000, any::<u64>()).prop_map(|(len, seed)| noise(len, seed)),
         // text-like bytes
-        proptest::collection::vec(prop_oneof![Just(b' '), Just(b'\r'), Just(b'\n'), 0x41u8..0x5B], 0..3000),
+        proptest::collection::vec(
+            prop_oneof![Just(b' '), Just(b'\r'), Just(b'\n'), 0x41u8..0x5B],
+            0..3000
+        ),
     ];
     proptest::collection::vec(piece, 0..6).prop_map(|pieces| pieces.concat())
 }
