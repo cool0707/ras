@@ -1,7 +1,7 @@
 {
   "name": "ras-vscode",
-  "displayName": "RAS (Better VBA)",
-  "description": "RAS（TypeScript ライクな構文から VBA へトランスパイルする言語）の言語サポート。シンタックスハイライト、ras 言語サーバー（ras lsp）への接続、ブレークポイントを使ったデバッグ実行、ユーザーフォーム デザイナーを提供します。",
+  "displayName": "RAS",
+  "description": "RAS（TypeScript ライクな構文から VBA へトランスパイルする Better VBA 言語）の言語サポート。シンタックスハイライト、ras 言語サーバー（ras lsp）への接続、ブレークポイントを使ったデバッグ実行、ユーザーフォーム デザイナーを提供します。",
   "version": "0.1.0",
   "publisher": "cool0707",
   "icon": "images/icon.png",
