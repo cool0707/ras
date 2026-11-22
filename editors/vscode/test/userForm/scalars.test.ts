@@ -15,7 +15,7 @@ describe("plain properties", () => {
 			lists.set(m[1], [...m[2].matchAll(/"(\w+)"/g)].map((t) => t[1]));
 		const pairs = (entries: [string, string[]][]) =>
 			entries.flatMap(([name, types]) => types.map((t) => `${name}:${t}`)).sort();
-		const fromRust: [string, string[]][] = [...rust.matchAll(/^\s*s\("(\w+)", (&\[[^\]]*\]|\w+),/gm)].map((m) => [
+		const fromRust: [string, string[]][] = [...rust.matchAll(/\bs\(\s*"(\w+)",\s*(&\[[^\]]*\]|\w+),/g)].map((m) => [
 			m[1],
 			m[2].startsWith("&[") ? [...m[2].matchAll(/"(\w+)"/g)].map((t) => t[1]) : (lists.get(m[2]) ?? [`?${m[2]}`]),
 		]);
