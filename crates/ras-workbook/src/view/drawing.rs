@@ -12,6 +12,8 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::{Cursor, Read};
 
+use gridcraft_core::RangeRef;
+
 use super::controls::{self, Controls};
 use super::geom;
 use super::xml::{Node, parse};
@@ -74,6 +76,13 @@ impl Parts {
                     &head[i + j..]
                 };
                 let end = rest.find("sheetView>").unwrap_or(rest.len());
+                // What is in it (the pane and the selections), as one element.
+                if let Some(close) = rest[..end].rfind('<').filter(|_| rest.starts_with('>')) {
+                    files.insert(
+                        format!("{name}#viewbody"),
+                        format!("<v>{}</v>", &rest[1..close]).into_bytes(),
+                    );
+                }
                 if let Some(p) = rest[..end].find("pane ")
                     && rest[..p].ends_with(['<', ':'])
                     && let Some(q) = rest[p..].find('>')
@@ -98,6 +107,25 @@ impl Parts {
             let Some(root) = parse(xml.as_bytes()) else {
                 continue;
             };
+            // Its filter: the range, then the columns (from 0) whose button is hidden and those
+            // filtered by, as `A1:C7;1,2;0`.
+            if let (Some(table), Some(f)) = (root.attr("name"), root.child("autoFilter"))
+                && let Some(range) = f.attr("ref")
+            {
+                let cols = |pick: &dyn Fn(&Node) -> bool| {
+                    f.all("filterColumn")
+                        .filter(|c| pick(c))
+                        .filter_map(|c| c.attr("colId"))
+                        .collect::<Vec<_>>()
+                        .join(",")
+                };
+                let hidden = cols(&|c| matches!(c.attr("hiddenButton"), Some("1" | "true")));
+                let filtered = cols(&|c| !c.children.is_empty());
+                files.insert(
+                    format!("#tablefilter:{table}"),
+                    format!("{range};{hidden};{filtered}").into_bytes(),
+                );
+            }
             if let (Some(table), Some(info)) = (root.attr("name"), root.child("tableStyleInfo")) {
                 let on = |a: &str| u8::from(matches!(info.attr(a), Some("1" | "true")));
                 files.insert(
@@ -265,6 +293,25 @@ impl Parts {
         (f.len() == 4).then(|| (f[0] == 1, f[1] == 1, f[2] == 1, f[3] == 1))
     }
 
+    /// The filter of a table (by its name): its range, and the columns (from 0) whose button is
+    /// hidden and those it filters by.
+    pub(crate) fn table_filter(&self, table: &str) -> Option<(RangeRef, Vec<u32>, Vec<u32>)> {
+        let f = self.files.get(&format!("#tablefilter:{table}"))?;
+        let f = String::from_utf8_lossy(f);
+        let mut parts = f.split(';');
+        let range = RangeRef::parse(&parts.next()?.replace('$', ""))?;
+        let mut cols = || -> Vec<u32> {
+            parts
+                .next()
+                .unwrap_or("")
+                .split(',')
+                .filter_map(|c| c.parse().ok())
+                .collect()
+        };
+        let hidden = cols();
+        Some((range, hidden, cols()))
+    }
+
     /// The workbook's own table styles by name.
     pub(crate) fn table_styles(&self) -> HashMap<String, crate::book::tables::StyleDef> {
         self.xml("#tableStyles")
@@ -309,6 +356,29 @@ impl Parts {
             if rows > 0 { top.row + rows } else { 0 },
             if cols > 0 { top.col + cols } else { 0 },
         ))
+    }
+
+    /// The cells selected on the sheet named `sheet` when it was saved, in its active pane: the
+    /// active cell and the range around it.
+    pub fn selection(&self, sheet: &str) -> Option<(gridcraft_core::CellRef, RangeRef)> {
+        let part = self.sheet_part(sheet)?;
+        let body = self.xml(&format!("{part}#viewbody"))?;
+        let pane = body
+            .child("pane")
+            .map(|p| p.attr("activePane").unwrap_or("topLeft").to_string());
+        let sel = body.all("selection").find(|s| match &pane {
+            Some(p) => s.attr("pane").unwrap_or("topLeft") == p,
+            None => true,
+        })?;
+        let active = gridcraft_core::CellRef::parse(&sel.attr("activeCell")?.replace('$', ""))?;
+        let range = sel
+            .attr("sqref")
+            .unwrap_or("")
+            .split_whitespace()
+            .filter_map(|r| RangeRef::parse(&r.replace('$', "")))
+            .find(|r| r.contains(active))
+            .unwrap_or(RangeRef::cell(active));
+        Some((active, range))
     }
 
     /// The alignment of the cells without a format of their own (the first of cellXfs), when

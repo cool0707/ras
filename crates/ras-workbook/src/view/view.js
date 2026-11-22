@@ -32,7 +32,7 @@
     const changes = (data.diff && data.diff.changes) || {};
     const KEY = 16384;
     // The height of the column headers, until it is measured (px).
-    const HEAD_H = 22;
+    const HEAD_H = 24;
     // How far past the visible part the grid is kept drawn (px).
     const AHEAD = 400;
 
@@ -321,6 +321,8 @@
         const filter = sheet.filter ? sheet.filter.split(":").map(parse) : null;
         const notes = new Map((sheet.notes || []).map((n) => [n.r * KEY + n.c, n]));
         const links = new Map((sheet.links || []).map((l) => [l.r * KEY + l.c, l]));
+        // The buttons of the tables' headings (drawn; the grid filters only the sheet's filter).
+        const tableButtons = new Map((sheet.tableFilters || []).map(([r, c, f]) => [r * KEY + c, f]));
         // The panes frozen: the rows above fr and the columns left of fc stay on the screen.
         const [fr, fc] = sheet.frozen || [0, 0];
 
@@ -426,7 +428,7 @@
                     const next = v.cols[i + 1] !== undefined ? v.cols[i + 1] : c + 1;
                     const text = cell.k === "string" || (formulas && cell.f);
                     // (A heading of the filter keeps its text by its button.)
-                    const head = filter && filter[0] && filter[1] && r === filter[0][0] && c >= filter[0][1] && c <= filter[1][1];
+                    const head = (filter && filter[0] && filter[1] && r === filter[0][0] && c >= filter[0][1] && c <= filter[1][1]) || tableButtons.has(key);
                     if (text && !head && !/pre-wrap|--shrink|--rot/.test(td.style.cssText) && (!/text-align/.test(td.style.cssText) || (formulas && cell.f)) && !cells.has(r * KEY + next) && !span.has(key)) {
                         td.classList.add("ov");
                         td.appendChild(el("div", "ovt")).appendChild(el("span", null, shown));
@@ -465,9 +467,11 @@
                 }
                 if (td.link) td.title = `${td.link.tip || td.link.url || td.link.to} - クリックするとリンク先に移動します。\nクリックしたままにすると、セルを選択します。`;
                 if (cell.ic && !formulas && sheet.icons && sheet.icons[cell.ic]) {
-                    // An icon of an icon set, at the left of the cell.
+                    // An icon of an icon set, at the left of the cell, as high as the text.
                     td.classList.add("cfi");
                     const icon = td.appendChild(el("span", "cficon"));
+                    const valign = td.style.verticalAlign;
+                    if (valign === "middle" || valign === "top") icon.classList.add(valign === "top" ? "top" : "mid");
                     icon.innerHTML = sheet.icons[cell.ic];
                 }
                 if (cell.f && !formulas && !td.title) td.title = cell.f;
@@ -487,8 +491,16 @@
             if (filter && filter[0] && filter[1] && r === filter[0][0] && c >= filter[0][1] && c <= filter[1][1]) {
                 td.classList.add("filter");
                 if ((sheet.filterColumns || {})[c - filter[0][1]]) td.classList.add("filtered");
+            } else if (tableButtons.has(key)) {
+                td.classList.add("tfilter");
+                if (tableButtons.get(key)) td.classList.add("filtered");
             }
             if (td.note) td.appendChild(el("span", "notemark"));
+            // Excel's error check: a formula giving an error value is marked at its corner.
+            if (cell && cell.f && cell.k === "error" && !formulas) {
+                td.classList.add("haserr");
+                td.appendChild(el("span", "errmark"));
+            }
             if (r < fr || c < fc) pinCell(td);
             if (cell || was || merged || td.note) v.byAddress.set(a, td);
         }
@@ -605,8 +617,12 @@
         if (zoom !== 100) setZoom(zoom, false);
         else showZoom();
         draw.find = (a) => v.byAddress.get(a);
-        // The selection the sheet had (A1 at first).
-        const was = sels[sheet.name];
+        // The selection the sheet had (at first, the one saved in the file, else A1).
+        let was = sels[sheet.name];
+        if (!was && sheet.selection) {
+            const [ar, ac, r1, c1, r2, c2] = sheet.selection;
+            was = { kind: "cells", nr: ar, nc: ac, fr: ar === r1 ? r2 : r1, fc: ac === c1 ? c2 : c1 };
+        }
         setSel(was || { kind: "cells", nr: 0, nc: 0, fr: 0, fc: 0 }, false);
     }
 
@@ -3172,13 +3188,11 @@
     function showMode() {
         $("mode").textContent = !entry ? "準備完了" : entry.point ? "参照" : entry.mode === "edit" ? "編集" : "入力";
     }
-    // A number as the status bar shows it: a date (when the cells are dates), else up to 10 decimals.
-    function statText(x, date) {
-        if (date && x >= 1 && x < 2958466) {
-            const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(x + 1e-9) * 864e5);
-            return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
-        }
-        return Number(x.toPrecision(15)).toLocaleString("ja-JP", { maximumFractionDigits: 10 });
+    // A number as the status bar shows it: in the number format of the active cell, as Excel
+    // 2021 shows it (General in at most 11 characters, without separators).
+    function statText(x, code) {
+        const shown = code ? formatNumber(x, code) : null;
+        return shown !== null ? shown : generalFit(x, () => true) || String(x);
     }
     function showStats() {
         const box = $("stats");
@@ -3189,25 +3203,239 @@
         let count = 0,
             nums = 0,
             sum = 0,
-            first = null;
+            errors = false;
         for (const c of s.cells) {
             if (!all.some((a) => c.r >= a.r1 && c.r <= a.r2 && c.c >= a.c1 && c.c <= a.c2)) continue;
             if (c.t === undefined || (c.t === "" && !c.f)) continue;
             // Hidden rows and columns (filtered out) are not counted.
             if (!(height(s, c.r) > 0) || !(width(s, c.c) > 0)) continue;
             count++;
+            if (c.k === "error") errors = true;
             if (typeof c.x === "number" && (c.k === "number" || c.k === "date")) {
                 nums++;
                 sum += c.x;
-                if (!first) first = c;
             }
         }
         if (!count) return;
-        const date = !!first && first.k === "date";
+        const active = view.cells.get(sel.ar * KEY + sel.ac);
+        const code = active && (active.sn || active.n);
         const add = (label, value) => box.appendChild(el("span", null, `${label}: ${value}`));
-        if (nums) add("平均", statText(sum / nums, date));
+        // With an error value among the cells, Excel shows only how many there are.
+        const stats = nums && !errors;
+        if (stats) add("平均", statText(sum / nums, code));
         add("データの個数", String(count));
-        if (nums) add("合計", statText(sum, date));
+        if (stats) add("合計", statText(sum, code));
+    }
+
+    // ---- number formats (the status bar; the cells come already shown): the codes for numbers,
+    // percentages, scientific notation, dates and times. null for what is not read here
+    // (fractions, conditions, Japanese eras), which is then shown as General.
+
+    const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    function formatNumber(x, code) {
+        if (/^general$/i.test(code)) return null;
+        // The sections, split at `;` outside quotes, escapes and brackets.
+        const secs = [];
+        let part = "";
+        for (let i = 0; i < code.length; i++) {
+            const ch = code[i];
+            if (ch === '"') {
+                const j = code.indexOf('"', i + 1);
+                const end = j < 0 ? code.length : j;
+                part += code.slice(i, end + 1);
+                i = end;
+            } else if (ch === "\\" || ch === "_" || ch === "*") {
+                part += code.slice(i, i + 2);
+                i++;
+            } else if (ch === "[") {
+                const j = code.indexOf("]", i);
+                const end = j < 0 ? code.length : j;
+                part += code.slice(i, end + 1);
+                i = end;
+            } else if (ch === ";") {
+                secs.push(part);
+                part = "";
+            } else part += ch;
+        }
+        secs.push(part);
+        if (secs.some((s) => /\[[<>=]/.test(s))) return null;
+        let s = secs[0],
+            sign = x < 0 ? "-" : "";
+        if (x < 0 && secs.length > 1) {
+            s = secs[1];
+            sign = "";
+        } else if (x === 0 && secs.length > 2) return null; // (Excel shows 0, not the zero's section.)
+        const toks = tokensOf(s);
+        if (!toks) return null;
+        if (toks.some((t) => t.k === "date" || t.k === "ampm")) {
+            // (Not fractions of a second, nor dates before 1900.)
+            if (x < 0 || toks.some((t) => t.k === "ph")) return null;
+            // Times (without a day) are shown as hours on end: 32:24:00.
+            const day = toks.some((t) => t.k === "date" && (/^[yda]/.test(t.v) || /^m{3,}$/.test(t.v)));
+            const time = toks.some((t) => t.k === "ampm" || (t.k === "date" && /^[hs]/.test(t.v)));
+            return formatDate(x, time && !day ? tokensOf("[h]:mm:ss") : toks);
+        }
+        const out = formatDigits(Math.abs(x), toks);
+        return out === null ? null : sign + out;
+    }
+    // A section's parts: literal text, digit places (0 # ?), the point, commas, %, E+, date parts.
+    function tokensOf(s) {
+        const toks = [];
+        const lit = (v) => toks.push({ k: "lit", v });
+        for (let i = 0; i < s.length; ) {
+            const ch = s[i];
+            const rest = s.slice(i);
+            let m;
+            if (ch === '"') {
+                const j = s.indexOf('"', i + 1);
+                const end = j < 0 ? s.length : j;
+                lit(s.slice(i + 1, end));
+                i = end + 1;
+            } else if (ch === "\\") {
+                lit(s[i + 1] || "");
+                i += 2;
+            } else if (ch === "_") {
+                lit(" ");
+                i += 2;
+            } else if (ch === "*") i += 2;
+            else if (ch === "[") {
+                const j = s.indexOf("]", i);
+                const inner = s.slice(i + 1, j < 0 ? s.length : j);
+                i = j < 0 ? s.length : j + 1;
+                if ((m = /^\$([^-]*)(?:-(.*))?$/.exec(inner))) {
+                    // A currency symbol, and a language (`[$-411]`); other calendars and the
+                    // system's date formats (`[$-F800]`) are not read here.
+                    if (m[2] !== undefined && !/^[0-9a-f]{1,4}$/i.test(m[2])) return null;
+                    if (/^f[0-9a-f]00$/i.test(m[2] || "")) return null;
+                    if (m[1]) lit(m[1]);
+                } else if (/^(h+|m+|s+)$/i.test(inner)) toks.push({ k: "date", v: inner.toLowerCase(), elapsed: true });
+                else if (/^dbnum/i.test(inner)) return null;
+                // Colors are not shown in the status bar.
+            } else if ("0#?".includes(ch)) {
+                toks.push({ k: "ph", v: ch });
+                i++;
+            } else if (ch === ".") {
+                toks.push({ k: "dot" });
+                i++;
+            } else if (ch === ",") {
+                toks.push({ k: "comma" });
+                i++;
+            } else if (ch === "%") {
+                toks.push({ k: "pct" });
+                i++;
+            } else if ((ch === "E" || ch === "e") && (s[i + 1] === "+" || s[i + 1] === "-")) {
+                toks.push({ k: "exp", v: ch + s[i + 1] });
+                i += 2;
+            } else if ((m = /^(am\/pm|a\/p)/i.exec(rest))) {
+                toks.push({ k: "ampm", v: m[1] });
+                i += m[1].length;
+            } else if ((m = /^(y+|m+|d+|h+|s+|a{3,4})/i.exec(rest))) {
+                toks.push({ k: "date", v: m[1].toLowerCase() });
+                i += m[1].length;
+            } else if (/[gGeEbB]/.test(ch)) return null; // Japanese eras, Buddhist years
+            else if (ch === "/" && toks.some((t) => t.k === "ph")) return null; // fractions
+            else {
+                lit(ch === "@" ? "" : ch);
+                i++;
+            }
+        }
+        return toks;
+    }
+    // x (not negative) with d decimals, rounded half up as written in decimals (16.15 → 16.2).
+    function decimal(x, d) {
+        const [m, e] = Number(x.toPrecision(15)).toExponential().split("e");
+        return (Math.round(Number(`${m}e${Number(e) + d}`)) / 10 ** d).toFixed(d);
+    }
+    function formatDigits(x, toks) {
+        x *= 100 ** toks.filter((t) => t.k === "pct").length;
+        const expAt = toks.findIndex((t) => t.k === "exp");
+        const end = expAt < 0 ? toks.length : expAt;
+        const dotAt = toks.findIndex((t, i) => t.k === "dot" && i < end);
+        const intEnd = dotAt < 0 ? end : dotAt;
+        const ints = [],
+            decs = [];
+        toks.forEach((t, i) => {
+            if (t.k === "ph" && i < intEnd) ints.push(i);
+            else if (t.k === "ph" && i > dotAt && dotAt >= 0 && i < end) decs.push(i);
+        });
+        // Commas right after the last digit place divide by 1000; between digit places they group.
+        let scale = 0;
+        const last = Math.max(-1, ...ints, ...decs);
+        if (last >= 0) for (let i = last + 1; i < end && toks[i].k === "comma"; i++) scale++;
+        const group = ints.length > 1 && toks.some((t, i) => t.k === "comma" && i > ints[0] && i < ints[ints.length - 1]);
+        // Text between the integer's digit places (000-0000) is not read here.
+        if (ints.length && toks.some((t, i) => t.k === "lit" && t.v && i > ints[0] && i < ints[ints.length - 1])) return null;
+        x /= 1000 ** scale;
+        let exp = "";
+        if (expAt >= 0) {
+            if (ints.length > 1) return null;
+            const digits = toks.slice(expAt + 1).filter((t) => t.k === "ph");
+            let n = x === 0 ? 0 : Math.floor(Math.log10(Number(x.toPrecision(15))));
+            if (Number(decimal(x / 10 ** n, decs.length)) >= 10) n++;
+            x /= 10 ** n;
+            exp = toks[expAt].v[0] + (n < 0 ? "-" : toks[expAt].v[1] === "+" ? "+" : "") + String(Math.abs(n)).padStart(digits.filter((t) => t.v === "0").length, "0");
+        }
+        let [ip, fp = ""] = decimal(x, decs.length).split(".");
+        // Decimal places # and ? show no trailing zeros (? as spaces).
+        const frac = fp.split("");
+        for (let i = decs.length - 1; i >= 0 && frac[i] === "0" && toks[decs[i]].v !== "0"; i--) frac[i] = toks[decs[i]].v === "?" ? " " : "";
+        if (ip === "0") ip = "";
+        ip = ip.padStart(ints.filter((i) => toks[i].v === "0").length, "0");
+        if (group) ip = ip.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+        let out = "";
+        toks.forEach((t, i) => {
+            if (t.k === "lit") out += t.v;
+            else if (t.k === "pct") out += "%";
+            // (Without integer places, the integer goes before the point: `.00`.)
+            else if (t.k === "dot" && i === dotAt) out += (ints.length ? "" : ip) + ".";
+            else if (t.k === "exp") out += exp;
+            else if (t.k === "ph" && i === ints[0]) out += ip;
+            else if (t.k === "ph" && i === decs[0]) out += frac.join("");
+        });
+        return out;
+    }
+    function formatDate(x, toks) {
+        let days = Math.floor(x);
+        let secs = Math.round((x - days) * 86400);
+        if (secs >= 86400) {
+            days++;
+            secs -= 86400;
+        }
+        const d = new Date(Date.UTC(1899, 11, 30) + days * 864e5);
+        const ampm = toks.some((t) => t.k === "ampm");
+        const h = Math.floor(secs / 3600),
+            mi = Math.floor(secs / 60) % 60,
+            sec = secs % 60;
+        const two = (n, w) => String(n).padStart(w, "0");
+        let out = "";
+        toks.forEach((t, i) => {
+            if (t.k === "lit") out += t.v;
+            else if (t.k === "ampm") out += t.v.toLowerCase().startsWith("am") ? (h < 12 ? "AM" : "PM") : h < 12 ? "A" : "P";
+            else if (t.k === "dot") out += ".";
+            else if (t.k === "date") {
+                const v = t.v;
+                // m and mm are minutes after hours or before seconds.
+                const prev = toks.slice(0, i).reverse().find((x) => x.k === "date") || {};
+                const next = toks.slice(i + 1).find((x) => x.k === "date") || {};
+                const minutes = v[0] === "m" && v.length <= 2 && (/^h/.test(prev.v || "") || /^s/.test(next.v || ""));
+                if (t.elapsed) {
+                    const total = v[0] === "h" ? Math.floor(x * 24) : v[0] === "m" ? Math.floor(x * 1440) : Math.round(x * 86400);
+                    out += two(total, v.length);
+                } else if (v[0] === "y") out += v.length > 2 ? String(d.getUTCFullYear()) : two(d.getUTCFullYear() % 100, 2);
+                else if (minutes) out += two(mi, v.length);
+                else if (v[0] === "m") {
+                    const m = d.getUTCMonth();
+                    out += v.length === 1 ? String(m + 1) : v.length === 2 ? two(m + 1, 2) : v.length === 3 ? MONTHS[m].slice(0, 3) : v.length === 5 ? MONTHS[m][0] : MONTHS[m];
+                } else if (v[0] === "d") {
+                    const w = d.getUTCDay();
+                    out += v.length <= 2 ? two(d.getUTCDate(), v.length) : v.length === 3 ? DAYS[w].slice(0, 3) : DAYS[w];
+                } else if (v[0] === "a") out += "日月火水木金土"[d.getUTCDay()] + (v.length === 4 ? "曜日" : "");
+                else if (v[0] === "h") out += two(ampm ? h % 12 || 12 : h, Math.min(v.length, 2));
+                else if (v[0] === "s") out += two(sec, Math.min(v.length, 2));
+            }
+        });
+        return out;
     }
 
     // ---- notes (comments): a mark at the corner of the cell, the note while the mouse is on it

@@ -32,8 +32,8 @@ body { display: flex; flex-direction: column; background: #fff; color: #000; fon
 table { border-collapse: collapse; table-layout: fixed; font: 11pt "Yu Gothic", Meiryo, sans-serif; }
 /* What is drawn over what: the cells, the boxes over them (1), the cells of the panes frozen (2;
    both ways: 4), the boxes that stay with them (3; both ways: 5), the headers (6 and up). */
-th { position: sticky; background: var(--head); color: var(--head-text); font: 12px "Segoe UI", sans-serif; font-weight: normal; border: 1px solid var(--line); z-index: 6; }
-thead th { top: 0; height: 20px; z-index: 8; }
+th { position: sticky; background: var(--head); color: var(--head-text); font: 11pt/1 "Yu Gothic", Meiryo, sans-serif; font-weight: normal; padding: 0; overflow: hidden; border: 1px solid var(--line); z-index: 6; }
+thead th { top: 0; height: 24px; z-index: 8; }
 tbody th { left: 0; }
 tbody th.fzr { z-index: 7; }
 thead th.fzc { z-index: 9; }
@@ -52,7 +52,9 @@ td.cfb { position: relative; z-index: 0; }
 td .cfbar { position: absolute; top: 2px; bottom: 2px; z-index: -1; pointer-events: none; }
 /* Icons of icon sets: at the left of the cell, the value after them. */
 td.cfi { position: relative; padding-left: 19px; }
-td .cficon { position: absolute; left: 2px; bottom: 3px; width: 14px; height: 14px; pointer-events: none; }
+td .cficon { position: absolute; left: 0; bottom: 2px; width: 16px; height: 16px; pointer-events: none; }
+td .cficon.mid { bottom: auto; top: 50%; margin-top: -8px; }
+td .cficon.top { bottom: auto; top: 1px; }
 td .cfaxis { position: absolute; top: 0; bottom: 0; border-left: 1px dashed #000; z-index: -1; pointer-events: none; }
 /* Text that runs over the empty cells to its right: their gridlines are under it. */
 td.ov { overflow: visible; }
@@ -63,7 +65,7 @@ table.nogrid td.nogr { background-image: none; }
 td.chg { position: relative; outline: 1px solid var(--changed-line); outline-offset: -1px; }
 td.chg::before { content: ""; position: absolute; top: 0; right: 0; border: 4px solid; border-color: var(--changed-line) var(--changed-line) transparent transparent; }
 td.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
-td.filter::after { content: "▾"; float: right; color: #555; font-size: 10px; border: 1px solid #aaa; background: #fff; padding: 0 2px; margin-left: 2px; }
+td.filter::after, td.tfilter::after { content: "▾"; float: right; color: #555; font-size: 10px; border: 1px solid #aaa; background: #fff; padding: 0 2px; margin-left: 2px; }
 tr.gap th { border-bottom: 2px solid #888; }
 th.gap { border-right: 2px solid #888; }
 #tabs { display: flex; gap: 2px; padding: 2px 6px 0; background: var(--head); border-top: 1px solid var(--line); overflow-x: auto; }
@@ -194,7 +196,7 @@ body.busy #tools { opacity: .6; }
 .menu.filterpop .values label { padding: 1px 6px; }
 .menu.filterpop .buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 6px 10px 2px; }
 .menu.filterpop .buttons button:disabled { color: #999; }
-td.filter.filtered::after { content: "▼"; color: var(--accent); border-color: var(--accent); }
+td.filter.filtered::after, td.tfilter.filtered::after { content: "▼"; color: var(--accent); border-color: var(--accent); }
 .dlg label input[type="number"] { width: 80px; margin-left: auto; font: inherit; }
 /* The edges of the headers: the widths of columns, the heights of rows. */
 table.ew th { cursor: col-resize; }
@@ -221,6 +223,9 @@ td.haslink { cursor: pointer; }
 
 /* Notes: the mark at the corner of the cell, the note while the mouse is on it. */
 td.hasnote { position: relative; }
+/* Formulas giving an error value: the green mark of Excel's error check. */
+td.haserr { position: relative; }
+td .errmark { position: absolute; top: 0; left: 0; width: 0; height: 0; border-style: solid; border-width: 6px 6px 0 0; border-color: #008000 transparent transparent transparent; pointer-events: none; }
 td .notemark { position: absolute; top: 0; right: 0; width: 0; height: 0; border-style: solid; border-width: 0 6px 6px 0; border-color: transparent #d00 transparent transparent; pointer-events: none; }
 .notebox { position: fixed; z-index: 12; max-width: 260px; padding: 4px 6px; background: #ffffe1; border: 1px solid #767676; box-shadow: 2px 2px 4px rgba(0, 0, 0, .25); color: #000; font: 9pt "Yu Gothic UI", "Meiryo UI", sans-serif; white-space: pre-wrap; pointer-events: none; }
 .notebox b { display: block; }
