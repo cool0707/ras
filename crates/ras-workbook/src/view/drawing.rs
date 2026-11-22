@@ -74,6 +74,17 @@ impl Parts {
                 files.insert(name.into(), b);
             }
         }
+        // The default font (the first of the styles) and the format of the cells without one
+        // (the first of cellXfs: the Normal style, centred vertically by Japanese Excel).
+        if let Some(styles) = read_part(&mut zr, "xl/styles.xml") {
+            let styles = String::from_utf8_lossy(&styles);
+            if let Some(font) = first_font(&styles) {
+                files.insert("#font".into(), font.into_bytes());
+            }
+            if let Some(xf) = element_text(&styles, "cellXfs").and_then(|xfs| first_xf(&xfs)) {
+                files.insert("#xf0".into(), xf.into_bytes());
+            }
+        }
         if !names.iter().any(|n| n.starts_with("xl/drawings/")) {
             return Parts { files };
         }
@@ -90,12 +101,6 @@ impl Parts {
             if keep && let Some(b) = read_part(&mut zr, name) {
                 files.insert(name.clone(), b);
             }
-        }
-        // The default font: the first of the styles.
-        if let Some(styles) = read_part(&mut zr, "xl/styles.xml")
-            && let Some(font) = first_font(&String::from_utf8_lossy(&styles))
-        {
-            files.insert("#font".into(), font.into_bytes());
         }
         // The controls of the sheets that have any (`<controls>` of the sheet's XML).
         let sheets: Vec<String> = names
@@ -201,6 +206,24 @@ impl Parts {
         Some(!matches!(view.attr("showGridLines"), Some("0" | "false")))
     }
 
+    /// The alignment of the cells without a format of their own (the first of cellXfs), when
+    /// it has one.
+    pub(crate) fn normal_alignment(&self) -> Option<umya_spreadsheet::Alignment> {
+        let xf = self.xml("#xf0")?;
+        let a = xf.child("alignment")?;
+        let mut out = umya_spreadsheet::Alignment::default();
+        if let Some(h) = a.attr("horizontal").and_then(|v| v.parse().ok()) {
+            out.set_horizontal(h);
+        }
+        if let Some(v) = a.attr("vertical").and_then(|v| v.parse().ok()) {
+            out.set_vertical(v);
+        }
+        if matches!(a.attr("wrapText"), Some("1" | "true")) {
+            out.set_wrap_text(true);
+        }
+        Some(out)
+    }
+
     /// The workbook's default font (name, size).
     pub(crate) fn default_font(&self) -> (String, f64) {
         let font = self.xml("#font").and_then(|f| f.find("font").cloned());
@@ -253,6 +276,21 @@ fn first_font(styles: &str) -> Option<String> {
     let fonts = element_text(styles, "fonts").unwrap_or_default();
     let font = element_text(&fonts, "font")?;
     Some(format!("<fonts>{font}</fonts>"))
+}
+
+/// The first `<xf>` of `<cellXfs>...</cellXfs>`.
+fn first_xf(xfs: &str) -> Option<String> {
+    let start = xfs.match_indices('<').map(|(i, _)| i).find(|&i| {
+        let rest = &xfs[i + 1..];
+        let local = rest.split(['>', ' ', '/']).next().unwrap_or("");
+        local == "xf" || local.ends_with(":xf")
+    })?;
+    let open_end = start + xfs[start..].find('>')?;
+    if xfs[..open_end].ends_with('/') {
+        return Some(xfs[start..=open_end].to_string());
+    }
+    let close = open_end + xfs[open_end..].find("xf>")?;
+    Some(xfs[start..close + 3].to_string())
 }
 
 /// `target` relative to the folder `dir` ("../drawings/drawing1.xml"), or absolute ("/xl/...").

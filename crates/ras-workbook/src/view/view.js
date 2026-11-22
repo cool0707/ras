@@ -193,6 +193,75 @@
         return h !== undefined ? h : sheet.defaultHeight;
     }
 
+    // Numbers that do not fit their column, as Excel shows them: the General format with fewer
+    // digits, the others (and General when nothing fits) as #### across the cell.
+    const measurer = document.createElement("canvas").getContext("2d");
+    const fonts = new Map(); // sheet and style -> the CSS font of its cells
+    function textWidth(td, cell, text) {
+        const k = `${current.name}\u0000${cell.s || 0}`;
+        let font = fonts.get(k);
+        if (font === undefined) {
+            font = getComputedStyle(td).font;
+            fonts.set(k, font);
+        }
+        measurer.font = font;
+        return measurer.measureText(text).width;
+    }
+    // The room for text in the cell at column c (merged: to its last column): a column n
+    // characters wide has n digits' room, the rest is the cell's padding.
+    function roomOf(c, merged) {
+        let px = 0;
+        for (let x = c; x <= (merged ? merged[1] : c); x++) px += width(current, x);
+        return px - 5;
+    }
+    // "Shrink to fit": a smaller font, until the text fits the cell.
+    function shrinkToFit(td, cell, text, c, merged) {
+        const w = textWidth(td, cell, text);
+        const room = roomOf(c, merged);
+        if (w > room && w > 0) td.style.fontSize = `${(parseFloat(getComputedStyle(td).fontSize) * room) / w}px`;
+    }
+    function fitNumber(td, cell, c, merged) {
+        const room = roomOf(c, merged);
+        const fits = (s) => textWidth(td, cell, s) <= room;
+        if (fits(cell.t)) return;
+        const shown = typeof cell.x === "number" ? generalFit(cell.x, fits) : null;
+        if (shown !== null) {
+            td.textContent = shown;
+            return;
+        }
+        const n = Math.max(0, Math.floor(room / textWidth(td, cell, "#")));
+        td.textContent = "#".repeat(n);
+        td.style.textAlign = "left";
+    }
+    // What the General format shows of n where `fits` says what fits: fewer decimals, then
+    // scientific notation, then 0 (as Excel narrows it); null when nothing fits. At most 11
+    // characters besides the sign; under 1E-4 fixed notation only with all the digits.
+    function generalFit(n, fits) {
+        if (n === 0) return fits("0") ? "0" : null;
+        const sign = n < 0 ? "-" : "";
+        const a = Number(Math.abs(n).toPrecision(15));
+        const trim = (s) => (s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s);
+        const ok = (s) => s.length - sign.length <= 11 && fits(s);
+        const [mant, ex] = a.toExponential(14).split("e");
+        const e = Number(ex);
+        if (e >= -4) {
+            for (let d = Math.max(0, 10 - Math.max(e, 0)); d >= 0; d--) {
+                const s = sign + trim(a.toFixed(d));
+                if (/[1-9]/.test(s) && ok(s)) return s;
+            }
+        } else {
+            const s = `${sign}0.${"0".repeat(-e - 1)}${mant.replace(".", "").replace(/0+$/, "")}`;
+            if (ok(s)) return s;
+        }
+        for (let d = 5; d >= 0; d--) {
+            const [m, x] = a.toExponential(d).split("e");
+            const s = `${sign}${trim(m)}E${Number(x) < 0 ? "-" : "+"}${String(Math.abs(Number(x))).padStart(2, "0")}`;
+            if (ok(s)) return s;
+        }
+        if (a < 1 && fits(`${sign}0`)) return `${sign}0`;
+        return null;
+    }
+
     function draw(sheet) {
         // What was being typed on the sheet shown before is dropped.
         entry = null;
@@ -277,7 +346,7 @@
             nrows: 0,
             width: 0, // of the cells (without the row headers)
             refs, // the boxes of the references of the selected formula
-            head: 40, // the width of the row headers
+            head: 28, // the width of the row headers
             byAddress: new Map(),
             // Right gridlines hidden under text that runs over empty cells: key -> true.
             noRight: new Set(),
@@ -294,7 +363,7 @@
             if (cell) {
                 if (cell.s) td.style.cssText = sheet.styles[cell.s];
                 // The formula view: formulas (left, as text) and the values as they are typed.
-                const shown = formulas ? cell.f || cell.v || cell.t : cell.t;
+                const shown = formulas ? cell.f || cell.v || cell.t : cell.hv ? "" : cell.t;
                 if (formulas && cell.f) {
                     td.style.textAlign = "left";
                     td.classList.add("fml");
@@ -303,11 +372,39 @@
                     // Text runs over the empty cells to its right, as in Excel.
                     const next = v.cols[i + 1] !== undefined ? v.cols[i + 1] : c + 1;
                     const text = cell.k === "string" || (formulas && cell.f);
-                    if (text && !/pre-wrap/.test(td.style.cssText) && (!/text-align/.test(td.style.cssText) || (formulas && cell.f)) && !cells.has(r * KEY + next) && !span.has(key)) {
+                    if (text && !/pre-wrap|--shrink|--rot/.test(td.style.cssText) && (!/text-align/.test(td.style.cssText) || (formulas && cell.f)) && !cells.has(r * KEY + next) && !span.has(key)) {
                         td.classList.add("ov");
                         td.appendChild(el("div", "ovt")).appendChild(el("span", null, shown));
+                    } else if (/pre-wrap/.test(td.style.cssText)) {
+                        // Wrapped text is cut at the row's height (a table row would grow to it),
+                        // from its first line, as Excel draws it.
+                        let h = 0;
+                        for (let x = r; x <= (span.has(key) ? span.get(key)[0] : r); x++) h += height(sheet, x);
+                        const box = td.appendChild(el("div", "wr", shown));
+                        box.style.maxHeight = `${Math.max(0, h - 1)}px`;
                     } else {
                         td.textContent = shown;
+                        const rot = td.style.getPropertyValue("--rot");
+                        if (rot) {
+                            td.textContent = "";
+                            td.appendChild(el("span", "rot", shown)).style.transform = `rotate(${-Number(rot)}deg)`;
+                        } else if (td.style.getPropertyValue("--shrink")) {
+                            shrinkToFit(td, cell, shown, c, span.get(key));
+                        } else if (!formulas && (cell.k === "number" || cell.k === "date")) {
+                            fitNumber(td, cell, c, span.get(key));
+                        }
+                    }
+                }
+                if (cell.bar && !formulas) {
+                    // A data bar under the value, 2px in from the cell's edges.
+                    td.classList.add("cfb");
+                    const bar = td.appendChild(el("div", "cfbar"));
+                    bar.style.left = `calc(2px + (100% - 4px) * ${cell.bar.x})`;
+                    bar.style.width = `calc((100% - 4px) * ${cell.bar.w})`;
+                    bar.style.background = cell.bar.bg;
+                    if (typeof cell.bar.axis === "number") {
+                        const axis = td.appendChild(el("div", "cfaxis"));
+                        axis.style.left = `calc(2px + (100% - 4px) * ${cell.bar.axis})`;
                     }
                 }
                 if (cell.f && !formulas && !td.title) td.title = cell.f;
@@ -366,10 +463,11 @@
             for (const [r, tr] of v.rows) makeCell(tr, r, c, i);
         }
 
-        // The row headers as wide as the largest row number needs.
+        // The row headers as wide as Excel draws them for the largest row number: 29 px with their
+        // line up to 3 digits, 8 px more for each digit after that (Excel 2021 at 100%).
         function sizeHead() {
             const digits = String(v.nrows).length;
-            v.head = Math.max(40, digits * 8 + 12);
+            v.head = 28 + 8 * Math.max(0, digits - 3);
             corner.style.width = `${v.head}px`;
             table.style.width = `${v.head + v.width}px`;
         }

@@ -79,6 +79,74 @@ pub fn local_format(code: &str) -> &str {
     }
 }
 
+/// The built-in number formats (a `numFmtId` without a `numFmt` of the file) whose code a
+/// Japanese Excel 2021 shows differently from the United States' (read from Excel itself).
+/// Formats with Japanese eras (27-29, 36, 50, 51, 54, 57, 58) are left out: they are not drawn.
+fn local_builtin(id: u32) -> Option<&'static str> {
+    Some(match id {
+        5 | 63 => "¥#,##0;¥-#,##0",
+        6 | 64 => "¥#,##0;[Red]¥-#,##0",
+        7 | 65 => "¥#,##0.00;¥-#,##0.00",
+        8 | 66 => "¥#,##0.00;[Red]¥-#,##0.00",
+        14 | 71 | 72 => "yyyy/m/d",
+        22 | 78 => "yyyy/m/d h:mm",
+        23 => "$#,##0_);($#,##0)",
+        24 => "$#,##0_);[Red]($#,##0)",
+        25 => "$#,##0.00_);($#,##0.00)",
+        26 => "$#,##0.00_);[Red]($#,##0.00)",
+        30 => "m/d/yy",
+        31 => "yyyy\"年\"m\"月\"d\"日\"",
+        32 => "h\"時\"mm\"分\"",
+        33 => "h\"時\"mm\"分\"ss\"秒\"",
+        34 | 52 | 55 => "yyyy\"年\"m\"月\"",
+        35 | 53 | 56 => "m\"月\"d\"日\"",
+        37 => "#,##0;-#,##0",
+        38 => "#,##0;[Red]-#,##0",
+        39 => "#,##0.00;-#,##0.00",
+        40 => "#,##0.00;[Red]-#,##0.00",
+        41 => "_ * #,##0_ ;_ * -#,##0_ ;_ * \"-\"_ ;_ @_ ",
+        42 => "_ ¥* #,##0_ ;_ ¥* -#,##0_ ;_ ¥* \"-\"_ ;_ @_ ",
+        43 => "_ * #,##0.00_ ;_ * -#,##0.00_ ;_ * \"-\"??_ ;_ @_ ",
+        44 => "_ ¥* #,##0.00_ ;_ ¥* -#,##0.00_ ;_ ¥* \"-\"??_ ;_ @_ ",
+        59 => "0",
+        60 => "0.00",
+        61 => "#,##0",
+        62 => "#,##0.00",
+        67 => "0%",
+        68 => "0.00%",
+        69 => "# ?/?",
+        70 => "# ??/??",
+        73 => "d-mmm-yy",
+        74 => "d-mmm",
+        75 => "mmm-yy",
+        76 => "h:mm",
+        77 => "h:mm:ss",
+        79 => "mm:ss",
+        80 => "[h]:mm:ss",
+        81 => "mm:ss.0",
+        _ => return None,
+    })
+}
+
+/// A number under 1E-4 in the General format, as Excel shows it when all its digits fit in 11
+/// characters in fixed notation (0.000012345, not 1.2345E-05); None for the others.
+fn general_small(n: f64) -> Option<String> {
+    if n == 0.0 || !n.is_finite() || n.abs() >= 1e-4 {
+        return None;
+    }
+    // The 15 significant digits Excel keeps.
+    let sci = format!("{:.14e}", n.abs());
+    let (mantissa, exp) = sci.split_once('e')?;
+    let exp: i32 = exp.parse().ok()?;
+    let digits = mantissa.replace('.', "");
+    let digits = digits.trim_end_matches('0');
+    let zeros = usize::try_from(-exp - 1).ok()?;
+    // (Excel's 11 characters do not count the minus sign: -0.000012345.)
+    let s = format!("0.{}{digits}", "0".repeat(zeros));
+    let sign = if n < 0.0 { "-" } else { "" };
+    (s.len() <= 11).then(|| format!("{sign}{s}"))
+}
+
 // ---------------------------------------------------------------------------- values
 
 /// A value as the program sees it (VBA's `Variant` of a cell).
@@ -1272,6 +1340,26 @@ impl Book {
         .unwrap_or_else(|| "General".into())
     }
 
+    /// The number format a Japanese Excel shows the cell by: a built-in format as Japanese Excel
+    /// has it (`local_builtin`), the others as `local_format` spells them.
+    fn shown_format_code(&self, si: usize, at: CellRef) -> String {
+        let id = self.file.sheet(si).ok().and_then(|ws| {
+            let style = match ws.cell(coord(at)) {
+                Some(c) => c.style().clone(),
+                None => self.style_at(si, at),
+            };
+            style.number_format().map(|f| f.number_format_id())
+        });
+        if let Some(code) = id.and_then(local_builtin) {
+            return code.to_string();
+        }
+        let code = self.number_format_code(si, at);
+        if code == "General" {
+            return code;
+        }
+        local_format(&code).to_string()
+    }
+
     fn format(&mut self, code: &str) -> &NumberFormat {
         if !self.formats.contains_key(code) {
             self.formats
@@ -1390,12 +1478,37 @@ impl Book {
     }
 
     fn text(&mut self, si: usize, at: CellRef, value: &Value) -> String {
-        let code = self.number_format_code(si, at);
+        self.formatted(si, at, value).text
+    }
+
+    /// What the cell shows and the color its number format gives it (`[Red]`).
+    fn formatted(&mut self, si: usize, at: CellRef, value: &Value) -> gridcraft_numfmt::Formatted {
+        let code = self.shown_format_code(si, at);
         match value {
-            Value::Empty => String::new(),
-            Value::Error(CellError::Circ) => "0".into(),
-            _ => self.display(value, &code),
+            Value::Empty => gridcraft_numfmt::Formatted::default(),
+            Value::Error(CellError::Circ) => gridcraft_numfmt::Formatted {
+                text: "0".into(),
+                ..Default::default()
+            },
+            Value::Number(n) if code == "General" && general_small(*n).is_some() => {
+                gridcraft_numfmt::Formatted {
+                    text: general_small(*n).unwrap_or_default(),
+                    numeric: true,
+                    ..Default::default()
+                }
+            }
+            _ => {
+                let sys = self.model.date_system;
+                gridcraft_numfmt::format_value(value, self.format(&code), sys)
+            }
         }
+    }
+
+    /// The color the number format of a cell gives what it shows (`[Red]`), as RRGGBB.
+    pub fn format_color(&mut self, si: usize, at: CellRef) -> Option<String> {
+        let value = self.value(si, at);
+        let [r, g, b] = self.formatted(si, at, &value).color?.rgb()?;
+        Some(format!("{r:02X}{g:02X}{b:02X}"))
     }
 
     /// Notes that a cell changed.
@@ -2266,8 +2379,10 @@ fn to_array(rows: &[Vec<Val>]) -> Array {
     Array::new(height, width, data).unwrap_or_else(|| Array::scalar(Value::Empty))
 }
 
+mod cond;
 mod edit;
 mod format;
+pub(crate) use format::width_of_px;
 mod inspect;
 mod paste;
 pub mod snapshot;

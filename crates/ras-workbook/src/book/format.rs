@@ -30,6 +30,28 @@ pub(super) fn width_to_file(chars: f64) -> f64 {
 pub(super) fn width_from_file(width: f64) -> f64 {
     (((width * DIGIT_WIDTH - CELL_PADDING) / DIGIT_WIDTH * 100.0 + 0.5).trunc() / 100.0).max(0.0)
 }
+
+/// The width in pixels at 100% of a column `chars` (`ColumnWidth`) wide, as Excel draws it: the
+/// digits and the padding of the cell (a column under one character is narrowed with its padding).
+pub(crate) fn width_px(chars: f64) -> f64 {
+    if chars <= 0.0 {
+        0.0
+    } else if chars < 1.0 {
+        (chars * (DIGIT_WIDTH + CELL_PADDING) + 0.5).trunc()
+    } else {
+        (chars * DIGIT_WIDTH + 0.5).trunc() + CELL_PADDING
+    }
+}
+
+/// The `ColumnWidth` of a column `px` pixels wide (the inverse of `width_px`).
+pub(crate) fn width_of_px(px: f64) -> f64 {
+    let chars = if px < DIGIT_WIDTH + CELL_PADDING {
+        px / (DIGIT_WIDTH + CELL_PADDING)
+    } else {
+        (px - CELL_PADDING) / DIGIT_WIDTH
+    };
+    ((chars * 100.0 + 0.5).trunc() / 100.0).max(0.0)
+}
 const DEFAULT_ROW_HEIGHT: f64 = 18.75;
 const DEFAULT_FONT: &str = "游ゴシック";
 const NONE: f64 = -4142.0;
