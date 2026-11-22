@@ -21,6 +21,7 @@ use crate::book::snapshot::{CellState, Raw, Snapshot, Styles};
 use crate::book::{Book, MAX_COLS, MAX_ROWS, SortKey, Val};
 
 mod macros;
+mod panes;
 mod scan;
 mod structure;
 mod styles;
@@ -152,13 +153,16 @@ pub enum Op {
         shape: Option<u32>,
         name: String,
     },
+    /// The rows above `at` and the columns to its left frozen ("ウィンドウ枠の固定"); None (or
+    /// A1): no longer frozen.
+    Freeze { sheet: String, at: Option<CellRef> },
 }
 
 impl Op {
     fn structural(&self) -> bool {
         matches!(
             self,
-            Op::Insert { .. } | Op::Delete { .. } | Op::Macro { .. }
+            Op::Insert { .. } | Op::Delete { .. } | Op::Macro { .. } | Op::Freeze { .. }
         )
     }
 }
@@ -412,7 +416,19 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     name,
                 }
             }
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro）")),
+            "freeze" => Op::Freeze {
+                sheet,
+                at: if o.get("off").and_then(Json::as_bool).unwrap_or(false) {
+                    None
+                } else {
+                    let at = range_of(o, "at")?;
+                    if !at.is_single() {
+                        return Err("`at` はセル 1 つで指定してください（B2 なら 1 行目と A 列を固定します）".into());
+                    }
+                    Some(at.start)
+                },
+            },
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze）")),
         });
     }
     Ok(out)
@@ -439,6 +455,7 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 shape,
                 name,
             } => macros::assign(&bytes, sheet, object, *shape, name)?,
+            Op::Freeze { sheet, at } => panes::freeze(&bytes, sheet, *at)?,
             _ => apply_group(&bytes, &ops[at..end])?,
         };
         at = end;
@@ -1010,7 +1027,7 @@ fn run(
             written.push((si, *to));
         }
         // (Made on the file by `apply`: it changes no cell.)
-        Op::Macro { .. } => {}
+        Op::Macro { .. } | Op::Freeze { .. } => {}
         Op::Fill {
             sheet,
             range,

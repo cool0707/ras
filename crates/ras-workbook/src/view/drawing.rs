@@ -67,6 +67,23 @@ impl Parts {
                     format!("{name}#view"),
                     format!("{}/>", head[start..i + j].trim_end_matches('/')).into_bytes(),
                 );
+                // Its pane (the rows and columns frozen), the first element in it.
+                let rest = if head[..i + j].ends_with('/') {
+                    ""
+                } else {
+                    &head[i + j..]
+                };
+                let end = rest.find("sheetView>").unwrap_or(rest.len());
+                if let Some(p) = rest[..end].find("pane ")
+                    && rest[..p].ends_with(['<', ':'])
+                    && let Some(q) = rest[p..].find('>')
+                {
+                    let open = rest[..p].rfind('<').unwrap_or(p);
+                    files.insert(
+                        format!("{name}#pane"),
+                        format!("{}/>", rest[open..p + q].trim_end_matches('/')).into_bytes(),
+                    );
+                }
             }
         }
         for name in ["xl/workbook.xml", "xl/_rels/workbook.xml.rels"] {
@@ -204,6 +221,37 @@ impl Parts {
     pub fn grid_lines(&self, sheet: &str) -> Option<bool> {
         let view = self.xml(&format!("{}#view", self.sheet_part(sheet)?))?;
         Some(!matches!(view.attr("showGridLines"), Some("0" | "false")))
+    }
+
+    /// The rows and columns the sheet named `sheet` keeps on the screen (its panes frozen): as
+    /// many as are above and to the left of the pane, counted from A1 (rows scrolled away above
+    /// a frozen pane count as frozen too).
+    pub fn frozen(&self, sheet: &str) -> Option<(u32, u32)> {
+        let part = self.sheet_part(sheet)?;
+        let pane = self.xml(&format!("{part}#pane"))?;
+        if !matches!(pane.attr("state"), Some("frozen" | "frozenSplit")) {
+            return None;
+        }
+        let split = |name: &str| {
+            pane.attr(name)
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| *v > 0.0)
+                .map(|v| v.round() as u32)
+                .unwrap_or(0)
+        };
+        let (rows, cols) = (split("ySplit"), split("xSplit"));
+        if rows == 0 && cols == 0 {
+            return None;
+        }
+        let top = self
+            .xml(&format!("{part}#view"))
+            .and_then(|v| v.attr("topLeftCell").map(str::to_string))
+            .and_then(|a| gridcraft_core::CellRef::parse(&a.replace('$', "")))
+            .unwrap_or(gridcraft_core::CellRef::new(0, 0));
+        Some((
+            if rows > 0 { top.row + rows } else { 0 },
+            if cols > 0 { top.col + cols } else { 0 },
+        ))
     }
 
     /// The alignment of the cells without a format of their own (the first of cellXfs), when

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::io::Read as _;
 
+use serde_json::json;
+
 use super::*;
 use crate::book::Read;
 
@@ -689,5 +691,93 @@ fn a_macro_is_assigned_to_a_button_and_a_chart() {
             Some("Data")
         )
         .is_err()
+    );
+}
+
+/// What the grid draws of a workbook file (`ras book view`).
+fn view(bytes: &[u8]) -> Json {
+    let mut book = Book::open_bytes(bytes).unwrap();
+    crate::view::data(&mut book, "edit.xlsm", Some(bytes), None, None).unwrap()
+}
+
+#[test]
+fn panes_frozen_and_no_longer() {
+    // `<sheetView .../>` gets the pane and its selections, as Excel writes them.
+    let out = edit(r#"{"op":"freeze","at":"B2"}"#);
+    assert_eq!(changed(BOOK, &out), ["xl/worksheets/sheet1.xml"]);
+    let doc = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(doc.contains(
+        "<sheetView tabSelected=\"1\" workbookViewId=\"0\"><pane xSplit=\"1\" ySplit=\"1\" topLeftCell=\"B2\" activePane=\"bottomRight\" state=\"frozen\"/><selection pane=\"topRight\"/><selection pane=\"bottomLeft\"/><selection pane=\"bottomRight\" activeCell=\"B2\" sqref=\"B2\"/></sheetView>"
+    ));
+    assert_eq!(view(&out)["sheets"][0]["frozen"], json!([1, 1]));
+    // Frozen again elsewhere: one pane, in place of the other.
+    let rows = apply(&out, &ops(r#"{"op":"freeze","at":"A4"}"#)).unwrap();
+    let doc = part(&rows, "xl/worksheets/sheet1.xml");
+    assert_eq!(doc.matches("<pane ").count(), 1);
+    assert!(doc.contains("<pane ySplit=\"3\" topLeftCell=\"A4\" activePane=\"bottomLeft\" state=\"frozen\"/><selection pane=\"bottomLeft\" activeCell=\"A4\" sqref=\"A4\"/></sheetView>"));
+    assert_eq!(view(&rows)["sheets"][0]["frozen"], json!([3, 0]));
+    // No longer frozen: the pane and its selections go.
+    let off = apply(&rows, &ops(r#"{"op":"freeze","off":true}"#)).unwrap();
+    let doc = part(&off, "xl/worksheets/sheet1.xml");
+    assert!(!doc.contains("<pane") && !doc.contains("<selection"));
+    assert_eq!(view(&off)["sheets"][0]["frozen"], Json::Null);
+    // The cells are those they were; A1 is no pane; a range is refused.
+    assert_eq!(cell(&out, "Data", "D6", Read::Formula), "=SUM(D2:D5)");
+    assert_eq!(
+        apply(BOOK, &ops(r#"{"op":"freeze","at":"A1"}"#)).unwrap(),
+        BOOK
+    );
+    assert!(
+        parse_ops(
+            &serde_json::json!({"op":"freeze","at":"A1:B2"}),
+            Some("Data")
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn notes_lists_and_names_for_the_grid() {
+    // The input rule of C2:C5 made a list of its own, and B2:B5 one of the name `Items`.
+    let sheet = part(BOOK, "xl/worksheets/sheet1.xml").replace(
+        "<dataValidations count=\"1\"><dataValidation type=\"whole\" allowBlank=\"1\" showInputMessage=\"1\" showErrorMessage=\"1\" sqref=\"C2:C5\"><formula1>1</formula1><formula2>100</formula2></dataValidation></dataValidations>",
+        "<dataValidations count=\"2\"><dataValidation type=\"list\" allowBlank=\"1\" showInputMessage=\"1\" showErrorMessage=\"1\" promptTitle=\"数量\" prompt=\"選んでください\" sqref=\"C2:C5\"><formula1>\"1,2, 3\"</formula1></dataValidation><dataValidation type=\"list\" errorStyle=\"warning\" showErrorMessage=\"1\" sqref=\"B2:B5 E7\"><formula1>Items</formula1></dataValidation></dataValidations>",
+    );
+    let mut all = parts(BOOK);
+    all.insert("xl/worksheets/sheet1.xml".into(), sheet.into_bytes());
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, data) in all {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(&data).unwrap();
+    }
+    let bytes = zip.finish().unwrap().into_inner();
+    let data = view(&bytes);
+    let sheet = &data["sheets"][0];
+    assert_eq!(
+        sheet["notes"],
+        json!([{ "r": 2, "c": 1, "text": "メモです", "author": "" }])
+    );
+    assert_eq!(
+        sheet["lists"],
+        json!([
+            { "ranges": [[1, 2, 4, 2]], "values": ["1", "2", "3"], "all": ["1", "2", "3"], "stop": "", "title": "数量", "prompt": "選んでください" },
+            { "ranges": [[1, 1, 4, 1], [6, 4, 6, 4]], "values": ["りんご", "みかん", "ぶどう", "もも"] }
+        ])
+    );
+    assert_eq!(
+        data["names"],
+        json!([{ "name": "Items", "ref": "Data!$A$2:$A$5" }, { "name": "Total", "ref": "Data!$D$6" }])
+    );
+    // Numbers keep their value, formatted or not (the status bar sums them).
+    let b2 = sheet["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["r"] == json!(1) && c["c"] == json!(1))
+        .unwrap();
+    assert_eq!(
+        (b2["x"].clone(), b2["n"].clone()),
+        (json!(120.0), json!("#,##0"))
     );
 }

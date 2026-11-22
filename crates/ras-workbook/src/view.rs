@@ -63,8 +63,26 @@ pub fn data(
         }
         json!({ "before": before, "structure": diff::structure_lines(d), "changes": by_sheet })
     });
+    // The names defined, for the name box and "ジャンプ" (F5): those of a sheet with its name.
+    let sheet_names: Vec<String> = sheets
+        .iter()
+        .map(|s| s["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    let names: Vec<Json> = book
+        .names()
+        .into_iter()
+        // Excel's own names (_xlnm.Print_Area, _FilterDatabase) are not offered.
+        .filter(|(n, _, _)| !n.starts_with("_xlnm.") && !n.starts_with("_Filter"))
+        .map(|(name, scope, refers)| {
+            let mut j = json!({ "name": name, "ref": refers.trim_start_matches('=') });
+            if let Some(s) = scope.and_then(|i| sheet_names.get(i)) {
+                j["sheet"] = json!(s);
+            }
+            j
+        })
+        .collect();
     Ok(
-        json!({ "file": file, "sheets": sheets, "diff": diff, "active": Json::Null, "images": images.into_inner().list }),
+        json!({ "file": file, "sheets": sheets, "names": names, "diff": diff, "active": Json::Null, "images": images.into_inner().list }),
     )
 }
 
@@ -85,9 +103,9 @@ pub fn page(data: &Json) -> String {
     format!(
         "<!doctype html>\n<html lang=\"ja\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{title}</title>\n<style>\n{CSS}</style>\n</head>\n<body>\n\
          <div id=\"top\"><span class=\"file\" id=\"file\"></span><span class=\"note\" id=\"summary\"></span></div>\n\
-         <div id=\"bar\"><div id=\"name\"></div><div id=\"fx\"></div><button id=\"formulas\" type=\"button\" title=\"セルに値ではなく数式を表示します（Ctrl+` / Ctrl+Shift+@）\" aria-pressed=\"false\">数式の表示</button></div>\n\
+         <div id=\"bar\"><input id=\"name\" type=\"text\" list=\"names\" autocomplete=\"off\" spellcheck=\"false\" aria-label=\"名前ボックス\" title=\"セル番地や名前を入力して Enter で移動します（Ctrl+G でジャンプ）\"><datalist id=\"names\"></datalist><div id=\"fx\"></div><button id=\"formulas\" type=\"button\" title=\"セルに値ではなく数式を表示します（Ctrl+` / Ctrl+Shift+@）\" aria-pressed=\"false\">数式の表示</button></div>\n\
          <div id=\"main\"><div id=\"grid\"></div><div id=\"side\"></div></div>\n\
-         <div id=\"note\" hidden></div>\n<div id=\"tabs\"></div>\n\
+         <div id=\"note\" hidden></div>\n<div id=\"tabs\"></div>\n<div id=\"status\"><span id=\"mode\"></span><span id=\"stats\"></span></div>\n\
          <script>window.DATA = {embedded};</script>\n<script>\n{CHART_JS}</script>\n<script>\n{JS}</script>\n</body>\n</html>\n"
     )
 }

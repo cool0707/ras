@@ -31,6 +31,8 @@
     };
     const changes = (data.diff && data.diff.changes) || {};
     const KEY = 16384;
+    // The height of the column headers, until it is measured (px).
+    const HEAD_H = 22;
     // How far past the visible part the grid is kept drawn (px).
     const AHEAD = 400;
 
@@ -115,26 +117,33 @@
         return out;
     }
 
+    // The colors of the references of a formula, and their boxes on the grid (those of this sheet).
+    function colorRefs(sheet, formula, refs) {
+        const colors = new Map();
+        for (const ref of refs) {
+            const key = `${ref.sheet || ""}!${ref.area.join(",")}`;
+            if (!colors.has(key)) colors.set(key, REF_COLORS[colors.size % REF_COLORS.length]);
+            ref.color = colors.get(key);
+            if (!ref.sheet || ref.sheet === sheet.name) ref.box = outline(ref.area, ref.color);
+        }
+        return refs;
+    }
+
     // The name box and the formula bar for the active cell.
     function showCell(sheet, cell, r, c) {
         cell = cell || {};
         view.refs.textContent = "";
-        $("name").textContent = address(r, c);
+        showName(sheet, r, c);
         const fx = $("fx");
         fx.textContent = "";
         if (cell.f) {
             // The references in colors, the same on the grid.
-            const refs = references(cell.f);
-            const colors = new Map();
+            const refs = colorRefs(sheet, cell.f, references(cell.f));
             let at = 0;
             for (const ref of refs) {
-                const key = `${ref.sheet || ""}!${ref.area.join(",")}`;
-                if (!colors.has(key)) colors.set(key, REF_COLORS[colors.size % REF_COLORS.length]);
-                const color = colors.get(key);
                 fx.appendChild(document.createTextNode(cell.f.slice(at, ref.start)));
-                fx.appendChild(el("span", "ref", cell.f.slice(ref.start, ref.end))).style.color = color;
+                fx.appendChild(el("span", "ref", cell.f.slice(ref.start, ref.end))).style.color = ref.color;
                 at = ref.end;
-                if (!ref.sheet || ref.sheet === sheet.name) outline(ref.area, color);
             }
             fx.appendChild(document.createTextNode(cell.f.slice(at)));
         } else {
@@ -156,6 +165,8 @@
             y2 = rowTop(v, r2 + 1);
         const box = v.refs.appendChild(el("div", "refbox"));
         Object.assign(box.style, { left: `${x}px`, top: `${y}px`, width: `${Math.max(2, x2 - x + 1)}px`, height: `${Math.max(2, y2 - y + 1)}px`, borderColor: color, background: `${color}14` });
+        pinTo(box, pinOf(v, { x, y, w: x2 - x, h: y2 - y }));
+        return box;
     }
 
     // ---- the formula view (Excel's 数式の表示): formulas in the cells, columns twice as wide
@@ -181,7 +192,7 @@
         selectedObj = obj;
         box.classList.add("on");
         refreshEventButton();
-        $("name").textContent = obj.name || "";
+        $("name").value = obj.name || "";
         $("fx").textContent = obj.macro ? `マクロ: ${obj.macro}` : "";
     }
 
@@ -229,7 +240,7 @@
         const room = roomOf(c, merged);
         const fits = (s) => textWidth(td, cell, s) <= room;
         if (fits(cell.t)) return;
-        const shown = typeof cell.x === "number" ? generalFit(cell.x, fits) : null;
+        const shown = typeof cell.x === "number" && !cell.n ? generalFit(cell.x, fits) : null;
         if (shown !== null) {
             td.textContent = shown;
             return;
@@ -278,7 +289,8 @@
         remember({ sheet: sheet.name });
         const grid = $("grid");
         grid.textContent = "";
-        $("name").textContent = "";
+        $("name").value = "";
+        fillNames(sheet);
         $("fx").textContent = "";
         $("note").hidden = !sheet.truncated;
         $("note").textContent = sheet.truncated ? `使用範囲 ${sheet.usedRange} のうち、${sheet.rows} 行 × ${sheet.cols} 列までを表示しています（--all ですべて表示します）` : "";
@@ -305,6 +317,9 @@
         }
         const changed = new Map((changes[sheet.name] || []).map((x) => [x.a, x]));
         const filter = sheet.filter ? sheet.filter.split(":").map(parse) : null;
+        const notes = new Map((sheet.notes || []).map((n) => [n.r * KEY + n.c, n]));
+        // The panes frozen: the rows above fr and the columns left of fc stay on the screen.
+        const [fr, fc] = sheet.frozen || [0, 0];
 
         const wrap = el("div", "sheetwrap");
         const table = el("table");
@@ -323,7 +338,15 @@
         const clipbox = marks.appendChild(el("div", "clipbox"));
         const fillbox = marks.appendChild(el("div", "fillbox"));
         const fillh = marks.appendChild(el("div", "fillhandle"));
-        selbox.hidden = clipbox.hidden = fillbox.hidden = fillh.hidden = true;
+        // The button of a list (an input rule) and its message, at the active cell.
+        const dropbtn = marks.appendChild(el("div", "dropbtn", "▾"));
+        const promptbox = marks.appendChild(el("div", "promptbox"));
+        // The lines under the rows and right of the columns frozen.
+        const frzh = marks.appendChild(el("div", "frzline h"));
+        const frzv = marks.appendChild(el("div", "frzline v"));
+        selbox.hidden = clipbox.hidden = fillbox.hidden = fillh.hidden = dropbtn.hidden = promptbox.hidden = true;
+        frzh.hidden = !fr;
+        frzv.hidden = !fc;
         wrap.appendChild(ed);
         grid.appendChild(wrap);
 
@@ -339,6 +362,13 @@
             clipbox,
             fillbox,
             fillh,
+            dropbtn,
+            promptbox,
+            frzh,
+            frzv,
+            notes,
+            fr,
+            fc,
             filter, // the filter's corners: [[r, c], [r, c]]
             hl: [], // the headers of the selection
 
@@ -352,6 +382,10 @@
             width: 0, // of the cells (without the row headers)
             refs, // the boxes of the references of the selected formula
             head: 28, // the width of the row headers
+            // Where the frozen rows start (px from the table's top, under the column headers),
+            // and the frozen columns (px from the row headers).
+            tops: [],
+            lefts: [],
             byAddress: new Map(),
             // Right gridlines hidden under text that runs over empty cells: key -> true.
             noRight: new Set(),
@@ -365,6 +399,15 @@
             td.cell = cell;
             td.r = r;
             td.c = c;
+            if (r < fr || c < fc) {
+                td.classList.add("frz");
+                if (r < fr) td.classList.add("fzr");
+                if (c < fc) td.classList.add("fzc");
+            }
+            if (notes.has(key)) {
+                td.classList.add("hasnote");
+                td.note = notes.get(key);
+            }
             if (cell) {
                 if (cell.s) td.style.cssText = sheet.styles[cell.s];
                 // The formula view: formulas (left, as text) and the values as they are typed.
@@ -430,7 +473,15 @@
                 td.classList.add("filter");
                 if ((sheet.filterColumns || {})[c - filter[0][1]]) td.classList.add("filtered");
             }
-            if (cell || was || merged) v.byAddress.set(a, td);
+            if (td.note) td.appendChild(el("span", "notemark"));
+            if (r < fr || c < fc) pinCell(td);
+            if (cell || was || merged || td.note) v.byAddress.set(a, td);
+        }
+
+        // A cell of the panes frozen: where it stays (known once the cells before it are drawn).
+        function pinCell(td) {
+            if (td.r < fr) td.style.top = `${v.tops[td.r] || 0}px`;
+            if (td.c < fc) td.style.left = `${(v.lefts[td.c] || 0) + v.head}px`;
         }
 
         function addRow(r) {
@@ -444,7 +495,12 @@
             }
             const tr = body.appendChild(el("tr"));
             tr.style.height = `${h}px`;
-            tr.appendChild(el("th", null, String(r + 1))).r = r;
+            const th = tr.appendChild(el("th", null, String(r + 1)));
+            th.r = r;
+            if (r < fr) {
+                th.classList.add("fzr");
+                th.style.top = `${v.tops[r] || 0}px`;
+            }
             v.cols.forEach((c, i) => makeCell(tr, r, c, i));
             v.rows.push([r, tr]);
             v.trs.set(r, tr);
@@ -461,6 +517,10 @@
             group.appendChild(el("col")).style.width = `${w}px`;
             const th = head.appendChild(el("th", null, colName(c)));
             th.c = c;
+            if (c < fc) {
+                th.classList.add("fzc");
+                th.style.left = `${(v.lefts[c] || 0) + v.head}px`;
+            }
             v.ths.set(c, th);
             const i = v.cols.length;
             v.cols.push(c);
@@ -472,11 +532,23 @@
         // line up to 3 digits, 8 px more for each digit after that (Excel 2021 at 100%).
         function sizeHead() {
             const digits = String(v.nrows).length;
+            const was = v.head;
             v.head = 28 + 8 * Math.max(0, digits - 3);
             corner.style.width = `${v.head}px`;
             table.style.width = `${v.head + v.width}px`;
+            // The frozen columns stay right of the row headers.
+            if (fc && v.head !== was) for (const x of table.querySelectorAll("td.fzc, th.fzc")) x.style.left = `${(v.lefts[x.c] || 0) + v.head}px`;
         }
 
+        // The frozen rows and columns: where each starts (hidden ones take no room).
+        for (let r = 0, y = HEAD_H; r < fr; r++) {
+            v.tops[r] = y;
+            y += Math.max(0, height(sheet, r));
+        }
+        for (let c = 0, x = 0; c < fc; c++) {
+            v.lefts[c] = x;
+            x += Math.max(0, width(sheet, c));
+        }
         // The cells of the sheet, then as many empty ones as the window shows.
         for (let c = 0; c < sheet.cols; c++) addCol(c);
         for (let r = 0; r < sheet.rows; r++) addRow(r);
@@ -500,8 +572,18 @@
             if (more) sizeHead();
         };
         v.fill();
+        // The frozen rows start under the column headers, as tall as they are drawn.
+        const headH = table.tHead.offsetHeight;
+        if (fr && headH !== HEAD_H) {
+            for (let r = 0, y = headH; r < fr; r++) {
+                v.tops[r] = y;
+                y += Math.max(0, height(sheet, r));
+            }
+            for (const x of table.querySelectorAll("td.fzr, th.fzr")) x.style.top = `${v.tops[x.r] || 0}px`;
+        }
         overflow(v);
         placeObjects(v);
+        placeFrozenLines(v);
         draw.find = (a) => v.byAddress.get(a);
         // The selection the sheet had (A1 at first).
         const was = sels[sheet.name];
@@ -545,6 +627,40 @@
         }
     }
 
+    // ---- the panes frozen: their cells are sticky; the boxes over them (objects, the selection,
+    // references) move with the scrolling the other way, marked by `data-pin` ("y": in the
+    // frozen rows, "x": in the frozen columns).
+
+    function pinOf(v, b) {
+        if (!b) return "";
+        const fy = v.fr > 0 && b.y + b.h <= rowTop(v, v.fr) + 1;
+        const fx = v.fc > 0 && b.x + b.w <= columnLeft(v, v.fc) + 1;
+        return (fy ? "y" : "") + (fx ? "x" : "");
+    }
+    function pinTo(div, pin) {
+        if (pin) div.dataset.pin = pin;
+        else delete div.dataset.pin;
+        applyPin(div);
+    }
+    function applyPin(div) {
+        const g = $("grid");
+        const p = div.dataset.pin || "";
+        div.style.transform = p ? `translate(${p.includes("x") ? g.scrollLeft : 0}px,${p.includes("y") ? g.scrollTop : 0}px)` : "";
+    }
+    function repin() {
+        if (view && (view.fr || view.fc)) for (const d of view.wrap.querySelectorAll("[data-pin]")) applyPin(d);
+    }
+    function placeFrozenLines(v) {
+        if (v.fr) {
+            Object.assign(v.frzh.style, { top: `${rowTop(v, v.fr) - 1}px`, width: `${v.head + v.width}px` });
+            pinTo(v.frzh, "y");
+        }
+        if (v.fc) {
+            Object.assign(v.frzv.style, { left: `${columnLeft(v, v.fc) - 1}px`, height: `${v.table.offsetHeight}px` });
+            pinTo(v.frzv, "x");
+        }
+    }
+
     // Where a column starts and a row starts on the grid (px from its top left corner).
     function columnLeft(v, c) {
         const th = v.ths.get(c);
@@ -585,6 +701,7 @@
             if (!(x2 >= x && y2 >= y)) continue;
             const box = layer.appendChild(el("div", `obj ${obj.kind}`));
             Object.assign(box.style, { left: `${x}px`, top: `${y}px`, width: `${x2 - x}px`, height: `${y2 - y}px` });
+            pinTo(box, pinOf(v, { x, y, w: x2 - x, h: y2 - y }));
             box.innerHTML = obj.html;
             if (obj.chart && window.rasChart) {
                 try {
@@ -726,6 +843,8 @@
         if (scroll) reveal(sel.kind === "cols" ? null : sel.fr, sel.kind === "rows" ? null : sel.fc);
         placeEditor();
         showTools();
+        showStats();
+        showMode();
     }
 
     // The box of the range, its headers, and the dashed box of the cells copied.
@@ -735,6 +854,7 @@
         const put = (div, b) => {
             div.hidden = !b;
             if (b) Object.assign(div.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w + 1}px`, height: `${b.h + 1}px` });
+            pinTo(div, pinOf(v, b));
         };
         for (const th of v.hl) th.classList.remove("hs");
         v.hl = [];
@@ -749,6 +869,8 @@
         const b = editable && sel && !selected && !entry && sel.kind === "cells" ? boxOf(sel.r1, sel.c1, sel.r2, sel.c2) : null;
         v.fillh.hidden = !b || sel.r2 >= v.nrows || sel.c2 >= v.ncols;
         if (b) Object.assign(v.fillh.style, { left: `${b.x + b.w - 3}px`, top: `${b.y + b.h - 3}px` });
+        pinTo(v.fillh, pinOf(v, b));
+        placeList();
     }
 
     // Scrolls a cell out from under the headers and into the window (null: that way stays).
@@ -758,12 +880,15 @@
         const o = (r !== null && c !== null && ownerOf(r, c)) || [r || 0, c || 0, r || 0, c || 0];
         const b = boxOf(o[0], o[1], o[2], o[3]);
         if (!b) return;
-        const top = v.table.tHead.offsetHeight;
-        if (c !== null) {
-            if (b.x - v.head < g.scrollLeft) g.scrollLeft = b.x - v.head;
-            else if (b.x + b.w + 1 > g.scrollLeft + g.clientWidth) g.scrollLeft = Math.min(b.x - v.head, b.x + b.w + 1 - g.clientWidth);
+        // (Under the column headers and the rows frozen; right of the columns frozen. A cell
+        // frozen is always in the window that way.)
+        const top = rowTop(v, v.fr);
+        const left = columnLeft(v, v.fc);
+        if (c !== null && o[1] >= v.fc) {
+            if (b.x - left < g.scrollLeft) g.scrollLeft = b.x - left;
+            else if (b.x + b.w + 1 > g.scrollLeft + g.clientWidth) g.scrollLeft = Math.min(b.x - left, b.x + b.w + 1 - g.clientWidth);
         }
-        if (r !== null) {
+        if (r !== null && o[0] >= v.fr) {
             if (b.y - top < g.scrollTop) g.scrollTop = b.y - top;
             else if (b.y + b.h + 1 > g.scrollTop + g.clientHeight) g.scrollTop = Math.min(b.y - top, b.y + b.h + 1 - g.clientHeight);
         }
@@ -855,6 +980,14 @@
         const edge = e.button === 0 ? edgeOf(e) : null;
         const button = e.button === 0 && filterButton(e);
         closeMenu();
+        // A formula being typed: the cell (the rows, the columns) clicked goes into it.
+        if (entry && !edge && !button && hit.kind !== "all" && e.button === 0 && pointable()) {
+            const at = [hit.r, hit.c];
+            const p = entry.point;
+            pointTo(e.shiftKey && p ? p.anchor : at, at, hit.kind);
+            drag = `point:${hit.kind}`;
+            return;
+        }
         if (entry) commit(null);
         focusGrid();
         if (edge) {
@@ -886,6 +1019,16 @@
         if (!drag || !sel) return;
         if (!(e.buttons & 1)) {
             drag = null;
+            return;
+        }
+        if (drag.startsWith("point:")) {
+            const kind = drag.slice(6);
+            const hit = hitOf(document.elementFromPoint(e.clientX, e.clientY));
+            const p = entry && entry.point;
+            if (!p || !hit || hit.kind === "all" || (kind !== "cells" && hit.kind !== kind && hit.kind !== "cells")) return;
+            if (kind === "cells" && hit.kind !== "cells") return;
+            if (p.cur && p.cur[0] === hit.r && p.cur[1] === hit.c) return;
+            pointTo(p.anchor, [hit.r, hit.c], kind);
             return;
         }
         const hit = hitOf(document.elementFromPoint(e.clientX, e.clientY));
@@ -943,6 +1086,7 @@
         const on = !!entry && entry.where === "cell";
         ed.classList.toggle("on", on);
         Object.assign(ed.style, { left: `${b.x}px`, top: `${b.y}px`, width: "", height: "", font: "" });
+        pinTo(ed, pinOf(view, b));
         if (!on) return;
         if (activeTd) ed.style.font = getComputedStyle(activeTd).font;
         // As wide and as tall as what is typed, the cell at least.
@@ -957,7 +1101,9 @@
         closeMenu();
         const cell = (activeTd && activeTd.cell) || {};
         const original = cell.f || cell.v || cell.t || "";
-        entry = { mode, where, original };
+        // `point`: the reference being pointed at (clicked, or moved to by the arrows) while a
+        // formula is typed: { start, end } in the text, `anchor` and `cur` its corners [r, c].
+        entry = { mode, where, original, point: null };
         if (text === null) text = original;
         const fx = $("fx");
         fx.textContent = "";
@@ -976,11 +1122,15 @@
             ed.setSelectionRange(text.length, text.length);
         }
         document.body.classList.add("typing");
+        entryRefs();
+        placeList();
+        showMode();
         return true;
     }
 
     function endEntry() {
         entry = null;
+        showMode();
         ed.value = "";
         bar.remove();
         document.body.classList.remove("typing");
@@ -995,6 +1145,13 @@
         const e = entry;
         if (!e || !sel) return;
         const text = (e.where === "bar" ? bar : ed).value;
+        // An entry the cell's list does not allow: refused, and typed on (as Excel's 再試行).
+        const no = refused(text);
+        if (no) {
+            showError(no);
+            (e.where === "bar" ? bar : ed).focus();
+            return;
+        }
         const fill = !!(how && how.fill) && !single(sel);
         const range = fill ? rangeText(sel) : address(sel.ar, sel.ac);
         const sheet = view.sheet.name;
@@ -1010,8 +1167,18 @@
             if (!beginEntry("enter", ed.value, "cell")) ed.value = "";
             return;
         }
+        // Typing ends the pointing.
+        entry.point = null;
         $("fx").textContent = ed.value;
         placeEditor();
+        entryRefs();
+        showMode();
+    });
+    bar.addEventListener("input", () => {
+        if (!entry) return;
+        entry.point = null;
+        entryRefs();
+        showMode();
     });
     ed.addEventListener("compositionstart", () => {
         if (!entry && !beginEntry("enter", ed.value, "cell")) ed.blur();
@@ -1034,6 +1201,90 @@
             beginEntry("edit", null, "bar");
         }
     });
+
+    // ---- formulas typed: pointing at cells (a click, a drag, the arrows), F4, the references
+
+    const entryInput = () => (entry && entry.where === "bar" ? bar : ed);
+    // A reference may be pointed at: in a formula, after an operator, a parenthesis or a comma.
+    function pointable() {
+        if (!entry || !view) return false;
+        const input = entryInput();
+        const text = input.value;
+        if (!/^[=+-]/.test(text)) return false;
+        if (entry.point) return true;
+        if (input.selectionStart !== input.selectionEnd) return false;
+        return /[=(,+\-*/^&<>:;\s]$/.test(text.slice(0, input.selectionStart));
+    }
+    // The text of a reference from the corner a to the corner b ([r, c]); `kind`: cells, rows, cols.
+    function refText(a, b, kind) {
+        const [r1, r2] = [Math.min(a[0], b[0]), Math.max(a[0], b[0])];
+        const [c1, c2] = [Math.min(a[1], b[1]), Math.max(a[1], b[1])];
+        if (kind === "rows") return `${r1 + 1}:${r2 + 1}`;
+        if (kind === "cols") return `${colName(c1)}:${colName(c2)}`;
+        // A merged cell whole.
+        const o1 = ownerOf(r1, c1) || [r1, c1, r1, c1];
+        const o2 = ownerOf(r2, c2) || [r2, c2, r2, c2];
+        const [x1, y1, x2, y2] = [Math.min(o1[0], o2[0]), Math.min(o1[1], o2[1]), Math.max(o1[2], o2[2]), Math.max(o1[3], o2[3])];
+        return x1 === x2 && y1 === y2 ? address(x1, y1) : `${address(x1, y1)}:${address(x2, y2)}`;
+    }
+    function pointTo(anchor, cur, kind) {
+        const input = entryInput();
+        let p = entry.point;
+        if (!p) {
+            const at = input.selectionStart;
+            p = entry.point = { start: at, end: at };
+        }
+        const text = refText(anchor, cur, kind || "cells");
+        input.setRangeText(text, p.start, p.end, "end");
+        Object.assign(p, { end: p.start + text.length, anchor, cur, kind: kind || "cells" });
+        if (entry.where === "cell") $("fx").textContent = input.value;
+        placeEditor();
+        entryRefs();
+        showMode();
+    }
+    // The references of what is typed, as boxes in their colors; the one pointed at dashed.
+    function entryRefs() {
+        if (!view || !entry) return;
+        view.refs.textContent = "";
+        const text = entryInput().value;
+        if (!/^[=+-]/.test(text)) return;
+        const refs = colorRefs(view.sheet, text, references(text));
+        const p = entry.point;
+        const ref = p && refs.find((r) => r.start === p.start && r.end === p.end);
+        if (ref && ref.box) ref.box.classList.add("pointing");
+    }
+    // F4: the reference at the caret, $ by $ (A1, $A$1, A$1, $A1).
+    function toggleAbsolute() {
+        const input = entryInput();
+        const text = input.value;
+        if (!/^[=+-]/.test(text)) return;
+        const at = input.selectionStart;
+        const refs = references(text);
+        const ref = refs.find((r) => at >= r.start && at <= r.end) || refs.filter((r) => r.end <= at).pop();
+        if (!ref) return;
+        const part = text.slice(ref.start, ref.end);
+        const bang = part.lastIndexOf("!");
+        const head = part.slice(0, bang + 1);
+        const ends = part.slice(bang + 1).split(":").map((t) => /^(\$?)([A-Z]*)(\$?)([0-9]*)$/.exec(t));
+        if (ends.some((m) => !m)) return;
+        const [m] = ends;
+        let state;
+        if (m[2] && m[4]) {
+            // Both: column and row; next as Excel goes round.
+            const now = `${m[1] ? 1 : 0}${m[3] ? 1 : 0}`;
+            state = { "00": [1, 1], "11": [0, 1], "01": [1, 0], "10": [0, 0] }[now];
+        } else {
+            const abs = m[2] ? !!m[1] : !!m[3];
+            state = [abs ? 0 : 1, abs ? 0 : 1];
+        }
+        const body = ends.map((e) => `${e[2] && state[0] ? "$" : ""}${e[2]}${e[4] && state[1] ? "$" : ""}${e[4]}`).join(":");
+        const next = head + body;
+        input.setRangeText(next, ref.start, ref.end, "end");
+        if (entry.point && entry.point.start === ref.start) entry.point.end = ref.start + next.length;
+        if (entry.where === "cell") $("fx").textContent = input.value;
+        placeEditor();
+        entryRefs();
+    }
 
     // ---- edits: posted to the editor, which writes the workbook and draws the page again
 
@@ -1671,6 +1922,9 @@
         button("sortAsc", "A→Z", "昇順で並べ替え", () => sortBy(false));
         button("sortDesc", "Z→A", "降順で並べ替え", () => sortBy(true));
         button("filter", "フィルター", "フィルター（Ctrl+Shift+L）", toggleFilter);
+        button("freeze", "固定", "ウィンドウ枠の固定", (b) => openFreeze(b));
+        gap();
+        button("find", "検索", "検索と置換（Ctrl+F / Ctrl+H）", () => openFind(false));
         gap();
         button("clearFormats", "書式のクリア", "書式のクリア", clearFormats);
     }
@@ -1691,6 +1945,7 @@
         tools.numberFormat.value = NUMBER_FORMATS.some(([c]) => c === code) ? code : "";
         tools.merge.classList.toggle("on", !!sel && single(sel) && mergedIn(sel));
         tools.filter.classList.toggle("on", !!view.sheet.filter);
+        tools.freeze.classList.toggle("on", !!(view.fr || view.fc));
     }
     if (editable) makeTools();
 
@@ -1953,6 +2208,13 @@
         autofill(f, f.to);
     }
     $("grid").addEventListener("mousedown", (e) => {
+        if (!view || e.target !== view.dropbtn || e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (menu && menu.classList.contains("listpop")) closeMenu();
+        else openList();
+    });
+    $("grid").addEventListener("mousedown", (e) => {
         if (!view || e.target !== view.fillh || e.button !== 0 || busy || !sel) return;
         e.preventDefault();
         e.stopPropagation();
@@ -1972,12 +2234,537 @@
         autofill(sel, [sel.r1, sel.c1, r, sel.c2]);
     });
 
+    // ---- the name box and "ジャンプ" (F5, Ctrl+G): a cell, a range or a name to go to
+
+    const sheetByName = (name) => data.sheets.find((s) => s.name === name) || data.sheets.find((s) => s.name.toLowerCase() === String(name).toLowerCase());
+    // The names a sheet sees: its own, then the workbook's.
+    function namesOf(sheet) {
+        const all = data.names || [];
+        const own = all.filter((n) => n.sheet === sheet.name);
+        return own.concat(all.filter((n) => !n.sheet && !own.some((o) => o.name.toLowerCase() === n.name.toLowerCase())));
+    }
+    function fillNames(sheet) {
+        const list = $("names");
+        list.textContent = "";
+        for (const n of namesOf(sheet)) list.appendChild(el("option")).value = n.name;
+    }
+    // A reference as it is typed: { sheet, kind, r1, c1, r2, c2 } or null.
+    function parseRef(text, sheet) {
+        let t = String(text).trim().replace(/^=/, "");
+        if (!t) return null;
+        const named = namesOf(sheet).find((n) => n.name.toLowerCase() === t.toLowerCase());
+        // (A name with several areas: its first.)
+        if (named) t = named.ref.split(",")[0];
+        let on = sheet;
+        const bang = t.lastIndexOf("!");
+        if (bang >= 0) {
+            on = sheetByName(t.slice(0, bang).replace(/^'(.*)'$/, "$1").replace(/''/g, "'"));
+            if (!on) return null;
+            t = t.slice(bang + 1);
+        }
+        t = t.replace(/\$/g, "").toUpperCase();
+        const ok = (r, c) => r >= 0 && r < MAXR && c >= 0 && c < MAXC;
+        let m;
+        if ((m = /^([A-Z]{1,3})(\d{1,7})(?::([A-Z]{1,3})(\d{1,7}))?$/.exec(t))) {
+            const [r1, c1] = [+m[2] - 1, colNumber(m[1])];
+            const [r2, c2] = m[3] ? [+m[4] - 1, colNumber(m[3])] : [r1, c1];
+            if (!ok(r1, c1) || !ok(r2, c2)) return null;
+            return { sheet: on, kind: "cells", r1: Math.min(r1, r2), c1: Math.min(c1, c2), r2: Math.max(r1, r2), c2: Math.max(c1, c2) };
+        }
+        if ((m = /^(\d{1,7}):(\d{1,7})$/.exec(t))) {
+            const [a, b] = [+m[1] - 1, +m[2] - 1];
+            if (!ok(a, 0) || !ok(b, 0)) return null;
+            return { sheet: on, kind: "rows", r1: Math.min(a, b), c1: 0, r2: Math.max(a, b), c2: MAXC - 1 };
+        }
+        if ((m = /^([A-Z]{1,3}):([A-Z]{1,3})$/.exec(t))) {
+            const [a, b] = [colNumber(m[1]), colNumber(m[2])];
+            if (!ok(0, a) || !ok(0, b)) return null;
+            return { sheet: on, kind: "cols", r1: 0, c1: Math.min(a, b), r2: MAXR - 1, c2: Math.max(a, b) };
+        }
+        return null;
+    }
+    // Selects what a reference points at (on its sheet): false when it points at nothing.
+    function goTo(text) {
+        if (!view) return false;
+        const ref = parseRef(text, view.sheet);
+        if (!ref) return false;
+        if (entry) commit(null);
+        if (ref.sheet !== view.sheet) draw(ref.sheet);
+        if (ref.kind === "rows") setSel({ kind: "rows", nr: ref.r1, nc: 0, fr: ref.r2, fc: 0 }, true);
+        else if (ref.kind === "cols") setSel({ kind: "cols", nr: 0, nc: ref.c1, fr: 0, fc: ref.c2 }, true);
+        else setSel(areaSel(ref.r1, ref.c1, ref.r2, ref.c2), true);
+        return true;
+    }
+    // The name box: the active cell, or the name of the cells selected when they have one.
+    function showName(sheet, r, c) {
+        const box = $("name");
+        if (document.activeElement === box) return;
+        let shown = address(r, c);
+        if (sel && !single(sel)) {
+            const here = rangeText(sel);
+            const named = namesOf(sheet).find((n) => {
+                const ref = parseRef(n.ref, sheet);
+                return ref && ref.sheet === sheet && ref.kind === sel.kind && rangeText(ref) === here;
+            });
+            if (named) shown = named.name;
+        }
+        box.value = shown;
+    }
+    const nameBox = $("name");
+    nameBox.addEventListener("focus", () => nameBox.select());
+    nameBox.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+            const text = nameBox.value;
+            if (!text.trim()) return;
+            nameBox.blur();
+            if (!goTo(text)) showError(`参照 \`${text}\` が正しくありません（A1、B2:D5、3:5、B:D、Sheet2!A1、定義された名前で指定してください）。`);
+            focusGrid();
+        } else if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            nameBox.blur();
+            focusGrid();
+        }
+    });
+    nameBox.addEventListener("blur", () => {
+        if (view && sel) showName(view.sheet, sel.ar, sel.ac);
+    });
+
+    // Excel's "ジャンプ": the names to go to, or a reference.
+    function askGoTo() {
+        if (!view) return;
+        if (entry) commit(null);
+        closeMenu();
+        closeDialog();
+        dialog = document.body.appendChild(el("div", "dlgback"));
+        const form = dialog.appendChild(el("form", "dlg goto"));
+        form.setAttribute("role", "dialog");
+        form.appendChild(el("h2", null, "ジャンプ"));
+        form.appendChild(el("div", "lbl", "移動先:"));
+        const list = form.appendChild(el("select"));
+        list.size = 8;
+        for (const n of namesOf(view.sheet)) list.appendChild(el("option", null, n.name)).value = n.name;
+        const line = form.appendChild(el("label"));
+        line.appendChild(document.createTextNode("参照先:"));
+        const input = line.appendChild(el("input"));
+        input.type = "text";
+        input.spellcheck = false;
+        list.addEventListener("change", () => (input.value = list.value));
+        list.addEventListener("dblclick", () => form.requestSubmit());
+        const buttons = form.appendChild(el("div", "buttons"));
+        buttons.appendChild(el("button", "ok", "OK")).type = "submit";
+        const cancel = buttons.appendChild(el("button", null, "キャンセル"));
+        cancel.type = "button";
+        cancel.addEventListener("click", closeDialog);
+        dialog.addEventListener("mousedown", (e) => {
+            if (e.target === dialog) closeDialog();
+        });
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const text = input.value.trim();
+            if (!text) return;
+            if (!parseRef(text, view.sheet)) {
+                input.setCustomValidity("参照が正しくありません");
+                input.reportValidity();
+                return;
+            }
+            closeDialog();
+            goTo(text);
+        });
+        input.addEventListener("input", () => input.setCustomValidity(""));
+        input.focus();
+    }
+
+    // ---- the status bar: what is being done, and the sum, the average and the count of the
+    // cells selected (those shown), as Excel's
+
+    function showMode() {
+        $("mode").textContent = !entry ? "準備完了" : entry.point ? "参照" : entry.mode === "edit" ? "編集" : "入力";
+    }
+    // A number as the status bar shows it: a date (when the cells are dates), else up to 10 decimals.
+    function statText(x, date) {
+        if (date && x >= 1 && x < 2958466) {
+            const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(x + 1e-9) * 864e5);
+            return `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+        }
+        return Number(x.toPrecision(15)).toLocaleString("ja-JP", { maximumFractionDigits: 10 });
+    }
+    function showStats() {
+        const box = $("stats");
+        box.textContent = "";
+        if (!view || !sel || selected || single(sel)) return;
+        const s = view.sheet;
+        let count = 0,
+            nums = 0,
+            sum = 0,
+            first = null;
+        for (const c of s.cells) {
+            if (c.r < sel.r1 || c.r > sel.r2 || c.c < sel.c1 || c.c > sel.c2) continue;
+            if (c.t === undefined || (c.t === "" && !c.f)) continue;
+            // Hidden rows and columns (filtered out) are not counted.
+            if (!(height(s, c.r) > 0) || !(width(s, c.c) > 0)) continue;
+            count++;
+            if (typeof c.x === "number" && (c.k === "number" || c.k === "date")) {
+                nums++;
+                sum += c.x;
+                if (!first) first = c;
+            }
+        }
+        if (!count) return;
+        const date = !!first && first.k === "date";
+        const add = (label, value) => box.appendChild(el("span", null, `${label}: ${value}`));
+        if (nums) add("平均", statText(sum / nums, date));
+        add("データの個数", String(count));
+        if (nums) add("合計", statText(sum, date));
+    }
+
+    // ---- notes (comments): a mark at the corner of the cell, the note while the mouse is on it
+
+    const notebox = el("div", "notebox");
+    notebox.hidden = true;
+    document.body.appendChild(notebox);
+    $("grid").addEventListener("mouseover", (e) => {
+        const td = e.target.closest && e.target.closest("td");
+        if (!td || !td.note || drag || filling || resizing) {
+            if (!(e.target.closest && e.target.closest(".notebox"))) notebox.hidden = true;
+            return;
+        }
+        notebox.textContent = "";
+        if (td.note.author) notebox.appendChild(el("b", null, `${td.note.author}:`));
+        notebox.appendChild(el("div", null, td.note.text));
+        notebox.hidden = false;
+        const b = td.getBoundingClientRect();
+        const x = Math.min(b.right + 12, window.innerWidth - notebox.offsetWidth - 4);
+        const y = Math.max(0, Math.min(b.top - 4, window.innerHeight - notebox.offsetHeight - 4));
+        Object.assign(notebox.style, { left: `${Math.max(0, x)}px`, top: `${y}px` });
+    });
+    $("grid").addEventListener("mouseleave", () => (notebox.hidden = true));
+    $("grid").addEventListener("scroll", () => (notebox.hidden = true), { passive: true });
+
+    // ---- lists (input rules): the button of the active cell, its list, and what may be entered
+
+    function listAt(r, c) {
+        if (!view) return null;
+        for (const rule of view.sheet.lists || []) {
+            if (rule.ranges.some(([r1, c1, r2, c2]) => r >= r1 && r <= r2 && c >= c1 && c <= c2)) return rule;
+        }
+        return null;
+    }
+    function placeList() {
+        const v = view;
+        if (!v) return;
+        const rule = sel && !selected && sel.kind === "cells" ? listAt(sel.ar, sel.ac) : null;
+        const o = sel ? ownerOf(sel.ar, sel.ac) || [sel.ar, sel.ac, sel.ar, sel.ac] : null;
+        const b = rule && o ? boxOf(o[0], o[1], o[2], o[3]) : null;
+        const button = !!b && editable && !!rule.values && !entry;
+        v.dropbtn.hidden = !button;
+        if (button) {
+            Object.assign(v.dropbtn.style, { left: `${b.x + b.w + 1}px`, top: `${b.y + Math.max(0, b.h - 17)}px` });
+            pinTo(v.dropbtn, pinOf(v, b));
+        }
+        const message = !!b && !!(rule.title || rule.prompt);
+        v.promptbox.hidden = !message;
+        if (message) {
+            v.promptbox.textContent = "";
+            if (rule.title) v.promptbox.appendChild(el("b", null, rule.title));
+            if (rule.prompt) v.promptbox.appendChild(el("div", null, rule.prompt));
+            Object.assign(v.promptbox.style, { left: `${b.x + Math.min(b.w, 40)}px`, top: `${b.y + b.h + 6}px` });
+            pinTo(v.promptbox, pinOf(v, b));
+        }
+    }
+    function openList() {
+        if (!editable || busy || !view || !sel) return;
+        const rule = listAt(sel.ar, sel.ac);
+        if (!rule || !rule.values) return;
+        const pop = openPop(view.dropbtn, "listpop");
+        const now = ((activeTd && activeTd.cell) || {}).t || "";
+        const sheet = view.sheet.name;
+        const at = address(sel.ar, sel.ac);
+        let first = null;
+        for (const value of rule.values) {
+            const b = popItem(pop, value, () => postEdit([{ op: "set", sheet, range: at, text: value }]));
+            if (value === now) b.classList.add("on");
+            first = first || b;
+        }
+        if (!rule.values.length) pop.appendChild(el("div", "empty", "（リストは空です）"));
+        const on = pop.querySelector("button.on") || first;
+        if (on) requestAnimationFrame(() => on.focus());
+        pop.addEventListener("keydown", (e) => {
+            const items = [...pop.querySelectorAll("button")];
+            const i = items.indexOf(document.activeElement);
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                e.stopPropagation();
+                const n = items[Math.max(0, Math.min(items.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
+                if (n) n.focus();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                closeMenu();
+                focusGrid();
+            }
+        });
+    }
+    // What was typed into a cell with a list that stops other entries: the message, or null.
+    function refused(text) {
+        if (!sel || !view || text === "" || /^[=+-]./.test(text)) return null;
+        const rule = listAt(sel.ar, sel.ac);
+        if (!rule || rule.stop === undefined || !rule.all) return null;
+        if (rule.all.some((x) => x.toLowerCase() === text.toLowerCase())) return null;
+        return rule.stop || "この値は、このセルに定義されているデータ入力規則の制限を満たしていません。";
+    }
+
+    // ---- find and replace (Ctrl+F, Ctrl+H)
+
+    // The state of the box, kept while the page is drawn again (after a replacement).
+    const finder = Object.assign({ open: false, replace: false, what: "", with: "", matchCase: false, whole: false, lookIn: "formulas", within: "sheet" }, saved.finder || {});
+    let findBox = null;
+    // `what` as Excel reads it: * any characters, ? one, ~ the next as it is.
+    function finderRegex(f, global) {
+        let src = "";
+        for (let i = 0; i < f.what.length; i++) {
+            const ch = f.what[i];
+            if (ch === "~" && i + 1 < f.what.length) src += f.what[++i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            else if (ch === "*") src += "[\\s\\S]*";
+            else if (ch === "?") src += "[\\s\\S]";
+            else src += ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        }
+        if (f.whole) src = `^(?:${src})$`;
+        return new RegExp(src, (f.matchCase ? "" : "i") + (global ? "g" : ""));
+    }
+    // What a cell is searched by: its formula (or what was typed), its value as shown, its note.
+    function searchedText(sheet, c, f) {
+        if (f.lookIn === "values") return c.t || "";
+        return c.f || c.v || c.t || "";
+    }
+    // The cells that match, in Excel's order (by rows), from the sheet shown when `within` is the workbook.
+    function findAll(f) {
+        if (!f.what) return [];
+        const re = finderRegex(f, false);
+        const sheets = f.within === "book" ? data.sheets.filter((s) => s.visible === "visible") : [view.sheet];
+        const out = [];
+        for (const sheet of sheets) {
+            const items = [];
+            if (f.lookIn === "notes") {
+                for (const n of sheet.notes || []) if (re.test(n.text)) items.push({ sheet, r: n.r, c: n.c, text: n.text });
+            } else {
+                for (const c of sheet.cells) {
+                    const text = searchedText(sheet, c, f);
+                    if (text !== "" && re.test(text)) items.push({ sheet, r: c.r, c: c.c, text, cell: c });
+                }
+            }
+            items.sort((a, b) => a.r - b.r || a.c - b.c);
+            out.push(...items);
+        }
+        return out;
+    }
+    function findNext(back) {
+        const found = findAll(finder);
+        if (!found.length) {
+            findStatus(`「${finder.what}」が見つかりません。`);
+            return null;
+        }
+        // After (before) the active cell, on to the next sheet and round again.
+        const order = data.sheets.indexOf(view.sheet);
+        const key = (x) => [data.sheets.indexOf(x.sheet), x.r, x.c];
+        const here = [order, sel ? sel.ar : 0, sel ? sel.ac : 0];
+        const cmp = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+        let hit = back ? [...found].reverse().find((x) => cmp(key(x), here) < 0) : found.find((x) => cmp(key(x), here) > 0);
+        hit = hit || (back ? found[found.length - 1] : found[0]);
+        showFound(hit);
+        findStatus(`${found.length} 件見つかりました。`);
+        return hit;
+    }
+    function showFound(hit) {
+        if (hit.sheet !== view.sheet) draw(hit.sheet);
+        setSel(cellSel(hit.r, hit.c), true);
+    }
+    function findStatus(text) {
+        if (findBox) findBox.querySelector(".status").textContent = text;
+    }
+    // The cell's content with what matches replaced: the text to enter, or null (no match, or
+    // nothing to replace in a value a formula gives).
+    function replaced(cell) {
+        const text = cell.f || cell.v || cell.t || "";
+        if (!text) return null;
+        const f = Object.assign({}, finder, { lookIn: "formulas" });
+        if (!finderRegex(f, false).test(text)) return null;
+        // (The text replacing: what it says, `$` included.)
+        const next = text.replace(finderRegex(f, true), () => finder.with);
+        return next === text ? null : next;
+    }
+    function replaceOne() {
+        if (!editable || busy || !view || !sel) return;
+        const cell = view.cells.get(sel.ar * KEY + sel.ac);
+        const next = cell && finderRegex(Object.assign({}, finder, { lookIn: "formulas" }), false).test(cell.f || cell.v || cell.t || "") ? replaced(cell) : null;
+        if (next === null) {
+            findNext(false);
+            return;
+        }
+        remember({ finder, findAfter: true });
+        postEdit([{ op: "set", sheet: view.sheet.name, range: address(sel.ar, sel.ac), text: next }]);
+    }
+    function replaceAll() {
+        if (!editable || busy || !view) return;
+        const f = Object.assign({}, finder, { lookIn: "formulas" });
+        const ops = [];
+        for (const hit of findAll(f)) {
+            const next = hit.cell ? replaced(hit.cell) : null;
+            if (next !== null) ops.push({ op: "set", sheet: hit.sheet.name, range: address(hit.r, hit.c), text: next });
+        }
+        if (!ops.length) {
+            findStatus(`「${finder.what}」が見つかりません。`);
+            return;
+        }
+        remember({ finder, findReplaced: ops.length });
+        postEdit(ops);
+    }
+    function closeFind() {
+        if (findBox) findBox.remove();
+        findBox = null;
+        finder.open = false;
+        remember({ finder });
+        focusGrid();
+    }
+    function openFind(replace) {
+        if (!view) return;
+        if (entry) commit(null);
+        closeMenu();
+        finder.open = true;
+        finder.replace = replace && editable;
+        remember({ finder });
+        if (findBox) findBox.remove();
+        const box = (findBox = document.body.appendChild(el("form", "findbox")));
+        box.setAttribute("role", "dialog");
+        box.dataset.vscodeContext = JSON.stringify({ preventDefaultContextMenuItems: false });
+        const tabs = box.appendChild(el("div", "findtabs"));
+        const tab = (label, on, act) => {
+            const b = tabs.appendChild(el("button", on ? "on" : null, label));
+            b.type = "button";
+            b.addEventListener("click", act);
+        };
+        tab("検索", !finder.replace, () => openFind(false));
+        if (editable) tab("置換", finder.replace, () => openFind(true));
+        const close = tabs.appendChild(el("button", "x", "×"));
+        close.type = "button";
+        close.title = "閉じる（Esc）";
+        close.addEventListener("click", closeFind);
+        const field = (label, key) => {
+            const line = box.appendChild(el("label", "field"));
+            line.appendChild(el("span", null, label));
+            const input = line.appendChild(el("input"));
+            input.type = "text";
+            input.spellcheck = false;
+            input.value = finder[key];
+            input.addEventListener("input", () => {
+                finder[key] = input.value;
+                remember({ finder });
+            });
+            return input;
+        };
+        const what = field("検索する文字列:", "what");
+        if (finder.replace) field("置換後の文字列:", "with");
+        const opts = box.appendChild(el("div", "opts"));
+        const check = (label, key) => {
+            const line = opts.appendChild(el("label"));
+            const input = line.appendChild(el("input"));
+            input.type = "checkbox";
+            input.checked = !!finder[key];
+            input.addEventListener("change", () => {
+                finder[key] = input.checked;
+                remember({ finder });
+            });
+            line.appendChild(document.createTextNode(label));
+        };
+        const choose = (label, key, options) => {
+            const line = opts.appendChild(el("label"));
+            line.appendChild(document.createTextNode(label));
+            const s = line.appendChild(el("select"));
+            for (const [value, text] of options) s.appendChild(el("option", null, text)).value = value;
+            s.value = finder[key];
+            s.addEventListener("change", () => {
+                finder[key] = s.value;
+                remember({ finder });
+            });
+        };
+        choose("検索場所:", "within", [["sheet", "シート"], ["book", "ブック"]]);
+        if (!finder.replace) choose("検索対象:", "lookIn", [["formulas", "数式"], ["values", "値"], ["notes", "メモ"]]);
+        check("大文字と小文字を区別する", "matchCase");
+        check("セル内容が完全に同一であるものを検索する", "whole");
+        const buttons = box.appendChild(el("div", "buttons"));
+        const button = (label, act, cls) => {
+            const b = buttons.appendChild(el("button", cls || null, label));
+            b.type = "button";
+            b.addEventListener("click", () => {
+                if (!finder.what) {
+                    what.focus();
+                    return;
+                }
+                act();
+            });
+            return b;
+        };
+        if (finder.replace) {
+            button("すべて置換", replaceAll);
+            button("置換", replaceOne);
+        }
+        button("すべて検索", () => listFound(findAll(finder)));
+        button("次を検索", () => findNext(false), "ok");
+        box.appendChild(el("div", "status"));
+        box.appendChild(el("div", "found"));
+        box.addEventListener("submit", (e) => e.preventDefault());
+        box.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                closeFind();
+            } else if (e.key === "Enter" && e.target.tagName === "INPUT") {
+                e.preventDefault();
+                e.stopPropagation();
+                if (finder.what) findNext(e.shiftKey);
+            }
+        });
+        what.focus();
+        what.select();
+    }
+    function listFound(found) {
+        if (!findBox) return;
+        const list = findBox.querySelector(".found");
+        list.textContent = "";
+        findStatus(found.length ? `${found.length} 件見つかりました。` : `「${finder.what}」が見つかりません。`);
+        for (const hit of found.slice(0, 1000)) {
+            const row = list.appendChild(el("div", "hit"));
+            row.appendChild(el("span", "where", `${hit.sheet.name}!${address(hit.r, hit.c)}`));
+            row.appendChild(el("span", "what", hit.text));
+            row.title = hit.text;
+            row.addEventListener("click", () => showFound(hit));
+        }
+    }
+
+    // ---- the panes frozen: the toolbar's menu
+
+    function freeze(at) {
+        if (!editable || !view) return;
+        const sheet = view.sheet.name;
+        postEdit([at ? { op: "freeze", sheet, at } : { op: "freeze", sheet, off: true }]);
+    }
+    function openFreeze(anchor) {
+        const pop = openPop(anchor, "freezes");
+        const v = view;
+        if (v.fr || v.fc) popItem(pop, "ウィンドウ枠固定の解除", () => freeze(null)).dataset.freeze = "off";
+        else if (sel && (sel.ar > 0 || sel.ac > 0)) popItem(pop, "ウィンドウ枠の固定", () => freeze(address(sel.ar, sel.ac))).dataset.freeze = "here";
+        popItem(pop, "先頭行の固定", () => freeze("A2")).dataset.freeze = "row";
+        popItem(pop, "先頭列の固定", () => freeze("B1")).dataset.freeze = "col";
+    }
+
     // ---- the keys
 
     // The rows a page key moves by.
     function pageRows() {
         const g = $("grid");
-        const room = g.clientHeight - view.table.tHead.offsetHeight;
+        const room = g.clientHeight - rowTop(view, view.fr);
         return Math.max(1, Math.floor(room / Math.max(1, view.sheet.defaultHeight)) - 1);
     }
 
@@ -2002,11 +2789,30 @@
         } else if (e.key === "F2") {
             e.preventDefault();
             entry.mode = entry.mode === "edit" ? "enter" : "edit";
+            entry.point = null;
+            showMode();
+        } else if (e.key === "F4") {
+            e.preventDefault();
+            toggleAbsolute();
+        } else if (entry.mode === "enter" && /^Arrow/.test(e.key) && !e.altKey && pointable()) {
+            // Pointing with the arrows: from the cell pointed at (the active cell at first).
+            e.preventDefault();
+            const d = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+            const p = entry.point;
+            const from = p && p.kind === "cells" ? p.cur : [sel.ar, sel.ac];
+            const next = (ctrl ? jump : step)(from[0], from[1], d[0], d[1]);
+            grow(next[0], next[1]);
+            pointTo(e.shiftKey ? (p && p.kind === "cells" ? p.anchor : from) : next, next, "cells");
+            reveal(next[0], next[1]);
         } else if (entry.mode === "enter" && entry.where === "cell" && /^Arrow/.test(e.key) && !ctrl && !e.shiftKey && !e.altKey) {
             // An entry that was typed over the cell is entered by the arrows, as in Excel.
             e.preventDefault();
             const d = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
             commit({ move: d });
+        } else if (entry.point && !["Shift", "Control", "Alt", "Meta"].includes(e.key)) {
+            // Any other key (the caret moved, a character typed) ends the pointing.
+            entry.point = null;
+            showMode();
         }
     }
 
@@ -2027,12 +2833,25 @@
             entryKey(e);
             return;
         }
-        if (!view || !sel || !onGrid()) return;
         const ctrl = e.ctrlKey || e.metaKey;
         const key = e.key;
+        // Find, replace, go to: from the grid and from the boxes of the page.
+        if (view && ctrl && !e.altKey && !e.shiftKey && (key === "f" || key === "F" || key === "h" || key === "H")) {
+            e.preventDefault();
+            openFind((key === "h" || key === "H") && editable);
+            return;
+        }
+        // (F5 only where cells are edited: elsewhere it reloads the page, or goes on debugging.)
+        if (view && ((key === "F5" && editable && !e.altKey && !ctrl && !e.shiftKey) || (ctrl && !e.altKey && !e.shiftKey && (key === "g" || key === "G")))) {
+            e.preventDefault();
+            askGoTo();
+            return;
+        }
+        if (!view || !sel || !onGrid()) return;
         const arrows = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
         let done = true;
-        if (e.altKey) done = false;
+        if (e.altKey && key === "ArrowDown" && listAt(sel.ar, sel.ac)) openList();
+        else if (e.altKey) done = false;
         else if (arrows[key]) move(arrows[key][0], arrows[key][1], e.shiftKey, ctrl);
         else if (key === "Tab") move(0, e.shiftKey ? -1 : 1, false);
         else if (key === "Enter" && !ctrl) move(e.shiftKey ? -1 : 1, 0, false);
@@ -2082,12 +2901,14 @@
             if (view.ncols !== before[1]) refreshOverflow(view, before[1]);
             // Wider row headers (more digits) move the columns: the objects follow.
             if (view.head !== before[2]) placeObjects(view);
+            if (view.nrows !== before[0] || view.ncols !== before[1] || view.head !== before[2]) placeFrozenLines(view);
             // Whole rows and columns selected reach as far as the grid is drawn.
             if (view.nrows !== before[0] || view.ncols !== before[1] || view.head !== before[2]) drawBoxes();
             remember({ scroll: { sheet: view.sheet.name, x: $("grid").scrollLeft, y: $("grid").scrollTop } });
         });
     };
     $("grid").addEventListener("scroll", more, { passive: true });
+    $("grid").addEventListener("scroll", repin, { passive: true });
     window.addEventListener("resize", more);
 
     // Columns added after text that runs over them: their gridlines too.
@@ -2344,6 +3165,13 @@
         // Drawn again (after an edit, at a stop of the debugger): where it was.
         if (again) scrollTo(again.x, again.y);
         focusGrid();
+        // The box of find and replace, open again after a replacement.
+        if (finder.open) {
+            openFind(finder.replace);
+            if (saved.findAfter) findNext(false);
+            if (saved.findReplaced) findStatus(`${saved.findReplaced} 件を置換しました。`);
+            remember({ findAfter: false, findReplaced: 0 });
+        }
         // Fonts that come late change the heights of rows: the objects follow them.
         if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => view && view.sheet === first && placeObjects(view));
     } else {

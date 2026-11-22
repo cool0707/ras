@@ -524,8 +524,10 @@ impl Book {
                     }
                     if c.number_format != "General" {
                         cell["n"] = json!(c.number_format);
-                    } else if let Val::Num(x) = c.value {
-                        // For the page to fit the number to its column, as Excel does.
+                    }
+                    // The number (a date's serial): for the page to fit a General number to its
+                    // column, as Excel does, and to sum the cells selected (the status bar).
+                    if let Val::Num(x) | Val::Date(x) = c.value {
                         cell["x"] = json!(x);
                     }
                     cell["k"] = json!(kind);
@@ -631,7 +633,13 @@ impl Book {
                     .collect()
             })
             .unwrap_or_default();
+        let (notes, lists) = self.notes_and_lists(si, &info.name)?;
+        // The panes frozen (rows, columns), as the file keeps them.
+        let frozen = drawing.and_then(|d| d.parts.frozen(&info.name));
         Ok(json!({
+            "frozen": frozen.map(|(r, c)| json!([r, c])),
+            "notes": notes,
+            "lists": lists,
             "name": info.name,
             "codeName": info.code_name,
             "visible": crate::dump::visible_name(info.visible),
@@ -657,6 +665,144 @@ impl Book {
             "filterColumns": filter_columns,
             "tabColor": self.tab_color(si).map(|c| { let c = c as u32; format!("#{:02x}{:02x}{:02x}", c & 0xff, (c >> 8) & 0xff, (c >> 16) & 0xff) }),
         }))
+    }
+
+    /// The notes (comments) of the sheet: `{ r, c, text, author }`; and its input rules that
+    /// choose from a list, with what the list holds: `{ ranges: [[r1, c1, r2, c2]], values,
+    /// title, prompt, stop, all }` (`values` absent: the list's button is hidden; `stop`: an
+    /// entry not among `all` is refused, with that message, empty for Excel's own).
+    fn notes_and_lists(&mut self, si: usize, sheet: &str) -> Result<(Vec<Json>, Vec<Json>)> {
+        let Ok(ws) = self.file.sheet(si) else {
+            return Err("シートがありません".into());
+        };
+        let notes: Vec<Json> = ws
+            .comments()
+            .iter()
+            .map(|c| {
+                let t = c.text();
+                let text = t
+                    .text()
+                    .map(|t| t.value().to_string())
+                    .or_else(|| t.rich_text().map(|r| r.text().into_owned()))
+                    .unwrap_or_default();
+                json!({
+                    "r": c.coordinate().row_num().saturating_sub(1),
+                    "c": c.coordinate().col_num().saturating_sub(1),
+                    "text": text,
+                    "author": c.author(),
+                })
+            })
+            .collect();
+        // (formula1, ranges, the button shown, title, prompt, the error that stops an entry)
+        type Rule = (String, Vec<RangeRef>, bool, String, String, Option<String>);
+        let mut rules: Vec<Rule> = Vec::new();
+        if let Some(dv) = ws.data_validations() {
+            for v in dv.data_validation_list() {
+                if v.get_type().value_string() != "list" {
+                    continue;
+                }
+                let ranges = v
+                    .sequence_of_references()
+                    .range_collection()
+                    .iter()
+                    .filter_map(|r| RangeRef::parse(&r.range().replace('$', "")))
+                    .collect();
+                let (title, prompt) = if v.show_input_message() {
+                    (v.prompt_title().to_string(), v.prompt().to_string())
+                } else {
+                    (String::new(), String::new())
+                };
+                // An entry not in the list is refused (the style "stop"; the others ask, and
+                // Excel enters it when told to).
+                let stop = (v.show_error_message() && v.error_style().value_string() == "stop")
+                    .then(|| v.error_message().to_string());
+                // (`showDropDown` is true when the button is *not* shown.)
+                rules.push((
+                    v.formula1().to_string(),
+                    ranges,
+                    !v.show_drop_down(),
+                    title,
+                    prompt,
+                    stop,
+                ));
+            }
+        }
+        let mut lists = Vec::new();
+        for (formula, ranges, button, title, prompt, stop) in rules {
+            let mut j = json!({
+                "ranges": ranges
+                    .iter()
+                    .map(|r| json!([r.start.row, r.start.col, r.end.row, r.end.col]))
+                    .collect::<Vec<_>>(),
+            });
+            let values = self.list_values(si, sheet, &formula);
+            if let Some(message) = stop {
+                j["stop"] = json!(message);
+                j["all"] = json!(values);
+            }
+            if button {
+                j["values"] = json!(values);
+            }
+            if !title.is_empty() {
+                j["title"] = json!(title);
+            }
+            if !prompt.is_empty() {
+                j["prompt"] = json!(prompt);
+            }
+            lists.push(j);
+        }
+        Ok((notes, lists))
+    }
+
+    /// What a list of an input rule offers: `"a,b,c"`, or the cells of a reference or a name
+    /// (`$A$1:$A$5`, `Sheet2!$A$1:$A$3`, `Items`), at most 1000 of them, empty ones left out.
+    fn list_values(&mut self, si: usize, sheet: &str, formula: &str) -> Vec<String> {
+        let f = formula.trim().trim_start_matches('=');
+        if let Some(inner) = f.strip_prefix('"') {
+            let inner = inner
+                .strip_suffix('"')
+                .unwrap_or(inner)
+                .replace("\"\"", "\"");
+            return inner
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+        // A name: what it refers to (the sheet's own first).
+        let mut text = f.to_string();
+        let names = self.names();
+        let named = names
+            .iter()
+            .filter(|(n, _, _)| n.eq_ignore_ascii_case(f))
+            .min_by_key(|(_, scope, _)| if *scope == Some(si) { 0 } else { 1 });
+        if let Some((_, _, refers)) = named {
+            text = refers.trim().trim_start_matches('=').to_string();
+        }
+        let (on, body) = gridcraft_core::split_sheet(&text);
+        let at = match on {
+            Some(s) => match self.sheet_index(s.trim_start_matches("[0]")) {
+                Some(i) => i,
+                None => return Vec::new(),
+            },
+            None => self.sheet_index(sheet).unwrap_or(si),
+        };
+        let Some(range) = RangeRef::parse(&body.replace('$', "")).filter(|r| r.count() <= 100_000)
+        else {
+            return Vec::new();
+        };
+        let Ok(cells) = self.cells(at, range) else {
+            return Vec::new();
+        };
+        let mut cells: Vec<CellInfo> = cells;
+        cells.sort_by_key(|c| (c.at.row, c.at.col));
+        cells
+            .into_iter()
+            .map(|c| c.text)
+            .filter(|t| !t.is_empty())
+            .take(1000)
+            .collect()
     }
 
     /// The objects of the sheet's drawing, with what its controls need of the cells.
