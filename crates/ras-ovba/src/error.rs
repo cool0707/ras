@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use umya_spreadsheet::vba::VbaError;
+
 /// Everything that can go wrong while reading or writing a VBA project.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -10,7 +12,8 @@ pub enum OvbaError {
     Io(std::io::Error),
     /// The OPC (zip) container could not be read or written.
     Zip(zip::result::ZipError),
-    /// The compound file (`vbaProject.bin`) could not be read or written.
+    /// The compound file (`vbaProject.bin`) could not be read or written
+    /// ([`VbaError::Cfb`]).
     Cfb(std::io::Error),
     /// The data does not follow \[MS-OVBA\] / the OPC conventions.
     Format(String),
@@ -95,6 +98,27 @@ impl From<std::io::Error> for OvbaError {
     }
 }
 
+/// The errors of the VBA project itself ([`umya_spreadsheet::vba`]), with the
+/// same messages.
+impl From<VbaError> for OvbaError {
+    fn from(e: VbaError) -> Self {
+        match e {
+            VbaError::Cfb(e) => OvbaError::Cfb(e),
+            VbaError::Format(m) => OvbaError::Format(m),
+            VbaError::MissingModuleStream { module, stream } => OvbaError::Format(format!(
+                "module `{module}` has no stream `{stream}` in the VBA storage"
+            )),
+            VbaError::Protected => OvbaError::Protected,
+            VbaError::UnknownCodeName(n) => OvbaError::UnknownCodeName(n),
+            VbaError::UnsupportedFormat(m) => OvbaError::UnsupportedFormat(m),
+            VbaError::Verify(m) => OvbaError::Verify(m),
+            VbaError::Encoding(m) => OvbaError::Encoding(m),
+            VbaError::InvalidRequest(m) => OvbaError::InvalidRequest(m),
+            other => OvbaError::Format(other.to_string()),
+        }
+    }
+}
+
 impl From<zip::result::ZipError> for OvbaError {
     fn from(e: zip::result::ZipError) -> Self {
         match e {
@@ -102,8 +126,4 @@ impl From<zip::result::ZipError> for OvbaError {
             other => OvbaError::Zip(other),
         }
     }
-}
-
-pub(crate) fn format_err<T>(msg: impl Into<String>) -> Result<T, OvbaError> {
-    Err(OvbaError::Format(msg.into()))
 }
