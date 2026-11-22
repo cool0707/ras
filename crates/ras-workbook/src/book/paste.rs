@@ -330,9 +330,32 @@ impl Book {
             self.unmerge(ti, target);
         }
 
+        let source = self
+            .model
+            .sheet(si)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        // A formula of the source as it is pasted at `t`: its relative references moved (rows
+        // and columns swapped when transposing).
+        let moved = |f: &gm::Formula, at: CellRef, t: CellRef| -> gm::Formula {
+            let e = f.expr().map(|e| {
+                if p.transpose {
+                    transpose_refs(e, &source, from, to, at, t)
+                } else {
+                    let (dr, dc) = (t.row as i64 - at.row as i64, t.col as i64 - at.col as i64);
+                    gridcraft_formula::adjust::shift_relative(e, dr, dc)
+                }
+            });
+            let mut formula = match e {
+                Some(e) => gm::Formula::from_expr(e),
+                None => f.clone(),
+            };
+            formula.array = None;
+            formula.dynamic = f.dynamic;
+            formula
+        };
         for (at, src) in cells {
             let t = place(at);
-            let (dr, dc) = (t.row as i64 - at.row as i64, t.col as i64 - at.col as i64);
             let blank = src
                 .own
                 .as_ref()
@@ -340,20 +363,19 @@ impl Book {
                 && src.shown.is_empty();
             if content && !(blank && (p.skip_blanks || p.op != PasteOp::None)) {
                 if p.op != PasteOp::None {
-                    self.paste_operation(ti, t, &src.shown, p.op);
+                    // Formulas pasted with an operation are joined to what the cell has
+                    // (`=100+(B1*2)`); values pasted are worked out.
+                    match src.own.as_ref().and_then(|c| c.formula.as_ref()) {
+                        Some(f) if p.what.formulas() => {
+                            let f = moved(f, at, t);
+                            self.paste_operation_formula(ti, t, &f.text, p.op);
+                        }
+                        _ => self.paste_operation(ti, t, &src.shown, p.op),
+                    }
                 } else if let Some(sh) = self.model.sheet_mut(ti) {
                     match &src.own {
                         Some(c) if p.what.formulas() && c.formula.is_some() => {
-                            let f = c.formula.as_ref().expect("checked");
-                            let moved = f
-                                .expr()
-                                .map(|e| gridcraft_formula::adjust::shift_relative(e, dr, dc));
-                            let mut formula = match moved {
-                                Some(e) => gm::Formula::from_expr(e),
-                                None => (**f).clone(),
-                            };
-                            formula.array = None;
-                            formula.dynamic = f.dynamic;
+                            let formula = moved(c.formula.as_ref().expect("checked"), at, t);
                             let style = sh.style_id(t);
                             sh.set_cell(
                                 t,
@@ -458,6 +480,38 @@ impl Book {
                 sh.set_value(t, y);
             }
         }
+    }
+
+    /// `PasteSpecial Operation:=` with a formula pasted (`formula`, without `=`): Excel joins it
+    /// to what the cell has, `=(<its formula>)+(<formula>)` or `=<its number>+(<formula>)` (an
+    /// empty cell as 0). Text and other values are left as they are.
+    fn paste_operation_formula(&mut self, ti: usize, t: CellRef, formula: &str, op: PasteOp) {
+        let Some(sh) = self.model.sheet_mut(ti) else {
+            return;
+        };
+        let old = sh.cell(t).cloned();
+        let left = match &old {
+            Some(c) if c.formula.is_some() => {
+                format!("({})", c.formula.as_ref().expect("checked").text)
+            }
+            None => "0".to_string(),
+            Some(c) => match c.value {
+                Value::Empty => "0".to_string(),
+                Value::Number(x) => gridcraft_core::number_to_text(x),
+                _ => return,
+            },
+        };
+        let text = format!("{left}{}({formula})", op.symbol());
+        let style = sh.style_id(t);
+        sh.set_cell(
+            t,
+            gm::Cell {
+                value: Value::Empty,
+                formula: Some(Arc::new(gm::Formula::new(&text))),
+                style,
+                py: None,
+            },
+        );
     }
 
     /// `PasteSpecial xlPasteColumnWidths`.
@@ -611,4 +665,99 @@ impl Book {
         self.rebuild = true;
         Ok(())
     }
+}
+
+/// The references of a formula copied from `at` and pasted transposed at `t` (the cells of
+/// `from`, on the sheet `source`, pasted from `to` on), as Excel 2021 writes them:
+///
+/// * A reference within `from` (on the same sheet), `$` or not, goes where that cell was
+///   pasted, with the `$` of its row and its column swapped (`=$B2` → `=G$10`).
+/// * Any other reference without a `$` keeps where it is from the cell, with rows and columns
+///   swapped (`=A1` in C3 → `=F9` in H11). Pushed off the sheet, it becomes `#REF!`.
+/// * Whole rows and columns with a relative part become the columns and rows they swap to,
+///   from where the first one goes to the sheet's last row or column (`=SUM(2:2)` in B3 →
+///   `=SUM(E$4:E$1048576)` in F5).
+/// * The rest (with a `$` somewhere, outside `from`) is left as it is.
+fn transpose_refs(
+    e: Expr,
+    source: &str,
+    from: RangeRef,
+    to: CellRef,
+    at: CellRef,
+    t: CellRef,
+) -> Expr {
+    use gridcraft_core::{CellError, MAX_COLS, MAX_ROWS};
+    use gridcraft_formula::{Anchor, RefKind};
+    let here = |s: &SheetSel| match s {
+        SheetSel::Current => true,
+        SheetSel::Named(n) => gridcraft_formula::same_name(n, source),
+        SheetSel::Span(..) => false,
+    };
+    // A cell `row`, `col` relative to the cell copied, swapped, from the cell pasted.
+    let swap = |row: i64, col: i64| -> (i64, i64) {
+        (
+            t.row as i64 + (col - at.col as i64),
+            t.col as i64 + (row - at.row as i64),
+        )
+    };
+    let inside = |row: i64, col: i64| -> Option<(u32, u32)> {
+        (row >= 0 && col >= 0 && row < MAX_ROWS as i64 && col < MAX_COLS as i64)
+            .then_some((row as u32, col as u32))
+    };
+    // A cell of `from`: where it was pasted.
+    let placed = |a: &Anchor| Anchor {
+        row: to.row + (a.col - from.start.col),
+        col: to.col + (a.row - from.start.row),
+        row_abs: a.col_abs,
+        col_abs: a.row_abs,
+    };
+    let relative = |a: &Anchor| -> Option<Anchor> {
+        let (row, col) = swap(a.row as i64, a.col as i64);
+        let (row, col) = inside(row, col)?;
+        Some(Anchor { row, col, ..*a })
+    };
+    let clip = |row: i64, col: i64, row_abs: bool, col_abs: bool| {
+        let (row, col) = swap(row, col);
+        Anchor {
+            row: row.clamp(0, MAX_ROWS as i64 - 1) as u32,
+            col: col.clamp(0, MAX_COLS as i64 - 1) as u32,
+            row_abs,
+            col_abs,
+        }
+    };
+    let free = |a: &Anchor| !a.row_abs && !a.col_abs;
+    e.map(&mut |x| {
+        let Expr::Ref(r) = x else { return x };
+        let within = here(&r.sheet) && from.contains_range(&r.range());
+        let kind = match &r.kind {
+            RefKind::Cell(a) if within => Some(RefKind::Cell(placed(a))),
+            RefKind::Range(a, b) if within => Some(RefKind::Range(placed(a), placed(b))),
+            RefKind::Cell(a) if free(a) => relative(a).map(RefKind::Cell),
+            RefKind::Range(a, b) if free(a) && free(b) => relative(a)
+                .zip(relative(b))
+                .map(|(a, b)| RefKind::Range(a, b)),
+            RefKind::Rows(r0, a0, r1, a1) if !*a0 || !*a1 => Some(RefKind::Range(
+                clip(*r0 as i64, 0, true, *a0),
+                Anchor {
+                    row: MAX_ROWS - 1,
+                    ..clip(*r1 as i64, 0, true, *a1)
+                },
+            )),
+            RefKind::Cols(c0, a0, c1, a1) if !*a0 || !*a1 => Some(RefKind::Range(
+                clip(0, *c0 as i64, *a0, true),
+                Anchor {
+                    col: MAX_COLS - 1,
+                    ..clip(0, *c1 as i64, *a1, true)
+                },
+            )),
+            other => Some(other.clone()),
+        };
+        match kind {
+            Some(kind) => Expr::Ref(gridcraft_formula::Reference {
+                sheet: r.sheet,
+                kind,
+            }),
+            None => Expr::Error(CellError::Ref),
+        }
+    })
 }

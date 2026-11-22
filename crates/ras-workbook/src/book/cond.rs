@@ -913,9 +913,15 @@ const RED: &str = "#D93025";
 const GRAY: &str = "#8C8C8C";
 const BLACK: &str = "#262626";
 
-fn arrow(deg: i32, c: &str) -> String {
+// The arrows as Excel 2021 draws them: 13 x 16 px with a darker edge (fill, edge).
+const ARROW_RED: (&str, &str) = ("#D65532", "#9E381C");
+const ARROW_YELLOW: (&str, &str) = ("#EAC282", "#A4802C");
+const ARROW_GREEN: (&str, &str) = ("#68A490", "#326F5B");
+const ARROW_GRAY: (&str, &str) = ("#8C8C8C", "#5F5F5F");
+
+fn arrow(deg: i32, (fill, edge): (&str, &str)) -> String {
     format!(
-        "<path transform=\"rotate({deg} 8 8)\" d=\"M8 1.5L14 8H10.2V14.5H5.8V8H2Z\" fill=\"{c}\"/>"
+        "<path transform=\"rotate({deg} 8 8)\" d=\"M8 .5L14.5 7.5H10.5V15.5H5.5V7.5H1.5Z\" fill=\"{fill}\" stroke=\"{edge}\" stroke-width=\"1\"/>"
     )
 }
 
@@ -958,24 +964,26 @@ fn bars(on: usize) -> String {
         .collect()
 }
 
+// As Excel 2021 draws them: 16 px across.
 fn quarters(q: usize) -> String {
-    let c = "#4A4A4A";
-    let ring = format!(
-        "<circle cx=\"8\" cy=\"8\" r=\"6.3\" fill=\"#fff\" stroke=\"{c}\" stroke-width=\"1.2\"/>"
-    );
+    let c = "#505050";
+    let ring =
+        "<circle cx=\"8\" cy=\"8\" r=\"7\" fill=\"#fff\" stroke=\"#545454\" stroke-width=\"1\"/>";
     let fill = match q {
         0 => String::new(),
-        4 => format!("<circle cx=\"8\" cy=\"8\" r=\"6.3\" fill=\"{c}\"/>"),
+        4 => format!(
+            "<circle cx=\"8\" cy=\"8\" r=\"7\" fill=\"{c}\" stroke=\"#343434\" stroke-width=\"1\"/>"
+        ),
         _ => {
             let a = q as f64 * std::f64::consts::FRAC_PI_2;
-            let (x, y) = (8.0 + 6.3 * a.sin(), 8.0 - 6.3 * a.cos());
+            let (x, y) = (8.0 + 7.0 * a.sin(), 8.0 - 7.0 * a.cos());
             format!(
-                "<path d=\"M8 8V1.7A6.3 6.3 0 {} 1 {x:.2} {y:.2}Z\" fill=\"{c}\"/>",
+                "<path d=\"M8 8V1A7 7 0 {} 1 {x:.2} {y:.2}Z\" fill=\"{c}\"/>",
                 if q > 2 { 1 } else { 0 }
             )
         }
     };
-    ring + &fill
+    ring.to_string() + &fill
 }
 
 fn star(fill: f64, id: &str) -> String {
@@ -1006,33 +1014,33 @@ fn boxes(on: usize) -> String {
 pub fn icon_svg(set: &str, i: usize) -> Option<String> {
     let pick = |v: &[String]| v.get(i).cloned();
     let body = match set {
-        "3Arrows" => pick(&[arrow(180, RED), arrow(90, YELLOW), arrow(0, GREEN)]),
-        "3ArrowsGray" => pick(&[arrow(180, GRAY), arrow(90, GRAY), arrow(0, GRAY)]),
+        "3Arrows" => pick(&[arrow(180, ARROW_RED), arrow(90, ARROW_YELLOW), arrow(0, ARROW_GREEN)]),
+        "3ArrowsGray" => pick(&[arrow(180, ARROW_GRAY), arrow(90, ARROW_GRAY), arrow(0, ARROW_GRAY)]),
         "4Arrows" => pick(&[
-            arrow(180, RED),
-            arrow(135, YELLOW),
-            arrow(45, YELLOW),
-            arrow(0, GREEN),
+            arrow(180, ARROW_RED),
+            arrow(135, ARROW_YELLOW),
+            arrow(45, ARROW_YELLOW),
+            arrow(0, ARROW_GREEN),
         ]),
         "4ArrowsGray" => pick(&[
-            arrow(180, GRAY),
-            arrow(135, GRAY),
-            arrow(45, GRAY),
-            arrow(0, GRAY),
+            arrow(180, ARROW_GRAY),
+            arrow(135, ARROW_GRAY),
+            arrow(45, ARROW_GRAY),
+            arrow(0, ARROW_GRAY),
         ]),
         "5Arrows" => pick(&[
-            arrow(180, RED),
-            arrow(135, YELLOW),
-            arrow(90, YELLOW),
-            arrow(45, YELLOW),
-            arrow(0, GREEN),
+            arrow(180, ARROW_RED),
+            arrow(135, ARROW_YELLOW),
+            arrow(90, ARROW_YELLOW),
+            arrow(45, ARROW_YELLOW),
+            arrow(0, ARROW_GREEN),
         ]),
         "5ArrowsGray" => pick(&[
-            arrow(180, GRAY),
-            arrow(135, GRAY),
-            arrow(90, GRAY),
-            arrow(45, GRAY),
-            arrow(0, GRAY),
+            arrow(180, ARROW_GRAY),
+            arrow(135, ARROW_GRAY),
+            arrow(90, ARROW_GRAY),
+            arrow(45, ARROW_GRAY),
+            arrow(0, ARROW_GRAY),
         ]),
         "3Flags" => pick(&[RED, YELLOW, GREEN].map(|c| {
             format!(

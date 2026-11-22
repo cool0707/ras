@@ -661,6 +661,12 @@ impl Book {
                     }
                     if c.number_format != "General" {
                         cell["n"] = json!(c.number_format);
+                        // The format Japanese Excel shows it by, when not the same (built-in
+                        // formats: `yyyy/m/d` for `m/d/yyyy`), for the status bar.
+                        let shown = self.shown_format_code(si, CellRef::new(row, col));
+                        if shown != c.number_format {
+                            cell["sn"] = json!(shown);
+                        }
                     }
                     // The number (a date's serial): for the page to fit a General number to its
                     // column, as Excel does, and to sum the cells selected (the status bar).
@@ -780,6 +786,21 @@ impl Book {
                     .collect()
             })
             .unwrap_or_default();
+        // The buttons of the tables' headings: [row, column, filtered (0 / 1)].
+        let table_filters: Vec<Json> = match (self.file.sheet(si), drawing) {
+            (Ok(ws), Some(d)) => ws
+                .tables()
+                .iter()
+                .filter_map(|t| d.parts.table_filter(t.name()))
+                .flat_map(|(r, hidden, filtered)| {
+                    (r.start.col..=r.end.col)
+                        .map(move |c| (r.start.row, c, c - r.start.col))
+                        .filter(move |(_, _, i)| !hidden.contains(i))
+                        .map(move |(row, c, i)| json!([row, c, u8::from(filtered.contains(&i))]))
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
         let (notes, lists) = self.notes_and_lists(si, &info.name)?;
         let links = self.links(si);
         // The panes frozen (rows, columns), as the file keeps them.
@@ -787,6 +808,10 @@ impl Book {
         Ok(json!({
             "frozen": frozen.map(|(r, c)| json!([r, c])),
             "zoom": drawing.and_then(|d| d.parts.zoom(&info.name)),
+            // The active cell and the range selected when the file was saved.
+            "selection": drawing
+                .and_then(|d| d.parts.selection(&info.name))
+                .map(|(a, r)| json!([a.row, a.col, r.start.row, r.start.col, r.end.row, r.end.col])),
             "notes": notes,
             "links": links,
             "lists": lists,
@@ -814,6 +839,7 @@ impl Book {
             "merges": merges,
             "filter": info.filter,
             "filterColumns": filter_columns,
+            "tableFilters": table_filters,
             "tabColor": self.tab_color(si).map(|c| { let c = c as u32; format!("#{:02x}{:02x}{:02x}", c & 0xff, (c >> 8) & 0xff, (c >> 16) & 0xff) }),
         }))
     }
