@@ -14,7 +14,6 @@ pub mod chart;
 mod controls;
 pub mod drawing;
 mod emf;
-mod geom;
 #[cfg(test)]
 mod tests;
 pub(crate) mod xml;

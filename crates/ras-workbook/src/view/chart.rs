@@ -3,15 +3,18 @@
 //! values of the series read from the cells they refer to as they are now (so that a chart shows
 //! what a run changed), or from the chart's cache when the cells cannot be read.
 //!
-//! How the chart XML is read (the automatic colors of series, the sources of values) follows
-//! xljs (`src/api/xlsx_chart.rs`), which draws Excel's charts with AG Charts; the grid draws
-//! them as SVG itself.
+//! How the chart XML is read follows xljs (`src/api/xlsx_chart.rs`), which draws Excel's charts
+//! with AG Charts; the grid draws them as SVG itself. What both read alike (the automatic colors
+//! of series, the colors of `c:spPr`, the references and caches of values) is umya-spreadsheet's
+//! `drawingml::chart` (in the fork).
 
 use std::collections::HashMap;
 
 use serde_json::{Map, Value as Json, json};
+use umya_spreadsheet::drawingml::chart::{AutoColors, DataSource, paint};
+use umya_spreadsheet::drawingml::package::Package;
 
-use super::drawing::{Env, Parts, base_color, color_of, modified, mods_of, office_color};
+use super::drawing::{Env, Parts};
 use super::xml::Node;
 
 /// A cell as a chart reads it: its number (None for text and empty cells), what it shows, its
@@ -23,131 +26,17 @@ pub struct Point {
     pub format: String,
 }
 
-/// The automatic colors of a chart's series and points, as Excel 2013 and later picks them: the
-/// chart's color style (xl/charts/colorsN.xml, the palette chosen with "Change Colors") or else
-/// the theme's accent1 to accent6. After the last color they repeat with the next variation
-/// (darker, lighter, ...).
-struct AutoColors {
-    colors: Vec<String>,
-    variations: Vec<Vec<(String, f64)>>,
-}
-
-impl AutoColors {
-    fn new(parts: &Parts, chart_part: &str, theme: &HashMap<String, String>) -> AutoColors {
-        let style = parts
-            .rels(chart_part)
-            .into_values()
-            .find(|(t, _)| t.ends_with("/chartColorStyle"))
-            .and_then(|(_, p)| parts.xml(&p));
-        if let Some(st) = style {
-            let colors: Vec<String> = st
-                .children
-                .iter()
-                .filter(|c| matches!(c.name.as_str(), "srgbClr" | "schemeClr" | "sysClr"))
-                .filter_map(|c| {
-                    modified(&base_color(c, theme)?, &mods_of(c)).map(|x| x[1..].to_string())
-                })
-                .collect();
-            if !colors.is_empty() {
-                return AutoColors {
-                    colors,
-                    variations: st.all("variation").map(mods_of).collect(),
-                };
-            }
-        }
-        // Office's default color style (colors1.xml of a new chart).
-        let m = |v: &[(&str, f64)]| {
-            v.iter()
-                .map(|(k, x)| (k.to_string(), *x))
-                .collect::<Vec<_>>()
-        };
-        AutoColors {
-            colors: (1..=6)
-                .map(|i| format!("accent{i}"))
-                .filter_map(|a| {
-                    theme
-                        .get(&a)
-                        .cloned()
-                        .or_else(|| office_color(&a).map(str::to_string))
-                })
-                .collect(),
-            variations: vec![
-                vec![],
-                m(&[("lumMod", 0.6)]),
-                m(&[("lumMod", 0.8), ("lumOff", 0.2)]),
-                m(&[("lumMod", 0.8)]),
-                m(&[("lumMod", 0.6), ("lumOff", 0.4)]),
-                m(&[("lumMod", 0.5)]),
-                m(&[("lumMod", 0.7), ("lumOff", 0.3)]),
-                m(&[("lumMod", 0.7)]),
-                m(&[("lumMod", 0.5), ("lumOff", 0.5)]),
-            ],
-        }
-    }
-
-    /// The color of the i-th series (its c:idx) or point.
-    fn nth(&self, i: usize) -> Option<String> {
-        let n = self.colors.len();
-        if n == 0 {
-            return None;
-        }
-        let none = Vec::new();
-        let var = if self.variations.is_empty() {
-            &none
-        } else {
-            &self.variations[(i / n) % self.variations.len()]
-        };
-        modified(&self.colors[i % n], var)
-    }
-}
-
-/// The areas of a series reference ("'売上 2026'!$B$2:$B$13", "(Sheet1!$A$1,Sheet1!$A$3)").
-fn areas(f: &str) -> Vec<String> {
-    let f = f.trim();
-    let f = f
-        .strip_prefix('(')
-        .and_then(|x| x.strip_suffix(')'))
-        .unwrap_or(f);
-    let mut parts = Vec::new();
-    let (mut cur, mut quoted) = (String::new(), false);
-    for ch in f.chars() {
-        match ch {
-            '\'' => {
-                quoted = !quoted;
-                cur.push(ch);
-            }
-            ',' if !quoted => parts.push(std::mem::take(&mut cur)),
-            _ => cur.push(ch),
-        }
-    }
-    parts.push(cur);
-    parts
-        .into_iter()
-        .map(|p| p.trim().to_string())
-        .filter(|p| !p.is_empty())
-        .collect()
-}
-
 /// The points of c:cat, c:val, c:xVal, c:yVal, c:bubbleSize or c:tx: from the cells they refer
 /// to (down a column or along a row; of an area more than one cell wide and tall, the innermost
 /// level of categories, its last column or row), else from the cache.
 fn source(n: &Node, env: &Env) -> Vec<Point> {
-    let Some(r) = n.children.iter().find(|c| {
-        matches!(
-            c.name.as_str(),
-            "numRef" | "strRef" | "multiLvlStrRef" | "numLit" | "strLit"
-        )
-    }) else {
+    let Some(src) = DataSource::read(n) else {
         return Vec::new();
     };
-    let formula = r
-        .child("f")
-        .map(|f| f.text.trim().to_string())
-        .unwrap_or_default();
-    if !formula.is_empty() {
+    if !src.formula.is_empty() {
         let mut out = Vec::new();
         let mut read = true;
-        for area in areas(&formula) {
+        for area in src.areas() {
             let Some(grid) = (env.range)(&area) else {
                 read = false;
                 break;
@@ -167,72 +56,28 @@ fn source(n: &Node, env: &Env) -> Vec<Point> {
         }
     }
     // The cache (and literals): points by index.
-    let cache = r
-        .children
-        .iter()
-        .find(|c| {
-            matches!(
-                c.name.as_str(),
-                "numCache" | "strCache" | "multiLvlStrCache"
-            )
+    let numeric = src.numeric();
+    src.points
+        .into_iter()
+        .map(|p| {
+            let p = p.unwrap_or_default();
+            Point {
+                number: if numeric {
+                    p.text.trim().parse::<f64>().ok()
+                } else {
+                    None
+                },
+                text: p.text,
+                format: p.format,
+            }
         })
-        .unwrap_or(r);
-    let cache = if cache.name == "multiLvlStrCache" {
-        cache.all("lvl").next().unwrap_or(cache)
-    } else {
-        cache
-    };
-    let format = cache
-        .child("formatCode")
-        .map(|f| f.text.trim().to_string())
-        .unwrap_or_default();
-    let count = cache
-        .child("ptCount")
-        .and_then(|c| c.attr("val"))
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0)
-        .min(100_000);
-    let numeric = matches!(r.name.as_str(), "numRef" | "numLit");
-    let mut out = vec![Point::default(); count];
-    for p in cache.all("pt") {
-        let idx = p
-            .attr("idx")
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(out.len())
-            .min(100_000);
-        if idx >= out.len() {
-            out.resize(idx + 1, Point::default());
-        }
-        let text = p.child("v").map(|v| v.text.clone()).unwrap_or_default();
-        let number = if numeric {
-            text.trim().parse::<f64>().ok()
-        } else {
-            None
-        };
-        out[idx] = Point {
-            number,
-            text,
-            format: p
-                .attr("formatCode")
-                .map(str::to_string)
-                .unwrap_or_else(|| format.clone()),
-        };
-    }
-    out
+        .collect()
 }
 
 /// The text of a title or a series name (c:tx: rich text, a value or a cell).
 fn text_of(tx: &Node, env: &Env) -> Option<String> {
-    if let Some(rich) = tx.find("rich") {
-        let lines: Vec<String> = rich
-            .all("p")
-            .map(|p| {
-                let mut runs = Vec::new();
-                p.find_all("t", &mut runs);
-                runs.iter().map(|t| t.text.as_str()).collect::<String>()
-            })
-            .collect();
-        return Some(lines.join("\n").trim().to_string());
+    if tx.find("rich").is_some() {
+        return Some(tx.rich_text());
     }
     if let Some(v) = tx.child("v") {
         return Some(v.text.clone());
@@ -243,26 +88,6 @@ fn text_of(tx: &Node, env: &Env) -> Option<String> {
         .filter(|t| !t.is_empty())
         .collect();
     (!parts.is_empty()).then(|| parts.join(" "))
-}
-
-/// The fill (or, for lines, the line) of a c:spPr: its color, or that it has none.
-fn paint(sp: Option<&Node>, line: bool, theme: &HashMap<String, String>) -> (Option<String>, bool) {
-    let Some(sp) = sp else { return (None, false) };
-    let src = if line {
-        sp.child("ln").unwrap_or(sp)
-    } else {
-        sp
-    };
-    if src.child("noFill").is_some() {
-        return (None, true);
-    }
-    let color = src.child("solidFill").and_then(|f| color_of(f, theme));
-    let color = color.or_else(|| {
-        src.child("gradFill")
-            .and_then(|g| g.find("gs"))
-            .and_then(|gs| color_of(gs, theme))
-    });
-    (color, false)
 }
 
 /// The size (pt) of the text of a title or the chart (`txPr`'s or the rich text's defRPr).
@@ -312,7 +137,7 @@ pub(crate) fn chart_spec(
 ) -> Option<Json> {
     let root = parts.xml(part)?;
     let chart = root.child("chart")?;
-    let auto = AutoColors::new(parts, part, theme);
+    let auto = AutoColors::of_chart(parts, part, theme);
     let mut out = Map::new();
     let on = |n: Option<&Node>| {
         n.and_then(|c| c.attr("val"))

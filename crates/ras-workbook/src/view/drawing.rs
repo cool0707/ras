@@ -3,9 +3,10 @@
 //! drawing, its charts (read in `chart.rs`, drawn by the page), the form and ActiveX controls and
 //! the embedded objects (`controls.rs`): everything a macro can be assigned to.
 //!
-//! Taken from xljs's printing of sheets (`src/api/xlsx_shape.rs`, the colours and anchors of
-//! `src/api/xlsx_chart.rs`); the geometry of shapes is in `geom.rs`. The parts are read from the
-//! workbook file itself: umya-spreadsheet's model leaves out much of what drawings hold.
+//! Drawn as xljs prints sheets (`src/api/xlsx_shape.rs` there). The parts are read from the
+//! workbook file itself: umya-spreadsheet's model leaves out much of what drawings hold. What
+//! xljs and RAS share of reading them is umya-spreadsheet's `drawingml` (in the fork): the
+//! geometry of shapes, colours, anchors and transforms, the relationships of the parts.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -13,14 +14,15 @@ use std::fmt::Write as _;
 use std::io::{Cursor, Read};
 
 use gridcraft_core::RangeRef;
+use umya_spreadsheet::drawingml::EMU_PT;
+use umya_spreadsheet::drawingml::anchor::{Anchor, Xfrm, anchor_of, xfrm};
+use umya_spreadsheet::drawingml::color::{alpha_of, color_of, fill_color, style_ref};
+use umya_spreadsheet::drawingml::geometry as geom;
+use umya_spreadsheet::drawingml::package::Package;
 
 use super::controls::{self, Controls};
-use super::geom;
 use super::xml::{Node, parse};
 
-pub(crate) const EMU_PT: f64 = 12700.0;
-/// EMU in a pixel (at 96 dpi).
-pub(crate) const EMU_PX: f64 = 9525.0;
 /// The largest part read (a picture, a drawing).
 const MAX_PART: u64 = 256 << 20;
 
@@ -220,66 +222,6 @@ impl Parts {
         self.files.get(part).map(Vec::as_slice)
     }
 
-    pub(crate) fn xml(&self, part: &str) -> Option<Node> {
-        parse(self.files.get(part)?)
-    }
-
-    /// The relationships of a part: id -> (type, part it points to).
-    pub(crate) fn rels(&self, part: &str) -> HashMap<String, (String, String)> {
-        let (dir, file) = part.rsplit_once('/').unwrap_or(("", part));
-        let mut out = HashMap::new();
-        let Some(root) = self.xml(&format!("{dir}/_rels/{file}.rels")) else {
-            return out;
-        };
-        for r in root.all("Relationship") {
-            let (Some(id), Some(target)) = (r.attr("Id"), r.attr("Target")) else {
-                continue;
-            };
-            if r.attr("TargetMode") == Some("External") {
-                continue;
-            }
-            out.insert(
-                id.to_string(),
-                (
-                    r.attr("Type").unwrap_or("").to_string(),
-                    resolve(dir, target),
-                ),
-            );
-        }
-        out
-    }
-
-    /// The part of the worksheet named `sheet`.
-    pub(crate) fn sheet_part(&self, sheet: &str) -> Option<String> {
-        let wb = self.xml("xl/workbook.xml")?;
-        let s = wb
-            .child("sheets")?
-            .all("sheet")
-            .find(|s| s.attr("name") == Some(sheet))?;
-        let id = s.attr("id")?;
-        self.rels("xl/workbook.xml").remove(id).map(|(_, p)| p)
-    }
-
-    /// The theme's colors by name (accent1, dk1, ...) as RRGGBB.
-    pub(crate) fn theme(&self) -> HashMap<String, String> {
-        let mut out = HashMap::new();
-        let Some(t) = self.xml("xl/theme/theme1.xml") else {
-            return out;
-        };
-        if let Some(cs) = t.find("clrScheme") {
-            for c in &cs.children {
-                let v = c
-                    .child("srgbClr")
-                    .and_then(|x| x.attr("val"))
-                    .or_else(|| c.child("sysClr").and_then(|x| x.attr("lastClr")));
-                if let Some(v) = v {
-                    out.insert(c.name.clone(), v.to_uppercase());
-                }
-            }
-        }
-        out
-    }
-
     /// Whether the sheet named `sheet` shows its gridlines (None: the file does not say).
     pub fn grid_lines(&self, sheet: &str) -> Option<bool> {
         let view = self.xml(&format!("{}#view", self.sheet_part(sheet)?))?;
@@ -420,6 +362,14 @@ impl Parts {
     }
 }
 
+/// The parts as XML (as much as can be read: VML is not always well-formed), their
+/// relationships, the sheets' parts and the theme's colours.
+impl Package for Parts {
+    fn xml(&self, part: &str) -> Option<Node> {
+        parse(self.files.get(part)?)
+    }
+}
+
 /// The text of the first element `name` (with any prefix) of an XML document, to its first end
 /// (the elements read so are not nested in their own kind).
 fn element_text(xml: &str, name: &str) -> Option<String> {
@@ -466,28 +416,6 @@ fn first_xf(xfs: &str) -> Option<String> {
     }
     let close = open_end + xfs[open_end..].find("xf>")?;
     Some(xfs[start..close + 3].to_string())
-}
-
-/// `target` relative to the folder `dir` ("../drawings/drawing1.xml"), or absolute ("/xl/...").
-pub(crate) fn resolve(dir: &str, target: &str) -> String {
-    if let Some(t) = target.strip_prefix('/') {
-        return t.to_string();
-    }
-    let mut parts: Vec<&str> = if dir.is_empty() {
-        vec![]
-    } else {
-        dir.split('/').collect()
-    };
-    for seg in target.split('/') {
-        match seg {
-            ".." => {
-                parts.pop();
-            }
-            "." | "" => {}
-            s => parts.push(s),
-        }
-    }
-    parts.join("/")
 }
 
 // ---------------------------------------------------------------------------------------- text
@@ -560,204 +488,6 @@ pub(crate) fn font_family(name: &str) -> String {
         out.push_str(",\"Yu Gothic\",Meiryo,sans-serif");
     }
     out
-}
-
-// -------------------------------------------------------------------------------------- colors
-
-/// A color element (a:srgbClr, a:schemeClr, a:sysClr) as RRGGBB, before its modifiers.
-pub(crate) fn base_color(c: &Node, theme: &HashMap<String, String>) -> Option<String> {
-    Some(match c.name.as_str() {
-        "srgbClr" => c.attr("val")?.to_uppercase(),
-        "sysClr" => c.attr("lastClr")?.to_uppercase(),
-        "prstClr" => match c.attr("val")? {
-            "black" => "000000",
-            "white" => "FFFFFF",
-            "red" => "FF0000",
-            "green" => "008000",
-            "blue" => "0000FF",
-            "yellow" => "FFFF00",
-            "gray" | "grey" => "808080",
-            _ => return None,
-        }
-        .to_string(),
-        "schemeClr" => {
-            let name = match c.attr("val")? {
-                "tx1" => "dk1",
-                "bg1" => "lt1",
-                "tx2" => "dk2",
-                "bg2" => "lt2",
-                v => v,
-            };
-            theme
-                .get(name)
-                .cloned()
-                .or_else(|| office_color(name).map(str::to_string))?
-        }
-        _ => return None,
-    })
-}
-
-/// The color modifiers among the children of `n` (lumMod, lumOff, shade, tint) as fractions.
-pub(crate) fn mods_of(n: &Node) -> Vec<(String, f64)> {
-    n.children
-        .iter()
-        .filter(|c| matches!(c.name.as_str(), "lumMod" | "lumOff" | "shade" | "tint"))
-        .filter_map(|c| {
-            Some((
-                c.name.clone(),
-                c.attr("val")?.parse::<f64>().ok()? / 100000.0,
-            ))
-        })
-        .collect()
-}
-
-/// `rgb` (RRGGBB) with modifiers applied, as "#RRGGBB". lumMod / lumOff work on the luminance
-/// (HSL), as Office does; shade / tint darken and lighten.
-pub(crate) fn modified(rgb: &str, mods: &[(String, f64)]) -> Option<String> {
-    let v = u32::from_str_radix(rgb, 16).ok()?;
-    let (mut r, mut g, mut b) = (
-        ((v >> 16) & 255) as f64 / 255.0,
-        ((v >> 8) & 255) as f64 / 255.0,
-        (v & 255) as f64 / 255.0,
-    );
-    let get = |k: &str| mods.iter().find(|(n, _)| n == k).map(|(_, x)| *x);
-    if get("lumMod").is_some() || get("lumOff").is_some() {
-        let (h, s, l) = to_hsl(r, g, b);
-        let l = (l * get("lumMod").unwrap_or(1.0) + get("lumOff").unwrap_or(0.0)).clamp(0.0, 1.0);
-        (r, g, b) = from_hsl(h, s, l);
-    }
-    if let Some(x) = get("shade") {
-        (r, g, b) = (r * x, g * x, b * x);
-    }
-    if let Some(x) = get("tint") {
-        (r, g, b) = (
-            1.0 - (1.0 - r) * x,
-            1.0 - (1.0 - g) * x,
-            1.0 - (1.0 - b) * x,
-        );
-    }
-    let f = |v: f64| (v * 255.0).round().clamp(0.0, 255.0) as u8;
-    Some(format!("#{:02X}{:02X}{:02X}", f(r), f(g), f(b)))
-}
-
-fn to_hsl(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
-    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
-    let l = (max + min) / 2.0;
-    if max == min {
-        return (0.0, 0.0, l);
-    }
-    let d = max - min;
-    let s = if l > 0.5 {
-        d / (2.0 - max - min)
-    } else {
-        d / (max + min)
-    };
-    let h = if max == r {
-        (g - b) / d + if g < b { 6.0 } else { 0.0 }
-    } else if max == g {
-        (b - r) / d + 2.0
-    } else {
-        (r - g) / d + 4.0
-    };
-    (h / 6.0, s, l)
-}
-
-fn from_hsl(h: f64, s: f64, l: f64) -> (f64, f64, f64) {
-    if s == 0.0 {
-        return (l, l, l);
-    }
-    let q = if l < 0.5 {
-        l * (1.0 + s)
-    } else {
-        l + s - l * s
-    };
-    let p = 2.0 * l - q;
-    let hue = |mut t: f64| {
-        if t < 0.0 {
-            t += 1.0;
-        }
-        if t > 1.0 {
-            t -= 1.0;
-        }
-        if t < 1.0 / 6.0 {
-            p + (q - p) * 6.0 * t
-        } else if t < 0.5 {
-            q
-        } else if t < 2.0 / 3.0 {
-            p + (q - p) * (2.0 / 3.0 - t) * 6.0
-        } else {
-            p
-        }
-    };
-    (hue(h + 1.0 / 3.0), hue(h), hue(h - 1.0 / 3.0))
-}
-
-/// A color of a fill (a:solidFill and the like) as "#RRGGBB".
-pub(crate) fn color_of(fill: &Node, theme: &HashMap<String, String>) -> Option<String> {
-    let c = fill.children.iter().find(|c| {
-        matches!(
-            c.name.as_str(),
-            "srgbClr" | "schemeClr" | "sysClr" | "prstClr"
-        )
-    })?;
-    modified(&base_color(c, theme)?, &mods_of(c))
-}
-
-/// Office's default theme (when the workbook has none).
-pub(crate) fn office_color(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "dk1" => "000000",
-        "lt1" => "FFFFFF",
-        "dk2" => "44546A",
-        "lt2" => "E7E6E6",
-        "accent1" => "4472C4",
-        "accent2" => "ED7D31",
-        "accent3" => "A5A5A5",
-        "accent4" => "FFC000",
-        "accent5" => "5B9BD5",
-        "accent6" => "70AD47",
-        _ => return None,
-    })
-}
-
-// ------------------------------------------------------------------------------------- anchors
-
-/// Where a drawing object is on its sheet: the cell markers (zero-based column and row, offsets
-/// in EMU) and/or the size and position in EMU.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Anchor {
-    pub from: Option<(u32, i64, u32, i64)>,
-    pub to: Option<(u32, i64, u32, i64)>,
-    pub ext: Option<(i64, i64)>,
-    pub pos: Option<(i64, i64)>,
-}
-
-/// The anchor of a drawing (twoCellAnchor, oneCellAnchor, absoluteAnchor; the anchor of a
-/// control in the sheet's XML is the same).
-pub(crate) fn anchor_of(a: &Node) -> Anchor {
-    let marker = |n: &str| -> Option<(u32, i64, u32, i64)> {
-        let m = a.child(n)?;
-        let num = |k: &str| {
-            m.child(k)
-                .and_then(|c| c.all_text().trim().parse::<i64>().ok())
-        };
-        Some((
-            num("col")?.clamp(0, u32::MAX as i64) as u32,
-            num("colOff").unwrap_or(0),
-            num("row")?.clamp(0, u32::MAX as i64) as u32,
-            num("rowOff").unwrap_or(0),
-        ))
-    };
-    let pair = |n: &str, x: &str, y: &str| -> Option<(i64, i64)> {
-        let e = a.child(n)?;
-        Some((e.attr(x)?.parse().ok()?, e.attr(y)?.parse().ok()?))
-    };
-    Anchor {
-        from: marker("from"),
-        to: marker("to"),
-        ext: pair("ext", "cx", "cy"),
-        pos: pair("pos", "x", "y"),
-    }
 }
 
 // ------------------------------------------------------------------------------------- objects
@@ -880,7 +610,7 @@ pub fn sheet_objects(
     let Some(sheet_part) = parts.sheet_part(sheet) else {
         return out;
     };
-    let theme = parts.theme();
+    let theme = parts.theme_colors();
     let font = parts.default_font();
     let mut controls = Controls::read(parts, &sheet_part, &font);
     let mut drawings: Vec<String> = parts
@@ -1195,49 +925,6 @@ fn diagram_html(ctx: &Ctx, frame: &Node, size: Option<(f64, f64)>) -> Option<Str
     })
 }
 
-/// The transform of a shape, picture or group (pt).
-#[derive(Clone, Copy, Debug, Default)]
-struct Xfrm {
-    off: (f64, f64),
-    ext: (f64, f64),
-    ch_off: (f64, f64),
-    ch_ext: (f64, f64),
-    rot: f64,
-    flip_h: bool,
-    flip_v: bool,
-}
-
-fn xfrm(obj: &Node) -> Option<Xfrm> {
-    let props = obj
-        .children
-        .iter()
-        .find(|c| matches!(c.name.as_str(), "spPr" | "grpSpPr"))?;
-    let x = props.child("xfrm")?;
-    let pair = |n: &str, a: &str, b: &str| -> (f64, f64) {
-        x.child(n)
-            .map(|e| {
-                let g =
-                    |k: &str| e.attr(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0) / EMU_PT;
-                (g(a), g(b))
-            })
-            .unwrap_or((0.0, 0.0))
-    };
-    let flag = |k: &str| matches!(x.attr(k), Some("1" | "true"));
-    Some(Xfrm {
-        off: pair("off", "x", "y"),
-        ext: pair("ext", "cx", "cy"),
-        ch_off: pair("chOff", "x", "y"),
-        ch_ext: pair("chExt", "cx", "cy"),
-        rot: x
-            .attr("rot")
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(0.0)
-            / 60000.0,
-        flip_h: flag("flipH"),
-        flip_v: flag("flipV"),
-    })
-}
-
 /// The HTML of a shape, connector, picture or group. Without `place` it fills its container (a
 /// top-level object, sized by its anchor); in a group, `place` is its box as fractions of the
 /// group's box. `size` is the object's size in pt.
@@ -1442,41 +1129,6 @@ fn svg_stretched(data: &[u8]) -> Vec<u8> {
     format!("{}{add}{}", &s[..end], &s[end..]).into_bytes()
 }
 
-/// A fill or line color: "none", a color, or None (not said).
-fn paint(props: Option<&Node>, theme: &HashMap<String, String>) -> Option<(String, f64)> {
-    let p = props?;
-    if p.child("noFill").is_some() {
-        return Some(("none".into(), 1.0));
-    }
-    let fill = p
-        .child("solidFill")
-        .or_else(|| p.child("gradFill").and_then(|g| g.find("gs")))?;
-    let color = color_of(fill, theme)?;
-    let alpha = fill
-        .children
-        .first()
-        .and_then(|c| c.child("alpha"))
-        .and_then(|a| a.attr("val"))
-        .and_then(|v| v.parse::<f64>().ok())
-        .map(|v| v / 100000.0)
-        .unwrap_or(1.0);
-    Some((color, alpha))
-}
-
-/// The color of a style reference (lnRef, fillRef, fontRef) when its index is not 0.
-fn style_ref(sp: &Node, name: &str, theme: &HashMap<String, String>) -> Option<(String, usize)> {
-    let r = sp.child("style")?.child(name)?;
-    let idx = r
-        .attr("idx")
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0);
-    let color = color_of(r, theme)?;
-    if name != "fontRef" && idx == 0 {
-        return None;
-    }
-    Some((color, idx))
-}
-
 /// An arrowhead of a line end (headEnd / tailEnd), as an SVG marker.
 fn marker(end: Option<&Node>, color: &str, id: &str, width: f64) -> Option<String> {
     let e = end?;
@@ -1552,10 +1204,10 @@ fn shape_html(ctx: &Ctx, sp: &Node, x: &Xfrm, w: f64, h: f64) -> String {
         .unwrap_or_default();
     let ln = props.and_then(|p| p.child("ln"));
     // Fill: the shape's own, else the theme's by its style.
-    let fill = paint(props, &ctx.theme)
+    let fill = fill_color(props, &ctx.theme)
         .or_else(|| style_ref(sp, "fillRef", &ctx.theme).map(|(c, _)| (c, 1.0)))
         .unwrap_or(("none".into(), 1.0));
-    let stroke = paint(ln, &ctx.theme)
+    let stroke = fill_color(ln, &ctx.theme)
         .or_else(|| style_ref(sp, "lnRef", &ctx.theme).map(|(c, _)| (c, 1.0)))
         .unwrap_or(("none".into(), 1.0));
     let width = ln
@@ -1898,7 +1550,7 @@ fn run_css(
     let ln = rpr
         .and_then(|x| x.child("ln"))
         .or_else(|| def.and_then(|x| x.child("ln")));
-    if let Some((c, a)) = paint(ln, &ctx.theme).filter(|(c, _)| c != "none") {
+    if let Some((c, a)) = fill_color(ln, &ctx.theme).filter(|(c, _)| c != "none") {
         let w = ln
             .and_then(|l| l.attr("w"))
             .and_then(|v| v.parse::<f64>().ok())
@@ -1955,23 +1607,6 @@ fn text_fill(
             }
         }
     }
-}
-
-/// The alpha of a fill's color (alpha 100000 = opaque).
-fn alpha_of(fill: &Node) -> f64 {
-    fill.children
-        .iter()
-        .find(|c| {
-            matches!(
-                c.name.as_str(),
-                "srgbClr" | "schemeClr" | "sysClr" | "prstClr"
-            )
-        })
-        .and_then(|c| c.child("alpha"))
-        .and_then(|a| a.attr("val"))
-        .and_then(|v| v.parse::<f64>().ok())
-        .map(|v| (v / 100000.0).clamp(0.0, 1.0))
-        .unwrap_or(1.0)
 }
 
 /// A CSS color of "#RRGGBB" with an alpha.
@@ -2139,28 +1774,6 @@ mod tests {
             ids,
             images,
         }
-    }
-
-    #[test]
-    fn color_modifiers() {
-        let m = |v: &[(&str, f64)]| {
-            v.iter()
-                .map(|(k, x)| (k.to_string(), *x))
-                .collect::<Vec<_>>()
-        };
-        // As Excel shows them (Office 2013+ theme): accent1 darker 40% / lighter 40%, accent2 darker 25%.
-        assert_eq!(
-            modified("4472C4", &m(&[("lumMod", 0.6)])).unwrap(),
-            "#264478"
-        );
-        assert_eq!(
-            modified("4472C4", &m(&[("lumMod", 0.6), ("lumOff", 0.4)])).unwrap(),
-            "#8FAADC"
-        );
-        assert_eq!(
-            modified("ED7D31", &m(&[("lumMod", 0.75)])).unwrap(),
-            "#C55A11"
-        );
     }
 
     #[test]
