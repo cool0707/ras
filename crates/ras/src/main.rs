@@ -1399,7 +1399,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             };
             book::dump(&file, sheet, range.as_deref(), *format, *formats, if *all { None } else { Some((*max_rows, *max_cols)) })
         }
-        Command::Book { action: book::BookCommand::View { file, diff, output, stdout, open, all, title, drawings, sheet } } => {
+        Command::Book { action: book::BookCommand::View { file, diff, output, stdout, open, all, title, drawings, sheet, editable } } => {
             // The project, when there is one: its workbook, and build/view/ for the page.
             let root = find_root(project).ok();
             let file = match (file, &root) {
@@ -1411,7 +1411,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 (None, None) => return Err("対象ブックを指定してください".into()),
             };
             if *stdout {
-                print!("{}", book::view_page(&file, diff.as_deref(), *all, title.as_deref(), drawings.as_deref(), sheet.as_deref())?);
+                print!("{}", book::view_page(&file, diff.as_deref(), *all, title.as_deref(), drawings.as_deref(), sheet.as_deref(), *editable)?);
                 return Ok(ExitCode::SUCCESS);
             }
             let dir = root.unwrap_or_else(|| PathBuf::from(".")).join("build").join("view");
@@ -1419,6 +1419,39 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             println!("{} を作成しました（ブラウザーで開くと、シートをグリッドで見られます）", page.display());
             if *open {
                 book::open_in_browser(&page)?;
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Book { action: book::BookCommand::Edit { file, sheet, set, clear, insert, delete, shift, op, ops_file, output, view, editable, all } } => {
+            // The project, when there is one: its workbook, and build/backup/ for the copy of the file as it was.
+            let root = find_root(project).ok();
+            let config = match &root {
+                Some(root) => Some(ras_compiler::load_project(root)?.0),
+                None => None,
+            };
+            let file = match (file, &root, &config) {
+                (Some(f), _, _) => f.clone(),
+                (None, Some(root), Some(cfg)) => workbook_path(root, cfg, None).ok_or("対象ブックを指定してください（ras.toml の project.workbook が未設定です）")?,
+                _ => return Err("対象ブックを指定してください".into()),
+            };
+            let backup_dir = root.as_ref().map(|r| r.join("build").join("backup"));
+            let backup = match (&backup_dir, &config) {
+                (Some(dir), Some(cfg)) => Some((dir.as_path(), cfg.pack.backup_generations)),
+                _ => None,
+            };
+            let args = book::EditArgs { sheet: sheet.as_deref(), set, clear, insert, delete, shift: shift.as_deref(), op, ops_file: ops_file.as_deref() };
+            let written = match book::edit(&file, &args, output.as_deref(), backup) {
+                Ok(path) => path,
+                Err(Ok(message)) => {
+                    eprintln!("error: {message}");
+                    return Ok(ExitCode::from(1));
+                }
+                Err(Err(message)) => return Err(message),
+            };
+            if *view {
+                print!("{}", book::view_page(&written, None, *all, None, None, sheet.as_deref(), *editable)?);
+            } else {
+                println!("{} を書き換えました", written.display());
             }
             Ok(ExitCode::SUCCESS)
         }

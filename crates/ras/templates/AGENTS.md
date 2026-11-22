@@ -4,7 +4,7 @@
 
 ## 作業の手順
 
-1. **ブックを知る**: `ras book dump`（シート・コード名・使用範囲・数式・名前・テーブル）、`ras book dump --sheet Sheet1 --range A1:F20`（セルの値と数式）。シートの構成やセルの内容を推測で書かない。
+1. **ブックを知る**: `ras book dump`（シート・コード名・使用範囲・数式・名前・テーブル）、`ras book dump --sheet Sheet1 --range A1:F20`（セルの値と数式）。シートの構成やセルの内容を推測で書かない。 ブックのデータを直すときは `ras book edit --sheet Sheet1 --set B2=100`（`--clear` / `--insert 3:4` / `--delete B:B`。Excel で開いているブックは書き換えない）。
 2. **書く**: `src/*.ras`（ユーザーフォームは `forms/`）。構文は `ras cheatsheet` で確かめる。
 3. **検査する**: `ras check`。エラーのコードは `ras explain E0301` で説明と直し方を見られる。`ras check --fix` は機械的に直せる警告を直す。`--message-format json` で JSON。
 4. **動かす**: `ras run Module.func`。`debug.print` の出力、実行時エラー（番号・説明・`.ras` の位置）、変更されたセルの差分が出る。ダイアログの応答は `--msgbox vbYes --inputbox "..."`。

@@ -691,6 +691,92 @@
         ],
         "url": "./schemas/userform.schema.json"
       }
+    ],
+    "keybindings": [
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+r",
+        "mac": "cmd+r",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+d",
+        "mac": "cmd+d",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+-",
+        "mac": "cmd+-",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+=",
+        "mac": "cmd+=",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+shift+=",
+        "mac": "cmd+shift+=",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+shift+;",
+        "mac": "cmd+shift+;",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+numpad_add",
+        "mac": "cmd+numpad_add",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+numpad_subtract",
+        "mac": "cmd+numpad_subtract",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+b",
+        "mac": "cmd+b",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+i",
+        "mac": "cmd+i",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+u",
+        "mac": "cmd+u",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+5",
+        "mac": "cmd+5",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
+        "key": "ctrl+y",
+        "mac": "cmd+y",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      }
     ]
   },
   "scripts": {

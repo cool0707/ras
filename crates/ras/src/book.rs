@@ -1,10 +1,11 @@
-//! `ras book dump` / `ras book diff`: a workbook's contents as text, without Excel.
+//! `ras book`: a workbook's contents as text (`dump`, `diff`), as a grid (`view`), and edits of
+//! its cells written into the file (`edit`), without Excel.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use ras_workbook::book::Book;
-use ras_workbook::{diff, dump, view, RangeRef};
+use ras_workbook::{diff, dump, patch, view, RangeRef};
 
 #[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
 pub enum DumpFormat {
@@ -76,6 +77,50 @@ pub enum BookCommand {
         /// 最初に表示するシート（コード名かシート名。両方に当たるときはコード名。例: Sheet1）
         #[arg(long, value_name = "SHEET")]
         sheet: Option<String>,
+        /// エディタのパネルで、セルの編集を受け付けるページにする（編集は `ras book edit` が行う）
+        #[arg(long, hide = true)]
+        editable: bool,
+    },
+    /// ブックのセルを Excel と同じように編集して、ファイルに書き込む（入力・クリア・コピーと移動・セルと行と列の挿入と削除）
+    Edit {
+        /// 対象ブック（省略時は ras.toml の project.workbook）
+        file: Option<PathBuf>,
+        /// 編集するシート（コード名・シート名・1 から始まる番号）。編集がシートを指定していないときに使う
+        #[arg(long, value_name = "SHEET")]
+        sheet: Option<String>,
+        /// セルに入力する（例: --set B2=100、--set "C2==B2*2"、--set "A1:A5=x"）。複数指定できる
+        #[arg(long, value_name = "RANGE=TEXT")]
+        set: Vec<String>,
+        /// セルの数式と値をクリアする（例: --clear A1:C3）。複数指定できる
+        #[arg(long, value_name = "RANGE")]
+        clear: Vec<String>,
+        /// 行・列・セルを挿入する（例: --insert 3:4、--insert B:C、--insert B2:C3）。セルは --shift で動かす向きを指定する
+        #[arg(long, value_name = "RANGE")]
+        insert: Vec<String>,
+        /// 行・列・セルを削除する（例: --delete 3:4、--delete B:C、--delete B2:C3）
+        #[arg(long, value_name = "RANGE")]
+        delete: Vec<String>,
+        /// セルの挿入・削除で、ほかのセルを動かす向き（挿入: down / right、削除: up / left。既定は上下）
+        #[arg(long, value_name = "DIR")]
+        shift: Option<String>,
+        /// 編集を JSON で指定する（1 つの編集か、その配列。例: '{"op":"copy","from":"A1:B2","to":"D1"}'）。複数指定できる
+        #[arg(long, value_name = "JSON")]
+        op: Vec<String>,
+        /// 編集の JSON を読むファイル（`-` で標準入力）
+        #[arg(long, value_name = "FILE")]
+        ops_file: Option<PathBuf>,
+        /// 書き換えたブックを別のファイルに書く（元のブックは変えない）
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<PathBuf>,
+        /// 書き換えた後のブックのグリッド（`ras book view --stdout` と同じ HTML）を標準出力に出す
+        #[arg(long)]
+        view: bool,
+        /// --view の HTML を、セルの編集を受け付けるページにする
+        #[arg(long, hide = true)]
+        editable: bool,
+        /// --view の HTML で、行数・列数の上限を付けずに表示する
+        #[arg(long)]
+        all: bool,
     },
     /// 2 つのブックのセル（値・数式・表示形式）と構造（シート、行・列の挿入と削除の推定）の差分を出力する
     Diff {
@@ -236,6 +281,7 @@ pub fn view_page(
     title: Option<&str>,
     drawings: Option<&Path>,
     sheet: Option<&str>,
+    editable: bool,
 ) -> Result<String, String> {
     let mut book = open(file)?;
     let focus = match sheet {
@@ -284,6 +330,9 @@ pub fn view_page(
         data["active"] = focus.into();
         data["focus"] = true.into();
     }
+    if editable {
+        data["editable"] = true.into();
+    }
     Ok(view::page(&data))
 }
 
@@ -315,7 +364,7 @@ pub fn write_view(
     drawings: Option<&Path>,
     sheet: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let page = view_page(file, before, all, None, drawings, sheet)?;
+    let page = view_page(file, before, all, None, drawings, sheet, false)?;
     let target = match output {
         Some(o) => o.to_path_buf(),
         None => dir.join(format!(
@@ -330,6 +379,124 @@ pub fn write_view(
     }
     std::fs::write(&target, page).map_err(|e| format!("{}: {e}", target.display()))?;
     Ok(target)
+}
+
+/// What `ras book edit` is asked to do.
+pub struct EditArgs<'a> {
+    pub sheet: Option<&'a str>,
+    pub set: &'a [String],
+    pub clear: &'a [String],
+    pub insert: &'a [String],
+    pub delete: &'a [String],
+    pub shift: Option<&'a str>,
+    pub op: &'a [String],
+    pub ops_file: Option<&'a Path>,
+}
+
+/// The edits of the command line, in the order: `--set`, `--clear`, `--insert`, `--delete`, then
+/// those written as JSON.
+fn edit_ops(args: &EditArgs) -> Result<Vec<patch::Op>, String> {
+    use serde_json::json;
+    let mut list: Vec<serde_json::Value> = Vec::new();
+    for entry in args.set {
+        let (range, text) = entry.split_once('=').ok_or_else(|| {
+            format!(
+                "--set `{entry}`: `B2=100` のように、範囲と入力する内容を `=` で区切ってください"
+            )
+        })?;
+        list.push(json!({ "op": "set", "range": range.trim(), "text": text }));
+    }
+    for range in args.clear {
+        list.push(json!({ "op": "clear", "range": range }));
+    }
+    for (kind, ranges) in [("insert", args.insert), ("delete", args.delete)] {
+        for range in ranges {
+            let mut op = json!({ "op": kind, "range": range });
+            if let Some(shift) = args.shift {
+                op["shift"] = shift.into();
+            }
+            list.push(op);
+        }
+    }
+    let mut texts: Vec<String> = args.op.to_vec();
+    if let Some(file) = args.ops_file {
+        texts.push(if file.as_os_str() == "-" {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut text)
+                .map_err(|e| format!("標準入力を読めません: {e}"))?;
+            text
+        } else {
+            std::fs::read_to_string(file).map_err(|e| format!("{}: {e}", file.display()))?
+        });
+    }
+    for text in texts {
+        let value: serde_json::Value = serde_json::from_str(&text)
+            .map_err(|e| format!("編集の JSON を読み取れません: {e}"))?;
+        match value {
+            serde_json::Value::Array(items) => list.extend(items),
+            other => list.push(other),
+        }
+    }
+    if list.is_empty() {
+        return Err(
+            "編集が指定されていません（--set / --clear / --insert / --delete / --op / --ops-file）"
+                .into(),
+        );
+    }
+    patch::parse_ops(&serde_json::Value::Array(list), args.sheet)
+}
+
+/// `ras book edit`: makes the edits in the workbook file and writes it (to `output`, or over the
+/// file itself with a copy of the previous one in `backup`). Returns the path written.
+///
+/// Errors: `Err(Err(..))` when the workbook cannot be read at all, `Err(Ok(..))` when the edit
+/// cannot be made (what is asked is refused, the workbook is open in Excel); nothing is written.
+pub fn edit(
+    file: &Path,
+    args: &EditArgs,
+    output: Option<&Path>,
+    backup: Option<(&Path, usize)>,
+) -> Result<PathBuf, Result<String, String>> {
+    let first = open(file).map_err(Err)?.sheet_name(0).map(str::to_string);
+    edit_file(file, args, first, output, backup).map_err(Ok)
+}
+
+fn edit_file(
+    file: &Path,
+    args: &EditArgs,
+    first: Option<String>,
+    output: Option<&Path>,
+    backup: Option<(&Path, usize)>,
+) -> Result<PathBuf, String> {
+    // Without a sheet named, the edits are of the first one.
+    let mut edit_args = EditArgs { ..*args };
+    let sheet = args.sheet.map(str::to_string).or(first);
+    edit_args.sheet = sheet.as_deref();
+    let ops = edit_ops(&edit_args)?;
+    let locked = || {
+        format!(
+            "{} は Excel で開かれているため、ファイルを書き換えられません（Excel でブックを閉じてから行ってください）",
+            file.display()
+        )
+    };
+    let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
+    let new = patch::apply(&bytes, &ops)?;
+    if let Some(output) = output {
+        if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        std::fs::write(output, new).map_err(|e| format!("{}: {e}", output.display()))?;
+        return Ok(output.to_path_buf());
+    }
+    if new == bytes {
+        return Ok(file.to_path_buf());
+    }
+    ras_ovba::replace_workbook(file, &new, backup.map(|b| b.0), backup.map_or(0, |b| b.1))
+        .map_err(|e| match e {
+            ras_ovba::OvbaError::Locked => locked(),
+            other => format!("{}: {other}", file.display()),
+        })?;
+    Ok(file.to_path_buf())
 }
 
 /// Opens a file with the program the system has for it (a page: the browser).

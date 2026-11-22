@@ -323,6 +323,37 @@ pub(crate) fn write_temp_file(target: &Path, bytes: &[u8]) -> Result<TempFile, O
     )))
 }
 
+/// Replaces the workbook file `book` with `bytes` (a package made from it), the way [`pack`]
+/// writes: the new file is written next to it, the previous one is copied to `backup_dir`
+/// (keeping `generations` copies), and the new one is renamed over it.
+///
+/// Errors: [`OvbaError::Locked`] when the workbook is open in Excel (nothing is written).
+pub fn replace_workbook(
+    book: &Path,
+    bytes: &[u8],
+    backup_dir: Option<&Path>,
+    generations: usize,
+) -> Result<(), OvbaError> {
+    check_not_locked(book, true)?;
+    let mut temp = write_temp_file(book, bytes)?;
+    if let Some(dir) = backup_dir {
+        back_up(book, dir, generations)?;
+    }
+    if let Ok(metadata) = fs::metadata(book) {
+        let _ = fs::set_permissions(&temp.path, metadata.permissions());
+    }
+    check_not_locked(book, true)?;
+    fs::rename(&temp.path, book).map_err(|e| {
+        if is_sharing_violation(&e) || e.kind() == io::ErrorKind::PermissionDenied {
+            OvbaError::Locked
+        } else {
+            OvbaError::Io(e)
+        }
+    })?;
+    temp.keep = true;
+    Ok(())
+}
+
 /// The document modules the project must contain and the code names that
 /// may receive document code.
 pub(crate) struct DocumentPlan {
