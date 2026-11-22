@@ -158,13 +158,32 @@ function demo(name: string, id: string): int {
     let m = code(&out, "Main");
     assert_contains(&m, "    If Not StrUtil.isBlank(name_) Then\n        code = StrUtil.padLeft(id, 6&, \"0\")\n    End If\n    last = ExcelUtil.lastRow(Sheet1, 1&)\n");
     let x = code(&out, "ExcelUtil");
-    assert_contains(&x, "Public Function lastRow(ByVal this_ As Worksheet, Optional ByVal col As Long = 1&) As Long\n    lastRow = this_.Cells(this_.Rows.Count, col).End(xlUp).Row\nEnd Function\n");
+    assert_contains(&x, "Public Function lastRow(ByVal this_ As Worksheet, Optional ByVal col As Long = 1&) As Long\n    lastRow = this_.Cells(this_.Rows.CountLarge, col).End(xlUp).Row\nEnd Function\n");
     assert_contains(
         &x,
         "Public Function sum(ByRef this_() As Double) As Double\n",
     );
     let s = code(&out, "StrUtil");
     assert_contains(&s, "    isBlank = Len(Trim$(this_)) = 0&\n");
+}
+
+#[test]
+fn spec_16_1_2_emit_as_count_large() {
+    // `range.count` is written as `CountLarge`, which also counts the cells of a whole sheet.
+    // A late-bound `count` (a Collection, a Dictionary) keeps `Count`.
+    let main = r#"
+export function counts(c: any): int {
+    const ws = Sheet1;
+    const n = ws.cells.count;
+    const m: int = ws.range("A1:B2").count + c.count;
+    return n + m + worksheets.count;
+}
+"#;
+    let (_, out) = compile(&[("main", main)]);
+    let m = code(&out, "Main");
+    assert_contains(&m, "n = ws.Cells.CountLarge\n");
+    assert_contains(&m, "m = ws.Range(\"A1:B2\").CountLarge + c.Count\n");
+    assert_contains(&m, "Worksheets.Count");
 }
 
 #[test]

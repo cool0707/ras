@@ -28,7 +28,7 @@ const Sheet1 = {
     $typeName: "Worksheet",
     Name: "Data",
     Cells: (r, c) => cell(r, c),
-    Rows: { Count: 1048576 },
+    Rows: { Count: 1048576, CountLarge: 1048576 },
     Range: () => ({ Columns: () => ({ Value: Array.from({ length: 6 }, (_, i) => [cell(i + 2, 1).Value]) }) }),
 };
 const sheetList = [Sheet1, { $typeName: "Worksheet", Name: "Hidden", Visible: 0 }, { $typeName: "Worksheet", Name: "Summary", Visible: -1 }];

@@ -459,7 +459,7 @@ impl<'p> Gen<'p> {
                 if self.prog.classes[c].kind == ClassKind::Host {
                     let o = self.expr(object);
                     let prog = self.prog;
-                    self.host_get(o, prog.classes[c].fields[idx].vba_name(), optional)
+                    self.host_get(o, prog.classes[c].fields[idx].emitted_name(), optional)
                 } else if obj_is_ns {
                     format!("{}.{member}", self.class_ref(c))
                 } else {
@@ -550,7 +550,7 @@ impl<'p> Gen<'p> {
                     Some(Res::Field(c, idx)) if self.prog.classes[c].kind == ClassKind::Host => {
                         Place::Host {
                             obj: self.expr(object),
-                            name: self.prog.classes[c].fields[idx].vba_name().to_string(),
+                            name: self.prog.classes[c].fields[idx].emitted_name().to_string(),
                         }
                     }
                     Some(Res::Field(c, _)) if matches!(obj_ty, Type::Ns(_)) => {

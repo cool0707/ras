@@ -536,6 +536,29 @@ impl FieldDef {
     pub fn vba_name(&self) -> &str {
         self.host_name.as_deref().unwrap_or(&self.name)
     }
+
+    /// The name written in the generated code. A property of a type definition whose doc comment
+    /// has `@emitAs Name` is emitted as that property, a compatible successor that works in more
+    /// cases (`Range.Count` → `CountLarge`, spec §16.1.2). Otherwise `vba_name`.
+    pub fn emitted_name(&self) -> &str {
+        self.doc
+            .as_deref()
+            .and_then(emit_as)
+            .unwrap_or_else(|| self.vba_name())
+    }
+}
+
+/// The name after `@emitAs` in a doc comment.
+fn emit_as(doc: &str) -> Option<&str> {
+    let rest = &doc[doc.find("@emitAs")? + "@emitAs".len()..];
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let name = rest
+        .trim_start()
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .next()?;
+    (!name.is_empty()).then_some(name)
 }
 
 #[derive(Clone, Debug)]

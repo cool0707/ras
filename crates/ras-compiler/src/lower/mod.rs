@@ -2373,7 +2373,7 @@ impl<'p> Lowerer<'p> {
         let fld = &def.fields[idx];
         if def.kind == ClassKind::Host {
             // A property of a host object keeps the type library's spelling, reserved word or not (`ws.Type`).
-            let fname = fld.vba_name().to_string();
+            let fname = fld.emitted_name().to_string();
             return match object {
                 Some(o) => o.member(fname),
                 None => VExpr::Name(fname),
