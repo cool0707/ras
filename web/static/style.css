@@ -1,56 +1,59 @@
 :root {
-    --bg: #f6f7f6;
+    --bg: #f6f6f6;
     --panel: #ffffff;
-    --text: #1d2321;
-    --muted: #5d6763;
-    --line: #dde2df;
-    --accent: #107c41;
+    --text: #222222;
+    --muted: #5f6368;
+    --line: #e0e0e0;
+    --accent: #e4501a;
     --accent-text: #ffffff;
-    --accent-soft: #e3f1e8;
+    --accent-soft: #fde4d6;
     --error: #c42b1c;
     --warning: #9d5d00;
     --info: #2a64b8;
-    --code-bg: #fbfcfb;
-    --selection: #cfe6d8;
+    --code-bg: #fbfbfb;
+    --selection: #fbd3bd;
     --stderr: #7a5300;
+    --ok: #107c41;
     --shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
     color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-        --bg: #161a18;
-        --panel: #1e2321;
-        --text: #e3e8e5;
-        --muted: #9aa5a0;
-        --line: #333b37;
-        --accent: #3fb873;
-        --accent-text: #0b1a12;
-        --accent-soft: #1f3a2b;
+        --bg: #171717;
+        --panel: #1f1f1f;
+        --text: #e6e6e6;
+        --muted: #a0a0a0;
+        --line: #363636;
+        --accent: #f0743f;
+        --accent-text: #1a0c05;
+        --accent-soft: #3d2317;
         --error: #ff7b6b;
         --warning: #e3b341;
         --info: #79a8ff;
-        --code-bg: #191d1b;
-        --selection: #2c4a39;
+        --code-bg: #1b1b1b;
+        --selection: #4d2c1d;
         --stderr: #e3b341;
+        --ok: #3fb873;
         --shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
         color-scheme: dark;
     }
 }
 :root[data-theme="dark"] {
-    --bg: #161a18;
-    --panel: #1e2321;
-    --text: #e3e8e5;
-    --muted: #9aa5a0;
-    --line: #333b37;
-    --accent: #3fb873;
-    --accent-text: #0b1a12;
-    --accent-soft: #1f3a2b;
+    --bg: #171717;
+    --panel: #1f1f1f;
+    --text: #e6e6e6;
+    --muted: #a0a0a0;
+    --line: #363636;
+    --accent: #f0743f;
+    --accent-text: #1a0c05;
+    --accent-soft: #3d2317;
     --error: #ff7b6b;
     --warning: #e3b341;
     --info: #79a8ff;
-    --code-bg: #191d1b;
-    --selection: #2c4a39;
+    --code-bg: #1b1b1b;
+    --selection: #4d2c1d;
     --stderr: #e3b341;
+    --ok: #3fb873;
     --shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
 }
@@ -369,7 +372,7 @@ button:disabled {
     margin-bottom: 8px;
 }
 .output .ok {
-    color: var(--accent);
+    color: var(--ok);
 }
 .output .ng {
     color: var(--error);
@@ -392,7 +395,7 @@ button:disabled {
 }
 .tests .passed::before {
     content: "✓ ";
-    color: var(--accent);
+    color: var(--ok);
     font-weight: 700;
 }
 .tests .failed::before {

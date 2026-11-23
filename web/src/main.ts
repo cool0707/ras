@@ -850,12 +850,15 @@ async function readWorkbook(file: File) {
     toast(`${file.name} を読み込みました。プログラムはこのブックで動きます（シート: ${sheetNames().join(", ")}）`);
 }
 
-/** `ras pack`: the VBA written into the workbook (the one read into the page, or a new one), saved as .xlsm. */
-function packWorkbook() {
+/**
+ * `ras pack`: the VBA written into a workbook, saved as .xlsm. The book is the one read into the
+ * page (or a new one), or from the book tab, the one shown there (after the run, if there was one).
+ */
+function packWorkbook(book: Workbook = workbook) {
     const input = { files: files.filter((f) => f.path.endsWith(".ras")), toml: toml() };
     let packed;
     try {
-        packed = packBook(JSON.stringify(input), workbook.bytes, workbook.name);
+        packed = packBook(JSON.stringify(input), book.bytes, book.name);
     } catch (e) {
         toast(String((e as Error).message || e).split("\n")[0]);
         showTab("problems");
@@ -960,7 +963,7 @@ async function main() {
         if (f.fileName.endsWith(".doccls")) download(`${f.name}.txt`, encodeVba(f.text.replace(/\n/g, "\r\n"), codepage), "text/plain");
         else download(f.fileName, encodeVba(f.file, codepage), "text/plain");
     };
-    $("pack").onclick = packWorkbook;
+    $("pack").onclick = () => packWorkbook();
     $("run").onclick = () => run("run");
     $("test").onclick = () => run("test");
     $("stop").onclick = stopRun;
@@ -992,11 +995,7 @@ async function main() {
         renderBook();
         scheduleCompile(0);
     };
-    $("book-download").onclick = () => {
-        const b = lastRun ? lastRun.after : workbook;
-        const type = b.name.endsWith(".xlsm") ? "application/vnd.ms-excel.sheet.macroEnabled.12" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-        download(b.name, b.bytes, type);
-    };
+    $("book-download").onclick = () => packWorkbook(lastRun ? lastRun.after : workbook);
     document.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !editor.hasFocus) {
             e.preventDefault();
