@@ -2469,7 +2469,22 @@
         ["label", "ラベル", '<text x="2" y="12" font-size="10" stroke="none" fill="currentColor" font-family="sans-serif">Aa</text>'],
         ["scrollBar", "スクロール バー", '<rect x="1.5" y="5" width="13" height="6"/><path d="M4 5v6M12 5v6M6.5 7h3v2h-3z"/>'],
     ];
-    const isControlKind = (kind) => kind.startsWith("control:");
+    // The ActiveX controls (Microsoft Forms 2.0) of 開発 > 挿入, in Excel's order: [kind, name,
+    // icon (16 × 16)]. Their events are then handled in the sheet's file (`@on`).
+    const ACTIVEX_CONTROLS = [
+        ["commandButton", "コマンド ボタン", '<rect x="1.5" y="4" width="13" height="8" rx="1"/><path d="M4 10.5h8" stroke-opacity=".4"/>'],
+        ["comboBox", "コンボ ボックス", '<rect x="1.5" y="5" width="13" height="6"/><path d="M10.5 5v6M11.8 7.3l.7.9.7-.9"/>'],
+        ["checkBox", "チェック ボックス", '<rect x="2.5" y="4.5" width="7" height="7"/><path d="m3.8 8 1.7 1.7 2.7-3.4"/><path d="M11 8h3.5" stroke-opacity=".5"/>'],
+        ["listBox", "リスト ボックス", '<rect x="1.5" y="2.5" width="13" height="11"/><path d="M3.5 5.5h6M3.5 8h6M3.5 10.5h6M11 2.5v11"/>'],
+        ["textBox", "テキスト ボックス", '<rect x="1.5" y="4.5" width="13" height="7"/><path d="M4 6.5v3"/>'],
+        ["scrollBar", "スクロール バー", '<rect x="1.5" y="5" width="13" height="6"/><path d="M4 5v6M12 5v6M6.5 7h3v2h-3z"/>'],
+        ["spinButton", "スピン ボタン", '<rect x="5" y="1.5" width="6" height="13"/><path d="M5 8h6M6.8 5.3 8 4l1.2 1.3M6.8 10.7 8 12l1.2-1.3"/>'],
+        ["optionButton", "オプション ボタン", '<circle cx="6" cy="8" r="3.5"/><circle cx="6" cy="8" r="1.3" fill="currentColor"/><path d="M11 8h3.5" stroke-opacity=".5"/>'],
+        ["label", "ラベル", '<text x="2" y="12" font-size="10" stroke="none" fill="currentColor" font-family="sans-serif">A</text>'],
+        ["toggleButton", "トグル ボタン", '<rect x="1.5" y="4" width="13" height="8" rx="1"/><rect x="3.5" y="6" width="9" height="4" fill="currentColor" fill-opacity=".35" stroke="none"/>'],
+    ];
+    // What is drawn: `control:<kind>` a form control, `activeX:<kind>` an ActiveX control.
+    const isControlKind = (kind) => kind.startsWith("control:") || kind.startsWith("activeX:");
 
     // A point of the sheet (px at 100% from the top left of the grid, as the objects are placed).
     function sheetPoint(e) {
@@ -2533,6 +2548,7 @@
         }
     }
     function shapeName(kind) {
+        if (kind.startsWith("activeX:")) return `${(ACTIVEX_CONTROLS.find((c) => `activeX:${c[0]}` === kind) || [, kind])[1]}（ActiveX コントロール）`;
         if (isControlKind(kind)) return (FORM_CONTROLS.find((c) => `control:${c[0]}` === kind) || [, kind])[1];
         for (const [, list] of SHAPE_GROUPS) for (const [k, name] of list) if (k === kind) return name;
         return kind;
@@ -2614,7 +2630,7 @@
             if (Math.abs(x1 - x0) < 3 && Math.abs(y1 - y0) < 3) {
                 // A control put with a click: the size Excel gives it.
                 if (isControlKind(d.kind)) {
-                    putControl(d.kind.slice(8), x0, y0, null);
+                    putControl(d.kind, x0, y0, null);
                     return;
                 }
                 [x1, y1] = [x0 + clickSize(d.kind)[0], y0 + clickSize(d.kind)[1]];
@@ -2629,7 +2645,7 @@
     // text box asks for its text first.
     function putShape(kind, x0, y0, x1, y1) {
         if (isControlKind(kind)) {
-            putControl(kind.slice(8), Math.min(x0, x1), Math.min(y0, y1), { width: Math.round(Math.abs(x1 - x0)), height: Math.round(Math.abs(y1 - y0)) });
+            putControl(kind, Math.min(x0, x1), Math.min(y0, y1), { width: Math.round(Math.abs(x1 - x0)), height: Math.round(Math.abs(y1 - y0)) });
             return;
         }
         const line = LINES.has(kind);
@@ -2647,11 +2663,13 @@
             postEdit([op]);
         });
     }
-    // A form control put where it was drawn (`size` null: Excel's size for it).
-    function putControl(kind, x, y, size) {
-        const op = { op: "control", sheet: view.sheet.name, control: kind, ...anchorOf(x, y), ...(size || {}) };
-        // A scroll bar drawn wider than high goes across.
-        if (kind === "scrollBar" && size && size.width > size.height) op.horizontal = true;
+    // A form control (`control:<kind>`) or an ActiveX control (`activeX:<kind>`) put where it was
+    // drawn (`size` null: Excel's size for it).
+    function putControl(drawn, x, y, size) {
+        const [how, kind] = drawn.split(":");
+        const op = { op: how === "activeX" ? "activeX" : "control", sheet: view.sheet.name, control: kind, ...anchorOf(x, y), ...(size || {}) };
+        // A form scroll bar drawn wider than high goes across (an ActiveX one turns by its shape).
+        if (how === "control" && kind === "scrollBar" && size && size.width > size.height) op.horizontal = true;
         pickAfter(null);
         postEdit([op]);
     }
@@ -4031,22 +4049,27 @@
             edits: true,
             menu: (anchor) => {
                 const pop = openPop(anchor, "shapes");
-                head(pop, "フォーム コントロール");
-                const row = pop.appendChild(el("div", "shaperow"));
-                for (const [kind, name, path] of FORM_CONTROLS) {
-                    const b = row.appendChild(el("button", "shapebtn"));
-                    b.type = "button";
-                    b.title = `${name}（フォーム コントロール）`;
-                    b.dataset.control = kind;
-                    b.innerHTML = `<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
-                    b.addEventListener("click", () => {
-                        closeMenu();
-                        closeOpen();
-                        startDrawing(`control:${kind}`);
-                    });
+                // A row of buttons a group: [heading, controls, what is drawn, what the tip adds].
+                const groups = [
+                    ["フォーム コントロール", FORM_CONTROLS, "control", "フォーム コントロール"],
+                    ["ActiveX コントロール", ACTIVEX_CONTROLS, "activeX", "ActiveX コントロール。イベントはシートのファイルの @on で受け取ります"],
+                ];
+                for (const [heading, list, how, tip] of groups) {
+                    head(pop, heading);
+                    const row = pop.appendChild(el("div", "shaperow"));
+                    for (const [kind, name, path] of list) {
+                        const b = row.appendChild(el("button", "shapebtn"));
+                        b.type = "button";
+                        b.title = `${name}（${tip}）`;
+                        b.dataset.control = `${how}:${kind}`;
+                        b.innerHTML = `<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+                        b.addEventListener("click", () => {
+                            closeMenu();
+                            closeOpen();
+                            startDrawing(`${how}:${kind}`);
+                        });
+                    }
                 }
-                head(pop, "ActiveX コントロール");
-                pop.appendChild(el("div", "pnote", "Excel で挿入してください"));
             },
         });
         const ev = button("event", {

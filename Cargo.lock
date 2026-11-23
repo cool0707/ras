@@ -1552,6 +1552,7 @@ dependencies = [
  "gridcraft-model",
  "gridcraft-numfmt",
  "gridcraft-xlsx-formulas",
+ "ras-ovba",
  "serde_json",
  "umya-spreadsheet",
  "zip 2.6.1",
