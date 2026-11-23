@@ -186,6 +186,25 @@ async function fromHash(): Promise<boolean> {
     }
 }
 
+/** A new project, as `ras init --workbook Book.xlsx` makes it: ras.toml, src/main.ras and an empty workbook. */
+const NEW_PROJECT: ProjectFile[] = [
+    { path: "ras.toml", text: '[project]\nname = "Playground"\nworkbook = "Book.xlsx"\n\n[build]\nopt-level = 1\n' },
+    {
+        path: "src/main.ras",
+        text: "/**\n * サンプルのマクロ。Excel の「マクロ」ダイアログから `hello` を実行できる。\n */\nexport function hello() {\n    const names = [\"RAS\", \"VBA\"];\n    const greeting = names.map(n => `Hello, ${n}!`).join(\"\\n\");\n    msgBox(greeting);\n}\n",
+    },
+];
+
+function newProject() {
+    files = NEW_PROJECT.map((f) => ({ ...f }));
+    sampleId = "";
+    active = "src/main.ras";
+    workbook = newWorkbook();
+    lastRun = null;
+    clearBookHistory();
+    states.clear();
+}
+
 function loadSample(id: string) {
     const s = samples.find((x) => x.id === id) || samples[0];
     files = s.files.map((f) => ({ ...f }));
@@ -975,6 +994,20 @@ async function isolate() {
     }
 }
 
+/** Shows the project just put in place (a sample, a new one). */
+function projectOpened() {
+    stopRun();
+    history.replaceState(null, "", location.pathname + location.search);
+    const a = active;
+    active = "";
+    openFile(a);
+    $("output").innerHTML = '<p class="hint">▶ 実行 で関数を、テスト で test/*.test.ras を、Excel を使わずにブラウザの中で動かします。</p>';
+    renderBook();
+    runCompile();
+    save();
+    showTab("vba");
+}
+
 async function main() {
     void isolate();
     $("editor").innerHTML = '<div class="loading">コンパイラーを読み込んでいます…</div>';
@@ -1003,13 +1036,14 @@ async function main() {
             return;
         }
         loadSample(sample.value);
-        history.replaceState(null, "", location.pathname + location.search);
-        const a = active;
-        active = "";
-        openFile(a);
-        renderBook();
-        runCompile();
-        showTab("vba");
+        projectOpened();
+    };
+    $("new").onclick = () => {
+        if (!confirm("新しいプロジェクトを作ると、いまのファイルとブックは置き換わります。作りますか？")) return;
+        newProject();
+        sample.value = "";
+        projectOpened();
+        toast("新しいプロジェクトを作りました（src/main.ras と空のブック Book.xlsx）");
     };
 
     editor = new EditorView({ parent: $("editor") });
