@@ -392,10 +392,21 @@ pub(super) fn rid_attr(doc: &str, root: &El, id: &str) -> String {
 /// it.
 pub(super) fn place(root: &El, name: &str) -> usize {
     let rank = |n: &str| ORDER.iter().position(|o| *o == n).unwrap_or(ORDER.len());
+    // (What newer Excel wraps in `mc:AlternateContent`, `<controls>` and `<oleObjects>`: by
+    // the child of its choice.)
+    let rank_of = |c: &El| match c.local() {
+        "AlternateContent" => c
+            .children
+            .iter()
+            .find(|x| x.local() == "Choice")
+            .and_then(|x| x.children.first())
+            .map_or(ORDER.len(), |x| rank(x.local())),
+        other => rank(other),
+    };
     let mine = rank(name);
     root.children
         .iter()
-        .take_while(|c| rank(c.local()) < mine)
+        .take_while(|c| rank_of(c) < mine)
         .last()
         .map_or(root.inner.start, |c| c.end)
 }

@@ -2168,6 +2168,293 @@ fn activex_controls_changed_moved_and_deleted() {
     );
 }
 
+/// The ActiveX controls the grid draws on a sheet: (name, Microsoft Forms type).
+fn activex_of(bytes: &[u8], sheet: usize) -> Vec<(String, String)> {
+    view(bytes)["sheets"][sheet]["objects"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|o| o["kind"] == json!("control") && o.get("activex").is_some())
+        .map(|o| {
+            (
+                o["name"].as_str().unwrap_or("").to_string(),
+                o["activex"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn activex_controls_put_on_a_sheet() {
+    // Each kind, on a sheet with VML (a button, a note) and no `<controls>`.
+    let kinds = [
+        (
+            "commandButton",
+            "CommandButton",
+            "CommandButton",
+            Some("CommandButton1"),
+        ),
+        ("textBox", "TextBox", "MorphData", None),
+        ("checkBox", "CheckBox", "MorphData", Some("CheckBox1")),
+        (
+            "optionButton",
+            "OptionButton",
+            "MorphData",
+            Some("OptionButton1"),
+        ),
+        (
+            "toggleButton",
+            "ToggleButton",
+            "MorphData",
+            Some("ToggleButton1"),
+        ),
+        ("comboBox", "ComboBox", "MorphData", None),
+        ("listBox", "ListBox", "MorphData", None),
+        ("label", "Label", "Label", Some("Label1")),
+        ("spinButton", "SpinButton", "SpinButton", None),
+        ("scrollBar", "ScrollBar", "ScrollBar", None),
+    ];
+    for (key, forms, class, caption) in kinds {
+        let out = edit(&format!(
+            r#"{{"op":"activeX","control":"{key}","at":"H18","width":96,"height":32}}"#
+        ));
+        let name = format!("{forms}1");
+        assert_eq!(
+            changed(BOOK, &out),
+            [
+                "[Content_Types].xml",
+                "xl/activeX/_rels/activeX1.xml.rels",
+                "xl/activeX/activeX1.bin",
+                "xl/activeX/activeX1.xml",
+                "xl/drawings/vmlDrawing1.vml",
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                "xl/worksheets/sheet1.xml"
+            ],
+            "{key}"
+        );
+        // Its part, its data's relationship, their content types (the file's `bin` is its VBA
+        // project's: the data's own).
+        let clsid = crate::activex::clsid_of(forms).unwrap();
+        assert_eq!(
+            part(&out, "xl/activeX/activeX1.xml"),
+            format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n<ax:ocx ax:classid=\"{{{clsid}}}\" ax:persistence=\"persistStreamInit\" r:id=\"rId1\" xmlns:ax=\"http://schemas.microsoft.com/office/2006/activeX\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/>"
+            )
+        );
+        assert!(part(&out, "xl/activeX/_rels/activeX1.xml.rels").contains(r#"<Relationship Id="rId1" Type="http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary" Target="activeX1.bin"/>"#));
+        let types = part(&out, "[Content_Types].xml");
+        assert!(types.contains(r#"<Override PartName="/xl/activeX/activeX1.xml" ContentType="application/vnd.ms-office.activeX+xml"/>"#));
+        assert!(types.contains(r#"<Override PartName="/xl/activeX/activeX1.bin" ContentType="application/vnd.ms-office.activeX"/>"#));
+        assert!(types.contains(
+            r#"<Default Extension="bin" ContentType="application/vnd.ms-office.vbaProject"/>"#
+        ));
+        // The sheet: its relationship, `<controls>` after `<legacyDrawing>`.
+        assert!(part(&out, "xl/worksheets/_rels/sheet1.xml.rels").contains(r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/control" Target="../activeX/activeX1.xml""#));
+        let doc = part(&out, SHEET1);
+        assert!(doc.contains(&format!(r#"<legacyDrawing r:id="rId3"/><controls><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><mc:Choice Requires="x14"><control shapeId="1027" r:id="rId5" name="{name}"><controlPr defaultSize="0" autoLine="0" autoPict="0"><anchor moveWithCells="1" xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"><from><xdr:col>7</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>17</xdr:row><xdr:rowOff>0</xdr:rowOff></from>"#)), "{doc}");
+        assert!(doc.ends_with(&format!(r#"</controlPr></control></mc:Choice><mc:Fallback><control shapeId="1027" r:id="rId5" name="{name}"/></mc:Fallback></mc:AlternateContent></controls></worksheet>"#)), "{doc}");
+        // Its VML shape, named after it.
+        let vml = part(&out, "xl/drawings/vmlDrawing1.vml");
+        assert!(vml.contains(&format!(r##"<v:shape id="{name}" o:spid="_x0000_s1027" type="#_x0000_t201" style="position:absolute;z-index:3;margin-left:435pt;margin-top:270pt;width:72pt;height:24pt""##)), "{vml}");
+        assert!(vml.ends_with(r#"<x:ClientData ObjectType="Pict"><x:SizeWithCells/><x:Anchor>7, 0, 17, 0, 8, 24, 18, 12</x:Anchor><x:CF>Pict</x:CF><x:AutoPict/></x:ClientData></v:shape></xml>"#), "{vml}");
+
+        // Its data: its CLSID and a record read back whole, its caption, its size.
+        let bin = &parts(&out)["xl/activeX/activeX1.bin"];
+        let st = crate::activex::Stream::read(class, bin).unwrap_or_else(|| panic!("{key}"));
+        assert_eq!(st.write(), *bin, "{key}");
+        assert_eq!(st.string("Caption").as_deref(), caption, "{key}");
+        assert_eq!(st.size(), Some((2540, 847)), "{key}");
+        let mut ax = umya_spreadsheet::drawingml::controls::ActiveX {
+            class,
+            ..Default::default()
+        };
+        umya_spreadsheet::drawingml::controls::read_activex_stream(&mut ax, &bin[16..]);
+        assert_eq!(ax.caption.as_deref(), caption, "{key}");
+        if matches!(class, "CommandButton" | "Label" | "MorphData") {
+            assert_eq!(
+                (ax.font.as_deref(), ax.size),
+                (Some("MS UI Gothic"), Some(9.0)),
+                "{key}"
+            );
+        }
+        // The grid draws it as an ActiveX control of its type.
+        assert!(
+            activex_of(&out, 0).contains(&(name.clone(), forms.to_string())),
+            "{key}: {:?}",
+            activex_of(&out, 0)
+        );
+    }
+
+    // Names as Excel gives them; a text; a name given.
+    let two = edit(
+        r#"[{"op":"activeX","at":"B12"},{"op":"activeX","control":"commandButton","at":"B15","text":"実行"},{"op":"activeX","control":"textBox","at":"D15","name":"txtName","text":"既定"}]"#,
+    );
+    let names: Vec<String> = activex_of(&two, 0).into_iter().map(|c| c.0).collect();
+    assert_eq!(names, ["CommandButton1", "CommandButton2", "txtName"]);
+    assert!(parts(&two).contains_key("xl/activeX/activeX3.bin"));
+    let st = crate::activex::Stream::read("CommandButton", &parts(&two)["xl/activeX/activeX2.bin"])
+        .unwrap();
+    assert_eq!(st.string("Caption").as_deref(), Some("実行"));
+    let st =
+        crate::activex::Stream::read("MorphData", &parts(&two)["xl/activeX/activeX3.bin"]).unwrap();
+    assert_eq!(st.string("Value").as_deref(), Some("既定"));
+    let doc = part(&two, SHEET1);
+    assert_eq!(doc.matches("<controls>").count(), 1);
+    assert!(
+        doc.contains(r#"<control shapeId="1028" r:id="rId6" name="CommandButton2">"#),
+        "{doc}"
+    );
+    // Refused: a name the sheet has, names VBA does not take, kinds there are not, a text a
+    // kind does not show.
+    assert!(
+        apply(
+            &two,
+            &ops(r#"{"op":"activeX","at":"A1","name":"commandbutton1"}"#)
+        )
+        .unwrap_err()
+        .contains("commandbutton1")
+    );
+    for bad in [
+        json!({"op":"activeX","control":"slider","at":"A1"}),
+        json!({"op":"activeX","at":"A1","name":"1st"}),
+        json!({"op":"activeX","at":"A1","name":"a b"}),
+        json!({"op":"activeX","control":"spinButton","at":"A1","text":"x"}),
+        json!({"op":"activeX","control":"commandButton"}),
+    ] {
+        assert!(parse_ops(&bad, Some("Data")).is_err(), "{bad}");
+    }
+
+    // A sheet without VML: its drawing made, numbered in a block no other has; `<controls>`
+    // in the schema's place.
+    let out = edit(r#"{"op":"activeX","sheet":"Summary","control":"checkBox","at":"C2"}"#);
+    let vml = part(&out, "xl/drawings/vmlDrawing2.vml");
+    assert!(
+        vml.contains(r#"<o:idmap v:ext="edit" data="2"/>"#)
+            && vml.contains(r#"<v:shape id="CheckBox1" o:spid="_x0000_s2049""#),
+        "{vml}"
+    );
+    let doc = part(&out, SHEET2);
+    assert!(
+        doc.contains(r#"<legacyDrawing r:id="rId1"/><controls><mc:AlternateContent"#),
+        "{doc}"
+    );
+    assert_eq!(
+        activex_of(&out, 1),
+        [("CheckBox1".to_string(), "CheckBox".to_string())]
+    );
+    // Its caption, moved, deleted.
+    let named = apply(
+        &out,
+        &ops(
+            r#"{"op":"object","sheet":"Summary","name":"CheckBox1","text":"確認","checked":true}"#,
+        ),
+    )
+    .unwrap();
+    let st = crate::activex::Stream::read("MorphData", &parts(&named)["xl/activeX/activeX1.bin"])
+        .unwrap();
+    assert_eq!(
+        (
+            st.string("Caption").as_deref(),
+            st.string("Value").as_deref()
+        ),
+        (Some("確認"), Some("1"))
+    );
+    let moved = apply(
+        &out,
+        &ops(r#"{"op":"object","sheet":"Summary","name":"CheckBox1","at":"E4","width":120,"height":40}"#),
+    )
+    .unwrap();
+    assert!(
+        part(&moved, "xl/drawings/vmlDrawing2.vml")
+            .contains("<x:Anchor>4, 0, 3, 0, 5, 48, 5, 0</x:Anchor>"),
+        "{}",
+        part(&moved, "xl/drawings/vmlDrawing2.vml")
+    );
+    assert!(part(&moved, SHEET2).contains("<from><xdr:col>4</xdr:col>"));
+    let st = crate::activex::Stream::read("MorphData", &parts(&moved)["xl/activeX/activeX1.bin"])
+        .unwrap();
+    assert_eq!(st.size(), Some((3175, 1058)));
+    let gone = apply(
+        &out,
+        &ops(r#"{"op":"object","sheet":"Summary","name":"CheckBox1","delete":true}"#),
+    )
+    .unwrap();
+    let names = parts(&gone);
+    assert!(
+        !names.contains_key("xl/activeX/activeX1.xml")
+            && !names.contains_key("xl/activeX/activeX1.bin")
+    );
+    assert!(!part(&gone, "[Content_Types].xml").contains("activeX1"));
+    assert!(!part(&gone, SHEET2).contains("<controls>"));
+    assert!(activex_of(&gone, 1).is_empty());
+
+    // What the compiler reads of the sheet's controls (ras-ovba): their names and types.
+    let file = std::env::temp_dir().join(format!("ras-activex-{}.xlsm", std::process::id()));
+    std::fs::write(&file, &two).unwrap();
+    let listed = ras_ovba::workbook_sheet_controls(&file).unwrap().unwrap();
+    std::fs::remove_file(&file).ok();
+    let data = listed.iter().find(|s| s.code_name == "Sheet1").unwrap();
+    let got: Vec<(&str, &str)> = data
+        .controls
+        .iter()
+        .map(|c| (c.name.as_str(), c.class.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("CommandButton1", "CommandButton"),
+            ("CommandButton2", "CommandButton"),
+            ("txtName", "TextBox")
+        ]
+    );
+}
+
+#[test]
+fn activex_controls_put_where_excel_2010_keeps_controls() {
+    // A sheet with `<controls>` (form and ActiveX controls): the next name, the entry with the
+    // others.
+    let sample = crate::view::tests::sample();
+    let ed = |bytes: &[u8], json: &str| {
+        apply(
+            bytes,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+    };
+    let out = ed(&sample, r#"{"op":"activeX","at":"B20"}"#).unwrap();
+    let doc = part(&out, "xl/worksheets/sheet1.xml");
+    assert_eq!(doc.matches("<controls>").count(), 1);
+    assert!(doc.contains(r#"name="CommandButton2"><controlPr"#), "{doc}");
+    assert!(parts(&out).contains_key("xl/activeX/activeX2.bin"));
+    // (The file's `bin` is the controls' already.)
+    assert!(!part(&out, "[Content_Types].xml").contains("activeX2.bin"));
+    let names: Vec<(String, String)> = activex_of(&out, 0);
+    assert!(
+        names.contains(&("CommandButton1".into(), "CommandButton".into()))
+            && names.contains(&("CommandButton2".into(), "CommandButton".into())),
+        "{names:?}"
+    );
+
+    // `<controls>` in an `mc:AlternateContent` with a fallback: both get it.
+    let sheet = part(&sample, "xl/worksheets/sheet1.xml");
+    let (head, rest) = sheet.split_once("<controls>").unwrap();
+    let (inner, tail) = rest.split_once("</controls>").unwrap();
+    let wrapped = format!(
+        "{head}<mc:AlternateContent><mc:Choice Requires=\"x14\"><controls>{inner}</controls></mc:Choice><mc:Fallback><controls><control shapeId=\"1026\" r:id=\"rId4\" name=\"CommandButton1\"/></controls></mc:Fallback></mc:AlternateContent>{tail}"
+    );
+    let book = with_parts(
+        &sample,
+        &[("xl/worksheets/sheet1.xml", Some(wrapped.into_bytes()))],
+    );
+    let out = ed(&book, r#"{"op":"activeX","control":"label","at":"B20"}"#).unwrap();
+    let doc = part(&out, "xl/worksheets/sheet1.xml");
+    assert_eq!(doc.matches(r#"name="Label1""#).count(), 3, "{doc}");
+    assert!(
+        doc.contains(r#"name="Label1"/></controls></mc:Fallback>"#),
+        "{doc}"
+    );
+}
+
 /// The `xf` (in `cellXfs`) of the cell `at` of the first sheet.
 fn xf_of(bytes: &[u8], at: &str) -> String {
     let sheet = part(bytes, SHEET1);

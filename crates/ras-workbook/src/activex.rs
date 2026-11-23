@@ -95,6 +95,18 @@ const SCROLL_BAR: &[Field] = &[
     (13, "Orientation", 4),
 ];
 
+/// The font of a control (what follows the record of a `CommandButton`, `Label` or
+/// `MorphData`, after its pictures).
+const TEXT_PROPS: &[Field] = &[
+    (0, "FontName", 4),
+    (1, "FontEffects", 4),
+    (2, "FontHeight", 4),
+    (4, "FontCharSet", 1),
+    (5, "FontPitchAndFamily", 1),
+    (6, "ParagraphAlign", 1),
+    (7, "FontWeight", 2),
+];
+
 /// The size in the `ExtraDataBlock`.
 const SIZE: &str = "#Size";
 
@@ -114,6 +126,7 @@ fn spec(class: &str) -> Option<Spec> {
         ),
         "SpinButton" => (SPIN_BUTTON, false, &[(3, SIZE)]),
         "ScrollBar" => (SCROLL_BAR, false, &[(3, SIZE)]),
+        "TextProps" => (TEXT_PROPS, false, &[(0, "FontName")]),
         _ => return None,
     })
 }
@@ -151,6 +164,125 @@ pub(crate) fn forms_type(class: &str, display: u8) -> &'static str {
         ("ScrollBar", _) => "ScrollBar",
         _ => "",
     }
+}
+
+/// The CLSID of a Microsoft Forms type (`CommandButton`, `TextBox`, ...).
+pub(crate) fn clsid_of(forms: &str) -> Option<&'static str> {
+    Some(match forms {
+        "CommandButton" => "D7053240-CE69-11CD-A777-00DD01143C57",
+        "Label" => "978C9E23-D4B0-11CE-BF2D-00AA003F40D0",
+        "TextBox" => "8BD21D10-EC42-11CE-9E0D-00AA006002F3",
+        "ListBox" => "8BD21D20-EC42-11CE-9E0D-00AA006002F3",
+        "ComboBox" => "8BD21D30-EC42-11CE-9E0D-00AA006002F3",
+        "CheckBox" => "8BD21D40-EC42-11CE-9E0D-00AA006002F3",
+        "OptionButton" => "8BD21D50-EC42-11CE-9E0D-00AA006002F3",
+        "ToggleButton" => "8BD21D60-EC42-11CE-9E0D-00AA006002F3",
+        "SpinButton" => "79176FB0-B7F2-11CE-97EF-00AA006D2776",
+        "ScrollBar" => "DFD181E0-5E2F-11CE-A449-00AA004A803D",
+        _ => return None,
+    })
+}
+
+/// A CLSID as it is stored (a GUID: its first three parts little-endian).
+fn clsid_bytes(clsid: &str) -> Option<[u8; 16]> {
+    let hex: Vec<u8> = clsid
+        .chars()
+        .filter_map(|c| c.to_digit(16).map(|d| d as u8))
+        .collect();
+    if hex.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = hex[i * 2] << 4 | hex[i * 2 + 1];
+    }
+    out[0..4].reverse();
+    out[4..6].reverse();
+    out[6..8].reverse();
+    Some(out)
+}
+
+/// The font the VBA editor (in Japanese) stores in every control it makes, as `ras-form`
+/// writes a new control's: MS UI Gothic 9pt (in twips), `SHIFTJIS_CHARSET`, `VARIABLE_PITCH`.
+const FRESH_FONT: (&str, i64, i64, i64) = ("MS UI Gothic", 180, 128, 2);
+
+/// The data (a `.bin` part: the CLSID and the stream) of a new control of a Microsoft Forms
+/// type (`CommandButton`, `TextBox`, ...), as a control just put on a sheet: the
+/// `VariousPropertyBits`, colors and list settings of a new control of its kind, its caption
+/// and value, its size (HIMETRIC), and the font of the classes that have one. None for a type
+/// that is not one of these.
+pub(crate) fn fresh(
+    forms: &str,
+    caption: Option<&str>,
+    value: Option<&str>,
+    size: (i32, i32),
+) -> Option<Vec<u8>> {
+    let clsid = clsid_of(forms)?;
+    let (class, display) = class_of(clsid);
+    let empty = |class: &'static str, head: Vec<u8>| Stream {
+        class,
+        head,
+        mask: 0,
+        values: HashMap::new(),
+        strings: HashMap::new(),
+        size: None,
+        rest: Vec::new(),
+    };
+    let mut s = empty(spec_class(class)?, clsid_bytes(clsid)?.to_vec());
+    // As Excel writes them (`ras-form`'s `fresh_bits`): enabled, opaque, ...; a text box and a
+    // combo box editable, a label word-wrapped.
+    let bits: i64 = match forms {
+        "TextBox" | "ComboBox" => 0x2c80_481b,
+        "Label" => 0x0080_001b,
+        "ListBox" | "CheckBox" | "OptionButton" | "ToggleButton" => 0x2c80_081b,
+        _ => 0x1b,
+    };
+    s.set_number("VariousPropertyBits", bits);
+    if class == "MorphData" {
+        // (A bit without data that MS-OFORMS reserves; a new control has it.)
+        s.mask |= 1 << 31;
+        s.set_number("DisplayStyle", i64::from(display));
+        match forms {
+            // The drop button always shown, the entry completed.
+            "ComboBox" => {
+                s.set_number("ShowDropButtonWhen", 2);
+                s.set_number("MatchEntry", 1);
+            }
+            // (MS-OFORMS: a list box's scroll bars are fmScrollBarsBoth.)
+            "ListBox" => {
+                s.set_number("MatchEntry", 0);
+                s.set_number("ScrollBars", 3);
+            }
+            // The button face and text colors (the record's defaults are a text box's).
+            "CheckBox" | "OptionButton" | "ToggleButton" => {
+                s.set_number("BackColor", 0x8000_000F);
+                s.set_number("ForeColor", 0x8000_0012);
+            }
+            _ => {}
+        }
+    }
+    if let Some(c) = caption {
+        s.set_string("Caption", c);
+    }
+    if let Some(v) = value {
+        s.set_string("Value", v);
+    }
+    s.set_size(size.0, size.1);
+    // The font (TextProps), right after the record (there are no pictures).
+    if matches!(class, "CommandButton" | "Label" | "MorphData") {
+        let mut font = empty("TextProps", Vec::new());
+        let (name, height, charset, pitch) = FRESH_FONT;
+        font.set_string("FontName", name);
+        font.set_number("FontHeight", height);
+        font.set_number("FontCharSet", charset);
+        font.set_number("FontPitchAndFamily", pitch);
+        // A button's caption centred (PARAFORMAT's center).
+        if matches!(forms, "CommandButton" | "ToggleButton") {
+            font.set_number("ParagraphAlign", 3);
+        }
+        s.rest = font.write();
+    }
+    Some(s.write())
 }
 
 /// The persisted data of a control: its record read, and what is around it.
@@ -352,6 +484,12 @@ impl Stream {
     }
 
     /// The size (HIMETRIC: hundredths of a millimeter).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn size(&self) -> Option<(i32, i32)> {
+        self.size
+    }
+
+    /// The size set.
     pub(crate) fn set_size(&mut self, w: i32, h: i32) {
         if let Some(bit) = self.bit_of(SIZE) {
             self.mask |= 1 << bit;
@@ -367,6 +505,7 @@ fn spec_class(class: &str) -> Option<&'static str> {
         "MorphData",
         "SpinButton",
         "ScrollBar",
+        "TextProps",
     ]
     .into_iter()
     .find(|c| *c == class)
@@ -391,6 +530,49 @@ pub(crate) mod tests {
         s.set_string("Caption", caption);
         s.set_string("Value", value);
         s.write()
+    }
+
+    #[test]
+    fn the_data_of_a_new_control_is_read_back() {
+        let data = fresh("CommandButton", Some("実行"), None, (2540, 847)).unwrap();
+        // The CLSID as it is stored.
+        assert_eq!(
+            data[..16],
+            [
+                0x40, 0x32, 0x05, 0xD7, 0x69, 0xCE, 0xCD, 0x11, 0xA7, 0x77, 0x00, 0xDD, 0x01, 0x14,
+                0x3C, 0x57
+            ]
+        );
+        let s = Stream::read("CommandButton", &data).unwrap();
+        assert_eq!(s.write(), data);
+        assert_eq!(s.string("Caption").as_deref(), Some("実行"));
+        assert_eq!(s.number("VariousPropertyBits"), Some(0x1b));
+        assert_eq!(s.size(), Some((2540, 847)));
+        // The font after the record.
+        let font = Stream::read("TextProps", &s.rest).unwrap();
+        assert_eq!(font.string("FontName").as_deref(), Some("MS UI Gothic"));
+        assert_eq!(
+            (font.number("FontHeight"), font.number("ParagraphAlign")),
+            (Some(180), Some(3))
+        );
+        // A combo box: its display style and settings; a scroll bar: no font.
+        let s = Stream::read(
+            "MorphData",
+            &fresh("ComboBox", None, Some("A"), (1, 1)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            (s.number("DisplayStyle"), s.number("ShowDropButtonWhen")),
+            (Some(3), Some(2))
+        );
+        assert_eq!(s.string("Value").as_deref(), Some("A"));
+        let s = Stream::read(
+            "ScrollBar",
+            &fresh("ScrollBar", None, None, (1, 1)).unwrap(),
+        )
+        .unwrap();
+        assert!(s.rest.is_empty());
+        assert!(fresh("Image", None, None, (1, 1)).is_none());
     }
 
     #[test]

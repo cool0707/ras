@@ -211,6 +211,17 @@ pub enum Op {
     },
     /// A form control put on the sheet (開発 > 挿入 > フォーム コントロール).
     Control { sheet: String, control: FormControl },
+    /// An ActiveX control of Microsoft Forms 2.0 put on the sheet (開発 > 挿入 > ActiveX
+    /// コントロール): `control` one of `controls::ACTIVEX_KINDS` (`commandButton`, `textBox`,
+    /// ...), named `name` (None: as Excel names it, `CommandButton1`), showing `text` (its
+    /// caption, its name when None; the value of a text or combo box).
+    ActiveX {
+        sheet: String,
+        control: String,
+        place: Place,
+        name: Option<String>,
+        text: Option<String>,
+    },
     /// A table made of `range` (a single cell: the data around it), as Excel's "テーブルの作成"
     /// makes it. `header`: its first row is the headings; otherwise a row of headings (列1,
     /// 列2, ...) is inserted above it.
@@ -345,6 +356,7 @@ impl Op {
                 | Op::Picture { .. }
                 | Op::Object { .. }
                 | Op::Control { .. }
+                | Op::ActiveX { .. }
         )
     }
 }
@@ -969,7 +981,34 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 }
                 Op::Control { sheet, control }
             }
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control）")),
+            "activeX" => {
+                let control = text("control").unwrap_or_else(|| "commandButton".to_string());
+                if !controls::ACTIVEX_KINDS.iter().any(|k| k.key == control) {
+                    let all: Vec<&str> = controls::ACTIVEX_KINDS.iter().map(|k| k.key).collect();
+                    return Err(format!("ActiveX コントロール `{control}` はありません（{}）", all.join(" / ")));
+                }
+                // A name VBA can refer to (`Sheet1.CommandButton1`).
+                let name = text("name").filter(|n| !n.is_empty());
+                if let Some(n) = &name
+                    && (n.chars().count() > 40
+                        || !n.starts_with(char::is_alphabetic)
+                        || !n.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                {
+                    return Err(format!("名前 `{n}` は指定できません（文字で始まり、文字・数字・_ だけの 40 文字までの名前にしてください）"));
+                }
+                let text = text("text");
+                if text.is_some() && !controls::activex_text(&control) {
+                    return Err(format!("ActiveX コントロール `{control}` には文字を指定できません"));
+                }
+                Op::ActiveX {
+                    sheet,
+                    control,
+                    place: place_of(o)?.ok_or("コントロールの位置 `at`（セル）か `range` がありません")?,
+                    name,
+                    text,
+                }
+            }
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control / activeX）")),
         });
     }
     Ok(out)
@@ -1039,6 +1078,20 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                     _ => out,
                 }
             }
+            Op::ActiveX {
+                sheet,
+                control,
+                place,
+                name,
+                text,
+            } => controls::add_activex(
+                &bytes,
+                sheet,
+                control,
+                place,
+                name.as_deref(),
+                text.as_deref(),
+            )?,
             Op::Table {
                 sheet,
                 range,
@@ -1717,7 +1770,8 @@ fn run(
         | Op::Shape { .. }
         | Op::Picture { .. }
         | Op::Object { .. }
-        | Op::Control { .. } => {}
+        | Op::Control { .. }
+        | Op::ActiveX { .. } => {}
         Op::Fill {
             sheet,
             range,

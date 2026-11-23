@@ -310,7 +310,7 @@ VS Code のシートプレビュー（「RAS: ブックをシートプレビュ�
 | 図形・テキスト ボックス | 挿入の「図形」（線・四角形・基本図形・ブロック矢印・星・吹き出し）・「テキスト ボックス」を選び、シートをドラッグして描く（クリックで既定の大きさ。Shift で縦横を同じに。Esc で取り消し） |
 | 画像 | 挿入の「画像」（PNG・JPEG・GIF・BMP。アクティブセルの位置に入ります）、画像の貼り付け（Ctrl+V） |
 | 図形・画像・グラフの移動と削除 | クリックで選び、ドラッグで移動、周りのハンドルでサイズの変更、矢印キーで 1 ピクセル（Ctrl で 10）移動、Delete で削除。図形の文字は F2・ダブルクリック・右クリックの「テキストの編集…」 |
-| フォームコントロール | 開発の「挿入」でボタン・チェック ボックス・オプション ボタン・ラベル・グループ ボックス・リスト ボックス・コンボ ボックス・スピン ボタン・スクロール バーを選び、シートをドラッグして描く。図形と同じく、選んでドラッグで移動、ハンドルでサイズの変更、Delete で削除。右クリックの「コントロールの書式設定…」で文字・オン／オフ・入力範囲・リンクするセル・値と範囲、F2 で文字。ActiveX コントロールも、移動・サイズの変更・削除と、右クリックの「プロパティ…」で Caption・Value・LinkedCell・ListFillRange・Min・Max など |
+| フォームコントロール | 開発の「挿入」でボタン・チェック ボックス・オプション ボタン・ラベル・グループ ボックス・リスト ボックス・コンボ ボックス・スピン ボタン・スクロール バーを選び、シートをドラッグして描く。図形と同じく、選んでドラッグで移動、ハンドルでサイズの変更、Delete で削除。右クリックの「コントロールの書式設定…」で文字・オン／オフ・入力範囲・リンクするセル・値と範囲、F2 で文字。ActiveX コントロールも、同じく「挿入」でコマンド ボタン・テキスト ボックスなど 10 種類を描け（名前は `CommandButton1` など。イベントはシートのファイルの `@on("CommandButton1.Click")` で受け取る）、移動・サイズの変更・削除と、右クリックの「プロパティ…」で Caption・Value・LinkedCell・ListFillRange・Min・Max など（挿入したものは、実際の Excel ではまだ確認していない） |
 | 図形の書式・回転・重なり順 | 選んでいる間に出る「図形の書式」タブ（図形の塗りつぶし・図形の枠線と太さ、前面へ移動・最前面へ移動・背面へ移動・最背面へ移動、回転: 右へ／左へ 90 度・上下反転・左右反転・角度の指定）。上の丸いハンドルのドラッグ（Shift で 15° ずつ）・Alt+← / Alt+→ でも回転。右クリックにも重なり順と「回転…」 |
 | 連続データ（フィルハンドル） | 選択範囲の右下の ■ をドラッグ（数値・日付・「第1回」のような番号は続きを、数式は参照をずらして入力）。ダブルクリックで隣の列の下端まで |
 | 元に戻す・やり直し | Ctrl+Z / Ctrl+Y |
@@ -336,6 +336,7 @@ ras book edit Book.xlsm --op '{"op":"picture","sheet":"Sheet1","file":"logo.png"
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"図 2","at":"H2"}'   # 図形・画像・グラフの移動（"width"・"height" でサイズ、"text" で図形の文字、"delete":true で削除）
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"楕円 1","fill":"#FF0000","line":null,"rotation":30,"order":"front"}'   # 塗りつぶし・線（"lineWidth" で太さ）・回転（"flipH"・"flipV" で反転）・重なり順（front / forward / backward / back）
 ras book edit Book.xlsm --op '{"op":"control","sheet":"Sheet1","control":"button","at":"B2","text":"集計","macro":"Module1.run"}'   # フォームコントロール（checkBox・listBox など。"link" でリンクするセル、"items" でリストの範囲）
+ras book edit Book.xlsm --op '{"op":"activeX","sheet":"Sheet1","control":"commandButton","at":"B4"}'   # ActiveX コントロール（textBox・comboBox など。名前は CommandButton1 など、"name" で指定もできる）
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","shape":1025,"at":"D2"}'   # フォームコントロールの移動（"delete":true で削除。名前でも指定できる）
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"チェック 2","text":"確認済み","link":"$C$2","checked":true}'   # 文字・リンクするセル・状態（"items"、"selected"、"value"・"min"・"max"・"step"・"page" も。リンクするセルにも入力する。ActiveX コントロールも同じ）
 ras book edit Book.xlsm --op '{"op":"sort","sheet":"Sheet1","range":"A1","keys":[{"by":"C"},{"by":"D","desc":true}]}'    # 複数の列で並べ替える
@@ -349,7 +350,7 @@ ras book edit Book.xlsm --set A1=x -o build/edited.xlsm                 # 別の
 - Excel で開いているブックは書き換えません（エラーになります。Excel で閉じてから行ってください）。
 - テーブルの列をまたぐ列の挿入・削除と、ピボットテーブルのあるシートでの挿入・削除は、ファイルの書き換えでは行えません（Excel で行ってください）。
 - 新しい書式は、元のスタイル（`xl/styles.xml`）の末尾に足します。既存の書式の番号は変わりません。
-- 条件付き書式・入力規則の編集、色・アイコンでの絞り込み、スレッド形式のコメントの編集、図形のグラデーション・線の種類・効果・文字の書式、グラフ・ActiveX コントロールの挿入、ActiveX コントロールの名前・色・フォントの変更、数式の入力中にほかのシートのセルをクリックして参照を入れることは、まだ行えません。`ras book view` が作る HTML（ブラウザーで開くもの）は読み取り専用です。
+- 条件付き書式・入力規則の編集、色・アイコンでの絞り込み、スレッド形式のコメントの編集、図形のグラデーション・線の種類・効果・文字の書式、グラフの挿入、ActiveX コントロールの名前・色・フォントの変更、数式の入力中にほかのシートのセルをクリックして参照を入れることは、まだ行えません。`ras book view` が作る HTML（ブラウザーで開くもの）は読み取り専用です。
 
 ### エラーを調べる・AI に渡す
 
