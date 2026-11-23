@@ -5912,7 +5912,6 @@
         }
     });
 
-    $("file").textContent = data.file;
     const total = Object.values(changes).reduce((n, list) => n + list.length, 0);
     if (data.diff) {
         $("summary").textContent = total || data.diff.structure.length ? `${data.diff.before} からの変更: セル ${total} 個` : `${data.diff.before} からの変更はありません`;
