@@ -7,7 +7,7 @@ RAS をブラウザで書いて VBA に変換し、Excel なしで実行・テ�
 
 | 部分 | 中身 |
 |---|---|
-| `crates/ras-wasm` | コンパイラー（`compile`・`format`・`explain`）、`ras pack`（`packBook`）、ブックの代役（`Book`）、`ras book diff` / `view` を WebAssembly にしたもの |
+| `crates/ras-wasm` | コンパイラー（`compile`・`format`・`explain`）、`ras pack`（`packBook`）、ブックの代役（`Book`）、`ras book diff` / `view` / `edit`（`editBook`）を WebAssembly にしたもの。ブックタブの画面（`view.js`）は、実行前のブックへの編集を親のページに `postMessage` し、`main.ts` が `editBook` で書き換えて描き直します |
 | `src/main.ts` | 画面: エディタ（CodeMirror）、VBA・問題・実行結果・ブックの表示 |
 | `src/worker.ts` | 実行用の Web Worker。止まらないプログラムでもページは固まらず、「停止」で終了します |
 | `src/runtime/` | ブラウザの中の小さな Node.js（`fs` はメモリ上、`require`、`process`）。`ras build --target js` が出力したデバッグ用の JavaScript（`ras-main.js` / `ras-test-main.js` とランタイム）を、CLI と同じものをそのまま動かします。`ras_book` アドオンの代わりは wasm の `Book` です |

@@ -116,3 +116,14 @@ test("writes the VBA into a workbook (.xlsx → .xlsm)", async () => {
     assert.ok(report.created.includes("Main"), packed.report);
     assert.ok(packed.bytes.length > 1000);
 });
+
+test("edits the workbook as the page of the book tab posts (ras book edit)", async () => {
+    const { diffText, editBook, viewPage } = await import("../pkg/ras_wasm.js");
+    const before = book();
+    const page = viewPage(before, "Book.xlsx", undefined, "", true);
+    assert.match(page, /"editable":true/);
+    assert.match(page, /"host":"parent"/);
+    const after = editBook(before, JSON.stringify([{ op: "set", range: "B2", text: "100" }, { op: "format", range: "B2", set: { bold: true } }]));
+    assert.match(diffText(before, after, 10), /B2/);
+    assert.throws(() => editBook(before, JSON.stringify({ op: "nope", range: "A1" })));
+});
