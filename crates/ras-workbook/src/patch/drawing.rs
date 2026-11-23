@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use super::insert::{Sheet, place, relative, rid_attr, tree};
 use super::scan::{self, Edits, El};
-use super::{Place, Result};
+use super::{ObjectChange, Order, Place, Result};
 use crate::book::Book;
 use crate::book::view::Sizes;
 
@@ -535,136 +535,380 @@ fn anchor_box(doc: &str, sizes: &Sizes, a: &El) -> Option<(f64, f64, f64, f64)> 
 }
 
 /// The file with the object named `name` (as the name box shows it) of the sheet `sheet`
-/// moved and sized to `place` (the size it has where the place gives none), saying `text`, or
-/// (`delete`) taken away with its picture or chart.
+/// changed: moved and sized (the size it has where the place gives none), given a text, a fill,
+/// a line, a rotation, put elsewhere among the objects over one another, or (`delete`) taken
+/// away with its picture or chart.
 pub(super) fn object(
     bytes: &[u8],
     sheet: &str,
     name: &str,
-    place: Option<&Place>,
-    text: Option<&str>,
-    delete: bool,
+    change: &ObjectChange,
 ) -> Result<Vec<u8>> {
     let sizes = sizes_of(bytes, sheet)?;
     let mut s = Sheet::open(bytes, sheet)?;
     let missing = || format!("シート `{sheet}` に図形・画像 `{name}` がありません");
     let d = drawing_of(&mut s, false)?.ok_or_else(missing)?;
-    let doc = d.doc.clone();
-    let root = scan::tree(&doc, &[]).ok_or("描画のパートを読み取れません")?;
-    let all = units(&root);
-    let unit = all
-        .iter()
-        .find(|u| {
-            u.anchors
-                .iter()
-                .any(|a| name_of(&doc, a).as_deref() == Some(name))
-        })
-        .ok_or_else(missing)?;
-    // A form or ActiveX control is drawn from the sheet's controls and its VML shape too.
-    if unit.anchors.iter().any(|a| first(a, "compatExt").is_some()) {
-        return Err(format!(
-            "`{name}` はコントロールのため、ここでは移動・削除できません（Excel で行ってください）"
-        ));
-    }
-    let mut edits = Edits::default();
-    if delete {
-        edits.replace(unit.span.clone(), "");
-        let removed = &doc[unit.span.clone()];
-        let after = edits.apply(&doc);
-        let after = drop_unused(&mut s, &d.part, removed, after)?;
-        s.put(&d.part, after);
-        return s.finish(None);
-    }
-    if let Some(place) = place {
-        for a in &unit.anchors {
-            let now = anchor_box(&doc, &sizes, a)
-                .ok_or_else(|| format!("`{name}` の位置を読み取れません"))?;
-            let own = (now.2 - now.0, now.3 - now.1);
-            let (x0, y0, x1, y1) = box_of(&sizes, place, own);
-            let x = scan::prefix(a.name).to_string();
-            for (tag, px, py) in [("from", x0, y0), ("to", x1, y1)] {
-                if let Some(m) = a.child(tag) {
-                    edits.replace(m.span(), marker_xml(&x, tag, &sizes, px, py));
-                }
-            }
-            if let Some(p) = a.child("pos") {
-                scan::set_attr(&doc, p.open.clone(), "x", &emu(x0).to_string(), &mut edits);
-                scan::set_attr(&doc, p.open.clone(), "y", &emu(y0).to_string(), &mut edits);
-            }
-            if let Some(e) = a.child("ext") {
-                scan::set_attr(
-                    &doc,
-                    e.open.clone(),
-                    "cx",
-                    &emu(x1 - x0).to_string(),
-                    &mut edits,
-                );
-                scan::set_attr(
-                    &doc,
-                    e.open.clone(),
-                    "cy",
-                    &emu(y1 - y0).to_string(),
-                    &mut edits,
-                );
-            }
-            // The transform of the object says the same in EMU (a chart's frame keeps its own).
-            let obj = object_of(a).filter(|o| o.local() != "graphicFrame");
-            let props = obj.and_then(|o| {
-                o.children
+    let mut doc = d.doc.clone();
+
+    // One pass after another, each on the drawing the one before wrote: an edit of a pass may
+    // span what another changes (the text of the object moved, its shape properties).
+    for pass in 0..3 {
+        let root = scan::tree(&doc, &[]).ok_or("描画のパートを読み取れません")?;
+        let all = units(&root);
+        let at = all
+            .iter()
+            .position(|u| {
+                u.anchors
                     .iter()
-                    .find(|c| c.local() == "spPr" || c.local() == "grpSpPr")
-            });
-            if let Some(xfrm) = props.and_then(|p| p.child("xfrm")) {
-                if let Some(off) = xfrm.child("off") {
-                    scan::set_attr(
-                        &doc,
-                        off.open.clone(),
-                        "x",
-                        &emu(x0).to_string(),
-                        &mut edits,
-                    );
-                    scan::set_attr(
-                        &doc,
-                        off.open.clone(),
-                        "y",
-                        &emu(y0).to_string(),
-                        &mut edits,
-                    );
-                }
-                if let Some(ext) = xfrm.child("ext") {
-                    scan::set_attr(
-                        &doc,
-                        ext.open.clone(),
-                        "cx",
-                        &emu(x1 - x0).to_string(),
-                        &mut edits,
-                    );
-                    scan::set_attr(
-                        &doc,
-                        ext.open.clone(),
-                        "cy",
-                        &emu(y1 - y0).to_string(),
-                        &mut edits,
-                    );
-                }
-            }
+                    .any(|a| name_of(&doc, a).as_deref() == Some(name))
+            })
+            .ok_or_else(missing)?;
+        let unit = &all[at];
+        // A form or ActiveX control is drawn from the sheet's controls and its VML shape too.
+        if unit.anchors.iter().any(|a| first(a, "compatExt").is_some()) {
+            return Err(format!(
+                "`{name}` はコントロールのため、ここでは変更・削除できません（Excel で行ってください）"
+            ));
         }
-    }
-    if let Some(text) = text {
-        for a in &unit.anchors {
-            let obj = object_of(a).filter(|o| o.local() == "sp").ok_or_else(|| {
+        let mut edits = Edits::default();
+        match pass {
+            0 if change.delete => {
+                edits.replace(unit.span.clone(), "");
+                let removed = doc[unit.span.clone()].to_string();
+                let after = edits.apply(&doc);
+                let after = drop_unused(&mut s, &d.part, &removed, after)?;
+                s.put(&d.part, after);
+                return s.finish(None);
+            }
+            0 => {
+                if let Some(place) = &change.place {
+                    for a in &unit.anchors {
+                        // The anchor of a shape turned sideways is its box turned (Excel's).
+                        let rot = object_of(a).map_or(0.0, |o| rot_of(&doc, o));
+                        let now = anchor_box(&doc, &sizes, a)
+                            .map(|b| turn_box(b, rot))
+                            .ok_or_else(|| format!("`{name}` の位置を読み取れません"))?;
+                        let own = (now.2 - now.0, now.3 - now.1);
+                        let new = box_of(&sizes, place, own);
+                        write_anchor(&doc, a, &sizes, turn_box(new, rot), &mut edits);
+                        // The transform of the object says the same in EMU (a chart's frame
+                        // keeps its own).
+                        if let Some(obj) = object_of(a).filter(|o| o.local() != "graphicFrame") {
+                            write_xfrm(&doc, obj, new, &mut edits);
+                        }
+                    }
+                }
+                if let Some(text) = &change.text {
+                    for a in &unit.anchors {
+                        let obj = object_of(a).filter(|o| o.local() == "sp").ok_or_else(|| {
                 format!(
                     "`{name}` には文字を入れられません（図形・テキスト ボックスに入れられます）"
                 )
             })?;
-            set_text(&doc, obj, text, &mut edits);
+                        set_text(&doc, obj, text, &mut edits);
+                    }
+                }
+            }
+            1 => {
+                for a in &unit.anchors {
+                    let Some(obj) = object_of(a) else { continue };
+                    style(&doc, &root, obj, name, change, &mut edits)?;
+                    // Turned to or from sideways: the anchor turns with it.
+                    if let Some(deg) = change.rotation {
+                        let old = rot_of(&doc, obj);
+                        if sideways(old) != sideways(deg)
+                            && let Some(b) = anchor_box(&doc, &sizes, a)
+                        {
+                            let b = turn_box(turn_box(b, old), deg);
+                            write_anchor(&doc, a, &sizes, b, &mut edits);
+                        }
+                    }
+                }
+            }
+            _ => {
+                if let Some(order) = change.order {
+                    let to = match order {
+                        Order::Front if at + 1 < all.len() => Some(root.inner.end),
+                        Order::Forward if at + 1 < all.len() => Some(all[at + 1].span.end),
+                        Order::Backward if at > 0 => Some(all[at - 1].span.start),
+                        Order::Back if at > 0 => Some(all[0].span.start),
+                        _ => None,
+                    };
+                    if let Some(to) = to {
+                        edits.replace(unit.span.clone(), "");
+                        edits.insert(to, doc[unit.span.clone()].to_string());
+                    }
+                }
+            }
+        }
+        if !edits.is_empty() {
+            doc = edits.apply(&doc);
         }
     }
-    if edits.is_empty() {
+    if doc == d.doc {
         return Ok(bytes.to_vec());
     }
-    s.put(&d.part, edits.apply(&doc));
+    s.put(&d.part, doc);
     s.finish(None)
+}
+
+use crate::view::drawing::sideways;
+
+/// The rotation of an object (degrees; its transform's `rot`).
+fn rot_of(doc: &str, obj: &El) -> f64 {
+    obj.children
+        .iter()
+        .find(|c| c.local() == "spPr" || c.local() == "grpSpPr")
+        .and_then(|p| p.child("xfrm"))
+        .and_then(|x| x.attr(doc, "rot"))
+        .and_then(|r| r.parse::<f64>().ok())
+        .map_or(0.0, |r| r / 60000.0)
+}
+
+/// A box turned a quarter around its center (width and height swapped) when `rot` turns it
+/// sideways: an object's box from its anchor, and its anchor from its box.
+fn turn_box(b: (f64, f64, f64, f64), rot: f64) -> (f64, f64, f64, f64) {
+    if !sideways(rot) {
+        return b;
+    }
+    let (cx, cy) = ((b.0 + b.2) / 2.0, (b.1 + b.3) / 2.0);
+    let (hw, hh) = ((b.2 - b.0) / 2.0, (b.3 - b.1) / 2.0);
+    (cx - hh, cy - hw, cx + hh, cy + hw)
+}
+
+/// The anchor of an object written for a box (px): its markers, or its position and size.
+fn write_anchor(doc: &str, a: &El, sizes: &Sizes, b: (f64, f64, f64, f64), edits: &mut Edits) {
+    let (x0, y0) = (b.0.max(0.0), b.1.max(0.0));
+    let (x1, y1) = (b.2.max(x0), b.3.max(y0));
+    let x = scan::prefix(a.name).to_string();
+    for (tag, px, py) in [("from", x0, y0), ("to", x1, y1)] {
+        if let Some(m) = a.child(tag) {
+            edits.replace(m.span(), marker_xml(&x, tag, sizes, px, py));
+        }
+    }
+    if let Some(p) = a.child("pos") {
+        scan::set_attr(doc, p.open.clone(), "x", &emu(x0).to_string(), edits);
+        scan::set_attr(doc, p.open.clone(), "y", &emu(y0).to_string(), edits);
+    }
+    if let Some(e) = a.child("ext") {
+        scan::set_attr(doc, e.open.clone(), "cx", &emu(x1 - x0).to_string(), edits);
+        scan::set_attr(doc, e.open.clone(), "cy", &emu(y1 - y0).to_string(), edits);
+    }
+}
+
+/// The offset and size of an object's transform written for its box (px).
+fn write_xfrm(doc: &str, obj: &El, b: (f64, f64, f64, f64), edits: &mut Edits) {
+    let Some(xfrm) = obj
+        .children
+        .iter()
+        .find(|c| c.local() == "spPr" || c.local() == "grpSpPr")
+        .and_then(|p| p.child("xfrm"))
+    else {
+        return;
+    };
+    if let Some(off) = xfrm.child("off") {
+        scan::set_attr(doc, off.open.clone(), "x", &emu(b.0).to_string(), edits);
+        scan::set_attr(doc, off.open.clone(), "y", &emu(b.1).to_string(), edits);
+    }
+    if let Some(ext) = xfrm.child("ext") {
+        scan::set_attr(
+            doc,
+            ext.open.clone(),
+            "cx",
+            &emu(b.2 - b.0).to_string(),
+            edits,
+        );
+        scan::set_attr(
+            doc,
+            ext.open.clone(),
+            "cy",
+            &emu(b.3 - b.1).to_string(),
+            edits,
+        );
+    }
+}
+
+/// The fills of shape properties (`EG_FillProperties`).
+const FILLS: [&str; 6] = [
+    "noFill",
+    "solidFill",
+    "gradFill",
+    "blipFill",
+    "pattFill",
+    "grpFill",
+];
+
+/// The fill, line, rotation and flips of an object of the drawing changed (its shape
+/// properties, `spPr`, written again with its children in the schema's order).
+fn style(
+    doc: &str,
+    root: &El,
+    obj: &El,
+    name: &str,
+    change: &ObjectChange,
+    edits: &mut Edits,
+) -> Result<()> {
+    let kind = obj.local();
+    let fill = change.fill.as_ref();
+    let line = change.line.is_some() || change.line_width.is_some();
+    let turn = change.rotation.is_some() || change.flip_h.is_some() || change.flip_v.is_some();
+    if !(fill.is_some() || line || turn) {
+        return Ok(());
+    }
+    if kind == "graphicFrame" {
+        return Err(format!(
+            "`{name}` はグラフのため、ここでは書式・回転を変えられません（Excel で行ってください）"
+        ));
+    }
+    if (fill.is_some() || line) && kind == "grpSp" {
+        return Err(format!(
+            "`{name}` はグループのため、塗りつぶし・線を変えられません（グループの中の図形ごとに Excel で行ってください）"
+        ));
+    }
+    if fill.is_some() && kind == "cxnSp" {
+        return Err(format!("`{name}` は線のため、塗りつぶしはありません"));
+    }
+    let Some(props) = obj
+        .children
+        .iter()
+        .find(|c| c.local() == "spPr" || c.local() == "grpSpPr")
+    else {
+        return Err(format!("`{name}` の書式を読み取れません"));
+    };
+    // The prefix of DrawingML: as its children have it, as the drawing declares it, or `a:`
+    // declared where it is written.
+    let (a, decl) = match props
+        .children
+        .first()
+        .map(|c| scan::prefix(c.name).to_string())
+        .or_else(|| ns_prefix(doc, root, A_NS))
+    {
+        Some(p) => (p, String::new()),
+        None => ("a:".to_string(), format!(" xmlns:a=\"{A_NS}\"")),
+    };
+    let color_xml = |c: &Option<String>| match c {
+        Some(c) => format!("<{a}solidFill{decl}><{a}srgbClr val=\"{c}\"/></{a}solidFill>"),
+        None => format!("<{a}noFill{decl}/>"),
+    };
+    let mut kids: Vec<(String, String)> = props
+        .children
+        .iter()
+        .map(|c| (c.local().to_string(), doc[c.span()].to_string()))
+        .collect();
+    let mut changed = false;
+    if turn {
+        let Some(i) = kids.iter().position(|k| k.0 == "xfrm") else {
+            return Err(format!("`{name}` の位置と大きさ（xfrm）を読み取れません"));
+        };
+        let mut attrs: Vec<(&str, Option<String>)> = Vec::new();
+        if let Some(deg) = change.rotation {
+            let rot = ((deg * 60000.0).round() as i64).rem_euclid(21_600_000);
+            attrs.push(("rot", (rot != 0).then(|| rot.to_string())));
+        }
+        for (key, on) in [("flipH", change.flip_h), ("flipV", change.flip_v)] {
+            if let Some(on) = on {
+                attrs.push((key, on.then(|| "1".to_string())));
+            }
+        }
+        kids[i].1 = with_attrs(&kids[i].1, &attrs);
+        changed = true;
+    }
+    if let Some(fill) = fill {
+        kids.retain(|k| !FILLS.contains(&k.0.as_str()));
+        let at = kids
+            .iter()
+            .rposition(|k| matches!(k.0.as_str(), "xfrm" | "custGeom" | "prstGeom"))
+            .map_or(0, |i| i + 1);
+        kids.insert(at, ("solidFill".into(), color_xml(fill)));
+        changed = true;
+    }
+    if line {
+        let w = change
+            .line_width
+            .map(|pt| ((pt * 12700.0).round() as i64).to_string());
+        match kids.iter().position(|k| k.0 == "ln") {
+            Some(i) => {
+                let ln = match &w {
+                    Some(w) => with_attrs(&kids[i].1, &[("w", Some(w.clone()))]),
+                    None => kids[i].1.clone(),
+                };
+                let ln_el = scan::tree(&ln, &[]).ok_or("線の書式を読み取れません")?;
+                let mut inner: Vec<String> = ln_el
+                    .children
+                    .iter()
+                    .filter(|c| change.line.is_none() || !FILLS.contains(&c.local()))
+                    .map(|c| ln[c.span()].to_string())
+                    .collect();
+                if let Some(c) = &change.line {
+                    // (The line's fill comes first in it.)
+                    inner.insert(0, color_xml(c));
+                }
+                kids[i].1 = format!(
+                    "{}{}</{}>",
+                    open_tag(&ln, &ln_el),
+                    inner.concat(),
+                    ln_el.name
+                );
+            }
+            None => {
+                let at = kids
+                    .iter()
+                    .rposition(|k| {
+                        matches!(k.0.as_str(), "xfrm" | "custGeom" | "prstGeom")
+                            || FILLS.contains(&k.0.as_str())
+                    })
+                    .map_or(0, |i| i + 1);
+                let w = w.map(|w| format!(" w=\"{w}\"")).unwrap_or_default();
+                let fill = change.line.as_ref().map(color_xml).unwrap_or_default();
+                kids.insert(at, ("ln".into(), format!("<{a}ln{w}{decl}>{fill}</{a}ln>")));
+            }
+        }
+        changed = true;
+    }
+    if changed {
+        let body: String = kids.into_iter().map(|k| k.1).collect();
+        edits.replace(
+            props.span(),
+            format!("{}{body}</{}>", open_tag(doc, props), props.name),
+        );
+    }
+    Ok(())
+}
+
+/// The start tag of an element written as one with content (`<a/>` → `<a>`).
+fn open_tag(doc: &str, el: &El) -> String {
+    let tag = &doc[el.open.clone()];
+    match tag.strip_suffix("/>") {
+        Some(head) if el.open.end == el.end => format!("{}>", head.trim_end()),
+        _ => tag.to_string(),
+    }
+}
+
+/// An element (its text) with attributes of its start tag set, or (None) taken away.
+fn with_attrs(text: &str, attrs: &[(&str, Option<String>)]) -> String {
+    let mut text = text.to_string();
+    for (name, value) in attrs {
+        let Some(el) = scan::tree(&text, &[]) else {
+            return text;
+        };
+        let mut edits = Edits::default();
+        match value {
+            Some(v) => scan::set_attr(&text, el.open.clone(), name, v, &mut edits),
+            None => {
+                if let Some(v) = scan::attr_span(&text, el.open.clone(), name) {
+                    // ` name="value"`: from the space before it to the quote after it.
+                    let head = &text[el.open.start..v.start - 1];
+                    if let Some(eq) = head.rfind('=') {
+                        let start = el.open.start + head[..eq].trim_end().len() - name.len();
+                        let start = text[..start].trim_end().len();
+                        edits.replace(start..v.end + 1, "");
+                    }
+                }
+            }
+        }
+        text = edits.apply(&text);
+    }
+    text
 }
 
 /// The text of a shape replaced: its paragraphs, one a line, keep the first one's paragraph

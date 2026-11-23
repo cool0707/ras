@@ -201,13 +201,12 @@ pub enum Op {
         data: Vec<u8>,
     },
     /// An object of the sheet's drawing (a shape, a picture, a chart; by its name) moved and
-    /// sized, given a text (a shape), or deleted.
+    /// sized, given a text (a shape), a fill, a line, a rotation, brought forward or sent
+    /// backward, or deleted.
     Object {
         sheet: String,
         name: String,
-        place: Option<Place>,
-        text: Option<String>,
-        delete: bool,
+        change: ObjectChange,
     },
     /// A table made of `range` (a single cell: the data around it), as Excel's "テーブルの作成"
     /// makes it. `header`: its first row is the headings; otherwise a row of headings (列1,
@@ -236,6 +235,40 @@ pub enum Place {
         width: Option<f64>,
         height: Option<f64>,
     },
+}
+
+/// What an `object` edit changes of an object of the drawing (None: what it has stays).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectChange {
+    /// Moved and sized.
+    pub place: Option<Place>,
+    /// The text of a shape.
+    pub text: Option<String>,
+    /// The fill (`RRGGBB`; None: 塗りつぶしなし), of a shape or a picture.
+    pub fill: Option<Option<String>>,
+    /// The color of the line (`RRGGBB`; None: 線なし), and its width in points.
+    pub line: Option<Option<String>>,
+    pub line_width: Option<f64>,
+    /// The rotation clockwise in degrees, and whether it is flipped.
+    pub rotation: Option<f64>,
+    pub flip_h: Option<bool>,
+    pub flip_v: Option<bool>,
+    /// Its place among the objects drawn over one another.
+    pub order: Option<Order>,
+    pub delete: bool,
+}
+
+/// Where an object goes among those drawn over one another (配置 > 前面へ移動, ...).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Order {
+    /// 最前面へ移動.
+    Front,
+    /// 前面へ移動: over the object drawn after it.
+    Forward,
+    /// 背面へ移動: under the object drawn before it.
+    Backward,
+    /// 最背面へ移動.
+    Back,
 }
 
 /// Where a hyperlink goes.
@@ -738,19 +771,58 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
             }
             "object" => {
                 let name = text("name").filter(|n| !n.is_empty()).ok_or("`name`（図形・画像の名前）がありません")?;
-                let delete = o.get("delete").and_then(Json::as_bool).unwrap_or(false);
-                let place = place_of(o)?;
-                let new_text = text("text");
-                if !delete && place.is_none() && new_text.is_none() {
-                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`delete` のどれかを指定してください".into());
+                // A color "#RRGGBB", or null for none.
+                let color = |key: &str| -> Result<Option<Option<String>>> {
+                    match o.get(key) {
+                        None => Ok(None),
+                        Some(Json::Null) => Ok(Some(None)),
+                        Some(v) => {
+                            let c = v.as_str().unwrap_or("").trim().trim_start_matches('#');
+                            if c.len() != 6 || !c.bytes().all(|b| b.is_ascii_hexdigit()) {
+                                return Err(format!("`{key}` は \"#RRGGBB\" か null（なし）で指定してください"));
+                            }
+                            Ok(Some(Some(c.to_ascii_uppercase())))
+                        }
+                    }
+                };
+                let number = |key: &str, max: f64| -> Result<Option<f64>> {
+                    match o.get(key) {
+                        None | Some(Json::Null) => Ok(None),
+                        Some(v) => v
+                            .as_f64()
+                            .filter(|x| x.is_finite() && x.abs() <= max)
+                            .map(Some)
+                            .ok_or_else(|| format!("`{key}` は数で指定してください")),
+                    }
+                };
+                let line_width = number("lineWidth", 1584.0)?;
+                if line_width.is_some_and(|w| w < 0.0) {
+                    return Err("`lineWidth` は 0〜1584（ポイント）で指定してください".into());
                 }
-                Op::Object {
-                    sheet,
-                    name,
-                    place,
-                    text: new_text,
-                    delete,
+                let order = match text("order").as_deref() {
+                    None => None,
+                    Some("front") => Some(Order::Front),
+                    Some("forward") => Some(Order::Forward),
+                    Some("backward") => Some(Order::Backward),
+                    Some("back") => Some(Order::Back),
+                    Some(other) => return Err(format!("`order` `{other}` は指定できません（front / forward / backward / back）")),
+                };
+                let change = ObjectChange {
+                    place: place_of(o)?,
+                    text: text("text"),
+                    fill: color("fill")?,
+                    line: color("line")?,
+                    line_width,
+                    rotation: number("rotation", 1e6)?,
+                    flip_h: o.get("flipH").and_then(Json::as_bool),
+                    flip_v: o.get("flipV").and_then(Json::as_bool),
+                    order,
+                    delete: o.get("delete").and_then(Json::as_bool).unwrap_or(false),
+                };
+                if change == (ObjectChange { delete: false, ..Default::default() }) {
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`order`、`delete` のどれかを指定してください".into());
                 }
+                Op::Object { sheet, name, change }
             }
             other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object）")),
         });
@@ -798,17 +870,8 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
             Op::Object {
                 sheet,
                 name,
-                place,
-                text,
-                delete,
-            } => drawing::object(
-                &bytes,
-                sheet,
-                name,
-                place.as_ref(),
-                text.as_deref(),
-                *delete,
-            )?,
+                change,
+            } => drawing::object(&bytes, sheet, name, change)?,
             Op::Table {
                 sheet,
                 range,

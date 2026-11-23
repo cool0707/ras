@@ -87,6 +87,11 @@ td.fml { font-family: Consolas, "MS Gothic", monospace; font-size: 10pt; color: 
 .obj img { display: block; }
 /* Objects edited with the mouse: moved by dragging, sized by their handles; drawn shapes. */
 .obj.movable { cursor: move; }
+.obj.on.framed { outline: 0; box-shadow: none; }
+.objframe { position: absolute; inset: 0; z-index: 2; pointer-events: none; outline: 1px solid var(--accent); outline-offset: 1px; box-shadow: 0 0 0 3px rgba(228, 80, 26, .25); }
+.objframe .objhandle { pointer-events: auto; }
+.objhandle.rot { top: -22px; left: calc(50% - 5px); width: 10px; height: 10px; cursor: grab; background: var(--accent); border-color: #fff; }
+.objhandle.rot::after { content: ""; position: absolute; left: 3.5px; top: 9px; width: 1px; height: 12px; background: var(--accent); }
 .objhandle { position: absolute; z-index: 2; width: 7px; height: 7px; box-sizing: border-box; background: #fff; border: 1px solid var(--accent); border-radius: 50%; }
 .objhandle.nw, .objhandle.n, .objhandle.ne { top: -5px; }
 .objhandle.sw, .objhandle.s, .objhandle.se { bottom: -5px; }
@@ -213,6 +218,7 @@ body.busy, body.busy td, body.busy th { cursor: progress; }
 #ribbon .rbtn.on { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-ink); }
 #ribbon .rbtn.large { flex-direction: column; justify-content: flex-start; gap: 2px; height: 78px; min-width: 46px; max-width: 80px; padding: 4px 4px 2px; white-space: normal; text-align: center; line-height: 1.2; }
 #ribbon .rbtn.large.two { max-width: 96px; }
+#ribbon .rtab.context { color: var(--accent-ink); }
 #ribbon .rbtn.large .lbl { font-size: 12px; }
 #ribbon .rbtn .caret { font-size: 9px; color: #555; }
 #ribbon .rbtn.large .caret { line-height: 1; }

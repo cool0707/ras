@@ -101,6 +101,9 @@ impl Controls {
             assignable: c.activex.is_none() && c.kind != "Pict",
             shape_id: Some(c.shape_id),
             text: None,
+            element: "",
+            rot: 0.0,
+            flip: (false, false),
         })
     }
 }

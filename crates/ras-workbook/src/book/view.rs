@@ -758,6 +758,18 @@ impl Book {
                 if let Some(text) = &o.text {
                     j["text"] = json!(text);
                 }
+                if !o.element.is_empty() {
+                    j["el"] = json!(o.element);
+                }
+                if o.rot != 0.0 {
+                    j["rot"] = json!(o.rot);
+                }
+                if o.flip.0 {
+                    j["flipH"] = json!(true);
+                }
+                if o.flip.1 {
+                    j["flipV"] = json!(true);
+                }
                 if let Some(c) = &o.chart {
                     j["chart"] = c.clone();
                 }

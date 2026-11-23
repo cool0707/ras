@@ -250,6 +250,11 @@ pub struct Obj {
     pub shape_id: Option<u32>,
     /// The text of a shape that can hold one (paragraphs on lines of their own).
     pub text: Option<String>,
+    /// The element of the drawing (`sp`, `cxnSp`, `pic`, `grpSp`, `graphicFrame`; empty for
+    /// a control), its rotation (degrees) and flips.
+    pub element: &'static str,
+    pub rot: f64,
+    pub flip: (bool, bool),
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -308,6 +313,13 @@ pub(crate) fn image_mime(part: &str) -> Option<&'static str> {
         "tif" | "tiff" => "image/tiff",
         _ => return None,
     })
+}
+
+/// Whether a rotation (degrees) turns an object sideways: Excel then anchors it by its box
+/// turned a quarter around its center (from 45° to 135°, from 225° to 315°).
+pub(crate) fn sideways(rot: f64) -> bool {
+    let r = rot.rem_euclid(360.0);
+    (45.0..135.0).contains(&r) || (225.0..315.0).contains(&r)
 }
 
 /// What the drawing of a sheet needs from the workbook.
@@ -475,6 +487,9 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 assignable: true,
                 shape_id: None,
                 text: None,
+                element: "graphicFrame",
+                rot: 0.0,
+                flip: (false, false),
             });
             return;
         }
@@ -492,12 +507,18 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 assignable: true,
                 shape_id: None,
                 text: None,
+                element: "graphicFrame",
+                rot: 0.0,
+                flip: (false, false),
             });
         }
         return;
     }
     // The box comes from the anchor (the shape's xfrm says the same in EMU).
+    // (A shape turned sideways: its anchor is its box turned.)
+    let turned = xfrm(obj).is_some_and(|x| sideways(x.rot));
     let ext = (env.size)(&anchor)
+        .map(|(w, h)| if turned { (h, w) } else { (w, h) })
         .or_else(|| xfrm(obj).map(|x| x.ext))
         .filter(|e| e.0 > 0.0 && e.1 > 0.0);
     let html = object_html(ctx, obj, None, ext);
@@ -519,6 +540,14 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
             assignable: obj.name != "grpSp",
             shape_id: None,
             text: (obj.name == "sp").then(|| shape_text(obj)),
+            element: match obj.name.as_str() {
+                "sp" => "sp",
+                "cxnSp" => "cxnSp",
+                "pic" => "pic",
+                _ => "grpSp",
+            },
+            rot: xfrm(obj).map_or(0.0, |x| x.rot),
+            flip: xfrm(obj).map_or((false, false), |x| (x.flip_h, x.flip_v)),
         });
     }
 }

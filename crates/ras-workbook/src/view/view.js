@@ -74,11 +74,13 @@
     function clearSelection() {
         if (selected) {
             selected.classList.remove("on");
-            for (const h of selected.querySelectorAll(".objhandle")) h.remove();
+            selected.classList.remove("framed");
+            for (const f of selected.querySelectorAll(".objframe")) f.remove();
         }
         selected = null;
         selectedObj = null;
         refreshEventButton();
+        refreshShapeTools();
         if (activeTd) activeTd.classList.remove("sel");
         activeTd = null;
         if (view) {
@@ -199,6 +201,7 @@
         box.classList.add("on");
         addHandles(box, obj);
         refreshEventButton();
+        refreshShapeTools();
         $("name").value = obj.name || "";
         $("fx").textContent = obj.macro ? `マクロ: ${obj.macro}` : "";
     }
@@ -809,6 +812,12 @@
             else if (obj.ext) [x2, y2] = [x + obj.ext[0], y + obj.ext[1]];
             else continue;
             if (!(x2 >= x && y2 >= y)) continue;
+            // Turned sideways (45° to 135°, 225° to 315°): Excel anchors its box turned a quarter.
+            const r = (((obj.rot || 0) % 360) + 360) % 360;
+            if ((r >= 45 && r < 135) || (r >= 225 && r < 315)) {
+                const [cx, cy, hw, hh] = [(x + x2) / 2, (y + y2) / 2, (x2 - x) / 2, (y2 - y) / 2];
+                [x, y, x2, y2] = [cx - hh, cy - hw, cx + hh, cy + hw];
+            }
             const box = layer.appendChild(el("div", `obj ${obj.kind}`));
             Object.assign(box.style, { left: `${x}px`, top: `${y}px`, width: `${x2 - x}px`, height: `${y2 - y}px` });
             pinTo(box, pinOf(v, { x, y, w: x2 - x, h: y2 - y }));
@@ -2611,10 +2620,16 @@
     }
     // The handles of the selected object: its sides and corners size it.
     const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+    // (In a frame turned as the object is; above it, the handle that turns it.)
     function addHandles(box, obj) {
         if (!movable(obj)) return;
-        for (const h of HANDLES) {
-            const d = box.appendChild(el("div", `objhandle ${h}`));
+        box.classList.add("framed");
+        const frame = box.appendChild(el("div", "objframe"));
+        if (obj.rot) frame.style.transform = `rotate(${obj.rot}deg)`;
+        const handles = canTurn(obj) ? HANDLES.concat(["rot"]) : HANDLES;
+        for (const h of handles) {
+            const d = frame.appendChild(el("div", `objhandle ${h}`));
+            if (h === "rot") d.title = "回転（Shift で 15° ずつ）";
             d.addEventListener("mousedown", (e) => {
                 if (e.button !== 0) return;
                 e.preventDefault();
@@ -2626,7 +2641,8 @@
     function beginObjectDrag(e, box, obj, how) {
         if (busy || !view) return;
         if (entry) commit(null);
-        objDrag = { obj, box, how, x: e.clientX, y: e.clientY, from: boxOfObject(box), ghost: null, now: null };
+        const r = box.getBoundingClientRect();
+        objDrag = { obj, box, how, x: e.clientX, y: e.clientY, from: boxOfObject(box), center: [r.left + r.width / 2, r.top + r.height / 2], ghost: null, now: null };
     }
     function dragObject(e) {
         const d = objDrag;
@@ -2639,6 +2655,18 @@
         if (!d.ghost && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
         const f = d.from;
         let { x, y, w, h } = f;
+        const turn = ((d.obj.rot || 0) * Math.PI) / 180;
+        if (d.how === "rot") {
+            // The angle of the mouse around the object's center (0: above it).
+            let deg = (Math.atan2(e.clientY - d.center[1], e.clientX - d.center[0]) * 180) / Math.PI + 90;
+            if (e.shiftKey) deg = Math.round(deg / 15) * 15;
+            deg = ((Math.round(deg) % 360) + 360) % 360;
+            if (!d.ghost) d.ghost = makeGhost(false);
+            d.now = { rot: deg };
+            ghostAt(d.ghost, f.x, f.y, f.x + f.w, f.y + f.h, false);
+            d.ghost.style.transform = `rotate(${deg}deg)`;
+            return;
+        }
         if (d.how === "move") {
             // Shift: across or down only.
             if (e.shiftKey) {
@@ -2647,22 +2675,31 @@
             }
             [x, y] = [f.x + dx, f.y + dy];
         } else {
-            if (d.how.includes("w")) [x, w] = [f.x + Math.min(dx, f.w), f.w - Math.min(dx, f.w)];
-            if (d.how.includes("e")) w = Math.max(0, f.w + dx);
-            if (d.how.includes("n")) [y, h] = [f.y + Math.min(dy, f.h), f.h - Math.min(dy, f.h)];
-            if (d.how.includes("s")) h = Math.max(0, f.h + dy);
+            // Along the object's own sides when it is turned: the mouse's move in its frame.
+            const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
+            const [lx, ly] = [dx * cos + dy * sin, -dx * sin + dy * cos];
+            let [x0, y0] = [0, 0];
+            if (d.how.includes("w")) [x0, w] = [Math.min(lx, f.w), f.w - Math.min(lx, f.w)];
+            if (d.how.includes("e")) w = Math.max(0, f.w + lx);
+            if (d.how.includes("n")) [y0, h] = [Math.min(ly, f.h), f.h - Math.min(ly, f.h)];
+            if (d.how.includes("s")) h = Math.max(0, f.h + ly);
             // A picture keeps its proportion by its corners (Shift: a shape too).
             if (d.how.length === 2 && (d.obj.kind === "picture" || e.shiftKey) && f.w > 0 && f.h > 0) {
                 const k = Math.max(w / f.w, h / f.h);
                 const [nw, nh] = [f.w * k, f.h * k];
-                if (d.how.includes("w")) x = f.x + f.w - nw;
-                if (d.how.includes("n")) y = f.y + f.h - nh;
+                if (d.how.includes("w")) x0 = f.w - nw;
+                if (d.how.includes("n")) y0 = f.h - nh;
                 [w, h] = [nw, nh];
             }
+            // The side across stays where it is: the center moves by the change turned back.
+            const [sx, sy] = [x0 + w / 2 - f.w / 2, y0 + h / 2 - f.h / 2];
+            const [cx, cy] = [f.x + f.w / 2 + sx * cos - sy * sin, f.y + f.h / 2 + sx * sin + sy * cos];
+            [x, y] = [cx - w / 2, cy - h / 2];
         }
         if (!d.ghost) d.ghost = makeGhost(false);
         d.now = { x, y, w, h };
         ghostAt(d.ghost, x, y, x + w, y + h, false);
+        if (turn) d.ghost.style.transform = `rotate(${d.obj.rot}deg)`;
     }
     function endObjectDrag() {
         const d = objDrag;
@@ -2671,7 +2708,8 @@
         d.ghost.remove();
         swallowClick = true;
         setTimeout(() => (swallowClick = false));
-        moveObject(d.obj, d.now);
+        if (d.how === "rot") objectEdit(d.obj, { rotation: d.now.rot });
+        else moveObject(d.obj, d.now);
     }
     // The arrow keys move the selected object by a pixel (Ctrl: by 10).
     function nudgeObject(obj, box, dr, dc, far) {
@@ -2679,6 +2717,68 @@
         const b = boxOfObject(box);
         const step = far ? 10 : 1;
         moveObject(obj, { x: b.x + dc * step, y: b.y + dr * step, w: b.w, h: b.h });
+    }
+
+    // ---- 図形の書式: the fill, the line, the rotation, the order of the object selected
+
+    // What can be given a fill (a shape, a picture; not a line, a group or a chart), a line, a
+    // rotation (not a chart).
+    const canFill = (obj) => movable(obj) && (obj.el === "sp" || obj.el === "pic");
+    const canLine = (obj) => movable(obj) && (obj.el === "sp" || obj.el === "pic" || obj.el === "cxnSp");
+    const canTurn = (obj) => movable(obj) && !!obj.el && obj.el !== "graphicFrame";
+    function objectEdit(obj, change) {
+        if (!movable(obj) || busy || !view) return;
+        pickAfter(obj.name);
+        postEdit([{ op: "object", sheet: view.sheet.name, name: obj.name, ...change }]);
+    }
+    // Turned by `by` degrees (clockwise), as 右へ 90 度回転 turns it.
+    function turnObject(obj, by) {
+        if (canTurn(obj)) objectEdit(obj, { rotation: ((((obj.rot || 0) + by) % 360) + 360) % 360 });
+    }
+    // 上下反転 / 左右反転: flipped as it is seen, a turned object turned the other way too.
+    function flipObject(obj, vertical) {
+        if (!canTurn(obj)) return;
+        const change = vertical ? { flipV: !obj.flipV } : { flipH: !obj.flipH };
+        if (obj.rot) change.rotation = (360 - obj.rot) % 360;
+        objectEdit(obj, change);
+    }
+    // その他の回転オプション: the angle typed.
+    function askRotation(obj) {
+        if (!canTurn(obj) || busy) return;
+        const form = openDialog(`回転（${obj.name}）`, "rotdlg");
+        const input = field(form, "回転角度（°）:", "number");
+        input.min = "-3600";
+        input.max = "3600";
+        input.step = "1";
+        input.value = String(Math.round(obj.rot || 0));
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const deg = +input.value;
+            if (!isFinite(deg)) return;
+            closeDialog();
+            objectEdit(obj, { rotation: (((deg % 360) + 360) % 360) });
+        });
+        input.focus();
+        input.select();
+    }
+    const ORDERS = [
+        ["front", "最前面へ移動"],
+        ["forward", "前面へ移動"],
+        ["backward", "背面へ移動"],
+        ["back", "最背面へ移動"],
+    ];
+    const LINE_WIDTHS = [0.25, 0.5, 0.75, 1, 1.5, 2.25, 3, 4.5, 6];
+    // The contextual tab of the ribbon: shown while an object that can be changed is selected.
+    function refreshShapeTools() {
+        const ribbon = $("ribbon");
+        if (!ribbon || !ribbon.showShapeTab) return;
+        const obj = selected && movable(selectedObj) ? selectedObj : null;
+        ribbon.showShapeTab(!!obj);
+        if (!obj) return;
+        tools.shapeFill.disabled = tools.shapeFillMore.disabled = !canFill(obj);
+        tools.shapeLine.disabled = tools.shapeLineMore.disabled = !canLine(obj);
+        tools.rotate.disabled = !canTurn(obj);
     }
 
     // 挿入 > 画像: a picture from a file, at the active cell (shrunk to the window when larger).
@@ -2929,6 +3029,9 @@
         if (movable(obj)) {
             if (obj.text !== undefined) items.push(["テキストの編集…", () => editObjectText(obj), "F2"]);
             items.push(["削除", () => deleteObject(obj), "Delete"]);
+            items.push(null);
+            for (const [how, label] of ORDERS) items.push([label, () => objectEdit(obj, { order: how }), ""]);
+            if (canTurn(obj)) items.push(["回転…", () => askRotation(obj), ""]);
         }
         const more = eventItems(obj);
         if (items.length && more.length) items.push(null);
@@ -3039,9 +3142,10 @@
         format({ [name]: color });
     }
     // The colors to choose from; `name` is the format ("color", "fill"), `none` what no color is called.
-    function openColors(anchor, name, none) {
+    // `pick`: what the color chosen is for (else the cells' format).
+    function openColors(anchor, name, none, pick) {
         const pop = openPop(anchor, "colors");
-        popItem(pop, none, () => format({ [name]: null }));
+        popItem(pop, none, () => (pick ? pick(null) : format({ [name]: null })));
         const grid = pop.appendChild(el("div", "swatches"));
         for (const color of PALETTE) {
             const b = grid.appendChild(el("button", "swatch"));
@@ -3052,7 +3156,8 @@
             b.addEventListener("click", () => {
                 closeMenu();
                 focusGrid();
-                useColor(name, color.toUpperCase());
+                if (pick) pick(color.toUpperCase());
+                else useColor(name, color.toUpperCase());
             });
         }
         // Any other color, as #RRGGBB.
@@ -3068,7 +3173,8 @@
             if (!m) return;
             closeMenu();
             focusGrid();
-            useColor(name, `#${m[1].toUpperCase()}`);
+            if (pick) pick(`#${m[1].toUpperCase()}`);
+            else useColor(name, `#${m[1].toUpperCase()}`);
         });
     }
     const BORDERS = [["bottom", "下罫線"], ["top", "上罫線"], ["left", "左罫線"], ["right", "右罫線"], ["none", "枠なし"], ["all", "格子"], ["outline", "外枠"], ["thick", "太い外枠"]];
@@ -3192,6 +3298,10 @@
         picture: '<rect x="1.5" y="2.5" width="13" height="11" rx="1"/><circle cx="5.5" cy="6" r="1.3"/><path d="m1.5 12 4-4 3 3 2-2 4 4"/>',
         shapes: '<circle cx="5.5" cy="5.5" r="4"/><rect x="7.5" y="7.5" width="7" height="7" fill="#fff"/>',
         textBox: '<rect x="1.5" y="2.5" width="13" height="11"/><path d="M4.5 5.5h7M8 5.5v6"/>',
+        shapeLine: '<path d="M12.5 1.5 5 9l-1 3 3-1 7.5-7.5z"/>',
+        forward: '<rect x="1.5" y="1.5" width="8" height="8" stroke-dasharray="1.5 1.5"/><rect x="6.5" y="6.5" width="8" height="8" fill="#dbe5f1"/>',
+        backward: '<rect x="6.5" y="6.5" width="8" height="8" stroke-dasharray="1.5 1.5"/><rect x="1.5" y="1.5" width="8" height="8" fill="#dbe5f1"/>',
+        rotate: '<path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M12 1.5v3.2H8.8"/>',
     };
     function icon(name, large) {
         const s = large ? 30 : 16;
@@ -3217,14 +3327,15 @@
         const panels = {};
         let shown = saved.ribbonTab || "home";
         let collapsed = saved.ribbonCollapsed === undefined ? !editable : saved.ribbonCollapsed;
-        const show = (key) => {
+        // `keep`: the tab chosen stays remembered (a contextual tab hidden for a while).
+        const show = (key, keep) => {
             shown = key;
             for (const [k, p] of Object.entries(panels)) {
                 p.panel.hidden = k !== key;
                 p.tab.classList.toggle("on", k === key);
                 p.tab.setAttribute("aria-selected", String(k === key));
             }
-            remember({ ribbonTab: key });
+            if (!keep) remember({ ribbonTab: key });
         };
         const setCollapsed = (on) => {
             collapsed = on;
@@ -3661,6 +3772,77 @@
         group(viewTab, "ウィンドウ");
         button("freeze", { icon: "freeze", label: "ウィンドウ枠の固定", large: true, cls: "two", edits: true, menu: (anchor) => openFreeze(anchor) });
 
+        // ---- 図形の書式 (shown while a shape, a picture or a chart is selected)
+        const shapeTab = tab("shapeFormat", "図形の書式");
+        panels.shapeFormat.tab.hidden = true;
+        panels.shapeFormat.tab.classList.add("context");
+        const onObj = (act) => () => selectedObj && act(selectedObj);
+        group(shapeTab, "図形のスタイル");
+        const lastShape = { fill: "#4472C4", line: "#000000" };
+        const shapeColor = (key, iconName, label, none, more) => {
+            const pick = (color) => {
+                if (color) {
+                    lastShape[key] = color;
+                    const bar = tools[key === "fill" ? "shapeFill" : "shapeLine"].querySelector(".bar");
+                    if (bar) bar.style.background = color;
+                }
+                if (selectedObj) objectEdit(selectedObj, { [key]: color });
+            };
+            const b = button(key === "fill" ? "shapeFill" : "shapeLine", {
+                icon: iconName,
+                label,
+                showLabel: true,
+                title: label,
+                moreTitle: `${label}の選択`,
+                split: true,
+                cls: "color",
+                act: () => pick(lastShape[key]),
+                menu: (anchor) => {
+                    openColors(anchor, key, none, pick);
+                    if (more) more(menu);
+                },
+            });
+            b.querySelector(".ico").appendChild(el("span", "bar")).style.background = lastShape[key];
+        };
+        stack();
+        shapeColor("fill", "fill", "図形の塗りつぶし", "塗りつぶしなし");
+        shapeColor("line", "shapeLine", "図形の枠線", "枠線なし", (pop) => {
+            head(pop, "太さ");
+            for (const w of LINE_WIDTHS) item(pop, `${w} pt`, onObj((obj) => objectEdit(obj, { lineWidth: w })));
+        });
+        group(shapeTab, "配置");
+        const orderButton = (key, iconName, label, one, all) => {
+            button(key, {
+                icon: iconName,
+                label,
+                large: true,
+                split: true,
+                cls: "two",
+                title: label,
+                act: onObj((obj) => objectEdit(obj, { order: one })),
+                menu: (anchor) => {
+                    const pop = openPop(anchor, "orders");
+                    for (const [how, text] of ORDERS.filter(([how]) => how === one || how === all)) item(pop, text, onObj((obj) => objectEdit(obj, { order: how })));
+                },
+            });
+        };
+        orderButton("forward", "forward", "前面へ移動", "forward", "front");
+        orderButton("backward", "backward", "背面へ移動", "backward", "back");
+        button("rotate", {
+            icon: "rotate",
+            label: "回転",
+            large: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "rotates");
+                item(pop, "右へ 90 度回転", onObj((obj) => turnObject(obj, 90)));
+                item(pop, "左へ 90 度回転", onObj((obj) => turnObject(obj, -90)));
+                item(pop, "上下反転", onObj((obj) => flipObject(obj, true)));
+                item(pop, "左右反転", onObj((obj) => flipObject(obj, false)));
+                pop.appendChild(el("hr"));
+                item(pop, "その他の回転オプション…", onObj(askRotation));
+            },
+        });
+
         // ---- 開発 (where the objects' events open in the sheet's file)
         const dev = tab("dev", "開発");
         panels.dev.tab.hidden = true;
@@ -3681,8 +3863,13 @@
         ev.disabled = true;
 
         if (!panels[shown] || panels[shown].tab.hidden) shown = "home";
-        show(shown);
+        show(shown, true);
         ribbon.classList.toggle("collapsed", collapsed);
+        ribbon.showShapeTab = (on) => {
+            panels.shapeFormat.tab.hidden = !on;
+            if (on && saved.ribbonTab === "shapeFormat" && shown !== "shapeFormat") show("shapeFormat", true);
+            if (!on && shown === "shapeFormat") show("home", true);
+        };
         ribbon.showDev = () => {
             panels.dev.tab.hidden = false;
             if (saved.ribbonTab === "dev") show("dev");
@@ -5229,6 +5416,12 @@
         }
         // The object selected: Delete deletes it, the arrows move it, F2 and Enter edit its text,
         // Esc goes back to the cells.
+        if (view && selectedObj && selected && onGrid() && e.altKey && !ctrl && (key === "ArrowLeft" || key === "ArrowRight")) {
+            // Alt+← / Alt+→: turned by 15°, as Excel turns a shape.
+            e.preventDefault();
+            turnObject(selectedObj, key === "ArrowRight" ? 15 : -15);
+            return;
+        }
         if (view && selectedObj && selected && onGrid() && !e.altKey) {
             const obj = selectedObj;
             const moves = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };

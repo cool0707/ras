@@ -1362,3 +1362,219 @@ fn objects_moved_sized_given_a_text_and_deleted() {
             .contains("delete")
     );
 }
+
+#[test]
+fn objects_filled_lined_turned_and_reordered() {
+    let png = crate::view::drawing::base64(PNG);
+    let out = edit(&format!(
+        r#"[{{"op":"shape","at":"A12","width":50,"height":30}},{{"op":"shape","shape":"line","at":"D12","width":40}},{{"op":"picture","at":"F12","data":"{png}"}}]"#
+    ));
+    let shape = |bytes: &[u8], name: &str| -> String {
+        let doc = part(bytes, "xl/drawings/drawing1.xml");
+        let at = doc.find(&format!("name=\"{name}\"")).unwrap();
+        let start = doc[..at].rfind("<xdr:twoCellAnchor").unwrap();
+        let end = at + doc[at..].find("</xdr:twoCellAnchor>").unwrap();
+        doc[start..end].to_string()
+    };
+    // Fill and line: in the shape's properties, in the schema's order (after the geometry; the
+    // line after the fill), over what the shape's style gives.
+    let styled = apply(
+        &out,
+        &ops(r##"{"op":"object","name":"正方形/長方形 2","fill":"#ff0000","line":"#00ff00","lineWidth":2.25}"##),
+    )
+    .unwrap();
+    assert_eq!(changed(&out, &styled), ["xl/drawings/drawing1.xml"]);
+    assert!(shape(&styled, "正方形/長方形 2").contains(r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:ln w="28575"><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></a:ln></xdr:spPr>"#), "{}", shape(&styled, "正方形/長方形 2"));
+    // Again: replaced, not added; no fill, no line.
+    let none = apply(
+        &styled,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","fill":null,"line":null}"#),
+    )
+    .unwrap();
+    assert!(
+        shape(&none, "正方形/長方形 2")
+            .contains(r#"</a:prstGeom><a:noFill/><a:ln w="28575"><a:noFill/></a:ln></xdr:spPr>"#),
+        "{}",
+        shape(&none, "正方形/長方形 2")
+    );
+    // The width alone keeps the line's color; the arrow's head stays.
+    let arrow = edit(r#"{"op":"shape","shape":"arrow","at":"A20","width":40}"#);
+    let wide = apply(
+        &arrow,
+        &ops(r#"{"op":"object","name":"直線矢印コネクタ 2","lineWidth":3}"#),
+    )
+    .unwrap();
+    assert!(
+        shape(&wide, "直線矢印コネクタ 2")
+            .contains(r#"<a:ln w="38100"><a:tailEnd type="triangle"/></a:ln>"#)
+    );
+    let red = apply(
+        &wide,
+        &ops(r##"{"op":"object","name":"直線矢印コネクタ 2","line":"#C00000"}"##),
+    )
+    .unwrap();
+    assert!(shape(&red, "直線矢印コネクタ 2").contains(r#"<a:ln w="38100"><a:solidFill><a:srgbClr val="C00000"/></a:solidFill><a:tailEnd type="triangle"/></a:ln>"#));
+    // A picture gets a frame.
+    let framed = apply(
+        &out,
+        &ops(r##"{"op":"object","name":"図 4","line":"#000000"}"##),
+    )
+    .unwrap();
+    assert!(shape(&framed, "図 4").contains(r#"</a:prstGeom><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></xdr:spPr>"#));
+
+    // Rotation and flips: the transform's attributes; 0 and false take them away.
+    let turned = apply(
+        &styled,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","rotation":-30,"flipH":true}"#),
+    )
+    .unwrap();
+    assert!(
+        shape(&turned, "正方形/長方形 2").contains(r#"<a:xfrm rot="19800000" flipH="1">"#),
+        "{}",
+        shape(&turned, "正方形/長方形 2")
+    );
+    let shown = &view(&turned)["sheets"][0]["objects"][1];
+    assert_eq!(
+        (
+            shown["rot"].clone(),
+            shown["flipH"].clone(),
+            shown["el"].clone()
+        ),
+        (json!(330.0), json!(true), json!("sp"))
+    );
+    assert!(shown["html"].as_str().unwrap().contains("rotate(330deg)"));
+    let back = apply(
+        &turned,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","rotation":360,"flipH":false}"#),
+    )
+    .unwrap();
+    assert!(shape(&back, "正方形/長方形 2").contains("<a:xfrm><a:off"));
+    // Turned sideways, its anchor is its box turned a quarter around its center (Excel's); its
+    // transform keeps the box. Moved so, the anchor stays turned; turned back, it is the box.
+    let side = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","rotation":90}"#),
+    )
+    .unwrap();
+    let doc = shape(&side, "正方形/長方形 2");
+    // (The box 50 × 30 at 0, 240: the anchor 30 × 50 at 10, 230.)
+    assert!(doc.contains(r#"<xdr:from><xdr:col>0</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>95250</xdr:rowOff></xdr:from><xdr:to><xdr:col>0</xdr:col><xdr:colOff>381000</xdr:colOff><xdr:row>13</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"#), "{doc}");
+    assert!(
+        doc.contains(
+            r#"<a:xfrm rot="5400000"><a:off x="0" y="2286000"/><a:ext cx="476250" cy="285750"/>"#
+        ),
+        "{doc}"
+    );
+    let moved = apply(
+        &side,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","at":"B15"}"#),
+    )
+    .unwrap();
+    let doc = shape(&moved, "正方形/長方形 2");
+    assert!(doc.contains(r#"<a:ext cx="476250" cy="285750"/>"#), "{doc}");
+    let o = objects(&moved, 0)
+        .into_iter()
+        .find(|o| o.1 == "正方形/長方形 2")
+        .unwrap();
+    // (B15 is at 118, 300: the anchor from 128, 290 to 158, 340.)
+    assert_eq!(
+        (o.2, o.3),
+        (json!([1, 10.0, 13, 10.0]), json!([1, 40.0, 16, 0.0]))
+    );
+    let back = apply(
+        &side,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","rotation":180}"#),
+    )
+    .unwrap();
+    assert_eq!(
+        shape(&back, "正方形/長方形 2").split("<xdr:sp ").next(),
+        shape(&out, "正方形/長方形 2").split("<xdr:sp ").next()
+    );
+
+    // Moved and turned in one edit.
+    let both = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","at":"B15","rotation":90}"#),
+    )
+    .unwrap();
+    let doc = shape(&both, "正方形/長方形 2");
+    assert!(
+        doc.contains(r#"<xdr:from><xdr:col>1</xdr:col>"#)
+            && doc.contains(r#"<a:xfrm rot="5400000">"#),
+        "{doc}"
+    );
+
+    // The order: the drawing's order is the order they lie over one another.
+    let names = |bytes: &[u8]| -> Vec<String> {
+        objects(bytes, 0)
+            .into_iter()
+            .map(|o| o.1)
+            .filter(|n| !n.is_empty())
+            .collect()
+    };
+    assert_eq!(
+        names(&out),
+        ["Chart 1", "正方形/長方形 2", "直線コネクタ 3", "図 4"]
+    );
+    let order = |name: &str, how: &str| {
+        names(
+            &apply(
+                &out,
+                &ops(&format!(
+                    r#"{{"op":"object","name":"{name}","order":"{how}"}}"#
+                )),
+            )
+            .unwrap(),
+        )
+    };
+    assert_eq!(
+        order("正方形/長方形 2", "front"),
+        ["Chart 1", "直線コネクタ 3", "図 4", "正方形/長方形 2"]
+    );
+    assert_eq!(
+        order("正方形/長方形 2", "forward"),
+        ["Chart 1", "直線コネクタ 3", "正方形/長方形 2", "図 4"]
+    );
+    assert_eq!(
+        order("正方形/長方形 2", "backward"),
+        ["正方形/長方形 2", "Chart 1", "直線コネクタ 3", "図 4"]
+    );
+    assert_eq!(
+        order("図 4", "back"),
+        ["図 4", "Chart 1", "正方形/長方形 2", "直線コネクタ 3"]
+    );
+    // Already in front: nothing to write.
+    assert_eq!(
+        apply(
+            &out,
+            &ops(r#"{"op":"object","name":"図 4","order":"front"}"#)
+        )
+        .unwrap(),
+        out
+    );
+    // Styled and put in front at once.
+    let front = apply(
+        &out,
+        &ops(r##"{"op":"object","name":"正方形/長方形 2","fill":"#123456","order":"front"}"##),
+    )
+    .unwrap();
+    assert_eq!(names(&front).last().unwrap(), "正方形/長方形 2");
+    assert!(shape(&front, "正方形/長方形 2").contains("123456"));
+
+    // Refused: a fill of a line, the format of a chart; colors and orders not so written.
+    let no = |json: &str| apply(&out, &ops(json)).unwrap_err();
+    assert!(no(r##"{"op":"object","name":"直線コネクタ 3","fill":"#FF0000"}"##).contains("線"));
+    assert!(no(r#"{"op":"object","name":"Chart 1","rotation":10}"#).contains("グラフ"));
+    // (A chart is moved and put elsewhere in the order.)
+    assert_eq!(order("Chart 1", "front").last().unwrap(), "Chart 1");
+    for bad in [
+        json!({"op":"object","name":"x","fill":"red"}),
+        json!({"op":"object","name":"x","order":"top"}),
+        json!({"op":"object","name":"x","lineWidth":-1}),
+    ] {
+        assert!(parse_ops(&bad, Some("Data")).is_err(), "{bad}");
+    }
+    // The file reads back.
+    let mut book = Book::open_bytes(&front).unwrap();
+    assert!(book.sheet_summary(0).is_ok());
+}
