@@ -1,0 +1,14 @@
+// ユーザーフォームのサンプル。▶ 実行 で `Main.register` を選ぶと、フォームがこのページの上に表示されます。
+//
+// ・forms/frmEntry.form.json を開くとデザイナーになります。コントロールを足したり動かしたりでき、
+//   ダブルクリックすると、そのイベントのハンドラーを forms/frmEntry.ras に追加します。
+// ・「ブック」タブでは、シートにボタンなどのコントロールを置けます（挿入 → コントロール）。
+//   右クリックの「既定のイベントを開く」「新しいマクロを登録」で、objects/Sheet1.ras にハンドラーを追加します。
+
+/** フォームで入力した名前と数量を、Sheet1 の表の末尾に足す。 */
+export function register() {
+    const ws = Sheet1;
+    if (ws.range("A1").value == "") ws.range("A1:B1").value = ["名前", "数量"];
+    frmEntry.show();
+    debug.print(`${ws.cells(ws.rows.count, 1).end(xlUp).row - 1} 件になりました`);
+}

@@ -1137,12 +1137,17 @@ module.exports = function install(rt) {
 
     let channel = null;
 
-    /** The connection to the host that draws the forms (the VS Code extension, or a test double). */
+    /** The connection to the host that draws the forms (the VS Code extension, the playground, or a test double). */
     function host() {
         if (channel) return channel;
         const mock = rt.mock();
         if (mock && mock.formHost) {
             channel = mock.formHost;
+            return channel;
+        }
+        // A host the embedder gives (the playground, which draws the forms in the page).
+        if (rt.hooks && rt.hooks.formHost) {
+            channel = rt.hooks.formHost;
             return channel;
         }
         const port = Number(process.env.RAS_FORM_HOST);

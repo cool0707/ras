@@ -35,6 +35,7 @@
   <section class="pane editor-pane" aria-label="ソース">
     <nav class="tabs" id="files" aria-label="ファイル"></nav>
     <div id="editor" class="editor"></div>
+    <iframe id="designer" class="designer" title="ユーザーフォーム デザイナー" hidden></iframe>
   </section>
   <section class="pane out-pane" aria-label="出力">
     <nav class="tabs" role="tablist">
@@ -78,6 +79,13 @@
     <p id="dialog-prompt"></p>
     <input id="dialog-input" type="text" autocomplete="off">
     <div id="dialog-buttons" class="dialog-buttons"></div>
+  </form>
+</dialog>
+<dialog id="picker" class="dialog picker">
+  <form method="dialog">
+    <h2 id="picker-title"></h2>
+    <div id="picker-list" class="picker-list"></div>
+    <div class="dialog-buttons"><button value="cancel">キャンセル</button></div>
   </form>
 </dialog>
 <div id="toast" class="toast" role="alert" hidden></div>

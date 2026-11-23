@@ -127,3 +127,71 @@ test("edits the workbook as the page of the book tab posts (ras book edit)", asy
     assert.match(diffText(before, after, 10), /B2/);
     assert.throws(() => editBook(before, JSON.stringify({ op: "nope", range: "A1" })));
 });
+
+/** A project with a form (forms/frmInput.form.json and its code-behind) that a function shows. */
+async function formProject() {
+    const { newFormSpec } = await import("../pkg/ras_wasm.js");
+    const spec = JSON.parse(newFormSpec("frmInput"));
+    spec.controls = [
+        { id: "c1", name: "txtName", type: "TextBox", left: 12, top: 12, width: 150, height: 18 },
+        { id: "c2", name: "btnOK", type: "CommandButton", caption: "OK", left: 12, top: 50, width: 72, height: 24 },
+    ];
+    return {
+        toml: '[project]\nname = "P"\nworkbook = "Book.xlsx"\n',
+        files: [
+            { path: "src/main.ras", text: 'export function go() {\n    frmInput.show();\n    debug.print(Sheet1.range("A1").value);\n}\n' },
+            { path: "forms/frmInput.form.json", text: JSON.stringify(spec, null, 2) },
+            { path: "forms/frmInput.ras", text: '@on("btnOK.Click")\nfunction ok() {\n    Sheet1.range("A1").value = this.txtName.text;\n    unload(this);\n}\n' },
+        ],
+    };
+}
+
+test("compiles, checks and writes the forms of forms/", async () => {
+    const { packBook } = await import("../pkg/ras_wasm.js");
+    const p = await formProject();
+    const out = JSON.parse(compile(JSON.stringify({ files: p.files, toml: p.toml, sheets: ["Sheet1"], js: true })));
+    assert.deepEqual(out.diagnostics, []);
+    assert.ok(out.entries.includes("frmInput.show"), out.entries.join(", "));
+    assert.ok(out.vba.some((v: { name: string }) => v.name === "frmInput"));
+    // A problem of a form's design is reported at its place in the .form.json.
+    const broken = p.files.map((f) => (f.path.endsWith(".form.json") ? { ...f, text: f.text.replace('"name": "txtName"', '"name": "btnOK"') } : f));
+    const bad = JSON.parse(compile(JSON.stringify({ files: broken, toml: p.toml, sheets: ["Sheet1"], js: true })));
+    assert.ok(bad.diagnostics.some((d: { path: string; severity: string }) => d.path === "forms/frmInput.form.json" && d.severity === "error"), JSON.stringify(bad.diagnostics));
+    const packed = packBook(JSON.stringify({ files: p.files, toml: p.toml }), book(), "Book.xlsx");
+    assert.ok(JSON.parse(packed.report).created.includes("frmInput"), packed.report);
+});
+
+test("shows a form through the page's host and runs its handlers", async () => {
+    const p = await formProject();
+    const out = JSON.parse(compile(JSON.stringify({ files: p.files, toml: p.toml, sheets: ["Sheet1"], js: true })));
+    const sent: { t: string; name?: string }[] = [];
+    const actions = [
+        { t: "input", control: "txtName", text: "山田", seq: 1 },
+        { t: "click", control: "btnOK" },
+    ];
+    const forms = {
+        send: (m: unknown) => void sent.push(m as { t: string }),
+        receive: () => {
+            const a = actions.shift();
+            return a ? { ...a, id: (sent.find((m) => m.t === "show") as { id?: number } | undefined)?.id } : { t: "disconnected" };
+        },
+    };
+    const r = runJob(Book as unknown as WasmBookClass, { kind: "run", js: out.js, files: [...p.files.map((f) => ({ path: f.path, data: f.text })), { path: "Book.xlsx", data: book() }], target: "Main.go" }, undefined, undefined, forms);
+    assert.equal(r.exitCode, 0, JSON.stringify(r.output));
+    assert.equal(sent[0].t, "show");
+    assert.equal(sent[0].name, "frmInput");
+    assert.ok(sent.some((m) => m.t === "unload"));
+    assert.match(r.output.map((o) => o.text).join(""), /山田/);
+});
+
+test("reads the ActiveX controls of the sheets for @on(\"<control>.<event>\")", async () => {
+    const { sheetControls } = await import("../pkg/ras_wasm.js");
+    assert.deepEqual(JSON.parse(sheetControls(book())), []);
+    assert.equal(sheetControls(new Uint8Array([1, 2, 3])), "null");
+    const files = [{ path: "objects/Sheet1.ras", text: '@on("CommandButton1.Click")\nfunction c() {\n}\n' }];
+    const toml = '[project]\nname = "P"\n';
+    const known = JSON.parse(compile(JSON.stringify({ files, toml, sheets: ["Sheet1"], sheetControls: [{ name: "Sheet1", controls: [{ name: "CommandButton1", type: "CommandButton" }] }] })));
+    assert.deepEqual(known.diagnostics, []);
+    const missing = JSON.parse(compile(JSON.stringify({ files, toml, sheets: ["Sheet1"], sheetControls: [] })));
+    assert.ok(missing.diagnostics.some((d: { code: string }) => d.code === "E0613"), JSON.stringify(missing.diagnostics));
+});

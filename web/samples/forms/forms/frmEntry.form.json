@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": {
+    "name": "frmEntry",
+    "caption": "登録",
+    "width": 260,
+    "height": 150
+  },
+  "controls": [
+    {
+      "id": "lblName",
+      "name": "lblName",
+      "type": "Label",
+      "caption": "名前",
+      "left": 12,
+      "top": 14,
+      "width": 40,
+      "height": 14
+    },
+    {
+      "id": "txtName",
+      "name": "txtName",
+      "type": "TextBox",
+      "left": 60,
+      "top": 12,
+      "width": 170,
+      "height": 18
+    },
+    {
+      "id": "lblQty",
+      "name": "lblQty",
+      "type": "Label",
+      "caption": "数量",
+      "left": 12,
+      "top": 44,
+      "width": 40,
+      "height": 14
+    },
+    {
+      "id": "cboQty",
+      "name": "cboQty",
+      "type": "ComboBox",
+      "left": 60,
+      "top": 42,
+      "width": 80,
+      "height": 18
+    },
+    {
+      "id": "btnOK",
+      "name": "btnOK",
+      "type": "CommandButton",
+      "caption": "登録",
+      "left": 84,
+      "top": 84,
+      "width": 72,
+      "height": 24,
+      "enabled": false,
+      "default": true
+    },
+    {
+      "id": "btnCancel",
+      "name": "btnCancel",
+      "type": "CommandButton",
+      "caption": "キャンセル",
+      "left": 162,
+      "top": 84,
+      "width": 72,
+      "height": 24,
+      "cancel": true
+    }
+  ]
+}

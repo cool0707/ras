@@ -91,6 +91,16 @@ export type Dialog =
  */
 export type Ask = (dialog: Dialog) => number | string | false | undefined;
 
+/**
+ * The host that draws the user forms of a run (spec §14.10.7), as the runtime's ras-forms.js
+ * uses it: `send` a form's state (`show` / `update` / `hide` / `unload` / `error` / `blocked`),
+ * `receive` what the user does next (waiting for it). The page is the host in the playground.
+ */
+export interface FormChannel {
+    send(message: unknown): void;
+    receive(): unknown;
+}
+
 const BUTTON_NAMES = ["", "vbOK", "vbCancel", "vbAbort", "vbRetry", "vbIgnore", "vbYes", "vbNo"];
 
 /** Puts `ask` before the dialogs of `ras run` (main.js sets `hooks.msgBox` / `hooks.inputBox`). */
@@ -151,7 +161,7 @@ function allowWaiting() {
 
 let waiting = false;
 
-export function runJob(Book: WasmBookClass, job: RunJob, onOutput?: (stream: "stdout" | "stderr", text: string) => void, ask?: Ask): RunResult {
+export function runJob(Book: WasmBookClass, job: RunJob, onOutput?: (stream: "stdout" | "stderr", text: string) => void, ask?: Ask, forms?: FormChannel): RunResult {
     if (!waiting) {
         allowWaiting();
         waiting = true;
@@ -184,9 +194,10 @@ export function runJob(Book: WasmBookClass, job: RunJob, onOutput?: (stream: "st
         env.RAS_TEST_OPTIONS = JSON.stringify({ filter: job.filter || null, saveWorkbooks: false });
     }
     const loaded = (id: string, exports: unknown) => {
-        if (ask && id === `${DEBUG_DIR}/ras-runtime.js`) {
-            askingHooks((exports as { hooks: Record<string, unknown> }).hooks, ask, (text) => out("stdout", `${text}\n`));
-        }
+        if (id !== `${DEBUG_DIR}/ras-runtime.js`) return;
+        const hooks = (exports as { hooks: Record<string, unknown> }).hooks;
+        if (ask) askingHooks(hooks, ask, (text) => out("stdout", `${text}\n`));
+        if (forms) hooks.formHost = forms;
     };
     const world = new NodeWorld({ fs, out, env, argv, extra: { ras_book: bookAddon(Book, fs) }, loaded });
     const c = console as unknown as Record<string, (...a: unknown[]) => void>;

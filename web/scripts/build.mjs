@@ -8,7 +8,10 @@ import { build } from "esbuild";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, extname, join, relative } from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+
+const require = createRequire(import.meta.url);
 
 const web = dirname(dirname(fileURLToPath(import.meta.url)));
 const root = dirname(web);
@@ -20,17 +23,17 @@ if (!existsSync(join(web, "pkg", "ras_wasm_bg.wasm"))) {
     process.exit(1);
 }
 
-/** A project's files: ras.toml and the .ras files of src/, types/, objects/, test/ (not forms/: the browser has no forms). */
+/** A project's files: ras.toml, the .ras files of src/, types/, objects/, test/ and the forms of forms/. */
 function project(dir) {
     const files = [];
     const walk = (d) => {
         for (const n of readdirSync(d).sort()) {
             const p = join(d, n);
             if (statSync(p).isDirectory()) walk(p);
-            else if (n.endsWith(".ras")) files.push({ path: relative(dir, p).split("\\").join("/"), text: readFileSync(p, "utf8") });
+            else if (n.endsWith(".ras") || n.endsWith(".form.json")) files.push({ path: relative(dir, p).split("\\").join("/"), text: readFileSync(p, "utf8") });
         }
     };
-    for (const sub of ["src", "types", "objects", "test"]) if (existsSync(join(dir, sub))) walk(join(dir, sub));
+    for (const sub of ["src", "types", "objects", "forms", "test"]) if (existsSync(join(dir, sub))) walk(join(dir, sub));
     let toml = readFileSync(join(dir, "ras.toml"), "utf8");
     // The playground's workbook is Book.xlsx (a new one, or the one read into the page).
     if (!/^\s*workbook\s*=/m.test(toml)) toml = toml.replace(/^\[project\][^\n]*\n/m, (h) => `${h}workbook = "Book.xlsx"\n`);
@@ -41,6 +44,7 @@ function project(dir) {
 const samples = [
     { id: "hello", title: "はじめての RAS（表と数式・テスト）", files: project(join(web, "samples", "hello")) },
     { id: "dialogs", title: "ダイアログと実行時エラー", files: project(join(web, "samples", "dialogs")) },
+    { id: "forms", title: "ユーザーフォームとシートのコントロール", files: project(join(web, "samples", "forms")) },
     { id: "sales-report", title: "examples/sales-report", files: project(join(root, "examples", "sales-report")) },
 ];
 
@@ -63,10 +67,35 @@ const common = {
     logLevel: "warning",
     define: { "process.env.NODE_ENV": JSON.stringify(production ? "production" : "development") },
 };
-await build({ ...common, entryPoints: [join(web, "src", "main.ts")], outfile: join(dist, "app.js"), plugins: [samplesPlugin] });
+// The page uses modules of the VS Code extension (the Designer's engine, the sheets' events):
+// the few Node modules they import are the browser's.
+const browserModules = {
+    name: "browser-modules",
+    setup(b) {
+        b.onResolve({ filter: /^(node:)?crypto$/ }, () => ({ path: "crypto", namespace: "browser-modules" }));
+        b.onLoad({ filter: /^crypto$/, namespace: "browser-modules" }, () => ({ contents: "export const randomUUID = () => crypto.randomUUID();", loader: "js" }));
+        b.onResolve({ filter: /^(node:)?path$/ }, () => ({ path: require.resolve("path-browserify") }));
+    },
+};
+await build({ ...common, entryPoints: [join(web, "src", "main.ts")], outfile: join(dist, "app.js"), plugins: [samplesPlugin, browserModules], nodePaths: [join(web, "node_modules")] });
+// The VS Code extension's UserForm Designer and form panel (its webviews), for the frames of
+// designer.html and runner.html. Their packages are the playground's (package.json).
+const vscode = join(root, "editors", "vscode");
+await build({
+    ...common,
+    format: "iife",
+    entryPoints: { userFormDesigner: join(vscode, "webview", "userFormDesigner", "App.tsx"), formRunner: join(vscode, "webview", "formRunner", "main.ts") },
+    outdir: join(dist, "designer"),
+    jsx: "automatic",
+    jsxImportSource: "preact",
+    loader: { ".ttf": "file" },
+    assetNames: "[name]",
+    nodePaths: [join(web, "node_modules")],
+    tsconfig: join(vscode, "tsconfig.webview.json"),
+});
 await build({ ...common, entryPoints: [join(web, "src", "worker.ts")], outfile: join(dist, "worker.js") });
 copyFileSync(join(web, "pkg", "ras_wasm_bg.wasm"), join(dist, "ras_wasm_bg.wasm"));
-for (const f of ["index.html", "style.css", "sw.js"]) copyFileSync(join(web, "static", f), join(dist, f));
+for (const f of ["index.html", "style.css", "sw.js", "designer.html", "runner.html", "frame.css"]) copyFileSync(join(web, "static", f), join(dist, f));
 // The icon is the VS Code extension's (also embedded in ras.exe: crates/ras/assets/ras.ico).
 copyFileSync(join(root, "editors", "vscode", "images", "icon.png"), join(dist, "icon.png"));
 writeFileSync(join(dist, ".nojekyll"), "");

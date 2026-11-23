@@ -56,7 +56,7 @@ pub use forms::{
     export_user_form, import_user_form, is_generated_form, read_user_forms, unpack_user_forms,
     RAS_FORM_MARKER,
 };
-pub use opc::{workbook_code_names, workbook_sheet_controls};
+pub use opc::{workbook_code_names, workbook_sheet_controls, workbook_sheet_controls_bytes};
 pub use pack::{pack, pack_bytes, replace_workbook, unpack, unpack_bytes};
 pub use sheets::{
     edit_sheets, sheet_references, valid_code_name, valid_sheet_name, workbook_sheets, Place,

@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 ras-syntax.workspace = true
 ras-compiler.workspace = true
 ras-ovba.workspace = true
+ras-form.workspace = true
 ras-workbook = { path = "../ras-workbook" }
 serde_json.workspace = true
 encoding_rs.workspace = true

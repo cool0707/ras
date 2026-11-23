@@ -1,0 +1,26 @@
+// フォーム frmEntry のコードビハインド。`this` がフォームで、コントロールは `this.<名前>` で参照します。
+
+@on("UserForm.Initialize")
+function initialize() {
+    for (const n of [1, 2, 3, 5, 10]) this.cboQty.addItem(n);
+    this.cboQty.listIndex = 0;
+}
+
+@on("txtName.Change")
+function nameChanged() {
+    this.btnOK.enabled = this.txtName.text != "";
+}
+
+@on("btnOK.Click")
+function ok() {
+    const ws = Sheet1;
+    const r = ws.cells(ws.rows.count, 1).end(xlUp).row + 1;
+    ws.cells(r, 1).value = this.txtName.text;
+    ws.cells(r, 2).value = int(this.cboQty.value);
+    unload(this);
+}
+
+@on("btnCancel.Click")
+function cancel() {
+    unload(this);
+}

@@ -6,7 +6,9 @@
 //!   bytes of a `.bas` / `.cls` as `ras build` writes them.
 //! - [`Book`]: the workbook of the stand-in for Excel, as the `ras_book` addon gives it to Node
 //!   (`crates/ras-book`); its methods are those of `ras_workbook::js`.
-//! - [`pack_book`]: `ras pack` into the bytes of a workbook.
+//! - [`pack_book`]: `ras pack` into the bytes of a workbook (with the user forms of `forms/`);
+//!   [`new_form_spec`]: the design of a new form (`ras form new`); [`sheet_controls`]: the
+//!   ActiveX controls of the sheets of a workbook, for the compiler.
 //! - [`diff_text`], [`view_page`]: what `ras run` prints of the cells a program changed, and the
 //!   page of `ras book view`; [`edit_book`]: `ras book edit`, for the edits made on that page.
 //!
@@ -29,6 +31,13 @@ fn source_of(path: &str, text: &str) -> Option<SourceInput> {
     if let Some(rel) = path.strip_prefix("objects/") {
         let name = rel.strip_suffix(".ras")?;
         return Some(ras_compiler::object_source(PathBuf::from(path), name, text));
+    }
+    if let Some(rel) = path.strip_prefix("forms/") {
+        // The code-behind of a form (`forms/<Name>.ras`); its design is read by `read_input`.
+        let name = rel
+            .strip_suffix(".ras")
+            .filter(|n| !n.contains(['.', '/']))?;
+        return Some(ras_compiler::form_source(PathBuf::from(path), name, text));
     }
     let (dir, rel) = path.split_once('/')?;
     let kind = match dir {
@@ -81,12 +90,15 @@ fn severity(s: Severity) -> &'static str {
 /// { "files": [{ "path": "src/main.ras", "text": "..." }],
 ///   "toml": "[project]\nname = \"Playground\"",
 ///   "sheets": ["Sheet1"],
+///   "sheetControls": [{ "name": "Sheet1", "controls": [{ "name": "CommandButton1", "type": "CommandButton" }] }],
 ///   "release": false,
 ///   "js": true }
 /// ```
 ///
 /// Paths are those of the project: `src/`, `types/` (`.d.ras`), `objects/` (the sheets and
-/// `ThisWorkbook`) and `test/`. `sheets` are the code names of the sheets of the workbook.
+/// `ThisWorkbook`), `forms/` (`<Name>.form.json` and its code-behind `<Name>.ras`) and `test/`.
+/// `sheets` are the code names of the sheets of the workbook, `sheetControls` the ActiveX
+/// controls on them (as [`sheet_controls`] reads them; without it they are unknown).
 ///
 /// Returns JSON: `{ diagnostics: [{ path, line, col, endLine, endCol, severity, code, message }],
 /// vba: [{ name, fileName, text, file }], js: [{ path, text }] | null, entries, macros, tests, error }`,
@@ -103,6 +115,8 @@ struct Input {
     config: Config,
     sources: Vec<SourceInput>,
     tests: Vec<SourceInput>,
+    /// The designs of the forms (`forms/<Name>.form.json`).
+    forms: Vec<ras_form::workspace::LoadedForm>,
 }
 
 fn read_input(input: &str) -> Result<Input, String> {
@@ -116,14 +130,47 @@ fn read_input(input: &str) -> Result<Input, String> {
             .filter_map(|s| s.as_str().map(str::to_string))
             .collect();
     }
+    if let Some(sheets) = input["sheetControls"].as_array() {
+        config.sheet_controls = sheets
+            .iter()
+            .map(|s| ras_compiler::FormDecl {
+                name: s["name"].as_str().unwrap_or_default().to_string(),
+                controls: s["controls"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|c| ras_compiler::FormControl {
+                        name: c["name"].as_str().unwrap_or_default().to_string(),
+                        control_type: c["type"].as_str().unwrap_or_default().to_string(),
+                    })
+                    .collect(),
+            })
+            .filter(|s| !s.controls.is_empty())
+            .collect();
+        config.sheet_controls_known = true;
+    }
     // The VBA is built without the tests (`ras build`); they are checked and run (`ras check`,
     // `ras test`) with the rest.
     let mut sources = Vec::new();
     let mut tests = Vec::new();
+    let mut forms = Vec::new();
     for f in input["files"].as_array().into_iter().flatten() {
         let (Some(path), Some(text)) = (f["path"].as_str(), f["text"].as_str()) else {
             continue;
         };
+        if let Some(file_name) = path
+            .strip_prefix("forms/")
+            .filter(|n| n.ends_with(".form.json") && !n.contains('/'))
+        {
+            let form = ras_form::workspace::loaded(Path::new("forms"), file_name, text.to_string());
+            if let Some(mut decl) = ras_compiler::FormDecl::from_form_json(&form.text) {
+                // The file name is the form's name (a mismatch is reported by the form checks).
+                decl.name = form.name.clone();
+                config.forms.push(decl);
+            }
+            forms.push(form);
+            continue;
+        }
         let is_test = config.test.is_test_file(path);
         if is_test || path.starts_with("test/") {
             if path.ends_with(".d.ras") {
@@ -142,6 +189,7 @@ fn read_input(input: &str) -> Result<Input, String> {
         config,
         sources,
         tests,
+        forms,
     })
 }
 
@@ -151,6 +199,7 @@ fn compile_json(input: &str) -> Json {
         config,
         mut sources,
         tests,
+        forms,
     } = match read_input(input) {
         Ok(i) => i,
         Err(e) => return json!({ "error": e }),
@@ -188,7 +237,8 @@ fn compile_json(input: &str) -> Json {
     diags.dedup_by(|a, b| {
         a.1.code == b.1.code && a.1.message == b.1.message && at(a.0, a.1) == at(b.0, b.1)
     });
-    let diagnostics: Vec<Json> = diags
+    let codepage = built.config.target.codepage;
+    let mut diagnostics: Vec<Json> = diags
         .iter()
         .map(|(p, d)| {
             let Some(m) = d.module else {
@@ -202,6 +252,13 @@ fn compile_json(input: &str) -> Json {
                 "severity": severity(d.severity), "code": d.code, "message": d.message })
         })
         .collect();
+    // The forms' designs (`ras check` checks them with the code compiled for them).
+    diagnostics.extend(
+        build_forms(&forms, codepage, &out.files)
+            .problems
+            .iter()
+            .map(form_problem),
+    );
     let vba: Vec<Json> = out
         .files
         .iter()
@@ -221,9 +278,37 @@ fn compile_json(input: &str) -> Json {
         "entries": js.as_ref().map(|j| j.entries.clone()).unwrap_or_default(),
         "macros": out.macros,
         "tests": has_tests,
-        "codepage": built.config.target.codepage,
+        "codepage": codepage,
         "error": null,
     })
+}
+
+/// The forms validated and generated with the code compiled for their code-behinds.
+fn build_forms(
+    forms: &[ras_form::workspace::LoadedForm],
+    codepage: u16,
+    files: &[ras_compiler::OutputFile],
+) -> ras_form::workspace::Built {
+    let compiled: std::collections::HashMap<String, String> = files
+        .iter()
+        .filter(|f| f.kind == VModuleKind::Form)
+        .map(|f| (f.name.clone(), f.code.clone()))
+        .collect();
+    // Pictures are files of the project, which the playground does not have.
+    ras_form::workspace::build(forms, Path::new("/"), codepage, &compiled)
+}
+
+/// A problem of a form as a diagnostic of [`compile`] (its position from 1 to from 0).
+fn form_problem(p: &ras_form::workspace::Problem) -> Json {
+    let (line, col) = p
+        .position
+        .map_or((0, 0), |(l, c)| (l.saturating_sub(1), c.saturating_sub(1)));
+    let severity = match p.severity {
+        ras_form::Severity::Error => "error",
+        ras_form::Severity::Warning => "warning",
+    };
+    json!({ "path": p.rel_path, "line": line, "col": col, "endLine": line, "endCol": col,
+        "severity": severity, "code": p.code, "message": p.message })
 }
 
 // The entries of `ras explain` (the `ras` program's own module, shared with it; formatted as
@@ -307,8 +392,8 @@ fn to_ovba_kind(k: &VModuleKind) -> ras_ovba::ModuleKind {
 /// `ras pack --overwrite` in memory: writes the VBA of the project (`input` as for [`compile`])
 /// into the workbook `bytes` named `name`, and returns the new workbook (a `.xlsx` becomes a
 /// `.xlsm`). Modules that RAS generated earlier and the project no longer has are removed;
-/// modules of the same name are replaced. The user forms of the project are not written (the
-/// playground has none).
+/// modules of the same name are replaced. The user forms of the project are written with their
+/// code (forms with pictures cannot be: the playground has no picture files).
 #[wasm_bindgen(js_name = packBook)]
 pub fn pack_book(input: &str, bytes: &[u8], name: &str) -> Result<PackedBook, JsError> {
     let mut i = read_input(input).map_err(err)?;
@@ -320,9 +405,26 @@ pub fn pack_book(input: &str, bytes: &[u8], name: &str) -> Result<PackedBook, Js
         .map(|s| s.code_name.clone())
         .collect();
     i.config.test_files.clear();
+    if let Ok(Some(sheets)) = ras_ovba::workbook_sheet_controls_bytes(bytes.to_vec()) {
+        i.config.sheet_controls = sheet_decls(sheets);
+        i.config.sheet_controls_known = true;
+    }
     let codepage = i.config.target.codepage;
     let prog = ras_compiler::analyze(i.sources, i.config);
     let out = ras_compiler::build(&prog, &BuildOptions::default());
+    let user_forms = build_forms(&i.forms, codepage, &out.files);
+    if user_forms.errors() > 0 {
+        let text: Vec<String> = user_forms
+            .problems
+            .iter()
+            .filter(|p| p.severity == ras_form::Severity::Error)
+            .map(ToString::to_string)
+            .collect();
+        return Err(err(format!(
+            "ユーザーフォームにエラーがあるため書き込めません:\n{}",
+            text.join("\n")
+        )));
+    }
     let errors: Vec<&ras_compiler::Diagnostic> = prog
         .diagnostics
         .iter()
@@ -398,7 +500,7 @@ pub fn pack_book(input: &str, bytes: &[u8], name: &str) -> Result<PackedBook, Js
         remove_modules: remove,
         rename_modules: Vec::new(),
         prune_documents: false,
-        forms: Vec::new(),
+        forms: user_forms.forms,
         backup_dir: None,
         backup_generations: 0,
     };
@@ -417,6 +519,52 @@ pub fn pack_book(input: &str, bytes: &[u8], name: &str) -> Result<PackedBook, Js
         })
         .to_string(),
     })
+}
+
+/// The ActiveX controls of the sheets as the compiler takes them (one entry per sheet with any).
+fn sheet_decls(sheets: Vec<ras_ovba::SheetControls>) -> Vec<ras_compiler::FormDecl> {
+    sheets
+        .into_iter()
+        .filter(|s| !s.controls.is_empty())
+        .map(|s| ras_compiler::FormDecl {
+            name: s.code_name,
+            controls: s
+                .controls
+                .into_iter()
+                .map(|c| ras_compiler::FormControl {
+                    name: c.name,
+                    control_type: c.class,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// The ActiveX controls on the sheets of a workbook (spec §12.2.1), as `sheetControls` of the
+/// input of [`compile`]: `[{ name: <code name>, controls: [{ name, type }] }]`, or `null` when
+/// they cannot be read (an `.xlsb`, bytes that are not a workbook).
+#[wasm_bindgen(js_name = sheetControls)]
+pub fn sheet_controls(bytes: &[u8]) -> String {
+    match ras_ovba::workbook_sheet_controls_bytes(bytes.to_vec()) {
+        Ok(Some(sheets)) => Json::Array(
+            sheet_decls(sheets)
+                .into_iter()
+                .map(|s| {
+                    json!({ "name": s.name, "controls": s.controls.iter()
+                        .map(|c| json!({ "name": c.name, "type": c.control_type }))
+                        .collect::<Vec<_>>() })
+                })
+                .collect(),
+        )
+        .to_string(),
+        _ => "null".to_string(),
+    }
+}
+
+/// A new form `name` (`ras form new`): the text of its `forms/<name>.form.json`.
+#[wasm_bindgen(js_name = newFormSpec)]
+pub fn new_form_spec(name: &str) -> String {
+    ras_form::FormSpec::new_form(name).to_json()
 }
 
 fn err(e: String) -> JsError {
