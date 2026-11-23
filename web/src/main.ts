@@ -12,7 +12,7 @@ import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { EditorState, type Extension } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import init, { Book, compile, diffText, encodeVba, explain, format, packBook, viewPage } from "../pkg/ras_wasm.js";
+import init, { Book, compile, diffText, editBook, encodeVba, explain, format, packBook, viewPage } from "../pkg/ras_wasm.js";
 import type { Dialog, RunJob, RunResult } from "./runtime/run";
 import samples from "virtual:samples";
 import type { FromWorker, ToWorker } from "./worker";
@@ -57,6 +57,10 @@ let sampleId = "";
 let workbook: Workbook;
 /** The workbook as the last run left it, and what it was before. */
 let lastRun: { before: Workbook; after: Workbook } | null = null;
+/** The book tab shows the workbook before the run (where it is edited), not the one after it. */
+let showBefore = false;
+/** The bytes the workbook had before the edits made on the book tab (`redo`: after those undone). */
+const bookHistory: { undo: Uint8Array[]; redo: Uint8Array[] } = { undo: [], redo: [] };
 let compiled: Compiled | null = null;
 let wasmModule: WebAssembly.Module;
 const states = new Map<string, EditorState>();
@@ -182,6 +186,25 @@ async function fromHash(): Promise<boolean> {
     }
 }
 
+/** A new project, as `ras init --workbook Book.xlsx` makes it: ras.toml, src/main.ras and an empty workbook. */
+const NEW_PROJECT: ProjectFile[] = [
+    { path: "ras.toml", text: '[project]\nname = "Playground"\nworkbook = "Book.xlsx"\n\n[build]\nopt-level = 1\n' },
+    {
+        path: "src/main.ras",
+        text: "/**\n * サンプルのマクロ。Excel の「マクロ」ダイアログから `hello` を実行できる。\n */\nexport function hello() {\n    const names = [\"RAS\", \"VBA\"];\n    const greeting = names.map(n => `Hello, ${n}!`).join(\"\\n\");\n    msgBox(greeting);\n}\n",
+    },
+];
+
+function newProject() {
+    files = NEW_PROJECT.map((f) => ({ ...f }));
+    sampleId = "";
+    active = "src/main.ras";
+    workbook = newWorkbook();
+    lastRun = null;
+    clearBookHistory();
+    states.clear();
+}
+
 function loadSample(id: string) {
     const s = samples.find((x) => x.id === id) || samples[0];
     files = s.files.map((f) => ({ ...f }));
@@ -189,6 +212,7 @@ function loadSample(id: string) {
     active = files.find((f) => f.path.startsWith("src/"))?.path || files[0].path;
     workbook = newWorkbook();
     lastRun = null;
+    clearBookHistory();
     states.clear();
 }
 
@@ -762,6 +786,7 @@ function showRunResult(r: RunResult, ms: number, head: HTMLElement, before: Work
     if (file) {
         const after: Workbook = { name: saved.name, bytes: file.data };
         lastRun = { before, after };
+        showBefore = false;
         out.append(el("h3", undefined, `変更されたセル（${before.name} → 実行後）`));
         let text = "";
         try {
@@ -819,15 +844,82 @@ function showTestResult(r: RunResult, list: HTMLElement, head: HTMLElement): { p
 // ---------------------------------------------------------------------------- the workbook
 
 function renderBook() {
-    const shown = lastRun ? lastRun.after : workbook;
-    $("book-name").textContent = lastRun ? `${lastRun.after.name}（実行後。変更されたセルに印が付きます）` : `${workbook.name}（実行前）`;
+    const after = lastRun && !showBefore ? lastRun : null;
+    $("book-which").hidden = !lastRun;
+    for (const b of document.querySelectorAll<HTMLButtonElement>("#book-which button")) b.setAttribute("aria-pressed", String((b.dataset.which === "after") === !!after));
+    $("book-name").textContent = after
+        ? `${after.after.name}（実行後。変更されたセルに印が付きます。編集は「実行前」で）`
+        : `${workbook.name}（実行前。編集すると、プログラムはこのブックで動きます）`;
     let html: string;
     try {
-        html = lastRun ? viewPage(shown.bytes, shown.name, lastRun.before.bytes, "実行前") : viewPage(shown.bytes, shown.name, undefined, "");
+        // The workbook before the run is edited on the page: it posts its edits here (bookMessage).
+        html = after ? viewPage(after.after.bytes, after.after.name, after.before.bytes, "実行前", false) : viewPage(workbook.bytes, workbook.name, undefined, "", true);
     } catch (e) {
         html = `<p style="font-family:sans-serif">ブックを表示できません: ${String((e as Error).message).replace(/</g, "&lt;")}</p>`;
     }
     $<HTMLIFrameElement>("book").srcdoc = html;
+}
+
+function clearBookHistory() {
+    bookHistory.undo = [];
+    bookHistory.redo = [];
+}
+
+/** The workbook changed on the book tab: the run's result is of the workbook it was before. */
+function bookEdited(bytes: Uint8Array) {
+    workbook = { name: workbook.name, bytes };
+    lastRun = null;
+    showBefore = false;
+    save();
+    renderBook();
+    // (Sheets may have been added, renamed or deleted: their code names are what objects/ refers to.)
+    scheduleCompile(0);
+}
+
+/** What the page of the book tab posts (as `{ rasView: message }`): edits, undo and redo, links. */
+function bookMessage(m: { type?: string; ops?: unknown; url?: string }) {
+    const frame = $<HTMLIFrameElement>("book").contentWindow;
+    const fail = (message: string) => frame?.postMessage({ type: "error", message }, "*");
+    if (m.type === "link") {
+        if (typeof m.url === "string" && /^(https?:\/\/|mailto:)/i.test(m.url)) window.open(m.url, "_blank", "noopener");
+        return;
+    }
+    if (m.type === "event") {
+        fail("図形やコントロールのイベントは、VS Code の拡張機能で設定してください。");
+        return;
+    }
+    if (m.type === "undo" || m.type === "redo") {
+        const [from, to] = m.type === "redo" ? [bookHistory.redo, bookHistory.undo] : [bookHistory.undo, bookHistory.redo];
+        const bytes = from.pop();
+        if (!bytes) {
+            fail(m.type === "redo" ? "やり直す操作はありません。" : "元に戻す操作はありません。");
+            return;
+        }
+        to.push(workbook.bytes);
+        bookEdited(bytes);
+        return;
+    }
+    if (m.type !== "edit") return;
+    let bytes: Uint8Array;
+    try {
+        bytes = editBook(workbook.bytes, JSON.stringify(m.ops ?? []));
+    } catch (e) {
+        fail(String((e as Error).message || e));
+        return;
+    }
+    // An edit that changed nothing (the same value typed again) is not a step to undo.
+    if (!sameBytes(bytes, workbook.bytes)) {
+        bookHistory.undo.push(workbook.bytes);
+        if (bookHistory.undo.length > 50) bookHistory.undo.shift();
+        bookHistory.redo = [];
+    }
+    bookEdited(bytes);
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
 }
 
 async function readWorkbook(file: File) {
@@ -840,6 +932,7 @@ async function readWorkbook(file: File) {
     }
     workbook = { name: file.name, bytes };
     lastRun = null;
+    clearBookHistory();
     setWorkbookPath(file.name);
     if (active === "ras.toml") {
         active = "";
@@ -850,12 +943,15 @@ async function readWorkbook(file: File) {
     toast(`${file.name} を読み込みました。プログラムはこのブックで動きます（シート: ${sheetNames().join(", ")}）`);
 }
 
-/** `ras pack`: the VBA written into the workbook (the one read into the page, or a new one), saved as .xlsm. */
-function packWorkbook() {
+/**
+ * `ras pack`: the VBA written into a workbook, saved as .xlsm. The book is the one read into the
+ * page (or a new one), or from the book tab, the one shown there (after the run, if there was one).
+ */
+function packWorkbook(book: Workbook = workbook) {
     const input = { files: files.filter((f) => f.path.endsWith(".ras")), toml: toml() };
     let packed;
     try {
-        packed = packBook(JSON.stringify(input), workbook.bytes, workbook.name);
+        packed = packBook(JSON.stringify(input), book.bytes, book.name);
     } catch (e) {
         toast(String((e as Error).message || e).split("\n")[0]);
         showTab("problems");
@@ -898,6 +994,20 @@ async function isolate() {
     }
 }
 
+/** Shows the project just put in place (a sample, a new one). */
+function projectOpened() {
+    stopRun();
+    history.replaceState(null, "", location.pathname + location.search);
+    const a = active;
+    active = "";
+    openFile(a);
+    $("output").innerHTML = '<p class="hint">▶ 実行 で関数を、テスト で test/*.test.ras を、Excel を使わずにブラウザの中で動かします。</p>';
+    renderBook();
+    runCompile();
+    save();
+    showTab("vba");
+}
+
 async function main() {
     void isolate();
     $("editor").innerHTML = '<div class="loading">コンパイラーを読み込んでいます…</div>';
@@ -926,13 +1036,14 @@ async function main() {
             return;
         }
         loadSample(sample.value);
-        history.replaceState(null, "", location.pathname + location.search);
-        const a = active;
-        active = "";
-        openFile(a);
-        renderBook();
-        runCompile();
-        showTab("vba");
+        projectOpened();
+    };
+    $("new").onclick = () => {
+        if (!confirm("新しいプロジェクトを作ると、いまのファイルとブックは置き換わります。作りますか？")) return;
+        newProject();
+        sample.value = "";
+        projectOpened();
+        toast("新しいプロジェクトを作りました（src/main.ras と空のブック Book.xlsx）");
     };
 
     editor = new EditorView({ parent: $("editor") });
@@ -960,7 +1071,7 @@ async function main() {
         if (f.fileName.endsWith(".doccls")) download(`${f.name}.txt`, encodeVba(f.text.replace(/\n/g, "\r\n"), codepage), "text/plain");
         else download(f.fileName, encodeVba(f.file, codepage), "text/plain");
     };
-    $("pack").onclick = packWorkbook;
+    $("pack").onclick = () => packWorkbook();
     $("run").onclick = () => run("run");
     $("test").onclick = () => run("test");
     $("stop").onclick = stopRun;
@@ -984,6 +1095,7 @@ async function main() {
     $("book-new").onclick = () => {
         workbook = newWorkbook();
         lastRun = null;
+        clearBookHistory();
         setWorkbookPath(workbook.name);
         if (active === "ras.toml") {
             active = "";
@@ -992,11 +1104,18 @@ async function main() {
         renderBook();
         scheduleCompile(0);
     };
-    $("book-download").onclick = () => {
-        const b = lastRun ? lastRun.after : workbook;
-        const type = b.name.endsWith(".xlsm") ? "application/vnd.ms-excel.sheet.macroEnabled.12" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-        download(b.name, b.bytes, type);
-    };
+    for (const b of document.querySelectorAll<HTMLButtonElement>("#book-which button")) {
+        b.onclick = () => {
+            showBefore = b.dataset.which === "before";
+            renderBook();
+        };
+    }
+    window.addEventListener("message", (e) => {
+        if (e.source !== $<HTMLIFrameElement>("book").contentWindow) return;
+        const m = e.data && (e.data as { rasView?: unknown }).rasView;
+        if (m && typeof m === "object") bookMessage(m);
+    });
+    $("book-download").onclick = () => packWorkbook(lastRun && !showBefore ? lastRun.after : workbook);
     document.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !editor.hasFocus) {
             e.preventDefault();

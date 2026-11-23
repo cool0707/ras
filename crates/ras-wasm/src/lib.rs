@@ -8,7 +8,7 @@
 //!   (`crates/ras-book`); its methods are those of `ras_workbook::js`.
 //! - [`pack_book`]: `ras pack` into the bytes of a workbook.
 //! - [`diff_text`], [`view_page`]: what `ras run` prints of the cells a program changed, and the
-//!   page of `ras book view`.
+//!   page of `ras book view`; [`edit_book`]: `ras book edit`, for the edits made on that page.
 //!
 //! Everything crosses as JSON text, numbers and bytes, so that the JavaScript side needs nothing
 //! but what `wasm-bindgen` generates.
@@ -503,19 +503,22 @@ pub fn diff_text(before: &[u8], after: &[u8], max_cells: usize) -> Result<String
 }
 
 /// The page of `ras book view` for a workbook: with `before`, what differs from it is marked.
+/// `editable`: the page of `ras book view --editable`, whose edits are posted to the page that
+/// holds it (its parent window), which makes them with [`edit_book`] and draws the page again.
 #[wasm_bindgen(js_name = viewPage)]
 pub fn view_page(
     bytes: &[u8],
     name: &str,
     before: Option<Vec<u8>>,
     before_name: &str,
+    editable: bool,
 ) -> Result<String, JsError> {
     let mut b = open(bytes)?;
     let changes = match before {
         Some(old) => Some(diff::diff(&mut open(&old)?, &mut b).map_err(err)?),
         None => None,
     };
-    let data = view::data(
+    let mut data = view::data(
         &mut b,
         name,
         Some(bytes),
@@ -523,7 +526,24 @@ pub fn view_page(
         changes.as_ref().map(|d| (before_name, d)),
     )
     .map_err(err)?;
+    if editable {
+        data["editable"] = true.into();
+        data["host"] = "parent".into();
+        // For the completion of formulas typed into the cells.
+        data["functions"] = view::functions();
+    }
     Ok(view::page(&data))
+}
+
+/// `ras book edit`: the bytes of the workbook with the edits the page posted (JSON: one edit or
+/// an array of them; those that name no sheet are of the first sheet).
+#[wasm_bindgen(js_name = editBook)]
+pub fn edit_book(bytes: &[u8], ops: &str) -> Result<Vec<u8>, JsError> {
+    let first = open(bytes)?.sheet_name(0).map(str::to_string);
+    let json: Json =
+        serde_json::from_str(ops).map_err(|e| err(format!("編集の JSON を読み取れません: {e}")))?;
+    let ops = ras_workbook::patch::parse_ops(&json, first.as_deref()).map_err(err)?;
+    ras_workbook::patch::apply(bytes, &ops).map_err(err)
 }
 
 #[cfg(test)]

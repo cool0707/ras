@@ -1,6 +1,6 @@
 // The grid of `ras book view` (and of the editor's sheet panel): draws the sheets of DATA.
 // (A sheet: `filter` is its filter's range, `filterColumns` { offset: { values, blanks } | { other } } the columns filtered.)
-// DATA = { editable?: true, file, sheets: [sheet_view...], images: [data URL], diff: { before, structure: [text], changes: { sheet: [{ a, before, after }] } } | null, active: name | null, focus?: true }
+// DATA = { editable?: true, host?: "parent", file, sheets: [sheet_view...], images: [data URL], diff: { before, structure: [text], changes: { sheet: [{ a, before, after }] } } | null, active: name | null, focus?: true }
 // (`focus`: `active` was asked for (`ras book view --sheet`) and comes before the sheet shown last time.)
 //
 // The grid goes on past the cells as Excel's does: empty rows and columns are added while the
@@ -37,7 +37,31 @@
     const AHEAD = 400;
 
     // What is kept when the page is drawn again (the editor redraws it at every stop).
-    const vscode = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null;
+    // The editor is VS Code's (its webview), or, with `host: "parent"`, the page that holds this
+    // one in a frame (the playground): what is posted goes to it as `{ rasView: message }`, and
+    // what is kept is kept in the session's storage.
+    const parentHost = () => {
+        const key = "ras-view-state";
+        return {
+            postMessage: (m) => window.parent.postMessage({ rasView: m }, "*"),
+            getState: () => {
+                try {
+                    return JSON.parse(sessionStorage.getItem(key) || "null");
+                } catch {
+                    return null;
+                }
+            },
+            setState: (state) => {
+                try {
+                    sessionStorage.setItem(key, JSON.stringify(state));
+                } catch {
+                    // Then it is not kept.
+                }
+            },
+        };
+    };
+    const vscode =
+        typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : data.host === "parent" && window.parent !== window ? parentHost() : null;
     const saved = (vscode && vscode.getState()) || {};
     const remember = (patch) => {
         Object.assign(saved, patch);
