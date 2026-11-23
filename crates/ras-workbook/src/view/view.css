@@ -184,6 +184,7 @@ body.busy, body.busy td, body.busy th { cursor: progress; }
 .menu.shapes .shaperow { display: flex; flex-wrap: wrap; gap: 1px; margin-bottom: 4px; }
 .menu.shapes .shapebtn { display: inline-flex; width: 28px; height: 28px; padding: 3px; gap: 0; justify-content: center; align-items: center; border: 1px solid transparent; border-radius: 3px; color: #2f5597; }
 .menu.shapes .shapebtn:hover { border-color: var(--accent); }
+.menu .pnote { padding: 2px 12px 6px; color: #777; font-size: 12px; }
 .dlgback { position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .15); }
 .dlg { min-width: 200px; padding: 12px 16px; background: #fff; border: 1px solid #999; box-shadow: 0 4px 18px rgba(0, 0, 0, .3); }
 .dlg h2 { margin: 0 0 8px; font-size: 13px; }

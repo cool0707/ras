@@ -682,7 +682,7 @@ fn comment_edit(doc: &str, a1: &str, text: Option<&str>, author: &str) -> Option
 }
 
 /// The blocks of shape ids a VML drawing has (`<o:idmap data="1,2">`).
-fn idmap(doc: &str) -> Vec<u32> {
+pub(super) fn idmap(doc: &str) -> Vec<u32> {
     scan::tags(doc, 0)
         .filter(|t| !t.is_close() && t.local() == "idmap")
         .filter_map(|t| scan::attr(doc, t.start..t.end, "data"))

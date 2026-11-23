@@ -1578,3 +1578,204 @@ fn objects_filled_lined_turned_and_reordered() {
     let mut book = Book::open_bytes(&front).unwrap();
     assert!(book.sheet_summary(0).is_ok());
 }
+
+/// The controls the grid draws on a sheet: (name, shape number, from, to).
+fn controls_of(bytes: &[u8], sheet: usize) -> Vec<(String, u64, Json, Json)> {
+    view(bytes)["sheets"][sheet]["objects"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|o| o["kind"] == json!("control"))
+        .map(|o| {
+            (
+                o["name"].as_str().unwrap_or("").to_string(),
+                o["shapeId"].as_u64().unwrap_or(0),
+                o["from"].clone(),
+                o["to"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn form_controls_in_vml_put_moved_and_deleted() {
+    // A sheet whose controls are in VML alone (XlsxWriter's button, as Excel 2007 writes them):
+    // a new one is too, after its shapes.
+    let out = edit(
+        r#"{"op":"control","control":"checkBox","at":"H18","width":100,"height":22,"link":"$I$18","checked":true,"text":"済み"}"#,
+    );
+    assert_eq!(changed(BOOK, &out), ["xl/drawings/vmlDrawing1.vml"]);
+    let vml = part(&out, "xl/drawings/vmlDrawing1.vml");
+    assert!(vml.ends_with(r#"<x:ClientData ObjectType="Checkbox"><x:Anchor>7, 0, 17, 0, 8, 28, 18, 2</x:Anchor><x:AutoFill>False</x:AutoFill><x:AutoLine>False</x:AutoLine><x:TextVAlign>Center</x:TextVAlign><x:FmlaLink>$I$18</x:FmlaLink><x:Checked>1</x:Checked><x:NoThreeD/></x:ClientData></v:shape></xml>"#), "{vml}");
+    assert!(vml.contains(r##"<v:shape id="_x0000_s1027" type="#_x0000_t201" style="position:absolute;z-index:3;mso-wrap-style:tight;margin-left:435pt;margin-top:270pt;width:75pt;height:16.5pt""##), "{vml}");
+    assert!(vml.contains(">済み</font>"));
+    assert_eq!(vml.matches("id=\"_x0000_t201\"").count(), 1);
+    let drawn = controls_of(&out, 0);
+    assert_eq!(drawn[1].1, 1027);
+    assert_eq!(
+        (drawn[1].2.clone(), drawn[1].3.clone()),
+        (json!([7, 0.0, 17, 0.0]), json!([8, 28.0, 18, 2.0]))
+    );
+
+    // A sheet without VML gets a drawing of its own, numbered in a block no other has.
+    let out = edit(
+        r#"{"op":"control","sheet":"Summary","control":"button","at":"C2","macro":"Module1.run"}"#,
+    );
+    assert_eq!(
+        changed(BOOK, &out),
+        [
+            "xl/drawings/vmlDrawing2.vml",
+            "xl/worksheets/_rels/sheet2.xml.rels",
+            "xl/worksheets/sheet2.xml"
+        ]
+    );
+    let vml = part(&out, "xl/drawings/vmlDrawing2.vml");
+    assert!(
+        vml.contains(r#"<o:idmap v:ext="edit" data="2"/>"#) && vml.contains(r#"id="_x0000_s2049""#),
+        "{vml}"
+    );
+    assert!(
+        vml.contains("<x:FmlaMacro>[0]!Module1.run</x:FmlaMacro>")
+            && vml.contains(">ボタン 1</font>")
+    );
+    assert!(part(&out, SHEET2).contains(r#"<legacyDrawing r:id="rId1"/></worksheet>"#));
+    assert_eq!(controls_of(&out, 1)[0].1, 2049);
+
+    // Moved: its VML anchor and style; deleted: its shape (the note's box stays).
+    let moved = edit(r#"{"op":"object","shape":1025,"at":"B12","dx":4}"#);
+    assert_eq!(changed(BOOK, &moved), ["xl/drawings/vmlDrawing1.vml"]);
+    let vml = part(&moved, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains("<x:Anchor>1, 4, 11, 0, 2, 20, 12, 10</x:Anchor>"),
+        "{vml}"
+    );
+    assert!(
+        vml.contains("margin-left:91.5pt;margin-top:180pt;width:66pt;height:22.5pt"),
+        "{vml}"
+    );
+    let gone = edit(r#"{"op":"object","shape":1025,"delete":true}"#);
+    let vml = part(&gone, "xl/drawings/vmlDrawing1.vml");
+    assert!(!vml.contains("_x0000_s1025") && vml.contains("ObjectType=\"Note\""));
+    assert!(controls_of(&gone, 0).is_empty());
+    assert_eq!(cell(&gone, "Data", "D6", Read::Formula), "=SUM(D2:D5)");
+
+    // Refused: a note's box, what a control does not have, kinds there are not.
+    assert!(
+        refused(r#"{"op":"object","shape":1026,"delete":true}"#)
+            .contains("コントロール `_x0000_s1026` がありません")
+    );
+    assert!(
+        refused(r##"{"op":"object","shape":1025,"fill":"#FF0000"}"##)
+            .contains("移動・サイズの変更・削除だけ")
+    );
+    assert!(refused(r#"{"op":"object","shape":1099,"delete":true}"#).contains("1099"));
+    for bad in [
+        json!({"op":"control","control":"slider","at":"A1"}),
+        json!({"op":"control","control":"checkBox","at":"A1","link":"どこか"}),
+        json!({"op":"control","control":"spinner","at":"A1","min":10,"max":5}),
+        json!({"op":"control","control":"button","at":"A1","macro":"a b"}),
+    ] {
+        assert!(parse_ops(&bad, Some("Data")).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn form_controls_as_excel_2010_keeps_them() {
+    // A sheet saved by Excel 2010 or later: `<controls>`, the properties, the mirrors.
+    let sample = crate::view::tests::sample();
+    let sheet1 = "xl/worksheets/sheet1.xml";
+    let ed = |bytes: &[u8], json: &str| {
+        apply(
+            bytes,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+    };
+    let out = ed(&sample, r#"{"op":"control","control":"listBox","at":"B2","width":80,"height":60,"items":"$K$18:$K$20","link":"$L$1"}"#).unwrap();
+    assert_eq!(
+        changed(&sample, &out),
+        [
+            "[Content_Types].xml",
+            "xl/ctrlProps/ctrlProp4.xml",
+            "xl/drawings/drawing1.xml",
+            "xl/drawings/vmlDrawing1.vml",
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            sheet1
+        ]
+    );
+    assert_eq!(
+        part(&out, "xl/ctrlProps/ctrlProp4.xml"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<formControlPr xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" objectType=\"List\" dx=\"16\" fmlaRange=\"$K$18:$K$20\" fmlaLink=\"$L$1\" noThreeD=\"1\" sel=\"0\"/>"
+    );
+    assert!(part(&out, "[Content_Types].xml").contains(r#"<Override PartName="/xl/ctrlProps/ctrlProp4.xml" ContentType="application/vnd.ms-excel.controlproperties+xml"/>"#));
+    let doc = part(&out, sheet1);
+    assert!(doc.contains(r#"<control shapeId="1031" r:id="rId5" name="リスト 7"><controlPr defaultSize="0" autoFill="0" autoLine="0" autoPict="0"><anchor moveWithCells="1"><from><xdr:col>1</xdr:col>"#), "{doc}");
+    assert!(doc.contains(r#"<mc:Fallback><control shapeId="1031" r:id="rId5" name="リスト 7"/></mc:Fallback></mc:AlternateContent></controls>"#));
+    assert!(part(&out, "xl/drawings/drawing1.xml").contains(r#"<xdr:cNvPr id="1031" name="リスト 7" hidden="1"><a:extLst><a:ext uri="{63B3BB69-23CF-44E3-9099-C40C66FF867C}"><a14:compatExt spid="_x0000_s1031"/>"#));
+    assert!(
+        part(&out, "xl/drawings/vmlDrawing1.vml").contains(r#"<x:ClientData ObjectType="List">"#)
+    );
+    let drawn = controls_of(&out, 0);
+    let list = drawn.iter().find(|c| c.0 == "リスト 7").unwrap();
+    assert_eq!((list.1, list.2.clone()), (1031, json!([1, 0.0, 1, 0.0])));
+
+    // Moved by its name: its entry, its VML shape and its mirror.
+    let moved = ed(&sample, r#"{"op":"object","name":"Button 1","at":"B3"}"#).unwrap();
+    assert_eq!(
+        changed(&sample, &moved),
+        [
+            "xl/drawings/drawing1.xml",
+            "xl/drawings/vmlDrawing1.vml",
+            sheet1
+        ]
+    );
+    let doc = part(&moved, sheet1);
+    assert!(doc.contains(r#"name="Button 1"><controlPr defaultSize="0" autoLine="0"><anchor moveWithCells="1"><from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>3</xdr:col>"#), "{doc}");
+    assert!(
+        part(&moved, "xl/drawings/vmlDrawing1.vml")
+            .contains("<x:Anchor>1, 0, 2, 0, 3, 0, 4, 0</x:Anchor>")
+    );
+    let button = controls_of(&moved, 0)
+        .into_iter()
+        .find(|c| c.0 == "Button 1")
+        .unwrap();
+    assert_eq!(
+        (button.2, button.3),
+        (json!([1, 0.0, 2, 0.0]), json!([3, 0.0, 4, 0.0]))
+    );
+
+    // Deleted: its entry, its properties (the part, its relationship, its content type), its
+    // VML shape; the others stay.
+    let gone = ed(
+        &sample,
+        r#"{"op":"object","name":"Check Box 3","delete":true}"#,
+    )
+    .unwrap();
+    assert!(!parts(&gone).contains_key("xl/ctrlProps/ctrlProp2.xml"));
+    assert!(!part(&gone, "[Content_Types].xml").contains("ctrlProp2"));
+    assert!(!part(&gone, "xl/worksheets/_rels/sheet1.xml.rels").contains("ctrlProp2"));
+    assert!(!part(&gone, sheet1).contains("Check Box 3"));
+    assert!(!part(&gone, "xl/drawings/vmlDrawing1.vml").contains("_x0000_s1027"));
+    let names: Vec<String> = controls_of(&gone, 0).into_iter().map(|c| c.0).collect();
+    assert!(
+        !names.contains(&"Check Box 3".to_string()) && names.contains(&"List Box 4".to_string()),
+        "{names:?}"
+    );
+    // With its mirror.
+    let gone = ed(
+        &sample,
+        r#"{"op":"object","name":"Button 1","delete":true}"#,
+    )
+    .unwrap();
+    assert!(!part(&gone, "xl/drawings/drawing1.xml").contains("_x0000_s1025"));
+
+    // An ActiveX control is Excel's to change.
+    assert!(
+        ed(
+            &sample,
+            r#"{"op":"object","name":"CommandButton1","delete":true}"#
+        )
+        .unwrap_err()
+        .contains("ActiveX")
+    );
+}

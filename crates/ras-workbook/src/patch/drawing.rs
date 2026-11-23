@@ -11,8 +11,9 @@ use super::{ObjectChange, Order, Place, Result};
 use crate::book::Book;
 use crate::book::view::Sizes;
 
-const XDR_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
-const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+pub(super) const XDR_NS: &str =
+    "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+pub(super) const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const DRAWING_TYPE: &str = "application/vnd.openxmlformats-officedocument.drawing+xml";
 /// EMU in a pixel at 96 dpi.
@@ -56,7 +57,7 @@ pub(super) const SHAPES: [(&str, &str); 24] = [
 
 /// The box of a place on the sheet in pixels: (left, top, right, bottom). `own`: the size of
 /// the object when the place gives none (one side given: the other keeps the proportion).
-fn box_of(sizes: &Sizes, place: &Place, own: (f64, f64)) -> (f64, f64, f64, f64) {
+pub(super) fn box_of(sizes: &Sizes, place: &Place, own: (f64, f64)) -> (f64, f64, f64, f64) {
     match place {
         Place::Cells(range) => (
             sizes.x(range.start.col),
@@ -86,12 +87,12 @@ fn box_of(sizes: &Sizes, place: &Place, own: (f64, f64)) -> (f64, f64, f64, f64)
     }
 }
 
-fn emu(px: f64) -> i64 {
+pub(super) fn emu(px: f64) -> i64 {
     (px * EMU_PX).round() as i64
 }
 
 /// A marker of an anchor (`from`, `to`) at a point of the sheet.
-fn marker_xml(x: &str, tag: &str, sizes: &Sizes, px: f64, py: f64) -> String {
+pub(super) fn marker_xml(x: &str, tag: &str, sizes: &Sizes, px: f64, py: f64) -> String {
     let (col, dx, row, dy) = sizes.marker(px, py);
     format!(
         "<{x}{tag}><{x}col>{col}</{x}col><{x}colOff>{}</{x}colOff><{x}row>{row}</{x}row><{x}rowOff>{}</{x}rowOff></{x}{tag}>",
@@ -100,7 +101,7 @@ fn marker_xml(x: &str, tag: &str, sizes: &Sizes, px: f64, py: f64) -> String {
     )
 }
 
-fn sizes_of(bytes: &[u8], sheet: &str) -> Result<Sizes> {
+pub(super) fn sizes_of(bytes: &[u8], sheet: &str) -> Result<Sizes> {
     let book = Book::open_bytes(bytes)?;
     let si = book
         .find_sheet(sheet)
@@ -112,15 +113,15 @@ fn sizes_of(bytes: &[u8], sheet: &str) -> Result<Sizes> {
 // ---------------------------------------------------------------------------- the drawing
 
 /// The drawing of a sheet: its part and XML; a new one when the sheet has none.
-struct Drawing {
-    part: String,
-    doc: String,
+pub(super) struct Drawing {
+    pub(super) part: String,
+    pub(super) doc: String,
     /// The sheet's XML with the `<drawing>` that refers to a new drawing.
-    sheet_doc: Option<String>,
+    pub(super) sheet_doc: Option<String>,
 }
 
 /// The sheet's drawing (made, with its relationship and content type, when it has none).
-fn drawing_of(s: &mut Sheet, make: bool) -> Result<Option<Drawing>> {
+pub(super) fn drawing_of(s: &mut Sheet, make: bool) -> Result<Option<Drawing>> {
     let sdoc = s.doc.clone();
     let root = tree(&sdoc, &s.part)?;
     let rels = s.rels()?;
@@ -163,7 +164,7 @@ fn drawing_of(s: &mut Sheet, make: bool) -> Result<Option<Drawing>> {
 
 /// The prefix (with its colon) the root of a document gives a namespace; None when it does
 /// not declare it.
-fn ns_prefix(doc: &str, root: &El, ns: &str) -> Option<String> {
+pub(super) fn ns_prefix(doc: &str, root: &El, ns: &str) -> Option<String> {
     scan::attrs(doc, root.open.clone())
         .into_iter()
         .find(|(name, span)| {
@@ -204,7 +205,7 @@ fn append(doc: &str, make: impl FnOnce(&str, &str, u32) -> String) -> Result<Str
 
 /// The id a new object of the drawing gets: one more than the largest (2 for the first, as
 /// Excel numbers them).
-fn next_id(doc: &str) -> u32 {
+pub(super) fn next_id(doc: &str) -> u32 {
     scan::tags(doc, 0)
         .filter(|t| !t.is_close() && t.local() == "cNvPr")
         .filter_map(|t| scan::attr(doc, t.start..t.end, "id")?.parse::<u32>().ok())
@@ -434,14 +435,14 @@ pub(super) fn base64_decode(text: &str) -> Result<Vec<u8>> {
 
 /// An object of the drawing as the grid lists it: its anchors (the alternatives of one in
 /// `mc:AlternateContent`) and what is deleted with it.
-struct Unit<'a, 'd> {
-    span: std::ops::Range<usize>,
-    anchors: Vec<&'a El<'d>>,
+pub(super) struct Unit<'a, 'd> {
+    pub(super) span: std::ops::Range<usize>,
+    pub(super) anchors: Vec<&'a El<'d>>,
 }
 
 const OBJECTS: [&str; 5] = ["sp", "cxnSp", "grpSp", "pic", "graphicFrame"];
 
-fn object_of<'a, 'd>(anchor: &'a El<'d>) -> Option<&'a El<'d>> {
+pub(super) fn object_of<'a, 'd>(anchor: &'a El<'d>) -> Option<&'a El<'d>> {
     anchor
         .children
         .iter()
@@ -457,14 +458,14 @@ fn find_all<'a, 'd>(el: &'a El<'d>, name: &str, out: &mut Vec<&'a El<'d>>) {
     }
 }
 
-fn first<'a, 'd>(el: &'a El<'d>, name: &str) -> Option<&'a El<'d>> {
+pub(super) fn first<'a, 'd>(el: &'a El<'d>, name: &str) -> Option<&'a El<'d>> {
     let mut all = Vec::new();
     find_all(el, name, &mut all);
     all.into_iter().next()
 }
 
 /// The objects of the drawing, in order.
-fn units<'a, 'd>(root: &'a El<'d>) -> Vec<Unit<'a, 'd>> {
+pub(super) fn units<'a, 'd>(root: &'a El<'d>) -> Vec<Unit<'a, 'd>> {
     let mut out = Vec::new();
     for c in &root.children {
         if c.local().ends_with("Anchor") {
@@ -492,14 +493,14 @@ fn units<'a, 'd>(root: &'a El<'d>) -> Vec<Unit<'a, 'd>> {
     out
 }
 
-fn name_of(doc: &str, anchor: &El) -> Option<String> {
+pub(super) fn name_of(doc: &str, anchor: &El) -> Option<String> {
     let obj = object_of(anchor)?;
     let nv = obj.children.iter().find(|c| c.local().starts_with("nv"))?;
     nv.child("cNvPr")?.attr(doc, "name")
 }
 
 /// The point of a marker (`from`, `to`) of an anchor in pixels.
-fn marker_point(doc: &str, sizes: &Sizes, m: &El) -> Option<(f64, f64)> {
+pub(super) fn marker_point(doc: &str, sizes: &Sizes, m: &El) -> Option<(f64, f64)> {
     let n = |name: &str| -> Option<f64> { m.child(name)?.text(doc).trim().parse().ok() };
     Some((
         sizes.x(n("col")? as u32) + n("colOff")? / EMU_PX,
@@ -508,7 +509,7 @@ fn marker_point(doc: &str, sizes: &Sizes, m: &El) -> Option<(f64, f64)> {
 }
 
 /// The box of an anchor in pixels.
-fn anchor_box(doc: &str, sizes: &Sizes, a: &El) -> Option<(f64, f64, f64, f64)> {
+pub(super) fn anchor_box(doc: &str, sizes: &Sizes, a: &El) -> Option<(f64, f64, f64, f64)> {
     let ext = |el: &El| -> Option<(f64, f64)> {
         Some((
             el.attr(doc, "cx")?.parse::<f64>().ok()? / EMU_PX,
@@ -544,6 +545,32 @@ pub(super) fn object(
     name: &str,
     change: &ObjectChange,
 ) -> Result<Vec<u8>> {
+    // A form control: moved, sized or deleted where all its places are.
+    if let Some(id) = super::controls::find(bytes, sheet, name, change.shape)? {
+        let only = ObjectChange {
+            shape: change.shape,
+            place: change.place.clone(),
+            delete: change.delete,
+            ..Default::default()
+        };
+        if *change != only {
+            return Err(format!(
+                "`{}` はコントロールのため、移動・サイズの変更・削除だけができます",
+                if name.is_empty() {
+                    format!("_x0000_s{id}")
+                } else {
+                    name.to_string()
+                }
+            ));
+        }
+        return super::controls::change(bytes, sheet, id, change.place.as_ref(), change.delete);
+    }
+    if name.is_empty() {
+        return Err(format!(
+            "シート `{sheet}` にコントロール `_x0000_s{}` がありません",
+            change.shape.unwrap_or_default()
+        ));
+    }
     let sizes = sizes_of(bytes, sheet)?;
     let mut s = Sheet::open(bytes, sheet)?;
     let missing = || format!("シート `{sheet}` に図形・画像 `{name}` がありません");
@@ -677,7 +704,13 @@ fn turn_box(b: (f64, f64, f64, f64), rot: f64) -> (f64, f64, f64, f64) {
 }
 
 /// The anchor of an object written for a box (px): its markers, or its position and size.
-fn write_anchor(doc: &str, a: &El, sizes: &Sizes, b: (f64, f64, f64, f64), edits: &mut Edits) {
+pub(super) fn write_anchor(
+    doc: &str,
+    a: &El,
+    sizes: &Sizes,
+    b: (f64, f64, f64, f64),
+    edits: &mut Edits,
+) {
     let (x0, y0) = (b.0.max(0.0), b.1.max(0.0));
     let (x1, y1) = (b.2.max(x0), b.3.max(y0));
     let x = scan::prefix(a.name).to_string();
@@ -697,7 +730,7 @@ fn write_anchor(doc: &str, a: &El, sizes: &Sizes, b: (f64, f64, f64, f64), edits
 }
 
 /// The offset and size of an object's transform written for its box (px).
-fn write_xfrm(doc: &str, obj: &El, b: (f64, f64, f64, f64), edits: &mut Edits) {
+pub(super) fn write_xfrm(doc: &str, obj: &El, b: (f64, f64, f64, f64), edits: &mut Edits) {
     let Some(xfrm) = obj
         .children
         .iter()
@@ -979,7 +1012,7 @@ fn drop_unused(s: &mut Sheet, drawing: &str, removed: &str, doc: String) -> Resu
 /// A part taken out of the file when no relationship points to it any more, with its own
 /// relationships and the parts only it pointed to (a chart's style and colors), and its content
 /// type.
-fn drop_part(s: &mut Sheet, part: &str) -> Result<()> {
+pub(super) fn drop_part(s: &mut Sheet, part: &str) -> Result<()> {
     if !s.has(part) || referenced(s, part)? {
         return Ok(());
     }

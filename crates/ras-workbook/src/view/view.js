@@ -838,7 +838,13 @@
             });
             // Dragged: moved (in the panel that edits the workbook).
             box.addEventListener("mousedown", (e) => {
-                if (e.button !== 0 || !movable(obj) || drawingShape) return;
+                if (e.button !== 0 || drawingShape) return;
+                // (What cannot be moved is selected all the same: Delete and the arrows are not
+                // for the object selected before it.)
+                if (!movable(obj)) {
+                    if (selectedObj !== obj) selectObject(box, obj);
+                    return;
+                }
                 e.preventDefault();
                 if (selectedObj !== obj) selectObject(box, obj);
                 focusGrid();
@@ -2411,7 +2417,28 @@
     let swallowClick = false;
     // The objects that can be moved, sized and deleted here: not the controls (they are drawn
     // from the sheet's controls and their VML shapes too).
-    const movable = (obj) => editable && !!obj && !!obj.name && obj.kind !== "control";
+    // A form control too, by its shape (not an ActiveX control, nor an embedded object, which
+    // have no macro).
+    const isForm = (obj) => !!obj && obj.kind === "control" && obj.shapeId !== undefined && !!obj.onAction && obj.activex === undefined;
+    const movable = (obj) => editable && !!obj && (isForm(obj) || (!!obj.name && obj.kind !== "control"));
+    // How an edit names an object: a form control by its shape.
+    const target = (obj) => (isForm(obj) ? { shape: obj.shapeId } : { name: obj.name });
+    // What tells an object from the others after the page is drawn again.
+    const keyOf = (obj) => (isForm(obj) ? `#${obj.shapeId}` : obj.name || "");
+
+    // The form controls of 開発 > 挿入: [kind, name, icon (16 × 16)].
+    const FORM_CONTROLS = [
+        ["button", "ボタン", '<rect x="1.5" y="4" width="13" height="8" rx="1"/><path d="M4 10.5h8" stroke-opacity=".4"/>'],
+        ["comboBox", "コンボ ボックス", '<rect x="1.5" y="5" width="13" height="6"/><path d="M10.5 5v6M11.8 7.3l.7.9.7-.9"/>'],
+        ["checkBox", "チェック ボックス", '<rect x="2.5" y="4.5" width="7" height="7"/><path d="m3.8 8 1.7 1.7 2.7-3.4"/><path d="M11 8h3.5" stroke-opacity=".5"/>'],
+        ["spinner", "スピン ボタン", '<rect x="5" y="1.5" width="6" height="13"/><path d="M5 8h6M6.8 5.3 8 4l1.2 1.3M6.8 10.7 8 12l1.2-1.3"/>'],
+        ["listBox", "リスト ボックス", '<rect x="1.5" y="2.5" width="13" height="11"/><path d="M3.5 5.5h6M3.5 8h6M3.5 10.5h6M11 2.5v11"/>'],
+        ["optionButton", "オプション ボタン", '<circle cx="6" cy="8" r="3.5"/><circle cx="6" cy="8" r="1.3" fill="currentColor"/><path d="M11 8h3.5" stroke-opacity=".5"/>'],
+        ["groupBox", "グループ ボックス", '<path d="M5 3.5H1.5v10h13v-10H11"/><path d="M6 3.5h4" stroke-opacity=".5"/>'],
+        ["label", "ラベル", '<text x="2" y="12" font-size="10" stroke="none" fill="currentColor" font-family="sans-serif">Aa</text>'],
+        ["scrollBar", "スクロール バー", '<rect x="1.5" y="5" width="13" height="6"/><path d="M4 5v6M12 5v6M6.5 7h3v2h-3z"/>'],
+    ];
+    const isControlKind = (kind) => kind.startsWith("control:");
 
     // A point of the sheet (px at 100% from the top left of the grid, as the objects are placed).
     function sheetPoint(e) {
@@ -2441,9 +2468,10 @@
         return { at: address(r, c), dx: round(Math.max(0, x - columnLeft(v, c)) / (formulas ? 2 : 1)), dy: round(Math.max(0, y - rowTop(v, r))) };
     }
     // After the page is drawn again: the object the edit made or changed is selected.
-    function pickAfter(name) {
+    // `key`: the object's (`keyOf`), or null for the one the edit adds.
+    function pickAfter(key) {
         if (!view) return;
-        remember({ pickObj: { sheet: view.sheet.name, name: name || null, before: name ? null : (view.sheet.objects || []).map((o) => o.name || "") } });
+        remember({ pickObj: { sheet: view.sheet.name, key: key || null, before: key ? null : (view.sheet.objects || []).map(keyOf) } });
     }
     function pickObject(v) {
         const p = saved.pickObj;
@@ -2451,7 +2479,7 @@
         remember({ pickObj: null });
         if (p.sheet !== v.sheet.name) return;
         const objects = v.sheet.objects || [];
-        const obj = p.name ? objects.find((o) => o.name === p.name) : objects.find((o) => o.name && !p.before.includes(o.name));
+        const obj = p.key ? objects.find((o) => keyOf(o) === p.key) : objects.find((o) => keyOf(o) && !(p.before || []).includes(keyOf(o)));
         if (obj && obj.box) selectObject(obj.box, obj);
     }
 
@@ -2474,6 +2502,7 @@
         }
     }
     function shapeName(kind) {
+        if (isControlKind(kind)) return (FORM_CONTROLS.find((c) => `control:${c[0]}` === kind) || [, kind])[1];
         for (const [, list] of SHAPE_GROUPS) for (const [k, name] of list) if (k === kind) return name;
         return kind;
     }
@@ -2551,7 +2580,14 @@
             let [x0, y0] = d.start;
             let [x1, y1] = d.now;
             // A click: the shape's size from there.
-            if (Math.abs(x1 - x0) < 3 && Math.abs(y1 - y0) < 3) [x1, y1] = [x0 + clickSize(d.kind)[0], y0 + clickSize(d.kind)[1]];
+            if (Math.abs(x1 - x0) < 3 && Math.abs(y1 - y0) < 3) {
+                // A control put with a click: the size Excel gives it.
+                if (isControlKind(d.kind)) {
+                    putControl(d.kind.slice(8), x0, y0, null);
+                    return;
+                }
+                [x1, y1] = [x0 + clickSize(d.kind)[0], y0 + clickSize(d.kind)[1]];
+            }
             putShape(d.kind, x0, y0, x1, y1);
             return;
         }
@@ -2561,6 +2597,10 @@
     // A shape put where it was drawn: a line keeps its direction (flipped as Excel writes it); a
     // text box asks for its text first.
     function putShape(kind, x0, y0, x1, y1) {
+        if (isControlKind(kind)) {
+            putControl(kind.slice(8), Math.min(x0, x1), Math.min(y0, y1), { width: Math.round(Math.abs(x1 - x0)), height: Math.round(Math.abs(y1 - y0)) });
+            return;
+        }
         const line = LINES.has(kind);
         const op = { op: "shape", sheet: view.sheet.name, shape: kind, ...anchorOf(Math.min(x0, x1), Math.min(y0, y1)), width: Math.round(Math.abs(x1 - x0)), height: Math.round(Math.abs(y1 - y0)) };
         if (line && x1 < x0) op.flipH = true;
@@ -2575,6 +2615,14 @@
             pickAfter(null);
             postEdit([op]);
         });
+    }
+    // A form control put where it was drawn (`size` null: Excel's size for it).
+    function putControl(kind, x, y, size) {
+        const op = { op: "control", sheet: view.sheet.name, control: kind, ...anchorOf(x, y), ...(size || {}) };
+        // A scroll bar drawn wider than high goes across.
+        if (kind === "scrollBar" && size && size.width > size.height) op.horizontal = true;
+        pickAfter(null);
+        postEdit([op]);
     }
     // The text of a shape or a text box (Enter starts a new line; Ctrl+Enter enters it).
     function askText(title, now, done) {
@@ -2602,21 +2650,21 @@
         const sheet = view.sheet.name;
         askText(`テキストの編集（${obj.name}）`, obj.text, (text) => {
             if (text === obj.text) return;
-            pickAfter(obj.name);
-            postEdit([{ op: "object", sheet, name: obj.name, text }]);
+            pickAfter(keyOf(obj));
+            postEdit([{ op: "object", sheet, ...target(obj), text }]);
         });
     }
     function deleteObject(obj) {
         if (!movable(obj) || busy || !view) return;
-        postEdit([{ op: "object", sheet: view.sheet.name, name: obj.name, delete: true }]);
+        postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), delete: true }]);
     }
     // The box of an object as it is placed (px at 100%).
     const boxOfObject = (box) => ({ x: box.offsetLeft, y: box.offsetTop, w: box.offsetWidth, h: box.offsetHeight });
     // An object moved (its box) to where it now is, or sized.
     function moveObject(obj, b) {
         if (!view) return;
-        pickAfter(obj.name);
-        postEdit([{ op: "object", sheet: view.sheet.name, name: obj.name, ...anchorOf(Math.max(0, b.x), Math.max(0, b.y)), width: Math.max(0, Math.round(b.w)), height: Math.max(0, Math.round(b.h)) }]);
+        pickAfter(keyOf(obj));
+        postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), ...anchorOf(Math.max(0, b.x), Math.max(0, b.y)), width: Math.max(0, Math.round(b.w)), height: Math.max(0, Math.round(b.h)) }]);
     }
     // The handles of the selected object: its sides and corners size it.
     const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -2728,8 +2776,8 @@
     const canTurn = (obj) => movable(obj) && !!obj.el && obj.el !== "graphicFrame";
     function objectEdit(obj, change) {
         if (!movable(obj) || busy || !view) return;
-        pickAfter(obj.name);
-        postEdit([{ op: "object", sheet: view.sheet.name, name: obj.name, ...change }]);
+        pickAfter(keyOf(obj));
+        postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), ...change }]);
     }
     // Turned by `by` degrees (clockwise), as 右へ 90 度回転 turns it.
     function turnObject(obj, by) {
@@ -2773,7 +2821,7 @@
     function refreshShapeTools() {
         const ribbon = $("ribbon");
         if (!ribbon || !ribbon.showShapeTab) return;
-        const obj = selected && movable(selectedObj) ? selectedObj : null;
+        const obj = selected && movable(selectedObj) && !isForm(selectedObj) ? selectedObj : null;
         ribbon.showShapeTab(!!obj);
         if (!obj) return;
         tools.shapeFill.disabled = tools.shapeFillMore.disabled = !canFill(obj);
@@ -3029,8 +3077,10 @@
         if (movable(obj)) {
             if (obj.text !== undefined) items.push(["テキストの編集…", () => editObjectText(obj), "F2"]);
             items.push(["削除", () => deleteObject(obj), "Delete"]);
-            items.push(null);
-            for (const [how, label] of ORDERS) items.push([label, () => objectEdit(obj, { order: how }), ""]);
+            if (!isForm(obj)) {
+                items.push(null);
+                for (const [how, label] of ORDERS) items.push([label, () => objectEdit(obj, { order: how }), ""]);
+            }
             if (canTurn(obj)) items.push(["回転…", () => askRotation(obj), ""]);
         }
         const more = eventItems(obj);
@@ -3302,6 +3352,7 @@
         forward: '<rect x="1.5" y="1.5" width="8" height="8" stroke-dasharray="1.5 1.5"/><rect x="6.5" y="6.5" width="8" height="8" fill="#dbe5f1"/>',
         backward: '<rect x="6.5" y="6.5" width="8" height="8" stroke-dasharray="1.5 1.5"/><rect x="1.5" y="1.5" width="8" height="8" fill="#dbe5f1"/>',
         rotate: '<path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M12 1.5v3.2H8.8"/>',
+        controls: '<rect x="1.5" y="2.5" width="6" height="4" rx=".8"/><rect x="9.5" y="2.5" width="5" height="5"/><path d="m10.5 5 1.2 1.2 1.8-2.2"/><circle cx="4.5" cy="11.5" r="2.5"/><rect x="9" y="9.5" width="5.5" height="4"/>',
     };
     function icon(name, large) {
         const s = large ? 30 : 16;
@@ -3845,8 +3896,34 @@
 
         // ---- 開発 (where the objects' events open in the sheet's file)
         const dev = tab("dev", "開発");
-        panels.dev.tab.hidden = true;
+        // (Where the workbook is edited, for its controls; elsewhere for the events.)
+        panels.dev.tab.hidden = !editable;
         group(dev, "コントロール");
+        button("controlInsert", {
+            icon: "controls",
+            label: "挿入",
+            large: true,
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "shapes");
+                head(pop, "フォーム コントロール");
+                const row = pop.appendChild(el("div", "shaperow"));
+                for (const [kind, name, path] of FORM_CONTROLS) {
+                    const b = row.appendChild(el("button", "shapebtn"));
+                    b.type = "button";
+                    b.title = `${name}（フォーム コントロール）`;
+                    b.dataset.control = kind;
+                    b.innerHTML = `<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+                    b.addEventListener("click", () => {
+                        closeMenu();
+                        closeOpen();
+                        startDrawing(`control:${kind}`);
+                    });
+                }
+                head(pop, "ActiveX コントロール");
+                pop.appendChild(el("div", "pnote", "Excel で挿入してください"));
+            },
+        });
         const ev = button("event", {
             icon: "code",
             label: "コードの表示",

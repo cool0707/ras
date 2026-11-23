@@ -20,6 +20,7 @@ use serde_json::Value as Json;
 use crate::book::snapshot::{CellState, Raw, Snapshot, Styles};
 use crate::book::{Book, MAX_COLS, MAX_ROWS, Paste, PasteOp, PasteWhat, SortKey, Val};
 
+mod controls;
 mod drawing;
 mod insert;
 mod macros;
@@ -208,6 +209,8 @@ pub enum Op {
         name: String,
         change: ObjectChange,
     },
+    /// A form control put on the sheet (開発 > 挿入 > フォーム コントロール).
+    Control { sheet: String, control: FormControl },
     /// A table made of `range` (a single cell: the data around it), as Excel's "テーブルの作成"
     /// makes it. `header`: its first row is the headings; otherwise a row of headings (列1,
     /// 列2, ...) is inserted above it.
@@ -237,9 +240,39 @@ pub enum Place {
     },
 }
 
+/// A new form control.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FormControl {
+    /// `button`, `checkBox`, `optionButton`, `label`, `groupBox`, `listBox`, `comboBox`,
+    /// `spinner`, `scrollBar`.
+    pub kind: String,
+    pub place: Place,
+    /// What it shows (a button, a check box, ...; its name when None).
+    pub text: Option<String>,
+    /// The macro it runs (`Module1.run`).
+    pub macro_name: Option<String>,
+    /// The cell it is linked to (`$B$2`), and (a list or combo box) the cells of its items
+    /// (`items` in the edit).
+    pub link: Option<String>,
+    pub range: Option<String>,
+    /// A check box or an option button checked.
+    pub checked: bool,
+    /// A spin button's or a scroll bar's value, least and greatest, step and page.
+    pub value: Option<i64>,
+    pub min: Option<i64>,
+    pub max: Option<i64>,
+    pub step: Option<i64>,
+    pub page: Option<i64>,
+    /// A scroll bar across.
+    pub horizontal: bool,
+}
+
 /// What an `object` edit changes of an object of the drawing (None: what it has stays).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ObjectChange {
+    /// The object by the number of its shape (a form control: 1025 for `_x0000_s1025`), when
+    /// it is not named.
+    pub shape: Option<u32>,
     /// Moved and sized.
     pub place: Option<Place>,
     /// The text of a shape.
@@ -298,6 +331,7 @@ impl Op {
                 | Op::Shape { .. }
                 | Op::Picture { .. }
                 | Op::Object { .. }
+                | Op::Control { .. }
         )
     }
 }
@@ -770,7 +804,11 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 }
             }
             "object" => {
-                let name = text("name").filter(|n| !n.is_empty()).ok_or("`name`（図形・画像の名前）がありません")?;
+                let shape = o.get("shape").and_then(Json::as_u64).and_then(|n| u32::try_from(n).ok());
+                let name = text("name").filter(|n| !n.is_empty()).unwrap_or_default();
+                if name.is_empty() && shape.is_none() {
+                    return Err("`name`（図形・画像・コントロールの名前）か `shape`（コントロールのシェイプ番号）がありません".into());
+                }
                 // A color "#RRGGBB", or null for none.
                 let color = |key: &str| -> Result<Option<Option<String>>> {
                     match o.get(key) {
@@ -808,6 +846,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     Some(other) => return Err(format!("`order` `{other}` は指定できません（front / forward / backward / back）")),
                 };
                 let change = ObjectChange {
+                    shape,
                     place: place_of(o)?,
                     text: text("text"),
                     fill: color("fill")?,
@@ -819,12 +858,67 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     order,
                     delete: o.get("delete").and_then(Json::as_bool).unwrap_or(false),
                 };
-                if change == (ObjectChange { delete: false, ..Default::default() }) {
+                if change == (ObjectChange { shape, ..Default::default() }) {
                     return Err("`at`・`range`（移動・サイズの変更）、`text`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`order`、`delete` のどれかを指定してください".into());
                 }
                 Op::Object { sheet, name, change }
             }
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object）")),
+            "control" => {
+                let kind = text("control").unwrap_or_else(|| "button".to_string());
+                if !controls::KINDS.iter().any(|k| k.key == kind) {
+                    let all: Vec<&str> = controls::KINDS.iter().map(|k| k.key).collect();
+                    return Err(format!("コントロール `{kind}` はありません（{}）", all.join(" / ")));
+                }
+                let macro_name = text("macro").filter(|m| !m.is_empty());
+                if let Some(m) = &macro_name
+                    && !m.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                {
+                    return Err(format!("マクロの名前 `{m}` は指定できません（Module1.macro1 のように指定してください）"));
+                }
+                // A reference: a cell or a range, of this sheet or another.
+                let reference = |key: &str| -> Result<Option<String>> {
+                    let Some(r) = text(key).map(|r| r.trim().trim_start_matches('=').to_string()).filter(|r| !r.is_empty()) else {
+                        return Ok(None);
+                    };
+                    let cells = r.rsplit_once('!').map_or(r.as_str(), |(_, c)| c);
+                    if RangeRef::parse(&cells.replace('$', "")).is_none() || r.contains('"') {
+                        return Err(format!("`{key}` `{r}` はセル参照で指定してください（$B$2、Sheet2!$A$1:$A$5 など）"));
+                    }
+                    Ok(Some(r))
+                };
+                let int = |key: &str| -> Result<Option<i64>> {
+                    match o.get(key) {
+                        None | Some(Json::Null) => Ok(None),
+                        Some(v) => v
+                            .as_i64()
+                            .filter(|n| (0..=30000).contains(n))
+                            .map(Some)
+                            .ok_or_else(|| format!("`{key}` は 0〜30000 の整数で指定してください")),
+                    }
+                };
+                let control = FormControl {
+                    kind,
+                    place: place_of(o)?.ok_or("コントロールの位置 `at`（セル）か `range` がありません")?,
+                    text: text("text"),
+                    macro_name,
+                    link: reference("link")?,
+                    range: reference("items")?,
+                    checked: o.get("checked").and_then(Json::as_bool).unwrap_or(false),
+                    value: int("value")?,
+                    min: int("min")?,
+                    max: int("max")?,
+                    step: int("step")?,
+                    page: int("page")?,
+                    horizontal: o.get("horizontal").and_then(Json::as_bool).unwrap_or(false),
+                };
+                if let (Some(a), Some(b)) = (control.min, control.max)
+                    && a > b
+                {
+                    return Err("`min` は `max` 以下にしてください".into());
+                }
+                Op::Control { sheet, control }
+            }
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control）")),
         });
     }
     Ok(out)
@@ -872,6 +966,7 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 name,
                 change,
             } => drawing::object(&bytes, sheet, name, change)?,
+            Op::Control { sheet, control } => controls::add(&bytes, sheet, control)?,
             Op::Table {
                 sheet,
                 range,
@@ -1486,7 +1581,8 @@ fn run(
         | Op::Table { .. }
         | Op::Shape { .. }
         | Op::Picture { .. }
-        | Op::Object { .. } => {}
+        | Op::Object { .. }
+        | Op::Control { .. } => {}
         Op::Fill {
             sheet,
             range,
