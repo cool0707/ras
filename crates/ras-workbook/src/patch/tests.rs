@@ -1768,16 +1768,6 @@ fn form_controls_as_excel_2010_keeps_them() {
     )
     .unwrap();
     assert!(!part(&gone, "xl/drawings/drawing1.xml").contains("_x0000_s1025"));
-
-    // An ActiveX control is Excel's to change.
-    assert!(
-        ed(
-            &sample,
-            r#"{"op":"object","name":"CommandButton1","delete":true}"#
-        )
-        .unwrap_err()
-        .contains("ActiveX")
-    );
 }
 
 #[test]
@@ -1899,12 +1889,252 @@ fn form_controls_given_texts_links_and_values() {
         (list["form"]["items"].clone(), list["form"]["link"].clone()),
         (json!("$K$18:$K$19"), json!("$L$1"))
     );
+}
+
+/// A workbook file with some of its parts replaced (None: taken away).
+fn with_parts(bytes: &[u8], change: &[(&str, Option<Vec<u8>>)]) -> Vec<u8> {
+    let mut all = parts(bytes);
+    for (name, data) in change {
+        match data {
+            Some(d) => {
+                all.insert(name.to_string(), d.clone());
+            }
+            None => {
+                all.remove(*name);
+            }
+        }
+    }
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, data) in all {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut zip, &data).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn list_items_selected() {
+    let sample = crate::view::tests::sample();
+    let ed = |bytes: &[u8], json: &str| {
+        apply(
+            bytes,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+    };
+    let out = ed(
+        &sample,
+        r#"{"op":"object","name":"List Box 4","selected":3,"link":"$L$2"}"#,
+    )
+    .unwrap();
+    assert!(part(&out, "xl/ctrlProps/ctrlProp3.xml").contains(r#"sel="3""#));
+    assert!(part(&out, "xl/drawings/vmlDrawing1.vml").contains("<x:Sel>3</x:Sel>"));
+    assert_eq!(cell(&out, "Sheet1", "L2", Read::Value), "3");
+    let list = view(&out)["sheets"][0]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == json!("List Box 4"))
+        .unwrap()
+        .clone();
+    assert_eq!(list["form"]["sel"], json!(3));
+    // Three items: no fourth; a check box has none.
     assert!(
         ed(
             &sample,
-            r#"{"op":"object","name":"CommandButton1","text":"x"}"#
+            r#"{"op":"object","name":"List Box 4","selected":4}"#
         )
         .unwrap_err()
-        .contains("ActiveX")
+        .contains("3 まで")
+    );
+    assert!(
+        ed(
+            &sample,
+            r#"{"op":"object","name":"Check Box 3","selected":1}"#
+        )
+        .unwrap_err()
+        .contains("選択している項目")
+    );
+}
+
+#[test]
+fn activex_controls_changed_moved_and_deleted() {
+    let sample = crate::view::tests::sample();
+    let ed = |bytes: &[u8], json: &str| {
+        apply(
+            bytes,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+    };
+    let html = |bytes: &[u8], name: &str| -> Json {
+        view(bytes)["sheets"][0]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["name"] == json!(name))
+            .cloned()
+            .unwrap_or(Json::Null)
+    };
+    // A command button's caption: in its data (its font and the rest kept).
+    let out = ed(
+        &sample,
+        r#"{"op":"object","name":"CommandButton1","text":"OK"}"#,
+    )
+    .unwrap();
+    assert_eq!(changed(&sample, &out), ["xl/activeX/activeX1.bin"]);
+    let button = html(&out, "CommandButton1");
+    assert!(
+        button["html"].as_str().unwrap().contains(">OK<"),
+        "{button}"
+    );
+    assert_eq!(
+        (button["text"].clone(), button["form"]["type"].clone()),
+        (json!("OK"), json!("CommandButton"))
+    );
+    let before =
+        crate::activex::Stream::read("CommandButton", &parts(&sample)["xl/activeX/activeX1.bin"])
+            .unwrap();
+    let after =
+        crate::activex::Stream::read("CommandButton", &parts(&out)["xl/activeX/activeX1.bin"])
+            .unwrap();
+    assert_eq!(after.number("ForeColor"), before.number("ForeColor"));
+    assert!(
+        parts(&out)["xl/activeX/activeX1.bin"]
+            .starts_with(&parts(&sample)["xl/activeX/activeX1.bin"][..16])
+    );
+
+    // Moved and sized: its entry, its VML shape, its mirror, its own size.
+    let moved = ed(
+        &sample,
+        r#"{"op":"object","name":"CommandButton1","at":"B2","width":96,"height":48}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        changed(&sample, &moved),
+        [
+            "xl/activeX/activeX1.bin",
+            "xl/drawings/drawing1.xml",
+            "xl/drawings/vmlDrawing1.vml",
+            "xl/worksheets/sheet1.xml"
+        ]
+    );
+    let b = html(&moved, "CommandButton1");
+    assert_eq!(b["from"], json!([1, 0.0, 1, 0.0]));
+    let st =
+        crate::activex::Stream::read("CommandButton", &parts(&moved)["xl/activeX/activeX1.bin"])
+            .unwrap();
+    assert_eq!(
+        st.write().len(),
+        parts(&moved)["xl/activeX/activeX1.bin"].len()
+    );
+    let vml = part(&moved, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains("<x:Anchor>1, 0, 1, 0, 2, 24, 2, 23</x:Anchor>"),
+        "{vml}"
+    );
+
+    // Deleted: its part, its data, its VML shape, its mirror.
+    let gone = ed(
+        &sample,
+        r#"{"op":"object","name":"CommandButton1","delete":true}"#,
+    )
+    .unwrap();
+    let names = parts(&gone);
+    assert!(
+        !names.contains_key("xl/activeX/activeX1.xml")
+            && !names.contains_key("xl/activeX/activeX1.bin")
+    );
+    assert!(!names.contains_key("xl/activeX/_rels/activeX1.xml.rels"));
+    assert!(!part(&gone, "[Content_Types].xml").contains("activeX1.xml"));
+    assert!(!part(&gone, "xl/worksheets/sheet1.xml").contains("CommandButton1"));
+    assert!(!part(&gone, "xl/drawings/vmlDrawing1.vml").contains("CommandButton1"));
+    assert!(!part(&gone, "xl/drawings/drawing1.xml").contains("_x0000_s1026"));
+    assert_eq!(html(&gone, "CommandButton1"), Json::Null);
+
+    // What a command button does not have.
+    assert!(
+        ed(
+            &sample,
+            r#"{"op":"object","name":"CommandButton1","link":"$A$1"}"#
+        )
+        .unwrap_err()
+        .contains("リンクするセル")
+    );
+
+    // A check box: its caption and state in its data, its linked cell in the sheet, the cell.
+    let check = with_parts(
+        &sample,
+        &[
+            (
+                "xl/activeX/activeX1.xml",
+                Some(
+                    part(&sample, "xl/activeX/activeX1.xml")
+                        .replace(
+                            "D7053240-CE69-11CD-A777-00DD01143C57",
+                            "8BD21D40-EC42-11CE-9E0D-00AA006002F3",
+                        )
+                        .into_bytes(),
+                ),
+            ),
+            (
+                "xl/activeX/activeX1.bin",
+                Some(
+                    [
+                        &parts(&sample)["xl/activeX/activeX1.bin"][..16],
+                        &crate::activex::tests::check_box("確認", "0")[..],
+                    ]
+                    .concat(),
+                ),
+            ),
+        ],
+    );
+    let on = ed(
+        &check,
+        r#"{"op":"object","name":"CommandButton1","text":"同意する","checked":true,"link":"$M$1"}"#,
+    )
+    .unwrap();
+    let st =
+        crate::activex::Stream::read("MorphData", &parts(&on)["xl/activeX/activeX1.bin"]).unwrap();
+    assert_eq!(
+        (
+            st.string("Caption").as_deref(),
+            st.string("Value").as_deref()
+        ),
+        (Some("同意する"), Some("1"))
+    );
+    assert!(
+        part(&on, "xl/worksheets/sheet1.xml")
+            .contains(r#"<controlPr defaultSize="0" autoLine="0" linkedCell="$M$1">"#)
+    );
+    assert_eq!(cell(&on, "Sheet1", "M1", Read::Value), "true");
+    let shown = html(&on, "CommandButton1");
+    assert_eq!(
+        (
+            shown["form"]["type"].clone(),
+            shown["form"]["link"].clone(),
+            shown["form"]["checked"].clone()
+        ),
+        (json!("CheckBox"), json!("$M$1"), json!(true))
+    );
+    let off = ed(
+        &on,
+        r#"{"op":"object","name":"CommandButton1","link":null}"#,
+    )
+    .unwrap();
+    assert!(!part(&off, "xl/worksheets/sheet1.xml").contains("linkedCell"));
+
+    // Properties kept in the part (persistPropertyBag).
+    let bag = with_parts(
+        &sample,
+        &[("xl/activeX/activeX1.xml", Some(part(&sample, "xl/activeX/activeX1.xml").replace("persistStream\" r:id=\"rId1\"/>", "persistPropertyBag\"><ax:ocxPr ax:name=\"Caption\" ax:value=\"前\"/></ax:ocx>").into_bytes()))],
+    );
+    let out = ed(
+        &bag,
+        r#"{"op":"object","name":"CommandButton1","text":"後"}"#,
+    )
+    .unwrap();
+    assert!(
+        part(&out, "xl/activeX/activeX1.xml")
+            .contains(r#"<ax:ocxPr ax:name="Caption" ax:value="後"/>"#)
     );
 }

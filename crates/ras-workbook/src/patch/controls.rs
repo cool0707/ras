@@ -342,14 +342,10 @@ pub(super) fn change(
     let entry_rel = entry
         .and_then(|e| prefixed_attr(&sdoc, e.el, "id"))
         .and_then(|rid| rels.iter().find(|r| r.0 == rid).cloned());
-    if entry_rel
+    // An ActiveX control: its part (`xl/activeX/activeX<n>.xml`).
+    let activex = entry_rel
         .as_ref()
-        .is_some_and(|r| r.1.ends_with("/control"))
-    {
-        return Err(
-            "ActiveX コントロールは、ここでは移動・削除できません（Excel で行ってください）".into(),
-        );
-    }
+        .is_some_and(|r| r.1.ends_with("/control"));
     if sdoc.contains(&format!("shapeId=\"{id}\"")) && entry.is_none() {
         return Err(
             "埋め込みオブジェクトは、ここでは移動・削除できません（Excel で行ってください）".into(),
@@ -377,10 +373,11 @@ pub(super) fn change(
             "シート `{sheet}` にコントロール `{spid}` がありません"
         ));
     }
-    if let (Some(sh), Some(doc)) = (shape, vml_doc.as_deref())
-        && matches!(object_type(doc, sh).as_str(), "Pict" | "Note")
-    {
-        return Err(format!("`{spid}` はフォーム コントロールではありません"));
+    if let (Some(sh), Some(doc)) = (shape, vml_doc.as_deref()) {
+        let t = object_type(doc, sh);
+        if t == "Note" || (t == "Pict" && !activex) {
+            return Err(format!("`{spid}` はフォーム コントロールではありません"));
+        }
     }
 
     // Where it is now: the sheet's anchor (EMU), else VML's (pixels).
@@ -399,9 +396,24 @@ pub(super) fn change(
 
     let mut sheet_edits = Edits::default();
     let mut vml_edits = Edits::default();
+    // The parts that go with it: its properties (an ActiveX control's part, with its data), the
+    // picture of an ActiveX control; and what its VML shape used.
+    let mut parts: Vec<(String, String)> = entry_rel
+        .iter()
+        .map(|r| (r.0.clone(), r.2.clone()))
+        .collect();
+    let mut vml_removed = String::new();
     if delete {
         if let Some(sh) = shape {
             vml_edits.replace(sh.span(), "");
+            vml_removed = vml_doc.as_deref().unwrap_or_default()[sh.span()].to_string();
+        }
+        if let Some(rid) = entry
+            .and_then(|e| first(e.el, "controlPr"))
+            .and_then(|p| prefixed_attr(&sdoc, p, "id"))
+            && let Some(r) = rels.iter().find(|r| r.0 == rid)
+        {
+            parts.push((r.0.clone(), r.2.clone()));
         }
         if let (Some(e), Some((_, outer, list))) = (entry, &controls) {
             // The last control: `<controls>` goes too.
@@ -444,6 +456,14 @@ pub(super) fn change(
                 }
             }
         }
+        // An ActiveX control's own size (HIMETRIC), in its data.
+        if activex && let Some(r) = &entry_rel {
+            let himetric = |px: f64| (px * 2540.0 / 96.0).round() as i32;
+            if let Some((part, mut stream)) = activex_stream(&mut s, &r.2)? {
+                stream.set_size(himetric(b.2 - b.0), himetric(b.3 - b.1));
+                s.put_bytes(&part, stream.write());
+            }
+        }
         // (Below: its mirror.)
         return finish(
             s,
@@ -455,7 +475,8 @@ pub(super) fn change(
             vml_edits,
             &spid,
             Some(b),
-            None,
+            Vec::new(),
+            String::new(),
         );
     }
     finish(
@@ -468,8 +489,51 @@ pub(super) fn change(
         vml_edits,
         &spid,
         None,
-        entry_rel.map(|r| (r.0, r.2)),
+        parts,
+        vml_removed,
     )
+}
+
+/// An ActiveX control's part: its class (`CommandButton`, `MorphData`, ...) and display style,
+/// how it keeps its properties (`persistStream`, `persistPropertyBag`, ...), its data's part.
+pub(super) fn activex_part(
+    s: &mut Sheet,
+    part: &str,
+) -> Result<(String, &'static str, u8, String, Option<String>)> {
+    let doc = s
+        .text(part)?
+        .ok_or_else(|| format!("{part} がありません"))?;
+    let root = scan::tree(&doc, &[]).ok_or_else(|| format!("{part} を読み取れません"))?;
+    let attr = |local: &str| -> Option<String> {
+        scan::attrs(&doc, root.open.clone())
+            .into_iter()
+            .find(|(n, _)| scan::local(n) == local && !n.starts_with("xmlns"))
+            .map(|(_, span)| scan::unescape(&doc[span]))
+    };
+    let (class, display) = crate::activex::class_of(&attr("classid").unwrap_or_default());
+    let persistence = attr("persistence").unwrap_or_default();
+    let bin = match attr("id") {
+        Some(rid) => s
+            .rels_of(part)?
+            .into_iter()
+            .find(|r| r.0 == rid)
+            .map(|r| r.2),
+        None => None,
+    };
+    Ok((doc, class, display, persistence, bin))
+}
+
+/// The data of an ActiveX control kept as a stream: its part and the stream read. None when it
+/// is kept otherwise or its stream is not read.
+fn activex_stream(s: &mut Sheet, part: &str) -> Result<Option<(String, crate::activex::Stream)>> {
+    let (_, class, _, persistence, bin) = activex_part(s, part)?;
+    let Some(bin) = bin.filter(|_| persistence == "persistStream") else {
+        return Ok(None);
+    };
+    let Some(data) = s.bytes(&bin)? else {
+        return Ok(None);
+    };
+    Ok(crate::activex::Stream::read(class, &data).map(|st| (bin, st)))
 }
 
 /// A cell a control is linked to (`$B$2`, `Sheet2!$B$2`) and what goes in it (as typed).
@@ -486,6 +550,7 @@ fn has(object: &str, what: &str) -> bool {
         ),
         "items" => matches!(object, "List" | "Drop"),
         "checked" => matches!(object, "Checkbox" | "Radio"),
+        "selected" => matches!(object, "List" | "Drop"),
         "value" => matches!(object, "Spin" | "Scroll"),
         "page" => object == "Scroll",
         _ => false,
@@ -540,10 +605,9 @@ pub(super) fn configure(
             .and_then(|e| prefixed_attr(&sdoc, e.el, "id"))
     });
     let rel = entry.and_then(|rid| rels.iter().find(|r| r.0 == rid).cloned());
-    if rel.as_ref().is_some_and(|r| r.1.ends_with("/control")) {
-        return Err(
-            "ActiveX コントロールは、ここでは変更できません（Excel で行ってください）".into(),
-        );
+    if let Some(r) = rel.as_ref().filter(|r| r.1.ends_with("/control")) {
+        let part = r.2.clone();
+        return configure_activex(s, id, &part, change);
     }
     let props_part = rel.filter(|r| r.1.ends_with("/ctrlProp")).map(|r| r.2);
     let props_doc = match &props_part {
@@ -597,6 +661,20 @@ pub(super) fn configure(
         return Err(format!("`{spid}` はフォーム コントロールではありません"));
     }
 
+    // A form control's numbers: 0 to 30000, as Excel takes them.
+    for (key, n) in [
+        ("selected", change.selected),
+        ("value", change.value),
+        ("min", change.min),
+        ("max", change.max),
+        ("step", change.step),
+        ("page", change.page),
+    ] {
+        if n.is_some_and(|n| !(0..=30000).contains(&n)) {
+            return Err(format!("`{key}` は 0〜30000 の整数で指定してください"));
+        }
+    }
+
     // What the kind has.
     let kind = kind_name(&object);
     let asked = [
@@ -604,6 +682,7 @@ pub(super) fn configure(
         ("link", change.link.is_some(), "リンクするセル"),
         ("items", change.items.is_some(), "入力範囲（items）"),
         ("checked", change.checked.is_some(), "チェックの状態"),
+        ("selected", change.selected.is_some(), "選択している項目"),
         (
             "value",
             change.value.is_some()
@@ -676,6 +755,26 @@ pub(super) fn configure(
     if let Some(on) = change.checked {
         set.push(("checked", "Checked", on.then(|| "1".to_string())));
     }
+    // The item selected: one of the items (as many as the cells of their range).
+    if let Some(sel) = change.selected {
+        let items = change
+            .items
+            .clone()
+            .unwrap_or_else(|| prop("fmlaRange").or_else(|| client("FmlaRange")))
+            .filter(|r| !r.is_empty());
+        let count = items.as_deref().map_or(0, |r| {
+            let cells = r.rsplit_once('!').map_or(r, |(_, c)| c);
+            gridcraft_core::RangeRef::parse(&cells.replace('$', "")).map_or(0, |g| g.count() as i64)
+        });
+        if sel > count {
+            return Err(if count == 0 {
+                format!("{kind}に入力範囲が無いため、項目を選べません")
+            } else {
+                format!("選択する項目は 0（なし）から {count} までにしてください")
+            });
+        }
+        set.push(("sel", "Sel", Some(sel.to_string())));
+    }
     for (p, c, v) in &numbers {
         set.push((p, c, Some(v.to_string())));
     }
@@ -742,6 +841,10 @@ pub(super) fn configure(
         (Some(l), "Checkbox") => change
             .checked
             .map(|on| (l.clone(), if on { "TRUE" } else { "FALSE" }.to_string())),
+        (Some(l), "List" | "Drop") => change
+            .selected
+            .filter(|n| *n > 0)
+            .map(|n| (l.clone(), n.to_string())),
         (Some(l), "Spin" | "Scroll") => numbers
             .iter()
             .find(|n| n.0 == "val")
@@ -772,6 +875,257 @@ pub(super) fn configure(
         }
     }
     Ok((s.finish(None)?, cell))
+}
+
+/// What an ActiveX control (its Microsoft Forms type) has of what an edit changes, and the
+/// property of its data each is: its text (`Caption`, or the `Value` of a text, list or combo
+/// box), its state (`Value`: "1" or "0"), its linked cell and items (in the sheet's
+/// `controlPr`), its value in a range.
+fn activex_has(forms: &str, what: &str) -> bool {
+    match what {
+        "text" => !matches!(forms, "SpinButton" | "ScrollBar" | ""),
+        "checked" => matches!(forms, "CheckBox" | "OptionButton" | "ToggleButton"),
+        "link" => !matches!(forms, "CommandButton" | "Label" | ""),
+        "items" => matches!(forms, "ListBox" | "ComboBox"),
+        "value" => matches!(forms, "SpinButton" | "ScrollBar"),
+        "page" => forms == "ScrollBar",
+        _ => false,
+    }
+}
+
+/// The file with an ActiveX control's text and settings changed: its data (its stream, or its
+/// properties in the part), its linked cell and items in the sheet's `controlPr`. Also returns
+/// the linked cell and what goes in it.
+fn configure_activex(
+    mut s: Sheet,
+    id: u32,
+    part: &str,
+    change: &super::ObjectChange,
+) -> Result<(Vec<u8>, Option<LinkedValue>)> {
+    let (ocx, class, display, persistence, bin) = activex_part(&mut s, part)?;
+    let forms = crate::activex::forms_type(class, display);
+    if forms.is_empty() {
+        return Err("この ActiveX コントロールは、ここでは変更できません（Microsoft Forms 2.0 のコントロールではありません。Excel で行ってください）".into());
+    }
+    let asked = [
+        ("text", change.text.is_some(), "文字"),
+        ("checked", change.checked.is_some(), "オン／オフ"),
+        (
+            "link",
+            change.link.is_some(),
+            "リンクするセル（LinkedCell）",
+        ),
+        ("items", change.items.is_some(), "入力範囲（ListFillRange）"),
+        (
+            "value",
+            change.value.is_some()
+                || change.min.is_some()
+                || change.max.is_some()
+                || change.step.is_some(),
+            "値・最小値・最大値・変化の増分",
+        ),
+        (
+            "page",
+            change.page.is_some(),
+            "ページ単位の変化（LargeChange）",
+        ),
+    ];
+    for (what, on, label) in asked {
+        if on && !activex_has(forms, what) {
+            return Err(format!("{forms} には{label}がありません"));
+        }
+    }
+    if change.selected.is_some() {
+        return Err(format!(
+            "ActiveX の {forms} では、選択する項目を `text`（値）で指定してください"
+        ));
+    }
+
+    // The properties kept in its data: (name, value).
+    let mut props: Vec<(&str, String)> = Vec::new();
+    if let Some(t) = &change.text {
+        let name = if matches!(forms, "TextBox" | "ListBox" | "ComboBox") {
+            "Value"
+        } else {
+            "Caption"
+        };
+        props.push((name, t.clone()));
+    }
+    if let Some(on) = change.checked {
+        props.push(("Value", if on { "1" } else { "0" }.to_string()));
+    }
+
+    // Its data as it is: a stream, or properties in the part.
+    let mut stream = match (persistence.as_str(), &bin) {
+        ("persistStream", Some(b)) => {
+            let data = s.bytes(b)?.ok_or_else(|| format!("{b} がありません"))?;
+            Some(crate::activex::Stream::read(class, &data).ok_or(
+                "この ActiveX コントロールの保存データを読み取れません（Excel で行ってください）",
+            )?)
+        }
+        _ => None,
+    };
+    let bag = |name: &str| -> Option<String> {
+        let root = scan::tree(&ocx, &[])?;
+        root.children.iter().find_map(|c| {
+            let attrs = scan::attrs(&ocx, c.open.clone());
+            let get = |k: &str| {
+                attrs
+                    .iter()
+                    .find(|(n, _)| scan::local(n) == k)
+                    .map(|(_, sp)| scan::unescape(&ocx[sp.clone()]))
+            };
+            (c.local() == "ocxPr" && get("name").as_deref() == Some(name)).then(|| get("value"))?
+        })
+    };
+    let numbers_asked = change.value.is_some()
+        || change.min.is_some()
+        || change.max.is_some()
+        || change.step.is_some()
+        || change.page.is_some();
+    if numbers_asked {
+        let now = |name: &str, d: i64| -> i64 {
+            match &stream {
+                Some(st) => st.number(name).unwrap_or(d),
+                None => bag(name).and_then(|v| v.parse().ok()).unwrap_or(d),
+            }
+        };
+        let min = change.min.unwrap_or_else(|| now("Min", 0));
+        let max = change
+            .max
+            .unwrap_or_else(|| now("Max", if forms == "ScrollBar" { 32767 } else { 100 }));
+        if min > max {
+            return Err(format!(
+                "最小値（{min}）は最大値（{max}）以下にしてください"
+            ));
+        }
+        let value = change.value.unwrap_or_else(|| now("Position", min));
+        if change.value.is_some() && !(min..=max).contains(&value) {
+            return Err(format!(
+                "現在値（{value}）は最小値（{min}）から最大値（{max}）の間にしてください"
+            ));
+        }
+        let step = change.step.unwrap_or_else(|| now("SmallChange", 1));
+        if step < 1 || change.page.is_some_and(|p| p < 1) {
+            return Err("変化の増分は 1 以上にしてください".into());
+        }
+        props.push(("Min", min.to_string()));
+        props.push(("Max", max.to_string()));
+        props.push(("Position", value.clamp(min, max).to_string()));
+        props.push(("SmallChange", step.to_string()));
+        if let Some(p) = change.page {
+            props.push(("LargeChange", p.to_string()));
+        }
+    }
+
+    if !props.is_empty() {
+        match (&mut stream, persistence.as_str()) {
+            (Some(st), _) => {
+                for (name, v) in &props {
+                    if matches!(*name, "Caption" | "Value") {
+                        st.set_string(name, v);
+                    } else {
+                        st.set_number(name, v.parse().unwrap_or(0));
+                    }
+                }
+                if let Some(b) = &bin {
+                    s.put_bytes(b, st.write());
+                }
+            }
+            (None, "persistPropertyBag") => {
+                let root =
+                    scan::tree(&ocx, &[]).ok_or_else(|| format!("{part} を読み取れません"))?;
+                let p = scan::prefix(root.name).to_string();
+                let mut edits = Edits::default();
+                for (name, v) in &props {
+                    let el = root.children.iter().find(|c| {
+                        c.local() == "ocxPr"
+                            && scan::attrs(&ocx, c.open.clone()).iter().any(|(n, sp)| {
+                                scan::local(n) == "name"
+                                    && scan::unescape(&ocx[sp.clone()]) == *name
+                            })
+                    });
+                    let item = format!(
+                        "<{p}ocxPr {p}name=\"{name}\" {p}value=\"{}\"/>",
+                        scan::escape(v)
+                    );
+                    match el {
+                        Some(el) => edits.replace(el.span(), item),
+                        None if root.open.end == root.end => {
+                            let head = ocx[root.open.clone()].trim_end_matches("/>");
+                            edits.replace(
+                                root.open.clone(),
+                                format!("{head}>{item}</{}>", root.name),
+                            );
+                        }
+                        None => edits.insert(root.inner.end, item),
+                    }
+                }
+                s.put(part, edits.apply(&ocx));
+            }
+            _ => {
+                return Err("この ActiveX コントロールの保存データ（persistStorage）は、ここでは変更できません（Excel で行ってください）".into());
+            }
+        }
+    }
+
+    // The linked cell and the items: the sheet's `controlPr`.
+    let sdoc = s.doc.clone();
+    let root = tree(&sdoc, &s.part)?;
+    let mut sheet_edits = Edits::default();
+    let pr = sheet_controls(&root).and_then(|(_, _, list)| {
+        list.into_iter()
+            .find(|e| shape_id(&sdoc, e.el) == Some(id))
+            .and_then(|e| first(e.el, "controlPr"))
+    });
+    for (attr, value) in [
+        ("linkedCell", &change.link),
+        ("listFillRange", &change.items),
+    ] {
+        let Some(value) = value else { continue };
+        let Some(pr) = pr else {
+            return Err("この ActiveX コントロールの設定（controlPr）がありません（Excel で行ってください）".into());
+        };
+        match value {
+            Some(v) => scan::set_attr(&sdoc, pr.open.clone(), attr, v, &mut sheet_edits),
+            None => {
+                // ` name="value"`: from the space before it to the quote after it.
+                if let Some(v) = scan::attr_span(&sdoc, pr.open.clone(), attr) {
+                    let head = &sdoc[pr.open.start..v.start - 1];
+                    if let Some(eq) = head.rfind('=') {
+                        let start = pr.open.start + head[..eq].trim_end().len() - attr.len();
+                        let start = sdoc[..start].trim_end().len();
+                        sheet_edits.replace(start..v.end + 1, "");
+                    }
+                }
+            }
+        }
+    }
+    // The linked cell gets the state, the text or the value.
+    let link = change
+        .link
+        .clone()
+        .unwrap_or_else(|| pr.and_then(|p| p.attr(&sdoc, "linkedCell")))
+        .filter(|l| !l.is_empty());
+    let cell = link.and_then(|l| {
+        if let Some(on) = change.checked {
+            return Some((l, if on { "TRUE" } else { "FALSE" }.to_string()));
+        }
+        if numbers_asked {
+            return props
+                .iter()
+                .find(|p| p.0 == "Position")
+                .map(|p| (l, p.1.clone()));
+        }
+        let text = change
+            .text
+            .as_ref()
+            .filter(|_| matches!(forms, "TextBox" | "ListBox" | "ComboBox"))?;
+        // (A text typed as it is: not read as a number or a formula.)
+        Some((l, format!("'{text}")))
+    });
+    let doc = (!sheet_edits.is_empty()).then(|| sheet_edits.apply(&sdoc));
+    Ok((s.finish(doc)?, cell))
 }
 
 /// A linked cell (`$B$2`, `Sheet2!$B$2`, `'売上 4月'!$B$2`): its sheet (`sheet` when it names
@@ -846,12 +1200,16 @@ fn finish(
     vml_edits: Edits,
     spid: &str,
     moved: Option<(f64, f64, f64, f64)>,
-    props: Option<(String, String)>,
+    parts: Vec<(String, String)>,
+    vml_removed: String,
 ) -> Result<Vec<u8>> {
     if let (Some(part), Some(doc)) = (vml, vml_doc)
         && !vml_edits.is_empty()
     {
-        s.put(&part, vml_edits.apply(&doc));
+        let new = vml_edits.apply(&doc);
+        // (The picture of a shape taken away, when nothing else shows it.)
+        let new = super::drawing::drop_unused(&mut s, &part, &vml_removed, new)?;
+        s.put(&part, new);
     }
     // The mirror in the drawing.
     if let Some(d) = drawing_of(&mut s, false)? {
@@ -883,9 +1241,12 @@ fn finish(
             s.put(&d.part, edits.apply(&d.doc));
         }
     }
-    if let Some((rid, part)) = props {
-        s.remove_rels_of(&s.part.clone(), &[rid].into_iter().collect())?;
-        drop_part(&mut s, &part)?;
+    if !parts.is_empty() {
+        let ids = parts.iter().map(|p| p.0.clone()).collect();
+        s.remove_rels_of(&s.part.clone(), &ids)?;
+        for (_, part) in parts {
+            drop_part(&mut s, &part)?;
+        }
     }
     let doc = (!sheet_edits.is_empty()).then(|| sheet_edits.apply(&sdoc));
     s.finish(doc)

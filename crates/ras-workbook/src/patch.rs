@@ -295,6 +295,8 @@ pub struct ObjectChange {
     pub link: Option<Option<String>>,
     pub items: Option<Option<String>>,
     pub checked: Option<bool>,
+    /// The item selected in a list or combo box (1 for the first; 0: none).
+    pub selected: Option<i64>,
     pub value: Option<i64>,
     pub min: Option<i64>,
     pub max: Option<i64>,
@@ -503,15 +505,16 @@ fn reference_of(o: &Json, key: &str) -> Result<Option<String>> {
     Ok(Some(r))
 }
 
-/// A whole number of a form control (0 to 30000, as Excel takes them).
+/// A whole number of a control (a 32-bit one: a form control's are checked to be 0 to 30000
+/// where they are written).
 fn int_of(o: &Json, key: &str) -> Result<Option<i64>> {
     match o.get(key) {
         None | Some(Json::Null) => Ok(None),
         Some(v) => v
             .as_i64()
-            .filter(|n| (0..=30000).contains(n))
+            .filter(|n| i32::try_from(*n).is_ok())
             .map(Some)
-            .ok_or_else(|| format!("`{key}` は 0〜30000 の整数で指定してください")),
+            .ok_or_else(|| format!("`{key}` は整数で指定してください")),
     }
 }
 
@@ -912,6 +915,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                         Some(_) => Some(reference_of(o, "items")?),
                     },
                     checked: o.get("checked").and_then(Json::as_bool),
+                    selected: int_of(o, "selected")?,
                     value: int_of(o, "value")?,
                     min: int_of(o, "min")?,
                     max: int_of(o, "max")?,
@@ -919,7 +923,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     page: int_of(o, "page")?,
                 };
                 if change == (ObjectChange { shape, ..Default::default() }) {
-                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
                 }
                 Op::Object { sheet, name, change }
             }
@@ -936,7 +940,13 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     return Err(format!("マクロの名前 `{m}` は指定できません（Module1.macro1 のように指定してください）"));
                 }
                 let reference = |key: &str| reference_of(o, key);
-                let int = |key: &str| int_of(o, key);
+                let int = |key: &str| -> Result<Option<i64>> {
+                    let n = int_of(o, key)?;
+                    if n.is_some_and(|n| !(0..=30000).contains(&n)) {
+                        return Err(format!("`{key}` は 0〜30000 の整数で指定してください"));
+                    }
+                    Ok(n)
+                };
                 let control = FormControl {
                     kind,
                     place: place_of(o)?.ok_or("コントロールの位置 `at`（セル）か `range` がありません")?,
@@ -1777,6 +1787,21 @@ impl<'a> Pack<'a> {
         String::from_utf8(data)
             .map(Some)
             .map_err(|_| format!("{name} は UTF-8 ではないため、書き換えられません"))
+    }
+
+    /// A part's bytes.
+    pub(crate) fn bytes(&mut self, part: &str) -> Result<Option<Vec<u8>>> {
+        let Some(name) = self.find(part) else {
+            return Ok(None);
+        };
+        let mut file = self
+            .zip
+            .by_name(&name)
+            .map_err(|e| format!("{name}: {e}"))?;
+        let mut data = Vec::with_capacity(file.size().min(1 << 28) as usize);
+        file.read_to_end(&mut data)
+            .map_err(|e| format!("{name}: {e}"))?;
+        Ok(Some(data))
     }
 
     /// The relationships of a part: (id, type, the part it points to).

@@ -2420,11 +2420,15 @@
     // A form control too, by its shape (not an ActiveX control, nor an embedded object, which
     // have no macro).
     const isForm = (obj) => !!obj && obj.kind === "control" && obj.shapeId !== undefined && !!obj.onAction && obj.activex === undefined;
-    const movable = (obj) => editable && !!obj && (isForm(obj) || (!!obj.name && obj.kind !== "control"));
+    // An ActiveX control of Microsoft Forms (one whose settings the page has).
+    const isActiveX = (obj) => !!obj && obj.kind === "control" && obj.shapeId !== undefined && obj.activex !== undefined && !!obj.form;
+    // A control: by its shape; its settings and place change, not its format.
+    const isControl = (obj) => isForm(obj) || isActiveX(obj);
+    const movable = (obj) => editable && !!obj && (isControl(obj) || (!!obj.name && obj.kind !== "control"));
     // How an edit names an object: a form control by its shape.
-    const target = (obj) => (isForm(obj) ? { shape: obj.shapeId } : { name: obj.name });
+    const target = (obj) => (isControl(obj) ? { shape: obj.shapeId } : { name: obj.name });
     // What tells an object from the others after the page is drawn again.
-    const keyOf = (obj) => (isForm(obj) ? `#${obj.shapeId}` : obj.name || "");
+    const keyOf = (obj) => (isControl(obj) ? `#${obj.shapeId}` : obj.name || "");
 
     // The form controls of 開発 > 挿入: [kind, name, icon (16 × 16)].
     const FORM_CONTROLS = [
@@ -2658,14 +2662,15 @@
     // control (what its kind has).
     function askControlFormat(obj) {
         const f = obj.form;
-        if (!isForm(obj) || !f || busy || !view) return;
+        if (!isControl(obj) || !f || busy || !view) return;
         const t = f.type;
-        const form = openDialog(`コントロールの書式設定（${obj.name || `_x0000_s${obj.shapeId}`}）`, "ctldlg");
+        const ax = !!f.activex;
+        const form = openDialog(`${ax ? "プロパティ" : "コントロールの書式設定"}（${obj.name || `_x0000_s${obj.shapeId}`}）`, "ctldlg");
         const change = {};
         const inputs = [];
         if (obj.text !== undefined) {
             const line = form.appendChild(el("label"));
-            line.appendChild(el("span", "lbl", "文字:"));
+            line.appendChild(el("span", "lbl", ax && ["TextBox", "ListBox", "ComboBox"].includes(t) ? "値（Value）:" : ax ? "Caption:" : "文字:"));
             const text = line.appendChild(el("textarea"));
             text.rows = 2;
             text.value = obj.text;
@@ -2673,7 +2678,7 @@
                 if (text.value !== obj.text) change.text = text.value;
             });
         }
-        if (t === "CheckBox" || t === "Radio") {
+        if (["CheckBox", "Radio", "OptionButton", "ToggleButton"].includes(t)) {
             const on = check(form, "オン（チェックする）", !!f.checked);
             inputs.push(() => {
                 if (on.checked !== !!f.checked) change.checked = on.checked;
@@ -2688,14 +2693,25 @@
                 if (v !== (f[key] || "")) change[key] = v || null;
             });
         };
-        if (t === "List" || t === "Drop") ref("入力範囲:", "items");
-        if (["CheckBox", "Radio", "List", "Drop", "Spin", "Scroll"].includes(t)) ref("リンクするセル:", "link");
-        if (t === "Spin" || t === "Scroll") {
-            const numbers = [["現在値:", "val", "value"], ["最小値:", "min", "min"], ["最大値:", "max", "max"], ["変化の増分:", "inc", "step"]];
-            if (t === "Scroll") numbers.push(["ページ単位の変化:", "page", "page"]);
+        if (["List", "Drop", "ListBox", "ComboBox"].includes(t)) ref(ax ? "ListFillRange:" : "入力範囲:", "items");
+        if (["CheckBox", "Radio", "List", "Drop", "Spin", "Scroll", "OptionButton", "ToggleButton", "TextBox", "ListBox", "ComboBox", "SpinButton", "ScrollBar"].includes(t)) ref(ax ? "LinkedCell:" : "リンクするセル:", "link");
+        // The item selected (a form control's list or combo box: its number).
+        if (t === "List" || t === "Drop") {
+            const input = field(form, "選択している項目（番号。0 はなし）:", "number");
+            Object.assign(input, { min: "0", max: "30000", step: "1", value: String(f.sel || 0) });
+            inputs.push(() => {
+                const v = Math.round(+input.value);
+                if (isFinite(v) && v !== (f.sel || 0)) change.selected = v;
+            });
+        }
+        if (["Spin", "Scroll", "SpinButton", "ScrollBar"].includes(t)) {
+            const numbers = ax
+                ? [["Value:", "val", "value"], ["Min:", "min", "min"], ["Max:", "max", "max"], ["SmallChange:", "inc", "step"]]
+                : [["現在値:", "val", "value"], ["最小値:", "min", "min"], ["最大値:", "max", "max"], ["変化の増分:", "inc", "step"]];
+            if (t === "Scroll" || t === "ScrollBar") numbers.push([ax ? "LargeChange:" : "ページ単位の変化:", "page", "page"]);
             for (const [label, key, op] of numbers) {
                 const input = field(form, label, "number");
-                Object.assign(input, { min: "0", max: "30000", step: "1", value: String(f[key]) });
+                Object.assign(input, ax ? { step: "1", value: String(f[key]) } : { min: "0", max: "30000", step: "1", value: String(f[key]) });
                 inputs.push(() => {
                     const v = Math.round(+input.value);
                     if (isFinite(v) && v !== f[key]) change[op] = v;
@@ -2879,7 +2895,7 @@
     function refreshShapeTools() {
         const ribbon = $("ribbon");
         if (!ribbon || !ribbon.showShapeTab) return;
-        const obj = selected && movable(selectedObj) && !isForm(selectedObj) ? selectedObj : null;
+        const obj = selected && movable(selectedObj) && !isControl(selectedObj) ? selectedObj : null;
         ribbon.showShapeTab(!!obj);
         if (!obj) return;
         tools.shapeFill.disabled = tools.shapeFillMore.disabled = !canFill(obj);
@@ -3134,9 +3150,9 @@
         const items = [];
         if (movable(obj)) {
             if (obj.text !== undefined) items.push(["テキストの編集…", () => editObjectText(obj), "F2"]);
-            if (isForm(obj) && obj.form) items.push(["コントロールの書式設定…", () => askControlFormat(obj), ""]);
+            if (isControl(obj) && obj.form) items.push([isActiveX(obj) ? "プロパティ…" : "コントロールの書式設定…", () => askControlFormat(obj), ""]);
             items.push(["削除", () => deleteObject(obj), "Delete"]);
-            if (!isForm(obj)) {
+            if (!isControl(obj)) {
                 items.push(null);
                 for (const [how, label] of ORDERS) items.push([label, () => objectEdit(obj, { order: how }), ""]);
             }

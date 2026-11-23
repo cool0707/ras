@@ -550,6 +550,7 @@ pub(super) fn object(
     let control_only = change.link.is_some()
         || change.items.is_some()
         || change.checked.is_some()
+        || change.selected.is_some()
         || change.value.is_some()
         || change.min.is_some()
         || change.max.is_some()
@@ -564,6 +565,7 @@ pub(super) fn object(
             link: change.link.clone(),
             items: change.items.clone(),
             checked: change.checked,
+            selected: change.selected,
             value: change.value,
             min: change.min,
             max: change.max,
@@ -1027,7 +1029,12 @@ pub(super) fn set_text(doc: &str, sp: &El, text: &str, edits: &mut Edits) {
 
 /// The drawing `doc` (with `removed` taken out of it) without the relationships only the
 /// removed XML used, and the parts they pointed to when nothing else points to them.
-fn drop_unused(s: &mut Sheet, drawing: &str, removed: &str, doc: String) -> Result<String> {
+pub(super) fn drop_unused(
+    s: &mut Sheet,
+    drawing: &str,
+    removed: &str,
+    doc: String,
+) -> Result<String> {
     let rels = s.rels_of(drawing)?;
     let used = |text: &str, id: &str| {
         text.contains(&format!("=\"{id}\"")) || text.contains(&format!("='{id}'"))

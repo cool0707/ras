@@ -4,6 +4,7 @@
 //! [`book::Book`] holds a workbook read with umya-spreadsheet; its formulas are calculated by
 //! GridCraft's engine, as xljs uses it (the engine is taken from xljs's `vendor/gridcraft`).
 
+pub(crate) mod activex;
 pub mod book;
 pub mod diff;
 pub mod dump;

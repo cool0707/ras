@@ -112,6 +112,20 @@ impl<'a> Sheet<'a> {
         }
     }
 
+    /// A part's bytes as they are now.
+    pub(super) fn bytes(&mut self, part: &str) -> Result<Option<Vec<u8>>> {
+        if self.removed.iter().any(|r| r.eq_ignore_ascii_case(part)) {
+            return Ok(None);
+        }
+        if let Some(data) = self.out.get(part) {
+            return Ok(Some(data.clone()));
+        }
+        match self.pack.find(part) {
+            Some(name) => self.pack.bytes(&name),
+            None => Ok(None),
+        }
+    }
+
     pub(super) fn put(&mut self, part: &str, text: String) {
         self.put_bytes(part, text.into_bytes());
     }
