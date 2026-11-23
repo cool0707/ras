@@ -100,6 +100,7 @@ impl Controls {
             // Embedded objects run no macro.
             assignable: c.activex.is_none() && c.kind != "Pict",
             shape_id: Some(c.shape_id),
+            text: None,
         })
     }
 }

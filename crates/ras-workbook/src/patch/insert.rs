@@ -60,17 +60,19 @@ const ORDER: [&str; 38] = [
 // ---------------------------------------------------------------------------- the parts
 
 /// A workbook file opened to put something on one of its sheets.
-struct Sheet<'a> {
-    pack: Pack<'a>,
+pub(super) struct Sheet<'a> {
+    pub(super) pack: Pack<'a>,
     /// The sheet's part, and its XML.
-    part: String,
-    doc: String,
+    pub(super) part: String,
+    pub(super) doc: String,
     /// The parts written: new contents, and the new parts.
     out: BTreeMap<String, Vec<u8>>,
+    /// The parts taken out of the file.
+    removed: HashSet<String>,
 }
 
 impl<'a> Sheet<'a> {
-    fn open(bytes: &'a [u8], sheet: &str) -> Result<Sheet<'a>> {
+    pub(super) fn open(bytes: &'a [u8], sheet: &str) -> Result<Sheet<'a>> {
         let mut pack = Pack::open(bytes)?;
         let workbook = pack.text(WORKBOOK)?.ok_or("xl/workbook.xml がありません")?;
         let parts = sheet_parts(&mut pack, &workbook)?;
@@ -92,11 +94,15 @@ impl<'a> Sheet<'a> {
             part,
             doc,
             out: BTreeMap::new(),
+            removed: HashSet::new(),
         })
     }
 
     /// A part as it is now: as written, else as the file has it.
-    fn text(&mut self, part: &str) -> Result<Option<String>> {
+    pub(super) fn text(&mut self, part: &str) -> Result<Option<String>> {
+        if self.removed.iter().any(|r| r.eq_ignore_ascii_case(part)) {
+            return Ok(None);
+        }
         if let Some(data) = self.out.get(part) {
             return Ok(Some(String::from_utf8_lossy(data).into_owned()));
         }
@@ -106,33 +112,53 @@ impl<'a> Sheet<'a> {
         }
     }
 
-    fn put(&mut self, part: &str, text: String) {
+    pub(super) fn put(&mut self, part: &str, text: String) {
+        self.put_bytes(part, text.into_bytes());
+    }
+
+    pub(super) fn put_bytes(&mut self, part: &str, data: Vec<u8>) {
         let name = self.pack.find(part).unwrap_or_else(|| part.to_string());
-        self.out.insert(name, text.into_bytes());
+        self.out.insert(name, data);
+    }
+
+    /// A part taken out of the file.
+    pub(super) fn remove(&mut self, part: &str) {
+        if let Some(name) = self.pack.find(part) {
+            self.removed.insert(name);
+        }
+        self.out.retain(|k, _| !k.eq_ignore_ascii_case(part));
     }
 
     /// Whether the file (or what is written) has a part.
-    fn has(&self, part: &str) -> bool {
-        self.pack.find(part).is_some() || self.out.keys().any(|k| k.eq_ignore_ascii_case(part))
+    pub(super) fn has(&self, part: &str) -> bool {
+        let removed = self.removed.iter().any(|r| r.eq_ignore_ascii_case(part));
+        (self.pack.find(part).is_some() && !removed)
+            || self.out.keys().any(|k| k.eq_ignore_ascii_case(part))
     }
 
     /// The first free name `<head><n><tail>` (n from 1).
-    fn free(&self, head: &str, tail: &str) -> String {
+    pub(super) fn free(&self, head: &str, tail: &str) -> String {
         (1..)
             .map(|n| format!("{head}{n}{tail}"))
             .find(|name| !self.has(name))
             .unwrap_or_default()
     }
 
-    /// The relationships part of the sheet.
-    fn rels_part(&self) -> String {
-        let (dir, file) = self.part.rsplit_once('/').unwrap_or(("", &self.part));
-        format!("{dir}/_rels/{file}.rels")
+    /// A relationship of the sheet added: its id.
+    pub(super) fn add_rel(&mut self, kind: &str, target: &str, external: bool) -> Result<String> {
+        let owner = self.part.clone();
+        self.add_rel_of(&owner, kind, target, external)
     }
 
-    /// A relationship of the sheet added: its id.
-    fn add_rel(&mut self, kind: &str, target: &str, external: bool) -> Result<String> {
-        let part = self.rels_part();
+    /// A relationship of the part `owner` added: its id.
+    pub(super) fn add_rel_of(
+        &mut self,
+        owner: &str,
+        kind: &str,
+        target: &str,
+        external: bool,
+    ) -> Result<String> {
+        let part = rels_part_of(owner);
         let doc = self.text(&part)?.unwrap_or_else(|| {
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"></Relationships>".to_string()
         });
@@ -169,10 +195,16 @@ impl<'a> Sheet<'a> {
 
     /// The relationships of the sheet with these ids taken away.
     fn remove_rels(&mut self, ids: &HashSet<String>) -> Result<()> {
+        let owner = self.part.clone();
+        self.remove_rels_of(&owner, ids)
+    }
+
+    /// The relationships of the part `owner` with these ids taken away.
+    pub(super) fn remove_rels_of(&mut self, owner: &str, ids: &HashSet<String>) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
-        let part = self.rels_part();
+        let part = rels_part_of(owner);
         let Some(doc) = self.text(&part)? else {
             return Ok(());
         };
@@ -198,16 +230,18 @@ impl<'a> Sheet<'a> {
     }
 
     /// The relationships of the sheet: (id, type, target, external).
-    fn rels(&mut self) -> Result<Vec<(String, String, String, bool)>> {
-        let part = self.rels_part();
+    pub(super) fn rels(&mut self) -> Result<Vec<(String, String, String, bool)>> {
+        let owner = self.part.clone();
+        self.rels_of(&owner)
+    }
+
+    /// The relationships of the part `owner`: (id, type, target, external).
+    pub(super) fn rels_of(&mut self, owner: &str) -> Result<Vec<(String, String, String, bool)>> {
+        let part = rels_part_of(owner);
         let Some(doc) = self.text(&part)? else {
             return Ok(Vec::new());
         };
-        let dir = self
-            .part
-            .rsplit_once('/')
-            .map_or("", |(d, _)| d)
-            .to_string();
+        let dir = owner.rsplit_once('/').map_or("", |(d, _)| d).to_string();
         Ok(scan::tags(&doc, 0)
             .filter(|t| !t.is_close() && t.local() == "Relationship")
             .filter_map(|t| {
@@ -228,7 +262,12 @@ impl<'a> Sheet<'a> {
     }
 
     /// The content type of a new part (`Override`), or of an extension (`Default`).
-    fn content_type(&mut self, part: Option<&str>, ext: Option<&str>, kind: &str) -> Result<()> {
+    pub(super) fn content_type(
+        &mut self,
+        part: Option<&str>,
+        ext: Option<&str>,
+        kind: &str,
+    ) -> Result<()> {
         let doc = self
             .text(CONTENT_TYPES)?
             .ok_or("[Content_Types].xml がありません")?;
@@ -282,18 +321,25 @@ impl<'a> Sheet<'a> {
     }
 
     /// The file with the sheet's new XML and the parts written.
-    fn finish(mut self, sheet_doc: Option<String>) -> Result<Vec<u8>> {
+    pub(super) fn finish(mut self, sheet_doc: Option<String>) -> Result<Vec<u8>> {
         if let Some(doc) = sheet_doc {
             let part = self.part.clone();
             self.out.insert(part, doc.into_bytes());
         }
         let out = std::mem::take(&mut self.out);
-        self.pack.rewrite(&out, &HashSet::new())
+        let removed = std::mem::take(&mut self.removed);
+        self.pack.rewrite(&out, &removed)
     }
 }
 
+/// The relationships part of a part (`xl/worksheets/_rels/sheet1.xml.rels`).
+pub(super) fn rels_part_of(part: &str) -> String {
+    let (dir, file) = part.rsplit_once('/').unwrap_or(("", part));
+    format!("{dir}/_rels/{file}.rels")
+}
+
 /// A part's target from a sheet in `xl/worksheets/` (`../comments1.xml`).
-fn relative(from_part: &str, to: &str) -> String {
+pub(super) fn relative(from_part: &str, to: &str) -> String {
     let from: Vec<&str> = from_part.split('/').collect();
     let from = &from[..from.len() - 1];
     let to: Vec<&str> = to.split('/').collect();
@@ -308,13 +354,13 @@ fn relative(from_part: &str, to: &str) -> String {
 }
 
 /// The sheet's tree (its cells not read).
-fn tree<'d>(doc: &'d str, part: &str) -> Result<El<'d>> {
+pub(super) fn tree<'d>(doc: &'d str, part: &str) -> Result<El<'d>> {
     scan::tree(doc, &["sheetData", "extLst"]).ok_or_else(|| format!("{part} を読み取れません"))
 }
 
 /// `r:id="rId1"` for an element of the sheet `doc` (declaring the relationships' namespace
 /// when its root does not).
-fn rid_attr(doc: &str, root: &El, id: &str) -> String {
+pub(super) fn rid_attr(doc: &str, root: &El, id: &str) -> String {
     let prefix = scan::attrs(doc, root.open.clone())
         .into_iter()
         .find(|(name, span)| {
@@ -329,7 +375,7 @@ fn rid_attr(doc: &str, root: &El, id: &str) -> String {
 
 /// Where a new child `name` of the worksheet goes: after the children the schema puts before
 /// it.
-fn place(root: &El, name: &str) -> usize {
+pub(super) fn place(root: &El, name: &str) -> usize {
     let rank = |n: &str| ORDER.iter().position(|o| *o == n).unwrap_or(ORDER.len());
     let mine = rank(name);
     root.children
@@ -340,7 +386,7 @@ fn place(root: &El, name: &str) -> usize {
 }
 
 /// The value of an attribute named `local` with a namespace prefix (`r:id`).
-fn prefixed_attr(doc: &str, el: &El, local: &str) -> Option<String> {
+pub(super) fn prefixed_attr(doc: &str, el: &El, local: &str) -> Option<String> {
     scan::attrs(doc, el.open.clone())
         .into_iter()
         .find(|(name, _)| {

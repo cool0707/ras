@@ -20,6 +20,7 @@ use serde_json::Value as Json;
 use crate::book::snapshot::{CellState, Raw, Snapshot, Styles};
 use crate::book::{Book, MAX_COLS, MAX_ROWS, Paste, PasteOp, PasteWhat, SortKey, Val};
 
+mod drawing;
 mod insert;
 mod macros;
 mod panes;
@@ -183,6 +184,31 @@ pub enum Op {
         text: Option<String>,
         author: String,
     },
+    /// A shape put on the sheet (挿入 > 図形; `kind` one of `drawing::SHAPES`: `rect`, `ellipse`,
+    /// ..., `textBox`, `line`, `arrow`), saying `text`. `flip`: a line drawn right to left,
+    /// bottom to top.
+    Shape {
+        sheet: String,
+        kind: String,
+        place: Place,
+        text: String,
+        flip: (bool, bool),
+    },
+    /// A picture (PNG, JPEG, GIF, BMP) put on the sheet (挿入 > 画像).
+    Picture {
+        sheet: String,
+        place: Place,
+        data: Vec<u8>,
+    },
+    /// An object of the sheet's drawing (a shape, a picture, a chart; by its name) moved and
+    /// sized, given a text (a shape), or deleted.
+    Object {
+        sheet: String,
+        name: String,
+        place: Option<Place>,
+        text: Option<String>,
+        delete: bool,
+    },
     /// A table made of `range` (a single cell: the data around it), as Excel's "テーブルの作成"
     /// makes it. `header`: its first row is the headings; otherwise a row of headings (列1,
     /// 列2, ...) is inserted above it.
@@ -191,6 +217,24 @@ pub enum Op {
         range: RangeRef,
         header: bool,
         name: Option<String>,
+    },
+}
+
+/// Where an object of the drawing goes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Place {
+    /// Over the cells of a range: from the top left of its first cell to the bottom right of its
+    /// last.
+    Cells(RangeRef),
+    /// `dx`, `dy` pixels (as the grid draws them at 100%) right of and below the top left of the
+    /// cell `at`, `width` × `height` pixels (None: the object's own size; one of them: the other
+    /// keeps the proportion).
+    At {
+        at: CellRef,
+        dx: f64,
+        dy: f64,
+        width: Option<f64>,
+        height: Option<f64>,
     },
 }
 
@@ -218,6 +262,9 @@ impl Op {
                 | Op::Link { .. }
                 | Op::Note { .. }
                 | Op::Table { .. }
+                | Op::Shape { .. }
+                | Op::Picture { .. }
+                | Op::Object { .. }
         )
     }
 }
@@ -319,6 +366,43 @@ fn criterion_of(o: &Json) -> Result<crate::book::FilterCriterion> {
             .collect(),
         blanks: o.get("blanks").and_then(Json::as_bool).unwrap_or(false),
     })
+}
+
+/// Where an object goes: `range` (over its cells), or `at` (a cell) with `dx`, `dy`, `width`,
+/// `height` (pixels). None when the edit gives neither.
+fn place_of(o: &Json) -> Result<Option<Place>> {
+    if o.get("range").is_some() {
+        return Ok(Some(Place::Cells(range_of(o, "range")?)));
+    }
+    if o.get("at").is_none() {
+        return Ok(None);
+    }
+    let at = range_of(o, "at")?;
+    if !at.is_single() {
+        return Err("`at` はセル 1 つで指定してください（範囲に合わせるときは `range`）".into());
+    }
+    let number = |key: &str, min: f64| -> Result<Option<f64>> {
+        match o.get(key) {
+            None | Some(Json::Null) => Ok(None),
+            Some(v) => v
+                .as_f64()
+                .filter(|x| x.is_finite() && *x >= min && *x <= drawing::MAX_SIZE)
+                .map(Some)
+                .ok_or_else(|| {
+                    format!(
+                        "`{key}` は {min} 以上 {} 以下の数（ピクセル）です",
+                        drawing::MAX_SIZE
+                    )
+                }),
+        }
+    };
+    Ok(Some(Place::At {
+        at: at.start,
+        dx: number("dx", -drawing::MAX_SIZE)?.unwrap_or(0.0),
+        dy: number("dy", -drawing::MAX_SIZE)?.unwrap_or(0.0),
+        width: number("width", 0.0)?,
+        height: number("height", 0.0)?,
+    }))
 }
 
 /// The edits of a JSON value: one object, or an array of them. `sheet`: the sheet of those that
@@ -622,7 +706,53 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 header: o.get("header").and_then(Json::as_bool).unwrap_or(true),
                 name: text("name").filter(|n| !n.trim().is_empty()),
             },
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table）")),
+            "shape" => {
+                let kind = text("shape").unwrap_or_else(|| "rect".to_string());
+                if !drawing::SHAPES.iter().any(|(k, _)| *k == kind) {
+                    let all: Vec<&str> = drawing::SHAPES.iter().map(|(k, _)| *k).collect();
+                    return Err(format!("図形 `{kind}` はありません（{}）", all.join(" / ")));
+                }
+                let flag = |key: &str| o.get(key).and_then(Json::as_bool).unwrap_or(false);
+                Op::Shape {
+                    sheet,
+                    kind,
+                    place: place_of(o)?.ok_or("図形の位置 `at`（セル）か `range` がありません")?,
+                    text: text("text").unwrap_or_default(),
+                    flip: (flag("flipH"), flag("flipV")),
+                }
+            }
+            "picture" => {
+                let data = match (text("data"), text("file")) {
+                    (Some(data), None) => drawing::base64_decode(&data)?,
+                    (None, Some(file)) => std::fs::read(&file).map_err(|e| format!("{file}: {e}"))?,
+                    _ => return Err("画像を `data`（base64）か `file`（ファイルのパス）のどちらか一方で指定してください".into()),
+                };
+                if data.len() > 64 << 20 {
+                    return Err("画像が大きすぎます（64 MB まで）".into());
+                }
+                Op::Picture {
+                    sheet,
+                    place: place_of(o)?.ok_or("画像の位置 `at`（セル）か `range` がありません")?,
+                    data,
+                }
+            }
+            "object" => {
+                let name = text("name").filter(|n| !n.is_empty()).ok_or("`name`（図形・画像の名前）がありません")?;
+                let delete = o.get("delete").and_then(Json::as_bool).unwrap_or(false);
+                let place = place_of(o)?;
+                let new_text = text("text");
+                if !delete && place.is_none() && new_text.is_none() {
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`delete` のどれかを指定してください".into());
+                }
+                Op::Object {
+                    sheet,
+                    name,
+                    place,
+                    text: new_text,
+                    delete,
+                }
+            }
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object）")),
         });
     }
     Ok(out)
@@ -657,6 +787,28 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 text,
                 author,
             } => insert::note(&bytes, sheet, *at, text.as_deref(), author)?,
+            Op::Shape {
+                sheet,
+                kind,
+                place,
+                text,
+                flip,
+            } => drawing::shape(&bytes, sheet, kind, place, text, *flip)?,
+            Op::Picture { sheet, place, data } => drawing::picture(&bytes, sheet, place, data)?,
+            Op::Object {
+                sheet,
+                name,
+                place,
+                text,
+                delete,
+            } => drawing::object(
+                &bytes,
+                sheet,
+                name,
+                place.as_ref(),
+                text.as_deref(),
+                *delete,
+            )?,
             Op::Table {
                 sheet,
                 range,
@@ -1268,7 +1420,10 @@ fn run(
         | Op::Freeze { .. }
         | Op::Link { .. }
         | Op::Note { .. }
-        | Op::Table { .. } => {}
+        | Op::Table { .. }
+        | Op::Shape { .. }
+        | Op::Picture { .. }
+        | Op::Object { .. } => {}
         Op::Fill {
             sheet,
             range,

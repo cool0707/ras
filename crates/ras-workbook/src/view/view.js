@@ -72,7 +72,10 @@
     let clip = saved.clip || null;
 
     function clearSelection() {
-        if (selected) selected.classList.remove("on");
+        if (selected) {
+            selected.classList.remove("on");
+            for (const h of selected.querySelectorAll(".objhandle")) h.remove();
+        }
         selected = null;
         selectedObj = null;
         refreshEventButton();
@@ -81,6 +84,7 @@
         if (view) {
             view.refs.textContent = "";
             view.selbox.hidden = true;
+            view.fillh.hidden = true;
             for (const th of view.hl) th.classList.remove("hs");
             view.hl = [];
         }
@@ -193,6 +197,7 @@
         selected = box;
         selectedObj = obj;
         box.classList.add("on");
+        addHandles(box, obj);
         refreshEventButton();
         $("name").value = obj.name || "";
         $("fx").textContent = obj.macro ? `マクロ: ${obj.macro}` : "";
@@ -816,14 +821,32 @@
                 }
             }
             if (obj.name) box.title = obj.macro ? `${obj.name}（マクロ: ${obj.macro}）` : obj.name;
+            obj.box = box;
+            if (movable(obj)) box.classList.add("movable");
             box.addEventListener("click", (e) => {
                 e.stopPropagation();
                 selectObject(box, obj);
             });
+            // Dragged: moved (in the panel that edits the workbook).
+            box.addEventListener("mousedown", (e) => {
+                if (e.button !== 0 || !movable(obj) || drawingShape) return;
+                e.preventDefault();
+                if (selectedObj !== obj) selectObject(box, obj);
+                focusGrid();
+                beginObjectDrag(e, box, obj, "move");
+            });
             // As the form designer: a double click opens the default event, the menu the others.
+            // Without events, a shape's text is edited.
             box.addEventListener("dblclick", (e) => {
                 e.stopPropagation();
-                if (!hasEvents(obj)) return;
+                if (!hasEvents(obj)) {
+                    if (movable(obj) && obj.text !== undefined) {
+                        e.preventDefault();
+                        selectObject(box, obj);
+                        editObjectText(obj);
+                    }
+                    return;
+                }
                 e.preventDefault();
                 selectObject(box, obj);
                 openEvent(obj, false);
@@ -832,9 +855,15 @@
                 e.preventDefault();
                 e.stopPropagation();
                 selectObject(box, obj);
-                const items = eventItems(obj);
+                const items = objectItems(obj);
                 if (items.length) showMenu(e.clientX, e.clientY, items);
             });
+            // Drawn again (the rows grew, the fonts came): still selected.
+            if (selectedObj === obj) {
+                selected = box;
+                box.classList.add("on");
+                addHandles(box, obj);
+            }
         }
         for (const img of layer.querySelectorAll("img[data-img]")) {
             const src = (data.images || [])[+img.dataset.img];
@@ -1655,6 +1684,7 @@
             document.body.insertBefore(box, $("tabs"));
         }
         box.textContent = "";
+        box.classList.remove("hint");
         box.appendChild(el("span", null, message));
         const close = box.appendChild(el("button", null, "×"));
         close.type = "button";
@@ -1671,6 +1701,7 @@
             if (m.on) enableEvents();
         } else if (m && m.type === "error") {
             setBusy(false);
+            remember({ pickObj: null });
             showError(String(m.message || "変更できませんでした。"));
             focusGrid();
         }
@@ -1915,6 +1946,7 @@
     document.addEventListener("paste", (e) => {
         if (entry || !onGrid()) return;
         e.preventDefault();
+        if (pastedPicture(e)) return;
         pasteText(e.clipboardData.getData("text/plain"));
     });
     // From the menu: through the clipboard where the page may use it.
@@ -2318,6 +2350,391 @@
     }
     const notesIn = () => allAreas().some((a) => (view.sheet.notes || []).some((n) => n.r >= a.r1 && n.r <= a.r2 && n.c >= a.c1 && n.c <= a.c2));
 
+    // ---- shapes and pictures: put on the sheet (挿入 > 図), moved, sized, given a text and
+    // deleted with the mouse and the keys as in Excel (`shape`, `picture` and `object` edits)
+
+    // The shapes of 挿入 > 図形: [kind, name, icon (16 × 16)], by group.
+    const SHAPE_GROUPS = [
+        ["線", [
+            ["line", "直線", '<path d="M2.5 13.5 13.5 2.5"/>'],
+            ["arrow", "線矢印", '<path d="M2.5 13.5 13 3"/><path d="M8.5 3H13v4.5"/>'],
+        ]],
+        ["四角形", [
+            ["rect", "正方形/長方形", '<rect x="2" y="3.5" width="12" height="9"/>'],
+            ["roundRect", "四角形: 角を丸くする", '<rect x="2" y="3.5" width="12" height="9" rx="2.5"/>'],
+        ]],
+        ["基本図形", [
+            ["textBox", "テキスト ボックス", '<rect x="2" y="2.5" width="12" height="11"/><path d="M5 5.5h6M8 5.5v6"/>'],
+            ["ellipse", "楕円", '<ellipse cx="8" cy="8" rx="6" ry="5"/>'],
+            ["triangle", "二等辺三角形", '<path d="M8 2.5 14 13.5H2z"/>'],
+            ["rtTriangle", "直角三角形", '<path d="M2.5 2.5v11h11z"/>'],
+            ["diamond", "ひし形", '<path d="M8 1.5 14.5 8 8 14.5 1.5 8z"/>'],
+            ["parallelogram", "平行四辺形", '<path d="M5 3.5h9l-3 9H2z"/>'],
+            ["trapezoid", "台形", '<path d="M5 3.5h6l3 9H2z"/>'],
+            ["pentagon", "五角形", '<path d="M8 2 14 6.5 11.7 13.5H4.3L2 6.5z"/>'],
+            ["hexagon", "六角形", '<path d="M5 3h6l3 5-3 5H5L2 8z"/>'],
+            ["octagon", "八角形", '<path d="M5.5 2h5L14 5.5v5L10.5 14h-5L2 10.5v-5z"/>'],
+            ["heart", "ハート", '<path d="M8 13.5S2 9.8 2 5.8A3 3 0 0 1 8 4.5a3 3 0 0 1 6 1.3c0 4-6 7.7-6 7.7z"/>'],
+            ["smileyFace", "スマイル", '<circle cx="8" cy="8" r="6"/><path d="M5.5 9.5c1.4 1.6 3.6 1.6 5 0"/><path d="M6 6h0M10 6h0" stroke-width="1.8"/>'],
+        ]],
+        ["ブロック矢印", [
+            ["rightArrow", "矢印: 右", '<path d="M2 5.5h7V2.5l5 5.5-5 5.5v-3H2z"/>'],
+            ["leftArrow", "矢印: 左", '<path d="M14 5.5H7V2.5L2 8l5 5.5v-3h7z"/>'],
+            ["upArrow", "矢印: 上", '<path d="M5.5 14V7H2.5L8 2l5.5 5h-3v7z"/>'],
+            ["downArrow", "矢印: 下", '<path d="M5.5 2v7H2.5L8 14l5.5-5h-3V2z"/>'],
+        ]],
+        ["星", [["star5", "星: 5 pt", '<path d="m8 1.5 1.9 4.2 4.6.4-3.5 3 1 4.5L8 11.3l-4 2.3 1-4.5-3.5-3 4.6-.4z"/>']]],
+        ["吹き出し", [
+            ["wedgeRectCallout", "吹き出し: 四角形", '<path d="M2 2.5h12v8H8l-3.5 3.5.5-3.5H2z"/>'],
+            ["wedgeRoundRectCallout", "吹き出し: 角を丸めた四角形", '<path d="M4 2.5h8a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2H8l-3.5 3.5.5-3.5H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2z"/>'],
+            ["wedgeEllipseCallout", "吹き出し: 円形", '<path d="M5.2 11.4A6 4.5 0 1 1 7 11.9L3.5 14z"/>'],
+        ]],
+    ];
+    const LINES = new Set(["line", "arrow"]);
+    // The size of a shape put with a click (px): a line goes right.
+    const clickSize = (kind) => (LINES.has(kind) ? [96, 0] : kind === "textBox" ? [144, 36] : [96, 96]);
+    // The shape being drawn: { kind, start: [x, y], ghost } (with the mouse down).
+    let drawingShape = null;
+    // An object being moved or sized: { obj, how: "move" | "n" | "ne" | ..., x, y (where the
+    // mouse went down), box (the object's: x, y, w, h), ghost, now }.
+    let objDrag = null;
+    // A click that ends drawing or dragging is not one on the object or the cell under it.
+    let swallowClick = false;
+    // The objects that can be moved, sized and deleted here: not the controls (they are drawn
+    // from the sheet's controls and their VML shapes too).
+    const movable = (obj) => editable && !!obj && !!obj.name && obj.kind !== "control";
+
+    // A point of the sheet (px at 100% from the top left of the grid, as the objects are placed).
+    function sheetPoint(e) {
+        const r = view.wrap.getBoundingClientRect();
+        const z = Z();
+        return [(e.clientX - r.left) / z, (e.clientY - r.top) / z];
+    }
+    // The drawn column (row) a point is in: the last whose start is not after it.
+    function lineAt(list, start, x) {
+        let [lo, hi, best] = [0, list.length - 1, list.length ? list[0] : 0];
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (start(list[mid]) <= x) {
+                best = list[mid];
+                lo = mid + 1;
+            } else hi = mid - 1;
+        }
+        return best;
+    }
+    // Where a point of the sheet is for an edit: the cell, and the pixels right of and below its
+    // top left corner (the columns are drawn twice as wide while formulas are shown).
+    function anchorOf(x, y) {
+        const v = view;
+        const c = lineAt(v.cols, (i) => columnLeft(v, i), x);
+        const r = lineAt(v.rows.map((row) => row[0]), (i) => rowTop(v, i), y);
+        const round = (n) => Math.round(n * 100) / 100;
+        return { at: address(r, c), dx: round(Math.max(0, x - columnLeft(v, c)) / (formulas ? 2 : 1)), dy: round(Math.max(0, y - rowTop(v, r))) };
+    }
+    // After the page is drawn again: the object the edit made or changed is selected.
+    function pickAfter(name) {
+        if (!view) return;
+        remember({ pickObj: { sheet: view.sheet.name, name: name || null, before: name ? null : (view.sheet.objects || []).map((o) => o.name || "") } });
+    }
+    function pickObject(v) {
+        const p = saved.pickObj;
+        if (!p) return;
+        remember({ pickObj: null });
+        if (p.sheet !== v.sheet.name) return;
+        const objects = v.sheet.objects || [];
+        const obj = p.name ? objects.find((o) => o.name === p.name) : objects.find((o) => o.name && !p.before.includes(o.name));
+        if (obj && obj.box) selectObject(obj.box, obj);
+    }
+
+    function startDrawing(kind) {
+        if (!editable || busy || !view) return;
+        if (entry) commit(null);
+        drawingShape = { kind };
+        document.body.classList.add("drawing");
+        showError(`${shapeName(kind)}: シートをドラッグして描きます（クリックすると既定の大きさ。Esc で取り消し）`);
+        $("error").classList.add("hint");
+    }
+    function stopDrawing() {
+        if (drawingShape && drawingShape.ghost) drawingShape.ghost.remove();
+        drawingShape = null;
+        document.body.classList.remove("drawing");
+        const hint = $("error");
+        if (hint && hint.classList.contains("hint")) {
+            hint.hidden = true;
+            hint.classList.remove("hint");
+        }
+    }
+    function shapeName(kind) {
+        for (const [, list] of SHAPE_GROUPS) for (const [k, name] of list) if (k === kind) return name;
+        return kind;
+    }
+    // A dashed box (with a line across, for a line) where the object will be.
+    function ghostAt(g, x0, y0, x1, y1, line) {
+        const [x, y, w, h] = [Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0)];
+        Object.assign(g.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+        if (line) {
+            const down = (x1 >= x0) === (y1 >= y0);
+            g.innerHTML = `<svg width="${w + 2}" height="${h + 2}"><line x1="1" y1="${down ? 1 : h + 1}" x2="${w + 1}" y2="${down ? h + 1 : 1}"/></svg>`;
+        }
+    }
+    function makeGhost(line) {
+        const g = view.layer.appendChild(el("div", `objghost${line ? " line" : ""}`));
+        return g;
+    }
+
+    // The mouse on the grid while a shape is drawn, or on a selected object's handles.
+    $("grid").addEventListener(
+        "mousedown",
+        (e) => {
+            if (!drawingShape || !view) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.button !== 0) {
+                stopDrawing();
+                return;
+            }
+            const [x, y] = sheetPoint(e);
+            drawingShape.start = [x, y];
+            drawingShape.now = [x, y];
+            drawingShape.ghost = makeGhost(LINES.has(drawingShape.kind));
+            ghostAt(drawingShape.ghost, x, y, x, y, LINES.has(drawingShape.kind));
+        },
+        true,
+    );
+    $("grid").addEventListener(
+        "click",
+        (e) => {
+            if (!swallowClick) return;
+            swallowClick = false;
+            e.preventDefault();
+            e.stopPropagation();
+        },
+        true,
+    );
+    document.addEventListener("mousemove", (e) => {
+        if (drawingShape && drawingShape.start) {
+            let [x, y] = sheetPoint(e);
+            const [x0, y0] = drawingShape.start;
+            // Shift: as wide as it is high (a line: across, down, or at 45°).
+            if (e.shiftKey) {
+                const [w, h] = [Math.abs(x - x0), Math.abs(y - y0)];
+                if (LINES.has(drawingShape.kind) && (w < h / 2 || h < w / 2)) {
+                    if (w < h) x = x0;
+                    else y = y0;
+                } else {
+                    const d = Math.max(w, h);
+                    x = x0 + Math.sign(x - x0 || 1) * d;
+                    y = y0 + Math.sign(y - y0 || 1) * d;
+                }
+            }
+            drawingShape.now = [x, y];
+            ghostAt(drawingShape.ghost, x0, y0, x, y, LINES.has(drawingShape.kind));
+            return;
+        }
+        if (objDrag) dragObject(e);
+    });
+    document.addEventListener("mouseup", (e) => {
+        if (drawingShape && drawingShape.start) {
+            const d = drawingShape;
+            stopDrawing();
+            swallowClick = true;
+            setTimeout(() => (swallowClick = false));
+            let [x0, y0] = d.start;
+            let [x1, y1] = d.now;
+            // A click: the shape's size from there.
+            if (Math.abs(x1 - x0) < 3 && Math.abs(y1 - y0) < 3) [x1, y1] = [x0 + clickSize(d.kind)[0], y0 + clickSize(d.kind)[1]];
+            putShape(d.kind, x0, y0, x1, y1);
+            return;
+        }
+        if (objDrag) endObjectDrag();
+    });
+
+    // A shape put where it was drawn: a line keeps its direction (flipped as Excel writes it); a
+    // text box asks for its text first.
+    function putShape(kind, x0, y0, x1, y1) {
+        const line = LINES.has(kind);
+        const op = { op: "shape", sheet: view.sheet.name, shape: kind, ...anchorOf(Math.min(x0, x1), Math.min(y0, y1)), width: Math.round(Math.abs(x1 - x0)), height: Math.round(Math.abs(y1 - y0)) };
+        if (line && x1 < x0) op.flipH = true;
+        if (line && y1 < y0) op.flipV = true;
+        if (kind !== "textBox") {
+            pickAfter(null);
+            postEdit([op]);
+            return;
+        }
+        askText("テキスト ボックス", "", (text) => {
+            op.text = text;
+            pickAfter(null);
+            postEdit([op]);
+        });
+    }
+    // The text of a shape or a text box (Enter starts a new line; Ctrl+Enter enters it).
+    function askText(title, now, done) {
+        const form = openDialog(title, "notedlg");
+        const text = form.appendChild(el("textarea"));
+        text.rows = 5;
+        text.value = now;
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            closeDialog();
+            done(text.value);
+        });
+        text.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                form.requestSubmit();
+            }
+        });
+        text.focus();
+        text.setSelectionRange(text.value.length, text.value.length);
+    }
+    function editObjectText(obj) {
+        if (!movable(obj) || obj.text === undefined || busy || !view) return;
+        const sheet = view.sheet.name;
+        askText(`テキストの編集（${obj.name}）`, obj.text, (text) => {
+            if (text === obj.text) return;
+            pickAfter(obj.name);
+            postEdit([{ op: "object", sheet, name: obj.name, text }]);
+        });
+    }
+    function deleteObject(obj) {
+        if (!movable(obj) || busy || !view) return;
+        postEdit([{ op: "object", sheet: view.sheet.name, name: obj.name, delete: true }]);
+    }
+    // The box of an object as it is placed (px at 100%).
+    const boxOfObject = (box) => ({ x: box.offsetLeft, y: box.offsetTop, w: box.offsetWidth, h: box.offsetHeight });
+    // An object moved (its box) to where it now is, or sized.
+    function moveObject(obj, b) {
+        if (!view) return;
+        pickAfter(obj.name);
+        postEdit([{ op: "object", sheet: view.sheet.name, name: obj.name, ...anchorOf(Math.max(0, b.x), Math.max(0, b.y)), width: Math.max(0, Math.round(b.w)), height: Math.max(0, Math.round(b.h)) }]);
+    }
+    // The handles of the selected object: its sides and corners size it.
+    const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+    function addHandles(box, obj) {
+        if (!movable(obj)) return;
+        for (const h of HANDLES) {
+            const d = box.appendChild(el("div", `objhandle ${h}`));
+            d.addEventListener("mousedown", (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                beginObjectDrag(e, box, obj, h);
+            });
+        }
+    }
+    function beginObjectDrag(e, box, obj, how) {
+        if (busy || !view) return;
+        if (entry) commit(null);
+        objDrag = { obj, box, how, x: e.clientX, y: e.clientY, from: boxOfObject(box), ghost: null, now: null };
+    }
+    function dragObject(e) {
+        const d = objDrag;
+        if (!(e.buttons & 1)) {
+            endObjectDrag();
+            return;
+        }
+        const z = Z();
+        let [dx, dy] = [(e.clientX - d.x) / z, (e.clientY - d.y) / z];
+        if (!d.ghost && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+        const f = d.from;
+        let { x, y, w, h } = f;
+        if (d.how === "move") {
+            // Shift: across or down only.
+            if (e.shiftKey) {
+                if (Math.abs(dx) > Math.abs(dy)) dy = 0;
+                else dx = 0;
+            }
+            [x, y] = [f.x + dx, f.y + dy];
+        } else {
+            if (d.how.includes("w")) [x, w] = [f.x + Math.min(dx, f.w), f.w - Math.min(dx, f.w)];
+            if (d.how.includes("e")) w = Math.max(0, f.w + dx);
+            if (d.how.includes("n")) [y, h] = [f.y + Math.min(dy, f.h), f.h - Math.min(dy, f.h)];
+            if (d.how.includes("s")) h = Math.max(0, f.h + dy);
+            // A picture keeps its proportion by its corners (Shift: a shape too).
+            if (d.how.length === 2 && (d.obj.kind === "picture" || e.shiftKey) && f.w > 0 && f.h > 0) {
+                const k = Math.max(w / f.w, h / f.h);
+                const [nw, nh] = [f.w * k, f.h * k];
+                if (d.how.includes("w")) x = f.x + f.w - nw;
+                if (d.how.includes("n")) y = f.y + f.h - nh;
+                [w, h] = [nw, nh];
+            }
+        }
+        if (!d.ghost) d.ghost = makeGhost(false);
+        d.now = { x, y, w, h };
+        ghostAt(d.ghost, x, y, x + w, y + h, false);
+    }
+    function endObjectDrag() {
+        const d = objDrag;
+        objDrag = null;
+        if (!d || !d.ghost) return;
+        d.ghost.remove();
+        swallowClick = true;
+        setTimeout(() => (swallowClick = false));
+        moveObject(d.obj, d.now);
+    }
+    // The arrow keys move the selected object by a pixel (Ctrl: by 10).
+    function nudgeObject(obj, box, dr, dc, far) {
+        if (!movable(obj) || busy) return;
+        const b = boxOfObject(box);
+        const step = far ? 10 : 1;
+        moveObject(obj, { x: b.x + dc * step, y: b.y + dr * step, w: b.w, h: b.h });
+    }
+
+    // 挿入 > 画像: a picture from a file, at the active cell (shrunk to the window when larger).
+    function askPicture() {
+        if (!editable || busy || !view || !sel) return;
+        if (entry) commit(null);
+        const input = document.body.appendChild(el("input"));
+        input.type = "file";
+        input.accept = "image/png,image/jpeg,image/gif,image/bmp,.png,.jpg,.jpeg,.gif,.bmp";
+        input.hidden = true;
+        input.addEventListener("change", () => {
+            const file = input.files && input.files[0];
+            input.remove();
+            if (file) putPicture(file);
+        });
+        input.click();
+    }
+    function putPicture(file) {
+        if (!view || !sel) return;
+        if (file.size > 64 * 1024 * 1024) {
+            showError("画像が大きすぎます（64 MB まで）。");
+            return;
+        }
+        const sheet = view.sheet.name;
+        const at = { at: address(sel.ar, sel.ac) };
+        const reader = new FileReader();
+        reader.addEventListener("load", () => {
+            const url = String(reader.result);
+            const img = new Image();
+            const post = (size) => {
+                pickAfter(null);
+                postEdit([{ op: "picture", sheet, ...at, ...size, data: url.slice(url.indexOf(",") + 1) }]);
+            };
+            img.addEventListener("load", () => {
+                const g = $("grid");
+                const z = Z();
+                const [maxW, maxH] = [Math.max(100, g.clientWidth / z - 60), Math.max(100, g.clientHeight / z - 40)];
+                const k = Math.min(1, maxW / img.naturalWidth, maxH / img.naturalHeight);
+                post(k < 1 ? { width: Math.round(img.naturalWidth * k), height: Math.round(img.naturalHeight * k) } : {});
+            });
+            // (A format the page cannot show, BMP in some browsers: its own size.)
+            img.addEventListener("error", () => post({}));
+            img.src = url;
+        });
+        reader.readAsDataURL(file);
+    }
+    // The pictures of the clipboard (a screenshot, an image copied), when it has no text.
+    function pastedPicture(e) {
+        const d = e.clipboardData;
+        if (!editable || !d || d.getData("text/plain")) return false;
+        const file = Array.from(d.files || []).find((f) => /^image\/(png|jpeg|gif|bmp)$/.test(f.type));
+        if (!file) return false;
+        putPicture(file);
+        return true;
+    }
+
     // "記号と特殊文字": a symbol typed where the cell is being typed in (or after what the active
     // cell has). The dialog stays open, as Excel's.
     const SYMBOLS = [
@@ -2505,6 +2922,17 @@
                   ["新しいマクロを登録", () => openEvent(obj, false), ""],
                   ["マクロの登録…", () => openEvent(obj, true), ""],
               ];
+    }
+    // The menu of an object: its text, deleting it, its events.
+    function objectItems(obj) {
+        const items = [];
+        if (movable(obj)) {
+            if (obj.text !== undefined) items.push(["テキストの編集…", () => editObjectText(obj), "F2"]);
+            items.push(["削除", () => deleteObject(obj), "Delete"]);
+        }
+        const more = eventItems(obj);
+        if (items.length && more.length) items.push(null);
+        return items.concat(more);
     }
     // The button of the bar: the events of the object selected (a menu).
     function refreshEventButton() {
@@ -2761,6 +3189,9 @@
         link: '<path d="M6.5 9.5 9.5 6.5"/><path d="M7.5 4.5 9 3a2.5 2.5 0 0 1 3.5 3.5L11 8M8.5 11.5 7 13a2.5 2.5 0 0 1-3.5-3.5L5 8"/>',
         note: '<path d="M2.5 2.5h11v8l-3 3h-8z"/><path d="M10.5 13.5v-3h3"/><path d="M5 6h6M5 8.5h4"/>',
         symbol: '<path d="M3 13.5h3.2v-1.6A5 5 0 1 1 9.8 11.9v1.6H13"/>',
+        picture: '<rect x="1.5" y="2.5" width="13" height="11" rx="1"/><circle cx="5.5" cy="6" r="1.3"/><path d="m1.5 12 4-4 3 3 2-2 4 4"/>',
+        shapes: '<circle cx="5.5" cy="5.5" r="4"/><rect x="7.5" y="7.5" width="7" height="7" fill="#fff"/>',
+        textBox: '<rect x="1.5" y="2.5" width="13" height="11"/><path d="M4.5 5.5h7M8 5.5v6"/>',
     };
     function icon(name, large) {
         const s = large ? 30 : 16;
@@ -3155,6 +3586,35 @@
         const insertTab = tab("insert", "挿入");
         group(insertTab, "テーブル");
         button("table", { icon: "table", label: "テーブル", large: true, title: "テーブル（Ctrl+T）: データの範囲をテーブルにします", edits: true, act: askTable });
+        group(insertTab, "図");
+        button("picture", { icon: "picture", label: "画像", large: true, title: "画像: ファイルの画像（PNG・JPEG・GIF・BMP）をアクティブなセルの位置に挿入します（画像の貼り付けでも挿入できます）", edits: true, act: askPicture });
+        button("shapes", {
+            icon: "shapes",
+            label: "図形",
+            large: true,
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "shapes");
+                for (const [title, list] of SHAPE_GROUPS) {
+                    head(pop, title);
+                    const row = pop.appendChild(el("div", "shaperow"));
+                    for (const [kind, name, path] of list) {
+                        const b = row.appendChild(el("button", "shapebtn"));
+                        b.type = "button";
+                        b.title = name;
+                        b.dataset.shape = kind;
+                        b.innerHTML = `<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+                        b.addEventListener("click", () => {
+                            closeMenu();
+                            closeOpen();
+                            startDrawing(kind);
+                        });
+                    }
+                }
+            },
+        });
+        group(insertTab, "テキスト");
+        button("textBox", { icon: "textBox", label: "テキスト ボックス", large: true, cls: "two", title: "テキスト ボックス: シートをドラッグして描きます", edits: true, act: () => startDrawing("textBox") });
         group(insertTab, "リンク");
         button("link", { icon: "link", label: "リンク", large: true, title: "リンク（Ctrl+K）: Web ページ・ファイル・ブック内の場所へのハイパーリンクを挿入します", edits: true, act: askLink });
         group(insertTab, "メモ");
@@ -4761,6 +5221,31 @@
             askGoTo();
             return;
         }
+        // A shape being drawn: Esc stops.
+        if (drawingShape && key === "Escape") {
+            e.preventDefault();
+            stopDrawing();
+            return;
+        }
+        // The object selected: Delete deletes it, the arrows move it, F2 and Enter edit its text,
+        // Esc goes back to the cells.
+        if (view && selectedObj && selected && onGrid() && !e.altKey) {
+            const obj = selectedObj;
+            const moves = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+            if (key === "Escape") {
+                e.preventDefault();
+                clearSelection();
+                if (sel) setSel(sel, false);
+                return;
+            }
+            if (!ctrl || moves[key]) {
+                e.preventDefault();
+                if (key === "Delete" || key === "Backspace") deleteObject(obj);
+                else if (moves[key]) nudgeObject(obj, selected, moves[key][0], moves[key][1], ctrl);
+                else if (key === "F2" || key === "Enter") editObjectText(obj);
+                return;
+            }
+        }
         if (!view || !sel || !onGrid()) return;
         const arrows = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
         let done = true;
@@ -5083,6 +5568,7 @@
         if (list.length && saved.sheet !== first.name) go(first.name, list[0].a);
         // Drawn again (after an edit, at a stop of the debugger): where it was.
         if (again) scrollTo(again.x, again.y);
+        if (view) pickObject(view);
         focusGrid();
         // The box of find and replace, open again after a replacement.
         if (finder.open) {

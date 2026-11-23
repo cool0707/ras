@@ -1115,3 +1115,250 @@ fn tables_made_of_the_data() {
     assert!(refused(r#"{"op":"table","range":"A1:D5","name":"Items"}"#).contains("既に"));
     assert!(refused(r#"{"op":"table","range":"A1:D5","name":"A1"}"#).contains("使えません"));
 }
+
+/// A PNG of 3 × 2 pixels.
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x02, 0x08, 0x02, 0x00, 0x00, 0x00, 0x12, 0x16, 0xF1,
+    0x4D, 0x00, 0x00, 0x00, 0x12, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0,
+    0x1F, 0x08, 0x19, 0x18, 0xFE, 0x03, 0x00, 0x2F, 0xF6, 0x05, 0xFB, 0x66, 0x29, 0xC3, 0x1E, 0x00,
+    0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+/// The objects the grid draws on a sheet: (kind, name, from, to).
+fn objects(bytes: &[u8], sheet: usize) -> Vec<(String, String, Json, Json)> {
+    view(bytes)["sheets"][sheet]["objects"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|o| {
+            (
+                o["kind"].as_str().unwrap_or("").to_string(),
+                o["name"].as_str().unwrap_or("").to_string(),
+                o["from"].clone(),
+                o["to"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn shapes_and_pictures_put_on_a_sheet() {
+    // A sheet without a drawing gets one: its part, relationship, content type, `<drawing>`.
+    let out = edit(
+        r#"{"op":"shape","sheet":"Summary","shape":"ellipse","at":"B2","dx":10,"dy":5,"width":100,"height":50,"text":"こんにちは\n2 行目"}"#,
+    );
+    assert_eq!(
+        changed(BOOK, &out),
+        [
+            "[Content_Types].xml",
+            "xl/drawings/drawing2.xml",
+            "xl/worksheets/_rels/sheet2.xml.rels",
+            "xl/worksheets/sheet2.xml"
+        ]
+    );
+    assert!(part(&out, SHEET2).ends_with(r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><drawing r:id="rId1"/></worksheet>"#));
+    assert!(part(&out, "xl/worksheets/_rels/sheet2.xml.rels").contains(r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml""#));
+    assert!(part(&out, "[Content_Types].xml").contains(r#"<Override PartName="/xl/drawings/drawing2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>"#));
+    let drawing = part(&out, "xl/drawings/drawing2.xml");
+    // (Columns 72 px wide, rows 20 px high: B2 is at 72, 20.)
+    assert!(drawing.contains(r#"<xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>47625</xdr:rowOff></xdr:from><xdr:to><xdr:col>2</xdr:col><xdr:colOff>361950</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>142875</xdr:rowOff></xdr:to><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="2" name="楕円 1"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="781050" y="238125"/><a:ext cx="952500" cy="476250"/></a:xfrm><a:prstGeom prst="ellipse">"#), "{drawing}");
+    assert!(drawing.contains(r#"<a:p><a:pPr algn="ctr"/><a:r><a:rPr kumimoji="1" lang="ja-JP" altLang="en-US" sz="1100"/><a:t>こんにちは</a:t></a:r></a:p><a:p><a:pPr algn="ctr"/><a:r><a:rPr kumimoji="1" lang="ja-JP" altLang="en-US" sz="1100"/><a:t>2 行目</a:t></a:r></a:p>"#), "{drawing}");
+    let shapes = objects(&out, 1);
+    assert_eq!(
+        shapes,
+        [(
+            "shape".to_string(),
+            "楕円 1".to_string(),
+            json!([1, 10.0, 1, 5.0]),
+            json!([2, 38.0, 3, 15.0])
+        )]
+    );
+    assert!(
+        view(&out)["sheets"][1]["objects"][0]["html"]
+            .as_str()
+            .unwrap()
+            .contains("こんにちは")
+    );
+    // The cells are as they were.
+    assert_eq!(cell(&out, "Summary", "A1", Read::Formula), "=Data!D6*2");
+
+    // Over a range; a text box, a line drawn up to the right, an arrow: on the sheet's drawing,
+    // after its chart.
+    let out = edit(
+        r#"[{"op":"shape","shape":"textBox","range":"A12:B13","text":"メモ"},{"op":"shape","shape":"line","at":"D12","width":64,"height":40,"flipV":true},{"op":"shape","shape":"arrow","at":"F12","width":30}]"#,
+    );
+    assert_eq!(changed(BOOK, &out), ["xl/drawings/drawing1.xml"]);
+    let drawing = part(&out, "xl/drawings/drawing1.xml");
+    assert!(
+        drawing
+            .contains(r#"<xdr:cNvPr id="3" name="テキスト ボックス 2"/><xdr:cNvSpPr txBox="1"/>"#),
+        "{drawing}"
+    );
+    assert!(drawing.contains(r#"<xdr:cNvPr id="4" name="直線コネクタ 3"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr><a:xfrm flipV="1">"#), "{drawing}");
+    assert!(
+        drawing.contains(r#"name="直線矢印コネクタ 4"/>"#),
+        "{drawing}"
+    );
+    assert!(drawing.contains(r#"<a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom><a:ln><a:tailEnd type="triangle"/></a:ln>"#), "{drawing}");
+    let names: Vec<(String, String)> = objects(&out, 0).into_iter().map(|o| (o.0, o.1)).collect();
+    assert_eq!(
+        names,
+        [
+            ("chart", "Chart 1"),
+            ("shape", "テキスト ボックス 2"),
+            ("shape", "直線コネクタ 3"),
+            ("shape", "直線矢印コネクタ 4"),
+            ("control", "")
+        ]
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+    );
+    // The text box covers its range.
+    assert_eq!(objects(&out, 0)[1].2, json!([0, 0.0, 11, 0.0]));
+    assert_eq!(objects(&out, 0)[1].3, json!([2, 0.0, 13, 0.0]));
+
+    // A picture: its bytes in xl/media, the relationship of the drawing, the content type of
+    // its extension; its own size.
+    let out = edit(&format!(
+        r#"{{"op":"picture","at":"A12","data":"data:image/png;base64,{}"}}"#,
+        crate::view::drawing::base64(PNG)
+    ));
+    assert_eq!(
+        changed(BOOK, &out),
+        [
+            "[Content_Types].xml",
+            "xl/drawings/_rels/drawing1.xml.rels",
+            "xl/drawings/drawing1.xml",
+            "xl/media/image1.png"
+        ]
+    );
+    assert_eq!(parts(&out)["xl/media/image1.png"], PNG);
+    assert!(
+        part(&out, "[Content_Types].xml")
+            .contains(r#"<Default Extension="png" ContentType="image/png"/>"#)
+    );
+    assert!(part(&out, "xl/drawings/_rels/drawing1.xml.rels").contains(r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>"#));
+    let drawing = part(&out, "xl/drawings/drawing1.xml");
+    assert!(drawing.contains(r#"<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>11</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>0</xdr:col><xdr:colOff>28575</xdr:colOff><xdr:row>11</xdr:row><xdr:rowOff>19050</xdr:rowOff></xdr:to><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="図 2"/>"#), "{drawing}");
+    assert!(drawing.contains(r#"<a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId2"/>"#));
+    let pic = &view(&out)["sheets"][0]["objects"][1];
+    assert_eq!(pic["kind"], json!("picture"));
+    assert!(pic["html"].as_str().unwrap().contains("data-img"));
+    // Sized by its width only: its proportion kept.
+    let out2 = edit(&format!(
+        r#"{{"op":"picture","sheet":"Summary","at":"B2","width":30,"data":"{}"}}"#,
+        crate::view::drawing::base64(PNG)
+    ));
+    assert_eq!(objects(&out2, 1)[0].3, json!([1, 30.0, 2, 0.0]));
+
+    // Refused: a shape there is not, a picture that is not one.
+    assert!(
+        parse_ops(
+            &json!({"op":"shape","shape":"cloud","at":"A1"}),
+            Some("Data")
+        )
+        .unwrap_err()
+        .contains("cloud")
+    );
+    assert!(refused(r#"{"op":"picture","at":"A1","data":"aGVsbG8="}"#).contains("形式"));
+    assert!(
+        parse_ops(&json!({"op":"shape","at":"A1:B2"}), Some("Data"))
+            .unwrap_err()
+            .contains("range")
+    );
+}
+
+#[test]
+fn objects_moved_sized_given_a_text_and_deleted() {
+    let png = crate::view::drawing::base64(PNG);
+    let out = edit(&format!(
+        r#"[{{"op":"shape","at":"A12","width":50,"height":30,"text":"前"}},{{"op":"picture","at":"D12","data":"{png}"}}]"#
+    ));
+    // Moved (its size kept), sized, both.
+    let moved = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","at":"B15","dx":4}"#),
+    )
+    .unwrap();
+    assert_eq!(changed(&out, &moved), ["xl/drawings/drawing1.xml"]);
+    let o = &objects(&moved, 0)[1];
+    assert_eq!(
+        (o.2.clone(), o.3.clone()),
+        (json!([1, 4.0, 14, 0.0]), json!([1, 54.0, 15, 10.0]))
+    );
+    let drawing = part(&moved, "xl/drawings/drawing1.xml");
+    // (A is 118 px wide; row 7 is 40 px high.)
+    assert!(
+        drawing.contains(r#"<a:off x="1162050" y="2857500"/><a:ext cx="476250" cy="285750"/>"#),
+        "{drawing}"
+    );
+    let sized = apply(
+        &moved,
+        &ops(r#"{"op":"object","name":"図 3","range":"D12:E13"}"#),
+    )
+    .unwrap();
+    let o = &objects(&sized, 0)[2];
+    assert_eq!(
+        (o.2.clone(), o.3.clone()),
+        (json!([3, 0.0, 11, 0.0]), json!([5, 0.0, 13, 0.0]))
+    );
+
+    // A text: the first paragraph's properties kept.
+    let texted = apply(
+        &sized,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","text":"後\n2"}"#),
+    )
+    .unwrap();
+    let drawing = part(&texted, "xl/drawings/drawing1.xml");
+    assert!(drawing.contains(r#"<a:p><a:pPr algn="ctr"/><a:r><a:rPr kumimoji="1" lang="ja-JP" altLang="en-US" sz="1100"/><a:t>後</a:t></a:r></a:p><a:p><a:pPr algn="ctr"/><a:r><a:rPr kumimoji="1" lang="ja-JP" altLang="en-US" sz="1100"/><a:t>2</a:t></a:r></a:p></xdr:txBody>"#), "{drawing}");
+    assert!(!drawing.contains("前"));
+    assert!(
+        apply(&texted, &ops(r#"{"op":"object","name":"図 3","text":"x"}"#))
+            .unwrap_err()
+            .contains("文字")
+    );
+
+    // Deleted: a picture takes its bytes, its relationship and nothing else with it.
+    let gone = apply(
+        &texted,
+        &ops(r#"{"op":"object","name":"図 3","delete":true}"#),
+    )
+    .unwrap();
+    assert_eq!(
+        changed(&texted, &gone),
+        [
+            "xl/drawings/_rels/drawing1.xml.rels",
+            "xl/drawings/drawing1.xml",
+            "xl/media/image1.png"
+        ]
+    );
+    assert!(!parts(&gone).contains_key("xl/media/image1.png"));
+    assert!(!part(&gone, "xl/drawings/_rels/drawing1.xml.rels").contains("image"));
+    // A chart: its part and content type.
+    let gone = apply(
+        &gone,
+        &ops(r#"{"op":"object","name":"Chart 1","delete":true}"#),
+    )
+    .unwrap();
+    assert!(!parts(&gone).contains_key("xl/charts/chart1.xml"));
+    assert!(!part(&gone, "[Content_Types].xml").contains("chart1"));
+    assert!(!part(&gone, "xl/drawings/_rels/drawing1.xml.rels").contains("chart"));
+    let names: Vec<String> = objects(&gone, 0).into_iter().map(|o| o.1).collect();
+    assert_eq!(names, ["正方形/長方形 2", ""]);
+    assert_eq!(cell(&gone, "Data", "D6", Read::Formula), "=SUM(D2:D5)");
+
+    assert!(
+        apply(
+            &gone,
+            &ops(r#"{"op":"object","name":"なし","delete":true}"#)
+        )
+        .unwrap_err()
+        .contains("なし")
+    );
+    assert!(
+        parse_ops(&json!({"op":"object","name":"x"}), Some("Data"))
+            .unwrap_err()
+            .contains("delete")
+    );
+}

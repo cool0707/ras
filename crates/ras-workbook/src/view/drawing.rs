@@ -248,6 +248,8 @@ pub struct Obj {
     pub assignable: bool,
     /// A control's shape (`_x0000_s1025` in the VML drawing: 1025).
     pub shape_id: Option<u32>,
+    /// The text of a shape that can hold one (paragraphs on lines of their own).
+    pub text: Option<String>,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -472,6 +474,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 activex: None,
                 assignable: true,
                 shape_id: None,
+                text: None,
             });
             return;
         }
@@ -488,6 +491,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 activex: None,
                 assignable: true,
                 shape_id: None,
+                text: None,
             });
         }
         return;
@@ -514,8 +518,30 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
             // (A group has no macro of its own in the file.)
             assignable: obj.name != "grpSp",
             shape_id: None,
+            text: (obj.name == "sp").then(|| shape_text(obj)),
         });
     }
+}
+
+/// The text of a shape: its paragraphs, one a line.
+fn shape_text(sp: &Node) -> String {
+    let Some(body) = sp.child("txBody") else {
+        return String::new();
+    };
+    body.children("p")
+        .map(|p| {
+            let mut line = String::new();
+            for r in &p.children {
+                match r.name.as_str() {
+                    "r" | "fld" => line.push_str(r.child("t").map_or("", |t| t.text.as_str())),
+                    "br" => line.push('\n'),
+                    _ => {}
+                }
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A chart: its spec for the page, or a box with its title when the page does not draw it (the
