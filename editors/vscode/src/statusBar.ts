@@ -17,6 +17,10 @@ export class SyncStatusBar implements vscode.Disposable {
 	private readonly openItem = vscode.window.createStatusBarItem("ras.openInExcel", vscode.StatusBarAlignment.Left, -0.001);
 	private serverState: ServerState = "stopped";
 	private status: SyncStatus | undefined;
+	/** Whether the workspace has a project (or a .ras file): otherwise the server is not started. */
+	private serverWanted = false;
+	/** No project yet, in a folder to start one in: the item offers "New RAS project". */
+	private canCreateProject = false;
 
 	constructor() {
 		this.item.name = "RAS 同期状態";
@@ -24,7 +28,16 @@ export class SyncStatusBar implements vscode.Disposable {
 		this.openItem.text = "$(link-external) Excel で開く";
 		this.openItem.command = "ras.client.openInExcel";
 		this.render();
-		this.item.show();
+	}
+
+	setServerWanted(wanted: boolean): void {
+		this.serverWanted = wanted;
+		this.render();
+	}
+
+	setCanCreateProject(can: boolean): void {
+		this.canCreateProject = can;
+		this.render();
 	}
 
 	setServerState(state: ServerState): void {
@@ -50,6 +63,19 @@ export class SyncStatusBar implements vscode.Disposable {
 	private render(): void {
 		const item = this.item;
 		item.backgroundColor = undefined;
+		if (!this.serverWanted && this.serverState === "stopped") {
+			this.openItem.hide();
+			if (this.canCreateProject) {
+				item.text = "$(new-folder) RAS プロジェクトを作成";
+				item.tooltip = "このフォルダーに、Excel ブックと RAS のソースを入れたプロジェクトを作成します。";
+				item.command = "ras.project.new";
+				item.show();
+			} else {
+				item.hide();
+			}
+			return;
+		}
+		item.show();
 		const showOpen = process.platform === "win32" && this.serverState === "running" && !this.status?.connected;
 		if (showOpen) {
 			this.openItem.tooltip = this.status?.workbook ? `${this.status.workbook} を Excel で開いて同期します` : "対象のブックを Excel で開いて同期します";

@@ -37,7 +37,9 @@
     "onDebugInitialConfigurations",
     "onCustomEditor:ras.userFormDesigner",
     "onCommand:ras.userForm.new",
-    "onCommand:ras.module.new"
+    "onCommand:ras.module.new",
+    "onStartupFinished",
+    "onCommand:ras.project.new"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -221,6 +223,12 @@
       }
     },
     "commands": [
+      {
+        "command": "ras.project.new",
+        "title": "新しいプロジェクトを作成",
+        "category": "RAS",
+        "icon": "$(new-folder)"
+      },
       {
         "command": "ras.client.showGeneratedVba",
         "title": "生成 VBA を表示",
@@ -420,6 +428,11 @@
       ],
       "explorer/context": [
         {
+          "command": "ras.project.new",
+          "when": "explorerResourceIsFolder && ras.noProject",
+          "group": "navigation@19"
+        },
+        {
           "command": "ras.userForm.openDesigner",
           "when": "resourceFilename =~ /\\.form\\.json$/",
           "group": "navigation@20"
@@ -466,6 +479,11 @@
         }
       ],
       "view/title": [
+        {
+          "command": "ras.project.new",
+          "when": "view == workbench.explorer.fileView && ras.canCreateProject",
+          "group": "navigation@-3"
+        },
         {
           "command": "ras.module.new",
           "when": "view == workbench.explorer.fileView && ras.projectOpen",
@@ -522,6 +540,13 @@
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "explorer",
+        "contents": "Excel ブックと RAS のソースを入れたプロジェクトを作成できます。\n[新しい RAS プロジェクトを作成](command:ras.project.new)",
+        "when": "workbenchState == empty"
+      }
+    ],
     "breakpoints": [
       {
         "language": "ras"

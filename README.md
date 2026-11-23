@@ -61,6 +61,8 @@ VS Code 拡張は「拡張機能」ビューの `…` → 「VSIX からのイ�
 
 ## 使い方
 
+VS Code では、空のフォルダーを開いてエクスプローラーの［新しい RAS プロジェクトを作成］（コマンドパレットの「RAS: 新しいプロジェクトを作成」）で、プロジェクトとブックを作成して開けます（`ras init` と `ras pack` を行います）。
+
 ```sh
 ras init myproject --workbook Book.xlsm   # ras.toml・src/main.ras・空のマクロ有効ブックを作成
 cd myproject

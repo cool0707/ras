@@ -201,6 +201,24 @@ body.busy, body.busy td, body.busy th { cursor: progress; }
 #ribbon .rtab.on { color: var(--accent-ink); font-weight: bold; }
 #ribbon .rtab.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 1px; height: 3px; border-radius: 2px; background: var(--accent); }
 #ribbon .rbody { display: flex; margin: 0 6px 4px; padding: 3px 2px 0; background: #fff; border: 1px solid #e1e1e1; border-radius: 6px; box-shadow: 0 1px 2px rgba(0, 0, 0, .06); overflow-x: auto; overflow-y: hidden; }
+/* A tab wider than the window: a thin scroll bar in the ribbon's grays, shown only under the
+   mouse, and a fade on each side that has buttons out of view (more-l / more-r, view.js). */
+#ribbon .rbody::-webkit-scrollbar { height: 6px; background: transparent; }
+#ribbon .rbody::-webkit-scrollbar-track, #ribbon .rbody::-webkit-scrollbar-corner { background: transparent; }
+#ribbon .rbody::-webkit-scrollbar-thumb { border-radius: 3px; background: transparent; }
+/* (`hover` is set by view.js: Chromium does not repaint a scroll bar for :hover alone.) */
+#ribbon .rbody.hover { overflow-x: scroll; }
+#ribbon .rbody.hover::-webkit-scrollbar-thumb { background: #cfcfcf; }
+#ribbon .rbody.hover::-webkit-scrollbar-thumb:hover { background: #b0b0b0; }
+#ribbon .rbody.hover::-webkit-scrollbar-thumb:active { background: var(--accent); }
+@supports not selector(::-webkit-scrollbar) {
+    #ribbon .rbody { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+    #ribbon .rbody:hover { scrollbar-color: #cfcfcf transparent; }
+}
+#ribbon .rbody::before, #ribbon .rbody::after { content: ""; position: sticky; z-index: 1; flex: none; width: 36px; pointer-events: none; opacity: 0; transition: opacity .15s; }
+#ribbon .rbody::before { left: 0; order: -1; margin-right: -36px; border-radius: 5px 0 0 5px; background: linear-gradient(to right, rgba(0, 0, 0, .09), rgba(0, 0, 0, 0) 5px), linear-gradient(to right, #fff 15%, rgba(255, 255, 255, 0)); }
+#ribbon .rbody::after { right: 0; order: 1; margin-left: -36px; border-radius: 0 5px 5px 0; background: linear-gradient(to left, rgba(0, 0, 0, .09), rgba(0, 0, 0, 0) 5px), linear-gradient(to left, #fff 15%, rgba(255, 255, 255, 0)); }
+#ribbon .rbody.more-l::before, #ribbon .rbody.more-r::after { opacity: 1; }
 #ribbon.collapsed .rbody { display: none; }
 #ribbon.collapsed.open .rbody { display: flex; position: absolute; left: 0; right: 0; top: 100%; box-shadow: 0 4px 12px rgba(0, 0, 0, .2); }
 #ribbon.collapsed .rtab.on::after { display: none; }
