@@ -177,9 +177,28 @@ button:disabled {
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 1px;
+    /* --split: the source pane's share of the width (the splitter sets it, main.ts). */
+    grid-template-columns: minmax(0, calc(var(--split, 0.5) * 100%)) 5px minmax(0, 1fr);
     background: var(--line);
+}
+.splitter {
+    cursor: col-resize;
+    background: var(--line);
+    touch-action: none;
+    outline: none;
+}
+.splitter:hover,
+.splitter:focus-visible,
+body.splitting .splitter {
+    background: var(--accent);
+}
+/* While the splitter is dragged, the frames (the book, the Designer) do not take the mouse. */
+body.splitting {
+    cursor: col-resize;
+    user-select: none;
+}
+body.splitting iframe {
+    pointer-events: none;
 }
 .pane {
     display: flex;
@@ -579,6 +598,10 @@ button:disabled {
     .panes {
         grid-template-columns: minmax(0, 1fr);
         grid-template-rows: minmax(320px, 1fr) minmax(320px, 1fr);
+        gap: 1px;
+    }
+    .splitter {
+        display: none;
     }
     body {
         height: auto;

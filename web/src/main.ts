@@ -1243,6 +1243,72 @@ function toast(text: string) {
     toastTimer = window.setTimeout(() => (t.hidden = true), 4000);
 }
 
+const SPLIT = "ras-playground:split";
+
+/** The splitter between the source and the output: dragged, or moved with the arrow keys. */
+function setUpSplitter() {
+    const panes = document.querySelector<HTMLElement>(".panes")!;
+    const splitter = $("splitter");
+    const clamp = (r: number) => {
+        const w = panes.clientWidth || 1;
+        // Each pane keeps at least 240 px (or a fifth of a narrow page).
+        const min = Math.min(240 / w, 0.2);
+        return Math.min(Math.max(r, min), 1 - min);
+    };
+    const apply = (r: number, keep: boolean) => {
+        const v = clamp(r);
+        panes.style.setProperty("--split", String(v));
+        splitter.setAttribute("aria-valuenow", String(Math.round(v * 100)));
+        if (keep) {
+            try {
+                localStorage.setItem(SPLIT, String(v));
+            } catch {
+                // Not kept without storage.
+            }
+        }
+    };
+    let saved = NaN;
+    try {
+        saved = parseFloat(localStorage.getItem(SPLIT) || "");
+    } catch {
+        // The default.
+    }
+    apply(Number.isFinite(saved) ? saved : 0.5, false);
+    splitter.setAttribute("aria-valuemin", "0");
+    splitter.setAttribute("aria-valuemax", "100");
+    const current = () => parseFloat(panes.style.getPropertyValue("--split")) || 0.5;
+    splitter.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        splitter.setPointerCapture(e.pointerId);
+        document.body.classList.add("splitting");
+        const rect = panes.getBoundingClientRect();
+        const move = (ev: PointerEvent) => apply((ev.clientX - rect.left) / rect.width, false);
+        const up = () => {
+            splitter.removeEventListener("pointermove", move);
+            splitter.removeEventListener("pointerup", up);
+            splitter.removeEventListener("pointercancel", up);
+            document.body.classList.remove("splitting");
+            apply(current(), true);
+        };
+        splitter.addEventListener("pointermove", move);
+        splitter.addEventListener("pointerup", up);
+        splitter.addEventListener("pointercancel", up);
+    });
+    splitter.addEventListener("dblclick", () => apply(0.5, true));
+    splitter.addEventListener("keydown", (e) => {
+        const step = e.shiftKey ? 0.1 : 0.02;
+        if (e.key === "ArrowLeft") apply(current() - step, true);
+        else if (e.key === "ArrowRight") apply(current() + step, true);
+        else if (e.key === "Home") apply(0, true);
+        else if (e.key === "End") apply(1, true);
+        else return;
+        e.preventDefault();
+    });
+    // A narrower window keeps both panes usable.
+    window.addEventListener("resize", () => apply(current(), false));
+}
+
 /** The page is cross-origin isolated through sw.js (for the dialogs); reloads once to be. */
 async function isolate() {
     if (crossOriginIsolated || !("serviceWorker" in navigator) || !window.isSecureContext) return;
@@ -1274,6 +1340,7 @@ function projectOpened() {
 
 async function main() {
     void isolate();
+    setUpSplitter();
     $("editor").innerHTML = '<div class="loading">コンパイラーを読み込んでいます…</div>';
     const response = fetch("ras_wasm_bg.wasm");
     wasmModule = await (WebAssembly.compileStreaming ? WebAssembly.compileStreaming(response) : response.then((r) => r.arrayBuffer()).then((b) => WebAssembly.compile(b)));
