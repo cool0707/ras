@@ -3457,6 +3457,28 @@
         let shown = saved.ribbonTab || "home";
         let collapsed = saved.ribbonCollapsed === undefined ? !editable : saved.ribbonCollapsed;
         // `keep`: the tab chosen stays remembered (a contextual tab hidden for a while).
+        // A tab wider than the window scrolls: a fade marks each side with buttons out of view,
+        // and the wheel scrolls it sideways (its scroll bar is a thin one shown under the mouse).
+        const edges = () => {
+            const max = body.scrollWidth - body.clientWidth;
+            body.classList.toggle("more-l", max > 1 && body.scrollLeft > 1);
+            body.classList.toggle("more-r", max > 1 && body.scrollLeft < max - 1);
+        };
+        body.addEventListener("scroll", edges, { passive: true });
+        // `hover` (overflow-x: scroll) repaints the bar; set only while the tab overflows, so nothing moves.
+        body.addEventListener("mouseenter", () => body.classList.toggle("hover", body.scrollWidth > body.clientWidth));
+        body.addEventListener("mouseleave", () => body.classList.remove("hover"));
+        if (typeof ResizeObserver === "function") new ResizeObserver(edges).observe(body);
+        body.addEventListener(
+            "wheel",
+            (e) => {
+                if (e.ctrlKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY) || body.scrollWidth <= body.clientWidth) return;
+                if (e.target.closest("select")) return;
+                e.preventDefault();
+                body.scrollLeft += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+            },
+            { passive: false },
+        );
         const show = (key, keep) => {
             shown = key;
             for (const [k, p] of Object.entries(panels)) {
@@ -3465,6 +3487,7 @@
                 p.tab.setAttribute("aria-selected", String(k === key));
             }
             if (!keep) remember({ ribbonTab: key });
+            edges();
         };
         const setCollapsed = (on) => {
             collapsed = on;
@@ -4020,6 +4043,7 @@
         if (!panels[shown] || panels[shown].tab.hidden) shown = "home";
         show(shown, true);
         ribbon.classList.toggle("collapsed", collapsed);
+        edges();
         ribbon.showShapeTab = (on) => {
             panels.shapeFormat.tab.hidden = !on;
             if (on && saved.ribbonTab === "shapeFormat" && shown !== "shapeFormat") show("shapeFormat", true);
