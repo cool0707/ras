@@ -15,7 +15,7 @@ mod controls;
 pub mod drawing;
 mod emf;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 pub(crate) mod xml;
 
 pub use drawing::Parts;

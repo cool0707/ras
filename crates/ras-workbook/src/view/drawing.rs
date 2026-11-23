@@ -248,6 +248,16 @@ pub struct Obj {
     pub assignable: bool,
     /// A control's shape (`_x0000_s1025` in the VML drawing: 1025).
     pub shape_id: Option<u32>,
+    /// The text of a shape that can hold one (paragraphs on lines of their own).
+    pub text: Option<String>,
+    /// The element of the drawing (`sp`, `cxnSp`, `pic`, `grpSp`, `graphicFrame`; empty for
+    /// a control), its rotation (degrees) and flips.
+    pub element: &'static str,
+    pub rot: f64,
+    pub flip: (bool, bool),
+    /// A form control's settings, for the grid's コントロールの書式設定: `type` (CheckBox, ...),
+    /// `link`, `items`, `checked`, `val`, `min`, `max`, `inc`, `page`.
+    pub form: Option<serde_json::Value>,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -306,6 +316,13 @@ pub(crate) fn image_mime(part: &str) -> Option<&'static str> {
         "tif" | "tiff" => "image/tiff",
         _ => return None,
     })
+}
+
+/// Whether a rotation (degrees) turns an object sideways: Excel then anchors it by its box
+/// turned a quarter around its center (from 45° to 135°, from 225° to 315°).
+pub(crate) fn sideways(rot: f64) -> bool {
+    let r = rot.rem_euclid(360.0);
+    (45.0..135.0).contains(&r) || (225.0..315.0).contains(&r)
 }
 
 /// What the drawing of a sheet needs from the workbook.
@@ -472,6 +489,11 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 activex: None,
                 assignable: true,
                 shape_id: None,
+                text: None,
+                element: "graphicFrame",
+                rot: 0.0,
+                flip: (false, false),
+                form: None,
             });
             return;
         }
@@ -488,12 +510,20 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 activex: None,
                 assignable: true,
                 shape_id: None,
+                text: None,
+                element: "graphicFrame",
+                rot: 0.0,
+                flip: (false, false),
+                form: None,
             });
         }
         return;
     }
     // The box comes from the anchor (the shape's xfrm says the same in EMU).
+    // (A shape turned sideways: its anchor is its box turned.)
+    let turned = xfrm(obj).is_some_and(|x| sideways(x.rot));
     let ext = (env.size)(&anchor)
+        .map(|(w, h)| if turned { (h, w) } else { (w, h) })
         .or_else(|| xfrm(obj).map(|x| x.ext))
         .filter(|e| e.0 > 0.0 && e.1 > 0.0);
     let html = object_html(ctx, obj, None, ext);
@@ -514,8 +544,39 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
             // (A group has no macro of its own in the file.)
             assignable: obj.name != "grpSp",
             shape_id: None,
+            text: (obj.name == "sp").then(|| shape_text(obj)),
+            element: match obj.name.as_str() {
+                "sp" => "sp",
+                "cxnSp" => "cxnSp",
+                "pic" => "pic",
+                _ => "grpSp",
+            },
+            rot: xfrm(obj).map_or(0.0, |x| x.rot),
+            flip: xfrm(obj).map_or((false, false), |x| (x.flip_h, x.flip_v)),
+            form: None,
         });
     }
+}
+
+/// The text of a shape: its paragraphs, one a line.
+fn shape_text(sp: &Node) -> String {
+    let Some(body) = sp.child("txBody") else {
+        return String::new();
+    };
+    body.children("p")
+        .map(|p| {
+            let mut line = String::new();
+            for r in &p.children {
+                match r.name.as_str() {
+                    "r" | "fld" => line.push_str(r.child("t").map_or("", |t| t.text.as_str())),
+                    "br" => line.push('\n'),
+                    _ => {}
+                }
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A chart: its spec for the page, or a box with its title when the page does not draw it (the

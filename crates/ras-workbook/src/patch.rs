@@ -20,6 +20,8 @@ use serde_json::Value as Json;
 use crate::book::snapshot::{CellState, Raw, Snapshot, Styles};
 use crate::book::{Book, MAX_COLS, MAX_ROWS, Paste, PasteOp, PasteWhat, SortKey, Val};
 
+mod controls;
+mod drawing;
 mod insert;
 mod macros;
 mod panes;
@@ -183,6 +185,32 @@ pub enum Op {
         text: Option<String>,
         author: String,
     },
+    /// A shape put on the sheet (挿入 > 図形; `kind` one of `drawing::SHAPES`: `rect`, `ellipse`,
+    /// ..., `textBox`, `line`, `arrow`), saying `text`. `flip`: a line drawn right to left,
+    /// bottom to top.
+    Shape {
+        sheet: String,
+        kind: String,
+        place: Place,
+        text: String,
+        flip: (bool, bool),
+    },
+    /// A picture (PNG, JPEG, GIF, BMP) put on the sheet (挿入 > 画像).
+    Picture {
+        sheet: String,
+        place: Place,
+        data: Vec<u8>,
+    },
+    /// An object of the sheet's drawing (a shape, a picture, a chart; by its name) moved and
+    /// sized, given a text (a shape), a fill, a line, a rotation, brought forward or sent
+    /// backward, or deleted.
+    Object {
+        sheet: String,
+        name: String,
+        change: ObjectChange,
+    },
+    /// A form control put on the sheet (開発 > 挿入 > フォーム コントロール).
+    Control { sheet: String, control: FormControl },
     /// A table made of `range` (a single cell: the data around it), as Excel's "テーブルの作成"
     /// makes it. `header`: its first row is the headings; otherwise a row of headings (列1,
     /// 列2, ...) is inserted above it.
@@ -192,6 +220,101 @@ pub enum Op {
         header: bool,
         name: Option<String>,
     },
+}
+
+/// Where an object of the drawing goes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Place {
+    /// Over the cells of a range: from the top left of its first cell to the bottom right of its
+    /// last.
+    Cells(RangeRef),
+    /// `dx`, `dy` pixels (as the grid draws them at 100%) right of and below the top left of the
+    /// cell `at`, `width` × `height` pixels (None: the object's own size; one of them: the other
+    /// keeps the proportion).
+    At {
+        at: CellRef,
+        dx: f64,
+        dy: f64,
+        width: Option<f64>,
+        height: Option<f64>,
+    },
+}
+
+/// A new form control.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FormControl {
+    /// `button`, `checkBox`, `optionButton`, `label`, `groupBox`, `listBox`, `comboBox`,
+    /// `spinner`, `scrollBar`.
+    pub kind: String,
+    pub place: Place,
+    /// What it shows (a button, a check box, ...; its name when None).
+    pub text: Option<String>,
+    /// The macro it runs (`Module1.run`).
+    pub macro_name: Option<String>,
+    /// The cell it is linked to (`$B$2`), and (a list or combo box) the cells of its items
+    /// (`items` in the edit).
+    pub link: Option<String>,
+    pub range: Option<String>,
+    /// A check box or an option button checked.
+    pub checked: bool,
+    /// A spin button's or a scroll bar's value, least and greatest, step and page.
+    pub value: Option<i64>,
+    pub min: Option<i64>,
+    pub max: Option<i64>,
+    pub step: Option<i64>,
+    pub page: Option<i64>,
+    /// A scroll bar across.
+    pub horizontal: bool,
+}
+
+/// What an `object` edit changes of an object of the drawing (None: what it has stays).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectChange {
+    /// The object by the number of its shape (a form control: 1025 for `_x0000_s1025`), when
+    /// it is not named.
+    pub shape: Option<u32>,
+    /// Moved and sized.
+    pub place: Option<Place>,
+    /// The text of a shape.
+    pub text: Option<String>,
+    /// The fill (`RRGGBB`; None: 塗りつぶしなし), of a shape or a picture.
+    pub fill: Option<Option<String>>,
+    /// The color of the line (`RRGGBB`; None: 線なし), and its width in points.
+    pub line: Option<Option<String>>,
+    pub line_width: Option<f64>,
+    /// The rotation clockwise in degrees, and whether it is flipped.
+    pub rotation: Option<f64>,
+    pub flip_h: Option<bool>,
+    pub flip_v: Option<bool>,
+    /// Its place among the objects drawn over one another.
+    pub order: Option<Order>,
+    pub delete: bool,
+    /// A form control's linked cell and (a list or combo box) the cells of its items (None in
+    /// them: none), whether it is checked, a spin button's or scroll bar's value, least and
+    /// greatest, step and page.
+    pub link: Option<Option<String>>,
+    pub items: Option<Option<String>>,
+    pub checked: Option<bool>,
+    /// The item selected in a list or combo box (1 for the first; 0: none).
+    pub selected: Option<i64>,
+    pub value: Option<i64>,
+    pub min: Option<i64>,
+    pub max: Option<i64>,
+    pub step: Option<i64>,
+    pub page: Option<i64>,
+}
+
+/// Where an object goes among those drawn over one another (配置 > 前面へ移動, ...).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Order {
+    /// 最前面へ移動.
+    Front,
+    /// 前面へ移動: over the object drawn after it.
+    Forward,
+    /// 背面へ移動: under the object drawn before it.
+    Backward,
+    /// 最背面へ移動.
+    Back,
 }
 
 /// Where a hyperlink goes.
@@ -218,6 +341,10 @@ impl Op {
                 | Op::Link { .. }
                 | Op::Note { .. }
                 | Op::Table { .. }
+                | Op::Shape { .. }
+                | Op::Picture { .. }
+                | Op::Object { .. }
+                | Op::Control { .. }
         )
     }
 }
@@ -319,6 +446,76 @@ fn criterion_of(o: &Json) -> Result<crate::book::FilterCriterion> {
             .collect(),
         blanks: o.get("blanks").and_then(Json::as_bool).unwrap_or(false),
     })
+}
+
+/// Where an object goes: `range` (over its cells), or `at` (a cell) with `dx`, `dy`, `width`,
+/// `height` (pixels). None when the edit gives neither.
+fn place_of(o: &Json) -> Result<Option<Place>> {
+    if o.get("range").is_some() {
+        return Ok(Some(Place::Cells(range_of(o, "range")?)));
+    }
+    if o.get("at").is_none() {
+        return Ok(None);
+    }
+    let at = range_of(o, "at")?;
+    if !at.is_single() {
+        return Err("`at` はセル 1 つで指定してください（範囲に合わせるときは `range`）".into());
+    }
+    let number = |key: &str, min: f64| -> Result<Option<f64>> {
+        match o.get(key) {
+            None | Some(Json::Null) => Ok(None),
+            Some(v) => v
+                .as_f64()
+                .filter(|x| x.is_finite() && *x >= min && *x <= drawing::MAX_SIZE)
+                .map(Some)
+                .ok_or_else(|| {
+                    format!(
+                        "`{key}` は {min} 以上 {} 以下の数（ピクセル）です",
+                        drawing::MAX_SIZE
+                    )
+                }),
+        }
+    };
+    Ok(Some(Place::At {
+        at: at.start,
+        dx: number("dx", -drawing::MAX_SIZE)?.unwrap_or(0.0),
+        dy: number("dy", -drawing::MAX_SIZE)?.unwrap_or(0.0),
+        width: number("width", 0.0)?,
+        height: number("height", 0.0)?,
+    }))
+}
+
+/// A reference of an edit: a cell or a range, of this sheet or another (`$B$2`,
+/// `Sheet2!$A$1:$A$5`); None when it is empty or not given.
+fn reference_of(o: &Json, key: &str) -> Result<Option<String>> {
+    let Some(r) = o
+        .get(key)
+        .and_then(Json::as_str)
+        .map(|r| r.trim().trim_start_matches('=').to_string())
+        .filter(|r| !r.is_empty())
+    else {
+        return Ok(None);
+    };
+    let cells = r.rsplit_once('!').map_or(r.as_str(), |(_, c)| c);
+    if RangeRef::parse(&cells.replace('$', "")).is_none() || r.contains('"') {
+        return Err(format!(
+            "`{key}` `{r}` はセル参照で指定してください（$B$2、Sheet2!$A$1:$A$5 など）"
+        ));
+    }
+    Ok(Some(r))
+}
+
+/// A whole number of a control (a 32-bit one: a form control's are checked to be 0 to 30000
+/// where they are written).
+fn int_of(o: &Json, key: &str) -> Result<Option<i64>> {
+    match o.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(v) => v
+            .as_i64()
+            .filter(|n| i32::try_from(*n).is_ok())
+            .map(Some)
+            .ok_or_else(|| format!("`{key}` は整数で指定してください")),
+    }
 }
 
 /// The edits of a JSON value: one object, or an array of them. `sheet`: the sheet of those that
@@ -622,7 +819,157 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 header: o.get("header").and_then(Json::as_bool).unwrap_or(true),
                 name: text("name").filter(|n| !n.trim().is_empty()),
             },
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table）")),
+            "shape" => {
+                let kind = text("shape").unwrap_or_else(|| "rect".to_string());
+                if !drawing::SHAPES.iter().any(|(k, _)| *k == kind) {
+                    let all: Vec<&str> = drawing::SHAPES.iter().map(|(k, _)| *k).collect();
+                    return Err(format!("図形 `{kind}` はありません（{}）", all.join(" / ")));
+                }
+                let flag = |key: &str| o.get(key).and_then(Json::as_bool).unwrap_or(false);
+                Op::Shape {
+                    sheet,
+                    kind,
+                    place: place_of(o)?.ok_or("図形の位置 `at`（セル）か `range` がありません")?,
+                    text: text("text").unwrap_or_default(),
+                    flip: (flag("flipH"), flag("flipV")),
+                }
+            }
+            "picture" => {
+                let data = match (text("data"), text("file")) {
+                    (Some(data), None) => drawing::base64_decode(&data)?,
+                    (None, Some(file)) => std::fs::read(&file).map_err(|e| format!("{file}: {e}"))?,
+                    _ => return Err("画像を `data`（base64）か `file`（ファイルのパス）のどちらか一方で指定してください".into()),
+                };
+                if data.len() > 64 << 20 {
+                    return Err("画像が大きすぎます（64 MB まで）".into());
+                }
+                Op::Picture {
+                    sheet,
+                    place: place_of(o)?.ok_or("画像の位置 `at`（セル）か `range` がありません")?,
+                    data,
+                }
+            }
+            "object" => {
+                let shape = o.get("shape").and_then(Json::as_u64).and_then(|n| u32::try_from(n).ok());
+                let name = text("name").filter(|n| !n.is_empty()).unwrap_or_default();
+                if name.is_empty() && shape.is_none() {
+                    return Err("`name`（図形・画像・コントロールの名前）か `shape`（コントロールのシェイプ番号）がありません".into());
+                }
+                // A color "#RRGGBB", or null for none.
+                let color = |key: &str| -> Result<Option<Option<String>>> {
+                    match o.get(key) {
+                        None => Ok(None),
+                        Some(Json::Null) => Ok(Some(None)),
+                        Some(v) => {
+                            let c = v.as_str().unwrap_or("").trim().trim_start_matches('#');
+                            if c.len() != 6 || !c.bytes().all(|b| b.is_ascii_hexdigit()) {
+                                return Err(format!("`{key}` は \"#RRGGBB\" か null（なし）で指定してください"));
+                            }
+                            Ok(Some(Some(c.to_ascii_uppercase())))
+                        }
+                    }
+                };
+                let number = |key: &str, max: f64| -> Result<Option<f64>> {
+                    match o.get(key) {
+                        None | Some(Json::Null) => Ok(None),
+                        Some(v) => v
+                            .as_f64()
+                            .filter(|x| x.is_finite() && x.abs() <= max)
+                            .map(Some)
+                            .ok_or_else(|| format!("`{key}` は数で指定してください")),
+                    }
+                };
+                let line_width = number("lineWidth", 1584.0)?;
+                if line_width.is_some_and(|w| w < 0.0) {
+                    return Err("`lineWidth` は 0〜1584（ポイント）で指定してください".into());
+                }
+                let order = match text("order").as_deref() {
+                    None => None,
+                    Some("front") => Some(Order::Front),
+                    Some("forward") => Some(Order::Forward),
+                    Some("backward") => Some(Order::Backward),
+                    Some("back") => Some(Order::Back),
+                    Some(other) => return Err(format!("`order` `{other}` は指定できません（front / forward / backward / back）")),
+                };
+                let change = ObjectChange {
+                    shape,
+                    place: place_of(o)?,
+                    text: text("text"),
+                    fill: color("fill")?,
+                    line: color("line")?,
+                    line_width,
+                    rotation: number("rotation", 1e6)?,
+                    flip_h: o.get("flipH").and_then(Json::as_bool),
+                    flip_v: o.get("flipV").and_then(Json::as_bool),
+                    order,
+                    delete: o.get("delete").and_then(Json::as_bool).unwrap_or(false),
+                    link: match o.get("link") {
+                        None => None,
+                        Some(Json::Null) => Some(None),
+                        // (An empty text: no longer linked.)
+                        Some(_) => Some(reference_of(o, "link")?),
+                    },
+                    items: match o.get("items") {
+                        None => None,
+                        Some(Json::Null) => Some(None),
+                        Some(_) => Some(reference_of(o, "items")?),
+                    },
+                    checked: o.get("checked").and_then(Json::as_bool),
+                    selected: int_of(o, "selected")?,
+                    value: int_of(o, "value")?,
+                    min: int_of(o, "min")?,
+                    max: int_of(o, "max")?,
+                    step: int_of(o, "step")?,
+                    page: int_of(o, "page")?,
+                };
+                if change == (ObjectChange { shape, ..Default::default() }) {
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
+                }
+                Op::Object { sheet, name, change }
+            }
+            "control" => {
+                let kind = text("control").unwrap_or_else(|| "button".to_string());
+                if !controls::KINDS.iter().any(|k| k.key == kind) {
+                    let all: Vec<&str> = controls::KINDS.iter().map(|k| k.key).collect();
+                    return Err(format!("コントロール `{kind}` はありません（{}）", all.join(" / ")));
+                }
+                let macro_name = text("macro").filter(|m| !m.is_empty());
+                if let Some(m) = &macro_name
+                    && !m.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                {
+                    return Err(format!("マクロの名前 `{m}` は指定できません（Module1.macro1 のように指定してください）"));
+                }
+                let reference = |key: &str| reference_of(o, key);
+                let int = |key: &str| -> Result<Option<i64>> {
+                    let n = int_of(o, key)?;
+                    if n.is_some_and(|n| !(0..=30000).contains(&n)) {
+                        return Err(format!("`{key}` は 0〜30000 の整数で指定してください"));
+                    }
+                    Ok(n)
+                };
+                let control = FormControl {
+                    kind,
+                    place: place_of(o)?.ok_or("コントロールの位置 `at`（セル）か `range` がありません")?,
+                    text: text("text"),
+                    macro_name,
+                    link: reference("link")?,
+                    range: reference("items")?,
+                    checked: o.get("checked").and_then(Json::as_bool).unwrap_or(false),
+                    value: int("value")?,
+                    min: int("min")?,
+                    max: int("max")?,
+                    step: int("step")?,
+                    page: int("page")?,
+                    horizontal: o.get("horizontal").and_then(Json::as_bool).unwrap_or(false),
+                };
+                if let (Some(a), Some(b)) = (control.min, control.max)
+                    && a > b
+                {
+                    return Err("`min` は `max` 以下にしてください".into());
+                }
+                Op::Control { sheet, control }
+            }
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control）")),
         });
     }
     Ok(out)
@@ -657,6 +1004,20 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 text,
                 author,
             } => insert::note(&bytes, sheet, *at, text.as_deref(), author)?,
+            Op::Shape {
+                sheet,
+                kind,
+                place,
+                text,
+                flip,
+            } => drawing::shape(&bytes, sheet, kind, place, text, *flip)?,
+            Op::Picture { sheet, place, data } => drawing::picture(&bytes, sheet, place, data)?,
+            Op::Object {
+                sheet,
+                name,
+                change,
+            } => drawing::object(&bytes, sheet, name, change)?,
+            Op::Control { sheet, control } => controls::add(&bytes, sheet, control)?,
             Op::Table {
                 sheet,
                 range,
@@ -1268,7 +1629,11 @@ fn run(
         | Op::Freeze { .. }
         | Op::Link { .. }
         | Op::Note { .. }
-        | Op::Table { .. } => {}
+        | Op::Table { .. }
+        | Op::Shape { .. }
+        | Op::Picture { .. }
+        | Op::Object { .. }
+        | Op::Control { .. } => {}
         Op::Fill {
             sheet,
             range,
@@ -1422,6 +1787,21 @@ impl<'a> Pack<'a> {
         String::from_utf8(data)
             .map(Some)
             .map_err(|_| format!("{name} は UTF-8 ではないため、書き換えられません"))
+    }
+
+    /// A part's bytes.
+    pub(crate) fn bytes(&mut self, part: &str) -> Result<Option<Vec<u8>>> {
+        let Some(name) = self.find(part) else {
+            return Ok(None);
+        };
+        let mut file = self
+            .zip
+            .by_name(&name)
+            .map_err(|e| format!("{name}: {e}"))?;
+        let mut data = Vec::with_capacity(file.size().min(1 << 28) as usize);
+        file.read_to_end(&mut data)
+            .map_err(|e| format!("{name}: {e}"))?;
+        Ok(Some(data))
     }
 
     /// The relationships of a part: (id, type, the part it points to).

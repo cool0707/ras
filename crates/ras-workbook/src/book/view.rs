@@ -357,7 +357,7 @@ pub struct Drawing<'a> {
 }
 
 /// The sizes of a sheet's columns and rows in pixels, as Excel shows them at 100%.
-struct Sizes {
+pub(crate) struct Sizes {
     default_w: f64,
     default_h: f64,
     widths: HashMap<u32, f64>,
@@ -365,6 +365,52 @@ struct Sizes {
 }
 
 impl Sizes {
+    /// The sizes of the sheet `ws`. Column widths are kept as `ColumnWidth` has them
+    /// (characters, without the padding).
+    pub(crate) fn of(ws: &umya_spreadsheet::Worksheet) -> Sizes {
+        let px = super::format::width_px;
+        let fmt = ws.sheet_format_properties();
+        let default_w = if fmt.default_column_width() > 0.0 {
+            px(fmt.default_column_width())
+        } else {
+            72.0
+        };
+        let default_h = if fmt.default_row_height() > 0.0 {
+            (fmt.default_row_height() * 96.0 / 72.0).round()
+        } else {
+            25.0
+        };
+        let mut widths: HashMap<u32, f64> = HashMap::new();
+        for c in ws.column_dimensions() {
+            widths.insert(
+                c.col_num(),
+                if c.hidden() {
+                    0.0
+                } else if c.width() > 0.0 {
+                    px(c.width())
+                } else {
+                    default_w
+                },
+            );
+        }
+        let mut heights: HashMap<u32, f64> = HashMap::new();
+        for r in ws.row_dimensions() {
+            if r.hidden() {
+                heights.insert(r.row_num(), 0.0);
+            } else if r.height() > 0.0 {
+                heights.insert(r.row_num(), (r.height() * 96.0 / 72.0).round());
+            }
+        }
+        widths.retain(|_, w| *w != default_w);
+        heights.retain(|_, h| *h != default_h);
+        Sizes {
+            default_w,
+            default_h,
+            widths,
+            heights,
+        }
+    }
+
     /// The width of the column `c` (0-based).
     fn w(&self, c: u32) -> f64 {
         self.widths.get(&(c + 1)).copied().unwrap_or(self.default_w)
@@ -378,7 +424,7 @@ impl Sizes {
     }
 
     /// The left of the column `c`: the widths before it.
-    fn x(&self, c: u32) -> f64 {
+    pub(crate) fn x(&self, c: u32) -> f64 {
         let custom: f64 = self
             .widths
             .iter()
@@ -389,7 +435,7 @@ impl Sizes {
         custom + (c as f64 - n) * self.default_w
     }
 
-    fn y(&self, r: u32) -> f64 {
+    pub(crate) fn y(&self, r: u32) -> f64 {
         let custom: f64 = self
             .heights
             .iter()
@@ -422,6 +468,22 @@ impl Sizes {
         (x2 >= x && y2 >= y).then_some((x, y, x2, y2))
     }
 
+    /// Where a point (pixels) is as a drawing's anchor has it: the column, the offset in it,
+    /// the row, the offset in it (pixels). On a line between two cells, the later cell.
+    pub(crate) fn marker(&self, x: f64, y: f64) -> (u32, f64, u32, f64) {
+        let (mut col, mut left) = (0, 0.0);
+        while col + 1 < MAX_COLS && left + self.w(col) <= x {
+            left += self.w(col);
+            col += 1;
+        }
+        let (mut row, mut top) = (0, 0.0);
+        while row + 1 < MAX_ROWS && top + self.h(row) <= y {
+            top += self.h(row);
+            row += 1;
+        }
+        (col, x - left, row, y - top)
+    }
+
     /// The cell at a point (pixels).
     fn cell_at(&self, x: f64, y: f64) -> (u32, u32) {
         let (mut col, mut left) = (0, 0.0);
@@ -439,6 +501,11 @@ impl Sizes {
 }
 
 impl Book {
+    /// The sizes of the columns and rows of the sheet `si` in pixels, as the grid draws them.
+    pub(crate) fn sizes(&self, si: usize) -> Option<Sizes> {
+        self.file.sheet(si).ok().map(Sizes::of)
+    }
+
     /// The sheet for the grid: `rows` × `cols` of it at most, from its first cell, with the
     /// objects of its drawing.
     pub fn sheet_view(
@@ -456,56 +523,11 @@ impl Book {
         for m in info.merged.iter().filter_map(|m| RangeRef::parse(m)) {
             used = used.union(&m);
         }
-        // Column widths are kept as `ColumnWidth` has them (characters, without the padding).
-        let px = super::format::width_px;
         let (sizes, grid_lines) = {
             let Ok(ws) = self.file.sheet(si) else {
                 return Err("シートがありません".into());
             };
-            let fmt = ws.sheet_format_properties();
-            let default_w = if fmt.default_column_width() > 0.0 {
-                px(fmt.default_column_width())
-            } else {
-                72.0
-            };
-            let default_h = if fmt.default_row_height() > 0.0 {
-                (fmt.default_row_height() * 96.0 / 72.0).round()
-            } else {
-                25.0
-            };
-            let mut widths: HashMap<u32, f64> = HashMap::new();
-            for c in ws.column_dimensions() {
-                widths.insert(
-                    c.col_num(),
-                    if c.hidden() {
-                        0.0
-                    } else if c.width() > 0.0 {
-                        px(c.width())
-                    } else {
-                        default_w
-                    },
-                );
-            }
-            let mut heights: HashMap<u32, f64> = HashMap::new();
-            for r in ws.row_dimensions() {
-                if r.hidden() {
-                    heights.insert(r.row_num(), 0.0);
-                } else if r.height() > 0.0 {
-                    heights.insert(r.row_num(), (r.height() * 96.0 / 72.0).round());
-                }
-            }
-            widths.retain(|_, w| *w != default_w);
-            heights.retain(|_, h| *h != default_h);
-            let grid = super::sheet_view::grid_lines(ws);
-            (
-                Sizes {
-                    default_w,
-                    default_h,
-                    widths,
-                    heights,
-                },
-                grid,
-            )
+            (Sizes::of(ws), super::sheet_view::grid_lines(ws))
         };
         // The objects of the drawing; the grid reaches to them.
         let objects = match drawing {
@@ -732,6 +754,24 @@ impl Book {
                 }
                 if let Some(id) = o.shape_id {
                     j["shapeId"] = json!(id);
+                }
+                if let Some(text) = &o.text {
+                    j["text"] = json!(text);
+                }
+                if !o.element.is_empty() {
+                    j["el"] = json!(o.element);
+                }
+                if o.rot != 0.0 {
+                    j["rot"] = json!(o.rot);
+                }
+                if o.flip.0 {
+                    j["flipH"] = json!(true);
+                }
+                if o.flip.1 {
+                    j["flipV"] = json!(true);
+                }
+                if let Some(f) = &o.form {
+                    j["form"] = f.clone();
                 }
                 if let Some(c) = &o.chart {
                     j["chart"] = c.clone();

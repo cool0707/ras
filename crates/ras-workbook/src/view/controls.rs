@@ -22,16 +22,56 @@ pub(crate) struct Controls {
     /// Those drawn already.
     done: Vec<bool>,
     font: (String, f64),
+    /// An ActiveX control's settings in the sheet (`controlPr`: its linked cell and items) and
+    /// in its data (its small and large change), by its shape.
+    activex: std::collections::HashMap<u32, (String, String, Option<i64>, Option<i64>)>,
 }
 
 impl Controls {
     /// The controls of the sheet whose part is `sheet_part`.
     pub(crate) fn read(parts: &Parts, sheet_part: &str, font: &(String, f64)) -> Controls {
+        use umya_spreadsheet::drawingml::package::Package;
         let list = read::controls(parts, sheet_part);
+        let mut activex = std::collections::HashMap::new();
+        let rels = parts.rels(sheet_part);
+        if let Some(root) = parts.sheet_element(sheet_part, "controls") {
+            let mut found = Vec::new();
+            root.find_all("control", &mut found);
+            for c in found {
+                let (Some(id), Some((kind, part))) = (
+                    c.attr("shapeId").and_then(|v| v.parse::<u32>().ok()),
+                    c.attr("id").and_then(|r| rels.get(r)),
+                ) else {
+                    continue;
+                };
+                if !kind.ends_with("/control") || activex.contains_key(&id) {
+                    continue;
+                }
+                let pr = c.find("controlPr");
+                let attr = |k: &str| pr.and_then(|p| p.attr(k)).unwrap_or("").to_string();
+                // Its small and large change, from its data.
+                let stream = parts.xml(part).and_then(|ocx| {
+                    let (class, _) = crate::activex::class_of(ocx.attr("classid").unwrap_or(""));
+                    let bin = ocx.attr("id").and_then(|r| parts.rels(part).remove(r))?.1;
+                    crate::activex::Stream::read(class, Parts::bytes(parts, &bin)?)
+                });
+                let n = |k: &str| stream.as_ref().and_then(|st| st.number(k));
+                activex.insert(
+                    id,
+                    (
+                        attr("linkedCell"),
+                        attr("listFillRange"),
+                        n("SmallChange"),
+                        n("LargeChange"),
+                    ),
+                );
+            }
+        }
         Controls {
             done: vec![false; list.len()],
             list,
             font: font.clone(),
+            activex,
         }
     }
 
@@ -89,6 +129,69 @@ impl Controls {
             None if c.kind == "Pict" => picture()?,
             None => form_html(c, env, &self.font)?,
         };
+        // A form control's settings, and its text where it shows one.
+        let form = (c.activex.is_none() && c.kind != "Pict").then(|| {
+            let (val, min, max) = c.value_range();
+            let num = |p: &str, v: &str, d: i64| {
+                c.property(p, v)
+                    .and_then(|x| x.trim().parse::<i64>().ok())
+                    .unwrap_or(d)
+            };
+            serde_json::json!({
+                "type": c.kind,
+                "link": c.linked_cell().unwrap_or(""),
+                "items": c.list_range().unwrap_or(""),
+                "checked": c.checked() == CheckState::Checked,
+                "sel": c.selected(),
+                "val": val,
+                "min": min,
+                "max": max,
+                "inc": num("inc", "Inc", 1),
+                "page": num("page", "Page", 10),
+            })
+        });
+        let shows_text = matches!(
+            c.kind.as_str(),
+            "Button" | "CheckBox" | "Radio" | "Label" | "GBox"
+        );
+        // An ActiveX control's: its Microsoft Forms type, its text (a caption, or the value of
+        // a text, list or combo box), its state, linked cell, items, value in a range.
+        let (form, text) = match (&c.activex, form) {
+            (Some(ax), _) => {
+                let forms = crate::activex::forms_type(ax.class, ax.display);
+                let (link, items, inc, page) =
+                    self.activex.get(&c.shape_id).cloned().unwrap_or_default();
+                let value_text = matches!(forms, "TextBox" | "ListBox" | "ComboBox");
+                let text = if value_text {
+                    ax.value.clone()
+                } else {
+                    ax.caption.clone()
+                };
+                let shows = !matches!(forms, "SpinButton" | "ScrollBar" | "");
+                (
+                    (!forms.is_empty()).then(|| {
+                        serde_json::json!({
+                            "type": forms,
+                            "activex": true,
+                            "link": link,
+                            "items": items,
+                            "checked": ax.value.as_deref() == Some("1"),
+                            "val": ax.position,
+                            "min": ax.min,
+                            "max": ax.max,
+                            "inc": inc.unwrap_or(1),
+                            "page": page.unwrap_or(1),
+                        })
+                    }),
+                    (shows && !forms.is_empty()).then(|| text.unwrap_or_default()),
+                )
+            }
+            (None, form) => {
+                let text = (form.is_some() && shows_text)
+                    .then(|| c.text.as_ref().map(|t| t.text.clone()).unwrap_or_default());
+                (form, text)
+            }
+        };
         Some(Obj {
             anchor,
             html,
@@ -100,6 +203,11 @@ impl Controls {
             // Embedded objects run no macro.
             assignable: c.activex.is_none() && c.kind != "Pict",
             shape_id: Some(c.shape_id),
+            text,
+            element: "",
+            rot: 0.0,
+            flip: (false, false),
+            form,
         })
     }
 }

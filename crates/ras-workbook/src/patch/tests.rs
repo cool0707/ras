@@ -1115,3 +1115,1026 @@ fn tables_made_of_the_data() {
     assert!(refused(r#"{"op":"table","range":"A1:D5","name":"Items"}"#).contains("既に"));
     assert!(refused(r#"{"op":"table","range":"A1:D5","name":"A1"}"#).contains("使えません"));
 }
+
+/// A PNG of 3 × 2 pixels.
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x02, 0x08, 0x02, 0x00, 0x00, 0x00, 0x12, 0x16, 0xF1,
+    0x4D, 0x00, 0x00, 0x00, 0x12, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0,
+    0x1F, 0x08, 0x19, 0x18, 0xFE, 0x03, 0x00, 0x2F, 0xF6, 0x05, 0xFB, 0x66, 0x29, 0xC3, 0x1E, 0x00,
+    0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+/// The objects the grid draws on a sheet: (kind, name, from, to).
+fn objects(bytes: &[u8], sheet: usize) -> Vec<(String, String, Json, Json)> {
+    view(bytes)["sheets"][sheet]["objects"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|o| {
+            (
+                o["kind"].as_str().unwrap_or("").to_string(),
+                o["name"].as_str().unwrap_or("").to_string(),
+                o["from"].clone(),
+                o["to"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn shapes_and_pictures_put_on_a_sheet() {
+    // A sheet without a drawing gets one: its part, relationship, content type, `<drawing>`.
+    let out = edit(
+        r#"{"op":"shape","sheet":"Summary","shape":"ellipse","at":"B2","dx":10,"dy":5,"width":100,"height":50,"text":"こんにちは\n2 行目"}"#,
+    );
+    assert_eq!(
+        changed(BOOK, &out),
+        [
+            "[Content_Types].xml",
+            "xl/drawings/drawing2.xml",
+            "xl/worksheets/_rels/sheet2.xml.rels",
+            "xl/worksheets/sheet2.xml"
+        ]
+    );
+    assert!(part(&out, SHEET2).ends_with(r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><drawing r:id="rId1"/></worksheet>"#));
+    assert!(part(&out, "xl/worksheets/_rels/sheet2.xml.rels").contains(r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing2.xml""#));
+    assert!(part(&out, "[Content_Types].xml").contains(r#"<Override PartName="/xl/drawings/drawing2.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>"#));
+    let drawing = part(&out, "xl/drawings/drawing2.xml");
+    // (Columns 72 px wide, rows 20 px high: B2 is at 72, 20.)
+    assert!(drawing.contains(r#"<xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>47625</xdr:rowOff></xdr:from><xdr:to><xdr:col>2</xdr:col><xdr:colOff>361950</xdr:colOff><xdr:row>3</xdr:row><xdr:rowOff>142875</xdr:rowOff></xdr:to><xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="2" name="楕円 1"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:xfrm><a:off x="781050" y="238125"/><a:ext cx="952500" cy="476250"/></a:xfrm><a:prstGeom prst="ellipse">"#), "{drawing}");
+    assert!(drawing.contains(r#"<a:p><a:pPr algn="ctr"/><a:r><a:rPr kumimoji="1" lang="ja-JP" altLang="en-US" sz="1100"/><a:t>こんにちは</a:t></a:r></a:p><a:p><a:pPr algn="ctr"/><a:r><a:rPr kumimoji="1" lang="ja-JP" altLang="en-US" sz="1100"/><a:t>2 行目</a:t></a:r></a:p>"#), "{drawing}");
+    let shapes = objects(&out, 1);
+    assert_eq!(
+        shapes,
+        [(
+            "shape".to_string(),
+            "楕円 1".to_string(),
+            json!([1, 10.0, 1, 5.0]),
+            json!([2, 38.0, 3, 15.0])
+        )]
+    );
+    assert!(
+        view(&out)["sheets"][1]["objects"][0]["html"]
+            .as_str()
+            .unwrap()
+            .contains("こんにちは")
+    );
+    // The cells are as they were.
+    assert_eq!(cell(&out, "Summary", "A1", Read::Formula), "=Data!D6*2");
+
+    // Over a range; a text box, a line drawn up to the right, an arrow: on the sheet's drawing,
+    // after its chart.
+    let out = edit(
+        r#"[{"op":"shape","shape":"textBox","range":"A12:B13","text":"メモ"},{"op":"shape","shape":"line","at":"D12","width":64,"height":40,"flipV":true},{"op":"shape","shape":"arrow","at":"F12","width":30}]"#,
+    );
+    assert_eq!(changed(BOOK, &out), ["xl/drawings/drawing1.xml"]);
+    let drawing = part(&out, "xl/drawings/drawing1.xml");
+    assert!(
+        drawing
+            .contains(r#"<xdr:cNvPr id="3" name="テキスト ボックス 2"/><xdr:cNvSpPr txBox="1"/>"#),
+        "{drawing}"
+    );
+    assert!(drawing.contains(r#"<xdr:cNvPr id="4" name="直線コネクタ 3"/><xdr:cNvCxnSpPr/></xdr:nvCxnSpPr><xdr:spPr><a:xfrm flipV="1">"#), "{drawing}");
+    assert!(
+        drawing.contains(r#"name="直線矢印コネクタ 4"/>"#),
+        "{drawing}"
+    );
+    assert!(drawing.contains(r#"<a:prstGeom prst="straightConnector1"><a:avLst/></a:prstGeom><a:ln><a:tailEnd type="triangle"/></a:ln>"#), "{drawing}");
+    let names: Vec<(String, String)> = objects(&out, 0).into_iter().map(|o| (o.0, o.1)).collect();
+    assert_eq!(
+        names,
+        [
+            ("chart", "Chart 1"),
+            ("shape", "テキスト ボックス 2"),
+            ("shape", "直線コネクタ 3"),
+            ("shape", "直線矢印コネクタ 4"),
+            ("control", "")
+        ]
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+    );
+    // The text box covers its range.
+    assert_eq!(objects(&out, 0)[1].2, json!([0, 0.0, 11, 0.0]));
+    assert_eq!(objects(&out, 0)[1].3, json!([2, 0.0, 13, 0.0]));
+
+    // A picture: its bytes in xl/media, the relationship of the drawing, the content type of
+    // its extension; its own size.
+    let out = edit(&format!(
+        r#"{{"op":"picture","at":"A12","data":"data:image/png;base64,{}"}}"#,
+        crate::view::drawing::base64(PNG)
+    ));
+    assert_eq!(
+        changed(BOOK, &out),
+        [
+            "[Content_Types].xml",
+            "xl/drawings/_rels/drawing1.xml.rels",
+            "xl/drawings/drawing1.xml",
+            "xl/media/image1.png"
+        ]
+    );
+    assert_eq!(parts(&out)["xl/media/image1.png"], PNG);
+    assert!(
+        part(&out, "[Content_Types].xml")
+            .contains(r#"<Default Extension="png" ContentType="image/png"/>"#)
+    );
+    assert!(part(&out, "xl/drawings/_rels/drawing1.xml.rels").contains(r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>"#));
+    let drawing = part(&out, "xl/drawings/drawing1.xml");
+    assert!(drawing.contains(r#"<xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>11</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>0</xdr:col><xdr:colOff>28575</xdr:colOff><xdr:row>11</xdr:row><xdr:rowOff>19050</xdr:rowOff></xdr:to><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="3" name="図 2"/>"#), "{drawing}");
+    assert!(drawing.contains(r#"<a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId2"/>"#));
+    let pic = &view(&out)["sheets"][0]["objects"][1];
+    assert_eq!(pic["kind"], json!("picture"));
+    assert!(pic["html"].as_str().unwrap().contains("data-img"));
+    // Sized by its width only: its proportion kept.
+    let out2 = edit(&format!(
+        r#"{{"op":"picture","sheet":"Summary","at":"B2","width":30,"data":"{}"}}"#,
+        crate::view::drawing::base64(PNG)
+    ));
+    assert_eq!(objects(&out2, 1)[0].3, json!([1, 30.0, 2, 0.0]));
+
+    // Refused: a shape there is not, a picture that is not one.
+    assert!(
+        parse_ops(
+            &json!({"op":"shape","shape":"cloud","at":"A1"}),
+            Some("Data")
+        )
+        .unwrap_err()
+        .contains("cloud")
+    );
+    assert!(refused(r#"{"op":"picture","at":"A1","data":"aGVsbG8="}"#).contains("形式"));
+    assert!(
+        parse_ops(&json!({"op":"shape","at":"A1:B2"}), Some("Data"))
+            .unwrap_err()
+            .contains("range")
+    );
+}
+
+#[test]
+fn objects_moved_sized_given_a_text_and_deleted() {
+    let png = crate::view::drawing::base64(PNG);
+    let out = edit(&format!(
+        r#"[{{"op":"shape","at":"A12","width":50,"height":30,"text":"前"}},{{"op":"picture","at":"D12","data":"{png}"}}]"#
+    ));
+    // Moved (its size kept), sized, both.
+    let moved = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","at":"B15","dx":4}"#),
+    )
+    .unwrap();
+    assert_eq!(changed(&out, &moved), ["xl/drawings/drawing1.xml"]);
+    let o = &objects(&moved, 0)[1];
+    assert_eq!(
+        (o.2.clone(), o.3.clone()),
+        (json!([1, 4.0, 14, 0.0]), json!([1, 54.0, 15, 10.0]))
+    );
+    let drawing = part(&moved, "xl/drawings/drawing1.xml");
+    // (A is 118 px wide; row 7 is 40 px high.)
+    assert!(
+        drawing.contains(r#"<a:off x="1162050" y="2857500"/><a:ext cx="476250" cy="285750"/>"#),
+        "{drawing}"
+    );
+    let sized = apply(
+        &moved,
+        &ops(r#"{"op":"object","name":"図 3","range":"D12:E13"}"#),
+    )
+    .unwrap();
+    let o = &objects(&sized, 0)[2];
+    assert_eq!(
+        (o.2.clone(), o.3.clone()),
+        (json!([3, 0.0, 11, 0.0]), json!([5, 0.0, 13, 0.0]))
+    );
+
+    // A text: the first paragraph's properties kept.
+    let texted = apply(
+        &sized,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","text":"後\n2"}"#),
+    )
+    .unwrap();
+    let drawing = part(&texted, "xl/drawings/drawing1.xml");
+    assert!(drawing.contains(r#"<a:p><a:pPr algn="ctr"/><a:r><a:rPr kumimoji="1" lang="ja-JP" altLang="en-US" sz="1100"/><a:t>後</a:t></a:r></a:p><a:p><a:pPr algn="ctr"/><a:r><a:rPr kumimoji="1" lang="ja-JP" altLang="en-US" sz="1100"/><a:t>2</a:t></a:r></a:p></xdr:txBody>"#), "{drawing}");
+    assert!(!drawing.contains("前"));
+    assert!(
+        apply(&texted, &ops(r#"{"op":"object","name":"図 3","text":"x"}"#))
+            .unwrap_err()
+            .contains("文字")
+    );
+
+    // Deleted: a picture takes its bytes, its relationship and nothing else with it.
+    let gone = apply(
+        &texted,
+        &ops(r#"{"op":"object","name":"図 3","delete":true}"#),
+    )
+    .unwrap();
+    assert_eq!(
+        changed(&texted, &gone),
+        [
+            "xl/drawings/_rels/drawing1.xml.rels",
+            "xl/drawings/drawing1.xml",
+            "xl/media/image1.png"
+        ]
+    );
+    assert!(!parts(&gone).contains_key("xl/media/image1.png"));
+    assert!(!part(&gone, "xl/drawings/_rels/drawing1.xml.rels").contains("image"));
+    // A chart: its part and content type.
+    let gone = apply(
+        &gone,
+        &ops(r#"{"op":"object","name":"Chart 1","delete":true}"#),
+    )
+    .unwrap();
+    assert!(!parts(&gone).contains_key("xl/charts/chart1.xml"));
+    assert!(!part(&gone, "[Content_Types].xml").contains("chart1"));
+    assert!(!part(&gone, "xl/drawings/_rels/drawing1.xml.rels").contains("chart"));
+    let names: Vec<String> = objects(&gone, 0).into_iter().map(|o| o.1).collect();
+    assert_eq!(names, ["正方形/長方形 2", ""]);
+    assert_eq!(cell(&gone, "Data", "D6", Read::Formula), "=SUM(D2:D5)");
+
+    assert!(
+        apply(
+            &gone,
+            &ops(r#"{"op":"object","name":"なし","delete":true}"#)
+        )
+        .unwrap_err()
+        .contains("なし")
+    );
+    assert!(
+        parse_ops(&json!({"op":"object","name":"x"}), Some("Data"))
+            .unwrap_err()
+            .contains("delete")
+    );
+}
+
+#[test]
+fn objects_filled_lined_turned_and_reordered() {
+    let png = crate::view::drawing::base64(PNG);
+    let out = edit(&format!(
+        r#"[{{"op":"shape","at":"A12","width":50,"height":30}},{{"op":"shape","shape":"line","at":"D12","width":40}},{{"op":"picture","at":"F12","data":"{png}"}}]"#
+    ));
+    let shape = |bytes: &[u8], name: &str| -> String {
+        let doc = part(bytes, "xl/drawings/drawing1.xml");
+        let at = doc.find(&format!("name=\"{name}\"")).unwrap();
+        let start = doc[..at].rfind("<xdr:twoCellAnchor").unwrap();
+        let end = at + doc[at..].find("</xdr:twoCellAnchor>").unwrap();
+        doc[start..end].to_string()
+    };
+    // Fill and line: in the shape's properties, in the schema's order (after the geometry; the
+    // line after the fill), over what the shape's style gives.
+    let styled = apply(
+        &out,
+        &ops(r##"{"op":"object","name":"正方形/長方形 2","fill":"#ff0000","line":"#00ff00","lineWidth":2.25}"##),
+    )
+    .unwrap();
+    assert_eq!(changed(&out, &styled), ["xl/drawings/drawing1.xml"]);
+    assert!(shape(&styled, "正方形/長方形 2").contains(r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:ln w="28575"><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></a:ln></xdr:spPr>"#), "{}", shape(&styled, "正方形/長方形 2"));
+    // Again: replaced, not added; no fill, no line.
+    let none = apply(
+        &styled,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","fill":null,"line":null}"#),
+    )
+    .unwrap();
+    assert!(
+        shape(&none, "正方形/長方形 2")
+            .contains(r#"</a:prstGeom><a:noFill/><a:ln w="28575"><a:noFill/></a:ln></xdr:spPr>"#),
+        "{}",
+        shape(&none, "正方形/長方形 2")
+    );
+    // The width alone keeps the line's color; the arrow's head stays.
+    let arrow = edit(r#"{"op":"shape","shape":"arrow","at":"A20","width":40}"#);
+    let wide = apply(
+        &arrow,
+        &ops(r#"{"op":"object","name":"直線矢印コネクタ 2","lineWidth":3}"#),
+    )
+    .unwrap();
+    assert!(
+        shape(&wide, "直線矢印コネクタ 2")
+            .contains(r#"<a:ln w="38100"><a:tailEnd type="triangle"/></a:ln>"#)
+    );
+    let red = apply(
+        &wide,
+        &ops(r##"{"op":"object","name":"直線矢印コネクタ 2","line":"#C00000"}"##),
+    )
+    .unwrap();
+    assert!(shape(&red, "直線矢印コネクタ 2").contains(r#"<a:ln w="38100"><a:solidFill><a:srgbClr val="C00000"/></a:solidFill><a:tailEnd type="triangle"/></a:ln>"#));
+    // A picture gets a frame.
+    let framed = apply(
+        &out,
+        &ops(r##"{"op":"object","name":"図 4","line":"#000000"}"##),
+    )
+    .unwrap();
+    assert!(shape(&framed, "図 4").contains(r#"</a:prstGeom><a:ln><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></xdr:spPr>"#));
+
+    // Rotation and flips: the transform's attributes; 0 and false take them away.
+    let turned = apply(
+        &styled,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","rotation":-30,"flipH":true}"#),
+    )
+    .unwrap();
+    assert!(
+        shape(&turned, "正方形/長方形 2").contains(r#"<a:xfrm rot="19800000" flipH="1">"#),
+        "{}",
+        shape(&turned, "正方形/長方形 2")
+    );
+    let shown = &view(&turned)["sheets"][0]["objects"][1];
+    assert_eq!(
+        (
+            shown["rot"].clone(),
+            shown["flipH"].clone(),
+            shown["el"].clone()
+        ),
+        (json!(330.0), json!(true), json!("sp"))
+    );
+    assert!(shown["html"].as_str().unwrap().contains("rotate(330deg)"));
+    let back = apply(
+        &turned,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","rotation":360,"flipH":false}"#),
+    )
+    .unwrap();
+    assert!(shape(&back, "正方形/長方形 2").contains("<a:xfrm><a:off"));
+    // Turned sideways, its anchor is its box turned a quarter around its center (Excel's); its
+    // transform keeps the box. Moved so, the anchor stays turned; turned back, it is the box.
+    let side = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","rotation":90}"#),
+    )
+    .unwrap();
+    let doc = shape(&side, "正方形/長方形 2");
+    // (The box 50 × 30 at 0, 240: the anchor 30 × 50 at 10, 230.)
+    assert!(doc.contains(r#"<xdr:from><xdr:col>0</xdr:col><xdr:colOff>95250</xdr:colOff><xdr:row>10</xdr:row><xdr:rowOff>95250</xdr:rowOff></xdr:from><xdr:to><xdr:col>0</xdr:col><xdr:colOff>381000</xdr:colOff><xdr:row>13</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>"#), "{doc}");
+    assert!(
+        doc.contains(
+            r#"<a:xfrm rot="5400000"><a:off x="0" y="2286000"/><a:ext cx="476250" cy="285750"/>"#
+        ),
+        "{doc}"
+    );
+    let moved = apply(
+        &side,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","at":"B15"}"#),
+    )
+    .unwrap();
+    let doc = shape(&moved, "正方形/長方形 2");
+    assert!(doc.contains(r#"<a:ext cx="476250" cy="285750"/>"#), "{doc}");
+    let o = objects(&moved, 0)
+        .into_iter()
+        .find(|o| o.1 == "正方形/長方形 2")
+        .unwrap();
+    // (B15 is at 118, 300: the anchor from 128, 290 to 158, 340.)
+    assert_eq!(
+        (o.2, o.3),
+        (json!([1, 10.0, 13, 10.0]), json!([1, 40.0, 16, 0.0]))
+    );
+    let back = apply(
+        &side,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","rotation":180}"#),
+    )
+    .unwrap();
+    assert_eq!(
+        shape(&back, "正方形/長方形 2").split("<xdr:sp ").next(),
+        shape(&out, "正方形/長方形 2").split("<xdr:sp ").next()
+    );
+
+    // Moved and turned in one edit.
+    let both = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","at":"B15","rotation":90}"#),
+    )
+    .unwrap();
+    let doc = shape(&both, "正方形/長方形 2");
+    assert!(
+        doc.contains(r#"<xdr:from><xdr:col>1</xdr:col>"#)
+            && doc.contains(r#"<a:xfrm rot="5400000">"#),
+        "{doc}"
+    );
+
+    // The order: the drawing's order is the order they lie over one another.
+    let names = |bytes: &[u8]| -> Vec<String> {
+        objects(bytes, 0)
+            .into_iter()
+            .map(|o| o.1)
+            .filter(|n| !n.is_empty())
+            .collect()
+    };
+    assert_eq!(
+        names(&out),
+        ["Chart 1", "正方形/長方形 2", "直線コネクタ 3", "図 4"]
+    );
+    let order = |name: &str, how: &str| {
+        names(
+            &apply(
+                &out,
+                &ops(&format!(
+                    r#"{{"op":"object","name":"{name}","order":"{how}"}}"#
+                )),
+            )
+            .unwrap(),
+        )
+    };
+    assert_eq!(
+        order("正方形/長方形 2", "front"),
+        ["Chart 1", "直線コネクタ 3", "図 4", "正方形/長方形 2"]
+    );
+    assert_eq!(
+        order("正方形/長方形 2", "forward"),
+        ["Chart 1", "直線コネクタ 3", "正方形/長方形 2", "図 4"]
+    );
+    assert_eq!(
+        order("正方形/長方形 2", "backward"),
+        ["正方形/長方形 2", "Chart 1", "直線コネクタ 3", "図 4"]
+    );
+    assert_eq!(
+        order("図 4", "back"),
+        ["図 4", "Chart 1", "正方形/長方形 2", "直線コネクタ 3"]
+    );
+    // Already in front: nothing to write.
+    assert_eq!(
+        apply(
+            &out,
+            &ops(r#"{"op":"object","name":"図 4","order":"front"}"#)
+        )
+        .unwrap(),
+        out
+    );
+    // Styled and put in front at once.
+    let front = apply(
+        &out,
+        &ops(r##"{"op":"object","name":"正方形/長方形 2","fill":"#123456","order":"front"}"##),
+    )
+    .unwrap();
+    assert_eq!(names(&front).last().unwrap(), "正方形/長方形 2");
+    assert!(shape(&front, "正方形/長方形 2").contains("123456"));
+
+    // Refused: a fill of a line, the format of a chart; colors and orders not so written.
+    let no = |json: &str| apply(&out, &ops(json)).unwrap_err();
+    assert!(no(r##"{"op":"object","name":"直線コネクタ 3","fill":"#FF0000"}"##).contains("線"));
+    assert!(no(r#"{"op":"object","name":"Chart 1","rotation":10}"#).contains("グラフ"));
+    // (A chart is moved and put elsewhere in the order.)
+    assert_eq!(order("Chart 1", "front").last().unwrap(), "Chart 1");
+    for bad in [
+        json!({"op":"object","name":"x","fill":"red"}),
+        json!({"op":"object","name":"x","order":"top"}),
+        json!({"op":"object","name":"x","lineWidth":-1}),
+    ] {
+        assert!(parse_ops(&bad, Some("Data")).is_err(), "{bad}");
+    }
+    // The file reads back.
+    let mut book = Book::open_bytes(&front).unwrap();
+    assert!(book.sheet_summary(0).is_ok());
+}
+
+/// The controls the grid draws on a sheet: (name, shape number, from, to).
+fn controls_of(bytes: &[u8], sheet: usize) -> Vec<(String, u64, Json, Json)> {
+    view(bytes)["sheets"][sheet]["objects"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|o| o["kind"] == json!("control"))
+        .map(|o| {
+            (
+                o["name"].as_str().unwrap_or("").to_string(),
+                o["shapeId"].as_u64().unwrap_or(0),
+                o["from"].clone(),
+                o["to"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn form_controls_in_vml_put_moved_and_deleted() {
+    // A sheet whose controls are in VML alone (XlsxWriter's button, as Excel 2007 writes them):
+    // a new one is too, after its shapes.
+    let out = edit(
+        r#"{"op":"control","control":"checkBox","at":"H18","width":100,"height":22,"link":"$I$18","checked":true,"text":"済み"}"#,
+    );
+    assert_eq!(changed(BOOK, &out), ["xl/drawings/vmlDrawing1.vml"]);
+    let vml = part(&out, "xl/drawings/vmlDrawing1.vml");
+    assert!(vml.ends_with(r#"<x:ClientData ObjectType="Checkbox"><x:Anchor>7, 0, 17, 0, 8, 28, 18, 2</x:Anchor><x:AutoFill>False</x:AutoFill><x:AutoLine>False</x:AutoLine><x:TextVAlign>Center</x:TextVAlign><x:FmlaLink>$I$18</x:FmlaLink><x:Checked>1</x:Checked><x:NoThreeD/></x:ClientData></v:shape></xml>"#), "{vml}");
+    assert!(vml.contains(r##"<v:shape id="_x0000_s1027" type="#_x0000_t201" style="position:absolute;z-index:3;mso-wrap-style:tight;margin-left:435pt;margin-top:270pt;width:75pt;height:16.5pt""##), "{vml}");
+    assert!(vml.contains(">済み</font>"));
+    assert_eq!(vml.matches("id=\"_x0000_t201\"").count(), 1);
+    let drawn = controls_of(&out, 0);
+    assert_eq!(drawn[1].1, 1027);
+    assert_eq!(
+        (drawn[1].2.clone(), drawn[1].3.clone()),
+        (json!([7, 0.0, 17, 0.0]), json!([8, 28.0, 18, 2.0]))
+    );
+
+    // A sheet without VML gets a drawing of its own, numbered in a block no other has.
+    let out = edit(
+        r#"{"op":"control","sheet":"Summary","control":"button","at":"C2","macro":"Module1.run"}"#,
+    );
+    assert_eq!(
+        changed(BOOK, &out),
+        [
+            "xl/drawings/vmlDrawing2.vml",
+            "xl/worksheets/_rels/sheet2.xml.rels",
+            "xl/worksheets/sheet2.xml"
+        ]
+    );
+    let vml = part(&out, "xl/drawings/vmlDrawing2.vml");
+    assert!(
+        vml.contains(r#"<o:idmap v:ext="edit" data="2"/>"#) && vml.contains(r#"id="_x0000_s2049""#),
+        "{vml}"
+    );
+    assert!(
+        vml.contains("<x:FmlaMacro>[0]!Module1.run</x:FmlaMacro>")
+            && vml.contains(">ボタン 1</font>")
+    );
+    assert!(part(&out, SHEET2).contains(r#"<legacyDrawing r:id="rId1"/></worksheet>"#));
+    assert_eq!(controls_of(&out, 1)[0].1, 2049);
+
+    // Moved: its VML anchor and style; deleted: its shape (the note's box stays).
+    let moved = edit(r#"{"op":"object","shape":1025,"at":"B12","dx":4}"#);
+    assert_eq!(changed(BOOK, &moved), ["xl/drawings/vmlDrawing1.vml"]);
+    let vml = part(&moved, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains("<x:Anchor>1, 4, 11, 0, 2, 20, 12, 10</x:Anchor>"),
+        "{vml}"
+    );
+    assert!(
+        vml.contains("margin-left:91.5pt;margin-top:180pt;width:66pt;height:22.5pt"),
+        "{vml}"
+    );
+    let gone = edit(r#"{"op":"object","shape":1025,"delete":true}"#);
+    let vml = part(&gone, "xl/drawings/vmlDrawing1.vml");
+    assert!(!vml.contains("_x0000_s1025") && vml.contains("ObjectType=\"Note\""));
+    assert!(controls_of(&gone, 0).is_empty());
+    assert_eq!(cell(&gone, "Data", "D6", Read::Formula), "=SUM(D2:D5)");
+
+    // Refused: a note's box, what a control does not have, kinds there are not.
+    assert!(
+        refused(r#"{"op":"object","shape":1026,"delete":true}"#)
+            .contains("コントロール `_x0000_s1026` がありません")
+    );
+    assert!(
+        refused(r##"{"op":"object","shape":1025,"fill":"#FF0000"}"##)
+            .contains("塗りつぶし・線・回転・重なり順は変えられません")
+    );
+    assert!(refused(r#"{"op":"object","shape":1099,"delete":true}"#).contains("1099"));
+    for bad in [
+        json!({"op":"control","control":"slider","at":"A1"}),
+        json!({"op":"control","control":"checkBox","at":"A1","link":"どこか"}),
+        json!({"op":"control","control":"spinner","at":"A1","min":10,"max":5}),
+        json!({"op":"control","control":"button","at":"A1","macro":"a b"}),
+    ] {
+        assert!(parse_ops(&bad, Some("Data")).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn form_controls_as_excel_2010_keeps_them() {
+    // A sheet saved by Excel 2010 or later: `<controls>`, the properties, the mirrors.
+    let sample = crate::view::tests::sample();
+    let sheet1 = "xl/worksheets/sheet1.xml";
+    let ed = |bytes: &[u8], json: &str| {
+        apply(
+            bytes,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+    };
+    let out = ed(&sample, r#"{"op":"control","control":"listBox","at":"B2","width":80,"height":60,"items":"$K$18:$K$20","link":"$L$1"}"#).unwrap();
+    assert_eq!(
+        changed(&sample, &out),
+        [
+            "[Content_Types].xml",
+            "xl/ctrlProps/ctrlProp4.xml",
+            "xl/drawings/drawing1.xml",
+            "xl/drawings/vmlDrawing1.vml",
+            "xl/worksheets/_rels/sheet1.xml.rels",
+            sheet1
+        ]
+    );
+    assert_eq!(
+        part(&out, "xl/ctrlProps/ctrlProp4.xml"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<formControlPr xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" objectType=\"List\" dx=\"16\" fmlaRange=\"$K$18:$K$20\" fmlaLink=\"$L$1\" noThreeD=\"1\" sel=\"0\"/>"
+    );
+    assert!(part(&out, "[Content_Types].xml").contains(r#"<Override PartName="/xl/ctrlProps/ctrlProp4.xml" ContentType="application/vnd.ms-excel.controlproperties+xml"/>"#));
+    let doc = part(&out, sheet1);
+    assert!(doc.contains(r#"<control shapeId="1031" r:id="rId5" name="リスト 7"><controlPr defaultSize="0" autoFill="0" autoLine="0" autoPict="0"><anchor moveWithCells="1"><from><xdr:col>1</xdr:col>"#), "{doc}");
+    assert!(doc.contains(r#"<mc:Fallback><control shapeId="1031" r:id="rId5" name="リスト 7"/></mc:Fallback></mc:AlternateContent></controls>"#));
+    assert!(part(&out, "xl/drawings/drawing1.xml").contains(r#"<xdr:cNvPr id="1031" name="リスト 7" hidden="1"><a:extLst><a:ext uri="{63B3BB69-23CF-44E3-9099-C40C66FF867C}"><a14:compatExt spid="_x0000_s1031"/>"#));
+    assert!(
+        part(&out, "xl/drawings/vmlDrawing1.vml").contains(r#"<x:ClientData ObjectType="List">"#)
+    );
+    let drawn = controls_of(&out, 0);
+    let list = drawn.iter().find(|c| c.0 == "リスト 7").unwrap();
+    assert_eq!((list.1, list.2.clone()), (1031, json!([1, 0.0, 1, 0.0])));
+
+    // Moved by its name: its entry, its VML shape and its mirror.
+    let moved = ed(&sample, r#"{"op":"object","name":"Button 1","at":"B3"}"#).unwrap();
+    assert_eq!(
+        changed(&sample, &moved),
+        [
+            "xl/drawings/drawing1.xml",
+            "xl/drawings/vmlDrawing1.vml",
+            sheet1
+        ]
+    );
+    let doc = part(&moved, sheet1);
+    assert!(doc.contains(r#"name="Button 1"><controlPr defaultSize="0" autoLine="0"><anchor moveWithCells="1"><from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>2</xdr:row><xdr:rowOff>0</xdr:rowOff></from><to><xdr:col>3</xdr:col>"#), "{doc}");
+    assert!(
+        part(&moved, "xl/drawings/vmlDrawing1.vml")
+            .contains("<x:Anchor>1, 0, 2, 0, 3, 0, 4, 0</x:Anchor>")
+    );
+    let button = controls_of(&moved, 0)
+        .into_iter()
+        .find(|c| c.0 == "Button 1")
+        .unwrap();
+    assert_eq!(
+        (button.2, button.3),
+        (json!([1, 0.0, 2, 0.0]), json!([3, 0.0, 4, 0.0]))
+    );
+
+    // Deleted: its entry, its properties (the part, its relationship, its content type), its
+    // VML shape; the others stay.
+    let gone = ed(
+        &sample,
+        r#"{"op":"object","name":"Check Box 3","delete":true}"#,
+    )
+    .unwrap();
+    assert!(!parts(&gone).contains_key("xl/ctrlProps/ctrlProp2.xml"));
+    assert!(!part(&gone, "[Content_Types].xml").contains("ctrlProp2"));
+    assert!(!part(&gone, "xl/worksheets/_rels/sheet1.xml.rels").contains("ctrlProp2"));
+    assert!(!part(&gone, sheet1).contains("Check Box 3"));
+    assert!(!part(&gone, "xl/drawings/vmlDrawing1.vml").contains("_x0000_s1027"));
+    let names: Vec<String> = controls_of(&gone, 0).into_iter().map(|c| c.0).collect();
+    assert!(
+        !names.contains(&"Check Box 3".to_string()) && names.contains(&"List Box 4".to_string()),
+        "{names:?}"
+    );
+    // With its mirror.
+    let gone = ed(
+        &sample,
+        r#"{"op":"object","name":"Button 1","delete":true}"#,
+    )
+    .unwrap();
+    assert!(!part(&gone, "xl/drawings/drawing1.xml").contains("_x0000_s1025"));
+}
+
+#[test]
+fn form_controls_given_texts_links_and_values() {
+    // In VML alone: the text of XlsxWriter's button (its font kept).
+    let out = edit(r#"{"op":"object","shape":1025,"text":"集計\n実行"}"#);
+    assert_eq!(changed(BOOK, &out), ["xl/drawings/vmlDrawing1.vml"]);
+    let vml = part(&out, "xl/drawings/vmlDrawing1.vml");
+    assert!(vml.contains(r##"<div style="text-align:center"><font face="Calibri" size="220" color="#000000">集計</font></div><div style="text-align:center"><font face="Calibri" size="220" color="#000000">実行</font></div></v:textbox>"##), "{vml}");
+    let drawn = &view(&out)["sheets"][0]["objects"];
+    let button = drawn
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["shapeId"] == json!(1025))
+        .unwrap();
+    assert_eq!(button["text"], json!("集計\n実行"));
+    assert_eq!(button["form"]["type"], json!("Button"));
+
+    // A check box linked and checked: its VML, and the cell it is linked to.
+    let added = edit(r#"{"op":"control","control":"checkBox","at":"H18"}"#);
+    let checked = apply(
+        &added,
+        &ops(r#"{"op":"object","shape":1027,"link":"$I$18","checked":true}"#),
+    )
+    .unwrap();
+    let vml = part(&checked, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains("<x:FmlaLink>$I$18</x:FmlaLink><x:Checked>1</x:Checked>"),
+        "{vml}"
+    );
+    assert_eq!(cell(&checked, "Data", "I18", Read::Value), "true");
+    let form = &view(&checked)["sheets"][0]["objects"][2]["form"];
+    assert_eq!(
+        (form["link"].clone(), form["checked"].clone()),
+        (json!("$I$18"), json!(true))
+    );
+    // Unchecked and no longer linked.
+    let off = apply(
+        &checked,
+        &ops(r#"{"op":"object","shape":1027,"checked":false,"link":null}"#),
+    )
+    .unwrap();
+    let vml = part(&off, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        !vml.contains("<x:Checked>") && !vml.contains("$I$18"),
+        "{vml}"
+    );
+
+    // A spin button: its range and value, the value in the cell.
+    let spin = edit(r#"{"op":"control","control":"spinner","at":"F15","link":"Data!$G$15"}"#);
+    let set = apply(
+        &spin,
+        &ops(r#"{"op":"object","shape":1027,"min":5,"max":50,"step":5,"value":20}"#),
+    )
+    .unwrap();
+    let vml = part(&set, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains("<x:Val>20</x:Val><x:Min>5</x:Min><x:Max>50</x:Max><x:Inc>5</x:Inc>"),
+        "{vml}"
+    );
+    assert_eq!(cell(&set, "Data", "G15", Read::Value), "20");
+    // A range that leaves the value out: the value comes into it.
+    let narrowed = apply(&set, &ops(r#"{"op":"object","shape":1027,"max":10}"#)).unwrap();
+    assert!(part(&narrowed, "xl/drawings/vmlDrawing1.vml").contains("<x:Val>10</x:Val>"));
+    assert_eq!(cell(&narrowed, "Data", "G15", Read::Value), "10");
+
+    // Refused: what a kind does not have, values out of their range, settings of a shape.
+    let no = |bytes: &[u8], json: &str| apply(bytes, &ops(json)).unwrap_err();
+    assert!(
+        no(BOOK, r#"{"op":"object","shape":1025,"link":"$A$1"}"#)
+            .contains("ボタンにはリンクするセルがありません")
+    );
+    assert!(no(&spin, r#"{"op":"object","shape":1027,"page":3}"#).contains("ページ"));
+    assert!(no(&spin, r#"{"op":"object","shape":1027,"value":200}"#).contains("最大値"));
+    assert!(no(&spin, r#"{"op":"object","shape":1027,"min":60,"max":50}"#).contains("最小値"));
+    assert!(no(&spin, r#"{"op":"object","shape":1027,"text":"x"}"#).contains("文字"));
+    assert!(
+        no(BOOK, r#"{"op":"object","name":"Chart 1","link":"$A$1"}"#)
+            .contains("フォーム コントロールではない")
+    );
+    assert!(
+        parse_ops(
+            &json!({"op":"object","shape":1025,"link":"どこ"}),
+            Some("Data")
+        )
+        .is_err()
+    );
+
+    // As Excel 2010 keeps them: the properties too, and the text of the mirror.
+    let sample = crate::view::tests::sample();
+    let ed = |bytes: &[u8], json: &str| {
+        apply(
+            bytes,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+    };
+    let out = ed(&sample, r#"[{"op":"object","name":"Check Box 3","checked":true},{"op":"object","name":"List Box 4","items":"$K$18:$K$19","link":"$L$1"},{"op":"object","name":"Button 1","text":"実行する"}]"#).unwrap();
+    assert_eq!(
+        part(&out, "xl/ctrlProps/ctrlProp2.xml"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<formControlPr xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" objectType=\"CheckBox\" fmlaLink=\"$K$17\" lockText=\"1\" noThreeD=\"1\" checked=\"Checked\"/>"
+    );
+    assert!(
+        part(&out, "xl/ctrlProps/ctrlProp3.xml")
+            .contains(r#"fmlaRange="$K$18:$K$19" noThreeD="1" sel="2" fmlaLink="$L$1""#)
+    );
+    assert_eq!(cell(&out, "Sheet1", "K17", Read::Value), "true");
+    assert!(part(&out, "xl/drawings/drawing1.xml").contains("<a:t>実行する</a:t>"));
+    assert!(part(&out, "xl/drawings/vmlDrawing1.vml").contains(">実行する</font>"));
+    let drawn = view(&out)["sheets"][0]["objects"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let list = drawn
+        .iter()
+        .find(|o| o["name"] == json!("List Box 4"))
+        .unwrap();
+    assert_eq!(
+        (list["form"]["items"].clone(), list["form"]["link"].clone()),
+        (json!("$K$18:$K$19"), json!("$L$1"))
+    );
+}
+
+/// A workbook file with some of its parts replaced (None: taken away).
+fn with_parts(bytes: &[u8], change: &[(&str, Option<Vec<u8>>)]) -> Vec<u8> {
+    let mut all = parts(bytes);
+    for (name, data) in change {
+        match data {
+            Some(d) => {
+                all.insert(name.to_string(), d.clone());
+            }
+            None => {
+                all.remove(*name);
+            }
+        }
+    }
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, data) in all {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut zip, &data).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+#[test]
+fn list_items_selected() {
+    let sample = crate::view::tests::sample();
+    let ed = |bytes: &[u8], json: &str| {
+        apply(
+            bytes,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+    };
+    let out = ed(
+        &sample,
+        r#"{"op":"object","name":"List Box 4","selected":3,"link":"$L$2"}"#,
+    )
+    .unwrap();
+    assert!(part(&out, "xl/ctrlProps/ctrlProp3.xml").contains(r#"sel="3""#));
+    assert!(part(&out, "xl/drawings/vmlDrawing1.vml").contains("<x:Sel>3</x:Sel>"));
+    assert_eq!(cell(&out, "Sheet1", "L2", Read::Value), "3");
+    let list = view(&out)["sheets"][0]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == json!("List Box 4"))
+        .unwrap()
+        .clone();
+    assert_eq!(list["form"]["sel"], json!(3));
+    // Three items: no fourth; a check box has none.
+    assert!(
+        ed(
+            &sample,
+            r#"{"op":"object","name":"List Box 4","selected":4}"#
+        )
+        .unwrap_err()
+        .contains("3 まで")
+    );
+    assert!(
+        ed(
+            &sample,
+            r#"{"op":"object","name":"Check Box 3","selected":1}"#
+        )
+        .unwrap_err()
+        .contains("選択している項目")
+    );
+}
+
+#[test]
+fn activex_controls_changed_moved_and_deleted() {
+    let sample = crate::view::tests::sample();
+    let ed = |bytes: &[u8], json: &str| {
+        apply(
+            bytes,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+    };
+    let html = |bytes: &[u8], name: &str| -> Json {
+        view(bytes)["sheets"][0]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["name"] == json!(name))
+            .cloned()
+            .unwrap_or(Json::Null)
+    };
+    // A command button's caption: in its data (its font and the rest kept).
+    let out = ed(
+        &sample,
+        r#"{"op":"object","name":"CommandButton1","text":"OK"}"#,
+    )
+    .unwrap();
+    assert_eq!(changed(&sample, &out), ["xl/activeX/activeX1.bin"]);
+    let button = html(&out, "CommandButton1");
+    assert!(
+        button["html"].as_str().unwrap().contains(">OK<"),
+        "{button}"
+    );
+    assert_eq!(
+        (button["text"].clone(), button["form"]["type"].clone()),
+        (json!("OK"), json!("CommandButton"))
+    );
+    let before =
+        crate::activex::Stream::read("CommandButton", &parts(&sample)["xl/activeX/activeX1.bin"])
+            .unwrap();
+    let after =
+        crate::activex::Stream::read("CommandButton", &parts(&out)["xl/activeX/activeX1.bin"])
+            .unwrap();
+    assert_eq!(after.number("ForeColor"), before.number("ForeColor"));
+    assert!(
+        parts(&out)["xl/activeX/activeX1.bin"]
+            .starts_with(&parts(&sample)["xl/activeX/activeX1.bin"][..16])
+    );
+
+    // Moved and sized: its entry, its VML shape, its mirror, its own size.
+    let moved = ed(
+        &sample,
+        r#"{"op":"object","name":"CommandButton1","at":"B2","width":96,"height":48}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        changed(&sample, &moved),
+        [
+            "xl/activeX/activeX1.bin",
+            "xl/drawings/drawing1.xml",
+            "xl/drawings/vmlDrawing1.vml",
+            "xl/worksheets/sheet1.xml"
+        ]
+    );
+    let b = html(&moved, "CommandButton1");
+    assert_eq!(b["from"], json!([1, 0.0, 1, 0.0]));
+    let st =
+        crate::activex::Stream::read("CommandButton", &parts(&moved)["xl/activeX/activeX1.bin"])
+            .unwrap();
+    assert_eq!(
+        st.write().len(),
+        parts(&moved)["xl/activeX/activeX1.bin"].len()
+    );
+    let vml = part(&moved, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains("<x:Anchor>1, 0, 1, 0, 2, 24, 2, 23</x:Anchor>"),
+        "{vml}"
+    );
+
+    // Deleted: its part, its data, its VML shape, its mirror.
+    let gone = ed(
+        &sample,
+        r#"{"op":"object","name":"CommandButton1","delete":true}"#,
+    )
+    .unwrap();
+    let names = parts(&gone);
+    assert!(
+        !names.contains_key("xl/activeX/activeX1.xml")
+            && !names.contains_key("xl/activeX/activeX1.bin")
+    );
+    assert!(!names.contains_key("xl/activeX/_rels/activeX1.xml.rels"));
+    assert!(!part(&gone, "[Content_Types].xml").contains("activeX1.xml"));
+    assert!(!part(&gone, "xl/worksheets/sheet1.xml").contains("CommandButton1"));
+    assert!(!part(&gone, "xl/drawings/vmlDrawing1.vml").contains("CommandButton1"));
+    assert!(!part(&gone, "xl/drawings/drawing1.xml").contains("_x0000_s1026"));
+    assert_eq!(html(&gone, "CommandButton1"), Json::Null);
+
+    // What a command button does not have.
+    assert!(
+        ed(
+            &sample,
+            r#"{"op":"object","name":"CommandButton1","link":"$A$1"}"#
+        )
+        .unwrap_err()
+        .contains("リンクするセル")
+    );
+
+    // A check box: its caption and state in its data, its linked cell in the sheet, the cell.
+    let check = with_parts(
+        &sample,
+        &[
+            (
+                "xl/activeX/activeX1.xml",
+                Some(
+                    part(&sample, "xl/activeX/activeX1.xml")
+                        .replace(
+                            "D7053240-CE69-11CD-A777-00DD01143C57",
+                            "8BD21D40-EC42-11CE-9E0D-00AA006002F3",
+                        )
+                        .into_bytes(),
+                ),
+            ),
+            (
+                "xl/activeX/activeX1.bin",
+                Some(
+                    [
+                        &parts(&sample)["xl/activeX/activeX1.bin"][..16],
+                        &crate::activex::tests::check_box("確認", "0")[..],
+                    ]
+                    .concat(),
+                ),
+            ),
+        ],
+    );
+    let on = ed(
+        &check,
+        r#"{"op":"object","name":"CommandButton1","text":"同意する","checked":true,"link":"$M$1"}"#,
+    )
+    .unwrap();
+    let st =
+        crate::activex::Stream::read("MorphData", &parts(&on)["xl/activeX/activeX1.bin"]).unwrap();
+    assert_eq!(
+        (
+            st.string("Caption").as_deref(),
+            st.string("Value").as_deref()
+        ),
+        (Some("同意する"), Some("1"))
+    );
+    assert!(
+        part(&on, "xl/worksheets/sheet1.xml")
+            .contains(r#"<controlPr defaultSize="0" autoLine="0" linkedCell="$M$1">"#)
+    );
+    assert_eq!(cell(&on, "Sheet1", "M1", Read::Value), "true");
+    let shown = html(&on, "CommandButton1");
+    assert_eq!(
+        (
+            shown["form"]["type"].clone(),
+            shown["form"]["link"].clone(),
+            shown["form"]["checked"].clone()
+        ),
+        (json!("CheckBox"), json!("$M$1"), json!(true))
+    );
+    let off = ed(
+        &on,
+        r#"{"op":"object","name":"CommandButton1","link":null}"#,
+    )
+    .unwrap();
+    assert!(!part(&off, "xl/worksheets/sheet1.xml").contains("linkedCell"));
+
+    // Properties kept in the part (persistPropertyBag).
+    let bag = with_parts(
+        &sample,
+        &[("xl/activeX/activeX1.xml", Some(part(&sample, "xl/activeX/activeX1.xml").replace("persistStream\" r:id=\"rId1\"/>", "persistPropertyBag\"><ax:ocxPr ax:name=\"Caption\" ax:value=\"前\"/></ax:ocx>").into_bytes()))],
+    );
+    let out = ed(
+        &bag,
+        r#"{"op":"object","name":"CommandButton1","text":"後"}"#,
+    )
+    .unwrap();
+    assert!(
+        part(&out, "xl/activeX/activeX1.xml")
+            .contains(r#"<ax:ocxPr ax:name="Caption" ax:value="後"/>"#)
+    );
+}
