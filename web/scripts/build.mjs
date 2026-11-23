@@ -67,11 +67,13 @@ await build({ ...common, entryPoints: [join(web, "src", "main.ts")], outfile: jo
 await build({ ...common, entryPoints: [join(web, "src", "worker.ts")], outfile: join(dist, "worker.js") });
 copyFileSync(join(web, "pkg", "ras_wasm_bg.wasm"), join(dist, "ras_wasm_bg.wasm"));
 for (const f of ["index.html", "style.css", "sw.js"]) copyFileSync(join(web, "static", f), join(dist, f));
+// The icon is the VS Code extension's (also embedded in ras.exe: crates/ras/assets/ras.ico).
+copyFileSync(join(root, "editors", "vscode", "images", "icon.png"), join(dist, "icon.png"));
 writeFileSync(join(dist, ".nojekyll"), "");
 console.log(`web/dist/ を作成しました（${readdirSync(dist).join(", ")}）`);
 
 if (!production) {
-    const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".wasm": "application/wasm", ".json": "application/json" };
+    const types = { ".png": "image/png", ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".wasm": "application/wasm", ".json": "application/json" };
     createServer((req, res) => {
         const url = new URL(req.url, "http://localhost");
         let file = join(dist, decodeURIComponent(url.pathname));

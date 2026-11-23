@@ -139,14 +139,9 @@ button:disabled {
     font-size: 15px;
 }
 .logo {
-    display: inline-grid;
-    place-items: center;
+    display: block;
     width: 26px;
     height: 26px;
-    border-radius: 6px;
-    background: var(--accent);
-    color: var(--accent-text);
-    font-size: 14px;
 }
 .group {
     display: flex;

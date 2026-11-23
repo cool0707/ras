@@ -24,6 +24,10 @@ clap.workspace = true
 encoding_rs.workspace = true
 notify.workspace = true
 
+# Embeds the icon (assets/ras.ico) and the version information in ras.exe: see build.rs.
+[build-dependencies]
+winresource = { version = "0.1", default-features = false }
+
 [dev-dependencies]
 ras-workbook = { path = "../ras-workbook" }
 ras-ovba.workspace = true
