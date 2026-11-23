@@ -1,3 +1,5 @@
+<img src="editors/vscode/images/icon.png" alt="RAS" width="96" align="right">
+
 # RAS
 
 TypeScript ライクな構文から VBA（`.bas` / `.cls`）へトランスパイルする Better VBA 言語。
