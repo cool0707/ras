@@ -117,6 +117,15 @@ impl Package for Parts {
     fn xml(&self, part: &str) -> Option<Node> {
         parse(self.files.get(part)?)
     }
+
+    fn bytes(&self, part: &str) -> Option<Vec<u8>> {
+        self.files.get(part).cloned()
+    }
+
+    /// The `controls` and `oleObjects` of a sheet, kept without the rest of it.
+    fn sheet_element(&self, part: &str, name: &str) -> Option<Node> {
+        self.xml(&format!("{part}#{name}"))
+    }
 }
 
 /// The text of the first element `name` (with any prefix) of an XML document, to its first end
