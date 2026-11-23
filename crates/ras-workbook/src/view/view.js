@@ -2654,6 +2654,64 @@
             postEdit([{ op: "object", sheet, ...target(obj), text }]);
         });
     }
+    // コントロールの書式設定: the text, the linked cell, the items, the state, the values of a form
+    // control (what its kind has).
+    function askControlFormat(obj) {
+        const f = obj.form;
+        if (!isForm(obj) || !f || busy || !view) return;
+        const t = f.type;
+        const form = openDialog(`コントロールの書式設定（${obj.name || `_x0000_s${obj.shapeId}`}）`, "ctldlg");
+        const change = {};
+        const inputs = [];
+        if (obj.text !== undefined) {
+            const line = form.appendChild(el("label"));
+            line.appendChild(el("span", "lbl", "文字:"));
+            const text = line.appendChild(el("textarea"));
+            text.rows = 2;
+            text.value = obj.text;
+            inputs.push(() => {
+                if (text.value !== obj.text) change.text = text.value;
+            });
+        }
+        if (t === "CheckBox" || t === "Radio") {
+            const on = check(form, "オン（チェックする）", !!f.checked);
+            inputs.push(() => {
+                if (on.checked !== !!f.checked) change.checked = on.checked;
+            });
+        }
+        const ref = (label, key) => {
+            const input = field(form, label);
+            input.value = f[key] || "";
+            input.placeholder = key === "items" ? "$A$1:$A$5" : "$B$2";
+            inputs.push(() => {
+                const v = input.value.trim().replace(/^=/, "");
+                if (v !== (f[key] || "")) change[key] = v || null;
+            });
+        };
+        if (t === "List" || t === "Drop") ref("入力範囲:", "items");
+        if (["CheckBox", "Radio", "List", "Drop", "Spin", "Scroll"].includes(t)) ref("リンクするセル:", "link");
+        if (t === "Spin" || t === "Scroll") {
+            const numbers = [["現在値:", "val", "value"], ["最小値:", "min", "min"], ["最大値:", "max", "max"], ["変化の増分:", "inc", "step"]];
+            if (t === "Scroll") numbers.push(["ページ単位の変化:", "page", "page"]);
+            for (const [label, key, op] of numbers) {
+                const input = field(form, label, "number");
+                Object.assign(input, { min: "0", max: "30000", step: "1", value: String(f[key]) });
+                inputs.push(() => {
+                    const v = Math.round(+input.value);
+                    if (isFinite(v) && v !== f[key]) change[op] = v;
+                });
+            }
+        }
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            for (const take of inputs) take();
+            closeDialog();
+            if (Object.keys(change).length) objectEdit(obj, change);
+        });
+        const firstInput = form.querySelector("textarea, input");
+        if (firstInput) firstInput.focus();
+    }
     function deleteObject(obj) {
         if (!movable(obj) || busy || !view) return;
         postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), delete: true }]);
@@ -3076,6 +3134,7 @@
         const items = [];
         if (movable(obj)) {
             if (obj.text !== undefined) items.push(["テキストの編集…", () => editObjectText(obj), "F2"]);
+            if (isForm(obj) && obj.form) items.push(["コントロールの書式設定…", () => askControlFormat(obj), ""]);
             items.push(["削除", () => deleteObject(obj), "Delete"]);
             if (!isForm(obj)) {
                 items.push(null);

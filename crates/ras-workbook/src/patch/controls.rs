@@ -472,6 +472,366 @@ pub(super) fn change(
     )
 }
 
+/// A cell a control is linked to (`$B$2`, `Sheet2!$B$2`) and what goes in it (as typed).
+pub(super) type LinkedValue = (String, String);
+
+/// What each kind of form control (its VML `ObjectType`) has of the settings an edit changes:
+/// a text, a linked cell, a range of items, a checked state, a value in a range, a page.
+fn has(object: &str, what: &str) -> bool {
+    match what {
+        "text" => matches!(object, "Button" | "Checkbox" | "Radio" | "Label" | "GBox"),
+        "link" => matches!(
+            object,
+            "Checkbox" | "Radio" | "List" | "Drop" | "Spin" | "Scroll"
+        ),
+        "items" => matches!(object, "List" | "Drop"),
+        "checked" => matches!(object, "Checkbox" | "Radio"),
+        "value" => matches!(object, "Spin" | "Scroll"),
+        "page" => object == "Scroll",
+        _ => false,
+    }
+}
+
+/// What a kind of form control is called in a message.
+fn kind_name(object: &str) -> &'static str {
+    match object {
+        "Button" => "ボタン",
+        "Checkbox" => "チェック ボックス",
+        "Radio" => "オプション ボタン",
+        "Label" => "ラベル",
+        "GBox" => "グループ ボックス",
+        "List" => "リスト ボックス",
+        "Drop" => "コンボ ボックス",
+        "Spin" => "スピン ボタン",
+        "Scroll" => "スクロール バー",
+        _ => "このコントロール",
+    }
+}
+
+/// The VML object type of a form control's properties' `objectType`.
+fn vml_kind(prop: &str) -> &str {
+    match prop {
+        "CheckBox" => "Checkbox",
+        other => other,
+    }
+}
+
+/// The file with the text and the settings of the form control whose shape is `id` on the sheet
+/// `sheet` changed as `change` says: in its VML shape (its text box, `x:ClientData`), its
+/// properties (`formControlPr`) and the text of its mirror in the drawing. Also returns the
+/// cell it is linked to and what goes in it, when its state or value changed (Excel writes the
+/// cell then; the cell's value is what the control shows).
+pub(super) fn configure(
+    bytes: &[u8],
+    sheet: &str,
+    id: u32,
+    change: &super::ObjectChange,
+) -> Result<(Vec<u8>, Option<LinkedValue>)> {
+    let mut s = Sheet::open(bytes, sheet)?;
+    let sdoc = s.doc.clone();
+    let root = tree(&sdoc, &s.part)?;
+    let rels = s.rels()?;
+    let spid = format!("_x0000_s{id}");
+
+    // Its properties, its VML shape.
+    let entry = sheet_controls(&root).and_then(|(_, _, list)| {
+        list.into_iter()
+            .find(|e| shape_id(&sdoc, e.el) == Some(id))
+            .and_then(|e| prefixed_attr(&sdoc, e.el, "id"))
+    });
+    let rel = entry.and_then(|rid| rels.iter().find(|r| r.0 == rid).cloned());
+    if rel.as_ref().is_some_and(|r| r.1.ends_with("/control")) {
+        return Err(
+            "ActiveX コントロールは、ここでは変更できません（Excel で行ってください）".into(),
+        );
+    }
+    let props_part = rel.filter(|r| r.1.ends_with("/ctrlProp")).map(|r| r.2);
+    let props_doc = match &props_part {
+        Some(p) => s.text(p)?,
+        None => None,
+    };
+    let vml = vml_part(&mut s, &root, &sdoc)?;
+    let vml_doc = match &vml {
+        Some(p) => s.text(p)?,
+        None => None,
+    };
+    let vroot = match vml_doc.as_deref() {
+        Some(d) => {
+            Some(scan::tree(d, &[]).ok_or("VML の描画を読み取れません（Excel で行ってください）")?)
+        }
+        None => None,
+    };
+    let shape = vroot.as_ref().and_then(|r| {
+        let mut all = Vec::new();
+        vml_shapes(r, &mut all);
+        let doc = vml_doc.as_deref().unwrap_or_default();
+        all.into_iter().find(|x| spid_of(doc, x) == Some(id))
+    });
+    let prop = |name: &str| -> Option<String> {
+        let doc = props_doc.as_deref()?;
+        scan::tree(doc, &[])?.attr(doc, name)
+    };
+    let client = |name: &str| -> Option<String> {
+        let doc = vml_doc.as_deref()?;
+        Some(
+            shape?
+                .child("ClientData")?
+                .child(name)?
+                .text(doc)
+                .trim()
+                .to_string(),
+        )
+    };
+    let object = match (shape, vml_doc.as_deref()) {
+        (Some(sh), Some(doc)) => object_type(doc, sh),
+        _ => prop("objectType")
+            .map(|t| vml_kind(&t).to_string())
+            .unwrap_or_default(),
+    };
+    if object.is_empty() {
+        return Err(format!(
+            "シート `{sheet}` にコントロール `{spid}` がありません"
+        ));
+    }
+    if matches!(object.as_str(), "Pict" | "Note") {
+        return Err(format!("`{spid}` はフォーム コントロールではありません"));
+    }
+
+    // What the kind has.
+    let kind = kind_name(&object);
+    let asked = [
+        ("text", change.text.is_some(), "文字"),
+        ("link", change.link.is_some(), "リンクするセル"),
+        ("items", change.items.is_some(), "入力範囲（items）"),
+        ("checked", change.checked.is_some(), "チェックの状態"),
+        (
+            "value",
+            change.value.is_some()
+                || change.min.is_some()
+                || change.max.is_some()
+                || change.step.is_some(),
+            "値・最小値・最大値・変化の増分",
+        ),
+        ("page", change.page.is_some(), "ページ単位の変化"),
+    ];
+    for (what, on, label) in asked {
+        if on && !has(&object, what) {
+            return Err(format!("{kind}には{label}がありません"));
+        }
+    }
+
+    // The value in its range (Excel's: the least, the greatest, the value between them).
+    let now = |p: &str, c: &str, d: i64| -> i64 {
+        prop(p)
+            .or_else(|| client(c))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(d)
+    };
+    let mut numbers: Vec<(&str, &str, i64)> = Vec::new();
+    if has(&object, "value")
+        && (change.value.is_some()
+            || change.min.is_some()
+            || change.max.is_some()
+            || change.step.is_some()
+            || change.page.is_some())
+    {
+        let min = change.min.unwrap_or_else(|| now("min", "Min", 0));
+        let max = change.max.unwrap_or_else(|| now("max", "Max", 100));
+        if min > max {
+            return Err(format!(
+                "最小値（{min}）は最大値（{max}）以下にしてください"
+            ));
+        }
+        let value = change.value.unwrap_or_else(|| now("val", "Val", min));
+        if change.value.is_some() && !(min..=max).contains(&value) {
+            return Err(format!(
+                "現在値（{value}）は最小値（{min}）から最大値（{max}）の間にしてください"
+            ));
+        }
+        let step = change.step.unwrap_or_else(|| now("inc", "Inc", 1));
+        if step < 1 {
+            return Err("変化の増分は 1 以上にしてください".into());
+        }
+        numbers.push(("val", "Val", value.clamp(min, max)));
+        numbers.push(("min", "Min", min));
+        numbers.push(("max", "Max", max));
+        numbers.push(("inc", "Inc", step));
+        if let Some(page) = change.page {
+            if page < 1 {
+                return Err("ページ単位の変化は 1 以上にしてください".into());
+            }
+            numbers.push(("page", "Page", page));
+        }
+    }
+
+    // The settings: (the attribute of the properties, the element of VML, the value; None
+    // takes it away).
+    let mut set: Vec<(&str, &str, Option<String>)> = Vec::new();
+    if let Some(link) = &change.link {
+        set.push(("fmlaLink", "FmlaLink", link.clone()));
+    }
+    if let Some(items) = &change.items {
+        set.push(("fmlaRange", "FmlaRange", items.clone()));
+    }
+    if let Some(on) = change.checked {
+        set.push(("checked", "Checked", on.then(|| "1".to_string())));
+    }
+    for (p, c, v) in &numbers {
+        set.push((p, c, Some(v.to_string())));
+    }
+
+    // VML: `x:ClientData`'s elements and the text box.
+    if let (Some(sh), Some(doc), Some(part)) = (shape, vml_doc.as_deref(), &vml) {
+        let mut edits = Edits::default();
+        if let Some(data) = sh.child("ClientData") {
+            let x = scan::prefix(data.name);
+            for (_, name, value) in &set {
+                let el = data.children.iter().find(|c| c.local() == *name);
+                let new = value
+                    .as_ref()
+                    .map(|v| format!("<{x}{name}>{}</{x}{name}>", scan::escape(v)));
+                match (el, new) {
+                    (Some(el), Some(new)) => edits.replace(el.span(), new),
+                    (Some(el), None) => edits.replace(el.span(), ""),
+                    (None, Some(new)) => edits.insert(data.inner.end, new),
+                    (None, None) => {}
+                }
+            }
+        }
+        if let Some(text) = &change.text {
+            match sh.child("textbox") {
+                Some(tb) => edits.replace(tb.inner.clone(), vml_box_text(doc, tb, text)),
+                None => {
+                    let at = sh
+                        .child("ClientData")
+                        .map_or(sh.inner.end, |d| d.open.start);
+                    edits.insert(at, vml_textbox(text, "left"));
+                }
+            }
+        }
+        if !edits.is_empty() {
+            s.put(part, edits.apply(doc));
+        }
+    }
+
+    // The properties: the attributes of `formControlPr` (the checked state as `Checked`).
+    if let (Some(part), Some(doc)) = (&props_part, props_doc.as_deref()) {
+        let attrs: Vec<(&str, Option<String>)> = set
+            .iter()
+            .map(|(p, _, v)| {
+                let v = if *p == "checked" {
+                    v.as_ref().map(|_| "Checked".to_string())
+                } else {
+                    v.clone()
+                };
+                (*p, v)
+            })
+            .collect();
+        if !attrs.is_empty() {
+            s.put(part, super::drawing::with_attrs(doc, &attrs));
+        }
+    }
+
+    // The linked cell: a check box's state, a spin button's or scroll bar's value.
+    let link = change
+        .link
+        .clone()
+        .unwrap_or_else(|| prop("fmlaLink").or_else(|| client("FmlaLink")))
+        .filter(|l| !l.is_empty());
+    let cell = match (&link, object.as_str()) {
+        (Some(l), "Checkbox") => change
+            .checked
+            .map(|on| (l.clone(), if on { "TRUE" } else { "FALSE" }.to_string())),
+        (Some(l), "Spin" | "Scroll") => numbers
+            .iter()
+            .find(|n| n.0 == "val")
+            .map(|n| (l.clone(), n.2.to_string())),
+        _ => None,
+    };
+
+    // The text of its mirror.
+    if let Some(text) = &change.text
+        && let Some(d) = drawing_of(&mut s, false)?
+    {
+        let droot = scan::tree(&d.doc, &[]).ok_or("描画のパートを読み取れません")?;
+        let mut edits = Edits::default();
+        for u in units(&droot) {
+            for a in &u.anchors {
+                let mine = first(a, "compatExt")
+                    .and_then(|c| c.attr(&d.doc, "spid"))
+                    .as_deref()
+                    == Some(spid.as_str());
+                if let Some(sp) = super::drawing::object_of(a).filter(|o| mine && o.local() == "sp")
+                {
+                    super::drawing::set_text(&d.doc, sp, text, &mut edits);
+                }
+            }
+        }
+        if !edits.is_empty() {
+            s.put(&d.part, edits.apply(&d.doc));
+        }
+    }
+    Ok((s.finish(None)?, cell))
+}
+
+/// A linked cell (`$B$2`, `Sheet2!$B$2`, `'売上 4月'!$B$2`): its sheet (`sheet` when it names
+/// none) and the cell.
+pub(super) fn linked(sheet: &str, link: &str) -> Option<(String, gridcraft_core::RangeRef)> {
+    let (name, cell) = match link.rsplit_once('!') {
+        Some((n, c)) => {
+            let n = n.trim();
+            let n = n
+                .strip_prefix('\'')
+                .and_then(|n| n.strip_suffix('\''))
+                .map_or_else(|| n.to_string(), |n| n.replace("''", "'"));
+            (n, c)
+        }
+        None => (sheet.to_string(), link),
+    };
+    let range = gridcraft_core::RangeRef::parse(&cell.replace('$', ""))?;
+    Some((name, gridcraft_core::RangeRef::cell(range.start)))
+}
+
+/// The inside of a VML text box with a new text: a paragraph (`div`) a line, each with the
+/// first paragraph's style and font.
+fn vml_box_text(doc: &str, tb: &El, text: &str) -> String {
+    let lines: Vec<String> = text
+        .replace("\r\n", "\n")
+        .split('\n')
+        .map(scan::escape)
+        .collect();
+    let open = |el: &El| {
+        let tag = &doc[el.open.clone()];
+        match tag.strip_suffix("/>") {
+            Some(head) => format!("{}>", head.trim_end()),
+            None => tag.to_string(),
+        }
+    };
+    let (div, font) = match tb.children.iter().find(|c| c.local() == "div") {
+        Some(div) => (
+            (open(div), format!("</{}>", div.name)),
+            first(div, "font").map(|f| (open(f), format!("</{}>", f.name))),
+        ),
+        None => (
+            (
+                "<div style=\"text-align:left\">".to_string(),
+                "</div>".to_string(),
+            ),
+            Some((
+                format!("<font face=\"{FONT}\" size=\"220\" color=\"#000000\">"),
+                "</font>".to_string(),
+            )),
+        ),
+    };
+    lines
+        .iter()
+        .map(|line| match &font {
+            Some((fo, fc)) => format!("{}{fo}{line}{fc}{}", div.0, div.1),
+            None => format!("{}{line}{}", div.0, div.1),
+        })
+        .collect()
+}
+
 /// The parts of a control's change written: the sheet, its VML, its mirror in the drawing
 /// moved to `moved` or (None) taken away, and (`props`: the relationship and the part of its
 /// properties) its properties taken away.
@@ -535,11 +895,17 @@ fn finish(
 
 /// The text of a control as VML writes it in its text box.
 fn vml_textbox(text: &str, align: &str) -> String {
-    let lines: Vec<String> = text.split('\n').map(scan::escape).collect();
-    format!(
-        "<v:textbox style=\"mso-direction-alt:auto\" o:singleclick=\"f\"><div style=\"text-align:{align}\"><font face=\"{FONT}\" size=\"220\" color=\"#000000\">{}</font></div></v:textbox>",
-        lines.join("<br/>")
-    )
+    let lines: String = text
+        .replace("\r\n", "\n")
+        .split('\n')
+        .map(|l| {
+            format!(
+                "<div style=\"text-align:{align}\"><font face=\"{FONT}\" size=\"220\" color=\"#000000\">{}</font></div>",
+                scan::escape(l)
+            )
+        })
+        .collect();
+    format!("<v:textbox style=\"mso-direction-alt:auto\" o:singleclick=\"f\">{lines}</v:textbox>")
 }
 
 /// The VML shape of a new control.

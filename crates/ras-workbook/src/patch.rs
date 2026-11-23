@@ -289,6 +289,17 @@ pub struct ObjectChange {
     /// Its place among the objects drawn over one another.
     pub order: Option<Order>,
     pub delete: bool,
+    /// A form control's linked cell and (a list or combo box) the cells of its items (None in
+    /// them: none), whether it is checked, a spin button's or scroll bar's value, least and
+    /// greatest, step and page.
+    pub link: Option<Option<String>>,
+    pub items: Option<Option<String>>,
+    pub checked: Option<bool>,
+    pub value: Option<i64>,
+    pub min: Option<i64>,
+    pub max: Option<i64>,
+    pub step: Option<i64>,
+    pub page: Option<i64>,
 }
 
 /// Where an object goes among those drawn over one another (配置 > 前面へ移動, ...).
@@ -470,6 +481,38 @@ fn place_of(o: &Json) -> Result<Option<Place>> {
         width: number("width", 0.0)?,
         height: number("height", 0.0)?,
     }))
+}
+
+/// A reference of an edit: a cell or a range, of this sheet or another (`$B$2`,
+/// `Sheet2!$A$1:$A$5`); None when it is empty or not given.
+fn reference_of(o: &Json, key: &str) -> Result<Option<String>> {
+    let Some(r) = o
+        .get(key)
+        .and_then(Json::as_str)
+        .map(|r| r.trim().trim_start_matches('=').to_string())
+        .filter(|r| !r.is_empty())
+    else {
+        return Ok(None);
+    };
+    let cells = r.rsplit_once('!').map_or(r.as_str(), |(_, c)| c);
+    if RangeRef::parse(&cells.replace('$', "")).is_none() || r.contains('"') {
+        return Err(format!(
+            "`{key}` `{r}` はセル参照で指定してください（$B$2、Sheet2!$A$1:$A$5 など）"
+        ));
+    }
+    Ok(Some(r))
+}
+
+/// A whole number of a form control (0 to 30000, as Excel takes them).
+fn int_of(o: &Json, key: &str) -> Result<Option<i64>> {
+    match o.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(v) => v
+            .as_i64()
+            .filter(|n| (0..=30000).contains(n))
+            .map(Some)
+            .ok_or_else(|| format!("`{key}` は 0〜30000 の整数で指定してください")),
+    }
 }
 
 /// The edits of a JSON value: one object, or an array of them. `sheet`: the sheet of those that
@@ -857,9 +900,26 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     flip_v: o.get("flipV").and_then(Json::as_bool),
                     order,
                     delete: o.get("delete").and_then(Json::as_bool).unwrap_or(false),
+                    link: match o.get("link") {
+                        None => None,
+                        Some(Json::Null) => Some(None),
+                        // (An empty text: no longer linked.)
+                        Some(_) => Some(reference_of(o, "link")?),
+                    },
+                    items: match o.get("items") {
+                        None => None,
+                        Some(Json::Null) => Some(None),
+                        Some(_) => Some(reference_of(o, "items")?),
+                    },
+                    checked: o.get("checked").and_then(Json::as_bool),
+                    value: int_of(o, "value")?,
+                    min: int_of(o, "min")?,
+                    max: int_of(o, "max")?,
+                    step: int_of(o, "step")?,
+                    page: int_of(o, "page")?,
                 };
                 if change == (ObjectChange { shape, ..Default::default() }) {
-                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`order`、`delete` のどれかを指定してください".into());
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
                 }
                 Op::Object { sheet, name, change }
             }
@@ -875,27 +935,8 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 {
                     return Err(format!("マクロの名前 `{m}` は指定できません（Module1.macro1 のように指定してください）"));
                 }
-                // A reference: a cell or a range, of this sheet or another.
-                let reference = |key: &str| -> Result<Option<String>> {
-                    let Some(r) = text(key).map(|r| r.trim().trim_start_matches('=').to_string()).filter(|r| !r.is_empty()) else {
-                        return Ok(None);
-                    };
-                    let cells = r.rsplit_once('!').map_or(r.as_str(), |(_, c)| c);
-                    if RangeRef::parse(&cells.replace('$', "")).is_none() || r.contains('"') {
-                        return Err(format!("`{key}` `{r}` はセル参照で指定してください（$B$2、Sheet2!$A$1:$A$5 など）"));
-                    }
-                    Ok(Some(r))
-                };
-                let int = |key: &str| -> Result<Option<i64>> {
-                    match o.get(key) {
-                        None | Some(Json::Null) => Ok(None),
-                        Some(v) => v
-                            .as_i64()
-                            .filter(|n| (0..=30000).contains(n))
-                            .map(Some)
-                            .ok_or_else(|| format!("`{key}` は 0〜30000 の整数で指定してください")),
-                    }
-                };
+                let reference = |key: &str| reference_of(o, key);
+                let int = |key: &str| int_of(o, key);
                 let control = FormControl {
                     kind,
                     place: place_of(o)?.ok_or("コントロールの位置 `at`（セル）か `range` がありません")?,

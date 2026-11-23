@@ -255,6 +255,9 @@ pub struct Obj {
     pub element: &'static str,
     pub rot: f64,
     pub flip: (bool, bool),
+    /// A form control's settings, for the grid's コントロールの書式設定: `type` (CheckBox, ...),
+    /// `link`, `items`, `checked`, `val`, `min`, `max`, `inc`, `page`.
+    pub form: Option<serde_json::Value>,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -490,6 +493,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 element: "graphicFrame",
                 rot: 0.0,
                 flip: (false, false),
+                form: None,
             });
             return;
         }
@@ -510,6 +514,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 element: "graphicFrame",
                 rot: 0.0,
                 flip: (false, false),
+                form: None,
             });
         }
         return;
@@ -548,6 +553,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
             },
             rot: xfrm(obj).map_or(0.0, |x| x.rot),
             flip: xfrm(obj).map_or((false, false), |x| (x.flip_h, x.flip_v)),
+            form: None,
         });
     }
 }

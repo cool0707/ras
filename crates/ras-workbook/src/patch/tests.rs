@@ -1667,7 +1667,7 @@ fn form_controls_in_vml_put_moved_and_deleted() {
     );
     assert!(
         refused(r##"{"op":"object","shape":1025,"fill":"#FF0000"}"##)
-            .contains("移動・サイズの変更・削除だけ")
+            .contains("塗りつぶし・線・回転・重なり順は変えられません")
     );
     assert!(refused(r#"{"op":"object","shape":1099,"delete":true}"#).contains("1099"));
     for bad in [
@@ -1774,6 +1774,135 @@ fn form_controls_as_excel_2010_keeps_them() {
         ed(
             &sample,
             r#"{"op":"object","name":"CommandButton1","delete":true}"#
+        )
+        .unwrap_err()
+        .contains("ActiveX")
+    );
+}
+
+#[test]
+fn form_controls_given_texts_links_and_values() {
+    // In VML alone: the text of XlsxWriter's button (its font kept).
+    let out = edit(r#"{"op":"object","shape":1025,"text":"集計\n実行"}"#);
+    assert_eq!(changed(BOOK, &out), ["xl/drawings/vmlDrawing1.vml"]);
+    let vml = part(&out, "xl/drawings/vmlDrawing1.vml");
+    assert!(vml.contains(r##"<div style="text-align:center"><font face="Calibri" size="220" color="#000000">集計</font></div><div style="text-align:center"><font face="Calibri" size="220" color="#000000">実行</font></div></v:textbox>"##), "{vml}");
+    let drawn = &view(&out)["sheets"][0]["objects"];
+    let button = drawn
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["shapeId"] == json!(1025))
+        .unwrap();
+    assert_eq!(button["text"], json!("集計\n実行"));
+    assert_eq!(button["form"]["type"], json!("Button"));
+
+    // A check box linked and checked: its VML, and the cell it is linked to.
+    let added = edit(r#"{"op":"control","control":"checkBox","at":"H18"}"#);
+    let checked = apply(
+        &added,
+        &ops(r#"{"op":"object","shape":1027,"link":"$I$18","checked":true}"#),
+    )
+    .unwrap();
+    let vml = part(&checked, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains("<x:FmlaLink>$I$18</x:FmlaLink><x:Checked>1</x:Checked>"),
+        "{vml}"
+    );
+    assert_eq!(cell(&checked, "Data", "I18", Read::Value), "true");
+    let form = &view(&checked)["sheets"][0]["objects"][2]["form"];
+    assert_eq!(
+        (form["link"].clone(), form["checked"].clone()),
+        (json!("$I$18"), json!(true))
+    );
+    // Unchecked and no longer linked.
+    let off = apply(
+        &checked,
+        &ops(r#"{"op":"object","shape":1027,"checked":false,"link":null}"#),
+    )
+    .unwrap();
+    let vml = part(&off, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        !vml.contains("<x:Checked>") && !vml.contains("$I$18"),
+        "{vml}"
+    );
+
+    // A spin button: its range and value, the value in the cell.
+    let spin = edit(r#"{"op":"control","control":"spinner","at":"F15","link":"Data!$G$15"}"#);
+    let set = apply(
+        &spin,
+        &ops(r#"{"op":"object","shape":1027,"min":5,"max":50,"step":5,"value":20}"#),
+    )
+    .unwrap();
+    let vml = part(&set, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains("<x:Val>20</x:Val><x:Min>5</x:Min><x:Max>50</x:Max><x:Inc>5</x:Inc>"),
+        "{vml}"
+    );
+    assert_eq!(cell(&set, "Data", "G15", Read::Value), "20");
+    // A range that leaves the value out: the value comes into it.
+    let narrowed = apply(&set, &ops(r#"{"op":"object","shape":1027,"max":10}"#)).unwrap();
+    assert!(part(&narrowed, "xl/drawings/vmlDrawing1.vml").contains("<x:Val>10</x:Val>"));
+    assert_eq!(cell(&narrowed, "Data", "G15", Read::Value), "10");
+
+    // Refused: what a kind does not have, values out of their range, settings of a shape.
+    let no = |bytes: &[u8], json: &str| apply(bytes, &ops(json)).unwrap_err();
+    assert!(
+        no(BOOK, r#"{"op":"object","shape":1025,"link":"$A$1"}"#)
+            .contains("ボタンにはリンクするセルがありません")
+    );
+    assert!(no(&spin, r#"{"op":"object","shape":1027,"page":3}"#).contains("ページ"));
+    assert!(no(&spin, r#"{"op":"object","shape":1027,"value":200}"#).contains("最大値"));
+    assert!(no(&spin, r#"{"op":"object","shape":1027,"min":60,"max":50}"#).contains("最小値"));
+    assert!(no(&spin, r#"{"op":"object","shape":1027,"text":"x"}"#).contains("文字"));
+    assert!(
+        no(BOOK, r#"{"op":"object","name":"Chart 1","link":"$A$1"}"#)
+            .contains("フォーム コントロールではない")
+    );
+    assert!(
+        parse_ops(
+            &json!({"op":"object","shape":1025,"link":"どこ"}),
+            Some("Data")
+        )
+        .is_err()
+    );
+
+    // As Excel 2010 keeps them: the properties too, and the text of the mirror.
+    let sample = crate::view::tests::sample();
+    let ed = |bytes: &[u8], json: &str| {
+        apply(
+            bytes,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+    };
+    let out = ed(&sample, r#"[{"op":"object","name":"Check Box 3","checked":true},{"op":"object","name":"List Box 4","items":"$K$18:$K$19","link":"$L$1"},{"op":"object","name":"Button 1","text":"実行する"}]"#).unwrap();
+    assert_eq!(
+        part(&out, "xl/ctrlProps/ctrlProp2.xml"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<formControlPr xmlns=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\" objectType=\"CheckBox\" fmlaLink=\"$K$17\" lockText=\"1\" noThreeD=\"1\" checked=\"Checked\"/>"
+    );
+    assert!(
+        part(&out, "xl/ctrlProps/ctrlProp3.xml")
+            .contains(r#"fmlaRange="$K$18:$K$19" noThreeD="1" sel="2" fmlaLink="$L$1""#)
+    );
+    assert_eq!(cell(&out, "Sheet1", "K17", Read::Value), "true");
+    assert!(part(&out, "xl/drawings/drawing1.xml").contains("<a:t>実行する</a:t>"));
+    assert!(part(&out, "xl/drawings/vmlDrawing1.vml").contains(">実行する</font>"));
+    let drawn = view(&out)["sheets"][0]["objects"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let list = drawn
+        .iter()
+        .find(|o| o["name"] == json!("List Box 4"))
+        .unwrap();
+    assert_eq!(
+        (list["form"]["items"].clone(), list["form"]["link"].clone()),
+        (json!("$K$18:$K$19"), json!("$L$1"))
+    );
+    assert!(
+        ed(
+            &sample,
+            r#"{"op":"object","name":"CommandButton1","text":"x"}"#
         )
         .unwrap_err()
         .contains("ActiveX")

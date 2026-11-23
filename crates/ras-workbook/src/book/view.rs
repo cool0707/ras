@@ -770,6 +770,9 @@ impl Book {
                 if o.flip.1 {
                     j["flipV"] = json!(true);
                 }
+                if let Some(f) = &o.form {
+                    j["form"] = f.clone();
+                }
                 if let Some(c) = &o.chart {
                     j["chart"] = c.clone();
                 }

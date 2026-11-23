@@ -545,17 +545,35 @@ pub(super) fn object(
     name: &str,
     change: &ObjectChange,
 ) -> Result<Vec<u8>> {
-    // A form control: moved, sized or deleted where all its places are.
+    // A form control: moved, sized or deleted where all its places are; its text and settings
+    // changed.
+    let control_only = change.link.is_some()
+        || change.items.is_some()
+        || change.checked.is_some()
+        || change.value.is_some()
+        || change.min.is_some()
+        || change.max.is_some()
+        || change.step.is_some()
+        || change.page.is_some();
     if let Some(id) = super::controls::find(bytes, sheet, name, change.shape)? {
-        let only = ObjectChange {
+        let mine = ObjectChange {
             shape: change.shape,
             place: change.place.clone(),
+            text: change.text.clone(),
             delete: change.delete,
+            link: change.link.clone(),
+            items: change.items.clone(),
+            checked: change.checked,
+            value: change.value,
+            min: change.min,
+            max: change.max,
+            step: change.step,
+            page: change.page,
             ..Default::default()
         };
-        if *change != only {
+        if *change != mine {
             return Err(format!(
-                "`{}` はコントロールのため、移動・サイズの変更・削除だけができます",
+                "`{}` はコントロールのため、塗りつぶし・線・回転・重なり順は変えられません",
                 if name.is_empty() {
                     format!("_x0000_s{id}")
                 } else {
@@ -563,7 +581,26 @@ pub(super) fn object(
                 }
             ));
         }
-        return super::controls::change(bytes, sheet, id, change.place.as_ref(), change.delete);
+        let mut out = bytes.to_vec();
+        if change.place.is_some() || change.delete {
+            out = super::controls::change(&out, sheet, id, change.place.as_ref(), change.delete)?;
+        }
+        if !change.delete && (change.text.is_some() || control_only) {
+            let (file, cell) = super::controls::configure(&out, sheet, id, change)?;
+            out = file;
+            // The linked cell gets the state or the value, as when the control is used.
+            if let Some((link, text)) = cell
+                && let Some((sheet, range)) = super::controls::linked(sheet, &link)
+            {
+                out = super::apply(&out, &[super::Op::Set { sheet, range, text }])?;
+            }
+        }
+        return Ok(out);
+    }
+    if control_only {
+        return Err(format!(
+            "`{name}` はフォーム コントロールではないため、リンクするセル・値などはありません"
+        ));
     }
     if name.is_empty() {
         return Err(format!(
@@ -918,7 +955,7 @@ fn open_tag(doc: &str, el: &El) -> String {
 }
 
 /// An element (its text) with attributes of its start tag set, or (None) taken away.
-fn with_attrs(text: &str, attrs: &[(&str, Option<String>)]) -> String {
+pub(super) fn with_attrs(text: &str, attrs: &[(&str, Option<String>)]) -> String {
     let mut text = text.to_string();
     for (name, value) in attrs {
         let Some(el) = scan::tree(&text, &[]) else {
@@ -946,7 +983,7 @@ fn with_attrs(text: &str, attrs: &[(&str, Option<String>)]) -> String {
 
 /// The text of a shape replaced: its paragraphs, one a line, keep the first one's paragraph
 /// and run properties (the font, the alignment); the body's properties stay.
-fn set_text(doc: &str, sp: &El, text: &str, edits: &mut Edits) {
+pub(super) fn set_text(doc: &str, sp: &El, text: &str, edits: &mut Edits) {
     let x = scan::prefix(sp.name);
     let Some(body) = sp.child("txBody") else {
         // A shape without a text body gets one, centered as a new shape's.

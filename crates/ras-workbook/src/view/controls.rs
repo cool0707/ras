@@ -89,6 +89,30 @@ impl Controls {
             None if c.kind == "Pict" => picture()?,
             None => form_html(c, env, &self.font)?,
         };
+        // A form control's settings, and its text where it shows one.
+        let form = (c.activex.is_none() && c.kind != "Pict").then(|| {
+            let (val, min, max) = c.value_range();
+            let num = |p: &str, v: &str, d: i64| {
+                c.property(p, v)
+                    .and_then(|x| x.trim().parse::<i64>().ok())
+                    .unwrap_or(d)
+            };
+            serde_json::json!({
+                "type": c.kind,
+                "link": c.linked_cell().unwrap_or(""),
+                "items": c.list_range().unwrap_or(""),
+                "checked": c.checked() == CheckState::Checked,
+                "val": val,
+                "min": min,
+                "max": max,
+                "inc": num("inc", "Inc", 1),
+                "page": num("page", "Page", 10),
+            })
+        });
+        let shows_text = matches!(
+            c.kind.as_str(),
+            "Button" | "CheckBox" | "Radio" | "Label" | "GBox"
+        );
         Some(Obj {
             anchor,
             html,
@@ -100,10 +124,12 @@ impl Controls {
             // Embedded objects run no macro.
             assignable: c.activex.is_none() && c.kind != "Pict",
             shape_id: Some(c.shape_id),
-            text: None,
+            text: (form.is_some() && shows_text)
+                .then(|| c.text.as_ref().map(|t| t.text.clone()).unwrap_or_default()),
             element: "",
             rot: 0.0,
             flip: (false, false),
+            form,
         })
     }
 }
