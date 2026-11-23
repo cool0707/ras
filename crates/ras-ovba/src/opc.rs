@@ -928,6 +928,13 @@ pub fn workbook_sheet_controls(
     book: &std::path::Path,
 ) -> Result<Option<Vec<crate::SheetControls>>, OvbaError> {
     let bytes = std::fs::read(book).map_err(crate::pack::map_open_error)?;
+    workbook_sheet_controls_bytes(bytes)
+}
+
+/// [`workbook_sheet_controls`] of the bytes of a workbook file.
+pub fn workbook_sheet_controls_bytes(
+    bytes: Vec<u8>,
+) -> Result<Option<Vec<crate::SheetControls>>, OvbaError> {
     let mut package = Package::open(bytes)?;
     let layout = analyze(&mut package)?;
     if layout.binary {

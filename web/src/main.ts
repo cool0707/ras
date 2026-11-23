@@ -12,7 +12,12 @@ import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { EditorState, type Extension } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import init, { Book, compile, diffText, editBook, encodeVba, explain, format, packBook, viewPage } from "../pkg/ras_wasm.js";
+import init, { Book, compile, diffText, editBook, encodeVba, explain, format, newFormSpec, packBook, sheetControls, viewPage } from "../pkg/ras_wasm.js";
+import type { EventDescriptor } from "../../editors/vscode/src/userForm/events";
+import type { RuntimeMessage } from "../../editors/vscode/src/formRunner/protocol";
+import { macrosOf, moduleName, newMacroName, sheetControlEvents } from "../../editors/vscode/src/sheetEvents";
+import { codeBehindPath, type DesignerHooks, FormDesigner, openHandler } from "./designer";
+import { FormPanels } from "./forms";
 import type { Dialog, RunJob, RunResult } from "./runtime/run";
 import samples from "virtual:samples";
 import type { FromWorker, ToWorker } from "./worker";
@@ -65,6 +70,11 @@ let compiled: Compiled | null = null;
 let wasmModule: WebAssembly.Module;
 const states = new Map<string, EditorState>();
 let sheetsCache: { bytes: Uint8Array; sheets: string[] } | null = null;
+let controlsCache: { bytes: Uint8Array; controls: unknown } | null = null;
+/** The forms shown as their JSON text rather than in the Designer. */
+const formsAsText = new Set<string>();
+let designer: FormDesigner;
+let formPanels: FormPanels;
 
 function newWorkbook(): Workbook {
     const b = Book.create();
@@ -92,6 +102,26 @@ function sheetNames(): string[] {
     }
     sheetsCache = { bytes: workbook.bytes, sheets };
     return sheets;
+}
+
+/** The ActiveX controls on the sheets of the workbook (what `@on("CommandButton1.Click")` refers to). */
+function workbookControls(): unknown {
+    if (controlsCache && controlsCache.bytes === workbook.bytes) return controlsCache.controls;
+    let controls: unknown = null;
+    try {
+        controls = JSON.parse(sheetControls(workbook.bytes));
+    } catch {
+        controls = null;
+    }
+    controlsCache = { bytes: workbook.bytes, controls };
+    return controls;
+}
+
+const isForm = (path: string) => /^forms\/[^/]+\.form\.json$/i.test(path);
+
+/** The files the compiler reads: the .ras files and the forms' designs. */
+function sourceFiles(): ProjectFile[] {
+    return files.filter((f) => f.path.endsWith(".ras") || isForm(f.path));
 }
 
 function toml(): string {
@@ -254,6 +284,7 @@ const common: Extension[] = [
 
 function language(path: string): Extension {
     if (path.endsWith(".toml")) return [];
+    if (path.endsWith(".json")) return javascript();
     // RAS is close enough to TypeScript for its highlighting.
     return javascript({ typescript: true });
 }
@@ -284,6 +315,7 @@ function editorState(f: ProjectFile): EditorState {
                 if (!u.docChanged) return;
                 const file = files.find((x) => x.path === active);
                 if (file) file.text = u.state.doc.toString();
+                if (file && isForm(file.path)) designer.changed(file.path);
                 scheduleCompile();
             }),
         ],
@@ -298,6 +330,17 @@ function openFile(path: string, at?: { line: number; col: number }) {
     if (!f) return;
     if (active && editor) states.set(active, editor.state);
     active = path;
+    // A form is shown in the Designer (its JSON when asked for, or at a place of its text).
+    if (isForm(path) && at) formsAsText.add(path);
+    if (isForm(path) && !formsAsText.has(path)) {
+        $("editor").hidden = true;
+        designer.show(path);
+        renderFiles();
+        save();
+        return;
+    }
+    designer.hide();
+    $("editor").hidden = false;
     let state = states.get(path);
     if (!state || state.doc.toString() !== f.text) state = editorState(f);
     editor.setState(state);
@@ -321,7 +364,7 @@ function renderFiles() {
         const b = document.createElement("button");
         b.className = `file${errors.has(f.path) ? " has-error" : ""}`;
         b.setAttribute("aria-selected", String(f.path === active));
-        b.title = f.path === "ras.toml" ? "プロジェクトの設定" : f.path;
+        b.title = f.path === "ras.toml" ? "プロジェクトの設定" : isForm(f.path) ? `${f.path}（フォーム。開いているときにもう一度クリックすると、デザイナーと JSON を切り替えます）` : f.path;
         b.append(f.path);
         if (f.path !== "ras.toml") {
             const x = document.createElement("span");
@@ -333,13 +376,21 @@ function renderFiles() {
                 if (!confirm(`${f.path} を削除しますか？`)) return;
                 files = files.filter((y) => y !== f);
                 states.delete(f.path);
+                formsAsText.delete(f.path);
                 if (active === f.path) openFile(files.find((y) => y.path.startsWith("src/"))?.path || files[0].path);
                 renderFiles();
                 scheduleCompile(0);
             };
             b.append(x);
         }
-        b.onclick = () => openFile(f.path);
+        b.onclick = () => {
+            // The form open: between the Designer and its JSON.
+            if (f.path === active && isForm(f.path)) {
+                if (formsAsText.has(f.path)) formsAsText.delete(f.path);
+                else formsAsText.add(f.path);
+            }
+            openFile(f.path);
+        };
         b.ondblclick = () => renameFile(f);
         nav.append(b);
     }
@@ -348,6 +399,36 @@ function renderFiles() {
     add.title = "ファイルを追加（src/〜.ras、objects/Sheet1.ras、test/〜.test.ras、types/〜.d.ras）";
     add.onclick = addFile;
     nav.append(add);
+    const form = document.createElement("button");
+    form.textContent = "＋フォーム";
+    form.title = "ユーザーフォームを追加（forms/<名前>.form.json とコードビハインド forms/<名前>.ras）";
+    form.onclick = addForm;
+    nav.append(form);
+}
+
+/** `ras form new`: a new form, opened in the Designer. */
+function addForm() {
+    const taken = (n: string) => files.some((f) => f.path.toLowerCase().startsWith(`forms/${n.toLowerCase()}.`));
+    let n = 1;
+    while (taken(`UserForm${n}`)) n++;
+    const name = prompt("フォームの名前（英字で始まる英数字と _、31 文字まで）", `UserForm${n}`)?.trim();
+    if (!name) return;
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(name)) {
+        toast(`${name} はフォーム名に使えません（英字で始まり、英数字と _ からなる 31 文字以内の名前にしてください）`);
+        return;
+    }
+    if (taken(name)) {
+        toast(`フォーム ${name} はもうあります（フォーム名は大文字小文字を区別しません）`);
+        return;
+    }
+    const spec = `forms/${name}.form.json`;
+    files.push({ path: spec, text: newFormSpec(name) });
+    files.push({
+        path: `forms/${name}.ras`,
+        text: `// フォーム ${name} のコードビハインド。\`this\` がフォームで、コントロールは \`this.<名前>\` で参照します。\n// イベントは @on("<コントロール名>.<イベント>") を付けた関数で受け取ります（フォーム自身は UserForm）。\n// デザイナーでコントロールをダブルクリックすると、そのイベントのハンドラーをここに追加します。\n// 表示するには、ほかのモジュールから ${name}.show() を呼びます（「実行」の ${name}.show でも表示できます）。\n`,
+    });
+    openFile(spec);
+    scheduleCompile(0);
 }
 
 function validPath(p: string): string | null {
@@ -380,6 +461,10 @@ function addFile() {
 
 function renameFile(f: ProjectFile) {
     if (f.path === "ras.toml") return;
+    if (f.path.startsWith("forms/")) {
+        toast("フォームのファイルの名前は変えられません（フォーム名はファイル名と form.name で決まります）");
+        return;
+    }
     const p = prompt("新しい名前", f.path);
     if (!p || p === f.path) return;
     const path = validPath(p);
@@ -420,9 +505,10 @@ function scheduleCompile(delay = 250) {
 function runCompile() {
     const started = performance.now();
     const input = {
-        files: files.filter((f) => f.path.endsWith(".ras")),
+        files: sourceFiles(),
         toml: toml(),
         sheets: sheetNames(),
+        sheetControls: workbookControls() ?? undefined,
         js: true,
     };
     compiled = JSON.parse(compile(JSON.stringify(input))) as Compiled;
@@ -644,9 +730,20 @@ function download(name: string, data: string | Uint8Array, type: string) {
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/** Hands the run (waiting on `shared`) a value as JSON: [0] 1 when given, [1] its length, then its bytes. */
+function answer(shared: SharedArrayBuffer, value: unknown) {
+    const bytes = new TextEncoder().encode(JSON.stringify(value));
+    const state = new Int32Array(shared, 0, 2);
+    new Uint8Array(shared, 8).set(bytes.subarray(0, 65536));
+    state[1] = Math.min(bytes.length, 65536);
+    Atomics.store(state, 0, 1);
+    Atomics.notify(state, 0);
+}
+
 function stopRun() {
     if (!running) return;
     running.terminate();
+    formPanels.end();
     running = null;
     $("stop").hidden = true;
     renderEntries();
@@ -685,6 +782,9 @@ async function run(kind: "run" | "test") {
             running = worker;
             renderEntries();
             const shared = typeof SharedArrayBuffer !== "undefined" && crossOriginIsolated ? new SharedArrayBuffer(8 + 65536) : null;
+            // The forms the run shows are drawn here; what the user does on them is handed back.
+            const forms = kind === "run" && shared ? new SharedArrayBuffer(8 + 65536) : null;
+            if (forms) formPanels = new FormPanels((action) => answer(forms, action));
             worker.onmessage = async (e: MessageEvent<FromWorker>) => {
                 const m = e.data;
                 if (m.type === "output") {
@@ -694,28 +794,29 @@ async function run(kind: "run" | "test") {
                         console_.append(span);
                     }
                 } else if (m.type === "dialog" && shared) {
-                    const answer = await showDialog(m.dialog);
-                    const bytes = new TextEncoder().encode(JSON.stringify({ value: answer }));
-                    const state = new Int32Array(shared, 0, 2);
-                    new Uint8Array(shared, 8).set(bytes.subarray(0, 65536));
-                    state[1] = Math.min(bytes.length, 65536);
-                    Atomics.store(state, 0, 1);
-                    Atomics.notify(state, 0);
+                    answer(shared, { value: await showDialog(m.dialog) });
+                } else if (m.type === "form") {
+                    formPanels.receive(m.message as RuntimeMessage);
+                } else if (m.type === "formWait") {
+                    formPanels.wait();
                 } else if (m.type === "done") {
                     worker.terminate();
+                    formPanels.end();
                     resolve({ result: m.result, ms: m.ms });
                 } else if (m.type === "failed") {
                     worker.terminate();
+                    formPanels.end();
                     out.append(el("pre", "err", m.message));
                     resolve(null);
                 }
             };
             worker.onerror = (e) => {
                 worker.terminate();
+                formPanels.end();
                 out.append(el("pre", "err", `ワーカーのエラー: ${e.message}`));
                 resolve(null);
             };
-            worker.postMessage({ type: "run", module: wasmModule, job, shared } satisfies ToWorker);
+            worker.postMessage({ type: "run", module: wasmModule, job, shared, forms } satisfies ToWorker);
             if (!shared && kind === "run") {
                 // (Without SharedArrayBuffer the dialogs get the answers `ras run` gives.)
             }
@@ -884,8 +985,13 @@ function bookMessage(m: { type?: string; ops?: unknown; url?: string }) {
         if (typeof m.url === "string" && /^(https?:\/\/|mailto:)/i.test(m.url)) window.open(m.url, "_blank", "noopener");
         return;
     }
+    if (m.type === "ready") {
+        // The objects of the workbook before the run have events: their handlers are in objects/.
+        if (!(lastRun && !showBefore)) frame?.postMessage({ type: "events", on: true }, "*");
+        return;
+    }
     if (m.type === "event") {
-        fail("図形やコントロールのイベントは、VS Code の拡張機能で設定してください。");
+        objectEvent(m as unknown as ObjectEvent).catch((e) => fail(String((e as Error).message || e)));
         return;
     }
     if (m.type === "undo" || m.type === "redo") {
@@ -900,14 +1006,17 @@ function bookMessage(m: { type?: string; ops?: unknown; url?: string }) {
         return;
     }
     if (m.type !== "edit") return;
-    let bytes: Uint8Array;
     try {
-        bytes = editBook(workbook.bytes, JSON.stringify(m.ops ?? []));
+        // (An edit that changed nothing, the same value typed again, is not a step to undo.)
+        editWorkbook(m.ops ?? []);
     } catch (e) {
         fail(String((e as Error).message || e));
-        return;
     }
-    // An edit that changed nothing (the same value typed again) is not a step to undo.
+}
+
+/** Applies edits to the workbook before the run, as a step to undo. */
+function editWorkbook(ops: unknown) {
+    const bytes = editBook(workbook.bytes, JSON.stringify(ops));
     if (!sameBytes(bytes, workbook.bytes)) {
         bookHistory.undo.push(workbook.bytes);
         if (bookHistory.undo.length > 50) bookHistory.undo.shift();
@@ -915,6 +1024,161 @@ function bookMessage(m: { type?: string; ops?: unknown; url?: string }) {
     }
     bookEdited(bytes);
 }
+
+// ---------------------------------------------------------------------------- the events of the sheets' objects
+
+/** What the book tab posts for the events of a shape or a control (`choose`: the menu's "…"). */
+interface ObjectEvent {
+    sheet: string;
+    codeName: string;
+    object: string;
+    /** A form control's VML shape. */
+    shape?: number;
+    /** An ActiveX control: its Microsoft Forms type (`CommandButton`; empty for another control). */
+    activex?: string;
+    /** The macro assigned to it (`Sheet1.button1Click`). */
+    macro: string;
+    choose: boolean;
+}
+
+/** The file of a sheet: `objects/<CodeName>.ras`, as it is spelled in the project if it is there. */
+function sheetFile(codeName: string): string {
+    const want = `objects/${codeName}.ras`;
+    return files.find((f) => f.path.toLowerCase() === want.toLowerCase())?.path ?? want;
+}
+
+/** The files that hold macros (the sheets' and the standard modules), with their modules. */
+function macroFiles(): { file: string; module: string }[] {
+    return files
+        .filter((f) => (/^objects\/[^/]+\.ras$/.test(f.path) && !/^objects\/ThisWorkbook\.ras$/i.test(f.path)) || (/^src\/.+\.ras$/.test(f.path) && !f.path.endsWith(".d.ras")))
+        .map((f) => ({ file: f.path, module: f.path.startsWith("objects/") ? f.path.slice(8, -4) : moduleName(f.path) }))
+        .sort((a, b) => a.module.localeCompare(b.module));
+}
+
+/** The first body line of the function `name` of a text (its declaration when it has none). */
+function bodyLineOf(text: string, name: string): number {
+    const found = macrosOf(text).find((m) => m.name.toLowerCase() === name.toLowerCase());
+    if (!found) return 0;
+    const lines = text.split(/\r\n|\r|\n/);
+    for (let line = found.line; line < lines.length; line++) if (/\{\s*(\/\/.*)?$/.test(lines[line])) return Math.min(line + 1, lines.length - 1);
+    return found.line;
+}
+
+/** Opens (or adds) the handler of an event of an object of the sheet, or its macro. */
+async function objectEvent(m: ObjectEvent) {
+    if (!m.codeName) throw new Error(`シート ${m.sheet} のコード名が分かりません。`);
+    const file = sheetFile(m.codeName);
+    if (m.activex !== undefined) {
+        // An ActiveX control: `@on("CommandButton1.Click")` in the sheet's file (spec §12.2.1).
+        const events = m.activex && m.object ? sheetControlEvents(m.activex, m.object) : [];
+        if (!events.length) {
+            throw new Error(`${m.object || "このコントロール"} は Microsoft Forms 2.0 のコントロールではないため、イベントを選べません。ハンドラー（@on("${m.object || "<名前>"}.<イベント>")）は、VBE が作るイベント プロシージャの宣言どおりの引数で手で書いてください。`);
+        }
+        let event: EventDescriptor | undefined = events.find((e) => e.isDefault) ?? events[0];
+        if (m.choose) {
+            const sorted = [...events].sort((a, b) => Number(b.isDefault) - Number(a.isDefault));
+            const i = await pick(`${m.object} の開くイベント`, sorted.map((e) => ({ label: e.name })));
+            event = i === undefined ? undefined : sorted[i];
+        }
+        if (event) openHandler(hooks, file, m.object, event);
+        return;
+    }
+    // A shape or a form control: the macro it runs (`OnAction`), an `export function`.
+    const label = m.object || "このコントロール";
+    if (!m.choose && m.macro) {
+        const bare = m.macro.replace(/^.*!/, "");
+        const dot = bare.lastIndexOf(".");
+        const [module, name] = dot < 0 ? [undefined, bare] : [bare.slice(0, dot), bare.slice(dot + 1)];
+        const found = macroFiles().find((f) => (module === undefined || f.module.toLowerCase() === module.toLowerCase()) && macrosOf(hooks.text(f.file) ?? "").some((x) => x.name.toLowerCase() === name.toLowerCase()));
+        if (!found) throw new Error(`${label} のマクロ ${m.macro} は、プロジェクトの RAS のファイルにありません（ブックの VBA だけにあるマクロかもしれません）。`);
+        hooks.openCode(found.file, bodyLineOf(hooks.text(found.file) ?? "", name));
+        return;
+    }
+    const fresh = newMacroName(hooks.text(file) ?? "", m.object, m.shape);
+    let target = { file, module: m.codeName, name: fresh };
+    let create = true;
+    if (m.choose) {
+        const choices: { target: typeof target; create: boolean; label: string; description?: string; detail?: string }[] = [
+            { target, create: true, label: `＋ 新しいマクロ: ${m.codeName}.${fresh}`, description: file },
+        ];
+        for (const f of macroFiles()) {
+            for (const x of macrosOf(hooks.text(f.file) ?? "")) {
+                const full = `${f.module}.${x.name}`;
+                choices.push({ target: { file: f.file, module: f.module, name: x.name }, create: false, label: full, description: f.file, detail: m.macro.toLowerCase() === full.toLowerCase() ? "登録されています" : undefined });
+            }
+        }
+        const i = await pick(`${label} に登録するマクロ（クリックすると実行されます）`, choices);
+        if (i === undefined) return;
+        target = choices[i].target;
+        create = choices[i].create;
+    }
+    if (create) {
+        const text = hooks.text(target.file) ?? "";
+        const separator = !text.trim() ? "" : text.endsWith("\n") ? "\n" : "\n\n";
+        hooks.write(target.file, `${text}${separator}export function ${target.name}() {\n    \n}\n`);
+    }
+    const full = `${target.module}.${target.name}`;
+    if (full.toLowerCase() !== m.macro.toLowerCase()) editWorkbook([{ op: "macro", sheet: m.sheet, object: m.object, shape: m.shape, macro: full }]);
+    hooks.openCode(target.file, bodyLineOf(hooks.text(target.file) ?? "", target.name));
+}
+
+/** Asks for one of the items (the Designer's and the sheets' menus of events and macros). */
+function pick(title: string, items: { label: string; description?: string; detail?: string }[]): Promise<number | undefined> {
+    const dialog = $<HTMLDialogElement>("picker");
+    const list = $("picker-list");
+    $("picker-title").textContent = title;
+    list.textContent = "";
+    return new Promise((resolve) => {
+        let chosen: number | undefined;
+        items.forEach((item, i) => {
+            const b = el("button", "pick");
+            b.type = "button";
+            b.append(el("span", "pick-label", item.label));
+            if (item.description) b.append(el("span", "pick-desc", item.description));
+            if (item.detail) b.append(el("span", "pick-detail", item.detail));
+            b.onclick = () => {
+                chosen = i;
+                dialog.close();
+            };
+            list.append(b);
+        });
+        dialog.onclose = () => {
+            dialog.onclose = null;
+            resolve(chosen);
+        };
+        dialog.showModal();
+        (list.firstElementChild as HTMLElement | null)?.focus();
+    });
+}
+
+/** The project's files as the Designer and the events of the sheets use them. */
+const hooks: DesignerHooks = {
+    text: (path) => files.find((f) => f.path === path)?.text,
+    write(path, text) {
+        const f = files.find((x) => x.path === path);
+        if (f) f.text = text;
+        else files.push({ path, text });
+        states.delete(path);
+        if (active === path && !$("editor").hidden) {
+            active = "";
+            openFile(path);
+        }
+        renderFiles();
+        scheduleCompile(0);
+    },
+    openText(path, at) {
+        formsAsText.add(path);
+        active = "";
+        openFile(path, at);
+    },
+    openCode(path, line) {
+        if (active === path && editor.state.doc.toString() !== hooks.text(path)) states.delete(path);
+        active = "";
+        const text = hooks.text(path) ?? "";
+        openFile(path, { line, col: text.split("\n")[line]?.length ?? 0 });
+    },
+    pick,
+};
 
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
     if (a.length !== b.length) return false;
@@ -948,7 +1212,7 @@ async function readWorkbook(file: File) {
  * page (or a new one), or from the book tab, the one shown there (after the run, if there was one).
  */
 function packWorkbook(book: Workbook = workbook) {
-    const input = { files: files.filter((f) => f.path.endsWith(".ras")), toml: toml() };
+    const input = { files: sourceFiles(), toml: toml() };
     let packed;
     try {
         packed = packBook(JSON.stringify(input), book.bytes, book.name);
@@ -977,6 +1241,72 @@ function toast(text: string) {
     t.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = window.setTimeout(() => (t.hidden = true), 4000);
+}
+
+const SPLIT = "ras-playground:split";
+
+/** The splitter between the source and the output: dragged, or moved with the arrow keys. */
+function setUpSplitter() {
+    const panes = document.querySelector<HTMLElement>(".panes")!;
+    const splitter = $("splitter");
+    const clamp = (r: number) => {
+        const w = panes.clientWidth || 1;
+        // Each pane keeps at least 240 px (or a fifth of a narrow page).
+        const min = Math.min(240 / w, 0.2);
+        return Math.min(Math.max(r, min), 1 - min);
+    };
+    const apply = (r: number, keep: boolean) => {
+        const v = clamp(r);
+        panes.style.setProperty("--split", String(v));
+        splitter.setAttribute("aria-valuenow", String(Math.round(v * 100)));
+        if (keep) {
+            try {
+                localStorage.setItem(SPLIT, String(v));
+            } catch {
+                // Not kept without storage.
+            }
+        }
+    };
+    let saved = NaN;
+    try {
+        saved = parseFloat(localStorage.getItem(SPLIT) || "");
+    } catch {
+        // The default.
+    }
+    apply(Number.isFinite(saved) ? saved : 0.5, false);
+    splitter.setAttribute("aria-valuemin", "0");
+    splitter.setAttribute("aria-valuemax", "100");
+    const current = () => parseFloat(panes.style.getPropertyValue("--split")) || 0.5;
+    splitter.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        splitter.setPointerCapture(e.pointerId);
+        document.body.classList.add("splitting");
+        const rect = panes.getBoundingClientRect();
+        const move = (ev: PointerEvent) => apply((ev.clientX - rect.left) / rect.width, false);
+        const up = () => {
+            splitter.removeEventListener("pointermove", move);
+            splitter.removeEventListener("pointerup", up);
+            splitter.removeEventListener("pointercancel", up);
+            document.body.classList.remove("splitting");
+            apply(current(), true);
+        };
+        splitter.addEventListener("pointermove", move);
+        splitter.addEventListener("pointerup", up);
+        splitter.addEventListener("pointercancel", up);
+    });
+    splitter.addEventListener("dblclick", () => apply(0.5, true));
+    splitter.addEventListener("keydown", (e) => {
+        const step = e.shiftKey ? 0.1 : 0.02;
+        if (e.key === "ArrowLeft") apply(current() - step, true);
+        else if (e.key === "ArrowRight") apply(current() + step, true);
+        else if (e.key === "Home") apply(0, true);
+        else if (e.key === "End") apply(1, true);
+        else return;
+        e.preventDefault();
+    });
+    // A narrower window keeps both panes usable.
+    window.addEventListener("resize", () => apply(current(), false));
 }
 
 /** The page is cross-origin isolated through sw.js (for the dialogs); reloads once to be. */
@@ -1010,6 +1340,7 @@ function projectOpened() {
 
 async function main() {
     void isolate();
+    setUpSplitter();
     $("editor").innerHTML = '<div class="loading">コンパイラーを読み込んでいます…</div>';
     const response = fetch("ras_wasm_bg.wasm");
     wasmModule = await (WebAssembly.compileStreaming ? WebAssembly.compileStreaming(response) : response.then((r) => r.arrayBuffer()).then((b) => WebAssembly.compile(b)));
@@ -1047,6 +1378,8 @@ async function main() {
     };
 
     editor = new EditorView({ parent: $("editor") });
+    designer = new FormDesigner($<HTMLIFrameElement>("designer"), hooks);
+    formPanels = new FormPanels(() => undefined);
     vbaView = new EditorView({
         parent: $("vba"),
         state: EditorState.create({ doc: "", extensions: [common, StreamLanguage.define(vb), EditorState.readOnly.of(true), EditorView.editable.of(false)] }),

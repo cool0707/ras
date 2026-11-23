@@ -55,33 +55,39 @@ pub fn load(root: &Path) -> Result<Vec<LoadedForm>, String> {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let name = file_name.trim_end_matches(".form.json").to_string();
         let text =
             std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let text = text
-            .strip_prefix('\u{feff}')
-            .map(str::to_string)
-            .unwrap_or(text);
-        let mut parsed = crate::parse(&text);
-        if let Some(spec) = &parsed.spec {
-            if spec.form.name != name {
-                parsed.issues.push(Issue {
-                    code: "UFV003".into(),
-                    severity: Severity::Error,
-                    message: format!("form.name {:?} がファイル名 {file_name} と一致しません。ファイル名は <form.name>.form.json にしてください。", spec.form.name),
-                    field: "form.name".into(),
-                });
-            }
-        }
-        forms.push(LoadedForm {
-            code_path: dir.join(format!("{name}.ras")),
-            name,
-            rel_path: format!("forms/{file_name}"),
-            text,
-            parsed,
-        });
+        forms.push(loaded(&dir, &file_name, text));
     }
     Ok(forms)
+}
+
+/// A form of `forms/` from the text of its file `file_name` (`<Name>.form.json`), parsed and
+/// validated; `dir` is the directory of the forms (where its code-behind is).
+pub fn loaded(dir: &Path, file_name: &str, text: String) -> LoadedForm {
+    let name = file_name.trim_end_matches(".form.json").to_string();
+    let text = text
+        .strip_prefix('\u{feff}')
+        .map(str::to_string)
+        .unwrap_or(text);
+    let mut parsed = crate::parse(&text);
+    if let Some(spec) = &parsed.spec {
+        if spec.form.name != name {
+            parsed.issues.push(Issue {
+                code: "UFV003".into(),
+                severity: Severity::Error,
+                message: format!("form.name {:?} がファイル名 {file_name} と一致しません。ファイル名は <form.name>.form.json にしてください。", spec.form.name),
+                field: "form.name".into(),
+            });
+        }
+    }
+    LoadedForm {
+        code_path: dir.join(format!("{name}.ras")),
+        name,
+        rel_path: format!("forms/{file_name}"),
+        text,
+        parsed,
+    }
 }
 
 /// Something wrong with a form, pointing into its `.form.json` file.

@@ -177,9 +177,28 @@ button:disabled {
     flex: 1;
     min-height: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 1px;
+    /* --split: the source pane's share of the width (the splitter sets it, main.ts). */
+    grid-template-columns: minmax(0, calc(var(--split, 0.5) * 100%)) 5px minmax(0, 1fr);
     background: var(--line);
+}
+.splitter {
+    cursor: col-resize;
+    background: var(--line);
+    touch-action: none;
+    outline: none;
+}
+.splitter:hover,
+.splitter:focus-visible,
+body.splitting .splitter {
+    background: var(--accent);
+}
+/* While the splitter is dragged, the frames (the book, the Designer) do not take the mouse. */
+body.splitting {
+    cursor: col-resize;
+    user-select: none;
+}
+body.splitting iframe {
+    pointer-events: none;
 }
 .pane {
     display: flex;
@@ -440,6 +459,78 @@ button:disabled {
     width: 100%;
     background: #fff;
 }
+.editor[hidden],
+.designer[hidden] {
+    display: none;
+}
+.designer {
+    flex: 1;
+    min-height: 0;
+    border: 0;
+    width: 100%;
+    background: var(--panel);
+}
+.picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: min(60vh, 420px);
+    overflow-y: auto;
+    margin-bottom: 12px;
+}
+.picker-list .pick {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    text-align: left;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    padding: 6px 8px;
+}
+.picker-list .pick:hover,
+.picker-list .pick:focus-visible {
+    background: var(--accent-soft);
+}
+.pick-desc,
+.pick-detail {
+    color: var(--muted);
+    font-size: 12px;
+}
+.pick-detail {
+    color: var(--ok);
+}
+/* The user forms a run shows (forms.ts): over the page, which they block while one is modal. */
+.form-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+}
+.form-layer[hidden] {
+    display: none;
+}
+.form-layer.modal {
+    pointer-events: auto;
+    background: rgba(0, 0, 0, 0.25);
+}
+.form-box {
+    position: absolute;
+    pointer-events: auto;
+}
+.form-box iframe {
+    display: block;
+    border: 0;
+    max-width: calc(100vw - 32px);
+    max-height: calc(100vh - 32px);
+    background: transparent;
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+}
 
 .dialog {
     border: 1px solid var(--line);
@@ -507,6 +598,10 @@ button:disabled {
     .panes {
         grid-template-columns: minmax(0, 1fr);
         grid-template-rows: minmax(320px, 1fr) minmax(320px, 1fr);
+        gap: 1px;
+    }
+    .splitter {
+        display: none;
     }
     body {
         height: auto;

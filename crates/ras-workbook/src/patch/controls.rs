@@ -7,6 +7,11 @@
 //! the sheet's drawing (`a14:compatExt`). A control is changed in all the places it is in. A new
 //! one is written as the sheet keeps the others: in VML alone on a sheet without `<controls>`
 //! (as Excel 2007 and XlsxWriter write them), in all four on one with them.
+//!
+//! An ActiveX control (開発 > 挿入 > ActiveX コントロール) is kept in its part
+//! (`xl/activeX/activeX<n>.xml`) and data (`activeX<n>.bin`), an entry of `<controls>` and a
+//! VML shape (`ObjectType="Pict"`); one is changed, moved and deleted here too, and a new one
+//! (of Microsoft Forms 2.0) put on a sheet as Excel 2010 and later save it.
 
 use super::drawing::{
     A_NS, XDR_NS, box_of, drawing_of, drop_part, emu, first, marker_point, name_of, ns_prefix,
@@ -1455,12 +1460,111 @@ pub(super) fn add(bytes: &[u8], sheet: &str, c: &FormControl) -> Result<Vec<u8>>
     let b = box_of(&sizes, &c.place, k.size);
     let b = (b.0, b.1, b.2.max(b.0 + 1.0), b.3.max(b.1 + 1.0));
     let mut s = Sheet::open(bytes, sheet)?;
+    let full = sheet_controls(&tree(&s.doc, &s.part)?).is_some();
 
-    // The VML drawing (made, with a block of shape numbers of its own, when there is none).
+    // Its VML shape, after the others.
+    let n = new_shape(&mut s)?;
+    let id = n.id;
+    let name = format!("{} {}", k.name, id - n.low);
+    let text = c.text.clone().unwrap_or_else(|| name.clone());
+    let style = vml_style(
+        &format!("position:absolute;z-index:{};mso-wrap-style:tight", n.z),
+        b,
+    );
+    let shape = vml_shape(k, id, &style, &vml_anchor(&sizes, b), c, &text);
+    put_shape(&mut s, &n, &shape);
+
+    if full {
+        // Its properties.
+        let part = s.free("xl/ctrlProps/ctrlProp", ".xml");
+        s.put(&part, props_xml(k, c));
+        s.content_type(Some(&part), None, CTRL_PROP_TYPE)?;
+        let rid = s.add_rel("ctrlProp", &relative(&s.part.clone(), &part), false)?;
+
+        // Its mirror in the drawing (made when the sheet has none).
+        let d = drawing_of(&mut s, true)?.ok_or("描画のパートを作れません")?;
+        if let Some(doc) = d.sheet_doc {
+            s.doc = doc;
+        }
+        let droot = scan::tree(&d.doc, &[]).ok_or("描画のパートを読み取れません")?;
+        let x = ns_prefix(&d.doc, &droot, XDR_NS)
+            .unwrap_or_else(|| scan::prefix(droot.name).to_string());
+        let a_decl = if ns_prefix(&d.doc, &droot, A_NS).as_deref() == Some("a:") {
+            String::new()
+        } else {
+            format!(" xmlns:a=\"{A_NS}\"")
+        };
+        let marker =
+            |tag: &str, px: f64, py: f64| super::drawing::marker_xml(&x, tag, &sizes, px, py);
+        let mirror = mirror_xml(
+            &x,
+            &a_decl,
+            id,
+            &name,
+            k,
+            &text,
+            &marker("from", b.0, b.1),
+            &marker("to", b.2, b.3),
+            b,
+        );
+        let mut dedits = Edits::default();
+        append(&d.doc, &droot, &mirror, &mut dedits);
+        s.put(&d.part, dedits.apply(&d.doc));
+
+        // Its entry in the sheet's `<controls>`.
+        let print = if k.key == "button" {
+            " print=\"0\""
+        } else {
+            ""
+        };
+        // (As Excel 2021 puts them: a button, a label and a spin button sized with the cells too.)
+        let size_with = if matches!(k.key, "button" | "label" | "spinner") {
+            " sizeWithCells=\"1\""
+        } else {
+            ""
+        };
+        let macro_ = c
+            .macro_name
+            .as_ref()
+            .map(|m| format!(" macro=\"[0]!{}\"", scan::escape(m)))
+            .unwrap_or_default();
+        put_entry(&mut s, &rid, |e| {
+            let (p, r) = (&e.p, &e.r);
+            let entry = format!(
+                "<mc:AlternateContent xmlns:mc=\"{MC_NS}\"{}><mc:Choice Requires=\"x14\"><{p}control shapeId=\"{id}\" {r} name=\"{}\"><{p}controlPr defaultSize=\"0\"{print} autoFill=\"0\" autoLine=\"0\" autoPict=\"0\"{macro_}><{p}anchor moveWithCells=\"1\"{size_with}{}>{}{}</{p}anchor></{p}controlPr></{p}control></mc:Choice><mc:Fallback><{p}control shapeId=\"{id}\" {r} name=\"{}\"/></mc:Fallback></mc:AlternateContent>",
+                e.x14_decl,
+                scan::escape(&name),
+                e.xdr_decl,
+                control_marker(&format!("{p}from"), &e.xdr, &sizes, b.0, b.1),
+                control_marker(&format!("{p}to"), &e.xdr, &sizes, b.2, b.3),
+                scan::escape(&name),
+            );
+            (entry, None)
+        })?;
+    }
+    let doc = s.doc.clone();
+    s.finish(Some(doc))
+}
+
+/// A new control's place in the sheet's VML drawing: the drawing and its text, its shape number
+/// and the first of its block, its `z-index`, where its shape goes.
+struct NewShape {
+    vml: String,
+    vml_doc: String,
+    id: u32,
+    low: u32,
+    z: usize,
+    at: usize,
+}
+
+/// Where a new control goes in the sheet's VML drawing (made, with a block of shape numbers of
+/// its own and the sheet's `<legacyDrawing>`, when there is none): its number after the others
+/// in the drawing's last block (the sheet's controls and the objects of its drawing do not have
+/// it either), after the drawing's shapes.
+fn new_shape(s: &mut Sheet) -> Result<NewShape> {
     let sdoc = s.doc.clone();
     let root = tree(&sdoc, &s.part)?;
-    let full = sheet_controls(&root).is_some();
-    let (vml, vml_doc) = match vml_part(&mut s, &root, &sdoc)? {
+    let (vml, vml_doc) = match vml_part(s, &root, &sdoc)? {
         Some(part) => {
             let doc = s
                 .text(&part)?
@@ -1503,8 +1607,6 @@ pub(super) fn add(bytes: &[u8], sheet: &str, c: &FormControl) -> Result<Vec<u8>>
     let mut shapes = Vec::new();
     vml_shapes(&vroot, &mut shapes);
 
-    // Its number: after the others in the drawing's last block (the sheet's controls and the
-    // objects of its drawing do not have it either).
     let block = idmap(&vml_doc).into_iter().max().unwrap_or(1);
     let (low, high) = (block * 1024, block * 1024 + 1023);
     let mut used: Vec<u32> = shapes.iter().filter_map(|x| spid_of(&vml_doc, x)).collect();
@@ -1514,7 +1616,7 @@ pub(super) fn add(bytes: &[u8], sheet: &str, c: &FormControl) -> Result<Vec<u8>>
             used.extend(list.iter().filter_map(|e| shape_id(&s.doc, e.el)));
         }
     }
-    if let Some(d) = drawing_of(&mut s, false)? {
+    if let Some(d) = drawing_of(s, false)? {
         used.extend(
             scan::tags(&d.doc, 0)
                 .filter(|t| !t.is_close() && t.local() == "cNvPr")
@@ -1533,125 +1635,363 @@ pub(super) fn add(bytes: &[u8], sheet: &str, c: &FormControl) -> Result<Vec<u8>>
     if id > high {
         return Err("このシートの VML の描画には、これ以上コントロールを追加できません".into());
     }
-    let name = format!("{} {}", k.name, id - low);
-    let text = c.text.clone().unwrap_or_else(|| name.clone());
+    let (z, at) = (shapes.len() + 1, vroot.inner.end);
+    Ok(NewShape {
+        vml,
+        vml_doc,
+        id,
+        low,
+        z,
+        at,
+    })
+}
 
-    // The VML shape, after the others (the shape type of controls added where it is missing).
-    let z = shapes.len() + 1;
-    let style = vml_style(
-        &format!("position:absolute;z-index:{z};mso-wrap-style:tight"),
-        b,
-    );
-    let shape = vml_shape(k, id, &style, &vml_anchor(&sizes, b), c, &text);
-    let mut edits = Edits::default();
-    let shapetype = if vml_doc.contains("\"_x0000_t201\"") {
+/// The VML drawing with a new control's shape (and the shape type of controls, where it is
+/// missing).
+fn put_shape(s: &mut Sheet, n: &NewShape, shape: &str) {
+    let shapetype = if n.vml_doc.contains("\"_x0000_t201\"") {
         ""
     } else {
         CONTROL_SHAPETYPE
     };
-    edits.insert(vroot.inner.end, format!("{shapetype}{shape}"));
-    s.put(&vml, edits.apply(&vml_doc));
+    let mut edits = Edits::default();
+    edits.insert(n.at, format!("{shapetype}{shape}"));
+    s.put(&n.vml, edits.apply(&n.vml_doc));
+}
 
-    if full {
-        // Its properties.
-        let part = s.free("xl/ctrlProps/ctrlProp", ".xml");
-        s.put(&part, props_xml(k, c));
-        s.content_type(Some(&part), None, CTRL_PROP_TYPE)?;
-        let rid = s.add_rel("ctrlProp", &relative(&s.part.clone(), &part), false)?;
+/// What a new control's entry in the sheet's `<controls>` is written with: the prefix of the
+/// elements of `<controls>`, the relationship's attribute, the prefix of the anchor's markers
+/// and its declaration (where the sheet has none), the declaration of `x14` (for
+/// `Requires="x14"`, where the sheet has none).
+struct EntryNames {
+    p: String,
+    r: String,
+    xdr: String,
+    xdr_decl: String,
+    x14_decl: String,
+}
 
-        // Its mirror in the drawing (made when the sheet has none).
-        let d = drawing_of(&mut s, true)?.ok_or("描画のパートを作れません")?;
-        if let Some(doc) = d.sheet_doc {
-            s.doc = doc;
-        }
-        let droot = scan::tree(&d.doc, &[]).ok_or("描画のパートを読み取れません")?;
-        let x = ns_prefix(&d.doc, &droot, XDR_NS)
-            .unwrap_or_else(|| scan::prefix(droot.name).to_string());
-        let a_decl = if ns_prefix(&d.doc, &droot, A_NS).as_deref() == Some("a:") {
-            String::new()
-        } else {
-            format!(" xmlns:a=\"{A_NS}\"")
-        };
-        let marker =
-            |tag: &str, px: f64, py: f64| super::drawing::marker_xml(&x, tag, &sizes, px, py);
-        let mirror = mirror_xml(
-            &x,
-            &a_decl,
-            id,
-            &name,
-            k,
-            &text,
-            &marker("from", b.0, b.1),
-            &marker("to", b.2, b.3),
-            b,
-        );
-        let mut dedits = Edits::default();
-        if droot.open.end == droot.end {
-            let head = d.doc[droot.open.clone()].trim_end_matches("/>");
-            dedits.replace(
-                droot.open.clone(),
-                format!("{head}>{mirror}</{}>", droot.name),
-            );
-        } else {
-            dedits.insert(droot.inner.end, mirror);
-        }
-        s.put(&d.part, dedits.apply(&d.doc));
-
-        // Its entry in the sheet's `<controls>`.
-        let sdoc = s.doc.clone();
-        let root = tree(&sdoc, &s.part)?;
-        let (controls, _, _) =
-            sheet_controls(&root).ok_or("シートのコントロールを読み取れません")?;
-        let p = scan::prefix(controls.name);
-        let xdr = match ns_prefix(&sdoc, &root, XDR_NS) {
-            Some(x) => (x, String::new()),
-            None => ("xdr:".to_string(), format!(" xmlns:xdr=\"{XDR_NS}\"")),
-        };
-        let x14 = if ns_prefix(&sdoc, &root, X14_NS).as_deref() == Some("x14:") {
-            String::new()
-        } else {
-            format!(" xmlns:x14=\"{X14_NS}\"")
-        };
-        let r = rid_attr(&sdoc, &root, &rid);
-        let print = if k.key == "button" {
-            " print=\"0\""
-        } else {
-            ""
-        };
-        // (As Excel 2021 puts them: a button, a label and a spin button sized with the cells too.)
-        let size_with = if matches!(k.key, "button" | "label" | "spinner") {
-            " sizeWithCells=\"1\""
-        } else {
-            ""
-        };
-        let macro_ = c
-            .macro_name
-            .as_ref()
-            .map(|m| format!(" macro=\"[0]!{}\"", scan::escape(m)))
-            .unwrap_or_default();
-        let (fx, fy) = (b.0, b.1);
-        let entry = format!(
-            "<mc:AlternateContent xmlns:mc=\"{MC_NS}\"{x14}><mc:Choice Requires=\"x14\"><{p}control shapeId=\"{id}\" {r} name=\"{}\"><{p}controlPr defaultSize=\"0\"{print} autoFill=\"0\" autoLine=\"0\" autoPict=\"0\"{macro_}><{p}anchor moveWithCells=\"1\"{size_with}{}>{}{}</{p}anchor></{p}controlPr></{p}control></mc:Choice><mc:Fallback><{p}control shapeId=\"{id}\" {r} name=\"{}\"/></mc:Fallback></mc:AlternateContent>",
-            scan::escape(&name),
-            xdr.1,
-            control_marker(&format!("{p}from"), &xdr.0, &sizes, fx, fy),
-            control_marker(&format!("{p}to"), &xdr.0, &sizes, b.2, b.3),
-            scan::escape(&name),
-        );
-        let mut sedits = Edits::default();
-        if controls.open.end == controls.end {
-            let head = sdoc[controls.open.clone()].trim_end_matches("/>");
-            sedits.replace(
-                controls.open.clone(),
-                format!("{head}>{entry}</{}>", controls.name),
-            );
-        } else {
-            sedits.insert(controls.inner.end, entry);
-        }
-        s.doc = sedits.apply(&sdoc);
+/// An element with a new last child (an empty element opened).
+fn append(doc: &str, el: &El, child: &str, edits: &mut Edits) {
+    if el.open.end == el.end {
+        let head = doc[el.open.clone()].trim_end_matches("/>");
+        edits.replace(el.open.clone(), format!("{head}>{child}</{}>", el.name));
+    } else {
+        edits.insert(el.inner.end, child.to_string());
     }
+}
+
+/// The sheet with a new control's entry in its `<controls>` (made where the sheet has none, in
+/// the place the schema has it). `entry` writes the entry, and the plain `<control>` for the
+/// fallback of an `mc:AlternateContent` that `<controls>` is in (as Excel 2010 and later save a
+/// sheet's form controls), when it has one.
+fn put_entry(
+    s: &mut Sheet,
+    rid: &str,
+    entry: impl FnOnce(&EntryNames) -> (String, Option<String>),
+) -> Result<()> {
+    let sdoc = s.doc.clone();
+    let root = tree(&sdoc, &s.part)?;
+    let found = sheet_controls(&root);
+    let p = match &found {
+        Some((controls, _, _)) => scan::prefix(controls.name),
+        None => scan::prefix(root.name),
+    }
+    .to_string();
+    let (xdr, xdr_decl) = match ns_prefix(&sdoc, &root, XDR_NS) {
+        Some(x) => (x, String::new()),
+        None => ("xdr:".to_string(), format!(" xmlns:xdr=\"{XDR_NS}\"")),
+    };
+    let x14_decl = if ns_prefix(&sdoc, &root, X14_NS).as_deref() == Some("x14:") {
+        String::new()
+    } else {
+        format!(" xmlns:x14=\"{X14_NS}\"")
+    };
+    let names = EntryNames {
+        r: rid_attr(&sdoc, &root, rid),
+        p,
+        xdr,
+        xdr_decl,
+        x14_decl,
+    };
+    let (choice, fallback) = entry(&names);
+    let mut edits = Edits::default();
+    match found {
+        Some((controls, outer, _)) => {
+            append(&sdoc, controls, &choice, &mut edits);
+            // `<controls>` in an `mc:AlternateContent`: its fallback's `<controls>` too.
+            let fallback_controls = root
+                .children
+                .iter()
+                .filter(|c| c.local() == "AlternateContent" && c.span() == outer)
+                .flat_map(|ac| ac.children.iter().filter(|c| c.local() == "Fallback"))
+                .find_map(|f| f.children.iter().find(|c| c.local() == "controls"));
+            if let (Some(el), Some(plain)) = (fallback_controls, &fallback) {
+                append(&sdoc, el, plain, &mut edits);
+            }
+        }
+        None => {
+            let p = &names.p;
+            edits.insert(
+                place(&root, "controls"),
+                format!("<{p}controls>{choice}</{p}controls>"),
+            );
+        }
+    }
+    s.doc = edits.apply(&sdoc);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------- ActiveX controls
+
+/// The relationship of an ActiveX control's part to its data.
+const ACTIVEX_BINARY: &str =
+    "http://schemas.microsoft.com/office/2006/relationships/activeXControlBinary";
+const ACTIVEX_TYPE: &str = "application/vnd.ms-office.activeX+xml";
+const ACTIVEX_BIN_TYPE: &str = "application/vnd.ms-office.activeX";
+
+/// A kind of ActiveX control (開発 > 挿入 > ActiveX コントロール, of Microsoft Forms 2.0): its
+/// key in the edit, its Microsoft Forms type (the name Excel gives a new one, followed by its
+/// number), its size when it is put with a click (px), and whether it shows a caption (else
+/// the text of an edit is its value).
+pub(super) struct ActiveXKind {
+    pub key: &'static str,
+    forms: &'static str,
+    size: (f64, f64),
+    caption: bool,
+}
+
+pub(super) const ACTIVEX_KINDS: [ActiveXKind; 10] = [
+    ActiveXKind {
+        key: "commandButton",
+        forms: "CommandButton",
+        size: (96.0, 32.0),
+        caption: true,
+    },
+    ActiveXKind {
+        key: "comboBox",
+        forms: "ComboBox",
+        size: (96.0, 24.0),
+        caption: false,
+    },
+    ActiveXKind {
+        key: "checkBox",
+        forms: "CheckBox",
+        size: (96.0, 24.0),
+        caption: true,
+    },
+    ActiveXKind {
+        key: "listBox",
+        forms: "ListBox",
+        size: (96.0, 72.0),
+        caption: false,
+    },
+    ActiveXKind {
+        key: "textBox",
+        forms: "TextBox",
+        size: (96.0, 24.0),
+        caption: false,
+    },
+    ActiveXKind {
+        key: "scrollBar",
+        forms: "ScrollBar",
+        size: (17.0, 96.0),
+        caption: false,
+    },
+    ActiveXKind {
+        key: "spinButton",
+        forms: "SpinButton",
+        size: (17.0, 32.0),
+        caption: false,
+    },
+    ActiveXKind {
+        key: "optionButton",
+        forms: "OptionButton",
+        size: (96.0, 24.0),
+        caption: true,
+    },
+    ActiveXKind {
+        key: "label",
+        forms: "Label",
+        size: (96.0, 24.0),
+        caption: true,
+    },
+    ActiveXKind {
+        key: "toggleButton",
+        forms: "ToggleButton",
+        size: (96.0, 32.0),
+        caption: true,
+    },
+];
+
+/// Whether an ActiveX control's kind has a text an edit can give it: its caption, or the value
+/// of a text box or a combo box.
+pub(super) fn activex_text(key: &str) -> bool {
+    ACTIVEX_KINDS
+        .iter()
+        .any(|k| k.key == key && (k.caption || matches!(k.forms, "TextBox" | "ComboBox")))
+}
+
+/// The names the objects of a sheet have: its controls', its VML shapes' (an ActiveX control's
+/// shape is named after it) and its drawing's.
+fn names_on(s: &mut Sheet, vml_doc: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let root = tree(&s.doc, &s.part)?;
+    if let Some((_, _, list)) = sheet_controls(&root) {
+        out.extend(list.iter().filter_map(|e| e.el.attr(&s.doc, "name")));
+    }
+    if let Some(vroot) = scan::tree(vml_doc, &[]) {
+        let mut shapes = Vec::new();
+        vml_shapes(&vroot, &mut shapes);
+        out.extend(shapes.iter().filter_map(|x| x.attr(vml_doc, "id")));
+    }
+    if let Some(d) = drawing_of(s, false)? {
+        out.extend(
+            scan::tags(&d.doc, 0)
+                .filter(|t| !t.is_close() && t.local() == "cNvPr")
+                .filter_map(|t| scan::attr(&d.doc, t.start..t.end, "name")),
+        );
+    }
+    Ok(out)
+}
+
+/// The file with a new ActiveX control on the sheet `sheet`, written as Excel writes one it
+/// puts there: its part (`xl/activeX/activeX<n>.xml`, `persistStreamInit`) and its data
+/// (`activeX<n>.bin`: its CLSID and the stream of a new control of its kind, MS-OFORMS), its
+/// entry in the sheet's `<controls>` (made when the sheet has none) with the relationship to
+/// its part, and its VML shape (`ObjectType="Pict"`, named after it; the VML drawing made when
+/// the sheet has none). Its name is `name`, or as Excel names it: its type and the first number
+/// no object of the sheet has (`CommandButton1`). Its caption is `text` or its name (a text
+/// box's or a combo box's value is `text`).
+pub(super) fn add_activex(
+    bytes: &[u8],
+    sheet: &str,
+    kind: &str,
+    place: &Place,
+    name: Option<&str>,
+    text: Option<&str>,
+) -> Result<Vec<u8>> {
+    let k = ACTIVEX_KINDS
+        .iter()
+        .find(|k| k.key == kind)
+        .ok_or_else(|| format!("ActiveX コントロール `{kind}` はありません"))?;
+    let sizes = sizes_of(bytes, sheet)?;
+    let b = box_of(&sizes, place, k.size);
+    let b = (b.0, b.1, b.2.max(b.0 + 1.0), b.3.max(b.1 + 1.0));
+    let mut s = Sheet::open(bytes, sheet)?;
+    let n = new_shape(&mut s)?;
+
+    // Its name: one no other object of the sheet has (VBA names them so).
+    let taken: Vec<String> = names_on(&mut s, &n.vml_doc)?
+        .into_iter()
+        .map(|t| t.to_lowercase())
+        .collect();
+    let name = match name {
+        Some(name) => {
+            if taken.contains(&name.to_lowercase()) {
+                return Err(format!(
+                    "シート `{sheet}` には、もう `{name}` という名前のオブジェクトがあります"
+                ));
+            }
+            name.to_string()
+        }
+        None => (1..)
+            .map(|i| format!("{}{i}", k.forms))
+            .find(|n| !taken.contains(&n.to_lowercase()))
+            .unwrap_or_default(),
+    };
+
+    // Its part and its data.
+    let number = (1..)
+        .find(|i| {
+            !s.has(&format!("xl/activeX/activeX{i}.xml"))
+                && !s.has(&format!("xl/activeX/activeX{i}.bin"))
+        })
+        .unwrap_or(1);
+    let part = format!("xl/activeX/activeX{number}.xml");
+    let bin = format!("xl/activeX/activeX{number}.bin");
+    let clsid = crate::activex::clsid_of(k.forms).ok_or("ActiveX コントロールの種類が不明です")?;
+    s.put(
+        &part,
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>\n<ax:ocx ax:classid=\"{{{clsid}}}\" ax:persistence=\"persistStreamInit\" r:id=\"rId1\" xmlns:ax=\"http://schemas.microsoft.com/office/2006/activeX\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"/>"
+        ),
+    );
+    s.put(
+        &super::insert::rels_part_of(&part),
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{ACTIVEX_BINARY}\" Target=\"activeX{number}.bin\"/></Relationships>"
+        ),
+    );
+    let himetric = |px: f64| (px * 2540.0 / 96.0).round() as i32;
+    let (caption, value) = match (k.caption, k.forms) {
+        (true, "CheckBox" | "OptionButton" | "ToggleButton") => {
+            (Some(text.unwrap_or(&name)), Some("0"))
+        }
+        (true, _) => (Some(text.unwrap_or(&name)), None),
+        (false, _) => (None, text),
+    };
+    let data = crate::activex::fresh(
+        k.forms,
+        caption,
+        value,
+        (himetric(b.2 - b.0), himetric(b.3 - b.1)),
+    )
+    .ok_or("ActiveX コントロールのデータを作れません")?;
+    s.put_bytes(&bin, data);
+    s.content_type(Some(&part), None, ACTIVEX_TYPE)?;
+    bin_content_type(&mut s, &bin)?;
+    let rid = s.add_rel("control", &relative(&s.part.clone(), &part), false)?;
+
+    // Its VML shape: named after it, its picture made by Excel (`x:AutoPict`).
+    let id = n.id;
+    let style = vml_style(&format!("position:absolute;z-index:{}", n.z), b);
+    let shape = format!(
+        "<v:shape id=\"{}\" o:spid=\"_x0000_s{id}\" type=\"#_x0000_t201\" style=\"{style}\" stroked=\"f\" strokecolor=\"windowText [64]\" o:insetmode=\"auto\"><o:lock v:ext=\"edit\" rotation=\"t\" text=\"t\"/><x:ClientData ObjectType=\"Pict\"><x:SizeWithCells/><x:Anchor>{}</x:Anchor><x:CF>Pict</x:CF><x:AutoPict/></x:ClientData></v:shape>",
+        scan::escape(&name),
+        vml_anchor(&sizes, b)
+    );
+    put_shape(&mut s, &n, &shape);
+
+    // Its entry in `<controls>`, with the fallback Excel 2007 reads.
+    put_entry(&mut s, &rid, |e| {
+        let (p, r) = (&e.p, &e.r);
+        let plain = format!(
+            "<{p}control shapeId=\"{id}\" {r} name=\"{}\"/>",
+            scan::escape(&name)
+        );
+        let entry = format!(
+            "<mc:AlternateContent xmlns:mc=\"{MC_NS}\"{}><mc:Choice Requires=\"x14\"><{p}control shapeId=\"{id}\" {r} name=\"{}\"><{p}controlPr defaultSize=\"0\" autoLine=\"0\" autoPict=\"0\"><{p}anchor moveWithCells=\"1\"{}>{}{}</{p}anchor></{p}controlPr></{p}control></mc:Choice><mc:Fallback>{plain}</mc:Fallback></mc:AlternateContent>",
+            e.x14_decl,
+            scan::escape(&name),
+            e.xdr_decl,
+            control_marker(&format!("{p}from"), &e.xdr, &sizes, b.0, b.1),
+            control_marker(&format!("{p}to"), &e.xdr, &sizes, b.2, b.3),
+        );
+        (entry, Some(plain))
+    })?;
     let doc = s.doc.clone();
     s.finish(Some(doc))
+}
+
+/// The content type of an ActiveX control's data: the files' `bin` (`Default`) when they have
+/// none, else (an `.xlsm` whose `bin` is its VBA project's) its own (`Override`).
+fn bin_content_type(s: &mut Sheet, bin: &str) -> Result<()> {
+    let doc = s
+        .text("[Content_Types].xml")?
+        .ok_or("[Content_Types].xml がありません")?;
+    let default = scan::tags(&doc, 0)
+        .filter(|t| !t.is_close() && t.local() == "Default")
+        .find(|t| {
+            scan::attr(&doc, t.start..t.end, "Extension")
+                .is_some_and(|e| e.eq_ignore_ascii_case("bin"))
+        })
+        .map(|t| scan::attr(&doc, t.start..t.end, "ContentType").unwrap_or_default());
+    match default {
+        None => s.content_type(None, Some("bin"), ACTIVEX_BIN_TYPE),
+        Some(t) if t == ACTIVEX_BIN_TYPE => Ok(()),
+        Some(_) => s.content_type(Some(bin), None, ACTIVEX_BIN_TYPE),
+    }
 }
 
 /// Whether an ActiveX control keeps its data as its CLSID and a stream: `persistStream`, or
