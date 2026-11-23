@@ -298,20 +298,30 @@ impl Book {
         } else {
             r.iter().collect()
         };
+        // A format without one of its own is the standard style's (its font and alignment,
+        // 游ゴシック and centred in a Japanese workbook): what is changed is changed from that,
+        // as in Excel.
+        let normal = self.file.normal_style();
+        let from_normal = |style: &mut Style| {
+            if *style == Style::default() {
+                *style = normal.clone();
+            }
+            f(style);
+        };
         let Ok(ws) = self.file.sheet_mut(si) else {
             return Ok(());
         };
         if whole_cols {
             for col in r.start.col..=r.end.col {
-                f(ws.column_dimension_by_number_mut(col + 1).style_mut());
+                from_normal(ws.column_dimension_by_number_mut(col + 1).style_mut());
             }
         } else if whole_rows {
             for row in r.start.row..=r.end.row {
-                f(ws.row_dimension_mut(row + 1).style_mut());
+                from_normal(ws.row_dimension_mut(row + 1).style_mut());
             }
         }
         for at in cells {
-            f(ws.style_mut(coord(at)));
+            from_normal(ws.style_mut(coord(at)));
         }
         Ok(())
     }
@@ -530,6 +540,13 @@ impl Book {
                     .set_val(value);
             }
             "font.color" => colour(style.font_mut().color_mut(), v)?,
+            "font.themecolor" => {
+                style.font_mut().color_mut().set_theme_index(num(v)? as u32);
+            }
+            // The cell style the format is made from (the styles' `cellStyleXfs` number).
+            "style.xfid" => {
+                style.set_format_id(num(v)? as u32);
+            }
             "font.colorindex" => {
                 let rgb = indexed(v)?.unwrap_or(0);
                 style

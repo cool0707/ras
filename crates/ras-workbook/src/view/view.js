@@ -2160,13 +2160,14 @@
         const form = openDialog("テーブルの作成", "tabledlg");
         const input = field(form, "テーブルに変換するデータ範囲を指定してください:");
         input.value = sel.kind === "cells" ? absText(s) : `=${rangeText(sel).replace(/([A-Z]+|\d+)/g, "$$$1")}`;
-        // Headings guessed as Excel guesses them: texts over a row that is not all texts.
+        // Headings guessed as Excel 2021 guesses them: a column with a text (typed or a formula's)
+        // over something that is not one (a number, a date, ...).
         let guess = false;
         if (sel.kind === "cells" && s.r2 > s.r1) {
-            guess = true;
-            for (let c = s.c1; c <= s.c2; c++) {
+            for (let c = s.c1; c <= s.c2 && !guess; c++) {
                 const x = cellOf(s.r1, c);
-                if (!x || x.k !== "string" || x.f) guess = false;
+                const y = cellOf(s.r1 + 1, c);
+                if (x && x.k === "string" && y && y.k !== "string" && (y.t ?? "") !== "") guess = true;
             }
         }
         const head = check(form, "先頭行をテーブルの見出しとして使用する", guess);
@@ -2303,8 +2304,8 @@
                 const text = shown.value || (cell.t ? "" : target);
                 if (text && text !== (cell.t || "")) ops.push({ op: "set", sheet: sheet.name, range: address(sel.ar, sel.ac), text: asText(text) });
             }
-            // A new link is shown as Excel's Hyperlink style shows it: blue, underlined.
-            if (!now) ops.push({ op: "format", sheet: sheet.name, range, set: { color: "#0563C1", underline: true } });
+            // A new link gets Excel's cell style ハイパーリンク (blue, underlined).
+            if (!now) ops.push({ op: "format", sheet: sheet.name, range, set: { style: "Hyperlink" } });
             ops.push(op);
             postEdit(ops);
         });
@@ -2312,11 +2313,11 @@
         ref.addEventListener("input", () => ref.setCustomValidity(""));
         (now && place.checked ? ref : web.checked ? addr : shown).focus();
     }
-    // "ハイパーリンクの削除": the links of the selection go, and their blue underline.
+    // "ハイパーリンクの削除": the links of the selection go, and the cells get the style 標準.
     function removeLinks() {
         if (!editable || busy || !sel || !view) return;
         const sheet = view.sheet.name;
-        postEdit(allAreas().flatMap((a) => [{ op: "link", sheet, range: rangeText(a), off: true }, { op: "format", sheet, range: areaText(a), set: { color: null, underline: false } }]));
+        postEdit(allAreas().flatMap((a) => [{ op: "link", sheet, range: rangeText(a), off: true }, { op: "format", sheet, range: areaText(a), set: { style: "Normal" } }]));
     }
     const linksIn = () => allAreas().some((a) => (view.sheet.links || []).some((l) => l.r >= a.r1 && l.r <= a.r2 && l.c >= a.c1 && l.c <= a.c2));
 
@@ -2407,7 +2408,9 @@
     ];
     const LINES = new Set(["line", "arrow"]);
     // The size of a shape put with a click (px): a line goes right.
-    const clickSize = (kind) => (LINES.has(kind) ? [96, 0] : kind === "textBox" ? [144, 36] : [96, 96]);
+    // The size Excel 2021 gives a shape put with a click (a line goes across a square of 96).
+    const clickSize = (kind) =>
+        ({ textBox: [144, 36], triangle: [111.36, 96], rightArrow: [102.72, 50.88], leftArrow: [102.72, 50.88], upArrow: [50.88, 102.72], downArrow: [50.88, 102.72] })[kind] || [96, 96];
     // The shape being drawn: { kind, start: [x, y], ghost } (with the mouse down).
     let drawingShape = null;
     // An object being moved or sized: { obj, how: "move" | "n" | "ne" | ..., x, y (where the

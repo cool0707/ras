@@ -10,6 +10,7 @@ use gridcraft_core::{CellRef, RangeRef};
 use super::scan::{self, Edits, El};
 use super::{Link, Op, Pack, Result, WORKBOOK, around, sheet_index, sheet_parts};
 use crate::book::Book;
+use crate::book::view::Sizes;
 
 const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/";
@@ -515,6 +516,7 @@ pub(super) fn note(
             }
         }
     }
+    let sizes = super::drawing::sizes_of(bytes, sheet)?;
     let sdoc = s.doc.clone();
     let root = tree(&sdoc, &s.part)?;
     let p = scan::prefix(root.name).to_string();
@@ -570,7 +572,7 @@ pub(super) fn note(
             let doc = s
                 .text(&part)?
                 .ok_or_else(|| format!("{part} がありません"))?;
-            if let Some(doc) = vml_edit(&doc, at, text.is_some()) {
+            if let Some(doc) = vml_edit(&doc, at, text.is_some(), &sizes) {
                 s.put(&part, doc);
             }
         }
@@ -594,7 +596,7 @@ pub(super) fn note(
             let doc = format!(
                 "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\"\n xmlns:o=\"urn:schemas-microsoft-com:office:office\"\n xmlns:x=\"urn:schemas-microsoft-com:office:excel\">\n <o:shapelayout v:ext=\"edit\">\n  <o:idmap v:ext=\"edit\" data=\"{block}\"/>\n </o:shapelayout>{}{}</xml>",
                 NOTE_SHAPETYPE,
-                note_shape(block * 1024 + 1, at)
+                note_shape(block * 1024 + 1, at, &sizes)
             );
             s.put(&part, doc);
             let id = s.add_rel("vmlDrawing", &relative(&s.part.clone(), &part), false)?;
@@ -710,25 +712,26 @@ pub(super) fn idmap(doc: &str) -> Vec<u32> {
 
 const NOTE_SHAPETYPE: &str = "<v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\"\n  path=\"m,l,21600r21600,l21600,xe\">\n  <v:stroke joinstyle=\"miter\"/>\n  <v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/>\n </v:shapetype>";
 
-/// The box of a note, as Excel draws a new one: right of the cell, hidden.
-fn note_shape(id: u32, at: CellRef) -> String {
+/// The box of a note, as Excel's 新しいメモ draws one: 128 × 79 pixels, hidden, 15 pixels into
+/// the next column and into the row above (2 into the first row), its anchor the cells under
+/// it as the sheet's widths and heights have them.
+fn note_shape(id: u32, at: CellRef, sizes: &Sizes) -> String {
     let (r, c) = (at.row, at.col);
-    let top = r.saturating_sub(1);
-    // The cell's column and row from 0; the box from the next column, a row above.
+    let left = sizes.x(c + 1) + 15.0;
+    let top = if r == 0 { 2.0 } else { sizes.y(r - 1) + 15.0 };
+    let (c1, dx1, r1, dy1) = sizes.marker(left, top);
+    let (c2, dx2, r2, dy2) = sizes.marker(left + 128.0, top + 79.0);
+    let (dx1, dy1, dx2, dy2) = (dx1.round(), dy1.round(), dx2.round(), dy2.round());
     format!(
-        "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style='position:absolute;\n  margin-left:{left}pt;margin-top:{mtop}pt;width:108pt;height:59.25pt;z-index:1;\n  visibility:hidden' fillcolor=\"infoBackground [80]\" strokecolor=\"none [81]\" o:insetmode=\"auto\">\n  <v:fill color2=\"infoBackground [80]\"/>\n  <v:shadow color=\"none [81]\" obscured=\"t\"/>\n  <v:path o:connecttype=\"none\"/>\n  <v:textbox style='mso-direction-alt:auto'>\n   <div style='text-align:left'></div>\n  </v:textbox>\n  <x:ClientData ObjectType=\"Note\">\n   <x:MoveWithCells/>\n   <x:SizeWithCells/>\n   <x:Anchor>\n    {c1}, 15, {top}, {toff}, {c2}, 15, {bottom}, 4</x:Anchor>\n   <x:AutoFill>False</x:AutoFill>\n   <x:Row>{r}</x:Row>\n   <x:Column>{c}</x:Column>\n  </x:ClientData>\n </v:shape>",
-        left = f64::from(c + 1) * 54.0 + 11.25,
-        mtop = f64::from(top) * 13.5 + if r == 0 { 1.5 } else { 7.5 },
-        c1 = c + 1,
-        toff = if r == 0 { 2 } else { 10 },
-        c2 = c + 3,
-        bottom = top + 4,
+        "<v:shape id=\"_x0000_s{id}\" type=\"#_x0000_t202\" style='position:absolute;\n  margin-left:{left}pt;margin-top:{mtop}pt;width:96pt;height:59.25pt;z-index:1;\n  visibility:hidden' fillcolor=\"infoBackground [80]\" strokecolor=\"none [81]\" o:insetmode=\"auto\">\n  <v:fill color2=\"infoBackground [80]\"/>\n  <v:shadow color=\"none [81]\" obscured=\"t\"/>\n  <v:path o:connecttype=\"none\"/>\n  <v:textbox style='mso-direction-alt:auto'>\n   <div style='text-align:left'></div>\n  </v:textbox>\n  <x:ClientData ObjectType=\"Note\">\n   <x:MoveWithCells/>\n   <x:SizeWithCells/>\n   <x:Anchor>\n    {c1}, {dx1}, {r1}, {dy1}, {c2}, {dx2}, {r2}, {dy2}</x:Anchor>\n   <x:AutoFill>False</x:AutoFill>\n   <x:Row>{r}</x:Row>\n   <x:Column>{c}</x:Column>\n  </x:ClientData>\n </v:shape>",
+        left = left * 0.75,
+        mtop = top * 0.75,
     )
 }
 
 /// The VML drawing with a box for the note of `at` (`on`), or without the box it has. None:
 /// nothing to change.
-fn vml_edit(doc: &str, at: CellRef, on: bool) -> Option<String> {
+fn vml_edit(doc: &str, at: CellRef, on: bool, sizes: &Sizes) -> Option<String> {
     let root = scan::tree(doc, &[])?;
     let is_note = |el: &El| {
         el.local() == "shape"
@@ -766,7 +769,7 @@ fn vml_edit(doc: &str, at: CellRef, on: bool) -> Option<String> {
             if !typed {
                 add.push_str(NOTE_SHAPETYPE);
             }
-            add.push_str(&note_shape(id, at));
+            add.push_str(&note_shape(id, at, sizes));
             edits.insert(root.inner.end, add);
         }
     }
@@ -775,27 +778,32 @@ fn vml_edit(doc: &str, at: CellRef, on: bool) -> Option<String> {
 
 // ---------------------------------------------------------------------------- tables
 
-/// The headings of a table: what its first row shows, each a text of its own (empty: 列1,
-/// ...; one shown before: a number after it), as Excel names the columns.
+/// The headings of a table: what its first row shows, each a text of its own, as Excel names
+/// the columns. An empty one is 列<n> and one shown before gets <n> after it, from one number
+/// for both (from 1; 2 at least after a heading), the next after each name made, passing over
+/// names the row has (later ones too) or has been given: `[q, , q, ]` is `[q, 列1, q2, 列3]`.
 fn headings(shown: &[String]) -> Vec<String> {
+    let given: Vec<String> = shown
+        .iter()
+        .map(|t| t.replace(['\r', '\n'], " ").chars().take(255).collect())
+        .collect();
+    let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
     let mut out: Vec<String> = Vec::new();
-    let taken =
-        |out: &Vec<String>, n: &str| out.iter().any(|o| o.to_lowercase() == n.to_lowercase());
-    for (i, text) in shown.iter().enumerate() {
-        let text = text.replace(['\r', '\n'], " ");
-        let mut name = if text.trim().is_empty() {
-            format!("列{}", i + 1)
-        } else {
-            text.chars().take(255).collect()
-        };
-        if taken(&out, &name) {
-            let base = name.clone();
-            name = (2..)
-                .map(|n| format!("{base}{n}"))
-                .find(|n| !taken(&out, n))
-                .unwrap_or(base);
+    let mut next = 1;
+    for text in &given {
+        let empty = text.trim().is_empty();
+        if !empty && !out.iter().any(|o| same(o, text)) {
+            out.push(text.clone());
+            continue;
         }
-        out.push(name);
+        let base = if empty { "列" } else { text.as_str() };
+        let mut n = if empty { next } else { next.max(2) };
+        let taken = |name: &str, out: &[String]| given.iter().chain(out).any(|o| same(o, name));
+        while taken(&format!("{base}{n}"), &out) {
+            n += 1;
+        }
+        out.push(format!("{base}{n}"));
+        next = n + 1;
     }
     out
 }
@@ -855,11 +863,16 @@ pub(super) fn table_cells(
     let (c1, c2) = (range.start.col, range.end.col);
     let row = |r: u32| RangeRef::new(CellRef::new(r, c1), CellRef::new(r, c2));
     let shown: Vec<(CellRef, String, bool)> = if header {
-        book.cells(si, row(range.start.row))?
-            .into_iter()
-            .map(|c| {
-                let plain = c.formula.is_none() && matches!(c.value, crate::book::Val::Text(_));
-                (c.at, c.text, plain)
+        // Every column has a heading, empty cells (which `cells` leaves out) too.
+        let mut cells = book.cells(si, row(range.start.row))?.into_iter().peekable();
+        row(range.start.row)
+            .iter()
+            .map(|at| match cells.next_if(|c| c.at == at) {
+                Some(c) => {
+                    let plain = c.formula.is_none() && matches!(c.value, crate::book::Val::Text(_));
+                    (c.at, c.text, plain)
+                }
+                None => (at, String::new(), false),
             })
             .collect()
     } else {
@@ -1088,9 +1101,23 @@ mod tests {
             assert!(!table_name_ok(bad), "{bad}");
         }
         let h = |v: &[&str]| headings(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        assert_eq!(
-            h(&["a", "", "A", "a2", "1"]),
-            ["a", "列2", "A2", "a22", "1"]
-        );
+        // As Excel 2021 names them.
+        for (row, names) in [
+            (&["", "a", ""][..], &["列1", "a", "列2"][..]),
+            (&["a", "a", "", "a"], &["a", "a2", "列3", "a4"]),
+            (&["x", "x", "x"], &["x", "x2", "x3"]),
+            (&["", "", "b", ""], &["列1", "列2", "b", "列3"]),
+            (&["列1", "", ""], &["列1", "列2", "列3"]),
+            (&["a", "A", "a2", "a"], &["a", "A3", "a2", "a4"]),
+            (&["", "列1", ""], &["列2", "列1", "列3"]),
+            (&["q", "", "q", ""], &["q", "列1", "q2", "列3"]),
+            (&["1", "1", ""], &["1", "12", "列3"]),
+            (
+                &["Name", "Qty", "qty", "2026", ""],
+                &["Name", "Qty", "qty2", "2026", "列3"],
+            ),
+        ] {
+            assert_eq!(h(row), names, "{row:?}");
+        }
     }
 }

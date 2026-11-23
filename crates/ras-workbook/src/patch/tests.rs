@@ -1096,6 +1096,24 @@ fn tables_made_of_the_data() {
         part(&out, "xl/tables/table2.xml")
             .contains(r#"<tableColumn id="1" name="6720"/><tableColumn id="2" name="67202"/>"#)
     );
+    // Empty headings, in the middle and last, are 列1, 列2, ... as Excel names them.
+    let gaps = edit(
+        r#"[{"op":"clear","sheet":"Summary","range":"A1:D3"},{"op":"set","sheet":"Summary","range":"A1","text":"a"},{"op":"set","sheet":"Summary","range":"C1","text":"c"},{"op":"set","sheet":"Summary","range":"A2:D2","text":"1"}]"#,
+    );
+    let out = apply(
+        &gaps,
+        &ops(r#"{"op":"table","sheet":"Summary","range":"A1:D2"}"#),
+    )
+    .unwrap();
+    assert_eq!(
+        cells(&out, "Summary", "A1:D1", Read::Formula),
+        [["a", "列1", "c", "列2"]]
+    );
+    assert!(
+        part(&out, "xl/tables/table2.xml").contains(r#"<tableColumns count="4"><tableColumn id="1" name="a"/><tableColumn id="2" name="列1"/><tableColumn id="3" name="c"/><tableColumn id="4" name="列2"/></tableColumns>"#),
+        "{}",
+        part(&out, "xl/tables/table2.xml")
+    );
     // No headings: a row of them is inserted above the data.
     let out = edit(r#"{"op":"table","sheet":"Summary","range":"A1:A3","header":false}"#);
     assert_eq!(
@@ -1605,7 +1623,12 @@ fn form_controls_in_vml_put_moved_and_deleted() {
     let out = edit(
         r#"{"op":"control","control":"checkBox","at":"H18","width":100,"height":22,"link":"$I$18","checked":true,"text":"済み"}"#,
     );
-    assert_eq!(changed(BOOK, &out), ["xl/drawings/vmlDrawing1.vml"]);
+    // (The linked cell gets the state, as Excel writes it.)
+    assert_eq!(
+        changed(BOOK, &out),
+        ["xl/drawings/vmlDrawing1.vml", "xl/worksheets/sheet1.xml"]
+    );
+    assert_eq!(cell(&out, "Data", "I18", Read::Value), "true");
     let vml = part(&out, "xl/drawings/vmlDrawing1.vml");
     assert!(vml.ends_with(r#"<x:ClientData ObjectType="Checkbox"><x:Anchor>7, 0, 17, 0, 8, 28, 18, 2</x:Anchor><x:AutoFill>False</x:AutoFill><x:AutoLine>False</x:AutoLine><x:TextVAlign>Center</x:TextVAlign><x:FmlaLink>$I$18</x:FmlaLink><x:Checked>1</x:Checked><x:NoThreeD/></x:ClientData></v:shape></xml>"#), "{vml}");
     assert!(vml.contains(r##"<v:shape id="_x0000_s1027" type="#_x0000_t201" style="position:absolute;z-index:3;mso-wrap-style:tight;margin-left:435pt;margin-top:270pt;width:75pt;height:16.5pt""##), "{vml}");
@@ -1842,7 +1865,13 @@ fn form_controls_given_texts_links_and_values() {
             .contains("ボタンにはリンクするセルがありません")
     );
     assert!(no(&spin, r#"{"op":"object","shape":1027,"page":3}"#).contains("ページ"));
-    assert!(no(&spin, r#"{"op":"object","shape":1027,"value":200}"#).contains("最大値"));
+    assert!(
+        no(
+            &spin,
+            r#"{"op":"object","shape":1027,"value":200,"max":100}"#
+        )
+        .contains("最大値")
+    );
     assert!(no(&spin, r#"{"op":"object","shape":1027,"min":60,"max":50}"#).contains("最小値"));
     assert!(no(&spin, r#"{"op":"object","shape":1027,"text":"x"}"#).contains("文字"));
     assert!(
@@ -2136,5 +2165,84 @@ fn activex_controls_changed_moved_and_deleted() {
     assert!(
         part(&out, "xl/activeX/activeX1.xml")
             .contains(r#"<ax:ocxPr ax:name="Caption" ax:value="後"/>"#)
+    );
+}
+
+/// The `xf` (in `cellXfs`) of the cell `at` of the first sheet.
+fn xf_of(bytes: &[u8], at: &str) -> String {
+    let sheet = part(bytes, SHEET1);
+    let tag = &sheet[sheet.find(&format!("<c r=\"{at}\"")).unwrap()..];
+    let tag = &tag[..tag.find('>').unwrap()];
+    let s: usize = tag
+        .split(" s=\"")
+        .nth(1)
+        .map_or(0, |s| s[..s.find('"').unwrap()].parse().unwrap());
+    let styles = part(bytes, "xl/styles.xml");
+    let xfs = &styles[styles.find("<cellXfs").unwrap()..styles.find("</cellXfs>").unwrap()];
+    xfs.split("<xf ").nth(s + 1).unwrap().to_string()
+}
+
+#[test]
+fn links_get_the_cell_style_hyperlink() {
+    // As the grid gives a new link: Excel's cell style ハイパーリンク (built-in 8).
+    let link = r#"[{"op":"format","range":"C2","set":{"style":"Hyperlink"}},{"op":"link","range":"C2","url":"https://example.org/"}]"#;
+    let out = edit(link);
+    let styles = part(&out, "xl/styles.xml");
+    let named = &styles[styles.find("<cellStyles").unwrap()..];
+    let id = named
+        .split("<cellStyle ")
+        .find(|s| s.contains("builtinId=\"8\""))
+        .and_then(|s| s.split("xfId=\"").nth(1))
+        .map(|s| s[..s.find('"').unwrap()].to_string())
+        .expect("ハイパーリンク");
+    // (The workbook has it already, as English Excel names it: it is taken, not added.)
+    assert_eq!(styles.matches("builtinId=\"8\"").count(), 1);
+    assert!(named.contains("name=\"Hyperlink\""), "{named}");
+    let xf = xf_of(&out, "C2");
+    assert!(xf.contains(&format!("xfId=\"{id}\"")), "{xf}");
+    // Its font: the standard one underlined, in the theme's colour of links.
+    let font_id: usize = xf
+        .split("fontId=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let fonts = &styles[styles.find("<fonts").unwrap()..styles.find("</fonts>").unwrap()];
+    let font = fonts.split("<font>").nth(font_id + 1).unwrap();
+    assert!(
+        font.starts_with("<u/>") && font.contains("<color theme=\"10\"/>"),
+        "{font}"
+    );
+    // Another link takes the style there.
+    let again = apply(
+        &out,
+        &ops(r#"[{"op":"format","range":"D2","set":{"style":"Hyperlink"}},{"op":"link","range":"D2","url":"https://example.org/"}]"#),
+    )
+    .unwrap();
+    assert_eq!(
+        part(&again, "xl/styles.xml")
+            .matches("builtinId=\"8\"")
+            .count(),
+        1
+    );
+    assert!(xf_of(&again, "D2").contains(&format!("xfId=\"{id}\"")));
+    // Taken away: the standard style again.
+    let off = apply(
+        &again,
+        &ops(r#"[{"op":"link","range":"C2","off":true},{"op":"format","range":"C2","set":{"style":"Normal"}}]"#),
+    )
+    .unwrap();
+    let xf = xf_of(&off, "C2");
+    assert!(xf.contains("xfId=\"0\""), "{xf}");
+    assert!(
+        apply(
+            &out,
+            &ops(r#"{"op":"format","range":"C2","set":{"style":"Good"}}"#)
+        )
+        .unwrap_err()
+        .contains("Hyperlink")
     );
 }
