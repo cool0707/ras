@@ -28,7 +28,7 @@ const FONT: &str = "ＭＳ Ｐゴシック";
 
 /// A kind of form control: its key in the edit, its `ObjectType` in VML and in its properties,
 /// the name Excel gives a new one (followed by its number), its size when it is put with a
-/// click (px), and whether it shows a text.
+/// click (px, as Excel 2021 puts it on a sheet of 游ゴシック 11), and whether it shows a text.
 pub(super) struct Kind {
     pub key: &'static str,
     vml: &'static str,
@@ -44,7 +44,7 @@ pub(super) const KINDS: [Kind; 9] = [
         vml: "Button",
         prop: "Button",
         name: "ボタン",
-        size: (96.0, 32.0),
+        size: (62.0, 30.0),
         text: true,
     },
     Kind {
@@ -52,7 +52,7 @@ pub(super) const KINDS: [Kind; 9] = [
         vml: "Checkbox",
         prop: "CheckBox",
         name: "チェック",
-        size: (112.0, 22.0),
+        size: (65.0, 25.0),
         text: true,
     },
     Kind {
@@ -60,7 +60,7 @@ pub(super) const KINDS: [Kind; 9] = [
         vml: "Radio",
         prop: "Radio",
         name: "オプション",
-        size: (112.0, 22.0),
+        size: (77.0, 25.0),
         text: true,
     },
     Kind {
@@ -68,7 +68,7 @@ pub(super) const KINDS: [Kind; 9] = [
         vml: "Label",
         prop: "Label",
         name: "ラベル",
-        size: (72.0, 20.0),
+        size: (42.0, 19.0),
         text: true,
     },
     Kind {
@@ -76,7 +76,7 @@ pub(super) const KINDS: [Kind; 9] = [
         vml: "GBox",
         prop: "GBox",
         name: "グループ",
-        size: (144.0, 96.0),
+        size: (98.0, 96.0),
         text: true,
     },
     Kind {
@@ -84,7 +84,7 @@ pub(super) const KINDS: [Kind; 9] = [
         vml: "List",
         prop: "List",
         name: "リスト",
-        size: (96.0, 80.0),
+        size: (96.0, 94.0),
         text: false,
     },
     Kind {
@@ -92,7 +92,7 @@ pub(super) const KINDS: [Kind; 9] = [
         vml: "Drop",
         prop: "Drop",
         name: "ドロップ",
-        size: (96.0, 22.0),
+        size: (96.0, 96.0),
         text: false,
     },
     Kind {
@@ -108,7 +108,7 @@ pub(super) const KINDS: [Kind; 9] = [
         vml: "Scroll",
         prop: "Scroll",
         name: "スクロール",
-        size: (20.0, 96.0),
+        size: (96.0, 288.0),
         text: false,
     },
 ];
@@ -527,7 +527,7 @@ pub(super) fn activex_part(
 /// is kept otherwise or its stream is not read.
 fn activex_stream(s: &mut Sheet, part: &str) -> Result<Option<(String, crate::activex::Stream)>> {
     let (_, class, _, persistence, bin) = activex_part(s, part)?;
-    let Some(bin) = bin.filter(|_| persistence == "persistStream") else {
+    let Some(bin) = bin.filter(|_| is_stream(&persistence)) else {
         return Ok(None);
     };
     let Some(data) = s.bytes(&bin)? else {
@@ -957,7 +957,7 @@ fn configure_activex(
 
     // Its data as it is: a stream, or properties in the part.
     let mut stream = match (persistence.as_str(), &bin) {
-        ("persistStream", Some(b)) => {
+        (p, Some(b)) if is_stream(p) => {
             let data = s.bytes(b)?.ok_or_else(|| format!("{b} がありません"))?;
             Some(crate::activex::Stream::read(class, &data).ok_or(
                 "この ActiveX コントロールの保存データを読み取れません（Excel で行ってください）",
@@ -1064,7 +1064,9 @@ fn configure_activex(
                 s.put(part, edits.apply(&ocx));
             }
             _ => {
-                return Err("この ActiveX コントロールの保存データ（persistStorage）は、ここでは変更できません（Excel で行ってください）".into());
+                return Err(format!(
+                    "この ActiveX コントロールの保存データ（{persistence}）は、ここでは変更できません（Excel で行ってください）"
+                ));
             }
         }
     }
@@ -1351,7 +1353,7 @@ fn vml_shape(k: &Kind, id: u32, style: &str, anchor: &str, c: &FormControl, text
                 "<x:AutoLine>False</x:AutoLine>{macro_}{}{}{}{}{}{link}{}",
                 num("Val", c.value, c.min.unwrap_or(0)),
                 num("Min", c.min, 0),
-                num("Max", c.max, 100),
+                num("Max", c.max, default_max(k)),
                 num("Inc", c.step, 1),
                 num("Page", c.page, 10),
                 if k.key == "scrollBar" && c.horizontal {
@@ -1397,7 +1399,7 @@ fn props_xml(k: &Kind, c: &FormControl) -> String {
                 ""
             },
             c.step.unwrap_or(1),
-            c.max.unwrap_or(100),
+            c.max.unwrap_or(default_max(k)),
             c.min.unwrap_or(0),
             c.page.unwrap_or(10),
             c.value.unwrap_or(c.min.unwrap_or(0))
@@ -1616,7 +1618,8 @@ pub(super) fn add(bytes: &[u8], sheet: &str, c: &FormControl) -> Result<Vec<u8>>
         } else {
             ""
         };
-        let size_with = if k.key == "button" {
+        // (As Excel 2021 puts them: a button, a label and a spin button sized with the cells too.)
+        let size_with = if matches!(k.key, "button" | "label" | "spinner") {
             " sizeWithCells=\"1\""
         } else {
             ""
@@ -1649,4 +1652,15 @@ pub(super) fn add(bytes: &[u8], sheet: &str, c: &FormControl) -> Result<Vec<u8>>
     }
     let doc = s.doc.clone();
     s.finish(Some(doc))
+}
+
+/// Whether an ActiveX control keeps its data as its CLSID and a stream: `persistStream`, or
+/// `persistStreamInit` as Excel saves the controls of Microsoft Forms 2.0.
+fn is_stream(persistence: &str) -> bool {
+    matches!(persistence, "persistStream" | "persistStreamInit")
+}
+
+/// The greatest value of a new spin button or scroll bar, as Excel puts one: 30000 and 100.
+fn default_max(k: &Kind) -> i64 {
+    if k.key == "spinner" { 30000 } else { 100 }
 }

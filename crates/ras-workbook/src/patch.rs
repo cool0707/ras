@@ -1017,7 +1017,28 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 name,
                 change,
             } => drawing::object(&bytes, sheet, name, change)?,
-            Op::Control { sheet, control } => controls::add(&bytes, sheet, control)?,
+            Op::Control { sheet, control } => {
+                let out = controls::add(&bytes, sheet, control)?;
+                // The linked cell gets the state or the value given: what the control shows is
+                // the cell's value (Excel writes it when the control is set so).
+                let text = match control.kind.as_str() {
+                    "checkBox" if control.checked => Some("TRUE".to_string()),
+                    "spinner" | "scrollBar" => control.value.map(|v| v.to_string()),
+                    _ => None,
+                };
+                match (
+                    text,
+                    control
+                        .link
+                        .as_deref()
+                        .and_then(|l| controls::linked(sheet, l)),
+                ) {
+                    (Some(text), Some((sheet, range))) => {
+                        apply(&out, &[Op::Set { sheet, range, text }])?
+                    }
+                    _ => out,
+                }
+            }
             Op::Table {
                 sheet,
                 range,
@@ -1034,11 +1055,60 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 };
                 insert::table(&bytes, sheet, range, name.as_deref())?
             }
-            _ => apply_group(&bytes, &ops[at..end])?,
+            _ => match with_cell_styles(&bytes, &ops[at..end])? {
+                Some((styled, group)) => apply_group(&styled, &group)?,
+                None => apply_group(&bytes, &ops[at..end])?,
+            },
         };
         at = end;
     }
     Ok(bytes)
+}
+
+/// For edits that give cells a cell style (`format`'s `style`: `Hyperlink`, `Normal`): the
+/// file with ハイパーリンク in its styles where it is given (added as Excel adds it), and the
+/// edits with the style's number (`xfId`) in their place. None when no edit gives a style.
+fn with_cell_styles(bytes: &[u8], ops: &[Op]) -> Result<Option<(Vec<u8>, Vec<Op>)>> {
+    let gives = |op: &Op, name: Option<&str>| matches!(op, Op::Format { set, .. } if set.iter().any(|(k, v)| k == "style" && name.is_none_or(|n| v.as_str() == Some(n))));
+    if !ops.iter().any(|op| gives(op, None)) {
+        return Ok(None);
+    }
+    let mut bytes = bytes.to_vec();
+    let mut link_xf = 0;
+    if ops.iter().any(|op| gives(op, Some("Hyperlink"))) {
+        let mut pack = Pack::open(&bytes)?;
+        let part = pack
+            .find("xl/styles.xml")
+            .ok_or("ブックに xl/styles.xml がありません")?;
+        let doc = pack
+            .text(&part)?
+            .ok_or_else(|| format!("{part} を読めません"))?;
+        let (doc, xf_id) = styles::with_hyperlink_style(&doc)?;
+        link_xf = xf_id;
+        bytes = pack.rewrite(&BTreeMap::from([(part, doc.into_bytes())]), &HashSet::new())?;
+    }
+    let mut ops = ops.to_vec();
+    for op in &mut ops {
+        if let Op::Format { set, .. } = op {
+            for (key, value) in set.iter_mut() {
+                if key != "style" {
+                    continue;
+                }
+                let (k, id) = match value.as_str() {
+                    Some("Hyperlink") => ("hyperlinkXf", link_xf),
+                    Some("Normal") => ("normalXf", 0),
+                    _ => {
+                        return Err(format!(
+                            "書式 `style` の値 {value} は指定できません（Hyperlink か Normal です）"
+                        ));
+                    }
+                };
+                *key = k.into();
+                *value = id.into();
+            }
+        }
+    }
+    Ok(Some((bytes, ops)))
 }
 
 /// The cells an insertion or a deletion moves, as an edit of the formulas' references.
@@ -1153,6 +1223,20 @@ fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) 
         "bold" => set("font.bold", flag()?),
         "italic" => set("font.italic", flag()?),
         "underline" => set("font.underline", flag()?),
+        // (`style` once the styles have ハイパーリンク: its number.) Its font: underlined, in the
+        // theme's colour of links.
+        "hyperlinkXf" => {
+            let id = value.as_f64().ok_or_else(wrong)?;
+            set("font.underline", Val::Bool(true))?;
+            set("font.themecolor", Val::Num(10.0))?;
+            set("style.xfid", Val::Num(id))
+        }
+        // (`style` Normal.) The standard style's font: not underlined, in the theme's text colour.
+        "normalXf" => {
+            set("font.underline", Val::Bool(false))?;
+            set("font.themecolor", Val::Num(1.0))?;
+            set("style.xfid", Val::Num(0.0))
+        }
         "strike" => set("font.strikethrough", flag()?),
         "wrap" => set("wraptext", flag()?),
         "fontName" => set("font.name", Val::Text(text()?.to_string())),

@@ -37,6 +37,84 @@ const BUILT_IN: &[(u32, &str)] = &[
     (49, "@"),
 ];
 
+/// The styles with the cell style ハイパーリンク (built-in 8) Excel gives the cells of a new
+/// link, added as Excel adds it where they have none (the standard font underlined, in the
+/// theme's colour of links), and the number of its format among the styles' (`xfId`).
+pub(super) fn with_hyperlink_style(doc: &str) -> Result<(String, u32)> {
+    let root = scan::tree(doc, &[]).ok_or("xl/styles.xml を読み取れません")?;
+    let named = root.child("cellStyles");
+    if let Some(id) = named
+        .iter()
+        .flat_map(|s| &s.children)
+        .find(|s| s.attr(doc, "builtinId").as_deref() == Some("8"))
+        .and_then(|s| s.attr(doc, "xfId")?.parse().ok())
+    {
+        return Ok((doc.to_string(), id));
+    }
+    if !scan::prefix(root.name).is_empty() {
+        return Err("このブックのスタイル（名前空間の接頭辞つき）には、ハイパーリンクのスタイルを追加できません".into());
+    }
+    let missing = |what: &str| format!("xl/styles.xml に {what} がありません");
+    let fonts = root.child("fonts").filter(|f| f.end != f.open.end);
+    let fonts = fonts.ok_or_else(|| missing("fonts"))?;
+    let style_xfs = root.child("cellStyleXfs").filter(|f| f.end != f.open.end);
+    let style_xfs = style_xfs.ok_or_else(|| missing("cellStyleXfs"))?;
+    let named = named.filter(|f| f.end != f.open.end);
+    let named = named.ok_or_else(|| missing("cellStyles"))?;
+    let count =
+        |el: &scan::El, name: &str| el.children.iter().filter(|c| c.local() == name).count();
+    let (font_id, xf_id) = (count(fonts, "font"), count(style_xfs, "xf"));
+
+    // The standard font (the first), its size, name and family as they are.
+    let standard = fonts.children.iter().find(|c| c.local() == "font");
+    let of = |n: &str| {
+        standard
+            .and_then(|f| f.child(n))
+            .map_or("", |c| &doc[c.span()])
+    };
+    let font = format!(
+        "<font><u/>{}<color theme=\"10\"/>{}{}{}{}</font>",
+        of("sz"),
+        of("name"),
+        of("family"),
+        of("charset"),
+        of("scheme")
+    );
+    // The standard style's alignment (vertical centring, in a Japanese workbook).
+    let align = style_xfs
+        .children
+        .iter()
+        .find(|c| c.local() == "xf")
+        .and_then(|x| x.child("alignment"))
+        .map(|a| &doc[a.span()]);
+    let xf = match align {
+        Some(a) => format!(
+            "<xf numFmtId=\"0\" fontId=\"{font_id}\" fillId=\"0\" borderId=\"0\" applyNumberFormat=\"0\" applyFill=\"0\" applyBorder=\"0\" applyAlignment=\"0\" applyProtection=\"0\">{a}</xf>"
+        ),
+        None => format!(
+            "<xf numFmtId=\"0\" fontId=\"{font_id}\" fillId=\"0\" borderId=\"0\" applyNumberFormat=\"0\" applyFill=\"0\" applyBorder=\"0\" applyAlignment=\"0\" applyProtection=\"0\"/>"
+        ),
+    };
+    let mut edits = Edits::default();
+    for (el, add, n) in [
+        (fonts, font, font_id + 1),
+        (style_xfs, xf, xf_id + 1),
+        (
+            named,
+            format!("<cellStyle name=\"ハイパーリンク\" xfId=\"{xf_id}\" builtinId=\"8\"/>"),
+            count(named, "cellStyle") + 1,
+        ),
+    ] {
+        edits.insert(el.inner.end, add);
+        if el.attr(doc, "count").is_some() {
+            scan::set_attr(doc, el.open.clone(), "count", &n.to_string(), &mut edits);
+        }
+    }
+    let out = edits.apply(doc);
+    scan::tree(&out, &[]).ok_or("xl/styles.xml を書き換えられませんでした")?;
+    Ok((out, xf_id as u32))
+}
+
 /// How many cell formats (`cellXfs`) the styles have.
 pub(super) fn xf_count(doc: &str) -> u32 {
     scan::tree(doc, &[])
@@ -262,6 +340,9 @@ pub(super) fn with_formats(
         written(&fresh)?
     }
     .into_iter();
+    let style_xf_count = root.child("cellStyleXfs").map_or(0, |x| {
+        x.children.iter().filter(|c| c.local() == "xf").count()
+    });
     let mut fonts = Pool::new(doc, &root, "fonts");
     let mut fills = Pool::new(doc, &root, "fills");
     let mut borders = Pool::new(doc, &root, "borders");
@@ -292,7 +373,13 @@ pub(super) fn with_formats(
             }
             NewXf::Fresh(style) => {
                 let w = fresh.next().ok_or("書式を書き出せませんでした")?;
-                let mut attrs: Vec<(&str, String)> = vec![("xfId", "0".into())];
+                // Its cell style (ハイパーリンク, ...), when the styles have it.
+                let xf_id = styles
+                    .get(*style)
+                    .map(|s| s.format_id())
+                    .filter(|id| (*id as usize) < style_xf_count)
+                    .unwrap_or(0);
+                let mut attrs: Vec<(&str, String)> = vec![("xfId", xf_id.to_string())];
                 let id = match &w.code {
                     Some(code) => id_of(code),
                     None => 0,
@@ -376,6 +463,20 @@ pub(super) fn with_formats(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_style_hyperlink_is_added_as_excel_adds_it() {
+        // A Japanese workbook's styles as Excel 2021 writes them, and as it writes them after a
+        // link is put in.
+        let doc = r#"<styleSheet><fonts count="1"><font><sz val="11"/><color theme="1"/><name val="游ゴシック"/><family val="2"/><charset val="128"/><scheme val="minor"/></font></fonts><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"><alignment vertical="center"/></xf></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"><alignment vertical="center"/></xf></cellXfs><cellStyles count="1"><cellStyle name="標準" xfId="0" builtinId="0"/></cellStyles></styleSheet>"#;
+        let (out, id) = with_hyperlink_style(doc).unwrap();
+        assert_eq!(id, 1);
+        assert!(out.contains(r#"<fonts count="2"><font><sz val="11"/><color theme="1"/><name val="游ゴシック"/><family val="2"/><charset val="128"/><scheme val="minor"/></font><font><u/><sz val="11"/><color theme="10"/><name val="游ゴシック"/><family val="2"/><charset val="128"/><scheme val="minor"/></font></fonts>"#), "{out}");
+        assert!(out.contains(r#"<cellStyleXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"><alignment vertical="center"/></xf><xf numFmtId="0" fontId="1" fillId="0" borderId="0" applyNumberFormat="0" applyFill="0" applyBorder="0" applyAlignment="0" applyProtection="0"><alignment vertical="center"/></xf></cellStyleXfs>"#), "{out}");
+        assert!(out.contains(r#"<cellStyles count="2"><cellStyle name="標準" xfId="0" builtinId="0"/><cellStyle name="ハイパーリンク" xfId="1" builtinId="8"/></cellStyles>"#), "{out}");
+        // There once: the same.
+        assert_eq!(with_hyperlink_style(&out).unwrap(), (out.clone(), 1));
+    }
 
     #[test]
     fn a_format_is_added_with_its_number_format() {

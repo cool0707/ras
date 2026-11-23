@@ -20,6 +20,19 @@ const DRAWING_TYPE: &str = "application/vnd.openxmlformats-officedocument.drawin
 const EMU_PX: f64 = 9525.0;
 /// The size of a shape put without one (px): Excel's when the sheet is clicked, not dragged.
 const SHAPE_SIZE: (f64, f64) = (96.0, 96.0);
+/// The size of a shape of `kind` put without one (px), as Excel 2021 puts it with a click: most
+/// in a square of 96, some as they are drawn best (a triangle wider, an arrow long), a line
+/// across it.
+pub(super) fn shape_size(kind: &str) -> (f64, f64) {
+    match kind {
+        "textBox" => (144.0, 36.0),
+        "triangle" => (111.36, 96.0),
+        "rightArrow" | "leftArrow" => (102.72, 50.88),
+        "upArrow" | "downArrow" => (50.88, 102.72),
+        _ => SHAPE_SIZE,
+    }
+}
+
 /// The largest box of an object (px).
 pub(super) const MAX_SIZE: f64 = 100_000.0;
 
@@ -265,11 +278,7 @@ pub(super) fn shape(
         .ok_or_else(|| format!("図形 `{kind}` はありません"))?;
     let sizes = sizes_of(bytes, sheet)?;
     let line = matches!(kind, "line" | "arrow");
-    let own = match kind {
-        "line" | "arrow" => (SHAPE_SIZE.0, 0.0),
-        "textBox" => (144.0, 36.0),
-        _ => SHAPE_SIZE,
-    };
+    let own = shape_size(kind);
     let (x0, y0, x1, y1) = box_of(&sizes, place, own);
     let mut s = Sheet::open(bytes, sheet)?;
     let d = drawing_of(&mut s, true)?.ok_or("描画のパートを作れません")?;
@@ -306,7 +315,7 @@ pub(super) fn shape(
             )
         } else {
             format!(
-                "<{x}sp macro=\"\" textlink=\"\"><{x}nvSpPr><{x}cNvPr id=\"{id}\" name=\"{name}\"/><{x}cNvSpPr/></{x}nvSpPr><{x}spPr>{xfrm}<a:prstGeom prst=\"{kind}\"><a:avLst/></a:prstGeom></{x}spPr><{x}style><a:lnRef idx=\"2\"><a:schemeClr val=\"accent1\"><a:shade val=\"50000\"/></a:schemeClr></a:lnRef><a:fillRef idx=\"1\"><a:schemeClr val=\"accent1\"/></a:fillRef><a:effectRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:effectRef><a:fontRef idx=\"minor\"><a:schemeClr val=\"lt1\"/></a:fontRef></{x}style><{x}txBody><a:bodyPr vertOverflow=\"clip\" horzOverflow=\"clip\" rtlCol=\"0\" anchor=\"ctr\"/><a:lstStyle/>{}</{x}txBody></{x}sp>",
+                "<{x}sp macro=\"\" textlink=\"\"><{x}nvSpPr><{x}cNvPr id=\"{id}\" name=\"{name}\"/><{x}cNvSpPr/></{x}nvSpPr><{x}spPr>{xfrm}<a:prstGeom prst=\"{kind}\"><a:avLst/></a:prstGeom></{x}spPr><{x}style><a:lnRef idx=\"2\"><a:schemeClr val=\"accent1\"><a:shade val=\"15000\"/></a:schemeClr></a:lnRef><a:fillRef idx=\"1\"><a:schemeClr val=\"accent1\"/></a:fillRef><a:effectRef idx=\"0\"><a:schemeClr val=\"accent1\"/></a:effectRef><a:fontRef idx=\"minor\"><a:schemeClr val=\"lt1\"/></a:fontRef></{x}style><{x}txBody><a:bodyPr vertOverflow=\"clip\" horzOverflow=\"clip\" rtlCol=\"0\" anchor=\"ctr\"/><a:lstStyle/>{}</{x}txBody></{x}sp>",
                 paragraphs(text, "ctr", None, None)
             )
         };
@@ -322,8 +331,10 @@ pub(super) fn shape(
 
 // ---------------------------------------------------------------------------- pictures
 
-/// A picture's format (its extension and content type) and size in pixels, from its first
-/// bytes. None for what Excel does not take as a picture of its own.
+/// A picture's format (its extension and content type) and size in pixels of 96 dpi, from its
+/// first bytes: as Excel sizes a picture, by the resolution it has (PNG's pHYs, JPEG's JFIF,
+/// BMP's; 96 dpi where it has none, and for GIF). None for what Excel does not take as a
+/// picture of its own.
 pub(super) fn picture_info(data: &[u8]) -> Option<(&'static str, &'static str, (f64, f64))> {
     let be16 = |i: usize| Some(u16::from_be_bytes([*data.get(i)?, *data.get(i + 1)?]) as f64);
     let le16 = |i: usize| Some(u16::from_le_bytes([*data.get(i)?, *data.get(i + 1)?]) as f64);
@@ -331,17 +342,50 @@ pub(super) fn picture_info(data: &[u8]) -> Option<(&'static str, &'static str, (
     let le32 = |i: usize| {
         Some(i32::from_le_bytes(data.get(i..i + 4)?.try_into().ok()?).unsigned_abs() as f64)
     };
+    // Pixels of `dpi` (none or 0: 96) as pixels of 96 dpi.
+    let at = |px: f64, dpi: Option<f64>| match dpi {
+        Some(d) if d > 0.0 => px * 96.0 / d,
+        _ => px,
+    };
+    const INCH_M: f64 = 0.0254;
     if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Some(("png", "image/png", (be32(16)?, be32(20)?)));
+        let (w, h) = (be32(16)?, be32(20)?);
+        // pHYs (pixels a metre) comes before the image data.
+        let mut i = 8;
+        let mut dpi = (None, None);
+        while let (Some(len), Some(kind)) = (be32(i), data.get(i + 4..i + 8)) {
+            match kind {
+                b"pHYs" => {
+                    if data.get(i + 16) == Some(&1) {
+                        dpi = (
+                            be32(i + 8).map(|x| x * INCH_M),
+                            be32(i + 12).map(|y| y * INCH_M),
+                        );
+                    }
+                    break;
+                }
+                b"IDAT" | b"IEND" => break,
+                _ => i += 12 + len as usize,
+            }
+        }
+        return Some(("png", "image/png", (at(w, dpi.0), at(h, dpi.1))));
     }
     if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
         return Some(("gif", "image/gif", (le16(6)?, le16(8)?)));
     }
     if data.starts_with(b"BM") && data.len() > 26 {
-        return Some(("bmp", "image/bmp", (le32(18)?, le32(22)?)));
+        let (w, h) = (le32(18)?, le32(22)?);
+        // (BITMAPINFOHEADER and later; the core header of 12 bytes has no resolution.)
+        let (x, y) = if le32(14)? >= 40.0 {
+            (le32(38).map(|x| x * INCH_M), le32(42).map(|y| y * INCH_M))
+        } else {
+            (None, None)
+        };
+        return Some(("bmp", "image/bmp", (at(w, x), at(h, y))));
     }
     if data.starts_with(&[0xFF, 0xD8]) {
-        // The frame's header (SOFn) has the size.
+        let mut dpi = (None, None);
+        // The frame's header (SOFn) has the size; JFIF's (APP0), before it, the resolution.
         let mut i = 2;
         while i + 9 < data.len() {
             if data[i] != 0xFF {
@@ -358,8 +402,20 @@ pub(super) fn picture_info(data: &[u8]) -> Option<(&'static str, &'static str, (
                 continue;
             }
             let len = be16(i + 2)? as usize;
+            if m == 0xE0 && data.get(i + 4..i + 9) == Some(b"JFIF\0") {
+                // Units: 1 dots an inch, 2 a centimetre (0: only the aspect).
+                let k = match data.get(i + 11) {
+                    Some(1) => Some(1.0),
+                    Some(2) => Some(2.54),
+                    _ => None,
+                };
+                if let Some(k) = k {
+                    dpi = (be16(i + 12).map(|x| x * k), be16(i + 14).map(|y| y * k));
+                }
+            }
             if (0xC0..=0xCF).contains(&m) && !matches!(m, 0xC4 | 0xC8 | 0xCC) {
-                return Some(("jpeg", "image/jpeg", (be16(i + 7)?, be16(i + 5)?)));
+                let (w, h) = (be16(i + 7)?, be16(i + 5)?);
+                return Some(("jpeg", "image/jpeg", (at(w, dpi.0), at(h, dpi.1))));
             }
             i += 2 + len;
         }
@@ -1125,4 +1181,52 @@ fn remove_override(s: &mut Sheet, part: &str) -> Result<()> {
         s.put(ct, text);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pictures_sized_by_their_resolution() {
+        // A PNG of 60 × 40 pixels: 144 × 72 dpi (pHYs in pixels a metre) is 40 × 53.3 of 96 dpi.
+        let png = |phys: Option<(u32, u32)>| {
+            let mut d = b"\x89PNG\r\n\x1a\n".to_vec();
+            d.extend(13u32.to_be_bytes());
+            d.extend(b"IHDR");
+            d.extend(60u32.to_be_bytes());
+            d.extend(40u32.to_be_bytes());
+            d.extend([8, 2, 0, 0, 0, 0, 0, 0, 0]);
+            if let Some((x, y)) = phys {
+                d.extend(9u32.to_be_bytes());
+                d.extend(b"pHYs");
+                d.extend(x.to_be_bytes());
+                d.extend(y.to_be_bytes());
+                d.extend([1, 0, 0, 0, 0]);
+            }
+            d.extend(0u32.to_be_bytes());
+            d.extend(b"IEND");
+            d
+        };
+        assert_eq!(picture_info(&png(None)).unwrap().2, (60.0, 40.0));
+        let (w, h) = picture_info(&png(Some((5669, 2835)))).unwrap().2;
+        assert!(
+            (w - 40.0).abs() < 0.01 && (h - 53.33).abs() < 0.01,
+            "{w} {h}"
+        );
+        // A JPEG of 60 × 40 at 144 dpi (JFIF) is 40 × 26.7.
+        let mut jpg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0, 16];
+        jpg.extend(b"JFIF\0\x01\x01\x01\0\x90\0\x90\0\0");
+        jpg.extend([
+            0xFF, 0xC0, 0, 17, 8, 0, 40, 0, 60, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
+        let (w, h) = picture_info(&jpg).unwrap().2;
+        assert!(
+            (w - 40.0).abs() < 0.01 && (h - 26.67).abs() < 0.01,
+            "{w} {h}"
+        );
+        // Units 0 (only the aspect): 96 dpi.
+        jpg[13] = 0;
+        assert_eq!(picture_info(&jpg).unwrap().2, (60.0, 40.0));
+    }
 }

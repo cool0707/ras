@@ -1,6 +1,6 @@
 //! The persisted data of an ActiveX control of Microsoft Forms 2.0 on a sheet (MS-OFORMS):
 //! read, changed and written again. Excel keeps it in `xl/activeX/activeX<n>.bin` (the control's
-//! CLSID, then its stream: `ax:persistence="persistStream"`).
+//! CLSID, then its stream: `ax:persistence="persistStream"` or `"persistStreamInit"`).
 //!
 //! A control's stream starts with its record: a mask of the properties it has, a `DataBlock`
 //! (each property aligned to its size) and an `ExtraDataBlock` (strings and the size, aligned
