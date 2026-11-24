@@ -1097,3 +1097,30 @@ fn hyperlinks_are_kept_with_their_cells() {
         Some(Val::Bool(true))
     );
 }
+
+#[test]
+fn japanese_eras() {
+    let mut b = Book::new_book();
+    // Typed with an era, as Japanese Excel reads it.
+    put(&mut b, "A1", text("R1/5/1"));
+    assert_eq!(read(&mut b, "A1", Read::Value2), num(43586.0));
+    assert_eq!(read(&mut b, "A1", Read::Text), text("R1.5.1"));
+    put(&mut b, "A2", text("令和元年5月2日"));
+    assert_eq!(read(&mut b, "A2", Read::Text), text("令和1年5月2日"));
+    put(&mut b, "A3", text("H31/4/30"));
+    assert_eq!(read(&mut b, "A3", Read::Text), text("H31.4.30"));
+    // Formats with eras, and the system's long date.
+    for (code, shown) in [
+        (
+            "[$-ja-JP-x-gannen]ggge\"年\"m\"月\"d\"日\"",
+            "令和元年5月1日",
+        ),
+        ("[$-411]ggge\"年\"m\"月\"d\"日\"(aaa)", "令和1年5月1日(水)"),
+        ("gge", "令1"),
+        ("[$-F800]dddd, mmmm dd, yyyy", "2019年5月1日"),
+    ] {
+        b.set_number_format(0, rng("B1"), code).unwrap();
+        put(&mut b, "B1", Val::Date(43586.0));
+        assert_eq!(read(&mut b, "B1", Read::Text), text(shown), "{code}");
+    }
+}

@@ -491,3 +491,18 @@ body.copying, body.copying td { cursor: copy; }
 #pane .pitem { padding: 4px 8px; border: 0; border-radius: 2px; background: none; color: #000; font: inherit; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 #pane .pitem:hover { background: var(--accent-hover); }
 #pane .pitem.on { background: var(--accent-tint); color: var(--accent-ink); }
+.dlg.numfmtdlg { width: 520px; }
+.dlg.numfmtdlg .fmttabs { display: flex; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.dlg.numfmtdlg .fmttabs span { padding: 3px 12px; border: 1px solid var(--line); border-bottom: none; margin-bottom: -1px; background: #fff; }
+.dlg.numfmtdlg .fmtbody { display: flex; gap: 12px; min-height: 230px; }
+.dlg.numfmtdlg .fmtkinds { width: 130px; flex: none; }
+.dlg.numfmtdlg .fmtkinds select { width: 100%; font: inherit; }
+.dlg.numfmtdlg .fmtright { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.dlg.numfmtdlg .fmtsample { margin: 0; padding: 2px 8px 4px; border: 1px solid var(--line); }
+.dlg.numfmtdlg .fmtsample .out { min-height: 1.4em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dlg.numfmtdlg .fmtopts { display: flex; flex-direction: column; gap: 2px; }
+.dlg.numfmtdlg .fmtopts label input[type="number"] { margin-left: 8px; width: 60px; }
+.dlg.numfmtdlg .fmtopts select { font: inherit; }
+.dlg.numfmtdlg .fmtlist { width: 100%; }
+.dlg.numfmtdlg .fmtlist option.red { color: #c00; }
+.dlg.numfmtdlg input.fmtcode { flex: 1; min-width: 0; font: inherit; }
