@@ -59,8 +59,8 @@ pub use forms::{
 pub use opc::{workbook_code_names, workbook_sheet_controls, workbook_sheet_controls_bytes};
 pub use pack::{pack, pack_bytes, replace_workbook, unpack, unpack_bytes};
 pub use sheets::{
-    edit_sheets, sheet_references, valid_code_name, valid_sheet_name, workbook_sheets, Place,
-    SheetEdit, SheetEditReport, SheetEditRequest, SheetError, SheetInfo,
+    edit_sheet_bytes, edit_sheets, sheet_references, valid_code_name, valid_sheet_name,
+    workbook_sheets, Place, SheetEdit, SheetEditReport, SheetEditRequest, SheetError, SheetInfo,
 };
 pub use source::{
     extract_managed_region, merge_managed_region, procedure_names, replace_document_code,

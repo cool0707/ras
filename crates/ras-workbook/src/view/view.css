@@ -67,6 +67,18 @@ th.gap { border-right-color: var(--line); box-shadow: inset -1px 0 0 var(--head)
 #tabs button.on { background: #fff; color: var(--accent); font-weight: bold; }
 #tabs button.hidden { color: #999; font-style: italic; }
 #tabs .badge { background: var(--changed-line); color: #fff; border-radius: 8px; padding: 0 6px; margin-left: 6px; font-size: 11px; }
+#tabs button.addsheet { padding: 3px 10px; color: #555; background: transparent; border-color: transparent; }
+#tabs button.addsheet:hover { color: var(--accent); background: #e9e9e9; }
+#tabs input.tabname { font: inherit; font-weight: normal; padding: 0 2px; margin: -1px 0; border: 1px solid var(--accent); min-width: 3em; }
+.dlg.sheetdlg { width: 300px; }
+.dlg.sheetdlg label .lbl, .dlg.sheetdlg .tabcolor .lbl { flex: none; width: 80px; }
+.dlg.sheetdlg label input { flex: 1; font: inherit; }
+.dlg.sheetdlg .tabcolor { display: flex; align-items: flex-start; gap: 6px; padding: 4px 0 2px; }
+.dlg.sheetdlg .swatches { display: grid; grid-template-columns: repeat(7, 18px); gap: 3px; }
+.dlg.sheetdlg .swatch { display: block; min-width: 0; width: 18px; height: 18px; padding: 0; border: 1px solid #b0b0b0; }
+.dlg.sheetdlg .swatch.none { background: linear-gradient(to top right, #fff calc(50% - 1px), #c00000, #fff calc(50% + 1px)); }
+.dlg.sheetdlg .swatch:hover { outline: 1px solid var(--accent); }
+.dlg.sheetdlg .swatch.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 #note { padding: 2px 8px; color: #8a6d00; background: #fffbe6; border-top: 1px solid var(--line); }
 .empty { padding: 24px; color: #666; }
 
