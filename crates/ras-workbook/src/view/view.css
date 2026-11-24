@@ -303,7 +303,7 @@ table.ns th { cursor: row-resize; }
 .guide.h { left: 0; right: 0; height: 1px; width: 100%; }
 .probe { position: absolute; left: 0; top: 0; visibility: hidden; padding: 0 3px; overflow-wrap: anywhere; }
 /* The fill handle and the cells it is drawn out over. */
-.fillhandle { position: absolute; width: 7px; height: 7px; box-sizing: border-box; background: var(--accent); border: 1px solid #fff; cursor: crosshair; pointer-events: auto; }
+.fillhandle { position: absolute; width: 6px; height: 6px; box-sizing: border-box; background: var(--accent); border: 1px solid #fff; cursor: crosshair; pointer-events: auto; }
 .fillbox { position: absolute; box-sizing: border-box; border: 2px dashed #555; }
 
 /* The status bar. */

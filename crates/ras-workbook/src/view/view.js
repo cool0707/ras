@@ -1077,7 +1077,10 @@
         // The fill handle: at the bottom right corner of the cells selected.
         const b = editable && sel && !selected && !entry && sel.kind === "cells" && !areas.length ? boxOf(sel.r1, sel.c1, sel.r2, sel.c2) : null;
         v.fillh.hidden = !b || sel.r2 >= v.nrows || sel.c2 >= v.ncols;
-        if (b) Object.assign(v.fillh.style, { left: `${b.x + b.w - 3}px`, top: `${b.y + b.h - 3}px` });
+        // (Centred on the corner of the border: the active cell's outline is drawn inside the cell,
+        // 2px; the range's border 1px further out, over the gridline.)
+        const at = b && (single(sel) ? 4 : 3);
+        if (b) Object.assign(v.fillh.style, { left: `${b.x + b.w - at}px`, top: `${b.y + b.h - at}px` });
         pinTo(v.fillh, pinOf(v, b));
         placeList();
     }
