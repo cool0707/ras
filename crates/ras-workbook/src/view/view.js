@@ -3182,7 +3182,22 @@
         if (d.obj.flipV) y = f.h - y;
         return [x, y];
     }
-    // A handle dragged: the outline of the shape as its new adjust values make it.
+    // The paths of a shape as drawn (`shape_html`), with the preset's paths they are drawn from
+    // ([drawn path, its index in `def.path`]) and the size of its SVG (pt); null when they do
+    // not match (then the outline is shown instead).
+    function drawnPaths(box, def) {
+        const svg = box.querySelector(":scope > .shape > svg");
+        const drawn = svg ? [...svg.querySelectorAll(":scope > g > path")] : [];
+        const vb = svg && svg.viewBox.baseVal;
+        if (!drawn.length || !vb || !(vb.width > 0 && vb.height > 0)) return null;
+        // (Paths neither filled nor stroked are not drawn: with the shape's fill or line none.)
+        const all = def.path.map((p, i) => i);
+        const tries = [all, all.filter((i) => def.path[i].stroke !== false), all.filter((i) => def.path[i].fill !== "none"), all.filter((i) => def.path[i].stroke !== false && def.path[i].fill !== "none")];
+        const which = tries.find((t) => t.length === drawn.length);
+        if (!which) return null;
+        return { paths: drawn.map((el, k) => [el, which[k]]), w: vb.width, h: vb.height, was: drawn.map((el) => el.getAttribute("d")) };
+    }
+    // A handle dragged: the shape drawn as its new adjust values make it (its handles with it).
     function dragAdjust(e, d) {
         const def = d.obj.adjust;
         const f = d.from;
@@ -3190,21 +3205,51 @@
         if (!d.adj) d.adj = adjustValues(def);
         const adj = adjustTo(def, d.adj, def.ah[d.handle], f.w, f.h, x, y);
         d.now = { adjust: adj };
-        if (!d.ghost) {
-            d.ghost = makeGhost(false);
-            d.ghost.classList.add("adj");
+        if (d.drawn === undefined) d.drawn = drawnPaths(d.box, def);
+        if (d.drawn) {
+            const { paths, w, h } = d.drawn;
+            for (const [el, i] of paths) el.setAttribute("d", shapeOutline({ ...def, path: [def.path[i]] }, adj, w, h));
+        } else {
+            if (!d.ghost) {
+                d.ghost = makeGhost(false);
+                d.ghost.classList.add("adj");
+            }
+            ghostAt(d.ghost, f.x, f.y, f.x + f.w, f.y + f.h, false);
+            const flip = d.obj.flipH || d.obj.flipV ? ` transform="translate(${d.obj.flipH ? f.w : 0},${d.obj.flipV ? f.h : 0}) scale(${d.obj.flipH ? -1 : 1},${d.obj.flipV ? -1 : 1})"` : "";
+            d.ghost.innerHTML = `<svg width="${f.w}" height="${f.h}" viewBox="0 0 ${f.w} ${f.h}"><path${flip} d="${shapeOutline(def, adj, f.w, f.h)}"/></svg>`;
+            if (d.obj.rot) d.ghost.style.transform = `rotate(${d.obj.rot}deg)`;
         }
-        ghostAt(d.ghost, f.x, f.y, f.x + f.w, f.y + f.h, false);
-        const flip = d.obj.flipH || d.obj.flipV ? ` transform="translate(${d.obj.flipH ? f.w : 0},${d.obj.flipV ? f.h : 0}) scale(${d.obj.flipH ? -1 : 1},${d.obj.flipV ? -1 : 1})"` : "";
-        d.ghost.innerHTML = `<svg width="${f.w}" height="${f.h}" viewBox="0 0 ${f.w} ${f.h}"><path${flip} d="${shapeOutline(def, adj, f.w, f.h)}"/></svg>`;
-        if (d.obj.rot) d.ghost.style.transform = `rotate(${d.obj.rot}deg)`;
+        // The handles where the new values put them.
+        const g = shapeGuides(def, adj, f.w * EMU_PX, f.h * EMU_PX);
+        d.box.querySelectorAll(".objhandle.adj").forEach((el, i) => {
+            if (!def.ah[i]) return;
+            let [hx, hy] = handlePoint(g, def.ah[i]);
+            if (d.obj.flipH) hx = f.w - hx;
+            if (d.obj.flipV) hy = f.h - hy;
+            Object.assign(el.style, { left: `${hx}px`, top: `${hy}px` });
+        });
+    }
+    // The shape as it was (a drag that changed nothing, or an edit not made).
+    function undoAdjust(d) {
+        if (d.drawn) d.drawn.paths.forEach(([el], k) => el.setAttribute("d", d.drawn.was[k]));
+        const def = d.obj.adjust;
+        const f = d.from;
+        const g = shapeGuides(def, d.adj || adjustValues(def), f.w * EMU_PX, f.h * EMU_PX);
+        d.box.querySelectorAll(".objhandle.adj").forEach((el, i) => {
+            if (!def.ah[i]) return;
+            let [hx, hy] = handlePoint(g, def.ah[i]);
+            if (d.obj.flipH) hx = f.w - hx;
+            if (d.obj.flipV) hy = f.h - hy;
+            Object.assign(el.style, { left: `${hx}px`, top: `${hy}px` });
+        });
     }
     // The adjust values a handle was dragged to (only those that changed).
     function endAdjust(d) {
         const before = d.adj || {};
         const change = {};
         for (const [k, v] of Object.entries(d.now.adjust)) if (Math.round(before[k]) !== v) change[k] = v;
-        if (Object.keys(change).length) objectEdit(d.obj, { adjust: change });
+        if (Object.keys(change).length && movable(d.obj) && !busy && view) objectEdit(d.obj, { adjust: change });
+        else undoAdjust(d);
     }
     function beginObjectDrag(e, box, obj, how) {
         if (busy || !view) return;
@@ -3220,7 +3265,7 @@
         }
         const z = Z();
         let [dx, dy] = [(e.clientX - d.x) / z, (e.clientY - d.y) / z];
-        if (!d.ghost && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+        if (!d.now && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
         if (d.how === "adj") {
             dragAdjust(e, d);
             return;
@@ -3300,8 +3345,8 @@
     function endObjectDrag() {
         const d = objDrag;
         objDrag = null;
-        if (!d || !d.ghost) return;
-        d.ghost.remove();
+        if (!d || !d.now) return;
+        if (d.ghost) d.ghost.remove();
         swallowClick = true;
         setTimeout(() => (swallowClick = false));
         if (d.how === "rot") objectEdit(d.obj, { rotation: d.now.rot });
