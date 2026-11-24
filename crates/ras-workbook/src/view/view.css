@@ -278,6 +278,8 @@ body.busy, body.busy td, body.busy th { cursor: progress; }
 #ribbon .ico { position: relative; display: inline-flex; }
 #ribbon .ico .bar { position: absolute; left: 0; right: 0; bottom: -3px; height: 4px; }
 #ribbon .rbtn.color .ico svg { margin-bottom: 3px; }
+/* 線のスタイル: the line chosen. */
+#ribbon .rbtn.linestyle .sample { display: inline-flex; }
 #ribbon .rbtn .glyph { width: 14px; text-align: center; font-size: 14px; }
 #ribbon .rbtn.b .glyph { font-weight: bold; }
 #ribbon .rbtn.i .glyph { font-style: italic; font-family: Georgia, serif; }
@@ -307,6 +309,13 @@ body.busy #ribbon .rbody { opacity: .6; }
 .menu .phead { padding: 4px 12px 2px; color: #555; font-weight: bold; font-size: 12px; background: #f3f3f3; }
 .menu button.on { font-weight: bold; }
 .menu.pop { min-width: 150px; }
+/* 罫線: each border with its icon; 線のスタイル: the lines drawn. */
+.menu.borders button { align-items: center; gap: 8px; padding: 3px 14px 3px 8px; }
+.menu.borders .bico { display: inline-flex; flex: none; }
+.menu.linestyles { min-width: 0; }
+.menu.linestyles button { padding: 2px 10px 2px 26px; }
+.menu.linestyles button span { display: inline-flex; flex: none; }
+.menu.linestyles button.on { background: var(--accent-tint); }
 .menu .swatches { display: grid; grid-template-columns: repeat(10, 18px); gap: 3px; padding: 4px 10px; }
 .menu .swatches .swatch { display: block; width: 18px; height: 18px; padding: 0; border: 1px solid #b0b0b0; }
 .menu .swatches .swatch:hover { outline: 2px solid var(--accent); }

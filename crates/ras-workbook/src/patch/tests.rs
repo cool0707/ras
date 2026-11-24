@@ -3340,6 +3340,33 @@ fn conditional_scales_bars_and_icons_together() {
 }
 
 #[test]
+fn borders_take_the_line_and_the_color_of_the_ribbon() {
+    let out = edit(
+        r##"[{"op":"format","range":"A2:B3","set":{"border":{"preset":"topDoubleBottom","line":"dashed","color":"#FF0000"}}},{"op":"format","range":"C2","set":{"border":"thickBottom"}}]"##,
+    );
+    let styles = part(&out, "xl/styles.xml");
+    for expected in [
+        // The top of the range (the 線のスタイル), its bottom (double), in the 線の色.
+        r#"<left/><right/><top style="dashed"><color rgb="FFFF0000"/></top><bottom/>"#,
+        r#"<left/><right/><top/><bottom style="double"><color rgb="FFFF0000"/></bottom>"#,
+        r#"<left/><right/><top/><bottom style="thick"/>"#,
+    ] {
+        assert!(styles.contains(expected), "{expected}: {styles}");
+    }
+    // Automatic again: the line without its color.
+    let again = apply(
+        &out,
+        &ops(r#"[{"op":"format","range":"A2:B2","set":{"border":"top"}}]"#),
+    )
+    .unwrap();
+    let styles = part(&again, "xl/styles.xml");
+    assert!(
+        styles.contains(r#"<left/><right/><top style="thin"/><bottom/>"#),
+        "{styles}"
+    );
+}
+
+#[test]
 fn adjust_values_of_a_shape() {
     // A shape put on a sheet: the page gets its adjust handles, with no values of its own.
     let out = edit(r#"{"op":"shape","shape":"roundRect","at":"A20","width":100,"height":50}"#);

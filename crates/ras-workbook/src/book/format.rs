@@ -756,6 +756,15 @@ impl Book {
                 let i = num(v)?;
                 if i == NONE {
                     b.set_style(BorderStyleValues::None);
+                } else if i == AUTOMATIC {
+                    // Automatic: the line without a color of its own.
+                    let mut plain = Border::default();
+                    plain.set_style(if line == NONE {
+                        BorderStyleValues::Thin
+                    } else {
+                        b.style().clone()
+                    });
+                    *b = plain;
                 } else {
                     if line == NONE {
                         b.set_style(BorderStyleValues::Thin);

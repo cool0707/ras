@@ -5525,7 +5525,64 @@
             else useColor(name, `#${m[1].toUpperCase()}`);
         });
     }
-    const BORDERS = [["bottom", "下罫線"], ["top", "上罫線"], ["left", "左罫線"], ["right", "右罫線"], ["none", "枠なし"], ["all", "格子"], ["outline", "外枠"], ["thick", "太い外枠"], ["diagonalDown", "斜め罫線（＼）"], ["diagonalUp", "斜め罫線（／）"]];
+    // The borders of the ribbon's menu (as Excel's, in its groups) and the sides each draws: its
+    // lines of the 線のスタイル chosen ("s"), thick ("t") or double ("d").
+    const BORDERS = [
+        [["bottom", "下罫線", { b: "s" }], ["top", "上罫線", { t: "s" }], ["left", "左罫線", { l: "s" }], ["right", "右罫線", { r: "s" }]],
+        [["none", "枠なし", {}], ["all", "格子", { t: "s", b: "s", l: "s", r: "s", h: "s", v: "s" }], ["outline", "外枠", { t: "s", b: "s", l: "s", r: "s" }], ["thick", "太い外枠", { t: "t", b: "t", l: "t", r: "t" }]],
+        [["doubleBottom", "下二重罫線", { b: "d" }], ["thickBottom", "下太罫線", { b: "t" }], ["topBottom", "上罫線 + 下罫線", { t: "s", b: "s" }], ["topThickBottom", "上罫線 + 下太罫線", { t: "s", b: "t" }], ["topDoubleBottom", "上罫線 + 下二重罫線", { t: "s", b: "d" }]],
+        [["diagonalDown", "斜め罫線（＼）", { dd: "s" }], ["diagonalUp", "斜め罫線（／）", { du: "s" }]],
+    ];
+    // The lines of 線のスタイル (as Excel's list, in the file's names) and how they are drawn:
+    // [width, dashes (SVG), double].
+    const BORDER_LINES = [
+        ["thin", "細線", [1, ""]],
+        ["hair", "極細線", [1, "1 1"]],
+        ["dotted", "点線", [1, "1 2"]],
+        ["dashDotDot", "二点鎖線", [1, "6 2 1 2 1 2"]],
+        ["dashDot", "一点鎖線", [1, "6 2 1 2"]],
+        ["dashed", "破線", [1, "3 2"]],
+        ["double", "二重線", [1, "", true]],
+        ["medium", "中線", [2, ""]],
+        ["mediumDashed", "中破線", [2, "5 2"]],
+        ["mediumDashDot", "中一点鎖線", [2, "7 2 2 2"]],
+        ["mediumDashDotDot", "中二点鎖線", [2, "7 2 2 2 2 2"]],
+        ["slantDashDot", "斜め一点鎖線", [2, "7 1 3 1"]],
+        ["thick", "太線", [3, ""]],
+    ];
+    // The icon of a border of the menu: the cell's gridlines dotted, the sides it draws on them.
+    function borderIcon(sides) {
+        const line = (k, x1, y1, x2, y2) => {
+            const v = sides[k];
+            if (!v) return "";
+            if (v === "d") {
+                const [dx, dy] = y1 === y2 ? [0, 1.2] : [1.2, 0];
+                return `<path d="M${x1 - dx} ${y1 - dy}L${x2 - dx} ${y2 - dy}M${x1 + dx} ${y1 + dy}L${x2 + dx} ${y2 + dy}" stroke-width="1"/>`;
+            }
+            return `<path d="M${x1} ${y1}L${x2} ${y2}" stroke-width="${v === "t" ? 2.2 : 1.2}"/>`;
+        };
+        const span = el("span", "ico bico");
+        span.innerHTML =
+            '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-linecap="square" aria-hidden="true">' +
+            '<path d="M2.5 2.5h11v11h-11zM8 2.5v11M2.5 8h11" stroke="#9a9a9a" stroke-width="1" stroke-dasharray="1 1"/>' +
+            line("t", 2.5, 2.5, 13.5, 2.5) +
+            line("b", 2.5, 13.5, 13.5, 13.5) +
+            line("l", 2.5, 2.5, 2.5, 13.5) +
+            line("r", 13.5, 2.5, 13.5, 13.5) +
+            line("h", 2.5, 8, 13.5, 8) +
+            line("v", 8, 2.5, 8, 13.5) +
+            line("dd", 2.5, 2.5, 13.5, 13.5) +
+            line("du", 2.5, 13.5, 13.5, 2.5) +
+            "</svg>";
+        return span;
+    }
+    // A line of 線のスタイル drawn `w` wide, in `color`.
+    function lineSample(name, w, color) {
+        const [width, dash, double] = (BORDER_LINES.find((l) => l[0] === name) || BORDER_LINES[0])[2];
+        const c = color || "currentColor";
+        const path = double ? `<path d="M0 6.5h${w}M0 9.5h${w}" stroke-width="1"/>` : `<path d="M0 8h${w}" stroke-width="${width}"${dash ? ` stroke-dasharray="${dash}"` : ""}/>`;
+        return `<svg viewBox="0 0 ${w} 16" width="${w}" height="16" fill="none" stroke="${c}" aria-hidden="true">${path}</svg>`;
+    }
     // The formats of the ribbon's list (as Japanese Excel 2021 gives them, in the file's spelling).
     const ACCOUNTING_YEN = '_ ¥* #,##0_ ;_ ¥* -#,##0_ ;_ ¥* "-"_ ;_ @_ ';
     const NUMBER_FORMATS = [
@@ -5685,7 +5742,6 @@
         copy: '<rect x="2.5" y="2.5" width="8" height="9" rx="1"/><rect x="5.5" y="5.5" width="8" height="9" rx="1" fill="#fff"/>',
         grow: '<path d="M2 13 5.5 4 9 13M3.3 10h4.4"/><path d="m11 6 2-2.5L15 6"/>',
         shrink: '<path d="M2 13 5.5 4 9 13M3.3 10h4.4"/><path d="m11 4 2 2.5L15 4"/>',
-        border: '<rect x="2.5" y="2.5" width="11" height="11" stroke-dasharray="1.5 1.5"/><path d="M2 13.5h12" stroke-width="2"/>',
         fill: '<path d="m3 8 5-5 5 5-5 5z"/><path d="M13 9.5c.8 1.2 1.2 2 1.2 2.5a1.2 1.2 0 0 1-2.4 0c0-.5.4-1.3 1.2-2.5z"/>',
         fontColor: '<path d="M4 12 8 2l4 10M5.5 8.5h5"/>',
         top: '<path d="M2 2.5h12"/><path d="M8 13V5M5 8l3-3 3 3"/>',
@@ -5751,7 +5807,12 @@
     const lastColor = { color: "#FF0000", fill: "#FFFF00" };
     // The colors of 図形の塗りつぶし and 図形の枠線 used last.
     const lastShape = { fill: "#4472C4", line: "#000000" };
-    let lastBorder = "bottom";
+    let lastBorder = "all";
+    // The 線の色 (null: automatic) and the 線のスタイル the borders of the menu are drawn with.
+    const borderPen = { color: null, line: "thin" };
+    function borderSet(preset) {
+        return { border: borderPen.color || borderPen.line !== "thin" ? { preset, line: borderPen.line, color: borderPen.color } : preset };
+    }
     function makeRibbon() {
         const ribbon = $("ribbon");
         const tabs = ribbon.appendChild(el("div", "rtabs"));
@@ -6000,25 +6061,75 @@
         button("italic", { text: "I", title: "斜体（Ctrl+I）", cls: "i", edits: true, act: () => toggleFormat("italic") });
         button("underline", { text: "U", title: "下線（Ctrl+U）", cls: "u", edits: true, act: () => toggleFormat("underline") });
         sep();
+        // The button shows the border used last (格子 at first) and gives it again, as Excel's.
+        const showBorder = (value) => {
+            const [, label, sides] = BORDERS.flat().find((b) => b[0] === value);
+            const b = tools.border;
+            b.title = `罫線（${label}）`;
+            const old = b.querySelector(".ico");
+            if (old) old.replaceWith(borderIcon(sides));
+            else b.insertBefore(borderIcon(sides), b.firstChild);
+        };
         button("border", {
-            icon: "border",
             title: "罫線",
             moreTitle: "罫線の種類",
             split: true,
             edits: true,
-            act: () => format({ border: lastBorder }),
+            act: () => format(borderSet(lastBorder)),
             menu: (anchor) => {
                 const pop = openPop(anchor, "borders");
                 head(pop, "罫線");
-                for (const [value, label] of BORDERS) {
-                    item(pop, label, () => {
-                        lastBorder = value;
-                        tools.border.title = `罫線（${label}）`;
-                        format({ border: value });
-                    }).dataset.border = value;
+                BORDERS.forEach((group, i) => {
+                    if (i) pop.appendChild(el("hr"));
+                    for (const [value, label, sides] of group) {
+                        const b = item(pop, label, () => {
+                            lastBorder = value;
+                            showBorder(value);
+                            format(borderSet(value));
+                        });
+                        b.insertBefore(borderIcon(sides), b.firstChild);
+                        b.dataset.border = value;
+                    }
+                });
+            },
+        });
+        showBorder(lastBorder);
+        // 線の色 and 線のスタイル: what the borders of the menu are drawn with (Excel has them in
+        // the menu).
+        const penColor = button("borderColor", {
+            icon: "shapeLine",
+            title: "線の色",
+            cls: "color",
+            edits: true,
+            menu: (anchor) =>
+                openColors(anchor, "borderColor", "自動", (color) => {
+                    borderPen.color = color;
+                    penColor.querySelector(".bar").style.background = color || "#000000";
+                    penColor.title = `線の色（${color || "自動"}）`;
+                }),
+        });
+        penColor.querySelector(".ico").appendChild(el("span", "bar")).style.background = "#000000";
+        const penLine = button("borderLine", {
+            title: "線のスタイル（細線）",
+            cls: "linestyle",
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "linestyles");
+                head(pop, "線のスタイル");
+                for (const [name, label] of BORDER_LINES) {
+                    const b = item(pop, "", () => {
+                        borderPen.line = name;
+                        penLine.querySelector(".sample").innerHTML = lineSample(name, 28);
+                        penLine.title = `線のスタイル（${label}）`;
+                    });
+                    b.title = label;
+                    b.dataset.line = name;
+                    b.classList.toggle("on", borderPen.line === name);
+                    b.querySelector("span").innerHTML = lineSample(name, 96);
                 }
             },
         });
+        penLine.insertBefore(el("span", "sample"), penLine.firstChild).innerHTML = lineSample(borderPen.line, 28);
         sep();
         const colorButton = (key, iconName, title, none) => {
             const b = button(key, {
