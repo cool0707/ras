@@ -159,6 +159,23 @@ impl fmt::Display for SheetError {
     }
 }
 
+impl SheetError {
+    /// What cannot be done, in Japanese (the editor's and the grid's messages).
+    pub fn japanese(&self) -> String {
+        match self {
+            SheetError::NotFound(s) => format!("ブックに「{s}」というシートがありません"),
+            SheetError::NotAWorksheet(s) => format!("「{s}」はワークシートではありません（グラフシートなどは扱えません）"),
+            SheetError::BadName(s) => format!("「{s}」はシートの見出しの名前にできません（31 文字まで。`: \\ / ? * [ ]` は使えず、前後を `'` にできません）"),
+            SheetError::NameTaken(s) => format!("「{s}」という名前のシートが既にあります"),
+            SheetError::BadCodeName(s) => format!("`{s}` はコード名にできません（文字で始まり、文字・数字・`_` だけの 31 文字までの名前にします）"),
+            SheetError::CodeNameTaken(s) => format!("`{s}` という名前は、ほかのシートかモジュールが使っています"),
+            SheetError::LastVisibleSheet => "表示されているシートがほかに無いため、削除できません".into(),
+            SheetError::CannotCopy(what) => format!("このシートは、ブックのファイルの書き換えでは複製できません（{} があります）。Excel でブックを開いた状態で実行してください", what.join("・")),
+            SheetError::Binary => "バイナリ形式のブック（.xlsb）のシートは、ファイルの書き換えでは操作できません。Excel でブックを開いた状態で実行してください".into(),
+        }
+    }
+}
+
 fn err(e: SheetError) -> OvbaError {
     OvbaError::Sheet(e)
 }
@@ -1003,6 +1020,35 @@ pub fn edit_sheets(req: &SheetEditRequest) -> Result<SheetEditReport, OvbaError>
     }
     pack::check_not_locked(&req.book, true)?;
     let bytes = std::fs::read(&req.book).map_err(pack::map_open_error)?;
+    let (new_package, report) = edit_sheet_bytes(bytes, &req.edit)?;
+    let Some(new_package) = new_package else {
+        return Ok(report);
+    };
+    let mut temp = pack::write_temp_file(&req.book, &new_package)?;
+    if let Some(dir) = &req.backup_dir {
+        pack::back_up(&req.book, dir, req.backup_generations)?;
+    }
+    if let Ok(metadata) = std::fs::metadata(&req.book) {
+        let _ = std::fs::set_permissions(&temp.path, metadata.permissions());
+    }
+    pack::check_not_locked(&req.book, true)?;
+    std::fs::rename(&temp.path, &req.book).map_err(|e| {
+        if pack::is_sharing_violation(&e) || e.kind() == std::io::ErrorKind::PermissionDenied {
+            OvbaError::Locked
+        } else {
+            OvbaError::Io(e)
+        }
+    })?;
+    temp.keep = true;
+    Ok(report)
+}
+
+/// [`edit_sheets`] on the bytes of a workbook (`.xlsx`, `.xlsm`, ...): the bytes of the new
+/// package (None when nothing changed) and what was done.
+pub fn edit_sheet_bytes(
+    bytes: Vec<u8>,
+    edit: &SheetEdit,
+) -> Result<(Option<Vec<u8>>, SheetEditReport), OvbaError> {
     let mut package = Package::open(bytes)?;
     let mut layout = opc::analyze(&mut package)?;
     if layout.binary {
@@ -1096,7 +1142,7 @@ pub fn edit_sheets(req: &SheetEditRequest) -> Result<SheetEditReport, OvbaError>
     let mut changes = Changes::default();
     let mut report = SheetEditReport::default();
     let mut module_rename: Option<(String, String)> = None;
-    match &req.edit {
+    match edit {
         SheetEdit::Add {
             name,
             code_name,
@@ -1370,7 +1416,7 @@ pub fn edit_sheets(req: &SheetEditRequest) -> Result<SheetEditReport, OvbaError>
         }
     }
     if changes.replace.is_empty() && changes.remove.is_empty() && changes.add.is_empty() {
-        return Ok(report);
+        return Ok((None, report));
     }
     let new_package = package.rewrite(&changes.replace, &changes.remove, &changes.add)?;
     let new_package = follow_in_project(new_package, module_rename)?;
@@ -1379,7 +1425,7 @@ pub fn edit_sheets(req: &SheetEditRequest) -> Result<SheetEditReport, OvbaError>
         .map_err(|e| OvbaError::Verify(format!("the new package cannot be opened: {e}")))?;
     let after = opc::analyze(&mut check)
         .map_err(|e| OvbaError::Verify(format!("the new package cannot be analysed: {e}")))?;
-    let expected = match &req.edit {
+    let expected = match edit {
         SheetEdit::Add { .. } | SheetEdit::Copy { .. } => sheets.len() + 1,
         SheetEdit::Remove { .. } => sheets.len() - 1,
         SheetEdit::Rename { .. } => sheets.len(),
@@ -1388,29 +1434,12 @@ pub fn edit_sheets(req: &SheetEditRequest) -> Result<SheetEditReport, OvbaError>
         .sheets
         .iter()
         .any(|s| same_name(&s.code_name, &report.code_name) && same_name(&s.name, &report.name));
-    if after.sheets.len() != expected || present == matches!(req.edit, SheetEdit::Remove { .. }) {
+    if after.sheets.len() != expected || present == matches!(edit, SheetEdit::Remove { .. }) {
         return Err(OvbaError::Verify(
             "the sheets of the new package are not as requested".into(),
         ));
     }
-
-    let mut temp = pack::write_temp_file(&req.book, &new_package)?;
-    if let Some(dir) = &req.backup_dir {
-        pack::back_up(&req.book, dir, req.backup_generations)?;
-    }
-    if let Ok(metadata) = std::fs::metadata(&req.book) {
-        let _ = std::fs::set_permissions(&temp.path, metadata.permissions());
-    }
-    pack::check_not_locked(&req.book, true)?;
-    std::fs::rename(&temp.path, &req.book).map_err(|e| {
-        if pack::is_sharing_violation(&e) || e.kind() == std::io::ErrorKind::PermissionDenied {
-            OvbaError::Locked
-        } else {
-            OvbaError::Io(e)
-        }
-    })?;
-    temp.keep = true;
-    Ok(report)
+    Ok((Some(new_package), report))
 }
 
 #[cfg(test)]

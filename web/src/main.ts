@@ -357,6 +357,15 @@ function openFile(path: string, at?: { line: number; col: number }) {
     save();
 }
 
+function removeFile(f: ProjectFile) {
+    files = files.filter((y) => y !== f);
+    states.delete(f.path);
+    formsAsText.delete(f.path);
+    if (active === f.path) openFile(files.find((y) => y.path.startsWith("src/"))?.path || files[0].path);
+    renderFiles();
+    scheduleCompile(0);
+}
+
 function renderFiles() {
     const nav = $("files");
     nav.textContent = "";
@@ -375,12 +384,7 @@ function renderFiles() {
             x.onclick = (e) => {
                 e.stopPropagation();
                 if (!confirm(`${f.path} を削除しますか？`)) return;
-                files = files.filter((y) => y !== f);
-                states.delete(f.path);
-                formsAsText.delete(f.path);
-                if (active === f.path) openFile(files.find((y) => y.path.startsWith("src/"))?.path || files[0].path);
-                renderFiles();
-                scheduleCompile(0);
+                removeFile(f);
             };
             b.append(x);
         }
@@ -1046,6 +1050,10 @@ function bookMessage(m: { type?: string; ops?: unknown; url?: string }, frame: W
         bookEdited(bytes);
         return;
     }
+    if (m.type === "sheet") {
+        sheetMessage(m as unknown as SheetMessage, frame);
+        return;
+    }
     if (m.type !== "edit") return;
     try {
         // (An edit that changed nothing, the same value typed again, is not a step to undo.)
@@ -1053,6 +1061,33 @@ function bookMessage(m: { type?: string; ops?: unknown; url?: string }, frame: W
     } catch (e) {
         fail(String((e as Error).message || e));
     }
+}
+
+/** What the tabs of the book tab's page ask for: a sheet inserted, removed, renamed or copied. */
+interface SheetMessage {
+    action: "add" | "copy" | "remove" | "rename";
+    sheet: string;
+    name?: string;
+    codeName?: string;
+    color?: string | null;
+}
+
+function sheetMessage(m: SheetMessage, frame: Window) {
+    // A removed sheet's file in objects/ goes with it.
+    const file = m.action === "remove" && m.codeName ? files.find((f) => f.path.toLowerCase() === `objects/${m.codeName}.ras`.toLowerCase()) : undefined;
+    if (m.action === "remove" && !confirm(`シート「${m.sheet}」を削除しますか？${file ? `（${file.path} も削除します）` : ""}`)) {
+        frame.postMessage({ type: "idle" }, "*");
+        return;
+    }
+    const ops: unknown[] = [{ op: "sheet", action: m.action, sheet: m.sheet, name: m.name ?? "", codeName: m.action === "add" ? (m.codeName ?? "") : "" }];
+    if (m.action === "add" && m.name && m.color) ops.push({ op: "tabColor", sheet: m.name, color: m.color });
+    try {
+        editWorkbook(ops);
+    } catch (e) {
+        frame.postMessage({ type: "error", message: String((e as Error).message || e) }, "*");
+        return;
+    }
+    if (file) removeFile(file);
 }
 
 /** Applies edits to the workbook before the run, as a step to undo. */

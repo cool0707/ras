@@ -23,6 +23,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import type { SheetResult } from "./sheetCommands";
 import { sheetOfRasFile } from "./sheetFile";
 import { findServerExecutable } from "./serverPath";
 import { macrosOf, moduleName, newMacroName, sheetControlEvents } from "./sheetEvents";
@@ -317,7 +318,7 @@ function receive(message: unknown): void {
 		}
 		return;
 	}
-	if (type !== "edit" && type !== "undo" && type !== "redo" && type !== "event") {
+	if (type !== "edit" && type !== "undo" && type !== "redo" && type !== "event" && type !== "sheet") {
 		return;
 	}
 	queue = queue.then(async () => {
@@ -332,12 +333,17 @@ function receive(message: unknown): void {
 			const html =
 				type === "event"
 					? await openObjectEvent(what, message as ObjectEvent)
-					: type === "edit"
-						? await edit(what, (message as { ops?: unknown }).ops ?? [])
-						: await travel(what, type === "redo");
+					: type === "sheet"
+						? await sheetAction(what, message as SheetMessage)
+						: type === "edit"
+							? await edit(what, (message as { ops?: unknown }).ops ?? [])
+							: await travel(what, type === "redo");
 			// (Another workbook may be shown by now.)
 			if (html !== undefined && panel !== undefined && shown === what) {
 				panel.webview.html = html;
+			} else if (html === undefined && type === "sheet" && panel !== undefined && shown === what) {
+				// Nothing was done: the page takes edits again.
+				void panel.webview.postMessage({ type: "idle" });
 			}
 		} catch (error) {
 			if (panel !== undefined && shown === what) {
@@ -345,6 +351,67 @@ function receive(message: unknown): void {
 			}
 		}
 	});
+}
+
+// ---- the sheets: inserted, removed, renamed and copied from the tabs of the page
+
+/** What the tabs of the page post. */
+interface SheetMessage {
+	action: "add" | "copy" | "remove" | "rename";
+	sheet: string;
+	name?: string;
+	codeName?: string;
+	color?: string | null;
+}
+
+/**
+ * Changes the sheets as the page asked, and gives the page made again (undefined: nothing was
+ * done). The project's workbook changes with the files of its sheets in objects/ (the commands
+ * "RAS: シートを追加 / ..."), another workbook as the other edits change it (`ras book edit`).
+ */
+async function sheetAction(what: Shown, m: SheetMessage): Promise<string | undefined> {
+	if (!["add", "copy", "remove", "rename"].includes(m.action)) {
+		return undefined;
+	}
+	// The page shows the sheet it remembers (the new one, the one renamed), not the one asked
+	// for first, which may be gone.
+	what.sheet = undefined;
+	const color = typeof m.color === "string" && m.color !== "" ? m.color : undefined;
+	if (sheetFolder(what) === undefined) {
+		if (m.action === "remove") {
+			const remove = "削除する";
+			const choice = await vscode.window.showWarningMessage(`シート「${m.sheet}」を ${path.basename(what.file)} から削除します。`, { modal: true }, remove);
+			if (choice !== remove) {
+				return undefined;
+			}
+		}
+		const ops: unknown[] = [{ op: "sheet", action: m.action, sheet: m.sheet, name: m.name ?? "", codeName: m.action === "add" ? (m.codeName ?? "") : "" }];
+		if (m.action === "add" && m.name !== undefined && color !== undefined) {
+			ops.push({ op: "tabColor", sheet: m.name, color });
+		}
+		return edit(what, ops);
+	}
+	const result = await vscode.commands.executeCommand<SheetResult | undefined>(`ras.sheet.${m.action}`, { sheet: m.sheet, name: m.name, codeName: m.codeName, fromGrid: true });
+	if (result === undefined || !result.ok) {
+		return undefined;
+	}
+	// (The command may have shown the page again, at the new sheet.)
+	const now = shown !== undefined && shown !== what && samePath(shown.file, what.file) ? shown : what;
+	let html: string | undefined;
+	if (m.action === "add" && color !== undefined && result.name !== undefined) {
+		if (result.live === true) {
+			void vscode.window.showWarningMessage("RAS: Excel で開いているブックのシート見出しの色は、Excel で設定してください。");
+		} else {
+			html = await edit(now, [{ op: "tabColor", sheet: result.name, color }]);
+		}
+	}
+	if (now !== what) {
+		if (html !== undefined && panel !== undefined && shown === now) {
+			panel.webview.html = html;
+		}
+		return undefined;
+	}
+	return html ?? page(what.root, what.file, undefined, undefined, undefined, undefined, true);
 }
 
 // ---- the events of the shapes and controls of a sheet

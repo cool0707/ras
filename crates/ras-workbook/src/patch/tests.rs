@@ -2577,3 +2577,71 @@ fn links_get_the_cell_style_hyperlink() {
         .contains("Hyperlink")
     );
 }
+
+#[test]
+fn the_color_of_a_tab() {
+    // `<sheetPr codeName="Sheet1"/>` gets a tabColor, as Excel writes it.
+    let out = edit(r##"{"op":"tabColor","color":"#ff0000"}"##);
+    assert_eq!(changed(BOOK, &out), ["xl/worksheets/sheet1.xml"]);
+    let doc = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(doc.contains("<sheetPr codeName=\"Sheet1\"><tabColor rgb=\"FFFF0000\"/></sheetPr>"));
+    assert_eq!(view(&out)["sheets"][0]["tabColor"], json!("#ff0000"));
+    // Another color takes its place; none takes it away.
+    let blue = apply(&out, &ops(r##"{"op":"tabColor","color":"0070C0"}"##)).unwrap();
+    let doc = part(&blue, "xl/worksheets/sheet1.xml");
+    assert_eq!(doc.matches("<tabColor").count(), 1);
+    assert!(doc.contains("<tabColor rgb=\"FF0070C0\"/>"));
+    let none = apply(&blue, &ops(r#"{"op":"tabColor","color":null}"#)).unwrap();
+    assert!(!part(&none, "xl/worksheets/sheet1.xml").contains("<tabColor"));
+    assert_eq!(view(&none)["sheets"][0]["tabColor"], Json::Null);
+    assert!(parse_ops(&json!({"op":"tabColor","color":"red"}), Some("Data")).is_err());
+}
+
+#[test]
+fn sheets_added_copied_renamed_and_removed_from_their_tabs() {
+    let names = |bytes: &[u8]| -> Vec<String> {
+        view(bytes)["sheets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // Added after the sheet, named and colored in one edit.
+    let out = edit(
+        r##"[{"op":"sheet","action":"add","name":"売上","codeName":"Sales"},{"op":"tabColor","sheet":"売上","color":"#00B050"}]"##,
+    );
+    assert_eq!(names(&out), ["Data", "売上", "Summary", "Tbl"]);
+    assert_eq!(view(&out)["sheets"][1]["tabColor"], json!("#00b050"));
+    assert_eq!(view(&out)["sheets"][1]["codeName"], json!("Sales"));
+    // Renamed: the formulas that refer to it follow.
+    let renamed = apply(
+        &out,
+        &ops(r#"{"op":"sheet","action":"rename","name":"Input"}"#),
+    )
+    .unwrap();
+    assert_eq!(names(&renamed), ["Input", "売上", "Summary", "Tbl"]);
+    assert!(part(&renamed, "xl/workbook.xml").contains("Input!$A$2:$A$5"));
+    // Copied, as Excel names a copy.
+    let copied = apply(
+        &out,
+        &ops(r#"{"op":"sheet","sheet":"売上","action":"copy"}"#),
+    )
+    .unwrap();
+    assert_eq!(
+        names(&copied),
+        ["Data", "売上", "売上 (2)", "Summary", "Tbl"]
+    );
+    // Removed.
+    let removed = apply(
+        &out,
+        &ops(r#"{"op":"sheet","sheet":"売上","action":"remove"}"#),
+    )
+    .unwrap();
+    assert_eq!(names(&removed), ["Data", "Summary", "Tbl"]);
+    // What cannot be done is said in Japanese.
+    assert!(refused(r#"{"op":"sheet","action":"add","name":"Summary"}"#).contains("既にあります"));
+    assert!(
+        refused(r#"{"op":"sheet","action":"rename","name":"a/b"}"#).contains("名前にできません")
+    );
+}

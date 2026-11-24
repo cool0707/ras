@@ -516,28 +516,6 @@
           "when": "resourcePath in ras.sheetFiles",
           "group": "ras.sheet@1"
         }
-      ],
-      "webview/context": [
-        {
-          "command": "ras.sheet.copy",
-          "when": "webviewId == 'ras.sheetView' && webviewSection == 'sheetTab'",
-          "group": "ras.sheet@2"
-        },
-        {
-          "command": "ras.sheet.rename",
-          "when": "webviewId == 'ras.sheetView' && webviewSection == 'sheetTab'",
-          "group": "ras.sheet@3"
-        },
-        {
-          "command": "ras.sheet.remove",
-          "when": "webviewId == 'ras.sheetView' && webviewSection == 'sheetTab'",
-          "group": "ras.sheet@4"
-        },
-        {
-          "command": "ras.sheet.add",
-          "when": "webviewId == 'ras.sheetView' && webviewSection == 'sheetTab'",
-          "group": "ras.sheet@1"
-        }
       ]
     },
     "viewsWelcome": [

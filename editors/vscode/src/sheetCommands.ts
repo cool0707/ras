@@ -20,7 +20,7 @@ interface SheetRow {
 	file: string | null;
 }
 
-interface SheetResult {
+export interface SheetResult {
 	ok: boolean;
 	message?: string;
 	refused?: string[];
@@ -39,6 +39,21 @@ interface SheetResult {
 
 function asResult(value: unknown): SheetResult {
 	return typeof value === "object" && value !== null && typeof (value as { ok?: unknown }).ok === "boolean" ? (value as SheetResult) : { ok: false, message: "言語サーバーから想定外の応答が返されました。" };
+}
+
+/**
+ * What the tabs of the sheet grid give (its menu, its dialog of a new sheet, a double click on a
+ * tab): the sheet, and the names already chosen there — no more is asked.
+ */
+interface FromGrid {
+	sheet: string;
+	fromGrid: true;
+	name?: string;
+	codeName?: string;
+}
+
+function fromGrid(arg: unknown): FromGrid | undefined {
+	return typeof arg === "object" && arg !== null && (arg as { fromGrid?: unknown }).fromGrid === true ? (arg as FromGrid) : undefined;
 }
 
 /** What a menu was invoked on: a file of `objects/`, or a tab of the sheet grid (`{ sheet }`). */
@@ -138,49 +153,54 @@ function rootOf(arg: unknown): Promise<string | undefined> {
 	return projectRoot(arg instanceof vscode.Uri ? arg : undefined, "プロジェクトを選んでください");
 }
 
-async function addSheet(server: RasServer, arg: unknown): Promise<void> {
-	const name = await vscode.window.showInputBox({ title: "RAS: シートを追加", prompt: "見出しの名前", validateInput: (v) => validateName(v.trim(), true) });
+async function addSheet(server: RasServer, arg: unknown): Promise<SheetResult | undefined> {
+	const grid = fromGrid(arg);
+	const name = grid?.name ?? (await vscode.window.showInputBox({ title: "RAS: シートを追加", prompt: "見出しの名前", validateInput: (v) => validateName(v.trim(), true) }));
 	if (name === undefined) {
-		return;
+		return undefined;
 	}
-	const codeName = await vscode.window.showInputBox({ title: "RAS: シートを追加", prompt: "コード名（空欄なら Sheet<番号> を自動で付けます）", validateInput: (v) => validateCodeName(v.trim()) });
+	const codeName = grid !== undefined ? (grid.codeName ?? "") : await vscode.window.showInputBox({ title: "RAS: シートを追加", prompt: "コード名（空欄なら Sheet<番号> を自動で付けます）", validateInput: (v) => validateCodeName(v.trim()) });
 	if (codeName === undefined) {
-		return;
+		return undefined;
 	}
 	// On a sheet's file (or tab): right after that sheet. Else at the end.
 	const after = sheetOfArgument(arg);
 	const result = await execute(server, "RAS: シートを追加しています…", { action: "add", name: name.trim(), codeName: codeName.trim(), after });
 	await report(await rootOf(arg), result, `シート「${result.name}」（コード名 ${result.codeName}）を追加しました。`);
+	return result;
 }
 
-async function copySheet(server: RasServer, arg: unknown): Promise<void> {
+async function copySheet(server: RasServer, arg: unknown): Promise<SheetResult | undefined> {
 	const target = await pickSheet(server, arg, "複製するシートを選んでください");
 	if (target === undefined) {
-		return;
+		return undefined;
 	}
-	const name = await vscode.window.showInputBox({ title: "RAS: シートを複製", prompt: "複製先の見出しの名前（空欄なら「<元の名前> (2)」）", validateInput: (v) => validateName(v.trim(), false) });
+	// From the grid's tab ("コピーを作成"): named as Excel names a copy.
+	const grid = fromGrid(arg);
+	const name = grid !== undefined ? "" : await vscode.window.showInputBox({ title: "RAS: シートを複製", prompt: "複製先の見出しの名前（空欄なら「<元の名前> (2)」）", validateInput: (v) => validateName(v.trim(), false) });
 	if (name === undefined) {
-		return;
+		return undefined;
 	}
-	const codeName = await vscode.window.showInputBox({ title: "RAS: シートを複製", prompt: "複製先のコード名（空欄なら Sheet<番号> を自動で付けます）", validateInput: (v) => validateCodeName(v.trim()) });
+	const codeName = grid !== undefined ? "" : await vscode.window.showInputBox({ title: "RAS: シートを複製", prompt: "複製先のコード名（空欄なら Sheet<番号> を自動で付けます）", validateInput: (v) => validateCodeName(v.trim()) });
 	if (codeName === undefined) {
-		return;
+		return undefined;
 	}
 	const result = await execute(server, "RAS: シートを複製しています…", { action: "copy", sheet: target.sheet, name: name.trim(), codeName: codeName.trim() });
 	await report(await rootOf(arg), result, `シート「${result.name}」（コード名 ${result.codeName}）を複製して作りました。`);
+	return result;
 }
 
-async function removeSheet(server: RasServer, arg: unknown, sheetName?: string): Promise<void> {
+async function removeSheet(server: RasServer, arg: unknown, sheetName?: string): Promise<SheetResult | undefined> {
 	const target = sheetName !== undefined ? { sheet: sheetName, row: undefined } : await pickSheet(server, arg, "削除するシートを選んでください");
 	if (target === undefined) {
-		return;
+		return undefined;
 	}
 	const shown = target.row !== undefined ? `「${target.row.name}」（コード名 ${target.row.codeName}）` : `「${target.sheet}」`;
 	const remove = "削除する";
 	if (sheetName === undefined) {
 		const choice = await vscode.window.showWarningMessage(`シート${shown}を、ブックから削除します。objects/ のファイルも削除します。`, { modal: true }, remove);
 		if (choice !== remove) {
-			return;
+			return undefined;
 		}
 	}
 	let result = await execute(server, "RAS: シートを削除しています…", { action: "remove", sheet: target.sheet });
@@ -188,40 +208,44 @@ async function removeSheet(server: RasServer, arg: unknown, sheetName?: string):
 		// Something refers to the sheet, or its file has code: the user decides (spec §14.16).
 		const choice = await vscode.window.showWarningMessage(`シート${shown}を削除すると、次のものが失われます。`, { modal: true, detail: result.refused.map((r) => `・${r}`).join("\n") }, remove);
 		if (choice !== remove) {
-			return;
+			return undefined;
 		}
 		result = await execute(server, "RAS: シートを削除しています…", { action: "remove", sheet: target.sheet, force: true });
 	}
 	await report(await rootOf(arg), result, `シート${shown}を削除しました。`);
+	return result;
 }
 
-async function renameSheet(server: RasServer, arg: unknown): Promise<void> {
+async function renameSheet(server: RasServer, arg: unknown): Promise<SheetResult | undefined> {
 	const target = await pickSheet(server, arg, "名前を変えるシートを選んでください");
 	if (target === undefined) {
-		return;
+		return undefined;
 	}
-	const name = await vscode.window.showInputBox({ title: "RAS: シートの名前を変更", prompt: "見出しの名前", value: target.row?.name ?? "", validateInput: (v) => validateName(v.trim(), true) });
+	// From the grid's tab (its name edited there): the tab's name only.
+	const grid = fromGrid(arg);
+	const name = grid?.name ?? (await vscode.window.showInputBox({ title: "RAS: シートの名前を変更", prompt: "見出しの名前", value: target.row?.name ?? "", validateInput: (v) => validateName(v.trim(), true) }));
 	if (name === undefined) {
-		return;
+		return undefined;
 	}
-	const codeName = await vscode.window.showInputBox({
+	const codeName = grid !== undefined ? (target.row?.codeName ?? "") : await vscode.window.showInputBox({
 		title: "RAS: シートの名前を変更",
 		prompt: "コード名（変えると、objects/ のファイル名とソースの参照も変えます）",
 		value: target.row?.codeName ?? "",
 		validateInput: (v) => (v.trim() === "" ? "コード名を入力してください。" : validateCodeName(v.trim())),
 	});
 	if (codeName === undefined) {
-		return;
+		return undefined;
 	}
 	const newName = name.trim() !== (target.row?.name ?? "") ? name.trim() : undefined;
 	const newCodeName = codeName.trim() !== (target.row?.codeName ?? "") ? codeName.trim() : undefined;
 	if (newName === undefined && newCodeName === undefined) {
-		return;
+		return undefined;
 	}
 	// The files are saved first: the references in the sources are rewritten on disk.
 	await vscode.workspace.saveAll(false);
 	const result = await execute(server, "RAS: シートの名前を変えています…", { action: "rename", sheet: target.sheet, name: newName, codeName: newCodeName });
 	await report(await rootOf(arg), result, `シートの名前を「${result.name}」（コード名 ${result.codeName}）に変えました。`);
+	return result;
 }
 
 /** A file of `objects/` was renamed in the Explorer: the sheet's code name can follow. */
@@ -268,12 +292,14 @@ async function onDeleted(server: RasServer, event: vscode.FileDeleteEvent): Prom
 }
 
 export function registerSheetCommands(server: RasServer): vscode.Disposable {
-	const command = (id: string, title: string, run: (arg: unknown) => Promise<void>) =>
-		vscode.commands.registerCommand(id, async (arg?: unknown) => {
+	// (What was done is the command's result: the sheet grid draws the page after it.)
+	const command = (id: string, title: string, run: (arg: unknown) => Promise<SheetResult | undefined>) =>
+		vscode.commands.registerCommand(id, async (arg?: unknown): Promise<SheetResult | undefined> => {
 			try {
-				await run(arg);
+				return await run(arg);
 			} catch (error) {
 				void vscode.window.showErrorMessage(`RAS「${title}」に失敗しました: ${errorMessage(error)}`);
+				return undefined;
 			}
 		});
 	return vscode.Disposable.from(

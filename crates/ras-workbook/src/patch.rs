@@ -28,6 +28,7 @@ mod panes;
 mod scan;
 mod structure;
 mod styles;
+mod tabs;
 #[cfg(test)]
 mod tests;
 
@@ -228,6 +229,14 @@ pub enum Op {
         name: Option<String>,
         text: Option<String>,
     },
+    /// The sheets changed from their tabs: one added, copied, removed or renamed (and its file
+    /// in `objects/` left to the editor).
+    Sheet { edit: ras_ovba::SheetEdit },
+    /// The color of the tab of `sheet` ("シート見出しの色"): `#RRGGBB`, or none.
+    TabColor {
+        sheet: String,
+        color: Option<String>,
+    },
     /// A table made of `range` (a single cell: the data around it), as Excel's "テーブルの作成"
     /// makes it. `header`: its first row is the headings; otherwise a row of headings (列1,
     /// 列2, ...) is inserted above it.
@@ -363,6 +372,8 @@ impl Op {
                 | Op::Object { .. }
                 | Op::Control { .. }
                 | Op::ActiveX { .. }
+                | Op::Sheet { .. }
+                | Op::TabColor { .. }
         )
     }
 }
@@ -1032,7 +1043,36 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     text,
                 }
             }
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control / activeX）")),
+            "sheet" => {
+                // The name, and the code name, as given (empty: as Excel names it).
+                let given = |key: &str| text(key).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                let edit = match text("action").unwrap_or_default().as_str() {
+                    "add" => ras_ovba::SheetEdit::Add {
+                        name: given("name").ok_or("新しいシートの名前 `name` がありません")?,
+                        code_name: given("codeName"),
+                        place: ras_ovba::Place::After(sheet.clone()),
+                    },
+                    "copy" => ras_ovba::SheetEdit::Copy {
+                        sheet: sheet.clone(),
+                        name: given("name"),
+                        code_name: given("codeName"),
+                        place: None,
+                    },
+                    "remove" => ras_ovba::SheetEdit::Remove { sheet: sheet.clone() },
+                    "rename" => ras_ovba::SheetEdit::Rename {
+                        sheet: sheet.clone(),
+                        name: given("name"),
+                        code_name: given("codeName"),
+                    },
+                    other => return Err(format!("シートの操作 `{other}` はありません（add / copy / remove / rename）")),
+                };
+                Op::Sheet { edit }
+            }
+            "tabColor" => Op::TabColor {
+                sheet,
+                color: tabs::color_of(o.get("color"))?,
+            },
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control / activeX / sheet / tabColor）")),
         });
     }
     Ok(out)
@@ -1060,6 +1100,8 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 name,
             } => macros::assign(&bytes, sheet, object, *shape, name)?,
             Op::Freeze { sheet, at } => panes::freeze(&bytes, sheet, *at)?,
+            Op::Sheet { edit } => tabs::edit(&bytes, edit)?,
+            Op::TabColor { sheet, color } => tabs::color(&bytes, sheet, color.as_deref())?,
             Op::Link { sheet, range, link } => insert::link(&bytes, sheet, *range, link.as_ref())?,
             Op::Note {
                 sheet,
@@ -1811,7 +1853,9 @@ fn run(
         | Op::Picture { .. }
         | Op::Object { .. }
         | Op::Control { .. }
-        | Op::ActiveX { .. } => {}
+        | Op::ActiveX { .. }
+        | Op::Sheet { .. }
+        | Op::TabColor { .. } => {}
         Op::Fill {
             sheet,
             range,

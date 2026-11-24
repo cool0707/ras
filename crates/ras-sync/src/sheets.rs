@@ -170,17 +170,7 @@ fn find<'a>(sheets: &'a [Row], wanted: &str) -> Result<&'a Row, String> {
 
 /// The message for what [`ras_ovba::edit_sheets`] refused.
 fn refusal(e: &SheetError) -> String {
-    match e {
-        SheetError::NotFound(s) => format!("ブックに「{s}」というシートがありません"),
-        SheetError::NotAWorksheet(s) => format!("「{s}」はワークシートではありません（グラフシートなどは扱えません）"),
-        SheetError::BadName(s) => format!("「{s}」はシートの見出しの名前にできません（31 文字まで。`: \\ / ? * [ ]` は使えず、前後を `'` にできません）"),
-        SheetError::NameTaken(s) => format!("「{s}」という名前のシートが既にあります"),
-        SheetError::BadCodeName(s) => format!("`{s}` はコード名にできません（文字で始まり、文字・数字・`_` だけの 31 文字までの名前にします）"),
-        SheetError::CodeNameTaken(s) => format!("`{s}` という名前は、ほかのシートかモジュールが使っています"),
-        SheetError::LastVisibleSheet => "表示されているシートがほかに無いため、削除できません".into(),
-        SheetError::CannotCopy(what) => format!("このシートは、ブックのファイルの書き換えでは複製できません（{} があります）。Excel でブックを開いた状態で実行してください", what.join("・")),
-        SheetError::Binary => "バイナリ形式のブック（.xlsb）のシートは、ファイルの書き換えでは操作できません。Excel でブックを開いた状態で実行してください".into(),
-    }
+    e.japanese()
 }
 
 /// The names of the modules of the project (other than the files of `objects/`).

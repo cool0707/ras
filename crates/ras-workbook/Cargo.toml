@@ -25,7 +25,5 @@ zip = { workspace = true }
 serde_json = { workspace = true }
 # The bitmaps of EMF pictures, as PNG.
 flate2 = "1"
-
-[dev-dependencies]
-# What the compiler reads of a sheet's ActiveX controls, read from the controls put on one.
+# Sheets added, copied, removed and renamed in the file (the grid's tabs), as `ras sheet` does it.
 ras-ovba = { workspace = true }

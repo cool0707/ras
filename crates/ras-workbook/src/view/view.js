@@ -1931,6 +1931,10 @@
             if (m.on) enableEvents();
         } else if (m && m.type === "fonts") {
             if (Array.isArray(m.names)) takeFonts(m.names);
+        } else if (m && m.type === "idle") {
+            // Nothing was done (a question of the editor's was cancelled).
+            setBusy(false);
+            focusGrid();
         } else if (m && m.type === "error") {
             setBusy(false);
             remember({ pickObj: null });
@@ -6926,16 +6930,213 @@
     if (data.diff) {
         $("summary").textContent = total || data.diff.structure.length ? `${data.diff.before} からの変更: セル ${total} 個` : `${data.diff.before} からの変更はありません`;
     }
-    for (const sheet of data.sheets) {
-        const b = el("button", sheet.visible === "visible" ? null : "hidden", sheet.name + (sheet.visible === "visible" ? "" : "（非表示）"));
-        b.sheet = sheet;
-        // In the editor, the tab's context menu offers the sheet commands (copy, rename, remove).
-        b.dataset.vscodeContext = JSON.stringify({ webviewSection: "sheetTab", sheet: sheet.name, preventDefaultContextMenuItems: true });
-        if (sheet.tabColor) b.style.borderBottomColor = sheet.tabColor;
+    // ---- the tabs of the sheets: a click shows one. Where the workbook is edited, their menu
+    // inserts, removes, renames and copies sheets and colors a tab, a double click on one
+    // renames it there, and ＋ inserts a sheet, as Excel's tabs do. The editor makes the change
+    // (in the project's workbook, with the files of objects/) and draws the page again.
+
+    // What is wrong with `name` for a sheet's tab (`but`: the sheet that has it now).
+    function sheetNameProblem(name, but) {
+        if (!name) return "シート名を入力してください。";
+        if ([...name].length > 31 || /[:\\/?*[\]]/.test(name) || name.startsWith("'") || name.endsWith("'")) return "シート名は 31 文字までで、: \\ / ? * [ ] は使えません（前後を ' にもできません）。";
+        if (data.sheets.some((s) => s !== but && s.name.toLowerCase() === name.toLowerCase())) return `「${name}」という名前のシートは既にあります。`;
+        return "";
+    }
+    function codeNameProblem(code) {
+        if (!code) return "";
+        if (!/^\p{L}[\p{L}\p{N}_]*$/u.test(code) || [...code].length > 31) return "コード名は、文字で始まり、文字・数字・_ だけの 31 文字までの名前にしてください。";
+        if (data.sheets.some((s) => (s.codeName || "").toLowerCase() === code.toLowerCase())) return `コード名 ${code} は、ほかのシートが使っています。`;
+        return "";
+    }
+    const takenName = (name) => data.sheets.some((s) => s.name.toLowerCase() === name.toLowerCase() || (s.codeName || "").toLowerCase() === name.toLowerCase());
+    // `m`: { action: "add" | "copy" | "remove" | "rename", sheet, name, codeName, color };
+    // `show`: the sheet shown when the page is drawn again.
+    function postSheet(m, show) {
+        if (!editable || busy) return;
+        setClip(null);
+        setBusy(true);
+        if (show) remember({ sheet: show });
+        vscode.postMessage({ type: "sheet", ...m });
+    }
+    // "挿入": a new sheet after `after`, its name, code name and color asked at once.
+    function askNewSheet(after) {
+        if (!editable || busy) return;
+        if (entry) commit(null);
+        const form = openDialog("シートの挿入", "sheetdlg");
+        let n = data.sheets.length + 1;
+        while (takenName(`Sheet${n}`)) n++;
+        const name = field(form, "シート名");
+        name.value = `Sheet${n}`;
+        name.maxLength = 31;
+        const code = field(form, "コード名");
+        code.placeholder = "空欄なら自動で付けます";
+        code.maxLength = 31;
+        const line = form.appendChild(el("div", "tabcolor"));
+        line.appendChild(el("span", "lbl", "見出しの色"));
+        const swatches = line.appendChild(el("div", "swatches"));
+        let color = null;
+        const swatch = (c, title) => {
+            const b = swatches.appendChild(el("button", c ? "swatch" : "swatch none"));
+            b.type = "button";
+            b.title = title;
+            if (c) b.style.background = c;
+            b.classList.toggle("on", c === color);
+            b.addEventListener("click", () => {
+                color = c;
+                for (const x of swatches.children) x.classList.toggle("on", x === b);
+            });
+        };
+        swatch(null, "色なし");
+        for (const c of PALETTE) swatch(c.toUpperCase(), c.toUpperCase());
+        form.appendChild(el("div", "hint", "コード名は、プログラムからシートを指す名前です（Sheet1.Range(\"A1\") の Sheet1、objects/Sheet1.ras）。"));
+        dialogButtons(form);
+        const validate = () => {
+            name.setCustomValidity(sheetNameProblem(name.value.trim()));
+            code.setCustomValidity(codeNameProblem(code.value.trim()));
+        };
+        name.addEventListener("input", validate);
+        code.addEventListener("input", validate);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            validate();
+            if (!form.reportValidity()) return;
+            closeDialog();
+            const n = name.value.trim();
+            postSheet({ action: "add", sheet: after.name, name: n, codeName: code.value.trim(), color }, n);
+        });
+        name.focus();
+        name.select();
+    }
+    // "名前の変更" (a double click on the tab): the name edited on the tab; Enter (or a click
+    // elsewhere) changes it, Esc does not.
+    function renameTab(b) {
+        if (!editable || busy || b.querySelector("input")) return;
+        if (entry) commit(null);
+        closeMenu();
+        const sheet = b.sheet;
+        const input = el("input", "tabname");
+        input.type = "text";
+        input.value = sheet.name;
+        input.maxLength = 31;
+        input.spellcheck = false;
+        const fit = () => (input.style.width = `${Math.max(3, [...input.value].length + 1)}em`);
+        fit();
+        b.textContent = "";
+        b.appendChild(input);
+        let done = false;
+        const finish = (change) => {
+            if (done) return;
+            const name = input.value.trim();
+            const problem = change && name !== sheet.name ? sheetNameProblem(name, sheet) : "";
+            if (problem && change === "enter") {
+                input.setCustomValidity(problem);
+                input.reportValidity();
+                return;
+            }
+            done = true;
+            labelTab(b);
+            if (problem) showError(problem);
+            else if (change && name !== sheet.name) {
+                b.firstChild.textContent = name;
+                postSheet({ action: "rename", sheet: sheet.name, name }, name);
+            }
+            focusGrid();
+        };
+        input.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.isComposing || e.keyCode === 229) return;
+            if (e.key === "Enter") {
+                e.preventDefault();
+                finish("enter");
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                finish(null);
+            }
+        });
+        input.addEventListener("input", () => {
+            input.setCustomValidity("");
+            fit();
+        });
+        input.addEventListener("blur", () => finish("blur"));
+        for (const type of ["click", "dblclick", "mousedown", "contextmenu"]) input.addEventListener(type, (e) => e.stopPropagation());
+        input.focus();
+        input.select();
+    }
+    function removeSheet(sheet) {
+        if (data.sheets.filter((s) => s !== sheet && s.visible === "visible").length === 0) {
+            showError("表示されているシートがほかに無いため、削除できません。");
+            return;
+        }
+        const others = data.sheets.filter((s) => s !== sheet);
+        const next = others[Math.min(data.sheets.indexOf(sheet), others.length - 1)];
+        postSheet({ action: "remove", sheet: sheet.name, codeName: sheet.codeName || "" }, next && next.name);
+    }
+    function copySheet(sheet) {
+        let n = 2;
+        const base = (k) => `${sheet.name.slice(0, 31 - ` (${k})`.length)} (${k})`;
+        while (takenName(base(n))) n++;
+        postSheet({ action: "copy", sheet: sheet.name }, base(n));
+    }
+    function openTabMenu(x, y, b) {
+        const sheet = b.sheet;
+        showMenu(x, y, [
+            ["挿入…", () => askNewSheet(sheet), ""],
+            ["削除", () => removeSheet(sheet), ""],
+            ["名前の変更", () => renameTab(b), ""],
+            ["コピーを作成", () => copySheet(sheet), ""],
+            null,
+            ["シート見出しの色…", () => openColors(b, "tab", "色なし", (color) => postEdit([{ op: "tabColor", sheet: sheet.name, color }])), ""],
+        ]);
+    }
+    // The tab's name, and the number of the cells changed.
+    function labelTab(b) {
+        const sheet = b.sheet;
+        b.textContent = "";
+        b.appendChild(el("span", null, sheet.name));
+        if (sheet.visible !== "visible") b.appendChild(document.createTextNode("（非表示）"));
         const n = (changes[sheet.name] || []).length;
         if (n) b.appendChild(el("span", "badge", String(n)));
-        b.addEventListener("click", () => draw(sheet));
+    }
+    for (const sheet of data.sheets) {
+        const b = el("button", sheet.visible === "visible" ? null : "hidden");
+        b.type = "button";
+        b.sheet = sheet;
+        labelTab(b);
+        if (sheet.tabColor) {
+            b.style.borderBottomColor = sheet.tabColor;
+            b.classList.add("colored");
+        }
+        b.addEventListener("click", () => {
+            if (!b.querySelector("input")) draw(sheet);
+        });
+        if (editable) {
+            b.title = "ダブルクリックで名前を変更";
+            b.dataset.vscodeContext = JSON.stringify({ preventDefaultContextMenuItems: true });
+            b.addEventListener("dblclick", (e) => {
+                e.preventDefault();
+                renameTab(b);
+            });
+            b.addEventListener("contextmenu", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (busy) return;
+                if (view && view.sheet !== sheet) draw(sheet);
+                openTabMenu(e.clientX, e.clientY, b);
+            });
+        }
         $("tabs").appendChild(b);
+    }
+    if (editable) {
+        // Excel's ⊕ right after the last tab (kept in view while the tabs scroll).
+        const add = $("tabs").appendChild(el("button", "addsheet"));
+        add.type = "button";
+        add.title = "新しいシート";
+        add.setAttribute("aria-label", "新しいシート");
+        add.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5v7M4.5 8h7"/></svg>';
+        add.addEventListener("click", () => {
+            const after = (view && view.sheet) || data.sheets[data.sheets.length - 1];
+            if (after) askNewSheet(after);
+        });
     }
     const side = $("side");
     if (data.diff && (total || data.diff.structure.length)) {
