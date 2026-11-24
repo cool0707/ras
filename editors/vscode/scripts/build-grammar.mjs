@@ -241,6 +241,107 @@ function addStructDeclaration(grammar) {
 	declarations.splice(afterInterface, 0, { include: "#struct-declaration" });
 }
 
+/**
+ * Excel formulas in `` fx`SUM(A1:A3)` `` and `` ws.fx`A1` `` (spec §2.7). The formula is scoped
+ * `meta.embedded.formula.ras`, so VS Code treats it as code (suggestions while typing), not as
+ * a string; its own strings are strings again. `${…}` is a RAS expression as in any template.
+ * Added in front of upstream's tagged templates, so it wins over them for the tag `fx`.
+ */
+function addFormulaTemplate(grammar) {
+	const template = rule(grammar, "template").patterns;
+	if (template[0]?.include !== "#template-call") {
+		throw new Error("build-grammar: template no longer starts with #template-call; review addFormulaTemplate");
+	}
+	const scope = (name) => ({ name: `${name}.formula.ts` });
+	grammar.repository["formula-template"] = {
+		begin: "(?:(\\??\\.)\\s*)?(?<![_$[:alnum:]])(fx)\\s*(`)",
+		beginCaptures: {
+			1: { name: "punctuation.accessor.ts" },
+			2: { name: "entity.name.function.tagged-template.ts" },
+			3: { name: "string.template.ts punctuation.definition.string.template.begin.ts" },
+		},
+		end: "`",
+		endCaptures: { 0: { name: "string.template.ts punctuation.definition.string.template.end.ts" } },
+		contentName: "meta.embedded.formula.ts",
+		patterns: [
+			{ include: "#template-substitution-element" },
+			{ include: "#string-character-escape" },
+			{ include: "#formula" },
+		],
+	};
+	grammar.repository.formula = {
+		patterns: [
+			// "text", with "" for a quote
+			{
+				name: "string.quoted.double.formula.ts",
+				begin: '"',
+				beginCaptures: { 0: { name: "punctuation.definition.string.begin.formula.ts" } },
+				end: '"(?!")',
+				endCaptures: { 0: { name: "punctuation.definition.string.end.formula.ts" } },
+				patterns: [{ name: "constant.character.escape.formula.ts", match: '""' }],
+			},
+			// 'Sheet name'! and Sheet1! (also [Book.xlsx]Sheet1!)
+			{
+				match: "('(?:[^']|'')*'|(?:\\[[^\\]`]+\\])?[_\\p{L}][_.\\p{L}\\p{N}]*)(!)",
+				captures: { 1: scope("entity.name.type.sheet"), 2: scope("punctuation.separator.sheet") },
+			},
+			{
+				name: "constant.language.error.formula.ts",
+				match: "#(?:NULL!|DIV/0!|VALUE!|REF!|NAME\\?|NUM!|N/A|GETTING_DATA|SPILL!|CALC!|FIELD!|BLOCKED!|CONNECT!|BUSY!|UNKNOWN!)",
+			},
+			// SUM( / _xlfn.XLOOKUP( / STDEV.S(
+			{
+				match: "(?i)(?<![_.\\p{L}\\p{N}$])((?:_xlfn\\.|_xlws\\.)?[_\\p{L}][_.\\p{L}\\p{N}]*)(?=\\s*\\()",
+				captures: { 1: scope("support.function") },
+			},
+			{
+				name: "constant.language.boolean.formula.ts",
+				match: "(?i)(?<![_.\\p{L}\\p{N}$])(?:TRUE|FALSE)(?![_.\\p{L}\\p{N}(])",
+			},
+			// A1, $B$2, A:C, 1:3, R1C1, R[-1]C[2]
+			{
+				name: "variable.other.constant.reference.formula.ts",
+				match: "(?i)(?<![_.\\p{L}\\p{N}$])(?:\\$?[A-Z]{1,3}\\$?[0-9]+|\\$?[A-Z]{1,3}(?=\\s*:\\s*\\$?[A-Z]{1,3}(?![_.\\p{L}\\p{N}]))|(?<=:)\\s*\\$?[A-Z]{1,3}|R(?:\\[-?[0-9]+\\]|[0-9]+)?C(?:\\[-?[0-9]+\\]|[0-9]+)?)(?![_.\\p{L}\\p{N}(])",
+			},
+			{
+				name: "constant.numeric.formula.ts",
+				match: "(?<![_.\\p{L}\\p{N}$])(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?",
+			},
+			// Structured references: Table1[Column], [@Column], [#Headers]
+			{
+				name: "meta.structured-reference.formula.ts",
+				begin: "\\[",
+				beginCaptures: { 0: scope("punctuation.definition.structured-reference.begin") },
+				end: "\\]",
+				endCaptures: { 0: scope("punctuation.definition.structured-reference.end") },
+				patterns: [
+					{ match: "\\[", name: "punctuation.definition.structured-reference.begin.formula.ts" },
+					{ match: "\\]", name: "punctuation.definition.structured-reference.end.formula.ts" },
+					{ match: "[@#][^\\]\\[,]*", name: "variable.language.structured-reference.formula.ts" },
+					{ match: "[^\\]\\[,@#`$\\\\]+", name: "variable.other.property.formula.ts" },
+				],
+			},
+			// Defined names, LET's and LAMBDA's names
+			{ name: "variable.other.readwrite.formula.ts", match: "[_\\p{L}][_.\\p{L}\\p{N}]*" },
+			{ name: "keyword.operator.comparison.formula.ts", match: "<>|<=|>=|=|<|>" },
+			{ name: "keyword.operator.arithmetic.formula.ts", match: "[-+*/^%]" },
+			{ name: "keyword.operator.concatenation.formula.ts", match: "&" },
+			{ name: "keyword.operator.range.formula.ts", match: ":" },
+			// implicit intersection, spilled range
+			{ name: "keyword.operator.reference.formula.ts", match: "[@#]" },
+			{ name: "meta.brace.round.ts", match: "[()]" },
+			{ name: "meta.brace.curly.formula.ts", match: "[{}]" },
+			{ name: "punctuation.separator.formula.ts", match: "[,;]" },
+		],
+	};
+	template.unshift({ include: "#formula-template" });
+	// Upstream's tagged-template call starts at the object of `ws.fx` (earlier than the `.`
+	// above): it must not take `fx`.
+	const call = rule(grammar, "template-call").patterns[0];
+	const chain = `(?:${IDENTIFIER}\\s*\\??\\.\\s*)*`;
+	replaceIn(call, "begin", "(?=(([_$[:alpha:]]", `(?!${chain}(?:\\??\\.\\s*)?fx\\s*\`)(?=(([_$[:alpha:]]`);
+}
+
 /** `.ts` → `.ras` on every scope name. */
 function renameScopes(grammar) {
 	const rename = (scopes) => scopes.replace(/\.ts(?=\s|$)/g, ".ras");
@@ -274,6 +375,7 @@ export function buildGrammar() {
 	replaceNumericLiterals(upstream);
 	scopeDecoratorNames(upstream);
 	addStructDeclaration(upstream);
+	addFormulaTemplate(upstream);
 	// JavaScript, DOM and Node.js library names (Math, JSON, console, document,
 	// process, `.length` ...). RAS has its own standard library; its members are
 	// coloured by the language server's semantic tokens instead.

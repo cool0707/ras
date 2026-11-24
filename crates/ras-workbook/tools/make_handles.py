@@ -7,7 +7,7 @@ annex "Preset Shape Definitions"; LibreOffice has a copy at
 oox/source/drawingml/customshapes/presetShapeDefinitions.xml). Of each
 preset with handles (`ahLst`) this keeps what the page evaluates them with:
 the adjust values and their defaults (avLst), the guides (gdLst), the
-handles (ahLst) and the paths (pathLst, for the outline shown while a handle
+handles (ahLst) and the paths (pathLst, for the shape drawn anew while a handle
 is dragged), as JSON in handles.json in the zip (deflated: the crate embeds
 the zip and reads it on first use):
 

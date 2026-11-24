@@ -4,6 +4,7 @@
 use ras_syntax::ast::{self, Expr, ExprKind, Item, PassMode, Span};
 
 use crate::astutil::{walk_expr, walk_stmt, walk_stmts};
+use crate::formula;
 use crate::intrinsics;
 use crate::model::*;
 
@@ -335,6 +336,19 @@ fn describe_res(prog: &Program, m: ModuleId, offset: u32, res: &Res, ty: &Type) 
 
 pub fn hover(prog: &Program, m: ModuleId, offset: u32) -> Option<Hover> {
     let md = &prog.modules[m];
+    // A function of the formula of `` fx`…` `` (spec §2.7).
+    if let Some(h) = formula::hover_at(&md.text, (offset as usize).min(md.text.len())) {
+        let (f, (a, b)) = h?;
+        let mut markdown = format!("```\n{}\n```", f.signature);
+        if !f.description.is_empty() {
+            markdown.push_str("\n\n");
+            markdown.push_str(&f.description);
+        }
+        return Some(Hover {
+            span: Span::new((a as u32).into(), (b as u32).into()),
+            markdown,
+        });
+    }
     // Declarations first: function names and local declarations are not expressions.
     for &f in &md.fns {
         let d = &prog.fns[f];
@@ -433,6 +447,11 @@ pub struct Completion {
     /// The `import` that makes the name visible, inserted when the item is accepted (an
     /// export of a module that is not imported yet, spec §16.2.1).
     pub import: Option<(Span, String)>,
+    /// The text the item replaces (when it is not the identifier at the cursor: a function
+    /// of a formula with `.` in its name, spec §2.7).
+    pub range: Option<Span>,
+    /// Shows the signature once the item is accepted (a function of a formula).
+    pub parameter_hints: bool,
 }
 
 fn item(
@@ -451,6 +470,8 @@ fn item(
         insert: None,
         filter: None,
         import: None,
+        range: None,
+        parameter_hints: false,
     }
 }
 
@@ -1064,6 +1085,8 @@ fn named_arg_items(prog: &Program, m: ModuleId, p: usize) -> Option<(Vec<Complet
             insert: Some(format!("{}: ", pd.name)),
             filter: Some(pd.name.clone()),
             import: None,
+            range: None,
+            parameter_hints: false,
         });
     }
     Some((out, !names.is_empty()))
@@ -1073,6 +1096,9 @@ fn named_arg_items(prog: &Program, m: ModuleId, p: usize) -> Option<(Vec<Complet
 pub fn named_arg_completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> {
     let text: &str = &prog.modules[m].text;
     let offset = (offset as usize).min(text.len());
+    if formula::formula_at(text, offset).is_some() {
+        return Vec::new();
+    }
     named_arg_items(prog, m, ident_start(text, offset))
         .map(|x| x.0)
         .unwrap_or_default()
@@ -1132,6 +1158,18 @@ pub struct SignatureHelp {
 /// written (spec §16.2). Works on the text, like named-argument completion.
 pub fn signature_help(prog: &Program, m: ModuleId, offset: u32) -> Option<SignatureHelp> {
     let text: &str = &prog.modules[m].text;
+    if let Some(sig) = formula::signature_at(text, (offset as usize).min(text.len())) {
+        let (f, params, active) = sig?;
+        return Some(SignatureHelp {
+            label: f.signature.clone(),
+            doc: Some(f.description.clone()).filter(|d| !d.is_empty()),
+            params: params
+                .into_iter()
+                .map(|(a, b)| ((a as u32, b as u32), None))
+                .collect(),
+            active: active.map(|a| a as u32),
+        });
+    }
     let (paren, args) = enclosing_args(text, (offset as usize).min(text.len()))?;
     let (f, skip) = callee_at(prog, m, paren as u32)?;
     let d = &prog.fns[f];
@@ -1286,6 +1324,10 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
     let md = &prog.modules[m];
     let text: &str = &md.text;
     let offset = (offset as usize).min(text.len());
+    // In the formula of `` fx`…` ``: Excel's functions (spec §2.7).
+    if let Some(list) = formula::completions(text, offset) {
+        return list.into_iter().map(formula_item).collect();
+    }
     let p = ident_start(text, offset);
     if text[..p].ends_with('.') {
         let dot = (p - 1) as u32;
@@ -1380,6 +1422,24 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
         out.push(item(k, kind::KEYWORD, "", None, 4));
     }
     out
+}
+
+/// A worksheet function offered in a formula: `NAME(` replacing the word written so far.
+fn formula_item(c: formula::FormulaCompletion) -> Completion {
+    let f = c.function;
+    let mut doc = format!("```\n{}\n```", f.signature);
+    if !f.description.is_empty() {
+        doc.push_str("\n\n");
+        doc.push_str(&f.description);
+    }
+    let mut it = item(&f.name, kind::FUNCTION, "Excel の関数", Some(&doc), 0);
+    it.insert = Some(format!("{}(", f.name));
+    it.range = Some(Span::new(
+        (c.replace.0 as u32).into(),
+        (c.replace.1 as u32).into(),
+    ));
+    it.parameter_hints = true;
+    it
 }
 
 /// LSP `SymbolKind` values.
