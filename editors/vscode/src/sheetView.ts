@@ -238,6 +238,56 @@ async function travel(what: Shown, redo: boolean): Promise<string> {
 	return page(what.root, what.file, undefined, undefined, undefined, what.sheet, true);
 }
 
+/** The families of the fonts installed (asked once a session; none when they cannot be listed). */
+let fonts: Promise<string[]> | undefined;
+
+function installedFonts(): Promise<string[]> {
+	fonts ??= listFonts().catch(() => []);
+	return fonts;
+}
+
+function listFonts(): Promise<string[]> {
+	// Windows: the names in the user's language ("游ゴシック"), as Excel shows them.
+	const [command, args, split] =
+		process.platform === "win32"
+			? [
+					"powershell.exe",
+					[
+						"-NoProfile",
+						"-NonInteractive",
+						"-Command",
+						"[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Drawing; (New-Object System.Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name }",
+					],
+					false,
+				]
+			: process.platform === "darwin"
+				? [
+						"osascript",
+						["-l", "JavaScript", "-e", 'ObjC.import("AppKit"); ObjC.deepUnwrap($.NSFontManager.sharedFontManager.availableFontFamilies).join("\\n")'],
+						false,
+					]
+				: // fontconfig: a family's names in each language, separated by commas.
+					["fc-list", ["--format", "%{family}\\n"], true];
+	return new Promise((resolve, reject) => {
+		cp.execFile(command, args as string[], { encoding: "utf8", timeout: 20000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout) => {
+			if (error) {
+				reject(error);
+				return;
+			}
+			const names = new Set<string>();
+			for (const line of stdout.split(/\r?\n/)) {
+				for (const name of split ? line.split(",") : [line]) {
+					const n = name.trim();
+					if (n !== "") {
+						names.add(n);
+					}
+				}
+			}
+			resolve([...names]);
+		});
+	});
+}
+
 /** One edit at a time, in the order the page posted them. */
 let queue: Promise<void> = Promise.resolve();
 
@@ -248,6 +298,15 @@ function receive(message: unknown): void {
 		if (panel !== undefined && shown !== undefined && shown.editable && sheetFolder(shown) !== undefined) {
 			void panel.webview.postMessage({ type: "events", on: true });
 		}
+		return;
+	}
+	if (type === "fonts") {
+		// The fonts installed on the system, for the font box of the ribbon.
+		void installedFonts().then((names) => {
+			if (panel !== undefined) {
+				void panel.webview.postMessage({ type: "fonts", names });
+			}
+		});
 		return;
 	}
 	if (type === "link") {
@@ -302,6 +361,8 @@ interface ObjectEvent {
 	activex?: string;
 	/** The macro assigned to it (`Sheet1.button1Click`). */
 	macro: string;
+	/** What runs it, as the page names it: "クリック", "選択" (a list or combo box), "変更" (a spin button, a scroll bar). */
+	eventName?: string;
 	choose: boolean;
 }
 
@@ -368,7 +429,29 @@ async function append(code: vscode.TextDocument, make: (text: string, indent: st
 async function reveal(code: vscode.TextDocument, line: number): Promise<void> {
 	const at = Math.min(Math.max(line, 0), code.lineCount - 1);
 	const position = new vscode.Position(at, code.lineAt(at).text.length);
-	await vscode.window.showTextDocument(code, { viewColumn: vscode.ViewColumn.Beside, selection: new vscode.Range(position, position) });
+	await vscode.window.showTextDocument(code, { viewColumn: codeColumn(code), selection: new vscode.Range(position, position) });
+}
+
+/**
+ * Where the code opens: the group already showing it, else the group of the code next to the
+ * panel (the one left of it first), and only without another group a new one beside the panel
+ * (`Beside` from the panel would split the window into a third group).
+ */
+function codeColumn(code: vscode.TextDocument): vscode.ViewColumn {
+	const shown = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === code.uri.toString());
+	if (shown?.viewColumn !== undefined) {
+		return shown.viewColumn;
+	}
+	const own = panel?.viewColumn;
+	const others = vscode.window.tabGroups.all.map((g) => g.viewColumn).filter((c) => c !== own);
+	if (others.length === 0) {
+		return vscode.ViewColumn.Beside;
+	}
+	if (own === undefined) {
+		return others[0];
+	}
+	const left = others.filter((c) => c < own);
+	return left.length > 0 ? Math.max(...left) : Math.min(...others);
 }
 
 /** The first body line of the function `name` of a document (its declaration when it has none). */
@@ -450,6 +533,7 @@ async function findMacro(root: string, macro: string): Promise<{ file: string; n
 /** A shape's or a form control's macro: opened, or a new one (or one chosen) assigned to it. */
 async function assignMacro(what: Shown, root: string, sheetFile: string, m: ObjectEvent): Promise<string | undefined> {
 	const label = m.object || "このコントロール";
+	const ev = m.eventName ?? "クリック";
 	const open = async (file: string, name: string) => {
 		const code = await documentOf(file);
 		await reveal(code, bodyLineOf(code, name) ?? 0);
@@ -457,7 +541,7 @@ async function assignMacro(what: Shown, root: string, sheetFile: string, m: Obje
 	if (!m.choose && m.macro) {
 		const found = await findMacro(root, m.macro);
 		if (found === undefined) {
-			throw new Error(`${label} のマクロ ${m.macro} は、プロジェクトの RAS のファイルにありません（ブックの VBA だけにあるマクロかもしれません）。`);
+			throw new Error(`${label} の${ev}イベントに登録された ${m.macro} は、プロジェクトの RAS のファイルにありません（ブックの VBA だけにある関数かもしれません）。`);
 		}
 		await open(found.file, found.name);
 		return undefined;
@@ -467,7 +551,7 @@ async function assignMacro(what: Shown, root: string, sheetFile: string, m: Obje
 	let create = true;
 	if (m.choose) {
 		type Item = vscode.QuickPickItem & { target?: { file: string; module: string; name: string }; create?: boolean };
-		const items: Item[] = [{ label: `$(add) 新しいマクロ: ${m.codeName}.${fresh}`, description: path.basename(sheetFile), target: chosen, create: true }];
+		const items: Item[] = [{ label: `$(add) 新しい関数: ${m.codeName}.${fresh}`, description: path.basename(sheetFile), target: chosen, create: true }];
 		for (const f of await macroFiles(root)) {
 			const macros = macrosOf(await textOf(f.file));
 			if (macros.length > 0) {
@@ -478,7 +562,7 @@ async function assignMacro(what: Shown, root: string, sheetFile: string, m: Obje
 				items.push({ label: full, description: vscode.workspace.asRelativePath(f.file), detail: m.macro.toLowerCase() === full.toLowerCase() ? "登録されています" : undefined, target: { file: f.file, module: f.module, name: x.name } });
 			}
 		}
-		const picked = await vscode.window.showQuickPick(items, { placeHolder: `${label} に登録するマクロを選んでください（クリックすると実行されます）` });
+		const picked = await vscode.window.showQuickPick(items, { placeHolder: `${label} の${ev}イベントに登録する関数を選んでください` });
 		if (picked?.target === undefined) {
 			return undefined;
 		}
