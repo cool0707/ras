@@ -1738,6 +1738,8 @@
         const m = e.data;
         if (m && m.type === "events") {
             if (m.on) enableEvents();
+        } else if (m && m.type === "fonts") {
+            if (Array.isArray(m.names)) takeFonts(m.names);
         } else if (m && m.type === "error") {
             setBusy(false);
             remember({ pickObj: null });
@@ -2694,84 +2696,10 @@
         text.focus();
         text.setSelectionRange(text.value.length, text.value.length);
     }
+    // F2, a double click: the text in the pane of the object.
     function editObjectText(obj) {
         if (!movable(obj) || obj.text === undefined || busy || !view) return;
-        const sheet = view.sheet.name;
-        askText(`テキストの編集（${obj.name}）`, obj.text, (text) => {
-            if (text === obj.text) return;
-            pickAfter(keyOf(obj));
-            postEdit([{ op: "object", sheet, ...target(obj), text }]);
-        });
-    }
-    // コントロールの書式設定: the text, the linked cell, the items, the state, the values of a form
-    // control (what its kind has).
-    function askControlFormat(obj) {
-        const f = obj.form;
-        if (!isControl(obj) || !f || busy || !view) return;
-        const t = f.type;
-        const ax = !!f.activex;
-        const form = openDialog(`${ax ? "プロパティ" : "コントロールの書式設定"}（${obj.name || `_x0000_s${obj.shapeId}`}）`, "ctldlg");
-        const change = {};
-        const inputs = [];
-        if (obj.text !== undefined) {
-            const line = form.appendChild(el("label"));
-            line.appendChild(el("span", "lbl", ax && ["TextBox", "ListBox", "ComboBox"].includes(t) ? "値（Value）:" : ax ? "Caption:" : "文字:"));
-            const text = line.appendChild(el("textarea"));
-            text.rows = 2;
-            text.value = obj.text;
-            inputs.push(() => {
-                if (text.value !== obj.text) change.text = text.value;
-            });
-        }
-        if (["CheckBox", "Radio", "OptionButton", "ToggleButton"].includes(t)) {
-            const on = check(form, "オン（チェックする）", !!f.checked);
-            inputs.push(() => {
-                if (on.checked !== !!f.checked) change.checked = on.checked;
-            });
-        }
-        const ref = (label, key) => {
-            const input = field(form, label);
-            input.value = f[key] || "";
-            input.placeholder = key === "items" ? "$A$1:$A$5" : "$B$2";
-            inputs.push(() => {
-                const v = input.value.trim().replace(/^=/, "");
-                if (v !== (f[key] || "")) change[key] = v || null;
-            });
-        };
-        if (["List", "Drop", "ListBox", "ComboBox"].includes(t)) ref(ax ? "ListFillRange:" : "入力範囲:", "items");
-        if (["CheckBox", "Radio", "List", "Drop", "Spin", "Scroll", "OptionButton", "ToggleButton", "TextBox", "ListBox", "ComboBox", "SpinButton", "ScrollBar"].includes(t)) ref(ax ? "LinkedCell:" : "リンクするセル:", "link");
-        // The item selected (a form control's list or combo box: its number).
-        if (t === "List" || t === "Drop") {
-            const input = field(form, "選択している項目（番号。0 はなし）:", "number");
-            Object.assign(input, { min: "0", max: "30000", step: "1", value: String(f.sel || 0) });
-            inputs.push(() => {
-                const v = Math.round(+input.value);
-                if (isFinite(v) && v !== (f.sel || 0)) change.selected = v;
-            });
-        }
-        if (["Spin", "Scroll", "SpinButton", "ScrollBar"].includes(t)) {
-            const numbers = ax
-                ? [["Value:", "val", "value"], ["Min:", "min", "min"], ["Max:", "max", "max"], ["SmallChange:", "inc", "step"]]
-                : [["現在値:", "val", "value"], ["最小値:", "min", "min"], ["最大値:", "max", "max"], ["変化の増分:", "inc", "step"]];
-            if (t === "Scroll" || t === "ScrollBar") numbers.push([ax ? "LargeChange:" : "ページ単位の変化:", "page", "page"]);
-            for (const [label, key, op] of numbers) {
-                const input = field(form, label, "number");
-                Object.assign(input, ax ? { step: "1", value: String(f[key]) } : { min: "0", max: "30000", step: "1", value: String(f[key]) });
-                inputs.push(() => {
-                    const v = Math.round(+input.value);
-                    if (isFinite(v) && v !== f[key]) change[op] = v;
-                });
-            }
-        }
-        dialogButtons(form);
-        form.addEventListener("submit", (e) => {
-            e.preventDefault();
-            for (const take of inputs) take();
-            closeDialog();
-            if (Object.keys(change).length) objectEdit(obj, change);
-        });
-        const firstInput = form.querySelector("textarea, input");
-        if (firstInput) firstInput.focus();
+        openPane("format", "text");
     }
     function deleteObject(obj) {
         if (!movable(obj) || busy || !view) return;
@@ -2863,10 +2791,34 @@
             const [cx, cy] = [f.x + f.w / 2 + sx * cos - sy * sin, f.y + f.h / 2 + sx * sin + sy * cos];
             [x, y] = [cx - w / 2, cy - h / 2];
         }
+        // 枠線に合わせる (or Alt held, as in Excel): the sides moved go to the cells' borders.
+        if ((saved.snapGrid || e.altKey) && !turn) [x, y, w, h] = snapBox(d.how, x, y, w, h);
         if (!d.ghost) d.ghost = makeGhost(false);
         d.now = { x, y, w, h };
         ghostAt(d.ghost, x, y, x + w, y + h, false);
         if (turn) d.ghost.style.transform = `rotate(${d.obj.rot}deg)`;
+    }
+    // The border of a column (`cols`) or a row nearest a point of the sheet.
+    function nearestBorder(cols, p) {
+        const v = view;
+        const at = cols ? (i) => columnLeft(v, i) : (i) => rowTop(v, i);
+        const i = lineAt(cols ? v.cols : v.rows.map((row) => row[0]), at, p);
+        const [a, b] = [at(i), at(i + 1)];
+        return p - a <= b - p ? a : b;
+    }
+    function snapBox(how, x, y, w, h) {
+        if (how === "move") {
+            const [l, r] = [nearestBorder(true, x), nearestBorder(true, x + w)];
+            x = Math.abs(l - x) <= Math.abs(r - x - w) ? l : r - w;
+            const [t, b] = [nearestBorder(false, y), nearestBorder(false, y + h)];
+            y = Math.abs(t - y) <= Math.abs(b - y - h) ? t : b - h;
+            return [x, y, w, h];
+        }
+        if (how.includes("w")) [x, w] = [nearestBorder(true, x), x + w - nearestBorder(true, x)];
+        if (how.includes("e")) w = nearestBorder(true, x + w) - x;
+        if (how.includes("n")) [y, h] = [nearestBorder(false, y), y + h - nearestBorder(false, y)];
+        if (how.includes("s")) h = nearestBorder(false, y + h) - y;
+        return [x, y, Math.max(0, w), Math.max(0, h)];
     }
     function endObjectDrag() {
         const d = objDrag;
@@ -2909,26 +2861,6 @@
         if (obj.rot) change.rotation = (360 - obj.rot) % 360;
         objectEdit(obj, change);
     }
-    // その他の回転オプション: the angle typed.
-    function askRotation(obj) {
-        if (!canTurn(obj) || busy) return;
-        const form = openDialog(`回転（${obj.name}）`, "rotdlg");
-        const input = field(form, "回転角度（°）:", "number");
-        input.min = "-3600";
-        input.max = "3600";
-        input.step = "1";
-        input.value = String(Math.round(obj.rot || 0));
-        dialogButtons(form);
-        form.addEventListener("submit", (e) => {
-            e.preventDefault();
-            const deg = +input.value;
-            if (!isFinite(deg)) return;
-            closeDialog();
-            objectEdit(obj, { rotation: (((deg % 360) + 360) % 360) });
-        });
-        input.focus();
-        input.select();
-    }
     const ORDERS = [
         ["front", "最前面へ移動"],
         ["forward", "前面へ移動"],
@@ -2936,16 +2868,332 @@
         ["back", "最背面へ移動"],
     ];
     const LINE_WIDTHS = [0.25, 0.5, 0.75, 1, 1.5, 2.25, 3, 4.5, 6];
-    // The contextual tab of the ribbon: shown while an object that can be changed is selected.
+    // The contextual tab of the ribbon: shown while an object that can be changed is selected
+    // (a shape, a picture, a chart, a control).
     function refreshShapeTools() {
+        renderPane();
         const ribbon = $("ribbon");
         if (!ribbon || !ribbon.showShapeTab) return;
-        const obj = selected && movable(selectedObj) && !isControl(selectedObj) ? selectedObj : null;
+        const obj = selected && movable(selectedObj) ? selectedObj : null;
         ribbon.showShapeTab(!!obj);
         if (!obj) return;
         tools.shapeFill.disabled = tools.shapeFillMore.disabled = !canFill(obj);
         tools.shapeLine.disabled = tools.shapeLineMore.disabled = !canLine(obj);
+        for (const key of ["forward", "forwardMore", "backward", "backwardMore"]) tools[key].disabled = isControl(obj);
         tools.rotate.disabled = !canTurn(obj);
+        const b = boxOfObject(selected);
+        tools.objHeight.setCm(cmOf(b.h));
+        tools.objWidth.setCm(cmOf(b.w));
+    }
+    function cmOf(px) {
+        return Math.round(((px * 2.54) / 96) * 100) / 100;
+    }
+    // A box of centimeters with its spin buttons (as Excel's サイズ): `set` takes what is typed.
+    function sizeBox(into, label, set) {
+        const wrap = into.appendChild(el("span", "spinbox"));
+        const input = wrap.appendChild(el("input"));
+        input.type = "text";
+        input.title = label;
+        input.setAttribute("aria-label", label);
+        input.spellcheck = false;
+        input.autocomplete = "off";
+        let now = null;
+        const show = () => (input.value = now === null ? "" : `${now} cm`);
+        const take = (cm) => {
+            if (!isFinite(cm)) return show();
+            cm = Math.round(Math.min(Math.max(cm, 0), 1000) * 100) / 100;
+            if (cm === now) return show();
+            now = cm;
+            show();
+            set(cm);
+        };
+        input.addEventListener("change", () => take(parseFloat(input.value)));
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                e.preventDefault();
+                take((parseFloat(input.value) || 0) + (e.key === "ArrowUp" ? 0.1 : -0.1));
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                show();
+                focusGrid();
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                input.blur();
+                focusGrid();
+            }
+        });
+        const spins = wrap.appendChild(el("span", "spins"));
+        for (const [text, by] of [["▴", 0.1], ["▾", -0.1]]) {
+            const b = spins.appendChild(el("button", null, text));
+            b.type = "button";
+            b.tabIndex = -1;
+            b.addEventListener("click", () => take((parseFloat(input.value) || 0) + by));
+        }
+        wrap.setCm = (cm) => {
+            now = cm;
+            if (document.activeElement !== input) show();
+        };
+        wrap.input = input;
+        return wrap;
+    }
+
+    // ---- the pane at the right: the format of the object selected (as the form designer's
+    // properties), or the objects of the sheet (オブジェクトの選択と表示)
+    // `saved.pane`: "format", "list", or null (closed); the format is shown until it is closed.
+
+    function paneMode() {
+        return saved.pane === undefined ? "format" : saved.pane;
+    }
+    function openPane(mode, focus) {
+        remember({ pane: mode });
+        renderPane(focus);
+    }
+    function closePane() {
+        remember({ pane: null });
+        renderPane();
+        focusGrid();
+    }
+    function objectLabel(obj) {
+        // (A form control may have no name: its text, as it shows.)
+        return obj.name || (isControl(obj) && obj.text ? obj.text : obj.shapeId !== undefined ? `_x0000_s${obj.shapeId}` : "（名前なし）");
+    }
+    function renderPane(focus) {
+        let pane = $("pane");
+        const mode = paneMode();
+        const obj = selected && movable(selectedObj) ? selectedObj : null;
+        const on = editable && !!view && (mode === "list" || (mode === "format" && !!obj));
+        if (!on) {
+            if (pane) pane.hidden = true;
+            return;
+        }
+        if (!pane) {
+            pane = el("div");
+            pane.id = "pane";
+            pane.dataset.vscodeContext = JSON.stringify({ preventDefaultContextMenuItems: true });
+            $("main").insertBefore(pane, $("grid").nextSibling);
+        }
+        // (A field being typed into keeps what is typed until the object changes.)
+        const key = mode === "list" ? "list" : `format:${view.sheet.name}:${keyOf(obj)}`;
+        if (!pane.hidden && pane.dataset.key === key && pane.contains(document.activeElement) && !focus) {
+            if (mode === "list") markListed(pane);
+            return;
+        }
+        pane.hidden = false;
+        pane.dataset.key = key;
+        pane.textContent = "";
+        const head = pane.appendChild(el("div", "phd"));
+        const title = mode === "list" ? "選択" : isActiveX(obj) ? "プロパティ" : isControl(obj) ? "コントロールの書式設定" : "図形の書式設定";
+        head.appendChild(el("span", "ptitle", title));
+        const close = head.appendChild(el("button", "pclose", "×"));
+        close.type = "button";
+        close.title = "閉じる";
+        close.addEventListener("click", closePane);
+        const body = pane.appendChild(el("div", "pbody"));
+        if (mode === "list") listPane(body);
+        else formatPane(body, obj);
+        const target = focus && body.querySelector(`[data-field="${focus}"]`);
+        if (target) {
+            target.focus();
+            if (target.select) target.select();
+        }
+    }
+    // The objects of the sheet, the front one first (as Excel lists them); a click selects one.
+    function listPane(body) {
+        const objects = (view.sheet.objects || []).filter((o) => o.name || o.shapeId !== undefined);
+        if (!objects.length) {
+            body.appendChild(el("div", "pnone", "このシートには図形・コントロールがありません"));
+            return;
+        }
+        const list = body.appendChild(el("div", "plist"));
+        for (const obj of objects.slice().reverse()) {
+            const b = list.appendChild(el("button", "pitem", objectLabel(obj)));
+            b.type = "button";
+            b.obj = obj;
+            b.title = obj.macro ? `${objectLabel(obj)}（マクロ: ${obj.macro}）` : objectLabel(obj);
+            b.addEventListener("click", () => {
+                if (!obj.box) return;
+                selectObject(obj.box, obj);
+                obj.box.scrollIntoView({ block: "nearest", inline: "nearest" });
+                focusGrid();
+            });
+        }
+        markListed(body.parentNode);
+    }
+    function markListed(pane) {
+        for (const b of pane.querySelectorAll(".pitem")) b.classList.toggle("on", b.obj === selectedObj);
+    }
+    // The format of an object: what it can have, each set as it is changed.
+    function formatPane(body, obj) {
+        const ax = isActiveX(obj);
+        const f = obj.form || {};
+        const t = f.type;
+        const edit = (change) => objectEdit(obj, change);
+        body.appendChild(el("div", "pname", objectLabel(obj)));
+        const section = (label) => {
+            const sec = body.appendChild(el("section", "psec"));
+            sec.appendChild(el("h3", null, label));
+            return sec;
+        };
+        const line = (sec, label) => {
+            const row = sec.appendChild(el("label", "prow"));
+            row.appendChild(el("span", "plabel", label));
+            return row;
+        };
+        // A box committed when it changes (Enter: back to the grid; Esc: what it had).
+        const box = (sec, label, field, value, take, type) => {
+            const input = line(sec, label).appendChild(el("input"));
+            input.type = type || "text";
+            input.dataset.field = field;
+            input.spellcheck = false;
+            input.autocomplete = "off";
+            input.value = value;
+            input.addEventListener("change", () => take(input.value));
+            input.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    input.blur();
+                    focusGrid();
+                } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    input.value = value;
+                    focusGrid();
+                }
+            });
+            return input;
+        };
+
+        // サイズ (cm), 回転 (°)
+        const size = section("サイズ");
+        const b = boxOfObject(selected);
+        for (const [field, label, px] of [["height", "高さ", b.h], ["width", "幅", b.w]]) {
+            const row = line(size, label);
+            const spin = sizeBox(row, `図形の${label}`, (cm) => {
+                const now = boxOfObject(obj.box || selected);
+                const v = (cm * 96) / 2.54;
+                moveObject(obj, field === "height" ? { ...now, h: v } : { ...now, w: v });
+            });
+            spin.input.dataset.field = field;
+            spin.setCm(cmOf(px));
+        }
+        if (canTurn(obj)) {
+            const input = box(size, "回転", "rotation", String(Math.round(obj.rot || 0)), (v) => {
+                const deg = +v;
+                if (v.trim() === "" || !isFinite(deg)) return;
+                edit({ rotation: ((Math.round(deg) % 360) + 360) % 360 });
+            }, "number");
+            Object.assign(input, { min: "-3600", max: "3600", step: "1" });
+            input.after(el("span", "punit", "°"));
+            const flips = size.appendChild(el("div", "pbtns"));
+            for (const [label, vertical] of [["左右反転", false], ["上下反転", true]]) {
+                const fb = flips.appendChild(el("button", null, label));
+                fb.type = "button";
+                fb.addEventListener("click", () => flipObject(obj, vertical));
+            }
+        }
+
+        // 塗りつぶしと線
+        if (canFill(obj) || canLine(obj)) {
+            const sec = section("塗りつぶしと線");
+            const colorRow = (label, key, none) => {
+                const row = sec.appendChild(el("div", "prow"));
+                row.appendChild(el("span", "plabel", label));
+                const cb = row.appendChild(el("button", "pcolor"));
+                cb.type = "button";
+                cb.appendChild(el("span", "sw")).style.background = lastShape[key];
+                cb.appendChild(el("span", null, "色の選択 ▾"));
+                cb.addEventListener("click", () => openColors(cb, key, none, (color) => {
+                    if (color) lastShape[key] = color;
+                    edit({ [key]: color });
+                }));
+            };
+            if (canFill(obj)) colorRow("塗りつぶし", "fill", "塗りつぶしなし");
+            if (canLine(obj)) {
+                colorRow("線", "line", "線なし");
+                const row = line(sec, "線の幅");
+                const w = row.appendChild(el("select"));
+                w.appendChild(el("option", null, "")).value = "";
+                for (const n of LINE_WIDTHS) w.appendChild(el("option", null, `${n} pt`)).value = String(n);
+                w.addEventListener("change", () => w.value && edit({ lineWidth: +w.value }));
+            }
+        }
+
+        // テキスト (a control's caption or value)
+        if (obj.text !== undefined) {
+            const sec = section(ax && ["TextBox", "ListBox", "ComboBox"].includes(t) ? "値（Value）" : ax ? "Caption" : isControl(obj) ? "文字" : "テキスト");
+            const text = sec.appendChild(el("textarea", "ptext"));
+            text.rows = 4;
+            text.value = obj.text;
+            text.dataset.field = "text";
+            text.title = "Ctrl+Enter で確定";
+            const commit = () => {
+                if (text.value !== obj.text) edit({ text: text.value });
+            };
+            text.addEventListener("change", commit);
+            text.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    text.blur();
+                    focusGrid();
+                } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    text.value = obj.text;
+                    focusGrid();
+                }
+            });
+        }
+
+        // コントロール: what its kind has (the linked cell, the items, the state, the values)
+        if (isControl(obj) && obj.form) {
+            const sec = section("コントロール");
+            if (["CheckBox", "Radio", "OptionButton", "ToggleButton"].includes(t)) {
+                const row = sec.appendChild(el("label", "prow pcheck"));
+                const on = row.appendChild(el("input"));
+                on.type = "checkbox";
+                on.checked = !!f.checked;
+                on.dataset.field = "checked";
+                row.appendChild(el("span", null, "オン（チェックする）"));
+                on.addEventListener("change", () => edit({ checked: on.checked }));
+            }
+            const ref = (label, key) => {
+                const input = box(sec, label, key, f[key] || "", (v) => {
+                    v = v.trim().replace(/^=/, "");
+                    if (v !== (f[key] || "")) edit({ [key]: v || null });
+                });
+                input.placeholder = key === "items" ? "$A$1:$A$5" : "$B$2";
+            };
+            if (["List", "Drop", "ListBox", "ComboBox"].includes(t)) ref(ax ? "ListFillRange" : "入力範囲", "items");
+            if (["CheckBox", "Radio", "List", "Drop", "Spin", "Scroll", "OptionButton", "ToggleButton", "TextBox", "ListBox", "ComboBox", "SpinButton", "ScrollBar"].includes(t)) ref(ax ? "LinkedCell" : "リンクするセル", "link");
+            const number = (label, key, op, limits) => {
+                const input = box(sec, label, op, String(f[key] || 0), (v) => {
+                    const n = Math.round(+v);
+                    if (v.trim() !== "" && isFinite(n) && n !== (f[key] || 0)) edit({ [op]: n });
+                }, "number");
+                Object.assign(input, limits ? { min: "0", max: "30000", step: "1" } : { step: "1" });
+            };
+            // The item selected (a form control's list or combo box: its number; 0 none).
+            if (t === "List" || t === "Drop") number("選択している項目", "sel", "selected", true);
+            if (["Spin", "Scroll", "SpinButton", "ScrollBar"].includes(t)) {
+                const numbers = ax
+                    ? [["Value", "val", "value"], ["Min", "min", "min"], ["Max", "max", "max"], ["SmallChange", "inc", "step"]]
+                    : [["現在値", "val", "value"], ["最小値", "min", "min"], ["最大値", "max", "max"], ["変化の増分", "inc", "step"]];
+                if (t === "Scroll" || t === "ScrollBar") numbers.push([ax ? "LargeChange" : "ページ単位の変化", "page", "page"]);
+                for (const [label, key, op] of numbers) number(label, key, op, !ax);
+            }
+            if (!sec.querySelector(".prow")) sec.remove();
+        }
+
+        // マクロ (イベント): in the sheet's file
+        const items = eventItems(obj);
+        if (items.length) {
+            const sec = section(ax ? "イベント" : "マクロ");
+            if (!ax) sec.appendChild(el("div", "pnote", obj.macro ? `登録されているマクロ: ${obj.macro}` : "マクロは登録されていません"));
+            const btns = sec.appendChild(el("div", "pbtns"));
+            for (const [label, act] of items) {
+                const mb = btns.appendChild(el("button", null, label));
+                mb.type = "button";
+                mb.addEventListener("click", act);
+            }
+        }
     }
 
     // 挿入 > 画像: a picture from a file, at the active cell (shrunk to the window when larger).
@@ -3127,7 +3375,7 @@
             b.type = "button";
             b.setAttribute("role", "menuitem");
             b.appendChild(el("span", null, item[0]));
-            b.appendChild(el("kbd", null, item[2]));
+            if (item[2]) b.appendChild(el("kbd", null, item[2]));
             b.disabled = busy && item[0] !== "コピー";
             b.addEventListener("click", () => {
                 closeMenu();
@@ -3194,31 +3442,33 @@
     function objectItems(obj) {
         const items = [];
         if (movable(obj)) {
-            if (obj.text !== undefined) items.push(["テキストの編集…", () => editObjectText(obj), "F2"]);
-            if (isControl(obj) && obj.form) items.push([isActiveX(obj) ? "プロパティ…" : "コントロールの書式設定…", () => askControlFormat(obj), ""]);
+            if (obj.text !== undefined) items.push(["テキストの編集", () => editObjectText(obj), "F2"]);
+            items.push([isActiveX(obj) ? "プロパティ" : isControl(obj) ? "コントロールの書式設定" : "図形の書式設定", () => openPane("format"), ""]);
             items.push(["削除", () => deleteObject(obj), "Delete"]);
             if (!isControl(obj)) {
                 items.push(null);
                 for (const [how, label] of ORDERS) items.push([label, () => objectEdit(obj, { order: how }), ""]);
             }
-            if (canTurn(obj)) items.push(["回転…", () => askRotation(obj), ""]);
+            if (canTurn(obj)) items.push(["回転", () => openPane("format", "rotation"), ""]);
         }
         const more = eventItems(obj);
         if (items.length && more.length) items.push(null);
         return items.concat(more);
     }
     // The button of the bar: the events of the object selected (a menu).
+    // (Only where the objects have events: the project's workbook.)
     function refreshEventButton() {
         const b = $("event");
         if (!b) return;
         const on = hasEvents(selectedObj);
         b.disabled = !on;
-        b.querySelector(".lbl").textContent = on && selectedObj.activex === undefined ? "マクロ" : "コードの表示";
+        b.querySelector(".lbl").textContent = on && selectedObj.activex !== undefined ? "コードの表示" : "マクロ";
+        if (tools.macroGroup) tools.macroGroup.hidden = !events;
     }
     function enableEvents() {
         events = true;
-        $("ribbon").showDev();
         refreshEventButton();
+        renderPane();
     }
     if (editable) vscode.postMessage({ type: "ready" });
 
@@ -3350,7 +3600,74 @@
     const BORDERS = [["bottom", "下罫線"], ["top", "上罫線"], ["left", "左罫線"], ["right", "右罫線"], ["none", "枠なし"], ["all", "格子"], ["outline", "外枠"], ["thick", "太い外枠"]];
     const NUMBER_FORMATS = [["General", "標準"], ["0.00", "数値"], ["#,##0", "桁区切り"], ["¥#,##0", "通貨"], ["0%", "パーセント"], ["yyyy/m/d", "日付"], ["h:mm", "時刻"], ["@", "文字列"]];
     const FONT_SIZES = [6, 8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
+    // The fonts listed until those of the system are known.
     const FONT_NAMES = ["游ゴシック", "游ゴシック Light", "游明朝", "ＭＳ ゴシック", "ＭＳ Ｐゴシック", "ＭＳ 明朝", "ＭＳ Ｐ明朝", "メイリオ", "Meiryo UI", "BIZ UDゴシック", "BIZ UDPゴシック", "Arial", "Calibri", "Century", "Consolas", "Segoe UI", "Times New Roman", "Verdana"];
+    // The fonts installed on the system: VS Code's editor lists them (the page asks it), the
+    // playground asks the browser (the Local Font Access API: the browser asks the user the first
+    // time the list is opened). Kept with the page's state: the page is drawn again at each edit.
+    let systemFonts = Array.isArray(saved.fonts) ? saved.fonts : null;
+    let fontsAsked = !!systemFonts;
+    let fontsWaiting = null;
+    const inVsCode = typeof acquireVsCodeApi === "function";
+    function takeFonts(names) {
+        const seen = new Set();
+        const list = [];
+        for (const n of names) {
+            const name = String(n || "").trim();
+            // (Windows lists the vertical writing of a font as "@" and its name.)
+            if (!name || name.startsWith("@") || seen.has(name)) continue;
+            seen.add(name);
+            list.push(name);
+        }
+        if (!list.length) return;
+        list.sort((a, b) => a.localeCompare(b, "ja"));
+        systemFonts = list;
+        remember({ fonts: list });
+        if (fontsWaiting) fontsWaiting();
+    }
+    function askFonts() {
+        if (fontsAsked) return;
+        fontsAsked = true;
+        if (inVsCode) vscode.postMessage({ type: "fonts" });
+        else if (typeof window.queryLocalFonts === "function") {
+            // (Called on the click that opens the list: the browser asks for the permission then.)
+            window
+                .queryLocalFonts()
+                .then((fonts) => takeFonts(fonts.map((f) => f.family)))
+                .catch(() => {
+                    // Not allowed: the fonts of Office listed.
+                });
+        }
+    }
+    // The list of the fonts under the font box: each in its own font; `pick` takes the one chosen.
+    function openFontList(anchor, pick) {
+        askFonts();
+        const fill = () => {
+            const now = tools.fontName.value.trim();
+            const names = systemFonts || FONT_NAMES;
+            pop.textContent = "";
+            const list = names.includes(now) || !now ? names : [now].concat(names);
+            let on = null;
+            for (const name of list) {
+                const b = popItem(pop, name, () => pick(name));
+                b.dataset.font = name;
+                b.style.fontFamily = `"${name.replace(/["\\]/g, "")}", sans-serif`;
+                if (name === now) {
+                    b.classList.add("on");
+                    on = b;
+                }
+            }
+            if (!systemFonts && fontsAsked && !inVsCode && typeof window.queryLocalFonts !== "function") {
+                pop.appendChild(el("div", "pnote", "このブラウザーではシステムのフォントを一覧できません（名前を入力すると使えます）"));
+            }
+            if (on) pop.scrollTop = Math.max(0, on.offsetTop - pop.clientHeight / 2);
+        };
+        const pop = openPop(anchor, "fonts");
+        fontsWaiting = () => {
+            if (menu === pop) fill();
+        };
+        fill();
+    }
 
     // The number format with one decimal more (fewer): Excel's 小数点以下の表示桁数を増やす (減らす).
     function stepDecimals(code, up) {
@@ -3472,6 +3789,10 @@
         forward: '<rect x="1.5" y="1.5" width="8" height="8" stroke-dasharray="1.5 1.5"/><rect x="6.5" y="6.5" width="8" height="8" fill="#dbe5f1"/>',
         backward: '<rect x="6.5" y="6.5" width="8" height="8" stroke-dasharray="1.5 1.5"/><rect x="1.5" y="1.5" width="8" height="8" fill="#dbe5f1"/>',
         rotate: '<path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M12 1.5v3.2H8.8"/>',
+        selectionPane: '<rect x="1.5" y="1.5" width="13" height="13"/><path d="M9.5 1.5v13M11 4.5h2M11 7h2M11 9.5h2"/><path d="M3.5 4.5 7 8.2l-1.6.3.9 2-1 .4-.9-2L3.5 10z" fill="currentColor" stroke="none"/>',
+        align: '<path d="M2.5 1.5v13"/><rect x="2.5" y="3.5" width="9" height="3"/><rect x="2.5" y="9.5" width="6" height="3"/>',
+        height: '<path d="M8 1.5v13M6 3.5l2-2 2 2M6 12.5l2 2 2-2M3 1.5h10M3 14.5h10"/>',
+        width: '<path d="M1.5 8h13M3.5 6l-2 2 2 2M12.5 6l2 2-2 2M1.5 3v10M14.5 3v10"/>',
         controls: '<rect x="1.5" y="2.5" width="6" height="4" rx=".8"/><rect x="9.5" y="2.5" width="5" height="5"/><path d="m10.5 5 1.2 1.2 1.8-2.2"/><circle cx="4.5" cy="11.5" r="2.5"/><rect x="9" y="9.5" width="5.5" height="4"/>',
     };
     function icon(name, large) {
@@ -3485,6 +3806,8 @@
     // buttons that edit are off where the workbook cannot be edited.
     const tools = {};
     const lastColor = { color: "#FF0000", fill: "#FFFF00" };
+    // The colors of 図形の塗りつぶし and 図形の枠線 used last.
+    const lastShape = { fill: "#4472C4", line: "#000000" };
     let lastBorder = "bottom";
     function makeRibbon() {
         const ribbon = $("ribbon");
@@ -3623,6 +3946,19 @@
             return s;
         };
         const sep = () => into.appendChild(el("span", "rsep"));
+        // The small button at the corner of a group's label (Excel's dialog box launcher).
+        const launcher = (title, act) => {
+            const label = into.closest(".rgroup").querySelector(".rlabel");
+            const b = label.appendChild(el("button", "launch"));
+            b.type = "button";
+            b.title = title;
+            b.innerHTML = '<svg viewBox="0 0 8 8" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true"><path d="M.5 3.5V.5h3M7.5 3.5v4h-4M3 3l4.2 4.2M7.5 5v2.5H5"/></svg>';
+            b.addEventListener("click", () => {
+                if (entry) commit(null);
+                act();
+            });
+            return b;
+        };
         const item = (pop, label, act, kbd) => {
             const b = popItem(pop, label, () => {
                 act();
@@ -3668,17 +4004,20 @@
         group(home, "フォント");
         const fontRows = into.appendChild(el("div", "rstack wide"));
         row(fontRows);
-        const fontName = into.appendChild(el("input", "fontname"));
+        // A box typed into and a list of every font (a datalist would show only the fonts
+        // matching what the box has).
+        const fontBox = into.appendChild(el("span", "fontbox"));
+        const fontName = fontBox.appendChild(el("input", "fontname"));
         fontName.type = "text";
         fontName.title = "フォント";
         fontName.dataset.tool = "fontName";
-        fontName.setAttribute("list", "fontnames");
         fontName.spellcheck = false;
         fontName.autocomplete = "off";
-        const names = into.appendChild(el("datalist"));
-        names.id = "fontnames";
-        for (const n of FONT_NAMES) names.appendChild(el("option")).value = n;
-        if (!editable) fontName.disabled = true;
+        const fontDrop = fontBox.appendChild(el("button", "fontdrop", "▾"));
+        fontDrop.type = "button";
+        fontDrop.title = "フォントの一覧";
+        fontDrop.dataset.tool = "fontNameMore";
+        if (!editable) fontName.disabled = fontDrop.disabled = true;
         tools.fontName = fontName;
         const applyFont = () => {
             const name = fontName.value.trim();
@@ -3686,11 +4025,23 @@
             focusGrid();
         };
         fontName.addEventListener("change", applyFont);
+        const openFonts = () => {
+            if (busy) return;
+            if (entry) commit(null);
+            openFontList(fontBox, (name) => {
+                fontName.value = name;
+                applyFont();
+            });
+        };
+        fontDrop.addEventListener("click", openFonts);
         fontName.addEventListener("keydown", (e) => {
             if (e.key === "Escape") {
                 e.preventDefault();
                 showTools();
                 focusGrid();
+            } else if (e.key === "ArrowDown" && e.altKey) {
+                e.preventDefault();
+                openFonts();
             }
         });
         const size = select("fontSize", "フォント サイズ", FONT_SIZES.map((n) => [String(n), String(n)]), "fontsize");
@@ -3918,6 +4269,39 @@
                 }
             },
         });
+        // The controls of a sheet (Excel's 開発 > 挿入): their events are in the sheet's file.
+        group(insertTab, "コントロール");
+        button("controlInsert", {
+            icon: "controls",
+            label: "コントロール",
+            large: true,
+            cls: "two",
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "shapes");
+                // A row of buttons a group: [heading, controls, what is drawn, what the tip adds].
+                const groups = [
+                    ["フォーム コントロール", FORM_CONTROLS, "control", "フォーム コントロール"],
+                    ["ActiveX コントロール", ACTIVEX_CONTROLS, "activeX", "ActiveX コントロール。イベントはシートのファイルの @on で受け取ります"],
+                ];
+                for (const [heading, list, how, tip] of groups) {
+                    head(pop, heading);
+                    const row = pop.appendChild(el("div", "shaperow"));
+                    for (const [kind, name, path] of list) {
+                        const b = row.appendChild(el("button", "shapebtn"));
+                        b.type = "button";
+                        b.title = `${name}（${tip}）`;
+                        b.dataset.control = `${how}:${kind}`;
+                        b.innerHTML = `<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+                        b.addEventListener("click", () => {
+                            closeMenu();
+                            closeOpen();
+                            startDrawing(`${how}:${kind}`);
+                        });
+                    }
+                }
+            },
+        });
         group(insertTab, "テキスト");
         button("textBox", { icon: "textBox", label: "テキスト ボックス", large: true, cls: "two", title: "テキスト ボックス: シートをドラッグして描きます", edits: true, act: () => startDrawing("textBox") });
         group(insertTab, "リンク");
@@ -3972,7 +4356,6 @@
         panels.shapeFormat.tab.classList.add("context");
         const onObj = (act) => () => selectedObj && act(selectedObj);
         group(shapeTab, "図形のスタイル");
-        const lastShape = { fill: "#4472C4", line: "#000000" };
         const shapeColor = (key, iconName, label, none, more) => {
             const pick = (color) => {
                 if (color) {
@@ -4005,13 +4388,13 @@
             for (const w of LINE_WIDTHS) item(pop, `${w} pt`, onObj((obj) => objectEdit(obj, { lineWidth: w })));
         });
         group(shapeTab, "配置");
+        stack();
         const orderButton = (key, iconName, label, one, all) => {
             button(key, {
                 icon: iconName,
                 label,
-                large: true,
+                showLabel: true,
                 split: true,
-                cls: "two",
                 title: label,
                 act: onObj((obj) => objectEdit(obj, { order: one })),
                 menu: (anchor) => {
@@ -4022,10 +4405,22 @@
         };
         orderButton("forward", "forward", "前面へ移動", "forward", "front");
         orderButton("backward", "backward", "背面へ移動", "backward", "back");
+        button("selectionPane", { icon: "selectionPane", label: "オブジェクトの選択と表示", showLabel: true, title: "オブジェクトの選択と表示: シートの図形・コントロールの一覧を右に表示します", act: () => openPane("list") });
+        stack();
+        button("align", {
+            icon: "align",
+            label: "配置",
+            title: "オブジェクトの配置",
+            menu: (anchor) => {
+                const pop = openPop(anchor, "aligns");
+                const snap = item(pop, "枠線に合わせる", () => remember({ snapGrid: !saved.snapGrid }));
+                snap.classList.toggle("on", !!saved.snapGrid);
+                snap.title = "移動・サイズの変更でセルの枠線に合わせます（Alt を押しながらドラッグしても合わせます）";
+            },
+        });
         button("rotate", {
             icon: "rotate",
             label: "回転",
-            large: true,
             menu: (anchor) => {
                 const pop = openPop(anchor, "rotates");
                 item(pop, "右へ 90 度回転", onObj((obj) => turnObject(obj, 90)));
@@ -4033,49 +4428,36 @@
                 item(pop, "上下反転", onObj((obj) => flipObject(obj, true)));
                 item(pop, "左右反転", onObj((obj) => flipObject(obj, false)));
                 pop.appendChild(el("hr"));
-                item(pop, "その他の回転オプション…", onObj(askRotation));
+                item(pop, "その他の回転オプション…", onObj((obj) => openPane("format", "rotation")));
             },
         });
 
-        // ---- 開発 (where the objects' events open in the sheet's file)
-        const dev = tab("dev", "開発");
-        // (Where the workbook is edited, for its controls; elsewhere for the events.)
-        panels.dev.tab.hidden = !editable;
-        group(dev, "コントロール");
-        button("controlInsert", {
-            icon: "controls",
-            label: "挿入",
-            large: true,
-            edits: true,
-            menu: (anchor) => {
-                const pop = openPop(anchor, "shapes");
-                // A row of buttons a group: [heading, controls, what is drawn, what the tip adds].
-                const groups = [
-                    ["フォーム コントロール", FORM_CONTROLS, "control", "フォーム コントロール"],
-                    ["ActiveX コントロール", ACTIVEX_CONTROLS, "activeX", "ActiveX コントロール。イベントはシートのファイルの @on で受け取ります"],
-                ];
-                for (const [heading, list, how, tip] of groups) {
-                    head(pop, heading);
-                    const row = pop.appendChild(el("div", "shaperow"));
-                    for (const [kind, name, path] of list) {
-                        const b = row.appendChild(el("button", "shapebtn"));
-                        b.type = "button";
-                        b.title = `${name}（${tip}）`;
-                        b.dataset.control = `${how}:${kind}`;
-                        b.innerHTML = `<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
-                        b.addEventListener("click", () => {
-                            closeMenu();
-                            closeOpen();
-                            startDrawing(`${how}:${kind}`);
-                        });
-                    }
-                }
-            },
-        });
+        // サイズ: the height and the width (cm, as Excel shows them in Japanese).
+        group(shapeTab, "サイズ");
+        launcher("書式設定: 右に図形・コントロールの書式設定を表示します", () => openPane("format", "height"));
+        stack().classList.add("sizes");
+        for (const [key, iconName, label] of [["objHeight", "height", "図形の高さ"], ["objWidth", "width", "図形の幅"]]) {
+            row();
+            into.appendChild(icon(iconName)).title = label;
+            const box = sizeBox(into, label, (cm) => {
+                const obj = selectedObj;
+                if (!obj || !selected) return;
+                const b = boxOfObject(selected);
+                const px = (cm * 96) / 2.54;
+                moveObject(obj, key === "objHeight" ? { ...b, h: px } : { ...b, w: px });
+            });
+            box.dataset.tool = key;
+            tools[key] = box;
+            into = into.parentNode;
+        }
+
+        // マクロ: the events of the object selected (in the sheet's file; with a project's workbook).
+        group(shapeTab, "マクロ");
         const ev = button("event", {
             icon: "code",
-            label: "コードの表示",
+            label: "マクロ",
             large: true,
+            cls: "two",
             title: "選択した図形・コントロールのイベント（マクロ）を開きます。シートのファイルにハンドラーを追加します（図形をダブルクリックすると既定のイベント）",
             menu: (anchor) => {
                 const items = eventItems(selectedObj);
@@ -4086,6 +4468,7 @@
         });
         ev.id = "event";
         ev.disabled = true;
+        tools.macroGroup = ev.closest(".rgroup");
 
         if (!panels[shown] || panels[shown].tab.hidden) shown = "home";
         show(shown, true);
@@ -4095,10 +4478,6 @@
             panels.shapeFormat.tab.hidden = !on;
             if (on && saved.ribbonTab === "shapeFormat" && shown !== "shapeFormat") show("shapeFormat", true);
             if (!on && shown === "shapeFormat") show("home", true);
-        };
-        ribbon.showDev = () => {
-            panels.dev.tab.hidden = false;
-            if (saved.ribbonTab === "dev") show("dev");
         };
     }
     // The buttons show the format of the active cell.

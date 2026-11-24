@@ -238,6 +238,56 @@ async function travel(what: Shown, redo: boolean): Promise<string> {
 	return page(what.root, what.file, undefined, undefined, undefined, what.sheet, true);
 }
 
+/** The families of the fonts installed (asked once a session; none when they cannot be listed). */
+let fonts: Promise<string[]> | undefined;
+
+function installedFonts(): Promise<string[]> {
+	fonts ??= listFonts().catch(() => []);
+	return fonts;
+}
+
+function listFonts(): Promise<string[]> {
+	// Windows: the names in the user's language ("游ゴシック"), as Excel shows them.
+	const [command, args, split] =
+		process.platform === "win32"
+			? [
+					"powershell.exe",
+					[
+						"-NoProfile",
+						"-NonInteractive",
+						"-Command",
+						"[Console]::OutputEncoding = [Text.Encoding]::UTF8; Add-Type -AssemblyName System.Drawing; (New-Object System.Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name }",
+					],
+					false,
+				]
+			: process.platform === "darwin"
+				? [
+						"osascript",
+						["-l", "JavaScript", "-e", 'ObjC.import("AppKit"); ObjC.deepUnwrap($.NSFontManager.sharedFontManager.availableFontFamilies).join("\\n")'],
+						false,
+					]
+				: // fontconfig: a family's names in each language, separated by commas.
+					["fc-list", ["--format", "%{family}\\n"], true];
+	return new Promise((resolve, reject) => {
+		cp.execFile(command, args as string[], { encoding: "utf8", timeout: 20000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (error, stdout) => {
+			if (error) {
+				reject(error);
+				return;
+			}
+			const names = new Set<string>();
+			for (const line of stdout.split(/\r?\n/)) {
+				for (const name of split ? line.split(",") : [line]) {
+					const n = name.trim();
+					if (n !== "") {
+						names.add(n);
+					}
+				}
+			}
+			resolve([...names]);
+		});
+	});
+}
+
 /** One edit at a time, in the order the page posted them. */
 let queue: Promise<void> = Promise.resolve();
 
@@ -248,6 +298,15 @@ function receive(message: unknown): void {
 		if (panel !== undefined && shown !== undefined && shown.editable && sheetFolder(shown) !== undefined) {
 			void panel.webview.postMessage({ type: "events", on: true });
 		}
+		return;
+	}
+	if (type === "fonts") {
+		// The fonts installed on the system, for the font box of the ribbon.
+		void installedFonts().then((names) => {
+			if (panel !== undefined) {
+				void panel.webview.postMessage({ type: "fonts", names });
+			}
+		});
 		return;
 	}
 	if (type === "link") {

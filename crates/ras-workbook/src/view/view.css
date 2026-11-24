@@ -173,7 +173,8 @@ body.busy, body.busy td, body.busy th { cursor: progress; }
 .menu { position: fixed; z-index: 20; min-width: 190px; padding: 4px 0; background: #fff; border: 1px solid #c8c8c8; box-shadow: 0 2px 10px rgba(0, 0, 0, .25); }
 .menu button { display: flex; width: 100%; gap: 24px; padding: 4px 14px; border: 0; background: none; color: #000; font: inherit; text-align: left; cursor: pointer; }
 .menu button span { flex: 1; }
-.menu button kbd { color: #777; font: inherit; }
+/* (VS Code's default styles of webviews draw a kbd as a key: here it is the menu's text.) */
+.menu button kbd { margin: 0; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; color: #777; font: inherit; vertical-align: baseline; }
 .menu button:hover:not(:disabled) { background: var(--accent-hover); }
 .menu button:disabled { color: #999; cursor: default; }
 .menu hr { margin: 4px 0; border: 0; border-top: 1px solid var(--line); }
@@ -197,9 +198,12 @@ body.busy, body.busy td, body.busy th { cursor: progress; }
 #ribbon .rtab:hover { color: #000; background: #e6e6e6; border-radius: 3px 3px 0 0; }
 #ribbon .rtab.on { color: var(--accent-ink); font-weight: bold; }
 #ribbon .rtab.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 1px; height: 3px; border-radius: 2px; background: var(--accent); }
-#ribbon .rbody { display: flex; margin: 0 6px 4px; padding: 3px 2px 0; background: #fff; border: 1px solid #e1e1e1; border-radius: 6px; box-shadow: 0 1px 2px rgba(0, 0, 0, .06); overflow-x: auto; overflow-y: hidden; }
+#ribbon .rbody { display: flex; margin: 0 6px 4px; padding: 3px 2px 0; background: #fff; border: 1px solid #e1e1e1; border-radius: 6px; box-shadow: 0 1px 2px rgba(0, 0, 0, .06); overflow-x: auto; overflow-y: hidden; scrollbar-color: auto; scrollbar-width: auto; }
 /* A tab wider than the window: a thin scroll bar in the ribbon's grays, shown only under the
-   mouse, and a fade on each side that has buttons out of view (more-l / more-r, view.js). */
+   mouse, and a fade on each side that has buttons out of view (more-l / more-r, view.js).
+   (VS Code's default styles of webviews give the page a `scrollbar-color` in the editor's
+   colors, and Chromium then draws a standard bar, ignoring ::-webkit-scrollbar: `auto` above
+   keeps the bar drawn here.) */
 #ribbon .rbody::-webkit-scrollbar { height: 6px; background: transparent; }
 #ribbon .rbody::-webkit-scrollbar-track, #ribbon .rbody::-webkit-scrollbar-corner { background: transparent; }
 #ribbon .rbody::-webkit-scrollbar-thumb { border-radius: 3px; background: transparent; }
@@ -254,7 +258,15 @@ body.busy, body.busy td, body.busy th { cursor: progress; }
 #ribbon .rsplit.large > .rbtn.more { justify-content: center; }
 #ribbon .rsplit.large > .rbtn.more { height: 20px; }
 #ribbon select, #ribbon input.fontname { height: 24px; padding: 0 3px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; }
-#ribbon input.fontname { width: 128px; }
+#ribbon .fontbox { display: inline-flex; }
+#ribbon .fontbox input.fontname { width: 128px; border-radius: 3px 0 0 3px; }
+#ribbon .fontdrop { width: 16px; height: 24px; padding: 0; border: 1px solid #c8c8c8; border-left: 0; border-radius: 0 3px 3px 0; background: #fff; color: #555; font-size: 9px; cursor: pointer; }
+#ribbon .fontdrop:hover:not(:disabled) { background: #ececec; }
+#ribbon .fontdrop:disabled { color: #a6a6a6; background: #f7f7f7; cursor: default; }
+.menu.fonts { width: 240px; max-height: min(420px, 70vh); overflow-y: auto; }
+.menu.fonts button { padding: 3px 12px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu.fonts button span { overflow: hidden; text-overflow: ellipsis; }
+.menu.fonts button.on { background: var(--accent-tint); }
 #ribbon select.fontsize { width: 52px; }
 #ribbon select.numberformat { width: 150px; }
 #ribbon select:disabled, #ribbon input:disabled { color: #a6a6a6; background: #f7f7f7; }
@@ -409,3 +421,53 @@ body.copying, body.copying td { cursor: copy; }
 .fnlist .desc { position: sticky; bottom: 0; padding: 4px 6px; border-top: 1px solid var(--line); background: #ffffe1; color: #333; white-space: normal; }
 .fnhint { position: fixed; z-index: 19; max-width: 520px; padding: 2px 6px; background: #ffffe1; border: 1px solid #767676; color: #000; font: 12px Consolas, "MS Gothic", monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fnhint .on { font-weight: bold; }
+
+/* A toggle of a menu of the ribbon (枠線に合わせる): checked. */
+.menu button.on span::before { content: "✓"; display: inline-block; width: 1.2em; margin-left: -1.2em; color: var(--accent-ink); }
+.menu.aligns button { padding-left: 28px; }
+
+/* The launcher at the corner of a group's label, and the boxes of サイズ (cm, with spin buttons). */
+#ribbon .rlabel { position: relative; }
+#ribbon .rlabel .launch { position: absolute; right: -4px; bottom: 3px; display: inline-flex; padding: 2px; border: 1px solid transparent; border-radius: 2px; background: none; color: #666; cursor: pointer; }
+#ribbon .rlabel .launch:hover { background: #ececec; border-color: #ddd; }
+#ribbon .rlabel:has(.launch) { padding-left: 12px; padding-right: 12px; }
+#ribbon .rstack.sizes { gap: 6px; padding-top: 6px; }
+#ribbon .rstack.sizes .rrow { gap: 4px; }
+.spinbox { display: inline-flex; align-items: stretch; height: 24px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; }
+.spinbox input { width: 70px; min-width: 0; height: auto; margin: 0; padding: 0 4px; border: 0; outline: 0; background: none; color: #000; font: inherit; text-align: right; }
+.spinbox:focus-within { border-color: var(--accent); }
+.spinbox .spins { display: flex; flex-direction: column; border-left: 1px solid #e1e1e1; }
+.spinbox .spins button { flex: 1; width: 16px; min-width: 0; height: auto; padding: 0; margin: 0; border: 0; border-radius: 0; background: none; color: #555; font-size: 9px; line-height: 1; cursor: pointer; }
+.spinbox .spins button:hover { background: #ececec; }
+#ribbon .spinbox input:disabled { background: none; }
+
+/* The pane at the right: the format of the object selected, or the objects of the sheet. */
+#pane { flex: none; display: flex; flex-direction: column; width: 270px; border-left: 1px solid var(--line); background: #fafafa; overflow: hidden; }
+#pane .phd { display: flex; align-items: center; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--line); background: #f3f3f3; }
+#pane .ptitle { flex: 1; font-weight: bold; }
+#pane .pclose { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 3px; background: none; color: #444; font: 16px/1 inherit; cursor: pointer; }
+#pane .pclose:hover { background: #e6e6e6; }
+#pane .pbody { flex: 1; overflow: auto; padding: 6px 12px 12px; }
+#pane .pname { margin: 2px 0 6px; color: #444; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#pane .psec { padding: 6px 0 8px; border-top: 1px solid #e6e6e6; }
+#pane .psec h3 { margin: 0 0 6px; color: var(--accent-ink); font-size: 12px; }
+#pane .prow { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+#pane .plabel { flex: none; width: 92px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pane .prow > input, #pane .prow > select { flex: 1; min-width: 0; height: 24px; padding: 0 4px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; }
+#pane .prow > input:focus, #pane .prow > select:focus, #pane .ptext:focus { outline: 0; border-color: var(--accent); }
+#pane .prow > input[type="number"] { flex: none; width: 80px; text-align: right; }
+#pane .prow.pcheck { gap: 6px; }
+#pane .prow.pcheck > input { flex: none; width: auto; height: auto; margin: 0 0 0 2px; accent-color: var(--accent); }
+#pane .punit { color: #555; }
+#pane .ptext { display: block; width: 100%; padding: 4px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; resize: vertical; }
+#pane .pbtns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+#pane .pbtns button, #pane .pcolor { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; cursor: pointer; }
+#pane .pbtns button:hover, #pane .pcolor:hover { background: var(--accent-hover); border-color: var(--accent); }
+#pane .pcolor { padding: 0 8px; }
+#pane .pcolor .sw { width: 14px; height: 14px; border: 1px solid #999; }
+#pane .pnote { color: #555; font-size: 12px; }
+#pane .pnone { padding: 8px 0; color: #777; }
+#pane .plist { display: flex; flex-direction: column; }
+#pane .pitem { padding: 4px 8px; border: 0; border-radius: 2px; background: none; color: #000; font: inherit; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+#pane .pitem:hover { background: var(--accent-hover); }
+#pane .pitem.on { background: var(--accent-tint); color: var(--accent-ink); }
