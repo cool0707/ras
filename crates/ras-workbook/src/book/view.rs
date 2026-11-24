@@ -749,7 +749,7 @@ impl Book {
             .zip(cells.iter())
         {
             let typed = match &c.value {
-                Val::Date(d) => Some(self.date_text(*d)),
+                Val::Date(d) => Some(self.date_input_text(*d)),
                 Val::Num(x) if c.text != format!("{x}") => Some(format!("{x}")),
                 _ => None,
             };

@@ -141,6 +141,19 @@ impl Book {
         self.display(&Value::Number(serial), code)
     }
 
+    /// A serial date as Japanese Excel shows it in the formula bar: `2026/4/1`, with the time
+    /// (`2026/4/1 13:05:00`) when it has one.
+    pub fn date_input_text(&mut self, serial: f64) -> String {
+        let code = if serial.fract() == 0.0 {
+            "yyyy/m/d"
+        } else if serial < 1.0 {
+            "h:mm:ss"
+        } else {
+            "yyyy/m/d h:mm:ss"
+        };
+        self.display(&Value::Number(serial), code)
+    }
+
     /// The formulas of a sheet, those filled down or across written once.
     pub fn formula_regions(&mut self, si: usize) -> Result<Vec<FormulaRegion>> {
         let all = RangeRef::new(CellRef::new(0, 0), CellRef::new(MAX_ROWS - 1, MAX_COLS - 1));

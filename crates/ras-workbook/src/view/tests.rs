@@ -849,3 +849,36 @@ fn table_buttons_and_the_selection_saved() {
         .unwrap();
     assert!(b1["sn"].is_string() && b1["sn"] != b1["n"], "{b1}");
 }
+
+#[test]
+fn dates_are_typed_with_slashes() {
+    use crate::book::Val;
+    use gridcraft_core::addr::RangeRef;
+    let mut b = Book::new_book();
+    let rows = [vec![Val::Date(46085.0)], vec![Val::Date(46085.5)]];
+    b.set_values(0, RangeRef::parse("A1:A2").unwrap(), &rows)
+        .unwrap();
+    let bytes = b.to_bytes().unwrap();
+    let data = view_of(&bytes);
+    let cells = data["sheets"][0]["cells"].as_array().unwrap().clone();
+    let typed = |r: u64| {
+        cells
+            .iter()
+            .find(|c| c["r"] == json!(r) && c["c"] == json!(0))
+            .unwrap()["v"]
+            .clone()
+    };
+    // The formula bar shows a date as Japanese Excel does.
+    assert_eq!(typed(0), json!("2026/3/4"));
+    assert_eq!(typed(1), json!("2026/3/4 12:00:00"));
+    // And it is read back as the same date when typed in again.
+    let sys = gridcraft_core::DateSystem::default();
+    for (text, serial) in [("2026/3/4", 46085.0), ("2026/3/4 12:00:00", 46085.5)] {
+        let parsed = gridcraft_core::parse::parse_input(text, sys);
+        assert_eq!(
+            parsed.value,
+            gridcraft_core::Value::Number(serial),
+            "{text}"
+        );
+    }
+}
