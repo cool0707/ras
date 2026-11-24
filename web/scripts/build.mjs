@@ -35,17 +35,19 @@ function project(dir) {
     };
     for (const sub of ["src", "types", "objects", "forms", "test"]) if (existsSync(join(dir, sub))) walk(join(dir, sub));
     let toml = readFileSync(join(dir, "ras.toml"), "utf8");
-    // The playground's workbook is Book.xlsx (a new one, or the one read into the page).
-    if (!/^\s*workbook\s*=/m.test(toml)) toml = toml.replace(/^\[project\][^\n]*\n/m, (h) => `${h}workbook = "Book.xlsx"\n`);
+    // The playground's workbook is named after the project (a new one, or the one read into the page).
+    const name = /^\s*name\s*=\s*"([^"]+)"/m.exec(toml)?.[1] ?? "Book";
+    if (!/^\s*workbook\s*=/m.test(toml)) toml = toml.replace(/^\[project\][^\n]*\n/m, (h) => `${h}workbook = "${name}.xlsx"\n`);
     files.unshift({ path: "ras.toml", text: toml });
     return files;
 }
 
 const samples = [
-    { id: "hello", title: "はじめての RAS（表と数式・テスト）", files: project(join(web, "samples", "hello")) },
-    { id: "dialogs", title: "ダイアログと実行時エラー", files: project(join(web, "samples", "dialogs")) },
-    { id: "forms", title: "ユーザーフォームとシートのコントロール", files: project(join(web, "samples", "forms")) },
-    { id: "sales-report", title: "examples/sales-report", files: project(join(root, "examples", "sales-report")) },
+    // The title begins with the project's name, which is also the workbook's (Hello.xlsx).
+    { id: "hello", title: "Hello（はじめての RAS：表と数式・テスト）", files: project(join(web, "samples", "hello")) },
+    { id: "dialogs", title: "Dialogs（ダイアログと実行時エラー）", files: project(join(web, "samples", "dialogs")) },
+    { id: "forms", title: "Forms（ユーザーフォームとシートのコントロール）", files: project(join(web, "samples", "forms")) },
+    { id: "sales-report", title: "SalesReport（examples/sales-report）", files: project(join(root, "examples", "sales-report")) },
 ];
 
 const samplesPlugin = {

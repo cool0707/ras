@@ -39,10 +39,13 @@ function build(dir: string) {
 
 const book = () => Book.create().toBytes();
 
+/** `workbook` of the project's ras.toml (the samples' are named after the project: Hello.xlsx). */
+const workbookOf = (toml: string) => /^\s*workbook\s*=\s*"([^"]+)"/m.exec(toml)![1];
+
 function run(dir: string, kind: "run" | "test", target: string, ask?: Parameters<typeof runJob>[3]): { r: RunResult; before: Uint8Array } {
-    const { files, out } = build(dir);
+    const { files, toml, out } = build(dir);
     const before = book();
-    const r = runJob(Book as unknown as WasmBookClass, { kind, js: out.js, files: [...files.map((f) => ({ path: f.path, data: f.text })), { path: "Book.xlsx", data: before }], target }, undefined, ask);
+    const r = runJob(Book as unknown as WasmBookClass, { kind, js: out.js, files: [...files.map((f) => ({ path: f.path, data: f.text })), { path: workbookOf(toml), data: before }], target }, undefined, ask);
     return { r, before };
 }
 
@@ -78,7 +81,7 @@ test("runs a function on the stand-in and reports the cells it changed", () => {
     assert.equal(r.exitCode, 0, JSON.stringify(r.output));
     const printed = r.output.map((o) => o.text).join("");
     assert.match(printed, /合計: 2060 円/);
-    const saved = r.saved.find((s) => s.path === "build/debug/workbooks/Book.xlsx");
+    const saved = r.saved.find((s) => s.path === "build/debug/workbooks/Hello.xlsx");
     assert.ok(saved);
     assert.match(diffText(before, saved.data, 100), /D5\t（空） → =SUM\(D2:D4\)（2060）/);
 });
@@ -110,8 +113,8 @@ test("asks the dialogs, and reports a run-time error at its line of RAS", () => 
 test("writes the VBA into a workbook (.xlsx → .xlsm)", async () => {
     const { packBook } = await import("../pkg/ras_wasm.js");
     const p = project(hello);
-    const packed = packBook(JSON.stringify({ files: p.files, toml: p.toml }), book(), "Book.xlsx");
-    assert.equal(packed.name, "Book.xlsm");
+    const packed = packBook(JSON.stringify({ files: p.files, toml: p.toml }), book(), "Hello.xlsx");
+    assert.equal(packed.name, "Hello.xlsm");
     const report = JSON.parse(packed.report);
     assert.ok(report.created.includes("Main"), packed.report);
     assert.ok(packed.bytes.length > 1000);
