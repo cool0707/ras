@@ -2565,7 +2565,7 @@ ras book edit Book.xlsm --op '{"op":"copy","sheet":"Sheet1","from":"A1:B2","to":
   | `autofill` | `from`、`to` | フィルハンドル。`to` は `from` を上下左右のどれか一方向に延ばした範囲。2 つ以上の数値・日付は等差の連続データ（最小二乗の直線）、1 つの日付は 1 日ずつ、数字を含む文字列（`第1回`、`No.008`）は番号を進め、数式は相対参照をずらしてコピーし、それ以外は繰り返す。書式もコピーする |
   | `format` | `range`、`set` | 書式の設定。`set` のキー: `bold` / `italic` / `underline` / `strike` / `wrap`（真偽値）、`fontName`、`fontSize`（pt）、`color` / `fill`（`"#RRGGBB"`。`null` は自動・塗りつぶしなし）、`align`（`left` / `center` / `right` / `general`）、`valign`（`top` / `middle` / `bottom`）、`numberFormat`（表示形式のコード）、`border`（`all` / `outline` / `thick` / `top` / `bottom` / `left` / `right` / `none`）、`style`（セルのスタイル: `Hyperlink` は Excel のハイパーリンク（組み込みの 8。スタイルに無ければ Excel と同じく、標準のフォントに下線とテーマのリンクの色を付けたフォントで足す）、`Normal` は標準に戻す）。書式の無いセルは、標準のスタイルの書式（フォント・配置）から変える（Excel と同じ）。行全体・列全体（`3:5`、`B:D`）にも設定できる |
   | `clearFormats` | `range` | 書式のクリア（結合も解除する） |
-  | `size` | `range`（`B:D` か `3:5`）、`px` | 列の幅・行の高さ。グリッドが 100% で描くピクセル数で指定する（列は 8 px が 1 文字、行は 1 px が 0.75 pt） |
+  | `size` | `range`（`B:D` か `3:5`）、`px` | 列の幅・行の高さ。グリッドが 100% で描くピクセル数で指定する（列は 8 px が 1 文字、行は 1 px が 0.75 pt）。Excel と同じく、0 は非表示にし、非表示の行・列に大きさを指定すると再表示する |
   | `fit` | `rows`（`[[行（0 から）, px], ...]`） | 高さを指定していない行を、フォントに合わせた高さにする（Excel と同じく `ht` だけを書き、`customHeight` は付けない）。高さを指定した行・非表示の行は変えない。シートプレビューは、フォント名・サイズを変える `format` と `clearFormats` に、ブラウザーで測った高さ（フォントの ascent と descent を整数のピクセルで足して 2 px）を付けて送る |
   | `hide` | `range`（`B:D` か `3:5`）、`hidden` | 行・列の非表示と再表示 |
   | `merge` / `unmerge` | `range`、`across` | セルの結合（`across` は行ごと）と解除。結合すると、Excel と同じく左上のセルの内容だけが残る |

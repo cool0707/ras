@@ -1659,6 +1659,16 @@ fn run(
             px,
         } => {
             let si = sheet_index(book, sheet)?;
+            let (lo, hi) = if *columns {
+                (range.start.col, range.end.col)
+            } else {
+                (range.start.row, range.end.row)
+            };
+            // As Excel: 0 hides the lines, a size shows hidden ones again.
+            book.set_hidden(si, *columns, lo, hi, *px <= 0.0)?;
+            if *px <= 0.0 {
+                return Ok(());
+            }
             if *columns {
                 let chars = crate::book::width_of_px(*px);
                 book.set_format(si, *range, "columnwidth", &Val::Num(chars))?;

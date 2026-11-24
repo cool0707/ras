@@ -535,6 +535,30 @@ fn formats_are_added_to_the_styles_and_cells_keep_what_they_hold() {
 }
 
 #[test]
+fn a_size_shows_hidden_lines_and_zero_hides_them() {
+    let out =
+        edit(r#"[{"op":"hide","range":"5:5","hidden":true},{"op":"size","range":"B:B","px":0}]"#);
+    let sheet = part(&out, SHEET1);
+    assert!(sheet.contains(r#"<row r="5" hidden="1">"#), "{sheet}");
+    assert!(
+        sheet.contains(r#"hidden="1""#) && sheet.contains(r#"<col min="2" max="2""#),
+        "{sheet}"
+    );
+    // As Excel: sizing hidden lines shows them again.
+    let back = apply(
+        &out,
+        &ops(r#"[{"op":"size","range":"4:6","px":30},{"op":"size","range":"B:B","px":80}]"#),
+    )
+    .unwrap();
+    let sheet = part(&back, SHEET1);
+    assert!(
+        sheet.contains(r#"<row r="5" ht="22.5" customHeight="1">"#),
+        "{sheet}"
+    );
+    assert!(!sheet.contains(r#"hidden="1""#), "{sheet}");
+}
+
+#[test]
 fn rows_fit_to_their_fonts() {
     // Row 3 is given a height first: a fit leaves it as it is.
     let out = edit(

@@ -393,7 +393,8 @@ impl Sizes {
         for c in ws.column_dimensions() {
             widths.insert(
                 c.col_num(),
-                if c.hidden() {
+                // (Width 0: hidden, as Excel shows it.)
+                if c.hidden() || c.width() <= 0.0 {
                     0.0
                 } else if c.width() > 0.0 {
                     px(c.width())
@@ -406,13 +407,15 @@ impl Sizes {
         let mut fixed = std::collections::HashSet::new();
         let mut custom = Vec::new();
         for r in ws.row_dimensions() {
-            if r.hidden() || r.height() > 0.0 {
+            // (Height 0 given: hidden, as Excel shows it.)
+            let zero = r.custom_height() && r.height() <= 0.0;
+            if r.hidden() || zero || r.height() > 0.0 {
                 fixed.insert(r.row_num());
             }
             if r.custom_height() && r.row_num() > 0 {
                 custom.push(r.row_num() - 1);
             }
-            if r.hidden() {
+            if r.hidden() || zero {
                 heights.insert(r.row_num(), 0.0);
             } else if r.height() > 0.0 {
                 heights.insert(r.row_num(), (r.height() * 96.0 / 72.0).round());

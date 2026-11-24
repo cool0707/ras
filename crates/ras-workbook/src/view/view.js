@@ -4740,12 +4740,24 @@
         if (th.c !== undefined) {
             if (b.right - e.clientX <= EDGE) return { cols: true, index: th.c, th };
             const i = view.cols.indexOf(th.c);
-            if (e.clientX - b.left <= EDGE && i > 0) return { cols: true, index: view.cols[i - 1], th: view.ths.get(view.cols[i - 1]) };
+            if (e.clientX - b.left <= EDGE && i > 0) {
+                // Right of a line with hidden columns before it: the last of them, which the
+                // drag shows again (as Excel).
+                if (th.c - 1 > view.cols[i - 1]) return { cols: true, index: th.c - 1, th, from: b.left };
+                return { cols: true, index: view.cols[i - 1], th: view.ths.get(view.cols[i - 1]) };
+            }
+            if (i === 0 && th.c > 0 && e.clientX - b.left <= EDGE) return { cols: true, index: th.c - 1, th, from: b.left };
             return null;
         }
         if (b.bottom - e.clientY <= EDGE) return { cols: false, index: th.r, th };
         const i = view.rows.findIndex((x) => x[0] === th.r);
-        if (e.clientY - b.top <= EDGE && i > 0) return { cols: false, index: view.rows[i - 1][0], th: view.rows[i - 1][1].firstChild };
+        if (e.clientY - b.top <= EDGE && i > 0) {
+            // Under a line with hidden rows above it: the last of them.
+            if (th.r - 1 > view.rows[i - 1][0]) return { cols: false, index: th.r - 1, th, from: b.top };
+            return { cols: false, index: view.rows[i - 1][0], th: view.rows[i - 1][1].firstChild };
+        }
+        // The first rows (columns) hidden: under (right of) the headers' line.
+        if (i === 0 && th.r > 0 && e.clientY - b.top <= EDGE) return { cols: false, index: th.r - 1, th, from: b.top };
         return null;
     }
     function hoverEdge(e) {
@@ -4763,7 +4775,8 @@
     }
     function beginResize(edge, e) {
         const b = edge.th.getBoundingClientRect();
-        resizing = Object.assign(edge, { start: edge.cols ? b.left : b.top, at: edge.cols ? e.clientX : e.clientY, moved: false });
+        const start = edge.from !== undefined ? edge.from : edge.cols ? b.left : b.top;
+        resizing = Object.assign(edge, { start, at: edge.cols ? e.clientX : e.clientY, moved: false });
         document.body.appendChild(guide);
         document.body.appendChild(sizeTip);
         guide.className = edge.cols ? "guide v" : "guide h";
