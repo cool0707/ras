@@ -602,6 +602,13 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.condfmtdlg .condfmtsample { margin: 8px 0 0; padding: 4px 8px 8px; border: 1px solid var(--line); text-align: center; }
 .dlg.condfmtdlg .condfmtsample span { display: inline-block; min-width: 60%; padding: 4px 8px; outline-offset: -3px; }
 .dlg.condfmtdlg .buttons .clear { margin-right: auto; }
+.dlg.conddlg .condbarmore { justify-content: space-between; margin-top: 2px; }
+.dlg.condnegdlg { width: 460px; max-width: calc(100vw - 32px); box-sizing: border-box; }
+.dlg.condnegdlg fieldset { margin: 0 0 8px; padding: 2px 10px 6px; border: 1px solid var(--line); }
+.dlg.condnegdlg legend { padding: 0 4px; }
+.dlg.condnegdlg .hint { margin: 2px 0 4px; }
+.dlg.condnegdlg input[type="color"] { width: 48px; height: 22px; margin-left: 6px; padding: 0 1px; border: 1px solid #adadad; }
+.dlg.condnegdlg .axiscolor { margin-top: 4px; }
 .dlg.condmgr { width: 680px; max-width: calc(100vw - 32px); }
 .dlg.condmgr select, .dlg.condmgr input[type="text"] { font: inherit; }
 .dlg.condmgr label > .lbl { flex: none; }

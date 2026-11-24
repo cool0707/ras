@@ -3234,3 +3234,107 @@ fn conditional_formats_of_excel_2010_written() {
             .contains("auto")
     );
 }
+
+#[test]
+fn conditional_bars_negative_values_axis_and_direction() {
+    const SHEET1: &str = "xl/worksheets/sheet1.xml";
+    let cell = |out: &[u8], r: u64| {
+        view(out)["sheets"][0]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["r"] == json!(r) && x["c"] == json!(1))
+            .cloned()
+            .unwrap()
+    };
+    // 右から左, the axis in the middle in gray, negative values in the positive's fill and in a
+    // blue border.
+    let out = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#638EC6"],"direction":"rightToLeft","negativeFillSame":true,"negativeBorder":"#0000FF","axis":"middle","axisColor":"#808080"}"##,
+    );
+    let doc = part(&out, SHEET1);
+    assert!(
+        doc.contains(r#"<x14:dataBar minLength="0" maxLength="100" border="1" direction="rightToLeft" negativeBarColorSameAsPositive="1" negativeBarBorderColorSameAsPositive="0" axisPosition="middle"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/><x14:borderColor rgb="FF638EC6"/><x14:negativeFillColor rgb="FFFF0000"/><x14:negativeBorderColor rgb="FF0000FF"/><x14:axisColor rgb="FF808080"/></x14:dataBar>"#),
+        "{doc}"
+    );
+    let r = &view(&out)["sheets"][0]["condRules"][0];
+    for (key, want) in [
+        ("direction", json!("rightToLeft")),
+        ("negativeFillSame", json!(true)),
+        ("negativeFill", json!("#FF0000")),
+        ("negativeBorderSame", json!(false)),
+        ("negativeBorder", json!("#0000FF")),
+        ("axis", json!("middle")),
+        ("axisColor", json!("#808080")),
+    ] {
+        assert_eq!(r[key], want, "{key}");
+    }
+    // 300 of 0〜500 from the middle, to the left: 0.2〜0.5 of the cell, the axis at 0.5.
+    let bar = &cell(&out, 4)["bar"];
+    let near = |v: &serde_json::Value, x: f64| (v.as_f64().unwrap() - x).abs() < 1e-9;
+    assert!(
+        near(&bar["x"], 0.2) && near(&bar["w"], 0.3) && near(&bar["axis"], 0.5),
+        "{bar}"
+    );
+    assert_eq!(bar["ac"], json!("#808080"));
+
+    // A negative value: its own color from the axis (automatic: where 0 is); without an axis,
+    // the same way as the others, in its color.
+    let neg = |extra: &str| {
+        let json = format!(
+            r##"[{{"op":"set","range":"B3","text":"-100"}},{{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#638EC6"],"solid":true,"negativeFill":"#00FF00"{extra}}}]"##
+        );
+        apply(BOOK, &ops(&json)).unwrap()
+    };
+    let auto = neg("");
+    let bar = &cell(&auto, 2)["bar"];
+    assert_eq!(bar["bg"], json!("#00FF00"));
+    assert!(near(&bar["axis"], 100.0 / 600.0), "{bar}");
+    let none = neg(r#","axis":"none""#);
+    assert!(part(&none, SHEET1).contains(r#"axisPosition="none""#));
+    let bar = &cell(&none, 2)["bar"];
+    assert!(
+        bar["bg"] == json!("#00FF00") && bar["axis"].is_null() && near(&bar["x"], 0.0),
+        "{bar}"
+    );
+
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(
+        wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"direction":"up"}"##)
+            .contains("direction")
+    );
+    assert!(
+        wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"axis":"left"}"##)
+            .contains("axis")
+    );
+}
+
+#[test]
+fn conditional_scales_bars_and_icons_together() {
+    // As Excel draws them on the same cells: the scale's fill, the bar, the icon.
+    let out = apply(
+        BOOK,
+        &ops(
+            r##"[{"op":"conditional","range":"B2:B5","type":"colorScale","colors":["#F8696B","#63BE7B"]},{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#D6007B"],"solid":true},{"op":"conditional","range":"B2:B5","type":"iconSet","icons":"3TrafficLights2"}]"##,
+        ),
+    )
+    .unwrap();
+    let data = view(&out);
+    let sheet = &data["sheets"][0];
+    for r in 1..=4u64 {
+        let cell = sheet["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["r"] == json!(r) && x["c"] == json!(1))
+            .unwrap();
+        let css = sheet["styles"][cell["s"].as_u64().unwrap_or(0) as usize]
+            .as_str()
+            .unwrap();
+        assert!(
+            css.contains("background:#") && cell.get("bar").is_some() && cell.get("ic").is_some(),
+            "{r}: {cell} {css}"
+        );
+    }
+}

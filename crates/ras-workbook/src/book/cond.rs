@@ -23,8 +23,10 @@ pub struct Bar {
     pub gradient: bool,
     /// The bar grows to the left (a negative value, or right to left).
     pub leftward: bool,
-    /// The axis between negative and positive values, in fractions of the cell's width.
+    /// The axis between negative and positive values, in fractions of the cell's width, and its
+    /// color (#RRGGBB; None: black).
     pub axis: Option<f64>,
+    pub axis_color: Option<String>,
 }
 
 /// A border line a format gives: its style (`thin`, `double`, ...) and #RRGGBB (None: black).
@@ -79,6 +81,7 @@ struct BarDef {
     negative_border_same: bool,
     /// automatic, middle, none.
     axis: String,
+    axis_color: Option<Color>,
     rtl: bool,
     /// Written with the Excel 2010 extension (negative values grow from an axis).
     ext: bool,
@@ -258,6 +261,7 @@ fn read_rule(r: &ConditionalFormattingRule, x14: bool) -> Rule {
                 "" => "automatic".to_string(),
                 a => a.to_string(),
             },
+            axis_color: db.axis_color().and_then(given),
             rtl: db.direction() == "rightToLeft",
             ext: x14,
         });
@@ -504,14 +508,16 @@ impl Book {
                             fx.fill = Some(c);
                         }
                     }
+                    // (A bar and an icon together, as Excel draws them: the icon over the bar,
+                    // both over a color scale's fill; of each, the first rule's.)
                     Eff::Bar(bar) => {
-                        if fx.bar.is_none() && fx.icon.is_none() {
+                        if fx.bar.is_none() {
                             fx.bar = Some(bar);
                             fx.hide_value |= !rule.show_value;
                         }
                     }
                     Eff::Icon(i) => {
-                        if fx.icon.is_none() && fx.bar.is_none() {
+                        if fx.icon.is_none() {
                             fx.icon = i;
                             fx.hide_value |= !rule.show_value;
                         }
@@ -624,6 +630,7 @@ impl Book {
                         .or(border.clone())
                 };
                 let (min_l, max_l) = (def.min_len / 100.0, def.max_len / 100.0);
+                let axis_color = def.axis_color.as_ref().and_then(css);
                 for (at, v) in cells.iter().zip(vals) {
                     let Some(x) = num(v) else { continue };
                     let mut bar =
@@ -651,6 +658,7 @@ impl Book {
                                     gradient: def.gradient,
                                     leftward: false,
                                     axis: Some(a),
+                                    axis_color: axis_color.clone(),
                                 }
                             } else {
                                 let len = if neg > 0.0 { a * (-x / neg) } else { 0.0 };
@@ -662,6 +670,7 @@ impl Book {
                                     gradient: def.gradient,
                                     leftward: true,
                                     axis: Some(a),
+                                    axis_color: axis_color.clone(),
                                 }
                             }
                         } else {
@@ -670,14 +679,17 @@ impl Book {
                             } else {
                                 0.0
                             };
+                            // (Without an axis, a negative value's bar the same way, in its colors.)
+                            let negative = def.ext && x < 0.0;
                             Bar {
                                 start: 0.0,
                                 len: min_l + t * (max_l - min_l),
-                                fill: fill.clone(),
-                                border: border.clone(),
+                                fill: if negative { &neg_fill } else { &fill }.clone(),
+                                border: if negative { &neg_border } else { &border }.clone(),
                                 gradient: def.gradient,
                                 leftward: false,
                                 axis: None,
+                                axis_color: None,
                             }
                         };
                     if def.rtl {

@@ -62,6 +62,17 @@ pub struct CondRule {
     pub bar_only: bool,
     pub solid: bool,
     pub bar_border: Option<String>,
+    /// `dataBar`: "棒の方向" (`context`, `leftToRight`, `rightToLeft`; empty: `context`); "負の
+    /// 値と軸": the negative values' fill and border (`RRGGBB`; empty: red), or (`*_same`) the
+    /// positive's, the axis (`automatic`, `middle`, `none`; empty: `automatic`) and its color
+    /// (empty: black).
+    pub direction: String,
+    pub negative_fill: String,
+    pub negative_fill_same: bool,
+    pub negative_border: String,
+    pub negative_border_same: bool,
+    pub axis: String,
+    pub axis_color: String,
     /// The values the bar, the scale or the icons go by (`cfvo`): a bar's least and greatest,
     /// a scale's one for each color, an icon set's one for each icon from the least (the first
     /// is where the least icon starts). Empty: as Excel puts them (the least and the greatest,
@@ -352,6 +363,21 @@ impl CondRule {
             }
             "dataBar" if self.colors.len() != 1 => {
                 return Err("データ バーの `colors` は 1 色です".into());
+            }
+            "dataBar"
+                if !["", "context", "leftToRight", "rightToLeft"]
+                    .contains(&self.direction.as_str()) =>
+            {
+                return Err(format!(
+                    "`direction` `{}` は指定できません（context / leftToRight / rightToLeft）",
+                    self.direction
+                ));
+            }
+            "dataBar" if !["", "automatic", "middle", "none"].contains(&self.axis.as_str()) => {
+                return Err(format!(
+                    "`axis` `{}` は指定できません（automatic / middle / none）",
+                    self.axis
+                ));
             }
             "colorScale" if !(2..=3).contains(&self.colors.len()) => {
                 return Err("カラー スケールの `colors` は 2 色か 3 色です".into());
@@ -667,6 +693,13 @@ fn x14_xml(rule: &CondRule, id: &str, priority: Option<usize>, refs: &str) -> St
             .enumerate()
             .map(|(i, x)| x.x14_xml(x.x14_kind(i == 0), false))
             .collect();
+        let or = |c: &str, default: &str| {
+            if c.is_empty() {
+                default.to_string()
+            } else {
+                c.to_string()
+            }
+        };
         let mut head = String::from("<x14:dataBar minLength=\"0\" maxLength=\"100\"");
         let mut colors = String::new();
         if let Some(c) = &rule.bar_border {
@@ -676,12 +709,31 @@ fn x14_xml(rule: &CondRule, id: &str, priority: Option<usize>, refs: &str) -> St
         if rule.solid {
             head.push_str(" gradient=\"0\"");
         }
-        colors.push_str("<x14:negativeFillColor rgb=\"FFFF0000\"/>");
-        if rule.bar_border.is_some() {
-            head.push_str(" negativeBarBorderColorSameAsPositive=\"0\"");
-            colors.push_str("<x14:negativeBorderColor rgb=\"FFFF0000\"/>");
+        if !matches!(rule.direction.as_str(), "" | "context") {
+            head.push_str(&format!(" direction=\"{}\"", rule.direction));
         }
-        colors.push_str("<x14:axisColor rgb=\"FF000000\"/>");
+        if rule.negative_fill_same {
+            head.push_str(" negativeBarColorSameAsPositive=\"1\"");
+        }
+        colors.push_str(&format!(
+            "<x14:negativeFillColor rgb=\"FF{}\"/>",
+            or(&rule.negative_fill, "FF0000")
+        ));
+        // (The schema has a border of the positive's color: said when not.)
+        if rule.bar_border.is_some() && !rule.negative_border_same {
+            head.push_str(" negativeBarBorderColorSameAsPositive=\"0\"");
+            colors.push_str(&format!(
+                "<x14:negativeBorderColor rgb=\"FF{}\"/>",
+                or(&rule.negative_border, "FF0000")
+            ));
+        }
+        if !matches!(rule.axis.as_str(), "" | "automatic") {
+            head.push_str(&format!(" axisPosition=\"{}\"", rule.axis));
+        }
+        colors.push_str(&format!(
+            "<x14:axisColor rgb=\"FF{}\"/>",
+            or(&rule.axis_color, "000000")
+        ));
         format!("{head}>{cfvos}{colors}</x14:dataBar>")
     } else {
         let n = ICON_SETS
@@ -1316,10 +1368,17 @@ fn describe(doc: &str, f: &Found, half: Option<&Found>, dxfs: &[Json]) -> Json {
                     Some("0" | "false")
                 ));
             }
-            // Its look, as its half has it (Excel 2007's: a gradient without a border); the
-            // values too (自動 there).
+            // Its look, as its half has it (Excel 2007's: a gradient without a border, the
+            // defaults of the rest); the values too (自動 there).
             j["solid"] = json!(false);
             j["barBorder"] = json!(false);
+            j["direction"] = json!("context");
+            j["negativeFill"] = json!("#FF0000");
+            j["negativeFillSame"] = json!(false);
+            j["negativeBorder"] = json!("#FF0000");
+            j["negativeBorderSame"] = json!(false);
+            j["axis"] = json!("automatic");
+            j["axisColor"] = json!("#000000");
             let half = half.map(|h| &doc[h.rule.clone()]);
             if let Some(t) = half
                 && let Some(b) = scan::tree(t, &[]).as_ref().and_then(|h| h.child("dataBar"))
@@ -1328,6 +1387,30 @@ fn describe(doc: &str, f: &Found, half: Option<&Found>, dxfs: &[Json]) -> Json {
                 j["solid"] = json!(matches!(on("gradient").as_deref(), Some("0" | "false")));
                 if matches!(on("border").as_deref(), Some("1" | "true")) {
                     j["barBorder"] = json!(rgb_of(t, b.child("borderColor")).or(color.clone()));
+                }
+                if let Some(d) = on("direction") {
+                    j["direction"] = json!(d);
+                }
+                j["negativeFillSame"] = json!(matches!(
+                    on("negativeBarColorSameAsPositive").as_deref(),
+                    Some("1" | "true")
+                ));
+                // (The schema's: the positive's border.)
+                j["negativeBorderSame"] = json!(!matches!(
+                    on("negativeBarBorderColorSameAsPositive").as_deref(),
+                    Some("0" | "false")
+                ));
+                for (key, tag) in [
+                    ("negativeFill", "negativeFillColor"),
+                    ("negativeBorder", "negativeBorderColor"),
+                    ("axisColor", "axisColor"),
+                ] {
+                    if let Some(c) = rgb_of(t, b.child(tag)) {
+                        j[key] = json!(c);
+                    }
+                }
+                if let Some(a) = on("axisPosition") {
+                    j["axis"] = json!(a);
                 }
                 if b.children.iter().filter(|c| c.local() == "cfvo").count() == 2 {
                     j["thresholds"] = thresholds_of(t, b);

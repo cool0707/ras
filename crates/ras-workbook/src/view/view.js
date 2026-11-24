@@ -624,6 +624,7 @@
                     if (typeof cell.bar.axis === "number") {
                         const axis = td.appendChild(el("div", "cfaxis"));
                         axis.style.left = `calc(2px + (100% - 4px) * ${cell.bar.axis})`;
+                        if (cell.bar.ac) axis.style.borderLeftColor = cell.bar.ac;
                     }
                 }
                 if (td.link) td.title = `${td.link.tip || td.link.url || td.link.to} - クリックするとリンク先に移動します。\nクリックしたままにすると、セルを選択します。`;
@@ -3937,13 +3938,14 @@
         if (subDialog) subDialog.remove();
         subDialog = null;
     }
-    function askCondFormat(f0, done, cancelled) {
+    // A dialog over the dialog open (its form): キャンセル, Escape and a click beside it close
+    // it alone (`cancelled()` then).
+    function openSubDialog(title, cls, cancelled) {
         closeSubDialog();
-        const f = Object.assign({}, f0 || {});
         const back = (subDialog = document.body.appendChild(el("div", "dlgback sub")));
-        const form = back.appendChild(el("form", "dlg condfmtdlg"));
+        const form = back.appendChild(el("form", `dlg ${cls}`));
         form.setAttribute("role", "dialog");
-        form.appendChild(el("h2", null, "セルの書式設定"));
+        form.appendChild(el("h2", null, title));
         form.cancel = () => {
             closeSubDialog();
             if (cancelled) cancelled();
@@ -3951,6 +3953,11 @@
         back.addEventListener("mousedown", (e) => {
             if (e.target === back) form.cancel();
         });
+        return form;
+    }
+    function askCondFormat(f0, done, cancelled) {
+        const f = Object.assign({}, f0 || {});
+        const form = openSubDialog("セルの書式設定", "condfmtdlg", cancelled);
         const tabs = form.appendChild(el("div", "fmttabs"));
         const pages = {};
         const showTab = (key) => {
@@ -4066,6 +4073,75 @@
             done(Object.keys(f).length ? Object.assign({}, f) : null);
         });
         tabs.firstChild.focus();
+    }
+
+    // "負の値と軸の設定" of a data bar, over the rule's dialog, as Excel's: the negative values'
+    // fill and border (their own colors, or the positive's), the axis and its color. `n`: the
+    // settings ({ negativeFill, negativeFillSame, negativeBorder, negativeBorderSame, axis,
+    // axisColor }), `bordered`: whether the bar has a border; `done(n)` with them changed.
+    function askBarNegative(n, bordered, done, cancelled) {
+        const form = openSubDialog("負の値と軸の設定", "condnegdlg", cancelled);
+        const group = (title) => {
+            const box = form.appendChild(el("fieldset"));
+            box.appendChild(el("legend", null, title));
+            return box;
+        };
+        const radio = (box, name, value, label, on) => {
+            const line = box.appendChild(el("label"));
+            const r = line.appendChild(el("input"));
+            r.type = "radio";
+            r.name = name;
+            r.value = value;
+            r.checked = on;
+            line.appendChild(document.createTextNode(label));
+            return line;
+        };
+        const colorAfter = (line, value, field) => {
+            const pick = line.appendChild(el("input"));
+            pick.type = "color";
+            pick.value = value.toLowerCase();
+            pick.dataset.field = field;
+            return pick;
+        };
+        // Its own color, or the positive's.
+        const choice = (title, name, own, same, color, field, sameLabel) => {
+            const box = group(title);
+            const pick = colorAfter(radio(box, name, "own", own, !same), color, field);
+            radio(box, name, "same", sameLabel, same);
+            const sync = () => (pick.disabled = form.querySelector(`input[name=${name}]:checked`).value === "same");
+            box.addEventListener("change", sync);
+            pick.addEventListener("input", () => {
+                form.querySelector(`input[name=${name}][value=own]`).checked = true;
+            });
+            sync();
+            return { box, pick, same: () => form.querySelector(`input[name=${name}]:checked`).value === "same" };
+        };
+        const fill = choice("負の値のバーの塗りつぶしの色", "negFill", "塗りつぶしの色:", n.negativeFillSame, n.negativeFill, "negativeFill", "正の値のバーと同じ塗りつぶしの色を適用する");
+        const border = choice("負の値のバーの枠線の色", "negBorder", "枠線の色:", n.negativeBorderSame, n.negativeBorder, "negativeBorder", "正の値のバーと同じ枠線の色を適用する");
+        // (Of a bar with a border only.)
+        if (!bordered) for (const x of border.box.querySelectorAll("input")) x.disabled = true;
+        const axisBox = group("軸の設定");
+        axisBox.appendChild(el("div", "hint", "負の値のバーの外観を変更するには、セルの軸の位置を選択してください:"));
+        radio(axisBox, "axis", "automatic", "セルの値に基づく自動調整 (可変の位置に表示)", n.axis === "automatic");
+        radio(axisBox, "axis", "middle", "セルの中点", n.axis === "middle");
+        radio(axisBox, "axis", "none", "なし (負の値のバーを正の値のバーと同じ方向に表示)", n.axis === "none");
+        const axisLine = axisBox.appendChild(el("label", "axiscolor"));
+        axisLine.appendChild(el("span", null, "軸の色:"));
+        const axisColor = colorAfter(axisLine, n.axisColor, "axisColor");
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            closeSubDialog();
+            done({
+                negativeFill: fill.pick.value.toUpperCase(),
+                negativeFillSame: fill.same(),
+                negativeBorder: border.pick.value.toUpperCase(),
+                negativeBorderSame: bordered ? border.same() : n.negativeBorderSame,
+                axis: form.querySelector("input[name=axis]:checked").value,
+                axisColor: axisColor.value.toUpperCase(),
+            });
+        });
+        form.querySelector("input[name=negFill]:checked").focus();
     }
 
     // The values a bar, a scale or an icon set goes by (`cfvo`): their kinds, as Excel names them.
@@ -4598,15 +4674,44 @@
                 // (The border's color follows the bar's until it is chosen.)
                 let follow = typeof given !== "string";
                 bc.addEventListener("input", () => (follow = false));
+                // "負の値と軸…" (its own dialog) and "棒の方向".
+                let neg = {
+                    negativeFill: scaleGiven("dataBar", "negativeFill", "#FF0000"),
+                    negativeFillSame: !!scaleGiven("dataBar", "negativeFillSame", false),
+                    negativeBorder: scaleGiven("dataBar", "negativeBorder", "#FF0000"),
+                    negativeBorderSame: !!scaleGiven("dataBar", "negativeBorderSame", false),
+                    axis: scaleGiven("dataBar", "axis", "automatic"),
+                    axisColor: scaleGiven("dataBar", "axisColor", "#000000"),
+                };
+                const more = box.appendChild(el("div", "condline condbarmore"));
+                const negButton = more.appendChild(el("button", null, "負の値と軸…"));
+                negButton.type = "button";
+                negButton.dataset.act = "negative";
+                negButton.addEventListener("click", () =>
+                    askBarNegative(
+                        neg,
+                        line.value !== "none",
+                        (n) => {
+                            neg = n;
+                            negButton.focus();
+                        },
+                        () => negButton.focus(),
+                    ),
+                );
+                const dirLine = more.appendChild(el("label"));
+                dirLine.appendChild(el("span", null, "棒の方向:"));
+                const direction = condSelect(dirLine, [["context", "コンテキスト"], ["leftToRight", "左から右"], ["rightToLeft", "右から左"]], scaleGiven("dataBar", "direction", "context"), "direction");
                 // (The bar in its box, as in a cell.)
                 const bar = previewLine(box).appendChild(el("span", "barfill"));
                 const paint = () => {
                     if (follow) bc.value = c.value;
                     bc.disabled = line.value === "none";
-                    bar.style.background = fill.value === "solid" ? c.value : `linear-gradient(to right, ${c.value}, #fff)`;
+                    const rtl = direction.value === "rightToLeft";
+                    bar.style.background = fill.value === "solid" ? c.value : `linear-gradient(to ${rtl ? "left" : "right"}, ${c.value}, #fff)`;
                     bar.style.borderColor = line.value === "none" ? "transparent" : bc.value;
+                    bar.style.marginLeft = rtl ? "auto" : "";
                 };
-                for (const x of [fill, c, line, bc]) x.addEventListener(x.tagName === "SELECT" ? "change" : "input", paint);
+                for (const x of [fill, c, line, bc, direction]) x.addEventListener(x.tagName === "SELECT" ? "change" : "input", paint);
                 paint();
                 return {
                     box,
@@ -4614,7 +4719,7 @@
                     read: () => {
                         const points = fields.map((f) => f.read());
                         if (points.includes(null)) return null;
-                        const r = { type: "dataBar", colors: [c.value.toUpperCase()], thresholds: points, barBorder: line.value === "none" ? false : bc.value.toUpperCase() };
+                        const r = Object.assign({ type: "dataBar", colors: [c.value.toUpperCase()], thresholds: points, barBorder: line.value === "none" ? false : bc.value.toUpperCase(), direction: direction.value }, neg);
                         if (fill.value === "solid") r.solid = true;
                         if (only.checked) r.barOnly = true;
                         return r;

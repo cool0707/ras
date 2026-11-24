@@ -1156,7 +1156,9 @@ fn hex_color(v: &Json, key: &str) -> Result<String> {
 
 /// The rule of a `conditional` edit: `type` and what it takes (`operator` and `values`,
 /// `formula`, `text`, `rank` / `bottom` / `percent`, `below` / `equal` / `stdDev`, `period`, `colors`,
-/// `barOnly` / `solid` / `barBorder`, `icons` / `reverse` / `iconOnly`, `thresholds`), the
+/// `barOnly` / `solid` / `barBorder` / `direction` / `negativeFill` / `negativeFillSame` /
+/// `negativeBorder` / `negativeBorderSame` / `axis` / `axisColor`, `icons` / `reverse` /
+/// `iconOnly`, `thresholds`), the
 /// `format` it gives (`color`, `fill`, `bold`,
 /// `italic`, `underline`, `strike`, `border`) and `stop`.
 fn cond_rule_of(o: &Json) -> Result<CondRule> {
@@ -1220,6 +1222,13 @@ fn cond_rule_of(o: &Json) -> Result<CondRule> {
         Some(Json::Null | Json::Bool(false)) => None,
         Some(c) => Some(hex_color(c, "barBorder")?),
     };
+    // A color of a bar's negative values or axis: `RRGGBB`, or empty (Excel's).
+    let bar_color = |key: &str| -> Result<String> {
+        match o.get(key) {
+            None | Some(Json::Null) => Ok(String::new()),
+            Some(c) => hex_color(c, key),
+        }
+    };
     let rule = CondRule {
         kind,
         operator: text("operator").unwrap_or_default(),
@@ -1245,6 +1254,13 @@ fn cond_rule_of(o: &Json) -> Result<CondRule> {
         bar_only: flag("barOnly"),
         solid,
         bar_border,
+        direction: text("direction").unwrap_or_default(),
+        negative_fill: bar_color("negativeFill")?,
+        negative_fill_same: flag("negativeFillSame"),
+        negative_border: bar_color("negativeBorder")?,
+        negative_border_same: flag("negativeBorderSame"),
+        axis: text("axis").unwrap_or_default(),
+        axis_color: bar_color("axisColor")?,
         thresholds: match o.get("thresholds") {
             None | Some(Json::Null) => Vec::new(),
             Some(Json::Array(list)) => list
