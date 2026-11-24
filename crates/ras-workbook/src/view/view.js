@@ -1240,6 +1240,7 @@
         if (b) Object.assign(v.fillh.style, { left: `${b.x + b.w - 3}px`, top: `${b.y + b.h - 3}px` });
         pinTo(v.fillh, pinOf(v, b));
         placeList();
+        placeInvalid();
     }
 
     // Scrolls a cell out from under the headers and into the window (null: that way stays).
@@ -1361,7 +1362,11 @@
             drag = `point:${hit.kind}`;
             return;
         }
-        if (entry) commit(null);
+        if (entry) {
+            commit(null);
+            // (What was typed is asked about: the cell stays as it is.)
+            if (entry) return;
+        }
         focusGrid();
         if (edge) {
             beginResize(edge, e);
@@ -1570,21 +1575,38 @@
     function commit(how) {
         const e = entry;
         if (!e || !sel) return;
-        const text = (e.where === "bar" ? bar : ed).value;
-        // An entry the cell's list does not allow: refused, and typed on (as Excel's 再試行).
-        const no = refused(text);
-        if (no) {
-            showError(no);
-            (e.where === "bar" ? bar : ed).focus();
+        const box = e.where === "bar" ? bar : ed;
+        const text = box.value;
+        // What the rule of the cell (データの入力規則) says of it, as Excel checks it: a value it
+        // does not allow is asked about (再試行: typed on; キャンセル: undone); one worked out by
+        // the editor (a formula, a rule of a formula) is checked there, after it is entered.
+        const rule = listAt(sel.ar, sel.ac);
+        const verdict = rule && rule.showError && text !== e.original ? judge(rule, text) : null;
+        if (verdict === "no") {
+            askRefused(rule, (answer) => {
+                if (answer === "enter") enter(e, how, text, false);
+                else if (answer === "retry") {
+                    box.focus();
+                    box.select();
+                } else cancelEntry();
+            });
             return;
         }
+        enter(e, how, text, verdict === "editor" && rule.errorStyle === "stop");
+    }
+    // Enters `text` (`validate`: the editor checks it against the cell's rule).
+    function enter(e, how, text, validate) {
+        if (!sel || !view) return;
         const fill = !!(how && how.fill) && (!single(sel) || areas.length > 0);
-        const ranges = fill ? allAreas().map(rangeText) : [address(sel.ar, sel.ac)];
+        const at = address(sel.ar, sel.ac);
+        const ranges = fill ? allAreas().map(rangeText) : [at];
         const sheet = view.sheet.name;
         endEntry();
         if (how && how.move) move(how.move[0], how.move[1], false);
         if (text === e.original && !fill) return;
-        postEdit(ranges.map((range) => (text === "" ? { op: "clear", sheet, range } : { op: "set", sheet, range, text })));
+        const ops = ranges.map((range) => (text === "" ? { op: "clear", sheet, range } : { op: "set", sheet, range, text }));
+        if (validate && text !== "") ops.push({ op: "validate", sheet, range: at });
+        postEdit(ops);
     }
 
     ed.addEventListener("input", () => {
@@ -5977,6 +5999,8 @@
                 case "conditional":
                 case "conditionalRules":
                     return !allow.formatCells;
+                case "validate":
+                    return false;
                 case "size":
                 case "hide":
                     return !(columns(o.range) ? allow.formatColumns : allow.formatRows);
@@ -6063,6 +6087,7 @@
         sort: '<rect x="1.5" y="2.5" width="7" height="11"/><path d="M1.5 6.2h7M1.5 9.8h7"/><path d="M12 2v11M10 11l2 2 2-2"/>',
         filter: '<path d="M2 2.5h12L9.5 8v5.5l-3-1.5V8z"/>',
         filterClear: '<path d="M2 2.5h9L7.5 7v5l-2-1V7z"/><path d="m10 9.5 4 4M14 9.5l-4 4"/>',
+        validation: '<rect x="1.5" y="2.5" width="9" height="11"/><path d="M1.5 6h9M1.5 9.5h9M5 2.5v11"/><path d="m9.5 11 2 2 3.5-5" stroke="#107c41" stroke-width="1.6"/>',
         formulas: '<text x="1" y="12" font-size="10" font-style="italic" stroke="none" fill="currentColor" font-family="serif">fx</text><path d="M11 5h4M11 9h4M11 13h4"/>',
         zoom: '<circle cx="6.5" cy="6.5" r="4.5"/><path d="m10 10 4.5 4.5M4.5 6.5h4M6.5 4.5v4"/>',
         zoom100: '<rect x="1.5" y="3.5" width="13" height="9"/><text x="3" y="10.5" font-size="5.5" stroke="none" fill="currentColor" font-family="sans-serif">100</text>',
@@ -6198,6 +6223,7 @@
             if (busy && edits) return;
             if (edits && !sel) return;
             if (entry && !keep) commit(null);
+            if (entry && !keep) return;
             act(b);
             if (!menu) closeOpen();
             focusGrid();
@@ -6219,6 +6245,7 @@
             const openMenuOf = (anchor) => {
                 if (o.edits && busy) return;
                 if (entry) commit(null);
+                if (entry) return;
                 o.menu(anchor);
             };
             if (o.menu && !o.split) b.addEventListener("click", () => openMenuOf(wrap === into ? b : wrap));
@@ -6809,6 +6836,24 @@
         button("filter", { icon: "filter", label: "フィルター", large: true, title: "フィルター（Ctrl+Shift+L）", edits: true, act: toggleFilter });
         stack();
         button("filterClear", { icon: "filterClear", label: "クリア", showLabel: true, title: "フィルターの条件をすべてクリア", edits: true, act: clearFilters });
+        group(dataTab, "データ ツール");
+        button("validation", {
+            icon: "validation",
+            label: "データの\n入力規則",
+            large: true,
+            split: true,
+            cls: "two",
+            title: "データの入力規則: セルに入力できる値（整数・リスト・日付など）を制限し、入力時メッセージやエラー メッセージを設定します",
+            moreTitle: "データの入力規則",
+            edits: true,
+            act: askValidation,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "validations");
+                item(pop, "データの入力規則…", askValidation);
+                item(pop, "無効データのマーク", () => markInvalid(true));
+                item(pop, "入力規則マークのクリア", () => markInvalid(false));
+            },
+        });
 
         // ---- 表示
         const viewTab = tab("view", "表示");
@@ -8531,17 +8576,17 @@
         const rule = sel && !selected && sel.kind === "cells" ? listAt(sel.ar, sel.ac) : null;
         const o = sel ? ownerOf(sel.ar, sel.ac) || [sel.ar, sel.ac, sel.ar, sel.ac] : null;
         const b = rule && o ? boxOf(o[0], o[1], o[2], o[3]) : null;
-        const button = !!b && editable && !!rule.values && !entry;
+        const button = !!b && editable && rule.type === "list" && rule.inCellDropdown && !!rule.values && !entry;
         v.dropbtn.hidden = !button;
         if (button) {
             Object.assign(v.dropbtn.style, { left: `${b.x + b.w + 1}px`, top: `${b.y + Math.max(0, b.h - 17)}px` });
             pinTo(v.dropbtn, pinOf(v, b));
         }
-        const message = !!b && !!(rule.title || rule.prompt);
+        const message = !!b && rule.showInput && !!(rule.promptTitle || rule.prompt);
         v.promptbox.hidden = !message;
         if (message) {
             v.promptbox.textContent = "";
-            if (rule.title) v.promptbox.appendChild(el("b", null, rule.title));
+            if (rule.promptTitle) v.promptbox.appendChild(el("b", null, rule.promptTitle));
             if (rule.prompt) v.promptbox.appendChild(el("div", null, rule.prompt));
             Object.assign(v.promptbox.style, { left: `${b.x + Math.min(b.w, 40)}px`, top: `${b.y + b.h + 6}px` });
             pinTo(v.promptbox, pinOf(v, b));
@@ -8550,7 +8595,7 @@
     function openList() {
         if (!editable || busy || !view || !sel) return;
         const rule = listAt(sel.ar, sel.ac);
-        if (!rule || !rule.values) return;
+        if (!rule || rule.type !== "list" || !rule.inCellDropdown || !rule.values) return;
         const pop = openPop(view.dropbtn, "listpop");
         const now = ((activeTd && activeTd.cell) || {}).t || "";
         const sheet = view.sheet.name;
@@ -8580,13 +8625,433 @@
             }
         });
     }
-    // What was typed into a cell with a list that stops other entries: the message, or null.
-    function refused(text) {
-        if (!sel || !view || text === "" || /^[=+-]./.test(text)) return null;
-        const rule = listAt(sel.ar, sel.ac);
-        if (!rule || rule.stop === undefined || !rule.all) return null;
-        if (rule.all.some((x) => x.toLowerCase() === text.toLowerCase())) return null;
-        return rule.stop || "この値は、このセルに定義されているデータ入力規則の制限を満たしていません。";
+    // What a text typed into a cell is, as far as the rules are checked here: { n } a number
+    // (a date or a time typed as Excel reads them: its serial), { text }, { bool }, or null: one
+    // the editor works out (a formula, a date of an era): checked there.
+    function typedValue(text) {
+        const t = text.trim();
+        if (text.startsWith("'")) return { text: text.slice(1) };
+        if (/^[=@]/.test(t) || /^[+-][^\d.]/.test(t)) return null;
+        if (/^(true|false)$/i.test(t)) return { bool: /^true$/i.test(t) };
+        const plain = t.replace(/[,¥$\s]/g, "");
+        const num = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(%?)$/i.exec(plain);
+        if (num && plain !== "") return { n: +num[1] / (num[2] ? 100 : 1) };
+        const serial = (y, m, d) => {
+            const ms = Date.UTC(y, m - 1, d);
+            const back = new Date(ms);
+            if (back.getUTCMonth() !== m - 1 || back.getUTCDate() !== d) return null;
+            return ms / 86400000 + 25569;
+        };
+        const time = (s) => {
+            const m = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}(?:\.\d+)?))?\s*(am|pm)?$/i.exec(s) || /^(\d{1,2})時(?:(\d{1,2})分)?(?:(\d{1,2})秒)?$/.exec(s);
+            if (!m) return null;
+            let h = +m[1];
+            if (m[4]) h = (h % 12) + (/pm/i.test(m[4]) ? 12 : 0);
+            return (h * 3600 + +(m[2] || 0) * 60 + +(m[3] || 0)) / 86400;
+        };
+        const tm = time(t);
+        if (tm !== null) return { n: tm };
+        const [datePart, timePart] = t.split(/\s+(?=\d{1,2}(?::|時))/);
+        const year = new Date().getFullYear();
+        const d =
+            /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/.exec(datePart) ||
+            /^(\d{4})年(\d{1,2})月(\d{1,2})日$/.exec(datePart) ||
+            ((m) => m && [m[0], year, m[1], m[2]])(/^(\d{1,2})[/-](\d{1,2})$/.exec(datePart) || /^(\d{1,2})月(\d{1,2})日$/.exec(datePart));
+        if (d) {
+            const day = serial(+d[1], +d[2], +d[3]);
+            const at = timePart ? time(timePart) : 0;
+            if (day !== null && at !== null) return { n: day + at };
+        }
+        // (An era's date, a month's name, ...: the editor reads it.)
+        if (/^(明治|大正|昭和|平成|令和|[MTSHRmtshr])\s*(\d+|元)/.test(t)) return null;
+        return { text };
+    }
+    // A rule's operand worked out here: a number written in the rule (null: a formula, a
+    // reference — the editor works those out).
+    const ruleNumber = (f) => (/^\s*[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?\s*$/i.test(f || "") ? +f : null);
+    // What the rule of the active cell says of the text typed into it: null (allowed), "editor"
+    // (the editor checks it after it is entered), or "no".
+    function judge(rule, text) {
+        if (!rule || rule.type === "any" || text === "") return null;
+        if (rule.type === "custom") return "editor";
+        const v = typedValue(text);
+        if (!v) return "editor";
+        if (rule.type === "list") {
+            const all = rule.values || [];
+            const t = v.n !== undefined ? null : String(v.text !== undefined ? v.text : v.bool ? "TRUE" : "FALSE").toLowerCase();
+            const hit = all.some((x) => (v.n !== undefined ? (x.trim() !== "" && +x.replace(/,/g, "") === v.n) || x === text.trim() : x.toLowerCase() === t));
+            // (A list of cells shows them formatted: a number typed may be one of them as it is shown.)
+            return hit ? null : rule.formula1.startsWith('"') ? "no" : "editor";
+        }
+        let x;
+        if (rule.type === "textLength") x = (v.text !== undefined ? v.text : text.trim()).length;
+        else if (v.n === undefined) return "no";
+        else x = v.n;
+        if (rule.type === "whole" && x !== Math.floor(x)) return "no";
+        const a = ruleNumber(rule.formula1);
+        const two = rule.operator === "between" || rule.operator === "notBetween";
+        const b = two ? ruleNumber(rule.formula2) : 0;
+        if (a === null || b === null) return "editor";
+        const ok = {
+            between: x >= a && x <= b,
+            notBetween: x < a || x > b,
+            equal: x === a,
+            notEqual: x !== a,
+            greaterThan: x > a,
+            lessThan: x < a,
+            greaterThanOrEqual: x >= a,
+            lessThanOrEqual: x <= a,
+        }[rule.operator];
+        return ok === false ? "no" : null;
+    }
+    // The message of a value the rule does not allow, as Excel's: 再試行 / キャンセル (停止),
+    // はい / いいえ / キャンセル (注意: "続けますか?"), OK / キャンセル (情報). `then(answer)`:
+    // "enter" (the value is entered), "retry" (typed on), "cancel" (what was typed is undone).
+    function askRefused(rule, then) {
+        closeDialog();
+        const style = rule.errorStyle || "stop";
+        dialog = document.body.appendChild(el("div", "dlgback"));
+        const form = dialog.appendChild(el("form", `dlg alertdlg ${style}`));
+        form.setAttribute("role", "alertdialog");
+        form.appendChild(el("h2", null, rule.errorTitle || "Microsoft Excel"));
+        const body = form.appendChild(el("div", "alertbody"));
+        body.appendChild(el("span", "alerticon", style === "stop" ? "✕" : style === "warning" ? "!" : "i"));
+        const text = body.appendChild(el("div", "msg", rule.error || "この値は、このセルに定義されているデータ入力規則の制限を満たしていません。"));
+        if (style === "warning") text.appendChild(el("div", "ask", "続けますか?"));
+        const buttons = form.appendChild(el("div", "buttons"));
+        const answers = style === "stop" ? [["再試行", "retry"], ["キャンセル", "cancel"]] : style === "warning" ? [["はい", "enter"], ["いいえ", "retry"], ["キャンセル", "cancel"]] : [["OK", "enter"], ["キャンセル", "cancel"]];
+        let first = null;
+        for (const [label, answer] of answers) {
+            const b = buttons.appendChild(el("button", first ? null : "ok", label));
+            b.type = "button";
+            b.addEventListener("click", () => {
+                closeDialog();
+                then(answer);
+            });
+            first = first || b;
+        }
+        form.cancel = () => {
+            closeDialog();
+            then("cancel");
+        };
+        form.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                form.cancel();
+            }
+        });
+        form.addEventListener("submit", (e) => e.preventDefault());
+        first.focus();
+    }
+
+    // ---- データ > データの入力規則
+
+    // The rules of the sheet on the cells selected.
+    function rulesOfSelection() {
+        const list = view.sheet.lists || [];
+        const all = allAreas();
+        return list.filter((rule) => rule.ranges.some(([r1, c1, r2, c2]) => all.some((a) => r1 <= a.r2 && r2 >= a.r1 && c1 <= a.c2 && c2 >= a.c1)));
+    }
+    // A rule's ranges as an edit takes them (`A1:B5 D2`).
+    const ruleRange = (rule) => rule.ranges.map(([r1, c1, r2, c2]) => (r1 === r2 && c1 === c2 ? address(r1, c1) : `${address(r1, c1)}:${address(r2, c2)}`)).join(" ");
+    const VALIDATION_KINDS = [
+        ["any", "すべての値"],
+        ["whole", "整数"],
+        ["decimal", "小数点数"],
+        ["list", "リスト"],
+        ["date", "日付"],
+        ["time", "時刻"],
+        ["textLength", "文字列 (長さ指定)"],
+        ["custom", "ユーザー設定"],
+    ];
+    const VALIDATION_OPERATORS = [
+        ["between", "次の値の間"],
+        ["notBetween", "次の値の間以外"],
+        ["equal", "次の値に等しい"],
+        ["notEqual", "次の値に等しくない"],
+        ["greaterThan", "次の値より大きい"],
+        ["lessThan", "次の値より小さい"],
+        ["greaterThanOrEqual", "次の値以上"],
+        ["lessThanOrEqual", "次の値以下"],
+    ];
+    const VALIDATION_STYLES = [
+        ["stop", "停止"],
+        ["warning", "注意"],
+        ["information", "情報"],
+    ];
+    const IME_MODES = [
+        ["noControl", "コントロールなし"],
+        ["on", "オン"],
+        ["off", "オフ (英語モード)"],
+        ["disabled", "無効"],
+        ["hiragana", "ひらがな"],
+        ["fullKatakana", "全角カタカナ"],
+        ["halfKatakana", "半角カタカナ"],
+        ["fullAlpha", "全角英数字"],
+        ["halfAlpha", "半角英数字"],
+    ];
+    // A serial as the dialog shows a date (2026/11/24) or a time (9:00:00).
+    function serialText(n, kind) {
+        if (kind === "date") {
+            const d = new Date(Math.round((Math.floor(n) - 25569) * 86400000));
+            const date = `${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+            return n === Math.floor(n) ? date : `${date} ${serialText(n - Math.floor(n), "time")}`;
+        }
+        const secs = Math.round((n - Math.floor(n)) * 86400);
+        const two = (x) => String(x).padStart(2, "0");
+        return `${Math.floor(secs / 3600) + (n >= 1 ? Math.floor(n) * 24 : 0)}:${two(Math.floor(secs / 60) % 60)}:${two(secs % 60)}`;
+    }
+    // A formula of the file as the dialog shows it, of a rule of `kind`.
+    function operandText(f, kind) {
+        if (!f) return "";
+        if (kind === "list" && f.startsWith('"')) return f.slice(1, f.endsWith('"') ? -1 : undefined).replace(/""/g, '"');
+        const n = ruleNumber(f);
+        if (n !== null && kind !== "custom" && kind !== "list") return kind === "date" || kind === "time" ? serialText(n, kind) : String(n);
+        return `=${f}`;
+    }
+    // What is typed into the dialog as the file's formula (`ok: false`, and why, when it is not one).
+    function operandOf(text, kind) {
+        const t = text.trim();
+        if (t === "") return { ok: false, why: kind === "list" ? "元の値を入力してください。" : "値を入力してください。" };
+        if (t.startsWith("=")) {
+            const f = t.slice(1).trim();
+            return f ? { ok: true, f } : { ok: false, why: "数式を入力してください。" };
+        }
+        if (kind === "list") return { ok: true, f: `"${t.replace(/"/g, '""')}"` };
+        if (kind === "custom") return { ok: true, f: t };
+        const v = typedValue(t);
+        if (!v || v.n === undefined) return { ok: false, why: "入力した値は正しくありません。数値、日付、時刻、または = で始まる数式を入力してください。" };
+        if ((kind === "whole" || kind === "textLength") && v.n !== Math.floor(v.n)) return { ok: false, why: "入力した値は正しくありません。整数を入力してください。" };
+        return { ok: true, f: String(+v.n.toPrecision(15)), n: v.n };
+    }
+    // "データの入力規則": 設定 (the kind of values, the comparison, its values; a list's values,
+    // a formula), 入力時メッセージ, エラー メッセージ, 日本語入力 — of the rule of the cells
+    // selected; すべてクリア takes the rules off them.
+    function askValidation() {
+        if (!editable || busy || !sel || !view) return;
+        if (entry) commit(null);
+        const sheet = view.sheet;
+        if (sheet.protection) {
+            showError("保護されたシートでは、データの入力規則を変更できません。シートの保護を解除してください。");
+            return;
+        }
+        const found = rulesOfSelection();
+        if (found.length > 1) {
+            askYes("選択範囲には複数の種類の入力値の設定が含まれています。現在の設定を消去して続けますか?", () => validationDialog(null, true));
+            return;
+        }
+        const active = listAt(sel.ar, sel.ac);
+        validationDialog(found[0] || null, false, active && active === found[0]);
+    }
+    // A question with OK and キャンセル.
+    function askYes(message, then) {
+        closeDialog();
+        dialog = document.body.appendChild(el("div", "dlgback"));
+        const form = dialog.appendChild(el("form", "dlg"));
+        form.setAttribute("role", "dialog");
+        form.appendChild(el("h2", null, "Microsoft Excel"));
+        form.appendChild(el("div", "msg", message));
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            closeDialog();
+            then();
+        });
+        form.querySelector("button.ok").focus();
+    }
+    function validationDialog(rule, cleared, sameOffered) {
+        const sheet = view.sheet;
+        const r = Object.assign(
+            { type: "any", operator: "between", formula1: "", formula2: "", allowBlank: true, inCellDropdown: true, showInput: true, promptTitle: "", prompt: "", showError: true, errorStyle: "stop", errorTitle: "", error: "", ime: "noControl" },
+            rule || {},
+        );
+        const form = openDialog("データの入力規則", "validdlg");
+        const tabs = form.appendChild(el("div", "fmttabs"));
+        const pages = {};
+        const showTab = (key) => {
+            for (const t of tabs.children) t.classList.toggle("on", t.dataset.tab === key);
+            for (const [k, p] of Object.entries(pages)) p.hidden = k !== key;
+        };
+        for (const [key, label] of [["settings", "設定"], ["input", "入力時メッセージ"], ["error", "エラー メッセージ"], ["ime", "日本語入力"]]) {
+            const t = tabs.appendChild(el("button", null, label));
+            t.type = "button";
+            t.dataset.tab = key;
+            t.addEventListener("click", () => showTab(key));
+            pages[key] = form.appendChild(el("div", "validpage"));
+        }
+        const selectOf = (page, label, options, value) => {
+            const line = page.appendChild(el("label", "row"));
+            line.appendChild(el("span", "lbl", label));
+            const s = line.appendChild(el("select"));
+            for (const [v, text] of options) s.appendChild(el("option", null, text)).value = v;
+            s.value = value;
+            return s;
+        };
+        const textOf = (page, label, value, area) => {
+            const line = page.appendChild(el("label", "col"));
+            line.appendChild(el("span", "lbl", label));
+            const input = line.appendChild(el(area ? "textarea" : "input"));
+            if (!area) input.type = "text";
+            input.spellcheck = false;
+            input.value = value;
+            input.addEventListener("input", () => input.setCustomValidity(""));
+            return input;
+        };
+
+        // 設定
+        const set = pages.settings;
+        set.appendChild(el("div", "condprompt", "条件の設定"));
+        const kind = selectOf(set, "入力値の種類:", VALIDATION_KINDS, r.type);
+        const blank = check(set, "空白を無視する", r.allowBlank);
+        const op = selectOf(set, "データ:", VALIDATION_OPERATORS, r.operator);
+        const f1 = textOf(set, "", operandText(r.formula1, r.type));
+        const f2 = textOf(set, "", operandText(r.formula2, r.type));
+        const drop = check(set, "ドロップダウン リストから選択する", r.inCellDropdown);
+        set.appendChild(el("hr"));
+        const same = check(set, "同じ入力規則が設定されたすべてのセルに変更を適用する", false);
+        same.disabled = !sameOffered;
+        const lineOf = (x) => x.closest("label");
+        const labels = {
+            between: { "": ["最小値:", "最大値:"], date: ["次の日付から:", "次の日付まで:"], time: ["開始時刻:", "終了時刻:"] },
+            one: { "": ["値:"], date: ["日付:"], time: ["時刻:"], textLength: ["長さ:"] },
+            min: { "": ["最小値:"], date: ["開始日:"], time: ["開始時刻:"] },
+            max: { "": ["最大値:"], date: ["終了日:"], time: ["終了時刻:"] },
+        };
+        const layout = () => {
+            const k = kind.value;
+            const compares = ["whole", "decimal", "date", "time", "textLength"].includes(k);
+            const o = op.value;
+            const two = compares && (o === "between" || o === "notBetween");
+            lineOf(op).hidden = !compares;
+            blank.disabled = k === "any";
+            lineOf(f1).hidden = k === "any";
+            lineOf(f2).hidden = !two;
+            lineOf(drop).hidden = k !== "list";
+            const group = two ? "between" : /^greaterThan/.test(o) ? "min" : /^lessThan/.test(o) ? "max" : "one";
+            const names = labels[group][k] || labels[group][""];
+            lineOf(f1).querySelector(".lbl").textContent = k === "list" ? "元の値:" : k === "custom" ? "数式:" : names[0];
+            lineOf(f2).querySelector(".lbl").textContent = names[1] || "";
+        };
+        let lastKind = r.type;
+        kind.addEventListener("change", () => {
+            // (Another kind: the values typed for the other go, as Excel's.)
+            if (kind.value !== lastKind) f1.value = f2.value = "";
+            lastKind = kind.value;
+            layout();
+        });
+        op.addEventListener("change", layout);
+        layout();
+
+        // 入力時メッセージ
+        const inp = pages.input;
+        const showInput = check(inp, "セルを選択したときに入力時メッセージを表示する", r.showInput);
+        inp.appendChild(el("div", "condprompt", "セルを選択したときに表示するメッセージ:"));
+        const promptTitle = textOf(inp, "タイトル:", r.promptTitle);
+        promptTitle.maxLength = 32;
+        const prompt = textOf(inp, "入力時メッセージ:", r.prompt, true);
+        prompt.maxLength = 255;
+
+        // エラー メッセージ
+        const err = pages.error;
+        const showErr = check(err, "無効なデータが入力されたらエラー メッセージを表示する", r.showError);
+        err.appendChild(el("div", "condprompt", "無効なデータが入力されたときに表示するエラー メッセージ:"));
+        const style = selectOf(err, "スタイル:", VALIDATION_STYLES, r.errorStyle);
+        const errorTitle = textOf(err, "タイトル:", r.errorTitle);
+        errorTitle.maxLength = 32;
+        const error = textOf(err, "エラー メッセージ:", r.error, true);
+        error.maxLength = 225;
+
+        // 日本語入力
+        const ime = pages.ime;
+        ime.appendChild(el("div", "condprompt", "IME"));
+        const imeMode = selectOf(ime, "日本語入力:", IME_MODES, r.ime);
+
+        const buttons = dialogButtons(form);
+        const clearAll = buttons.insertBefore(el("button", "clear", "すべてクリア(C)"), buttons.firstChild);
+        clearAll.type = "button";
+        clearAll.addEventListener("click", () => {
+            kind.value = lastKind = "any";
+            op.value = "between";
+            f1.value = f2.value = "";
+            blank.checked = drop.checked = showInput.checked = showErr.checked = true;
+            promptTitle.value = prompt.value = errorTitle.value = error.value = "";
+            style.value = "stop";
+            imeMode.value = "noControl";
+            layout();
+        });
+        const fail = (input, why) => {
+            showTab("settings");
+            input.setCustomValidity(why);
+            input.reportValidity();
+        };
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const range = same.checked && rule ? ruleRange(rule) : condRange();
+            const k = kind.value;
+            const edit = { op: "validation", sheet: sheet.name, range };
+            const nothing = k === "any" && !promptTitle.value && !prompt.value && !errorTitle.value && !error.value && imeMode.value === "noControl";
+            if (nothing) {
+                closeDialog();
+                // (Nothing set: the cells have no rule — nothing to do when they had none.)
+                if (rule || cleared) postEdit([Object.assign(edit, { clear: true })]);
+                return;
+            }
+            Object.assign(edit, {
+                type: k,
+                allowBlank: blank.checked,
+                inCellDropdown: drop.checked,
+                showInput: showInput.checked,
+                promptTitle: promptTitle.value,
+                prompt: prompt.value,
+                showError: showErr.checked,
+                errorStyle: style.value,
+                errorTitle: errorTitle.value,
+                error: error.value,
+                ime: imeMode.value,
+            });
+            if (k !== "any") {
+                const a = operandOf(f1.value, k);
+                if (!a.ok) return fail(f1, a.why);
+                edit.formula1 = a.f;
+                if (["whole", "decimal", "date", "time", "textLength"].includes(k)) {
+                    edit.operator = op.value;
+                    if (op.value === "between" || op.value === "notBetween") {
+                        const b = operandOf(f2.value, k);
+                        if (!b.ok) return fail(f2, b.why);
+                        if (a.n !== undefined && b.n !== undefined && b.n < a.n) return fail(f2, "最大値は最小値以上でなければなりません。");
+                        edit.formula2 = b.f;
+                    }
+                }
+            }
+            closeDialog();
+            postEdit([edit]);
+        });
+        showTab("settings");
+        kind.focus();
+    }
+
+    // "無効データのマーク": the cells with values their rules do not allow, circled in red (as
+    // Excel, up to 255), until "入力規則マークのクリア".
+    function markInvalid(on) {
+        remember({ invalidMarks: on });
+        if (on && view && !(view.sheet.invalid || []).length && (view.sheet.lists || []).length) showError("無効なデータはありません。");
+        drawBoxes();
+    }
+    function placeInvalid() {
+        const v = view;
+        if (!v) return;
+        for (const m of v.wrap.querySelectorAll(".invalidmark")) m.remove();
+        if (!saved.invalidMarks) return;
+        const marks = v.selbox.parentNode;
+        for (const [r, c] of (v.sheet.invalid || []).slice(0, 255)) {
+            const o = ownerOf(r, c) || [r, c, r, c];
+            const b = boxOf(o[0], o[1], o[2], o[3]);
+            if (!b) continue;
+            const m = marks.insertBefore(el("div", "invalidmark"), v.selbox);
+            Object.assign(m.style, { left: `${b.x - 4}px`, top: `${b.y - 3}px`, width: `${b.w + 8}px`, height: `${b.h + 6}px` });
+            pinTo(m, pinOf(v, b));
+        }
     }
 
     // ---- find and replace (Ctrl+F, Ctrl+H)
@@ -8973,7 +9438,7 @@
         const arrows = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
         let done = true;
         if (e.altKey && ctrl && (key === "v" || key === "V")) askPasteSpecial();
-        else if (e.altKey && key === "ArrowDown" && listAt(sel.ar, sel.ac)) openList();
+        else if (e.altKey && key === "ArrowDown" && (listAt(sel.ar, sel.ac) || {}).type === "list") openList();
         else if (e.altKey) done = false;
         else if (arrows[key]) move(arrows[key][0], arrows[key][1], e.shiftKey, ctrl);
         else if (key === "Tab") move(0, e.shiftKey ? -1 : 1, false);

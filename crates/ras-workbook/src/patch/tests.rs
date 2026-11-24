@@ -802,12 +802,31 @@ fn notes_lists_and_names_for_the_grid() {
         sheet["notes"],
         json!([{ "r": 2, "c": 1, "text": "メモです", "author": "" }])
     );
+    let lists = &sheet["lists"];
     assert_eq!(
-        sheet["lists"],
-        json!([
-            { "ranges": [[1, 2, 4, 2]], "values": ["1", "2", "3"], "all": ["1", "2", "3"], "stop": "", "title": "数量", "prompt": "選んでください" },
-            { "ranges": [[1, 1, 4, 1], [6, 4, 6, 4]], "values": ["りんご", "みかん", "ぶどう", "もも"] }
-        ])
+        lists[0],
+        json!({
+            "ranges": [[1, 2, 4, 2]], "type": "list", "operator": "between", "formula1": "\"1,2, 3\"", "formula2": "",
+            "allowBlank": true, "inCellDropdown": true, "showInput": true, "promptTitle": "数量", "prompt": "選んでください",
+            "showError": true, "errorStyle": "stop", "errorTitle": "", "error": "", "ime": "noControl", "values": ["1", "2", "3"],
+        })
+    );
+    assert_eq!(
+        (
+            &lists[1]["ranges"],
+            &lists[1]["errorStyle"],
+            &lists[1]["values"]
+        ),
+        (
+            &json!([[1, 1, 4, 1], [6, 4, 6, 4]]),
+            &json!("warning"),
+            &json!(["りんご", "みかん", "ぶどう", "もも"])
+        )
+    );
+    // The quantities not in the list (and the prices, not fruits) are marked as invalid.
+    assert_eq!(
+        sheet["invalid"],
+        json!([[1, 1], [2, 1], [2, 2], [3, 1], [4, 1], [4, 2]])
     );
     assert_eq!(
         data["names"],
@@ -823,6 +842,115 @@ fn notes_lists_and_names_for_the_grid() {
     assert_eq!(
         (b2["x"].clone(), b2["n"].clone()),
         (json!(120.0), json!("#,##0"))
+    );
+}
+
+#[test]
+fn input_rules_put_cleared_and_checked() {
+    const SHEET1: &str = "xl/worksheets/sheet1.xml";
+    // A whole number of 1 to 10 on E2:E5 (with the rule of C2:C5 as it was).
+    let out = edit(
+        r#"{"op":"validation","range":"E2:E5","type":"whole","operator":"between","formula1":"1","formula2":"10","errorTitle":"数量","error":"1〜10 を入力してください","promptTitle":"数量","prompt":"1〜10"}"#,
+    );
+    assert_eq!(changed(BOOK, &out), [SHEET1]);
+    let doc = part(&out, SHEET1);
+    assert!(
+        doc.contains(r#"<dataValidations count="2"><dataValidation type="whole" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="C2:C5"><formula1>1</formula1><formula2>100</formula2></dataValidation><dataValidation type="whole" allowBlank="1" showInputMessage="1" showErrorMessage="1" errorTitle="数量" error="1〜10 を入力してください" promptTitle="数量" prompt="1〜10" sqref="E2:E5"><formula1>1</formula1><formula2>10</formula2></dataValidation></dataValidations>"#),
+        "{doc}"
+    );
+    // Put on C4:E4: the cells taken out of the rules they had; a list with a range.
+    let out = apply(
+        &out,
+        &ops(r#"{"op":"validation","range":"C4:E4","type":"list","formula1":"=$A$2:$A$5","errorStyle":"warning","ime":"hiragana","inCellDropdown":false}"#),
+    )
+    .unwrap();
+    let doc = part(&out, SHEET1);
+    assert!(
+        doc.contains(r#"sqref="C2:C3 C5""#) && doc.contains(r#"sqref="E2:E3 E5""#),
+        "{doc}"
+    );
+    assert!(
+        doc.contains(r#"<dataValidation type="list" errorStyle="warning" imeMode="hiragana" allowBlank="1" showDropDown="1" showInputMessage="1" showErrorMessage="1" sqref="C4:E4"><formula1>$A$2:$A$5</formula1></dataValidation></dataValidations>"#),
+        "{doc}"
+    );
+    assert!(doc.contains(r#"<dataValidations count="3">"#));
+    // A rule without a type: "すべての値" with its message; an operator of one value.
+    let out2 = apply(
+        &out,
+        &ops(r#"[{"op":"validation","range":"G1","type":"any","prompt":"メモ"},{"op":"validation","range":"G2","type":"decimal","operator":"greaterThan","formula1":"0.5"}]"#),
+    )
+    .unwrap();
+    let doc = part(&out2, SHEET1);
+    assert!(doc.contains(r#"<dataValidation allowBlank="1" showInputMessage="1" showErrorMessage="1" prompt="メモ" sqref="G1"/>"#), "{doc}");
+    assert!(doc.contains(r#"<dataValidation type="decimal" operator="greaterThan" allowBlank="1" showInputMessage="1" showErrorMessage="1" sqref="G2"><formula1>0.5</formula1></dataValidation>"#), "{doc}");
+    // The rules as the grid reads them: the file's own (no operator: between).
+    let data = view(&out);
+    let lists = data["sheets"][0]["lists"].as_array().unwrap().clone();
+    assert_eq!(lists.len(), 3);
+    assert_eq!(
+        (&lists[0]["type"], &lists[0]["operator"]),
+        (&json!("whole"), &json!("between"))
+    );
+    assert_eq!(
+        lists[2]["values"],
+        json!(["りんご", "みかん", "ぶどう", "もも"])
+    );
+    assert_eq!(lists[2]["inCellDropdown"], json!(false));
+    // Cleared: the cells out of every rule; a rule left with none goes, and so does the list.
+    let cleared = apply(
+        &out,
+        &ops(r#"{"op":"validation","range":"C1:E9","clear":true}"#),
+    )
+    .unwrap();
+    let doc = part(&cleared, SHEET1);
+    assert!(!doc.contains("dataValidation"), "{doc}");
+    // Entries checked against the rules (of the style "停止" alone): 1〜100 in C2:C5.
+    let typed = |text: &str, at: &str| {
+        apply(
+            BOOK,
+            &ops(&format!(
+                r#"[{{"op":"set","range":"{at}","text":"{text}"}},{{"op":"validate","range":"{at}"}}]"#
+            )),
+        )
+    };
+    assert!(typed("50", "C2").is_ok());
+    assert!(typed("=10*5", "C2").is_ok());
+    assert_eq!(typed("101", "C2").unwrap_err(), crate::book::REFUSED);
+    assert_eq!(typed("1.5", "C2").unwrap_err(), crate::book::REFUSED);
+    assert_eq!(typed("abc", "C3").unwrap_err(), crate::book::REFUSED);
+    assert!(typed("", "C3").is_ok());
+    assert!(typed("abc", "F3").is_ok());
+    // A rule of a formula, its references relative to its first cell; its own message.
+    let custom = apply(
+        BOOK,
+        &ops(r#"{"op":"validation","range":"E2:E5","type":"custom","formula1":"=E2<=D2","errorTitle":"確認","error":"金額以下にしてください"}"#),
+    )
+    .unwrap();
+    let typed = |text: &str, at: &str| {
+        apply(
+            &custom,
+            &ops(&format!(
+                r#"[{{"op":"set","range":"{at}","text":"{text}"}},{{"op":"validate","range":"{at}"}}]"#
+            )),
+        )
+    };
+    let d3: f64 = cell(BOOK, "Data", "D3", Read::Value).parse().unwrap();
+    assert!(typed(&d3.to_string(), "E3").is_ok());
+    assert_eq!(
+        typed(&(d3 + 1.0).to_string(), "E3").unwrap_err(),
+        "確認: 金額以下にしてください"
+    );
+    // What is wrong with a rule is refused.
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(
+        wrong(r#"{"op":"validation","range":"A1","type":"whole","formula1":"1"}"#)
+            .contains("最大値")
+    );
+    assert!(wrong(r#"{"op":"validation","range":"A1","type":"list"}"#).contains("リスト"));
+    assert!(
+        wrong(r#"{"op":"validation","range":"A1","type":"number","formula1":"1"}"#)
+            .contains("number")
     );
 }
 
