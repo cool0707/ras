@@ -3998,8 +3998,8 @@
         const home = tab("home", "ホーム");
         group(home, "元に戻す");
         stack();
-        button("undo", { icon: "undo", label: "元に戻す", title: "元に戻す（Ctrl+Z）", showLabel: true, edits: true, act: () => postHistory("undo") });
-        button("redo", { icon: "redo", label: "やり直し", title: "やり直し（Ctrl+Y）", showLabel: true, edits: true, act: () => postHistory("redo") });
+        button("undo", { icon: "undo", label: "元に戻す", title: "元に戻す（Ctrl+Z）", edits: true, act: () => postHistory("undo") });
+        button("redo", { icon: "redo", label: "やり直し", title: "やり直し（Ctrl+Y）", edits: true, act: () => postHistory("redo") });
 
         group(home, "クリップボード");
         button("paste", {
@@ -4023,8 +4023,8 @@
             },
         });
         stack();
-        button("cut", { icon: "cut", label: "切り取り", title: "切り取り（Ctrl+X）", showLabel: true, edits: true, act: () => menuCopy(true) });
-        button("copy", { icon: "copy", label: "コピー", title: "コピー（Ctrl+C）", showLabel: true, act: () => menuCopy(false) });
+        button("cut", { icon: "cut", label: "切り取り", title: "切り取り（Ctrl+X）", edits: true, act: () => menuCopy(true) });
+        button("copy", { icon: "copy", label: "コピー", title: "コピー（Ctrl+C）", act: () => menuCopy(false) });
 
         group(home, "フォント");
         const fontRows = into.appendChild(el("div", "rstack wide"));
@@ -4122,14 +4122,13 @@
         row(alignRows);
         for (const [value, ic, title] of [["top", "top", "上揃え"], ["middle", "middle", "上下中央揃え"], ["bottom", "bottom", "下揃え"]]) button(`valign-${value}`, { icon: ic, title, edits: true, act: () => format({ valign: value }) });
         sep();
-        button("wrap", { icon: "wrap", label: "折り返して全体を表示する", showLabel: true, title: "折り返して全体を表示する", edits: true, act: () => toggleFormat("wrap") });
+        button("wrap", { icon: "wrap", label: "折り返して全体を表示する", title: "折り返して全体を表示する", edits: true, act: () => toggleFormat("wrap") });
         row(alignRows);
         for (const [value, ic, title] of [["left", "left", "左揃え"], ["center", "center", "中央揃え"], ["right", "right", "右揃え"]]) button(`align-${value}`, { icon: ic, title, edits: true, act: () => format({ align: value }) });
         sep();
         button("merge", {
             icon: "merge",
             label: "セルを結合して中央揃え",
-            showLabel: true,
             title: "セルを結合して中央揃え（結合したセルでは結合の解除）",
             moreTitle: "セルの結合",
             split: true,
@@ -4163,10 +4162,11 @@
         button("decDown", { icon: "decDown", title: "小数点以下の表示桁数を減らす", edits: true, act: () => decimals(false) });
 
         group(home, "セル");
+        stack();
         button("insert", {
             icon: "insert",
             label: "挿入",
-            large: true,
+            showLabel: true,
             edits: true,
             menu: (anchor) => {
                 const pop = openPop(anchor, "inserts");
@@ -4178,7 +4178,7 @@
         button("delete", {
             icon: "delete",
             label: "削除",
-            large: true,
+            showLabel: true,
             edits: true,
             menu: (anchor) => {
                 const pop = openPop(anchor, "deletes");
@@ -4190,7 +4190,7 @@
         button("cellFormat", {
             icon: "cellFormat",
             label: "書式",
-            large: true,
+            showLabel: true,
             edits: true,
             menu: (anchor) => {
                 const pop = openPop(anchor, "cellformats");
@@ -4212,7 +4212,6 @@
         button("fillDown", {
             icon: "fillDown",
             label: "フィル",
-            showLabel: true,
             edits: true,
             menu: (anchor) => {
                 const pop = openPop(anchor, "fills");
@@ -4223,7 +4222,6 @@
         button("clear", {
             icon: "clear",
             label: "クリア",
-            showLabel: true,
             edits: true,
             menu: (anchor) => {
                 const pop = openPop(anchor, "clears");
@@ -4234,13 +4232,11 @@
                 item(pop, "数式と値のクリア", clearSel, "Delete");
             },
         });
-        into = into.parentNode;
+        stack();
         button("sortFilter", {
             icon: "sortFilter",
             label: "並べ替えとフィルター",
-            large: true,
             edits: true,
-            cls: "two",
             menu: (anchor) => {
                 const pop = openPop(anchor, "sorts");
                 item(pop, "昇順", () => sortBy(false));
@@ -4254,7 +4250,6 @@
         button("findSelect", {
             icon: "find",
             label: "検索と選択",
-            large: true,
             menu: (anchor) => {
                 const pop = openPop(anchor, "finds");
                 item(pop, "検索…", () => openFind(false), "Ctrl+F");
