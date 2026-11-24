@@ -6843,9 +6843,12 @@
         $("tabs").appendChild(b);
     }
     if (editable) {
-        const add = $("tabs").appendChild(el("button", "addsheet", "＋"));
+        // Excel's ⊕ right after the last tab (kept in view while the tabs scroll).
+        const add = $("tabs").appendChild(el("button", "addsheet"));
         add.type = "button";
         add.title = "新しいシート";
+        add.setAttribute("aria-label", "新しいシート");
+        add.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.5v7M4.5 8h7"/></svg>';
         add.addEventListener("click", () => {
             const after = (view && view.sheet) || data.sheets[data.sheets.length - 1];
             if (after) askNewSheet(after);
