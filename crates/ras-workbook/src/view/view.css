@@ -641,3 +641,17 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.condmgr .condsample .fmt { display: inline-block; padding: 1px 6px; border: 1px solid #ddd; white-space: nowrap; }
 .dlg.condmgr .condsample .bar { display: block; width: 90px; height: 16px; }
 .dlg.condmgr .condsample .scale { display: block; width: 90px; height: 16px; }
+/* ホーム > 書式: the items that are on or off (セルのロック, ロックされたセルを表示) with a check. */
+.menu.cellformats > button { padding-left: 26px; position: relative; }
+.menu button.chk.on { font-weight: normal; }
+.menu button.chk.on::before { content: "✓"; position: absolute; left: 9px; }
+/* "ロックされたセルを表示": the locked cells shaded (over their fill, under their text). */
+#grid.showlocked td:not(.unlk) { box-shadow: inset 0 0 0 9999px rgba(255, 170, 0, .2) !important; }
+.dlg.unhidedlg select, .dlg.movedlg select { display: block; width: 260px; margin: 2px 0 8px; font: inherit; }
+.dlg.unhidedlg .lbl, .dlg.movedlg .lbl { margin-bottom: 2px; }
+.dlg.protectdlg { width: 340px; }
+.dlg.protectdlg label:has(input[type="password"]) { flex-direction: column; align-items: stretch; gap: 2px; }
+.dlg.protectdlg input[type="password"] { font: inherit; }
+.dlg.protectdlg > .lbl { margin-top: 6px; }
+.dlg.protectdlg .allows { max-height: 220px; overflow: auto; margin: 2px 0; padding: 2px 6px; border: 1px solid var(--line); }
+.dlg.protectdlg .note { margin-top: 6px; color: #555; font-size: 12px; }

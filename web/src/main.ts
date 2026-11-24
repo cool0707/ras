@@ -1128,6 +1128,9 @@ interface SheetMessage {
     name?: string;
     codeName?: string;
     color?: string | null;
+    /** A copy's place ("シートの移動またはコピー"): before this sheet, or after it. */
+    before?: string;
+    after?: string;
 }
 
 function sheetMessage(m: SheetMessage, frame: Window) {
@@ -1137,7 +1140,7 @@ function sheetMessage(m: SheetMessage, frame: Window) {
         frame.postMessage({ type: "idle" }, "*");
         return;
     }
-    const ops: unknown[] = [{ op: "sheet", action: m.action, sheet: m.sheet, name: m.name ?? "", codeName: m.action === "add" ? (m.codeName ?? "") : "" }];
+    const ops: unknown[] = [{ op: "sheet", action: m.action, sheet: m.sheet, name: m.name ?? "", codeName: m.action === "add" ? (m.codeName ?? "") : "", before: m.before ?? "", after: m.after ?? "" }];
     if (m.action === "add" && m.name && m.color) ops.push({ op: "tabColor", sheet: m.name, color: m.color });
     try {
         editWorkbook(ops);

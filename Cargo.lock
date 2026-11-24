@@ -1544,6 +1544,7 @@ dependencies = [
 name = "ras-workbook"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "flate2",
  "gridcraft-calc",
  "gridcraft-core",
@@ -1554,6 +1555,7 @@ dependencies = [
  "gridcraft-xlsx-formulas",
  "ras-ovba",
  "serde_json",
+ "sha2",
  "umya-spreadsheet",
  "zip 2.6.1",
 ]

@@ -362,6 +362,9 @@ interface SheetMessage {
 	name?: string;
 	codeName?: string;
 	color?: string | null;
+	/** A copy's place ("シートの移動またはコピー"): before this sheet, or after it. */
+	before?: string;
+	after?: string;
 }
 
 /**
@@ -385,13 +388,13 @@ async function sheetAction(what: Shown, m: SheetMessage): Promise<string | undef
 				return undefined;
 			}
 		}
-		const ops: unknown[] = [{ op: "sheet", action: m.action, sheet: m.sheet, name: m.name ?? "", codeName: m.action === "add" ? (m.codeName ?? "") : "" }];
+		const ops: unknown[] = [{ op: "sheet", action: m.action, sheet: m.sheet, name: m.name ?? "", codeName: m.action === "add" ? (m.codeName ?? "") : "", before: m.before ?? "", after: m.after ?? "" }];
 		if (m.action === "add" && m.name !== undefined && color !== undefined) {
 			ops.push({ op: "tabColor", sheet: m.name, color });
 		}
 		return edit(what, ops);
 	}
-	const result = await vscode.commands.executeCommand<SheetResult | undefined>(`ras.sheet.${m.action}`, { sheet: m.sheet, name: m.name, codeName: m.codeName, fromGrid: true });
+	const result = await vscode.commands.executeCommand<SheetResult | undefined>(`ras.sheet.${m.action}`, { sheet: m.sheet, name: m.name, codeName: m.codeName, before: m.before, after: m.after, fromGrid: true });
 	if (result === undefined || !result.ok) {
 		return undefined;
 	}

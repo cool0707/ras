@@ -642,6 +642,8 @@
             // than the font (not as tall as the browser's "normal") nor than the row.
             const css = cell ? (cell.s && sheet.styles[cell.s]) || "" : cssOf(sheet, r, c, null);
             if (!cell && css) td.style.cssText = css;
+            // (Shaded by "ロックされたセルを表示" unless unlocked.)
+            if (/--unlocked:1/.test(css)) td.classList.add("unlk");
             const merged = span.get(key);
             let line = lineOf(css);
             if (!(merged && merged[0] > r)) line = Math.max(0, Math.min(line, height(sheet, r) - 1));
@@ -1517,6 +1519,10 @@
 
     function beginEntry(mode, text, where) {
         if (!editable || busy || !sel || !view) return false;
+        if (view.sheet.protection && lockedAt(sel.ar, sel.ac)) {
+            showError(PROTECTED);
+            return false;
+        }
         closeMenu();
         const cell = (activeTd && activeTd.cell) || {};
         const original = cell.f || cell.v || cell.t || "";
@@ -1885,6 +1891,10 @@
 
     function postEdit(ops, keepClip) {
         if (!editable || busy) return false;
+        if (refusedByProtection(ops)) {
+            showError(PROTECTED);
+            return false;
+        }
         if (!keepClip) setClip(null);
         setBusy(true);
         vscode.postMessage({ type: "edit", ops });
@@ -5492,7 +5502,9 @@
     // The colors to choose from; `name` is the format ("color", "fill"), `none` what no color is called.
     // `pick`: what the color chosen is for (else the cells' format).
     function openColors(anchor, name, none, pick) {
-        const pop = openPop(anchor, "colors");
+        fillColors(openPop(anchor, "colors"), name, none, pick);
+    }
+    function fillColors(pop, name, none, pick) {
         popItem(pop, none, () => (pick ? pick(null) : format({ [name]: null })));
         const grid = pop.appendChild(el("div", "swatches"));
         for (const color of PALETTE) {
@@ -5698,6 +5710,288 @@
     function hideWhole(cols, hidden) {
         if (!sel || !view || !oneArea()) return;
         postEdit([{ op: "hide", sheet: view.sheet.name, range: cols ? wholeCols() : wholeRows(), hidden }]);
+    }
+    // ---- ホーム > 書式: the sheets (hidden, shown again, moved or copied, protected) and the
+    // cells' lock.
+
+    // "既定の幅": the width of the columns given none, in characters (as Excel counts them).
+    function askStandardWidth() {
+        if (!editable || busy || !view) return;
+        const sheet = view.sheet;
+        const px = sheet.defaultWidth || 72;
+        const now = px < 13 ? px / 13 : (px - 5) / 8;
+        const form = openDialog("標準の幅", "stdwidth");
+        const input = field(form, "標準の列幅", "number");
+        input.min = "0";
+        input.max = "255";
+        input.step = "0.01";
+        input.value = String(Math.round(now * 100) / 100);
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const width = +input.value;
+            if (!(width >= 0 && width <= 255) || input.value.trim() === "") {
+                input.setCustomValidity("0 から 255 までの数値を入力してください。");
+                input.reportValidity();
+                return;
+            }
+            closeDialog();
+            postEdit([{ op: "standardWidth", sheet: sheet.name, width }]);
+        });
+        input.addEventListener("input", () => input.setCustomValidity(""));
+        input.focus();
+        input.select();
+    }
+    // "シートを表示しない": the next visible sheet is shown in its place.
+    function hideSheet(sheet) {
+        if (!editable || busy) return;
+        const visible = data.sheets.filter((s) => s.visible === "visible");
+        if (sheet.visible !== "visible") return;
+        if (visible.length <= 1) {
+            showError("ブックのすべてのシートを非表示にすることはできません。");
+            return;
+        }
+        const i = visible.indexOf(sheet);
+        const next = visible[i + 1] || visible[i - 1];
+        remember({ sheet: next.name });
+        postEdit([{ op: "sheetVisible", sheet: sheet.name, visible: false }]);
+    }
+    // "シートの再表示": the hidden sheets, any of them shown again.
+    function askUnhideSheets() {
+        if (!editable || busy) return;
+        const hidden = data.sheets.filter((s) => s.visible !== "visible");
+        if (!hidden.length) return;
+        const form = openDialog("再表示", "unhidedlg");
+        form.appendChild(el("div", "lbl", "表示するシートを選択してください:"));
+        const list = form.appendChild(el("select"));
+        list.multiple = true;
+        list.size = Math.min(8, Math.max(4, hidden.length));
+        for (const s of hidden) list.appendChild(el("option", null, s.name)).value = s.name;
+        list.options[0].selected = true;
+        list.addEventListener("dblclick", () => form.requestSubmit());
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const names = [...list.selectedOptions].map((o) => o.value);
+            closeDialog();
+            if (!names.length) return;
+            remember({ sheet: names[0] });
+            postEdit(names.map((name) => ({ op: "sheetVisible", sheet: name, visible: true })));
+        });
+        list.focus();
+    }
+    // "シートの移動またはコピー": before which sheet (or at the end), moved or a copy.
+    function askMoveOrCopy(sheet) {
+        if (!editable || busy) return;
+        if (entry) commit(null);
+        const form = openDialog("シートの移動またはコピー", "movedlg");
+        form.appendChild(el("div", "lbl", `選択したシート「${sheet.name}」を移動します。`));
+        form.appendChild(el("div", "lbl", "挿入先:"));
+        const list = form.appendChild(el("select"));
+        list.size = Math.min(10, data.sheets.length + 1);
+        for (const s of data.sheets) list.appendChild(el("option", null, s.visible === "visible" ? s.name : `${s.name}（非表示）`)).value = s.name;
+        const end = list.appendChild(el("option", null, "(末尾へ移動)"));
+        end.value = "";
+        // (As Excel: the sheet after it.)
+        const at = data.sheets.indexOf(sheet);
+        list.selectedIndex = Math.min(at + 1, data.sheets.length);
+        const copy = check(form, "コピーを作成する", false);
+        const sync = () => (form.querySelector(".lbl").textContent = `選択したシート「${sheet.name}」を${copy.checked ? "コピー" : "移動"}します。`);
+        copy.addEventListener("change", sync);
+        list.addEventListener("dblclick", () => form.requestSubmit());
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const before = list.value;
+            closeDialog();
+            if (copy.checked) {
+                let n = 2;
+                const base = (k) => `${sheet.name.slice(0, 31 - ` (${k})`.length)} (${k})`;
+                while (takenName(base(n))) n++;
+                const place = before ? { before } : { after: data.sheets[data.sheets.length - 1].name };
+                postSheet({ action: "copy", sheet: sheet.name, ...place }, base(n));
+            } else {
+                if (before === sheet.name || (before === "" && at === data.sheets.length - 1) || (before && data.sheets[at + 1] && data.sheets[at + 1].name === before)) return;
+                remember({ sheet: sheet.name });
+                postEdit([{ op: "moveSheet", sheet: sheet.name, before }]);
+            }
+        });
+        list.focus();
+    }
+    // What a protected sheet still allows (the check boxes of "シートの保護"), in Excel's order.
+    const PROTECT_ALLOWS = [
+        ["selectLockedCells", "ロックされたセル範囲の選択", true],
+        ["selectUnlockedCells", "ロックされていないセル範囲の選択", true],
+        ["formatCells", "セルの書式設定"],
+        ["formatColumns", "列の書式設定"],
+        ["formatRows", "行の書式設定"],
+        ["insertColumns", "列の挿入"],
+        ["insertRows", "行の挿入"],
+        ["insertHyperlinks", "ハイパーリンクの挿入"],
+        ["deleteColumns", "列の削除"],
+        ["deleteRows", "行の削除"],
+        ["sort", "並べ替え"],
+        ["autoFilter", "オートフィルターの使用"],
+        ["pivotTables", "ピボットテーブルとピボットグラフを使う"],
+        ["objects", "オブジェクトの編集"],
+        ["scenarios", "シナリオの編集"],
+    ];
+    // "シートの保護": a password (asked again), and what the sheet still allows.
+    function askProtect(sheet) {
+        if (!editable || busy) return;
+        if (entry) commit(null);
+        const form = openDialog("シートの保護", "protectdlg");
+        const on = check(form, "シートとロックされたセルの内容を保護する", true);
+        const password = field(form, "シートの保護を解除するためのパスワード", "password");
+        password.autocomplete = "new-password";
+        form.appendChild(el("div", "lbl", "このシートのすべてのユーザーに以下を許可します。"));
+        const box = form.appendChild(el("div", "allows"));
+        const boxes = PROTECT_ALLOWS.map(([key, label, checked]) => [key, check(box, label, !!checked)]);
+        const ok = dialogButtons(form).querySelector(".ok");
+        on.addEventListener("change", () => (ok.disabled = !on.checked));
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const allow = boxes.filter(([, b]) => b.checked).map(([key]) => key);
+            const op = { op: "protect", sheet: sheet.name, on: true, password: password.value, allow };
+            if (!password.value) {
+                closeDialog();
+                postEdit([op]);
+                return;
+            }
+            // "パスワードの確認".
+            const again = openDialog("パスワードの確認", "protectdlg");
+            const input = field(again, "続行するにはもう一度パスワードを入力してください。", "password");
+            again.appendChild(el("div", "note", "注意: 忘れてしまったパスワードは回復できません。パスワードとそれに対応するブック名とシート名を一覧にして、安全な場所に保管することをお勧めします (パスワードについては大文字と小文字が区別されることに注意してください)。"));
+            dialogButtons(again);
+            again.addEventListener("submit", (e2) => {
+                e2.preventDefault();
+                closeDialog();
+                if (input.value !== password.value) {
+                    showError("確認のパスワードが一致しません。");
+                    return;
+                }
+                postEdit([op]);
+            });
+            input.focus();
+        });
+        password.focus();
+    }
+    // "シート保護の解除": with its password, when it has one.
+    function askUnprotect(sheet) {
+        if (!editable || busy) return;
+        if (entry) commit(null);
+        const op = { op: "protect", sheet: sheet.name, on: false, password: "" };
+        if (!sheet.protection.password) {
+            postEdit([op]);
+            return;
+        }
+        const form = openDialog("シート保護の解除", "protectdlg");
+        const input = field(form, "パスワード", "password");
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            closeDialog();
+            postEdit([{ ...op, password: input.value }]);
+        });
+        input.focus();
+    }
+    // The cell at (r, c) of the sheet shown is locked (as every cell is, until セルのロック is
+    // taken off it).
+    const lockedAt = (r, c) => !/--unlocked:1/.test(cssOf(view.sheet, r, c, view.cells.get(r * KEY + c)));
+    const cellLocked = () => !!(view && sel && lockedAt(sel.ar, sel.ac));
+    // "セルのロック": the selection locked, or no longer (as the active cell is now).
+    function toggleLock() {
+        if (!sel || !view) return;
+        if (view.sheet.protection) {
+            showError(PROTECTED);
+            return;
+        }
+        format({ locked: !cellLocked() });
+    }
+    // "ロックされたセルを表示": the locked cells shaded, or not (kept with the page's state).
+    let showLocked = !!saved.showLocked;
+    if (showLocked) $("grid").classList.add("showlocked");
+    function showLockedCells(on) {
+        showLocked = on;
+        remember({ showLocked: on });
+        $("grid").classList.toggle("showlocked", on);
+    }
+    // A protected sheet: what an edit would change that it does not allow (Excel's message).
+    const PROTECTED = "変更しようとしているセルやグラフは保護されているシート上にあります。変更するには、シートの保護を解除してください。パスワードの入力が必要な場合もあります。";
+    // Every cell of the range `text` (as the edits write it; `size` rows by columns from its
+    // start when given) is unlocked.
+    function unlockedRange(text, size) {
+        const sheet = view.sheet;
+        const a = parseRef(text, sheet);
+        if (!a) return false;
+        let { r1, c1, r2, c2 } = a;
+        if (size) {
+            r2 = Math.max(r2, r1 + size[0] - 1);
+            c2 = Math.max(c2, c1 + size[1] - 1);
+        }
+        // (Past the cells: their rows' and columns' formats; one beyond stands for the rest.)
+        r2 = Math.min(r2, (sheet.rows || 0) + 1);
+        c2 = Math.min(c2, (sheet.cols || 0) + 1);
+        if ((r2 - r1 + 1) * (c2 - c1 + 1) > 500000) return false;
+        for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) if (lockedAt(r, c)) return false;
+        return true;
+    }
+    // The edits `ops` are refused on the protected sheet shown: what they change is locked, or
+    // the protection does not allow it.
+    function refusedByProtection(ops) {
+        if (!view || !view.sheet.protection) return false;
+        const sheet = view.sheet;
+        const allow = sheet.protection.allow || {};
+        const sizeOf = (text) => {
+            const a = text && parseRef(text, sheet);
+            return a ? [a.r2 - a.r1 + 1, a.c2 - a.c1 + 1] : null;
+        };
+        const columns = (text) => /^\$?[A-Za-z]/.test(String(text || ""));
+        return ops.some((o) => {
+            if (o.sheet && o.sheet !== sheet.name) return false;
+            switch (o.op) {
+                case "protect":
+                case "sheetVisible":
+                case "moveSheet":
+                case "tabColor":
+                    return false;
+                case "set":
+                case "clear":
+                    return !unlockedRange(o.range);
+                case "values":
+                    return !unlockedRange(o.at, [o.rows.length, Math.max(1, ...o.rows.map((row) => row.length))]);
+                case "copy":
+                case "pasteSpecial":
+                case "autofill":
+                    return !unlockedRange(o.to, o.op === "autofill" ? null : sizeOf(o.from));
+                case "move":
+                    return !unlockedRange(o.from) || !unlockedRange(o.to, sizeOf(o.from));
+                case "fill":
+                    return !unlockedRange(o.range);
+                case "link":
+                    return !allow.insertHyperlinks || !unlockedRange(o.range);
+                case "format":
+                case "clearFormats":
+                case "merge":
+                case "unmerge":
+                case "conditional":
+                case "conditionalRules":
+                    return !allow.formatCells;
+                case "size":
+                case "hide":
+                    return !(columns(o.range) ? allow.formatColumns : allow.formatRows);
+                case "fit":
+                    return !allow.formatRows;
+                case "standardWidth":
+                    return !allow.formatColumns;
+                case "filterBy":
+                    return !allow.autoFilter;
+                case "sort":
+                    return !allow.sort || !unlockedRange(o.range);
+                default:
+                    return true;
+            }
+        });
     }
     // The columns (rows) of the selection as wide (tall) as their contents, each on its own.
     function autofitSel(cols) {
@@ -6319,17 +6613,46 @@
             showLabel: true,
             edits: true,
             menu: (anchor) => {
+                // (As Excel's ホーム > 書式.)
                 const pop = openPop(anchor, "cellformats");
+                const sheet = view && view.sheet;
                 head(pop, "セルのサイズ");
                 item(pop, "行の高さ…", () => askSize(false));
                 item(pop, "行の高さの自動調整", () => autofitSel(false));
                 item(pop, "列の幅…", () => askSize(true));
                 item(pop, "列の幅の自動調整", () => autofitSel(true));
+                item(pop, "既定の幅…", askStandardWidth);
                 head(pop, "表示設定");
-                item(pop, "行を表示しない", () => hideWhole(false, true));
-                item(pop, "列を表示しない", () => hideWhole(true, true));
-                item(pop, "行の再表示", () => hideWhole(false, false));
-                item(pop, "列の再表示", () => hideWhole(true, false));
+                subMenu(pop, "非表示/再表示", (sub) => {
+                    item(sub, "行を表示しない", () => hideWhole(false, true));
+                    item(sub, "列を表示しない", () => hideWhole(true, true));
+                    item(sub, "シートを表示しない", () => sheet && hideSheet(sheet));
+                    sub.appendChild(el("hr"));
+                    item(sub, "行の再表示", () => hideWhole(false, false));
+                    item(sub, "列の再表示", () => hideWhole(true, false));
+                    item(sub, "シートの再表示…", askUnhideSheets).disabled = !data.sheets.some((s) => s.visible !== "visible");
+                });
+                head(pop, "シートの整理");
+                item(pop, "シート名の変更", () => {
+                    const b = [...$("tabs").children].find((t) => t.sheet === sheet);
+                    if (b) renameTab(b);
+                });
+                item(pop, "シートの移動またはコピー…", () => sheet && askMoveOrCopy(sheet));
+                subMenu(pop, "シート見出しの色", (sub) => {
+                    sub.classList.add("colors");
+                    fillColors(sub, "tab", "色なし", (color) => sheet && postEdit([{ op: "tabColor", sheet: sheet.name, color }]));
+                });
+                head(pop, "保護");
+                if (sheet && sheet.protection) item(pop, "シート保護の解除…", () => askUnprotect(sheet));
+                else item(pop, "シートの保護…", () => sheet && askProtect(sheet));
+                const lock = item(pop, "セルのロック", toggleLock);
+                lock.classList.add("chk");
+                lock.classList.toggle("on", cellLocked());
+                lock.disabled = !!(sheet && sheet.protection);
+                const show = item(pop, "ロックされたセルを表示", () => showLockedCells(!showLocked));
+                show.classList.add("chk");
+                show.classList.toggle("on", showLocked);
+                item(pop, "セルの書式設定…", askNumberFormat, "Ctrl+1");
             },
         });
 
@@ -9075,8 +9398,13 @@
             ["削除", () => removeSheet(sheet), ""],
             ["名前の変更", () => renameTab(b), ""],
             ["コピーを作成", () => copySheet(sheet), ""],
+            ["移動またはコピー…", () => askMoveOrCopy(sheet), ""],
             null,
+            sheet.protection ? ["シート保護の解除…", () => askUnprotect(sheet), ""] : ["シートの保護…", () => askProtect(sheet), ""],
             ["シート見出しの色…", () => openColors(b, "tab", "色なし", (color) => postEdit([{ op: "tabColor", sheet: sheet.name, color }])), ""],
+            null,
+            ["非表示", () => hideSheet(sheet), ""],
+            ...(data.sheets.some((s) => s.visible !== "visible") ? [["再表示…", askUnhideSheets, ""]] : []),
         ]);
     }
     // The tab's name, and the number of the cells changed.

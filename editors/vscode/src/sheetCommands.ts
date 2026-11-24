@@ -50,6 +50,9 @@ interface FromGrid {
 	fromGrid: true;
 	name?: string;
 	codeName?: string;
+	/** A copy's place ("シートの移動またはコピー"): before this sheet, or after it. */
+	before?: string;
+	after?: string;
 }
 
 function fromGrid(arg: unknown): FromGrid | undefined {
@@ -185,7 +188,7 @@ async function copySheet(server: RasServer, arg: unknown): Promise<SheetResult |
 	if (codeName === undefined) {
 		return undefined;
 	}
-	const result = await execute(server, "RAS: シートを複製しています…", { action: "copy", sheet: target.sheet, name: name.trim(), codeName: codeName.trim() });
+	const result = await execute(server, "RAS: シートを複製しています…", { action: "copy", sheet: target.sheet, name: name.trim(), codeName: codeName.trim(), before: grid?.before, after: grid?.after });
 	await report(await rootOf(arg), result, `シート「${result.name}」（コード名 ${result.codeName}）を複製して作りました。`);
 	return result;
 }

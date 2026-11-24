@@ -986,13 +986,18 @@ impl Book {
 
     /// `Worksheet.Visible`: -1 visible, 0 hidden, 2 very hidden.
     pub fn visible(&self, si: usize) -> i32 {
-        match self
+        use umya_spreadsheet::SheetStateValues as S;
+        // As the program set it, else as the file has it (`state` of the sheet).
+        let state = self
             .file
             .sheet(si)
-            .map(|ws| ws.sheet_state().to_string())
-            .unwrap_or_default()
-            .as_str()
-        {
+            .map(|ws| match (ws.sheet_state(), ws.state()) {
+                ("", S::Hidden) => "hidden".to_string(),
+                ("", S::VeryHidden) => "veryHidden".to_string(),
+                (s, _) => s.to_string(),
+            })
+            .unwrap_or_default();
+        match state.as_str() {
             "hidden" => 0,
             "veryHidden" => 2,
             _ => -1,
