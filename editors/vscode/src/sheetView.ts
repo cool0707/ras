@@ -427,7 +427,29 @@ async function append(code: vscode.TextDocument, make: (text: string, indent: st
 async function reveal(code: vscode.TextDocument, line: number): Promise<void> {
 	const at = Math.min(Math.max(line, 0), code.lineCount - 1);
 	const position = new vscode.Position(at, code.lineAt(at).text.length);
-	await vscode.window.showTextDocument(code, { viewColumn: vscode.ViewColumn.Beside, selection: new vscode.Range(position, position) });
+	await vscode.window.showTextDocument(code, { viewColumn: codeColumn(code), selection: new vscode.Range(position, position) });
+}
+
+/**
+ * Where the code opens: the group already showing it, else the group of the code next to the
+ * panel (the one left of it first), and only without another group a new one beside the panel
+ * (`Beside` from the panel would split the window into a third group).
+ */
+function codeColumn(code: vscode.TextDocument): vscode.ViewColumn {
+	const shown = vscode.window.visibleTextEditors.find((e) => e.document.uri.toString() === code.uri.toString());
+	if (shown?.viewColumn !== undefined) {
+		return shown.viewColumn;
+	}
+	const own = panel?.viewColumn;
+	const others = vscode.window.tabGroups.all.map((g) => g.viewColumn).filter((c) => c !== own);
+	if (others.length === 0) {
+		return vscode.ViewColumn.Beside;
+	}
+	if (own === undefined) {
+		return others[0];
+	}
+	const left = others.filter((c) => c < own);
+	return left.length > 0 ? Math.max(...left) : Math.min(...others);
 }
 
 /** The first body line of the function `name` of a document (its declaration when it has none). */
