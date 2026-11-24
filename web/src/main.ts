@@ -1212,10 +1212,10 @@ async function readWorkbook(file: File) {
 }
 
 /**
- * `ras pack`: the VBA written into a workbook, saved as .xlsm. The book is the one read into the
- * page (or a new one), or from the header's button, the one the book tab shows (after the run, if there was one).
+ * `ras pack`: the VBA written into a workbook, saved as .xlsm. The book is the one the book tab
+ * shows: the one read into the page (or a new one), or after the run, if there was one.
  */
-function packWorkbook(book: Workbook = workbook) {
+function packWorkbook(book: Workbook) {
     const input = { files: sourceFiles(), toml: toml() };
     let packed;
     try {
@@ -1408,7 +1408,6 @@ async function main() {
         if (f.fileName.endsWith(".doccls")) download(`${f.name}.txt`, encodeVba(f.text.replace(/\n/g, "\r\n"), codepage), "text/plain");
         else download(f.fileName, encodeVba(f.file, codepage), "text/plain");
     };
-    $("pack").onclick = () => packWorkbook();
     $("run").onclick = () => run("run");
     $("test").onclick = () => run("test");
     $("stop").onclick = stopRun;
