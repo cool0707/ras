@@ -16,7 +16,9 @@ import init, { Book, compile, diffText, editBook, encodeVba, explain, format, ne
 import type { EventDescriptor } from "../../editors/vscode/src/userForm/events";
 import type { RuntimeMessage } from "../../editors/vscode/src/formRunner/protocol";
 import { macrosOf, moduleName, newMacroName, sheetControlEvents } from "../../editors/vscode/src/sheetEvents";
+import "@vscode/codicons/dist/codicon.css";
 import { codeBehindPath, type DesignerHooks, FormDesigner, openHandler } from "./designer";
+import { Explorer } from "./explorer";
 import { FormPanels } from "./forms";
 import type { Dialog, RunJob, RunResult } from "./runtime/run";
 import samples from "virtual:samples";
@@ -58,6 +60,8 @@ const STORE = "ras-playground:v1";
 
 let files: ProjectFile[] = [];
 let active = "";
+/** The files open in the editor's tabs, in their order. */
+let openTabs: string[] = [];
 let sampleId = "";
 let workbook: Workbook;
 /** The workbook as the last run left it, and what it was before. */
@@ -75,6 +79,7 @@ let controlsCache: { bytes: Uint8Array; controls: unknown } | null = null;
 const formsAsText = new Set<string>();
 let designer: FormDesigner;
 let formPanels: FormPanels;
+let explorer: Explorer;
 
 /** An empty workbook, named as `workbook` of ras.toml names it (the project's name, `Hello.xlsx`). */
 function newWorkbook(): Workbook {
@@ -163,7 +168,7 @@ function fromBase64(text: string): Uint8Array {
 function save() {
     try {
         const book = workbook.bytes.length < 1_500_000 ? { name: workbook.name, data: toBase64(workbook.bytes) } : null;
-        localStorage.setItem(STORE, JSON.stringify({ files, active, sample: sampleId, book }));
+        localStorage.setItem(STORE, JSON.stringify({ files, active, open: openTabs, sample: sampleId, book }));
     } catch {
         // Without storage the project lasts as long as the page.
     }
@@ -175,6 +180,7 @@ function restore(): boolean {
         if (!saved || !Array.isArray(saved.files) || !saved.files.length) return false;
         files = saved.files;
         active = saved.active;
+        openTabs = Array.isArray(saved.open) ? saved.open.filter((p: unknown) => typeof p === "string") : [];
         sampleId = saved.sample || "";
         if (saved.book) workbook = { name: saved.book.name, bytes: fromBase64(saved.book.data) };
         return true;
@@ -209,6 +215,7 @@ async function fromHash(): Promise<boolean> {
         if (!Array.isArray(p.files)) return false;
         files = p.files.filter((f: ProjectFile) => typeof f.path === "string" && typeof f.text === "string");
         active = p.active;
+        openTabs = [];
         sampleId = "";
         return files.length > 0;
     } catch {
@@ -230,6 +237,7 @@ function newProject() {
     files = NEW_PROJECT.map((f) => ({ ...f }));
     sampleId = "";
     active = "src/main.ras";
+    openTabs = [];
     workbook = newWorkbook();
     lastRun = null;
     clearBookHistory();
@@ -241,6 +249,7 @@ function loadSample(id: string) {
     files = s.files.map((f) => ({ ...f }));
     sampleId = s.id;
     active = files.find((f) => f.path.startsWith("src/"))?.path || files[0].path;
+    openTabs = [];
     workbook = newWorkbook();
     lastRun = null;
     clearBookHistory();
@@ -329,8 +338,11 @@ let vbaView: EditorView;
 function openFile(path: string, at?: { line: number; col: number }) {
     const f = files.find((x) => x.path === path);
     if (!f) return;
-    if (active && editor) states.set(active, editor.state);
+    if (active && editor && !$("editor").hidden) states.set(active, editor.state);
+    if (!openTabs.includes(path)) openTabs.splice(active && openTabs.includes(active) ? openTabs.indexOf(active) + 1 : openTabs.length, 0, path);
     active = path;
+    explorer.reveal(path);
+    $("editor-empty").hidden = true;
     // A form is shown in the Designer (its JSON when asked for, or at a place of its text).
     if (isForm(path) && at) formsAsText.add(path);
     if (isForm(path) && !formsAsText.has(path)) {
@@ -361,33 +373,78 @@ function removeFile(f: ProjectFile) {
     files = files.filter((y) => y !== f);
     states.delete(f.path);
     formsAsText.delete(f.path);
-    if (active === f.path) openFile(files.find((y) => y.path.startsWith("src/"))?.path || files[0].path);
+    closeTab(f.path);
     renderFiles();
     scheduleCompile(0);
 }
 
+/** The tab of a file closed (the file stays in the project); the one next to it is opened. */
+function closeTab(path: string) {
+    const i = openTabs.indexOf(path);
+    if (i < 0) return;
+    openTabs.splice(i, 1);
+    if (active !== path) {
+        renderFiles();
+        save();
+        return;
+    }
+    if (!$("editor").hidden) states.set(path, editor.state);
+    const next = openTabs[Math.min(i, openTabs.length - 1)];
+    if (next) {
+        active = "";
+        openFile(next);
+        return;
+    }
+    // No file open: the editor is empty, as in VS Code.
+    active = "";
+    designer.hide();
+    $("editor").hidden = true;
+    $("editor-empty").hidden = false;
+    renderFiles();
+    save();
+}
+
+/** The project's files (in the explorer) and the files open (the editor's tabs). */
 function renderFiles() {
+    openTabs = openTabs.filter((p) => files.some((f) => f.path === p));
+    explorer.render();
+    renderTabs();
+}
+
+function errorCounts(): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const d of compiled?.diagnostics || []) if (d.severity === "error" && d.path) counts.set(d.path, (counts.get(d.path) || 0) + 1);
+    return counts;
+}
+
+function renderTabs() {
     const nav = $("files");
     nav.textContent = "";
-    const errors = new Set((compiled?.diagnostics || []).filter((d) => d.severity === "error").map((d) => d.path));
-    for (const f of files) {
+    const errors = errorCounts();
+    for (const path of openTabs) {
+        const f = files.find((x) => x.path === path)!;
         const b = document.createElement("button");
         b.className = `file${errors.has(f.path) ? " has-error" : ""}`;
         b.setAttribute("aria-selected", String(f.path === active));
         b.title = f.path === "ras.toml" ? "プロジェクトの設定" : isForm(f.path) ? `${f.path}（フォーム。開いているときにもう一度クリックすると、デザイナーと JSON を切り替えます）` : f.path;
-        b.append(f.path);
-        if (f.path !== "ras.toml") {
-            const x = document.createElement("span");
-            x.className = "x";
-            x.textContent = "×";
-            x.title = `${f.path} を削除`;
-            x.onclick = (e) => {
-                e.stopPropagation();
-                if (!confirm(`${f.path} を削除しますか？`)) return;
-                removeFile(f);
-            };
-            b.append(x);
+        const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+        b.append(name);
+        // The folder, when another tab has the same name (src/main.ras and objects/main.ras).
+        if (openTabs.some((p) => p !== path && p.slice(p.lastIndexOf("/") + 1) === name) && path.includes("/")) {
+            const dir = document.createElement("span");
+            dir.className = "dir";
+            dir.textContent = path.slice(0, path.lastIndexOf("/"));
+            b.append(dir);
         }
+        const x = document.createElement("span");
+        x.className = "x codicon codicon-close";
+        x.title = "閉じる";
+        x.setAttribute("aria-label", `${f.path} を閉じる`);
+        x.onclick = (e) => {
+            e.stopPropagation();
+            closeTab(f.path);
+        };
+        b.append(x);
         b.onclick = () => {
             // The form open: between the Designer and its JSON.
             if (f.path === active && isForm(f.path)) {
@@ -396,35 +453,27 @@ function renderFiles() {
             }
             openFile(f.path);
         };
-        b.ondblclick = () => renameFile(f);
+        // The middle button closes the tab.
+        b.onauxclick = (e) => {
+            if (e.button !== 1) return;
+            e.preventDefault();
+            closeTab(f.path);
+        };
         nav.append(b);
+        if (f.path === active) b.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
-    const add = document.createElement("button");
-    add.textContent = "＋";
-    add.title = "ファイルを追加（src/〜.ras、objects/Sheet1.ras、test/〜.test.ras、types/〜.d.ras）";
-    add.onclick = addFile;
-    nav.append(add);
-    const form = document.createElement("button");
-    form.textContent = "＋フォーム";
-    form.title = "ユーザーフォームを追加（forms/<名前>.form.json とコードビハインド forms/<名前>.ras）";
-    form.onclick = addForm;
-    nav.append(form);
 }
 
 /** `ras form new`: a new form, opened in the Designer. */
-function addForm() {
+function addForm(name: string): boolean {
     const taken = (n: string) => files.some((f) => f.path.toLowerCase().startsWith(`forms/${n.toLowerCase()}.`));
-    let n = 1;
-    while (taken(`UserForm${n}`)) n++;
-    const name = prompt("フォームの名前（英字で始まる英数字と _、31 文字まで）", `UserForm${n}`)?.trim();
-    if (!name) return;
     if (!/^[A-Za-z][A-Za-z0-9_]{0,30}$/.test(name)) {
         toast(`${name} はフォーム名に使えません（英字で始まり、英数字と _ からなる 31 文字以内の名前にしてください）`);
-        return;
+        return false;
     }
     if (taken(name)) {
         toast(`フォーム ${name} はもうあります（フォーム名は大文字小文字を区別しません）`);
-        return;
+        return false;
     }
     const spec = `forms/${name}.form.json`;
     files.push({ path: spec, text: newFormSpec(name) });
@@ -434,6 +483,7 @@ function addForm() {
     });
     openFile(spec);
     scheduleCompile(0);
+    return true;
 }
 
 function validPath(p: string): string | null {
@@ -449,33 +499,40 @@ function validPath(p: string): string | null {
     return path;
 }
 
-function addFile() {
-    const p = prompt("追加するファイル（src/〜.ras が標準モジュール、objects/Sheet1.ras がシートのモジュール、test/〜.test.ras がテスト）", "src/util.ras");
-    if (!p) return;
-    const path = validPath(p);
-    if (!path) return;
-    const text = path.startsWith("test/")
+/** The text a new file starts with. */
+function templateOf(path: string): string {
+    return path.startsWith("test/")
         ? 'describe("", () => {\n    test("", () => {\n        expect(1 + 1).toBe(2);\n    });\n});\n'
         : path.startsWith("objects/")
           ? '@on("Worksheet.Change")\nfunction onChange(target: Excel.Range) {\n    debug.print(target.address);\n}\n'
-          : "export function example() {\n}\n";
-    files.push({ path, text });
-    openFile(path);
-    scheduleCompile(0);
+          : path.startsWith("types/")
+            ? ""
+            : "export function example() {\n}\n";
 }
 
-function renameFile(f: ProjectFile) {
-    if (f.path === "ras.toml") return;
-    if (f.path.startsWith("forms/")) {
-        toast("フォームのファイルの名前は変えられません（フォーム名はファイル名と form.name で決まります）");
-        return;
-    }
-    const p = prompt("新しい名前", f.path);
-    if (!p || p === f.path) return;
-    const path = validPath(p);
-    if (!path) return;
+/** A file named in the explorer: a .ras file, or a form (its name typed in forms/). */
+function createFile(typed: string): boolean {
+    if (/^forms\//i.test(typed)) return addForm(typed.slice(6).replace(/(\.form\.json|\.json|\.ras)$/i, ""));
+    // The extension may be left out (util → util.ras).
+    const path = validPath(/\.[^/]*$/.test(typed) ? typed : `${typed}.ras`);
+    if (!path) return false;
+    files.push({ path, text: templateOf(path) });
+    openFile(path);
+    scheduleCompile(0);
+    return true;
+}
+
+function renameFile(f: ProjectFile, to: string): boolean {
+    if (to === f.path) return true;
+    // A name differing only in case is not taken by the file itself.
+    const others = files;
+    files = files.filter((x) => x !== f);
+    const path = validPath(to);
+    files = others;
+    if (!path) return false;
     states.delete(f.path);
     const wasActive = active === f.path;
+    openTabs = openTabs.map((p) => (p === f.path ? path : p));
     f.path = path;
     if (wasActive) {
         active = "";
@@ -483,6 +540,7 @@ function renameFile(f: ProjectFile) {
     }
     renderFiles();
     scheduleCompile(0);
+    return true;
 }
 
 function formatActive() {
@@ -1388,6 +1446,79 @@ function setUpSplitter() {
     window.addEventListener("resize", () => apply(current(), false));
 }
 
+const EXPLORER = "ras-playground:explorer-pane";
+
+/** The explorer shown or hidden (kept for the next visit). */
+function toggleExplorer(show = $("explorer").hidden) {
+    $("explorer").hidden = !show;
+    $("explorer-splitter").hidden = !show;
+    $("explorer-toggle").setAttribute("aria-pressed", String(show));
+    try {
+        const saved = JSON.parse(localStorage.getItem(EXPLORER) || "{}");
+        localStorage.setItem(EXPLORER, JSON.stringify({ ...saved, hidden: !show }));
+    } catch {
+        // Not kept without storage.
+    }
+}
+
+/** The explorer's width (dragged on its edge) and whether it is shown. */
+function setUpExplorerPane() {
+    const pane = $("explorer");
+    const splitter = $("explorer-splitter");
+    let saved: { width?: number; hidden?: boolean } = {};
+    try {
+        saved = JSON.parse(localStorage.getItem(EXPLORER) || "{}") || {};
+    } catch {
+        // The default.
+    }
+    const clamp = (w: number) => Math.round(Math.min(Math.max(w, 140), Math.max(140, window.innerWidth * 0.5)));
+    const apply = (w: number, keep: boolean) => {
+        const v = clamp(w);
+        pane.style.width = `${v}px`;
+        if (!keep) return;
+        try {
+            const now = JSON.parse(localStorage.getItem(EXPLORER) || "{}") || {};
+            localStorage.setItem(EXPLORER, JSON.stringify({ ...now, width: v }));
+        } catch {
+            // Not kept without storage.
+        }
+    };
+    apply(typeof saved.width === "number" ? saved.width : 220, false);
+    // Shown unless hidden before; on a narrow page (a phone), hidden until asked for.
+    const show = saved.hidden === undefined ? window.innerWidth > 860 : !saved.hidden;
+    pane.hidden = !show;
+    splitter.hidden = !show;
+    $("explorer-toggle").setAttribute("aria-pressed", String(show));
+    $("explorer-toggle").onclick = () => toggleExplorer();
+    splitter.addEventListener("pointerdown", (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        splitter.setPointerCapture(e.pointerId);
+        document.body.classList.add("splitting");
+        const left = pane.getBoundingClientRect().left;
+        const move = (ev: PointerEvent) => apply(ev.clientX - left, false);
+        const up = () => {
+            splitter.removeEventListener("pointermove", move);
+            splitter.removeEventListener("pointerup", up);
+            splitter.removeEventListener("pointercancel", up);
+            document.body.classList.remove("splitting");
+            apply(pane.getBoundingClientRect().width, true);
+        };
+        splitter.addEventListener("pointermove", move);
+        splitter.addEventListener("pointerup", up);
+        splitter.addEventListener("pointercancel", up);
+    });
+    splitter.addEventListener("dblclick", () => apply(220, true));
+    splitter.addEventListener("keydown", (e) => {
+        const w = pane.getBoundingClientRect().width;
+        const step = e.shiftKey ? 40 : 10;
+        if (e.key === "ArrowLeft") apply(w - step, true);
+        else if (e.key === "ArrowRight") apply(w + step, true);
+        else return;
+        e.preventDefault();
+    });
+}
+
 /** The page is cross-origin isolated through sw.js (for the dialogs); reloads once to be. */
 async function isolate() {
     if (crossOriginIsolated || !("serviceWorker" in navigator) || !window.isSecureContext) return;
@@ -1457,6 +1588,32 @@ async function main() {
     };
 
     editor = new EditorView({ parent: $("editor") });
+    explorer = new Explorer($("tree"), {
+        files: () => files.map((f) => f.path),
+        active: () => active,
+        errors: errorCounts,
+        open: (path) => openFile(path),
+        create: createFile,
+        rename: (from, to) => {
+            const f = files.find((x) => x.path === from);
+            return f ? renameFile(f, to) : false;
+        },
+        remove: (path) => {
+            const f = files.find((x) => x.path === path);
+            if (f) removeFile(f);
+        },
+        fixed: (path) =>
+            path === "ras.toml"
+                ? { rename: "ras.toml はプロジェクトの設定のため、名前の変更や削除はできません", remove: "ras.toml はプロジェクトの設定のため、名前の変更や削除はできません" }
+                : path.startsWith("forms/")
+                  ? { rename: "フォームのファイルの名前は変えられません（フォーム名はファイル名と form.name で決まります）" }
+                  : {},
+        message: toast,
+    });
+    $("explorer-new-file").onclick = () => explorer.newFile();
+    $("explorer-new-form").onclick = () => explorer.newFile("forms");
+    $("explorer-collapse").onclick = () => explorer.collapseAll();
+    setUpExplorerPane();
     designer = new FormDesigner($<HTMLIFrameElement>("designer"), hooks);
     formPanels = new FormPanels(() => undefined);
     vbaView = new EditorView({
@@ -1517,6 +1674,12 @@ async function main() {
     });
     $("book-download").onclick = () => packWorkbook(lastRun && !showBefore ? lastRun.after : workbook);
     document.addEventListener("keydown", (e) => {
+        // Ctrl+B: the explorer shown or hidden, as the side bar of VS Code.
+        if (e.key.toLowerCase() === "b" && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            toggleExplorer();
+            return;
+        }
         if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !editor.hasFocus) {
             e.preventDefault();
             void run("run");

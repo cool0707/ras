@@ -173,8 +173,217 @@ button:disabled {
     text-decoration: underline;
 }
 
+/* The explorer (explorer.ts) on the left of the source and the output. */
+.workbench {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    background: var(--line);
+}
+.explorer {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--panel);
+    font-size: 13px;
+}
+.workbench > .splitter {
+    flex: none;
+    width: 5px;
+}
+.explorer-head {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 6px 0 12px;
+    min-height: 35px;
+    border-bottom: 1px solid var(--line);
+    flex: none;
+}
+.explorer-title {
+    flex: 1;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tree {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 4px 0;
+    outline: none;
+}
+.tree-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding-right: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    user-select: none;
+    outline: none;
+    border: 1px solid transparent;
+}
+.tree-row:hover {
+    background: color-mix(in srgb, var(--accent-soft) 55%, transparent);
+}
+.tree-row.active {
+    background: var(--accent-soft);
+}
+.tree-row:focus-visible,
+.tree:focus-within .tree-row.focused {
+    border-color: var(--accent);
+}
+.tree-row .codicon {
+    flex: none;
+    font-size: 16px;
+    color: var(--muted);
+}
+.tree-row .codicon-file-code,
+.tree-row .codicon-beaker,
+.tree-row .codicon-window,
+.tree-row .codicon-symbol-interface {
+    color: var(--info);
+}
+.tree-row .codicon-settings-gear {
+    color: var(--warning);
+}
+.twistie {
+    flex: none;
+    width: 16px;
+}
+.tree-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, "Cascadia Code", Consolas, "Menlo", monospace;
+    font-size: 12.5px;
+}
+.tree-row.has-error .tree-name {
+    color: var(--error);
+}
+.tree-badge {
+    flex: none;
+    color: var(--error);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 0 2px;
+}
+.tree-actions {
+    display: none;
+    gap: 2px;
+}
+.tree-row:hover .tree-actions,
+.tree-row.focused:focus .tree-actions {
+    display: flex;
+}
+.tree-action {
+    border: 0;
+    background: none;
+    min-height: 22px;
+    padding: 2px;
+    border-radius: 4px;
+    color: var(--muted);
+}
+.tree-action:hover {
+    background: color-mix(in srgb, var(--muted) 18%, transparent);
+    color: var(--text);
+}
+.tree-action .codicon {
+    font-size: 16px;
+    color: inherit;
+}
+.tree-row.editing {
+    cursor: default;
+}
+.tree-input {
+    flex: 1;
+    min-width: 0;
+    font: 12.5px ui-monospace, "Cascadia Code", Consolas, "Menlo", monospace;
+    color: var(--text);
+    background: var(--code-bg);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 1px 4px;
+    outline: none;
+}
+.icon-button {
+    min-height: 30px;
+    padding: 4px 6px;
+}
+.icon-button .codicon {
+    font-size: 18px;
+}
+.icon-button[aria-pressed="true"] {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+}
+.menu {
+    position: fixed;
+    z-index: 20;
+    min-width: 200px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    font-size: 13px;
+}
+.menu-item {
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    min-height: 26px;
+    padding: 3px 8px;
+    gap: 8px;
+    justify-content: flex-start;
+}
+.menu-item:hover:not(:disabled),
+.menu-item:focus-visible {
+    background: var(--accent-soft);
+    outline: none;
+}
+.menu-item .codicon {
+    font-size: 16px;
+    color: var(--muted);
+}
+.menu-label {
+    flex: 1;
+    text-align: left;
+}
+.menu-key {
+    color: var(--muted);
+    font-size: 12px;
+    margin-left: 16px;
+}
+.editor-empty {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    background: var(--code-bg);
+    text-align: center;
+    padding: 16px;
+}
+.editor-empty p {
+    margin: 2px 0;
+}
+
 .panes {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     display: grid;
     /* --split: the source pane's share of the width (the splitter sets it, main.ts). */
@@ -235,9 +444,20 @@ body.splitting iframe {
 }
 .tabs .file .x {
     margin-left: 4px;
-    opacity: 0.5;
-    padding: 0 2px;
+    opacity: 0;
+    padding: 1px;
     border-radius: 3px;
+    font-size: 14px;
+}
+.tabs .file:hover .x,
+.tabs .file[aria-selected="true"] .x {
+    opacity: 0.7;
+}
+.tabs .file .dir {
+    margin-left: 6px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 400;
 }
 .tabs .file .x:hover {
     opacity: 1;
@@ -615,6 +835,14 @@ body.splitting iframe {
     }
     .splitter {
         display: none;
+    }
+    .workbench {
+        flex-direction: column;
+    }
+    .explorer {
+        width: auto !important;
+        max-height: 40vh;
+        border-bottom: 1px solid var(--line);
     }
     body {
         height: auto;

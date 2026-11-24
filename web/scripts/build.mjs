@@ -79,7 +79,16 @@ const browserModules = {
         b.onResolve({ filter: /^(node:)?path$/ }, () => ({ path: require.resolve("path-browserify") }));
     },
 };
-await build({ ...common, entryPoints: [join(web, "src", "main.ts")], outfile: join(dist, "app.js"), plugins: [samplesPlugin, browserModules], nodePaths: [join(web, "node_modules")] });
+// The codicons of the explorer and the tabs: app.css (and codicon.ttf) next to app.js.
+await build({
+    ...common,
+    entryPoints: [join(web, "src", "main.ts")],
+    outfile: join(dist, "app.js"),
+    plugins: [samplesPlugin, browserModules],
+    nodePaths: [join(web, "node_modules")],
+    loader: { ".ttf": "file" },
+    assetNames: "[name]",
+});
 // The VS Code extension's UserForm Designer and form panel (its webviews), for the frames of
 // designer.html and runner.html. Their packages are the playground's (package.json).
 const vscode = join(root, "editors", "vscode");

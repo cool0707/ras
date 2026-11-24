@@ -7,10 +7,12 @@
 <meta name="description" content="TypeScript に似た構文の RAS を、ブラウザの中で VBA に変換し、Excel なしで実行・テストします。">
 <link rel="icon" type="image/png" href="icon.png">
 <link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="app.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="bar">
+  <button id="explorer-toggle" class="icon-button" title="エクスプローラーの表示・非表示（Ctrl+B）" aria-label="エクスプローラー" aria-controls="explorer"><i class="codicon codicon-files" aria-hidden="true"></i></button>
   <div class="brand"><img class="logo" src="icon.png" alt="" width="26" height="26"><span>RAS Playground</span></div>
   <button id="new" title="新しいプロジェクト（src/main.ras と空のブック）を作る">新規</button>
   <label class="field">
@@ -35,10 +37,22 @@
   <span id="status" class="status" role="status"></span>
   <a class="link" href="https://github.com/cool0707/ras#readme" target="_blank" rel="noopener">ドキュメント</a>
 </header>
+<div class="workbench">
+<aside id="explorer" class="explorer" aria-label="エクスプローラー">
+  <div class="explorer-head">
+    <span class="explorer-title">エクスプローラー</span>
+    <button id="explorer-new-file" class="tree-action" title="新しいファイル（src/〜.ras、objects/Sheet1.ras、test/〜.test.ras、types/〜.d.ras）" aria-label="新しいファイル"><i class="codicon codicon-new-file" aria-hidden="true"></i></button>
+    <button id="explorer-new-form" class="tree-action" title="新しいフォーム（forms/&lt;名前&gt;.form.json とコードビハインド forms/&lt;名前&gt;.ras）" aria-label="新しいフォーム"><i class="codicon codicon-window" aria-hidden="true"></i></button>
+    <button id="explorer-collapse" class="tree-action" title="フォルダーをすべて折りたたむ" aria-label="フォルダーをすべて折りたたむ"><i class="codicon codicon-collapse-all" aria-hidden="true"></i></button>
+  </div>
+  <div id="tree" class="tree" tabindex="-1"></div>
+</aside>
+<div id="explorer-splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="エクスプローラーの幅（ドラッグ、または左右キーで変える。ダブルクリックで元の幅に戻す）" tabindex="0"></div>
 <main class="panes">
   <section class="pane editor-pane" aria-label="ソース">
     <nav class="tabs" id="files" aria-label="ファイル"></nav>
     <div id="editor" class="editor"></div>
+    <div id="editor-empty" class="editor-empty" hidden><p>開いているファイルはありません。</p><p>エクスプローラー（Ctrl+B）からファイルを開いてください。</p></div>
     <iframe id="designer" class="designer" title="ユーザーフォーム デザイナー" hidden></iframe>
   </section>
   <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="ソースと出力の境界（ドラッグ、または左右キーで動かす。ダブルクリックで半分に戻す）" tabindex="0"></div>
@@ -74,6 +88,7 @@
     </div>
   </section>
 </main>
+</div>
 <dialog id="dialog" class="dialog">
   <form method="dialog">
     <h2 id="dialog-title"></h2>
