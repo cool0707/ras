@@ -2837,3 +2837,134 @@ fn conditional_formats_of_excel_2010_cleared() {
         "{doc}"
     );
 }
+
+#[test]
+fn conditional_rules_listed_and_managed() {
+    const SHEET1: &str = "xl/worksheets/sheet1.xml";
+    let out = edit(
+        r##"{"op":"conditional","range":"D2:D5","type":"cellIs","operator":"lessThan","values":["1000"],"format":{"color":"#9C0006","fill":"#FFC7CE"}}"##,
+    );
+    // Listed in priority order, with what the dialog edits them with.
+    let data = view(&out);
+    let rules = &data["sheets"][0]["condRules"];
+    assert_eq!(rules[0]["id"], json!("m1"));
+    assert_eq!(rules[0]["values"], json!(["1000"]));
+    assert_eq!(
+        rules[0]["format"],
+        json!({ "color": "#9C0006", "fill": "#FFC7CE" })
+    );
+    assert_eq!(rules[0]["editable"], json!(true));
+    assert_eq!(rules[1]["id"], json!("m0"));
+    assert_eq!(rules[1]["operator"], json!("greaterThan"));
+    assert_eq!(rules[1]["format"]["bold"], json!(true));
+    assert_eq!(rules[1]["range"], json!("D2:D5"));
+    assert!(data["sheets"][1].get("condRules").is_none());
+
+    // One deleted, the other first, its range and 停止 changed.
+    let one = apply(
+        &out,
+        &ops(r#"{"op":"conditionalRules","rules":[{"id":"m0","range":"D2:D9","stop":true}]}"#),
+    )
+    .unwrap();
+    let doc = part(&one, SHEET1);
+    assert_eq!(doc.matches("<conditionalFormatting").count(), 1, "{doc}");
+    assert!(
+        doc.contains(r#"<conditionalFormatting sqref="D2:D9"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan" stopIfTrue="1"><formula>500</formula></cfRule></conditionalFormatting>"#),
+        "{doc}"
+    );
+    // Edited, kept, new: in that order of priority.
+    let edited = apply(
+        &out,
+        &ops(r##"{"op":"conditionalRules","rules":[{"id":"m1","type":"cellIs","operator":"equal","values":["=$B$1"],"format":{"bold":true}},{"id":"m0"},{"type":"dataBar","colors":["#638EC6"],"range":"B2:B5"}]}"##),
+    )
+    .unwrap();
+    let doc = part(&edited, SHEET1);
+    assert!(
+        doc.contains(r#"<conditionalFormatting sqref="D2:D5"><cfRule type="cellIs" dxfId="2" priority="1" operator="equal"><formula>$B$1</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="D2:D5"><cfRule type="cellIs" dxfId="0" priority="2" operator="greaterThan"><formula>500</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="B2:B5"><cfRule type="dataBar" priority="3">"#),
+        "{doc}"
+    );
+    let rules = &view(&edited)["sheets"][0]["condRules"];
+    assert_eq!(rules[0]["values"], json!(["=$B$1"]));
+    assert_eq!(rules[2]["colors"], json!(["#638EC6"]));
+    // All deleted.
+    let none = apply(&out, &ops(r#"{"op":"conditionalRules","rules":[]}"#)).unwrap();
+    assert!(!part(&none, SHEET1).contains("conditionalFormatting"));
+
+    let wrong = |json: &str| apply(&out, &ops(json)).unwrap_err();
+    assert!(wrong(r#"{"op":"conditionalRules","rules":[{"id":"m7"}]}"#).contains("m7"));
+    assert!(
+        wrong(r#"{"op":"conditionalRules","rules":[{"id":"m0"},{"id":"m0"}]}"#).contains("2 回")
+    );
+    assert!(
+        wrong(r##"{"op":"conditionalRules","rules":[{"type":"dataBar","colors":["#638EC6"]}]}"##)
+            .contains("range")
+    );
+}
+
+#[test]
+fn conditional_rules_of_excel_2010_managed() {
+    // A data bar of the sheet with its half in the extLst, and an icon set of the extLst alone.
+    let x14 = r#"<conditionalFormatting sqref="B2:B5"><cfRule type="dataBar" priority="2"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:id>{00000000-0000-0000-0000-000000000001}</x14:id></ext></extLst></cfRule></conditionalFormatting>"#;
+    let ext = r#"<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:conditionalFormattings><x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="dataBar" id="{00000000-0000-0000-0000-000000000001}"><x14:dataBar minLength="0" maxLength="100"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/></x14:dataBar></x14:cfRule><xm:sqref>B2:B5</xm:sqref></x14:conditionalFormatting><x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="iconSet" priority="3" id="{00000000-0000-0000-0000-000000000002}"><x14:iconSet iconSet="3Stars"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule><xm:sqref>C2:C5</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>"#;
+    let mut parts = parts(BOOK);
+    let doc = String::from_utf8(parts["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    let doc = doc
+        .replace(
+            "</conditionalFormatting>",
+            &format!("</conditionalFormatting>{x14}"),
+        )
+        .replace("</worksheet>", &format!("{ext}</worksheet>"));
+    parts.insert("xl/worksheets/sheet1.xml".into(), doc.into_bytes());
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, data) in &parts {
+        zip.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(data).unwrap();
+    }
+    let book = zip.finish().unwrap().into_inner();
+    let rules = &view(&book)["sheets"][0]["condRules"];
+    let ids: Vec<&str> = rules
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["m0", "m1", "x1"]);
+    assert_eq!(rules[2]["editable"], json!(false));
+    assert_eq!(rules[2]["icons"], json!("3Stars"));
+    // The icon set first, the data bar's range changed (its half's too), the cell rule deleted.
+    let out = apply(
+        &book,
+        &ops(r#"{"op":"conditionalRules","rules":[{"id":"x1"},{"id":"m1","range":"B2:B9"}]}"#),
+    )
+    .unwrap();
+    let doc = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(!doc.contains(r#"type="cellIs""#), "{doc}");
+    assert!(
+        doc.contains(
+            r#"<conditionalFormatting sqref="B2:B9"><cfRule type="dataBar" priority="2">"#
+        ),
+        "{doc}"
+    );
+    assert!(
+        doc.contains(r#"<x14:cfRule type="dataBar" id="{00000000-0000-0000-0000-000000000001}">"#)
+            && doc.contains("<xm:sqref>B2:B9</xm:sqref>"),
+        "{doc}"
+    );
+    assert!(
+        doc.contains(r#"<x14:cfRule type="iconSet" priority="1""#)
+            && doc.contains("<xm:sqref>C2:C5</xm:sqref>"),
+        "{doc}"
+    );
+    // The data bar deleted: its half goes with it; then nothing of the extLst is left.
+    let out = apply(
+        &book,
+        &ops(r#"{"op":"conditionalRules","rules":[{"id":"m0"}]}"#),
+    )
+    .unwrap();
+    let doc = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(
+        !doc.contains("<extLst>") && !doc.contains("dataBar"),
+        "{doc}"
+    );
+}

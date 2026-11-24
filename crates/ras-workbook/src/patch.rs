@@ -33,7 +33,8 @@ mod tabs;
 #[cfg(test)]
 mod tests;
 
-pub use conditional::{CondFormat, CondRule};
+pub(crate) use conditional::rules_of as conditional_rules;
+pub use conditional::{CondFormat, CondRule, Managed};
 use scan::Edits;
 
 type Result<T> = std::result::Result<T, String>;
@@ -256,6 +257,9 @@ pub enum Op {
         ranges: Vec<RangeRef>,
         rule: Option<CondRule>,
     },
+    /// The conditional formats of the sheet as "条件付き書式ルールの管理" leaves them: in this
+    /// order of priority; those not listed deleted.
+    ConditionalRules { sheet: String, rules: Vec<Managed> },
 }
 
 /// Where an object of the drawing goes.
@@ -385,6 +389,7 @@ impl Op {
                 | Op::Sheet { .. }
                 | Op::TabColor { .. }
                 | Op::Conditional { .. }
+                | Op::ConditionalRules { .. }
         )
     }
 }
@@ -1090,15 +1095,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                         vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(MAX_ROWS - 1, MAX_COLS - 1))]
                     }
                     None => return Err("`range` がありません".into()),
-                    Some(text) => text
-                        .split([' ', ','])
-                        .filter(|r| !r.trim().is_empty())
-                        .map(|r| {
-                            RangeRef::parse(&r.replace('$', "")).ok_or_else(|| {
-                                format!("範囲 `{r}` を読み取れません（A1:B5 C2:C9 のように指定してください）")
-                            })
-                        })
-                        .collect::<Result<Vec<_>>>()?,
+                    Some(text) => areas_of(text)?,
                 };
                 if ranges.is_empty() {
                     return Err("`range` がありません".into());
@@ -1113,10 +1110,39 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     },
                 }
             }
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control / activeX / sheet / tabColor / conditional）")),
+            "conditionalRules" => Op::ConditionalRules {
+                sheet,
+                rules: o
+                    .get("rules")
+                    .and_then(Json::as_array)
+                    .ok_or("`rules`（ルールの配列）がありません")?
+                    .iter()
+                    .map(|r| {
+                        Ok(Managed {
+                            id: r.get("id").and_then(Json::as_str).map(str::to_string),
+                            ranges: r.get("range").and_then(Json::as_str).map(areas_of).transpose()?,
+                            stop: r.get("stop").and_then(Json::as_bool),
+                            rule: if r.get("type").is_some() { Some(cond_rule_of(r)?) } else { None },
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            },
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control / activeX / sheet / tabColor / conditional / conditionalRules）")),
         });
     }
     Ok(out)
+}
+
+/// The ranges of a text (`A1:B5 C2:C9`, `A1:B5,C2:C9`).
+fn areas_of(text: &str) -> Result<Vec<RangeRef>> {
+    text.split([' ', ','])
+        .filter(|r| !r.trim().is_empty())
+        .map(|r| {
+            RangeRef::parse(&r.replace('$', "")).ok_or_else(|| {
+                format!("範囲 `{r}` を読み取れません（A1:B5 C2:C9 のように指定してください）")
+            })
+        })
+        .collect()
 }
 
 /// A color of an edit, `#RRGGBB` or `RRGGBB`: `RRGGBB` in capitals.
@@ -1237,6 +1263,7 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 ranges,
                 rule,
             } => conditional::conditional(&bytes, sheet, ranges, rule.as_ref())?,
+            Op::ConditionalRules { sheet, rules } => conditional::manage(&bytes, sheet, rules)?,
             Op::Link { sheet, range, link } => insert::link(&bytes, sheet, *range, link.as_ref())?,
             Op::Note {
                 sheet,
@@ -1991,7 +2018,8 @@ fn run(
         | Op::ActiveX { .. }
         | Op::Sheet { .. }
         | Op::TabColor { .. }
-        | Op::Conditional { .. } => {}
+        | Op::Conditional { .. }
+        | Op::ConditionalRules { .. } => {}
         Op::Fill {
             sheet,
             range,

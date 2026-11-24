@@ -334,7 +334,7 @@ ras book edit Book.xlsm --op '{"op":"freeze","sheet":"Sheet1","at":"B2"}'    # �
 ras book edit Book.xlsm --op '{"op":"table","sheet":"Sheet1","range":"A1:D20"}'    # テーブルにする（"header":false で見出しの行を挿入、"name" で名前）
 ras book edit Book.xlsm --op '{"op":"link","sheet":"Sheet1","range":"B2","url":"https://example.com"}'   # ハイパーリンク（"to":"Sheet2!A1" でブック内、"off":true で削除）
 ras book edit Book.xlsm --op '{"op":"note","sheet":"Sheet1","at":"B2","text":"確認済み"}'   # メモ（"off":true で削除）
-ras book edit Book.xlsm --op '{"op":"conditional","sheet":"Sheet1","range":"D2:D20","type":"cellIs","operator":"greaterThan","values":["1000"],"format":{"color":"#9C0006","fill":"#FFC7CE"}}'   # 条件付き書式（dataBar・colorScale・iconSet・expression なども。"clear":true でルールのクリア）
+ras book edit Book.xlsm --op '{"op":"conditional","sheet":"Sheet1","range":"D2:D20","type":"cellIs","operator":"greaterThan","values":["1000"],"format":{"color":"#9C0006","fill":"#FFC7CE"}}'   # 条件付き書式（dataBar・colorScale・iconSet・expression なども。"clear":true でルールのクリア。conditionalRules で並べ替え・削除・編集）
 ras book edit Book.xlsm --op '{"op":"shape","sheet":"Sheet1","shape":"roundRect","at":"B2","width":120,"height":40,"text":"集計"}'   # 図形（"range":"B2:D4" で範囲に重ねる。textBox・line・arrow なども）
 ras book edit Book.xlsm --op '{"op":"picture","sheet":"Sheet1","file":"logo.png","at":"F2","width":200}'   # 画像（"data" に base64 でも。大きさを省略すると画像の大きさ）
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"図 2","at":"H2"}'   # 図形・画像・グラフの移動（"width"・"height" でサイズ、"text" で図形の文字、"delete":true で削除）
@@ -354,7 +354,7 @@ ras book edit Book.xlsm --set A1=x -o build/edited.xlsm                 # 別の
 - Excel で開いているブックは書き換えません（エラーになります。Excel で閉じてから行ってください）。
 - テーブルの列をまたぐ列の挿入・削除と、ピボットテーブルのあるシートでの挿入・削除は、ファイルの書き換えでは行えません（Excel で行ってください）。
 - 新しい書式は、元のスタイル（`xl/styles.xml`）の末尾に足します。既存の書式の番号は変わりません。
-- 条件付き書式のルールの管理（既存のルールの編集・順序の変更）、入力規則の編集、色・アイコンでの絞り込み、スレッド形式のコメントの編集、図形のグラデーション・線の種類・効果・文字の書式、グラフの挿入、ActiveX コントロールの名前・色・フォントの変更、数式の入力中にほかのシートのセルをクリックして参照を入れることは、まだ行えません。`ras book view` が作る HTML（ブラウザーで開くもの）は読み取り専用です。
+- 条件付き書式のデータ バー・カラー スケール・アイコン セットのしきい値（最小値・数値・百分位など）の指定、入力規則の編集、色・アイコンでの絞り込み、スレッド形式のコメントの編集、図形のグラデーション・線の種類・効果・文字の書式、グラフの挿入、ActiveX コントロールの名前・色・フォントの変更、数式の入力中にほかのシートのセルをクリックして参照を入れることは、まだ行えません。`ras book view` が作る HTML（ブラウザーで開くもの）は読み取り専用です。
 
 ### エラーを調べる・AI に渡す
 

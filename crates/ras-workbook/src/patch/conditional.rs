@@ -3,12 +3,20 @@
 //! priority: the rules there move down one), the format it gives in the styles' `<dxfs>`.
 //! Clearing takes the cells out of the rules' ranges (those of Excel 2010 in the sheet's
 //! `extLst` too); a rule left with no cells goes.
+//!
+//! "条件付き書式ルールの管理": the rules of a sheet listed for the grid ([`rules_of`]), and
+//! written again as the dialog leaves them ([`manage`]): in its order of priority, without those
+//! deleted, with their ranges and "停止" changed, edited, new.
+
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use gridcraft_core::{CellRef, RangeRef};
+use serde_json::{Value as Json, json};
 
-use super::Result;
 use super::insert::{Sheet, place, tree};
 use super::scan::{self, Edits, El};
+use super::{Pack, Result, WORKBOOK, sheet_parts};
 
 /// A rule put on cells.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -309,13 +317,13 @@ fn formula_of(rule: &CondRule, a: &str) -> Option<String> {
 }
 
 /// The rule as a `cfRule` of the sheet (prefix `p`), on cells whose first is `first`.
-fn rule_xml(p: &str, rule: &CondRule, dxf: Option<u32>, first: CellRef) -> String {
+fn rule_xml(p: &str, rule: &CondRule, dxf: Option<u32>, first: CellRef, priority: usize) -> String {
     let a = first.a1();
     let mut attrs = format!(" type=\"{}\"", rule.kind);
     if let Some(id) = dxf {
         attrs.push_str(&format!(" dxfId=\"{id}\""));
     }
-    attrs.push_str(" priority=\"1\"");
+    attrs.push_str(&format!(" priority=\"{priority}\""));
     if rule.stop {
         attrs.push_str(" stopIfTrue=\"1\"");
     }
@@ -572,7 +580,7 @@ pub(super) fn conditional(
     let el = format!(
         "<{p}conditionalFormatting sqref=\"{}\">{}</{p}conditionalFormatting>",
         sqref(on),
-        rule_xml(&p, rule, dxf, first.start)
+        rule_xml(&p, rule, dxf, first.start, 1)
     );
     // After the sheet's other conditional formats.
     let at = root
@@ -645,4 +653,524 @@ fn clear(doc: &str, root: &El, on: &[RangeRef], edits: &mut Edits) -> Result<()>
         edits.replace(ext_list.span(), "");
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------- ルールの管理
+
+/// A rule of a sheet as the file has it.
+struct Found {
+    /// `m<n>`: the n-th `cfRule` of the sheet's `<conditionalFormatting>`s; `x<n>`: the n-th of
+    /// those of Excel 2010 in its `extLst`.
+    id: String,
+    priority: i64,
+    sqref: String,
+    /// The rule (`cfRule`), and the start tag and name of its `conditionalFormatting`.
+    rule: Range<usize>,
+    cf_open: Range<usize>,
+    cf_name: String,
+    /// A rule of the sheet: the id of its half in the `extLst` (`x14:id`); one of the
+    /// `extLst`: its id.
+    x14: Option<String>,
+    /// (Of the `extLst`.) The name of the element of its ranges (`xm:sqref`).
+    sqref_tag: String,
+}
+
+/// The rules of a sheet, and where they are.
+struct Rules {
+    main: Vec<Found>,
+    ext: Vec<Found>,
+    /// The sheet's `<conditionalFormatting>`s.
+    cfs: Vec<Range<usize>>,
+    /// The `extLst`, how many `ext` it has, and those with conditional formats: (the `ext`,
+    /// between the tags of its `x14:conditionalFormattings`).
+    ext_list: Option<Range<usize>>,
+    ext_count: usize,
+    ext_cfs: Vec<(Range<usize>, Range<usize>)>,
+}
+
+impl Rules {
+    /// The rules as Excel's dialog lists them: in priority order, those of the `extLst` that
+    /// are halves of the sheet's rules not on their own.
+    fn listed(&self) -> Vec<&Found> {
+        let linked: HashSet<&str> = self.main.iter().filter_map(|f| f.x14.as_deref()).collect();
+        let mut out: Vec<&Found> = self
+            .main
+            .iter()
+            .chain(
+                self.ext
+                    .iter()
+                    .filter(|f| !f.x14.as_deref().is_some_and(|id| linked.contains(id))),
+            )
+            .collect();
+        out.sort_by_key(|f| f.priority);
+        out
+    }
+
+    /// The half in the `extLst` of a rule of the sheet.
+    fn half(&self, f: &Found) -> Option<&Found> {
+        let id = f.x14.as_deref()?;
+        if f.id.starts_with('x') {
+            return None;
+        }
+        self.ext.iter().find(|x| x.x14.as_deref() == Some(id))
+    }
+}
+
+fn priority_of(doc: &str, el: &El) -> i64 {
+    el.attr(doc, "priority")
+        .and_then(|p| p.trim().parse().ok())
+        .unwrap_or(i64::MAX)
+}
+
+/// The rules of the sheet `doc` (its tree `root`).
+fn find(doc: &str, root: &El) -> Result<Rules> {
+    let mut rules = Rules {
+        main: Vec::new(),
+        ext: Vec::new(),
+        cfs: Vec::new(),
+        ext_list: None,
+        ext_count: 0,
+        ext_cfs: Vec::new(),
+    };
+    for cf in root
+        .children
+        .iter()
+        .filter(|c| c.local() == "conditionalFormatting")
+    {
+        rules.cfs.push(cf.span());
+        let sqref = cf.attr(doc, "sqref").unwrap_or_default();
+        for r in cf.children.iter().filter(|c| c.local() == "cfRule") {
+            // The id of its half (`<x14:id>` in its `extLst`).
+            let x14 = scan::tags(doc, r.open.start)
+                .take_while(|t| t.start < r.end)
+                .find(|t| t.is_open() && t.local() == "id")
+                .and_then(|t| doc[t.end..].split('<').next().map(|v| v.trim().to_string()));
+            rules.main.push(Found {
+                id: format!("m{}", rules.main.len()),
+                priority: priority_of(doc, r),
+                sqref: sqref.clone(),
+                rule: r.span(),
+                cf_open: cf.open.clone(),
+                cf_name: cf.name.to_string(),
+                x14,
+                sqref_tag: String::new(),
+            });
+        }
+    }
+    let Some(list) = root.child("extLst") else {
+        return Ok(rules);
+    };
+    let text = &doc[list.span()];
+    let base = list.open.start;
+    let shift = |r: Range<usize>| r.start + base..r.end + base;
+    let tree = scan::tree(text, &[]).ok_or("シートの extLst を読み取れません")?;
+    rules.ext_list = Some(list.span());
+    for ext in tree.children.iter().filter(|c| c.local() == "ext") {
+        rules.ext_count += 1;
+        let Some(cfs) = ext.child("conditionalFormattings") else {
+            continue;
+        };
+        rules
+            .ext_cfs
+            .push((shift(ext.span()), shift(cfs.inner.clone())));
+        for cf in cfs
+            .children
+            .iter()
+            .filter(|c| c.local() == "conditionalFormatting")
+        {
+            let refs = cf.child("sqref");
+            for r in cf.children.iter().filter(|c| c.local() == "cfRule") {
+                rules.ext.push(Found {
+                    id: format!("x{}", rules.ext.len()),
+                    priority: priority_of(text, r),
+                    sqref: refs.map(|s| s.text(text)).unwrap_or_default(),
+                    rule: shift(r.span()),
+                    cf_open: shift(cf.open.clone()),
+                    cf_name: cf.name.to_string(),
+                    x14: r.attr(text, "id"),
+                    sqref_tag: refs.map_or("xm:sqref".to_string(), |s| s.name.to_string()),
+                });
+            }
+        }
+    }
+    Ok(rules)
+}
+
+/// `#RRGGBB` of a color given by its `rgb` (`FFRRGGBB`); None for a theme's or an index's.
+fn rgb_of(doc: &str, el: Option<&El>) -> Option<String> {
+    let rgb = el?.attr(doc, "rgb")?;
+    let rgb = rgb.trim();
+    let hex = if rgb.len() == 8 { &rgb[2..] } else { rgb };
+    (hex.len() == 6 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| format!("#{}", hex.to_ascii_uppercase()))
+}
+
+/// The formats of the styles' `dxfs`, as the edits give them (`color`, `fill`, `bold`, ...).
+fn dxfs_of(styles: &str) -> Vec<Json> {
+    let Some(root) = scan::tree(styles, &[]) else {
+        return Vec::new();
+    };
+    let Some(list) = root.child("dxfs") else {
+        return Vec::new();
+    };
+    list.children
+        .iter()
+        .filter(|c| c.local() == "dxf")
+        .map(|d| {
+            let mut f = serde_json::Map::new();
+            if let Some(font) = d.child("font") {
+                for (tag, key) in [
+                    ("b", "bold"),
+                    ("i", "italic"),
+                    ("u", "underline"),
+                    ("strike", "strike"),
+                ] {
+                    if let Some(t) = font.child(tag)
+                        && !matches!(
+                            t.attr(styles, "val").as_deref(),
+                            Some("0" | "false" | "none")
+                        )
+                    {
+                        f.insert(key.into(), json!(true));
+                    }
+                }
+                if let Some(c) = rgb_of(styles, font.child("color")) {
+                    f.insert("color".into(), json!(c));
+                }
+            }
+            if let Some(p) = d.child("fill").and_then(|x| x.child("patternFill"))
+                && let Some(c) = rgb_of(styles, p.child("bgColor"))
+                    .or_else(|| rgb_of(styles, p.child("fgColor")))
+            {
+                f.insert("fill".into(), json!(c));
+            }
+            if let Some(b) = d.child("border")
+                && let Some(c) = ["left", "right", "top", "bottom"]
+                    .iter()
+                    .find_map(|s| rgb_of(styles, b.child(s).and_then(|x| x.child("color"))))
+            {
+                f.insert("border".into(), json!(c));
+            }
+            Json::Object(f)
+        })
+        .collect()
+}
+
+/// A rule as the grid's dialog lists and edits it: its settings as a `conditional` edit gives
+/// them, `range`, `format`, `stop`, and whether the dialog can edit it (`editable`).
+fn describe(doc: &str, f: &Found, dxfs: &[Json]) -> Json {
+    let text = &doc[f.rule.clone()];
+    let Some(r) = scan::tree(text, &[]) else {
+        return json!({ "id": f.id, "type": "", "range": f.sqref, "editable": false });
+    };
+    let attr = |n: &str| r.attr(text, n);
+    let on = |n: &str| matches!(attr(n).as_deref(), Some("1" | "true"));
+    let kind = attr("type").unwrap_or_default();
+    let ext = f.id.starts_with('x');
+    let mut j = json!({ "id": f.id, "type": kind, "range": f.sqref, "stop": on("stopIfTrue") });
+    let formulas: Vec<String> = r
+        .children
+        .iter()
+        .filter(|c| matches!(c.local(), "formula" | "f"))
+        .map(|c| c.text(text).trim().to_string())
+        .collect();
+    match kind.as_str() {
+        "cellIs" => {
+            j["operator"] = json!(attr("operator").unwrap_or_else(|| "between".into()));
+            j["values"] = json!(
+                formulas
+                    .iter()
+                    .map(|f| if f.parse::<f64>().is_ok() {
+                        f.clone()
+                    } else {
+                        format!("={f}")
+                    })
+                    .collect::<Vec<_>>()
+            );
+        }
+        "expression" => {
+            j["formula"] = json!(
+                formulas
+                    .first()
+                    .map(|f| format!("={f}"))
+                    .unwrap_or_default()
+            )
+        }
+        "containsText" | "notContainsText" | "beginsWith" | "endsWith" => {
+            j["text"] = json!(attr("text").unwrap_or_default())
+        }
+        "top10" => {
+            j["rank"] = json!(
+                attr("rank")
+                    .and_then(|n| n.parse::<u32>().ok())
+                    .unwrap_or(10)
+            );
+            j["bottom"] = json!(on("bottom"));
+            j["percent"] = json!(on("percent"));
+        }
+        "aboveAverage" => {
+            j["below"] = json!(matches!(
+                attr("aboveAverage").as_deref(),
+                Some("0" | "false")
+            ));
+            j["equal"] = json!(on("equalAverage"));
+        }
+        "timePeriod" => j["period"] = json!(attr("timePeriod").unwrap_or_default()),
+        "dataBar" => {
+            let bar = r.child("dataBar");
+            let color = bar.and_then(|b| {
+                rgb_of(text, b.child("color")).or_else(|| rgb_of(text, b.child("fillColor")))
+            });
+            j["colors"] = json!(color.into_iter().collect::<Vec<_>>());
+        }
+        "colorScale" => {
+            if let Some(cs) = r.child("colorScale") {
+                j["colors"] = json!(
+                    cs.children
+                        .iter()
+                        .filter(|c| c.local() == "color")
+                        .map(|c| rgb_of(text, Some(c)).unwrap_or_else(|| "#FFFFFF".into()))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+        "iconSet" => {
+            if let Some(is) = r.child("iconSet") {
+                let at = |n: &str| is.attr(text, n);
+                j["icons"] = json!(at("iconSet").unwrap_or_else(|| "3TrafficLights1".into()));
+                j["reverse"] = json!(matches!(at("reverse").as_deref(), Some("1" | "true")));
+                j["iconOnly"] = json!(matches!(at("showValue").as_deref(), Some("0" | "false")));
+            }
+        }
+        _ => {}
+    }
+    if let Some(d) = attr("dxfId")
+        .and_then(|d| d.parse::<usize>().ok())
+        .and_then(|d| dxfs.get(d))
+    {
+        j["format"] = d.clone();
+    }
+    let known = KINDS.contains(&kind.as_str())
+        && (kind != "iconSet"
+            || ICON_SETS
+                .iter()
+                .any(|(s, _)| j["icons"].as_str() == Some(s)));
+    j["editable"] = json!(known && !ext);
+    j
+}
+
+/// The conditional formats of the sheets of the workbook file, by the names of the sheets, as
+/// the grid's "ルールの管理" lists them (in priority order).
+pub(crate) fn rules_of(bytes: &[u8]) -> Result<HashMap<String, Vec<Json>>> {
+    let mut pack = Pack::open(bytes)?;
+    let workbook = pack.text(WORKBOOK)?.ok_or("xl/workbook.xml がありません")?;
+    let parts = sheet_parts(&mut pack, &workbook)?;
+    let dxfs = pack
+        .text("xl/styles.xml")?
+        .map(|s| dxfs_of(&s))
+        .unwrap_or_default();
+    let mut out = HashMap::new();
+    for (name, part) in parts {
+        let Some(doc) = pack.find(&part).and_then(|p| pack.text(&p).ok().flatten()) else {
+            continue;
+        };
+        if !doc.contains("conditionalFormatting") {
+            continue;
+        }
+        let Ok(root) = tree(&doc, &part) else {
+            continue;
+        };
+        let Ok(rules) = find(&doc, &root) else {
+            continue;
+        };
+        let list: Vec<Json> = rules
+            .listed()
+            .into_iter()
+            .map(|f| describe(&doc, f, &dxfs))
+            .collect();
+        if !list.is_empty() {
+            out.insert(name, list);
+        }
+    }
+    Ok(out)
+}
+
+/// A rule as the dialog leaves it: one of the sheet's (`id`, as [`rules_of`] lists it) or a new
+/// one; its ranges and "停止" changed, or (`rule`) edited.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Managed {
+    pub id: Option<String>,
+    pub ranges: Option<Vec<RangeRef>>,
+    pub stop: Option<bool>,
+    pub rule: Option<CondRule>,
+}
+
+/// A start tag (or a whole element's text) with an attribute set.
+fn with_attr(tag: &str, name: &str, value: &str) -> String {
+    let end = tag.find('>').map_or(tag.len(), |i| i + 1);
+    let mut edits = Edits::default();
+    scan::set_attr(tag, 0..end, name, value, &mut edits);
+    edits.apply(tag)
+}
+
+/// The file with the conditional formats of the sheet `sheet` as `rules` lists them, the first
+/// first in priority: those of the sheet it does not list are deleted.
+pub(super) fn manage(bytes: &[u8], sheet: &str, rules: &[Managed]) -> Result<Vec<u8>> {
+    let mut s = Sheet::open(bytes, sheet)?;
+    let sdoc = s.doc.clone();
+    let root = tree(&sdoc, &s.part)?;
+    let p = scan::prefix(root.name).to_string();
+    let found = find(&sdoc, &root)?;
+    let listed = found.listed();
+    let mut seen = HashSet::new();
+    for m in rules {
+        match &m.id {
+            Some(id) => {
+                if !listed.iter().any(|f| &f.id == id) {
+                    return Err(format!("条件付き書式のルール `{id}` はありません"));
+                }
+                if !seen.insert(id.clone()) {
+                    return Err(format!("条件付き書式のルール `{id}` が 2 回あります"));
+                }
+            }
+            None if m.rule.is_none() => {
+                return Err("新しいルール（`id` の無いもの）には `type` がありません".into());
+            }
+            None if m.ranges.is_none() => {
+                return Err("新しいルールの `range` がありません".into());
+            }
+            None => {}
+        }
+        if let Some(r) = &m.rule {
+            r.check()?;
+        }
+        if m.ranges.as_ref().is_some_and(Vec::is_empty) {
+            return Err("ルールの適用先がありません".into());
+        }
+    }
+    let mut styles: Option<String> = None;
+    let mut main = String::new();
+    // The halves in the extLst kept: (the rule, its priority or None, its ranges).
+    let mut ext_kept: Vec<(&Found, Option<usize>, String)> = Vec::new();
+    for (i, m) in rules.iter().enumerate() {
+        let priority = i + 1;
+        let f =
+            m.id.as_ref()
+                .and_then(|id| listed.iter().find(|f| &f.id == id).copied());
+        let sqref_now = match (&m.ranges, f) {
+            (Some(r), _) => sqref(r),
+            (None, Some(f)) => f.sqref.clone(),
+            (None, None) => unreachable!(),
+        };
+        let main_cf = f.filter(|f| f.id.starts_with('m'));
+        let open = |f: Option<&Found>| match f {
+            Some(f) => (
+                with_attr(&sdoc[f.cf_open.clone()], "sqref", &sqref_now),
+                f.cf_name.clone(),
+            ),
+            None => (
+                format!(
+                    "<{p}conditionalFormatting sqref=\"{}\">",
+                    scan::escape(&sqref_now)
+                ),
+                format!("{p}conditionalFormatting"),
+            ),
+        };
+        if let Some(rule) = &m.rule {
+            let mut rule = rule.clone();
+            if let Some(stop) = m.stop {
+                rule.stop = stop;
+            }
+            let dxf = match &rule.format {
+                Some(fmt) if rule.formats() => {
+                    let doc = match styles.take() {
+                        Some(d) => d,
+                        None => s
+                            .text("xl/styles.xml")?
+                            .ok_or("ブックに xl/styles.xml がありません")?,
+                    };
+                    let (doc, id) = with_dxf(&doc, &dxf_xml(fmt))?;
+                    styles = Some(doc);
+                    Some(id)
+                }
+                _ => None,
+            };
+            let first = ranges(&sqref_now)
+                .first()
+                .map_or(CellRef { row: 0, col: 0 }, |r| r.start);
+            let (head, name) = open(main_cf);
+            main.push_str(&format!(
+                "{head}{}</{name}>",
+                rule_xml(&p, &rule, dxf, first, priority)
+            ));
+            continue;
+        }
+        let f = f.expect("checked");
+        if f.id.starts_with('x') {
+            ext_kept.push((f, Some(priority), sqref_now));
+            continue;
+        }
+        let mut text = with_attr(&sdoc[f.rule.clone()], "priority", &priority.to_string());
+        if let Some(stop) = m.stop {
+            text = with_attr(&text, "stopIfTrue", if stop { "1" } else { "0" });
+        }
+        let (head, name) = open(Some(f));
+        main.push_str(&format!("{head}{text}</{name}>"));
+        if let Some(half) = found.half(f) {
+            ext_kept.push((half, None, sqref_now));
+        }
+    }
+    if let Some(doc) = styles {
+        s.put("xl/styles.xml", doc);
+    }
+    let mut edits = Edits::default();
+    match found.cfs.split_first() {
+        Some((first, rest)) => {
+            edits.replace(first.clone(), main);
+            for cf in rest {
+                edits.replace(cf.clone(), "");
+            }
+        }
+        None if !main.is_empty() => edits.insert(place(&root, "conditionalFormatting"), main),
+        None => {}
+    }
+    if let Some(list) = &found.ext_list
+        && !found.ext_cfs.is_empty()
+    {
+        if ext_kept.is_empty() {
+            if found.ext_cfs.len() == found.ext_count {
+                edits.replace(list.clone(), "");
+            } else {
+                for (ext, _) in &found.ext_cfs {
+                    edits.replace(ext.clone(), "");
+                }
+            }
+        } else {
+            let mut inner = String::new();
+            for (f, priority, refs) in &ext_kept {
+                let mut text = sdoc[f.rule.clone()].to_string();
+                if let Some(n) = priority {
+                    text = with_attr(&text, "priority", &n.to_string());
+                }
+                inner.push_str(&format!(
+                    "{}{text}<{tag}>{}</{tag}></{}>",
+                    &sdoc[f.cf_open.clone()],
+                    scan::escape(refs),
+                    f.cf_name,
+                    tag = f.sqref_tag
+                ));
+            }
+            let (_, first) = &found.ext_cfs[0];
+            edits.replace(first.clone(), inner);
+            for (ext, _) in &found.ext_cfs[1..] {
+                edits.replace(ext.clone(), "");
+            }
+        }
+    }
+    if edits.is_empty() {
+        return Ok(bytes.to_vec());
+    }
+    let doc = edits.apply(&sdoc);
+    tree(&doc, &s.part)?;
+    s.finish(Some(doc))
 }
