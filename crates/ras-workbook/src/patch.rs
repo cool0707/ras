@@ -20,6 +20,7 @@ use serde_json::Value as Json;
 use crate::book::snapshot::{CellState, Raw, Snapshot, Styles};
 use crate::book::{Book, MAX_COLS, MAX_ROWS, Paste, PasteOp, PasteWhat, SortKey, Val};
 
+mod conditional;
 mod controls;
 mod drawing;
 mod insert;
@@ -32,6 +33,7 @@ mod tabs;
 #[cfg(test)]
 mod tests;
 
+pub use conditional::{CondFormat, CondRule};
 use scan::Edits;
 
 type Result<T> = std::result::Result<T, String>;
@@ -246,6 +248,14 @@ pub enum Op {
         header: bool,
         name: Option<String>,
     },
+    /// A conditional format put on the cells of `ranges` (ホーム > 条件付き書式), first in
+    /// priority; None: the rules of those cells cleared ("選択したセルからルールをクリア",
+    /// "シート全体からルールをクリア" with the whole sheet).
+    Conditional {
+        sheet: String,
+        ranges: Vec<RangeRef>,
+        rule: Option<CondRule>,
+    },
 }
 
 /// Where an object of the drawing goes.
@@ -374,6 +384,7 @@ impl Op {
                 | Op::ActiveX { .. }
                 | Op::Sheet { .. }
                 | Op::TabColor { .. }
+                | Op::Conditional { .. }
         )
     }
 }
@@ -1072,10 +1083,129 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 sheet,
                 color: tabs::color_of(o.get("color"))?,
             },
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control / activeX / sheet / tabColor）")),
+            "conditional" => {
+                let ranges = match o.get("range").and_then(Json::as_str) {
+                    // (Clearing the whole sheet.)
+                    None if o.get("clear").and_then(Json::as_bool).unwrap_or(false) => {
+                        vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(MAX_ROWS - 1, MAX_COLS - 1))]
+                    }
+                    None => return Err("`range` がありません".into()),
+                    Some(text) => text
+                        .split([' ', ','])
+                        .filter(|r| !r.trim().is_empty())
+                        .map(|r| {
+                            RangeRef::parse(&r.replace('$', "")).ok_or_else(|| {
+                                format!("範囲 `{r}` を読み取れません（A1:B5 C2:C9 のように指定してください）")
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                };
+                if ranges.is_empty() {
+                    return Err("`range` がありません".into());
+                }
+                Op::Conditional {
+                    sheet,
+                    ranges,
+                    rule: if o.get("clear").and_then(Json::as_bool).unwrap_or(false) {
+                        None
+                    } else {
+                        Some(cond_rule_of(o)?)
+                    },
+                }
+            }
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control / activeX / sheet / tabColor / conditional）")),
         });
     }
     Ok(out)
+}
+
+/// A color of an edit, `#RRGGBB` or `RRGGBB`: `RRGGBB` in capitals.
+fn hex_color(v: &Json, key: &str) -> Result<String> {
+    let c = v.as_str().unwrap_or("").trim().trim_start_matches('#');
+    if c.len() != 6 || !c.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!("`{key}` の色は \"#RRGGBB\" で指定してください"));
+    }
+    Ok(c.to_ascii_uppercase())
+}
+
+/// The rule of a `conditional` edit: `type` and what it takes (`operator` and `values`,
+/// `formula`, `text`, `rank` / `bottom` / `percent`, `below` / `equal`, `period`, `colors`,
+/// `icons` / `reverse` / `iconOnly`), the `format` it gives (`color`, `fill`, `bold`,
+/// `italic`, `underline`, `strike`, `border`) and `stop`.
+fn cond_rule_of(o: &Json) -> Result<CondRule> {
+    let text = |key: &str| o.get(key).and_then(Json::as_str).map(str::to_string);
+    let flag = |key: &str| o.get(key).and_then(Json::as_bool).unwrap_or(false);
+    let kind = text("type").ok_or("条件付き書式の `type` がありません")?;
+    let mut values: Vec<String> = match o.get("values") {
+        None | Some(Json::Null) => Vec::new(),
+        Some(Json::Array(list)) => list
+            .iter()
+            .map(|v| match v {
+                Json::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .collect(),
+        Some(Json::String(s)) => vec![s.clone()],
+        Some(other) => vec![other.to_string()],
+    };
+    if let Some(f) = text("formula") {
+        values = vec![f];
+    }
+    let format = match o.get("format") {
+        None | Some(Json::Null) => None,
+        Some(f) => {
+            let color = |key: &str| -> Result<Option<String>> {
+                match f.get(key) {
+                    None | Some(Json::Null) => Ok(None),
+                    Some(v) => hex_color(v, key).map(Some),
+                }
+            };
+            let on = |key: &str| f.get(key).and_then(Json::as_bool).unwrap_or(false);
+            let format = CondFormat {
+                color: color("color")?,
+                fill: color("fill")?,
+                bold: on("bold"),
+                italic: on("italic"),
+                underline: on("underline"),
+                strike: on("strike"),
+                border: color("border")?,
+            };
+            if format == CondFormat::default() {
+                return Err("`format` に書式（color・fill・bold・italic・underline・strike・border）を指定してください".into());
+            }
+            Some(format)
+        }
+    };
+    let rule = CondRule {
+        kind,
+        operator: text("operator").unwrap_or_default(),
+        values,
+        text: text("text").unwrap_or_default(),
+        rank: o
+            .get("rank")
+            .and_then(Json::as_u64)
+            .map_or(10, |n| n.min(u32::MAX as u64) as u32),
+        bottom: flag("bottom"),
+        percent: flag("percent"),
+        below: flag("below"),
+        equal: flag("equal"),
+        period: text("period").unwrap_or_default(),
+        colors: match o.get("colors") {
+            None | Some(Json::Null) => Vec::new(),
+            Some(Json::Array(list)) => list
+                .iter()
+                .map(|c| hex_color(c, "colors"))
+                .collect::<Result<_>>()?,
+            Some(c) => vec![hex_color(c, "colors")?],
+        },
+        icons: text("icons").unwrap_or_default(),
+        reverse: flag("reverse"),
+        icon_only: flag("iconOnly"),
+        format,
+        stop: flag("stop"),
+    };
+    rule.check()?;
+    Ok(rule)
 }
 
 /// The workbook file `bytes` (.xlsx / .xlsm) with `ops` made, in order.
@@ -1102,6 +1232,11 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
             Op::Freeze { sheet, at } => panes::freeze(&bytes, sheet, *at)?,
             Op::Sheet { edit } => tabs::edit(&bytes, edit)?,
             Op::TabColor { sheet, color } => tabs::color(&bytes, sheet, color.as_deref())?,
+            Op::Conditional {
+                sheet,
+                ranges,
+                rule,
+            } => conditional::conditional(&bytes, sheet, ranges, rule.as_ref())?,
             Op::Link { sheet, range, link } => insert::link(&bytes, sheet, *range, link.as_ref())?,
             Op::Note {
                 sheet,
@@ -1855,7 +1990,8 @@ fn run(
         | Op::Control { .. }
         | Op::ActiveX { .. }
         | Op::Sheet { .. }
-        | Op::TabColor { .. } => {}
+        | Op::TabColor { .. }
+        | Op::Conditional { .. } => {}
         Op::Fill {
             sheet,
             range,

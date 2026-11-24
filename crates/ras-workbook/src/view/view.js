@@ -3726,6 +3726,385 @@
     function clearFormats() {
         if (sel && view) postEdit(allAreas().map((a) => ({ op: "clearFormats", sheet: view.sheet.name, range: areaText(a) })).concat(fitOps(allAreas(), () => "")));
     }
+    // ---- ホーム > 条件付き書式: rules put on the cells selected, as Excel's menu and dialogs
+    // put them (the first in priority), and cleared from them or from the sheet.
+
+    // The formats Excel offers in its dialogs ("書式:"), and one chosen.
+    const COND_FORMATS = [
+        ["red", "濃い赤の文字、明るい赤の背景", { color: "#9C0006", fill: "#FFC7CE" }],
+        ["yellow", "濃い黄色の文字、黄色の背景", { color: "#9C5700", fill: "#FFEB9C" }],
+        ["green", "濃い緑の文字、緑の背景", { color: "#006100", fill: "#C6EFCE" }],
+        ["redFill", "明るい赤の背景", { fill: "#FFC7CE" }],
+        ["redText", "赤の文字", { color: "#9C0006" }],
+        ["redBorder", "赤の罫線", { border: "#FF0000" }],
+        ["custom", "ユーザー設定の書式…", null],
+    ];
+    // The kinds of rules of "新しい書式ルール" (`colorScale2` / `colorScale3`: of two or three colors).
+    const COND_KINDS = [
+        ["cellIs", "セルの値"],
+        ["text", "特定の文字列"],
+        ["timePeriod", "日付"],
+        ["containsBlanks", "空白"],
+        ["notContainsBlanks", "空白なし"],
+        ["containsErrors", "エラー"],
+        ["notContainsErrors", "エラーなし"],
+        ["top10", "上位または下位に入る値"],
+        ["aboveAverage", "平均より上または下の値"],
+        ["duplicateValues", "一意の値または重複する値"],
+        ["expression", "数式を使用して、書式設定するセルを決定"],
+        ["dataBar", "データ バー"],
+        ["colorScale2", "2 色スケール"],
+        ["colorScale3", "3 色スケール"],
+        ["iconSet", "アイコン セット"],
+    ];
+    const COND_OPERATORS = [
+        ["between", "次の値の間"],
+        ["notBetween", "次の値の間以外"],
+        ["equal", "次の値に等しい"],
+        ["notEqual", "次の値に等しくない"],
+        ["greaterThan", "次の値より大きい"],
+        ["lessThan", "次の値より小さい"],
+        ["greaterThanOrEqual", "次の値以上"],
+        ["lessThanOrEqual", "次の値以下"],
+    ];
+    const COND_TEXTS = [
+        ["containsText", "次の値を含む"],
+        ["notContainsText", "次の値を含まない"],
+        ["beginsWith", "次の値で始まる"],
+        ["endsWith", "次の値で終わる"],
+    ];
+    const COND_PERIODS = [
+        ["yesterday", "昨日"],
+        ["today", "今日"],
+        ["tomorrow", "明日"],
+        ["last7Days", "過去 7 日間"],
+        ["lastWeek", "先週"],
+        ["thisWeek", "今週"],
+        ["nextWeek", "来週"],
+        ["lastMonth", "先月"],
+        ["thisMonth", "今月"],
+        ["nextMonth", "来月"],
+    ];
+    // The data bars and color scales of the menu (Excel's first ones).
+    const COND_BARS = [["#638EC6", "青"], ["#63C384", "緑"], ["#FF555A", "赤"], ["#FFB628", "オレンジ"], ["#008AEF", "水色"], ["#D6007B", "紫"]];
+    const COND_SCALES = [
+        ["#63BE7B", "#FFEB84", "#F8696B", "緑、黄、赤"],
+        ["#F8696B", "#FFEB84", "#63BE7B", "赤、黄、緑"],
+        ["#63BE7B", "#FCFCFF", "#F8696B", "緑、白、赤"],
+        ["#F8696B", "#FCFCFF", "#63BE7B", "赤、白、緑"],
+        ["#5A8AC6", "#FCFCFF", "#F8696B", "青、白、赤"],
+        ["#F8696B", "#FCFCFF", "#5A8AC6", "赤、白、青"],
+        ["#FCFCFF", null, "#F8696B", "白、赤"],
+        ["#F8696B", null, "#FCFCFF", "赤、白"],
+        ["#63BE7B", null, "#FCFCFF", "緑、白"],
+        ["#FCFCFF", null, "#63BE7B", "白、緑"],
+        ["#63BE7B", null, "#FFEF9C", "緑、黄"],
+        ["#FFEF9C", null, "#63BE7B", "黄、緑"],
+    ];
+    // The icon sets (of Excel 2007): their name, and a sketch of their icons, the greatest first.
+    const COND_ICONS = [
+        ["3Arrows", "3 つの矢印（色分け）", [["↑", "#00B050"], ["→", "#FFC000"], ["↓", "#C00000"]]],
+        ["3ArrowsGray", "3 つの矢印（灰色）", [["↑", "#808080"], ["→", "#808080"], ["↓", "#808080"]]],
+        ["4Arrows", "4 つの矢印（色分け）", [["↑", "#00B050"], ["↗", "#FFC000"], ["↘", "#FFC000"], ["↓", "#C00000"]]],
+        ["4ArrowsGray", "4 つの矢印（灰色）", [["↑", "#808080"], ["↗", "#808080"], ["↘", "#808080"], ["↓", "#808080"]]],
+        ["5Arrows", "5 つの矢印（色分け）", [["↑", "#00B050"], ["↗", "#FFC000"], ["→", "#FFC000"], ["↘", "#FFC000"], ["↓", "#C00000"]]],
+        ["5ArrowsGray", "5 つの矢印（灰色）", [["↑", "#808080"], ["↗", "#808080"], ["→", "#808080"], ["↘", "#808080"], ["↓", "#808080"]]],
+        ["3TrafficLights1", "3 つの信号（枠なし）", [["●", "#00B050"], ["●", "#FFC000"], ["●", "#C00000"]]],
+        ["3TrafficLights2", "3 つの信号（枠あり）", [["◉", "#00B050"], ["◉", "#FFC000"], ["◉", "#C00000"]]],
+        ["3Signs", "3 つの図形", [["●", "#00B050"], ["▲", "#FFC000"], ["◆", "#C00000"]]],
+        ["4RedToBlack", "赤から黒", [["●", "#C00000"], ["●", "#FF8080"], ["●", "#A0A0A0"], ["●", "#000000"]]],
+        ["4TrafficLights", "4 つの信号", [["●", "#00B050"], ["●", "#FFC000"], ["●", "#C00000"], ["●", "#000000"]]],
+        ["3Symbols", "3 つの記号（丸囲み）", [["✔", "#00B050"], ["!", "#FFC000"], ["✖", "#C00000"]]],
+        ["3Symbols2", "3 つの記号（丸囲みなし）", [["✓", "#00B050"], ["!", "#FFC000"], ["✗", "#C00000"]]],
+        ["3Flags", "3 つのフラグ", [["⚑", "#00B050"], ["⚑", "#FFC000"], ["⚑", "#C00000"]]],
+        ["4Rating", "4 つの評価", [["▂", "#2F75B5"], ["▄", "#2F75B5"], ["▆", "#2F75B5"], ["█", "#2F75B5"]]],
+        ["5Rating", "5 つの評価", [["▁", "#2F75B5"], ["▂", "#2F75B5"], ["▄", "#2F75B5"], ["▆", "#2F75B5"], ["█", "#2F75B5"]]],
+        ["5Quarters", "5 つの四分円", [["●", "#404040"], ["◕", "#404040"], ["◑", "#404040"], ["◔", "#404040"], ["○", "#404040"]]],
+    ];
+    const iconSketch = (icons) => icons.map(([g, c]) => `<span style="color:${c}">${g}</span>`).join("");
+    // The cells a rule goes on: every area selected.
+    const condRange = () => allAreas().map((a) => (a.kind === "cells" ? areaText(a) : rangeText(a))).join(" ");
+    function postCond(rule) {
+        if (!editable || busy || !sel || !view) return;
+        if (entry) commit(null);
+        postEdit([Object.assign({ op: "conditional", sheet: view.sheet.name, range: condRange() }, rule)]);
+    }
+    // "ルールのクリア": of the cells selected, or (`all`) of the whole sheet.
+    function clearCond(all) {
+        if (!editable || busy || !view || (!all && !sel)) return;
+        if (entry) commit(null);
+        const op = { op: "conditional", sheet: view.sheet.name, clear: true };
+        if (!all) op.range = condRange();
+        postEdit([op]);
+    }
+    // The value of the active cell, to start a dialog's box with (as Excel does).
+    function activeValue() {
+        const cell = sel ? cellOf(sel.ar, sel.ac) : null;
+        return cell && cell.t !== undefined && !cell.f ? String(cell.v !== undefined ? cell.v : cell.t) : "";
+    }
+
+    // Excel's dialogs of 条件付き書式: one of the quick ones of the menu (`o.kind` given, with
+    // `o.operator`, ...; `o.prompt` what it asks), or "新しい書式ルール" (the kind chosen in it).
+    function askCond(o) {
+        if (!editable || busy || !sel || !view) return;
+        if (entry) commit(null);
+        o = o || {};
+        const quick = !!o.kind;
+        const form = openDialog(o.title || "新しい書式ルール", "conddlg");
+        let kindSel = null;
+        if (!quick) {
+            const line = form.appendChild(el("label"));
+            line.appendChild(el("span", "lbl", "ルールの種類:"));
+            kindSel = line.appendChild(el("select"));
+            kindSel.dataset.field = "kind";
+            for (const [value, label] of COND_KINDS) kindSel.appendChild(el("option", null, label)).value = value;
+        }
+        const body = form.appendChild(el("div", "condbody"));
+        const fmtBox = form.appendChild(el("div", "condfmt"));
+        // The format: one of Excel's, or one made here.
+        const fmtLine = fmtBox.appendChild(el("label"));
+        fmtLine.appendChild(el("span", "lbl", "書式:"));
+        const fmtSel = fmtLine.appendChild(el("select"));
+        fmtSel.dataset.field = "format";
+        for (const [value, label] of COND_FORMATS) fmtSel.appendChild(el("option", null, label)).value = value;
+        const custom = fmtBox.appendChild(el("div", "condcustom"));
+        const colorField = (label, value) => {
+            const line = custom.appendChild(el("label"));
+            const on = line.appendChild(el("input"));
+            on.type = "checkbox";
+            line.appendChild(el("span", "lbl", label));
+            const pick = line.appendChild(el("input"));
+            pick.type = "color";
+            pick.value = value;
+            pick.addEventListener("input", () => (on.checked = true));
+            return () => (on.checked ? pick.value.toUpperCase() : null);
+        };
+        const fontColor = colorField("フォントの色", "#9C0006");
+        const fillColor = colorField("塗りつぶしの色", "#FFC7CE");
+        const borderColor = colorField("罫線の色", "#FF0000");
+        const styles = custom.appendChild(el("div", "condstyles"));
+        const styleBox = (label) => {
+            const line = styles.appendChild(el("label"));
+            const box = line.appendChild(el("input"));
+            box.type = "checkbox";
+            line.appendChild(document.createTextNode(label));
+            return box;
+        };
+        const bold = styleBox("太字");
+        const italic = styleBox("斜体");
+        const underline = styleBox("下線");
+        const strike = styleBox("取り消し線");
+        const showCustom = () => {
+            custom.hidden = fmtSel.value !== "custom";
+            fmtSel.setCustomValidity("");
+        };
+        custom.addEventListener("change", () => fmtSel.setCustomValidity(""));
+        fmtSel.addEventListener("change", showCustom);
+        showCustom();
+        const formatOf = () => {
+            const chosen = COND_FORMATS.find(([v]) => v === fmtSel.value);
+            if (chosen && chosen[2]) return chosen[2];
+            const f = {};
+            if (fontColor()) f.color = fontColor();
+            if (fillColor()) f.fill = fillColor();
+            if (borderColor()) f.border = borderColor();
+            if (bold.checked) f.bold = true;
+            if (italic.checked) f.italic = true;
+            if (underline.checked) f.underline = true;
+            if (strike.checked) f.strike = true;
+            return Object.keys(f).length ? f : null;
+        };
+
+        // The fields of the kind of rule: `read()` gives the rule's settings (null: something is
+        // missing, said where it is).
+        let read = () => ({});
+        const prompt = (text) => body.appendChild(el("div", "prompt", text));
+        const choose = (options, value, name) => {
+            const s = body.appendChild(el("select"));
+            s.dataset.field = name;
+            for (const [v, label] of options) s.appendChild(el("option", null, label)).value = v;
+            if (value) s.value = value;
+            return s;
+        };
+        const box = (where, value, name) => {
+            const input = where.appendChild(el("input"));
+            input.type = "text";
+            input.spellcheck = false;
+            input.dataset.field = name;
+            input.value = value || "";
+            input.addEventListener("input", () => input.setCustomValidity(""));
+            return input;
+        };
+        const needed = (input) => {
+            if (input.value.trim()) return true;
+            input.setCustomValidity("値を入力してください");
+            input.reportValidity();
+            return false;
+        };
+        const colorPick = (where, label, value, name) => {
+            const line = where.appendChild(el("label"));
+            line.appendChild(el("span", "lbl", label));
+            const pick = line.appendChild(el("input"));
+            pick.type = "color";
+            pick.value = value;
+            pick.dataset.field = name;
+            return pick;
+        };
+        const fill = (kind) => {
+            body.textContent = "";
+            fmtBox.hidden = ["dataBar", "colorScale2", "colorScale3", "iconSet"].includes(kind);
+            if (kind === "cellIs") {
+                prompt(o.prompt || "次のセルのみを書式設定:");
+                const line = body.appendChild(el("div", "condline"));
+                let op = o.operator || "between";
+                let opSel = null;
+                if (!quick) {
+                    opSel = line.appendChild(el("select"));
+                    opSel.dataset.field = "operator";
+                    for (const [v, label] of COND_OPERATORS) opSel.appendChild(el("option", null, label)).value = v;
+                    opSel.value = op;
+                }
+                const a = box(line, activeValue(), "value1");
+                const and = line.appendChild(el("span", null, "と"));
+                const b = box(line, "", "value2");
+                const two = () => ["between", "notBetween"].includes(opSel ? opSel.value : op);
+                const shown = () => (and.hidden = b.hidden = !two());
+                if (opSel) opSel.addEventListener("change", shown);
+                shown();
+                read = () => {
+                    op = opSel ? opSel.value : op;
+                    if (!needed(a) || (two() && !needed(b))) return null;
+                    return { type: "cellIs", operator: op, values: two() ? [a.value, b.value] : [a.value] };
+                };
+                a.focus();
+                a.select();
+            } else if (kind === "text") {
+                prompt(o.prompt || "次の文字列を含むセルだけを書式設定:");
+                const line = body.appendChild(el("div", "condline"));
+                const how = quick ? null : choose(COND_TEXTS, "containsText", "textKind");
+                if (how) line.appendChild(how);
+                const t = box(line, "", "text");
+                read = () => (needed(t) ? { type: how ? how.value : "containsText", text: t.value } : null);
+                t.focus();
+            } else if (kind === "timePeriod") {
+                prompt(o.prompt || "次の日付を含むセルを書式設定:");
+                const p = choose(COND_PERIODS, "yesterday", "period");
+                read = () => ({ type: "timePeriod", period: p.value });
+            } else if (["containsBlanks", "notContainsBlanks", "containsErrors", "notContainsErrors"].includes(kind)) {
+                prompt(`${COND_KINDS.find(([v]) => v === kind)[1]}のセルを書式設定します。`);
+                read = () => ({ type: kind });
+            } else if (kind === "duplicateValues") {
+                prompt(o.prompt || "次の値を含むセルを書式設定:");
+                const d = choose([["duplicateValues", "重複"], ["uniqueValues", "一意"]], o.unique ? "uniqueValues" : "duplicateValues", "duplicate");
+                read = () => ({ type: d.value });
+            } else if (kind === "top10") {
+                prompt(o.prompt || (o.bottom ? "下位に入るセルを書式設定:" : "上位に入るセルを書式設定:"));
+                const line = body.appendChild(el("div", "condline"));
+                const which = quick ? null : line.appendChild(choose([["top", "上位"], ["bottom", "下位"]], o.bottom ? "bottom" : "top", "which"));
+                const n = line.appendChild(el("input"));
+                n.type = "number";
+                n.min = 1;
+                n.max = 1000;
+                n.value = 10;
+                n.dataset.field = "rank";
+                const pctLine = line.appendChild(el("label"));
+                const pct = pctLine.appendChild(el("input"));
+                pct.type = "checkbox";
+                pct.checked = !!o.percent;
+                pctLine.appendChild(document.createTextNode("%"));
+                if (quick) pctLine.hidden = true;
+                read = () => {
+                    const rank = Math.round(+n.value);
+                    if (!(rank >= 1 && rank <= (pct.checked ? 100 : 1000))) {
+                        n.setCustomValidity(pct.checked ? "1〜100 の数を入力してください" : "1〜1000 の数を入力してください");
+                        n.reportValidity();
+                        return null;
+                    }
+                    const r = { type: "top10", rank };
+                    if (which ? which.value === "bottom" : o.bottom) r.bottom = true;
+                    if (pct.checked) r.percent = true;
+                    return r;
+                };
+                n.addEventListener("input", () => n.setCustomValidity(""));
+                n.focus();
+                n.select();
+            } else if (kind === "aboveAverage") {
+                prompt(o.prompt || "選択範囲の平均値に対して次の値を書式設定:");
+                const a = quick ? null : choose([["above", "より上"], ["below", "より下"], ["aboveEq", "以上"], ["belowEq", "以下"]], o.below ? "below" : "above", "average");
+                read = () => {
+                    const v = a ? a.value : o.below ? "below" : "above";
+                    const r = { type: "aboveAverage" };
+                    if (v.startsWith("below")) r.below = true;
+                    if (v.endsWith("Eq")) r.equal = true;
+                    return r;
+                };
+            } else if (kind === "expression") {
+                prompt("次の数式を満たす場合に値を書式設定:");
+                const f = box(body, "=", "formula");
+                f.classList.add("wide");
+                read = () => {
+                    if (f.value.trim().replace(/^=/, "").trim()) return { type: "expression", formula: f.value.trim() };
+                    f.setCustomValidity("数式を入力してください");
+                    f.reportValidity();
+                    return null;
+                };
+                f.focus();
+            } else if (kind === "dataBar") {
+                const c = colorPick(body, "バーの色:", "#638EC6", "barColor");
+                read = () => ({ type: "dataBar", colors: [c.value.toUpperCase()] });
+            } else if (kind === "colorScale2" || kind === "colorScale3") {
+                const three = kind === "colorScale3";
+                const lo = colorPick(body, "最小値の色:", "#F8696B", "minColor");
+                const mid = three ? colorPick(body, "中間値の色（50 百分位）:", "#FFEB84", "midColor") : null;
+                const hi = colorPick(body, "最大値の色:", "#63BE7B", "maxColor");
+                read = () => ({ type: "colorScale", colors: [lo, mid, hi].filter(Boolean).map((p) => p.value.toUpperCase()) });
+            } else if (kind === "iconSet") {
+                const line = body.appendChild(el("label"));
+                line.appendChild(el("span", "lbl", "アイコン スタイル:"));
+                const s = line.appendChild(el("select"));
+                s.dataset.field = "icons";
+                for (const [v, label] of COND_ICONS) s.appendChild(el("option", null, label)).value = v;
+                s.value = "3TrafficLights1";
+                const sketch = body.appendChild(el("div", "condicons"));
+                const showSketch = () => (sketch.innerHTML = iconSketch(COND_ICONS.find(([v]) => v === s.value)[2]));
+                s.addEventListener("change", showSketch);
+                showSketch();
+                const rev = check(body, "アイコンの順序を逆にする", false);
+                const only = check(body, "アイコンのみ表示", false);
+                read = () => {
+                    const r = { type: "iconSet", icons: s.value };
+                    if (rev.checked) r.reverse = true;
+                    if (only.checked) r.iconOnly = true;
+                    return r;
+                };
+            }
+        };
+        fill(o.kind || "cellIs");
+        if (kindSel) {
+            kindSel.addEventListener("change", () => fill(kindSel.value));
+            kindSel.focus();
+        }
+        if (o.format) fmtSel.value = o.format;
+        showCustom();
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const rule = read();
+            if (!rule) return;
+            if (!fmtBox.hidden) {
+                const f = formatOf();
+                if (!f) {
+                    fmtSel.setCustomValidity("色かフォントのスタイルを 1 つ以上選んでください");
+                    fmtSel.reportValidity();
+                    return;
+                }
+                rule.format = f;
+            }
+            closeDialog();
+            postCond(rule);
+        });
+    }
+
     // A merged cell among the cells selected.
     function mergedIn(s) {
         return !!s && view.sheet.merges.some(([a, b, c, d]) => a <= s.r2 && c >= s.r1 && b <= s.c2 && d >= s.c1);
@@ -4024,6 +4403,7 @@
         align: '<path d="M2.5 1.5v13"/><rect x="2.5" y="3.5" width="9" height="3"/><rect x="2.5" y="9.5" width="6" height="3"/>',
         height: '<path d="M8 1.5v13M6 3.5l2-2 2 2M6 12.5l2 2 2-2M3 1.5h10M3 14.5h10"/>',
         width: '<path d="M1.5 8h13M3.5 6l-2 2 2 2M12.5 6l2 2-2 2M1.5 3v10M14.5 3v10"/>',
+        condFormat: '<rect x="1.5" y="1.5" width="13" height="13"/><path d="M1.5 6h13M1.5 10.5h13M6 1.5v13"/><rect x="6" y="6" width="8.5" height="4.5" fill="#f4b183" stroke="none"/><rect x="6" y="10.5" width="5" height="4" fill="#9dc3e6" stroke="none"/>',
         controls: '<rect x="1.5" y="2.5" width="6" height="4" rx=".8"/><rect x="9.5" y="2.5" width="5" height="5"/><path d="m10.5 5 1.2 1.2 1.8-2.2"/><circle cx="4.5" cy="11.5" r="2.5"/><rect x="9" y="9.5" width="5.5" height="4"/>',
     };
     function icon(name, large) {
@@ -4372,6 +4752,66 @@
         };
         button("decUp", { icon: "decUp", title: "小数点以下の表示桁数を増やす", edits: true, act: () => decimals(true) });
         button("decDown", { icon: "decDown", title: "小数点以下の表示桁数を減らす", edits: true, act: () => decimals(false) });
+
+        group(home, "スタイル");
+        button("condFormat", {
+            icon: "condFormat",
+            label: "条件付き書式",
+            large: true,
+            cls: "two",
+            edits: true,
+            menu: (anchor) => {
+                const pop = openPop(anchor, "condmenu");
+                const ask = (label, o) => item(pop, label, () => askCond(Object.assign({ title: label.replace(/…$/, "") }, o)));
+                head(pop, "セルの強調表示ルール");
+                ask("指定の値より大きい…", { kind: "cellIs", operator: "greaterThan", prompt: "次の値より大きいセルを書式設定:" });
+                ask("指定の値より小さい…", { kind: "cellIs", operator: "lessThan", prompt: "次の値より小さいセルを書式設定:" });
+                ask("指定の範囲内…", { kind: "cellIs", operator: "between", prompt: "次の値の間にあるセルを書式設定:" });
+                ask("指定の値に等しい…", { kind: "cellIs", operator: "equal", prompt: "次の値に等しいセルを書式設定:" });
+                ask("文字列…", { kind: "text", prompt: "次の文字列を含むセルを書式設定:" });
+                ask("日付…", { kind: "timePeriod", prompt: "次の日付を含むセルを書式設定:" });
+                ask("重複する値…", { kind: "duplicateValues", prompt: "次の値を含むセルを書式設定:" });
+                head(pop, "上位/下位ルール");
+                ask("上位 10 項目…", { kind: "top10", prompt: "上位に入るセルを書式設定（項目数）:" });
+                ask("上位 10%…", { kind: "top10", percent: true, prompt: "上位に入るセルを書式設定（%）:" });
+                ask("下位 10 項目…", { kind: "top10", bottom: true, prompt: "下位に入るセルを書式設定（項目数）:" });
+                ask("下位 10%…", { kind: "top10", bottom: true, percent: true, prompt: "下位に入るセルを書式設定（%）:" });
+                ask("平均より上…", { kind: "aboveAverage", prompt: "選択範囲の平均値より上のセルを書式設定:" });
+                ask("平均より下…", { kind: "aboveAverage", below: true, prompt: "選択範囲の平均値より下のセルを書式設定:" });
+                const swatchRow = (title) => {
+                    head(pop, title);
+                    return pop.appendChild(el("div", "condrow"));
+                };
+                const swatch = (row, title, html, act) => {
+                    const b = row.appendChild(el("button", "condswatch"));
+                    b.type = "button";
+                    b.title = title;
+                    b.innerHTML = html;
+                    b.addEventListener("click", () => {
+                        closeMenu();
+                        closeOpen();
+                        focusGrid();
+                        act();
+                    });
+                    return b;
+                };
+                let row = swatchRow("データ バー");
+                for (const [color, name] of COND_BARS) swatch(row, `${name}のデータ バー`, `<span class="bar" style="background:linear-gradient(to right, ${color}, #fff)"></span>`, () => postCond({ type: "dataBar", colors: [color] })).dataset.bar = color;
+                row = swatchRow("カラー スケール");
+                for (const [lo, mid, hi, name] of COND_SCALES) {
+                    const colors = mid ? [lo, mid, hi] : [lo, hi];
+                    // (The menu shows the greatest first, the scale is written from the least.)
+                    swatch(row, `${name}のカラー スケール`, `<span class="scale" style="background:linear-gradient(to bottom, ${colors.join(", ")})"></span>`, () => postCond({ type: "colorScale", colors: colors.slice().reverse() })).dataset.scale = colors.join(" ");
+                }
+                row = swatchRow("アイコン セット");
+                for (const [set, name, icons] of COND_ICONS) swatch(row, name, `<span class="icons">${iconSketch(icons)}</span>`, () => postCond({ type: "iconSet", icons: set })).dataset.icons = set;
+                pop.appendChild(el("hr"));
+                item(pop, "新しいルール…", () => askCond());
+                head(pop, "ルールのクリア");
+                item(pop, "選択したセルからルールをクリア", () => clearCond(false));
+                item(pop, "シート全体からルールをクリア", () => clearCond(true));
+            },
+        });
 
         group(home, "セル");
         stack();

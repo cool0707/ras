@@ -518,3 +518,27 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.numfmtdlg .fmtlist { width: 100%; }
 .dlg.numfmtdlg .fmtlist option.red { color: #c00; }
 .dlg.numfmtdlg input.fmtcode { flex: 1; min-width: 0; font: inherit; }
+/* ホーム > 条件付き書式: its menu (rows of bars, scales and icon sets) and its dialogs. */
+.menu.condmenu { width: 252px; max-height: calc(100vh - 8px); overflow-y: auto; }
+.menu.condmenu .condrow { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 10px; }
+.menu.condmenu button.condswatch { display: inline-flex; width: auto; min-width: 30px; height: 30px; padding: 2px; gap: 0; justify-content: center; align-items: center; border: 1px solid transparent; border-radius: 3px; }
+.menu.condmenu button.condswatch:hover { border-color: var(--accent); background: var(--accent-hover); }
+.menu.condmenu .condswatch span { flex: none; }
+.menu.condmenu .condswatch .bar { display: block; width: 22px; height: 20px; border: 1px solid rgba(0, 0, 0, .15); }
+.menu.condmenu .condswatch .scale { display: block; width: 20px; height: 22px; border: 1px solid rgba(0, 0, 0, .15); }
+.menu.condmenu .condswatch .icons, .dlg.conddlg .condicons { display: inline-flex; gap: 1px; font-size: 13px; line-height: 1; }
+.dlg.conddlg { width: 440px; }
+.dlg.conddlg select, .dlg.conddlg input[type="text"], .dlg.conddlg input[type="number"] { font: inherit; }
+.dlg.conddlg label > .lbl { flex: none; min-width: 84px; }
+.dlg.conddlg label > select { flex: 1; min-width: 0; }
+.dlg.conddlg .condbody { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; padding: 8px; border: 1px solid var(--line); }
+.dlg.conddlg .condbody > select { align-self: flex-start; }
+.dlg.conddlg .condline { display: flex; align-items: center; gap: 6px; }
+.dlg.conddlg .condline input[type="text"] { flex: 1; min-width: 0; }
+.dlg.conddlg .condline input[type="number"] { width: 70px; margin: 0; }
+.dlg.conddlg input.wide { width: 100%; box-sizing: border-box; }
+.dlg.conddlg .condicons { font-size: 16px; padding: 2px 0 4px 90px; }
+.dlg.conddlg .condcustom { margin: 4px 0 0 90px; }
+.dlg.conddlg .condcustom input[type="color"] { width: 40px; height: 20px; padding: 0; border: 1px solid #adadad; }
+.dlg.conddlg .condstyles { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.dlg.conddlg [hidden] { display: none !important; }
