@@ -71,6 +71,13 @@ const TIME_FORMAT: &str = "h:mm:ss";
 
 /// The number format a Japanese Excel shows a cell by, and says its `NumberFormatLocal` is.
 pub fn local_format(code: &str) -> &str {
+    // The system's long date and time (`[$-F800]`, `[$-F400]`), as Japanese Windows has them.
+    let system = code.get(..8).map(str::to_ascii_uppercase);
+    match system.as_deref() {
+        Some("[$-F800]") => return "yyyy\"年\"m\"月\"d\"日\"",
+        Some("[$-F400]") => return "h:mm:ss",
+        _ => {}
+    }
     match code {
         DATE_FORMAT => "yyyy/m/d",
         DATE_TIME_FORMAT => "yyyy/m/d h:mm",
@@ -81,7 +88,7 @@ pub fn local_format(code: &str) -> &str {
 
 /// The built-in number formats (a `numFmtId` without a `numFmt` of the file) whose code a
 /// Japanese Excel 2021 shows differently from the United States' (read from Excel itself).
-/// Formats with Japanese eras (27-29, 36, 50, 51, 54, 57, 58) are left out: they are not drawn.
+/// Those with Japanese eras (27-29, 36, 50, 51, 54, 57, 58) are as Japanese Excel has them.
 fn local_builtin(id: u32) -> Option<&'static str> {
     Some(match id {
         5 | 63 => "¥#,##0;¥-#,##0",
@@ -91,6 +98,8 @@ fn local_builtin(id: u32) -> Option<&'static str> {
         14 | 71 | 72 => "yyyy/m/d",
         22 | 78 => "yyyy/m/d h:mm",
         23 => "$#,##0_);($#,##0)",
+        27 | 36 | 50 | 57 => era::ERA_SHORT,
+        28 | 29 | 51 | 54 | 58 => era::ERA_LONG,
         24 => "$#,##0_);[Red]($#,##0)",
         25 => "$#,##0.00_);($#,##0.00)",
         26 => "$#,##0.00_);[Red]($#,##0.00)",
@@ -1639,6 +1648,22 @@ impl Book {
             );
             return Ok(());
         }
+        // A date with a Japanese era (`R1/5/1`, `令和元年5月1日`) as Japanese Excel reads it.
+        let era = era::gregorian(text)
+            .map(|(t, f)| {
+                (
+                    gridcraft_core::parse::parse_input(&t, self.model.date_system),
+                    f,
+                )
+            })
+            .filter(|(p, _)| matches!(p.value, Value::Number(_)));
+        if let Some((parsed, f)) = era {
+            if code == "General" {
+                self.set_number_format_at(si, at, f.unwrap_or(DATE_TIME_FORMAT));
+            }
+            self.put_value(si, at, parsed.value, false);
+            return Ok(());
+        }
         let parsed = gridcraft_core::parse::parse_input(text, self.model.date_system);
         if let Some(f) = parsed.format
             && code == "General"
@@ -2377,6 +2402,7 @@ fn to_array(rows: &[Vec<Val>]) -> Array {
 
 mod cond;
 mod edit;
+mod era;
 mod format;
 pub(crate) use format::width_of_px;
 mod inspect;

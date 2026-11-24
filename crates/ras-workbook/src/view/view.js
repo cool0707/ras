@@ -2327,7 +2327,7 @@
         return { r1, c1, r2, c2 };
     }
     // A text typed in as it is (a number, a date or a formula would be taken for one).
-    const asText = (text) => (/^[=+\-@']/.test(text) || (text.trim() !== "" && !isNaN(+text.replace(/[,¥$%\s]/g, ""))) || /^\d+[/-]\d+/.test(text) ? `'${text}` : text);
+    const asText = (text) => (/^[=+\-@']/.test(text) || (text.trim() !== "" && !isNaN(+text.replace(/[,¥$%\s]/g, ""))) || /^\d+[/-]\d+/.test(text) || /^\s*(明治|大正|昭和|平成|令和|[明大昭平令MTSHRmtshr])(\d+|元)[/.\-年]/.test(text) ? `'${text}` : text);
 
     // A dialog of the page: its form, its buttons (OK and キャンセル), closed by a click beside it.
     function openDialog(title, cls) {
@@ -3532,6 +3532,7 @@
             }
             items.push(["数式と値のクリア", clearSel, "Delete"]);
             items.push(["書式のクリア", clearFormats, ""]);
+            items.push(["セルの書式設定…", askNumberFormat, "Ctrl+1"]);
             if (kind === "cells") {
                 items.push(null);
                 const note = noteAt(sel.ar, sel.ac);
@@ -4348,9 +4349,15 @@
         group(home, "数値");
         const numberRows = into.appendChild(el("div", "rstack wide"));
         row(numberRows);
-        const number = select("numberFormat", "表示形式", [["", "ユーザー定義"]].concat(NUMBER_FORMATS), "numberformat");
+        launcher("表示形式: セルの書式設定（表示形式）を表示します (Ctrl+1)", askNumberFormat);
+        const number = select("numberFormat", "表示形式", [["", "ユーザー定義"]].concat(NUMBER_FORMATS, [["more", "その他の表示形式…"]]), "numberformat");
         number.addEventListener("change", () => {
-            if (number.value) format({ numberFormat: number.value });
+            if (number.value === "more") {
+                showTools();
+                askNumberFormat();
+                return;
+            }
+            if (number.value) format({ numberFormat: fileCode(number.value) });
             focusGrid();
         });
         row(numberRows);
@@ -4720,7 +4727,8 @@
         if (![...tools.fontSize.options].some((o) => o.value === size)) tools.fontSize.appendChild(el("option", null, size)).value = size;
         tools.fontSize.value = size;
         if (document.activeElement !== tools.fontName) tools.fontName.value = font.name;
-        const code = cell.n || "General";
+        // (A date of the system's short format is `m/d/yyyy` in the file, shown `yyyy/m/d`.)
+        const code = cell.sn || cell.n || "General";
         tools.numberFormat.value = NUMBER_FORMATS.some(([c]) => c === code) ? code : "";
         tools.merge.classList.toggle("on", !!sel && single(sel) && mergedIn(sel));
         tools.filter.classList.toggle("on", !!view.sheet.filter);
@@ -5157,6 +5165,256 @@
         }
         return [r1, c1, r2, c2];
     }
+    // ---- Ctrl+1: "セルの書式設定" (the 表示形式 tab): the number format of the cells selected
+
+    // The colors of a format as Japanese Excel spells them ([赤]), and as the file does ([Red]).
+    const FORMAT_COLORS = [["Black", "黒"], ["Blue", "青"], ["Cyan", "水"], ["Green", "緑"], ["Magenta", "紫"], ["Red", "赤"], ["White", "白"], ["Yellow", "黄"]];
+    // A format as the dialog shows it (Japanese Excel's NumberFormatLocal).
+    function localCode(code) {
+        if (code === "General") return "G/標準";
+        let out = code;
+        for (const [en, ja] of FORMAT_COLORS) out = out.replace(new RegExp(`\\[${en}\\]`, "gi"), `[${ja}]`);
+        return out;
+    }
+    // A format typed into the dialog as the file keeps it: the system's short date is Excel's
+    // built-in one (`m/d/yyyy`, shown `yyyy/m/d`), as when Japanese Excel is given it.
+    function fileCode(code) {
+        if (/^(G\/標準|general)$/i.test(code)) return "General";
+        if (code === "yyyy/m/d") return "m/d/yyyy";
+        if (code === "yyyy/m/d h:mm") return "m/d/yyyy h:mm";
+        let out = code;
+        for (const [en, ja] of FORMAT_COLORS) out = out.split(`[${ja}]`).join(`[${en}]`);
+        return out;
+    }
+    // The formats of the 日付 and 時刻 lists (as Japanese Excel 2021 offers them, eras too).
+    const DATE_CODES = ["yyyy/m/d", 'yyyy"年"m"月"d"日"', 'yyyy"年"m"月"', 'm"月"d"日"', "[$-411]ge.m.d", '[$-411]ggge"年"m"月"d"日"', '[$-ja-JP-x-gannen]ggge"年"m"月"d"日"', '[$-411]gge"年"m"月"d"日"', "[$-411]ge/m/d", "yyyy/m/d(aaa)", 'yyyy"年"m"月"d"日"(aaaa)', "m/d", "yy/m/d", "yyyy/mm/dd", "yyyy-mm-dd", "m/d/yy", "d-mmm", "d-mmm-yy", "mmm-yy", "yyyy/m/d h:mm", "yyyy/m/d h:mm AM/PM"];
+    const TIME_CODES = ["h:mm", "h:mm:ss", "h:mm AM/PM", "h:mm:ss AM/PM", 'h"時"mm"分"', 'h"時"mm"分"ss"秒"', "[h]:mm:ss", "mm:ss", "yyyy/m/d h:mm"];
+    const CUSTOM_CODES = ["G/標準", "0", "0.00", "#,##0", "#,##0.00", "#,##0;-#,##0", "#,##0;[赤]-#,##0", "#,##0.00;[赤]-#,##0.00", "¥#,##0;¥-#,##0", "¥#,##0;[赤]¥-#,##0", "0%", "0.00%", "0.00E+00", "##0.0E+0", "# ?/?", "@"]
+        .concat(DATE_CODES, TIME_CODES.filter((c) => !DATE_CODES.includes(c)));
+    // The numbers: the places, the separators, and how a negative number shows.
+    const NEGATIVES = [
+        ["minus", "-1,234", (p) => `${p};-${p}`],
+        ["red", "1,234 (赤)", (p) => `${p};[赤]${p}`],
+        ["redminus", "-1,234 (赤)", (p) => `${p};[赤]-${p}`],
+        ["tri", "△ 1,234", (p) => `${p};"△ "${p}`],
+        ["blacktri", "▲ 1,234", (p) => `${p};"▲ "${p}`],
+    ];
+    const places = (n) => (n > 0 ? `.${"0".repeat(n)}` : "");
+    const FORMAT_KINDS = [
+        { key: "general", label: "標準", note: "標準の表示形式では、特定の書式は設定されません。", code: () => "G/標準" },
+        {
+            key: "number",
+            label: "数値",
+            note: "数値の表示形式は一般的な数値を表すのに使用します。",
+            places: true,
+            comma: true,
+            negative: true,
+            code: (s) => {
+                const p = `${s.comma ? "#,##0" : "0"}${places(s.places)}`;
+                return s.negative === "minus" ? p : NEGATIVES.find((n) => n[0] === s.negative)[2](p);
+            },
+        },
+        {
+            key: "currency",
+            label: "通貨",
+            note: "通貨の表示形式は一般的な金額を表すのに使用します。",
+            places: true,
+            symbol: true,
+            negative: true,
+            code: (s) => {
+                const p = `${s.symbol}#,##0${places(s.places)}`;
+                const neg = { minus: `${s.symbol}-#,##0${places(s.places)}`, red: `[赤]${p}`, redminus: `[赤]${s.symbol}-#,##0${places(s.places)}`, tri: `"△ "${p}`, blacktri: `"▲ "${p}` }[s.negative];
+                return `${p};${neg}`;
+            },
+        },
+        { key: "date", label: "日付", note: "日付の表示形式は日付/時刻のシリアル値を日付として表示します。", list: DATE_CODES },
+        { key: "time", label: "時刻", note: "時刻の表示形式は日付/時刻のシリアル値を時刻として表示します。", list: TIME_CODES },
+        { key: "percent", label: "パーセンテージ", note: "セルの値を 100 倍し、パーセント記号 (%) を付けて表示します。", places: true, code: (s) => `0${places(s.places)}%` },
+        { key: "scientific", label: "指数", note: "数値を指数で表示します。", places: true, code: (s) => `0${places(s.places)}E+00` },
+        { key: "text", label: "文字列", note: "文字列として扱われます。数値も文字列として扱われ、入力したとおりに表示されます。", code: () => "@" },
+        { key: "custom", label: "ユーザー定義", note: "基になる組み込みの表示形式を選択し、新しい表示形式に変更します。", list: CUSTOM_CODES, custom: true },
+    ];
+    // The kind (and its settings) a format is one of, as the dialog opens on it.
+    function kindOf(code) {
+        const state = { places: 2, comma: false, symbol: "¥", negative: "minus" };
+        for (const kind of FORMAT_KINDS) {
+            if (kind.list) {
+                if (!kind.custom && kind.list.includes(code)) return { kind, state, code };
+                continue;
+            }
+            const tries = [{}];
+            if (kind.places) for (let p = 0; p <= 10; p++) tries.push({ places: p });
+            for (const t of tries) {
+                for (const comma of kind.comma ? [false, true] : [false]) {
+                    for (const symbol of kind.symbol ? ["¥", "$", ""] : ["¥"]) {
+                        for (const [negative] of kind.negative ? NEGATIVES : [["minus"]]) {
+                            const s = { ...state, ...t, comma, symbol, negative };
+                            if (kind.code(s) === code) return { kind, state: s, code };
+                        }
+                    }
+                }
+            }
+        }
+        return { kind: FORMAT_KINDS[FORMAT_KINDS.length - 1], state, code };
+    }
+    // What a format shows of the active cell (null when it is not drawn here).
+    function sampleText(cell, code) {
+        const file = fileCode(code);
+        const x = typeof cell.x === "number" ? cell.x : null;
+        if (x === null) return cell.t ?? "";
+        if (file === "@") return cell.t ?? String(x);
+        const shown = formatNumber(x, file === "m/d/yyyy" ? "yyyy/m/d" : file === "m/d/yyyy h:mm" ? "yyyy/m/d h:mm" : file);
+        return shown !== null ? shown : /^general$/i.test(file) ? generalFit(x, () => true) || String(x) : null;
+    }
+    function askNumberFormat() {
+        if (!editable || busy || !sel || !view) return;
+        if (entry) commit(null);
+        const cell = (activeTd && activeTd.cell) || cellOf(sel.ar, sel.ac) || {};
+        const now = localCode(cell.sn || cell.n || "General");
+        const start = kindOf(now);
+        const form = openDialog("セルの書式設定", "numfmtdlg");
+        const tabs = form.appendChild(el("div", "fmttabs"));
+        tabs.appendChild(el("span", "on", "表示形式"));
+        const body = form.appendChild(el("div", "fmtbody"));
+        const left = body.appendChild(el("div", "fmtkinds"));
+        left.appendChild(el("div", "lbl", "分類:"));
+        const kinds = left.appendChild(el("select"));
+        kinds.size = FORMAT_KINDS.length;
+        for (const k of FORMAT_KINDS) kinds.appendChild(el("option", null, k.label)).value = k.key;
+        const right = body.appendChild(el("div", "fmtright"));
+        const sample = right.appendChild(el("fieldset", "fmtsample"));
+        sample.appendChild(el("legend", null, "サンプル"));
+        const sampleOut = sample.appendChild(el("div", "out"));
+        const opts = right.appendChild(el("div", "fmtopts"));
+        const note = form.appendChild(el("div", "hint"));
+        dialogButtons(form);
+
+        let kind = start.kind;
+        const state = { ...start.state };
+        let code = start.code;
+        let typed = null; // the input of ユーザー定義
+        const showSample = () => {
+            const t = sampleText(cell, code);
+            sampleOut.textContent = t === null ? "（ここでは表示できません）" : t === "" ? " " : t;
+        };
+        const refresh = () => {
+            if (kind.code) code = kind.code(state);
+            showSample();
+        };
+        // A list of formats, each shown as the sample (or 2012/3/14 13:30:55, as Excel does).
+        const listOf = (codes, onPick) => {
+            const list = opts.appendChild(el("select", "fmtlist"));
+            list.size = 8;
+            const x = typeof cell.x === "number" ? cell.x : 40982.56313657407;
+            for (const c of codes) {
+                const shown = kind.custom ? c : formatNumber(x, fileCode(c) === "m/d/yyyy" ? "yyyy/m/d" : fileCode(c) === "m/d/yyyy h:mm" ? "yyyy/m/d h:mm" : fileCode(c));
+                const o = list.appendChild(el("option", null, shown ?? c));
+                o.value = c;
+                o.title = c;
+            }
+            list.value = codes.includes(code) ? code : "";
+            list.addEventListener("change", () => onPick(list.value));
+            return list;
+        };
+        const build = () => {
+            opts.textContent = "";
+            note.textContent = kind.note;
+            if (kind.places) {
+                const n = field(opts, "小数点以下の桁数:", "number");
+                n.min = 0;
+                n.max = 30;
+                n.value = state.places;
+                n.addEventListener("input", () => {
+                    state.places = Math.max(0, Math.min(30, Math.floor(+n.value) || 0));
+                    refresh();
+                });
+            }
+            if (kind.symbol) {
+                const line = opts.appendChild(el("label"));
+                line.appendChild(el("span", "lbl", "記号:"));
+                const s = line.appendChild(el("select"));
+                for (const [v, l] of [["¥", "¥"], ["$", "$"], ["", "なし"]]) s.appendChild(el("option", null, l)).value = v;
+                s.value = state.symbol;
+                s.addEventListener("change", () => {
+                    state.symbol = s.value;
+                    refresh();
+                });
+            }
+            if (kind.comma) {
+                const c = check(opts, "桁区切り (,) を使用する", state.comma);
+                c.addEventListener("change", () => {
+                    state.comma = c.checked;
+                    refresh();
+                });
+            }
+            if (kind.negative) {
+                opts.appendChild(el("div", "lbl", "負の数の表示形式:"));
+                const s = opts.appendChild(el("select", "fmtlist neg"));
+                s.size = NEGATIVES.length;
+                for (const [v, l] of NEGATIVES) {
+                    const o = s.appendChild(el("option", null, kind.key === "currency" ? l.replace(/1,234/, `${state.symbol}1,234`) : l));
+                    o.value = v;
+                    if (v.includes("red")) o.className = "red";
+                }
+                s.value = state.negative;
+                s.addEventListener("change", () => {
+                    state.negative = s.value;
+                    refresh();
+                });
+            }
+            if (kind.custom) {
+                const t = field(opts, "種類:");
+                t.classList.add("fmtcode");
+                t.value = code;
+                typed = t;
+                const list = listOf(kind.list.includes(code) ? kind.list : [code].concat(kind.list), (c) => {
+                    t.value = code = c;
+                    t.setCustomValidity("");
+                    showSample();
+                });
+                t.addEventListener("input", () => {
+                    code = t.value;
+                    t.setCustomValidity("");
+                    list.value = kind.list.includes(code) ? code : "";
+                    showSample();
+                });
+            } else {
+                typed = null;
+                if (kind.list) {
+                    if (!kind.list.includes(code)) code = kind.list[0];
+                    opts.appendChild(el("div", "lbl", "種類:"));
+                    listOf(kind.list, (c) => {
+                        code = c;
+                        showSample();
+                    });
+                }
+            }
+            refresh();
+        };
+        kinds.value = kind.key;
+        kinds.addEventListener("change", () => {
+            const next = FORMAT_KINDS.find((k) => k.key === kinds.value);
+            // ユーザー定義 starts from the format chosen so far, as in Excel.
+            kind = next;
+            build();
+        });
+        build();
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const c = code.trim();
+            if (!c) {
+                if (typed) {
+                    typed.setCustomValidity("表示形式を入力してください");
+                    typed.reportValidity();
+                }
+                return;
+            }
+            closeDialog();
+            format({ numberFormat: fileCode(c) });
+        });
+        setTimeout(() => (typed || kinds).focus(), 0);
+    }
+
     function askSort() {
         if (!editable || busy || !sel || !view || sel.kind === "all" || !oneArea()) return;
         if (entry) commit(null);
@@ -5670,6 +5928,9 @@
     const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     function formatNumber(x, code) {
         if (/^general$/i.test(code)) return null;
+        // The system's long date and time, as Japanese Windows has them.
+        if (/^\[\$-F800\]/i.test(code)) code = 'yyyy"年"m"月"d"日"';
+        else if (/^\[\$-F400\]/i.test(code)) code = "h:mm:ss";
         // The sections, split at `;` outside quotes, escapes and brackets.
         const secs = [];
         let part = "";
@@ -5707,7 +5968,7 @@
             // (Not fractions of a second, nor dates before 1900.)
             if (x < 0 || toks.some((t) => t.k === "ph")) return null;
             // Times (without a day) are shown as hours on end: 32:24:00.
-            const day = toks.some((t) => t.k === "date" && (/^[yda]/.test(t.v) || /^m{3,}$/.test(t.v)));
+            const day = toks.some((t) => t.k === "date" && (/^[ydage]/.test(t.v) || /^m{3,}$/.test(t.v)));
             const time = toks.some((t) => t.k === "ampm" || (t.k === "date" && /^[hs]/.test(t.v)));
             return formatDate(x, time && !day ? tokensOf("[h]:mm:ss") : toks);
         }
@@ -5741,7 +6002,9 @@
                 if ((m = /^\$([^-]*)(?:-(.*))?$/.exec(inner))) {
                     // A currency symbol, and a language (`[$-411]`); other calendars and the
                     // system's date formats (`[$-F800]`) are not read here.
-                    if (m[2] !== undefined && !/^[0-9a-f]{1,4}$/i.test(m[2])) return null;
+                    // `[$-ja-JP-x-gannen]`: the first year of an era is 元.
+                    if (m[2] !== undefined && /^ja-jp-x-gannen$/i.test(m[2])) toks.gannen = true;
+                    else if (m[2] !== undefined && !/^[0-9a-f]{1,4}$/i.test(m[2])) return null;
                     if (/^f[0-9a-f]00$/i.test(m[2] || "")) return null;
                     if (m[1]) lit(m[1]);
                 } else if (/^(h+|m+|s+)$/i.test(inner)) toks.push({ k: "date", v: inner.toLowerCase(), elapsed: true });
@@ -5765,10 +6028,12 @@
             } else if ((m = /^(am\/pm|a\/p)/i.exec(rest))) {
                 toks.push({ k: "ampm", v: m[1] });
                 i += m[1].length;
-            } else if ((m = /^(y+|m+|d+|h+|s+|a{3,4})/i.exec(rest))) {
+            } else if (/^(general|G\/標準)/i.test(rest)) return null;
+            else if ((m = /^(y+|m+|d+|h+|s+|a{3,4}|g+|e+)/i.exec(rest))) {
+                // (g: the Japanese era, e: the year in it.)
                 toks.push({ k: "date", v: m[1].toLowerCase() });
                 i += m[1].length;
-            } else if (/[gGeEbB]/.test(ch)) return null; // Japanese eras, Buddhist years
+            } else if (/[bB]/.test(ch)) return null; // Buddhist years
             else if (ch === "/" && toks.some((t) => t.k === "ph")) return null; // fractions
             else {
                 lit(ch === "@" ? "" : ch);
@@ -5830,6 +6095,19 @@
         });
         return out;
     }
+    // The Japanese eras: the first day, the letter (g) and the name (ggg).
+    const ERAS = [
+        [Date.UTC(1868, 8, 8), "M", "明治"],
+        [Date.UTC(1912, 6, 30), "T", "大正"],
+        [Date.UTC(1926, 11, 25), "S", "昭和"],
+        [Date.UTC(1989, 0, 8), "H", "平成"],
+        [Date.UTC(2019, 4, 1), "R", "令和"],
+    ];
+    // The era of a date, and the year in it (dates before Meiji count as Meiji).
+    function eraOf(d) {
+        const [start, letter, name] = [...ERAS].reverse().find(([t]) => d.getTime() >= t) || ERAS[0];
+        return { letter, name, year: d.getUTCFullYear() - new Date(start).getUTCFullYear() + 1 };
+    }
     function formatDate(x, toks) {
         let days = Math.floor(x);
         let secs = Math.round((x - days) * 86400);
@@ -5866,6 +6144,11 @@
                     const w = d.getUTCDay();
                     out += v.length <= 2 ? two(d.getUTCDate(), v.length) : v.length === 3 ? DAYS[w].slice(0, 3) : DAYS[w];
                 } else if (v[0] === "a") out += "日月火水木金土"[d.getUTCDay()] + (v.length === 4 ? "曜日" : "");
+                else if (v[0] === "g" || v[0] === "e") {
+                    const era = eraOf(d);
+                    if (v[0] === "g") out += v.length === 1 ? era.letter : v.length === 2 ? era.name[0] : era.name;
+                    else out += toks.gannen && era.year === 1 ? "元" : two(era.year, Math.min(v.length, 2));
+                }
                 else if (v[0] === "h") out += two(ampm ? h % 12 || 12 : h, Math.min(v.length, 2));
                 else if (v[0] === "s") out += two(sec, Math.min(v.length, 2));
             }
@@ -6405,6 +6688,7 @@
         else if (ctrl && e.shiftKey && (key === "l" || key === "L")) toggleFilter();
         else if (ctrl && !e.shiftKey && (key === "t" || key === "T" || key === "l" || key === "L")) askTable();
         else if (ctrl && !e.shiftKey && (key === "k" || key === "K")) askLink();
+        else if (ctrl && !e.shiftKey && (key === "1" || e.code === "Digit1" || e.code === "Numpad1")) askNumberFormat();
         else if (ctrl && !e.shiftKey && (key === "d" || key === "D")) fill("down");
         else if (ctrl && !e.shiftKey && (key === "r" || key === "R")) fill("right");
         else if (ctrl && !e.shiftKey && key === ";") typeNow(false);

@@ -775,6 +775,12 @@
       },
       {
         "command": "ras.sheet.gridKey",
+        "key": "ctrl+1",
+        "mac": "cmd+1",
+        "when": "activeWebviewPanelId == 'ras.sheetView'"
+      },
+      {
+        "command": "ras.sheet.gridKey",
         "key": "ctrl+shift+l",
         "mac": "cmd+shift+l",
         "when": "activeWebviewPanelId == 'ras.sheetView'"
