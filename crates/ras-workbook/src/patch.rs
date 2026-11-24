@@ -1550,6 +1550,28 @@ fn colour(text: &str) -> Result<f64> {
     ))
 }
 
+/// `LineStyle` and `Weight` of a line of the ribbon's 線のスタイル.
+fn border_line(name: &str) -> Option<(f64, f64)> {
+    const THIN: f64 = 2.0;
+    const MEDIUM: f64 = -4138.0;
+    Some(match name {
+        "thin" => (1.0, THIN),
+        "hair" => (1.0, 1.0),
+        "dotted" => (-4118.0, THIN),
+        "dashed" => (-4115.0, THIN),
+        "dashDot" => (4.0, THIN),
+        "dashDotDot" => (5.0, THIN),
+        "double" => (-4119.0, 4.0),
+        "medium" => (1.0, MEDIUM),
+        "mediumDashed" => (-4115.0, MEDIUM),
+        "mediumDashDot" => (4.0, MEDIUM),
+        "mediumDashDotDot" => (5.0, MEDIUM),
+        "slantDashDot" => (13.0, MEDIUM),
+        "thick" => (1.0, 4.0),
+        _ => return None,
+    })
+}
+
 /// One format of the toolbar given to the cells of `range`.
 fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) -> Result<()> {
     const NONE: f64 = -4142.0;
@@ -1617,26 +1639,56 @@ fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) 
         ),
         "numberFormat" => book.set_number_format(si, range, text()?),
         "border" => {
+            // A preset of the ribbon's menu: its name, or { preset, line, color } with the
+            // line (`thin`, `dashed`, `double`, ...: the 線のスタイル) its plain sides take and
+            // the color (#RRGGBB, null: automatic) of all its sides.
+            let (preset, line, color) = match value {
+                Json::Object(o) => (
+                    o.get("preset").and_then(Json::as_str).ok_or_else(wrong)?,
+                    match o.get("line") {
+                        None | Some(Json::Null) => "thin",
+                        Some(l) => l.as_str().ok_or_else(wrong)?,
+                    },
+                    match o.get("color") {
+                        None | Some(Json::Null) => None,
+                        Some(c) => Some(colour(c.as_str().ok_or_else(wrong)?)?),
+                    },
+                ),
+                _ => (text()?, "thin", None),
+            };
+            let given = border_line(line).ok_or_else(wrong)?;
+            let thick = border_line("thick").unwrap();
+            let double = border_line("double").unwrap();
             // `Borders(index)`: 7 left, 8 top, 9 bottom, 10 right, 11 and 12 the lines inside.
-            const THIN: f64 = 2.0;
-            const THICK: f64 = 4.0;
-            let (sides, weight): (&[&str], f64) = match text()? {
-                "all" => (&["7", "8", "9", "10", "11", "12"], THIN),
-                "outline" => (&["7", "8", "9", "10"], THIN),
-                "thick" => (&["7", "8", "9", "10"], THICK),
-                "top" => (&["8"], THIN),
-                "bottom" => (&["9"], THIN),
-                "left" => (&["7"], THIN),
-                "right" => (&["10"], THIN),
-                "none" => (&["7", "8", "9", "10", "11", "12"], NONE),
+            let sides: Vec<(&str, (f64, f64))> = match preset {
+                "all" => ["7", "8", "9", "10", "11", "12"]
+                    .map(|s| (s, given))
+                    .to_vec(),
+                "outline" => ["7", "8", "9", "10"].map(|s| (s, given)).to_vec(),
+                "thick" => ["7", "8", "9", "10"].map(|s| (s, thick)).to_vec(),
+                "top" => vec![("8", given)],
+                "bottom" => vec![("9", given)],
+                "left" => vec![("7", given)],
+                "right" => vec![("10", given)],
+                "doubleBottom" => vec![("9", double)],
+                "thickBottom" => vec![("9", thick)],
+                "topBottom" => vec![("8", given), ("9", given)],
+                "topThickBottom" => vec![("8", given), ("9", thick)],
+                "topDoubleBottom" => vec![("8", given), ("9", double)],
+                "none" => ["7", "8", "9", "10", "11", "12"]
+                    .map(|s| (s, (NONE, 0.0)))
+                    .to_vec(),
                 _ => return Err(wrong()),
             };
-            for side in sides {
-                if weight == NONE {
-                    set(&format!("borders.{side}.linestyle"), Val::Num(NONE))?;
-                } else {
-                    set(&format!("borders.{side}.linestyle"), Val::Num(1.0))?;
-                    set(&format!("borders.{side}.weight"), Val::Num(weight))?;
+            for (side, (linestyle, weight)) in sides {
+                set(&format!("borders.{side}.linestyle"), Val::Num(linestyle))?;
+                if linestyle == NONE {
+                    continue;
+                }
+                set(&format!("borders.{side}.weight"), Val::Num(weight))?;
+                set(&format!("borders.{side}.colorindex"), Val::Num(-4105.0))?;
+                if let Some(c) = color {
+                    set(&format!("borders.{side}.color"), Val::Num(c))?;
                 }
             }
             Ok(())
