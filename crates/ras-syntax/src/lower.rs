@@ -1397,6 +1397,7 @@ impl Lower {
                     },
                 }
             }
+            TAGGED_TEMPLATE => self.tagged_template(n, span),
             INDEX_EXPR => {
                 let subs = self.sub_exprs(n);
                 ExprKind::Index {
@@ -1500,6 +1501,42 @@ impl Lower {
         ExprKind::Template(parts)
     }
 
+    /// `` fx`formula` `` is `evaluate("formula")`, and `` obj.fx`formula` `` is
+    /// `obj.evaluate("formula")` (spec §2.7): the `fx` keeps its span, so hover and go to
+    /// definition show `Evaluate`. Any other tag is an error.
+    fn tagged_template(&mut self, n: &SyntaxNode, span: Span) -> ExprKind {
+        let subs = self.sub_exprs(n);
+        let mut tag = self.boxed(&subs, 0, span);
+        let mut formula = self.boxed(&subs, 1, span);
+        let name = match &mut tag.kind {
+            ExprKind::Name(name) | ExprKind::Member { name, .. } => Some(name),
+            _ => None,
+        };
+        match name {
+            Some(name) if name.text == FORMULA_TAG => name.text = "evaluate".into(),
+            _ => {
+                self.err(
+                    tag.span,
+                    format!("タグ付きテンプレートのタグは `{FORMULA_TAG}` だけです（`` {FORMULA_TAG}`SUM(A1:A3)` `` は `evaluate(\"SUM(A1:A3)\")`）"),
+                );
+                return ExprKind::Error;
+            }
+        }
+        // Without `${…}` the formula is a plain string.
+        if let ExprKind::Template(parts) = &formula.kind {
+            match parts.as_slice() {
+                [] => formula.kind = ExprKind::Str(String::new()),
+                [TemplatePart::Str(s)] => formula.kind = ExprKind::Str(s.clone()),
+                _ => {}
+            }
+        }
+        ExprKind::Call {
+            callee: tag,
+            type_args: Vec::new(),
+            args: vec![*formula],
+        }
+    }
+
     /// Parses and lowers an expression embedded in a template literal.
     fn fragment(&mut self, text: &str, base: u32) -> Expr {
         let mut p = Parser::new(text);
@@ -1522,6 +1559,9 @@ impl Lower {
         expr
     }
 }
+
+/// The tag of the formula sugar `` fx`SUM(A1:A3)` `` (spec §2.7).
+pub const FORMULA_TAG: &str = "fx";
 
 /// Value of a quoted string literal token (quotes removed, escapes decoded).
 pub fn string_value(tok_text: &str) -> String {

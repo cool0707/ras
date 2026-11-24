@@ -1611,6 +1611,14 @@ impl<'a> Parser<'a> {
                     self.bump();
                     self.finish();
                 }
+                // `` fx`…` `` (spec §2.7): the tag and the template on the same line.
+                TEMPLATE_LIT if !self.newline_before(0) => {
+                    self.start_at(cp, TAGGED_TEMPLATE);
+                    self.start(LITERAL);
+                    self.bump();
+                    self.finish();
+                    self.finish();
+                }
                 PLUS2 | MINUS2 if !self.newline_before(0) => {
                     self.start_at(cp, POSTFIX_EXPR);
                     self.bump();
