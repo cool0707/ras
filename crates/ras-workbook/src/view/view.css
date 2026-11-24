@@ -163,10 +163,17 @@ th { user-select: none; cursor: default; }
 .selbox.overx { border-right-color: transparent; }
 .selbox.overy { border-bottom-color: transparent; }
 .selbox.more { border-color: rgba(228, 80, 26, .5); background: rgba(228, 80, 26, .14); }
-/* The cells copied: dashes of the accent and white (seen over the selection's border, which
-   is where they are right after the copy). */
-.clipbox { position: absolute; box-sizing: border-box; border: 2px solid #fff; }
-.clipbox::after { content: ""; position: absolute; inset: -2px; border: 2px dashed var(--accent); }
+/* The cells copied: dashes of the accent and white going round (Excel's marching ants), where
+   the selection's border is drawn (over it, as Excel: it is there right after the copy). */
+.clipbox {
+    position: absolute; box-sizing: border-box; pointer-events: none;
+    --ant-a: linear-gradient(90deg, var(--accent) 50%, #fff 50%);
+    --ant-b: linear-gradient(0deg, var(--accent) 50%, #fff 50%);
+    background: var(--ant-a) 0 0 / 8px 2px repeat-x, var(--ant-b) 100% 0 / 2px 8px repeat-y, var(--ant-a) 0 100% / 8px 2px repeat-x, var(--ant-b) 0 0 / 2px 8px repeat-y;
+    animation: ants .6s linear infinite;
+}
+@keyframes ants { to { background-position: 8px 0, 100% 8px, -8px 100%, 0 -8px; } }
+@media (prefers-reduced-motion: reduce) { .clipbox { animation: none; } }
 /* The box typed into: on the active cell, seen while something is typed. */
 .editor { position: absolute; z-index: 1; width: 2px; height: 2px; margin: 0; padding: 0; border: 0; outline: 0; resize: none; overflow: hidden; opacity: 0; pointer-events: none; white-space: pre; background: #fff; color: #000; font: 11pt "Yu Gothic", Meiryo, sans-serif; }
 .editor.on { opacity: 1; pointer-events: auto; padding: 0 3px; }

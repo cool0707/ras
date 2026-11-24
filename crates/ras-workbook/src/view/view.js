@@ -1227,7 +1227,9 @@
                 put(box, boxOf(a.r1, a.c1, a.r2, a.c2));
             }
         }
-        put(v.clipbox, clip && clip.sheet === v.sheet.name ? boxOf(clip.r1, clip.c1, clip.r2, clip.c2) : null);
+        // (Where the border of the cells is drawn when they are selected, as Excel: over it.)
+        const cb = clip && clip.sheet === v.sheet.name ? boxOf(clip.r1, clip.c1, clip.r2, clip.c2) : null;
+        put(v.clipbox, cb && borderOf(cb));
         // The fill handle: at the bottom right corner of the cells selected.
         const b = editable && sel && !selected && !entry && sel.kind === "cells" && !areas.length ? boxOf(sel.r1, sel.c1, sel.r2, sel.c2) : null;
         v.fillh.hidden = !b || sel.r2 >= v.nrows || sel.c2 >= v.ncols;
