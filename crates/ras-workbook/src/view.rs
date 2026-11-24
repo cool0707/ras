@@ -45,6 +45,15 @@ pub fn data(
     for si in 0..book.sheet_count() {
         sheets.push(book.sheet_view(si, rows, cols, drawing.as_ref())?);
     }
+    // The conditional formats of the sheets, for "条件付き書式ルールの管理".
+    if let Some(mut rules) = source.and_then(|b| crate::patch::conditional_rules(b).ok()) {
+        for sheet in &mut sheets {
+            let name = sheet["name"].as_str().unwrap_or_default().to_string();
+            if let Some(list) = rules.remove(&name) {
+                sheet["condRules"] = Json::Array(list);
+            }
+        }
+    }
     let diff = changes.map(|(before, d)| {
         let mut by_sheet = serde_json::Map::new();
         for c in &d.cells {

@@ -2645,3 +2645,383 @@ fn sheets_added_copied_renamed_and_removed_from_their_tabs() {
         refused(r#"{"op":"sheet","action":"rename","name":"a/b"}"#).contains("名前にできません")
     );
 }
+
+#[test]
+fn conditional_formats_put_on_cells_and_cleared() {
+    const SHEET1: &str = "xl/worksheets/sheet1.xml";
+    // 指定の値より小さい: the format in the styles' dxfs, the rule first in priority.
+    let out = edit(
+        r##"{"op":"conditional","range":"D2:D5","type":"cellIs","operator":"lessThan","values":["1000"],"format":{"color":"#9C0006","fill":"#FFC7CE"}}"##,
+    );
+    assert_eq!(changed(BOOK, &out), ["xl/styles.xml", SHEET1]);
+    let styles = part(&out, "xl/styles.xml");
+    assert!(
+        styles.contains(r#"<dxfs count="2">"#)
+            && styles.contains(r#"<dxf><font><color rgb="FF9C0006"/></font><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf></dxfs>"#),
+        "{styles}"
+    );
+    let doc = part(&out, SHEET1);
+    assert!(
+        doc.contains(r#"<conditionalFormatting sqref="D2:D5"><cfRule type="cellIs" dxfId="0" priority="2" operator="greaterThan"><formula>500</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="D2:D5"><cfRule type="cellIs" dxfId="1" priority="1" operator="lessThan"><formula>1000</formula></cfRule></conditionalFormatting>"#),
+        "{doc}"
+    );
+    let data = view(&out);
+    let sheet = &data["sheets"][0];
+    let css = |r: u64, c: u64| -> String {
+        let cell = sheet["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["r"] == json!(r) && x["c"] == json!(c))
+            .unwrap();
+        sheet["styles"][cell["s"].as_u64().unwrap_or(0) as usize]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    // 800 is under 1000 (and over 500); 1200 is not.
+    let s = css(2, 3);
+    assert!(
+        s.contains("background:#FFC7CE") && s.contains("font-weight:bold"),
+        "{s}"
+    );
+    assert!(!css(4, 3).contains("#FFC7CE"));
+
+    // Texts, top and bottom, dates: the formulas Excel writes, of the first cell.
+    let text = edit(
+        r##"{"op":"conditional","range":"A2:A7 C2","type":"containsText","text":"a\"b","format":{"bold":true,"border":"FF0000"}}"##,
+    );
+    let doc = part(&text, SHEET1);
+    assert!(
+        doc.contains(r#"<conditionalFormatting sqref="A2:A7 C2"><cfRule type="containsText" dxfId="1" priority="1" operator="containsText" text="a&quot;b"><formula>NOT(ISERROR(SEARCH(&quot;a&quot;&quot;b&quot;,A2)))</formula></cfRule></conditionalFormatting>"#),
+        "{doc}"
+    );
+    let top = edit(
+        r##"{"op":"conditional","range":"B2:B7","type":"top10","rank":3,"bottom":true,"format":{"fill":"#C6EFCE"}}"##,
+    );
+    assert!(
+        part(&top, SHEET1)
+            .contains(r#"<cfRule type="top10" dxfId="1" priority="1" bottom="1" rank="3"/>"#)
+    );
+    let week = edit(
+        r##"{"op":"conditional","range":"B2","type":"timePeriod","period":"today","format":{"fill":"#C6EFCE"}}"##,
+    );
+    assert!(
+        part(&week, SHEET1)
+            .contains(r#"timePeriod="today"><formula>FLOOR(B2,1)=TODAY()</formula>"#)
+    );
+    // A text value in quotes, a formula as it is.
+    let between = edit(
+        r##"{"op":"conditional","range":"A2:A7","type":"cellIs","operator":"between","values":["a","=$B$1"],"format":{"italic":true}}"##,
+    );
+    assert!(part(&between, SHEET1).contains(
+        r#"operator="between"><formula>&quot;a&quot;</formula><formula>$B$1</formula></cfRule>"#
+    ));
+
+    // Data bars, color scales and icon sets: no format of the styles.
+    let bars =
+        edit(r##"{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#638EC6"]}"##);
+    assert_eq!(changed(BOOK, &bars), [SHEET1]);
+    assert!(part(&bars, SHEET1).contains(r#"<cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar></cfRule>"#));
+    let data = view(&bars);
+    assert!(
+        data["sheets"][0]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["r"] == json!(1) && x["c"] == json!(1) && x.get("bar").is_some())
+    );
+    let scale = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"colorScale","colors":["F8696B","FFEB84","63BE7B"]}"##,
+    );
+    assert!(part(&scale, SHEET1).contains(r#"<colorScale><cfvo type="min"/><cfvo type="percentile" val="50"/><cfvo type="max"/><color rgb="FFF8696B"/><color rgb="FFFFEB84"/><color rgb="FF63BE7B"/></colorScale>"#));
+    let icons =
+        edit(r##"{"op":"conditional","range":"B2:B5","type":"iconSet","icons":"4Rating"}"##);
+    assert!(part(&icons, SHEET1).contains(r#"<iconSet iconSet="4Rating"><cfvo type="percent" val="0"/><cfvo type="percent" val="25"/><cfvo type="percent" val="50"/><cfvo type="percent" val="75"/></iconSet>"#));
+
+    // Cleared from some cells: the rules keep the others; from all of theirs: they go.
+    let some = apply(
+        &out,
+        &ops(r#"{"op":"conditional","range":"D3","clear":true}"#),
+    )
+    .unwrap();
+    let doc = part(&some, SHEET1);
+    assert_eq!(
+        doc.matches(r#"<conditionalFormatting sqref="D2 D4:D5">"#)
+            .count(),
+        2,
+        "{doc}"
+    );
+    let gone = apply(
+        &out,
+        &ops(r#"{"op":"conditional","range":"C1:E9","clear":true}"#),
+    )
+    .unwrap();
+    assert!(!part(&gone, SHEET1).contains("conditionalFormatting"));
+    let sheet = apply(&out, &ops(r#"{"op":"conditional","clear":true}"#)).unwrap();
+    assert!(!part(&sheet, SHEET1).contains("conditionalFormatting"));
+    let none = apply(
+        BOOK,
+        &ops(r#"{"op":"conditional","range":"A1","clear":true}"#),
+    )
+    .unwrap();
+    assert!(changed(BOOK, &none).is_empty());
+
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(
+        wrong(r#"{"op":"conditional","range":"A1","type":"nope","format":{"bold":true}}"#)
+            .contains("nope")
+    );
+    assert!(wrong(r#"{"op":"conditional","range":"A1","type":"cellIs","operator":"between","values":["1"],"format":{"bold":true}}"#).contains("2"));
+    assert!(
+        wrong(
+            r#"{"op":"conditional","range":"A1","type":"cellIs","operator":"equal","values":["1"]}"#
+        )
+        .contains("format")
+    );
+    assert!(
+        wrong(r#"{"op":"conditional","range":"A1","type":"colorScale","colors":["red","blue"]}"#)
+            .contains("RRGGBB")
+    );
+}
+
+#[test]
+fn conditional_formats_of_excel_2010_cleared() {
+    // A data bar written in both places, joined by its id: the cells cleared from both.
+    let x14 = r#"<conditionalFormatting sqref="B2:B5"><cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:id>{00000000-0000-0000-0000-000000000001}</x14:id></ext></extLst></cfRule></conditionalFormatting>"#;
+    let ext = r#"<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:conditionalFormattings><x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="dataBar" id="{00000000-0000-0000-0000-000000000001}"><x14:dataBar minLength="0" maxLength="100"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/></x14:dataBar></x14:cfRule><xm:sqref>B2:B5</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>"#;
+    let mut parts = parts(BOOK);
+    let doc = String::from_utf8(parts["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    let doc = doc
+        .replace(
+            "</conditionalFormatting>",
+            &format!("</conditionalFormatting>{x14}"),
+        )
+        .replace("</worksheet>", &format!("{ext}</worksheet>"));
+    parts.insert("xl/worksheets/sheet1.xml".into(), doc.into_bytes());
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, data) in &parts {
+        zip.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(data).unwrap();
+    }
+    let book = zip.finish().unwrap().into_inner();
+    let some = apply(
+        &book,
+        &ops(r#"{"op":"conditional","range":"B2","clear":true}"#),
+    )
+    .unwrap();
+    let doc = part(&some, "xl/worksheets/sheet1.xml");
+    assert!(
+        doc.contains(r#"<conditionalFormatting sqref="B3:B5"><cfRule type="dataBar""#),
+        "{doc}"
+    );
+    assert!(doc.contains("<xm:sqref>B3:B5</xm:sqref>"), "{doc}");
+    // A new rule comes first: the others, the Excel 2010 one too, after it.
+    let first = apply(&book, &ops(r##"{"op":"conditional","range":"A1","type":"duplicateValues","format":{"fill":"#FFC7CE"}}"##)).unwrap();
+    let doc = part(&first, "xl/worksheets/sheet1.xml");
+    assert!(
+        doc.contains(r#"<cfRule type="duplicateValues" dxfId="1" priority="1"/>"#)
+            && doc.contains(r#"<cfRule type="dataBar" priority="2">"#),
+        "{doc}"
+    );
+    let all = apply(
+        &book,
+        &ops(r#"{"op":"conditional","range":"A:E","clear":true}"#),
+    )
+    .unwrap();
+    let doc = part(&all, "xl/worksheets/sheet1.xml");
+    assert!(
+        !doc.contains("conditionalFormatting") && !doc.contains("<extLst>"),
+        "{doc}"
+    );
+}
+
+#[test]
+fn conditional_rules_listed_and_managed() {
+    const SHEET1: &str = "xl/worksheets/sheet1.xml";
+    let out = edit(
+        r##"{"op":"conditional","range":"D2:D5","type":"cellIs","operator":"lessThan","values":["1000"],"format":{"color":"#9C0006","fill":"#FFC7CE"}}"##,
+    );
+    // Listed in priority order, with what the dialog edits them with.
+    let data = view(&out);
+    let rules = &data["sheets"][0]["condRules"];
+    assert_eq!(rules[0]["id"], json!("m1"));
+    assert_eq!(rules[0]["values"], json!(["1000"]));
+    assert_eq!(
+        rules[0]["format"],
+        json!({ "color": "#9C0006", "fill": "#FFC7CE" })
+    );
+    assert_eq!(rules[0]["editable"], json!(true));
+    assert_eq!(rules[1]["id"], json!("m0"));
+    assert_eq!(rules[1]["operator"], json!("greaterThan"));
+    assert_eq!(rules[1]["format"]["bold"], json!(true));
+    assert_eq!(rules[1]["range"], json!("D2:D5"));
+    assert!(data["sheets"][1].get("condRules").is_none());
+
+    // One deleted, the other first, its range and 停止 changed.
+    let one = apply(
+        &out,
+        &ops(r#"{"op":"conditionalRules","rules":[{"id":"m0","range":"D2:D9","stop":true}]}"#),
+    )
+    .unwrap();
+    let doc = part(&one, SHEET1);
+    assert_eq!(doc.matches("<conditionalFormatting").count(), 1, "{doc}");
+    assert!(
+        doc.contains(r#"<conditionalFormatting sqref="D2:D9"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan" stopIfTrue="1"><formula>500</formula></cfRule></conditionalFormatting>"#),
+        "{doc}"
+    );
+    // Edited, kept, new: in that order of priority.
+    let edited = apply(
+        &out,
+        &ops(r##"{"op":"conditionalRules","rules":[{"id":"m1","type":"cellIs","operator":"equal","values":["=$B$1"],"format":{"bold":true}},{"id":"m0"},{"type":"dataBar","colors":["#638EC6"],"range":"B2:B5"}]}"##),
+    )
+    .unwrap();
+    let doc = part(&edited, SHEET1);
+    assert!(
+        doc.contains(r#"<conditionalFormatting sqref="D2:D5"><cfRule type="cellIs" dxfId="2" priority="1" operator="equal"><formula>$B$1</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="D2:D5"><cfRule type="cellIs" dxfId="0" priority="2" operator="greaterThan"><formula>500</formula></cfRule></conditionalFormatting><conditionalFormatting sqref="B2:B5"><cfRule type="dataBar" priority="3">"#),
+        "{doc}"
+    );
+    let rules = &view(&edited)["sheets"][0]["condRules"];
+    assert_eq!(rules[0]["values"], json!(["=$B$1"]));
+    assert_eq!(rules[2]["colors"], json!(["#638EC6"]));
+    // All deleted.
+    let none = apply(&out, &ops(r#"{"op":"conditionalRules","rules":[]}"#)).unwrap();
+    assert!(!part(&none, SHEET1).contains("conditionalFormatting"));
+
+    let wrong = |json: &str| apply(&out, &ops(json)).unwrap_err();
+    assert!(wrong(r#"{"op":"conditionalRules","rules":[{"id":"m7"}]}"#).contains("m7"));
+    assert!(
+        wrong(r#"{"op":"conditionalRules","rules":[{"id":"m0"},{"id":"m0"}]}"#).contains("2 回")
+    );
+    assert!(
+        wrong(r##"{"op":"conditionalRules","rules":[{"type":"dataBar","colors":["#638EC6"]}]}"##)
+            .contains("range")
+    );
+}
+
+#[test]
+fn conditional_rules_of_excel_2010_managed() {
+    // A data bar of the sheet with its half in the extLst, and an icon set of the extLst alone.
+    let x14 = r#"<conditionalFormatting sqref="B2:B5"><cfRule type="dataBar" priority="2"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:id>{00000000-0000-0000-0000-000000000001}</x14:id></ext></extLst></cfRule></conditionalFormatting>"#;
+    let ext = r#"<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:conditionalFormattings><x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="dataBar" id="{00000000-0000-0000-0000-000000000001}"><x14:dataBar minLength="0" maxLength="100"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/></x14:dataBar></x14:cfRule><xm:sqref>B2:B5</xm:sqref></x14:conditionalFormatting><x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="iconSet" priority="3" id="{00000000-0000-0000-0000-000000000002}"><x14:iconSet iconSet="3Stars"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule><xm:sqref>C2:C5</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst>"#;
+    let mut parts = parts(BOOK);
+    let doc = String::from_utf8(parts["xl/worksheets/sheet1.xml"].clone()).unwrap();
+    let doc = doc
+        .replace(
+            "</conditionalFormatting>",
+            &format!("</conditionalFormatting>{x14}"),
+        )
+        .replace("</worksheet>", &format!("{ext}</worksheet>"));
+    parts.insert("xl/worksheets/sheet1.xml".into(), doc.into_bytes());
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, data) in &parts {
+        zip.start_file(name.as_str(), zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(data).unwrap();
+    }
+    let book = zip.finish().unwrap().into_inner();
+    let rules = &view(&book)["sheets"][0]["condRules"];
+    let ids: Vec<&str> = rules
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["m0", "m1", "x1"]);
+    assert_eq!(rules[2]["editable"], json!(false));
+    assert_eq!(rules[2]["icons"], json!("3Stars"));
+    // The icon set first, the data bar's range changed (its half's too), the cell rule deleted.
+    let out = apply(
+        &book,
+        &ops(r#"{"op":"conditionalRules","rules":[{"id":"x1"},{"id":"m1","range":"B2:B9"}]}"#),
+    )
+    .unwrap();
+    let doc = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(!doc.contains(r#"type="cellIs""#), "{doc}");
+    assert!(
+        doc.contains(
+            r#"<conditionalFormatting sqref="B2:B9"><cfRule type="dataBar" priority="2">"#
+        ),
+        "{doc}"
+    );
+    assert!(
+        doc.contains(r#"<x14:cfRule type="dataBar" id="{00000000-0000-0000-0000-000000000001}">"#)
+            && doc.contains("<xm:sqref>B2:B9</xm:sqref>"),
+        "{doc}"
+    );
+    assert!(
+        doc.contains(r#"<x14:cfRule type="iconSet" priority="1""#)
+            && doc.contains("<xm:sqref>C2:C5</xm:sqref>"),
+        "{doc}"
+    );
+    // The data bar deleted: its half goes with it; then nothing of the extLst is left.
+    let out = apply(
+        &book,
+        &ops(r#"{"op":"conditionalRules","rules":[{"id":"m0"}]}"#),
+    )
+    .unwrap();
+    let doc = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(
+        !doc.contains("<extLst>") && !doc.contains("dataBar"),
+        "{doc}"
+    );
+}
+
+#[test]
+fn conditional_thresholds_of_bars_scales_and_icons() {
+    const SHEET1: &str = "xl/worksheets/sheet1.xml";
+    // A bar from 0 to the 90th percentile, the bar alone.
+    let bar = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#638EC6"],"barOnly":true,"thresholds":[{"type":"num","value":0},{"type":"percentile","value":"90"}]}"##,
+    );
+    let doc = part(&bar, SHEET1);
+    assert!(
+        doc.contains(r#"<dataBar showValue="0"><cfvo type="num" val="0"/><cfvo type="percentile" val="90"/><color rgb="FF638EC6"/></dataBar>"#),
+        "{doc}"
+    );
+    let rule = &view(&bar)["sheets"][0]["condRules"][0];
+    assert_eq!(
+        rule["thresholds"],
+        json!([{ "type": "num", "value": "0", "gte": true }, { "type": "percentile", "value": "90", "gte": true }])
+    );
+    assert_eq!(rule["barOnly"], json!(true));
+    // A scale from a cell's value (a formula) through a number to the greatest.
+    let scale = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"colorScale","colors":["F8696B","FFEB84","63BE7B"],"thresholds":[{"type":"formula","value":"=$B$1*2"},{"type":"num","value":"=$C$1"},{"type":"max"}]}"##,
+    );
+    let doc = part(&scale, SHEET1);
+    assert!(doc.contains(r#"<colorScale><cfvo type="formula" val="$B$1*2"/><cfvo type="num" val="$C$1"/><cfvo type="max"/>"#), "{doc}");
+    let rule = &view(&scale)["sheets"][0]["condRules"][0];
+    assert_eq!(
+        rule["thresholds"][0],
+        json!({ "type": "formula", "value": "=$B$1*2", "gte": true })
+    );
+    assert_eq!(rule["thresholds"][1]["value"], json!("=$C$1"));
+    // Icons by numbers, the greatest above 300 (not from it).
+    let icons = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"iconSet","icons":"3Arrows","thresholds":[{"type":"percent","value":0},{"type":"num","value":100},{"type":"num","value":300,"gte":false}]}"##,
+    );
+    let doc = part(&icons, SHEET1);
+    assert!(doc.contains(r#"<iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="num" val="100"/><cfvo type="num" val="300" gte="0"/></iconSet>"#), "{doc}");
+    assert_eq!(
+        view(&icons)["sheets"][0]["condRules"][0]["thresholds"][2]["gte"],
+        json!(false)
+    );
+    // Kept as they are when the rule is moved; written again when it is edited.
+    let moved = apply(
+        &icons,
+        &ops(r#"{"op":"conditionalRules","rules":[{"id":"m0"},{"id":"m1","range":"B2:B9"}]}"#),
+    )
+    .unwrap();
+    assert!(part(&moved, SHEET1).contains(r#"<cfvo type="num" val="300" gte="0"/>"#));
+
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"thresholds":[{"type":"max"},{"type":"max"}]}"##).contains("max"));
+    assert!(wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"thresholds":[{"type":"percent","value":"150"},{"type":"max"}]}"##).contains("0〜100"));
+    assert!(wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"thresholds":[{"type":"num","value":"abc"},{"type":"max"}]}"##).contains("abc"));
+    assert!(wrong(r#"{"op":"conditional","range":"A1","type":"iconSet","icons":"4Rating","thresholds":[{"type":"num","value":1}]}"#).contains("4 つ"));
+    assert!(wrong(r#"{"op":"conditional","range":"A1","type":"colorScale","colors":["000000","FFFFFF"],"thresholds":[{"type":"min"},{"type":"formula","value":"="}]}"#).contains("数式"));
+}

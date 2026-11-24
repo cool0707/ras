@@ -518,3 +518,57 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.numfmtdlg .fmtlist { width: 100%; }
 .dlg.numfmtdlg .fmtlist option.red { color: #c00; }
 .dlg.numfmtdlg input.fmtcode { flex: 1; min-width: 0; font: inherit; }
+/* ホーム > 条件付き書式: its menu (rows of bars, scales and icon sets) and its dialogs. */
+.menu.condmenu { width: 252px; max-height: calc(100vh - 8px); overflow-y: auto; }
+.menu.condmenu .condrow { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 10px; }
+.menu.condmenu button.condswatch { display: inline-flex; width: auto; min-width: 30px; height: 30px; padding: 2px; gap: 0; justify-content: center; align-items: center; border: 1px solid transparent; border-radius: 3px; }
+.menu.condmenu button.condswatch:hover { border-color: var(--accent); background: var(--accent-hover); }
+.menu.condmenu .condswatch span { flex: none; }
+.menu.condmenu .condswatch .bar { display: block; width: 22px; height: 20px; border: 1px solid rgba(0, 0, 0, .15); }
+.menu.condmenu .condswatch .scale { display: block; width: 20px; height: 22px; border: 1px solid rgba(0, 0, 0, .15); }
+.menu.condmenu .condswatch .icons, .dlg.conddlg .condicons { display: inline-flex; gap: 1px; font-size: 13px; line-height: 1; }
+.dlg.conddlg { width: 440px; }
+.dlg.conddlg select, .dlg.conddlg input[type="text"], .dlg.conddlg input[type="number"] { font: inherit; }
+.dlg.conddlg label > .lbl { flex: none; min-width: 84px; }
+.dlg.conddlg label > select { flex: 1; min-width: 0; }
+.dlg.conddlg .condbody { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; padding: 8px; border: 1px solid var(--line); }
+.dlg.conddlg .condbody > select { align-self: flex-start; }
+.dlg.conddlg .condline { display: flex; align-items: center; gap: 6px; }
+.dlg.conddlg .condline input[type="text"] { flex: 1; min-width: 0; }
+.dlg.conddlg .condline input[type="number"] { width: 70px; margin: 0; }
+.dlg.conddlg input.wide { width: 100%; box-sizing: border-box; }
+.dlg.conddlg .condicons { font-size: 16px; padding: 2px 0 4px 90px; }
+.dlg.conddlg .condcustom { margin: 4px 0 0 90px; }
+.dlg.conddlg .condcustom input[type="color"] { width: 40px; height: 20px; padding: 0; border: 1px solid #adadad; }
+.dlg.conddlg .condstyles { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.dlg.conddlg [hidden] { display: none !important; }
+.dlg.condmgr { width: 680px; max-width: calc(100vw - 32px); }
+.dlg.condmgr select, .dlg.condmgr input[type="text"] { font: inherit; }
+.dlg.condmgr label > .lbl { flex: none; }
+.dlg.condmgr .condtools { display: flex; gap: 6px; margin: 6px 0; }
+.dlg.condmgr .condtools button { min-width: 0; }
+.dlg.condmgr .condtools button:disabled { color: #999; cursor: default; }
+.dlg.condmgr .condlist { height: 220px; overflow: auto; border: 1px solid var(--line); }
+.dlg.condmgr .condhead, .dlg.condmgr .condrule { display: grid; grid-template-columns: minmax(0, 1.4fr) 140px minmax(0, 1fr) 96px; align-items: center; gap: 8px; padding: 3px 6px; }
+.dlg.condmgr .condhead { position: sticky; top: 0; background: #f3f3f3; border-bottom: 1px solid var(--line); font-size: 12px; color: #444; }
+.dlg.condmgr .condrule { border-bottom: 1px solid #eee; cursor: default; }
+.dlg.condmgr .condrule.on { background: var(--accent-hover); }
+.dlg.condmgr .condrule .what { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dlg.condmgr .condrule input[type="text"] { min-width: 0; }
+.dlg.condmgr .condrule .stop { text-align: center; }
+.dlg.condmgr .condnone { padding: 12px; color: #666; }
+.dlg.condmgr .condsample { display: inline-flex; align-items: center; }
+.dlg.condmgr .condsample .fmt { display: inline-block; padding: 1px 6px; border: 1px solid #ddd; white-space: nowrap; }
+.dlg.condmgr .condsample .bar { display: block; width: 90px; height: 16px; }
+.dlg.condmgr .condsample .scale { display: block; width: 90px; height: 16px; }
+.dlg.condmgr .condsample .icons { display: inline-flex; gap: 2px; font-size: 14px; }
+.dlg.conddlg .condpoints { display: flex; flex-direction: column; gap: 3px; margin-bottom: 4px; }
+.dlg.conddlg .condpoint, .dlg.conddlg .condiconrow { display: flex; align-items: center; gap: 6px; }
+.dlg.conddlg .condpoint .lbl { flex: none; width: 60px; }
+.dlg.conddlg .condpoint select, .dlg.conddlg .condiconrow select { flex: none; width: 96px; }
+.dlg.conddlg .condpoint input[type="text"], .dlg.conddlg .condiconrow input[type="text"] { flex: 1; min-width: 0; }
+.dlg.conddlg .condiconrow select[data-field="gte"] { width: 48px; }
+.dlg.conddlg .condpoint input[type="color"] { width: 40px; height: 20px; padding: 0; border: 1px solid #adadad; }
+.dlg.conddlg .condicongrid { display: flex; flex-direction: column; gap: 3px; }
+.dlg.conddlg .condiconrow .icon { flex: none; width: 20px; font-size: 16px; text-align: center; }
+.dlg.conddlg .condiconrow > span:nth-child(2) { flex: none; white-space: nowrap; }
