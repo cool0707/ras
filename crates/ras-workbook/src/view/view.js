@@ -3828,8 +3828,8 @@
         ["#63BE7B", null, "#FFEF9C", "緑、黄"],
         ["#FFEF9C", null, "#63BE7B", "黄、緑"],
     ];
-    // The icon sets (of Excel 2007) in the order of Excel's dialog ("アイコン スタイル"), named
-    // as Excel names them.
+    // The icon sets in the order of Excel's dialog ("アイコン スタイル"), named as Excel names
+    // them (3 つの星・3 つの三角形・5 つのボックス: of Excel 2010, written in the sheet's extLst).
     const COND_ICONS = [
         ["3Arrows", "3 つの矢印 (色分け)"],
         ["3ArrowsGray", "3 つの矢印 (灰色)"],
@@ -3839,6 +3839,8 @@
         ["3Signs", "3 つの図形"],
         ["3Symbols", "3 つの記号 (丸囲み)"],
         ["3Symbols2", "3 つの記号 (丸囲みなし)"],
+        ["3Stars", "3 つの星"],
+        ["3Triangles", "3 つの三角形"],
         ["4Arrows", "4 つの矢印 (色分け)"],
         ["4ArrowsGray", "4 つの矢印 (灰色)"],
         ["4RedToBlack", "赤から黒"],
@@ -3848,14 +3850,14 @@
         ["5ArrowsGray", "5 つの矢印 (灰色)"],
         ["5Rating", "5 つの評価"],
         ["5Quarters", "5 つの四分円"],
+        ["5Boxes", "5 つのボックス"],
     ];
-    // Those of the menu, in Excel's groups and order (without Excel 2010's 3 つの三角形, 3 つの星
-    // and 5 つのボックス).
+    // Those of the menu, in Excel's groups and order.
     const COND_ICON_MENU = [
-        ["方向", ["3Arrows", "3ArrowsGray", "4ArrowsGray", "4Arrows", "5ArrowsGray", "5Arrows"]],
+        ["方向", ["3Arrows", "3ArrowsGray", "3Triangles", "4ArrowsGray", "4Arrows", "5ArrowsGray", "5Arrows"]],
         ["図形", ["3TrafficLights1", "3TrafficLights2", "3Signs", "4TrafficLights", "4RedToBlack"]],
         ["インジケーター", ["3Symbols", "3Symbols2", "3Flags"]],
-        ["評価", ["4Rating", "5Quarters", "5Rating"]],
+        ["評価", ["3Stars", "4Rating", "5Quarters", "5Rating", "5Boxes"]],
     ];
     const iconName = (set) => (COND_ICONS.find(([k]) => k === set) || [, set])[1];
     // The icons of a set as the grid draws them in the cells (`data.iconSets`, from the icon of
@@ -4067,10 +4069,13 @@
     }
 
     // The values a bar, a scale or an icon set goes by (`cfvo`): their kinds, as Excel names them.
-    const POINT_KINDS = { min: "最小値", max: "最大値", num: "数値", percent: "パーセント", formula: "数式", percentile: "百分位" };
+    const POINT_KINDS = { auto: "自動", min: "最小値", max: "最大値", num: "数値", percent: "パーセント", formula: "数式", percentile: "百分位" };
     const POINT_LEAST = ["min", "num", "percent", "formula", "percentile"];
     const POINT_BETWEEN = ["num", "percent", "formula", "percentile"];
     const POINT_GREATEST = ["max", "num", "percent", "formula", "percentile"];
+    // A data bar's (Excel 2010's 自動 first).
+    const POINT_BAR_LEAST = ["auto"].concat(POINT_LEAST);
+    const POINT_BAR_GREATEST = ["auto"].concat(POINT_GREATEST);
     // The boxes of a value: its kind (`type`), its value (`value`: none for the least and the
     // greatest), and a color (`pick`) when `color` is given; the caller lays them out.
     // `read()`: `{ type, value }`, or null (said where) when the value is missing.
@@ -4085,7 +4090,7 @@
         value.dataset.field = "pointValue";
         value.value = t.value === undefined || t.value === null ? "" : String(t.value);
         const sync = () => {
-            const none = type.value === "min" || type.value === "max";
+            const none = type.value === "min" || type.value === "max" || type.value === "auto";
             value.disabled = none;
             value.placeholder = none ? `(${POINT_KINDS[type.value]})` : type.value === "formula" ? "=$A$1" : "";
             if (none) value.value = "";
@@ -4569,19 +4574,39 @@
             dataBar(box, top) {
                 const only = check(top, "棒のみ表示", !!scaleGiven("dataBar", "barOnly", false));
                 only.dataset.field = "barOnly";
-                const t = scaleGiven("dataBar", "thresholds", null) || [{ type: "min" }, { type: "max" }];
-                const fields = [pointFields(POINT_LEAST, t[0]), pointFields(POINT_GREATEST, t[1])];
+                const t = scaleGiven("dataBar", "thresholds", null) || [{ type: "auto" }, { type: "auto" }];
+                const fields = [pointFields(POINT_BAR_LEAST, t[0]), pointFields(POINT_BAR_GREATEST, t[1])];
                 columns(box, ["最小値", "最大値"], fields, false);
+                // バーの外観: 塗りつぶし and its color, 枠線 and its color (as Excel's, a border of
+                // the bar's color to start with).
                 box.appendChild(el("div", "condsub", "バーの外観:"));
-                const cl = box.appendChild(el("label"));
-                cl.appendChild(el("span", "lbl", "色:"));
-                const c = cl.appendChild(el("input"));
-                c.type = "color";
-                c.dataset.field = "barColor";
-                c.value = (scaleGiven("dataBar", "colors", null) || ["#638EC6"])[0].toLowerCase();
-                const bar = previewLine(box);
-                const paint = () => (bar.style.background = `linear-gradient(to right, ${c.value}, #fff)`);
-                c.addEventListener("input", paint);
+                const look = box.appendChild(el("div", "condcols"));
+                look.style.gridTemplateColumns = "minmax(0, 2.1fr) minmax(0, .8fr) minmax(0, 1.4fr) minmax(0, .8fr)";
+                for (const h of ["塗りつぶし", "色", "枠線", "色"]) look.appendChild(el("span", "head", h));
+                const fill = condSelect(look, [["gradient", "塗りつぶし (グラデーション)"], ["solid", "塗りつぶし (単色)"]], scaleGiven("dataBar", "solid", false) ? "solid" : "gradient", "barFill");
+                const color = (value, name) => {
+                    const pick = look.appendChild(el("input"));
+                    pick.type = "color";
+                    pick.dataset.field = name;
+                    pick.value = value.toLowerCase();
+                    return pick;
+                };
+                const c = color((scaleGiven("dataBar", "colors", null) || ["#638EC6"])[0], "barColor");
+                const given = scaleGiven("dataBar", "barBorder", undefined);
+                const line = condSelect(look, [["none", "枠線なし"], ["solid", "枠線 (実線)"]], given === false ? "none" : "solid", "barBorder");
+                const bc = color(typeof given === "string" ? given : c.value, "barBorderColor");
+                // (The border's color follows the bar's until it is chosen.)
+                let follow = typeof given !== "string";
+                bc.addEventListener("input", () => (follow = false));
+                // (The bar in its box, as in a cell.)
+                const bar = previewLine(box).appendChild(el("span", "barfill"));
+                const paint = () => {
+                    if (follow) bc.value = c.value;
+                    bc.disabled = line.value === "none";
+                    bar.style.background = fill.value === "solid" ? c.value : `linear-gradient(to right, ${c.value}, #fff)`;
+                    bar.style.borderColor = line.value === "none" ? "transparent" : bc.value;
+                };
+                for (const x of [fill, c, line, bc]) x.addEventListener(x.tagName === "SELECT" ? "change" : "input", paint);
                 paint();
                 return {
                     box,
@@ -4589,7 +4614,8 @@
                     read: () => {
                         const points = fields.map((f) => f.read());
                         if (points.includes(null)) return null;
-                        const r = { type: "dataBar", colors: [c.value.toUpperCase()], thresholds: points };
+                        const r = { type: "dataBar", colors: [c.value.toUpperCase()], thresholds: points, barBorder: line.value === "none" ? false : bc.value.toUpperCase() };
+                        if (fill.value === "solid") r.solid = true;
                         if (only.checked) r.barOnly = true;
                         return r;
                     },
@@ -4770,8 +4796,12 @@
     // A sample of what a rule draws.
     function condSample(r) {
         const s = el("span", "condsample");
-        if (r.type === "dataBar") s.innerHTML = `<span class="bar" style="background:linear-gradient(to right, ${(r.colors || ["#638EC6"])[0]}, #fff)"></span>`;
-        else if (r.type === "colorScale") s.innerHTML = `<span class="scale" style="background:linear-gradient(to right, ${(r.colors && r.colors.length > 1 ? r.colors : ["#F8696B", "#63BE7B"]).join(", ")})"></span>`;
+        if (r.type === "dataBar") {
+            const c = (r.colors || ["#638EC6"])[0];
+            const b = s.appendChild(el("span", "bar"));
+            b.style.background = r.solid ? c : `linear-gradient(to right, ${c}, #fff)`;
+            if (r.barBorder) b.style.outline = `1px solid ${r.barBorder}`;
+        } else if (r.type === "colorScale") s.innerHTML = `<span class="scale" style="background:linear-gradient(to right, ${(r.colors && r.colors.length > 1 ? r.colors : ["#F8696B", "#63BE7B"]).join(", ")})"></span>`;
         else if (r.type === "iconSet") {
             // (From the least, as the rule has them.)
             s.innerHTML = data.iconSets && data.iconSets[r.icons] ? iconsHtml(r.icons, !!r.reverse) : `<span class="icons">${r.icons || ""}</span>`;
@@ -5748,8 +5778,11 @@
                 });
                 pop.appendChild(el("hr"));
                 subMenu(pop, "データ バー", (sub) => {
-                    const g = grid(sub, "塗りつぶし (グラデーション)", 3);
-                    for (const [color, name] of COND_BARS) swatch(g, `${name}のデータ バー`, `<span class="bar" style="background:linear-gradient(to right, ${color}, #fff)"></span>`, () => postCond({ type: "dataBar", colors: [color] })).dataset.bar = color;
+                    let g = grid(sub, "塗りつぶし (グラデーション)", 3);
+                    for (const [color, name] of COND_BARS) swatch(g, `${name}のデータ バー`, `<span class="bar" style="background:linear-gradient(to right, ${color}, #fff);border-color:${color}"></span>`, () => postCond({ type: "dataBar", colors: [color] })).dataset.bar = color;
+                    sub.appendChild(el("hr"));
+                    g = grid(sub, "塗りつぶし (単色)", 3);
+                    for (const [color, name] of COND_BARS) swatch(g, `${name}のデータ バー (単色)`, `<span class="bar" style="background:${color}"></span>`, () => postCond({ type: "dataBar", colors: [color], solid: true })).dataset.solid = color;
                     more(sub, { startKind: "scale", startStyle: "dataBar" });
                 });
                 subMenu(pop, "カラー スケール", (sub) => {

@@ -1156,7 +1156,8 @@ fn hex_color(v: &Json, key: &str) -> Result<String> {
 
 /// The rule of a `conditional` edit: `type` and what it takes (`operator` and `values`,
 /// `formula`, `text`, `rank` / `bottom` / `percent`, `below` / `equal` / `stdDev`, `period`, `colors`,
-/// `icons` / `reverse` / `iconOnly`), the `format` it gives (`color`, `fill`, `bold`,
+/// `barOnly` / `solid` / `barBorder`, `icons` / `reverse` / `iconOnly`, `thresholds`), the
+/// `format` it gives (`color`, `fill`, `bold`,
 /// `italic`, `underline`, `strike`, `border`) and `stop`.
 fn cond_rule_of(o: &Json) -> Result<CondRule> {
     let text = |key: &str| o.get(key).and_then(Json::as_str).map(str::to_string);
@@ -1202,6 +1203,23 @@ fn cond_rule_of(o: &Json) -> Result<CondRule> {
             Some(format)
         }
     };
+    let colors = match o.get("colors") {
+        None | Some(Json::Null) => Vec::new(),
+        Some(Json::Array(list)) => list
+            .iter()
+            .map(|c| hex_color(c, "colors"))
+            .collect::<Result<_>>()?,
+        Some(c) => vec![hex_color(c, "colors")?],
+    };
+    let solid = flag("solid");
+    // A bar's border: given, or none (`false`); else as Excel's: a gradient's of its color.
+    let bar_border = match o.get("barBorder") {
+        _ if kind != "dataBar" => None,
+        None if solid => None,
+        None => colors.first().cloned(),
+        Some(Json::Null | Json::Bool(false)) => None,
+        Some(c) => Some(hex_color(c, "barBorder")?),
+    };
     let rule = CondRule {
         kind,
         operator: text("operator").unwrap_or_default(),
@@ -1220,18 +1238,13 @@ fn cond_rule_of(o: &Json) -> Result<CondRule> {
             .and_then(Json::as_u64)
             .map_or(0, |n| n.min(u32::MAX as u64) as u32),
         period: text("period").unwrap_or_default(),
-        colors: match o.get("colors") {
-            None | Some(Json::Null) => Vec::new(),
-            Some(Json::Array(list)) => list
-                .iter()
-                .map(|c| hex_color(c, "colors"))
-                .collect::<Result<_>>()?,
-            Some(c) => vec![hex_color(c, "colors")?],
-        },
+        colors,
         icons: text("icons").unwrap_or_default(),
         reverse: flag("reverse"),
         icon_only: flag("iconOnly"),
         bar_only: flag("barOnly"),
+        solid,
+        bar_border,
         thresholds: match o.get("thresholds") {
             None | Some(Json::Null) => Vec::new(),
             Some(Json::Array(list)) => list

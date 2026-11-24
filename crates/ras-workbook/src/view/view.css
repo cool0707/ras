@@ -532,7 +532,7 @@ body.copying, body.copying td { cursor: copy; }
 .menu.condmenu button.condswatch { display: inline-flex; width: auto; min-width: 28px; height: 28px; padding: 2px; gap: 0; justify-content: center; align-items: center; border: 1px solid transparent; border-radius: 3px; }
 .menu.condmenu button.condswatch:hover { border-color: var(--accent); background: var(--accent-hover); }
 .menu.condmenu .condswatch span { flex: none; }
-.menu.condmenu .condswatch .bar { display: block; width: 22px; height: 20px; border: 1px solid rgba(0, 0, 0, .15); }
+.menu.condmenu .condswatch .bar { display: block; box-sizing: border-box; width: 22px; height: 20px; border: 1px solid rgba(0, 0, 0, .15); }
 .menu.condmenu .condswatch .scale { display: block; width: 20px; height: 22px; border: 1px solid rgba(0, 0, 0, .15); }
 /* The icons of the icon sets (drawn as in the cells). */
 .menu.condmenu .icons, .dlg.conddlg .icons, .dlg.condmgr .icons, .condiconlist .icons { display: inline-flex; gap: 4px; line-height: 0; }
@@ -569,6 +569,7 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.conddlg .condcols select, .dlg.conddlg .condcols input { width: 100%; min-width: 0; box-sizing: border-box; }
 .dlg.conddlg .condscalepreview { margin-top: 4px; flex-wrap: nowrap; }
 .dlg.conddlg .condscalebar { flex: 1; height: 24px; border: 1px solid #999; }
+.dlg.conddlg .condscalebar .barfill { display: block; box-sizing: border-box; width: 70%; height: 100%; border: 1px solid transparent; }
 .dlg.conddlg .condicongrid { display: grid; grid-template-columns: auto auto 52px minmax(0, 1fr) 100px; gap: 4px 6px; align-items: center; }
 .dlg.conddlg .condicongrid .head { font-size: 12px; color: #444; }
 .dlg.conddlg .condicongrid .icon { line-height: 0; text-align: center; }
