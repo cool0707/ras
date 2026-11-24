@@ -297,8 +297,11 @@ td.filter.filtered::after, td.tfilter.filtered::after { content: "▼"; color: v
 table.ew th { cursor: col-resize; }
 table.ns th { cursor: row-resize; }
 .guide { position: fixed; z-index: 15; background: var(--accent); pointer-events: none; }
-.guide.v { top: 0; bottom: 0; width: 1px; height: 100%; }
-.guide.h { left: 0; right: 0; height: 1px; width: 100%; }
+/* (Over the grid only, not the ribbon: placed by the page.) */
+.guide.v { width: 1px; }
+.guide.h { height: 1px; }
+/* The size while a column or row is sized, as Excel's tip: 幅: 8.38 (72 ピクセル). */
+.sizetip { position: fixed; z-index: 16; padding: 1px 4px; background: #fff; border: 1px solid #767676; color: #000; font: 12px "Yu Gothic UI", "Meiryo UI", sans-serif; white-space: nowrap; pointer-events: none; box-shadow: 1px 1px 2px rgba(0, 0, 0, .2); }
 .probe { position: absolute; left: 0; top: 0; visibility: hidden; padding: 0 3px; overflow-wrap: anywhere; }
 /* The fill handle and the cells it is drawn out over. */
 .fillhandle { position: absolute; width: 6px; height: 6px; box-sizing: border-box; background: var(--accent); border: 1px solid #fff; cursor: crosshair; pointer-events: auto; }

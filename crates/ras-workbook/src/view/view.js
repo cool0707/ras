@@ -4730,6 +4730,7 @@
     const EDGE = 4;
     let resizing = null;
     const guide = el("div", "guide");
+    const sizeTip = el("div", "sizetip");
     // The edge of a header under the mouse: { cols, index } (the column or row before the edge).
     function edgeOf(e) {
         if (!editable || !view || busy) return null;
@@ -4764,24 +4765,39 @@
         const b = edge.th.getBoundingClientRect();
         resizing = Object.assign(edge, { start: edge.cols ? b.left : b.top, at: edge.cols ? e.clientX : e.clientY, moved: false });
         document.body.appendChild(guide);
+        document.body.appendChild(sizeTip);
         guide.className = edge.cols ? "guide v" : "guide h";
         moveResize(e);
     }
+    // The size the edge dragged to gives (px at 100%; columns are drawn twice as wide while
+    // formulas are shown).
+    const resizedPx = (r) => Math.round((r.now - r.start) / (r.cols && formulas ? 2 : 1) / Z());
+    // A column width as Excel gives it (characters: 8 px a digit and 5 px of padding).
+    const widthChars = (px) => Math.max(0, Math.trunc((px < 13 ? px / 13 : (px - 5) / 8) * 100 + 0.5) / 100);
     function moveResize(e) {
         const r = resizing;
         const at = Math.max(r.start, r.cols ? e.clientX : e.clientY);
         if (Math.abs(at - r.at) > 1) r.moved = true;
         r.now = at;
-        guide.style.left = r.cols ? `${at}px` : "0";
-        guide.style.top = r.cols ? "0" : `${at}px`;
+        // The line across the grid (from its headers), not over the ribbon or the tabs.
+        const g = $("grid").getBoundingClientRect();
+        if (r.cols) Object.assign(guide.style, { left: `${at}px`, top: `${g.top}px`, height: `${g.height}px`, width: "" });
+        else Object.assign(guide.style, { left: `${g.left}px`, top: `${at}px`, width: `${g.width}px`, height: "" });
+        // The size, as Excel shows it: 幅: 8.38 (72 ピクセル) / 高さ: 18.75 (25 ピクセル).
+        const px = resizedPx(r);
+        sizeTip.textContent = r.cols ? `幅: ${widthChars(px).toFixed(2)} (${px} ピクセル)` : `高さ: ${(px * 0.75).toFixed(2)} (${px} ピクセル)`;
+        const w = sizeTip.offsetWidth;
+        const h = sizeTip.offsetHeight;
+        if (r.cols) Object.assign(sizeTip.style, { left: `${Math.min(at + 4, window.innerWidth - w - 2)}px`, top: `${Math.max(0, g.top - h - 2)}px` });
+        else Object.assign(sizeTip.style, { left: `${g.left + 2}px`, top: `${Math.min(at + 4, window.innerHeight - h - 2)}px` });
     }
     function endResize() {
         const r = resizing;
         resizing = null;
         guide.remove();
+        sizeTip.remove();
         if (!r.moved || !view) return;
-        // (Columns are drawn twice as wide while formulas are shown.)
-        const px = Math.round((r.now - r.start) / (r.cols && formulas ? 2 : 1) / Z());
+        const px = resizedPx(r);
         const sheet = view.sheet.name;
         const range = sized(r);
         postEdit([px <= 0 ? { op: "hide", sheet, range, hidden: true } : { op: "size", sheet, range, px }]);
