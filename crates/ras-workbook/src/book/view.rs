@@ -939,7 +939,7 @@ impl Book {
                 .collect(),
             _ => Vec::new(),
         };
-        let (notes, lists) = self.notes_and_lists(si, &info.name)?;
+        let notes = self.notes(si)?;
         let links = self.links(si);
         // The panes frozen (rows, columns), as the file keeps them.
         let screen = self.file.sheet(si).ok();
@@ -953,7 +953,6 @@ impl Book {
                 .map(|(a, r)| json!([a.row, a.col, r.start.row, r.start.col, r.end.row, r.end.col])),
             "notes": notes,
             "links": links,
-            "lists": lists,
             "name": info.name,
             "codeName": info.code_name,
             "visible": crate::dump::visible_name(info.visible),
@@ -989,10 +988,6 @@ impl Book {
         }))
     }
 
-    /// The notes (comments) of the sheet: `{ r, c, text, author }`; and its input rules that
-    /// choose from a list, with what the list holds: `{ ranges: [[r1, c1, r2, c2]], values,
-    /// title, prompt, stop, all }` (`values` absent: the list's button is hidden; `stop`: an
-    /// entry not among `all` is refused, with that message, empty for Excel's own).
     /// The workbook's default font (the Normal style's name and size).
     fn default_font(&self) -> (String, f64) {
         self.file
@@ -1002,7 +997,9 @@ impl Book {
             .unwrap_or(("游ゴシック".into(), 11.0))
     }
 
-    fn notes_and_lists(&mut self, si: usize, sheet: &str) -> Result<(Vec<Json>, Vec<Json>)> {
+    /// The notes (comments) of the sheet: `{ r, c, text, author }`. (Its input rules are read
+    /// from the file: [`crate::view::data`].)
+    fn notes(&mut self, si: usize) -> Result<Vec<Json>> {
         let Ok(ws) = self.file.sheet(si) else {
             return Err("シートがありません".into());
         };
@@ -1024,65 +1021,7 @@ impl Book {
                 })
             })
             .collect();
-        // (formula1, ranges, the button shown, title, prompt, the error that stops an entry)
-        type Rule = (String, Vec<RangeRef>, bool, String, String, Option<String>);
-        let mut rules: Vec<Rule> = Vec::new();
-        if let Some(dv) = ws.data_validations() {
-            for v in dv.data_validation_list() {
-                if v.get_type().value_string() != "list" {
-                    continue;
-                }
-                let ranges = v
-                    .sequence_of_references()
-                    .range_collection()
-                    .iter()
-                    .filter_map(|r| RangeRef::parse(&r.range().replace('$', "")))
-                    .collect();
-                let (title, prompt) = if v.show_input_message() {
-                    (v.prompt_title().to_string(), v.prompt().to_string())
-                } else {
-                    (String::new(), String::new())
-                };
-                // An entry not in the list is refused (the style "stop"; the others ask, and
-                // Excel enters it when told to).
-                let stop = (v.show_error_message() && v.error_style().value_string() == "stop")
-                    .then(|| v.error_message().to_string());
-                // (`showDropDown` is true when the button is *not* shown.)
-                rules.push((
-                    v.formula1().to_string(),
-                    ranges,
-                    !v.show_drop_down(),
-                    title,
-                    prompt,
-                    stop,
-                ));
-            }
-        }
-        let mut lists = Vec::new();
-        for (formula, ranges, button, title, prompt, stop) in rules {
-            let mut j = json!({
-                "ranges": ranges
-                    .iter()
-                    .map(|r| json!([r.start.row, r.start.col, r.end.row, r.end.col]))
-                    .collect::<Vec<_>>(),
-            });
-            let values = self.list_values(si, sheet, &formula);
-            if let Some(message) = stop {
-                j["stop"] = json!(message);
-                j["all"] = json!(values);
-            }
-            if button {
-                j["values"] = json!(values);
-            }
-            if !title.is_empty() {
-                j["title"] = json!(title);
-            }
-            if !prompt.is_empty() {
-                j["prompt"] = json!(prompt);
-            }
-            lists.push(j);
-        }
-        Ok((notes, lists))
+        Ok(notes)
     }
 
     /// The hyperlinks of the sheet's cells: `{ r, c, url, tip }`, or `{ r, c, to, tip }` for a
@@ -1114,7 +1053,7 @@ impl Book {
 
     /// What a list of an input rule offers: `"a,b,c"`, or the cells of a reference or a name
     /// (`$A$1:$A$5`, `Sheet2!$A$1:$A$3`, `Items`), at most 1000 of them, empty ones left out.
-    fn list_values(&mut self, si: usize, sheet: &str, formula: &str) -> Vec<String> {
+    pub(crate) fn list_values(&mut self, si: usize, sheet: &str, formula: &str) -> Vec<String> {
         let f = formula.trim().trim_start_matches('=');
         if let Some(inner) = f.strip_prefix('"') {
             let inner = inner

@@ -444,7 +444,7 @@ fn sqref(list: &[RangeRef]) -> String {
 }
 
 /// `a` without the cells of `b`: up to four ranges (above, below, left and right of `b`).
-fn subtract(a: RangeRef, b: &RangeRef) -> Vec<RangeRef> {
+pub(super) fn subtract(a: RangeRef, b: &RangeRef) -> Vec<RangeRef> {
     let Some(x) = a.intersection(b) else {
         return vec![a];
     };

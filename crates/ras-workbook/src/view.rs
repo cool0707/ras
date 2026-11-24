@@ -54,6 +54,17 @@ pub fn data(
             }
         }
     }
+    // The input rules of the sheets (データの入力規則), and the cells with values they do not
+    // allow ("無効データのマーク").
+    if let Some(rules) = source.and_then(|b| crate::patch::validation_rules(b).ok()) {
+        for (si, sheet) in sheets.iter_mut().enumerate() {
+            let name = sheet["name"].as_str().unwrap_or_default().to_string();
+            if let Some(list) = rules.get(&name) {
+                sheet["lists"] = Json::Array(book.rules_view(si, &name, list));
+                sheet["invalid"] = Json::Array(book.invalid_cells(si, list));
+            }
+        }
+    }
     let diff = changes.map(|(before, d)| {
         let mut by_sheet = serde_json::Map::new();
         for c in &d.cells {

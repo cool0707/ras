@@ -32,11 +32,14 @@ mod styles;
 mod tabs;
 #[cfg(test)]
 mod tests;
+mod validation;
 
 pub(crate) use conditional::rules_of as conditional_rules;
 pub use conditional::{CondFormat, CondRule, Managed, Threshold};
 use scan::Edits;
 pub(crate) use tabs::protections;
+pub use validation::Validation;
+pub(crate) use validation::rules_of as validation_rules;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -275,6 +278,18 @@ pub enum Op {
     /// The conditional formats of the sheet as "条件付き書式ルールの管理" leaves them: in this
     /// order of priority; those not listed deleted.
     ConditionalRules { sheet: String, rules: Vec<Managed> },
+    /// An input rule put on the cells of `ranges` (データ > データの入力規則), the rules they had
+    /// taken off them; None: the rules of those cells cleared ("すべてクリア").
+    Validation {
+        sheet: String,
+        ranges: Vec<RangeRef>,
+        rule: Option<Validation>,
+    },
+    /// The cells of `range` checked against their input rules (after the edits before it, as
+    /// Excel checks what is typed): a value a rule of the style "停止" does not allow stops the
+    /// edit with the rule's message. (The grid checks the rules it can work out itself; it asks
+    /// this for those it cannot: of a formula, of values that are formulas.)
+    Validate { sheet: String, range: RangeRef },
 }
 
 /// Where an object of the drawing goes.
@@ -411,6 +426,7 @@ impl Op {
                 | Op::Protect { .. }
                 | Op::Conditional { .. }
                 | Op::ConditionalRules { .. }
+                | Op::Validation { .. }
         )
     }
 }
@@ -1209,7 +1225,29 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     })
                     .collect::<Result<Vec<_>>>()?,
             },
-            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control / activeX / sheet / tabColor / conditional / conditionalRules）")),
+            "validation" => {
+                let clear = o.get("clear").and_then(Json::as_bool).unwrap_or(false);
+                let ranges = match o.get("range").and_then(Json::as_str) {
+                    None if clear => {
+                        vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(MAX_ROWS - 1, MAX_COLS - 1))]
+                    }
+                    None => return Err("`range` がありません".into()),
+                    Some(text) => areas_of(text)?,
+                };
+                if ranges.is_empty() {
+                    return Err("`range` がありません".into());
+                }
+                Op::Validation {
+                    sheet,
+                    ranges,
+                    rule: if clear { None } else { Some(Validation::of_json(o)?) },
+                }
+            }
+            "validate" => Op::Validate {
+                sheet,
+                range: range_of(o, "range")?,
+            },
+            other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control / activeX / sheet / tabColor / conditional / conditionalRules / validation / validate）")),
         });
     }
     Ok(out)
@@ -1406,6 +1444,11 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 rule,
             } => conditional::conditional(&bytes, sheet, ranges, rule.as_ref())?,
             Op::ConditionalRules { sheet, rules } => conditional::manage(&bytes, sheet, rules)?,
+            Op::Validation {
+                sheet,
+                ranges,
+                rule,
+            } => validation::validation(&bytes, sheet, ranges, rule.as_ref())?,
             Op::Link { sheet, range, link } => insert::link(&bytes, sheet, *range, link.as_ref())?,
             Op::Note {
                 sheet,
@@ -2221,7 +2264,10 @@ fn run(
         | Op::MoveSheet { .. }
         | Op::Protect { .. }
         | Op::Conditional { .. }
-        | Op::ConditionalRules { .. } => {}
+        | Op::ConditionalRules { .. }
+        | Op::Validation { .. }
+        // (Checked by `apply_group`, which reads the rules of the file.)
+        | Op::Validate { .. } => {}
         Op::StandardWidth { sheet, width } => {
             let si = sheet_index(book, sheet)?;
             book.set_standard_width(si, *width)?;
@@ -2269,7 +2315,22 @@ fn apply_group(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
     let before = Book::open_bytes(bytes)?.snapshot(&mut styles, &[]);
     let mut book = Book::open_bytes(bytes)?;
     let (mut written, mut moved) = (Vec::new(), None);
+    let mut rules = None;
     for op in ops {
+        if let Op::Validate { sheet, range } = op {
+            let rules = match &mut rules {
+                Some(r) => r,
+                None => rules.insert(validation::rules_of(bytes)?),
+            };
+            let si = sheet_index(&book, sheet)?;
+            let name = book.sheet_name(si).unwrap_or_default().to_string();
+            if let Some(list) = rules.get(&name) {
+                if let Some(message) = book.refused(si, list, *range) {
+                    return Err(message);
+                }
+            }
+            continue;
+        }
         run(&mut book, op, &mut written, &mut moved)?;
     }
     let after = book.snapshot(&mut styles, &written);

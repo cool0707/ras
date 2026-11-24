@@ -655,3 +655,28 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.protectdlg > .lbl { margin-top: 6px; }
 .dlg.protectdlg .allows { max-height: 220px; overflow: auto; margin: 2px 0; padding: 2px 6px; border: 1px solid var(--line); }
 .dlg.protectdlg .note { margin-top: 6px; color: #555; font-size: 12px; }
+/* データの入力規則 */
+.dlg.validdlg { width: 470px; max-width: calc(100vw - 32px); box-sizing: border-box; }
+.dlg.validdlg [hidden] { display: none !important; }
+.dlg.validdlg select, .dlg.validdlg input[type="text"], .dlg.validdlg textarea { font: inherit; }
+.dlg.validdlg .fmttabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+.dlg.validdlg .fmttabs button { min-width: 0; margin-bottom: -1px; padding: 3px 10px; border: 1px solid var(--line); border-bottom-color: transparent; background: #f3f3f3; }
+.dlg.validdlg .fmttabs button.on { background: #fff; border-bottom-color: #fff; }
+.dlg.validdlg .validpage { display: flex; flex-direction: column; gap: 4px; min-height: 236px; }
+.dlg.validdlg label.row > .lbl { flex: none; width: 96px; }
+.dlg.validdlg label.row select { flex: 1; min-width: 0; }
+.dlg.validdlg label.col { flex-direction: column; align-items: stretch; gap: 2px; }
+.dlg.validdlg label.col input, .dlg.validdlg label.col textarea { width: 100%; box-sizing: border-box; }
+.dlg.validdlg label.col textarea { height: 76px; resize: vertical; }
+.dlg.validdlg hr { width: 100%; margin: 6px 0 2px; border: none; border-top: 1px solid var(--line); }
+.dlg.validdlg .buttons .clear { margin-right: auto; }
+.dlg.alertdlg { min-width: 300px; max-width: min(440px, calc(100vw - 32px)); box-sizing: border-box; }
+.dlg.alertdlg .alertbody { display: flex; align-items: flex-start; gap: 12px; }
+.dlg.alertdlg .alerticon { flex: none; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; background: #c42b1c; }
+.dlg.alertdlg.warning .alerticon { border-radius: 2px; clip-path: polygon(50% 0, 100% 100%, 0 100%); background: #e8a500; color: #000; padding-top: 6px; box-sizing: border-box; }
+.dlg.alertdlg.information .alerticon { background: #0067c0; font-family: Georgia, serif; }
+.dlg.alertdlg .msg { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.dlg.alertdlg .msg .ask { margin-top: 8px; }
+/* 無効データのマーク */
+.invalidmark { position: absolute; box-sizing: border-box; border: 2px solid #e00000; border-radius: 50%; pointer-events: none; }
+.dlg.validdlg .condprompt { font-weight: bold; margin-top: 2px; }

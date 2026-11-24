@@ -2417,6 +2417,7 @@ mod sheet_view;
 pub mod snapshot;
 mod sort;
 pub(crate) mod tables;
+mod valid;
 pub mod view;
 
 pub(crate) use edit::{adjusted, moved};
@@ -2425,6 +2426,7 @@ pub use inspect::{CellInfo, FormulaRegion, RuleInfo, SheetInfo, TableInfo};
 pub use links::LinkInfo;
 pub use paste::{Paste, PasteOp, PasteWhat};
 pub use sort::{SortKey, Special, split_criterion};
+pub use valid::REFUSED;
 pub use view::{VIEW_COLS, VIEW_ROWS};
 
 #[cfg(test)]
