@@ -36,6 +36,7 @@ mod tests;
 pub(crate) use conditional::rules_of as conditional_rules;
 pub use conditional::{CondFormat, CondRule, Managed, Threshold};
 use scan::Edits;
+pub(crate) use tabs::protections;
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -240,6 +241,20 @@ pub enum Op {
         sheet: String,
         color: Option<String>,
     },
+    /// The sheet hidden (ホーム > 書式 > 非表示/再表示 > シートを表示しない) or shown again.
+    SheetVisible { sheet: String, visible: bool },
+    /// The sheet moved before the sheet `before` (None: to the end) ("シートの移動またはコピー").
+    MoveSheet {
+        sheet: String,
+        before: Option<String>,
+    },
+    /// The sheet protected or no longer (ホーム > 書式 > シートの保護).
+    Protect {
+        sheet: String,
+        change: tabs::Protect,
+    },
+    /// The width of the columns given none (ホーム > 書式 > 既定の幅), in characters.
+    StandardWidth { sheet: String, width: f64 },
     /// A table made of `range` (a single cell: the data around it), as Excel's "テーブルの作成"
     /// makes it. `header`: its first row is the headings; otherwise a row of headings (列1,
     /// 列2, ...) is inserted above it.
@@ -391,6 +406,9 @@ impl Op {
                 | Op::ActiveX { .. }
                 | Op::Sheet { .. }
                 | Op::TabColor { .. }
+                | Op::SheetVisible { .. }
+                | Op::MoveSheet { .. }
+                | Op::Protect { .. }
                 | Op::Conditional { .. }
                 | Op::ConditionalRules { .. }
         )
@@ -1094,7 +1112,12 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                         sheet: sheet.clone(),
                         name: given("name"),
                         code_name: given("codeName"),
-                        place: None,
+                        // ("シートの移動またはコピー": before a sheet, or at the end.)
+                        place: match (given("before"), given("after")) {
+                            (Some(b), _) => Some(ras_ovba::Place::Before(b)),
+                            (None, Some(a)) => Some(ras_ovba::Place::After(a)),
+                            _ => None,
+                        },
                     },
                     "remove" => ras_ovba::SheetEdit::Remove { sheet: sheet.clone() },
                     "rename" => ras_ovba::SheetEdit::Rename {
@@ -1109,6 +1132,43 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
             "tabColor" => Op::TabColor {
                 sheet,
                 color: tabs::color_of(o.get("color"))?,
+            },
+            "sheetVisible" => Op::SheetVisible {
+                sheet,
+                visible: o.get("visible").and_then(Json::as_bool).ok_or("`visible` がありません")?,
+            },
+            "moveSheet" => Op::MoveSheet {
+                sheet,
+                before: text("before").filter(|b| !b.is_empty()),
+            },
+            "protect" => {
+                let password = text("password").unwrap_or_default();
+                Op::Protect {
+                    sheet,
+                    change: if o.get("on").and_then(Json::as_bool).unwrap_or(true) {
+                        tabs::Protect::On {
+                            password,
+                            allow: match o.get("allow") {
+                                None | Some(Json::Null) => vec!["selectLockedCells".into(), "selectUnlockedCells".into()],
+                                Some(Json::Array(list)) => list
+                                    .iter()
+                                    .map(|a| a.as_str().map(str::to_string).ok_or("`allow` は文字列の配列で指定してください"))
+                                    .collect::<std::result::Result<_, _>>()?,
+                                Some(_) => return Err("`allow` は文字列の配列で指定してください".into()),
+                            },
+                        }
+                    } else {
+                        tabs::Protect::Off { password }
+                    },
+                }
+            }
+            "standardWidth" => Op::StandardWidth {
+                sheet,
+                width: o
+                    .get("width")
+                    .and_then(Json::as_f64)
+                    .filter(|w| (0.0..=255.0).contains(w))
+                    .ok_or("`width`（0 から 255 の文字数）がありません")?,
             },
             "conditional" => {
                 let ranges = match o.get("range").and_then(Json::as_str) {
@@ -1337,6 +1397,9 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
             Op::Freeze { sheet, at } => panes::freeze(&bytes, sheet, *at)?,
             Op::Sheet { edit } => tabs::edit(&bytes, edit)?,
             Op::TabColor { sheet, color } => tabs::color(&bytes, sheet, color.as_deref())?,
+            Op::SheetVisible { sheet, visible } => tabs::visible(&bytes, sheet, *visible)?,
+            Op::MoveSheet { sheet, before } => tabs::move_to(&bytes, sheet, before.as_deref())?,
+            Op::Protect { sheet, change } => tabs::protect(&bytes, sheet, change)?,
             Op::Conditional {
                 sheet,
                 ranges,
@@ -1598,6 +1661,8 @@ fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) 
             set("style.xfid", Val::Num(0.0))
         }
         "strike" => set("font.strikethrough", flag()?),
+        // ホーム > 書式 > セルのロック.
+        "locked" => set("locked", flag()?),
         "wrap" => set("wraptext", flag()?),
         "fontName" => set("font.name", Val::Text(text()?.to_string())),
         "fontSize" => set(
@@ -2100,8 +2165,15 @@ fn run(
         | Op::ActiveX { .. }
         | Op::Sheet { .. }
         | Op::TabColor { .. }
+        | Op::SheetVisible { .. }
+        | Op::MoveSheet { .. }
+        | Op::Protect { .. }
         | Op::Conditional { .. }
         | Op::ConditionalRules { .. } => {}
+        Op::StandardWidth { sheet, width } => {
+            let si = sheet_index(book, sheet)?;
+            book.set_standard_width(si, *width)?;
+        }
         Op::Fill {
             sheet,
             range,

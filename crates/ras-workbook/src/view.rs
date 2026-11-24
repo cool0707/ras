@@ -71,6 +71,15 @@ pub fn data(
         }
         json!({ "before": before, "structure": diff::structure_lines(d), "changes": by_sheet })
     });
+    // The sheets protected (シートの保護), as the file has them.
+    if let Some(mut list) = source.and_then(|b| crate::patch::protections(b).ok()) {
+        for sheet in &mut sheets {
+            let name = sheet["name"].as_str().unwrap_or_default().to_string();
+            if let Some(p) = list.remove(&name) {
+                sheet["protection"] = p;
+            }
+        }
+    }
     // The names defined, for the name box and "ジャンプ" (F5): those of a sheet with its name.
     let sheet_names: Vec<String> = sheets
         .iter()

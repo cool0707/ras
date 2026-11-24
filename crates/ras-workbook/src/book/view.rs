@@ -393,6 +393,10 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
             3 + indent * 9
         ));
     }
+    // Not locked (セルのロック off): a protected sheet lets it be changed.
+    if st.protection().is_some_and(|p| !super::format::locked(p)) {
+        css.push_str("--unlocked:1;");
+    }
     css
 }
 
@@ -980,6 +984,7 @@ impl Book {
             "filter": info.filter,
             "filterColumns": filter_columns,
             "tableFilters": table_filters,
+            // The sheet protected (シートの保護): with a password, and what it still allows.
             "tabColor": self.tab_color(si).map(|c| { let c = c as u32; format!("#{:02x}{:02x}{:02x}", c & 0xff, (c >> 8) & 0xff, (c >> 16) & 0xff) }),
         }))
     }

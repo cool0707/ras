@@ -2598,6 +2598,117 @@ fn the_color_of_a_tab() {
 }
 
 #[test]
+fn sheets_hidden_shown_and_moved() {
+    let names = |bytes: &[u8]| -> Vec<String> {
+        view(bytes)["sheets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // シートを表示しない: the active sheet gives its place to the next visible one.
+    let hidden = edit(r#"{"op":"sheetVisible","visible":false}"#);
+    assert_eq!(changed(BOOK, &hidden), ["xl/workbook.xml"]);
+    assert_eq!(view(&hidden)["sheets"][0]["visible"], json!("hidden"));
+    assert!(part(&hidden, "xl/workbook.xml").contains("activeTab=\"1\""));
+    // シートの再表示.
+    let shown = apply(&hidden, &ops(r#"{"op":"sheetVisible","visible":true}"#)).unwrap();
+    assert_eq!(view(&shown)["sheets"][0]["visible"], json!("visible"));
+    assert!(!part(&shown, "xl/workbook.xml").contains("state="));
+    // Not every sheet.
+    let all = r#"[{"op":"sheetVisible","sheet":"Data","visible":false},{"op":"sheetVisible","sheet":"Summary","visible":false},{"op":"sheetVisible","sheet":"Tbl","visible":false}]"#;
+    assert!(
+        apply(BOOK, &ops(all))
+            .unwrap_err()
+            .contains("すべてのシート")
+    );
+    // Moved to the end, and before another; the names of a sheet follow it.
+    let end = edit(r#"{"op":"moveSheet"}"#);
+    assert_eq!(names(&end), ["Summary", "Tbl", "Data"]);
+    let back = apply(&end, &ops(r#"{"op":"moveSheet","before":"Summary"}"#)).unwrap();
+    assert_eq!(names(&back), ["Data", "Summary", "Tbl"]);
+    assert_eq!(
+        part(&back, "xl/workbook.xml"),
+        part(BOOK, "xl/workbook.xml")
+    );
+    // Copied before a sheet.
+    let copied = edit(r#"{"op":"sheet","sheet":"Summary","action":"copy","before":"Data"}"#);
+    assert_eq!(names(&copied), ["Summary (2)", "Data", "Summary", "Tbl"]);
+    let last = edit(r#"{"op":"sheet","sheet":"Summary","action":"copy","after":"Tbl"}"#);
+    assert_eq!(names(&last), ["Data", "Summary", "Tbl", "Summary (2)"]);
+}
+
+#[test]
+fn sheets_protected_and_cells_unlocked() {
+    const SHEET1: &str = "xl/worksheets/sheet1.xml";
+    assert!(view(BOOK)["sheets"][0]["protection"].is_null());
+    // Without a password: what it allows besides selecting is written.
+    let on = edit(
+        r#"{"op":"protect","allow":["selectLockedCells","selectUnlockedCells","formatCells"]}"#,
+    );
+    assert_eq!(changed(BOOK, &on), [SHEET1]);
+    assert!(part(&on, SHEET1).contains("</sheetData><sheetProtection sheet=\"1\" formatCells=\"0\" objects=\"1\" scenarios=\"1\"/><autoFilter"));
+    let p = &view(&on)["sheets"][0]["protection"];
+    assert_eq!(p["password"], json!(false));
+    assert_eq!(p["allow"]["formatCells"], json!(true));
+    assert_eq!(p["allow"]["formatColumns"], json!(false));
+    assert_eq!(p["allow"]["selectLockedCells"], json!(true));
+    let off = apply(&on, &ops(r#"{"op":"protect","on":false}"#)).unwrap();
+    assert_eq!(part(&off, SHEET1), part(BOOK, SHEET1));
+    // With one: hashed as Excel hashes it, and asked for again.
+    let locked = edit(r#"{"op":"protect","password":"秘密"}"#);
+    let doc = part(&locked, SHEET1);
+    assert!(
+        doc.contains("algorithmName=\"SHA-512\"")
+            && doc.contains("spinCount=\"100000\"")
+            && !doc.contains("秘密")
+    );
+    assert_eq!(
+        view(&locked)["sheets"][0]["protection"]["password"],
+        json!(true)
+    );
+    let wrong = apply(
+        &locked,
+        &ops(r#"{"op":"protect","on":false,"password":"himitsu"}"#),
+    )
+    .unwrap_err();
+    assert!(wrong.contains("パスワードが間違っています"));
+    let open = apply(
+        &locked,
+        &ops(r#"{"op":"protect","on":false,"password":"秘密"}"#),
+    )
+    .unwrap();
+    assert!(!part(&open, SHEET1).contains("sheetProtection"));
+    // セルのロック off: the cell's format says so (and the page sees it).
+    let unlocked = edit(r#"{"op":"format","range":"B2","set":{"locked":false}}"#);
+    let mut book = Book::open_bytes(&unlocked).unwrap();
+    assert_eq!(
+        book.format_of(0, RangeRef::parse("B2").unwrap(), "locked")
+            .unwrap(),
+        Some(Val::Bool(false))
+    );
+    let v = view(&unlocked);
+    let cell = v["sheets"][0]["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["r"] == json!(1) && c["c"] == json!(1))
+        .unwrap();
+    let css = v["sheets"][0]["styles"][cell["s"].as_u64().unwrap() as usize]
+        .as_str()
+        .unwrap();
+    assert!(css.contains("--unlocked:1"));
+}
+
+#[test]
+fn the_standard_width_of_a_sheet() {
+    let out = edit(r#"{"op":"standardWidth","width":12}"#);
+    assert!(part(&out, "xl/worksheets/sheet1.xml").contains("defaultColWidth=\"12.625\""));
+    assert_eq!(view(&out)["sheets"][0]["defaultWidth"], json!(101.0));
+}
+
+#[test]
 fn sheets_added_copied_renamed_and_removed_from_their_tabs() {
     let names = |bytes: &[u8]| -> Vec<String> {
         view(bytes)["sheets"]

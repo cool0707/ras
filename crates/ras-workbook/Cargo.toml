@@ -27,3 +27,6 @@ serde_json = { workspace = true }
 flate2 = "1"
 # Sheets added, copied, removed and renamed in the file (the grid's tabs), as `ras sheet` does it.
 ras-ovba = { workspace = true }
+# The passwords of protected sheets (シートの保護), hashed as Excel hashes them.
+sha2 = "0.11"
+base64 = "0.22"

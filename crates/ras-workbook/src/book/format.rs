@@ -21,6 +21,22 @@ const DIGIT_WIDTH: f64 = 8.0;
 /// The padding of a cell in pixels, which the width of a column has in the file.
 const CELL_PADDING: f64 = 5.0;
 
+/// A cell of this protection is locked: as `locked` says, else (as Excel takes it) it is.
+pub(crate) fn locked(p: &umya_spreadsheet::Protection) -> bool {
+    // (The model reads a `locked` not written as false.)
+    let unset = |hidden: Option<bool>| {
+        let mut q = umya_spreadsheet::Protection::default();
+        if let Some(h) = hidden {
+            q.set_hidden(h);
+        }
+        q == *p
+    };
+    if unset(None) || unset(Some(false)) || unset(Some(true)) {
+        return true;
+    }
+    p.locked()
+}
+
 /// The width of a column as the file has it, of a `ColumnWidth` (ECMA-376 18.3.1.13).
 pub(super) fn width_to_file(chars: f64) -> f64 {
     ((chars * DIGIT_WIDTH + CELL_PADDING) / DIGIT_WIDTH * 256.0).trunc() / 256.0
@@ -462,7 +478,7 @@ impl Book {
                 d if d <= 90 => d as f64,
                 d => 90.0 - d as f64,
             }),
-            "locked" => Val::Bool(style.protection().is_none_or(|p| p.locked())),
+            "locked" => Val::Bool(style.protection().is_none_or(locked)),
             "formulahidden" => {
                 Val::Bool(style.protection().cloned().is_some_and(|mut p| p.hidden()))
             }
@@ -981,6 +997,19 @@ impl Book {
     }
 
     /// `Worksheet.Tab.Color` as VBA's colour number, None when the tab has no colour.
+    /// The width of the columns given none (ホーム > 書式 > 既定の幅), in characters
+    /// (`StandardWidth`).
+    pub fn set_standard_width(&mut self, si: usize, chars: f64) -> Result<()> {
+        self.check_sheet(si)?;
+        if !(0.0..=255.0).contains(&chars) {
+            return Err("Worksheet クラスの StandardWidth プロパティを設定できません。".into());
+        }
+        let ws = self.file.sheet_mut(si).map_err(|e| e.to_string())?;
+        ws.sheet_format_properties_mut()
+            .set_default_column_width(chars);
+        Ok(())
+    }
+
     pub fn tab_color(&self, si: usize) -> Option<f64> {
         let ws = self.file.sheet(si).ok()?;
         ws.tab_color()
