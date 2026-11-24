@@ -532,10 +532,9 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.conddlg select, .dlg.conddlg input[type="text"], .dlg.conddlg input[type="number"] { font: inherit; }
 .dlg.conddlg [hidden] { display: none !important; }
 .dlg.conddlg label > .lbl { flex: none; }
-.dlg.conddlg .condwhere input { flex: 1; min-width: 0; }
+.dlg.conddlg .condtop > .lbl { width: 84px; }
+.dlg.conddlg .condtop > input, .dlg.conddlg .condtop > select { flex: 1; min-width: 0; }
 .dlg.conddlg .condcaption { margin: 8px 0 3px; }
-.dlg.conddlg select.condkinds { display: block; width: 100%; padding: 2px 0; overflow: hidden; border: 1px solid #adadad; }
-.dlg.conddlg select.condkinds option { padding: 3px 8px; }
 .dlg.conddlg .condbody { display: flex; flex-direction: column; gap: 6px; min-height: 196px; padding: 8px 10px; border: 1px solid #adadad; }
 .dlg.conddlg .condpane, .dlg.conddlg .condstyle { display: flex; flex-direction: column; gap: 6px; }
 .dlg.conddlg .condprompt { font-weight: bold; }

@@ -4240,14 +4240,13 @@
         // or what of the cells).
         const given = (kind, key, value, sub) => (initKind === kind && (!sub || sub === initSub) && init[key] !== undefined && init[key] !== null ? init[key] : value);
         const form = openDialog(o.rule ? "書式ルールの編集" : "新しい書式ルール", "conddlg", o.back);
-        const whereLine = form.appendChild(el("label", "condwhere"));
+        const whereLine = form.appendChild(el("label", "condtop"));
         whereLine.appendChild(el("span", "lbl", "適用先:"));
         const where = condInput(whereLine, condRefText(o.range || condRange()), "range");
         where.title = "ルールを適用するセル（=$A$1:$B$10,$D$2 のように , で区切って複数の範囲も）";
-        form.appendChild(el("div", "condcaption", "ルールの種類を選択してください:"));
-        const kinds = condSelect(form, COND_KINDS.map(([v, label]) => [v, `► ${label}`]), initKind, "kind");
-        kinds.className = "condkinds";
-        kinds.size = COND_KINDS.length;
+        const kindLine = form.appendChild(el("label", "condtop"));
+        kindLine.appendChild(el("span", "lbl", "ルールの種類:"));
+        const kinds = condSelect(kindLine, COND_KINDS, initKind, "kind");
         form.appendChild(el("div", "condcaption", "ルールの内容を編集してください:"));
         const body = form.appendChild(el("div", "condbody"));
 
