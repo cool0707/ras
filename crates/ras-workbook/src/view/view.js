@@ -3996,7 +3996,7 @@
 
         // ---- ホーム
         const home = tab("home", "ホーム");
-        group(home, "元に戻す");
+        group(home, "履歴");
         stack();
         button("undo", { icon: "undo", label: "元に戻す", title: "元に戻す（Ctrl+Z）", edits: true, act: () => postHistory("undo") });
         button("redo", { icon: "redo", label: "やり直し", title: "やり直し（Ctrl+Y）", edits: true, act: () => postHistory("redo") });
