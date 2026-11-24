@@ -1154,6 +1154,9 @@ impl<'p> Gen<'p> {
         if intr == EventOn {
             return self.event_on(e, &r, args);
         }
+        if intr.is_file_io() {
+            return self.file_io(intr, args);
+        }
         let a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
         let argv = a.join(", ");
         let arg =
@@ -1161,6 +1164,9 @@ impl<'p> Gen<'p> {
         let elem = recv_ty.elem_of();
         match intr {
             EventOn => unreachable!(),
+            FileOpen | FileClose | FileReset | FilePrint | FilePrintLine | FileWrite
+            | FileWriteLine | FileInput | FileLineInput | FileInputString | FileGet | FilePut
+            | FileSeek | FileLock | FileUnlock | FileWidth | FileRename => unreachable!(),
             ArrLength | ArrRows | StrLength => format!("{r}.length"),
             ArrCols => format!("$rt.cols({r})"),
             MapSize => format!("{r}.size"),
@@ -1316,6 +1322,112 @@ impl ElemOf for Type {
         match self {
             Type::Array(inner) => (**inner).clone(),
             _ => Type::Any,
+        }
+    }
+}
+
+/// How the run time converts what it reads into a variable of type `t` (`Input #`).
+fn file_kind(t: &Type) -> &'static str {
+    match t {
+        Type::Str => "s",
+        Type::Bool => "b",
+        Type::Date => "d",
+        Type::Byte => "u8",
+        Type::Short => "i16",
+        Type::Int | Type::Enum(_) => "i32",
+        Type::Long | Type::Ptr => "i64",
+        Type::Float => "f32",
+        Type::Double | Type::Decimal => "f64",
+        Type::Currency => "cur",
+        _ => "v",
+    }
+}
+
+/// The layout of a value written by `Put #` / read by `Get #`: its kind, `[kind]` for an array.
+fn binary_kind(t: &Type) -> String {
+    match t {
+        Type::Array(e) => format!("[{}]", file_kind(e)),
+        other => file_kind(other).to_string(),
+    }
+}
+
+impl Gen<'_> {
+    /// The statements of the files opened by number (spec §15.3.2), on the run time's file table.
+    fn file_io(&mut self, intr: Intr, args: &[Expr]) -> String {
+        use Intr::*;
+        match intr {
+            FilePrint | FilePrintLine => {
+                let n = self.expr(&args[0]);
+                let parts: Vec<String> = args[1..]
+                    .iter()
+                    .map(|x| {
+                        let at = self.ty(x);
+                        let v = self.expr(x);
+                        self.to_string(v, &at)
+                    })
+                    .collect();
+                format!(
+                    "$rt.filePrint({n}, [{}], {})",
+                    parts.join(", "),
+                    intr == FilePrintLine
+                )
+            }
+            FileWrite | FileWriteLine => {
+                let a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
+                format!(
+                    "$rt.fileWrite({}, [{}], {})",
+                    a[0],
+                    a[1..].join(", "),
+                    intr == FileWriteLine
+                )
+            }
+            FileInput => {
+                let n = self.expr(&args[0]);
+                let targets: Vec<String> = args[1..]
+                    .iter()
+                    .map(|x| {
+                        let kind = file_kind(&self.ty(x));
+                        let cell = self.by_ref(x);
+                        format!("[{cell}, \"{kind}\"]")
+                    })
+                    .collect();
+                format!("$rt.fileInput({n}, [{}])", targets.join(", "))
+            }
+            FileGet | FilePut => {
+                let n = self.expr(&args[0]);
+                let kind = binary_kind(&self.ty(&args[1]));
+                let v = if intr == FileGet && !self.ty(&args[1]).is_array() {
+                    self.by_ref(&args[1])
+                } else {
+                    self.expr(&args[1])
+                };
+                let rec = match args.get(2) {
+                    Some(r) => self.expr(r),
+                    None => "undefined".into(),
+                };
+                let f = if intr == FileGet {
+                    "fileGet"
+                } else {
+                    "filePut"
+                };
+                format!("$rt.{f}({n}, {v}, \"{kind}\", {rec})")
+            }
+            _ => {
+                let a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
+                let f = match intr {
+                    FileOpen => "fileOpen",
+                    FileClose => "fileClose",
+                    FileReset => "fileReset",
+                    FileLineInput => "fileLineInput",
+                    FileInputString => "fileInputString",
+                    FileSeek => "fileSeek",
+                    FileLock => "fileLock",
+                    FileUnlock => "fileUnlock",
+                    FileWidth => "fileWidth",
+                    _ => "fileRename",
+                };
+                format!("$rt.{f}({})", a.join(", "))
+            }
         }
     }
 }

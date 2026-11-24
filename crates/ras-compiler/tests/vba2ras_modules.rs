@@ -476,6 +476,112 @@ fn scripting_types_convert_and_stay_late_bound() {
     );
 }
 
+const FILE_IO: &str = r#"Option Explicit
+
+Public Sub SaveAndLoad(ByVal path As String)
+    Dim f As Integer
+    Dim s As String, n As Long, ok As Boolean
+    Dim buf() As Byte
+    f = FreeFile
+    Open path For Output As #f
+    Print #f, "name"; 1
+    Print #f, "partial";
+    Print #f,
+    Write #f, "a", 2, True
+    Write #f, "b";
+    Close #f
+    Open path For Input Access Read Shared As #f
+    Do While Not EOF(f)
+        Line Input #f, s
+        Debug.Print s
+    Loop
+    Seek #f, 1
+    Input #f, s, n, ok
+    s = Input(3, #f)
+    Debug.Print Seek(f), LOF(f), Loc(f)
+    Close
+    Open path & ".bin" For Binary Lock Write As 2
+    Put #2, , n
+    Get #2, 1, n
+    Lock #2, 1 To 4
+    Unlock #2
+    Width #2, 80
+    Close #1, #2
+    Open path & ".dat" For Random As #3 Len = 32
+    Put 3, 2, s
+    Reset
+    Name path As path & ".old"
+    Kill path & ".*"
+    If Dir(path) = "" Then MkDir path & "_dir"
+    Print #3, "a", "b"
+    Debug.Print DateDiff("d", #1/2/2020#, #Jan 3, 2020#)
+End Sub
+"#;
+
+#[test]
+fn file_statements_convert_to_the_file_functions() {
+    let m = convert(FILE_IO, &Target::Standard, &[]);
+    println!("{}\n{:?}", m.text, m.todos);
+    // `Print #3, "a", "b"` (tab positions) is left as a TODO; after `(` and `,` a `#…#` with
+    // a date in it is still a date literal (left as a TODO as before), not a file number.
+    assert_eq!(m.todos.len(), 2, "{:?}", m.todos);
+    assert!(m.todos[0].1.contains("Print #"), "{:?}", m.todos);
+    assert!(m.todos[1].1.contains("日付リテラル"), "{:?}", m.todos);
+    for want in [
+        "f = freeFile();",
+        "fileOpen(f, path, forOutput);",
+        "printLine(f, \"name\", 1);",
+        "print(f, \"partial\");",
+        "printLine(f);",
+        "writeLine(f, \"a\", 2, true);",
+        "write(f, \"b\");",
+        "fileClose(f);",
+        "fileOpen(f, path, forInput, accessRead, lockShared);",
+        "while (!eof(f)) {",
+        "s = lineInput(f);",
+        "seek(f, 1);",
+        "input(f, s, n, ok);",
+        "s = inputString(f, 3);",
+        "fileClose();",
+        "fileOpen(2, `${path}.bin`, forBinary, accessDefault, lockWrite);",
+        "filePut(2, n);",
+        "fileGet(2, n, 1);",
+        "lock(2, 1, 4);",
+        "unlock(2);",
+        "fileWidth(2, 80);",
+        "fileClose(1, 2);",
+        "fileOpen(3, `${path}.dat`, forRandom, accessDefault, lockDefault, 32);",
+        "filePut(3, s, 2);",
+        "reset();",
+        "rename(path, `${path}.old`);",
+        "kill(`${path}.*`);",
+    ] {
+        assert!(m.text.contains(want), "{want}\n{}", m.text);
+    }
+    // And back to VBA.
+    let (diags, files) = compile(&[("Module1", &m.text)]);
+    assert!(diags.is_empty(), "{diags:?}");
+    let vba = code(&files, "Module1");
+    for want in [
+        "Open path_ For Output As #f",
+        "Print #f, \"name\"; CStr(1&)",
+        "Print #f, \"partial\";",
+        "Write #f, \"a\", 2&, True",
+        "Open path_ For Input Access Read Shared As #f",
+        "Line Input #f, ",
+        "Input #f, s, n, ok",
+        "Input$(3&, #f)",
+        "Open path_ & \".bin\" For Binary Lock Write As #2",
+        "Get #2, 1&, n",
+        "Lock #2, 1& To 4&",
+        "Open path_ & \".dat\" For Random As #3 Len = 32&",
+        "Put #3, 2&, s",
+        "Name path_ As path_ & \".old\"",
+    ] {
+        assert!(vba.contains(want), "{want}\n{vba}");
+    }
+}
+
 /// `[A1]` / `[SUM(A1:A3)]` (the shorthand of `Evaluate`) become `` fx`…` `` (spec §2.7);
 /// a name written in brackets stays a name.
 #[test]

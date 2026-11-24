@@ -238,6 +238,27 @@ function opened() {
 
 `on` は、コントロール（`this.btnOK.on("Click", () => { ... })`）・シート・ブック・`application` に使えます。配列・コレクションにも使えます（`this.controls.on("Change", (c) => { ... })`、`[this.txtA, this.txtB].on(...)`。ハンドラは先頭の引数でそのメンバーを受け取ります）。フォームのコードビハインドで付けたものは、フォームが閉じると外れます。図形には、マクロにする関数の名前を渡します（`shape.on("Click", reload)`。`OnAction` に設定されます）。決まったコントロールのイベントは `@on("btnOK.Click")` で書きます。
 
+## ファイルの読み書き（`Open` / `Print #` / `Close`）
+
+```typescript
+export function copyLines(src: string, dest: string) {
+    const inp = freeFile();
+    fileOpen(inp, src, forInput);                     // Open src For Input As #inp
+    const out = freeFile();
+    fileOpen(out, dest, forAppend);                   // For Output / Append / Binary / Random
+    while (!eof(inp)) {
+        const line = lineInput(inp);                  // Line Input #inp, line
+        printLine(out, line, "\t", line.length);     // Print #out, line; vbTab; …（print は改行しない）
+    }
+    writeLine(out, "合計", 3, true);                  // Write #out, "合計", 3, True
+    fileClose(inp, out);                              // Close #inp, #out（引数なしで全部）
+    if (dir(dest + ".bak") != "") kill(dest + ".bak");
+    fileCopy(dest, dest + ".bak");
+}
+```
+
+ほかに `input(n, a, b)`（`Input #`）、`inputString(n, 文字数)`、`fileGet` / `filePut`（`Get` / `Put`）、`seek`、`lock` / `unlock`、`fileWidth`、`rename(古い, 新しい)`（`Name … As …`）、`reset()`。`fileOpen` のモード（`forInput` など）・`accessRead`・`lockShared` は定数で書きます。
+
 ## テスト（`test/*.test.ras`）
 
 ```typescript

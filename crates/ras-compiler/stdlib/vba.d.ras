@@ -327,6 +327,60 @@ declare namespace VBA {
     }
 }
 
+// ファイル番号を使うファイル操作（`fileOpen` など。仕様 §15.3.2）の定数。VBA では `Open` 文の
+// キーワード（`For Output`、`Access Read`、`Lock Write`）になる。この名前の列挙型は VBA に無いので、
+// 値として使ったときは数値で出力する（`fileAttr` の戻り値と比べられる）。
+declare namespace FileIO {
+    /**
+     * `fileOpen` でファイルを開くモード（VBA の `Open … For <モード>`）。値は `fileAttr(n, 1)` の戻り値と同じ。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/open-statement
+     */
+    enum OpenMode {
+        /** 読み取り（`For Input`）。ファイルが無ければエラー 53。 */
+        forInput = 1,
+        /** 書き込み（`For Output`）。ファイルは作り直される。 */
+        forOutput = 2,
+        /** 固定長のレコード単位の読み書き（`For Random`）。 */
+        forRandom = 4,
+        /** 末尾への追記（`For Append`）。 */
+        forAppend = 8,
+        /** バイト単位の読み書き（`For Binary`）。 */
+        forBinary = 32
+    }
+
+    /**
+     * `fileOpen` で許可する操作（VBA の `Open … Access <操作>`）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/open-statement
+     */
+    enum OpenAccess {
+        /** 指定しない（モードの既定）。 */
+        accessDefault = -1,
+        /** 読み取りのみ（`Access Read`）。 */
+        accessRead = 1,
+        /** 書き込みのみ（`Access Write`）。 */
+        accessWrite = 2,
+        /** 読み書き（`Access Read Write`）。 */
+        accessReadWrite = 3
+    }
+
+    /**
+     * `fileOpen` で開いているファイルに、ほかのプロセスから許可する操作（VBA の `Open … <ロック>`）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/open-statement
+     */
+    enum OpenShare {
+        /** 指定しない（`Lock` 句なし）。 */
+        lockDefault = -1,
+        /** 読み書きとも禁止（`Lock Read Write`）。 */
+        lockReadWrite = 0,
+        /** 書き込みを禁止（`Lock Write`）。 */
+        lockWrite = 1,
+        /** 読み取りを禁止（`Lock Read`）。 */
+        lockRead = 2,
+        /** 禁止しない（`Shared`）。 */
+        lockShared = 3
+    }
+}
+
 // ---------------------------------------------------------------------
 // グローバル オブジェクトと定数
 // ---------------------------------------------------------------------
@@ -1218,6 +1272,18 @@ declare function EOF(fileNumber: int): boolean;
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/lof-function
  */
 declare function LOF(fileNumber: int): int;
+
+/**
+ * 開いているファイルの現在の位置を返す（`forRandom` は最後に読み書きしたレコード番号、`forBinary` は最後に読み書きしたバイトの位置、テキストのモードはバイト位置 ÷ 128）。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/loc-function
+ */
+declare function Loc(fileNumber: int): int;
+
+/**
+ * 開いているファイルのモード（`returnType` が 1 のとき。`FileIO.OpenMode` の値）を返す。
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/fileattr-function
+ */
+declare function FileAttr(fileNumber: int, returnType?: int): int;
 
 // ---------------------------------------------------------------------
 // ポインター

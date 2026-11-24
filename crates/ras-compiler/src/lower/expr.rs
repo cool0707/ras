@@ -2007,8 +2007,14 @@ impl<'p> Lowerer<'p> {
         if intr == EventOn {
             return self.event_on(e, recv?, args, want);
         }
+        if intr.is_file_io() {
+            return self.file_io(intr, args, want);
+        }
         let v = match intr {
             EventOn => unreachable!(),
+            FileOpen | FileClose | FileReset | FilePrint | FilePrintLine | FileWrite
+            | FileWriteLine | FileInput | FileLineInput | FileInputString | FileGet | FilePut
+            | FileSeek | FileLock | FileUnlock | FileWidth | FileRename => unreachable!(),
             ArrLength => {
                 let a = self.expr(recv?);
                 match self.pc.push_caps.get(&a.print()) {
@@ -2533,6 +2539,278 @@ pub(crate) fn mentions(v: &VExpr, name: &str) -> bool {
         VExpr::Call(f, args) => mentions(f, name) || args.iter().any(|a| mentions(a, name)),
         VExpr::Not(x) | VExpr::Neg(x) => mentions(x, name),
         VExpr::Bin(_, l, r) => mentions(l, name) || mentions(r, name),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Files opened by number (spec §15.3.2): VBA statements with their own syntax.
+
+/// `#n`: a file number (an expression in parentheses unless it is a name or literal).
+fn file_number(v: &VExpr) -> String {
+    // `#1`, not `#1&`.
+    if let VExpr::Lit(t) = v {
+        if let Some(digits) = t.strip_suffix('&') {
+            if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) {
+                return format!("#{digits}");
+            }
+        }
+    }
+    if simple(v) {
+        format!("#{}", v.print())
+    } else {
+        format!("#({})", v.print())
+    }
+}
+
+impl<'p> Lowerer<'p> {
+    /// The value of a `FileIO` constant (`forOutput`), checked by the checker.
+    fn file_const(&self, a: Option<&Expr>) -> Option<i64> {
+        let a = a?;
+        match self.info().res.get(&a.peel().id) {
+            Some(Res::EnumMember(en, i)) => Some(self.prog.enums[*en].members[*i].value),
+            _ => None,
+        }
+    }
+
+    /// A variable a statement reads into (`Input #`, `Get #`): the place itself when it is a
+    /// plain variable, else a temporary copied there afterwards.
+    /// `keep`: the statement reads as much as the variable holds (`Get #` into a string or
+    /// an array), so the temporary starts with its value.
+    fn file_target(&mut self, a: &Expr, keep: bool, after: &mut Vec<VStmt>) -> VExpr {
+        let (place, ty) = self.lvalue_ex(a, true);
+        if matches!(place, VExpr::Name(_)) {
+            return place;
+        }
+        let t = VExpr::Name(self.temp(&ty));
+        let set = ty.is_object();
+        if keep {
+            self.emit(VStmt::Assign {
+                target: t.clone(),
+                value: place.clone(),
+                set,
+            });
+        }
+        after.push(VStmt::Assign {
+            target: place,
+            value: t.clone(),
+            set,
+        });
+        t
+    }
+
+    pub(crate) fn file_io(&mut self, intr: Intr, args: &[Expr], want: bool) -> Option<VExpr> {
+        use Intr::*;
+        let raw = |lw: &mut Self, text: String| {
+            lw.emit(VStmt::Raw(text));
+        };
+        match intr {
+            FileOpen => {
+                let mut es: Vec<&Expr> = vec![&args[0], &args[1]];
+                if let Some(r) = args.get(5) {
+                    es.push(r);
+                }
+                let ops = self.operands(&es);
+                let mode = match self.file_const(args.get(2)) {
+                    Some(1) => "Input",
+                    Some(2) => "Output",
+                    Some(4) => "Random",
+                    Some(8) => "Append",
+                    _ => "Binary",
+                };
+                let mut text = format!("Open {} For {mode}", ops[1].print());
+                match self.file_const(args.get(3)) {
+                    Some(1) => text.push_str(" Access Read"),
+                    Some(2) => text.push_str(" Access Write"),
+                    Some(3) => text.push_str(" Access Read Write"),
+                    _ => {}
+                }
+                match self.file_const(args.get(4)) {
+                    Some(0) => text.push_str(" Lock Read Write"),
+                    Some(1) => text.push_str(" Lock Write"),
+                    Some(2) => text.push_str(" Lock Read"),
+                    Some(3) => text.push_str(" Shared"),
+                    _ => {}
+                }
+                text.push_str(&format!(" As {}", file_number(&ops[0])));
+                if let Some(len) = ops.get(2) {
+                    text.push_str(&format!(" Len = {}", len.print()));
+                }
+                raw(self, text);
+                None
+            }
+            FileClose => {
+                let es: Vec<&Expr> = args.iter().collect();
+                let ops = self.operands(&es);
+                let list: Vec<String> = ops.iter().map(file_number).collect();
+                raw(
+                    self,
+                    if list.is_empty() {
+                        "Close".into()
+                    } else {
+                        format!("Close {}", list.join(", "))
+                    },
+                );
+                None
+            }
+            FileReset => {
+                raw(self, "Reset".into());
+                None
+            }
+            FileRename => {
+                let ops = self.operands(&[&args[0], &args[1]]);
+                raw(
+                    self,
+                    format!("Name {} As {}", ops[0].print(), ops[1].print()),
+                );
+                None
+            }
+            FileWidth => {
+                let ops = self.operands(&[&args[0], &args[1]]);
+                raw(
+                    self,
+                    format!("Width {}, {}", file_number(&ops[0]), ops[1].print()),
+                );
+                None
+            }
+            FileLock | FileUnlock => {
+                let es: Vec<&Expr> = args.iter().collect();
+                let ops = self.operands(&es);
+                let kw = if intr == FileLock { "Lock" } else { "Unlock" };
+                let mut text = format!("{kw} {}", file_number(&ops[0]));
+                match ops.len() {
+                    2 => text.push_str(&format!(", {}", ops[1].print())),
+                    3 => text.push_str(&format!(", {} To {}", ops[1].print(), ops[2].print())),
+                    _ => {}
+                }
+                raw(self, text);
+                None
+            }
+            FileSeek => {
+                if args.len() == 1 {
+                    let n = self.expr(&args[0]);
+                    let v = call("Seek", vec![n]);
+                    if !want {
+                        return None;
+                    }
+                    return Some(v);
+                }
+                let ops = self.operands(&[&args[0], &args[1]]);
+                raw(
+                    self,
+                    format!("Seek {}, {}", file_number(&ops[0]), ops[1].print()),
+                );
+                None
+            }
+            FilePrint | FilePrintLine => {
+                let es: Vec<&Expr> = args.iter().collect();
+                let mut ops = self.operands(&es);
+                let n = ops.remove(0);
+                let mut list = Vec::new();
+                for (a, v) in args[1..].iter().zip(ops) {
+                    let at = self.ty(a);
+                    list.push(self.to_string(v, &at).print());
+                }
+                let text = match (intr == FilePrintLine, list.is_empty()) {
+                    (true, true) => format!("Print {},", file_number(&n)),
+                    (false, true) => return None,
+                    (true, false) => format!("Print {}, {}", file_number(&n), list.join("; ")),
+                    (false, false) => format!("Print {}, {};", file_number(&n), list.join("; ")),
+                };
+                raw(self, text);
+                None
+            }
+            FileWrite | FileWriteLine => {
+                let es: Vec<&Expr> = args.iter().collect();
+                let ops = self.operands(&es);
+                let list: Vec<String> = ops[1..].iter().map(|v| v.print()).collect();
+                let text = match (intr == FileWriteLine, list.is_empty()) {
+                    (true, true) => format!("Write {},", file_number(&ops[0])),
+                    (false, true) => return None,
+                    (true, false) => format!("Write {}, {}", file_number(&ops[0]), list.join(", ")),
+                    (false, false) => {
+                        format!("Write {}, {},", file_number(&ops[0]), list.join(", "))
+                    }
+                };
+                raw(self, text);
+                None
+            }
+            FileInput => {
+                let n = self.expr(&args[0]);
+                let n = self.spill(n, &Type::Int);
+                let mut after = Vec::new();
+                let targets: Vec<String> = args[1..]
+                    .iter()
+                    .map(|a| self.file_target(a, false, &mut after).print())
+                    .collect();
+                raw(
+                    self,
+                    format!("Input {}, {}", file_number(&n), targets.join(", ")),
+                );
+                for s in after {
+                    self.emit(s);
+                }
+                None
+            }
+            FileLineInput => {
+                let n = self.expr(&args[0]);
+                let t = VExpr::Name(self.temp(&Type::Str));
+                raw(
+                    self,
+                    format!("Line Input {}, {}", file_number(&n), t.print()),
+                );
+                want.then_some(t)
+            }
+            FileInputString => {
+                let ops = self.operands(&[&args[0], &args[1]]);
+                let v = lit(format!(
+                    "Input$({}, {})",
+                    ops[1].print(),
+                    file_number(&ops[0])
+                ));
+                if want {
+                    Some(v)
+                } else {
+                    // `Input$` is a function: its value goes somewhere.
+                    let t = VExpr::Name(self.temp(&Type::Str));
+                    self.emit(assign(t, v));
+                    None
+                }
+            }
+            FileGet | FilePut => {
+                let n = self.expr(&args[0]);
+                let n = self.spill(n, &Type::Int);
+                let mut after = Vec::new();
+                let var = if intr == FileGet {
+                    self.file_target(&args[1], true, &mut after)
+                } else {
+                    // `Put` writes the bytes of the variable's type: an expression is stored
+                    // in a variable of its RAS type first (`Put #1, , 5&` would be the literal's).
+                    let ty = self.ty(&args[1]);
+                    let v = self.expr(&args[1]);
+                    if matches!(v, VExpr::Name(_)) {
+                        v
+                    } else {
+                        let t = VExpr::Name(self.temp(&ty));
+                        self.store(&t, &ty, v, &ty);
+                        t
+                    }
+                };
+                let rec = match args.get(2) {
+                    Some(r) => self.expr(r).print(),
+                    None => String::new(),
+                };
+                let kw = if intr == FileGet { "Get" } else { "Put" };
+                raw(
+                    self,
+                    format!("{kw} {}, {rec}, {}", file_number(&n), var.print()),
+                );
+                for s in after {
+                    self.emit(s);
+                }
+                None
+            }
+            _ => None,
+        }
     }
 }
 
