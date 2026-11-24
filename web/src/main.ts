@@ -76,10 +76,11 @@ const formsAsText = new Set<string>();
 let designer: FormDesigner;
 let formPanels: FormPanels;
 
+/** An empty workbook, named as `workbook` of ras.toml names it (the project's name, `Hello.xlsx`). */
 function newWorkbook(): Workbook {
     const b = Book.create();
     try {
-        return { name: "Book.xlsx", bytes: b.toBytes() };
+        return { name: workbookPath()?.split("/").pop() || "Book.xlsx", bytes: b.toBytes() };
     } finally {
         b.free();
     }
@@ -216,9 +217,9 @@ async function fromHash(): Promise<boolean> {
     }
 }
 
-/** A new project, as `ras init --workbook Book.xlsx` makes it: ras.toml, src/main.ras and an empty workbook. */
+/** A new project, as `ras init --workbook Playground.xlsx` makes it: ras.toml, src/main.ras and an empty workbook. */
 const NEW_PROJECT: ProjectFile[] = [
-    { path: "ras.toml", text: '[project]\nname = "Playground"\nworkbook = "Book.xlsx"\n\n[build]\nopt-level = 1\n' },
+    { path: "ras.toml", text: '[project]\nname = "Playground"\nworkbook = "Playground.xlsx"\n\n[build]\nopt-level = 1\n' },
     {
         path: "src/main.ras",
         text: "/**\n * サンプルのマクロ。Excel の「マクロ」ダイアログから `hello` を実行できる。\n */\nexport function hello() {\n    const names = [\"RAS\", \"VBA\"];\n    const greeting = names.map(n => `Hello, ${n}!`).join(\"\\n\");\n    msgBox(greeting);\n}\n",
@@ -1212,7 +1213,7 @@ async function readWorkbook(file: File) {
 
 /**
  * `ras pack`: the VBA written into a workbook, saved as .xlsm. The book is the one read into the
- * page (or a new one), or from the book tab, the one shown there (after the run, if there was one).
+ * page (or a new one), or from the header's button, the one the book tab shows (after the run, if there was one).
  */
 function packWorkbook(book: Workbook = workbook) {
     const input = { files: sourceFiles(), toml: toml() };
@@ -1377,7 +1378,7 @@ async function main() {
         newProject();
         sample.value = "";
         projectOpened();
-        toast("新しいプロジェクトを作りました（src/main.ras と空のブック Book.xlsx）");
+        toast("新しいプロジェクトを作りました（src/main.ras と空のブック Playground.xlsx）");
     };
 
     editor = new EditorView({ parent: $("editor") });
@@ -1427,18 +1428,6 @@ async function main() {
         const f = input.files && input.files[0];
         if (f) void readWorkbook(f);
         input.value = "";
-    };
-    $("book-new").onclick = () => {
-        workbook = newWorkbook();
-        lastRun = null;
-        clearBookHistory();
-        setWorkbookPath(workbook.name);
-        if (active === "ras.toml") {
-            active = "";
-            openFile("ras.toml");
-        }
-        renderBook();
-        scheduleCompile(0);
     };
     for (const b of document.querySelectorAll<HTMLButtonElement>("#book-which button")) {
         b.onclick = () => {

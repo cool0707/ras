@@ -1,6 +1,6 @@
 [project]
-name = "Playground"
-workbook = "Book.xlsx"
+name = "Forms"
+workbook = "Forms.xlsx"
 
 [build]
 opt-level = 1
