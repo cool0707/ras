@@ -326,6 +326,9 @@ pub struct ObjectChange {
     pub rotation: Option<f64>,
     pub flip_h: Option<bool>,
     pub flip_v: Option<bool>,
+    /// The adjust values of a preset shape (`a:avLst` of its `prstGeom`: `adj`, `adj1`, ...),
+    /// as its 調整ハンドル change them; the others it has stay.
+    pub adjust: Option<Vec<(String, i64)>>,
     /// Its place among the objects drawn over one another.
     pub order: Option<Order>,
     pub delete: bool,
@@ -946,6 +949,24 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                 if line_width.is_some_and(|w| w < 0.0) {
                     return Err("`lineWidth` は 0〜1584（ポイント）で指定してください".into());
                 }
+                let adjust = match o.get("adjust") {
+                    None | Some(Json::Null) => None,
+                    Some(Json::Object(m)) if !m.is_empty() => {
+                        let mut list = Vec::new();
+                        for (k, v) in m {
+                            if !(k.len() <= 32 && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')) {
+                                return Err(format!("`adjust` の `{k}` は調整値の名前（adj、adj1 など）ではありません"));
+                            }
+                            let v = v
+                                .as_f64()
+                                .filter(|x| x.is_finite() && x.abs() <= 2_147_483_647.0)
+                                .ok_or_else(|| format!("`adjust` の `{k}` は数で指定してください"))?;
+                            list.push((k.clone(), v.round() as i64));
+                        }
+                        Some(list)
+                    }
+                    Some(_) => return Err("`adjust` は調整値の名前と値（{\"adj\": 25000} など）で指定してください".into()),
+                };
                 let order = match text("order").as_deref() {
                     None => None,
                     Some("front") => Some(Order::Front),
@@ -964,6 +985,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     rotation: number("rotation", 1e6)?,
                     flip_h: o.get("flipH").and_then(Json::as_bool),
                     flip_v: o.get("flipV").and_then(Json::as_bool),
+                    adjust,
                     order,
                     delete: o.get("delete").and_then(Json::as_bool).unwrap_or(false),
                     link: match o.get("link") {
@@ -986,7 +1008,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     page: int_of(o, "page")?,
                 };
                 if change == (ObjectChange { shape, ..Default::default() }) {
-                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
                 }
                 Op::Object { sheet, name, change }
             }
