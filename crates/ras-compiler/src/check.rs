@@ -5792,6 +5792,11 @@ impl Checker<'_> {
             }
             PlatformIs64 | PlatformIsVba7 => Type::Bool,
             EventOn => self.event_on(call, recv, args),
+            FileOpen | FileClose | FileReset | FilePrint | FilePrintLine | FileWrite
+            | FileWriteLine | FileInput | FileLineInput | FileInputString | FileGet | FilePut
+            | FileSeek | FileLock | FileUnlock | FileWidth | FileRename => {
+                self.file_io_call(call, intr, args)
+            }
             RangeToArray | SheetUsedTable => {
                 self.arg_count(call, args, 0, 0);
                 Type::array(Type::array(Type::Any))
@@ -6145,6 +6150,194 @@ fn contains_break(s: &Stmt) -> bool {
         StmtKind::Labeled { body, .. } => contains_break(body),
         // `break` inside a nested loop / switch belongs to that construct.
         _ => false,
+    }
+}
+
+impl Checker<'_> {
+    /// The statements of the files opened by number (`fileOpen`, `printLine` …; spec §15.3.2).
+    fn file_io_call(&mut self, call: &Expr, intr: Intr, args: &[Expr]) -> Type {
+        use Intr::*;
+        let (min, max) = match intr {
+            FileOpen => (3, 6),
+            FileClose => (0, usize::MAX),
+            FileReset => (0, 0),
+            FilePrint | FilePrintLine | FileWrite | FileWriteLine => (1, usize::MAX),
+            FileInput => (2, usize::MAX),
+            FileLineInput => (1, 1),
+            FileInputString | FileWidth | FileRename => (2, 2),
+            FileGet | FilePut => (2, 3),
+            FileSeek => (1, 2),
+            FileLock | FileUnlock => (1, 3),
+            _ => (0, usize::MAX),
+        };
+        if !self.arg_count(call, args, min, max) {
+            return match intr {
+                FileLineInput | FileInputString => Type::Str,
+                FileSeek if args.len() == 1 => Type::Int,
+                _ => Type::Void,
+            };
+        }
+        let name = intrinsics::GLOBAL_FNS
+            .iter()
+            .find(|n| intrinsics::global_fn(n) == Some(intr))
+            .copied()
+            .unwrap_or("");
+        match intr {
+            FileOpen => {
+                self.arg(args, 0, &Type::Int);
+                self.arg(args, 1, &Type::Str);
+                self.file_const(
+                    args,
+                    2,
+                    "OpenMode",
+                    "モード",
+                    "forInput / forOutput / forAppend / forBinary / forRandom",
+                );
+                self.file_const(
+                    args,
+                    3,
+                    "OpenAccess",
+                    "アクセス",
+                    "accessRead / accessWrite / accessReadWrite / accessDefault",
+                );
+                self.file_const(
+                    args,
+                    4,
+                    "OpenShare",
+                    "ロック",
+                    "lockShared / lockRead / lockWrite / lockReadWrite / lockDefault",
+                );
+                self.arg(args, 5, &Type::Int);
+                Type::Void
+            }
+            FileClose | FileLock | FileUnlock | FileWidth | FileLineInput | FileInputString => {
+                for i in 0..args.len() {
+                    self.arg(args, i, &Type::Int);
+                }
+                match intr {
+                    FileLineInput | FileInputString => Type::Str,
+                    _ => Type::Void,
+                }
+            }
+            FileReset => Type::Void,
+            FileRename => {
+                self.arg(args, 0, &Type::Str);
+                self.arg(args, 1, &Type::Str);
+                Type::Void
+            }
+            FileSeek => {
+                self.arg(args, 0, &Type::Int);
+                if args.len() == 2 {
+                    self.arg(args, 1, &Type::Int);
+                    Type::Void
+                } else {
+                    Type::Int
+                }
+            }
+            FilePrint | FilePrintLine | FileWrite | FileWriteLine => {
+                self.arg(args, 0, &Type::Int);
+                for a in &args[1..] {
+                    let t = self.value(a, None);
+                    if !self.stringifiable(&t) {
+                        self.err(
+                            a.span,
+                            "E0381",
+                            format!("`{name}` に `{}` の値は書き込めません（数値・文字列・真偽値・日付を渡してください）", self.show(&t)),
+                        );
+                    }
+                }
+                Type::Void
+            }
+            FileInput => {
+                self.arg(args, 0, &Type::Int);
+                for a in &args[1..] {
+                    let t = self.value(a, None);
+                    if self.stringifiable(&t) {
+                        self.byref_arg(a, &t, &t, "`input` の読み込み先");
+                    } else {
+                        self.err(
+                            a.span,
+                            "E0381",
+                            format!("`input` で `{}` の変数には読み込めません（数値・文字列・真偽値・日付の変数を渡してください）", self.show(&t)),
+                        );
+                    }
+                }
+                Type::Void
+            }
+            FileGet | FilePut => {
+                self.arg(args, 0, &Type::Int);
+                let a = &args[1];
+                let t = self.value(a, None);
+                let elem = match &t {
+                    Type::Array(e) => (**e).clone(),
+                    other => other.clone(),
+                };
+                let ok = !matches!(elem, Type::Array(_) | Type::Any)
+                    && self.stringifiable(&elem)
+                    && elem.union_members().is_none()
+                    || t.is_error();
+                if !ok {
+                    self.err(
+                        a.span,
+                        "E0381",
+                        format!("`{name}` で `{}` は読み書きできません（数値・文字列・真偽値・日付の変数か、その 1 次元配列を渡してください）", self.show(&t)),
+                    );
+                } else if intr == FileGet && !t.is_array() {
+                    self.byref_arg(a, &t, &t, "`fileGet` の読み込み先");
+                } else if intr == FileGet {
+                    // An array is filled in place (as many elements as it has).
+                    self.lvalue_array(a);
+                }
+                self.arg(args, 2, &Type::Int);
+                Type::Void
+            }
+            _ => Type::Void,
+        }
+    }
+
+    /// The array `fileGet` fills: a variable, field or element, not an expression.
+    fn lvalue_array(&mut self, a: &Expr) {
+        let inner = a.peel();
+        let ok = match &inner.kind {
+            ExprKind::Name(_) => matches!(
+                self.info().res.get(&inner.id),
+                Some(Res::Local(_) | Res::Global(_))
+            ),
+            ExprKind::Member { .. } => matches!(
+                self.info().res.get(&inner.id),
+                Some(Res::Field(..) | Res::Dynamic | Res::Global(_))
+            ),
+            ExprKind::Index { .. } | ExprKind::Error => true,
+            _ => false,
+        };
+        if !ok {
+            self.err(
+                a.span,
+                "E0406",
+                "`fileGet` の読み込み先にはリテラルや式ではなく変数を渡してください",
+            );
+        }
+    }
+
+    /// An argument of `fileOpen` that becomes a keyword of VBA's `Open`: a constant of `FileIO.<enum_name>`.
+    fn file_const(&mut self, args: &[Expr], i: usize, enum_name: &str, what: &str, names: &str) {
+        let Some(a) = args.get(i) else { return };
+        let t = self.value(a, None);
+        if t.is_error() {
+            return;
+        }
+        let inner = a.peel();
+        let ok = match self.info().res.get(&inner.id).cloned() {
+            Some(Res::EnumMember(en, _)) => self.prog.enums[en].name == enum_name,
+            _ => false,
+        };
+        if !ok {
+            self.err(
+                a.span,
+                "E0416",
+                format!("`fileOpen` の{what}には定数（{names}）を直接書いてください（VBA の `Open` 文のキーワードになるため、変数や式は渡せません）"),
+            );
+        }
     }
 }
 

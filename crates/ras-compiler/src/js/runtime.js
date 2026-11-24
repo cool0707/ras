@@ -1231,26 +1231,25 @@ function strConv(s, mode) {
     return out;
 }
 
-let dirState = null;
-function dir(pattern) {
-    const fs = require("fs");
-    const path = require("path");
-    if (pattern !== undefined && pattern !== "") {
-        const full = String(pattern);
-        const name = path.basename(full);
-        const folder = path.dirname(full);
-        const re = new RegExp(`^${name.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, "i");
-        let names = [];
-        try {
-            names = fs.readdirSync(folder).filter((n) => re.test(n) && fs.statSync(path.join(folder, n)).isFile());
-        } catch {
-            names = [];
-        }
-        dirState = names;
-    }
-    if (!dirState) raise(5);
-    return dirState.shift() || "";
+/** VBA's files opened by number and its file functions (spec §15.3.2), in `ras-scripting.js`. */
+function files() {
+    return scripting().files;
 }
+const fileOpen = (n, p, mode, access, share, len) => files().open(n, p, mode, access, share, len);
+const fileClose = (...numbers) => files().close(numbers);
+const fileReset = () => files().close([]);
+const filePrint = (n, parts, newline) => files().print(n, parts, newline);
+const fileWrite = (n, values, newline) => files().write(n, values, newline);
+const fileInput = (n, cells) => files().input(n, cells);
+const fileLineInput = (n) => files().lineInput(n);
+const fileInputString = (n, count) => files().inputString(n, count);
+const fileGet = (n, target, kind, rec) => files().get(n, target, kind, rec);
+const filePut = (n, value, kind, rec) => files().put(n, value, kind, rec);
+const fileSeek = (n, position) => files().seek(n, position);
+const fileLock = (n) => files().lock(n);
+const fileUnlock = (n) => files().lock(n);
+const fileWidth = (n, w) => files().width(n, w);
+const fileRename = (a, b) => files().rename(a, b);
 
 const vbaImpl = {
     vbCrLf: "\r\n", vbCr: "\r", vbLf: "\n", vbTab: "\t", vbNullString: "", vbNullChar: "\0", vbNewLine: "\r\n", vbBack: "\b", vbFormFeed: "\f", vbVerticalTab: "\v",
@@ -1504,19 +1503,23 @@ const vbaImpl = {
     Weekday: (d, first) => ((dateArg(d).getUTCDay() - ((first === undefined || first === 0 ? 1 : first) - 1) + 7) % 7) + 1,
     WeekdayName: (n, abbreviate, first) => new Intl.DateTimeFormat(undefined, { weekday: abbreviate ? "short" : "long", timeZone: "UTC" }).format(new Date(Date.UTC(2023, 0, n + ((first === undefined || first === 0 ? 1 : first) - 1)))),
     MonthName: (n, abbreviate) => new Intl.DateTimeFormat(undefined, { month: abbreviate ? "short" : "long", timeZone: "UTC" }).format(new Date(Date.UTC(2023, n - 1, 1))),
-    Dir: dir,
-    Kill: (p) => require("fs").unlinkSync(String(p)),
-    FileCopy: (a, b) => require("fs").copyFileSync(a, b),
-    FileLen: (p) => require("fs").statSync(p).size,
-    FileDateTime(p) {
-        const d = require("fs").statSync(p).mtime;
-        return dateOf(d.getFullYear(), d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds());
-    },
-    MkDir: (p) => require("fs").mkdirSync(p),
-    RmDir: (p) => require("fs").rmdirSync(p),
-    ChDir: (p) => process.chdir(p),
+    Dir: (pattern, attributes) => files().dir(pattern, attributes),
+    Kill: (p) => files().kill(p),
+    FileCopy: (a, b) => files().fileCopy(a, b),
+    FileLen: (p) => files().fileLen(p),
+    FileDateTime: (p) => files().fileDateTime(p),
+    GetAttr: (p) => files().getAttr(p),
+    SetAttr: (p, attributes) => files().setAttr(p, attributes),
+    MkDir: (p) => files().mkDir(p),
+    RmDir: (p) => files().rmDir(p),
+    ChDir: (p) => files().chDir(p),
     ChDrive() {},
     CurDir: () => process.cwd(),
+    FreeFile: (rangeNumber) => files().freeFile(rangeNumber),
+    EOF: (n) => files().eof(n),
+    LOF: (n) => files().lof(n),
+    Loc: (n) => files().loc(n),
+    FileAttr: (n, returnType) => files().attr(n, returnType),
 };
 
 /** VBA library members; an unknown one raises when it is used, not when the project loads. */
@@ -1814,6 +1817,7 @@ module.exports = {
     trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
+    fileOpen, fileClose, fileReset, filePrint, fileWrite, fileInput, fileLineInput, fileInputString, fileGet, filePut, fileSeek, fileLock, fileUnlock, fileWidth, fileRename,
     vba, declare, module: module_, withEvents, listen, listenAny, listenEach, fireListeners, unlistenOwner, onAction, onActionEach, ensureInit, entries, run, form,
 };
 Object.defineProperty(module.exports, "msforms", { get: () => forms().msforms, enumerable: true });

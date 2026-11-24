@@ -262,7 +262,13 @@ struct Line {
 
 const OPS: &[&str] = &[
     ":=", "<>", "<=", ">=", "=", "<", ">", "+", "-", "*", "/", "\\", "^", "&", "(", ")", ",", ".",
-    "!",
+    "!", ";",
+];
+
+/// Words after which a `#` is a file number (`Print #1`, `As #f`), not a date literal.
+const FILE_NUMBER_AFTER: &[&str] = &[
+    "print", "write", "input", "get", "put", "close", "seek", "lock", "unlock", "width", "as",
+    "eof", "lof", "loc", "fileattr",
 ];
 
 fn lex(code: &str) -> Result<Vec<Tok>, ()> {
@@ -299,6 +305,14 @@ fn lex(code: &str) -> Result<Vec<Tok>, ()> {
             continue;
         }
         if c == '#' {
+            // A file number: `Print #1, …`, `Open … As #f`, `Close #1, #2`, `Input(5, #1)`.
+            let file_number = match out.last() {
+                Some(Tok::Word(w, None)) => {
+                    FILE_NUMBER_AFTER.contains(&w.to_ascii_lowercase().as_str())
+                }
+                Some(Tok::Op(",") | Tok::Op("(")) => true,
+                _ => false,
+            };
             // Date literal `#1/2/2020#` (a `#` elsewhere is a file number or a suffix).
             if let Some(end) = chars[i + 1..].iter().position(|&ch| ch == '#') {
                 let inner: String = chars[i + 1..i + 1 + end].iter().collect();
@@ -306,11 +320,30 @@ fn lex(code: &str) -> Result<Vec<Tok>, ()> {
                     && inner
                         .chars()
                         .all(|ch| ch.is_ascii_alphanumeric() || " /-:.,".contains(ch))
+                    && (!file_number || inner.contains(['/', '-', ':']) || {
+                        // `#Jan 1, 2020#`: a month written as a name.
+                        let lower = inner.to_ascii_lowercase();
+                        [
+                            "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct",
+                            "nov", "dec",
+                        ]
+                        .iter()
+                        .any(|m| {
+                            lower
+                                .split(|c: char| !c.is_ascii_alphabetic())
+                                .any(|w| w.starts_with(m))
+                        })
+                    })
                 {
                     out.push(Tok::Date(inner));
                     i += end + 2;
                     continue;
                 }
+            }
+            if file_number {
+                out.push(Tok::Op("#"));
+                i += 1;
+                continue;
             }
             return Err(());
         }
@@ -687,10 +720,26 @@ enum StmtKind {
     OnErrorGoTo0,
     OnErrorGoTo(String),
     Label(String),
+    /// A statement of the files opened by number (`Open`, `Print #` …): the RAS function and
+    /// its arguments; with `result`, `result = func(args)` (`Line Input #`).
+    File {
+        func: &'static str,
+        args: Vec<FileArg>,
+        result: Option<Expr>,
+    },
     /// A statement without RAS counterpart: the reason.
     Todo(String),
     /// Only a comment.
     Nothing,
+}
+
+#[derive(Clone, Debug)]
+enum FileArg {
+    Value(Expr),
+    /// A variable the statement assigns (`Input #1, a`).
+    Target(Expr),
+    /// A word written as is (`forOutput`).
+    Word(&'static str),
 }
 
 #[derive(Clone, Debug)]
@@ -1428,6 +1477,9 @@ impl<'a> Parser<'a> {
         if kw("RaiseEvent") || kw("LSet") || kw("RSet") {
             return Err(format!("{} には対応していません", head_word(&head)));
         }
+        if let Some(k) = self.file_statement()? {
+            return Ok(k);
+        }
         if kw("Set") || kw("Let") {
             self.ti += 1;
             let target = self.postfix()?;
@@ -1497,6 +1549,261 @@ impl<'a> Parser<'a> {
         }
         self.end_of_stmt()?;
         Ok(StmtKind::Call(Expr::Call(Box::new(callee), args)))
+    }
+
+    /// The statements of the files opened by number; `None` when the statement is not one.
+    fn file_statement(&mut self) -> PResult<Option<StmtKind>> {
+        let Some(Tok::Word(head, None)) = self.peek().cloned() else {
+            return Ok(None);
+        };
+        let head = head.to_ascii_lowercase();
+        let next = self.peek_at(1).cloned();
+        let hash_next = next.as_ref().is_some_and(|t| t.is_op("#"));
+        // `Name = …`, `Width = …`: variables, not the statements.
+        let assigns = next
+            .as_ref()
+            .is_some_and(|t| t.is_op("=") || t.is_op(".") || t.is_op("(") || t.is_op("!"));
+        let has_word = |p: &Self, w: &str| {
+            p.toks()[p.ti..]
+                .iter()
+                .take_while(|t| **t != Tok::Colon)
+                .any(|t| t.is_kw(w))
+        };
+        let file = |args: Vec<FileArg>, func: &'static str| StmtKind::File {
+            func,
+            args,
+            result: None,
+        };
+        let kind = match head.as_str() {
+            "open" if !assigns && has_word(self, "For") => {
+                self.ti += 1;
+                let path = self.expr()?;
+                if !self.eat_kw("For") {
+                    return Err("Open … For を読めません".into());
+                }
+                let (mode, _) = self.ident()?;
+                let mode = match mode.to_ascii_lowercase().as_str() {
+                    "input" => "forInput",
+                    "output" => "forOutput",
+                    "append" => "forAppend",
+                    "binary" => "forBinary",
+                    "random" => "forRandom",
+                    _ => return Err(format!("Open のモード `{mode}` を読めません")),
+                };
+                let mut access = None;
+                if self.eat_kw("Access") {
+                    access = Some(if self.eat_kw("Read") {
+                        if self.eat_kw("Write") {
+                            "accessReadWrite"
+                        } else {
+                            "accessRead"
+                        }
+                    } else if self.eat_kw("Write") {
+                        "accessWrite"
+                    } else {
+                        return Err("Open … Access を読めません".into());
+                    });
+                }
+                let mut share = None;
+                if self.eat_kw("Shared") {
+                    share = Some("lockShared");
+                } else if self.eat_kw("Lock") {
+                    share = Some(if self.eat_kw("Read") {
+                        if self.eat_kw("Write") {
+                            "lockReadWrite"
+                        } else {
+                            "lockRead"
+                        }
+                    } else if self.eat_kw("Write") {
+                        "lockWrite"
+                    } else {
+                        return Err("Open … Lock を読めません".into());
+                    });
+                }
+                if !self.eat_kw("As") {
+                    return Err("Open … As を読めません".into());
+                }
+                let n = self.file_number()?;
+                let len = if self.eat_kw("Len") {
+                    self.expect_op("=")?;
+                    Some(self.expr()?)
+                } else {
+                    None
+                };
+                let mut args = vec![FileArg::Value(n), FileArg::Value(path), FileArg::Word(mode)];
+                if access.is_some() || share.is_some() || len.is_some() {
+                    args.push(FileArg::Word(access.unwrap_or("accessDefault")));
+                }
+                if share.is_some() || len.is_some() {
+                    args.push(FileArg::Word(share.unwrap_or("lockDefault")));
+                }
+                if let Some(len) = len {
+                    args.push(FileArg::Value(len));
+                }
+                file(args, "fileOpen")
+            }
+            "close" if !assigns => {
+                self.ti += 1;
+                let mut args = Vec::new();
+                if !self.at_stmt_end() {
+                    loop {
+                        args.push(FileArg::Value(self.file_number()?));
+                        if !self.eat_op(",") {
+                            break;
+                        }
+                    }
+                }
+                file(args, "fileClose")
+            }
+            "reset" if next.is_none() || next == Some(Tok::Colon) => {
+                self.ti += 1;
+                file(vec![], "reset")
+            }
+            "name" if !assigns && has_word(self, "As") => {
+                self.ti += 1;
+                let from = self.expr()?;
+                if !self.eat_kw("As") {
+                    return Err("Name … As を読めません".into());
+                }
+                let to = self.expr()?;
+                file(vec![FileArg::Value(from), FileArg::Value(to)], "rename")
+            }
+            "print" if hash_next => {
+                self.ti += 1;
+                let n = self.file_number()?;
+                let mut args = vec![FileArg::Value(n)];
+                let mut newline = true;
+                if self.eat_op(",") {
+                    while !self.at_stmt_end() && !self.peek().is_some_and(|t| t.is_kw("Else")) {
+                        if self.eat_op(";") {
+                            newline = false;
+                            continue;
+                        }
+                        if self
+                            .peek()
+                            .is_some_and(|t| t.is_op(",") || t.is_kw("Spc") || t.is_kw("Tab"))
+                        {
+                            return Err("Print # の `,`（次のタブ位置）・Spc・Tab には対応していません（`;` で区切るか、文字列を組み立ててください）".into());
+                        }
+                        args.push(FileArg::Value(self.expr()?));
+                        newline = true;
+                    }
+                }
+                file(args, if newline { "printLine" } else { "print" })
+            }
+            "write" if hash_next => {
+                self.ti += 1;
+                let n = self.file_number()?;
+                let mut args = vec![FileArg::Value(n)];
+                let mut newline = true;
+                if self.eat_op(",") {
+                    while !self.at_stmt_end() && !self.peek().is_some_and(|t| t.is_kw("Else")) {
+                        args.push(FileArg::Value(self.expr()?));
+                        newline = true;
+                        if self.eat_op(",") || self.eat_op(";") {
+                            newline = false;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                file(args, if newline { "writeLine" } else { "write" })
+            }
+            "input" if hash_next => {
+                self.ti += 1;
+                let n = self.file_number()?;
+                self.expect_op(",")?;
+                let mut args = vec![FileArg::Value(n)];
+                loop {
+                    args.push(FileArg::Target(self.postfix()?));
+                    if !self.eat_op(",") {
+                        break;
+                    }
+                }
+                file(args, "input")
+            }
+            "line" if next.as_ref().is_some_and(|t| t.is_kw("Input")) => {
+                self.ti += 2;
+                let n = self.file_number()?;
+                self.expect_op(",")?;
+                let target = self.postfix()?;
+                StmtKind::File {
+                    func: "lineInput",
+                    args: vec![FileArg::Value(n)],
+                    result: Some(target),
+                }
+            }
+            "get" | "put" if !assigns && next.is_some() => {
+                self.ti += 1;
+                let n = self.file_number()?;
+                self.expect_op(",")?;
+                let rec = if self.peek().is_some_and(|t| t.is_op(",")) {
+                    None
+                } else {
+                    Some(self.expr()?)
+                };
+                self.expect_op(",")?;
+                let var = self.postfix()?;
+                let get = head == "get";
+                let mut args = vec![
+                    FileArg::Value(n),
+                    if get {
+                        FileArg::Target(var)
+                    } else {
+                        FileArg::Value(var)
+                    },
+                ];
+                if let Some(r) = rec {
+                    args.push(FileArg::Value(r));
+                }
+                file(args, if get { "fileGet" } else { "filePut" })
+            }
+            "seek" if !assigns && next.is_some() => {
+                self.ti += 1;
+                let n = self.file_number()?;
+                self.expect_op(",")?;
+                let pos = self.expr()?;
+                file(vec![FileArg::Value(n), FileArg::Value(pos)], "seek")
+            }
+            "lock" | "unlock" if !assigns && next.is_some() => {
+                self.ti += 1;
+                let n = self.file_number()?;
+                let mut args = vec![FileArg::Value(n)];
+                if self.eat_op(",") {
+                    // `Lock #1, To 5` starts at the first record.
+                    let from = if self.peek().is_some_and(|t| t.is_kw("To")) {
+                        Expr::Num("1".into(), false)
+                    } else {
+                        self.expr()?
+                    };
+                    args.push(FileArg::Value(from));
+                    if self.eat_kw("To") {
+                        args.push(FileArg::Value(self.expr()?));
+                    }
+                }
+                file(args, if head == "lock" { "lock" } else { "unlock" })
+            }
+            "width" if hash_next => {
+                self.ti += 1;
+                let n = self.file_number()?;
+                self.expect_op(",")?;
+                let w = self.expr()?;
+                file(vec![FileArg::Value(n), FileArg::Value(w)], "fileWidth")
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(self.finish_file(kind)?))
+    }
+
+    fn finish_file(&mut self, kind: StmtKind) -> PResult<StmtKind> {
+        self.end_of_stmt()?;
+        Ok(kind)
+    }
+
+    /// `#n` or `n`.
+    fn file_number(&mut self) -> PResult<Expr> {
+        self.eat_op("#");
+        self.expr()
     }
 
     fn end_of_stmt(&mut self) -> PResult<()> {
@@ -1978,6 +2285,8 @@ impl<'a> Parser<'a> {
                 }
                 _ => Expr::Ident(w, s),
             },
+            // A file number among the arguments (`Input(5, #1)`).
+            Tok::Op("#") => return self.primary(),
             Tok::Op(op) => return Err(format!("`{op}` を式として読めません")),
             Tok::Colon => return Err("式がありません".into()),
         })
@@ -3029,6 +3338,12 @@ impl<'a> Emitter<'a> {
                 }
             }
             StmtKind::Todo(reason) => self.todo(s.line, s.line, reason),
+            StmtKind::File { func, args, result } => {
+                match self.file_stmt(func, args, result.as_ref()) {
+                    Ok(text) => self.line(format!("{text};{tail}")),
+                    Err(reason) => self.todo(s.line, s.line, &reason),
+                }
+            }
             StmtKind::Dim { vars, is_static } => {
                 if *is_static {
                     self.todo(s.line, s.line, "Static 変数には対応していません（呼び出しごとに初期化されます。値を残すにはモジュールの変数にしてください）");
@@ -3391,6 +3706,28 @@ impl<'a> Emitter<'a> {
             return Ok(format!("{t}.value"));
         }
         Ok(t)
+    }
+
+    /// A statement of the files opened by number as a call of its RAS function (spec §15.3.2).
+    fn file_stmt(
+        &mut self,
+        func: &str,
+        args: &[FileArg],
+        result: Option<&Expr>,
+    ) -> Result<String, String> {
+        let mut parts = Vec::new();
+        for a in args {
+            parts.push(match a {
+                FileArg::Value(e) => self.value_expr(e)?.0,
+                FileArg::Target(e) => self.lvalue(e)?,
+                FileArg::Word(w) => (*w).to_string(),
+            });
+        }
+        let call = format!("{func}({})", parts.join(", "));
+        match result {
+            Some(target) => Ok(format!("{} = {call}", self.lvalue(target)?)),
+            None => Ok(call),
+        }
     }
 
     fn call_stmt(&mut self, e: &Expr) -> Result<String, String> {
@@ -3853,6 +4190,27 @@ impl<'a> Emitter<'a> {
                 }
             }
         }
+        // The functions of the files opened by number that RAS writes differently.
+        if let Expr::Ident(name, _) = callee {
+            let lower = name.to_lowercase();
+            if !self.procs.contains_key(&lower) {
+                let value = |cv: &mut Self, i: usize| -> Result<String, String> {
+                    match args.get(i).and_then(|a| a.value.as_ref()) {
+                        Some(v) => Ok(cv.value_expr(v)?.0),
+                        None => Err(format!("{name} の引数がありません")),
+                    }
+                };
+                match lower.as_str() {
+                    "input" if args.len() == 2 => {
+                        let (count, n) = (value(self, 0)?, value(self, 1)?);
+                        return Ok(format!("inputString({n}, {count})"));
+                    }
+                    "seek" if args.len() == 1 => return Ok(format!("seek({})", value(self, 0)?)),
+                    "inputb" => return Err("InputB には対応していません".into()),
+                    _ => {}
+                }
+            }
+        }
         let f = match callee {
             Expr::Ident(name, _) => self.name_ref(name, true),
             Expr::Member(obj, name) => self.member(obj.as_deref(), name, true)?,
@@ -3913,6 +4271,14 @@ fn assigned_names(stmts: &[Stmt]) -> HashSet<String> {
         for s in stmts {
             match &s.kind {
                 StmtKind::Assign { target, .. } => out.extend(root(target)),
+                StmtKind::File { args, result, .. } => {
+                    out.extend(result.as_ref().and_then(root));
+                    for a in args {
+                        if let FileArg::Target(t) = a {
+                            out.extend(root(t));
+                        }
+                    }
+                }
                 StmtKind::For { var, body, .. } => {
                     out.extend(root(var));
                     walk(body, out);

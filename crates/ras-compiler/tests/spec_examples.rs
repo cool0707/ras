@@ -1386,3 +1386,53 @@ fn spec_12_1_files_without_code_are_no_modules() {
         .iter()
         .any(|f| f.code.contains("Sheet1Events") || f.code.contains("OnlyImports")));
 }
+
+#[test]
+fn spec_15_3_2_files_opened_by_number() {
+    let src = r#"
+class Counter { n: int = 0; }
+export function save(path: string, c: Counter) {
+    const f = freeFile();
+    fileOpen(f, path, forAppend, accessWrite, lockReadWrite);
+    printLine(f, "n=", c.n, 1.5);
+    print(f, "x");
+    writeLine(f, "a", c.n, true);
+    fileClose(f);
+    fileOpen(f + 1, path, forInput);
+    input(f + 1, c.n);
+    const line = lineInput(f + 1);
+    seek(f + 1, seek(f + 1) + 1);
+    fileClose();
+}
+"#;
+    let (_, out) = compile(&[("Main", src)]);
+    let vba = code(&out, "Main");
+    for want in [
+        "Open path_ For Append Access Write Lock Read Write As #f\n",
+        "Print #f, \"n=\"; CStr(c.n); RAS_NumStr(1.5#)\n",
+        "Print #f, \"x\";\n",
+        "Write #f, \"a\", c.n, True\n",
+        "Close #f\n",
+        "Open path_ For Input As #(f + 1&)\n",
+        // A field is read through a variable: `Input #` takes variables only.
+        "Input #(f + 1&), ras_t",
+        "Line Input #(f + 1&), ras_t",
+        "Seek #(f + 1&), Seek(f + 1&) + 1&\n",
+        "Close\n",
+    ] {
+        assert_contains(&vba, want);
+    }
+    // The keywords of `Open` must be constants; `input` and `fileGet` need variables.
+    let bad = r#"
+export function bad(m: FileIO.OpenMode) {
+    fileOpen(1, "a.txt", m);
+    input(1, 1 + 2);
+    fileGet(1, [1, 2]);
+    printLine(1, new Map<string, int>());
+}
+"#;
+    assert_eq!(
+        error_codes(&[("Main", bad)]),
+        vec!["E0416", "E0406", "E0406", "E0381"]
+    );
+}

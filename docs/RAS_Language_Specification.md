@@ -1889,6 +1889,7 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
   * **パス:** Mac・Linux では、`/` に加えて `\` もパスの区切りとして扱う（`folder + "\\data.txt"` のように書いたコードがそのまま動く）。`getParentFolderName` などパスの文字列だけを扱うメソッドは、どちらの区切りも受け付ける。
   * **辞書:** キーの順序、`compareMode`、無いキーを読むと空の値で追加される動作、エラー番号（457、32811）は本物と同じ。
   * **正規表現:** パターンは JavaScript の正規表現として解釈する（VBScript の正規表現の構文はその部分集合にあたる）。`global` / `ignoreCase` / `multiline`、`test` / `execute` / `replace`（`$1`・`$&`）。パターンの誤りはエラー 5017。
+* **ファイル番号を使うファイル操作:** `fileOpen` / `printLine` / `lineInput` / `fileGet` などと `dir` / `kill` などの VBA 標準関数は、ランタイムの JavaScript 実装で実際のファイルを読み書きする（§15.3.2）。
 * **`declare`（DLL 関数）:** `kernel32` の `Sleep` / `GetTickCount` / `GetTickCount64` / `GetCurrentProcessId` / `QueryPerformanceCounter` / `QueryPerformanceFrequency` のみ代替実装がある。それ以外は警告 `W1410` を出し、呼び出した時点でエラーになる。
 * **速度:** Excel へのアクセスはプロセス間 COM 呼び出しになるため、セルを 1 つずつ読み書きするループは VBA ビルドより大幅に遅い。
 * **実行中の Excel:** マクロ実行中の状態ではないため、停止中も実行中もユーザーが Excel を操作できる。
@@ -2792,6 +2793,77 @@ Excel / VBA / Office のタイプ ライブラリは、メンバー名を Pascal
 * **VBA の綴りで書いた場合:** VBA は大文字小文字を区別しないため、`ws.Cells(r, 1).Value` と書いても同じメンバーとして解決する。ただし警告（`W0304`）を出す。`ras check --fix` とエディタのクイックフィックスが camelCase に書き換える。
 * **プロジェクトが宣言した名前はそのまま:** シートのコード名（`Sheet1`）と `types/*.d.ras` で宣言した名前は、書かれたとおりに参照し、そのまま出力する。変換するのは同梱の型定義の名前だけである。
 * **同梱の型定義の書き方:** `.d.ras` 自体はタイプ ライブラリの綴りで書く（`ras typegen` の出力と同じ形）。コレクションの要素の型は、型引数で表す（`interface Sheets<T>`）。型引数を省略したホスト型は、既定の型引数があればそれ（`Excel.Sheets` は `Excel.Sheets<Excel.Worksheet | Excel.Chart>`。§2.6.5）、なければ要素が `object` になる。タイプ ライブラリが Object / Variant を返すメンバーでも、値の型が決まっているものはユニオン型で書く（§2.6.5）。
+
+#### 15.3.2 ファイル番号を使うファイル操作（v0.9で追加）
+
+VBA の `Open` / `Close` / `Print #` / `Write #` / `Input #` / `Line Input #` / `Get` / `Put` / `Seek` / `Lock` / `Unlock` / `Width #` / `Name` / `Reset` は、独自の構文を持つステートメントで、関数として呼べない。RAS では、これらを組み込みの関数として書く。名前と引数の順は、同じものを関数にした VB.NET の `Microsoft.VisualBasic.FileSystem`（`FileOpen`・`PrintLine`・`LineInput` など）に合わせている。生成する VBA には元のステートメントを出力する。
+
+```typescript
+export function writeLines(path: string, lines: string[]) {
+    const f = freeFile();
+    fileOpen(f, path, forOutput);
+    for (const line of lines) printLine(f, line);
+    fileClose(f);
+}
+
+export function readLines(path: string): string[] {
+    const lines: string[] = [];
+    const f = freeFile();
+    fileOpen(f, path, forInput, accessRead, lockShared);
+    while (!eof(f)) lines.push(lineInput(f));
+    fileClose(f);
+    return lines;
+}
+```
+
+**出力VBAコード（抜粋）:**
+```vba
+    f = FreeFile()
+    Open path_ For Output As #f
+    For ras_i = 0 To RAS_Len(lines) - 1&
+        line = lines(ras_i)
+        Print #f, line
+    Next ras_i
+    Close #f
+    ...
+    Open path_ For Input Access Read Shared As #f
+    ...
+    Do While Not EOF(f)
+        Line Input #f, ras_t1
+        ...
+        lines(ras_len_lines) = ras_t1
+        ...
+    Loop
+    ...
+    Close #f
+```
+
+| RAS | VBA | 説明 |
+|---|---|---|
+| `fileOpen(n, path, mode, access?, share?, recordLength?)` | `Open path For mode [Access …] [Lock …] As #n [Len = …]` | ファイルを開く。`mode` は `forInput` / `forOutput` / `forAppend` / `forBinary` / `forRandom`（`FileIO.OpenMode`）、`access` は `accessRead` / `accessWrite` / `accessReadWrite`（`FileIO.OpenAccess`）、`share` は `lockShared` / `lockRead` / `lockWrite` / `lockReadWrite`（`FileIO.OpenShare`）。指定しないときは `accessDefault` / `lockDefault`（後ろの引数を書くための埋め草） |
+| `fileClose(n1, n2, …)` / `fileClose()` | `Close #n1, #n2` / `Close` | 閉じる。引数なしはすべて閉じる |
+| `reset()` | `Reset` | すべて閉じる |
+| `printLine(n, a, b, …)` | `Print #n, a; b` | 値を続けて書き、改行する（`printLine(n)` は空の行） |
+| `print(n, a, b, …)` | `Print #n, a; b;` | 値を続けて書き、改行しない |
+| `writeLine(n, a, b, …)` | `Write #n, a, b` | `,` 区切りで書き、改行する（文字列は `"` で囲む。`Input #` で読める形式） |
+| `write(n, a, b, …)` | `Write #n, a, b,` | 同上、改行しない |
+| `input(n, v1, v2, …)` | `Input #n, v1, v2` | `,` 区切りの値を変数に読む |
+| `lineInput(n)` | `Line Input #n, v` | 1 行を読んで返す（`string`） |
+| `inputString(n, count)` | `Input$(count, #n)` | `count` 文字を読んで返す |
+| `fileGet(n, v, record?)` | `Get #n, record, v` | `forBinary` / `forRandom` のファイルから変数に読む |
+| `filePut(n, value, record?)` | `Put #n, record, value` | `forBinary` / `forRandom` のファイルに書く |
+| `seek(n)` / `seek(n, position)` | `Seek(n)` / `Seek #n, position` | 次に読み書きする位置（バイトまたはレコード、1 始まり）を返す / 移す |
+| `lock(n, from?, to?)` / `unlock(n, from?, to?)` | `Lock #n, from To to` / `Unlock …` | ほかのプロセスからの読み書きを禁止する / 解除する |
+| `fileWidth(n, width)` | `Width #n, width` | 1 行の幅（`Print #` で折り返す桁数。0 は無制限） |
+| `rename(oldPath, newPath)` | `Name oldPath As newPath` | ファイル・フォルダーの名前を変える（移動する） |
+
+* **ファイル番号を使う関数:** `freeFile()`・`eof(n)`・`lof(n)`・`loc(n)`・`fileAttr(n, 1)` は VBA 標準関数のまま使う（§15.3.1 の camelCase）。`fileAttr(n, 1)` の値は `FileIO.OpenMode` の値と同じ（`fileAttr(n, 1) == forBinary`）。
+* **ファイル番号を使わない関数:** `dir`・`kill`・`fileCopy`・`fileLen`・`fileDateTime`・`getAttr` / `setAttr`・`mkDir`・`rmDir`・`chDir`・`chDrive`・`curDir` は、VBA 標準関数として呼ぶ（`kill(folder + "\\*.tmp")`、`dir(path, vbDirectory)`）。
+* **定数の引数:** `fileOpen` のモード・アクセス・ロックは、VBA の `Open` 文のキーワードになるため、定数を直接書く（変数や式はエラー `E0416`）。`FileIO` の列挙型は VBA に無いため、値として使ったとき（比較など）は数値で出力する。
+* **書き込む値:** `print` / `printLine` は、値を `${}` と同じ規則で文字列にしてから書く（VBA の `Print #` と違い、数値の前後に空白を入れない。`true` は `true`）。`write` / `writeLine` は値をそのまま渡すので、VBA の `Write #` の形式になる（文字列は `"…"`、真偽値は `#TRUE#`、日付は `#2024-01-31#`）。書けるのは数値・文字列・真偽値・日付（`any` を含む）で、オブジェクトや配列はエラー（`E0381`）。
+* **読み込み先:** `input` と `fileGet` の読み込み先は変数・フィールド・配列の要素（`byref` の引数と同じ規則。リテラルや式は `E0406`）。VBA の `Input #` / `Get` は変数にしか読めないため、フィールドや要素に読むときは一時変数に読んでから代入する。`fileGet` / `filePut` で扱えるのは、数値・文字列・真偽値・日付の変数と、その 1 次元配列（配列は要素の数だけ読み書きする）。`filePut` に式を渡すと、式の型の一時変数に入れてから書く（バイト数が RAS の型で決まるように。`filePut(f, 1)` は `Long` の 4 バイト）。
+* **デバッグ実行:** Excel のないデバッグ実行・テスト・プレイグラウンドでは、ランタイム（`ras-scripting.js`）がファイル番号の表を持ち、日本語版 Windows の VBA と同じ形式で読み書きする（テキストは ANSI（Shift_JIS）と CR LF、`Write #` の形式、`Get` / `Put` のバイト列、`forRandom` の文字列の長さ（2 バイト））。エラーも VBA の番号（52 ファイル番号が不正、53 ファイルが見つからない、54 モードが不正、55 既に開かれている、59 レコード長が不正、62 ファイルの終わり、63 レコード番号が不正、67 ファイルが多すぎる、75 パス名が無効）。`lock` / `unlock` は開いているかだけを確かめ、ロックはしない。`Get` / `Put` の `Variant` とオブジェクトには対応していない（エラー 445）。
+* **手書き VBA の取り込み（§14.7.1）:** これらのステートメントは上の関数に変換する（`Open p For Input As #1` → `fileOpen(1, p, forInput)`、`Line Input #1, s` → `s = lineInput(1)`、`Input(5, #1)` → `inputString(1, 5)`）。`Print #` の `,`（次のタブ位置）・`Spc` / `Tab` は変換しない（TODO として残す）。
 
 ---
 

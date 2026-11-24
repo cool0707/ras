@@ -38,6 +38,10 @@ intrinsics! {
     RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, SheetUsedTable, ExcelMatch,
     // event handlers attached at run time (spec §12.2.3)
     EventOn,
+    // statements of the files opened by number (spec §15.3.2)
+    FileOpen, FileClose, FileReset, FilePrint, FilePrintLine, FileWrite, FileWriteLine, FileInput,
+    FileLineInput, FileInputString, FileGet, FilePut, FileSeek, FileLock, FileUnlock, FileWidth,
+    FileRename,
 }
 
 pub fn array_member(name: &str, dims: usize) -> Option<Intr> {
@@ -271,6 +275,23 @@ pub fn global_fn(name: &str) -> Option<Intr> {
         "sleep" => Sleep,
         "waitUntil" => WaitUntil,
         "yieldNow" => YieldNow,
+        "fileOpen" => FileOpen,
+        "fileClose" => FileClose,
+        "reset" => FileReset,
+        "print" => FilePrint,
+        "printLine" => FilePrintLine,
+        "write" => FileWrite,
+        "writeLine" => FileWriteLine,
+        "input" => FileInput,
+        "lineInput" => FileLineInput,
+        "inputString" => FileInputString,
+        "fileGet" => FileGet,
+        "filePut" => FilePut,
+        "seek" => FileSeek,
+        "lock" => FileLock,
+        "unlock" => FileUnlock,
+        "fileWidth" => FileWidth,
+        "rename" => FileRename,
         _ => return None,
     })
 }
@@ -293,6 +314,23 @@ pub const GLOBAL_FNS: &[&str] = &[
     "sleep",
     "waitUntil",
     "yieldNow",
+    "fileOpen",
+    "fileClose",
+    "reset",
+    "print",
+    "printLine",
+    "write",
+    "writeLine",
+    "input",
+    "lineInput",
+    "inputString",
+    "fileGet",
+    "filePut",
+    "seek",
+    "lock",
+    "unlock",
+    "fileWidth",
+    "rename",
 ];
 
 /// Built-in namespaces usable as `Name.member`.
@@ -344,6 +382,31 @@ pub fn host_member(prog: &Program, recv: &Type, name: &str) -> Option<Intr> {
 }
 
 impl Intr {
+    /// The statements of the files opened by number (`Open`, `Print #` …; spec §15.3.2).
+    pub fn is_file_io(self) -> bool {
+        use Intr::*;
+        matches!(
+            self,
+            FileOpen
+                | FileClose
+                | FileReset
+                | FilePrint
+                | FilePrintLine
+                | FileWrite
+                | FileWriteLine
+                | FileInput
+                | FileLineInput
+                | FileInputString
+                | FileGet
+                | FilePut
+                | FileSeek
+                | FileLock
+                | FileUnlock
+                | FileWidth
+                | FileRename
+        )
+    }
+
     /// True for members read without a call (`arr.length`, `Math.PI`).
     pub fn is_property(self) -> bool {
         use Intr::*;

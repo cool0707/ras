@@ -743,3 +743,125 @@ fn a_function_named_as_one_of_vba_is_renamed_in_the_vba_build() {
         assert!(!main.contains(bad), "{bad}\n{main}");
     }
 }
+
+const FILE_IO: &str = r#"
+class Rec { n: int = 0; }
+export function run() {
+    if (dir("work", vbDirectory) != "") {
+        kill("work\\*");
+        rmDir("work");
+    }
+    mkDir("work");
+    const path = "work\\out.txt";
+    const f = freeFile();
+    fileOpen(f, path, forOutput);
+    printLine(f, "名前", 1, 2.5, true);
+    print(f, "no newline");
+    printLine(f);
+    writeLine(f, "x,y", 3, false, -1.5);
+    write(f, "y");
+    writeLine(f, 7);
+    fileClose(f);
+    console.log(`len=${fileLen(path)} free=${freeFile()}`);
+    fileOpen(1, path, forInput, accessRead, lockShared);
+    for (let i = 0; i < 2; i++) console.log(`[${lineInput(1)}]`);
+    let s = "";
+    let n = 0;
+    let b = true;
+    let d = 0.0;
+    const r = new Rec();
+    input(1, s, n, b, d);
+    console.log(`${s}|${n}|${b}|${d}`);
+    input(1, s, r.n);
+    console.log(`${s}|${r.n}|${eof(1)}|${seek(1)}`);
+    seek(1, 1);
+    console.log(inputString(1, 3));
+    fileClose(1);
+    fileOpen(2, "work/b.bin", forBinary);
+    filePut(2, 42, 1);
+    filePut(2, "あいう");
+    const arr: int[] = [7, 8];
+    filePut(2, arr);
+    let back = 0;
+    fileGet(2, back, 1);
+    let txt = "xxx";
+    fileGet(2, txt);
+    const arr2: int[] = [0, 0];
+    fileGet(2, arr2);
+    console.log(`${back} ${txt} ${arr2.join(",")} lof=${lof(2)} loc=${loc(2)} mode=${fileAttr(2, 1) == forBinary} eof=${eof(2)}`);
+    fileGet(2, back);
+    console.log(`eof=${eof(2)}`);
+    fileClose();
+    fileOpen(3, "work/r.dat", forRandom, accessDefault, lockDefault, 16);
+    filePut(3, "abc", 2);
+    let rs = "";
+    fileGet(3, rs, 2);
+    console.log(`${rs} ${loc(3)} ${lof(3)}`);
+    reset();
+    rename("work/b.bin", "work/c.bin");
+    let names = "";
+    let e = dir("work\\*.*");
+    while (e != "") {
+        names += `${e};`;
+        e = dir();
+    }
+    console.log(names);
+    try {
+        fileOpen(9, "work/none.txt", forInput);
+    } catch (err) {
+        console.log(`${err.code}`);
+    }
+    try {
+        printLine(5, "x");
+    } catch (err) {
+        console.log(`${err.code}`);
+    }
+    fileOpen(4, "work/c.bin", forBinary, accessRead);
+    try {
+        filePut(4, 1);
+    } catch (err) {
+        console.log(`${err.code}`);
+    }
+    try {
+        kill("work/c.bin");
+    } catch (err) {
+        console.log(`${err.code}`);
+    }
+    fileClose(4);
+    kill("work\\*.*");
+    rmDir("work");
+    console.log(`${dir("work", vbDirectory) == ""}`);
+}
+"#;
+
+#[test]
+fn files_opened_by_number_run_without_excel() {
+    let files = [("Main", FILE_IO)];
+    let (_prog, out) = compile(&files);
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("fileio", &files, &out);
+    let (stdout, stderr, ok) = p.run("Main.run", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec![
+            "len=55 free=1",
+            "[名前12.5true]",
+            "[no newline]",
+            "x,y|3|false|-1.5",
+            "y|7|true|56",
+            "名前1",
+            "42 あいう 7,8 lof=18 loc=18 mode=true eof=false",
+            "eof=true",
+            "abc 2 21",
+            "c.bin;out.txt;r.dat;",
+            "53",
+            "52",
+            "75",
+            "75",
+            "true",
+        ]
+    );
+}
