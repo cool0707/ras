@@ -34,7 +34,7 @@ mod tabs;
 mod tests;
 
 pub(crate) use conditional::rules_of as conditional_rules;
-pub use conditional::{CondFormat, CondRule, Managed};
+pub use conditional::{CondFormat, CondRule, Managed, Threshold};
 use scan::Edits;
 
 type Result<T> = std::result::Result<T, String>;
@@ -1227,6 +1227,30 @@ fn cond_rule_of(o: &Json) -> Result<CondRule> {
         icons: text("icons").unwrap_or_default(),
         reverse: flag("reverse"),
         icon_only: flag("iconOnly"),
+        bar_only: flag("barOnly"),
+        thresholds: match o.get("thresholds") {
+            None | Some(Json::Null) => Vec::new(),
+            Some(Json::Array(list)) => list
+                .iter()
+                .map(|t| {
+                    let kind = t
+                        .get("type")
+                        .and_then(Json::as_str)
+                        .ok_or("`thresholds` の要素は { \"type\": \"num\", \"value\": 10 } のように指定してください")?;
+                    let value = match t.get("value") {
+                        None | Some(Json::Null) => String::new(),
+                        Some(Json::String(v)) => v.clone(),
+                        Some(v) => v.to_string(),
+                    };
+                    Ok(conditional::Threshold {
+                        kind: kind.to_string(),
+                        value,
+                        gte: t.get("gte").and_then(Json::as_bool).unwrap_or(true),
+                    })
+                })
+                .collect::<Result<_>>()?,
+            Some(_) => return Err("`thresholds` は配列で指定してください".into()),
+        },
         format,
         stop: flag("stop"),
     };

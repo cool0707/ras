@@ -2968,3 +2968,60 @@ fn conditional_rules_of_excel_2010_managed() {
         "{doc}"
     );
 }
+
+#[test]
+fn conditional_thresholds_of_bars_scales_and_icons() {
+    const SHEET1: &str = "xl/worksheets/sheet1.xml";
+    // A bar from 0 to the 90th percentile, the bar alone.
+    let bar = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#638EC6"],"barOnly":true,"thresholds":[{"type":"num","value":0},{"type":"percentile","value":"90"}]}"##,
+    );
+    let doc = part(&bar, SHEET1);
+    assert!(
+        doc.contains(r#"<dataBar showValue="0"><cfvo type="num" val="0"/><cfvo type="percentile" val="90"/><color rgb="FF638EC6"/></dataBar>"#),
+        "{doc}"
+    );
+    let rule = &view(&bar)["sheets"][0]["condRules"][0];
+    assert_eq!(
+        rule["thresholds"],
+        json!([{ "type": "num", "value": "0", "gte": true }, { "type": "percentile", "value": "90", "gte": true }])
+    );
+    assert_eq!(rule["barOnly"], json!(true));
+    // A scale from a cell's value (a formula) through a number to the greatest.
+    let scale = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"colorScale","colors":["F8696B","FFEB84","63BE7B"],"thresholds":[{"type":"formula","value":"=$B$1*2"},{"type":"num","value":"=$C$1"},{"type":"max"}]}"##,
+    );
+    let doc = part(&scale, SHEET1);
+    assert!(doc.contains(r#"<colorScale><cfvo type="formula" val="$B$1*2"/><cfvo type="num" val="$C$1"/><cfvo type="max"/>"#), "{doc}");
+    let rule = &view(&scale)["sheets"][0]["condRules"][0];
+    assert_eq!(
+        rule["thresholds"][0],
+        json!({ "type": "formula", "value": "=$B$1*2", "gte": true })
+    );
+    assert_eq!(rule["thresholds"][1]["value"], json!("=$C$1"));
+    // Icons by numbers, the greatest above 300 (not from it).
+    let icons = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"iconSet","icons":"3Arrows","thresholds":[{"type":"percent","value":0},{"type":"num","value":100},{"type":"num","value":300,"gte":false}]}"##,
+    );
+    let doc = part(&icons, SHEET1);
+    assert!(doc.contains(r#"<iconSet iconSet="3Arrows"><cfvo type="percent" val="0"/><cfvo type="num" val="100"/><cfvo type="num" val="300" gte="0"/></iconSet>"#), "{doc}");
+    assert_eq!(
+        view(&icons)["sheets"][0]["condRules"][0]["thresholds"][2]["gte"],
+        json!(false)
+    );
+    // Kept as they are when the rule is moved; written again when it is edited.
+    let moved = apply(
+        &icons,
+        &ops(r#"{"op":"conditionalRules","rules":[{"id":"m0"},{"id":"m1","range":"B2:B9"}]}"#),
+    )
+    .unwrap();
+    assert!(part(&moved, SHEET1).contains(r#"<cfvo type="num" val="300" gte="0"/>"#));
+
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"thresholds":[{"type":"max"},{"type":"max"}]}"##).contains("max"));
+    assert!(wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"thresholds":[{"type":"percent","value":"150"},{"type":"max"}]}"##).contains("0〜100"));
+    assert!(wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"thresholds":[{"type":"num","value":"abc"},{"type":"max"}]}"##).contains("abc"));
+    assert!(wrong(r#"{"op":"conditional","range":"A1","type":"iconSet","icons":"4Rating","thresholds":[{"type":"num","value":1}]}"#).contains("4 つ"));
+    assert!(wrong(r#"{"op":"conditional","range":"A1","type":"colorScale","colors":["000000","FFFFFF"],"thresholds":[{"type":"min"},{"type":"formula","value":"="}]}"#).contains("数式"));
+}

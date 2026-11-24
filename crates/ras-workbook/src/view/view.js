@@ -3845,6 +3845,65 @@
         return cell && cell.t !== undefined && !cell.f ? String(cell.v !== undefined ? cell.v : cell.t) : "";
     }
 
+    // The values a bar, a scale or an icon set goes by (`cfvo`): their kinds, as Excel names them.
+    const POINT_KINDS = { min: "最小値", max: "最大値", num: "数値", percent: "パーセント", formula: "数式", percentile: "百分位" };
+    const POINT_LEAST = ["min", "num", "percent", "formula", "percentile"];
+    const POINT_BETWEEN = ["num", "percent", "formula", "percentile"];
+    const POINT_GREATEST = ["max", "num", "percent", "formula", "percentile"];
+    // A line of a value: its kind and value (none for the least and the greatest), and a color.
+    // `read()`: `{ type, value }`, or null (said where) when the value is missing.
+    function pointRow(where, label, kinds, t, color) {
+        const row = label === null ? where : where.appendChild(el("div", "condpoint"));
+        if (label) row.appendChild(el("span", "lbl", label));
+        const type = row.appendChild(el("select"));
+        type.dataset.field = "pointType";
+        for (const k of kinds) type.appendChild(el("option", null, POINT_KINDS[k])).value = k;
+        type.value = kinds.includes(t.type) ? t.type : kinds[0];
+        const value = row.appendChild(el("input"));
+        value.type = "text";
+        value.spellcheck = false;
+        value.dataset.field = "pointValue";
+        value.value = t.value === undefined || t.value === null ? "" : String(t.value);
+        const sync = () => {
+            const none = type.value === "min" || type.value === "max";
+            value.disabled = none;
+            value.placeholder = none ? `（${POINT_KINDS[type.value]}）` : type.value === "formula" ? "=$A$1" : "";
+            if (none) value.value = "";
+        };
+        type.addEventListener("change", () => {
+            if (type.value === "formula" && value.value && !value.value.startsWith("=")) value.value = `=${value.value}`;
+            sync();
+        });
+        value.addEventListener("input", () => value.setCustomValidity(""));
+        sync();
+        let pick = null;
+        if (color) {
+            pick = row.appendChild(el("input"));
+            pick.type = "color";
+            pick.value = color.toLowerCase();
+            pick.dataset.field = "pointColor";
+        }
+        const now = () => ({ type: type.value, value: value.value.trim() });
+        return {
+            now,
+            read: () => {
+                const v = value.value.trim();
+                if (!value.disabled && !v.replace(/^=/, "").trim()) {
+                    value.setCustomValidity("値を入力してください");
+                    value.reportValidity();
+                    return null;
+                }
+                if (!value.disabled && !v.startsWith("=") && type.value !== "formula" && !isFinite(+v)) {
+                    value.setCustomValidity("数値か、= で始まる数式を入力してください");
+                    value.reportValidity();
+                    return null;
+                }
+                return now();
+            },
+            color: () => pick && pick.value.toUpperCase(),
+        };
+    }
+
     // The kind of "新しい書式ルール" a rule is of.
     const condKind = (r) =>
         ({ containsText: "text", notContainsText: "text", beginsWith: "text", endsWith: "text", uniqueValues: "duplicateValues", colorScale: (r.colors || []).length === 3 ? "colorScale3" : "colorScale2" })[r.type] || r.type;
@@ -4065,15 +4124,32 @@
                 };
                 f.focus();
             } else if (kind === "dataBar") {
+                const t = given("dataBar", "thresholds", null) || [{ type: "min" }, { type: "max" }];
+                const grid = body.appendChild(el("div", "condpoints"));
+                const lo = pointRow(grid, "最小値:", POINT_LEAST, t[0]);
+                const hi = pointRow(grid, "最大値:", POINT_GREATEST, t[1]);
                 const c = colorPick(body, "バーの色:", (given("dataBar", "colors", null) || ["#638EC6"])[0], "barColor");
-                read = () => ({ type: "dataBar", colors: [c.value.toUpperCase()] });
+                const only = check(body, "棒のみ表示", !!given("dataBar", "barOnly", false));
+                read = () => {
+                    const points = [lo.read(), hi.read()];
+                    if (points.includes(null)) return null;
+                    const r = { type: "dataBar", colors: [c.value.toUpperCase()], thresholds: points };
+                    if (only.checked) r.barOnly = true;
+                    return r;
+                };
             } else if (kind === "colorScale2" || kind === "colorScale3") {
                 const three = kind === "colorScale3";
                 const was = given(kind, "colors", null) || (three ? ["#F8696B", "#FFEB84", "#63BE7B"] : ["#F8696B", "#63BE7B"]);
-                const lo = colorPick(body, "最小値の色:", was[0], "minColor");
-                const mid = three ? colorPick(body, "中間値の色（50 百分位）:", was[1], "midColor") : null;
-                const hi = colorPick(body, "最大値の色:", was[was.length - 1], "maxColor");
-                read = () => ({ type: "colorScale", colors: [lo, mid, hi].filter(Boolean).map((p) => p.value.toUpperCase()) });
+                const t = given(kind, "thresholds", null) || (three ? [{ type: "min" }, { type: "percentile", value: "50" }, { type: "max" }] : [{ type: "min" }, { type: "max" }]);
+                const grid = body.appendChild(el("div", "condpoints"));
+                const rows = [pointRow(grid, "最小値:", POINT_LEAST, t[0], was[0])];
+                if (three) rows.push(pointRow(grid, "中間点:", POINT_BETWEEN, t[1], was[1]));
+                rows.push(pointRow(grid, "最大値:", POINT_GREATEST, t[t.length - 1], was[was.length - 1]));
+                read = () => {
+                    const points = rows.map((r) => r.read());
+                    if (points.includes(null)) return null;
+                    return { type: "colorScale", colors: rows.map((r) => r.color()), thresholds: points };
+                };
             } else if (kind === "iconSet") {
                 const line = body.appendChild(el("label"));
                 line.appendChild(el("span", "lbl", "アイコン スタイル:"));
@@ -4081,14 +4157,52 @@
                 s.dataset.field = "icons";
                 for (const [v, label] of COND_ICONS) s.appendChild(el("option", null, label)).value = v;
                 s.value = given("iconSet", "icons", "3TrafficLights1");
-                const sketch = body.appendChild(el("div", "condicons"));
-                const showSketch = () => (sketch.innerHTML = iconSketch(COND_ICONS.find(([v]) => v === s.value)[2]));
-                s.addEventListener("change", showSketch);
-                showSketch();
                 const rev = check(body, "アイコンの順序を逆にする", !!given("iconSet", "reverse", false));
                 const only = check(body, "アイコンのみ表示", !!given("iconSet", "iconOnly", false));
+                body.appendChild(el("div", "prompt", "次のルールに従って各アイコンを表示:"));
+                const grid = body.appendChild(el("div", "condicongrid"));
+                // The values of the icons (the first: where the least starts), kept as the set
+                // changes when it has as many icons.
+                let points = given("iconSet", "thresholds", null);
+                let rows = [];
+                const draw = () => {
+                    const set = COND_ICONS.find(([v]) => v === s.value);
+                    const n = set[2].length;
+                    if (rows.length) points = [points[0]].concat(rows.map((r) => r.now()).reverse());
+                    if (!points || points.length !== n) points = Array.from({ length: n }, (_, i) => ({ type: "percent", value: String(Math.round((i * 100) / n)), gte: true }));
+                    const icons = rev.checked ? set[2].slice().reverse() : set[2];
+                    grid.textContent = "";
+                    rows = [];
+                    // The greatest first, as Excel lists them.
+                    for (let k = 0; k < n - 1; k++) {
+                        const t = points[n - 1 - k];
+                        const row = grid.appendChild(el("div", "condiconrow"));
+                        row.appendChild(el("span", "icon")).innerHTML = iconSketch([icons[k]]);
+                        row.appendChild(el("span", null, k === 0 ? "値が" : "上の値未満で、値が"));
+                        const op = row.appendChild(el("select"));
+                        op.dataset.field = "gte";
+                        for (const [v, label] of [["1", ">="], ["0", ">"]]) op.appendChild(el("option", null, label)).value = v;
+                        op.value = t.gte === false ? "0" : "1";
+                        const point = pointRow(row, null, POINT_BETWEEN, t);
+                        rows.push({
+                            read: () => {
+                                const x = point.read();
+                                return x && Object.assign(x, { gte: op.value === "1" });
+                            },
+                            now: () => Object.assign(point.now(), { gte: op.value === "1" }),
+                        });
+                    }
+                    const last = grid.appendChild(el("div", "condiconrow"));
+                    last.appendChild(el("span", "icon")).innerHTML = iconSketch([icons[n - 1]]);
+                    last.appendChild(el("span", null, "それ以外（上の値より小さい）"));
+                };
+                s.addEventListener("change", draw);
+                rev.addEventListener("change", draw);
+                draw();
                 read = () => {
-                    const r = { type: "iconSet", icons: s.value };
+                    const read = rows.map((r) => r.read());
+                    if (read.includes(null)) return null;
+                    const r = { type: "iconSet", icons: s.value, thresholds: [points[0]].concat(read.reverse()) };
                     if (rev.checked) r.reverse = true;
                     if (only.checked) r.iconOnly = true;
                     return r;

@@ -51,11 +51,84 @@ pub struct CondRule {
     pub icons: String,
     pub reverse: bool,
     pub icon_only: bool,
+    /// `dataBar`: the bar alone ("棒のみ表示").
+    pub bar_only: bool,
+    /// The values the bar, the scale or the icons go by (`cfvo`): a bar's least and greatest,
+    /// a scale's one for each color, an icon set's one for each icon from the least (the first
+    /// is where the least icon starts). Empty: as Excel puts them (the least and the greatest,
+    /// the 50th percentile, percents in equal steps).
+    pub thresholds: Vec<Threshold>,
     /// What the rule gives the cells (not for bars, scales and icons).
     pub format: Option<CondFormat>,
     /// "条件を満たす場合は停止".
     pub stop: bool,
 }
+
+/// A value a bar, a scale or an icon set goes by: `min` / `max` (the least, the greatest of
+/// the cells), `num`, `percent`, `percentile` (`value` a number, or a formula with `=`), or
+/// `formula` (`value` the formula). `gte`: an icon's from the value on (else: above it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Threshold {
+    pub kind: String,
+    pub value: String,
+    pub gte: bool,
+}
+
+impl Threshold {
+    fn new(kind: &str, value: &str) -> Threshold {
+        Threshold {
+            kind: kind.into(),
+            value: value.into(),
+            gte: true,
+        }
+    }
+
+    /// What is wrong with the value, among those `kinds` allows.
+    fn check(&self, kinds: &[&str], what: &str) -> Result<()> {
+        if !kinds.contains(&self.kind.as_str()) {
+            return Err(format!(
+                "{what}の種類 `{}` は指定できません（{}）",
+                self.kind,
+                kinds.join(" / ")
+            ));
+        }
+        let v = self.value.trim();
+        match self.kind.as_str() {
+            "min" | "max" => Ok(()),
+            "formula" if v.trim_start_matches('=').trim().is_empty() => {
+                Err(format!("{what}の数式がありません"))
+            }
+            "formula" => Ok(()),
+            _ if v.starts_with('=') && v.len() > 1 => Ok(()),
+            kind => match v.parse::<f64>() {
+                Ok(x) if x.is_finite() && (kind == "num" || (0.0..=100.0).contains(&x)) => Ok(()),
+                Ok(_) => Err(format!("{what}の値は 0〜100 で指定してください")),
+                Err(_) => Err(format!(
+                    "{what}の値 `{v}` は数値か、= で始まる数式で指定してください"
+                )),
+            },
+        }
+    }
+
+    fn xml(&self, p: &str, icon: bool) -> String {
+        let mut out = format!("<{p}cfvo type=\"{}\"", self.kind);
+        if !matches!(self.kind.as_str(), "min" | "max") {
+            let v = self.value.trim();
+            let v = v.strip_prefix('=').unwrap_or(v).trim();
+            out.push_str(&format!(" val=\"{}\"", scan::escape(v)));
+        }
+        if icon && !self.gte {
+            out.push_str(" gte=\"0\"");
+        }
+        out.push_str("/>");
+        out
+    }
+}
+
+/// The kinds of the values of bars and scales: the least's, one between, the greatest's.
+const LEAST: &[&str] = &["min", "num", "percent", "percentile", "formula"];
+const BETWEEN: &[&str] = &["num", "percent", "percentile", "formula"];
+const GREATEST: &[&str] = &["max", "num", "percent", "percentile", "formula"];
 
 /// The format a rule gives: font color, fill, bold, italic, underline, strike-through, a border
 /// around the cells (`RRGGBB`).
@@ -207,6 +280,38 @@ impl CondRule {
                 ));
             }
             _ => {}
+        }
+        if !self.thresholds.is_empty() {
+            let t = &self.thresholds;
+            match self.kind.as_str() {
+                "dataBar" => {
+                    if t.len() != 2 {
+                        return Err("データ バーの `thresholds` は最小値と最大値の 2 つです".into());
+                    }
+                    t[0].check(LEAST, "最小値")?;
+                    t[1].check(GREATEST, "最大値")?;
+                }
+                "colorScale" => {
+                    if t.len() != self.colors.len() {
+                        return Err("カラー スケールの `thresholds` は色と同じ数です".into());
+                    }
+                    t[0].check(LEAST, "最小値")?;
+                    if t.len() == 3 {
+                        t[1].check(BETWEEN, "中間点")?;
+                    }
+                    t[t.len() - 1].check(GREATEST, "最大値")?;
+                }
+                "iconSet" => {
+                    let n = ICON_SETS.iter().find(|(s, _)| *s == self.icons).map_or(3, |(_, n)| *n);
+                    if t.len() != n {
+                        return Err(format!("アイコン セット `{}` の `thresholds` は {n} つです", self.icons));
+                    }
+                    for x in t {
+                        x.check(BETWEEN, "アイコンの値")?;
+                    }
+                }
+                _ => return Err("`thresholds` はデータ バー・カラー スケール・アイコン セットだけに指定できます".into()),
+            }
         }
         if self.formats() && self.format.is_none() {
             return Err("`format`（ルールが付ける書式）がありません".into());
@@ -372,25 +477,38 @@ fn rule_xml(p: &str, rule: &CondRule, dxf: Option<u32>, first: CellRef, priority
         }
         "timePeriod" => attrs.push_str(&format!(" timePeriod=\"{}\"", rule.period)),
         "dataBar" => {
+            let t = match rule.thresholds.as_slice() {
+                [] => vec![Threshold::new("min", ""), Threshold::new("max", "")],
+                t => t.to_vec(),
+            };
+            let cfvos: String = t.iter().map(|x| x.xml(p, false)).collect();
+            let only = if rule.bar_only {
+                " showValue=\"0\""
+            } else {
+                ""
+            };
             inner = format!(
-                "<{p}dataBar><{p}cfvo type=\"min\"/><{p}cfvo type=\"max\"/><{p}color rgb=\"FF{}\"/></{p}dataBar>",
+                "<{p}dataBar{only}>{cfvos}<{p}color rgb=\"FF{}\"/></{p}dataBar>",
                 rule.colors[0]
             );
         }
         "colorScale" => {
-            let mid = if rule.colors.len() == 3 {
-                format!("<{p}cfvo type=\"percentile\" val=\"50\"/>")
-            } else {
-                String::new()
+            let t = match rule.thresholds.as_slice() {
+                [] if rule.colors.len() == 3 => vec![
+                    Threshold::new("min", ""),
+                    Threshold::new("percentile", "50"),
+                    Threshold::new("max", ""),
+                ],
+                [] => vec![Threshold::new("min", ""), Threshold::new("max", "")],
+                t => t.to_vec(),
             };
+            let cfvos: String = t.iter().map(|x| x.xml(p, false)).collect();
             let colors: String = rule
                 .colors
                 .iter()
                 .map(|c| format!("<{p}color rgb=\"FF{c}\"/>"))
                 .collect();
-            inner = format!(
-                "<{p}colorScale><{p}cfvo type=\"min\"/>{mid}<{p}cfvo type=\"max\"/>{colors}</{p}colorScale>"
-            );
+            inner = format!("<{p}colorScale>{cfvos}{colors}</{p}colorScale>");
         }
         "iconSet" => {
             let n = ICON_SETS
@@ -404,9 +522,15 @@ fn rule_xml(p: &str, rule: &CondRule, dxf: Option<u32>, first: CellRef, priority
             if rule.reverse {
                 head.push_str(" reverse=\"1\"");
             }
-            let cfvos: String = (0..n)
-                .map(|i| format!("<{p}cfvo type=\"percent\" val=\"{}\"/>", i * 100 / n))
-                .collect();
+            let cfvos: String = if rule.thresholds.is_empty() {
+                (0..n)
+                    .map(|i| {
+                        Threshold::new("percent", &((i * 100 + n / 2) / n).to_string()).xml(p, true)
+                    })
+                    .collect()
+            } else {
+                rule.thresholds.iter().map(|x| x.xml(p, true)).collect()
+            };
             inner = format!("{head}>{cfvos}</{p}iconSet>");
         }
         _ => {}
@@ -856,6 +980,37 @@ fn dxfs_of(styles: &str) -> Vec<Json> {
         .collect()
 }
 
+/// The values (`cfvo`) of a bar, a scale or an icon set, as the edits give them: `{ type,
+/// value, gte }` (a formula with `=`; Excel 2010's `autoMin` / `autoMax` as `min` / `max`).
+fn thresholds_of(text: &str, el: &El) -> Json {
+    Json::Array(
+        el.children
+            .iter()
+            .filter(|c| c.local() == "cfvo")
+            .map(|c| {
+                let kind = match c.attr(text, "type").unwrap_or_default().as_str() {
+                    "autoMin" => "min".to_string(),
+                    "autoMax" => "max".to_string(),
+                    k => k.to_string(),
+                };
+                // (Excel 2010's in `<xm:f>`.)
+                let val = c
+                    .attr(text, "val")
+                    .or_else(|| c.child("f").map(|f| f.text(text)))
+                    .unwrap_or_default();
+                let value = match kind.as_str() {
+                    "min" | "max" => String::new(),
+                    "formula" => format!("={val}"),
+                    _ if val.trim().parse::<f64>().is_err() && !val.is_empty() => format!("={val}"),
+                    _ => val,
+                };
+                let gte = !matches!(c.attr(text, "gte").as_deref(), Some("0" | "false"));
+                json!({ "type": kind, "value": value, "gte": gte })
+            })
+            .collect(),
+    )
+}
+
 /// A rule as the grid's dialog lists and edits it: its settings as a `conditional` edit gives
 /// them, `range`, `format`, `stop`, and whether the dialog can edit it (`editable`).
 fn describe(doc: &str, f: &Found, dxfs: &[Json]) -> Json {
@@ -922,9 +1077,17 @@ fn describe(doc: &str, f: &Found, dxfs: &[Json]) -> Json {
                 rgb_of(text, b.child("color")).or_else(|| rgb_of(text, b.child("fillColor")))
             });
             j["colors"] = json!(color.into_iter().collect::<Vec<_>>());
+            if let Some(b) = bar {
+                j["thresholds"] = thresholds_of(text, b);
+                j["barOnly"] = json!(matches!(
+                    b.attr(text, "showValue").as_deref(),
+                    Some("0" | "false")
+                ));
+            }
         }
         "colorScale" => {
             if let Some(cs) = r.child("colorScale") {
+                j["thresholds"] = thresholds_of(text, cs);
                 j["colors"] = json!(
                     cs.children
                         .iter()
@@ -940,6 +1103,7 @@ fn describe(doc: &str, f: &Found, dxfs: &[Json]) -> Json {
                 j["icons"] = json!(at("iconSet").unwrap_or_else(|| "3TrafficLights1".into()));
                 j["reverse"] = json!(matches!(at("reverse").as_deref(), Some("1" | "true")));
                 j["iconOnly"] = json!(matches!(at("showValue").as_deref(), Some("0" | "false")));
+                j["thresholds"] = thresholds_of(text, is);
             }
         }
         _ => {}

@@ -562,3 +562,13 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.condmgr .condsample .bar { display: block; width: 90px; height: 16px; }
 .dlg.condmgr .condsample .scale { display: block; width: 90px; height: 16px; }
 .dlg.condmgr .condsample .icons { display: inline-flex; gap: 2px; font-size: 14px; }
+.dlg.conddlg .condpoints { display: flex; flex-direction: column; gap: 3px; margin-bottom: 4px; }
+.dlg.conddlg .condpoint, .dlg.conddlg .condiconrow { display: flex; align-items: center; gap: 6px; }
+.dlg.conddlg .condpoint .lbl { flex: none; width: 60px; }
+.dlg.conddlg .condpoint select, .dlg.conddlg .condiconrow select { flex: none; width: 96px; }
+.dlg.conddlg .condpoint input[type="text"], .dlg.conddlg .condiconrow input[type="text"] { flex: 1; min-width: 0; }
+.dlg.conddlg .condiconrow select[data-field="gte"] { width: 48px; }
+.dlg.conddlg .condpoint input[type="color"] { width: 40px; height: 20px; padding: 0; border: 1px solid #adadad; }
+.dlg.conddlg .condicongrid { display: flex; flex-direction: column; gap: 3px; }
+.dlg.conddlg .condiconrow .icon { flex: none; width: 20px; font-size: 16px; text-align: center; }
+.dlg.conddlg .condiconrow > span:nth-child(2) { flex: none; white-space: nowrap; }
