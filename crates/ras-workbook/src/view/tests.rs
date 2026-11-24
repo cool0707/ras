@@ -871,6 +871,16 @@ fn dates_are_typed_with_slashes() {
     // The formula bar shows a date as Japanese Excel does.
     assert_eq!(typed(0), json!("2026/3/4"));
     assert_eq!(typed(1), json!("2026/3/4 12:00:00"));
+    // A date shown with a Japanese era is typed with one, as Japanese Excel shows it.
+    let mut b = Book::new_book();
+    b.set_values(
+        0,
+        RangeRef::parse("A1").unwrap(),
+        &[vec![Val::Text("R1/5/1".into())]],
+    )
+    .unwrap();
+    let data = view_of(&b.to_bytes().unwrap());
+    assert_eq!(data["sheets"][0]["cells"][0]["v"], json!("R1/5/1"));
     // And it is read back as the same date when typed in again.
     let sys = gridcraft_core::DateSystem::default();
     for (text, serial) in [("2026/3/4", 46085.0), ("2026/3/4 12:00:00", 46085.5)] {

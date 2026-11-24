@@ -749,7 +749,10 @@ impl Book {
             .zip(cells.iter())
         {
             let typed = match &c.value {
-                Val::Date(d) => Some(self.date_input_text(*d)),
+                Val::Date(d) => {
+                    let era = super::era::shows_era(&self.shown_format_code(si, c.at));
+                    Some(self.date_input_text(*d, era))
+                }
                 Val::Num(x) if c.text != format!("{x}") => Some(format!("{x}")),
                 _ => None,
             };

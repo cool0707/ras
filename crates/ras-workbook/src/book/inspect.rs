@@ -143,15 +143,22 @@ impl Book {
 
     /// A serial date as Japanese Excel shows it in the formula bar: `2026/4/1`, with the time
     /// (`2026/4/1 13:05:00`) when it has one.
-    pub fn date_input_text(&mut self, serial: f64) -> String {
-        let code = if serial.fract() == 0.0 {
-            "yyyy/m/d"
+    /// `era`: the cell shows a Japanese era, and the formula bar does too (`R1/5/1`).
+    pub fn date_input_text(&mut self, serial: f64, era: bool) -> String {
+        let code = if era && serial >= 1.0 {
+            if serial.fract() == 0.0 {
+                super::era::ERA_INPUT.to_string()
+            } else {
+                format!("{} h:mm:ss", super::era::ERA_INPUT)
+            }
+        } else if serial.fract() == 0.0 {
+            "yyyy/m/d".into()
         } else if serial < 1.0 {
-            "h:mm:ss"
+            "h:mm:ss".into()
         } else {
-            "yyyy/m/d h:mm:ss"
+            "yyyy/m/d h:mm:ss".into()
         };
-        self.display(&Value::Number(serial), code)
+        self.display(&Value::Number(serial), &code)
     }
 
     /// The formulas of a sheet, those filled down or across written once.

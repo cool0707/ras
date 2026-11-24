@@ -2322,7 +2322,7 @@
         return { r1, c1, r2, c2 };
     }
     // A text typed in as it is (a number, a date or a formula would be taken for one).
-    const asText = (text) => (/^[=+\-@']/.test(text) || (text.trim() !== "" && !isNaN(+text.replace(/[,¥$%\s]/g, ""))) || /^\d+[/-]\d+/.test(text) ? `'${text}` : text);
+    const asText = (text) => (/^[=+\-@']/.test(text) || (text.trim() !== "" && !isNaN(+text.replace(/[,¥$%\s]/g, ""))) || /^\d+[/-]\d+/.test(text) || /^\s*(明治|大正|昭和|平成|令和|[明大昭平令MTSHRmtshr])(\d+|元)[/.\-年]/.test(text) ? `'${text}` : text);
 
     // A dialog of the page: its form, its buttons (OK and キャンセル), closed by a click beside it.
     function openDialog(title, cls) {
@@ -5181,8 +5181,8 @@
         for (const [en, ja] of FORMAT_COLORS) out = out.split(`[${ja}]`).join(`[${en}]`);
         return out;
     }
-    // The formats of the 日付 and 時刻 lists (as Japanese Excel 2021 offers them, but eras).
-    const DATE_CODES = ["yyyy/m/d", 'yyyy"年"m"月"d"日"', 'yyyy"年"m"月"', 'm"月"d"日"', "yyyy/m/d(aaa)", 'yyyy"年"m"月"d"日"(aaaa)', "m/d", "yy/m/d", "yyyy/mm/dd", "yyyy-mm-dd", "m/d/yy", "d-mmm", "d-mmm-yy", "mmm-yy", "yyyy/m/d h:mm", "yyyy/m/d h:mm AM/PM"];
+    // The formats of the 日付 and 時刻 lists (as Japanese Excel 2021 offers them, eras too).
+    const DATE_CODES = ["yyyy/m/d", 'yyyy"年"m"月"d"日"', 'yyyy"年"m"月"', 'm"月"d"日"', "[$-411]ge.m.d", '[$-411]ggge"年"m"月"d"日"', '[$-ja-JP-x-gannen]ggge"年"m"月"d"日"', '[$-411]gge"年"m"月"d"日"', "[$-411]ge/m/d", "yyyy/m/d(aaa)", 'yyyy"年"m"月"d"日"(aaaa)', "m/d", "yy/m/d", "yyyy/mm/dd", "yyyy-mm-dd", "m/d/yy", "d-mmm", "d-mmm-yy", "mmm-yy", "yyyy/m/d h:mm", "yyyy/m/d h:mm AM/PM"];
     const TIME_CODES = ["h:mm", "h:mm:ss", "h:mm AM/PM", "h:mm:ss AM/PM", 'h"時"mm"分"', 'h"時"mm"分"ss"秒"', "[h]:mm:ss", "mm:ss", "yyyy/m/d h:mm"];
     const CUSTOM_CODES = ["G/標準", "0", "0.00", "#,##0", "#,##0.00", "#,##0;-#,##0", "#,##0;[赤]-#,##0", "#,##0.00;[赤]-#,##0.00", "¥#,##0;¥-#,##0", "¥#,##0;[赤]¥-#,##0", "0%", "0.00%", "0.00E+00", "##0.0E+0", "# ?/?", "@"]
         .concat(DATE_CODES, TIME_CODES.filter((c) => !DATE_CODES.includes(c)));
@@ -5857,6 +5857,9 @@
     const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     function formatNumber(x, code) {
         if (/^general$/i.test(code)) return null;
+        // The system's long date and time, as Japanese Windows has them.
+        if (/^\[\$-F800\]/i.test(code)) code = 'yyyy"年"m"月"d"日"';
+        else if (/^\[\$-F400\]/i.test(code)) code = "h:mm:ss";
         // The sections, split at `;` outside quotes, escapes and brackets.
         const secs = [];
         let part = "";
@@ -5894,7 +5897,7 @@
             // (Not fractions of a second, nor dates before 1900.)
             if (x < 0 || toks.some((t) => t.k === "ph")) return null;
             // Times (without a day) are shown as hours on end: 32:24:00.
-            const day = toks.some((t) => t.k === "date" && (/^[yda]/.test(t.v) || /^m{3,}$/.test(t.v)));
+            const day = toks.some((t) => t.k === "date" && (/^[ydage]/.test(t.v) || /^m{3,}$/.test(t.v)));
             const time = toks.some((t) => t.k === "ampm" || (t.k === "date" && /^[hs]/.test(t.v)));
             return formatDate(x, time && !day ? tokensOf("[h]:mm:ss") : toks);
         }
@@ -5928,7 +5931,9 @@
                 if ((m = /^\$([^-]*)(?:-(.*))?$/.exec(inner))) {
                     // A currency symbol, and a language (`[$-411]`); other calendars and the
                     // system's date formats (`[$-F800]`) are not read here.
-                    if (m[2] !== undefined && !/^[0-9a-f]{1,4}$/i.test(m[2])) return null;
+                    // `[$-ja-JP-x-gannen]`: the first year of an era is 元.
+                    if (m[2] !== undefined && /^ja-jp-x-gannen$/i.test(m[2])) toks.gannen = true;
+                    else if (m[2] !== undefined && !/^[0-9a-f]{1,4}$/i.test(m[2])) return null;
                     if (/^f[0-9a-f]00$/i.test(m[2] || "")) return null;
                     if (m[1]) lit(m[1]);
                 } else if (/^(h+|m+|s+)$/i.test(inner)) toks.push({ k: "date", v: inner.toLowerCase(), elapsed: true });
@@ -5952,10 +5957,12 @@
             } else if ((m = /^(am\/pm|a\/p)/i.exec(rest))) {
                 toks.push({ k: "ampm", v: m[1] });
                 i += m[1].length;
-            } else if ((m = /^(y+|m+|d+|h+|s+|a{3,4})/i.exec(rest))) {
+            } else if (/^(general|G\/標準)/i.test(rest)) return null;
+            else if ((m = /^(y+|m+|d+|h+|s+|a{3,4}|g+|e+)/i.exec(rest))) {
+                // (g: the Japanese era, e: the year in it.)
                 toks.push({ k: "date", v: m[1].toLowerCase() });
                 i += m[1].length;
-            } else if (/[gGeEbB]/.test(ch)) return null; // Japanese eras, Buddhist years
+            } else if (/[bB]/.test(ch)) return null; // Buddhist years
             else if (ch === "/" && toks.some((t) => t.k === "ph")) return null; // fractions
             else {
                 lit(ch === "@" ? "" : ch);
@@ -6017,6 +6024,19 @@
         });
         return out;
     }
+    // The Japanese eras: the first day, the letter (g) and the name (ggg).
+    const ERAS = [
+        [Date.UTC(1868, 8, 8), "M", "明治"],
+        [Date.UTC(1912, 6, 30), "T", "大正"],
+        [Date.UTC(1926, 11, 25), "S", "昭和"],
+        [Date.UTC(1989, 0, 8), "H", "平成"],
+        [Date.UTC(2019, 4, 1), "R", "令和"],
+    ];
+    // The era of a date, and the year in it (dates before Meiji count as Meiji).
+    function eraOf(d) {
+        const [start, letter, name] = [...ERAS].reverse().find(([t]) => d.getTime() >= t) || ERAS[0];
+        return { letter, name, year: d.getUTCFullYear() - new Date(start).getUTCFullYear() + 1 };
+    }
     function formatDate(x, toks) {
         let days = Math.floor(x);
         let secs = Math.round((x - days) * 86400);
@@ -6053,6 +6073,11 @@
                     const w = d.getUTCDay();
                     out += v.length <= 2 ? two(d.getUTCDate(), v.length) : v.length === 3 ? DAYS[w].slice(0, 3) : DAYS[w];
                 } else if (v[0] === "a") out += "日月火水木金土"[d.getUTCDay()] + (v.length === 4 ? "曜日" : "");
+                else if (v[0] === "g" || v[0] === "e") {
+                    const era = eraOf(d);
+                    if (v[0] === "g") out += v.length === 1 ? era.letter : v.length === 2 ? era.name[0] : era.name;
+                    else out += toks.gannen && era.year === 1 ? "元" : two(era.year, Math.min(v.length, 2));
+                }
                 else if (v[0] === "h") out += two(ampm ? h % 12 || 12 : h, Math.min(v.length, 2));
                 else if (v[0] === "s") out += two(sec, Math.min(v.length, 2));
             }
