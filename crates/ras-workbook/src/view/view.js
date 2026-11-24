@@ -109,7 +109,7 @@
         activeTd = null;
         if (view) {
             view.refs.textContent = "";
-            view.selbox.hidden = true;
+            view.selbox.hidden = view.selshade.hidden = true;
             view.fillh.hidden = true;
             for (const th of view.hl) th.classList.remove("hs");
             view.hl = [];
@@ -371,6 +371,8 @@
         const layer = wrap.appendChild(el("div", "objs"));
         const refs = wrap.appendChild(el("div", "refs"));
         const marks = wrap.appendChild(el("div", "refs"));
+        // (The shade of the range: all of it but the active cell, which stays as it is, as Excel's.)
+        const selshade = marks.appendChild(el("div", "selshade"));
         const selbox = marks.appendChild(el("div", "selbox"));
         const clipbox = marks.appendChild(el("div", "clipbox"));
         const fillbox = marks.appendChild(el("div", "fillbox"));
@@ -381,7 +383,7 @@
         // The lines under the rows and right of the columns frozen.
         const frzh = marks.appendChild(el("div", "frzline h"));
         const frzv = marks.appendChild(el("div", "frzline v"));
-        selbox.hidden = clipbox.hidden = fillbox.hidden = fillh.hidden = dropbtn.hidden = promptbox.hidden = true;
+        selshade.hidden = selbox.hidden = clipbox.hidden = fillbox.hidden = fillh.hidden = dropbtn.hidden = promptbox.hidden = true;
         frzh.hidden = !fr;
         frzv.hidden = !fc;
         wrap.appendChild(ed);
@@ -396,6 +398,7 @@
             filled,
             owner,
             selbox,
+            selshade,
             clipbox,
             fillbox,
             fillh,
@@ -1048,8 +1051,23 @@
             for (const [c, th] of v.ths) if (all.some((a) => c >= a.c1 && c <= a.c2)) v.hl.push(th);
             for (const [r, tr] of v.rows) if (all.some((a) => r >= a.r1 && r <= a.r2)) v.hl.push(tr.firstChild);
             for (const th of v.hl) th.classList.add("hs");
-            put(v.selbox, single(sel) && !areas.length ? null : boxOf(sel.r1, sel.c1, sel.r2, sel.c2));
+            const one = single(sel) && !areas.length;
+            const range = one ? null : boxOf(sel.r1, sel.c1, sel.r2, sel.c2);
+            put(v.selbox, range);
             v.selbox.classList.toggle("multi", areas.length > 0);
+            // A range: its border only (the active cell is not outlined again in it).
+            if (activeTd) activeTd.classList.toggle("inrange", !one);
+            put(v.selshade, range);
+            const o = ownerOf(sel.ar, sel.ac) || [sel.ar, sel.ac, sel.ar, sel.ac];
+            const a = range && boxOf(o[0], o[1], o[2], o[3]);
+            if (range) {
+                const [W, H] = [range.w + 1, range.h + 1];
+                v.selshade.style.clipPath = a
+                    ? `polygon(evenodd, 0 0, ${W}px 0, ${W}px ${H}px, 0 ${H}px, 0 0, ${a.x - range.x}px ${a.y - range.y}px, ${a.x - range.x + a.w}px ${a.y - range.y}px, ${a.x - range.x + a.w}px ${a.y - range.y + a.h}px, ${a.x - range.x}px ${a.y - range.y + a.h}px, ${a.x - range.x}px ${a.y - range.y})`
+                    : "";
+            }
+        } else {
+            put(v.selshade, null);
             for (const a of areas) {
                 const box = v.selbox.parentNode.insertBefore(el("div", "selbox multi more"), v.selbox);
                 put(box, boxOf(a.r1, a.c1, a.r2, a.c2));
