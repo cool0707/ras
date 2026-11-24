@@ -250,7 +250,7 @@ body.busy, body.busy td, body.busy th { cursor: progress; }
 #ribbon.collapsed .rtab.on::after { display: none; }
 #ribbon.collapsed.open .rtab.on::after { display: block; }
 #ribbon .rpanel { display: flex; align-items: stretch; }
-#ribbon .rgroup { display: flex; flex-direction: column; padding: 0 6px; border-right: 1px solid #e1e1e1; }
+#ribbon .rgroup { display: flex; flex-direction: column; flex-shrink: 0; padding: 0 6px; border-right: 1px solid #e1e1e1; }
 #ribbon .rcontent { flex: 1; display: flex; align-items: flex-start; gap: 2px; min-height: 78px; }
 #ribbon .rlabel { padding: 1px 0 3px; color: #666; font-size: 11px; text-align: center; white-space: nowrap; }
 #ribbon .rstack { display: flex; flex-direction: column; gap: 1px; }
@@ -264,11 +264,13 @@ body.busy, body.busy td, body.busy th { cursor: progress; }
 #ribbon .rbtn:disabled { color: #a6a6a6; cursor: default; }
 #ribbon .rbtn.on { background: var(--accent-tint); border-color: var(--accent); color: var(--accent-ink); }
 #ribbon .rbtn.large { flex-direction: column; justify-content: flex-start; gap: 2px; height: 78px; min-width: 46px; max-width: 80px; padding: 4px 4px 2px; white-space: normal; text-align: center; line-height: 1.2; }
-#ribbon .rbtn.large.two { max-width: 96px; }
+/* (Its label on the two lines `\n` breaks it into, as Excel's.) */
+#ribbon .rbtn.large.two { max-width: none; }
+#ribbon .rbtn.large.two .lbl { white-space: pre; }
 #ribbon .rtab.context { color: var(--accent-ink); }
-#ribbon .rbtn.large .lbl { font-size: 12px; }
+#ribbon .rbtn.large .lbl { font-size: 12px; white-space: pre-line; }
 #ribbon .rbtn .caret { font-size: 9px; color: #555; }
-#ribbon .rbtn.large .caret { line-height: 1; }
+#ribbon .rbtn.large .lbl .caret { margin-left: 3px; }
 #ribbon .ico { position: relative; display: inline-flex; }
 #ribbon .ico .bar { position: absolute; left: 0; right: 0; bottom: -3px; height: 4px; }
 #ribbon .rbtn.color .ico svg { margin-bottom: 3px; }

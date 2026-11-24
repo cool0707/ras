@@ -5341,7 +5341,7 @@
         align: '<path d="M2.5 1.5v13"/><rect x="2.5" y="3.5" width="9" height="3"/><rect x="2.5" y="9.5" width="6" height="3"/>',
         height: '<path d="M8 1.5v13M6 3.5l2-2 2 2M6 12.5l2 2 2-2M3 1.5h10M3 14.5h10"/>',
         width: '<path d="M1.5 8h13M3.5 6l-2 2 2 2M12.5 6l2 2-2 2M1.5 3v10M14.5 3v10"/>',
-        condFormat: '<rect x="1.5" y="1.5" width="13" height="13"/><path d="M1.5 6h13M1.5 10.5h13M6 1.5v13"/><rect x="6" y="6" width="8.5" height="4.5" fill="#f4b183" stroke="none"/><rect x="6" y="10.5" width="5" height="4" fill="#9dc3e6" stroke="none"/>',
+        condFormat: '<rect x="1.5" y="1.5" width="13" height="13"/><path d="M1.5 5.8h13M1.5 10.2h13M5.5 1.5v13"/><path d="M7 2.9h6.2v1.6H7zM7 7.2h3v1.6H7zM7 11.5h4.6v1.6H7z" fill="currentColor" stroke="none"/>',
         controls: '<rect x="1.5" y="2.5" width="6" height="4" rx=".8"/><rect x="9.5" y="2.5" width="5" height="5"/><path d="m10.5 5 1.2 1.2 1.8-2.2"/><circle cx="4.5" cy="11.5" r="2.5"/><rect x="9" y="9.5" width="5.5" height="4"/>',
     };
     function icon(name, large) {
@@ -5454,17 +5454,18 @@
             focusGrid();
         };
         // `o`: { label, title, icon, large, edits, menu: (anchor) => fill it, split, cls, text,
-        // keepEntry (what is being typed in the cell stays) }.
+        // keepEntry (what is being typed in the cell stays) }. A large button's label is on the
+        // lines `\n` breaks it into, as Excel's ("条件付き\n書式"), its ▾ after the last.
         const button = (key, o) => {
             const wrap = o.split ? into.appendChild(el("div", `rsplit${o.large ? " large" : ""}`)) : into;
             const b = wrap.appendChild(el("button", `rbtn${o.large ? " large" : ""}${o.cls ? ` ${o.cls}` : ""}`));
             b.type = "button";
-            b.title = o.title || o.label || "";
+            b.title = o.title || (o.label || "").replace(/\n/g, "");
             b.dataset.tool = key;
             if (o.icon) b.appendChild(icon(o.icon, o.large));
             if (o.text) b.appendChild(el("span", "glyph", o.text));
-            if (o.label && (o.large || o.showLabel)) b.appendChild(el("span", "lbl", o.label));
-            if (o.menu && !o.split) b.appendChild(el("span", "caret", "▾"));
+            const lbl = o.label && (o.large || o.showLabel) ? b.appendChild(el("span", "lbl", o.large ? o.label : o.label.replace(/\n/g, ""))) : null;
+            if (o.menu && !o.split) (o.large && lbl ? lbl : b).appendChild(el("span", "caret", "▾"));
             if (o.edits && !editable) b.disabled = true;
             const openMenuOf = (anchor) => {
                 if (o.edits && busy) return;
@@ -5476,7 +5477,7 @@
             if (o.split) {
                 const more = wrap.appendChild(el("button", "rbtn more", "▾"));
                 more.type = "button";
-                more.title = o.moreTitle || o.title || o.label;
+                more.title = o.moreTitle || o.title || (o.label || "").replace(/\n/g, "");
                 more.dataset.tool = `${key}More`;
                 if (o.edits && !editable) more.disabled = true;
                 more.addEventListener("click", () => openMenuOf(wrap));
@@ -5694,7 +5695,7 @@
         group(home, "スタイル");
         button("condFormat", {
             icon: "condFormat",
-            label: "条件付き書式",
+            label: "条件付き\n書式",
             large: true,
             cls: "two",
             edits: true,
@@ -5940,7 +5941,7 @@
             },
         });
         group(insertTab, "テキスト");
-        button("textBox", { icon: "textBox", label: "テキスト ボックス", large: true, cls: "two", title: "テキスト ボックス: シートをドラッグして描きます", edits: true, act: () => startDrawing("textBox") });
+        button("textBox", { icon: "textBox", label: "テキスト\nボックス", large: true, cls: "two", title: "テキスト ボックス: シートをドラッグして描きます", edits: true, act: () => startDrawing("textBox") });
         group(insertTab, "リンク");
         button("link", { icon: "link", label: "リンク", large: true, title: "リンク（Ctrl+K）: Web ページ・ファイル・ブック内の場所へのハイパーリンクを挿入します", edits: true, act: askLink });
         group(insertTab, "メモ");
@@ -5957,7 +5958,7 @@
             },
         });
         group(insertTab, "記号と特殊文字");
-        button("symbol", { icon: "symbol", label: "記号と特殊文字", large: true, cls: "two", title: "記号と特殊文字: 入力中のセル（またはアクティブなセル）に記号を入力します", edits: true, keepEntry: true, act: askSymbol });
+        button("symbol", { icon: "symbol", label: "記号と\n特殊文字", large: true, cls: "two", title: "記号と特殊文字: 入力中のセル（またはアクティブなセル）に記号を入力します", edits: true, keepEntry: true, act: askSymbol });
 
         // ---- 数式
         const formulasTab = tab("formulas", "数式");
@@ -5983,9 +5984,9 @@
         group(viewTab, "ズーム");
         button("zoomBox", { icon: "zoom", label: "ズーム", large: true, menu: (anchor) => openZoomBox(anchor) });
         button("zoom100", { icon: "zoom100", label: "100%", large: true, title: "100% に戻す", act: () => setZoom(100) });
-        button("zoomSel", { icon: "zoomSel", label: "選択範囲に合わせて拡大/縮小", large: true, cls: "two", act: zoomToSelection });
+        button("zoomSel", { icon: "zoomSel", label: "選択範囲に合わせて\n拡大/縮小", large: true, cls: "two", act: zoomToSelection });
         group(viewTab, "ウィンドウ");
-        button("freeze", { icon: "freeze", label: "ウィンドウ枠の固定", large: true, cls: "two", edits: true, menu: (anchor) => openFreeze(anchor) });
+        button("freeze", { icon: "freeze", label: "ウィンドウ枠の\n固定", large: true, cls: "two", edits: true, menu: (anchor) => openFreeze(anchor) });
 
         // ---- 図形の書式 (shown while a shape, a picture or a chart is selected)
         const shapeTab = tab("shapeFormat", "図形の書式");
