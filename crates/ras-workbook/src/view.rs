@@ -94,6 +94,24 @@ pub fn data(
     )
 }
 
+/// The icons of the icon sets as the grid draws them, for the menu and the dialogs of
+/// conditional formats: `{ set: [SVG, ...] }`, from the icon of the lowest values.
+pub fn icon_sets() -> Json {
+    use crate::book::cond::{ICON_SETS, icon_svg};
+    Json::Object(
+        ICON_SETS
+            .iter()
+            .map(|(set, n)| {
+                let icons: Vec<Json> = (0..*n)
+                    .filter_map(|i| icon_svg(set, i))
+                    .map(Json::from)
+                    .collect();
+                (set.to_string(), Json::Array(icons))
+            })
+            .collect(),
+    )
+}
+
 /// The functions the stand-in works out, for completing formulas typed into the grid:
 /// `[name, signature, description]` by name.
 pub fn functions() -> Json {

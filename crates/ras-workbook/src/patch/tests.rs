@@ -3041,3 +3041,19 @@ fn conditional_thresholds_of_bars_scales_and_icons() {
     assert!(wrong(r#"{"op":"conditional","range":"A1","type":"iconSet","icons":"4Rating","thresholds":[{"type":"num","value":1}]}"#).contains("4 つ"));
     assert!(wrong(r#"{"op":"conditional","range":"A1","type":"colorScale","colors":["000000","FFFFFF"],"thresholds":[{"type":"min"},{"type":"formula","value":"="}]}"#).contains("数式"));
 }
+
+#[test]
+fn icon_sets_drawn_for_the_dialogs() {
+    // Every icon set a rule can be written with has its icons, as many as the set has.
+    let sets = crate::view::icon_sets();
+    for (set, n) in conditional::ICON_SETS {
+        let icons = sets[*set].as_array().unwrap_or_else(|| panic!("{set}"));
+        assert_eq!(icons.len(), *n, "{set}");
+        assert!(
+            icons
+                .iter()
+                .all(|s| s.as_str().unwrap().starts_with("<svg")),
+            "{set}"
+        );
+    }
+}

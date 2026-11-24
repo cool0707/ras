@@ -334,6 +334,8 @@ pub fn view_page(
         data["editable"] = true.into();
         // For the completion of formulas typed into the cells.
         data["functions"] = view::functions();
+        // For the menu and the dialogs of conditional formats.
+        data["iconSets"] = view::icon_sets();
     }
     Ok(view::page(&data))
 }

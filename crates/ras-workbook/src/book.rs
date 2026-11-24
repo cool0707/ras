@@ -2400,7 +2400,7 @@ fn to_array(rows: &[Vec<Val>]) -> Array {
     Array::new(height, width, data).unwrap_or_else(|| Array::scalar(Value::Empty))
 }
 
-mod cond;
+pub(crate) mod cond;
 mod edit;
 mod era;
 mod format;

@@ -526,7 +526,10 @@ body.copying, body.copying td { cursor: copy; }
 .menu.condmenu .condswatch span { flex: none; }
 .menu.condmenu .condswatch .bar { display: block; width: 22px; height: 20px; border: 1px solid rgba(0, 0, 0, .15); }
 .menu.condmenu .condswatch .scale { display: block; width: 20px; height: 22px; border: 1px solid rgba(0, 0, 0, .15); }
-.menu.condmenu .condswatch .icons, .dlg.conddlg .condicons { display: inline-flex; gap: 1px; font-size: 13px; line-height: 1; }
+/* The icons of the icon sets (drawn as in the cells). */
+.menu.condmenu .icons, .dlg.conddlg .icons, .dlg.condmgr .icons, .condiconlist .icons { display: inline-flex; gap: 4px; line-height: 0; }
+.menu.condmenu .icons .ic, .dlg.conddlg .ic, .dlg.condmgr .icons .ic, .condiconlist .icons .ic { display: inline-block; width: 16px; height: 16px; }
+.menu.condmenu .condswatch .icons { gap: 2px; padding: 0 2px; }
 .dlg.conddlg { width: 580px; max-width: calc(100vw - 32px); box-sizing: border-box; }
 .dlg.conddlg.quick { width: 520px; }
 .dlg.conddlg select, .dlg.conddlg input[type="text"], .dlg.conddlg input[type="number"] { font: inherit; }
@@ -544,7 +547,12 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.conddlg .condline label { padding: 0; }
 .dlg.conddlg input.wide { width: 100%; box-sizing: border-box; }
 .dlg.conddlg .condsub { margin-top: 4px; }
-.dlg.conddlg .condicons { font-size: 16px; }
+.dlg.conddlg .condiconpick { display: inline-flex; align-items: center; gap: 8px; min-width: 140px; padding: 3px 6px; background: #fff; border: 1px solid #adadad; }
+.dlg.conddlg .condiconpick .icons { flex: 1; }
+.dlg.conddlg .condiconpick .caret { width: 7px; height: 7px; margin: -4px 2px 0 0; border: solid #444; border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.condiconlist { position: fixed; z-index: 33; box-sizing: border-box; max-height: 160px; overflow-y: auto; padding: 1px; background: #fff; border: 1px solid #828790; box-shadow: 0 2px 8px rgba(0, 0, 0, .2); outline: 0; }
+.condiconlist .opt { display: flex; padding: 4px 8px; cursor: default; }
+.condiconlist .opt[aria-selected="true"] { background: var(--accent-hover); outline: 1px solid var(--accent); outline-offset: -1px; }
 .dlg.conddlg .condreverse { min-width: 0; margin-left: auto; }
 .dlg.conddlg .condreverse[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-hover); }
 .dlg.conddlg input[type="color"] { width: 48px; height: 22px; padding: 0 1px; border: 1px solid #adadad; }
@@ -555,7 +563,7 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.conddlg .condscalebar { flex: 1; height: 24px; border: 1px solid #999; }
 .dlg.conddlg .condicongrid { display: grid; grid-template-columns: auto auto 52px minmax(0, 1fr) 100px; gap: 4px 6px; align-items: center; }
 .dlg.conddlg .condicongrid .head { font-size: 12px; color: #444; }
-.dlg.conddlg .condicongrid .icon { font-size: 16px; text-align: center; }
+.dlg.conddlg .condicongrid .icon { line-height: 0; text-align: center; }
 .dlg.conddlg .condicongrid .what { white-space: nowrap; }
 .dlg.conddlg .condicongrid .what.last { grid-column: span 4; }
 .dlg.conddlg .condicongrid select, .dlg.conddlg .condicongrid input { min-width: 0; box-sizing: border-box; }
@@ -604,4 +612,3 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.condmgr .condsample .fmt { display: inline-block; padding: 1px 6px; border: 1px solid #ddd; white-space: nowrap; }
 .dlg.condmgr .condsample .bar { display: block; width: 90px; height: 16px; }
 .dlg.condmgr .condsample .scale { display: block; width: 90px; height: 16px; }
-.dlg.condmgr .condsample .icons { display: inline-flex; gap: 2px; font-size: 14px; }

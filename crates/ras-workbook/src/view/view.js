@@ -1,6 +1,6 @@
 // The grid of `ras book view` (and of the editor's sheet panel): draws the sheets of DATA.
 // (A sheet: `filter` is its filter's range, `filterColumns` { offset: { values, blanks } | { other } } the columns filtered.)
-// DATA = { editable?: true, host?: "parent", file, sheets: [sheet_view...], images: [data URL], diff: { before, structure: [text], changes: { sheet: [{ a, before, after }] } } | null, active: name | null, focus?: true }
+// DATA = { editable?: true, host?: "parent", functions?, iconSets?: { set: [SVG] }, file, sheets: [sheet_view...], images: [data URL], diff: { before, structure: [text], changes: { sheet: [{ a, before, after }] } } | null, active: name | null, focus?: true }
 // (`focus`: `active` was asked for (`ras book view --sheet`) and comes before the sheet shown last time.)
 //
 // The grid goes on past the cells as Excel's does: empty rows and columns are added while the
@@ -3828,28 +3828,42 @@
         ["#63BE7B", null, "#FFEF9C", "緑、黄"],
         ["#FFEF9C", null, "#63BE7B", "黄、緑"],
     ];
-    // The icon sets (of Excel 2007) in Excel's order (方向・図形・インジケーター・評価): their
-    // name, and a sketch of their icons, the greatest first.
+    // The icon sets (of Excel 2007) in the order of Excel's dialog ("アイコン スタイル"), named
+    // as Excel names them.
     const COND_ICONS = [
-        ["3Arrows", "3 つの矢印 (色分け)", [["↑", "#00B050"], ["→", "#FFC000"], ["↓", "#C00000"]]],
-        ["3ArrowsGray", "3 つの矢印 (灰色)", [["↑", "#808080"], ["→", "#808080"], ["↓", "#808080"]]],
-        ["4ArrowsGray", "4 つの矢印 (灰色)", [["↑", "#808080"], ["↗", "#808080"], ["↘", "#808080"], ["↓", "#808080"]]],
-        ["4Arrows", "4 つの矢印 (色分け)", [["↑", "#00B050"], ["↗", "#FFC000"], ["↘", "#FFC000"], ["↓", "#C00000"]]],
-        ["5ArrowsGray", "5 つの矢印 (灰色)", [["↑", "#808080"], ["↗", "#808080"], ["→", "#808080"], ["↘", "#808080"], ["↓", "#808080"]]],
-        ["5Arrows", "5 つの矢印 (色分け)", [["↑", "#00B050"], ["↗", "#FFC000"], ["→", "#FFC000"], ["↘", "#FFC000"], ["↓", "#C00000"]]],
-        ["3TrafficLights1", "3 つの信号 (枠なし)", [["●", "#00B050"], ["●", "#FFC000"], ["●", "#C00000"]]],
-        ["3TrafficLights2", "3 つの信号 (枠あり)", [["◉", "#00B050"], ["◉", "#FFC000"], ["◉", "#C00000"]]],
-        ["3Signs", "3 つの図形", [["●", "#00B050"], ["▲", "#FFC000"], ["◆", "#C00000"]]],
-        ["4TrafficLights", "4 つの信号", [["●", "#00B050"], ["●", "#FFC000"], ["●", "#C00000"], ["●", "#000000"]]],
-        ["4RedToBlack", "赤から黒", [["●", "#C00000"], ["●", "#FF8080"], ["●", "#A0A0A0"], ["●", "#000000"]]],
-        ["3Symbols", "3 つの記号 (丸囲み)", [["✔", "#00B050"], ["!", "#FFC000"], ["✖", "#C00000"]]],
-        ["3Symbols2", "3 つの記号 (丸囲みなし)", [["✓", "#00B050"], ["!", "#FFC000"], ["✗", "#C00000"]]],
-        ["3Flags", "3 つのフラグ", [["⚑", "#00B050"], ["⚑", "#FFC000"], ["⚑", "#C00000"]]],
-        ["4Rating", "4 つの評価", [["▂", "#2F75B5"], ["▄", "#2F75B5"], ["▆", "#2F75B5"], ["█", "#2F75B5"]]],
-        ["5Quarters", "5 つの四分円", [["●", "#404040"], ["◕", "#404040"], ["◑", "#404040"], ["◔", "#404040"], ["○", "#404040"]]],
-        ["5Rating", "5 つの評価", [["▁", "#2F75B5"], ["▂", "#2F75B5"], ["▄", "#2F75B5"], ["▆", "#2F75B5"], ["█", "#2F75B5"]]],
+        ["3Arrows", "3 つの矢印 (色分け)"],
+        ["3ArrowsGray", "3 つの矢印 (灰色)"],
+        ["3Flags", "3 つのフラグ"],
+        ["3TrafficLights1", "3 つの信号 (枠なし)"],
+        ["3TrafficLights2", "3 つの信号 (枠あり)"],
+        ["3Signs", "3 つの図形"],
+        ["3Symbols", "3 つの記号 (丸囲み)"],
+        ["3Symbols2", "3 つの記号 (丸囲みなし)"],
+        ["4Arrows", "4 つの矢印 (色分け)"],
+        ["4ArrowsGray", "4 つの矢印 (灰色)"],
+        ["4RedToBlack", "赤から黒"],
+        ["4Rating", "4 つの評価"],
+        ["4TrafficLights", "4 つの信号"],
+        ["5Arrows", "5 つの矢印 (色分け)"],
+        ["5ArrowsGray", "5 つの矢印 (灰色)"],
+        ["5Rating", "5 つの評価"],
+        ["5Quarters", "5 つの四分円"],
     ];
-    const iconSketch = (icons) => icons.map(([g, c]) => `<span style="color:${c}">${g}</span>`).join("");
+    // Those of the menu, in the order of Excel's (方向・図形・インジケーター・評価).
+    const COND_ICON_MENU = ["3Arrows", "3ArrowsGray", "4ArrowsGray", "4Arrows", "5ArrowsGray", "5Arrows", "3TrafficLights1", "3TrafficLights2", "3Signs", "4TrafficLights", "4RedToBlack", "3Symbols", "3Symbols2", "3Flags", "4Rating", "5Quarters", "5Rating"];
+    const iconName = (set) => (COND_ICONS.find(([k]) => k === set) || [, set])[1];
+    // The icons of a set as the grid draws them in the cells (`data.iconSets`, from the icon of
+    // the lowest values): the `i`-th, or all of them from the least (`high`: from the greatest).
+    const iconSvg = (set, i) => {
+        const svg = data.iconSets && data.iconSets[set] && data.iconSets[set][i];
+        return svg ? `<span class="ic">${svg}</span>` : "";
+    };
+    function iconsHtml(set, high) {
+        const n = (data.iconSets && data.iconSets[set] && data.iconSets[set].length) || 0;
+        const list = Array.from({ length: n }, (_, i) => iconSvg(set, i));
+        if (high) list.reverse();
+        return `<span class="icons">${list.join("")}</span>`;
+    }
     // The cells a rule goes on: every area selected.
     const condRange = () => allAreas().map((a) => (a.kind === "cells" ? areaText(a) : rangeText(a))).join(" ");
     // A rule's range as the dialogs show it (`A1:B5 D2` → `=$A$1:$B$5,$D$2`).
@@ -4105,6 +4119,95 @@
             },
             color: () => pick && pick.value.toUpperCase(),
         };
+    }
+
+    // "アイコン スタイル" as Excel's: a list of the icon sets that shows their icons (from the
+    // least). The button's `value` is the set chosen; `change` when another is chosen.
+    function iconPicker(where, value) {
+        const b = where.appendChild(el("button", "condiconpick"));
+        b.type = "button";
+        b.dataset.field = "icons";
+        b.setAttribute("aria-haspopup", "listbox");
+        const show = () => {
+            b.innerHTML = `${iconsHtml(b.value)}<span class="caret"></span>`;
+            b.title = iconName(b.value);
+        };
+        b.value = value;
+        show();
+        let list = null;
+        const outside = (e) => {
+            if (list && !list.contains(e.target) && !b.contains(e.target)) close(false);
+        };
+        const close = (focus) => {
+            if (list) list.remove();
+            list = null;
+            document.removeEventListener("mousedown", outside, true);
+            if (focus) b.focus();
+        };
+        const choose = (v) => {
+            close(true);
+            if (v === b.value) return;
+            b.value = v;
+            show();
+            b.dispatchEvent(new Event("change"));
+        };
+        const step = (by) => {
+            const at = COND_ICONS.findIndex(([k]) => k === b.value);
+            const to = COND_ICONS[Math.max(0, Math.min(COND_ICONS.length - 1, at + by))][0];
+            if (to !== b.value) choose(to);
+        };
+        const open = () => {
+            list = dialog.appendChild(el("div", "condiconlist"));
+            list.setAttribute("role", "listbox");
+            list.tabIndex = -1;
+            let at = Math.max(0, COND_ICONS.findIndex(([k]) => k === b.value));
+            const items = COND_ICONS.map(([k, name], i) => {
+                const o = list.appendChild(el("div", "opt"));
+                o.setAttribute("role", "option");
+                o.dataset.value = k;
+                o.title = name;
+                o.innerHTML = iconsHtml(k);
+                o.addEventListener("mousemove", () => mark(i));
+                o.addEventListener("click", () => choose(k));
+                return o;
+            });
+            const mark = (i) => {
+                at = i;
+                items.forEach((o, j) => o.setAttribute("aria-selected", String(j === i)));
+            };
+            mark(at);
+            const r = b.getBoundingClientRect();
+            list.style.left = `${r.left}px`;
+            list.style.minWidth = `${r.width}px`;
+            list.style.top = `${r.bottom + list.offsetHeight > window.innerHeight - 4 ? Math.max(4, r.top - list.offsetHeight) : r.bottom}px`;
+            items[at].scrollIntoView({ block: "nearest" });
+            list.addEventListener("keydown", (e) => {
+                // (Not the dialog's keys: Escape closes the list alone.)
+                e.stopPropagation();
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    e.preventDefault();
+                    mark(Math.max(0, Math.min(items.length - 1, at + (e.key === "ArrowDown" ? 1 : -1))));
+                    items[at].scrollIntoView({ block: "nearest" });
+                } else if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    choose(COND_ICONS[at][0]);
+                } else if (e.key === "Escape" || e.key === "Tab") {
+                    e.preventDefault();
+                    close(true);
+                }
+            });
+            document.addEventListener("mousedown", outside, true);
+            list.focus();
+        };
+        b.addEventListener("click", () => (list ? close(true) : open()));
+        // As a list box's: ↑↓ choose, Alt+↓ (F4) opens the list.
+        b.addEventListener("keydown", (e) => {
+            if ((e.altKey && e.key === "ArrowDown") || e.key === "F4") open();
+            else if (e.key === "ArrowDown" || e.key === "ArrowUp") step(e.key === "ArrowDown" ? 1 : -1);
+            else return;
+            e.preventDefault();
+        });
+        return b;
     }
 
     // The kind of rule of "新しい書式ルール" a rule is of; its 書式スタイル (of "セルの値に基づいて…");
@@ -4493,8 +4596,7 @@
                 const line = lineOf(box);
                 const sl = line.appendChild(el("label"));
                 sl.appendChild(el("span", "lbl", "アイコン スタイル:"));
-                const s = condSelect(sl, COND_ICONS, scaleGiven("iconSet", "icons", "3TrafficLights1"), "icons");
-                const sketch = line.appendChild(el("span", "condicons"));
+                const s = iconPicker(sl, scaleGiven("iconSet", "icons", "3TrafficLights1"));
                 const only = check(line, "アイコンのみ表示", !!scaleGiven("iconSet", "iconOnly", false));
                 only.dataset.field = "iconOnly";
                 box.appendChild(el("div", "condsub", "次のルールに従って各アイコンを表示:"));
@@ -4504,13 +4606,12 @@
                 let points = scaleGiven("iconSet", "thresholds", null);
                 let rows = [];
                 const draw = () => {
-                    const set = COND_ICONS.find(([v]) => v === s.value);
-                    const n = set[2].length;
+                    const n = data.iconSets[s.value].length;
                     if (rows.length) points = [points[0]].concat(rows.map((r) => r.now()).reverse());
                     if (!points || points.length !== n) points = Array.from({ length: n }, (_, i) => ({ type: "percent", value: String(Math.round((i * 100) / n)), gte: true }));
-                    const icons = reversed ? set[2].slice().reverse() : set[2];
+                    // The icon of the k-th line (the greatest first).
+                    const icon = (k) => iconSvg(s.value, reversed ? k : n - 1 - k);
                     rev.setAttribute("aria-pressed", String(reversed));
-                    sketch.innerHTML = iconSketch(icons);
                     grid.textContent = "";
                     for (const h of ["アイコン", "", "", "値", "種類"]) grid.appendChild(el("span", "head", h));
                     rows = [];
@@ -4524,7 +4625,7 @@
                     };
                     // The greatest first, as Excel lists them.
                     for (let k = 0; k < n; k++) {
-                        grid.appendChild(el("span", "icon")).innerHTML = iconSketch([icons[k]]);
+                        grid.appendChild(el("span", "icon")).innerHTML = icon(k);
                         texts.push(grid.appendChild(el("span", "what", k === 0 ? "値が" : "")));
                         if (k === n - 1) {
                             texts[k].classList.add("last");
@@ -4665,8 +4766,8 @@
         if (r.type === "dataBar") s.innerHTML = `<span class="bar" style="background:linear-gradient(to right, ${(r.colors || ["#638EC6"])[0]}, #fff)"></span>`;
         else if (r.type === "colorScale") s.innerHTML = `<span class="scale" style="background:linear-gradient(to right, ${(r.colors && r.colors.length > 1 ? r.colors : ["#F8696B", "#63BE7B"]).join(", ")})"></span>`;
         else if (r.type === "iconSet") {
-            const set = COND_ICONS.find(([k]) => k === r.icons);
-            s.innerHTML = set ? `<span class="icons">${iconSketch(set[2])}</span>` : `<span class="icons">${r.icons || ""}</span>`;
+            // (From the least, as the rule has them.)
+            s.innerHTML = data.iconSets && data.iconSets[r.icons] ? iconsHtml(r.icons, !!r.reverse) : `<span class="icons">${r.icons || ""}</span>`;
         } else {
             const f = r.format || {};
             const t = s.appendChild(el("span", "fmt", "Aaあぁアァ亜宇"));
@@ -5572,7 +5673,8 @@
                     swatch(row, `${name}のカラー スケール`, `<span class="scale" style="background:linear-gradient(to bottom, ${colors.join(", ")})"></span>`, () => postCond({ type: "colorScale", colors: colors.slice().reverse() })).dataset.scale = colors.join(" ");
                 }
                 row = swatchRow("アイコン セット");
-                for (const [set, name, icons] of COND_ICONS) swatch(row, name, `<span class="icons">${iconSketch(icons)}</span>`, () => postCond({ type: "iconSet", icons: set })).dataset.icons = set;
+                // (As Excel's, the greatest first.)
+                for (const set of COND_ICON_MENU) swatch(row, iconName(set), iconsHtml(set, true), () => postCond({ type: "iconSet", icons: set })).dataset.icons = set;
                 pop.appendChild(el("hr"));
                 item(pop, "新しいルール…", () => askCond());
                 head(pop, "ルールのクリア");

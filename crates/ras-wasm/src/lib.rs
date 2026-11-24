@@ -679,6 +679,8 @@ pub fn view_page(
         data["host"] = "parent".into();
         // For the completion of formulas typed into the cells.
         data["functions"] = view::functions();
+        // For the menu and the dialogs of conditional formats.
+        data["iconSets"] = view::icon_sets();
     }
     Ok(view::page(&data))
 }
