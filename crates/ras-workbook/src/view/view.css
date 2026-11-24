@@ -519,9 +519,15 @@ body.copying, body.copying td { cursor: copy; }
 .dlg.numfmtdlg .fmtlist option.red { color: #c00; }
 .dlg.numfmtdlg input.fmtcode { flex: 1; min-width: 0; font: inherit; }
 /* ホーム > 条件付き書式: its menu (rows of bars, scales and icon sets) and its dialogs. */
-.menu.condmenu { width: 252px; max-height: calc(100vh - 8px); overflow-y: auto; }
-.menu.condmenu .condrow { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 10px; }
-.menu.condmenu button.condswatch { display: inline-flex; width: auto; min-width: 30px; height: 30px; padding: 2px; gap: 0; justify-content: center; align-items: center; border: 1px solid transparent; border-radius: 3px; }
+/* A submenu: beside the item that opens it (a child of its menu). */
+.menu button.hassub { align-items: center; }
+.menu button.hassub .subarrow { flex: none; width: 6px; height: 6px; margin-right: 2px; border: solid #555; border-width: 1.5px 1.5px 0 0; transform: rotate(45deg); }
+.menu button.hassub.open { background: var(--accent-hover); }
+.menu.sub { min-width: 0; max-height: calc(100vh - 8px); overflow-y: auto; }
+.menu .subhead { padding: 6px 12px 2px; font-weight: bold; font-size: 12px; }
+.menu.condmenu { min-width: 0; width: 220px; }
+.menu.condmenu .condgrid { display: grid; gap: 1px 14px; justify-content: start; justify-items: start; padding: 2px 10px 4px; }
+.menu.condmenu button.condswatch { display: inline-flex; width: auto; min-width: 28px; height: 28px; padding: 2px; gap: 0; justify-content: center; align-items: center; border: 1px solid transparent; border-radius: 3px; }
 .menu.condmenu button.condswatch:hover { border-color: var(--accent); background: var(--accent-hover); }
 .menu.condmenu .condswatch span { flex: none; }
 .menu.condmenu .condswatch .bar { display: block; width: 22px; height: 20px; border: 1px solid rgba(0, 0, 0, .15); }

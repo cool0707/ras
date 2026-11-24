@@ -3849,8 +3849,14 @@
         ["5Rating", "5 つの評価"],
         ["5Quarters", "5 つの四分円"],
     ];
-    // Those of the menu, in the order of Excel's (方向・図形・インジケーター・評価).
-    const COND_ICON_MENU = ["3Arrows", "3ArrowsGray", "4ArrowsGray", "4Arrows", "5ArrowsGray", "5Arrows", "3TrafficLights1", "3TrafficLights2", "3Signs", "4TrafficLights", "4RedToBlack", "3Symbols", "3Symbols2", "3Flags", "4Rating", "5Quarters", "5Rating"];
+    // Those of the menu, in Excel's groups and order (without Excel 2010's 3 つの三角形, 3 つの星
+    // and 5 つのボックス).
+    const COND_ICON_MENU = [
+        ["方向", ["3Arrows", "3ArrowsGray", "4ArrowsGray", "4Arrows", "5ArrowsGray", "5Arrows"]],
+        ["図形", ["3TrafficLights1", "3TrafficLights2", "3Signs", "4TrafficLights", "4RedToBlack"]],
+        ["インジケーター", ["3Symbols", "3Symbols2", "3Flags"]],
+        ["評価", ["4Rating", "5Quarters", "5Rating"]],
+    ];
     const iconName = (set) => (COND_ICONS.find(([k]) => k === set) || [, set])[1];
     // The icons of a set as the grid draws them in the cells (`data.iconSets`, from the icon of
     // the lowest values): the `i`-th, or all of them from the least (`high`: from the greatest).
@@ -4330,14 +4336,15 @@
         if (first && first.select) first.select();
     }
 
-    // "新しい書式ルール" (`o.rule`: "書式ルールの編集" of that rule), as Excel's: the kind of rule
+    // "新しい書式ルール" (`o.rule`: "書式ルールの編集" of that rule; `o.startKind`, `o.startStyle`: the
+    // kind of rule, the 書式スタイル to start with), as Excel's: the kind of rule
     // from Excel's list, the settings of that kind, the format ("書式…"), and (not in Excel's:
     // there a new rule goes on the cells selected) the cells it goes on, "適用先". `o.range`:
     // those cells to start with (else the cells selected); `o.done(rule, range)`: what is done
     // with the rule made (else it is put on the cells); `o.back`: what キャンセル does.
     function askCondRule(o) {
         const init = o.rule || {};
-        const initKind = o.rule ? condKind(o.rule) : "scale";
+        const initKind = o.rule ? condKind(o.rule) : o.startKind || "scale";
         const initSub = o.rule ? (initKind === "scale" ? condStyleOf(init) : condWhatOf(init)) : null;
         // A setting of the rule edited, for the fields of its kind (and of its `sub`: 書式スタイル,
         // or what of the cells).
@@ -4392,7 +4399,7 @@
                 const top = lineOf(box);
                 const styleLine = top.appendChild(el("label"));
                 styleLine.appendChild(el("span", "lbl", "書式スタイル:"));
-                const style = condSelect(styleLine, COND_STYLES, initKind === "scale" ? initSub : "colorScale2", "style");
+                const style = condSelect(styleLine, COND_STYLES, (initKind === "scale" && initSub) || o.startStyle || "colorScale2", "style");
                 // Each 書式スタイル's boxes, made when first chosen (and kept as it changes).
                 const styles = {};
                 const showStyle = () => {
@@ -5021,6 +5028,68 @@
         Object.assign(pop.style, { left: `${b.left}px`, top: `${b.bottom + 1}px` });
         return pop;
     }
+    // An item of the menu `pop` that opens a submenu beside it (`fill(sub)` fills it): on the
+    // mouse over it, a click, → or Enter (← in the submenu goes back). One open at a time.
+    function subMenu(pop, label, fill) {
+        const b = pop.appendChild(el("button", "hassub"));
+        b.type = "button";
+        b.setAttribute("aria-haspopup", "menu");
+        b.appendChild(el("span", null, label));
+        b.appendChild(el("i", "subarrow"));
+        const open = (focus) => {
+            if (pop.sub && pop.sub.owner === b) {
+                if (focus) pop.sub.focusFirst();
+                return;
+            }
+            if (pop.sub) pop.sub.close();
+            const sub = pop.appendChild(el("div", "menu pop sub"));
+            sub.setAttribute("role", "menu");
+            fill(sub);
+            b.classList.add("open");
+            b.setAttribute("aria-expanded", "true");
+            // Beside the item (on the left when there is no room on the right).
+            const r = b.getBoundingClientRect();
+            const p = pop.getBoundingClientRect();
+            const left = p.right + sub.offsetWidth > window.innerWidth - 4 ? Math.max(0, p.left - sub.offsetWidth) : p.right - 1;
+            sub.style.left = `${left}px`;
+            sub.style.top = `${Math.max(0, Math.min(r.top - 5, window.innerHeight - sub.offsetHeight - 4))}px`;
+            const close = () => {
+                sub.remove();
+                b.classList.remove("open");
+                b.setAttribute("aria-expanded", "false");
+                if (pop.sub && pop.sub.owner === b) pop.sub = null;
+            };
+            const focusFirst = () => {
+                const first = sub.querySelector("button");
+                if (first) first.focus();
+            };
+            pop.sub = { owner: b, close, focusFirst };
+            sub.addEventListener("keydown", (e) => {
+                if (e.key !== "ArrowLeft") return;
+                e.preventDefault();
+                e.stopPropagation();
+                close();
+                b.focus();
+            });
+            if (focus) focusFirst();
+        };
+        b.addEventListener("mouseenter", () => open(false));
+        b.addEventListener("click", () => open(true));
+        b.addEventListener("keydown", (e) => {
+            if (e.key !== "ArrowRight") return;
+            e.preventDefault();
+            open(true);
+        });
+        // The mouse over another item of the menu closes the submenu.
+        if (!pop.subWatch) {
+            pop.subWatch = true;
+            pop.addEventListener("mouseover", (e) => {
+                const item = e.target.closest && e.target.closest("button");
+                if (item && item.parentNode === pop && pop.sub && pop.sub.owner !== item) pop.sub.close();
+            });
+        }
+        return b;
+    }
     function popItem(pop, label, act) {
         const b = pop.appendChild(el("button"));
         b.type = "button";
@@ -5630,29 +5699,16 @@
             cls: "two",
             edits: true,
             menu: (anchor) => {
+                // As Excel's: the kinds of rules, each a submenu.
                 const pop = openPop(anchor, "condmenu");
-                const ask = (label, o) => item(pop, label, () => askCond(Object.assign({ title: label.replace(/…$/, "") }, o)));
-                head(pop, "セルの強調表示ルール");
-                ask("指定の値より大きい…", { kind: "cellIs", operator: "greaterThan", prompt: "次の値より大きいセルを書式設定:" });
-                ask("指定の値より小さい…", { kind: "cellIs", operator: "lessThan", prompt: "次の値より小さいセルを書式設定:" });
-                ask("指定の範囲内…", { kind: "cellIs", operator: "between", prompt: "次の値の間にあるセルを書式設定:" });
-                ask("指定の値に等しい…", { kind: "cellIs", operator: "equal", prompt: "次の値に等しいセルを書式設定:" });
-                ask("文字列…", { kind: "text", prompt: "次の文字列を含むセルを書式設定:" });
-                ask("日付…", { kind: "timePeriod", prompt: "次の日付を含むセルを書式設定:" });
-                ask("重複する値…", { kind: "duplicateValues", prompt: "次の値を含むセルを書式設定:" });
-                head(pop, "上位/下位ルール");
-                ask("上位 10 項目…", { kind: "top10", prompt: "上位に入るセルを書式設定（項目数）:" });
-                ask("上位 10%…", { kind: "top10", percent: true, prompt: "上位に入るセルを書式設定（%）:" });
-                ask("下位 10 項目…", { kind: "top10", bottom: true, prompt: "下位に入るセルを書式設定（項目数）:" });
-                ask("下位 10%…", { kind: "top10", bottom: true, percent: true, prompt: "下位に入るセルを書式設定（%）:" });
-                ask("平均より上…", { kind: "aboveAverage", prompt: "選択範囲の平均値より上のセルを書式設定:" });
-                ask("平均より下…", { kind: "aboveAverage", below: true, prompt: "選択範囲の平均値より下のセルを書式設定:" });
-                const swatchRow = (title) => {
-                    head(pop, title);
-                    return pop.appendChild(el("div", "condrow"));
+                const ask = (sub, label, o) => item(sub, label, () => askCond(Object.assign({ title: label.replace(/…$/, "") }, o)));
+                // "その他のルール…": "新しい書式ルール", the kind of the submenu chosen.
+                const more = (sub, o) => {
+                    sub.appendChild(el("hr"));
+                    item(sub, "その他のルール…", () => askCond(o));
                 };
-                const swatch = (row, title, html, act) => {
-                    const b = row.appendChild(el("button", "condswatch"));
+                const swatch = (where, title, html, act) => {
+                    const b = where.appendChild(el("button", "condswatch"));
                     b.type = "button";
                     b.title = title;
                     b.innerHTML = html;
@@ -5664,23 +5720,60 @@
                     });
                     return b;
                 };
-                let row = swatchRow("データ バー");
-                for (const [color, name] of COND_BARS) swatch(row, `${name}のデータ バー`, `<span class="bar" style="background:linear-gradient(to right, ${color}, #fff)"></span>`, () => postCond({ type: "dataBar", colors: [color] })).dataset.bar = color;
-                row = swatchRow("カラー スケール");
-                for (const [lo, mid, hi, name] of COND_SCALES) {
-                    const colors = mid ? [lo, mid, hi] : [lo, hi];
-                    // (The menu shows the greatest first, the scale is written from the least.)
-                    swatch(row, `${name}のカラー スケール`, `<span class="scale" style="background:linear-gradient(to bottom, ${colors.join(", ")})"></span>`, () => postCond({ type: "colorScale", colors: colors.slice().reverse() })).dataset.scale = colors.join(" ");
-                }
-                row = swatchRow("アイコン セット");
-                // (As Excel's, the greatest first.)
-                for (const set of COND_ICON_MENU) swatch(row, iconName(set), iconsHtml(set, true), () => postCond({ type: "iconSet", icons: set })).dataset.icons = set;
+                const grid = (sub, title, columns) => {
+                    if (title) sub.appendChild(el("div", "subhead", title));
+                    const g = sub.appendChild(el("div", "condgrid"));
+                    g.style.gridTemplateColumns = `repeat(${columns}, auto)`;
+                    return g;
+                };
+                subMenu(pop, "セルの強調表示ルール", (sub) => {
+                    ask(sub, "指定の値より大きい…", { kind: "cellIs", operator: "greaterThan", prompt: "次の値より大きいセルを書式設定:" });
+                    ask(sub, "指定の値より小さい…", { kind: "cellIs", operator: "lessThan", prompt: "次の値より小さいセルを書式設定:" });
+                    ask(sub, "指定の範囲内…", { kind: "cellIs", operator: "between", prompt: "次の値の間にあるセルを書式設定:" });
+                    ask(sub, "指定の値に等しい…", { kind: "cellIs", operator: "equal", prompt: "次の値に等しいセルを書式設定:" });
+                    ask(sub, "文字列…", { kind: "text", prompt: "次の文字列を含むセルを書式設定:" });
+                    ask(sub, "日付…", { kind: "timePeriod", prompt: "次の日付を含むセルを書式設定:" });
+                    ask(sub, "重複する値…", { kind: "duplicateValues", prompt: "次の値を含むセルを書式設定:" });
+                    more(sub, { startKind: "contains" });
+                });
+                subMenu(pop, "上位/下位ルール", (sub) => {
+                    ask(sub, "上位 10 項目…", { kind: "top10", prompt: "上位に入るセルを書式設定（項目数）:" });
+                    ask(sub, "上位 10%…", { kind: "top10", percent: true, prompt: "上位に入るセルを書式設定（%）:" });
+                    ask(sub, "下位 10 項目…", { kind: "top10", bottom: true, prompt: "下位に入るセルを書式設定（項目数）:" });
+                    ask(sub, "下位 10%…", { kind: "top10", bottom: true, percent: true, prompt: "下位に入るセルを書式設定（%）:" });
+                    ask(sub, "平均より上…", { kind: "aboveAverage", prompt: "選択範囲の平均値より上のセルを書式設定:" });
+                    ask(sub, "平均より下…", { kind: "aboveAverage", below: true, prompt: "選択範囲の平均値より下のセルを書式設定:" });
+                    more(sub, { startKind: "top10" });
+                });
+                pop.appendChild(el("hr"));
+                subMenu(pop, "データ バー", (sub) => {
+                    const g = grid(sub, "塗りつぶし (グラデーション)", 3);
+                    for (const [color, name] of COND_BARS) swatch(g, `${name}のデータ バー`, `<span class="bar" style="background:linear-gradient(to right, ${color}, #fff)"></span>`, () => postCond({ type: "dataBar", colors: [color] })).dataset.bar = color;
+                    more(sub, { startKind: "scale", startStyle: "dataBar" });
+                });
+                subMenu(pop, "カラー スケール", (sub) => {
+                    const g = grid(sub, null, 4);
+                    for (const [lo, mid, hi, name] of COND_SCALES) {
+                        const colors = mid ? [lo, mid, hi] : [lo, hi];
+                        // (The menu shows the greatest first, the scale is written from the least.)
+                        swatch(g, `${name}のカラー スケール`, `<span class="scale" style="background:linear-gradient(to bottom, ${colors.join(", ")})"></span>`, () => postCond({ type: "colorScale", colors: colors.slice().reverse() })).dataset.scale = colors.join(" ");
+                    }
+                    more(sub, { startKind: "scale", startStyle: "colorScale2" });
+                });
+                subMenu(pop, "アイコン セット", (sub) => {
+                    // (As Excel's, in its groups, the greatest first.)
+                    for (const [title, sets] of COND_ICON_MENU) {
+                        const g = grid(sub, title, 2);
+                        for (const set of sets) swatch(g, iconName(set), iconsHtml(set, true), () => postCond({ type: "iconSet", icons: set })).dataset.icons = set;
+                    }
+                    more(sub, { startKind: "scale", startStyle: "iconSet" });
+                });
                 pop.appendChild(el("hr"));
                 item(pop, "新しいルール…", () => askCond());
-                head(pop, "ルールのクリア");
-                item(pop, "選択したセルからルールをクリア", () => clearCond(false));
-                item(pop, "シート全体からルールをクリア", () => clearCond(true));
-                pop.appendChild(el("hr"));
+                subMenu(pop, "ルールのクリア", (sub) => {
+                    item(sub, "選択したセルからルールをクリア", () => clearCond(false));
+                    item(sub, "シート全体からルールをクリア", () => clearCond(true));
+                });
                 item(pop, "ルールの管理…", () => manageCond());
             },
         });
