@@ -7,6 +7,10 @@
 //! "条件付き書式ルールの管理": the rules of a sheet listed for the grid ([`rules_of`]), and
 //! written again as the dialog leaves them ([`manage`]): in its order of priority, without those
 //! deleted, with their ranges and "停止" changed, edited, new.
+//!
+//! As Excel 2010 and later write them, a data bar has a half in the sheet's `extLst` (its look:
+//! solid or gradient, the border, 自動 for the least and the greatest), joined to it by an id;
+//! an icon set of Excel 2010 (三角形・星・ボックス) is in the `extLst` alone.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
@@ -38,9 +42,11 @@ pub struct CondRule {
     pub rank: u32,
     pub bottom: bool,
     pub percent: bool,
-    /// `aboveAverage`: below it, or equal to it too.
+    /// `aboveAverage`: below it, or equal to it too; how many standard deviations above (below)
+    /// it (1〜3; 0: the average itself).
     pub below: bool,
     pub equal: bool,
+    pub std_dev: u32,
     /// `timePeriod`: `today`, `yesterday`, `tomorrow`, `last7Days`, `thisWeek`, `lastWeek`,
     /// `nextWeek`, `thisMonth`, `lastMonth`, `nextMonth`.
     pub period: String,
@@ -51,8 +57,22 @@ pub struct CondRule {
     pub icons: String,
     pub reverse: bool,
     pub icon_only: bool,
-    /// `dataBar`: the bar alone ("棒のみ表示").
+    /// `dataBar`: the bar alone ("棒のみ表示"); of one color ("塗りつぶし (単色)", else a
+    /// gradient); its border ("枠線 (実線)", `RRGGBB`; None: "枠線なし").
     pub bar_only: bool,
+    pub solid: bool,
+    pub bar_border: Option<String>,
+    /// `dataBar`: "棒の方向" (`context`, `leftToRight`, `rightToLeft`; empty: `context`); "負の
+    /// 値と軸": the negative values' fill and border (`RRGGBB`; empty: red), or (`*_same`) the
+    /// positive's, the axis (`automatic`, `middle`, `none`; empty: `automatic`) and its color
+    /// (empty: black).
+    pub direction: String,
+    pub negative_fill: String,
+    pub negative_fill_same: bool,
+    pub negative_border: String,
+    pub negative_border_same: bool,
+    pub axis: String,
+    pub axis_color: String,
     /// The values the bar, the scale or the icons go by (`cfvo`): a bar's least and greatest,
     /// a scale's one for each color, an icon set's one for each icon from the least (the first
     /// is where the least icon starts). Empty: as Excel puts them (the least and the greatest,
@@ -65,8 +85,9 @@ pub struct CondRule {
 }
 
 /// A value a bar, a scale or an icon set goes by: `min` / `max` (the least, the greatest of
-/// the cells), `num`, `percent`, `percentile` (`value` a number, or a formula with `=`), or
-/// `formula` (`value` the formula). `gte`: an icon's from the value on (else: above it).
+/// the cells), `auto` (a bar's "自動": the least or 0, the greatest or 0), `num`, `percent`,
+/// `percentile` (`value` a number, or a formula with `=`), or `formula` (`value` the formula).
+/// `gte`: an icon's from the value on (else: above it).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Threshold {
     pub kind: String,
@@ -94,7 +115,7 @@ impl Threshold {
         }
         let v = self.value.trim();
         match self.kind.as_str() {
-            "min" | "max" => Ok(()),
+            "min" | "max" | "auto" => Ok(()),
             "formula" if v.trim_start_matches('=').trim().is_empty() => {
                 Err(format!("{what}の数式がありません"))
             }
@@ -110,9 +131,33 @@ impl Threshold {
         }
     }
 
+    /// The kind as the sheet's half of a rule writes it: a bar's `auto` as `min` / `max`
+    /// (`least`).
+    fn main_kind(&self, least: bool) -> &str {
+        match self.kind.as_str() {
+            "auto" if least => "min",
+            "auto" => "max",
+            k => k,
+        }
+    }
+
+    /// The kind as Excel 2010's half writes it: `auto` as `autoMin` / `autoMax`.
+    fn x14_kind(&self, least: bool) -> &str {
+        match self.kind.as_str() {
+            "auto" if least => "autoMin",
+            "auto" => "autoMax",
+            k => k,
+        }
+    }
+
+    /// As a `cfvo` of the sheet (prefix `p`): its value in `val`.
     fn xml(&self, p: &str, icon: bool) -> String {
-        let mut out = format!("<{p}cfvo type=\"{}\"", self.kind);
-        if !matches!(self.kind.as_str(), "min" | "max") {
+        self.xml_as(p, &self.kind, icon)
+    }
+
+    fn xml_as(&self, p: &str, kind: &str, icon: bool) -> String {
+        let mut out = format!("<{p}cfvo type=\"{kind}\"");
+        if !matches!(kind, "min" | "max") {
             let v = self.value.trim();
             let v = v.strip_prefix('=').unwrap_or(v).trim();
             out.push_str(&format!(" val=\"{}\"", scan::escape(v)));
@@ -123,12 +168,36 @@ impl Threshold {
         out.push_str("/>");
         out
     }
+
+    /// As a `x14:cfvo` of Excel 2010: its value in `<xm:f>`.
+    fn x14_xml(&self, kind: &str, icon: bool) -> String {
+        let gte = if icon && !self.gte { " gte=\"0\"" } else { "" };
+        if matches!(kind, "min" | "max" | "autoMin" | "autoMax") {
+            return format!("<x14:cfvo type=\"{kind}\"{gte}/>");
+        }
+        let v = self.value.trim();
+        let v = v.strip_prefix('=').unwrap_or(v).trim();
+        format!(
+            "<x14:cfvo type=\"{kind}\"{gte}><xm:f>{}</xm:f></x14:cfvo>",
+            scan::escape(v)
+        )
+    }
 }
 
-/// The kinds of the values of bars and scales: the least's, one between, the greatest's.
+/// The kinds of the values of bars and scales: the least's, one between, the greatest's (a
+/// bar's also `auto`).
 const LEAST: &[&str] = &["min", "num", "percent", "percentile", "formula"];
 const BETWEEN: &[&str] = &["num", "percent", "percentile", "formula"];
 const GREATEST: &[&str] = &["max", "num", "percent", "percentile", "formula"];
+const BAR_LEAST: &[&str] = &["auto", "min", "num", "percent", "percentile", "formula"];
+const BAR_GREATEST: &[&str] = &["auto", "max", "num", "percent", "percentile", "formula"];
+
+/// The namespaces of Excel 2010's half of the rules, and the `uri`s of the `ext` of a rule that
+/// has its half there, and of the sheet's `ext` of those halves.
+const X14_NS: &str = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main";
+const XM_NS: &str = "http://schemas.microsoft.com/office/excel/2006/main";
+const EXT_RULE: &str = "{B025F937-C7B1-47D3-B67F-A62EFF666E3E}";
+const EXT_CFS: &str = "{78C0D931-6437-407d-A8EE-F0AAD7539E65}";
 
 /// The format a rule gives: font color, fill, bold, italic, underline, strike-through, a border
 /// around the cells (`RRGGBB`).
@@ -188,8 +257,8 @@ pub(super) const PERIODS: &[&str] = &[
     "nextMonth",
 ];
 
-/// The icon sets of Excel 2007 (those of 2010, the stars, triangles and boxes, are written in
-/// the `extLst`), and how many icons each has.
+/// The icon sets and how many icons each has: those of Excel 2007, then those of Excel 2010
+/// (written in the sheet's `extLst` alone, [`X14_ICONS`]).
 pub(super) const ICON_SETS: &[(&str, usize)] = &[
     ("3Arrows", 3),
     ("3ArrowsGray", 3),
@@ -208,12 +277,36 @@ pub(super) const ICON_SETS: &[(&str, usize)] = &[
     ("5ArrowsGray", 5),
     ("5Rating", 5),
     ("5Quarters", 5),
+    ("3Stars", 3),
+    ("3Triangles", 3),
+    ("5Boxes", 5),
 ];
+
+/// The icon sets of Excel 2010.
+const X14_ICONS: &[&str] = &["3Stars", "3Triangles", "5Boxes"];
 
 impl CondRule {
     /// Whether the rule gives a format (a `dxf`) rather than drawing bars, colors or icons.
     fn formats(&self) -> bool {
         !matches!(self.kind.as_str(), "dataBar" | "colorScale" | "iconSet")
+    }
+
+    /// Whether it is written in the sheet's `extLst` alone (an icon set of Excel 2010).
+    fn x14_only(&self) -> bool {
+        self.kind == "iconSet" && X14_ICONS.contains(&self.icons.as_str())
+    }
+
+    /// Whether it has its half in the sheet's `extLst` (a data bar, as Excel 2010 writes it).
+    fn x14_half(&self) -> bool {
+        self.kind == "dataBar"
+    }
+
+    /// A bar's values: those given, or "自動" for both.
+    fn bar_points(&self) -> Vec<Threshold> {
+        match self.thresholds.as_slice() {
+            [] => vec![Threshold::new("auto", ""), Threshold::new("auto", "")],
+            t => t.to_vec(),
+        }
     }
 
     /// What is wrong with the rule, as the edit says it.
@@ -258,6 +351,9 @@ impl CondRule {
                     return Err(format!("`rank` は 1〜{max} で指定してください"));
                 }
             }
+            "aboveAverage" if self.std_dev > 3 => {
+                return Err("`stdDev`（標準偏差）は 1〜3 で指定してください".into());
+            }
             "timePeriod" if !PERIODS.contains(&self.period.as_str()) => {
                 return Err(format!(
                     "`period` `{}` は指定できません（{}）",
@@ -267,6 +363,21 @@ impl CondRule {
             }
             "dataBar" if self.colors.len() != 1 => {
                 return Err("データ バーの `colors` は 1 色です".into());
+            }
+            "dataBar"
+                if !["", "context", "leftToRight", "rightToLeft"]
+                    .contains(&self.direction.as_str()) =>
+            {
+                return Err(format!(
+                    "`direction` `{}` は指定できません（context / leftToRight / rightToLeft）",
+                    self.direction
+                ));
+            }
+            "dataBar" if !["", "automatic", "middle", "none"].contains(&self.axis.as_str()) => {
+                return Err(format!(
+                    "`axis` `{}` は指定できません（automatic / middle / none）",
+                    self.axis
+                ));
             }
             "colorScale" if !(2..=3).contains(&self.colors.len()) => {
                 return Err("カラー スケールの `colors` は 2 色か 3 色です".into());
@@ -288,8 +399,8 @@ impl CondRule {
                     if t.len() != 2 {
                         return Err("データ バーの `thresholds` は最小値と最大値の 2 つです".into());
                     }
-                    t[0].check(LEAST, "最小値")?;
-                    t[1].check(GREATEST, "最大値")?;
+                    t[0].check(BAR_LEAST, "最小値")?;
+                    t[1].check(BAR_GREATEST, "最大値")?;
                 }
                 "colorScale" => {
                     if t.len() != self.colors.len() {
@@ -421,8 +532,16 @@ fn formula_of(rule: &CondRule, a: &str) -> Option<String> {
     })
 }
 
-/// The rule as a `cfRule` of the sheet (prefix `p`), on cells whose first is `first`.
-fn rule_xml(p: &str, rule: &CondRule, dxf: Option<u32>, first: CellRef, priority: usize) -> String {
+/// The rule as a `cfRule` of the sheet (prefix `p`), on cells whose first is `first`; `x14`: the
+/// id of its half in the sheet's `extLst` ([`x14_xml`]).
+fn rule_xml(
+    p: &str,
+    rule: &CondRule,
+    dxf: Option<u32>,
+    first: CellRef,
+    priority: usize,
+    x14: Option<&str>,
+) -> String {
     let a = first.a1();
     let mut attrs = format!(" type=\"{}\"", rule.kind);
     if let Some(id) = dxf {
@@ -474,14 +593,19 @@ fn rule_xml(p: &str, rule: &CondRule, dxf: Option<u32>, first: CellRef, priority
             if rule.equal {
                 attrs.push_str(" equalAverage=\"1\"");
             }
+            if rule.std_dev > 0 {
+                attrs.push_str(&format!(" stdDev=\"{}\"", rule.std_dev));
+            }
         }
         "timePeriod" => attrs.push_str(&format!(" timePeriod=\"{}\"", rule.period)),
         "dataBar" => {
-            let t = match rule.thresholds.as_slice() {
-                [] => vec![Threshold::new("min", ""), Threshold::new("max", "")],
-                t => t.to_vec(),
-            };
-            let cfvos: String = t.iter().map(|x| x.xml(p, false)).collect();
+            // (自動 as the least and the greatest: Excel 2010's half says it.)
+            let cfvos: String = rule
+                .bar_points()
+                .iter()
+                .enumerate()
+                .map(|(i, x)| x.xml_as(p, x.main_kind(i == 0), false))
+                .collect();
             let only = if rule.bar_only {
                 " showValue=\"0\""
             } else {
@@ -541,11 +665,158 @@ fn rule_xml(p: &str, rule: &CondRule, dxf: Option<u32>, first: CellRef, priority
     for f in &formulas {
         inner.push_str(&format!("<{p}formula>{}</{p}formula>", scan::escape(f)));
     }
+    if let Some(id) = x14 {
+        inner.push_str(&format!(
+            "<{p}extLst><{p}ext uri=\"{EXT_RULE}\" xmlns:x14=\"{X14_NS}\"><x14:id>{id}</x14:id></{p}ext></{p}extLst>"
+        ));
+    }
     if inner.is_empty() {
         format!("<{p}cfRule{attrs}/>")
     } else {
         format!("<{p}cfRule{attrs}>{inner}</{p}cfRule>")
     }
+}
+
+/// Excel 2010's half of a rule (a data bar's look), or a rule of Excel 2010 alone (an icon set
+/// of its own, with its `priority`), as a `x14:conditionalFormatting` of the sheet's `extLst` on
+/// the cells `refs`, as Excel writes them.
+fn x14_xml(rule: &CondRule, id: &str, priority: Option<usize>, refs: &str) -> String {
+    let mut attrs = format!(" type=\"{}\"", rule.kind);
+    if let Some(n) = priority {
+        attrs.push_str(&format!(" priority=\"{n}\""));
+    }
+    attrs.push_str(&format!(" id=\"{id}\""));
+    let body = if rule.kind == "dataBar" {
+        let cfvos: String = rule
+            .bar_points()
+            .iter()
+            .enumerate()
+            .map(|(i, x)| x.x14_xml(x.x14_kind(i == 0), false))
+            .collect();
+        let or = |c: &str, default: &str| {
+            if c.is_empty() {
+                default.to_string()
+            } else {
+                c.to_string()
+            }
+        };
+        let mut head = String::from("<x14:dataBar minLength=\"0\" maxLength=\"100\"");
+        let mut colors = String::new();
+        if let Some(c) = &rule.bar_border {
+            head.push_str(" border=\"1\"");
+            colors.push_str(&format!("<x14:borderColor rgb=\"FF{c}\"/>"));
+        }
+        if rule.solid {
+            head.push_str(" gradient=\"0\"");
+        }
+        if !matches!(rule.direction.as_str(), "" | "context") {
+            head.push_str(&format!(" direction=\"{}\"", rule.direction));
+        }
+        if rule.negative_fill_same {
+            head.push_str(" negativeBarColorSameAsPositive=\"1\"");
+        }
+        colors.push_str(&format!(
+            "<x14:negativeFillColor rgb=\"FF{}\"/>",
+            or(&rule.negative_fill, "FF0000")
+        ));
+        // (The schema has a border of the positive's color: said when not.)
+        if rule.bar_border.is_some() && !rule.negative_border_same {
+            head.push_str(" negativeBarBorderColorSameAsPositive=\"0\"");
+            colors.push_str(&format!(
+                "<x14:negativeBorderColor rgb=\"FF{}\"/>",
+                or(&rule.negative_border, "FF0000")
+            ));
+        }
+        if !matches!(rule.axis.as_str(), "" | "automatic") {
+            head.push_str(&format!(" axisPosition=\"{}\"", rule.axis));
+        }
+        colors.push_str(&format!(
+            "<x14:axisColor rgb=\"FF{}\"/>",
+            or(&rule.axis_color, "000000")
+        ));
+        format!("{head}>{cfvos}{colors}</x14:dataBar>")
+    } else {
+        let n = ICON_SETS
+            .iter()
+            .find(|(s, _)| *s == rule.icons)
+            .map_or(3, |(_, n)| *n);
+        let mut head = format!("<x14:iconSet iconSet=\"{}\"", rule.icons);
+        if rule.icon_only {
+            head.push_str(" showValue=\"0\"");
+        }
+        if rule.reverse {
+            head.push_str(" reverse=\"1\"");
+        }
+        let cfvos: String = if rule.thresholds.is_empty() {
+            (0..n)
+                .map(|i| {
+                    Threshold::new("percent", &((i * 100 + n / 2) / n).to_string())
+                        .x14_xml("percent", true)
+                })
+                .collect()
+        } else {
+            rule.thresholds
+                .iter()
+                .map(|x| x.x14_xml(&x.kind, true))
+                .collect()
+        };
+        format!("{head}>{cfvos}</x14:iconSet>")
+    };
+    format!(
+        "<x14:conditionalFormatting xmlns:x14=\"{X14_NS}\" xmlns:xm=\"{XM_NS}\"><x14:cfRule{attrs}>{body}</x14:cfRule><xm:sqref>{}</xm:sqref></x14:conditionalFormatting>",
+        scan::escape(refs)
+    )
+}
+
+/// New ids of rules of Excel 2010 (GUIDs, `{…}`), not in the sheet's file.
+struct Ids<'a> {
+    doc: &'a str,
+    n: u64,
+}
+
+impl Ids<'_> {
+    fn new(doc: &str) -> Ids<'_> {
+        Ids { doc, n: 0 }
+    }
+
+    fn next(&mut self) -> String {
+        loop {
+            self.n += 1;
+            let id = format!("{{6F1C3A2E-8B4D-4C7A-9E5F-{:012X}}}", self.n);
+            if !self.doc.contains(&id) {
+                return id;
+            }
+        }
+    }
+}
+
+/// The edit that adds `els` (`x14:conditionalFormatting`s) to the sheet's `extLst`: into its
+/// `ext` of conditional formats, else into a new one (the first of the list), else into a new
+/// `extLst`.
+fn put_x14(doc: &str, root: &El, p: &str, els: &str, edits: &mut Edits) -> Result<()> {
+    let new_ext = format!(
+        "<{p}ext uri=\"{EXT_CFS}\" xmlns:x14=\"{X14_NS}\"><x14:conditionalFormattings>{els}</x14:conditionalFormattings></{p}ext>"
+    );
+    let Some(list) = root.child("extLst") else {
+        edits.insert(
+            place(root, "extLst"),
+            format!("<{p}extLst>{new_ext}</{p}extLst>"),
+        );
+        return Ok(());
+    };
+    let text = &doc[list.span()];
+    let base = list.open.start;
+    let tree = scan::tree(text, &[]).ok_or("シートの extLst を読み取れません")?;
+    match tree
+        .children
+        .iter()
+        .filter(|c| c.local() == "ext")
+        .find_map(|e| e.child("conditionalFormattings"))
+    {
+        Some(cfs) if cfs.open.end != cfs.end => edits.insert(base + cfs.inner.end, els.to_string()),
+        _ => edits.insert(base + tree.inner.start, new_ext),
+    }
+    Ok(())
 }
 
 /// The format of a rule as a `dxf` of the styles.
@@ -701,18 +972,26 @@ pub(super) fn conditional(
             scan::set_attr(&sdoc, span, "priority", &(n + 1).to_string(), &mut edits);
         }
     }
-    let el = format!(
-        "<{p}conditionalFormatting sqref=\"{}\">{}</{p}conditionalFormatting>",
-        sqref(on),
-        rule_xml(&p, rule, dxf, first.start, 1)
-    );
-    // After the sheet's other conditional formats.
-    let at = root
-        .children
-        .iter()
-        .rfind(|c| c.local() == "conditionalFormatting")
-        .map_or_else(|| place(&root, "conditionalFormatting"), |c| c.end);
-    edits.insert(at, el);
+    let refs = sqref(on);
+    // (A data bar's half, an icon set of Excel 2010: in the extLst.)
+    let x14 = (rule.x14_only() || rule.x14_half()).then(|| Ids::new(&sdoc).next());
+    if !rule.x14_only() {
+        let el = format!(
+            "<{p}conditionalFormatting sqref=\"{refs}\">{}</{p}conditionalFormatting>",
+            rule_xml(&p, rule, dxf, first.start, 1, x14.as_deref())
+        );
+        // After the sheet's other conditional formats.
+        let at = root
+            .children
+            .iter()
+            .rfind(|c| c.local() == "conditionalFormatting")
+            .map_or_else(|| place(&root, "conditionalFormatting"), |c| c.end);
+        edits.insert(at, el);
+    }
+    if let Some(id) = &x14 {
+        let el = x14_xml(rule, id, rule.x14_only().then_some(1), &refs);
+        put_x14(&sdoc, &root, &p, &el, &mut edits)?;
+    }
     let doc = edits.apply(&sdoc);
     tree(&doc, &s.part)?;
     s.finish(Some(doc))
@@ -981,7 +1260,7 @@ fn dxfs_of(styles: &str) -> Vec<Json> {
 }
 
 /// The values (`cfvo`) of a bar, a scale or an icon set, as the edits give them: `{ type,
-/// value, gte }` (a formula with `=`; Excel 2010's `autoMin` / `autoMax` as `min` / `max`).
+/// value, gte }` (a formula with `=`; Excel 2010's `autoMin` / `autoMax` as `auto`).
 fn thresholds_of(text: &str, el: &El) -> Json {
     Json::Array(
         el.children
@@ -989,8 +1268,7 @@ fn thresholds_of(text: &str, el: &El) -> Json {
             .filter(|c| c.local() == "cfvo")
             .map(|c| {
                 let kind = match c.attr(text, "type").unwrap_or_default().as_str() {
-                    "autoMin" => "min".to_string(),
-                    "autoMax" => "max".to_string(),
+                    "autoMin" | "autoMax" => "auto".to_string(),
                     k => k.to_string(),
                 };
                 // (Excel 2010's in `<xm:f>`.)
@@ -999,7 +1277,7 @@ fn thresholds_of(text: &str, el: &El) -> Json {
                     .or_else(|| c.child("f").map(|f| f.text(text)))
                     .unwrap_or_default();
                 let value = match kind.as_str() {
-                    "min" | "max" => String::new(),
+                    "min" | "max" | "auto" => String::new(),
                     "formula" => format!("={val}"),
                     _ if val.trim().parse::<f64>().is_err() && !val.is_empty() => format!("={val}"),
                     _ => val,
@@ -1012,8 +1290,9 @@ fn thresholds_of(text: &str, el: &El) -> Json {
 }
 
 /// A rule as the grid's dialog lists and edits it: its settings as a `conditional` edit gives
-/// them, `range`, `format`, `stop`, and whether the dialog can edit it (`editable`).
-fn describe(doc: &str, f: &Found, dxfs: &[Json]) -> Json {
+/// them, `range`, `format`, `stop`, and whether the dialog can edit it (`editable`). `half`: its
+/// half in the sheet's `extLst` (a data bar's look).
+fn describe(doc: &str, f: &Found, half: Option<&Found>, dxfs: &[Json]) -> Json {
     let text = &doc[f.rule.clone()];
     let Some(r) = scan::tree(text, &[]) else {
         return json!({ "id": f.id, "type": "", "range": f.sqref, "editable": false });
@@ -1069,6 +1348,11 @@ fn describe(doc: &str, f: &Found, dxfs: &[Json]) -> Json {
                 Some("0" | "false")
             ));
             j["equal"] = json!(on("equalAverage"));
+            j["stdDev"] = json!(
+                attr("stdDev")
+                    .and_then(|n| n.parse::<u32>().ok())
+                    .unwrap_or(0)
+            );
         }
         "timePeriod" => j["period"] = json!(attr("timePeriod").unwrap_or_default()),
         "dataBar" => {
@@ -1076,13 +1360,61 @@ fn describe(doc: &str, f: &Found, dxfs: &[Json]) -> Json {
             let color = bar.and_then(|b| {
                 rgb_of(text, b.child("color")).or_else(|| rgb_of(text, b.child("fillColor")))
             });
-            j["colors"] = json!(color.into_iter().collect::<Vec<_>>());
+            j["colors"] = json!(color.iter().collect::<Vec<_>>());
             if let Some(b) = bar {
                 j["thresholds"] = thresholds_of(text, b);
                 j["barOnly"] = json!(matches!(
                     b.attr(text, "showValue").as_deref(),
                     Some("0" | "false")
                 ));
+            }
+            // Its look, as its half has it (Excel 2007's: a gradient without a border, the
+            // defaults of the rest); the values too (自動 there).
+            j["solid"] = json!(false);
+            j["barBorder"] = json!(false);
+            j["direction"] = json!("context");
+            j["negativeFill"] = json!("#FF0000");
+            j["negativeFillSame"] = json!(false);
+            j["negativeBorder"] = json!("#FF0000");
+            j["negativeBorderSame"] = json!(false);
+            j["axis"] = json!("automatic");
+            j["axisColor"] = json!("#000000");
+            let half = half.map(|h| &doc[h.rule.clone()]);
+            if let Some(t) = half
+                && let Some(b) = scan::tree(t, &[]).as_ref().and_then(|h| h.child("dataBar"))
+            {
+                let on = |n: &str| b.attr(t, n);
+                j["solid"] = json!(matches!(on("gradient").as_deref(), Some("0" | "false")));
+                if matches!(on("border").as_deref(), Some("1" | "true")) {
+                    j["barBorder"] = json!(rgb_of(t, b.child("borderColor")).or(color.clone()));
+                }
+                if let Some(d) = on("direction") {
+                    j["direction"] = json!(d);
+                }
+                j["negativeFillSame"] = json!(matches!(
+                    on("negativeBarColorSameAsPositive").as_deref(),
+                    Some("1" | "true")
+                ));
+                // (The schema's: the positive's border.)
+                j["negativeBorderSame"] = json!(!matches!(
+                    on("negativeBarBorderColorSameAsPositive").as_deref(),
+                    Some("0" | "false")
+                ));
+                for (key, tag) in [
+                    ("negativeFill", "negativeFillColor"),
+                    ("negativeBorder", "negativeBorderColor"),
+                    ("axisColor", "axisColor"),
+                ] {
+                    if let Some(c) = rgb_of(t, b.child(tag)) {
+                        j[key] = json!(c);
+                    }
+                }
+                if let Some(a) = on("axisPosition") {
+                    j["axis"] = json!(a);
+                }
+                if b.children.iter().filter(|c| c.local() == "cfvo").count() == 2 {
+                    j["thresholds"] = thresholds_of(t, b);
+                }
             }
         }
         "colorScale" => {
@@ -1119,7 +1451,14 @@ fn describe(doc: &str, f: &Found, dxfs: &[Json]) -> Json {
             || ICON_SETS
                 .iter()
                 .any(|(s, _)| j["icons"].as_str() == Some(s)));
-    j["editable"] = json!(known && !ext);
+    // Of the extLst alone: an icon set of Excel 2010 (not one of icons chosen one by one).
+    let x14_icons = kind == "iconSet"
+        && j["icons"].as_str().is_some_and(|s| X14_ICONS.contains(&s))
+        && r.child("iconSet").is_some_and(|is| {
+            !matches!(is.attr(text, "custom").as_deref(), Some("1" | "true"))
+                && !is.children.iter().any(|c| c.local() == "cfIcon")
+        });
+    j["editable"] = json!(known && (!ext || x14_icons));
     j
 }
 
@@ -1150,7 +1489,7 @@ pub(crate) fn rules_of(bytes: &[u8]) -> Result<HashMap<String, Vec<Json>>> {
         let list: Vec<Json> = rules
             .listed()
             .into_iter()
-            .map(|f| describe(&doc, f, &dxfs))
+            .map(|f| describe(&doc, f, rules.half(f), &dxfs))
             .collect();
         if !list.is_empty() {
             out.insert(name, list);
@@ -1214,8 +1553,11 @@ pub(super) fn manage(bytes: &[u8], sheet: &str, rules: &[Managed]) -> Result<Vec
     }
     let mut styles: Option<String> = None;
     let mut main = String::new();
-    // The halves in the extLst kept: (the rule, its priority or None, its ranges).
+    // The halves in the extLst kept: (the rule, its priority or None, its ranges); those of the
+    // rules written (a data bar's half, an icon set of Excel 2010).
     let mut ext_kept: Vec<(&Found, Option<usize>, String)> = Vec::new();
+    let mut ext_new: Vec<String> = Vec::new();
+    let mut ids = Ids::new(&sdoc);
     for (i, m) in rules.iter().enumerate() {
         let priority = i + 1;
         let f =
@@ -1262,10 +1604,22 @@ pub(super) fn manage(bytes: &[u8], sheet: &str, rules: &[Managed]) -> Result<Vec
             let first = ranges(&sqref_now)
                 .first()
                 .map_or(CellRef { row: 0, col: 0 }, |r| r.start);
+            let x14 = (rule.x14_only() || rule.x14_half()).then(|| ids.next());
+            if let Some(id) = &x14 {
+                ext_new.push(x14_xml(
+                    &rule,
+                    id,
+                    rule.x14_only().then_some(priority),
+                    &sqref_now,
+                ));
+            }
+            if rule.x14_only() {
+                continue;
+            }
             let (head, name) = open(main_cf);
             main.push_str(&format!(
                 "{head}{}</{name}>",
-                rule_xml(&p, &rule, dxf, first, priority)
+                rule_xml(&p, &rule, dxf, first, priority, x14.as_deref())
             ));
             continue;
         }
@@ -1298,38 +1652,41 @@ pub(super) fn manage(bytes: &[u8], sheet: &str, rules: &[Managed]) -> Result<Vec
         None if !main.is_empty() => edits.insert(place(&root, "conditionalFormatting"), main),
         None => {}
     }
-    if let Some(list) = &found.ext_list
-        && !found.ext_cfs.is_empty()
-    {
-        if ext_kept.is_empty() {
-            if found.ext_cfs.len() == found.ext_count {
+    // The extLst's: those kept, then those written.
+    let mut x14 = String::new();
+    for (f, priority, refs) in &ext_kept {
+        let mut text = sdoc[f.rule.clone()].to_string();
+        if let Some(n) = priority {
+            text = with_attr(&text, "priority", &n.to_string());
+        }
+        x14.push_str(&format!(
+            "{}{text}<{tag}>{}</{tag}></{}>",
+            &sdoc[f.cf_open.clone()],
+            scan::escape(refs),
+            f.cf_name,
+            tag = f.sqref_tag
+        ));
+    }
+    for el in &ext_new {
+        x14.push_str(el);
+    }
+    match (&found.ext_list, found.ext_cfs.split_first()) {
+        (Some(list), Some(((_, first), rest))) => {
+            if !x14.is_empty() {
+                edits.replace(first.clone(), x14);
+                for (ext, _) in rest {
+                    edits.replace(ext.clone(), "");
+                }
+            } else if found.ext_cfs.len() == found.ext_count {
                 edits.replace(list.clone(), "");
             } else {
                 for (ext, _) in &found.ext_cfs {
                     edits.replace(ext.clone(), "");
                 }
             }
-        } else {
-            let mut inner = String::new();
-            for (f, priority, refs) in &ext_kept {
-                let mut text = sdoc[f.rule.clone()].to_string();
-                if let Some(n) = priority {
-                    text = with_attr(&text, "priority", &n.to_string());
-                }
-                inner.push_str(&format!(
-                    "{}{text}<{tag}>{}</{tag}></{}>",
-                    &sdoc[f.cf_open.clone()],
-                    scan::escape(refs),
-                    f.cf_name,
-                    tag = f.sqref_tag
-                ));
-            }
-            let (_, first) = &found.ext_cfs[0];
-            edits.replace(first.clone(), inner);
-            for (ext, _) in &found.ext_cfs[1..] {
-                edits.replace(ext.clone(), "");
-            }
         }
+        _ if !x14.is_empty() => put_x14(&sdoc, &root, &p, &x14, &mut edits)?,
+        _ => {}
     }
     if edits.is_empty() {
         return Ok(bytes.to_vec());

@@ -686,6 +686,9 @@ impl Book {
                     if let Some(bd) = &b.border {
                         cell["bar"]["bd"] = json!(bd);
                     }
+                    if let (Some(_), Some(ac)) = (b.axis, &b.axis_color) {
+                        cell["bar"]["ac"] = json!(ac);
+                    }
                 }
                 if let Some((set, i)) = fx.and_then(|fx| fx.icon.as_ref())
                     && let Some(svg) = super::cond::icon_svg(set, *i)

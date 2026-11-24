@@ -2703,6 +2703,18 @@ fn conditional_formats_put_on_cells_and_cleared() {
         part(&top, SHEET1)
             .contains(r#"<cfRule type="top10" dxfId="1" priority="1" bottom="1" rank="3"/>"#)
     );
+    // 標準偏差 1 下: below the average by a standard deviation, as Excel writes it.
+    let sd = edit(
+        r##"{"op":"conditional","range":"B2:B7","type":"aboveAverage","below":true,"stdDev":1,"format":{"fill":"#C6EFCE"}}"##,
+    );
+    assert!(part(&sd, SHEET1).contains(
+        r#"<cfRule type="aboveAverage" dxfId="1" priority="1" aboveAverage="0" stdDev="1"/>"#
+    ));
+    let rule = &view(&sd)["sheets"][0]["condRules"][0];
+    assert_eq!(
+        (&rule["below"], &rule["stdDev"], &rule["equal"]),
+        (&json!(true), &json!(1), &json!(false))
+    );
     let week = edit(
         r##"{"op":"conditional","range":"B2","type":"timePeriod","period":"today","format":{"fill":"#C6EFCE"}}"##,
     );
@@ -2722,7 +2734,11 @@ fn conditional_formats_put_on_cells_and_cleared() {
     let bars =
         edit(r##"{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#638EC6"]}"##);
     assert_eq!(changed(BOOK, &bars), [SHEET1]);
-    assert!(part(&bars, SHEET1).contains(r#"<cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar></cfRule>"#));
+    // (As Excel 2010 writes it: its look in the extLst, joined by its id; 自動 for the least and
+    // the greatest, a border of its color.)
+    let doc = part(&bars, SHEET1);
+    assert!(doc.contains(r#"<cfRule type="dataBar" priority="1"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:id>{6F1C3A2E-8B4D-4C7A-9E5F-000000000001}</x14:id></ext></extLst></cfRule>"#), "{doc}");
+    assert!(doc.ends_with(r#"<extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:conditionalFormattings><x14:conditionalFormatting xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="dataBar" id="{6F1C3A2E-8B4D-4C7A-9E5F-000000000001}"><x14:dataBar minLength="0" maxLength="100" border="1" negativeBarBorderColorSameAsPositive="0"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/><x14:borderColor rgb="FF638EC6"/><x14:negativeFillColor rgb="FFFF0000"/><x14:negativeBorderColor rgb="FFFF0000"/><x14:axisColor rgb="FF000000"/></x14:dataBar></x14:cfRule><xm:sqref>B2:B5</xm:sqref></x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst></worksheet>"#), "{doc}");
     let data = view(&bars);
     assert!(
         data["sheets"][0]["cells"]
@@ -2783,6 +2799,10 @@ fn conditional_formats_put_on_cells_and_cleared() {
     assert!(
         wrong(r#"{"op":"conditional","range":"A1","type":"colorScale","colors":["red","blue"]}"#)
             .contains("RRGGBB")
+    );
+    assert!(
+        wrong(r#"{"op":"conditional","range":"A1","type":"aboveAverage","stdDev":4,"format":{"bold":true}}"#)
+            .contains("stdDev")
     );
 }
 
@@ -2930,8 +2950,47 @@ fn conditional_rules_of_excel_2010_managed() {
         .map(|r| r["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, ["m0", "m1", "x1"]);
-    assert_eq!(rules[2]["editable"], json!(false));
+    // (The data bar's look and 自動 from its half; the stars editable.)
+    assert_eq!(
+        (
+            &rules[1]["solid"],
+            &rules[1]["barBorder"],
+            &rules[1]["thresholds"][0]["type"]
+        ),
+        (&json!(false), &json!(false), &json!("auto"))
+    );
+    assert_eq!(rules[2]["editable"], json!(true));
     assert_eq!(rules[2]["icons"], json!("3Stars"));
+    // A new one of Excel 2010: with the others of the extLst.
+    let more = apply(
+        &book,
+        &ops(r##"{"op":"conditional","range":"D2:D5","type":"dataBar","colors":["#63C384"],"solid":true}"##),
+    )
+    .unwrap();
+    let doc = part(&more, "xl/worksheets/sheet1.xml");
+    assert_eq!(
+        doc.matches("<x14:conditionalFormattings>").count(),
+        1,
+        "{doc}"
+    );
+    assert_eq!(
+        doc.matches("<x14:conditionalFormatting ").count(),
+        3,
+        "{doc}"
+    );
+    // The stars edited: boxes, of the extLst still.
+    let boxes = apply(
+        &book,
+        &ops(r#"{"op":"conditionalRules","rules":[{"id":"m0"},{"id":"m1"},{"id":"x1","type":"iconSet","icons":"5Boxes","reverse":true}]}"#),
+    )
+    .unwrap();
+    let doc = part(&boxes, "xl/worksheets/sheet1.xml");
+    assert!(
+        doc.contains(r#"<x14:cfRule type="iconSet" priority="3" id="{6F1C3A2E-8B4D-4C7A-9E5F-000000000001}"><x14:iconSet iconSet="5Boxes" reverse="1"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo>"#)
+            && !doc.contains("3Stars")
+            && doc.contains(r#"<x14:cfRule type="dataBar" id="{00000000-0000-0000-0000-000000000001}">"#),
+        "{doc}"
+    );
     // The icon set first, the data bar's range changed (its half's too), the cell rule deleted.
     let out = apply(
         &book,
@@ -3024,4 +3083,258 @@ fn conditional_thresholds_of_bars_scales_and_icons() {
     assert!(wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"thresholds":[{"type":"num","value":"abc"},{"type":"max"}]}"##).contains("abc"));
     assert!(wrong(r#"{"op":"conditional","range":"A1","type":"iconSet","icons":"4Rating","thresholds":[{"type":"num","value":1}]}"#).contains("4 つ"));
     assert!(wrong(r#"{"op":"conditional","range":"A1","type":"colorScale","colors":["000000","FFFFFF"],"thresholds":[{"type":"min"},{"type":"formula","value":"="}]}"#).contains("数式"));
+}
+
+#[test]
+fn icon_sets_drawn_for_the_dialogs() {
+    // Every icon set a rule can be written with has its icons, as many as the set has.
+    let sets = crate::view::icon_sets();
+    for (set, n) in conditional::ICON_SETS {
+        let icons = sets[*set].as_array().unwrap_or_else(|| panic!("{set}"));
+        assert_eq!(icons.len(), *n, "{set}");
+        assert!(
+            icons
+                .iter()
+                .all(|s| s.as_str().unwrap().starts_with("<svg")),
+            "{set}"
+        );
+    }
+}
+
+#[test]
+fn conditional_formats_of_excel_2010_written() {
+    const SHEET1: &str = "xl/worksheets/sheet1.xml";
+    let rules = |out: &[u8]| view(out)["sheets"][0]["condRules"].clone();
+    let bar_of = |out: &[u8]| {
+        view(out)["sheets"][0]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["r"] == json!(4) && x["c"] == json!(1))
+            .map(|x| x["bar"].clone())
+            .unwrap()
+    };
+    // 塗りつぶし (単色): of one color, without a border.
+    let solid = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#63C384"],"solid":true}"##,
+    );
+    let doc = part(&solid, SHEET1);
+    assert!(
+        doc.contains(r#"<x14:dataBar minLength="0" maxLength="100" gradient="0"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/><x14:negativeFillColor rgb="FFFF0000"/><x14:axisColor rgb="FF000000"/></x14:dataBar>"#),
+        "{doc}"
+    );
+    let bar = bar_of(&solid);
+    assert!(
+        !bar["bg"].as_str().unwrap().contains("gradient") && bar.get("bd").is_none(),
+        "{bar}"
+    );
+    let r = &rules(&solid)[0];
+    assert_eq!(
+        (&r["solid"], &r["barBorder"], &r["thresholds"]),
+        (
+            &json!(true),
+            &json!(false),
+            &json!([{ "type": "auto", "value": "", "gte": true }, { "type": "auto", "value": "", "gte": true }])
+        )
+    );
+    // A gradient with a border of another color; none.
+    let border = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#638EC6"],"barBorder":"#000000"}"##,
+    );
+    assert!(part(&border, SHEET1).contains(r#"<x14:borderColor rgb="FF000000"/>"#));
+    let bar = bar_of(&border);
+    assert!(
+        bar["bg"].as_str().unwrap().contains("gradient") && bar.get("bd").is_some(),
+        "{bar}"
+    );
+    assert_eq!(rules(&border)[0]["barBorder"], json!("#000000"));
+    let plain = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#638EC6"],"barBorder":false}"##,
+    );
+    assert!(!part(&plain, SHEET1).contains("border="));
+
+    // 3 つの星: in the extLst alone, first in priority (the rule there moves down).
+    let stars = edit(r##"{"op":"conditional","range":"B2:B5","type":"iconSet","icons":"3Stars"}"##);
+    let doc = part(&stars, SHEET1);
+    assert!(
+        doc.contains(r#"<cfRule type="cellIs" dxfId="0" priority="2""#)
+            && doc.contains(r#"<x14:cfRule type="iconSet" priority="1" id="{6F1C3A2E-8B4D-4C7A-9E5F-000000000001}"><x14:iconSet iconSet="3Stars"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule><xm:sqref>B2:B5</xm:sqref>"#),
+        "{doc}"
+    );
+    let listed = rules(&stars);
+    assert_eq!(
+        (
+            &listed[0]["icons"],
+            &listed[0]["editable"],
+            &listed[0]["id"]
+        ),
+        (&json!("3Stars"), &json!(true), &json!("x0"))
+    );
+    let data = view(&stars);
+    assert!(
+        data["sheets"][0]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["ic"].as_str().is_some_and(|k| k.starts_with("3Stars:"))),
+        "{data}"
+    );
+    // Triangles and boxes too; an icon set of Excel 2007 stays in the sheet's rules.
+    for set in ["3Triangles", "5Boxes"] {
+        let out = edit(&format!(
+            r#"{{"op":"conditional","range":"B2:B5","type":"iconSet","icons":"{set}","reverse":true,"iconOnly":true}}"#
+        ));
+        assert!(
+            part(&out, SHEET1).contains(&format!(
+                r#"<x14:iconSet iconSet="{set}" showValue="0" reverse="1">"#
+            )),
+            "{set}"
+        );
+    }
+    let arrows =
+        edit(r##"{"op":"conditional","range":"B2:B5","type":"iconSet","icons":"3Arrows"}"##);
+    assert!(!part(&arrows, SHEET1).contains("extLst"));
+
+    // ルールの管理: a new solid bar and stars, the rule there kept; then all deleted.
+    let managed = apply(
+        BOOK,
+        &ops(r##"{"op":"conditionalRules","rules":[{"type":"iconSet","icons":"3Stars","range":"C2:C5"},{"id":"m0"},{"type":"dataBar","colors":["#FF555A"],"solid":true,"range":"B2:B5"}]}"##),
+    )
+    .unwrap();
+    let doc = part(&managed, SHEET1);
+    assert!(
+        doc.contains(r#"<x14:cfRule type="iconSet" priority="1" id="{6F1C3A2E-8B4D-4C7A-9E5F-000000000001}">"#)
+            && doc.contains(r#"<cfRule type="cellIs" dxfId="0" priority="2""#)
+            && doc.contains(r#"<cfRule type="dataBar" priority="3"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FFFF555A"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:id>{6F1C3A2E-8B4D-4C7A-9E5F-000000000002}</x14:id>"#)
+            && doc.contains(r#"<x14:cfRule type="dataBar" id="{6F1C3A2E-8B4D-4C7A-9E5F-000000000002}"><x14:dataBar minLength="0" maxLength="100" gradient="0">"#),
+        "{doc}"
+    );
+    let ids: Vec<serde_json::Value> = rules(&managed)
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].clone())
+        .collect();
+    assert_eq!(ids, [json!("x0"), json!("m0"), json!("m1")]);
+    let none = apply(&managed, &ops(r#"{"op":"conditionalRules","rules":[]}"#)).unwrap();
+    let doc = part(&none, SHEET1);
+    assert!(
+        !doc.contains("extLst") && !doc.contains("conditionalFormatting"),
+        "{doc}"
+    );
+
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(
+        wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"barBorder":"blue"}"##)
+            .contains("barBorder")
+    );
+    assert!(
+        wrong(r##"{"op":"conditional","range":"A1","type":"colorScale","colors":["#638EC6","#FFFFFF"],"thresholds":[{"type":"auto"},{"type":"max"}]}"##)
+            .contains("auto")
+    );
+}
+
+#[test]
+fn conditional_bars_negative_values_axis_and_direction() {
+    const SHEET1: &str = "xl/worksheets/sheet1.xml";
+    let cell = |out: &[u8], r: u64| {
+        view(out)["sheets"][0]["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["r"] == json!(r) && x["c"] == json!(1))
+            .cloned()
+            .unwrap()
+    };
+    // 右から左, the axis in the middle in gray, negative values in the positive's fill and in a
+    // blue border.
+    let out = edit(
+        r##"{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#638EC6"],"direction":"rightToLeft","negativeFillSame":true,"negativeBorder":"#0000FF","axis":"middle","axisColor":"#808080"}"##,
+    );
+    let doc = part(&out, SHEET1);
+    assert!(
+        doc.contains(r#"<x14:dataBar minLength="0" maxLength="100" border="1" direction="rightToLeft" negativeBarColorSameAsPositive="1" negativeBarBorderColorSameAsPositive="0" axisPosition="middle"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/><x14:borderColor rgb="FF638EC6"/><x14:negativeFillColor rgb="FFFF0000"/><x14:negativeBorderColor rgb="FF0000FF"/><x14:axisColor rgb="FF808080"/></x14:dataBar>"#),
+        "{doc}"
+    );
+    let r = &view(&out)["sheets"][0]["condRules"][0];
+    for (key, want) in [
+        ("direction", json!("rightToLeft")),
+        ("negativeFillSame", json!(true)),
+        ("negativeFill", json!("#FF0000")),
+        ("negativeBorderSame", json!(false)),
+        ("negativeBorder", json!("#0000FF")),
+        ("axis", json!("middle")),
+        ("axisColor", json!("#808080")),
+    ] {
+        assert_eq!(r[key], want, "{key}");
+    }
+    // 300 of 0〜500 from the middle, to the left: 0.2〜0.5 of the cell, the axis at 0.5.
+    let bar = &cell(&out, 4)["bar"];
+    let near = |v: &serde_json::Value, x: f64| (v.as_f64().unwrap() - x).abs() < 1e-9;
+    assert!(
+        near(&bar["x"], 0.2) && near(&bar["w"], 0.3) && near(&bar["axis"], 0.5),
+        "{bar}"
+    );
+    assert_eq!(bar["ac"], json!("#808080"));
+
+    // A negative value: its own color from the axis (automatic: where 0 is); without an axis,
+    // the same way as the others, in its color.
+    let neg = |extra: &str| {
+        let json = format!(
+            r##"[{{"op":"set","range":"B3","text":"-100"}},{{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#638EC6"],"solid":true,"negativeFill":"#00FF00"{extra}}}]"##
+        );
+        apply(BOOK, &ops(&json)).unwrap()
+    };
+    let auto = neg("");
+    let bar = &cell(&auto, 2)["bar"];
+    assert_eq!(bar["bg"], json!("#00FF00"));
+    assert!(near(&bar["axis"], 100.0 / 600.0), "{bar}");
+    let none = neg(r#","axis":"none""#);
+    assert!(part(&none, SHEET1).contains(r#"axisPosition="none""#));
+    let bar = &cell(&none, 2)["bar"];
+    assert!(
+        bar["bg"] == json!("#00FF00") && bar["axis"].is_null() && near(&bar["x"], 0.0),
+        "{bar}"
+    );
+
+    let wrong =
+        |json: &str| parse_ops(&serde_json::from_str(json).unwrap(), Some("Data")).unwrap_err();
+    assert!(
+        wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"direction":"up"}"##)
+            .contains("direction")
+    );
+    assert!(
+        wrong(r##"{"op":"conditional","range":"A1","type":"dataBar","colors":["#638EC6"],"axis":"left"}"##)
+            .contains("axis")
+    );
+}
+
+#[test]
+fn conditional_scales_bars_and_icons_together() {
+    // As Excel draws them on the same cells: the scale's fill, the bar, the icon.
+    let out = apply(
+        BOOK,
+        &ops(
+            r##"[{"op":"conditional","range":"B2:B5","type":"colorScale","colors":["#F8696B","#63BE7B"]},{"op":"conditional","range":"B2:B5","type":"dataBar","colors":["#D6007B"],"solid":true},{"op":"conditional","range":"B2:B5","type":"iconSet","icons":"3TrafficLights2"}]"##,
+        ),
+    )
+    .unwrap();
+    let data = view(&out);
+    let sheet = &data["sheets"][0];
+    for r in 1..=4u64 {
+        let cell = sheet["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["r"] == json!(r) && x["c"] == json!(1))
+            .unwrap();
+        let css = sheet["styles"][cell["s"].as_u64().unwrap_or(0) as usize]
+            .as_str()
+            .unwrap();
+        assert!(
+            css.contains("background:#") && cell.get("bar").is_some() && cell.get("ic").is_some(),
+            "{r}: {cell} {css}"
+        );
+    }
 }

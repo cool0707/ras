@@ -23,8 +23,10 @@ pub struct Bar {
     pub gradient: bool,
     /// The bar grows to the left (a negative value, or right to left).
     pub leftward: bool,
-    /// The axis between negative and positive values, in fractions of the cell's width.
+    /// The axis between negative and positive values, in fractions of the cell's width, and its
+    /// color (#RRGGBB; None: black).
     pub axis: Option<f64>,
+    pub axis_color: Option<String>,
 }
 
 /// A border line a format gives: its style (`thin`, `double`, ...) and #RRGGBB (None: black).
@@ -79,6 +81,7 @@ struct BarDef {
     negative_border_same: bool,
     /// automatic, middle, none.
     axis: String,
+    axis_color: Option<Color>,
     rtl: bool,
     /// Written with the Excel 2010 extension (negative values grow from an axis).
     ext: bool,
@@ -258,6 +261,7 @@ fn read_rule(r: &ConditionalFormattingRule, x14: bool) -> Rule {
                 "" => "automatic".to_string(),
                 a => a.to_string(),
             },
+            axis_color: db.axis_color().and_then(given),
             rtl: db.direction() == "rightToLeft",
             ext: x14,
         });
@@ -504,14 +508,16 @@ impl Book {
                             fx.fill = Some(c);
                         }
                     }
+                    // (A bar and an icon together, as Excel draws them: the icon over the bar,
+                    // both over a color scale's fill; of each, the first rule's.)
                     Eff::Bar(bar) => {
-                        if fx.bar.is_none() && fx.icon.is_none() {
+                        if fx.bar.is_none() {
                             fx.bar = Some(bar);
                             fx.hide_value |= !rule.show_value;
                         }
                     }
                     Eff::Icon(i) => {
-                        if fx.icon.is_none() && fx.bar.is_none() {
+                        if fx.icon.is_none() {
                             fx.icon = i;
                             fx.hide_value |= !rule.show_value;
                         }
@@ -624,6 +630,7 @@ impl Book {
                         .or(border.clone())
                 };
                 let (min_l, max_l) = (def.min_len / 100.0, def.max_len / 100.0);
+                let axis_color = def.axis_color.as_ref().and_then(css);
                 for (at, v) in cells.iter().zip(vals) {
                     let Some(x) = num(v) else { continue };
                     let mut bar =
@@ -651,6 +658,7 @@ impl Book {
                                     gradient: def.gradient,
                                     leftward: false,
                                     axis: Some(a),
+                                    axis_color: axis_color.clone(),
                                 }
                             } else {
                                 let len = if neg > 0.0 { a * (-x / neg) } else { 0.0 };
@@ -662,6 +670,7 @@ impl Book {
                                     gradient: def.gradient,
                                     leftward: true,
                                     axis: Some(a),
+                                    axis_color: axis_color.clone(),
                                 }
                             }
                         } else {
@@ -670,14 +679,17 @@ impl Book {
                             } else {
                                 0.0
                             };
+                            // (Without an axis, a negative value's bar the same way, in its colors.)
+                            let negative = def.ext && x < 0.0;
                             Bar {
                                 start: 0.0,
                                 len: min_l + t * (max_l - min_l),
-                                fill: fill.clone(),
-                                border: border.clone(),
+                                fill: if negative { &neg_fill } else { &fill }.clone(),
+                                border: if negative { &neg_border } else { &border }.clone(),
                                 gradient: def.gradient,
                                 leftward: false,
                                 axis: None,
+                                axis_color: None,
                             }
                         };
                     if def.rtl {
@@ -905,66 +917,107 @@ fn add_dxf(fx: &mut CondFx, d: &Dxf, css: &dyn Fn(&Color) -> Option<String>) {
     }
 }
 
-// ---- icons (as xljs draws them)
+// ---- icons (as Excel 2021 / 365 draws them, 16 x 16 px)
 
-const GREEN: &str = "#33A02C";
-const YELLOW: &str = "#F2B400";
-const RED: &str = "#D93025";
-const GRAY: &str = "#8C8C8C";
-const BLACK: &str = "#262626";
+/// The colors of Excel's icons: (fill, edge).
+type Paint = (&'static str, &'static str);
+const RED: Paint = ("#D65532", "#9E381C");
+const YELLOW: Paint = ("#EAC282", "#A4802B");
+const GREEN: Paint = ("#68A490", "#326F5B");
+const GRAY: Paint = ("#808080", "#646262");
+const DARK: Paint = ("#505050", "#343434");
+/// Of "赤から黒".
+const LIGHT: Paint = ("#B1B1B1", "#787878");
+const PINK: Paint = ("#EDB2A3", "#C98E80");
+const RED_2: Paint = ("#D86344", "#B14629");
+/// The parts of the ratings and boxes, on and off.
+const BLUE: Paint = ("#4A7DB1", "#335F8C");
+const OFF: Paint = ("#B3B3B3", "#727272");
 
-// The arrows as Excel 2021 draws them: 13 x 16 px with a darker edge (fill, edge).
-const ARROW_RED: (&str, &str) = ("#D65532", "#9E381C");
-const ARROW_YELLOW: (&str, &str) = ("#EAC282", "#A4802C");
-const ARROW_GREEN: (&str, &str) = ("#68A490", "#326F5B");
-const ARROW_GRAY: (&str, &str) = ("#8C8C8C", "#5F5F5F");
-
-fn arrow(deg: i32, (fill, edge): (&str, &str)) -> String {
+/// A shape (`d`) filled, with its edge.
+fn shape(d: &str, (fill, edge): Paint) -> String {
     format!(
-        "<path transform=\"rotate({deg} 8 8)\" d=\"M8 .5L14.5 7.5H10.5V15.5H5.5V7.5H1.5Z\" fill=\"{fill}\" stroke=\"{edge}\" stroke-width=\"1\"/>"
+        "<path d=\"{d}\" fill=\"{fill}\" stroke=\"{edge}\" stroke-width=\"1\" stroke-linejoin=\"round\"/>"
     )
 }
 
-fn circle(c: &str) -> String {
-    format!("<circle cx=\"8\" cy=\"8\" r=\"6.5\" fill=\"{c}\"/>")
+/// An arrow pointing `deg` from up, 13 x 16 px (a slanted one larger, with a shorter shaft: it
+/// fills the corners of the box).
+fn arrow(deg: i32, paint: Paint) -> String {
+    let (fill, edge) = paint;
+    let (scale, tail) = if deg % 90 == 0 {
+        ("", "15.5")
+    } else {
+        (" translate(8 8) scale(1.1) translate(-8 -8)", "14")
+    };
+    format!(
+        "<path transform=\"rotate({deg} 8 8){scale}\" d=\"M8 .5L14.5 7.5H11V{tail}H5V7.5H1.5Z\" fill=\"{fill}\" stroke=\"{edge}\" stroke-width=\"1\" stroke-linejoin=\"miter\"/>"
+    )
 }
 
-fn mark(kind: char, c: &str, circled: bool) -> String {
-    let (bg, fg) = if circled { (c, "#fff") } else { ("none", c) };
-    let w = if circled { "2" } else { "2.6" };
-    let body = match kind {
-        'v' => format!(
-            "<path d=\"M4.5 8.3L7 10.8L11.6 5.4\" fill=\"none\" stroke=\"{fg}\" stroke-width=\"{w}\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>"
-        ),
-        '!' => format!(
-            "<path d=\"M8 4V9\" stroke=\"{fg}\" stroke-width=\"{w}\" stroke-linecap=\"round\"/><circle cx=\"8\" cy=\"12\" r=\"1.2\" fill=\"{fg}\"/>"
-        ),
-        _ => format!(
-            "<path d=\"M5.2 5.2L10.8 10.8M10.8 5.2L5.2 10.8\" stroke=\"{fg}\" stroke-width=\"{w}\" stroke-linecap=\"round\"/>"
-        ),
-    };
+fn circle((fill, edge): Paint) -> String {
+    format!(
+        "<circle cx=\"8\" cy=\"8\" r=\"7\" fill=\"{fill}\" stroke=\"{edge}\" stroke-width=\".8\"/>"
+    )
+}
+
+/// A flag on its pole.
+fn flag(paint: Paint) -> String {
+    format!(
+        "<path d=\"M3.5 1V15.5\" stroke=\"#727272\" stroke-width=\"1.6\"/>{}",
+        shape("M4.5 1.5L14 5.75L4.5 10Z", paint)
+    )
+}
+
+/// A traffic light in its black box.
+fn lamp((fill, edge): Paint) -> String {
+    format!(
+        "<rect x=\".5\" y=\".5\" width=\"15\" height=\"15\" rx=\"3\" fill=\"#505050\" stroke=\"#303030\" stroke-width=\"1\"/><circle cx=\"8\" cy=\"8\" r=\"5\" fill=\"{fill}\" stroke=\"{edge}\" stroke-width=\".6\"/>"
+    )
+}
+
+/// ✖, !, ✔ (`kind` 'x', '!', 'v'): in white on a circle, or of the color with its edge.
+fn mark(kind: char, paint: Paint, circled: bool) -> String {
+    let (fill, edge) = paint;
     if circled {
-        format!("<circle cx=\"8\" cy=\"8\" r=\"7\" fill=\"{bg}\"/>{body}")
-    } else {
-        body
+        let body = match kind {
+            'v' => "<path d=\"M4.6 8.4L7 10.7L11.4 5.6\" fill=\"none\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>".to_string(),
+            '!' => "<path d=\"M8 3.6V8.8\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\"/><circle cx=\"8\" cy=\"11.9\" r=\"1.2\" fill=\"#fff\"/>".to_string(),
+            _ => "<path d=\"M5.3 5.3L10.7 10.7M10.7 5.3L5.3 10.7\" stroke=\"#fff\" stroke-width=\"2\" stroke-linecap=\"round\"/>".to_string(),
+        };
+        return format!("{}{body}", circle(paint));
+    }
+    // A thick line with its edge: the edge drawn under, wider.
+    let line = |d: &str, cap: &str| {
+        format!(
+            "<path d=\"{d}\" fill=\"none\" stroke=\"{edge}\" stroke-width=\"4.4\" stroke-linecap=\"{cap}\" stroke-linejoin=\"miter\"/><path d=\"{d}\" fill=\"none\" stroke=\"{fill}\" stroke-width=\"2.6\" stroke-linecap=\"{cap}\" stroke-linejoin=\"miter\"/>"
+        )
+    };
+    match kind {
+        'v' => line("M2.4 8.6L6.2 12.4L13.8 3.8", "butt"),
+        '!' => format!(
+            "{}{}",
+            line("M8 1.2V10.2", "butt"),
+            shape("M6.3 11.8H9.7V15.2H6.3Z", paint)
+        ),
+        _ => line("M2.6 2.6L13.4 13.4M13.4 2.6L2.6 13.4", "butt"),
     }
 }
 
 fn bars(on: usize) -> String {
     (0..4)
         .map(|i| {
-            let h = 3.0 + i as f64 * 3.5;
-            let c = if i < on { "#3C78C8" } else { "#D0D0D0" };
+            let h = 6.0 + i as f64 * 3.0;
+            let (fill, edge) = if i < on { BLUE } else { OFF };
             format!(
-                "<rect x=\"{}\" y=\"{}\" width=\"2.6\" height=\"{h}\" fill=\"{c}\"/>",
-                1.5 + i as f64 * 3.5,
-                14.5 - h
+                "<rect x=\"{}\" y=\"{}\" width=\"3\" height=\"{h}\" fill=\"{fill}\" stroke=\"{edge}\" stroke-width=\".8\"/>",
+                1.0 + i as f64 * 3.6,
+                15.4 - h
             )
         })
         .collect()
 }
 
-// As Excel 2021 draws them: 16 px across.
 fn quarters(q: usize) -> String {
     let c = "#505050";
     let ring =
@@ -986,83 +1039,111 @@ fn quarters(q: usize) -> String {
     ring.to_string() + &fill
 }
 
-fn star(fill: f64, id: &str) -> String {
+/// An empty star, half filled (the left half), full.
+fn star(fill: f64) -> String {
     let d = "M8 1.2L10 5.8L15 6.2L11.2 9.4L12.4 14.4L8 11.7L3.6 14.4L4.8 9.4L1 6.2L6 5.8Z";
-    let c = "#F2B400";
+    let empty = ("#fff", "#727272");
     match fill {
-        f if f >= 1.0 => {
-            format!("<path d=\"{d}\" fill=\"{c}\" stroke=\"{c}\" stroke-width=\".6\"/>")
+        f if f >= 1.0 => shape(d, YELLOW),
+        f if f > 0.0 => {
+            // (Each half with its own edge: no line down the middle.)
+            let half = |fill: &str, outline: &str, (f, e): Paint| {
+                format!(
+                    "<path d=\"{fill}\" fill=\"{f}\"/><path d=\"{outline}\" fill=\"none\" stroke=\"{e}\" stroke-width=\"1\" stroke-linejoin=\"round\"/>"
+                )
+            };
+            half(
+                "M8 1.2L10 5.8L15 6.2L11.2 9.4L12.4 14.4L8 11.7Z",
+                "M8 1.2L10 5.8L15 6.2L11.2 9.4L12.4 14.4L8 11.7",
+                empty,
+            ) + &half(
+                "M8 1.2L8 11.7L3.6 14.4L4.8 9.4L1 6.2L6 5.8Z",
+                "M8 1.2L6 5.8L1 6.2L4.8 9.4L3.6 14.4L8 11.7",
+                YELLOW,
+            )
         }
-        f if f > 0.0 => format!(
-            "<clipPath id=\"{id}\"><rect width=\"8\" height=\"16\"/></clipPath><path d=\"{d}\" fill=\"#fff\" stroke=\"{c}\" stroke-width=\".8\"/><path d=\"{d}\" fill=\"{c}\" clip-path=\"url(#{id})\"/>"
-        ),
-        _ => format!("<path d=\"{d}\" fill=\"#fff\" stroke=\"{c}\" stroke-width=\".8\"/>"),
+        _ => shape(d, empty),
     }
 }
 
+/// Four boxes, `on` of them blue: those of the bottom row first.
 fn boxes(on: usize) -> String {
-    (0..4)
-        .map(|i| {
-            let (x, y) = (1.5 + (i % 2) as f64 * 7.0, 1.5 + (i / 2) as f64 * 7.0);
-            let c = if i < on { "#3C78C8" } else { "#D0D0D0" };
-            format!("<rect x=\"{x}\" y=\"{y}\" width=\"6\" height=\"6\" fill=\"{c}\"/>")
+    [(1.0, 8.5), (8.5, 8.5), (1.0, 1.0), (8.5, 1.0)]
+        .iter()
+        .enumerate()
+        .map(|(i, (x, y))| {
+            let (fill, edge) = if i < on { BLUE } else { OFF };
+            format!(
+                "<rect x=\"{x}\" y=\"{y}\" width=\"6.5\" height=\"6.5\" rx=\"1\" fill=\"{fill}\" stroke=\"{edge}\" stroke-width=\".8\"/>"
+            )
         })
         .collect()
 }
+
+/// The icon sets and how many icons each has: those of Excel 2007, then those of Excel 2010.
+pub const ICON_SETS: &[(&str, usize)] = &[
+    ("3Arrows", 3),
+    ("3ArrowsGray", 3),
+    ("3Flags", 3),
+    ("3TrafficLights1", 3),
+    ("3TrafficLights2", 3),
+    ("3Signs", 3),
+    ("3Symbols", 3),
+    ("3Symbols2", 3),
+    ("4Arrows", 4),
+    ("4ArrowsGray", 4),
+    ("4RedToBlack", 4),
+    ("4Rating", 4),
+    ("4TrafficLights", 4),
+    ("5Arrows", 5),
+    ("5ArrowsGray", 5),
+    ("5Rating", 5),
+    ("5Quarters", 5),
+    ("3Stars", 3),
+    ("3Triangles", 3),
+    ("5Boxes", 5),
+];
 
 /// The icon of a set (its index from the lowest values) as SVG; None for an unknown set.
 pub fn icon_svg(set: &str, i: usize) -> Option<String> {
     let pick = |v: &[String]| v.get(i).cloned();
     let body = match set {
-        "3Arrows" => pick(&[arrow(180, ARROW_RED), arrow(90, ARROW_YELLOW), arrow(0, ARROW_GREEN)]),
-        "3ArrowsGray" => pick(&[arrow(180, ARROW_GRAY), arrow(90, ARROW_GRAY), arrow(0, ARROW_GRAY)]),
+        "3Arrows" => pick(&[arrow(180, RED), arrow(90, YELLOW), arrow(0, GREEN)]),
+        "3ArrowsGray" => pick(&[arrow(180, GRAY), arrow(90, GRAY), arrow(0, GRAY)]),
         "4Arrows" => pick(&[
-            arrow(180, ARROW_RED),
-            arrow(135, ARROW_YELLOW),
-            arrow(45, ARROW_YELLOW),
-            arrow(0, ARROW_GREEN),
+            arrow(180, RED),
+            arrow(135, YELLOW),
+            arrow(45, YELLOW),
+            arrow(0, GREEN),
         ]),
         "4ArrowsGray" => pick(&[
-            arrow(180, ARROW_GRAY),
-            arrow(135, ARROW_GRAY),
-            arrow(45, ARROW_GRAY),
-            arrow(0, ARROW_GRAY),
+            arrow(180, GRAY),
+            arrow(135, GRAY),
+            arrow(45, GRAY),
+            arrow(0, GRAY),
         ]),
         "5Arrows" => pick(&[
-            arrow(180, ARROW_RED),
-            arrow(135, ARROW_YELLOW),
-            arrow(90, ARROW_YELLOW),
-            arrow(45, ARROW_YELLOW),
-            arrow(0, ARROW_GREEN),
+            arrow(180, RED),
+            arrow(135, YELLOW),
+            arrow(90, YELLOW),
+            arrow(45, YELLOW),
+            arrow(0, GREEN),
         ]),
         "5ArrowsGray" => pick(&[
-            arrow(180, ARROW_GRAY),
-            arrow(135, ARROW_GRAY),
-            arrow(90, ARROW_GRAY),
-            arrow(45, ARROW_GRAY),
-            arrow(0, ARROW_GRAY),
+            arrow(180, GRAY),
+            arrow(135, GRAY),
+            arrow(90, GRAY),
+            arrow(45, GRAY),
+            arrow(0, GRAY),
         ]),
-        "3Flags" => pick(&[RED, YELLOW, GREEN].map(|c| {
-            format!(
-                "<path d=\"M3.5 1.5V15\" stroke=\"#555\" stroke-width=\"1.3\"/><path d=\"M4 2H13.5L11 5.5L13.5 9H4Z\" fill=\"{c}\"/>"
-            )
-        })),
+        "3Flags" => pick(&[flag(RED), flag(YELLOW), flag(GREEN)]),
         "3TrafficLights1" => pick(&[circle(RED), circle(YELLOW), circle(GREEN)]),
-        "3TrafficLights2" => pick(&[RED, YELLOW, GREEN].map(|c| {
-            format!(
-                "<rect x=\"1\" y=\"1\" width=\"14\" height=\"14\" rx=\"3\" fill=\"{BLACK}\"/><circle cx=\"8\" cy=\"8\" r=\"5\" fill=\"{c}\"/>"
-            )
-        })),
-        "4TrafficLights" => pick(&[circle(BLACK), circle(RED), circle(YELLOW), circle(GREEN)]),
-        "4RedToBlack" => pick(&[
-            circle(BLACK),
-            circle(GRAY),
-            circle("#F4A6A6"),
-            circle(RED),
-        ]),
+        "3TrafficLights2" => pick(&[lamp(RED), lamp(YELLOW), lamp(GREEN)]),
+        "4TrafficLights" => pick(&[circle(DARK), circle(RED), circle(YELLOW), circle(GREEN)]),
+        "4RedToBlack" => pick(&[circle(DARK), circle(LIGHT), circle(PINK), circle(RED_2)]),
         "3Signs" => pick(&[
-            format!("<path d=\"M8 1L15 8L8 15L1 8Z\" fill=\"{RED}\"/>"),
-            format!("<path d=\"M8 1.5L15 14.5H1Z\" fill=\"{YELLOW}\"/>"),
+            shape("M8 .9L15.1 8L8 15.1L.9 8Z", RED),
+            shape("M8 1.4L15 14.6H1Z", YELLOW),
             circle(GREEN),
         ]),
         "3Symbols" => pick(&[
@@ -1071,7 +1152,7 @@ pub fn icon_svg(set: &str, i: usize) -> Option<String> {
             mark('v', GREEN, true),
         ]),
         "3Symbols2" => pick(&[
-            mark('x', RED, false),
+            mark('x', RED_2, false),
             mark('!', YELLOW, false),
             mark('v', GREEN, false),
         ]),
@@ -1084,11 +1165,11 @@ pub fn icon_svg(set: &str, i: usize) -> Option<String> {
             quarters(3),
             quarters(4),
         ]),
-        "3Stars" => pick(&[star(0.0, ""), star(0.5, "half"), star(1.0, "")]),
+        "3Stars" => pick(&[star(0.0), star(0.5), star(1.0)]),
         "3Triangles" => pick(&[
-            format!("<path d=\"M2 4.5H14L8 13Z\" fill=\"{RED}\"/>"),
-            format!("<rect x=\"2.5\" y=\"6.5\" width=\"11\" height=\"3\" fill=\"{YELLOW}\"/>"),
-            format!("<path d=\"M2 11.5H14L8 3Z\" fill=\"{GREEN}\"/>"),
+            shape("M.6 4H15.4L8 12.4Z", RED),
+            shape("M.6 5.6H15.4V10.4H.6Z", YELLOW),
+            shape("M.6 12H15.4L8 3.6Z", GREEN),
         ]),
         "5Boxes" => pick(&[boxes(0), boxes(1), boxes(2), boxes(3), boxes(4)]),
         _ => None,
