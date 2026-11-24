@@ -1330,15 +1330,24 @@
         if (!b) return;
         const on = !!entry && entry.where === "cell";
         ed.classList.toggle("on", on);
-        Object.assign(ed.style, { left: `${b.x}px`, top: `${b.y}px`, width: "", height: "", font: "" });
+        Object.assign(ed.style, { left: `${b.x}px`, top: `${b.y}px`, width: "", height: "", font: "", paddingTop: "" });
         pinTo(ed, pinOf(view, b));
         if (!on) return;
-        if (activeTd) ed.style.font = getComputedStyle(activeTd).font;
+        const style = activeTd ? getComputedStyle(activeTd) : null;
+        if (style) ed.style.font = style.font;
         // As wide and as tall as what is typed, the cell at least.
         ed.style.width = `${b.w + 1}px`;
-        ed.style.height = `${b.h + 1}px`;
         ed.style.width = `${Math.max(b.w + 1, ed.scrollWidth + 10)}px`;
-        ed.style.height = `${Math.max(b.h + 1, ed.scrollHeight + 2)}px`;
+        // What is typed stands where the cell shows it (at the bottom, unless the cell says
+        // otherwise): it does not move when it is entered.
+        ed.style.paddingTop = "0px";
+        ed.style.height = "0px";
+        const textH = ed.scrollHeight;
+        const valign = style ? style.verticalAlign : "bottom";
+        const room = b.h - textH;
+        const pad = room <= 0 || valign === "top" ? 0 : valign === "middle" ? room / 2 : room;
+        ed.style.paddingTop = `${pad}px`;
+        ed.style.height = `${pad > 0 ? b.h + 1 : Math.max(b.h + 1, textH + 2)}px`;
     }
 
     function beginEntry(mode, text, where) {
