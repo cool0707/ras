@@ -57,7 +57,6 @@ table.nogrid td.nogr { background-image: none; }
 /* A changed cell keeps its own fill: a line around it and a corner mark. */
 td.chg { position: relative; outline: 1px solid var(--changed-line); outline-offset: -1px; }
 td.chg::before { content: ""; position: absolute; top: 0; right: 0; border: 4px solid; border-color: var(--changed-line) var(--changed-line) transparent transparent; }
-td.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
 td.filter::after, td.tfilter::after { content: "▾"; float: right; color: #555; font-size: 10px; border: 1px solid #aaa; background: #fff; padding: 0 2px; margin-left: 2px; }
 tr.gap th { border-bottom: 2px solid #888; }
 th.gap { border-right: 2px solid #888; }
@@ -157,8 +156,6 @@ tbody th.hs { border-bottom-color: var(--line); border-right-color: var(--accent
 th { user-select: none; cursor: default; }
 .selbox { position: absolute; box-sizing: border-box; border: 2px solid var(--accent); }
 .selshade { position: absolute; background: rgba(228, 80, 26, .08); }
-/* The active cell in a range: the range's border is the only one. */
-td.sel.inrange { outline: 0; }
 /* The areas of a selection made with Ctrl: shaded, the last one outlined thinly. */
 .selbox.multi { border-width: 1px; }
 .selbox.more { border-color: rgba(228, 80, 26, .5); background: rgba(228, 80, 26, .14); }
@@ -168,7 +165,7 @@ td.sel.inrange { outline: 0; }
 .clipbox::after { content: ""; position: absolute; inset: -2px; border: 2px dashed var(--accent); }
 /* The box typed into: on the active cell, seen while something is typed. */
 .editor { position: absolute; z-index: 1; width: 2px; height: 2px; margin: 0; padding: 0; border: 0; outline: 0; resize: none; overflow: hidden; opacity: 0; pointer-events: none; white-space: pre; background: #fff; color: #000; font: 11pt "Yu Gothic", Meiryo, sans-serif; }
-.editor.on { opacity: 1; pointer-events: auto; padding: 0 3px; outline: 2px solid var(--accent); outline-offset: -2px; box-shadow: 0 1px 6px rgba(0, 0, 0, .3); }
+.editor.on { opacity: 1; pointer-events: auto; padding: 0 3px; }
 .barinput { display: block; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; outline: 0; resize: none; overflow: hidden; white-space: pre; background: transparent; color: inherit; font: inherit; }
 body.busy, body.busy td, body.busy th { cursor: progress; }
 #error { display: flex; align-items: center; gap: 8px; padding: 3px 8px; color: #7a1410; background: #fde7e9; border-top: 1px solid #e6a8ab; }

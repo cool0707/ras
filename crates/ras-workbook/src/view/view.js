@@ -386,7 +386,8 @@
         selshade.hidden = selbox.hidden = clipbox.hidden = fillbox.hidden = fillh.hidden = dropbtn.hidden = promptbox.hidden = true;
         frzh.hidden = !fr;
         frzv.hidden = !fc;
-        wrap.appendChild(ed);
+        // (Under the marks: the border of the selection stays on the cell while what is typed runs over.)
+        wrap.insertBefore(ed, refs);
         grid.appendChild(wrap);
 
         const v = (view = {
@@ -802,23 +803,36 @@
     }
 
     // Where a column starts and a row starts on the grid (px from its top left corner).
+    //
+    // (Where they are drawn, to the fraction of a pixel: the collapsed borders of the headers put
+    // the cells half a pixel off, which offsetLeft and offsetTop round away, and the boxes drawn
+    // over the cells, a pixel off theirs, would not stand on the gridlines.)
+    function exact(v, node) {
+        const w = v.wrap.getBoundingClientRect();
+        const r = node.getBoundingClientRect();
+        // (The grid's zoom: as getBoundingClientRect has it, whichever way the browser zooms.)
+        const k = v.wrap.offsetWidth ? w.width / v.wrap.offsetWidth : 1;
+        return { x: (r.left - w.left) / k, y: (r.top - w.top) / k, w: r.width / k, h: r.height / k };
+    }
     function columnLeft(v, c) {
         const th = v.ths.get(c);
-        if (th) return th.offsetLeft;
+        if (th) return exact(v, th).x;
         // Hidden or not drawn: after the column drawn before it.
         let k = c - 1;
         while (k >= 0 && !v.ths.has(k)) k--;
-        let x = k >= 0 ? v.ths.get(k).offsetLeft + v.ths.get(k).offsetWidth : v.head;
+        const before = k >= 0 && exact(v, v.ths.get(k));
+        let x = before ? before.x + before.w : v.head;
         for (let i = k + 1; i < c; i++) x += width(v.sheet, i);
         return x;
     }
     function rowTop(v, r) {
         const tr = v.trs.get(r);
-        if (tr) return tr.offsetTop;
+        if (tr) return exact(v, tr).y;
         // Hidden or not drawn: after the row drawn before it.
         let k = r - 1;
         while (k >= 0 && !v.trs.has(k)) k--;
-        let y = k >= 0 ? v.trs.get(k).offsetTop + v.trs.get(k).offsetHeight : v.table.tHead.offsetHeight;
+        const before = k >= 0 && exact(v, v.trs.get(k));
+        let y = before ? before.y + before.h : v.table.tHead.offsetHeight;
         for (let i = k + 1; i < r; i++) y += height(v.sheet, i);
         return y;
     }
@@ -1034,6 +1048,17 @@
         showMode();
     }
 
+    // The border of the cells selected (one cell too), 2px as Excel's: 1px over the gridline
+    // around them, 1px outside it. (The gridlines are the right and bottom pixels of the cells:
+    // those left and above them are the cells' before.) Around what is typed into one cell, as
+    // it grows past the cell.
+    function borderOf(box, one) {
+        const typed = one && entry && entry.where === "cell" && ed.classList.contains("on");
+        const w = typed ? Math.max(box.w, parseFloat(ed.style.width) - 1 || 0) : box.w;
+        const h = typed ? Math.max(box.h, parseFloat(ed.style.height) - 1 || 0) : box.h;
+        return { x: box.x - 2, y: box.y - 2, w: w + 2, h: h + 2 };
+    }
+
     // The box of the range, its headers, and the dashed box of the cells copied.
     function drawBoxes() {
         const v = view;
@@ -1052,11 +1077,10 @@
             for (const [r, tr] of v.rows) if (all.some((a) => r >= a.r1 && r <= a.r2)) v.hl.push(tr.firstChild);
             for (const th of v.hl) th.classList.add("hs");
             const one = single(sel) && !areas.length;
-            const range = one ? null : boxOf(sel.r1, sel.c1, sel.r2, sel.c2);
-            put(v.selbox, range);
+            const box = boxOf(sel.r1, sel.c1, sel.r2, sel.c2);
+            const range = one ? null : box;
+            put(v.selbox, box && !areas.length ? borderOf(box, one) : range);
             v.selbox.classList.toggle("multi", areas.length > 0);
-            // A range: its border only (the active cell is not outlined again in it).
-            if (activeTd) activeTd.classList.toggle("inrange", !one);
             put(v.selshade, range);
             const o = ownerOf(sel.ar, sel.ac) || [sel.ar, sel.ac, sel.ar, sel.ac];
             const a = range && boxOf(o[0], o[1], o[2], o[3]);
@@ -1077,10 +1101,8 @@
         // The fill handle: at the bottom right corner of the cells selected.
         const b = editable && sel && !selected && !entry && sel.kind === "cells" && !areas.length ? boxOf(sel.r1, sel.c1, sel.r2, sel.c2) : null;
         v.fillh.hidden = !b || sel.r2 >= v.nrows || sel.c2 >= v.ncols;
-        // (Centred on the corner of the border: the active cell's outline is drawn inside the cell,
-        // 2px; the range's border 1px further out, over the gridline.)
-        const at = b && (single(sel) ? 4 : 3);
-        if (b) Object.assign(v.fillh.style, { left: `${b.x + b.w - at}px`, top: `${b.y + b.h - at}px` });
+        // (Centred on the corner of the border.)
+        if (b) Object.assign(v.fillh.style, { left: `${b.x + b.w - 3}px`, top: `${b.y + b.h - 3}px` });
         pinTo(v.fillh, pinOf(v, b));
         placeList();
     }
@@ -1327,7 +1349,7 @@
 
     function placeEditor() {
         if (!view || !sel) return;
-        if (ed.parentNode !== view.wrap) view.wrap.appendChild(ed);
+        if (ed.parentNode !== view.wrap) view.wrap.insertBefore(ed, view.refs);
         const o = ownerOf(sel.ar, sel.ac) || [sel.ar, sel.ac, sel.ar, sel.ac];
         const b = boxOf(o[0], o[1], o[2], o[3]);
         if (!b) return;
@@ -1351,6 +1373,12 @@
         const pad = room <= 0 || valign === "top" ? 0 : valign === "middle" ? room / 2 : room;
         ed.style.paddingTop = `${pad}px`;
         ed.style.height = `${pad > 0 ? b.h + 1 : Math.max(b.h + 1, textH + 2)}px`;
+        // (Not filled from while typed into: the fill handle is not there.)
+        view.fillh.hidden = true;
+        if (single(sel) && !areas.length) {
+            const r = borderOf(b, true);
+            Object.assign(view.selbox.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w + 1}px`, height: `${r.h + 1}px` });
+        }
     }
 
     function beginEntry(mode, text, where) {
