@@ -475,3 +475,28 @@ fn scripting_types_convert_and_stay_late_bound() {
         "{vba}"
     );
 }
+
+/// `[A1]` / `[SUM(A1:A3)]` (the shorthand of `Evaluate`) become `` fx`…` `` (spec §2.7);
+/// a name written in brackets stays a name.
+#[test]
+fn bracket_evaluate_becomes_fx() {
+    let vba = "Public Sub Report()\n    Dim total As Double\n    total = [SUM(A1:A3)] + [A1] + [$B$2]\n    Range(\"C1\").Value = [Sheet1!A1:B2].Rows.Count\n    Debug.Print [COUNTIF(A:A,\"`x`\")]\n    Debug.Print [total]\nEnd Sub\n";
+    let c = convert(vba, &Target::Standard, &[]);
+    println!("{}\n{:?}", c.text, c.todos);
+    assert!(
+        c.text.contains("fx`SUM(A1:A3)` + fx`A1` + fx`$B$2`"),
+        "{}",
+        c.text
+    );
+    assert!(c.text.contains("fx`Sheet1!A1:B2`).rows"), "{}", c.text);
+    assert!(c.text.contains("debug.print(total);"), "{}", c.text);
+    assert!(c.text.contains(r#"fx`COUNTIF(A:A,"\`x\`")`"#), "{}", c.text);
+    let (diags, files) = compile(&[("Module1", &c.text)]);
+    assert!(diags.is_empty(), "{diags:?}\n{}", c.text);
+    let vba = code(&files, "Module1");
+    assert!(
+        vba.contains(r#"Evaluate("SUM(A1:A3)") + Evaluate("A1") + Evaluate("$B$2")"#),
+        "{vba}"
+    );
+    assert!(vba.contains(r#"Evaluate("COUNTIF(A:A,""`x`"")")"#), "{vba}");
+}

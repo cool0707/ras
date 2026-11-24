@@ -35,6 +35,7 @@ The derived grammar is generated from the unmodified upstream file by `scripts/b
 8. In the rule `decorator`, an unqualified decorator name directly after `@` is scoped `entity.name.function.decorator.ras`.
 9. A new rule `struct-declaration` (`declare struct Name { ... }`, scopes `meta.struct.ras`, `storage.type.struct.ras`, `entity.name.type.struct.ras`) is added and included from the rule `declaration`.
 10. The rule `support-objects` (names of the JavaScript, DOM and Node.js runtime libraries) and every reference to it are removed.
+11. New rules `formula-template` and `formula` colour the Excel formula of the tagged template `` fx`…` `` (also `` obj.fx`…` ``): the formula is scoped `meta.embedded.formula.ras`, and its functions, references, sheet names, strings, numbers, error values, booleans and operators get scopes ending in `.formula.ras`. `formula-template` is included first in the rule `template`, and the first pattern of the rule `template-call` gets a negative lookahead so that it does not take the tag `fx`.
 
 ### Licence
 

@@ -1075,6 +1075,32 @@ fn links_conditional_formats_tables_and_functions_for_the_grid() {
     );
 }
 
+/// The functions the editor completes in `` fx`…` `` formulas (spec §2.7) are these: the
+/// compiler has them as `stdlib/formula_functions.json`.
+#[test]
+fn formula_functions_of_the_compiler_are_up_to_date() {
+    let list = crate::view::functions();
+    let mut listed = String::from("[\n");
+    let rows = list.as_array().unwrap();
+    for (i, f) in rows.iter().enumerate() {
+        listed.push_str(&serde_json::to_string(f).unwrap());
+        listed.push_str(if i + 1 < rows.len() { ",\n" } else { "\n" });
+    }
+    listed.push_str("]\n");
+    let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../ras-compiler/stdlib/formula_functions.json");
+    if std::env::var_os("RAS_UPDATE_FUNCTIONS").is_some() {
+        std::fs::write(&file, &listed).unwrap();
+    }
+    let committed = std::fs::read_to_string(&file)
+        .unwrap_or_default()
+        .replace("\r\n", "\n");
+    assert!(
+        committed == listed,
+        "crates/ras-compiler/stdlib/formula_functions.json is out of date: run this test with RAS_UPDATE_FUNCTIONS=1"
+    );
+}
+
 #[test]
 fn hyperlinks_inserted_and_taken_away() {
     // A web page: the sheet's hyperlinks get one, its relationships the page.

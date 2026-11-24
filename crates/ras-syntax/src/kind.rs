@@ -304,6 +304,8 @@ pub enum SyntaxKind {
     NEW_EXPR,
     MEMBER_EXPR,
     INDEX_EXPR,
+    /// `` fx`SUM(A1:A3)` `` — a tag followed by a template literal (spec §2.7).
+    TAGGED_TEMPLATE,
     AS_EXPR,
     ARG_LIST,
     /// `name: value` inside an argument list.
@@ -353,6 +355,7 @@ impl SyntaxKind {
                 | NEW_EXPR
                 | MEMBER_EXPR
                 | INDEX_EXPR
+                | TAGGED_TEMPLATE
                 | AS_EXPR
                 | NAMED_ARG
                 | ERROR

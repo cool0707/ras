@@ -606,6 +606,8 @@ enum Expr {
     Paren(Box<Expr>),
     New(String),
     TypeOf,
+    /// `[A1:B3]` / `[SUM(A1:A3)]`: the shorthand of `Evaluate` (`` fx`A1:B3` ``, spec §2.7).
+    Formula(String),
 }
 
 #[derive(Clone, Debug)]
@@ -1952,7 +1954,8 @@ impl<'a> Parser<'a> {
                 self.expect_op(")")?;
                 Expr::Paren(Box::new(e))
             }
-            Tok::Bracketed(w) => Expr::Ident(w, None),
+            Tok::Bracketed(w) if is_bracketed_name(&w) => Expr::Ident(w, None),
+            Tok::Bracketed(w) => Expr::Formula(w),
             Tok::Word(w, s) => match w.to_ascii_lowercase().as_str() {
                 "true" => Expr::Bool(true),
                 "false" => Expr::Bool(false),
@@ -3503,6 +3506,7 @@ impl<'a> Emitter<'a> {
         Ok(match e {
             Expr::Num(n, _) => (n.clone(), PRIMARY),
             Expr::Str(s) => (ras_string(s), PRIMARY),
+            Expr::Formula(f) => (formula_string(f), PRIMARY),
             Expr::Date(d) => {
                 return Err(format!(
                     "日付リテラル #{d}# には対応していません（dateSerial などで書いてください）"
@@ -3881,6 +3885,62 @@ impl<'a> Emitter<'a> {
         let _ = host_fn;
         Ok(format!("{f}({})", parts.join(", ")))
     }
+}
+
+/// Whether `[w]` in an expression is a name written in brackets (`[_Default]`, `[My Name]`)
+/// rather than the shorthand of `Evaluate`: a cell (`[A1]`) or anything with a reference's or a
+/// formula's characters (`[A1:B3]`, `[Sheet1!A1]`, `[SUM(A1:A3)]`) is a formula.
+fn is_bracketed_name(w: &str) -> bool {
+    let cell = {
+        let t = w.trim_start_matches('$');
+        let letters = t.chars().take_while(|c| c.is_ascii_alphabetic()).count();
+        let rest = t[letters..].trim_start_matches('$');
+        (1..=3).contains(&letters) && !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    };
+    !cell
+        && !w.trim().is_empty()
+        && !w.chars().any(|c| {
+            matches!(
+                c,
+                ':' | '!'
+                    | '$'
+                    | '('
+                    | ')'
+                    | ','
+                    | '"'
+                    | '+'
+                    | '-'
+                    | '*'
+                    | '/'
+                    | '^'
+                    | '&'
+                    | '='
+                    | '<'
+                    | '>'
+                    | '{'
+                    | '}'
+                    | '#'
+                    | '\''
+            )
+        })
+}
+
+/// `[formula]` as `` fx`formula` ``.
+fn formula_string(f: &str) -> String {
+    let mut out = String::from("fx`");
+    let mut chars = f.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '`' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '$' if chars.peek() == Some(&'{') => out.push_str("\\$"),
+            other => out.push(other),
+        }
+    }
+    out.push('`');
+    out
 }
 
 /// A RAS string literal.

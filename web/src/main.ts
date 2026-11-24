@@ -20,6 +20,7 @@ import "@vscode/codicons/dist/codicon.css";
 import { codeBehindPath, type DesignerHooks, FormDesigner, openHandler } from "./designer";
 import { Explorer } from "./explorer";
 import { FormPanels } from "./forms";
+import { rasLanguage } from "./formula";
 import type { Dialog, RunJob, RunResult } from "./runtime/run";
 import samples from "virtual:samples";
 import type { FromWorker, ToWorker } from "./worker";
@@ -266,6 +267,9 @@ const highlight = HighlightStyle.define([
     { tag: [tags.typeName, tags.className], color: "var(--hl-type, #1f6feb)" },
     { tag: tags.function(tags.variableName), color: "var(--hl-fn, #b4235a)" },
     { tag: tags.meta, color: "var(--hl-meta, #9d5d00)" },
+    // Excel formulas (`fx`…``): references and sheets.
+    { tag: tags.special(tags.variableName), color: "var(--hl-ref, #0b6bcb)" },
+    { tag: tags.namespace, color: "var(--hl-type, #1f6feb)" },
 ]);
 
 const theme = EditorView.theme({
@@ -295,8 +299,9 @@ const common: Extension[] = [
 function language(path: string): Extension {
     if (path.endsWith(".toml")) return [];
     if (path.endsWith(".json")) return javascript();
-    // RAS is close enough to TypeScript for its highlighting.
-    return javascript({ typescript: true });
+    // RAS is close enough to TypeScript for its highlighting; the formulas of `fx` templates
+    // are Excel's (spec §2.7).
+    return rasLanguage();
 }
 
 function editorState(f: ProjectFile): EditorState {

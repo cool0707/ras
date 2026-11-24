@@ -9,7 +9,7 @@ mod parser;
 
 pub use format::format;
 pub use kind::{lex, RasLanguage, SyntaxElement, SyntaxKind, SyntaxNode, SyntaxToken, Token};
-pub use lower::{doc_comment, string_value, unescape};
+pub use lower::{doc_comment, string_value, unescape, FORMULA_TAG};
 pub use parser::SyntaxError;
 pub use rowan::{GreenNode, TextRange, TextSize};
 
@@ -219,6 +219,36 @@ mod tests {
         };
         assert_eq!(parts.len(), 3);
         assert!(matches!(get(5), ExprKind::Str(s) if s == "a\nあ"));
+    }
+
+    #[test]
+    fn fx_template_is_a_call_of_evaluate() {
+        let m = ok("const a = fx`SUM(A1:A3)`;\nconst b = ws.fx`A${n}`;\nconst c = fx ``;");
+        let init = |i: usize| match &m.items[i] {
+            Item::Var(v) => v.init.clone().unwrap(),
+            _ => panic!(),
+        };
+        let ExprKind::Call { callee, args, .. } = init(0).kind else {
+            panic!()
+        };
+        assert!(
+            matches!(&callee.kind, ExprKind::Name(n) if n.text == "evaluate" && n.span == TextRange::new(10.into(), 12.into()))
+        );
+        assert!(
+            matches!(&args[..], [a] if matches!(&a.kind, ExprKind::Str(s) if s == "SUM(A1:A3)"))
+        );
+        let ExprKind::Call { callee, args, .. } = init(1).kind else {
+            panic!()
+        };
+        assert!(matches!(&callee.kind, ExprKind::Member { name, .. } if name.text == "evaluate"));
+        assert!(matches!(&args[0].kind, ExprKind::Template(p) if p.len() == 2));
+        assert!(
+            matches!(init(2).kind, ExprKind::Call { args, .. } if matches!(&args[0].kind, ExprKind::Str(s) if s.is_empty()))
+        );
+        // Any other tag is an error; a template on the next line is not tagged.
+        assert!(!parse("const a = foo`x`;").errors.is_empty());
+        let p = parse("let a = fx\n`x`;");
+        assert!(p.errors.iter().all(|e| !e.message.contains("タグ付き")));
     }
 
     #[test]

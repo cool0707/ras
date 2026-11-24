@@ -13,6 +13,7 @@ RAS は TypeScript に似た構文で書き、VBA（`.bas` / `.cls`）に変換�
 - Excel / VBA のメンバーとグローバルは camelCase で書きます（`ws.cells(1, 1).value`、`msgBox(...)`、`xlUp`）。VBA の綴り（`Cells`）は警告になり、`ras check --fix` で直せます。
 - 名前は大文字小文字だけの違いでは区別できません（VBA が区別しないため。`Shape` という型と `shape` という変数は同時に使えません）。
 - セルの値（`range.value`）は `any` です。型の付いた変数に入れると実行時に変換されます（空のセル → `0` / `""`）。
+- VBA の `[A1]`・`[SUM(A1:A10)]`（`Evaluate`）は `` fx`SUM(A1:A10)` `` と書きます（`[...]` は配列です）。
 - シートはコード名（`Sheet1`）で参照します。`range("A1")` のようにシートを付けない書き方は、選択中のシートに依存するので警告になります。
 
 ## 型
@@ -195,6 +196,13 @@ export function ask(): string {
         return "";
     }
     return inputBox("月を入力してください", "入力", "2026/4");
+}
+
+// Excel の数式を評価する（VBA の [SUM(A1:A10)] / Evaluate）。${...} で値を埋め込める
+export function sums(code: string): double {
+    const ws = Sheet1;
+    const total = fx`SUM(A1:A10)`;
+    return total + ws.fx`SUMIF(A:A, "${code}", B:B)`;
 }
 ```
 

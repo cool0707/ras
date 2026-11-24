@@ -288,3 +288,31 @@ test("TypeScript constructs RAS reuses still tokenize", () => {
 	// JavaScript runtime names get no special treatment in RAS.
 	expectScopes("return this.length >= width", "length", "variable.other.property.ras", { not: ["support."] });
 });
+
+test("Excel formulas in fx templates", () => {
+	const sum = "const total = fx`SUM(";
+	expectScopes(sum, "fx", "entity.name.function.tagged-template.ras");
+	expectScopes(sum, "`", "punctuation.definition.string.template.begin.ras");
+	// The formula is code (meta.embedded), not a string: VS Code suggests while typing.
+	expectScopes(sum, "SUM", ["support.function.formula.ras", "meta.embedded.formula.ras"], { not: ["string.template"] });
+	expectScopes(sum, "Sheet1", "entity.name.type.sheet.formula.ras");
+	expectScopes(sum, "$A$1", "variable.other.constant.reference.formula.ras");
+	expectScopes(sum, ":", "keyword.operator.range.formula.ras");
+	expectScopes(sum, "B3", "variable.other.constant.reference.formula.ras");
+	expectScopes(sum, "#N/A", "constant.language.error.formula.ras");
+	expectScopes(sum, "&", "keyword.operator.concatenation.formula.ras");
+	expectScopes(sum, '""', ["constant.character.escape.formula.ras", "string.quoted.double.formula.ras"]);
+
+	const lookup = "const looked = ws.fx`VLOOKUP(";
+	expectScopes(lookup, "ws", "variable.other.object.ras");
+	expectScopes(lookup, "fx", "entity.name.function.tagged-template.ras");
+	expectScopes(lookup, "VLOOKUP", "support.function.formula.ras");
+	expectScopes(lookup, "key", ["meta.template.expression.ras", "variable.other.readwrite.ras"]);
+	expectScopes(lookup, "'Price list'", "entity.name.type.sheet.formula.ras");
+	expectScopes(lookup, "2", "constant.numeric.formula.ras");
+	expectScopes(lookup, "FALSE", "constant.language.boolean.formula.ras");
+	expectScopes(lookup, ";", "punctuation.terminator.statement.ras", { not: ["meta.embedded.formula"] });
+
+	// Any other tag is an ordinary template.
+	expectScopes("const plain = tag`SUM(A1)`;", "SUM(A1)", "string.template.ras", { not: ["meta.embedded.formula"] });
+});

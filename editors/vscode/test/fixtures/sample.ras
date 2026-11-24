@@ -143,3 +143,8 @@ export function lastRow(this: Excel.Worksheet, col: int = 1): int {
 // §4 lambdas
 const doubled = arr.map(x => x * base);
 const adder = (byref acc: double, x: double) => { acc += x; };
+
+// §2.7 Excel formulas
+const total = fx`SUM(Sheet1!$A$1:B3, #N/A) & "a""b"`;
+const looked = ws.fx`VLOOKUP(${key}, 'Price list'!A:C, 2, FALSE)`;
+const plain = tag`SUM(A1)`;

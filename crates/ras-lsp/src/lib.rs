@@ -400,11 +400,18 @@ impl Server {
                         if let Some(doc) = c.doc {
                             v["documentation"] = json!({ "kind": "markdown", "value": doc });
                         }
-                        if let Some(t) = c.insert {
+                        if let Some(t) = &c.insert {
                             v["insertText"] = json!(t);
                         }
                         if let Some(t) = c.filter {
                             v["filterText"] = json!(t);
+                        }
+                        if let Some(span) = c.range {
+                            let text = c.insert.clone().unwrap_or_else(|| c.label.clone());
+                            v["textEdit"] = json!({ "range": Self::range(prog, m, span), "newText": text });
+                        }
+                        if c.parameter_hints {
+                            v["command"] = json!({ "title": "", "command": "editor.action.triggerParameterHints" });
                         }
                         if let Some((span, text)) = c.import {
                             v["additionalTextEdits"] = json!([{ "range": Self::range(prog, m, span), "newText": text }]);
@@ -1347,6 +1354,66 @@ mod tests {
         assert!(
             labels.iter().any(|l| l == "lookAt:") && !labels.iter().any(|l| l == "what:"),
             "{labels:?}"
+        );
+
+        // in the formula of `` fx`…` ``: Excel's functions, `NAME(` replacing the word written
+        // (with its `.`), then the signature (spec §2.7)
+        let (labels, comp) = complete("const v = fx`1 + stdev.", None);
+        assert!(labels.iter().any(|l| l == "STDEV.S"), "{labels:?}");
+        assert!(
+            !labels.iter().any(|l| l == "ws" || l == "label"),
+            "{labels:?}"
+        );
+        let item = comp["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["label"] == "STDEV.S")
+            .unwrap();
+        assert_eq!(item["textEdit"]["newText"], "STDEV.S(");
+        assert_eq!(
+            item["textEdit"]["range"]["end"]["character"]
+                .as_u64()
+                .unwrap()
+                - item["textEdit"]["range"]["start"]["character"]
+                    .as_u64()
+                    .unwrap(),
+            "stdev.".len() as u64
+        );
+        assert_eq!(
+            item["command"]["command"],
+            "editor.action.triggerParameterHints"
+        );
+        assert!(complete("const v = fx`VLOOKUP(", Some("(")).0.is_empty());
+        assert!(complete("const v = fx`COUNTIF(A:A, \"su", None)
+            .0
+            .is_empty());
+        // `${…}` is RAS again
+        let (labels, _) = complete("const v = fx`SUM(${w", None);
+        assert!(labels.iter().any(|l| l == "ws"), "{labels:?}");
+        let typed = "const v = fx`VLOOKUP(A1, B:C, ";
+        complete(typed, None);
+        let line = head.matches('\n').count();
+        let character = typed.encode_utf16().count() as u32 + 4;
+        let sig = request(
+            "textDocument/signatureHelp",
+            json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": character } }),
+        );
+        assert_eq!(
+            sig["signatures"][0]["label"],
+            "VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])"
+        );
+        assert_eq!(sig["activeParameter"], 2, "{sig}");
+        let hover = request(
+            "textDocument/hover",
+            json!({ "textDocument": { "uri": uri }, "position": { "line": line, "character": 4 + 15 } }),
+        );
+        assert!(
+            hover["contents"]["value"]
+                .as_str()
+                .unwrap()
+                .contains("VLOOKUP(lookup_value"),
+            "{hover}"
         );
 
         request("shutdown", Value::Null);
