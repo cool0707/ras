@@ -3396,3 +3396,41 @@ fn adjust_values_of_a_shape() {
         .is_err()
     );
 }
+
+#[test]
+fn diagonal_borders_are_added_and_none_clears_them() {
+    let out = edit(
+        r##"[{"op":"format","range":"A2","set":{"border":"diagonalDown"}},{"op":"format","range":"A2","set":{"border":"diagonalUp"}},{"op":"format","range":"B2","set":{"border":"diagonalUp"}}]"##,
+    );
+    let styles = part(&out, "xl/styles.xml");
+    for expected in [
+        r#"<border diagonalUp="1" diagonalDown="1"><left/><right/><top/><bottom/><diagonal style="thin"/></border>"#,
+        r#"<border diagonalUp="1"><left/><right/><top/><bottom/><diagonal style="thin"/></border>"#,
+    ] {
+        assert!(styles.contains(expected), "{expected}: {styles}");
+    }
+    let mut book = Book::open_bytes(&out).unwrap();
+    let a2 = RangeRef::parse("A2").unwrap();
+    assert_eq!(
+        book.format_of(0, a2, "borders.5.linestyle").unwrap(),
+        Some(Val::Num(1.0))
+    );
+    // 枠なし: the diagonals go too.
+    let none = apply(
+        &out,
+        &ops(r#"[{"op":"format","range":"A2:B2","set":{"border":"none"}}]"#),
+    )
+    .unwrap();
+    let mut book = Book::open_bytes(&none).unwrap();
+    for index in ["5", "6"] {
+        assert_eq!(
+            book.format_of(
+                0,
+                RangeRef::parse("A2:B2").unwrap(),
+                &format!("borders.{index}.linestyle")
+            )
+            .unwrap(),
+            Some(Val::Num(-4142.0))
+        );
+    }
+}

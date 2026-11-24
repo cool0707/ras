@@ -1639,7 +1639,8 @@ fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) 
         ),
         "numberFormat" => book.set_number_format(si, range, text()?),
         "border" => {
-            // `Borders(index)`: 7 left, 8 top, 9 bottom, 10 right, 11 and 12 the lines inside.
+            // `Borders(index)`: 7 left, 8 top, 9 bottom, 10 right, 11 and 12 the lines inside,
+            // 5 the diagonal down (＼) and 6 up (／) of each cell.
             const THIN: f64 = 2.0;
             const THICK: f64 = 4.0;
             let (sides, weight): (&[&str], f64) = match text()? {
@@ -1650,7 +1651,9 @@ fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) 
                 "bottom" => (&["9"], THIN),
                 "left" => (&["7"], THIN),
                 "right" => (&["10"], THIN),
-                "none" => (&["7", "8", "9", "10", "11", "12"], NONE),
+                "diagonalDown" => (&["5"], THIN),
+                "diagonalUp" => (&["6"], THIN),
+                "none" => (&["5", "6", "7", "8", "9", "10", "11", "12"], NONE),
                 _ => return Err(wrong()),
             };
             for side in sides {

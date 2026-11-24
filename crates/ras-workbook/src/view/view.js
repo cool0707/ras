@@ -5525,7 +5525,7 @@
             else useColor(name, `#${m[1].toUpperCase()}`);
         });
     }
-    const BORDERS = [["bottom", "下罫線"], ["top", "上罫線"], ["left", "左罫線"], ["right", "右罫線"], ["none", "枠なし"], ["all", "格子"], ["outline", "外枠"], ["thick", "太い外枠"]];
+    const BORDERS = [["bottom", "下罫線"], ["top", "上罫線"], ["left", "左罫線"], ["right", "右罫線"], ["none", "枠なし"], ["all", "格子"], ["outline", "外枠"], ["thick", "太い外枠"], ["diagonalDown", "斜め罫線（＼）"], ["diagonalUp", "斜め罫線（／）"]];
     // The formats of the ribbon's list (as Japanese Excel 2021 gives them, in the file's spelling).
     const ACCOUNTING_YEN = '_ ¥* #,##0_ ;_ ¥* -#,##0_ ;_ ¥* "-"_ ;_ @_ ';
     const NUMBER_FORMATS = [
