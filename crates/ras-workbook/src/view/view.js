@@ -227,7 +227,7 @@
         refreshEventButton();
         refreshShapeTools();
         $("name").value = obj.name || "";
-        $("fx").textContent = obj.macro ? `マクロ: ${obj.macro}` : "";
+        $("fx").textContent = obj.macro ? `${eventName(obj)}イベント: ${obj.macro}` : "";
     }
 
     // The width of a column and the height of a row (px), drawn or not.
@@ -853,7 +853,7 @@
                     // A chart that cannot be drawn leaves its box empty.
                 }
             }
-            if (obj.name) box.title = obj.macro ? `${obj.name}（マクロ: ${obj.macro}）` : obj.name;
+            if (obj.name) box.title = obj.macro ? `${obj.name}（${eventName(obj)}イベント: ${obj.macro}）` : obj.name;
             obj.box = box;
             if (movable(obj)) box.classList.add("movable");
             box.addEventListener("click", (e) => {
@@ -3009,7 +3009,7 @@
             const b = list.appendChild(el("button", "pitem", objectLabel(obj)));
             b.type = "button";
             b.obj = obj;
-            b.title = obj.macro ? `${objectLabel(obj)}（マクロ: ${obj.macro}）` : objectLabel(obj);
+            b.title = obj.macro ? `${objectLabel(obj)}（${eventName(obj)}イベント: ${obj.macro}）` : objectLabel(obj);
             b.addEventListener("click", () => {
                 if (!obj.box) return;
                 selectObject(obj.box, obj);
@@ -3182,11 +3182,11 @@
             if (!sec.querySelector(".prow")) sec.remove();
         }
 
-        // マクロ (イベント): in the sheet's file
+        // イベント: its handlers in the sheet's file
         const items = eventItems(obj);
         if (items.length) {
-            const sec = section(ax ? "イベント" : "マクロ");
-            if (!ax) sec.appendChild(el("div", "pnote", obj.macro ? `登録されているマクロ: ${obj.macro}` : "マクロは登録されていません"));
+            const sec = section("イベント");
+            if (!ax) sec.appendChild(el("div", "pnote", obj.macro ? `${eventName(obj)}イベント: ${obj.macro}` : `${eventName(obj)}イベントは登録されていません`));
             const btns = sec.appendChild(el("div", "pbtns"));
             for (const [label, act] of items) {
                 const mb = btns.appendChild(el("button", null, label));
@@ -3406,6 +3406,12 @@
 
     let events = false;
     const hasEvents = (obj) => events && !!obj && (obj.activex !== undefined || !!obj.onAction);
+    // The event a shape's or a form control's function (its OnAction) runs on: a click; a
+    // change of the item selected (a list or combo box); of the value (a spin button, a scroll bar).
+    function eventName(obj) {
+        const t = obj && obj.form && obj.form.type;
+        return t === "List" || t === "Drop" ? "選択" : t === "Spin" || t === "Scroll" ? "変更" : "クリック";
+    }
     function openEvent(obj, choose) {
         if (!hasEvents(obj) || busy || !view) return;
         closeMenu();
@@ -3417,6 +3423,7 @@
             shape: obj.shapeId,
             activex: obj.activex,
             macro: obj.macro || "",
+            eventName: eventName(obj),
             choose,
         });
     }
@@ -3424,18 +3431,19 @@
         if (!hasEvents(obj)) return [];
         if (obj.activex !== undefined) {
             return [
-                ["既定のイベントを開く", () => openEvent(obj, false), ""],
-                ["イベントを開く…", () => openEvent(obj, true), ""],
+                ["コードの表示", () => openEvent(obj, false), ""],
+                ["イベントの登録…", () => openEvent(obj, true), ""],
             ];
         }
+        const ev = `${eventName(obj)}イベント`;
         return obj.macro
             ? [
-                  [`マクロを開く（${obj.macro}）`, () => openEvent(obj, false), ""],
-                  ["マクロの登録…", () => openEvent(obj, true), ""],
+                  ["コードの表示", () => openEvent(obj, false), ""],
+                  [`${ev}の登録…`, () => openEvent(obj, true), ""],
               ]
             : [
-                  ["新しいマクロを登録", () => openEvent(obj, false), ""],
-                  ["マクロの登録…", () => openEvent(obj, true), ""],
+                  [`${ev}の登録`, () => openEvent(obj, false), ""],
+                  [`${ev}に関数を登録…`, () => openEvent(obj, true), ""],
               ];
     }
     // The menu of an object: its text, deleting it, its events.
@@ -3462,7 +3470,6 @@
         if (!b) return;
         const on = hasEvents(selectedObj);
         b.disabled = !on;
-        b.querySelector(".lbl").textContent = on && selectedObj.activex !== undefined ? "コードの表示" : "マクロ";
         if (tools.macroGroup) tools.macroGroup.hidden = !events;
     }
     function enableEvents() {
@@ -4451,14 +4458,14 @@
             into = into.parentNode;
         }
 
-        // マクロ: the events of the object selected (in the sheet's file; with a project's workbook).
-        group(shapeTab, "マクロ");
+        // コード: the events of the object selected (in the sheet's file; with a project's workbook).
+        group(shapeTab, "コード");
         const ev = button("event", {
             icon: "code",
-            label: "マクロ",
+            label: "コードの表示",
             large: true,
             cls: "two",
-            title: "選択した図形・コントロールのイベント（マクロ）を開きます。シートのファイルにハンドラーを追加します（図形をダブルクリックすると既定のイベント）",
+            title: "選択した図形・コントロールのイベント（クリック・選択など）のコードを開きます。シートのファイルにハンドラーを追加します（図形をダブルクリックすると既定のイベント）",
             menu: (anchor) => {
                 const items = eventItems(selectedObj);
                 if (!items.length) return;

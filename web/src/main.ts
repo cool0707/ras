@@ -1038,6 +1038,8 @@ interface ObjectEvent {
     activex?: string;
     /** The macro assigned to it (`Sheet1.button1Click`). */
     macro: string;
+    /** What runs it, as the page names it: "クリック", "選択" (a list or combo box), "変更" (a spin button, a scroll bar). */
+    eventName?: string;
     choose: boolean;
 }
 
@@ -1085,12 +1087,13 @@ async function objectEvent(m: ObjectEvent) {
     }
     // A shape or a form control: the macro it runs (`OnAction`), an `export function`.
     const label = m.object || "このコントロール";
+    const ev = m.eventName ?? "クリック";
     if (!m.choose && m.macro) {
         const bare = m.macro.replace(/^.*!/, "");
         const dot = bare.lastIndexOf(".");
         const [module, name] = dot < 0 ? [undefined, bare] : [bare.slice(0, dot), bare.slice(dot + 1)];
         const found = macroFiles().find((f) => (module === undefined || f.module.toLowerCase() === module.toLowerCase()) && macrosOf(hooks.text(f.file) ?? "").some((x) => x.name.toLowerCase() === name.toLowerCase()));
-        if (!found) throw new Error(`${label} のマクロ ${m.macro} は、プロジェクトの RAS のファイルにありません（ブックの VBA だけにあるマクロかもしれません）。`);
+        if (!found) throw new Error(`${label} の${ev}イベントに登録された ${m.macro} は、プロジェクトの RAS のファイルにありません（ブックの VBA だけにある関数かもしれません）。`);
         hooks.openCode(found.file, bodyLineOf(hooks.text(found.file) ?? "", name));
         return;
     }
@@ -1099,7 +1102,7 @@ async function objectEvent(m: ObjectEvent) {
     let create = true;
     if (m.choose) {
         const choices: { target: typeof target; create: boolean; label: string; description?: string; detail?: string }[] = [
-            { target, create: true, label: `＋ 新しいマクロ: ${m.codeName}.${fresh}`, description: file },
+            { target, create: true, label: `＋ 新しい関数: ${m.codeName}.${fresh}`, description: file },
         ];
         for (const f of macroFiles()) {
             for (const x of macrosOf(hooks.text(f.file) ?? "")) {
@@ -1107,7 +1110,7 @@ async function objectEvent(m: ObjectEvent) {
                 choices.push({ target: { file: f.file, module: f.module, name: x.name }, create: false, label: full, description: f.file, detail: m.macro.toLowerCase() === full.toLowerCase() ? "登録されています" : undefined });
             }
         }
-        const i = await pick(`${label} に登録するマクロ（クリックすると実行されます）`, choices);
+        const i = await pick(`${label} の${ev}イベントに登録する関数`, choices);
         if (i === undefined) return;
         target = choices[i].target;
         create = choices[i].create;

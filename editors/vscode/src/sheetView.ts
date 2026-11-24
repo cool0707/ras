@@ -361,6 +361,8 @@ interface ObjectEvent {
 	activex?: string;
 	/** The macro assigned to it (`Sheet1.button1Click`). */
 	macro: string;
+	/** What runs it, as the page names it: "クリック", "選択" (a list or combo box), "変更" (a spin button, a scroll bar). */
+	eventName?: string;
 	choose: boolean;
 }
 
@@ -531,6 +533,7 @@ async function findMacro(root: string, macro: string): Promise<{ file: string; n
 /** A shape's or a form control's macro: opened, or a new one (or one chosen) assigned to it. */
 async function assignMacro(what: Shown, root: string, sheetFile: string, m: ObjectEvent): Promise<string | undefined> {
 	const label = m.object || "このコントロール";
+	const ev = m.eventName ?? "クリック";
 	const open = async (file: string, name: string) => {
 		const code = await documentOf(file);
 		await reveal(code, bodyLineOf(code, name) ?? 0);
@@ -538,7 +541,7 @@ async function assignMacro(what: Shown, root: string, sheetFile: string, m: Obje
 	if (!m.choose && m.macro) {
 		const found = await findMacro(root, m.macro);
 		if (found === undefined) {
-			throw new Error(`${label} のマクロ ${m.macro} は、プロジェクトの RAS のファイルにありません（ブックの VBA だけにあるマクロかもしれません）。`);
+			throw new Error(`${label} の${ev}イベントに登録された ${m.macro} は、プロジェクトの RAS のファイルにありません（ブックの VBA だけにある関数かもしれません）。`);
 		}
 		await open(found.file, found.name);
 		return undefined;
@@ -548,7 +551,7 @@ async function assignMacro(what: Shown, root: string, sheetFile: string, m: Obje
 	let create = true;
 	if (m.choose) {
 		type Item = vscode.QuickPickItem & { target?: { file: string; module: string; name: string }; create?: boolean };
-		const items: Item[] = [{ label: `$(add) 新しいマクロ: ${m.codeName}.${fresh}`, description: path.basename(sheetFile), target: chosen, create: true }];
+		const items: Item[] = [{ label: `$(add) 新しい関数: ${m.codeName}.${fresh}`, description: path.basename(sheetFile), target: chosen, create: true }];
 		for (const f of await macroFiles(root)) {
 			const macros = macrosOf(await textOf(f.file));
 			if (macros.length > 0) {
@@ -559,7 +562,7 @@ async function assignMacro(what: Shown, root: string, sheetFile: string, m: Obje
 				items.push({ label: full, description: vscode.workspace.asRelativePath(f.file), detail: m.macro.toLowerCase() === full.toLowerCase() ? "登録されています" : undefined, target: { file: f.file, module: f.module, name: x.name } });
 			}
 		}
-		const picked = await vscode.window.showQuickPick(items, { placeHolder: `${label} に登録するマクロを選んでください（クリックすると実行されます）` });
+		const picked = await vscode.window.showQuickPick(items, { placeHolder: `${label} の${ev}イベントに登録する関数を選んでください` });
 		if (picked?.target === undefined) {
 			return undefined;
 		}
