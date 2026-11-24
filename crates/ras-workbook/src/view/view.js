@@ -5494,7 +5494,6 @@
         copy: '<rect x="2.5" y="2.5" width="8" height="9" rx="1"/><rect x="5.5" y="5.5" width="8" height="9" rx="1" fill="#fff"/>',
         grow: '<path d="M2 13 5.5 4 9 13M3.3 10h4.4"/><path d="m11 6 2-2.5L15 6"/>',
         shrink: '<path d="M2 13 5.5 4 9 13M3.3 10h4.4"/><path d="m11 4 2 2.5L15 4"/>',
-        border: '<rect x="2.5" y="2.5" width="11" height="11" stroke-dasharray="1.5 1.5"/><path d="M2 13.5h12" stroke-width="2"/>',
         fill: '<path d="m3 8 5-5 5 5-5 5z"/><path d="M13 9.5c.8 1.2 1.2 2 1.2 2.5a1.2 1.2 0 0 1-2.4 0c0-.5.4-1.3 1.2-2.5z"/>',
         fontColor: '<path d="M4 12 8 2l4 10M5.5 8.5h5"/>',
         top: '<path d="M2 2.5h12"/><path d="M8 13V5M5 8l3-3 3 3"/>',
@@ -5560,7 +5559,7 @@
     const lastColor = { color: "#FF0000", fill: "#FFFF00" };
     // The colors of 図形の塗りつぶし and 図形の枠線 used last.
     const lastShape = { fill: "#4472C4", line: "#000000" };
-    let lastBorder = "bottom";
+    let lastBorder = "all";
     // The 線の色 (null: automatic) and the 線のスタイル the borders of the menu are drawn with.
     const borderPen = { color: null, line: "thin" };
     function borderSet(preset) {
@@ -5814,9 +5813,17 @@
         button("italic", { text: "I", title: "斜体（Ctrl+I）", cls: "i", edits: true, act: () => toggleFormat("italic") });
         button("underline", { text: "U", title: "下線（Ctrl+U）", cls: "u", edits: true, act: () => toggleFormat("underline") });
         sep();
+        // The button shows the border used last (格子 at first) and gives it again, as Excel's.
+        const showBorder = (value) => {
+            const [, label, sides] = BORDERS.flat().find((b) => b[0] === value);
+            const b = tools.border;
+            b.title = `罫線（${label}）`;
+            const old = b.querySelector(".ico");
+            if (old) old.replaceWith(borderIcon(sides));
+            else b.insertBefore(borderIcon(sides), b.firstChild);
+        };
         button("border", {
-            icon: "border",
-            title: "罫線（下罫線）",
+            title: "罫線",
             moreTitle: "罫線の種類",
             split: true,
             edits: true,
@@ -5829,7 +5836,7 @@
                     for (const [value, label, sides] of group) {
                         const b = item(pop, label, () => {
                             lastBorder = value;
-                            tools.border.title = `罫線（${label}）`;
+                            showBorder(value);
                             format(borderSet(value));
                         });
                         b.insertBefore(borderIcon(sides), b.firstChild);
@@ -5838,6 +5845,7 @@
                 });
             },
         });
+        showBorder(lastBorder);
         // 線の色 and 線のスタイル: what the borders of the menu are drawn with (Excel has them in
         // the menu).
         const penColor = button("borderColor", {
