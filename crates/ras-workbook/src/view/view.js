@@ -6065,6 +6065,13 @@
             }
         }
         if (!view || !sel || !onGrid()) return;
+        // A character typed while the box of the active cell has lost the focus (the page drawn
+        // again in a frame that was not focused, an input method started while an edit was
+        // posted): the box takes it, so that it is typed into the cell, not lost.
+        if (editable && !busy && !ctrl && !e.altKey && document.activeElement !== ed && (key.length === 1 || key === "Process" || e.keyCode === 229)) {
+            ed.focus({ preventScroll: true });
+            return;
+        }
         const arrows = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
         let done = true;
         if (e.altKey && ctrl && (key === "v" || key === "V")) askPasteSpecial();
