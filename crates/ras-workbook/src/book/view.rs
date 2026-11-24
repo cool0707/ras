@@ -48,6 +48,10 @@ fn font_family(name: &str) -> String {
         "ＭＳ Ｐ明朝" => "MS PMincho",
         "ＭＳ 明朝" => "MS Mincho",
         "メイリオ" => "Meiryo",
+        "BIZ UDゴシック" => "BIZ UDGothic",
+        "BIZ UDPゴシック" => "BIZ UDPGothic",
+        "BIZ UD明朝 Medium" => "BIZ UDMincho Medium",
+        "BIZ UDP明朝 Medium" => "BIZ UDPMincho Medium",
         _ => "",
     };
     let quote = |s: &str| format!("'{}'", s.replace(['\'', '\\', ';', '"'], ""));
@@ -255,7 +259,8 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
         if !f.name().is_empty() {
             css.push_str(&format!("font-family:{};", font_family(f.name())));
         }
-        if f.size() > 0.0 && f.size() != 11.0 {
+        // (Always: the grid's own font is the workbook's, of any size.)
+        if f.size() > 0.0 {
             css.push_str(&format!("font-size:{}pt;", n(f.size())));
         }
         if f.bold() {
@@ -362,6 +367,10 @@ pub(crate) struct Sizes {
     default_h: f64,
     widths: HashMap<u32, f64>,
     heights: HashMap<u32, f64>,
+    /// The rows (1-based) the file gives a height (or hides); the others Excel fits to their
+    /// fonts. And those given it by hand (customHeight).
+    fixed: std::collections::HashSet<u32>,
+    custom: Vec<u32>,
 }
 
 impl Sizes {
@@ -394,7 +403,15 @@ impl Sizes {
             );
         }
         let mut heights: HashMap<u32, f64> = HashMap::new();
+        let mut fixed = std::collections::HashSet::new();
+        let mut custom = Vec::new();
         for r in ws.row_dimensions() {
+            if r.hidden() || r.height() > 0.0 {
+                fixed.insert(r.row_num());
+            }
+            if r.custom_height() && r.row_num() > 0 {
+                custom.push(r.row_num() - 1);
+            }
             if r.hidden() {
                 heights.insert(r.row_num(), 0.0);
             } else if r.height() > 0.0 {
@@ -403,11 +420,14 @@ impl Sizes {
         }
         widths.retain(|_, w| *w != default_w);
         heights.retain(|_, h| *h != default_h);
+        custom.sort();
         Sizes {
             default_w,
             default_h,
             widths,
             heights,
+            fixed,
+            custom,
         }
     }
 
@@ -588,7 +608,11 @@ impl Book {
         }
         let mut out_cells: Vec<Json> = Vec::new();
         let col_w: Vec<f64> = (0..=end.col).map(|c| sizes.w(c)).collect();
-        let row_h: Vec<f64> = (0..=end.row).map(|r| sizes.h(r)).collect();
+        let font = self.default_font();
+        // (null: a row Excel fits to its fonts, which the page works out.)
+        let row_h: Vec<Option<f64>> = (0..=end.row)
+            .map(|r| sizes.fixed.contains(&(r + 1)).then(|| sizes.h(r)))
+            .collect();
         {
             let Ok(ws) = self.file.sheet(si) else {
                 return Err("シートがありません".into());
@@ -695,6 +719,24 @@ impl Book {
                     cell["k"] = json!(kind);
                 }
                 out_cells.push(cell);
+            }
+        }
+        // The formats of whole rows and columns: their empty cells have them (a row's before a
+        // column's, as Excel).
+        let (mut row_styles, mut col_styles) = (serde_json::Map::new(), serde_json::Map::new());
+        if let Ok(ws) = self.file.sheet(si) {
+            let plain = Style::default();
+            for r in ws.row_dimensions() {
+                if r.row_num() > 0 && r.row_num() <= end.row + 1 + 20_000 && *r.style() != plain {
+                    let s = intern(style_css(r.style(), &theme, "empty"));
+                    row_styles.insert((r.row_num() - 1).to_string(), json!(s));
+                }
+            }
+            for c in ws.column_dimensions() {
+                if c.col_num() > 0 && *c.style() != plain {
+                    let s = intern(style_css(c.style(), &theme, "empty"));
+                    col_styles.insert((c.col_num() - 1).to_string(), json!(s));
+                }
             }
         }
         // What is typed into the cells (the formula bar): dates and numbers as values, not as shown.
@@ -862,6 +904,11 @@ impl Book {
             "truncated": truncated,
             "colWidths": col_w,
             "rowHeights": row_h,
+            "rowStyles": row_styles,
+            "colStyles": col_styles,
+            "customRows": sizes.custom.iter().take(20_000).collect::<Vec<_>>(),
+            // The workbook's font (the Normal style's): cells without a font of their own.
+            "font": { "name": font.0, "size": font.1, "css": font_family(&font.0) },
             // Past the cells: the default sizes, the others, and how far the grid goes.
             "defaultWidth": sizes.default_w,
             "defaultHeight": sizes.default_h,

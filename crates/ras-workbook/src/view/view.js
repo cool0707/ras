@@ -238,9 +238,126 @@
         return (w !== undefined ? w : sheet.defaultWidth) * k;
     }
     function height(sheet, r) {
-        if (r < sheet.rows) return sheet.rowHeights[r];
+        if (r < sheet.rows) {
+            const h = sheet.rowHeights[r];
+            return h === null ? fitHeight(sheet, r) : h;
+        }
         const h = sheet.moreHeights && sheet.moreHeights[r];
-        return h !== undefined ? h : sheet.defaultHeight;
+        return h !== undefined ? h : sheet.rowStyles && sheet.rowStyles[r] !== undefined ? fitHeight(sheet, r) : sheet.defaultHeight;
+    }
+
+    // ---- the fonts of the cells, and the heights of the rows Excel fits to them
+
+    // The CSS font-family of an Excel font name (as the workbook writes it: Japanese names also
+    // by their English names).
+    const FONT_ALIASES = {
+        "游ゴシック": "Yu Gothic",
+        "游ゴシック Light": "Yu Gothic Light",
+        "游ゴシック Medium": "Yu Gothic Medium",
+        "游明朝": "Yu Mincho",
+        "ＭＳ Ｐゴシック": "MS PGothic",
+        "ＭＳ ゴシック": "MS Gothic",
+        "ＭＳ Ｐ明朝": "MS PMincho",
+        "ＭＳ 明朝": "MS Mincho",
+        "メイリオ": "Meiryo",
+        "BIZ UDゴシック": "BIZ UDGothic",
+        "BIZ UDPゴシック": "BIZ UDPGothic",
+        "BIZ UD明朝 Medium": "BIZ UDMincho Medium",
+        "BIZ UDP明朝 Medium": "BIZ UDPMincho Medium",
+    };
+    function fontFamily(name) {
+        const quote = (s) => `'${s.replace(/['\\;"]/g, "")}'`;
+        let out = quote(name);
+        if (FONT_ALIASES[name]) out += `,${quote(FONT_ALIASES[name])}`;
+        return out + (/明朝|Mincho/.test(name) ? ",'Yu Mincho',serif" : ",'Yu Gothic',Meiryo,sans-serif");
+    }
+    // The workbook's font: that of the cells without one of their own.
+    const bookFont = (sheet) => sheet.font || { name: "游ゴシック", size: 11, css: fontFamily("游ゴシック") };
+    // The font of the cells drawn with the CSS `css`: { family, pt, name }.
+    function fontOfCss(sheet, css) {
+        const f = bookFont(sheet);
+        const family = (/font-family:([^;]+)/.exec(css || "") || [])[1] || f.css;
+        const pt = +(/font-size:([\d.]+)pt/.exec(css || "") || [])[1] || f.size;
+        const name = (/font-family:'([^']*)'/.exec(css || "") || [])[1] || f.name;
+        return { family, pt, name };
+    }
+    // The ascent and descent of a font `px` high (as the browser rounds them).
+    const fontMetrics = new Map();
+    function metricsOf(family, px) {
+        const k = `${px}|${family}`;
+        let m = fontMetrics.get(k);
+        if (!m) {
+            measurer.font = `${px}px ${family}`;
+            const t = measurer.measureText("x");
+            m = t.fontBoundingBoxAscent !== undefined ? [t.fontBoundingBoxAscent, t.fontBoundingBoxDescent] : [Math.round(px * 0.9), Math.round(px * 0.25)];
+            fontMetrics.set(k, m);
+        }
+        return m;
+    }
+    // The height of a line of the cells drawn with `css` (px): the rows Excel fits are no taller,
+    // so the text does not make the row grow.
+    function lineHeight(sheet, css) {
+        const { family, pt } = fontOfCss(sheet, css);
+        const [a, d] = metricsOf(family, (pt * 96) / 72);
+        return a + d;
+    }
+    // The height Excel fits a row to for a cell with `css` (px): the font's ascent and descent at
+    // its size in whole pixels, and 2 px (Calibri 11: 20, Arial 11: 19, Arial 10: 17). The
+    // workbook's font: the sheet's default height.
+    function fitOfCss(sheet, css) {
+        const f = bookFont(sheet);
+        const { family, pt } = fontOfCss(sheet, css);
+        if (family === f.css && pt === f.size) return sheet.defaultHeight;
+        const [a, d] = metricsOf(family, Math.round((pt * 96) / 72));
+        return Math.min(545, a + d + 2);
+    }
+    // A row not given a height: as tall as the tallest font of its cells (merged cells left out,
+    // as Excel), or the default height without cells.
+    function fitHeight(sheet, r) {
+        if (!sheet.fits) {
+            const fits = (sheet.fits = new Map());
+            const merged = new Set(sheet.merges.map(([r1, c1]) => r1 * KEY + c1));
+            const take = (row, css) => fits.set(row, Math.max(fits.get(row) || 0, fitOfCss(sheet, css)));
+            for (const cell of sheet.cells) if (!merged.has(cell.r * KEY + cell.c)) take(cell.r, cell.s ? sheet.styles[cell.s] : "");
+            for (const [row, s] of Object.entries(sheet.rowStyles || {})) take(+row, sheet.styles[s]);
+        }
+        return sheet.fits.get(r) || sheet.defaultHeight;
+    }
+    // The rows a change of the font of `areas` fits again: [[row, px]] of those it makes taller
+    // or shorter. `font(css)` is the CSS of a cell after the change (`null`: as it is).
+    function refit(sheet, areaList, font) {
+        const custom = new Set(sheet.customRows || []);
+        const cells = new Map();
+        for (const cell of sheet.cells) {
+            if (!cells.has(cell.r)) cells.set(cell.r, []);
+            cells.get(cell.r).push(cell);
+        }
+        const merged = new Set(sheet.merges.map(([r1, c1]) => r1 * KEY + c1));
+        const last = Math.max(sheet.rows, view ? view.nrows : 0) - 1;
+        const rows = new Set();
+        for (const a of areaList) for (let r = a.r1; r <= Math.min(a.r2, last); r++) rows.add(r);
+        const out = [];
+        for (const r of rows) {
+            const now = height(sheet, r);
+            if (custom.has(r) || !(now > 0) || (r >= sheet.rows && sheet.moreHeights && sheet.moreHeights[r] !== undefined)) continue;
+            const inside = (c) => areaList.some((a) => r >= a.r1 && r <= a.r2 && c >= a.c1 && c <= a.c2);
+            const rowCss = sheet.rowStyles && sheet.rowStyles[r] !== undefined ? sheet.styles[sheet.rowStyles[r]] : "";
+            let px = 0;
+            const had = new Set();
+            for (const cell of cells.get(r) || []) {
+                had.add(cell.c);
+                if (merged.has(r * KEY + cell.c)) continue;
+                const css = cell.s ? sheet.styles[cell.s] : "";
+                px = Math.max(px, fitOfCss(sheet, inside(cell.c) ? font(css) : css));
+            }
+            // The empty cells changed: formatted now, they count.
+            const empty = areaList.some((a) => r >= a.r1 && r <= a.r2 && a.c2 - a.c1 + 1 > [...had].filter((c) => c >= a.c1 && c <= a.c2).length);
+            if (empty) px = Math.max(px, fitOfCss(sheet, font(rowCss)));
+            else if (rowCss) px = Math.max(px, fitOfCss(sheet, rowCss));
+            if (!px) px = sheet.defaultHeight;
+            if (px !== now) out.push([r, px]);
+        }
+        return out;
     }
 
     // Numbers that do not fit their column, as Excel shows them: the General format with fewer
@@ -360,6 +477,14 @@
 
         const wrap = el("div", "sheetwrap");
         const table = el("table");
+        // The workbook's font, for the cells without one of their own.
+        const lines = new Map();
+        const lineOf = (css) => {
+            if (!lines.has(css)) lines.set(css, lineHeight(sheet, css));
+            return lines.get(css);
+        };
+        table.style.font = `${bookFont(sheet).size}pt ${bookFont(sheet).css}`;
+        table.style.lineHeight = `${lineOf("")}px`;
         if (sheet.gridLines === false) table.classList.add("nogrid");
         const group = el("colgroup");
         const corner = group.appendChild(el("col"));
@@ -512,8 +637,15 @@
                 }
                 if (cell.f && !formulas && !td.title) td.title = cell.f;
             }
-            if (v.noRight.has(key)) td.classList.add("nogr");
+            // Empty cells have their row's or column's format; the lines of text are no taller
+            // than the font (not as tall as the browser's "normal") nor than the row.
+            const css = cell ? (cell.s && sheet.styles[cell.s]) || "" : cssOf(sheet, r, c, null);
+            if (!cell && css) td.style.cssText = css;
             const merged = span.get(key);
+            let line = lineOf(css);
+            if (!(merged && merged[0] > r)) line = Math.max(0, Math.min(line, height(sheet, r) - 1));
+            if (line !== lineOf("")) td.style.lineHeight = `${line}px`;
+            if (v.noRight.has(key)) td.classList.add("nogr");
             if (merged) {
                 td.rowSpan = merged[0] - r + 1;
                 td.colSpan = v.cols.filter((x) => x >= c && x <= merged[1]).length || 1;
@@ -3543,7 +3675,13 @@
     // The cells selected, a merged cell with all its cells (its format is that of all of them).
     const areaText = (s) => (s.kind !== "cells" ? rangeText(s) : s.r1 === s.r2 && s.c1 === s.c2 ? address(s.r1, s.c1) : `${address(s.r1, s.c1)}:${address(s.r2, s.c2)}`);
     // The CSS the active cell is drawn with (its format, as far as the page knows it).
-    const activeCss = () => (view && activeTd && activeTd.cell && activeTd.cell.s && view.sheet.styles[activeTd.cell.s]) || "";
+    const activeCss = () => (view && activeTd ? cssOf(view.sheet, activeTd.r, activeTd.c, activeTd.cell) : "");
+    // The CSS of a cell: its own format, or (empty, without one) its row's or column's.
+    function cssOf(sheet, r, c, cell) {
+        if (cell) return (cell.s && sheet.styles[cell.s]) || "";
+        const s = sheet.rowStyles && sheet.rowStyles[r] !== undefined ? sheet.rowStyles[r] : sheet.colStyles && sheet.colStyles[c];
+        return (s !== undefined && sheet.styles[s]) || "";
+    }
     const STATE = {
         bold: (css) => /font-weight:bold/.test(css),
         italic: (css) => /font-style:italic/.test(css),
@@ -3552,13 +3690,35 @@
         wrap: (css) => /white-space:pre-wrap/.test(css),
     };
     function format(set) {
-        if (sel && view) postEdit(allAreas().map((a) => ({ op: "format", sheet: view.sheet.name, range: areaText(a), set })));
+        if (!sel || !view) return;
+        const list = allAreas();
+        const ops = list.map((a) => ({ op: "format", sheet: view.sheet.name, range: areaText(a), set }));
+        // A new font fits the rows to it, as Excel does (those not given a height).
+        const font =
+            set.style === "Normal"
+                ? () => ""
+                : set.fontName !== undefined || set.fontSize !== undefined
+                  ? (css) => {
+                        let out = css || "";
+                        const put = (prop, value) => (out = new RegExp(`${prop}:[^;]*;?`).test(out) ? out.replace(new RegExp(`${prop}:[^;]*;?`), `${prop}:${value};`) : `${out}${prop}:${value};`);
+                        if (set.fontName !== undefined) put("font-family", fontFamily(set.fontName));
+                        if (set.fontSize !== undefined) put("font-size", `${set.fontSize}pt`);
+                        return out;
+                    }
+                  : null;
+        postEdit(ops.concat(fitOps(list, font)));
+    }
+    // The edit that fits the rows of `list` to the font `font` gives their cells (none without one).
+    function fitOps(list, font) {
+        if (!font || !view) return [];
+        const rows = refit(view.sheet, list, font);
+        return rows.length ? [{ op: "fit", sheet: view.sheet.name, rows }] : [];
     }
     function toggleFormat(name) {
         if (editable) format({ [name]: !STATE[name](activeCss()) });
     }
     function clearFormats() {
-        if (sel && view) postEdit(allAreas().map((a) => ({ op: "clearFormats", sheet: view.sheet.name, range: areaText(a) })));
+        if (sel && view) postEdit(allAreas().map((a) => ({ op: "clearFormats", sheet: view.sheet.name, range: areaText(a) })).concat(fitOps(allAreas(), () => "")));
     }
     // A merged cell among the cells selected.
     function mergedIn(s) {
@@ -3754,7 +3914,7 @@
     }
     // The font size of the active cell one step up (down): Excel's フォント サイズの拡大 (縮小).
     function stepFontSize(up) {
-        const now = +((/font-size:([\d.]+)pt/.exec(activeCss()) || [])[1] || 11);
+        const now = view ? fontOfCss(view.sheet, activeCss()).pt : 11;
         const next = up ? FONT_SIZES.find((n) => n > now) : [...FONT_SIZES].reverse().find((n) => n < now);
         if (next) format({ fontSize: next });
     }
@@ -4550,10 +4710,11 @@
         for (const a of ["left", "center", "right"]) tools[`align-${a}`].classList.toggle("on", align === a);
         const valign = (/vertical-align:(\w+)/.exec(css) || [])[1];
         for (const a of ["top", "middle", "bottom"]) tools[`valign-${a}`].classList.toggle("on", valign === a);
-        const size = (/font-size:([\d.]+)pt/.exec(css) || [])[1] || "11";
+        const font = fontOfCss(view.sheet, css);
+        const size = String(font.pt);
         if (![...tools.fontSize.options].some((o) => o.value === size)) tools.fontSize.appendChild(el("option", null, size)).value = size;
         tools.fontSize.value = size;
-        if (document.activeElement !== tools.fontName) tools.fontName.value = (/font-family:'([^']*)'/.exec(css) || [])[1] || "游ゴシック";
+        if (document.activeElement !== tools.fontName) tools.fontName.value = font.name;
         const code = cell.n || "General";
         tools.numberFormat.value = NUMBER_FORMATS.some(([c]) => c === code) ? code : "";
         tools.merge.classList.toggle("on", !!sel && single(sel) && mergedIn(sel));

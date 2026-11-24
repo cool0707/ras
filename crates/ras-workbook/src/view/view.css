@@ -27,7 +27,8 @@ table { border-collapse: collapse; table-layout: fixed; font: 11pt "Yu Gothic", 
    both ways: 4), the boxes that stay with them (3; both ways: 5), the headers (6 and up). */
 th { position: sticky; background: var(--head); color: var(--head-text); font: 11pt/1 "Yu Gothic", Meiryo, sans-serif; font-weight: normal; padding: 0; overflow: hidden; border: 1px solid var(--line); z-index: 6; }
 thead th { top: 0; height: 24px; z-index: 8; }
-tbody th { left: 0; }
+/* (Row numbers taller than their row do not make it grow: centered on a line of no height.) */
+tbody th { left: 0; line-height: 0; }
 tbody th.fzr { z-index: 7; }
 thead th.fzc { z-index: 9; }
 thead th:first-child { left: 0; z-index: 10; }
