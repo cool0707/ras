@@ -5531,6 +5531,7 @@
         [["bottom", "下罫線", { b: "s" }], ["top", "上罫線", { t: "s" }], ["left", "左罫線", { l: "s" }], ["right", "右罫線", { r: "s" }]],
         [["none", "枠なし", {}], ["all", "格子", { t: "s", b: "s", l: "s", r: "s", h: "s", v: "s" }], ["outline", "外枠", { t: "s", b: "s", l: "s", r: "s" }], ["thick", "太い外枠", { t: "t", b: "t", l: "t", r: "t" }]],
         [["doubleBottom", "下二重罫線", { b: "d" }], ["thickBottom", "下太罫線", { b: "t" }], ["topBottom", "上罫線 + 下罫線", { t: "s", b: "s" }], ["topThickBottom", "上罫線 + 下太罫線", { t: "s", b: "t" }], ["topDoubleBottom", "上罫線 + 下二重罫線", { t: "s", b: "d" }]],
+        [["diagonalDown", "斜め罫線（＼）", { dd: "s" }], ["diagonalUp", "斜め罫線（／）", { du: "s" }]],
     ];
     // The lines of 線のスタイル (as Excel's list, in the file's names) and how they are drawn:
     // [width, dashes (SVG), double].
@@ -5570,6 +5571,8 @@
             line("r", 13.5, 2.5, 13.5, 13.5) +
             line("h", 2.5, 8, 13.5, 8) +
             line("v", 8, 2.5, 8, 13.5) +
+            line("dd", 2.5, 2.5, 13.5, 13.5) +
+            line("du", 2.5, 13.5, 13.5, 2.5) +
             "</svg>";
         return span;
     }

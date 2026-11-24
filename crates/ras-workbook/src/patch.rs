@@ -1681,7 +1681,8 @@ fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) 
             let given = border_line(line).ok_or_else(wrong)?;
             let thick = border_line("thick").unwrap();
             let double = border_line("double").unwrap();
-            // `Borders(index)`: 7 left, 8 top, 9 bottom, 10 right, 11 and 12 the lines inside.
+            // `Borders(index)`: 7 left, 8 top, 9 bottom, 10 right, 11 and 12 the lines inside,
+            // 5 the diagonal down (＼) and 6 up (／) of each cell.
             let sides: Vec<(&str, (f64, f64))> = match preset {
                 "all" => ["7", "8", "9", "10", "11", "12"]
                     .map(|s| (s, given))
@@ -1697,7 +1698,9 @@ fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) 
                 "topBottom" => vec![("8", given), ("9", given)],
                 "topThickBottom" => vec![("8", given), ("9", thick)],
                 "topDoubleBottom" => vec![("8", given), ("9", double)],
-                "none" => ["7", "8", "9", "10", "11", "12"]
+                "diagonalDown" => vec![("5", given)],
+                "diagonalUp" => vec![("6", given)],
+                "none" => ["5", "6", "7", "8", "9", "10", "11", "12"]
                     .map(|s| (s, (NONE, 0.0)))
                     .to_vec(),
                 _ => return Err(wrong()),
