@@ -38,9 +38,11 @@ pub struct CondRule {
     pub rank: u32,
     pub bottom: bool,
     pub percent: bool,
-    /// `aboveAverage`: below it, or equal to it too.
+    /// `aboveAverage`: below it, or equal to it too; how many standard deviations above (below)
+    /// it (1〜3; 0: the average itself).
     pub below: bool,
     pub equal: bool,
+    pub std_dev: u32,
     /// `timePeriod`: `today`, `yesterday`, `tomorrow`, `last7Days`, `thisWeek`, `lastWeek`,
     /// `nextWeek`, `thisMonth`, `lastMonth`, `nextMonth`.
     pub period: String,
@@ -258,6 +260,9 @@ impl CondRule {
                     return Err(format!("`rank` は 1〜{max} で指定してください"));
                 }
             }
+            "aboveAverage" if self.std_dev > 3 => {
+                return Err("`stdDev`（標準偏差）は 1〜3 で指定してください".into());
+            }
             "timePeriod" if !PERIODS.contains(&self.period.as_str()) => {
                 return Err(format!(
                     "`period` `{}` は指定できません（{}）",
@@ -473,6 +478,9 @@ fn rule_xml(p: &str, rule: &CondRule, dxf: Option<u32>, first: CellRef, priority
             }
             if rule.equal {
                 attrs.push_str(" equalAverage=\"1\"");
+            }
+            if rule.std_dev > 0 {
+                attrs.push_str(&format!(" stdDev=\"{}\"", rule.std_dev));
             }
         }
         "timePeriod" => attrs.push_str(&format!(" timePeriod=\"{}\"", rule.period)),
@@ -1069,6 +1077,11 @@ fn describe(doc: &str, f: &Found, dxfs: &[Json]) -> Json {
                 Some("0" | "false")
             ));
             j["equal"] = json!(on("equalAverage"));
+            j["stdDev"] = json!(
+                attr("stdDev")
+                    .and_then(|n| n.parse::<u32>().ok())
+                    .unwrap_or(0)
+            );
         }
         "timePeriod" => j["period"] = json!(attr("timePeriod").unwrap_or_default()),
         "dataBar" => {

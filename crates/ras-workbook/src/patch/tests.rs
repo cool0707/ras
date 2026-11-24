@@ -2703,6 +2703,18 @@ fn conditional_formats_put_on_cells_and_cleared() {
         part(&top, SHEET1)
             .contains(r#"<cfRule type="top10" dxfId="1" priority="1" bottom="1" rank="3"/>"#)
     );
+    // 標準偏差 1 下: below the average by a standard deviation, as Excel writes it.
+    let sd = edit(
+        r##"{"op":"conditional","range":"B2:B7","type":"aboveAverage","below":true,"stdDev":1,"format":{"fill":"#C6EFCE"}}"##,
+    );
+    assert!(part(&sd, SHEET1).contains(
+        r#"<cfRule type="aboveAverage" dxfId="1" priority="1" aboveAverage="0" stdDev="1"/>"#
+    ));
+    let rule = &view(&sd)["sheets"][0]["condRules"][0];
+    assert_eq!(
+        (&rule["below"], &rule["stdDev"], &rule["equal"]),
+        (&json!(true), &json!(1), &json!(false))
+    );
     let week = edit(
         r##"{"op":"conditional","range":"B2","type":"timePeriod","period":"today","format":{"fill":"#C6EFCE"}}"##,
     );
@@ -2783,6 +2795,10 @@ fn conditional_formats_put_on_cells_and_cleared() {
     assert!(
         wrong(r#"{"op":"conditional","range":"A1","type":"colorScale","colors":["red","blue"]}"#)
             .contains("RRGGBB")
+    );
+    assert!(
+        wrong(r#"{"op":"conditional","range":"A1","type":"aboveAverage","stdDev":4,"format":{"bold":true}}"#)
+            .contains("stdDev")
     );
 }
 

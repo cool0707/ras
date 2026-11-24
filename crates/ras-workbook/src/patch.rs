@@ -1155,7 +1155,7 @@ fn hex_color(v: &Json, key: &str) -> Result<String> {
 }
 
 /// The rule of a `conditional` edit: `type` and what it takes (`operator` and `values`,
-/// `formula`, `text`, `rank` / `bottom` / `percent`, `below` / `equal`, `period`, `colors`,
+/// `formula`, `text`, `rank` / `bottom` / `percent`, `below` / `equal` / `stdDev`, `period`, `colors`,
 /// `icons` / `reverse` / `iconOnly`), the `format` it gives (`color`, `fill`, `bold`,
 /// `italic`, `underline`, `strike`, `border`) and `stop`.
 fn cond_rule_of(o: &Json) -> Result<CondRule> {
@@ -1215,6 +1215,10 @@ fn cond_rule_of(o: &Json) -> Result<CondRule> {
         percent: flag("percent"),
         below: flag("below"),
         equal: flag("equal"),
+        std_dev: o
+            .get("stdDev")
+            .and_then(Json::as_u64)
+            .map_or(0, |n| n.min(u32::MAX as u64) as u32),
         period: text("period").unwrap_or_default(),
         colors: match o.get("colors") {
             None | Some(Json::Null) => Vec::new(),
