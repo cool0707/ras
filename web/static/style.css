@@ -453,11 +453,24 @@ body.splitting iframe {
     color: var(--error);
     font-size: 13px;
 }
-.book {
+.book-frames {
     flex: 1;
+    min-height: 0;
+    position: relative;
+}
+/* The page drawn again after an edit is made under the one shown, and takes its place when it is
+   drawn (a page reloaded in place goes white for a moment). */
+.book {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
     border: 0;
     width: 100%;
+    height: 100%;
     background: #fff;
+}
+.book.incoming {
+    z-index: 0;
 }
 .editor[hidden],
 .designer[hidden] {

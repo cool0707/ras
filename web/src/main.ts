@@ -959,7 +959,48 @@ function renderBook() {
     } catch (e) {
         html = `<p style="font-family:sans-serif">ブックを表示できません: ${String((e as Error).message).replace(/</g, "&lt;")}</p>`;
     }
-    $<HTMLIFrameElement>("book").srcdoc = html;
+    showBookPage(html);
+}
+
+/** The page drawn again, made under the one shown: it takes its place when it is drawn. */
+let incomingBook: HTMLIFrameElement | null = null;
+
+function showBookPage(html: string) {
+    const shown = $<HTMLIFrameElement>("book");
+    incomingBook?.remove();
+    incomingBook = null;
+    // (Nothing to keep on the screen: a page not drawn yet, or the tab hidden.)
+    if (!shown.srcdoc || !shown.offsetParent) {
+        shown.srcdoc = html;
+        return;
+    }
+    const next = shown.cloneNode(false) as HTMLIFrameElement;
+    next.removeAttribute("id");
+    next.classList.add("incoming");
+    next.addEventListener(
+        "load",
+        () => {
+            if (incomingBook !== next) return;
+            incomingBook = null;
+            const focused = document.activeElement === shown;
+            shown.remove();
+            next.id = "book";
+            next.classList.remove("incoming");
+            if (focused) next.contentWindow?.focus();
+        },
+        { once: true },
+    );
+    next.srcdoc = html;
+    incomingBook = next;
+    shown.after(next);
+}
+
+/** The window of the book tab's page that posted `source`: the one shown, or the one drawn under it. */
+function bookFrameOf(source: MessageEventSource | null): Window | null {
+    const shown = $<HTMLIFrameElement>("book").contentWindow;
+    if (source && source === shown) return shown;
+    if (source && incomingBook && source === incomingBook.contentWindow) return incomingBook.contentWindow;
+    return null;
 }
 
 function clearBookHistory() {
@@ -979,16 +1020,15 @@ function bookEdited(bytes: Uint8Array) {
 }
 
 /** What the page of the book tab posts (as `{ rasView: message }`): edits, undo and redo, links. */
-function bookMessage(m: { type?: string; ops?: unknown; url?: string }) {
-    const frame = $<HTMLIFrameElement>("book").contentWindow;
-    const fail = (message: string) => frame?.postMessage({ type: "error", message }, "*");
+function bookMessage(m: { type?: string; ops?: unknown; url?: string }, frame: Window) {
+    const fail = (message: string) => frame.postMessage({ type: "error", message }, "*");
     if (m.type === "link") {
         if (typeof m.url === "string" && /^(https?:\/\/|mailto:)/i.test(m.url)) window.open(m.url, "_blank", "noopener");
         return;
     }
     if (m.type === "ready") {
         // The objects of the workbook before the run have events: their handlers are in objects/.
-        if (!(lastRun && !showBefore)) frame?.postMessage({ type: "events", on: true }, "*");
+        if (!(lastRun && !showBefore)) frame.postMessage({ type: "events", on: true }, "*");
         return;
     }
     if (m.type === "event") {
@@ -1435,9 +1475,10 @@ async function main() {
         };
     }
     window.addEventListener("message", (e) => {
-        if (e.source !== $<HTMLIFrameElement>("book").contentWindow) return;
+        const frame = bookFrameOf(e.source);
+        if (!frame) return;
         const m = e.data && (e.data as { rasView?: unknown }).rasView;
-        if (m && typeof m === "object") bookMessage(m);
+        if (m && typeof m === "object") bookMessage(m, frame);
     });
     $("book-download").onclick = () => packWorkbook(lastRun && !showBefore ? lastRun.after : workbook);
     document.addEventListener("keydown", (e) => {
