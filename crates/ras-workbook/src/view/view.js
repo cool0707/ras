@@ -2933,6 +2933,246 @@
                 beginObjectDrag(e, box, obj, h);
             });
         }
+        // 調整ハンドル: where the shape's adjust values put them.
+        const def = obj.adjust;
+        if (!def) return;
+        const [w, h] = [box.offsetWidth, box.offsetHeight];
+        if (!(w > 0 && h > 0)) return;
+        const g = shapeGuides(def, adjustValues(def), w * EMU_PX, h * EMU_PX);
+        def.ah.forEach((ah, i) => {
+            let [x, y] = handlePoint(g, ah);
+            if (obj.flipH) x = w - x;
+            if (obj.flipV) y = h - y;
+            const d = frame.appendChild(el("div", "objhandle adj"));
+            Object.assign(d.style, { left: `${x}px`, top: `${y}px` });
+            d.title = "調整ハンドル（図形の形を変える）";
+            d.addEventListener("mousedown", (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                beginObjectDrag(e, box, obj, "adj");
+                if (objDrag) objDrag.handle = i;
+            });
+        });
+    }
+
+    // ---- 調整ハンドル: the adjust values of a preset shape (its avLst), evaluated as DrawingML
+    // does (`obj.adjust`: the preset's adjust values, guides, handles and paths, from
+    // ECMA-376), changed by dragging its handles
+
+    // EMU in a pixel (at 100%: 96 a inch).
+    const EMU_PX = 9525;
+    // The adjust values of a shape: the preset's, with those the shape has.
+    function adjustValues(def) {
+        const out = {};
+        for (const [name, f] of def.av) {
+            const v = +String(f).replace(/^val\s+/, "");
+            out[name] = Number.isFinite(v) ? v : 0;
+        }
+        return Object.assign(out, def.adj || {});
+    }
+    // The guides of a shape of w × h (EMU) for adjust values: what its handles and paths refer to.
+    function shapeGuides(def, adj, w, h) {
+        const v = { w, h, l: 0, t: 0, r: w, b: h, hc: w / 2, vc: h / 2, ss: Math.min(w, h), ls: Math.max(w, h) };
+        for (let d = 2; d <= 32; d++) [v[`wd${d}`], v[`hd${d}`], v[`ssd${d}`]] = [w / d, h / d, v.ss / d];
+        Object.assign(v, { cd2: 10800000, cd4: 5400000, cd8: 2700000, "3cd4": 16200000, "3cd8": 8100000, "5cd8": 13500000, "7cd8": 18900000 });
+        Object.assign(v, adj);
+        for (const [name, f] of def.gd) {
+            const x = guideValue(v, f);
+            v[name] = Number.isFinite(x) ? x : 0;
+        }
+        return v;
+    }
+    // A guide's formula (as DrawingML's guides: angles in 60000ths of a degree).
+    function guideValue(v, fmla) {
+        const [op, ...args] = String(fmla).trim().split(/\s+/);
+        const a = args.map((s) => guideOf(v, s));
+        const x = (i) => a[i] || 0;
+        const ang = (t) => ((t / 60000) * Math.PI) / 180;
+        const div = (p, q) => (q === 0 ? 0 : p / q);
+        switch (op) {
+            case "val": return x(0);
+            case "*/": return div(x(0) * x(1), x(2));
+            case "+-": return x(0) + x(1) - x(2);
+            case "+/": return div(x(0) + x(1), x(2));
+            case "?:": return x(0) > 0 ? x(1) : x(2);
+            case "abs": return Math.abs(x(0));
+            case "at2": return ((Math.atan2(x(1), x(0)) * 180) / Math.PI) * 60000;
+            case "cat2": return x(0) * Math.cos(Math.atan2(x(2), x(1)));
+            case "sat2": return x(0) * Math.sin(Math.atan2(x(2), x(1)));
+            case "cos": return x(0) * Math.cos(ang(x(1)));
+            case "sin": return x(0) * Math.sin(ang(x(1)));
+            case "tan": return x(0) * Math.tan(ang(x(1)));
+            case "max": return Math.max(x(0), x(1));
+            case "min": return Math.min(x(0), x(1));
+            case "mod": return Math.sqrt(x(0) * x(0) + x(1) * x(1) + x(2) * x(2));
+            case "pin": return x(1) < x(0) ? x(0) : x(1) > x(2) ? x(2) : x(1);
+            case "sqrt": return Math.sqrt(Math.max(0, x(0)));
+            default: return 0;
+        }
+    }
+    const guideOf = (v, s) => {
+        if (s === undefined || s === null) return 0;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : v[s] || 0;
+    };
+    // Where a handle is (px from the shape's box, before it is flipped).
+    const handlePoint = (g, ah) => [guideOf(g, ah.pos[0]) / EMU_PX, guideOf(g, ah.pos[1]) / EMU_PX];
+    // The adjust values a handle moves ([name, least, greatest]: x and y, or radius and angle).
+    function handleRefs(g, ah) {
+        const out = [];
+        for (const k of ["x", "y", "r", "a"]) {
+            const ref = ah[k];
+            if (!ref) continue;
+            let [lo, hi] = [guideOf(g, ref[1]), guideOf(g, ref[2])];
+            if (lo > hi) [lo, hi] = [hi, lo];
+            out.push({ name: ref[0], lo, hi });
+        }
+        return out;
+    }
+    // The adjust values that bring a handle nearest a point (px from the shape's box): the
+    // handle's place is any function of them, so they are looked for (a grid of values, then
+    // finer ones around the best).
+    function adjustTo(def, adj, ah, w, h, px, py) {
+        const [we, he] = [w * EMU_PX, h * EMU_PX];
+        const refs = handleRefs(shapeGuides(def, adj, we, he), ah);
+        if (!refs.length) return adj;
+        const [tx, ty] = [px * EMU_PX, py * EMU_PX];
+        const trial = Object.assign({}, adj);
+        const cost = (vals) => {
+            refs.forEach((r, i) => (trial[r.name] = vals[i]));
+            const g = shapeGuides(def, trial, we, he);
+            const [x, y] = [guideOf(g, ah.pos[0]) - tx, guideOf(g, ah.pos[1]) - ty];
+            return x * x + y * y;
+        };
+        // (Handles without limits, as a callout's: within ten times the shape around where the
+        // value is now.)
+        const span = refs.map((r) => {
+            const now = adj[r.name] || 0;
+            return [Math.max(r.lo, now - 1e6), Math.min(r.hi, now + 1e6)];
+        });
+        const n = refs.length === 1 ? 64 : 24;
+        let best = refs.map((r) => adj[r.name] || 0);
+        let bestCost = cost(best);
+        let steps = span.map(([lo, hi]) => (hi - lo) / n);
+        const scan = (ranges, count) => {
+            const grid = ranges.map(([lo, hi]) => Array.from({ length: count + 1 }, (_, i) => lo + ((hi - lo) * i) / count));
+            const each = (i, vals) => {
+                if (i === grid.length) {
+                    const c = cost(vals);
+                    if (c < bestCost) [best, bestCost] = [vals.slice(), c];
+                    return;
+                }
+                for (const x of grid[i]) {
+                    vals[i] = x;
+                    each(i + 1, vals);
+                }
+            };
+            each(0, []);
+        };
+        scan(span, n);
+        for (let round = 0; round < 8; round++) {
+            const ranges = best.map((b, i) => [Math.max(span[i][0], b - steps[i]), Math.min(span[i][1], b + steps[i])]);
+            scan(ranges, 8);
+            steps = steps.map((s) => s / 4);
+        }
+        const out = Object.assign({}, adj);
+        refs.forEach((r, i) => (out[r.name] = Math.round(Math.min(r.hi, Math.max(r.lo, best[i])))));
+        return out;
+    }
+    // The outline of a shape of w × h (px) for adjust values: SVG path data in px (arcs as lines).
+    function shapeOutline(def, adj, w, h) {
+        const [we, he] = [w * EMU_PX, h * EMU_PX];
+        const g = shapeGuides(def, adj, we, he);
+        let d = "";
+        for (const p of def.path) {
+            const kx = (p.w ? we / p.w : 1) / EMU_PX;
+            const ky = (p.h ? he / p.h : 1) / EMU_PX;
+            const pt = (x, y) => `${(x * kx).toFixed(2)},${(y * ky).toFixed(2)}`;
+            let cur = [0, 0];
+            let start = [0, 0];
+            for (const c of p.c) {
+                const v = c.slice(1).map((s) => guideOf(g, s));
+                if (c[0] === "M") {
+                    cur = start = [v[0], v[1]];
+                    d += `M${pt(...cur)} `;
+                } else if (c[0] === "L") {
+                    cur = [v[0], v[1]];
+                    d += `L${pt(...cur)} `;
+                } else if (c[0] === "Q") {
+                    d += `Q${pt(v[0], v[1])} ${pt(v[2], v[3])} `;
+                    cur = [v[2], v[3]];
+                } else if (c[0] === "C") {
+                    d += `C${pt(v[0], v[1])} ${pt(v[2], v[3])} ${pt(v[4], v[5])} `;
+                    cur = [v[4], v[5]];
+                } else if (c[0] === "A") {
+                    // An arc of the ellipse wR × hR from the angle stAng by swAng (angles as seen).
+                    const [wr, hr, st, sw] = v;
+                    const rad = (t) => ((t / 60000) * Math.PI) / 180;
+                    const param = (t) => Math.atan2(wr * Math.sin(t), hr * Math.cos(t));
+                    const p1 = param(rad(st));
+                    const center = [cur[0] - wr * Math.cos(p1), cur[1] - hr * Math.sin(p1)];
+                    const turns = Math.trunc(sw / 21600000);
+                    const rem = rad(sw) - turns * 2 * Math.PI;
+                    let p2 = param(rad(st + sw));
+                    if (rem > 0) {
+                        while (p2 <= p1) p2 += 2 * Math.PI;
+                        while (p2 - p1 > 2 * Math.PI) p2 -= 2 * Math.PI;
+                    } else if (rem < 0) {
+                        while (p2 >= p1) p2 -= 2 * Math.PI;
+                        while (p1 - p2 > 2 * Math.PI) p2 += 2 * Math.PI;
+                    } else p2 = p1;
+                    p2 += turns * 2 * Math.PI;
+                    if (!d) d += `M${pt(...cur)} `;
+                    const steps = Math.min(1000, Math.max(1, Math.ceil(Math.abs(p2 - p1) / (Math.PI / 48))));
+                    for (let i = 1; i <= steps; i++) {
+                        const q = p1 + ((p2 - p1) * i) / steps;
+                        cur = [center[0] + wr * Math.cos(q), center[1] + hr * Math.sin(q)];
+                        d += `L${pt(...cur)} `;
+                    }
+                } else if (c[0] === "Z") {
+                    d += "Z ";
+                    cur = start;
+                }
+            }
+        }
+        return d.trim();
+    }
+    // The point of the mouse in a shape's box (px at 100%; before it is turned and flipped).
+    function pointInShape(e, d) {
+        const z = Z();
+        const f = d.from;
+        const [dx, dy] = [(e.clientX - d.center[0]) / z, (e.clientY - d.center[1]) / z];
+        const turn = ((d.obj.rot || 0) * Math.PI) / 180;
+        const [cos, sin] = [Math.cos(turn), Math.sin(turn)];
+        let [x, y] = [dx * cos + dy * sin + f.w / 2, -dx * sin + dy * cos + f.h / 2];
+        if (d.obj.flipH) x = f.w - x;
+        if (d.obj.flipV) y = f.h - y;
+        return [x, y];
+    }
+    // A handle dragged: the outline of the shape as its new adjust values make it.
+    function dragAdjust(e, d) {
+        const def = d.obj.adjust;
+        const f = d.from;
+        const [x, y] = pointInShape(e, d);
+        if (!d.adj) d.adj = adjustValues(def);
+        const adj = adjustTo(def, d.adj, def.ah[d.handle], f.w, f.h, x, y);
+        d.now = { adjust: adj };
+        if (!d.ghost) {
+            d.ghost = makeGhost(false);
+            d.ghost.classList.add("adj");
+        }
+        ghostAt(d.ghost, f.x, f.y, f.x + f.w, f.y + f.h, false);
+        const flip = d.obj.flipH || d.obj.flipV ? ` transform="translate(${d.obj.flipH ? f.w : 0},${d.obj.flipV ? f.h : 0}) scale(${d.obj.flipH ? -1 : 1},${d.obj.flipV ? -1 : 1})"` : "";
+        d.ghost.innerHTML = `<svg width="${f.w}" height="${f.h}" viewBox="0 0 ${f.w} ${f.h}"><path${flip} d="${shapeOutline(def, adj, f.w, f.h)}"/></svg>`;
+        if (d.obj.rot) d.ghost.style.transform = `rotate(${d.obj.rot}deg)`;
+    }
+    // The adjust values a handle was dragged to (only those that changed).
+    function endAdjust(d) {
+        const before = d.adj || {};
+        const change = {};
+        for (const [k, v] of Object.entries(d.now.adjust)) if (Math.round(before[k]) !== v) change[k] = v;
+        if (Object.keys(change).length) objectEdit(d.obj, { adjust: change });
     }
     function beginObjectDrag(e, box, obj, how) {
         if (busy || !view) return;
@@ -2949,6 +3189,10 @@
         const z = Z();
         let [dx, dy] = [(e.clientX - d.x) / z, (e.clientY - d.y) / z];
         if (!d.ghost && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+        if (d.how === "adj") {
+            dragAdjust(e, d);
+            return;
+        }
         const f = d.from;
         let { x, y, w, h } = f;
         const turn = ((d.obj.rot || 0) * Math.PI) / 180;
@@ -3029,6 +3273,7 @@
         swallowClick = true;
         setTimeout(() => (swallowClick = false));
         if (d.how === "rot") objectEdit(d.obj, { rotation: d.now.rot });
+        else if (d.how === "adj") endAdjust(d);
         else moveObject(d.obj, d.now);
     }
     // The arrow keys move the selected object by a pixel (Ctrl: by 10).

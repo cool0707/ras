@@ -827,6 +827,9 @@ impl Book {
                 if let Some(c) = &o.chart {
                     j["chart"] = c.clone();
                 }
+                if let Some(a) = &o.adjust {
+                    j["adjust"] = a.clone();
+                }
                 j
             })
             .collect();

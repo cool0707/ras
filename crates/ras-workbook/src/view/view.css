@@ -113,6 +113,10 @@ td.fml { font-family: Consolas, "MS Gothic", monospace; font-size: 10pt; color: 
 .objhandle.ne, .objhandle.sw { cursor: nesw-resize; }
 .objhandle.n, .objhandle.s { cursor: ns-resize; }
 .objhandle.e, .objhandle.w { cursor: ew-resize; }
+.objhandle.adj { width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; background: #ffd23f; border-color: #8a6100; cursor: default; }
+.objghost.adj { border: 0; overflow: visible; }
+.objghost.adj svg { left: 0; top: 0; }
+.objghost.adj path { fill: none; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; }
 .objghost { position: absolute; z-index: 6; box-sizing: border-box; border: 1px dashed var(--accent); pointer-events: none; }
 .objghost.line { border: 0; overflow: visible; }
 .objghost svg { position: absolute; left: -1px; top: -1px; overflow: visible; }

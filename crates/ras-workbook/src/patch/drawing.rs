@@ -880,8 +880,14 @@ fn style(
     let fill = change.fill.as_ref();
     let line = change.line.is_some() || change.line_width.is_some();
     let turn = change.rotation.is_some() || change.flip_h.is_some() || change.flip_v.is_some();
-    if !(fill.is_some() || line || turn) {
+    let adjust = change.adjust.as_ref();
+    if !(fill.is_some() || line || turn || adjust.is_some()) {
         return Ok(());
+    }
+    if adjust.is_some() && kind != "sp" && kind != "cxnSp" {
+        return Err(format!(
+            "`{name}` は図形ではないため、調整ハンドル（`adjust`）はありません"
+        ));
     }
     if kind == "graphicFrame" {
         return Err(format!(
@@ -924,6 +930,16 @@ fn style(
         .map(|c| (c.local().to_string(), doc[c.span()].to_string()))
         .collect();
     let mut changed = false;
+    if let Some(adjust) = adjust {
+        let Some(i) = kids.iter().position(|k| k.0 == "prstGeom") else {
+            return Err(format!(
+                "`{name}` は既定の図形（prstGeom）ではないため、調整ハンドルはありません"
+            ));
+        };
+        kids[i].1 = with_adjust(&kids[i].1, adjust)
+            .ok_or_else(|| format!("`{name}` の形状（prstGeom）を読み取れません"))?;
+        changed = true;
+    }
     if turn {
         let Some(i) = kids.iter().position(|k| k.0 == "xfrm") else {
             return Err(format!("`{name}` の位置と大きさ（xfrm）を読み取れません"));
@@ -1001,6 +1017,52 @@ fn style(
         );
     }
     Ok(())
+}
+
+/// A preset geometry (`prstGeom`, its text) with adjust values set: those it has by the names
+/// given replaced, the others kept, the new ones after them (`<gd name="adj" fmla="val N"/>`).
+fn with_adjust(text: &str, adjust: &[(String, i64)]) -> Option<String> {
+    let el = scan::tree(text, &[])?;
+    let a = scan::prefix(el.name);
+    let gd = |n: &str, v: i64| format!("<{a}gd name=\"{n}\" fmla=\"val {v}\"/>");
+    let mut kids: Vec<String> = Vec::new();
+    let mut list: Vec<(Option<String>, String)> = Vec::new();
+    let mut av: Option<&El> = None;
+    for c in &el.children {
+        if c.local() == "avLst" && av.is_none() {
+            av = Some(c);
+            kids.push(String::new());
+        } else {
+            kids.push(text[c.span()].to_string());
+        }
+    }
+    if let Some(av) = av {
+        for g in &av.children {
+            list.push((g.attr(text, "name"), text[g.span()].to_string()));
+        }
+    }
+    for (n, v) in adjust {
+        match list.iter_mut().find(|g| g.0.as_deref() == Some(n.as_str())) {
+            Some(g) => g.1 = gd(n, *v),
+            None => list.push((Some(n.clone()), gd(n, *v))),
+        }
+    }
+    let body: String = list.into_iter().map(|g| g.1).collect();
+    let av_xml = match av {
+        Some(av) => format!("{}{body}</{}>", open_tag(text, av), av.name),
+        None => format!("<{a}avLst>{body}</{a}avLst>"),
+    };
+    match kids.iter().position(String::is_empty) {
+        Some(i) => kids[i] = av_xml,
+        // (avLst comes first in prstGeom.)
+        None => kids.insert(0, av_xml),
+    }
+    Some(format!(
+        "{}{}</{}>",
+        open_tag(text, &el),
+        kids.concat(),
+        el.name
+    ))
 }
 
 /// The start tag of an element written as one with content (`<a/>` → `<a>`).
