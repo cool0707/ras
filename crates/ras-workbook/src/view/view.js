@@ -1182,13 +1182,10 @@
 
     // The border of the cells selected (one cell too), 2px as Excel's: 1px over the gridline
     // around them, 1px outside it. (The gridlines are the right and bottom pixels of the cells:
-    // those left and above them are the cells' before.) Around what is typed into one cell, as
-    // it grows past the cell.
-    function borderOf(box, one) {
-        const typed = one && entry && entry.where === "cell" && ed.classList.contains("on");
-        const w = typed ? Math.max(box.w, parseFloat(ed.style.width) - 1 || 0) : box.w;
-        const h = typed ? Math.max(box.h, parseFloat(ed.style.height) - 1 || 0) : box.h;
-        return { x: box.x - 2, y: box.y - 2, w: w + 2, h: h + 2 };
+    // those left and above them are the cells' before.) Around the cell while it is typed into
+    // too: what is typed past it is shown over the cells next to it, as Excel shows it.
+    function borderOf(box) {
+        return { x: box.x - 2, y: box.y - 2, w: box.w + 2, h: box.h + 2 };
     }
 
     // The box of the range, its headers, and the dashed box of the cells copied.
@@ -1211,7 +1208,8 @@
             const one = single(sel) && !areas.length;
             const box = boxOf(sel.r1, sel.c1, sel.r2, sel.c2);
             const range = one ? null : box;
-            put(v.selbox, box && !areas.length ? borderOf(box, one) : range);
+            put(v.selbox, box && !areas.length ? borderOf(box) : range);
+            if (!entry) v.selbox.classList.remove("overx", "overy");
             v.selbox.classList.toggle("multi", areas.length > 0);
             put(v.selshade, range);
             const o = ownerOf(sel.ar, sel.ac) || [sel.ar, sel.ac, sel.ar, sel.ac];
@@ -1489,6 +1487,7 @@
         ed.classList.toggle("on", on);
         Object.assign(ed.style, { left: `${b.x}px`, top: `${b.y}px`, width: "", height: "", font: "", paddingTop: "" });
         pinTo(ed, pinOf(view, b));
+        view.selbox.classList.remove("overx", "overy");
         if (!on) return;
         const style = activeTd ? getComputedStyle(activeTd) : null;
         if (style) ed.style.font = style.font;
@@ -1507,10 +1506,10 @@
         ed.style.height = `${pad > 0 ? b.h + 1 : Math.max(b.h + 1, textH + 2)}px`;
         // (Not filled from while typed into: the fill handle is not there.)
         view.fillh.hidden = true;
-        if (single(sel) && !areas.length) {
-            const r = borderOf(b, true);
-            Object.assign(view.selbox.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w + 1}px`, height: `${r.h + 1}px` });
-        }
+        // What is typed past the cell runs over the right (bottom) side of its border, as Excel
+        // shows it: the border stays on the cell.
+        view.selbox.classList.toggle("overx", parseFloat(ed.style.width) > b.w + 1);
+        view.selbox.classList.toggle("overy", parseFloat(ed.style.height) > b.h + 1);
     }
 
     function beginEntry(mode, text, where) {
@@ -5345,12 +5344,77 @@
         if (down) return [Math.min(f.r1, hit.r), f.c1, Math.max(f.r2, hit.r), f.c2];
         return [f.r1, Math.min(f.c1, hit.c), f.r2, Math.max(f.c2, hit.c)];
     }
+    // What the fill puts in the cell it is drawn out to (shown by the mouse, as Excel shows it):
+    // the same series the workbook continues (`autofill` in patch.rs), for the first cell across
+    // the end of the fill. null: nothing to show (a formula, an empty cell, the cells drawn in).
+    const fillTip = el("div", "sizetip filltip");
+    function numbered(text) {
+        const m = /^([\s\S]*?)([0-9]+)([^0-9]*)$/.exec(text);
+        if (!m || m[2].length > 15) return null;
+        return { head: m[1], n: Number(m[2]), digits: m[2].length, tail: m[3] };
+    }
+    function fillPreview(f, to) {
+        const down = to[1] === f.c1 && to[3] === f.c2;
+        const [lo, hi, toLo, toHi] = down ? [f.r1, f.r2, to[0], to[2]] : [f.c1, f.c2, to[1], to[3]];
+        const n = hi - lo + 1;
+        // The line along the fill: after the cells (down, right), else before them.
+        const k = toHi > hi ? toHi - lo : toLo < lo ? toLo - lo : null;
+        if (k === null) return null;
+        const at = (i) => view.cells.get(down ? (lo + i) * KEY + f.c1 : f.r1 * KEY + lo + i);
+        const cells = [];
+        for (let i = 0; i < n; i++) cells.push(at(i) || {});
+        if (cells.some((c) => c.f)) return null;
+        const src = cells[((k % n) + n) % n];
+        const code = src.sn || src.n;
+        const shown = (x) => statText(Math.round(x * 1e10) / 1e10, code);
+        if (cells.every((c) => (c.k === "number" || c.k === "date") && typeof c.x === "number")) {
+            const xs = cells.map((c) => c.x);
+            if (n >= 2) {
+                // The line through the numbers (least squares).
+                const mk = (n - 1) / 2;
+                const mx = xs.reduce((a, b) => a + b, 0) / n;
+                let num = 0,
+                    den = 0;
+                xs.forEach((x, i) => {
+                    num += (i - mk) * (x - mx);
+                    den += (i - mk) ** 2;
+                });
+                const slope = num / den;
+                return shown(mx - slope * mk + slope * k);
+            }
+            if (cells[0].k === "date") return shown(xs[0] + k);
+        } else if (cells.every((c) => c.k === "string")) {
+            const ts = cells.map((c) => numbered(c.t || ""));
+            if (ts.every(Boolean)) {
+                const step = n >= 2 ? ts[1].n - ts[0].n : 1;
+                const regular = ts.every((t, i) => i === 0 || (t.head === ts[i - 1].head && t.tail === ts[i - 1].tail && t.n - ts[i - 1].n === step));
+                if (regular) {
+                    const t = ts[0];
+                    return t.head + String(Math.abs(t.n + step * k)).padStart(t.digits, "0") + t.tail;
+                }
+            }
+        }
+        return src.t === undefined || src.t === "" ? null : src.t;
+    }
     function moveFill(e) {
         const f = filling;
         f.to = fillTarget(e);
         const b = boxOf(f.to[0], f.to[1], f.to[2], f.to[3]);
         view.fillbox.hidden = !b;
         if (b) Object.assign(view.fillbox.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w + 1}px`, height: `${b.h + 1}px` });
+        pinTo(view.fillbox, pinOf(view, b));
+        const text = b ? fillPreview(f, f.to) : null;
+        if (text === null) {
+            fillTip.remove();
+            return;
+        }
+        document.body.appendChild(fillTip);
+        fillTip.textContent = text;
+        // At the bottom right of the cells drawn out to.
+        const r = view.fillbox.getBoundingClientRect();
+        const w = fillTip.offsetWidth;
+        const h = fillTip.offsetHeight;
+        Object.assign(fillTip.style, { left: `${Math.max(0, Math.min(r.right + 6, window.innerWidth - w - 2))}px`, top: `${Math.max(0, Math.min(r.bottom + 6, window.innerHeight - h - 2))}px` });
     }
     function autofill(f, to) {
         if (to[0] === f.r1 && to[1] === f.c1 && to[2] === f.r2 && to[3] === f.c2) return;
@@ -5361,6 +5425,7 @@
     function endFill() {
         const f = filling;
         filling = null;
+        fillTip.remove();
         if (!view) return;
         view.fillbox.hidden = true;
         autofill(f, f.to);
