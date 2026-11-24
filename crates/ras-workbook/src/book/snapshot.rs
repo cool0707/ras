@@ -105,7 +105,8 @@ pub struct ColState {
 /// What a whole row is given.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowState {
-    /// Its height in points (0: the sheet's default).
+    /// Its height in points (0: the sheet's default). Without `custom`, the height Excel fit
+    /// the row to (its tallest font), kept as the file has it.
     pub height: f64,
     pub custom: bool,
     pub hidden: bool,
@@ -319,12 +320,14 @@ impl Book {
             }
             for r in ws.row_dimensions() {
                 let state = RowState {
-                    height: if r.custom_height() { r.height() } else { 0.0 },
+                    height: r.height(),
                     custom: r.custom_height(),
                     hidden: r.hidden(),
                     style: styles.intern(r.style()),
                 };
-                if r.row_num() > 0 && (state.custom || state.hidden || *r.style() != plain) {
+                if r.row_num() > 0
+                    && (state.custom || state.height > 0.0 || state.hidden || *r.style() != plain)
+                {
                     sheet.rows.insert(r.row_num() - 1, state);
                 }
             }

@@ -115,6 +115,12 @@ pub enum Op {
         columns: bool,
         px: f64,
     },
+    /// Rows not given a height fit to their fonts: (row, px), as the grid works them out (the
+    /// browser has the fonts). Rows given a height are left as they are.
+    Fit {
+        sheet: String,
+        rows: Vec<(u32, f64)>,
+    },
     /// Whole rows or columns hidden, or shown again.
     Hide {
         sheet: String,
@@ -689,6 +695,24 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                         .ok_or("`px` がありません")?,
                 }
             }
+            "fit" => Op::Fit {
+                sheet,
+                rows: o
+                    .get("rows")
+                    .and_then(Json::as_array)
+                    .ok_or("`rows` がありません")?
+                    .iter()
+                    .map(|x| match x.as_array().map(Vec::as_slice) {
+                        Some([r, px]) => match (r.as_u64(), px.as_f64()) {
+                            (Some(r), Some(px)) if r < MAX_ROWS as u64 && (1.0..=545.0).contains(&px) => {
+                                Ok((r as u32, px))
+                            }
+                            _ => Err("`rows` は [行（0 から）, ピクセル] の配列で指定してください".to_string()),
+                        },
+                        _ => Err("`rows` は [行（0 から）, ピクセル] の配列で指定してください".to_string()),
+                    })
+                    .collect::<Result<_>>()?,
+            },
             "hide" => {
                 let (range, columns) = lines_of(o)?;
                 Op::Hide {
@@ -1635,11 +1659,27 @@ fn run(
             px,
         } => {
             let si = sheet_index(book, sheet)?;
+            let (lo, hi) = if *columns {
+                (range.start.col, range.end.col)
+            } else {
+                (range.start.row, range.end.row)
+            };
+            // As Excel: 0 hides the lines, a size shows hidden ones again.
+            book.set_hidden(si, *columns, lo, hi, *px <= 0.0)?;
+            if *px <= 0.0 {
+                return Ok(());
+            }
             if *columns {
                 let chars = crate::book::width_of_px(*px);
                 book.set_format(si, *range, "columnwidth", &Val::Num(chars))?;
             } else {
                 book.set_format(si, *range, "rowheight", &Val::Num(px * 0.75))?;
+            }
+        }
+        Op::Fit { sheet, rows } => {
+            let si = sheet_index(book, sheet)?;
+            for (r, px) in rows {
+                book.fit_row(si, *r, px * 0.75)?;
             }
         }
         Op::Hide {
@@ -2575,11 +2615,17 @@ fn rewrite_sheet(
                 }
                 let mut attrs = Attrs::parse(row_attrs.get(&r).map_or("", String::as_str));
                 let custom = now.is_some_and(|n| n.custom);
+                let height = now.map_or(0.0, |n| n.height);
                 if custom {
-                    attrs.set("ht", &number(now.map_or(0.0, |n| n.height)));
+                    attrs.set("ht", &number(height));
                     attrs.set("customHeight", "1");
-                } else if was.is_some_and(|w| w.custom) {
-                    attrs.remove("ht");
+                } else if was.is_some_and(|w| w.custom) || was.map_or(0.0, |w| w.height) != height {
+                    // A row fit to its fonts: the height Excel keeps for it, without customHeight.
+                    if height > 0.0 {
+                        attrs.set("ht", &number(height));
+                    } else {
+                        attrs.remove("ht");
+                    }
                     attrs.remove("customHeight");
                 }
                 if now.is_some_and(|n| n.hidden) {

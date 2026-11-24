@@ -535,6 +535,50 @@ fn formats_are_added_to_the_styles_and_cells_keep_what_they_hold() {
 }
 
 #[test]
+fn a_size_shows_hidden_lines_and_zero_hides_them() {
+    let out =
+        edit(r#"[{"op":"hide","range":"5:5","hidden":true},{"op":"size","range":"B:B","px":0}]"#);
+    let sheet = part(&out, SHEET1);
+    assert!(sheet.contains(r#"<row r="5" hidden="1">"#), "{sheet}");
+    assert!(
+        sheet.contains(r#"hidden="1""#) && sheet.contains(r#"<col min="2" max="2""#),
+        "{sheet}"
+    );
+    // As Excel: sizing hidden lines shows them again.
+    let back = apply(
+        &out,
+        &ops(r#"[{"op":"size","range":"4:6","px":30},{"op":"size","range":"B:B","px":80}]"#),
+    )
+    .unwrap();
+    let sheet = part(&back, SHEET1);
+    assert!(
+        sheet.contains(r#"<row r="5" ht="22.5" customHeight="1">"#),
+        "{sheet}"
+    );
+    assert!(!sheet.contains(r#"hidden="1""#), "{sheet}");
+}
+
+#[test]
+fn rows_fit_to_their_fonts() {
+    // Row 3 is given a height first: a fit leaves it as it is.
+    let out = edit(
+        r#"[{"op":"size","range":"3:3","px":40},{"op":"format","range":"B4","set":{"fontSize":20}},{"op":"fit","rows":[[2,35],[3,35]]}]"#,
+    );
+    let sheet = part(&out, SHEET1);
+    assert!(
+        sheet.contains(r#"<row r="3" ht="30" customHeight="1">"#),
+        "{sheet}"
+    );
+    // As Excel keeps a row it fits: its height without customHeight.
+    assert!(sheet.contains(r#"<row r="4" ht="26.25">"#), "{sheet}");
+    // A smaller font again: back to its height.
+    let back = apply(&out, &ops(r#"[{"op":"fit","rows":[[3,20]]}]"#)).unwrap();
+    assert!(part(&back, SHEET1).contains(r#"<row r="4" ht="15">"#));
+    let bad = serde_json::from_str(r#"[{"op":"fit","rows":[[3]]}]"#).unwrap();
+    assert!(parse_ops(&bad, Some("Data")).is_err());
+}
+
+#[test]
 fn sizes_hidden_lines_and_merged_cells() {
     let out = edit(
         r#"[{"op":"size","range":"B:C","px":120},{"op":"size","range":"3:3","px":40},{"op":"hide","range":"5:5","hidden":true},{"op":"hide","range":"A:A","hidden":true},{"op":"merge","range":"A2:B3"},{"op":"unmerge","range":"A8"}]"#,

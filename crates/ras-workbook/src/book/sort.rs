@@ -230,6 +230,23 @@ impl Book {
         Ok(())
     }
 
+    /// The row `row` (0-based) fit to its fonts: `pt` high, as Excel keeps a row it fits (no
+    /// customHeight). A row given a height, or hidden, is left as it is.
+    pub fn fit_row(&mut self, si: usize, row: u32, pt: f64) -> Result<()> {
+        self.check_sheet(si)?;
+        let ws = self.file.sheet_mut(si).map_err(|e| e.to_string())?;
+        if ws
+            .row_dimension(row + 1)
+            .is_some_and(|r| r.custom_height() || r.hidden())
+        {
+            return Ok(());
+        }
+        ws.row_dimension_mut(row + 1)
+            .set_height(pt)
+            .set_custom_height(false);
+        Ok(())
+    }
+
     /// Whether the lines `lo..=hi` are hidden: None when some are and some are not.
     pub fn hidden(&self, si: usize, columns: bool, lo: u32, hi: u32) -> Option<bool> {
         let sh = self.model.sheet(si)?;
