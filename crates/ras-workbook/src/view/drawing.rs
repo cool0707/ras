@@ -258,6 +258,8 @@ pub struct Obj {
     /// A form control's settings, for the grid's コントロールの書式設定: `type` (CheckBox, ...),
     /// `link`, `items`, `checked`, `val`, `min`, `max`, `inc`, `page`.
     pub form: Option<serde_json::Value>,
+    /// The adjust handles of a preset shape (`adjust_of`), for the grid's 調整ハンドル.
+    pub adjust: Option<serde_json::Value>,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -494,6 +496,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 rot: 0.0,
                 flip: (false, false),
                 form: None,
+                adjust: None,
             });
             return;
         }
@@ -515,6 +518,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 rot: 0.0,
                 flip: (false, false),
                 form: None,
+                adjust: None,
             });
         }
         return;
@@ -554,8 +558,57 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
             rot: xfrm(obj).map_or(0.0, |x| x.rot),
             flip: xfrm(obj).map_or((false, false), |x| (x.flip_h, x.flip_v)),
             form: None,
+            adjust: matches!(obj.name.as_str(), "sp" | "cxnSp")
+                .then(|| adjust_of(obj))
+                .flatten(),
         });
     }
+}
+
+/// The adjust handles of the presets that have them (`handles.zip`, made by
+/// `crates/ras-workbook/tools/make_handles.py` from the definitions of ECMA-376): by preset, its adjust
+/// values (`av`), guides (`gd`), handles (`ah`) and paths (`path`).
+fn handle_presets() -> &'static serde_json::Map<String, serde_json::Value> {
+    static P: std::sync::OnceLock<serde_json::Map<String, serde_json::Value>> =
+        std::sync::OnceLock::new();
+    P.get_or_init(|| {
+        let read = || -> Option<serde_json::Map<String, serde_json::Value>> {
+            let mut zip =
+                zip::ZipArchive::new(Cursor::new(&include_bytes!("handles.zip")[..])).ok()?;
+            let mut f = zip.by_name("handles.json").ok()?;
+            let mut text = String::new();
+            f.read_to_string(&mut text).ok()?;
+            serde_json::from_str(&text).ok()
+        };
+        read().unwrap_or_default()
+    })
+}
+
+/// The adjust handles of a shape of a preset that has them: the preset's definition (as
+/// `handle_presets` has it) with its name (`prst`) and the shape's own adjust values (`adj`:
+/// by name, as its `avLst` gives them), which the page evaluates the handles and the outline
+/// with. None for other shapes.
+pub(crate) fn adjust_of(sp: &Node) -> Option<serde_json::Value> {
+    let g = sp.child("spPr")?.child("prstGeom")?;
+    let prst = g.attr("prst")?;
+    let mut def = handle_presets().get(prst)?.clone();
+    let mut adj = serde_json::Map::new();
+    for gd in g.child("avLst").into_iter().flat_map(|l| l.all("gd")) {
+        let (Some(name), Some(f)) = (gd.attr("name"), gd.attr("fmla")) else {
+            continue;
+        };
+        // (`val N`: what Excel writes.)
+        if let Some(v) = f
+            .strip_prefix("val ")
+            .and_then(|v| v.trim().parse::<f64>().ok())
+        {
+            adj.insert(name.to_string(), serde_json::json!(v));
+        }
+    }
+    let o = def.as_object_mut()?;
+    o.insert("prst".into(), serde_json::json!(prst));
+    o.insert("adj".into(), serde_json::Value::Object(adj));
+    Some(def)
 }
 
 /// The text of a shape: its paragraphs, one a line.

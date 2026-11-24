@@ -208,6 +208,7 @@ impl Controls {
             rot: 0.0,
             flip: (false, false),
             form,
+            adjust: None,
         })
     }
 }

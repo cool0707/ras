@@ -313,7 +313,7 @@ VS Code のシートプレビュー（「RAS: ブックをシートプレビュ�
 | 記号と特殊文字 | 挿入の「記号と特殊文字」（入力中のセルのカーソルの位置、入力中でなければアクティブセルの内容の後ろに入れます） |
 | 図形・テキスト ボックス | 挿入の「図形」（線・四角形・基本図形・ブロック矢印・星・吹き出し）・「テキスト ボックス」を選び、シートをドラッグして描く（クリックで既定の大きさ。Shift で縦横を同じに。Esc で取り消し） |
 | 画像 | 挿入の「画像」（PNG・JPEG・GIF・BMP。アクティブセルの位置に入ります）、画像の貼り付け（Ctrl+V） |
-| 図形・画像・グラフの移動と削除 | クリックで選び、ドラッグで移動、周りのハンドルでサイズの変更、矢印キーで 1 ピクセル（Ctrl で 10）移動、Delete で削除。図形の文字は F2・ダブルクリック・右クリックの「テキストの編集…」 |
+| 図形・画像・グラフの移動と削除 | クリックで選び、ドラッグで移動、周りのハンドルでサイズの変更、黄色の調整ハンドルで図形の形の変更（角丸の大きさ・矢印の太さ・吹き出しの先など）、矢印キーで 1 ピクセル（Ctrl で 10）移動、Delete で削除。図形の文字は F2・ダブルクリック・右クリックの「テキストの編集…」 |
 | フォームコントロール | 挿入の「コントロール」でボタン・チェック ボックス・オプション ボタン・ラベル・グループ ボックス・リスト ボックス・コンボ ボックス・スピン ボタン・スクロール バーを選び、シートをドラッグして描く。図形と同じく、選んでドラッグで移動、ハンドルでサイズの変更、Delete で削除。右クリックの「コントロールの書式設定」で開く右のペイン（ダイアログではなく、フォームのデザイナーのプロパティと同じ形）で文字・オン／オフ・入力範囲・リンクするセル・値と範囲、F2 で文字。ActiveX コントロールも、同じく「コントロール」でコマンド ボタン・テキスト ボックスなど 10 種類を描け（名前は `CommandButton1` など。イベントはシートのファイルの `@on("CommandButton1.Click")` で受け取る）、移動・サイズの変更・削除と、右クリックの「プロパティ」のペインで Caption・Value・LinkedCell・ListFillRange・Min・Max など（挿入したものは、実際の Excel ではまだ確認していない） |
 | 図形の書式・回転・重なり順 | 選んでいる間に出る「図形の書式」タブ（図形の塗りつぶし・図形の枠線と太さ、前面へ移動・最前面へ移動・背面へ移動・最背面へ移動、オブジェクトの選択と表示、配置の「枠線に合わせる」、回転: 右へ／左へ 90 度・上下反転・左右反転、サイズ: 高さと幅（cm）、コードの表示）。書式は右のペインにも出る（サイズ・回転・塗りつぶしと線・テキスト・コントロールの設定・イベント）。上の丸いハンドルのドラッグ（Shift で 15° ずつ）・Alt+← / Alt+→ でも回転。右クリックにも重なり順と「回転」 |
 | 連続データ（フィルハンドル） | 選択範囲の右下の ■ をドラッグ（数値・日付・「第1回」のような番号は続きを、数式は参照をずらして入力）。ダブルクリックで隣の列の下端まで |
@@ -339,7 +339,7 @@ ras book edit Book.xlsm --op '{"op":"conditional","sheet":"Sheet1","range":"D2:D
 ras book edit Book.xlsm --op '{"op":"shape","sheet":"Sheet1","shape":"roundRect","at":"B2","width":120,"height":40,"text":"集計"}'   # 図形（"range":"B2:D4" で範囲に重ねる。textBox・line・arrow なども）
 ras book edit Book.xlsm --op '{"op":"picture","sheet":"Sheet1","file":"logo.png","at":"F2","width":200}'   # 画像（"data" に base64 でも。大きさを省略すると画像の大きさ）
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"図 2","at":"H2"}'   # 図形・画像・グラフの移動（"width"・"height" でサイズ、"text" で図形の文字、"delete":true で削除）
-ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"楕円 1","fill":"#FF0000","line":null,"rotation":30,"order":"front"}'   # 塗りつぶし・線（"lineWidth" で太さ）・回転（"flipH"・"flipV" で反転）・重なり順（front / forward / backward / back）
+ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"楕円 1","fill":"#FF0000","line":null,"rotation":30,"order":"front"}'   # 塗りつぶし・線（"lineWidth" で太さ）・回転（"flipH"・"flipV" で反転）・調整値（"adjust": {"adj": 25000}）・重なり順（front / forward / backward / back）
 ras book edit Book.xlsm --op '{"op":"control","sheet":"Sheet1","control":"button","at":"B2","text":"集計","macro":"Module1.run"}'   # フォームコントロール（checkBox・listBox など。"link" でリンクするセル、"items" でリストの範囲）
 ras book edit Book.xlsm --op '{"op":"activeX","sheet":"Sheet1","control":"commandButton","at":"B4"}'   # ActiveX コントロール（textBox・comboBox など。名前は CommandButton1 など、"name" で指定もできる）
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","shape":1025,"at":"D2"}'   # フォームコントロールの移動（"delete":true で削除。名前でも指定できる）

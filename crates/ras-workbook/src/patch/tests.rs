@@ -3365,3 +3365,61 @@ fn borders_take_the_line_and_the_color_of_the_ribbon() {
         "{styles}"
     );
 }
+
+#[test]
+fn adjust_values_of_a_shape() {
+    // A shape put on a sheet: the page gets its adjust handles, with no values of its own.
+    let out = edit(r#"{"op":"shape","shape":"roundRect","at":"A20","width":100,"height":50}"#);
+    let objects = view(&out)["sheets"][0]["objects"].clone();
+    let shown = objects
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["adjust"]["prst"] == json!("roundRect"))
+        .unwrap()
+        .clone();
+    assert_eq!(shown["adjust"]["adj"], json!({}));
+    assert_eq!(shown["adjust"]["ah"][0]["x"], json!(["adj", "0", "50000"]));
+    let name = shown["name"].as_str().unwrap().to_string();
+    // Its handle dragged: the value in the avLst, as Excel writes it; the others stay.
+    let op = |adjust: &str| format!(r#"{{"op":"object","name":"{name}","adjust":{adjust}}}"#);
+    let set = apply(&out, &ops(&op(r#"{"adj":30000}"#))).unwrap();
+    let doc = part(&set, "xl/drawings/drawing1.xml");
+    assert!(
+        doc.contains(r#"<a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 30000"/></a:avLst></a:prstGeom>"#),
+        "{doc}"
+    );
+    let shown = view(&set)["sheets"][0]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == json!(name))
+        .unwrap()["adjust"]["adj"]
+        .clone();
+    assert_eq!(shown, json!({ "adj": 30000.0 }));
+    let again = apply(&set, &ops(&op(r#"{"adj":5000,"adj2":1}"#))).unwrap();
+    let doc = part(&again, "xl/drawings/drawing1.xml");
+    assert!(doc.contains(r#"<a:avLst><a:gd name="adj" fmla="val 5000"/><a:gd name="adj2" fmla="val 1"/></a:avLst>"#), "{doc}");
+    // Not a name of an adjust value, not a number, a picture: refused.
+    assert!(
+        parse_ops(
+            &json!({"op":"object","name":"x","adjust":{"a b":1}}),
+            Some("Data")
+        )
+        .is_err()
+    );
+    assert!(
+        parse_ops(
+            &json!({"op":"object","name":"x","adjust":{"adj":"1"}}),
+            Some("Data")
+        )
+        .is_err()
+    );
+    assert!(
+        parse_ops(
+            &json!({"op":"object","name":"x","adjust":[1]}),
+            Some("Data")
+        )
+        .is_err()
+    );
+}
