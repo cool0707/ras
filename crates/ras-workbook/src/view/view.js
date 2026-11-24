@@ -5281,7 +5281,21 @@
         });
     }
     const BORDERS = [["bottom", "下罫線"], ["top", "上罫線"], ["left", "左罫線"], ["right", "右罫線"], ["none", "枠なし"], ["all", "格子"], ["outline", "外枠"], ["thick", "太い外枠"]];
-    const NUMBER_FORMATS = [["General", "標準"], ["0.00", "数値"], ["#,##0", "桁区切り"], ["¥#,##0", "通貨"], ["0%", "パーセント"], ["yyyy/m/d", "日付"], ["h:mm", "時刻"], ["@", "文字列"]];
+    // The formats of the ribbon's list (as Japanese Excel 2021 gives them, in the file's spelling).
+    const ACCOUNTING_YEN = '_ ¥* #,##0_ ;_ ¥* -#,##0_ ;_ ¥* "-"_ ;_ @_ ';
+    const NUMBER_FORMATS = [
+        ["General", "標準"],
+        ["0.00", "数値"],
+        ["¥#,##0;[Red]¥-#,##0", "通貨"],
+        [ACCOUNTING_YEN, "会計"],
+        ["m/d/yyyy", "短い日付形式"],
+        ["[$-F800]dddd, mmmm dd, yyyy", "長い日付形式"],
+        ["[$-F400]h:mm:ss AM/PM", "時刻"],
+        ["0.00%", "パーセンテージ"],
+        ["# ?/?", "分数"],
+        ["0.00E+00", "指数"],
+        ["@", "文字列"],
+    ];
     const FONT_SIZES = [6, 8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
     // The fonts listed until those of the system are known.
     const FONT_NAMES = ["游ゴシック", "游ゴシック Light", "游明朝", "ＭＳ ゴシック", "ＭＳ Ｐゴシック", "ＭＳ 明朝", "ＭＳ Ｐ明朝", "メイリオ", "Meiryo UI", "BIZ UDゴシック", "BIZ UDPゴシック", "Arial", "Calibri", "Century", "Consolas", "Segoe UI", "Times New Roman", "Verdana"];
@@ -5811,7 +5825,7 @@
                 askNumberFormat();
                 return;
             }
-            if (number.value) format({ numberFormat: fileCode(number.value) });
+            if (number.value) format({ numberFormat: number.value });
             focusGrid();
         });
         row(numberRows);
@@ -6271,8 +6285,7 @@
         if (![...tools.fontSize.options].some((o) => o.value === size)) tools.fontSize.appendChild(el("option", null, size)).value = size;
         tools.fontSize.value = size;
         if (document.activeElement !== tools.fontName) tools.fontName.value = font.name;
-        // (A date of the system's short format is `m/d/yyyy` in the file, shown `yyyy/m/d`.)
-        const code = cell.sn || cell.n || "General";
+        const code = cell.n || "General";
         tools.numberFormat.value = NUMBER_FORMATS.some(([c]) => c === code) ? code : "";
         tools.merge.classList.toggle("on", !!sel && single(sel) && mergedIn(sel));
         tools.filter.classList.toggle("on", !!view.sheet.filter);
@@ -6716,7 +6729,7 @@
     // A format as the dialog shows it (Japanese Excel's NumberFormatLocal).
     function localCode(code) {
         if (code === "General") return "G/標準";
-        let out = code;
+        let out = code.replace(/General/gi, "G/標準");
         for (const [en, ja] of FORMAT_COLORS) out = out.replace(new RegExp(`\\[${en}\\]`, "gi"), `[${ja}]`);
         return out;
     }
@@ -6726,15 +6739,39 @@
         if (/^(G\/標準|general)$/i.test(code)) return "General";
         if (code === "yyyy/m/d") return "m/d/yyyy";
         if (code === "yyyy/m/d h:mm") return "m/d/yyyy h:mm";
-        let out = code;
+        let out = code.split("G/標準").join("General");
         for (const [en, ja] of FORMAT_COLORS) out = out.split(`[${ja}]`).join(`[${en}]`);
         return out;
     }
-    // The formats of the 日付 and 時刻 lists (as Japanese Excel 2021 offers them, eras too).
-    const DATE_CODES = ["yyyy/m/d", 'yyyy"年"m"月"d"日"', 'yyyy"年"m"月"', 'm"月"d"日"', "[$-411]ge.m.d", '[$-411]ggge"年"m"月"d"日"', '[$-ja-JP-x-gannen]ggge"年"m"月"d"日"', '[$-411]gge"年"m"月"d"日"', "[$-411]ge/m/d", "yyyy/m/d(aaa)", 'yyyy"年"m"月"d"日"(aaaa)', "m/d", "yy/m/d", "yyyy/mm/dd", "yyyy-mm-dd", "m/d/yy", "d-mmm", "d-mmm-yy", "mmm-yy", "yyyy/m/d h:mm", "yyyy/m/d h:mm AM/PM"];
-    const TIME_CODES = ["h:mm", "h:mm:ss", "h:mm AM/PM", "h:mm:ss AM/PM", 'h"時"mm"分"', 'h"時"mm"分"ss"秒"', "[h]:mm:ss", "mm:ss", "yyyy/m/d h:mm"];
-    const CUSTOM_CODES = ["G/標準", "0", "0.00", "#,##0", "#,##0.00", "#,##0;-#,##0", "#,##0;[赤]-#,##0", "#,##0.00;[赤]-#,##0.00", "¥#,##0;¥-#,##0", "¥#,##0;[赤]¥-#,##0", "0%", "0.00%", "0.00E+00", "##0.0E+0", "# ?/?", "@"]
-        .concat(DATE_CODES, TIME_CODES.filter((c) => !DATE_CODES.includes(c)));
+    // The formats of the 日付 and 時刻 lists (as Japanese Excel 2021 offers them, eras too; not
+    // those of 午前/午後, which the cells do not show as Excel does). Those of the system (Excel
+    // marks them with *): its short date (`yyyy/m/d`, `m/d/yyyy` in the file), its long date and
+    // its time.
+    const SYSTEM_CODES = ["yyyy/m/d", "[$-F800]dddd, mmmm dd, yyyy", "[$-F400]h:mm:ss AM/PM"];
+    const DATE_CODES = ["yyyy/m/d", "[$-F800]dddd, mmmm dd, yyyy", 'yyyy"年"m"月"d"日"', 'yyyy"年"m"月"', 'm"月"d"日"', "[$-411]ge.m.d", '[$-411]ggge"年"m"月"d"日"', '[$-ja-JP-x-gannen]ggge"年"m"月"d"日"', '[$-411]gge"年"m"月"d"日"', "[$-411]ge/m/d", "yyyy/m/d(aaa)", 'yyyy"年"m"月"d"日"(aaaa)', "m/d", "yy/m/d", "yyyy/mm/dd", "yyyy-mm-dd", "m/d/yy", "d-mmm", "d-mmm-yy", "mmm-yy", "yyyy/m/d h:mm", "yyyy/m/d h:mm AM/PM"];
+    const TIME_CODES = ["[$-F400]h:mm:ss AM/PM", "h:mm", "[$-409]h:mm AM/PM", "h:mm:ss", "[$-409]h:mm:ss AM/PM", "[$-409]yyyy/m/d h:mm AM/PM", "yyyy/m/d h:mm", 'h"時"mm"分"', 'h"時"mm"分"ss"秒"', "mm:ss.0", "[h]:mm:ss"];
+    // The 分数 and the その他 (Japanese) lists: their formats and the names Excel gives them.
+    const FRACTION_CODES = [
+        ["# ?/?", "1 桁増加 (1/4)"],
+        ["# ??/??", "2 桁増加 (21/25)"],
+        ["# ???/???", "3 桁増加 (312/943)"],
+        ["# ?/2", "2 分の 1 (1/2)"],
+        ["# ?/4", "4 分の 1 (2/4)"],
+        ["# ?/8", "8 分の 1 (4/8)"],
+        ["# ??/16", "16 分の 1 (8/16)"],
+        ["# ?/10", "10 分の 1 (3/10)"],
+        ["# ??/100", "100 分の 1 (30/100)"],
+    ];
+    const SPECIAL_CODES = [
+        ["[<=999]000;[<=9999]000-00;000-0000", "郵便番号"],
+        ["[<=99999999]####-####;(00) ####-####", "電話番号 (東京)"],
+        ["[DBNum1][$-411]G/標準", "漢数字 (十二万三千四百)"],
+        ["[DBNum2][$-411]G/標準", "大字 (壱拾弐萬参阡四百)"],
+        ["[DBNum3][$-411]0", "全角 (１２３４５)"],
+        ["[DBNum3][$-411]#,##0", "全角 桁区切り (１２,３４５)"],
+    ];
+    const CUSTOM_CODES = ["G/標準", "0", "0.00", "#,##0", "#,##0.00", "#,##0;-#,##0", "#,##0;[赤]-#,##0", "#,##0.00;[赤]-#,##0.00", "¥#,##0;¥-#,##0", "¥#,##0;[赤]¥-#,##0", "0%", "0.00%", "0.00E+00", "##0.0E+0", "# ?/?", "# ??/??", "@"]
+        .concat(DATE_CODES, TIME_CODES.filter((c) => !DATE_CODES.includes(c)), SPECIAL_CODES.map((c) => c[0]));
     // The numbers: the places, the separators, and how a negative number shows.
     const NEGATIVES = [
         ["minus", "-1,234", (p) => `${p};-${p}`],
@@ -6771,11 +6808,25 @@
                 return `${p};${neg}`;
             },
         },
+        {
+            key: "accounting",
+            label: "会計",
+            note: "会計の表示形式は、通貨記号と小数点の位置をそろえて表示します。",
+            places: true,
+            symbol: true,
+            code: (s) => {
+                const sym = `${s.symbol}* `;
+                const n = `#,##0${places(s.places)}`;
+                return `_ ${sym}${n}_ ;_ ${sym}-${n}_ ;_ ${sym}"-"${"?".repeat(s.places)}_ ;_ @_ `;
+            },
+        },
         { key: "date", label: "日付", note: "日付の表示形式は日付/時刻のシリアル値を日付として表示します。", list: DATE_CODES },
         { key: "time", label: "時刻", note: "時刻の表示形式は日付/時刻のシリアル値を時刻として表示します。", list: TIME_CODES },
         { key: "percent", label: "パーセンテージ", note: "セルの値を 100 倍し、パーセント記号 (%) を付けて表示します。", places: true, code: (s) => `0${places(s.places)}%` },
+        { key: "fraction", label: "分数", note: "", list: FRACTION_CODES.map((c) => c[0]), names: FRACTION_CODES.map((c) => c[1]) },
         { key: "scientific", label: "指数", note: "数値を指数で表示します。", places: true, code: (s) => `0${places(s.places)}E+00` },
         { key: "text", label: "文字列", note: "文字列として扱われます。数値も文字列として扱われ、入力したとおりに表示されます。", code: () => "@" },
+        { key: "special", label: "その他", note: "その他の表示形式は、郵便番号や電話番号などを表示するときに使用します。", list: SPECIAL_CODES.map((c) => c[0]), names: SPECIAL_CODES.map((c) => c[1]) },
         { key: "custom", label: "ユーザー定義", note: "基になる組み込みの表示形式を選択し、新しい表示形式に変更します。", list: CUSTOM_CODES, custom: true },
     ];
     // The kind (and its settings) a format is one of, as the dialog opens on it.
@@ -6814,7 +6865,8 @@
         if (!editable || busy || !sel || !view) return;
         if (entry) commit(null);
         const cell = (activeTd && activeTd.cell) || cellOf(sel.ar, sel.ac) || {};
-        const now = localCode(cell.sn || cell.n || "General");
+        // (The system's long date and time are kept as the file has them, as Excel lists them.)
+        const now = localCode(/^\[\$-F[48]00\]/i.test(cell.n || "") ? cell.n : cell.sn || cell.n || "General");
         const start = kindOf(now);
         const form = openDialog("セルの書式設定", "numfmtdlg");
         const tabs = form.appendChild(el("div", "fmttabs"));
@@ -6845,17 +6897,19 @@
             if (kind.code) code = kind.code(state);
             showSample();
         };
-        // A list of formats, each shown as the sample (or 2012/3/14 13:30:55, as Excel does).
+        // A list of formats, each shown by its name, or as Excel's sample (2012/3/14 13:30:55.2;
+        // 37:30:55 for hours on end) shows in it (* before those of the system), or as it is (ユーザー定義).
         const listOf = (codes, onPick) => {
             const list = opts.appendChild(el("select", "fmtlist"));
             list.size = 8;
-            const x = typeof cell.x === "number" ? cell.x : 40982.56313657407;
-            for (const c of codes) {
-                const shown = kind.custom ? c : formatNumber(x, fileCode(c) === "m/d/yyyy" ? "yyyy/m/d" : fileCode(c) === "m/d/yyyy h:mm" ? "yyyy/m/d h:mm" : fileCode(c));
-                const o = list.appendChild(el("option", null, shown ?? c));
+            const x = 40982 + 48655.2 / 86400;
+            codes.forEach((c, i) => {
+                const file = fileCode(c);
+                const shown = kind.custom ? c : kind.names ? kind.names[i] : (SYSTEM_CODES.includes(c) ? "*" : "") + (formatNumber(/\[[hms]+\]/i.test(file) ? 1 + (x % 1) : x, file === "m/d/yyyy" ? "yyyy/m/d" : file === "m/d/yyyy h:mm" ? "yyyy/m/d h:mm" : file) ?? c);
+                const o = list.appendChild(el("option", null, shown));
                 o.value = c;
                 o.title = c;
-            }
+            });
             list.value = codes.includes(code) ? code : "";
             list.addEventListener("change", () => onPick(list.value));
             return list;
@@ -7428,7 +7482,7 @@
     // A number as the status bar shows it: in the number format of the active cell, as Excel
     // 2021 shows it (General in at most 11 characters, without separators).
     function statText(x, code) {
-        const shown = code ? formatNumber(x, code) : null;
+        const shown = code ? formatNumber(x, code, true) : null;
         return shown !== null ? shown : generalFit(x, () => true) || String(x);
     }
     function showStats() {
@@ -7470,7 +7524,8 @@
 
     const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
     const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    function formatNumber(x, code) {
+    // (`hours`: times without a day as hours on end, as the status bar shows a sum of them.)
+    function formatNumber(x, code, hours) {
         if (/^general$/i.test(code)) return null;
         // The system's long date and time, as Japanese Windows has them.
         if (/^\[\$-F800\]/i.test(code)) code = 'yyyy"年"m"月"d"日"';
@@ -7506,18 +7561,44 @@
             s = secs[1];
             sign = "";
         } else if (x === 0 && secs.length > 2) return null; // (Excel shows 0, not the zero's section.)
+        const fraction = /^(?:([#0?]+) +)?([#0?]+)\/([#0?]+|[1-9]\d*)$/.exec(s);
+        if (fraction) return sign + formatFraction(Math.abs(x), fraction);
         const toks = tokensOf(s);
         if (!toks) return null;
         if (toks.some((t) => t.k === "date" || t.k === "ampm")) {
-            // (Not fractions of a second, nor dates before 1900.)
-            if (x < 0 || toks.some((t) => t.k === "ph")) return null;
-            // Times (without a day) are shown as hours on end: 32:24:00.
+            // (Not dates before 1900; fractions of a second only as 0s after the seconds.)
+            if (x < 0) return null;
+            const after = (i) => toks.slice(0, i).reverse().find((t) => t.k !== "ph");
+            const second = (i) => toks.slice(0, i).reverse().find((t) => t.k === "date");
+            if (toks.some((t, i) => t.k === "ph" && (t.v !== "0" || (after(i) || {}).k !== "dot" || !/^s/.test((second(i) || {}).v || "")))) return null;
+            // In the status bar, times (without a day) are shown as hours on end: 32:24:00.
             const day = toks.some((t) => t.k === "date" && (/^[ydage]/.test(t.v) || /^m{3,}$/.test(t.v)));
             const time = toks.some((t) => t.k === "ampm" || (t.k === "date" && /^[hs]/.test(t.v)));
-            return formatDate(x, time && !day ? tokensOf("[h]:mm:ss") : toks);
+            return formatDate(x, hours && time && !day ? tokensOf("[h]:mm:ss") : toks);
         }
         const out = formatDigits(Math.abs(x), toks);
         return out === null ? null : sign + out;
+    }
+    // A fraction (`# ?/?`, `# ??/16`): the nearest one with as many digits in the denominator,
+    // or with the denominator given; the integer before it when the format has one.
+    function formatFraction(x, [, whole, num, den]) {
+        let w = whole ? Math.floor(x) : 0;
+        const f = x - w;
+        let n, d;
+        if (/^\d+$/.test(den)) {
+            d = Number(den);
+            n = Math.round(f * d);
+        } else {
+            [n, d] = [Math.round(f), 1];
+            for (let t = 2, best = Math.abs(f - n); t < 10 ** den.length; t++) {
+                const e = Math.abs(f - Math.round(f * t) / t);
+                if (e < best - 1e-12) [n, d, best] = [Math.round(f * t), t, e];
+            }
+        }
+        if (whole && n === d) [w, n] = [w + 1, 0];
+        const blank = " ".repeat(num.length + den.length + 1);
+        if (whole && n === 0) return `${w} ${blank}`;
+        return `${whole && w ? `${w} ` : ""}${String(n).padStart(num.length, " ")}/${/^\d+$/.test(den) ? den : String(d).padEnd(den.length, " ")}`;
     }
     // A section's parts: literal text, digit places (0 # ?), the point, commas, %, E+, date parts.
     function tokensOf(s) {
@@ -7653,12 +7734,17 @@
         return { letter, name, year: d.getUTCFullYear() - new Date(start).getUTCFullYear() + 1 };
     }
     function formatDate(x, toks) {
+        // The 0s after the seconds: their tenths, hundredths and thousandths.
+        const places = Math.min(3, toks.filter((t) => t.k === "ph").length);
         let days = Math.floor(x);
-        let secs = Math.round((x - days) * 86400);
-        if (secs >= 86400) {
+        let parts = Math.round((x - days) * 86400 * 10 ** places);
+        if (parts >= 86400 * 10 ** places) {
             days++;
-            secs -= 86400;
+            parts -= 86400 * 10 ** places;
         }
+        const secs = Math.floor(parts / 10 ** places);
+        const frac = String(parts % 10 ** places).padStart(places, "0");
+        let firstPh = true;
         const d = new Date(Date.UTC(1899, 11, 30) + days * 864e5);
         const ampm = toks.some((t) => t.k === "ampm");
         const h = Math.floor(secs / 3600),
@@ -7670,7 +7756,10 @@
             if (t.k === "lit") out += t.v;
             else if (t.k === "ampm") out += t.v.toLowerCase().startsWith("am") ? (h < 12 ? "AM" : "PM") : h < 12 ? "A" : "P";
             else if (t.k === "dot") out += ".";
-            else if (t.k === "date") {
+            else if (t.k === "ph") {
+                if (firstPh) out += frac;
+                firstPh = false;
+            } else if (t.k === "date") {
                 const v = t.v;
                 // m and mm are minutes after hours or before seconds.
                 const prev = toks.slice(0, i).reverse().find((x) => x.k === "date") || {};
