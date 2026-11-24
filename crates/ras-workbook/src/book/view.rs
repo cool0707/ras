@@ -228,8 +228,19 @@ fn cond_css(fx: &super::cond::CondFx, own: &Style) -> String {
     css
 }
 
+/// A diagonal line of a cell as a CSS image stretched over it (`down`: ＼, else ／).
+fn diagonal_image(down: bool, width: u32, color: &str) -> String {
+    let d = if down { "M0 0L1 1" } else { "M0 1L1 0" };
+    format!(
+        "url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1' preserveAspectRatio='none'><path d='{d}' stroke='{}' stroke-width='{width}' vector-effect='non-scaling-stroke'/></svg>\")",
+        color.replace('#', "%23")
+    )
+}
+
 fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -> String {
     let mut css = String::new();
+    // The pattern of the fill (its image), drawn under the diagonal lines.
+    let mut pattern = None;
     if let Some(pf) = st.fill().and_then(|f| f.pattern_fill()) {
         let t = pf.pattern_type().value_string();
         if !(t == "none" || t.is_empty()) {
@@ -248,10 +259,11 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
                     .background_color()
                     .and_then(|c| css_color(c, theme))
                     .unwrap_or_else(|| "#FFFFFF".into());
+                let image = pattern_image(tile, &fg);
                 css.push_str(&format!(
-                    "background:{bg} {};box-shadow:-1px 0 {bg},0 -1px {bg},-1px -1px {bg};",
-                    pattern_image(tile, &fg)
+                    "background:{bg} {image};box-shadow:-1px 0 {bg},0 -1px {bg},-1px -1px {bg};"
                 ));
+                pattern = Some(image);
             }
         }
     }
@@ -298,6 +310,37 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
                     .and_then(|c| css_color(c, theme))
                     .unwrap_or_else(|| "#000".into());
                 css.push_str(&format!("border-{side}:{w}px {line} {color};"));
+            }
+        }
+        // The diagonals (＼ and ／, one line for both), stretched over the cell.
+        let d = b.diagonal();
+        if let Some((w, _)) = line_css(d.border_style()) {
+            let color = d
+                .color()
+                .as_ref()
+                .and_then(|c| css_color(c, theme))
+                .unwrap_or_else(|| "#000".into());
+            let mut images: Vec<String> = [(b.diagonal_down(), true), (b.diagonal_up(), false)]
+                .into_iter()
+                .filter(|(on, _)| *on)
+                .map(|(_, down)| diagonal_image(down, w, &color))
+                .collect();
+            if !images.is_empty() {
+                let lines = images.len();
+                let tiled = pattern.is_some();
+                images.extend(pattern.take());
+                let mut size = vec!["100% 100%"; lines];
+                let mut repeat = vec!["no-repeat"; lines];
+                if tiled {
+                    size.push("auto");
+                    repeat.push("repeat");
+                }
+                css.push_str(&format!(
+                    "background-image:{};background-size:{};background-repeat:{};",
+                    images.join(","),
+                    size.join(","),
+                    repeat.join(",")
+                ));
             }
         }
     }

@@ -911,6 +911,14 @@ impl Book {
                         Self::set_border_prop(&mut Border::default(), &what, v)?;
                         self.restyle(si, cells, &|style| {
                             let _ = Self::set_border_prop(border_mut(style, side), &what, v);
+                            // A diagonal without a line: no diagonal (both share the one line).
+                            if matches!(side, Side::DiagonalDown | Side::DiagonalUp) {
+                                let b = style.borders_mut();
+                                if matches!(b.diagonal().border_style(), "" | "none") {
+                                    b.set_diagonal_down(false);
+                                    b.set_diagonal_up(false);
+                                }
+                            }
                         })?;
                     }
                 } else {
