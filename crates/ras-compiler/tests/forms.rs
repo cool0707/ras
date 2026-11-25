@@ -1113,6 +1113,19 @@ export function run() {
         assert!(joined.contains(code), "{code}: {joined}");
     }
 
+    // `unload(this)` in a form shown by showModal(): the result is not guaranteed.
+    let (diags, _) = compile(
+        "@on(\"btnOK.Click\")\nfunction ok() { this.close(this.txtName.text); }\n@on(\"btnCancel.Click\")\nfunction cancel() { unload(this); }\n",
+        &[("main", "export function run() { msgBox(frmInput.showModal()); }")],
+    );
+    assert!(diags.iter().any(|d| d.starts_with("W0631")), "{diags:#?}");
+    // A form that is only shown by show() may unload itself.
+    let (diags, _) = compile(
+        "@on(\"btnCancel.Click\")\nfunction cancel() { unload(this); }\n",
+        &[("main", "export function run() { frmInput.show(); }")],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+
     // No constructor: no arguments.
     let (diags, _) = compile(
         "",

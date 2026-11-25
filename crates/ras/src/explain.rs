@@ -280,6 +280,12 @@ pub const ENTRIES: &[Entry] = &[
     e("W0510", "ブックの代役にないメンバー", "そのメンバーは、Excel を使わない実行（`ras run`、`ras test`、Excel のないデバッグ実行）のブックの代役にありません。そこで実行すると、エラー 438 になります。VBA として Excel で動かす分には問題ありません。代役で動かすには、代役にあるメンバーで書き換えるか、その部分をテスト・実行の対象から外してください。`ras check --target stand-in` を付けたときにだけ出ます。"),
     e("W0511", "Excel が必要な操作", "その操作（手書き VBA の実行、ファイルの選択ダイアログ、`Application.OnTime` など）は Excel そのものが必要で、ブックの代役ではエラー 445 になります。テストでは `mockRun` / `mockGetOpenFilename` など、`ras run` では `--open-file` / `--replace-run` などで置き換えられます。`ras check --target stand-in` を付けたときにだけ出ます。"),
     e("W0512", "代役で作れない COM オブジェクト", "その ProgID の COM オブジェクトは、COM を使わない実行では作れません（エラー 429）。作れるのは `Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` です。テストでは `mockCreateObject`、`ras run` では `--replace-object` で、同じメンバーを持つ RAS のクラスに置き換えられます。`ras check --target stand-in` を付けたときにだけ出ます。"),
+    x(
+        "W0631",
+        "`showModal()` で表示するフォームの `unload(this)`",
+        "`showModal()` で表示する（`this.close()` を使う）フォームを、コードビハインドの中から `unload(this)` で閉じています。VBA はアンロードしたフォームのモジュール変数を参照するとフォームを読み込み直す（`Initialize` が起きる）ため、`showModal()` が `this.close(値)` の値を返せる保証がありません。`this.close(値)` で閉じてください（値を返さないなら `this.close()`。`show()` で表示したフォームはアンロードされます）。",
+        "@on(\"btnCancel.Click\")\nfunction cancel() {\n    this.close();          // unload(this) ではなく\n}",
+    ),
     e("W0630", "`fastMode()` の使い方", "`fastMode()` を呼ぶだけでは、関数を抜けるまで元に戻りません。`using _ = fastMode();` と書くと、そのブロックを抜けるときに元の状態に戻ります。関数全体なら `@fast` を付けます。"),
     e("W1410", "デバッグ実行で動かないもの", "`declare` した DLL の関数など、JavaScript のランタイム（デバッグ実行・`ras run`・`ras test`）では動かないものを使っています。VBA のビルドでは動きますが、デバッグ実行では呼び出した時点でエラーになります。"),
 ];

@@ -6166,9 +6166,60 @@ impl Checker<'_> {
     // ------------------------------------------------------------------ lints (spec §6)
 
     fn lints(&mut self) {
+        self.lint_unload_of_modal_forms();
         self.lint_inline_recursion();
         self.lint_identifier_case();
         self.lint_docs();
+    }
+
+    /// `unload(this)` in the code-behind of a form shown by `showModal()` or closed by
+    /// `this.close()` (spec §14.11.9): once VBA has unloaded the form, `RAS_ShowModal` cannot
+    /// read the result back reliably.
+    fn lint_unload_of_modal_forms(&mut self) {
+        struct Finder<'a> {
+            spans: Vec<Span>,
+            _m: std::marker::PhantomData<&'a ()>,
+        }
+        impl<'a> crate::astutil::Visit<'a> for Finder<'a> {
+            fn expr(&mut self, e: &'a Expr) {
+                if let ExprKind::Call { callee, args, .. } = &e.kind {
+                    if matches!(&callee.peel().kind, ExprKind::Name(n) if n.text.eq_ignore_ascii_case("unload"))
+                        && args.len() == 1
+                        && matches!(args[0].peel().kind, ExprKind::This)
+                    {
+                        self.spans.push(e.span);
+                    }
+                }
+            }
+        }
+        for m in 0..self.prog.modules.len() {
+            let md = &self.prog.modules[m];
+            if !md
+                .form
+                .as_ref()
+                .is_some_and(|f| f.kind == ObjectKind::Form && f.modal)
+            {
+                continue;
+            }
+            // A function of the code-behind named `unload` is not the statement.
+            if md
+                .fns
+                .iter()
+                .any(|&f| self.prog.fns[f].name.eq_ignore_ascii_case("unload"))
+            {
+                continue;
+            }
+            let ast = md.ast.clone();
+            let mut finder = Finder {
+                spans: Vec::new(),
+                _m: std::marker::PhantomData,
+            };
+            crate::astutil::visit_module(&ast, &mut finder);
+            self.module = m;
+            for span in finder.spans {
+                self.warn(span, "W0631", "`showModal()` で表示するフォームを `unload(this)` で閉じると、`showModal()` の戻り値は保証されません（VBA はアンロードしたフォームの変数を参照すると読み込み直します）。`this.close(値)` / `this.close()` で閉じてください");
+            }
+        }
     }
 
     /// Rule 8: `inline` functions must not be (mutually) recursive.
