@@ -3020,7 +3020,7 @@
     function editShapeText(obj, all) {
         if (shapeEditor) return;
         const box = obj.box;
-        const shape = box.querySelector(":scope > .shape") || box;
+        const shape = box.querySelector(":scope > .shape, :scope > .refl > .shape") || box;
         const tb = obj.textBox;
         // (A warped text is put straight while it is typed.)
         const old = shape.querySelector(".stext, .warp");
@@ -3338,7 +3338,7 @@
     // ([drawn path, its index in `def.path`]) and the size of its SVG (pt); null when they do
     // not match (then the outline is shown instead).
     function drawnPaths(box, def) {
-        const svg = box.querySelector(":scope > .shape > svg");
+        const svg = box.querySelector(":scope > .shape > svg, :scope > .refl > .shape > svg");
         const drawn = svg ? [...svg.querySelectorAll(":scope > g > path")] : [];
         const vb = svg && svg.viewBox.baseVal;
         if (!drawn.length || !vb || !(vb.width > 0 && vb.height > 0)) return null;
