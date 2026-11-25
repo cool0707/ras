@@ -375,6 +375,11 @@ pub struct ObjectChange {
     pub max: Option<i64>,
     pub step: Option<i64>,
     pub page: Option<i64>,
+    /// The text box of a shape (its `bodyPr`): 垂直方向の配置 (`t`, `ctr`, `b`), 図形内でテキストを
+    /// 折り返す, and the margins (左, 上, 右, 下; points; None in them: what it has stays).
+    pub text_anchor: Option<String>,
+    pub text_wrap: Option<bool>,
+    pub inset: Option<[Option<f64>; 4]>,
 }
 
 /// Where an object goes among those drawn over one another (配置 > 前面へ移動, ...).
@@ -1009,8 +1014,35 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     Some("back") => Some(Order::Back),
                     Some(other) => return Err(format!("`order` `{other}` は指定できません（front / forward / backward / back）")),
                 };
+                let text_anchor = match text("textAnchor").as_deref() {
+                    None => None,
+                    Some(a @ ("t" | "ctr" | "b")) => Some(a.to_string()),
+                    Some(other) => return Err(format!("`textAnchor` `{other}` は指定できません（t / ctr / b）")),
+                };
+                let inset = match o.get("inset") {
+                    None | Some(Json::Null) => None,
+                    Some(Json::Object(m)) => {
+                        let mut four = [None; 4];
+                        for (k, v) in m {
+                            let i = ["left", "top", "right", "bottom"]
+                                .iter()
+                                .position(|x| x == k)
+                                .ok_or_else(|| format!("`inset` の `{k}` は指定できません（left / top / right / bottom）"))?;
+                            four[i] = Some(
+                                v.as_f64()
+                                    .filter(|x| x.is_finite() && (0.0..=1584.0).contains(x))
+                                    .ok_or_else(|| format!("`inset` の `{k}` は 0〜1584（ポイント）で指定してください"))?,
+                            );
+                        }
+                        four.iter().any(Option::is_some).then_some(four)
+                    }
+                    Some(_) => return Err("`inset` は {\"left\": 7.2, \"top\": 3.6} のように指定してください（ポイント）".into()),
+                };
                 let change = ObjectChange {
                     shape,
+                    text_anchor,
+                    text_wrap: o.get("textWrap").and_then(Json::as_bool),
+                    inset,
                     place: place_of(o)?,
                     text: text("text"),
                     fill: color("fill")?,
@@ -1042,7 +1074,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     page: int_of(o, "page")?,
                 };
                 if change == (ObjectChange { shape, ..Default::default() }) {
-                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`textAnchor`・`textWrap`・`inset`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
                 }
                 Op::Object { sheet, name, change }
             }

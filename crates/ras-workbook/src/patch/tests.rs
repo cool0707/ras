@@ -1613,6 +1613,58 @@ fn objects_filled_lined_turned_and_reordered() {
         "{}",
         shape(&none, "正方形/長方形 2")
     );
+    // The text box: the vertical alignment, the wrapping, the margins (a shape without text
+    // gets an empty text body), then its text keeps them.
+    let boxed = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","textAnchor":"b","textWrap":false,"inset":{"left":0,"bottom":9}}"#),
+    )
+    .unwrap();
+    let sp = shape(&boxed, "正方形/長方形 2");
+    let pr = &sp[sp.find("<a:bodyPr").unwrap()..];
+    let pr = &pr[..pr.find("/>").unwrap()];
+    for want in [
+        r#"anchor="b""#,
+        r#"wrap="none""#,
+        r#"lIns="0""#,
+        r#"bIns="114300""#,
+    ] {
+        assert!(pr.contains(want), "{want}: {sp}");
+    }
+    let texted = apply(
+        &boxed,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","text":"文字","textAnchor":"ctr"}"#),
+    )
+    .unwrap();
+    let sp = shape(&texted, "正方形/長方形 2");
+    assert!(
+        sp.contains("文字") && sp.contains(r#"anchor="ctr""#) && sp.contains(r#"wrap="none""#),
+        "{sp}"
+    );
+    let shown = view(&texted);
+    let tb = &shown["sheets"][0]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == "正方形/長方形 2")
+        .unwrap()["textBox"];
+    assert_eq!(
+        (
+            tb["anchor"].as_str(),
+            tb["wrap"].as_bool(),
+            tb["inset"][0].as_f64(),
+            tb["inset"][3].as_f64()
+        ),
+        (Some("ctr"), Some(false), Some(0.0), Some(9.0))
+    );
+    assert!(
+        apply(
+            &out,
+            &ops(r#"{"op":"object","name":"直線コネクタ 3","textAnchor":"t"}"#)
+        )
+        .unwrap_err()
+        .contains("テキスト ボックス")
+    );
     // The width alone keeps the line's color; the arrow's head stays.
     let arrow = edit(r#"{"op":"shape","shape":"arrow","at":"A20","width":40}"#);
     let wide = apply(
@@ -1787,6 +1839,8 @@ fn objects_filled_lined_turned_and_reordered() {
         json!({"op":"object","name":"x","fill":"red"}),
         json!({"op":"object","name":"x","order":"top"}),
         json!({"op":"object","name":"x","lineWidth":-1}),
+        json!({"op":"object","name":"x","textAnchor":"middle"}),
+        json!({"op":"object","name":"x","inset":{"center":1}}),
     ] {
         assert!(parse_ops(&bad, Some("Data")).is_err(), "{bad}");
     }

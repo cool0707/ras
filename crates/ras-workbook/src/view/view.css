@@ -108,6 +108,10 @@ td.fml { font-family: Consolas, "MS Gothic", monospace; font-size: 10pt; color: 
 .obj.on.framed { outline: 0; box-shadow: none; }
 .objframe { position: absolute; inset: 0; z-index: 2; pointer-events: none; outline: 1px solid var(--accent); outline-offset: 1px; box-shadow: 0 0 0 3px rgba(228, 80, 26, .25); }
 .objframe .objhandle { pointer-events: auto; }
+/* The text of a shape being typed in it. */
+.obj.typing { cursor: text; }
+.stedit { position: absolute; inset: 0; z-index: 1; box-sizing: border-box; display: flex; flex-direction: column; font: 11pt "Yu Gothic", Meiryo, sans-serif; line-height: 1.2; }
+.stedit textarea { flex: none; display: block; width: 100%; margin: 0; padding: 0; border: 0; outline: 0; background: none; color: inherit; font: inherit; line-height: 1.2; resize: none; overflow: hidden; cursor: text; }
 .objhandle.rot { top: -26px; left: calc(50% - 6px); width: 12px; height: 12px; cursor: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><g stroke='%23fff' stroke-linejoin='round' stroke-linecap='round'><path d='M15.5 18.06A7 7 0 1 1 19 12' fill='none' stroke-width='4'/><path d='M15.2 10.5h7.6L19 15.8z' fill='%23fff' stroke-width='2'/></g><path d='M15.5 18.06A7 7 0 1 1 19 12' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round'/><path d='M15.2 10.5h7.6L19 15.8z' fill='%23000'/></svg>") 12 12, grab; background: var(--accent); border-color: #fff; }
 .objhandle.rot::after { content: ""; position: absolute; left: 3.5px; top: 10px; width: 1px; height: 12px; background: var(--accent); }
 .objhandle { position: absolute; z-index: 2; width: 12px; height: 12px; box-sizing: border-box; background: #fff; border: 2px solid var(--accent); border-radius: 50%; }
@@ -503,22 +507,38 @@ body.copying, body.copying td { cursor: copy; }
 #pane .pclose { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 3px; background: none; color: #444; font: 16px/1 inherit; cursor: pointer; }
 #pane .pclose:hover { background: #e6e6e6; }
 #pane .pbody { flex: 1; overflow: auto; padding: 6px 12px 12px; }
-#pane .pname { margin: 2px 0 6px; color: #444; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#pane .psec { padding: 6px 0 8px; border-top: 1px solid #e6e6e6; }
-#pane .psec h3 { margin: 0 0 6px; color: var(--accent-ink); font-size: 12px; }
-#pane .prow { display: flex; align-items: center; gap: 8px; min-height: 28px; }
-#pane .plabel { flex: none; width: 92px; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#pane .prow > input, #pane .prow > select { flex: 1; min-width: 0; height: 24px; padding: 0 4px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; }
+#pane .pname { margin: 2px 0 4px; color: #444; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* The pages of 図形の書式設定: one row of icons, the shown one underlined (as Excel's tabs). */
+#pane .ptabs { display: flex; gap: 4px; padding: 6px 10px 0; border-bottom: 1px solid var(--line); }
+#pane .ptab { position: relative; display: flex; align-items: center; justify-content: center; width: 36px; height: 34px; padding: 0 0 4px; border: 0; border-radius: 3px 3px 0 0; background: none; color: #444; cursor: pointer; }
+#pane .ptab:hover { background: #ececec; }
+#pane .ptab.on { color: var(--accent-ink); }
+#pane .ptab.on::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -1px; height: 2px; border-radius: 1px; background: var(--accent); }
+#pane .psec { padding: 2px 0 6px; }
+#pane .phead { display: flex; align-items: center; gap: 6px; width: 100%; height: 26px; margin: 0; padding: 0; border: 0; background: none; color: #000; font: inherit; font-weight: bold; text-align: left; cursor: pointer; }
+#pane .phead:hover { color: var(--accent-ink); }
+#pane .pchev { flex: none; width: 8px; height: 8px; margin: 0 2px 3px; border-right: 1.5px solid #555; border-bottom: 1.5px solid #555; transform: rotate(45deg); }
+#pane .psec.folded .pchev { margin: 0 3px 0 0; transform: rotate(-45deg); }
+#pane .psec.folded .pinner { display: none; }
+#pane .pinner { padding-left: 16px; }
+#pane .pradios { display: flex; flex-direction: column; padding-bottom: 4px; }
+#pane .pradio { display: flex; align-items: center; gap: 6px; min-height: 23px; cursor: pointer; }
+#pane .pradio input { margin: 0; accent-color: var(--accent); }
+#pane .pradios + .prow { margin-top: 2px; padding-top: 6px; border-top: 1px solid #e6e6e6; }
+#pane .prow { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+#pane .plabel { flex: 1; min-width: 0; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pane .prow > .spinbox input { width: 72px; }
+#pane .prow > input, #pane .prow > select { flex: none; width: 110px; min-width: 0; height: 24px; padding: 0 4px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; }
 #pane .prow > input:focus, #pane .prow > select:focus, #pane .ptext:focus { outline: 0; border-color: var(--accent); }
 #pane .prow > input[type="number"] { flex: none; width: 80px; text-align: right; }
-#pane .prow.pcheck { gap: 6px; }
+#pane .prow.pcheck { gap: 6px; margin-top: 2px; }
 #pane .prow.pcheck > input { flex: none; width: auto; height: auto; margin: 0 0 0 2px; accent-color: var(--accent); }
-#pane .punit { color: #555; }
 #pane .ptext { display: block; width: 100%; padding: 4px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; resize: vertical; }
 #pane .pbtns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 #pane .pbtns button, #pane .pcolor { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; cursor: pointer; }
 #pane .pbtns button:hover, #pane .pcolor:hover { background: var(--accent-hover); border-color: var(--accent); }
-#pane .pcolor { padding: 0 8px; }
+#pane .pcolor { padding: 0 6px; gap: 4px; }
+#pane .pcolor .pdrop { color: #555; font-size: 10px; }
 #pane .pcolor .sw { width: 14px; height: 14px; border: 1px solid #999; }
 #pane .pnote { color: #555; font-size: 12px; }
 #pane .pnone { padding: 8px 0; color: #777; }

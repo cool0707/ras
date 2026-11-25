@@ -2932,7 +2932,70 @@
     // F2, a double click: the text in the pane of the object.
     function editObjectText(obj) {
         if (!movable(obj) || obj.text === undefined || busy || !view) return;
-        openPane("format", "text");
+        if (obj.textBox && obj.box) editShapeText(obj);
+        else openPane("format", "text");
+    }
+    // The text of a shape typed in the shape, as Excel's: over its text, in its font, where its
+    // text box puts it. Enter starts a new line; Esc or a click elsewhere sets it.
+    let shapeEditor = null;
+    function editShapeText(obj) {
+        if (shapeEditor) return;
+        const box = obj.box;
+        const shape = box.querySelector(":scope > .shape") || box;
+        const tb = obj.textBox;
+        // (A warped text is put straight while it is typed.)
+        const old = shape.querySelector(".stext, .warp");
+        const cover = shape.appendChild(el("div", "stedit"));
+        const [l, t, r, b] = tb.inset;
+        const pad = old && old.classList.contains("stext") ? old.style.padding : `${t}pt ${r}pt ${b}pt ${l}pt`;
+        const just = { t: "flex-start", ctr: "center", b: "flex-end" }[tb.anchor] || "flex-start";
+        Object.assign(cover.style, { padding: pad, justifyContent: just, color: tb.color });
+        const ta = cover.appendChild(el("textarea"));
+        ta.spellcheck = false;
+        ta.value = obj.text;
+        if (!tb.wrap) ta.wrap = "off";
+        // The font of its first run, the alignment of its first paragraph.
+        const run = old && old.querySelector("span");
+        const para = old && old.querySelector("p");
+        if (run) {
+            const cs = getComputedStyle(run);
+            Object.assign(ta.style, { fontFamily: cs.fontFamily, fontSize: cs.fontSize, fontWeight: cs.fontWeight, fontStyle: cs.fontStyle });
+            // (A text filled with a gradient or a picture is see-through: typed in its style's color.)
+            if (!/^rgba\(.*,\s*0\)$|^transparent$/.test(cs.color)) ta.style.color = cs.color;
+        }
+        ta.style.textAlign = para ? para.style.textAlign || "left" : "center";
+        if (old) old.style.visibility = "hidden";
+        box.classList.add("typing");
+        const fit = () => {
+            ta.style.height = "auto";
+            ta.style.height = `${ta.scrollHeight}px`;
+        };
+        let done = false;
+        const finish = (back) => {
+            if (done) return;
+            done = true;
+            shapeEditor = null;
+            const text = ta.value;
+            cover.remove();
+            box.classList.remove("typing");
+            if (old) old.style.visibility = "";
+            if (text !== obj.text) objectEdit(obj, { text });
+            if (back) focusGrid();
+        };
+        ta.addEventListener("input", fit);
+        ta.addEventListener("blur", () => finish(false));
+        ta.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Escape" || (e.key === "Enter" && (e.ctrlKey || e.metaKey))) {
+                e.preventDefault();
+                finish(true);
+            }
+        });
+        for (const type of ["mousedown", "click", "dblclick", "contextmenu"]) ta.addEventListener(type, (e) => e.stopPropagation());
+        shapeEditor = { obj, ta };
+        fit();
+        ta.focus({ preventScroll: true });
+        ta.setSelectionRange(ta.value.length, ta.value.length);
     }
     function deleteObject(obj) {
         if (!movable(obj) || busy || !view) return;
@@ -3412,7 +3475,9 @@
         return Math.round(((px * 2.54) / 96) * 100) / 100;
     }
     // A box of centimeters with its spin buttons (as Excel's サイズ): `set` takes what is typed.
-    function sizeBox(into, label, set) {
+    // (`unit`: another unit, its step and its limit; 線の幅 is points.)
+    function sizeBox(into, label, set, unit) {
+        const { name = "cm", step = 0.1, min = 0, max = 1000 } = unit || {};
         const wrap = into.appendChild(el("span", "spinbox"));
         const input = wrap.appendChild(el("input"));
         input.type = "text";
@@ -3421,10 +3486,10 @@
         input.spellcheck = false;
         input.autocomplete = "off";
         let now = null;
-        const show = () => (input.value = now === null ? "" : `${now} cm`);
+        const show = () => (input.value = now === null ? "" : name === "°" ? `${now}°` : `${now} ${name}`);
         const take = (cm) => {
             if (!isFinite(cm)) return show();
-            cm = Math.round(Math.min(Math.max(cm, 0), 1000) * 100) / 100;
+            cm = Math.round(Math.min(Math.max(cm, min), max) * 100) / 100;
             if (cm === now) return show();
             now = cm;
             show();
@@ -3434,7 +3499,7 @@
         input.addEventListener("keydown", (e) => {
             if (e.key === "ArrowUp" || e.key === "ArrowDown") {
                 e.preventDefault();
-                take((parseFloat(input.value) || 0) + (e.key === "ArrowUp" ? 0.1 : -0.1));
+                take((parseFloat(input.value) || 0) + (e.key === "ArrowUp" ? step : -step));
             } else if (e.key === "Escape") {
                 e.preventDefault();
                 show();
@@ -3446,7 +3511,7 @@
             }
         });
         const spins = wrap.appendChild(el("span", "spins"));
-        for (const [text, by] of [["▴", 0.1], ["▾", -0.1]]) {
+        for (const [text, by] of [["▴", step], ["▾", -step]]) {
             const b = spins.appendChild(el("button", null, text));
             b.type = "button";
             b.tabIndex = -1;
@@ -3513,7 +3578,7 @@
         close.addEventListener("click", closePane);
         const body = pane.appendChild(el("div", "pbody"));
         if (mode === "list") listPane(body);
-        else formatPane(body, obj);
+        else formatPane(body, obj, focus);
         const target = focus && body.querySelector(`[data-field="${focus}"]`);
         if (target) {
             target.focus();
@@ -3545,17 +3610,56 @@
     function markListed(pane) {
         for (const b of pane.querySelectorAll(".pitem")) b.classList.toggle("on", b.obj === selectedObj);
     }
-    // The format of an object: what it can have, each set as it is changed.
-    function formatPane(body, obj) {
+    // The format of an object, as Excel's 図形の書式設定: its pages by the icons of one row of tabs
+    // (塗りつぶしと線, 効果, サイズとプロパティ, 文字), their sections folded by their headings;
+    // each value is set as it is changed.
+    const PANE_ICONS = {
+        fill: '<path d="m2.5 7.5 5-5 5 5-5 5z"/><path d="M4 9h7"/><path d="M13.3 9.5c.8 1.2 1.2 2 1.2 2.5a1.2 1.2 0 0 1-2.4 0c0-.5.4-1.3 1.2-2.5z"/><path d="M1.5 15h13" stroke-width="2"/>',
+        effects: '<path d="M8 1.8 14.2 6.3 11.8 13.5H4.2L1.8 6.3z"/>',
+        size: '<rect x="5" y="5" width="7" height="7"/><path d="M2.5 1.5v13M1.5 2.5h2M1.5 13.5h2M5 2.5h9M13 1.5v2M7.5 8.5h2M8.5 7.5v2"/>',
+        text: '<path d="M4 11.5 8 2l4 9.5M5.4 8.3h5.2"/><path d="M2 14.5h12" stroke-width="2"/>',
+    };
+    const PANE_PAGES = [
+        ["fill", "塗りつぶしと線"],
+        ["effects", "効果"],
+        ["size", "サイズとプロパティ"],
+        ["text", "文字"],
+    ];
+    // The sections folded (by their heading), as long as the page is open.
+    const paneFolded = new Set();
+    function formatPane(body, obj, focus) {
         const ax = isActiveX(obj);
         const f = obj.form || {};
         const t = f.type;
+        const paint = obj.paint || {};
         const edit = (change) => objectEdit(obj, change);
+        const tabs = body.parentNode.insertBefore(el("div", "ptabs"), body);
+        tabs.setAttribute("role", "tablist");
         body.appendChild(el("div", "pname", objectLabel(obj)));
-        const section = (label) => {
-            const sec = body.appendChild(el("section", "psec"));
-            sec.appendChild(el("h3", null, label));
-            return sec;
+        const pages = {};
+        const page = (key) => {
+            if (!pages[key]) pages[key] = body.appendChild(el("div", "ppage"));
+            return pages[key];
+        };
+        const section = (pg, label) => {
+            const sec = page(pg).appendChild(el("section", "psec"));
+            const h = sec.appendChild(el("button", "phead"));
+            h.type = "button";
+            h.appendChild(el("span", "pchev"));
+            h.appendChild(el("span", null, label));
+            const inner = sec.appendChild(el("div", "pinner"));
+            const fold = (on) => {
+                sec.classList.toggle("folded", on);
+                h.setAttribute("aria-expanded", String(!on));
+            };
+            fold(paneFolded.has(label));
+            h.addEventListener("click", () => {
+                const on = !sec.classList.contains("folded");
+                if (on) paneFolded.add(label);
+                else paneFolded.delete(label);
+                fold(on);
+            });
+            return inner;
         };
         const line = (sec, label) => {
             const row = sec.appendChild(el("label", "prow"));
@@ -3584,9 +3688,63 @@
             });
             return input;
         };
+        // Options of one choice, as Excel's radio buttons (塗りつぶしなし, 塗りつぶし (単色), ...).
+        let radios = 0;
+        const choices = (sec, list, now, pick) => {
+            const name = `pr${++radios}`;
+            const wrap = sec.appendChild(el("div", "pradios"));
+            for (const [value, label] of list) {
+                const row = wrap.appendChild(el("label", "pradio"));
+                const r = row.appendChild(el("input"));
+                r.type = "radio";
+                r.name = name;
+                r.checked = value === now;
+                row.appendChild(el("span", null, label));
+                r.addEventListener("change", () => r.checked && pick(value));
+            }
+        };
+        // 色: the button of a color and its palette.
+        const colorRow = (sec, key, color, none, set) => {
+            const row = sec.appendChild(el("div", "prow"));
+            row.appendChild(el("span", "plabel", "色"));
+            const cb = row.appendChild(el("button", "pcolor"));
+            cb.type = "button";
+            cb.title = "色の選択";
+            cb.appendChild(el("span", "sw")).style.background = color || lastShape[key];
+            cb.appendChild(el("span", "pdrop", "▾"));
+            cb.addEventListener("click", () => openColors(cb, key, none, (c) => {
+                if (c) lastShape[key] = c;
+                set(c);
+            }));
+        };
+
+        // 塗りつぶしと線
+        if (canFill(obj)) {
+            const sec = section("fill", "塗りつぶし");
+            const fill = paint.fill || null;
+            choices(sec, [["none", "塗りつぶしなし"], ["solid", "塗りつぶし (単色)"]], fill ? "solid" : "none", (v) => edit({ fill: v === "none" ? null : fill || lastShape.fill }));
+            if (fill) colorRow(sec, "fill", fill, "塗りつぶしなし", (c) => edit({ fill: c }));
+        }
+        if (canLine(obj)) {
+            const sec = section("fill", "線");
+            const color = paint.line || null;
+            choices(sec, [["none", "線なし"], ["solid", "線 (単色)"]], color ? "solid" : "none", (v) => edit({ line: v === "none" ? null : color || lastShape.line }));
+            if (color) {
+                colorRow(sec, "line", color, "線なし", (c) => edit({ line: c }));
+                const w = sizeBox(line(sec, "幅"), "線の幅", (pt) => edit({ lineWidth: pt }), { name: "pt", step: 0.25, max: 1584 });
+                w.input.dataset.field = "lineWidth";
+                w.setCm(paint.lineWidth ?? 0.75);
+            }
+        }
+
+        // 効果: what the file has is kept and drawn; not changed here
+        if (canFill(obj) || canLine(obj)) {
+            const sec = section("effects", "効果");
+            sec.appendChild(el("div", "pnote", "影・光彩・ぼかし・3-D などの効果の変更にはまだ対応していません（ファイルにある効果はそのまま残り、表示されます）。"));
+        }
 
         // サイズ (cm), 回転 (°)
-        const size = section("サイズ");
+        const size = section("size", "サイズ");
         const b = boxOfObject(selected);
         for (const [field, label, px] of [["height", "高さ", b.h], ["width", "幅", b.w]]) {
             const row = line(size, label);
@@ -3599,13 +3757,9 @@
             spin.setCm(cmOf(px));
         }
         if (canTurn(obj)) {
-            const input = box(size, "回転", "rotation", String(Math.round(obj.rot || 0)), (v) => {
-                const deg = +v;
-                if (v.trim() === "" || !isFinite(deg)) return;
-                edit({ rotation: ((Math.round(deg) % 360) + 360) % 360 });
-            }, "number");
-            Object.assign(input, { min: "-3600", max: "3600", step: "1" });
-            input.after(el("span", "punit", "°"));
+            const turn = sizeBox(line(size, "回転"), "図形の回転", (deg) => edit({ rotation: ((Math.round(deg) % 360) + 360) % 360 }), { name: "°", step: 1, min: -3600, max: 3600 });
+            turn.input.dataset.field = "rotation";
+            turn.setCm(Math.round(obj.rot || 0));
             const flips = size.appendChild(el("div", "pbtns"));
             for (const [label, vertical] of [["左右反転", false], ["上下反転", true]]) {
                 const fb = flips.appendChild(el("button", null, label));
@@ -3614,60 +3768,9 @@
             }
         }
 
-        // 塗りつぶしと線
-        if (canFill(obj) || canLine(obj)) {
-            const sec = section("塗りつぶしと線");
-            const colorRow = (label, key, none) => {
-                const row = sec.appendChild(el("div", "prow"));
-                row.appendChild(el("span", "plabel", label));
-                const cb = row.appendChild(el("button", "pcolor"));
-                cb.type = "button";
-                cb.appendChild(el("span", "sw")).style.background = lastShape[key];
-                cb.appendChild(el("span", null, "色の選択 ▾"));
-                cb.addEventListener("click", () => openColors(cb, key, none, (color) => {
-                    if (color) lastShape[key] = color;
-                    edit({ [key]: color });
-                }));
-            };
-            if (canFill(obj)) colorRow("塗りつぶし", "fill", "塗りつぶしなし");
-            if (canLine(obj)) {
-                colorRow("線", "line", "線なし");
-                const row = line(sec, "線の幅");
-                const w = row.appendChild(el("select"));
-                w.appendChild(el("option", null, "")).value = "";
-                for (const n of LINE_WIDTHS) w.appendChild(el("option", null, `${n} pt`)).value = String(n);
-                w.addEventListener("change", () => w.value && edit({ lineWidth: +w.value }));
-            }
-        }
-
-        // テキスト (a control's caption or value)
-        if (obj.text !== undefined) {
-            const sec = section(ax && ["TextBox", "ListBox", "ComboBox"].includes(t) ? "値（Value）" : ax ? "Caption" : isControl(obj) ? "文字" : "テキスト");
-            const text = sec.appendChild(el("textarea", "ptext"));
-            text.rows = 4;
-            text.value = obj.text;
-            text.dataset.field = "text";
-            text.title = "Ctrl+Enter で確定";
-            const commit = () => {
-                if (text.value !== obj.text) edit({ text: text.value });
-            };
-            text.addEventListener("change", commit);
-            text.addEventListener("keydown", (e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    text.blur();
-                    focusGrid();
-                } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    text.value = obj.text;
-                    focusGrid();
-                }
-            });
-        }
-
         // コントロール: what its kind has (the linked cell, the items, the state, the values)
         if (isControl(obj) && obj.form) {
-            const sec = section("コントロール");
+            const sec = section("size", ax ? "プロパティ" : "コントロール");
             if (["CheckBox", "Radio", "OptionButton", "ToggleButton"].includes(t)) {
                 const row = sec.appendChild(el("label", "prow pcheck"));
                 const on = row.appendChild(el("input"));
@@ -3702,13 +3805,13 @@
                 if (t === "Scroll" || t === "ScrollBar") numbers.push([ax ? "LargeChange" : "ページ単位の変化", "page", "page"]);
                 for (const [label, key, op] of numbers) number(label, key, op, !ax);
             }
-            if (!sec.querySelector(".prow")) sec.remove();
+            if (!sec.querySelector(".prow")) sec.parentNode.remove();
         }
 
         // イベント: its handlers in the sheet's file
         const items = eventItems(obj);
         if (items.length) {
-            const sec = section("イベント");
+            const sec = section("size", "イベント");
             if (!ax) sec.appendChild(el("div", "pnote", obj.macro ? `${eventName(obj)}イベント: ${obj.macro}` : `${eventName(obj)}イベントは登録されていません`));
             const btns = sec.appendChild(el("div", "pbtns"));
             for (const [label, act] of items) {
@@ -3717,6 +3820,85 @@
                 mb.addEventListener("click", act);
             }
         }
+
+        // 文字 > テキスト ボックス: 垂直方向の配置, the margins, 図形内でテキストを折り返す (the
+        // text itself is typed in the shape)
+        const tb = obj.textBox;
+        if (tb) {
+            const sec = section("text", "テキスト ボックス");
+            const row = line(sec, "垂直方向の配置");
+            const anchor = row.appendChild(el("select"));
+            anchor.dataset.field = "textAnchor";
+            for (const [v, label] of [["t", "上揃え"], ["ctr", "上下中央揃え"], ["b", "下揃え"]]) anchor.appendChild(el("option", null, label)).value = v;
+            anchor.value = tb.anchor;
+            anchor.addEventListener("change", () => edit({ textAnchor: anchor.value }));
+            const cm = (pt) => Math.round(((pt * 2.54) / 72) * 100) / 100;
+            [["left", "左余白", 0], ["right", "右余白", 2], ["top", "上余白", 1], ["bottom", "下余白", 3]].forEach(([key, label, i]) => {
+                const m = sizeBox(line(sec, label), label, (v) => edit({ inset: { [key]: Math.round(((v * 72) / 2.54) * 100) / 100 } }), { step: 0.05, max: 50 });
+                m.input.dataset.field = `inset-${key}`;
+                m.setCm(cm(tb.inset[i]));
+            });
+            const wrap = sec.appendChild(el("label", "prow pcheck"));
+            const on = wrap.appendChild(el("input"));
+            on.type = "checkbox";
+            on.checked = !!tb.wrap;
+            on.dataset.field = "textWrap";
+            wrap.appendChild(el("span", null, "図形内でテキストを折り返す"));
+            on.addEventListener("change", () => edit({ textWrap: on.checked }));
+        }
+
+        // 文字: the text of a control (its caption or value)
+        if (obj.text !== undefined && !tb) {
+            const sec = section("text", ax && ["TextBox", "ListBox", "ComboBox"].includes(t) ? "値（Value）" : ax ? "Caption" : "文字");
+            const text = sec.appendChild(el("textarea", "ptext"));
+            text.rows = 4;
+            text.value = obj.text;
+            text.dataset.field = "text";
+            text.title = "Ctrl+Enter で確定";
+            const commit = () => {
+                if (text.value !== obj.text) edit({ text: text.value });
+            };
+            text.addEventListener("change", commit);
+            text.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    text.blur();
+                    focusGrid();
+                } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    text.value = obj.text;
+                    focusGrid();
+                }
+            });
+        }
+
+        // The tabs of the pages it has: the one shown last (or the one of the field asked for).
+        const shown = PANE_PAGES.filter(([key]) => pages[key]);
+        const target = focus && body.querySelector(`[data-field="${focus}"]`);
+        let now = target ? Object.keys(pages).find((k) => pages[k].contains(target)) : saved.panePage;
+        if (target && target.closest(".psec")) target.closest(".psec").classList.remove("folded");
+        if (!pages[now]) now = shown[0] && shown[0][0];
+        const show = (key) => {
+            for (const [k] of shown) {
+                pages[k].hidden = k !== key;
+                tabs.querySelector(`[data-page="${k}"]`).classList.toggle("on", k === key);
+                tabs.querySelector(`[data-page="${k}"]`).setAttribute("aria-selected", String(k === key));
+            }
+        };
+        for (const [key, label] of shown) {
+            const tb = tabs.appendChild(el("button", "ptab"));
+            tb.type = "button";
+            tb.dataset.page = key;
+            tb.title = label;
+            tb.setAttribute("role", "tab");
+            tb.setAttribute("aria-label", label);
+            tb.innerHTML = `<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PANE_ICONS[key]}</svg>`;
+            tb.addEventListener("click", () => {
+                remember({ panePage: key });
+                show(key);
+            });
+        }
+        if (now) show(now);
     }
 
     // 挿入 > 画像: a picture from a file, at the active cell (shrunk to the window when larger).
@@ -9462,6 +9644,11 @@
                 e.preventDefault();
                 clearSelection();
                 if (sel) setSel(sel, false);
+                return;
+            }
+            // A character typed: into the shape's text (the input method's too).
+            if (!ctrl && editable && !busy && obj.textBox && movable(obj) && (key.length === 1 || key === "Process" || e.keyCode === 229)) {
+                editShapeText(obj);
                 return;
             }
             if (!ctrl || moves[key]) {

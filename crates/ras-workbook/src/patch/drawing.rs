@@ -735,6 +735,7 @@ pub(super) fn object(
                 for a in &unit.anchors {
                     let Some(obj) = object_of(a) else { continue };
                     style(&doc, &root, obj, name, change, &mut edits)?;
+                    text_box(&doc, obj, name, change, &mut edits)?;
                     // Turned to or from sideways: the anchor turns with it.
                     if let Some(deg) = change.rotation {
                         let old = rot_of(&doc, obj);
@@ -1015,6 +1016,62 @@ fn style(
             props.span(),
             format!("{}{body}</{}>", open_tag(doc, props), props.name),
         );
+    }
+    Ok(())
+}
+
+/// The text box of a shape changed (its `bodyPr`): the vertical alignment, the wrapping, the
+/// margins. A shape without a text body gets one, empty.
+fn text_box(
+    doc: &str,
+    obj: &El,
+    name: &str,
+    change: &ObjectChange,
+    edits: &mut Edits,
+) -> Result<()> {
+    if change.text_anchor.is_none() && change.text_wrap.is_none() && change.inset.is_none() {
+        return Ok(());
+    }
+    if obj.local() != "sp" {
+        return Err(format!(
+            "`{name}` には文字がないため、テキスト ボックスの設定はありません（図形・テキスト ボックスにあります）"
+        ));
+    }
+    let emu = |pt: f64| Some(((pt * 12700.0).round() as i64).to_string());
+    let mut attrs: Vec<(&str, Option<String>)> = Vec::new();
+    if let Some(a) = &change.text_anchor {
+        attrs.push(("anchor", Some(a.clone())));
+    }
+    if let Some(w) = change.text_wrap {
+        attrs.push(("wrap", Some(if w { "square" } else { "none" }.into())));
+    }
+    if let Some(four) = change.inset {
+        for (k, v) in ["lIns", "tIns", "rIns", "bIns"].into_iter().zip(four) {
+            if let Some(pt) = v {
+                attrs.push((k, emu(pt)));
+            }
+        }
+    }
+    match obj.child("txBody") {
+        Some(body) => {
+            let Some(pr) = body.child("bodyPr") else {
+                return Err(format!("`{name}` の文字の書式（bodyPr）を読み取れません"));
+            };
+            edits.replace(pr.span(), with_attrs(&doc[pr.span()], &attrs));
+        }
+        None => {
+            // As a new shape's text body (centered), with what is set.
+            let x = scan::prefix(obj.name);
+            let pr = with_attrs(
+                "<a:bodyPr vertOverflow=\"clip\" horzOverflow=\"clip\" rtlCol=\"0\" anchor=\"ctr\"/>",
+                &attrs,
+            );
+            let at = obj.children.last().map_or(obj.inner.end, |c| c.end);
+            edits.insert(
+                at,
+                format!("<{x}txBody>{pr}<a:lstStyle/><a:p><a:pPr algn=\"ctr\"/></a:p></{x}txBody>"),
+            );
+        }
     }
     Ok(())
 }
