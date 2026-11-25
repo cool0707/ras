@@ -1034,7 +1034,7 @@
                     if (movable(obj) && obj.text !== undefined) {
                         e.preventDefault();
                         selectObject(box, obj);
-                        editObjectText(obj);
+                        editObjectText(obj, true);
                     }
                     return;
                 }
@@ -2929,16 +2929,18 @@
         text.focus();
         text.setSelectionRange(text.value.length, text.value.length);
     }
-    // F2, a double click: the text in the pane of the object.
-    function editObjectText(obj) {
+    // F2, a double click: the text in the pane of the object (a double click: all of it
+    // selected).
+    function editObjectText(obj, all) {
         if (!movable(obj) || obj.text === undefined || busy || !view) return;
-        if (obj.textBox && obj.box) editShapeText(obj);
+        if (obj.textBox && obj.box) editShapeText(obj, all);
         else openPane("format", "text");
     }
     // The text of a shape typed in the shape, as Excel's: over its text, in its font, where its
-    // text box puts it. Enter starts a new line; Esc or a click elsewhere sets it.
+    // text box puts it. Enter starts a new line; Esc or a click elsewhere sets it. `all`: its
+    // text selected (a double click), else the caret after it (shown in an empty shape too).
     let shapeEditor = null;
-    function editShapeText(obj) {
+    function editShapeText(obj, all) {
         if (shapeEditor) return;
         const box = obj.box;
         const shape = box.querySelector(":scope > .shape") || box;
@@ -2952,6 +2954,8 @@
         Object.assign(cover.style, { padding: pad, justifyContent: just, color: tb.color });
         const ta = cover.appendChild(el("textarea"));
         ta.spellcheck = false;
+        // (One line high when empty: the caret where the text box puts its text.)
+        ta.rows = 1;
         ta.value = obj.text;
         if (!tb.wrap) ta.wrap = "off";
         // The font of its first run, the alignment of its first paragraph.
@@ -2994,8 +2998,16 @@
         for (const type of ["mousedown", "click", "dblclick", "contextmenu"]) ta.addEventListener(type, (e) => e.stopPropagation());
         shapeEditor = { obj, ta };
         fit();
-        ta.focus({ preventScroll: true });
-        ta.setSelectionRange(ta.value.length, ta.value.length);
+        const place = () => {
+            if (done) return;
+            ta.focus({ preventScroll: true });
+            if (all) ta.select();
+            else ta.setSelectionRange(ta.value.length, ta.value.length);
+        };
+        place();
+        // (Again once the double click and what the selection redraws are over, so the focus
+        // and the caret stay in the shape.)
+        requestAnimationFrame(() => document.activeElement !== ta && place());
     }
     function deleteObject(obj) {
         if (!movable(obj) || busy || !view) return;
