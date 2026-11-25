@@ -62,12 +62,20 @@ td.filter::after, td.tfilter::after { content: "▾"; float: right; color: #555;
 /* Where rows (columns) are hidden: a double line in the headers, as Excel (the sizes stay). */
 tr.gap th { border-bottom-color: var(--line); box-shadow: inset 0 -1px 0 var(--head), inset 0 -2px 0 var(--line); }
 th.gap { border-right-color: var(--line); box-shadow: inset -1px 0 0 var(--head), inset -2px 0 0 var(--line); }
-#tabs { display: flex; gap: 2px; padding: 2px 6px 0; background: var(--head); border-top: 1px solid var(--line); overflow-x: auto; }
-#tabs button { border: 1px solid var(--line); border-top: none; background: #e9e9e9; padding: 3px 12px; cursor: pointer; font: inherit; white-space: nowrap; border-bottom: 3px solid transparent; }
-#tabs button.on { background: #fff; color: var(--accent); font-weight: bold; }
+/* The sheet tabs, as Excel's (since 2023): flat, rounded, the one shown raised (a shadow, not
+   joined to the grid) and underlined in the accent; a tab colored is filled with its color, made lighter. */
+#tabs { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: #eef1f4; border-top: 1px solid var(--line); overflow-x: auto; }
+#tabs button { position: relative; border: 0; border-radius: 5px; background: transparent; color: #333; padding: 3px 12px; cursor: pointer; font: inherit; white-space: nowrap; transition: background-color .12s, box-shadow .12s; }
+#tabs button:hover { background: rgba(0, 0, 0, .06); }
+#tabs button.colored { background: var(--tab-bg); color: var(--tab-ink); }
+#tabs button.colored:hover { filter: brightness(.96); }
+#tabs button.on { background: #fff; color: #222; box-shadow: 0 1px 4px rgba(0, 0, 0, .16), 0 0 0 1px rgba(0, 0, 0, .05); filter: none; }
+#tabs button.on.colored { background: var(--tab-tint); }
+#tabs button.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: 2px; height: 2px; border-radius: 1px; background: var(--accent); }
 #tabs button.hidden { color: #999; font-style: italic; }
 #tabs .badge { background: var(--changed-line); color: #fff; border-radius: 8px; padding: 0 6px; margin-left: 6px; font-size: 11px; }
-#tabs button.addsheet { position: sticky; right: -6px; display: flex; align-items: center; padding: 0 14px 0 8px; color: #666; background: var(--head); border-color: transparent; border-bottom-color: transparent; box-shadow: -6px 0 6px -2px var(--head); }
+#tabs button.addsheet { position: sticky; right: -6px; display: flex; align-items: center; align-self: stretch; margin: -4px 0; padding: 0 14px 0 8px; border-radius: 0; color: #666; background: #eef1f4; box-shadow: -6px 0 6px -2px #eef1f4; }
+#tabs button.addsheet:hover { background: #eef1f4; }
 #tabs button.addsheet:hover { color: var(--accent); }
 #tabs input.tabname { font: inherit; font-weight: normal; padding: 0 2px; margin: -1px 0; border: 1px solid var(--accent); min-width: 3em; }
 .dlg.sheetdlg { width: 300px; }

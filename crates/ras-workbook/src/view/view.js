@@ -9917,6 +9917,20 @@
             ...(data.sheets.some((s) => s.visible !== "visible") ? [["再表示…", askUnhideSheets, ""]] : []),
         ]);
     }
+    // A tab colored: filled with its color made a little lighter (the name in black or white,
+    // whichever reads), the tab shown with a tint of it (underlined, as every tab shown, in the accent).
+    function paintTab(b, color) {
+        const m = /^#?([0-9a-f]{6})$/i.exec(color || "");
+        if (!m) return;
+        const rgb = [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16));
+        const mix = (t) => "#" + rgb.map((c) => Math.round(c + (255 - c) * t).toString(16).padStart(2, "0")).join("");
+        const light = rgb.map((c) => c + (255 - c) * 0.25);
+        const lum = light.map((c) => ((c /= 255) <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)).reduce((a, c, i) => a + c * [0.2126, 0.7152, 0.0722][i], 0);
+        b.style.setProperty("--tab-bg", mix(0.25));
+        b.style.setProperty("--tab-ink", lum > 0.4 ? "#222" : "#fff");
+        b.style.setProperty("--tab-tint", mix(0.88));
+        b.classList.add("colored");
+    }
     // The tab's name, and the number of the cells changed.
     function labelTab(b) {
         const sheet = b.sheet;
@@ -9932,8 +9946,7 @@
         b.sheet = sheet;
         labelTab(b);
         if (sheet.tabColor) {
-            b.style.borderBottomColor = sheet.tabColor;
-            b.classList.add("colored");
+            paintTab(b, sheet.tabColor);
         }
         b.addEventListener("click", () => {
             if (!b.querySelector("input")) draw(sheet);
