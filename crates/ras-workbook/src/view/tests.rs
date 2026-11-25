@@ -779,12 +779,19 @@ fn formats_as_excel_draws_them() {
     assert_eq!(cell("C1")["t"], json!("0.000012345"));
     assert_eq!(cell("C1")["x"], json!(1.2345e-5));
     // A pattern over white; turned and shrunk text for the page.
+    assert!(css("D1").contains("background:#FFFFFF;"), "{}", css("D1"));
     assert!(
-        css("D1").contains("background:#FFFFFF url(\"data:image/svg+xml,"),
+        css("D1").contains("--fill:url(\"data:image/svg+xml,"),
         "{}",
         css("D1")
     );
     assert!(css("D1").contains("fill='%2300AA00'"), "{}", css("D1"));
+    // (Its pixels from one origin for all the cells, as large at any zoom.)
+    assert!(
+        css("D1").contains(" var(--px, 0px) var(--py, 0px)/calc(8px * var(--pz, 1)) calc(8px * var(--pz, 1)) repeat #FFFFFF;"),
+        "{}",
+        css("D1")
+    );
     assert!(css("E1").contains("--rot:45;"), "{}", css("E1"));
     assert!(css("F1").contains("--shrink:1;"), "{}", css("F1"));
     // The data bar: 10% to 90% of the cell from the lowest to the highest value.

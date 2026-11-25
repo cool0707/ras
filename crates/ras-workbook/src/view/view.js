@@ -601,7 +601,10 @@
             byAddress: new Map(),
             // Right gridlines hidden under text that runs over empty cells: key -> true.
             noRight: new Set(),
+            pats: new Set(), // the cells of pattern fills (td.pat)
         });
+        // (Again when the cells move: a row or a column of another size, shown or hidden.)
+        if (typeof ResizeObserver === "function") new ResizeObserver(() => alignPatterns(v)).observe(table);
 
         function makeCell(tr, r, c, i) {
             const key = r * KEY + c;
@@ -690,6 +693,13 @@
             if (!cell && css) td.style.cssText = css;
             // (Shaded by "ロックされたセルを表示" unless unlocked.)
             if (/--unlocked:1/.test(css)) td.classList.add("unlk");
+            // A pattern fill, drawn over the gridlines above and left of it (see view.css), its
+            // tiles from the table's corner.
+            if (/--fill:/.test(css)) {
+                td.classList.add("pat");
+                v.pats.add(td);
+                alignPatterns(v);
+            }
             const merged = span.get(key);
             let line = lineOf(css);
             if (!(merged && merged[0] > r)) line = Math.max(0, Math.min(line, height(sheet, r) - 1));
@@ -880,6 +890,26 @@
         }
     }
 
+    // The tiles of the pattern fills, from one point (the table's corner) for all the cells, so
+    // that a pattern runs on from a cell to the next as Excel draws it: where each cell's box of
+    // the pattern (1px above and left of the cell) is, the other way. (Once the cells are laid.)
+    function alignPatterns(v) {
+        if (v.aligning) return;
+        v.aligning = true;
+        requestAnimationFrame(() => {
+            v.aligning = false;
+            const at = [];
+            for (const td of v.pats) {
+                if (!td.isConnected) v.pats.delete(td);
+                else at.push([td, td.offsetLeft + td.clientLeft - 1, td.offsetTop + td.clientTop - 1]);
+            }
+            for (const [td, x, y] of at) {
+                td.style.setProperty("--px", `${-x}px`);
+                td.style.setProperty("--py", `${-y}px`);
+            }
+        });
+    }
+
     // ---- zoom: the sheet drawn larger or smaller (CSS zoom on it). Inside it, sizes are those at
     // 100%; the window's scrolling is zoomed: z turns one into the other.
 
@@ -897,6 +927,9 @@
         const [x, y] = [g.scrollLeft / was, g.scrollTop / was];
         v.zoom = z;
         v.wrap.style.zoom = z === 1 ? "" : String(z);
+        // (Pattern fills keep their pixels: their tiles are drawn 1/z as large.)
+        if (z === 1) v.wrap.style.removeProperty("--pz");
+        else v.wrap.style.setProperty("--pz", String(1 / z));
         zooms[v.sheet.name] = pct;
         remember({ zooms });
         showZoom();
