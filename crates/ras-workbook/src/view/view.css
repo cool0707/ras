@@ -8,7 +8,7 @@ body { display: flex; flex-direction: column; background: #fff; color: #000; fon
 #bar { display: flex; min-height: 25px; border-bottom: 1px solid var(--line); }
 #name { flex: none; width: 110px; margin: 0; padding: 3px 6px; border: 0; border-right: 1px solid var(--line); border-radius: 0; background: #fff; color: #000; font: inherit; text-align: left; outline: 0; }
 #name:focus { box-shadow: inset 0 0 0 1px var(--accent); }
-#fx { flex: 1; padding: 3px 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; font-family: Consolas, "MS Gothic", monospace; }
+#fx { position: relative; flex: 1; padding: 3px 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; font-family: Consolas, "MS Gothic", monospace; }
 #fx .was { color: #8a6d00; margin-left: 16px; }
 #fx .ref { font-weight: bold; }
 #fxlabel { flex: none; align-self: center; padding: 0 8px; border-right: 1px solid var(--line); color: #666; font: italic 13px/1 Georgia, "Times New Roman", serif; }
@@ -207,6 +207,11 @@ th { user-select: none; cursor: default; }
 /* The box typed into: on the active cell, seen while something is typed. */
 .editor { position: absolute; z-index: 1; width: 2px; height: 2px; margin: 0; padding: 0; border: 0; outline: 0; resize: none; overflow: hidden; opacity: 0; pointer-events: none; white-space: pre; background: #fff; color: #000; font: 11pt "Yu Gothic", Meiryo, sans-serif; }
 .editor.on { opacity: 1; pointer-events: auto; padding: 0 3px; }
+/* The layer of a formula typed, its references in colors, over the box typed into (whose own text
+   is not seen: its caret and its selection are; the selection light, for the colors over it). */
+.paint { position: absolute; z-index: 1; margin: 0; border: 0; overflow: hidden; white-space: pre; pointer-events: none; background: transparent; color: #000; }
+.editor.painted, .barinput.painted { color: transparent; caret-color: #000; }
+.editor.painted::selection, .barinput.painted::selection { color: transparent; background: #b4d5fe; }
 .barinput { display: block; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; outline: 0; resize: none; overflow: hidden; white-space: pre; background: transparent; color: inherit; font: inherit; }
 body.busy, body.busy td, body.busy th { cursor: progress; }
 #error { display: flex; align-items: center; gap: 8px; padding: 3px 8px; color: #7a1410; background: #fde7e9; border-top: 1px solid #e6a8ab; }
@@ -423,8 +428,8 @@ td .notemark { position: absolute; top: 0; right: 0; width: 0; height: 0; border
    under the rows and right of the columns. The boxes that stay with them are over them. */
 td.frz { position: sticky; z-index: 2; background-color: #fff; }
 td.fzr.fzc { z-index: 4; }
-.refs > [data-pin], .objs > [data-pin], .sheetwrap > textarea[data-pin] { z-index: 3; }
-.refs > [data-pin="yx"], .objs > [data-pin="yx"], .sheetwrap > textarea[data-pin="yx"] { z-index: 5; }
+.refs > [data-pin], .objs > [data-pin], .sheetwrap > textarea[data-pin], .sheetwrap > .paint[data-pin] { z-index: 3; }
+.refs > [data-pin="yx"], .objs > [data-pin="yx"], .sheetwrap > textarea[data-pin="yx"], .sheetwrap > .paint[data-pin="yx"] { z-index: 5; }
 .frzline { position: absolute; background: #9b9b9b; pointer-events: none; }
 .frzline.h { left: 0; height: 1px; }
 .frzline.v { top: 0; width: 1px; }

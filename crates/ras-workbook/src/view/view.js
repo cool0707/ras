@@ -160,6 +160,18 @@
         return refs;
     }
 
+    // `text` into `box`, its references (colorRefs) in their colors (spans of the class `cls`).
+    function refSpans(box, text, refs, cls) {
+        box.textContent = "";
+        let at = 0;
+        for (const ref of refs) {
+            box.appendChild(document.createTextNode(text.slice(at, ref.start)));
+            box.appendChild(el("span", cls, text.slice(ref.start, ref.end))).style.color = ref.color;
+            at = ref.end;
+        }
+        box.appendChild(document.createTextNode(text.slice(at)));
+    }
+
     // The name box and the formula bar for the active cell.
     function showCell(sheet, cell, r, c) {
         cell = cell || {};
@@ -169,14 +181,7 @@
         fx.textContent = "";
         if (cell.f) {
             // The references in colors, the same on the grid.
-            const refs = colorRefs(sheet, cell.f, references(cell.f));
-            let at = 0;
-            for (const ref of refs) {
-                fx.appendChild(document.createTextNode(cell.f.slice(at, ref.start)));
-                fx.appendChild(el("span", "ref", cell.f.slice(ref.start, ref.end))).style.color = ref.color;
-                at = ref.end;
-            }
-            fx.appendChild(document.createTextNode(cell.f.slice(at)));
+            refSpans(fx, cell.f, colorRefs(sheet, cell.f, references(cell.f)), "ref");
         } else {
             fx.textContent = cell.v || cell.t || "";
         }
@@ -1569,6 +1574,63 @@
         // shows it: the border stays on the cell.
         view.selbox.classList.toggle("overx", parseFloat(ed.style.width) > b.w + 1);
         view.selbox.classList.toggle("overy", parseFloat(ed.style.height) > b.h + 1);
+        placePaint();
+    }
+
+    // What is typed in a formula, its references in their colors in the cell and in the bar (as
+    // Excel colors them while one is typed): a layer over the box typed into, of the same text in
+    // the same place, the box's own text not seen (its caret and its selection are).
+    const edPaint = el("div", "paint");
+    const barPaint = el("div", "paint");
+    // While an input method composes, the box shows its own text (the layer would not have it).
+    let composing = false;
+    function paintEntry(refs) {
+        const input = entry && entryInput();
+        const on = !!input && !composing && refs.length > 0;
+        for (const t of [ed, bar]) t.classList.toggle("painted", on && t === input);
+        const paint = input === bar ? barPaint : edPaint;
+        for (const p of [edPaint, barPaint]) if (!on || p !== paint) p.remove();
+        if (!on) return;
+        if (paint.previousSibling !== input) input.after(paint);
+        refSpans(paint, input.value, refs, "");
+        placePaint();
+    }
+    // The layer where the box is, of its font, scrolled as it is.
+    function placePaint() {
+        const input = entry && entryInput();
+        const paint = input === bar ? barPaint : edPaint;
+        if (!input || paint.previousSibling !== input) return;
+        const s = getComputedStyle(input);
+        Object.assign(paint.style, {
+            left: `${input.offsetLeft}px`,
+            top: `${input.offsetTop}px`,
+            width: `${input.offsetWidth}px`,
+            height: `${input.offsetHeight}px`,
+            padding: s.padding,
+            fontFamily: s.fontFamily,
+            fontSize: s.fontSize,
+            fontWeight: s.fontWeight,
+            fontStyle: s.fontStyle,
+            lineHeight: s.lineHeight,
+            letterSpacing: s.letterSpacing,
+            textAlign: s.textAlign,
+        });
+        // (On the panes frozen, as the box.)
+        if (input.dataset.pin) pinTo(paint, input.dataset.pin);
+        else pinTo(paint, "");
+        paint.scrollLeft = input.scrollLeft;
+        paint.scrollTop = input.scrollTop;
+    }
+    for (const t of [ed, bar]) {
+        t.addEventListener("scroll", placePaint);
+        t.addEventListener("compositionstart", () => {
+            composing = true;
+            if (entry) paintEntry([]);
+        });
+        t.addEventListener("compositionend", () => {
+            composing = false;
+            if (entry) entryRefs();
+        });
     }
 
     function beginEntry(mode, text, where) {
@@ -1613,6 +1675,7 @@
         showMode();
         ed.value = "";
         bar.remove();
+        paintEntry([]);
         document.body.classList.remove("typing");
         if (view && sel) paint(false);
         focusGrid();
@@ -1703,6 +1766,7 @@
             $("fx").appendChild(bar);
             bar.value = text;
             bar.focus();
+            entryRefs();
         } else if (!entry) {
             beginEntry("edit", null, "bar");
         }
@@ -1750,15 +1814,17 @@
         updateAssist();
     }
     // The references of what is typed, as boxes in their colors; the one pointed at dashed.
+    // (In the cell and in the bar, the references in the same colors.)
     function entryRefs() {
         if (!view || !entry) return;
         view.refs.textContent = "";
         const text = entryInput().value;
-        if (!/^[=+-]/.test(text)) return;
-        const refs = colorRefs(view.sheet, text, references(text));
+        const refs = /^[=+-]/.test(text) ? colorRefs(view.sheet, text, references(text)) : [];
         const p = entry.point;
         const ref = p && refs.find((r) => r.start === p.start && r.end === p.end);
         if (ref && ref.box) ref.box.classList.add("pointing");
+        if (entry.where === "cell") refSpans($("fx"), text, refs, "ref");
+        paintEntry(refs);
     }
     // F4: the reference at the caret, $ by $ (A1, $A$1, A$1, $A1).
     function toggleAbsolute() {
