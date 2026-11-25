@@ -4765,8 +4765,8 @@
             };
             const left = grid.appendChild(el("div", "pbcol"));
             for (const k of ["top", "insideH", "bottom"]) sideButton(left, k);
-            // The picture: the cells (two when the range has more), "文字列" in each, the sides.
-            const [W, H, M] = [168, 112, 12];
+            // The picture: a square of the cells (two when the range has more) and their sides.
+            const [W, H, M] = [128, 128, 12];
             const [x1, y1, x2, y2] = [M, M, W - M, H - M];
             const [xm, ym] = [(x1 + x2) / 2, (y1 + y2) / 2];
             const stroke = (side, x, y, X, Y) => {
@@ -4787,7 +4787,6 @@
             for (const [x, y] of [[x1, y1], [x2, y1], [x1, y2], [x2, y2]].concat(many.v ? [[xm, y1], [xm, y2]] : [], many.h ? [[x1, ym], [x2, ym]] : [])) {
                 svg += `<path d="M${x - 6} ${y}h-4M${x + 6} ${y}h4M${x} ${y - 6}v-4M${x} ${y + 6}v4" stroke="#9a9a9a" stroke-width="1"/>`;
             }
-            for (const [a, b] of xs) for (const [c, d] of ys) svg += `<text x="${(a + b) / 2}" y="${(c + d) / 2}" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="#555" stroke="none">文字列</text>`;
             for (const [a, b] of xs)
                 for (const [c, d] of ys) {
                     svg += stroke("diagDown", a, c, b, d);
@@ -4819,9 +4818,10 @@
                 near.sort((a, b) => a[1] - b[1]);
                 if (near[0][1] <= 8) toggle(near[0][0]);
             });
-            grid.appendChild(el("div"));
+            // ／ in the corner under the buttons of the rows, ＼ at the end of those of the columns.
+            sideButton(grid.appendChild(el("div", "pbcorner")), "diagUp");
             const bottom = grid.appendChild(el("div", "pbrow"));
-            for (const k of ["diagUp", "left", "insideV", "right", "diagDown"]) sideButton(bottom, k);
+            for (const k of ["left", "insideV", "right", "diagDown"]) sideButton(bottom, k);
             box.appendChild(el("div", "pnote", "選んだスタイルと色で、プリセットや周りのボタン、図のクリックで罫線を引きます（同じ罫線をもう一度クリックすると消えます）。"));
         }
 
