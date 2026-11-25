@@ -42,6 +42,8 @@ impl<'p> Gen<'p> {
     pub(crate) fn stmt(&mut self, s: &Stmt) {
         match &s.kind {
             StmtKind::Empty | StmtKind::Error | StmtKind::Resume | StmtKind::Fn(_) => {}
+            // Pauses only while a debugger is attached (DevTools, VS Code); no-op otherwise.
+            StmtKind::Debugger => self.wm(s.span, "debugger;"),
             StmtKind::Var(v) => self.var_stmt(s, v),
             StmtKind::Expr(e) => {
                 let text = self.effect(e.peel());

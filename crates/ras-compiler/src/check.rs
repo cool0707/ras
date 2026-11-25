@@ -1166,7 +1166,7 @@ impl Checker<'_> {
     fn stmt(&mut self, s: &Stmt) {
         self.fx.cost += 1;
         match &s.kind {
-            StmtKind::Empty | StmtKind::Error => {}
+            StmtKind::Empty | StmtKind::Error | StmtKind::Debugger => {}
             StmtKind::Var(v) => self.var_stmt(v),
             StmtKind::Expr(e) => {
                 let t = self.expr(e, None);

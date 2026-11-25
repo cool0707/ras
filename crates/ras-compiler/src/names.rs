@@ -366,6 +366,7 @@ const RAS_KEYWORDS: &[&str] = &[
     "instanceof",
     "in",
     "var",
+    "debugger",
     "byref",
     "byval",
     "inline",

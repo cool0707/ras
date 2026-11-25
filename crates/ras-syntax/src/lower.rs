@@ -1114,6 +1114,7 @@ impl Lower {
                 None => StmtKind::Error,
             },
             RESUME_STMT => StmtKind::Resume,
+            DEBUGGER_STMT => StmtKind::Debugger,
             EMPTY_STMT => StmtKind::Empty,
             FN_DECL => StmtKind::Fn(Box::new(self.fn_decl(n))),
             _ => return,

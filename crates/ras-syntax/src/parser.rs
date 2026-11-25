@@ -1255,6 +1255,12 @@ impl<'a> Parser<'a> {
                 self.semi();
                 self.finish();
             }
+            DEBUGGER_KW => {
+                self.start(DEBUGGER_STMT);
+                self.bump();
+                self.semi();
+                self.finish();
+            }
             SEMI => {
                 self.start(EMPTY_STMT);
                 self.bump();

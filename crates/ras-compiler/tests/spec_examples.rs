@@ -515,6 +515,46 @@ export function total(values: double[], n: int): double {
 }
 
 #[test]
+fn spec_14_10_9_debugger_is_nothing_in_vba() {
+    // The VBA build is the same as without the `debugger;` statements, loop optimizations included.
+    let with = r#"
+export function fill(last: int) {
+    const ws = Sheet1;
+    debugger
+    for (let r = 2; r <= last; r++) {
+        debugger;
+        for (let c = 1; c <= 5; c++) {
+            ws.cells(r, c).value = r * c;
+        }
+    }
+    try { debugger; } catch { resume; }
+}
+"#;
+    let without: String = with
+        .lines()
+        .filter(|l| l.trim() != "debugger;" && l.trim() != "debugger")
+        .map(|l| {
+            format!(
+                "{}\n",
+                l.replace(
+                    "try { debugger; } catch { resume; }",
+                    "try { } catch { resume; }"
+                )
+            )
+        })
+        .collect();
+    let (_, a) = compile(&[("report", with)]);
+    let (_, b) = compile(&[("report", &without)]);
+    let m = code(&a, "Report");
+    assert!(!m.contains("Stop"), "{m}");
+    assert_eq!(m, code(&b, "Report"));
+    assert_contains(
+        &m,
+        "ws.Range(ws.Cells(2, 1), ws.Cells(last, 5)).Value = ras_buf1",
+    );
+}
+
+#[test]
 fn spec_9_bulk_range_transfer() {
     let src = r#"
 export function fill(last: int) {

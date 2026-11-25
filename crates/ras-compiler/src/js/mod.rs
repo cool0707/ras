@@ -360,13 +360,17 @@ fn finish(code: &str, md: &ModuleData, file: &str, source: &str) -> (String, Str
             }
         }
     }
-    let map = serde_json::json!({
+    let mut map = serde_json::json!({
         "version": 3,
         "file": file,
         "sources": [source],
         "names": [],
         "mappings": mappings,
     });
+    // The standard library is not a file of the project: the debugger shows it from the map.
+    if md.rel_path.starts_with("<stdlib>/") {
+        map["sourcesContent"] = serde_json::json!([&*md.text]);
+    }
     (text, map.to_string())
 }
 

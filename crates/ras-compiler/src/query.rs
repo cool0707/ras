@@ -914,6 +914,7 @@ pub(crate) const KEYWORDS: &[&str] = &[
     "inline",
     "noinline",
     "resume",
+    "debugger",
     "using",
     "declare",
     "instanceof",
