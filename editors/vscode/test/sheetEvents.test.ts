@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { macrosOf, moduleName, newMacroName, sheetControlEvents } from "../src/sheetEvents";
+import { isShapeMacro, macrosOf, moduleName, newMacroName, shapeHandlerText, shapeMacro, shapeMacroObject, sheetControlEvents } from "../src/sheetEvents";
 
 test("a control on a sheet raises GotFocus and LostFocus, not what a form raises", () => {
 	const names = sheetControlEvents("TextBox", "TextBox1").map((e) => e.name);
@@ -33,4 +33,14 @@ test("a new macro is named after its object, unused in the file", () => {
 	assert.equal(newMacroName("", "", 1025), "shape1025Click");
 	assert.equal(newMacroName("export function chart1Click() {}\n", "Chart 1", undefined), "chart1Click2");
 	assert.equal(newMacroName("export function chart1ClickX() {}\n", "Chart 1", undefined), "chart1Click");
+});
+
+test("a shape's handler is an @on of the sheet's file, called from the macro Excel would name", () => {
+	assert.equal(shapeMacroObject("ボタン 1"), "ボタン1");
+	assert.equal(shapeMacroObject("1 Shape"), "Shape1Shape");
+	assert.equal(shapeMacro("Sheet1", "Button 1"), "Sheet1.Button1_Click");
+	assert.ok(isShapeMacro("'Book.xlsm'!sheet1.button1_click", "Sheet1", "Button 1"));
+	assert.ok(!isShapeMacro("Sheet1.go", "Sheet1", "Button 1"));
+	assert.equal(shapeHandlerText("", "Button 1", "    ", "\n"), '@on("Button 1.Click")\nfunction button1Click() {\n    \n}\n');
+	assert.equal(shapeHandlerText("function button1Click() {}\n", "Button 1", "\t", "\n"), '\n@on("Button 1.Click")\nfunction button1Click2() {\n\t\n}\n');
 });

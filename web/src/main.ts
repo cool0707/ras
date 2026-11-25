@@ -14,8 +14,9 @@ import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutt
 import { tags } from "@lezer/highlight";
 import init, { Book, compile, diffText, editBook, encodeVba, explain, format, newFormSpec, packBook, sheetControls, viewPage } from "../pkg/ras_wasm.js";
 import type { EventDescriptor } from "../../editors/vscode/src/userForm/events";
+import { bodyIndent, findHandler } from "../../editors/vscode/src/userForm/events";
 import type { RuntimeMessage } from "../../editors/vscode/src/formRunner/protocol";
-import { macrosOf, moduleName, newMacroName, sheetControlEvents } from "../../editors/vscode/src/sheetEvents";
+import { isShapeMacro, macrosOf, moduleName, newMacroName, shapeHandlerText, shapeMacro, sheetControlEvents } from "../../editors/vscode/src/sheetEvents";
 import "@vscode/codicons/dist/codicon.css";
 import { codeBehindPath, type DesignerHooks, FormDesigner, openHandler } from "./designer";
 import { Explorer } from "./explorer";
@@ -1227,10 +1228,24 @@ async function objectEvent(m: ObjectEvent) {
         if (event) openHandler(hooks, file, m.object, event);
         return;
     }
-    // A shape or a form control: the macro it runs (`OnAction`), an `export function`.
+    // A shape or a form control: its `@on("<name>.Click")` handler in the sheet's file, whose
+    // generated macro (`Sheet1.ボタン1_Click`) it runs (`OnAction`); or another macro.
     const label = m.object || "このコントロール";
     const ev = m.eventName ?? "クリック";
-    if (!m.choose && m.macro) {
+    const assign = (full: string) => {
+        if (full.toLowerCase() !== m.macro.replace(/^.*!/, "").toLowerCase()) editWorkbook([{ op: "macro", sheet: m.sheet, object: m.object, shape: m.shape, macro: full }]);
+    };
+    const handler = () => {
+        let text = hooks.text(file) ?? "";
+        if (!findHandler(text, m.object, "Click")) {
+            text += shapeHandlerText(text, m.object, bodyIndent(text, "    "), "\n");
+            hooks.write(file, text);
+        }
+        assign(shapeMacro(m.codeName, m.object));
+        hooks.openCode(file, findHandler(text, m.object, "Click")?.bodyLine ?? 0);
+    };
+    const generated = m.object !== "" && m.macro !== "" && isShapeMacro(m.macro, m.codeName, m.object);
+    if (!m.choose && m.macro && !generated) {
         const bare = m.macro.replace(/^.*!/, "");
         const dot = bare.lastIndexOf(".");
         const [module, name] = dot < 0 ? [undefined, bare] : [bare.slice(0, dot), bare.slice(dot + 1)];
@@ -1239,22 +1254,38 @@ async function objectEvent(m: ObjectEvent) {
         hooks.openCode(found.file, bodyLineOf(hooks.text(found.file) ?? "", name));
         return;
     }
+    if (!m.choose && m.object) {
+        handler();
+        return;
+    }
     const fresh = newMacroName(hooks.text(file) ?? "", m.object, m.shape);
     let target = { file, module: m.codeName, name: fresh };
     let create = true;
     if (m.choose) {
-        const choices: { target: typeof target; create: boolean; label: string; description?: string; detail?: string }[] = [
-            { target, create: true, label: `＋ 新しい関数: ${m.codeName}.${fresh}`, description: file },
-        ];
+        const choices: { target?: typeof target; create: boolean; handler?: boolean; label: string; description?: string; detail?: string }[] = m.object
+            ? [
+                  {
+                      handler: true,
+                      create: false,
+                      label: `@on("${m.object}.Click")`,
+                      description: file,
+                      detail: findHandler(hooks.text(file) ?? "", m.object, "Click") ? `ハンドラーがあります${generated ? "（登録されています）" : ""}` : "ハンドラーを追加します",
+                  },
+              ]
+            : [{ target, create: true, label: `＋ 新しい関数: ${m.codeName}.${fresh}`, description: file }];
         for (const f of macroFiles()) {
             for (const x of macrosOf(hooks.text(f.file) ?? "")) {
                 const full = `${f.module}.${x.name}`;
-                choices.push({ target: { file: f.file, module: f.module, name: x.name }, create: false, label: full, description: f.file, detail: m.macro.toLowerCase() === full.toLowerCase() ? "登録されています" : undefined });
+                choices.push({ target: { file: f.file, module: f.module, name: x.name }, create: false, label: full, description: f.file, detail: m.macro.replace(/^.*!/, "").toLowerCase() === full.toLowerCase() ? "登録されています" : undefined });
             }
         }
-        const i = await pick(`${label} の${ev}イベントに登録する関数`, choices);
+        const i = await pick(`${label} の${ev}イベントに登録するハンドラー・関数`, choices);
         if (i === undefined) return;
-        target = choices[i].target;
+        if (choices[i].handler) {
+            handler();
+            return;
+        }
+        target = choices[i].target ?? target;
         create = choices[i].create;
     }
     if (create) {
@@ -1262,8 +1293,7 @@ async function objectEvent(m: ObjectEvent) {
         const separator = !text.trim() ? "" : text.endsWith("\n") ? "\n" : "\n\n";
         hooks.write(target.file, `${text}${separator}export function ${target.name}() {\n    \n}\n`);
     }
-    const full = `${target.module}.${target.name}`;
-    if (full.toLowerCase() !== m.macro.toLowerCase()) editWorkbook([{ op: "macro", sheet: m.sheet, object: m.object, shape: m.shape, macro: full }]);
+    assign(`${target.module}.${target.name}`);
     hooks.openCode(target.file, bodyLineOf(hooks.text(target.file) ?? "", target.name));
 }
 

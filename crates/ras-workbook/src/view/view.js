@@ -2934,7 +2934,84 @@
     function editObjectText(obj, all) {
         if (!movable(obj) || obj.text === undefined || busy || !view) return;
         if (obj.textBox && obj.box) editShapeText(obj, all);
+        else if (obj.kind === "control" && obj.box && controlTextSpan(obj)) editControlText(obj, all);
         else openPane("format", "text");
+    }
+    // The element a control shows its text in (a caption, a label, the value of a text or combo
+    // box); none for a list box, whose value is not shown as a text.
+    function controlTextSpan(obj) {
+        const ctl = obj.box && obj.box.querySelector(".ctl");
+        if (!ctl || ctl.classList.contains("list")) return null;
+        return ctl.querySelector(":scope > span.label, :scope > span.value, :scope > span:not(.btn):not(.box):not(.radio)");
+    }
+    // Whether a control's text is a value typed on one line (a text or combo box; a form
+    // control's edit box): Enter sets it.
+    const oneLineText = (obj) => {
+        const t = obj.form && obj.form.type;
+        return ["TextBox", "ComboBox", "EditBox", "Drop"].includes(t);
+    };
+    // The text of a control typed on the control, as Excel's text editing of a button or a
+    // label (and an ActiveX control's caption or value in design mode): where it shows its text,
+    // in its font. Esc, Ctrl+Enter or a click elsewhere sets it (Enter too, for a value on one
+    // line; else Enter starts a new line).
+    function editControlText(obj, all) {
+        if (shapeEditor) return;
+        const box = obj.box;
+        const span = controlTextSpan(obj);
+        if (!span) return;
+        const ctl = span.parentNode;
+        const ta = el("textarea", "ctledit");
+        ta.spellcheck = false;
+        ta.rows = 1;
+        ta.value = obj.text;
+        if (oneLineText(obj)) ta.wrap = "off";
+        const cs = getComputedStyle(span);
+        Object.assign(ta.style, { fontFamily: cs.fontFamily, fontSize: cs.fontSize, fontWeight: cs.fontWeight, fontStyle: cs.fontStyle, color: cs.color, textAlign: getComputedStyle(ctl).textAlign });
+        // (In the place of its text: the box of a check box stays.)
+        if (span.classList.contains("label") && ctl.classList.contains("gbox")) ta.classList.add("gbox");
+        span.style.display = "none";
+        ctl.insertBefore(ta, span);
+        box.classList.add("typing");
+        const fit = () => {
+            ta.style.height = "auto";
+            ta.style.height = `${Math.min(ta.scrollHeight, ctl.clientHeight || ta.scrollHeight)}px`;
+        };
+        let done = false;
+        const finish = (back) => {
+            if (done) return;
+            done = true;
+            shapeEditor = null;
+            const text = ta.value;
+            ta.remove();
+            span.style.display = "";
+            box.classList.remove("typing");
+            if (text !== obj.text) {
+                // (Shown at once, as it will be drawn.)
+                span.textContent = text;
+                objectEdit(obj, { text });
+            }
+            if (back) focusGrid();
+        };
+        ta.addEventListener("input", fit);
+        ta.addEventListener("blur", () => finish(false));
+        ta.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Escape" || (e.key === "Enter" && (e.ctrlKey || e.metaKey || (oneLineText(obj) && !e.isComposing)))) {
+                e.preventDefault();
+                finish(true);
+            }
+        });
+        for (const type of ["mousedown", "click", "dblclick", "contextmenu"]) ta.addEventListener(type, (e) => e.stopPropagation());
+        shapeEditor = { obj, ta };
+        fit();
+        const place = () => {
+            if (done) return;
+            ta.focus({ preventScroll: true });
+            if (all) ta.select();
+            else ta.setSelectionRange(ta.value.length, ta.value.length);
+        };
+        place();
+        requestAnimationFrame(() => document.activeElement !== ta && place());
     }
     // The text of a shape typed in the shape, as Excel's: over its text, in its font, where its
     // text box puts it. Enter starts a new line; Esc or a click elsewhere sets it. `all`: its
@@ -4408,7 +4485,8 @@
 
     // ---- the events of the objects: their handlers in the sheet's file, written by the editor
     // An ActiveX control's events are `@on("CommandButton1.Click")` functions of the sheet's
-    // file; a shape or a form control runs the macro assigned to it (`OnAction`). The editor says
+    // file; a shape or a form control runs the macro assigned to it (`OnAction`): the one the
+    // compiler generates for its `@on("ボタン 1.Click")` functions, or another one. The editor says
     // whether the workbook shown is the project's (`events`), whose sheets have files.
 
     let events = false;

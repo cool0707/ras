@@ -42,6 +42,7 @@ pub use config::{Config, FormControl, FormDecl};
 pub use diag::{apply_fixes, Diagnostic, Fix, Severity};
 pub use emit::OutputFile;
 pub use js::{build_js, JsFile, JsOutput};
+pub use lower::shape_macro_object;
 pub use model::{ModuleId, ModuleKind, OptNote, Program};
 
 /// Type definitions and library modules bundled with the compiler (spec §15.3).
