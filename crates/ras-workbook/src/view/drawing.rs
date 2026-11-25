@@ -850,6 +850,10 @@ pub(crate) fn object_html(
         ),
         None => "left:0;top:0;width:100%;height:100%;".to_string(),
     };
+    // A rotated shape's reflection is not rotated with it: Excel mirrors the rotated shape about
+    // a horizontal line below its lowest point. So it is drawn by an unrotated box around the
+    // rotated shape (its bounding box), the shape in it.
+    let mut outer = None;
     if x.rot != 0.0 {
         let _ = write!(style, "transform:rotate({}deg);", n(x.rot));
     }
@@ -858,7 +862,36 @@ pub(crate) fn object_html(
     if obj.name != "grpSp" {
         let fx = obj.child("spPr").and_then(|p| p.child("effectLst"));
         style.push_str(&effect_css(fx, &ctx.theme, x.rot));
-        style.push_str(&reflect_css(fx));
+        let reflect = reflect_css(fx);
+        if x.rot != 0.0 && !reflect.is_empty() && w > 0.0 && h > 0.0 {
+            let t = x.rot.to_radians();
+            let (bw, bh) = (
+                w * t.cos().abs() + h * t.sin().abs(),
+                w * t.sin().abs() + h * t.cos().abs(),
+            );
+            let (dx, dy) = ((bw - w) / 2.0, (bh - h) / 2.0);
+            // The bounding box where the shape's box is (its size as a fraction of the shape's).
+            let (l, t, pw, ph) = place.unwrap_or((0.0, 0.0, 1.0, 1.0));
+            let (fx_, fy) = (dx / w, dy / h);
+            outer = Some(format!(
+                "left:{}%;top:{}%;width:{}%;height:{}%;{reflect}",
+                pct(l - fx_ * pw),
+                pct(t - fy * ph),
+                pct(pw * bw / w),
+                pct(ph * bh / h)
+            ));
+            let at = style.find("transform:").unwrap_or(0);
+            style = format!(
+                "left:{}%;top:{}%;width:{}%;height:{}%;{}",
+                pct(dx / bw),
+                pct(dy / bh),
+                pct(w / bw),
+                pct(h / bh),
+                &style[at..]
+            );
+        } else {
+            style.push_str(&reflect);
+        }
     }
     let inner = match obj.name.as_str() {
         "grpSp" => group_html(ctx, obj, &x, w, h),
@@ -869,7 +902,11 @@ pub(crate) fn object_html(
     if inner.is_empty() {
         return String::new();
     }
-    format!("<div class=\"shape\" style=\"{style}\">{inner}</div>")
+    let html = format!("<div class=\"shape\" style=\"{style}\">{inner}</div>");
+    match outer {
+        Some(o) => format!("<div class=\"refl\" style=\"position:absolute;{o}\">{html}</div>"),
+        None => html,
+    }
 }
 
 fn group_html(ctx: &Ctx, g: &Node, x: &Xfrm, w: f64, h: f64) -> String {
@@ -1746,7 +1783,7 @@ fn reflect_css(fx: Option<&Node>) -> String {
         num("endPos", 100000.0) / 1000.0,
     );
     format!(
-        "-webkit-box-reflect:below {}pt linear-gradient(rgba(0,0,0,{}) {}%,rgba(0,0,0,{}) {}%,transparent {}%);",
+        "-webkit-box-reflect:below {}pt linear-gradient(to top,rgba(0,0,0,{}) {}%,rgba(0,0,0,{}) {}%,transparent {}%);",
         n(num("dist", 0.0) / EMU_PT),
         n(st_a),
         n(st_pos),
@@ -1826,6 +1863,26 @@ mod tests {
         assert!(
             picture_of(&ctx, "xl/media/image3.emf", b"", "")
                 .contains("表示できない形式の画像（EMF）")
+        );
+    }
+
+    /// A rotated shape's reflection: mirrored about a horizontal line below the rotated shape's
+    /// lowest point (an unrotated box around it), not rotated with the shape.
+    #[test]
+    fn rotated_reflection() {
+        let parts = Parts::default();
+        let (ids, images) = (Cell::new(0), RefCell::new(Images::default()));
+        let ctx = ctx(&parts, HashMap::new(), &ids, &images);
+        let sp = parse(
+            br#"<xdr:sp xmlns:xdr="x" xmlns:a="a"><xdr:nvSpPr><xdr:cNvPr id="2" name="R"/></xdr:nvSpPr><xdr:spPr><a:xfrm rot="5400000"><a:off x="0" y="0"/><a:ext cx="1270000" cy="635000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:effectLst><a:reflection dist="50800" endPos="50000"/></a:effectLst></xdr:spPr></xdr:sp>"#,
+        )
+        .unwrap();
+        let html = object_html(&ctx, &sp, None, Some((100.0, 50.0)));
+        // 90°: its bounding box 50 x 100pt about the same center.
+        assert!(
+            html.starts_with("<div class=\"refl\" style=\"position:absolute;left:25%;top:-50%;width:50%;height:200%;-webkit-box-reflect:below 4pt ")
+                && html.contains("<div class=\"shape\" style=\"left:-50%;top:25%;width:200%;height:50%;transform:rotate(90deg);\">"),
+            "{html}"
         );
     }
 
