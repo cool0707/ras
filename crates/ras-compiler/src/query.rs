@@ -100,7 +100,7 @@ pub(crate) fn vba_type(t: &Type) -> Option<&'static str> {
         Type::Float => "Single",
         Type::Double => "Double",
         Type::Currency => "Currency",
-        Type::Decimal | Type::Any => "Variant",
+        Type::Decimal | Type::Any | Type::CellValue => "Variant",
         Type::Ptr => "LongPtr",
         Type::Date => "Date",
         Type::Str => "String",
@@ -667,7 +667,7 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
         _ => {}
     }
     // Extension methods whose receiver type matches come after the members of the type.
-    if ty.is_value() && !matches!(ty, Type::Any | Type::Object | Type::Error) {
+    if ty.is_value() && !matches!(ty, Type::Any | Type::CellValue | Type::Object | Type::Error) {
         for &f in &prog.modules[m].ext_methods {
             let d = &prog.fns[f];
             let Some(p0) = d.params.first() else { continue };

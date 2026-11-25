@@ -1191,7 +1191,10 @@ impl<'p> Lowerer<'p> {
                     );
                 }
                 // Arrays of `any` live in a plain Variant so that Range data is never copied (spec §9.2.1).
-                if matches!(elem, Type::Any | Type::Error | Type::Null | Type::Decimal) {
+                if matches!(
+                    elem,
+                    Type::Any | Type::CellValue | Type::Error | Type::Null | Type::Decimal
+                ) {
                     ("Variant".into(), false)
                 } else {
                     (self.vscalar(&elem), true)
@@ -1453,7 +1456,12 @@ impl<'p> Lowerer<'p> {
             Type::Date => call("CDate", vec![lit("0")]),
             Type::Str => lit("vbNullString"),
             Type::Bool => lit("False"),
-            Type::Any | Type::Decimal | Type::Error | Type::Null | Type::Param(_) => lit("Empty"),
+            Type::Any
+            | Type::CellValue
+            | Type::Decimal
+            | Type::Error
+            | Type::Null
+            | Type::Param(_) => lit("Empty"),
             Type::Object | Type::Class(..) | Type::Map(..) | Type::Func(_) => lit("Nothing"),
             Type::Union(_) if t.is_object() => lit("Nothing"),
             Type::Union(_) => lit("Empty"),

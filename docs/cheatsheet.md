@@ -12,7 +12,7 @@ RAS は TypeScript に似た構文で書き、VBA（`.bas` / `.cls`）に変換�
 - `undefined`・`?.`・スプレッド（`...`）・`async` / `await`・クラスの継承（`extends` / `super`）・関数の中の `function` はありません。
 - Excel / VBA のメンバーとグローバルは camelCase で書きます（`ws.cells(1, 1).value`、`msgBox(...)`、`xlUp`）。VBA の綴り（`Cells`）は警告になり、`ras check --fix` で直せます。
 - 名前は大文字小文字だけの違いでは区別できません（VBA が区別しないため。`Shape` という型と `shape` という変数は同時に使えません）。
-- セルの値（`range.value`）は `any` です。型の付いた変数に入れると実行時に変換されます（空のセル → `0` / `""`）。
+- セルの値（`range.value`）は `cellValue` です（エラー値 `#N/A` などのことがある `any`）。`isError()` で確かめる（`if (isError(v)) continue;`）か `Excel.errorToNull(v)` を通すと `any` になります。そのまま比較・計算・型変換すると警告 W0313（エラー値のとき実行時エラーになるため）。型の付いた変数に入れると実行時に変換されます（空のセル → `0` / `""`）。
 - VBA の `[A1]`・`[SUM(A1:A10)]`（`Evaluate`）は `` fx`SUM(A1:A10)` `` と書きます（`[...]` は配列です）。
 - シートはコード名（`Sheet1`）で参照します。`range("A1")` のようにシートを付けない書き方は、選択中のシートに依存するので警告になります。
 
@@ -25,6 +25,7 @@ RAS は TypeScript に似た構文で書き、VBA（`.bas` / `.cls`）に変換�
 | `currency` / `decimal` | `Currency` / `Variant`（`CDec`） | `1.5m` は `decimal` |
 | `string` / `boolean` / `date` | `String` / `Boolean` / `Date` | |
 | `any` / `object` | `Variant` / `Object` | `object` のメンバーは遅延バインディング |
+| `cellValue` | `Variant` | セルの値。エラー値のことがある `any`（`isError` で絞り込む） |
 | `T[]` / `T[][]` | 動的配列 / 2 次元配列 | 添字は 0 始まり |
 | `Map<K, V>` | `Scripting.Dictionary` 相当 | キーは数値・文字列・日付 |
 | `struct` / `{ a: A; b: B }` / `[A, B]` | `Type` | 値型 |
@@ -182,7 +183,7 @@ export function fill() {
 
 export function readAll(): double {
     const ws = Sheet1;
-    const data = ws.range("A1").currentRegion.value;   // 2 次元配列（any[][]。添字は 0 始まり）
+    const data = ws.range("A1").currentRegion.value;   // 2 次元配列（cellValue。添字は 0 始まり）
     let total = 0.0;
     for (let r = 1; r < data.length; r++) {
         const v = data[r][1];

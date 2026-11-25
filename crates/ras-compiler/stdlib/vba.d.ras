@@ -109,7 +109,7 @@ declare namespace VBA {
          * イミディエイト ウィンドウに値を出力する。
          * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/print-method
          */
-        Print(arg1?: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any): void;
+        Print(arg1?: cellValue, arg2?: cellValue, arg3?: cellValue, arg4?: cellValue, arg5?: cellValue, arg6?: cellValue, arg7?: cellValue, arg8?: cellValue): void;
 
         /**
          * 条件が偽のとき、開発中の実行を中断する。
@@ -589,61 +589,61 @@ declare function Switch(arg1?: any, arg2?: any, arg3?: any, arg4?: any, arg5?: a
  * 数値として評価できるかどうかを返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isnumeric-function
  */
-declare function IsNumeric(expression: any): boolean;
+declare function IsNumeric(expression: cellValue): boolean;
 
 /**
  * 日付として評価できるかどうかを返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isdate-function
  */
-declare function IsDate(expression: any): boolean;
+declare function IsDate(expression: cellValue): boolean;
 
 /**
  * Variant が未初期化（Empty）かどうかを返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isempty-function
  */
-declare function IsEmpty(expression: any): boolean;
+declare function IsEmpty(expression: cellValue): boolean;
 
 /**
  * 値が Null かどうかを返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isnull-function
  */
-declare function IsNull(expression: any): boolean;
+declare function IsNull(expression: cellValue): boolean;
 
 /**
  * オブジェクトを参照しているかどうかを返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isobject-function
  */
-declare function IsObject(expression: any): boolean;
+declare function IsObject(expression: cellValue): boolean;
 
 /**
  * 配列かどうかを返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/isarray-function
  */
-declare function IsArray(varName: any): boolean;
+declare function IsArray(varName: cellValue): boolean;
 
 /**
  * エラー値かどうかを返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/iserror-function
  */
-declare function IsError(expression: any): boolean;
+declare function IsError(expression: cellValue): boolean;
 
 /**
  * 省略可能な Variant 引数が省略されたかどうかを返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/ismissing-function
  */
-declare function IsMissing(argName: any): boolean;
+declare function IsMissing(argName: cellValue): boolean;
 
 /**
  * 変数の型名を文字列で返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/typename-function
  */
-declare function TypeName(varName: any): string;
+declare function TypeName(varName: cellValue): string;
 
 /**
  * 変数のデータ型を表す値を返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/vartype-function
  */
-declare function VarType(varName: any): VBA.VbVarType;
+declare function VarType(varName: cellValue): VBA.VbVarType;
 
 /**
  * 引数を要素とする Variant 配列を作る。
@@ -958,9 +958,8 @@ declare function CLngPtr(expression: any): ptr;
 /**
  * 指定したエラー番号を持つエラー値（Variant）を返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/cverr-function
- * @errorValue
  */
-declare function CVErr(expression: any): any;
+declare function CVErr(expression: any): cellValue;
 
 // ---------------------------------------------------------------------
 // 数値

@@ -2131,6 +2131,7 @@ fn primitive(name: &str) -> Option<Type> {
         "string" => Type::Str,
         "boolean" => Type::Bool,
         "any" => Type::Any,
+        "cellValue" => Type::CellValue,
         "object" => Type::Object,
         "void" => Type::Void,
         "wstr" => Type::WStr,
@@ -2141,8 +2142,22 @@ fn primitive(name: &str) -> Option<Type> {
 }
 
 pub const PRIMITIVE_NAMES: &[&str] = &[
-    "byte", "short", "int", "long", "float", "double", "currency", "decimal", "ptr", "date",
-    "string", "boolean", "any", "object", "void",
+    "byte",
+    "short",
+    "int",
+    "long",
+    "float",
+    "double",
+    "currency",
+    "decimal",
+    "ptr",
+    "date",
+    "string",
+    "boolean",
+    "any",
+    "cellValue",
+    "object",
+    "void",
 ];
 
 fn resolve_type_inner(
@@ -2217,7 +2232,12 @@ fn resolve_type_inner(
         }
         TypeRef::Nullable { inner, span } => {
             let ty = resolve_type_inner(prog, m, tps, inner, errors);
-            if !(ty.is_object() || matches!(ty, Type::Any | Type::Error | Type::Param(_))) {
+            if !(ty.is_object()
+                || matches!(
+                    ty,
+                    Type::Any | Type::CellValue | Type::Error | Type::Param(_)
+                ))
+            {
                 errors.push((*span, format!("`{} | null` は使えません。`null` を持てるのはオブジェクト型と `any` のみです", prog.show(&ty))));
             }
             ty
@@ -2246,8 +2266,7 @@ fn resolve_type_inner(
                 members.push(ty);
             }
             let ty = Type::union(members);
-            if *nullable
-                && !(ty.is_object() || ty.is_mixed_union() || matches!(ty, Type::Any | Type::Error))
+            if *nullable && !(ty.is_object() || ty.is_mixed_union() || ty.is_any() || ty.is_error())
             {
                 errors.push((*span, format!("`{} | null` は使えません。`null` を持てるのはオブジェクト型を含む型と `any` のみです", prog.show(&ty))));
             }

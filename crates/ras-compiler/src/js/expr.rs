@@ -28,7 +28,10 @@ pub(crate) enum Place {
 
 /// Types whose values are only known at run time (VBA `Variant`).
 fn is_dyn(t: &Type) -> bool {
-    matches!(t, Type::Any | Type::Error | Type::Param(_)) || t.is_value_union()
+    matches!(
+        t,
+        Type::Any | Type::CellValue | Type::Error | Type::Param(_)
+    ) || t.is_value_union()
 }
 
 /// The `TypeName` of the numbers a value of type `t` can hold, when there is only one.
@@ -79,7 +82,10 @@ impl<'p> Gen<'p> {
         match t {
             // The members of a union are found by name at run time unless all are RAS classes.
             Type::Union(ms) => ms.iter().any(|m| !matches!(m, Type::Class(c, _) if self.prog.classes[*c].kind != ClassKind::Host)),
-            _ => matches!(t, Type::Any | Type::Object | Type::Param(_)) || self.is_host_class(t),
+            _ => {
+                matches!(t, Type::Any | Type::CellValue | Type::Object | Type::Param(_))
+                    || self.is_host_class(t)
+            }
         }
     }
 
@@ -122,7 +128,7 @@ impl<'p> Gen<'p> {
     /// Explicit conversion (`x as T`).
     fn convert(&mut self, v: String, from: &Type, to: &Type) -> String {
         use Type::*;
-        if from == to || matches!(to, Any | Error) {
+        if from == to || matches!(to, Any | CellValue | Error) {
             return v;
         }
         let exact_int = from.is_integer() || matches!(from, Enum(_));

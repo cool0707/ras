@@ -268,7 +268,7 @@ impl<'p> Lowerer<'p> {
                 elem_ty,
             } => {
                 let (mut b, _) = self.capture(|lw| {
-                    if elem_ty.is_object() || *elem_ty == Type::Any {
+                    if elem_ty.is_object() || elem_ty.is_any() {
                         body(lw, name(item.clone()), elem_ty.clone());
                     } else {
                         // A value element (`FileDialogSelectedItems`) arrives in a Variant.

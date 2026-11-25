@@ -137,7 +137,6 @@ pub fn check(prog: &mut Program) {
         ck.check_struct_members(c);
     }
     ck.lints();
-    crate::errval::lint(ck.prog);
 }
 
 fn has_named(args: &[Expr]) -> bool {
@@ -146,7 +145,7 @@ fn has_named(args: &[Expr]) -> bool {
 }
 
 /// The value of an argument, without its name.
-pub(crate) fn named_value(a: &Expr) -> &Expr {
+fn named_value(a: &Expr) -> &Expr {
     match &a.kind {
         ExprKind::NamedArg { value, .. } => value,
         _ => a,
@@ -213,8 +212,10 @@ impl Checker<'_> {
             (Void, _) | (_, Void) | (Ns(_), _) | (_, Ns(_)) => false,
             // Structs (and arrays of them) cannot be stored in a Variant.
             // (A test only runs as JavaScript, where a struct is an object like any other.)
-            (f, Any) | (Any, f) if f.has_struct() => self.prog.modules[self.module].is_test(),
-            (_, Any) | (Any, _) => true,
+            (f, t) | (t, f) if t.is_any() && f.has_struct() => {
+                self.prog.modules[self.module].is_test()
+            }
+            (_, t) | (t, _) if t.is_any() => true,
             // `A | B` fits where each of its members fits; a value fits a union when it fits one of the members.
             (Union(fs), _) => fs.iter().all(|f| self.assignable(f, to)),
             (Null, Union(ts)) => ts.iter().any(|t| t.is_object()),
@@ -288,7 +289,7 @@ impl Checker<'_> {
 
     fn is_numeric(&self, t: &Type) -> bool {
         t.is_numeric()
-            || matches!(t, Type::Any | Type::Error)
+            || matches!(t, Type::Any | Type::CellValue | Type::Error)
             || matches!(t, Type::Param(p) if self.constraint_of(p) == Constraint::Numeric)
     }
 
@@ -298,7 +299,7 @@ impl Checker<'_> {
         if a.is_error() || b.is_error() {
             return Some(Error);
         }
-        if *a == Any || *b == Any {
+        if a.is_any() || b.is_any() {
             return Some(Any);
         }
         if let (Param(x), Param(y)) = (a, b) {
@@ -371,8 +372,26 @@ impl Checker<'_> {
         }
     }
 
+    /// W0313 (spec §2.6.6): a `cellValue` used where VBA raises a type mismatch (13) when it is
+    /// an error value (`#N/A` ...). `what` says how it is used.
+    fn warn_cell_value(&mut self, e: &Expr, t: &Type, what: &str) {
+        if *t != Type::CellValue || self.prog.modules[self.module].is_test() {
+            return;
+        }
+        let shown = cell_value_label(e);
+        self.warn(e.span, "W0313", format!("`{shown}` は `cellValue`（セルのエラー値 `#N/A` などのことがある値）です。そのまま{what}と、エラー値のとき実行時エラー（型が一致しません）になります。`isError()` で確かめて絞り込むか、`Excel.errorToNull()` で `any` にしてください"));
+    }
+
     /// Reports an error unless a value of type `from` (expression `e`) can be stored into `to`.
     fn coerce(&mut self, e: &Expr, from: &Type, to: &Type) {
+        if *from == Type::CellValue && !matches!(to, Type::CellValue | Type::Error) {
+            let what = if *to == Type::Any {
+                "`any` の変数・引数に入れる"
+            } else {
+                "型を変換する"
+            };
+            self.warn_cell_value(e, from, what);
+        }
         if self.assignable(from, to) || self.implicit_narrowing(e.span, from, to) {
             return;
         }
@@ -397,7 +416,7 @@ impl Checker<'_> {
             && (from.is_numeric() || matches!(from, Type::Bool | Type::Date))
         {
             "（`.toString()` かテンプレート文字列 `${x}` で文字列に変換してください）".to_string()
-        } else if from.has_struct() && matches!(to, Type::Any | Type::Object) {
+        } else if from.has_struct() && (to.is_any() || *to == Type::Object) {
             "（構造体は `any` に入れられません。フィールドを個別に渡すか、参照が必要なら `class` を使ってください）".to_string()
         } else if matches!((from, to), (Type::Struct(_), Type::Struct(_))) {
             "（別の構造体型です。リテラルなら `const p: T = { ... }` のように型注釈を付け、そうでなければフィールドを個別に代入してください）".to_string()
@@ -1024,17 +1043,70 @@ impl Checker<'_> {
                     .narrow_typeof(&cur, &name)
                     .map(|ty| vec![(l, ty)])
                     .unwrap_or_default();
-                let f = self
-                    .narrow_away(&cur, |m| {
+                let f = if cur == Type::CellValue {
+                    // `typeof v != "Error"`: not an error value (spec §2.6.6).
+                    if name.eq_ignore_ascii_case("Error") {
+                        vec![(l, Type::Any)]
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    self.narrow_away(&cur, |m| {
                         self.type_name_of(m)
                             .is_some_and(|n| n.eq_ignore_ascii_case(&name))
                     })
                     .map(|ty| vec![(l, ty)])
-                    .unwrap_or_default();
+                    .unwrap_or_default()
+                };
                 if *op == BinaryOp::Eq {
                     (t, f)
                 } else {
                     (f, t)
+                }
+            }
+            // `isError(v)` (spec §2.6.6): `v` is an error value only when it is true;
+            // `isNumeric(v)`, `isEmpty(v)` ... are false for error values.
+            ExprKind::Call { args, .. } => {
+                let Some(l) = args
+                    .first()
+                    .and_then(|a| self.guarded_local(named_value(a)))
+                else {
+                    return none();
+                };
+                if self.fact_ty(env, l) != Type::CellValue {
+                    return none();
+                }
+                let calls = &self.prog.modules[self.module].info.calls;
+                let f = match calls.get(&cond.id).map(|c| &c.target) {
+                    Some(
+                        CallTarget::Fn(f)
+                        | CallTarget::Host(f)
+                        | CallTarget::Method(f)
+                        | CallTarget::DefaultMember(f),
+                    ) => *f,
+                    _ => return none(),
+                };
+                // Only the bundled `IsError` (VBA's, `WorksheetFunction`'s), not one of the user's.
+                if self.prog.modules[self.prog.fns[f].module].kind == ModuleKind::User {
+                    return none();
+                }
+                let name = self.prog.fns[f].vba_name();
+                if name.eq_ignore_ascii_case("IsError") {
+                    (Vec::new(), vec![(l, Type::Any)])
+                } else if [
+                    "IsNumeric",
+                    "IsDate",
+                    "IsEmpty",
+                    "IsNull",
+                    "IsObject",
+                    "IsArray",
+                ]
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(name))
+                {
+                    (vec![(l, Type::Any)], Vec::new())
+                } else {
+                    none()
                 }
             }
             _ => none(),
@@ -1066,7 +1138,7 @@ impl Checker<'_> {
         for m in members {
             if self.is_subtype(&m, target) {
                 kept.push(m);
-            } else if self.is_subtype(target, &m) || matches!(m, Type::Any) {
+            } else if self.is_subtype(target, &m) || m.is_any() {
                 kept.push(target.clone());
             }
         }
@@ -1099,6 +1171,9 @@ impl Checker<'_> {
                 (!kept.is_empty()).then(|| Type::union(kept))
             }
             Type::Any => type_of_type_name(name),
+            // `typeof v == "String"`: not an error value (spec §2.6.6).
+            Type::CellValue if name.eq_ignore_ascii_case("Error") => Some(Type::CellValue),
+            Type::CellValue => Some(type_of_type_name(name).unwrap_or(Type::Any)),
             _ => None,
         }
     }
@@ -1117,7 +1192,7 @@ impl Checker<'_> {
             // `TypeName` of an array: the element type and `()` (`"Variant()"`, `"String()"`).
             Type::Array(e) if !e.is_array() => {
                 let elem = match &**e {
-                    Type::Any | Type::Decimal | Type::Error | Type::Union(_) => {
+                    Type::Any | Type::CellValue | Type::Decimal | Type::Error | Type::Union(_) => {
                         "Variant".to_string()
                     }
                     Type::Object | Type::Map(..) | Type::Func(_) => "Object".to_string(),
@@ -1144,7 +1219,8 @@ impl Checker<'_> {
 
     fn cond(&mut self, e: &Expr) {
         let t = self.value(e, Some(&Type::Bool));
-        if !matches!(t, Type::Bool | Type::Any | Type::Error) {
+        self.warn_cell_value(e, &t, "条件に使う");
+        if !matches!(t, Type::Bool | Type::Any | Type::CellValue | Type::Error) {
             self.err(e.span, "E0303", format!("条件式は `boolean` である必要があります（`{}` です）。比較演算子で明示してください", self.show(&t)));
         }
     }
@@ -1246,6 +1322,8 @@ impl Checker<'_> {
                     }
                     Type::Array(e) => (**e).clone(),
                     Type::Any | Type::Object => Type::Any,
+                    // The elements of a cell value (a 2-D array) may be error values.
+                    Type::CellValue => Type::CellValue,
                     Type::Class(c, args) if self.prog.classes[*c].kind == ClassKind::Host => {
                         match self.prog.classes[*c].call_sig {
                             Some(sig) => {
@@ -1329,6 +1407,7 @@ impl Checker<'_> {
             }
             StmtKind::Switch { disc, cases } => {
                 let dt = self.value(disc, None);
+                self.warn_cell_value(disc, &dt, "`switch` で比べる");
                 self.fx.switch_depth += 1;
                 let mut seen_default = false;
                 for c in cases {
@@ -1396,7 +1475,9 @@ impl Checker<'_> {
             StmtKind::Throw(e) => {
                 let t = self.value(e, None);
                 let err_ty = self.error_type();
-                if !(t == err_ty || matches!(t, Type::Str | Type::Any | Type::Error)) {
+                if !(t == err_ty
+                    || matches!(t, Type::Str | Type::Any | Type::CellValue | Type::Error))
+                {
                     self.err(e.span, "E0351", "`throw` できるのは `new Error(\"...\")`・`catch` で受け取ったエラー・文字列のいずれかです");
                 }
             }
@@ -1645,7 +1726,7 @@ impl Checker<'_> {
                         Some(CallTarget::Intrinsic(Intr::FastMode))
                     )
                 }),
-                Type::Error | Type::Any | Type::Object => true,
+                Type::Error | Type::Any | Type::CellValue | Type::Object => true,
                 _ => false,
             };
             if !ok {
@@ -1711,7 +1792,7 @@ impl Checker<'_> {
 
     fn comparable(&self, a: &Type, b: &Type, equality: bool) -> bool {
         use Type::*;
-        if a.is_error() || b.is_error() || *a == Any || *b == Any {
+        if a.is_error() || b.is_error() || a.is_any() || b.is_any() {
             return true;
         }
         // A union equals a value when one of its members can; ordering needs every member to be ordered.
@@ -1919,7 +2000,7 @@ impl Checker<'_> {
                 match elem {
                     Some(Type::Null) | None => match expect {
                         Some(t @ Type::Array(_)) => t.clone(),
-                        Some(Type::Any) => Type::array(Type::Any),
+                        Some(t @ (Type::Any | Type::CellValue)) => Type::array(t.clone()),
                         _ => {
                             self.err(e.span, "E0385", "配列リテラルの要素の型を決められません。`let a: int[] = []` のように型注釈を付けてください");
                             Type::Error
@@ -1932,9 +2013,17 @@ impl Checker<'_> {
             ExprKind::Arrow(arrow) => self.arrow(e, arrow, expect),
             ExprKind::Unary { op, operand } => {
                 let t = self.value(operand, None);
+                if *op != UnaryOp::TypeOf {
+                    let what = if *op == UnaryOp::Not {
+                        "条件に使う"
+                    } else {
+                        "演算に使う"
+                    };
+                    self.warn_cell_value(operand, &t, what);
+                }
                 match op {
                     UnaryOp::Not => {
-                        if !matches!(t, Type::Bool | Type::Any | Type::Error) {
+                        if !matches!(t, Type::Bool | Type::Any | Type::CellValue | Type::Error) {
                             self.err(
                                 operand.span,
                                 "E0303",
@@ -1976,7 +2065,11 @@ impl Checker<'_> {
                         }
                     }
                     UnaryOp::BitNot => {
-                        if !(t.is_integer() || matches!(t, Type::Any | Type::Error | Type::Enum(_)))
+                        if !(t.is_integer()
+                            || matches!(
+                                t,
+                                Type::Any | Type::CellValue | Type::Error | Type::Enum(_)
+                            ))
                         {
                             self.err(operand.span, "E0387", "`~` は整数にのみ使えます");
                             return Type::Error;
@@ -1991,6 +2084,7 @@ impl Checker<'_> {
             }
             ExprKind::IncDec { operand, .. } => {
                 let t = self.lvalue(operand);
+                self.warn_cell_value(operand, &t, "演算に使う");
                 if !self.is_numeric(&t) {
                     self.err(
                         operand.span,
@@ -2044,7 +2138,7 @@ impl Checker<'_> {
                     Some(want)
                         if self.assignable(&a, want)
                             && self.assignable(&b, want)
-                            && *want != Type::Any =>
+                            && !want.is_any() =>
                     {
                         want.clone()
                     }
@@ -2124,8 +2218,12 @@ impl Checker<'_> {
                 match &ot {
                     Type::Array(el) => {
                         let it = self.value(index, Some(&Type::Int));
+                        self.warn_cell_value(index, &it, "添字に使う");
                         if !(it.is_integer()
-                            || matches!(it, Type::Any | Type::Error | Type::Enum(_)))
+                            || matches!(
+                                it,
+                                Type::Any | Type::CellValue | Type::Error | Type::Enum(_)
+                            ))
                         {
                             self.err(
                                 index.span,
@@ -2145,7 +2243,10 @@ impl Checker<'_> {
                     }
                     Type::Str => {
                         let it = self.value(index, Some(&Type::Int));
-                        if !(it.is_integer() || matches!(it, Type::Any | Type::Error)) {
+                        self.warn_cell_value(index, &it, "添字に使う");
+                        if !(it.is_integer()
+                            || matches!(it, Type::Any | Type::CellValue | Type::Error))
+                        {
                             self.err(
                                 index.span,
                                 "E0389",
@@ -2201,8 +2302,15 @@ impl Checker<'_> {
                         self.prog.fns[sig].ret_ty().subst(&env)
                     }
                     Type::Any | Type::Object => {
-                        self.value(index, None);
+                        let it = self.value(index, None);
+                        self.warn_cell_value(index, &it, "添字に使う");
                         Type::Any
+                    }
+                    // The elements of a cell value (a 2-D array) may be error values.
+                    Type::CellValue => {
+                        let it = self.value(index, None);
+                        self.warn_cell_value(index, &it, "添字に使う");
+                        Type::CellValue
                     }
                     Type::Error => {
                         self.value(index, None);
@@ -2220,6 +2328,10 @@ impl Checker<'_> {
                 let tps = self.fx.type_params.clone();
                 let target = resolve_type(self.prog, self.module, &tps, ty);
                 let from = self.value(expr, Some(&target));
+                // `v as any` says the value is wanted as it is; any other type converts it.
+                if !target.is_any() {
+                    self.warn_cell_value(expr, &from, "型を変換する");
+                }
                 if !self.castable(&from, &target) {
                     self.err(
                         e.span,
@@ -2240,7 +2352,7 @@ impl Checker<'_> {
                 self.fx.instanceof_types.insert(e.id, target.clone());
                 if !(from.is_object()
                     || from.is_mixed_union()
-                    || matches!(from, Type::Any | Type::Error))
+                    || matches!(from, Type::Any | Type::CellValue | Type::Error))
                 {
                     self.err(
                         expr.span,
@@ -2361,7 +2473,13 @@ impl Checker<'_> {
         t.is_numeric()
             || matches!(
                 t,
-                Type::Str | Type::Bool | Type::Date | Type::Any | Type::Error | Type::Param(_)
+                Type::Str
+                    | Type::Bool
+                    | Type::Date
+                    | Type::Any
+                    | Type::CellValue
+                    | Type::Error
+                    | Type::Param(_)
             )
     }
 
@@ -2995,7 +3113,7 @@ impl Checker<'_> {
                     Access::Error
                 }
             },
-            Type::Any | Type::Object => {
+            Type::Any | Type::CellValue | Type::Object => {
                 // spec §3.2.3 rule 5
                 let has_ext = self.prog.modules[self.module]
                     .ext_methods
@@ -3414,7 +3532,7 @@ impl Checker<'_> {
                 };
                 let at = self.info().ty(a.id);
                 let ok = if p.mode == PassMode::ByRef {
-                    at == want || want == Type::Any || at.is_error()
+                    at == want || want.is_any() || at.is_error()
                 } else {
                     self.assignable(&at, &want)
                 };
@@ -3595,9 +3713,13 @@ impl Checker<'_> {
             BinaryOp::Coalesce => {
                 let a = self.value(lhs, None);
                 let b = self.value(rhs, Some(&a));
-                if !(a.is_object() || matches!(a, Type::Any | Type::Error)) {
+                if !(a.is_object() || matches!(a, Type::Any | Type::CellValue | Type::Error)) {
                     self.err(lhs.span, "E0394", format!("`??` の左辺はオブジェクト型か `any` である必要があります（`{}` は null になりません）", self.show(&a)));
                     return Type::Error;
+                }
+                // An error value is not null: it stays (spec §2.6.6).
+                if a == Type::CellValue {
+                    return Type::CellValue;
                 }
                 if a == Type::Any || a == Type::Null {
                     return if b == Type::Null { Type::Any } else { b };
@@ -3656,6 +3778,18 @@ impl Checker<'_> {
         lhs: &Expr,
         rhs: &Expr,
     ) -> Type {
+        // `v == null` is `IsEmpty` / `IsNull`, which take an error value.
+        let null_check =
+            matches!(op, BinaryOp::Eq | BinaryOp::Ne) && (*a == Type::Null || *b == Type::Null);
+        if !null_check {
+            let what = if op.is_comparison() {
+                "比較する"
+            } else {
+                "演算に使う"
+            };
+            self.warn_cell_value(lhs, a, what);
+            self.warn_cell_value(rhs, b, what);
+        }
         if a.is_error() || b.is_error() {
             return if op.is_comparison() {
                 Type::Bool
@@ -3748,7 +3882,9 @@ impl Checker<'_> {
             | BinaryOp::BitXor
             | BinaryOp::Shl
             | BinaryOp::Shr => {
-                let int_like = |t: &Type| t.is_integer() || matches!(t, Type::Enum(_) | Type::Any);
+                let int_like = |t: &Type| {
+                    t.is_integer() || matches!(t, Type::Enum(_) | Type::Any | Type::CellValue)
+                };
                 if !int_like(a) || !int_like(b) {
                     self.err(
                         span,
@@ -4134,7 +4270,7 @@ impl Checker<'_> {
                     );
                     ret
                 }
-                Type::Any | Type::Object => {
+                Type::Any | Type::CellValue | Type::Object => {
                     for a in args {
                         self.value(a, None);
                     }
@@ -4455,7 +4591,7 @@ impl Checker<'_> {
                 return;
             }
         }
-        if at != want && !at.is_error() && !want.is_error() && *want != Type::Any {
+        if at != want && !at.is_error() && !want.is_error() && !want.is_any() {
             self.err(a.span, "E0407", format!("{what} には `{}` 型の変数が必要です（`{}` は渡せません。参照渡しでは型が完全に一致している必要があります）", self.show(want), self.show(at)));
         }
         // The callee may assign through the reference.
@@ -4711,7 +4847,9 @@ impl Checker<'_> {
                         }
                         for a in args {
                             let t = self.value(a, Some(&Type::Int));
-                            if !(t.is_integer() || matches!(t, Type::Any | Type::Error)) {
+                            if !(t.is_integer()
+                                || matches!(t, Type::Any | Type::CellValue | Type::Error))
+                            {
                                 self.err(a.span, "E0389", "配列の長さは整数である必要があります");
                             }
                         }
@@ -4739,7 +4877,12 @@ impl Checker<'_> {
                         if !(k.is_numeric()
                             || matches!(
                                 k,
-                                Type::Str | Type::Any | Type::Date | Type::Error | Type::Param(_)
+                                Type::Str
+                                    | Type::Any
+                                    | Type::CellValue
+                                    | Type::Date
+                                    | Type::Error
+                                    | Type::Param(_)
                             ))
                         {
                             self.err(
@@ -5803,18 +5946,22 @@ impl Checker<'_> {
             | FileSeek | FileLock | FileUnlock | FileWidth | FileRename => {
                 self.file_io_call(call, intr, args)
             }
+            // Cell values may be error values (spec §2.6.6).
             RangeToArray | SheetUsedTable => {
                 self.arg_count(call, args, 0, 0);
-                Type::array(Type::array(Type::Any))
+                Type::array(Type::array(Type::CellValue))
             }
             RangeToColumn | RangeToRow => {
                 self.arg_count(call, args, 0, 0);
-                Type::array(Type::Any)
+                Type::array(Type::CellValue)
             }
             RangeFromArray => {
                 if self.arg_count(call, args, 1, 1) {
                     let t = self.value(&args[0], None);
-                    if !matches!(t, Type::Array(_) | Type::Any | Type::Error) {
+                    if !matches!(
+                        t,
+                        Type::Array(_) | Type::Any | Type::CellValue | Type::Error
+                    ) {
                         self.err(
                             args[0].span,
                             "E0301",
@@ -5839,7 +5986,7 @@ impl Checker<'_> {
                 }
                 match self.value(&args[0], None) {
                     Type::Null | Type::Error => Type::Any,
-                    t => t,
+                    t => t.without_cell_errors(),
                 }
             }
         }
@@ -6081,7 +6228,7 @@ fn stmt_returns(s: &Stmt) -> bool {
 }
 
 /// Control never reaches the statement after `s`.
-pub(crate) fn stmt_exits(s: &Stmt) -> bool {
+fn stmt_exits(s: &Stmt) -> bool {
     match &s.kind {
         StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break(_) | StmtKind::Continue(_) => {
             true
@@ -6106,7 +6253,7 @@ fn assigns_target(target: &Expr, name: &str) -> bool {
 }
 
 /// `e` contains an assignment to the variable `name`.
-pub(crate) fn assigns_in_expr(e: &Expr, name: &str) -> bool {
+fn assigns_in_expr(e: &Expr, name: &str) -> bool {
     crate::astutil::any_expr_in(e, &mut |x| match &x.kind {
         ExprKind::Assign { target, .. } => assigns_target(target, name),
         ExprKind::IncDec { operand, .. } => assigns_target(operand, name),
@@ -6114,12 +6261,27 @@ pub(crate) fn assigns_in_expr(e: &Expr, name: &str) -> bool {
     })
 }
 
-pub(crate) fn assigns_in_stmt(s: &Stmt, name: &str) -> bool {
+fn assigns_in_stmt(s: &Stmt, name: &str) -> bool {
     crate::astutil::any_expr(s, &mut |x| match &x.kind {
         ExprKind::Assign { target, .. } => assigns_target(target, name),
         ExprKind::IncDec { operand, .. } => assigns_target(operand, name),
         _ => false,
     })
+}
+
+/// How a `cellValue` expression is shown in W0313 (`ws.range(…).value`, `data[…][…]`).
+fn cell_value_label(e: &Expr) -> String {
+    match &e.kind {
+        ExprKind::Paren(inner) | ExprKind::NonNull(inner) => cell_value_label(inner),
+        ExprKind::Name(id) => id.text.clone(),
+        ExprKind::This => "this".into(),
+        ExprKind::Member { object, name, .. } => {
+            format!("{}.{}", cell_value_label(object), name.text)
+        }
+        ExprKind::Call { callee, .. } => format!("{}(…)", cell_value_label(callee)),
+        ExprKind::Index { object, .. } => format!("{}[…]", cell_value_label(object)),
+        _ => "…".into(),
+    }
 }
 
 /// The type whose values `TypeName` reports as `name` (`"String"` → `string`, `"Variant()"` → `any[]`).
@@ -6288,7 +6450,7 @@ impl Checker<'_> {
                     Type::Array(e) => (**e).clone(),
                     other => other.clone(),
                 };
-                let ok = !matches!(elem, Type::Array(_) | Type::Any)
+                let ok = !matches!(elem, Type::Array(_) | Type::Any | Type::CellValue)
                     && self.stringifiable(&elem)
                     && elem.union_members().is_none()
                     || t.is_error();

@@ -4126,7 +4126,7 @@
 		},
 		"type-primitive": {
 			"name": "support.type.primitive.ras",
-			"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(byte|short|int|long|float|double|currency|decimal|ptr|date|string|boolean|any|object|void|wstr|astr)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
+			"match": "(?<![_$[:alnum:]])(?:(?<=\\.\\.\\.)|(?<!\\.))(byte|short|int|long|float|double|currency|decimal|ptr|date|string|boolean|any|cellValue|object|void|wstr|astr)(?![_$[:alnum:]])(?:(?=\\.\\.\\.)|(?!\\.))"
 		},
 		"type-builtin-literals": {
 			"name": "support.type.builtin.ras",

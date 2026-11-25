@@ -20,8 +20,9 @@ export function rebuildReport() {
     const last = ws.lastRow();
     let total = 0.0;
     for (let r = 2; r <= last; r++) {
-        const price: double = ws.cells(r, 3).value;
-        const qty: double = ws.cells(r, 4).value;
+        // セルの値は cellValue（#N/A などのエラー値のことがある）。エラー値は 0 として計算する
+        const price: double = Excel.errorToNull(ws.cells(r, 3).value) ?? 0.0;
+        const qty: double = Excel.errorToNull(ws.cells(r, 4).value) ?? 0.0;
         total += nonNegative(price * qty);
     }
     for (let r = 2; r <= last; r++) {

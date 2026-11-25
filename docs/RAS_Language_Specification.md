@@ -91,6 +91,7 @@ TypeScript の `number` 型は存在しない（`number` と書いた場合は�
 | `string` | `String` | |
 | `boolean` | `Boolean` | |
 | `any` | `Variant` | 型不明・異種混在 |
+| `cellValue` | `Variant` | セルの値。エラー値（`#N/A` など）のことがある `any`。§2.6.6 |
 | `object` | `Object` | 遅延バインディング |
 | `A \| B`（ユニオン型） | `Object` / `Variant` | メンバーがすべてオブジェクト型なら `Object`、それ以外は `Variant`。§2.6 |
 | `Excel.Range` 等 | `Range` 等（事前バインディング） | ホスト型ライブラリ由来。§15.3 |
@@ -412,7 +413,7 @@ End Function
 * **シートの種類:** シートのコレクションは `interface Sheets<T = Worksheet | Chart>` と宣言している（§2.4.1）。Excel 4.0 マクロシートは `Worksheet` オブジェクトとして現れる。ダイアログシート（`DialogSheet`）は型定義にないため、ダイアログシートを含むブックでは `instanceof Excel.Worksheet` の偽の分岐が `Excel.Chart` とは限らない。
 * **`getOpenFilename` の配列:** Excel が返す配列は 1 始まりだが、RAS の配列はすべて 0 始まりのため（§13.3）、生成する VBA はランタイム `RAS_Rebase1` で 0 始まりに直す。`typeof` は `"Variant()"`。
 * **既存のコード:** `const ws: Excel.Worksheet = activeSheet;` や `activeSheet.cells(1, 1)` はそのままコンパイルでき、警告（`W0306` / `W0305`）が出る。
-* **ユニオン型にしていないもの:** 値が引数や状況でさまざまに変わるもの（`selection`、`application.inputBox`・`evaluate`・`run`・`caller`、`Range.value` など）、エラー値（`CVErr`）や `Null` を返しうるもの、引数の有無で単体とコレクションが変わるもの（`chartObjects(...)` など）は `object` / `any` のまま。
+* **ユニオン型にしていないもの:** 値が引数や状況でさまざまに変わるもの（`selection`、`application.inputBox`・`evaluate`・`run`・`caller`、`Range.value` など）、`Null` を返しうるもの、引数の有無で単体とコレクションが変わるもの（`chartObjects(...)` など）は `object` / `any` のまま。セルのエラー値を返しうるもの（`Range.value` など）は `cellValue`（§2.6.6）。
 
 ```typescript
 const f = application.getOpenFilename("Excel ブック,*.xlsx", 1, "開くブック", "開く", true);
@@ -429,6 +430,31 @@ for (const sh of thisWorkbook.sheets) {
     } else {
         sh.chartTitle.text = sh.name;      // sh: Excel.Chart
     }
+}
+```
+
+#### 2.6.6 セルの値（`cellValue`）
+
+セルの値は、数値・文字列などのほかに、セルのエラー値（`#N/A`、`#DIV/0!` など。VBA の `Variant` の `vbError`）のことがある。VBA はエラー値を比較・演算・型変換すると、エラー値のときだけ実行時エラー 13（型が一致しません）になるため、テストで見つけにくい。そうした値を型 `cellValue` で表し、確かめずに使う箇所を警告する。
+
+* **型:** `cellValue` は「エラー値のことがある `any`」。格納先は `any` と同じ `Variant`、`typeof` も同じ。どんな値も代入できる（`ws.range("A1").value = 1`）。
+* **`cellValue` の値:** 同梱の型定義では `Range.value` / `value2`、`evaluate`（`` fx`…` ``、`Application` / `Worksheet` の `evaluate`）、`Application` の `match` / `index` / `vLookup`、`cvErr`。`toArray()` / `usedTable()` は `cellValue[][]`、`toColumn()` / `toRow()` は `cellValue[]`。`cellValue` の添字・`for...of` の要素も `cellValue`（複数セルの `value` は 2 次元配列）。型注釈のない変数・関数の戻り値は、ほかの型と同じく `cellValue` と推論される。自分の関数・フィールド・引数にも `cellValue` を書ける。
+* **警告（`W0313`）:** `cellValue` の値を次のように使うと警告。比較（`==` / `!=` / `<` など）・演算（`+` / `-` / `!` / `++` など）・条件（`if` / `while` / `&&` / 三項演算子）・`switch`・添字・`as` による変換（`as any` を除く）・`cellValue` 以外の型の変数・引数・戻り値・フィールドへの代入（`any` も含む。`any` に入れると以降は警告されなくなるため）。テストファイルでは警告しない。
+* **警告しない使い方:** `== null` / `!= null`（`IsEmpty` / `IsNull` になる）、`??`（エラー値は `null` ではないので結果も `cellValue`）、`typeof`、テンプレートリテラル（`CStr` と同じく `Error 2042` になる）、メンバーの参照、`cellValue` の変数・引数・フィールドへの代入、`as any`（そのまま使うことを明示する）。同梱の型定義でエラー値を受け取る引数は `cellValue` にしている（`isError`・`isNumeric`・`isDate`・`isEmpty`・`isNull`・`isObject`・`isArray`・`typeName`・`varType`、`debug.print`、`Application` の `match` / `vLookup` の検索値、`WorksheetFunction` の `isError` / `isNA` / `isErr` / `ifError` / `ifNa` などの判定関数）。`console.log` も受け取る。
+* **絞り込み（§2.6.4 と同じ範囲）:** ローカル変数・引数の `cellValue` は、`isError(v)`（VBA の `IsError`・`WorksheetFunction.IsError`）が偽の側、`isNumeric(v)` / `isDate(v)` / `isEmpty(v)` / `isNull(v)` / `isObject(v)` / `isArray(v)` が真の側、`typeof v == "Error"` が偽の側で `any` になる。`typeof v == "String"` などほかの型名なら、真の側でその型になる。`if (isError(v)) continue;` のように抜けた後も同じ。その範囲で変数に代入すると絞り込みは成り立たない。
+* **変換:** `Excel.errorToNull(v)` はエラー値を `null` にして、型の `cellValue` を `any` にする（`cellValue[][]` は `any[][]`。§13.3）。既定値は `??` で付ける（`Excel.errorToNull(v) ?? 0`）。
+
+```typescript
+const v = ws.range("A1").value;          // v: cellValue
+if (v == "済") { ... }                    // 警告 W0313（#N/A なら実行時エラー）
+if (isError(v)) return;
+if (v == "済") { ... }                    // v: any。警告なし
+
+const rows = Excel.errorToNull(ws.range("A1:C9").toArray());   // any[][]
+const price = Excel.errorToNull(ws.cells(r, 3).value) ?? 0;
+
+function lookup(code: string) {          // 戻り値は cellValue と推論される
+    return application.vLookup(code, Sheet2.range("A:C"), 3, false);
 }
 ```
 
@@ -769,11 +795,7 @@ On Error GoTo 0
 13. **（追加）最適化の可視化:** インライン展開・一括転送・ループ融合が適用された／適用できなかった箇所を Hint と CodeLens で示す（理由付き）。
 14. **（v0.9で追加）ホストの名前の綴り:** Excel / VBA / Office のメンバー・グローバルを VBA の綴り（`ws.Cells`、`MsgBox`）で書くと警告（`W0304`）。意味は変わらず、`ras check --fix` とクイックフィックスで camelCase に書き換えられる（§15.3.1）。
 15. **（v0.9で追加）`typeof` の比較:** `typeof x == "string"` のように JavaScript の型名と比較すると警告（`W0312`）。`typeof` は VBA の `TypeName` と同じ名前を返す（§2.6.4）。
-16. **（追加）エラー値かもしれない値の使用:** セルのエラー値（`#N/A` など）のことがある値を、確かめずに比較・演算・条件・型変換（`as`、型の付いた変数・引数・戻り値への代入）・添字・`switch`・関数の引数に使うと警告（`W0313`）。VBA はエラー値のときだけ実行時エラー 13（型が一致しません）になるため（§13.3）。
-    * **エラー値かもしれない値:** doc コメントに `@errorValue` の付いたメンバー・関数の値（同梱の型定義では `Range.value` / `value2`、`Application` の `evaluate` / `match` / `index` / `vLookup`、`Worksheet.evaluate`、`CVErr`。自分の関数にも付けられる）、`toArray()` / `usedTable()` / `toColumn()` / `toRow()` の要素、それらの要素（添字・`for...of`）。
-    * **追跡:** そうした値を入れた変数（関数の中の変数と、`Main` のトップレベルの変数）は、関数の中で追跡する。`isError(v)` が偽の側、`isNumeric(v)` / `isDate(v)` / `isEmpty(v)` / `isNull(v)` / `isObject(v)` / `isArray(v)` が真の側、`typeof v == "Error"` が偽の側（ほかの型名なら真の側）、`v == null` が真の側では警告しない。`if (isError(v)) return;` のように抜けた後も同じ（§2.6.4 の絞り込みと同じ範囲）。別の値を代入すると追跡をやめる。分岐の後は、どちらかの経路でエラー値かもしれなければ、エラー値かもしれないものとする。ほかの関数へ渡した値、フィールドや配列の要素に入れた値は追跡しない。
-    * **警告しない使い方:** `== null` / `!= null`、`??`、`typeof`、テンプレートリテラル（`CStr` と同じく `Error 2042` になる）、`any` の変数・フィールドへの代入、エラー値を受け取る関数の引数（`isError` などの判定関数、`typeName`、`varType`、`console.log`、`Debug.Print`、`Excel.match`、`Excel.errorToNull`、`Application` の `match` / `index` / `vLookup` など）。テストファイルでは警告しない。
-    * **直し方:** `isError()` で確かめるか、`Excel.errorToNull(v)` でエラー値を `null` にする（§13.3）。
+16. **（追加）セルの値（`cellValue`）の使用:** エラー値（`#N/A` など）のことがある `cellValue` の値を、`isError()` などで絞り込まずに比較・演算・条件・型変換・`cellValue` 以外への代入に使うと警告（`W0313`）。VBA はエラー値のときだけ実行時エラー 13（型が一致しません）になるため（§2.6.6）。
 
 ---
 
@@ -1612,7 +1634,7 @@ RAS は以下のすべての経路から `RAS_EnsureInit` を呼び、初期化�
 * **`Collection` は 1 始まり:** RAS の `Collection` ラッパは 0 始まりで添字を補正する。
 * **`Scripting.Dictionary`:** 遅延バインディング（`CreateObject`）で生成し、参照設定に依存しない。`Map<K, V>` 型として提供する。
 * **`WorksheetFunction.Match` 等が見つからないとき実行時エラー:** RAS の `Excel.match()` 等は `Application.Match` を用い、エラー値を `null` に変換して返す。
-* **セルのエラー値を比較すると実行時エラー:** `#N/A` などのエラー値（`Variant` の `vbError`）を `=` や `<` で比較したり、演算・型変換したりすると、VBA は実行時エラー 13（型が一致しません）になる。値がエラー値のときだけ起きるので、テストで見つけにくい。RAS は確かめずに使っている箇所を警告する（`W0313`、§6 の 16）。`Excel.errorToNull(v)`（ランタイム `RAS_ErrorToNull`）は、エラー値を `null`（`Empty`）にして返し、ほかの値はそのまま返す。配列（2 次元配列・配列の配列を含む）なら、エラー値の要素を `null` にした写しを返す（`Excel.errorToNull(ws.range("A1:C9").toArray())`）。既定値は `??` で付ける（`Excel.errorToNull(v) ?? ""`）。戻り値の型は引数の型と同じ。ユニオン型の `==`（`RAS_UnionEq`）は、エラー値を別の種類の値として扱い、エラー値どうしはエラー番号で比べる（§2.6.2）。
+* **セルのエラー値を比較すると実行時エラー:** `#N/A` などのエラー値（`Variant` の `vbError`）を `=` や `<` で比較したり、演算・型変換したりすると、VBA は実行時エラー 13（型が一致しません）になる。値がエラー値のときだけ起きるので、テストで見つけにくい。RAS はそうした値を型 `cellValue` で表し、確かめずに使っている箇所を警告する（`W0313`、§2.6.6）。`Excel.errorToNull(v)`（ランタイム `RAS_ErrorToNull`）は、エラー値を `null`（`Empty`）にして返し、ほかの値はそのまま返す。配列（2 次元配列・配列の配列を含む）なら、エラー値の要素を `null` にした写しを返す（`Excel.errorToNull(ws.range("A1:C9").toArray())`）。既定値は `??` で付ける（`Excel.errorToNull(v) ?? ""`）。戻り値の型は引数の型の `cellValue` を `any` にしたもの（`cellValue` → `any`、`cellValue[][]` → `any[][]`）。ユニオン型の `==`（`RAS_UnionEq`）は、エラー値を別の種類の値として扱い、エラー値どうしはエラー番号で比べる（§2.6.2）。
 * **`Range.Find` の設定持ち越し:** `find()` ラッパはすべての引数（`LookAt`, `LookIn`, `MatchCase` 等）を毎回明示する。
 
 ### 13.4 シート・Range の参照

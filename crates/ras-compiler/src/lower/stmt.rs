@@ -817,8 +817,7 @@ impl<'p> Lowerer<'p> {
         };
         let n = self.local_name(&var_name.text, &var_ty);
         self.bind(local, Binding::Var(n.clone()));
-        let direct =
-            var_ty.is_object() || matches!(var_ty, Type::Any) || self.vtype(&var_ty).0 == "Variant";
+        let direct = var_ty.is_object() || var_ty.is_any() || self.vtype(&var_ty).0 == "Variant";
         self.enter_loop(LoopKind::For, label);
         let (control, mut b) = if direct && !var_ty.is_array() {
             (n, Vec::new())
