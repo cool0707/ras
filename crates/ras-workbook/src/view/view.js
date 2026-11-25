@@ -4687,13 +4687,14 @@
             });
         }
 
-        // 罫線: the line and its color, the presets, and each side (the buttons around the
-        // picture of the cells, or the picture itself clicked).
+        // 罫線: one section, as each effect of 図形の書式設定 is: the line and its color (what the
+        // borders are drawn with), then where they are drawn: by a preset, by the buttons around
+        // the picture of the cells, or by the picture itself clicked.
         {
             const sides = bordersOf(sel);
             const many = { v: !single(sel) && sel.c2 > sel.c1, h: !single(sel) && sel.r2 > sel.r1 };
-            const sec = section("border", "線");
-            const row = line(sec, "スタイル");
+            const box = section("border", "罫線");
+            const row = line(box, "スタイル");
             const pick = row.appendChild(el("button", "pcolor pline"));
             pick.type = "button";
             pick.dataset.field = "borderLine";
@@ -4712,17 +4713,19 @@
                     b.querySelector("span").innerHTML = lineSample(key, 96);
                 }
             });
-            colorRow(sec, "色", borderPen.color, "自動", (c) => {
+            colorRow(box, "色", borderPen.color, "自動", (c) => {
                 setPen({ color: c });
                 renderPane("borderColor");
             }, "borderColor");
             const pen = () => ({ line: borderPen.line, color: borderPen.color });
-            const presets = section("border", "プリセット").appendChild(el("div", "pbtns"));
+            const presets = box.appendChild(el("div", "prow pborderpresets"));
+            presets.appendChild(el("span", "plabel", "プリセット"));
             const preset = (label, icon, change, off) => {
-                const b = presets.appendChild(el("button"));
+                const b = presets.appendChild(el("button", "pside"));
                 b.type = "button";
+                b.title = label;
+                b.setAttribute("aria-label", label);
                 b.appendChild(borderIcon(icon));
-                b.appendChild(el("span", null, label));
                 b.disabled = !!off;
                 b.addEventListener("click", () => set({ borders: change() }));
             };
@@ -4730,7 +4733,6 @@
             preset("外枠", { t: "s", b: "s", l: "s", r: "s" }, () => ({ left: pen(), top: pen(), right: pen(), bottom: pen() }));
             preset("内側", { h: "s", v: "s" }, () => Object.assign(many.v ? { insideV: pen() } : {}, many.h ? { insideH: pen() } : {}), !many.v && !many.h);
 
-            const box = section("border", "罫線");
             const grid = box.appendChild(el("div", "pborders"));
             // A side clicked: drawn with the pen, or taken away when it is drawn so already.
             const toggle = (k) => {
@@ -4820,7 +4822,7 @@
             grid.appendChild(el("div"));
             const bottom = grid.appendChild(el("div", "pbrow"));
             for (const k of ["diagUp", "left", "insideV", "right", "diagDown"]) sideButton(bottom, k);
-            box.appendChild(el("div", "pnote", "プリセット、プレビュー枠内、または周りのボタンをクリックすると、上で選んだスタイルと色の罫線が適用されます。"));
+            box.appendChild(el("div", "pnote", "選んだスタイルと色で、プリセットや周りのボタン、図のクリックで罫線を引きます（同じ罫線をもう一度クリックすると消えます）。"));
         }
 
         // 塗りつぶし: 背景色, パターンの色, パターンの種類, サンプル

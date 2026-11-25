@@ -586,6 +586,8 @@ body.panesizing { cursor: col-resize; user-select: none; }
 #pane .pfillsample { height: 40px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; }
 #pane .pbtns button:disabled, #pane .pside:disabled { opacity: .45; cursor: default; background: #fff; border-color: #c8c8c8; }
 #pane .pbtns button .bico { display: inline-flex; }
+#pane .pborderpresets { gap: 4px; }
+#pane .pborderpresets + .pborders { margin-top: 2px; padding-top: 8px; border-top: 1px solid #e6e6e6; }
 #pane .pborders { display: grid; grid-template-columns: 30px auto; grid-template-rows: auto 30px; gap: 4px; justify-content: start; padding: 4px 0 6px; }
 #pane .pbcol { display: flex; flex-direction: column; justify-content: space-between; }
 #pane .pbrow { display: flex; justify-content: space-between; }
