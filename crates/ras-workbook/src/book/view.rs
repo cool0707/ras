@@ -883,6 +883,9 @@ impl Book {
                 if let Some(t) = &o.text_box {
                     j["textBox"] = t.clone();
                 }
+                if let Some(p) = &o.props {
+                    j["props"] = p.clone();
+                }
                 j
             })
             .collect();

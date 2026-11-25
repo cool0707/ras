@@ -661,7 +661,9 @@ pub fn view_page(
     before_name: &str,
     editable: bool,
 ) -> Result<String, JsError> {
-    let mut b = open(bytes)?;
+    // (The page that edits the workbook: RAND, NOW and the like as the file has them, as
+    // `ras book view --editable` shows them.)
+    let mut b = book::Book::open_bytes_as(bytes, !editable).map_err(err)?;
     let changes = match before {
         Some(old) => Some(diff::diff(&mut open(&old)?, &mut b).map_err(err)?),
         None => None,

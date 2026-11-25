@@ -1034,7 +1034,7 @@
                     if (movable(obj) && obj.text !== undefined) {
                         e.preventDefault();
                         selectObject(box, obj);
-                        editObjectText(obj);
+                        editObjectText(obj, true);
                     }
                     return;
                 }
@@ -2929,16 +2929,18 @@
         text.focus();
         text.setSelectionRange(text.value.length, text.value.length);
     }
-    // F2, a double click: the text in the pane of the object.
-    function editObjectText(obj) {
+    // F2, a double click: the text in the pane of the object (a double click: all of it
+    // selected).
+    function editObjectText(obj, all) {
         if (!movable(obj) || obj.text === undefined || busy || !view) return;
-        if (obj.textBox && obj.box) editShapeText(obj);
+        if (obj.textBox && obj.box) editShapeText(obj, all);
         else openPane("format", "text");
     }
     // The text of a shape typed in the shape, as Excel's: over its text, in its font, where its
-    // text box puts it. Enter starts a new line; Esc or a click elsewhere sets it.
+    // text box puts it. Enter starts a new line; Esc or a click elsewhere sets it. `all`: its
+    // text selected (a double click), else the caret after it (shown in an empty shape too).
     let shapeEditor = null;
-    function editShapeText(obj) {
+    function editShapeText(obj, all) {
         if (shapeEditor) return;
         const box = obj.box;
         const shape = box.querySelector(":scope > .shape") || box;
@@ -2952,6 +2954,8 @@
         Object.assign(cover.style, { padding: pad, justifyContent: just, color: tb.color });
         const ta = cover.appendChild(el("textarea"));
         ta.spellcheck = false;
+        // (One line high when empty: the caret where the text box puts its text.)
+        ta.rows = 1;
         ta.value = obj.text;
         if (!tb.wrap) ta.wrap = "off";
         // The font of its first run, the alignment of its first paragraph.
@@ -2994,8 +2998,16 @@
         for (const type of ["mousedown", "click", "dblclick", "contextmenu"]) ta.addEventListener(type, (e) => e.stopPropagation());
         shapeEditor = { obj, ta };
         fit();
-        ta.focus({ preventScroll: true });
-        ta.setSelectionRange(ta.value.length, ta.value.length);
+        const place = () => {
+            if (done) return;
+            ta.focus({ preventScroll: true });
+            if (all) ta.select();
+            else ta.setSelectionRange(ta.value.length, ta.value.length);
+        };
+        place();
+        // (Again once the double click and what the selection redraws are over, so the focus
+        // and the caret stay in the shape.)
+        requestAnimationFrame(() => document.activeElement !== ta && place());
     }
     function deleteObject(obj) {
         if (!movable(obj) || busy || !view) return;
@@ -3486,7 +3498,7 @@
         input.spellcheck = false;
         input.autocomplete = "off";
         let now = null;
-        const show = () => (input.value = now === null ? "" : name === "°" ? `${now}°` : `${now} ${name}`);
+        const show = () => (input.value = now === null ? "" : name === "°" || name === "%" ? `${now}${name}` : `${now} ${name}`);
         const take = (cm) => {
             if (!isFinite(cm)) return show();
             cm = Math.round(Math.min(Math.max(cm, min), max) * 100) / 100;
@@ -3618,15 +3630,172 @@
         effects: '<path d="M8 1.8 14.2 6.3 11.8 13.5H4.2L1.8 6.3z"/>',
         size: '<rect x="5" y="5" width="7" height="7"/><path d="M2.5 1.5v13M1.5 2.5h2M1.5 13.5h2M5 2.5h9M13 1.5v2M7.5 8.5h2M8.5 7.5v2"/>',
         text: '<path d="M4 11.5 8 2l4 9.5M5.4 8.3h5.2"/><path d="M2 14.5h12" stroke-width="2"/>',
+        code: '<path d="M5.5 4 1.5 8l4 4M10.5 4l4 4-4 4M9.2 2.5l-2.4 11"/>',
     };
     const PANE_PAGES = [
         ["fill", "塗りつぶしと線"],
         ["effects", "効果"],
         ["size", "サイズとプロパティ"],
         ["text", "文字"],
+        ["code", "コード"],
     ];
     // The sections folded (by their heading), as long as the page is open.
     const paneFolded = new Set();
+    // The properties of an object as the object model (VBA's Shape) has them, as Chrome's
+    // developer tools list an element's: a name and its value, an object (Fill, Line, ...)
+    // opened by its triangle; what is opened stays so while the pane is.
+    const propsOpen = new Set();
+    const MSO_SHAPES = { rect: 1, parallelogram: 2, trapezoid: 3, diamond: 4, roundRect: 5, octagon: 6, triangle: 7, rtTriangle: 8, ellipse: 9, hexagon: 10, plus: 11, pentagon: 51, chevron: 52, star5: 92, rightArrow: 33, leftArrow: 34, upArrow: 35, downArrow: 36, can: 13, cube: 14, smileyFace: 17, donut: 18, heart: 21, lightningBolt: 22, sun: 23, moon: 24, cloud: 179, wedgeRectCallout: 105, wedgeRoundRectCallout: 106, wedgeEllipseCallout: 107 };
+    function objectModel(obj) {
+        const pt = (px) => Math.round(px * 0.75 * 100) / 100;
+        const b = obj.box ? boxOfObject(obj.box) : null;
+        const p = obj.paint || {};
+        const pr = obj.props || {};
+        const f = obj.form || {};
+        const ax = isActiveX(obj);
+        const enumOf = (name, n) => ({ enum: name, n });
+        const rgb = (c) => (c ? { color: c } : undefined);
+        const tri = (on) => enumOf(on ? "msoTrue" : "msoFalse", on ? -1 : 0);
+        const cell = (m) => (m ? { range: `$${colName(m[0])}$${m[2] + 1}` } : undefined);
+        const type = obj.kind === "chart" ? enumOf("msoChart", 3) : obj.el === "pic" ? enumOf("msoPicture", 13) : obj.el === "grpSp" || obj.kind === "group" ? enumOf("msoGroup", 6) : obj.el === "cxnSp" ? enumOf("msoLine", 9) : ax ? enumOf("msoOLEControlObject", 12) : isControl(obj) ? enumOf("msoFormControl", 8) : enumOf("msoAutoShape", 1);
+        const m = {
+            Name: obj.name || "",
+            Type: type,
+        };
+        if (obj.adjust && obj.adjust.prst) {
+            const prst = obj.adjust.prst;
+            m.AutoShapeType = MSO_SHAPES[prst] ? enumOf(`msoShape${prst[0].toUpperCase()}${prst.slice(1)}`, MSO_SHAPES[prst]) : prst;
+        }
+        if (b) Object.assign(m, { Left: pt(b.x), Top: pt(b.y), Width: pt(b.w), Height: pt(b.h) });
+        m.Rotation = obj.rot || 0;
+        if (canTurn(obj)) Object.assign(m, { HorizontalFlip: tri(!!obj.flipH), VerticalFlip: tri(!!obj.flipV) });
+        m.Visible = tri(true);
+        if (obj.props) {
+            m.Placement = { twoCell: enumOf("xlMoveAndSize", 1), oneCell: enumOf("xlMove", 2), absolute: enumOf("xlFreeFloating", 3) }[pr.placement];
+            m.Locked = !!pr.locked;
+        }
+        m.TopLeftCell = cell(obj.from);
+        m.BottomRightCell = cell(obj.to);
+        if (obj.onAction) m.OnAction = obj.macro || "";
+        const z = (view.sheet.objects || []).indexOf(obj);
+        if (z >= 0) m.ZOrderPosition = z + 1;
+        if ("fill" in p && obj.el !== "cxnSp") m.Fill = { Visible: tri(!!p.fill), ForeColor: { RGB: rgb(p.fill || "#FFFFFF") } };
+        if ("line" in p) m.Line = { Visible: tri(!!p.line), ForeColor: { RGB: rgb(p.line || "#000000") }, Weight: p.lineWidth };
+        if ("shadow" in p) {
+            const sh = p.shadow;
+            const rad = sh ? (sh.angle * Math.PI) / 180 : 0;
+            m.Shadow = sh
+                ? { Visible: tri(true), Type: enumOf("msoShadowOuter", 25), ForeColor: { RGB: rgb(sh.color) }, Transparency: sh.transparency / 100, Blur: sh.blur, OffsetX: Math.round(sh.distance * Math.cos(rad) * 100) / 100, OffsetY: Math.round(sh.distance * Math.sin(rad) * 100) / 100 }
+                : { Visible: tri(false) };
+            m.Glow = p.glow ? { Radius: p.glow.size, Color: { RGB: rgb(p.glow.color) }, Transparency: p.glow.transparency / 100 } : { Radius: 0 };
+            m.Reflection = p.reflection ? { Type: enumOf("msoReflectionTypeMixed", -2), Transparency: p.reflection.transparency / 100, Size: p.reflection.size, Offset: p.reflection.distance, Blur: p.reflection.blur } : { Type: enumOf("msoReflectionTypeNone", 0) };
+        }
+        const tb = obj.textBox;
+        if (tb) {
+            m.TextFrame2 = {
+                HasText: tri(!!obj.text),
+                TextRange: { Text: obj.text || "" },
+                VerticalAnchor: { t: enumOf("msoAnchorTop", 1), ctr: enumOf("msoAnchorMiddle", 3), b: enumOf("msoAnchorBottom", 4) }[tb.anchor],
+                WordWrap: tri(!!tb.wrap),
+                MarginLeft: tb.inset[0],
+                MarginTop: tb.inset[1],
+                MarginRight: tb.inset[2],
+                MarginBottom: tb.inset[3],
+            };
+        }
+        if (obj.adjust && obj.adjust.adj) {
+            const vals = Object.values(obj.adjust.adj);
+            if (vals.length) {
+                const a = { Count: vals.length };
+                vals.forEach((v, i) => (a[`Item(${i + 1})`] = Math.round((v / 100000) * 10000) / 10000));
+                m.Adjustments = a;
+            }
+        }
+        if (isControl(obj) && obj.form) {
+            const t = f.type;
+            const c = {};
+            if (["CheckBox", "Radio", "OptionButton", "ToggleButton"].includes(t)) c.Value = ax ? !!f.checked : f.checked ? enumOf("xlOn", 1) : enumOf("xlOff", -4146);
+            if (f.link !== undefined) c.LinkedCell = f.link || "";
+            if (["List", "Drop", "ListBox", "ComboBox"].includes(t)) c.ListFillRange = f.items || "";
+            if (t === "List" || t === "Drop") c.ListIndex = f.sel || 0;
+            if (["Spin", "Scroll", "SpinButton", "ScrollBar"].includes(t)) {
+                Object.assign(c, { Value: f.val || 0, Min: f.min || 0, Max: f.max || 0, SmallChange: f.inc || 1 });
+                if (t === "Scroll" || t === "ScrollBar") c.LargeChange = f.page || 1;
+            }
+            if (obj.text !== undefined) c[ax ? (["TextBox", "ListBox", "ComboBox"].includes(t) ? "Text" : "Caption") : "Caption"] = obj.text;
+            if (ax) m.OLEFormat = { ProgId: `Forms.${obj.activex || t}.1`, Object: c };
+            else m.ControlFormat = c;
+        }
+        return m;
+    }
+    function propertyTree(sec, obj) {
+        const tree = sec.appendChild(el("div", "pprops"));
+        tree.setAttribute("role", "tree");
+        const value = (v) => {
+            const span = el("span", "pv");
+            if (v && v.color) {
+                span.appendChild(el("span", "psw")).style.background = v.color;
+                const n = parseInt(v.color.slice(1), 16);
+                span.appendChild(document.createTextNode(`RGB(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`));
+            } else if (v && v.enum) {
+                span.textContent = `${v.enum} (${v.n})`;
+                span.classList.add("penum");
+            } else if (v && v.range) {
+                span.textContent = v.range;
+            } else if (typeof v === "string") {
+                span.textContent = JSON.stringify(v);
+                span.classList.add("pstr");
+            } else if (typeof v === "boolean") {
+                span.textContent = v ? "True" : "False";
+                span.classList.add("pbool");
+            } else {
+                span.textContent = String(v);
+                span.classList.add("pnum");
+            }
+            return span;
+        };
+        const leaf = (v) => v === null || typeof v !== "object" || v.color || v.enum || v.range;
+        const add = (into, model, path, depth) => {
+            for (const [k, v] of Object.entries(model)) {
+                if (v === undefined) continue;
+                const row = into.appendChild(el("div", "prop"));
+                row.style.paddingLeft = `${depth * 12 + 4}px`;
+                row.setAttribute("role", "treeitem");
+                const tw = row.appendChild(el("span", "ptw"));
+                // (The values in one column, whatever the depth.)
+                row.appendChild(el("span", "pk", k)).style.minWidth = `${Math.max(40, 112 - depth * 12)}px`;
+                if (leaf(v)) {
+                    row.appendChild(value(v)).title = row.lastChild.textContent;
+                    continue;
+                }
+                const key = `${path}.${k}`;
+                const kids = into.appendChild(el("div", "pkids"));
+                const open = (on) => {
+                    row.classList.toggle("open", on);
+                    row.setAttribute("aria-expanded", String(on));
+                    kids.hidden = !on;
+                    if (on && !kids.firstChild) add(kids, v, key, depth + 1);
+                };
+                // (Its first values, as the tools preview an object.)
+                const brief = (x) => (leaf(x) ? (x && x.color ? x.color : x && x.enum ? x.enum : x && x.range ? x.range : typeof x === "string" ? JSON.stringify(x) : String(x)) : "{…}");
+                const preview = `{${Object.entries(v)
+                    .filter(([, x]) => x !== undefined)
+                    .map(([n, x]) => `${n}: ${brief(x)}`)
+                    .join(", ")}}`;
+                row.appendChild(el("span", "pv pobj", preview)).title = preview;
+                row.classList.add("pbranch");
+                tw.textContent = "▶";
+                row.addEventListener("click", () => {
+                    const on = !row.classList.contains("open");
+                    if (on) propsOpen.add(key);
+                    else propsOpen.delete(key);
+                    open(on);
+                });
+                open(propsOpen.has(key));
+            }
+        };
+        add(tree, objectModel(obj), "", 0);
+    }
     function formatPane(body, obj, focus) {
         const ax = isActiveX(obj);
         const f = obj.form || {};
@@ -3737,10 +3906,100 @@
             }
         }
 
-        // 効果: what the file has is kept and drawn; not changed here
-        if (canFill(obj) || canLine(obj)) {
-            const sec = section("effects", "効果");
-            sec.appendChild(el("div", "pnote", "影・光彩・ぼかし・3-D などの効果の変更にはまだ対応していません（ファイルにある効果はそのまま残り、表示されます）。"));
+        // 効果: those the grid draws (影 (外側), 反射, 光彩), each by its 標準スタイル and its
+        // values; the others the file has (内側の影, ぼかし, 3-D, ...) stay as they are.
+        if (canLine(obj) && "shadow" in paint) {
+            const effectSection = (key, label, presets, values) => {
+                const sec = section("effects", label);
+                const now = paint[key] || null;
+                const row = line(sec, "標準スタイル");
+                const pick = row.appendChild(el("select", "pwide"));
+                pick.dataset.field = `${key}-preset`;
+                const same = (p) => now && Object.keys(p).every((k) => k === "color" || Math.abs((now[k] ?? 0) - p[k]) < 0.01);
+                let chosen = now ? "" : "none";
+                presets.forEach(([label, p], i) => {
+                    pick.appendChild(el("option", null, label)).value = String(i);
+                    if (!chosen && same(p)) chosen = String(i);
+                });
+                pick.insertBefore(el("option", null, "なし"), pick.firstChild).value = "none";
+                if (!chosen) {
+                    const custom = pick.appendChild(el("option", null, "ユーザー設定"));
+                    custom.value = "";
+                    custom.disabled = true;
+                }
+                pick.value = chosen;
+                pick.addEventListener("change", () => {
+                    if (pick.value === "none") return edit({ [key]: null });
+                    const p = { ...presets[+pick.value][1] };
+                    if (key !== "reflection") p.color = (now && now.color) || lastShape[key];
+                    edit({ [key]: p });
+                });
+                if (!now) return;
+                for (const [field, label, unit] of values) {
+                    if (field === "color") {
+                        colorRow(sec, key, now.color, null, (c) => c && edit({ [key]: { color: c } }));
+                        continue;
+                    }
+                    const b = sizeBox(line(sec, label), label, (v) => edit({ [key]: { [field]: v } }), unit);
+                    b.input.dataset.field = `${key}-${field}`;
+                    b.setCm(now[field] ?? 0);
+                }
+            };
+            const pct = { name: "%", step: 1, max: 100 };
+            const pts = (max) => ({ name: "pt", step: 1, max });
+            const shadow = (angle, distance = 3, blur = 4) => ({ transparency: 60, blur, angle, distance });
+            effectSection(
+                "shadow",
+                "影",
+                [
+                    ["オフセット: 右下", shadow(45)],
+                    ["オフセット: 下", shadow(90)],
+                    ["オフセット: 左下", shadow(135)],
+                    ["オフセット: 右", shadow(0)],
+                    ["オフセット: 中央", shadow(0, 0, 5)],
+                    ["オフセット: 左", shadow(180)],
+                    ["オフセット: 右上", shadow(315)],
+                    ["オフセット: 上", shadow(270)],
+                    ["オフセット: 左上", shadow(225)],
+                ],
+                [
+                    ["color", "色"],
+                    ["transparency", "透明度", pct],
+                    ["blur", "ぼかし", pts(100)],
+                    ["angle", "角度", { name: "°", step: 1, max: 359 }],
+                    ["distance", "距離", pts(200)],
+                ],
+            );
+            effectSection(
+                "reflection",
+                "反射",
+                [
+                    ["反射 (弱): 接触", { transparency: 48, size: 35, distance: 0 }],
+                    ["反射 (中): 接触", { transparency: 50, size: 55, distance: 0 }],
+                    ["反射 (強): 接触", { transparency: 50, size: 90, distance: 0 }],
+                    ["反射 (弱): 4 pt オフセット", { transparency: 48, size: 35, distance: 4 }],
+                    ["反射 (中): 4 pt オフセット", { transparency: 50, size: 55, distance: 4 }],
+                    ["反射 (強): 4 pt オフセット", { transparency: 50, size: 90, distance: 4 }],
+                    ["反射 (弱): 8 pt オフセット", { transparency: 48, size: 35, distance: 8 }],
+                    ["反射 (中): 8 pt オフセット", { transparency: 50, size: 55, distance: 8 }],
+                    ["反射 (強): 8 pt オフセット", { transparency: 50, size: 90, distance: 8 }],
+                ],
+                [
+                    ["transparency", "透明度", pct],
+                    ["size", "サイズ", pct],
+                    ["distance", "距離", pts(200)],
+                ],
+            );
+            effectSection(
+                "glow",
+                "光彩",
+                [5, 8, 11, 18].map((size) => [`光彩: ${size} pt`, { transparency: 60, size }]),
+                [
+                    ["color", "色"],
+                    ["size", "サイズ", pts(150)],
+                    ["transparency", "透明度", pct],
+                ],
+            );
         }
 
         // サイズ (cm), 回転 (°)
@@ -3766,6 +4025,34 @@
                 fb.type = "button";
                 fb.addEventListener("click", () => flipObject(obj, vertical));
             }
+        }
+
+        // プロパティ: オブジェクトの位置関係, オブジェクトを印刷する, ロック, テキストをロックする
+        const props = !isControl(obj) && obj.props;
+        if (props) {
+            const sec = section("size", "プロパティ");
+            choices(
+                sec,
+                [
+                    ["twoCell", "セルに合わせて移動やサイズ変更をする"],
+                    ["oneCell", "セルに合わせて移動するがサイズ変更はしない"],
+                    ["absolute", "セルに合わせて移動やサイズ変更をしない"],
+                ],
+                props.placement,
+                (v) => edit({ placement: v }),
+            );
+            const check = (label, key, field) => {
+                const row = sec.appendChild(el("label", "prow pcheck"));
+                const on = row.appendChild(el("input"));
+                on.type = "checkbox";
+                on.checked = !!props[key];
+                on.dataset.field = field;
+                row.appendChild(el("span", null, label));
+                on.addEventListener("change", () => edit({ [field]: on.checked }));
+            };
+            check("オブジェクトを印刷する", "print", "print");
+            check("ロック", "locked", "locked");
+            if (props.lockText !== null && props.lockText !== undefined) check("テキストをロックする", "lockText", "lockText");
         }
 
         // コントロール: what its kind has (the linked cell, the items, the state, the values)
@@ -3808,10 +4095,23 @@
             if (!sec.querySelector(".prow")) sec.parentNode.remove();
         }
 
-        // イベント: its handlers in the sheet's file
+        // コード: its name and how the code refers to it, its events, its properties (as the
+        // object model has them, as a browser's developer tools list an element's)
+        {
+            const sec = section("code", "オブジェクト");
+            const named = (label, value, title) => {
+                const row = sec.appendChild(el("div", "prow"));
+                row.appendChild(el("span", "plabel", label));
+                const v = row.appendChild(el("span", "pcode", value));
+                v.title = title;
+            };
+            named("名前", obj.name || (obj.shapeId !== undefined ? `_x0000_s${obj.shapeId}` : ""), "オブジェクトの名前（Name）");
+            const code = view.sheet.codeName || "Sheet1";
+            named("コード", obj.activex !== undefined && obj.name ? `${code}.${obj.name}` : `${code}.shapes(${JSON.stringify(obj.name || "")})`, "コードからこのオブジェクトを参照する書き方");
+        }
         const items = eventItems(obj);
         if (items.length) {
-            const sec = section("size", "イベント");
+            const sec = section("code", "イベント");
             if (!ax) sec.appendChild(el("div", "pnote", obj.macro ? `${eventName(obj)}イベント: ${obj.macro}` : `${eventName(obj)}イベントは登録されていません`));
             const btns = sec.appendChild(el("div", "pbtns"));
             for (const [label, act] of items) {
@@ -3820,6 +4120,7 @@
                 mb.addEventListener("click", act);
             }
         }
+        propertyTree(section("code", "プロパティ"), obj);
 
         // 文字 > テキスト ボックス: 垂直方向の配置, the margins, 図形内でテキストを折り返す (the
         // text itself is typed in the shape)
@@ -5754,7 +6055,7 @@
         fillColors(openPop(anchor, "colors"), name, none, pick);
     }
     function fillColors(pop, name, none, pick) {
-        popItem(pop, none, () => (pick ? pick(null) : format({ [name]: null })));
+        if (none) popItem(pop, none, () => (pick ? pick(null) : format({ [name]: null })));
         const grid = pop.appendChild(el("div", "swatches"));
         for (const color of PALETTE) {
             const b = grid.appendChild(el("button", "swatch"));
@@ -6239,6 +6540,21 @@
                     return !allow.autoFilter;
                 case "sort":
                     return !allow.sort || !unlockedRange(o.range);
+                // An object: as its ロック and テキストをロックする say, unless the sheet lets
+                // objects be edited.
+                case "object": {
+                    if (allow.objects) return false;
+                    const obj = (sheet.objects || []).find((x) => (o.name ? x.name === o.name : x.shapeId === o.shape));
+                    const props = (obj && obj.props) || {};
+                    if (props.locked === false) return false;
+                    const keys = Object.keys(o).filter((k) => !["op", "sheet", "name", "shape"].includes(k));
+                    return !(props.lockText === false && keys.length && keys.every((k) => k === "text"));
+                }
+                case "shape":
+                case "picture":
+                case "control":
+                case "activeX":
+                    return !allow.objects;
                 default:
                     return true;
             }
@@ -6352,7 +6668,7 @@
     const tools = {};
     const lastColor = { color: "#FF0000", fill: "#FFFF00" };
     // The colors of 図形の塗りつぶし and 図形の枠線 used last.
-    const lastShape = { fill: "#4472C4", line: "#000000" };
+    const lastShape = { fill: "#4472C4", line: "#000000", shadow: "#000000", glow: "#4472C4" };
     let lastBorder = "all";
     // The 線の色 (null: automatic) and the 線のスタイル the borders of the menu are drawn with.
     const borderPen = { color: null, line: "thin" };

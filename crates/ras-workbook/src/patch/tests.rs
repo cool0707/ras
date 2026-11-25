@@ -1665,6 +1665,168 @@ fn objects_filled_lined_turned_and_reordered() {
         .unwrap_err()
         .contains("テキスト ボックス")
     );
+    // 効果: 影, 光彩, 反射 in an effect list after the fill and the line, in the schema's order;
+    // the values not given as Excel's first preset; the view gives them back.
+    let fx = apply(
+        &out,
+        &ops(r##"{"op":"object","name":"正方形/長方形 2","reflection":{"size":55},"shadow":{"angle":225,"distance":0,"transparency":80,"blur":6},"glow":{"color":"#FF0000","size":8}}"##),
+    )
+    .unwrap();
+    let sp = shape(&fx, "正方形/長方形 2");
+    let lst = &sp[sp.find("<a:effectLst>").expect(&sp)..];
+    let lst = &lst[..lst.find("</a:effectLst>").unwrap()];
+    assert!(sp.find("<a:effectLst>") > sp.find("</a:prstGeom>"), "{sp}");
+    assert!(
+        lst.contains(r#"<a:glow rad="101600"><a:srgbClr val="FF0000"><a:alpha val="40000"/></a:srgbClr></a:glow><a:outerShdw blurRad="76200" dist="0" dir="13500000" algn="tl" rotWithShape="0"><a:prstClr val="black"><a:alpha val="20000"/></a:prstClr></a:outerShdw><a:reflection "#),
+        "{lst}"
+    );
+    assert!(lst.contains(r#"endPos="55000""#), "{lst}");
+    let shown = view(&fx);
+    let paint = &shown["sheets"][0]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == "正方形/長方形 2")
+        .unwrap()["paint"];
+    assert_eq!(
+        (
+            paint["shadow"]["angle"].as_f64(),
+            paint["shadow"]["transparency"].as_f64(),
+            paint["shadow"]["blur"].as_f64(),
+            paint["glow"]["color"].as_str(),
+            paint["glow"]["size"].as_f64(),
+            paint["reflection"]["size"].as_f64(),
+            paint["reflection"]["transparency"].as_f64(),
+        ),
+        (
+            Some(225.0),
+            Some(80.0),
+            Some(6.0),
+            Some("#FF0000"),
+            Some(8.0),
+            Some(55.0),
+            Some(48.0)
+        )
+    );
+    // A value changed keeps the others (the color, its alpha by the transparency); null takes
+    // an effect away, the list kept (as none, over the style's).
+    let less = apply(
+        &fx,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","glow":{"transparency":0},"shadow":null,"reflection":null}"#),
+    )
+    .unwrap();
+    let sp = shape(&less, "正方形/長方形 2");
+    assert!(
+        sp.contains(r#"<a:effectLst><a:glow rad="101600"><a:srgbClr val="FF0000"></a:srgbClr></a:glow></a:effectLst>"#),
+        "{sp}"
+    );
+    let none = apply(
+        &less,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","glow":null}"#),
+    )
+    .unwrap();
+    assert!(shape(&none, "正方形/長方形 2").contains("<a:effectLst></a:effectLst>"));
+    assert!(
+        view(&none)["sheets"][0]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|o| o["paint"]["glow"].is_null())
+    );
+    for bad in [
+        r#"{"op":"object","name":"正方形/長方形 2","glow":{"angle":3}}"#,
+        r#"{"op":"object","name":"正方形/長方形 2","shadow":{"transparency":120}}"#,
+        r##"{"op":"object","name":"正方形/長方形 2","reflection":{"color":"#000000"}}"##,
+    ] {
+        assert!(
+            parse_ops(&serde_json::from_str(bad).unwrap(), None).is_err(),
+            "{bad}"
+        );
+    }
+
+    // プロパティ: オブジェクトの位置関係 (the anchor's editAs), オブジェクトを印刷する and
+    // ロック (its client data), テキストをロックする (the shape); back to the defaults, the
+    // attributes go.
+    let set = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","placement":"absolute","print":false,"locked":false,"lockText":false}"#),
+    )
+    .unwrap();
+    let sp = shape(&set, "正方形/長方形 2");
+    for want in [
+        r#"<xdr:twoCellAnchor editAs="absolute">"#,
+        r#"fLocksText="0""#,
+        r#"fPrintsWithSheet="0""#,
+        r#"fLocksWithSheet="0""#,
+    ] {
+        assert!(sp.contains(want), "{want}: {sp}");
+    }
+    let props = |bytes: &[u8]| {
+        view(bytes)["sheets"][0]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["name"] == "正方形/長方形 2")
+            .unwrap()["props"]
+            .clone()
+    };
+    assert_eq!(
+        props(&set),
+        json!({"placement": "absolute", "print": false, "locked": false, "lockText": false})
+    );
+    let back = apply(
+        &set,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","placement":"twoCell","print":true,"locked":true,"lockText":true}"#),
+    )
+    .unwrap();
+    let sp = shape(&back, "正方形/長方形 2");
+    assert!(
+        sp.starts_with("<xdr:twoCellAnchor>")
+            && !sp.contains("fLocksText")
+            && !sp.contains("fPrintsWithSheet")
+            && !sp.contains("fLocksWithSheet"),
+        "{sp}"
+    );
+    assert!(
+        apply(
+            &out,
+            &ops(r#"{"op":"object","name":"直線コネクタ 3","lockText":false}"#)
+        )
+        .unwrap_err()
+        .contains("テキストのロック")
+    );
+    // Rows and columns sized: an object that does not move with the cells stays where it was
+    // (its from goes up as row 1 grows); one that moves but does not size keeps its size (its
+    // to goes on into column B as column A narrows); one that does both stretches.
+    let marker = |bytes: &[u8], tag: &str, what: &str| -> u32 {
+        let sp = shape(bytes, "正方形/長方形 2");
+        let m = &sp[sp.find(&format!("<xdr:{tag}>")).unwrap()..];
+        let v = &m[m.find(&format!("<xdr:{what}>")).unwrap() + what.len() + 6..];
+        v[..v.find('<').unwrap()].parse().unwrap()
+    };
+    assert_eq!(marker(&set, "from", "row"), 11);
+    let taller = apply(&set, &ops(r#"{"op":"size","range":"1:1","px":120}"#)).unwrap();
+    assert!(
+        marker(&taller, "from", "row") < 11,
+        "{}",
+        shape(&taller, "正方形/長方形 2")
+    );
+    let one = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","placement":"oneCell"}"#),
+    )
+    .unwrap();
+    assert_eq!(marker(&one, "to", "col"), 0);
+    let narrow = apply(&one, &ops(r#"{"op":"size","range":"A:A","px":20}"#)).unwrap();
+    assert_eq!(marker(&narrow, "from", "row"), 11);
+    assert!(
+        marker(&narrow, "to", "col") >= 1,
+        "{}",
+        shape(&narrow, "正方形/長方形 2")
+    );
+    let stretched = apply(&out, &ops(r#"{"op":"size","range":"A:A","px":20}"#)).unwrap();
+    assert_eq!(marker(&stretched, "to", "col"), 0);
+
     // The width alone keeps the line's color; the arrow's head stays.
     let arrow = edit(r#"{"op":"shape","shape":"arrow","at":"A20","width":40}"#);
     let wide = apply(

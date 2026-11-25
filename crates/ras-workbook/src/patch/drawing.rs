@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use super::insert::{Sheet, place, relative, rid_attr, tree};
 use super::scan::{self, Edits, El};
-use super::{ObjectChange, Order, Place, Result};
+use super::{Effect, ObjectChange, Order, Place, Result};
 use crate::book::Book;
 use crate::book::view::Sizes;
 
@@ -674,7 +674,7 @@ pub(super) fn object(
 
     // One pass after another, each on the drawing the one before wrote: an edit of a pass may
     // span what another changes (the text of the object moved, its shape properties).
-    for pass in 0..3 {
+    for pass in 0..5 {
         let root = scan::tree(&doc, &[]).ok_or("描画のパートを読み取れません")?;
         let all = units(&root);
         let at = all
@@ -746,6 +746,38 @@ pub(super) fn object(
                             write_anchor(&doc, a, &sizes, b, &mut edits);
                         }
                     }
+                }
+            }
+            // プロパティ: an anchor not of two cells made one, as Excel saves an object whose
+            // オブジェクトの位置関係 is set (`editAs`).
+            3 if change.placement.is_some() => {
+                for a in &unit.anchors {
+                    if a.local() == "twoCellAnchor" {
+                        continue;
+                    }
+                    let b = anchor_box(&doc, &sizes, a)
+                        .ok_or_else(|| format!("`{name}` の位置を読み取れません"))?;
+                    let x = scan::prefix(a.name);
+                    let rest: String = a
+                        .children
+                        .iter()
+                        .filter(|c| !matches!(c.local(), "from" | "to" | "pos" | "ext"))
+                        .map(|c| doc[c.span()].to_string())
+                        .collect();
+                    edits.replace(
+                        a.span(),
+                        format!(
+                            "<{x}twoCellAnchor>{}{}{rest}</{x}twoCellAnchor>",
+                            marker_xml(x, "from", &sizes, b.0, b.1),
+                            marker_xml(x, "to", &sizes, b.2, b.3)
+                        ),
+                    );
+                }
+            }
+            3 => {}
+            4 => {
+                for a in &unit.anchors {
+                    properties(&doc, a, name, change, &mut edits)?;
                 }
             }
             _ => {
@@ -882,7 +914,8 @@ fn style(
     let line = change.line.is_some() || change.line_width.is_some();
     let turn = change.rotation.is_some() || change.flip_h.is_some() || change.flip_v.is_some();
     let adjust = change.adjust.as_ref();
-    if !(fill.is_some() || line || turn || adjust.is_some()) {
+    let fx = change.shadow.is_some() || change.glow.is_some() || change.reflection.is_some();
+    if !(fill.is_some() || line || turn || adjust.is_some() || fx) {
         return Ok(());
     }
     if adjust.is_some() && kind != "sp" && kind != "cxnSp" {
@@ -893,6 +926,11 @@ fn style(
     if kind == "graphicFrame" {
         return Err(format!(
             "`{name}` はグラフのため、ここでは書式・回転を変えられません（Excel で行ってください）"
+        ));
+    }
+    if fx && kind == "grpSp" {
+        return Err(format!(
+            "`{name}` はグループのため、効果を変えられません（グループの中の図形ごとに Excel で行ってください）"
         ));
     }
     if (fill.is_some() || line) && kind == "grpSp" {
@@ -1010,6 +1048,10 @@ fn style(
         }
         changed = true;
     }
+    if fx {
+        effects(&mut kids, &a, &decl, change, name)?;
+        changed = true;
+    }
     if changed {
         let body: String = kids.into_iter().map(|k| k.1).collect();
         edits.replace(
@@ -1018,6 +1060,335 @@ fn style(
         );
     }
     Ok(())
+}
+
+/// The start tag of an element with attributes set, or (None) taken away.
+fn tag_with(doc: &str, el: &El, attrs: &[(&str, Option<String>)]) -> String {
+    let tag = open_tag(doc, el);
+    let close = format!("</{}>", el.name);
+    let done = with_attrs(&format!("{tag}{close}"), attrs);
+    done.strip_suffix(&close).map_or(tag, str::to_string)
+}
+
+/// プロパティ of an object changed: オブジェクトの位置関係 (its anchor's `editAs`; none for
+/// `twoCell`, as Excel writes it), オブジェクトを印刷する and ロック (its `clientData`'s
+/// `fPrintsWithSheet`, `fLocksWithSheet`: "0" when off), テキストをロックする (a shape's
+/// `fLocksText`).
+fn properties(
+    doc: &str,
+    a: &El,
+    name: &str,
+    change: &ObjectChange,
+    edits: &mut Edits,
+) -> Result<()> {
+    let off = |on: bool| (!on).then(|| "0".to_string());
+    if let Some(p) = &change.placement {
+        edits.replace(
+            a.open.clone(),
+            tag_with(doc, a, &[("editAs", (p != "twoCell").then(|| p.clone()))]),
+        );
+    }
+    let mut data: Vec<(&str, Option<String>)> = Vec::new();
+    if let Some(on) = change.print {
+        data.push(("fPrintsWithSheet", off(on)));
+    }
+    if let Some(on) = change.locked {
+        data.push(("fLocksWithSheet", off(on)));
+    }
+    if !data.is_empty() {
+        let x = scan::prefix(a.name);
+        match a.child("clientData") {
+            Some(c) => edits.replace(c.span(), with_attrs(&doc[c.span()], &data)),
+            None => edits.insert(a.inner.end, with_attrs(&format!("<{x}clientData/>"), &data)),
+        }
+    }
+    if let Some(on) = change.lock_text {
+        let obj = object_of(a).filter(|o| o.local() == "sp").ok_or_else(|| {
+            format!("`{name}` には文字がないため、テキストのロックはありません（図形・テキスト ボックスにあります）")
+        })?;
+        edits.replace(
+            obj.open.clone(),
+            tag_with(doc, obj, &[("fLocksText", off(on))]),
+        );
+    }
+    Ok(())
+}
+
+/// The objects set not to size with the cells (`editAs="oneCell"`) or not to move with them
+/// either (`absolute`) as they were (`before`) after the columns' widths or the rows' heights
+/// changed (or rows and columns were hidden or shown again), as Excel keeps them: their anchor
+/// written again for their size, or their place too.
+pub(super) fn keep_placed(before: &[u8], after: Vec<u8>) -> Result<Vec<u8>> {
+    let fixed = |bytes: &[u8]| -> bool {
+        let Ok(mut zip) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
+            return false;
+        };
+        let names: Vec<String> = zip
+            .file_names()
+            .filter(|n| n.starts_with("xl/drawings/") && n.ends_with(".xml"))
+            .map(str::to_string)
+            .collect();
+        names.iter().any(|n| {
+            let mut text = String::new();
+            zip.by_name(n)
+                .ok()
+                .and_then(|mut f| std::io::Read::read_to_string(&mut f, &mut text).ok())
+                .is_some()
+                && (text.contains("editAs=\"oneCell\"") || text.contains("editAs=\"absolute\""))
+        })
+    };
+    if before == after.as_slice() || !fixed(&after) {
+        return Ok(after);
+    }
+    let (old, new) = (Book::open_bytes(before)?, Book::open_bytes(&after)?);
+    let mut out = after;
+    for si in 0..new.sheet_count() {
+        let Some(sheet) = new.sheet_name(si).map(str::to_string) else {
+            continue;
+        };
+        let (Some(was), Some(now)) = (
+            old.find_sheet(&sheet).and_then(|i| old.sizes(i)),
+            new.sizes(si),
+        ) else {
+            continue;
+        };
+        let mut s = Sheet::open(&out, &sheet)?;
+        let Some(d) = drawing_of(&mut s, false)? else {
+            continue;
+        };
+        let Some(root) = scan::tree(&d.doc, &[]) else {
+            continue;
+        };
+        let mut edits = Edits::default();
+        for unit in units(&root) {
+            for a in unit.anchors {
+                let mode = a.attr(&d.doc, "editAs");
+                if a.local() != "twoCellAnchor"
+                    || !matches!(mode.as_deref(), Some("oneCell" | "absolute"))
+                {
+                    continue;
+                }
+                let (Some(b), Some(from)) = (anchor_box(&d.doc, &was, a), a.child("from")) else {
+                    continue;
+                };
+                let b = if mode.as_deref() == Some("absolute") {
+                    b
+                } else {
+                    let Some((x, y)) = marker_point(&d.doc, &now, from) else {
+                        continue;
+                    };
+                    (x, y, x + b.2 - b.0, y + b.3 - b.1)
+                };
+                // (Written again only where its markers change: an offset past its cell's
+                // edge is one into the next.)
+                let x = scan::prefix(a.name);
+                let same = |tag: &str, px: f64, py: f64| {
+                    a.child(tag)
+                        .is_some_and(|m| d.doc[m.span()] == marker_xml(x, tag, &now, px, py))
+                };
+                if same("from", b.0, b.1) && same("to", b.2, b.3) {
+                    continue;
+                }
+                write_anchor(&d.doc, a, &now, b, &mut edits);
+            }
+        }
+        if !edits.is_empty() {
+            s.put(&d.part, edits.apply(&d.doc));
+            out = s.finish(None)?;
+        }
+    }
+    Ok(out)
+}
+
+/// The effects of an effect list in the schema's order.
+const EFFECTS: [&str; 8] = [
+    "blur",
+    "fillOverlay",
+    "glow",
+    "innerShdw",
+    "outerShdw",
+    "prstShdw",
+    "reflection",
+    "softEdge",
+];
+
+/// The effects of shape properties (their children `kids`) changed: 影 (`outerShdw`), 光彩
+/// (`glow`), 反射 (`reflection`) set or taken away in its `effectLst` (made after the fill and
+/// the line when it has none), the other effects it has kept. `a` is the prefix of DrawingML,
+/// `decl` its declaration where it is not declared.
+fn effects(
+    kids: &mut Vec<(String, String)>,
+    a: &str,
+    decl: &str,
+    change: &ObjectChange,
+    name: &str,
+) -> Result<()> {
+    if kids.iter().any(|k| k.0 == "effectDag") {
+        return Err(format!(
+            "`{name}` の効果は組み合わせ（effectDag）で書かれているため、ここでは変えられません（Excel で行ってください）"
+        ));
+    }
+    let at = kids.iter().position(|k| k.0 == "effectLst");
+    let (mut list, open, close, p) = match at {
+        Some(i) => {
+            let text = &kids[i].1;
+            let el = scan::tree(text, &[]).ok_or("効果の書式を読み取れません")?;
+            let list: Vec<(String, String)> = el
+                .children
+                .iter()
+                .map(|c| (c.local().to_string(), text[c.span()].to_string()))
+                .collect();
+            (
+                list,
+                open_tag(text, &el),
+                format!("</{}>", el.name),
+                scan::prefix(el.name).to_string(),
+            )
+        }
+        None => (
+            Vec::new(),
+            format!("<{a}effectLst{decl}>"),
+            format!("</{a}effectLst>"),
+            a.to_string(),
+        ),
+    };
+    for (kind, eff) in [
+        ("glow", &change.glow),
+        ("outerShdw", &change.shadow),
+        ("reflection", &change.reflection),
+    ] {
+        let Some(eff) = eff else { continue };
+        let i = list.iter().position(|k| k.0 == kind);
+        match (eff, i) {
+            (None, Some(i)) => {
+                list.remove(i);
+            }
+            (None, None) => {}
+            (Some(e), i) => {
+                let new = effect_xml(kind, i.map(|i| list[i].1.as_str()), e, &p)
+                    .ok_or_else(|| format!("`{name}` の効果（{kind}）を読み取れません"))?;
+                match i {
+                    Some(i) => list[i].1 = new,
+                    None => list.push((kind.to_string(), new)),
+                }
+            }
+        }
+    }
+    list.sort_by_key(|k| {
+        EFFECTS
+            .iter()
+            .position(|e| *e == k.0)
+            .unwrap_or(EFFECTS.len())
+    });
+    let body: String = list.into_iter().map(|k| k.1).collect();
+    let text = format!("{open}{body}{close}");
+    match at {
+        Some(i) => kids[i].1 = text,
+        None => {
+            let at = kids
+                .iter()
+                .rposition(|k| {
+                    matches!(k.0.as_str(), "xfrm" | "custGeom" | "prstGeom" | "ln")
+                        || FILLS.contains(&k.0.as_str())
+                })
+                .map_or(0, |i| i + 1);
+            kids.insert(at, ("effectLst".into(), text));
+        }
+    }
+    Ok(())
+}
+
+/// An effect (its text) with the values given set: on what it has (`old`), else on Excel's first
+/// preset of its kind (影: 外側 オフセット: 右下; 光彩: 5 pt, アクセント 1; 反射: 弱 接触).
+fn effect_xml(kind: &str, old: Option<&str>, e: &Effect, p: &str) -> Option<String> {
+    let base = match old {
+        Some(t) => t.to_string(),
+        None => match kind {
+            "outerShdw" => format!(
+                "<{p}outerShdw blurRad=\"50800\" dist=\"38100\" dir=\"2700000\" algn=\"tl\" rotWithShape=\"0\"><{p}prstClr val=\"black\"><{p}alpha val=\"40000\"/></{p}prstClr></{p}outerShdw>"
+            ),
+            "glow" => format!(
+                "<{p}glow rad=\"63500\"><{p}schemeClr val=\"accent1\"><{p}satMod val=\"175000\"/><{p}alpha val=\"40000\"/></{p}schemeClr></{p}glow>"
+            ),
+            _ => format!(
+                "<{p}reflection blurRad=\"6350\" stA=\"52000\" endA=\"300\" endPos=\"35000\" dir=\"5400000\" sy=\"-100000\" algn=\"bl\" rotWithShape=\"0\"/>"
+            ),
+        },
+    };
+    let emu = |pt: f64| Some(((pt * 12700.0).round() as i64).to_string());
+    let mut attrs: Vec<(&str, Option<String>)> = Vec::new();
+    if let Some(b) = e.blur {
+        attrs.push(("blurRad", emu(b)));
+    }
+    if let Some(d) = e.distance {
+        attrs.push(("dist", emu(d)));
+    }
+    if let Some(deg) = e.angle {
+        let dir = ((deg * 60000.0).round() as i64).rem_euclid(21_600_000);
+        attrs.push(("dir", Some(dir.to_string())));
+    }
+    match kind {
+        "glow" => {
+            if let Some(s) = e.size {
+                attrs.push(("rad", emu(s)));
+            }
+        }
+        "reflection" => {
+            if let Some(t) = e.transparency {
+                attrs.push((
+                    "stA",
+                    Some((((100.0 - t) * 1000.0).round() as i64).to_string()),
+                ));
+            }
+            if let Some(s) = e.size {
+                attrs.push(("endPos", Some(((s * 1000.0).round() as i64).to_string())));
+            }
+        }
+        _ => {}
+    }
+    let text = with_attrs(&base, &attrs);
+    if kind == "reflection" || (e.color.is_none() && e.transparency.is_none()) {
+        return Some(text);
+    }
+    // The color: the one given, else the one it has with its changes (but its alpha); then the
+    // alpha of the transparency given, else of what it had.
+    let el = scan::tree(&text, &[])?;
+    let old_color = el.children.first();
+    let old_alpha = old_color
+        .and_then(|c| c.child("alpha"))
+        .map(|al| text[al.span()].to_string());
+    let alpha = match e.transparency {
+        Some(t) => {
+            let v = ((100.0 - t) * 1000.0).round() as i64;
+            (v < 100_000).then(|| format!("<{p}alpha val=\"{v}\"/>"))
+        }
+        None => old_alpha,
+    }
+    .unwrap_or_default();
+    let color = match (&e.color, old_color) {
+        (Some(c), _) => format!("<{p}srgbClr val=\"{c}\">{alpha}</{p}srgbClr>"),
+        (None, Some(c)) => {
+            let mods: String = c
+                .children
+                .iter()
+                .filter(|m| m.local() != "alpha")
+                .map(|m| text[m.span()].to_string())
+                .collect();
+            format!("{}{mods}{alpha}</{}>", open_tag(&text, c), c.name)
+        }
+        (None, None) => format!("<{p}prstClr val=\"black\">{alpha}</{p}prstClr>"),
+    };
+    let rest: String = el
+        .children
+        .iter()
+        .skip(usize::from(old_color.is_some()))
+        .map(|c| text[c.span()].to_string())
+        .collect();
+    Some(format!(
+        "{}{color}{rest}</{}>",
+        open_tag(&text, &el),
+        el.name
+    ))
 }
 
 /// The text box of a shape changed (its `bodyPr`): the vertical alignment, the wrapping, the

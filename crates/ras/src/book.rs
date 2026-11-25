@@ -136,6 +136,12 @@ pub enum BookCommand {
 }
 
 pub fn open(path: &Path) -> Result<Book, String> {
+    open_as(path, true)
+}
+
+/// `open`, or (`volatile` false) with the values of RAND, NOW and the like as the file has them
+/// (`Book::open_saved`).
+fn open_as(path: &Path, volatile: bool) -> Result<Book, String> {
     if !path.is_file() {
         return Err(format!("{} が見つかりません", path.display()));
     }
@@ -146,7 +152,11 @@ pub fn open(path: &Path) -> Result<Book, String> {
     if matches!(ext.as_str(), "xls" | "xlsb") {
         return Err(format!("{}: .{ext} は読み取れません（.xlsx / .xlsm / .xltx / .xltm / .xlam に保存し直してください）", path.display()));
     }
-    Book::open(path)
+    if volatile {
+        Book::open(path)
+    } else {
+        Book::open_saved(path)
+    }
 }
 
 /// Splits `Sheet1!A1:B2` / `'My sheet'!A1` into the sheet and the range.
@@ -283,7 +293,10 @@ pub fn view_page(
     sheet: Option<&str>,
     editable: bool,
 ) -> Result<String, String> {
-    let mut book = open(file)?;
+    // The page that edits the workbook shows its volatile formulas (RAND, NOW) as the file has
+    // them: they change when cells are edited (the edit calculates them, as Excel does), not
+    // each time the page is drawn again (after a shape is changed, as in Excel).
+    let mut book = open_as(file, !editable)?;
     let focus = match sheet {
         Some(wanted) => Some(
             sheet_named(&book, wanted)

@@ -261,11 +261,16 @@ pub struct Obj {
     /// The adjust handles of a preset shape (`adjust_of`), for the grid's 調整ハンドル.
     pub adjust: Option<serde_json::Value>,
     /// The fill and line of a shape or a picture as they are drawn (`paint_of`), for the grid's
-    /// 図形の書式設定: `fill`, `line` ("#RRGGBB", null for none), `lineWidth` (points).
+    /// 図形の書式設定: `fill`, `line` ("#RRGGBB", null for none), `lineWidth` (points), and the
+    /// effects drawn: `shadow` (color, transparency, blur, angle, distance), `glow` (color,
+    /// transparency, size), `reflection` (transparency, size, distance, blur); null for none.
     pub paint: Option<serde_json::Value>,
     /// The text box of a shape (`text_box_of`): `anchor` (t, ctr, b), `wrap`, `inset` (left,
     /// top, right, bottom; points), `color` (of its text by its style).
     pub text_box: Option<serde_json::Value>,
+    /// プロパティ (`props_of`): `placement` (twoCell, oneCell, absolute), `print`, `locked`,
+    /// `lockText` (a shape's; null for others).
+    pub props: Option<serde_json::Value>,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -505,6 +510,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 adjust: None,
                 paint: None,
                 text_box: None,
+                props: Some(props_of(a, obj)),
             });
             return;
         }
@@ -529,6 +535,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 adjust: None,
                 paint: None,
                 text_box: None,
+                props: Some(props_of(a, obj)),
             });
         }
         return;
@@ -573,8 +580,29 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 .flatten(),
             paint: matches!(obj.name.as_str(), "sp" | "cxnSp" | "pic").then(|| paint_of(ctx, obj)),
             text_box: (obj.name == "sp").then(|| text_box_of(ctx, obj)),
+            props: Some(props_of(a, obj)),
         });
     }
+}
+
+/// The プロパティ of an object as its anchor and its client data say them.
+fn props_of(a: &Node, obj: &Node) -> serde_json::Value {
+    let placement = match a.name.as_str() {
+        "oneCellAnchor" => "oneCell",
+        "absoluteAnchor" => "absolute",
+        _ => a
+            .attr("editAs")
+            .filter(|m| matches!(*m, "oneCell" | "absolute"))
+            .unwrap_or("twoCell"),
+    };
+    let on = |n: Option<&Node>, k: &str| !matches!(n.and_then(|n| n.attr(k)), Some("0" | "false"));
+    let data = a.child("clientData");
+    serde_json::json!({
+        "placement": placement,
+        "print": on(data, "fPrintsWithSheet"),
+        "locked": on(data, "fLocksWithSheet"),
+        "lockText": (obj.name == "sp").then(|| on(Some(obj), "fLocksText")),
+    })
 }
 
 /// The adjust handles of the presets that have them (`handles.zip`, made by
@@ -1078,7 +1106,53 @@ fn paint_of(ctx: &Ctx, sp: &Node) -> serde_json::Value {
                 None => 0.75,
             },
         );
-    serde_json::json!({ "fill": color(fill), "line": color(line), "lineWidth": (width * 100.0).round() / 100.0 })
+    let mut j = serde_json::json!({ "fill": color(fill), "line": color(line), "lineWidth": (width * 100.0).round() / 100.0 });
+    // The effects drawn (effect_css, reflect_css): 影 (外側), 光彩, 反射; null: none.
+    let fx = props.and_then(|p| p.child("effectLst"));
+    let r2 = |v: f64| (v * 100.0).round() / 100.0;
+    let num =
+        |e: &Node, k: &str, d: f64| e.attr(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(d);
+    let pt = |e: &Node, k: &str| r2(num(e, k, 0.0) / EMU_PT);
+    let colored = |e: &Node| {
+        (
+            color_of(e, &ctx.theme).map(|c| c.to_ascii_uppercase()),
+            (100.0 - alpha_of(e) * 100.0).round(),
+        )
+    };
+    j["shadow"] = match fx.and_then(|f| f.child("outerShdw")) {
+        Some(s) => {
+            let (c, t) = colored(s);
+            serde_json::json!({
+                "color": c.unwrap_or_else(|| "#000000".into()),
+                "transparency": t,
+                "blur": pt(s, "blurRad"),
+                "angle": r2(num(s, "dir", 0.0) / 60000.0),
+                "distance": pt(s, "dist"),
+            })
+        }
+        None => serde_json::Value::Null,
+    };
+    j["glow"] = match fx.and_then(|f| f.child("glow")) {
+        Some(g) => {
+            let (c, t) = colored(g);
+            serde_json::json!({
+                "color": c.unwrap_or_else(|| "#000000".into()),
+                "transparency": t,
+                "size": pt(g, "rad"),
+            })
+        }
+        None => serde_json::Value::Null,
+    };
+    j["reflection"] = match fx.and_then(|f| f.child("reflection")) {
+        Some(r) => serde_json::json!({
+            "transparency": r2(100.0 - num(r, "stA", 100_000.0) / 1000.0),
+            "size": r2(num(r, "endPos", 100_000.0) / 1000.0),
+            "distance": pt(r, "dist"),
+            "blur": pt(r, "blurRad"),
+        }),
+        None => serde_json::Value::Null,
+    };
+    j
 }
 
 /// The text box of a shape as `text_html` draws it (a shape without text: as one is given,

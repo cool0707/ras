@@ -289,6 +289,30 @@ fn saved_workbooks_read_back() {
     assert_eq!(read(&mut b, "A2", Read::Value), Val::Empty);
 }
 
+/// RAND and NOW are calculated again when a workbook is opened (as Excel opens it), not when it
+/// is opened with its saved values (the page that edits it, drawn again after a shape changed).
+#[test]
+fn volatile_formulas_keep_their_saved_values_when_asked() {
+    let mut file = umya_spreadsheet::new_file();
+    let ws = file.sheet_mut(0).unwrap();
+    ws.cell_mut((1, 1)).set_formula("RAND()+5");
+    ws.cell_mut((1, 1)).set_formula_result_number(42.0);
+    ws.cell_mut((2, 1)).set_formula("A1*2");
+    ws.cell_mut((2, 1)).set_formula_result_number(84.0);
+    let mut bytes = Vec::new();
+    umya_spreadsheet::writer::xlsx::write_writer(&file, Cursor::new(&mut bytes)).unwrap();
+
+    let mut saved = Book::open_bytes_as(&bytes, false).unwrap();
+    assert_eq!(read(&mut saved, "A1", Read::Value), num(42.0));
+    assert_eq!(read(&mut saved, "B1", Read::Value), num(84.0));
+    let mut opened = Book::open_bytes(&bytes).unwrap();
+    let Val::Num(a) = read(&mut opened, "A1", Read::Value) else {
+        panic!("not a number")
+    };
+    assert!((5.0..6.0).contains(&a));
+    assert_eq!(read(&mut opened, "B1", Read::Value), num(a * 2.0));
+}
+
 #[test]
 fn formulas_the_engine_does_not_know_keep_their_values() {
     // A workbook saved with a formula calling a VBA function: its saved value stays.

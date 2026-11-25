@@ -285,7 +285,7 @@ VS Code では「RAS: ブックをシートプレビューで表示」（エク�
 
 ### ブックを編集する（`ras book edit`、VS Code のシートプレビュー）
 
-VS Code のシートプレビュー（「RAS: ブックをシートプレビューで表示」「RAS: シートプレビューを表示」）では、ブックのファイルを Excel と同じ操作で編集できます。操作は Excel のリボン（ホーム・挿入・数式・データ・表示・開発のタブ）と同じ配置です。
+VS Code のシートプレビュー（「RAS: ブックをシートプレビューで表示」「RAS: シートプレビューを表示」）では、ブックのファイルを Excel と同じ操作で編集できます。操作は Excel のリボン（ホーム・挿入・数式・データ・表示・開発のタブ）と同じ配置です。RAND・NOW などの揮発性関数は、Excel と同じくセルの編集で再計算し、図形の移動・サイズや文字・書式の変更、表示の切り替えでは再計算しません（編集用の表示はファイルに保存された値を表示します。読み取り専用の `ras book view` は Excel でブックを開いたときと同じく再計算します）。
 
 | 操作 | キー・マウス |
 |---|---|
@@ -341,7 +341,7 @@ ras book edit Book.xlsm --op '{"op":"validation","sheet":"Sheet1","range":"C2:C2
 ras book edit Book.xlsm --op '{"op":"shape","sheet":"Sheet1","shape":"roundRect","at":"B2","width":120,"height":40,"text":"集計"}'   # 図形（"range":"B2:D4" で範囲に重ねる。textBox・line・arrow なども）
 ras book edit Book.xlsm --op '{"op":"picture","sheet":"Sheet1","file":"logo.png","at":"F2","width":200}'   # 画像（"data" に base64 でも。大きさを省略すると画像の大きさ）
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"図 2","at":"H2"}'   # 図形・画像・グラフの移動（"width"・"height" でサイズ、"text" で図形の文字、"delete":true で削除）
-ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"楕円 1","fill":"#FF0000","line":null,"rotation":30,"order":"front"}'   # 塗りつぶし・線（"lineWidth" で太さ）・回転（"flipH"・"flipV" で反転）・文字の配置（"textAnchor": t / ctr / b、"textWrap"、"inset": {"left": 0} など。ポイント）・調整値（"adjust": {"adj": 25000}）・重なり順（front / forward / backward / back）
+ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"楕円 1","fill":"#FF0000","line":null,"rotation":30,"order":"front"}'   # 塗りつぶし・線（"lineWidth" で太さ）・回転（"flipH"・"flipV" で反転）・文字の配置（"textAnchor": t / ctr / b、"textWrap"、"inset": {"left": 0} など。ポイント）・効果（"shadow": {"angle": 45, "distance": 3}、"glow": {"color": "#FFC000", "size": 8}、"reflection": {"size": 35}。null でなし）・プロパティ（"placement": twoCell / oneCell / absolute、"print"、"locked"、"lockText"）・調整値（"adjust": {"adj": 25000}）・重なり順（front / forward / backward / back）
 ras book edit Book.xlsm --op '{"op":"control","sheet":"Sheet1","control":"button","at":"B2","text":"集計","macro":"Module1.run"}'   # フォームコントロール（checkBox・listBox など。"link" でリンクするセル、"items" でリストの範囲）
 ras book edit Book.xlsm --op '{"op":"activeX","sheet":"Sheet1","control":"commandButton","at":"B4"}'   # ActiveX コントロール（textBox・comboBox など。名前は CommandButton1 など、"name" で指定もできる）
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","shape":1025,"at":"D2"}'   # フォームコントロールの移動（"delete":true で削除。名前でも指定できる）
@@ -357,7 +357,7 @@ ras book edit Book.xlsm --set A1=x -o build/edited.xlsm                 # 別の
 - Excel で開いているブックは書き換えません（エラーになります。Excel で閉じてから行ってください）。
 - テーブルの列をまたぐ列の挿入・削除と、ピボットテーブルのあるシートでの挿入・削除は、ファイルの書き換えでは行えません（Excel で行ってください）。
 - 新しい書式は、元のスタイル（`xl/styles.xml`）の末尾に足します。既存の書式の番号は変わりません。
-- 条件付き書式のアイコンを 1 つずつ選んだアイコン セットの作成、色・アイコンでの絞り込み、スレッド形式のコメントの編集、図形のグラデーション・線の種類・効果・文字の書式、グラフの挿入、ActiveX コントロールの名前・色・フォントの変更、数式の入力中にほかのシートのセルをクリックして参照を入れることは、まだ行えません。`ras book view` が作る HTML（ブラウザーで開くもの）は読み取り専用です。
+- 条件付き書式のアイコンを 1 つずつ選んだアイコン セットの作成、色・アイコンでの絞り込み、スレッド形式のコメントの編集、図形のグラデーション・線の種類・影（外側）・光彩・反射のほかの効果（ぼかし・3-D など）・文字の書式、グラフの挿入、ActiveX コントロールの名前・色・フォントの変更、数式の入力中にほかのシートのセルをクリックして参照を入れることは、まだ行えません。`ras book view` が作る HTML（ブラウザーで開くもの）は読み取り専用です。
 
 ### エラーを調べる・AI に渡す
 

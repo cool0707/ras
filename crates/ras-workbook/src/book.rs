@@ -678,22 +678,39 @@ impl Book {
         if let Ok(ws) = file.sheet_mut(0) {
             ws.set_code_name("Sheet1");
         }
-        Book::from_file(file)
+        Book::from_file(file, true)
     }
 
+    /// The workbook as Excel opens it: the formulas that change on their own (RAND, NOW, ...)
+    /// calculated again.
     pub fn open(path: &Path) -> Result<Book> {
         let file = umya_spreadsheet::reader::xlsx::read(path)
             .map_err(|e| format!("{} を開けません（{e}）", path.display()))?;
-        Ok(Book::from_file(file))
+        Ok(Book::from_file(file, true))
     }
 
     pub fn open_bytes(data: &[u8]) -> Result<Book> {
-        let file = umya_spreadsheet::reader::xlsx::read_reader(Cursor::new(data), true)
-            .map_err(|e| format!("ブックを開けません（{e}）"))?;
-        Ok(Book::from_file(file))
+        Book::open_bytes_as(data, true)
     }
 
-    fn from_file(mut file: umya_spreadsheet::Workbook) -> Book {
+    /// The workbook with the values its file has: the formulas that change on their own
+    /// (RAND, NOW, ...) not calculated again (those without a value are). For a workbook shown
+    /// again after an edit of it: Excel calculates them when cells are entered (the edit wrote
+    /// them so), not when a shape or its text is changed.
+    pub fn open_saved(path: &Path) -> Result<Book> {
+        let file = umya_spreadsheet::reader::xlsx::read(path)
+            .map_err(|e| format!("{} を開けません（{e}）", path.display()))?;
+        Ok(Book::from_file(file, false))
+    }
+
+    /// `open_bytes`, or (`volatile` false) `open_saved`.
+    pub fn open_bytes_as(data: &[u8], volatile: bool) -> Result<Book> {
+        let file = umya_spreadsheet::reader::xlsx::read_reader(Cursor::new(data), true)
+            .map_err(|e| format!("ブックを開けません（{e}）"))?;
+        Ok(Book::from_file(file, volatile))
+    }
+
+    fn from_file(mut file: umya_spreadsheet::Workbook, volatile: bool) -> Book {
         let date1904 = file.date1904();
         file.read_sheet_collection();
         // A workbook without a VBA project has no code names in its file (umya-spreadsheet writes
@@ -823,8 +840,11 @@ impl Book {
         // LENB and the like count a full-width character as two bytes, as Japanese Excel does.
         gridcraft_functions::set_dbcs(true);
         book.calc.rebuild(&book.model);
-        // The formulas without a saved value, and those that change on their own (NOW, RAND).
-        book.calc.cells_changed(&mut book.model, &fresh);
+        // The formulas without a saved value, and those that change on their own (NOW, RAND;
+        // with their saved values when `volatile` is false and every formula has one).
+        if volatile || !fresh.is_empty() {
+            book.calc.cells_changed(&mut book.model, &fresh);
+        }
         book
     }
 

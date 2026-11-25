@@ -529,6 +529,23 @@ body.copying, body.copying td { cursor: copy; }
 #pane .plabel { flex: 1; min-width: 0; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #pane .prow > .spinbox input { width: 72px; }
 #pane .prow > input, #pane .prow > select { flex: none; width: 110px; min-width: 0; height: 24px; padding: 0 4px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; }
+#pane .prow > select.pwide { width: 136px; }
+#pane .prow > .pcode { flex: 1; min-width: 0; padding: 3px 0; font: 12px/1.4 Consolas, "Cascadia Mono", Menlo, monospace; overflow-wrap: anywhere; user-select: text; }
+/* コード > プロパティ: as a browser's developer tools list an element's (a name, its value; an
+   object opened by its triangle). */
+#pane .pprops { margin: 0 -4px; font: 12px/20px Consolas, "Cascadia Mono", Menlo, monospace; user-select: text; }
+#pane .prop { display: flex; align-items: baseline; gap: 6px; padding-right: 4px; white-space: nowrap; border-bottom: 1px solid #f0f0f0; }
+#pane .prop:hover { background: #eef3fb; }
+#pane .prop.pbranch { cursor: pointer; }
+#pane .prop .ptw { flex: none; width: 10px; color: #777; font-size: 8px; transition: transform .1s; }
+#pane .prop.open .ptw { transform: rotate(90deg); }
+#pane .prop .pk { flex: none; color: #c80000; }
+#pane .prop .pv { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: #222; }
+#pane .prop .pv.pstr { color: #1a1aa6; }
+#pane .prop .pv.pnum, #pane .prop .pv.pbool { color: #1c00cf; }
+#pane .prop .pv.penum { color: #444; }
+#pane .prop .pv.pobj { color: #888; }
+#pane .prop .psw { display: inline-block; width: 9px; height: 9px; margin-right: 5px; border: 1px solid #888; vertical-align: -1px; }
 #pane .prow > input:focus, #pane .prow > select:focus, #pane .ptext:focus { outline: 0; border-color: var(--accent); }
 #pane .prow > input[type="number"] { flex: none; width: 80px; text-align: right; }
 #pane .prow.pcheck { gap: 6px; margin-top: 2px; }
