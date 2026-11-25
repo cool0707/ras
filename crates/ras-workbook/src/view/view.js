@@ -72,6 +72,8 @@
     // The object (a shape, a control) selected, and the cell of the active cell.
     let selected = null;
     let selectedObj = null;
+    // The other objects selected with it (Ctrl or Shift and a click), as Excel selects several.
+    let others = [];
     let activeTd = null;
     // The sheet as drawn: its table, the rows and columns so far, where they are.
     let view = null;
@@ -96,13 +98,10 @@
     let clip = saved.clip || null;
 
     function clearSelection() {
-        if (selected) {
-            selected.classList.remove("on");
-            selected.classList.remove("framed");
-            for (const f of selected.querySelectorAll(".objframe")) f.remove();
-        }
+        for (const box of [selected, ...others.map((o) => o.box)]) unmark(box);
         selected = null;
         selectedObj = null;
+        others = [];
         refreshEventButton();
         refreshShapeTools();
         if (activeTd) activeTd.classList.remove("sel");
@@ -217,18 +216,59 @@
         }
     }
 
-    function selectObject(box, obj) {
+    // `add` (Ctrl or Shift held): added to the objects selected, or taken out of them if it is
+    // one (as Excel selects several shapes and controls; only those that can be moved).
+    function selectObject(box, obj, add) {
+        if (add && selected && selectedObj && movable(selectedObj) && movable(obj)) {
+            if (entry) cancelEntry();
+            if (obj === selectedObj || others.includes(obj)) {
+                unmark(box);
+                if (obj === selectedObj) {
+                    const next = others.pop();
+                    [selected, selectedObj] = next ? [next.box, next] : [null, null];
+                } else others = others.filter((o) => o !== obj);
+                if (!selectedObj) {
+                    clearSelection();
+                    if (sel) setSel(sel, false);
+                    return;
+                }
+            } else {
+                others.push(selectedObj);
+                [selected, selectedObj] = [box, obj];
+                mark(box, obj);
+            }
+            refreshEventButton();
+            refreshShapeTools();
+            showObjectName();
+            return;
+        }
         if (entry) cancelEntry();
         clearSelection();
         selected = box;
         selectedObj = obj;
-        box.classList.add("on");
-        addHandles(box, obj);
+        mark(box, obj);
         refreshEventButton();
         refreshShapeTools();
+        showObjectName();
+    }
+    function mark(box, obj) {
+        box.classList.add("on");
+        addHandles(box, obj);
+    }
+    function unmark(box) {
+        if (!box) return;
+        box.classList.remove("on");
+        box.classList.remove("framed");
+        for (const f of box.querySelectorAll(".objframe")) f.remove();
+    }
+    function showObjectName() {
+        const obj = selectedObj;
         $("name").value = obj.name || "";
         $("fx").textContent = obj.macro ? `${eventName(obj)}イベント: ${obj.macro}` : "";
     }
+    // The objects selected (the one selected last first); `isSelected`: one of them.
+    const selectedObjects = () => (selected && selectedObj ? [selectedObj, ...others] : []);
+    const isSelected = (obj) => !!selected && (obj === selectedObj || others.includes(obj));
 
     // The width of a column and the height of a row (px), drawn or not.
     function width(sheet, c) {
@@ -434,6 +474,7 @@
         entry = null;
         ed.value = "";
         bar.remove();
+        if (sheet !== current) others = [];
         current = sheet;
         selected = null;
         activeTd = null;
@@ -1010,11 +1051,21 @@
             if (movable(obj)) box.classList.add("movable");
             box.addEventListener("click", (e) => {
                 e.stopPropagation();
+                // (Ctrl or Shift: the mouse going down added it or took it out. One of several
+                // selected stays so, as it was dragged with them.)
+                if (e.ctrlKey || e.metaKey || e.shiftKey || (isSelected(obj) && others.length)) return;
                 selectObject(box, obj);
             });
             // Dragged: moved (in the panel that edits the workbook).
             box.addEventListener("mousedown", (e) => {
                 if (e.button !== 0 || drawingShape) return;
+                // Ctrl or Shift: added to the objects selected (or taken out of them).
+                if ((e.ctrlKey || e.metaKey || e.shiftKey) && movable(obj) && selected && movable(selectedObj)) {
+                    e.preventDefault();
+                    selectObject(box, obj, true);
+                    focusGrid();
+                    return;
+                }
                 // (What cannot be moved is selected all the same: Delete and the arrows are not
                 // for the object selected before it.)
                 if (!movable(obj)) {
@@ -1022,7 +1073,8 @@
                     return;
                 }
                 e.preventDefault();
-                if (selectedObj !== obj) selectObject(box, obj);
+                // (One of several selected: moved with the others.)
+                if (!isSelected(obj)) selectObject(box, obj);
                 focusGrid();
                 beginObjectDrag(e, box, obj, "move");
             });
@@ -1045,16 +1097,13 @@
             box.addEventListener("contextmenu", (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                selectObject(box, obj);
+                if (!isSelected(obj)) selectObject(box, obj);
                 const items = objectItems(obj);
                 if (items.length) showMenu(e.clientX, e.clientY, items);
             });
             // Drawn again (the rows grew, the fonts came): still selected.
-            if (selectedObj === obj) {
-                selected = box;
-                box.classList.add("on");
-                addHandles(box, obj);
-            }
+            if (selectedObj === obj) selected = box;
+            if (selectedObj === obj || others.includes(obj)) mark(box, obj);
         }
         for (const img of layer.querySelectorAll("img[data-img]")) {
             const src = (data.images || [])[+img.dataset.img];
@@ -2749,10 +2798,13 @@
         return { at: address(r, c), dx: round(Math.max(0, x - columnLeft(v, c)) / (formulas ? 2 : 1)), dy: round(Math.max(0, y - rowTop(v, r))) };
     }
     // After the page is drawn again: the object the edit made or changed is selected.
-    // `key`: the object's (`keyOf`), or null for the one the edit adds.
+    // `key`: the object's (`keyOf`), or null for the one the edit adds. (One of several
+    // selected: all of them stay selected.)
     function pickAfter(key) {
         if (!view) return;
-        remember({ pickObj: { sheet: view.sheet.name, key: key || null, before: key ? null : (view.sheet.objects || []).map(keyOf) } });
+        const all = selectedObjects().map(keyOf);
+        const keys = key ? (all.includes(key) ? all : [key]) : null;
+        remember({ pickObj: { sheet: view.sheet.name, keys, before: key ? null : (view.sheet.objects || []).map(keyOf) } });
     }
     function pickObject(v) {
         const p = saved.pickObj;
@@ -2760,8 +2812,13 @@
         remember({ pickObj: null });
         if (p.sheet !== v.sheet.name) return;
         const objects = v.sheet.objects || [];
-        const obj = p.key ? objects.find((o) => keyOf(o) === p.key) : objects.find((o) => keyOf(o) && !(p.before || []).includes(keyOf(o)));
-        if (obj && obj.box) selectObject(obj.box, obj);
+        const keys = p.keys || (p.key ? [p.key] : null);
+        const found = keys ? keys.map((k) => objects.find((o) => keyOf(o) === k)).filter((o) => o && o.box) : [objects.find((o) => keyOf(o) && !(p.before || []).includes(keyOf(o)))].filter((o) => o && o.box);
+        if (!found.length) return;
+        // (The one selected last is selected again last.)
+        const rest = found.slice(1);
+        rest.forEach((obj, i) => selectObject(obj.box, obj, i > 0));
+        selectObject(found[0].box, found[0], rest.length > 0);
     }
 
     function startDrawing(kind) {
@@ -3088,15 +3145,23 @@
     }
     function deleteObject(obj) {
         if (!movable(obj) || busy || !view) return;
-        postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), delete: true }]);
+        // (One of several selected: all of them.)
+        const all = isSelected(obj) ? selectedObjects().filter(movable) : [obj];
+        postEdit(all.map((o) => ({ op: "object", sheet: view.sheet.name, ...target(o), delete: true })));
     }
-    // The box of an object as it is placed (px at 100%).
-    const boxOfObject = (box) => ({ x: box.offsetLeft, y: box.offsetTop, w: box.offsetWidth, h: box.offsetHeight });
+    // The box of an object as it is placed (px at 100%; as placed, not rounded as offsetLeft is,
+    // which would move it by half a pixel each time).
+    const placed = (v, rounded) => (Number.isFinite(parseFloat(v)) ? parseFloat(v) : rounded);
+    const boxOfObject = (box) => ({ x: placed(box.style.left, box.offsetLeft), y: placed(box.style.top, box.offsetTop), w: placed(box.style.width, box.offsetWidth), h: placed(box.style.height, box.offsetHeight) });
     // An object moved (its box) to where it now is, or sized.
     function moveObject(obj, b) {
-        if (!view) return;
-        pickAfter(keyOf(obj));
-        postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), ...anchorOf(Math.max(0, b.x), Math.max(0, b.y)), width: Math.max(0, Math.round(b.w)), height: Math.max(0, Math.round(b.h)) }]);
+        moveObjects([[obj, b]]);
+    }
+    // Objects moved (or sized) at once: [[obj, box]].
+    function moveObjects(moves) {
+        if (!view || !moves.length) return;
+        pickAfter(keyOf(moves[0][0]));
+        postEdit(moves.map(([obj, b]) => ({ op: "object", sheet: view.sheet.name, ...target(obj), ...anchorOf(Math.max(0, b.x), Math.max(0, b.y)), width: Math.max(0, Math.round(b.w)), height: Math.max(0, Math.round(b.h)) })));
     }
     // The handles of the selected object: its sides and corners size it.
     const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -3408,6 +3473,8 @@
         if (entry) commit(null);
         const r = box.getBoundingClientRect();
         objDrag = { obj, box, how, x: e.clientX, y: e.clientY, from: boxOfObject(box), center: [r.left + r.width / 2, r.top + r.height / 2], ghost: null, now: null };
+        // Moved: the other objects selected with it too.
+        if (how === "move" && isSelected(obj)) objDrag.group = selectedObjects().filter((o) => o !== obj && movable(o) && o.box).map((o) => ({ obj: o, from: boxOfObject(o.box), ghost: null }));
     }
     function dragObject(e) {
         const d = objDrag;
@@ -3471,6 +3538,14 @@
         d.now = { x, y, w, h };
         ghostAt(d.ghost, x, y, x + w, y + h, false);
         if (turn) d.ghost.style.transform = `rotate(${d.obj.rot}deg)`;
+        // The others selected: by as much.
+        for (const g of d.group || []) {
+            const b = g.from;
+            if (!g.ghost) g.ghost = makeGhost(false);
+            g.now = { x: b.x + x - f.x, y: b.y + y - f.y, w: b.w, h: b.h };
+            ghostAt(g.ghost, g.now.x, g.now.y, g.now.x + b.w, g.now.y + b.h, false);
+            if (g.obj.rot) g.ghost.style.transform = `rotate(${g.obj.rot}deg)`;
+        }
     }
     // The border of a column (`cols`) or a row nearest a point of the sheet.
     function nearestBorder(cols, p) {
@@ -3499,18 +3574,21 @@
         objDrag = null;
         if (!d || !d.now) return;
         if (d.ghost) d.ghost.remove();
+        for (const g of d.group || []) if (g.ghost) g.ghost.remove();
         swallowClick = true;
         setTimeout(() => (swallowClick = false));
         if (d.how === "rot") objectEdit(d.obj, { rotation: d.now.rot });
         else if (d.how === "adj") endAdjust(d);
-        else moveObject(d.obj, d.now);
+        else moveObjects([[d.obj, d.now], ...(d.group || []).filter((g) => g.now).map((g) => [g.obj, g.now])]);
     }
-    // The arrow keys move the selected object by a pixel (Ctrl: by 10).
-    function nudgeObject(obj, box, dr, dc, far) {
-        if (!movable(obj) || busy) return;
-        const b = boxOfObject(box);
+    // The arrow keys move the selected objects by a pixel (Ctrl: by 10).
+    function nudgeObjects(dr, dc, far) {
+        if (busy) return;
         const step = far ? 10 : 1;
-        moveObject(obj, { x: b.x + dc * step, y: b.y + dr * step, w: b.w, h: b.h });
+        moveObjects(selectedObjects().filter((o) => movable(o) && o.box).map((o) => {
+            const b = boxOfObject(o.box);
+            return [o, { x: b.x + dc * step, y: b.y + dr * step, w: b.w, h: b.h }];
+        }));
     }
 
     // ---- 図形の書式: the fill, the line, the rotation, the order of the object selected
@@ -3525,16 +3603,75 @@
         pickAfter(keyOf(obj));
         postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), ...change }]);
     }
-    // Turned by `by` degrees (clockwise), as 右へ 90 度回転 turns it.
-    function turnObject(obj, by) {
-        if (canTurn(obj)) objectEdit(obj, { rotation: ((((obj.rot || 0) + by) % 360) + 360) % 360 });
+    // The objects selected changed at once: `changeOf(obj)` is the change of each (null: not
+    // that one, as a fill is not a control's).
+    function editSelected(changeOf) {
+        if (busy || !view) return;
+        const ops = [];
+        for (const obj of selectedObjects()) {
+            const change = movable(obj) && changeOf(obj);
+            if (change) ops.push({ op: "object", sheet: view.sheet.name, ...target(obj), ...change });
+        }
+        if (!ops.length) return;
+        pickAfter(keyOf(selectedObj));
+        postEdit(ops);
     }
+    // Turned by `by` degrees (clockwise), as 右へ 90 度回転 turns it.
+    const turnChange = (obj, by) => canTurn(obj) && { rotation: ((((obj.rot || 0) + by) % 360) + 360) % 360 };
     // 上下反転 / 左右反転: flipped as it is seen, a turned object turned the other way too.
-    function flipObject(obj, vertical) {
-        if (!canTurn(obj)) return;
+    function flipChange(obj, vertical) {
+        if (!canTurn(obj)) return null;
         const change = vertical ? { flipV: !obj.flipV } : { flipH: !obj.flipH };
         if (obj.rot) change.rotation = (360 - obj.rot) % 360;
-        objectEdit(obj, change);
+        return change;
+    }
+
+    // ---- 配置 (オブジェクトの配置): the objects selected lined up by their sides or centers, or
+    // spread evenly between the first and the last (as Excel, by the boxes they are seen in,
+    // turned)
+
+    // The box an object is seen in (turned as it is): its left, top, right and bottom.
+    function seenBox(obj) {
+        const b = boxOfObject(obj.box);
+        const t = ((obj.rot || 0) * Math.PI) / 180;
+        const [c, s] = [Math.abs(Math.cos(t)), Math.abs(Math.sin(t))];
+        const [hw, hh] = [(b.w * c + b.h * s) / 2, (b.w * s + b.h * c) / 2];
+        const [cx, cy] = [b.x + b.w / 2, b.y + b.h / 2];
+        return { box: b, l: cx - hw, t: cy - hh, r: cx + hw, b: cy + hh };
+    }
+    const alignable = () => selectedObjects().filter((o) => movable(o) && o.box);
+    // `how`: left, center, right, top, middle, bottom; spreadH, spreadV (three or more).
+    function alignObjects(how) {
+        const list = alignable().map((obj) => ({ obj, ...seenBox(obj) }));
+        if (list.length < (how.startsWith("spread") ? 3 : 2) || busy) return;
+        const min = (k) => Math.min(...list.map((o) => o[k]));
+        const max = (k) => Math.max(...list.map((o) => o[k]));
+        const across = how === "left" || how === "center" || how === "right" || how === "spreadH";
+        const [lo, hi] = across ? ["l", "r"] : ["t", "b"];
+        const to = new Map();
+        if (how === "left" || how === "top") for (const o of list) to.set(o, min(lo));
+        else if (how === "right" || how === "bottom") for (const o of list) to.set(o, max(hi) - (o[hi] - o[lo]));
+        else if (how === "center" || how === "middle") for (const o of list) to.set(o, (min(lo) + max(hi)) / 2 - (o[hi] - o[lo]) / 2);
+        else {
+            // The first and the last stay; the space between the others is the same.
+            const order = list.slice().sort((a, b) => a[lo] + a[hi] - (b[lo] + b[hi]));
+            const [first, last] = [order[0], order[order.length - 1]];
+            const sizes = order.reduce((n, o) => n + o[hi] - o[lo], 0);
+            const gap = (last[hi] - first[lo] - sizes) / (order.length - 1);
+            let at = first[lo];
+            for (const o of order) {
+                to.set(o, at);
+                at += o[hi] - o[lo] + gap;
+            }
+        }
+        const moves = [];
+        for (const o of list) {
+            const by = to.get(o) - o[lo];
+            if (Math.abs(by) < 0.5) continue;
+            const b = o.box;
+            moves.push([o.obj, across ? { ...b, x: b.x + by } : { ...b, y: b.y + by }]);
+        }
+        if (moves.length) moveObjects(moves);
     }
     const ORDERS = [
         ["front", "最前面へ移動"],
@@ -3543,6 +3680,23 @@
         ["back", "最背面へ移動"],
     ];
     const LINE_WIDTHS = [0.25, 0.5, 0.75, 1, 1.5, 2.25, 3, 4.5, 6];
+    // 配置's items: [how, icon, label, title], by group.
+    const ALIGNS = [
+        [
+            ["left", "alignLeft", "左揃え", "選択したオブジェクトの左端を揃えます"],
+            ["center", "alignCenter", "左右中央揃え", "選択したオブジェクトを左右の中央で揃えます"],
+            ["right", "alignRight", "右揃え", "選択したオブジェクトの右端を揃えます"],
+        ],
+        [
+            ["top", "alignTop", "上揃え", "選択したオブジェクトの上端を揃えます"],
+            ["middle", "alignMiddle", "上下中央揃え", "選択したオブジェクトを上下の中央で揃えます"],
+            ["bottom", "alignBottom", "下揃え", "選択したオブジェクトの下端を揃えます"],
+        ],
+        [
+            ["spreadH", "spreadH", "左右に整列", "選択したオブジェクト（3 つ以上）を左右に等間隔で並べます"],
+            ["spreadV", "spreadV", "上下に整列", "選択したオブジェクト（3 つ以上）を上下に等間隔で並べます"],
+        ],
+    ];
     // The contextual tab of the ribbon: shown while an object that can be changed is selected
     // (a shape, a picture, a chart, a control).
     function refreshShapeTools() {
@@ -3552,10 +3706,12 @@
         const obj = selected && movable(selectedObj) ? selectedObj : null;
         ribbon.showShapeTab(!!obj);
         if (!obj) return;
-        tools.shapeFill.disabled = tools.shapeFillMore.disabled = !canFill(obj);
-        tools.shapeLine.disabled = tools.shapeLineMore.disabled = !canLine(obj);
-        for (const key of ["forward", "forwardMore", "backward", "backwardMore"]) tools[key].disabled = isControl(obj);
-        tools.rotate.disabled = !canTurn(obj);
+        // (Several selected: what any of them can be given.)
+        const all = alignable();
+        tools.shapeFill.disabled = tools.shapeFillMore.disabled = !all.some(canFill);
+        tools.shapeLine.disabled = tools.shapeLineMore.disabled = !all.some(canLine);
+        for (const key of ["forward", "forwardMore", "backward", "backwardMore"]) tools[key].disabled = all.every(isControl);
+        tools.rotate.disabled = !all.some(canTurn);
         const b = boxOfObject(selected);
         tools.objHeight.setCm(cmOf(b.h));
         tools.objWidth.setCm(cmOf(b.w));
@@ -3687,9 +3843,10 @@
             b.type = "button";
             b.obj = obj;
             b.title = obj.macro ? `${objectLabel(obj)}（${eventName(obj)}イベント: ${obj.macro}）` : objectLabel(obj);
-            b.addEventListener("click", () => {
+            b.addEventListener("click", (e) => {
                 if (!obj.box) return;
-                selectObject(obj.box, obj);
+                // (Ctrl or Shift: added to the objects selected, or taken out of them.)
+                selectObject(obj.box, obj, e.ctrlKey || e.metaKey || e.shiftKey);
                 obj.box.scrollIntoView({ block: "nearest", inline: "nearest" });
                 focusGrid();
             });
@@ -3697,7 +3854,7 @@
         markListed(body.parentNode);
     }
     function markListed(pane) {
-        for (const b of pane.querySelectorAll(".pitem")) b.classList.toggle("on", b.obj === selectedObj);
+        for (const b of pane.querySelectorAll(".pitem")) b.classList.toggle("on", isSelected(b.obj));
     }
     // The format of an object, as Excel's 図形の書式設定: its pages by the icons of one row of tabs
     // (塗りつぶしと線, 効果, サイズとプロパティ, 文字), their sections folded by their headings;
@@ -4100,7 +4257,7 @@
             for (const [label, vertical] of [["左右反転", false], ["上下反転", true]]) {
                 const fb = flips.appendChild(el("button", null, label));
                 fb.type = "button";
-                fb.addEventListener("click", () => flipObject(obj, vertical));
+                fb.addEventListener("click", () => objectEdit(obj, flipChange(obj, vertical)));
             }
         }
 
@@ -4540,7 +4697,7 @@
             items.push(["削除", () => deleteObject(obj), "Delete"]);
             if (!isControl(obj)) {
                 items.push(null);
-                for (const [how, label] of ORDERS) items.push([label, () => objectEdit(obj, { order: how }), ""]);
+                for (const [how, label] of ORDERS) items.push([label, () => (isSelected(obj) ? editSelected((o) => !isControl(o) && { order: how }) : objectEdit(obj, { order: how })), ""]);
             }
             if (canTurn(obj)) items.push(["回転", () => openPane("format", "rotation"), ""]);
         }
@@ -6729,6 +6886,15 @@
         rotate: '<path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M12 1.5v3.2H8.8"/>',
         selectionPane: '<rect x="1.5" y="1.5" width="13" height="13"/><path d="M9.5 1.5v13M11 4.5h2M11 7h2M11 9.5h2"/><path d="M3.5 4.5 7 8.2l-1.6.3.9 2-1 .4-.9-2L3.5 10z" fill="currentColor" stroke="none"/>',
         align: '<path d="M2.5 1.5v13"/><rect x="2.5" y="3.5" width="9" height="3"/><rect x="2.5" y="9.5" width="6" height="3"/>',
+        alignLeft: '<path d="M2.5 1.5v13"/><rect x="4.5" y="3.5" width="9" height="3"/><rect x="4.5" y="9.5" width="6" height="3"/>',
+        alignCenter: '<path d="M8 1.5v2M8 6.5v3M8 12.5v2"/><rect x="3" y="3.5" width="10" height="3"/><rect x="5" y="9.5" width="6" height="3"/>',
+        alignRight: '<path d="M13.5 1.5v13"/><rect x="2.5" y="3.5" width="9" height="3"/><rect x="5.5" y="9.5" width="6" height="3"/>',
+        alignTop: '<path d="M1.5 2.5h13"/><rect x="3.5" y="4.5" width="3" height="9"/><rect x="9.5" y="4.5" width="3" height="6"/>',
+        alignMiddle: '<path d="M1.5 8h2M6.5 8h3M12.5 8h2"/><rect x="3.5" y="3" width="3" height="10"/><rect x="9.5" y="5" width="3" height="6"/>',
+        alignBottom: '<path d="M1.5 13.5h13"/><rect x="3.5" y="2.5" width="3" height="9"/><rect x="9.5" y="5.5" width="3" height="6"/>',
+        spreadH: '<path d="M1.5 1.5v13M14.5 1.5v13"/><rect x="6.5" y="4.5" width="3" height="7"/>',
+        spreadV: '<path d="M1.5 1.5h13M1.5 14.5h13"/><rect x="4.5" y="6.5" width="7" height="3"/>',
+        snapGrid: '<path d="M1.5 5.5h13M1.5 10.5h13M5.5 1.5v13M10.5 1.5v13" stroke-opacity=".45"/><rect x="5.5" y="5.5" width="5" height="5" fill="#dbe5f1"/>',
         height: '<path d="M8 1.5v13M6 3.5l2-2 2 2M6 12.5l2 2 2-2M3 1.5h10M3 14.5h10"/>',
         width: '<path d="M1.5 8h13M3.5 6l-2 2 2 2M12.5 6l2 2-2 2M1.5 3v10M14.5 3v10"/>',
         condFormat: '<rect x="1.5" y="1.5" width="13" height="13"/><path d="M1.5 5.8h13M1.5 10.2h13M5.5 1.5v13"/><path d="M7 2.9h6.2v1.6H7zM7 7.2h3v1.6H7zM7 11.5h4.6v1.6H7z" fill="currentColor" stroke="none"/>',
@@ -7489,7 +7655,8 @@
         const shapeTab = tab("shapeFormat", "図形の書式");
         panels.shapeFormat.tab.hidden = true;
         panels.shapeFormat.tab.classList.add("context");
-        const onObj = (act) => () => selectedObj && act(selectedObj);
+        // (What is chosen is done to each of the objects selected.)
+        const onObjs = (changeOf) => () => editSelected(changeOf);
         group(shapeTab, "図形のスタイル");
         const shapeColor = (key, iconName, label, none, more) => {
             const pick = (color) => {
@@ -7498,7 +7665,7 @@
                     const bar = tools[key === "fill" ? "shapeFill" : "shapeLine"].querySelector(".bar");
                     if (bar) bar.style.background = color;
                 }
-                if (selectedObj) objectEdit(selectedObj, { [key]: color });
+                editSelected((obj) => (key === "fill" ? canFill(obj) : canLine(obj)) && { [key]: color });
             };
             const b = button(key === "fill" ? "shapeFill" : "shapeLine", {
                 icon: iconName,
@@ -7520,7 +7687,7 @@
         shapeColor("fill", "fill", "図形の塗りつぶし", "塗りつぶしなし");
         shapeColor("line", "shapeLine", "図形の枠線", "枠線なし", (pop) => {
             head(pop, "太さ");
-            for (const w of LINE_WIDTHS) item(pop, `${w} pt`, onObj((obj) => objectEdit(obj, { lineWidth: w })));
+            for (const w of LINE_WIDTHS) item(pop, `${w} pt`, onObjs((obj) => canLine(obj) && { lineWidth: w }));
         });
         group(shapeTab, "配置");
         stack();
@@ -7531,10 +7698,10 @@
                 showLabel: true,
                 split: true,
                 title: label,
-                act: onObj((obj) => objectEdit(obj, { order: one })),
+                act: onObjs((obj) => !isControl(obj) && { order: one }),
                 menu: (anchor) => {
                     const pop = openPop(anchor, "orders");
-                    for (const [how, text] of ORDERS.filter(([how]) => how === one || how === all)) item(pop, text, onObj((obj) => objectEdit(obj, { order: how })));
+                    for (const [how, text] of ORDERS.filter(([how]) => how === one || how === all)) item(pop, text, onObjs((obj) => !isControl(obj) && { order: how }));
                 },
             });
         };
@@ -7548,8 +7715,22 @@
             title: "オブジェクトの配置",
             menu: (anchor) => {
                 const pop = openPop(anchor, "aligns");
+                // (Two or more objects selected: lined up; three or more: spread.)
+                const n = alignable().length;
+                ALIGNS.forEach((group, i) => {
+                    if (i) pop.appendChild(el("hr"));
+                    for (const [how, iconName, label, title] of group) {
+                        const b = item(pop, label, () => alignObjects(how));
+                        b.insertBefore(icon(iconName), b.firstChild);
+                        b.title = title;
+                        b.disabled = n < (how.startsWith("spread") ? 3 : 2);
+                    }
+                });
+                pop.appendChild(el("hr"));
                 const snap = item(pop, "枠線に合わせる", () => remember({ snapGrid: !saved.snapGrid }));
+                snap.insertBefore(icon("snapGrid"), snap.firstChild);
                 snap.classList.toggle("on", !!saved.snapGrid);
+                snap.setAttribute("aria-pressed", String(!!saved.snapGrid));
                 snap.title = "移動・サイズの変更でセルの枠線に合わせます（Alt を押しながらドラッグしても合わせます）";
             },
         });
@@ -7558,12 +7739,12 @@
             label: "回転",
             menu: (anchor) => {
                 const pop = openPop(anchor, "rotates");
-                item(pop, "右へ 90 度回転", onObj((obj) => turnObject(obj, 90)));
-                item(pop, "左へ 90 度回転", onObj((obj) => turnObject(obj, -90)));
-                item(pop, "上下反転", onObj((obj) => flipObject(obj, true)));
-                item(pop, "左右反転", onObj((obj) => flipObject(obj, false)));
+                item(pop, "右へ 90 度回転", onObjs((obj) => turnChange(obj, 90)));
+                item(pop, "左へ 90 度回転", onObjs((obj) => turnChange(obj, -90)));
+                item(pop, "上下反転", onObjs((obj) => flipChange(obj, true)));
+                item(pop, "左右反転", onObjs((obj) => flipChange(obj, false)));
                 pop.appendChild(el("hr"));
-                item(pop, "その他の回転オプション…", onObj((obj) => openPane("format", "rotation")));
+                item(pop, "その他の回転オプション…", () => selectedObj && openPane("format", "rotation"));
             },
         });
 
@@ -7574,12 +7755,13 @@
         for (const [key, iconName, label] of [["objHeight", "height", "図形の高さ"], ["objWidth", "width", "図形の幅"]]) {
             row();
             into.appendChild(icon(iconName)).title = label;
+            // (Several selected: each made as high, or as wide.)
             const box = sizeBox(into, label, (cm) => {
-                const obj = selectedObj;
-                if (!obj || !selected) return;
-                const b = boxOfObject(selected);
                 const px = (cm * 96) / 2.54;
-                moveObject(obj, key === "objHeight" ? { ...b, h: px } : { ...b, w: px });
+                moveObjects(alignable().map((obj) => {
+                    const b = boxOfObject(obj.box);
+                    return [obj, key === "objHeight" ? { ...b, h: px } : { ...b, w: px }];
+                }));
             });
             box.dataset.tool = key;
             tools[key] = box;
@@ -10028,7 +10210,7 @@
         if (view && selectedObj && selected && onGrid() && e.altKey && !ctrl && (key === "ArrowLeft" || key === "ArrowRight")) {
             // Alt+← / Alt+→: turned by 15°, as Excel turns a shape.
             e.preventDefault();
-            turnObject(selectedObj, key === "ArrowRight" ? 15 : -15);
+            editSelected((o) => turnChange(o, key === "ArrowRight" ? 15 : -15));
             return;
         }
         if (view && selectedObj && selected && onGrid() && !e.altKey) {
@@ -10048,7 +10230,7 @@
             if (!ctrl || moves[key]) {
                 e.preventDefault();
                 if (key === "Delete" || key === "Backspace") deleteObject(obj);
-                else if (moves[key]) nudgeObject(obj, selected, moves[key][0], moves[key][1], ctrl);
+                else if (moves[key]) nudgeObjects(moves[key][0], moves[key][1], ctrl);
                 else if (key === "F2" || key === "Enter") editObjectText(obj);
                 return;
             }
