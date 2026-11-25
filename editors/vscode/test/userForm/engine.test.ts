@@ -5,7 +5,8 @@ import { bodyIndent, eventsForType, eventTarget, findHandler, handlerText, jsNam
 import { formatJson, minimalEdit } from "../../src/userForm/jsonSource";
 import { columnLayout, itemColumns, listToText, parseColumnWidths, textColumnIndex, textToList } from "../../src/userForm/listItems";
 import { designerDocument, toggleState } from "../../src/userForm/model";
-import { isWebviewMessage } from "../../src/userForm/protocol";
+import { isStructuralOperation, isWebviewMessage } from "../../src/userForm/protocol";
+import { createControl } from "../../src/userForm/toolbox";
 import type { SemanticOperation } from "../../src/userForm/protocol";
 import { pasteAllocations } from "../../src/userForm/clipboard";
 import { newFormSpec, parseSpec, previewDocument, problems, propertyGrid } from "../../src/userForm/spec";
@@ -47,6 +48,41 @@ describe("FormSpec editing", () => {
 		assert.deepEqual(result.backColor, { kind: "system", value: "buttonFace" });
 		rejects(text, [{ type: "setFormProperty", field: "foreColor", value: { kind: "rgb", value: "red" } }], "UFV021");
 		rejects(text, [{ type: "setFormProperty", field: "observed", value: "x" }], "UFE005");
+	});
+
+	it("creates labels, check boxes and option buttons with a transparent background", () => {
+		const parsed = parseSpec(form());
+		assert.ok(parsed.ok);
+		const document = designerDocument(previewDocument(parsed.spec));
+		for (const type of ["Label", "CheckBox", "OptionButton"] as const) {
+			const created = createControl(document, type, 8, 8, true, () => "x")!;
+			assert.equal(created.backStyle, 0);
+			const op = { type: "addControl", control: created } as const;
+			assert.ok(isStructuralOperation(op));
+			assert.equal(control(apply(form(), op), created.id).backStyle, 0);
+		}
+		for (const type of ["CommandButton", "ToggleButton", "TextBox", "ComboBox"] as const)
+			assert.equal(Object.hasOwn(createControl(document, type, 8, 8, true, () => "x")!, "backStyle"), false);
+		assert.equal(isStructuralOperation({ type: "addControl", control: { id: "t", name: "TextBox1", type: "TextBox", left: 0, top: 0, width: 72, height: 18, backStyle: 0 } }), false);
+	});
+
+	it("creates controls with the form's font, else the system UI font at 10pt", () => {
+		const documentOf = (text: string) => {
+			const parsed = parseSpec(text);
+			assert.ok(parsed.ok);
+			return designerDocument(previewDocument(parsed.spec));
+		};
+		const plain = documentOf(form());
+		assert.deepEqual(createControl(plain, "TextBox", 8, 8, true, () => "x")!.font, { name: "Yu Gothic UI", size: 10 });
+		plain.newControlFont = { name: "Meiryo UI", size: 10, charset: 128 };
+		const created = createControl(plain, "Label", 8, 8, true, () => "x")!;
+		assert.deepEqual(created.font, { name: "Meiryo UI", size: 10, charset: 128 });
+		assert.ok(isStructuralOperation({ type: "addControl", control: created }));
+		assert.deepEqual(control(apply(form(), { type: "addControl", control: created }), created.id).font, created.font);
+		assert.equal(Object.hasOwn(createControl(plain, "SpinButton", 8, 8, true, () => "x")!, "font"), false);
+		const styled = documentOf(form([], { font: { name: "Tahoma", size: 8 } }));
+		assert.deepEqual(createControl(styled, "CommandButton", 8, 8, true, () => "x")!.font, { name: "Tahoma", size: 8 });
+		assert.deepEqual(newFormSpec("F", { name: "Meiryo UI", size: 10 }).form, { name: "F", caption: "F", width: 240, height: 180, font: { name: "Meiryo UI", size: 10 } });
 	});
 
 	it("adds, edits and removes controls", () => {
