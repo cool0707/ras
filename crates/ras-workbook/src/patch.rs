@@ -1825,7 +1825,110 @@ fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) 
     match key {
         "bold" => set("font.bold", flag()?),
         "italic" => set("font.italic", flag()?),
-        "underline" => set("font.underline", flag()?),
+        // On or off, or the kind of line (セルの書式設定 > フォント > 下線).
+        "underline" => match value {
+            Json::String(kind) => set(
+                "font.underline",
+                Val::Num(match kind.as_str() {
+                    "none" => NONE,
+                    "single" => 2.0,
+                    "double" => -4119.0,
+                    "singleAccounting" => 4.0,
+                    "doubleAccounting" => 5.0,
+                    _ => return Err(wrong()),
+                }),
+            ),
+            _ => set("font.underline", flag()?),
+        },
+        "superscript" => set("font.superscript", flag()?),
+        "subscript" => set("font.subscript", flag()?),
+        // セルの書式設定 > 保護 > 表示しない.
+        "hidden" => set("formulahidden", flag()?),
+        "shrink" => set("shrinktofit", flag()?),
+        "indent" => set(
+            "indentlevel",
+            Val::Num(
+                value
+                    .as_f64()
+                    .filter(|n| (0.0..=250.0).contains(n))
+                    .ok_or_else(wrong)?
+                    .round(),
+            ),
+        ),
+        // The angle of the text (-90 to 90 degrees), or "vertical" (縦書き: letters stacked).
+        "orientation" => set(
+            "orientation",
+            Val::Num(match value {
+                Json::String(s) if s == "vertical" => -4166.0,
+                _ => value
+                    .as_f64()
+                    .filter(|d| (-90.0..=90.0).contains(d))
+                    .ok_or_else(wrong)?
+                    .round(),
+            }),
+        ),
+        // 文字の方向: "context" (the text's own), "ltr", "rtl".
+        "readingOrder" => set(
+            "readingorder",
+            Val::Num(match text()? {
+                "context" => -5002.0,
+                "ltr" => -5003.0,
+                "rtl" => -5004.0,
+                _ => return Err(wrong()),
+            }),
+        ),
+        // 塗りつぶし: { pattern, color, background } — the pattern's name (the file's: `solid`,
+        // `lightGray`, ...; `none`), its color, and the cell's color under it (#RRGGBB, null
+        // for none).
+        "pattern" => {
+            let o = value.as_object().ok_or_else(wrong)?;
+            let color = |k: &str| -> Result<Option<f64>> {
+                match o.get(k) {
+                    None | Some(Json::Null) => Ok(None),
+                    Some(c) => Ok(Some(colour(c.as_str().ok_or_else(wrong)?)?)),
+                }
+            };
+            let (fg, bg) = (color("color")?, color("background")?);
+            let kind = o.get("pattern").and_then(Json::as_str).ok_or_else(wrong)?;
+            let code = match kind {
+                "none" => NONE,
+                "solid" => 1.0,
+                "mediumGray" => -4124.0,
+                "darkGray" => -4125.0,
+                "lightGray" => -4126.0,
+                "gray125" => 17.0,
+                "gray0625" => 18.0,
+                "darkHorizontal" => -4128.0,
+                "darkVertical" => -4166.0,
+                "darkDown" => -4121.0,
+                "darkUp" => -4162.0,
+                "darkGrid" => 9.0,
+                "darkTrellis" => 10.0,
+                "lightHorizontal" => 11.0,
+                "lightVertical" => 12.0,
+                "lightDown" => 13.0,
+                "lightUp" => 14.0,
+                "lightGrid" => 15.0,
+                "lightTrellis" => 16.0,
+                _ => return Err(wrong()),
+            };
+            // (Anew: no colors of a fill before.)
+            set("interior.pattern", Val::Num(NONE))?;
+            if code == NONE {
+                return Ok(());
+            }
+            set("interior.pattern", Val::Num(code))?;
+            // The file's foreground: a solid fill's color, a pattern's lines (black without
+            // one); its background: the cell's color under a pattern (none: white).
+            if code == 1.0 {
+                return set("interior.color", Val::Num(fg.or(bg).ok_or_else(wrong)?));
+            }
+            set("interior.color", Val::Num(fg.unwrap_or(0.0)))?;
+            match bg {
+                Some(b) => set("interior.patterncolor", Val::Num(b)),
+                None => Ok(()),
+            }
+        }
         // (`style` once the styles have ハイパーリンク: its number.) Its font: underlined, in the
         // theme's colour of links.
         "hyperlinkXf" => {
@@ -1870,6 +1973,10 @@ fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) 
                 "center" => -4108.0,
                 "right" => -4152.0,
                 "general" => 1.0,
+                "fill" => 5.0,
+                "justify" => -4130.0,
+                "centerContinuous" => 7.0,
+                "distributed" => -4117.0,
                 _ => return Err(wrong()),
             }),
         ),
@@ -1879,10 +1986,49 @@ fn format(book: &mut Book, si: usize, range: RangeRef, key: &str, value: &Json) 
                 "top" => -4160.0,
                 "middle" => -4108.0,
                 "bottom" => -4107.0,
+                "justify" => -4130.0,
+                "distributed" => -4117.0,
                 _ => return Err(wrong()),
             }),
         ),
         "numberFormat" => book.set_number_format(si, range, text()?),
+        // The sides of セルの書式設定 > 罫線, each { line, color } or null (none): `left`, `top`,
+        // `right`, `bottom` of the range, `insideV` and `insideH` between its cells, `diagDown`
+        // (＼) and `diagUp` (／) of each cell. The sides not named stay as they are.
+        "borders" => {
+            let o = value.as_object().ok_or_else(wrong)?;
+            for (side, spec) in o {
+                let index = match side.as_str() {
+                    "left" => "7",
+                    "top" => "8",
+                    "bottom" => "9",
+                    "right" => "10",
+                    "insideV" => "11",
+                    "insideH" => "12",
+                    "diagDown" => "5",
+                    "diagUp" => "6",
+                    _ => return Err(wrong()),
+                };
+                if spec.is_null() {
+                    set(&format!("borders.{index}.linestyle"), Val::Num(NONE))?;
+                    continue;
+                }
+                let line = spec.get("line").and_then(Json::as_str).unwrap_or("thin");
+                let (linestyle, weight) = border_line(line).ok_or_else(wrong)?;
+                set(&format!("borders.{index}.linestyle"), Val::Num(linestyle))?;
+                set(&format!("borders.{index}.weight"), Val::Num(weight))?;
+                match spec.get("color") {
+                    None | Some(Json::Null) => {
+                        set(&format!("borders.{index}.colorindex"), Val::Num(-4105.0))?
+                    }
+                    Some(c) => set(
+                        &format!("borders.{index}.color"),
+                        Val::Num(colour(c.as_str().ok_or_else(wrong)?)?),
+                    )?,
+                }
+            }
+            Ok(())
+        }
         "border" => {
             // A preset of the ribbon's menu: its name, or { preset, line, color } with the
             // line (`thin`, `dashed`, `double`, ...: the 線のスタイル) its plain sides take and

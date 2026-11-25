@@ -560,26 +560,45 @@ body.copying, body.copying td { cursor: copy; }
 #pane .pcolor .pdrop { color: #555; font-size: 10px; }
 #pane .pcolor .sw { width: 14px; height: 14px; border: 1px solid #999; }
 #pane .pnote { color: #555; font-size: 12px; }
+/* セルの書式設定 */
+#pane .pcolor .sw.none { background: linear-gradient(to top right, #fff calc(50% - 1px), #c00000, #fff calc(50% + 1px)); }
+#pane .pcolor .pctext { color: #333; }
+#pane .pcolor.pline .sample { display: inline-flex; }
+#pane .pblock { display: flex; flex-direction: column; gap: 3px; padding: 4px 0; }
+#pane .pblock > .plabel { flex: none; }
+#pane .pblock > .prow { min-height: 0; }
+#pane .pblock > .prow > .plabel { flex: none; }
+#pane .pblock > .prow > input.pcode { flex: 1; width: auto; font: 12px Consolas, "Cascadia Mono", Menlo, monospace; }
+#pane .psample { min-height: 24px; padding: 3px 6px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 18px; }
+#pane .plistbox { width: 100%; padding: 2px 0; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; }
+#pane .plistbox:focus { outline: 0; border-color: var(--accent); }
+#pane .plistbox option { padding: 1px 6px; }
+#pane .plistbox option.red { color: #c00; }
+#pane .pcombo { flex: none; display: inline-flex; width: 136px; height: 24px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; }
+#pane .pcombo:focus-within { border-color: var(--accent); }
+#pane .pcombo input { flex: 1; min-width: 0; padding: 0 4px; border: 0; outline: 0; background: none; color: #000; font: inherit; }
+#pane .pcombo .pdrop { flex: none; width: 18px; padding: 0; border: 0; border-left: 1px solid #e1e1e1; background: none; color: #555; font-size: 10px; cursor: pointer; }
+#pane .pcombo .pdrop:hover { background: #ececec; }
+#pane .ppreview { display: flex; align-items: center; justify-content: center; height: 64px; padding: 0 8px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; overflow: hidden; white-space: nowrap; }
+#pane .pfillsample { height: 40px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; }
+#pane .pbtns button:disabled, #pane .pside:disabled { opacity: .45; cursor: default; background: #fff; border-color: #c8c8c8; }
+#pane .pbtns button .bico { display: inline-flex; }
+#pane .pborders { display: grid; grid-template-columns: 30px auto; grid-template-rows: auto 30px; gap: 4px; justify-content: start; padding: 4px 0 6px; }
+#pane .pbcol { display: flex; flex-direction: column; justify-content: space-between; }
+#pane .pbrow { display: flex; justify-content: space-between; }
+#pane .pbpic { display: flex; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; cursor: pointer; }
+#pane .pbpic svg { display: block; }
+#pane .pside { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; cursor: pointer; }
+#pane .pside:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent); }
+#pane .pside.on { background: var(--accent-tint); border-color: var(--accent); }
+.menu.patterns .swatches { grid-template-columns: repeat(6, 22px); }
+.menu.patterns .swatches .swatch { width: 22px; height: 22px; }
+.menu.patterns .swatches .swatch.on { outline: 2px solid var(--accent); outline-offset: 1px; }
 #pane .pnone { padding: 8px 0; color: #777; }
 #pane .plist { display: flex; flex-direction: column; }
 #pane .pitem { padding: 4px 8px; border: 0; border-radius: 2px; background: none; color: #000; font: inherit; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 #pane .pitem:hover { background: var(--accent-hover); }
 #pane .pitem.on { background: var(--accent-tint); color: var(--accent-ink); }
-.dlg.numfmtdlg { width: 520px; }
-.dlg.numfmtdlg .fmttabs { display: flex; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
-.dlg.numfmtdlg .fmttabs span { padding: 3px 12px; border: 1px solid var(--line); border-bottom: none; margin-bottom: -1px; background: #fff; }
-.dlg.numfmtdlg .fmtbody { display: flex; gap: 12px; min-height: 230px; }
-.dlg.numfmtdlg .fmtkinds { width: 130px; flex: none; }
-.dlg.numfmtdlg .fmtkinds select { width: 100%; font: inherit; }
-.dlg.numfmtdlg .fmtright { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.dlg.numfmtdlg .fmtsample { margin: 0; padding: 2px 8px 4px; border: 1px solid var(--line); }
-.dlg.numfmtdlg .fmtsample .out { min-height: 1.4em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.dlg.numfmtdlg .fmtopts { display: flex; flex-direction: column; gap: 2px; }
-.dlg.numfmtdlg .fmtopts label input[type="number"] { margin-left: 8px; width: 60px; }
-.dlg.numfmtdlg .fmtopts select { font: inherit; }
-.dlg.numfmtdlg .fmtlist { width: 100%; }
-.dlg.numfmtdlg .fmtlist option.red { color: #c00; }
-.dlg.numfmtdlg input.fmtcode { flex: 1; min-width: 0; font: inherit; }
 /* ホーム > 条件付き書式: its menu (rows of bars, scales and icon sets) and its dialogs. */
 /* A submenu: beside the item that opens it (a child of its menu). */
 .menu button.hassub { align-items: center; }

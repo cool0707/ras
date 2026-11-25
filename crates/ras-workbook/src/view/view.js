@@ -3575,7 +3575,7 @@
         input.spellcheck = false;
         input.autocomplete = "off";
         let now = null;
-        const show = () => (input.value = now === null ? "" : name === "°" || name === "%" ? `${now}${name}` : `${now} ${name}`);
+        const show = () => (input.value = now === null ? "" : !name || name === "°" || name === "%" ? `${now}${name}` : `${now} ${name}`);
         const take = (cm) => {
             if (!isFinite(cm)) return show();
             cm = Math.round(Math.min(Math.max(cm, min), max) * 100) / 100;
@@ -3594,7 +3594,9 @@
                 show();
                 focusGrid();
             } else if (e.key === "Enter") {
+                // (Not the grid's Enter too, which would move the active cell.)
                 e.preventDefault();
+                e.stopPropagation();
                 input.blur();
                 focusGrid();
             }
@@ -3638,7 +3640,10 @@
         let pane = $("pane");
         const mode = paneMode();
         const obj = selected && movable(selectedObj) ? selectedObj : null;
-        const on = editable && !!view && (mode === "list" || (mode === "format" && !!obj));
+        // "cells": セルの書式設定, which gives way to the format of an object selected.
+        const shape = !!obj && (mode === "format" || mode === "cells");
+        const cells = !obj && mode === "cells" && !!sel;
+        const on = editable && !!view && (mode === "list" || shape || cells);
         if (!on) {
             if (pane) pane.hidden = true;
             return;
@@ -3649,9 +3654,10 @@
             pane.dataset.vscodeContext = JSON.stringify({ preventDefaultContextMenuItems: true });
             $("main").insertBefore(pane, $("grid").nextSibling);
         }
-        // (A field being typed into keeps what is typed until the object changes.)
-        const key = mode === "list" ? "list" : `format:${view.sheet.name}:${keyOf(obj)}`;
-        if (!pane.hidden && pane.dataset.key === key && pane.contains(document.activeElement) && !focus) {
+        // (A field being typed into keeps what is typed until the object changes; the cells'
+        // formats change only as the page is drawn again.)
+        const key = mode === "list" ? "list" : shape ? `format:${view.sheet.name}:${keyOf(obj)}` : `cells:${view.sheet.name}:${[sel.r1, sel.c1, sel.r2, sel.c2, sel.ar, sel.ac, areas.length].join(",")}`;
+        if (!pane.hidden && pane.dataset.key === key && (cells || pane.contains(document.activeElement)) && !focus) {
             if (mode === "list") markListed(pane);
             return;
         }
@@ -3659,7 +3665,7 @@
         pane.dataset.key = key;
         pane.textContent = "";
         const head = pane.appendChild(el("div", "phd"));
-        const title = mode === "list" ? "選択" : isActiveX(obj) ? "プロパティ" : isControl(obj) ? "コントロールの書式設定" : "図形の書式設定";
+        const title = mode === "list" ? "選択" : cells ? "セルの書式設定" : isActiveX(obj) ? "プロパティ" : isControl(obj) ? "コントロールの書式設定" : "図形の書式設定";
         head.appendChild(el("span", "ptitle", title));
         const close = head.appendChild(el("button", "pclose", "×"));
         close.type = "button";
@@ -3667,11 +3673,17 @@
         close.addEventListener("click", closePane);
         const body = pane.appendChild(el("div", "pbody"));
         if (mode === "list") listPane(body);
+        else if (cells) cellPane(body, focus);
         else formatPane(body, obj, focus);
+        // Where it was scrolled to, as long as it shows the same (the page is drawn again at
+        // each edit).
+        const scroll = saved.paneScroll;
+        if (scroll && scroll.key === key) body.scrollTop = scroll.top;
+        body.addEventListener("scroll", () => remember({ paneScroll: { key, top: body.scrollTop } }), { passive: true });
         const target = focus && body.querySelector(`[data-field="${focus}"]`);
         if (target) {
-            target.focus();
-            if (target.select) target.select();
+            target.focus({ preventScroll: !!(scroll && scroll.key === key) });
+            if (target.select && target.tagName === "INPUT") target.select();
         }
     }
     // The objects of the sheet, the front one first (as Excel lists them); a click selects one.
@@ -3873,15 +3885,11 @@
         };
         add(tree, objectModel(obj), "", 0);
     }
-    function formatPane(body, obj, focus) {
-        const ax = isActiveX(obj);
-        const f = obj.form || {};
-        const t = f.type;
-        const paint = obj.paint || {};
-        const edit = (change) => objectEdit(obj, change);
+    // The parts of a pane of formats (図形の書式設定, セルの書式設定): its pages, shown by the icons
+    // of one row of tabs, their sections folded by their headings, and the controls in them.
+    function paneKit(body) {
         const tabs = body.parentNode.insertBefore(el("div", "ptabs"), body);
         tabs.setAttribute("role", "tablist");
-        body.appendChild(el("div", "pname", objectLabel(obj)));
         const pages = {};
         const page = (key) => {
             if (!pages[key]) pages[key] = body.appendChild(el("div", "ppage"));
@@ -3924,6 +3932,7 @@
             input.addEventListener("keydown", (e) => {
                 if (e.key === "Enter") {
                     e.preventDefault();
+                    e.stopPropagation();
                     input.blur();
                     focusGrid();
                 } else if (e.key === "Escape") {
@@ -3949,20 +3958,96 @@
                 r.addEventListener("change", () => r.checked && pick(value));
             }
         };
-        // 色: the button of a color and its palette.
-        const colorRow = (sec, key, color, none, set) => {
+        // The button of a color and its palette: `color` null is `none` (自動, 色なし), when
+        // the palette has it.
+        const colorRow = (sec, label, color, none, set, field) => {
             const row = sec.appendChild(el("div", "prow"));
-            row.appendChild(el("span", "plabel", "色"));
+            row.appendChild(el("span", "plabel", label));
             const cb = row.appendChild(el("button", "pcolor"));
             cb.type = "button";
-            cb.title = "色の選択";
-            cb.appendChild(el("span", "sw")).style.background = color || lastShape[key];
+            cb.title = `${label}の選択`;
+            if (field) cb.dataset.field = field;
+            const sw = cb.appendChild(el("span", "sw"));
+            if (color) sw.style.background = color;
+            else {
+                // (自動 is black; 色なし is crossed out.)
+                if (none === "自動") sw.style.background = "#000000";
+                else sw.classList.add("none");
+                cb.appendChild(el("span", "pctext", none || ""));
+            }
             cb.appendChild(el("span", "pdrop", "▾"));
-            cb.addEventListener("click", () => openColors(cb, key, none, (c) => {
+            cb.addEventListener("click", () => openColors(cb, null, none, set));
+            return cb;
+        };
+        const checkRow = (sec, label, on, field, take) => {
+            const row = sec.appendChild(el("label", "prow pcheck"));
+            const input = row.appendChild(el("input"));
+            input.type = "checkbox";
+            input.checked = !!on;
+            input.dataset.field = field;
+            row.appendChild(el("span", null, label));
+            input.addEventListener("change", () => take(input.checked));
+            return input;
+        };
+        // A list to choose from: [value, label] each.
+        const selectRow = (sec, label, list, now, field, take, cls) => {
+            const pick = line(sec, label).appendChild(el("select", cls || null));
+            pick.dataset.field = field;
+            for (const [value, text] of list) pick.appendChild(el("option", null, text)).value = value;
+            pick.value = now;
+            pick.addEventListener("change", () => take(pick.value));
+            return pick;
+        };
+        // The tabs of the pages it has (`order`: [key, label], `icons` by key): the one shown
+        // last (`savedKey` in the page's state), or that of the field asked for.
+        const finish = (order, icons, savedKey, focus) => {
+            const shown = order.filter(([key]) => pages[key]);
+            const target = focus && body.querySelector(`[data-field="${focus}"]`);
+            let now = target ? Object.keys(pages).find((k) => pages[k].contains(target)) : pages[focus] ? focus : saved[savedKey];
+            if (target && target.closest(".psec")) target.closest(".psec").classList.remove("folded");
+            if (!pages[now]) now = shown[0] && shown[0][0];
+            const show = (key) => {
+                for (const [k] of shown) {
+                    pages[k].hidden = k !== key;
+                    tabs.querySelector(`[data-page="${k}"]`).classList.toggle("on", k === key);
+                    tabs.querySelector(`[data-page="${k}"]`).setAttribute("aria-selected", String(k === key));
+                }
+            };
+            for (const [key, label] of shown) {
+                const tb = tabs.appendChild(el("button", "ptab"));
+                tb.type = "button";
+                tb.dataset.page = key;
+                tb.title = label;
+                tb.setAttribute("role", "tab");
+                tb.setAttribute("aria-label", label);
+                tb.innerHTML = `<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[key]}</svg>`;
+                tb.addEventListener("click", () => {
+                    remember({ [savedKey]: key });
+                    show(key);
+                });
+            }
+            if (now) {
+                if (pages[focus]) remember({ [savedKey]: now });
+                show(now);
+            }
+        };
+        return { tabs, pages, page, section, line, box, choices, colorRow, checkRow, selectRow, finish };
+    }
+    function formatPane(body, obj, focus) {
+        const ax = isActiveX(obj);
+        const f = obj.form || {};
+        const t = f.type;
+        const paint = obj.paint || {};
+        const edit = (change) => objectEdit(obj, change);
+        const kit = paneKit(body);
+        const { section, line, box, choices } = kit;
+        body.appendChild(el("div", "pname", objectLabel(obj)));
+        // 色: the button of a color and its palette (the color used last when it has none).
+        const colorRow = (sec, key, color, none, set) =>
+            kit.colorRow(sec, "色", color || lastShape[key], none, (c) => {
                 if (c) lastShape[key] = c;
                 set(c);
-            }));
-        };
+            });
 
         // 塗りつぶしと線
         if (canFill(obj)) {
@@ -4250,33 +4335,517 @@
             });
         }
 
-        // The tabs of the pages it has: the one shown last (or the one of the field asked for).
-        const shown = PANE_PAGES.filter(([key]) => pages[key]);
-        const target = focus && body.querySelector(`[data-field="${focus}"]`);
-        let now = target ? Object.keys(pages).find((k) => pages[k].contains(target)) : saved.panePage;
-        if (target && target.closest(".psec")) target.closest(".psec").classList.remove("folded");
-        if (!pages[now]) now = shown[0] && shown[0][0];
-        const show = (key) => {
-            for (const [k] of shown) {
-                pages[k].hidden = k !== key;
-                tabs.querySelector(`[data-page="${k}"]`).classList.toggle("on", k === key);
-                tabs.querySelector(`[data-page="${k}"]`).setAttribute("aria-selected", String(k === key));
-            }
+        kit.finish(PANE_PAGES, PANE_ICONS, "panePage", focus);
+    }
+
+    // ---- セルの書式設定 (Ctrl+1): the formats of the cells selected in the pane at the right, as
+    // Excel's dialog has them (表示形式, 配置, フォント, 罫線, 塗りつぶし, 保護) but with the
+    // controls of 図形の書式設定; each is set as it is changed. Shown for the active cell (the
+    // borders: for the range), as Excel's dialog opens.
+
+    const CELL_PAGES = [
+        ["number", "表示形式"],
+        ["align", "配置"],
+        ["font", "フォント"],
+        ["border", "罫線"],
+        ["fill", "塗りつぶし"],
+        ["protect", "保護"],
+    ];
+    const CELL_ICONS = {
+        number: '<path d="M6.2 2.5 4.6 13.5M11.4 2.5 9.8 13.5M2.5 5.8h11.5M2 10.2h11.5"/>',
+        align: '<path d="M2 3h12M4 6.5h8M2 10h12M4 13.5h8"/>',
+        font: PANE_ICONS.text,
+        border: '<path d="M2.5 2.5h11v11h-11z"/><path d="M8 2.5v11M2.5 8h11" stroke-dasharray="1 1.6"/>',
+        fill: PANE_ICONS.fill,
+        protect: '<rect x="3.5" y="7.5" width="9" height="6.5" rx="1"/><path d="M5.5 7.5V5.3a2.5 2.5 0 0 1 5 0v2.2M8 10.2v1.3"/>',
+    };
+    const H_ALIGNS = [
+        ["general", "標準"],
+        ["left", "左詰め (インデント)"],
+        ["center", "中央揃え"],
+        ["right", "右詰め (インデント)"],
+        ["fill", "繰り返し"],
+        ["justify", "両端揃え"],
+        ["centerContinuous", "選択範囲内で中央"],
+        ["distributed", "均等割り付け (インデント)"],
+    ];
+    const V_ALIGNS = [
+        ["top", "上詰め"],
+        ["center", "中央揃え"],
+        ["bottom", "下詰め"],
+        ["justify", "両端揃え"],
+        ["distributed", "均等割り付け"],
+    ];
+    const UNDERLINES = [
+        ["none", "なし"],
+        ["single", "一重線"],
+        ["double", "二重線"],
+        ["singleAccounting", "一重線 (会計)"],
+        ["doubleAccounting", "二重線 (会計)"],
+    ];
+    // The patterns of 塗りつぶし > パターンの種類 (as Excel lists them) and their tiles (as the
+    // grid draws them: a row of pixels per string, '1' the pattern's color).
+    const FILL_PATTERNS = [
+        ["solid", "単色", null],
+        ["darkGray", "75% 灰色", ["0111", "1101"]],
+        ["mediumGray", "50% 灰色", ["10", "01"]],
+        ["lightGray", "25% 灰色", ["1000", "0010"]],
+        ["gray125", "12.5% 灰色", ["1000", "0000", "0010", "0000"]],
+        ["gray0625", "6.25% 灰色", ["10000000", "00000000", "00001000", "00000000"]],
+        ["darkHorizontal", "横 縞", ["1", "1", "0", "0"]],
+        ["darkVertical", "縦 縞", ["1100"]],
+        ["darkDown", "右下がり斜線 縞", ["1100", "0110", "0011", "1001"]],
+        ["darkUp", "左下がり斜線 縞", ["0011", "0110", "1100", "1001"]],
+        ["darkGrid", "斜線 格子", ["1100", "1100", "0011", "0011"]],
+        ["darkTrellis", "極太 斜線 格子", ["1100", "1111", "0011", "1111"]],
+        ["lightHorizontal", "実線 横 縞", ["1", "0", "0", "0"]],
+        ["lightVertical", "実線 縦 縞", ["1000"]],
+        ["lightDown", "実線 右下がり斜線 縞", ["1000", "0100", "0010", "0001"]],
+        ["lightUp", "実線 左下がり斜線 縞", ["0001", "0010", "0100", "1000"]],
+        ["lightGrid", "実線 横 格子", ["1111", "1000", "1000", "1000"]],
+        ["lightTrellis", "実線 斜線 格子", ["1001", "0110", "0110", "1001"]],
+    ];
+    // A fill as CSS: its color, or its pattern in `fg` (black without one) over `bg` (white).
+    function fillCss(pattern, fg, bg) {
+        if (pattern === "none") return "";
+        if (pattern === "solid") return fg ? `background:${fg};` : "";
+        const tile = (FILL_PATTERNS.find((p) => p[0] === pattern) || [])[2];
+        if (!tile) return "";
+        let d = "";
+        tile.forEach((row, y) => [...row].forEach((b, x) => b === "1" && (d += `M${x} ${y}h1v1h-1z`)));
+        const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${tile[0].length}' height='${tile.length}' shape-rendering='crispEdges'><path fill='${fg || "#000000"}' d='${d}'/></svg>`;
+        return `background:${bg || "#FFFFFF"} url("data:image/svg+xml,${encodeURIComponent(svg)}");`;
+    }
+    // The formats of a cell (the sheet's `formats`): its own, else its row's or its column's.
+    function formatAt(r, c) {
+        const s = view.sheet;
+        const list = s.formats || [{}];
+        const cell = cellOf(r, c);
+        const i = cell ? cell.fm || 0 : s.rowFormats && s.rowFormats[r] !== undefined ? s.rowFormats[r] : s.colFormats && s.colFormats[c] !== undefined ? s.colFormats[c] : 0;
+        return list[i] || {};
+    }
+    // The borders of the cells selected, as Excel's 罫線 shows them: the sides of the range (or
+    // those its neighbors draw there), the lines between its cells, and the diagonals of its
+    // first cell. Each { s: the line's name, c: its color (null: automatic) } or null.
+    function bordersOf(s) {
+        const at = (r, c) => (r >= 0 && c >= 0 ? formatAt(r, c).borders || {} : {});
+        const one = single(s);
+        const tl = at(s.r1, s.c1);
+        const br = at(s.r2, s.c2);
+        return {
+            left: tl.left || at(s.r1, s.c1 - 1).right || null,
+            top: tl.top || at(s.r1 - 1, s.c1).bottom || null,
+            right: br.right || at(s.r2, s.c2 + 1).left || null,
+            bottom: br.bottom || at(s.r2 + 1, s.c2).top || null,
+            insideV: !one && s.c2 > s.c1 ? tl.right || at(s.r1, s.c1 + 1).left || null : null,
+            insideH: !one && s.r2 > s.r1 ? tl.bottom || at(s.r1 + 1, s.c1).top || null : null,
+            diagDown: tl.diagDown || null,
+            diagUp: tl.diagUp || null,
         };
-        for (const [key, label] of shown) {
-            const tb = tabs.appendChild(el("button", "ptab"));
-            tb.type = "button";
-            tb.dataset.page = key;
-            tb.title = label;
-            tb.setAttribute("role", "tab");
-            tb.setAttribute("aria-label", label);
-            tb.innerHTML = `<svg viewBox="0 0 16 16" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${PANE_ICONS[key]}</svg>`;
-            tb.addEventListener("click", () => {
-                remember({ panePage: key });
-                show(key);
+    }
+    // The 線のスタイル and 線の色 the borders are drawn with (the ribbon's menu and the pane's 罫線
+    // share them; kept with the page's state, as the page is drawn again at each edit).
+    function setPen(change) {
+        Object.assign(borderPen, change);
+        remember({ borderPen: { ...borderPen } });
+        const line = tools.borderLine;
+        if (line) {
+            const label = (BORDER_LINES.find((l) => l[0] === borderPen.line) || BORDER_LINES[0])[1];
+            line.querySelector(".sample").innerHTML = lineSample(borderPen.line, 28);
+            line.title = `線のスタイル（${label}）`;
+        }
+        const color = tools.borderColor;
+        if (color) {
+            color.querySelector(".bar").style.background = borderPen.color || "#000000";
+            color.title = `線の色（${borderPen.color || "自動"}）`;
+        }
+    }
+    function openCellPane(page) {
+        if (!editable || !view || !sel) return;
+        if (entry) commit(null);
+        openPane("cells", page);
+    }
+    function cellPane(body, focus) {
+        const kit = paneKit(body);
+        const { section, line, colorRow, checkRow, selectRow } = kit;
+        const fm = formatAt(sel.ar, sel.ac);
+        const range = allAreas()
+            .map((a) => areaText(a))
+            .join(",");
+        body.appendChild(el("div", "pname", range));
+        // (A list of the pane is chosen from by a click: the grid then has the focus.)
+        const set = (change) => format(change);
+        const block = (sec, label) => {
+            const b = sec.appendChild(el("div", "pblock"));
+            if (label) b.appendChild(el("div", "plabel", label));
+            return b;
+        };
+        const spin = (sec, label, field, now, take, unit) => {
+            const b = sizeBox(line(sec, label), label, take, unit);
+            b.input.dataset.field = field;
+            b.setCm(now);
+            return b;
+        };
+
+        // 表示形式: 分類, サンプル, and what the kind has (as the dialog's page).
+        {
+            const sec = section("number", "表示形式");
+            const cell = cellOf(sel.ar, sel.ac) || {};
+            const now = localCode(/^\[\$-F[48]00\]/i.test(cell.n || "") ? cell.n : cell.sn || cell.n || "General");
+            const at = `${view.sheet.name}!${sel.ar}:${sel.ac}`;
+            // The kind chosen last for this cell, while its format is what it made (ユーザー定義
+            // stays so, as the format is one of another kind too).
+            const was = saved.numKind;
+            const start = kindOf(now);
+            let kind = was && was.at === at && was.code === now ? FORMAT_KINDS.find((k) => k.key === was.kind) || start.kind : start.kind;
+            const state = { ...start.state };
+            const apply = (code, kindKey) => {
+                code = code.trim();
+                remember({ numKind: { at, code, kind: kindKey || kind.key } });
+                if (!code) return;
+                if (fileCode(code) !== fileCode(now)) set({ numberFormat: fileCode(code) });
+                else renderPane("numberKind");
+            };
+            selectRow(sec, "分類", FORMAT_KINDS.map((k) => [k.key, k.label]), kind.key, "numberKind", (key) => {
+                const next = FORMAT_KINDS.find((k) => k.key === key);
+                // ユーザー定義 starts from the format so far, the others from their first.
+                const code = next.code ? next.code(next.key === start.kind.key ? state : { places: 2, comma: false, symbol: "¥", negative: "minus" }) : next.custom ? now : next.list.includes(now) ? now : next.list[0];
+                apply(code, key);
+            });
+            const sample = block(sec, "サンプル").appendChild(el("div", "psample"));
+            const t = sampleText(cell, now);
+            sample.textContent = t === null ? "（ここでは表示できません）" : t === "" ? " " : t;
+            if (kind.places) {
+                spin(sec, "小数点以下の桁数", "places", state.places, (n) => apply(kind.code({ ...state, places: Math.round(n) })), { name: "", step: 1, max: 30 });
+            }
+            if (kind.symbol) selectRow(sec, "記号", [["¥", "¥"], ["$", "$"], ["", "なし"]], state.symbol, "symbol", (v) => apply(kind.code({ ...state, symbol: v })));
+            if (kind.comma) checkRow(sec, "桁区切り (,) を使用する", state.comma, "comma", (on) => apply(kind.code({ ...state, comma: on })));
+            if (kind.negative) {
+                const list = block(sec, "負の数の表示形式").appendChild(el("select", "plistbox"));
+                list.size = NEGATIVES.length;
+                list.dataset.field = "negative";
+                for (const [v, l] of NEGATIVES) {
+                    const o = list.appendChild(el("option", null, kind.key === "currency" ? l.replace(/1,234/, `${state.symbol}1,234`) : l));
+                    o.value = v;
+                    if (v.includes("red")) o.className = "red";
+                }
+                list.value = state.negative;
+                list.addEventListener("change", () => apply(kind.code({ ...state, negative: list.value })));
+            }
+            if (kind.list) {
+                const b = block(sec, kind.custom ? null : "種類");
+                let typed = null;
+                if (kind.custom) {
+                    typed = kit.box(b, "種類", "numberCode", now, (v) => apply(v));
+                    typed.classList.add("pcode");
+                    typed.placeholder = "G/標準";
+                }
+                const codes = kind.custom && !kind.list.includes(now) ? [now].concat(kind.list) : kind.list;
+                const list = b.appendChild(el("select", "plistbox"));
+                list.size = 8;
+                list.dataset.field = "numberList";
+                // Each by its name, or as Excel's sample (2012/3/14 13:30:55.2) shows in it (* before
+                // those of the system), or as it is (ユーザー定義).
+                const x = 40982 + 48655.2 / 86400;
+                codes.forEach((c, i) => {
+                    const file = fileCode(c);
+                    const shown = kind.custom ? c : kind.names ? kind.names[i] : (SYSTEM_CODES.includes(c) ? "*" : "") + (formatNumber(/\[[hms]+\]/i.test(file) ? 1 + (x % 1) : x, file === "m/d/yyyy" ? "yyyy/m/d" : file === "m/d/yyyy h:mm" ? "yyyy/m/d h:mm" : file) ?? c);
+                    const o = list.appendChild(el("option", null, shown));
+                    o.value = c;
+                    o.title = c;
+                });
+                list.value = codes.includes(now) ? now : "";
+                list.addEventListener("change", () => {
+                    if (typed) typed.value = list.value;
+                    apply(list.value);
+                });
+            }
+            if (kind.note) sec.appendChild(el("div", "pnote", kind.note));
+        }
+
+        // 配置: 文字の配置, 文字の制御, 方向, 右から左
+        {
+            const sec = section("align", "文字の配置");
+            const h = fm.h || "general";
+            selectRow(sec, "横位置", H_ALIGNS, h, "hAlign", (v) => set({ align: v }), "pwide");
+            // (An indent makes 標準 and 中央揃え 左詰め, as in Excel.)
+            const indented = ["left", "right", "distributed"].includes(h);
+            spin(sec, "インデント", "indent", fm.indent || 0, (n) => set(indented ? { indent: Math.round(n) } : { align: "left", indent: Math.round(n) }), { name: "", step: 1, max: 250 });
+            selectRow(sec, "縦位置", V_ALIGNS, fm.v || "bottom", "vAlign", (v) => set({ valign: v === "center" ? "middle" : v }), "pwide");
+            const ctl = section("align", "文字の制御");
+            checkRow(ctl, "折り返して全体を表示する", fm.wrap, "wrap", (on) => set({ wrap: on }));
+            checkRow(ctl, "縮小して全体を表示する", fm.shrink, "shrink", (on) => set({ shrink: on })).disabled = !!fm.wrap;
+            const merged = mergedIn(sel);
+            const m = checkRow(ctl, "セルを結合する", merged, "merge", (on) => merge(on ? "merge" : "unmerge"));
+            m.disabled = sel.kind === "all" || areas.length > 0 || (!merged && single(sel));
+            const dir = section("align", "方向");
+            const rot = fm.rot || 0;
+            const vertical = rot === 255;
+            checkRow(dir, "縦書き", vertical, "vertical", (on) => set({ orientation: on ? "vertical" : 0 }));
+            const angle = spin(dir, "角度", "orientation", vertical ? 0 : rot <= 90 ? rot : 90 - rot, (d) => set({ orientation: Math.round(d) }), { name: "°", step: 1, min: -90, max: 90 });
+            angle.input.disabled = vertical;
+            const rtl = section("align", "右から左");
+            selectRow(rtl, "文字の方向", [["context", "コンテキスト"], ["ltr", "左から右"], ["rtl", "右から左"]], ["context", "ltr", "rtl"][fm.ro || 0] || "context", "readingOrder", (v) => set({ readingOrder: v }), "pwide");
+        }
+
+        // フォント: フォント名, スタイル, サイズ, 下線, 色, 標準フォント; 文字飾り; プレビュー
+        {
+            const book = bookFont(view.sheet);
+            const name = fm.font || book.name;
+            const size = fm.size || book.size;
+            const sec = section("font", "フォント");
+            const row = line(sec, "フォント名");
+            const combo = row.appendChild(el("span", "pcombo"));
+            const input = combo.appendChild(el("input"));
+            input.type = "text";
+            input.value = name;
+            input.dataset.field = "fontName";
+            input.spellcheck = false;
+            input.autocomplete = "off";
+            const take = (v) => {
+                v = v.trim();
+                if (v && v !== name) set({ fontName: v });
+            };
+            input.addEventListener("change", () => take(input.value));
+            input.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    input.blur();
+                    focusGrid();
+                } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    input.value = name;
+                    focusGrid();
+                }
+            });
+            const drop = combo.appendChild(el("button", "pdrop", "▾"));
+            drop.type = "button";
+            drop.title = "フォントの一覧";
+            drop.addEventListener("click", () => openFontList(combo, take, name));
+            const style = fm.b && fm.i ? "boldItalic" : fm.b ? "bold" : fm.i ? "italic" : "normal";
+            selectRow(sec, "スタイル", [["normal", "標準"], ["italic", "斜体"], ["bold", "太字"], ["boldItalic", "太字 斜体"]], style, "fontStyle", (v) => set({ bold: v.startsWith("bold"), italic: /italic/i.test(v) }));
+            spin(sec, "サイズ", "fontSize", size, (n) => set({ fontSize: n }), { name: "pt", step: 1, min: 1, max: 409 });
+            selectRow(sec, "下線", UNDERLINES, fm.u || "none", "underline", (v) => set({ underline: v }));
+            colorRow(sec, "色", fm.color || null, "自動", (c) => set({ color: c }), "fontColor");
+            const standard = name === book.name && size === book.size && !fm.b && !fm.i && !fm.u && !fm.st && !fm.va && !fm.color;
+            const std = checkRow(sec, "標準フォント", standard, "standardFont", (on) => {
+                if (on) set({ fontName: book.name, fontSize: book.size, bold: false, italic: false, underline: "none", strike: false, superscript: false, color: null });
+                else std.checked = true;
+            });
+            const deco = section("font", "文字飾り");
+            checkRow(deco, "取り消し線", fm.st, "strike", (on) => set({ strike: on }));
+            checkRow(deco, "上付き", fm.va === "superscript", "superscript", (on) => set({ superscript: on }));
+            checkRow(deco, "下付き", fm.va === "subscript", "subscript", (on) => set({ subscript: on }));
+            const pre = section("font", "プレビュー").appendChild(el("div", "ppreview"));
+            const text = pre.appendChild(el("span", null, name));
+            Object.assign(text.style, {
+                fontFamily: fontFamily(name),
+                fontSize: `${Math.min(size, 26)}pt`,
+                fontWeight: fm.b ? "bold" : "normal",
+                fontStyle: fm.i ? "italic" : "normal",
+                textDecoration: [fm.u ? "underline" : "", fm.st ? "line-through" : ""].join(" ").trim() || "none",
+                textDecorationStyle: /double/i.test(fm.u || "") ? "double" : "solid",
+                color: fm.color || "#000000",
+                verticalAlign: fm.va === "superscript" ? "super" : fm.va === "subscript" ? "sub" : "baseline",
             });
         }
-        if (now) show(now);
+
+        // 罫線: the line and its color, the presets, and each side (the buttons around the
+        // picture of the cells, or the picture itself clicked).
+        {
+            const sides = bordersOf(sel);
+            const many = { v: !single(sel) && sel.c2 > sel.c1, h: !single(sel) && sel.r2 > sel.r1 };
+            const sec = section("border", "線");
+            const row = line(sec, "スタイル");
+            const pick = row.appendChild(el("button", "pcolor pline"));
+            pick.type = "button";
+            pick.dataset.field = "borderLine";
+            pick.title = `線のスタイル（${(BORDER_LINES.find((l) => l[0] === borderPen.line) || BORDER_LINES[0])[1]}）`;
+            pick.appendChild(el("span", "sample")).innerHTML = lineSample(borderPen.line, 56);
+            pick.appendChild(el("span", "pdrop", "▾"));
+            pick.addEventListener("click", () => {
+                const pop = openPop(pick, "linestyles");
+                for (const [key, label] of BORDER_LINES) {
+                    const b = popItem(pop, "", () => {
+                        setPen({ line: key });
+                        renderPane("borderLine");
+                    });
+                    b.title = label;
+                    b.classList.toggle("on", borderPen.line === key);
+                    b.querySelector("span").innerHTML = lineSample(key, 96);
+                }
+            });
+            colorRow(sec, "色", borderPen.color, "自動", (c) => {
+                setPen({ color: c });
+                renderPane("borderColor");
+            }, "borderColor");
+            const pen = () => ({ line: borderPen.line, color: borderPen.color });
+            const presets = section("border", "プリセット").appendChild(el("div", "pbtns"));
+            const preset = (label, icon, change, off) => {
+                const b = presets.appendChild(el("button"));
+                b.type = "button";
+                b.appendChild(borderIcon(icon));
+                b.appendChild(el("span", null, label));
+                b.disabled = !!off;
+                b.addEventListener("click", () => set({ borders: change() }));
+            };
+            preset("なし", {}, () => ({ left: null, top: null, right: null, bottom: null, insideV: null, insideH: null, diagDown: null, diagUp: null }));
+            preset("外枠", { t: "s", b: "s", l: "s", r: "s" }, () => ({ left: pen(), top: pen(), right: pen(), bottom: pen() }));
+            preset("内側", { h: "s", v: "s" }, () => Object.assign(many.v ? { insideV: pen() } : {}, many.h ? { insideH: pen() } : {}), !many.v && !many.h);
+
+            const box = section("border", "罫線");
+            const grid = box.appendChild(el("div", "pborders"));
+            // A side clicked: drawn with the pen, or taken away when it is drawn so already.
+            const toggle = (k) => {
+                const now = sides[k];
+                const same = now && now.s === borderPen.line && (now.c || "").toUpperCase() === (borderPen.color || "").toUpperCase();
+                set({ borders: { [k]: same ? null : pen() } });
+            };
+            const ICONS = {
+                top: { t: "s" },
+                insideH: { h: "s" },
+                bottom: { b: "s" },
+                diagUp: { du: "s" },
+                left: { l: "s" },
+                insideV: { v: "s" },
+                right: { r: "s" },
+                diagDown: { dd: "s" },
+            };
+            const NAMES = { top: "上罫線", insideH: "内側横罫線", bottom: "下罫線", diagUp: "斜め罫線（／）", left: "左罫線", insideV: "内側縦罫線", right: "右罫線", diagDown: "斜め罫線（＼）" };
+            const sideButton = (into, k) => {
+                const b = into.appendChild(el("button", "pside"));
+                b.type = "button";
+                b.title = NAMES[k];
+                b.setAttribute("aria-label", NAMES[k]);
+                b.setAttribute("aria-pressed", String(!!sides[k]));
+                b.dataset.side = k;
+                b.classList.toggle("on", !!sides[k]);
+                b.appendChild(borderIcon(ICONS[k]));
+                b.disabled = (k === "insideV" && !many.v) || (k === "insideH" && !many.h);
+                b.addEventListener("click", () => toggle(k));
+            };
+            const left = grid.appendChild(el("div", "pbcol"));
+            for (const k of ["top", "insideH", "bottom"]) sideButton(left, k);
+            // The picture: the cells (two when the range has more), "文字列" in each, the sides.
+            const [W, H, M] = [168, 112, 12];
+            const [x1, y1, x2, y2] = [M, M, W - M, H - M];
+            const [xm, ym] = [(x1 + x2) / 2, (y1 + y2) / 2];
+            const stroke = (side, x, y, X, Y) => {
+                const b = sides[side];
+                if (!b) return "";
+                const [w, dash, double] = (BORDER_LINES.find((l) => l[0] === b.s) || BORDER_LINES[0])[2];
+                const c = b.c || "#000000";
+                if (double) {
+                    const [dx, dy] = y === Y ? [0, 1.5] : x === X ? [1.5, 0] : [1.1, -1.1];
+                    return `<path d="M${x - dx} ${y - dy}L${X - dx} ${Y - dy}M${x + dx} ${y + dy}L${X + dx} ${Y + dy}" stroke="${c}" stroke-width="1"/>`;
+                }
+                return `<path d="M${x} ${y}L${X} ${Y}" stroke="${c}" stroke-width="${w}"${dash ? ` stroke-dasharray="${dash}"` : ""}/>`;
+            };
+            const xs = many.v ? [[x1, xm], [xm, x2]] : [[x1, x2]];
+            const ys = many.h ? [[y1, ym], [ym, y2]] : [[y1, y2]];
+            let svg = "";
+            // The corners and the middles, as Excel marks them.
+            for (const [x, y] of [[x1, y1], [x2, y1], [x1, y2], [x2, y2]].concat(many.v ? [[xm, y1], [xm, y2]] : [], many.h ? [[x1, ym], [x2, ym]] : [])) {
+                svg += `<path d="M${x - 6} ${y}h-4M${x + 6} ${y}h4M${x} ${y - 6}v-4M${x} ${y + 6}v4" stroke="#9a9a9a" stroke-width="1"/>`;
+            }
+            for (const [a, b] of xs) for (const [c, d] of ys) svg += `<text x="${(a + b) / 2}" y="${(c + d) / 2}" text-anchor="middle" dominant-baseline="middle" font-size="11" fill="#555" stroke="none">文字列</text>`;
+            for (const [a, b] of xs)
+                for (const [c, d] of ys) {
+                    svg += stroke("diagDown", a, c, b, d);
+                    svg += stroke("diagUp", a, d, b, c);
+                }
+            svg += stroke("top", x1, y1, x2, y1) + stroke("bottom", x1, y2, x2, y2) + stroke("left", x1, y1, x1, y2) + stroke("right", x2, y1, x2, y2);
+            if (many.v) svg += stroke("insideV", xm, y1, xm, y2);
+            if (many.h) svg += stroke("insideH", x1, ym, x2, ym);
+            const pic = grid.appendChild(el("div", "pbpic"));
+            pic.title = "クリックすると、その罫線を引きます（引いてある罫線は消します）";
+            pic.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" fill="none" aria-hidden="true">${svg}</svg>`;
+            pic.addEventListener("click", (e) => {
+                const r = pic.firstChild.getBoundingClientRect();
+                const [x, y] = [((e.clientX - r.left) * W) / r.width, ((e.clientY - r.top) * H) / r.height];
+                // The nearest line (within 8 px): a side, a line between the cells, a diagonal.
+                const near = [
+                    ["top", Math.abs(y - y1)],
+                    ["bottom", Math.abs(y - y2)],
+                    ["left", Math.abs(x - x1)],
+                    ["right", Math.abs(x - x2)],
+                ];
+                if (many.v) near.push(["insideV", Math.abs(x - xm)]);
+                if (many.h) near.push(["insideH", Math.abs(y - ym)]);
+                const cw = (x2 - x1) / xs.length;
+                const ch = (y2 - y1) / ys.length;
+                const [u, v] = [(((x - x1) % cw) + cw) % cw, (((y - y1) % ch) + ch) % ch];
+                const k = Math.hypot(cw, ch);
+                near.push(["diagDown", Math.abs(u * ch - v * cw) / k], ["diagUp", Math.abs(u * ch + v * cw - cw * ch) / k]);
+                near.sort((a, b) => a[1] - b[1]);
+                if (near[0][1] <= 8) toggle(near[0][0]);
+            });
+            grid.appendChild(el("div"));
+            const bottom = grid.appendChild(el("div", "pbrow"));
+            for (const k of ["diagUp", "left", "insideV", "right", "diagDown"]) sideButton(bottom, k);
+            box.appendChild(el("div", "pnote", "プリセット、プレビュー枠内、または周りのボタンをクリックすると、上で選んだスタイルと色の罫線が適用されます。"));
+        }
+
+        // 塗りつぶし: 背景色, パターンの色, パターンの種類, サンプル
+        {
+            const fill = fm.fill || null;
+            const pattern = fill ? fill.pattern : "none";
+            const plain = pattern === "none" || pattern === "solid";
+            const bg = !fill ? null : pattern === "solid" ? fill.fg : fill.bg;
+            const fg = plain ? (saved.patternColor ?? null) : fill.fg;
+            const put = (p, color, background) => set({ pattern: { pattern: p, color, background } });
+            const sec = section("fill", "塗りつぶし");
+            colorRow(sec, "背景色", bg, "色なし", (c) => (plain ? put(c ? "solid" : "none", c, null) : put(pattern, fg, c)), "fillColor");
+            colorRow(sec, "パターンの色", fg, "自動", (c) => {
+                if (!plain) return put(pattern, c, bg);
+                // (No pattern yet: the one chosen next is drawn in it.)
+                remember({ patternColor: c });
+                renderPane("patternColor");
+            }, "patternColor");
+            const row = line(sec, "パターンの種類");
+            const kind = row.appendChild(el("button", "pcolor"));
+            kind.type = "button";
+            kind.dataset.field = "pattern";
+            const name = plain ? "なし" : (FILL_PATTERNS.find((p) => p[0] === pattern) || [, pattern])[1];
+            kind.title = `パターンの種類（${name}）`;
+            const sw = kind.appendChild(el("span", "sw ptile"));
+            if (plain) {
+                sw.classList.add("none");
+                kind.appendChild(el("span", "pctext", "なし"));
+            } else sw.style.cssText = fillCss(pattern, fg, bg);
+            kind.appendChild(el("span", "pdrop", "▾"));
+            kind.addEventListener("click", () => {
+                const pop = openPop(kind, "patterns");
+                const tiles = pop.appendChild(el("div", "swatches"));
+                for (const [key, label] of FILL_PATTERNS) {
+                    const b = tiles.appendChild(el("button", "swatch"));
+                    b.type = "button";
+                    b.title = label;
+                    b.dataset.pattern = key;
+                    b.style.cssText = key === "solid" ? "background:#FFFFFF" : fillCss(key, "#000000", "#FFFFFF");
+                    b.classList.toggle("on", key === pattern || (key === "solid" && plain));
+                    b.addEventListener("click", () => {
+                        closeMenu();
+                        focusGrid();
+                        if (key === "solid") put(bg ? "solid" : "none", bg, null);
+                        else put(key, fg, bg);
+                    });
+                }
+            });
+            const sample = block(sec, "サンプル").appendChild(el("div", "pfillsample"));
+            sample.style.cssText = fillCss(pattern, pattern === "solid" ? bg : fg, bg);
+        }
+
+        // 保護: ロック, 表示しない (what they do on a protected sheet)
+        {
+            const sec = section("protect", "保護");
+            checkRow(sec, "ロック", !fm.unlocked, "locked", (on) => set({ locked: on }));
+            checkRow(sec, "表示しない", fm.hidden, "hidden", (on) => set({ hidden: on }));
+            sec.appendChild(el("div", "pnote", "ワークシートを保護しなければ、セルをロックしたり数式を表示しないようにした効果はありません（［校閲］タブの［シートの保護］で保護します）。"));
+        }
+
+        kit.finish(CELL_PAGES, CELL_ICONS, "cellPage", focus);
     }
 
     // 挿入 > 画像: a picture from a file, at the active cell (shrunk to the window when larger).
@@ -4420,7 +4989,7 @@
             }
             items.push(["数式と値のクリア", clearSel, "Delete"]);
             items.push(["書式のクリア", clearFormats, ""]);
-            items.push(["セルの書式設定…", askNumberFormat, "Ctrl+1"]);
+            items.push(["セルの書式設定…", () => openCellPane(), "Ctrl+1"]);
             if (kind === "cells") {
                 items.push(null);
                 const note = noteAt(sel.ar, sel.ac);
@@ -6279,10 +6848,10 @@
         }
     }
     // The list of the fonts under the font box: each in its own font; `pick` takes the one chosen.
-    function openFontList(anchor, pick) {
+    function openFontList(anchor, pick, current) {
         askFonts();
         const fill = () => {
-            const now = tools.fontName.value.trim();
+            const now = current !== undefined ? current : tools.fontName.value.trim();
             const names = systemFonts || FONT_NAMES;
             pop.textContent = "";
             const list = names.includes(now) || !now ? names : [now].concat(names);
@@ -6749,7 +7318,7 @@
     const lastShape = { fill: "#4472C4", line: "#000000", shadow: "#000000", glow: "#4472C4" };
     let lastBorder = "all";
     // The 線の色 (null: automatic) and the 線のスタイル the borders of the menu are drawn with.
-    const borderPen = { color: null, line: "thin" };
+    const borderPen = { color: null, line: "thin", ...(saved.borderPen || {}) };
     function borderSet(preset) {
         return { border: borderPen.color || borderPen.line !== "thin" ? { preset, line: borderPen.line, color: borderPen.color } : preset };
     }
@@ -6951,6 +7520,7 @@
         group(home, "フォント");
         const fontRows = into.appendChild(el("div", "rstack wide"));
         row(fontRows);
+        launcher("フォント: 右にセルの書式設定（フォント）を表示します", () => openCellPane("font"));
         // A box typed into and a list of every font (a datalist would show only the fonts
         // matching what the box has).
         const fontBox = into.appendChild(el("span", "fontbox"));
@@ -7045,12 +7615,12 @@
             edits: true,
             menu: (anchor) =>
                 openColors(anchor, "borderColor", "自動", (color) => {
-                    borderPen.color = color;
-                    penColor.querySelector(".bar").style.background = color || "#000000";
-                    penColor.title = `線の色（${color || "自動"}）`;
+                    setPen({ color });
+                    renderPane(true);
                 }),
         });
-        penColor.querySelector(".ico").appendChild(el("span", "bar")).style.background = "#000000";
+        penColor.querySelector(".ico").appendChild(el("span", "bar")).style.background = borderPen.color || "#000000";
+        penColor.title = `線の色（${borderPen.color || "自動"}）`;
         const penLine = button("borderLine", {
             title: "線のスタイル（細線）",
             cls: "linestyle",
@@ -7060,9 +7630,8 @@
                 head(pop, "線のスタイル");
                 for (const [name, label] of BORDER_LINES) {
                     const b = item(pop, "", () => {
-                        borderPen.line = name;
-                        penLine.querySelector(".sample").innerHTML = lineSample(name, 28);
-                        penLine.title = `線のスタイル（${label}）`;
+                        setPen({ line: name });
+                        renderPane(true);
                     });
                     b.title = label;
                     b.dataset.line = name;
@@ -7072,6 +7641,7 @@
             },
         });
         penLine.insertBefore(el("span", "sample"), penLine.firstChild).innerHTML = lineSample(borderPen.line, 28);
+        penLine.title = `線のスタイル（${(BORDER_LINES.find((l) => l[0] === borderPen.line) || BORDER_LINES[0])[1]}）`;
         sep();
         const colorButton = (key, iconName, title, none) => {
             const b = button(key, {
@@ -7092,6 +7662,7 @@
         group(home, "配置");
         const alignRows = into.appendChild(el("div", "rstack wide"));
         row(alignRows);
+        launcher("配置の設定: 右にセルの書式設定（配置）を表示します", () => openCellPane("align"));
         for (const [value, ic, title] of [["top", "top", "上揃え"], ["middle", "middle", "上下中央揃え"], ["bottom", "bottom", "下揃え"]]) button(`valign-${value}`, { icon: ic, title, edits: true, act: () => format({ valign: value }) });
         sep();
         button("wrap", { icon: "wrap", label: "折り返して全体を表示する", title: "折り返して全体を表示する", edits: true, act: () => toggleFormat("wrap") });
@@ -7115,12 +7686,12 @@
         group(home, "数値");
         const numberRows = into.appendChild(el("div", "rstack wide"));
         row(numberRows);
-        launcher("表示形式: セルの書式設定（表示形式）を表示します (Ctrl+1)", askNumberFormat);
+        launcher("表示形式: 右にセルの書式設定（表示形式）を表示します (Ctrl+1)", () => openCellPane("number"));
         const number = select("numberFormat", "表示形式", [["", "ユーザー定義"]].concat(NUMBER_FORMATS, [["more", "その他の表示形式…"]]), "numberformat");
         number.addEventListener("change", () => {
             if (number.value === "more") {
                 showTools();
-                askNumberFormat();
+                openCellPane("number");
                 return;
             }
             if (number.value) format({ numberFormat: number.value });
@@ -7300,7 +7871,7 @@
                 const show = item(pop, "ロックされたセルを表示", () => showLockedCells(!showLocked));
                 show.classList.add("chk");
                 show.classList.toggle("on", showLocked);
-                item(pop, "セルの書式設定…", askNumberFormat, "Ctrl+1");
+                item(pop, "セルの書式設定…", () => openCellPane("number"), "Ctrl+1");
             },
         });
 
@@ -8067,7 +8638,7 @@
         }
         return [r1, c1, r2, c2];
     }
-    // ---- Ctrl+1: "セルの書式設定" (the 表示形式 tab): the number format of the cells selected
+    // ---- the number formats of "セルの書式設定" (表示形式, in the pane at the right)
 
     // The colors of a format as Japanese Excel spells them ([赤]), and as the file does ([Red]).
     const FORMAT_COLORS = [["Black", "黒"], ["Blue", "青"], ["Cyan", "水"], ["Green", "緑"], ["Magenta", "紫"], ["Red", "赤"], ["White", "白"], ["Yellow", "黄"]];
@@ -8206,158 +8777,6 @@
         const shown = formatNumber(x, file === "m/d/yyyy" ? "yyyy/m/d" : file === "m/d/yyyy h:mm" ? "yyyy/m/d h:mm" : file);
         return shown !== null ? shown : /^general$/i.test(file) ? generalFit(x, () => true) || String(x) : null;
     }
-    function askNumberFormat() {
-        if (!editable || busy || !sel || !view) return;
-        if (entry) commit(null);
-        const cell = (activeTd && activeTd.cell) || cellOf(sel.ar, sel.ac) || {};
-        // (The system's long date and time are kept as the file has them, as Excel lists them.)
-        const now = localCode(/^\[\$-F[48]00\]/i.test(cell.n || "") ? cell.n : cell.sn || cell.n || "General");
-        const start = kindOf(now);
-        const form = openDialog("セルの書式設定", "numfmtdlg");
-        const tabs = form.appendChild(el("div", "fmttabs"));
-        tabs.appendChild(el("span", "on", "表示形式"));
-        const body = form.appendChild(el("div", "fmtbody"));
-        const left = body.appendChild(el("div", "fmtkinds"));
-        left.appendChild(el("div", "lbl", "分類:"));
-        const kinds = left.appendChild(el("select"));
-        kinds.size = FORMAT_KINDS.length;
-        for (const k of FORMAT_KINDS) kinds.appendChild(el("option", null, k.label)).value = k.key;
-        const right = body.appendChild(el("div", "fmtright"));
-        const sample = right.appendChild(el("fieldset", "fmtsample"));
-        sample.appendChild(el("legend", null, "サンプル"));
-        const sampleOut = sample.appendChild(el("div", "out"));
-        const opts = right.appendChild(el("div", "fmtopts"));
-        const note = form.appendChild(el("div", "hint"));
-        dialogButtons(form);
-
-        let kind = start.kind;
-        const state = { ...start.state };
-        let code = start.code;
-        let typed = null; // the input of ユーザー定義
-        const showSample = () => {
-            const t = sampleText(cell, code);
-            sampleOut.textContent = t === null ? "（ここでは表示できません）" : t === "" ? " " : t;
-        };
-        const refresh = () => {
-            if (kind.code) code = kind.code(state);
-            showSample();
-        };
-        // A list of formats, each shown by its name, or as Excel's sample (2012/3/14 13:30:55.2;
-        // 37:30:55 for hours on end) shows in it (* before those of the system), or as it is (ユーザー定義).
-        const listOf = (codes, onPick) => {
-            const list = opts.appendChild(el("select", "fmtlist"));
-            list.size = 8;
-            const x = 40982 + 48655.2 / 86400;
-            codes.forEach((c, i) => {
-                const file = fileCode(c);
-                const shown = kind.custom ? c : kind.names ? kind.names[i] : (SYSTEM_CODES.includes(c) ? "*" : "") + (formatNumber(/\[[hms]+\]/i.test(file) ? 1 + (x % 1) : x, file === "m/d/yyyy" ? "yyyy/m/d" : file === "m/d/yyyy h:mm" ? "yyyy/m/d h:mm" : file) ?? c);
-                const o = list.appendChild(el("option", null, shown));
-                o.value = c;
-                o.title = c;
-            });
-            list.value = codes.includes(code) ? code : "";
-            list.addEventListener("change", () => onPick(list.value));
-            return list;
-        };
-        const build = () => {
-            opts.textContent = "";
-            note.textContent = kind.note;
-            if (kind.places) {
-                const n = field(opts, "小数点以下の桁数:", "number");
-                n.min = 0;
-                n.max = 30;
-                n.value = state.places;
-                n.addEventListener("input", () => {
-                    state.places = Math.max(0, Math.min(30, Math.floor(+n.value) || 0));
-                    refresh();
-                });
-            }
-            if (kind.symbol) {
-                const line = opts.appendChild(el("label"));
-                line.appendChild(el("span", "lbl", "記号:"));
-                const s = line.appendChild(el("select"));
-                for (const [v, l] of [["¥", "¥"], ["$", "$"], ["", "なし"]]) s.appendChild(el("option", null, l)).value = v;
-                s.value = state.symbol;
-                s.addEventListener("change", () => {
-                    state.symbol = s.value;
-                    refresh();
-                });
-            }
-            if (kind.comma) {
-                const c = check(opts, "桁区切り (,) を使用する", state.comma);
-                c.addEventListener("change", () => {
-                    state.comma = c.checked;
-                    refresh();
-                });
-            }
-            if (kind.negative) {
-                opts.appendChild(el("div", "lbl", "負の数の表示形式:"));
-                const s = opts.appendChild(el("select", "fmtlist neg"));
-                s.size = NEGATIVES.length;
-                for (const [v, l] of NEGATIVES) {
-                    const o = s.appendChild(el("option", null, kind.key === "currency" ? l.replace(/1,234/, `${state.symbol}1,234`) : l));
-                    o.value = v;
-                    if (v.includes("red")) o.className = "red";
-                }
-                s.value = state.negative;
-                s.addEventListener("change", () => {
-                    state.negative = s.value;
-                    refresh();
-                });
-            }
-            if (kind.custom) {
-                const t = field(opts, "種類:");
-                t.classList.add("fmtcode");
-                t.value = code;
-                typed = t;
-                const list = listOf(kind.list.includes(code) ? kind.list : [code].concat(kind.list), (c) => {
-                    t.value = code = c;
-                    t.setCustomValidity("");
-                    showSample();
-                });
-                t.addEventListener("input", () => {
-                    code = t.value;
-                    t.setCustomValidity("");
-                    list.value = kind.list.includes(code) ? code : "";
-                    showSample();
-                });
-            } else {
-                typed = null;
-                if (kind.list) {
-                    if (!kind.list.includes(code)) code = kind.list[0];
-                    opts.appendChild(el("div", "lbl", "種類:"));
-                    listOf(kind.list, (c) => {
-                        code = c;
-                        showSample();
-                    });
-                }
-            }
-            refresh();
-        };
-        kinds.value = kind.key;
-        kinds.addEventListener("change", () => {
-            const next = FORMAT_KINDS.find((k) => k.key === kinds.value);
-            // ユーザー定義 starts from the format chosen so far, as in Excel.
-            kind = next;
-            build();
-        });
-        build();
-        form.addEventListener("submit", (e) => {
-            e.preventDefault();
-            const c = code.trim();
-            if (!c) {
-                if (typed) {
-                    typed.setCustomValidity("表示形式を入力してください");
-                    typed.reportValidity();
-                }
-                return;
-            }
-            closeDialog();
-            format({ numberFormat: fileCode(c) });
-        });
-        setTimeout(() => (typed || kinds).focus(), 0);
-    }
-
     function askSort() {
         if (!editable || busy || !sel || !view || sel.kind === "all" || !oneArea()) return;
         if (entry) commit(null);
@@ -10093,7 +10512,7 @@
         else if (ctrl && e.shiftKey && (key === "l" || key === "L")) toggleFilter();
         else if (ctrl && !e.shiftKey && (key === "t" || key === "T" || key === "l" || key === "L")) askTable();
         else if (ctrl && !e.shiftKey && (key === "k" || key === "K")) askLink();
-        else if (ctrl && !e.shiftKey && (key === "1" || e.code === "Digit1" || e.code === "Numpad1")) askNumberFormat();
+        else if (ctrl && !e.shiftKey && (key === "1" || e.code === "Digit1" || e.code === "Numpad1")) openCellPane();
         else if (ctrl && !e.shiftKey && (key === "d" || key === "D")) fill("down");
         else if (ctrl && !e.shiftKey && (key === "r" || key === "R")) fill("right");
         else if (ctrl && !e.shiftKey && key === ";") typeNow(false);

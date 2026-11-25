@@ -400,6 +400,123 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
     css
 }
 
+/// A cell's own formats as "セルの書式設定" (the page's pane) shows them: what the CSS says only
+/// roughly (the kind of each border line, a pattern, the alignment, the protection), and only
+/// what differs from a cell without formats.
+fn style_json(st: &Style, theme: &umya_spreadsheet::drawing::Theme) -> Json {
+    let mut j = serde_json::Map::new();
+    let mut put = |k: &str, v: Json| {
+        j.insert(k.into(), v);
+    };
+    if let Some(f) = st.font() {
+        if !f.name().is_empty() {
+            put("font", json!(f.name()));
+        }
+        if f.size() > 0.0 {
+            put("size", json!(f.size()));
+        }
+        if f.bold() {
+            put("b", json!(true));
+        }
+        if f.italic() {
+            put("i", json!(true));
+        }
+        let u = f.font_underline().val().value_string();
+        if !u.is_empty() && u != "none" {
+            put("u", json!(u));
+        }
+        if f.strikethrough() {
+            put("st", json!(true));
+        }
+        use umya_spreadsheet::VerticalAlignmentRunValues as R;
+        match f.vertical_text_alignment().val() {
+            R::Superscript => put("va", json!("superscript")),
+            R::Subscript => put("va", json!("subscript")),
+            _ => {}
+        }
+        if let Some(c) = css_color(f.color(), theme) {
+            put("color", json!(c));
+        }
+    }
+    if let Some(p) = st.fill().and_then(|f| f.pattern_fill()) {
+        let t = p.pattern_type().value_string();
+        if !(t == "none" || t.is_empty()) {
+            put(
+                "fill",
+                json!({
+                    "pattern": t,
+                    "fg": p.foreground_color().and_then(|c| css_color(c, theme)),
+                    "bg": p.background_color().and_then(|c| css_color(c, theme)),
+                }),
+            );
+        }
+    }
+    if let Some(b) = st.borders() {
+        let line = |bd: &umya_spreadsheet::Border| {
+            let s = bd.border_style();
+            (!s.is_empty() && s != "none").then(
+                || json!({ "s": s, "c": bd.color().as_ref().and_then(|c| css_color(c, theme)) }),
+            )
+        };
+        let mut sides = serde_json::Map::new();
+        for (k, bd) in [
+            ("left", b.left()),
+            ("right", b.right()),
+            ("top", b.top()),
+            ("bottom", b.bottom()),
+        ] {
+            if let Some(l) = line(bd) {
+                sides.insert(k.into(), l);
+            }
+        }
+        if let Some(l) = line(b.diagonal()) {
+            if b.diagonal_down() {
+                sides.insert("diagDown".into(), l.clone());
+            }
+            if b.diagonal_up() {
+                sides.insert("diagUp".into(), l);
+            }
+        }
+        if !sides.is_empty() {
+            put("borders", Json::Object(sides));
+        }
+    }
+    if let Some(a) = st.alignment() {
+        let h = a.horizontal().value_string();
+        if !h.is_empty() && h != "general" {
+            put("h", json!(h));
+        }
+        let v = a.vertical().value_string();
+        if !v.is_empty() {
+            put("v", json!(v));
+        }
+        if a.wrap_text() {
+            put("wrap", json!(true));
+        }
+        if a.shrink_to_fit() {
+            put("shrink", json!(true));
+        }
+        if a.indent() > 0 {
+            put("indent", json!(a.indent()));
+        }
+        if a.text_rotation() > 0 {
+            put("rot", json!(a.text_rotation()));
+        }
+        if a.reading_order() > 0 {
+            put("ro", json!(a.reading_order()));
+        }
+    }
+    if let Some(p) = st.protection() {
+        if !super::format::locked(p) {
+            put("unlocked", json!(true));
+        }
+        if p.clone().hidden() {
+            put("hidden", json!(true));
+        }
+    }
+    Json::Object(j)
+}
+
 /// What the grid draws of a sheet's drawing: the parts of the file, and what the page shares
 /// among its sheets (the ids of SVG markers, the pictures).
 pub struct Drawing<'a> {
@@ -633,6 +750,28 @@ impl Book {
             style_index.insert(css, styles.len() - 1);
             styles.len() - 1
         };
+        // The cells' own formats as the pane of "セルの書式設定" shows them, each once: the first
+        // that of a cell without formats (the Normal style's alignment).
+        let base = {
+            let mut st = Style::default();
+            if let Some(a) = self.file.normal_style().alignment() {
+                st.set_alignment(a.clone());
+            }
+            style_json(&st, &theme)
+        };
+        let mut formats: Vec<Json> = vec![base.clone()];
+        let mut format_index: HashMap<String, usize> = HashMap::new();
+        format_index.insert(base.to_string(), 0);
+        let mut intern_format = |st: &Style| -> usize {
+            let j = style_json(st, &theme);
+            let key = j.to_string();
+            if let Some(i) = format_index.get(&key) {
+                return *i;
+            }
+            formats.push(j);
+            format_index.insert(key, formats.len() - 1);
+            formats.len() - 1
+        };
         // The color scales and data bars of the conditional formats.
         let cond = self.cond_effects(si, shown, &|c| css_color(c, &theme));
         // What the cells show in the number formats the conditional formats give them.
@@ -720,6 +859,10 @@ impl Book {
                 }
                 let s = intern(css);
                 let mut cell = json!({ "r": row, "c": col });
+                let fm = intern_format(&style);
+                if fm != 0 {
+                    cell["fm"] = json!(fm);
+                }
                 if let Some(b) = fx.and_then(|fx| fx.bar.as_ref()) {
                     // A gradient fades to white at the bar's end, as Excel draws it.
                     let bg = if b.gradient {
@@ -777,18 +920,27 @@ impl Book {
         // The formats of whole rows and columns: their empty cells have them (a row's before a
         // column's, as Excel).
         let (mut row_styles, mut col_styles) = (serde_json::Map::new(), serde_json::Map::new());
+        let (mut row_formats, mut col_formats) = (serde_json::Map::new(), serde_json::Map::new());
         if let Ok(ws) = self.file.sheet(si) {
             let plain = Style::default();
             for r in ws.row_dimensions() {
                 if r.row_num() > 0 && r.row_num() <= end.row + 1 + 20_000 && *r.style() != plain {
                     let s = intern(style_css(r.style(), &theme, "empty"));
                     row_styles.insert((r.row_num() - 1).to_string(), json!(s));
+                    row_formats.insert(
+                        (r.row_num() - 1).to_string(),
+                        json!(intern_format(r.style())),
+                    );
                 }
             }
             for c in ws.column_dimensions() {
                 if c.col_num() > 0 && *c.style() != plain {
                     let s = intern(style_css(c.style(), &theme, "empty"));
                     col_styles.insert((c.col_num() - 1).to_string(), json!(s));
+                    col_formats.insert(
+                        (c.col_num() - 1).to_string(),
+                        json!(intern_format(c.style())),
+                    );
                 }
             }
         }
@@ -973,6 +1125,8 @@ impl Book {
             "rowHeights": row_h,
             "rowStyles": row_styles,
             "colStyles": col_styles,
+            "rowFormats": row_formats,
+            "colFormats": col_formats,
             "customRows": sizes.custom.iter().take(20_000).collect::<Vec<_>>(),
             // The workbook's font (the Normal style's): cells without a font of their own.
             "font": { "name": font.0, "size": font.1, "css": font_family(&font.0) },
@@ -986,6 +1140,7 @@ impl Book {
             "gridLines": grid_lines,
             "objects": objects,
             "styles": styles,
+            "formats": formats,
             "icons": icons,
             "cells": out_cells,
             "merges": merges,

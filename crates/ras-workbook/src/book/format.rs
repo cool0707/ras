@@ -478,6 +478,11 @@ impl Book {
                 d if d <= 90 => d as f64,
                 d => 90.0 - d as f64,
             }),
+            "readingorder" => n(match style.alignment().map_or(0, |a| a.reading_order()) {
+                1 => -5003.0,
+                2 => -5004.0,
+                _ => -5002.0,
+            }),
             "locked" => Val::Bool(style.protection().is_none_or(locked)),
             "formulahidden" => {
                 Val::Bool(style.protection().cloned().is_some_and(|mut p| p.hidden()))
@@ -666,6 +671,14 @@ impl Book {
                     _ => return Err("Orientation の値が正しくありません。".into()),
                 });
             }
+            // XlReadingOrder: xlContext, xlLTR, xlRTL.
+            "readingorder" => style
+                .alignment_mut()
+                .set_reading_order(match num(v)? as i32 {
+                    -5003 => 1,
+                    -5004 => 2,
+                    _ => 0,
+                }),
             "locked" => style.protection_mut().set_locked(flag(v)?),
             "formulahidden" => style.protection_mut().set_hidden(flag(v)?),
             _ => return Err(format!("書式 {prop} には対応していません")),

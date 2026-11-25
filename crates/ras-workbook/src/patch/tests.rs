@@ -535,6 +535,102 @@ fn formats_are_added_to_the_styles_and_cells_keep_what_they_hold() {
 }
 
 #[test]
+fn the_formats_of_the_cells_pane_are_set_and_shown() {
+    // セルの書式設定: the alignment, the font, the pattern, each side of the borders, the
+    // protection.
+    let out = edit(
+        r##"[{"op":"format","range":"A2:B3","set":{"align":"distributed","indent":2,"valign":"justify","shrink":true,"orientation":-45,"readingOrder":"rtl","underline":"double","superscript":true,"hidden":true,"locked":false,"pattern":{"pattern":"lightDown","color":"#FF0000","background":"#FFFF00"},"borders":{"left":{"line":"dashed","color":"#0000FF"},"insideH":{"line":"double"},"diagDown":{"line":"thin"}}}},{"op":"format","range":"C2","set":{"orientation":"vertical","pattern":{"pattern":"solid","color":"#00FF00"}}},{"op":"format","range":"C3","set":{"pattern":{"pattern":"solid","color":"#00FF00"}}},{"op":"format","range":"C3","set":{"pattern":{"pattern":"none"}}}]"##,
+    );
+    let mut book = Book::open_bytes(&out).unwrap();
+    let r = |a: &str| RangeRef::parse(a).unwrap();
+    let mut is = |a: &str, prop: &str, v: Val| {
+        assert_eq!(
+            book.format_of(0, r(a), prop).unwrap(),
+            Some(v),
+            "{a} {prop}"
+        )
+    };
+    is("A2:B3", "horizontalalignment", Val::Num(-4117.0));
+    is("A2:B3", "indentlevel", Val::Num(2.0));
+    is("A2:B3", "verticalalignment", Val::Num(-4130.0));
+    is("A2:B3", "shrinktofit", Val::Bool(true));
+    is("A2:B3", "orientation", Val::Num(-45.0));
+    is("A2:B3", "readingorder", Val::Num(-5004.0));
+    is("A2:B3", "font.underline", Val::Num(-4119.0));
+    is("A2:B3", "font.superscript", Val::Bool(true));
+    is("A2:B3", "formulahidden", Val::Bool(true));
+    is("A2:B3", "locked", Val::Bool(false));
+    is("A2:B3", "interior.pattern", Val::Num(13.0));
+    is("C2", "orientation", Val::Num(-4166.0));
+    is("C2", "interior.pattern", Val::Num(1.0));
+    is("C3", "interior.pattern", Val::Num(-4142.0));
+    // The sides of the range: the left of its first column only, the lines between its rows.
+    is("A2:A3", "borders.7.linestyle", Val::Num(-4115.0));
+    is("B2:B3", "borders.7.linestyle", Val::Num(-4142.0));
+    is("A2:B2", "borders.9.linestyle", Val::Num(-4119.0));
+    is("A3:B3", "borders.9.linestyle", Val::Num(-4142.0));
+    // A side taken away (null) and the others as they were.
+    let out = apply(
+        &out,
+        &ops(r#"[{"op":"format","range":"A2:B3","set":{"borders":{"left":null}}}]"#),
+    )
+    .unwrap();
+    let mut book = Book::open_bytes(&out).unwrap();
+    assert_eq!(
+        book.format_of(0, r("A2:A3"), "borders.7.linestyle")
+            .unwrap(),
+        Some(Val::Num(-4142.0))
+    );
+    assert_eq!(
+        book.format_of(0, r("A2:B2"), "borders.9.linestyle")
+            .unwrap(),
+        Some(Val::Num(-4119.0))
+    );
+
+    // What the pane is told of them (the sheet's `formats`, by the cells' `fm`).
+    let view = book.sheet_view(0, 50, 20, None).unwrap();
+    let format = |a: &str| {
+        let (row, col) = (r(a).start.row, r(a).start.col);
+        let c = view["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["r"] == row && c["c"] == col)
+            .unwrap();
+        view["formats"][c["fm"].as_u64().unwrap_or(0) as usize].clone()
+    };
+    let a2 = format("A2");
+    assert_eq!(a2["h"], "distributed");
+    assert_eq!(a2["v"], "justify");
+    assert_eq!(a2["indent"], 2);
+    assert_eq!(a2["rot"], 135);
+    assert_eq!(a2["ro"], 2);
+    assert_eq!(a2["u"], "double");
+    assert_eq!(a2["va"], "superscript");
+    assert_eq!(a2["unlocked"], true);
+    assert_eq!(a2["hidden"], true);
+    assert_eq!(
+        a2["fill"],
+        json!({ "pattern": "lightDown", "fg": "#FF0000", "bg": "#FFFF00" })
+    );
+    assert_eq!(a2["borders"]["bottom"], json!({ "s": "double", "c": null }));
+    assert_eq!(a2["borders"]["diagDown"], json!({ "s": "thin", "c": null }));
+    assert!(a2["borders"].get("left").is_none(), "{a2}");
+    assert_eq!(format("C2")["rot"], 255);
+    assert_eq!(format("C2")["fill"]["fg"], "#00FF00");
+    assert!(format("C3").get("fill").is_none());
+    // Values the pane does not offer are refused.
+    assert!(
+        refused(r#"[{"op":"format","range":"A1","set":{"orientation":91}}]"#)
+            .contains("orientation")
+    );
+    assert!(
+        refused(r#"[{"op":"format","range":"A1","set":{"borders":{"middle":null}}}]"#)
+            .contains("borders")
+    );
+}
+
+#[test]
 fn a_size_shows_hidden_lines_and_zero_hides_them() {
     let out =
         edit(r#"[{"op":"hide","range":"5:5","hidden":true},{"op":"size","range":"B:B","px":0}]"#);
