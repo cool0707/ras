@@ -1,6 +1,6 @@
 /* Ported from xlflow (https://github.com/harumiWeb/xlflow), MIT License,
    Copyright (c) 2026 harumiWeb. See THIRD_PARTY_NOTICES.md. */
-import type { DesignerDocument, SpecControl } from "./protocol";
+import type { DesignerDocument, FontValue, SpecControl } from "./protocol";
 import { gridSize, isDesignerFrame, isDesignerPage, parentBounds, stableDelta } from "./geometry";
 
 // Shared by rendering fallback and Toolbox creation. Dimensions are points,
@@ -25,7 +25,7 @@ export const controlMetadata = [
 export type ToolboxType = (typeof controlMetadata)[number]["type"];
 export type NewControl = Pick<
   SpecControl,
-  "id" | "parentId" | "name" | "caption" | "selectedIndex" | "tabs" | "backStyle"
+  "id" | "parentId" | "name" | "caption" | "selectedIndex" | "tabs" | "backStyle" | "font"
 > & {
   type: ToolboxType;
   left: number;
@@ -41,6 +41,13 @@ export const transparentOnCreate: ReadonlySet<ToolboxType> = new Set([
   "CheckBox",
   "OptionButton",
 ]);
+
+/** The size new forms and controls are made with, in points. */
+export const newFontSize = 10;
+/** The UI font of Japanese Windows 10 and later, when the system's cannot be looked up. */
+export const fallbackNewFont: Readonly<FontValue> = { name: "Yu Gothic UI", size: newFontSize };
+/** Controls without a Font property. */
+const fontless: ReadonlySet<ToolboxType> = new Set(["SpinButton", "ScrollBar", "Image"]);
 
 export function controlDefaults(type: string): readonly [number, number] {
   const metadata = controlMetadata.find((m) => m.type.toLowerCase() === type.toLowerCase());
@@ -105,6 +112,14 @@ export function createControl(
     if (parentId) control.parentId = parentId;
     if ("caption" in metadata && metadata.caption) control.caption = control.name;
     if (transparentOnCreate.has(type)) control.backStyle = 0;
+    // As in the VBA editor, a new control takes the form's font; a form without one
+    // gives the system UI font instead of MSForms' MS UI Gothic 9pt.
+    if (!fontless.has(type)) {
+      const font = document.font ?? document.newControlFont ?? fallbackNewFont;
+      control.font = Object.fromEntries(
+        Object.entries(font).filter(([, v]) => v !== null && v !== undefined),
+      ) as FontValue;
+    }
     if (type === "MultiPage" || type === "TabStrip") control.selectedIndex = -1;
     if (type === "TabStrip") {
       control.tabs = [

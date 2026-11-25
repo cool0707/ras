@@ -238,6 +238,8 @@ export interface DesignerDocument extends AppearanceProperties {
   height: number;
   approximate: boolean;
   eventEditable: boolean;
+  /** The font of controls made with the Toolbox when the form has none (the system UI font). */
+  newControlFont?: FontValue;
   controls: DesignerControl[];
   warnings: DesignerProblem[];
 }
@@ -749,6 +751,7 @@ export function isStructuralOperation(value: unknown): value is StructuralOperat
         "selectedIndex",
         "tabs",
         "backStyle",
+        "font",
       ].includes(key),
     ) &&
     typeof control.id === "string" &&
@@ -766,6 +769,13 @@ export function isStructuralOperation(value: unknown): value is StructuralOperat
     (!Object.hasOwn(control, "caption") || typeof control.caption === "string") &&
     (!Object.hasOwn(control, "backStyle") ||
       (control.backStyle === 0 && transparentOnCreate.has(control.type as ToolboxType))) &&
+    (!Object.hasOwn(control, "font") ||
+      (typeof control.font === "object" &&
+        control.font !== null &&
+        !Array.isArray(control.font) &&
+        Object.keys(control.font).every((key) =>
+          ["name", "size", "bold", "italic", "underline", "strikeThrough", "charset", "pitchAndFamily"].includes(key),
+        ))) &&
     (((!Object.hasOwn(control, "selectedIndex") || control.selectedIndex === -1) &&
       (!Object.hasOwn(control, "tabs") ||
         (Array.isArray(control.tabs) && control.tabs.length === 0))) ||

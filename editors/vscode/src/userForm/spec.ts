@@ -27,6 +27,7 @@ import type { JsonNode, JsonValue } from "./jsonSource";
 import { JsonSyntaxError, nodeAtPath, offsetToPosition, parseJson } from "./jsonSource";
 import type {
 	DesignerProblem,
+	FontValue,
 	PreviewDocument,
 	PropertyGridData,
 	PropertyState,
@@ -790,12 +791,12 @@ export function propertyGrid(spec: ParsedSpec): PropertyGridData {
 }
 
 /** A new, empty form in the minimal authoring shape. */
-export function newFormSpec(name: string): JsonObject {
+export function newFormSpec(name: string, font?: FontValue): JsonObject {
 	return {
 		schemaVersion: 1,
 		kind: FORM_KIND,
 		basis: "designer",
-		form: { name, caption: name, width: 240, height: 180 },
+		form: { name, caption: name, width: 240, height: 180, ...(font ? { font: { ...font } } : {}) },
 		controls: [],
 	};
 }

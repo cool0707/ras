@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 import { formatJson } from "./jsonSource";
 import { designerViewType, FORM_SUFFIX } from "./provider";
 import { newFormSpec } from "./spec";
+import { systemUiFont } from "./systemFont";
 
 /** A VBA identifier usable as a component name (at most 31 characters). */
 export function formNameError(name: string): string | undefined {
@@ -57,7 +58,7 @@ async function newUserForm(resource?: vscode.Uri): Promise<void> {
 	const spec = vscode.Uri.file(path.join(formsDir, `${formName}${FORM_SUFFIX}`));
 	const code = vscode.Uri.file(path.join(formsDir, `${formName}.ras`));
 	await vscode.workspace.fs.createDirectory(vscode.Uri.file(formsDir));
-	await vscode.workspace.fs.writeFile(spec, Buffer.from(formatJson(newFormSpec(formName)), "utf8"));
+	await vscode.workspace.fs.writeFile(spec, Buffer.from(formatJson(newFormSpec(formName, await systemUiFont())), "utf8"));
 	if (!fs.existsSync(code.fsPath)) await vscode.workspace.fs.writeFile(code, Buffer.from(newCodeBehind(formName), "utf8"));
 	await vscode.commands.executeCommand("vscode.openWith", spec, designerViewType);
 }

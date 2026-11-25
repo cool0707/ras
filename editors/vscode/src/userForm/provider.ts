@@ -38,6 +38,7 @@ import { editableControlProperties } from "./contract";
 import type { ParsedSpec } from "./spec";
 import { flattenControls, parseSpec, previewDocument, problems, propertyGrid } from "./spec";
 import { subtreeIds } from "./toolbox";
+import { knownSystemUiFont, systemUiFont } from "./systemFont";
 import { pasteAllocations } from "./clipboard";
 
 export const designerViewType = "ras.userFormDesigner";
@@ -157,6 +158,8 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 			});
 			if (pictures?.form) preview.form.picturePreview = pictures.form;
 			const designer = designerDocument(preview, [...problems(spec), ...problems(spec, pictures?.issues ?? [])], true);
+			const font = knownSystemUiFont();
+			if (font) designer.newControlFont = font;
 			latest = { version, spec, document: designer };
 			send({
 				type: "document",
@@ -469,6 +472,11 @@ export class UserFormDesignerProvider implements vscode.CustomTextEditorProvider
 			subscriptions.forEach((s) => s.dispose());
 		});
 		update();
+		// The system UI font is looked up once; the document is sent again with it.
+		if (!knownSystemUiFont())
+			void systemUiFont().then(() => {
+				if (latest && !disposed) compose(latest.version, latest.spec);
+			});
 	}
 
 	/** Asks before a deletion that takes descendant controls with it. */
