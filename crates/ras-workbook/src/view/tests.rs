@@ -892,3 +892,31 @@ fn dates_are_typed_with_slashes() {
         );
     }
 }
+
+#[test]
+fn empty_cells_have_their_number_format() {
+    use gridcraft_core::addr::RangeRef;
+    // The pane's 表示形式 reads an empty cell's from its formats (no value says it).
+    let mut b = Book::new_book();
+    b.set_number_format(0, RangeRef::parse("C3").unwrap(), "[$-F400]h:mm:ss AM/PM")
+        .unwrap();
+    b.set_number_format(0, RangeRef::parse("D3").unwrap(), "m/d/yyyy")
+        .unwrap();
+    let data = view_of(&b.to_bytes().unwrap());
+    let sheet = &data["sheets"][0];
+    let format = |c: u64| {
+        let cell = sheet["cells"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["r"] == json!(2) && x["c"] == json!(c))
+            .unwrap();
+        sheet["formats"][cell["fm"].as_u64().unwrap() as usize].clone()
+    };
+    let c3 = format(2);
+    assert_eq!(c3["n"], json!("[$-F400]h:mm:ss AM/PM"), "{c3}");
+    assert_eq!(c3["sn"], json!("h:mm:ss"), "{c3}");
+    let d3 = format(3);
+    assert_eq!(d3["n"], json!("m/d/yyyy"), "{d3}");
+    assert_eq!(d3["sn"], json!("yyyy/m/d"), "{d3}");
+}

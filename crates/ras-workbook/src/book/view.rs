@@ -763,7 +763,17 @@ impl Book {
         let mut format_index: HashMap<String, usize> = HashMap::new();
         format_index.insert(base.to_string(), 0);
         let mut intern_format = |st: &Style| -> usize {
-            let j = style_json(st, &theme);
+            let mut j = style_json(st, &theme);
+            // The number format (and as Japanese Excel shows it, when not the same): what the
+            // pane's 表示形式 shows for an empty cell, whose value does not say it.
+            let n = super::style_format_code(st);
+            if n != "General" {
+                let shown = super::style_shown_code(st);
+                if shown != n {
+                    j["sn"] = json!(shown);
+                }
+                j["n"] = json!(n);
+            }
             let key = j.to_string();
             if let Some(i) = format_index.get(&key) {
                 return *i;

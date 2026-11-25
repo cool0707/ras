@@ -4533,21 +4533,20 @@
 
     // ---- セルの書式設定 (Ctrl+1): the formats of the cells selected in the pane at the right, as
     // Excel's dialog has them (表示形式, 配置, フォント, 罫線, 塗りつぶし, 保護) but with the
-    // controls of 図形の書式設定 (フォント and 塗りつぶし on one page); each is set as it is
+    // controls of 図形の書式設定 (表示形式 and 配置 on one page, フォント and 塗りつぶし on
+    // another); each is set as it is
     // changed. Shown for the active cell (the borders: for the range), as Excel's dialog opens.
     // プロパティ has 保護 and what the cells selected are in: the rules of 条件付き書式 and the
     // names defined.
 
     const CELL_PAGES = [
-        ["number", "表示形式"],
-        ["align", "配置"],
+        ["number", "表示形式と配置"],
         ["font", "フォントと塗りつぶし"],
         ["border", "罫線"],
         ["props", "プロパティ"],
     ];
     const CELL_ICONS = {
         number: '<path d="M6.2 2.5 4.6 13.5M11.4 2.5 9.8 13.5M2.5 5.8h11.5M2 10.2h11.5"/>',
-        align: '<path d="M2 3h12M4 6.5h8M2 10h12M4 13.5h8"/>',
         font: PANE_ICONS.text,
         border: '<path d="M2.5 2.5h11v11h-11z"/><path d="M8 2.5v11M2.5 8h11" stroke-dasharray="1 1.6"/>',
         props: '<rect x="2.5" y="1.5" width="11" height="13" rx="1"/><path d="M5 5h1M5 8h1M5 11h1M8 5h3M8 8h3M8 11h3"/>',
@@ -4617,6 +4616,13 @@
         const i = cell ? cell.fm || 0 : s.rowFormats && s.rowFormats[r] !== undefined ? s.rowFormats[r] : s.colFormats && s.colFormats[c] !== undefined ? s.colFormats[c] : 0;
         return list[i] || {};
     }
+    // The number format of a cell, [as in the file, as Japanese Excel shows it (when not the
+    // same)]: a value's, else (an empty cell) that of its formats, its row's or its column's.
+    function numberCodeAt(r, c) {
+        const cell = cellOf(r, c);
+        const f = cell && cell.t !== undefined ? cell : formatAt(r, c);
+        return [f.n, f.sn];
+    }
     // The borders of the cells selected, as Excel's 罫線 shows them: the sides of the range (or
     // those its neighbors draw there), the lines between its cells, and the diagonals of its
     // first cell. Each { s: the line's name, c: its color (null: automatic) } or null.
@@ -4680,11 +4686,14 @@
             return b;
         };
 
+        // The list of 種類 (drawn again as a format is chosen in it): where it was scrolled to.
+        let numberList = null;
         // 表示形式: 分類, サンプル, and what the kind has (as the dialog's page).
         {
             const sec = section("number", "表示形式");
             const cell = cellOf(sel.ar, sel.ac) || {};
-            const now = localCode(/^\[\$-F[48]00\]/i.test(cell.n || "") ? cell.n : cell.sn || cell.n || "General");
+            const [n, sn] = numberCodeAt(sel.ar, sel.ac);
+            const now = localCode(/^\[\$-F[48]00\]/i.test(n || "") ? n : sn || n || "General");
             const at = `${view.sheet.name}!${sel.ar}:${sel.ac}`;
             // The kind chosen last for this cell, while its format is what it made (ユーザー定義
             // stays so, as the format is one of another kind too).
@@ -4748,8 +4757,12 @@
                     o.title = c;
                 });
                 list.value = codes.includes(now) ? now : "";
+                const where = `${at}:${kind.key}`;
+                numberList = { list, where };
+                list.addEventListener("scroll", () => remember({ numberListTop: { where, top: list.scrollTop } }), { passive: true });
                 list.addEventListener("change", () => {
                     if (typed) typed.value = list.value;
+                    remember({ numberListTop: { where, top: list.scrollTop } });
                     apply(list.value);
                 });
             }
@@ -4758,26 +4771,26 @@
 
         // 配置: 文字の配置, 文字の制御, 方向, 右から左
         {
-            const sec = section("align", "文字の配置");
+            const sec = section("number", "文字の配置");
             const h = fm.h || "general";
             selectRow(sec, "横位置", H_ALIGNS, h, "hAlign", (v) => set({ align: v }), "pwide");
             // (An indent makes 標準 and 中央揃え 左詰め, as in Excel.)
             const indented = ["left", "right", "distributed"].includes(h);
             spin(sec, "インデント", "indent", fm.indent || 0, (n) => set(indented ? { indent: Math.round(n) } : { align: "left", indent: Math.round(n) }), { name: "", step: 1, max: 250 });
             selectRow(sec, "縦位置", V_ALIGNS, fm.v || "bottom", "vAlign", (v) => set({ valign: v === "center" ? "middle" : v }), "pwide");
-            const ctl = section("align", "文字の制御");
+            const ctl = section("number", "文字の制御");
             checkRow(ctl, "折り返して全体を表示する", fm.wrap, "wrap", (on) => set({ wrap: on }));
             checkRow(ctl, "縮小して全体を表示する", fm.shrink, "shrink", (on) => set({ shrink: on })).disabled = !!fm.wrap;
             const merged = mergedIn(sel);
             const m = checkRow(ctl, "セルを結合する", merged, "merge", (on) => merge(on ? "merge" : "unmerge"));
             m.disabled = sel.kind === "all" || areas.length > 0 || (!merged && single(sel));
-            const dir = section("align", "方向");
+            const dir = section("number", "方向");
             const rot = fm.rot || 0;
             const vertical = rot === 255;
             checkRow(dir, "縦書き", vertical, "vertical", (on) => set({ orientation: on ? "vertical" : 0 }));
             const angle = spin(dir, "角度", "orientation", vertical ? 0 : rot <= 90 ? rot : 90 - rot, (d) => set({ orientation: Math.round(d) }), { name: "°", step: 1, min: -90, max: 90 });
             angle.input.disabled = vertical;
-            const rtl = section("align", "右から左");
+            const rtl = section("number", "右から左");
             selectRow(rtl, "文字の方向", [["context", "コンテキスト"], ["ltr", "左から右"], ["rtl", "右から左"]], ["context", "ltr", "rtl"][fm.ro || 0] || "context", "readingOrder", (v) => set({ readingOrder: v }), "pwide");
         }
 
@@ -5098,10 +5111,13 @@
             if (!named.length) list.appendChild(el("div", "pnone", "選択範囲を参照する名前はありません。"));
         }
 
-        // (The pages that were 塗りつぶし and 保護 are those that have them now.)
-        const was = { fill: "font", protect: "props" }[saved.cellPage];
+        // (The pages that were 配置, 塗りつぶし and 保護 are those that have them now.)
+        const was = { align: "number", fill: "font", protect: "props" }[saved.cellPage];
         if (was) remember({ cellPage: was });
         kit.finish(CELL_PAGES, CELL_ICONS, "cellPage", focus);
+        // (Once its page shows: a list hidden is not scrolled.)
+        const top = saved.numberListTop;
+        if (numberList && top && top.where === numberList.where) numberList.list.scrollTop = top.top;
     }
 
     // 挿入 > 画像: a picture from a file, at the active cell (shrunk to the window when larger).
@@ -7973,7 +7989,7 @@
         group(home, "配置");
         const alignRows = into.appendChild(el("div", "rstack wide"));
         row(alignRows);
-        launcher("配置の設定: 右にセルの書式設定（配置）を表示します", () => openCellPane("align"));
+        launcher("配置の設定: 右にセルの書式設定（配置）を表示します", () => openCellPane("hAlign"));
         for (const [value, ic, title] of [["top", "top", "上揃え"], ["middle", "middle", "上下中央揃え"], ["bottom", "bottom", "下揃え"]]) button(`valign-${value}`, { icon: ic, title, edits: true, act: () => format({ valign: value }) });
         sep();
         button("wrap", { icon: "wrap", label: "折り返して全体を表示する", title: "折り返して全体を表示する", edits: true, act: () => toggleFormat("wrap") });
@@ -8014,8 +8030,8 @@
         button("comma", { icon: "comma", title: "桁区切りスタイル", edits: true, act: () => format({ numberFormat: "#,##0" }) });
         sep();
         const decimals = (up) => {
-            const cell = (activeTd && activeTd.cell) || {};
-            const code = stepDecimals(cell.n || "General", up);
+            if (!sel) return;
+            const code = stepDecimals(numberCodeAt(sel.ar, sel.ac)[0] || "General", up);
             if (code) format({ numberFormat: code });
         };
         button("decUp", { icon: "decUp", title: "小数点以下の表示桁数を増やす", edits: true, act: () => decimals(true) });
@@ -8532,7 +8548,7 @@
         if (![...tools.fontSize.options].some((o) => o.value === size)) tools.fontSize.appendChild(el("option", null, size)).value = size;
         tools.fontSize.value = size;
         if (document.activeElement !== tools.fontName) tools.fontName.value = font.name;
-        const code = cell.n || "General";
+        const code = (sel ? numberCodeAt(sel.ar, sel.ac)[0] : cell.n) || "General";
         tools.numberFormat.value = NUMBER_FORMATS.some(([c]) => c === code) ? code : "";
         tools.merge.classList.toggle("on", !!sel && single(sel) && mergedIn(sel));
         tools.filter.classList.toggle("on", !!view.sheet.filter);
