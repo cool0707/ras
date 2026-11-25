@@ -2932,7 +2932,70 @@
     // F2, a double click: the text in the pane of the object.
     function editObjectText(obj) {
         if (!movable(obj) || obj.text === undefined || busy || !view) return;
-        openPane("format", "text");
+        if (obj.textBox && obj.box) editShapeText(obj);
+        else openPane("format", "text");
+    }
+    // The text of a shape typed in the shape, as Excel's: over its text, in its font, where its
+    // text box puts it. Enter starts a new line; Esc or a click elsewhere sets it.
+    let shapeEditor = null;
+    function editShapeText(obj) {
+        if (shapeEditor) return;
+        const box = obj.box;
+        const shape = box.querySelector(":scope > .shape") || box;
+        const tb = obj.textBox;
+        // (A warped text is put straight while it is typed.)
+        const old = shape.querySelector(".stext, .warp");
+        const cover = shape.appendChild(el("div", "stedit"));
+        const [l, t, r, b] = tb.inset;
+        const pad = old && old.classList.contains("stext") ? old.style.padding : `${t}pt ${r}pt ${b}pt ${l}pt`;
+        const just = { t: "flex-start", ctr: "center", b: "flex-end" }[tb.anchor] || "flex-start";
+        Object.assign(cover.style, { padding: pad, justifyContent: just, color: tb.color });
+        const ta = cover.appendChild(el("textarea"));
+        ta.spellcheck = false;
+        ta.value = obj.text;
+        if (!tb.wrap) ta.wrap = "off";
+        // The font of its first run, the alignment of its first paragraph.
+        const run = old && old.querySelector("span");
+        const para = old && old.querySelector("p");
+        if (run) {
+            const cs = getComputedStyle(run);
+            Object.assign(ta.style, { fontFamily: cs.fontFamily, fontSize: cs.fontSize, fontWeight: cs.fontWeight, fontStyle: cs.fontStyle });
+            // (A text filled with a gradient or a picture is see-through: typed in its style's color.)
+            if (!/^rgba\(.*,\s*0\)$|^transparent$/.test(cs.color)) ta.style.color = cs.color;
+        }
+        ta.style.textAlign = para ? para.style.textAlign || "left" : "center";
+        if (old) old.style.visibility = "hidden";
+        box.classList.add("typing");
+        const fit = () => {
+            ta.style.height = "auto";
+            ta.style.height = `${ta.scrollHeight}px`;
+        };
+        let done = false;
+        const finish = (back) => {
+            if (done) return;
+            done = true;
+            shapeEditor = null;
+            const text = ta.value;
+            cover.remove();
+            box.classList.remove("typing");
+            if (old) old.style.visibility = "";
+            if (text !== obj.text) objectEdit(obj, { text });
+            if (back) focusGrid();
+        };
+        ta.addEventListener("input", fit);
+        ta.addEventListener("blur", () => finish(false));
+        ta.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Escape" || (e.key === "Enter" && (e.ctrlKey || e.metaKey))) {
+                e.preventDefault();
+                finish(true);
+            }
+        });
+        for (const type of ["mousedown", "click", "dblclick", "contextmenu"]) ta.addEventListener(type, (e) => e.stopPropagation());
+        shapeEditor = { obj, ta };
+        fit();
+        ta.focus({ preventScroll: true });
+        ta.setSelectionRange(ta.value.length, ta.value.length);
     }
     function deleteObject(obj) {
         if (!movable(obj) || busy || !view) return;
@@ -3758,9 +3821,35 @@
             }
         }
 
-        // 文字: the text (a control's caption or value)
-        if (obj.text !== undefined) {
-            const sec = section("text", ax && ["TextBox", "ListBox", "ComboBox"].includes(t) ? "値（Value）" : ax ? "Caption" : "テキスト");
+        // 文字 > テキスト ボックス: 垂直方向の配置, the margins, 図形内でテキストを折り返す (the
+        // text itself is typed in the shape)
+        const tb = obj.textBox;
+        if (tb) {
+            const sec = section("text", "テキスト ボックス");
+            const row = line(sec, "垂直方向の配置");
+            const anchor = row.appendChild(el("select"));
+            anchor.dataset.field = "textAnchor";
+            for (const [v, label] of [["t", "上揃え"], ["ctr", "上下中央揃え"], ["b", "下揃え"]]) anchor.appendChild(el("option", null, label)).value = v;
+            anchor.value = tb.anchor;
+            anchor.addEventListener("change", () => edit({ textAnchor: anchor.value }));
+            const cm = (pt) => Math.round(((pt * 2.54) / 72) * 100) / 100;
+            [["left", "左余白", 0], ["right", "右余白", 2], ["top", "上余白", 1], ["bottom", "下余白", 3]].forEach(([key, label, i]) => {
+                const m = sizeBox(line(sec, label), label, (v) => edit({ inset: { [key]: Math.round(((v * 72) / 2.54) * 100) / 100 } }), { step: 0.05, max: 50 });
+                m.input.dataset.field = `inset-${key}`;
+                m.setCm(cm(tb.inset[i]));
+            });
+            const wrap = sec.appendChild(el("label", "prow pcheck"));
+            const on = wrap.appendChild(el("input"));
+            on.type = "checkbox";
+            on.checked = !!tb.wrap;
+            on.dataset.field = "textWrap";
+            wrap.appendChild(el("span", null, "図形内でテキストを折り返す"));
+            on.addEventListener("change", () => edit({ textWrap: on.checked }));
+        }
+
+        // 文字: the text of a control (its caption or value)
+        if (obj.text !== undefined && !tb) {
+            const sec = section("text", ax && ["TextBox", "ListBox", "ComboBox"].includes(t) ? "値（Value）" : ax ? "Caption" : "文字");
             const text = sec.appendChild(el("textarea", "ptext"));
             text.rows = 4;
             text.value = obj.text;
@@ -9555,6 +9644,11 @@
                 e.preventDefault();
                 clearSelection();
                 if (sel) setSel(sel, false);
+                return;
+            }
+            // A character typed: into the shape's text (the input method's too).
+            if (!ctrl && editable && !busy && obj.textBox && movable(obj) && (key.length === 1 || key === "Process" || e.keyCode === 229)) {
+                editShapeText(obj);
                 return;
             }
             if (!ctrl || moves[key]) {

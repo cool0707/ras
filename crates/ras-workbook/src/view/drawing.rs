@@ -263,6 +263,9 @@ pub struct Obj {
     /// The fill and line of a shape or a picture as they are drawn (`paint_of`), for the grid's
     /// 図形の書式設定: `fill`, `line` ("#RRGGBB", null for none), `lineWidth` (points).
     pub paint: Option<serde_json::Value>,
+    /// The text box of a shape (`text_box_of`): `anchor` (t, ctr, b), `wrap`, `inset` (left,
+    /// top, right, bottom; points), `color` (of its text by its style).
+    pub text_box: Option<serde_json::Value>,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -501,6 +504,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 form: None,
                 adjust: None,
                 paint: None,
+                text_box: None,
             });
             return;
         }
@@ -524,6 +528,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 form: None,
                 adjust: None,
                 paint: None,
+                text_box: None,
             });
         }
         return;
@@ -567,6 +572,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 .then(|| adjust_of(obj))
                 .flatten(),
             paint: matches!(obj.name.as_str(), "sp" | "cxnSp" | "pic").then(|| paint_of(ctx, obj)),
+            text_box: (obj.name == "sp").then(|| text_box_of(ctx, obj)),
         });
     }
 }
@@ -1075,6 +1081,36 @@ fn paint_of(ctx: &Ctx, sp: &Node) -> serde_json::Value {
     serde_json::json!({ "fill": color(fill), "line": color(line), "lineWidth": (width * 100.0).round() / 100.0 })
 }
 
+/// The text box of a shape as `text_html` draws it (a shape without text: as one is given,
+/// centered).
+fn text_box_of(ctx: &Ctx, sp: &Node) -> serde_json::Value {
+    let tx = sp.child("txBody");
+    let body = tx.and_then(|t| t.child("bodyPr"));
+    let ins = |k: &str, d: f64| {
+        let v = body
+            .and_then(|b| b.attr(k))
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(d)
+            / EMU_PT;
+        (v * 100.0).round() / 100.0
+    };
+    let anchor = match body.and_then(|b| b.attr("anchor")) {
+        Some(a @ ("ctr" | "b")) => a,
+        Some(_) => "t",
+        None if tx.is_none() => "ctr",
+        None => "t",
+    };
+    let color = style_ref(sp, "fontRef", &ctx.theme)
+        .map(|(c, _)| c)
+        .unwrap_or_else(|| "#000000".into());
+    serde_json::json!({
+        "anchor": anchor,
+        "wrap": body.and_then(|b| b.attr("wrap")) != Some("none"),
+        "inset": [ins("lIns", 91440.0), ins("tIns", 45720.0), ins("rIns", 91440.0), ins("bIns", 45720.0)],
+        "color": color,
+    })
+}
+
 fn shape_html(ctx: &Ctx, sp: &Node, x: &Xfrm, w: f64, h: f64) -> String {
     let props = sp.child("spPr");
     let geom = if let Some(g) = props.and_then(|p| p.child("prstGeom")) {
@@ -1375,7 +1411,7 @@ pub(crate) fn text_html(
     if vert {
         style.push_str("writing-mode:vertical-rl;");
     }
-    format!("<div style=\"{style}\">{paras}</div>")
+    format!("<div class=\"stext\" style=\"{style}\">{paras}</div>")
 }
 
 fn run_css(

@@ -880,6 +880,9 @@ impl Book {
                 if let Some(p) = &o.paint {
                     j["paint"] = p.clone();
                 }
+                if let Some(t) = &o.text_box {
+                    j["textBox"] = t.clone();
+                }
                 j
             })
             .collect();

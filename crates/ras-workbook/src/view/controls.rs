@@ -210,6 +210,7 @@ impl Controls {
             form,
             adjust: None,
             paint: None,
+            text_box: None,
         })
     }
 }
