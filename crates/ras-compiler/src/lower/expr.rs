@@ -1168,6 +1168,20 @@ impl<'p> Lowerer<'p> {
             {
                 self.struct_lit_into(inner, target)
             }
+            // `x = Excel.errorToNull(v)`: the assignment copies `v` into `x` anyway (arrays are
+            // values), so the error values are cleared in `x` itself, without another copy
+            // (spec §13.3). (Not the return variable: `f` as an argument inside `f` is a call.)
+            ExprKind::Call { args, .. }
+                if args.len() == 1
+                    && matches!(
+                        self.info().calls.get(&inner.id).map(|c| &c.target),
+                        Some(CallTarget::Intrinsic(Intr::ExcelErrorToNull))
+                    )
+                    && matches!(target, VExpr::Name(n) if *n != self.pc.proc_name) =>
+            {
+                self.expr_into(&args[0], target, ty);
+                self.emit(call_stmt("RAS_ErrorToNullInPlace", vec![target.clone()]));
+            }
             // (`f(i) = x` inside function `f` would be a recursive call, so the return variable is excluded)
             ExprKind::Array(_) | ExprKind::New { .. } | ExprKind::Call { .. }
                 if self.ty(inner).is_array()

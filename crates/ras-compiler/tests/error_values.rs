@@ -297,11 +297,15 @@ fn test_files_are_not_warned() {
 fn error_to_null_is_emitted() {
     let (_, out) = compile(
         r#"
-export function f(ws: Excel.Worksheet): void {
+export function f(ws: Excel.Worksheet): any {
     const v = Excel.errorToNull(ws.range("A1").value) ?? "";
     const grid = Excel.errorToNull(ws.range("A1:C3").toArray());
     ws.range("D1").value = grid[0][0];
     ws.range("D2").value = v;
+    const data = ws.range("A1:C3").toArray();
+    const clean = Excel.errorToNull(data);
+    ws.range("D3").value = clean[0][0];
+    return Excel.errorToNull(data);
 }
 "#,
     );
@@ -312,9 +316,16 @@ export function f(ws: Excel.Worksheet): void {
         .expect("module M")
         .code
         .replace("\r\n", "\n");
+    // A value: the function, which copies.
     assert!(m.contains("RAS_ErrorToNull(ws.Range(\"A1\").Value)"), "{m}");
+    assert!(m.contains("    f = RAS_ErrorToNull(data)\n"), "{m}");
+    // Into a variable: the assignment already copies, the errors are cleared there.
     assert!(
-        m.contains("grid = RAS_ErrorToNull(RAS_Read2D(ws.Range(\"A1:C3\")))"),
+        m.contains("    grid = RAS_Read2D(ws.Range(\"A1:C3\"))\n    RAS_ErrorToNullInPlace grid\n"),
+        "{m}"
+    );
+    assert!(
+        m.contains("    clean = data\n    RAS_ErrorToNullInPlace clean\n"),
         "{m}"
     );
     let rt = out
@@ -326,6 +337,10 @@ export function f(ws: Excel.Worksheet): void {
         .replace("\r\n", "\n");
     assert!(
         rt.contains("Public Function RAS_ErrorToNull(ByRef v As Variant) As Variant"),
+        "{rt}"
+    );
+    assert!(
+        rt.contains("Public Sub RAS_ErrorToNullInPlace(ByRef v As Variant)"),
         "{rt}"
     );
     // It walks the array with RAS_Len, which comes along.

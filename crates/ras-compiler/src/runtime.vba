@@ -860,44 +860,52 @@ Public Function RAS_Match(ByRef lookupValue As Variant, ByRef lookupArray As Var
     If Not IsError(r) Then RAS_Match = r
 End Function
 '@@ proc RAS_ErrorToNull
-' Excel.errorToNull (spec 13.3): an error value (#N/A ...) as Empty (null). For an array, a copy
-' whose error elements are Empty (2-D arrays and arrays of arrays too).
+' Excel.errorToNull (spec 13.3) as a value: a copy of `v` whose error values (#N/A ...) are Empty.
+' `x = Excel.errorToNull(v)` into a variable uses RAS_ErrorToNullInPlace on `x` instead.
 Public Function RAS_ErrorToNull(ByRef v As Variant) As Variant
     Dim out As Variant
-    Dim i As Long
-    Dim j As Long
-    Dim twoD As Boolean
     If IsObject(v) Then
         Set RAS_ErrorToNull = v
         Exit Function
     End If
-    If IsError(v) Then Exit Function
     out = v
-    If IsArray(v) Then
-        If RAS_Len(v) > 0& Then
-            On Error Resume Next
-            j = LBound(v, 2)
-            twoD = (Err.Number = 0)
-            On Error GoTo 0
-            If twoD Then
-                For i = LBound(v, 1) To UBound(v, 1)
-                    For j = LBound(v, 2) To UBound(v, 2)
-                        If IsError(v(i, j)) Then out(i, j) = Empty
-                    Next j
-                Next i
-            Else
-                For i = LBound(v) To UBound(v)
-                    If IsError(v(i)) Then
-                        out(i) = Empty
-                    ElseIf IsArray(v(i)) Then
-                        out(i) = RAS_ErrorToNull(v(i))
-                    End If
-                Next i
-            End If
-        End If
-    End If
+    RAS_ErrorToNullInPlace out
     RAS_ErrorToNull = out
 End Function
+'@@ proc RAS_ErrorToNullInPlace
+' Clears the error values (#N/A ...) in `v` itself: the value, or the elements of an array
+' (2-D arrays and arrays of arrays too). Nothing is copied.
+Public Sub RAS_ErrorToNullInPlace(ByRef v As Variant)
+    Dim i As Long
+    Dim j As Long
+    Dim twoD As Boolean
+    If IsObject(v) Then Exit Sub
+    If IsError(v) Then
+        v = Empty
+        Exit Sub
+    End If
+    If Not IsArray(v) Then Exit Sub
+    If RAS_Len(v) = 0& Then Exit Sub
+    On Error Resume Next
+    j = LBound(v, 2)
+    twoD = (Err.Number = 0)
+    On Error GoTo 0
+    If twoD Then
+        For i = LBound(v, 1) To UBound(v, 1)
+            For j = LBound(v, 2) To UBound(v, 2)
+                If IsError(v(i, j)) Then v(i, j) = Empty
+            Next j
+        Next i
+    Else
+        For i = LBound(v) To UBound(v)
+            If IsError(v(i)) Then
+                v(i) = Empty
+            ElseIf IsArray(v(i)) Then
+                RAS_ErrorToNullInPlace v(i)
+            End If
+        Next i
+    End If
+End Sub
 '@@ proc RAS_ShowForm
 ' Shows a user form by name: "Run in Excel" of a form (Application.Run cannot reach a form's
 ' code module, and VBA.UserForms is visible only to code in the project).
