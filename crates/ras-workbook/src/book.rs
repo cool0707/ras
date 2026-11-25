@@ -86,6 +86,32 @@ pub fn local_format(code: &str) -> &str {
     }
 }
 
+/// The number format of a style, as the file has it ("General" without one).
+fn style_format_code(style: &umya_spreadsheet::Style) -> String {
+    style
+        .number_format()
+        .map(|f| f.format_code().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "General".into())
+}
+
+/// The number format of a style as a Japanese Excel shows it: a built-in format as Japanese
+/// Excel has it (`local_builtin`), the others as `local_format` spells them.
+fn style_shown_code(style: &umya_spreadsheet::Style) -> String {
+    if let Some(code) = style
+        .number_format()
+        .map(|f| f.number_format_id())
+        .and_then(local_builtin)
+    {
+        return code.to_string();
+    }
+    let code = style_format_code(style);
+    if code == "General" {
+        return code;
+    }
+    local_format(&code).to_string()
+}
+
 /// The built-in number formats (a `numFmtId` without a `numFmt` of the file) whose code a
 /// Japanese Excel 2021 shows differently from the United States' (read from Excel itself).
 /// Those with Japanese eras (27-29, 36, 50, 51, 54, 57, 58) are as Japanese Excel has them.
@@ -1384,37 +1410,22 @@ impl Book {
         let Ok(ws) = self.file.sheet(si) else {
             return "General".into();
         };
-        let code = |style: &umya_spreadsheet::Style| {
-            style
-                .number_format()
-                .map(|f| f.format_code().to_string())
-                .filter(|s| !s.is_empty())
-        };
         match ws.cell(coord(at)) {
-            Some(c) => code(c.style()),
-            None => code(&self.style_at(si, at)),
+            Some(c) => style_format_code(c.style()),
+            None => style_format_code(&self.style_at(si, at)),
         }
-        .unwrap_or_else(|| "General".into())
     }
 
     /// The number format a Japanese Excel shows the cell by: a built-in format as Japanese Excel
     /// has it (`local_builtin`), the others as `local_format` spells them.
     fn shown_format_code(&self, si: usize, at: CellRef) -> String {
-        let id = self.file.sheet(si).ok().and_then(|ws| {
-            let style = match ws.cell(coord(at)) {
-                Some(c) => c.style().clone(),
-                None => self.style_at(si, at),
-            };
-            style.number_format().map(|f| f.number_format_id())
-        });
-        if let Some(code) = id.and_then(local_builtin) {
-            return code.to_string();
+        let Ok(ws) = self.file.sheet(si) else {
+            return "General".into();
+        };
+        match ws.cell(coord(at)) {
+            Some(c) => style_shown_code(c.style()),
+            None => style_shown_code(&self.style_at(si, at)),
         }
-        let code = self.number_format_code(si, at);
-        if code == "General" {
-            return code;
-        }
-        local_format(&code).to_string()
     }
 
     fn format(&mut self, code: &str) -> &NumberFormat {
