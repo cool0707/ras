@@ -209,6 +209,7 @@ impl Controls {
             flip: (false, false),
             form,
             adjust: None,
+            paint: None,
         })
     }
 }

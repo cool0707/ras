@@ -260,6 +260,9 @@ pub struct Obj {
     pub form: Option<serde_json::Value>,
     /// The adjust handles of a preset shape (`adjust_of`), for the grid's 調整ハンドル.
     pub adjust: Option<serde_json::Value>,
+    /// The fill and line of a shape or a picture as they are drawn (`paint_of`), for the grid's
+    /// 図形の書式設定: `fill`, `line` ("#RRGGBB", null for none), `lineWidth` (points).
+    pub paint: Option<serde_json::Value>,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -497,6 +500,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 flip: (false, false),
                 form: None,
                 adjust: None,
+                paint: None,
             });
             return;
         }
@@ -519,6 +523,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 flip: (false, false),
                 form: None,
                 adjust: None,
+                paint: None,
             });
         }
         return;
@@ -561,6 +566,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
             adjust: matches!(obj.name.as_str(), "sp" | "cxnSp")
                 .then(|| adjust_of(obj))
                 .flatten(),
+            paint: matches!(obj.name.as_str(), "sp" | "cxnSp" | "pic").then(|| paint_of(ctx, obj)),
         });
     }
 }
@@ -1035,6 +1041,38 @@ fn dash(ln: Option<&Node>, width: f64) -> String {
     };
     let v: Vec<String> = pattern.iter().map(|x| n(x * k)).collect();
     format!(" stroke-dasharray=\"{}\"", v.join(" "))
+}
+
+/// The fill and line of a shape, a connector or a picture as `shape_html` draws them: its own,
+/// else its style's (a picture has none but its own).
+fn paint_of(ctx: &Ctx, sp: &Node) -> serde_json::Value {
+    let props = sp.child("spPr");
+    let ln = props.and_then(|p| p.child("ln"));
+    let color = |c: Option<(String, f64)>| match c {
+        Some((c, _)) if c != "none" => serde_json::json!(c.to_ascii_uppercase()),
+        _ => serde_json::Value::Null,
+    };
+    let fill = if sp.name == "cxnSp" {
+        None
+    } else {
+        fill_color(props, &ctx.theme)
+            .or_else(|| style_ref(sp, "fillRef", &ctx.theme).map(|(c, _)| (c, 1.0)))
+    };
+    let line = fill_color(ln, &ctx.theme)
+        .or_else(|| style_ref(sp, "lnRef", &ctx.theme).map(|(c, _)| (c, 1.0)));
+    let width = ln
+        .and_then(|l| l.attr("w"))
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| v / EMU_PT)
+        .unwrap_or_else(
+            || match style_ref(sp, "lnRef", &ctx.theme).map(|(_, i)| i) {
+                Some(1) => 0.5,
+                Some(3) => 1.5,
+                Some(_) => 1.0,
+                None => 0.75,
+            },
+        );
+    serde_json::json!({ "fill": color(fill), "line": color(line), "lineWidth": (width * 100.0).round() / 100.0 })
 }
 
 fn shape_html(ctx: &Ctx, sp: &Node, x: &Xfrm, w: f64, h: f64) -> String {

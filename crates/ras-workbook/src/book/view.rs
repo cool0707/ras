@@ -877,6 +877,9 @@ impl Book {
                 if let Some(a) = &o.adjust {
                     j["adjust"] = a.clone();
                 }
+                if let Some(p) = &o.paint {
+                    j["paint"] = p.clone();
+                }
                 j
             })
             .collect();
