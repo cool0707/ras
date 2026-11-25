@@ -4533,24 +4533,24 @@
 
     // ---- セルの書式設定 (Ctrl+1): the formats of the cells selected in the pane at the right, as
     // Excel's dialog has them (表示形式, 配置, フォント, 罫線, 塗りつぶし, 保護) but with the
-    // controls of 図形の書式設定; each is set as it is changed. Shown for the active cell (the
-    // borders: for the range), as Excel's dialog opens.
+    // controls of 図形の書式設定 (フォント and 塗りつぶし on one page); each is set as it is
+    // changed. Shown for the active cell (the borders: for the range), as Excel's dialog opens.
+    // プロパティ has 保護 and what the cells selected are in: the rules of 条件付き書式 and the
+    // names defined.
 
     const CELL_PAGES = [
         ["number", "表示形式"],
         ["align", "配置"],
-        ["font", "フォント"],
+        ["font", "フォントと塗りつぶし"],
         ["border", "罫線"],
-        ["fill", "塗りつぶし"],
-        ["protect", "保護"],
+        ["props", "プロパティ"],
     ];
     const CELL_ICONS = {
         number: '<path d="M6.2 2.5 4.6 13.5M11.4 2.5 9.8 13.5M2.5 5.8h11.5M2 10.2h11.5"/>',
         align: '<path d="M2 3h12M4 6.5h8M2 10h12M4 13.5h8"/>',
         font: PANE_ICONS.text,
         border: '<path d="M2.5 2.5h11v11h-11z"/><path d="M8 2.5v11M2.5 8h11" stroke-dasharray="1 1.6"/>',
-        fill: PANE_ICONS.fill,
-        protect: '<rect x="3.5" y="7.5" width="9" height="6.5" rx="1"/><path d="M5.5 7.5V5.3a2.5 2.5 0 0 1 5 0v2.2M8 10.2v1.3"/>',
+        props: '<rect x="2.5" y="1.5" width="11" height="13" rx="1"/><path d="M5 5h1M5 8h1M5 11h1M8 5h3M8 8h3M8 11h3"/>',
     };
     const H_ALIGNS = [
         ["general", "標準"],
@@ -4781,7 +4781,9 @@
             selectRow(rtl, "文字の方向", [["context", "コンテキスト"], ["ltr", "左から右"], ["rtl", "右から左"]], ["context", "ltr", "rtl"][fm.ro || 0] || "context", "readingOrder", (v) => set({ readingOrder: v }), "pwide");
         }
 
-        // フォント: フォント名, スタイル, サイズ, 下線, 色, 標準フォント; 文字飾り; プレビュー
+        // フォントと塗りつぶし: フォント (フォント名, スタイル, サイズ, 下線, 色, 標準フォント),
+        // 文字飾り, 塗りつぶし, and プレビュー of both (after 塗りつぶし).
+        const preview = el("div", "ppreview");
         {
             const book = bookFont(view.sheet);
             const name = fm.font || book.name;
@@ -4830,8 +4832,7 @@
             checkRow(deco, "取り消し線", fm.st, "strike", (on) => set({ strike: on }));
             checkRow(deco, "上付き", fm.va === "superscript", "superscript", (on) => set({ superscript: on }));
             checkRow(deco, "下付き", fm.va === "subscript", "subscript", (on) => set({ subscript: on }));
-            const pre = section("font", "プレビュー").appendChild(el("div", "ppreview"));
-            const text = pre.appendChild(el("span", null, name));
+            const text = preview.appendChild(el("span", null, name));
             Object.assign(text.style, {
                 fontFamily: fontFamily(name),
                 fontSize: `${Math.min(size, 26)}pt`,
@@ -4982,7 +4983,7 @@
             box.appendChild(el("div", "pnote", "選んだスタイルと色で、プリセットや周りのボタン、図のクリックで罫線を引きます（同じ罫線をもう一度クリックすると消えます）。"));
         }
 
-        // 塗りつぶし: 背景色, パターンの色, パターンの種類, サンプル
+        // 塗りつぶし: 背景色, パターンの色, パターンの種類 (shown in プレビュー)
         {
             const fill = fm.fill || null;
             const pattern = fill ? fill.pattern : "none";
@@ -4990,7 +4991,7 @@
             const bg = !fill ? null : pattern === "solid" ? fill.fg : fill.bg;
             const fg = plain ? (saved.patternColor ?? null) : fill.fg;
             const put = (p, color, background) => set({ pattern: { pattern: p, color, background } });
-            const sec = section("fill", "塗りつぶし");
+            const sec = section("font", "塗りつぶし");
             colorRow(sec, "背景色", bg, "色なし", (c) => (plain ? put(c ? "solid" : "none", c, null) : put(pattern, fg, c)), "fillColor");
             colorRow(sec, "パターンの色", fg, "自動", (c) => {
                 if (!plain) return put(pattern, c, bg);
@@ -5028,18 +5029,78 @@
                     });
                 }
             });
-            const sample = block(sec, "サンプル").appendChild(el("div", "pfillsample"));
-            sample.style.cssText = fillCss(pattern, pattern === "solid" ? bg : fg, bg);
+            preview.style.cssText = fillCss(pattern, pattern === "solid" ? bg : fg, bg);
+            section("font", "プレビュー").appendChild(preview);
         }
 
-        // 保護: ロック, 表示しない (what they do on a protected sheet)
+        // プロパティ > 保護: ロック, 表示しない (what they do on a protected sheet)
         {
-            const sec = section("protect", "保護");
+            const sec = section("props", "保護");
             checkRow(sec, "ロック", !fm.unlocked, "locked", (on) => set({ locked: on }));
             checkRow(sec, "表示しない", fm.hidden, "hidden", (on) => set({ hidden: on }));
             sec.appendChild(el("div", "pnote", "ワークシートを保護しなければ、セルをロックしたり数式を表示しないようにした効果はありません（［校閲］タブの［シートの保護］で保護します）。"));
         }
 
+        // プロパティ > 条件付き書式: the rules on the cells selected, in their order of priority
+        // (one clicked: chosen in "条件付き書式ルールの管理").
+        {
+            const sec = section("props", "条件付き書式");
+            const rules = view.sheet.condRules || [];
+            const on = rules.map((r, i) => i).filter((i) => touchesSelection(condAreas(rules[i].range)));
+            const list = sec.appendChild(el("div", "plist"));
+            for (const i of on) {
+                const r = rules[i];
+                const what = condText(r);
+                const where = String(r.range).split(/\s+/).filter(Boolean).join(",");
+                const b = list.appendChild(el("button", "pitem pcond"));
+                b.type = "button";
+                b.dataset.rule = String(i);
+                b.title = `${what}\n適用先: ${where}${r.stop ? "\n条件を満たす場合は停止" : ""}`;
+                const top = b.appendChild(el("span", "pctop"));
+                top.appendChild(condSample(r));
+                top.appendChild(el("span", "pcwhat", what));
+                b.appendChild(el("span", "pcwhere", `適用先: ${where}`));
+                b.addEventListener("click", () => {
+                    const state = condManageState();
+                    state.chosen = i;
+                    manageCond(state);
+                });
+            }
+            if (!on.length) list.appendChild(el("div", "pnone", "選択範囲に条件付き書式はありません。"));
+            const btns = sec.appendChild(el("div", "pbtns"));
+            const manage = btns.appendChild(el("button", null, "ルールの管理…"));
+            manage.type = "button";
+            manage.dataset.field = "condManage";
+            manage.addEventListener("click", () => manageCond());
+        }
+
+        // プロパティ > 名前の定義: the names that refer to the cells selected (one clicked: what it
+        // refers to selected).
+        {
+            const sec = section("props", "名前の定義");
+            const named = (data.names || []).map((n) => ({ n, areas: nameAreas(n) })).filter((x) => touchesSelection(x.areas));
+            const list = sec.appendChild(el("div", "plist"));
+            for (const { n, areas: at } of named) {
+                const scope = n.sheet || "ブック";
+                const b = list.appendChild(el("button", "pitem pdefname"));
+                b.type = "button";
+                b.dataset.name = n.name;
+                b.title = `${n.name}（範囲: ${scope}）\n参照範囲: =${n.ref}`;
+                const top = b.appendChild(el("span", "pctop"));
+                top.appendChild(el("span", "pnname", n.name));
+                top.appendChild(el("span", "pnscope", scope));
+                b.appendChild(el("span", "pcwhere", `=${n.ref}`));
+                b.addEventListener("click", () => {
+                    selectAreas(at);
+                    focusGrid();
+                });
+            }
+            if (!named.length) list.appendChild(el("div", "pnone", "選択範囲を参照する名前はありません。"));
+        }
+
+        // (The pages that were 塗りつぶし and 保護 are those that have them now.)
+        const was = { fill: "font", protect: "props" }[saved.cellPage];
+        if (was) remember({ cellPage: was });
         kit.finish(CELL_PAGES, CELL_ICONS, "cellPage", focus);
     }
 
@@ -6576,15 +6637,58 @@
         return out.length ? out : null;
     }
     const condRangeText = (areas) => areas.map((a) => (a.kind === "cells" ? areaText(a) : rangeText(a))).join(" ");
+    // Some of `list` (areas of the sheet shown, or null) is among the cells selected.
+    const touchesSelection = (list) => !!list && list.some((a) => allAreas().some((s) => a.r1 <= s.r2 && a.r2 >= s.r1 && a.c1 <= s.c2 && a.c2 >= s.c1));
+    // The areas a name refers to (`Sheet1!$A$1:$B$5,Sheet1!$D$2`; on the sheet of the name, or
+    // the one shown, when they name none), or null when it refers to something else (a
+    // formula, a constant).
+    function refAreas(n) {
+        const home = (n.sheet && sheetByName(n.sheet)) || view.sheet;
+        const parts = [];
+        let [part, quoted, depth] = ["", false, 0];
+        for (const ch of String(n.ref).replace(/^=/, "")) {
+            if (ch === "'") quoted = !quoted;
+            else if (!quoted && ch === "(") depth++;
+            else if (!quoted && ch === ")") depth--;
+            if (ch === "," && !quoted && depth === 0) {
+                parts.push(part);
+                part = "";
+            } else part += ch;
+        }
+        parts.push(part);
+        const out = [];
+        for (const p of parts) {
+            const ref = parseRef(p, home);
+            if (!ref) return null;
+            out.push(ref);
+        }
+        return out.length ? out : null;
+    }
+    // The areas of the sheet shown a name refers to, or null (another sheet, not a range).
+    function nameAreas(n) {
+        const list = refAreas(n);
+        return list && list.every((a) => a.sheet === view.sheet) ? list : null;
+    }
+    // Selects areas of the sheet shown (the last one with the active cell).
+    function selectAreas(list) {
+        if (!list || !list.length) return;
+        if (entry) commit(null);
+        const last = list[list.length - 1];
+        const rest = list.slice(0, -1).map((a) => ({ kind: a.kind, r1: a.r1, c1: a.c1, r2: a.r2, c2: a.c2 }));
+        const s = last.kind === "rows" ? { kind: "rows", nr: last.r1, nc: 0, fr: last.r2, fc: 0 } : last.kind === "cols" ? { kind: "cols", nr: 0, nc: last.c1, fr: 0, fc: last.c2 } : areaSel(last.r1, last.c1, last.r2, last.c2);
+        setSel(Object.assign(s, { areas: rest }), true);
+    }
 
+    // The rules of the sheet as "条件付き書式ルールの管理" has them, at first.
+    function condManageState() {
+        const list = (view.sheet.condRules || []).map((r) => ({ id: r.id, now: Object.assign({}, r), range: r.range, stop: !!r.stop, edited: false }));
+        return { list, scope: "selection", chosen: -1, changed: false };
+    }
     // `state`: the list as the dialog has it (kept while a rule is edited in its own dialog).
     function manageCond(state) {
         if (!editable || busy || !view) return;
         if (entry) commit(null);
-        if (!state) {
-            const list = (view.sheet.condRules || []).map((r) => ({ id: r.id, now: Object.assign({}, r), range: r.range, stop: !!r.stop, edited: false }));
-            state = { list, scope: "selection", chosen: -1, changed: false };
-        }
+        if (!state) state = condManageState();
         const form = openDialog("条件付き書式ルールの管理", "condmgr");
         const scopeLine = form.appendChild(el("label"));
         scopeLine.appendChild(el("span", "lbl", "書式ルールの表示:"));
@@ -7346,6 +7450,7 @@
                 case "sheetVisible":
                 case "moveSheet":
                 case "tabColor":
+                case "name":
                     return false;
                 case "set":
                 case "clear":
@@ -7474,6 +7579,8 @@
         filterClear: '<path d="M2 2.5h9L7.5 7v5l-2-1V7z"/><path d="m10 9.5 4 4M14 9.5l-4 4"/>',
         validation: '<rect x="1.5" y="2.5" width="9" height="11"/><path d="M1.5 6h9M1.5 9.5h9M5 2.5v11"/><path d="m9.5 11 2 2 3.5-5" stroke="#107c41" stroke-width="1.6"/>',
         formulas: '<text x="1" y="12" font-size="10" font-style="italic" stroke="none" fill="currentColor" font-family="serif">fx</text><path d="M11 5h4M11 9h4M11 13h4"/>',
+        nameManager: '<rect x="1.5" y="2.5" width="13" height="11"/><path d="M1.5 5.5h13M5.5 5.5v8M1.5 8.2h13M1.5 10.9h13"/><path d="M7.5 3.8h5" stroke-width="1.2"/>',
+        defineName: '<path d="M1.5 4.5h8l3.5 3.5-3.5 3.5h-8z"/><path d="M3.8 8h4"/>',
         zoom: '<circle cx="6.5" cy="6.5" r="4.5"/><path d="m10 10 4.5 4.5M4.5 6.5h4M6.5 4.5v4"/>',
         zoom100: '<rect x="1.5" y="3.5" width="13" height="9"/><text x="3" y="10.5" font-size="5.5" stroke="none" fill="currentColor" font-family="sans-serif">100</text>',
         zoomSel: '<rect x="1.5" y="1.5" width="13" height="13" stroke-dasharray="2 1.5"/><rect x="4.5" y="4.5" width="7" height="7"/>',
@@ -8220,6 +8327,10 @@
         const f = button("formulas", { icon: "formulas", label: "数式の表示", large: true, title: "セルに値ではなく数式を表示します（Ctrl+` / Ctrl+Shift+@）", act: () => showFormulas(!formulas) });
         f.id = "formulas";
         f.setAttribute("aria-pressed", "false");
+        group(formulasTab, "定義された名前");
+        button("nameManager", { icon: "nameManager", label: "名前の\n管理", large: true, cls: "two", title: "名前の管理（Ctrl+F3）: ブックの名前の一覧を表示し、新しい名前の作成・編集・削除をします", edits: true, act: () => manageNames() });
+        stack();
+        button("defineName", { icon: "defineName", label: "名前の定義", showLabel: true, title: "名前の定義: 選択したセル（または値や数式）に名前を付けます", edits: true, act: defineName });
 
         // ---- データ
         const dataTab = tab("data", "データ");
@@ -9446,6 +9557,262 @@
         input.focus();
     }
 
+    // ---- 数式 > 定義された名前: "名前の管理" (Ctrl+F3: the names of the workbook, new ones,
+    // edited and deleted; what the one chosen refers to changed below the list; OK writes the
+    // changes, an edit `name` each) and "名前の定義" (a new name, written at once).
+
+    // A cell's address (A1, XFD1048576), or R1C1 (R, C, R1C, RC1, ...): no name.
+    function cellLike(text) {
+        const m = /^([A-Za-z]{1,3})([1-9]\d{0,6})$/.exec(text);
+        return (!!m && colNumber(m[1].toUpperCase()) < MAXC && +m[2] <= MAXR) || /^[Rr]\d*[Cc]?\d*$/.test(text) || /^[Cc]\d*$/.test(text);
+    }
+    // Why a name cannot be one (as Excel takes them), or "".
+    function nameError(name) {
+        if (!name) return "名前を入力してください。";
+        if (name.length > 255 || !/^[\p{L}_\\][\p{L}\p{N}_.\\]*$/u.test(name) || cellLike(name)) {
+            return "入力した名前は正しくありません（先頭は文字か _ か \\、ほかは文字・数字・_・.・\\ で、セルの番地と同じ名前は使えません）。";
+        }
+        return "";
+    }
+    // A sheet's name in a reference: quoted when it must be ('My Sheet'!A1).
+    const sheetPrefix = (name) => `${/^[A-Za-z_　-鿿＀-￯][\w.　-鿿＀-￯]*$/.test(name) && !cellLike(name) ? name : `'${name.replace(/'/g, "''")}'`}!`;
+    // An area as an absolute reference ($A$1:$B$5, $3:$5, $B:$D).
+    function absArea(a) {
+        if (a.kind === "rows") return `$${a.r1 + 1}:$${a.r2 + 1}`;
+        if (a.kind === "cols") return `$${colName(a.c1)}:$${colName(a.c2)}`;
+        if (a.kind === "all") return `$1:$${MAXR}`;
+        const one = `$${colName(a.c1)}$${a.r1 + 1}`;
+        return a.r1 === a.r2 && a.c1 === a.c2 ? one : `${one}:$${colName(a.c2)}$${a.r2 + 1}`;
+    }
+    // The cells selected as 参照範囲 has them (=Sheet1!$A$1:$B$5,Sheet1!$D$2).
+    const selectionRef = () => `=${allAreas().map((a) => sheetPrefix(view.sheet.name) + absArea(a)).join(",")}`;
+    // What a name comes to, as 名前の管理 lists it (値): the text of its cell, the texts of its
+    // cells as an array ({"1","2";"3","4"}), or its constant; "" when it is worked out.
+    function nameValue(n) {
+        const areas = refAreas(n);
+        const ref = String(n.ref).replace(/^=/, "");
+        if (!areas) return /^-?\d+(\.\d+)?(E[+-]?\d+)?$/i.test(ref) ? ref : /^"([^"]|"")*"$/.test(ref) ? ref.slice(1, -1).replace(/""/g, '"') : /^(TRUE|FALSE)$/i.test(ref) ? ref.toUpperCase() : "";
+        if (areas.length !== 1) return "";
+        const a = areas[0];
+        const rows = a.r2 - a.r1 + 1;
+        const cols = a.c2 - a.c1 + 1;
+        if (rows * cols > 200) return "";
+        const texts = new Map();
+        for (const c of a.sheet.cells || []) if (c.r >= a.r1 && c.r <= a.r2 && c.c >= a.c1 && c.c <= a.c2) texts.set(c.r * KEY + c.c, c.t || "");
+        const at = (r, c) => texts.get(r * KEY + c) || "";
+        if (rows === 1 && cols === 1) return at(a.r1, a.c1);
+        const out = [];
+        for (let r = a.r1; r <= a.r2; r++) {
+            const row = [];
+            for (let c = a.c1; c <= a.c2; c++) row.push(`"${at(r, c)}"`);
+            out.push(row.join(","));
+        }
+        return `{${out.join(";")}}`;
+    }
+    const scopeLabel = (sheet) => sheet || "ブック";
+    const sameName = (a, b) => a.toLowerCase() === b.toLowerCase();
+
+    // "新しい名前" / "名前の編集": `o.item` ({ name, sheet, ref, comment }) edited, or a new one;
+    // `o.others`: the names it must not be the same as; `o.done(item)`, `o.back` (キャンセル).
+    function askName(o) {
+        const it = o.item || {};
+        const form = openDialog(o.item ? "名前の編集" : "新しい名前", "namedlg", o.back);
+        const name = field(form, "名前:");
+        name.dataset.field = "name";
+        // (New: the active cell's text, when it is a name, as Excel suggests it.)
+        const active = !o.item && sel ? String((cellOf(sel.ar, sel.ac) || {}).t || "").trim().replace(/\s+/g, "_") : "";
+        name.value = o.item ? it.name : active && !nameError(active) ? active : "";
+        const scopeLine = form.appendChild(el("label"));
+        scopeLine.appendChild(el("span", "lbl", "範囲:"));
+        const scope = scopeLine.appendChild(el("select"));
+        scope.dataset.field = "scope";
+        scope.appendChild(el("option", null, "ブック")).value = "";
+        for (const sh of data.sheets) scope.appendChild(el("option", null, sh.name)).value = sh.name;
+        scope.value = it.sheet || "";
+        // (As Excel's: a name keeps its scope.)
+        scope.disabled = !!o.item;
+        const comment = field(form, "コメント:", "textarea");
+        comment.dataset.field = "comment";
+        comment.rows = 3;
+        comment.value = it.comment || "";
+        const ref = field(form, "参照範囲:");
+        ref.dataset.field = "ref";
+        ref.value = o.item ? `=${String(it.ref).replace(/^=/, "")}` : selectionRef();
+        for (const box of [name, ref]) box.addEventListener("input", () => box.setCustomValidity(""));
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const n = name.value.trim();
+            const sheet = scope.value || undefined;
+            const wrong = nameError(n) || ((o.others || []).some((x) => sameName(x.name, n) && (x.sheet || "") === (sheet || "")) ? "入力された名前は既に存在します。一意の名前を入力してください。" : "");
+            if (wrong) {
+                name.setCustomValidity(wrong);
+                name.reportValidity();
+                return;
+            }
+            const r = ref.value.trim().replace(/^=/, "").trim();
+            if (!r) {
+                ref.setCustomValidity("参照範囲を入力してください");
+                ref.reportValidity();
+                return;
+            }
+            o.done({ name: n, sheet, ref: r, comment: comment.value });
+        });
+        name.focus();
+        name.select();
+    }
+    // 名前の定義: a new name of the cells selected, written at once.
+    function defineName() {
+        if (!editable || busy || !view || !sel) return;
+        if (entry) commit(null);
+        askName({
+            others: data.names || [],
+            done: (item) => {
+                closeDialog();
+                postEdit([{ op: "name", sheet: view.sheet.name, name: item.name, scope: item.sheet || null, ref: `=${item.ref}`, comment: item.comment }]);
+            },
+        });
+    }
+    // `state`: the names as the dialog has them (kept while one is edited in its own dialog).
+    function manageNames(state) {
+        if (!editable || busy || !view) return;
+        if (entry) commit(null);
+        if (!state) {
+            const list = (data.names || []).map((n) => ({ was: n, name: n.name, sheet: n.sheet, ref: n.ref, comment: n.comment || "" }));
+            state = { list, deleted: [], chosen: list.length ? 0 : -1, changed: false };
+        }
+        const reopen = () => manageNames(state);
+        const form = openDialog("名前の管理", "namemgr");
+        const tools = form.appendChild(el("div", "condtools"));
+        const tool = (label, key, act) => {
+            const b = tools.appendChild(el("button", null, label));
+            b.type = "button";
+            b.dataset.act = key;
+            b.addEventListener("click", act);
+            return b;
+        };
+        const others = (except) => state.list.filter((x) => x !== except);
+        tool("新規作成…", "new", () =>
+            askName({
+                others: others(null),
+                back: reopen,
+                done: (item) => {
+                    state.list.push(Object.assign({ was: null }, item));
+                    state.chosen = state.list.length - 1;
+                    state.changed = true;
+                    reopen();
+                },
+            }),
+        );
+        const edit = tool("編集…", "edit", () => {
+            const it = state.list[state.chosen];
+            if (!it) return;
+            askName({
+                item: it,
+                others: others(it),
+                back: reopen,
+                done: (item) => {
+                    Object.assign(it, { name: item.name, ref: item.ref, comment: item.comment });
+                    state.changed = true;
+                    reopen();
+                },
+            });
+        });
+        const del = tool("削除", "delete", () => {
+            const it = state.list[state.chosen];
+            if (!it) return;
+            if (it.was) state.deleted.push(it.was);
+            state.list.splice(state.chosen, 1);
+            state.chosen = Math.min(state.chosen, state.list.length - 1);
+            state.changed = true;
+            draw();
+        });
+        const table = form.appendChild(el("div", "namelist"));
+        const refLine = form.appendChild(el("label", "nameref"));
+        refLine.appendChild(el("span", "lbl", "参照範囲:"));
+        const refBox = refLine.appendChild(el("input"));
+        refBox.type = "text";
+        refBox.spellcheck = false;
+        refBox.dataset.field = "ref";
+        refBox.addEventListener("input", () => refBox.setCustomValidity(""));
+        refBox.addEventListener("change", () => {
+            const it = state.list[state.chosen];
+            const r = refBox.value.trim().replace(/^=/, "").trim();
+            if (!it) return;
+            if (!r) {
+                refBox.setCustomValidity("参照範囲を入力してください");
+                refBox.reportValidity();
+                return;
+            }
+            if (r === it.ref) return;
+            it.ref = r;
+            state.changed = true;
+            draw();
+        });
+        function draw() {
+            table.textContent = "";
+            const head = table.appendChild(el("div", "namehead"));
+            for (const t of ["名前", "値", "参照範囲", "範囲", "コメント"]) head.appendChild(el("span", null, t));
+            // (In the order of their names, as Excel lists them.)
+            const order = state.list.map((x, i) => i).sort((a, b) => state.list[a].name.localeCompare(state.list[b].name, "ja") || scopeLabel(state.list[a].sheet).localeCompare(scopeLabel(state.list[b].sheet), "ja"));
+            for (const i of order) {
+                const it = state.list[i];
+                const row = table.appendChild(el("div", `namerow${i === state.chosen ? " on" : ""}`));
+                row.dataset.name = it.name;
+                const cells = [it.name, nameValue(it), `=${it.ref}`, scopeLabel(it.sheet), it.comment || ""];
+                cells.forEach((t, k) => {
+                    const c = row.appendChild(el("span", null, t));
+                    c.title = t;
+                    if (k === 0) c.className = "nm";
+                });
+                row.addEventListener("mousedown", () => {
+                    state.chosen = i;
+                    for (const x of table.querySelectorAll(".namerow.on")) x.classList.remove("on");
+                    row.classList.add("on");
+                    showChosen();
+                });
+                row.addEventListener("dblclick", () => edit.click());
+            }
+            if (!state.list.length) table.appendChild(el("div", "condnone", "名前は定義されていません。［新規作成］で、セルや値に名前を付けられます。"));
+            showChosen();
+        }
+        function showChosen() {
+            const it = state.list[state.chosen];
+            refBox.value = it ? `=${it.ref}` : "";
+            refBox.disabled = !it;
+            edit.disabled = del.disabled = !it;
+        }
+        draw();
+        dialogButtons(form);
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            // (The reference being typed, not yet taken.)
+            if (document.activeElement === refBox) refBox.dispatchEvent(new Event("change"));
+            if (!refBox.checkValidity()) return;
+            closeDialog();
+            if (!state.changed) return;
+            const sheet = view.sheet.name;
+            const ops = state.deleted.map((n) => ({ op: "name", sheet, delete: true, name: n.name, scope: n.sheet || null }));
+            // (Those changed before those added, whose names they may free.)
+            const added = [];
+            for (const it of state.list) {
+                const w = it.was;
+                if (w && w.name === it.name && w.ref === it.ref && (w.comment || "") === it.comment) continue;
+                const op = { op: "name", sheet, name: it.name, scope: it.sheet || null, ref: `=${it.ref}`, comment: it.comment };
+                if (w) {
+                    op.old = { name: w.name, scope: w.sheet || null };
+                    ops.push(op);
+                } else added.push(op);
+            }
+            ops.push(...added);
+            if (ops.length) postEdit(ops);
+        });
+        if (state.chosen >= 0) {
+            const on = table.querySelector(".namerow.on");
+            if (on) on.scrollIntoView({ block: "nearest" });
+        }
+    }
+
     // ---- Ctrl+; and Ctrl+:: today's date and the time, as Japanese Excel types them
 
     function nowText(time) {
@@ -10648,6 +11015,12 @@
         if (view && ctrl && !e.altKey && !e.shiftKey && (key === "f" || key === "F" || key === "h" || key === "H")) {
             e.preventDefault();
             openFind((key === "h" || key === "H") && editable);
+            return;
+        }
+        // Ctrl+F3: 名前の管理.
+        if (view && editable && ctrl && key === "F3" && !e.altKey && !e.shiftKey) {
+            e.preventDefault();
+            manageNames();
             return;
         }
         // (F5 only where cells are edited: elsewhere it reloads the page, or goes on debugging.)

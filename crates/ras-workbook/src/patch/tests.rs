@@ -4038,3 +4038,68 @@ fn diagonal_borders_are_added_and_none_clears_them() {
         );
     }
 }
+
+#[test]
+fn names_defined_changed_and_deleted() {
+    // A new name of a sheet, with a comment: the cells that use it work it out.
+    let out =
+        edit(r#"{"op":"name","name":"Rate","scope":"Summary","ref":"=0.1","comment":"税率 <%>"}"#);
+    assert_eq!(changed(BOOK, &out), ["xl/workbook.xml"]);
+    assert!(part(&out, "xl/workbook.xml").contains(
+        r#"<definedName name="Total">Data!$D$6</definedName><definedName name="Rate" comment="税率 &lt;%&gt;" localSheetId="1">0.1</definedName></definedNames>"#
+    ));
+    let used = apply(
+        &out,
+        &ops(r#"{"op":"set","sheet":"Summary","range":"B1","text":"=Rate*10"}"#),
+    )
+    .unwrap();
+    assert_eq!(cell(&used, "Summary", "B1", Read::Value), "1");
+    assert_eq!(
+        view(&out)["names"],
+        json!([
+            { "name": "Items", "ref": "Data!$A$2:$A$5" },
+            { "name": "Total", "ref": "Data!$D$6" },
+            { "name": "Rate", "ref": "0.1", "sheet": "Summary", "comment": "税率 <%>" },
+        ])
+    );
+    // Renamed and made to refer elsewhere, its comment taken off; then deleted.
+    let renamed = apply(&out, &ops(r#"{"op":"name","name":"Tax","ref":"=Data!$D$5","comment":"","old":{"name":"rate","scope":"Summary"}}"#)).unwrap();
+    assert!(
+        part(&renamed, "xl/workbook.xml")
+            .contains(r#"<definedName name="Tax" localSheetId="1">Data!$D$5</definedName>"#)
+    );
+    // The formulas that use it follow (Summary's own name: there, and as Summary!Rate).
+    let uses = apply(&out, &ops(r#"[{"op":"set","sheet":"Summary","range":"B1","text":"=Rate*10"},{"op":"set","sheet":"Data","range":"F1","text":"=Summary!Rate*2"}]"#)).unwrap();
+    let both = apply(
+        &uses,
+        &ops(r#"{"op":"name","name":"Tax","ref":"=0.2","old":{"name":"Rate","scope":"Summary"}}"#),
+    )
+    .unwrap();
+    assert_eq!(cell(&both, "Summary", "B1", Read::Formula), "=Tax*10");
+    assert_eq!(cell(&both, "Summary", "B1", Read::Value), "2");
+    assert_eq!(cell(&both, "Data", "F1", Read::Formula), "=Summary!Tax*2");
+    assert_eq!(cell(&both, "Data", "F1", Read::Value), "0.4");
+    let gone = apply(
+        &renamed,
+        &ops(r#"{"op":"name","delete":true,"name":"Tax","scope":"Summary"}"#),
+    )
+    .unwrap();
+    assert_eq!(
+        part(&gone, "xl/workbook.xml"),
+        part(BOOK, "xl/workbook.xml")
+    );
+    // What Excel refuses.
+    assert!(
+        refused(r#"{"op":"name","name":"items","ref":"=Data!$A$1"}"#).contains("既に存在します")
+    );
+    assert!(refused(r#"{"op":"name","name":"A1","ref":"=Data!$A$1"}"#).contains("使えません"));
+    assert!(refused(r#"{"op":"name","name":"Ok","ref":"=SUM("}"#).contains("参照範囲"));
+    assert!(refused(r#"{"op":"name","name":"Ok","scope":"Nope","ref":"=1"}"#).contains("Nope"));
+    assert!(refused(r#"{"op":"name","delete":true,"name":"Nope"}"#).contains("Nope"));
+    // The same name in a sheet of its own is another name.
+    let own = edit(r#"{"op":"name","name":"Items","scope":"Data","ref":"=Data!$B$2"}"#);
+    assert!(
+        part(&own, "xl/workbook.xml")
+            .contains(r#"<definedName name="Items" localSheetId="0">Data!$B$2</definedName>"#)
+    );
+}

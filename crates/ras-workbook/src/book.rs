@@ -1224,6 +1224,12 @@ impl Book {
 
     /// Rewrites every formula and name (a sheet was renamed or deleted).
     fn rewrite_formulas(&mut self, f: impl Fn(Expr) -> Expr) {
+        self.rewrite_formulas_in(|_, e| f(e));
+    }
+
+    /// Rewrites every formula and name, `f` given the sheet the formula is on (a name: the
+    /// sheet it belongs to).
+    fn rewrite_formulas_in(&mut self, f: impl Fn(Option<usize>, Expr) -> Expr) {
         for si in 0..self.model.sheets.len() {
             let Some(sh) = self.model.sheet_mut(si) else {
                 continue;
@@ -1234,7 +1240,7 @@ impl Book {
                 .filter_map(|(at, c)| {
                     let old = c.formula.as_ref()?;
                     let e = old.expr()?;
-                    let mut new = gm::Formula::from_expr(f(e));
+                    let mut new = gm::Formula::from_expr(f(Some(si), e));
                     new.array = old.array;
                     new.dynamic = old.dynamic;
                     (new.text != old.text).then_some((at, new))
@@ -1248,7 +1254,7 @@ impl Book {
         }
         for n in &mut self.model.names {
             if let Ok(e) = gridcraft_formula::parse(&n.formula) {
-                n.formula = gridcraft_formula::print(&f(e));
+                n.formula = gridcraft_formula::print(&f(n.scope, e));
             }
         }
         self.names = Names::default();
@@ -1256,6 +1262,45 @@ impl Book {
     }
 
     // ---- names
+
+    /// The formulas (and names) that use the name `old` of the sheet `scope` (None: of the
+    /// workbook) made to use `new`, as Excel does when a name is renamed: `old` where it means
+    /// that name (on a sheet without a name of its own of that name, or on the sheet `scope`)
+    /// and `Sheet!old` naming the sheet of the name.
+    pub fn rename_name_uses(&mut self, old: &str, new: &str, scope: Option<usize>) {
+        let same = |a: &str, b: &str| gridcraft_formula::same_name(a, b);
+        let own: HashSet<usize> = self
+            .model
+            .names
+            .iter()
+            .filter(|n| n.scope.is_some() && same(&n.name, old))
+            .filter_map(|n| n.scope)
+            .collect();
+        let host = scope.and_then(|s| self.sheet_name(s)).map(str::to_string);
+        for n in &mut self.model.names {
+            if n.scope == scope && same(&n.name, old) {
+                n.name = new.to_string();
+            }
+        }
+        self.rewrite_formulas_in(|at, e| {
+            let bare = match scope {
+                Some(s) => at == Some(s),
+                None => at.is_none_or(|a| !own.contains(&a)),
+            };
+            e.map(&mut |x| match x {
+                Expr::Name(n) if bare && same(&n, old) => Expr::Name(new.to_string()),
+                Expr::Name(n) => match (n.rsplit_once('!'), &host) {
+                    (Some((sheet, name)), Some(h))
+                        if sheet.trim_matches('\'').eq_ignore_ascii_case(h) && same(name, old) =>
+                    {
+                        Expr::Name(format!("{sheet}!{new}"))
+                    }
+                    _ => Expr::Name(n),
+                },
+                other => other,
+            })
+        });
+    }
 
     /// The workbook's names: (name, sheet of a sheet's own name, formula without `=`).
     pub fn names(&self) -> Vec<(String, Option<usize>, String)> {
