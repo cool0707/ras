@@ -2706,9 +2706,17 @@ impl<'a> Emitter<'a> {
             match item {
                 Item::Proc(p) => {
                     if self.event_of(&p.name).is_none() {
-                        let name = Self::user_ident(&p.name);
+                        let form = matches!(self.target, Target::Form(_));
+                        // What RAS generated for `constructor` and `this.close(value)`
+                        // (spec §14.11.9).
+                        let name = match p.name.to_lowercase().as_str() {
+                            "ras_construct" if form => "constructor".to_string(),
+                            "ras_close" if form => "this.close".to_string(),
+                            _ => Self::user_ident(&p.name),
+                        };
                         self.taken.insert(name.to_lowercase());
-                        let exported = !is_private(p.vis.as_deref());
+                        let exported =
+                            !is_private(p.vis.as_deref()) && !(form && name == "constructor");
                         self.procs.insert(
                             p.name.to_lowercase(),
                             ProcInfo {
@@ -2747,6 +2755,22 @@ impl<'a> Emitter<'a> {
         for item in items {
             if let Item::Proc(p) = item {
                 if self.glue.contains(&p.name.to_lowercase()) {
+                    continue;
+                }
+            }
+            // The variables of `showModal()` (spec §14.11.9).
+            if let Item::Stmt(Stmt {
+                kind: StmtKind::Dim { vars, .. },
+                ..
+            }) = item
+            {
+                if matches!(self.target, Target::Form(_))
+                    && !vars.is_empty()
+                    && vars.iter().all(|v| {
+                        v.name.eq_ignore_ascii_case("RAS_Result")
+                            || v.name.eq_ignore_ascii_case("RAS_Modal")
+                    })
+                {
                     continue;
                 }
             }
@@ -2971,6 +2995,13 @@ impl<'a> Emitter<'a> {
             |e: &Expr| matches!(e, Expr::Ident(n, _) if n.to_lowercase().starts_with("ras_busy"));
         for item in items {
             let Item::Proc(p) = item else { continue };
+            if matches!(self.target, Target::Form(_))
+                && (p.name.eq_ignore_ascii_case("RAS_ShowModal")
+                    || p.name.eq_ignore_ascii_case("RAS_Close"))
+            {
+                self.glue.insert(p.name.to_lowercase());
+                continue;
+            }
             if p.name.eq_ignore_ascii_case("RAS_ModInit") {
                 let mut inits = Vec::new();
                 let all = p.body.iter().all(|st| match &st.kind {
@@ -3006,6 +3037,12 @@ impl<'a> Emitter<'a> {
                 StmtKind::Exit(w) => w == "sub",
                 StmtKind::Assign { target, .. } => is_flag(target),
                 StmtKind::Nothing => true,
+                // The close button of a form shown by `showModal()` (spec §14.11.9).
+                StmtKind::If { arms, .. }
+                    if arms.len() == 1 && format!("{:?}", arms[0].0).contains("\"RAS_Modal\"") =>
+                {
+                    true
+                }
                 StmtKind::Call(e) => {
                     if let Expr::Call(c, _) | Expr::Member(Some(c), _) = e {
                         if matches!(&**c, Expr::Ident(n, _) if n.eq_ignore_ascii_case("RAS_EventError")) {

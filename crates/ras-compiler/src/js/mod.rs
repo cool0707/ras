@@ -894,6 +894,31 @@ impl<'p> Gen<'p> {
         }
         self.indent -= 1;
         self.w("}");
+        // Several instances (`new frmInput()`, spec §14.11.9): the run time swaps their state.
+        let state: Vec<String> = md
+            .vars
+            .iter()
+            .map(|&v| &prog.vars[v])
+            .filter(|d| !d.declared && d.const_value.is_none())
+            .map(|d| js_ident(&d.name))
+            .collect();
+        self.w(format!(
+            "function $save() {{ return {{ {} }}; }}",
+            state.join(", ")
+        ));
+        self.w("function $restore($s, $form) {");
+        self.indent += 1;
+        self.w("$me = $form;");
+        if !state.is_empty() {
+            self.w(format!("if ($s) ({{ {} }} = $s);", state.join(", ")));
+        }
+        self.indent -= 1;
+        self.w("}");
+        let ctor = md
+            .form
+            .as_ref()
+            .and_then(|f| f.ctor)
+            .map(|f| js_ident(&prog.fns[f].name));
         let members: Vec<String> = md
             .fns
             .iter()
@@ -917,6 +942,11 @@ impl<'p> Gen<'p> {
             js_str(&format!("{dir}{}.form.json", md.vba_name))
         ));
         self.w("    load: $load,");
+        self.w("    save: $save,");
+        self.w("    restore: $restore,");
+        if let Some(c) = ctor {
+            self.w(format!("    ctor: {c},"));
+        }
         self.w(format!("    members: {{ {} }},", members.join(", ")));
         self.w(format!("    events: [{}],", events.join(", ")));
         self.w("});");

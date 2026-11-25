@@ -209,6 +209,20 @@ pub const ENTRIES: &[Entry] = &[
     e("E0630", "フォームのコードビハインドに書けないもの", "`forms/<名前>.ras` はフォームのコードモジュールになるため、トップレベルの文・クラス・インターフェイス・構造体などは書けません（関数・変数・`import` を書きます）。共通の型やクラスは `src/` のモジュールに置いて `import` してください。"),
     e("E0631", "フォームのデザインがない", "`forms/<名前>.ras` に対応するデザイン `forms/<名前>.form.json` がありません。`ras form new <名前>` で作るか、ブックにあるフォームを `ras form pull` で取り出してください。"),
     e("E0632", "フォームの関数に付けられないデコレータ", "フォームのコードビハインドの関数には、`@macro` / `@init` / `@udf` などを付けられません（標準モジュールの関数に付けるものです）。`src/` のモジュールに書いてください。"),
+    x(
+        "E0633",
+        "フォームの `constructor` の書き方",
+        "フォームのコードビハインドの `function constructor(...)` は、`new フォーム名(...)` で作ったインスタンスで、`Initialize` の後に呼ばれます（仕様 §14.11.9）。`export` せず、型パラメーターと戻り値の型を付けずに書きます。",
+        "// forms/frmInput.ras\nfunction constructor(name: string, limit: int = 10) {\n    this.txtName.text = name;\n}\n\n// src/main.ras\nconst name = new frmInput(\"山田\").showModal();",
+    ),
+    e("E0634", "同じフォームの中の `showModal()`", "`showModal()` の戻り値の型は、コードビハインドの `this.close(値)` に渡す値から決まります。そのコードビハインドの関数を調べている途中で同じフォームの `showModal()` を使うと、型が決まりません。`src/` のモジュールの関数から呼んでください。"),
+    x(
+        "E0635",
+        "`close` を呼べる場所",
+        "`close(値)` は、フォームのコードビハインドの中で `this.close(値)` と書いて、そのフォームを閉じます。`showModal()` で表示したフォームなら、`showModal()` がその値を返します。ほかのモジュールからは呼べません（`unload(frmInput)` / `frmInput.hide()` を使います）。",
+        "@on(\"btnOK.Click\")\nfunction ok() {\n    this.close(this.txtName.text);\n}",
+    ),
+    e("E0636", "`close` に渡せない値", "`this.close(値)` の値は `showModal()` の戻り値になります。VBA のフォームのメンバーは構造体（`Type`）を受け渡せないため、構造体は渡せません。クラスのインスタンス、ユニオン型、配列などにしてください。"),
     e("E0650", "シート・`ThisWorkbook` のファイルに書けないもの", "`objects/<コード名>.ras`・`objects/ThisWorkbook.ras` は、そのシート・ブックのモジュール（ドキュメントモジュール）になります。VBA がドキュメントモジュールに置けないものと、標準モジュールに置かなければ働かないものは書けません: `export` した変数・定数・列挙型・型エイリアス、構造体・クラス・インターフェイス、`declare module`、トップレベルの文、`@udf` / `@ribbon` / `@init`、拡張メソッド。関数・変数・定数・列挙型は書けます。ほかのモジュールと共有するものは `src/` のモジュールに置いて、`import` して使ってください。"),
     e("E0651", "シート（ブック）のメンバーと同じ名前", "シート・`ThisWorkbook` のファイルの関数・変数の名前が、シート（ブック）が持つメンバー（`name`・`range`・`activate` など）や、シートの上のコントロールと同じです。`Sheet1.name` や `this.name` がどちらを指すか決まらなくなるので、別の名前にしてください。"),
     e("E0640", "ラムダの中の `try` / `using`", "変数に入れる・引数として渡すアロー関数の中では、`try` / `using` を使えません。その処理を通常の関数に切り出して、ラムダから呼んでください。"),
@@ -266,6 +280,12 @@ pub const ENTRIES: &[Entry] = &[
     e("W0510", "ブックの代役にないメンバー", "そのメンバーは、Excel を使わない実行（`ras run`、`ras test`、Excel のないデバッグ実行）のブックの代役にありません。そこで実行すると、エラー 438 になります。VBA として Excel で動かす分には問題ありません。代役で動かすには、代役にあるメンバーで書き換えるか、その部分をテスト・実行の対象から外してください。`ras check --target stand-in` を付けたときにだけ出ます。"),
     e("W0511", "Excel が必要な操作", "その操作（手書き VBA の実行、ファイルの選択ダイアログ、`Application.OnTime` など）は Excel そのものが必要で、ブックの代役ではエラー 445 になります。テストでは `mockRun` / `mockGetOpenFilename` など、`ras run` では `--open-file` / `--replace-run` などで置き換えられます。`ras check --target stand-in` を付けたときにだけ出ます。"),
     e("W0512", "代役で作れない COM オブジェクト", "その ProgID の COM オブジェクトは、COM を使わない実行では作れません（エラー 429）。作れるのは `Scripting.FileSystemObject`・`Scripting.Dictionary`・`VBScript.RegExp` です。テストでは `mockCreateObject`、`ras run` では `--replace-object` で、同じメンバーを持つ RAS のクラスに置き換えられます。`ras check --target stand-in` を付けたときにだけ出ます。"),
+    x(
+        "W0631",
+        "`showModal()` で表示するフォームの `unload(this)`",
+        "`showModal()` で表示する（`this.close()` を使う）フォームを、コードビハインドの中から `unload(this)` で閉じています。VBA はアンロードしたフォームのモジュール変数を参照するとフォームを読み込み直す（`Initialize` が起きる）ため、`showModal()` が `this.close(値)` の値を返せる保証がありません。`this.close(値)` で閉じてください（値を返さないなら `this.close()`。`show()` で表示したフォームはアンロードされます）。",
+        "@on(\"btnCancel.Click\")\nfunction cancel() {\n    this.close();          // unload(this) ではなく\n}",
+    ),
     e("W0630", "`fastMode()` の使い方", "`fastMode()` を呼ぶだけでは、関数を抜けるまで元に戻りません。`using _ = fastMode();` と書くと、そのブロックを抜けるときに元の状態に戻ります。関数全体なら `@fast` を付けます。"),
     e("W1410", "デバッグ実行で動かないもの", "`declare` した DLL の関数など、JavaScript のランタイム（デバッグ実行・`ras run`・`ras test`）では動かないものを使っています。VBA のビルドでは動きますが、デバッグ実行では呼び出した時点でエラーになります。"),
 ];

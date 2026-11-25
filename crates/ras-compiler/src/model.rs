@@ -939,9 +939,27 @@ pub struct FormModule {
     pub decl: Option<crate::config::FormDecl>,
     /// The type of `this`: the form (sheet, workbook) with its controls as fields.
     pub class: Option<ClassId>,
+    /// A form's `function constructor(...)`: the arguments of `new frmInput(...)` (spec §14.11.9).
+    pub ctor: Option<FnId>,
+    /// The type of the values the code-behind passes to `this.close(value)`, merged; what
+    /// `showModal()` returns. `None` before checking, `Void` when no value is passed.
+    pub result: Option<Type>,
+    /// The form is shown by `showModal()` or closed by `this.close()` somewhere: its module
+    /// gets the procedures that run them.
+    pub modal: bool,
 }
 
 impl Program {
+    /// The module of the form whose type is `c` (a form's code-behind, spec §14.11).
+    pub fn form_module_of(&self, c: ClassId) -> Option<ModuleId> {
+        let m = self.classes.get(c)?.module;
+        self.modules[m]
+            .form
+            .as_ref()
+            .filter(|f| f.kind == ObjectKind::Form && f.class == Some(c))
+            .map(|_| m)
+    }
+
     /// The variable or field the handler `f` names in `@on("<target>.<Event>")`, when the
     /// target is neither the object of the file (`Worksheet`, `Workbook`, `UserForm`) nor a
     /// control: the object it holds is listened to (spec §12.2.2). A variable of a standard

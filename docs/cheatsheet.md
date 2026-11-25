@@ -244,6 +244,37 @@ function opened() {
 
 `on` は、コントロール（`this.btnOK.on("Click", () => { ... })`）・シート・ブック・`application` に使えます。配列・コレクションにも使えます（`this.controls.on("Change", (c) => { ... })`、`[this.txtA, this.txtB].on(...)`。ハンドラは先頭の引数でそのメンバーを受け取ります）。フォームのコードビハインドで付けたものは、フォームが閉じると外れます。図形には、マクロにする関数の名前を渡します（`shape.on("Click", reload)`。`OnAction` に設定されます）。決まったコントロールのイベントは `@on("btnOK.Click")` で書きます。
 
+## ユーザーフォーム（`forms/<名前>.form.json` と `.ras`）
+
+```typescript
+// forms/frmInput.ras（コードビハインド。this がフォーム）
+function constructor(name: string, limit: int = 20) {   // new frmInput(...) の引数
+    this.txtName.text = name;
+}
+
+@on("btnOK.Click")
+function ok() {
+    this.close(this.txtName.text);    // showModal() がこの値を返す
+}
+
+@on("btnCancel.Click")
+function cancel() {
+    this.close();                     // 値なし（× ボタンも）: 型の既定値（""）
+}
+```
+
+```typescript
+// src/ の関数から
+export function askName() {
+    const name = new frmInput("山田").showModal();   // 閉じるとアンロードされる
+    if (name == "") return;                          // キャンセル
+    const f: frmInput = new frmInput(name, 10);      // フォーム名は型としても書ける
+    f.show();
+}
+```
+
+表示スケール（DPI）が 100% 以外でも、フォームの内側の大きさはデザインどおりになります（読み込み時に合わせます）。
+
 ## ファイルの読み書き（`Open` / `Print #` / `Close`）
 
 ```typescript

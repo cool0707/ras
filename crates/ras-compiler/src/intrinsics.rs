@@ -35,7 +35,7 @@ intrinsics! {
     // platform
     PlatformIs64, PlatformIsVba7,
     // Range helpers (spec §9.4)
-    RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, SheetUsedTable, ExcelMatch,
+    FormShowModal, FormClose, RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, SheetUsedTable, ExcelMatch,
     ExcelErrorToNull,
     // event handlers attached at run time (spec §12.2.3)
     EventOn,
@@ -368,6 +368,14 @@ pub fn host_member(prog: &Program, recv: &Type, name: &str) -> Option<Intr> {
     // has events is the checker's business.
     if EVENT_MEMBERS.contains(&name) {
         return Some(Intr::EventOn);
+    }
+    // `form.showModal()` and `this.close(value)` of a user form (spec §14.11.9).
+    if prog.form_module_of(*id).is_some() {
+        match name {
+            "showModal" => return Some(Intr::FormShowModal),
+            "close" => return Some(Intr::FormClose),
+            _ => {}
+        }
     }
     if c.namespace.as_deref() != Some("Excel") {
         return None;

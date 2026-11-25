@@ -195,6 +195,8 @@ pub(crate) struct Lowerer<'p> {
     dispatchers: Vec<events::Dispatcher>,
     /// Forms whose code attaches event handlers: they are detached when the form is unloaded.
     form_listens: HashSet<ModuleId>,
+    /// Forms whose factory `RAS_Glue.New_<Form>` (spec §14.11.9) is generated.
+    form_factories: HashSet<ModuleId>,
     /// No "this arrow function becomes a class" hint (the handler of an `on` call).
     quiet_closures: bool,
 }
@@ -593,6 +595,7 @@ pub fn lower(prog: &Program) -> Lowered {
         listeners: Vec::new(),
         dispatchers: Vec::new(),
         form_listens: HashSet::new(),
+        form_factories: HashSet::new(),
         quiet_closures: false,
     };
     lw.run();
@@ -1317,6 +1320,8 @@ impl<'p> Lowerer<'p> {
         let def = &self.prog.fns[f];
         let base = match &def.kind {
             FnKind::Ctor { .. } => "RAS_Init".to_string(),
+            // A form's `constructor` (spec §14.11.9).
+            FnKind::Free if self.is_form_ctor(f) => "RAS_Construct".to_string(),
             FnKind::Method {
                 class,
                 is_static: true,
@@ -1678,7 +1683,12 @@ impl<'p> Lowerer<'p> {
                 && (def.attrs.macro_entry
                     || (!def.attrs.on_events.is_empty() && !def.attrs.doc_member)
                     || matches!(def.kind, FnKind::Main | FnKind::ModInit)));
-        if let Some(p) = self.build_proc(f, env, None, name.clone(), public) {
+        if let Some(mut p) = self.build_proc(f, env, None, name.clone(), public) {
+            if self.is_form_ctor(f) {
+                // Called by the factory in `RAS_Glue`; `Friend` takes structs too.
+                p.public = true;
+                p.friend = true;
+            }
             self.fn_procs.entry(f).or_default().push((mi, name));
             self.out[mi].procs.push(p);
         }
@@ -3166,6 +3176,158 @@ impl<'p> Lowerer<'p> {
         }
     }
 
+    /// The `constructor` of a form's code-behind (spec §14.11.9).
+    pub(crate) fn is_form_ctor(&self, f: FnId) -> bool {
+        let m = self.prog.fns[f].module;
+        self.prog.modules[m]
+            .form
+            .as_ref()
+            .is_some_and(|x| x.ctor == Some(f))
+    }
+
+    /// `RAS_Glue.New_<Form>(args)`: a new instance of the form, its `constructor` run with the
+    /// arguments (spec §14.11.9). A form's own module cannot hold it (calling it would load
+    /// the default instance).
+    pub(crate) fn form_factory(&mut self, m: ModuleId, ctor: Option<FnId>) -> VExpr {
+        let form = self.prog.modules[m].vba_name.clone();
+        let fname = format!("New_{form}");
+        if self.form_factories.insert(m) {
+            let gi = self.vmodule("RAS_Glue", VModuleKind::Standard);
+            self.out[gi].private_module = true;
+            let mut body = vec![set(vname(fname.clone()), lit(format!("New {form}")))];
+            let mut params = Vec::new();
+            if let Some(ctor) = ctor {
+                let construct = self.fn_name(ctor, &[]);
+                params = self
+                    .signature_stub(ctor, &HashMap::new(), fname.clone(), true)
+                    .params;
+                body.push(VStmt::Call {
+                    target: vname(fname.clone()).member(construct),
+                    args: params.iter().map(|x| vname(x.name.clone())).collect(),
+                });
+            }
+            self.out[gi].procs.push(VProc {
+                kind: ProcKind::Function,
+                public: true,
+                friend: false,
+                name: fname.clone(),
+                params,
+                ret: Some(form.clone()),
+                locals: vec![],
+                body,
+                leading_comments: vec![],
+                attributes: vec![],
+                source: None,
+            });
+        }
+        vname("RAS_Glue").member(fname)
+    }
+
+    /// What `showModal()` and `this.close(value)` call (spec §14.11.9):
+    ///
+    /// ```vb
+    /// Private RAS_Result As String
+    /// Private RAS_Modal As Boolean
+    ///
+    /// Friend Function RAS_ShowModal() As String
+    ///     RAS_Modal = True
+    ///     Me.Show vbModal
+    ///     RAS_Modal = False
+    ///     RAS_ShowModal = RAS_Result
+    ///     Unload Me
+    /// End Function
+    ///
+    /// Friend Sub RAS_Close(ByVal ras_value As String)
+    ///     RAS_Result = ras_value
+    ///     If RAS_Modal Then
+    ///         Me.Hide
+    ///     Else
+    ///         Unload Me
+    ///     End If
+    /// End Sub
+    /// ```
+    ///
+    /// The close button of the title bar hides the form too (see `emit_form_events`), so that
+    /// `RAS_ShowModal` finds the form still loaded when `Show` returns.
+    fn emit_form_modal(&mut self, m: ModuleId, fi: usize) {
+        let result = self.prog.modules[m]
+            .form
+            .as_ref()
+            .and_then(|f| f.result.clone())
+            .filter(|t| !t.is_error())
+            .unwrap_or(Type::Void);
+        let has_value = result != Type::Void;
+        let (vt, is_array) = self.vtype(&result);
+        let vt = if is_array { "Variant".to_string() } else { vt };
+        let is_obj = result.is_object();
+        let mut decls = vec!["Private RAS_Modal As Boolean".to_string()];
+        if has_value {
+            decls.insert(0, format!("Private RAS_Result As {vt}"));
+        }
+        for d in decls {
+            self.out[fi].decls.push(d);
+        }
+        let assign_value = |target: &str, value: &str| VStmt::Assign {
+            target: vname(target.to_string()),
+            value: vname(value.to_string()),
+            set: is_obj,
+        };
+        let mut body = vec![
+            assign(vname("RAS_Modal"), lit("True")),
+            VStmt::Raw("Me.Show vbModal".into()),
+            assign(vname("RAS_Modal"), lit("False")),
+        ];
+        if has_value {
+            body.push(assign_value("RAS_ShowModal", "RAS_Result"));
+        }
+        body.push(VStmt::Raw("Unload Me".into()));
+        self.out[fi].procs.push(VProc {
+            kind: if has_value {
+                ProcKind::Function
+            } else {
+                ProcKind::Sub
+            },
+            public: true,
+            friend: true,
+            name: "RAS_ShowModal".into(),
+            params: vec![],
+            ret: has_value.then(|| vt.clone()),
+            locals: vec![],
+            body,
+            leading_comments: vec![],
+            attributes: vec![],
+            source: None,
+        });
+        let mut body = Vec::new();
+        let mut params = Vec::new();
+        if has_value {
+            params.push(VParam {
+                name: "ras_value".into(),
+                byref: false,
+                ty: vt.clone(),
+                is_array: false,
+                optional_default: None,
+            });
+            body.push(assign_value("RAS_Result", "ras_value"));
+        }
+        body.push(VStmt::Raw(
+            "If RAS_Modal Then Me.Hide Else Unload Me".into(),
+        ));
+        self.out[fi].procs.push(VProc {
+            kind: ProcKind::Sub,
+            public: true,
+            friend: true,
+            name: "RAS_Close".into(),
+            params,
+            ret: None,
+            locals: vec![],
+            body,
+            leading_comments: vec![],
+            attributes: vec![],
+            source: None,
+        });
+    }
+
     /// Event procedures of a form (spec §14.11.2): `@on("btnOK.Click")` handlers are called from
     /// `Private Sub btnOK_Click()`, generated in the form's code module with the same re-entrancy
     /// guard and error dialog as document-module events (spec §12.2). `UserForm_Initialize`
@@ -3265,6 +3427,20 @@ impl<'p> Lowerer<'p> {
                 table.push((("UserForm".to_string(), def), Vec::new()));
             }
         }
+        // A form shown by `showModal()` is hidden, not unloaded, by the close button of its
+        // title bar: `RAS_ShowModal` unloads it (spec §14.11.9).
+        let modal = form.modal;
+        if modal {
+            self.emit_form_modal(m, fi);
+            if !table
+                .iter()
+                .any(|t| t.0 .0 == "UserForm" && t.0 .1.name == "QueryClose")
+            {
+                if let Some(def) = crate::userform::find_event("UserForm", "QueryClose") {
+                    table.push((("UserForm".to_string(), def), Vec::new()));
+                }
+            }
+        }
         for ((object, def), handlers) in table {
             let proc_name = format!("{object}_{}", def.name);
             // A function of the code-behind named like the event procedure would clash with it.
@@ -3318,6 +3494,11 @@ impl<'p> Lowerer<'p> {
             body.extend(calls);
             if unlisten {
                 body.push(call_stmt("RAS_UnlistenOwner", vec![lit("Me")]));
+            }
+            if modal && object == "UserForm" && def.name == "QueryClose" {
+                body.push(VStmt::Raw(
+                    "If RAS_Modal And Cancel = 0 And CloseMode = vbFormControlMenu Then Cancel = 1: Me.Hide".into(),
+                ));
             }
             body.push(VStmt::Exit("Sub"));
             body.push(VStmt::Label("RAS_OnError".into()));

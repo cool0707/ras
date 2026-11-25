@@ -1,0 +1,34 @@
+// `new frmAsk(...)` / `showModal()` / `this.close(value)` (spec §14.11.9).
+let question = "";
+let asked = 0;
+
+function constructor(q: string, initial: string = "") {
+    question = q;
+    this.caption = q;
+    this.txtAnswer.text = initial;
+}
+
+@on("UserForm.Activate")
+function shown() {
+    asked++;
+    console.log(`asking ${question} (${asked})`);
+}
+
+@on("btnOK.Click")
+function ok() {
+    this.close(`${question}=${this.txtAnswer.text}`);
+}
+
+@on("btnCancel.Click")
+function cancel() {
+    this.close();
+}
+
+@on("UserForm.Terminate")
+function bye() {
+    console.log(`bye ${question}`);
+}
+
+export function describe(): string {
+    return `${question}/${asked}`;
+}

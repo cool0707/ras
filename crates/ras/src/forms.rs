@@ -76,6 +76,10 @@ pub fn new_code_behind(name: &str) -> String {
          //\n\
          // @on(\"UserForm.Initialize\")\n\
          // function initialize() {{\n\
+         // }}\n\
+         //\n\
+         // new {name}(...) の引数は constructor で受け取り、this.close(値) の値が showModal() の戻り値になります。\n\
+         // function constructor(text: string) {{\n\
          // }}\n"
     )
 }

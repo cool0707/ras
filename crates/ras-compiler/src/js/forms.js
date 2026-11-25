@@ -706,6 +706,27 @@ module.exports = function install(rt) {
     let nextId = 1;
     const defs = new Map(); // lower-case name → { name, def, instance }
     const modal = []; // forms shown modally, innermost last
+    const loaded = new Set(); // every loaded instance: default ones and those of `new`
+    /**
+     * Runs `fn` as code of `form`: a form's code-behind keeps its module variables (and `$me`)
+     * in its JavaScript module, so with several instances of a form (`new frmInput()`, spec
+     * §14.11.9) they are swapped in for the instance whose code runs, and back out after.
+     */
+    function enter(form, fn) {
+        const def = form.$entry.def;
+        const prev = def.$current || null;
+        if (prev === form || !def.save) return fn();
+        if (prev) prev.$state = def.save();
+        def.$current = form;
+        def.restore(form.$state || null, form);
+        try {
+            return fn();
+        } finally {
+            form.$state = def.save();
+            def.$current = prev;
+            def.restore(prev ? prev.$state : null, prev);
+        }
+    }
     const busyHandlers = new Set();
     /** Events of a control that the form raises: a `WithEvents` variable does not get them. */
     const FORM_RAISED = new Set(["enter", "exit", "beforeupdate", "afterupdate"]);
@@ -783,8 +804,9 @@ module.exports = function install(rt) {
             // Bound controls show their cells from the start (MSForms reads them as the form loads).
             for (const ctl of this.$all) ctl.$readControlSource();
             for (const [member, fn] of Object.entries(def.members || {})) {
-                if (!(member in this)) this[member] = fn;
+                if (!(member in this)) this[member] = (...args) => enter(this, () => fn(...args));
             }
+            loaded.add(this);
         }
 
         get Name() {
@@ -812,6 +834,32 @@ module.exports = function install(rt) {
         }
         $touch() {
             this.$dirty.add(this);
+        }
+        $enter(fn) {
+            return enter(this, fn);
+        }
+
+        /**
+         * `form.showModal()` (spec §14.11.9): shows the form modally and returns what
+         * `this.close(value)` passed (`zero` when it was closed otherwise); the form is unloaded.
+         */
+        $showModal(zero) {
+            this.$result = zero;
+            this.$modalResult = true;
+            try {
+                this.Show(1);
+            } finally {
+                this.$modalResult = false;
+            }
+            const result = this.$result;
+            if (this.$loaded) this.$queryClose(1);
+            return result;
+        }
+        /** `this.close(value)`: hidden when shown by `showModal()` (which unloads it), else unloaded. */
+        $close(value) {
+            this.$result = value;
+            if (this.$modalResult) this.Hide();
+            else if (this.$loaded) this.$queryClose(1);
         }
 
         Show(modalArg) {
@@ -923,7 +971,7 @@ module.exports = function install(rt) {
                 if (!h.reentrant && busyHandlers.has(key)) continue;
                 busyHandlers.add(key);
                 try {
-                    h.fn(args);
+                    enter(this, () => h.fn(args));
                 } catch (err) {
                     reportError(this, `${this.$name}.${target}_${event}`, err);
                 } finally {
@@ -1049,6 +1097,11 @@ module.exports = function install(rt) {
             const cancel = cell(0);
             this.$fire("UserForm", "QueryClose", [cancel, cell(mode)]);
             if (rt.cnum(cancel.v) !== 0) return false;
+            // Shown by `showModal()`: the close button hides it (spec §14.11.9).
+            if (this.$modalResult && mode === 0) {
+                this.Hide();
+                return true;
+            }
             this.$unload();
             return true;
         }
@@ -1061,6 +1114,7 @@ module.exports = function install(rt) {
             this.$fire("UserForm", "Terminate", []);
             rt.unlistenOwner(this);
             this.$loaded = false;
+            loaded.delete(this);
             if (this.$entry.instance === this) this.$entry.instance = null;
         }
     }
@@ -1223,22 +1277,19 @@ parentPort.on("message", (line) => socket.write(line + "\\n"));
     /** Hands what the user does to the forms until `cond` is false. */
     function pump(cond) {
         while (cond()) {
-            for (const e of defs.values()) if (e.instance) e.instance.$flush();
+            for (const f of loaded) f.$flush();
             const msg = host().receive();
             if (!msg) continue;
             if (msg.t === "disconnected") {
                 // The panels are gone (VS Code ended the session): the forms are closed.
-                for (const e of defs.values()) {
-                    if (e.instance) {
-                        e.instance.$visible = false;
-                        e.instance.$unload();
-                    }
+                for (const f of [...loaded]) {
+                    f.$visible = false;
+                    f.$unload();
                 }
                 channel = { send() {}, receive: () => ({ t: "disconnected" }), closed: true };
                 return;
             }
-            const entry = [...defs.values()].find((e) => e.instance && e.instance.$id === msg.id);
-            const form = entry && entry.instance;
+            const form = [...loaded].find((f) => f.$id === msg.id);
             if (!form || !form.$visible) continue;
             // Under a modal form, the others do not respond.
             if (modal.length > 0 && modal[modal.length - 1] !== form) {
@@ -1266,13 +1317,24 @@ parentPort.on("message", (line) => socket.write(line + "\\n"));
         rt.ensureInit();
         const form = new UserForm(entry);
         entry.instance = form;
-        entry.def.load(form);
+        enter(form, () => entry.def.load(form));
         form.$fire("UserForm", "Initialize", []);
+        return form;
+    }
+    /** `new frmInput(args)` (spec §14.11.9): a new instance, its `constructor` run with `args`. */
+    function create(name, args) {
+        const entry = defs.get(String(name).toLowerCase());
+        if (!entry) raise(429, String(name));
+        rt.ensureInit();
+        const form = new UserForm(entry);
+        enter(form, () => entry.def.load(form));
+        form.$fire("UserForm", "Initialize", []);
+        if (entry.def.ctor && form.$loaded) enter(form, () => entry.def.ctor(...args));
         return form;
     }
     /** After the entry point: modeless forms stay up until they are closed, as in Excel. */
     function idle() {
-        const open = () => [...defs.values()].some((e) => e.instance && e.instance.$visible);
+        const open = () => [...loaded].some((f) => f.$visible);
         if (open()) pump(open);
     }
     const msforms = {
@@ -1296,5 +1358,5 @@ parentPort.on("message", (line) => socket.write(line + "\\n"));
             return { $picture: data, Handle: 1, Type: 1 };
         },
     };
-    return { register, names, instance, idle, msforms, UserForm };
+    return { register, names, instance, create, idle, msforms, UserForm };
 };

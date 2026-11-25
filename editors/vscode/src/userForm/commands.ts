@@ -71,6 +71,10 @@ export function newCodeBehind(name: string): string {
 		`// @on("UserForm.Initialize")`,
 		"// function initialize() {",
 		"// }",
+		"//",
+		`// new ${name}(...) の引数は constructor で受け取り、this.close(値) の値が showModal() の戻り値になります。`,
+		"// function constructor(text: string) {",
+		"// }",
 		"",
 	].join("\n");
 }

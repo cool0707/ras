@@ -1991,7 +1991,7 @@ COM 呼び出しは、Excel がモーダルダイアログを出している間�
 フォームのコードビハインド（§14.11.2）もデバッグ実行の対象になる。デバッグ実行のプロセスは Excel のフォームのイベントを受け取れないため、フォームは Excel には表示せず、**VS Code のパネルに表示する**。コードビハインドは他のモジュールと同じく JavaScript として動き、ブレークポイント・ステップ実行・変数の確認が使える。Excel の操作（セルの読み書きなど）は従来どおり実際の Excel に対して行う。
 
 * **起動:** フォームのコードビハインドの先頭の CodeLens「デバッグ実行」、デザイナーのタイトルバーのボタン、または実行する関数の一覧の `<フォーム名>.show` から、そのフォームを表示して始める。他のモジュールの関数から `frmInput.show()` で表示することもできる。
-* **インスタンス:** フォームは既定のインスタンスだけを持つ（RAS ではフォームを `new` できない）。フォーム名を最初に参照した時点でインスタンスを作り、モジュール変数を初期化して `Initialize` を起こす。`unload` の後に参照すると、新しいインスタンスを作る（VBA と同じ）。
+* **インスタンス:** フォーム名（既定のインスタンス）を最初に参照した時点でインスタンスを作り、モジュール変数を初期化して `Initialize` を起こす。`unload` の後に参照すると、新しいインスタンスを作る（VBA と同じ）。`new フォーム名(...)` で作ったインスタンス（§14.11.9）はそれぞれモジュール変数を持つ。コードビハインドの JavaScript のモジュール変数は 1 組なので、ランタイムはイベントのハンドラ・公開した関数・`on` で付けたハンドラを呼ぶたびに、そのインスタンスの値に入れ替えて呼び、戻ったら元に戻す。
 * **表示:** `show()` はモーダル（生成するフォームの `ShowModal` の既定値）、`show(vbModeless)` はモードレスで表示する。モーダル表示はフォームが閉じられる（`hide` / `unload`）まで戻らない。モードレス表示はすぐに戻り、起動した関数が終わった後も、表示中のフォームがすべて閉じられるまでプロセスは終わらない。
 * **ホストとの接続:** VS Code 拡張はデバッグ実行のたびに `127.0.0.1` の TCP ポートで待ち受け、その番号を環境変数 `RAS_FORM_HOST` でプロセスに渡す。ランタイムは最初にフォームを表示するときに接続する。生成コードは同期的に動くため、ユーザーの操作を待つ間はワーカースレッドがソケットを受け持ち、メインスレッドは `Atomics.wait` で短い間隔ごとに待つ（その間もデバッガの一時停止は効く）。通信は 1 行 1 つの JSON で、ランタイムがフォームの状態（`show` / `update` / `hide` / `unload`）を送り、拡張はユーザーの操作（フォーカスの移動・入力・クリック・選択・タブの切り替え・閉じるボタン）を返す。`RAS_FORM_HOST` が無い（VS Code の外で実行した）場合、フォームの表示はエラー 429 になる。
   * プレイグラウンド（`web/`）では、ページがホストになる。プログラムを動かす Web Worker がフォームの状態をページに送り、ページは VS Code 拡張と同じフォームのパネルでフォームをページの上に描く。ユーザーの操作は `SharedArrayBuffer` でワーカーに返す（ワーカーは `Atomics.wait` で待つ）。ランタイムには、ソケットの代わりに `hooks.formHost`（`send` / `receive`）として渡す。ページがクロスオリジン分離されていない（`SharedArrayBuffer` を使えない）ブラウザでは、フォームの表示はエラー 429 になる。
@@ -2216,6 +2216,7 @@ export function enteredName(): string {
   * ハンドラの引数はイベントの引数の先頭から順に受け取り、省略できる。`ByVal` のオブジェクト引数（`MSForms.ReturnBoolean` など）は `value` に代入して結果を返す。`QueryClose` の `Cancel` のような `ByRef` の数値引数を書き換えるときは、`byref cancel: short` と宣言する（イベント プロシージャの宣言と型を合わせるため `Integer` は `short`）。
   * エラー: コントロールがない（`E0613`）、そのコントロールにないイベント（`E0611`。ページのイベントは親の `MultiPage` で受け取る）、引数が多すぎる（`E0612`）、関数名が生成するイベント プロシージャ名（`btnOK_Click`）と同じ（`E0614`）。
 * **変数:** トップレベルの `let` / `const` はフォームのモジュール変数（`Private`）になる。初期値は `UserForm_Initialize` の先頭で設定する（`Initialize` のハンドラが無くても生成する）。フォームのインスタンスごとに持つ。
+* **インスタンスと戻り値:** `function constructor(...)` を書くと `new frmInput(...)` で引数を渡してインスタンスを作れ、`this.close(値)` の値を `showModal()` で受け取れる（§14.11.9）。
 * **公開:** `export function` はフォームの `Public` メンバーになり、他のモジュールからフォームの既定のインスタンス経由で `frmInput.enteredName()` のように呼べる。フォーム名はどこからでも参照できるグローバル（既定のインスタンス）で、`frmInput.show()` のように使う。`export` しない関数は `Private`。コードビハインドの関数はマクロ入口にならない（§12.4 のラップもしない）。
 * **`WithEvents`:** トップレベルの変数のイベントは、`@on("<変数名>.<イベント>")` で受け取れる（§12.2.2）。
 * **実行時に付けるハンドラ:** 同じ処理を多くのコントロールに付けるときは、`Initialize` のハンドラで `this.controls.on("Change", (c) => …)` / `[this.txtA, this.txtB].on("Change", …)` / `this.btnOK.on("Click", …)` のように付ける（§12.2.3）。フォームが閉じると外れる。
@@ -2343,7 +2344,102 @@ VS Code の「Excel で実行」（フォームのコードビハインドの先
 * 表示の前に Excel を前面に出す（Windows が前面の切り替えを許可しない場合は、タスク バーのボタンが点滅する）。
 * モーダルのフォームは閉じられるまで呼び出しが戻らない。その間、同期（保存のたびの同期を含む）は待たされる。
 
-#### 14.11.9 制限
+#### 14.11.9 インスタンスの作成と戻り値（`new` / `showModal` / `close`）
+
+VBA のフォームには、作るときに値を渡す方法（コンストラクタの引数）と、モーダルで表示して閉じたときに値を受け取る方法がない。そのため既定のインスタンスとモジュール変数を介して受け渡すことになり、`×` ボタンで閉じられるとフォームがアンロードされて値が消える、前回の状態が既定のインスタンスに残る、といった問題が起こりやすい。RAS では、フォームのインスタンスを `new` で作り、`constructor` に引数を渡し、`showModal()` で表示して `this.close(値)` の値を受け取れる。
+
+```typescript
+// forms/frmInput.ras
+function constructor(name: string, limit: int = 20) {
+    this.txtName.text = name;
+    this.txtName.maxLength = limit;
+}
+
+@on("btnOK.Click")
+function ok() {
+    this.close(this.txtName.text);       // showModal() がこの値を返す
+}
+
+@on("btnCancel.Click")
+function cancel() {
+    this.close();                        // 値なし: showModal() は型の既定値（""）を返す
+}
+
+// src/main.ras
+export function ask() {
+    const name = new frmInput("山田", 10).showModal();   // name: string
+    if (name == "") return;                               // キャンセル・× ボタン
+    msgBox(`こんにちは、${name} さん`);
+}
+```
+
+* **`new フォーム名(引数)`:** フォームの新しいインスタンスを作る。モジュール変数の初期化と `Initialize` のハンドラの後に、コードビハインドの `function constructor(...)` を引数で呼ぶ。`constructor` は `export` せず、型パラメーターと戻り値の型を付けずに書く（`E0633`）。引数の省略値・名前付き引数は通常の関数と同じ。`constructor` が無いフォームは引数なしで `new フォーム名()` と書く（引数を渡すと `E0402`）。インスタンスはそれぞれモジュール変数を持つ（既定のインスタンスとも別）。
+* **フォームの型:** フォーム名は既定のインスタンスであると同時に型名でもあり、`const f: frmInput = new frmInput("x");`、`function edit(f: frmInput)` のように書ける。
+* **`showModal()`:** フォームをモーダルで表示し、閉じられるまで待って、`this.close(値)` に渡された値を返す。戻ったときにはフォームはアンロードされている（`Terminate` が起きる）。`close` 以外で閉じられた（タイトル バーの `×`、値なしの `this.close()`）ときは、戻り値の型の既定値（`""`・`0`・`false`・`null` など）を返す。既定のインスタンスにも使える（`frmInput.showModal()`）。
+* **戻り値の型:** コードビハインドのすべての `this.close(値)` の値の型から決まる（関数の戻り値の推論と同じく、型が違えば `E0302`。`as` で揃える）。値を渡す `close` が無ければ `void`。構造体は渡せない（`E0636`）。同じフォームのコードビハインドの中からその `showModal()` の戻り値を使うことはできない（`E0634`）。
+* **`this.close(値?)`:** コードビハインドの中でだけ書ける（`E0635`）。`showModal()` で表示したフォームは非表示にして `showModal()` に戻り、それ以外のフォーム（`show()` で表示したもの）はアンロードする（`unload(this)` と同じ）。
+* **`unload(this)`:** `showModal()` / `this.close()` を使うフォームのコードビハインドで `unload(this)` と書くと警告（`W0631`）。アンロードしたフォームのモジュール変数を参照すると VBA がフォームを読み込み直す（`Initialize` が起きる）ため、`showModal()` の戻り値を保証できない。`this.close(値)` / `this.close()` で閉じる。
+* **`×` ボタン:** `showModal()` で表示したフォームは、`QueryClose` のハンドラが取り消さなければ、`×` ボタンでアンロードせずに非表示にして `showModal()` に戻る（アンロードされたフォームのメンバーを参照すると VBA がフォームを読み込み直すため）。
+* **生成する VBA:** `showModal()` / `close` を使うフォームのコードモジュールに次を生成する。`new` は、生成モジュール `RAS_Glue` の工場関数 `New_<フォーム名>` になる（`constructor` は `Friend Sub RAS_Construct` として出力する）。
+
+  ```vb
+  ' frmInput
+  Private RAS_Result As String
+  Private RAS_Modal As Boolean
+
+  Friend Sub RAS_Construct(ByVal name_ As String, Optional ByVal limit As Long = 20&)
+      ...
+  End Sub
+
+  Friend Function RAS_ShowModal() As String
+      RAS_Modal = True
+      Me.Show vbModal
+      RAS_Modal = False
+      RAS_ShowModal = RAS_Result
+      Unload Me
+  End Function
+
+  Friend Sub RAS_Close(ByVal ras_value As String)
+      RAS_Result = ras_value
+      If RAS_Modal Then Me.Hide Else Unload Me
+  End Sub
+
+  Private Sub UserForm_QueryClose(ByRef Cancel As Integer, ByRef CloseMode As Integer)
+      ...（QueryClose のハンドラ）
+      If RAS_Modal And Cancel = 0 And CloseMode = vbFormControlMenu Then Cancel = 1: Me.Hide
+  End Sub
+
+  ' RAS_Glue
+  Public Function New_frmInput(ByVal name_ As String, ByVal limit As Long) As frmInput
+      Set New_frmInput = New frmInput
+      New_frmInput.RAS_Construct name_, limit
+  End Function
+
+  ' 呼び出し側
+  name_ = RAS_Glue.New_frmInput("山田", 10&).RAS_ShowModal()
+  ```
+
+* `ras form pull` で RAS が書き込んだフォームのコードを変換するときは、これらを `function constructor` と `this.close(...)` に戻す。
+* デバッグ実行（§14.10.7）でも同じように動く。
+
+#### 14.11.10 表示スケール（DPI）
+
+Windows の表示スケールが 100% 以外（125%・150% など）のとき、VBA はデザインの大きさからフォームのウィンドウを作るが、タイトル バーと枠の大きさはポイントの比率どおりには拡大されないため、フォームの内側がデザインより小さく（大きく）なり、右端・下端のコントロールが欠けたり余白が出たりする。RAS が書き込むフォームは、フォームの読み込み時（`UserForm_Initialize` の先頭で呼ぶ `RAS_FormInit`。§14.11.5）に、内側の大きさ（`InsideWidth` / `InsideHeight`）を `form.width` / `form.height` に合わせる。
+
+```vb
+Private Sub RAS_FormInit()
+    If Abs(Me.InsideWidth - 240) >= 1 Then Me.Width = Me.Width + 240 - Me.InsideWidth
+    If Abs(Me.InsideHeight - 180) >= 1 Then Me.Height = Me.Height + 180 - Me.InsideHeight
+    ...（list の項目）
+End Sub
+```
+
+* 表示の拡大そのもの（文字やコントロールが表示スケールに合わせて大きくなること）は変えない。
+* 1 ポイント未満の差（ピクセルの丸め）は直さない。100% の表示では何もしない。
+* 値は書き込むときと同じく 96 DPI のピクセルに丸めた大きさ（§14.11.1。340pt は 339.75pt）。
+* コードビハインドの `Initialize` のハンドラで `this.width` などを変えた場合は、そちらが優先される（`RAS_FormInit` はハンドラより先に動く）。
+
+#### 14.11.11 制限
 
 * カスタム ActiveX コントロールは生成できない（エラーになる）。
 * VBE でフォームのデザインやコードを編集しても `forms/` には自動では反映されない。デザインは `ras form pull --force` で取り込める。取り込まない限り、次に `forms/` 側を変更して書き込んだ時点で `forms/` の内容に置き換わる（ドリフト検出は行わない）。

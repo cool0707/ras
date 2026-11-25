@@ -922,7 +922,7 @@ fn form_pictures_lists_and_pull() {
             .any(|w| w == bmp.as_slice()),
         "picture not stored"
     );
-    assert!(form.code.contains("Private Sub RAS_FormInit()\n    With Me.cboKind\n        .AddItem \"通常\"\n        .AddItem \"お急ぎ\"\n        .ListIndex = 0\n    End With\n"), "{}", form.code);
+    assert!(form.code.contains("Private Sub RAS_FormInit()\n    If Abs(Me.InsideWidth - 240) >= 1 Then Me.Width = Me.Width + 240 - Me.InsideWidth\n    If Abs(Me.InsideHeight - 180) >= 1 Then Me.Height = Me.Height + 180 - Me.InsideHeight\n    With Me.cboKind\n        .AddItem \"通常\"\n        .AddItem \"お急ぎ\"\n        .ListIndex = 0\n    End With\n"), "{}", form.code);
     assert!(
         form.code
             .contains("Private Sub UserForm_Initialize()\n    RAS_FormInit '--- RAS ---\n"),

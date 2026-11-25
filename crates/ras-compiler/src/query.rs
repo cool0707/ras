@@ -604,6 +604,21 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
                     _ => {}
                 }
             }
+            // A user form (spec §14.11.9): `showModal()` anywhere, `close` in its code-behind.
+            if let Some(fm) = prog.form_module_of(*c) {
+                if !out.iter().any(|o| o.label == "showModal") {
+                    out.push(item("showModal", kind::METHOD, "(組み込み) showModal(): モーダルで表示し、this.close(値) の値を返す（閉じたフォームはアンロードする）", None, 0));
+                }
+                if fm == m && !out.iter().any(|o| o.label == "close") {
+                    out.push(item(
+                        "close",
+                        kind::METHOD,
+                        "(組み込み) close(値?): フォームを閉じ、showModal() に値を返す",
+                        None,
+                        0,
+                    ));
+                }
+            }
             // Handlers attached at run time (spec §12.2.3).
             if crate::lower::listen_target(prog, *c).is_some() {
                 for n in intrinsics::EVENT_MEMBERS {
