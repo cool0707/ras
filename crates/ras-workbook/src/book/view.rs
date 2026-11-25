@@ -112,12 +112,25 @@ fn pattern_tile(t: &str) -> Option<&'static [&'static str]> {
     })
 }
 
-/// A pattern's tile as a CSS image in `color` (#RRGGBB).
+/// A pattern's tile as a layer of `background` (without the color): as many screen pixels at any
+/// zoom (the grid sets `--pz` to 1 over its zoom), and from one origin for all the cells (the grid
+/// sets `--px` and `--py`), so that the pattern runs on from a cell to the next, as Excel draws it.
+/// (The tile 8 by 8 pixels, repeated as many times as it takes: the browser draws a smaller one
+/// wrongly over a large area, the columns of a 2 by 2 tile as stripes.)
+fn pattern_layer(tile: &[&str], color: &str) -> String {
+    format!(
+        "{} var(--px, 0px) var(--py, 0px)/calc(8px * var(--pz, 1)) calc(8px * var(--pz, 1)) repeat",
+        pattern_image(tile, color)
+    )
+}
+
+/// A pattern's tile as a CSS image in `color` (#RRGGBB), 8 by 8 pixels.
 fn pattern_image(tile: &[&str], color: &str) -> String {
-    let (w, h) = (tile[0].len(), tile.len());
+    let (w, h) = (8, 8);
     let mut d = String::new();
-    for (y, row) in tile.iter().enumerate() {
-        for (x, _) in row.bytes().enumerate().filter(|(_, b)| *b == b'1') {
+    for y in 0..h {
+        let row = tile[y % tile.len()].as_bytes();
+        for x in (0..w).filter(|x| row[x % row.len()] == b'1') {
             d.push_str(&format!("M{x} {y}h1v1h-1z"));
         }
     }
@@ -173,7 +186,7 @@ fn cond_css(fx: &super::cond::CondFx, own: &Style) -> String {
     let mut css = String::new();
     if let Some(c) = &fx.fill {
         css.push_str(&format!(
-            "background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};"
+            "background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};--fill:none;"
         ));
     }
     if let Some(c) = &fx.color {
@@ -259,11 +272,10 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
                     .background_color()
                     .and_then(|c| css_color(c, theme))
                     .unwrap_or_else(|| "#FFFFFF".into());
-                let image = pattern_image(tile, &fg);
-                css.push_str(&format!(
-                    "background:{bg} {image};box-shadow:-1px 0 {bg},0 -1px {bg},-1px -1px {bg};"
-                ));
-                pattern = Some(image);
+                // (The grid draws `--fill` 1px over the cells above and left, over the gridlines
+                // there as Excel does: the cell's own color only would part two cells' patterns.)
+                css.push_str(&format!("background:{bg};"));
+                pattern = Some(format!("{} {bg}", pattern_layer(tile, &fg)));
             }
         }
     }
@@ -320,29 +332,33 @@ fn style_css(st: &Style, theme: &umya_spreadsheet::drawing::Theme, kind: &str) -
                 .as_ref()
                 .and_then(|c| css_color(c, theme))
                 .unwrap_or_else(|| "#000".into());
-            let mut images: Vec<String> = [(b.diagonal_down(), true), (b.diagonal_up(), false)]
+            let images: Vec<String> = [(b.diagonal_down(), true), (b.diagonal_up(), false)]
                 .into_iter()
                 .filter(|(on, _)| *on)
                 .map(|(_, down)| diagonal_image(down, w, &color))
                 .collect();
             if !images.is_empty() {
-                let lines = images.len();
-                let tiled = pattern.is_some();
-                images.extend(pattern.take());
-                let mut size = vec!["100% 100%"; lines];
-                let mut repeat = vec!["no-repeat"; lines];
-                if tiled {
-                    size.push("auto");
-                    repeat.push("repeat");
+                if let Some(fill) = &mut pattern {
+                    // Over the pattern, in the box drawn 1px larger than the cell.
+                    let lines: Vec<String> = images
+                        .iter()
+                        .map(|i| format!("{i} 1px 1px/calc(100% - 1px) calc(100% - 1px) no-repeat"))
+                        .collect();
+                    *fill = format!("{},{fill}", lines.join(","));
+                } else {
+                    let n = images.len();
+                    css.push_str(&format!(
+                        "background-image:{};background-size:{};background-repeat:{};",
+                        images.join(","),
+                        vec!["100% 100%"; n].join(","),
+                        vec!["no-repeat"; n].join(",")
+                    ));
                 }
-                css.push_str(&format!(
-                    "background-image:{};background-size:{};background-repeat:{};",
-                    images.join(","),
-                    size.join(","),
-                    repeat.join(",")
-                ));
             }
         }
+    }
+    if let Some(fill) = pattern {
+        css.push_str(&format!("--fill:{fill};"));
     }
     let (mut h, mut v, mut wrap, mut indent) = (String::new(), String::new(), false, 0);
     let (mut rotation, mut shrink) = (0, false);
