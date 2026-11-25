@@ -503,7 +503,10 @@ body.copying, body.copying td { cursor: copy; }
 #ribbon .spinbox input:disabled { background: none; }
 
 /* The pane at the right: the format of the object selected, or the objects of the sheet. */
-#pane { flex: none; display: flex; flex-direction: column; width: 270px; border-left: 1px solid var(--line); background: #fafafa; overflow: hidden; }
+#pane { flex: none; display: flex; flex-direction: column; width: 270px; border-left: 1px solid var(--line); background: #fafafa; overflow: hidden; position: relative; }
+#pane .pgrip { position: absolute; left: 0; top: 0; bottom: 0; z-index: 2; width: 5px; cursor: col-resize; touch-action: none; }
+#pane .pgrip:hover, body.panesizing #pane .pgrip { background: var(--accent); opacity: .5; }
+body.panesizing { cursor: col-resize; user-select: none; }
 #pane .phd { display: flex; align-items: center; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--line); background: #f3f3f3; }
 #pane .ptitle { flex: 1; font-weight: bold; }
 #pane .pclose { width: 24px; height: 24px; padding: 0; border: 0; border-radius: 3px; background: none; color: #444; font: 16px/1 inherit; cursor: pointer; }

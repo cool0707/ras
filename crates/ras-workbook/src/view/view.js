@@ -3664,6 +3664,7 @@
         pane.hidden = false;
         pane.dataset.key = key;
         pane.textContent = "";
+        paneGrip(pane);
         const head = pane.appendChild(el("div", "phd"));
         const title = mode === "list" ? "選択" : cells ? "セルの書式設定" : isActiveX(obj) ? "プロパティ" : isControl(obj) ? "コントロールの書式設定" : "図形の書式設定";
         head.appendChild(el("span", "ptitle", title));
@@ -3685,6 +3686,41 @@
             target.focus({ preventScroll: !!(scroll && scroll.key === key) });
             if (target.select && target.tagName === "INPUT") target.select();
         }
+    }
+    // The left edge of the pane, dragged: its width (kept with the page's state; a double
+    // click: the width it had at first).
+    const PANE_WIDTH = 270;
+    function paneGrip(pane) {
+        const fit = (w) => Math.round(Math.max(220, Math.min(w, Math.max(220, window.innerWidth * 0.6))));
+        pane.style.width = `${fit(saved.paneWidth || PANE_WIDTH)}px`;
+        const grip = pane.appendChild(el("div", "pgrip"));
+        grip.title = "ドラッグで幅を変更（ダブルクリックで元の幅）";
+        grip.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            grip.setPointerCapture(e.pointerId);
+            const [x0, w0] = [e.clientX, pane.getBoundingClientRect().width];
+            document.body.classList.add("panesizing");
+            // (The grid fills what it is given more of.)
+            const move = (ev) => {
+                pane.style.width = `${fit(w0 + x0 - ev.clientX)}px`;
+                window.dispatchEvent(new Event("resize"));
+            };
+            const up = () => {
+                grip.removeEventListener("pointermove", move);
+                grip.removeEventListener("pointerup", up);
+                grip.removeEventListener("pointercancel", up);
+                document.body.classList.remove("panesizing");
+                remember({ paneWidth: parseFloat(pane.style.width) });
+            };
+            grip.addEventListener("pointermove", move);
+            grip.addEventListener("pointerup", up);
+            grip.addEventListener("pointercancel", up);
+        });
+        grip.addEventListener("dblclick", () => {
+            pane.style.width = `${PANE_WIDTH}px`;
+            remember({ paneWidth: PANE_WIDTH });
+        });
     }
     // The objects of the sheet, the front one first (as Excel lists them); a click selects one.
     function listPane(body) {
