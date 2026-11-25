@@ -196,7 +196,12 @@ impl<'p> Lowerer<'p> {
 
     fn mark_pos(&mut self, s: &Stmt) {
         // Inlined bodies keep the position of the call site.
-        if self.pc.frames.len() == 1 && !matches!(s.kind, StmtKind::Block(_) | StmtKind::Empty) {
+        if self.pc.frames.len() == 1
+            && !matches!(
+                s.kind,
+                StmtKind::Block(_) | StmtKind::Empty | StmtKind::Debugger
+            )
+        {
             let line = self.line_of(s.span);
             self.emit(VStmt::Pos(line));
         }
@@ -205,7 +210,12 @@ impl<'p> Lowerer<'p> {
     pub(crate) fn stmt(&mut self, s: &Stmt, tail: bool) {
         self.mark_pos(s);
         match &s.kind {
-            StmtKind::Empty | StmtKind::Error | StmtKind::Resume | StmtKind::Fn(_) => {}
+            // `debugger;` pauses the debug run only (spec §14.10.9): nothing in VBA.
+            StmtKind::Empty
+            | StmtKind::Error
+            | StmtKind::Resume
+            | StmtKind::Debugger
+            | StmtKind::Fn(_) => {}
             StmtKind::Var(v) => self.var_stmt(v),
             StmtKind::Expr(e) => self.expr_stmt(e),
             StmtKind::Block(b) => self.stmts(&b.stmts, tail),

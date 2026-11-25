@@ -164,6 +164,16 @@ mod tests {
     }
 
     #[test]
+    fn debugger_statement() {
+        let m = ok("function f() {\n debugger;\n debugger\n x.debugger = 1;\n}");
+        let Item::Fn(f) = &m.items[0] else { panic!() };
+        let body = &f.body.as_ref().unwrap().stmts;
+        assert!(matches!(body[0].kind, StmtKind::Debugger));
+        assert!(matches!(body[1].kind, StmtKind::Debugger));
+        assert!(matches!(body[2].kind, StmtKind::Expr(_)));
+    }
+
+    #[test]
     fn decorators_and_declare() {
         let m = ok("@on(\"Sheet1.Change\")\nfunction h(target: Excel.Range) {}\n@fast\nexport function r() { @bulk for (let i = 0; i < 3; i++) {} }\ndeclare module \"user32\" {\n function GetForegroundWindow(): ptr;\n @alias(\"GetWindowTextW\")\n function GetWindowText(hWnd: ptr, lpString: wstr, nMaxCount: int): int;\n}");
         let Item::Fn(f) = &m.items[0] else { panic!() };

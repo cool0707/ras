@@ -106,6 +106,8 @@ pub enum SyntaxKind {
     IN_KW,
     #[token("var")]
     VAR_KW,
+    #[token("debugger")]
+    DEBUGGER_KW,
     // RAS additions (spec §1)
     #[token("byref")]
     BYREF_KW,
@@ -283,6 +285,7 @@ pub enum SyntaxKind {
     CONTINUE_STMT,
     LABELED_STMT,
     RESUME_STMT,
+    DEBUGGER_STMT,
     EMPTY_STMT,
     // expressions
     LITERAL,
@@ -387,6 +390,7 @@ impl SyntaxKind {
                 | CONTINUE_STMT
                 | LABELED_STMT
                 | RESUME_STMT
+                | DEBUGGER_STMT
                 | EMPTY_STMT
                 | VAR_DECL
                 | FN_DECL

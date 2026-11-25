@@ -395,6 +395,8 @@ pub enum StmtKind {
     },
     /// `resume;` — only valid as the sole statement of a `catch` block (spec §5.2).
     Resume,
+    /// `debugger;` — pauses the debug run (spec §14.10.9); nothing in the VBA build.
+    Debugger,
     /// Nested function declaration (rejected by the checker, kept for diagnostics).
     Fn(Box<FnDecl>),
     Empty,

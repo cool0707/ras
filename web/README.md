@@ -13,7 +13,7 @@ RAS をブラウザで書いて VBA に変換し、Excel なしで実行・テ�
 | `src/designer.ts` | ユーザーフォームのデザイナー。VS Code 拡張のデザイナー（`editors/vscode/webview/userFormDesigner`）を `designer.html` のフレームに表示し、拡張のプロバイダー（`src/userForm/provider.ts`）が VS Code のドキュメントで行うことを、ページのファイルで行います |
 | `src/forms.ts` | 実行中のユーザーフォームの表示。VS Code 拡張のフォームのパネル（`webview/formRunner`）を `runner.html` のフレームでページの上に表示し、ユーザーの操作を Worker に返します（Worker は `Atomics.wait` で待ちます） |
 | `src/worker.ts` | 実行用の Web Worker。止まらないプログラムでもページは固まらず、「停止」で終了します |
-| `src/runtime/` | ブラウザの中の小さな Node.js（`fs` はメモリ上、`require`、`process`）。`ras build --target js` が出力したデバッグ用の JavaScript（`ras-main.js` / `ras-test-main.js` とランタイム）を、CLI と同じものをそのまま動かします。`ras_book` アドオンの代わりは wasm の `Book` です |
+| `src/runtime/` | ブラウザの中の小さな Node.js（`fs` はメモリ上、`require`、`process`）。`ras build --target js` が出力したデバッグ用の JavaScript（`ras-main.js` / `ras-test-main.js` とランタイム）を、CLI と同じものをそのまま動かします。`ras_book` アドオンの代わりは wasm の `Book` です。各モジュールの Source Map は `.ras` の本文を入れた `data:` URL にして付け直し（`inlineSourceMap`）、ブラウザの開発者ツールで `.ras` のままデバッグできるようにします（仕様 §14.10.10） |
 | `static/sw.js` | GitHub Pages ではヘッダーを付けられないため、Service Worker で COOP / COEP を付けて `SharedArrayBuffer` を使えるようにします。実行中の `msgBox` / `inputBox` は、Worker が `Atomics.wait` で待つ間にページがダイアログを表示して答えます（使えないブラウザでは `ras run` と同じ既定の応答） |
 | `samples/` | サンプル（`examples/sales-report` も含めます） |
 | `static/designer.html`・`runner.html`・`frame.css` | VS Code 拡張の Webview をフレームで動かすページ。`acquireVsCodeApi` を親のページへの `postMessage` にし、VS Code のテーマの色（`--vscode-*`）をプレイグラウンドの色にします |

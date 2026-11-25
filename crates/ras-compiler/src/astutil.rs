@@ -74,6 +74,7 @@ pub fn walk_stmt<'a>(
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::Resume
+        | StmtKind::Debugger
         | StmtKind::Fn(_)
         | StmtKind::Empty
         | StmtKind::Error => {}
@@ -463,6 +464,7 @@ fn visit_stmt<'a>(s: &'a Stmt, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>) {
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::Resume
+        | StmtKind::Debugger
         | StmtKind::Empty
         | StmtKind::Error => {}
     }

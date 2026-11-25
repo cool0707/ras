@@ -78,6 +78,44 @@ export interface NodeOptions {
     loaded?: (id: string, exports: unknown) => void;
 }
 
+/**
+ * A module of the debug build, ready for the browser's DevTools to show its `.ras` files
+ * (spec §14.10.9): the `sourceMappingURL` of the build names the `.map` next to the module, which
+ * is only in `fs`, and the map names the `.ras` files without their text. The map is inlined as a
+ * `data:` URL with the sources' text (`sourcesContent`; the standard library's is in the map
+ * already), and the sources become `ras://` URLs
+ * of their paths in `fs` (`ras://project/src/main.ras`), absolute whatever the page's URL is.
+ * `body` is the module without its `sourceMappingURL`; `sourceMap` the comment to end the
+ * evaluated code with (empty when the module has no map).
+ */
+export function inlineSourceMap(text: string, id: string, fs: MemFs): { body: string; sourceMap: string } {
+    const m = /\/\/# sourceMappingURL=([^\s]+)\s*$/.exec(text);
+    if (!m || m[1].startsWith("data:")) return { body: text, sourceMap: "" };
+    const body = text.slice(0, m.index);
+    const dir = pathModule.dirname(id);
+    let map: { sources?: string[]; sourcesContent?: (string | null)[]; sourceRoot?: string };
+    try {
+        map = JSON.parse(fs.readFileSync(pathModule.resolve(dir, m[1]), "utf8") as string);
+    } catch {
+        return { body, sourceMap: "" };
+    }
+    const files = (map.sources || []).map((s) => pathModule.resolve(dir, map.sourceRoot || "", s));
+    // `ras://project/src/main.ras`; the standard library (`<stdlib>/…`) is `ras://stdlib/…`.
+    map.sources = files.map((f) => `ras://${f.replace(/^.*\/<stdlib>\//, "stdlib/").replace(/^\/+/, "")}`);
+    // The standard library is not in `fs`: its text comes in the map (`sourcesContent`).
+    const given = map.sourcesContent || [];
+    map.sourcesContent = files.map((f, i) => {
+        try {
+            return fs.readFileSync(f, "utf8") as string;
+        } catch {
+            return given[i] ?? null;
+        }
+    });
+    delete map.sourceRoot;
+    const data = Buffer.from(JSON.stringify(map), "utf8").toString("base64");
+    return { body, sourceMap: `\n//# sourceMappingURL=data:application/json;charset=utf-8;base64,${data}` };
+}
+
 /** A Node-like world: `run(file)` loads a module of `fs` as Node runs a script. */
 export class NodeWorld {
     readonly fs: MemFs;
@@ -249,8 +287,8 @@ export class NodeWorld {
                 });
                 // On one line with the module's first line, so that its lines and columns are
                 // the file's, as in Node (the stack traces are mapped back to the .ras files).
-                const body = text.replace(/^#!.*/, "");
-                const wrapper = (0, eval)(`(function (exports, require, module, __filename, __dirname, process, Buffer) {${body}\n})\n//# sourceURL=${id}`);
+                const { body, sourceMap } = inlineSourceMap(text.replace(/^#!.*/, ""), id, this.fs);
+                const wrapper = (0, eval)(`(function (exports, require, module, __filename, __dirname, process, Buffer) {${body}\n})\n//# sourceURL=${id}${sourceMap}`);
                 wrapper.call(module.exports, module.exports, req, module, id, dir, this.process, Buffer);
             }
             module.loaded = true;

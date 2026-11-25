@@ -249,6 +249,22 @@ fn source_maps_lead_back_to_ras_lines() {
         .unwrap()
         .text;
     assert!(js.ends_with("//# sourceMappingURL=m.js.map\n"));
+    // The project's files are read from the disk; the standard library's text is in its map.
+    assert!(map.get("sourcesContent").is_none());
+    let lib = out
+        .files
+        .iter()
+        .find(|f| f.rel_path == "ras_collections.js.map")
+        .expect("the standard library's module");
+    let lib: serde_json::Value = serde_json::from_str(&lib.text).unwrap();
+    assert!(lib["sources"][0]
+        .as_str()
+        .unwrap()
+        .ends_with("<stdlib>/ras_collections.ras"));
+    assert!(lib["sourcesContent"][0]
+        .as_str()
+        .unwrap()
+        .contains("export class"));
     assert!(
         !js.contains('\u{1}') && !js.contains('\u{2}'),
         "position markers must be stripped"
@@ -260,6 +276,28 @@ fn source_maps_lead_back_to_ras_lines() {
     let (stdout, stderr, ok) = p.run("run", None);
     assert!(ok, "{stderr}");
     assert_eq!(stdout, "11 2 true\n");
+}
+
+#[test]
+fn debugger_statements_pause_the_debug_run() {
+    let src = "export function run() {\n    let n = 1;\n    debugger;\n    try { debugger } catch { resume; }\n    console.log(n);\n}\n";
+    let files = [("m", src)];
+    let (_, out) = compile(&files);
+    let js = &out
+        .files
+        .iter()
+        .find(|f| f.rel_path == "m.js")
+        .unwrap()
+        .text;
+    assert_eq!(js.matches("debugger;").count(), 2, "{js}");
+    if !has_node() {
+        return;
+    }
+    // Without a debugger attached, the statement does nothing.
+    let p = Project::new("debugger", &files, &out);
+    let (stdout, stderr, ok) = p.run("run", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout, "1\n");
 }
 
 #[test]
