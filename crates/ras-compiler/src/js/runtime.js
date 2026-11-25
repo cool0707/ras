@@ -1637,7 +1637,9 @@ function fireListeners(target, event, cells, onError) {
         if (l.fn === null || l.target !== target || l.event.toLowerCase() !== name || l.busy) continue;
         l.busy = true;
         try {
-            const result = l.fn(...cells.map((c) => c.v));
+            const call = () => l.fn(...cells.map((c) => c.v));
+            // A handler a form's code attached runs as code of that instance of the form.
+            const result = l.owner && typeof l.owner.$enter === "function" ? l.owner.$enter(call) : call();
             if (result === false && l.cancel >= 0 && cells[l.cancel]) cells[l.cancel].v = true;
         } catch (err) {
             onError(err, { target: typeName(target), event: l.event });
@@ -1721,6 +1723,10 @@ function forms() {
 /** Registers the code-behind of a form (`forms/<Name>.ras`). */
 function form(name, definition) {
     forms().register(name, definition);
+}
+/** `new frmInput(args)` (spec §14.11.9). */
+function newForm(name, args) {
+    return forms().create(name, args);
 }
 
 // ---------------------------------------------------------------------------- debugger hovers
@@ -1845,7 +1851,7 @@ module.exports = {
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
     fileOpen, fileClose, fileReset, filePrint, fileWrite, fileInput, fileLineInput, fileInputString, fileGet, filePut, fileSeek, fileLock, fileUnlock, fileWidth, fileRename,
-    vba, declare, module: module_, withEvents, listen, listenAny, listenEach, fireListeners, unlistenOwner, onAction, onActionEach, ensureInit, entries, run, form,
+    vba, declare, module: module_, withEvents, listen, listenAny, listenEach, fireListeners, unlistenOwner, onAction, onActionEach, ensureInit, entries, run, form, newForm,
 };
 Object.defineProperty(module.exports, "msforms", { get: () => forms().msforms, enumerable: true });
 // The API of test files (spec §14.12), there only in the build of `ras test`.

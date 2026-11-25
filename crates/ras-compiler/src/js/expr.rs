@@ -1031,6 +1031,17 @@ impl<'p> Gen<'p> {
         match self.info().calls.get(&e.id).map(|c| c.target.clone()) {
             Some(CallTarget::Ctor(c)) => {
                 let def = &self.prog.classes[c];
+                // A user form (spec §14.11.9).
+                if let Some(m) = self.prog.form_module_of(c) {
+                    let argv = match self.prog.modules[m].form.as_ref().and_then(|f| f.ctor) {
+                        Some(ctor) => self.ras_args(ctor, 0, args).join(", "),
+                        None => String::new(),
+                    };
+                    return format!(
+                        "$rt.newForm({}, [{argv}])",
+                        js_str(&self.prog.modules[m].vba_name)
+                    );
+                }
                 if def.kind == ClassKind::Host {
                     return format!(
                         "$rt.newHost({}, {})",
@@ -1311,6 +1322,33 @@ impl<'p> Gen<'p> {
             YieldNow => "$rt.yieldNow()".into(),
             PlatformIs64 => "$rt.is64()".into(),
             PlatformIsVba7 => "true".into(),
+            FormShowModal => {
+                let z = match self.ty(e) {
+                    Type::Void => "undefined".to_string(),
+                    t => self.zero(&t),
+                };
+                format!("{r}.$showModal({z})")
+            }
+            FormClose => {
+                let result = match recv.map(|x| self.ty(x)) {
+                    Some(Type::Class(c, _)) => self
+                        .prog
+                        .form_module_of(c)
+                        .and_then(|m| self.prog.modules[m].form.as_ref())
+                        .and_then(|f| f.result.clone())
+                        .unwrap_or(Type::Void),
+                    _ => Type::Void,
+                };
+                let v = match (args.first(), &result) {
+                    (_, Type::Void) => "undefined".to_string(),
+                    (Some(a), t) => {
+                        let t = t.clone();
+                        self.coerce_store(a, &t)
+                    }
+                    (None, t) => self.zero(t),
+                };
+                format!("{r}.$close({v})")
+            }
             RangeToArray => format!("$rt.read2D({r})"),
             SheetUsedTable => format!("$rt.read2D($rt.get({r}, \"UsedRange\"))"),
             RangeToColumn => format!("$rt.toColumn({r})"),

@@ -4924,6 +4924,9 @@ impl Checker<'_> {
                             format!("インターフェイス `{}` のインスタンスは作れません", def.name),
                         );
                     }
+                    ClassKind::Host if self.prog.form_module_of(*c).is_some() => {
+                        return self.new_form(e, *c, args, t.clone());
+                    }
                     ClassKind::Host => {
                         if def.namespace.as_deref() != Some("VBA")
                             && crate::model::prog_id(def.namespace.as_deref(), &def.name).is_none()
@@ -5003,6 +5006,141 @@ impl Checker<'_> {
                 Type::Error
             }
         }
+    }
+
+    // ------------------------------------------------------------------ forms (spec §14.11.9)
+
+    /// `new frmInput(args)`: a new instance of a form, its `constructor` called with `args`.
+    fn new_form(&mut self, e: &Expr, c: ClassId, args: &[Expr], t: Type) -> Type {
+        let m = self.prog.form_module_of(c).unwrap();
+        match self.prog.modules[m].form.as_ref().and_then(|f| f.ctor) {
+            Some(ctor) => {
+                self.check_fn_call(e, ctor, HashMap::new(), None, &[], args);
+                if !self.fx.calls.contains(&ctor) {
+                    self.fx.calls.push(ctor);
+                }
+            }
+            None => {
+                if !args.is_empty() {
+                    let name = self.prog.class_display(c);
+                    self.err(
+                        e.span,
+                        "E0402",
+                        format!("フォーム `{name}` には `constructor` がないため、引数は渡せません（forms/{name}.ras に `function constructor(...)` を書きます）"),
+                    );
+                }
+                for a in args {
+                    self.expr(a, None);
+                }
+            }
+        }
+        self.info().calls.insert(
+            e.id,
+            CallInfo {
+                target: CallTarget::Ctor(c),
+                type_args: Vec::new(),
+            },
+        );
+        t
+    }
+
+    fn form_of(&self, recv: Option<&Type>) -> Option<ModuleId> {
+        match recv {
+            Some(Type::Class(c, _)) => self.prog.form_module_of(*c),
+            _ => None,
+        }
+    }
+
+    /// `form.showModal()`: what `this.close(value)` of the form's code-behind passes.
+    fn form_show_modal(&mut self, call: &Expr, recv: Option<&Type>, args: &[Expr]) -> Type {
+        self.arg_count(call, args, 0, 0);
+        let Some(m) = self.form_of(recv) else {
+            return Type::Error;
+        };
+        if let Some(f) = self.prog.modules[m].form.as_mut() {
+            f.modal = true;
+        }
+        // The type comes from the whole code-behind.
+        let fns = self.prog.modules[m].fns.clone();
+        let mut incomplete = false;
+        for f in fns {
+            if self.in_progress.contains(&f) {
+                incomplete = true;
+            } else {
+                self.ensure_fn(f);
+            }
+        }
+        if incomplete {
+            let name = self.prog.modules[m].vba_name.clone();
+            self.err(call.span, "E0634", format!("フォーム `{name}` のコードビハインドの中では、同じフォームの `showModal()` の戻り値の型を決められません（`this.close(...)` を調べ終わっていないため）。別のモジュールの関数から呼んでください"));
+            return Type::Error;
+        }
+        self.prog.modules[m]
+            .form
+            .as_ref()
+            .and_then(|f| f.result.clone())
+            .unwrap_or(Type::Void)
+    }
+
+    /// `this.close(value?)` in a form's code-behind: closes the form; `showModal()` returns `value`.
+    fn form_close(
+        &mut self,
+        call: &Expr,
+        recv_expr: Option<&Expr>,
+        recv: Option<&Type>,
+        args: &[Expr],
+    ) -> Type {
+        let m = self.form_of(recv);
+        let own = m == Some(self.module)
+            && recv_expr.is_some_and(|r| matches!(r.peel().kind, ExprKind::This));
+        if !own {
+            self.err(call.span, "E0635", "`close` はフォームのコードビハインドの中で `this.close(値)` と書きます（ほかのモジュールからは閉じられません。値を返すフォームは `showModal()` で表示します）");
+            for a in args {
+                self.expr(a, None);
+            }
+            return Type::Void;
+        }
+        let m = m.unwrap();
+        if !self.arg_count(call, args, 0, 1) {
+            return Type::Void;
+        }
+        let prev = self.prog.modules[m]
+            .form
+            .as_ref()
+            .and_then(|f| f.result.clone());
+        let ty = match args.first() {
+            None => prev.clone().unwrap_or(Type::Void),
+            Some(a) => {
+                let t = self.value(a, prev.as_ref().filter(|p| **p != Type::Void));
+                if t == Type::Void {
+                    self.err(
+                        a.span,
+                        "E0307",
+                        "`close` に渡す値がありません（値を返さない関数の呼び出しです）",
+                    );
+                    Type::Error
+                } else if t.has_struct() {
+                    self.err(a.span, "E0636", "`close` に構造体は渡せません（クラスのインスタンスか、ユニオン型・配列などにしてください）");
+                    Type::Error
+                } else {
+                    match prev.clone() {
+                        Some(p) if p != Type::Void && !p.is_error() => {
+                            self.unify_branches(a.span, &p, &t)
+                        }
+                        _ if t == Type::Null => {
+                            self.err(a.span, "E0308", "`this.close(null)` だけでは戻り値の型が決まりません。`null as Excel.Range` のように型を付けてください");
+                            Type::Error
+                        }
+                        _ => t,
+                    }
+                }
+            }
+        };
+        if let Some(f) = self.prog.modules[m].form.as_mut() {
+            f.modal = true;
+            f.result = Some(ty);
+        }
+        Type::Void
     }
 
     // ------------------------------------------------------------------ intrinsics
@@ -5941,6 +6079,8 @@ impl Checker<'_> {
             }
             PlatformIs64 | PlatformIsVba7 => Type::Bool,
             EventOn => self.event_on(call, recv, args),
+            FormShowModal => self.form_show_modal(call, recv, args),
+            FormClose => self.form_close(call, recv_expr, recv, args),
             FileOpen | FileClose | FileReset | FilePrint | FilePrintLine | FileWrite
             | FileWriteLine | FileInput | FileLineInput | FileInputString | FileGet | FilePut
             | FileSeek | FileLock | FileUnlock | FileWidth | FileRename => {

@@ -173,6 +173,8 @@ function leave(cancel: MSForms.ReturnBoolean) {
 
 - イベントは `@on("<コントロール名>.<イベント>")`（フォーム自身は `UserForm.Initialize` など）を付けた関数で受け取ります。コンパイラが `Private Sub btnOK_Click()` などのイベントプロシージャを生成します。同じ処理を多くのコントロールに付けるときは、`Initialize` のハンドラで `this.controls.on("Change", (c) => { ... })`（コレクション・配列のすべてのメンバーに付く）/ `this.btnOK.addEventListener("Click", ok)` のように実行時に付けます（仕様 §12.2.3。`WithEvents` の変数を持つクラスを生成します。フォームが閉じると外れます）。`export function` はフォームの公開メンバーになり、他のモジュールから `frmInput.show()` / `frmInput.enteredName()` のように使えます。
 
+- `function constructor(...)` を書くと、`new frmInput("山田")` のように引数を渡してフォームのインスタンスを作れます。`const name = new frmInput("山田").showModal();` はモーダルで表示し、コードビハインドの `this.close(値)` に渡した値を返します（`×` ボタン・値なしの `close()` では型の既定値。仕様 §14.11.9）。
+- Windows の表示スケール（DPI）が 125%・150% などでも、フォームの内側の大きさはデザインどおりになります（タイトル バーと枠の差でコントロールが欠けたり余白が出たりしないよう、読み込み時に合わせます。仕様 §14.11.10）。
 - `Image` の画像は `"picture": { "path": "forms/assets/logo.png" }` のように、プロジェクト内の画像ファイル（BMP / JPEG / PNG / GIF / WebP / TIFF / ICO）を指定します。画像はブックに埋め込まれます。MS-Forms がそのまま保存できる BMP（24 / 32 ビット無圧縮）と JPEG は内容のまま、それ以外は書き込み時に 24 ビットの BMP に変換して埋め込みます（透過部分はコントロールの `backColor` で塗りつぶします。元のファイルは変更しません）。
 - `ComboBox` / `ListBox` の項目は `"list": ["A", "B"]`、最初の選択は `"selectedIndex": 0` で指定します。項目はデザイナの情報としては保存されないため、フォームの読み込み時に項目を設定するコード（`RAS_FormInit`）を生成してコードモジュールに加えます。
 - VBE で作った既存のフォームは `ras form pull` で `forms/` に取り出せます（デザイン・コード・画像）。コードは VBA から RAS に変換して `forms/<名前>.ras` に書きます。変換できなかった行（`GoTo`・`ReDim` など）は `// TODO(VBA):` のコメントとして残り、警告として表示されます。FormSpec で表せないプロパティも警告として表示され、`forms/` から書き戻すと既定値になります。取り出した後、`ras pack --overwrite` でブックのフォームを `forms/` の内容に置き換えます。

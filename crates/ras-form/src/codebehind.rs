@@ -5,11 +5,18 @@
 //! them when the workbook is saved), so `list` and `selectedIndex` of a
 //! FormSpec become VBA that runs in `UserForm_Initialize`:
 //!
+//! It also keeps the inside of the form at its designed size when Windows
+//! scales the display (125%, 150% …): the title bar and the borders do not
+//! scale like the points of the design, so the window VBA makes from the
+//! stored size can cut the controls off or leave a margin.
+//!
 //! ```text
 //! ' RAS-FORM forms/frmInput.form.json design=0123456789abcdef code=fedcba9876543210
 //! (code-behind; a call of RAS_FormInit is added to its UserForm_Initialize)
 //! '--- RAS BEGIN ---
 //! Private Sub RAS_FormInit()
+//!     If Abs(Me.InsideWidth - 240) >= 1 Then Me.Width = Me.Width + 240 - Me.InsideWidth
+//!     If Abs(Me.InsideHeight - 180) >= 1 Then Me.Height = Me.Height + 180 - Me.InsideHeight
 //!     With Me.cboKind
 //!         .AddItem "A"
 //!         .ListIndex = 0
@@ -114,10 +121,33 @@ fn vba_string(text: &str, codepage: u16) -> String {
     parts.join(" & ")
 }
 
-/// The generated procedure that fills the lists of `spec`; `None` when no
-/// control has items or a selection.
+/// A size in points as a VBA literal (`240`, `453.75`).
+/// A size read back from a workbook went through HIMETRIC (240 pt is stored as 8467 and read
+/// as 240.009 pt): within a fiftieth of a pixel at 96 DPI it is that whole pixel.
+fn points_literal(points: f64) -> String {
+    let pixels = points / 0.75;
+    let points = if (pixels - pixels.round()).abs() < 0.02 {
+        pixels.round() * 0.75
+    } else {
+        points
+    };
+    let rounded = (points * 1000.0).round() / 1000.0;
+    format!("{rounded}")
+}
+
+/// The generated procedure that sizes the form and fills the lists of `spec`.
 pub fn init_procedure(spec: &FormSpec, codepage: u16) -> Result<Option<String>, String> {
-    let mut body = String::new();
+    // The inside of the form as designed, whatever the display scaling (DPI): the outer size
+    // VBA gives the window holds title bar and borders of another scaling.
+    let width = points_literal(crate::compile::client_points(
+        spec.form.width.unwrap_or(240.0),
+    ));
+    let height = points_literal(crate::compile::client_points(
+        spec.form.height.unwrap_or(180.0),
+    ));
+    let mut body = format!(
+        "    If Abs(Me.InsideWidth - {width}) >= 1 Then Me.Width = Me.Width + {width} - Me.InsideWidth\n    If Abs(Me.InsideHeight - {height}) >= 1 Then Me.Height = Me.Height + {height} - Me.InsideHeight\n"
+    );
     for control in &spec.controls {
         let kind = control.control_type.trim();
         if !kind.eq_ignore_ascii_case("ComboBox") && !kind.eq_ignore_ascii_case("ListBox") {
@@ -156,9 +186,6 @@ pub fn init_procedure(spec: &FormSpec, codepage: u16) -> Result<Option<String>, 
             body.push_str(&format!("        .ListIndex = {index}\n"));
         }
         body.push_str("    End With\n");
-    }
-    if body.is_empty() {
-        return Ok(None);
     }
     Ok(Some(format!(
         "Private Sub {INIT_PROCEDURE}()\n{body}End Sub\n"
@@ -354,7 +381,7 @@ mod tests {
     }
 
     #[test]
-    fn a_form_without_lists_gets_only_the_marker() {
+    fn a_form_without_lists_gets_the_marker_and_its_size() {
         let spec = spec(r#"{"id":"t","name":"txt","type":"TextBox"}"#);
         let code = compose_for(&spec, "Private Sub txt_Change()\nEnd Sub\n");
         let mut lines = code.lines();
@@ -380,7 +407,20 @@ mod tests {
         assert_ne!(other[1], fields[1]);
         assert_eq!(
             lines.collect::<Vec<_>>(),
-            ["Private Sub txt_Change()", "End Sub"]
+            [
+                "Private Sub txt_Change()",
+                "End Sub",
+                "'--- RAS BEGIN ---",
+                "Private Sub RAS_FormInit()",
+                "    If Abs(Me.InsideWidth - 240) >= 1 Then Me.Width = Me.Width + 240 - Me.InsideWidth",
+                "    If Abs(Me.InsideHeight - 180) >= 1 Then Me.Height = Me.Height + 180 - Me.InsideHeight",
+                "End Sub",
+                "",
+                "Private Sub UserForm_Initialize()",
+                "    RAS_FormInit",
+                "End Sub",
+                "'--- RAS END ---",
+            ]
         );
         assert_eq!(code_behind(&code), "Private Sub txt_Change()\nEnd Sub\n");
     }
@@ -393,7 +433,7 @@ mod tests {
         let code = init_procedure(&spec, 932).unwrap().unwrap();
         assert_eq!(
             code,
-            "Private Sub RAS_FormInit()\n    With Me.lstStaff\n        .AddItem \"001\"\n        .List(.ListCount - 1, 1) = \"山田\"\n        .List(.ListCount - 1, 2) = \"営業\"\n        .AddItem \"002\"\n        .AddItem \"003\"\n        .List(.ListCount - 1, 1) = \"\"\n    End With\nEnd Sub\n"
+            "Private Sub RAS_FormInit()\n    If Abs(Me.InsideWidth - 240) >= 1 Then Me.Width = Me.Width + 240 - Me.InsideWidth\n    If Abs(Me.InsideHeight - 180) >= 1 Then Me.Height = Me.Height + 180 - Me.InsideHeight\n    With Me.lstStaff\n        .AddItem \"001\"\n        .List(.ListCount - 1, 1) = \"山田\"\n        .List(.ListCount - 1, 2) = \"営業\"\n        .AddItem \"002\"\n        .AddItem \"003\"\n        .List(.ListCount - 1, 1) = \"\"\n    End With\nEnd Sub\n"
         );
         // 1 to 10 columns.
         for bad in [
@@ -411,7 +451,7 @@ mod tests {
     fn lists_are_filled_by_a_generated_initialize() {
         let spec = spec(COMBO);
         let code = compose_for(&spec, "Option Explicit\n");
-        let expected = "Option Explicit\n'--- RAS BEGIN ---\nPrivate Sub RAS_FormInit()\n    With Me.cboKind\n        .AddItem \"A\"\n        .AddItem \"B \"\"x\"\"\"\n        .ListIndex = 1\n    End With\nEnd Sub\n\nPrivate Sub UserForm_Initialize()\n    RAS_FormInit\nEnd Sub\n'--- RAS END ---\n";
+        let expected = "Option Explicit\n'--- RAS BEGIN ---\nPrivate Sub RAS_FormInit()\n    If Abs(Me.InsideWidth - 240) >= 1 Then Me.Width = Me.Width + 240 - Me.InsideWidth\n    If Abs(Me.InsideHeight - 180) >= 1 Then Me.Height = Me.Height + 180 - Me.InsideHeight\n    With Me.cboKind\n        .AddItem \"A\"\n        .AddItem \"B \"\"x\"\"\"\n        .ListIndex = 1\n    End With\nEnd Sub\n\nPrivate Sub UserForm_Initialize()\n    RAS_FormInit\nEnd Sub\n'--- RAS END ---\n";
         assert_eq!(code.split_once('\n').unwrap().1, expected);
         assert_eq!(code_behind(&code), "Option Explicit\n");
         // No code-behind at all.
@@ -447,6 +487,19 @@ mod tests {
         let comment =
             "Private Sub UserForm_Initialize() ' RAS_FormInit\n    x = \"RAS_FormInit\"\nEnd Sub\n";
         assert!(compose_for(&spec, comment).contains("RAS_FormInit '--- RAS ---"));
+    }
+
+    /// The inside of the form keeps its designed size at any display scaling: the stored
+    /// size, rounded to whole pixels at 96 DPI as the form is written.
+    #[test]
+    fn the_inside_size_is_kept_at_any_scaling() {
+        let text = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F","width":340,"height":200.25},"controls":[]}"#;
+        let parsed = crate::parse(text);
+        let code = init_procedure(parsed.spec.as_ref().unwrap(), 932)
+            .unwrap()
+            .unwrap();
+        assert!(code.contains("If Abs(Me.InsideWidth - 339.75) >= 1 Then Me.Width = Me.Width + 339.75 - Me.InsideWidth\n"), "{code}");
+        assert!(code.contains("If Abs(Me.InsideHeight - 200.25) >= 1 Then Me.Height = Me.Height + 200.25 - Me.InsideHeight\n"), "{code}");
     }
 
     #[test]

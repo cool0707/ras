@@ -95,7 +95,7 @@ fn defaults(control_type: &str) -> Option<(u16, f64, f64)> {
 /// of pixels at 96 DPI (340 pt is 453⅓ px; a multiple of 3 always is) goes to the nearest pixel,
 /// as the VBA editor stores it at 100% scaling. Other sizes, such as those read from a workbook
 /// saved at another scaling (349.2 pt is 582 px at 120 DPI), are kept.
-fn client_points(points: f64) -> f64 {
+pub(crate) fn client_points(points: f64) -> f64 {
     if points.is_finite() && points.fract() == 0.0 {
         (points / 0.75).round() * 0.75
     } else {

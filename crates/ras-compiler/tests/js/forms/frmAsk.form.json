@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "form": { "name": "frmAsk", "caption": "質問", "width": 180, "height": 90 },
+  "controls": [
+    { "id": "answer", "name": "txtAnswer", "type": "TextBox", "left": 12, "top": 12, "width": 120, "height": 18 },
+    { "id": "ok", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 12, "top": 48 },
+    { "id": "cancel", "name": "btnCancel", "type": "CommandButton", "caption": "キャンセル", "left": 90, "top": 48 }
+  ]
+}

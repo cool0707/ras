@@ -248,6 +248,9 @@ impl Collector {
                         .find(|f| f.name.eq_ignore_ascii_case(name))
                         .cloned(),
                     class: None,
+                    ctor: None,
+                    result: None,
+                    modal: false,
                 },
             )),
             (_, Some(name)) if input.kind == ModuleKind::User => {
@@ -280,6 +283,9 @@ impl Collector {
                             controls,
                         }),
                         class: None,
+                        ctor: None,
+                        result: None,
+                        modal: false,
                     },
                 ))
             }
@@ -545,8 +551,37 @@ impl Collector {
                 })
                 .collect();
             self.prog.classes[id].methods = exported;
+            // `function constructor(...)`: the arguments of `new frmInput(...)` (spec §14.11.9).
+            let ctor = self.prog.modules[m].fns.iter().copied().find(|&f| {
+                let d = &self.prog.fns[f];
+                d.name == "constructor" && matches!(d.kind, FnKind::Free) && !d.is_extension
+            });
+            if let Some(f) = ctor {
+                let d = self.prog.fns[f].clone();
+                let span = d.name_span;
+                if d.exported {
+                    self.err(m, span, "E0633", "フォームの `constructor` は `export` せずに書いてください（`new フォーム名(...)` で呼ばれます）");
+                }
+                if !d.type_params.is_empty() {
+                    self.err(
+                        m,
+                        span,
+                        "E0633",
+                        "フォームの `constructor` に型パラメーターは付けられません",
+                    );
+                }
+                if d.decl.as_ref().is_some_and(|x| x.ret.is_some()) {
+                    self.err(
+                        m,
+                        span,
+                        "E0633",
+                        "フォームの `constructor` に戻り値の型は書けません",
+                    );
+                }
+            }
             if let Some(f) = self.prog.modules[m].form.as_mut() {
                 f.class = Some(id);
+                f.ctor = ctor;
             }
             // The default instance, visible everywhere by the form's name.
             let var = self.prog.vars.len();
@@ -2405,6 +2440,10 @@ fn resolve_type_inner(
                 Some(Sym::Enum(e)) => Type::Enum(e),
                 Some(Sym::Struct(s)) => Type::Struct(s),
                 Some(Sym::Alias(t)) => t,
+                // A user form's name is its default instance and its type (spec §14.11.9).
+                Some(Sym::Var(v)) if matches!(&prog.vars[v].ty, Type::Class(c, _) if prog.form_module_of(*c).is_some() && prog.vars[v].declared) => {
+                    prog.vars[v].ty.clone()
+                }
                 Some(_) => {
                     errors.push((*span, format!("`{display}` は型ではありません")));
                     Type::Error

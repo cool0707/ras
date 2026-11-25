@@ -966,3 +966,228 @@ function init() {
         "{lambdas}"
     );
 }
+
+/// `new frmInput(args)` runs the form's `constructor`; `showModal()` returns what
+/// `this.close(value)` passed (spec §14.11.9).
+#[test]
+fn constructor_arguments_and_modal_results() {
+    let (diags, files) = compile(
+        r#"
+let initial = "";
+
+function constructor(name: string, n: int = 3) {
+    initial = name;
+    this.txtName.text = name;
+}
+
+@on("btnOK.Click")
+function ok() {
+    this.close(this.txtName.text);
+}
+
+@on("btnCancel.Click")
+function cancel() {
+    this.close();
+}
+"#,
+        &[(
+            "main",
+            r#"
+export function run() {
+    const s = new frmInput("x").showModal();
+    msgBox(s);
+    const f: frmInput = new frmInput("y", 2);
+    f.showModal();
+    msgBox(frmInput.showModal());
+}
+"#,
+        )],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = form_code(&files);
+    for want in [
+        "Private RAS_Result As String\nPrivate RAS_Modal As Boolean\n",
+        "Friend Sub RAS_Construct(ByVal name_ As String, Optional ByVal n As Long = 3&)\n",
+        "Private Sub ok()\n    Me.RAS_Close Me.txtName.Text\nEnd Sub\n",
+        "Private Sub cancel()\n    Me.RAS_Close vbNullString\nEnd Sub\n",
+        "Friend Function RAS_ShowModal() As String\n    RAS_Modal = True\n    Me.Show vbModal\n    RAS_Modal = False\n    RAS_ShowModal = RAS_Result\n    Unload Me\nEnd Function\n",
+        "Friend Sub RAS_Close(ByVal ras_value As String)\n    RAS_Result = ras_value\n    If RAS_Modal Then Me.Hide Else Unload Me\nEnd Sub\n",
+        // The close button of the title bar hides the form shown by showModal().
+        "Private Sub UserForm_QueryClose(ByRef Cancel As Integer, ByRef CloseMode As Integer)\n    On Error GoTo RAS_OnError\n    If RAS_Modal And Cancel = 0 And CloseMode = vbFormControlMenu Then Cancel = 1: Me.Hide\n",
+    ] {
+        assert!(code.contains(want), "{want}\n---\n{code}");
+    }
+    let glue = file(&files, "RAS_Glue");
+    assert!(
+        glue.contains("Public Function New_frmInput(ByVal name_ As String, ByVal n As Long) As frmInput\n    Set New_frmInput = New frmInput\n    New_frmInput.RAS_Construct name_, n\nEnd Function\n"),
+        "{glue}"
+    );
+    let main = file(&files, "Main");
+    for want in [
+        "s = RAS_Glue.New_frmInput(\"x\", 3&).RAS_ShowModal()",
+        "Dim f As frmInput",
+        "Set f = RAS_Glue.New_frmInput(\"y\", 2&)",
+        "    f.RAS_ShowModal\n",
+        "MsgBox frmInput.RAS_ShowModal()",
+    ] {
+        assert!(main.contains(want), "{want}\n---\n{main}");
+    }
+}
+
+/// Without a constructor, `new frmInput()` only makes the instance; a form that is never shown by
+/// `showModal()` gets none of its procedures; objects come back with `Set`.
+#[test]
+fn forms_without_constructor_and_object_results() {
+    let (diags, files) = compile(
+        r#"
+@on("btnOK.Click")
+function ok() {
+    this.close(this.txtName);
+}
+"#,
+        &[(
+            "main",
+            r#"
+export function run() {
+    const r = new frmInput().showModal();
+    if (r != null) msgBox(r.text);
+}
+"#,
+        )],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = form_code(&files);
+    assert!(
+        code.contains("Private RAS_Result As MSForms.TextBox\n"),
+        "{code}"
+    );
+    assert!(code.contains("Set RAS_ShowModal = RAS_Result\n"), "{code}");
+    assert!(code.contains("Set RAS_Result = ras_value\n"), "{code}");
+    let main = file(&files, "Main");
+    assert!(
+        main.contains("Set r = RAS_Glue.New_frmInput().RAS_ShowModal()"),
+        "{main}"
+    );
+    let glue = file(&files, "RAS_Glue");
+    assert!(
+        glue.contains("Public Function New_frmInput() As frmInput\n    Set New_frmInput = New frmInput\nEnd Function\n"),
+        "{glue}"
+    );
+
+    let (diags, files) = compile(
+        "@on(\"btnOK.Click\")\nfunction ok() { this.hide(); }\n",
+        &[],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+    assert!(
+        !form_code(&files).contains("RAS_Modal"),
+        "{}",
+        form_code(&files)
+    );
+}
+
+#[test]
+fn errors_of_constructors_and_results() {
+    let (diags, _) = compile(
+        r#"
+export function constructor(name: string): int { return 1; }
+
+@on("btnOK.Click")
+function ok() {
+    this.close(1);
+    this.close("a");
+}
+"#,
+        &[(
+            "main",
+            r#"
+export function run() {
+    new frmInput();
+    frmInput.close(1);
+}
+"#,
+        )],
+    );
+    let joined = diags.join("\n");
+    for code in ["E0633", "E0302", "E0402", "E0635"] {
+        assert!(joined.contains(code), "{code}: {joined}");
+    }
+
+    // No constructor: no arguments.
+    let (diags, _) = compile(
+        "",
+        &[("main", "export function run() { new frmInput(1); }")],
+    );
+    assert!(diags.iter().any(|d| d.starts_with("E0402")), "{diags:#?}");
+    // Nothing passed to close(): showModal() has no value.
+    let (diags, _) = compile(
+        "@on(\"btnOK.Click\")\nfunction ok() { this.close(); }\n",
+        &[(
+            "main",
+            "export function run() { const x = frmInput.showModal(); }",
+        )],
+    );
+    assert!(!diags.is_empty(), "{diags:#?}");
+}
+
+/// `ras form pull` of a form RAS wrote without its `.ras`: the generated procedures go back.
+#[test]
+fn modal_forms_convert_back() {
+    let source = r#"
+let initial = "";
+
+function constructor(name: string) {
+    initial = name;
+}
+
+@on("btnOK.Click")
+function ok() {
+    this.close(`${initial}:${this.txtName.text}`);
+}
+
+@on("UserForm.QueryClose")
+function closing(byref cancel: short, closeMode: short) {
+    if (this.txtName.text == "") cancel = 1;
+}
+"#;
+    let (diags, files) = compile(
+        source,
+        &[(
+            "main",
+            "export function run() { msgBox(new frmInput(\"a\").showModal()); }",
+        )],
+    );
+    assert!(diags.is_empty(), "{diags:?}");
+    let vba = form_code(&files);
+    let mut config = Config::default();
+    config.forms = vec![FormDecl {
+        name: "frmInput".into(),
+        controls: vec![
+            control("txtName", "TextBox"),
+            control("btnOK", "CommandButton"),
+        ],
+    }];
+    let converted = ras_compiler::vba2ras::convert_form(&vba, &config.forms[0]);
+    println!("{}", converted.text);
+    assert!(converted.todos.is_empty(), "{:?}", converted.todos);
+    for want in [
+        "function constructor(name_: string) {",
+        "    this.close(`${initial}:${this.txtName.text}`);",
+        "@on(\"UserForm.QueryClose\")\nfunction closing(",
+    ] {
+        assert!(
+            converted.text.contains(want),
+            "{want}\n---\n{}",
+            converted.text
+        );
+    }
+    assert!(!converted.text.contains("RAS_"), "{}", converted.text);
+    let (diags, _) = compile(
+        &converted.text,
+        &[(
+            "main",
+            "export function run() { msgBox(new frmInput(\"a\").showModal()); }",
+        )],
+    );
+    assert!(diags.is_empty(), "{diags:?}");
+}

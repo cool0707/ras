@@ -1596,8 +1596,27 @@ fn cheat_sheet_examples_pass_the_check() {
             .strip_prefix("// objects/")
             .and_then(|rest| rest.split_once(".ras"))
             .map(|(name, _)| format!("objects/{name}.ras"));
+        // `// forms/frmInput.ras…`: a form's code-behind, with a design of the controls it uses.
+        let form = code
+            .strip_prefix("// forms/")
+            .and_then(|rest| rest.split_once(".ras"))
+            .map(|(name, _)| name.to_string());
+        if let Some(name) = &form {
+            let spec = serde_json::json!({
+                "schemaVersion": 1, "kind": "ras.userform", "basis": "designer",
+                "form": { "name": name, "caption": name, "width": 240, "height": 120 },
+                "controls": [
+                    { "id": "n", "name": "txtName", "type": "TextBox", "left": 12, "top": 12 },
+                    { "id": "o", "name": "btnOK", "type": "CommandButton", "left": 12, "top": 48 },
+                    { "id": "c", "name": "btnCancel", "type": "CommandButton", "left": 96, "top": 48 }
+                ]
+            });
+            files.push((format!("forms/{name}.form.json"), spec.to_string()));
+        }
         let path = if code.starts_with("// test/") {
             format!("test/block{i}.test.ras")
+        } else if let Some(name) = form {
+            format!("forms/{name}.ras")
         } else {
             object.unwrap_or_else(|| format!("src/block{i}.ras"))
         };

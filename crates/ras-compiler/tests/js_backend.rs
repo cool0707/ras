@@ -903,3 +903,93 @@ fn files_opened_by_number_run_without_excel() {
         ]
     );
 }
+
+const ASK_MAIN: &str = r#"export function run() {
+    const color = new frmAsk("色", "青").showModal();
+    console.log(`color: ${color}`);
+    const a = new frmAsk("A");
+    const b = new frmAsk("B");
+    console.log(`${a.describe()} ${b.describe()}`);
+    console.log(`cancelled: [${a.showModal()}]`);
+    console.log(`closed: [${b.showModal()}]`);
+    frmAsk.txtAnswer.text = "既定";
+    console.log(`default: ${frmAsk.showModal()}`);
+}
+"#;
+
+/// `new frmAsk(...)` runs the form's `constructor`; instances keep their own variables;
+/// `showModal()` returns what `this.close(value)` passed (spec §14.11.9).
+#[test]
+fn forms_take_arguments_and_return_values() {
+    let spec = include_str!("js/forms/frmAsk.form.json");
+    let code = include_str!("js/forms/frmAsk.ras");
+    let mut cfg = Config::default();
+    cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
+    let sources = vec![
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: ASK_MAIN.into(),
+        },
+        form_source(
+            PathBuf::from("forms/frmAsk.ras"),
+            "frmAsk",
+            code.to_string(),
+        ),
+    ];
+    let prog = analyze(sources, cfg);
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    let out = build_js(&prog, "../../");
+    assert!(!out.files.is_empty(), "no output: {:?}", out.diagnostics);
+    if !has_node() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ras-js-{}-ask", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("src/main.ras", ASK_MAIN);
+    write("forms/frmAsk.ras", code);
+    write("forms/frmAsk.form.json", spec);
+    for f in &out.files {
+        write(&format!("build/debug/{}", f.rel_path), &f.text);
+    }
+    let p = Project(root);
+    let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_ask.js")));
+    assert!(ok, "{stderr}");
+    let expected = "\
+show frmAsk#1 \"色\" modal=true
+asking 色 (1)
+hide #1
+bye 色
+color: 色=赤
+A/0 B/0
+show frmAsk#2 \"A\" modal=true
+asking A (1)
+hide #2
+bye A
+cancelled: []
+show frmAsk#3 \"B\" modal=true
+asking B (1)
+hide #3
+bye B
+closed: []
+show frmAsk#4 \"質問\" modal=true
+asking  (1)
+hide #4
+bye 
+default: =既定
+";
+    assert_eq!(stdout, expected, "{stderr}");
+}
