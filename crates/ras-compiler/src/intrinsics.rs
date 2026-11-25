@@ -36,6 +36,7 @@ intrinsics! {
     PlatformIs64, PlatformIsVba7,
     // Range helpers (spec §9.4)
     RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, SheetUsedTable, ExcelMatch,
+    ExcelErrorToNull,
     // event handlers attached at run time (spec §12.2.3)
     EventOn,
     // statements of the files opened by number (spec §15.3.2)

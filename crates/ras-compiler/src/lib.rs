@@ -19,6 +19,7 @@ pub mod collect;
 pub mod config;
 pub mod diag;
 pub mod emit;
+mod errval;
 pub mod formula;
 pub mod hints;
 pub mod intrinsics;

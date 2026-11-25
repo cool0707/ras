@@ -2497,6 +2497,7 @@ impl<'p> Lowerer<'p> {
                 }
                 call("RAS_Match", ops)
             }
+            ExcelErrorToNull => call("RAS_ErrorToNull", self.operands(&[&args[0]])),
             ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind
             | ArrFindIndex | ArrSlice | ArrConcat | MapKeys | MapValues | CollToArray => {
                 unreachable!()

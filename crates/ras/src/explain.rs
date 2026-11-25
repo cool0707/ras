@@ -249,6 +249,12 @@ pub const ENTRIES: &[Entry] = &[
     e("W0311", "使われない式の値", "式の値が使われていません（`a == 1;`、`x + 1;` など）。代入（`=`）のつもりで比較（`==`）を書いていないか確かめてください。"),
     e("W0312", "`typeof` の比較", "`typeof` は VBA の `TypeName` と同じ型名（`\"Long\"`、`\"String\"`、`\"Range\"`）を返します。JavaScript の `\"number\"` / `\"string\"` とは一致しないので、メッセージに示された名前と比較してください。"),
     x(
+        "W0313",
+        "エラー値かもしれない値をそのまま使っている",
+        "セルの値（`Range.value` / `value2`、`toArray()` などで読んだ配列の要素）、`application.vLookup` / `match` / `index` / `evaluate`、`CVErr` の値は、セルのエラー値（`#N/A`、`#DIV/0!` など）のことがあります。VBA ではエラー値を比較・演算・型変換したり、多くの関数の引数に渡したりすると、そのときだけ実行時エラー（13: 型が一致しません）になります。先に `isError()` で確かめる（`if (isError(v)) continue;`）か、`Excel.errorToNull()` でエラー値を `null` にしてから使ってください（配列なら要素のエラー値を `null` にします。`?? \"\"` で既定値を付けられます）。変数に入れた値は関数の中だけで追跡し、ほかの関数へ渡した先は追跡しません。自分の関数の doc コメントに `@errorValue` を書くと、その戻り値も同じように扱います。",
+        "const v = ws.range(\"A1\").value;\nif (isError(v)) return;\nif (v == \"済\") { ... }           // ここでは警告しない\n\nconst rows = Excel.errorToNull(ws.range(\"A1:C9\").toArray());",
+    ),
+    x(
         "W0401",
         "修飾されていない Excel の参照",
         "`range(...)`・`cells(...)`・`activeSheet` などをシートやブックを付けずに書くと、そのとき選択されているシート・ブックに対して動きます（ユーザーが別のシートを開いていると、そこに書き込みます）。シートを明示してください。",

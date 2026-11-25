@@ -711,7 +711,10 @@ impl<'p> Gen<'p> {
                 }
                 let l = self.expr(lhs);
                 let r = self.expr(rhs);
-                if is_dyn(&lt) || is_dyn(&rt) {
+                // A union may hold a value of another kind: such values are not equal (spec §2.6.2).
+                if lt.is_value_union() || rt.is_value_union() {
+                    format!("{}$rt.unionEq({l}, {r})", if negate { "!" } else { "" })
+                } else if is_dyn(&lt) || is_dyn(&rt) {
                     format!("{}$rt.eq({l}, {r})", if negate { "!" } else { "" })
                 } else if lt == Type::Date || rt == Type::Date {
                     format!("(+{l} {} +{r})", if negate { "!==" } else { "===" })
@@ -1308,6 +1311,7 @@ impl<'p> Gen<'p> {
             RangeToRow => format!("$rt.toRow({r})"),
             RangeFromArray => format!("$rt.fromArray({r}, {argv})"),
             ExcelMatch => format!("$rt.match({argv})"),
+            ExcelErrorToNull => format!("$rt.errorToNull({argv})"),
         }
     }
 }

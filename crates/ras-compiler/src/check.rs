@@ -137,6 +137,7 @@ pub fn check(prog: &mut Program) {
         ck.check_struct_members(c);
     }
     ck.lints();
+    crate::errval::lint(ck.prog);
 }
 
 fn has_named(args: &[Expr]) -> bool {
@@ -145,7 +146,7 @@ fn has_named(args: &[Expr]) -> bool {
 }
 
 /// The value of an argument, without its name.
-fn named_value(a: &Expr) -> &Expr {
+pub(crate) fn named_value(a: &Expr) -> &Expr {
     match &a.kind {
         ExprKind::NamedArg { value, .. } => value,
         _ => a,
@@ -2791,9 +2792,14 @@ impl Checker<'_> {
                 }
             }
             Type::Ns(NsRef::Host(ns)) => {
-                if ns == "Excel" && name.text == "match" {
-                    self.set_res(e.id, Res::Intrinsic(Intr::ExcelMatch));
-                    return Access::Intrinsic(Intr::ExcelMatch);
+                let excel_intr = match name.text.as_str() {
+                    "match" => Some(Intr::ExcelMatch),
+                    "errorToNull" => Some(Intr::ExcelErrorToNull),
+                    _ => None,
+                };
+                if let (true, Some(intr)) = (ns == "Excel", excel_intr) {
+                    self.set_res(e.id, Res::Intrinsic(intr));
+                    return Access::Intrinsic(intr);
                 }
                 match self
                     .prog
@@ -5826,6 +5832,16 @@ impl Checker<'_> {
                 }
                 Type::Any
             }
+            // `Excel.errorToNull(v)`: the value with error values (#N/A ...) as null (spec §13.3).
+            ExcelErrorToNull => {
+                if !self.arg_count(call, args, 1, 1) {
+                    return Type::Any;
+                }
+                match self.value(&args[0], None) {
+                    Type::Null | Type::Error => Type::Any,
+                    t => t,
+                }
+            }
         }
     }
 
@@ -6065,7 +6081,7 @@ fn stmt_returns(s: &Stmt) -> bool {
 }
 
 /// Control never reaches the statement after `s`.
-fn stmt_exits(s: &Stmt) -> bool {
+pub(crate) fn stmt_exits(s: &Stmt) -> bool {
     match &s.kind {
         StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break(_) | StmtKind::Continue(_) => {
             true
@@ -6090,7 +6106,7 @@ fn assigns_target(target: &Expr, name: &str) -> bool {
 }
 
 /// `e` contains an assignment to the variable `name`.
-fn assigns_in_expr(e: &Expr, name: &str) -> bool {
+pub(crate) fn assigns_in_expr(e: &Expr, name: &str) -> bool {
     crate::astutil::any_expr_in(e, &mut |x| match &x.kind {
         ExprKind::Assign { target, .. } => assigns_target(target, name),
         ExprKind::IncDec { operand, .. } => assigns_target(operand, name),
@@ -6098,7 +6114,7 @@ fn assigns_in_expr(e: &Expr, name: &str) -> bool {
     })
 }
 
-fn assigns_in_stmt(s: &Stmt, name: &str) -> bool {
+pub(crate) fn assigns_in_stmt(s: &Stmt, name: &str) -> bool {
     crate::astutil::any_expr(s, &mut |x| match &x.kind {
         ExprKind::Assign { target, .. } => assigns_target(target, name),
         ExprKind::IncDec { operand, .. } => assigns_target(operand, name),

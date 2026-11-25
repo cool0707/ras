@@ -172,7 +172,8 @@ export function fill() {
     const last = ws.cells(ws.rows.count, 1).end(xlUp).row;
     for (let r = 2; r <= last; r++) {
         // セルを 1 つずつ読み書きするループは、Range と配列の一括転送に変換される
-        ws.cells(r, 3).value = ws.cells(r, 2).value * 2;
+        // セルのエラー値（#N/A など）は計算・比較すると実行時エラーになるので、null にしてから使う
+        ws.cells(r, 3).value = (Excel.errorToNull(ws.cells(r, 2).value) ?? 0) * 2;
     }
     ws.range("C1").value = "2 倍";
     ws.range("C1").font.bold = true;
@@ -184,7 +185,9 @@ export function readAll(): double {
     const data = ws.range("A1").currentRegion.value;   // 2 次元配列（any[][]。添字は 0 始まり）
     let total = 0.0;
     for (let r = 1; r < data.length; r++) {
-        total += data[r][1] as double;
+        const v = data[r][1];
+        if (isError(v)) continue;                       // エラー値（#N/A など）を飛ばす
+        total += v as double;
     }
     const names = worksheets.map(s => s.name);         // コレクションは配列のように使える
     debug.print(names.join(","), total);
@@ -202,7 +205,9 @@ export function ask(): string {
 export function sums(code: string): double {
     const ws = Sheet1;
     const total = fx`SUM(A1:A10)`;
-    return total + ws.fx`SUMIF(A:A, "${code}", B:B)`;
+    const hit = ws.fx`SUMIF(A:A, "${code}", B:B)`;
+    if (isError(total) || isError(hit)) return 0;      // 数式の結果もエラー値のことがある
+    return total + hit;
 }
 ```
 

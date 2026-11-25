@@ -958,6 +958,7 @@ declare function CLngPtr(expression: any): ptr;
 /**
  * 指定したエラー番号を持つエラー値（Variant）を返す。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/cverr-function
+ * @errorValue
  */
 declare function CVErr(expression: any): any;
 

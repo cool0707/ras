@@ -477,8 +477,35 @@ function isPlainValue(v) {
 }
 function eq(a, b) {
     if (a == null && b == null) return true;
+    // VBA's `=` on an error value (#N/A ...) is a type mismatch.
+    if (a instanceof CVErr || b instanceof CVErr) return raise(13);
     if (!isPlainValue(a) || !isPlainValue(b)) return a === b || (isCom(a) && isCom(b) && a.isSame(b)) || (a != null && typeof a.$same === "function" && a.$same(b));
     return cmp(a, b) === 0;
+}
+/** The kind of a value for `==` on a union (`RAS_ValueKind`): 0 number, 1 string, 2 boolean, 3 date, 4 empty, 5 error value. */
+function valueKind(v) {
+    if (v == null) return 4;
+    if (typeof v === "string") return 1;
+    if (typeof v === "boolean") return 2;
+    if (v instanceof RDate) return 3;
+    if (v instanceof CVErr) return 5;
+    return 0;
+}
+/** `==` on a union value (`RAS_UnionEq`, spec §2.6.2): values of different kinds are not equal. */
+function unionEq(a, b) {
+    if (!isPlainValue(a) && !(a instanceof CVErr)) return eq(a, b);
+    if (!isPlainValue(b) && !(b instanceof CVErr)) return false;
+    const k = valueKind(a);
+    if (k !== valueKind(b)) return false;
+    if (k === 4) return true;
+    if (k === 5) return a.code === b.code;
+    return eq(a, b);
+}
+/** `Excel.errorToNull(v)`: an error value (#N/A ...) as null, also the elements of an array. */
+function errorToNull(v) {
+    if (v instanceof CVErr) return null;
+    if (Array.isArray(v)) return v.map(errorToNull);
+    return v;
 }
 
 // ---------------------------------------------------------------------------- strings and arrays
@@ -1813,7 +1840,7 @@ module.exports = {
     RasError, RDate, CVErr, Struct, Collection, Nothing,
     raise, makeError, unsupported, caught,
     date, clone, i32, i64, idiv, imod, div, fmod, pow, sqrt, log, post, round, bankersRound, numStr, toFixed, val,
-    cnum, cint, clng, toInt, toLong, cbool, cdate, cstr, str, dyn, cmp, eq,
+    cnum, cint, clng, toInt, toLong, cbool, cdate, cstr, str, dyn, cmp, eq, unionEq, errorToNull,
     trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,

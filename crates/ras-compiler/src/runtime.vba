@@ -84,12 +84,15 @@ Public Function RAS_UnionEq(ByRef a As Variant, ByRef b As Variant) As Boolean
     If RAS_ValueKind(a) <> RAS_ValueKind(b) Then Exit Function
     If IsNull(a) Or IsEmpty(a) Then
         RAS_UnionEq = True
+    ElseIf IsError(a) Then
+        ' error values (#N/A ...) cannot be compared with `=`: compare their numbers
+        RAS_UnionEq = (CLng(a) = CLng(b))
     Else
         RAS_UnionEq = (a = b)
     End If
 End Function
 '@@ proc RAS_ValueKind
-' 0 number, 1 string, 2 boolean, 3 date, 4 empty / null.
+' 0 number, 1 string, 2 boolean, 3 date, 4 empty / null, 5 error value.
 Public Function RAS_ValueKind(ByRef v As Variant) As Long
     Select Case VarType(v)
     Case vbString
@@ -100,6 +103,8 @@ Public Function RAS_ValueKind(ByRef v As Variant) As Long
         RAS_ValueKind = 3&
     Case vbEmpty, vbNull
         RAS_ValueKind = 4&
+    Case vbError
+        RAS_ValueKind = 5&
     Case Else
         RAS_ValueKind = 0&
     End Select
@@ -853,6 +858,45 @@ Public Function RAS_Match(ByRef lookupValue As Variant, ByRef lookupArray As Var
     Dim r As Variant
     r = Application.Match(lookupValue, lookupArray, matchType)
     If Not IsError(r) Then RAS_Match = r
+End Function
+'@@ proc RAS_ErrorToNull
+' Excel.errorToNull (spec 13.3): an error value (#N/A ...) as Empty (null). For an array, a copy
+' whose error elements are Empty (2-D arrays and arrays of arrays too).
+Public Function RAS_ErrorToNull(ByRef v As Variant) As Variant
+    Dim out As Variant
+    Dim i As Long
+    Dim j As Long
+    Dim twoD As Boolean
+    If IsObject(v) Then
+        Set RAS_ErrorToNull = v
+        Exit Function
+    End If
+    If IsError(v) Then Exit Function
+    out = v
+    If IsArray(v) Then
+        If RAS_Len(v) > 0& Then
+            On Error Resume Next
+            j = LBound(v, 2)
+            twoD = (Err.Number = 0)
+            On Error GoTo 0
+            If twoD Then
+                For i = LBound(v, 1) To UBound(v, 1)
+                    For j = LBound(v, 2) To UBound(v, 2)
+                        If IsError(v(i, j)) Then out(i, j) = Empty
+                    Next j
+                Next i
+            Else
+                For i = LBound(v) To UBound(v)
+                    If IsError(v(i)) Then
+                        out(i) = Empty
+                    ElseIf IsArray(v(i)) Then
+                        out(i) = RAS_ErrorToNull(v(i))
+                    End If
+                Next i
+            End If
+        End If
+    End If
+    RAS_ErrorToNull = out
 End Function
 '@@ proc RAS_ShowForm
 ' Shows a user form by name: "Run in Excel" of a form (Application.Run cannot reach a form's

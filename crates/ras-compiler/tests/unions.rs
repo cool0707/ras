@@ -207,6 +207,9 @@ export function store(): boolean {
     let rt = code(&out, "RAS_Runtime");
     assert_contains(&rt, "Public Function RAS_UnionEq(");
     assert_contains(&rt, "Public Function RAS_ValueKind(");
+    // Error values (`#N/A` ...) are a kind of their own, compared by their numbers.
+    assert_contains(&rt, "    Case vbError\n        RAS_ValueKind = 5&\n");
+    assert_contains(&rt, "        RAS_UnionEq = (CLng(a) = CLng(b))\n");
 }
 
 #[test]
