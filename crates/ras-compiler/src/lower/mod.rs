@@ -2639,7 +2639,19 @@ impl<'p> Lowerer<'p> {
                     prog.modules[t.module].vba_name.clone(),
                 )
             };
-            let proc_name = format!("{}_{}", t.object, t.event);
+            // A control's (an ActiveX control's, a shape's): its event in RAS's spelling
+            // (`CommandButton1_click`, VBA ignores the case); the sheet's and the workbook's own
+            // as VBE declares them (`Worksheet_Change`).
+            let proc_name = if t.object == "Workbook" || t.object == "Worksheet" {
+                format!("{}_{}", t.object, t.event)
+            } else {
+                let mut ev = t.event.chars();
+                let first = ev
+                    .next()
+                    .map(|c| c.to_lowercase().collect::<String>())
+                    .unwrap_or_default();
+                format!("{}_{first}{}", t.object, ev.as_str())
+            };
             if t.module != usize::MAX {
                 // A function of the file named like the event procedure would clash with it.
                 for &f in &prog.modules[t.module].fns {

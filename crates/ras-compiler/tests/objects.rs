@@ -277,14 +277,14 @@ function left() {
     assert!(diags.is_empty(), "{diags:#?}");
     let code = module(&files, "Sheet1");
     assert!(
-        code.contains("Private Sub CommandButton1_Click()"),
+        code.contains("Private Sub CommandButton1_click()"),
         "{code}"
     );
-    assert!(code.contains("Private Sub TextBox1_KeyDown(ByVal KeyCode As MSForms.ReturnInteger, ByVal Shift As Integer)"), "{code}");
-    assert!(code.contains("Private Sub TextBox1_LostFocus()"), "{code}");
+    assert!(code.contains("Private Sub TextBox1_keyDown(ByVal KeyCode As MSForms.ReturnInteger, ByVal Shift As Integer)"), "{code}");
+    assert!(code.contains("Private Sub TextBox1_lostFocus()"), "{code}");
     assert!(code.contains("Me.CommandButton1.Caption = "), "{code}");
     assert!(
-        code.contains("RAS_EventError \"Sheet1.CommandButton1_Click\""),
+        code.contains("RAS_EventError \"Sheet1.CommandButton1_click\""),
         "{code}"
     );
     assert!(
@@ -380,7 +380,7 @@ fn controls_whose_events_are_not_known() {
     let code = module(&out.files, "Sheet1");
     assert!(
         code.contains(
-            "Private Sub Calendar1_DateClick(ByVal dateClicked As Date, ByRef cancel As Boolean)"
+            "Private Sub Calendar1_dateClick(ByVal dateClicked As Date, ByRef cancel As Boolean)"
         ),
         "{code}"
     );
@@ -410,7 +410,7 @@ fn controls_whose_events_are_not_known() {
             .collect::<Vec<_>>()
     );
     assert!(module(&out.files, "Sheet1").contains(
-        "Private Sub Calendar1_DateClick(ByVal dateClicked As Date, ByRef cancel As Boolean)"
+        "Private Sub Calendar1_dateClick(ByVal dateClicked As Date, ByRef cancel As Boolean)"
     ));
 }
 
