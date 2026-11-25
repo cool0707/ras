@@ -3486,7 +3486,7 @@
         input.spellcheck = false;
         input.autocomplete = "off";
         let now = null;
-        const show = () => (input.value = now === null ? "" : name === "°" ? `${now}°` : `${now} ${name}`);
+        const show = () => (input.value = now === null ? "" : name === "°" || name === "%" ? `${now}${name}` : `${now} ${name}`);
         const take = (cm) => {
             if (!isFinite(cm)) return show();
             cm = Math.round(Math.min(Math.max(cm, min), max) * 100) / 100;
@@ -3737,10 +3737,100 @@
             }
         }
 
-        // 効果: what the file has is kept and drawn; not changed here
-        if (canFill(obj) || canLine(obj)) {
-            const sec = section("effects", "効果");
-            sec.appendChild(el("div", "pnote", "影・光彩・ぼかし・3-D などの効果の変更にはまだ対応していません（ファイルにある効果はそのまま残り、表示されます）。"));
+        // 効果: those the grid draws (影 (外側), 反射, 光彩), each by its 標準スタイル and its
+        // values; the others the file has (内側の影, ぼかし, 3-D, ...) stay as they are.
+        if (canLine(obj) && "shadow" in paint) {
+            const effectSection = (key, label, presets, values) => {
+                const sec = section("effects", label);
+                const now = paint[key] || null;
+                const row = line(sec, "標準スタイル");
+                const pick = row.appendChild(el("select", "pwide"));
+                pick.dataset.field = `${key}-preset`;
+                const same = (p) => now && Object.keys(p).every((k) => k === "color" || Math.abs((now[k] ?? 0) - p[k]) < 0.01);
+                let chosen = now ? "" : "none";
+                presets.forEach(([label, p], i) => {
+                    pick.appendChild(el("option", null, label)).value = String(i);
+                    if (!chosen && same(p)) chosen = String(i);
+                });
+                pick.insertBefore(el("option", null, "なし"), pick.firstChild).value = "none";
+                if (!chosen) {
+                    const custom = pick.appendChild(el("option", null, "ユーザー設定"));
+                    custom.value = "";
+                    custom.disabled = true;
+                }
+                pick.value = chosen;
+                pick.addEventListener("change", () => {
+                    if (pick.value === "none") return edit({ [key]: null });
+                    const p = { ...presets[+pick.value][1] };
+                    if (key !== "reflection") p.color = (now && now.color) || lastShape[key];
+                    edit({ [key]: p });
+                });
+                if (!now) return;
+                for (const [field, label, unit] of values) {
+                    if (field === "color") {
+                        colorRow(sec, key, now.color, null, (c) => c && edit({ [key]: { color: c } }));
+                        continue;
+                    }
+                    const b = sizeBox(line(sec, label), label, (v) => edit({ [key]: { [field]: v } }), unit);
+                    b.input.dataset.field = `${key}-${field}`;
+                    b.setCm(now[field] ?? 0);
+                }
+            };
+            const pct = { name: "%", step: 1, max: 100 };
+            const pts = (max) => ({ name: "pt", step: 1, max });
+            const shadow = (angle, distance = 3, blur = 4) => ({ transparency: 60, blur, angle, distance });
+            effectSection(
+                "shadow",
+                "影",
+                [
+                    ["オフセット: 右下", shadow(45)],
+                    ["オフセット: 下", shadow(90)],
+                    ["オフセット: 左下", shadow(135)],
+                    ["オフセット: 右", shadow(0)],
+                    ["オフセット: 中央", shadow(0, 0, 5)],
+                    ["オフセット: 左", shadow(180)],
+                    ["オフセット: 右上", shadow(315)],
+                    ["オフセット: 上", shadow(270)],
+                    ["オフセット: 左上", shadow(225)],
+                ],
+                [
+                    ["color", "色"],
+                    ["transparency", "透明度", pct],
+                    ["blur", "ぼかし", pts(100)],
+                    ["angle", "角度", { name: "°", step: 1, max: 359 }],
+                    ["distance", "距離", pts(200)],
+                ],
+            );
+            effectSection(
+                "reflection",
+                "反射",
+                [
+                    ["反射 (弱): 接触", { transparency: 48, size: 35, distance: 0 }],
+                    ["反射 (中): 接触", { transparency: 50, size: 55, distance: 0 }],
+                    ["反射 (強): 接触", { transparency: 50, size: 90, distance: 0 }],
+                    ["反射 (弱): 4 pt オフセット", { transparency: 48, size: 35, distance: 4 }],
+                    ["反射 (中): 4 pt オフセット", { transparency: 50, size: 55, distance: 4 }],
+                    ["反射 (強): 4 pt オフセット", { transparency: 50, size: 90, distance: 4 }],
+                    ["反射 (弱): 8 pt オフセット", { transparency: 48, size: 35, distance: 8 }],
+                    ["反射 (中): 8 pt オフセット", { transparency: 50, size: 55, distance: 8 }],
+                    ["反射 (強): 8 pt オフセット", { transparency: 50, size: 90, distance: 8 }],
+                ],
+                [
+                    ["transparency", "透明度", pct],
+                    ["size", "サイズ", pct],
+                    ["distance", "距離", pts(200)],
+                ],
+            );
+            effectSection(
+                "glow",
+                "光彩",
+                [5, 8, 11, 18].map((size) => [`光彩: ${size} pt`, { transparency: 60, size }]),
+                [
+                    ["color", "色"],
+                    ["size", "サイズ", pts(150)],
+                    ["transparency", "透明度", pct],
+                ],
+            );
         }
 
         // サイズ (cm), 回転 (°)
@@ -5754,7 +5844,7 @@
         fillColors(openPop(anchor, "colors"), name, none, pick);
     }
     function fillColors(pop, name, none, pick) {
-        popItem(pop, none, () => (pick ? pick(null) : format({ [name]: null })));
+        if (none) popItem(pop, none, () => (pick ? pick(null) : format({ [name]: null })));
         const grid = pop.appendChild(el("div", "swatches"));
         for (const color of PALETTE) {
             const b = grid.appendChild(el("button", "swatch"));
@@ -6352,7 +6442,7 @@
     const tools = {};
     const lastColor = { color: "#FF0000", fill: "#FFFF00" };
     // The colors of 図形の塗りつぶし and 図形の枠線 used last.
-    const lastShape = { fill: "#4472C4", line: "#000000" };
+    const lastShape = { fill: "#4472C4", line: "#000000", shadow: "#000000", glow: "#4472C4" };
     let lastBorder = "all";
     // The 線の色 (null: automatic) and the 線のスタイル the borders of the menu are drawn with.
     const borderPen = { color: null, line: "thin" };

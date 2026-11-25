@@ -221,7 +221,7 @@ pub enum Op {
     Object {
         sheet: String,
         name: String,
-        change: ObjectChange,
+        change: Box<ObjectChange>,
     },
     /// A form control put on the sheet (開発 > 挿入 > フォーム コントロール).
     Control { sheet: String, control: FormControl },
@@ -380,6 +380,23 @@ pub struct ObjectChange {
     pub text_anchor: Option<String>,
     pub text_wrap: Option<bool>,
     pub inset: Option<[Option<f64>; 4]>,
+    /// 効果 (its `effectLst`): 影 (外側), 光彩, 反射 (None in them: none; the values not given
+    /// stay as it has them, or as Excel's first preset).
+    pub shadow: Option<Option<Effect>>,
+    pub glow: Option<Option<Effect>>,
+    pub reflection: Option<Option<Effect>>,
+}
+
+/// An effect of a shape as 図形の書式設定 > 効果 sets it (None: what it has stays): 色
+/// (`RRGGBB`), 透明度 (%), サイズ (光彩: points; 反射: %), ぼかし and 距離 (points), 角度 (°).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Effect {
+    pub color: Option<String>,
+    pub transparency: Option<f64>,
+    pub size: Option<f64>,
+    pub blur: Option<f64>,
+    pub angle: Option<f64>,
+    pub distance: Option<f64>,
 }
 
 /// Where an object goes among those drawn over one another (配置 > 前面へ移動, ...).
@@ -1038,8 +1055,54 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     }
                     Some(_) => return Err("`inset` は {\"left\": 7.2, \"top\": 3.6} のように指定してください（ポイント）".into()),
                 };
+                // An effect: null for none, or its values (each kind those it has).
+                let effect = |key: &str, keys: &[&str]| -> Result<Option<Option<Effect>>> {
+                    let m = match o.get(key) {
+                        None => return Ok(None),
+                        Some(Json::Null) => return Ok(Some(None)),
+                        Some(Json::Object(m)) => m,
+                        Some(_) => return Err(format!("`{key}` は null（なし）か {{{}}} のうち変えるもので指定してください", keys.iter().map(|k| format!("\"{k}\"")).collect::<Vec<_>>().join(", "))),
+                    };
+                    let mut e = Effect::default();
+                    for (k, v) in m {
+                        if !keys.contains(&k.as_str()) {
+                            return Err(format!("`{key}` の `{k}` は指定できません（{}）", keys.join(" / ")));
+                        }
+                        if k == "color" {
+                            let c = v.as_str().unwrap_or("").trim().trim_start_matches('#');
+                            if c.len() != 6 || !c.bytes().all(|b| b.is_ascii_hexdigit()) {
+                                return Err(format!("`{key}` の `color` は \"#RRGGBB\" で指定してください"));
+                            }
+                            e.color = Some(c.to_ascii_uppercase());
+                            continue;
+                        }
+                        let (max, unit) = match k.as_str() {
+                            "transparency" => (100.0, "%"),
+                            "size" if key == "reflection" => (100.0, "%"),
+                            "size" => (150.0, "ポイント"),
+                            "angle" => (360.0, "°"),
+                            "blur" | "distance" => (200.0, "ポイント"),
+                            _ => unreachable!(),
+                        };
+                        let x = v
+                            .as_f64()
+                            .filter(|x| x.is_finite() && (0.0..=max).contains(x))
+                            .ok_or_else(|| format!("`{key}` の `{k}` は 0〜{max}（{unit}）で指定してください"))?;
+                        *match k.as_str() {
+                            "transparency" => &mut e.transparency,
+                            "size" => &mut e.size,
+                            "angle" => &mut e.angle,
+                            "blur" => &mut e.blur,
+                            _ => &mut e.distance,
+                        } = Some(x);
+                    }
+                    Ok(Some(Some(e)))
+                };
                 let change = ObjectChange {
                     shape,
+                    shadow: effect("shadow", &["color", "transparency", "blur", "angle", "distance"])?,
+                    glow: effect("glow", &["color", "transparency", "size"])?,
+                    reflection: effect("reflection", &["transparency", "size", "blur", "distance"])?,
                     text_anchor,
                     text_wrap: o.get("textWrap").and_then(Json::as_bool),
                     inset,
@@ -1074,9 +1137,9 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     page: int_of(o, "page")?,
                 };
                 if change == (ObjectChange { shape, ..Default::default() }) {
-                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`textAnchor`・`textWrap`・`inset`、`fill`、`line`、`lineWidth`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`textAnchor`・`textWrap`・`inset`、`fill`、`line`、`lineWidth`、`shadow`・`glow`・`reflection`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
                 }
-                Op::Object { sheet, name, change }
+                Op::Object { sheet, name, change: Box::new(change) }
             }
             "control" => {
                 let kind = text("control").unwrap_or_else(|| "button".to_string());

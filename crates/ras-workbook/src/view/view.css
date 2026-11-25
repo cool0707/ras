@@ -529,6 +529,7 @@ body.copying, body.copying td { cursor: copy; }
 #pane .plabel { flex: 1; min-width: 0; color: #333; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #pane .prow > .spinbox input { width: 72px; }
 #pane .prow > input, #pane .prow > select { flex: none; width: 110px; min-width: 0; height: 24px; padding: 0 4px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; color: #000; font: inherit; }
+#pane .prow > select.pwide { width: 136px; }
 #pane .prow > input:focus, #pane .prow > select:focus, #pane .ptext:focus { outline: 0; border-color: var(--accent); }
 #pane .prow > input[type="number"] { flex: none; width: 80px; text-align: right; }
 #pane .prow.pcheck { gap: 6px; margin-top: 2px; }

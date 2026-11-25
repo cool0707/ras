@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use super::insert::{Sheet, place, relative, rid_attr, tree};
 use super::scan::{self, Edits, El};
-use super::{ObjectChange, Order, Place, Result};
+use super::{Effect, ObjectChange, Order, Place, Result};
 use crate::book::Book;
 use crate::book::view::Sizes;
 
@@ -882,7 +882,8 @@ fn style(
     let line = change.line.is_some() || change.line_width.is_some();
     let turn = change.rotation.is_some() || change.flip_h.is_some() || change.flip_v.is_some();
     let adjust = change.adjust.as_ref();
-    if !(fill.is_some() || line || turn || adjust.is_some()) {
+    let fx = change.shadow.is_some() || change.glow.is_some() || change.reflection.is_some();
+    if !(fill.is_some() || line || turn || adjust.is_some() || fx) {
         return Ok(());
     }
     if adjust.is_some() && kind != "sp" && kind != "cxnSp" {
@@ -893,6 +894,11 @@ fn style(
     if kind == "graphicFrame" {
         return Err(format!(
             "`{name}` はグラフのため、ここでは書式・回転を変えられません（Excel で行ってください）"
+        ));
+    }
+    if fx && kind == "grpSp" {
+        return Err(format!(
+            "`{name}` はグループのため、効果を変えられません（グループの中の図形ごとに Excel で行ってください）"
         ));
     }
     if (fill.is_some() || line) && kind == "grpSp" {
@@ -1010,6 +1016,10 @@ fn style(
         }
         changed = true;
     }
+    if fx {
+        effects(&mut kids, &a, &decl, change, name)?;
+        changed = true;
+    }
     if changed {
         let body: String = kids.into_iter().map(|k| k.1).collect();
         edits.replace(
@@ -1018,6 +1028,197 @@ fn style(
         );
     }
     Ok(())
+}
+
+/// The effects of an effect list in the schema's order.
+const EFFECTS: [&str; 8] = [
+    "blur",
+    "fillOverlay",
+    "glow",
+    "innerShdw",
+    "outerShdw",
+    "prstShdw",
+    "reflection",
+    "softEdge",
+];
+
+/// The effects of shape properties (their children `kids`) changed: 影 (`outerShdw`), 光彩
+/// (`glow`), 反射 (`reflection`) set or taken away in its `effectLst` (made after the fill and
+/// the line when it has none), the other effects it has kept. `a` is the prefix of DrawingML,
+/// `decl` its declaration where it is not declared.
+fn effects(
+    kids: &mut Vec<(String, String)>,
+    a: &str,
+    decl: &str,
+    change: &ObjectChange,
+    name: &str,
+) -> Result<()> {
+    if kids.iter().any(|k| k.0 == "effectDag") {
+        return Err(format!(
+            "`{name}` の効果は組み合わせ（effectDag）で書かれているため、ここでは変えられません（Excel で行ってください）"
+        ));
+    }
+    let at = kids.iter().position(|k| k.0 == "effectLst");
+    let (mut list, open, close, p) = match at {
+        Some(i) => {
+            let text = &kids[i].1;
+            let el = scan::tree(text, &[]).ok_or("効果の書式を読み取れません")?;
+            let list: Vec<(String, String)> = el
+                .children
+                .iter()
+                .map(|c| (c.local().to_string(), text[c.span()].to_string()))
+                .collect();
+            (
+                list,
+                open_tag(text, &el),
+                format!("</{}>", el.name),
+                scan::prefix(el.name).to_string(),
+            )
+        }
+        None => (
+            Vec::new(),
+            format!("<{a}effectLst{decl}>"),
+            format!("</{a}effectLst>"),
+            a.to_string(),
+        ),
+    };
+    for (kind, eff) in [
+        ("glow", &change.glow),
+        ("outerShdw", &change.shadow),
+        ("reflection", &change.reflection),
+    ] {
+        let Some(eff) = eff else { continue };
+        let i = list.iter().position(|k| k.0 == kind);
+        match (eff, i) {
+            (None, Some(i)) => {
+                list.remove(i);
+            }
+            (None, None) => {}
+            (Some(e), i) => {
+                let new = effect_xml(kind, i.map(|i| list[i].1.as_str()), e, &p)
+                    .ok_or_else(|| format!("`{name}` の効果（{kind}）を読み取れません"))?;
+                match i {
+                    Some(i) => list[i].1 = new,
+                    None => list.push((kind.to_string(), new)),
+                }
+            }
+        }
+    }
+    list.sort_by_key(|k| {
+        EFFECTS
+            .iter()
+            .position(|e| *e == k.0)
+            .unwrap_or(EFFECTS.len())
+    });
+    let body: String = list.into_iter().map(|k| k.1).collect();
+    let text = format!("{open}{body}{close}");
+    match at {
+        Some(i) => kids[i].1 = text,
+        None => {
+            let at = kids
+                .iter()
+                .rposition(|k| {
+                    matches!(k.0.as_str(), "xfrm" | "custGeom" | "prstGeom" | "ln")
+                        || FILLS.contains(&k.0.as_str())
+                })
+                .map_or(0, |i| i + 1);
+            kids.insert(at, ("effectLst".into(), text));
+        }
+    }
+    Ok(())
+}
+
+/// An effect (its text) with the values given set: on what it has (`old`), else on Excel's first
+/// preset of its kind (影: 外側 オフセット: 右下; 光彩: 5 pt, アクセント 1; 反射: 弱 接触).
+fn effect_xml(kind: &str, old: Option<&str>, e: &Effect, p: &str) -> Option<String> {
+    let base = match old {
+        Some(t) => t.to_string(),
+        None => match kind {
+            "outerShdw" => format!(
+                "<{p}outerShdw blurRad=\"50800\" dist=\"38100\" dir=\"2700000\" algn=\"tl\" rotWithShape=\"0\"><{p}prstClr val=\"black\"><{p}alpha val=\"40000\"/></{p}prstClr></{p}outerShdw>"
+            ),
+            "glow" => format!(
+                "<{p}glow rad=\"63500\"><{p}schemeClr val=\"accent1\"><{p}satMod val=\"175000\"/><{p}alpha val=\"40000\"/></{p}schemeClr></{p}glow>"
+            ),
+            _ => format!(
+                "<{p}reflection blurRad=\"6350\" stA=\"52000\" endA=\"300\" endPos=\"35000\" dir=\"5400000\" sy=\"-100000\" algn=\"bl\" rotWithShape=\"0\"/>"
+            ),
+        },
+    };
+    let emu = |pt: f64| Some(((pt * 12700.0).round() as i64).to_string());
+    let mut attrs: Vec<(&str, Option<String>)> = Vec::new();
+    if let Some(b) = e.blur {
+        attrs.push(("blurRad", emu(b)));
+    }
+    if let Some(d) = e.distance {
+        attrs.push(("dist", emu(d)));
+    }
+    if let Some(deg) = e.angle {
+        let dir = ((deg * 60000.0).round() as i64).rem_euclid(21_600_000);
+        attrs.push(("dir", Some(dir.to_string())));
+    }
+    match kind {
+        "glow" => {
+            if let Some(s) = e.size {
+                attrs.push(("rad", emu(s)));
+            }
+        }
+        "reflection" => {
+            if let Some(t) = e.transparency {
+                attrs.push((
+                    "stA",
+                    Some((((100.0 - t) * 1000.0).round() as i64).to_string()),
+                ));
+            }
+            if let Some(s) = e.size {
+                attrs.push(("endPos", Some(((s * 1000.0).round() as i64).to_string())));
+            }
+        }
+        _ => {}
+    }
+    let text = with_attrs(&base, &attrs);
+    if kind == "reflection" || (e.color.is_none() && e.transparency.is_none()) {
+        return Some(text);
+    }
+    // The color: the one given, else the one it has with its changes (but its alpha); then the
+    // alpha of the transparency given, else of what it had.
+    let el = scan::tree(&text, &[])?;
+    let old_color = el.children.first();
+    let old_alpha = old_color
+        .and_then(|c| c.child("alpha"))
+        .map(|al| text[al.span()].to_string());
+    let alpha = match e.transparency {
+        Some(t) => {
+            let v = ((100.0 - t) * 1000.0).round() as i64;
+            (v < 100_000).then(|| format!("<{p}alpha val=\"{v}\"/>"))
+        }
+        None => old_alpha,
+    }
+    .unwrap_or_default();
+    let color = match (&e.color, old_color) {
+        (Some(c), _) => format!("<{p}srgbClr val=\"{c}\">{alpha}</{p}srgbClr>"),
+        (None, Some(c)) => {
+            let mods: String = c
+                .children
+                .iter()
+                .filter(|m| m.local() != "alpha")
+                .map(|m| text[m.span()].to_string())
+                .collect();
+            format!("{}{mods}{alpha}</{}>", open_tag(&text, c), c.name)
+        }
+        (None, None) => format!("<{p}prstClr val=\"black\">{alpha}</{p}prstClr>"),
+    };
+    let rest: String = el
+        .children
+        .iter()
+        .skip(usize::from(old_color.is_some()))
+        .map(|c| text[c.span()].to_string())
+        .collect();
+    Some(format!(
+        "{}{color}{rest}</{}>",
+        open_tag(&text, &el),
+        el.name
+    ))
 }
 
 /// The text box of a shape changed (its `bodyPr`): the vertical alignment, the wrapping, the

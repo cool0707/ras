@@ -1665,6 +1665,85 @@ fn objects_filled_lined_turned_and_reordered() {
         .unwrap_err()
         .contains("テキスト ボックス")
     );
+    // 効果: 影, 光彩, 反射 in an effect list after the fill and the line, in the schema's order;
+    // the values not given as Excel's first preset; the view gives them back.
+    let fx = apply(
+        &out,
+        &ops(r##"{"op":"object","name":"正方形/長方形 2","reflection":{"size":55},"shadow":{"angle":225,"distance":0,"transparency":80,"blur":6},"glow":{"color":"#FF0000","size":8}}"##),
+    )
+    .unwrap();
+    let sp = shape(&fx, "正方形/長方形 2");
+    let lst = &sp[sp.find("<a:effectLst>").expect(&sp)..];
+    let lst = &lst[..lst.find("</a:effectLst>").unwrap()];
+    assert!(sp.find("<a:effectLst>") > sp.find("</a:prstGeom>"), "{sp}");
+    assert!(
+        lst.contains(r#"<a:glow rad="101600"><a:srgbClr val="FF0000"><a:alpha val="40000"/></a:srgbClr></a:glow><a:outerShdw blurRad="76200" dist="0" dir="13500000" algn="tl" rotWithShape="0"><a:prstClr val="black"><a:alpha val="20000"/></a:prstClr></a:outerShdw><a:reflection "#),
+        "{lst}"
+    );
+    assert!(lst.contains(r#"endPos="55000""#), "{lst}");
+    let shown = view(&fx);
+    let paint = &shown["sheets"][0]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["name"] == "正方形/長方形 2")
+        .unwrap()["paint"];
+    assert_eq!(
+        (
+            paint["shadow"]["angle"].as_f64(),
+            paint["shadow"]["transparency"].as_f64(),
+            paint["shadow"]["blur"].as_f64(),
+            paint["glow"]["color"].as_str(),
+            paint["glow"]["size"].as_f64(),
+            paint["reflection"]["size"].as_f64(),
+            paint["reflection"]["transparency"].as_f64(),
+        ),
+        (
+            Some(225.0),
+            Some(80.0),
+            Some(6.0),
+            Some("#FF0000"),
+            Some(8.0),
+            Some(55.0),
+            Some(48.0)
+        )
+    );
+    // A value changed keeps the others (the color, its alpha by the transparency); null takes
+    // an effect away, the list kept (as none, over the style's).
+    let less = apply(
+        &fx,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","glow":{"transparency":0},"shadow":null,"reflection":null}"#),
+    )
+    .unwrap();
+    let sp = shape(&less, "正方形/長方形 2");
+    assert!(
+        sp.contains(r#"<a:effectLst><a:glow rad="101600"><a:srgbClr val="FF0000"></a:srgbClr></a:glow></a:effectLst>"#),
+        "{sp}"
+    );
+    let none = apply(
+        &less,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","glow":null}"#),
+    )
+    .unwrap();
+    assert!(shape(&none, "正方形/長方形 2").contains("<a:effectLst></a:effectLst>"));
+    assert!(
+        view(&none)["sheets"][0]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|o| o["paint"]["glow"].is_null())
+    );
+    for bad in [
+        r#"{"op":"object","name":"正方形/長方形 2","glow":{"angle":3}}"#,
+        r#"{"op":"object","name":"正方形/長方形 2","shadow":{"transparency":120}}"#,
+        r##"{"op":"object","name":"正方形/長方形 2","reflection":{"color":"#000000"}}"##,
+    ] {
+        assert!(
+            parse_ops(&serde_json::from_str(bad).unwrap(), None).is_err(),
+            "{bad}"
+        );
+    }
+
     // The width alone keeps the line's color; the arrow's head stays.
     let arrow = edit(r#"{"op":"shape","shape":"arrow","at":"A20","width":40}"#);
     let wide = apply(
