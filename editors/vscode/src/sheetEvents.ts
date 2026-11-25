@@ -77,12 +77,12 @@ export function shapeMacroObject(name: string): string {
 	return /^\p{L}/u.test(kept) ? kept : `Shape${kept}`;
 }
 
-/** The macro a shape's `@on("<name>.Click")` handlers are called from: `Sheet1.ボタン1_Click`. */
+/** The macro a shape's `@on("<name>.Click")` handlers are called from: `Sheet1.ボタン1_click`. */
 export function shapeMacro(codeName: string, name: string): string {
-	return `${codeName}.${shapeMacroObject(name)}_Click`;
+	return `${codeName}.${shapeMacroObject(name)}_click`;
 }
 
-/** Whether `macro` (as `OnAction` has it: `'Book.xlsm'!Sheet1.ボタン1_Click` too) is that macro. */
+/** Whether `macro` (as `OnAction` has it: `'Book.xlsm'!Sheet1.ボタン1_click` too) is that macro. */
 export function isShapeMacro(macro: string, codeName: string, name: string): boolean {
 	return macro.replace(/^.*!/, "").toLowerCase() === shapeMacro(codeName, name).toLowerCase();
 }

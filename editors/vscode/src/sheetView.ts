@@ -13,7 +13,7 @@
 //   designer's controls do (the page's menu and button, a double click): an ActiveX control's
 //   handler is an `@on("CommandButton1.Click")` function of the sheet's file; a shape or a form
 //   control's is an `@on("ボタン 1.Click")` function too, whose generated macro
-//   (`Sheet1.ボタン1_Click`) `ras book edit`'s `macro` assigns to it (`OnAction`).
+//   (`Sheet1.ボタン1_click`) `ras book edit`'s `macro` assigns to it (`OnAction`).
 // - "RAS: シートプレビューを表示" on the RAS file of a worksheet (`objects/Sheet1.ras`) shows the
 //   project's workbook at that sheet: from the editor's title bar and context menu, and from
 //   the Explorer's context menu.
@@ -602,7 +602,7 @@ async function findMacro(root: string, macro: string): Promise<{ file: string; n
 
 /**
  * A shape's or a form control's event: its `@on("<name>.Click")` handler in the sheet's file,
- * added when there is none, whose macro (`Sheet1.ボタン1_Click`, spec §12.2.1) is assigned to it
+ * added when there is none, whose macro (`Sheet1.ボタン1_click`, spec §12.2.1) is assigned to it
  * (`OnAction`); or the macro assigned to it, or one chosen from the RAS files.
  */
 async function assignMacro(what: Shown, root: string, sheetFile: string, m: ObjectEvent): Promise<string | undefined> {

@@ -1229,7 +1229,7 @@ async function objectEvent(m: ObjectEvent) {
         return;
     }
     // A shape or a form control: its `@on("<name>.Click")` handler in the sheet's file, whose
-    // generated macro (`Sheet1.ボタン1_Click`) it runs (`OnAction`); or another macro.
+    // generated macro (`Sheet1.ボタン1_click`) it runs (`OnAction`); or another macro.
     const label = m.object || "このコントロール";
     const ev = m.eventName ?? "クリック";
     const assign = (full: string) => {

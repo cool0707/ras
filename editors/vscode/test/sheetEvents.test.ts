@@ -38,7 +38,7 @@ test("a new macro is named after its object, unused in the file", () => {
 test("a shape's handler is an @on of the sheet's file, called from the macro Excel would name", () => {
 	assert.equal(shapeMacroObject("ボタン 1"), "ボタン1");
 	assert.equal(shapeMacroObject("1 Shape"), "Shape1Shape");
-	assert.equal(shapeMacro("Sheet1", "Button 1"), "Sheet1.Button1_Click");
+	assert.equal(shapeMacro("Sheet1", "Button 1"), "Sheet1.Button1_click");
 	assert.ok(isShapeMacro("'Book.xlsm'!sheet1.button1_click", "Sheet1", "Button 1"));
 	assert.ok(!isShapeMacro("Sheet1.go", "Sheet1", "Button 1"));
 	assert.equal(shapeHandlerText("", "Button 1", "    ", "\n"), '@on("Button 1.Click")\nfunction button1Click() {\n    \n}\n');

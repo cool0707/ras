@@ -329,10 +329,10 @@ function rectangleClick() {
     let (diags, files) = compile(&[("Sheet1", sheet)], &[]);
     assert!(diags.is_empty(), "{diags:#?}");
     let code = module(&files, "Sheet1");
-    assert!(code.contains("Public Sub ボタン1_Click()"), "{code}");
-    assert!(code.contains("Public Sub Rectangle1_Click()"), "{code}");
+    assert!(code.contains("Public Sub ボタン1_click()"), "{code}");
+    assert!(code.contains("Public Sub Rectangle1_click()"), "{code}");
     assert!(
-        code.contains("RAS_EventError \"Sheet1.ボタン1_Click\""),
+        code.contains("RAS_EventError \"Sheet1.ボタン1_click\""),
         "{code}"
     );
     // Only Click; no arguments.

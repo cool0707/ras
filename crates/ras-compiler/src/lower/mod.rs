@@ -2511,9 +2511,9 @@ impl<'p> Lowerer<'p> {
                             }
                         } else if let Some(name) = self.sheet_shape(doc, &ev.target, &ev.event) {
                             // A shape or a form control: the macro its OnAction runs, public
-                            // and named as Excel names a new one (`ボタン1_Click`).
+                            // and named as Excel names a new one (`ボタン1_click`).
                             macros.push((m, name.clone()));
-                            (name, "Click".to_string(), Vec::new())
+                            (name, "click".to_string(), Vec::new())
                         } else if let Some(name) = self.untyped_control(doc, &ev.target) {
                             // A control whose events are not known (not an MSForms control, or no
                             // workbook to read the controls from): the event procedure is declared
@@ -3107,7 +3107,7 @@ impl<'p> Lowerer<'p> {
     /// The shape or form control `target` of a sheet whose macro (`OnAction`) an
     /// `@on("<name>.Click")` handler is called from (spec §12.2.1): a name that is not an ActiveX
     /// control of the sheet (one that is no VBA name, `ボタン 1`, whether the controls are known
-    /// or not). The object of its macro, `ボタン1` (the macro is `ボタン1_Click`).
+    /// or not). The object of its macro, `ボタン1` (the macro is `ボタン1_click`).
     fn sheet_shape(&self, doc: &FormModule, target: &str, event: &str) -> Option<String> {
         if doc.kind != ObjectKind::Sheet || !event.eq_ignore_ascii_case("Click") {
             return None;
