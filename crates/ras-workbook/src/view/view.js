@@ -9918,7 +9918,7 @@
         ]);
     }
     // A tab colored: filled with its color made a little lighter (the name in black or white,
-    // whichever reads), the tab shown with a tint of it and underlined with the color itself.
+    // whichever reads), the tab shown with a tint of it (underlined, as every tab shown, in the accent).
     function paintTab(b, color) {
         const m = /^#?([0-9a-f]{6})$/i.exec(color || "");
         if (!m) return;
@@ -9929,7 +9929,6 @@
         b.style.setProperty("--tab-bg", mix(0.25));
         b.style.setProperty("--tab-ink", lum > 0.4 ? "#222" : "#fff");
         b.style.setProperty("--tab-tint", mix(0.88));
-        b.style.setProperty("--tab-line", "#" + m[1]);
         b.classList.add("colored");
     }
     // The tab's name, and the number of the cells changed.
