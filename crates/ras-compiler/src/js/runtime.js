@@ -169,14 +169,14 @@ class RDate {
     }
     /** Calendar fields, read with the `getUTC*` methods of the returned object. */
     parts() {
-        return new Date(Math.round(this.oa * 86400000) + OA_EPOCH);
+        return new Date(Math.round(oaToLinear(this.oa) * 86400000) + OA_EPOCH);
     }
     toString() {
         const d = this.parts();
         const p2 = (n) => String(n).padStart(2, "0");
         const date = `${d.getUTCFullYear()}/${p2(d.getUTCMonth() + 1)}/${p2(d.getUTCDate())}`;
         const time = `${d.getUTCHours()}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`;
-        const whole = Math.floor(this.oa);
+        const whole = Math.trunc(this.oa);
         if (this.oa === whole) return date;
         return whole === 0 ? time : `${date} ${time}`;
     }
@@ -189,8 +189,47 @@ const OA_EPOCH = Date.UTC(1899, 11, 30);
 function date(oa) {
     return new RDate(oa);
 }
+/**
+ * A VBA `Date` before 1899-12-30 has its day as the integer part and its time as a fraction of
+ * the same sign: `-1.25` is 1899-12-29 06:00 (on a linear scale that would be `-0.75`).
+ */
+function oaToLinear(oa) {
+    if (oa >= 0) return oa;
+    const day = Math.trunc(oa);
+    return day + Math.abs(oa - day);
+}
+function linearToOa(x) {
+    if (x >= 0) return x;
+    const day = Math.floor(x);
+    const time = x - day;
+    return time === 0 ? day : day - time;
+}
+/** The day part of a `Date` (`DateValue`, `Int` of the calendar day). */
+function oaDay(oa) {
+    return Math.trunc(oa);
+}
+/** The time part of a `Date` (`TimeValue`): always 0 ≤ t < 1. */
+function oaTime(oa) {
+    return Math.abs(oa - Math.trunc(oa));
+}
 function dateOf(y, m, d, h, mi, s) {
-    return new RDate((Date.UTC(y, m - 1, d, h || 0, mi || 0, s || 0) - OA_EPOCH) / 86400000);
+    // `Date.UTC` reads the years 0–99 as 1900–1999: set the year on its own.
+    const t = new Date(Date.UTC(2000, m - 1, d, h || 0, mi || 0, s || 0));
+    t.setUTCFullYear(t.getUTCFullYear() - 2000 + y);
+    return new RDate(linearToOa((t.getTime() - OA_EPOCH) / 86400000));
+}
+/** `DateSerial`: the years 0–29 are 2000–2029 and 30–99 are 1930–1999, as in VBA. */
+function dateSerial(y, m, d) {
+    let year = toInt(y);
+    if (year >= 0 && year < 30) year += 2000;
+    else if (year >= 30 && year < 100) year += 1900;
+    return dateOf(year, toInt(m), toInt(d));
+}
+/** VBA dates run from 100-01-01 to 9999-12-31; `DateAdd` beyond them is error 5. */
+function inDateRange(d, what) {
+    const y = d.parts().getUTCFullYear();
+    if (y < 100 || y > 9999) raise(5, what);
+    return d;
 }
 function now() {
     const d = new Date();
@@ -1161,7 +1200,14 @@ function intervalAdd(interval, n, d) {
     const p = cdate(d).parts();
     const [y, m, day, h, mi, s] = [p.getUTCFullYear(), p.getUTCMonth() + 1, p.getUTCDate(), p.getUTCHours(), p.getUTCMinutes(), p.getUTCSeconds()];
     n = Math.trunc(n);
-    const clampDay = (yy, mm) => Math.min(day, new Date(Date.UTC(yy, mm, 0)).getUTCDate());
+    const clampDay = (yy, mm) => {
+        const t = new Date(Date.UTC(2000, mm, 0));
+        t.setUTCFullYear(yy, mm, 0);
+        return Math.min(day, t.getUTCDate());
+    };
+    return inDateRange(intervalAddParts(interval, n, y, m, day, h, mi, s, clampDay), "DateAdd");
+}
+function intervalAddParts(interval, n, y, m, day, h, mi, s, clampDay) {
     switch (String(interval).toLowerCase()) {
         case "yyyy":
             return dateOf(y + n, m, clampDay(y + n, m), h, mi, s);
@@ -1191,7 +1237,7 @@ function intervalAdd(interval, n, d) {
 function intervalDiff(interval, d1, d2) {
     const a = dateArg(d1);
     const b = dateArg(d2);
-    const days = Math.floor(cdate(d2).oa) - Math.floor(cdate(d1).oa);
+    const days = Math.floor(oaToLinear(cdate(d2).oa)) - Math.floor(oaToLinear(cdate(d1).oa));
     switch (String(interval).toLowerCase()) {
         case "yyyy":
             return b.getUTCFullYear() - a.getUTCFullYear();
@@ -1501,12 +1547,12 @@ const vbaImpl = {
     Randomize() {},
     RGB: (r, g, b) => (r & 255) + (g & 255) * 256 + (b & 255) * 65536,
     Now: now,
-    Date: () => new RDate(Math.floor(now().oa)),
-    Time: () => new RDate(now().oa % 1),
-    DateSerial: (y, m, d) => dateOf(y, m, d),
+    Date: () => new RDate(oaDay(now().oa)),
+    Time: () => new RDate(oaTime(now().oa)),
+    DateSerial: dateSerial,
     TimeSerial: (h, m, s) => new RDate((h * 3600 + m * 60 + s) / 86400),
-    DateValue: (s) => new RDate(Math.floor(cdate(s).oa)),
-    TimeValue: (s) => new RDate(cdate(s).oa % 1),
+    DateValue: (s) => new RDate(oaDay(cdate(s).oa)),
+    TimeValue: (s) => new RDate(oaTime(cdate(s).oa)),
     DateAdd: intervalAdd,
     DateDiff: intervalDiff,
     DatePart(interval, d) {

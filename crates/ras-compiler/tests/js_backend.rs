@@ -1164,3 +1164,49 @@ fn validation_schemas_check_values() {
         "{stderr}"
     );
 }
+
+const DATES: &str = r#"export function run() {
+    // The end of the month is kept, not carried over (unlike JavaScript's setMonth).
+    console.log(dateAdd("m", 1, dateSerial(2026, 1, 31)), dateAdd("m", 1, dateSerial(2024, 1, 31)), dateAdd("m", -1, dateSerial(2026, 3, 31)));
+    console.log(dateAdd("m", 13, dateSerial(2026, 1, 31)), dateAdd("yyyy", 1, dateSerial(2024, 2, 29)), dateAdd("q", 1, dateSerial(2026, 11, 30)));
+    console.log(dateAdd("d", 1, dateSerial(2026, 12, 31)), dateAdd("d", -1, dateSerial(2026, 1, 1)), dateAdd("h", 25, dateSerial(2026, 12, 31) + timeSerial(23, 0, 0)));
+    console.log(dateAdd("m", 1, dateSerial(2026, 1, 31) + timeSerial(10, 30, 0)));
+    // DateSerial carries months and days over, and reads two-digit years as VBA does.
+    console.log(dateSerial(2026, 14, 0), dateSerial(2026, 1, -1), dateSerial(2026, 0, 1), dateSerial(26, 1, 1), dateSerial(30, 1, 1));
+    // Before 1899-12-30 the time is a fraction of the same sign as the day.
+    const early = dateAdd("h", -18, dateSerial(1899, 12, 30));
+    console.log(cDbl(early), early, day(early), hour(early), dateDiff("d", early, dateSerial(1899, 12, 30)));
+    console.log(dateSerial(1899, 12, 29) + timeSerial(6, 0, 0));
+    // Out of 100–9999: error 5.
+    try { console.log(dateAdd("d", 1, dateSerial(9999, 12, 31))); } catch (e) { console.log(`error ${e.code}`); }
+    try { console.log(dateAdd("yyyy", -2000, dateSerial(2026, 1, 1))); } catch (e) { console.log(`error ${e.code}`); }
+}
+"#;
+
+/// `DateAdd` / `DateSerial` / `Date` values compute as VBA does.
+#[test]
+fn dates_compute_as_in_vba() {
+    let files = [("main", DATES)];
+    let (_, out) = compile(&files);
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("dates", &files, &out);
+    let (stdout, stderr, ok) = p.run("Main.run", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout,
+        "\
+2026/02/28 2024/02/29 2026/02/28
+2027/02/28 2025/02/28 2027/02/28
+2027/01/01 2025/12/31 2027/01/02
+2026/02/28 10:30:00
+2027/01/31 2025/12/30 2025/12/01 2026/01/01 1930/01/01
+-1.25 1899/12/29 6:00:00 29 6 1
+18:00:00
+error 5
+error 5
+",
+        "{stderr}"
+    );
+}
