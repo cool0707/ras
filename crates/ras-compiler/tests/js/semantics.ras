@@ -137,4 +137,21 @@ export function run() {
     let k = 1;
     bump(by: 5, n: k);
     console.log("named", label(a: 123, c: "あいう"), label(1, c: "z"), label(c: "q", b: 7, a: 0), new Circle(r: 1).radius, k);
+    // Error values (#N/A): a kind of their own in a union, null after Excel.errorToNull, a type mismatch for `==` on `any`.
+    const na = cvErr(2042);
+    const ue: string | double = Excel.errorToNull(na) ?? 1;
+    let ve: string | double = 1;
+    ve = na;
+    const withErr: any[] = [];
+    withErr.push(1);
+    withErr.push(na);
+    withErr.push("a");
+    const cleaned = Excel.errorToNull(withErr);
+    let mismatch = 0;
+    try {
+        if (na == 1) mismatch = -1;
+    } catch (e) {
+        mismatch = e.code;
+    }
+    console.log("errval", ue, ve == "x", ve == 1, ve == cvErr(2042), ve == cvErr(2007), cleaned[1] == null, cleaned[2], mismatch);
 }

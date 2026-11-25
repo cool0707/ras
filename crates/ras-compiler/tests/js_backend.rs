@@ -570,7 +570,7 @@ fn union_types_narrow_like_the_vba_build() {
         .unwrap()
         .text;
     // Values of different kinds are not equal; a number's `TypeName` follows the static type when it can.
-    assert!(js.contains("$rt.eq(v, \"abc\")"), "{js}");
+    assert!(js.contains("$rt.unionEq(v, \"abc\")"), "{js}");
     assert!(js.contains("$rt.typeName(w, \"Double\")"), "{js}");
     if !has_node() {
         return;

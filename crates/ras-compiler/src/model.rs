@@ -37,6 +37,11 @@ pub enum Type {
     Str,
     Bool,
     Any,
+    /// `cellValue`: an `any` that may be a cell error value (`#N/A` ..., `CVErr`) — what
+    /// `Range.value` and the lookups of `Application` return. Stored in a `Variant` like `any`;
+    /// using it where VBA raises a type mismatch for an error value is warned (W0313) until
+    /// `isError` / `typeof` narrows it to `any` (spec §2.6.6).
+    CellValue,
     Object,
     /// `declare`-only string marshalling types (spec §11.2).
     WStr,
@@ -81,6 +86,21 @@ impl Type {
 
     pub fn is_error(&self) -> bool {
         matches!(self, Type::Error)
+    }
+
+    /// `any` or `cellValue`: a value whose type is only known at run time.
+    pub fn is_any(&self) -> bool {
+        matches!(self, Type::Any | Type::CellValue)
+    }
+
+    /// The type with `cellValue` replaced by `any` (also as the element type of arrays): the
+    /// type of the value once error values are excluded.
+    pub fn without_cell_errors(&self) -> Type {
+        match self {
+            Type::CellValue => Type::Any,
+            Type::Array(e) => Type::array(e.without_cell_errors()),
+            other => other.clone(),
+        }
     }
 
     pub fn is_integer(&self) -> bool {
@@ -142,7 +162,10 @@ impl Type {
 
     /// Values whose kind is only known at run time: they live in a `Variant` and may hold an object.
     pub fn is_dynamic(&self) -> bool {
-        matches!(self, Type::Any | Type::Error | Type::Param(_)) || self.is_mixed_union()
+        matches!(
+            self,
+            Type::Any | Type::CellValue | Type::Error | Type::Param(_)
+        ) || self.is_mixed_union()
     }
 
     /// `A | B | ...`: flattens nested unions, drops duplicates and sorts the members into a
@@ -158,6 +181,9 @@ impl Type {
         }
         if flat.iter().any(|m| m.is_error()) {
             return Type::Error;
+        }
+        if flat.contains(&Type::CellValue) {
+            return Type::CellValue;
         }
         if flat.contains(&Type::Any) {
             return Type::Any;
@@ -1120,6 +1146,7 @@ impl Program {
             Type::Str => "string".into(),
             Type::Bool => "boolean".into(),
             Type::Any => "any".into(),
+            Type::CellValue => "cellValue".into(),
             Type::Object => "object".into(),
             Type::WStr => "wstr".into(),
             Type::AStr => "astr".into(),

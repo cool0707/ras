@@ -249,7 +249,7 @@ declare namespace Excel {
          * 名前や数式の文字列を評価して、オブジェクトまたは値にする。
          * @see https://learn.microsoft.com/office/vba/api/excel.application.evaluate
          */
-        Evaluate(name: any): any;
+        Evaluate(name: any): cellValue;
 
         /**
          * マクロまたは関数を名前で呼び出す。
@@ -371,19 +371,19 @@ declare namespace Excel {
          * ワークシート関数 MATCH を呼び出す。見つからないときは実行時エラーではなくエラー値を返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.match
          */
-        Match(arg1: any, arg2: any, arg3?: any): any;
+        Match(arg1: cellValue, arg2: any, arg3?: any): cellValue;
 
         /**
          * ワークシート関数 INDEX を呼び出す。失敗時はエラー値を返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.index
          */
-        Index(arg1: any, arg2: any, arg3?: any, arg4?: any): any;
+        Index(arg1: any, arg2: any, arg3?: any, arg4?: any): cellValue;
 
         /**
          * ワークシート関数 VLOOKUP を呼び出す。見つからないときはエラー値を返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.vlookup
          */
-        VLookup(arg1: any, arg2: any, arg3: any, arg4?: any): any;
+        VLookup(arg1: cellValue, arg2: any, arg3: any, arg4?: any): cellValue;
 
         /**
          * 配列の行と列を入れ替える。
@@ -1151,7 +1151,7 @@ declare namespace Excel {
          * 名前や数式の文字列を、このシートを基準に評価する。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.evaluate
          */
-        Evaluate(name: any): any;
+        Evaluate(name: any): cellValue;
 
         /**
          * シートを印刷する。
@@ -1244,15 +1244,17 @@ declare namespace Excel {
 
         /**
          * セルの値。複数セルの範囲では 2 次元配列（1 始まり）を読み書きする。
+         * セルのエラー値（`#N/A` など）のことがある。
          * @see https://learn.microsoft.com/office/vba/api/excel.range.value
          */
-        Value: any;
+        Value: cellValue;
 
         /**
          * 通貨型・日付型に変換しない生の値。日付はシリアル値（Double）になる。
+         * セルのエラー値（`#N/A` など）のことがある。
          * @see https://learn.microsoft.com/office/vba/api/excel.range.value2
          */
-        Value2: any;
+        Value2: cellValue;
 
         /**
          * A1 形式の数式。数式でないセルでは値そのもの。
@@ -3805,7 +3807,7 @@ declare namespace Excel {
          * 第 1 引数がエラー値なら第 2 引数を、そうでなければ第 1 引数を返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.iferror
          */
-        IfError(arg1: any, arg2: any): any;
+        IfError(arg1: cellValue, arg2: any): any;
 
         /**
          * 大きい方から数えて k 番目の値を返す。
@@ -3985,25 +3987,25 @@ declare namespace Excel {
          * 値が数値かどうかを返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.isnumber
          */
-        IsNumber(arg1: any): boolean;
+        IsNumber(arg1: cellValue): boolean;
 
         /**
          * 値が文字列かどうかを返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.istext
          */
-        IsText(arg1: any): boolean;
+        IsText(arg1: cellValue): boolean;
 
         /**
          * 値がエラー値かどうかを返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.iserror
          */
-        IsError(arg1: any): boolean;
+        IsError(arg1: cellValue): boolean;
 
         /**
          * 値が #N/A かどうかを返す。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheetfunction.isna
          */
-        IsNA(arg1: any): boolean;
+        IsNA(arg1: cellValue): boolean;
 
         /**
          * 円周率を返す。
@@ -4070,7 +4072,7 @@ declare namespace Excel {
         CountBlank(arg1: Range): double;
         AverageIf(arg1: Range, arg2: any, arg3?: any): double;
         AverageIfs(arg1: Range, arg2: Range, arg3: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
-        IfNa(arg1: any, arg2: any): any;
+        IfNa(arg1: cellValue, arg2: any): any;
         Mode(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
         StDevP(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
         VarP(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): double;
@@ -4092,9 +4094,9 @@ declare namespace Excel {
         Fixed(arg1: double, arg2?: any, arg3?: any): string;
         TextJoin(arg1: any, arg2: any, arg3: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): string;
         Concat(arg1: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): string;
-        IsNonText(arg1: any): boolean;
-        IsErr(arg1: any): boolean;
-        IsLogical(arg1: any): boolean;
+        IsNonText(arg1: cellValue): boolean;
+        IsErr(arg1: cellValue): boolean;
+        IsLogical(arg1: cellValue): boolean;
         IsEven(arg1: any): boolean;
         IsOdd(arg1: any): boolean;
         IsFormula(arg1: Range): boolean;
@@ -5597,7 +5599,7 @@ declare function Intersect(arg1: Excel.Range, arg2: Excel.Range, arg3?: any, arg
  * 名前や数式の文字列を評価して、オブジェクトまたは値にする。
  * @see https://learn.microsoft.com/office/vba/api/excel.application.evaluate
  */
-declare function Evaluate(name: any): any;
+declare function Evaluate(name: any): cellValue;
 
 /**
  * マクロまたは関数を名前で呼び出す。

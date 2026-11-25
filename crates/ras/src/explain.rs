@@ -249,6 +249,12 @@ pub const ENTRIES: &[Entry] = &[
     e("W0311", "使われない式の値", "式の値が使われていません（`a == 1;`、`x + 1;` など）。代入（`=`）のつもりで比較（`==`）を書いていないか確かめてください。"),
     e("W0312", "`typeof` の比較", "`typeof` は VBA の `TypeName` と同じ型名（`\"Long\"`、`\"String\"`、`\"Range\"`）を返します。JavaScript の `\"number\"` / `\"string\"` とは一致しないので、メッセージに示された名前と比較してください。"),
     x(
+        "W0313",
+        "エラー値かもしれないセルの値をそのまま使っている",
+        "`cellValue` 型の値（セルの値 `Range.value` / `value2`、`toArray()` などの要素、`application.vLookup` / `match` / `index`、`evaluate` / `fx`、`cvErr`、それらを返す自分の関数）は、セルのエラー値（`#N/A`、`#DIV/0!` など）のことがあります。VBA ではエラー値を比較・演算・型変換したり、条件に使ったりすると、そのときだけ実行時エラー（13: 型が一致しません）になります。`isError()` で確かめると、その先では `any` に絞り込まれて警告は出ません（`if (isError(v)) continue;`、`if (!isError(v)) { ... }`）。`Excel.errorToNull()` はエラー値を `null` にして `any` を返します（配列なら要素のエラー値を `null` にします。`?? 0` で既定値を付けられます）。値を `any` の変数や引数に入れても警告になります（そこから先で確かめられなくなるため）。値を保持するだけなら、変数・引数・フィールドの型を `cellValue` にしてください。そのまま使うと分かっているなら `as any` と書きます。",
+        "const v = ws.range(\"A1\").value;     // v: cellValue\nif (isError(v)) return;\nif (v == \"済\") { ... }              // ここでは v: any\n\nconst rows = Excel.errorToNull(ws.range(\"A1:C9\").toArray());   // any[][]",
+    ),
+    x(
         "W0401",
         "修飾されていない Excel の参照",
         "`range(...)`・`cells(...)`・`activeSheet` などをシートやブックを付けずに書くと、そのとき選択されているシート・ブックに対して動きます（ユーザーが別のシートを開いていると、そこに書き込みます）。シートを明示してください。",

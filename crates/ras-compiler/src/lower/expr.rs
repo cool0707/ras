@@ -286,7 +286,12 @@ impl<'p> Lowerer<'p> {
             self.emit(assign(target.clone(), value));
             return;
         }
-        if *tty == Type::Decimal && !matches!(vty, Type::Decimal | Type::Any | Type::Error) {
+        if *tty == Type::Decimal
+            && !matches!(
+                vty,
+                Type::Decimal | Type::Any | Type::CellValue | Type::Error
+            )
+        {
             self.emit(assign(target.clone(), call("CDec", vec![value])));
             return;
         }
@@ -443,7 +448,7 @@ impl<'p> Lowerer<'p> {
 
     fn convert(&mut self, v: VExpr, from: &Type, to: &Type) -> VExpr {
         use Type::*;
-        if from == to || matches!(to, Any | Error) {
+        if from == to || matches!(to, Any | CellValue | Error) {
             return v;
         }
         let fix = |v: VExpr| {
@@ -762,7 +767,7 @@ impl<'p> Lowerer<'p> {
     /// either way; this keeps the VBE from showing two spellings of one name.
     fn late_member_name(&self, object: &Expr, written: &str) -> Option<String> {
         let late = match self.ty(object) {
-            Type::Any | Type::Object | Type::Union(_) => true,
+            Type::Any | Type::CellValue | Type::Object | Type::Union(_) => true,
             Type::Class(c, _) => self.prog.classes[c].kind == ClassKind::Host,
             _ => false,
         };
@@ -1022,8 +1027,8 @@ impl<'p> Lowerer<'p> {
                     && self.is_safe_operand(lhs)
                     && self.is_safe_operand(rhs)
                     && !self.ty(lhs).is_object()
-                    && !matches!(self.ty(lhs), Type::Any | Type::Union(_))
-                    && !matches!(self.ty(rhs), Type::Any | Type::Union(_))
+                    && !matches!(self.ty(lhs), Type::Any | Type::CellValue | Type::Union(_))
+                    && !matches!(self.ty(rhs), Type::Any | Type::CellValue | Type::Union(_))
             }
             _ => false,
         }
@@ -1162,6 +1167,20 @@ impl<'p> Lowerer<'p> {
                 if matches!(self.ty(inner), Type::Struct(_)) =>
             {
                 self.struct_lit_into(inner, target)
+            }
+            // `x = Excel.errorToNull(v)`: the assignment copies `v` into `x` anyway (arrays are
+            // values), so the error values are cleared in `x` itself, without another copy
+            // (spec §13.3). (Not the return variable: `f` as an argument inside `f` is a call.)
+            ExprKind::Call { args, .. }
+                if args.len() == 1
+                    && matches!(
+                        self.info().calls.get(&inner.id).map(|c| &c.target),
+                        Some(CallTarget::Intrinsic(Intr::ExcelErrorToNull))
+                    )
+                    && matches!(target, VExpr::Name(n) if *n != self.pc.proc_name) =>
+            {
+                self.expr_into(&args[0], target, ty);
+                self.emit(call_stmt("RAS_ErrorToNullInPlace", vec![target.clone()]));
             }
             // (`f(i) = x` inside function `f` would be a recursive call, so the return variable is excluded)
             ExprKind::Array(_) | ExprKind::New { .. } | ExprKind::Call { .. }
@@ -2497,6 +2516,7 @@ impl<'p> Lowerer<'p> {
                 }
                 call("RAS_Match", ops)
             }
+            ExcelErrorToNull => call("RAS_ErrorToNull", self.operands(&[&args[0]])),
             ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind
             | ArrFindIndex | ArrSlice | ArrConcat | MapKeys | MapValues | CollToArray => {
                 unreachable!()
