@@ -25,7 +25,7 @@ export const controlMetadata = [
 export type ToolboxType = (typeof controlMetadata)[number]["type"];
 export type NewControl = Pick<
   SpecControl,
-  "id" | "parentId" | "name" | "caption" | "selectedIndex" | "tabs"
+  "id" | "parentId" | "name" | "caption" | "selectedIndex" | "tabs" | "backStyle"
 > & {
   type: ToolboxType;
   left: number;
@@ -33,6 +33,14 @@ export type NewControl = Pick<
   width: number;
   height: number;
 };
+
+// Controls whose background is the container's surface. Created transparent
+// (fmBackStyleTransparent) so they follow the form or frame BackColor.
+export const transparentOnCreate: ReadonlySet<ToolboxType> = new Set([
+  "Label",
+  "CheckBox",
+  "OptionButton",
+]);
 
 export function controlDefaults(type: string): readonly [number, number] {
   const metadata = controlMetadata.find((m) => m.type.toLowerCase() === type.toLowerCase());
@@ -96,6 +104,7 @@ export function createControl(
     };
     if (parentId) control.parentId = parentId;
     if ("caption" in metadata && metadata.caption) control.caption = control.name;
+    if (transparentOnCreate.has(type)) control.backStyle = 0;
     if (type === "MultiPage" || type === "TabStrip") control.selectedIndex = -1;
     if (type === "TabStrip") {
       control.tabs = [

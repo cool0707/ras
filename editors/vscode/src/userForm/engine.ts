@@ -297,7 +297,7 @@ function newControlObject(control: Record<string, unknown>, order: string[]): Js
 	for (const key of Object.keys(control)) if (!order.includes(key) && control[key] !== undefined) result[key] = control[key] as JsonValue;
 	return result;
 }
-const controlKeyOrder = ["id", "parentId", "name", "type", "caption", "left", "top", "width", "height", "zIndex", "selectedIndex", "tabs"];
+const controlKeyOrder = ["id", "parentId", "name", "type", "caption", "left", "top", "width", "height", "zIndex", "selectedIndex", "tabs", "backStyle"];
 
 function selectedAfterAdd(selected: unknown, count: number): number | undefined {
 	return selected === -1 && count === 0 ? 0 : undefined;

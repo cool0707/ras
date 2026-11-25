@@ -1,8 +1,8 @@
 /* Ported from xlflow (https://github.com/harumiWeb/xlflow), MIT License,
    Copyright (c) 2026 harumiWeb. See THIRD_PARTY_NOTICES.md. */
-import { controlMetadata } from "./toolbox";
+import { controlMetadata, transparentOnCreate } from "./toolbox";
 import { propertyEditorStrings } from "./propertyEditorStrings";
-import type { NewControl } from "./toolbox";
+import type { NewControl, ToolboxType } from "./toolbox";
 
 export interface DesignerError {
   code: string;
@@ -748,6 +748,7 @@ export function isStructuralOperation(value: unknown): value is StructuralOperat
         "caption",
         "selectedIndex",
         "tabs",
+        "backStyle",
       ].includes(key),
     ) &&
     typeof control.id === "string" &&
@@ -763,6 +764,8 @@ export function isStructuralOperation(value: unknown): value is StructuralOperat
     Number(control.width) > 0 &&
     Number(control.height) > 0 &&
     (!Object.hasOwn(control, "caption") || typeof control.caption === "string") &&
+    (!Object.hasOwn(control, "backStyle") ||
+      (control.backStyle === 0 && transparentOnCreate.has(control.type as ToolboxType))) &&
     (((!Object.hasOwn(control, "selectedIndex") || control.selectedIndex === -1) &&
       (!Object.hasOwn(control, "tabs") ||
         (Array.isArray(control.tabs) && control.tabs.length === 0))) ||
