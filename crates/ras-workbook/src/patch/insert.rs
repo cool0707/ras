@@ -923,7 +923,7 @@ pub(super) fn table_cells(
 
 /// Whether `name` can name a table: a letter, `_` or `\` first, then letters, digits, `_` and
 /// `.`; not a cell's address (A1, R1C1) nor R or C.
-fn table_name_ok(name: &str) -> bool {
+pub(super) fn table_name_ok(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;

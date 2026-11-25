@@ -96,19 +96,24 @@ pub fn data(
         .iter()
         .map(|s| s["name"].as_str().unwrap_or_default().to_string())
         .collect();
-    let names: Vec<Json> = book
-        .names()
-        .into_iter()
-        // Excel's own names (_xlnm.Print_Area, _FilterDatabase) are not offered.
-        .filter(|(n, _, _)| !n.starts_with("_xlnm.") && !n.starts_with("_Filter"))
-        .map(|(name, scope, refers)| {
-            let mut j = json!({ "name": name, "ref": refers.trim_start_matches('=') });
-            if let Some(s) = scope.and_then(|i| sheet_names.get(i)) {
-                j["sheet"] = json!(s);
-            }
-            j
-        })
-        .collect();
+    // (With their comments, from the file when there is one: "名前の管理".)
+    let from_file = source.and_then(|b| crate::patch::names_of(b).ok());
+    let names: Vec<Json> = match from_file {
+        Some(list) => list,
+        None => book
+            .names()
+            .into_iter()
+            // Excel's own names (_xlnm.Print_Area, _FilterDatabase) are not offered.
+            .filter(|(n, _, _)| !n.starts_with("_xlnm.") && !n.starts_with("_Filter"))
+            .map(|(name, scope, refers)| {
+                let mut j = json!({ "name": name, "ref": refers.trim_start_matches('=') });
+                if let Some(s) = scope.and_then(|i| sheet_names.get(i)) {
+                    j["sheet"] = json!(s);
+                }
+                j
+            })
+            .collect(),
+    };
     Ok(
         json!({ "file": file, "sheets": sheets, "names": names, "diff": diff, "active": Json::Null, "images": images.into_inner().list }),
     )

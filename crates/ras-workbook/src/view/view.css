@@ -729,6 +729,26 @@ body.panesizing { cursor: col-resize; user-select: none; }
 .dlg.condmgr .condsample .fmt { display: inline-block; padding: 1px 6px; border: 1px solid #ddd; white-space: nowrap; }
 .dlg.condmgr .condsample .bar { display: block; width: 90px; height: 16px; }
 .dlg.condmgr .condsample .scale { display: block; width: 90px; height: 16px; }
+/* 数式 > 名前の管理 and 新しい名前 */
+.dlg.namemgr { width: 760px; max-width: calc(100vw - 32px); }
+.dlg.namemgr .condtools { display: flex; gap: 6px; margin: 6px 0; }
+.dlg.namemgr .condtools button { min-width: 0; }
+.dlg.namemgr .condtools button:disabled { color: #999; cursor: default; }
+.dlg.namemgr .namelist { height: 240px; overflow: auto; border: 1px solid var(--line); }
+.dlg.namemgr .namehead, .dlg.namemgr .namerow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.4fr) minmax(0, .7fr) minmax(0, 1fr); align-items: center; gap: 8px; padding: 3px 6px; }
+.dlg.namemgr .namehead { position: sticky; top: 0; background: #f3f3f3; border-bottom: 1px solid var(--line); font-size: 12px; color: #444; }
+.dlg.namemgr .namerow { border-bottom: 1px solid #eee; cursor: default; user-select: none; }
+.dlg.namemgr .namerow.on { background: var(--accent-hover); }
+.dlg.namemgr .namerow > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.dlg.namemgr .namerow > .nm { font-weight: bold; }
+.dlg.namemgr .condnone { padding: 12px; color: #666; }
+.dlg.namemgr .nameref { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.dlg.namemgr .nameref input { flex: 1; min-width: 0; font: inherit; }
+.dlg.namedlg { width: 400px; }
+.dlg.namedlg .lbl { flex: none; width: 72px; }
+.dlg.namedlg label:has(textarea) { align-items: flex-start; }
+.dlg.namedlg textarea { flex: 1; min-width: 0; font: inherit; resize: vertical; }
+.dlg.namedlg input[type="text"], .dlg.namedlg select { flex: 1; min-width: 0; font: inherit; }
 /* ホーム > 書式: the items that are on or off (セルのロック, ロックされたセルを表示) with a check. */
 .menu.cellformats > button { padding-left: 26px; position: relative; }
 .menu button.chk.on { font-weight: normal; }

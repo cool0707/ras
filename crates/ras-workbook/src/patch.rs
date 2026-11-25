@@ -25,6 +25,7 @@ mod controls;
 mod drawing;
 mod insert;
 mod macros;
+mod names;
 mod panes;
 mod scan;
 mod structure;
@@ -36,6 +37,8 @@ mod validation;
 
 pub(crate) use conditional::rules_of as conditional_rules;
 pub use conditional::{CondFormat, CondRule, Managed, Threshold};
+pub(crate) use names::names_of;
+pub use names::{NameChange, NameDef};
 use scan::Edits;
 pub(crate) use tabs::protections;
 pub use validation::Validation;
@@ -278,6 +281,8 @@ pub enum Op {
     /// The conditional formats of the sheet as "条件付き書式ルールの管理" leaves them: in this
     /// order of priority; those not listed deleted.
     ConditionalRules { sheet: String, rules: Vec<Managed> },
+    /// A name of the workbook defined, changed or deleted (数式 > 名前の管理).
+    Name { change: NameChange },
     /// An input rule put on the cells of `ranges` (データ > データの入力規則), the rules they had
     /// taken off them; None: the rules of those cells cleared ("すべてクリア").
     Validation {
@@ -455,6 +460,7 @@ impl Op {
                 | Op::Protect { .. }
                 | Op::Conditional { .. }
                 | Op::ConditionalRules { .. }
+                | Op::Name { .. }
                 | Op::Validation { .. }
         )
     }
@@ -1319,6 +1325,32 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     },
                 }
             }
+            "name" => {
+                let scope_of = |v: Option<&Json>| v.and_then(Json::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+                let name = text("name").ok_or("`name`（名前）がありません")?;
+                Op::Name {
+                    change: if o.get("delete").and_then(Json::as_bool).unwrap_or(false) {
+                        NameChange::Delete { name, scope: scope_of(o.get("scope")) }
+                    } else {
+                        let old = match o.get("old") {
+                            None | Some(Json::Null) => None,
+                            Some(old) => Some((
+                                old.get("name").and_then(Json::as_str).ok_or("`old.name` がありません")?.to_string(),
+                                scope_of(old.get("scope")),
+                            )),
+                        };
+                        NameChange::Define {
+                            old,
+                            new: NameDef {
+                                name,
+                                scope: scope_of(o.get("scope")),
+                                refers: text("ref").ok_or("`ref`（参照範囲）がありません")?,
+                                comment: text("comment").unwrap_or_default(),
+                            },
+                        }
+                    },
+                }
+            }
             "conditionalRules" => Op::ConditionalRules {
                 sheet,
                 rules: o
@@ -1555,6 +1587,18 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 rule,
             } => conditional::conditional(&bytes, sheet, ranges, rule.as_ref())?,
             Op::ConditionalRules { sheet, rules } => conditional::manage(&bytes, sheet, rules)?,
+            Op::Name { change } => match change {
+                // Renamed: the formulas that use it follow, as Excel has them (first: the
+                // stand-in reads no formula that uses a name the workbook does not have).
+                NameChange::Define {
+                    old: Some((old, scope)),
+                    new,
+                } if old != new.name.trim() && names::name_ok(new.name.trim()) => {
+                    let uses = rename_name_uses(&bytes, old, new.name.trim(), scope.as_deref())?;
+                    names::change(&uses, change)?
+                }
+                _ => names::change(&bytes, change)?,
+            },
             Op::Validation {
                 sheet,
                 ranges,
@@ -2526,6 +2570,7 @@ fn run(
         | Op::Protect { .. }
         | Op::Conditional { .. }
         | Op::ConditionalRules { .. }
+        | Op::Name { .. }
         | Op::Validation { .. }
         // (Checked by `apply_group`, which reads the rules of the file.)
         | Op::Validate { .. } => {}
@@ -2604,6 +2649,23 @@ fn apply_group(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
         plain,
         moved.as_ref().map(|(si, e)| (*si, e)),
     )?;
+    verify(&out, &after)?;
+    Ok(out)
+}
+
+/// The file with the formulas that use the name `old` (of the sheet `scope`) made to use `new`.
+fn rename_name_uses(bytes: &[u8], old: &str, new: &str, scope: Option<&str>) -> Result<Vec<u8>> {
+    let mut styles = Styles::default();
+    let before = Book::open_bytes(bytes)?.snapshot(&mut styles, &[]);
+    let mut book = Book::open_bytes(bytes)?;
+    let si = match scope {
+        Some(s) => Some(sheet_index(&book, s)?),
+        None => None,
+    };
+    book.rename_name_uses(old, new, si);
+    let after = book.snapshot(&mut styles, &[]);
+    let plain = styles.plain();
+    let out = write(bytes, &before, &after, &styles, plain, None)?;
     verify(&out, &after)?;
     Ok(out)
 }
