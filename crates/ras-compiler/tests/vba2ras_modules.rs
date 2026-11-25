@@ -318,8 +318,8 @@ fn controls_and_public_declarations_of_a_sheet() {
     assert!(diags.is_empty(), "{diags:?}");
     let doc = code(&files, "Sheet2");
     assert!(
-        doc.contains("Private Sub CommandButton1_Click()")
-            && doc.contains("Private Sub TextBox1_LostFocus()"),
+        doc.contains("Private Sub CommandButton1_click()")
+            && doc.contains("Private Sub TextBox1_lostFocus()"),
         "{doc}"
     );
 }
