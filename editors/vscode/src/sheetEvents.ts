@@ -67,3 +67,28 @@ export function newMacroName(text: string, object: string, shape: number | undef
 		}
 	}
 }
+
+/**
+ * The object part of the macro the compiler generates for the `@on("<name>.Click")` handlers of a
+ * shape or a form control (spec §12.2.1), as Excel names a new macro: `ボタン 1` → `ボタン1`.
+ */
+export function shapeMacroObject(name: string): string {
+	const kept = name.replace(/[^\p{L}\p{N}_]/gu, "");
+	return /^\p{L}/u.test(kept) ? kept : `Shape${kept}`;
+}
+
+/** The macro a shape's `@on("<name>.Click")` handlers are called from: `Sheet1.ボタン1_click`. */
+export function shapeMacro(codeName: string, name: string): string {
+	return `${codeName}.${shapeMacroObject(name)}_click`;
+}
+
+/** Whether `macro` (as `OnAction` has it: `'Book.xlsm'!Sheet1.ボタン1_click` too) is that macro. */
+export function isShapeMacro(macro: string, codeName: string, name: string): boolean {
+	return macro.replace(/^.*!/, "").toLowerCase() === shapeMacro(codeName, name).toLowerCase();
+}
+
+/** Text to append to a sheet's file for a new `@on("<name>.Click")` handler of a shape. */
+export function shapeHandlerText(existing: string, name: string, indent: string, newline: string): string {
+	const separator = !existing.trim() ? "" : /(\r\n|\r|\n)$/.test(existing) ? newline : newline + newline;
+	return `${separator}@on(${JSON.stringify(`${name}.Click`)})${newline}function ${newMacroName(existing, name, undefined)}() {${newline}${indent}${newline}}${newline}`;
+}

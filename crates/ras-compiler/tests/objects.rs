@@ -297,7 +297,7 @@ function left() {
     let (diags, _) = compile(
         &[(
             "Sheet1",
-            "@on(\"TextBox1.Exit\")\nfunction a() {}\n@on(\"Button9.Click\")\nfunction b() {}\n",
+            "@on(\"TextBox1.Exit\")\nfunction a() {}\n@on(\"Button9.MouseDown\")\nfunction b() {}\n",
         )],
         &[],
     );
@@ -307,6 +307,45 @@ function left() {
         &[],
     );
     assert_eq!(codes(&diags), ["E0202"], "{diags:#?}");
+}
+
+#[test]
+fn shapes_and_form_controls_on_the_sheet() {
+    // The macro their OnAction runs: public, named as Excel names a new one.
+    let sheet = r#"
+@on("ボタン 1.Click")
+function button1Click() {
+    this.range("A1").value = 1;
+}
+
+@on("ボタン 1.Click")
+function also() {
+}
+
+@on("Rectangle1.Click")
+function rectangleClick() {
+}
+"#;
+    let (diags, files) = compile(&[("Sheet1", sheet)], &[]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = module(&files, "Sheet1");
+    assert!(code.contains("Public Sub ボタン1_click()"), "{code}");
+    assert!(code.contains("Public Sub Rectangle1_click()"), "{code}");
+    assert!(
+        code.contains("RAS_EventError \"Sheet1.ボタン1_click\""),
+        "{code}"
+    );
+    // Only Click; no arguments.
+    let (diags, _) = compile(
+        &[(
+            "Sheet1",
+            "@on(\"ボタン 1.Change\")\nfunction a() {}\n@on(\"ボタン 2.Click\")\nfunction b(x: int) {}\n",
+        )],
+        &[],
+    );
+    assert_eq!(codes(&diags), ["E0612", "E0613"], "{diags:#?}");
+    assert_eq!(ras_compiler::shape_macro_object("ボタン 1"), "ボタン1");
+    assert_eq!(ras_compiler::shape_macro_object("1 Shape"), "Shape1Shape");
 }
 
 #[test]

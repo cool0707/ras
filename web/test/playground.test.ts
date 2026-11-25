@@ -195,6 +195,10 @@ test("reads the ActiveX controls of the sheets for @on(\"<control>.<event>\")", 
     const toml = '[project]\nname = "P"\n';
     const known = JSON.parse(compile(JSON.stringify({ files, toml, sheets: ["Sheet1"], sheetControls: [{ name: "Sheet1", controls: [{ name: "CommandButton1", type: "CommandButton" }] }] })));
     assert.deepEqual(known.diagnostics, []);
-    const missing = JSON.parse(compile(JSON.stringify({ files, toml, sheets: ["Sheet1"], sheetControls: [] })));
+    // Another name's Click is a shape's or a form control's (its macro); its other events are no control's.
+    const shape = JSON.parse(compile(JSON.stringify({ files, toml, sheets: ["Sheet1"], sheetControls: [] })));
+    assert.deepEqual(shape.diagnostics, []);
+    const other = [{ path: "objects/Sheet1.ras", text: '@on("CommandButton1.MouseDown")\nfunction c() {\n}\n' }];
+    const missing = JSON.parse(compile(JSON.stringify({ files: other, toml, sheets: ["Sheet1"], sheetControls: [] })));
     assert.ok(missing.diagnostics.some((d: { code: string }) => d.code === "E0613"), JSON.stringify(missing.diagnostics));
 });

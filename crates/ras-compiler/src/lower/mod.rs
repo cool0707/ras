@@ -2453,6 +2453,8 @@ impl<'p> Lowerer<'p> {
             handlers: Vec<(FnId, bool)>,
         }
         let mut table: Vec<Proc> = Vec::new();
+        // (module, object) of the shapes and form controls whose macro is generated: public.
+        let mut macros: Vec<(ModuleId, String)> = Vec::new();
         let docs: Vec<ModuleId> = (0..prog.modules.len())
             .filter(|&m| prog.modules[m].document().is_some())
             .collect();
@@ -2507,6 +2509,11 @@ impl<'p> Lowerer<'p> {
                                     continue;
                                 }
                             }
+                        } else if let Some(name) = self.sheet_shape(doc, &ev.target, &ev.event) {
+                            // A shape or a form control: the macro its OnAction runs, public
+                            // and named as Excel names a new one (`ボタン1_click`).
+                            macros.push((m, name.clone()));
+                            (name, "click".to_string(), Vec::new())
                         } else if let Some(name) = self.untyped_control(doc, &ev.target) {
                             // A control whose events are not known (not an MSForms control, or no
                             // workbook to read the controls from): the event procedure is declared
@@ -2748,9 +2755,12 @@ impl<'p> Lowerer<'p> {
                     optional_default: None,
                 })
                 .collect();
+            let public = macros
+                .iter()
+                .any(|(mm, o)| *mm == t.module && *o == t.object);
             self.out[di].procs.push(VProc {
                 kind: ProcKind::Sub,
-                public: false,
+                public,
                 friend: false,
                 name: proc_name,
                 params,
@@ -3094,6 +3104,28 @@ impl<'p> Lowerer<'p> {
         }
     }
 
+    /// The shape or form control `target` of a sheet whose macro (`OnAction`) an
+    /// `@on("<name>.Click")` handler is called from (spec §12.2.1): a name that is not an ActiveX
+    /// control of the sheet (one that is no VBA name, `ボタン 1`, whether the controls are known
+    /// or not). The object of its macro, `ボタン1` (the macro is `ボタン1_click`).
+    fn sheet_shape(&self, doc: &FormModule, target: &str, event: &str) -> Option<String> {
+        if doc.kind != ObjectKind::Sheet || !event.eq_ignore_ascii_case("Click") {
+            return None;
+        }
+        let control = doc.decl.as_ref().is_some_and(|x| {
+            x.controls
+                .iter()
+                .any(|c| c.name.eq_ignore_ascii_case(target))
+        });
+        let vba_name = !target.is_empty()
+            && target.chars().next().is_some_and(|c| c.is_alphabetic())
+            && target.chars().all(|c| c.is_alphanumeric() || c == '_');
+        if control || (vba_name && !self.cfg.sheet_controls_known) {
+            return None;
+        }
+        Some(shape_macro_object(target))
+    }
+
     /// The name of the control `target` of a sheet when its events are not known: a control
     /// that is not an MSForms one, or any name when the controls of the workbook were not read.
     fn untyped_control(&self, doc: &FormModule, target: &str) -> Option<String> {
@@ -3398,3 +3430,18 @@ pub(crate) fn ptr_conditional(decl: &str, vba6: bool) -> String {
 
 #[allow(dead_code)]
 fn _keep(_: &ast::Block, _: ExprId) {}
+
+/// The object part of the macro generated for a shape or form control named `name` (spec
+/// §12.2.1), as Excel names a new macro: its letters, digits and `_` (`ボタン 1` → `ボタン1`),
+/// `Shape` before one that does not start with a letter.
+pub fn shape_macro_object(name: &str) -> String {
+    let kept: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if kept.chars().next().is_some_and(|c| c.is_alphabetic()) {
+        kept
+    } else {
+        format!("Shape{kept}")
+    }
+}

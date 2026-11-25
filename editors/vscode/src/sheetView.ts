@@ -12,8 +12,8 @@
 // - On the project's workbook, the shapes and controls of a sheet get their events as the form
 //   designer's controls do (the page's menu and button, a double click): an ActiveX control's
 //   handler is an `@on("CommandButton1.Click")` function of the sheet's file; a shape or a form
-//   control gets an `export function` of the sheet's file as its macro (`ras book edit`'s `macro`
-//   writes `OnAction` into the workbook file).
+//   control's is an `@on("ボタン 1.Click")` function too, whose generated macro
+//   (`Sheet1.ボタン1_click`) `ras book edit`'s `macro` assigns to it (`OnAction`).
 // - "RAS: シートプレビューを表示" on the RAS file of a worksheet (`objects/Sheet1.ras`) shows the
 //   project's workbook at that sheet: from the editor's title bar and context menu, and from
 //   the Explorer's context menu.
@@ -26,7 +26,7 @@ import * as vscode from "vscode";
 import type { SheetResult } from "./sheetCommands";
 import { sheetOfRasFile } from "./sheetFile";
 import { findServerExecutable } from "./serverPath";
-import { macrosOf, moduleName, newMacroName, sheetControlEvents } from "./sheetEvents";
+import { isShapeMacro, macrosOf, moduleName, newMacroName, shapeHandlerText, shapeMacro, sheetControlEvents } from "./sheetEvents";
 import { bodyIndent, findHandler, handlerText, rasParams } from "./userForm/events";
 import type { EventDescriptor } from "./userForm/events";
 
@@ -600,7 +600,11 @@ async function findMacro(root: string, macro: string): Promise<{ file: string; n
 	return undefined;
 }
 
-/** A shape's or a form control's macro: opened, or a new one (or one chosen) assigned to it. */
+/**
+ * A shape's or a form control's event: its `@on("<name>.Click")` handler in the sheet's file,
+ * added when there is none, whose macro (`Sheet1.ボタン1_click`, spec §12.2.1) is assigned to it
+ * (`OnAction`); or the macro assigned to it, or one chosen from the RAS files.
+ */
 async function assignMacro(what: Shown, root: string, sheetFile: string, m: ObjectEvent): Promise<string | undefined> {
 	const label = m.object || "このコントロール";
 	const ev = m.eventName ?? "クリック";
@@ -608,7 +612,22 @@ async function assignMacro(what: Shown, root: string, sheetFile: string, m: Obje
 		const code = await documentOf(file);
 		await reveal(code, bodyLineOf(code, name) ?? 0);
 	};
-	if (!m.choose && m.macro) {
+	const assign = async (full: string) => (full.toLowerCase() === m.macro.replace(/^.*!/, "").toLowerCase() ? undefined : edit(what, [{ op: "macro", sheet: m.sheet, object: m.object, shape: m.shape, macro: full }]));
+	// Its `@on` handler (an object with a name: the handler names it).
+	const handler = async () => {
+		const code = await documentOf(sheetFile);
+		let found = findHandler(code.getText(), m.object, "Click");
+		if (found === undefined) {
+			await append(code, (text, indent, newline) => shapeHandlerText(text, m.object, indent, newline));
+			await code.save();
+			found = findHandler(code.getText(), m.object, "Click");
+		}
+		const html = await assign(shapeMacro(m.codeName, m.object));
+		await reveal(code, found?.bodyLine ?? 0);
+		return html;
+	};
+	const generated = m.object !== "" && m.macro !== "" && isShapeMacro(m.macro, m.codeName, m.object);
+	if (!m.choose && m.macro && !generated) {
 		const found = await findMacro(root, m.macro);
 		if (found === undefined) {
 			throw new Error(`${label} の${ev}イベントに登録された ${m.macro} は、プロジェクトの RAS のファイルにありません（ブックの VBA だけにある関数かもしれません）。`);
@@ -616,12 +635,26 @@ async function assignMacro(what: Shown, root: string, sheetFile: string, m: Obje
 		await open(found.file, found.name);
 		return undefined;
 	}
+	if (!m.choose && m.object !== "") {
+		return handler();
+	}
+	type Target = { file: string; module: string; name: string };
 	const fresh = newMacroName(await textOf(sheetFile), m.object, m.shape);
-	let chosen: { file: string; module: string; name: string } | undefined = { file: sheetFile, module: m.codeName, name: fresh };
+	let chosen: Target | undefined = { file: sheetFile, module: m.codeName, name: fresh };
 	let create = true;
 	if (m.choose) {
-		type Item = vscode.QuickPickItem & { target?: { file: string; module: string; name: string }; create?: boolean };
-		const items: Item[] = [{ label: `$(add) 新しい関数: ${m.codeName}.${fresh}`, description: path.basename(sheetFile), target: chosen, create: true }];
+		type Item = vscode.QuickPickItem & { target?: Target; create?: boolean; handler?: boolean };
+		const items: Item[] =
+			m.object !== ""
+				? [
+						{
+							label: `$(symbol-event) @on("${m.object}.Click")`,
+							description: path.basename(sheetFile),
+							detail: findHandler(await textOf(sheetFile), m.object, "Click") ? `ハンドラーがあります${generated ? "（登録されています）" : ""}` : "ハンドラーを追加します",
+							handler: true,
+						},
+					]
+				: [{ label: `$(add) 新しい関数: ${m.codeName}.${fresh}`, description: path.basename(sheetFile), target: chosen, create: true }];
 		for (const f of await macroFiles(root)) {
 			const macros = macrosOf(await textOf(f.file));
 			if (macros.length > 0) {
@@ -629,10 +662,13 @@ async function assignMacro(what: Shown, root: string, sheetFile: string, m: Obje
 			}
 			for (const x of macros) {
 				const full = `${f.module}.${x.name}`;
-				items.push({ label: full, description: vscode.workspace.asRelativePath(f.file), detail: m.macro.toLowerCase() === full.toLowerCase() ? "登録されています" : undefined, target: { file: f.file, module: f.module, name: x.name } });
+				items.push({ label: full, description: vscode.workspace.asRelativePath(f.file), detail: m.macro.replace(/^.*!/, "").toLowerCase() === full.toLowerCase() ? "登録されています" : undefined, target: { file: f.file, module: f.module, name: x.name } });
 			}
 		}
-		const picked = await vscode.window.showQuickPick(items, { placeHolder: `${label} の${ev}イベントに登録する関数を選んでください` });
+		const picked = await vscode.window.showQuickPick(items, { placeHolder: `${label} の${ev}イベントに登録するハンドラー・関数を選んでください` });
+		if (picked?.handler) {
+			return handler();
+		}
 		if (picked?.target === undefined) {
 			return undefined;
 		}
@@ -648,8 +684,7 @@ async function assignMacro(what: Shown, root: string, sheetFile: string, m: Obje
 		});
 		await code.save();
 	}
-	const full = `${target.module}.${target.name}`;
-	const html = full.toLowerCase() === m.macro.toLowerCase() ? undefined : await edit(what, [{ op: "macro", sheet: m.sheet, object: m.object, shape: m.shape, macro: full }]);
+	const html = await assign(`${target.module}.${target.name}`);
 	await open(target.file, target.name);
 	return html;
 }
