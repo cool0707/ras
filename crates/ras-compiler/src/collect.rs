@@ -307,6 +307,10 @@ impl Collector {
                         .collect::<String>()
                 )
             }
+            // The bundled library would take a name a project may well use for its own module.
+            None if input.kind == ModuleKind::Std && input.key == VALIDATION_MODULE => {
+                "RAS_Validation".to_string()
+            }
             None => vba_module_name(&input.key),
         };
         self.prog.modules.push(ModuleData {
@@ -2533,6 +2537,9 @@ fn import_by_path(prog: &Program, m: ModuleId, source: &str) -> Option<ModuleId>
 }
 
 pub const STRUCT_MAP_MODULE: &str = "ras_collections";
+
+/// The bundled form validation library (spec §14.11.12): `import { z, FormValidator } from "validation"`.
+pub const VALIDATION_MODULE: &str = "validation";
 
 /// The bundled type definitions of the test API (`describe`, `expect`, ...; spec §14.12.4).
 pub const TEST_DEFS_MODULE: &str = "test.d";

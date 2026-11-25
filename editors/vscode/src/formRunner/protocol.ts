@@ -41,7 +41,7 @@ export interface ControlSnapshot {
 /** From the debug process. */
 export type RuntimeMessage =
 	| { t: "show"; id: number; name: string; modal: boolean; form: ControlState; controls: ControlSnapshot[] }
-	| { t: "update"; id: number; form?: ControlState; controls: ControlSnapshot[]; focus?: string }
+	| { t: "update"; id: number; form?: ControlState; controls: ControlSnapshot[]; focus?: string; removed?: string[] }
 	| { t: "hide"; id: number }
 	| { t: "unload"; id: number }
 	| { t: "error"; id: number; message: string }
@@ -79,10 +79,17 @@ export function initialState(msg: Extract<RuntimeMessage, { t: "show" }>): FormS
 	return { name: msg.name, modal: msg.modal, form: { ...msg.form }, controls: msg.controls.map((c) => ({ ...c })) };
 }
 
-/** Applies an `update` to a form's state. Controls are replaced whole; their order stays. */
+/**
+ * Applies an `update` to a form's state. Controls are replaced whole; their order stays. Controls
+ * the form's code added (`Controls.Add`) come last, on top of the others; `removed` names those
+ * it removed (`Controls.Remove`).
+ */
 export function applyUpdate(state: FormState, msg: Extract<RuntimeMessage, { t: "update" }>): FormState {
 	const changed = new Map(msg.controls.map((c) => [c.name.toLowerCase(), c]));
-	const controls = state.controls.map((c) => changed.get(c.name.toLowerCase()) ?? c);
+	const removed = new Set((msg.removed ?? []).map((n) => n.toLowerCase()));
+	const known = new Set(state.controls.map((c) => c.name.toLowerCase()));
+	const controls = state.controls.filter((c) => !removed.has(c.name.toLowerCase())).map((c) => changed.get(c.name.toLowerCase()) ?? c);
+	for (const c of msg.controls) if (!known.has(c.name.toLowerCase())) controls.push(c);
 	return { ...state, form: msg.form ? { ...msg.form } : state.form, controls };
 }
 

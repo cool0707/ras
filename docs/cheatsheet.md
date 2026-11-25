@@ -273,6 +273,26 @@ export function askName() {
 }
 ```
 
+```typescript
+// forms/frmEntry.ras（入力のバリデーション。zod 風の規則を付けると、入力の確定時に検証し、
+// エラーを <コントロール名>Error のラベルに表示する。無ければコントロールの下に透明なラベルを作る）
+import * as z from "validation";
+
+const form = new z.FormValidator();
+
+function constructor() {
+    form.rule(this.txtName, z.string().required("名前を入力してください").max(20));
+    // z.int().min(0).max(150) / z.string().email() / .regex(…) / .refine(v => …, "…") など。
+    // 前の入力で規則が変わるときは、Change のハンドラで rule / remove を呼び直す
+}
+
+@on("btnOK.Click")
+function submit() {
+    if (!form.validateAll()) return;  // すべて検証し、最初のエラーへフォーカス
+    this.close(this.txtName.text);
+}
+```
+
 表示スケール（DPI）が 100% 以外でも、フォームの内側の大きさはデザインどおりになります（読み込み時に合わせます）。
 
 ## ファイルの読み書き（`Open` / `Print #` / `Close`）

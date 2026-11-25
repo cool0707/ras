@@ -92,6 +92,11 @@ const STDLIB: &[(&str, ModuleKind, &str)] = &[
         ModuleKind::Std,
         include_str!("../stdlib/ras_collections.ras"),
     ),
+    (
+        collect::VALIDATION_MODULE,
+        ModuleKind::Std,
+        include_str!("../stdlib/validation.ras"),
+    ),
 ];
 
 fn stdlib_inputs() -> Vec<SourceInput> {

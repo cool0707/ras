@@ -702,7 +702,8 @@ impl<'p> Gen<'p> {
             if md.is_form() {
                 continue;
             }
-            if d.is_debug_entry() {
+            // The bundled library is no part of the project (`z.string()` is no entry point).
+            if d.is_debug_entry() && !md.rel_path.starts_with("<stdlib>/") {
                 self.entries.push(d.name.clone());
                 if d.is_macro_entry() {
                     self.macros.push(d.name.clone());
@@ -874,9 +875,45 @@ impl<'p> Gen<'p> {
 
     /// Registration of a form's code-behind: the run time creates the form (its only, default
     /// instance) and calls `load` with it, which sets `$me` and the module variables.
-    fn register_form(&mut self, events: Vec<String>) {
+    fn register_form(&mut self, mut events: Vec<String>) {
         let prog = self.prog;
         let md = &prog.modules[self.module];
+        // The form's validators (spec §14.11.12) get the events after the handlers of the
+        // code-behind, unguarded, as in the VBA build.
+        let validators: Vec<String> = prog
+            .form_validators(self.module)
+            .into_iter()
+            .map(|v| js_ident(&prog.vars[v].name))
+            .collect();
+        if let Some(decl) = md.form.as_ref().and_then(|f| f.decl.as_ref()) {
+            for c in decl.controls.iter().filter(|_| !validators.is_empty()) {
+                let hooks: &[(&str, &str)] =
+                    if VALIDATED_CONTROLS.contains(&c.control_type.as_str()) {
+                        &[("Exit", "commit"), ("Change", "edit")]
+                    } else if VALIDATED_CONTAINERS.contains(&c.control_type.as_str()) {
+                        &[("Exit", "commitActive")]
+                    } else {
+                        &[]
+                    };
+                for (event, method) in hooks {
+                    let calls: Vec<String> = validators
+                        .iter()
+                        .map(|v| {
+                            format!(
+                                "if ({v} !== null) {v}.{method}($rt.get($me, {}));",
+                                js_str(&c.name)
+                            )
+                        })
+                        .collect();
+                    events.push(format!(
+                        "{{ target: {}, event: {}, reentrant: true, fn: ($a) => {{ {} }} }}",
+                        js_str(&c.name),
+                        js_str(event),
+                        calls.join(" ")
+                    ));
+                }
+            }
+        }
         self.w("let $me = null;");
         self.w("function $load($form) {");
         self.indent += 1;

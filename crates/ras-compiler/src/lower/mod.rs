@@ -3404,6 +3404,38 @@ impl<'p> Lowerer<'p> {
                 }
             }
         }
+        // The form's validators (spec §14.11.12): (object, event, method of `FormValidator`).
+        let validators: Vec<String> = prog
+            .form_validators(m)
+            .into_iter()
+            .filter(|&v| !self.is_demoted(v))
+            .map(|v| names::module_ident(&prog.vars[v].name))
+            .collect();
+        let mut hooks: Vec<(String, &'static str, &'static str)> = Vec::new();
+        if !validators.is_empty() {
+            for c in &decl.controls {
+                let events: &[(&'static str, &'static str)] =
+                    if VALIDATED_CONTROLS.contains(&c.control_type.as_str()) {
+                        &[("Exit", "commit"), ("Change", "edit")]
+                    } else if VALIDATED_CONTAINERS.contains(&c.control_type.as_str()) {
+                        &[("Exit", "commitActive")]
+                    } else {
+                        &[]
+                    };
+                for &(event, method) in events {
+                    let Some(def) = crate::userform::find_event(&c.control_type, event) else {
+                        continue;
+                    };
+                    if !table
+                        .iter()
+                        .any(|t| t.0 .0 == c.name && t.0 .1.name == def.name)
+                    {
+                        table.push(((c.name.clone(), def), Vec::new()));
+                    }
+                    hooks.push((c.name.clone(), def.name.as_str(), method));
+                }
+            }
+        }
         let handlers = md.fns.clone();
         self.emit_with_events(fi, &decl.name, &handlers, false);
         let init_fn = md.init_fn;
@@ -3492,6 +3524,14 @@ impl<'p> Lowerer<'p> {
             let unlisten = listens && object == "UserForm" && def.name == "Terminate";
             body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
             body.extend(calls);
+            for (_, _, method) in hooks.iter().filter(|h| h.0 == object && h.1 == def.name) {
+                for v in &validators {
+                    body.push(VStmt::Raw(format!(
+                        "If Not {v} Is Nothing Then {v}.{} Me.{object}",
+                        names::member_ident(method)
+                    )));
+                }
+            }
             if unlisten {
                 body.push(call_stmt("RAS_UnlistenOwner", vec![lit("Me")]));
             }

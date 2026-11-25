@@ -34,6 +34,20 @@ describe("form runner protocol", () => {
 		assert.equal(captioned.form.Caption, "入力 2");
 	});
 
+	it("adds the controls the form's code added and drops the removed ones", () => {
+		const state = initialState(show);
+		const added = applyUpdate(state, { t: "update", id: 1, controls: [{ name: "txtNameError", type: "Label", parent: "", state: { Caption: "必須です", BackStyle: 0 } }] });
+		assert.deepEqual(
+			added.controls.map((c) => c.name),
+			["txtName", "fraSize", "optS", "txtNameError"],
+		);
+		const removed = applyUpdate(added, { t: "update", id: 1, controls: [], removed: ["TXTNAMEERROR"] });
+		assert.deepEqual(
+			removed.controls.map((c) => c.name),
+			["txtName", "fraSize", "optS"],
+		);
+	});
+
 	it("splits the stream into lines", () => {
 		const reader = new LineReader();
 		assert.deepEqual(reader.push('{"t":"hide"'), []);

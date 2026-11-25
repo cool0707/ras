@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "frmOrder", "caption": "注文", "width": 300, "height": 240 },
+  "controls": [
+    { "id": "1", "name": "txtName", "type": "TextBox", "left": 12, "top": 12, "width": 150, "height": 18 },
+    { "id": "2", "name": "txtAge", "type": "TextBox", "left": 12, "top": 48, "width": 150, "height": 18 },
+    { "id": "3", "name": "txtAgeError", "type": "Label", "left": 170, "top": 48, "width": 120, "height": 18, "caption": "" },
+    { "id": "4", "name": "cboKind", "type": "ComboBox", "left": 12, "top": 84, "width": 150, "height": 18, "list": ["個人", "法人"] },
+    { "id": "f", "name": "fraCorp", "type": "Frame", "left": 12, "top": 110, "width": 200, "height": 60, "caption": "法人" },
+    { "id": "5", "name": "txtCorp", "type": "TextBox", "parentId": "f", "left": 6, "top": 6, "width": 150, "height": 18 },
+    { "id": "6", "name": "chkAgree", "type": "CheckBox", "left": 12, "top": 180, "width": 150, "height": 18, "caption": "同意する" },
+    { "id": "7", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 200, "top": 200 }
+  ]
+}

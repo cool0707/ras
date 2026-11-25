@@ -1,0 +1,525 @@
+// フォームの入力のバリデーション（仕様 §14.11.12）。`import { z, FormValidator } from "validation";` で使う。
+//
+//     const form = new FormValidator();
+//
+//     function constructor() {
+//         form.rule(this.txtName, z.string().required("名前を入力してください").max(20));
+//         form.rule(this.txtAge, z.int().min(0).max(150));
+//     }
+//
+// フォームのコードビハインドのモジュール変数に `FormValidator` を置くと、コンパイラがフォームの
+// 入力コントロールの `Exit`（入力の確定）と `Change` をその `commit` / `edit` につなぐ。規則のある
+// コントロールは、確定した時点で検証し、エラーをコントロールの下のラベルに表示する。
+
+/** 規則の 1 つ（`ValidationSchema` が持つ）。 */
+export class RAS_ValidationCheck {
+    /** "min" / "max" / "length" / "regex" / "email" / "oneOf" / "refine"。 */
+    kind: string = "";
+    num: double = 0.0;
+    text: string = "";
+    items: string[] = [];
+    fn: (value: string) => boolean = null;
+    message: string = "";
+}
+
+/**
+ * 入力値の検証規則（zod 風）。`z.string()` / `z.int()` などで作り、`required()`・`max(20)` のように
+ * 規則をつなげる（どのメソッドも同じスキーマを返す）。
+ *
+ * 値はコントロールの文字列（`TextBox` / `ComboBox` / `ListBox` は `text`、`CheckBox` などは
+ * チェックされていれば `"true"`）で検証する。空欄（空白だけを含む）のときは、`required()` 以外の規則は
+ * 調べない（必須でない欄は空のままでよい）。
+ */
+export class ValidationSchema {
+    /** "string" / "int" / "number" / "date" / "boolean"。 */
+    type: string = "string";
+    /** 型の検査（`z.int()` の整数など）に通らないときのメッセージ。空なら既定のメッセージ。 */
+    typeMessage: string = "";
+    private needed: boolean = false;
+    private neededMessage: string = "";
+    private trims: boolean = true;
+    private checks: RAS_ValidationCheck[] = [];
+
+    /** 入力を必須にする（`boolean` ではチェックを必須にする）。 */
+    required(message: string = ""): ValidationSchema {
+        this.needed = true;
+        this.neededMessage = message;
+        return this;
+    }
+
+    /** 入力を任意にする（`required()` を取り消す）。 */
+    optional(): ValidationSchema {
+        this.needed = false;
+        return this;
+    }
+
+    /** 前後の空白を取り除かずに検証する（既定では取り除いてから検証する）。 */
+    noTrim(): ValidationSchema {
+        this.trims = false;
+        return this;
+    }
+
+    /** 最小値（`string` では文字数、`int` / `number` では値、`date` では日付のシリアル値）。 */
+    min(value: double, message: string = ""): ValidationSchema {
+        return this.add("min", value, "", message);
+    }
+
+    /** 最大値（`string` では文字数、`int` / `number` では値、`date` では日付のシリアル値）。 */
+    max(value: double, message: string = ""): ValidationSchema {
+        return this.add("max", value, "", message);
+    }
+
+    /** 文字数がちょうど `n`。 */
+    length(n: int, message: string = ""): ValidationSchema {
+        return this.add("length", n, "", message);
+    }
+
+    /** 0 より大きい。 */
+    positive(message: string = ""): ValidationSchema {
+        return this.add("gt", 0.0, "", message);
+    }
+
+    /** 0 以上。 */
+    nonnegative(message: string = ""): ValidationSchema {
+        return this.add("min", 0.0, "", message);
+    }
+
+    /** 正規表現（`VBScript.RegExp` の構文）に一致する。 */
+    regex(pattern: string, message: string = ""): ValidationSchema {
+        return this.add("regex", 0.0, pattern, message);
+    }
+
+    /** メールアドレスの形式。 */
+    email(message: string = ""): ValidationSchema {
+        return this.add(
+            "email",
+            0.0,
+            "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+            message
+        );
+    }
+
+    /** 値が `values` のどれか。 */
+    oneOf(values: string[], message: string = ""): ValidationSchema {
+        const c = new RAS_ValidationCheck();
+        c.kind = "oneOf";
+        c.items = values;
+        c.message = message;
+        this.checks.push(c);
+        return this;
+    }
+
+    /** 独自の検査。`fn` が `false` を返すと `message` をエラーにする。ほかのコントロールの値も参照できる。 */
+    refine(fn: (value: string) => boolean, message: string): ValidationSchema {
+        const c = new RAS_ValidationCheck();
+        c.kind = "refine";
+        c.fn = fn;
+        c.message = message;
+        this.checks.push(c);
+        return this;
+    }
+
+    private add(kind: string, num: double, text: string, message: string): ValidationSchema {
+        const c = new RAS_ValidationCheck();
+        c.kind = kind;
+        c.num = num;
+        c.text = text;
+        c.message = message;
+        this.checks.push(c);
+        return this;
+    }
+
+    /** 値を検証し、エラーのメッセージを返す（エラーがなければ `""`）。 */
+    check(value: string): string {
+        const v = this.trims ? value.trim() : value;
+        if (this.type == "boolean") {
+            if (this.needed && v != "true") {
+                return this.neededMessage != "" ? this.neededMessage : "チェックしてください";
+            }
+            return this.runChecks(v, 0.0);
+        }
+        if (v == "") {
+            if (this.needed) {
+                return this.neededMessage != "" ? this.neededMessage : "入力してください";
+            }
+            return "";
+        }
+        let num = 0.0;
+        if (this.type == "int" || this.type == "number") {
+            if (!isNumeric(v)) {
+                return this.typeError();
+            }
+            num = cDbl(v);
+            const whole: double = fix(num);
+            if (this.type == "int" && num != whole) {
+                return this.typeError();
+            }
+        } else if (this.type == "date") {
+            if (!isDate(v)) {
+                return this.typeError();
+            }
+            num = cDbl(cDate(v));
+        } else {
+            num = v.length;
+        }
+        return this.runChecks(v, num);
+    }
+
+    private typeError(): string {
+        if (this.typeMessage != "") return this.typeMessage;
+        if (this.type == "int") return "整数で入力してください";
+        if (this.type == "date") return "日付で入力してください";
+        return "数値で入力してください";
+    }
+
+    private runChecks(v: string, num: double): string {
+        const isText = this.type == "string";
+        for (const c of this.checks) {
+            let ok = true;
+            let fallback = "";
+            if (c.kind == "min") {
+                ok = num >= c.num;
+                fallback = isText ? `${c.num} 文字以上で入力してください` : `${this.show(c.num)} 以上で入力してください`;
+            } else if (c.kind == "max") {
+                ok = num <= c.num;
+                fallback = isText ? `${c.num} 文字以内で入力してください` : `${this.show(c.num)} 以下で入力してください`;
+            } else if (c.kind == "gt") {
+                ok = num > c.num;
+                fallback = `${this.show(c.num)} より大きい値を入力してください`;
+            } else if (c.kind == "length") {
+                ok = v.length == c.num;
+                fallback = `${c.num} 文字で入力してください`;
+            } else if (c.kind == "regex" || c.kind == "email") {
+                const re = new VBScript.RegExp();
+                re.pattern = c.text;
+                ok = re.test(v);
+                fallback = c.kind == "email" ? "メールアドレスの形式で入力してください" : "形式が正しくありません";
+            } else if (c.kind == "oneOf") {
+                ok = c.items.includes(v);
+                fallback = "一覧から選択してください";
+            } else if (c.kind == "refine") {
+                ok = c.fn(v);
+                fallback = "正しくありません";
+            }
+            if (!ok) {
+                return c.message != "" ? c.message : fallback;
+            }
+        }
+        return "";
+    }
+
+    /** `min` / `max` の値の表示（日付はその日付）。 */
+    private show(n: double): string {
+        if (this.type == "date") return `${cDate(n)}`;
+        return `${n}`;
+    }
+}
+
+/** 文字列の値のスキーマ。 */
+export function string(message: string = ""): ValidationSchema {
+    return schemaOf("string", message);
+}
+
+/** 整数の値のスキーマ。整数でない入力は `message`（省略時は「整数で入力してください」）のエラー。 */
+export function int(message: string = ""): ValidationSchema {
+    return schemaOf("int", message);
+}
+
+/** 数値のスキーマ。数値でない入力は `message` のエラー。 */
+export function number(message: string = ""): ValidationSchema {
+    return schemaOf("number", message);
+}
+
+/** 日付のスキーマ。日付でない入力は `message` のエラー。`min` / `max` には日付（`dateSerial(…)` など）を渡せる。 */
+export function date(message: string = ""): ValidationSchema {
+    return schemaOf("date", message);
+}
+
+/** チェック ボックスなどのオン / オフのスキーマ。`required()` でチェックを必須にする。 */
+export function boolean(): ValidationSchema {
+    return schemaOf("boolean", "");
+}
+
+function schemaOf(type: string, message: string): ValidationSchema {
+    const s = new ValidationSchema();
+    s.type = type;
+    s.typeMessage = message;
+    return s;
+}
+
+/** 規則を付けたコントロール 1 つ分の状態。 */
+export class RAS_ValidationField {
+    control: MSForms.Control = null;
+    schema: ValidationSchema = null;
+    label: MSForms.Label = null;
+    /** 一度確定した（以後は入力のたびに検証し直す）。 */
+    touched: boolean = false;
+    error: string = "";
+}
+
+/**
+ * フォームの入力のバリデーション。フォームのコードビハインドのモジュール変数に置く
+ * （`const form = new FormValidator();`）と、規則を付けたコントロールを入力の確定（`Exit`）の
+ * 時点で検証し、エラーをコントロールの下のラベルに表示する。一度確定したコントロールは、
+ * その後は入力のたびに（`Change`）検証し直すので、直すとすぐにエラーが消える。
+ *
+ * エラーを表示するラベルは、コントロールと同じコンテナーにある `<コントロール名>Error`
+ * （`txtName` なら `txtNameError`）を使い、無ければコントロールの直下に作る（背景は透明）。
+ */
+export class FormValidator {
+    private fields: Map<string, RAS_ValidationField> = new Map<string, RAS_ValidationField>();
+    /** エラーの文字色。 */
+    errorColor: int = 0x0000CC;
+
+    /**
+     * コントロールに規則を付ける（既にあれば置き換える）。前の入力によって規則を変えるときも、
+     * 同じように呼び直す。`errorLabel` を省略すると `<コントロール名>Error` のラベルを使う（無ければ作る）。
+     */
+    rule(control: MSForms.Control, schema: ValidationSchema, errorLabel: MSForms.Label = null): void {
+        const key = control.name.toLowerCase();
+        let f: RAS_ValidationField = null;
+        if (this.fields.has(key)) {
+            f = this.fields.get(key);
+        } else {
+            f = new RAS_ValidationField();
+            this.fields.set(key, f);
+        }
+        f.control = control;
+        f.schema = schema;
+        if (errorLabel != null) {
+            f.label = errorLabel;
+        }
+        // 確定済みのコントロールは、新しい規則ですぐに表示し直す。
+        if (f.touched || f.error != "") {
+            this.run(f);
+        }
+    }
+
+    /** コントロールの規則を外し、表示しているエラーを消す。 */
+    remove(control: MSForms.Control): void {
+        const key = control.name.toLowerCase();
+        if (!this.fields.has(key)) return;
+        const f = this.fields.get(key);
+        this.display(f, "");
+        this.fields.delete(key);
+    }
+
+    /** コントロールに規則があるか。 */
+    has(control: MSForms.Control): boolean {
+        return this.fields.has(control.name.toLowerCase());
+    }
+
+    /** コントロールを検証してエラーを表示し、エラーがなければ `true` を返す。 */
+    validate(control: MSForms.Control): boolean {
+        const key = control.name.toLowerCase();
+        if (!this.fields.has(key)) return true;
+        const f = this.fields.get(key);
+        f.touched = true;
+        return this.run(f);
+    }
+
+    /**
+     * 規則のあるすべてのコントロールを検証してエラーを表示し、すべて正しければ `true` を返す
+     * （送信ボタンで呼ぶ）。`focus` が `true` なら、最初（規則を付けた順）のエラーのコントロールに
+     * フォーカスを移す。非表示・無効のコントロールは検証しない。
+     */
+    validateAll(focus: boolean = true): boolean {
+        let first: MSForms.Control = null;
+        for (const key of this.fields.keys()) {
+            const f = this.fields.get(key);
+            if (!active(f.control)) {
+                this.display(f, "");
+                continue;
+            }
+            f.touched = true;
+            if (!this.run(f) && first == null) {
+                first = f.control;
+            }
+        }
+        if (first == null) return true;
+        if (focus) {
+            try {
+                first.setFocus();
+            } catch {
+                resume;
+            }
+        }
+        return false;
+    }
+
+    /** エラーを表示せずに、すべて正しいかを調べる。 */
+    isValid(): boolean {
+        for (const key of this.fields.keys()) {
+            const f = this.fields.get(key);
+            if (active(f.control) && f.schema.check(valueOf(f.control)) != "") {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 表示しているエラー（無ければ `""`）。 */
+    error(control: MSForms.Control): string {
+        const key = control.name.toLowerCase();
+        if (!this.fields.has(key)) return "";
+        return this.fields.get(key).error;
+    }
+
+    /**
+     * エラーを直接表示する（`""` で消す）。サーバーの応答など、規則で書けない検査の結果に使う。
+     * 規則が無いコントロールにも表示できる。
+     */
+    setError(control: MSForms.Control, message: string): void {
+        const key = control.name.toLowerCase();
+        let f: RAS_ValidationField = null;
+        if (this.fields.has(key)) {
+            f = this.fields.get(key);
+        } else {
+            f = new RAS_ValidationField();
+            f.control = control;
+            f.schema = new ValidationSchema();
+            this.fields.set(key, f);
+        }
+        this.display(f, message);
+    }
+
+    /** すべてのエラーを消し、確定していない状態に戻す（規則はそのまま）。 */
+    reset(): void {
+        for (const key of this.fields.keys()) {
+            const f = this.fields.get(key);
+            f.touched = false;
+            this.display(f, "");
+        }
+    }
+
+    /** 入力の確定（コントロールの `Exit`）。コンパイラが生成するイベント プロシージャから呼ばれる。 */
+    commit(control: MSForms.Control): void {
+        const key = control.name.toLowerCase();
+        if (!this.fields.has(key)) return;
+        const f = this.fields.get(key);
+        f.touched = true;
+        this.run(f);
+    }
+
+    /**
+     * 入力の変更（コントロールの `Change`）。確定済みのコントロールと、変更がそのまま確定になる
+     * コントロール（`CheckBox`・`OptionButton`・`ToggleButton`・`ListBox`）を検証し直す。
+     * コンパイラが生成するイベント プロシージャから呼ばれる。
+     */
+    edit(control: MSForms.Control): void {
+        const key = control.name.toLowerCase();
+        if (!this.fields.has(key)) return;
+        const f = this.fields.get(key);
+        const t = typeName(control);
+        if (t == "CheckBox" || t == "OptionButton" || t == "ToggleButton" || t == "ListBox") {
+            f.touched = true;
+        }
+        if (f.touched) {
+            this.run(f);
+        }
+    }
+
+    /**
+     * コンテナー（`Frame` / `MultiPage`）からフォーカスが出たとき、中でフォーカスを持っていた
+     * コントロールを確定する（MSForms はフレームの中のコントロールの `Exit` を、フォーカスがフレームの
+     * 外へ出るときには起こさないため）。コンパイラが生成するイベント プロシージャから呼ばれる。
+     */
+    commitActive(container: MSForms.Control): void {
+        const c: any = container;
+        let inner: object = null;
+        try {
+            if (typeName(container) == "MultiPage") {
+                inner = c.selectedItem.activeControl;
+            } else {
+                inner = c.activeControl;
+            }
+        } catch {
+            resume;
+        }
+        if (inner == null) return;
+        const t = typeName(inner);
+        if (t == "Frame" || t == "MultiPage") {
+            this.commitActive(inner as MSForms.Control);
+        } else {
+            this.commit(inner as MSForms.Control);
+        }
+    }
+
+    private run(f: RAS_ValidationField): boolean {
+        const message = f.schema.check(valueOf(f.control));
+        this.display(f, message);
+        return message == "";
+    }
+
+    private display(f: RAS_ValidationField, message: string): void {
+        f.error = message;
+        if (f.label == null) {
+            if (message == "") return;
+            f.label = this.labelFor(f.control);
+        }
+        f.label.caption = message;
+        f.label.visible = message != "";
+    }
+
+    /** `<コントロール名>Error` のラベル。無ければコントロールの直下に作る。 */
+    private labelFor(control: MSForms.Control): MSForms.Label {
+        const name = `${control.name}Error`;
+        const container: any = control.parent;
+        let found: any = null;
+        try {
+            found = container.controls.item(name);
+        } catch {
+            resume;
+        }
+        if (found != null) {
+            return found;
+        }
+        const created: any = container.controls.add("Forms.Label.1", name, true);
+        const label: MSForms.Label = created;
+        label.backStyle = MSForms.fmBackStyle.fmBackStyleTransparent;
+        label.foreColor = this.errorColor;
+        label.wordWrap = false;
+        const font: any = control;
+        try {
+            label.font.name = font.font.name;
+            label.font.size = font.font.size;
+        } catch {
+            resume;
+        }
+        label.left = control.left;
+        label.top = control.top + control.height + (1.0 as float);
+        label.width = control.width;
+        label.height = (label.font.size as double * 1.5 + 2.0) as float;
+        return label;
+    }
+}
+
+/** 表示されていて、操作できるコントロールか。 */
+function active(control: MSForms.Control): boolean {
+    if (!control.visible) return false;
+    const c: any = control;
+    let enabled = true;
+    try {
+        enabled = c.enabled;
+    } catch {
+        resume;
+    }
+    return enabled;
+}
+
+/** 検証する値（コントロールの文字列）。 */
+function valueOf(control: MSForms.Control): string {
+    const c: any = control;
+    const t = typeName(control);
+    if (t == "CheckBox" || t == "OptionButton" || t == "ToggleButton") {
+        const v: any = c.value;
+        if (isNull(v)) return "";
+        return v ? "true" : "false";
+    }
+    if (t == "TextBox" || t == "ComboBox" || t == "ListBox") {
+        return c.text;
+    }
+    const v: any = c.value;
+    if (isNull(v)) return "";
+    return cStr(v);
+}

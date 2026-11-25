@@ -383,6 +383,9 @@ function cdate(v) {
         const m = /^\s*(\d{1,4})[/-](\d{1,2})[/-](\d{1,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?\s*$/.exec(v);
         if (m) {
             const ymd = m[1].length === 4 ? [+m[1], +m[2], +m[3]] : [+m[3], +m[1], +m[2]];
+            // VBA does not carry an impossible date over (`2026/13/40` is a type mismatch).
+            const days = new Date(Date.UTC(ymd[0], ymd[1], 0)).getUTCDate();
+            if (ymd[1] < 1 || ymd[1] > 12 || ymd[2] < 1 || ymd[2] > days || +(m[4] || 0) > 23 || +(m[5] || 0) > 59 || +(m[6] || 0) > 59) raise(13, v);
             return dateOf(ymd[0], ymd[1], ymd[2], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
         }
         const t = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$/.exec(v);
