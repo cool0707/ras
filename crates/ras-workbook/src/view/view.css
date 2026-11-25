@@ -485,7 +485,13 @@ body.copying, body.copying td { cursor: copy; }
 
 /* A toggle of a menu of the ribbon (枠線に合わせる): checked. */
 .menu button.on span::before { content: "✓"; display: inline-block; width: 1.2em; margin-left: -1.2em; color: var(--accent-ink); }
-.menu.aligns button { padding-left: 28px; }
+/* 配置: its items with their icons (枠線に合わせる framed while it is on, as Excel). */
+.menu.aligns button { align-items: center; gap: 8px; padding: 3px 14px 3px 8px; }
+.menu.aligns button .ico { display: inline-flex; flex: none; padding: 2px; border: 1px solid transparent; border-radius: 2px; color: #444; }
+.menu.aligns button:disabled .ico { opacity: .45; }
+.menu.aligns button.on { font-weight: normal; }
+.menu.aligns button.on span::before { content: none; }
+.menu.aligns button.on .ico { border-color: var(--accent); background: var(--accent-tint); }
 
 /* The launcher at the corner of a group's label, and the boxes of サイズ (cm, with spin buttons). */
 #ribbon .rlabel { position: relative; }
