@@ -31,7 +31,7 @@ const IDENTIFIER = "[_$[:alpha:]][_$[:alnum:]]*";
 // §2.1 / §11.2 of the language specification. `number` is deliberately absent.
 const PRIMITIVE_TYPES = [
 	"byte", "short", "int", "long", "float", "double", "currency", "decimal",
-	"ptr", "date", "string", "boolean", "any", "object", "void", "wstr", "astr",
+	"ptr", "date", "string", "boolean", "any", "cellValue", "object", "void", "wstr", "astr",
 ];
 
 /** Replaces `from` with `to` in `holder[key]`, requiring exactly `count` occurrences. */
