@@ -4533,24 +4533,24 @@
 
     // ---- セルの書式設定 (Ctrl+1): the formats of the cells selected in the pane at the right, as
     // Excel's dialog has them (表示形式, 配置, フォント, 罫線, 塗りつぶし, 保護) but with the
-    // controls of 図形の書式設定; each is set as it is changed. Shown for the active cell (the
-    // borders: for the range), as Excel's dialog opens.
+    // controls of 図形の書式設定 (フォント and 塗りつぶし on one page); each is set as it is
+    // changed. Shown for the active cell (the borders: for the range), as Excel's dialog opens.
+    // プロパティ has 保護 and what the cells selected are in: the rules of 条件付き書式 and the
+    // names defined.
 
     const CELL_PAGES = [
         ["number", "表示形式"],
         ["align", "配置"],
-        ["font", "フォント"],
+        ["font", "フォントと塗りつぶし"],
         ["border", "罫線"],
-        ["fill", "塗りつぶし"],
-        ["protect", "保護"],
+        ["props", "プロパティ"],
     ];
     const CELL_ICONS = {
         number: '<path d="M6.2 2.5 4.6 13.5M11.4 2.5 9.8 13.5M2.5 5.8h11.5M2 10.2h11.5"/>',
         align: '<path d="M2 3h12M4 6.5h8M2 10h12M4 13.5h8"/>',
         font: PANE_ICONS.text,
         border: '<path d="M2.5 2.5h11v11h-11z"/><path d="M8 2.5v11M2.5 8h11" stroke-dasharray="1 1.6"/>',
-        fill: PANE_ICONS.fill,
-        protect: '<rect x="3.5" y="7.5" width="9" height="6.5" rx="1"/><path d="M5.5 7.5V5.3a2.5 2.5 0 0 1 5 0v2.2M8 10.2v1.3"/>',
+        props: '<rect x="2.5" y="1.5" width="11" height="13" rx="1"/><path d="M5 5h1M5 8h1M5 11h1M8 5h3M8 8h3M8 11h3"/>',
     };
     const H_ALIGNS = [
         ["general", "標準"],
@@ -4781,7 +4781,9 @@
             selectRow(rtl, "文字の方向", [["context", "コンテキスト"], ["ltr", "左から右"], ["rtl", "右から左"]], ["context", "ltr", "rtl"][fm.ro || 0] || "context", "readingOrder", (v) => set({ readingOrder: v }), "pwide");
         }
 
-        // フォント: フォント名, スタイル, サイズ, 下線, 色, 標準フォント; 文字飾り; プレビュー
+        // フォントと塗りつぶし: フォント (フォント名, スタイル, サイズ, 下線, 色, 標準フォント),
+        // 文字飾り, 塗りつぶし, and プレビュー of both (after 塗りつぶし).
+        const preview = el("div", "ppreview");
         {
             const book = bookFont(view.sheet);
             const name = fm.font || book.name;
@@ -4830,8 +4832,7 @@
             checkRow(deco, "取り消し線", fm.st, "strike", (on) => set({ strike: on }));
             checkRow(deco, "上付き", fm.va === "superscript", "superscript", (on) => set({ superscript: on }));
             checkRow(deco, "下付き", fm.va === "subscript", "subscript", (on) => set({ subscript: on }));
-            const pre = section("font", "プレビュー").appendChild(el("div", "ppreview"));
-            const text = pre.appendChild(el("span", null, name));
+            const text = preview.appendChild(el("span", null, name));
             Object.assign(text.style, {
                 fontFamily: fontFamily(name),
                 fontSize: `${Math.min(size, 26)}pt`,
@@ -4982,7 +4983,7 @@
             box.appendChild(el("div", "pnote", "選んだスタイルと色で、プリセットや周りのボタン、図のクリックで罫線を引きます（同じ罫線をもう一度クリックすると消えます）。"));
         }
 
-        // 塗りつぶし: 背景色, パターンの色, パターンの種類, サンプル
+        // 塗りつぶし: 背景色, パターンの色, パターンの種類 (shown in プレビュー)
         {
             const fill = fm.fill || null;
             const pattern = fill ? fill.pattern : "none";
@@ -4990,7 +4991,7 @@
             const bg = !fill ? null : pattern === "solid" ? fill.fg : fill.bg;
             const fg = plain ? (saved.patternColor ?? null) : fill.fg;
             const put = (p, color, background) => set({ pattern: { pattern: p, color, background } });
-            const sec = section("fill", "塗りつぶし");
+            const sec = section("font", "塗りつぶし");
             colorRow(sec, "背景色", bg, "色なし", (c) => (plain ? put(c ? "solid" : "none", c, null) : put(pattern, fg, c)), "fillColor");
             colorRow(sec, "パターンの色", fg, "自動", (c) => {
                 if (!plain) return put(pattern, c, bg);
@@ -5028,18 +5029,78 @@
                     });
                 }
             });
-            const sample = block(sec, "サンプル").appendChild(el("div", "pfillsample"));
-            sample.style.cssText = fillCss(pattern, pattern === "solid" ? bg : fg, bg);
+            preview.style.cssText = fillCss(pattern, pattern === "solid" ? bg : fg, bg);
+            section("font", "プレビュー").appendChild(preview);
         }
 
-        // 保護: ロック, 表示しない (what they do on a protected sheet)
+        // プロパティ > 保護: ロック, 表示しない (what they do on a protected sheet)
         {
-            const sec = section("protect", "保護");
+            const sec = section("props", "保護");
             checkRow(sec, "ロック", !fm.unlocked, "locked", (on) => set({ locked: on }));
             checkRow(sec, "表示しない", fm.hidden, "hidden", (on) => set({ hidden: on }));
             sec.appendChild(el("div", "pnote", "ワークシートを保護しなければ、セルをロックしたり数式を表示しないようにした効果はありません（［校閲］タブの［シートの保護］で保護します）。"));
         }
 
+        // プロパティ > 条件付き書式: the rules on the cells selected, in their order of priority
+        // (one clicked: chosen in "条件付き書式ルールの管理").
+        {
+            const sec = section("props", "条件付き書式");
+            const rules = view.sheet.condRules || [];
+            const on = rules.map((r, i) => i).filter((i) => touchesSelection(condAreas(rules[i].range)));
+            const list = sec.appendChild(el("div", "plist"));
+            for (const i of on) {
+                const r = rules[i];
+                const what = condText(r);
+                const where = String(r.range).split(/\s+/).filter(Boolean).join(",");
+                const b = list.appendChild(el("button", "pitem pcond"));
+                b.type = "button";
+                b.dataset.rule = String(i);
+                b.title = `${what}\n適用先: ${where}${r.stop ? "\n条件を満たす場合は停止" : ""}`;
+                const top = b.appendChild(el("span", "pctop"));
+                top.appendChild(condSample(r));
+                top.appendChild(el("span", "pcwhat", what));
+                b.appendChild(el("span", "pcwhere", `適用先: ${where}`));
+                b.addEventListener("click", () => {
+                    const state = condManageState();
+                    state.chosen = i;
+                    manageCond(state);
+                });
+            }
+            if (!on.length) list.appendChild(el("div", "pnone", "選択範囲に条件付き書式はありません。"));
+            const btns = sec.appendChild(el("div", "pbtns"));
+            const manage = btns.appendChild(el("button", null, "ルールの管理…"));
+            manage.type = "button";
+            manage.dataset.field = "condManage";
+            manage.addEventListener("click", () => manageCond());
+        }
+
+        // プロパティ > 名前の定義: the names that refer to the cells selected (one clicked: what it
+        // refers to selected).
+        {
+            const sec = section("props", "名前の定義");
+            const named = (data.names || []).map((n) => ({ n, areas: nameAreas(n) })).filter((x) => touchesSelection(x.areas));
+            const list = sec.appendChild(el("div", "plist"));
+            for (const { n, areas: at } of named) {
+                const scope = n.sheet || "ブック";
+                const b = list.appendChild(el("button", "pitem pdefname"));
+                b.type = "button";
+                b.dataset.name = n.name;
+                b.title = `${n.name}（範囲: ${scope}）\n参照範囲: =${n.ref}`;
+                const top = b.appendChild(el("span", "pctop"));
+                top.appendChild(el("span", "pnname", n.name));
+                top.appendChild(el("span", "pnscope", scope));
+                b.appendChild(el("span", "pcwhere", `=${n.ref}`));
+                b.addEventListener("click", () => {
+                    selectAreas(at);
+                    focusGrid();
+                });
+            }
+            if (!named.length) list.appendChild(el("div", "pnone", "選択範囲を参照する名前はありません。"));
+        }
+
+        // (The pages that were 塗りつぶし and 保護 are those that have them now.)
+        const was = { fill: "font", protect: "props" }[saved.cellPage];
+        if (was) remember({ cellPage: was });
         kit.finish(CELL_PAGES, CELL_ICONS, "cellPage", focus);
     }
 
@@ -6576,15 +6637,52 @@
         return out.length ? out : null;
     }
     const condRangeText = (areas) => areas.map((a) => (a.kind === "cells" ? areaText(a) : rangeText(a))).join(" ");
+    // Some of `list` (areas of the sheet shown, or null) is among the cells selected.
+    const touchesSelection = (list) => !!list && list.some((a) => allAreas().some((s) => a.r1 <= s.r2 && a.r2 >= s.r1 && a.c1 <= s.c2 && a.c2 >= s.c1));
+    // The areas of the sheet shown a name refers to (`Sheet1!$A$1:$B$5,Sheet1!$D$2`), or null
+    // when it refers to something else (another sheet, a formula, a constant).
+    function nameAreas(n) {
+        const home = (n.sheet && sheetByName(n.sheet)) || view.sheet;
+        const parts = [];
+        let [part, quoted, depth] = ["", false, 0];
+        for (const ch of String(n.ref)) {
+            if (ch === "'") quoted = !quoted;
+            else if (!quoted && ch === "(") depth++;
+            else if (!quoted && ch === ")") depth--;
+            if (ch === "," && !quoted && depth === 0) {
+                parts.push(part);
+                part = "";
+            } else part += ch;
+        }
+        parts.push(part);
+        const out = [];
+        for (const p of parts) {
+            const ref = parseRef(p, home);
+            if (!ref || ref.sheet !== view.sheet) return null;
+            out.push(ref);
+        }
+        return out.length ? out : null;
+    }
+    // Selects areas of the sheet shown (the last one with the active cell).
+    function selectAreas(list) {
+        if (!list || !list.length) return;
+        if (entry) commit(null);
+        const last = list[list.length - 1];
+        const rest = list.slice(0, -1).map((a) => ({ kind: a.kind, r1: a.r1, c1: a.c1, r2: a.r2, c2: a.c2 }));
+        const s = last.kind === "rows" ? { kind: "rows", nr: last.r1, nc: 0, fr: last.r2, fc: 0 } : last.kind === "cols" ? { kind: "cols", nr: 0, nc: last.c1, fr: 0, fc: last.c2 } : areaSel(last.r1, last.c1, last.r2, last.c2);
+        setSel(Object.assign(s, { areas: rest }), true);
+    }
 
+    // The rules of the sheet as "条件付き書式ルールの管理" has them, at first.
+    function condManageState() {
+        const list = (view.sheet.condRules || []).map((r) => ({ id: r.id, now: Object.assign({}, r), range: r.range, stop: !!r.stop, edited: false }));
+        return { list, scope: "selection", chosen: -1, changed: false };
+    }
     // `state`: the list as the dialog has it (kept while a rule is edited in its own dialog).
     function manageCond(state) {
         if (!editable || busy || !view) return;
         if (entry) commit(null);
-        if (!state) {
-            const list = (view.sheet.condRules || []).map((r) => ({ id: r.id, now: Object.assign({}, r), range: r.range, stop: !!r.stop, edited: false }));
-            state = { list, scope: "selection", chosen: -1, changed: false };
-        }
+        if (!state) state = condManageState();
         const form = openDialog("条件付き書式ルールの管理", "condmgr");
         const scopeLine = form.appendChild(el("label"));
         scopeLine.appendChild(el("span", "lbl", "書式ルールの表示:"));

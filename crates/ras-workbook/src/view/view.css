@@ -589,7 +589,6 @@ body.panesizing { cursor: col-resize; user-select: none; }
 #pane .pcombo .pdrop { flex: none; width: 18px; padding: 0; border: 0; border-left: 1px solid #e1e1e1; background: none; color: #555; font-size: 10px; cursor: pointer; }
 #pane .pcombo .pdrop:hover { background: #ececec; }
 #pane .ppreview { display: flex; align-items: center; justify-content: center; height: 64px; padding: 0 8px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; overflow: hidden; white-space: nowrap; }
-#pane .pfillsample { height: 40px; border: 1px solid #c8c8c8; border-radius: 3px; background: #fff; }
 #pane .pbtns button:disabled, #pane .pside:disabled { opacity: .45; cursor: default; background: #fff; border-color: #c8c8c8; }
 #pane .pbtns button .bico { display: inline-flex; }
 #pane .pborderpresets { gap: 4px; }
@@ -610,6 +609,18 @@ body.panesizing { cursor: col-resize; user-select: none; }
 #pane .pitem { padding: 4px 8px; border: 0; border-radius: 2px; background: none; color: #000; font: inherit; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 #pane .pitem:hover { background: var(--accent-hover); }
 #pane .pitem.on { background: var(--accent-tint); color: var(--accent-ink); }
+/* セルの書式設定 > プロパティ: the rules of 条件付き書式 and the names on the cells selected. */
+#pane .pitem.pcond, #pane .pitem.pdefname { display: flex; flex-direction: column; gap: 2px; padding: 4px 6px; border-bottom: 1px solid #eee; border-radius: 0; }
+#pane .pctop { display: flex; align-items: center; gap: 6px; min-width: 0; }
+#pane .pcwhat, #pane .pnname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#pane .pnname { font-weight: bold; }
+#pane .pnscope { flex: none; color: #666; font-size: 12px; }
+#pane .pcwhere { color: #666; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+#pane .condsample { flex: none; display: inline-flex; align-items: center; }
+#pane .condsample .fmt { display: inline-block; padding: 0 4px; border: 1px solid #ddd; font-size: 12px; white-space: nowrap; }
+#pane .condsample .bar, #pane .condsample .scale { display: block; width: 48px; height: 14px; }
+#pane .condsample .icons { display: inline-flex; gap: 2px; line-height: 0; }
+#pane .condsample .icons .ic { display: inline-block; width: 14px; height: 14px; }
 /* ホーム > 条件付き書式: its menu (rows of bars, scales and icon sets) and its dialogs. */
 /* A submenu: beside the item that opens it (a child of its menu). */
 .menu button.hassub { align-items: center; }
