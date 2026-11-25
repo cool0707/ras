@@ -3870,6 +3870,34 @@
             }
         }
 
+        // プロパティ: オブジェクトの位置関係, オブジェクトを印刷する, ロック, テキストをロックする
+        const props = !isControl(obj) && obj.props;
+        if (props) {
+            const sec = section("size", "プロパティ");
+            choices(
+                sec,
+                [
+                    ["twoCell", "セルに合わせて移動やサイズ変更をする"],
+                    ["oneCell", "セルに合わせて移動するがサイズ変更はしない"],
+                    ["absolute", "セルに合わせて移動やサイズ変更をしない"],
+                ],
+                props.placement,
+                (v) => edit({ placement: v }),
+            );
+            const check = (label, key, field) => {
+                const row = sec.appendChild(el("label", "prow pcheck"));
+                const on = row.appendChild(el("input"));
+                on.type = "checkbox";
+                on.checked = !!props[key];
+                on.dataset.field = field;
+                row.appendChild(el("span", null, label));
+                on.addEventListener("change", () => edit({ [field]: on.checked }));
+            };
+            check("オブジェクトを印刷する", "print", "print");
+            check("ロック", "locked", "locked");
+            if (props.lockText !== null && props.lockText !== undefined) check("テキストをロックする", "lockText", "lockText");
+        }
+
         // コントロール: what its kind has (the linked cell, the items, the state, the values)
         if (isControl(obj) && obj.form) {
             const sec = section("size", ax ? "プロパティ" : "コントロール");
@@ -6341,6 +6369,21 @@
                     return !allow.autoFilter;
                 case "sort":
                     return !allow.sort || !unlockedRange(o.range);
+                // An object: as its ロック and テキストをロックする say, unless the sheet lets
+                // objects be edited.
+                case "object": {
+                    if (allow.objects) return false;
+                    const obj = (sheet.objects || []).find((x) => (o.name ? x.name === o.name : x.shapeId === o.shape));
+                    const props = (obj && obj.props) || {};
+                    if (props.locked === false) return false;
+                    const keys = Object.keys(o).filter((k) => !["op", "sheet", "name", "shape"].includes(k));
+                    return !(props.lockText === false && keys.length && keys.every((k) => k === "text"));
+                }
+                case "shape":
+                case "picture":
+                case "control":
+                case "activeX":
+                    return !allow.objects;
                 default:
                     return true;
             }

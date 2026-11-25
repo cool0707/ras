@@ -1744,6 +1744,89 @@ fn objects_filled_lined_turned_and_reordered() {
         );
     }
 
+    // プロパティ: オブジェクトの位置関係 (the anchor's editAs), オブジェクトを印刷する and
+    // ロック (its client data), テキストをロックする (the shape); back to the defaults, the
+    // attributes go.
+    let set = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","placement":"absolute","print":false,"locked":false,"lockText":false}"#),
+    )
+    .unwrap();
+    let sp = shape(&set, "正方形/長方形 2");
+    for want in [
+        r#"<xdr:twoCellAnchor editAs="absolute">"#,
+        r#"fLocksText="0""#,
+        r#"fPrintsWithSheet="0""#,
+        r#"fLocksWithSheet="0""#,
+    ] {
+        assert!(sp.contains(want), "{want}: {sp}");
+    }
+    let props = |bytes: &[u8]| {
+        view(bytes)["sheets"][0]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["name"] == "正方形/長方形 2")
+            .unwrap()["props"]
+            .clone()
+    };
+    assert_eq!(
+        props(&set),
+        json!({"placement": "absolute", "print": false, "locked": false, "lockText": false})
+    );
+    let back = apply(
+        &set,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","placement":"twoCell","print":true,"locked":true,"lockText":true}"#),
+    )
+    .unwrap();
+    let sp = shape(&back, "正方形/長方形 2");
+    assert!(
+        sp.starts_with("<xdr:twoCellAnchor>")
+            && !sp.contains("fLocksText")
+            && !sp.contains("fPrintsWithSheet")
+            && !sp.contains("fLocksWithSheet"),
+        "{sp}"
+    );
+    assert!(
+        apply(
+            &out,
+            &ops(r#"{"op":"object","name":"直線コネクタ 3","lockText":false}"#)
+        )
+        .unwrap_err()
+        .contains("テキストのロック")
+    );
+    // Rows and columns sized: an object that does not move with the cells stays where it was
+    // (its from goes up as row 1 grows); one that moves but does not size keeps its size (its
+    // to goes on into column B as column A narrows); one that does both stretches.
+    let marker = |bytes: &[u8], tag: &str, what: &str| -> u32 {
+        let sp = shape(bytes, "正方形/長方形 2");
+        let m = &sp[sp.find(&format!("<xdr:{tag}>")).unwrap()..];
+        let v = &m[m.find(&format!("<xdr:{what}>")).unwrap() + what.len() + 6..];
+        v[..v.find('<').unwrap()].parse().unwrap()
+    };
+    assert_eq!(marker(&set, "from", "row"), 11);
+    let taller = apply(&set, &ops(r#"{"op":"size","range":"1:1","px":120}"#)).unwrap();
+    assert!(
+        marker(&taller, "from", "row") < 11,
+        "{}",
+        shape(&taller, "正方形/長方形 2")
+    );
+    let one = apply(
+        &out,
+        &ops(r#"{"op":"object","name":"正方形/長方形 2","placement":"oneCell"}"#),
+    )
+    .unwrap();
+    assert_eq!(marker(&one, "to", "col"), 0);
+    let narrow = apply(&one, &ops(r#"{"op":"size","range":"A:A","px":20}"#)).unwrap();
+    assert_eq!(marker(&narrow, "from", "row"), 11);
+    assert!(
+        marker(&narrow, "to", "col") >= 1,
+        "{}",
+        shape(&narrow, "正方形/長方形 2")
+    );
+    let stretched = apply(&out, &ops(r#"{"op":"size","range":"A:A","px":20}"#)).unwrap();
+    assert_eq!(marker(&stretched, "to", "col"), 0);
+
     // The width alone keeps the line's color; the arrow's head stays.
     let arrow = edit(r#"{"op":"shape","shape":"arrow","at":"A20","width":40}"#);
     let wide = apply(

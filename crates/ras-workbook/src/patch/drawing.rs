@@ -674,7 +674,7 @@ pub(super) fn object(
 
     // One pass after another, each on the drawing the one before wrote: an edit of a pass may
     // span what another changes (the text of the object moved, its shape properties).
-    for pass in 0..3 {
+    for pass in 0..5 {
         let root = scan::tree(&doc, &[]).ok_or("描画のパートを読み取れません")?;
         let all = units(&root);
         let at = all
@@ -746,6 +746,38 @@ pub(super) fn object(
                             write_anchor(&doc, a, &sizes, b, &mut edits);
                         }
                     }
+                }
+            }
+            // プロパティ: an anchor not of two cells made one, as Excel saves an object whose
+            // オブジェクトの位置関係 is set (`editAs`).
+            3 if change.placement.is_some() => {
+                for a in &unit.anchors {
+                    if a.local() == "twoCellAnchor" {
+                        continue;
+                    }
+                    let b = anchor_box(&doc, &sizes, a)
+                        .ok_or_else(|| format!("`{name}` の位置を読み取れません"))?;
+                    let x = scan::prefix(a.name);
+                    let rest: String = a
+                        .children
+                        .iter()
+                        .filter(|c| !matches!(c.local(), "from" | "to" | "pos" | "ext"))
+                        .map(|c| doc[c.span()].to_string())
+                        .collect();
+                    edits.replace(
+                        a.span(),
+                        format!(
+                            "<{x}twoCellAnchor>{}{}{rest}</{x}twoCellAnchor>",
+                            marker_xml(x, "from", &sizes, b.0, b.1),
+                            marker_xml(x, "to", &sizes, b.2, b.3)
+                        ),
+                    );
+                }
+            }
+            3 => {}
+            4 => {
+                for a in &unit.anchors {
+                    properties(&doc, a, name, change, &mut edits)?;
                 }
             }
             _ => {
@@ -1028,6 +1060,144 @@ fn style(
         );
     }
     Ok(())
+}
+
+/// The start tag of an element with attributes set, or (None) taken away.
+fn tag_with(doc: &str, el: &El, attrs: &[(&str, Option<String>)]) -> String {
+    let tag = open_tag(doc, el);
+    let close = format!("</{}>", el.name);
+    let done = with_attrs(&format!("{tag}{close}"), attrs);
+    done.strip_suffix(&close).map_or(tag, str::to_string)
+}
+
+/// プロパティ of an object changed: オブジェクトの位置関係 (its anchor's `editAs`; none for
+/// `twoCell`, as Excel writes it), オブジェクトを印刷する and ロック (its `clientData`'s
+/// `fPrintsWithSheet`, `fLocksWithSheet`: "0" when off), テキストをロックする (a shape's
+/// `fLocksText`).
+fn properties(
+    doc: &str,
+    a: &El,
+    name: &str,
+    change: &ObjectChange,
+    edits: &mut Edits,
+) -> Result<()> {
+    let off = |on: bool| (!on).then(|| "0".to_string());
+    if let Some(p) = &change.placement {
+        edits.replace(
+            a.open.clone(),
+            tag_with(doc, a, &[("editAs", (p != "twoCell").then(|| p.clone()))]),
+        );
+    }
+    let mut data: Vec<(&str, Option<String>)> = Vec::new();
+    if let Some(on) = change.print {
+        data.push(("fPrintsWithSheet", off(on)));
+    }
+    if let Some(on) = change.locked {
+        data.push(("fLocksWithSheet", off(on)));
+    }
+    if !data.is_empty() {
+        let x = scan::prefix(a.name);
+        match a.child("clientData") {
+            Some(c) => edits.replace(c.span(), with_attrs(&doc[c.span()], &data)),
+            None => edits.insert(a.inner.end, with_attrs(&format!("<{x}clientData/>"), &data)),
+        }
+    }
+    if let Some(on) = change.lock_text {
+        let obj = object_of(a).filter(|o| o.local() == "sp").ok_or_else(|| {
+            format!("`{name}` には文字がないため、テキストのロックはありません（図形・テキスト ボックスにあります）")
+        })?;
+        edits.replace(
+            obj.open.clone(),
+            tag_with(doc, obj, &[("fLocksText", off(on))]),
+        );
+    }
+    Ok(())
+}
+
+/// The objects set not to size with the cells (`editAs="oneCell"`) or not to move with them
+/// either (`absolute`) as they were (`before`) after the columns' widths or the rows' heights
+/// changed (or rows and columns were hidden or shown again), as Excel keeps them: their anchor
+/// written again for their size, or their place too.
+pub(super) fn keep_placed(before: &[u8], after: Vec<u8>) -> Result<Vec<u8>> {
+    let fixed = |bytes: &[u8]| -> bool {
+        let Ok(mut zip) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
+            return false;
+        };
+        let names: Vec<String> = zip
+            .file_names()
+            .filter(|n| n.starts_with("xl/drawings/") && n.ends_with(".xml"))
+            .map(str::to_string)
+            .collect();
+        names.iter().any(|n| {
+            let mut text = String::new();
+            zip.by_name(n)
+                .ok()
+                .and_then(|mut f| std::io::Read::read_to_string(&mut f, &mut text).ok())
+                .is_some()
+                && (text.contains("editAs=\"oneCell\"") || text.contains("editAs=\"absolute\""))
+        })
+    };
+    if before == after.as_slice() || !fixed(&after) {
+        return Ok(after);
+    }
+    let (old, new) = (Book::open_bytes(before)?, Book::open_bytes(&after)?);
+    let mut out = after;
+    for si in 0..new.sheet_count() {
+        let Some(sheet) = new.sheet_name(si).map(str::to_string) else {
+            continue;
+        };
+        let (Some(was), Some(now)) = (
+            old.find_sheet(&sheet).and_then(|i| old.sizes(i)),
+            new.sizes(si),
+        ) else {
+            continue;
+        };
+        let mut s = Sheet::open(&out, &sheet)?;
+        let Some(d) = drawing_of(&mut s, false)? else {
+            continue;
+        };
+        let Some(root) = scan::tree(&d.doc, &[]) else {
+            continue;
+        };
+        let mut edits = Edits::default();
+        for unit in units(&root) {
+            for a in unit.anchors {
+                let mode = a.attr(&d.doc, "editAs");
+                if a.local() != "twoCellAnchor"
+                    || !matches!(mode.as_deref(), Some("oneCell" | "absolute"))
+                {
+                    continue;
+                }
+                let (Some(b), Some(from)) = (anchor_box(&d.doc, &was, a), a.child("from")) else {
+                    continue;
+                };
+                let b = if mode.as_deref() == Some("absolute") {
+                    b
+                } else {
+                    let Some((x, y)) = marker_point(&d.doc, &now, from) else {
+                        continue;
+                    };
+                    (x, y, x + b.2 - b.0, y + b.3 - b.1)
+                };
+                // (Written again only where its markers change: an offset past its cell's
+                // edge is one into the next.)
+                let x = scan::prefix(a.name);
+                let same = |tag: &str, px: f64, py: f64| {
+                    a.child(tag)
+                        .is_some_and(|m| d.doc[m.span()] == marker_xml(x, tag, &now, px, py))
+                };
+                if same("from", b.0, b.1) && same("to", b.2, b.3) {
+                    continue;
+                }
+                write_anchor(&d.doc, a, &now, b, &mut edits);
+            }
+        }
+        if !edits.is_empty() {
+            s.put(&d.part, edits.apply(&d.doc));
+            out = s.finish(None)?;
+        }
+    }
+    Ok(out)
 }
 
 /// The effects of an effect list in the schema's order.

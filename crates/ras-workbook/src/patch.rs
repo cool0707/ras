@@ -385,6 +385,13 @@ pub struct ObjectChange {
     pub shadow: Option<Option<Effect>>,
     pub glow: Option<Option<Effect>>,
     pub reflection: Option<Option<Effect>>,
+    /// プロパティ: オブジェクトの位置関係 (`twoCell` セルに合わせて移動やサイズ変更をする,
+    /// `oneCell` セルに合わせて移動するがサイズ変更はしない, `absolute` セルに合わせて移動や
+    /// サイズ変更をしない), オブジェクトを印刷する, ロック, テキストをロックする.
+    pub placement: Option<String>,
+    pub print: Option<bool>,
+    pub locked: Option<bool>,
+    pub lock_text: Option<bool>,
 }
 
 /// An effect of a shape as 図形の書式設定 > 効果 sets it (None: what it has stays): 色
@@ -1098,8 +1105,17 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     }
                     Ok(Some(Some(e)))
                 };
+                let placement = match text("placement").as_deref() {
+                    None => None,
+                    Some(p @ ("twoCell" | "oneCell" | "absolute")) => Some(p.to_string()),
+                    Some(other) => return Err(format!("`placement` `{other}` は指定できません（twoCell / oneCell / absolute）")),
+                };
                 let change = ObjectChange {
                     shape,
+                    placement,
+                    print: o.get("print").and_then(Json::as_bool),
+                    locked: o.get("locked").and_then(Json::as_bool),
+                    lock_text: o.get("lockText").and_then(Json::as_bool),
                     shadow: effect("shadow", &["color", "transparency", "blur", "angle", "distance"])?,
                     glow: effect("glow", &["color", "transparency", "size"])?,
                     reflection: effect("reflection", &["transparency", "size", "blur", "distance"])?,
@@ -1137,7 +1153,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     page: int_of(o, "page")?,
                 };
                 if change == (ObjectChange { shape, ..Default::default() }) {
-                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`textAnchor`・`textWrap`・`inset`、`fill`、`line`、`lineWidth`、`shadow`・`glow`・`reflection`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`textAnchor`・`textWrap`・`inset`、`fill`、`line`、`lineWidth`、`shadow`・`glow`・`reflection`、`placement`・`print`・`locked`・`lockText`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
                 }
                 Op::Object { sheet, name, change: Box::new(change) }
             }
@@ -1616,10 +1632,14 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 };
                 insert::table(&bytes, sheet, range, name.as_deref())?
             }
-            _ => match with_cell_styles(&bytes, &ops[at..end])? {
-                Some((styled, group)) => apply_group(&styled, &group)?,
-                None => apply_group(&bytes, &ops[at..end])?,
-            },
+            // (Then the objects that do not size or move with the cells where they were.)
+            _ => drawing::keep_placed(
+                &bytes,
+                match with_cell_styles(&bytes, &ops[at..end])? {
+                    Some((styled, group)) => apply_group(&styled, &group)?,
+                    None => apply_group(&bytes, &ops[at..end])?,
+                },
+            )?,
         };
         at = end;
     }

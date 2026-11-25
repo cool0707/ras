@@ -268,6 +268,9 @@ pub struct Obj {
     /// The text box of a shape (`text_box_of`): `anchor` (t, ctr, b), `wrap`, `inset` (left,
     /// top, right, bottom; points), `color` (of its text by its style).
     pub text_box: Option<serde_json::Value>,
+    /// プロパティ (`props_of`): `placement` (twoCell, oneCell, absolute), `print`, `locked`,
+    /// `lockText` (a shape's; null for others).
+    pub props: Option<serde_json::Value>,
 }
 
 /// The pictures of a page: each one once (`data:` URLs), the objects refer to them by number
@@ -507,6 +510,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 adjust: None,
                 paint: None,
                 text_box: None,
+                props: Some(props_of(a, obj)),
             });
             return;
         }
@@ -531,6 +535,7 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 adjust: None,
                 paint: None,
                 text_box: None,
+                props: Some(props_of(a, obj)),
             });
         }
         return;
@@ -575,8 +580,29 @@ fn anchor_object(ctx: &Ctx, a: &Node, env: &Env, controls: &mut Controls, out: &
                 .flatten(),
             paint: matches!(obj.name.as_str(), "sp" | "cxnSp" | "pic").then(|| paint_of(ctx, obj)),
             text_box: (obj.name == "sp").then(|| text_box_of(ctx, obj)),
+            props: Some(props_of(a, obj)),
         });
     }
+}
+
+/// The プロパティ of an object as its anchor and its client data say them.
+fn props_of(a: &Node, obj: &Node) -> serde_json::Value {
+    let placement = match a.name.as_str() {
+        "oneCellAnchor" => "oneCell",
+        "absoluteAnchor" => "absolute",
+        _ => a
+            .attr("editAs")
+            .filter(|m| matches!(*m, "oneCell" | "absolute"))
+            .unwrap_or("twoCell"),
+    };
+    let on = |n: Option<&Node>, k: &str| !matches!(n.and_then(|n| n.attr(k)), Some("0" | "false"));
+    let data = a.child("clientData");
+    serde_json::json!({
+        "placement": placement,
+        "print": on(data, "fPrintsWithSheet"),
+        "locked": on(data, "fLocksWithSheet"),
+        "lockText": (obj.name == "sp").then(|| on(Some(obj), "fLocksText")),
+    })
 }
 
 /// The adjust handles of the presets that have them (`handles.zip`, made by

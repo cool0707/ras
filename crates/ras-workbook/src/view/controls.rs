@@ -211,6 +211,7 @@ impl Controls {
             adjust: None,
             paint: None,
             text_box: None,
+            props: None,
         })
     }
 }
