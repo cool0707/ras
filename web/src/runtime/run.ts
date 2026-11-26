@@ -20,6 +20,7 @@ export interface WasmBookClass {
     create(): WasmBook;
     isFunction(name: string): boolean;
     methods(): string;
+    controls(data: Uint8Array, sheets: string): string;
 }
 
 export const ROOT = "/project";
@@ -62,12 +63,15 @@ export function bookAddon(Book: WasmBookClass, fs: MemFs) {
             fromBytes: (data: Uint8Array) => wrap(Book.fromBytes(new Uint8Array(data))),
             create: () => wrap(Book.create()),
             isFunction: (name: string) => Book.isFunction(String(name)),
+            // The controls of the sheets of a workbook file (their state, kept while the program runs).
+            controls: (p: string, sheets: string[]) => JSON.parse(Book.controls(new Uint8Array(fs.readFileSync(p) as Buffer), JSON.stringify(sheets))),
         },
     };
 }
 
 export interface RunJob {
-    kind: "run" | "test";
+    /** `serve`: the run mode of the book tab (`ras-main.js --serve`, see `ServeSession`). */
+    kind: "run" | "test" | "serve";
     /** The debug build: paths relative to build/debug. */
     js: { path: string; text: string }[];
     /** The project's files (sources, the workbook): paths relative to the project. */
@@ -163,7 +167,8 @@ function allowWaiting() {
 
 let waiting = false;
 
-export function runJob(Book: WasmBookClass, job: RunJob, onOutput?: (stream: "stdout" | "stderr", text: string) => void, ask?: Ask, forms?: FormChannel): RunResult {
+/** The program's world: the project in a `MemFs`, `ras-main.js` (or `ras-test-main.js`) to run. */
+function prepare(Book: WasmBookClass, job: RunJob, onOutput?: (stream: "stdout" | "stderr", text: string) => void, ask?: Ask, forms?: FormChannel) {
     if (!waiting) {
         allowWaiting();
         waiting = true;
@@ -189,6 +194,9 @@ export function runJob(Book: WasmBookClass, job: RunJob, onOutput?: (stream: "st
         argv = [script, job.target];
         env.RAS_RUN_REPORT = reportFile;
         if (job.answers) env.RAS_ANSWERS = JSON.stringify(job.answers);
+    } else if (job.kind === "serve") {
+        script = `${DEBUG_DIR}/ras-main.js`;
+        argv = [script, "--serve", SERVE_DIR];
     } else {
         script = `${DEBUG_DIR}/ras-test-main.js`;
         argv = [script, job.target];
@@ -202,6 +210,11 @@ export function runJob(Book: WasmBookClass, job: RunJob, onOutput?: (stream: "st
         if (forms) hooks.formHost = forms;
     };
     const world = new NodeWorld({ fs, out, env, argv, extra: { ras_book: bookAddon(Book, fs) }, loaded });
+    return { fs, world, script, output, out, reportFile, eventsFile };
+}
+
+/** Calls `f` with `console` printing into `out` (as the program's standard output and error). */
+function printing<T>(out: (stream: "stdout" | "stderr", text: string) => void, f: () => T): T {
     const c = console as unknown as Record<string, (...a: unknown[]) => void>;
     const saved: Record<string, (...a: unknown[]) => void> = {};
     for (const [name, stream] of [
@@ -214,12 +227,16 @@ export function runJob(Book: WasmBookClass, job: RunJob, onOutput?: (stream: "st
         saved[name] = c[name];
         c[name] = (...a: unknown[]) => out(stream, `${formatConsole(a)}\n`);
     }
-    let exitCode: number;
     try {
-        exitCode = world.run(script);
+        return f();
     } finally {
         Object.assign(c, saved);
     }
+}
+
+export function runJob(Book: WasmBookClass, job: RunJob, onOutput?: (stream: "stdout" | "stderr", text: string) => void, ask?: Ask, forms?: FormChannel): RunResult {
+    const { fs, world, script, output, out, reportFile, eventsFile } = prepare(Book, job, onOutput, ask, forms);
+    const exitCode = printing(out, () => world.run(script));
     let report: unknown = null;
     if (fs.existsSync(reportFile)) {
         try {
@@ -244,4 +261,142 @@ export function runJob(Book: WasmBookClass, job: RunJob, onOutput?: (stream: "st
         savedBooks.push({ path: `build/debug/workbooks/${rel}`, data });
     }
     return { exitCode, output, report, events, saved: savedBooks };
+}
+
+// ---------------------------------------------------------------------------- the run mode
+
+/** Where `ras-main.js --serve` writes the workbooks after each request. */
+const SERVE_DIR = "/tmp/ras-serve";
+/** What starts an answer of `ras-main.js --serve` on its standard output. */
+const SERVE_MARK = "\u001eRAS ";
+
+/** What the program answers a request with (`$rt.serve` of the run time). */
+export interface ServeReply {
+    id: number;
+    ok: boolean;
+    error?: { code: number; description: string; file: string | null; line: number };
+    /** The errors the event handlers did not catch (the program goes on, as in Excel). */
+    errors?: { handler: string; code: number; description: string; file: string | null; line: number }[];
+    /** The sheet active and its selection, as the program left them. */
+    where?: { sheet: string | null; cell: string | null; selection: string | null };
+    /** The revision of the project's workbook (it changes with each change of its cells). */
+    rev?: number;
+    /** The revision of the state of the controls (their values, captions, items). */
+    controlsRev?: number;
+    cancel?: boolean;
+    snapshotError?: string;
+}
+
+/** The project's workbook as the program has it after a request (when it changed). */
+export interface ServeSnapshot {
+    bytes: Uint8Array;
+    /** The controls as the program has them (JSON, as `Book.controls` gives it), or null. */
+    controls: string | null;
+}
+
+/**
+ * The run mode of the book tab: `ras-main.js --serve`, kept running in this world. A request
+ * (what is done on the sheet, as the page posts it) goes to its standard input; its answer is
+ * what it writes on its standard output after the `SERVE_MARK`.
+ */
+export class ServeSession {
+    private readonly world: NodeWorld;
+    private readonly fs: MemFs;
+    private readonly out: (stream: "stdout" | "stderr", text: string) => void;
+    private readonly print: (stream: "stdout" | "stderr", text: string) => void;
+    private readonly input = new Map<string, ((...a: unknown[]) => void)[]>();
+    private reply: ServeReply | null = null;
+    /** What was printed of a line not ended yet. */
+    private pending = "";
+    private next = 1;
+    private rev = -1;
+    private controlsRev = -1;
+    /** The exit code when the program ended (by itself), or null. */
+    exited: number | null = null;
+
+    constructor(Book: WasmBookClass, job: RunJob, onOutput: (stream: "stdout" | "stderr", text: string) => void, ask?: Ask, forms?: FormChannel) {
+        this.out = onOutput;
+        // (The answers are not printed: they are taken from the lines written.)
+        const print = (stream: "stdout" | "stderr", text: string) => (stream === "stdout" ? this.lines(text) : onOutput(stream, text));
+        const p = prepare(Book, { ...job, kind: "serve" }, print, ask, forms);
+        this.world = p.world;
+        this.fs = p.fs;
+        const input = this.input;
+        const stdin = {
+            setEncoding: () => stdin,
+            on(event: string, f: (...a: unknown[]) => void) {
+                input.set(event, [...(input.get(event) || []), f]);
+                return stdin;
+            },
+            once(event: string, f: (...a: unknown[]) => void) {
+                return stdin.on(event, f);
+            },
+            resume: () => stdin,
+            pause: () => stdin,
+        };
+        this.world.process.stdin = stdin;
+        this.print = print;
+        const code = printing(print, () => this.world.start(p.script));
+        if (code !== undefined) this.exited = this.world.finish(code);
+    }
+
+    private line(text: string) {
+        const at = text.indexOf(SERVE_MARK);
+        if (at < 0) {
+            this.out("stdout", `${text}\n`);
+            return;
+        }
+        if (at > 0) this.out("stdout", `${text.slice(0, at)}\n`);
+        try {
+            this.reply = JSON.parse(text.slice(at + SERVE_MARK.length)) as ServeReply;
+        } catch {
+            // (Not an answer after all.)
+        }
+    }
+
+    /** Hands the program a request; gives its answer, with the workbook when it changed. */
+    request(m: Record<string, unknown>): { reply: ServeReply; snapshot: ServeSnapshot | null } {
+        const ended = (description: string): { reply: ServeReply; snapshot: null } => ({ reply: { id: 0, ok: false, error: { code: 0, description, file: null, line: 0 } }, snapshot: null });
+        if (this.exited !== null) return ended(`プログラムが終了しました（終了コード ${this.exited}）。`);
+        this.reply = null;
+        const code = printing(this.print, () =>
+            this.world.guard(() => {
+                for (const f of this.input.get("data") || []) f(`${JSON.stringify({ ...m, id: this.next++ })}\n`);
+            }),
+        );
+        if (code !== undefined) {
+            this.exited = this.world.finish(code);
+            if (this.reply === null) return ended(`プログラムが終了しました（終了コード ${this.exited}）。`);
+        }
+        const reply = this.reply ?? { id: 0, ok: false, error: { code: 0, description: "プログラムが答えませんでした。", file: null, line: 0 } };
+        return { reply, snapshot: this.snapshot(reply) };
+    }
+
+    /** What the program printed on its standard output: its answers, and the rest (shown). */
+    private lines(text: string) {
+        this.pending += text;
+        for (let i = this.pending.indexOf("\n"); i >= 0; i = this.pending.indexOf("\n")) {
+            this.line(this.pending.slice(0, i));
+            this.pending = this.pending.slice(i + 1);
+        }
+    }
+
+    private snapshot(reply: ServeReply): ServeSnapshot | null {
+        if (reply.rev === undefined) return null;
+        const controlsRev = reply.controlsRev ?? this.controlsRev;
+        if (reply.rev === this.rev && controlsRev === this.controlsRev) return null;
+        try {
+            const list = JSON.parse(this.fs.readFileSync(`${SERVE_DIR}/snapshot.json`, "utf8") as string) as { books: { file: string; project: boolean }[] };
+            const own = list.books.find((b) => b.project);
+            if (!own) return null;
+            const bytes = new Uint8Array(this.fs.readFileSync(`${SERVE_DIR}/${own.file}`) as Buffer);
+            const controlsFile = `${SERVE_DIR}/controls.json`;
+            const controls = this.fs.existsSync(controlsFile) ? (this.fs.readFileSync(controlsFile, "utf8") as string) : null;
+            this.rev = reply.rev;
+            this.controlsRev = controlsRev;
+            return { bytes, controls };
+        } catch {
+            return null;
+        }
+    }
 }

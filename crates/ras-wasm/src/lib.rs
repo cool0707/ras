@@ -697,6 +697,13 @@ impl Book {
     pub fn methods() -> String {
         json!(js::METHODS).to_string()
     }
+
+    /// The addon's `Book.controls(path, sheets)` for the bytes of the file: the controls of the
+    /// sheets `sheets` (a JSON array of their names), as JSON.
+    pub fn controls(data: &[u8], sheets: &str) -> String {
+        let sheets: Vec<String> = serde_json::from_str(sheets).unwrap_or_default();
+        view::controls_state(data, &sheets).to_string()
+    }
 }
 
 fn open(bytes: &[u8]) -> Result<book::Book, JsError> {
@@ -748,6 +755,58 @@ pub fn view_page(
         // For the menu and the dialogs of conditional formats.
         data["iconSets"] = view::icon_sets();
     }
+    Ok(view::page(&data))
+}
+
+/// The page of the run mode (`ras book view --editable --run`): the project's workbook as the
+/// program left it (`bytes`), drawn with the drawings of the workbook file (`drawings`) and the
+/// controls in the state the program gave them (`controls`, JSON as `Book.controls` gives it),
+/// at the sheet `sheet` (its code name or name) when given.
+#[wasm_bindgen(js_name = viewRunPage)]
+pub fn view_run_page(
+    bytes: &[u8],
+    name: &str,
+    drawings: &[u8],
+    sheet: Option<String>,
+    controls: Option<String>,
+) -> Result<String, JsError> {
+    let mut b = book::Book::open_bytes_as(bytes, false).map_err(err)?;
+    let controls: Option<Json> = match controls {
+        Some(t) => Some(serde_json::from_str(&t).map_err(|e| err(e.to_string()))?),
+        None => None,
+    };
+    let focus = sheet.and_then(|wanted| {
+        let count = b.sheet_count();
+        let by_code = (0..count).find(|&si| {
+            b.code_name(si)
+                .is_some_and(|c| c.eq_ignore_ascii_case(&wanted))
+        });
+        let si = by_code.or_else(|| {
+            (0..count).find(|&si| {
+                b.sheet_name(si)
+                    .is_some_and(|n| n.eq_ignore_ascii_case(&wanted))
+            })
+        })?;
+        b.sheet_name(si).map(str::to_string)
+    });
+    let mut data = view::data_with(
+        &mut b,
+        name,
+        Some(drawings),
+        Some((book::VIEW_ROWS, book::VIEW_COLS)),
+        None,
+        controls.as_ref(),
+    )
+    .map_err(err)?;
+    if let Some(focus) = focus {
+        data["active"] = focus.into();
+        data["focus"] = true.into();
+    }
+    data["editable"] = true.into();
+    data["host"] = "parent".into();
+    data["functions"] = view::functions();
+    data["iconSets"] = view::icon_sets();
+    data["run"] = true.into();
     Ok(view::page(&data))
 }
 

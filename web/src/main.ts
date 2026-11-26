@@ -12,7 +12,7 @@ import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { EditorState, type Extension } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import init, { Book, compile, diffText, editBook, encodeVba, explain, format, generateTest, newFormSpec, packBook, sheetControls, viewPage } from "../pkg/ras_wasm.js";
+import init, { Book, compile, diffText, editBook, encodeVba, explain, format, generateTest, newFormSpec, packBook, sheetControls, viewPage, viewRunPage } from "../pkg/ras_wasm.js";
 import type { EventDescriptor } from "../../editors/vscode/src/userForm/events";
 import { bodyIndent, findHandler } from "../../editors/vscode/src/userForm/events";
 import type { RuntimeMessage } from "../../editors/vscode/src/formRunner/protocol";
@@ -22,7 +22,7 @@ import { codeBehindPath, type DesignerHooks, FormDesigner, openHandler } from ".
 import { Explorer } from "./explorer";
 import { FormPanels } from "./forms";
 import { rasLanguage } from "./formula";
-import type { Dialog, RunJob, RunResult } from "./runtime/run";
+import type { Dialog, RunJob, RunResult, ServeReply } from "./runtime/run";
 import samples from "virtual:samples";
 import type { FromWorker, ToWorker } from "./worker";
 import { versioned } from "./versioned";
@@ -895,13 +895,14 @@ async function run(kind: "run" | "test") {
     const testFiles = files.filter((f) => /\.test\.ras$/.test(f.path)).map((f) => f.path);
     if (kind === "run" && !entry) return;
     if (kind === "test" && !testFiles.length) return;
+    // (The forms and dialogs are the run's now: the run mode of the book tab ends.)
+    if (bookRun) endBookRun("実行モードを終了しました。");
     showTab("output");
     const out = $("output");
     out.textContent = "";
     const bookPath = workbookPath();
     const before: Workbook = { name: bookPath ? bookPath.split("/").pop()! : workbook.name, bytes: workbook.bytes };
-    const projectFiles: RunJob["files"] = files.map((f) => ({ path: f.path, data: f.text }));
-    if (bookPath) projectFiles.push({ path: bookPath, data: workbook.bytes });
+    const projectFiles = runFiles();
     const targets = kind === "run" ? [entry] : testFiles;
     $("stop").hidden = false;
     let failures = 0;
@@ -987,6 +988,14 @@ async function run(kind: "run" | "test") {
         const sum = el("div", `result ${failures ? "ng" : "ok"}`, `${failures ? "失敗あり" : "すべて成功"}: 成功 ${passed}、失敗 ${failures}（${((performance.now() - startedAll) / 1000).toFixed(2)} 秒）`);
         out.prepend(sum);
     }
+}
+
+/** The project's files as a run has them (the workbook with them). */
+function runFiles(): RunJob["files"] {
+    const bookPath = workbookPath();
+    const projectFiles: RunJob["files"] = files.map((f) => ({ path: f.path, data: f.text }));
+    if (bookPath) projectFiles.push({ path: bookPath, data: workbook.bytes });
+    return projectFiles;
 }
 
 /**
@@ -1098,14 +1107,22 @@ function showTestResult(r: RunResult, list: HTMLElement, head: HTMLElement): { p
 // ---------------------------------------------------------------------------- the workbook
 
 function renderBook() {
+    // (Another workbook than the one the run mode started with: the run mode ends.)
+    if (bookRun && bookRun.workbook !== workbook) endBookRun("ブックが変わったため、実行モードを終了しました。", false);
     const after = lastRun && !showBefore ? lastRun : null;
     $("book-which").hidden = !lastRun;
     for (const b of document.querySelectorAll<HTMLButtonElement>("#book-which button")) b.setAttribute("aria-pressed", String((b.dataset.which === "after") === !!after));
     $("book-name").textContent = after
         ? `${after.after.name}（実行後。変更されたセルに印が付きます。編集は「実行前」で）`
-        : `${workbook.name}（実行前。編集すると、プログラムはこのブックで動きます）`;
+        : bookRun
+          ? `${workbook.name}（実行モード。シートでの操作がプログラムのイベントを起こします。ブックは変わりません）`
+          : `${workbook.name}（実行前。編集すると、プログラムはこのブックで動きます）`;
     let html: string;
     try {
+        if (bookRun && !after) {
+            showBookPage(viewRunPage(bookRun.bytes, workbook.name, workbook.bytes, bookRun.sheet ?? undefined, bookRun.controls ?? undefined));
+            return;
+        }
         // The workbook before the run is edited on the page: it posts its edits here (bookMessage).
         html = after ? viewPage(after.after.bytes, after.after.name, after.before.bytes, "実行前", false) : viewPage(workbook.bytes, workbook.name, undefined, "", true);
     } catch (e) {
@@ -1181,12 +1198,23 @@ function bookMessage(m: { type?: string; ops?: unknown; url?: string }, frame: W
     if (m.type === "ready") {
         // The objects of the workbook before the run have events: their handlers are in objects/.
         // (The playground has no run mode: the page shows no switch for it.)
-        if (!(lastRun && !showBefore)) frame.postMessage({ type: "events", on: true, canRun: false }, "*");
+        if (!(lastRun && !showBefore)) {
+            frame.postMessage({ type: "events", on: true, run: !!bookRun, session: bookRun?.id }, "*");
+            // What the program reported when the page was drawn again.
+            if (bookRun && bookRun.report.length) fail(bookRun.report.splice(0).join("\n"));
+        }
         return;
     }
-    if (m.type === "mode" || m.type === "run") {
-        // (A page that asks all the same is not left waiting for an answer.)
-        fail("プレイグラウンドでは実行モードを使えません。VS Code 拡張のシートビューで使ってください。");
+    if (m.type === "mode") {
+        switchBookMode((m as { run?: unknown }).run === true, frame).catch((e) => fail(String((e as Error).message || e)));
+        return;
+    }
+    if (m.type === "run") {
+        bookRunEvent(m as unknown as { id: number; [key: string]: unknown }, frame).catch((e) => fail(String((e as Error).message || e)));
+        return;
+    }
+    if (bookRun) {
+        fail("実行モードでは編集できません。リボンの右端のスイッチで「編集」モードに切り替えてください。");
         return;
     }
     if (m.type === "event") {
@@ -1215,6 +1243,174 @@ function bookMessage(m: { type?: string; ops?: unknown; url?: string }, frame: W
     } catch (e) {
         fail(String((e as Error).message || e));
     }
+}
+
+// ---------------------------------------------------------------------------- the run mode of the book tab
+
+/**
+ * The run mode of the book tab (the switch at the right end of its ribbon): the program runs in
+ * a worker as `ras-main.js --serve` (`ServeSession`), and what is done on the sheet raises its
+ * events. The page shows the workbook as the program has it; the workbook itself is not changed.
+ */
+interface BookRun {
+    id: number;
+    worker: Worker;
+    /** The workbook it started with (another one ends it). */
+    workbook: Workbook;
+    /** The project's workbook as the program has it, and its controls (JSON). */
+    bytes: Uint8Array;
+    controls: string | null;
+    /** The sheet the program made active. */
+    sheet: string | null;
+    waiting: Map<number, (r: Extract<FromWorker, { type: "reply" }>) => void>;
+    next: number;
+    /** The errors to show on the page drawn again. */
+    report: string[];
+    /** Where its output is shown (the 実行結果 tab). */
+    console: HTMLElement;
+}
+
+let bookRun: BookRun | null = null;
+let bookRunIds = 0;
+
+/** The page's switch: the run mode on (the program started) or off. */
+async function switchBookMode(on: boolean, frame: Window) {
+    const idle = () => frame.postMessage({ type: "idle" }, "*");
+    if (!on) {
+        if (bookRun) endBookRun("実行モードを終了しました（プログラムが変えたブックは残りません）。");
+        else idle();
+        return;
+    }
+    if (bookRun) return idle();
+    if (running) throw new Error("プログラムの実行中は、実行モードにできません。");
+    if (!compiled || !compiled.js) throw new Error("コンパイルエラーがあるため、実行モードにできません（「問題」タブを見てください）。");
+    if (!workbookPath()) throw new Error("実行モードは、ras.toml の project.workbook のブックで使えます。");
+    const out = $("output");
+    out.textContent = "";
+    const head = el("div", "result", "実行モード（ブック）を開始しています…");
+    const console_ = el("pre");
+    out.append(head, console_);
+    const shared = typeof SharedArrayBuffer !== "undefined" && crossOriginIsolated ? new SharedArrayBuffer(8 + 65536) : null;
+    const forms = shared ? new SharedArrayBuffer(8 + 65536) : null;
+    if (forms) formPanels = new FormPanels((action) => answer(forms, action));
+    const worker = new Worker(versioned("worker.js"), { type: "module" });
+    const session: BookRun = { id: ++bookRunIds, worker, workbook, bytes: workbook.bytes, controls: null, sheet: null, waiting: new Map(), next: 1, report: [], console: console_ };
+    const started = new Promise<Extract<FromWorker, { type: "reply" }>>((resolve, reject) => {
+        session.waiting.set(0, resolve);
+        worker.onmessage = async (e: MessageEvent<FromWorker>) => {
+            const m = e.data;
+            if (m.type === "output") {
+                session.console.append(el("span", m.stream === "stderr" ? "stderr" : undefined, m.text));
+            } else if (m.type === "dialog" && shared) {
+                answer(shared, { value: await showDialog(m.dialog) });
+            } else if (m.type === "form") {
+                formPanels.receive(m.message as RuntimeMessage);
+            } else if (m.type === "formWait") {
+                formPanels.wait();
+            } else if (m.type === "formPoll") {
+                formPanels.poll();
+            } else if (m.type === "reply") {
+                const done = session.waiting.get(m.id);
+                session.waiting.delete(m.id);
+                done?.(m);
+            } else if (m.type === "failed") {
+                reject(new Error(m.message));
+                if (bookRun === session) endBookRun(`実行モードのプログラムが止まりました: ${m.message}`);
+            }
+        };
+        worker.onerror = (e) => {
+            reject(new Error(`ワーカーのエラー: ${e.message}`));
+            if (bookRun === session) endBookRun(`実行モードのプログラムが止まりました: ${e.message}`);
+        };
+    });
+    worker.postMessage({ type: "serve", module: wasmModule, job: { kind: "serve", js: compiled.js, files: runFiles(), target: "" }, shared, forms } satisfies ToWorker);
+    let r: Extract<FromWorker, { type: "reply" }>;
+    try {
+        r = await started;
+    } catch (e) {
+        worker.terminate();
+        formPanels.end();
+        head.textContent = "実行モードにできませんでした";
+        head.className = "result ng";
+        throw e;
+    }
+    const errors = runReport(r.reply);
+    if (!r.reply.ok || r.exited) {
+        worker.terminate();
+        formPanels.end();
+        head.textContent = "実行モードにできませんでした";
+        head.className = "result ng";
+        throw new Error(errors.join("\n") || "プログラムが終了しました。");
+    }
+    head.textContent = "実行モード（ブック）: シートでの操作がプログラムのイベントを起こします";
+    head.className = "result ok";
+    if (r.snapshot) {
+        session.bytes = r.snapshot.bytes;
+        session.controls = r.snapshot.controls;
+    }
+    session.sheet = r.reply.where?.sheet ?? null;
+    session.report = errors;
+    // (Another workbook, or the page shown otherwise, by now.)
+    if (workbook !== session.workbook || (lastRun && !showBefore)) {
+        worker.terminate();
+        formPanels.end();
+        return;
+    }
+    bookRun = session;
+    renderBook();
+}
+
+/** What the program reported: the error that ended a request, those of its handlers. */
+function runReport(reply: ServeReply): string[] {
+    const at = (file: string | null, line: number) => (file ? `（${file}:${line}）` : "");
+    const list: string[] = [];
+    if (!reply.ok && reply.error) list.push(`実行時エラー ${reply.error.code ? `${reply.error.code}: ` : ""}${reply.error.description}${at(reply.error.file, reply.error.line)}`);
+    for (const e of reply.errors ?? []) list.push(`${e.handler}: 実行時エラー ${e.code}: ${e.description}${at(e.file, e.line)}`);
+    if (reply.snapshotError) list.push(`ブックを書き出せませんでした: ${reply.snapshotError}`);
+    // (The 実行結果 tab has them as the program printed them.)
+    return list;
+}
+
+/** What was done on the sheet in run mode: its events raised, the page drawn again when the workbook changed. */
+async function bookRunEvent(m: { id: number; [key: string]: unknown }, frame: Window) {
+    const session = bookRun;
+    if (!session) throw new Error("実行モードではありません。");
+    const { type: _type, id, ...request } = m;
+    const n = session.next++;
+    const r = await new Promise<Extract<FromWorker, { type: "reply" }>>((resolve) => {
+        session.waiting.set(n, resolve);
+        session.worker.postMessage({ type: "request", id: n, request } satisfies ToWorker);
+    });
+    if (bookRun !== session) return;
+    const errors = runReport(r.reply);
+    if (r.exited) {
+        endBookRun(`実行モードのプログラムが終了しました。編集モードに戻ります。${errors.length ? `\n${errors.join("\n")}` : ""}`);
+        return;
+    }
+    const sheet = r.reply.where?.sheet ?? session.sheet;
+    if (r.snapshot || sheet !== session.sheet) {
+        if (r.snapshot) {
+            session.bytes = r.snapshot.bytes;
+            session.controls = r.snapshot.controls;
+        }
+        session.sheet = sheet;
+        session.report.push(...errors);
+        renderBook();
+        return;
+    }
+    frame.postMessage({ type: "runDone", id, cancel: r.reply.cancel === true }, "*");
+    if (errors.length) frame.postMessage({ type: "error", message: errors.join("\n") }, "*");
+}
+
+/** The run mode ends: the program is stopped, the workbook shown again (`render`). */
+function endBookRun(message: string, render = true) {
+    const session = bookRun;
+    if (!session) return;
+    bookRun = null;
+    session.worker.terminate();
+    formPanels.end();
+    session.console.append(el("span", undefined, `${message}\n`));
+    if (render) renderBook();
 }
 
 /** What the tabs of the book tab's page ask for: a sheet inserted, removed, renamed or copied. */

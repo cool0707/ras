@@ -2150,7 +2150,6 @@
     window.addEventListener("message", (e) => {
         const m = e.data;
         if (m && m.type === "events") {
-            if (m.canRun === false) canRun = false;
             if (m.on) enableEvents();
             setRunMode(!!m.run, m.session);
         } else if (m && m.type === "runDone") {
@@ -5532,8 +5531,6 @@
     // whether the workbook shown is the project's (`events`), whose sheets have files.
 
     let events = false;
-    // Whether the editor has the run mode (the playground has none: no switch is shown).
-    let canRun = true;
     const hasEvents = (obj) => events && !!obj && (obj.activex !== undefined || !!obj.onAction);
     // The event a shape's or a form control's function (its OnAction) runs on: a click; a
     // change of the item selected (a list or combo box); of the value (a spin button, a scroll bar).
@@ -5600,7 +5597,7 @@
         const on = hasEvents(selectedObj);
         b.disabled = !on;
         if (tools.macroGroup) tools.macroGroup.hidden = !events;
-        if (tools.modeSwitch) tools.modeSwitch.hidden = !events || !canRun;
+        if (tools.modeSwitch) tools.modeSwitch.hidden = !events;
     }
     function enableEvents() {
         events = true;
@@ -5647,7 +5644,7 @@
         runSelectSoon();
     }
     function askMode(run) {
-        if (run === runMode || busy || !events || !canRun) return;
+        if (run === runMode || busy || !events) return;
         if (entry) cancelEntry();
         closeMenu();
         setBusy(true);

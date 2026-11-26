@@ -341,30 +341,51 @@ export class NodeWorld {
         return list.length > 0;
     }
 
-    /**
-     * Runs a script as `node <file>` does: an error that escapes it goes to the
-     * `uncaughtException` handlers (or is printed), and then the `exit` handlers run.
-     * Returns the exit code.
-     */
-    run(file: string): number {
+    /** Calls `f` with the globals of this world (`process`, `Buffer`, the mapped stacks). */
+    within<T>(f: () => T): T {
         const g = globalThis as Record<string, unknown>;
         const E = Error as unknown as { prepareStackTrace?: unknown };
         const saved = { process: g.process, Buffer: g.Buffer, prepare: E.prepareStackTrace };
         g.process = this.process;
         g.Buffer = Buffer;
         E.prepareStackTrace = this.mappedStack;
-        let code: number | undefined;
         try {
+            return f();
+        } finally {
+            g.process = saved.process;
+            g.Buffer = saved.Buffer;
+            E.prepareStackTrace = saved.prepare;
+        }
+    }
+
+    /**
+     * Calls `f` as the program's code runs: `process.exit()` and an error that escapes it (to
+     * the `uncaughtException` handlers, or printed) give the exit code; undefined: it returned.
+     */
+    guard(f: () => void): number | undefined {
+        return this.within(() => {
             try {
-                this.require(file, this.fs.cwd);
+                f();
+                return undefined;
             } catch (e) {
-                if (e instanceof ProcessExit) {
-                    code = e.code;
-                } else if (!this.emit("uncaughtException", e)) {
+                if (e instanceof ProcessExit) return e.code;
+                if (!this.emit("uncaughtException", e)) {
                     this.opts.out("stderr", `${inspect(e)}\n`);
-                    code = 1;
+                    return 1;
                 }
+                return undefined;
             }
+        });
+    }
+
+    /** Loads a script as `node <file>` does, without ending (it may serve requests after). */
+    start(file: string): number | undefined {
+        return this.guard(() => this.require(file, this.fs.cwd));
+    }
+
+    /** The program ends with `code` (undefined: `process.exitCode`): the `exit` handlers run. Returns the exit code. */
+    finish(code?: number): number {
+        return this.within(() => {
             if (code === undefined) code = typeof this.process.exitCode === "number" ? this.process.exitCode : 0;
             this.process.exitCode = code;
             try {
@@ -373,11 +394,16 @@ export class NodeWorld {
                 if (!(e instanceof ProcessExit)) this.opts.out("stderr", `${inspect(e)}\n`);
             }
             return typeof this.process.exitCode === "number" ? this.process.exitCode : code;
-        } finally {
-            g.process = saved.process;
-            g.Buffer = saved.Buffer;
-            E.prepareStackTrace = saved.prepare;
-        }
+        });
+    }
+
+    /**
+     * Runs a script as `node <file>` does: an error that escapes it goes to the
+     * `uncaughtException` handlers (or is printed), and then the `exit` handlers run.
+     * Returns the exit code.
+     */
+    run(file: string): number {
+        return this.finish(this.start(file));
     }
 }
 

@@ -7,7 +7,7 @@ RAS をブラウザで書いて VBA に変換し、Excel なしで実行・テ�
 
 | 部分 | 中身 |
 |---|---|
-| `crates/ras-wasm` | コンパイラー（`compile`・`format`・`explain`）、`ras pack`（`packBook`）、ブックの代役（`Book`）、`ras book diff` / `view` / `edit`（`editBook`）を WebAssembly にしたもの。ブックタブの画面（`view.js`）は、実行前のブックへの編集を親のページに `postMessage` し、`main.ts` が `editBook` で書き換えて描き直します |
+| `crates/ras-wasm` | コンパイラー（`compile`・`format`・`explain`）、`ras pack`（`packBook`）、ブックの代役（`Book`）、`ras book diff` / `view` / `edit`（`editBook`）を WebAssembly にしたもの。ブックタブの画面（`view.js`）は、実行前のブックへの編集を親のページに `postMessage` し、`main.ts` が `editBook` で書き換えて描き直します。実行モード（仕様 §14.10.10）では、シートでの操作を worker の `ServeSession`（`ras-main.js --serve`）に渡し、プログラムが変えたブックを `viewRunPage` で描きます |
 | `src/main.ts` | 画面: エディタ（CodeMirror）、VBA・問題・実行結果・ブックの表示。ブックタブの図形・コントロールのイベント（`objects/<コード名>.ras` のハンドラー、マクロの登録）も扱います |
 | `src/explorer.ts` | エクスプローラー: プロジェクトのファイルを VS Code のようなフォルダーのツリーで表示し、開く・追加（標準モジュール・ファイル・フォーム。標準モジュールは VS Code 拡張の［新しい標準モジュール］と同じく `module1` などの名前を示します）・名前の変更・削除をその場で行います（右クリックのメニュー、↑↓←→・Enter・F2・Delete）。エディタのタブ（`main.ts`）は開いているファイルです |
 | `src/designer.ts` | ユーザーフォームのデザイナー。VS Code 拡張のデザイナー（`editors/vscode/webview/userFormDesigner`）を `designer.html` のフレームに表示し、拡張のプロバイダー（`src/userForm/provider.ts`）が VS Code のドキュメントで行うことを、ページのファイルで行います |

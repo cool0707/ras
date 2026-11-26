@@ -5,10 +5,15 @@
 // buffer while the page shows the dialog; otherwise they get the answers `ras run` gives.
 
 import init, { Book } from "../pkg/ras_wasm.js";
-import { runJob, type Ask, type Dialog, type FormChannel, type RunJob, type WasmBookClass } from "./runtime/run";
+import { runJob, ServeSession, type Ask, type Dialog, type FormChannel, type RunJob, type ServeReply, type ServeSnapshot, type WasmBookClass } from "./runtime/run";
 
 /** `shared`: the dialogs' answers; `forms`: what the user does on the forms (both as `asker` lays them out). */
-export type ToWorker = { type: "run"; module: WebAssembly.Module; job: RunJob; shared: SharedArrayBuffer | null; forms: SharedArrayBuffer | null };
+export type ToWorker =
+    | { type: "run"; module: WebAssembly.Module; job: RunJob; shared: SharedArrayBuffer | null; forms: SharedArrayBuffer | null }
+    /** The run mode of the book tab: the program started (`ras-main.js --serve`), then its `start` request. */
+    | { type: "serve"; module: WebAssembly.Module; job: RunJob; shared: SharedArrayBuffer | null; forms: SharedArrayBuffer | null }
+    /** What was done on the sheet in run mode (`$rt.serve`'s requests). */
+    | { type: "request"; id: number; request: Record<string, unknown> };
 export type FromWorker =
     | { type: "output"; stream: "stdout" | "stderr"; text: string }
     | { type: "dialog"; dialog: Dialog }
@@ -18,7 +23,9 @@ export type FromWorker =
     | { type: "formWait" }
     | { type: "formPoll" }
     | { type: "done"; result: ReturnType<typeof runJob>; ms: number }
-    | { type: "failed"; message: string };
+    | { type: "failed"; message: string }
+    /** The answer of a request of the run mode (`id`: the request's; 0 for `start`). */
+    | { type: "reply"; id: number; reply: ServeReply; snapshot: ServeSnapshot | null; exited?: boolean };
 
 const post = (m: FromWorker, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(m, transfer);
 
@@ -58,8 +65,34 @@ function formChannel(shared: SharedArrayBuffer): FormChannel {
     };
 }
 
+let session: ServeSession | null = null;
+
+function reply(id: number, request: Record<string, unknown>) {
+    const r = session!.request(request);
+    post({ type: "reply", id, ...r, exited: session!.exited !== null }, r.snapshot ? [r.snapshot.bytes.buffer] : []);
+}
+
 self.onmessage = async (e: MessageEvent<ToWorker>) => {
     const m = e.data;
+    if (m.type === "request") {
+        try {
+            reply(m.id, m.request);
+        } catch (err) {
+            post({ type: "reply", id: m.id, reply: { id: 0, ok: false, error: { code: 0, description: String((err && (err as Error).message) || err), file: null, line: 0 } }, snapshot: null });
+        }
+        return;
+    }
+    if (m.type === "serve") {
+        try {
+            await init({ module_or_path: m.module });
+            const output = (stream: "stdout" | "stderr", text: string) => post({ type: "output", stream, text });
+            session = new ServeSession(Book as unknown as WasmBookClass, m.job, output, m.shared ? asker(m.shared) : undefined, m.forms ? formChannel(m.forms) : undefined);
+            reply(0, { op: "start" });
+        } catch (err) {
+            post({ type: "failed", message: String((err && (err as Error).stack) || err) });
+        }
+        return;
+    }
     if (m.type !== "run") return;
     try {
         await init({ module_or_path: m.module });
