@@ -94,6 +94,9 @@
     // An edit was posted: nothing more until the page is drawn again, or the edit is refused.
     let busy = false;
     let drag = null;
+    // An object moved or sized and sent, until the sheet is drawn again: it back as it was if the
+    // edit is not made.
+    let undrag = null;
     // The cells copied or cut: { sheet, kind, r1, c1, r2, c2, cut, text }.
     let clip = saved.clip || null;
 
@@ -1052,6 +1055,7 @@
     }
 
     function placeObjects(v) {
+        undrag = null;
         const objects = v.sheet.objects || [];
         if (!objects.length) return;
         const layer = v.layer;
@@ -2115,9 +2119,11 @@
         } else if (m && m.type === "idle") {
             // Nothing was done (a question of the editor's was cancelled).
             setBusy(false);
+            dragNotMade();
             focusGrid();
         } else if (m && m.type === "error") {
             setBusy(false);
+            dragNotMade();
             remember({ pickObj: null });
             showError(String(m.message || "変更できませんでした。"));
             focusGrid();
@@ -3648,8 +3654,11 @@
             }
             return;
         }
-        // Sized: a see-through copy of it as it will be, the object where it is.
-        if (!d.ghost) d.ghost = copyOfObject(d.box);
+        // Sized: only a see-through copy of it as it will be (the object hidden meanwhile).
+        if (!d.ghost) {
+            d.ghost = copyOfObject(d.box);
+            d.box.classList.add("sizing");
+        }
         Object.assign(d.ghost.style, { left: `${x}px`, top: `${y}px`, width: `${Math.max(0, w)}px`, height: `${Math.max(0, h)}px` });
         if (d.obj.chart && window.rasChart && !d.redraw) {
             d.redraw = requestAnimationFrame(() => {
@@ -3663,6 +3672,10 @@
             });
         }
     }
+    function dragNotMade() {
+        if (undrag) undrag();
+        undrag = null;
+    }
     function placeBox(box, x, y) {
         Object.assign(box.style, { left: `${x}px`, top: `${y}px` });
     }
@@ -3675,8 +3688,10 @@
         c.removeAttribute("title");
         return view.layer.appendChild(c);
     }
-    // The objects moved back where they were (a move not made).
+    // The objects back as they were (a move or a size not made).
     function unmove(d) {
+        if (d.ghost) d.ghost.remove();
+        d.box.classList.remove("sizing");
         placeBox(d.box, d.from.x, d.from.y);
         for (const g of d.group || []) placeBox(g.obj.box, g.from.x, g.from.y);
     }
@@ -3706,14 +3721,18 @@
         const d = objDrag;
         objDrag = null;
         if (!d || !d.now) return;
-        if (d.ghost) d.ghost.remove();
         if (d.redraw) cancelAnimationFrame(d.redraw);
         swallowClick = true;
         setTimeout(() => (swallowClick = false));
+        const sized = d.how !== "rot" && d.how !== "adj" && d.how !== "move";
+        // (A size sent: its copy stays until the sheet is drawn again, as the object is hidden.)
+        if (d.ghost && !sized) d.ghost.remove();
         if (d.how === "rot") objectEdit(d.obj, { rotation: d.now.rot });
         else if (d.how === "adj") endAdjust(d);
-        else if (!moveObjects([[d.obj, d.now], ...(d.group || []).filter((g) => g.now).map((g) => [g.obj, g.now])]) && d.how === "move") unmove(d);
+        else if (moveObjects([[d.obj, d.now], ...(d.group || []).filter((g) => g.now).map((g) => [g.obj, g.now])])) undrag = () => unmove(d);
+        else unmove(d);
     }
+
     // The arrow keys move the selected objects by a pixel (Ctrl: by 10).
     function nudgeObjects(dr, dc, far) {
         if (busy) return;
