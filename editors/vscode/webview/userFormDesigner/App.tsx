@@ -1022,7 +1022,7 @@ export function App() {
                   placing={!!tool && structuralEditable && !error}
                   onCancelPlacement={() => setTool(undefined)}
                   onDelete={canDelete ? remove : undefined}
-                  onPlace={(left, top, parentId) => {
+                  onPlace={(left, top, parentId, size) => {
                     if (!tool) return;
                     const control = createControl(
                       document,
@@ -1033,6 +1033,7 @@ export function App() {
                       undefined,
                       parentId,
                       pageEditable,
+                      size,
                     );
                     if (!control) {
                       setEditError(parentId ? strings.cannotInsertContainer : strings.cannotInsert);

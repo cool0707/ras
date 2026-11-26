@@ -312,13 +312,19 @@
         "command": "ras.module.new",
         "title": "新しい標準モジュール",
         "category": "RAS",
-        "icon": "$(file-code)"
+        "icon": {
+          "light": "./images/icons/new-module-light.svg",
+          "dark": "./images/icons/new-module-dark.svg"
+        }
       },
       {
         "command": "ras.userForm.new",
         "title": "新しいユーザーフォーム",
         "category": "RAS",
-        "icon": "$(window)"
+        "icon": {
+          "light": "./images/icons/new-form-light.svg",
+          "dark": "./images/icons/new-form-dark.svg"
+        }
       },
       {
         "command": "ras.userForm.openDesigner",

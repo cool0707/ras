@@ -2632,7 +2632,7 @@ frmUpload.pbUpload.value = 0;
 
 * **アクセント カラー:** `barColor` を省略すると、ブックにはシステム カラー `highlight`（Windows の既定の強調色。Windows 10 / 11 では `#0078D7`）で書き込み、フォームを読み込んだときに、Windows の設定のアクセント カラー（レジストリの `HKCU\Software\Microsoft\Windows\DWM\AccentColor`）に変える。読めない環境では `highlight` のまま。デザイナーは、CSS のシステム カラー `AccentColor`（使えないブラウザでは `#0078D7`）で描く。
 * **デバッグ実行:** フォームのパネル（§14.10.7）では、書き込みと同じ 4 つのラベルとして描き、同じクラスで操作する。アクセント カラーは読まない（`highlight` で描く）。
-* **デザイナー:** ツールボックスの「標準」に `ProgressBar` がある。キャンバスには書き込むのと同じ配置で描き、プロパティ グリッドで上の表のプロパティを編集できる。
+* **デザイナー:** ツールボックスの「標準」に `ProgressBar` がある。キャンバスには書き込むのと同じ配置で描き、ほかのコントロールと同じく移動・サイズ変更でき、プロパティ グリッドで上の表のプロパティを編集できる。
 
 #### 14.11.14 ファイル・フォルダーの選択欄（`FilePicker`）（v0.9で追加）
 
@@ -2705,7 +2705,7 @@ export function chooseFolder(): string[] {
 * **イベント:** `@on("<名前>.<イベント>")` は欄（`TextBox`）のイベントを受け取る（`Change`・`Exit`・`KeyDown` など。生成するイベント プロシージャは `fpBook_Text_Change`）。ボタンの `Click` と欄の `Exit` は、コンパイラが生成するイベント プロシージャから、フォームのコードのハンドラより先にクラスに渡す（`fpBook_Button_Click` → `fpBook.RAS_Click`）。`Change` は、ボタンで選んだとき・`path` などに代入したときにも起きる。
 * **生成する VBA:** プログレスバー（§14.11.13）と同じく、フォームのコードモジュールに `Public fpBook As FilePicker` を宣言して `UserForm_Initialize` で部品につなぐ。クラス モジュール `FilePicker` と標準モジュール `RAS_FilePicker` は、選択欄を置いたときだけ出力する。
 * **デバッグ実行:** フォームのパネル（§14.10.7）では、書き込みと同じ欄とボタンとして描き、同じクラスで操作する。Excel のない実行では、`Application.FileDialog` の `Show` を `getOpenFilename`（SaveAs は `getSaveAsFilename`）と同じく応答する（`ras run --open-file`、テストの `mockGetOpenFilename`。複数のパスは配列、キャンセルは `false`）。応答が無ければ、`FileDialog` は Excel が必要というエラーになる。
-* **デザイナー:** ツールボックスの「標準」に `FilePicker` がある。`filters` はプロパティ グリッドでは編集できない（JSON で書く）。
+* **デザイナー:** ツールボックスの「標準」に `FilePicker` がある。ほかのコントロールと同じく移動・サイズ変更できる。`filters` はプロパティ グリッドでは編集できない（JSON で書く）。
 
 ### 14.12 テスト（`ras test`）（v0.9で追加）
 

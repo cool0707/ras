@@ -5,6 +5,7 @@ import { progressBarLayout } from "../../src/userForm/progressBar";
 import { newFormSpec, parseSpec, previewDocument, propertyGrid } from "../../src/userForm/spec";
 import { createControl } from "../../src/userForm/toolbox";
 import { designerDocument } from "../../src/userForm/model";
+import { canEditGeometry, placementRect } from "../../src/userForm/geometry";
 
 type Json = Record<string, any>;
 const parse = (controls: Json[]) => {
@@ -70,5 +71,31 @@ describe("file picker", () => {
 		const made = createControl(document as any, "FilePicker", 12, 12, false, () => "1");
 		assert.equal(made?.name, "FilePicker1");
 		assert.deepEqual([made?.width, made?.height], [200, 18]);
+	});
+});
+
+describe("placing and editing controls", () => {
+	it("moves and resizes the composed controls like the others", () => {
+		for (const type of ["ProgressBar", "FilePicker", "TextBox"]) assert.ok(canEditGeometry({ type } as any), type);
+		assert.ok(!canEditGeometry({ type: "Page" } as any));
+	});
+
+	it("makes a control with the dragged size, and with the default size on a click", () => {
+		const document = designerDocument(previewDocument(parse([])));
+		const dragged = createControl(document as any, "ProgressBar", 12, 18, false, () => "1", undefined, false, { width: 150, height: 30 });
+		assert.deepEqual([dragged?.left, dragged?.top, dragged?.width, dragged?.height], [12, 18, 150, 30]);
+		const clicked = createControl(document as any, "CommandButton", 12, 18, false, () => "1");
+		assert.deepEqual([clicked?.width, clicked?.height], [72, 24]);
+		// Larger than the form: not made.
+		assert.equal(createControl(document as any, "Label", 0, 0, false, () => "1", undefined, false, { width: 1000, height: 10 }), undefined);
+	});
+
+	it("draws the rectangle from either corner, inside the container and on the grid", () => {
+		const bounds = { width: 240, height: 180 };
+		assert.deepEqual(placementRect({ left: 10, top: 20 }, { left: 70, top: 50 }, bounds, false), { left: 10, top: 20, width: 60, height: 30 });
+		assert.deepEqual(placementRect({ left: 70, top: 50 }, { left: 10, top: 20 }, bounds, false), { left: 10, top: 20, width: 60, height: 30 });
+		assert.deepEqual(placementRect({ left: 200, top: 170 }, { left: 300, top: 400 }, bounds, false), { left: 200, top: 170, width: 40, height: 10 });
+		assert.deepEqual(placementRect({ left: 7, top: 5 }, { left: 65, top: 34 }, bounds, true), { left: 8, top: 8, width: 56, height: 24 });
+		assert.equal(placementRect({ left: 10, top: 20 }, { left: 10.5, top: 60 }, bounds, false), undefined);
 	});
 });

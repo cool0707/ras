@@ -2,6 +2,8 @@
 // Files are opened, created, renamed and deleted from it (in place, in the tree), with the mouse,
 // a context menu or the keyboard (↑↓ ←→ Enter, F2, Delete).
 
+import { rasIcons } from "./icons";
+
 export interface ExplorerHooks {
     /** The project's files (their paths). */
     files(): string[];
@@ -11,7 +13,9 @@ export interface ExplorerHooks {
     errors(): Map<string, number>;
     open(path: string): void;
     /** A new file at `path` (the name typed in a folder): false keeps the name being typed. */
-    create(path: string): boolean;
+    create(path: string, module?: boolean): boolean;
+    /** The name proposed for a new standard module in `folder` (src/ or a folder in it). */
+    moduleName(folder: string): string;
     /** The file renamed: false keeps the name being typed. */
     rename(from: string, to: string): boolean;
     remove(path: string): void;
@@ -28,7 +32,8 @@ interface Node {
     children: Node[];
 }
 
-type Editing = { kind: "rename"; path: string } | { kind: "new"; folder: string };
+/** `module`: a new standard module, its name proposed as `initial`. */
+type Editing = { kind: "rename"; path: string } | { kind: "new"; folder: string; module?: boolean; initial?: string };
 
 const STORE = "ras-playground:explorer";
 
@@ -71,7 +76,18 @@ function parentOf(path: string): string {
     return i < 0 ? "" : path.slice(0, i);
 }
 
+let iconCount = 0;
+
+/** A codicon, or one of the playground's own icons (icons.ts). */
 function codicon(name: string): HTMLElement {
+    const own = rasIcons[name];
+    if (own) {
+        const i = document.createElement("i");
+        i.className = "ras-icon";
+        i.setAttribute("aria-hidden", "true");
+        i.innerHTML = own(`ras-icon-${++iconCount}`);
+        return i;
+    }
     const i = document.createElement("i");
     i.className = `codicon codicon-${name}`;
     i.setAttribute("aria-hidden", "true");
@@ -104,8 +120,9 @@ export class Explorer {
             if (e.target !== el) return;
             e.preventDefault();
             this.showMenu(e.clientX, e.clientY, [
+                { label: "新しい標準モジュール…", icon: "new-module", run: () => this.newModule() },
                 { label: "新しいファイル…", icon: "new-file", run: () => this.newFile("src") },
-                { label: "新しいフォーム…", icon: "window", run: () => this.newFile("forms") },
+                { label: "新しいフォーム…", icon: "new-form", run: () => this.newFile("forms") },
             ]);
         });
         document.addEventListener("pointerdown", (e) => {
@@ -124,6 +141,16 @@ export class Explorer {
         // The folder and those above it are opened.
         for (let p = folder; p; p = parentOf(p)) this.collapsed.delete(p);
         this.editing = { kind: "new", folder };
+        this.render();
+    }
+
+    /** A new standard module: in the focused folder when it is src/ or inside it, else in src/. */
+    newModule(within?: string): void {
+        const f = within ?? (this.focused || this.hooks.active());
+        let folder = this.hooks.files().includes(f) ? parentOf(f) : f;
+        if (folder !== "src" && !folder.startsWith("src/")) folder = "src";
+        for (let p = folder; p; p = parentOf(p)) this.collapsed.delete(p);
+        this.editing = { kind: "new", folder, module: true, initial: this.hooks.moduleName(folder) };
         this.render();
     }
 
@@ -191,7 +218,7 @@ export class Explorer {
         const errorsIn = (n: Node): number => (n.folder ? n.children.reduce((s, c) => s + errorsIn(c), 0) : errors.get(n.path) || 0);
         let input: HTMLInputElement | null = null;
         const walk = (nodes: Node[], depth: number, folder: string) => {
-            if (this.editing?.kind === "new" && this.editing.folder === folder) input = this.inputRow(depth, folder, "");
+            if (this.editing?.kind === "new" && this.editing.folder === folder) input = this.inputRow(depth, folder, this.editing.initial ?? "");
             for (const n of nodes) {
                 if (this.editing?.kind === "rename" && this.editing.path === n.path) {
                     input = this.inputRow(depth, folder, n.name);
@@ -298,8 +325,10 @@ export class Explorer {
     private menuOf(n: Node): MenuItem[] {
         if (n.folder) {
             const forms = n.path.split("/")[0] === "forms";
+            const src = n.path === "src" || n.path.startsWith("src/");
             return [
-                { label: forms ? "新しいフォーム…" : "新しいファイル…", icon: "new-file", run: () => this.newFile(n.path) },
+                ...(src ? [{ label: "新しい標準モジュール…", icon: "new-module", run: () => this.newModule(n.path) }] : []),
+                { label: forms ? "新しいフォーム…" : "新しいファイル…", icon: forms ? "new-form" : "new-file", run: () => this.newFile(n.path) },
                 { label: this.collapsed.has(n.path) ? "展開" : "折りたたむ", icon: this.collapsed.has(n.path) ? "expand-all" : "collapse-all", run: () => this.toggle(n.path) },
                 { label: "パスのコピー", icon: "copy", run: () => void navigator.clipboard?.writeText(n.path) },
             ];
@@ -338,7 +367,7 @@ export class Explorer {
         input.className = "tree-input";
         input.value = name;
         input.spellcheck = false;
-        input.setAttribute("aria-label", editing.kind === "rename" ? `${editing.path} の新しい名前` : `${folder || "ルート"} に追加するファイルの名前`);
+        input.setAttribute("aria-label", editing.kind === "rename" ? `${editing.path} の新しい名前` : editing.module ? `${folder} に追加する標準モジュールの名前` : `${folder || "ルート"} に追加するファイルの名前`);
         input.placeholder = folder.split("/")[0] === "forms" ? "フォームの名前" : folder.split("/")[0] === "test" ? "〜.test.ras" : "〜.ras";
         let done = false;
         const finish = (commit: boolean) => {
@@ -349,7 +378,7 @@ export class Explorer {
                 // The tree the hook draws again is without the input.
                 done = true;
                 this.editing = null;
-                const ok = editing.kind === "rename" ? this.hooks.rename(editing.path, to) : this.hooks.create(to);
+                const ok = editing.kind === "rename" ? this.hooks.rename(editing.path, to) : this.hooks.create(to, editing.module);
                 if (!ok) {
                     done = false;
                     this.editing = editing;

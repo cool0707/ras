@@ -14,6 +14,7 @@ import type { ClipboardSnapshot, DesignerDocument, DesignerError, HostMessage, S
 import type { ParsedSpec } from "../../editors/vscode/src/userForm/spec";
 import { flattenControls, parseSpec, previewDocument, problems, propertyGrid } from "../../editors/vscode/src/userForm/spec";
 import { subtreeIds } from "../../editors/vscode/src/userForm/toolbox";
+import { versioned } from "./versioned";
 
 /** What the Designer needs from the page. */
 export interface DesignerHooks {
@@ -59,6 +60,7 @@ export class FormDesigner {
             if (e.source !== this.frame.contentWindow) return;
             const m = e.data && (e.data as { rasFrame?: unknown }).rasFrame;
             if (isWebviewMessage(m)) void this.receive(m);
+            else this.unknown(m);
         });
     }
 
@@ -76,7 +78,7 @@ export class FormDesigner {
         this.path = path;
         this.version++;
         if (!this.frame.src) {
-            this.frame.src = "designer.html";
+            this.frame.src = versioned("designer.html");
         } else if (this.ready) {
             // A Designer that showed another form starts over (its selection and history are that form's).
             this.ready = false;
@@ -104,6 +106,21 @@ export class FormDesigner {
             this.history.set(to, h);
         }
         if (this.path === from) this.path = to;
+    }
+
+    /**
+     * An edit this page does not know (a Designer of another build, e.g. one kept in the
+     * browser's cache): it is answered, so that the Designer does not wait for it.
+     */
+    private unknown(m: unknown): void {
+        const request = m as { type?: unknown; requestId?: unknown } | null;
+        if (!request || typeof request !== "object" || typeof request.requestId !== "number") return;
+        if (request.type !== "edit" && request.type !== "clipboard" && request.type !== "history") return;
+        this.send({
+            type: "editResult",
+            requestId: request.requestId,
+            error: { code: "editFailed", message: "この操作を処理できませんでした。ページを再読み込みしてください。" },
+        });
     }
 
     private send(message: HostMessage): void {

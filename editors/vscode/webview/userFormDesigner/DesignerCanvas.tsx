@@ -41,6 +41,7 @@ import {
   resizeHandles,
   dropTarget,
   placeGeometry,
+  placementRect,
   worldGeometry,
   orderedChildren,
   selectionPath,
@@ -434,7 +435,12 @@ export function DesignerCanvas({
   onOpenEvent?: (targetId?: string, choose?: boolean) => void;
   onShortcut?: (action: "copy" | "cut" | "paste" | "duplicate" | "delete") => boolean;
   placing?: boolean;
-  onPlace?: (left: number, top: number, parentId?: string) => void;
+  onPlace?: (
+    left: number,
+    top: number,
+    parentId?: string,
+    size?: { width: number; height: number },
+  ) => void;
   onCancelPlacement?: () => void;
   onDelete?: () => void;
   hierarchy?: string;
@@ -467,6 +473,17 @@ export function DesignerCanvas({
   const [marqueeBox, setMarqueeBox] = useState<SelectionRect>();
   const [destination, setDestination] = useState<{ target?: DropTarget; valid: boolean }>();
   const [notice, setNotice] = useState<string>();
+  // A control being drawn with the Toolbox: a click makes it with the default size, a drag
+  // with the dragged rectangle (as in the VBA editor). Points, in the container's coordinates.
+  const placement = useRef<{
+    pointerId: number;
+    target: DropTarget;
+    x: number;
+    y: number;
+    start: { left: number; top: number };
+    rect?: Geometry;
+  }>();
+  const [placementBox, setPlacementBox] = useState<Geometry>();
   const gesture = useRef<{
     control: DesignerControl;
     start: Geometry;
@@ -502,6 +519,8 @@ export function DesignerCanvas({
   }>();
   const canvas = useRef<HTMLDivElement>(null);
   const cancel = () => {
+    placement.current = undefined;
+    setPlacementBox(undefined);
     gesture.current = undefined;
     formResizeGesture.current = undefined;
     marquee.current = undefined;
@@ -515,7 +534,8 @@ export function DesignerCanvas({
     if (
       gesture.current?.pointerId === event.pointerId ||
       formResizeGesture.current?.pointerId === event.pointerId ||
-      marquee.current?.pointerId === event.pointerId
+      marquee.current?.pointerId === event.pointerId ||
+      placement.current?.pointerId === event.pointerId
     )
       cancel();
   };
@@ -832,12 +852,34 @@ export function DesignerCanvas({
     current.end = end;
     setPreview({ id: current.control.id, geometry: end });
   };
+  /** Follows the pointer while a control is drawn; a move of a few pixels is still a click. */
+  const updatePlacement = (clientX: number, clientY: number) => {
+    const current = placement.current;
+    const form = canvas.current?.querySelector<HTMLElement>(".form");
+    if (!current || !form) return;
+    const moved = Math.max(Math.abs(clientX - current.x), Math.abs(clientY - current.y));
+    if (!current.rect && moved < 4) return;
+    const rect = form.getBoundingClientRect();
+    const end = {
+      left: pixelsToPoints(clientX - rect.left, zoom) - current.target.origin.left,
+      top: pixelsToPoints(clientY - rect.top, zoom) - current.target.origin.top,
+    };
+    current.rect = placementRect(current.start, end, current.target.bounds, snapping);
+    setPlacementBox(
+      current.rect && {
+        ...current.rect,
+        left: current.rect.left + current.target.origin.left,
+        top: current.rect.top + current.target.origin.top,
+      },
+    );
+  };
   const pointerDown = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
     if (
       event.button !== 0 ||
       gesture.current?.pointerId !== undefined ||
       formResizeGesture.current?.pointerId !== undefined ||
-      marquee.current?.pointerId !== undefined
+      marquee.current?.pointerId !== undefined ||
+      placement.current !== undefined
     )
       return;
     if (gesture.current?.keys) finish();
@@ -860,11 +902,20 @@ export function DesignerCanvas({
           setNotice(invalidDrop);
           return;
         }
-        onPlace?.(
-          point.left - target.origin.left,
-          point.top - target.origin.top,
-          target.parentId || undefined,
-        );
+        // The control is made when the button is released: at the size dragged, or the
+        // default size for a click.
+        placement.current = {
+          pointerId: event.pointerId,
+          target,
+          x: event.clientX,
+          y: event.clientY,
+          start: { left: point.left - target.origin.left, top: point.top - target.origin.top },
+        };
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        } catch {
+          /* no active pointer */
+        }
       }
       return;
     }
@@ -1322,6 +1373,11 @@ export function DesignerCanvas({
         onPointerMove={(event) => {
           const current = gesture.current;
           const formResize = formResizeGesture.current;
+          const drawing = placement.current;
+          if (drawing?.pointerId === event.pointerId) {
+            updatePlacement(event.clientX, event.clientY);
+            return;
+          }
           if (placing && parentEditable && !busy) {
             const form = canvas.current?.querySelector<HTMLElement>(".form");
             if (form) {
@@ -1367,6 +1423,23 @@ export function DesignerCanvas({
             );
         }}
         onPointerUp={(event) => {
+          const drawing = placement.current;
+          if (drawing?.pointerId === event.pointerId) {
+            updatePlacement(event.clientX, event.clientY);
+            placement.current = undefined;
+            setPlacementBox(undefined);
+            if (event.currentTarget.hasPointerCapture?.(event.pointerId))
+              event.currentTarget.releasePointerCapture(event.pointerId);
+            if (!placing || busy) return;
+            const parentId = drawing.target.parentId || undefined;
+            if (drawing.rect)
+              onPlace?.(drawing.rect.left, drawing.rect.top, parentId, {
+                width: drawing.rect.width,
+                height: drawing.rect.height,
+              });
+            else onPlace?.(drawing.start.left, drawing.start.top, parentId);
+            return;
+          }
           const formResize = formResizeGesture.current;
           if (formResize?.pointerId === event.pointerId) {
             updateFormResize(
@@ -1489,6 +1562,18 @@ export function DesignerCanvas({
                     />
                   );
                 })()}
+              {placementBox && (
+                <div
+                  class="placement-box"
+                  aria-hidden="true"
+                  style={{
+                    left: px(placementBox.left),
+                    top: px(placementBox.top),
+                    width: px(placementBox.width),
+                    height: px(placementBox.height),
+                  }}
+                />
+              )}
               {destination?.target && (
                 <div
                   class={`drop-target ${destination.valid ? "valid" : "invalid"}`}

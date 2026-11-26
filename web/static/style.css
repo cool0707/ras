@@ -859,3 +859,16 @@ body.splitting iframe {
         width: 100%;
     }
 }
+/* The playground's own icons (src/icons.ts): SVGs drawn like the codicons around them. */
+.ras-icon {
+    display: inline-flex;
+    width: 16px;
+    height: 16px;
+    flex: none;
+}
+.ras-icon svg {
+    display: block;
+}
+.menu-item .ras-icon {
+    color: var(--muted);
+}

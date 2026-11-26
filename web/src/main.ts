@@ -25,6 +25,9 @@ import { rasLanguage } from "./formula";
 import type { Dialog, RunJob, RunResult } from "./runtime/run";
 import samples from "virtual:samples";
 import type { FromWorker, ToWorker } from "./worker";
+import { versioned } from "./versioned";
+import { rasIcons } from "./icons";
+import { moduleFileNameError, newModuleSource, vbaModuleName } from "../../editors/vscode/src/moduleNames";
 
 interface ProjectFile {
     path: string;
@@ -516,8 +519,39 @@ function templateOf(path: string): string {
             : "export function example() {\n}\n";
 }
 
-/** A file named in the explorer: a .ras file, or a form (its name typed in forms/). */
-function createFile(typed: string): boolean {
+/**
+ * Why `path` (src/…/<name>.ras) cannot be a new standard module: its name, or a module or
+ * form of the project with the same VBA name. Undefined when it can.
+ */
+function moduleNameError(path: string): string | undefined {
+    const stem = path.slice(path.lastIndexOf("/") + 1).replace(/\.ras$/i, "");
+    const error = moduleFileNameError(stem);
+    if (error) return error;
+    if (files.some((f) => f.path.toLowerCase() === path.toLowerCase())) return `${path} はもうあります`;
+    const vbaName = vbaModuleName(stem);
+    const taken = files.some((f) => {
+        const m = /^src\/(?:.*\/)?([^/]+)\.ras$/i.exec(f.path) ?? /^forms\/([^/]+)\.form\.json$/i.exec(f.path);
+        if (!m || f.path.endsWith(".d.ras")) return false;
+        return (f.path.startsWith("forms/") ? m[1] : vbaModuleName(m[1])).toLowerCase() === vbaName.toLowerCase();
+    });
+    return taken ? `VBA のモジュール名 ${vbaName} は、ほかのモジュールかフォームが使っています` : undefined;
+}
+
+/** A file named in the explorer: a .ras file, a standard module (`module`), or a form (its name typed in forms/). */
+function createFile(typed: string, module = false): boolean {
+    if (module) {
+        const path = /\.ras$/i.test(typed) ? typed : `${typed}.ras`;
+        const error = moduleNameError(path);
+        if (error) {
+            toast(error);
+            return false;
+        }
+        const stem = path.slice(path.lastIndexOf("/") + 1, -".ras".length);
+        files.push({ path, text: newModuleSource(vbaModuleName(stem)) });
+        openFile(path);
+        scheduleCompile(0);
+        return true;
+    }
     if (/^forms\//i.test(typed)) return addForm(typed.slice(6).replace(/(\.form\.json|\.json|\.ras)$/i, ""));
     // The extension may be left out (util → util.ras).
     const path = validPath(/\.[^/]*$/.test(typed) ? typed : `${typed}.ras`);
@@ -847,7 +881,7 @@ async function run(kind: "run" | "test") {
         if (kind === "test") out.append(tests);
         const job: RunJob = { kind, js, files: projectFiles, target };
         const result = await new Promise<{ result: RunResult; ms: number } | null>((resolve) => {
-            const worker = new Worker("worker.js", { type: "module" });
+            const worker = new Worker(versioned("worker.js"), { type: "module" });
             running = worker;
             renderEntries();
             const shared = typeof SharedArrayBuffer !== "undefined" && crossOriginIsolated ? new SharedArrayBuffer(8 + 65536) : null;
@@ -1590,7 +1624,7 @@ async function main() {
     void isolate();
     setUpSplitter();
     $("editor").innerHTML = '<div class="loading">コンパイラーを読み込んでいます…</div>';
-    const response = fetch("ras_wasm_bg.wasm");
+    const response = fetch(versioned("ras_wasm_bg.wasm"));
     wasmModule = await (WebAssembly.compileStreaming ? WebAssembly.compileStreaming(response) : response.then((r) => r.arrayBuffer()).then((b) => WebAssembly.compile(b)));
     await init({ module_or_path: wasmModule });
     $("editor").innerHTML = "";
@@ -1632,6 +1666,12 @@ async function main() {
         errors: errorCounts,
         open: (path) => openFile(path),
         create: createFile,
+        moduleName: (folder) => {
+            for (let i = 1; ; i++) {
+                const stem = `module${i}`;
+                if (moduleNameError(`${folder}/${stem}.ras`) === undefined) return stem;
+            }
+        },
         rename: (from, to) => {
             const f = files.find((x) => x.path === from);
             return f ? renameFile(f, to) : false;
@@ -1648,6 +1688,8 @@ async function main() {
                   : {},
         message: toast,
     });
+    for (const i of document.querySelectorAll<HTMLElement>(".ras-icon[data-icon]")) i.innerHTML = rasIcons[i.dataset.icon!]?.(`ras-icon-${i.dataset.icon}`) ?? "";
+    $("explorer-new-module").onclick = () => explorer.newModule();
     $("explorer-new-file").onclick = () => explorer.newFile();
     $("explorer-new-form").onclick = () => explorer.newFile("forms");
     $("explorer-collapse").onclick = () => explorer.collapseAll();
