@@ -25,6 +25,7 @@ import {
 } from "../../src/userForm/productivity";
 import type { SelectionRect } from "../../src/userForm/productivity";
 import { subtreeIds } from "../../src/userForm/toolbox";
+import { progressBarLayout } from "../../src/userForm/progressBar";
 import {
   canEditGeometry,
   isControlVisible,
@@ -286,6 +287,67 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
       return null;
     case "page":
       return null;
+    case "progressbar": {
+      // As written into the workbook: caption and percentage over a bar (ras-form progress.rs).
+      const layout = progressBarLayout(control);
+      const colors = control as unknown as Record<string, unknown>;
+      const box = ([left, top, width, height]: [number, number, number, number]) => ({
+        left: px(left),
+        top: px(top),
+        width: px(width),
+        height: px(height),
+      });
+      return (
+        <>
+          <span
+            class="progress-track"
+            style={{ ...box(layout.track), backgroundColor: colorStyle(colors.trackColor) }}
+          />
+          {layout.bar[2] > 0 && (
+            <span
+              class="progress-bar"
+              style={{ ...box(layout.bar), backgroundColor: colorStyle(colors.barColor) }}
+            />
+          )}
+          <span class="progress-caption" style={box(layout.caption)}>
+            {control.caption ?? ""}
+          </span>
+          {layout.showValue && (
+            <span
+              class="progress-value"
+              style={{ ...box(layout.value), color: colorStyle(colors.valueColor) }}
+            >
+              {layout.text}
+            </span>
+          )}
+        </>
+      );
+    }
+    case "filepicker": {
+      // As written into the workbook: a text box with a button at its right (ras-form picker.rs).
+      const raw = control as unknown as Record<string, unknown>;
+      const buttonWidth = Math.max(
+        Math.min(typeof raw.buttonWidth === "number" ? raw.buttonWidth : 24, control.width),
+        0.75,
+      );
+      const caption = typeof raw.buttonCaption === "string" ? raw.buttonCaption : "...";
+      return (
+        <>
+          <span
+            class="picker-text"
+            style={{ width: px(Math.max(control.width - buttonWidth, 0.75)), height: px(control.height) }}
+          >
+            {control.text ?? ""}
+          </span>
+          <span
+            class="picker-button"
+            style={{ left: px(control.width - buttonWidth), width: px(buttonWidth), height: px(control.height) }}
+          >
+            {caption}
+          </span>
+        </>
+      );
+    }
     case "tabstrip":
       return (
         <div class="tabs">

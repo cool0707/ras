@@ -255,6 +255,59 @@ header {
 .control.label {
   overflow: hidden;
 }
+/* RAS's progress bar: four labels on a transparent box (ras-form progress.rs). */
+.control.progressbar {
+  overflow: hidden;
+  background: transparent;
+}
+.control.progressbar > span {
+  position: absolute;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.progress-track {
+  background-color: #e5e5e5;
+}
+.progress-bar {
+  /* The accent color of Windows, which the bar takes when the form loads; Highlight elsewhere. */
+  background-color: AccentColor;
+}
+@supports not (background-color: AccentColor) {
+  .progress-bar {
+    background-color: #0078d7;
+  }
+}
+/* RAS's file picker: a sunken text box and a button side by side (ras-form picker.rs). */
+.control.filepicker {
+  background: transparent;
+}
+.control.filepicker > span {
+  position: absolute;
+  top: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.picker-text {
+  left: 0;
+  padding: 1px 3px;
+  background: var(--ms-window, #fff);
+  border: 1px solid #7a7a7a;
+  border-right-color: #c8c8c8;
+  border-bottom-color: #c8c8c8;
+}
+.picker-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ms-face);
+  border: 1px solid #adadad;
+  color: var(--ms-text);
+}
+.progress-value {
+  text-align: right;
+  color: #6d6d6d;
+}
 /* SpecialEffect fmSpecialEffectSunken: the edit fields. */
 .textbox,
 .combobox,

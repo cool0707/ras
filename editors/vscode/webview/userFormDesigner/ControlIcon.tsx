@@ -98,6 +98,21 @@ const glyphs: Record<ToolboxType | "Pointer" | "Page", ComponentChildren> = {
       <path d="M6.5 6.5h2.5a1 1 0 0 1 1 1v4M10 6.5h2.5a1 1 0 0 1 1 1v4" />
     </>
   ),
+  ProgressBar: (
+    <>
+      <path d="M2 5.5h5M11 5.5h3" />
+      <rect x="1.5" y="9" width="13" height="3" rx="1.5" />
+      <rect class="fill" x="1.5" y="9" width="8" height="3" rx="1.5" />
+    </>
+  ),
+  FilePicker: (
+    <>
+      <rect x="1" y="4.5" width="14" height="7" rx="1" />
+      <path d="M10.5 4.5v7" />
+      <path class="fill" d="M12 8h.01M13.6 8h.01" stroke-width="1.4" stroke-linecap="round" />
+      <path d="M3 8h5" />
+    </>
+  ),
   Page: (
     <>
       <path d="M3.5 1.5h6l3 3v10h-9z" />

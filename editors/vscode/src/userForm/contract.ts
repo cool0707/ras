@@ -342,6 +342,51 @@ function buildControls(): Record<string, ControlContract> {
 		// The icon or cursor of MousePointer Custom (99), where there is a MousePointer.
 		if (contract.properties.mousePointer) contract.properties.mouseIcon = mouseIcon;
 	}
+	// RAS's progress bar: written as four labels (ras-form progress.rs), operated through the
+	// bundled class `ProgressBar`. Its properties are its own; it takes no focus.
+	controls.progressbar = {
+		type: "ProgressBar",
+		progId: "RAS.ProgressBar",
+		canContainChildren: false,
+		excludedCommon: ["tabIndex"],
+		properties: {
+			caption: p("string", false, "supported", "Text at the top left.", true),
+			value: p("number", false, "supported", "Current value, between min and max.", true),
+			min: p("number", false, "supported", "Least value (omitted: 0).", true),
+			max: p("number", false, "supported", "Greatest value (omitted: 100).", true),
+			showValue: flag("The percentage shows at the top right (omitted: true)."),
+			barHeight: { ...p("number", false, "supported", "Height of the bar in points (omitted: 4.5).", true), minimum: 0.75, maximum: 1000 },
+			barColor: { ...color, description: "Color of the bar (omitted: the accent color of Windows)." },
+			trackColor: { ...color, description: "Color under the bar (omitted: #E5E5E5)." },
+			valueColor: { ...color, description: "Color of the percentage (omitted: grayText)." },
+			foreColor: { ...color, description: "Color of the caption." },
+			font,
+		},
+	};
+	// RAS's file / folder picker: written as a text box and a button (ras-form picker.rs), operated
+	// through the bundled class `FilePicker`. The dialog's properties are those of Application.FileDialog.
+	controls.filepicker = {
+		type: "FilePicker",
+		progId: "RAS.FilePicker",
+		canContainChildren: false,
+		properties: {
+			text: p("string", false, "supported", "Path in the box (several are separated with ;).", true),
+			dialogType: { ...choice("FileDialog type (omitted: FilePicker).", [1, 2, 3, 4]), valueLabels: ["Open", "SaveAs", "FilePicker", "FolderPicker"] },
+			title: p("string", false, "supported", "Title of the dialog.", true),
+			buttonName: p("string", false, "supported", "Text of the dialog's OK button.", true),
+			allowMultiSelect: flag("Several files can be chosen (Open and FilePicker)."),
+			initialFileName: p("string", false, "supported", "Where the dialog opens when the box is empty.", true),
+			initialView: integer("InitialView of the dialog (msoFileDialogView; 0: the dialog's own).", 0, 9),
+			filters: p("objectArray", false, "supported", "File types: [{ description, extensions }] (Open and FilePicker).", true),
+			filterIndex: integer("File type chosen first (1 is the first of filters).", 1, 1000),
+			buttonCaption: p("string", false, "supported", "Caption of the button (omitted: ...).", true),
+			buttonWidth: { ...p("number", false, "supported", "Width of the button in points (omitted: 24).", true), minimum: 0.75, maximum: 1000 },
+			locked: flag("The box cannot be edited (the button still chooses)."),
+			foreColor: color,
+			backColor: color,
+			font,
+		},
+	};
 	return controls;
 }
 
@@ -382,7 +427,7 @@ export function lookupProperty(properties: Record<string, PropertyContract>, nam
 	return found ? properties[found] : undefined;
 }
 
-const editorPropertyNames = ["font", "foreColor", "backColor", "borderColor", "picture", "mouseIcon", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode"];
+const editorPropertyNames = ["font", "foreColor", "backColor", "borderColor", "picture", "mouseIcon", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode", "barColor", "trackColor", "valueColor"];
 const scalarTypes: ValueType[] = ["string", "number", "integer", "boolean", "any"];
 export const isEditorProperty = (name: string) => editorPropertyNames.includes(name);
 const isScalar = (contract: PropertyContract) => scalarTypes.includes(contract.valueType);

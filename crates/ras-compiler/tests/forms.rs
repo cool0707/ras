@@ -1355,3 +1355,187 @@ fn spec_example_of_validation_compiles() {
         assert!(out.files.iter().any(|f| f.name == module), "{module}");
     }
 }
+
+/// A `ProgressBar` of a form (spec §14.11.13) is an object of the bundled class, a public member
+/// of the form attached to its labels in `UserForm_Initialize`, and operated like a control.
+#[test]
+fn progress_bars_are_objects_of_the_bundled_class() {
+    let mut config = Config::default();
+    config.forms = vec![FormDecl {
+        name: "frmUpload".into(),
+        controls: vec![
+            control("pbUpload", "ProgressBar"),
+            control("btnStart", "CommandButton"),
+        ],
+    }];
+    let form = r#"
+@on("btnStart.Click")
+function start() {
+    this.pbUpload.caption = "Upload progress";
+    for (let i = 0; i <= 100; i++) {
+        this.pbUpload.value = i;
+    }
+    this.pbUpload.barColor = rgb(0, 0, 0);
+    this.pbUpload.showValue = this.pbUpload.value < 100;
+}
+"#;
+    let sources = vec![
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: "export function run() {\n    frmUpload.pbUpload.value = 10;\n    frmUpload.show();\n}\n".into(),
+        },
+        form_source(PathBuf::from("forms/frmUpload.ras"), "frmUpload", form.into()),
+    ];
+    let prog = analyze(sources, config);
+    let out = build(
+        &prog,
+        &BuildOptions {
+            erl: Some(false),
+            ..Default::default()
+        },
+    );
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .chain(out.diagnostics.iter())
+        .map(|d| {
+            format!(
+                "{}: {} ({:?})",
+                d.code,
+                d.message,
+                d.module.map(|m| &prog.modules[m].rel_path)
+            )
+        })
+        .collect();
+    assert!(errors.is_empty(), "{errors:#?}");
+    let code = file(&out.files, "frmUpload");
+    for want in [
+        "Public pbUpload As ProgressBar\n",
+        "Private Sub UserForm_Initialize()\n    On Error GoTo RAS_OnError\n    Set pbUpload = New ProgressBar\n    pbUpload.RAS_Attach Me, \"pbUpload\"\n",
+        "Me.pbUpload.value = i",
+    ] {
+        assert!(code.contains(want), "{want}\n---\n{code}");
+    }
+    let class = file(&out.files, "ProgressBar");
+    assert!(class.contains("Public Sub RAS_Attach("), "{class}");
+    assert!(class.contains("Public Property Let value("), "{class}");
+    assert!(out.files.iter().any(|f| f.name == "RAS_ProgressBar"));
+    let main = file(&out.files, "Main");
+    assert!(main.contains("frmUpload.pbUpload.value = 10"), "{main}");
+}
+
+/// A project without progress bars gets no class for them.
+#[test]
+fn no_progress_bar_no_class() {
+    let (_, files) = compile("", &[]);
+    assert!(!files
+        .iter()
+        .any(|f| f.name == "ProgressBar" || f.name == "RAS_ProgressBar"));
+}
+
+/// A form with a progress bar and no code-behind still gets the code that attaches the bar.
+#[test]
+fn a_progress_bar_needs_no_code_behind() {
+    let mut config = Config::default();
+    config.forms = vec![FormDecl {
+        name: "frmWait".into(),
+        controls: vec![control("pbWait", "ProgressBar")],
+    }];
+    let sources = vec![SourceInput {
+        path: PathBuf::from("src/main.ras"),
+        rel_path: "src/main.ras".into(),
+        key: "main".into(),
+        kind: ModuleKind::User,
+        text: "export function run() {\n    frmWait.pbWait.value = 30;\n    frmWait.show(vbModeless);\n}\n".into(),
+    }];
+    let prog = analyze(sources, config);
+    let out = build(&prog, &BuildOptions::default());
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .chain(out.diagnostics.iter())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "{errors:#?}");
+    let code = file(&out.files, "frmWait");
+    assert!(code.contains("pbWait.RAS_Attach Me, \"pbWait\""), "{code}");
+}
+
+/// A `FilePicker` of a form (spec §14.11.14): an object of the bundled class; the click of its
+/// button and the exit of its box reach the object, and `@on("<name>.<event>")` receives the
+/// events of its box.
+#[test]
+fn file_pickers_browse_with_their_button() {
+    let mut config = Config::default();
+    config.forms = vec![FormDecl {
+        name: "frmOpen".into(),
+        controls: vec![
+            control("fpInput", "FilePicker"),
+            control("btnOK", "CommandButton"),
+        ],
+    }];
+    let form = r#"
+@on("fpInput.Change")
+function changed() {
+    this.btnOK.enabled = this.fpInput.path != "";
+}
+
+@on("btnOK.Click")
+function ok() {
+    const files: string[] = this.fpInput.paths;
+    this.close(files.length);
+}
+
+export function pick(): string[] {
+    this.fpInput.dialogType = 4;
+    this.fpInput.addFilter("Excel", "*.xlsx");
+    return this.fpInput.browse();
+}
+"#;
+    let sources = vec![form_source(
+        PathBuf::from("forms/frmOpen.ras"),
+        "frmOpen",
+        form.into(),
+    )];
+    let prog = analyze(sources, config);
+    let out = build(
+        &prog,
+        &BuildOptions {
+            erl: Some(false),
+            ..Default::default()
+        },
+    );
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .chain(out.diagnostics.iter())
+        .map(|d| {
+            format!(
+                "{}: {} ({:?})",
+                d.code,
+                d.message,
+                d.module.map(|m| &prog.modules[m].rel_path)
+            )
+        })
+        .collect();
+    assert!(errors.is_empty(), "{errors:#?}");
+    let code = file(&out.files, "frmOpen");
+    for want in [
+        "Public fpInput As FilePicker\n",
+        "    Set fpInput = New FilePicker\n    fpInput.RAS_Attach Me, \"fpInput\"\n",
+        "Private Sub fpInput_Text_Change()\n",
+        "Private Sub fpInput_Button_Click()\n    On Error GoTo RAS_OnError\n    If Not fpInput Is Nothing Then fpInput.RAS_Click\n",
+        "Private Sub fpInput_Text_Exit(ByVal Cancel As MSForms.ReturnBoolean)\n    On Error GoTo RAS_OnError\n    If Not fpInput Is Nothing Then fpInput.RAS_Exit\n",
+    ] {
+        assert!(code.contains(want), "{want}\n---\n{code}");
+    }
+    let class = file(&out.files, "FilePicker");
+    assert!(
+        class.contains("Public Function browse() As String()"),
+        "{class}"
+    );
+    assert!(class.contains("Application.FileDialog("), "{class}");
+}

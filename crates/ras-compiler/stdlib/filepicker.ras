@@ -1,0 +1,298 @@
+// ファイル・フォルダーの選択欄（仕様 §14.11.14）。フォームのデザイン（`.form.json`）に
+// `"type": "FilePicker"` のコントロールを置くと、書き込み時にテキスト ボックス `<名前>_Text` と、その右に
+// くっつけたボタン `<名前>_Button` になり、フォームにはこのクラスのオブジェクトが `<名前>` という名前で
+// 置かれる。ボタンを押すと `Application.FileDialog` を表示し、選んだパスを欄に入れる。
+//
+//     const files = this.fpInput.browse();      // 選んだパスの配列（キャンセルは空の配列）
+//     const path = this.fpInput.path;           // 欄の（最初の）パス。貼り付けたものも読める
+//
+// 部品の配置は ras-form の `picker.rs`（書き込み）と js/forms.js の `pickerParts`（デバッグ実行）と同じにする。
+
+/** 複数のパスを欄に並べるときの区切り。 */
+const RAS_FP_SEPARATOR = "; ";
+
+/**
+ * ファイル・フォルダーの選択欄。フォームの `FilePicker` コントロール（`this.fpInput`）がこのクラスの
+ * オブジェクトで、ほかのコントロールと同じようにプロパティを読み書きして操作する。
+ *
+ * ダイアログの設定（`dialogType`・`title`・`filters` など）は `Application.FileDialog` と同じ意味で、
+ * デザインで指定した値から始まる。欄には直接入力・貼り付けもできる（エクスプローラーの「パスのコピー」で
+ * 付く `"` は読むときに外す）。
+ */
+export class FilePicker {
+    private box: MSForms.TextBox = null;
+    private button: MSForms.CommandButton = null;
+    private filterList: string[] = [];
+    private x: double = 0.0;
+    private y: double = 0.0;
+    private w: double = 0.0;
+    private h: double = 0.0;
+    private bw: double = 24.0;
+
+    /** ダイアログの種類（`msoFileDialogOpen` 1・`SaveAs` 2・`FilePicker` 3・`FolderPicker` 4）。既定は 3。 */
+    dialogType: int = 3;
+    /** ダイアログのタイトル（`""` は既定のタイトル）。 */
+    title: string = "";
+    /** ダイアログの決定ボタンの文字（`""` は既定）。 */
+    buttonName: string = "";
+    /** 複数のファイルを選べるか（`dialogType` 1・3 のとき）。 */
+    allowMultiSelect: boolean = false;
+    /** 欄が空のときにダイアログが最初に開く場所（ファイル名・フォルダー）。 */
+    initialFileName: string = "";
+    /** ダイアログの表示形式（`msoFileDialogView…`。0 は既定のまま）。 */
+    initialView: int = 0;
+    /** 最初に選ばれているファイルの種類（1 から）。 */
+    filterIndex: int = 1;
+
+    /**
+     * フォームの部品 `<name>_Text`・`<name>_Button` につなぐ。コンパイラがフォームの `Initialize` で呼ぶので、
+     * 自分で呼ぶ必要はない。
+     */
+    RAS_Attach(form: any, name: string): void {
+        const controls: any = form.controls;
+        this.box = controls.item(`${name}_Text`);
+        this.button = controls.item(`${name}_Button`);
+        for (const item of this.button.tag.split("|")) {
+            const eq = item.indexOf("=");
+            if (eq < 0) continue;
+            const key = item.substring(0, eq);
+            const v = item.substring(eq + 1);
+            if (key == "type") this.dialogType = val(v) as int;
+            else if (key == "multi") this.allowMultiSelect = val(v) != 0.0;
+            else if (key == "title") this.title = unescape(v);
+            else if (key == "buttonName") this.buttonName = unescape(v);
+            else if (key == "initial") this.initialFileName = unescape(v);
+            else if (key == "view") this.initialView = val(v) as int;
+            else if (key == "filterIndex") this.filterIndex = val(v) as int;
+            else if (key == "filters" && v != "") {
+                for (const pair of v.split(";")) {
+                    const parts = pair.split(",");
+                    if (parts.length == 2) this.addFilter(unescape(parts[0]), unescape(parts[1]));
+                }
+            }
+        }
+        this.x = this.box.left;
+        this.y = this.box.top;
+        this.h = this.box.height;
+        this.bw = this.button.width;
+        this.w = this.button.left + this.button.width - this.box.left;
+    }
+
+    /** ボタンが押されたとき。コンパイラが生成するイベント プロシージャから呼ばれる。 */
+    RAS_Click(): void {
+        this.browse();
+    }
+
+    /** 欄からフォーカスが離れたとき（貼り付けたパスの `"` を外す）。コンパイラが生成するイベント プロシージャから呼ばれる。 */
+    RAS_Exit(): void {
+        const shown = this.paths.join(RAS_FP_SEPARATOR);
+        if (shown != this.box.text) this.box.text = shown;
+    }
+
+    /**
+     * ダイアログを表示し、選んだパスを欄に入れて返す。キャンセルしたときは欄を変えず、空の配列を返す。
+     * 欄にパスがあれば、ダイアログはその場所から開く。
+     */
+    browse(): string[] {
+        const chosen: string[] = [];
+        const fd: Office.FileDialog = application.fileDialog(this.dialogType as Office.MsoFileDialogType);
+        if (this.title != "") fd.title = this.title;
+        if (this.buttonName != "") fd.buttonName = this.buttonName;
+        const opens = this.dialogType == 1 || this.dialogType == 3;
+        if (opens) {
+            fd.allowMultiSelect = this.allowMultiSelect;
+            if (this.filterList.length > 0) {
+                fd.filters.clear();
+                for (let i = 0; i + 1 < this.filterList.length; i += 2) {
+                    fd.filters.add(this.filterList[i], this.filterList[i + 1]);
+                }
+                if (this.filterIndex >= 1 && this.filterIndex <= this.filterList.length / 2) {
+                    fd.filterIndex = this.filterIndex;
+                }
+            }
+        }
+        let start = this.path;
+        if (start == "") start = this.initialFileName;
+        // フォルダーの中から開くには、末尾に \ が要る。
+        if (start != "" && this.dialogType == 4 && !start.endsWith("\\")) start = start + "\\";
+        if (start != "") fd.initialFileName = start;
+        if (this.initialView > 0) fd.initialView = this.initialView as Office.MsoFileDialogView;
+        if (fd.show() != -1) return chosen;
+        for (let i = 1; i <= fd.selectedItems.count; i++) {
+            chosen.push(fd.selectedItems.item(i));
+        }
+        this.box.text = chosen.join(RAS_FP_SEPARATOR);
+        return chosen;
+    }
+
+    /** ファイルの種類を足す（`addFilter("Excel ブック", "*.xlsx; *.xlsm")`）。`dialogType` 1・3 で使う。 */
+    addFilter(description: string, extensions: string): void {
+        this.filterList.push(description);
+        this.filterList.push(extensions);
+    }
+
+    /** ファイルの種類をすべて外す（ダイアログの既定に戻す）。 */
+    clearFilters(): void {
+        this.filterList = [];
+    }
+
+    /** 欄の文字列（パス。複数なら `; ` 区切り）。 */
+    get text(): string {
+        return this.box.text;
+    }
+    set text(v: string) {
+        this.box.text = v;
+    }
+
+    /** 欄のパスの配列（`;` か改行で区切り、前後の空白と `"` を外したもの。空欄なら空の配列）。 */
+    get paths(): string[] {
+        const out: string[] = [];
+        const text = this.box.text.replaceAll("\r\n", ";").replaceAll("\n", ";").replaceAll("\r", ";");
+        for (const part of text.split(";")) {
+            let p = part.trim();
+            if (p.length >= 2 && p.startsWith("\"") && p.endsWith("\"")) {
+                p = p.substring(1, p.length - 1).trim();
+            }
+            if (p != "") out.push(p);
+        }
+        return out;
+    }
+
+    /** 欄の最初のパス（無ければ `""`）。代入すると欄をそのパスにする。 */
+    get path(): string {
+        const all = this.paths;
+        if (all.length == 0) return "";
+        return all[0];
+    }
+    set path(v: string) {
+        this.box.text = v;
+    }
+
+    /** ボタンの文字（既定は `...`）。 */
+    get buttonCaption(): string {
+        return this.button.caption;
+    }
+    set buttonCaption(v: string) {
+        this.button.caption = v;
+    }
+
+    /** ボタンの幅（ポイント）。 */
+    get buttonWidth(): double {
+        return this.bw;
+    }
+    set buttonWidth(v: double) {
+        this.bw = v;
+        this.layout();
+    }
+
+    /** 表示するか。 */
+    get visible(): boolean {
+        return this.box.visible;
+    }
+    set visible(v: boolean) {
+        this.box.visible = v;
+        this.button.visible = v;
+    }
+
+    /** 操作できるか。 */
+    get enabled(): boolean {
+        return this.box.enabled;
+    }
+    set enabled(v: boolean) {
+        this.box.enabled = v;
+        this.button.enabled = v;
+    }
+
+    /** 欄を直接編集できないようにするか（ボタンでは選べる）。 */
+    get locked(): boolean {
+        return this.box.locked;
+    }
+    set locked(v: boolean) {
+        this.box.locked = v;
+    }
+
+    /** 左端の位置（ポイント）。 */
+    get left(): double {
+        return this.x;
+    }
+    set left(v: double) {
+        this.x = v;
+        this.layout();
+    }
+
+    /** 上端の位置（ポイント）。 */
+    get top(): double {
+        return this.y;
+    }
+    set top(v: double) {
+        this.y = v;
+        this.layout();
+    }
+
+    /** 幅（ポイント。ボタンを含む）。 */
+    get width(): double {
+        return this.w;
+    }
+    set width(v: double) {
+        this.w = v;
+        this.layout();
+    }
+
+    /** 高さ（ポイント）。 */
+    get height(): double {
+        return this.h;
+    }
+    set height(v: double) {
+        this.h = v;
+        this.layout();
+    }
+
+    /** 任意の文字列（欄の `Tag`）。 */
+    get tag(): string {
+        return this.box.tag;
+    }
+    set tag(v: string) {
+        this.box.tag = v;
+    }
+
+    /** マウスを重ねたときに表示するヒント。 */
+    get controlTipText(): string {
+        return this.box.controlTipText;
+    }
+    set controlTipText(v: string) {
+        this.box.controlTipText = v;
+        this.button.controlTipText = v;
+    }
+
+    /** 欄にフォーカスを移す。 */
+    setFocus(): void {
+        this.box.setFocus();
+    }
+
+    /** 欄とボタンを並べ直す。 */
+    private layout(): void {
+        if (this.box == null) return;
+        let bw = this.bw;
+        if (bw > this.w) bw = this.w;
+        if (bw < 0.75) bw = 0.75;
+        const height = Math.max(this.h, 0.75) as float;
+        this.box.left = this.x as float;
+        this.box.top = this.y as float;
+        this.box.width = Math.max(this.w - bw, 0.75) as float;
+        this.box.height = height;
+        this.button.left = (this.x + this.w - bw) as float;
+        this.button.top = this.y as float;
+        this.button.width = bw as float;
+        this.button.height = height;
+    }
+}
+
+/** `Tag` に書いた値を戻す（`%25`・`%7C`・`%3D`・`%3B`・`%2C` を `%`・`|`・`=`・`;`・`,` に）。 */
+function unescape(text: string): string {
+    return text
+        .replaceAll("%7C", "|")
+        .replaceAll("%3D", "=")
+        .replaceAll("%3B", ";")
+        .replaceAll("%2C", ",")
+        .replaceAll("%25", "%");
+}

@@ -1,0 +1,292 @@
+// プログレスバー（仕様 §14.11.13）。フォームのデザイン（`.form.json`）に `"type": "ProgressBar"` の
+// コントロールを置くと、書き込み時に 4 つのラベル（`<名前>_Track`・`<名前>_Bar`・`<名前>_Caption`・
+// `<名前>_Value`）になり、フォームにはこのクラスのオブジェクトが `<名前>` という名前で置かれる。
+//
+//     this.pbUpload.caption = "アップロード中";
+//     this.pbUpload.value = 56;
+//
+// ラベルの配置は ras-form の `progress.rs`（書き込み）と js/forms.js の `progressParts`（デバッグ実行）と
+// 同じにする。
+
+/** 文字とバーの間隔（ポイント）。 */
+const RAS_PB_GAP = 3.0;
+/** 割合を表示するラベルの幅（ポイント）。 */
+const RAS_PB_VALUE_WIDTH = 36.0;
+
+/**
+ * プログレスバー。フォームの `ProgressBar` コントロール（`this.pbUpload`）がこのクラスのオブジェクトで、
+ * ほかのコントロールと同じようにプロパティを読み書きして操作する。
+ *
+ * 上の行に `caption`（左）と割合（右。`showValue`）を、下にバーを表示する。バーの色（`barColor`）を
+ * デザインで指定しなければ、フォームを読み込んだときに Windows のアクセント カラーにする。
+ */
+export class ProgressBar {
+    private track: MSForms.Label = null;
+    private bar: MSForms.Label = null;
+    private captionLabel: MSForms.Label = null;
+    private valueLabel: MSForms.Label = null;
+    private low: double = 0.0;
+    private high: double = 100.0;
+    private current: double = 0.0;
+    private shows: boolean = true;
+    private shown: boolean = true;
+    private x: double = 0.0;
+    private y: double = 0.0;
+    private w: double = 0.0;
+    private h: double = 0.0;
+    private thickness: double = 4.5;
+
+    /**
+     * フォームのラベル `<name>_Track` などにつなぐ。コンパイラがフォームの `Initialize` で呼ぶので、
+     * 自分で呼ぶ必要はない。
+     */
+    RAS_Attach(form: any, name: string): void {
+        const controls: any = form.controls;
+        this.track = controls.item(`${name}_Track`);
+        this.bar = controls.item(`${name}_Bar`);
+        this.captionLabel = controls.item(`${name}_Caption`);
+        this.valueLabel = controls.item(`${name}_Value`);
+        let accent = false;
+        for (const item of this.track.tag.split("|")) {
+            const eq = item.indexOf("=");
+            if (eq < 0) continue;
+            const key = item.substring(0, eq);
+            const v = val(item.substring(eq + 1));
+            if (key == "min") this.low = v;
+            else if (key == "max") this.high = v;
+            else if (key == "value") this.current = v;
+            else if (key == "showValue") this.shows = v != 0.0;
+            else if (key == "accent") accent = v != 0.0;
+        }
+        this.x = this.track.left;
+        this.w = this.track.width;
+        this.thickness = this.track.height;
+        this.y = this.captionLabel.top;
+        this.h = this.track.top + this.track.height - this.y;
+        this.shown = this.track.visible;
+        if (accent) {
+            const color = accentColor();
+            if (color >= 0) this.bar.backColor = color;
+        }
+    }
+
+    /** 現在の値（`min` から `max` まで。範囲の外の値は端として表示する）。 */
+    get value(): double {
+        return this.current;
+    }
+    set value(v: double) {
+        this.current = v;
+        this.layout();
+    }
+
+    /** 最小値（既定は 0）。 */
+    get min(): double {
+        return this.low;
+    }
+    set min(v: double) {
+        this.low = v;
+        this.layout();
+    }
+
+    /** 最大値（既定は 100）。 */
+    get max(): double {
+        return this.high;
+    }
+    set max(v: double) {
+        this.high = v;
+        this.layout();
+    }
+
+    /** 進み具合（0 から 1 まで）。 */
+    get fraction(): double {
+        if (this.high <= this.low) return 0.0;
+        const f = (this.current - this.low) / (this.high - this.low);
+        if (f < 0.0) return 0.0;
+        if (f > 1.0) return 1.0;
+        return f;
+    }
+
+    /** 右端に表示する割合の文字列（`"56%"`）。 */
+    get text(): string {
+        return `${Math.floor(this.fraction * 100.0 + 0.5)}%`;
+    }
+
+    /** 左上に表示する文字列。 */
+    get caption(): string {
+        return this.captionLabel.caption;
+    }
+    set caption(v: string) {
+        this.captionLabel.caption = v;
+    }
+
+    /** 割合（`text`）を右端に表示するか。 */
+    get showValue(): boolean {
+        return this.shows;
+    }
+    set showValue(v: boolean) {
+        this.shows = v;
+        this.layout();
+    }
+
+    /** バーの色。 */
+    get barColor(): int {
+        return this.bar.backColor;
+    }
+    set barColor(v: int) {
+        this.bar.backColor = v;
+    }
+
+    /** バーの下地の色。 */
+    get trackColor(): int {
+        return this.track.backColor;
+    }
+    set trackColor(v: int) {
+        this.track.backColor = v;
+    }
+
+    /** `caption` の文字色。 */
+    get foreColor(): int {
+        return this.captionLabel.foreColor;
+    }
+    set foreColor(v: int) {
+        this.captionLabel.foreColor = v;
+    }
+
+    /** 割合の文字色。 */
+    get valueColor(): int {
+        return this.valueLabel.foreColor;
+    }
+    set valueColor(v: int) {
+        this.valueLabel.foreColor = v;
+    }
+
+    /** バーの太さ（ポイント）。 */
+    get barHeight(): double {
+        return this.thickness;
+    }
+    set barHeight(v: double) {
+        this.thickness = v;
+        this.layout();
+    }
+
+    /** 表示するか。 */
+    get visible(): boolean {
+        return this.shown;
+    }
+    set visible(v: boolean) {
+        this.shown = v;
+        this.layout();
+    }
+
+    /** 文字を淡色で表示しないか（`false` で淡色）。 */
+    get enabled(): boolean {
+        return this.captionLabel.enabled;
+    }
+    set enabled(v: boolean) {
+        this.track.enabled = v;
+        this.bar.enabled = v;
+        this.captionLabel.enabled = v;
+        this.valueLabel.enabled = v;
+    }
+
+    /** 左端の位置（ポイント）。 */
+    get left(): double {
+        return this.x;
+    }
+    set left(v: double) {
+        this.x = v;
+        this.layout();
+    }
+
+    /** 上端の位置（ポイント）。 */
+    get top(): double {
+        return this.y;
+    }
+    set top(v: double) {
+        this.y = v;
+        this.layout();
+    }
+
+    /** 幅（ポイント）。 */
+    get width(): double {
+        return this.w;
+    }
+    set width(v: double) {
+        this.w = v;
+        this.layout();
+    }
+
+    /** 高さ（ポイント。文字の行とバーを合わせた高さ）。 */
+    get height(): double {
+        return this.h;
+    }
+    set height(v: double) {
+        this.h = v;
+        this.layout();
+    }
+
+    /** 任意の文字列（`caption` のラベルの `Tag`）。 */
+    get tag(): string {
+        return this.captionLabel.tag;
+    }
+    set tag(v: string) {
+        this.captionLabel.tag = v;
+    }
+
+    /** マウスを重ねたときに表示するヒント。 */
+    get controlTipText(): string {
+        return this.captionLabel.controlTipText;
+    }
+    set controlTipText(v: string) {
+        this.track.controlTipText = v;
+        this.bar.controlTipText = v;
+        this.captionLabel.controlTipText = v;
+        this.valueLabel.controlTipText = v;
+    }
+
+    /** ラベルを並べ直す。 */
+    private layout(): void {
+        if (this.track == null) return;
+        let thick = this.thickness;
+        if (thick < 0.75) thick = 0.75;
+        if (this.h >= 0.75 && thick > this.h) thick = this.h;
+        const barTop = this.y + this.h - thick;
+        let textHeight = this.h - thick - RAS_PB_GAP;
+        if (textHeight < 0.0) textHeight = 0.0;
+        let valueWidth = 0.0;
+        if (this.shows) valueWidth = Math.min(RAS_PB_VALUE_WIDTH, this.w);
+        place(this.track, this.x, barTop, this.w, thick);
+        this.track.visible = this.shown;
+        const filled = Math.round(this.w * this.fraction / 0.75) * 0.75;
+        place(this.bar, this.x, barTop, filled, thick);
+        this.bar.visible = this.shown && filled > 0.0;
+        const captionWidth = Math.max(this.w - valueWidth, 0.0);
+        place(this.captionLabel, this.x, this.y, captionWidth, textHeight);
+        this.captionLabel.visible = this.shown && captionWidth > 0.0 && textHeight > 0.0;
+        place(this.valueLabel, this.x + this.w - valueWidth, this.y, valueWidth, textHeight);
+        this.valueLabel.caption = this.text;
+        this.valueLabel.visible = this.shown && this.shows && valueWidth > 0.0 && textHeight > 0.0;
+    }
+}
+
+/** ラベルを置く（幅と高さは 1 ピクセル以上）。 */
+function place(label: MSForms.Label, left: double, top: double, width: double, height: double): void {
+    label.left = left as float;
+    label.top = top as float;
+    label.width = Math.max(width, 0.75) as float;
+    label.height = Math.max(height, 0.75) as float;
+}
+
+/** Windows のアクセント カラー（VBA の色の値）。分からなければ -1。 */
+function accentColor(): int {
+    let color = -1;
+    try {
+        const shell: any = createObject("WScript.Shell");
+        const v: any = shell.regRead("HKCU\\Software\\Microsoft\\Windows\\DWM\\AccentColor");
+        // 0xAABBGGRR: 下位 24 ビットが VBA の色（&HBBGGRR）。
+        color = (v as int) & 0xFFFFFF;
+    } catch {
+        color = -1;
+    }
+    return color;
+}

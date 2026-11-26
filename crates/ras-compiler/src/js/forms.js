@@ -777,7 +777,11 @@ module.exports = function install(rt) {
             // Controls, with their containers (`parentId` is the id of the container in the spec).
             const byId = new Map();
             this.$all = [];
-            const specs = flatten(spec.controls || []);
+            const specs = flatten(spec.controls || []).flatMap((c) => {
+                const type = String(c.type || "").trim().toLowerCase();
+                if (!c.name) return [c];
+                return type === "progressbar" ? progressParts(c) : type === "filepicker" ? pickerParts(c) : [c];
+            });
             for (const c of specs) {
                 const kind = KINDS[String(c.type || "").trim().toLowerCase()];
                 if (!kind || !c.name) continue;
@@ -1209,6 +1213,63 @@ module.exports = function install(rt) {
             }
         }
         return out;
+    }
+
+    /**
+     * The labels a progress bar (`"type": "ProgressBar"`, spec §14.11.13) is written as; the same
+     * as `progress.rs` of ras-form, which writes them into the workbook.
+     */
+    function progressParts(c) {
+        const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+        const min = num(c.min, 0);
+        const max = num(c.max, 100);
+        const value = num(c.value, 0);
+        const showValue = c.showValue !== false;
+        const left = num(c.left, 0);
+        const top = num(c.top, 0);
+        const width = num(c.width, 200);
+        const height = num(c.height, 24);
+        const fraction = max <= min ? 0 : Math.min(1, Math.max(0, (value - min) / (max - min)));
+        const barHeight = Math.min(Math.max(num(c.barHeight, 4.5), 0.75), Math.max(height, 0.75));
+        const barTop = top + height - barHeight;
+        const textHeight = Math.max(height - barHeight - 3, 0);
+        const valueWidth = showValue ? Math.min(36, width) : 0;
+        const filled = Math.round((width * fraction) / 0.75) * 0.75;
+        const accent = !c.barColor;
+        const visible = c.visible !== false;
+        const base = { parentId: c.parentId, zIndex: c.zIndex, type: "Label", caption: "", controlTipText: c.controlTipText, enabled: c.enabled, borderStyle: 0 };
+        const part = (suffix, l, t, w, h, more) =>
+            Object.fromEntries(Object.entries({ ...base, id: `${c.id || c.name}${suffix}`, name: `${c.name}${suffix}`, left: l, top: t, width: Math.max(w, 0.75), height: Math.max(h, 0.75), visible, ...more }).filter(([, v]) => v !== undefined && v !== null));
+        const text = { font: c.font, backStyle: 0, wordWrap: false };
+        return [
+            part("_Track", left, barTop, width, barHeight, { backColor: c.trackColor || { kind: "rgb", value: "#E5E5E5" }, tag: `RAS.ProgressBar|min=${min}|max=${max}|value=${value}|showValue=${showValue ? 1 : 0}|accent=${accent ? 1 : 0}` }),
+            part("_Bar", left, barTop, filled, barHeight, { backColor: c.barColor || { kind: "system", value: "highlight" }, visible: visible && filled > 0 }),
+            part("_Caption", left, top, width - valueWidth, textHeight, { ...text, caption: c.caption ?? "", tag: c.tag, foreColor: c.foreColor, visible: visible && width - valueWidth > 0 && textHeight > 0 }),
+            part("_Value", left + width - valueWidth, top, valueWidth, textHeight, { ...text, caption: `${Math.floor(fraction * 100 + 0.5)}%`, foreColor: c.valueColor || { kind: "system", value: "grayText" }, textAlign: 3, visible: visible && showValue && valueWidth > 0 && textHeight > 0 }),
+        ];
+    }
+
+    /**
+     * The text box and the button a file picker (`"type": "FilePicker"`, spec §14.11.14) is
+     * written as; the same as `picker.rs` of ras-form.
+     */
+    function pickerParts(c) {
+        const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+        const str = (v) => (typeof v === "string" ? v : "");
+        const esc = (t) => t.replace(/%/g, "%25").replace(/\|/g, "%7C").replace(/=/g, "%3D").replace(/;/g, "%3B").replace(/,/g, "%2C");
+        const left = num(c.left, 0);
+        const top = num(c.top, 0);
+        const width = num(c.width, 200);
+        const height = Math.max(num(c.height, 18), 0.75);
+        const bw = Math.max(Math.min(num(c.buttonWidth, 24), width), 0.75);
+        const filters = Array.isArray(c.filters) ? c.filters.filter((f) => f && typeof f.description === "string" && typeof f.extensions === "string") : [];
+        const tag = `RAS.FilePicker|type=${num(c.dialogType, 3)}|multi=${c.allowMultiSelect === true ? 1 : 0}|title=${esc(str(c.title))}|buttonName=${esc(str(c.buttonName))}|initial=${esc(str(c.initialFileName))}|view=${num(c.initialView, 0)}|filterIndex=${num(c.filterIndex, 1)}|filters=${filters.map((f) => `${esc(f.description)},${esc(f.extensions)}`).join(";")}`;
+        const base = { parentId: c.parentId, zIndex: c.zIndex, controlTipText: c.controlTipText, enabled: c.enabled, visible: c.visible, font: c.font };
+        const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null));
+        return [
+            clean({ ...base, id: `${c.id || c.name}_Text`, name: `${c.name}_Text`, type: "TextBox", left, top, width: Math.max(width - bw, 0.75), height, text: c.text ?? (typeof c.value === "string" ? c.value : undefined), tag: c.tag, tabIndex: c.tabIndex, foreColor: c.foreColor, backColor: c.backColor, locked: c.locked }),
+            clean({ ...base, id: `${c.id || c.name}_Button`, name: `${c.name}_Button`, type: "CommandButton", left: left + width - bw, top, width: bw, height, caption: typeof c.buttonCaption === "string" ? c.buttonCaption : "...", tag, takeFocusOnClick: false }),
+        ];
     }
 
     /** The data URI of a picture action of a FormSpec (`{ path }`), or null. */

@@ -1368,7 +1368,7 @@ mod tests {
         // A new control of each type: no plain property differs from Excel's.
         for t in crate::contract::CONTROL_TYPES
             .iter()
-            .filter(|t| t.name != "Page")
+            .filter(|t| !matches!(t.name, "Page" | "ProgressBar" | "FilePicker"))
         {
             let text = format!(
                 r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{{"id":"c","name":"c","type":"{}"}}]}}"#,

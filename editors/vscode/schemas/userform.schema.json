@@ -411,7 +411,9 @@
                   "Frame",
                   "MultiPage",
                   "Page",
-                  "TabStrip"
+                  "TabStrip",
+                  "ProgressBar",
+                  "FilePicker"
                 ]
               },
               {
@@ -1012,16 +1014,12 @@
             "description": "Tab キーでフォーカスを移せる"
           },
           "min": {
-            "type": "integer",
-            "minimum": -2147483648,
-            "maximum": 2147483647,
-            "description": "SpinButton / ScrollBar の最小値"
+            "type": "number",
+            "description": "SpinButton / ScrollBar の最小値（整数）、ProgressBar の最小値（省略時 0）"
           },
           "max": {
-            "type": "integer",
-            "minimum": -2147483648,
-            "maximum": 2147483647,
-            "description": "SpinButton / ScrollBar の最大値（省略時は SpinButton 100、ScrollBar 32767）"
+            "type": "number",
+            "description": "SpinButton / ScrollBar の最大値（整数。省略時は SpinButton 100、ScrollBar 32767）、ProgressBar の最大値（省略時 100）"
           },
           "smallChange": {
             "type": "integer",
@@ -1052,6 +1050,148 @@
             "minimum": 0,
             "maximum": 2147483647,
             "description": "押し続けたときの変化の間隔（ミリ秒）"
+          },
+          "showValue": {
+            "type": "boolean",
+            "description": "ProgressBar: 割合（56%）を右上に表示する（省略時 true）"
+          },
+          "barHeight": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "ProgressBar: バーの太さ（ポイント。省略時 4.5）"
+          },
+          "barColor": {
+            "type": "object",
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "rgb",
+                  "system",
+                  "ole"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+              }
+            },
+            "description": "ProgressBar: バーの色（省略時は Windows のアクセント カラー）"
+          },
+          "trackColor": {
+            "type": "object",
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "rgb",
+                  "system",
+                  "ole"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+              }
+            },
+            "description": "ProgressBar: バーの下地の色（省略時 #E5E5E5）"
+          },
+          "valueColor": {
+            "type": "object",
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "rgb",
+                  "system",
+                  "ole"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+              }
+            },
+            "description": "ProgressBar: 割合の文字色（省略時 grayText）"
+          },
+          "dialogType": {
+            "type": "integer",
+            "enum": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "description": "FilePicker: ダイアログの種類（Application.FileDialog の msoFileDialogType。1: Open、2: SaveAs、3: FilePicker（省略時）、4: FolderPicker）"
+          },
+          "title": {
+            "type": "string",
+            "description": "FilePicker: ダイアログのタイトル"
+          },
+          "buttonName": {
+            "type": "string",
+            "description": "FilePicker: ダイアログの決定ボタンの文字"
+          },
+          "allowMultiSelect": {
+            "type": "boolean",
+            "description": "FilePicker: 複数のファイルを選べる（dialogType 1・3）"
+          },
+          "initialFileName": {
+            "type": "string",
+            "description": "FilePicker: 欄が空のときにダイアログが開く場所"
+          },
+          "initialView": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9,
+            "description": "FilePicker: ダイアログの表示形式（msoFileDialogView。0 は既定）"
+          },
+          "filters": {
+            "type": "array",
+            "description": "FilePicker: ファイルの種類（dialogType 1・3）",
+            "items": {
+              "type": "object",
+              "required": [
+                "description",
+                "extensions"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "description": {
+                  "type": "string"
+                },
+                "extensions": {
+                  "type": "string",
+                  "description": "\"*.xlsx; *.xlsm\" のように ; で区切る"
+                }
+              }
+            }
+          },
+          "filterIndex": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "FilePicker: 最初に選ばれているファイルの種類（1 から）"
+          },
+          "buttonCaption": {
+            "type": "string",
+            "description": "FilePicker: ボタンの文字（省略時 ...）"
+          },
+          "buttonWidth": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "FilePicker: ボタンの幅（ポイント。省略時 24）"
           },
           "tabOrientation": {
             "enum": [

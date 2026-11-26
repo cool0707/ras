@@ -370,6 +370,18 @@ pub const CONTROL_TYPES: &[ControlType] = &[
         prog_id: "Forms.TabStrip.1",
         container: false,
     },
+    // Composed of labels when written (`progress.rs`); not a control of MSForms.
+    ControlType {
+        name: "ProgressBar",
+        prog_id: "RAS.ProgressBar",
+        container: false,
+    },
+    // A text box and a button when written (`picker.rs`).
+    ControlType {
+        name: "FilePicker",
+        prog_id: "RAS.FilePicker",
+        container: false,
+    },
 ];
 
 /// The built-in type `name` (ignoring case and surrounding blanks).
@@ -421,6 +433,46 @@ pub fn type_properties(name: &str) -> Option<Props> {
             ("selectedIndex", p(T::Integer, false, Supported)),
             ("tabs", p(T::ObjectArray, false, Supported)),
         ],
+        // Composed of labels (`progress.rs`): its own properties only.
+        "ProgressBar" => {
+            return Some(vec![
+                ("caption", s()),
+                ("value", p(T::Number, false, Supported)),
+                ("min", p(T::Number, false, Supported)),
+                ("max", p(T::Number, false, Supported)),
+                ("showValue", p(T::Boolean, false, Supported)),
+                ("barHeight", p(T::Number, false, Supported)),
+                ("barColor", color()),
+                ("trackColor", color()),
+                ("valueColor", color()),
+                ("foreColor", color()),
+                ("font", font()),
+            ])
+        }
+        // Composed of a text box and a button (`picker.rs`): its own properties only.
+        "FilePicker" => {
+            return Some(vec![
+                ("text", s()),
+                ("value", s()),
+                (
+                    "dialogType",
+                    allowed(p(T::Integer, false, Supported), &["1", "2", "3", "4"]),
+                ),
+                ("title", s()),
+                ("buttonName", s()),
+                ("allowMultiSelect", p(T::Boolean, false, Supported)),
+                ("initialFileName", s()),
+                ("initialView", p(T::Integer, false, Supported)),
+                ("filters", p(T::ObjectArray, false, Supported)),
+                ("filterIndex", p(T::Integer, false, Supported)),
+                ("buttonCaption", s()),
+                ("buttonWidth", p(T::Number, false, Supported)),
+                ("locked", p(T::Boolean, false, Supported)),
+                ("foreColor", color()),
+                ("backColor", color()),
+                ("font", font()),
+            ])
+        }
         _ => vec![],
     };
     let n = t.name;
@@ -514,6 +566,10 @@ pub fn control_properties(name: &str) -> Props {
     };
     if control_type(name).map(|t| t.name) == Some("Page") {
         props.retain(|(k, _)| !matches!(*k, "left" | "top" | "width" | "height"));
+    }
+    // Labels take no focus.
+    if control_type(name).map(|t| t.name) == Some("ProgressBar") {
+        props.retain(|(k, _)| *k != "tabIndex");
     }
     for (k, v) in specific {
         props.retain(|(existing, _)| *existing != k);

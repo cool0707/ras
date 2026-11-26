@@ -1,4 +1,4 @@
-//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV022`).
+//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV025`).
 //!
 //! Port of the validation in xlflow's `internal/vba/userforms/spec`
 //! (`spec.go`, `appearance.go`; Copyright (c) 2026 harumiWeb, MIT License;
@@ -1194,7 +1194,7 @@ fn validate_selected_index(
 fn minimum_edit_height(control: &FormSpecControl) -> Option<f64> {
     if !matches!(
         control.control_type.to_lowercase().as_str(),
-        "textbox" | "combobox"
+        "textbox" | "combobox" | "filepicker"
     ) {
         return None;
     }
@@ -1517,5 +1517,157 @@ pub(crate) fn validate_strict(spec: &FormSpec) -> Vec<Issue> {
         ));
     }
     issues.extend(cycle_issues(&parent_by_id, &field_by_id));
+    issues.extend(progress_issues(spec));
+    issues.extend(picker_issues(spec));
+    issues
+}
+
+/// The file pickers (`picker.rs`): the dialog's type, filters that it takes, and names of the
+/// controls they are written as that no other control has.
+fn picker_issues(spec: &FormSpec) -> Vec<Issue> {
+    use crate::picker;
+    let mut issues = Vec::new();
+    let issue = |field: String, message: String| error("UFV025", message, &field);
+    for (i, control) in spec.controls.iter().enumerate() {
+        if !picker::is_file_picker(&control.control_type) {
+            continue;
+        }
+        let path = format!("controls[{i}]");
+        let settings = picker::Settings::of(control);
+        if !(1..=4).contains(&settings.dialog_type) {
+            issues.push(issue(
+                format!("{path}.dialogType"),
+                format!("{path}.dialogType は 1（Open）・2（SaveAs）・3（FilePicker）・4（FolderPicker）のどれかにしてください。"),
+            ));
+        }
+        let opens = matches!(settings.dialog_type, 1 | 3);
+        if let Some(value) = control.scalar("filters") {
+            match picker::filters(value) {
+                None => issues.push(issue(
+                    format!("{path}.filters"),
+                    format!("{path}.filters は {{ \"description\": 説明, \"extensions\": \"*.xlsx; *.xlsm\" }} の配列にしてください。"),
+                )),
+                Some(list) if !list.is_empty() && !opens => issues.push(issue(
+                    format!("{path}.filters"),
+                    format!("{path}.filters は dialogType 1（Open）と 3（FilePicker）でだけ使えます。"),
+                )),
+                Some(_) => {}
+            }
+        }
+        let count = settings.filters.len() as i64;
+        if control.scalar("filterIndex").is_some()
+            && !(1..=count.max(1)).contains(&settings.filter_index)
+        {
+            issues.push(issue(
+                format!("{path}.filterIndex"),
+                format!(
+                    "{path}.filterIndex は 1 から filters の数（{}）までにしてください。",
+                    count.max(1)
+                ),
+            ));
+        }
+        if settings.multi && !opens {
+            issues.push(issue(
+                format!("{path}.allowMultiSelect"),
+                format!("{path}.allowMultiSelect は dialogType 1（Open）と 3（FilePicker）でだけ使えます。"),
+            ));
+        }
+        if control
+            .scalar("buttonWidth")
+            .and_then(Value::as_f64)
+            .is_some_and(|w| w <= 0.0)
+        {
+            issues.push(issue(
+                format!("{path}.buttonWidth"),
+                format!("{path}.buttonWidth は 0 より大きくしてください。"),
+            ));
+        }
+        for suffix in picker::PARTS {
+            let part = format!("{}{suffix}", control.name);
+            if let Some((j, _)) = spec
+                .controls
+                .iter()
+                .enumerate()
+                .find(|(_, c)| c.name.eq_ignore_ascii_case(&part))
+            {
+                issues.push(issue(
+                    format!("controls[{j}].name"),
+                    format!("controls[{j}].name {part:?} は、ファイルの選択欄 {} を書き込むコントロールの名前と同じです。別の名前にしてください。", control.name),
+                ));
+            }
+        }
+    }
+    issues
+}
+
+/// The progress bars (`progress.rs`): a range with room, a value in it, colors, and names of
+/// the labels they are written as that no other control has.
+fn progress_issues(spec: &FormSpec) -> Vec<Issue> {
+    use crate::progress;
+    let mut issues = Vec::new();
+    let issue = |field: String, message: String| error("UFV024", message, &field);
+    for (i, control) in spec.controls.iter().enumerate() {
+        if !progress::is_progress_bar(&control.control_type) {
+            continue;
+        }
+        let path = format!("controls[{i}]");
+        let settings = progress::Settings::of(control);
+        if settings.max <= settings.min {
+            issues.push(issue(
+                format!("{path}.max"),
+                format!("{path}.max は min より大きくしてください。"),
+            ));
+        } else if settings.value < settings.min || settings.value > settings.max {
+            issues.push(issue(
+                format!("{path}.value"),
+                format!(
+                    "{path}.value は min と max の間（{}〜{}）にしてください。",
+                    settings.min, settings.max
+                ),
+            ));
+        }
+        if control
+            .scalar("barHeight")
+            .and_then(Value::as_f64)
+            .is_some_and(|h| h <= 0.0)
+        {
+            issues.push(issue(
+                format!("{path}.barHeight"),
+                format!("{path}.barHeight は 0 より大きくしてください。"),
+            ));
+        }
+        for name in ["barColor", "trackColor", "valueColor"] {
+            let Some(value) = control.scalar(name) else {
+                continue;
+            };
+            let bad = match serde_json::from_value::<FormSpecColor>(value.clone()) {
+                Ok(color) => color.ole().err(),
+                Err(_) => Some(
+                    "色は { \"kind\": \"rgb\", \"value\": \"#RRGGBB\" } の形で書いてください"
+                        .into(),
+                ),
+            };
+            if let Some(message) = bad {
+                issues.push(issue(
+                    format!("{path}.{name}"),
+                    format!("{path}.{name}: {message}。"),
+                ));
+            }
+        }
+        for suffix in progress::PARTS {
+            let part = format!("{}{suffix}", control.name);
+            if let Some((j, _)) = spec
+                .controls
+                .iter()
+                .enumerate()
+                .find(|(_, c)| c.name.eq_ignore_ascii_case(&part))
+            {
+                issues.push(issue(
+                    format!("controls[{j}].name"),
+                    format!("controls[{j}].name {part:?} は、プログレスバー {} を書き込むラベルの名前と同じです。別の名前にしてください。", control.name),
+                ));
+            }
+        }
+    }
     issues
 }

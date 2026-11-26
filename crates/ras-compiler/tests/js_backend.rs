@@ -1274,3 +1274,154 @@ two=[必須]true (kept)
         "{stderr}"
     );
 }
+
+const UPLOAD_MAIN: &str = "export function run() {\n    frmUpload.show();\n    console.log(frmUpload.pbUpload.value);\n}\n";
+
+/// A progress bar of a form (spec §14.11.13) in the debug run: its labels are drawn as the form
+/// is written into the workbook, and setting its properties moves them.
+#[test]
+fn progress_bars_move_their_labels() {
+    let spec = include_str!("js/forms/frmUpload.form.json");
+    let code = include_str!("js/forms/frmUpload.ras");
+    let mut cfg = Config::default();
+    cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
+    let sources = vec![
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: UPLOAD_MAIN.into(),
+        },
+        form_source(
+            PathBuf::from("forms/frmUpload.ras"),
+            "frmUpload",
+            code.to_string(),
+        ),
+    ];
+    let prog = analyze(sources, cfg);
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    let out = build_js(&prog, "../../");
+    assert!(!out.files.is_empty(), "no output: {:?}", out.diagnostics);
+    assert_eq!(out.entries, vec!["Main.run", "frmUpload.show"]);
+    if !has_node() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ras-js-{}-upload", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("src/main.ras", UPLOAD_MAIN);
+    write("forms/frmUpload.ras", code);
+    write("forms/frmUpload.form.json", spec);
+    for f in &out.files {
+        write(&format!("build/debug/{}", f.rel_path), &f.text);
+    }
+    let p = Project(root);
+    let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_progress.js")));
+    assert!(ok, "{stderr}");
+    // After the form is closed, `frmUpload.pbUpload` loads it again (as VBA does): 56 as designed.
+    let expected = "\
+Upload progress 56 56%
+show pbUpload_Track,pbUpload_Bar,pbUpload_Caption,pbUpload_Value,btnStart
+  pbUpload_Track \"\" visible=true back=15066597 at 12,31.5 240x4.5
+  pbUpload_Bar \"\" visible=true back=2147483661 at 12,31.5 134.25x4.5
+  pbUpload_Caption \"Upload progress\" visible=true back=2147483663 at 12,12 204x16.5
+  pbUpload_Value \"56%\" visible=true back=2147483663 at 216,12 36x16.5
+> {\"t\":\"click\",\"control\":\"btnStart\"}
+25% 0.25
+  pbUpload_Caption \"Uploading\" visible=true back=2147483663 at 12,12 120x16.5
+  pbUpload_Bar \"\" visible=true back=2147483661 at 12,31.5 120x4.5
+  pbUpload_Value \"100%\" visible=false back=2147483663 at 132,12 0.75x16.5
+  pbUpload_Track \"\" visible=true back=15066597 at 12,31.5 120x4.5
+Upload progress 56 56%
+56
+";
+    assert_eq!(stdout, expected, "{stderr}");
+}
+
+const OPEN_MAIN: &str = "export function run() {\n    console.log(new frmOpen().showModal());\n}\n";
+
+/// A file picker of a form (spec §14.11.14) in the debug run: a pasted path loses its quotes when
+/// the box is left, the button shows `Application.FileDialog` set up as designed (from the path
+/// in the box) and puts the chosen paths in the box, and `@on("fpInput.Change")` hears it.
+#[test]
+fn file_pickers_browse_in_the_debug_run() {
+    let spec = include_str!("js/forms/frmOpen.form.json");
+    let code = include_str!("js/forms/frmOpen.ras");
+    let mut cfg = Config::default();
+    cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
+    let sources = vec![
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: OPEN_MAIN.into(),
+        },
+        form_source(
+            PathBuf::from("forms/frmOpen.ras"),
+            "frmOpen",
+            code.to_string(),
+        ),
+    ];
+    let prog = analyze(sources, cfg);
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    let out = build_js(&prog, "../../");
+    assert!(!out.files.is_empty(), "no output: {:?}", out.diagnostics);
+    if !has_node() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ras-js-{}-open", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("src/main.ras", OPEN_MAIN);
+    write("forms/frmOpen.ras", code);
+    write("forms/frmOpen.form.json", spec);
+    for f in &out.files {
+        write(&format!("build/debug/{}", f.rel_path), &f.text);
+    }
+    let p = Project(root);
+    let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_picker.js")));
+    assert!(ok, "{stderr}");
+    // Pasted with quotes, then left: the quotes go (a second Change). The button opens the
+    // dialog where the box points.
+    let expected = "\
+show fpInput_Text:TextBox,fpInput_Button:CommandButton,btnOK:CommandButton
+  fpInput_Text \"\" at 12,12 216x18
+> {\"t\":\"focus\",\"control\":\"fpInput_Text\"}
+> {\"t\":\"input\",\"control\":\"fpInput_Text\",\"text\":\"\\\"C:\\\\My Docs\\\\a.xlsx\\\"\",\"seq\":1}
+change 1: \"C:\\My Docs\\a.xlsx\"
+> {\"t\":\"focus\",\"control\":\"btnOK\"}
+change 1: C:\\My Docs\\a.xlsx
+  fpInput_Text \"C:\\My Docs\\a.xlsx\" at 12,12 216x18
+> {\"t\":\"click\",\"control\":\"fpInput_Button\"}
+dialog 3 \"ブックを選択\" multi=true filters=Excel=*.xlsx; *.xlsm initial=C:\\My Docs\\a.xlsx
+change 2: C:\\x.xlsx; C:\\y.xlsm
+  fpInput_Button \"...\" at 228,12 24x18
+  fpInput_Text \"C:\\x.xlsx; C:\\y.xlsm\" at 12,12 216x18
+> {\"t\":\"click\",\"control\":\"btnOK\"}
+hide 
+C:\\x.xlsx | C:\\y.xlsm
+";
+    assert_eq!(stdout, expected, "{stderr}");
+}

@@ -1604,11 +1604,13 @@ fn cheat_sheet_examples_pass_the_check() {
         if let Some(name) = &form {
             let spec = serde_json::json!({
                 "schemaVersion": 1, "kind": "ras.userform", "basis": "designer",
-                "form": { "name": name, "caption": name, "width": 240, "height": 120 },
+                "form": { "name": name, "caption": name, "width": 240, "height": 140 },
                 "controls": [
                     { "id": "n", "name": "txtName", "type": "TextBox", "left": 12, "top": 12 },
                     { "id": "o", "name": "btnOK", "type": "CommandButton", "left": 12, "top": 48 },
-                    { "id": "c", "name": "btnCancel", "type": "CommandButton", "left": 96, "top": 48 }
+                    { "id": "c", "name": "btnCancel", "type": "CommandButton", "left": 96, "top": 48 },
+                    { "id": "p", "name": "pbWork", "type": "ProgressBar", "left": 12, "top": 80, "width": 216 },
+                    { "id": "f", "name": "fpBook", "type": "FilePicker", "left": 12, "top": 110, "width": 216 }
                 ]
             });
             files.push((format!("forms/{name}.form.json"), spec.to_string()));
@@ -2023,5 +2025,49 @@ fn book_edit_writes_the_cells_into_the_file() {
     let (code, _, err) = ras(&dir, &["book", "edit", "--set", "A1=x"]);
     assert!(code == 1 && err.contains("Excel で開かれている"), "{err}");
     assert_eq!(std::fs::read(&file).unwrap(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `application.fileDialog(…)` of the stand-in for Excel is answered as `getOpenFilename` is
+/// (spec §14.11.14): by a test's `mockGetOpenFilename`, with several paths or a cancel.
+#[test]
+fn the_stand_in_answers_file_dialogs_like_get_open_filename() {
+    if !has_node() {
+        return;
+    }
+    const SRC: &str = r#"export function pick(): string[] {
+    const fd = application.fileDialog(Office.MsoFileDialogType.msoFileDialogFilePicker);
+    fd.allowMultiSelect = true;
+    fd.filters.clear();
+    fd.filters.add("Excel", "*.xlsx");
+    const out: string[] = [];
+    if (fd.show() != -1) return out;
+    for (let i = 1; i <= fd.selectedItems.count; i++) {
+        out.push(fd.selectedItems.item(i));
+    }
+    return out;
+}
+"#;
+    const TEST: &str = r#"import { pick } from "../src/pick";
+
+describe("FileDialog", () => {
+    test("選んだファイル", () => {
+        const m = mockGetOpenFilename(() => ["C:\\a.xlsx", "C:\\b.xlsx"]);
+        expect(pick()).toEqual(["C:\\a.xlsx", "C:\\b.xlsx"]);
+        expect(m.calls.length).toBe(1);
+    });
+    test("キャンセル", () => {
+        mockGetOpenFilename(() => false);
+        expect(pick()).toHaveLength(0);
+    });
+});
+"#;
+    let dir = project(
+        "filedialog",
+        &mut sales(),
+        &[("src/pick.ras", SRC), ("test/pick.test.ras", TEST)],
+    );
+    let (code, out, err) = ras(&dir, &["test"]);
+    assert_eq!(code, 0, "{out}{err}");
     let _ = std::fs::remove_dir_all(&dir);
 }

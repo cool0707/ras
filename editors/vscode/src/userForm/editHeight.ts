@@ -25,7 +25,7 @@ const defaultFont = { name: "MS UI Gothic", size: 9 };
 /** The sunken edge (2px each side) and the field's inner margin (1px each side), in points. */
 const chrome = 4.5;
 
-const isEditField = (type: string) => ["textbox", "combobox"].includes(type.toLowerCase());
+const isEditField = (type: string) => ["textbox", "combobox", "filepicker"].includes(type.toLowerCase());
 
 /** Points rounded up to whole pixels at 96 DPI (0.75 pt), as Excel stores them. */
 const toPixels = (points: number) => Math.ceil(points / 0.75 - 1e-9) * 0.75;

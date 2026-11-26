@@ -1,0 +1,9 @@
+@on("fpInput.Change")
+function changed() {
+    console.log(`change ${this.fpInput.paths.length}: ${this.fpInput.text}`);
+}
+
+@on("btnOK.Click")
+function ok() {
+    this.close(this.fpInput.paths.join(" | "));
+}

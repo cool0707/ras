@@ -293,6 +293,41 @@ function submit() {
 }
 ```
 
+```typescript
+// forms/frmWork.ras（プログレスバー。.form.json に
+// { "type": "ProgressBar", "name": "pbWork", "caption": "処理中", "value": 0 } を置く。
+// キャプション・割合・バーを表示し、バーの既定の色は Windows のアクセント カラー）
+@on("btnOK.Click")
+function run() {
+    const total = 200;
+    this.pbWork.max = total;                  // min / max（既定 0 / 100）
+    for (let i = 1; i <= total; i++) {
+        this.pbWork.value = i;                // バーと右上の割合（this.pbWork.text は "56%"）が動く
+    }
+    this.pbWork.caption = "完了";
+    this.pbWork.barColor = rgb(16, 124, 16);  // trackColor / foreColor / valueColor / showValue / visible …
+}
+```
+
+```typescript
+// forms/frmPick.ras（ファイル・フォルダーの選択欄。.form.json に
+// { "type": "FilePicker", "name": "fpBook", "title": "ブックを選択",
+//   "filters": [{ "description": "Excel ブック", "extensions": "*.xlsx; *.xlsm" }] } を置く。
+// 欄の右の「...」で Application.FileDialog を出す。欄には貼り付けもできる）
+@on("fpBook.Change")                          // 欄のイベント（選んだ・貼り付けた）
+function changed() {
+    this.btnOK.enabled = this.fpBook.path != "";
+}
+
+@on("btnOK.Click")
+function ok() {
+    this.fpBook.dialogType = 4;               // FolderPicker（1 Open / 2 SaveAs / 3 FilePicker）
+    const chosen = this.fpBook.browse();      // 選んだパスの配列。キャンセルは空の配列
+    if (chosen.length == 0) return;
+    this.close(this.fpBook.paths.join(";"));  // paths: 欄のパス（"…" は外す）
+}
+```
+
 表示スケール（DPI）が 100% 以外でも、フォームの内側の大きさはデザインどおりになります（読み込み時に合わせます）。
 
 ## ファイルの読み書き（`Open` / `Print #` / `Close`）
