@@ -54,6 +54,72 @@ module.exports = function createExcel(rt, addon, options) {
         const text = detail ? `アプリケーション定義またはオブジェクト定義のエラーです。（${detail}）` : "アプリケーション定義またはオブジェクト定義のエラーです。";
         throw new RasError(text, code || 1004, "Microsoft Excel");
     }
+    /**
+     * `Application.FileDialog(type)` of the stand-in: `Show` is answered as `GetOpenFilename`
+     * (Open, FilePicker, FolderPicker) or `GetSaveAsFilename` (SaveAs) is, by `ras run
+     * --open-file` / `--save-file` or a test's mock; without an answer it needs Excel.
+     */
+    class FileDialog {
+        constructor(type) {
+            this.DialogType = type;
+            this.Title = "";
+            this.ButtonName = "";
+            this.AllowMultiSelect = false;
+            this.InitialFileName = "";
+            this.InitialView = 1;
+            this.FilterIndex = 1;
+            const filters = [];
+            this.$filters = filters;
+            this.Filters = {
+                get Count() {
+                    return filters.length;
+                },
+                Item: (i) => filters[rt.toInt(i) - 1],
+                Add: (description, extensions) => {
+                    const f = { Description: rt.cstr(description), Extensions: rt.cstr(extensions) };
+                    filters.push(f);
+                    return f;
+                },
+                Clear: () => {
+                    filters.length = 0;
+                },
+                Delete: (i) => {
+                    if (i === undefined || i === null) filters.length = 0;
+                    else filters.splice(rt.toInt(i) - 1, 1);
+                },
+            };
+            this.$selected = [];
+            const selected = () => this.$selected;
+            this.SelectedItems = {
+                get Count() {
+                    return selected().length;
+                },
+                Item: (i) => {
+                    const v = selected()[rt.toInt(i) - 1];
+                    if (v === undefined) raiseIndex();
+                    return v;
+                },
+            };
+        }
+        Show() {
+            const save = this.DialogType === 2;
+            const hook = save ? hooks.getSaveAsFilename : hooks.getOpenFilename;
+            const filter = this.$filters.map((f) => `${f.Description},${f.Extensions}`).join(",");
+            const r = hook ? (save ? hook(this.InitialFileName, filter, this.FilterIndex, this.Title) : hook(filter, this.FilterIndex, this.Title, undefined, this.AllowMultiSelect)) : undefined;
+            if (r === undefined) return needsExcel("ファイル ダイアログ（FileDialog）");
+            if (r === false || r === "false") {
+                this.$selected = [];
+                return 0;
+            }
+            this.$selected = (Array.isArray(r) ? r : [r]).map((x) => rt.cstr(x));
+            return -1;
+        }
+        Execute() {}
+    }
+    function raiseIndex() {
+        throw new RasError("インデックスが有効範囲にありません。", 9, "RAS");
+    }
+
     function needsExcel(what) {
         throw new RasError(`${what} は Excel が必要です。Excel のないデバッグ実行（ブックの代役）では使えません`, 445, "RAS");
     }
@@ -2348,8 +2414,8 @@ module.exports = function createExcel(rt, addon, options) {
             }
             return needsExcel("名前を付けて保存ダイアログ（GetSaveAsFilename）");
         }
-        FileDialog() {
-            return needsExcel("ファイル ダイアログ（FileDialog）");
+        FileDialog(type) {
+            return new FileDialog(rt.toInt(type));
         }
         OnTime() {
             return needsExcel("Application.OnTime");

@@ -397,7 +397,8 @@ pub fn collapse(spec: &mut FormSpec) {
         };
         let mut parts = [track_at, bar_at, caption_at, value_at];
         parts.sort_unstable();
-        let at = parts.iter().filter(|&&i| i < track_at).count();
+        // Where the track was, once the parts in front of it are gone.
+        let at = track_at - parts.iter().filter(|&&i| i < track_at).count();
         for i in parts.into_iter().rev() {
             spec.controls.remove(i);
         }
@@ -477,16 +478,17 @@ mod tests {
     #[test]
     fn labels_read_from_a_workbook_are_a_progress_bar_again() {
         let spec = spec(
-            r##"{"id":"pb","name":"pbUpload","type":"ProgressBar","caption":"Upload progress","value":56,"left":12,"top":12,"width":240,"height":30,"showValue":false,"barHeight":6,"barColor":{"kind":"rgb","value":"#000000"}},{"id":"ok","name":"btnOK","type":"CommandButton","top":60}"##,
+            r##"{"id":"no","name":"btnNo","type":"CommandButton","top":90},{"id":"pb","name":"pbUpload","type":"ProgressBar","caption":"Upload progress","value":56,"left":12,"top":12,"width":240,"height":30,"showValue":false,"barHeight":6,"barColor":{"kind":"rgb","value":"#000000"}},{"id":"ok","name":"btnOK","type":"CommandButton","top":60}"##,
         );
         let designer = crate::compile(&spec, 932).unwrap();
         let mut read = crate::snapshot("F", &designer.streams, &designer.storages, 932)
             .unwrap()
             .spec;
-        assert_eq!(read.controls.len(), 5);
+        assert_eq!(read.controls.len(), 6);
         collapse(&mut read);
-        assert_eq!(read.controls.len(), 2);
-        let bar = &read.controls[0];
+        assert_eq!(read.controls.len(), 3);
+        assert_eq!(read.controls[0].name, "btnNo");
+        let bar = &read.controls[1];
         assert_eq!(bar.control_type, TYPE);
         assert_eq!(bar.name, "pbUpload");
         assert_eq!(bar.caption.as_deref(), Some("Upload progress"));
@@ -502,7 +504,7 @@ mod tests {
             Some(&json!({"kind": "rgb", "value": "#000000"}))
         );
         assert_eq!(bar.scalar("trackColor"), None);
-        assert_eq!(read.controls[1].name, "btnOK");
+        assert_eq!(read.controls[2].name, "btnOK");
     }
 
     #[test]

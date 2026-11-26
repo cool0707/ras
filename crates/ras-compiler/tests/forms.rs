@@ -1463,3 +1463,79 @@ fn a_progress_bar_needs_no_code_behind() {
     let code = file(&out.files, "frmWait");
     assert!(code.contains("pbWait.RAS_Attach Me, \"pbWait\""), "{code}");
 }
+
+/// A `FilePicker` of a form (spec §14.11.14): an object of the bundled class; the click of its
+/// button and the exit of its box reach the object, and `@on("<name>.<event>")` receives the
+/// events of its box.
+#[test]
+fn file_pickers_browse_with_their_button() {
+    let mut config = Config::default();
+    config.forms = vec![FormDecl {
+        name: "frmOpen".into(),
+        controls: vec![
+            control("fpInput", "FilePicker"),
+            control("btnOK", "CommandButton"),
+        ],
+    }];
+    let form = r#"
+@on("fpInput.Change")
+function changed() {
+    this.btnOK.enabled = this.fpInput.path != "";
+}
+
+@on("btnOK.Click")
+function ok() {
+    const files: string[] = this.fpInput.paths;
+    this.close(files.length);
+}
+
+export function pick(): string[] {
+    this.fpInput.dialogType = 4;
+    this.fpInput.addFilter("Excel", "*.xlsx");
+    return this.fpInput.browse();
+}
+"#;
+    let sources = vec![form_source(
+        PathBuf::from("forms/frmOpen.ras"),
+        "frmOpen",
+        form.into(),
+    )];
+    let prog = analyze(sources, config);
+    let out = build(
+        &prog,
+        &BuildOptions {
+            erl: Some(false),
+            ..Default::default()
+        },
+    );
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .chain(out.diagnostics.iter())
+        .map(|d| {
+            format!(
+                "{}: {} ({:?})",
+                d.code,
+                d.message,
+                d.module.map(|m| &prog.modules[m].rel_path)
+            )
+        })
+        .collect();
+    assert!(errors.is_empty(), "{errors:#?}");
+    let code = file(&out.files, "frmOpen");
+    for want in [
+        "Public fpInput As FilePicker\n",
+        "    Set fpInput = New FilePicker\n    fpInput.RAS_Attach Me, \"fpInput\"\n",
+        "Private Sub fpInput_Text_Change()\n",
+        "Private Sub fpInput_Button_Click()\n    On Error GoTo RAS_OnError\n    If Not fpInput Is Nothing Then fpInput.RAS_Click\n",
+        "Private Sub fpInput_Text_Exit(ByVal Cancel As MSForms.ReturnBoolean)\n    On Error GoTo RAS_OnError\n    If Not fpInput Is Nothing Then fpInput.RAS_Exit\n",
+    ] {
+        assert!(code.contains(want), "{want}\n---\n{code}");
+    }
+    let class = file(&out.files, "FilePicker");
+    assert!(
+        class.contains("Public Function browse() As String()"),
+        "{class}"
+    );
+    assert!(class.contains("Application.FileDialog("), "{class}");
+}

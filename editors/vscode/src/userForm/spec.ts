@@ -507,6 +507,7 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 				issues.push(issue("UFV021", "error", `value は min と max の間（${lo}〜${hi}）にしてください。`, `${path}.value`));
 		}
 		if (type === "ProgressBar") issues.push(...progressIssues(control, path));
+		if (type === "FilePicker") issues.push(...pickerIssues(control, path));
 		issues.push(...edgeIssues(control, path));
 		const font = control.font ?? (isObject(control.properties) ? control.properties.font : undefined);
 		const multiLine = control.multiLine === true || (isObject(control.properties) && control.properties.multiLine === true);
@@ -643,8 +644,41 @@ function progressIssues(control: JsonObject, path: string): ValidationIssue[] {
 	return issues;
 }
 
+/** The controls a file picker is written as, by the suffix of their names (ras-form picker.rs). */
+export const PICKER_PARTS = ["_Text", "_Button"];
+
+/** A file picker's dialog settings (ras-form validate.rs `picker_issues`). */
+function pickerIssues(control: JsonObject, path: string): ValidationIssue[] {
+	const issues: ValidationIssue[] = [];
+	const type = typeof control.dialogType === "number" ? control.dialogType : 3;
+	const opens = type === 1 || type === 3;
+	const filters = control.filters;
+	let count = 0;
+	if (filters !== undefined && filters !== null) {
+		const ok = Array.isArray(filters) && filters.every((f) => isObject(f) && typeof f.description === "string" && typeof f.extensions === "string");
+		if (!ok) issues.push(issue("UFV025", "error", `${path}.filters は { "description": 説明, "extensions": "*.xlsx; *.xlsm" } の配列にしてください。`, `${path}.filters`));
+		else {
+			count = (filters as JsonValue[]).length;
+			if (count > 0 && !opens) issues.push(issue("UFV025", "error", `${path}.filters は dialogType 1（Open）と 3（FilePicker）でだけ使えます。`, `${path}.filters`));
+		}
+	}
+	if (typeof control.filterIndex === "number" && (control.filterIndex < 1 || control.filterIndex > Math.max(count, 1)))
+		issues.push(issue("UFV025", "error", `${path}.filterIndex は 1 から filters の数（${Math.max(count, 1)}）までにしてください。`, `${path}.filterIndex`));
+	if (control.allowMultiSelect === true && !opens)
+		issues.push(issue("UFV025", "error", `${path}.allowMultiSelect は dialogType 1（Open）と 3（FilePicker）でだけ使えます。`, `${path}.allowMultiSelect`));
+	if (typeof control.buttonWidth === "number" && control.buttonWidth <= 0)
+		issues.push(issue("UFV025", "error", `${path}.buttonWidth は 0 より大きくしてください。`, `${path}.buttonWidth`));
+	return issues;
+}
+
 function validateStructure(controls: RawRef[]): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
+	for (const picker of controls.filter((c) => c.type.trim().toLowerCase() === "filepicker" && c.name))
+		for (const suffix of PICKER_PARTS) {
+			const part = `${picker.name}${suffix}`.toLowerCase();
+			for (const other of controls.filter((c) => c.name.toLowerCase() === part))
+				issues.push(issue("UFV025", "error", `${other.path}.name "${other.name}" は、ファイルの選択欄 ${picker.name} を書き込むコントロールの名前と同じです。別の名前にしてください。`, `${other.path}.name`));
+		}
 	// The names of the labels of a progress bar belong to it.
 	for (const bar of controls.filter((c) => c.type.trim().toLowerCase() === "progressbar" && c.name))
 		for (const suffix of PROGRESS_PARTS) {

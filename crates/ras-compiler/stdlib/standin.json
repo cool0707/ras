@@ -68,7 +68,6 @@
    "Worksheets"
   ],
   "excel": [
-   "FileDialog",
    "GetOpenFilename",
    "GetSaveAsFilename",
    "OnTime"

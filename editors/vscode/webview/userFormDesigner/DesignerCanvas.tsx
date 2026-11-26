@@ -323,6 +323,31 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
         </>
       );
     }
+    case "filepicker": {
+      // As written into the workbook: a text box with a button at its right (ras-form picker.rs).
+      const raw = control as unknown as Record<string, unknown>;
+      const buttonWidth = Math.max(
+        Math.min(typeof raw.buttonWidth === "number" ? raw.buttonWidth : 24, control.width),
+        0.75,
+      );
+      const caption = typeof raw.buttonCaption === "string" ? raw.buttonCaption : "...";
+      return (
+        <>
+          <span
+            class="picker-text"
+            style={{ width: px(Math.max(control.width - buttonWidth, 0.75)), height: px(control.height) }}
+          >
+            {control.text ?? ""}
+          </span>
+          <span
+            class="picker-button"
+            style={{ left: px(control.width - buttonWidth), width: px(buttonWidth), height: px(control.height) }}
+          >
+            {caption}
+          </span>
+        </>
+      );
+    }
     case "tabstrip":
       return (
         <div class="tabs">

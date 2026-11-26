@@ -846,10 +846,24 @@ impl<'p> Gen<'p> {
                 .decl
                 .as_ref()
                 .is_some_and(|x| x.name.eq_ignore_ascii_case(&ev.target));
+        // A composed control raises the events of one of its parts (spec §14.11.14).
+        let part = form
+            .decl
+            .as_ref()
+            .and_then(|x| {
+                x.controls
+                    .iter()
+                    .find(|c| c.name.eq_ignore_ascii_case(&ev.target))
+            })
+            .and_then(|c| {
+                crate::collect::composite(&c.control_type)
+                    .and_then(|k| k.events)
+                    .map(|(suffix, _)| format!("{}{suffix}", c.name))
+            });
         let target = if is_form {
             "UserForm"
         } else {
-            ev.target.as_str()
+            part.as_deref().unwrap_or(ev.target.as_str())
         };
         let args: Vec<String> = d
             .params
@@ -914,37 +928,42 @@ impl<'p> Gen<'p> {
                 }
             }
         }
-        // The progress bars (spec §14.11.13): objects of the bundled class, members of the form.
-        let bars: Vec<String> = md
+        // The composed controls (spec §14.11.13): objects of the bundled classes, members of
+        // the form; the events of parts they handle are passed to them.
+        let mut composed: Vec<(String, String)> = Vec::new();
+        let controls = md
             .form
             .as_ref()
             .and_then(|f| f.decl.as_ref())
-            .map(|d| {
-                d.controls
-                    .iter()
-                    .filter(|c| {
-                        c.control_type
-                            .eq_ignore_ascii_case(crate::collect::PROGRESS_BAR_TYPE)
-                    })
-                    .map(|c| c.name.clone())
-                    .collect()
-            })
+            .map(|d| d.controls.clone())
             .unwrap_or_default();
-        let bar_class = crate::collect::progress_bar_class(prog)
-            .filter(|_| !bars.is_empty())
-            .map(|c| self.class_ref(c));
+        for c in &controls {
+            let Some(kind) = crate::collect::composite(&c.control_type) else {
+                continue;
+            };
+            let Some(class) = crate::collect::composite_class(prog, &c.control_type) else {
+                continue;
+            };
+            composed.push((c.name.clone(), self.class_ref(class)));
+            for &(suffix, _, event, method) in kind.hooks {
+                let name = js_str(&c.name);
+                events.push(format!(
+                    "{{ target: {}, event: {}, reentrant: true, fn: ($a) => {{ if ($me[{name}]) $me[{name}].{method}(); }} }}",
+                    js_str(&format!("{}{suffix}", c.name)),
+                    js_str(event),
+                ));
+            }
+        }
         self.w("let $me = null;");
         self.w("function $load($form) {");
         self.indent += 1;
         self.w("$me = $form;");
-        if let Some(class) = &bar_class {
-            for bar in &bars {
-                let name = js_str(bar);
-                self.w(format!(
-                    "Object.defineProperty($form, {name}, {{ value: new {class}(), enumerable: true, configurable: true }});"
-                ));
-                self.w(format!("$form[{name}].RAS_Attach($form, {name});"));
-            }
+        for (name, class) in &composed {
+            let name = js_str(name);
+            self.w(format!(
+                "Object.defineProperty($form, {name}, {{ value: new {class}(), enumerable: true, configurable: true }});"
+            ));
+            self.w(format!("$form[{name}].RAS_Attach($form, {name});"));
         }
         for &v in &md.vars {
             let d = &prog.vars[v];

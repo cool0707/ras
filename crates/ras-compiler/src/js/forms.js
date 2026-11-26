@@ -777,7 +777,11 @@ module.exports = function install(rt) {
             // Controls, with their containers (`parentId` is the id of the container in the spec).
             const byId = new Map();
             this.$all = [];
-            const specs = flatten(spec.controls || []).flatMap((c) => (String(c.type || "").trim().toLowerCase() === "progressbar" && c.name ? progressParts(c) : [c]));
+            const specs = flatten(spec.controls || []).flatMap((c) => {
+                const type = String(c.type || "").trim().toLowerCase();
+                if (!c.name) return [c];
+                return type === "progressbar" ? progressParts(c) : type === "filepicker" ? pickerParts(c) : [c];
+            });
             for (const c of specs) {
                 const kind = KINDS[String(c.type || "").trim().toLowerCase()];
                 if (!kind || !c.name) continue;
@@ -1242,6 +1246,29 @@ module.exports = function install(rt) {
             part("_Bar", left, barTop, filled, barHeight, { backColor: c.barColor || { kind: "system", value: "highlight" }, visible: visible && filled > 0 }),
             part("_Caption", left, top, width - valueWidth, textHeight, { ...text, caption: c.caption ?? "", tag: c.tag, foreColor: c.foreColor, visible: visible && width - valueWidth > 0 && textHeight > 0 }),
             part("_Value", left + width - valueWidth, top, valueWidth, textHeight, { ...text, caption: `${Math.floor(fraction * 100 + 0.5)}%`, foreColor: c.valueColor || { kind: "system", value: "grayText" }, textAlign: 3, visible: visible && showValue && valueWidth > 0 && textHeight > 0 }),
+        ];
+    }
+
+    /**
+     * The text box and the button a file picker (`"type": "FilePicker"`, spec §14.11.14) is
+     * written as; the same as `picker.rs` of ras-form.
+     */
+    function pickerParts(c) {
+        const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+        const str = (v) => (typeof v === "string" ? v : "");
+        const esc = (t) => t.replace(/%/g, "%25").replace(/\|/g, "%7C").replace(/=/g, "%3D").replace(/;/g, "%3B").replace(/,/g, "%2C");
+        const left = num(c.left, 0);
+        const top = num(c.top, 0);
+        const width = num(c.width, 200);
+        const height = Math.max(num(c.height, 18), 0.75);
+        const bw = Math.max(Math.min(num(c.buttonWidth, 24), width), 0.75);
+        const filters = Array.isArray(c.filters) ? c.filters.filter((f) => f && typeof f.description === "string" && typeof f.extensions === "string") : [];
+        const tag = `RAS.FilePicker|type=${num(c.dialogType, 3)}|multi=${c.allowMultiSelect === true ? 1 : 0}|title=${esc(str(c.title))}|buttonName=${esc(str(c.buttonName))}|initial=${esc(str(c.initialFileName))}|view=${num(c.initialView, 0)}|filterIndex=${num(c.filterIndex, 1)}|filters=${filters.map((f) => `${esc(f.description)},${esc(f.extensions)}`).join(";")}`;
+        const base = { parentId: c.parentId, zIndex: c.zIndex, controlTipText: c.controlTipText, enabled: c.enabled, visible: c.visible, font: c.font };
+        const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null));
+        return [
+            clean({ ...base, id: `${c.id || c.name}_Text`, name: `${c.name}_Text`, type: "TextBox", left, top, width: Math.max(width - bw, 0.75), height, text: c.text ?? (typeof c.value === "string" ? c.value : undefined), tag: c.tag, tabIndex: c.tabIndex, foreColor: c.foreColor, backColor: c.backColor, locked: c.locked }),
+            clean({ ...base, id: `${c.id || c.name}_Button`, name: `${c.name}_Button`, type: "CommandButton", left: left + width - bw, top, width: bw, height, caption: typeof c.buttonCaption === "string" ? c.buttonCaption : "...", tag, takeFocusOnClick: false }),
         ];
     }
 

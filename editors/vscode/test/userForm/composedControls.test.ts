@@ -48,3 +48,27 @@ describe("progress bar", () => {
 		assert.deepEqual([made?.width, made?.height], [200, 24]);
 	});
 });
+
+describe("file picker", () => {
+	const picker = { id: "fp", name: "fpInput", type: "FilePicker", left: 12, top: 12, width: 240, height: 18, title: "ブックを選択", filters: [{ description: "Excel", extensions: "*.xlsx" }], filterIndex: 1 };
+
+	it("is checked and edited like a built-in control", () => {
+		const spec = parse([picker]);
+		assert.deepEqual(spec.issues, []);
+		const fields = propertyGrid(spec).controls.fp.descriptors.map((d) => d.field);
+		for (const field of ["text", "dialogType", "title", "buttonName", "allowMultiSelect", "initialFileName", "filterIndex", "buttonCaption", "buttonWidth", "locked", "foreColor", "backColor", "font", "tabIndex"]) assert.ok(fields.includes(field), field);
+		const codes = (controls: Json[]) => parse(controls).issues.map((i) => `${i.code} ${i.field}`);
+		assert.deepEqual(codes([{ ...picker, dialogType: 4 }]), ["UFV025 controls[0].filters"]);
+		assert.deepEqual(codes([{ ...picker, filterIndex: 2 }]), ["UFV025 controls[0].filterIndex"]);
+		assert.deepEqual(codes([{ ...picker, filters: [{ description: "x" }] }]), ["UFV025 controls[0].filters"]);
+		assert.deepEqual(codes([picker, { id: "b", name: "fpInput_Button", type: "CommandButton", left: 0, top: 60 }]), ["UFV025 controls[1].name"]);
+		assert.ok(codes([{ ...picker, height: 8 }]).includes("UFV022 controls[0].height"));
+	});
+
+	it("is in the Toolbox", () => {
+		const document = designerDocument(previewDocument(parse([])));
+		const made = createControl(document as any, "FilePicker", 12, 12, false, () => "1");
+		assert.equal(made?.name, "FilePicker1");
+		assert.deepEqual([made?.width, made?.height], [200, 18]);
+	});
+});

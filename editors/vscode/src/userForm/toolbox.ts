@@ -22,6 +22,7 @@ export const controlMetadata = [
   { type: "TabStrip", width: 240, height: 48 },
   // RAS's own: written as four labels (spec §14.11.13).
   { type: "ProgressBar", width: 200, height: 24, caption: true },
+  { type: "FilePicker", width: 200, height: 18 },
 ] as const;
 
 export type ToolboxType = (typeof controlMetadata)[number]["type"];

@@ -311,8 +311,14 @@ impl Collector {
             None if input.kind == ModuleKind::Std && input.key == VALIDATION_MODULE => {
                 "RAS_Validation".to_string()
             }
-            None if input.kind == ModuleKind::Std && input.key == PROGRESS_MODULE => {
-                "RAS_ProgressBar".to_string()
+            None if input.kind == ModuleKind::Std
+                && COMPOSITES.iter().any(|c| c.module == input.key) =>
+            {
+                COMPOSITES
+                    .iter()
+                    .find(|c| c.module == input.key)
+                    .map(|c| c.vba_module.to_string())
+                    .unwrap_or_default()
             }
             None => vba_module_name(&input.key),
         };
@@ -525,12 +531,10 @@ impl Collector {
                 let ty = match control.control_type.as_str() {
                     t if t.eq_ignore_ascii_case("Control") || t.is_empty() => Type::Object,
                     // Labels on the form, operated through the bundled class (spec §14.11.13).
-                    t if t.eq_ignore_ascii_case(PROGRESS_BAR_TYPE) => {
-                        match progress_bar_class(&self.prog) {
-                            Some(c) => Type::Class(c, Vec::new()),
-                            None => Type::Object,
-                        }
-                    }
+                    t if composite(t).is_some() => match composite_class(&self.prog, t) {
+                        Some(c) => Type::Class(c, Vec::new()),
+                        None => Type::Object,
+                    },
                     t => match msforms.iter().find(|(k, _)| k.eq_ignore_ascii_case(t)) {
                         Some((_, Sym::Class(c))) => Type::Class(*c, Vec::new()),
                         _ => Type::Object,
@@ -2551,17 +2555,58 @@ pub const STRUCT_MAP_MODULE: &str = "ras_collections";
 /// The bundled form validation library (spec §14.11.12): `import { z, FormValidator } from "validation"`.
 pub const VALIDATION_MODULE: &str = "validation";
 
-/// The bundled progress bar (spec §14.11.13): the class of a form's `ProgressBar` controls.
-pub const PROGRESS_MODULE: &str = "progressbar";
+/// A control of a form that RAS composes of MSForms controls (spec §14.11.13, §14.11.14): the
+/// form holds an object of a bundled class under the control's name.
+pub struct Composite {
+    /// FormSpec type (`ProgressBar`).
+    pub control_type: &'static str,
+    /// Key of the bundled module with the class, and the VBA name of that module.
+    pub module: &'static str,
+    pub vba_module: &'static str,
+    /// The class (exported by the module).
+    pub class: &'static str,
+    /// The part whose events `@on("<name>.<event>")` receives: (suffix, MSForms type).
+    pub events: Option<(&'static str, &'static str)>,
+    /// Events of parts passed to the object: (suffix, MSForms type, event, method).
+    pub hooks: &'static [(&'static str, &'static str, &'static str, &'static str)],
+}
 
-/// FormSpec type of the progress bar, a control composed of labels (spec §14.11.13).
-pub const PROGRESS_BAR_TYPE: &str = "ProgressBar";
+/// The composed controls.
+pub const COMPOSITES: &[Composite] = &[
+    Composite {
+        control_type: "ProgressBar",
+        module: "progressbar",
+        vba_module: "RAS_ProgressBar",
+        class: "ProgressBar",
+        events: None,
+        hooks: &[],
+    },
+    Composite {
+        control_type: "FilePicker",
+        module: "filepicker",
+        vba_module: "RAS_FilePicker",
+        class: "FilePicker",
+        events: Some(("_Text", "TextBox")),
+        hooks: &[
+            ("_Button", "CommandButton", "Click", "RAS_Click"),
+            ("_Text", "TextBox", "Exit", "RAS_Exit"),
+        ],
+    },
+];
 
-/// The bundled class of the progress bars of forms.
-pub fn progress_bar_class(prog: &Program) -> Option<ClassId> {
-    let m = prog.module_by_key(PROGRESS_MODULE)?;
-    match prog.modules[m].exports.get("ProgressBar") {
-        Some(Sym::Class(c)) => Some(*c),
+/// The composed control of FormSpec type `control_type`.
+pub fn composite(control_type: &str) -> Option<&'static Composite> {
+    COMPOSITES
+        .iter()
+        .find(|c| c.control_type.eq_ignore_ascii_case(control_type.trim()))
+}
+
+/// The bundled class of a composed control type.
+pub fn composite_class(prog: &Program, control_type: &str) -> Option<ClassId> {
+    let c = composite(control_type)?;
+    let m = prog.module_by_key(c.module)?;
+    match prog.modules[m].exports.get(c.class) {
+        Some(Sym::Class(id)) => Some(*id),
         _ => None,
     }
 }

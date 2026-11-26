@@ -363,6 +363,30 @@ function buildControls(): Record<string, ControlContract> {
 			font,
 		},
 	};
+	// RAS's file / folder picker: written as a text box and a button (ras-form picker.rs), operated
+	// through the bundled class `FilePicker`. The dialog's properties are those of Application.FileDialog.
+	controls.filepicker = {
+		type: "FilePicker",
+		progId: "RAS.FilePicker",
+		canContainChildren: false,
+		properties: {
+			text: p("string", false, "supported", "Path in the box (several are separated with ;).", true),
+			dialogType: { ...choice("FileDialog type (omitted: FilePicker).", [1, 2, 3, 4]), valueLabels: ["Open", "SaveAs", "FilePicker", "FolderPicker"] },
+			title: p("string", false, "supported", "Title of the dialog.", true),
+			buttonName: p("string", false, "supported", "Text of the dialog's OK button.", true),
+			allowMultiSelect: flag("Several files can be chosen (Open and FilePicker)."),
+			initialFileName: p("string", false, "supported", "Where the dialog opens when the box is empty.", true),
+			initialView: integer("InitialView of the dialog (msoFileDialogView; 0: the dialog's own).", 0, 9),
+			filters: p("objectArray", false, "supported", "File types: [{ description, extensions }] (Open and FilePicker).", true),
+			filterIndex: integer("File type chosen first (1 is the first of filters).", 1, 1000),
+			buttonCaption: p("string", false, "supported", "Caption of the button (omitted: ...).", true),
+			buttonWidth: { ...p("number", false, "supported", "Width of the button in points (omitted: 24).", true), minimum: 0.75, maximum: 1000 },
+			locked: flag("The box cannot be edited (the button still chooses)."),
+			foreColor: color,
+			backColor: color,
+			font,
+		},
+	};
 	return controls;
 }
 

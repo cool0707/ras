@@ -3358,7 +3358,16 @@ impl<'p> Lowerer<'p> {
                     decl.controls
                         .iter()
                         .find(|c| c.name.eq_ignore_ascii_case(&ev.target))
-                        .map(|c| (c.control_type.clone(), c.name.clone()))
+                        .map(|c| {
+                            // A composed control raises the events of one of its parts.
+                            match crate::collect::composite(&c.control_type).and_then(|k| k.events)
+                            {
+                                Some((suffix, host)) => {
+                                    (host.to_string(), format!("{}{suffix}", c.name))
+                                }
+                                None => (c.control_type.clone(), c.name.clone()),
+                            }
+                        })
                 };
                 let Some((host_type, object)) = host_type else {
                     self.diag(Severity::Error, m, ev.span, "E0613", format!("`@on(\"{}.{}\")`: フォーム `{}` にコントロール `{}` がありません（フォーム自身のイベントは `UserForm.イベント`）", ev.target, ev.event, decl.name, ev.target));
@@ -3438,32 +3447,53 @@ impl<'p> Lowerer<'p> {
         }
         let handlers = md.fns.clone();
         self.emit_with_events(fi, &decl.name, &handlers, false);
-        // The progress bars (spec §14.11.13): an object of the bundled class per bar, a public
-        // member of the form under the bar's name, attached to its labels when the form loads.
+        // The composed controls (progress bars ..., spec §14.11.13): an object of the bundled
+        // class per control, a public member of the form under the control's name, attached to
+        // its parts when the form loads; the events of parts it handles are passed to it.
         let mut attach = Vec::new();
-        let bars: Vec<&str> = decl
-            .controls
-            .iter()
-            .filter(|c| {
-                c.control_type
-                    .eq_ignore_ascii_case(crate::collect::PROGRESS_BAR_TYPE)
-            })
-            .map(|c| c.name.as_str())
-            .collect();
-        if let Some(class) = crate::collect::progress_bar_class(prog).filter(|_| !bars.is_empty()) {
+        let mut part_hooks: Vec<(String, &'static str, String)> = Vec::new();
+        let mut decl_lines = Vec::new();
+        for c in &decl.controls {
+            let Some(kind) = crate::collect::composite(&c.control_type) else {
+                continue;
+            };
+            let Some(class) = crate::collect::composite_class(prog, &c.control_type) else {
+                continue;
+            };
             let class_name = self.class_name(class, &[]);
-            let method = prog
-                .find_methods(class, "RAS_Attach")
-                .first()
-                .map(|&f| prog.fns[f].proc_ident())
-                .unwrap_or_else(|| "RAS_Attach".into());
-            let mut lines = Vec::new();
-            for bar in &bars {
-                lines.push(format!("Public {bar} As {class_name}"));
-                attach.push(VStmt::Raw(format!("Set {bar} = New {class_name}")));
-                attach.push(VStmt::Raw(format!("{bar}.{method} Me, \"{bar}\"")));
+            let method = |name: &str| {
+                prog.find_methods(class, name)
+                    .first()
+                    .map(|&f| prog.fns[f].proc_ident())
+                    .unwrap_or_else(|| name.to_string())
+            };
+            let name = &c.name;
+            decl_lines.push(format!("Public {name} As {class_name}"));
+            attach.push(VStmt::Raw(format!("Set {name} = New {class_name}")));
+            attach.push(VStmt::Raw(format!(
+                "{name}.{} Me, \"{name}\"",
+                method("RAS_Attach")
+            )));
+            for &(suffix, host, event, handler) in kind.hooks {
+                let Some(def) = crate::userform::find_event(host, event) else {
+                    continue;
+                };
+                let object = format!("{name}{suffix}");
+                if !table
+                    .iter()
+                    .any(|t| t.0 .0.eq_ignore_ascii_case(&object) && t.0 .1.name == def.name)
+                {
+                    table.push(((object.clone(), def), Vec::new()));
+                }
+                part_hooks.push((
+                    object,
+                    def.name.as_str(),
+                    format!("If Not {name} Is Nothing Then {name}.{}", method(handler)),
+                ));
             }
-            self.out[fi].decls.push(lines.join("\n"));
+        }
+        if !decl_lines.is_empty() {
+            self.out[fi].decls.push(decl_lines.join("\n"));
         }
         let init_fn = md.init_fn;
         if (init_fn.is_some() || !attach.is_empty())
@@ -3551,6 +3581,12 @@ impl<'p> Lowerer<'p> {
             }
             let unlisten = listens && object == "UserForm" && def.name == "Terminate";
             body.push(VStmt::Raw("On Error GoTo RAS_OnError".into()));
+            for (_, _, stmt) in part_hooks
+                .iter()
+                .filter(|h| h.0.eq_ignore_ascii_case(&object) && h.1 == def.name)
+            {
+                body.push(VStmt::Raw(stmt.clone()));
+            }
             body.extend(calls);
             for (_, _, method) in hooks.iter().filter(|h| h.0 == object && h.1 == def.name) {
                 for v in &validators {

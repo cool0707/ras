@@ -376,6 +376,12 @@ pub const CONTROL_TYPES: &[ControlType] = &[
         prog_id: "RAS.ProgressBar",
         container: false,
     },
+    // A text box and a button when written (`picker.rs`).
+    ControlType {
+        name: "FilePicker",
+        prog_id: "RAS.FilePicker",
+        container: false,
+    },
 ];
 
 /// The built-in type `name` (ignoring case and surrounding blanks).
@@ -440,6 +446,30 @@ pub fn type_properties(name: &str) -> Option<Props> {
                 ("trackColor", color()),
                 ("valueColor", color()),
                 ("foreColor", color()),
+                ("font", font()),
+            ])
+        }
+        // Composed of a text box and a button (`picker.rs`): its own properties only.
+        "FilePicker" => {
+            return Some(vec![
+                ("text", s()),
+                ("value", s()),
+                (
+                    "dialogType",
+                    allowed(p(T::Integer, false, Supported), &["1", "2", "3", "4"]),
+                ),
+                ("title", s()),
+                ("buttonName", s()),
+                ("allowMultiSelect", p(T::Boolean, false, Supported)),
+                ("initialFileName", s()),
+                ("initialView", p(T::Integer, false, Supported)),
+                ("filters", p(T::ObjectArray, false, Supported)),
+                ("filterIndex", p(T::Integer, false, Supported)),
+                ("buttonCaption", s()),
+                ("buttonWidth", p(T::Number, false, Supported)),
+                ("locked", p(T::Boolean, false, Supported)),
+                ("foreColor", color()),
+                ("backColor", color()),
                 ("font", font()),
             ])
         }

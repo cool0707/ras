@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "frmOpen", "caption": "Open", "width": 264, "height": 60 },
+  "controls": [
+    { "id": "fp", "name": "fpInput", "type": "FilePicker", "left": 12, "top": 12, "width": 240, "title": "ブックを選択", "allowMultiSelect": true, "filters": [{ "description": "Excel", "extensions": "*.xlsx; *.xlsm" }] },
+    { "id": "ok", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 180, "top": 36, "height": 18 }
+  ]
+}
