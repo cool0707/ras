@@ -2464,3 +2464,100 @@ body.vscode-high-contrast-light button {
   fill: currentColor;
   stroke: none;
 }
+/* Anchor editor (Property Grid): a bar towards each edge of the container, as in Visual Studio. */
+.anchor-property-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.anchor-editor {
+  position: relative;
+  width: 60px;
+  height: 44px;
+  flex-shrink: 0;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  background: var(--vscode-input-background);
+}
+.anchor-editor .anchor-center {
+  position: absolute;
+  left: 22px;
+  top: 15px;
+  width: 16px;
+  height: 14px;
+  border: 1px solid var(--vscode-foreground);
+  opacity: 0.6;
+  pointer-events: none;
+}
+.anchor-editor .anchor-bar {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.anchor-editor .anchor-bar::after {
+  content: "";
+  position: absolute;
+  background: var(--vscode-disabledForeground, rgba(128, 128, 128, 0.5));
+  opacity: 0.45;
+}
+.anchor-editor .anchor-bar[aria-pressed="true"]::after {
+  background: var(--vscode-focusBorder, #0078d4);
+  opacity: 1;
+}
+.anchor-editor .anchor-bar:hover::after {
+  opacity: 0.8;
+}
+.anchor-editor .anchor-bar:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+.anchor-editor .anchor-bar:disabled {
+  cursor: default;
+}
+.anchor-editor .anchor-top,
+.anchor-editor .anchor-bottom {
+  left: 22px;
+  width: 18px;
+  height: 15px;
+}
+.anchor-editor .anchor-top {
+  top: 0;
+}
+.anchor-editor .anchor-bottom {
+  bottom: 0;
+}
+.anchor-editor .anchor-top::after,
+.anchor-editor .anchor-bottom::after {
+  left: 7px;
+  top: 2px;
+  width: 4px;
+  height: 11px;
+}
+.anchor-editor .anchor-left,
+.anchor-editor .anchor-right {
+  top: 15px;
+  width: 22px;
+  height: 16px;
+}
+.anchor-editor .anchor-left {
+  left: 0;
+}
+.anchor-editor .anchor-right {
+  right: 0;
+}
+.anchor-editor .anchor-left::after,
+.anchor-editor .anchor-right::after {
+  left: 3px;
+  top: 6px;
+  width: 16px;
+  height: 4px;
+}
+.anchor-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -21,6 +21,9 @@ import type { PropertyContract } from "./contract";
 import type { JsonValue } from "./jsonSource";
 import { formatJson } from "./jsonSource";
 import { minimumEditHeight } from "./editHeight";
+import { anchorLayout, formatAnchor, isDefaultAnchor, parseAnchor } from "./anchor";
+import type { AnchorItem } from "./anchor";
+import { gridSize } from "./geometry";
 import type { ClipboardSnapshot, DesignerError, SemanticOperation, SpecTab } from "./protocol";
 import type { ControlRecord, JsonObject, ParsedSpec } from "./spec";
 import { errorKeys, flattenControls, isObject, parseSpec, validateSpec } from "./spec";
@@ -207,6 +210,47 @@ function setGeometryFields(model: Model, g: Geometry) {
 	for (const key of ["left", "top", "width", "height"] as const) if (current[key] !== g[key]) g.record.raw[key] = g[key];
 }
 
+/** The `anchor` of a control as written (any letter case of the key). */
+function anchorOf(raw: JsonObject): unknown {
+	const key = Object.keys(raw).find((k) => k.toLowerCase() === "anchor");
+	return key === undefined ? undefined : raw[key];
+}
+
+const isContainer = (record: ControlRecord) => ["frame", "multipage"].includes(record.control.type.toLowerCase());
+
+/** Inside size of the form (`""`) or of a Frame / MultiPage, for anchors. */
+function insideSize(model: Model, id: string): [number, number] {
+	if (!id) return [num(model.form.width, 240), num(model.form.height, 180)];
+	const record = model.find(id);
+	if (!record) return [0, 0];
+	const g = geometry(model, record);
+	return contentSize(record.control.type, g.width, g.height);
+}
+
+/**
+ * The controls anchored in the container `id` (`""` for the form) follow its new size, as in
+ * the designer of Windows Forms: `before` is its inside size before the edit.
+ */
+function followAnchors(model: Model, id: string, before: [number, number]) {
+	model.reindex();
+	const [width, height] = insideSize(model, id);
+	const dw = stable(width - before[0]);
+	const dh = stable(height - before[1]);
+	if (!dw && !dh) return;
+	const items: AnchorItem[] = model.records.map((r) => {
+		const page = r.control.type.toLowerCase() === "page";
+		const g = page ? { left: 0, top: 0, width: 0, height: 0 } : geometry(model, r);
+		return { id: r.control.id, parentId: r.control.parentId, type: r.control.type, left: g.left, top: g.top, width: g.width, height: g.height, anchor: anchorOf(r.raw) };
+	});
+	for (const [controlId, next] of anchorLayout(items, id, dw, dh)) {
+		const record = model.find(controlId);
+		if (!record) continue;
+		const current = geometry(model, record);
+		for (const key of ["left", "top", "width", "height"] as const) if (current[key] !== next[key]) record.raw[key] = next[key];
+	}
+	model.reindex();
+}
+
 // ---------------------------------------------------------------------------
 
 function checkValue(field: string, contract: PropertyContract, value: unknown) {
@@ -267,6 +311,14 @@ const legacyNames: Record<string, string> = {
 
 function setProperty(owner: JsonObject, field: string, contract: PropertyContract, value: JsonValue) {
 	checkValue(field, contract, value);
+	if (contract.editor === "anchor") {
+		// The default (top,left) is written as an absent field; others in their canonical form.
+		const anchor = parseAnchor(value);
+		if (!anchor) fail("UFE003", `${field} には top・bottom・left・right をカンマで区切ったものか none を指定します。`);
+		for (const key of Object.keys(owner)) if (key.toLowerCase() === "anchor") delete owner[key];
+		if (!isDefaultAnchor(anchor!)) owner[field] = formatAnchor(anchor!);
+		return;
+	}
 	if (contract.editor === "picture" && (value === null || (isObject(value) && value.remove === true))) {
 		// No picture is written as an absent field.
 		delete owner[field];
@@ -360,33 +412,43 @@ function applyOne(model: Model, op: SemanticOperation) {
 	switch (op.type) {
 		case "setGeometry": {
 			if (op.controlId === undefined) {
+				const before = insideSize(model, "");
 				if (op.width !== undefined) model.form.width = op.width;
 				if (op.height !== undefined) model.form.height = op.height;
+				followAnchors(model, "", before);
 				return;
 			}
 			const record = model.record(op.controlId);
 			if (record.control.type.toLowerCase() === "page") fail("UFE005", "Page の位置とサイズは MultiPage から決まります。");
+			const before = insideSize(model, op.controlId);
 			for (const key of ["left", "top", "width", "height"] as const) if (op[key] !== undefined) record.raw[key] = op[key]!;
+			if (isContainer(record)) followAnchors(model, op.controlId, before);
 			return;
 		}
 		case "moveControl":
 		case "resizeControl": {
 			const record = model.record(op.controlId);
+			const before = insideSize(model, op.controlId);
 			if (op.type === "moveControl") Object.assign(record.raw, { left: op.left, top: op.top });
 			else Object.assign(record.raw, { width: op.width, height: op.height });
+			if (op.type === "resizeControl" && isContainer(record)) followAnchors(model, op.controlId, before);
 			return;
 		}
 		case "setFormProperty": {
 			const contract = editableFormProperties()[op.field];
 			if (!contract) fail("UFE005", `${op.field} はデザイナーで編集できるプロパティではありません。`);
+			const before = insideSize(model, "");
 			setProperty(model.form, op.field, contract!, op.value as JsonValue);
+			if (op.field === "width" || op.field === "height") followAnchors(model, "", before);
 			return;
 		}
 		case "setControlProperty": {
 			const record = model.record(op.controlId);
 			const contract = editableControlProperties(record.control.type, record.control.progId)[op.field];
 			if (!contract) fail("UFE005", `${op.field} はこのコントロールで編集できるプロパティではありません。`);
+			const before = insideSize(model, op.controlId);
 			setProperty(record.raw, op.field, contract!, op.value as JsonValue);
+			if ((op.field === "width" || op.field === "height") && isContainer(record)) followAnchors(model, op.controlId, before);
 			return;
 		}
 		case "addControl": {
@@ -626,6 +688,81 @@ function applyProductivity(model: Model, op: SemanticOperation) {
 			for (const s of states) {
 				if (op.dimension !== "height") s.width = w;
 				if (op.dimension !== "width") s.height = h;
+				const error = checkGeometry(model, s);
+				if (error) fail("UFE003", error);
+			}
+			states.forEach((s) => setGeometryFields(model, s));
+			return;
+		}
+		case "alignToGrid":
+		case "sizeToGrid": {
+			// Align to Grid moves the top left corner to the nearest grid point; Size to Grid moves
+			// the bottom right corner (the control keeps its place), as in Visual Studio.
+			const states = selected(model, op.controlIds);
+			const snap = (value: number, limit: number) => {
+				const near = Math.round(value / gridSize) * gridSize;
+				return stable(near <= limit + tolerance ? near : Math.floor(limit / gridSize) * gridSize);
+			};
+			for (const s of states) {
+				if (op.type === "alignToGrid") {
+					s.left = snap(s.left, s.parentWidth - s.width);
+					s.top = snap(s.top, s.parentHeight - s.height);
+				} else {
+					const [rw, rh] = requiredSize(model, s.record);
+					const edge = (start: number, size: number, least: number, limit: number) => {
+						let end = snap(start + size, limit);
+						// Too small for the grid line before: the next one, else as it was.
+						if (end - start < least) end = Math.min(limit, Math.ceil((start + least) / gridSize) * gridSize);
+						return end - start < least ? size : stable(end - start);
+					};
+					s.width = edge(s.left, s.width, Math.max(1, rw), s.parentWidth);
+					s.height = edge(s.top, s.height, Math.max(1, rh), s.parentHeight);
+				}
+				const error = checkGeometry(model, s);
+				if (error) fail("UFE003", error);
+			}
+			states.forEach((s) => setGeometryFields(model, s));
+			return;
+		}
+		case "spaceControls": {
+			// The primary control (the last selected) stays; the others move away from it or
+			// towards it so that each gap grows or shrinks by one grid unit, or closes.
+			const states = selected(model, op.controlIds);
+			const horizontal = op.axis === "horizontal";
+			const pos = (s: Geometry) => (horizontal ? s.left : s.top);
+			const size = (s: Geometry) => (horizontal ? s.width : s.height);
+			const set = (s: Geometry, value: number) => {
+				if (horizontal) s.left = stable(value);
+				else s.top = stable(value);
+			};
+			const ordered = [...states].sort((a, b) => pos(a) - pos(b) || op.controlIds.indexOf(a.record.control.id) - op.controlIds.indexOf(b.record.control.id));
+			const gaps = ordered.slice(1).map((s, i) => {
+				const gap = pos(s) - pos(ordered[i]) - size(ordered[i]);
+				if (op.command === "increase") return gap + gridSize;
+				if (op.command === "decrease") return gap > 0 ? Math.max(0, gap - gridSize) : gap;
+				return gap > 0 ? 0 : gap;
+			});
+			const primary = ordered.findIndex((s) => s.record.control.id === op.anchorId);
+			for (let i = primary + 1; i < ordered.length; i++) set(ordered[i], pos(ordered[i - 1]) + size(ordered[i - 1]) + gaps[i - 1]);
+			for (let i = primary - 1; i >= 0; i--) set(ordered[i], pos(ordered[i + 1]) - gaps[i] - size(ordered[i]));
+			for (const s of ordered) {
+				const error = checkGeometry(model, s);
+				if (error) fail("UFE003", error);
+			}
+			ordered.forEach((s) => setGeometryFields(model, s));
+			return;
+		}
+		case "centerControls": {
+			// The selection keeps its arrangement and is centred in its container.
+			const states = selected(model, op.controlIds);
+			const horizontal = op.axis === "horizontal";
+			const start = Math.min(...states.map((s) => (horizontal ? s.left : s.top)));
+			const end = Math.max(...states.map((s) => (horizontal ? s.left + s.width : s.top + s.height)));
+			const outer = horizontal ? states[0].parentWidth : states[0].parentHeight;
+			const shift = stable(Math.max(0, (outer - (end - start)) / 2) - start);
+			for (const s of states) {
+				if (horizontal) s.left = stable(s.left + shift);
+				else s.top = stable(s.top + shift);
 				const error = checkGeometry(model, s);
 				if (error) fail("UFE003", error);
 			}

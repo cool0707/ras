@@ -153,6 +153,8 @@ export interface SpecControl extends AppearanceProperties {
   columnWidths?: string | null;
   textColumn?: number | null;
   columnHeads?: boolean | null;
+  /** Edges of the container the control follows: "top,left" (omitted), "top,bottom,left,right", "none" ... */
+  anchor?: string | null;
   observed?: Partial<Omit<SpecControl, "observed">>;
 }
 
@@ -347,13 +349,28 @@ export const designerStrings = {
   alignTop: "上揃え",
   alignMiddle: "上下中央揃え",
   alignBottom: "下揃え",
-  distribute: "等間隔に配置",
-  distributeHorizontal: "左右に等間隔",
-  distributeVertical: "上下に等間隔",
   sameSize: "サイズを揃える",
   sameWidth: "幅を揃える",
   sameHeight: "高さを揃える",
   sameDimensions: "幅と高さを揃える",
+  alignToGrid: "グリッドに合わせる",
+  sizeToGrid: "サイズをグリッドに合わせる",
+  spacing: "間隔",
+  horizontalSpacing: "左右",
+  verticalSpacing: "上下",
+  spacingEqual: "均等にする",
+  spacingIncrease: "広げる",
+  spacingDecrease: "狭める",
+  spacingRemove: "詰める",
+  centerInForm: "中央に配置",
+  centerHorizontally: "左右の中央に配置",
+  centerVertically: "上下の中央に配置",
+  anchorEditor: "アンカー",
+  anchorTop: "上",
+  anchorBottom: "下",
+  anchorLeft: "左",
+  anchorRight: "右",
+  anchorHelp: "親（フォーム・Frame・MultiPage）の大きさが変わったとき、コントロールが距離を保つ辺。左右の両方なら幅が、上下の両方なら高さが伸び縮みします。",
   cut: "切り取り",
   copy: "コピー",
   paste: "貼り付け",
@@ -482,6 +499,16 @@ export type ProductivityOperation =
       anchorId: string;
       dimension: "width" | "height" | "size";
     }
+  | { type: "alignToGrid"; controlIds: string[] }
+  | { type: "sizeToGrid"; controlIds: string[] }
+  | {
+      type: "spaceControls";
+      controlIds: string[];
+      anchorId: string;
+      axis: "horizontal" | "vertical";
+      command: "increase" | "decrease" | "remove";
+    }
+  | { type: "centerControls"; controlIds: string[]; axis: "horizontal" | "vertical" }
   | { type: "removeControls"; controlIds: string[]; cascade: boolean }
   | {
       type: "reorderControls";
@@ -634,6 +661,29 @@ export function isProductivityOperation(value: unknown): value is ProductivityOp
       typeof op.anchorId === "string" &&
       op.controlIds.includes(op.anchorId) &&
       ["width", "height", "size"].includes(String(op.dimension))
+    );
+  if (op.type === "alignToGrid" || op.type === "sizeToGrid")
+    return (
+      exactKeys(["type", "controlIds"]) &&
+      isStringArray(op.controlIds, 1) &&
+      new Set(op.controlIds).size === op.controlIds.length
+    );
+  if (op.type === "spaceControls")
+    return (
+      exactKeys(["type", "controlIds", "anchorId", "axis", "command"]) &&
+      isStringArray(op.controlIds, 2) &&
+      new Set(op.controlIds).size === op.controlIds.length &&
+      typeof op.anchorId === "string" &&
+      op.controlIds.includes(op.anchorId) &&
+      ["horizontal", "vertical"].includes(String(op.axis)) &&
+      ["increase", "decrease", "remove"].includes(String(op.command))
+    );
+  if (op.type === "centerControls")
+    return (
+      exactKeys(["type", "controlIds", "axis"]) &&
+      isStringArray(op.controlIds, 1) &&
+      new Set(op.controlIds).size === op.controlIds.length &&
+      ["horizontal", "vertical"].includes(String(op.axis))
     );
   if (op.type === "removeControls")
     return (

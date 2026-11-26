@@ -34,6 +34,8 @@ use crate::spec::FormSpec;
 pub const INIT_PROCEDURE: &str = "RAS_FormInit";
 /// The call added to a hand-written `UserForm_Initialize`.
 const INIT_CALL: &str = "RAS_FormInit '--- RAS ---";
+/// The call added to a hand-written `UserForm_Resize` when controls are anchored.
+const RESIZE_CALL: &str = "RAS_FormResize '--- RAS ---";
 /// Longest statement written on one line (the VBE accepts 1023 characters).
 const MAX_LINE: usize = 1000;
 
@@ -137,6 +139,16 @@ fn points_literal(points: f64) -> String {
 
 /// The generated procedure that sizes the form and fills the lists of `spec`.
 pub fn init_procedure(spec: &FormSpec, codepage: u16) -> Result<Option<String>, String> {
+    init_procedure_with(spec, codepage, false)
+}
+
+/// [`init_procedure`]; with `anchored`, it also tells `RAS_FormResize`
+/// ([`crate::anchor`]) when the form has got its size.
+fn init_procedure_with(
+    spec: &FormSpec,
+    codepage: u16,
+    anchored: bool,
+) -> Result<Option<String>, String> {
     // The inside of the form as designed, whatever the display scaling (DPI): the outer size
     // VBA gives the window holds title bar and borders of another scaling.
     let width = points_literal(crate::compile::client_points(
@@ -148,6 +160,11 @@ pub fn init_procedure(spec: &FormSpec, codepage: u16) -> Result<Option<String>, 
     let mut body = format!(
         "    If Abs(Me.InsideWidth - {width}) >= 1 Then Me.Width = Me.Width + {width} - Me.InsideWidth\n    If Abs(Me.InsideHeight - {height}) >= 1 Then Me.Height = Me.Height + {height} - Me.InsideHeight\n"
     );
+    if anchored {
+        // The size fixed for the display scaling does not move the anchored controls.
+        let resize = crate::anchor::RESIZE_PROCEDURE;
+        body = format!("    {resize} 1\n{body}    {resize} 2\n");
+    }
     for control in &spec.controls {
         let kind = control.control_type.trim();
         if !kind.eq_ignore_ascii_case("ComboBox") && !kind.eq_ignore_ascii_case("ListBox") {
@@ -278,38 +295,45 @@ pub fn compose(
             "コードビハインドに `{RAS_BEGIN_MARKER}` の行があります。この行は RAS が生成するコードの目印なので、書かないでください"
         ));
     }
-    let Some(init) = init_procedure(spec, codepage)? else {
+    let resize = crate::anchor::resize_procedure(spec);
+    let Some(init) = init_procedure_with(spec, codepage, resize.is_some())? else {
         return Ok(with_marker(rel_path, designer, &code));
     };
-    if ras_ovba::procedure_names(&code)
-        .iter()
-        .any(|n| n.eq_ignore_ascii_case(INIT_PROCEDURE))
-    {
+    let names = ras_ovba::procedure_names(&code);
+    if names.iter().any(|n| n.eq_ignore_ascii_case(INIT_PROCEDURE)) {
         return Err(format!(
             "コードビハインドに `{INIT_PROCEDURE}` があります。この名前は list の項目を設定するために RAS が生成するプロシージャが使います"
         ));
     }
-    let lines: Vec<&str> = code.lines().collect();
+    let resize_name = crate::anchor::RESIZE_PROCEDURE;
+    if resize.is_some() && names.iter().any(|n| n.eq_ignore_ascii_case(resize_name)) {
+        return Err(format!(
+            "コードビハインドに `{resize_name}` があります。この名前はアンカー（anchor）を設定したコントロールを動かすために RAS が生成するプロシージャが使います"
+        ));
+    }
+    let mut lines: Vec<String> = code.lines().map(str::to_string).collect();
     let mut generated = init;
-    match sub_declaration_end(&lines, "UserForm_Initialize") {
-        // The hand-written handler fills the lists first, unless it says when.
-        Some(end) if !mentions(&code, INIT_PROCEDURE) => {
-            let mut body: String = lines[..=end].iter().map(|l| format!("{l}\n")).collect();
-            body.push_str(&format!("    {INIT_CALL}\n"));
-            body.extend(lines[end + 1..].iter().map(|l| format!("{l}\n")));
-            let code = ras_ovba::merge_managed_region(&body, &generated);
-            return Ok(with_marker(rel_path, designer, &code));
+    let mut hooks = vec![("UserForm_Initialize", INIT_PROCEDURE, INIT_CALL)];
+    if let Some(resize) = &resize {
+        generated.push('\n');
+        generated.push_str(resize);
+        hooks.push(("UserForm_Resize", resize_name, RESIZE_CALL));
+    }
+    for (handler, procedure, call) in hooks {
+        if mentions(&code, procedure) {
+            // The code-behind calls the procedure itself.
+            continue;
         }
-        None if !mentions(&code, INIT_PROCEDURE) => generated.push_str(&format!(
-            "\nPrivate Sub UserForm_Initialize()\n    {INIT_PROCEDURE}\nEnd Sub\n"
-        )),
-        // The code-behind calls the procedure itself.
-        _ => {}
+        let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+        match sub_declaration_end(&borrowed, handler) {
+            // The hand-written handler runs the generated procedure first.
+            Some(end) => lines.insert(end + 1, format!("    {call}")),
+            None => generated.push_str(&format!(
+                "\nPrivate Sub {handler}()\n    {procedure}\nEnd Sub\n"
+            )),
+        }
     }
-    let mut body = code;
-    if !body.is_empty() && !body.ends_with('\n') {
-        body.push('\n');
-    }
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
     // A module without code-behind would otherwise get CR LF line ends.
     let code = ras_ovba::merge_managed_region(&body, &generated).replace("\r\n", "\n");
     Ok(with_marker(rel_path, designer, &code))
@@ -334,7 +358,10 @@ pub fn code_behind(source: &str) -> String {
     let without_region = ras_ovba::merge_managed_region(&joined, "");
     let mut out: String = without_region
         .lines()
-        .filter(|l| !l.trim().eq_ignore_ascii_case(INIT_CALL))
+        .filter(|l| {
+            let line = l.trim();
+            !line.eq_ignore_ascii_case(INIT_CALL) && !line.eq_ignore_ascii_case(RESIZE_CALL)
+        })
         .map(|l| format!("{l}\n"))
         .collect();
     while out.ends_with("\n\n") {
@@ -487,6 +514,80 @@ mod tests {
         let comment =
             "Private Sub UserForm_Initialize() ' RAS_FormInit\n    x = \"RAS_FormInit\"\nEnd Sub\n";
         assert!(compose_for(&spec, comment).contains("RAS_FormInit '--- RAS ---"));
+    }
+
+    #[test]
+    fn anchored_controls_follow_the_size_of_the_form() {
+        let spec = spec(
+            r#"{"id":"ok","name":"btnOK","type":"CommandButton","left":150,"top":140,"anchor":"bottom,right"},
+               {"id":"fr","name":"fraMain","type":"Frame","left":8,"top":8,"width":200,"height":100,"anchor":"Top, Left, Right"},
+               {"id":"in","parentId":"fr","name":"txtIn","type":"TextBox","left":8,"top":8,"anchor":"top,left,right"},
+               {"id":"fix","parentId":"fr","name":"lblFix","type":"Label","left":8,"top":40},
+               {"id":"mid","name":"lblMid","type":"Label","left":8,"top":120,"anchor":"none"},
+               {"id":"fp","name":"fpBook","type":"FilePicker","left":8,"top":150,"width":120,"height":18,"anchor":"left,right"},
+               {"id":"plain","name":"lblPlain","type":"Label","left":8,"top":140}"#,
+        );
+        let code = compose_for(&spec, "Option Explicit\n");
+        let resize = "Private Sub RAS_FormResize(Optional ByVal mode As Long)\n    Static w As Single, h As Single, ready As Boolean\n    Dim dw As Single, dh As Single\n    If mode = 1 Then ready = False: Exit Sub\n    If mode = 2 Then w = Me.InsideWidth: h = Me.InsideHeight: ready = True: Exit Sub\n    If Not ready Then Exit Sub\n    dw = Me.InsideWidth - w: dh = Me.InsideHeight - h\n    If dw = 0 And dh = 0 Then Exit Sub\n    w = Me.InsideWidth: h = Me.InsideHeight\n    With Me.btnOK\n        .Left = .Left + dw\n        .Top = .Top + dh\n    End With\n    With Me.fraMain\n        If .Width + dw > 0 Then .Width = .Width + dw Else .Width = 0\n    End With\n    With Me.txtIn\n        If .Width + dw > 0 Then .Width = .Width + dw Else .Width = 0\n    End With\n    With Me.lblMid\n        .Left = .Left + dw / 2\n        .Top = .Top + dh / 2\n    End With\n    With Me.fpBook_Text\n        If .Width + dw > 0 Then .Width = .Width + dw Else .Width = 0\n        .Top = .Top + dh / 2\n    End With\n    With Me.fpBook_Button\n        .Left = .Left + dw\n        .Top = .Top + dh / 2\n    End With\nEnd Sub\n";
+        assert!(code.contains(resize), "{code}");
+        assert!(
+            code.contains(
+                "Private Sub RAS_FormInit()\n    RAS_FormResize 1\n    If Abs(Me.InsideWidth"
+            ),
+            "{code}"
+        );
+        assert!(
+            code.contains("Me.InsideHeight\n    RAS_FormResize 2\nEnd Sub\n"),
+            "{code}"
+        );
+        assert!(
+            code.contains("\nPrivate Sub UserForm_Resize()\n    RAS_FormResize\nEnd Sub\n"),
+            "{code}"
+        );
+        assert_eq!(code_behind(&code), "Option Explicit\n");
+
+        // A hand-written UserForm_Resize moves the controls first.
+        let hand = "Private Sub UserForm_Resize()\n    Me.Caption = Me.Width\nEnd Sub\n";
+        let code = compose_for(&spec, hand);
+        assert!(
+            code.contains(
+                "Private Sub UserForm_Resize()\n    RAS_FormResize '--- RAS ---\n    Me.Caption"
+            ),
+            "{code}"
+        );
+        assert_eq!(code.matches("Sub UserForm_Resize").count(), 1);
+        assert_eq!(code_behind(&code), hand);
+
+        // Without anchors there is nothing to move.
+        let plain = compose_for(&super::tests::spec(COMBO), "");
+        assert!(
+            !plain.contains("RAS_FormResize") && !plain.contains("UserForm_Resize"),
+            "{plain}"
+        );
+
+        // The name is RAS's.
+        let designer = crate::compile(&spec, 932).unwrap();
+        let own = "Private Sub RAS_FormResize()\nEnd Sub\n";
+        assert!(compose("forms/F.form.json", &designer, &spec, own, 932).is_err());
+    }
+
+    #[test]
+    fn anchors_are_validated() {
+        for (anchor, ok) in [
+            ("\"top,left\"", true),
+            ("\"none\"", true),
+            ("\"top,top\"", false),
+            ("\"center\"", false),
+            ("1", false),
+        ] {
+            let text = format!(
+                r#"{{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{{"name":"F"}},"controls":[{{"id":"l","name":"lbl","type":"Label","anchor":{anchor}}}]}}"#
+            );
+            assert_eq!(!crate::parse(&text).has_errors(), ok, "{anchor}");
+        }
+        // A Page fills its MultiPage.
+        let page = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F"},"controls":[{"id":"m","name":"mp","type":"MultiPage"},{"id":"p","parentId":"m","name":"pg","type":"Page","anchor":"top,left"}]}"#;
+        assert!(crate::parse(page).has_errors());
     }
 
     /// The inside of the form keeps its designed size at any display scaling: the stored

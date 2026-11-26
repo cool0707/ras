@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "frmAnchor", "caption": "Anchor", "width": 240, "height": 180 },
+  "controls": [
+    { "id": "ok", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 150, "top": 140, "width": 72, "height": 24, "anchor": "bottom,right" },
+    { "id": "fr", "name": "fraMain", "type": "Frame", "caption": "Main", "left": 8, "top": 8, "width": 200, "height": 100, "anchor": "top,bottom,left,right" },
+    { "id": "in", "parentId": "fr", "name": "txtIn", "type": "TextBox", "left": 8, "top": 8, "width": 100, "height": 18, "anchor": "top,left,right" },
+    { "id": "fix", "parentId": "fr", "name": "lblFix", "type": "Label", "caption": "x", "left": 8, "top": 40, "width": 40, "height": 18 },
+    { "id": "mid", "name": "lblMid", "type": "Label", "caption": "m", "left": 80, "top": 116, "width": 80, "height": 18, "anchor": "none" },
+    { "id": "fp", "name": "fpBook", "type": "FilePicker", "left": 8, "top": 150, "width": 120, "height": 18, "anchor": "left,right,top" }
+  ]
+}

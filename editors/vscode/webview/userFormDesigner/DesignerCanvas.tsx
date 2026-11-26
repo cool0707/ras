@@ -7,6 +7,7 @@ import { columnLayout, itemColumns, textColumnIndex } from "../../src/userForm/l
 import { backgroundPicture, picturePositionLayout } from "../../src/userForm/pictureLayout";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { displayPages } from "../../src/userForm/collections";
+import { anchorLayout, anchorMinimumSize } from "../../src/userForm/anchor";
 import type { ActivePages } from "../../src/userForm/collections";
 import type { JSX } from "preact";
 import type {
@@ -458,10 +459,28 @@ export function DesignerCanvas({
   resizeBothLabel?: string;
 }) {
   const [localActivePages, setLocalActivePages] = useState<ActivePages>({});
-  const document = useMemo(
+  const pagedDocument = useMemo(
     () => displayPages(sourceDocument, activePages ?? localActivePages),
     [sourceDocument, activePages, localActivePages],
   );
+  const [formResizePreview, setFormResizePreview] = useState<{ width: number; height: number }>();
+  // While the form is being resized, the anchored controls follow it (as they will once it is).
+  const document = useMemo(() => {
+    if (!formResizePreview) return pagedDocument;
+    const moved = anchorLayout(
+      pagedDocument.controls,
+      "",
+      formResizePreview.width - pagedDocument.width,
+      formResizePreview.height - pagedDocument.height,
+    );
+    if (!moved.size) return pagedDocument;
+    return {
+      ...pagedDocument,
+      controls: pagedDocument.controls.map((control) =>
+        moved.has(control.id) ? { ...control, ...moved.get(control.id)! } : control,
+      ),
+    };
+  }, [pagedDocument, formResizePreview]);
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const controlledSelection = !!onSelectionChangeMany || !!onSelectionChange;
   const selectionIds = controlledSelection
@@ -474,7 +493,6 @@ export function DesignerCanvas({
     else setLocalSelection(ids);
   };
   const [preview, setPreview] = useState<{ id: string; geometry: Geometry; floating?: boolean }>();
-  const [formResizePreview, setFormResizePreview] = useState<{ width: number; height: number }>();
   const [groupPreview, setGroupPreview] = useState<{ id: string; left: number; top: number }[]>();
   const [marqueeBox, setMarqueeBox] = useState<SelectionRect>();
   const [destination, setDestination] = useState<{ target?: DropTarget; valid: boolean }>();
@@ -601,7 +619,7 @@ export function DesignerCanvas({
       )
     )
       setSelection([]);
-  }, [document]);
+  }, [pagedDocument]);
   useEffect(() => {
     if (!formResizable) {
       formResizeGesture.current = undefined;
@@ -665,15 +683,16 @@ export function DesignerCanvas({
   const updateFormResize = (dx: number, dy: number) => {
     const current = formResizeGesture.current;
     if (!current) return;
-    const rootChildren = document.controls.filter((control) => !control.parentId);
-    const minimumWidth = Math.max(
-      1,
-      ...rootChildren.map((control) => control.left + control.width),
+    // The controls in the form limit how small it gets: those anchored to the right or the
+    // bottom move and those anchored to both edges shrink before that.
+    const least = anchorMinimumSize(
+      pagedDocument.controls,
+      "",
+      pagedDocument.width,
+      pagedDocument.height,
     );
-    const minimumHeight = Math.max(
-      1,
-      ...rootChildren.map((control) => control.top + control.height),
-    );
+    const minimumWidth = least.width;
+    const minimumHeight = least.height;
     const resizeAxis = (start: number, delta: number, minimum: number) => {
       if (stableDelta(delta) === 0) return start;
       const target = start + stableDelta(delta);

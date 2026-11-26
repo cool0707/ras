@@ -1212,6 +1212,72 @@ error 5
     );
 }
 
+/// Anchored controls (spec §14.11.16) follow the size of the form in the debug run, and
+/// `UserForm.Resize` runs after they have moved.
+#[test]
+fn anchored_controls_follow_the_form() {
+    let spec = include_str!("js/forms/frmAnchor.form.json");
+    let code = include_str!("js/forms/frmAnchor.ras");
+    let main = "export function main() {\n    new frmAnchor();\n}\n";
+    let mut cfg = Config::default();
+    cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
+    let sources = vec![
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: main.into(),
+        },
+        form_source(
+            PathBuf::from("forms/frmAnchor.ras"),
+            "frmAnchor",
+            code.to_string(),
+        ),
+    ];
+    let prog = analyze(sources, cfg);
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    let out = build_js(&prog, "../../");
+    if !has_node() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ras-js-{}-anchor", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("src/main.ras", main);
+    write("forms/frmAnchor.ras", code);
+    write("forms/frmAnchor.form.json", spec);
+    for f in &out.files {
+        write(&format!("build/debug/{}", f.rel_path), &f.text);
+    }
+    let p = Project(root);
+    let (stdout, stderr, ok) = p.run("Main.main", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout,
+        "\
+start: ok=150,140 fra=200x100 in=100 fix=8 mid=80,116 fp=96/104
+resize 300x180
+resize 300x200
+grown: ok=210,160 fra=260x120 in=160 fix=8 mid=110,126 fp=156/164
+resize 240x200
+resize 240x180
+back: ok=150,140 fra=200x100 in=100 fix=8 mid=80,116 fp=96/104
+",
+        "{stderr}"
+    );
+}
+
 /// `rule(..., errorLabel: label)` (spec §14.11.12): the error moves to the label passed, the one
 /// shown before is cleared, and calling `rule` again without a label keeps the last one.
 #[test]

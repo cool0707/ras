@@ -17,7 +17,7 @@ export interface PropertyContract {
 	description: string;
 	authoring: boolean;
 	allowedValues?: string[];
-	editor?: "font" | "color" | "enum" | "picture" | "list" | "toggle";
+	editor?: "font" | "color" | "enum" | "picture" | "list" | "toggle" | "anchor";
 	children?: Record<string, PropertyContract>;
 	minimum?: number;
 	maximum?: number;
@@ -116,6 +116,10 @@ export const commonControlProperties: Record<string, PropertyContract> = {
 	visible: p("boolean", false, "supported", "Whether the control is visible.", true),
 	tag: p("string", false, "supported", "Opaque metadata associated with the control.", true),
 	controlTipText: p("string", false, "supported", "Tooltip shown for the control.", true),
+	anchor: {
+		...p("string", false, "supported", "Edges of the container the control keeps its distance to when the container is resized: top, bottom, left, right separated by commas, or none (omitted: top,left).", true),
+		editor: "anchor",
+	},
 	observed: p("object", false, "snapshot-only", "Snapshot state captured from Excel for review.", false),
 	controls: p("objectArray", false, "snapshot-only", "Legacy nested input accepted and normalized to flat controls.", false),
 	properties: p("object", false, "custom/unchecked", "Unchecked custom property bag.", false),
@@ -318,7 +322,7 @@ function buildControls(): Record<string, ControlContract> {
 				),
 			),
 			allowedParentTypes: ["MultiPage"],
-			excludedCommon: ["left", "top", "width", "height"],
+			excludedCommon: ["left", "top", "width", "height", "anchor"],
 		},
 		tabstrip: control("TabStrip", false, {
 			selectedIndex: p("integer", false, "supported", "Zero-based selected Tab index, or -1 when no Tab is selected.", true),
@@ -348,7 +352,7 @@ function buildControls(): Record<string, ControlContract> {
 		type: "ProgressBar",
 		progId: "RAS.ProgressBar",
 		canContainChildren: false,
-		excludedCommon: ["tabIndex"],
+		excludedCommon: ["tabIndex", "anchor"],
 		properties: {
 			caption: p("string", false, "supported", "Text at the top left.", true),
 			value: p("number", false, "supported", "Current value, between min and max.", true),
