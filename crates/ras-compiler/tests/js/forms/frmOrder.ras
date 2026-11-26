@@ -12,7 +12,8 @@ function constructor() {
 @on("cboKind.Change")
 function kindChanged() {
     if (this.cboKind.text == "法人") {
-        form.rule(this.txtCorp, z.string().required("法人名を入力してください"));
+        // 自分で用意したラベルに表示する
+        form.rule(this.txtCorp, z.string().required("法人名を入力してください"), errorLabel: this.lblCorpMessage);
     } else {
         form.remove(this.txtCorp);
     }

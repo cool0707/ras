@@ -273,7 +273,13 @@ export class FormValidator {
 
     /**
      * コントロールに規則を付ける（既にあれば置き換える）。前の入力によって規則を変えるときも、
-     * 同じように呼び直す。`errorLabel` を省略すると `<コントロール名>Error` のラベルを使う（無ければ作る）。
+     * 同じように呼び直す。
+     *
+     * `errorLabel` に自分で用意したラベルを渡すと、そこにエラーを表示する（位置・色・フォントは
+     * そのラベルのまま。`form.rule(this.txtTel, z.string(), errorLabel: this.lblTelMessage)`）。
+     * 省略すると `<コントロール名>Error` のラベルを使い、無ければコントロールの下に作る。
+     * 呼び直すときに省略すると、それまでのラベルを使い続ける。別のラベルを渡すと、それまでの
+     * ラベルのエラーを消して新しいラベルに表示し直す。
      */
     rule(control: MSForms.Control, schema: ValidationSchema, errorLabel: MSForms.Label = null): void {
         const key = control.name.toLowerCase();
@@ -286,8 +292,15 @@ export class FormValidator {
         }
         f.control = control;
         f.schema = schema;
-        if (errorLabel != null) {
+        if (errorLabel != null && f.label != errorLabel) {
+            if (f.label != null) {
+                f.label.caption = "";
+                f.label.visible = false;
+            }
             f.label = errorLabel;
+            if (f.error != "") {
+                this.display(f, f.error);
+            }
         }
         // 確定済みのコントロールは、新しい規則ですぐに表示し直す。
         if (f.touched || f.error != "") {

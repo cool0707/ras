@@ -2517,7 +2517,8 @@ function ok() {
   | `errorColor` | 作るラベルの文字色（既定 `0x0000CC`、赤） |
   | `commit(control)` / `edit(control)` / `commitActive(container)` | コンパイラが生成するイベント プロシージャから呼ばれる（下記） |
 
-* **エラーを表示するラベル:** `rule` の `errorLabel` を省略すると、コントロールと同じコンテナー（フォーム・`Frame`・`Page`）の `<コントロール名>Error`（`txtName` なら `txtNameError`）を使う。デザインに置いたラベルは、位置・色・フォントをそのまま使い、`caption` と `visible` だけを変える。無ければ最初にエラーを表示するときに `controls.add("Forms.Label.1", "<コントロール名>Error")` で作る: コントロールの直下（`top` = コントロールの下端 + 1pt、`left` / `width` はコントロールと同じ、高さはフォントの 1.5 倍 + 2pt）、背景は透明（`fmBackStyleTransparent`）、文字色は `errorColor`、フォントはコントロールと同じ。作ったラベルの分の隙間は、デザインで空けておく。エラーが無いときラベルは非表示にする。
+* **エラーを表示するラベル:** `rule` の 3 番目の引数 `errorLabel` に自分で用意したラベルを渡すと、そこに表示する（`form.rule(this.txtTel, z.string().regex("^[0-9-]+$"), errorLabel: this.lblTelMessage)`。名前付き引数（§3.3）で書ける）。渡したラベルは位置・色・フォントをそのまま使い、`caption` と `visible` だけを変える。`rule` を呼び直すときに別のラベルを渡すと、それまでのラベルのエラーを消して新しいラベルに表示し直す。省略して呼び直すと、それまでのラベルを使い続ける。
+  `errorLabel` を省略すると、コントロールと同じコンテナー（フォーム・`Frame`・`Page`）の `<コントロール名>Error`（`txtName` なら `txtNameError`）を使う。デザインに置いたラベルは、位置・色・フォントをそのまま使い、`caption` と `visible` だけを変える。無ければ最初にエラーを表示するときに `controls.add("Forms.Label.1", "<コントロール名>Error")` で作る: コントロールの直下（`top` = コントロールの下端 + 1pt、`left` / `width` はコントロールと同じ、高さはフォントの 1.5 倍 + 2pt）、背景は透明（`fmBackStyleTransparent`）、文字色は `errorColor`、フォントはコントロールと同じ。作ったラベルの分の隙間は、デザインで空けておく。エラーが無いときラベルは非表示にする。
 * **イベントとのつなぎ:** フォームのコードビハインドのモジュール変数の型が `FormValidator` のとき、コンパイラはフォームのコントロールに次のイベント プロシージャを生成する（`@on` のハンドラがあれば、その後に呼ぶ）。`MSForms` のコントロールの `Exit` は `WithEvents` では受け取れない（§12.2.3）ため、コンパイラが生成する。変数が `null` の間は何もしない。
 
   | コントロール | イベント | 呼ぶもの |

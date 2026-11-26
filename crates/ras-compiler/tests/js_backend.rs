@@ -1000,7 +1000,8 @@ const ORDER_MAIN: &str =
 /// The validation of a form (spec §14.11.12) in the debug run: a rule checks its control when
 /// the focus leaves it, the error goes to the label `<control>Error` (made under the control when
 /// the form has none, transparent), a committed control is checked again as it changes, rules
-/// change with what was entered, and `validateAll` shows every error and focuses the first.
+/// change with what was entered (`txtCorp` shows its error in the label the form passes as
+/// `errorLabel`), and `validateAll` shows every error and focuses the first.
 #[test]
 fn forms_validate_their_input() {
     let spec = include_str!("js/forms/frmOrder.form.json");
@@ -1053,7 +1054,7 @@ fn forms_validate_their_input() {
     let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_validation.js")));
     assert!(ok, "{stderr}");
     let expected = "\
-show txtName,txtAge,txtAgeError,cboKind,fraCorp,txtCorp,chkAgree,btnOK
+show txtName,txtAge,txtAgeError,cboKind,fraCorp,txtCorp,lblCorpMessage,chkAgree,btnOK
   focus txtName
 > {\"t\":\"focus\",\"control\":\"txtName\"}
 > {\"t\":\"focus\",\"control\":\"txtAge\"}
@@ -1074,7 +1075,7 @@ show txtName,txtAge,txtAgeError,cboKind,fraCorp,txtCorp,chkAgree,btnOK
   focus cboKind
 > {\"t\":\"click\",\"control\":\"btnOK\"}
   chkAgreeError \"同意が必要です\" visible=true back=0 fore=204 at 12,199 150x15.5
-  fraCorp/txtCorpError \"法人名を入力してください\" visible=true back=0 fore=204 at 6,25 150x15.5
+  fraCorp/lblCorpMessage \"法人名を入力してください\" visible=true back=1 fore=2147483666 at 6,30 180x14
   focus txtName
 > {\"t\":\"input\",\"control\":\"txtName\",\"text\":\"山田\",\"seq\":3}
   txtNameError \"\" visible=false back=0 fore=204 at 12,31 150x15.5
@@ -1083,7 +1084,7 @@ show txtName,txtAge,txtAgeError,cboKind,fraCorp,txtCorp,chkAgree,btnOK
   chkAgreeError \"\" visible=false back=0 fore=204 at 12,199 150x15.5
   focus chkAgree
 > {\"t\":\"input\",\"control\":\"txtCorp\",\"text\":\"ABC\",\"seq\":4}
-  fraCorp/txtCorpError \"\" visible=false back=0 fore=204 at 6,25 150x15.5
+  fraCorp/lblCorpMessage \"\" visible=false back=1 fore=2147483666 at 6,30 180x14
   focus txtCorp
 > {\"t\":\"click\",\"control\":\"btnOK\"}
 hide 
@@ -1206,6 +1207,69 @@ fn dates_compute_as_in_vba() {
 18:00:00
 error 5
 error 5
+",
+        "{stderr}"
+    );
+}
+
+/// `rule(..., errorLabel: label)` (spec §14.11.12): the error moves to the label passed, the one
+/// shown before is cleared, and calling `rule` again without a label keeps the last one.
+#[test]
+fn validators_show_errors_in_the_labels_passed() {
+    let spec = include_str!("js/forms/frmLabels.form.json");
+    let code = include_str!("js/forms/frmLabels.ras");
+    let main = "export function main() {\n    new frmLabels().showModal();\n}\n";
+    let mut cfg = Config::default();
+    cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
+    let sources = vec![
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: main.into(),
+        },
+        form_source(
+            PathBuf::from("forms/frmLabels.ras"),
+            "frmLabels",
+            code.to_string(),
+        ),
+    ];
+    let prog = analyze(sources, cfg);
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    let out = build_js(&prog, "../../");
+    if !has_node() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ras-js-{}-labels", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("src/main.ras", main);
+    write("forms/frmLabels.ras", code);
+    write("forms/frmLabels.form.json", spec);
+    for f in &out.files {
+        write(&format!("build/debug/{}", f.rel_path), &f.text);
+    }
+    let p = Project(root);
+    let (stdout, stderr, ok) = p.run("Main.main", Some(&fixture("mock_labels.js")));
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout,
+        "\
+txtAError \"必須\" visible=true
+auto=[]false one=[必須]true
+one=[]false two=[必須]true
+two=[必須]true (kept)
 ",
         "{stderr}"
     );

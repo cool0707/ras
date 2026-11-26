@@ -21,7 +21,7 @@ module.exports = {
         send(msg) {
             if (msg.t === "show") { id = msg.id; console.log("show", msg.controls.map((c) => c.name).join(",")); return; }
             if (msg.t === "update") {
-                for (const c of msg.controls) if (/Error$/.test(c.name)) console.log(`  ${c.parent ? c.parent + "/" : ""}${c.name} "${c.state.Caption}" visible=${c.state.Visible} back=${c.state.BackStyle} fore=${c.state.ForeColor} at ${c.state.Left},${c.state.Top} ${c.state.Width}x${c.state.Height}`);
+                for (const c of msg.controls) if (/Error$|Message$/.test(c.name)) console.log(`  ${c.parent ? c.parent + "/" : ""}${c.name} "${c.state.Caption}" visible=${c.state.Visible} back=${c.state.BackStyle} fore=${c.state.ForeColor} at ${c.state.Left},${c.state.Top} ${c.state.Width}x${c.state.Height}`);
                 if (msg.removed) console.log("  removed", msg.removed);
                 if (msg.focus) console.log("  focus", msg.focus);
                 return;
