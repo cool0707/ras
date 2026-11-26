@@ -311,6 +311,9 @@ impl Collector {
             None if input.kind == ModuleKind::Std && input.key == VALIDATION_MODULE => {
                 "RAS_Validation".to_string()
             }
+            None if input.kind == ModuleKind::Std && input.key == DIALOG_MODULE => {
+                "RAS_Dialogs".to_string()
+            }
             None if input.kind == ModuleKind::Std
                 && COMPOSITES.iter().any(|c| c.module == input.key) =>
             {
@@ -2554,6 +2557,11 @@ pub const STRUCT_MAP_MODULE: &str = "ras_collections";
 
 /// The bundled form validation library (spec §14.11.12): `import { z, FormValidator } from "validation"`.
 pub const VALIDATION_MODULE: &str = "validation";
+
+/// The bundled library of dialogs built in code (spec §14.11.15): `import { Dialog } from "dialog"`.
+pub const DIALOG_MODULE: &str = "dialog";
+/// The empty form the dialogs fill with controls at run time.
+pub const DIALOG_FORM: &str = "RAS_Dialog";
 
 /// A control of a form that RAS composes of MSForms controls (spec §14.11.13, §14.11.14): the
 /// form holds an object of a bundled class under the control's name.

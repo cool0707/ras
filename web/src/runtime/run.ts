@@ -99,6 +99,8 @@ export type Ask = (dialog: Dialog) => number | string | false | undefined;
 export interface FormChannel {
     send(message: unknown): void;
     receive(): unknown;
+    /** What the user has done meanwhile, without waiting (null: nothing). */
+    poll?(): unknown;
 }
 
 const BUTTON_NAMES = ["", "vbOK", "vbCancel", "vbAbort", "vbRetry", "vbIgnore", "vbYes", "vbNo"];

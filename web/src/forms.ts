@@ -89,6 +89,11 @@ export class FormPanels {
         this.flush();
     }
 
+    /** The run asks what the user has done, without waiting (null: nothing). */
+    poll(): void {
+        this.answer(this.queue.shift() ?? null);
+    }
+
     /** The run has ended: its forms are gone. */
     end(): void {
         for (const id of [...this.panels.keys()]) this.close(id);

@@ -1061,10 +1061,15 @@ impl<'p> Gen<'p> {
             .unwrap_or_default();
         self.w(format!("$rt.form({}, {{", js_str(&md.vba_name)));
         self.w(format!("    file: {},", js_str(&md.rel_path)));
-        self.w(format!(
-            "    spec: {},",
-            js_str(&format!("{dir}{}.form.json", md.vba_name))
-        ));
+        if md.rel_path == crate::DIALOG_FORM_PATH {
+            // The bundled form of the dialogs built in code (spec §14.11.15) is no file.
+            self.w(format!("    design: {},", crate::dialog_form_spec().trim()));
+        } else {
+            self.w(format!(
+                "    spec: {},",
+                js_str(&format!("{dir}{}.form.json", md.vba_name))
+            ));
+        }
         self.w("    load: $load,");
         self.w("    save: $save,");
         self.w("    restore: $restore,");

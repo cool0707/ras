@@ -123,7 +123,7 @@ fn stdlib_inputs() -> Vec<SourceInput> {
 }
 
 /// Parses, collects and type-checks a project. Never fails: problems are in `Program::diagnostics`.
-pub fn analyze(sources: Vec<SourceInput>, config: Config) -> Program {
+pub fn analyze(sources: Vec<SourceInput>, mut config: Config) -> Program {
     let mut inputs = stdlib_inputs();
     inputs.extend(sources);
     // A form with a composed control (a progress bar ...) needs code that attaches it
@@ -142,10 +142,83 @@ pub fn analyze(sources: Vec<SourceInput>, config: Config) -> Program {
             ));
         }
     }
+    // The dialogs built in code (spec §14.11.15): the library and the empty form it fills, only
+    // when a module imports it (the form is written into the workbook with the project's forms).
+    if uses_dialog(&inputs) {
+        add_dialog(&mut inputs, &mut config);
+    }
     let mut prog = collect::collect(inputs, config);
     check::check(&mut prog);
     testing::check(&mut prog);
     prog
+}
+
+/// Key of the bundled library of dialogs built in code (spec §14.11.15).
+pub const DIALOG_MODULE: &str = collect::DIALOG_MODULE;
+/// The bundled form the dialogs fill (`RAS_Dialog`): no controls of its own.
+pub const DIALOG_FORM: &str = collect::DIALOG_FORM;
+/// Path the bundled form's code-behind is reported under.
+pub const DIALOG_FORM_PATH: &str = "<stdlib>/RAS_Dialog.ras";
+
+/// The design of the bundled form (a FormSpec): the dialogs size it and add its controls.
+pub fn dialog_form_spec() -> String {
+    format!(
+        "{{\n  \"schemaVersion\": 1,\n  \"kind\": \"ras.userform\",\n  \"basis\": \"designer\",\n  \"form\": {{ \"name\": \"{DIALOG_FORM}\", \"caption\": \"\", \"width\": 240, \"height\": 120 }},\n  \"controls\": []\n}}\n"
+    )
+}
+
+/// Whether a source imports the bundled dialogs: an `import … from "dialog"` statement whose
+/// `import` starts a line (the sources are not parsed yet; a comment does not count).
+fn uses_dialog(inputs: &[SourceInput]) -> bool {
+    inputs.iter().any(|i| {
+        i.kind == ModuleKind::User
+            && ["\"dialog\"", "'dialog'"].iter().any(|q| {
+                i.text.match_indices(q).any(|(at, _)| {
+                    let before = i.text[..at].trim_end();
+                    let Some(head) = before.strip_suffix("from") else {
+                        return false;
+                    };
+                    let Some(start) = head.rfind("import") else {
+                        return false;
+                    };
+                    let line = head[..start].rsplit('\n').next().unwrap_or("");
+                    line.trim().is_empty() && !head[start..].contains(';')
+                })
+            })
+    })
+}
+
+/// Adds the library of dialogs and its form (spec §14.11.15).
+fn add_dialog(inputs: &mut Vec<SourceInput>, config: &mut Config) {
+    if inputs.iter().any(|i| i.key == DIALOG_MODULE) {
+        return;
+    }
+    inputs.push(SourceInput {
+        path: PathBuf::from(format!("<stdlib>/{DIALOG_MODULE}.ras")),
+        rel_path: format!("<stdlib>/{DIALOG_MODULE}.ras"),
+        key: DIALOG_MODULE.to_string(),
+        kind: ModuleKind::Std,
+        text: include_str!("../stdlib/dialog.ras").to_string(),
+    });
+    if !config
+        .forms
+        .iter()
+        .any(|f| f.name.eq_ignore_ascii_case(DIALOG_FORM))
+    {
+        config.forms.push(FormDecl {
+            name: DIALOG_FORM.to_string(),
+            controls: Vec::new(),
+        });
+    }
+    let key = format!("{}{DIALOG_FORM}", collect::FORM_KEY_PREFIX);
+    inputs.retain(|i| !i.key.eq_ignore_ascii_case(&key));
+    inputs.push(SourceInput {
+        path: PathBuf::from(DIALOG_FORM_PATH),
+        rel_path: DIALOG_FORM_PATH.to_string(),
+        key,
+        kind: ModuleKind::User,
+        text: include_str!("../stdlib/dialog_form.ras").to_string(),
+    });
 }
 
 #[derive(Debug, Clone, Default)]

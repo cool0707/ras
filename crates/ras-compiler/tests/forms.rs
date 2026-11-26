@@ -1539,3 +1539,79 @@ export function pick(): string[] {
     );
     assert!(class.contains("Application.FileDialog("), "{class}");
 }
+
+/// The dialogs built in code (spec §14.11.15): importing `dialog` adds the library and the empty
+/// form `RAS_Dialog` (whose code takes the close button), and nothing of it without the import.
+#[test]
+fn importing_dialog_adds_the_bundled_form() {
+    let main = r#"import { Dialog, choose, Progress } from "dialog";
+
+export function ask(): int {
+    const d = new Dialog("入力");
+    const name = d.text("名前").required();
+    const kind = d.select("種類", ["A", "B"]);
+    if (!d.ok()) return -1;
+    console.log(name.text, kind.index);
+    const p = new Progress("処理中");
+    p.value = 50.0;
+    p.close();
+    return choose("続けますか", ["はい", "いいえ"], cancel: 1);
+}
+"#;
+    let source = |text: &str| SourceInput {
+        path: PathBuf::from("src/main.ras"),
+        rel_path: "src/main.ras".into(),
+        key: "main".into(),
+        kind: ModuleKind::User,
+        text: text.into(),
+    };
+    let prog = analyze(vec![source(main)], Config::default());
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {:?}: {}", d.code, d.module, d.message))
+        .collect();
+    assert!(errors.is_empty(), "{errors:#?}");
+    let out = build(&prog, &BuildOptions::default());
+    let file = |name: &str| {
+        out.files
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+    };
+    let form = file("RAS_Dialog");
+    assert_eq!(form.kind, ras_compiler::vba::VModuleKind::Form);
+    assert!(
+        form.code.contains("Private Sub UserForm_QueryClose("),
+        "{}",
+        form.code
+    );
+    assert!(file("Dialog").code.contains("Implements RAS_DialogHost"));
+    assert!(file("Progress").code.contains("f.Show vbModeless"));
+    assert!(
+        file("Main").code.contains("RAS_Dialogs.choose_("),
+        "{}",
+        file("Main").code
+    );
+    for name in [
+        "DialogField",
+        "RAS_Dialogs",
+        "ProgressBar",
+        "RAS_On_CommandButton_Click",
+    ] {
+        file(name);
+    }
+
+    let plain = analyze(
+        vec![source(
+            "// from \"dialog\" in a comment is not an import\nexport function f() {}\n",
+        )],
+        Config::default(),
+    );
+    let out = build(&plain, &BuildOptions::default());
+    assert!(out
+        .files
+        .iter()
+        .all(|f| f.name != "RAS_Dialog" && f.name != "Dialog"));
+}

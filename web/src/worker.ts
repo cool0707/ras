@@ -16,6 +16,7 @@ export type FromWorker =
     | { type: "form"; message: unknown }
     /** The run waits for what the user does next on the forms. */
     | { type: "formWait" }
+    | { type: "formPoll" }
     | { type: "done"; result: ReturnType<typeof runJob>; ms: number }
     | { type: "failed"; message: string };
 
@@ -44,6 +45,13 @@ function formChannel(shared: SharedArrayBuffer): FormChannel {
         receive: () => {
             Atomics.store(state, 0, 0);
             post({ type: "formWait" });
+            Atomics.wait(state, 0, 0);
+            return JSON.parse(new TextDecoder().decode(bytes.slice(0, state[1])));
+        },
+        // What the user has done, without waiting for more (DoEvents with a modeless form shown).
+        poll: () => {
+            Atomics.store(state, 0, 0);
+            post({ type: "formPoll" });
             Atomics.wait(state, 0, 0);
             return JSON.parse(new TextDecoder().decode(bytes.slice(0, state[1])));
         },

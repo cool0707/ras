@@ -542,3 +542,23 @@ fn an_exported_form_reads_back() {
     // Not an exported form.
     assert!(ras_ovba::import_user_form("Attribute VB_Name = \"X\"\r\n", b"", 932).is_err());
 }
+
+/// The bundled form of the dialogs built in code (spec §14.11.15) is generated with the forms of
+/// `forms/` when the compiler made its code, and not otherwise.
+#[test]
+fn the_bundled_dialog_form_is_written_when_its_code_is_compiled() {
+    let root = std::env::temp_dir().join(format!("ras-form-dialog-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let mut compiled = std::collections::HashMap::new();
+    let built = ras_form::workspace::build(&[], &root, 932, &compiled);
+    assert!(built.forms.is_empty());
+    compiled.insert("RAS_Dialog".to_string(), "Option Explicit\n".to_string());
+    let built = ras_form::workspace::build(&[], &root, 932, &compiled);
+    assert_eq!(built.errors(), 0, "{:?}", built.problems);
+    assert_eq!(built.forms.len(), 1);
+    assert_eq!(built.forms[0].name, "RAS_Dialog");
+    assert!(built.forms[0].code.starts_with("' RAS-FORM "));
+    assert!(!built.forms[0].streams.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}

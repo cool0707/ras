@@ -749,12 +749,14 @@ module.exports = function install(rt) {
             this.$shownOnce = false;
             this.$dirty = new Set();
             this.$active = null;
-            const file = path.resolve(rt.config().root, def.spec);
-            let spec;
-            try {
-                spec = JSON.parse(fs.readFileSync(file, "utf8").replace(/^﻿/, ""));
-            } catch (e) {
-                throw new RasError(`フォーム ${name} のデザイン（${def.spec}）を読めません: ${(e && e.message) || e}`, 75, "RAS");
+            let spec = def.design;
+            if (!spec) {
+                const file = path.resolve(rt.config().root, def.spec);
+                try {
+                    spec = JSON.parse(fs.readFileSync(file, "utf8").replace(/^﻿/, ""));
+                } catch (e) {
+                    throw new RasError(`フォーム ${name} のデザイン（${def.spec}）を読めません: ${(e && e.message) || e}`, 75, "RAS");
+                }
             }
             const f = spec.form || {};
             this.$specFont = f.font;
@@ -1391,6 +1393,12 @@ parentPort.on("message", (line) => socket.write(line + "\\n"));
                 if (msg.t === "disconnected") closed = true;
                 return msg;
             },
+            poll() {
+                if (closed) return null;
+                const msg = next(0);
+                if (msg && msg.t === "disconnected") closed = true;
+                return msg;
+            },
         };
     }
 
@@ -1400,24 +1408,46 @@ parentPort.on("message", (line) => socket.write(line + "\\n"));
             for (const f of loaded) f.$flush();
             const msg = host().receive();
             if (!msg) continue;
-            if (msg.t === "disconnected") {
-                // The panels are gone (VS Code ended the session): the forms are closed.
-                for (const f of [...loaded]) {
-                    f.$visible = false;
-                    f.$unload();
-                }
-                channel = { send() {}, receive: () => ({ t: "disconnected" }), closed: true };
-                return;
+            if (!handle(msg)) return;
+        }
+    }
+
+    /** Hands one thing the user did to its form; false when the host is gone. */
+    function handle(msg) {
+        if (msg.t === "disconnected") {
+            // The panels are gone (VS Code ended the session): the forms are closed.
+            for (const f of [...loaded]) {
+                f.$visible = false;
+                f.$unload();
             }
-            const form = [...loaded].find((f) => f.$id === msg.id);
-            if (!form || !form.$visible) continue;
-            // Under a modal form, the others do not respond.
-            if (modal.length > 0 && modal[modal.length - 1] !== form) {
-                host().send({ t: "blocked", id: form.$id });
-                continue;
-            }
-            form.$user(msg);
-            if (form.$loaded) form.$flush();
+            channel = { send() {}, receive: () => ({ t: "disconnected" }), closed: true };
+            return false;
+        }
+        const form = [...loaded].find((f) => f.$id === msg.id);
+        if (!form || !form.$visible) return true;
+        // Under a modal form, the others do not respond.
+        if (modal.length > 0 && modal[modal.length - 1] !== form) {
+            host().send({ t: "blocked", id: form.$id });
+            return true;
+        }
+        form.$user(msg);
+        if (form.$loaded) form.$flush();
+        return true;
+    }
+
+    /**
+     * `DoEvents`: draws what changed on the forms shown and hands them what the user has done
+     * meanwhile, without waiting (a modeless form, such as a progress bar with a cancel button,
+     * responds while the code runs). A host that cannot tell without waiting (no `poll`) gets
+     * only the changes.
+     */
+    function doEvents() {
+        if (channel === null || channel.closed) return;
+        for (const f of loaded) f.$flush();
+        if (typeof channel.poll !== "function") return;
+        for (let n = 0; n < 100; n++) {
+            const msg = channel.poll();
+            if (!msg || !handle(msg)) return;
         }
     }
 
@@ -1478,5 +1508,5 @@ parentPort.on("message", (line) => socket.write(line + "\\n"));
             return { $picture: data, Handle: 1, Type: 1 };
         },
     };
-    return { register, names, instance, create, idle, msforms, UserForm };
+    return { register, names, instance, create, idle, doEvents, msforms, UserForm };
 };

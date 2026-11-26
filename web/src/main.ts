@@ -902,6 +902,8 @@ async function run(kind: "run" | "test") {
                     formPanels.receive(m.message as RuntimeMessage);
                 } else if (m.type === "formWait") {
                     formPanels.wait();
+                } else if (m.type === "formPoll") {
+                    formPanels.poll();
                 } else if (m.type === "done") {
                     worker.terminate();
                     formPanels.end();

@@ -1,0 +1,88 @@
+show RAS_Dialog modal=true "保存" 324x78
+  lblMessage:Label 12,12 300x14 "変更を保存しますか？"
+  btn0:CommandButton 84,42 72x24 "変更を確定"
+  btn1:CommandButton 162,42 72x24 "別名で確定"
+  btn2:CommandButton 240,42 72x24 "キャンセル"
+> {"t":"click","control":"btn1"}
+hide
+1
+show RAS_Dialog modal=true "エクスポート" 324x406
+  lblMessage:Label 12,12 300x14 "出力の設定"
+  f0_Label:Label 12,38 300x14 "形式"
+  f0:ComboBox 12,54 300x18 "CSV"
+  f1_Label:Label 12,80 300x14 "出力先"
+  f1_Text:TextBox 12,96 276x18 ""
+  f1_Button:CommandButton 288,96 24x18 "..."
+  f1_Error:Label 12,115 300x12 ""
+  f2:CheckBox 12,135 300x18 "見出しを出力する"
+  f3_Label:Label 12,161 300x14 "名前"
+  f3:TextBox 12,177 300x18 ""
+  f3_Error:Label 12,196 300x12 ""
+  f4_Label:Label 12,216 300x14 "改行"
+  f4:Frame 12,232 300x42 ""
+  f4/f4_0:OptionButton 0,3 300x18 "CRLF"
+  f4/f4_1:OptionButton 0,21 300x18 "LF"
+  f5_Label:Label 12,282 300x14 "シート"
+  f5:Frame 12,298 300x60 ""
+  f5/f5_0:CheckBox 4,2 292x18 "A"
+  f5/f5_1:CheckBox 4,20 292x18 "B"
+  f5/f5_2:CheckBox 4,38 292x18 "C"
+  btn0:CommandButton 162,370 72x24 "OK"
+  btn1:CommandButton 240,370 72x24 "キャンセル"
+> {"t":"input","control":"f3","text":"toolong","seq":1}
+> {"t":"click","control":"btn0"}
+  draw f1_Error "出力先を選んでください" visible=true enabled=true
+  draw f3_Error "5 文字以内で入力してください" visible=true enabled=true
+  draw f1_Text "" visible=true enabled=true
+> {"t":"input","control":"f1_Text","text":"C:\\out.csv","seq":2}
+  draw f1_Error "" visible=false enabled=true
+> {"t":"input","control":"f3","text":"abc","seq":3}
+  draw f3_Error "" visible=false enabled=true
+> {"t":"click","control":"f4_1"}
+> {"t":"click","control":"f5_0"}
+> {"t":"click","control":"f5_2"}
+> {"t":"select","control":"f0","index":1}
+> {"t":"click","control":"f2"}
+  draw f1_Text "C:\out.csv" visible=true enabled=false
+> {"t":"click","control":"btn0"}
+hide
+0 TSV 1 C:\out.csv false abc LF A,C
+show RAS_Dialog modal=true "エクスポート" 324x406
+  lblMessage:Label 12,12 300x14 "出力の設定"
+  f0_Label:Label 12,38 300x14 "形式"
+  f0:ComboBox 12,54 300x18 "TSV"
+  f1_Label:Label 12,80 300x14 "出力先"
+  f1_Text:TextBox 12,96 276x18 "C:\out.csv"
+  f1_Button:CommandButton 288,96 24x18 "..."
+  f1_Error:Label 12,115 300x12 ""
+  f2:CheckBox 12,135 300x18 "見出しを出力する"
+  f3_Label:Label 12,161 300x14 "名前"
+  f3:TextBox 12,177 300x18 "abc"
+  f3_Error:Label 12,196 300x12 ""
+  f4_Label:Label 12,216 300x14 "改行"
+  f4:Frame 12,232 300x42 ""
+  f4/f4_0:OptionButton 0,3 300x18 "CRLF"
+  f4/f4_1:OptionButton 0,21 300x18 "LF"
+  f5_Label:Label 12,282 300x14 "シート"
+  f5:Frame 12,298 300x60 ""
+  f5/f5_0:CheckBox 4,2 292x18 "A"
+  f5/f5_1:CheckBox 4,20 292x18 "B"
+  f5/f5_2:CheckBox 4,38 292x18 "C"
+  btn0:CommandButton 162,370 72x24 "OK"
+  btn1:CommandButton 240,370 72x24 "キャンセル"
+> {"t":"close"}
+hide
+-1 TSV abc
+show RAS_Dialog modal=false "Microsoft Excel" 324x98
+  pb_Track:Label 12,31.5 300x4.5 ""
+  pb_Bar:Label 12,31.5 0.75x4.5 ""
+  pb_Caption:Label 12,12 264x16.5 "集計中"
+  pb_Value:Label 276,12 36x16.5 "0%"
+  lblMessage:Label 12,42 300x12 ""
+  btnCancel:CommandButton 240,62 72x24 "中止"
+  draw btnCancel "中止" visible=true enabled=true
+  draw pb_Value "1%" visible=true enabled=true
+> (DoEvents) click btnCancel
+  draw btnCancel "中止中…" visible=true enabled=false
+unload
+stopped true true

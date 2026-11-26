@@ -171,7 +171,10 @@ pub fn build(
         forms: Vec::new(),
         problems: Vec::new(),
     };
-    for form in forms {
+    // The bundled form of the dialogs built in code (spec §14.11.15), when the compiler made its
+    // code (the project uses the dialogs).
+    let bundled = bundled_dialog(forms, compiled);
+    for form in forms.iter().chain(bundled.iter()) {
         for issue in &form.parsed.issues {
             built.problems.push(problem(
                 form,
@@ -225,6 +228,24 @@ pub fn build(
         }
     }
     built
+}
+
+/// The bundled form `RAS_Dialog` (spec §14.11.15) when `compiled` has its code and `forms` has
+/// no form of that name.
+fn bundled_dialog(forms: &[LoadedForm], compiled: &HashMap<String, String>) -> Option<LoadedForm> {
+    let name = ras_compiler::DIALOG_FORM;
+    if !compiled.keys().any(|k| k.eq_ignore_ascii_case(name))
+        || forms.iter().any(|f| f.name.eq_ignore_ascii_case(name))
+    {
+        return None;
+    }
+    let mut form = loaded(
+        Path::new("forms"),
+        &format!("{name}.form.json"),
+        ras_compiler::dialog_form_spec(),
+    );
+    form.rel_path = ras_compiler::DIALOG_FORM_PATH.replace(".ras", ".form.json");
+    Some(form)
 }
 
 /// The files written for one form by [`pull`].
