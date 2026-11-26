@@ -3258,9 +3258,9 @@
     }
     // Objects moved (or sized) at once: [[obj, box]].
     function moveObjects(moves) {
-        if (!view || !moves.length) return;
+        if (!view || !moves.length) return false;
         pickAfter(keyOf(moves[0][0]));
-        postEdit(moves.map(([obj, b]) => ({ op: "object", sheet: view.sheet.name, ...target(obj), ...anchorOf(Math.max(0, b.x), Math.max(0, b.y)), width: Math.max(0, Math.round(b.w)), height: Math.max(0, Math.round(b.h)) })));
+        return postEdit(moves.map(([obj, b]) => ({ op: "object", sheet: view.sheet.name, ...target(obj), ...anchorOf(Math.max(0, b.x), Math.max(0, b.y)), width: Math.max(0, Math.round(b.w)), height: Math.max(0, Math.round(b.h)) })));
     }
     // The handles of the selected object: its sides and corners size it.
     const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -3633,18 +3633,48 @@
         }
         // 枠線に合わせる (or Alt held, as in Excel): the sides moved go to the cells' borders.
         if ((saved.snapGrid || e.altKey) && !turn) [x, y, w, h] = snapBox(d.how, x, y, w, h);
-        if (!d.ghost) d.ghost = makeGhost(false);
         d.now = { x, y, w, h };
-        ghostAt(d.ghost, x, y, x + w, y + h, false);
-        if (turn) d.ghost.style.transform = `rotate(${d.obj.rot}deg)`;
-        // The others selected: by as much.
-        for (const g of d.group || []) {
-            const b = g.from;
-            if (!g.ghost) g.ghost = makeGhost(false);
-            g.now = { x: b.x + x - f.x, y: b.y + y - f.y, w: b.w, h: b.h };
-            ghostAt(g.ghost, g.now.x, g.now.y, g.now.x + b.w, g.now.y + b.h, false);
-            if (g.obj.rot) g.ghost.style.transform = `rotate(${g.obj.rot}deg)`;
+        if (d.how === "move") {
+            // Moved: the object itself (and the others selected, by as much).
+            placeBox(d.box, x, y);
+            for (const g of d.group || []) {
+                const b = g.from;
+                g.now = { x: b.x + x - f.x, y: b.y + y - f.y, w: b.w, h: b.h };
+                placeBox(g.obj.box, g.now.x, g.now.y);
+            }
+            return;
         }
+        // Sized: a see-through copy of it as it will be, the object where it is.
+        if (!d.ghost) d.ghost = copyOfObject(d.box);
+        Object.assign(d.ghost.style, { left: `${x}px`, top: `${y}px`, width: `${Math.max(0, w)}px`, height: `${Math.max(0, h)}px` });
+        if (d.obj.chart && window.rasChart && !d.redraw) {
+            d.redraw = requestAnimationFrame(() => {
+                d.redraw = 0;
+                if (!d.ghost.isConnected) return;
+                try {
+                    window.rasChart.draw(d.ghost.querySelector(".chartbox") || d.ghost, d.obj.chart);
+                } catch (e) {
+                    // (As it was drawn, stretched or not.)
+                }
+            });
+        }
+    }
+    function placeBox(box, x, y) {
+        Object.assign(box.style, { left: `${x}px`, top: `${y}px` });
+    }
+    // A copy of an object's box (without its handles), half seen and not in the mouse's way.
+    function copyOfObject(box) {
+        const c = box.cloneNode(true);
+        c.querySelectorAll(".objframe").forEach((f) => f.remove());
+        c.classList.remove("on", "framed", "movable");
+        c.classList.add("objcopy");
+        c.removeAttribute("title");
+        return view.layer.appendChild(c);
+    }
+    // The objects moved back where they were (a move not made).
+    function unmove(d) {
+        placeBox(d.box, d.from.x, d.from.y);
+        for (const g of d.group || []) placeBox(g.obj.box, g.from.x, g.from.y);
     }
     // The border of a column (`cols`) or a row nearest a point of the sheet.
     function nearestBorder(cols, p) {
@@ -3673,12 +3703,12 @@
         objDrag = null;
         if (!d || !d.now) return;
         if (d.ghost) d.ghost.remove();
-        for (const g of d.group || []) if (g.ghost) g.ghost.remove();
+        if (d.redraw) cancelAnimationFrame(d.redraw);
         swallowClick = true;
         setTimeout(() => (swallowClick = false));
         if (d.how === "rot") objectEdit(d.obj, { rotation: d.now.rot });
         else if (d.how === "adj") endAdjust(d);
-        else moveObjects([[d.obj, d.now], ...(d.group || []).filter((g) => g.now).map((g) => [g.obj, g.now])]);
+        else if (!moveObjects([[d.obj, d.now], ...(d.group || []).filter((g) => g.now).map((g) => [g.obj, g.now])]) && d.how === "move") unmove(d);
     }
     // The arrow keys move the selected objects by a pixel (Ctrl: by 10).
     function nudgeObjects(dr, dc, far) {
