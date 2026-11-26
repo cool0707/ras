@@ -1508,7 +1508,7 @@ mod tests {
         let util_file = dir.join("src").join("util.ras");
         let main_file = dir.join("src").join("main.ras");
         let util = "/**\n * 2 倍にする。\n * @param x 元の値\n */\nexport function twice(x: int, byref out: int): int {\n    out = x * 2;\n    return out;\n}\n\nexport class Point {\n    x: double = 0;\n}\n";
-        let main = "import { twice, Point } from \"./util\";\n\nexport function run() {\n    let r = 0;\n    const a = twice(1, r);\n    const p: Point = new Point();\n    msgBox(twice(a, r) + p.x);\n}\n";
+        let main = "import { twice, Point } from \"src/util\";\n\nexport function run() {\n    let r = 0;\n    const a = twice(1, r);\n    const p: Point = new Point();\n    msgBox(twice(a, r) + p.x);\n}\n";
         std::fs::write(&util_file, util).unwrap();
         std::fs::write(&main_file, main).unwrap();
         let (util_uri, main_uri) = (path_to_uri(&util_file), path_to_uri(&main_file));
@@ -1696,12 +1696,12 @@ mod tests {
             json!({ "textDocument": { "uri": main_uri }, "range": { "start": { "line": 1, "character": 20 }, "end": { "line": 1, "character": 20 } }, "context": { "diagnostics": [] } }),
         );
         assert_eq!(
-            actions[0]["title"], "\"./util\" から `Point` をインポート",
+            actions[0]["title"], "\"src/util\" から `Point` をインポート",
             "{actions}"
         );
         assert_eq!(
             actions[0]["edit"]["changes"][&main_uri][0]["newText"],
-            "import { Point } from \"./util\";\n"
+            "import { Point } from \"src/util\";\n"
         );
         let comp = request("textDocument/completion", at(&main_uri, 2, 6));
         let item = comp["items"]
@@ -1711,7 +1711,7 @@ mod tests {
             .find(|i| i["label"] == "twice")
             .expect("twice is offered");
         assert_eq!(
-            item["additionalTextEdits"][0]["newText"], "import { twice } from \"./util\";\n",
+            item["additionalTextEdits"][0]["newText"], "import { twice } from \"src/util\";\n",
             "{item}"
         );
         send(Message::Notification(Notification::new(
@@ -2033,7 +2033,7 @@ mod tests {
         assert!(r["edits"][0]["newText"]
             .as_str()
             .unwrap()
-            .starts_with("import { sumTo } from \"../src/calc\";\n"));
+            .starts_with("import { sumTo } from \"src/calc\";\n"));
 
         send(Message::Notification(Notification::new(
             "textDocument/didOpen".into(),

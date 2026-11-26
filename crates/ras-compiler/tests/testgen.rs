@@ -140,7 +140,7 @@ fn generated_tests_compile() {
         "today",
     ];
     let text = generate_all("src/util.ras", SRC, &names);
-    assert!(text.starts_with("import { sumTo, half, greet, fill, lastRow, isBlank, kindOf, Kind, move, Point, names, makeCounter, apply, cell, today } from \"../src/util\";\n"), "{text}");
+    assert!(text.starts_with("import { sumTo, half, greet, fill, lastRow, isBlank, kindOf, Kind, move, Point, names, makeCounter, apply, cell, today } from \"src/util\";\n"), "{text}");
     for n in names {
         assert!(
             text.contains(&format!("describe(\"{n}\", () => {{")),
@@ -184,7 +184,7 @@ fn new_file() {
     assert_eq!(g.path, "test/a/calc.test.ras");
     assert_eq!(
         g.text,
-        r#"import { sumTo } from "../../src/a/calc";
+        r#"import { sumTo } from "src/a/calc";
 
 describe("sumTo", () => {
     test("sumTo の戻り値", () => {
@@ -259,7 +259,7 @@ fn existing_file_without_the_import() {
     let g = testgen::generate(&prog, fn_named(&prog, "sumTo"), Some(existing)).unwrap();
     assert!(
         g.text
-            .starts_with("import { sumTo } from \"../src/main\";\n\ndescribe(\"other\""),
+            .starts_with("import { sumTo } from \"src/main\";\n\ndescribe(\"other\""),
         "{}",
         g.text
     );

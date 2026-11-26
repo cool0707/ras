@@ -991,3 +991,100 @@ export function setup(book: Excel.Workbook) {
     );
     assert!(module(&files, "RAS_Runtime").contains("Sub RAS_OnActionEach("));
 }
+
+/// The standard modules of `src/` are globals like the code names of sheets: they are called
+/// by the module name without `import`, also from each other and from the files of sheets.
+#[test]
+fn standard_modules_are_called_by_name_without_import() {
+    let main = "export function hoge(): int { return Util.foo() + 1; }\nexport function run() { Sheet1.baz(); }\n";
+    let util = "export function foo(): int { return 1; }\nexport function bar(): int {\n    const main = 2;\n    return Main.hoge() + main;\n}\n";
+    let sheet = "export function baz() { msgBox(Main.hoge()); }\n";
+    let (diags, files) = compile(&[("Sheet1", sheet)], &[("main", main), ("util", util)]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    assert!(module(&files, "Main").contains("hoge = Util.foo() + 1&"));
+    let u = module(&files, "Util");
+    // A local with the module's name (in VBA's casing) is renamed so that `Main.` stays the module.
+    assert!(u.contains("bar = Main.hoge() + main_2"), "{u}");
+    assert!(module(&files, "Sheet1").contains("MsgBox Main.hoge()"));
+}
+
+/// A name declared or imported in the module hides the module's name; the module's extension
+/// methods stay out of scope until it is imported.
+#[test]
+fn module_names_are_hidden_by_own_names_and_bring_no_extension_methods() {
+    let ext = "export function twice(this: int): int { return this * 2; }\n";
+    let (diags, _) = compile(
+        &[],
+        &[
+            ("ext", ext),
+            ("main", "export function f(): int { return (3).twice(); }\n"),
+        ],
+    );
+    assert!(
+        !diags.is_empty(),
+        "the extension method should not be in scope"
+    );
+    let (diags, _) = compile(
+        &[],
+        &[
+            ("ext", ext),
+            (
+                "main",
+                "export function f(): int { return Ext.twice(3); }\n",
+            ),
+        ],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+    let own = "function Ext(): int { return 1; }\nexport function f(): int { return Ext(); }\n";
+    let (diags, _) = compile(&[], &[("ext", ext), ("main", own)]);
+    assert!(
+        !codes(&diags).iter().any(|c| c.starts_with("E02")),
+        "{diags:#?}"
+    );
+}
+
+/// The file of a sheet imports a module of `src/` by its path from the file.
+#[test]
+fn a_sheet_file_imports_by_its_own_path() {
+    let util = "export function foo(): int { return 1; }\n";
+    let sheet = |path: &str| {
+        format!("import {{ foo }} from \"{path}\";\nexport function baz() {{ msgBox(foo()); }}\n")
+    };
+    let (diags, _) = compile(&[("Sheet1", &sheet("src/util"))], &[("util", util)]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    // A relative path (deprecated) still works, with a warning that `--fix` rewrites.
+    for path in ["../src/util", "../util"] {
+        let (diags, _) = compile(&[("Sheet1", &sheet(path))], &[("util", util)]);
+        assert_eq!(codes(&diags), ["W0121"], "{path}: {diags:#?}");
+    }
+}
+
+/// `import "validation";` brings in no name, and does nothing: a warning shows what to write.
+#[test]
+fn an_import_without_names_is_reported() {
+    let main = "import \"validation\";\nimport {} from \"dialog\";\nimport \"src/util\";\nexport function f(): int { return Util.foo(); }\n";
+    let util = "export function foo(): int { return 1; }\n";
+    let (diags, _) = compile(&[], &[("main", main), ("util", util)]);
+    assert_eq!(codes(&diags), ["W0122", "W0122", "W0122"], "{diags:#?}");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.contains("`import * as validation from \"validation\"`")),
+        "{diags:#?}"
+    );
+    assert!(
+        diags.iter().any(|d| d.contains("`Util.foo()`")),
+        "{diags:#?}"
+    );
+    let (diags, _) = compile(
+        &[],
+        &[
+            (
+                "main",
+                "import * as z from \"validation\";\nimport { choose } from \"dialog\";\n",
+            ),
+            ("util", util),
+        ],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+}

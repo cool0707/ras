@@ -411,7 +411,7 @@ describe("fill", () => {
 ```
 
 - ブックはテストごとに元に戻ります。別のブックで試すには `useWorkbook("test/fixtures/x.xlsx")`。
-- `src/` の関数は `import { f } from "../src/module";` で使います（`export` されたものだけ）。
+- `src/` の関数は `Module.f()` のようにモジュール名で呼ぶか、`import { f } from "src/module";` で使います（`export` されたものだけ。パスはプロジェクトのフォルダーから）。
 
 ## コマンド（Excel が無くても動くもの）
 

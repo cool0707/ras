@@ -306,7 +306,7 @@ fn hand_written_vba_is_taken_over() {
         read("objects/Sheet1.ras")
     );
     assert!(
-        read("objects/Sheet1.ras").contains("import { Twice } from \"../mod_Util\";"),
+        read("objects/Sheet1.ras").contains("import { Twice } from \"src/mod_Util\";"),
         "{}",
         read("objects/Sheet1.ras")
     );
@@ -317,8 +317,7 @@ fn hand_written_vba_is_taken_over() {
         "{module1}"
     );
     assert!(
-        module1.contains("import * as ModUtil from \"./mod_Util\";")
-            && module1.contains("ModUtil.Twice(21)"),
+        !module1.contains("import ") && module1.contains("ModUtil.Twice(21)"),
         "{module1}"
     );
 

@@ -12,6 +12,9 @@
 > * クラス・インターフェイスの型パラメータに既定の型引数 `T = 型` を書けるようにした（§2.4.1）
 > * テスト（`ras test`）を追加。`test/` の `*.test.ras` に vitest 形式（`describe` / `test` / `expect`）で書き、ブックの代役（§14.10.8）で Excel を起動せずに実行する（§14.12）
 > * エディタ（VS Code 拡張・プレイグラウンド）の「テストを生成」で、関数のテストの雛形を `test/` に追加する（§14.12.10）
+> * `src/` の標準モジュールを、シートのコード名と同じく `import` なしでモジュール名で参照できるようにした（`Main.hoge()`。§12.1.2）
+> * 名前を取り込まない `import "validation";` を警告にした（`W0122`。§12.1.3）
+> * `import` のパスは、どのファイルからもプロジェクトのフォルダーからのパスで書く（`import { hoge } from "src/main"`。§12.1.3）。ファイルからの相対パス（`./main`、`../src/main`）は廃止した（警告 `W0121`。`ras check --fix` で書き換える）
 > * RAS のファイルと VBA のモジュールを一対一に対応させる（§12.1.1）。シート・`ThisWorkbook` のコードは `objects/<コード名>.ras`・`objects/ThisWorkbook.ras` に書き、そのファイルがドキュメントモジュール全体になる（§12.2）。シートの上の ActiveX コントロールのイベント（§12.2.1）と `WithEvents` のイベント（§12.2.2）を `@on` で受け取れる。VBE で足したプロシージャは RAS のファイルに取り込む（§14.7.3）。シートのイベントハンドラ（`@on("Sheet1.Change")`）をどのファイルにも書ける方式、`<コード名>Events.ras`、ドキュメントモジュールの RAS 管理領域は廃止した
 > * イベントハンドラを実行時に付ける `on` / `addEventListener` を追加（§12.2.3）。コントロール・シート・ブック・`Application` には、`WithEvents` の変数を持つクラスを生成して付ける。図形には `OnAction` にマクロの名前を設定する。フォーム・シートのファイルのアロー関数が、`this` とそのファイルの関数・変数を正しく参照するようにした（§4.1）
 > * フォームの入力のバリデーション（zod 風のスキーマと `FormValidator`。入力の確定時に検証し、エラーをコントロールの下のラベルに表示する）を同梱のライブラリ `validation` として追加（§14.11.12）
@@ -547,8 +550,8 @@ export function sum(this: double[]): double {
 #### 3.2.2 呼び出し側
 
 ```typescript
-import { isBlank, padLeft } from "./strutil";
-import * as xl from "./excelutil";   // 名前空間インポートでもモジュール内の拡張メソッドがすべて有効になる
+import { isBlank, padLeft } from "src/strutil";
+import * as xl from "src/excelutil";   // 名前空間インポートでもモジュール内の拡張メソッドがすべて有効になる
 
 if (!name.isBlank()) {
     code = id.padLeft(6, "0");
@@ -1257,6 +1260,45 @@ RAS のファイルと VBA のモジュールは一対一に対応させる。�
   * `RAS_StructMap__…`（§2.5.6）、`RAS_Lambda_…`（§4.1）、`RAS_On_…`・`RAS_Events`（§12.2.3）、`RAS_Runtime`（§7.5）
 * 同期・`ras pack` は、この対応に無いブックのコード（手書きの標準モジュール、シートのモジュールの手書きのコードなど）を RAS のファイルに変換して取り込み、対応を保つ（§14.7.1）。
 
+#### 12.1.2 モジュール名での呼び出し（`import` なし）
+
+`src/` のファイルの標準モジュールの名前（§12.1.1 のモジュール名。`main.ras` → `Main`）は、シートのコード名（§12.2）と同じく、どのファイルからも `import` なしで参照できるグローバルな名前である。`Main.hoge()` は `import * as Main from "src/main"` と書いたときと同じに解決され、生成される VBA も同じ（`Main.hoge()`）。VBA でほかのモジュールの `Public` プロシージャをモジュール名で修飾して呼ぶのと同じ書き方である。
+
+```typescript
+// src/util.ras
+export function bar(): int {
+    return Main.hoge() + 1;     // src/main.ras の export function hoge
+}
+
+// objects/Sheet1.ras
+export function baz() {
+    msgBox(Util.bar());         // src/util.ras の export function bar
+}
+```
+
+* **参照できるもの:** そのモジュールの `export` されたものだけ（`Main.hits` のような変数・定数、列挙型・クラスも含む）。`export` されていないものは参照できない。
+* **名前:** VBA のモジュール名と同じ綴りで書く（`main.ras` は `Main`、`mod_util.ras` は `ModUtil`、`util/b.ras` は `B`）。RAS は大文字小文字を区別するので、`main.hoge()` とは書けない。
+* **優先順位:** そのファイルで宣言・`import` した名前が、モジュール名より優先する（`import * as U from "src/util"` の別名も使える）。Excel / VBA のグローバルと同じ名前のモジュールは、グローバルのほうを指す。関数の中のローカル変数が、VBA で大文字小文字を区別せずにモジュール名と同じになるとき（`main` と `Main`）は、VBA ではローカル変数の名前を変えて出力する（`main_2`）。
+* **相互参照:** モジュール同士が互いを参照してもよい（`import` による相互参照も同じ）。
+* **修飾しない呼び出しと拡張メソッド:** 修飾しない `hoge()` と、そのモジュールの拡張メソッド（§3.2）は、`import` したときだけ使える。モジュール名だけでは、そのモジュールの拡張メソッドはスコープに入らない（どこで定義した拡張メソッドが呼ばれるかを、ファイルの `import` から分かるようにするため）。
+* `forms/` のフォームとシートのコード名、`thisWorkbook` は、もとからグローバルである（§12.2、§14.11）。`test/` のファイル（§14.12）はブックのモジュールにならないので、モジュール名では参照できない（テストのファイルからは、`src/` のモジュールをモジュール名で参照できる）。
+
+#### 12.1.3 `import` のパス
+
+`import` の `from` には、どのファイルからでも、プロジェクトのフォルダー（`ras.toml` のあるフォルダー）からのパスを、拡張子 `.ras` を付けずに書く。書いたファイルの場所によって書き方が変わらないので、ファイルを移しても `import` はそのままでよい。
+
+```typescript
+import { padLeft } from "src/lib/str";        // src/lib/str.ras
+import { setupBook } from "test/helper";      // test/helper.ras（テスト側のファイルからだけ）
+import { z } from "validation";               // 同梱のライブラリはパスなし
+```
+
+* **`/` を含むパス** はプロジェクトのファイル、**`/` を含まない名前**（`"validation"`、`"win32"`）は同梱のライブラリを指す。`"main"` のようにパスなしで書いた名前が `src/` のファイルの名前のときは、`E0121` のメッセージで `"src/main"` を示す。
+* **`import` できるファイル:** `src/` のファイル。テスト側のファイル（§14.12）は、テスト側からだけ `import` できる（`E0701`）。シート・`ThisWorkbook` のファイル（`objects/`）は `import` できず、フォームのファイル（`forms/`）はテストからだけ `import` できる（`E0124`。どちらもどこからでも名前で使える: `Sheet1.clearInput()`、`frmInput.show()`）。
+* **相対パス（廃止）:** `./` / `../` で始まるパスは、そのファイルからの相対パスとして読み替えて動くが、警告 `W0121` を出す。`ras check --fix` とエディタのクイックフィックスで、プロジェクトのフォルダーからのパスに書き換える（`objects/Sheet1.ras` の `"../src/main"` → `"src/main"`）。以前の、`objects/` / `forms/` のファイルを `src/` にあるものとした解決（`"../main"`）も、同じく警告にして読み替える。
+* **名前を取り込まない `import`:** `import "validation";`（`import {} from "validation"`）は、名前を何も取り込まないので何もしない（RAS のモジュールには、`import` したときに動くコードが無い。TypeScript の副作用のための `import` に当たるものは無い）。書き忘れとみなして警告 `W0122` を出し、`import * as validation from "validation"` / `import { … } from "validation"` の形を示す。`src/` のモジュールでは、`import` なしでモジュール名で呼べること（§12.1.2）を示す。
+* エディタの補完による `import` の追加（§16.2.7）、テストの生成（§14.12.10）、VBA からの変換（§14.7.1）が書く `import` も、このパスである。
+
 ### 12.2 シート・`ThisWorkbook` のファイル（ドキュメントモジュール）（v0.9で変更）
 
 ワークシートと `ThisWorkbook` のモジュール（ドキュメントモジュール）のコードは、`objects/<シートのコード名>.ras` と `objects/ThisWorkbook.ras` に書く（`objects/` は、VBE のプロジェクト エクスプローラーの「Microsoft Excel Objects」に当たるディレクトリで、`src/`・`forms/` と並べてプロジェクトの直下に置く）。コンパイラはこのファイルを、標準モジュールではなく**そのドキュメントモジュールのコード全体**として出力する。ドキュメントモジュールは VBE でもファイルとしてインポートできないので、同期（§14.6）と `ras pack`（§14.9）がコードモジュールに直接書き込む。フォームのコードビハインド（§14.11.2）と同じ形である。
@@ -1308,7 +1350,7 @@ function onAnySheetChange(sh: object, target: Excel.Range) { ... }
   * シートの上の ActiveX コントロールのイベントは `@on("<コントロール名>.<イベント>")`（§12.2.1）、`WithEvents` で受け取るイベントは `@on("<変数名>.<イベント>")`（§12.2.2）で受け取る。
   * `@on` は、どのイベントを受け取るかがコンパイル時に決まる。実行時に決めるとき（同じ処理を多くのコントロールに付ける、条件によって付け外しする）は、`on` / `addEventListener`（§12.2.3）を使う。
 * **変数:** トップレベルの `let` / `const` は、そのモジュールの変数・定数（`Private`）になる。初期値は、標準モジュールの変数と同じ時点で設定する。
-* **公開:** `export function` はそのシート（ブック）の `Public` メンバーになり、ほかのモジュールから `Sheet1.clearInput()` / `thisWorkbook.refresh()` のように呼ぶ（VBA のシートモジュールの `Public` プロシージャと同じ）。シートのコード名と `thisWorkbook` はどこからでも参照できるグローバルなので、`import` は要らない（シート・`ThisWorkbook` のファイルを `import` することはできない。このファイルからほかのモジュールを `import` することはできる）。`export` しない関数は `Private`。
+* **公開:** `export function` はそのシート（ブック）の `Public` メンバーになり、ほかのモジュールから `Sheet1.clearInput()` / `thisWorkbook.refresh()` のように呼ぶ（VBA のシートモジュールの `Public` プロシージャと同じ）。シートのコード名と `thisWorkbook` はどこからでも参照できるグローバルなので、`import` は要らない（シート・`ThisWorkbook` のファイルを `import` することはできない）。このファイルから `src/` のモジュールを使うときは、モジュール名で修飾するか（`Main.hoge()`。§12.1.2）、`import` する（`import { hoge } from "src/main"`。§12.1.3）。`export` しない関数は `Private`。
   * 引数なしで呼べる `export function` と `@macro` を付けた関数は、標準モジュールと同じくマクロ入口になる（§12.4 のラップをする）。Excel からは `Sheet1.clearInput` の名前で呼ばれる（ボタンへの登録など）。
 * **書けないもの（`E0650`）:** VBA がドキュメントモジュールに置けないものと、標準モジュールに置かなければ働かないものは、エラーにする。共有したいものは `src/` の標準モジュールに置き、`import` して使う。
 
@@ -1762,7 +1804,7 @@ Offset  Size  内容
 | VBE で作ったユーザーフォーム `frmInput` | `forms/frmInput.form.json`・`forms/frmInput.ras`（§14.11.6 と同じ） | 目印の行（`' RAS-FORM`）が無い。`forms/` に同名のファイルが無い |
 
 * クラスモジュールは取り込まない（そのまま残る）。
-* **変換:** `ras form pull` と同じ VBA → RAS の変換（§14.11.6）を使う。標準モジュールでは、`Public`（または省略）のプロシージャ・変数・定数・列挙型を `export` し、`Private` のものはそのモジュールの中だけのものにする。取り込むモジュール同士の参照は `import` にする（`Total(1)` → `import { Total } from "./Module1"`、`Module1.Total(1)` → `import * as Module1 from "./Module1"`）。
+* **変換:** `ras form pull` と同じ VBA → RAS の変換（§14.11.6）を使う。標準モジュールでは、`Public`（または省略）のプロシージャ・変数・定数・列挙型を `export` し、`Private` のものはそのモジュールの中だけのものにする。取り込むモジュール同士の参照は、修飾しない呼び出しを `import` にする（`Total(1)` → `import { Total } from "src/Module1"`）。モジュール名で修飾した呼び出し（`Module1.Total(1)`）は、`import` なしでそのまま使う（§12.1.2）。
 * **シート・`ThisWorkbook`:** そのモジュールのファイル（§12.2）に変換する。標準モジュールに移すことはしないので、ほかのモジュールからの `Sheet1.Foo` の呼び出しも、ボタンに登録されたマクロ名（`Sheet1.Foo`）も、そのまま使える。
   * イベント プロシージャ（`Worksheet_Change`、`Workbook_Open` など）は `@on("Worksheet.Change")` / `@on("Workbook.Open")` を付けた関数にする。
   * `Me` は `this` にする。修飾なしで使われたシート（ブック）のメンバー（`Range("A1")`、`Cells(1, 1)`、`Name`）には `this.` を付ける（`this.range("A1")`。VBA ではシートモジュールの中の `Range` はそのシートを指すため）。
@@ -2872,7 +2914,7 @@ RAS のプログラムを、Excel を起動せずに自動テストする。テ�
 | `test/fixtures/` | テストで読み込むブック（`.xlsx` / `.xlsm`）やテキスト ファイルの置き場所（慣例。§14.12.5 の `useWorkbook` はプロジェクトのルート基準の任意のパスを受け付ける） |
 | `build/test/` | `ras test` が出力する JavaScript とソースマップ、失敗したテストのブック（§14.12.8）。実行のたびに作り直す |
 
-* **テスト対象の参照:** テストファイルは、`src/` と `forms/` のモジュールの `export` されたものを相対パスで `import` して使う（`import { lastRow } from "../src/report";`）。`export` されていない関数は呼べない。シートのコード名（`Sheet1`）、`thisWorkbook` などのグローバルは、通常のモジュールと同じく使える。
+* **テスト対象の参照:** テストファイルは、`src/` と `forms/` のモジュールの `export` されたものを `import` して使う（`import { lastRow } from "src/report";`。パスはプロジェクトのフォルダーから。§12.1.3）。`export` されていない関数は呼べない。シートのコード名（`Sheet1`）、`thisWorkbook` などのグローバルは、通常のモジュールと同じく使える。
 * **逆向きの参照は不可:** `src/` / `forms/` のモジュールから `test/` のファイルを `import` するとエラー（`E0701`）。
 * **場所の変更:** `ras.toml` の `[test]` `include` で、テストファイルとみなすパターンを変更できる（§14.12.9）。`include` に一致するファイルはすべてテスト側（ビルドに含めない）として扱う。
 
@@ -2894,7 +2936,7 @@ RAS のプログラムを、Excel を起動せずに自動テストする。テ�
 
 ```typescript
 // test/report.test.ras
-import { rebuildReport, lastRow } from "../src/report";
+import { rebuildReport, lastRow } from "src/report";
 
 describe("lastRow", () => {
     beforeEach(() => useWorkbook("test/fixtures/sales.xlsx"));
@@ -3577,7 +3619,7 @@ VS Code の IntelliSense に相当する機能を、LSP の標準機能として
 #### 16.2.7 未インポートの候補
 
 * 候補にするのは、プロジェクトの他のモジュール（フォームのコードビハインドを除く）の `export` で、そのモジュールのスコープにまだ無い名前。拡張メソッドは `.` の後で、レシーバの型に適用できるものだけを候補にする。
-* 確定時の `import` は、同じモジュールからの `import { … }` があればその名前の並びの末尾に、無ければ最後の `import` の次の行（`import` が無ければファイルの先頭）に、相対パス（`./util`、`../lib/str`）で追加する。
+* 確定時の `import` は、同じモジュールからの `import { … }` があればその名前の並びの末尾に、無ければ最後の `import` の次の行（`import` が無ければファイルの先頭）に、プロジェクトのフォルダーからのパス（`src/util`、`src/lib/str`。§12.1.3）で追加する。
 * 同じ規則で、`名前が見つかりません`（関数・変数・クラス・列挙型）、`型が見つかりません`、拡張メソッドとしてのメンバーが見つからないエラーに、`import` を追加するクイックフィックスを出す。
 
 ---
