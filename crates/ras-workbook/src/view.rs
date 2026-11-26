@@ -20,6 +20,22 @@ pub(crate) mod xml;
 
 pub use drawing::Parts;
 
+/// The controls of the sheets `sheets` of the workbook file `data` (its bytes), as the stand-in
+/// for Excel takes them: `{ sheet: [{ name, activex, type, caption, value, ... }] }`.
+pub fn controls_state(data: &[u8], sheets: &[String]) -> Json {
+    use umya_spreadsheet::drawingml::package::Package;
+    let parts = Parts::read(data);
+    let mut out = serde_json::Map::new();
+    for sheet in sheets {
+        let list = parts
+            .sheet_part(sheet)
+            .map(|part| controls::Controls::read(&parts, &part, &(String::new(), 11.0)).state())
+            .unwrap_or_default();
+        out.insert(sheet.clone(), Json::Array(list));
+    }
+    Json::Object(out)
+}
+
 const CSS: &str = include_str!("view/view.css");
 const JS: &str = include_str!("view/view.js");
 const CHART_JS: &str = include_str!("view/chart.js");
@@ -33,10 +49,24 @@ pub fn data(
     limits: Option<(u32, u32)>,
     changes: Option<(&str, &Diff)>,
 ) -> Result<Json, String> {
+    data_with(book, file, source, limits, changes, None)
+}
+
+/// `data`, with the controls in the state `controls` gives them (by sheet name: what
+/// `controls_state` gives, changed by the program on the stand-in for Excel).
+pub fn data_with(
+    book: &mut Book,
+    file: &str,
+    source: Option<&[u8]>,
+    limits: Option<(u32, u32)>,
+    changes: Option<(&str, &Diff)>,
+    controls: Option<&Json>,
+) -> Result<Json, String> {
     let (rows, cols) = limits.unwrap_or((crate::book::MAX_ROWS, crate::book::MAX_COLS));
     let parts = source.map(Parts::read);
     let (ids, images) = (Cell::new(0), RefCell::new(drawing::Images::default()));
     let drawing = parts.as_ref().map(|parts| Drawing {
+        controls,
         parts,
         ids: &ids,
         images: &images,

@@ -726,8 +726,14 @@ mod tests {
                 }
                 out
             });
-            // Opening and saving files, and the engine's functions, are the bindings' own.
-            if factory || matches!(camel.as_str(), "toBytes" | "save" | "isFunction") {
+            // Opening and saving files (and reading the controls of one), and the engine's
+            // functions, are the bindings' own.
+            if factory
+                || matches!(
+                    camel.as_str(),
+                    "toBytes" | "save" | "isFunction" | "controls"
+                )
+            {
                 continue;
             }
             if !METHODS.contains(&camel.as_str()) {

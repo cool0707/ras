@@ -539,6 +539,9 @@ pub struct Drawing<'a> {
     pub parts: &'a crate::view::drawing::Parts,
     pub ids: &'a std::cell::Cell<usize>,
     pub images: &'a std::cell::RefCell<crate::view::drawing::Images>,
+    /// The state of the controls, by sheet name, as the stand-in for Excel has them (the run
+    /// mode of the editor's panel): drawn in place of what the file holds.
+    pub controls: Option<&'a Json>,
 }
 
 /// The sizes of a sheet's columns and rows in pixels, as Excel shows them at 100%.
@@ -1386,6 +1389,13 @@ impl Book {
             range: &range,
             font,
         };
-        sheet_objects(d.parts, sheet, &env, d.ids, d.images)
+        sheet_objects(
+            d.parts,
+            sheet,
+            &env,
+            d.ids,
+            d.images,
+            d.controls.and_then(|c| c.get(sheet)),
+        )
     }
 }

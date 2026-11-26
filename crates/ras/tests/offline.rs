@@ -1309,7 +1309,7 @@ fn check_warns_about_what_the_stand_in_lacks() {
     ws.range("A1").value = application.max(1, 2) + worksheets.count;
     ws.range("A1").font.bold = true;
     ws.range("A1").addComment("x");
-    ws.shapes.count;
+    ws.chartObjects().count;
     const file = application.getOpenFilename();
     application.run("Legacy");
     const conn = createObject("ADODB.Connection");
@@ -1576,6 +1576,364 @@ console.log($rasBookSnapshot(out));
         data["diff"]["changes"]["Sheet1"][0],
         serde_json::json!({ "a": "D2", "before": "（空）", "after": "6" })
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The run mode of the editor's sheet panel (`ras-main.js --serve`): what the user does on the
+/// page raises the program's events on the stand-in, and each request is answered on a line of
+/// its own, after what the handlers printed.
+#[test]
+fn run_mode_of_the_sheet_panel_raises_the_events_of_what_the_user_does() {
+    if !has_node() {
+        return;
+    }
+    let dir = project("serve", &mut sales(), &[]);
+    let ops = r#"[{"op":"activeX","sheet":"Sheet1","control":"commandButton","at":"F2","name":"CommandButton1","text":"押す"},{"op":"control","sheet":"Sheet1","control":"button","at":"F6","text":"ボタン"}]"#;
+    let (code, _, err) = ras(&dir, &["book", "edit", "Book.xlsx", "--op", ops]);
+    assert_eq!(code, 0, "{err}");
+    // The form control's name, as the workbook has it ("ボタン 2").
+    let (_, page, _) = ras(&dir, &["book", "view", "Book.xlsx", "--stdout"]);
+    let data = view_data(&page);
+    let button = data["sheets"][0]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["activex"].is_null())
+        .and_then(|o| o["name"].as_str())
+        .unwrap()
+        .to_string();
+    std::fs::create_dir_all(dir.join("objects")).unwrap();
+    std::fs::write(
+        dir.join("objects/Sheet1.ras"),
+        format!(
+            r#"@on("Worksheet.Change")
+function changed(target: Excel.Range) {{
+    debug.print("Change", target.address(false, false));
+    if (target.column == 1) this.cells(target.row, 8).value = "seen";
+}}
+
+@on("Worksheet.SelectionChange")
+function selected(target: Excel.Range) {{
+    debug.print("SelectionChange", target.address(false, false));
+}}
+
+@on("Worksheet.Activate")
+function entered() {{
+    debug.print("Activate");
+}}
+
+@on("Worksheet.BeforeDoubleClick")
+function doubleClicked(target: Excel.Range, byref cancel: boolean) {{
+    debug.print("BeforeDoubleClick", target.address(false, false));
+    cancel = true;
+}}
+
+@on("CommandButton1.Click")
+function pushed() {{
+    this.range("E1").value = "clicked";
+}}
+
+@on("CommandButton1.MouseDown")
+function pressed(button: int, shift: int, x: float, y: float) {{
+    debug.print("MouseDown", button, shift, x, y);
+}}
+
+@on("{button}.Click")
+function buttonClicked() {{
+    this.range("E2").value = "button";
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let (code, out, err) = ras(&dir, &["build", "--target", "js"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let requests = [
+        r#"{"id":1,"op":"start"}"#.to_string(),
+        r#"{"id":2,"op":"select","sheet":"Sheet1","range":"A6","active":"A6"}"#.to_string(),
+        r#"{"id":3,"op":"enter","sheet":"Sheet1","ranges":["A6"],"text":"E社"}"#.to_string(),
+        r#"{"id":4,"op":"select","sheet":"Sheet1","range":"A6","active":"A6"}"#.to_string(),
+        r#"{"id":5,"op":"doubleClick","sheet":"Sheet1","range":"C3"}"#.to_string(),
+        r#"{"id":6,"op":"control","sheet":"Sheet1","object":"CommandButton1","events":[{"event":"MouseDown","args":[1,0,3,4]},{"event":"Click"}]}"#.to_string(),
+        format!(r#"{{"id":7,"op":"macro","sheet":"Sheet1","object":"{button}","macro":""}}"#),
+        r#"{"id":8,"op":"macro","sheet":"Sheet1","object":"","macro":"Sheet1.nothing"}"#.to_string(),
+    ];
+    let mut child = Command::new("node")
+        .arg(dir.join("build/debug/ras-main.js"))
+        .arg("--serve")
+        .arg(dir.join("snap"))
+        .current_dir(&dir)
+        .env("RAS_BOOK_ADDON", addon())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("node");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().unwrap();
+        stdin
+            .write_all(format!("{}\n", requests.join("\n")).as_bytes())
+            .unwrap();
+    }
+    let run = child.wait_with_output().unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n");
+    let mut printed = Vec::new();
+    let mut replies = Vec::new();
+    for line in stdout.lines() {
+        match line.strip_prefix("\u{1e}RAS ") {
+            Some(json) => replies.push(serde_json::from_str::<serde_json::Value>(json).unwrap()),
+            // (Not what the run time notes: `[ras] Excel を使わずに実行します…`.)
+            None if !line.starts_with("[ras]") => printed.push(line.to_string()),
+            None => {}
+        }
+    }
+    // In Excel's order; the same selection again raises nothing.
+    assert_eq!(
+        printed,
+        [
+            "SelectionChange A6",
+            "Change A6",
+            "BeforeDoubleClick C3",
+            "MouseDown 1 0 3 4",
+            // (What the handlers of the buttons wrote.)
+            "Change E1",
+            "Change E2",
+        ],
+        "{stdout}"
+    );
+    assert_eq!(replies.len(), 8, "{stdout}");
+    assert!(replies[..7].iter().all(|r| r["ok"] == true), "{stdout}");
+    assert_eq!(replies[4]["cancel"], true);
+    assert_eq!(replies[5]["handled"], true);
+    assert_eq!(replies[1]["where"]["cell"], "A6");
+    // Each change of the workbook is a new revision.
+    let rev = |i: usize| replies[i]["rev"].as_i64().unwrap();
+    assert!(
+        rev(2) > rev(1) && rev(5) > rev(4) && rev(6) > rev(5),
+        "{stdout}"
+    );
+    // A macro that is nowhere: the request fails, the program goes on.
+    assert_eq!(replies[7]["ok"], false);
+    // The workbook as the program left it, for the panel to draw.
+    let (code, dump, err) = ras(
+        &dir,
+        &["book", "dump", "snap/book-0.xlsx", "--sheet", "Sheet1"],
+    );
+    assert_eq!(code, 0, "{err}");
+    for text in ["E社", "seen", "clicked", "button"] {
+        assert!(dump.contains(text), "{text}: {dump}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The controls of the sheets on the stand-in: read from the workbook, they keep their state
+/// (values, linked cells, items), raise their events when it changes, and the sheet panel draws
+/// them as they are (`controls.json` of the run mode, `ras book view --controls`).
+#[test]
+fn the_stand_in_keeps_the_state_of_the_controls() {
+    if !has_node() {
+        return;
+    }
+    let dir = project("controls", &mut sales(), &[]);
+    let ops = r#"[{"op":"activeX","sheet":"Sheet1","control":"checkBox","at":"F2","name":"CheckBox1","text":"確認"},{"op":"activeX","sheet":"Sheet1","control":"textBox","at":"F4","name":"TextBox1"},{"op":"activeX","sheet":"Sheet1","control":"comboBox","at":"F6","name":"ComboBox1"},{"op":"activeX","sheet":"Sheet1","control":"spinButton","at":"F8","name":"SpinButton1"},{"op":"control","sheet":"Sheet1","control":"checkBox","at":"F10","text":"フォーム"}]"#;
+    let (code, _, err) = ras(&dir, &["book", "edit", "Book.xlsx", "--op", ops]);
+    assert_eq!(code, 0, "{err}");
+    let (_, page, _) = ras(&dir, &["book", "view", "Book.xlsx", "--stdout"]);
+    let form = view_data(&page)["sheets"][0]["objects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["activex"].is_null())
+        .and_then(|o| o["name"].as_str())
+        .unwrap()
+        .to_string();
+    std::fs::create_dir_all(dir.join("objects")).unwrap();
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(
+        dir.join("objects/Sheet1.ras"),
+        r#"@on("CheckBox1.Change")
+function checkChanged() {
+    debug.print("CheckBox1.Change", this.CheckBox1.value);
+}
+
+@on("CheckBox1.Click")
+function checkClicked() {
+    debug.print("CheckBox1.Click");
+}
+
+@on("ComboBox1.Change")
+function comboChanged() {
+    debug.print("ComboBox1.Change", this.ComboBox1.value, this.ComboBox1.listIndex);
+}
+
+@on("SpinButton1.SpinUp")
+function spunUp() {
+    debug.print("SpinButton1.SpinUp");
+}
+
+@on("SpinButton1.Change")
+function spun() {
+    debug.print("SpinButton1.Change", this.SpinButton1.value);
+}
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("src/main.ras"),
+        format!(
+            r#"export function go() {{
+    const ws = Sheet1;
+    debug.print(ws.CheckBox1.value, ws.CheckBox1.caption, ws.oleObjects().count);
+    ws.CheckBox1.value = true;
+    ws.CheckBox1.value = true;
+    ws.oleObjects("CheckBox1").linkedCell = "H1";
+    debug.print("linked", ws.CheckBox1.value);
+    ws.CheckBox1.value = true;
+    debug.print("H1", ws.range("H1").value);
+    ws.range("H1").value = false;
+    debug.print("from H1", ws.CheckBox1.value);
+    ws.TextBox1.text = "abc";
+    debug.print("TextBox1", ws.TextBox1.value);
+    ws.ComboBox1.addItem("x");
+    ws.ComboBox1.addItem("y");
+    ws.ComboBox1.listIndex = 1;
+    debug.print("ComboBox1", ws.ComboBox1.text, ws.ComboBox1.listCount);
+    ws.SpinButton1.max = 5;
+    ws.SpinButton1.value = 9;
+    const f = ws.shapes("{form}").controlFormat;
+    f.value = xlOn;
+    debug.print("form", f.value, ws.shapes("CheckBox1").name);
+}}
+"#
+        ),
+    )
+    .unwrap();
+    let (code, out, err) = ras(&dir, &["run", "go", "--no-diff"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let printed: Vec<&str> = out.lines().filter(|l| !l.starts_with("[ras]")).collect();
+    assert_eq!(
+        printed,
+        [
+            "false 確認 4",
+            // The same value again raises nothing.
+            "CheckBox1.Change true",
+            "CheckBox1.Click",
+            // Linked to an empty cell: off; turned on, the cell is TRUE; the cell changed, the value follows.
+            "linked false",
+            "CheckBox1.Change true",
+            "CheckBox1.Click",
+            "H1 true",
+            "from H1 false",
+            "TextBox1 abc",
+            "ComboBox1.Change y 1",
+            "ComboBox1 y 2",
+            // (Up to its Max.)
+            "SpinButton1.Change 5",
+            "form 1 CheckBox1",
+        ],
+        "{out}"
+    );
+
+    // The run mode: a click changes the control, raises its events, and the page draws it so.
+    let mut child = Command::new("node")
+        .arg(dir.join("build/debug/ras-main.js"))
+        .arg("--serve")
+        .arg(dir.join("snap"))
+        .current_dir(&dir)
+        .env("RAS_BOOK_ADDON", addon())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("node");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().unwrap();
+        let requests = [
+            r#"{"id":1,"op":"start"}"#.to_string(),
+            r#"{"id":2,"op":"control","sheet":"Sheet1","object":"CheckBox1","events":[{"event":"Click"}]}"#.to_string(),
+            r#"{"id":3,"op":"control","sheet":"Sheet1","object":"SpinButton1","events":[{"event":"Click"}],"action":{"part":"more"}}"#.to_string(),
+            r#"{"id":4,"op":"control","sheet":"Sheet1","object":"TextBox1","events":[],"text":"typed"}"#.to_string(),
+            format!(r#"{{"id":5,"op":"macro","sheet":"Sheet1","object":"{form}","macro":""}}"#),
+        ];
+        stdin
+            .write_all(format!("{}\n", requests.join("\n")).as_bytes())
+            .unwrap();
+    }
+    let run = child.wait_with_output().unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&run.stdout).replace("\r\n", "\n");
+    let printed: Vec<&str> = stdout
+        .lines()
+        .filter(|l| !l.starts_with("[ras]") && !l.starts_with('\u{1e}'))
+        .collect();
+    assert_eq!(
+        printed,
+        [
+            "CheckBox1.Change true",
+            "CheckBox1.Click",
+            "SpinButton1.SpinUp",
+            "SpinButton1.Change 1",
+        ],
+        "{stdout}"
+    );
+    let replies: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter_map(|l| l.strip_prefix("\u{1e}RAS "))
+        .map(|j| serde_json::from_str(j).unwrap())
+        .collect();
+    assert!(replies.iter().all(|r| r["ok"] == true), "{stdout}");
+    assert!(
+        replies[1]["controlsRev"].as_i64() > replies[0]["controlsRev"].as_i64(),
+        "{stdout}"
+    );
+    let state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("snap/controls.json")).unwrap())
+            .unwrap();
+    let of = |name: &str| {
+        state["Sheet1"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(of("CheckBox1")["value"], "1");
+    assert_eq!(of("SpinButton1")["position"], 1);
+    assert_eq!(of("TextBox1")["value"], "typed");
+    assert_eq!(of(&form)["checked"], 1);
+    // Drawn as the program has them.
+    let (code, page, err) = ras(
+        &dir,
+        &[
+            "book",
+            "view",
+            "snap/book-0.xlsx",
+            "--drawings",
+            "Book.xlsx",
+            "--controls",
+            "snap/controls.json",
+            "--stdout",
+        ],
+    );
+    assert_eq!(code, 0, "{err}");
+    let data = view_data(&page);
+    let objects = data["sheets"][0]["objects"].as_array().unwrap();
+    let drawn = |name: &str| objects.iter().find(|o| o["name"] == name).unwrap();
+    assert_eq!(drawn("CheckBox1")["form"]["checked"], true);
+    assert_eq!(drawn("TextBox1")["text"], "typed");
+    assert_eq!(drawn(&form)["form"]["checked"], true);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

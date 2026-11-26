@@ -663,6 +663,7 @@ impl<'p> Gen<'p> {
         }
         let mut inits = Vec::new();
         let mut events = Vec::new();
+        let mut controls = Vec::new();
         // Handlers of the objects that module variables hold (`WithEvents`, spec §12.2.2).
         let mut sources: Vec<String> = Vec::new();
         for &f in &md.fns {
@@ -694,7 +695,15 @@ impl<'p> Gen<'p> {
                     Some(form) if form.kind == ObjectKind::Form => {
                         events.push(self.form_handler(form, ev, f))
                     }
-                    Some(form) => events.extend(self.document_handler(form, ev, f)),
+                    Some(form) => match self.document_handler(form, ev, f) {
+                        Some(h) => events.push(h),
+                        // A control or a shape of the sheet: raised by the user, in the run
+                        // mode of the sheet panel (`$rt.serve`).
+                        None if form.kind == ObjectKind::Sheet => {
+                            controls.push(self.control_handler(ev, f))
+                        }
+                        None => {}
+                    },
                     // An error already (`E0610`): `@on` is written in the file of the sheet.
                     None => {}
                 }
@@ -751,7 +760,38 @@ impl<'p> Gen<'p> {
         self.w(format!("    entries: {{ {entries} }},"));
         self.w(format!("    macros: [{macros}],"));
         self.w(format!("    events: [{}],", events.join(", ")));
+        if !controls.is_empty() {
+            self.w(format!("    controls: [{}],", controls.join(", ")));
+        }
         self.w("});");
+    }
+
+    /// The entry of `$rt.module` for an `@on` handler of a control or a shape of a sheet
+    /// (`@on("CommandButton1.Click")`, `@on("ボタン 1.Click")`): the run time calls it when the
+    /// user clicks the object in the run mode of the sheet panel, with the event's arguments as
+    /// `{ v }` cells (a `byref` parameter gets the cell).
+    fn control_handler(&self, ev: &OnEvent, f: FnId) -> String {
+        let d = &self.prog.fns[f];
+        let args: Vec<String> = d
+            .params
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                if p.mode == PassMode::ByRef {
+                    format!("$a[{i}]")
+                } else {
+                    format!("$a[{i}].v")
+                }
+            })
+            .collect();
+        format!(
+            "{{ target: {}, event: {}, reentrant: {}, fn: ($a) => {}({}) }}",
+            js_str(&ev.target),
+            js_str(&ev.event),
+            ev.reentrant,
+            js_ident(&d.name),
+            args.join(", ")
+        )
     }
 
     /// The entry of `$rt.module` for an `@on` handler of the workbook or a sheet (spec §12.2).
@@ -760,7 +800,7 @@ impl<'p> Gen<'p> {
     /// takes as many of the event's arguments as it declares parameters.
     ///
     /// The target is the sheet's code name, or `Workbook`. Events of controls on a sheet are
-    /// raised by the user only: they are not registered.
+    /// raised by the user only: they are registered apart (`control_handler`).
     fn document_handler(&self, doc: &FormModule, ev: &OnEvent, f: FnId) -> Option<String> {
         let d = &self.prog.fns[f];
         let md = &self.prog.modules[self.module];

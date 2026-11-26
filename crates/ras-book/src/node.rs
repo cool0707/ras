@@ -91,6 +91,14 @@ impl JsBook {
         })
     }
 
+    /// The controls of the sheets `sheets` of the workbook file `path` (ActiveX and form
+    /// controls: what they are and hold), for the stand-in's objects of the controls.
+    #[napi]
+    pub fn controls(path: String, sheets: Vec<String>) -> Result<Json> {
+        let data = std::fs::read(&path).map_err(|e| err(format!("{path}: {e}")))?;
+        Ok(ras_workbook::view::controls_state(&data, &sheets))
+    }
+
     /// The bytes of the file `save` would write.
     #[allow(clippy::wrong_self_convention)]
     #[napi]

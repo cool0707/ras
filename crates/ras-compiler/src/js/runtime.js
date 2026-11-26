@@ -668,7 +668,7 @@ function isValued(v) {
 function stand() {
     if (mock !== null || bookAddon === null || (com !== null && !noExcel)) return null;
     if (excelHost === null) {
-        excelHost = require("./ras-excel.js")(module.exports, bookAddon, { workbook: config.manifest.workbook, root: config.root, handlers: documentHandlers, outDir: config.workbooksDir || null });
+        excelHost = require("./ras-excel.js")(module.exports, bookAddon, { workbook: config.manifest.workbook, root: config.root, handlers: documentHandlers, controlHandlers, outDir: config.workbooksDir || null });
     }
     return excelHost;
 }
@@ -903,7 +903,12 @@ function memberKey(o, name) {
 function jsMember(o, name) {
     const key = memberKey(o, name);
     const v = o[key];
-    if (v === undefined && !(key in Object(o))) raise(438, name);
+    if (v === undefined && !(key in Object(o))) {
+        // A member an object of the stand-in has by name (a sheet's controls: `Sheet1.CheckBox1`).
+        const named = o !== null && typeof o === "object" && typeof o.$member === "function" ? o.$member(String(name)) : undefined;
+        if (named !== undefined) return named;
+        raise(438, name);
+    }
     return v;
 }
 
@@ -1643,6 +1648,12 @@ function documentHandlers() {
     for (const e of eventSources) out.push(e);
     return out;
 }
+/** The `@on` handlers of the controls and shapes of a sheet (`@on("CheckBox1.Click")`), by its code name. */
+function controlHandlers(codeName) {
+    const lower = String(codeName).toLowerCase();
+    for (const [k, m] of modules) if (k.toLowerCase() === lower) return m.controls || [];
+    return [];
+}
 /**
  * Handlers of the events of the object a variable holds (`@on("app.SheetChange")`, VBA's
  * `WithEvents`, spec §12.2.2): `{ target, event, reentrant, source, fn, alive }`. `source()` is
@@ -1753,6 +1764,158 @@ function run(entry) {
     const result = f();
     if (formsApi !== null) formsApi.idle();
     return result;
+}
+
+// ---------------------------------------------------------------------------- the run mode of the sheet panel
+
+/**
+ * The run mode of the editor's sheet panel: the program waits for what the user does on the
+ * project's workbook, drawn by the panel, and raises its events on the stand-in for Excel.
+ * Requests come on the standard input, one JSON object per line (`{ id, op, ... }`); each is
+ * answered on the standard output by a line of its own that starts with `SERVE_MARK`
+ * (what the program prints goes there too, between them). After each request the workbooks
+ * are written into `dir` (`snapshot.json`, `book-<n>.xlsx`) for the panel to draw them.
+ *
+ *   start                                  `Workbook.Open`
+ *   activate { sheet }                     `Deactivate`, `Activate`
+ *   select { sheet, range, active }        `SelectionChange`
+ *   enter { sheet, ranges, text }          `Change` (text typed in; "" clears the cells)
+ *   doubleClick / rightClick { sheet, range }   `BeforeDoubleClick` / `BeforeRightClick` → cancel
+ *   control { sheet, object, events: [{ event, args }], action, text }   an ActiveX control
+ *                                          clicked: what the click changes (`action`: `{ index }`
+ *                                          of an item, `{ part }` of a spin button or scroll bar),
+ *                                          its events, the text typed into it
+ *   macro { sheet, object, macro, action } a shape or a form control clicked: what it changes,
+ *                                          its `@on("<name>.Click")` handlers, else its macro
+ */
+const SERVE_MARK = "\u001eRAS ";
+function serve(dir) {
+    const host = stand();
+    const answer = (m) => process.stdout.write(`${SERVE_MARK}${JSON.stringify(m)}\n`);
+    if (host === null) {
+        answer({ id: 0, ok: false, error: { code: 0, description: "ブックの代役（ras_book.node）が見つからないため、実行モードにできません" } });
+        return;
+    }
+    let errors = [];
+    hooks.eventError = (e, h) => {
+        errors.push({ handler: `${h.target}.${h.event}`, code: e.code, description: e.description, file: e.rasFile || null, line: e.rasLine || 0 });
+        console.error(`[ras] ${h.target}.${h.event}: 実行時エラー ${e.code}: ${e.description}${e.rasFile ? `（${e.rasFile}:${e.rasLine}）` : ""}`);
+    };
+    const controlHandlers = (codeName, object, event) => {
+        const m = modules.get(codeName) || [...modules.entries()].find(([k]) => k.toLowerCase() === String(codeName).toLowerCase())?.[1];
+        const lower = (x) => String(x).toLowerCase();
+        return ((m && m.controls) || []).filter((h) => lower(h.target) === lower(object) && lower(h.event) === lower(event));
+    };
+    const call = (h, args) => {
+        try {
+            h.fn((args || []).map((v) => ({ v })));
+        } catch (err) {
+            const e = caught(err);
+            hooks.eventError(e, h);
+        }
+    };
+    /** `Sheet1.ボタン1_click` (as `OnAction` has it): the macro of the `@on("ボタン 1.Click")` handlers. */
+    const shapeMacro = (codeName, object) => `${codeName}.${(() => {
+        const kept = String(object).replace(/[^\p{L}\p{N}_]/gu, "");
+        return /^\p{L}/u.test(kept) ? kept : `Shape${kept}`;
+    })()}_click`.toLowerCase();
+    const runMacroOf = (sheet, object, macro, action) => {
+        const bare = String(macro).replace(/^.*!/, "");
+        const codeName = host.user.codeName(sheet);
+        // A form control: what the click changes (a check box turned on, an item chosen), then its macro.
+        const form = object ? host.user.formControl(sheet, object, action) : false;
+        // Its `@on` handlers, under its own name or under the macro the compiler made for them.
+        let list = object ? controlHandlers(codeName, object, "Click") : [];
+        if (list.length === 0 && bare) {
+            const dot = bare.lastIndexOf(".");
+            const [mod, name] = dot < 0 ? [codeName, bare] : [bare.slice(0, dot), bare.slice(dot + 1)];
+            for (const [k, m] of modules) {
+                if (k.toLowerCase() !== mod.toLowerCase()) continue;
+                for (const h of m.controls || []) if (shapeMacro(k, h.target) === `${k}.${name}`.toLowerCase() && h.event.toLowerCase() === "click") list.push(h);
+            }
+            if (list.length === 0) {
+                const f = findEntry(dot < 0 ? name : `${mod}.${name}`);
+                f();
+                return;
+            }
+        }
+        if (list.length === 0) {
+            if (form) return;
+            throw new RasError(`${object || "この図形"} にはマクロも @on("${object}.Click") のハンドラーもありません`, 0, "RAS");
+        }
+        for (const h of list) call(h, []);
+    };
+    const ops = {
+        start() {
+            host.user.open();
+        },
+        activate: (m) => host.user.activate(m.sheet),
+        select: (m) => host.user.select(m.sheet, m.range, m.active),
+        enter(m) {
+            for (const r of m.ranges || []) host.user.enter(m.sheet, r, m.text);
+        },
+        doubleClick: (m) => ({ cancel: host.user.beforeDoubleClick(m.sheet, m.range) }),
+        rightClick: (m) => ({ cancel: host.user.beforeRightClick(m.sheet, m.range) }),
+        control(m) {
+            // The control as the workbook has it: its state changes with the click, and raises its events.
+            if (host.user.control(m.sheet, m.object, m.events, m.action, m.text)) return { handled: true };
+            const codeName = host.user.codeName(m.sheet);
+            let any = false;
+            for (const ev of m.events || []) {
+                for (const h of controlHandlers(codeName, m.object, ev.event)) {
+                    any = true;
+                    call(h, ev.args);
+                }
+            }
+            return { handled: any };
+        },
+        macro: (m) => runMacroOf(m.sheet, m.object, m.macro, m.action),
+    };
+    const handle = (line) => {
+        let m;
+        try {
+            m = JSON.parse(line);
+        } catch {
+            return;
+        }
+        errors = [];
+        const reply = { id: m.id, ok: true };
+        try {
+            const op = ops[m.op];
+            if (op === undefined) throw new RasError(`要求 ${m.op} は扱えません`, 5, "RAS");
+            ensureInit();
+            Object.assign(reply, op(m) || {});
+            if (formsApi !== null) formsApi.idle();
+        } catch (err) {
+            const e = caught(err);
+            reply.ok = false;
+            reply.error = { code: e.code, description: e.description, file: e.rasFile || null, line: e.rasLine || 0 };
+        }
+        reply.errors = errors;
+        try {
+            host.saveSnapshot(dir);
+            reply.where = host.user.where();
+            const books = JSON.parse(require("fs").readFileSync(require("path").join(dir, "snapshot.json"), "utf8")).books;
+            const own = books.find((b) => b.project);
+            reply.rev = own ? own.rev : 0;
+            reply.controlsRev = host.controlsRev();
+        } catch (err) {
+            reply.snapshotError = String((err && err.message) || err);
+        }
+        answer(reply);
+    };
+    let pending = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+        pending += chunk;
+        for (let i = pending.indexOf("\n"); i >= 0; i = pending.indexOf("\n")) {
+            const line = pending.slice(0, i).trim();
+            pending = pending.slice(i + 1);
+            if (line) handle(line);
+        }
+    });
+    // The editor closed the input (run mode ended): the workbooks are saved as a run saves them.
+    process.stdin.on("end", () => process.exit(0));
 }
 
 // ---------------------------------------------------------------------------- user forms (spec §14.10.7)
@@ -1900,7 +2063,7 @@ module.exports = {
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
     fileOpen, fileClose, fileReset, filePrint, fileWrite, fileInput, fileLineInput, fileInputString, fileGet, filePut, fileSeek, fileLock, fileUnlock, fileWidth, fileRename,
-    vba, declare, module: module_, withEvents, listen, listenAny, listenEach, fireListeners, unlistenOwner, onAction, onActionEach, ensureInit, entries, run, form, newForm,
+    vba, declare, module: module_, withEvents, listen, listenAny, listenEach, fireListeners, unlistenOwner, onAction, onActionEach, ensureInit, entries, run, serve, form, newForm,
 };
 Object.defineProperty(module.exports, "msforms", { get: () => forms().msforms, enumerable: true });
 // The API of test files (spec §14.12), there only in the build of `ras test`.

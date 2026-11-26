@@ -2,6 +2,9 @@
 //
 //   node --enable-source-maps ras-main.js <Module.proc>   run an entry point
 //   node ras-main.js --list                               print the entry points as JSON
+//   node ras-main.js --serve <dir>                        the run mode of the editor's sheet panel:
+//                                                         the events of what the user does there
+//                                                         (requests on stdin, `$rt.serve`)
 //
 // Environment: RAS_COM_ADDON = path of the `ras_com` addon (Excel access),
 //              RAS_BOOK_ADDON = path of the `ras_book` addon: without Excel (no RAS_COM_ADDON), the
@@ -155,8 +158,9 @@ function main(argv) {
         console.log(JSON.stringify(manifest.entries));
         return;
     }
-    const entry = argv[0] || process.env.RAS_ENTRY || manifest.entries[0];
-    if (!entry) {
+    const serving = argv[0] === "--serve";
+    const entry = serving ? null : argv[0] || process.env.RAS_ENTRY || manifest.entries[0];
+    if (!entry && !serving) {
         console.error("実行できる関数がありません（引数なしの関数か、トップレベルの文が必要です）");
         process.exitCode = 2;
         return;
@@ -170,8 +174,14 @@ function main(argv) {
         workbooksDir: process.env.RAS_WORKBOOKS || null,
         mock: process.env.RAS_MOCK_HOST ? path.resolve(process.env.RAS_MOCK_HOST) : null,
     });
-    const report = process.env.RAS_RUN_REPORT ? reporting(process.env.RAS_RUN_REPORT) : null;
+    const report = process.env.RAS_RUN_REPORT && !serving ? reporting(process.env.RAS_RUN_REPORT) : null;
     for (const m of modules) require(m);
+    if (serving) {
+        const answers = givenAnswers();
+        if (answers !== null) answering(answers, null, (text) => console.log(text));
+        $rt.serve(path.resolve(argv[1] || path.join(__dirname, "serve")));
+        return;
+    }
     if (report === null) {
         // The debug run of the editor: the answers of its launch configuration.
         const answers = givenAnswers();
