@@ -1,0 +1,19 @@
+// 同梱のダイアログのフォーム `RAS_Dialog` のコードビハインド（仕様 §14.11.15）。コントロールの無い空の
+// フォームで、`dialog` モジュールの `Dialog` / `Progress` が実行時にコントロールを並べる。
+import { RAS_DialogHost } from "dialog";
+
+let host: RAS_DialogHost = null;
+
+/** フォームを使うダイアログ（null で離す）。 */
+export function RAS_Host(h: RAS_DialogHost) {
+    host = h;
+}
+
+@on("UserForm.QueryClose")
+function closing(byref cancel: short, closeMode: short) {
+    // × はフォームを閉じずにダイアログに知らせる（閉じるのはダイアログ）。
+    if (closeMode == vbFormControlMenu && host != null) {
+        cancel = 1;
+        host.RAS_CloseBox();
+    }
+}

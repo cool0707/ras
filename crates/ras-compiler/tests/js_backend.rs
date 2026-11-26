@@ -1425,3 +1425,58 @@ C:\\x.xlsx | C:\\y.xlsm
 ";
     assert_eq!(stdout, expected, "{stderr}");
 }
+
+const DIALOG_MAIN: &str = r#"import { Dialog, choose, Progress } from "dialog";
+import * as z from "validation";
+
+export function run() {
+    console.log(choose("変更を保存しますか？", ["変更を確定", "別名で確定", "キャンセル"], title: "保存", cancel: 2));
+
+    const d = new Dialog("エクスポート", "出力の設定");
+    const kind = d.select("形式", ["CSV", "TSV"]);
+    const file = d.file("出力先", dialogType: 2).required("出力先を選んでください");
+    const head = d.checkbox("見出しを出力する", true);
+    const name = d.text("名前").rule(z.string().max(5));
+    const eol = d.radio("改行", ["CRLF", "LF"]);
+    const sheets = d.list("シート", ["A", "B", "C"], multi: true);
+    d.onChange((f) => { file.enabled = head.checked; });
+    console.log(d.show(), kind.text, kind.index, file.text, head.checked, name.text, eol.text, sheets.selected.join(","));
+    // Shown again, the values are where they were left.
+    console.log(d.show(), kind.text, name.text);
+
+    const p = new Progress("集計中", max: 1000.0);
+    let i = 0;
+    while (i < 1000 && !p.cancelled) {
+        i++;
+        p.value = i;
+        const t = timer();
+        while (timer() - t < 0.02) {
+            // working
+        }
+    }
+    p.close();
+    console.log("stopped", i < 1000, p.value == i);
+}
+"#;
+
+/// The dialogs built in code (spec §14.11.15) in the debug run: the bundled form is filled with
+/// the controls, the buttons and fields respond, the rules hold OK back, the values are kept
+/// after the dialog closes, and a modeless progress bar hears its cancel button on DoEvents.
+#[test]
+fn dialogs_built_in_code_run_in_the_debug_run() {
+    let (prog, out) = compile(&[("main", DIALOG_MAIN)]);
+    assert!(prog.modules.iter().any(|m| m.vba_name == "RAS_Dialog"));
+    assert_eq!(out.entries, vec!["Main.run", "RAS_Dialog.show"]);
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("dialogs", &[("main", DIALOG_MAIN)], &out);
+    let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_dialog.js")));
+    assert!(ok, "{stdout}\n{stderr}");
+    let expected = std::fs::read_to_string(fixture("dialog.expected.txt")).unwrap_or_default();
+    if std::env::var_os("RAS_BLESS").is_some() {
+        std::fs::write(fixture("dialog.expected.txt"), &stdout).unwrap();
+        return;
+    }
+    assert_eq!(stdout, expected.replace("\r\n", "\n"), "{stderr}");
+}

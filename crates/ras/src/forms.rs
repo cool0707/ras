@@ -101,7 +101,12 @@ pub fn pull(root: &Path, book: &Path, names: &[String], force: bool) -> Result<E
     let in_book = ras_ovba::unpack_user_forms(book).map_err(at)?;
     let mut selected = Vec::new();
     if names.is_empty() {
-        selected.extend(in_book.iter());
+        // The bundled form of the dialogs built in code (spec §14.11.15) is no form of `forms/`.
+        selected.extend(
+            in_book
+                .iter()
+                .filter(|f| !f.name.eq_ignore_ascii_case(ras_compiler::DIALOG_FORM)),
+        );
     }
     for name in names {
         match in_book.iter().find(|f| f.name.eq_ignore_ascii_case(name)) {

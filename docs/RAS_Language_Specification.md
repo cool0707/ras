@@ -16,6 +16,7 @@
 > * フォームの入力のバリデーション（zod 風のスキーマと `FormValidator`。入力の確定時に検証し、エラーをコントロールの下のラベルに表示する）を同梱のライブラリ `validation` として追加（§14.11.12）
 > * フォームのコントロールにプログレスバー `ProgressBar`（キャプション・割合・バー。ラベルを組み合わせて書き込み、同梱のクラスで `value` などを操作する。バーの色の既定は Windows のアクセント カラー）を追加（§14.11.13）
 > * フォームのコントロールにファイル・フォルダーの選択欄 `FilePicker`（テキスト ボックスとボタン。ボタンで `Application.FileDialog` を表示し、`browse()` は選んだパスの配列（キャンセルは空の配列）を返す。パスは貼り付けもできる）を追加（§14.11.14）。Excel のない実行の `Application.FileDialog` を、`getOpenFilename` と同じく応答できるようにした
+> * フォームのデザインを作らずにコードで組み立てるダイアログ（任意のボタンの `choose`、入力欄を並べる `Dialog`、モードレスのプログレスバー `Progress`）を追加（§14.11.15）。同梱の空のフォーム `RAS_Dialog` に実行時にコントロールを並べる。デバッグ実行の `DoEvents` で、表示中のフォームの操作を受け取るようにした
 * デバッグ実行を一時停止する `debugger;` 文を追加（§14.10.9）。VBA ビルドでは何も出力しない。プレイグラウンドでは、ブラウザの開発者ツールで `.ras` のファイルにブレークポイントを置いてデバッグできる（§14.10.10）
 > * シートの追加・複製・削除・名前の変更を、ブックと `objects/` のファイルに一緒に行う `ras sheet` と VS Code のコマンドを追加（§14.16）。Excel で複製したシートは、同期がコピー元のファイルを複製する（§14.7.2）
 
@@ -2736,6 +2737,79 @@ export function chooseFolder(): string[] {
 * **生成する VBA:** プログレスバー（§14.11.13）と同じく、フォームのコードモジュールに `Public fpBook As FilePicker` を宣言して `UserForm_Initialize` で部品につなぐ。クラス モジュール `FilePicker` と標準モジュール `RAS_FilePicker` は、選択欄を置いたときだけ出力する。
 * **デバッグ実行:** フォームのパネル（§14.10.7）では、書き込みと同じ欄とボタンとして描き、同じクラスで操作する。Excel のない実行では、`Application.FileDialog` の `Show` を `getOpenFilename`（SaveAs は `getSaveAsFilename`）と同じく応答する（`ras run --open-file`、テストの `mockGetOpenFilename`。複数のパスは配列、キャンセルは `false`）。応答が無ければ、`FileDialog` は Excel が必要というエラーになる。
 * **デザイナー:** ツールボックスの「標準」に `FilePicker` がある。ほかのコントロールと同じく移動・サイズ変更できる。`filters` はプロパティ グリッドでは編集できない（JSON で書く）。
+
+#### 14.11.15 コードで組み立てるダイアログ（`dialog`）（v0.9で追加）
+
+ボタンを選ぶだけのダイアログや、入力欄をいくつか並べて OK / キャンセルを付けたダイアログ、処理の進み具合を出すプログレスバーを、フォームのデザイン（`forms/`）を作らずにコードだけで作る。ライブラリは RAS で書かれた同梱のモジュール `dialog`（`crates/ras-compiler/stdlib/dialog.ras`）。
+
+```typescript
+import { Dialog, choose, Progress } from "dialog";
+import * as z from "validation";
+
+// 任意のボタンを並べたダイアログ: 押したボタンの番号（0 から）。× と Esc は -1
+export function confirmSave() {
+    switch (choose("変更を保存しますか？", ["変更を確定", "別名で確定", "キャンセル"], title: "保存", cancel: 2)) {
+        case 0: save(); break;
+        case 1: saveAs(); break;
+        default: return;                                  // キャンセル・×
+    }
+}
+
+// 入力欄を並べたダイアログ（既定のボタンは OK・キャンセル）
+export function exportSheet() {
+    const d = new Dialog("エクスポート", "出力の設定を選んでください");
+    const kind = d.select("形式", ["CSV", "TSV", "固定長"]);
+    const file = d.file("出力先", dialogType: 2).addFilter("CSV", "*.csv").required("出力先を選んでください");
+    const head = d.checkbox("見出しを出力する", true);
+    const eol = d.radio("改行", ["CRLF", "LF"]);
+    const sheets = d.list("シート", worksheets.map(s => s.name), multi: true);
+    const memo = d.text("メモ", "", multiline: true).rule(z.string().max(200));
+    d.onChange((f) => { eol.enabled = kind.index != 2; });   // 表示中に項目を変える
+    if (d.show() != 0) return;                               // 0: OK
+    writeFile(file.text, kind.index, head.checked, eol.text, sheets.selected, memo.text);
+}
+
+// モードレスのプログレスバー（作るとすぐ表示する。中止ボタンか × で cancelled）
+export function rebuild() {
+    const last = Sheet1.cells(Sheet1.rows.count, 1).end(xlUp).row;
+    const p = new Progress("集計中", max: last);
+    for (let r = 1; r <= last; r++) {
+        if (p.cancelled) break;
+        p.value = r;
+        p.message = `${r} / ${last} 行`;
+        work(r);
+    }
+    p.close();
+}
+```
+
+* **仕組み:** モジュール `dialog` を `import` すると、コントロールの無い空のフォーム `RAS_Dialog`（同梱のデザインとコードビハインド）がプロジェクトに加わり、`ras pack` / `ras sync` がほかのフォームと一緒にブックへ書き込む。`Dialog` / `Progress` は、表示するたびに `new RAS_Dialog()` でインスタンスを作り、`controls.add` でコントロールを並べ、`on`（§12.2.3）でイベントをつなぐ。閉じるとアンロードする。`RAS_Dialog` は `forms/` には現れず、`ras form pull`（名前の指定なし）でも取り出さない。プロジェクトに同じ名前のフォームは置けない（置くとそちらが使われ、ダイアログは動かない）。
+* **`choose(message, buttons, title?, cancel = -1, enter = 0)`:** `message` の下に `buttons` を右寄せで並べ、押したボタンの番号を返す。`cancel` は Esc で押すボタン（そのとき戻り値は -1）、`enter` は Enter で押すボタン（MSForms の `Cancel` / `Default`）。タイトルを省略すると `Microsoft Excel`。
+* **`new Dialog(title?, message?)`:** 項目を足すメソッドを呼んだ順に、上から 1 列に並べる（見出しは欄の上）。`message` は項目の上の説明。
+
+  | メソッド | 項目 | 値 |
+  |---|---|---|
+  | `text(label, value?, multiline = false, rows = 4)` | テキスト ボックス（複数行なら Enter で改行） | `text` |
+  | `password(label, value?)` | `*` で隠すテキスト ボックス | `text` |
+  | `select(label, items, index = 0)` | ドロップダウン リスト（入力はできない） | `index`・`text` |
+  | `combo(label, items, value?)` | 入力もできるコンボ ボックス | `text`・`index` |
+  | `list(label, items, multi = false, rows = 5)` | リスト ボックス。`multi` なら項目ごとのチェック ボックス（見える行より多ければスクロール） | `index`・`text`・`selected`（`string[]`）・`isPicked(i)` / `pick(i, on)` |
+  | `radio(label, items, index = 0)` | オプション ボタン | `index`・`text` |
+  | `checkbox(caption, checked = false)` | チェック ボックス | `checked` |
+  | `file(label, path?, dialogType = 3, title?)` / `folder(label, path?, title?)` | ファイル・フォルダーの選択欄（§14.11.14 の `FilePicker`。`dialogType` は `Application.FileDialog` の種類） | `text`（パス） |
+  | `label(text)` | 文字列だけ | `text` |
+
+  * どのメソッドも項目（`DialogField`）を返す。値は `show()` の前に設定でき、`show()` が戻った後（閉じた後）も読める。同じ `Dialog` をもう一度 `show()` すると、前に閉じたときの値から始まる。
+  * `DialogField` のほかのメンバー: `enabled`、`rule(schema)`（`validation` のスキーマ。§14.11.12）、`required(message?)`（`z.string().required(message)`。`checkbox` はチェックを必須にする）、`addFilter(description, extensions)`（`file`）、`hint(text)`（ツールチップ）、`error`（表示しているエラー）、`control`（表示中のコントロール。閉じていれば `null`）。
+  * `buttons(captions, cancel = -1, enter = 0)` でボタンを置き換える（既定は OK・キャンセルで、キャンセルが Esc）。`width`（内側の幅。既定 300 ポイント）・`title`・`message` も表示する前に変えられる。
+  * **`show()`:** モーダルで表示し、押したボタンの番号を返す。× と Esc（`cancel` のボタン）は -1。それ以外のボタンは、規則のある項目をすべて検証し、エラーがあれば欄の下（規則のある項目のために空けておいた行）に表示して最初のエラーの欄にフォーカスを移し、閉じない。一度検証した項目は、その後の変更のたびに検証し直す。`ok()` は `show() == 0`。
+  * **`onChange((f) => …)`:** 項目の値が変わるたびに呼ぶ（`f` は変わった項目）。ハンドラで項目の値・`enabled` を読み書きすると、表示中のコントロールに反映する。**`onSubmit((d) => …)`:** キャンセル以外のボタンで、規則の検証の後に呼び、`false` を返すと閉じない。**`close(result = -1)`:** ハンドラの中から閉じる。
+* **`new Progress(caption?, max = 100, title?, cancelable = true, width = 300)`:** モードレスで表示し、すぐに戻る。バー（§14.11.13 の `ProgressBar`。`progressBar` で色なども変えられる）と、その下の 1 行（`message`）、`cancelable` なら「中止」ボタンを並べる。
+  * `value`・`min`・`max`・`caption`・`message`・`step(by = 1)`、`cancelled`（中止ボタンか × が押された。押されると「中止中…」にして無効にする）、`close()`（何度呼んでもよい。閉じた後も `value` は最後の値を返す）。
+  * × はフォームを閉じずに `cancelled` を `true` にする（閉じるのは `close()`）。値を変えたときと `cancelled` を読んだとき、前の描き直しから 0.1 秒以上たっていれば（`max` に達したときはすぐに）、`Repaint` と `DoEvents` で描き直し、ボタンの操作を受け取る。
+* **生成する VBA:** 標準モジュール `RAS_Dialogs`、クラス モジュール `Dialog`・`DialogField`・`Progress`・`RAS_DialogHost` と、使った部品（`ProgressBar`・`FilePicker`・`ValidationSchema` など）、`on` のクラス（`RAS_On_CommandButton_Click` など）、フォーム `RAS_Dialog`。`×` の扱いだけを `RAS_Dialog` のコード（`UserForm_QueryClose`）が受け持つ。
+* **デバッグ実行:** フォームのパネル（§14.10.7）に表示し、操作できる。モードレスのフォームは、表示中に `DoEvents` が呼ばれるたびに変更を描き、パネルの操作をその場で受け取る（待たない）。Excel のないテスト・`ras run` では、ほかのフォームと同じく表示はエラー 429。
+* **制限:** 配置は 1 列だけで、項目の大きさは文字数からの目安（MS UI Gothic 9pt）。項目の追加・削除は表示する前だけ。複数選択のリストはリスト ボックスではなくチェック ボックスの並び（RAS では `ListBox.Selected(i)` に代入できないため）。
 
 ### 14.12 テスト（`ras test`）（v0.9で追加）
 

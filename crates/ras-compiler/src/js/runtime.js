@@ -1376,7 +1376,11 @@ const vbaImpl = {
     },
     Environ: (name) => process.env[String(name)] || "",
     Command: () => "",
-    DoEvents: () => 0,
+    DoEvents() {
+        // The forms shown respond meanwhile (spec §14.10.7).
+        if (formsApi !== null) formsApi.doEvents();
+        return 0;
+    },
     Timer() {
         const d = new Date();
         return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds() + d.getMilliseconds() / 1000;

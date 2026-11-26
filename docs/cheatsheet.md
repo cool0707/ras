@@ -330,6 +330,38 @@ function ok() {
 
 表示スケール（DPI）が 100% 以外でも、フォームの内側の大きさはデザインどおりになります（読み込み時に合わせます）。
 
+フォームのデザインを作らずに、コードだけでダイアログを組み立てることもできます（`import … from "dialog"`。仕様 §14.11.15）。
+
+```typescript
+import { Dialog, choose, Progress } from "dialog";
+
+export function confirmSave(): string {
+    // 任意のボタン: 押したボタンの番号（0 から）。× と Esc（cancel のボタン）は -1
+    const r = choose("変更を保存しますか？", ["変更を確定", "別名で確定", "キャンセル"], title: "保存", cancel: 2);
+    if (r < 0) return "";
+    return r == 0 ? "save" : "saveAs";
+}
+
+export function askExport() {
+    const d = new Dialog("エクスポート", "出力の設定を選んでください");   // 上から 1 列に並ぶ。ボタンは OK・キャンセル
+    const kind = d.select("形式", ["CSV", "TSV"]);                         // text / password / combo / list / radio / folder / label も
+    const file = d.file("出力先", dialogType: 2).required("出力先を選んでください");   // rule(z.string()…) も付けられる
+    const head = d.checkbox("見出しを出力する", true);
+    if (d.show() != 0) return;                     // OK 以外（キャンセル・×）。規則に合わないと OK で閉じない
+    debug.print(kind.text, kind.index, file.text, head.checked);
+}
+
+export function longWork() {
+    const p = new Progress("集計中", max: 500);    // モードレスですぐ表示。「中止」か × で cancelled
+    for (let i = 1; i <= 500; i++) {
+        if (p.cancelled) break;
+        p.value = i;
+        p.message = `${i} / 500`;
+    }
+    p.close();
+}
+```
+
 ## ファイルの読み書き（`Open` / `Print #` / `Close`）
 
 ```typescript

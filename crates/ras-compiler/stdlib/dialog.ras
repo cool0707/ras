@@ -1,0 +1,1019 @@
+// コードで組み立てるダイアログ（仕様 §14.11.15）。`import { Dialog, choose, Progress } from "dialog";` で使う。
+//
+//     // 任意のボタンのダイアログ: 押したボタンの番号（× は -1）
+//     const r = choose("変更を保存しますか？", ["変更を確定", "別名で確定", "キャンセル"], cancel: 2);
+//
+//     // 入力を並べたダイアログ
+//     const d = new Dialog("エクスポート");
+//     const kind = d.select("形式", ["CSV", "TSV"]);
+//     const head = d.checkbox("見出しを出力する", true);
+//     if (d.show() != 0) return;          // 0: OK、1: キャンセル、-1: ×
+//     console.log(kind.text, head.checked);
+//
+//     // モードレスのプログレスバー
+//     const p = new Progress("集計中", max: 200);
+//     for (let i = 1; i <= 200 && !p.cancelled; i++) p.value = i;
+//     p.close();
+//
+// フォームのデザイン（`forms/`）は要らない。コントロールは、同梱の空のフォーム `RAS_Dialog` に実行時に
+// `controls.add` で並べる（`RAS_Dialog` は、このモジュールを使ったときだけブックに書き込まれる）。
+
+import { ValidationSchema, string as zstring } from "validation";
+import { ProgressBar } from "progressbar";
+import { FilePicker } from "filepicker";
+
+/** タイトルを省略したときのタイトル（`msgBox` と同じ）。 */
+const RAS_DLG_TITLE = "Microsoft Excel";
+/** 外側の余白（ポイント）。 */
+const RAS_DLG_PAD = 12.0;
+/** 項目の間隔。 */
+const RAS_DLG_GAP = 8.0;
+/** ラベルの 1 行の高さ。 */
+const RAS_DLG_LINE = 12.0;
+/** 1 行の入力欄の高さ。 */
+const RAS_DLG_ROW = 18.0;
+/** ボタンの高さ・最小の幅。 */
+const RAS_DLG_BUTTON_HEIGHT = 24.0;
+const RAS_DLG_BUTTON_WIDTH = 72.0;
+
+/** ダイアログのウィンドウから呼ばれるもの（`RAS_Dialog` のコードが使う）。 */
+export interface RAS_DialogHost {
+    /** タイトル バーの × が押されたとき。 */
+    RAS_CloseBox(): void;
+}
+
+/**
+ * ダイアログの項目の 1 つ。`Dialog` の `text()`・`select()`・`checkbox()` などが返す。
+ *
+ * 値は `show()` の前に設定でき、`show()` の後（ダイアログが閉じた後）に読める。表示中（`onChange` の
+ * ハンドラの中など）に読み書きすると、画面のコントロールを読み書きする。
+ */
+export class DialogField {
+    /** 項目の種類（"text"・"password"・"select"・"combo"・"list"・"radio"・"checkbox"・"file"・"label"）。 */
+    kind: string = "";
+    /** 見出し（`checkbox` ではチェック ボックスの文字）。 */
+    label: string = "";
+    /** 選択肢（`select`・`combo`・`list`・`radio`）。 */
+    items: string[] = [];
+    /** 複数行（`text`）・複数選択（`list`）。 */
+    multi: boolean = false;
+    /** 表示する行数（`list`、複数行の `text`）。 */
+    rows: int = 1;
+    /** 入力の規則（`rule()` / `required()` で付ける）。 */
+    schema: ValidationSchema = null;
+    /** ファイルの選択欄の設定（`file`）。 */
+    dialogType: int = 3;
+    title: string = "";
+    /** 入力欄にツールチップとして表示する説明。 */
+    tip: string = "";
+
+    private textValue: string = "";
+    private indexValue: int = -1;
+    private checkedValue: boolean = false;
+    private picks: boolean[] = [];
+    private able: boolean = true;
+    private message: string = "";
+    private filterNames: string[] = [];
+    private filterExts: string[] = [];
+
+    /** 表示中のコントロール（表示していないときは null）。 */
+    control: MSForms.Control = null;
+    /** `radio` の選択肢のボタン。 */
+    private options: MSForms.OptionButton[] = [];
+    /** 複数選択の `list` の項目のチェック ボックス。 */
+    private checks: MSForms.CheckBox[] = [];
+    /** `file` の選択欄。 */
+    private picker: FilePicker = null;
+    /** エラーを表示するラベル（規則のある項目だけ）。 */
+    private errorLabel: MSForms.Label = null;
+    /** 一度入力を確定したか（それからは変更のたびに検証する）。 */
+    touched: boolean = false;
+
+    /** 入力した文字列。`select` / `combo` / `list` / `radio` では選んだ項目の文字列、`file` ではパス。 */
+    get text(): string {
+        if (this.control == null) return this.textValue;
+        if (this.kind == "radio") {
+            const i = this.index;
+            return i >= 0 ? this.items[i] : "";
+        }
+        if (this.kind == "list") {
+            const i = this.index;
+            return i >= 0 ? this.items[i] : "";
+        }
+        if (this.kind == "file") return this.picker.text;
+        if (this.kind == "checkbox" || this.kind == "label") return (this.control as any).caption;
+        return (this.control as any).text;
+    }
+    set text(v: string) {
+        if (this.kind == "select" || this.kind == "list" || this.kind == "radio") {
+            this.index = this.items.indexOf(v);
+            return;
+        }
+        this.textValue = v;
+        if (this.control == null) return;
+        if (this.kind == "file") this.picker.text = v;
+        else if (this.kind == "checkbox" || this.kind == "label") (this.control as any).caption = v;
+        else (this.control as any).text = v;
+    }
+
+    /** 選んだ項目の番号（0 から。選んでいなければ -1）。`select`・`combo`・`list`・`radio`。 */
+    get index(): int {
+        if (this.control == null || !this.isChoice()) return this.indexValue;
+        if (this.kind == "radio") {
+            for (let i = 0; i < this.options.length; i++) {
+                if (this.options[i].value == true) return i;
+            }
+            return -1;
+        }
+        if (this.kind == "list" && this.multi) {
+            for (let i = 0; i < this.checks.length; i++) {
+                if (this.checks[i].value == true) return i;
+            }
+            return -1;
+        }
+        return (this.control as any).listIndex;
+    }
+    set index(v: int) {
+        let i = v;
+        if (i < -1 || i >= this.items.length) i = -1;
+        this.indexValue = i;
+        if (i >= 0) this.textValue = this.items[i];
+        if (this.control == null) return;
+        if (this.kind == "radio") {
+            for (let k = 0; k < this.options.length; k++) this.options[k].value = k == i;
+        } else if (this.kind == "list" && this.multi) {
+            for (let k = 0; k < this.checks.length; k++) this.checks[k].value = k == i;
+        } else if (this.isChoice()) {
+            (this.control as any).listIndex = i;
+        }
+    }
+
+    /** 選択肢から選ぶ項目か。 */
+    private isChoice(): boolean {
+        return this.kind == "select" || this.kind == "combo" || this.kind == "list" || this.kind == "radio";
+    }
+
+    /** チェックされているか（`checkbox`）。 */
+    get checked(): boolean {
+        if (this.control == null) return this.checkedValue;
+        return (this.control as MSForms.CheckBox).value == true;
+    }
+    set checked(v: boolean) {
+        this.checkedValue = v;
+        if (this.control != null) (this.control as MSForms.CheckBox).value = v;
+    }
+
+    /** 選んだ項目の文字列（複数選択の `list`。ほかの項目では `text` を 1 つ持つ配列か空の配列）。 */
+    get selected(): string[] {
+        const out: string[] = [];
+        if (this.kind == "list" && this.multi) {
+            for (let i = 0; i < this.items.length; i++) {
+                if (this.isPicked(i)) out.push(this.items[i]);
+            }
+            return out;
+        }
+        const t = this.text;
+        if (t != "") out.push(t);
+        return out;
+    }
+
+    /** `list` の `i` 番目の項目を選んでいるか。 */
+    isPicked(i: int): boolean {
+        if (i < 0 || i >= this.items.length) return false;
+        if (this.control == null) {
+            if (this.multi) return i < this.picks.length && this.picks[i];
+            return i == this.indexValue;
+        }
+        if (this.multi) return this.checks[i].value == true;
+        return (this.control as MSForms.ListBox).selected(i);
+    }
+
+    /** `list` の `i` 番目の項目を選ぶ（`false` で外す）。複数選択でなければ、ほかの選択は外れる。 */
+    pick(i: int, on: boolean = true): DialogField {
+        if (i < 0 || i >= this.items.length) return this;
+        if (!this.multi) {
+            this.index = on ? i : -1;
+            return this;
+        }
+        while (this.picks.length < this.items.length) this.picks.push(false);
+        this.picks[i] = on;
+        if (this.control != null) this.checks[i].value = on;
+        return this;
+    }
+
+    /** 入力できるか。 */
+    get enabled(): boolean {
+        return this.able;
+    }
+    set enabled(v: boolean) {
+        this.able = v;
+        if (this.control == null) return;
+        if (this.kind == "radio") {
+            for (const o of this.options) o.enabled = v;
+        } else if (this.kind == "list" && this.multi) {
+            for (const k of this.checks) k.enabled = v;
+        } else if (this.kind == "file") {
+            this.picker.enabled = v;
+        } else {
+            this.control.enabled = v;
+        }
+    }
+
+    /** 表示しているエラー（無ければ `""`）。 */
+    get error(): string {
+        return this.message;
+    }
+
+    /** 入力の規則を付ける（`validation` の `z.string()` などで作る）。OK などのボタンで検証する。 */
+    rule(schema: ValidationSchema): DialogField {
+        this.schema = schema;
+        return this;
+    }
+
+    /** 入力を必須にする（`checkbox` ではチェックを必須にする）。 */
+    required(message: string = ""): DialogField {
+        if (this.schema == null) {
+            const s = zstring();
+            if (this.kind == "checkbox") s.type = "boolean";
+            this.schema = s;
+        }
+        this.schema.required(message);
+        return this;
+    }
+
+    /** ファイルの種類を足す（`file`。`addFilter("Excel ブック", "*.xlsx; *.xlsm")`）。 */
+    addFilter(description: string, extensions: string): DialogField {
+        this.filterNames.push(description);
+        this.filterExts.push(extensions);
+        return this;
+    }
+
+    /** 入力欄の説明（ツールチップ）。 */
+    hint(text: string): DialogField {
+        this.tip = text;
+        return this;
+    }
+
+    /** 検証する文字列（`checkbox` はチェックされていれば `"true"`）。 */
+    RAS_Value(): string {
+        if (this.kind == "checkbox") return this.checked ? "true" : "";
+        if (this.kind == "list" && this.multi) return this.selected.join(";");
+        return this.text;
+    }
+
+    /** 規則で検証してエラーを表示する。正しければ true。 */
+    RAS_Validate(): boolean {
+        if (this.schema == null) return true;
+        let msg = "";
+        if (this.able) msg = this.schema.check(this.RAS_Value());
+        this.RAS_ShowError(msg);
+        return msg == "";
+    }
+
+    /** エラーを表示する（`""` で消す）。 */
+    RAS_ShowError(msg: string): void {
+        this.message = msg;
+        if (this.errorLabel == null) return;
+        this.errorLabel.caption = msg;
+        this.errorLabel.visible = msg != "";
+    }
+
+    /** 入力欄にフォーカスを移す。 */
+    RAS_Focus(): void {
+        if (this.control == null) return;
+        try {
+            if (this.kind == "radio") {
+                if (this.options.length > 0) this.options[0].setFocus();
+            } else if (this.kind == "list" && this.multi) {
+                if (this.checks.length > 0) this.checks[0].setFocus();
+            } else if (this.kind == "file") {
+                this.picker.setFocus();
+            } else {
+                this.control.setFocus();
+            }
+        } catch {
+            resume;
+        }
+    }
+
+    /** フォームにコントロールを作って置き、その下端を返す。 */
+    RAS_Build(form: RAS_Dialog, n: int, x: double, top: double, width: double): double {
+        const controls: MSForms.Controls = form.controls;
+        const name = `f${n}`;
+        let y = top;
+        if (this.kind == "label") {
+            const lb = controls.add("Forms.Label.1", name, true) as MSForms.Label;
+            const h = RAS_TextHeight(this.textValue, width);
+            RAS_Place(lb, x, y, width, h);
+            lb.caption = this.textValue;
+            lb.wordWrap = true;
+            lb.backStyle = 0;
+            this.control = lb;
+            return y + h;
+        }
+        if (this.kind != "checkbox" && this.label != "") {
+            const cap = controls.add("Forms.Label.1", `${name}_Label`, true) as MSForms.Label;
+            const h = RAS_TextHeight(this.label, width);
+            RAS_Place(cap, x, y, width, h);
+            cap.caption = this.label;
+            cap.wordWrap = true;
+            cap.backStyle = 0;
+            y += h + 2.0;
+        }
+        if (this.kind == "text" || this.kind == "password") {
+            const tb = controls.add("Forms.TextBox.1", name, true) as MSForms.TextBox;
+            let h = RAS_DLG_ROW;
+            if (this.multi) {
+                tb.multiLine = true;
+                tb.wordWrap = true;
+                tb.enterKeyBehavior = true;
+                tb.scrollBars = 2;
+                h = Math.max(this.rows, 2) * RAS_DLG_LINE + 6.0;
+            }
+            if (this.kind == "password") tb.passwordChar = "*";
+            RAS_Place(tb, x, y, width, h);
+            tb.text = this.textValue;
+            this.control = tb;
+            y += h;
+        } else if (this.kind == "select" || this.kind == "combo") {
+            const cb = controls.add("Forms.ComboBox.1", name, true) as MSForms.ComboBox;
+            RAS_Place(cb, x, y, width, RAS_DLG_ROW);
+            if (this.kind == "select") cb.style = 2;
+            for (const item of this.items) cb.addItem(item);
+            if (this.kind == "combo") cb.text = this.textValue;
+            else if (this.indexValue >= 0) cb.listIndex = this.indexValue;
+            this.control = cb;
+            y += RAS_DLG_ROW;
+        } else if (this.kind == "list" && this.multi) {
+            // A list of check boxes (a list box's selection cannot be set from RAS).
+            const frame = controls.add("Forms.Frame.1", name, true) as MSForms.Frame;
+            const shown = Math.min(Math.max(this.rows, 1), Math.max(this.items.length, 1));
+            const h = shown * RAS_DLG_ROW + 6.0;
+            RAS_Place(frame, x, y, width, h);
+            frame.caption = "";
+            frame.specialEffect = 2;
+            frame.backColor = -2147483643;     // システム カラー window（&H80000005）
+            let inner = width - 4.0;
+            if (this.items.length > shown) {
+                frame.scrollBars = 2;
+                frame.keepScrollBarsVisible = 2;
+                frame.scrollHeight = (this.items.length * RAS_DLG_ROW + 6.0) as float;
+                inner -= 18.0;
+            }
+            this.checks = [];
+            for (let i = 0; i < this.items.length; i++) {
+                const k = frame.controls.add("Forms.CheckBox.1", `${name}_${i}`, true) as MSForms.CheckBox;
+                RAS_Place(k, 4.0, 2.0 + i * RAS_DLG_ROW, inner - 4.0, RAS_DLG_ROW);
+                k.caption = this.items[i];
+                k.backStyle = 0;
+                k.value = i < this.picks.length && this.picks[i];
+                this.checks.push(k);
+            }
+            this.control = frame;
+            y += h;
+        } else if (this.kind == "list") {
+            const lb = controls.add("Forms.ListBox.1", name, true) as MSForms.ListBox;
+            const h = Math.max(this.rows, 1) * RAS_DLG_LINE + 6.0;
+            RAS_Place(lb, x, y, width, h);
+            for (const item of this.items) lb.addItem(item);
+            this.control = lb;
+            if (this.indexValue >= 0) lb.listIndex = this.indexValue;
+            y += h;
+        } else if (this.kind == "radio") {
+            const frame = controls.add("Forms.Frame.1", name, true) as MSForms.Frame;
+            const h = this.items.length * RAS_DLG_ROW + 6.0;
+            RAS_Place(frame, x, y, width, h);
+            frame.caption = "";
+            frame.specialEffect = 0;
+            frame.borderStyle = 0;
+            this.options = [];
+            for (let i = 0; i < this.items.length; i++) {
+                const o = frame.controls.add("Forms.OptionButton.1", `${name}_${i}`, true) as MSForms.OptionButton;
+                RAS_Place(o, 0.0, 3.0 + i * RAS_DLG_ROW, width, RAS_DLG_ROW);
+                o.caption = this.items[i];
+                o.groupName = name;
+                o.value = i == this.indexValue;
+                this.options.push(o);
+            }
+            this.control = frame;
+            y += h;
+        } else if (this.kind == "checkbox") {
+            const ck = controls.add("Forms.CheckBox.1", name, true) as MSForms.CheckBox;
+            RAS_Place(ck, x, y, width, RAS_DLG_ROW);
+            ck.caption = this.label;
+            ck.value = this.checkedValue;
+            this.control = ck;
+            y += RAS_DLG_ROW;
+        } else if (this.kind == "file") {
+            const box = controls.add("Forms.TextBox.1", `${name}_Text`, true) as MSForms.TextBox;
+            const button = controls.add("Forms.CommandButton.1", `${name}_Button`, true) as MSForms.CommandButton;
+            RAS_Place(box, x, y, width - 24.0, RAS_DLG_ROW);
+            RAS_Place(button, x + width - 24.0, y, 24.0, RAS_DLG_ROW);
+            button.caption = "...";
+            button.takeFocusOnClick = false;
+            button.tag = "RAS.FilePicker";
+            const fp = new FilePicker();
+            fp.RAS_Attach(form, name);
+            fp.dialogType = this.dialogType;
+            fp.title = this.title;
+            for (let i = 0; i < this.filterNames.length; i++) fp.addFilter(this.filterNames[i], this.filterExts[i]);
+            fp.text = this.textValue;
+            this.picker = fp;
+            this.control = box;
+            y += RAS_DLG_ROW;
+        }
+        if (this.tip != "") this.control.controlTipText = this.tip;
+        if (!this.able) this.enabled = false;
+        if (this.schema != null) {
+            const err = controls.add("Forms.Label.1", `${name}_Error`, true) as MSForms.Label;
+            RAS_Place(err, x, y + 1.0, width, RAS_DLG_LINE);
+            err.foreColor = 0x0000CC;
+            err.backStyle = 0;
+            err.caption = "";
+            err.visible = false;
+            this.errorLabel = err;
+            y += RAS_DLG_LINE + 1.0;
+        }
+        return y;
+    }
+
+    /** ファイルの選択欄のボタンが押されたとき。 */
+    RAS_Browse(): void {
+        if (this.picker != null) this.picker.RAS_Click();
+    }
+
+    /** 表示を終える: 値をコントロールから取っておき、コントロールを離す。 */
+    RAS_Detach(): void {
+        if (this.control == null) return;
+        if (this.kind == "list" && this.multi) {
+            const keep: boolean[] = [];
+            for (let i = 0; i < this.items.length; i++) keep.push(this.isPicked(i));
+            this.picks = keep;
+        }
+        const t = this.text;
+        const i = this.isChoice() ? this.index : this.indexValue;
+        const c = this.kind == "checkbox" ? this.checked : this.checkedValue;
+        this.control = null;
+        this.options = [];
+        this.checks = [];
+        this.picker = null;
+        this.errorLabel = null;
+        if (this.kind != "select" && this.kind != "list" && this.kind != "radio") this.textValue = t;
+        if (this.kind == "select" || this.kind == "list" || this.kind == "radio" || this.kind == "combo") {
+            this.indexValue = i;
+            if (this.kind != "combo") this.textValue = i >= 0 ? this.items[i] : "";
+        }
+        this.checkedValue = c;
+    }
+
+    /** 選択肢を置き換える（`select`・`combo`・`list`・`radio` で、表示する前に）。 */
+    RAS_Init(kind: string, label: string, items: string[]): void {
+        this.kind = kind;
+        this.label = label;
+        this.items = items;
+    }
+}
+
+/**
+ * コードで組み立てるダイアログ。項目を足すメソッド（`text`・`select`・`checkbox` など）を呼んだ順に
+ * 上から並べ、下にボタンを右寄せで並べる。`show()` でモーダルに表示し、押したボタンの番号を返す。
+ *
+ * ```typescript
+ * const d = new Dialog("エクスポート", "出力の設定を選んでください");
+ * const kind = d.select("形式", ["CSV", "TSV"]);
+ * const file = d.file("出力先", dialogType: 2).required("出力先を選んでください");
+ * const head = d.checkbox("見出しを出力する", true);
+ * if (d.show() != 0) return;             // OK 以外（キャンセル・×）
+ * exportTo(file.text, kind.index, head.checked);
+ * ```
+ */
+export class Dialog implements RAS_DialogHost {
+    /** タイトル バーの文字列。 */
+    title: string = "";
+    /** 項目の上に表示する説明（`""` なら表示しない）。 */
+    message: string = "";
+    /** 内側の幅（ポイント）。 */
+    width: double = 300.0;
+    /** Enter で押すボタンの番号（-1 なら無し）。 */
+    defaultButton: int = 0;
+    /** Esc で押すボタンの番号（-1 なら無し。× と同じく -1 を返す）。このボタンは入力を検証しない。 */
+    cancelButton: int = 1;
+    /** 項目。 */
+    fields: DialogField[] = [];
+    /** ボタンの文字列。 */
+    captions: string[] = ["OK", "キャンセル"];
+    /** 最後に押されたボタン（`show()` の戻り値）。 */
+    result: int = -1;
+
+    private form: RAS_Dialog = null;
+    private listeners: RAS_Listener[] = [];
+    private changed: (f: DialogField) => void = null;
+    private checker: (d: Dialog) => boolean = null;
+    private busy: boolean = false;
+
+    constructor(title: string = "", message: string = "") {
+        this.title = title;
+        this.message = message;
+    }
+
+    /** 1 行の入力欄（`multiline` なら複数行で、`rows` 行の高さ）。 */
+    text(label: string, value: string = "", multiline: boolean = false, rows: int = 4): DialogField {
+        const f = this.add("text", label, []);
+        f.text = value;
+        f.multi = multiline;
+        f.rows = rows;
+        return f;
+    }
+
+    /** パスワードの入力欄（`*` で表示する）。 */
+    password(label: string, value: string = ""): DialogField {
+        const f = this.add("password", label, []);
+        f.text = value;
+        return f;
+    }
+
+    /** 選択肢から 1 つを選ぶドロップダウン（入力はできない）。`index` は最初に選んでおく番号。 */
+    select(label: string, items: string[], index: int = 0): DialogField {
+        const f = this.add("select", label, items);
+        f.index = index;
+        return f;
+    }
+
+    /** 選択肢から選ぶか、入力するコンボ ボックス。 */
+    combo(label: string, items: string[], value: string = ""): DialogField {
+        const f = this.add("combo", label, items);
+        f.text = value;
+        return f;
+    }
+
+    /** リスト ボックス（`multi` なら複数選択で、項目ごとのチェック ボックスで表示する）。`rows` は見える行数。 */
+    list(label: string, items: string[], multi: boolean = false, rows: int = 5): DialogField {
+        const f = this.add("list", label, items);
+        f.multi = multi;
+        f.rows = rows;
+        if (!multi) f.index = -1;
+        return f;
+    }
+
+    /** オプション ボタン（ラジオ ボタン）で 1 つを選ぶ。 */
+    radio(label: string, items: string[], index: int = 0): DialogField {
+        const f = this.add("radio", label, items);
+        f.index = index;
+        return f;
+    }
+
+    /** チェック ボックス。 */
+    checkbox(caption: string, checked: boolean = false): DialogField {
+        const f = this.add("checkbox", caption, []);
+        f.checked = checked;
+        return f;
+    }
+
+    /**
+     * ファイル・フォルダーの選択欄（欄と「...」ボタン）。`dialogType` は `Application.FileDialog` の種類
+     * （1: 開く、2: 名前を付けて保存、3: ファイルの選択（既定）、4: フォルダーの選択）。
+     */
+    file(label: string, path: string = "", dialogType: int = 3, title: string = ""): DialogField {
+        const f = this.add("file", label, []);
+        f.text = path;
+        f.dialogType = dialogType;
+        f.title = title;
+        return f;
+    }
+
+    /** フォルダーの選択欄（`file(label, path, 4)` と同じ）。 */
+    folder(label: string, path: string = "", title: string = ""): DialogField {
+        return this.file(label, path, 4, title);
+    }
+
+    /** 文字列（説明など）。 */
+    label(text: string): DialogField {
+        const f = this.add("label", "", []);
+        f.text = text;
+        return f;
+    }
+
+    /**
+     * ボタンを置き換える（既定は OK・キャンセル）。`cancel` は Esc で押すボタンの番号（-1 なら無し）、
+     * `enter` は Enter で押すボタンの番号。
+     */
+    buttons(captions: string[], cancel: int = -1, enter: int = 0): Dialog {
+        this.captions = captions;
+        this.cancelButton = cancel;
+        this.defaultButton = enter;
+        return this;
+    }
+
+    /** 項目の値が変わるたびに呼ぶ関数（ほかの項目の `enabled` を変えるなど）。 */
+    onChange(handler: (f: DialogField) => void): Dialog {
+        this.changed = handler;
+        return this;
+    }
+
+    /**
+     * キャンセル以外のボタンが押されたときに呼ぶ検査（規則の検証の後）。`false` を返すと閉じない
+     * （項目の `RAS_ShowError` は使わず、`msgBox` などで知らせる）。
+     */
+    onSubmit(check: (d: Dialog) => boolean): Dialog {
+        this.checker = check;
+        return this;
+    }
+
+    /**
+     * モーダルに表示し、閉じるまで待って、押したボタンの番号（0 から）を返す。タイトル バーの ×
+     * と Esc（キャンセルのボタン）は -1 を返す。キャンセル以外のボタンは、規則（`rule` / `required`）の
+     * ある項目を検証し、エラーがあれば閉じない。
+     */
+    show(): int {
+        this.result = -1;
+        const f = new RAS_Dialog();
+        this.form = f;
+        f.RAS_Host(this);
+        try {
+            this.build();
+            f.show();
+        } finally {
+            this.finish();
+        }
+        return this.result;
+    }
+
+    /** OK（最初のボタン）で閉じたか（`show() == 0`）。 */
+    ok(): boolean {
+        return this.show() == 0;
+    }
+
+    /** 表示中なら閉じる（`show()` は `result` を返す）。 */
+    close(result: int = -1): void {
+        this.result = result;
+        if (this.form != null) this.form.hide();
+    }
+
+    RAS_CloseBox(): void {
+        this.close(-1);
+    }
+
+    /** ボタンが押されたとき。 */
+    RAS_Press(i: int): void {
+        if (this.busy) return;
+        if (i == this.cancelButton) {
+            this.close(-1);
+            return;
+        }
+        this.busy = true;
+        let first: DialogField = null;
+        for (const fld of this.fields) {
+            fld.touched = true;
+            if (!fld.RAS_Validate() && first == null) first = fld;
+        }
+        this.busy = false;
+        if (first != null) {
+            first.RAS_Focus();
+            return;
+        }
+        if (this.checker != null) {
+            if (!this.checker(this)) return;
+        }
+        this.close(i);
+    }
+
+    /** 項目の値が変わったとき。 */
+    RAS_Changed(fld: DialogField): void {
+        if (this.busy || this.form == null) return;
+        this.busy = true;
+        try {
+            if (fld.touched) fld.RAS_Validate();
+            if (this.changed != null) this.changed(fld);
+        } finally {
+            this.busy = false;
+        }
+    }
+
+    /** 項目を足す。 */
+    private add(kind: string, label: string, items: string[]): DialogField {
+        const f = new DialogField();
+        f.RAS_Init(kind, label, items);
+        this.fields.push(f);
+        return f;
+    }
+
+    /** コントロールを並べ、イベントをつなぐ。 */
+    private build(): void {
+        const form = this.form;
+        const w = this.width;
+        const x = RAS_DLG_PAD;
+        let y = RAS_DLG_PAD;
+        form.caption = this.title == "" ? RAS_DLG_TITLE : this.title;
+        if (this.message != "") {
+            const m = form.controls.add("Forms.Label.1", "lblMessage", true) as MSForms.Label;
+            const h = RAS_TextHeight(this.message, w);
+            RAS_Place(m, x, y, w, h);
+            m.caption = this.message;
+            m.wordWrap = true;
+            m.backStyle = 0;
+            y += h + RAS_DLG_GAP + 4.0;
+        }
+        for (let i = 0; i < this.fields.length; i++) {
+            const fld = this.fields[i];
+            y = fld.RAS_Build(form, i, x, y, w) + RAS_DLG_GAP;
+            this.wire(fld);
+        }
+        y += 4.0;
+        // Buttons, right-aligned.
+        const widths: double[] = [];
+        let total = 0.0;
+        for (const c of this.captions) {
+            const bw = Math.max(RAS_DLG_BUTTON_WIDTH, RAS_TextWidth(c) + 20.0);
+            widths.push(bw);
+            total += bw;
+        }
+        total += (this.captions.length - 1) * 6.0;
+        let inner = w;
+        if (total > inner) inner = total;
+        let bx = x + inner - total;
+        for (let i = 0; i < this.captions.length; i++) {
+            const b = form.controls.add("Forms.CommandButton.1", `btn${i}`, true) as MSForms.CommandButton;
+            RAS_Place(b, bx, y, widths[i], RAS_DLG_BUTTON_HEIGHT);
+            b.caption = this.captions[i];
+            b.default = i == this.defaultButton;
+            b.cancel = i == this.cancelButton;
+            const n = i;
+            this.listeners.push(b.on("Click", () => this.RAS_Press(n)));
+            bx += widths[i] + 6.0;
+        }
+        y += RAS_DLG_BUTTON_HEIGHT + RAS_DLG_PAD;
+        RAS_Size(form, inner + RAS_DLG_PAD * 2.0, y);
+        if (this.fields.length > 0) this.fields[0].RAS_Focus();
+    }
+
+    /** 項目のコントロールの変更を受け取る。 */
+    private wire(fld: DialogField): void {
+        const c = fld.control;
+        if (c == null) return;
+        if (fld.kind == "text" || fld.kind == "password") {
+            this.listeners.push((c as MSForms.TextBox).on("Change", () => this.RAS_Changed(fld)));
+        } else if (fld.kind == "select" || fld.kind == "combo") {
+            this.listeners.push((c as MSForms.ComboBox).on("Change", () => this.RAS_Changed(fld)));
+        } else if (fld.kind == "list" && fld.multi) {
+            const frame = c as MSForms.Frame;
+            for (let i = 0; i < fld.items.length; i++) {
+                const k = frame.controls.item(`${c.name}_${i}`) as MSForms.CheckBox;
+                this.listeners.push(k.on("Change", () => this.RAS_Changed(fld)));
+            }
+        } else if (fld.kind == "list") {
+            this.listeners.push((c as MSForms.ListBox).on("Change", () => this.RAS_Changed(fld)));
+        } else if (fld.kind == "checkbox") {
+            this.listeners.push((c as MSForms.CheckBox).on("Change", () => this.RAS_Changed(fld)));
+        } else if (fld.kind == "radio") {
+            const frame = c as MSForms.Frame;
+            for (let i = 0; i < fld.items.length; i++) {
+                const o = frame.controls.item(`${c.name}_${i}`) as MSForms.OptionButton;
+                this.listeners.push(o.on("Change", () => this.RAS_Changed(fld)));
+            }
+        } else if (fld.kind == "file") {
+            this.listeners.push((c as MSForms.TextBox).on("Change", () => this.RAS_Changed(fld)));
+            const b = this.form.controls.item(`${c.name.substring(0, c.name.length - 5)}_Button`) as MSForms.CommandButton;
+            this.listeners.push(b.on("Click", () => fld.RAS_Browse()));
+        }
+    }
+
+    /** 表示を終える: 値を取っておき、イベントを外し、フォームを閉じる。 */
+    private finish(): void {
+        for (const l of this.listeners) l.off();
+        this.listeners = [];
+        for (const fld of this.fields) fld.RAS_Detach();
+        const f = this.form;
+        this.form = null;
+        if (f != null) {
+            f.RAS_Host(null);
+            unload(f);
+        }
+    }
+}
+
+/**
+ * ボタンを並べたダイアログを表示し、押したボタンの番号（0 から）を返す。× と Esc は -1。
+ * `cancel` は Esc で押すボタンの番号（-1 なら Esc は効かない）、`enter` は Enter で押すボタンの番号。
+ *
+ * ```typescript
+ * switch (choose("変更を保存しますか？", ["変更を確定", "別名で確定", "キャンセル"], cancel: 2)) {
+ *     case 0: save(); break;
+ *     case 1: saveAs(); break;
+ *     default: return;                  // キャンセル・×（-1）
+ * }
+ * ```
+ */
+export function choose(message: string, buttons: string[], title: string = "", cancel: int = -1, enter: int = 0): int {
+    const d = new Dialog(title, message);
+    d.buttons(buttons, cancel, enter);
+    return d.show();
+}
+
+/**
+ * モードレスで表示するプログレスバー。作るとすぐに表示し、処理を続けながら `value` を進める。
+ * 「中止」ボタン（`cancelable`）か × が押されると `cancelled` が `true` になる。`close()` で閉じる。
+ *
+ * ```typescript
+ * const p = new Progress("集計中", max: last);
+ * for (let r = 1; r <= last; r++) {
+ *     if (p.cancelled) break;
+ *     p.value = r;
+ *     p.message = `${r} / ${last} 行`;
+ * }
+ * p.close();
+ * ```
+ */
+export class Progress implements RAS_DialogHost {
+    private form: RAS_Dialog = null;
+    private bar: ProgressBar = null;
+    private note: MSForms.Label = null;
+    private stop: MSForms.CommandButton = null;
+    private listener: RAS_Listener = null;
+    private stopped: boolean = false;
+    private last: double = -1.0;
+    /** 閉じたときの値（閉じた後の `value`）。 */
+    private kept: double = 0.0;
+
+    constructor(caption: string = "", max: double = 100.0, title: string = "", cancelable: boolean = true, width: double = 300.0) {
+        const f = new RAS_Dialog();
+        this.form = f;
+        f.RAS_Host(this);
+        f.caption = title == "" ? RAS_DLG_TITLE : title;
+        const controls: MSForms.Controls = f.controls;
+        const x = RAS_DLG_PAD;
+        let y = RAS_DLG_PAD;
+        // The four labels of a progress bar (spec §14.11.13), attached as a designed one is.
+        const track = controls.add("Forms.Label.1", "pb_Track", true) as MSForms.Label;
+        const fill = controls.add("Forms.Label.1", "pb_Bar", true) as MSForms.Label;
+        const cap = controls.add("Forms.Label.1", "pb_Caption", true) as MSForms.Label;
+        const pct = controls.add("Forms.Label.1", "pb_Value", true) as MSForms.Label;
+        RAS_Place(cap, x, y, width - 36.0, 16.5);
+        RAS_Place(pct, x + width - 36.0, y, 36.0, 16.5);
+        RAS_Place(track, x, y + 19.5, width, 4.5);
+        RAS_Place(fill, x, y + 19.5, 0.75, 4.5);
+        track.backColor = 0xE5E5E5;
+        track.tag = `RAS.ProgressBar|min=0|max=${max}|value=0|showValue=1|accent=1`;
+        fill.backColor = -2147483635;          // システム カラー highlight（&H8000000D）
+        cap.backStyle = 0;
+        pct.backStyle = 0;
+        pct.textAlign = 3;
+        pct.foreColor = -2147483631;           // システム カラー grayText（&H80000011）
+        const pb = new ProgressBar();
+        pb.RAS_Attach(f, "pb");
+        pb.caption = caption;
+        pb.value = 0.0;
+        this.bar = pb;
+        y += 24.0 + 6.0;
+        const n = controls.add("Forms.Label.1", "lblMessage", true) as MSForms.Label;
+        RAS_Place(n, x, y, width, RAS_DLG_LINE);
+        n.backStyle = 0;
+        n.caption = "";
+        this.note = n;
+        y += RAS_DLG_LINE + RAS_DLG_GAP;
+        if (cancelable) {
+            const b = controls.add("Forms.CommandButton.1", "btnCancel", true) as MSForms.CommandButton;
+            RAS_Place(b, x + width - RAS_DLG_BUTTON_WIDTH, y, RAS_DLG_BUTTON_WIDTH, RAS_DLG_BUTTON_HEIGHT);
+            b.caption = "中止";
+            b.cancel = true;
+            this.stop = b;
+            this.listener = b.on("Click", () => this.RAS_CloseBox());
+            y += RAS_DLG_BUTTON_HEIGHT + RAS_DLG_PAD;
+        } else {
+            y += RAS_DLG_PAD - RAS_DLG_GAP;
+        }
+        RAS_Size(f, width + RAS_DLG_PAD * 2.0, y);
+        f.show(vbModeless);
+        this.refresh(true);
+    }
+
+    /** 現在の値（`min` から `max` まで）。 */
+    get value(): double {
+        return this.bar == null ? this.kept : this.bar.value;
+    }
+    set value(v: double) {
+        if (this.bar == null) return;
+        this.bar.value = v;
+        this.refresh(v >= this.bar.max);
+    }
+
+    /** 最小値（既定は 0）。 */
+    get min(): double {
+        return this.bar == null ? 0.0 : this.bar.min;
+    }
+    set min(v: double) {
+        if (this.bar != null) this.bar.min = v;
+    }
+
+    /** 最大値（既定は 100）。 */
+    get max(): double {
+        return this.bar == null ? 0.0 : this.bar.max;
+    }
+    set max(v: double) {
+        if (this.bar != null) this.bar.max = v;
+    }
+
+    /** バーの上に表示する文字列。 */
+    get caption(): string {
+        return this.bar == null ? "" : this.bar.caption;
+    }
+    set caption(v: string) {
+        if (this.bar == null) return;
+        this.bar.caption = v;
+        this.refresh(false);
+    }
+
+    /** バーの下に表示する文字列（処理中の項目など）。 */
+    get message(): string {
+        return this.note == null ? "" : this.note.caption;
+    }
+    set message(v: string) {
+        if (this.note == null) return;
+        this.note.caption = v;
+        this.refresh(false);
+    }
+
+    /** 中止のボタンか × が押されたか。 */
+    get cancelled(): boolean {
+        this.refresh(false);
+        return this.stopped;
+    }
+
+    /** 値を `by` だけ進める。 */
+    step(by: double = 1.0): void {
+        this.value = this.value + by;
+    }
+
+    /** バーの部品（色などを変える）。 */
+    get progressBar(): ProgressBar {
+        return this.bar;
+    }
+
+    /** 閉じる（何度呼んでもよい）。 */
+    close(): void {
+        if (this.listener != null) this.listener.off();
+        this.listener = null;
+        const f = this.form;
+        if (this.bar != null) this.kept = this.bar.value;
+        this.form = null;
+        this.bar = null;
+        this.note = null;
+        this.stop = null;
+        if (f != null) {
+            f.RAS_Host(null);
+            unload(f);
+        }
+    }
+
+    RAS_CloseBox(): void {
+        this.stopped = true;
+        if (this.stop != null) {
+            this.stop.caption = "中止中…";
+            this.stop.enabled = false;
+        }
+    }
+
+    /** 画面を描き直し、ボタンの操作を受け取る（0.1 秒に 1 回まで。`now` ならすぐ）。 */
+    private refresh(now: boolean): void {
+        if (this.form == null) return;
+        const t = timer();
+        if (!now && this.last >= 0.0 && t >= this.last && t - this.last < 0.1) return;
+        this.last = t;
+        this.form.repaint();
+        doEvents();
+    }
+}
+
+/** コントロールを置く（幅と高さは 1 ピクセル以上）。 */
+function RAS_Place(c: any, left: double, top: double, width: double, height: double): void {
+    c.left = left as float;
+    c.top = top as float;
+    c.width = Math.max(width, 0.75) as float;
+    c.height = Math.max(height, 0.75) as float;
+}
+
+/** フォームの内側の大きさを合わせる。 */
+function RAS_Size(form: RAS_Dialog, width: double, height: double): void {
+    form.width = (form.width + width - form.insideWidth) as float;
+    form.height = (form.height + height - form.insideHeight) as float;
+}
+
+/** 文字列の幅の目安（MS UI Gothic 9pt。全角は 9pt、半角は 5pt）。 */
+function RAS_TextWidth(s: string): double {
+    let w = 0.0;
+    for (let i = 0; i < s.length; i++) {
+        w += s.charCodeAt(i) > 255 ? 9.0 : 5.0;
+    }
+    return w;
+}
+
+/** 幅 `width` で折り返したときの文字列の高さの目安。 */
+function RAS_TextHeight(s: string, width: double): double {
+    let lines = 0;
+    for (const line of s.split("\n")) {
+        const w = RAS_TextWidth(line);
+        let n = Math.ceil(w / Math.max(width, 1.0)) as int;
+        if (n < 1) n = 1;
+        lines += n;
+    }
+    return lines * RAS_DLG_LINE + 2.0;
+}
