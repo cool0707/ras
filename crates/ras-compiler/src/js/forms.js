@@ -149,9 +149,11 @@ module.exports = function install(rt) {
 
     /** `Controls` / `Pages` / `Tabs`: `Item` by 0-based index or by name, `Count`, `For Each`. */
     class Items {
-        constructor(list, what) {
+        /** `owner`: the form or the container whose `Controls` these are (`Add` / `Remove`). */
+        constructor(list, what, owner) {
             this.$list = list;
             this.$what = what;
+            this.$owner = owner || null;
         }
         get Count() {
             return this.$list().length;
@@ -167,11 +169,15 @@ module.exports = function install(rt) {
             if (!(i >= 0 && i < list.length)) raise(9, `${this.$what}(${i})`);
             return list[i];
         }
-        Add() {
-            return rt.unsupported(`${this.$what}.Add`);
+        Add(progId, name, visible) {
+            if (!this.$owner) return rt.unsupported(`${this.$what}.Add`);
+            const form = this.$owner.$form || this.$owner;
+            return form.$addControl(progId, name, visible, this.$owner === form ? null : this.$owner);
         }
-        Remove() {
-            return rt.unsupported(`${this.$what}.Remove`);
+        Remove(index) {
+            if (!this.$owner) return rt.unsupported(`${this.$what}.Remove`);
+            const ctl = this.Item(index);
+            (this.$owner.$form || this.$owner).$removeControl(ctl);
         }
         Clear() {
             return rt.unsupported(`${this.$what}.Clear`);
@@ -311,7 +317,7 @@ module.exports = function install(rt) {
             return this.$font;
         }
         get Controls() {
-            return new Items(() => this.$children, "Controls");
+            return new Items(() => this.$children, "Controls", this);
         }
         get ActiveControl() {
             const a = this.$form.$active;
@@ -815,8 +821,53 @@ module.exports = function install(rt) {
         get Font() {
             return this.$font;
         }
+
+        /** `Controls.Add("Forms.Label.1", name, visible)` of the form or of a container in it. */
+        $addControl(progId, name, visible, parent) {
+            const m = /^forms\.(\w+)\.1$/i.exec(String(progId ?? "").trim());
+            const kind = m ? KINDS[m[1].toLowerCase()] : undefined;
+            if (!kind || kind === "Page") raise(711, `Controls.Add("${rt.str(progId)}")`);
+            if (parent && !["Frame", "Page"].includes(parent.$kind)) raise(438, "Controls.Add");
+            const taken = (n) => n.toLowerCase() === this.$name.toLowerCase() || this.$all.some((c) => c.$s.Name.toLowerCase() === n.toLowerCase());
+            let n = name === undefined || name === null ? "" : rt.cstr(name);
+            if (n === "") {
+                let i = 1;
+                while (taken(`${kind}${i}`)) i++;
+                n = `${kind}${i}`;
+            } else if (taken(n)) {
+                raise(-2147319764, `Controls.Add("${rt.str(progId)}", "${n}")`);
+            }
+            const spec = { name: n, left: 0, top: 0, tabIndex: (parent ? parent.$children : this.$top).length };
+            const ctl = new Control(this, spec, kind, parent);
+            if (visible !== undefined && visible !== null) ctl.$s.Visible = rt.cbool(visible);
+            ctl.$added = true;
+            (parent ? parent.$children : this.$top).push(ctl);
+            this.$all.push(ctl);
+            if (!(n in this)) Object.defineProperty(this, n, { get: () => ctl, enumerable: true, configurable: true });
+            this.$dirty.add(ctl);
+            return ctl;
+        }
+
+        /** `Controls.Remove`: only what `Controls.Add` added (as in MSForms). */
+        $removeControl(ctl) {
+            if (!ctl.$added) raise(-2147467259, `Controls.Remove("${ctl.$s.Name}")`);
+            const drop = (c) => {
+                for (const child of c.$children.slice()) drop(child);
+                const siblings = c.$parent ? c.$parent.$children : this.$top;
+                siblings.splice(siblings.indexOf(c), 1);
+                this.$all.splice(this.$all.indexOf(c), 1);
+                this.$dirty.delete(c);
+                (this.$removed ||= []).push(c.$s.Name);
+                if (this.$active === c) this.$active = null;
+                const own = Object.getOwnPropertyDescriptor(this, c.$s.Name);
+                if (own && own.configurable) delete this[c.$s.Name];
+            };
+            drop(ctl);
+            this.$touch();
+        }
+
         get Controls() {
-            return new Items(() => this.$all, "Controls");
+            return new Items(() => this.$all, "Controls", this);
         }
         get ActiveControl() {
             let a = this.$active;
@@ -873,6 +924,7 @@ module.exports = function install(rt) {
             this.$visible = true;
             host().send({ t: "show", id: this.$id, name: this.$name, modal: isModal, form: this.$formSnapshot(), controls: this.$all.map((c) => c.$snapshot()) });
             this.$dirty.clear();
+            this.$removed = null;
             this.$fire("UserForm", "Activate", []);
             if (!this.$active || !this.$active.$focusable) {
                 const first = this.$tabOrder()[0];
@@ -935,6 +987,10 @@ module.exports = function install(rt) {
                 else msg.controls.push(d.$snapshot());
             }
             this.$dirty.clear();
+            if (this.$removed) {
+                msg.removed = this.$removed;
+                this.$removed = null;
+            }
             if (this.$active) msg.focus = this.$active.$s.Name;
             host().send(msg);
         }

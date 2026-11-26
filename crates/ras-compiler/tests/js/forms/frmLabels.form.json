@@ -1,0 +1,8 @@
+{ "schemaVersion": 1, "kind": "ras.userform", "basis": "designer",
+  "form": { "name": "frmLabels", "caption": "sw", "width": 240, "height": 160 },
+  "controls": [
+    { "id": "1", "name": "txtA", "type": "TextBox", "left": 12, "top": 12, "width": 100, "height": 18 },
+    { "id": "2", "name": "lblOne", "type": "Label", "left": 120, "top": 12, "width": 100, "height": 14 },
+    { "id": "3", "name": "lblTwo", "type": "Label", "left": 120, "top": 40, "width": 100, "height": 14 },
+    { "id": "4", "name": "btnGo", "type": "CommandButton", "caption": "go", "left": 12, "top": 80 }
+  ] }

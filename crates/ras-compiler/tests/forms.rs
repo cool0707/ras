@@ -1204,3 +1204,154 @@ function closing(byref cancel: short, closeMode: short) {
     );
     assert!(diags.is_empty(), "{diags:?}");
 }
+
+/// A `FormValidator` in a module variable of a form (spec §14.11.12): the `Exit` and `Change` of
+/// the form's input controls reach its `commit` / `edit`, after the handlers of the code-behind;
+/// the `Exit` of a container reaches `commitActive`.
+#[test]
+fn validators_receive_the_events_of_input_controls() {
+    let (diags, files) = compile(
+        r#"
+import * as z from "validation";
+
+const form = new z.FormValidator();
+
+function constructor() {
+    form.rule(this.txtName, z.string().required("名前を入力してください").max(20));
+    form.rule(this.cboKind, z.string().oneOf(["a", "b"]));
+}
+
+@on("txtName.Change")
+function changed() {
+    this.caption = this.txtName.text;
+}
+
+@on("btnOK.Click")
+function ok() {
+    if (!form.validateAll()) return;
+    this.close(this.txtName.text);
+}
+"#,
+        &[],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = form_code(&files);
+    for want in [
+        "Private form As FormValidator\n",
+        "Private Sub txtName_Exit(ByVal Cancel As MSForms.ReturnBoolean)\n    On Error GoTo RAS_OnError\n    If Not form Is Nothing Then form.commit Me.txtName\n    Exit Sub\n",
+        "        changed\n        ras_busy1 = False\n    End If\n    If Not form Is Nothing Then form.edit Me.txtName\n",
+        "Private Sub cboKind_Exit(ByVal Cancel As MSForms.ReturnBoolean)\n",
+        "Private Sub cboKind_Change()\n",
+        "Private Sub pages_Exit(ByVal Cancel As MSForms.ReturnBoolean)\n    On Error GoTo RAS_OnError\n    If Not form Is Nothing Then form.commitActive Me.pages\n",
+    ] {
+        assert!(code.contains(want), "{want}\n---\n{code}");
+    }
+    // Buttons have nothing to validate.
+    assert!(!code.contains("btnOK_Exit"), "{code}");
+    let lib = file(&files, "FormValidator");
+    assert!(
+        lib.contains("Public Sub commit(ByVal control As MSForms.Control)"),
+        "{lib}"
+    );
+    assert!(lib.contains("Public Sub commitActive("), "{lib}");
+}
+
+/// A form without a `FormValidator` gets no event procedures for its controls.
+#[test]
+fn forms_without_validator_get_no_validation_events() {
+    let (diags, files) = compile(
+        r#"
+@on("btnOK.Click")
+function ok() {
+    this.hide();
+}
+"#,
+        &[],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = form_code(&files);
+    assert!(!code.contains("txtName_Exit"), "{code}");
+    assert!(!files.iter().any(|f| f.name == "FormValidator"));
+}
+
+/// The example of spec §14.11.12 compiles, and its form gets the event procedure shown there.
+#[test]
+fn spec_example_of_validation_compiles() {
+    let text = include_str!("../../../docs/RAS_Language_Specification.md").replace("\r\n", "\n");
+    let section = &text[text.find("#### 14.11.12").unwrap()..];
+    let start = section.find("// forms/frmOrder.ras\n").unwrap();
+    let example = &section[start..start + section[start..].find("```").unwrap()];
+    let mut config = Config::default();
+    config.forms = vec![FormDecl {
+        name: "frmOrder".into(),
+        controls: vec![
+            control("txtName", "TextBox"),
+            control("txtAge", "TextBox"),
+            control("txtMail", "TextBox"),
+            control("chkAgree", "CheckBox"),
+            control("cboKind", "ComboBox"),
+            control("fraCorp", "Frame"),
+            control("txtCorp", "TextBox"),
+            control("btnOK", "CommandButton"),
+        ],
+    }];
+    let sources = vec![
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: "export function run() {\n    msgBox(new frmOrder().showModal());\n}\n".into(),
+        },
+        form_source(
+            PathBuf::from("forms/frmOrder.ras"),
+            "frmOrder",
+            example.to_string(),
+        ),
+    ];
+    let prog = analyze(sources, config);
+    let out = build(
+        &prog,
+        &BuildOptions {
+            erl: Some(false),
+            ..Default::default()
+        },
+    );
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .chain(out.diagnostics.iter())
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "{errors:#?}");
+    let code = file(&out.files, "frmOrder");
+    let shown = &section[section.find("  ```vb\n").unwrap() + 8..];
+    let shown = &shown[..shown.find("  ```").unwrap()];
+    let shown: String = shown
+        .lines()
+        .map(|l| l.strip_prefix("  ").unwrap_or(l))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (decl, proc) = shown.split_once("\n\n").unwrap();
+    assert!(code.contains(decl), "{decl}\n---\n{code}");
+    assert!(code.contains(proc.trim_end()), "{proc}\n---\n{code}");
+    // The handler of cboKind.Change runs before the validator hears of the change.
+    assert!(
+        code.contains("        kindChanged\n        ras_busy1 = False\n    End If\n    If Not form Is Nothing Then form.edit Me.cboKind\n"),
+        "{code}"
+    );
+    assert!(
+        code.contains("If Not form Is Nothing Then form.commitActive Me.fraCorp"),
+        "{code}"
+    );
+    for module in [
+        "RAS_Validation",
+        "FormValidator",
+        "ValidationSchema",
+        "RAS_ValidationField",
+        "RAS_ValidationCheck",
+    ] {
+        assert!(out.files.iter().any(|f| f.name == module), "{module}");
+    }
+}

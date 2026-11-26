@@ -1,0 +1,16 @@
+import * as z from "validation";
+const form = new z.FormValidator();
+function constructor() {
+    form.rule(this.txtA, z.string().required("必須"));
+}
+@on("btnGo.Click")
+function go() {
+    const auto: any = this.controls.item("txtAError");
+    form.rule(this.txtA, z.string().required("必須"), errorLabel: this.lblOne);
+    console.log(`auto=[${auto.caption}]${auto.visible} one=[${this.lblOne.caption}]${this.lblOne.visible}`);
+    form.rule(this.txtA, z.string().required("必須"), errorLabel: this.lblTwo);
+    console.log(`one=[${this.lblOne.caption}]${this.lblOne.visible} two=[${this.lblTwo.caption}]${this.lblTwo.visible}`);
+    form.rule(this.txtA, z.string().required("必須"));
+    console.log(`two=[${this.lblTwo.caption}]${this.lblTwo.visible} (kept)`);
+    this.close();
+}

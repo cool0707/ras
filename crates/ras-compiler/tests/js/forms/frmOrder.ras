@@ -1,0 +1,26 @@
+import * as z from "validation";
+
+const form = new z.FormValidator();
+
+function constructor() {
+    form.rule(this.txtName, z.string().required("名前を入力してください").max(20));
+    form.rule(this.txtAge, z.int().min(0).max(150));
+    form.rule(this.chkAgree, z.boolean().required("同意が必要です"));
+    form.rule(this.cboKind, z.string().required().oneOf(["個人", "法人"]));
+}
+
+@on("cboKind.Change")
+function kindChanged() {
+    if (this.cboKind.text == "法人") {
+        // 自分で用意したラベルに表示する
+        form.rule(this.txtCorp, z.string().required("法人名を入力してください"), errorLabel: this.lblCorpMessage);
+    } else {
+        form.remove(this.txtCorp);
+    }
+}
+
+@on("btnOK.Click")
+function ok() {
+    if (!form.validateAll()) return;
+    this.close(this.txtName.text);
+}

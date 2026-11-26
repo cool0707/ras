@@ -13,7 +13,8 @@
 > * テスト（`ras test`）を追加。`test/` の `*.test.ras` に vitest 形式（`describe` / `test` / `expect`）で書き、ブックの代役（§14.10.8）で Excel を起動せずに実行する（§14.12）
 > * RAS のファイルと VBA のモジュールを一対一に対応させる（§12.1.1）。シート・`ThisWorkbook` のコードは `objects/<コード名>.ras`・`objects/ThisWorkbook.ras` に書き、そのファイルがドキュメントモジュール全体になる（§12.2）。シートの上の ActiveX コントロールのイベント（§12.2.1）と `WithEvents` のイベント（§12.2.2）を `@on` で受け取れる。VBE で足したプロシージャは RAS のファイルに取り込む（§14.7.3）。シートのイベントハンドラ（`@on("Sheet1.Change")`）をどのファイルにも書ける方式、`<コード名>Events.ras`、ドキュメントモジュールの RAS 管理領域は廃止した
 > * イベントハンドラを実行時に付ける `on` / `addEventListener` を追加（§12.2.3）。コントロール・シート・ブック・`Application` には、`WithEvents` の変数を持つクラスを生成して付ける。図形には `OnAction` にマクロの名前を設定する。フォーム・シートのファイルのアロー関数が、`this` とそのファイルの関数・変数を正しく参照するようにした（§4.1）
-> * デバッグ実行を一時停止する `debugger;` 文を追加（§14.10.9）。VBA ビルドでは何も出力しない。プレイグラウンドでは、ブラウザの開発者ツールで `.ras` のファイルにブレークポイントを置いてデバッグできる（§14.10.10）
+> * フォームの入力のバリデーション（zod 風のスキーマと `FormValidator`。入力の確定時に検証し、エラーをコントロールの下のラベルに表示する）を同梱のライブラリ `validation` として追加（§14.11.12）
+* デバッグ実行を一時停止する `debugger;` 文を追加（§14.10.9）。VBA ビルドでは何も出力しない。プレイグラウンドでは、ブラウザの開発者ツールで `.ras` のファイルにブレークポイントを置いてデバッグできる（§14.10.10）
 > * シートの追加・複製・削除・名前の変更を、ブックと `objects/` のファイルに一緒に行う `ras sheet` と VS Code のコマンドを追加（§14.16）。Excel で複製したシートは、同期がコピー元のファイルを複製する（§14.7.2）
 
 > v0.7 からの変更
@@ -1931,6 +1932,7 @@ VS Code 上でブレークポイント・ステップ実行・変数の確認を
 * 配列と構造体（`struct`・無名のオブジェクト型・タプル）は値型（代入でコピー、関数には参照渡し）。`byref` 引数は呼び出し元の変数を書き換える。
 * 実数の文字列化は有効 15 桁（`0.1 + 0.2` は `0.3`）。`Math.round` は四捨五入、`trim` は半角空白のみ除去。
 * `try { } catch { resume; }` は文ごとにエラーを無視して次の文へ進む。`catch (e)` の `e` は `code` / `description` / `source` / `rasFile` / `rasLine` を持つ。
+* 日付は VBA の `Date` と同じ値（1899-12-30 からの日数）で持つ。`dateAdd` の `m` / `q` / `yyyy` は月末に丸め（1/31 の 1 か月後は 2/28。JavaScript の `setMonth` のように 3/3 へ繰り越さない）、`d` / `h` などは月・年をまたいで繰り越す。結果が 100〜9999 年の外ならエラー 5。`dateSerial` は月・日の範囲外を繰り越し、0〜29 年を 2000 年代、30〜99 年を 1900 年代と読む。1899-12-30 より前の日時は、時刻を日と同じ符号の小数で持つ（1899-12-29 6:00 は `-1.25`）。存在しない日付の文字列（`2026/13/40`）は `cDate` / `isDate` で型の不一致になる。
 * `@fast` と `fastMode` / `suspend*` / `status` は実際の `Application` の状態を変更し、終了時（異常終了を含む）に元へ戻す。
 
 #### 14.10.5 再現しないもの・制限
@@ -2445,6 +2447,103 @@ End Sub
 * VBE でフォームのデザインやコードを編集しても `forms/` には自動では反映されない。デザインは `ras form pull --force` で取り込める。取り込まない限り、次に `forms/` 側を変更して書き込んだ時点で `forms/` の内容に置き換わる（ドリフト検出は行わない）。
 * コードビハインドの `@on("<コントロール名>.<イベント>")` で扱えるのは、組み込みのコントロールのイベントだけである。同じハンドラを複数のコントロールに付けるとき（コントロールの配列）は、`on` で付ける（§12.2.3）。
 * ライブ同期でのフォームの取り込み（`VBComponents.Import`）は、Excel の無い環境では自動テストできない。`.frx` の構成は Excel が書き出したファイルと照合している（`crates/ras-form/tests/project.rs`）。
+
+#### 14.11.12 入力のバリデーション（`validation`）（v0.9で追加）
+
+フォームの入力を、zod 風に組み立てた規則で検証し、エラーを各コントロールの下のラベルに表示する。現代的な Web の入力フォームと同じく、コントロールで入力を確定した（フォーカスが離れた）時点で検証し、一度確定したコントロールはその後の入力のたびに検証し直す（直すとすぐにエラーが消える）。ライブラリは RAS で書かれた同梱のモジュール `validation`（`crates/ras-compiler/stdlib/validation.ras`）で、使ったときだけ出力する。
+
+```typescript
+// forms/frmOrder.ras
+import * as z from "validation";
+
+const form = new z.FormValidator();       // モジュール変数に置くと、コントロールのイベントがつながる
+
+function constructor() {
+    form.rule(this.txtName, z.string().required("名前を入力してください").max(20));
+    form.rule(this.txtAge, z.int().min(0).max(150));
+    form.rule(this.txtMail, z.string().email());
+    form.rule(this.chkAgree, z.boolean().required("同意が必要です"));
+}
+
+// 前の入力によって規則を変える: いつでも rule / remove を呼び直せる
+@on("cboKind.Change")
+function kindChanged() {
+    if (this.cboKind.text == "法人") {
+        form.rule(this.txtCorp, z.string().required("法人名を入力してください"));
+    } else {
+        form.remove(this.txtCorp);
+    }
+}
+
+@on("btnOK.Click")
+function ok() {
+    if (!form.validateAll()) return;      // すべて検証してエラーを表示し、最初のエラーへフォーカスを移す
+    this.close(this.txtName.text);
+}
+```
+
+* **スキーマ（`ValidationSchema`）:** `z.string()` / `z.int()` / `z.number()` / `z.date()` / `z.boolean()` で作り、規則のメソッドをつなげる（どれも同じスキーマを返す）。`int` / `number` / `date` に渡すメッセージは、型に合わない入力（`"abc"`）のエラーになる。
+
+  | メソッド | 規則 | 既定のメッセージ |
+  |---|---|---|
+  | `required(msg?)` | 空欄（空白だけを含む）でない。`boolean` ではチェックされている | 入力してください / チェックしてください |
+  | `optional()` | `required()` を取り消す | |
+  | `min(n, msg?)` / `max(n, msg?)` | `string` は文字数、`int` / `number` は値、`date` は日付（シリアル値。`cDbl(dateSerial(…))`）が `n` 以上 / 以下 | `n` 文字以上で… / `n` 以上で… |
+  | `length(n, msg?)` | 文字数がちょうど `n` | `n` 文字で入力してください |
+  | `positive(msg?)` / `nonnegative(msg?)` | 0 より大きい / 0 以上 | |
+  | `regex(pattern, msg?)` | 正規表現（`VBScript.RegExp` の構文）に一致する | 形式が正しくありません |
+  | `email(msg?)` | メールアドレスの形式 | メールアドレスの形式で入力してください |
+  | `oneOf(values, msg?)` | `values`（`string[]`）のどれか | 一覧から選択してください |
+  | `refine(fn, msg)` | `fn(値)` が `true`。ほかのコントロールの値（`this.txtA.text`）も参照できる | |
+  | `noTrim()` | 前後の空白を取り除かずに検証する（既定では取り除く） | |
+  | `check(value)` | 文字列を検証し、エラーのメッセージ（無ければ `""`）を返す（フォームの外でも使える） | |
+
+  * 値はコントロールの文字列で検証する。`TextBox` / `ComboBox` / `ListBox` は `text`、`CheckBox` / `OptionButton` / `ToggleButton` はチェックされていれば `"true"`（`Null` は `""`）。
+  * 空欄のときは `required()` 以外の規則を調べない（必須でない欄は空のままでよい）。規則は書いた順に調べ、最初に通らなかったもののメッセージを表示する。
+
+* **`FormValidator`:**
+
+  | メンバー | 動作 |
+  |---|---|
+  | `rule(control, schema, errorLabel?)` | コントロールに規則を付ける（既にあれば置き換える）。確定済みのコントロールは、新しい規則ですぐに表示し直す |
+  | `remove(control)` | 規則を外し、表示しているエラーを消す |
+  | `has(control)` | 規則があるか |
+  | `validate(control)` | 1 つを検証して表示し、正しければ `true` |
+  | `validateAll(focus = true)` | 規則のあるすべてを検証して表示し、すべて正しければ `true`。`focus` なら最初（規則を付けた順）のエラーのコントロールにフォーカスを移す。非表示・無効（`enabled == false`）のコントロールは検証せず、エラーを消す |
+  | `isValid()` | 表示を変えずに、すべて正しいかを返す |
+  | `error(control)` | 表示しているエラー（無ければ `""`） |
+  | `setError(control, msg)` | エラーを直接表示する（`""` で消す）。規則で書けない検査の結果に使う |
+  | `reset()` | すべてのエラーを消し、未確定に戻す（規則は残す） |
+  | `errorColor` | 作るラベルの文字色（既定 `0x0000CC`、赤） |
+  | `commit(control)` / `edit(control)` / `commitActive(container)` | コンパイラが生成するイベント プロシージャから呼ばれる（下記） |
+
+* **エラーを表示するラベル:** `rule` の 3 番目の引数 `errorLabel` に自分で用意したラベルを渡すと、そこに表示する（`form.rule(this.txtTel, z.string().regex("^[0-9-]+$"), errorLabel: this.lblTelMessage)`。名前付き引数（§3.3）で書ける）。渡したラベルは位置・色・フォントをそのまま使い、`caption` と `visible` だけを変える。`rule` を呼び直すときに別のラベルを渡すと、それまでのラベルのエラーを消して新しいラベルに表示し直す。省略して呼び直すと、それまでのラベルを使い続ける。
+  `errorLabel` を省略すると、コントロールと同じコンテナー（フォーム・`Frame`・`Page`）の `<コントロール名>Error`（`txtName` なら `txtNameError`）を使う。デザインに置いたラベルは、位置・色・フォントをそのまま使い、`caption` と `visible` だけを変える。無ければ最初にエラーを表示するときに `controls.add("Forms.Label.1", "<コントロール名>Error")` で作る: コントロールの直下（`top` = コントロールの下端 + 1pt、`left` / `width` はコントロールと同じ、高さはフォントの 1.5 倍 + 2pt）、背景は透明（`fmBackStyleTransparent`）、文字色は `errorColor`、フォントはコントロールと同じ。作ったラベルの分の隙間は、デザインで空けておく。エラーが無いときラベルは非表示にする。
+* **イベントとのつなぎ:** フォームのコードビハインドのモジュール変数の型が `FormValidator` のとき、コンパイラはフォームのコントロールに次のイベント プロシージャを生成する（`@on` のハンドラがあれば、その後に呼ぶ）。`MSForms` のコントロールの `Exit` は `WithEvents` では受け取れない（§12.2.3）ため、コンパイラが生成する。変数が `null` の間は何もしない。
+
+  | コントロール | イベント | 呼ぶもの |
+  |---|---|---|
+  | `TextBox` / `ComboBox` / `ListBox` / `CheckBox` / `OptionButton` / `ToggleButton` | `Exit`（入力の確定） | `commit`: 確定済みにして検証する |
+  | 同上 | `Change` | `edit`: 確定済みのコントロールを検証し直す。`CheckBox` / `OptionButton` / `ToggleButton` / `ListBox` は変更がそのまま確定になる |
+  | `Frame` / `MultiPage` | `Exit` | `commitActive`: 中でフォーカスを持っていたコントロールを確定する（MSForms は、フォーカスがフレームの外へ出るとき中のコントロールの `Exit` を起こさないため） |
+
+  ```vb
+  Private form As FormValidator
+
+  Private Sub txtName_Exit(ByVal Cancel As MSForms.ReturnBoolean)
+      On Error GoTo RAS_OnError
+      If Not form Is Nothing Then form.commit Me.txtName
+      Exit Sub
+  RAS_OnError:
+      RAS_EventError "frmOrder.txtName_Exit", Err.Number, Err.Source, Err.Description
+  End Sub
+  ```
+
+* **規則を付ける時期:** 通常は `constructor`（または `Initialize` のハンドラ）で付ける。前の入力によって規則が変わるときは、そのコントロールの `Change` などのハンドラで `rule` / `remove` を呼ぶ。`refine` の関数の中でほかのコントロールの値を読めば、確定のたびにその時点の値で検証される。
+* **生成する VBA:** 標準モジュール `RAS_Validation`（`z.string()` などのスキーマを作る関数）と、クラス モジュール `FormValidator`・`ValidationSchema`・`RAS_ValidationField`・`RAS_ValidationCheck` を出力する。`refine` の関数はエスケープするアロー関数（§4.3）になる。
+* **デバッグ実行:** フォームのデバッグ実行（§14.10.7）でも同じく動く。ランタイムは `Controls.Add`（`"Forms.<種類>.1"`）と、それで足したコントロールの `Controls.Remove` に対応し、パネルに足したコントロールを描く。
+* `FormValidator` を `src/` のモジュールの変数に置いてもイベントはつながらない（その場合は `commit` などを自分で呼ぶ）。
+* `×` ボタンで閉じるとき、`Exit` は起きない（検証しない）。
 
 ### 14.12 テスト（`ras test`）（v0.9で追加）
 

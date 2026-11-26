@@ -878,7 +878,7 @@ module.exports = function createScripting(rt) {
             const p2 = (n) => String(n).padStart(2, "0");
             const day = `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`;
             const time = `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())}`;
-            const whole = Math.floor(v.oa);
+            const whole = Math.trunc(v.oa);
             if (v.oa === whole) return `#${day}#`;
             return whole === 0 ? `#${time}#` : `#${day} ${time}#`;
         }

@@ -687,6 +687,20 @@ pub struct VarDef {
     pub reassigned: bool,
 }
 
+/// Controls whose value a `FormValidator` checks (spec §14.11.12).
+pub const VALIDATED_CONTROLS: [&str; 6] = [
+    "TextBox",
+    "ComboBox",
+    "ListBox",
+    "CheckBox",
+    "OptionButton",
+    "ToggleButton",
+];
+
+/// Containers whose `Exit` stands for that of the control inside that had the focus: MSForms
+/// raises no `Exit` for a control in a `Frame` when the focus leaves the frame.
+pub const VALIDATED_CONTAINERS: [&str; 2] = ["Frame", "MultiPage"];
+
 impl VarDef {
     pub fn vba_name(&self) -> &str {
         self.host_name.as_deref().unwrap_or(&self.name)
@@ -1310,6 +1324,30 @@ impl Program {
             }
         }
         None
+    }
+
+    /// The module variables of a form that hold a `FormValidator` of the bundled validation
+    /// library (spec §14.11.12): the `Exit` and `Change` events of the form's input controls are
+    /// passed to them (`commit` / `edit`), the `Exit` of its containers to `commitActive`.
+    pub fn form_validators(&self, m: ModuleId) -> Vec<VarId> {
+        let md = &self.modules[m];
+        if !md.form.as_ref().is_some_and(|f| f.kind == ObjectKind::Form) {
+            return Vec::new();
+        }
+        md.vars
+            .iter()
+            .copied()
+            .filter(|&v| match &self.vars[v].ty {
+                Type::Class(c, _) => {
+                    let cd = &self.classes[*c];
+                    let lib = &self.modules[cd.module];
+                    cd.name == "FormValidator"
+                        && lib.kind == ModuleKind::Std
+                        && lib.key == crate::collect::VALIDATION_MODULE
+                }
+                _ => false,
+            })
+            .collect()
     }
 
     pub fn find_methods(&self, class: ClassId, name: &str) -> Vec<FnId> {

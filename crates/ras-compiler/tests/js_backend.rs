@@ -993,3 +993,284 @@ default: =既定
 ";
     assert_eq!(stdout, expected, "{stderr}");
 }
+
+const ORDER_MAIN: &str =
+    "export function run() {\n    console.log(new frmOrder().showModal());\n}\n";
+
+/// The validation of a form (spec §14.11.12) in the debug run: a rule checks its control when
+/// the focus leaves it, the error goes to the label `<control>Error` (made under the control when
+/// the form has none, transparent), a committed control is checked again as it changes, rules
+/// change with what was entered (`txtCorp` shows its error in the label the form passes as
+/// `errorLabel`), and `validateAll` shows every error and focuses the first.
+#[test]
+fn forms_validate_their_input() {
+    let spec = include_str!("js/forms/frmOrder.form.json");
+    let code = include_str!("js/forms/frmOrder.ras");
+    let mut cfg = Config::default();
+    cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
+    let sources = vec![
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: ORDER_MAIN.into(),
+        },
+        form_source(
+            PathBuf::from("forms/frmOrder.ras"),
+            "frmOrder",
+            code.to_string(),
+        ),
+    ];
+    let prog = analyze(sources, cfg);
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    let out = build_js(&prog, "../../");
+    assert!(!out.files.is_empty(), "no output: {:?}", out.diagnostics);
+    // The library is no entry point of the project.
+    assert_eq!(out.entries, vec!["Main.run", "frmOrder.show"]);
+    if !has_node() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ras-js-{}-order", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("src/main.ras", ORDER_MAIN);
+    write("forms/frmOrder.ras", code);
+    write("forms/frmOrder.form.json", spec);
+    for f in &out.files {
+        write(&format!("build/debug/{}", f.rel_path), &f.text);
+    }
+    let p = Project(root);
+    let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_validation.js")));
+    assert!(ok, "{stderr}");
+    let expected = "\
+show txtName,txtAge,txtAgeError,cboKind,fraCorp,txtCorp,lblCorpMessage,chkAgree,btnOK
+  focus txtName
+> {\"t\":\"focus\",\"control\":\"txtName\"}
+> {\"t\":\"focus\",\"control\":\"txtAge\"}
+  txtNameError \"名前を入力してください\" visible=true back=0 fore=204 at 12,31 150x15.5
+  focus txtAge
+> {\"t\":\"input\",\"control\":\"txtAge\",\"text\":\"abc\",\"seq\":1}
+> {\"t\":\"focus\",\"control\":\"cboKind\"}
+  txtAgeError \"整数で入力してください\" visible=true back=1 fore=2147483666 at 170,48 120x18
+  focus cboKind
+> {\"t\":\"focus\",\"control\":\"txtAge\"}
+  cboKindError \"入力してください\" visible=true back=0 fore=204 at 12,103 150x15.5
+  focus txtAge
+> {\"t\":\"input\",\"control\":\"txtAge\",\"text\":\"30\",\"seq\":2}
+  txtAgeError \"\" visible=false back=1 fore=2147483666 at 170,48 120x18
+  focus txtAge
+> {\"t\":\"select\",\"control\":\"cboKind\",\"index\":1}
+  cboKindError \"\" visible=false back=0 fore=204 at 12,103 150x15.5
+  focus cboKind
+> {\"t\":\"click\",\"control\":\"btnOK\"}
+  chkAgreeError \"同意が必要です\" visible=true back=0 fore=204 at 12,199 150x15.5
+  fraCorp/lblCorpMessage \"法人名を入力してください\" visible=true back=1 fore=2147483666 at 6,30 180x14
+  focus txtName
+> {\"t\":\"input\",\"control\":\"txtName\",\"text\":\"山田\",\"seq\":3}
+  txtNameError \"\" visible=false back=0 fore=204 at 12,31 150x15.5
+  focus txtName
+> {\"t\":\"click\",\"control\":\"chkAgree\"}
+  chkAgreeError \"\" visible=false back=0 fore=204 at 12,199 150x15.5
+  focus chkAgree
+> {\"t\":\"input\",\"control\":\"txtCorp\",\"text\":\"ABC\",\"seq\":4}
+  fraCorp/lblCorpMessage \"\" visible=false back=1 fore=2147483666 at 6,30 180x14
+  focus txtCorp
+> {\"t\":\"click\",\"control\":\"btnOK\"}
+hide 
+山田
+";
+    assert_eq!(stdout, expected, "{stderr}");
+}
+
+const SCHEMAS: &str = r#"import * as z from "validation";
+
+export function run() {
+    const limit = 3;
+    const cases: [z.ValidationSchema, string][] = [
+        [z.string().required(), "  "],
+        [z.string(), ""],
+        [z.string().max(3), "abcd"],
+        [z.string().min(2, "2 文字以上"), "a"],
+        [z.string().length(3), "ab"],
+        [z.string().regex("^[0-9]+$"), "12a"],
+        [z.string().email(), "a@b.jp"],
+        [z.string().email(), "a@b"],
+        [z.string().oneOf(["A", "B"]), "C"],
+        [z.string().refine(v => v.length < limit, "短く"), "abc"],
+        [z.int(), "1.5"],
+        [z.int().min(1.0).max(10.0), "11"],
+        [z.int("整数で"), "x"],
+        [z.number().positive(), "0"],
+        [z.number().nonnegative(), "-0.5"],
+        [z.number(), " 2.5 "],
+        [z.date(), "2026/13/40"],
+        [z.date().min(cDbl(dateSerial(2026, 1, 1))), "2025/12/31"],
+        [z.boolean().required(), "false"],
+        [z.boolean(), "false"],
+        [z.string().required().noTrim().min(2), " a"],
+    ];
+    for (const [s, v] of cases) {
+        console.log(`[${v}] ${s.check(v)}`);
+    }
+}
+"#;
+
+/// The rules of `ValidationSchema` (spec §14.11.12).
+#[test]
+fn validation_schemas_check_values() {
+    let files = [("main", SCHEMAS)];
+    let (_, out) = compile(&files);
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("schemas", &files, &out);
+    let (stdout, stderr, ok) = p.run("Main.run", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout,
+        "\
+[  ] 入力してください
+[] 
+[abcd] 3 文字以内で入力してください
+[a] 2 文字以上
+[ab] 3 文字で入力してください
+[12a] 形式が正しくありません
+[a@b.jp] 
+[a@b] メールアドレスの形式で入力してください
+[C] 一覧から選択してください
+[abc] 短く
+[1.5] 整数で入力してください
+[11] 10 以下で入力してください
+[x] 整数で
+[0] 0 より大きい値を入力してください
+[-0.5] 0 以上で入力してください
+[ 2.5 ] 
+[2026/13/40] 日付で入力してください
+[2025/12/31] 2026/01/01 以上で入力してください
+[false] チェックしてください
+[false] 
+[ a] 
+",
+        "{stderr}"
+    );
+}
+
+const DATES: &str = r#"export function run() {
+    // The end of the month is kept, not carried over (unlike JavaScript's setMonth).
+    console.log(dateAdd("m", 1, dateSerial(2026, 1, 31)), dateAdd("m", 1, dateSerial(2024, 1, 31)), dateAdd("m", -1, dateSerial(2026, 3, 31)));
+    console.log(dateAdd("m", 13, dateSerial(2026, 1, 31)), dateAdd("yyyy", 1, dateSerial(2024, 2, 29)), dateAdd("q", 1, dateSerial(2026, 11, 30)));
+    console.log(dateAdd("d", 1, dateSerial(2026, 12, 31)), dateAdd("d", -1, dateSerial(2026, 1, 1)), dateAdd("h", 25, dateSerial(2026, 12, 31) + timeSerial(23, 0, 0)));
+    console.log(dateAdd("m", 1, dateSerial(2026, 1, 31) + timeSerial(10, 30, 0)));
+    // DateSerial carries months and days over, and reads two-digit years as VBA does.
+    console.log(dateSerial(2026, 14, 0), dateSerial(2026, 1, -1), dateSerial(2026, 0, 1), dateSerial(26, 1, 1), dateSerial(30, 1, 1));
+    // Before 1899-12-30 the time is a fraction of the same sign as the day.
+    const early = dateAdd("h", -18, dateSerial(1899, 12, 30));
+    console.log(cDbl(early), early, day(early), hour(early), dateDiff("d", early, dateSerial(1899, 12, 30)));
+    console.log(dateSerial(1899, 12, 29) + timeSerial(6, 0, 0));
+    // Out of 100–9999: error 5.
+    try { console.log(dateAdd("d", 1, dateSerial(9999, 12, 31))); } catch (e) { console.log(`error ${e.code}`); }
+    try { console.log(dateAdd("yyyy", -2000, dateSerial(2026, 1, 1))); } catch (e) { console.log(`error ${e.code}`); }
+}
+"#;
+
+/// `DateAdd` / `DateSerial` / `Date` values compute as VBA does.
+#[test]
+fn dates_compute_as_in_vba() {
+    let files = [("main", DATES)];
+    let (_, out) = compile(&files);
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("dates", &files, &out);
+    let (stdout, stderr, ok) = p.run("Main.run", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout,
+        "\
+2026/02/28 2024/02/29 2026/02/28
+2027/02/28 2025/02/28 2027/02/28
+2027/01/01 2025/12/31 2027/01/02
+2026/02/28 10:30:00
+2027/01/31 2025/12/30 2025/12/01 2026/01/01 1930/01/01
+-1.25 1899/12/29 6:00:00 29 6 1
+18:00:00
+error 5
+error 5
+",
+        "{stderr}"
+    );
+}
+
+/// `rule(..., errorLabel: label)` (spec §14.11.12): the error moves to the label passed, the one
+/// shown before is cleared, and calling `rule` again without a label keeps the last one.
+#[test]
+fn validators_show_errors_in_the_labels_passed() {
+    let spec = include_str!("js/forms/frmLabels.form.json");
+    let code = include_str!("js/forms/frmLabels.ras");
+    let main = "export function main() {\n    new frmLabels().showModal();\n}\n";
+    let mut cfg = Config::default();
+    cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
+    let sources = vec![
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: main.into(),
+        },
+        form_source(
+            PathBuf::from("forms/frmLabels.ras"),
+            "frmLabels",
+            code.to_string(),
+        ),
+    ];
+    let prog = analyze(sources, cfg);
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    let out = build_js(&prog, "../../");
+    if !has_node() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ras-js-{}-labels", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("src/main.ras", main);
+    write("forms/frmLabels.ras", code);
+    write("forms/frmLabels.form.json", spec);
+    for f in &out.files {
+        write(&format!("build/debug/{}", f.rel_path), &f.text);
+    }
+    let p = Project(root);
+    let (stdout, stderr, ok) = p.run("Main.main", Some(&fixture("mock_labels.js")));
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout,
+        "\
+txtAError \"必須\" visible=true
+auto=[]false one=[必須]true
+one=[]false two=[必須]true
+two=[必須]true (kept)
+",
+        "{stderr}"
+    );
+}
