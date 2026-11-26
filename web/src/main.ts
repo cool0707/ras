@@ -1591,14 +1591,21 @@ function setUpExplorerPane() {
     });
 }
 
-/** The page is cross-origin isolated through sw.js (for the dialogs); reloads once to be. */
+/**
+ * The page is cross-origin isolated through sw.js (for the dialogs and the user forms); reloads
+ * once to be. A hard reload (Ctrl+Shift+R) bypasses the service worker, so the page has to reload
+ * again then. What keeps the reload from looping (when the service worker does not make the page
+ * isolated) is the time of the last one, in localStorage: the isolated page is in another
+ * browsing context group (COOP), whose sessionStorage the page before it does not see.
+ */
 async function isolate() {
     if (crossOriginIsolated || !("serviceWorker" in navigator) || !window.isSecureContext) return;
     try {
         const reg = await navigator.serviceWorker.register("sw.js");
         if (navigator.serviceWorker.controller) return;
-        if (sessionStorage.getItem("ras-isolate")) return;
-        sessionStorage.setItem("ras-isolate", "1");
+        const last = Number(localStorage.getItem("ras-isolate"));
+        if (last && Math.abs(Date.now() - last) < 10_000) return;
+        localStorage.setItem("ras-isolate", String(Date.now()));
         await navigator.serviceWorker.ready;
         if (reg.active) location.reload();
     } catch {
