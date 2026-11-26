@@ -1561,6 +1561,20 @@ impl Collector {
                     continue;
                 }
             }
+            // `import "validation";` (`import {} from …`) brings in no name: RAS modules run no
+            // code when imported, so it does nothing (spec §12.1.3).
+            if imp.namespace.is_none() && imp.names.is_empty() {
+                let path = root_import_path(&self.prog, t);
+                let md = &self.prog.modules[t];
+                // The test side is no global: it is imported like a library.
+                let msg = if md.kind == ModuleKind::Std || md.is_test() {
+                    let alias = path.rsplit('/').next().unwrap_or(&path).to_string();
+                    format!("この `import` は何も取り込みません。`import * as {alias} from \"{path}\"` か `import {{ … }} from \"{path}\"` と書きます")
+                } else {
+                    format!("この `import` は何も取り込みません。`src/` のモジュールは `import` なしで `{}.foo()` のようにモジュール名で呼べます（名前を取り込むときは `import {{ … }} from \"{path}\"`）", md.vba_name)
+                };
+                self.warn(m, imp.span, "W0122", msg);
+            }
             if imp.source.starts_with('.') {
                 let path = root_import_path(&self.prog, t);
                 self.warn(

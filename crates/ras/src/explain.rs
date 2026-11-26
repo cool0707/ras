@@ -251,6 +251,12 @@ pub const ENTRIES: &[Entry] = &[
         "import { padLeft } from \"./lib/str\";     // 警告\nimport { padLeft } from \"src/lib/str\";   // OK",
     ),
     x(
+        "W0122",
+        "何も取り込まない `import`",
+        "`import \"validation\";`（`import {} from \"validation\"`）は、名前を何も取り込まないので何もしません（RAS のモジュールには、`import` したときに動くコードがありません）。同梱のライブラリは、名前空間として取り込むか（`import * as z from \"validation\"`）、使う名前を書いて取り込みます（`import { FormValidator } from \"validation\"`）。`src/` のモジュールは `import` しなくても `Main.hoge()` のようにモジュール名で呼べるので、この行は消してかまいません。",
+        "import \"validation\";                 // 警告\nimport * as z from \"validation\";       // OK: z.string()",
+    ),
+    x(
         "W0301",
         "型定義にないメンバー",
         "同梱の型定義に、そのメンバーがありません。VBA には遅延バインディングの呼び出しとして出力されるので、Excel に実際にあるメンバーなら動きますが、綴りが違っていても実行するまで分かりません。メンバーの名前は camelCase で書きます（`ws.usedRange`）。",

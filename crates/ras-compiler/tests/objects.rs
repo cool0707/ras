@@ -1058,3 +1058,33 @@ fn a_sheet_file_imports_by_its_own_path() {
         assert_eq!(codes(&diags), ["W0121"], "{path}: {diags:#?}");
     }
 }
+
+/// `import "validation";` brings in no name, and does nothing: a warning shows what to write.
+#[test]
+fn an_import_without_names_is_reported() {
+    let main = "import \"validation\";\nimport {} from \"dialog\";\nimport \"src/util\";\nexport function f(): int { return Util.foo(); }\n";
+    let util = "export function foo(): int { return 1; }\n";
+    let (diags, _) = compile(&[], &[("main", main), ("util", util)]);
+    assert_eq!(codes(&diags), ["W0122", "W0122", "W0122"], "{diags:#?}");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.contains("`import * as validation from \"validation\"`")),
+        "{diags:#?}"
+    );
+    assert!(
+        diags.iter().any(|d| d.contains("`Util.foo()`")),
+        "{diags:#?}"
+    );
+    let (diags, _) = compile(
+        &[],
+        &[
+            (
+                "main",
+                "import * as z from \"validation\";\nimport { choose } from \"dialog\";\n",
+            ),
+            ("util", util),
+        ],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+}
