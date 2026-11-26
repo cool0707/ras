@@ -81,7 +81,6 @@ show RAS_Dialog modal=false "Microsoft Excel" 324x98
   lblMessage:Label 12,42 300x12 ""
   btnCancel:CommandButton 240,62 72x24 "中止"
   draw btnCancel "中止" visible=true enabled=true
-  draw pb_Value "1%" visible=true enabled=true
 > (DoEvents) click btnCancel
   draw btnCancel "中止中…" visible=true enabled=false
 unload

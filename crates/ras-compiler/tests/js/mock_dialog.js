@@ -1,6 +1,7 @@
 // A host that plays a user of the dialogs built in code (spec §14.11.15): it answers each
 // `show` with the next scripted session, prints the controls the dialog laid out and what it is
-// told to draw, and presses the cancel button of a progress bar when DoEvents asks.
+// told to draw (not the percentage of the bar: how far it gets depends on the speed of the
+// run), and presses the cancel button of a progress bar when DoEvents asks.
 "use strict";
 const sessions = [
     // choose(): the second button.
@@ -38,7 +39,7 @@ module.exports = {
                 for (const c of msg.controls) console.log(show(c));
             } else if (msg.t === "update") {
                 for (const c of msg.controls) {
-                    if (/_Error$|^f1_Text$|^btnCancel$|^pb_Value$/.test(c.name)) console.log(`  draw ${c.name} "${c.state.Caption ?? c.state.Text}" visible=${c.state.Visible} enabled=${c.state.Enabled}`);
+                    if (/_Error$|^f1_Text$|^btnCancel$/.test(c.name)) console.log(`  draw ${c.name} "${c.state.Caption ?? c.state.Text}" visible=${c.state.Visible} enabled=${c.state.Enabled}`);
                 }
             } else {
                 console.log(msg.t);
