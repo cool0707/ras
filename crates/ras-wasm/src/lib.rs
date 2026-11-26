@@ -270,8 +270,20 @@ fn compile_json(input: &str) -> Json {
             .map(|f| json!({ "path": f.rel_path, "text": f.text }))
             .collect::<Vec<_>>()
     });
+    // The functions the editor offers "テストを生成" for (spec §14.12.10).
+    let test_targets: Vec<Json> = (0..prog.modules.len())
+        .flat_map(|m| ras_compiler::testgen::targets(&prog, m))
+        .filter_map(|f| {
+            let d = &prog.fns[f];
+            let md = &prog.modules[d.module];
+            let decl = d.decl.as_ref()?;
+            let (line, _) = md.line_col_utf16(u32::from(decl.span.start()));
+            Some(json!({ "path": md.rel_path, "name": d.name, "line": line, "testPath": ras_compiler::testgen::test_path(md) }))
+        })
+        .collect();
     json!({
         "diagnostics": diagnostics,
+        "testTargets": test_targets,
         "vba": vba,
         "js": js_files,
         "debugDir": DEBUG_DIR,
@@ -281,6 +293,58 @@ fn compile_json(input: &str) -> Json {
         "codepage": codepage,
         "error": null,
     })
+}
+
+/// The skeleton of a test of the function `name` of the module `path` (spec §14.12.10), for its
+/// test file in the project `input` (as for [`compile`]).
+///
+/// Returns JSON: `{ path, created, text, line }`: the test file (relative to the project), whether
+/// it is new, its text with the test added, and the line (from 0) of the test; or `{ error }`.
+#[wasm_bindgen(js_name = generateTest)]
+pub fn generate_test(input: &str, path: &str, name: &str) -> String {
+    generate_test_json(input, path, name).to_string()
+}
+
+fn generate_test_json(input: &str, path: &str, name: &str) -> Json {
+    let Input {
+        json: input,
+        config,
+        mut sources,
+        tests,
+        ..
+    } = match read_input(input) {
+        Ok(i) => i,
+        Err(e) => return json!({ "error": e }),
+    };
+    sources.extend(tests);
+    let prog = ras_compiler::analyze(sources, config);
+    let Some(f) = prog
+        .modules
+        .iter()
+        .position(|m| m.rel_path == path)
+        .and_then(|m| {
+            prog.modules[m]
+                .fns
+                .iter()
+                .copied()
+                .find(|&f| prog.fns[f].name == name)
+        })
+    else {
+        return json!({ "error": format!("{path} に関数 {name} がありません") });
+    };
+    let test_path = ras_compiler::testgen::test_path(&prog.modules[prog.fns[f].module]);
+    let existing = input["files"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|f| f["path"].as_str() == Some(&test_path))
+        .and_then(|f| f["text"].as_str());
+    match ras_compiler::testgen::generate(&prog, f, existing) {
+        Some(g) => json!({ "path": g.path, "created": g.created, "text": g.text, "line": g.line }),
+        None => {
+            json!({ "error": format!("{name} のテストは生成できません（src/ のモジュールの export された関数だけです）") })
+        }
+    }
 }
 
 /// The forms validated and generated with the code compiled for their code-behinds.

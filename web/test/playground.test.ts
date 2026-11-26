@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { Book, compile, diffText, explain, format, initSync } from "../pkg/ras_wasm.js";
+import { Book, compile, diffText, explain, format, generateTest, initSync } from "../pkg/ras_wasm.js";
 import { type RunResult, runJob, type WasmBookClass } from "../src/runtime/run";
 
 const web = join(fileURLToPath(import.meta.url), "..", "..");
@@ -92,6 +92,32 @@ test("runs the tests of a test file", () => {
     assert.equal(results.length, 3);
     assert.ok(results.every((t) => t.status === "passed"), JSON.stringify(results));
     assert.equal(r.exitCode, 0);
+});
+
+test("generates the skeleton of a test, which compiles and runs", () => {
+    const { files, toml, out } = build(hello);
+    assert.deepEqual(
+        out.testTargets.map((t: { path: string; name: string; testPath: string }) => [t.path, t.name, t.testPath]),
+        [["src/main.ras", "makeReport", "test/main.test.ras"], ["src/main.ras", "sumTo", "test/main.test.ras"]],
+    );
+    const input = (fs: { path: string; text: string }[]) => JSON.stringify({ files: fs, toml, sheets: ["Sheet1"], js: true });
+    // Into the test file of the sample: at the end of its describe("sumTo").
+    const added = JSON.parse(generateTest(input(files), "src/main.ras", "sumTo"));
+    assert.equal(added.path, "test/main.test.ras");
+    assert.equal(added.created, false);
+    assert.match(added.text.split("\n")[added.line], /^ {4}test\("sumTo の戻り値", \(\) => \{$/);
+    // Without the test file: a new one.
+    const others = files.filter((f) => f.path !== "test/main.test.ras");
+    const created = JSON.parse(generateTest(input(others), "src/main.ras", "makeReport"));
+    assert.equal(created.created, true);
+    assert.ok(created.text.startsWith('import { makeReport } from "../src/main";\n'), created.text);
+    const next = [...others, { path: created.path, text: created.text }];
+    const compiled = JSON.parse(compile(input(next)));
+    assert.deepEqual(compiled.diagnostics.filter((d: { severity: string }) => d.severity === "error"), []);
+    const r = runJob(Book as unknown as WasmBookClass, { kind: "test", js: compiled.js, files: [...next.map((f) => ({ path: f.path, data: f.text })), { path: workbookOf(toml), data: book() }], target: created.path });
+    const results = r.events.filter((e) => (e as { type: string }).type === "test") as { status: string }[];
+    assert.deepEqual(results.map((t) => t.status), ["passed"]);
+    assert.deepEqual(JSON.parse(generateTest(input(files), "src/main.ras", "nothing")).error !== undefined, true);
 });
 
 test("asks the dialogs, and reports a run-time error at its line of RAS", () => {

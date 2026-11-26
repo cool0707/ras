@@ -37,6 +37,7 @@ Excel / VBA のメンバーとグローバルは、JavaScript の命名規則（
 
 - 書いたそばから VBA に変換して表示し、エラー・警告をエディタに出します（「問題」でコードを選ぶと `ras explain` の説明を表示）。
 - ▶ 実行 / テスト で、`ras run` / `ras test` と同じように Excel なしで実行します。`msgBox` / `inputBox` はダイアログとして表示し、変更されたセルとブックのグリッド（`ras book view`）を表示します。
+- `src/` の `export` された関数の上の「テストを生成」で、その関数のテストの雛形を `test/<モジュール>.test.ras` に追加して開きます（VS Code 拡張の CodeLens と同じ。仕様 §14.12.10）。
 - 「.xlsm でダウンロード」で、生成した VBA を書き込んだマクロ有効ブックを保存できます（`ras pack`。「ブックを読み込む」で手元の .xlsx / .xlsm に書き込めます）。VBA タブでは、モジュールごとの `.bas` / `.cls` も保存できます。
 - 左のエクスプローラー（VS Code と同じフォルダーのツリー。Ctrl+B で表示・非表示）で、ファイルを開く・追加する・名前を変える（F2）・削除する（右クリックのメニューでも）ことができます。エディタのタブは開いているファイルで、閉じてもファイルは残ります。
 - エクスプローラーの「新しいフォーム」でユーザーフォーム（`forms/<名前>.form.json` とコードビハインド）を追加し、VS Code 拡張と同じデザイナーで編集できます。コントロールをダブルクリックするとイベントのハンドラーを追加します。実行中に表示したフォームはページの上に表示し、操作できます（画像の設定は VS Code 拡張だけです）。
@@ -250,6 +251,7 @@ ras test --ci                     # test.only と、置き換えていないダ�
 - ブックの状態はテストごとに、そのテストを囲む `beforeAll` を実行し終えた時点に戻ります。失敗したテストのブックは `build/test/workbooks/<テストファイル名>/` に保存します。
 - 使える API: `describe` / `test`（`it`）とその `.skip` / `.only` / `.each`、`test.todo`、`beforeAll` / `afterAll` / `beforeEach` / `afterEach`、`expect(...)` のマッチャ（`toBe`・`toEqual`・`toBeCloseTo`・大小の比較・`toBeTruthy`・`toBeFalsy`・`toBeEmpty`・`toBeNothing`・`toContain`・`toHaveLength`・`toMatch`・`toThrow` と `.not`）、`useWorkbook`、`tempDir`、`printed`、`mockMsgBox` / `mockInputBox` / `mockGetOpenFilename` / `mockGetSaveAsFilename` / `mockRun` / `mockCreateObject`。
 - 終了コードは、すべて成功なら 0、失敗があれば 1、コンパイル エラーなどで実行できなければ 2 です。`ras check` はテストのファイルも検査します。
+- VS Code とプレイグラウンドでは、関数の上の「テストを生成」で、その関数を呼んで戻り値を確かめるテストの雛形を追加できます。引数と期待値は型に合った仮の値になっているので、確かめたい値に書き換えます。
 
 ### ブックの中身を見る・比べる（`ras book`）
 

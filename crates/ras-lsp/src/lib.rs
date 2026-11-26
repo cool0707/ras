@@ -12,6 +12,7 @@ use lsp_server::{
     Connection, ErrorCode, Message, Notification, Request, RequestId, Response, ResponseError,
 };
 use ras_compiler::model::ModuleKind;
+use ras_compiler::testgen;
 use ras_compiler::{
     hints, query, refs, BuildOptions, BuildOutput, Config, Diagnostic, ModuleId, Program, Severity,
     SourceInput,
@@ -30,6 +31,7 @@ const COMMANDS: &[&str] = &[
     "ras.showForm",
     "ras.listMacros",
     "ras.sheet",
+    "ras.generateTest",
 ];
 
 fn percent_decode(s: &str) -> String {
@@ -608,8 +610,18 @@ impl Server {
                 else {
                     return json!([]);
                 };
-                let mut lenses =
-                    Self::run_lenses(prog, m, p["textDocument"]["uri"].as_str().unwrap_or(""));
+                let uri = p["textDocument"]["uri"].as_str().unwrap_or("");
+                let mut lenses = Self::run_lenses(prog, m, uri);
+                // "Generate a test" above each function a test file can import (spec §14.12.10).
+                if self.root.is_some() {
+                    lenses.extend(testgen::targets(prog, m).into_iter().filter_map(|f| {
+                        let d = &prog.fns[f];
+                        let decl = d.decl.as_ref()?;
+                        let range = Self::range(prog, m, ras_syntax::TextRange::empty(decl.span.start()));
+                        let path = testgen::test_path(&prog.modules[m]);
+                        Some(json!({ "range": range, "command": { "title": "$(beaker) テストを生成", "tooltip": format!("{} のテストの雛形を {path} に追加します", d.name), "command": "ras.client.generateTest", "arguments": [{ "uri": uri, "name": d.name }] } }))
+                    }));
+                }
                 lenses.extend(
                     self.build
                         .iter()
@@ -708,6 +720,61 @@ impl Server {
         }
     }
 
+    fn generate_test(&self, prog: &Program, arg: &Value) -> Option<Value> {
+        let m = self.module_for(&uri_to_path(arg["uri"].as_str()?)?)?;
+        // The function named (the code lens), or the one at the position (the command palette).
+        let f = match arg["name"].as_str() {
+            Some(name) => *prog.modules[m]
+                .fns
+                .iter()
+                .find(|&&f| prog.fns[f].name == name)?,
+            None => {
+                let md = &prog.modules[m];
+                let line = arg["position"]["line"].as_u64()? as u32;
+                let ch = arg["position"]["character"].as_u64()? as u32;
+                let off = md.offset_of(line, ch);
+                testgen::targets(prog, m).into_iter().find(|&f| {
+                    prog.fns[f].decl.as_ref().is_some_and(|d| {
+                        u32::from(d.span.start()) <= off && off <= u32::from(d.span.end())
+                    })
+                })?
+            }
+        };
+        let file = self
+            .root
+            .as_ref()?
+            .join(testgen::test_path(&prog.modules[m]));
+        // The text of the test file: unsaved in the editor, or on disk.
+        let existing = match self.open.iter().find(|(p, _)| same_file(p, &file)) {
+            Some((_, (_, text))) => Some(text.clone()),
+            None => std::fs::read_to_string(&file).ok(),
+        };
+        let existing =
+            existing.map(|t| t.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(t));
+        let g = testgen::generate(prog, f, existing.as_deref())?;
+        let base = existing.as_deref().unwrap_or("");
+        let pos = |off: u32| {
+            let before = &base[..off as usize];
+            let line = before.matches('\n').count();
+            let col: usize = before[before.rfind('\n').map_or(0, |i| i + 1)..]
+                .encode_utf16()
+                .count();
+            json!({ "line": line, "character": col })
+        };
+        let edits: Vec<Value> = g
+            .edits
+            .iter()
+            .map(|e| json!({ "range": { "start": pos(e.start), "end": pos(e.end) }, "newText": e.text }))
+            .collect();
+        let uri = match self.open.iter().find(|(p, _)| same_file(p, &file)) {
+            Some((_, (uri, _))) => uri.clone(),
+            None => path_to_uri(&file),
+        };
+        Some(
+            json!({ "uri": uri, "path": g.path, "created": g.created, "edits": edits, "line": g.line }),
+        )
+    }
+
     fn execute_command(&self, prog: &Program, p: &Value) -> Value {
         let args = &p["arguments"];
         match p["command"].as_str().unwrap_or("") {
@@ -728,6 +795,9 @@ impl Server {
                     .unwrap_or(-1);
                 json!({ "moduleName": file.name, "text": file.code, "line": line })
             }
+            // `{ uri, name }` (or `{ uri, position }`) → the skeleton of a test of the function `name` of the module `uri`
+            // for its test file: `{ uri, path, created, edits, line }` (spec §14.12.10).
+            "ras.generateTest" => self.generate_test(prog, &args[0]).unwrap_or(Value::Null),
             "ras.listMacros" => json!(self
                 .build
                 .as_ref()
@@ -1144,7 +1214,10 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|l| l["command"]["command"] != "")
+            .filter(|l| {
+                l["command"]["command"] != ""
+                    && l["command"]["command"] != "ras.client.generateTest"
+            })
             .map(|l| {
                 (
                     l["range"]["start"]["line"].as_u64().unwrap(),
@@ -1864,6 +1937,133 @@ mod tests {
         );
         // The server advertises the command that shows a form in Excel.
         assert!(COMMANDS.contains(&"ras.showForm"));
+
+        request("shutdown", Value::Null);
+        send(Message::Notification(Notification::new(
+            "exit".into(),
+            Value::Null,
+        )));
+        handle.join().unwrap().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// "テストを生成" above the exported functions of `src/`, and the command that writes the
+    /// skeleton of the test into the test file (spec §14.12.10).
+    #[test]
+    fn generate_test_lens_and_command() {
+        let dir = std::env::temp_dir().join(format!("ras-lsp-testgen-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("test")).unwrap();
+        std::fs::write(dir.join("ras.toml"), "[project]\nname = \"T\"\n").unwrap();
+        let file = dir.join("src").join("calc.ras");
+        let text =
+            "export function sumTo(n: int): int {\n    return n;\n}\n\nfunction hidden() {}\n";
+        std::fs::write(&file, text).unwrap();
+        let uri = path_to_uri(&file);
+        // An unsaved test file in the editor is the one added to.
+        let test_file = dir.join("test").join("calc.test.ras");
+        let test_uri = path_to_uri(&test_file);
+        let test_text = "describe(\"other\", () => {});\n";
+
+        let (server_conn, client) = Connection::memory();
+        let handle = std::thread::spawn(move || run(&server_conn).map_err(|e| e.to_string()));
+        let send = |m: Message| client.sender.send(m).unwrap();
+        let next_id = std::cell::Cell::new(0);
+        let request = |method: &str, params: Value| -> Value {
+            next_id.set(next_id.get() + 1);
+            let id = next_id.get();
+            send(Message::Request(Request {
+                id: id.into(),
+                method: method.into(),
+                params,
+            }));
+            loop {
+                match client
+                    .receiver
+                    .recv_timeout(std::time::Duration::from_secs(30))
+                    .unwrap()
+                {
+                    Message::Response(r) if r.id == id.into() => {
+                        return r.result.unwrap_or(Value::Null)
+                    }
+                    _ => {}
+                }
+            }
+        };
+        request(
+            "initialize",
+            json!({ "rootUri": path_to_uri(&dir), "capabilities": {} }),
+        );
+        send(Message::Notification(Notification::new(
+            "initialized".into(),
+            json!({}),
+        )));
+        send(Message::Notification(Notification::new(
+            "textDocument/didOpen".into(),
+            json!({ "textDocument": { "uri": uri, "languageId": "ras", "version": 1, "text": text } }),
+        )));
+        let lenses = request(
+            "textDocument/codeLens",
+            json!({ "textDocument": { "uri": uri } }),
+        );
+        let gen: Vec<&Value> = lenses
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|l| l["command"]["command"] == "ras.client.generateTest")
+            .collect();
+        assert_eq!(gen.len(), 1, "{lenses}");
+        assert_eq!(gen[0]["range"]["start"]["line"], 0);
+        assert_eq!(
+            gen[0]["command"]["arguments"][0],
+            json!({ "uri": uri, "name": "sumTo" })
+        );
+        assert!(COMMANDS.contains(&"ras.generateTest"));
+
+        // No test file yet: the whole file is created.
+        let r = request(
+            "workspace/executeCommand",
+            json!({ "command": "ras.generateTest", "arguments": [{ "uri": uri, "name": "sumTo" }] }),
+        );
+        assert_eq!(r["created"], true, "{r}");
+        assert_eq!(r["path"], "test/calc.test.ras");
+        assert_eq!(r["uri"], test_uri);
+        assert_eq!(r["line"], 3);
+        assert!(r["edits"][0]["newText"]
+            .as_str()
+            .unwrap()
+            .starts_with("import { sumTo } from \"../src/calc\";\n"));
+
+        send(Message::Notification(Notification::new(
+            "textDocument/didOpen".into(),
+            json!({ "textDocument": { "uri": test_uri, "languageId": "ras", "version": 1, "text": test_text } }),
+        )));
+        let r = request(
+            "workspace/executeCommand",
+            json!({ "command": "ras.generateTest", "arguments": [{ "uri": uri, "name": "sumTo" }] }),
+        );
+        assert_eq!(r["created"], false, "{r}");
+        let at = request(
+            "workspace/executeCommand",
+            json!({ "command": "ras.generateTest", "arguments": [{ "uri": uri, "position": { "line": 1, "character": 4 } }] }),
+        );
+        assert_eq!(at, r, "the function at the position");
+        let none = request(
+            "workspace/executeCommand",
+            json!({ "command": "ras.generateTest", "arguments": [{ "uri": uri, "position": { "line": 4, "character": 2 } }] }),
+        );
+        assert_eq!(none, Value::Null, "not exported");
+        let edits = r["edits"].as_array().unwrap();
+        assert_eq!(edits.len(), 2, "{r}");
+        assert_eq!(
+            edits[0]["range"]["start"],
+            json!({ "line": 0, "character": 0 })
+        );
+        assert_eq!(
+            edits[1]["range"]["start"],
+            json!({ "line": 1, "character": 0 })
+        );
 
         request("shutdown", Value::Null);
         send(Message::Notification(Notification::new(

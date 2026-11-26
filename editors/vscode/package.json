@@ -158,6 +158,12 @@
           "scope": "resource",
           "markdownDescription": "単独で起動できる関数の上と、ユーザーフォームのコード（`forms/<名前>.ras`）の先頭に「Excelで実行」（Windows のみ）と「デバッグ実行」の CodeLens を表示します。"
         },
+        "ras.codeLens.generateTest": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "`src/` のモジュールの `export` された関数の上に「テストを生成」の CodeLens を表示します。押すと、テストの雛形を `test/<モジュール>.test.ras` に追加して開きます。"
+        },
         "ras.debug.runtimeExecutable": {
           "type": "string",
           "default": "",
@@ -255,6 +261,12 @@
         "title": "フォームを Excel で実行",
         "category": "RAS",
         "icon": "$(play)"
+      },
+      {
+        "command": "ras.client.generateTest",
+        "title": "テストを生成",
+        "category": "RAS",
+        "icon": "$(beaker)"
       },
       {
         "command": "ras.userForm.debug",
@@ -358,6 +370,10 @@
           "when": "isWindows"
         },
         {
+          "command": "ras.client.generateTest",
+          "when": "editorLangId == ras"
+        },
+        {
           "command": "ras.sheet.show",
           "when": "editorLangId == ras"
         },
@@ -425,6 +441,11 @@
           "command": "ras.sheet.show",
           "when": "resourcePath in ras.sheetFiles",
           "group": "navigation@90"
+        },
+        {
+          "command": "ras.client.generateTest",
+          "when": "editorLangId == ras",
+          "group": "navigation@92"
         },
         {
           "command": "ras.userForm.openDesigner",
