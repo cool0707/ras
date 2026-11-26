@@ -346,8 +346,8 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
               left: px(control.width - buttonWidth),
               width: px(buttonWidth),
               height: px(control.height),
-              // At 10 pt Excel clips the default "..." (ras-form picker.rs).
-              ...(caption === "..." && typeof control.font?.size === "number" ? { fontSize: "9pt" } : {}),
+              // Always 9 pt: at 10 pt Excel clips the caption (ras-form picker.rs BUTTON_FONT_SIZE).
+              ...(typeof control.font?.size === "number" ? { fontSize: "9pt" } : {}),
             }}
           >
             {caption}
