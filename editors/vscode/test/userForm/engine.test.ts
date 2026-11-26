@@ -481,6 +481,69 @@ describe("FormSpec editing", () => {
 		rejects(text, [{ type: "alignControls", controlIds: ["a", "c"], anchorId: "a", alignment: "right" }, { type: "setTabOrder", parentId: "", controlIds: ["c"] }]);
 	});
 
+	it("snaps to the grid, changes spacing and centres controls as Visual Studio's Format menu", () => {
+		const a = { id: "a", name: "A", type: "Label", left: 10, top: 11, width: 40, height: 18 };
+		const b = { id: "b", name: "B", type: "Label", left: 60, top: 30, width: 21, height: 18 };
+		const c = { id: "c", name: "C", type: "Label", left: 100, top: 50, width: 30, height: 30 };
+		let text = form([a, b, c]);
+		text = apply(text, { type: "alignToGrid", controlIds: ["a", "b"] });
+		assert.deepEqual([control(text, "a").left, control(text, "a").top, control(text, "b").left, control(text, "b").top], [8, 8, 64, 32]);
+		text = apply(text, { type: "sizeToGrid", controlIds: ["b"] });
+		// The right edge goes to the nearest grid line (64 + 21 = 85 → 88).
+		assert.equal(control(text, "b").width, 24);
+		// a 8..48, b 64..88, c 100..130: gaps 16 and 12. The primary (b) stays.
+		text = apply(text, { type: "spaceControls", controlIds: ["a", "c", "b"], anchorId: "b", axis: "horizontal", command: "increase" });
+		assert.deepEqual(["a", "b", "c"].map((id) => control(text, id).left), [0, 64, 108]);
+		text = apply(text, { type: "spaceControls", controlIds: ["a", "c", "b"], anchorId: "b", axis: "horizontal", command: "remove" });
+		assert.deepEqual(["a", "b", "c"].map((id) => control(text, id).left), [24, 64, 88]);
+		text = apply(text, { type: "spaceControls", controlIds: ["a", "b"], anchorId: "a", axis: "horizontal", command: "decrease" });
+		assert.equal(control(text, "b").left, 64);
+		text = apply(text, { type: "centerControls", controlIds: ["a", "b"], axis: "horizontal" });
+		// The pair is 64 wide (24..88): centred in 240 it starts at 88.
+		assert.deepEqual([control(text, "a").left, control(text, "b").left], [88, 128]);
+		text = apply(text, { type: "centerControls", controlIds: ["c"], axis: "vertical" });
+		assert.equal(control(text, "c").top, 75);
+		// Spacing that would push a control out of the form is refused.
+		const wide = form([
+			{ id: "x", name: "X", type: "Label", left: 0, top: 0, width: 100, height: 18 },
+			{ id: "y", name: "Y", type: "Label", left: 120, top: 0, width: 120, height: 18 },
+		]);
+		rejects(wide, [{ type: "spaceControls", controlIds: ["x", "y"], anchorId: "x", axis: "horizontal", command: "increase" }], "UFE003");
+	});
+
+	it("keeps anchored controls at their edges when the form or a Frame is resized", () => {
+		const ok = { id: "ok", name: "btnOK", type: "CommandButton", left: 150, top: 140, width: 72, height: 24, anchor: "bottom,right" };
+		const box = { id: "box", name: "txtNote", type: "TextBox", left: 8, top: 8, width: 200, height: 100, anchor: "top,bottom,left,right" };
+		const mid = { id: "mid", name: "lblMid", type: "Label", left: 80, top: 116, width: 80, height: 18, anchor: "none" };
+		const fixed = { id: "fixed", name: "lblFixed", type: "Label", left: 8, top: 116, width: 40, height: 18 };
+		let text = form([ok, box, mid, fixed]);
+		text = apply(text, { type: "setFormProperty", field: "width", value: 300 }, { type: "setFormProperty", field: "height", value: 200 });
+		assert.deepEqual([control(text, "ok").left, control(text, "ok").top], [210, 160]);
+		assert.deepEqual([control(text, "box").width, control(text, "box").height], [260, 120]);
+		assert.deepEqual([control(text, "mid").left, control(text, "mid").top], [110, 126]);
+		assert.deepEqual([control(text, "fixed").left, control(text, "fixed").top], [8, 116]);
+		text = apply(text, { type: "setGeometry", width: 240 });
+		assert.equal(control(text, "ok").left, 150);
+		assert.equal(control(text, "box").width, 200);
+		// In a stretched Frame, the controls follow the Frame.
+		const outer = { id: "fr", name: "fraMain", type: "Frame", left: 8, top: 8, width: 200, height: 100, anchor: "top,left,right" };
+		const inner = { id: "in", parentId: "fr", name: "btnIn", type: "CommandButton", left: 100, top: 8, width: 72, height: 24, anchor: "top,right" };
+		text = apply(form([outer, inner]), { type: "setGeometry", width: 280 });
+		assert.equal(control(text, "fr").width, 240);
+		assert.equal(control(text, "in").left, 140);
+		text = apply(text, { type: "resizeControl", controlId: "fr", width: 220, height: 100 });
+		assert.equal(control(text, "in").left, 120);
+		// The anchor is written in its canonical form; the default removes the field.
+		text = apply(text, { type: "setControlProperty", controlId: "in", field: "anchor", value: "Right, Bottom" });
+		assert.equal(control(text, "in").anchor, "bottom,right");
+		text = apply(text, { type: "setControlProperty", controlId: "in", field: "anchor", value: "left, top" });
+		assert.equal(Object.hasOwn(control(text, "in"), "anchor"), false);
+		rejects(text, [{ type: "setControlProperty", controlId: "in", field: "anchor", value: "middle" }], "UFE003");
+		const invalid = parseSpec(form([{ ...inner, parentId: undefined, anchor: "top,top" }]));
+		assert.ok(invalid.ok);
+		assert.ok(invalid.spec.issues.some((i) => i.code === "UFV026"));
+	});
+
 	it("copies a subtree and pastes it with fresh names, IDs and an offset", () => {
 		const child = { id: "x", parentId: "f1", name: "Label1", type: "Label", left: 0, top: 0, width: 20, height: 18 };
 		const text = form([frame, child]);

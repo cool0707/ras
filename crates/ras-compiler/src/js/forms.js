@@ -57,7 +57,7 @@ module.exports = function install(rt) {
     const TOGGLES = new Set(["CheckBox", "OptionButton", "ToggleButton"]);
     const LISTS = new Set(["ComboBox", "ListBox"]);
     /** FormSpec fields that are not plain properties of the control, or are read on their own. */
-    const SPEC_FIELDS = new Set(["id", "name", "type", "progId", "parentId", "zIndex", "left", "top", "width", "height", "tabIndex", "list", "selectedIndex", "tabs", "picture", "controls", "properties", "observed", "unsupported", "font", "foreColor", "backColor", "caption", "text", "value"]);
+    const SPEC_FIELDS = new Set(["id", "name", "type", "progId", "parentId", "zIndex", "left", "top", "width", "height", "tabIndex", "list", "selectedIndex", "tabs", "picture", "controls", "properties", "observed", "unsupported", "font", "foreColor", "backColor", "caption", "text", "value", "anchor", "$anchorPart"]);
 
     /** Controls whose value can be bound to a cell (`ControlSource`). */
     const BOUND = new Set(["TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar"]);
@@ -212,6 +212,28 @@ module.exports = function install(rt) {
 
     // ------------------------------------------------------------------ controls
 
+    /**
+     * The `anchor` of a FormSpec control ("top,left", "bottom,right", "none" ...), as
+     * { top, bottom, left, right }; the default (top, left) when absent or not such a list.
+     * The same rules as ras-form anchor.rs and the designer's anchor.ts.
+     */
+    function parseAnchor(text) {
+        const anchor = { top: true, bottom: false, left: true, right: false };
+        if (typeof text !== "string") return anchor;
+        const words = text.split(/[\s,|]+/).map((w) => w.toLowerCase()).filter(Boolean);
+        if (words.length === 1 && words[0] === "none") return { top: false, bottom: false, left: false, right: false };
+        const parsed = { top: false, bottom: false, left: false, right: false };
+        for (const w of words) {
+            if (!(w in parsed) || parsed[w]) return anchor;
+            parsed[w] = true;
+        }
+        return words.length ? parsed : anchor;
+    }
+    /** How one axis follows its container: "stay", "move", "half" or "stretch". */
+    function follows(near, far) {
+        return near && far ? "stretch" : far ? "move" : near ? "stay" : "half";
+    }
+
     class Control {
         constructor(form, spec, kind, parent) {
             this.$form = form;
@@ -229,6 +251,10 @@ module.exports = function install(rt) {
             this.$picture = null;
             this.$mouseIcon = null;
             this.$entered = null; // value when the focus came in (BeforeUpdate / AfterUpdate)
+            // The edges it follows when the form is resized (spec §14.11.16); a file picker's
+            // parts say which they are (the box stretches, the button moves).
+            this.$anchor = parseAnchor(kind === "Page" ? undefined : spec.anchor);
+            this.$anchorPart = spec.$anchorPart;
             this.$init(spec);
         }
 
@@ -872,6 +898,36 @@ module.exports = function install(rt) {
             this.$touch();
         }
 
+        /**
+         * Moves and sizes the anchored controls when the inside of the form grew by dw × dh
+         * points (spec §14.11.16); the same as RAS_FormResize of the VBA build.
+         */
+        $followAnchors(dw, dh) {
+            const visit = (children, dx, dy) => {
+                if (!dx && !dy) return;
+                for (const c of children) {
+                    if (c.$kind === "Page") {
+                        visit(c.$children, dx, dy);
+                        continue;
+                    }
+                    const a = c.$anchor;
+                    let h = dx ? follows(a.left, a.right) : "stay";
+                    const v = dy ? follows(a.top, a.bottom) : "stay";
+                    if (c.$anchorPart === "button" && h === "stretch") h = "move";
+                    const s = c.$s;
+                    const apply = (how, start, size, d) => {
+                        if (how === "move") c.$set(start, s[start] + d);
+                        else if (how === "half") c.$set(start, s[start] + d / 2);
+                        else if (how === "stretch") c.$set(size, Math.max(0, s[size] + d));
+                    };
+                    apply(h, "Left", "Width", dx);
+                    apply(v, "Top", "Height", dy);
+                    if (!c.$anchorPart) visit(c.$children, h === "stretch" ? dx : 0, v === "stretch" ? dy : 0);
+                }
+            };
+            visit(this.$top, dw, dh);
+        }
+
         get Controls() {
             return new Items(() => this.$all, "Controls", this);
         }
@@ -1191,6 +1247,11 @@ module.exports = function install(rt) {
                 if (old === value) return;
                 this.$s[name] = value;
                 this.$touch();
+                // A new size moves the anchored controls, then UserForm_Resize runs (as in Excel).
+                if (name === "Width" || name === "Height") {
+                    this.$followAnchors(name === "Width" ? value - old : 0, name === "Height" ? value - old : 0);
+                    this.$fire("UserForm", "Resize", []);
+                }
             },
         });
     }
@@ -1272,8 +1333,8 @@ module.exports = function install(rt) {
         const caption = typeof c.buttonCaption === "string" ? c.buttonCaption : "...";
         const buttonFont = c.font && typeof c.font.size === "number" ? { ...c.font, size: 9 } : c.font;
         return [
-            clean({ ...base, id: `${c.id || c.name}_Text`, name: `${c.name}_Text`, type: "TextBox", left, top, width: Math.max(width - bw, 0.75), height, text: c.text ?? (typeof c.value === "string" ? c.value : undefined), tag: c.tag, tabIndex: c.tabIndex, foreColor: c.foreColor, backColor: c.backColor, locked: c.locked }),
-            clean({ ...base, id: `${c.id || c.name}_Button`, name: `${c.name}_Button`, type: "CommandButton", left: left + width - bw, top, width: bw, height, caption, font: buttonFont, tag, takeFocusOnClick: false }),
+            clean({ ...base, anchor: c.anchor, $anchorPart: "text", id: `${c.id || c.name}_Text`, name: `${c.name}_Text`, type: "TextBox", left, top, width: Math.max(width - bw, 0.75), height, text: c.text ?? (typeof c.value === "string" ? c.value : undefined), tag: c.tag, tabIndex: c.tabIndex, foreColor: c.foreColor, backColor: c.backColor, locked: c.locked }),
+            clean({ ...base, anchor: c.anchor, $anchorPart: "button", id: `${c.id || c.name}_Button`, name: `${c.name}_Button`, type: "CommandButton", left: left + width - bw, top, width: bw, height, caption, font: buttonFont, tag, takeFocusOnClick: false }),
         ];
     }
 

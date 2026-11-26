@@ -1,0 +1,18 @@
+function show(label: string) {
+    const text: any = this.controls.item("fpBook_Text");
+    const button: any = this.controls.item("fpBook_Button");
+    console.log(`${label}: ok=${this.btnOK.left},${this.btnOK.top} fra=${this.fraMain.width}x${this.fraMain.height} in=${this.txtIn.width} fix=${this.lblFix.left} mid=${this.lblMid.left},${this.lblMid.top} fp=${text.width}/${button.left}`);
+}
+@on("UserForm.Resize")
+function resized() {
+    console.log(`resize ${this.insideWidth}x${this.insideHeight}`);
+}
+function constructor() {
+    show("start");
+    this.width = 300;
+    this.height = 200;
+    show("grown");
+    this.width = 240;
+    this.height = 180;
+    show("back");
+}

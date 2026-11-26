@@ -10,6 +10,9 @@ import type {
 } from "../../src/userForm/protocol";
 import {
   alignOperation,
+  centerOperation,
+  gridOperation,
+  spacingOperation,
   defaultDuplicateParent,
   defaultPasteParent,
   distributeOperation,
@@ -228,7 +231,7 @@ export function ProductivityToolbar({
             <span class="sr-only">{strings.deleteItem}</span>
           </button>
           <span class="toolbar-separator" aria-hidden="true" />
-          {ids.length >= 2 && (
+          {ids.length >= 1 && (
             <CommandMenu label={strings.align}>
               {(
                 [
@@ -249,29 +252,18 @@ export function ProductivityToolbar({
                   {label}
                 </button>
               ))}
-            </CommandMenu>
-          )}
-          {ids.length >= 3 && (
-            <CommandMenu label={strings.distribute}>
+              <hr />
               <button
                 role="menuitem"
                 type="button"
-                disabled={!canArrange}
-                onClick={() => onOperation(distributeOperation(ids, "horizontal"))}
+                disabled={!canReorder}
+                onClick={() => onOperation(gridOperation(ids, "alignToGrid"))}
               >
-                {strings.distributeHorizontal}
-              </button>
-              <button
-                role="menuitem"
-                type="button"
-                disabled={!canArrange}
-                onClick={() => onOperation(distributeOperation(ids, "vertical"))}
-              >
-                {strings.distributeVertical}
+                {strings.alignToGrid}
               </button>
             </CommandMenu>
           )}
-          {ids.length >= 2 && (
+          {ids.length >= 1 && (
             <CommandMenu label={strings.sameSize}>
               {(
                 [
@@ -285,6 +277,72 @@ export function ProductivityToolbar({
                   type="button"
                   disabled={!canArrange}
                   onClick={() => onOperation(sameSizeOperation(ids, anchor, dimension))}
+                >
+                  {label}
+                </button>
+              ))}
+              <hr />
+              <button
+                role="menuitem"
+                type="button"
+                disabled={!canReorder}
+                onClick={() => onOperation(gridOperation(ids, "sizeToGrid"))}
+              >
+                {strings.sizeToGrid}
+              </button>
+            </CommandMenu>
+          )}
+          {ids.length >= 2 && (
+            <CommandMenu label={strings.spacing}>
+              {(
+                [
+                  ["horizontal", strings.horizontalSpacing],
+                  ["vertical", strings.verticalSpacing],
+                ] as const
+              ).map(([axis, label], index) => (
+                <>
+                  {index > 0 && <hr />}
+                  <button
+                    role="menuitem"
+                    type="button"
+                    disabled={!canArrange || ids.length < 3}
+                    onClick={() => onOperation(distributeOperation(ids, axis))}
+                  >
+                    {label}: {strings.spacingEqual}
+                  </button>
+                  {(
+                    [
+                      ["increase", strings.spacingIncrease],
+                      ["decrease", strings.spacingDecrease],
+                      ["remove", strings.spacingRemove],
+                    ] as const
+                  ).map(([command, text]) => (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      disabled={!canArrange}
+                      onClick={() => onOperation(spacingOperation(ids, anchor, axis, command))}
+                    >
+                      {label}: {text}
+                    </button>
+                  ))}
+                </>
+              ))}
+            </CommandMenu>
+          )}
+          {ids.length >= 1 && (
+            <CommandMenu label={strings.centerInForm}>
+              {(
+                [
+                  ["horizontal", strings.centerHorizontally],
+                  ["vertical", strings.centerVertically],
+                ] as const
+              ).map(([axis, label]) => (
+                <button
+                  role="menuitem"
+                  type="button"
+                  disabled={!canReorder}
+                  onClick={() => onOperation(centerOperation(ids, axis))}
                 >
                   {label}
                 </button>
@@ -426,6 +484,18 @@ export function ProductivityToolbar({
             onClick={() => zOrder("back")}
           >
             {strings.sendToBack}
+          </button>
+          <hr />
+          <button
+            role="menuitem"
+            type="button"
+            disabled={!canReorder}
+            onClick={() => {
+              onOperation(gridOperation(ids, "alignToGrid"));
+              onCloseMenu();
+            }}
+          >
+            {strings.alignToGrid}
           </button>
           <hr />
           <button

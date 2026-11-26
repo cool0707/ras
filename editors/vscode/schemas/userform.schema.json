@@ -488,6 +488,11 @@
             "type": "string",
             "description": "ツールチップの文字列（すべての種類のコントロールで指定可）"
           },
+          "anchor": {
+            "type": "string",
+            "description": "親（フォーム・Frame・MultiPage）の大きさが変わったときにコントロールが距離を保つ辺（Windows フォームの Anchor と同じ）。top・bottom・left・right をカンマで区切って並べるか none。左右の両方なら幅、上下の両方なら高さが伸び縮みし、どちらも無い軸では中央を保つ。省略時は top,left（動かない）。Page と ProgressBar には書けない",
+            "examples": ["top,left,right", "bottom,right", "top,bottom,left,right", "none"]
+          },
           "tag": {
             "type": "string",
             "description": "コントロールに付ける任意の文字列（すべての種類のコントロールで指定可）"

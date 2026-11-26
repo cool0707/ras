@@ -18,6 +18,15 @@ import { colorStyle, systemColorTable } from "./propertyEditors/appearance";
 import { validNumericInput } from "./propertyEditors/numeric";
 import { listToText, textToList } from "../../src/userForm/listItems";
 import { toggleState } from "../../src/userForm/model";
+import {
+  anchorLabel,
+  anchorSides,
+  defaultAnchor,
+  formatAnchor,
+  isDefaultAnchor,
+  parseAnchor,
+} from "../../src/userForm/anchor";
+import type { AnchorSide } from "../../src/userForm/anchor";
 
 // Presentation only. The server owns types, applicability and authoring values.
 const categories = {
@@ -60,7 +69,7 @@ const categories = {
     "orientation",
     "controlTipText",
   ],
-  layout: ["left", "top", "width", "height", "zoom", "scrollBars", "keepScrollBarsVisible", "scrollWidth", "scrollHeight", "scrollLeft", "scrollTop"],
+  layout: ["left", "top", "width", "height", "anchor", "zoom", "scrollBars", "keepScrollBarsVisible", "scrollWidth", "scrollHeight", "scrollLeft", "scrollTop"],
   behavior: [
     "enabled",
     "visible",
@@ -541,6 +550,53 @@ function ObjectPropertyRow(props: Props & { descriptor: PropertyDescriptor }) {
   );
 }
 
+/**
+ * The anchor of a control, edited as in the property window of Visual Studio: a box with a
+ * bar towards each edge of the container; a bar that is on keeps the distance to that edge.
+ */
+function AnchorPropertyRow(props: Props & { descriptor: PropertyDescriptor }) {
+  const { descriptor, target, strings, editable, busy, onCommit } = props;
+  const state = target.values[descriptor.field];
+  const anchor = parseAnchor(state?.present ? state.value : undefined);
+  const current = anchor ?? defaultAnchor;
+  const disabled = !editable || busy || !anchor;
+  const toggle = (side: AnchorSide) => {
+    const next = { ...current, [side]: !current[side] };
+    onCommit(descriptor.field, isDefaultAnchor(next) ? null : formatAnchor(next));
+  };
+  const sideLabel: Record<AnchorSide, string> = {
+    top: strings.anchorTop,
+    bottom: strings.anchorBottom,
+    left: strings.anchorLeft,
+    right: strings.anchorRight,
+  };
+  const id = `property-${props.controlId ?? "form"}-${descriptor.field}`;
+  return (
+    <div class="property-row" data-property-field={descriptor.field}>
+      <label id={id}>Anchor</label>
+      <div class="property-value anchor-property-value" title={strings.anchorHelp}>
+        <div class="anchor-editor" role="group" aria-labelledby={id}>
+          {anchorSides.map((side) => (
+            <button
+              type="button"
+              class={`anchor-bar anchor-${side}`}
+              aria-pressed={current[side]}
+              aria-label={sideLabel[side]}
+              title={sideLabel[side]}
+              disabled={disabled}
+              onClick={() => toggle(side)}
+            />
+          ))}
+          <span class="anchor-center" aria-hidden="true" />
+        </div>
+        <span class="anchor-summary">
+          {anchor ? anchorLabel(anchor) : String(state?.value ?? "")}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function PropertyGrid(props: Props) {
   const groups = Object.keys(categories) as Category[];
   return (
@@ -574,7 +630,16 @@ export function PropertyGrid(props: Props) {
             <details class="property-category" open>
               <summary>{props.strings[category]}</summary>
               {descriptors.map((descriptor) =>
-                descriptor.valueType === "object" ? (
+                descriptor.editor === "anchor" ? (
+                  <AnchorPropertyRow
+                    key={JSON.stringify([
+                      props.draftId ?? props.controlId ?? null,
+                      descriptor.field,
+                    ])}
+                    {...props}
+                    descriptor={descriptor}
+                  />
+                ) : descriptor.valueType === "object" ? (
                   <ObjectPropertyRow
                     key={JSON.stringify([
                       props.draftId ?? props.controlId ?? null,

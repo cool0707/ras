@@ -267,3 +267,26 @@ export function reorderOperation(
 ): ProductivityOperation {
   return { type: "reorderControls", controlIds: [...controlIds], command };
 }
+
+export function gridOperation(
+  controlIds: readonly string[],
+  command: "alignToGrid" | "sizeToGrid",
+): ProductivityOperation {
+  return { type: command, controlIds: [...controlIds] };
+}
+
+export function spacingOperation(
+  controlIds: readonly string[],
+  anchorId: string,
+  axis: "horizontal" | "vertical",
+  command: "increase" | "decrease" | "remove",
+): ProductivityOperation {
+  return { type: "spaceControls", controlIds: [...controlIds], anchorId, axis, command };
+}
+
+export function centerOperation(
+  controlIds: readonly string[],
+  axis: "horizontal" | "vertical",
+): ProductivityOperation {
+  return { type: "centerControls", controlIds: [...controlIds], axis };
+}

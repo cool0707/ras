@@ -292,7 +292,8 @@ fn is_list_control(control_type: &str) -> bool {
 ///
 /// Existing files are only replaced with `force`. What the designer
 /// storage does not hold — the `list` / `selectedIndex` of ComboBox and
-/// ListBox controls — is kept from an existing `.form.json`. `codepage` is
+/// ListBox controls, the `anchor` of controls — is kept from an existing
+/// `.form.json`. `codepage` is
 /// the code page of the project the form comes from.
 pub fn pull(
     root: &Path,
@@ -370,6 +371,16 @@ pub fn pull_with(
         {
             control.list = old.list.clone();
             control.selected_index = old.selected_index;
+        }
+    }
+
+    // The anchors are not in the designer storage either (RAS_FormResize applies them).
+    for control in spec.controls.iter_mut() {
+        if let Some(anchor) = previous_control(&control.name)
+            .and_then(|old| old.scalar("anchor"))
+            .filter(|_| crate::anchor::takes_anchor(&control.control_type))
+        {
+            control.scalars.insert("anchor".into(), anchor.clone());
         }
     }
 

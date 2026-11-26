@@ -23,6 +23,7 @@ import {
 } from "./contract";
 import type { PropertyContract, ValueType } from "./contract";
 import { minimumEditHeight } from "./editHeight";
+import { parseAnchor } from "./anchor";
 import type { JsonNode, JsonValue } from "./jsonSource";
 import { JsonSyntaxError, nodeAtPath, offsetToPosition, parseJson } from "./jsonSource";
 import type {
@@ -509,6 +510,17 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 		if (type === "ProgressBar") issues.push(...progressIssues(control, path));
 		if (type === "FilePicker") issues.push(...pickerIssues(control, path));
 		issues.push(...edgeIssues(control, path));
+		const [anchor, hasAnchor] = lookupRaw(control, "anchor");
+		if (hasAnchor && typeof anchor === "string" && Object.hasOwn(allowed, "anchor") && !parseAnchor(anchor))
+			issues.push(
+				issue(
+					"UFV026",
+					"error",
+					`${path}.anchor "${anchor}" はアンカーの指定ではありません。`,
+					`${path}.anchor`,
+					"top・bottom・left・right をカンマで区切って並べるか、none を書いてください（例: \"top,left,right\"）。",
+				),
+			);
 		const font = control.font ?? (isObject(control.properties) ? control.properties.font : undefined);
 		const multiLine = control.multiLine === true || (isObject(control.properties) && control.properties.multiLine === true);
 		const minimum = minimumEditHeight(type, font, multiLine);

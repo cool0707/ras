@@ -1,4 +1,4 @@
-//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV025`).
+//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV026`).
 //!
 //! Port of the validation in xlflow's `internal/vba/userforms/spec`
 //! (`spec.go`, `appearance.go`; Copyright (c) 2026 harumiWeb, MIT License;
@@ -489,6 +489,15 @@ fn validate_raw_control_properties(
     issues.extend(validate_raw_selected_index(control, control_type, path));
     if built_in {
         mark_unsupported(&mut issues, control_type);
+        if let Some(Value::String(text)) = lookup_raw(control, "anchor") {
+            if crate::anchor::takes_anchor(control_type) && crate::anchor::parse(text).is_none() {
+                issues.push(error(
+                    "UFV026",
+                    format!("{path}.anchor {text:?} はアンカーの指定ではありません（top・bottom・left・right をカンマで区切って並べるか、none を書いてください）。"),
+                    &format!("{path}.anchor"),
+                ));
+            }
+        }
     }
     if !control_type.trim().is_empty() && !prog_id.trim().is_empty() {
         if let Some(by_prog_id) = contract::control_type_by_prog_id(prog_id) {

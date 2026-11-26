@@ -275,6 +275,8 @@ pub fn common_control_properties() -> Props {
         ("visible", p(T::Boolean, false, Supported)),
         ("tag", p(T::String, false, Supported)),
         ("controlTipText", p(T::String, false, Supported)),
+        // RAS: the edges the control follows when its container is resized (`anchor.rs`).
+        ("anchor", p(T::String, false, Supported)),
         ("observed", p(T::Object, false, SnapshotOnly)),
         ("controls", p(T::ObjectArray, false, SnapshotOnly)),
         ("properties", p(T::Object, false, CustomUnchecked)),
@@ -565,11 +567,11 @@ pub fn control_properties(name: &str) -> Props {
         return props;
     };
     if control_type(name).map(|t| t.name) == Some("Page") {
-        props.retain(|(k, _)| !matches!(*k, "left" | "top" | "width" | "height"));
+        props.retain(|(k, _)| !matches!(*k, "left" | "top" | "width" | "height" | "anchor"));
     }
-    // Labels take no focus.
+    // Labels take no focus, and lay themselves out.
     if control_type(name).map(|t| t.name) == Some("ProgressBar") {
-        props.retain(|(k, _)| *k != "tabIndex");
+        props.retain(|(k, _)| *k != "tabIndex" && *k != "anchor");
     }
     for (k, v) in specific {
         props.retain(|(existing, _)| *existing != k);
