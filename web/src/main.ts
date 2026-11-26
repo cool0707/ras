@@ -1180,7 +1180,13 @@ function bookMessage(m: { type?: string; ops?: unknown; url?: string }, frame: W
     }
     if (m.type === "ready") {
         // The objects of the workbook before the run have events: their handlers are in objects/.
-        if (!(lastRun && !showBefore)) frame.postMessage({ type: "events", on: true }, "*");
+        // (The playground has no run mode: the page shows no switch for it.)
+        if (!(lastRun && !showBefore)) frame.postMessage({ type: "events", on: true, canRun: false }, "*");
+        return;
+    }
+    if (m.type === "mode" || m.type === "run") {
+        // (A page that asks all the same is not left waiting for an answer.)
+        fail("プレイグラウンドでは実行モードを使えません。VS Code 拡張のシートビューで使ってください。");
         return;
     }
     if (m.type === "event") {
