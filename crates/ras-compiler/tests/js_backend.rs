@@ -1480,3 +1480,45 @@ fn dialogs_built_in_code_run_in_the_debug_run() {
     }
     assert_eq!(stdout, expected.replace("\r\n", "\n"), "{stderr}");
 }
+
+const SLEEP_MAIN: &str = r#"import { Progress } from "dialog";
+
+export function run() {
+    // A cancel button pressed while `sleep` waits: read before the bar draws itself again.
+    const p = new Progress("待機中");
+    sleep(30);
+    console.log("slept");
+    console.log("sleep", p.cancelled);
+    p.close();
+
+    // `waitUntil` hears it too, and stops waiting for it.
+    const q = new Progress("待機中");
+    console.log("waitUntil", waitUntil(() => q.cancelled, 5000));
+    q.close();
+    console.log("timeout", waitUntil(() => false, 30));
+}
+"#;
+
+/// `sleep` / `waitUntil` in the debug run wait in short slices and call `DoEvents` between them,
+/// as `RAS_Sleep` / `RAS_WaitUntil` do (spec §10.4.1): a modeless form responds meanwhile.
+#[test]
+fn sleep_lets_the_forms_shown_respond() {
+    let (_, out) = compile(&[("main", SLEEP_MAIN)]);
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("sleep", &[("main", SLEEP_MAIN)], &out);
+    let (stdout, stderr, ok) = p.run("Main.run", Some(&fixture("mock_sleep.js")));
+    assert!(ok, "{stdout}\n{stderr}");
+    let expected = "\
+show modal=false
+> (DoEvents) click btnCancel
+slept
+sleep true
+show modal=false
+> (DoEvents) click btnCancel
+waitUntil true
+timeout false
+";
+    assert_eq!(stdout, expected, "{stderr}");
+}

@@ -797,7 +797,7 @@ function openByShell(file) {
     com.shellOpen(file);
     const start = Date.now();
     for (;;) {
-        sleep(500);
+        pause(500);
         const found = com.findWorkbook(file) || openByName(file);
         if (found) return found;
         if (Date.now() - start >= 60000) {
@@ -1132,18 +1132,40 @@ function status(message) {
         // ignored
     }
 }
-function sleep(ms) {
+/** Blocks the thread for `ms` milliseconds (`kernel32.Sleep`: nothing responds meanwhile). */
+function pause(ms) {
     if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
-function waitUntil(condition, timeoutMs) {
-    const start = Date.now();
+/** The slice `sleep` / `waitUntil` wait for between two `DoEvents`, as `RAS_Sleep` does (spec §10.4.1). */
+const SLEEP_SLICE_MS = 20;
+/**
+ * `sleep(ms)`: waits in short slices and calls `DoEvents` between them, so that the forms shown
+ * (a progress bar's cancel button, spec §14.10.7) respond meanwhile, as in Excel.
+ */
+function sleep(ms) {
+    const deadline = Date.now() + Math.max(0, Number(ms) || 0);
     for (;;) {
-        if (condition()) return true;
-        if (timeoutMs !== undefined && timeoutMs >= 0 && Date.now() - start >= timeoutMs) return false;
-        sleep(10);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return;
+        pause(Math.min(remaining, SLEEP_SLICE_MS));
+        yieldNow();
     }
 }
-function yieldNow() {}
+/** `waitUntil(cond, timeoutMs)`: true once `cond()` is; false on time-out (negative or none = no time-out). */
+function waitUntil(condition, timeoutMs) {
+    const limited = timeoutMs !== undefined && timeoutMs !== null && Number(timeoutMs) >= 0;
+    const deadline = Date.now() + (limited ? Number(timeoutMs) : 0);
+    for (;;) {
+        if (condition()) return true;
+        if (limited && Date.now() >= deadline) return false;
+        pause(SLEEP_SLICE_MS);
+        yieldNow();
+    }
+}
+/** `yieldNow()`: `DoEvents` there and then (`RAS_YieldNow`). */
+function yieldNow() {
+    if (formsApi !== null) formsApi.doEvents();
+}
 function is64() {
     try {
         get(application(), "HinstancePtr");
@@ -1616,7 +1638,7 @@ const vba = new Proxy(vbaImpl, {
 });
 
 const DECLARES = {
-    "kernel32.Sleep": sleep,
+    "kernel32.Sleep": pause,
     "kernel32.GetTickCount": () => Math.floor(performance.now()) | 0,
     "kernel32.GetTickCount64": () => Math.floor(performance.now()),
     "kernel32.GetCurrentProcessId": () => process.pid,
@@ -2065,7 +2087,7 @@ module.exports = {
     cnum, cint, clng, toInt, toLong, cbool, cdate, cstr, str, dyn, cmp, eq, unionEq, errorToNull,
     trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
-    suspend, resume, resetAppState, status, sleep, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
+    suspend, resume, resetAppState, status, sleep, pause, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
     fileOpen, fileClose, fileReset, filePrint, fileWrite, fileInput, fileLineInput, fileInputString, fileGet, filePut, fileSeek, fileLock, fileUnlock, fileWidth, fileRename,
     vba, declare, module: module_, withEvents, listen, listenAny, listenEach, fireListeners, unlistenOwner, onAction, onActionEach, ensureInit, entries, run, serve, form, newForm,
 };
