@@ -148,7 +148,7 @@ export function sumTo(n: int): int {
 押すと、その関数のテストの雛形を `test/<モジュール>.test.ras`（`src/report.ras` なら `test/report.test.ras`）に追加し、そのテストの行を開きます。
 
 ```typescript
-import { sumTo } from "../src/main";
+import { sumTo } from "src/main";
 
 describe("sumTo", () => {
     test("sumTo の戻り値", () => {

@@ -1523,21 +1523,59 @@ impl Collector {
                 import_target(&self.prog, m, &imp.source)
             };
             let Some(t) = target else {
-                if imp.source.starts_with('.')
-                    && import_by_path(&self.prog, m, &imp.source)
-                        .is_some_and(|t| self.prog.modules[t].is_test())
-                {
+                let test_side = if imp.source.starts_with('.') {
+                    import_by_path(&self.prog, m, &imp.source)
+                } else {
+                    import_by_root(&self.prog, &imp.source)
+                };
+                if test_side.is_some_and(|t| self.prog.modules[t].is_test()) {
                     self.err(m, imp.source_span, "E0701", format!("`{}` はテスト側のファイルです。`src/` / `forms/` のモジュールからテストのファイルは `import` できません", imp.source));
                 } else {
                     self.err(
                         m,
                         imp.source_span,
                         "E0121",
-                        format!("モジュール `{}` が見つかりません", imp.source),
+                        match import_by_root(&self.prog, &format!("src/{}", imp.source)) {
+                            Some(t) if !imp.source.starts_with('.') => format!(
+                                "モジュール `{}` が見つかりません。`import` のパスはプロジェクトのフォルダーから書きます（`\"{}\"`）",
+                                imp.source,
+                                root_import_path(&self.prog, t)
+                            ),
+                            _ => format!("モジュール `{}` が見つかりません", imp.source),
+                        },
                     );
                 }
                 continue;
             };
+            // The files of sheets and of the workbook are called by their code names; a form's
+            // code-behind is imported only by the tests (spec §12.2, §14.12).
+            if let Some(form) = &self.prog.modules[t].form {
+                let name = self.prog.modules[t].vba_name.clone();
+                let msg = match form.kind {
+                    ObjectKind::Form if self.prog.modules[m].is_test() => None,
+                    ObjectKind::Form => Some(format!("フォームのファイルは `import` できません。`{name}.show()` のようにフォームの名前で使います")),
+                    _ => Some(format!("シート・`ThisWorkbook` のファイルは `import` できません。`export function` は `{name}.foo()` のようにコード名で呼びます")),
+                };
+                if let Some(msg) = msg {
+                    self.err(m, imp.source_span, "E0124", msg);
+                    continue;
+                }
+            }
+            if imp.source.starts_with('.') {
+                let path = root_import_path(&self.prog, t);
+                self.warn(
+                    m,
+                    imp.source_span,
+                    "W0121",
+                    format!("`import` のパスは、プロジェクトのフォルダーからのパスで書きます（`\"{path}\"`）。相対パスは廃止しました"),
+                );
+                self.prog.fixes.push(crate::diag::Fix {
+                    module: m,
+                    span: imp.source_span,
+                    replacement: format!("\"{path}\""),
+                    code: "W0121",
+                });
+            }
             if t == m {
                 self.err(
                     m,
@@ -2495,19 +2533,45 @@ fn resolve_type_inner(
 
 /// The module an `import ... from "<source>"` in module `m` names: a project module for a
 /// relative path (`./util`, `../lib/str`), a bundled library module otherwise.
+/// The module an `import` names (spec §15.4): a path from the project root (`src/main`,
+/// `test/helper`), or the name of a bundled library (`validation`). The test side is only
+/// visible from the test side. A relative path (`./util`, deprecated) is also resolved.
 pub fn import_target(prog: &Program, m: ModuleId, source: &str) -> Option<ModuleId> {
     if source.starts_with("vba:") {
         return None;
     }
-    if !source.starts_with('.') {
+    let t = if source.starts_with('.') {
+        relative_import_target(prog, m, source)
+    } else if let Some(t) = import_by_root(prog, source) {
+        Some(t)
+    } else {
         return prog
             .modules
             .iter()
             .position(|x| x.kind == ModuleKind::Std && x.key == source);
+    }?;
+    (prog.modules[m].is_test() || !prog.modules[t].is_test()).then_some(t)
+}
+
+/// A user module by its path from the project root, without `.ras` (`src/util/str`).
+pub fn import_by_root(prog: &Program, source: &str) -> Option<ModuleId> {
+    let path = source.strip_suffix(".ras").unwrap_or(source);
+    if path.is_empty() || !path.contains('/') {
+        return None;
     }
-    // A test module names what it imports by its path (`../src/report`, `./helper`).
+    prog.modules
+        .iter()
+        .position(|x| x.kind == ModuleKind::User && x.rel_path.strip_suffix(".ras") == Some(path))
+}
+
+/// A relative import (deprecated, `W0121`): from the file itself (`../src/main` in
+/// `objects/Sheet1.ras`), or else as if the file were in `src/` (`./util` from a form).
+fn relative_import_target(prog: &Program, m: ModuleId, source: &str) -> Option<ModuleId> {
+    if let Some(t) = import_by_path(prog, m, source) {
+        return Some(t);
+    }
     if prog.modules[m].is_test() {
-        return import_by_path(prog, m, source);
+        return None;
     }
     let base = prog.modules[m]
         .key
@@ -2533,21 +2597,21 @@ pub fn import_target(prog: &Program, m: ModuleId, source: &str) -> Option<Module
     prog.modules
         .iter()
         .position(|x| x.kind == ModuleKind::User && x.key == key && !x.is_test())
-        // The path from the file itself: `objects/Sheet1.ras` imports `../src/main`.
-        .or_else(|| import_by_path(prog, m, source).filter(|&t| !prog.modules[t].is_test()))
 }
 
-/// The bundled class that implements `Map<K, V>` for struct values.
-pub fn struct_map_class(prog: &Program) -> Option<ClassId> {
-    let m = prog.module_by_key(STRUCT_MAP_MODULE)?;
-    match prog.modules[m].exports.get("RAS_StructMap") {
-        Some(Sym::Class(c)) => Some(*c),
-        _ => None,
+/// How an `import` names module `t`: its path from the project root, without `.ras`.
+pub fn root_import_path(prog: &Program, t: ModuleId) -> String {
+    let md = &prog.modules[t];
+    if md.kind == ModuleKind::Std {
+        return md.key.clone();
     }
+    md.rel_path
+        .strip_suffix(".ras")
+        .unwrap_or(&md.rel_path)
+        .to_string()
 }
 
-/// The module a relative import names by the path of its file from the project root
-/// (`test/report.test.ras` importing `../src/report` → `src/report.ras`).
+/// A path relative to the importing file (`./helper`, `../src/report`).
 fn import_by_path(prog: &Program, m: ModuleId, source: &str) -> Option<ModuleId> {
     let from = &prog.modules[m].rel_path;
     let mut parts: Vec<&str> = from
@@ -2568,6 +2632,15 @@ fn import_by_path(prog: &Program, m: ModuleId, source: &str) -> Option<ModuleId>
     prog.modules
         .iter()
         .position(|x| x.kind == ModuleKind::User && x.rel_path.strip_suffix(".ras") == Some(path))
+}
+
+/// The bundled class that implements `Map<K, V>` for struct values.
+pub fn struct_map_class(prog: &Program) -> Option<ClassId> {
+    let m = prog.module_by_key(STRUCT_MAP_MODULE)?;
+    match prog.modules[m].exports.get("RAS_StructMap") {
+        Some(Sym::Class(c)) => Some(*c),
+        _ => None,
+    }
 }
 
 pub const STRUCT_MAP_MODULE: &str = "ras_collections";

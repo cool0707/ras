@@ -49,16 +49,17 @@ pub const ENTRIES: &[Entry] = &[
     e("E0106", "コンストラクタの重複", "クラスに書けるコンストラクタは 1 つです（オーバーロードはありません）。引数を省略可能にするか、作り方ごとに `static` メソッドを用意してください。"),
     e("E0107", "列挙値の範囲", "列挙型の値は `int`（32bit）に収まる整数でなければなりません。"),
     e("E0108", "ジェネリックな型エイリアス", "`type Pair<T> = ...` のような型引数のある型エイリアスには対応していません。`struct` / `interface` をジェネリックにするか、具体的な型で書いてください。"),
-    e("E0109", "`namespace` の場所", "`declare namespace` は型定義ファイル（`types/*.d.ras`）でだけ使えます。ふつうのモジュールでは、ファイルがそのまま名前空間（`import * as m from \"./m\"`）になります。"),
+    e("E0109", "`namespace` の場所", "`declare namespace` は型定義ファイル（`types/*.d.ras`）でだけ使えます。ふつうのモジュールでは、ファイルがそのまま名前空間（`src/m.ras` は `M.foo()`、または `import * as m from \"src/m\"`）になります。"),
     e("E0120", "`vba:` インポート", "`import ... from \"vba:Module1\"`（RAS が管理していない VBA モジュールの参照）にはまだ対応していません。手書きの VBA の関数は `types/*.d.ras` に `declare function` で宣言すると呼べます。"),
     x(
         "E0121",
         "モジュールが見つからない",
-        "`import` の `from` に書いたモジュールがありません。相対パス（`./util`、`../lib/str`）は、そのファイルの場所から見たパスで、拡張子 `.ras` は書きません。`src/` のモジュールどうしは `src/` を基準にした場所で探します。同梱のライブラリは `\"win32\"` のようにパスなしで書きます。",
-        "// src/report.ras から src/lib/str.ras を使う\nimport { padLeft } from \"./lib/str\";",
+        "`import` の `from` に書いたモジュールがありません。パスは、どのファイルからでもプロジェクトのフォルダー（`ras.toml` のあるフォルダー）から書き、拡張子 `.ras` は書きません（`\"src/lib/str\"`、テストの補助の `\"test/helper\"`）。同梱のライブラリは `\"win32\"` のようにパスなしで書きます。`src/` のモジュールは、`import` しなくても `Str.padLeft(...)` のようにモジュール名で呼べます。",
+        "// src/report.ras から src/lib/str.ras を使う\nimport { padLeft } from \"src/lib/str\";",
     ),
     e("E0122", "自分自身のインポート", "モジュールが自分自身を `import` しています。同じファイルの中の宣言は、`import` なしで使えます。"),
     e("E0123", "`export` されていない名前", "`import { a }` の `a` が、相手のモジュールで `export` されていません。相手の宣言に `export` を付けるか、名前の綴りを確かめてください（大文字小文字を区別します）。"),
+    e("E0124", "シート・フォームのファイルのインポート", "シート・`ThisWorkbook` のファイル（`objects/`）と、フォームのファイル（`forms/`。テストからは除く）は `import` できません。シートの `export function` は `Sheet1.clearInput()`、ブックは `thisWorkbook.refresh()`、フォームは `frmInput.show()` のように、どこからでも名前で使えます。"),
     e("E0130", "構造体のフィールドの型", "`struct` のフィールドには型注釈（`x: int;`）が必要です。"),
     e("E0131", "`declare` した変数の型", "`declare const` / `declare let` は値を持たないので、型注釈が必要です。"),
     e("E0132", "`null` で初期化するフィールドの型", "`= null` からは型が決まりません。`item: Excel.Range = null;` のように型注釈を付けてください。"),
@@ -91,7 +92,7 @@ pub const ENTRIES: &[Entry] = &[
         "E0201",
         "名前が見つからない",
         "その名前の変数・関数・型がスコープにありません。よくある原因: 綴りの違い（大文字小文字を区別します）、`import` していない、VBA の名前をそのまま書いた（`MsgBox` ではなく `msgBox`。`ras check --fix` で直せます）、シートのコード名がブックに無い（`ras.toml` の `workbook` のブックから読みます。`ras book dump` で確かめられます）。",
-        "import { lastRow } from \"./util\";\n\nexport function run() {\n    msgBox(Sheet1.lastRow());\n}",
+        "import { lastRow } from \"src/util\";\n\nexport function run() {\n    msgBox(Sheet1.lastRow());\n}",
     ),
     e("E0202", "フィールドがない", "構造体・オブジェクト型に、その名前のフィールドがありません。オブジェクトリテラルに余分なフィールドを書いた場合もこのエラーになります。宣言のフィールド名と綴りを合わせてください。"),
     // ---- 型
@@ -243,6 +244,12 @@ pub const ENTRIES: &[Entry] = &[
     e("E0903", "大きすぎるプロシージャ", "生成した VBA のプロシージャが、VBA の上限（64KB）を超えます。関数を分割してください。"),
     // ---- 警告
     e("W0110", "不明なループのデコレータ", "ループに付けたデコレータ（`@bulk`、`@nodoevents` など以外）は無視されます。綴りを確かめてください。"),
+    x(
+        "W0121",
+        "相対パスの `import`",
+        "`import` のパスは、プロジェクトのフォルダーから書きます（`\"src/util\"`）。そのファイルからの相対パス（`./util`、`../src/report`）は廃止しました。今は読み替えて動きますが、`ras check --fix` でプロジェクトのフォルダーからのパスに書き換えられます。",
+        "import { padLeft } from \"./lib/str\";     // 警告\nimport { padLeft } from \"src/lib/str\";   // OK",
+    ),
     x(
         "W0301",
         "型定義にないメンバー",

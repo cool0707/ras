@@ -2397,8 +2397,6 @@ struct Emitter<'a> {
     inits: HashMap<String, String>,
     /// Names imported from peers: module key → RAS names.
     imports: BTreeMap<String, BTreeSet<String>>,
-    /// Peers used as a namespace (`Module1.Foo`): module key → alias.
-    namespace_imports: BTreeMap<String, String>,
 }
 
 impl<'a> Emitter<'a> {
@@ -2446,7 +2444,6 @@ impl<'a> Emitter<'a> {
             glue: HashSet::new(),
             inits: HashMap::new(),
             imports: BTreeMap::new(),
-            namespace_imports: BTreeMap::new(),
         }
     }
 
@@ -2455,12 +2452,8 @@ impl<'a> Emitter<'a> {
             self.out.pop();
         }
         // Imports of the names used from the peers.
-        let from = |key: &str| match self.target {
-            // A code-behind lies in `forms/`, the file of a sheet in `objects/`; module keys
-            // are relative to `src/`.
-            Target::Form(_) | Target::Document { .. } => format!("../{key}"),
-            _ => format!("./{key}"),
-        };
+        // Module keys are relative to `src/`; an import names the path from the project root.
+        let from = |key: &str| format!("src/{key}");
         let mut head: Vec<String> = Vec::new();
         for (key, names) in &self.imports {
             head.push(format!(
@@ -2468,9 +2461,6 @@ impl<'a> Emitter<'a> {
                 names.iter().cloned().collect::<Vec<_>>().join(", "),
                 from(key)
             ));
-        }
-        for (key, alias) in &self.namespace_imports {
-            head.push(format!("import * as {alias} from \"{}\";", from(key)));
         }
         if !head.is_empty() && !self.out.is_empty() {
             head.push(String::new());
@@ -2548,10 +2538,8 @@ impl<'a> Emitter<'a> {
             };
             return Some((object, name.clone()));
         }
-        let alias = crate::collect::vba_module_name(&peer.key);
-        self.namespace_imports
-            .insert(peer.key.clone(), alias.clone());
-        Some((alias, name.clone()))
+        // The module's name is a global: `Module1.Total(1)` needs no `import` (spec §12.1.2).
+        Some((crate::collect::vba_module_name(&peer.key), name.clone()))
     }
 
     fn line(&mut self, s: impl AsRef<str>) {

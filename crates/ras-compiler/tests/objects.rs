@@ -1047,11 +1047,14 @@ fn module_names_are_hidden_by_own_names_and_bring_no_extension_methods() {
 #[test]
 fn a_sheet_file_imports_by_its_own_path() {
     let util = "export function foo(): int { return 1; }\n";
+    let sheet = |path: &str| {
+        format!("import {{ foo }} from \"{path}\";\nexport function baz() {{ msgBox(foo()); }}\n")
+    };
+    let (diags, _) = compile(&[("Sheet1", &sheet("src/util"))], &[("util", util)]);
+    assert!(diags.is_empty(), "{diags:#?}");
+    // A relative path (deprecated) still works, with a warning that `--fix` rewrites.
     for path in ["../src/util", "../util"] {
-        let sheet = format!(
-            "import {{ foo }} from \"{path}\";\nexport function baz() {{ msgBox(foo()); }}\n"
-        );
-        let (diags, _) = compile(&[("Sheet1", &sheet)], &[("util", util)]);
-        assert!(diags.is_empty(), "{path}: {diags:#?}");
+        let (diags, _) = compile(&[("Sheet1", &sheet(path))], &[("util", util)]);
+        assert_eq!(codes(&diags), ["W0121"], "{path}: {diags:#?}");
     }
 }

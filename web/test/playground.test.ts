@@ -110,7 +110,7 @@ test("generates the skeleton of a test, which compiles and runs", () => {
     const others = files.filter((f) => f.path !== "test/main.test.ras");
     const created = JSON.parse(generateTest(input(others), "src/main.ras", "makeReport"));
     assert.equal(created.created, true);
-    assert.ok(created.text.startsWith('import { makeReport } from "../src/main";\n'), created.text);
+    assert.ok(created.text.startsWith('import { makeReport } from "src/main";\n'), created.text);
     const next = [...others, { path: created.path, text: created.text }];
     const compiled = JSON.parse(compile(input(next)));
     assert.deepEqual(compiled.diagnostics.filter((d: { severity: string }) => d.severity === "error"), []);

@@ -1,4 +1,4 @@
-import { lastRow, isBlank } from "./sheetutil";
+import { lastRow, isBlank } from "src/sheetutil";
 
 /** 税率。 */
 const TAX_RATE = 0.1;

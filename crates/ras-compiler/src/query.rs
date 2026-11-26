@@ -749,24 +749,10 @@ fn importable(prog: &Program, m: ModuleId) -> Vec<(ModuleId, &String, &Sym)> {
     out
 }
 
-/// The path module `m` imports module `t` by: `./util`, `../lib/str`.
-pub fn import_source(prog: &Program, m: ModuleId, t: ModuleId) -> String {
-    let from: Vec<&str> = prog.modules[m].key.split('/').collect();
-    let from = &from[..from.len() - 1];
-    let to: Vec<&str> = prog.modules[t].key.split('/').collect();
-    let common = from
-        .iter()
-        .zip(&to)
-        .take_while(|(a, b)| a == b)
-        .count()
-        .min(to.len() - 1);
-    let ups = from.len() - common;
-    let rest = to[common..].join("/");
-    if ups == 0 {
-        format!("./{rest}")
-    } else {
-        format!("{}{rest}", "../".repeat(ups))
-    }
+/// The path module `m` imports module `t` by: its path from the project root (`src/util`,
+/// `src/lib/str`; spec §15.4).
+pub fn import_source(prog: &Program, _m: ModuleId, t: ModuleId) -> String {
+    crate::collect::root_import_path(prog, t)
 }
 
 /// The edit that imports `name` from module `t` into module `m`: added to an existing

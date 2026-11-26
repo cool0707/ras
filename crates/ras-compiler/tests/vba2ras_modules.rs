@@ -218,7 +218,12 @@ fn modules_and_a_sheet_convert_to_ras_that_compiles() {
     );
     assert!(m1.text.contains("\nfunction Helper() {"), "{}", m1.text);
     // Names of the other modules are imported; the members of a sheet stay its members.
-    assert!(m2.text.starts_with("import { Report, TAX_RATE, Total } from \"./Module1\";\nimport * as Module1 from \"./Module1\";\n\n"), "{}", m2.text);
+    assert!(
+        m2.text
+            .starts_with("import { Report, TAX_RATE, Total } from \"src/Module1\";\n\n"),
+        "{}",
+        m2.text
+    );
     assert!(m2.text.contains("Sheet1.ClearMarks();"), "{}", m2.text);
     // The sheet is `this`; the events are handlers of the sheet's file.
     assert!(
@@ -251,7 +256,7 @@ fn modules_and_a_sheet_convert_to_ras_that_compiles() {
     assert!(
         sheet
             .text
-            .contains("import { Report } from \"../Module1\";"),
+            .contains("import { Report } from \"src/Module1\";"),
         "{}",
         sheet.text
     );

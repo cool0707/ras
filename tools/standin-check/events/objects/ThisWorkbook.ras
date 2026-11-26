@@ -1,5 +1,5 @@
 // The module of the workbook: its events.
-import { log } from "../main";
+import { log } from "src/main";
 
 @on("Workbook.SheetChange")
 function anySheet(sh: object, target: Excel.Range) {

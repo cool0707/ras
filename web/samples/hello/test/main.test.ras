@@ -1,5 +1,5 @@
 // 「テスト」を押すと、vitest と同じ形で書いたテストを実行します。
-import { makeReport, sumTo } from "../src/main";
+import { makeReport, sumTo } from "src/main";
 
 describe("sumTo", () => {
     test("1 から 10 までの和は 55", () => {

@@ -1,4 +1,4 @@
-import { clamp, Counter } from "./lib";
+import { clamp, Counter } from "src/lib";
 
 enum Color { Red, Green = 5, Blue }
 interface Shape { area(): double; }

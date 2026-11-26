@@ -1492,7 +1492,7 @@ mod tests {
     #[test]
     fn imports_are_added_next_to_the_existing_ones() {
         let strs = "export function isBlank(this: string): boolean {\n    return this.length == 0;\n}\n\nexport function pad(s: string): string {\n    return s;\n}\n";
-        let main = "import { pad } from \"../lib/str\";\n\nexport function run() {\n    msgBox(trim2(\"a\") + \"b\".isBlank());\n}\n";
+        let main = "import { pad } from \"src/lib/str\";\n\nexport function run() {\n    msgBox(trim2(\"a\") + \"b\".isBlank());\n}\n";
         let prog = program(&[
             ("lib/str", strs),
             (
@@ -1503,23 +1503,26 @@ mod tests {
         ]);
         let m = module(&prog, "app/main");
         let (lib, more) = (module(&prog, "lib/str"), module(&prog, "lib/more"));
-        assert_eq!(crate::query::import_source(&prog, m, lib), "../lib/str");
-        assert_eq!(crate::query::import_source(&prog, lib, more), "./more");
+        assert_eq!(crate::query::import_source(&prog, m, lib), "src/lib/str");
+        assert_eq!(
+            crate::query::import_source(&prog, lib, more),
+            "src/lib/more"
+        );
         // added to the import of the same module, or as a new line after the imports
         let (span, text) = crate::query::import_edit(&prog, m, lib, "isBlank").unwrap();
         assert_eq!((u32::from(span.start()), text.as_str()), (12, ", isBlank"));
         let (span, text) = crate::query::import_edit(&prog, m, more, "trim2").unwrap();
         assert_eq!(
             (u32::from(span.start()), text.as_str()),
-            (34, "import { trim2 } from \"../lib/more\";\n")
+            (35, "import { trim2 } from \"src/lib/more\";\n")
         );
         let fixes = crate::query::import_fixes(&prog, m, 0, main.len() as u32);
         let titles: Vec<&str> = fixes.iter().map(|f| f.title.as_str()).collect();
         assert_eq!(
             titles,
             [
-                "\"../lib/more\" から `trim2` をインポート",
-                "\"../lib/str\" から `isBlank` をインポート"
+                "\"src/lib/more\" から `trim2` をインポート",
+                "\"src/lib/str\" から `isBlank` をインポート"
             ]
         );
     }

@@ -219,7 +219,7 @@ Sheet1:
 
 ```typescript
 // test/report.test.ras
-import { rebuildReport, lastRow } from "../src/report";
+import { rebuildReport, lastRow } from "src/report";
 
 describe("rebuildReport", () => {
     beforeEach(() => useWorkbook("test/fixtures/sales.xlsx"));

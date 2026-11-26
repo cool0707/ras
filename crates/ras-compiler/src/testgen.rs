@@ -78,8 +78,7 @@ pub fn generate(prog: &Program, f: FnId, existing: Option<&str>) -> Option<Gener
     let d = &prog.fns[f];
     let md = &prog.modules[d.module];
     let path = test_path(md);
-    let depth = path.matches('/').count();
-    let from = format!("{}src/{}", "../".repeat(depth), md.key);
+    let from = crate::collect::root_import_path(prog, d.module);
 
     let mut gen = Gen {
         prog,
@@ -94,7 +93,7 @@ pub fn generate(prog: &Program, f: FnId, existing: Option<&str>) -> Option<Gener
         let src = if *m == d.module {
             from.clone()
         } else {
-            format!("{}src/{}", "../".repeat(depth), other.key)
+            crate::collect::root_import_path(prog, other.id)
         };
         let entry = (src, names.clone());
         if *m == d.module {
@@ -156,7 +155,9 @@ pub fn generate(prog: &Program, f: FnId, existing: Option<&str>) -> Option<Gener
     let mut after_imports = None;
     for (src, names) in &imports {
         let same = ast.items.iter().find_map(|i| match i {
-            Item::Import(im) if im.namespace.is_none() && im.source == *src => Some(im),
+            Item::Import(im) if im.namespace.is_none() && root_path(&path, &im.source) == *src => {
+                Some(im)
+            }
             _ => None,
         });
         match same {
@@ -641,4 +642,27 @@ impl Gen<'_> {
         }
         lines
     }
+}
+
+/// The path from the project root an `import` in the file at `file` names (a relative path,
+/// deprecated, is resolved from the file: `../src/report` in `test/report.test.ras`).
+fn root_path(file: &str, source: &str) -> String {
+    if !source.starts_with('.') {
+        return source.strip_suffix(".ras").unwrap_or(source).to_string();
+    }
+    let mut parts: Vec<&str> = file
+        .rsplit_once('/')
+        .map(|(d, _)| d.split('/').collect())
+        .unwrap_or_default();
+    for seg in source.split('/') {
+        match seg {
+            "." | "" => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    let path = parts.join("/");
+    path.strip_suffix(".ras").unwrap_or(&path).to_string()
 }

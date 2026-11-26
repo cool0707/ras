@@ -1,5 +1,5 @@
 // The module of the sheet Sheet1: its events.
-import { log } from "../main";
+import { log } from "src/main";
 
 @on("Worksheet.Change")
 function changed(target: Excel.Range) {
