@@ -401,9 +401,16 @@ body {
 }
 
 .ctl .button {
+	display: flex;
+	/* MSForms centres the caption only while it fits: one wider (or higher) than the
+	   button starts at the left (or top) edge, and is clipped inside the 3D edge. */
+	align-items: safe center;
+	justify-content: safe center;
+	overflow: clip;
+	overflow-clip-margin: content-box;
 	width: 100%;
 	height: 100%;
-	padding: 0 4px;
+	padding: 2px 4px;
 	font: inherit;
 	color: inherit;
 	white-space: pre-wrap;

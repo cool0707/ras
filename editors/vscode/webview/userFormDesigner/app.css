@@ -299,8 +299,12 @@ header {
 }
 .picker-button {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  /* As a CommandButton: centred while the caption fits, else from the top left. */
+  align-items: safe center;
+  justify-content: safe center;
+  padding: 2px 4px;
+  overflow: clip;
+  overflow-clip-margin: content-box;
   background: var(--ms-face);
   border: 1px solid #adadad;
   color: var(--ms-text);
@@ -342,11 +346,14 @@ header {
 .commandbutton,
 .togglebutton {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  /* MSForms centres the caption only while it fits: one wider (or higher) than the
+     button starts at the left (or top) edge, and is clipped inside the 3D edge. */
+  align-items: safe center;
+  justify-content: safe center;
   padding: 2px 4px;
   text-align: center;
-  overflow: hidden;
+  overflow: clip;
+  overflow-clip-margin: content-box;
 }
 /* Null: raised, dithered, with the caption in buttonShadow. */
 .togglebutton.mixed {

@@ -33,6 +33,9 @@ pub const DEFAULT_HEIGHT: f64 = 18.0;
 pub const DEFAULT_BUTTON_WIDTH: f64 = 24.0;
 /// Caption of the button when omitted.
 pub const DEFAULT_BUTTON_CAPTION: &str = "...";
+/// Font size of the button, in points, whatever the picker's: at 10 pt Excel clips the caption
+/// of the button (the "..." of a 24 pt wide one, and the bottom of any at 18 pt high).
+pub const BUTTON_FONT_SIZE: f64 = 9.0;
 /// `dialogType` when omitted (`msoFileDialogFilePicker`).
 pub const DEFAULT_DIALOG_TYPE: i64 = 3;
 
@@ -285,6 +288,11 @@ pub fn parts(control: &FormSpecControl) -> Vec<FormSpecControl> {
             .unwrap_or(DEFAULT_BUTTON_CAPTION)
             .to_string(),
     );
+    if let Some(font) = &mut button.font {
+        if font.size.is_some() {
+            font.size = Some(BUTTON_FONT_SIZE);
+        }
+    }
     button.tag = Some(tag(&settings));
     // A click on the button leaves the focus in the box.
     button
@@ -442,6 +450,32 @@ mod tests {
     }
 
     const PICKER: &str = r#"{"id":"fp","name":"fpInput","type":"FilePicker","left":12,"top":12,"width":240,"height":18,"text":"C:\\data\\a.xlsx","title":"ブックを選択","allowMultiSelect":true,"filters":[{"description":"Excel ブック","extensions":"*.xlsx; *.xlsm"},{"description":"CSV, TSV","extensions":"*.csv;*.tsv"}],"filterIndex":2,"buttonCaption":"参照","buttonWidth":36}"#;
+
+    #[test]
+    fn the_button_is_drawn_at_9_pt() {
+        let font = r#""font":{"name":"Yu Gothic UI","size":10}"#;
+        let spec_of = |extra: &str| {
+            spec(&format!(
+                r#"{{"id":"fp","name":"fp","type":"FilePicker",{font}{extra}}}"#
+            ))
+        };
+        let expanded = expand(&spec_of(""));
+        let size = |i: usize| expanded.controls[i].font.as_ref().and_then(|f| f.size);
+        assert_eq!((size(0), size(1)), (Some(10.0), Some(BUTTON_FONT_SIZE)));
+        assert_eq!(
+            expanded.controls[1]
+                .font
+                .as_ref()
+                .and_then(|f| f.name.as_deref()),
+            Some("Yu Gothic UI")
+        );
+        // A caption of its own too.
+        let expanded = expand(&spec_of(r#","buttonCaption":"参照""#));
+        assert_eq!(
+            expanded.controls[1].font.as_ref().and_then(|f| f.size),
+            Some(BUTTON_FONT_SIZE)
+        );
+    }
 
     #[test]
     fn a_file_picker_is_a_text_box_and_a_button() {

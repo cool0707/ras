@@ -342,7 +342,13 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
           </span>
           <span
             class="picker-button"
-            style={{ left: px(control.width - buttonWidth), width: px(buttonWidth), height: px(control.height) }}
+            style={{
+              left: px(control.width - buttonWidth),
+              width: px(buttonWidth),
+              height: px(control.height),
+              // Always 9 pt: at 10 pt Excel clips the caption (ras-form picker.rs BUTTON_FONT_SIZE).
+              ...(typeof control.font?.size === "number" ? { fontSize: "9pt" } : {}),
+            }}
           >
             {caption}
           </span>
