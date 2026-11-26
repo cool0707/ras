@@ -3596,10 +3596,14 @@
             let deg = (Math.atan2(e.clientY - d.center[1], e.clientX - d.center[0]) * 180) / Math.PI + 90;
             if (e.shiftKey) deg = Math.round(deg / 15) * 15;
             deg = ((Math.round(deg) % 360) + 360) % 360;
-            if (!d.ghost) d.ghost = makeGhost(false);
+            // A see-through copy of it turned so, the object where it is. (The copy is drawn
+            // turned as the object is: turned by the rest, after where frozen panes pin it.)
+            if (!d.ghost) {
+                d.ghost = copyOfObject(d.box);
+                d.pin = d.ghost.style.transform;
+            }
             d.now = { rot: deg };
-            ghostAt(d.ghost, f.x, f.y, f.x + f.w, f.y + f.h, false);
-            d.ghost.style.transform = `rotate(${deg}deg)`;
+            d.ghost.style.transform = `${d.pin} rotate(${deg - (d.obj.rot || 0)}deg)`;
             return;
         }
         if (d.how === "move") {
