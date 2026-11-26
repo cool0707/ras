@@ -3602,14 +3602,11 @@
             let deg = (Math.atan2(e.clientY - d.center[1], e.clientX - d.center[0]) * 180) / Math.PI + 90;
             if (e.shiftKey) deg = Math.round(deg / 15) * 15;
             deg = ((Math.round(deg) % 360) + 360) % 360;
-            // A see-through copy of it turned so, the object where it is. (The copy is drawn
-            // turned as the object is: turned by the rest, after where frozen panes pin it.)
-            if (!d.ghost) {
-                d.ghost = copyOfObject(d.box);
-                d.pin = d.ghost.style.transform;
-            }
+            // The object itself turned so. (It is drawn turned as it is: turned by the rest, after
+            // where frozen panes pin it.)
+            if (d.pin === undefined) d.pin = d.box.style.transform;
             d.now = { rot: deg };
-            d.ghost.style.transform = `${d.pin} rotate(${deg - (d.obj.rot || 0)}deg)`;
+            d.box.style.transform = `${d.pin} rotate(${deg - (d.obj.rot || 0)}deg)`;
             return;
         }
         if (d.how === "move") {
@@ -3692,6 +3689,7 @@
     function unmove(d) {
         if (d.ghost) d.ghost.remove();
         d.box.classList.remove("sizing");
+        if (d.pin !== undefined) d.box.style.transform = d.pin;
         placeBox(d.box, d.from.x, d.from.y);
         for (const g of d.group || []) placeBox(g.obj.box, g.from.x, g.from.y);
     }
@@ -3727,8 +3725,10 @@
         const sized = d.how !== "rot" && d.how !== "adj" && d.how !== "move";
         // (A size sent: its copy stays until the sheet is drawn again, as the object is hidden.)
         if (d.ghost && !sized) d.ghost.remove();
-        if (d.how === "rot") objectEdit(d.obj, { rotation: d.now.rot });
-        else if (d.how === "adj") endAdjust(d);
+        if (d.how === "rot") {
+            if (objectEdit(d.obj, { rotation: d.now.rot })) undrag = () => unmove(d);
+            else unmove(d);
+        } else if (d.how === "adj") endAdjust(d);
         else if (moveObjects([[d.obj, d.now], ...(d.group || []).filter((g) => g.now).map((g) => [g.obj, g.now])])) undrag = () => unmove(d);
         else unmove(d);
     }
@@ -3751,9 +3751,9 @@
     const canLine = (obj) => movable(obj) && (obj.el === "sp" || obj.el === "pic" || obj.el === "cxnSp");
     const canTurn = (obj) => movable(obj) && !!obj.el && obj.el !== "graphicFrame";
     function objectEdit(obj, change) {
-        if (!movable(obj) || busy || !view) return;
+        if (!movable(obj) || busy || !view) return false;
         pickAfter(keyOf(obj));
-        postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), ...change }]);
+        return postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), ...change }]);
     }
     // The objects selected changed at once: `changeOf(obj)` is the change of each (null: not
     // that one, as a fill is not a control's).
