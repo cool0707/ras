@@ -2639,7 +2639,79 @@ module.exports = function createExcel(rt, addon, options) {
         return books.length;
     }
 
+    // ------------------------------------------------------------------------ the user (the sheet panel's run mode)
+
+    /**
+     * What the user does in the run mode of the editor's sheet panel (`$rt.serve`), done as Excel
+     * does it, with its events: a sheet of the project's workbook chosen (`Deactivate`,
+     * `Activate`), cells selected (`SelectionChange`), typed into or cleared (`Calculate`,
+     * `Change`), double-clicked and right-clicked (`BeforeDoubleClick`, `BeforeRightClick`:
+     * true when a handler cancelled what Excel does next).
+     */
+    function userSheet(name) {
+        const wb = projectBook();
+        const sheet = wb.$sheets.find((s) => sameName(s.Name, rt.cstr(name)));
+        if (sheet === undefined) throw new RasError(`シート ${name} がありません`, 9, "RAS");
+        return sheet;
+    }
+    const user = {
+        activate(name) {
+            userSheet(name).Activate();
+        },
+        select(name, address, active) {
+            const sheet = userSheet(name);
+            sheet.Activate();
+            const range = sheet.Range(rt.cstr(address));
+            const at = active ? sheet.Range(rt.cstr(active)) : range.$at(range.$r1, range.$c1);
+            // (The same selection again raises nothing, as in Excel.)
+            const same = app.$selection instanceof Range && app.$selection.$sheet === sheet && app.$selection.Address() === range.Address() && app.$activeCell && app.$activeCell.Address() === at.Address();
+            if (same) return;
+            app.$select(range);
+            app.$activeCell = at;
+            sheetEvent(sheet, "SelectionChange", [range]);
+        },
+        /** Text typed into cells (a formula with `=`), or nothing: their contents cleared. */
+        enter(name, address, text) {
+            const range = userSheet(name).Range(rt.cstr(address));
+            const t = rt.cstr(text);
+            if (t === "") range.ClearContents();
+            else range.Formula = t;
+        },
+        beforeDoubleClick(name, address) {
+            const sheet = userSheet(name);
+            const range = sheet.Range(rt.cstr(address));
+            return cancelled(sheet, "BeforeDoubleClick", range);
+        },
+        beforeRightClick(name, address) {
+            const sheet = userSheet(name);
+            const range = sheet.Range(rt.cstr(address));
+            return cancelled(sheet, "BeforeRightClick", range);
+        },
+        /** The code name of a sheet of the project's workbook (to find its controls' handlers). */
+        codeName(name) {
+            return userSheet(name).CodeName;
+        },
+        /** The sheet active, and its active cell (what the program left selected). */
+        where() {
+            const wb = projectBook();
+            const sheet = wb.$sheets[wb.$active];
+            const cell = app.$activeCell && app.$activeCell.$sheet === sheet ? app.$activeCell.Address(false, false) : null;
+            const selection = app.$selection instanceof Range && app.$selection.$sheet === sheet ? app.$selection.Address(false, false) : null;
+            return { sheet: sheet ? sheet.Name : null, cell, selection };
+        },
+        /** `Workbook.Open`: the workbook opened with its macros (run mode started). */
+        open() {
+            bookEvent(projectBook(), "Open", []);
+        },
+    };
+    function cancelled(sheet, event, range) {
+        if (!sheet.$wb.$project) return false;
+        const a = raise([sheet.CodeName], event, [range, false], sheet);
+        const b = raise(WORKBOOK, `Sheet${event}`, [sheet, range, a[1].v], sheet.$wb);
+        return rt.cbool(a[1].v) || rt.cbool(b[2].v);
+    }
+
     // The objects of the stand-in by the name of their Excel class (what `tools/standin/members.js` lists).
     const classes = { Application, Workbooks, Workbook, Sheets, Worksheet, Range, Names, Name, Sort: SortState, Hyperlinks, Hyperlink };
-    return { application, global, runMacro, finish, snapshot, restore, useWorkbook, saveAll, saveSnapshot, classes, Range, Worksheet, Workbook };
+    return { application, global, runMacro, finish, snapshot, restore, useWorkbook, saveAll, saveSnapshot, user, classes, Range, Worksheet, Workbook };
 };

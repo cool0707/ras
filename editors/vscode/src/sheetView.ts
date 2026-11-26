@@ -14,6 +14,14 @@
 //   handler is an `@on("CommandButton1.Click")` function of the sheet's file; a shape or a form
 //   control's is an `@on("ボタン 1.Click")` function too, whose generated macro
 //   (`Sheet1.ボタン1_click`) `ras book edit`'s `macro` assigns to it (`OnAction`).
+// - On the project's workbook, the switch at the right end of the ribbon's tabs puts the page in
+//   run mode: the program is built and runs on the stand-in for Excel (`ras-main.js --serve`,
+//   a `RunSession`), and what is done on the page raises its events there (`Workbook.Open` when
+//   the mode starts; `Activate`, `SelectionChange`, `Change`, `BeforeDoubleClick`,
+//   `BeforeRightClick`; an ActiveX control's `Click` and the others; a shape's or a form
+//   control's macro). The page is drawn from the workbook as the program left it; the workbook
+//   file is not changed (the run saves what it changed under build/debug/workbooks/, as a debug
+//   run does). Back in edit mode, the page shows the workbook file again.
 // - "RAS: シートプレビューを表示" on the RAS file of a worksheet (`objects/Sheet1.ras`) shows the
 //   project's workbook at that sheet: from the editor's title bar and context menu, and from
 //   the Explorer's context menu.
@@ -23,6 +31,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import { build as buildJs, channel as runOutput, standInRun } from "./debug";
+import { FormHost } from "./formRunner/host";
 import type { SheetResult } from "./sheetCommands";
 import { sheetOfRasFile } from "./sheetFile";
 import { findServerExecutable } from "./serverPath";
@@ -39,6 +49,8 @@ interface Shown {
 	/** The sheet the page was asked to show first. */
 	sheet?: string;
 	editable: boolean;
+	/** The run mode (the project's workbook): the program the page's events go to. */
+	run?: RunSession;
 }
 let shown: Shown | undefined;
 
@@ -73,7 +85,7 @@ function projectWorkbook(root: string): string | undefined {
  * The page of `ras book view` for a workbook. `drawings`: the workbook whose shapes, pictures and
  * controls are drawn (a workbook a run saved may not keep all of what they look like).
  */
-function page(root: string | undefined, file: string, before: string | undefined, title: string | undefined, drawings?: string, sheet?: string, editable = false): Promise<string> {
+function page(root: string | undefined, file: string, before: string | undefined, title: string | undefined, drawings?: string, sheet?: string, editable = false, run = false): Promise<string> {
 	const exe = findServerExecutable(setting("path"), root ?? path.dirname(file));
 	if (exe === undefined) {
 		return Promise.reject(new Error("ras 実行ファイルが見つかりません。設定 ras.path を確認してください。"));
@@ -93,6 +105,9 @@ function page(root: string | undefined, file: string, before: string | undefined
 	}
 	if (editable) {
 		args.push("--editable");
+	}
+	if (run) {
+		args.push("--run");
 	}
 	return ras(exe, args, root ?? path.dirname(file));
 }
@@ -119,12 +134,18 @@ function show(html: string, title: string, reveal: boolean, what?: Shown): void 
 	if (panel === undefined) {
 		panel = vscode.window.createWebviewPanel("ras.sheetView", title, { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }, { enableScripts: true, retainContextWhenHidden: true });
 		panel.onDidDispose(() => {
+			void shown?.run?.stop();
 			panel = undefined;
 			shown = undefined;
 		});
 		panel.webview.onDidReceiveMessage((message: unknown) => receive(message));
 	} else if (reveal) {
 		panel.reveal(undefined, true);
+	}
+	// Another workbook (or the same one shown afresh): the run mode ends.
+	if (shown?.run !== undefined && shown.run !== what?.run) {
+		void shown.run.stop();
+		shown.run = undefined;
 	}
 	shown = what;
 	panel.title = title;
@@ -297,7 +318,7 @@ function receive(message: unknown): void {
 	if (type === "ready") {
 		// The page asks whether its objects have events: those of the project's workbook do.
 		if (panel !== undefined && shown !== undefined && shown.editable && sheetFolder(shown) !== undefined) {
-			void panel.webview.postMessage({ type: "events", on: true });
+			void panel.webview.postMessage({ type: "events", on: true, run: shown.run !== undefined, session: shown.run?.id });
 		}
 		return;
 	}
@@ -318,7 +339,7 @@ function receive(message: unknown): void {
 		}
 		return;
 	}
-	if (type !== "edit" && type !== "undo" && type !== "redo" && type !== "event" && type !== "sheet") {
+	if (type !== "edit" && type !== "undo" && type !== "redo" && type !== "event" && type !== "sheet" && type !== "mode" && type !== "run") {
 		return;
 	}
 	queue = queue.then(async () => {
@@ -330,18 +351,25 @@ function receive(message: unknown): void {
 			if (!what.editable) {
 				throw new Error("このブックは、この表示では編集できません。");
 			}
+			if (what.run !== undefined && type !== "mode" && type !== "run") {
+				throw new Error("実行モードでは編集できません。リボンの右端のスイッチで「編集」モードに切り替えてください。");
+			}
 			const html =
-				type === "event"
-					? await openObjectEvent(what, message as ObjectEvent)
-					: type === "sheet"
-						? await sheetAction(what, message as SheetMessage)
-						: type === "edit"
-							? await edit(what, (message as { ops?: unknown }).ops ?? [])
-							: await travel(what, type === "redo");
+				type === "mode"
+					? await switchMode(what, (message as { run?: unknown }).run === true)
+					: type === "run"
+						? await runEvent(what, message as RunMessage)
+						: type === "event"
+							? await openObjectEvent(what, message as ObjectEvent)
+							: type === "sheet"
+								? await sheetAction(what, message as SheetMessage)
+								: type === "edit"
+									? await edit(what, (message as { ops?: unknown }).ops ?? [])
+									: await travel(what, type === "redo");
 			// (Another workbook may be shown by now.)
 			if (html !== undefined && panel !== undefined && shown === what) {
 				panel.webview.html = html;
-			} else if (html === undefined && type === "sheet" && panel !== undefined && shown === what) {
+			} else if (html === undefined && (type === "sheet" || type === "mode") && panel !== undefined && shown === what) {
 				// Nothing was done: the page takes edits again.
 				void panel.webview.postMessage({ type: "idle" });
 			}
@@ -351,6 +379,286 @@ function receive(message: unknown): void {
 			}
 		}
 	});
+}
+
+// ---- the run mode: the program, run on the stand-in for Excel, gets the page's events
+
+let extensionContext: vscode.ExtensionContext | undefined;
+
+/** What the page posts in run mode (`$rt.serve` of the run time says what each request does). */
+interface RunMessage {
+	id: number;
+	op: string;
+	[key: string]: unknown;
+}
+
+/** What the program answers a request with. */
+interface RunReply {
+	id: number;
+	ok: boolean;
+	error?: { code: number; description: string; file: string | null; line: number };
+	/** The errors the event handlers did not catch (the program goes on, as in Excel). */
+	errors?: { handler: string; code: number; description: string; file: string | null; line: number }[];
+	/** The sheet active and its selection, as the program left them. */
+	where?: { sheet: string | null; cell: string | null; selection: string | null };
+	/** The revision of the project's workbook (it changes with each change of its cells). */
+	rev?: number;
+	cancel?: boolean;
+	snapshotError?: string;
+}
+
+/** What starts an answer of `ras-main.js --serve` on its standard output. */
+const SERVE_MARK = "\u001eRAS ";
+let runIds = 0;
+
+/** `ras-main.js --serve`: what is done on the page goes to it, and it says what changed. */
+class RunSession {
+	readonly id = ++runIds;
+	/** Where the program writes the workbooks after each request (for the page). */
+	readonly dir = fs.mkdtempSync(path.join(os.tmpdir(), "ras-run-"));
+	rev = -1;
+	sheet: string | undefined;
+	/** Called when the program ends by itself (not by `stop`). */
+	onExit: ((code: number | null) => void) | undefined;
+	private child: cp.ChildProcess | undefined;
+	private readonly waiting = new Map<number, (reply: RunReply) => void>();
+	private next = 1;
+	private stopping = false;
+	private formHost: FormHost | undefined;
+
+	private constructor(readonly root: string) {}
+
+	/** Builds the program and starts it. */
+	static async start(context: vscode.ExtensionContext, root: string): Promise<RunSession> {
+		await buildJs(root);
+		const session = new RunSession(root);
+		try {
+			await session.spawn(context);
+		} catch (error) {
+			await session.stop();
+			throw error;
+		}
+		return session;
+	}
+
+	private async spawn(context: vscode.ExtensionContext): Promise<void> {
+		const { runtime, env, book } = standInRun(context);
+		if (book === undefined) {
+			throw new Error("Excel の代わりにブックを読み書きするアドオン（ras_book.node）が見つからないため、実行モードにできません。設定 ras.debug.bookAddon で場所を指定できます。");
+		}
+		const debugDir = path.join(this.root, "build", "debug");
+		let forms: string[] = [];
+		try {
+			forms = (JSON.parse(fs.readFileSync(path.join(debugDir, "ras-debug.json"), "utf8")) as { forms?: string[] }).forms ?? [];
+		} catch {
+			// (No forms.)
+		}
+		// The forms the handlers show are drawn in panels, as in a debug run.
+		if (forms.length > 0) {
+			this.formHost = await FormHost.start(context);
+			env.RAS_FORM_HOST = String(this.formHost.port);
+		}
+		const out = runOutput();
+		out.appendLine("> 実行モード（シートプレビュー）");
+		const child = cp.spawn(runtime, ["--enable-source-maps", path.join(debugDir, "ras-main.js"), "--serve", this.dir], { cwd: this.root, env, windowsHide: true });
+		this.child = child;
+		let pending = "";
+		child.stdout?.setEncoding("utf8");
+		child.stdout?.on("data", (chunk: string) => {
+			pending += chunk;
+			const lines = pending.split(/\r?\n/);
+			pending = lines.pop() ?? "";
+			for (const line of lines) {
+				this.line(line, out);
+			}
+		});
+		child.stderr?.setEncoding("utf8");
+		child.stderr?.on("data", (chunk: string) => out.append(chunk));
+		child.stdin?.on("error", () => undefined);
+		child.on("error", (error) => out.appendLine(`[ras] 実行モードのプロセスを起動できません: ${error.message}`));
+		child.on("exit", (code) => {
+			this.child = undefined;
+			for (const done of this.waiting.values()) {
+				done({ id: 0, ok: false, error: { code: 0, description: `プログラムが終了しました（終了コード ${code ?? "?"}）。`, file: null, line: 0 } });
+			}
+			this.waiting.clear();
+			this.formHost?.dispose();
+			this.formHost = undefined;
+			if (!this.stopping) {
+				this.onExit?.(code);
+			}
+		});
+	}
+
+	/** A line of the program's output: an answer, or what it printed. */
+	private line(line: string, out: vscode.OutputChannel): void {
+		const at = line.indexOf(SERVE_MARK);
+		if (at >= 0) {
+			if (at > 0) {
+				out.appendLine(line.slice(0, at));
+			}
+			try {
+				const reply = JSON.parse(line.slice(at + SERVE_MARK.length)) as RunReply;
+				const done = this.waiting.get(reply.id);
+				this.waiting.delete(reply.id);
+				done?.(reply);
+			} catch {
+				// (Not an answer after all.)
+			}
+			return;
+		}
+		out.appendLine(line);
+		// The stand-in answers a message box with OK and prints what it showed: shown here too.
+		const box = /^\[MsgBox\] (.*)$/.exec(line);
+		if (box !== null) {
+			void vscode.window.showInformationMessage(box[1]);
+		}
+	}
+
+	request(m: Record<string, unknown>): Promise<RunReply> {
+		const stdin = this.child?.stdin;
+		if (stdin === null || stdin === undefined || !stdin.writable) {
+			return Promise.resolve({ id: 0, ok: false, error: { code: 0, description: "実行モードのプログラムは終了しています。", file: null, line: 0 } });
+		}
+		const id = this.next++;
+		return new Promise((resolve) => {
+			this.waiting.set(id, resolve);
+			stdin.write(`${JSON.stringify({ ...m, id })}\n`);
+		});
+	}
+
+	/** Ends the program: it saves the workbooks it changed, as a run does. */
+	async stop(): Promise<void> {
+		this.stopping = true;
+		const child = this.child;
+		if (child !== undefined) {
+			await new Promise<void>((resolve) => {
+				const timer = setTimeout(() => {
+					child.kill();
+					resolve();
+				}, 5000);
+				child.once("exit", () => {
+					clearTimeout(timer);
+					resolve();
+				});
+				child.stdin?.end();
+			});
+		}
+		this.formHost?.dispose();
+		this.formHost = undefined;
+		fs.rm(this.dir, { recursive: true, force: true }, () => undefined);
+	}
+
+	/** The project's workbook as the program has it now (the last answer wrote it). */
+	snapshot(): string | undefined {
+		try {
+			const list = JSON.parse(fs.readFileSync(path.join(this.dir, "snapshot.json"), "utf8")) as { books: { file: string; project: boolean }[] };
+			const own = list.books.find((b) => b.project);
+			return own === undefined ? undefined : path.join(this.dir, own.file);
+		} catch {
+			return undefined;
+		}
+	}
+}
+
+/** What the program reported: the error that ended a request, those of the handlers. */
+function reportRun(reply: RunReply): void {
+	const at = (file: string | null, line: number) => (file ? `（${file}:${line}）` : "");
+	if (!reply.ok && reply.error !== undefined) {
+		void vscode.window.showErrorMessage(`RAS: 実行時エラー ${reply.error.code ? `${reply.error.code}: ` : ""}${reply.error.description}${at(reply.error.file, reply.error.line)}`);
+	}
+	for (const e of reply.errors ?? []) {
+		void vscode.window.showErrorMessage(`RAS: ${e.handler}: 実行時エラー ${e.code}: ${e.description}${at(e.file, e.line)}`);
+	}
+	if (reply.snapshotError !== undefined) {
+		runOutput().appendLine(`[ras] ブックを書き出せませんでした: ${reply.snapshotError}`);
+	}
+}
+
+/** The page of the run mode: the project's workbook as the program left it, with its drawings. */
+async function runPage(what: Shown, session: RunSession): Promise<string> {
+	const file = session.snapshot();
+	if (file === undefined) {
+		throw new Error("実行中のブックを読み取れませんでした。");
+	}
+	return page(what.root, file, undefined, path.basename(what.file), what.file, session.sheet, true, true);
+}
+
+/** The page's switch: run mode on (the program started) or off (the workbook file again). */
+async function switchMode(what: Shown, run: boolean): Promise<string | undefined> {
+	if (run) {
+		if (what.run !== undefined) {
+			return undefined;
+		}
+		if (sheetFolder(what) === undefined || what.root === undefined) {
+			throw new Error("実行モードは、ras.toml の project.workbook のブックで使えます。");
+		}
+		if (!vscode.workspace.isTrusted) {
+			throw new Error("ワークスペースを信頼するまで、プログラムは実行できません。");
+		}
+		if (extensionContext === undefined) {
+			throw new Error("拡張機能の準備ができていません。");
+		}
+		const context = extensionContext;
+		const root = what.root;
+		await vscode.workspace.saveAll(false);
+		const session = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: "RAS: 実行モードを開始しています…" }, () => RunSession.start(context, root));
+		const reply = await session.request({ op: "start" });
+		reportRun(reply);
+		if (!reply.ok) {
+			await session.stop();
+			return undefined;
+		}
+		session.rev = reply.rev ?? 0;
+		session.sheet = reply.where?.sheet ?? undefined;
+		what.run = session;
+		session.onExit = (code) => {
+			if (what.run !== session) {
+				return;
+			}
+			what.run = undefined;
+			void vscode.window.showWarningMessage(`RAS: 実行モードのプログラムが終了しました（終了コード ${code ?? "?"}）。編集モードに戻ります。`);
+			queue = queue
+				.then(async () => {
+					if (panel !== undefined && shown === what) {
+						panel.webview.html = await page(what.root, what.file, undefined, undefined, undefined, session.sheet, true);
+					}
+				})
+				.catch(() => undefined);
+		};
+		return runPage(what, session);
+	}
+	const session = what.run;
+	if (session === undefined) {
+		return undefined;
+	}
+	what.run = undefined;
+	await session.stop();
+	runOutput().appendLine("（実行モードを終了しました。プログラムが変えたブックは build/debug/workbooks/ に保存されます）");
+	// The page shows the sheet it showed last.
+	what.sheet = undefined;
+	return page(what.root, what.file, undefined, undefined, undefined, undefined, true);
+}
+
+/** What was done on the page in run mode: its events raised, the page drawn again when the workbook changed. */
+async function runEvent(what: Shown, m: RunMessage): Promise<string | undefined> {
+	const session = what.run;
+	if (session === undefined) {
+		throw new Error("実行モードではありません。");
+	}
+	const { type: _type, id, ...request } = m;
+	const reply = await session.request(request);
+	reportRun(reply);
+	const sheet = reply.where?.sheet ?? undefined;
+	if (reply.rev !== undefined && (reply.rev !== session.rev || (sheet !== undefined && sheet !== session.sheet))) {
+		session.rev = reply.rev;
+		session.sheet = sheet;
+		return runPage(what, session);
+	}
+	if (panel !== undefined && shown === what) {
+		void panel.webview.postMessage({ type: "runDone", id, cancel: reply.cancel === true });
+	}
+	return undefined;
 }
 
 // ---- the sheets: inserted, removed, renamed and copied from the tabs of the page
@@ -844,8 +1152,10 @@ class Follower implements vscode.DebugAdapterTracker {
 	}
 }
 
-export function registerSheetView(): vscode.Disposable {
+export function registerSheetView(context: vscode.ExtensionContext): vscode.Disposable {
+	extensionContext = context;
 	return vscode.Disposable.from(
+		{ dispose: () => void shown?.run?.stop() },
 		vscode.commands.registerCommand("ras.book.show", async (resource?: unknown) => {
 			const file = resource instanceof vscode.Uri ? resource.fsPath : await pickWorkbook();
 			if (file !== undefined) {

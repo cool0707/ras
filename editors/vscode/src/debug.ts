@@ -56,7 +56,7 @@ const formHosts = new Map<string, FormHost>();
 let nextId = 1;
 let output: vscode.OutputChannel | undefined;
 
-function channel(): vscode.OutputChannel {
+export function channel(): vscode.OutputChannel {
 	output ??= vscode.window.createOutputChannel("RAS Debug");
 	return output;
 }
@@ -330,7 +330,7 @@ function rasExecutable(root: string): string {
 }
 
 /** Runs `ras build --target js`; rejects with the compiler's messages when it fails. */
-function build(root: string): Promise<void> {
+export function build(root: string): Promise<void> {
 	const exe = rasExecutable(root);
 	return new Promise((resolve, reject) => {
 		cp.execFile(exe, ["--project", root, "build", "--target", "js"], { cwd: root, windowsHide: true }, (error, stdout, stderr) => {
@@ -360,6 +360,22 @@ async function pickEntry(entries: string[], forms: string[]): Promise<string | u
 	const items = entries.map((entry) => ({ label: entry, description: isForm(entry) ? "ユーザーフォームを表示" : undefined }));
 	const picked = await vscode.window.showQuickPick(items, { title: "RAS: デバッグする関数", placeHolder: "実行する関数かフォームを選んでください" });
 	return picked?.label;
+}
+
+/**
+ * What the run mode of the sheet panel runs the program with (the stand-in for Excel, spec
+ * §14.10.8): the `ras_book` addon, the runtime, and the environment of a debug run without COM.
+ */
+export function standInRun(context: vscode.ExtensionContext): { runtime: string; env: NodeJS.ProcessEnv; book: string | undefined } {
+	const book = bookAddon(context, { type: DEBUG_TYPE, request: "launch", name: "" });
+	const env: NodeJS.ProcessEnv = { ...process.env, ELECTRON_RUN_AS_NODE: "1" };
+	for (const key of ["NODE_OPTIONS", "VSCODE_INSPECTOR_OPTIONS", "RAS_COM_ADDON", "RAS_BOOK_ADDON", "RAS_ANSWERS", "RAS_RUN_REPORT", "RAS_MOCK_HOST", "RAS_ENTRY"]) {
+		delete env[key];
+	}
+	if (book !== undefined) {
+		env.RAS_BOOK_ADDON = book;
+	}
+	return { runtime: setting("debug.runtimeExecutable") || process.execPath, env, book };
 }
 
 /** The `ras_com` addon: explicit path, the one shipped with the extension, or one next to `ras`. */

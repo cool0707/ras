@@ -36,7 +36,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		rasServer.onDidReceiveSyncStatus((params) => statusBar.setSyncStatus(params)),
 		registerCommands(rasServer, vbaView),
 		registerDebugging(context),
-		registerSheetView(),
+		registerSheetView(context),
 		registerSheetCommands(rasServer),
 		UserFormDesignerProvider.register(context),
 		registerUserFormCommands(),

@@ -1093,6 +1093,7 @@
             if (movable(obj)) box.classList.add("movable");
             box.addEventListener("click", (e) => {
                 e.stopPropagation();
+                if (runMode) return;
                 // (Ctrl or Shift: the mouse going down added it or took it out. One of several
                 // selected stays so, as it was dragged with them.)
                 if (e.ctrlKey || e.metaKey || e.shiftKey || (isSelected(obj) && others.length)) return;
@@ -1100,6 +1101,15 @@
             });
             // Dragged: moved (in the panel that edits the workbook).
             box.addEventListener("mousedown", (e) => {
+                // Run mode: pressed, as a button is (its events when the mouse goes up on it).
+                if (runMode) {
+                    if (e.button === 0) {
+                        e.preventDefault();
+                        runPress = obj;
+                        box.classList.add("pressed");
+                    }
+                    return;
+                }
                 if (e.button !== 0 || drawingShape) return;
                 // Ctrl or Shift: added to the objects selected (or taken out of them).
                 if ((e.ctrlKey || e.metaKey || e.shiftKey) && movable(obj) && selected && movable(selectedObj)) {
@@ -1122,8 +1132,19 @@
             });
             // As the form designer: a double click opens the default event, the menu the others.
             // Without events, a shape's text is edited.
+            box.addEventListener("mouseup", (e) => {
+                box.classList.remove("pressed");
+                if (!runMode || e.button !== 0 || runPress !== obj) return;
+                runPress = null;
+                runClick(obj, e);
+            });
+            box.addEventListener("mouseleave", () => box.classList.remove("pressed"));
             box.addEventListener("dblclick", (e) => {
                 e.stopPropagation();
+                if (runMode) {
+                    e.preventDefault();
+                    return;
+                }
                 if (!hasEvents(obj)) {
                     if (movable(obj) && obj.text !== undefined) {
                         e.preventDefault();
@@ -1139,6 +1160,7 @@
             box.addEventListener("contextmenu", (e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                if (runMode) return;
                 if (!isSelected(obj)) selectObject(box, obj);
                 const items = objectItems(obj);
                 if (items.length) showMenu(e.clientX, e.clientY, items);
@@ -1247,6 +1269,7 @@
         sels[sheet.name] = { kind, nr, nc, fr, fc, areas };
         remember({ sels });
         paint(scroll);
+        if (runMode) runSelectSoon();
     }
     // Every area of the selection, the last one (that of the active cell) last.
     const allAreas = () => (sel ? areas.concat([{ kind: sel.kind, r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 }]) : []);
@@ -1553,7 +1576,16 @@
         }
         if (filterButton(e)) return;
         const hit = hitOf(e.target);
-        if (hit && hit.kind === "cells" && !entry) beginEntry("edit", null, "cell");
+        if (hit && hit.kind === "cells" && !entry) {
+            // Run mode: `BeforeDoubleClick` first; the cell is typed into unless a handler cancels.
+            if (runMode && view && sel) {
+                postRun({ op: "doubleClick", sheet: view.sheet.name, range: address(sel.ar, sel.ac) }, (m) => {
+                    if (!m.cancel && !entry) beginEntry("edit", null, "cell");
+                });
+                return;
+            }
+            beginEntry("edit", null, "cell");
+        }
     });
 
     // ---- typing into cells
@@ -2069,6 +2101,7 @@
             showError(PROTECTED);
             return false;
         }
+        if (runMode) return runEdit(ops);
         if (!keepClip) setClip(null);
         setBusy(true);
         vscode.postMessage({ type: "edit", ops });
@@ -2076,6 +2109,10 @@
     }
     function postHistory(type) {
         if (!editable || busy) return;
+        if (runMode) {
+            showError("実行モードでは、元に戻す・やり直しはできません。");
+            return;
+        }
         setClip(null);
         setBusy(true);
         vscode.postMessage({ type });
@@ -2114,6 +2151,9 @@
         const m = e.data;
         if (m && m.type === "events") {
             if (m.on) enableEvents();
+            setRunMode(!!m.run, m.session);
+        } else if (m && m.type === "runDone") {
+            runDone(m);
         } else if (m && m.type === "fonts") {
             if (Array.isArray(m.names)) takeFonts(m.names);
         } else if (m && m.type === "idle") {
@@ -5469,6 +5509,14 @@
         if (!hit || e.target === ed) return;
         e.preventDefault();
         e.stopPropagation();
+        // Run mode: `BeforeRightClick` first; the menu opens unless a handler cancels.
+        if (runMode && view && sel) {
+            const [x, y, kind] = [e.clientX, e.clientY, sel.kind];
+            postRun({ op: "rightClick", sheet: view.sheet.name, range: allAreas().map(rangeText).join(",") }, (m) => {
+                if (!m.cancel) openMenu(x, y, kind);
+            });
+            return;
+        }
         openMenu(e.clientX, e.clientY, sel ? sel.kind : hit.kind);
     });
     document.addEventListener("mousedown", (e) => {
@@ -5549,12 +5597,154 @@
         const on = hasEvents(selectedObj);
         b.disabled = !on;
         if (tools.macroGroup) tools.macroGroup.hidden = !events;
+        if (tools.modeSwitch) tools.modeSwitch.hidden = !events;
     }
     function enableEvents() {
         events = true;
         refreshEventButton();
         renderPane();
     }
+
+    // ---- the run mode: what is done on the sheet raises the events of the program
+    // The switch at the right end of the ribbon's tabs (with the project's workbook): 編集 edits
+    // the workbook file; 実行 runs the program on the stand-in for Excel, where what the user does
+    // raises its events (spec §14.10.10): a sheet chosen (`Deactivate`, `Activate`), cells
+    // selected (`SelectionChange`), typed into or cleared (`Change`), double-clicked and
+    // right-clicked (`BeforeDoubleClick`, `BeforeRightClick`), an ActiveX control clicked
+    // (`GotFocus`, `MouseDown`, `MouseUp`, `Click`, then `LostFocus`), a shape or a form control
+    // clicked (its macro). The editor draws the page again when the program changed the workbook.
+
+    let runMode = !!(data.run && editable);
+    // The object pressed (the mouse down on it), and the ActiveX control that has the focus.
+    let runPress = null;
+    // What waits for its answer: { id, after }.
+    let runWait = null;
+    let runIds = 0;
+    let runTimer = 0;
+    const RUN_ONLY = "実行モードでは、セルへの入力と削除だけができます。ほかの編集は、リボンの右端のスイッチで「編集」モードに切り替えてから行ってください。";
+    function setRunMode(on, session) {
+        runMode = on && editable;
+        document.body.classList.toggle("run-mode", runMode);
+        showMode();
+        if (tools.modeSwitch) {
+            for (const b of tools.modeSwitch.querySelectorAll("button")) {
+                const pressed = (b.dataset.mode === "run") === runMode;
+                b.classList.toggle("on", pressed);
+                b.setAttribute("aria-pressed", String(pressed));
+            }
+        }
+        if (!runMode) return;
+        // A new run: what the program was told (the sheet, the selection, the focus) is told again.
+        if (session !== undefined && saved.runSession !== session) remember({ runSession: session, runSheet: null, runSel: null, runFocus: null });
+        // (No object stays selected: they are clicked now.)
+        if (selectedObj) {
+            clearSelection();
+            if (sel) paint(false);
+        }
+        runSelectSoon();
+    }
+    function askMode(run) {
+        if (run === runMode || busy || !events) return;
+        if (entry) cancelEntry();
+        closeMenu();
+        setBusy(true);
+        vscode.postMessage({ type: "mode", run });
+    }
+    // `after`: the page waits for the answer (busy), then calls it with it ({ cancel }).
+    function postRun(m, after) {
+        // What was selected is told first: `SelectionChange` comes before what is done there.
+        // (Not before cells typed into: Enter moved the selection after them, and Excel raises
+        // `Change` before that `SelectionChange`.)
+        if (m.op !== "select" && m.op !== "activate" && m.op !== "enter") runSelectNow();
+        const id = ++runIds;
+        if (after) {
+            runWait = { id, after };
+            setBusy(true);
+        }
+        vscode.postMessage({ type: "run", id, ...m });
+    }
+    function runDone(m) {
+        if (!runWait || runWait.id !== m.id) return;
+        const after = runWait.after;
+        runWait = null;
+        setBusy(false);
+        focusGrid();
+        after(m);
+    }
+    // Cells typed into or cleared (one text for all the ranges); the other edits are refused.
+    function runEdit(ops) {
+        const cells = ops.filter((o) => o.op !== "validate");
+        const text = (o) => (o.op === "clear" ? "" : o.text);
+        if (!cells.length || !cells.every((o) => (o.op === "set" || o.op === "clear") && o.sheet === cells[0].sheet && text(o) === text(cells[0]))) {
+            showError(RUN_ONLY);
+            return false;
+        }
+        postRun({ op: "enter", sheet: cells[0].sheet, ranges: cells.map((o) => o.range), text: text(cells[0]) }, () => {});
+        return true;
+    }
+    // The selection, told when it has settled (not while the mouse drags it).
+    function runSelectSoon() {
+        clearTimeout(runTimer);
+        runTimer = setTimeout(runSelectNow, 150);
+    }
+    function runSelectNow() {
+        clearTimeout(runTimer);
+        if (!runMode || !view || !sel) return;
+        if (drag) {
+            runSelectSoon();
+            return;
+        }
+        const sheet = view.sheet.name;
+        const range = allAreas().map(rangeText).join(",");
+        const active = address(sel.ar, sel.ac);
+        const key = `${range}|${active}`;
+        if (saved.runSheet !== sheet) {
+            // Another sheet: `Activate` (its selection is the one it had: no `SelectionChange`).
+            remember({ runSheet: sheet, runSel: key, runFocus: null });
+            postRun({ op: "activate", sheet });
+            return;
+        }
+        if (saved.runSel === key) return;
+        remember({ runSel: key });
+        runBlur();
+        postRun({ op: "select", sheet, range, active });
+    }
+    // The ActiveX control that had the focus loses it.
+    function runBlur(next) {
+        const had = saved.runFocus;
+        if (!had || had === next || !view) return;
+        remember({ runFocus: next || null });
+        postRun({ op: "control", sheet: view.sheet.name, object: had, events: [{ event: "LostFocus" }] });
+    }
+    // An object clicked: an ActiveX control's events, a shape's or a form control's macro.
+    function runClick(obj, e) {
+        if (busy || !view) return;
+        const sheet = view.sheet.name;
+        if (obj.activex !== undefined && obj.name) {
+            // Where on it, in points (Excel's X, Y), and the keys held (Shift 1, Ctrl 2, Alt 4).
+            const r = obj.box.getBoundingClientRect();
+            const scale = obj.box.offsetWidth ? obj.box.offsetWidth / (r.width || 1) : 1;
+            const x = Math.round((e.clientX - r.left) * scale * 0.75 * 100) / 100;
+            const y = Math.round((e.clientY - r.top) * scale * 0.75 * 100) / 100;
+            const shift = (e.shiftKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.altKey ? 4 : 0);
+            const list = [];
+            if (saved.runFocus !== obj.name) {
+                runBlur(obj.name);
+                remember({ runFocus: obj.name });
+                list.push({ event: "GotFocus" });
+            }
+            list.push({ event: "MouseDown", args: [1, shift, x, y] }, { event: "MouseUp", args: [1, shift, x, y] }, { event: "Click" });
+            postRun({ op: "control", sheet, object: obj.name, events: list }, () => {});
+            return;
+        }
+        if (obj.onAction || obj.macro) {
+            runBlur();
+            postRun({ op: "macro", sheet, object: obj.name || "", macro: obj.macro || "" }, () => {});
+        }
+    }
+    document.addEventListener("mouseup", () => {
+        runPress = null;
+    });
     if (editable) vscode.postMessage({ type: "ready" });
 
     // ---- formats, merged cells, sorting and the filter: the toolbar, the menus, the keys
@@ -8675,6 +8865,26 @@
         ev.disabled = true;
         tools.macroGroup = ev.closest(".rgroup");
 
+        // The mode, at the right end of the tabs (with the project's workbook): 編集 edits the
+        // workbook file, 実行 raises the program's events for what is done on the sheet.
+        const mode = tabs.appendChild(el("div", "rmode"));
+        mode.hidden = true;
+        mode.setAttribute("role", "group");
+        mode.setAttribute("aria-label", "モード");
+        for (const [key, label, title] of [
+            ["edit", "編集", "編集モード: ブックのファイルを編集します。図形・コントロールは選択して動かせます（ダブルクリックでイベントのコード）"],
+            ["run", "実行", "実行モード: プログラムを Excel の代役で実行し、セルの選択・入力、シートの切り替え、コントロール・図形のクリックでイベントを起こします（ブックのファイルは変えません）"],
+        ]) {
+            const b = mode.appendChild(el("button", `mode-${key}`));
+            b.type = "button";
+            b.dataset.mode = key;
+            b.title = title;
+            b.appendChild(el("span", "mico", key === "run" ? "▶" : "✎"));
+            b.appendChild(el("span", null, label));
+            b.addEventListener("click", () => askMode(key === "run"));
+        }
+        tools.modeSwitch = mode;
+
         if (!panels[shown] || panels[shown].tab.hidden) shown = "home";
         show(shown, true);
         ribbon.classList.toggle("collapsed", collapsed);
@@ -8708,6 +8918,7 @@
         tools.freeze.classList.toggle("on", !!(view.fr || view.fc));
     }
     makeRibbon();
+    setRunMode(runMode);
 
     // ---- the widths of columns and the heights of rows: the edges of the headers
 
@@ -9997,6 +10208,8 @@
 
     function showMode() {
         $("mode").textContent = !entry ? "準備完了" : entry.point ? "参照" : entry.mode === "edit" ? "編集" : "入力";
+        // (Run mode: said before it, as a badge.)
+        $("mode").classList.toggle("running", runMode);
     }
     // A number as the status bar shows it: in the number format of the active cell, as Excel
     // 2021 shows it (General in at most 11 characters, without separators).
@@ -11538,6 +11751,10 @@
     // `show`: the sheet shown when the page is drawn again.
     function postSheet(m, show) {
         if (!editable || busy) return;
+        if (runMode) {
+            showError(RUN_ONLY);
+            return;
+        }
         setClip(null);
         setBusy(true);
         if (show) remember({ sheet: show });
@@ -11777,7 +11994,7 @@
         if (list.length && saved.sheet !== first.name) go(first.name, list[0].a);
         // Drawn again (after an edit, at a stop of the debugger): where it was.
         if (again) scrollTo(again.x, again.y);
-        if (view) pickObject(view);
+        if (view && !runMode) pickObject(view);
         focusGrid();
         // The box of find and replace, open again after a replacement.
         if (finder.open) {
