@@ -141,6 +141,7 @@ pub fn collect(inputs: Vec<SourceInput>, config: Config) -> Program {
     // The files of sheets come first: their code names get the type with the file's members.
     c.add_forms();
     c.add_sheet_code_names();
+    c.add_module_names();
     for m in 0..c.prog.modules.len() {
         c.resolve_imports(m);
     }
@@ -1481,6 +1482,20 @@ impl Collector {
         }
     }
 
+    /// The standard modules of `src/` are globals, like the code names of sheets: another
+    /// module calls `Main.hoge()` without `import` (spec §12.1.2). Their extension methods are
+    /// in scope only where the module is imported.
+    fn add_module_names(&mut self) {
+        for m in 0..self.prog.modules.len() {
+            let md = &self.prog.modules[m];
+            if md.kind != ModuleKind::User || md.form.is_some() || md.is_test() {
+                continue;
+            }
+            let name = md.vba_name.clone();
+            self.prog.globals.entry(name).or_insert(Sym::Module(m));
+        }
+    }
+
     fn resolve_imports(&mut self, m: ModuleId) {
         if self.prog.modules[m].kind == ModuleKind::TypeDef {
             return;
@@ -2517,7 +2532,9 @@ pub fn import_target(prog: &Program, m: ModuleId, source: &str) -> Option<Module
     let key = key.strip_suffix(".ras").unwrap_or(&key);
     prog.modules
         .iter()
-        .position(|x| x.kind == ModuleKind::User && x.key == key)
+        .position(|x| x.kind == ModuleKind::User && x.key == key && !x.is_test())
+        // The path from the file itself: `objects/Sheet1.ras` imports `../src/main`.
+        .or_else(|| import_by_path(prog, m, source).filter(|&t| !prog.modules[t].is_test()))
 }
 
 /// The bundled class that implements `Map<K, V>` for struct values.

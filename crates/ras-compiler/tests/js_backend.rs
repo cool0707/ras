@@ -359,6 +359,21 @@ fn modules_in_subdirectories_and_import_cycles() {
 }
 
 #[test]
+fn standard_modules_are_called_by_name_without_import() {
+    let a = "export let hits = 0;\nexport function ping(n: int): int {\n    hits++;\n    return n <= 0 ? 0 : B.pong(n - 1) + 1;\n}\nexport function run() {\n    console.log(ping(5), A.hits);\n}\n";
+    let b = "export function pong(n: int): int {\n    return n <= 0 ? 0 : A.ping(n - 1) + 1;\n}\n";
+    let files = [("a", a), ("util/b", b)];
+    let (_, out) = compile(&files);
+    if !has_node() {
+        return;
+    }
+    let p = Project::new("module_names", &files, &out);
+    let (stdout, stderr, ok) = p.run("A.run", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout, "5 3\n");
+}
+
+#[test]
 fn unsupported_constructs_are_reported() {
     let src = "declare module \"user32\" {\n    function GetForegroundWindow(): ptr;\n}\nexport function run() {\n    const h = GetForegroundWindow();\n}\n";
     let (_, out) = compile(&[("m", src)]);
