@@ -1266,9 +1266,12 @@ module.exports = function install(rt) {
         const tag = `RAS.FilePicker|type=${num(c.dialogType, 3)}|multi=${c.allowMultiSelect === true ? 1 : 0}|title=${esc(str(c.title))}|buttonName=${esc(str(c.buttonName))}|initial=${esc(str(c.initialFileName))}|view=${num(c.initialView, 0)}|filterIndex=${num(c.filterIndex, 1)}|filters=${filters.map((f) => `${esc(f.description)},${esc(f.extensions)}`).join(";")}`;
         const base = { parentId: c.parentId, zIndex: c.zIndex, controlTipText: c.controlTipText, enabled: c.enabled, visible: c.visible, font: c.font };
         const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null));
+        // At 10 pt Excel clips the default "..." (ras-form picker.rs DEFAULT_BUTTON_FONT_SIZE).
+        const caption = typeof c.buttonCaption === "string" ? c.buttonCaption : "...";
+        const buttonFont = caption === "..." && c.font && typeof c.font.size === "number" ? { ...c.font, size: 9 } : c.font;
         return [
             clean({ ...base, id: `${c.id || c.name}_Text`, name: `${c.name}_Text`, type: "TextBox", left, top, width: Math.max(width - bw, 0.75), height, text: c.text ?? (typeof c.value === "string" ? c.value : undefined), tag: c.tag, tabIndex: c.tabIndex, foreColor: c.foreColor, backColor: c.backColor, locked: c.locked }),
-            clean({ ...base, id: `${c.id || c.name}_Button`, name: `${c.name}_Button`, type: "CommandButton", left: left + width - bw, top, width: bw, height, caption: typeof c.buttonCaption === "string" ? c.buttonCaption : "...", tag, takeFocusOnClick: false }),
+            clean({ ...base, id: `${c.id || c.name}_Button`, name: `${c.name}_Button`, type: "CommandButton", left: left + width - bw, top, width: bw, height, caption, font: buttonFont, tag, takeFocusOnClick: false }),
         ];
     }
 
