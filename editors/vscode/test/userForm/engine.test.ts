@@ -66,6 +66,36 @@ describe("FormSpec editing", () => {
 		assert.equal(isStructuralOperation({ type: "addControl", control: { id: "t", name: "TextBox1", type: "TextBox", left: 0, top: 0, width: 72, height: 18, backStyle: 0 } }), false);
 	});
 
+	it("creates frames, multipages and tab strips with the container's BackColor", () => {
+		const red = { kind: "rgb", value: "#FF0000" };
+		const blue = { kind: "rgb", value: "#0000FF" };
+		const green = { kind: "rgb", value: "#00FF00" };
+		const text = form(
+			[
+				{ ...frame, backColor: blue },
+				{ id: "m1", name: "MultiPage1", type: "MultiPage", left: 160, top: 8, width: 72, height: 160, selectedIndex: 0, backColor: green },
+				{ id: "p1", parentId: "m1", name: "Page1", type: "Page", caption: "Page1", left: 0, top: 0, width: 0, height: 0 },
+			],
+			{ backColor: red },
+		);
+		const parsed = parseSpec(text);
+		assert.ok(parsed.ok);
+		const document = designerDocument(previewDocument(parsed.spec));
+		for (const type of ["Frame", "MultiPage", "TabStrip"] as const) {
+			const created = createControl(document, type, 0, 0, false, () => "x", undefined, true, { width: 40, height: 40 })!;
+			assert.deepEqual(created.backColor, red);
+			const op = { type: "addControl", control: created } as const;
+			assert.ok(isStructuralOperation(op));
+			assert.deepEqual(control(apply(text, op), created.id).backColor, red);
+			assert.deepEqual(createControl(document, type, 0, 0, false, () => "x", "f1", true, { width: 40, height: 40 })!.backColor, blue);
+			assert.deepEqual(createControl(document, type, 0, 0, false, () => "x", "p1", true, { width: 40, height: 40 })!.backColor, green);
+		}
+		assert.equal(Object.hasOwn(createControl(document, "CommandButton", 0, 0, false, () => "x")!, "backColor"), false);
+		const plain = designerDocument(previewDocument((parseSpec(form()) as any).spec));
+		assert.equal(Object.hasOwn(createControl(plain, "Frame", 0, 0, false, () => "x")!, "backColor"), false);
+		assert.equal(isStructuralOperation({ type: "addControl", control: { id: "t", name: "TextBox1", type: "TextBox", left: 0, top: 0, width: 72, height: 18, backColor: red } }), false);
+	});
+
 	it("creates controls with the form's font, else the system UI font at 10pt", () => {
 		const documentOf = (text: string) => {
 			const parsed = parseSpec(text);

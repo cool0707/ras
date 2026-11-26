@@ -1,6 +1,6 @@
 /* Ported from xlflow (https://github.com/harumiWeb/xlflow), MIT License,
    Copyright (c) 2026 harumiWeb. See THIRD_PARTY_NOTICES.md. */
-import type { DesignerDocument, FontValue, SpecControl } from "./protocol";
+import type { ColorValue, DesignerDocument, FontValue, SpecControl } from "./protocol";
 import { gridSize, isDesignerFrame, isDesignerPage, parentBounds, stableDelta } from "./geometry";
 
 // Shared by rendering fallback and Toolbox creation. Dimensions are points,
@@ -28,7 +28,7 @@ export const controlMetadata = [
 export type ToolboxType = (typeof controlMetadata)[number]["type"];
 export type NewControl = Pick<
   SpecControl,
-  "id" | "parentId" | "name" | "caption" | "selectedIndex" | "tabs" | "backStyle" | "font"
+  "id" | "parentId" | "name" | "caption" | "selectedIndex" | "tabs" | "backStyle" | "backColor" | "font"
 > & {
   type: ToolboxType;
   left: number;
@@ -44,6 +44,25 @@ export const transparentOnCreate: ReadonlySet<ToolboxType> = new Set([
   "CheckBox",
   "OptionButton",
 ]);
+
+// Containers with no transparent BackStyle in MSForms. As in the VBA editor, a new
+// one takes the BackColor of the form, frame or page it is placed on.
+export const containerColorOnCreate: ReadonlySet<ToolboxType> = new Set([
+  "Frame",
+  "MultiPage",
+  "TabStrip",
+]);
+
+/** The BackColor shown behind a control placed in `parentId` (a Page shows its MultiPage's). */
+export function containerBackColor(
+  document: DesignerDocument,
+  parentId?: string,
+): ColorValue | undefined {
+  let parent = document.controls.find((c) => c.id === parentId);
+  if (parent?.type.toLowerCase() === "page")
+    parent = document.controls.find((c) => c.id === parent!.parentId);
+  return (parentId ? parent?.backColor : document.backColor) ?? undefined;
+}
 
 /** The size new forms and controls are made with, in points. */
 export const newFontSize = 10;
@@ -122,6 +141,10 @@ export function createControl(
     if (parentId) control.parentId = parentId;
     if ("caption" in metadata && metadata.caption) control.caption = control.name;
     if (transparentOnCreate.has(type)) control.backStyle = 0;
+    if (containerColorOnCreate.has(type)) {
+      const backColor = containerBackColor(document, parentId);
+      if (backColor) control.backColor = { kind: backColor.kind, value: backColor.value };
+    }
     // As in the VBA editor, a new control takes the form's font; a form without one
     // gives the system UI font instead of MSForms' MS UI Gothic 9pt.
     if (!fontless.has(type)) {
