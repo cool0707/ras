@@ -792,6 +792,9 @@ module.exports = function install(rt) {
                 Zoom: 100, ScrollBars: 0, KeepScrollBarsVisible: 3, ScrollWidth: 0, ScrollHeight: 0, ScrollLeft: 0, ScrollTop: 0,
                 SpecialEffect: 0, Cycle: 0, MousePointer: 0, DrawBuffer: 32000, HelpContextID: 0, RightToLeft: false, WhatsThisButton: false, WhatsThisHelp: false,
                 PictureAlignment: 2, PictureSizeMode: 0, PictureTiling: false,
+                // RAS (spec §14.11.17): the user resizes the form by its border; the least and
+                // greatest inside size (0: no limit). Not properties of the form's code.
+                Resizable: false, MinimumWidth: 0, MinimumHeight: 0, MaximumWidth: 0, MaximumHeight: 0,
             };
             // The form's plain properties (form.showModal ...), and the legacy property bag.
             const plain = Object.entries(f).filter(([k, v]) => !["name", "caption", "width", "height", "font", "foreColor", "backColor", "borderStyle", "observed", "properties", "picture", "mouseIcon"].includes(k) && v !== null && (typeof v !== "object" || k.toLowerCase().endsWith("color")));
@@ -938,6 +941,31 @@ module.exports = function install(rt) {
         }
         get Visible() {
             return this.$visible;
+        }
+        /** `size` of the axis "Width" / "Height" within the form's limits (spec §14.11.17). */
+        $limit(axis, size) {
+            const min = this.$s[`Minimum${axis}`];
+            const max = this.$s[`Maximum${axis}`];
+            if (max > 0 && size > max) size = max;
+            if (min > 0 && size < min) size = min;
+            return size;
+        }
+        /**
+         * Gives the inside of the form a new size within its limits: the anchored controls follow,
+         * then UserForm_Resize runs (as in Excel, once for both axes the user changed at once).
+         */
+        $resizeTo(width, height) {
+            const s = this.$s;
+            width = this.$limit("Width", width);
+            height = this.$limit("Height", height);
+            const dw = width - s.Width;
+            const dh = height - s.Height;
+            if (!dw && !dh) return;
+            s.Width = width;
+            s.Height = height;
+            this.$touch();
+            this.$followAnchors(dw, dh);
+            this.$fire("UserForm", "Resize", []);
         }
         get InsideWidth() {
             return this.$s.Width;
@@ -1203,6 +1231,12 @@ module.exports = function install(rt) {
                 case "scroll":
                     ctl.$setPosition(rt.toInt(msg.value), null);
                     break;
+                case "resize":
+                    // The user dragged the border of a form that can be resized (spec §14.11.17).
+                    if (this.$s.Resizable) this.$resizeTo(rt.cnum(msg.width), rt.cnum(msg.height));
+                    // The host draws the size that came of it (the limits, the form's code).
+                    this.$touch();
+                    break;
                 case "close":
                     // Kept open by QueryClose: the host redraws the form it closed.
                     if (!this.$queryClose(0)) this.$touch();
@@ -1244,14 +1278,12 @@ module.exports = function install(rt) {
             set(v) {
                 const old = this.$s[name];
                 const value = typeof old === "boolean" ? rt.cbool(v) : typeof old === "string" ? rt.cstr(v) : rt.cnum(v);
+                // A new size moves the anchored controls, then UserForm_Resize runs (as in Excel).
+                if (name === "Width") return this.$resizeTo(value, this.$s.Height);
+                if (name === "Height") return this.$resizeTo(this.$s.Width, value);
                 if (old === value) return;
                 this.$s[name] = value;
                 this.$touch();
-                // A new size moves the anchored controls, then UserForm_Resize runs (as in Excel).
-                if (name === "Width" || name === "Height") {
-                    this.$followAnchors(name === "Width" ? value - old : 0, name === "Height" ? value - old : 0);
-                    this.$fire("UserForm", "Resize", []);
-                }
             },
         });
     }

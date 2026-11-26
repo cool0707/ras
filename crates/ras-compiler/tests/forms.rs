@@ -28,6 +28,7 @@ fn compile(form: &str, src: &[(&str, &str)]) -> (Vec<String>, Vec<ras_compiler::
             control("pages", "MultiPage"),
             control("page1", "Page"),
         ],
+        resizable: false,
     }];
     let mut sources: Vec<SourceInput> = src
         .iter()
@@ -278,6 +279,7 @@ fn vba_code_behind_converts_to_ras_that_compiles() {
             control("pages", "MultiPage"),
             control("page1", "Page"),
         ],
+        resizable: false,
     };
     let converted = ras_compiler::vba2ras::convert_form(SAMPLE_VBA, &decl);
     println!("{}", converted.text);
@@ -348,6 +350,7 @@ fn unsupported_vba_is_kept_as_todo() {
             control("btnOK", "CommandButton"),
             control("chk", "CheckBox"),
         ],
+        resizable: false,
     };
     let converted = ras_compiler::vba2ras::convert_form(HARD_VBA, &decl);
     println!("{}", converted.text);
@@ -420,6 +423,7 @@ function changed() {
             control("txtName", "TextBox"),
             control("btnOK", "CommandButton"),
         ],
+        resizable: false,
     }];
     let prog = analyze(
         vec![form_source(
@@ -481,6 +485,7 @@ fn editor_completes_controls_and_form_members() {
         config.forms = vec![FormDecl {
             name: "frmInput".into(),
             controls: vec![control("txtName", "TextBox")],
+            resizable: false,
         }];
         let text = format!("@on(\"UserForm.Initialize\")\nfunction init() {{\n    {line}\n}}\n");
         let prog = analyze(
@@ -574,6 +579,7 @@ fn common_form_code_converts() {
             control("chkAll", "CheckBox"),
             control("btnClose", "CommandButton"),
         ],
+        resizable: false,
     };
     let converted = ras_compiler::vba2ras::convert_form(COMMON_VBA, &decl);
     println!("{}", converted.text);
@@ -1179,6 +1185,7 @@ function closing(byref cancel: short, closeMode: short) {
             control("txtName", "TextBox"),
             control("btnOK", "CommandButton"),
         ],
+        resizable: false,
     }];
     let converted = ras_compiler::vba2ras::convert_form(&vba, &config.forms[0]);
     println!("{}", converted.text);
@@ -1294,6 +1301,7 @@ fn spec_example_of_validation_compiles() {
             control("txtCorp", "TextBox"),
             control("btnOK", "CommandButton"),
         ],
+        resizable: false,
     }];
     let sources = vec![
         SourceInput {
@@ -1367,6 +1375,7 @@ fn progress_bars_are_objects_of_the_bundled_class() {
             control("pbUpload", "ProgressBar"),
             control("btnStart", "CommandButton"),
         ],
+        resizable: false,
     }];
     let form = r#"
 @on("btnStart.Click")
@@ -1443,6 +1452,7 @@ fn a_progress_bar_needs_no_code_behind() {
     config.forms = vec![FormDecl {
         name: "frmWait".into(),
         controls: vec![control("pbWait", "ProgressBar")],
+        resizable: false,
     }];
     let sources = vec![SourceInput {
         path: PathBuf::from("src/main.ras"),
@@ -1476,6 +1486,7 @@ fn file_pickers_browse_with_their_button() {
             control("fpInput", "FilePicker"),
             control("btnOK", "CommandButton"),
         ],
+        resizable: false,
     }];
     let form = r#"
 @on("fpInput.Change")
@@ -1614,4 +1625,42 @@ export function ask(): int {
         .files
         .iter()
         .all(|f| f.name != "RAS_Dialog" && f.name != "Dialog"));
+}
+
+/// A form the user can resize by its border needs `RAS_FormSizable` of the runtime (spec §14.11.17).
+#[test]
+fn resizable_forms_get_the_sizing_procedure() {
+    let decl = FormDecl::from_form_json(
+        r#"{"form":{"name":"frmSize","resizable":true},"controls":[{"name":"txt","type":"TextBox"}]}"#,
+    )
+    .unwrap();
+    assert!(decl.resizable);
+    assert!(
+        !FormDecl::from_form_json(r#"{"form":{"name":"F"}}"#)
+            .unwrap()
+            .resizable
+    );
+    let runtime = |resizable: bool| {
+        let mut config = Config::default();
+        config.forms = vec![FormDecl {
+            resizable,
+            ..decl.clone()
+        }];
+        let source = SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: "export function run() {\n    msgBox(\"x\");\n}\n".into(),
+        };
+        let prog = analyze(vec![source], config);
+        let out = build(&prog, &BuildOptions::default());
+        out.files
+            .iter()
+            .find(|f| f.name == "RAS_Runtime")
+            .map(|f| f.code.clone())
+            .unwrap_or_default()
+    };
+    assert!(runtime(true).contains("Public Sub RAS_FormSizable(ByVal form As Object)"));
+    assert!(!runtime(false).contains("RAS_FormSizable"));
 }

@@ -217,6 +217,24 @@ mod tests {
     }
 
     #[test]
+    fn sizable_forms_pull_in_the_window_api() {
+        let mut cfg = Config::default();
+        cfg.target.vba6 = false;
+        let rt = build(&used(&["RAS_FormSizable"]), &cfg, false);
+        assert!(rt
+            .module
+            .contains("Public Sub RAS_FormSizable(ByVal form As Object)"));
+        assert!(rt.module.contains(
+            "Private Declare PtrSafe Function RAS_WindowOfApi Lib \"shlwapi\" Alias \"#172\""
+        ));
+        assert!(rt
+            .module
+            .contains("Declare PtrSafe Function RAS_SetWindowPosApi"));
+        assert!(rt.module.contains("    Dim hwnd As LongPtr\n"));
+        assert!(!rt.module.contains("#Else"));
+    }
+
+    #[test]
     fn nothing_used_means_no_runtime() {
         let rt = build(&used(&["foo"]), &Config::default(), false);
         assert!(rt.module.is_empty());

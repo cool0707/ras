@@ -235,6 +235,7 @@ pub fn sheet_controls(book: &Path) -> Option<Vec<ras_compiler::FormDecl>> {
                         control_type: c.class,
                     })
                     .collect(),
+                resizable: false,
             })
             .collect(),
     )

@@ -209,6 +209,7 @@ fn add_dialog(inputs: &mut Vec<SourceInput>, config: &mut Config) {
         config.forms.push(FormDecl {
             name: DIALOG_FORM.to_string(),
             controls: Vec::new(),
+            resizable: false,
         });
     }
     let key = format!("{}{DIALOG_FORM}", collect::FORM_KEY_PREFIX);

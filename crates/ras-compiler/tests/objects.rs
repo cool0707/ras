@@ -25,6 +25,7 @@ fn config() -> Config {
                 control_type: "TextBox".into(),
             },
         ],
+        resizable: false,
     }];
     config
 }

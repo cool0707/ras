@@ -126,7 +126,7 @@ fn vba_string(text: &str, codepage: u16) -> String {
 /// A size in points as a VBA literal (`240`, `453.75`).
 /// A size read back from a workbook went through HIMETRIC (240 pt is stored as 8467 and read
 /// as 240.009 pt): within a fiftieth of a pixel at 96 DPI it is that whole pixel.
-fn points_literal(points: f64) -> String {
+pub(crate) fn points_literal(points: f64) -> String {
     let pixels = points / 0.75;
     let points = if (pixels - pixels.round()).abs() < 0.02 {
         pixels.round() * 0.75
@@ -143,7 +143,8 @@ pub fn init_procedure(spec: &FormSpec, codepage: u16) -> Result<Option<String>, 
 }
 
 /// [`init_procedure`]; with `anchored`, it also tells `RAS_FormResize`
-/// ([`crate::anchor`]) when the form has got its size.
+/// ([`crate::anchor`]) when the form has got its size. A form the user can
+/// resize ([`crate::sizing`]) gets its sizing border first.
 fn init_procedure_with(
     spec: &FormSpec,
     codepage: u16,
@@ -160,6 +161,10 @@ fn init_procedure_with(
     let mut body = format!(
         "    If Abs(Me.InsideWidth - {width}) >= 1 Then Me.Width = Me.Width + {width} - Me.InsideWidth\n    If Abs(Me.InsideHeight - {height}) >= 1 Then Me.Height = Me.Height + {height} - Me.InsideHeight\n"
     );
+    if crate::sizing::resizable(&spec.form) {
+        // The sizing border takes from the inside, which the size above gives back.
+        body = format!("    {} Me\n{body}", crate::sizing::SIZABLE_PROCEDURE);
+    }
     if anchored {
         // The size fixed for the display scaling does not move the anchored controls.
         let resize = crate::anchor::RESIZE_PROCEDURE;
@@ -308,7 +313,7 @@ pub fn compose(
     let resize_name = crate::anchor::RESIZE_PROCEDURE;
     if resize.is_some() && names.iter().any(|n| n.eq_ignore_ascii_case(resize_name)) {
         return Err(format!(
-            "コードビハインドに `{resize_name}` があります。この名前はアンカー（anchor）を設定したコントロールを動かすために RAS が生成するプロシージャが使います"
+            "コードビハインドに `{resize_name}` があります。この名前はアンカー（anchor）を設定したコントロールを動かし、フォームのサイズを最小・最大の範囲に収めるために RAS が生成するプロシージャが使います"
         ));
     }
     let mut lines: Vec<String> = code.lines().map(str::to_string).collect();
@@ -569,6 +574,41 @@ mod tests {
         let designer = crate::compile(&spec, 932).unwrap();
         let own = "Private Sub RAS_FormResize()\nEnd Sub\n";
         assert!(compose("forms/F.form.json", &designer, &spec, own, 932).is_err());
+    }
+
+    #[test]
+    fn a_resizable_form_gets_its_border_and_keeps_its_limits() {
+        let text = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F","width":240,"height":180,"resizable":true,"minimumWidth":200,"maximumHeight":300},"controls":[{"id":"ok","name":"btnOK","type":"CommandButton","left":150,"top":140,"anchor":"bottom,right"}]}"#;
+        let parsed = crate::parse(text);
+        assert!(!parsed.has_errors(), "{:?}", parsed.issues);
+        let spec = parsed.spec.unwrap();
+        let code = compose_for(&spec, "");
+        assert!(
+            code.contains("Private Sub RAS_FormInit()\n    RAS_FormResize 1\n    RAS_FormSizable Me\n    If Abs(Me.InsideWidth - 240) >= 1"),
+            "{code}"
+        );
+        assert!(
+            code.contains(
+                "    Static w As Single, h As Single, ready As Boolean, busy As Boolean\n"
+            ),
+            "{code}"
+        );
+        assert!(
+            code.contains("    If Not ready Then Exit Sub\n    If busy Then Exit Sub\n    busy = True\n    If 200 - Me.InsideWidth >= 1 Then Me.Width = Me.Width + 200 - Me.InsideWidth\n    If Me.InsideHeight - 300 >= 1 Then Me.Height = Me.Height + 300 - Me.InsideHeight\n    busy = False\n    dw = Me.InsideWidth - w"),
+            "{code}"
+        );
+        assert!(code.contains("\nPrivate Sub UserForm_Resize()\n    RAS_FormResize\nEnd Sub\n"));
+
+        // Limits without anchors still need UserForm_Resize; a sizing border alone does not.
+        let limits = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F","maximumWidth":400},"controls":[]}"#;
+        let code = compose_for(&crate::parse(limits).spec.unwrap(), "");
+        assert!(code.contains("If Me.InsideWidth - 400 >= 1 Then"), "{code}");
+        assert!(code.contains("Private Sub UserForm_Resize()"), "{code}");
+        assert!(!code.contains("RAS_FormSizable"), "{code}");
+        let border = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F","resizable":true},"controls":[]}"#;
+        let code = compose_for(&crate::parse(border).spec.unwrap(), "");
+        assert!(code.contains("    RAS_FormSizable Me\n"), "{code}");
+        assert!(!code.contains("UserForm_Resize"), "{code}");
     }
 
     #[test]

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "frmLimits", "caption": "Limits", "width": 240, "height": 180, "resizable": true, "minimumWidth": 200, "maximumWidth": 400, "minimumHeight": 150 },
+  "controls": [
+    { "id": "ok", "name": "btnOK", "type": "CommandButton", "caption": "OK", "left": 150, "top": 140, "width": 72, "height": 24, "anchor": "bottom,right" }
+  ]
+}

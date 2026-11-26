@@ -144,6 +144,7 @@ fn read_input(input: &str) -> Result<Input, String> {
                         control_type: c["type"].as_str().unwrap_or_default().to_string(),
                     })
                     .collect(),
+                resizable: false,
             })
             .filter(|s| !s.controls.is_empty())
             .collect();
@@ -600,6 +601,7 @@ fn sheet_decls(sheets: Vec<ras_ovba::SheetControls>) -> Vec<ras_compiler::FormDe
                     control_type: c.class,
                 })
                 .collect(),
+            resizable: false,
         })
         .collect()
 }

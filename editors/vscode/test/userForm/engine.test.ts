@@ -544,6 +544,36 @@ describe("FormSpec editing", () => {
 		assert.ok(invalid.spec.issues.some((i) => i.code === "UFV026"));
 	});
 
+	it("keeps the size of the form within its limits", () => {
+		const ok = { id: "ok", name: "btnOK", type: "CommandButton", left: 150, top: 140, width: 72, height: 24, anchor: "bottom,right" };
+		let text = form([ok]);
+		text = apply(text, { type: "setFormProperty", field: "resizable", value: true }, { type: "setFormProperty", field: "maximumWidth", value: 400 });
+		assert.equal(json(text).form.resizable, true);
+		// A limit that leaves the form outside it moves the size, and the anchored controls follow.
+		text = apply(text, { type: "setFormProperty", field: "minimumWidth", value: 300 });
+		assert.equal(json(text).form.width, 300);
+		assert.equal(control(text, "ok").left, 210);
+		text = apply(text, { type: "setFormProperty", field: "width", value: 500 });
+		assert.equal(json(text).form.width, 400);
+		text = apply(text, { type: "setGeometry", width: 100 });
+		assert.equal(json(text).form.width, 300);
+		const parsed = parseSpec(text);
+		assert.ok(parsed.ok);
+		assert.deepEqual(designerDocument(previewDocument(parsed.spec)).sizeLimits, { minWidth: 300, minHeight: 0, maxWidth: 400, maxHeight: 0 });
+		assert.deepEqual(parsed.spec.issues.filter((i) => i.severity === "error"), []);
+		// Hand-written limits are checked as ras-form checks them.
+		const codes = (fields: Json) => {
+			const spec = parseSpec(form([], fields));
+			assert.ok(spec.ok);
+			return spec.spec.issues.filter((i) => i.severity === "error").map((i) => `${i.code} ${i.field}`);
+		};
+		assert.deepEqual(codes({ minimumWidth: 500, maximumWidth: 480 }), ["UFV027 form.minimumWidth"]);
+		assert.deepEqual(codes({ minimumHeight: 200 }), ["UFV027 form.height"]);
+		assert.deepEqual(codes({ maximumWidth: 200 }), ["UFV027 form.width"]);
+		assert.deepEqual(codes({ minimumWidth: -1 }), ["UFV016 form.minimumWidth"]);
+		assert.deepEqual(codes({ resizable: "yes" }).map((c) => c.split(" ")[0]), ["UFV002"]);
+	});
+
 	it("copies a subtree and pastes it with fresh names, IDs and an offset", () => {
 		const child = { id: "x", parentId: "f1", name: "Label1", type: "Label", left: 0, top: 0, width: 20, height: 18 };
 		const text = form([frame, child]);
@@ -686,7 +716,7 @@ describe("FormSpec validation and metadata", () => {
 		assert.equal(descriptor("lb", "selectedIndex")?.valueType, "integer");
 		assert.deepEqual(grid.form.descriptors.map((d) => d.field), [
 			"backColor", "borderColor", "borderStyle", "caption", "cycle", "drawBuffer", "enabled", "font", "foreColor", "height", "helpContextId",
-			"keepScrollBarsVisible", "mouseIcon", "mousePointer", "name", "picture", "pictureAlignment", "pictureSizeMode", "pictureTiling", "rightToLeft", "scrollBars", "scrollHeight", "scrollLeft", "scrollTop", "scrollWidth",
+			"keepScrollBarsVisible", "maximumHeight", "maximumWidth", "minimumHeight", "minimumWidth", "mouseIcon", "mousePointer", "name", "picture", "pictureAlignment", "pictureSizeMode", "pictureTiling", "resizable", "rightToLeft", "scrollBars", "scrollHeight", "scrollLeft", "scrollTop", "scrollWidth",
 			"showModal", "specialEffect", "startUpPosition", "tag", "whatsThisButton", "whatsThisHelp", "width", "zoom",
 		]);
 		const formField = (field: string) => grid.form.descriptors.find((d) => d.field === field);

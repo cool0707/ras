@@ -182,6 +182,12 @@ pub fn form_properties() -> Props {
         ("foreColor", color()),
         ("backColor", color()),
         ("borderStyle", border_style()),
+        // RAS: the size of the form at run time (`sizing.rs`).
+        ("resizable", p(T::Boolean, false, Supported)),
+        ("minimumWidth", p(T::Number, false, Supported)),
+        ("minimumHeight", p(T::Number, false, Supported)),
+        ("maximumWidth", p(T::Number, false, Supported)),
+        ("maximumHeight", p(T::Number, false, Supported)),
     ];
     props.push(("picture", picture_action()));
     props.push(("mouseIcon", picture_action()));

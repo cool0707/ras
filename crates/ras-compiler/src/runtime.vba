@@ -22,6 +22,18 @@ Private Declare PtrSafe Sub RAS_CopyMemory Lib "kernel32" Alias "RtlMoveMemory" 
 #Else
 Private Declare Sub RAS_CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (ByRef Destination As Any, ByRef Source As Any, ByVal Length As Long)
 #End If
+'@@ decl RAS_WindowOfApi RAS_GetStyleApi RAS_SetStyleApi RAS_SetWindowPosApi
+#If VBA7 Then
+Private Declare PtrSafe Function RAS_WindowOfApi Lib "shlwapi" Alias "#172" (ByVal punk As IUnknown, ByRef hwnd As LongPtr) As Long
+Private Declare PtrSafe Function RAS_GetStyleApi Lib "user32" Alias "GetWindowLongW" (ByVal hwnd As LongPtr, ByVal index As Long) As Long
+Private Declare PtrSafe Function RAS_SetStyleApi Lib "user32" Alias "SetWindowLongW" (ByVal hwnd As LongPtr, ByVal index As Long, ByVal style As Long) As Long
+Private Declare PtrSafe Function RAS_SetWindowPosApi Lib "user32" Alias "SetWindowPos" (ByVal hwnd As LongPtr, ByVal after As LongPtr, ByVal x As Long, ByVal y As Long, ByVal cx As Long, ByVal cy As Long, ByVal flags As Long) As Long
+#Else
+Private Declare Function RAS_WindowOfApi Lib "shlwapi" Alias "#172" (ByVal punk As IUnknown, ByRef hwnd As Long) As Long
+Private Declare Function RAS_GetStyleApi Lib "user32" Alias "GetWindowLongW" (ByVal hwnd As Long, ByVal index As Long) As Long
+Private Declare Function RAS_SetStyleApi Lib "user32" Alias "SetWindowLongW" (ByVal hwnd As Long, ByVal index As Long, ByVal style As Long) As Long
+Private Declare Function RAS_SetWindowPosApi Lib "user32" Alias "SetWindowPos" (ByVal hwnd As Long, ByVal after As Long, ByVal x As Long, ByVal y As Long, ByVal cx As Long, ByVal cy As Long, ByVal flags As Long) As Long
+#End If
 '@@ decl ras_yieldMask ras_lastYield ras_lastCall ras_inDoEvents RAS_YIELD_MS
 Public ras_yieldMask As Long
 Public ras_inDoEvents As Boolean
@@ -911,6 +923,22 @@ End Sub
 ' code module, and VBA.UserForms is visible only to code in the project).
 Public Sub RAS_ShowForm(ByVal name As String)
     VBA.UserForms.Add(name).Show
+End Sub
+'@@ proc RAS_FormSizable
+' Lets the user resize a form by its border (form.resizable, spec §14.11.17). MSForms has no
+' property for it, so the window of the form gets the sizing border (WS_THICKFRAME) and is
+' redrawn with it (SWP_FRAMECHANGED). Without the Windows API (Excel for Mac) nothing happens.
+Public Sub RAS_FormSizable(ByVal form As Object)
+#If VBA7 Then
+    Dim hwnd As LongPtr
+#Else
+    Dim hwnd As Long
+#End If
+    On Error GoTo done
+    If RAS_WindowOfApi(form, hwnd) <> 0 Or hwnd = 0 Then Exit Sub
+    RAS_SetStyleApi hwnd, -16, RAS_GetStyleApi(hwnd, -16) Or &H40000
+    RAS_SetWindowPosApi hwnd, 0, 0, 0, 0, 0, &H27
+done:
 End Sub
 '@@ class RAS_Error
 Public code As Long

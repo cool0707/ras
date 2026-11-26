@@ -282,6 +282,7 @@ impl Collector {
                         decl: Some(crate::config::FormDecl {
                             name: code_name,
                             controls,
+                            resizable: false,
                         }),
                         class: None,
                         ctor: None,

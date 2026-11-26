@@ -139,6 +139,30 @@
           "type": "object",
           "description": "Excel から取り込んだ観測値（スナップショット専用）"
         },
+        "resizable": {
+          "type": "boolean",
+          "description": "RAS 独自。ユーザーがフォームの枠をドラッグしてサイズを変えられる（Windows フォームの FormBorderStyle.Sizable）。ビルドで生成するコードが Windows API で枠を付ける。省略時は false"
+        },
+        "minimumWidth": {
+          "type": "number",
+          "minimum": 0,
+          "description": "RAS 独自。フォームの内側の幅の最小値（ポイント）。ユーザーのリサイズにもコードでの Width の変更にも働く。0 か省略で制限なし"
+        },
+        "minimumHeight": {
+          "type": "number",
+          "minimum": 0,
+          "description": "RAS 独自。フォームの内側の高さの最小値（ポイント）。0 か省略で制限なし"
+        },
+        "maximumWidth": {
+          "type": "number",
+          "minimum": 0,
+          "description": "RAS 独自。フォームの内側の幅の最大値（ポイント）。0 か省略で制限なし"
+        },
+        "maximumHeight": {
+          "type": "number",
+          "minimum": 0,
+          "description": "RAS 独自。フォームの内側の高さの最大値（ポイント）。0 か省略で制限なし"
+        },
         "startUpPosition": {
           "enum": [
             0,

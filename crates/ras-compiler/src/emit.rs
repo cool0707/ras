@@ -399,6 +399,10 @@ pub fn finalize(
     if lowered.modules.iter().any(|m| m.kind == VModuleKind::Form) {
         used.insert("RAS_ShowForm".into());
     }
+    // A form the user can resize by its border (spec §14.11.17): its generated code calls it.
+    if cfg.forms.iter().any(|f| f.resizable) {
+        used.insert("RAS_FormSizable".into());
+    }
     let has_glue = lowered.modules.iter().any(|m| m.name == "RAS_Glue");
     let rt = runtime::build(&used, cfg, has_glue);
     if !rt.module.is_empty() {

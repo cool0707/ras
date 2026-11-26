@@ -42,6 +42,54 @@ client.addEventListener("click", (e) => {
 client.addEventListener("dblclick", (e) => {
 	if (onForm(e.target)) send({ t: "dblclick" });
 });
+// The sizing border of a form the user can resize (form.resizable, spec §14.11.17): the panel
+// shows the size being dragged and the form's code decides the size it gets (its limits,
+// UserForm_Resize), which the next state brings.
+let dragSize: { width: number; height: number } | undefined;
+let resizeSent = 0;
+for (const edge of ["e", "s", "se"] as const) {
+	const grip = el("div", `form-sizer form-sizer-${edge}`, frame);
+	grip.addEventListener("pointerdown", (down) => {
+		if (!state || down.button !== 0) return;
+		down.preventDefault();
+		grip.setPointerCapture(down.pointerId);
+		const form = state.form;
+		const start = { width: num(form.Width), height: num(form.Height) };
+		const limit = (size: number, min: unknown, max: unknown) => {
+			if (num(max) > 0) size = Math.min(size, num(max));
+			return Math.max(size, num(min), 0);
+		};
+		const move = (e: PointerEvent) => {
+			const dx = edge === "s" ? 0 : ((e.clientX - down.clientX) * 72) / 96;
+			const dy = edge === "e" ? 0 : ((e.clientY - down.clientY) * 72) / 96;
+			// Whole pixels, as a window is sized.
+			const round = (points: number) => (Math.round((points * 96) / 72) * 72) / 96;
+			dragSize = {
+				width: round(limit(start.width + dx, form.MinimumWidth, form.MaximumWidth)),
+				height: round(limit(start.height + dy, form.MinimumHeight, form.MaximumHeight)),
+			};
+			client.style.width = px(dragSize.width);
+			client.style.height = px(dragSize.height);
+			if (!resizeSent)
+				resizeSent = requestAnimationFrame(() => {
+					resizeSent = 0;
+					if (dragSize) send({ t: "resize", ...dragSize });
+				});
+		};
+		const end = () => {
+			grip.removeEventListener("pointermove", move);
+			grip.removeEventListener("pointerup", end);
+			grip.removeEventListener("pointercancel", end);
+			if (resizeSent) cancelAnimationFrame(resizeSent);
+			resizeSent = 0;
+			if (dragSize) send({ t: "resize", ...dragSize });
+			dragSize = undefined;
+		};
+		grip.addEventListener("pointermove", move);
+		grip.addEventListener("pointerup", end);
+		grip.addEventListener("pointercancel", end);
+	});
+}
 const banners = el("div", "banners", app);
 const note = el("div", "note", app);
 note.textContent = "デバッグ実行中のフォームです（RAS）。操作はフォームのコードで処理されます。";
@@ -544,8 +592,9 @@ function render(next: FormState, focus: string | undefined): void {
 	state = next;
 	const form = next.form;
 	titleText.textContent = str(form.Caption);
-	client.style.width = px(form.Width);
-	client.style.height = px(form.Height);
+	client.style.width = px(dragSize?.width ?? form.Width);
+	client.style.height = px(dragSize?.height ?? form.Height);
+	frame.classList.toggle("resizable", form.Resizable === true);
 	colors(client, form);
 	fontCss(client, form.Font as FontState | undefined);
 	frame.classList.toggle("disabled", form.Enabled === false);

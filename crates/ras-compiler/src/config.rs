@@ -44,6 +44,9 @@ pub struct FormDecl {
     /// `form.name` (the VBA name of the form).
     pub name: String,
     pub controls: Vec<FormControl>,
+    /// `form.resizable`: the user can resize the form by its border, which the generated code
+    /// does with `RAS_FormSizable` of the runtime (spec §14.11.17).
+    pub resizable: bool,
 }
 
 /// A control of a user form.
@@ -78,7 +81,15 @@ impl FormDecl {
             }
         }
         walk(value.get("controls"), &mut controls);
-        Some(FormDecl { name, controls })
+        let resizable = value["form"]
+            .as_object()
+            .and_then(|f| f.iter().find(|(k, _)| k.eq_ignore_ascii_case("resizable")))
+            .is_some_and(|(_, v)| v.as_bool() == Some(true));
+        Some(FormDecl {
+            name,
+            controls,
+            resizable,
+        })
     }
 }
 

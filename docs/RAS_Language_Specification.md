@@ -24,6 +24,7 @@
 * デバッグ実行を一時停止する `debugger;` 文を追加（§14.10.9）。VBA ビルドでは何も出力しない。プレイグラウンドでは、ブラウザの開発者ツールで `.ras` のファイルにブレークポイントを置いてデバッグできる（§14.10.10）
 > * シートの追加・複製・削除・名前の変更を、ブックと `objects/` のファイルに一緒に行う `ras sheet` と VS Code のコマンドを追加（§14.16）。Excel で複製したシートは、同期がコピー元のファイルを複製する（§14.7.2）
 > * フォームのコントロールにアンカー `anchor` を追加（§14.11.16）。フォームの大きさが変わると、生成する `UserForm_Resize` のコードが指定した辺に合わせてコントロールを動かし・伸ばす。デザイナーでは Visual Studio と同じ十字の図で選び、フォームのサイズ変更にも追従する。デザイナーのツールバーに、グリッドに合わせる・サイズをグリッドに合わせる・間隔（均等・広げる・狭める・詰める）・中央に配置を追加
+> * フォームに `resizable`（ユーザーが枠をドラッグしてサイズを変えられる）と、内側のサイズの最小・最大 `minimumWidth`・`minimumHeight`・`maximumWidth`・`maximumHeight` を追加（§14.11.17）。生成するコードが Windows API で枠を付け、`UserForm_Resize` でサイズを範囲に戻す。デバッグ実行のフォームも枠をドラッグしてサイズを変えられ、デザイナーのフォームのサイズ変更も範囲に収まる
 
 > v0.7 からの変更
 > * 構造体（`struct`）をデータの入れ物の基本とし、オブジェクトリテラル・無名のオブジェクト型・タプル・分割代入を追加（§2.5）
@@ -2220,7 +2221,7 @@ VS Code 拡張のシートプレビューでプロジェクトのブック（`ra
 * `controls` は平らな配列で、入れ子は `parentId` で表す。コンテナーは `Frame`・`MultiPage`（子は `Page` のみ）・`Page`（親は `MultiPage` のみ）。`TabStrip` のタブは `tabs` 配列に書く。
 * 組み込みのコントロール: `Label`・`TextBox`・`ComboBox`・`ListBox`・`CommandButton`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`・`Image`・`Frame`・`MultiPage`・`Page`・`TabStrip`。RAS 独自のものとして `ProgressBar`（ラベルを組み合わせて書き込む。§14.11.13）と `FilePicker`（テキスト ボックスとボタンの組。§14.11.14）。
 * 共通のプロパティ（`left` / `top` / `width` / `height` / `tabIndex` / `zIndex` / `enabled` / `visible`）、種類ごとのプロパティ（`caption` / `text` / `value` / `selectedIndex` / `tabs` など）、見た目（`font` / `foreColor` / `backColor` / `textAlign` / `borderStyle` / `pictureAlignment` / `pictureSizeMode`）の詳細と適用できるコントロールは xlflow の [UserForm Specification](https://harumiweb.github.io/xlflow/reference/userform-spec) に従う。色は `{ "kind": "rgb", "value": "#203040" }`、`{ "kind": "system", "value": "buttonFace" }`、`{ "kind": "ole", "value": "0x8000000F" }` の形で書く。
-* 検査結果のコードは `UFY001`（JSON の構文）と `UFV001`〜`UFV026`（`UFV024` はプログレスバー（§14.11.13）、`UFV025` はファイルの選択欄（§14.11.14）、`UFV026` はアンカー（§14.11.16））。メッセージは日本語。`UFV022`（警告）は、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。`UFV023`（警告）は、`borderStyle` 1（Single）と 0 以外の `specialEffect` を同時に書いたことを表す。MSForms は縁を 1 つしか描かず、VBE では一方を設定するともう一方が戻る（Single にすると平面、立体にすると枠なし）。書き込みでは `borderStyle` を優先し、`specialEffect` を 0 にする。片方だけ書いたときも VBE と同じく、Single の枠のコントロールは平面で、`specialEffect` を書いた `Image`（新しいものは Single の枠を持つ）は枠なしで書き込む。
+* 検査結果のコードは `UFY001`（JSON の構文）と `UFV001`〜`UFV027`（`UFV024` はプログレスバー（§14.11.13）、`UFV025` はファイルの選択欄（§14.11.14）、`UFV026` はアンカー（§14.11.16）、`UFV027` はフォームのサイズの最小・最大（§14.11.17））。メッセージは日本語。`UFV022`（警告）は、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。`UFV023`（警告）は、`borderStyle` 1（Single）と 0 以外の `specialEffect` を同時に書いたことを表す。MSForms は縁を 1 つしか描かず、VBE では一方を設定するともう一方が戻る（Single にすると平面、立体にすると枠なし）。書き込みでは `borderStyle` を優先し、`specialEffect` を 0 にする。片方だけ書いたときも VBE と同じく、Single の枠のコントロールは平面で、`specialEffect` を書いた `Image`（新しいものは Single の枠を持つ）は枠なしで書き込む。
 
 xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 
@@ -2228,6 +2229,7 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 |---|---|
 | `tag` / `controlTipText` | すべてのコントロールで使える（xlflow では `Page` 以外は `properties` に書く） |
 | `anchor` | RAS 独自。親の大きさが変わったときにコントロールが距離を保つ辺（§14.11.16） |
+| `form.resizable` / `form.minimumWidth` / `form.minimumHeight` / `form.maximumWidth` / `form.maximumHeight` | RAS 独自。ユーザーによるフォームのサイズ変更と、内側のサイズの最小・最大（§14.11.17） |
 | `ComboBox` / `ListBox` の `list` / `selectedIndex` | 書き込みの対象（§14.11.5）。xlflow では取得した値の記録にだけ使う |
 | コントロールのプロパティ | 値が 1 つのプロパティを、VBA の同名のプロパティと同じ値で書ける（名前は先頭を小文字にしたもの）。xlflow では `unsupported`。<br>・`TextBox`: `locked`・`multiLine`・`wordWrap`・`autoSize`・`passwordChar`・`scrollBars`・`maxLength`・`enterKeyBehavior`・`tabKeyBehavior`・`enterFieldBehavior`・`autoTab`・`autoWordSelect`・`hideSelection`・`selectionMargin`・`integralHeight`・`dragBehavior`・`imeMode`・`backStyle`・`specialEffect`・`borderColor`<br>・`ComboBox`: `style`（0: DropDownCombo、2: DropDownList）・`showDropButtonWhen`・`dropButtonStyle`・`listRows`・`listWidth`・`listStyle`・`matchEntry`・`matchRequired`・`locked`・`maxLength`・`autoSize` などの編集のプロパティ・`imeMode`・`backStyle`・`specialEffect`・`borderColor`<br>・`ListBox`: `multiSelect`・`listStyle`・`matchEntry`・`locked`・`integralHeight`・`imeMode`・`specialEffect`・`borderColor`<br>・`ComboBox` / `ListBox` の列: `columnCount`（-1 は項目のすべての列）・`columnWidths`（`"72 pt;;1 in"` のように ; で区切った各列の幅。単位は pt（省略時）・in・cm、空の欄と -1 は自動。MS-OFORMS の `MorphDataColumnInfo` の並びに、Excel と同じく最後の列から書き込む）・`boundColumn`・`textColumn`・`columnHeads`<br>・`CommandButton`: `default`・`cancel`・`takeFocusOnClick`・`locked`・`wordWrap`・`autoSize`・`backStyle`<br>・`CheckBox` / `OptionButton` / `ToggleButton`: `tripleState`・`locked`・`wordWrap`・`autoSize`・`backStyle`、`CheckBox` / `OptionButton` は `alignment`・`specialEffect`（0 か 2）、`OptionButton` は `groupName`<br>・`Label`: `wordWrap`・`autoSize`・`backStyle`・`specialEffect`・`borderColor`<br>・`SpinButton` / `ScrollBar`: `min`・`max`・`smallChange`・`orientation`・`delay`、`ScrollBar` は `largeChange`・`proportionalThumb`。`value` は `min` と `max` の間。無効（`enabled: false`）のものは、Excel と同じく矢印も無効（`PrevEnabled` / `NextEnabled` を 0）にして書き込む<br>・`Image`: `specialEffect`・`borderColor`<br>・`Frame`: `specialEffect`・`borderColor`・`cycle`<br>・`TabStrip` / `MultiPage`: `style`（0: Tabs、1: Buttons、2: None）・`tabOrientation`・`multiRow`・`tabFixedWidth`・`tabFixedHeight`（`MultiPage` のものは、その中の隠れた `TabStrip` に書き込む）<br>・`Image`・`Frame`・`TabStrip` と `Page` 以外のすべて: `mousePointer`。フォーカスを受け取るコントロール: `tabStop`<br>・値を持つコントロール（`TextBox`・`ComboBox`・`ListBox`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`）: `controlSource`（値を連動させるセル。`"Sheet1!B2"`）、`ComboBox` / `ListBox` は `rowSource`（項目を読むセル範囲。`"Sheet1!A2:A10"`。`list` と同時には書けない）。この 2 つはコントロールのサイト（`OleSiteConcrete`）に書き込む<br>長さ（`listWidth`・`tabFixedWidth`・`tabFixedHeight`）はポイント、`borderColor` は色、`passwordChar` は 1 文字の文字列 |
 | 書かなかったプロパティ | Excel でコントロールを作ったときと同じ値で書き込む（`ComboBox` はドロップ ボタンを常に表示・`matchEntry` 1、`ListBox` は `matchEntry` 0・スクロール バーあり、`Frame` は `specialEffect` 3、`CheckBox` / `OptionButton` / `ToggleButton` は `backColor` `buttonFace`・`foreColor` `buttonText`、`ToggleButton` は中央揃え、文字を持つコントロールのフォントは MS UI Gothic 9pt など）。xlflow は `ComboBox` と `ListBox` を MS-OFORMS の既定値（ドロップ ボタンなし・`matchEntry` 2）のまま書く。取り込み（`ras form pull`）では、これと違う値のものだけを書き出す |
@@ -2869,7 +2871,7 @@ export function rebuild() {
 
 * **値:** `top`・`bottom`・`left`・`right` をカンマ（または空白・`|`）で区切って並べた文字列（大文字小文字は区別しない。同じ辺を 2 度書けない）、またはどの辺にも固定しない `none`。省略時は `top,left`（動かない）。デザイナーは `top,bottom,left,right` の順の小文字で書き込み、`top,left` にすると `anchor` を削除する。それ以外の値はエラー（`UFV026`）。`Page`（`MultiPage` から大きさが決まる）と `ProgressBar` には書けない（`UFV005`）。
 * **動き方:** 親の内側の幅が `dw`、高さが `dh` 変わったとき、横は `left` と `right` の両方なら幅が `dw` 伸び（0 未満にはならない）、`right` だけなら `dw` 右へ動き、どちらも無ければ `dw / 2` 動き（中央を保つ）、`left` だけなら動かない。縦も `top`・`bottom` で同じ。幅（高さ）が伸び縮みする `Frame`・`MultiPage` は、同じ量をその中のコントロール（`MultiPage` はそのページのコントロール）に伝える。`FilePicker`（§14.11.14）は、左右の両方のときはテキスト ボックスが伸び、ボタンが右へ動く。
-* **生成する VBA:** アンカーを持つコントロールがあれば、管理領域に `RAS_FormResize` を生成し、`UserForm_Resize` から呼ぶ（コードビハインドに `UserForm_Resize` があれば、その先頭に `RAS_FormResize '--- RAS ---` の 1 行を挿入する。無ければ呼ぶだけの `UserForm_Resize` も生成する）。前回からの内側の大きさ（`InsideWidth` / `InsideHeight`）の差だけ、コントロールの `Left`・`Top`・`Width`・`Height` を変える。`RAS_FormInit`（§14.11.5）が表示スケールに合わせてフォームの大きさを直す（§14.11.10）前後は動かさない（`RAS_FormResize 1` / `RAS_FormResize 2`）。コードで `Width` / `Height` を変えたとき、`Declare` で API を使ってユーザーがサイズを変えられるようにしたフォームをリサイズしたときに働く。
+* **生成する VBA:** アンカーを持つコントロールがあれば、管理領域に `RAS_FormResize` を生成し、`UserForm_Resize` から呼ぶ（コードビハインドに `UserForm_Resize` があれば、その先頭に `RAS_FormResize '--- RAS ---` の 1 行を挿入する。無ければ呼ぶだけの `UserForm_Resize` も生成する）。前回からの内側の大きさ（`InsideWidth` / `InsideHeight`）の差だけ、コントロールの `Left`・`Top`・`Width`・`Height` を変える。`RAS_FormInit`（§14.11.5）が表示スケールに合わせてフォームの大きさを直す（§14.11.10）前後は動かさない（`RAS_FormResize 1` / `RAS_FormResize 2`）。コードで `Width` / `Height` を変えたとき、`resizable`（§14.11.17）のフォームをユーザーがリサイズしたときに働く。
   ```vb
   Private Sub RAS_FormResize(Optional ByVal mode As Long)
       Static w As Single, h As Single, ready As Boolean
@@ -2893,6 +2895,49 @@ export function rebuild() {
 * `RAS_FormResize` はコードビハインドで使えない名前になる。デザイナー ストレージにはアンカーが無いため、`ras form pull` は既存の `.form.json` の `anchor` を、同じ名前のコントロールに引き継ぐ。
 * **デバッグ実行:** フォームの `width` / `height` を変えると、同じ規則でコントロールを動かしてから `UserForm.Resize` のハンドラを呼ぶ。
 * **デザイナー:** プロパティ グリッドの Anchor（レイアウト）で、Visual Studio と同じ十字の図のバーをクリックして辺を選ぶ。フォームや `Frame`・`MultiPage` のサイズを変えると（ドラッグ中のプレビューも）、同じ規則でコントロールが動く。フォームは、固定した辺からはみ出す・伸び縮みするコントロールが 1pt を下回る大きさより小さくできない。
+
+#### 14.11.17 フォームのサイズ変更（`resizable`・最小／最大のサイズ）
+
+ユーザーがフォームの枠をドラッグしてサイズを変えられるようにし、内側のサイズの範囲を決める。Windows フォームの `FormBorderStyle.Sizable`・`MinimumSize`・`MaximumSize` に当たる。MSForms にはどれも無いため、デザイナー ストレージには書き込まず、生成するコードが行う。アンカー（§14.11.16）と組み合わせると、ユーザーのリサイズにコントロールが追従する。
+
+```json
+"form": {
+  "name": "frmNote", "width": 240, "height": 180,
+  "resizable": true, "minimumWidth": 200, "minimumHeight": 150, "maximumWidth": 480
+}
+```
+
+* **値:** `resizable` は真偽値（省略時は `false`）。`minimumWidth`・`minimumHeight`・`maximumWidth`・`maximumHeight` は `width` / `height` と同じく内側（`InsideWidth` / `InsideHeight`）のポイントで、0 以上（`UFV016`）。0 か省略は制限なし。最小が最大より大きいとき、`width` / `height`（省略時は 240 / 180）が範囲の外にあるときはエラー（`UFV027`）。
+* **リサイズ:** `resizable` のフォームは、`RAS_FormInit`（§14.11.5）がランタイムの `RAS_FormSizable Me` を呼び、Windows API でウィンドウにサイズ変更の枠（`WS_THICKFRAME`）を付けてから、内側のサイズを直す（§14.11.10）。ランタイム（`RAS_Runtime`）には、プロジェクトに `resizable` のフォームがあるときだけ `RAS_FormSizable` と、その `Declare`（`shlwapi` の `IUnknown_GetWindow`、`user32` の `GetWindowLongW`・`SetWindowLongW`・`SetWindowPos`）が入る。Windows API が使えない環境（Mac の Excel）では何もしない。
+  ```vb
+  Private Sub RAS_FormInit()
+      RAS_FormSizable Me
+      If Abs(Me.InsideWidth - 240) >= 1 Then Me.Width = Me.Width + 240 - Me.InsideWidth
+      If Abs(Me.InsideHeight - 180) >= 1 Then Me.Height = Me.Height + 180 - Me.InsideHeight
+  End Sub
+  ```
+* **最小・最大:** どれかを指定すると `RAS_FormResize`（§14.11.16）を生成して `UserForm_Resize` から呼び、範囲の外のサイズを近いほうの端に戻してから、アンカーのコントロールを動かす。ユーザーのリサイズにも、コードで `Width` / `Height` を変えたときにも働く（`resizable` でなくても）。戻すときの `UserForm_Resize` では何もしない（`busy`）。ウィンドウはピクセル単位なので、1pt 未満の違いは戻さない。ドラッグ中は、範囲の外のサイズが一瞬表示されることがある（ウィンドウ メッセージを横取り（サブクラス化）しないため）。
+  ```vb
+  Private Sub RAS_FormResize(Optional ByVal mode As Long)
+      Static w As Single, h As Single, ready As Boolean, busy As Boolean
+      Dim dw As Single, dh As Single
+      If mode = 1 Then ready = False: Exit Sub
+      If mode = 2 Then w = Me.InsideWidth: h = Me.InsideHeight: ready = True: Exit Sub
+      If Not ready Then Exit Sub
+      If busy Then Exit Sub
+      busy = True
+      If 200 - Me.InsideWidth >= 1 Then Me.Width = Me.Width + 200 - Me.InsideWidth
+      If Me.InsideWidth - 480 >= 1 Then Me.Width = Me.Width + 480 - Me.InsideWidth
+      If 150 - Me.InsideHeight >= 1 Then Me.Height = Me.Height + 150 - Me.InsideHeight
+      busy = False
+      dw = Me.InsideWidth - w: dh = Me.InsideHeight - h
+      If dw = 0 And dh = 0 Then Exit Sub
+      w = Me.InsideWidth: h = Me.InsideHeight
+  End Sub
+  ```
+* `ras form pull` は、既存の `.form.json` の `resizable` と最小・最大を引き継ぐ。
+* **デバッグ実行:** `resizable` のフォームは、パネルの右端・下端・右下の角をドラッグしてサイズを変えられる。コードで `width` / `height` を変えたときも含め、範囲に収めてからアンカーのコントロールを動かし、`UserForm.Resize` のハンドラを呼ぶ。
+* **デザイナー:** プロパティ グリッドのレイアウトに Resizable・MinimumWidth・MinimumHeight・MaximumWidth・MaximumHeight。フォームのサイズは、ドラッグでも Width / Height の入力でも範囲に収まり、範囲の外になる最小・最大を設定するとフォームのサイズもそこまで変わる（Visual Studio と同じ）。
 
 ### 14.12 テスト（`ras test`）（v0.9で追加）
 

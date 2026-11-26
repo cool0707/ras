@@ -35,6 +35,7 @@ export function designerDocument(
     caption: form.caption ?? form.name,
     width: width ?? 240,
     height: height ?? 180,
+    sizeLimits: form.sizeLimits,
     approximate: width == null || height == null,
     eventEditable,
     warnings: warnings.map((warning) => ({ ...warning })),

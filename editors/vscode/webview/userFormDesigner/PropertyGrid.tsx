@@ -69,7 +69,7 @@ const categories = {
     "orientation",
     "controlTipText",
   ],
-  layout: ["left", "top", "width", "height", "anchor", "zoom", "scrollBars", "keepScrollBarsVisible", "scrollWidth", "scrollHeight", "scrollLeft", "scrollTop"],
+  layout: ["left", "top", "width", "height", "anchor", "resizable", "minimumWidth", "minimumHeight", "maximumWidth", "maximumHeight", "zoom", "scrollBars", "keepScrollBarsVisible", "scrollWidth", "scrollHeight", "scrollLeft", "scrollTop"],
   behavior: [
     "enabled",
     "visible",

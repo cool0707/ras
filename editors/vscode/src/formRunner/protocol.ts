@@ -57,6 +57,8 @@ export type UserAction =
 	| { t: "page"; control: string; index: number }
 	| { t: "spin"; control: string; delta: number }
 	| { t: "scroll"; control: string; value: number }
+	/** The user dragged the border of a form that can be resized (spec §14.11.17); points. */
+	| { t: "resize"; width: number; height: number }
 	| { t: "close" };
 
 /** What the extension posts to the panel. */

@@ -691,23 +691,25 @@ export function DesignerCanvas({
       pagedDocument.width,
       pagedDocument.height,
     );
-    const minimumWidth = least.width;
-    const minimumHeight = least.height;
-    const resizeAxis = (start: number, delta: number, minimum: number) => {
+    // So does the form's own MinimumWidth / MinimumHeight, and MaximumWidth / MaximumHeight
+    // how large (0: no limit), as in Visual Studio.
+    const limits = document.sizeLimits;
+    const minimumWidth = Math.max(least.width, limits?.minWidth ?? 0);
+    const minimumHeight = Math.max(least.height, limits?.minHeight ?? 0);
+    const resizeAxis = (start: number, delta: number, minimum: number, maximum: number) => {
       if (stableDelta(delta) === 0) return start;
       const target = start + stableDelta(delta);
-      return stableDelta(
-        Math.max(minimum, snapping ? Math.round(target / gridSize) * gridSize : target),
-      );
+      const snapped = snapping ? Math.round(target / gridSize) * gridSize : target;
+      return stableDelta(Math.max(minimum, maximum > 0 ? Math.min(maximum, snapped) : snapped));
     };
     const end = {
       width:
         current.handle === "e" || current.handle === "se"
-          ? resizeAxis(current.start.width, dx, minimumWidth)
+          ? resizeAxis(current.start.width, dx, minimumWidth, limits?.maxWidth ?? 0)
           : current.start.width,
       height:
         current.handle === "s" || current.handle === "se"
-          ? resizeAxis(current.start.height, dy, minimumHeight)
+          ? resizeAxis(current.start.height, dy, minimumHeight, limits?.maxHeight ?? 0)
           : current.start.height,
     };
     current.end = end;
