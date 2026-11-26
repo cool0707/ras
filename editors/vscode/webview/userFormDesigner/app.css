@@ -243,6 +243,7 @@ header {
 }
 .control {
   position: absolute;
+  cursor: default;
   box-sizing: border-box;
   white-space: pre-wrap;
   /* Existing MSForms children keep independent appearance settings. Prevent
@@ -1202,7 +1203,15 @@ button:disabled {
   cursor: default;
   opacity: 0.5;
 }
-.placing-control .form {
+/* Same move cursor as draggable shapes in the sheet viewer. */
+.control.movable {
+  cursor: move;
+}
+.control.movable .tabs button {
+  cursor: pointer;
+}
+.placing-control .form,
+.placing-control .form .control {
   cursor: crosshair;
 }
 .collection-editor ul {

@@ -942,10 +942,16 @@ export function DesignerCanvas({
     const candidate = target.closest<HTMLElement>(
       ".control[data-control-id], .selection-outline[data-control-id]",
     );
+    // Blank page space belongs to the MultiPage itself (only the tabs are special).
+    const pageBlank = blankArea?.classList.contains("page-content")
+      ? multiPageOwner(blankArea.dataset.containerId)
+      : undefined;
     const id =
       candidate && (!blankArea || blankArea.contains(candidate))
         ? candidate.dataset.controlId
-        : undefined;
+        : pageBlank && !editingInside(pageBlank.id)
+          ? pageBlank.id
+          : undefined;
     const control = document.controls.find((c) => c.id === id);
     setNotice(undefined);
     canvas.current?.focus({ preventScroll: true });
@@ -1178,6 +1184,26 @@ export function DesignerCanvas({
     updateGesture(current.dx, current.dy);
   };
   const children = (parentId?: string) => orderedChildren(document, parentId);
+  /** The MultiPage that owns a page, so blank page space hits the MultiPage. */
+  const multiPageOwner = (pageId?: string) => {
+    const page = document.controls.find((c) => c.id === pageId);
+    const owner = document.controls.find((c) => c.id === page?.parentId);
+    return owner?.type.toLowerCase() === "multipage" ? owner : undefined;
+  };
+  /** True while the selection lies inside the MultiPage (a page picked by its
+   * tab, or a control on a page); blank page space then starts a marquee within
+   * the page instead of selecting the MultiPage. */
+  const editingInside = (ownerId: string) =>
+    selectionIds.some((id) => {
+      let c = document.controls.find((x) => x.id === id);
+      while (c?.parentId) {
+        if (c.parentId === ownerId) return true;
+        const parentId: string = c.parentId;
+        c = document.controls.find((x) => x.id === parentId);
+      }
+      return false;
+    });
+  const movable = (control: DesignerControl) => editable && !busy && canEditGeometry(control);
   const draw = (control: DesignerControl | undefined, floating = false): JSX.Element | null => {
     if (!control || control.visible === false) return null;
     if (preview?.floating && preview.id === control.id && !floating) return null;
@@ -1198,7 +1224,7 @@ export function DesignerCanvas({
       <>
         <div
           key={control.id}
-          class={`control ${type} ${borderClass(shown)} ${scalarClasses(shown)} ${control.enabled === false ? "disabled" : ""} ${type === "frame" && control.caption ? "has-caption" : ""} ${type === "togglebutton" ? { on: "pressed", null: "mixed", off: "" }[toggleState(control.value)] : ""}`}
+          class={`control ${type} ${movable(control) ? "movable" : ""} ${borderClass(shown)} ${scalarClasses(shown)} ${control.enabled === false ? "disabled" : ""} ${type === "frame" && control.caption ? "has-caption" : ""} ${type === "togglebutton" ? { on: "pressed", null: "mixed", off: "" }[toggleState(control.value)] : ""}`}
           data-control-id={control.id}
           title={`${control.name} (${control.type})${control.approximate ? ` — ${approximateBounds}` : ""}`}
           style={{
@@ -1238,7 +1264,7 @@ export function DesignerCanvas({
               </div>
               {page && page.visible !== false && (
                 <div
-                  class="control page page-content"
+                  class={`control page page-content ${movable(control) && !editingInside(control.id) ? "movable" : ""}`}
                   data-container-id={page.id}
                   title={page.name}
                   style={{

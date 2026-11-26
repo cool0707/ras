@@ -1,6 +1,6 @@
 /* Ported from xlflow (https://github.com/harumiWeb/xlflow), MIT License,
    Copyright (c) 2026 harumiWeb. See THIRD_PARTY_NOTICES.md. */
-import { controlMetadata, transparentOnCreate } from "./toolbox";
+import { containerColorOnCreate, controlMetadata, transparentOnCreate } from "./toolbox";
 import { propertyEditorStrings } from "./propertyEditorStrings";
 import type { NewControl, ToolboxType } from "./toolbox";
 
@@ -751,6 +751,7 @@ export function isStructuralOperation(value: unknown): value is StructuralOperat
         "selectedIndex",
         "tabs",
         "backStyle",
+        "backColor",
         "font",
       ].includes(key),
     ) &&
@@ -769,6 +770,8 @@ export function isStructuralOperation(value: unknown): value is StructuralOperat
     (!Object.hasOwn(control, "caption") || typeof control.caption === "string") &&
     (!Object.hasOwn(control, "backStyle") ||
       (control.backStyle === 0 && transparentOnCreate.has(control.type as ToolboxType))) &&
+    (!Object.hasOwn(control, "backColor") ||
+      (containerColorOnCreate.has(control.type as ToolboxType) && isNewBackColor(control.backColor))) &&
     (!Object.hasOwn(control, "font") ||
       (typeof control.font === "object" &&
         control.font !== null &&
@@ -793,6 +796,16 @@ export function isStructuralOperation(value: unknown): value is StructuralOperat
             typeof tab.caption === "string",
         ) &&
         new Set(control.tabs.map((tab) => tab.name.toLowerCase())).size === 2))
+  );
+}
+
+function isNewBackColor(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const color = value as Record<string, unknown>;
+  return (
+    Object.keys(color).every((key) => ["kind", "value"].includes(key)) &&
+    ["rgb", "system", "ole"].includes(color.kind as string) &&
+    typeof color.value === "string"
   );
 }
 
