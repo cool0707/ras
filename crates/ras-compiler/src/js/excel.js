@@ -2448,7 +2448,7 @@ module.exports = function createExcel(rt, addon, options) {
         Wait(time) {
             const target = time instanceof RDate ? time.oa : rt.cnum(time);
             const nowOa = rt.cnum(rt.vba.Now());
-            rt.sleep(Math.max(0, (target - nowOa) * 86400000));
+            rt.pause(Math.max(0, (target - nowOa) * 86400000));
             return true;
         }
         $debugProperties() {
