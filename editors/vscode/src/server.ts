@@ -11,6 +11,9 @@ const SYNC_STATUS_NOTIFICATION = "ras/syncStatus";
 /** Commands of the run / debug lenses the server puts above functions that can be started. */
 const RUN_LENS_COMMANDS = new Set(["ras.client.runMacro", "ras.client.showForm", "ras.debug.start"]);
 
+/** Command of the lens that generates a test of a function (spec §14.12.10). */
+const GENERATE_TEST_LENS_COMMAND = "ras.client.generateTest";
+
 /** Thrown by {@link RasServer.execute} when there is no server to talk to. */
 export class ServerNotRunningError extends Error {
 	constructor() {
@@ -139,10 +142,16 @@ export class RasServer implements vscode.Disposable {
 				// The run / debug lenses above functions can be turned off with `ras.codeLens.run`.
 				provideCodeLenses: async (document, token, next) => {
 					const lenses = await next(document, token);
-					if (lenses && !vscode.workspace.getConfiguration("ras", document).get<boolean>("codeLens.run", true)) {
-						return lenses.filter((lens) => !RUN_LENS_COMMANDS.has(lens.command?.command ?? ""));
+					if (!lenses) {
+						return lenses;
 					}
-					return lenses;
+					const config = vscode.workspace.getConfiguration("ras", document);
+					const run = config.get<boolean>("codeLens.run", true);
+					const test = config.get<boolean>("codeLens.generateTest", true);
+					return lenses.filter((lens) => {
+						const command = lens.command?.command ?? "";
+						return (run || !RUN_LENS_COMMANDS.has(command)) && (test || command !== GENERATE_TEST_LENS_COMMAND);
+					});
 				},
 			},
 			// A failed start is reported once, below, with a way to fix `ras.path`.

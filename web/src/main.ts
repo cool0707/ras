@@ -12,7 +12,7 @@ import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { EditorState, type Extension } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import init, { Book, compile, diffText, editBook, encodeVba, explain, format, newFormSpec, packBook, sheetControls, viewPage } from "../pkg/ras_wasm.js";
+import init, { Book, compile, diffText, editBook, encodeVba, explain, format, generateTest, newFormSpec, packBook, sheetControls, viewPage } from "../pkg/ras_wasm.js";
 import type { EventDescriptor } from "../../editors/vscode/src/userForm/events";
 import { bodyIndent, findHandler } from "../../editors/vscode/src/userForm/events";
 import type { RuntimeMessage } from "../../editors/vscode/src/formRunner/protocol";
@@ -26,6 +26,7 @@ import type { Dialog, RunJob, RunResult } from "./runtime/run";
 import samples from "virtual:samples";
 import type { FromWorker, ToWorker } from "./worker";
 import { versioned } from "./versioned";
+import { showTestLenses, testLenses } from "./testLens";
 import { rasIcons } from "./icons";
 import { moduleFileNameError, newModuleSource, vbaModuleName } from "../../editors/vscode/src/moduleNames";
 
@@ -49,6 +50,8 @@ interface Compiled {
     vba: { name: string; fileName: string; text: string; file: string }[];
     js: { path: string; text: string }[] | null;
     entries: string[];
+    /** The functions "テストを生成" is shown above (`line` from 0) and their test files. */
+    testTargets: { path: string; name: string; line: number; testPath: string }[];
     tests: boolean;
     codepage: number;
     error: string | null;
@@ -319,6 +322,7 @@ function editorState(f: ProjectFile): EditorState {
             closeBrackets(),
             autocompletion(),
             lintGutter(),
+            lenses,
             language(f.path),
             keymap.of([
                 { key: "Mod-Enter", run: () => (run("run"), true) },
@@ -343,6 +347,9 @@ function editorState(f: ProjectFile): EditorState {
 
 let editor: EditorView;
 let vbaView: EditorView;
+
+/** "テストを生成" above the exported functions of src/ (spec §14.12.10). */
+const lenses = testLenses((name) => generateTestOf(active, name));
 
 function openFile(path: string, at?: { line: number; col: number }) {
     const f = files.find((x) => x.path === path);
@@ -605,15 +612,41 @@ function scheduleCompile(delay = 250) {
     }, delay);
 }
 
-function runCompile() {
-    const started = performance.now();
-    const input = {
+/** The project as `compile` and `generateTest` take it. */
+function compileInput() {
+    return {
         files: sourceFiles(),
         toml: toml(),
         sheets: sheetNames(),
         sheetControls: workbookControls() ?? undefined,
         js: true,
     };
+}
+
+/**
+ * Adds the skeleton of a test of the function `name` of the file `path` to its test file
+ * (`test/<module>.test.ras`, created when there is none) and opens it at the test.
+ */
+function generateTestOf(path: string, name: string) {
+    const r = JSON.parse(generateTest(JSON.stringify(compileInput()), path, name)) as
+        | { path: string; created: boolean; text: string; line: number; error?: undefined }
+        | { error: string };
+    if (r.error !== undefined) {
+        toast(r.error);
+        return;
+    }
+    const existing = files.find((f) => f.path === r.path);
+    if (existing) existing.text = r.text;
+    else files.push({ path: r.path, text: r.text });
+    states.delete(r.path);
+    openFile(r.path, { line: r.line, col: 4 });
+    scheduleCompile(0);
+    toast(r.created ? `${r.path} を作成して ${name} のテストを追加しました` : `${r.path} に ${name} のテストを追加しました`);
+}
+
+function runCompile() {
+    const started = performance.now();
+    const input = compileInput();
     compiled = JSON.parse(compile(JSON.stringify(input))) as Compiled;
     const ms = performance.now() - started;
     if (compiled.error) {
@@ -658,6 +691,7 @@ function applyDiagnostics() {
             return { from, to, severity: d.severity === "hint" ? "hint" : d.severity, message: `${d.message} [${d.code}]`, source: "ras" };
         });
     editor.dispatch(setDiagnostics(editor.state, list));
+    showTestLenses(editor, (compiled.testTargets || []).filter((t) => t.path === active));
 }
 
 let vbaSelected = "";

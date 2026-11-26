@@ -20,6 +20,7 @@ const SERVER_COMMANDS = {
 	listMacros: "ras.listMacros",
 	runMacro: "ras.runMacro",
 	showForm: "ras.showForm",
+	generateTest: "ras.generateTest",
 } as const;
 
 export function registerCommands(server: RasServer, vbaView: GeneratedVbaView): vscode.Disposable {
@@ -44,6 +45,8 @@ export function registerCommands(server: RasServer, vbaView: GeneratedVbaView): 
 		// The run lens of a form's code-behind passes the form's name; the Designer's title bar its file.
 		command("ras.client.showForm", "フォームを Excel で実行", (arg) => showForm(server, arg)),
 		command("ras.userForm.debug", "フォームをデバッグ実行", (arg) => debugForm(arg)),
+		// The lens above a function passes `{ uri, name }`; from the palette, the function at the cursor.
+		command("ras.client.generateTest", "テストを生成", (arg) => generateTest(server, arg)),
 		command("ras.restartServer", "言語サーバーを再起動", async () => {
 			if (!vscode.workspace.isTrusted) {
 				void vscode.window.showInformationMessage("RAS 言語サーバーは、ワークスペースを信頼すると起動します。");
@@ -71,6 +74,63 @@ async function showGeneratedVba(server: RasServer, vbaView: GeneratedVbaView, re
 		throw new Error("言語サーバーから想定外の応答が返されました。");
 	}
 	await vbaView.show(editor.document.uri, result);
+}
+
+/** The answer of `ras.generateTest`: the edits of the test file of the function (spec §14.12.10). */
+interface GeneratedTest {
+	uri: string;
+	path: string;
+	created: boolean;
+	edits: { range: { start: { line: number; character: number }; end: { line: number; character: number } }; newText: string }[];
+	line: number;
+}
+
+function isGeneratedTest(value: unknown): value is GeneratedTest {
+	const v = value as Partial<GeneratedTest> | null;
+	return typeof v === "object" && v !== null && typeof v.uri === "string" && Array.isArray(v.edits) && typeof v.line === "number";
+}
+
+/** Writes the skeleton of a test of a function into its test file (`test/<module>.test.ras`) and opens it there. */
+async function generateTest(server: RasServer, arg: unknown): Promise<void> {
+	let params: unknown = arg;
+	if (typeof arg !== "object" || arg === null || typeof (arg as { name?: unknown }).name !== "string") {
+		const editor = findRasEditor(arg);
+		if (!editor) {
+			void vscode.window.showInformationMessage("テストを生成する関数のある RAS ファイル（.ras）のエディターで実行してください。");
+			return;
+		}
+		params = server.toProtocol(editor.document.uri, editor.selection.active);
+	}
+	const result = await server.execute(SERVER_COMMANDS.generateTest, [params]);
+	if (result === null || result === undefined) {
+		void vscode.window.showInformationMessage("テストを生成できるのは、src/ のモジュールの export された関数です。カーソルを関数の中に置いてください。");
+		return;
+	}
+	if (!isGeneratedTest(result)) {
+		throw new Error("言語サーバーから想定外の応答が返されました。");
+	}
+	const uri = vscode.Uri.parse(result.uri);
+	const edit = new vscode.WorkspaceEdit();
+	if (result.created) {
+		// `ignoreIfExists`: a file the server did not know of is added to, not replaced.
+		edit.createFile(uri, { ignoreIfExists: true });
+	}
+	for (const e of result.edits) {
+		const range = new vscode.Range(e.range.start.line, e.range.start.character, e.range.end.line, e.range.end.character);
+		edit.replace(uri, range, e.newText);
+	}
+	if (!(await vscode.workspace.applyEdit(edit))) {
+		throw new Error(`${result.path} を書き換えられませんでした。`);
+	}
+	const document = await vscode.workspace.openTextDocument(uri);
+	if (result.created) {
+		await document.save();
+	}
+	const position = new vscode.Position(result.line, 0);
+	await vscode.window.showTextDocument(document, {
+		selection: new vscode.Range(position, position),
+		preview: false,
+	});
 }
 
 async function syncNow(server: RasServer): Promise<void> {
