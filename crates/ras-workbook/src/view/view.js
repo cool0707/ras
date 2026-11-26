@@ -94,6 +94,9 @@
     // An edit was posted: nothing more until the page is drawn again, or the edit is refused.
     let busy = false;
     let drag = null;
+    // An object moved or sized and sent, until the sheet is drawn again: it back as it was if the
+    // edit is not made.
+    let undrag = null;
     // The cells copied or cut: { sheet, kind, r1, c1, r2, c2, cut, text }.
     let clip = saved.clip || null;
 
@@ -1052,6 +1055,7 @@
     }
 
     function placeObjects(v) {
+        undrag = null;
         const objects = v.sheet.objects || [];
         if (!objects.length) return;
         const layer = v.layer;
@@ -2115,9 +2119,11 @@
         } else if (m && m.type === "idle") {
             // Nothing was done (a question of the editor's was cancelled).
             setBusy(false);
+            dragNotMade();
             focusGrid();
         } else if (m && m.type === "error") {
             setBusy(false);
+            dragNotMade();
             remember({ pickObj: null });
             showError(String(m.message || "変更できませんでした。"));
             focusGrid();
@@ -3258,9 +3264,9 @@
     }
     // Objects moved (or sized) at once: [[obj, box]].
     function moveObjects(moves) {
-        if (!view || !moves.length) return;
+        if (!view || !moves.length) return false;
         pickAfter(keyOf(moves[0][0]));
-        postEdit(moves.map(([obj, b]) => ({ op: "object", sheet: view.sheet.name, ...target(obj), ...anchorOf(Math.max(0, b.x), Math.max(0, b.y)), width: Math.max(0, Math.round(b.w)), height: Math.max(0, Math.round(b.h)) })));
+        return postEdit(moves.map(([obj, b]) => ({ op: "object", sheet: view.sheet.name, ...target(obj), ...anchorOf(Math.max(0, b.x), Math.max(0, b.y)), width: Math.max(0, Math.round(b.w)), height: Math.max(0, Math.round(b.h)) })));
     }
     // The handles of the selected object: its sides and corners size it.
     const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -3596,10 +3602,11 @@
             let deg = (Math.atan2(e.clientY - d.center[1], e.clientX - d.center[0]) * 180) / Math.PI + 90;
             if (e.shiftKey) deg = Math.round(deg / 15) * 15;
             deg = ((Math.round(deg) % 360) + 360) % 360;
-            if (!d.ghost) d.ghost = makeGhost(false);
+            // The object itself turned so. (It is drawn turned as it is: turned by the rest, after
+            // where frozen panes pin it.)
+            if (d.pin === undefined) d.pin = d.box.style.transform;
             d.now = { rot: deg };
-            ghostAt(d.ghost, f.x, f.y, f.x + f.w, f.y + f.h, false);
-            d.ghost.style.transform = `rotate(${deg}deg)`;
+            d.box.style.transform = `${d.pin} rotate(${deg - (d.obj.rot || 0)}deg)`;
             return;
         }
         if (d.how === "move") {
@@ -3633,18 +3640,58 @@
         }
         // 枠線に合わせる (or Alt held, as in Excel): the sides moved go to the cells' borders.
         if ((saved.snapGrid || e.altKey) && !turn) [x, y, w, h] = snapBox(d.how, x, y, w, h);
-        if (!d.ghost) d.ghost = makeGhost(false);
         d.now = { x, y, w, h };
-        ghostAt(d.ghost, x, y, x + w, y + h, false);
-        if (turn) d.ghost.style.transform = `rotate(${d.obj.rot}deg)`;
-        // The others selected: by as much.
-        for (const g of d.group || []) {
-            const b = g.from;
-            if (!g.ghost) g.ghost = makeGhost(false);
-            g.now = { x: b.x + x - f.x, y: b.y + y - f.y, w: b.w, h: b.h };
-            ghostAt(g.ghost, g.now.x, g.now.y, g.now.x + b.w, g.now.y + b.h, false);
-            if (g.obj.rot) g.ghost.style.transform = `rotate(${g.obj.rot}deg)`;
+        if (d.how === "move") {
+            // Moved: the object itself (and the others selected, by as much).
+            placeBox(d.box, x, y);
+            for (const g of d.group || []) {
+                const b = g.from;
+                g.now = { x: b.x + x - f.x, y: b.y + y - f.y, w: b.w, h: b.h };
+                placeBox(g.obj.box, g.now.x, g.now.y);
+            }
+            return;
         }
+        // Sized: only a see-through copy of it as it will be (the object hidden meanwhile).
+        if (!d.ghost) {
+            d.ghost = copyOfObject(d.box);
+            d.box.classList.add("sizing");
+        }
+        Object.assign(d.ghost.style, { left: `${x}px`, top: `${y}px`, width: `${Math.max(0, w)}px`, height: `${Math.max(0, h)}px` });
+        if (d.obj.chart && window.rasChart && !d.redraw) {
+            d.redraw = requestAnimationFrame(() => {
+                d.redraw = 0;
+                if (!d.ghost.isConnected) return;
+                try {
+                    window.rasChart.draw(d.ghost.querySelector(".chartbox") || d.ghost, d.obj.chart);
+                } catch (e) {
+                    // (As it was drawn, stretched or not.)
+                }
+            });
+        }
+    }
+    function dragNotMade() {
+        if (undrag) undrag();
+        undrag = null;
+    }
+    function placeBox(box, x, y) {
+        Object.assign(box.style, { left: `${x}px`, top: `${y}px` });
+    }
+    // A copy of an object's box (without its handles), half seen and not in the mouse's way.
+    function copyOfObject(box) {
+        const c = box.cloneNode(true);
+        c.querySelectorAll(".objframe").forEach((f) => f.remove());
+        c.classList.remove("on", "framed", "movable");
+        c.classList.add("objcopy");
+        c.removeAttribute("title");
+        return view.layer.appendChild(c);
+    }
+    // The objects back as they were (a move or a size not made).
+    function unmove(d) {
+        if (d.ghost) d.ghost.remove();
+        d.box.classList.remove("sizing");
+        if (d.pin !== undefined) d.box.style.transform = d.pin;
+        placeBox(d.box, d.from.x, d.from.y);
+        for (const g of d.group || []) placeBox(g.obj.box, g.from.x, g.from.y);
     }
     // The border of a column (`cols`) or a row nearest a point of the sheet.
     function nearestBorder(cols, p) {
@@ -3672,14 +3719,20 @@
         const d = objDrag;
         objDrag = null;
         if (!d || !d.now) return;
-        if (d.ghost) d.ghost.remove();
-        for (const g of d.group || []) if (g.ghost) g.ghost.remove();
+        if (d.redraw) cancelAnimationFrame(d.redraw);
         swallowClick = true;
         setTimeout(() => (swallowClick = false));
-        if (d.how === "rot") objectEdit(d.obj, { rotation: d.now.rot });
-        else if (d.how === "adj") endAdjust(d);
-        else moveObjects([[d.obj, d.now], ...(d.group || []).filter((g) => g.now).map((g) => [g.obj, g.now])]);
+        const sized = d.how !== "rot" && d.how !== "adj" && d.how !== "move";
+        // (A size sent: its copy stays until the sheet is drawn again, as the object is hidden.)
+        if (d.ghost && !sized) d.ghost.remove();
+        if (d.how === "rot") {
+            if (objectEdit(d.obj, { rotation: d.now.rot })) undrag = () => unmove(d);
+            else unmove(d);
+        } else if (d.how === "adj") endAdjust(d);
+        else if (moveObjects([[d.obj, d.now], ...(d.group || []).filter((g) => g.now).map((g) => [g.obj, g.now])])) undrag = () => unmove(d);
+        else unmove(d);
     }
+
     // The arrow keys move the selected objects by a pixel (Ctrl: by 10).
     function nudgeObjects(dr, dc, far) {
         if (busy) return;
@@ -3698,9 +3751,9 @@
     const canLine = (obj) => movable(obj) && (obj.el === "sp" || obj.el === "pic" || obj.el === "cxnSp");
     const canTurn = (obj) => movable(obj) && !!obj.el && obj.el !== "graphicFrame";
     function objectEdit(obj, change) {
-        if (!movable(obj) || busy || !view) return;
+        if (!movable(obj) || busy || !view) return false;
         pickAfter(keyOf(obj));
-        postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), ...change }]);
+        return postEdit([{ op: "object", sheet: view.sheet.name, ...target(obj), ...change }]);
     }
     // The objects selected changed at once: `changeOf(obj)` is the change of each (null: not
     // that one, as a fill is not a control's).
