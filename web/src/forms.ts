@@ -6,6 +6,7 @@
 
 import { applyUpdate, initialState, px } from "../../editors/vscode/src/formRunner/protocol";
 import type { FormState, PanelMessage, RuntimeMessage, UserAction } from "../../editors/vscode/src/formRunner/protocol";
+import { versioned } from "./versioned";
 
 interface Panel {
     frame: HTMLIFrameElement;
@@ -112,7 +113,7 @@ export class FormPanels {
         box.className = "form-box";
         const frame = document.createElement("iframe");
         frame.title = `フォーム ${state.name}`;
-        frame.src = "runner.html";
+        frame.src = versioned("runner.html");
         box.append(frame);
         // Forms shown later are on top of the earlier ones, a little to the lower right.
         const n = this.panels.size;

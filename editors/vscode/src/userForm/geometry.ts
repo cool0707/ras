@@ -353,6 +353,8 @@ export function canEditGeometry(control: DesignerControl): boolean {
       "frame",
       "multipage",
       "tabstrip",
+      "progressbar",
+      "filepicker",
     ].includes(control.type.toLowerCase())
   );
 }
@@ -375,4 +377,31 @@ export function isControlVisible(document: DesignerDocument, id: string): boolea
     current = parent;
   }
   return visited.size > 0;
+}
+
+/**
+ * The rectangle a new control is drawn with by dragging from `start` to `end` (points in the
+ * container), as in the VBA editor: either corner may be first, it stays in the container and,
+ * with snapping, its edges are on the grid. Undefined when it is too small to be a control.
+ */
+export function placementRect(
+  start: { left: number; top: number },
+  end: { left: number; top: number },
+  bounds: Bounds,
+  snapping: boolean,
+): Geometry | undefined {
+  const edges = (a: number, b: number, maximum: number) => {
+    let low = clamp(Math.min(a, b), 0, maximum);
+    let high = clamp(Math.max(a, b), 0, maximum);
+    if (snapping) {
+      const snappedLow = clamp(snap(low, true), 0, maximum);
+      const snappedHigh = clamp(snap(high, true), 0, maximum);
+      if (snappedHigh - snappedLow >= minimumSize) [low, high] = [snappedLow, snappedHigh];
+    }
+    return [stableDelta(low), stableDelta(high - low)] as const;
+  };
+  const [left, width] = edges(start.left, end.left, bounds.width);
+  const [top, height] = edges(start.top, end.top, bounds.height);
+  if (width < minimumSize || height < minimumSize) return undefined;
+  return { left, top, width, height };
 }

@@ -12,3 +12,6 @@ declare module "path" {
     import path = require("path-browserify");
     export = path;
 }
+
+/** An id of the build (scripts/build.mjs), put on the files the page loads. */
+declare const RAS_BUILD: string;

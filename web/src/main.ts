@@ -25,6 +25,7 @@ import { rasLanguage } from "./formula";
 import type { Dialog, RunJob, RunResult } from "./runtime/run";
 import samples from "virtual:samples";
 import type { FromWorker, ToWorker } from "./worker";
+import { versioned } from "./versioned";
 
 interface ProjectFile {
     path: string;
@@ -847,7 +848,7 @@ async function run(kind: "run" | "test") {
         if (kind === "test") out.append(tests);
         const job: RunJob = { kind, js, files: projectFiles, target };
         const result = await new Promise<{ result: RunResult; ms: number } | null>((resolve) => {
-            const worker = new Worker("worker.js", { type: "module" });
+            const worker = new Worker(versioned("worker.js"), { type: "module" });
             running = worker;
             renderEntries();
             const shared = typeof SharedArrayBuffer !== "undefined" && crossOriginIsolated ? new SharedArrayBuffer(8 + 65536) : null;
@@ -1590,7 +1591,7 @@ async function main() {
     void isolate();
     setUpSplitter();
     $("editor").innerHTML = '<div class="loading">コンパイラーを読み込んでいます…</div>';
-    const response = fetch("ras_wasm_bg.wasm");
+    const response = fetch(versioned("ras_wasm_bg.wasm"));
     wasmModule = await (WebAssembly.compileStreaming ? WebAssembly.compileStreaming(response) : response.then((r) => r.arrayBuffer()).then((b) => WebAssembly.compile(b)));
     await init({ module_or_path: wasmModule });
     $("editor").innerHTML = "";

@@ -17,6 +17,9 @@ const web = dirname(dirname(fileURLToPath(import.meta.url)));
 const root = dirname(web);
 const dist = join(web, "dist");
 const production = !process.argv.includes("--serve");
+// The id of this build: the page loads its files with it (src/versioned.ts), so that a browser
+// does not mix files of an earlier build kept in its cache with the new ones.
+const buildId = Date.now().toString(36);
 
 if (!existsSync(join(web, "pkg", "ras_wasm_bg.wasm"))) {
     console.error("web/pkg/ がありません。先に node scripts/build-wasm.mjs を実行してください");
@@ -67,7 +70,7 @@ const common = {
     minify: production,
     sourcemap: production ? false : "inline",
     logLevel: "warning",
-    define: { "process.env.NODE_ENV": JSON.stringify(production ? "production" : "development") },
+    define: { "process.env.NODE_ENV": JSON.stringify(production ? "production" : "development"), RAS_BUILD: JSON.stringify(buildId) },
 };
 // The page uses modules of the VS Code extension (the Designer's engine, the sheets' events):
 // the few Node modules they import are the browser's.
@@ -106,7 +109,12 @@ await build({
 });
 await build({ ...common, entryPoints: [join(web, "src", "worker.ts")], outfile: join(dist, "worker.js") });
 copyFileSync(join(web, "pkg", "ras_wasm_bg.wasm"), join(dist, "ras_wasm_bg.wasm"));
-for (const f of ["index.html", "style.css", "sw.js", "designer.html", "runner.html", "frame.css"]) copyFileSync(join(web, "static", f), join(dist, f));
+for (const f of ["style.css", "sw.js", "frame.css"]) copyFileSync(join(web, "static", f), join(dist, f));
+// The pages refer to the scripts and styles with the build's id (`app.js?v=<id>`).
+for (const f of ["index.html", "designer.html", "runner.html"]) {
+    const text = readFileSync(join(web, "static", f), "utf8").replace(/(\b(?:src|href)=")([^":?#]+\.(?:js|css))"/g, `$1$2?v=${buildId}"`);
+    writeFileSync(join(dist, f), text);
+}
 // The icon is the VS Code extension's (also embedded in ras.exe: crates/ras/assets/ras.ico).
 copyFileSync(join(root, "editors", "vscode", "images", "icon.png"), join(dist, "icon.png"));
 writeFileSync(join(dist, ".nojekyll"), "");

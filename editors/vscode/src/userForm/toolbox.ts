@@ -70,8 +70,15 @@ export function createControl(
   uuid: () => string = () => crypto.randomUUID(),
   parentId?: string,
   pageEditable = false,
+  size?: { width: number; height: number },
 ): NewControl | undefined {
-  const metadata = controlMetadata.find((m) => m.type === type);
+  const found = controlMetadata.find((m) => m.type === type);
+  // A control drawn by dragging on the form takes the dragged size (as in the VBA editor);
+  // a click makes it with the default size.
+  const metadata =
+    found && size && size.width > 0 && size.height > 0
+      ? { ...found, width: size.width, height: size.height }
+      : found;
   const parent = document.controls.find((c) => c.id === parentId);
   if (
     parentId &&
