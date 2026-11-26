@@ -914,10 +914,38 @@ impl<'p> Gen<'p> {
                 }
             }
         }
+        // The progress bars (spec §14.11.13): objects of the bundled class, members of the form.
+        let bars: Vec<String> = md
+            .form
+            .as_ref()
+            .and_then(|f| f.decl.as_ref())
+            .map(|d| {
+                d.controls
+                    .iter()
+                    .filter(|c| {
+                        c.control_type
+                            .eq_ignore_ascii_case(crate::collect::PROGRESS_BAR_TYPE)
+                    })
+                    .map(|c| c.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let bar_class = crate::collect::progress_bar_class(prog)
+            .filter(|_| !bars.is_empty())
+            .map(|c| self.class_ref(c));
         self.w("let $me = null;");
         self.w("function $load($form) {");
         self.indent += 1;
         self.w("$me = $form;");
+        if let Some(class) = &bar_class {
+            for bar in &bars {
+                let name = js_str(bar);
+                self.w(format!(
+                    "Object.defineProperty($form, {name}, {{ value: new {class}(), enumerable: true, configurable: true }});"
+                ));
+                self.w(format!("$form[{name}].RAS_Attach($form, {name});"));
+            }
+        }
         for &v in &md.vars {
             let d = &prog.vars[v];
             if d.declared || d.const_value.is_some() {

@@ -1517,5 +1517,78 @@ pub(crate) fn validate_strict(spec: &FormSpec) -> Vec<Issue> {
         ));
     }
     issues.extend(cycle_issues(&parent_by_id, &field_by_id));
+    issues.extend(progress_issues(spec));
+    issues
+}
+
+/// The progress bars (`progress.rs`): a range with room, a value in it, colors, and names of
+/// the labels they are written as that no other control has.
+fn progress_issues(spec: &FormSpec) -> Vec<Issue> {
+    use crate::progress;
+    let mut issues = Vec::new();
+    let issue = |field: String, message: String| error("UFV024", message, &field);
+    for (i, control) in spec.controls.iter().enumerate() {
+        if !progress::is_progress_bar(&control.control_type) {
+            continue;
+        }
+        let path = format!("controls[{i}]");
+        let settings = progress::Settings::of(control);
+        if settings.max <= settings.min {
+            issues.push(issue(
+                format!("{path}.max"),
+                format!("{path}.max は min より大きくしてください。"),
+            ));
+        } else if settings.value < settings.min || settings.value > settings.max {
+            issues.push(issue(
+                format!("{path}.value"),
+                format!(
+                    "{path}.value は min と max の間（{}〜{}）にしてください。",
+                    settings.min, settings.max
+                ),
+            ));
+        }
+        if control
+            .scalar("barHeight")
+            .and_then(Value::as_f64)
+            .is_some_and(|h| h <= 0.0)
+        {
+            issues.push(issue(
+                format!("{path}.barHeight"),
+                format!("{path}.barHeight は 0 より大きくしてください。"),
+            ));
+        }
+        for name in ["barColor", "trackColor", "valueColor"] {
+            let Some(value) = control.scalar(name) else {
+                continue;
+            };
+            let bad = match serde_json::from_value::<FormSpecColor>(value.clone()) {
+                Ok(color) => color.ole().err(),
+                Err(_) => Some(
+                    "色は { \"kind\": \"rgb\", \"value\": \"#RRGGBB\" } の形で書いてください"
+                        .into(),
+                ),
+            };
+            if let Some(message) = bad {
+                issues.push(issue(
+                    format!("{path}.{name}"),
+                    format!("{path}.{name}: {message}。"),
+                ));
+            }
+        }
+        for suffix in progress::PARTS {
+            let part = format!("{}{suffix}", control.name);
+            if let Some((j, _)) = spec
+                .controls
+                .iter()
+                .enumerate()
+                .find(|(_, c)| c.name.eq_ignore_ascii_case(&part))
+            {
+                issues.push(issue(
+                    format!("controls[{j}].name"),
+                    format!("controls[{j}].name {part:?} は、プログレスバー {} を書き込むラベルの名前と同じです。別の名前にしてください。", control.name),
+                ));
+            }
+        }
+    }
     issues
 }

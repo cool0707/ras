@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "kind": "ras.userform",
+  "basis": "designer",
+  "form": { "name": "frmUpload", "caption": "Upload", "width": 264, "height": 96 },
+  "controls": [
+    { "id": "pb", "name": "pbUpload", "type": "ProgressBar", "caption": "Upload progress", "value": 56, "left": 12, "top": 12, "width": 240, "height": 24 },
+    { "id": "go", "name": "btnStart", "type": "CommandButton", "caption": "Start", "left": 180, "top": 54 }
+  ]
+}

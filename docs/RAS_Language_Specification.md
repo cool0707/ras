@@ -14,6 +14,7 @@
 > * RAS のファイルと VBA のモジュールを一対一に対応させる（§12.1.1）。シート・`ThisWorkbook` のコードは `objects/<コード名>.ras`・`objects/ThisWorkbook.ras` に書き、そのファイルがドキュメントモジュール全体になる（§12.2）。シートの上の ActiveX コントロールのイベント（§12.2.1）と `WithEvents` のイベント（§12.2.2）を `@on` で受け取れる。VBE で足したプロシージャは RAS のファイルに取り込む（§14.7.3）。シートのイベントハンドラ（`@on("Sheet1.Change")`）をどのファイルにも書ける方式、`<コード名>Events.ras`、ドキュメントモジュールの RAS 管理領域は廃止した
 > * イベントハンドラを実行時に付ける `on` / `addEventListener` を追加（§12.2.3）。コントロール・シート・ブック・`Application` には、`WithEvents` の変数を持つクラスを生成して付ける。図形には `OnAction` にマクロの名前を設定する。フォーム・シートのファイルのアロー関数が、`this` とそのファイルの関数・変数を正しく参照するようにした（§4.1）
 > * フォームの入力のバリデーション（zod 風のスキーマと `FormValidator`。入力の確定時に検証し、エラーをコントロールの下のラベルに表示する）を同梱のライブラリ `validation` として追加（§14.11.12）
+> * フォームのコントロールにプログレスバー `ProgressBar`（キャプション・割合・バー。ラベルを組み合わせて書き込み、同梱のクラスで `value` などを操作する。バーの色の既定は Windows のアクセント カラー）を追加（§14.11.13）
 * デバッグ実行を一時停止する `debugger;` 文を追加（§14.10.9）。VBA ビルドでは何も出力しない。プレイグラウンドでは、ブラウザの開発者ツールで `.ras` のファイルにブレークポイントを置いてデバッグできる（§14.10.10）
 > * シートの追加・複製・削除・名前の変更を、ブックと `objects/` のファイルに一緒に行う `ras sheet` と VS Code のコマンドを追加（§14.16）。Excel で複製したシートは、同期がコピー元のファイルを複製する（§14.7.2）
 
@@ -2139,9 +2140,9 @@ export function rebuild() {
 * `kind` は `ras.userform`。
 * 座標・サイズはポイント単位で、親コンテナー基準。`form.width` / `form.height` はクライアント領域（MS-OFORMS の `DisplayedSize`）。整数のポイントで 96 DPI の整数ピクセルにならない値（340pt = 453⅓ px など。3 の倍数は常に整数ピクセル）は、VBE が 100% の表示で保存するのと同じく最も近いピクセルに丸めて書き込む。MSForms はクライアント領域のピクセル数と `DisplayedSize` の比でコントロールを置くため、端数があるとコントロールが 1 ピクセルずれる。それ以外の値（別の拡大率で保存されたブックから取り込んだ 349.2pt = 120 DPI の 582 px など）はそのまま書き込む。
 * `controls` は平らな配列で、入れ子は `parentId` で表す。コンテナーは `Frame`・`MultiPage`（子は `Page` のみ）・`Page`（親は `MultiPage` のみ）。`TabStrip` のタブは `tabs` 配列に書く。
-* 組み込みのコントロール: `Label`・`TextBox`・`ComboBox`・`ListBox`・`CommandButton`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`・`Image`・`Frame`・`MultiPage`・`Page`・`TabStrip`。
+* 組み込みのコントロール: `Label`・`TextBox`・`ComboBox`・`ListBox`・`CommandButton`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`・`Image`・`Frame`・`MultiPage`・`Page`・`TabStrip`。RAS 独自のものとして `ProgressBar`（ラベルを組み合わせて書き込む。§14.11.13）。
 * 共通のプロパティ（`left` / `top` / `width` / `height` / `tabIndex` / `zIndex` / `enabled` / `visible`）、種類ごとのプロパティ（`caption` / `text` / `value` / `selectedIndex` / `tabs` など）、見た目（`font` / `foreColor` / `backColor` / `textAlign` / `borderStyle` / `pictureAlignment` / `pictureSizeMode`）の詳細と適用できるコントロールは xlflow の [UserForm Specification](https://harumiweb.github.io/xlflow/reference/userform-spec) に従う。色は `{ "kind": "rgb", "value": "#203040" }`、`{ "kind": "system", "value": "buttonFace" }`、`{ "kind": "ole", "value": "0x8000000F" }` の形で書く。
-* 検査結果のコードは `UFY001`（JSON の構文）と `UFV001`〜`UFV023`。メッセージは日本語。`UFV022`（警告）は、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。`UFV023`（警告）は、`borderStyle` 1（Single）と 0 以外の `specialEffect` を同時に書いたことを表す。MSForms は縁を 1 つしか描かず、VBE では一方を設定するともう一方が戻る（Single にすると平面、立体にすると枠なし）。書き込みでは `borderStyle` を優先し、`specialEffect` を 0 にする。片方だけ書いたときも VBE と同じく、Single の枠のコントロールは平面で、`specialEffect` を書いた `Image`（新しいものは Single の枠を持つ）は枠なしで書き込む。
+* 検査結果のコードは `UFY001`（JSON の構文）と `UFV001`〜`UFV024`（`UFV024` はプログレスバー。§14.11.13）。メッセージは日本語。`UFV022`（警告）は、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。`UFV023`（警告）は、`borderStyle` 1（Single）と 0 以外の `specialEffect` を同時に書いたことを表す。MSForms は縁を 1 つしか描かず、VBE では一方を設定するともう一方が戻る（Single にすると平面、立体にすると枠なし）。書き込みでは `borderStyle` を優先し、`specialEffect` を 0 にする。片方だけ書いたときも VBE と同じく、Single の枠のコントロールは平面で、`specialEffect` を書いた `Image`（新しいものは Single の枠を持つ）は枠なしで書き込む。
 
 xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 
@@ -2211,7 +2212,7 @@ export function enteredName(): string {
 }
 ```
 
-* **`this`:** コードビハインドの関数の中では、`this` がフォーム（VBA の `Me`）を表す。型はフォーム名の型で、`MSForms.UserForm` のメンバー（`caption`・`hide()`・`controls` など）と、`.form.json` のコントロールを持つ。コントロールは `this.<コントロール名>` で参照し、型は `MSForms.TextBox` などの組み込みコントロールの型（カスタム コントロールは `object`）。フォームにないメンバーはエラー（`E0202`）。
+* **`this`:** コードビハインドの関数の中では、`this` がフォーム（VBA の `Me`）を表す。型はフォーム名の型で、`MSForms.UserForm` のメンバー（`caption`・`hide()`・`controls` など）と、`.form.json` のコントロールを持つ。コントロールは `this.<コントロール名>` で参照し、型は `MSForms.TextBox` などの組み込みコントロールの型（`ProgressBar` は同梱のクラス `ProgressBar`（§14.11.13）、カスタム コントロールは `object`）。フォームにないメンバーはエラー（`E0202`）。
 * **型定義:** Microsoft Forms 2.0 の型（`MSForms.UserForm`・`MSForms.Control`・各コントロール・`MSForms.ReturnBoolean` などのイベント引数・`fm…` 列挙型）と `load` / `unload` / `loadPicture`、`vbModeless` / `vbFormControlMenu` などの定数を同梱する（`stdlib/msforms.d.ras`）。名前の綴りは他の型定義と同じく camelCase（§15.3.1）。生成する VBA では `MSForms.TextBox` のように名前空間付きで宣言する。
 * **イベント:** `@on("<コントロール名>.<イベント>")` を付けた関数がイベントを受け取る。フォーム自身のイベントは `UserForm.<イベント>`（`Initialize`・`Activate`・`QueryClose`・`Terminate` など）。コンパイラは VBE と同じ宣言のイベント プロシージャ（`Private Sub btnOK_Click()`、`Private Sub txtName_Exit(ByVal Cancel As MSForms.ReturnBoolean)` など）をフォームのコードモジュールに生成し、そこからハンドラを呼ぶ。イベントと引数は xlflow が VBE で採取した一覧に従う（VS Code 拡張と共通）。
   * ドキュメントモジュールのイベント（§12.2）と同じく、同じイベントに複数のハンドラを書け（宣言順に呼ぶ）、ハンドラ実行中に自身が発火させたイベントは無視する（`@on("…", { reentrant: true })` で解除）。ハンドラで捕捉されなかったエラーは RAS のエラーダイアログで表示する。
@@ -2544,6 +2545,93 @@ function ok() {
 * **デバッグ実行:** フォームのデバッグ実行（§14.10.7）でも同じく動く。ランタイムは `Controls.Add`（`"Forms.<種類>.1"`）と、それで足したコントロールの `Controls.Remove` に対応し、パネルに足したコントロールを描く。
 * `FormValidator` を `src/` のモジュールの変数に置いてもイベントはつながらない（その場合は `commit` などを自分で呼ぶ）。
 * `×` ボタンで閉じるとき、`Exit` は起きない（検証しない）。
+
+#### 14.11.13 プログレスバー（`ProgressBar`）（v0.9で追加）
+
+ラベル・割合・バーを組み合わせたプログレスバーを、組み込みのコントロールと同じようにデザインに置き、プロパティで操作する。MSForms にはプログレスバーが無い（Windows コモン コントロールのものは、すべての PC にあるとは限らない ActiveX コントロール）ので、RAS が MSForms のラベルを組み合わせて作る。
+
+```
+Upload progress                                    56%
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────────────────────
+```
+
+```json
+{ "id": "pb", "name": "pbUpload", "type": "ProgressBar", "caption": "Upload progress", "value": 56,
+  "left": 12, "top": 12, "width": 240, "height": 24 }
+```
+
+```typescript
+// forms/frmUpload.ras
+@on("btnStart.Click")
+function start() {
+    this.pbUpload.caption = "アップロード中";
+    for (let i = 0; i < files.length; i++) {
+        upload(files[i]);
+        this.pbUpload.value = (i + 1) * 100 / files.length;
+    }
+}
+
+// ほかのモジュールからも、コントロールと同じく参照できる
+frmUpload.pbUpload.value = 0;
+```
+
+* **デザインのプロパティ:** 共通のプロパティ（`left` / `top` / `width` / `height` / `enabled` / `visible` / `tag` / `controlTipText`。`tabIndex` は無い）と次のもの。既定の大きさは 200×24 ポイント。
+
+  | プロパティ | 内容 | 省略時 |
+  |---|---|---|
+  | `caption` | 左上に表示する文字列 | `""` |
+  | `value` | 現在の値（`min` 以上 `max` 以下） | 0 |
+  | `min` / `max` | 値の範囲（`max` は `min` より大きい） | 0 / 100 |
+  | `showValue` | 割合（`56%`）を右上に表示する | `true` |
+  | `barHeight` | バーの太さ（ポイント） | 4.5（6 ピクセル） |
+  | `barColor` | バーの色 | Windows のアクセント カラー（下記） |
+  | `trackColor` | バーの下地の色 | `#E5E5E5` |
+  | `foreColor` / `font` | `caption` の文字色とフォント（`font` は割合にも使う） | ラベルの既定 |
+  | `valueColor` | 割合の文字色 | `grayText` |
+
+  検査結果のコードは `UFV024`（`max` が `min` 以下、`value` が範囲の外、`barHeight` が 0 以下、色の指定が不正、下記のラベルの名前がほかのコントロールと同じ）。
+
+* **書き込み:** `ras pack` / `ras sync` は、プログレスバーを同じ位置に重ねた 4 つのラベルとして書き込む。
+
+  | ラベル | 位置 | 内容 |
+  |---|---|---|
+  | `<名前>_Track` | 下端。高さ `barHeight`、幅は全体 | 下地（`trackColor`）。`Tag` に、ラベルでは表せない設定（`RAS.ProgressBar\|min=0\|max=100\|value=56\|showValue=1\|accent=1`）を持つ |
+  | `<名前>_Bar` | `_Track` と同じ。幅は割合（ピクセルに丸める） | バー（`barColor`）。値が `min` 以下のときは非表示 |
+  | `<名前>_Caption` | 上端。高さは全体からバーと間隔 3pt を引いたもの、幅は割合の 36pt を除いたもの | `caption`（背景は透明） |
+  | `<名前>_Value` | 右上。幅 36pt | 割合（右揃え、背景は透明。`showValue` が `false` なら非表示） |
+
+  ラベルの名前は `<名前>_Track` などで固定なので、フォームにこれらの名前のコントロールを置けない（`UFV024`）。`ras form pull` は、`_Track` の `Tag` が `RAS.ProgressBar` で始まる 4 つのラベルを、プログレスバーに戻して取り込む。
+
+* **コードからの操作:** フォームの `this.<名前>`（ほかのモジュールからは `frmUpload.<名前>`）は、同梱のクラス `ProgressBar`（`crates/ras-compiler/stdlib/progressbar.ras`。RAS で書いたもの）のオブジェクトである。
+
+  | メンバー | 内容 |
+  |---|---|
+  | `value` / `min` / `max` | 値と範囲（`double`）。範囲の外の値も設定でき、バーは端で止まる |
+  | `fraction` / `text` | 進み具合（0〜1。読み取り専用）と、右上に表示する文字列（`"56%"`。四捨五入） |
+  | `caption` / `showValue` | 左上の文字列、割合を表示するか |
+  | `barColor` / `trackColor` / `foreColor` / `valueColor` | 色（VBA の色の値。`rgb(0, 120, 215)` など） |
+  | `barHeight` | バーの太さ（ポイント） |
+  | `left` / `top` / `width` / `height` | 位置と大きさ（ポイント）。変えるとラベルを並べ直す |
+  | `visible` / `enabled` / `tag` / `controlTipText` | コントロールと同じ（`tag` は `_Caption` の `Tag`） |
+
+  イベントは無い（`@on("pbUpload.Click")` はエラー）。
+
+* **生成する VBA:** フォームのコードモジュールに `Public pbUpload As ProgressBar` を宣言し、`UserForm_Initialize` の先頭（`RAS_FormInit` の後、コードビハインドのハンドラより前）でラベルにつなぐ。コードビハインドが無いフォームにも、このためのコードモジュールを出力する。クラス モジュール `ProgressBar` と標準モジュール `RAS_ProgressBar` は、プログレスバーを置いたときだけ出力する。手書きの VBA からも `frmUpload.pbUpload.Value = 56` のように使える。
+
+  ```vb
+  Public pbUpload As ProgressBar
+
+  Private Sub UserForm_Initialize()
+      RAS_FormInit '--- RAS ---
+      On Error GoTo RAS_OnError
+      Set pbUpload = New ProgressBar
+      pbUpload.RAS_Attach Me, "pbUpload"
+      …
+  ```
+
+* **アクセント カラー:** `barColor` を省略すると、ブックにはシステム カラー `highlight`（Windows の既定の強調色。Windows 10 / 11 では `#0078D7`）で書き込み、フォームを読み込んだときに、Windows の設定のアクセント カラー（レジストリの `HKCU\Software\Microsoft\Windows\DWM\AccentColor`）に変える。読めない環境では `highlight` のまま。デザイナーは、CSS のシステム カラー `AccentColor`（使えないブラウザでは `#0078D7`）で描く。
+* **デバッグ実行:** フォームのパネル（§14.10.7）では、書き込みと同じ 4 つのラベルとして描き、同じクラスで操作する。アクセント カラーは読まない（`highlight` で描く）。
+* **デザイナー:** ツールボックスの「標準」に `ProgressBar` がある。キャンバスには書き込むのと同じ配置で描き、プロパティ グリッドで上の表のプロパティを編集できる。
 
 ### 14.12 テスト（`ras test`）（v0.9で追加）
 

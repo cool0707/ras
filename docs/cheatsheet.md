@@ -293,6 +293,22 @@ function submit() {
 }
 ```
 
+```typescript
+// forms/frmWork.ras（プログレスバー。.form.json に
+// { "type": "ProgressBar", "name": "pbWork", "caption": "処理中", "value": 0 } を置く。
+// キャプション・割合・バーを表示し、バーの既定の色は Windows のアクセント カラー）
+@on("btnOK.Click")
+function run() {
+    const total = 200;
+    this.pbWork.max = total;                  // min / max（既定 0 / 100）
+    for (let i = 1; i <= total; i++) {
+        this.pbWork.value = i;                // バーと右上の割合（this.pbWork.text は "56%"）が動く
+    }
+    this.pbWork.caption = "完了";
+    this.pbWork.barColor = rgb(16, 124, 16);  // trackColor / foreColor / valueColor / showValue / visible …
+}
+```
+
 表示スケール（DPI）が 100% 以外でも、フォームの内側の大きさはデザインどおりになります（読み込み時に合わせます）。
 
 ## ファイルの読み書き（`Open` / `Print #` / `Close`）

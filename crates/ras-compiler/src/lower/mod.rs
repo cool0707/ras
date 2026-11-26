@@ -3438,8 +3438,35 @@ impl<'p> Lowerer<'p> {
         }
         let handlers = md.fns.clone();
         self.emit_with_events(fi, &decl.name, &handlers, false);
+        // The progress bars (spec §14.11.13): an object of the bundled class per bar, a public
+        // member of the form under the bar's name, attached to its labels when the form loads.
+        let mut attach = Vec::new();
+        let bars: Vec<&str> = decl
+            .controls
+            .iter()
+            .filter(|c| {
+                c.control_type
+                    .eq_ignore_ascii_case(crate::collect::PROGRESS_BAR_TYPE)
+            })
+            .map(|c| c.name.as_str())
+            .collect();
+        if let Some(class) = crate::collect::progress_bar_class(prog).filter(|_| !bars.is_empty()) {
+            let class_name = self.class_name(class, &[]);
+            let method = prog
+                .find_methods(class, "RAS_Attach")
+                .first()
+                .map(|&f| prog.fns[f].proc_ident())
+                .unwrap_or_else(|| "RAS_Attach".into());
+            let mut lines = Vec::new();
+            for bar in &bars {
+                lines.push(format!("Public {bar} As {class_name}"));
+                attach.push(VStmt::Raw(format!("Set {bar} = New {class_name}")));
+                attach.push(VStmt::Raw(format!("{bar}.{method} Me, \"{bar}\"")));
+            }
+            self.out[fi].decls.push(lines.join("\n"));
+        }
         let init_fn = md.init_fn;
-        if init_fn.is_some()
+        if (init_fn.is_some() || !attach.is_empty())
             && !table
                 .iter()
                 .any(|t| t.0 .0 == "UserForm" && t.0 .1.name == "Initialize")
@@ -3486,6 +3513,7 @@ impl<'p> Lowerer<'p> {
             let mut calls = Vec::new();
             let mut locals = Vec::new();
             if object == "UserForm" && def.name == "Initialize" {
+                calls.append(&mut attach);
                 if let Some(f) = init_fn {
                     calls.push(call_stmt(prog.fns[f].proc_ident(), vec![]));
                 }

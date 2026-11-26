@@ -311,6 +311,9 @@ impl Collector {
             None if input.kind == ModuleKind::Std && input.key == VALIDATION_MODULE => {
                 "RAS_Validation".to_string()
             }
+            None if input.kind == ModuleKind::Std && input.key == PROGRESS_MODULE => {
+                "RAS_ProgressBar".to_string()
+            }
             None => vba_module_name(&input.key),
         };
         self.prog.modules.push(ModuleData {
@@ -521,6 +524,13 @@ impl Collector {
             for control in &decl.controls {
                 let ty = match control.control_type.as_str() {
                     t if t.eq_ignore_ascii_case("Control") || t.is_empty() => Type::Object,
+                    // Labels on the form, operated through the bundled class (spec §14.11.13).
+                    t if t.eq_ignore_ascii_case(PROGRESS_BAR_TYPE) => {
+                        match progress_bar_class(&self.prog) {
+                            Some(c) => Type::Class(c, Vec::new()),
+                            None => Type::Object,
+                        }
+                    }
                     t => match msforms.iter().find(|(k, _)| k.eq_ignore_ascii_case(t)) {
                         Some((_, Sym::Class(c))) => Type::Class(*c, Vec::new()),
                         _ => Type::Object,
@@ -2540,6 +2550,21 @@ pub const STRUCT_MAP_MODULE: &str = "ras_collections";
 
 /// The bundled form validation library (spec §14.11.12): `import { z, FormValidator } from "validation"`.
 pub const VALIDATION_MODULE: &str = "validation";
+
+/// The bundled progress bar (spec §14.11.13): the class of a form's `ProgressBar` controls.
+pub const PROGRESS_MODULE: &str = "progressbar";
+
+/// FormSpec type of the progress bar, a control composed of labels (spec §14.11.13).
+pub const PROGRESS_BAR_TYPE: &str = "ProgressBar";
+
+/// The bundled class of the progress bars of forms.
+pub fn progress_bar_class(prog: &Program) -> Option<ClassId> {
+    let m = prog.module_by_key(PROGRESS_MODULE)?;
+    match prog.modules[m].exports.get("ProgressBar") {
+        Some(Sym::Class(c)) => Some(*c),
+        _ => None,
+    }
+}
 
 /// The bundled type definitions of the test API (`describe`, `expect`, ...; spec §14.12.4).
 pub const TEST_DEFS_MODULE: &str = "test.d";

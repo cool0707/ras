@@ -255,6 +255,32 @@ header {
 .control.label {
   overflow: hidden;
 }
+/* RAS's progress bar: four labels on a transparent box (ras-form progress.rs). */
+.control.progressbar {
+  overflow: hidden;
+  background: transparent;
+}
+.control.progressbar > span {
+  position: absolute;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.progress-track {
+  background-color: #e5e5e5;
+}
+.progress-bar {
+  /* The accent color of Windows, which the bar takes when the form loads; Highlight elsewhere. */
+  background-color: AccentColor;
+}
+@supports not (background-color: AccentColor) {
+  .progress-bar {
+    background-color: #0078d7;
+  }
+}
+.progress-value {
+  text-align: right;
+  color: #6d6d6d;
+}
 /* SpecialEffect fmSpecialEffectSunken: the edit fields. */
 .textbox,
 .combobox,

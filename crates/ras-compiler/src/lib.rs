@@ -97,6 +97,11 @@ const STDLIB: &[(&str, ModuleKind, &str)] = &[
         ModuleKind::Std,
         include_str!("../stdlib/validation.ras"),
     ),
+    (
+        collect::PROGRESS_MODULE,
+        ModuleKind::Std,
+        include_str!("../stdlib/progressbar.ras"),
+    ),
 ];
 
 fn stdlib_inputs() -> Vec<SourceInput> {
@@ -116,6 +121,22 @@ fn stdlib_inputs() -> Vec<SourceInput> {
 pub fn analyze(sources: Vec<SourceInput>, config: Config) -> Program {
     let mut inputs = stdlib_inputs();
     inputs.extend(sources);
+    // A form with a progress bar needs code that attaches it (spec §14.11.13), with or without
+    // a code-behind of its own.
+    for decl in &config.forms {
+        let has_bar = decl.controls.iter().any(|c| {
+            c.control_type
+                .eq_ignore_ascii_case(collect::PROGRESS_BAR_TYPE)
+        });
+        let key = format!("{}{}", collect::FORM_KEY_PREFIX, decl.name);
+        if has_bar && !inputs.iter().any(|i| i.key.eq_ignore_ascii_case(&key)) {
+            inputs.push(form_source(
+                PathBuf::from(format!("forms/{}.ras", decl.name)),
+                &decl.name,
+                String::new(),
+            ));
+        }
+    }
     let mut prog = collect::collect(inputs, config);
     check::check(&mut prog);
     testing::check(&mut prog);

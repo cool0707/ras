@@ -1608,7 +1608,8 @@ fn cheat_sheet_examples_pass_the_check() {
                 "controls": [
                     { "id": "n", "name": "txtName", "type": "TextBox", "left": 12, "top": 12 },
                     { "id": "o", "name": "btnOK", "type": "CommandButton", "left": 12, "top": 48 },
-                    { "id": "c", "name": "btnCancel", "type": "CommandButton", "left": 96, "top": 48 }
+                    { "id": "c", "name": "btnCancel", "type": "CommandButton", "left": 96, "top": 48 },
+                    { "id": "p", "name": "pbWork", "type": "ProgressBar", "left": 12, "top": 80, "width": 216 }
                 ]
             });
             files.push((format!("forms/{name}.form.json"), spec.to_string()));

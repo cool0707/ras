@@ -342,6 +342,27 @@ function buildControls(): Record<string, ControlContract> {
 		// The icon or cursor of MousePointer Custom (99), where there is a MousePointer.
 		if (contract.properties.mousePointer) contract.properties.mouseIcon = mouseIcon;
 	}
+	// RAS's progress bar: written as four labels (ras-form progress.rs), operated through the
+	// bundled class `ProgressBar`. Its properties are its own; it takes no focus.
+	controls.progressbar = {
+		type: "ProgressBar",
+		progId: "RAS.ProgressBar",
+		canContainChildren: false,
+		excludedCommon: ["tabIndex"],
+		properties: {
+			caption: p("string", false, "supported", "Text at the top left.", true),
+			value: p("number", false, "supported", "Current value, between min and max.", true),
+			min: p("number", false, "supported", "Least value (omitted: 0).", true),
+			max: p("number", false, "supported", "Greatest value (omitted: 100).", true),
+			showValue: flag("The percentage shows at the top right (omitted: true)."),
+			barHeight: { ...p("number", false, "supported", "Height of the bar in points (omitted: 4.5).", true), minimum: 0.75, maximum: 1000 },
+			barColor: { ...color, description: "Color of the bar (omitted: the accent color of Windows)." },
+			trackColor: { ...color, description: "Color under the bar (omitted: #E5E5E5)." },
+			valueColor: { ...color, description: "Color of the percentage (omitted: grayText)." },
+			foreColor: { ...color, description: "Color of the caption." },
+			font,
+		},
+	};
 	return controls;
 }
 
@@ -382,7 +403,7 @@ export function lookupProperty(properties: Record<string, PropertyContract>, nam
 	return found ? properties[found] : undefined;
 }
 
-const editorPropertyNames = ["font", "foreColor", "backColor", "borderColor", "picture", "mouseIcon", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode"];
+const editorPropertyNames = ["font", "foreColor", "backColor", "borderColor", "picture", "mouseIcon", "textAlign", "borderStyle", "pictureAlignment", "pictureSizeMode", "barColor", "trackColor", "valueColor"];
 const scalarTypes: ValueType[] = ["string", "number", "integer", "boolean", "any"];
 export const isEditorProperty = (name: string) => editorPropertyNames.includes(name);
 const isScalar = (contract: PropertyContract) => scalarTypes.includes(contract.valueType);

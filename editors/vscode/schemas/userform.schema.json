@@ -411,7 +411,8 @@
                   "Frame",
                   "MultiPage",
                   "Page",
-                  "TabStrip"
+                  "TabStrip",
+                  "ProgressBar"
                 ]
               },
               {
@@ -1012,16 +1013,12 @@
             "description": "Tab キーでフォーカスを移せる"
           },
           "min": {
-            "type": "integer",
-            "minimum": -2147483648,
-            "maximum": 2147483647,
-            "description": "SpinButton / ScrollBar の最小値"
+            "type": "number",
+            "description": "SpinButton / ScrollBar の最小値（整数）、ProgressBar の最小値（省略時 0）"
           },
           "max": {
-            "type": "integer",
-            "minimum": -2147483648,
-            "maximum": 2147483647,
-            "description": "SpinButton / ScrollBar の最大値（省略時は SpinButton 100、ScrollBar 32767）"
+            "type": "number",
+            "description": "SpinButton / ScrollBar の最大値（整数。省略時は SpinButton 100、ScrollBar 32767）、ProgressBar の最大値（省略時 100）"
           },
           "smallChange": {
             "type": "integer",
@@ -1052,6 +1049,81 @@
             "minimum": 0,
             "maximum": 2147483647,
             "description": "押し続けたときの変化の間隔（ミリ秒）"
+          },
+          "showValue": {
+            "type": "boolean",
+            "description": "ProgressBar: 割合（56%）を右上に表示する（省略時 true）"
+          },
+          "barHeight": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "ProgressBar: バーの太さ（ポイント。省略時 4.5）"
+          },
+          "barColor": {
+            "type": "object",
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "rgb",
+                  "system",
+                  "ole"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+              }
+            },
+            "description": "ProgressBar: バーの色（省略時は Windows のアクセント カラー）"
+          },
+          "trackColor": {
+            "type": "object",
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "rgb",
+                  "system",
+                  "ole"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+              }
+            },
+            "description": "ProgressBar: バーの下地の色（省略時 #E5E5E5）"
+          },
+          "valueColor": {
+            "type": "object",
+            "required": [
+              "kind",
+              "value"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "rgb",
+                  "system",
+                  "ole"
+                ]
+              },
+              "value": {
+                "type": "string",
+                "description": "#RRGGBB、システム カラー名（buttonFace など）、または 0xXXXXXXXX"
+              }
+            },
+            "description": "ProgressBar: 割合の文字色（省略時 grayText）"
           },
           "tabOrientation": {
             "enum": [

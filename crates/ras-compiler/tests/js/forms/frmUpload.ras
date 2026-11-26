@@ -1,0 +1,16 @@
+@on("UserForm.Initialize")
+function init() {
+    console.log(`${this.pbUpload.caption} ${this.pbUpload.value} ${this.pbUpload.text}`);
+}
+
+@on("btnStart.Click")
+function start() {
+    this.pbUpload.caption = "Uploading";
+    this.pbUpload.max = 200;
+    this.pbUpload.value = 50;
+    console.log(`${this.pbUpload.text} ${this.pbUpload.fraction}`);
+    this.pbUpload.value = 0;
+    this.pbUpload.showValue = false;
+    this.pbUpload.width = 120;
+    this.pbUpload.value = 300;
+}

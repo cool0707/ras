@@ -444,6 +444,8 @@ pub fn pull_with(
         pictures.push(rel);
     }
 
+    // The labels of a progress bar are the progress bar again.
+    crate::progress::collapse(&mut spec);
     let decl = ras_compiler::FormDecl {
         name: spec.form.name.clone(),
         controls: spec

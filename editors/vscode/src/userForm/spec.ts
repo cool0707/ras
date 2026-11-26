@@ -506,6 +506,7 @@ function validateControlProperties(control: JsonObject, type: string, progId: st
 			if (control.value < lo || control.value > hi)
 				issues.push(issue("UFV021", "error", `value は min と max の間（${lo}〜${hi}）にしてください。`, `${path}.value`));
 		}
+		if (type === "ProgressBar") issues.push(...progressIssues(control, path));
 		issues.push(...edgeIssues(control, path));
 		const font = control.font ?? (isObject(control.properties) ? control.properties.font : undefined);
 		const multiLine = control.multiLine === true || (isObject(control.properties) && control.properties.multiLine === true);
@@ -622,8 +623,35 @@ function parentAllowsChild(parent: RawRef, child: RawRef): boolean | undefined {
 	return true;
 }
 
+/** The labels a progress bar is written as, by the suffix of their names (ras-form progress.rs). */
+export const PROGRESS_PARTS = ["_Track", "_Bar", "_Caption", "_Value"];
+
+/** A progress bar's range, value and bar height (ras-form validate.rs `progress_issues`). */
+function progressIssues(control: JsonObject, path: string): ValidationIssue[] {
+	const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+	const min = num(control.min, 0);
+	const max = num(control.max, 100);
+	const value = num(control.value, 0);
+	if (max <= min) return [issue("UFV024", "error", `${path}.max は min より大きくしてください。`, `${path}.max`)];
+	const issues: ValidationIssue[] = [];
+	if (value < min || value > max) issues.push(issue("UFV024", "error", `${path}.value は min と max の間（${min}〜${max}）にしてください。`, `${path}.value`));
+	for (const name of ["barColor", "trackColor", "valueColor"]) {
+		const error = control[name] === undefined || control[name] === null ? undefined : colorError(control[name]);
+		if (error) issues.push(issue("UFV024", "error", error, `${path}.${name}`));
+	}
+	if (typeof control.barHeight === "number" && control.barHeight <= 0) issues.push(issue("UFV024", "error", `${path}.barHeight は 0 より大きくしてください。`, `${path}.barHeight`));
+	return issues;
+}
+
 function validateStructure(controls: RawRef[]): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
+	// The names of the labels of a progress bar belong to it.
+	for (const bar of controls.filter((c) => c.type.trim().toLowerCase() === "progressbar" && c.name))
+		for (const suffix of PROGRESS_PARTS) {
+			const part = `${bar.name}${suffix}`.toLowerCase();
+			for (const other of controls.filter((c) => c.name.toLowerCase() === part))
+				issues.push(issue("UFV024", "error", `${other.path}.name "${other.name}" は、プログレスバー ${bar.name} を書き込むラベルの名前と同じです。別の名前にしてください。`, `${other.path}.name`));
+		}
 	const ids = new Map<string, RawRef>();
 	for (const control of controls) {
 		if (!control.id) continue;

@@ -777,7 +777,7 @@ module.exports = function install(rt) {
             // Controls, with their containers (`parentId` is the id of the container in the spec).
             const byId = new Map();
             this.$all = [];
-            const specs = flatten(spec.controls || []);
+            const specs = flatten(spec.controls || []).flatMap((c) => (String(c.type || "").trim().toLowerCase() === "progressbar" && c.name ? progressParts(c) : [c]));
             for (const c of specs) {
                 const kind = KINDS[String(c.type || "").trim().toLowerCase()];
                 if (!kind || !c.name) continue;
@@ -1209,6 +1209,40 @@ module.exports = function install(rt) {
             }
         }
         return out;
+    }
+
+    /**
+     * The labels a progress bar (`"type": "ProgressBar"`, spec §14.11.13) is written as; the same
+     * as `progress.rs` of ras-form, which writes them into the workbook.
+     */
+    function progressParts(c) {
+        const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+        const min = num(c.min, 0);
+        const max = num(c.max, 100);
+        const value = num(c.value, 0);
+        const showValue = c.showValue !== false;
+        const left = num(c.left, 0);
+        const top = num(c.top, 0);
+        const width = num(c.width, 200);
+        const height = num(c.height, 24);
+        const fraction = max <= min ? 0 : Math.min(1, Math.max(0, (value - min) / (max - min)));
+        const barHeight = Math.min(Math.max(num(c.barHeight, 4.5), 0.75), Math.max(height, 0.75));
+        const barTop = top + height - barHeight;
+        const textHeight = Math.max(height - barHeight - 3, 0);
+        const valueWidth = showValue ? Math.min(36, width) : 0;
+        const filled = Math.round((width * fraction) / 0.75) * 0.75;
+        const accent = !c.barColor;
+        const visible = c.visible !== false;
+        const base = { parentId: c.parentId, zIndex: c.zIndex, type: "Label", caption: "", controlTipText: c.controlTipText, enabled: c.enabled, borderStyle: 0 };
+        const part = (suffix, l, t, w, h, more) =>
+            Object.fromEntries(Object.entries({ ...base, id: `${c.id || c.name}${suffix}`, name: `${c.name}${suffix}`, left: l, top: t, width: Math.max(w, 0.75), height: Math.max(h, 0.75), visible, ...more }).filter(([, v]) => v !== undefined && v !== null));
+        const text = { font: c.font, backStyle: 0, wordWrap: false };
+        return [
+            part("_Track", left, barTop, width, barHeight, { backColor: c.trackColor || { kind: "rgb", value: "#E5E5E5" }, tag: `RAS.ProgressBar|min=${min}|max=${max}|value=${value}|showValue=${showValue ? 1 : 0}|accent=${accent ? 1 : 0}` }),
+            part("_Bar", left, barTop, filled, barHeight, { backColor: c.barColor || { kind: "system", value: "highlight" }, visible: visible && filled > 0 }),
+            part("_Caption", left, top, width - valueWidth, textHeight, { ...text, caption: c.caption ?? "", tag: c.tag, foreColor: c.foreColor, visible: visible && width - valueWidth > 0 && textHeight > 0 }),
+            part("_Value", left + width - valueWidth, top, valueWidth, textHeight, { ...text, caption: `${Math.floor(fraction * 100 + 0.5)}%`, foreColor: c.valueColor || { kind: "system", value: "grayText" }, textAlign: 3, visible: visible && showValue && valueWidth > 0 && textHeight > 0 }),
+        ];
     }
 
     /** The data URI of a picture action of a FormSpec (`{ path }`), or null. */
