@@ -1303,7 +1303,7 @@ button:disabled {
   padding: 5px 6px;
   margin: 0;
 }
-.toolbox button:hover:not(:disabled) {
+.toolbox button:hover:not(:disabled):not([aria-pressed="true"]) {
   background: var(--vscode-list-hoverBackground);
 }
 .toolbox button[aria-pressed="true"] {
