@@ -5668,7 +5668,8 @@
         const after = runWait.after;
         runWait = null;
         setBusy(false);
-        focusGrid();
+        // (Not while a control is typed into.)
+        if (!runAskBox) focusGrid();
         after(m);
     }
     // Cells typed into or cleared (one text for all the ranges); the other edits are refused.
@@ -5716,10 +5717,86 @@
         remember({ runFocus: next || null });
         postRun({ op: "control", sheet: view.sheet.name, object: had, events: [{ event: "LostFocus" }] });
     }
-    // An object clicked: an ActiveX control's events, a shape's or a form control's macro.
+    // What a click on a control changes, by where it is on it: the part of a spin button or a
+    // scroll bar (`more` / `less`, `pageMore` / `pageLess`), the item of a list box.
+    function runAction(obj, e) {
+        const type = (obj.form && obj.form.type) || "";
+        const r = obj.box.getBoundingClientRect();
+        const horizontal = r.width > r.height;
+        // (Along the axis, from where the value is least: left, or top.)
+        const len = horizontal ? r.width : r.height;
+        const at = horizontal ? e.clientX - r.left : e.clientY - r.top;
+        if (type === "SpinButton" || type === "Spin") {
+            // Up (top) and right are more.
+            return { part: horizontal ? (at > len / 2 ? "more" : "less") : at < len / 2 ? "more" : "less" };
+        }
+        if (type === "ScrollBar" || type === "Scroll") {
+            const arrow = Math.min(r.width, r.height);
+            if (at < arrow) return { part: "less" };
+            if (at > len - arrow) return { part: "more" };
+            const f = obj.form;
+            const span = (f.max || 0) - (f.min || 0);
+            const thumb = arrow + (len - 2 * arrow) * (span ? ((f.val || 0) - (f.min || 0)) / span : 0);
+            return { part: at < thumb ? "pageLess" : "pageMore" };
+        }
+        if (type === "ListBox" || type === "List") {
+            const span = e.target.closest && e.target.closest(".ctl.list > span");
+            if (span) return { index: [...span.parentNode.children].indexOf(span) };
+        }
+        return null;
+    }
+    // A text typed into a control, or an item chosen from its list, in a box under it.
+    function runAsk(obj, opts, done) {
+        closeRunAsk();
+        const r = obj.box.getBoundingClientRect();
+        const pop = (runAskBox = document.body.appendChild(el("div", "runask")));
+        pop.style.left = `${Math.round(r.left)}px`;
+        pop.style.top = `${Math.round(r.bottom + 1)}px`;
+        pop.style.minWidth = `${Math.round(r.width)}px`;
+        let input = null;
+        if (opts.text) {
+            input = pop.appendChild(el("input"));
+            input.type = "text";
+            input.value = obj.text || "";
+            input.addEventListener("keydown", (e) => {
+                e.stopPropagation();
+                if (e.key === "Enter") {
+                    closeRunAsk();
+                    done({ text: input.value });
+                } else if (e.key === "Escape") {
+                    closeRunAsk();
+                    focusGrid();
+                }
+            });
+        }
+        (opts.items || []).forEach((item, index) => {
+            const b = pop.appendChild(el("button", item === obj.text ? "on" : null, item || " "));
+            b.type = "button";
+            b.addEventListener("mousedown", (e) => e.preventDefault());
+            b.addEventListener("click", () => {
+                closeRunAsk();
+                done({ index });
+            });
+        });
+        if (input) {
+            input.focus();
+            input.select();
+        }
+    }
+    let runAskBox = null;
+    function closeRunAsk() {
+        if (runAskBox) runAskBox.remove();
+        runAskBox = null;
+    }
+    document.addEventListener("mousedown", (e) => {
+        if (runAskBox && !runAskBox.contains(e.target)) closeRunAsk();
+    });
+    // An object clicked: an ActiveX control's events (and what the click changes), a shape's or
+    // a form control's macro (a form control changed first: a check box turned on, ...).
     function runClick(obj, e) {
         if (busy || !view) return;
         const sheet = view.sheet.name;
+        const type = (obj.form && obj.form.type) || "";
         if (obj.activex !== undefined && obj.name) {
             // Where on it, in points (Excel's X, Y), and the keys held (Shift 1, Ctrl 2, Alt 4).
             const r = obj.box.getBoundingClientRect();
@@ -5734,13 +5811,27 @@
                 list.push({ event: "GotFocus" });
             }
             list.push({ event: "MouseDown", args: [1, shift, x, y] }, { event: "MouseUp", args: [1, shift, x, y] }, { event: "Click" });
-            postRun({ op: "control", sheet, object: obj.name, events: list }, () => {});
+            const post = (more) => postRun({ op: "control", sheet, object: obj.name, events: list, ...more }, () => {});
+            // A text box is typed into, a combo box's item chosen (or its text typed).
+            if (type === "TextBox" || type === "ComboBox") {
+                post({ events: list.filter((x) => x.event !== "Click") });
+                runAsk(obj, { text: true, items: type === "ComboBox" ? obj.form.list || [] : [] }, (answer) =>
+                    postRun({ op: "control", sheet, object: obj.name, events: answer.index !== undefined ? [{ event: "Click" }] : [], action: answer.index !== undefined ? { index: answer.index } : null, text: answer.text }, () => {}),
+                );
+                return;
+            }
+            post({ action: runAction(obj, e) });
             return;
         }
-        if (obj.onAction || obj.macro) {
-            runBlur();
-            postRun({ op: "macro", sheet, object: obj.name || "", macro: obj.macro || "" }, () => {});
+        const form = ["CheckBox", "Radio", "List", "Drop", "Spin", "Scroll"].includes(type) && !(obj.form && obj.form.activex);
+        if (!form && !obj.onAction && !obj.macro) return;
+        runBlur();
+        const post = (action) => postRun({ op: "macro", sheet, object: obj.name || "", macro: obj.macro || "", action }, () => {});
+        if (type === "Drop") {
+            runAsk(obj, { items: obj.form.list || [] }, (answer) => post(answer));
+            return;
         }
+        post(form ? runAction(obj, e) : null);
     }
     document.addEventListener("mouseup", () => {
         runPress = null;
@@ -11498,7 +11589,8 @@
     });
     // A click on the page outside a control gives the keys back to the grid.
     document.addEventListener("mouseup", (e) => {
-        if (!entry && !dialog && !(e.target.closest && e.target.closest("button, input, select, label, textarea, .menu, #side"))) focusGrid();
+        // (Nor while a control of the run mode is typed into.)
+        if (!entry && !dialog && !runAskBox && !(e.target.closest && e.target.closest("button, input, select, label, textarea, .menu, #side"))) focusGrid();
     });
 
     // More rows and columns while the sheet is scrolled to its end.

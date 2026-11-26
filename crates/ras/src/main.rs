@@ -1399,7 +1399,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
             };
             book::dump(&file, sheet, range.as_deref(), *format, *formats, if *all { None } else { Some((*max_rows, *max_cols)) })
         }
-        Command::Book { action: book::BookCommand::View { file, diff, output, stdout, open, all, title, drawings, sheet, editable, run } } => {
+        Command::Book { action: book::BookCommand::View { file, diff, output, stdout, open, all, title, drawings, sheet, editable, run, controls } } => {
             // The project, when there is one: its workbook, and build/view/ for the page.
             let root = find_root(project).ok();
             let file = match (file, &root) {
@@ -1411,7 +1411,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 (None, None) => return Err("対象ブックを指定してください".into()),
             };
             if *stdout {
-                print!("{}", book::view_page(&file, diff.as_deref(), *all, title.as_deref(), drawings.as_deref(), sheet.as_deref(), *editable, *run)?);
+                print!("{}", book::view_page(&file, diff.as_deref(), *all, title.as_deref(), drawings.as_deref(), sheet.as_deref(), *editable, *run, controls.as_deref())?);
                 return Ok(ExitCode::SUCCESS);
             }
             let dir = root.unwrap_or_else(|| PathBuf::from(".")).join("build").join("view");
@@ -1449,7 +1449,7 @@ fn run(cli: Cli) -> Result<ExitCode, String> {
                 Err(Err(message)) => return Err(message),
             };
             if *view {
-                print!("{}", book::view_page(&written, None, *all, None, None, sheet.as_deref(), *editable, false)?);
+                print!("{}", book::view_page(&written, None, *all, None, None, sheet.as_deref(), *editable, false, None)?);
             } else {
                 println!("{} を書き換えました", written.display());
             }

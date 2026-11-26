@@ -85,7 +85,7 @@ function projectWorkbook(root: string): string | undefined {
  * The page of `ras book view` for a workbook. `drawings`: the workbook whose shapes, pictures and
  * controls are drawn (a workbook a run saved may not keep all of what they look like).
  */
-function page(root: string | undefined, file: string, before: string | undefined, title: string | undefined, drawings?: string, sheet?: string, editable = false, run = false): Promise<string> {
+function page(root: string | undefined, file: string, before: string | undefined, title: string | undefined, drawings?: string, sheet?: string, editable = false, run = false, controls?: string): Promise<string> {
 	const exe = findServerExecutable(setting("path"), root ?? path.dirname(file));
 	if (exe === undefined) {
 		return Promise.reject(new Error("ras 実行ファイルが見つかりません。設定 ras.path を確認してください。"));
@@ -108,6 +108,9 @@ function page(root: string | undefined, file: string, before: string | undefined
 	}
 	if (run) {
 		args.push("--run");
+	}
+	if (controls !== undefined) {
+		args.push("--controls", controls);
 	}
 	return ras(exe, args, root ?? path.dirname(file));
 }
@@ -403,6 +406,8 @@ interface RunReply {
 	where?: { sheet: string | null; cell: string | null; selection: string | null };
 	/** The revision of the project's workbook (it changes with each change of its cells). */
 	rev?: number;
+	/** The revision of the state of the controls (their values, captions, items). */
+	controlsRev?: number;
 	cancel?: boolean;
 	snapshotError?: string;
 }
@@ -417,6 +422,7 @@ class RunSession {
 	/** Where the program writes the workbooks after each request (for the page). */
 	readonly dir = fs.mkdtempSync(path.join(os.tmpdir(), "ras-run-"));
 	rev = -1;
+	controlsRev = -1;
 	sheet: string | undefined;
 	/** Called when the program ends by itself (not by `stop`). */
 	onExit: ((code: number | null) => void) | undefined;
@@ -581,7 +587,9 @@ async function runPage(what: Shown, session: RunSession): Promise<string> {
 	if (file === undefined) {
 		throw new Error("実行中のブックを読み取れませんでした。");
 	}
-	return page(what.root, file, undefined, path.basename(what.file), what.file, session.sheet, true, true);
+	// The controls as the program has them (their values, captions, items).
+	const controls = path.join(session.dir, "controls.json");
+	return page(what.root, file, undefined, path.basename(what.file), what.file, session.sheet, true, true, fs.existsSync(controls) ? controls : undefined);
 }
 
 /** The page's switch: run mode on (the program started) or off (the workbook file again). */
@@ -610,6 +618,7 @@ async function switchMode(what: Shown, run: boolean): Promise<string | undefined
 			return undefined;
 		}
 		session.rev = reply.rev ?? 0;
+		session.controlsRev = reply.controlsRev ?? 0;
 		session.sheet = reply.where?.sheet ?? undefined;
 		what.run = session;
 		session.onExit = (code) => {
@@ -650,8 +659,10 @@ async function runEvent(what: Shown, m: RunMessage): Promise<string | undefined>
 	const reply = await session.request(request);
 	reportRun(reply);
 	const sheet = reply.where?.sheet ?? undefined;
-	if (reply.rev !== undefined && (reply.rev !== session.rev || (sheet !== undefined && sheet !== session.sheet))) {
+	const controlsRev = reply.controlsRev ?? session.controlsRev;
+	if (reply.rev !== undefined && (reply.rev !== session.rev || controlsRev !== session.controlsRev || (sheet !== undefined && sheet !== session.sheet))) {
 		session.rev = reply.rev;
+		session.controlsRev = controlsRev;
 		session.sheet = sheet;
 		return runPage(what, session);
 	}

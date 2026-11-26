@@ -139,6 +139,7 @@
    "Name",
    "Names",
    "Next",
+   "OLEObjects",
    "Parent",
    "Paste",
    "PasteSpecial",
@@ -148,6 +149,7 @@
    "Range",
    "Rows",
    "Select",
+   "Shapes",
    "ShowAllData",
    "Sort",
    "StandardWidth",
@@ -292,6 +294,68 @@
    "SubAddress",
    "TextToDisplay",
    "Type"
+  ],
+  "excel": []
+ },
+ "OLEObjects": {
+  "members": [
+   "Count",
+   "Item"
+  ],
+  "excel": []
+ },
+ "OLEObject": {
+  "members": [
+   "Enabled",
+   "Height",
+   "Left",
+   "LinkedCell",
+   "ListFillRange",
+   "Name",
+   "Object",
+   "Parent",
+   "Top",
+   "Visible",
+   "Width"
+  ],
+  "excel": []
+ },
+ "Shapes": {
+  "members": [
+   "Count",
+   "Item"
+  ],
+  "excel": []
+ },
+ "Shape": {
+  "members": [
+   "ControlFormat",
+   "FormControlType",
+   "Name",
+   "OnAction",
+   "Parent",
+   "TextFrame",
+   "Type",
+   "Visible"
+  ],
+  "excel": []
+ },
+ "ControlFormat": {
+  "members": [
+   "AddItem",
+   "Enabled",
+   "LargeChange",
+   "LinkedCell",
+   "List",
+   "ListCount",
+   "ListFillRange",
+   "ListIndex",
+   "Max",
+   "Min",
+   "RemoveAllItems",
+   "RemoveItem",
+   "SmallChange",
+   "Value"
   ],
   "excel": []
  },

@@ -24,7 +24,22 @@ pub(crate) struct Controls {
     font: (String, f64),
     /// An ActiveX control's settings in the sheet (`controlPr`: its linked cell and items) and
     /// in its data (its small and large change), by its shape.
-    activex: std::collections::HashMap<u32, (String, String, Option<i64>, Option<i64>)>,
+    activex: std::collections::HashMap<u32, AxSettings>,
+    /// The items of the list and combo boxes, by name, as the stand-in for Excel has them
+    /// (`state`): drawn in place of those of the file.
+    lists: std::collections::HashMap<String, Vec<String>>,
+}
+
+/// What an ActiveX control keeps besides what umya-spreadsheet reads.
+#[derive(Clone, Default)]
+struct AxSettings {
+    link: String,
+    items: String,
+    small: Option<i64>,
+    large: Option<i64>,
+    /// `VariousPropertyBits` (MS-OFORMS): bit 1 is `Enabled`.
+    bits: Option<i64>,
+    group: Option<String>,
 }
 
 impl Controls {
@@ -58,12 +73,17 @@ impl Controls {
                 let n = |k: &str| stream.as_ref().and_then(|st| st.number(k));
                 activex.insert(
                     id,
-                    (
-                        attr("linkedCell"),
-                        attr("listFillRange"),
-                        n("SmallChange"),
-                        n("LargeChange"),
-                    ),
+                    AxSettings {
+                        link: attr("linkedCell"),
+                        items: attr("listFillRange"),
+                        small: n("SmallChange"),
+                        large: n("LargeChange"),
+                        bits: n("VariousPropertyBits"),
+                        group: stream
+                            .as_ref()
+                            .and_then(|st| st.string("GroupName"))
+                            .filter(|g| !g.is_empty()),
+                    },
                 );
             }
         }
@@ -72,6 +92,140 @@ impl Controls {
             list,
             font: font.clone(),
             activex,
+            lists: std::collections::HashMap::new(),
+        }
+    }
+
+    /// What the controls are and hold, for the stand-in for Excel (the debug run's objects of
+    /// the controls: `OLEObjects`, `Shapes`, `Sheet1.CheckBox1`): one object a control.
+    pub(crate) fn state(&self) -> Vec<serde_json::Value> {
+        use serde_json::json;
+        let mut out = Vec::new();
+        for c in &self.list {
+            if c.kind == "Pict" {
+                continue;
+            }
+            let mut j = match &c.activex {
+                Some(ax) => {
+                    let s = self.activex.get(&c.shape_id).cloned().unwrap_or_default();
+                    json!({
+                        "activex": true,
+                        "type": ax.msforms_type(),
+                        "caption": ax.caption,
+                        "value": ax.value,
+                        "min": ax.min,
+                        "max": ax.max,
+                        "position": ax.position,
+                        "smallChange": s.small.unwrap_or(1),
+                        "largeChange": s.large.unwrap_or(1),
+                        "linkedCell": s.link,
+                        "listFillRange": s.items,
+                        "enabled": s.bits.is_none_or(|b| b & 2 != 0),
+                        "groupName": s.group,
+                    })
+                }
+                None => {
+                    let (val, min, max) = c.value_range();
+                    let num = |p: &str, v: &str, d: i64| {
+                        c.property(p, v)
+                            .and_then(|x| x.trim().parse::<i64>().ok())
+                            .unwrap_or(d)
+                    };
+                    json!({
+                        "activex": false,
+                        "type": c.kind,
+                        "text": c.text.as_ref().map(|t| t.text.clone()),
+                        "checked": match c.checked() {
+                            CheckState::Unchecked => 0,
+                            CheckState::Checked => 1,
+                            CheckState::Mixed => 2,
+                        },
+                        "sel": c.selected(),
+                        "value": val,
+                        "min": min,
+                        "max": max,
+                        "smallChange": num("inc", "Inc", 1),
+                        "largeChange": num("page", "Page", 10),
+                        "linkedCell": c.linked_cell().unwrap_or(""),
+                        "listFillRange": c.list_range().unwrap_or(""),
+                        "macro": c.macro_name().unwrap_or(""),
+                        "enabled": !c.client.contains_key("Disabled"),
+                    })
+                }
+            };
+            j["name"] = json!(c.name);
+            j["shapeId"] = json!(c.shape_id);
+            j["visible"] = json!(!c.hidden);
+            out.push(j);
+        }
+        out
+    }
+
+    /// Takes the state the stand-in for Excel gives the controls (by name: what `state` gives,
+    /// changed by the program), in place of what the file holds.
+    pub(crate) fn apply(&mut self, state: &serde_json::Value) {
+        let Some(list) = state.as_array() else {
+            return;
+        };
+        for s in list {
+            let Some(name) = s["name"].as_str() else {
+                continue;
+            };
+            let Some(c) = self.list.iter_mut().find(|c| c.name == name) else {
+                continue;
+            };
+            if let Some(v) = s["visible"].as_bool() {
+                c.hidden = !v;
+            }
+            let text = |k: &str| s[k].as_str().map(str::to_string);
+            let int = |k: &str| s[k].as_f64().map(|v| v as i64);
+            if let Some(items) = s["list"].as_array() {
+                self.lists.insert(
+                    name.to_string(),
+                    items
+                        .iter()
+                        .map(|i| i.as_str().unwrap_or_default().to_string())
+                        .collect(),
+                );
+            }
+            match &mut c.activex {
+                Some(ax) => {
+                    if let Some(t) = text("caption") {
+                        ax.caption = Some(t);
+                    }
+                    if !s["value"].is_null() {
+                        ax.value = text("value");
+                    }
+                    if let Some(v) = int("position") {
+                        ax.position = v;
+                    }
+                    if let Some(v) = int("min") {
+                        ax.min = v;
+                    }
+                    if let Some(v) = int("max") {
+                        ax.max = v;
+                    }
+                }
+                None => {
+                    if let Some(t) = text("text") {
+                        c.text.get_or_insert_with(Default::default).text = t;
+                    }
+                    if let Some(v) = int("checked") {
+                        let on = ["Unchecked", "Checked", "Mixed"][v.clamp(0, 2) as usize];
+                        c.props.insert("checked".into(), on.into());
+                    }
+                    for (key, prop) in [
+                        ("sel", "sel"),
+                        ("value", "val"),
+                        ("min", "min"),
+                        ("max", "max"),
+                    ] {
+                        if let Some(v) = int(key) {
+                            c.props.insert(prop.into(), v.to_string());
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -121,13 +275,25 @@ impl Controls {
                 .as_ref()
                 .and_then(|p| Some(super::drawing::picture_of(ctx, p, ctx.parts.bytes(p)?, "")))
         };
+        // The items of a list or combo box: the stand-in's, else those of its range.
+        let items: Vec<String> = self.lists.get(&c.name).cloned().unwrap_or_else(|| {
+            let range = match &c.activex {
+                Some(_) => self.activex.get(&c.shape_id).map(|s| s.items.as_str()),
+                None => c.list_range(),
+            };
+            range
+                .filter(|r| !r.is_empty())
+                .map(|r| (env.texts)(r))
+                .unwrap_or_default()
+        });
+        let items = items.as_slice();
         let html = match &c.activex {
             // An ActiveX control the grid draws itself; another one: its preview.
-            Some(ax) if !ax.class.is_empty() => activex_html(c, ax, &self.font),
-            Some(ax) => picture().unwrap_or_else(|| activex_html(c, ax, &self.font)),
+            Some(ax) if !ax.class.is_empty() => activex_html(c, ax, &self.font, items),
+            Some(ax) => picture().unwrap_or_else(|| activex_html(c, ax, &self.font, items)),
             // An embedded object: its picture.
             None if c.kind == "Pict" => picture()?,
-            None => form_html(c, env, &self.font)?,
+            None => form_html(c, env, &self.font, items)?,
         };
         // A form control's settings, and its text where it shows one.
         let form = (c.activex.is_none() && c.kind != "Pict").then(|| {
@@ -148,6 +314,7 @@ impl Controls {
                 "max": max,
                 "inc": num("inc", "Inc", 1),
                 "page": num("page", "Page", 10),
+                "list": items,
             })
         });
         let shows_text = matches!(
@@ -159,8 +326,13 @@ impl Controls {
         let (form, text) = match (&c.activex, form) {
             (Some(ax), _) => {
                 let forms = crate::activex::forms_type(ax.class, ax.display);
-                let (link, items, inc, page) =
-                    self.activex.get(&c.shape_id).cloned().unwrap_or_default();
+                let AxSettings {
+                    link,
+                    items: fill,
+                    small: inc,
+                    large: page,
+                    ..
+                } = self.activex.get(&c.shape_id).cloned().unwrap_or_default();
                 let value_text = matches!(forms, "TextBox" | "ListBox" | "ComboBox");
                 let text = if value_text {
                     ax.value.clone()
@@ -174,13 +346,14 @@ impl Controls {
                             "type": forms,
                             "activex": true,
                             "link": link,
-                            "items": items,
+                            "items": fill,
                             "checked": ax.value.as_deref() == Some("1"),
                             "val": ax.position,
                             "min": ax.min,
                             "max": ax.max,
                             "inc": inc.unwrap_or(1),
                             "page": page.unwrap_or(1),
+                            "list": items,
                         })
                     }),
                     (shows && !forms.is_empty()).then(|| text.unwrap_or_default()),
@@ -325,7 +498,7 @@ fn spin_html(horiz: bool) -> String {
 }
 
 /// The HTML of a form control; None for kinds that are not drawn (dialog frames and the like).
-fn form_html(c: &Control, env: &Env, font: &(String, f64)) -> Option<String> {
+fn form_html(c: &Control, env: &Env, font: &(String, f64), items: &[String]) -> Option<String> {
     let text = c.text.clone().unwrap_or_default();
     let label = esc(&text.text);
     let linked = c.linked_cell().and_then(|r| (env.value)(r));
@@ -370,7 +543,6 @@ fn form_html(c: &Control, env: &Env, font: &(String, f64)) -> Option<String> {
             text_css(&text, font)
         ),
         "List" | "Drop" => {
-            let items = c.list_range().map(|r| (env.texts)(r)).unwrap_or_default();
             let sel = linked
                 .as_deref()
                 .and_then(|v| v.parse::<f64>().ok())
@@ -430,7 +602,7 @@ fn form_html(c: &Control, env: &Env, font: &(String, f64)) -> Option<String> {
 }
 
 /// The HTML of an ActiveX control.
-fn activex_html(c: &Control, ax: &Ax, default: &(String, f64)) -> String {
+fn activex_html(c: &Control, ax: &Ax, default: &(String, f64), items: &[String]) -> String {
     // The default font of MSForms controls in Excel.
     let fallback = (default.0.clone(), 9.0);
     let font = Text {
@@ -486,11 +658,27 @@ fn activex_html(c: &Control, ax: &Ax, default: &(String, f64)) -> String {
             back("#ffffff"),
             arrow("down")
         ),
-        ("MorphData", 2) => format!(
-            "<div class=\"ctl list\" style=\"{}{}\"></div>",
-            css,
-            back("#ffffff")
-        ),
+        ("MorphData", 2) => {
+            let mut list = String::new();
+            let selected = ax.value.as_deref().unwrap_or("");
+            for item in items.iter().take(200) {
+                let _ = write!(
+                    list,
+                    "<span{}>{}</span>",
+                    if !selected.is_empty() && item == selected {
+                        " class=\"sel\""
+                    } else {
+                        ""
+                    },
+                    esc(item)
+                );
+            }
+            format!(
+                "<div class=\"ctl list\" style=\"{}{}\">{list}</div>",
+                css,
+                back("#ffffff")
+            )
+        }
         ("MorphData", _) => format!(
             "<div class=\"ctl edit\" style=\"{}{}\"><span>{value}</span></div>",
             css,

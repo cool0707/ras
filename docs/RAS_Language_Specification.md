@@ -2056,7 +2056,12 @@ Excel を COM で操作できない環境でも、Excel を操作するプログ
   * `Hyperlinks.Delete` / `Hyperlink.Delete` はリンクと下線・色を取り除き、`ClearHyperlinks` はリンクだけを取り除く（表示はそのまま）。`Clear` はリンクも取り除き、`ClearContents` は残す。
   * 並べ替え・切り取り・コピーでは、ハイパーリンクは動かない（コピーもされない）。アドレスと場所の両方を持つリンク（ほかのブックのセルへのリンクなど）は、両方を保つ（`Address` と `SubAddress`）。
 * **書式:** 次の書式はブックに保持し、保存する。セルの挿入・削除、コピー・切り取り、並べ替えで、セルと一緒に動く。`Font`（`Name` / `Size` / `Bold` / `Italic` / `Underline` / `Strikethrough` / `Color` / `ColorIndex` / `Superscript` / `Subscript`）、`Interior`（`Color` / `ColorIndex` / `Pattern` / `PatternColor`）、`Borders`（`LineStyle` / `Weight` / `Color` / `ColorIndex`。`Borders(xlEdgeBottom)` などの各辺と、辺を指定しない `Borders`、`BorderAround`）、`HorizontalAlignment` / `VerticalAlignment` / `WrapText` / `ShrinkToFit` / `IndentLevel` / `Orientation`、`Locked` / `FormulaHidden`、`ColumnWidth` / `RowHeight`、`Hidden`（行全体・列全体）、`Merge` / `UnMerge` / `MergeCells` / `MergeArea`、表示形式 `NumberFormat`、シート見出しの色（`Tab.Color`）。セルによって値の違う範囲から読むと、VBA の `Null` にあたる `null` を返す。行全体・列全体に設定した書式は、その行・列に後から書き込んだセルにも付く。画面が無いので**描画はしない**（`AutoFit` は何もしない）。これ以外の書式のプロパティ（`ThemeColor`、`TintAndShade`、`Style` など）は、どの値でも受け付け、同じ範囲から読むと設定した値を返すが、保存しない。
-* **イベント:** プロジェクトのブックとそのシートの `@on` のハンドラ（`objects/ThisWorkbook.ras` とシートのファイル。§12.2）を、プログラムの操作に応じて呼び出す。順序は Excel が起こす順序に合わせているが、Excel の実機との突き合わせはまだ行っていない。プロジェクトのブック・そのシート・`Application` を指している `WithEvents` の変数のハンドラ（§12.2.2）も、同じ表に従って呼ぶ。シートの上のコントロールのイベント（§12.2.1）は起こさない。
+* **イベント:** プロジェクトのブックとそのシートの `@on` のハンドラ（`objects/ThisWorkbook.ras` とシートのファイル。§12.2）を、プログラムの操作に応じて呼び出す。順序は Excel が起こす順序に合わせているが、Excel の実機との突き合わせはまだ行っていない。プロジェクトのブック・そのシート・`Application` を指している `WithEvents` の変数のハンドラ（§12.2.2）も、同じ表に従って呼ぶ。シートの上のコントロールのイベント（§12.2.1）は、プログラムがコントロールの値を変えたとき（下の「コントロール」）と、シートプレビューの実行モードでの操作（§14.10.10）で起こす。
+* **コントロール:** シートの ActiveX コントロールとフォームコントロールを、プロジェクトのブックのファイルから読み込み（`ras_book` の `Book.controls`）、プログラムの実行中はその状態を持つ。
+  * ActiveX コントロールは、シートのメンバー（`Sheet1.CheckBox1`、`this.TextBox1`）、`OLEObjects(名前 | 番号)`（`.Object` がコントロール）、`Shapes(名前).OLEFormat.Object` で参照できる。`Value`・`Text`・`Caption`・`Enabled`・`Visible`・`LinkedCell`・`ListFillRange`・`GroupName`・`Min`・`Max`・`SmallChange`・`LargeChange`、リスト・コンボ ボックスの `ListIndex`・`ListCount`・`List(i)`・`AddItem`・`RemoveItem`・`Clear` を持つ。値は、リンクするセル（`LinkedCell`）があればそのセルを読み書きする（セルへの書き込みでシートの `Change` は起こさない。Excel と同じ）。リスト・コンボ ボックスの項目は、`ListFillRange` のセルか `AddItem` で加えたもの。`BackColor`・`Locked` などの見た目の設定は、値を覚えるだけ。位置と大きさ（`Left`・`Top`・`Width`・`Height`）は扱えない（エラー 445）。
+  * 値を変えると、Excel と同じくコントロールのイベントを起こす（`Application.EnableEvents` では止まらない）: チェック ボックス・オプション ボタン・トグル ボタンは `Change`・`Click`（オプション ボタンをオンにすると、同じ `GroupName` のほかのオプション ボタンはオフになる）、テキスト ボックスは `Change`、リスト・コンボ ボックスは `Change`（選んでいる項目が変われば `Click` も）、スピン ボタン・スクロール バーは `Change`（`Min`〜`Max` に収める）。同じ値の代入では起こさない。
+  * フォームコントロールは `Shapes(名前)`（`Name`・`Visible`・`OnAction`・`FormControlType`・`ControlFormat`）で参照できる。`ControlFormat` は `Value`（チェック ボックス・オプション ボタンは `xlOn` / `xlOff` / `xlMixed`、リスト・ドロップダウンは選んでいる項目の番号、スピン・スクロールは値）・`LinkedCell`・`ListFillRange`・`ListIndex`・`ListCount`・`List`・`AddItem`・`RemoveItem`・`RemoveAllItems`・`Min`・`Max`・`SmallChange`・`LargeChange`・`Enabled` を持つ。シートのオプション ボタンは 1 つのグループとして扱い、リンクするセルには選んでいるボタンの番号を書く。フォームコントロールの値の変更ではマクロを実行しない（Excel と同じ）。
+  * `ras test` では、テストごとにコントロールの状態もブックのファイルのとおりに戻す。
 
   | プログラムの操作 | イベント（シート、続いてブック） |
   |---|---|
@@ -2128,12 +2133,13 @@ VS Code 拡張のシートプレビューでプロジェクトのブック（`ra
   | ActiveX コントロールのクリック | `GotFocus`（フォーカスが移ったとき）、`MouseDown`・`MouseUp`（`button` = 1、`shift`、コントロール内の位置をポイントで）、`Click`。フォーカスがほかのコントロール・セルに移ると `LostFocus` |
   | 図形・フォームコントロールのクリック | `@on("<名前>.Click")` のハンドラー。無ければ登録されたマクロ（`OnAction`）の関数 |
 
-* コントロール・図形のハンドラーは、JavaScript の出力ではシートのモジュールの `controls` に登録する（代役はプログラムの操作では起こさない。§14.10.8）。
-* 操作のたびにプログラムはブックを書き出し、セルが変わった・アクティブなシートが変わったときは、シートプレビューをその内容で描き直す。ブックのファイルは変えない（プログラムが変えたブックは、モードを抜けたときに `build/debug/workbooks/` に保存する）。編集モードに戻ると、ブックのファイルの内容を表示する。
+* クリックはコントロールの状態も変える（§14.10.8 の「コントロール」。その変更が `Change`・`Click` を起こす）: チェック ボックス・トグル ボタンはオン／オフを切り替え、オプション ボタンはオンにする。スピン ボタンは押した側（上・右で増える。`SpinUp`・`SpinDown` も起こす）、スクロール バーは両端の矢印で `SmallChange`、つまみの前後で `LargeChange` だけ値を変える。リスト ボックスはクリックした項目を選ぶ。テキスト ボックス・コンボ ボックスは下に入力欄（コンボ ボックスは項目の一覧も）を出し、Enter で `Text` に入れる（`Change`）か、選んだ項目にする。フォームコントロールのチェック ボックス・オプション ボタン・リスト・ドロップダウン・スピン・スクロールも同じく値を変えてから、マクロを実行する。無効（`Enabled` が `false`）のコントロールは何もしない。
+* コントロール・図形のハンドラーは、JavaScript の出力ではシートのモジュールの `controls` に登録する。
+* 操作のたびにプログラムはブックとコントロールの状態（`controls.json`）を書き出し、セル・コントロールの状態・アクティブなシートが変わったときは、シートプレビューをその内容で描き直す（コントロールの値・キャプション・項目・表示／非表示。`ras book view --controls`）。ブックのファイルは変えない（プログラムが変えたブックは、モードを抜けたときに `build/debug/workbooks/` に保存する）。編集モードに戻ると、ブックのファイルの内容を表示する。
 * 実行モードで行えるのは、セルへの入力・削除と選択、シートの切り替え、オブジェクトのクリックだけ。書式・挿入・削除・元に戻すなどの編集は、編集モードに切り替えて行う。図形・コントロールはクリックの対象になり、選択・移動はできない。
 * `debug.print` の出力は「出力」パネル（RAS Debug）に、`msgBox` は通知に表示する（代役は OK で応答する）。ハンドラーが捕まえなかったエラーは通知に表示し、プログラムは続ける。フォームの表示は、デバッグ実行と同じくパネルに表示する。
-* 代役は ActiveX コントロールやフォームコントロールそのものの状態（`CheckBox1.value` など）を持たない。ハンドラーでのそれらの参照はエラーになる。プログラムのソースを変えたときは、モードを切り替え直すとビルドし直す。
-* 要求の形（`--serve`）: 標準入力に 1 行 1 つの JSON（`{"id", "op", …}`。`op` は `start`・`activate`・`select`・`enter`・`doubleClick`・`rightClick`・`control`・`macro`）。応答は標準出力に、`\u001eRAS ` で始まる 1 行の JSON（`ok`・`error`・`errors`（ハンドラーのエラー）・`cancel`・`where`（アクティブなシートと選択範囲）・`rev`（ブックの版））。プログラムが出力した行はその前に出る。標準入力を閉じると終了する。
+* プログラムのソースを変えたときは、モードを切り替え直すとビルドし直す。
+* 要求の形（`--serve`）: 標準入力に 1 行 1 つの JSON（`{"id", "op", …}`。`op` は `start`・`activate`・`select`・`enter`・`doubleClick`・`rightClick`・`control`・`macro`）。応答は標準出力に、`\u001eRAS ` で始まる 1 行の JSON（`ok`・`error`・`errors`（ハンドラーのエラー）・`cancel`・`where`（アクティブなシートと選択範囲）・`rev`（ブックの版）・`controlsRev`（コントロールの状態の版））。`control` は `action`（`{ index }`・`{ part }`）と `text`、`macro` は `action` も取る。プログラムが出力した行はその前に出る。標準入力を閉じると終了する。
 
 ### 14.11 ユーザーフォーム（`forms/`）
 

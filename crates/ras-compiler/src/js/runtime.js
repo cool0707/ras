@@ -668,7 +668,7 @@ function isValued(v) {
 function stand() {
     if (mock !== null || bookAddon === null || (com !== null && !noExcel)) return null;
     if (excelHost === null) {
-        excelHost = require("./ras-excel.js")(module.exports, bookAddon, { workbook: config.manifest.workbook, root: config.root, handlers: documentHandlers, outDir: config.workbooksDir || null });
+        excelHost = require("./ras-excel.js")(module.exports, bookAddon, { workbook: config.manifest.workbook, root: config.root, handlers: documentHandlers, controlHandlers, outDir: config.workbooksDir || null });
     }
     return excelHost;
 }
@@ -903,7 +903,12 @@ function memberKey(o, name) {
 function jsMember(o, name) {
     const key = memberKey(o, name);
     const v = o[key];
-    if (v === undefined && !(key in Object(o))) raise(438, name);
+    if (v === undefined && !(key in Object(o))) {
+        // A member an object of the stand-in has by name (a sheet's controls: `Sheet1.CheckBox1`).
+        const named = o !== null && typeof o === "object" && typeof o.$member === "function" ? o.$member(String(name)) : undefined;
+        if (named !== undefined) return named;
+        raise(438, name);
+    }
     return v;
 }
 
@@ -1643,6 +1648,12 @@ function documentHandlers() {
     for (const e of eventSources) out.push(e);
     return out;
 }
+/** The `@on` handlers of the controls and shapes of a sheet (`@on("CheckBox1.Click")`), by its code name. */
+function controlHandlers(codeName) {
+    const lower = String(codeName).toLowerCase();
+    for (const [k, m] of modules) if (k.toLowerCase() === lower) return m.controls || [];
+    return [];
+}
 /**
  * Handlers of the events of the object a variable holds (`@on("app.SheetChange")`, VBA's
  * `WithEvents`, spec §12.2.2): `{ target, event, reentrant, source, fn, alive }`. `source()` is
@@ -1770,9 +1781,12 @@ function run(entry) {
  *   select { sheet, range, active }        `SelectionChange`
  *   enter { sheet, ranges, text }          `Change` (text typed in; "" clears the cells)
  *   doubleClick / rightClick { sheet, range }   `BeforeDoubleClick` / `BeforeRightClick` → cancel
- *   control { sheet, object, events: [{ event, args }] }   an ActiveX control's `@on` handlers
- *   macro { sheet, object, macro }         a shape's or a form control's: its `@on("<name>.Click")`
- *                                          handlers, else the macro assigned to it (`OnAction`)
+ *   control { sheet, object, events: [{ event, args }], action, text }   an ActiveX control
+ *                                          clicked: what the click changes (`action`: `{ index }`
+ *                                          of an item, `{ part }` of a spin button or scroll bar),
+ *                                          its events, the text typed into it
+ *   macro { sheet, object, macro, action } a shape or a form control clicked: what it changes,
+ *                                          its `@on("<name>.Click")` handlers, else its macro
  */
 const SERVE_MARK = "\u001eRAS ";
 function serve(dir) {
@@ -1805,9 +1819,11 @@ function serve(dir) {
         const kept = String(object).replace(/[^\p{L}\p{N}_]/gu, "");
         return /^\p{L}/u.test(kept) ? kept : `Shape${kept}`;
     })()}_click`.toLowerCase();
-    const runMacroOf = (sheet, object, macro) => {
+    const runMacroOf = (sheet, object, macro, action) => {
         const bare = String(macro).replace(/^.*!/, "");
         const codeName = host.user.codeName(sheet);
+        // A form control: what the click changes (a check box turned on, an item chosen), then its macro.
+        const form = object ? host.user.formControl(sheet, object, action) : false;
         // Its `@on` handlers, under its own name or under the macro the compiler made for them.
         let list = object ? controlHandlers(codeName, object, "Click") : [];
         if (list.length === 0 && bare) {
@@ -1823,7 +1839,10 @@ function serve(dir) {
                 return;
             }
         }
-        if (list.length === 0) throw new RasError(`${object || "この図形"} にはマクロも @on("${object}.Click") のハンドラーもありません`, 0, "RAS");
+        if (list.length === 0) {
+            if (form) return;
+            throw new RasError(`${object || "この図形"} にはマクロも @on("${object}.Click") のハンドラーもありません`, 0, "RAS");
+        }
         for (const h of list) call(h, []);
     };
     const ops = {
@@ -1838,6 +1857,8 @@ function serve(dir) {
         doubleClick: (m) => ({ cancel: host.user.beforeDoubleClick(m.sheet, m.range) }),
         rightClick: (m) => ({ cancel: host.user.beforeRightClick(m.sheet, m.range) }),
         control(m) {
+            // The control as the workbook has it: its state changes with the click, and raises its events.
+            if (host.user.control(m.sheet, m.object, m.events, m.action, m.text)) return { handled: true };
             const codeName = host.user.codeName(m.sheet);
             let any = false;
             for (const ev of m.events || []) {
@@ -1848,7 +1869,7 @@ function serve(dir) {
             }
             return { handled: any };
         },
-        macro: (m) => runMacroOf(m.sheet, m.object, m.macro),
+        macro: (m) => runMacroOf(m.sheet, m.object, m.macro, m.action),
     };
     const handle = (line) => {
         let m;
@@ -1877,6 +1898,7 @@ function serve(dir) {
             const books = JSON.parse(require("fs").readFileSync(require("path").join(dir, "snapshot.json"), "utf8")).books;
             const own = books.find((b) => b.project);
             reply.rev = own ? own.rev : 0;
+            reply.controlsRev = host.controlsRev();
         } catch (err) {
             reply.snapshotError = String((err && err.message) || err);
         }

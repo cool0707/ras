@@ -1306,6 +1306,24 @@ module.exports = function createExcel(rt, addon, options) {
         Range(cell1, cell2) {
             return this.$range(cell1, cell2);
         }
+        // ---- the controls of the sheet (read from the workbook file; their state is kept here)
+        /** The controls of the sheet: `SheetControl` (ActiveX) and `FormControl` objects. */
+        get $controls() {
+            if (this.$ctls === undefined) this.$ctls = loadControls(this);
+            return this.$ctls;
+        }
+        /** `Sheet1.CheckBox1`: an ActiveX control by its name. */
+        $member(name) {
+            const c = this.$controls.find((x) => x instanceof SheetControl && sameName(x.$name, name));
+            return c === undefined ? undefined : c;
+        }
+        OLEObjects(index) {
+            const all = new OLEObjects(this);
+            return opt(index) === undefined ? all : all.Item(index);
+        }
+        get Shapes() {
+            return new Shapes(this);
+        }
         Cells(row, col) {
             const all = new Range(this, 1, 1, MAX_ROWS, MAX_COLS);
             return opt(row) === undefined && opt(col) === undefined ? all : all.Item(row, col);
@@ -2544,6 +2562,7 @@ module.exports = function createExcel(rt, addon, options) {
             lastFind: app.$lastFind,
             clip,
             untitled,
+            controlsRev,
         };
     }
     /** Puts back what `snapshot` took. The workbook and sheet objects the program holds stay valid. */
@@ -2580,6 +2599,11 @@ module.exports = function createExcel(rt, addon, options) {
         app.$lastFind = snap.lastFind;
         clip = snap.clip;
         untitled = snap.untitled;
+        // The controls changed since: as the file has them again.
+        if (snap.controlsRev !== controlsRev) {
+            for (const wb of app.$books) for (const sheet of wb.$sheets) sheet.$ctls = undefined;
+            controlsRev++;
+        }
         if (!snap.loaded) project = null;
     }
     /**
@@ -2593,12 +2617,16 @@ module.exports = function createExcel(rt, addon, options) {
         const handle = book(() => Book.open(file));
         wb.$book = handle;
         wb.$codeNames = codeNames;
+        // Its controls are those of that file.
+        wb.$controlFile = file;
+        wb.$controlData = undefined;
         const n = handle.sheetCount();
         wb.$sheets.length = Math.min(wb.$sheets.length, n);
         while (wb.$sheets.length < n) wb.$sheets.push(new Worksheet(wb));
         for (const sheet of wb.$sheets) {
             sheet.$formats = new Map();
             sheet.$sort = null;
+            sheet.$ctls = undefined;
         }
         wb.$active = Math.max(0, wb.$sheets.findIndex((_, i) => handle.sheetInfo(i).visible === -1));
         handle.setManual(app.$state.Calculation === XL.manual);
@@ -2635,8 +2663,767 @@ module.exports = function createExcel(rt, addon, options) {
             const active = wb.$sheets[wb.$active];
             books.push({ name: wb.$name, file, project: wb.$project, rev: wb.$rev, source: wb.$file || null, activeSheet: active ? active.Name : null, active: app.$activeBook === wb });
         });
-        fs.writeFileSync(path.join(dir, "snapshot.json"), JSON.stringify({ books }));
+        fs.writeFileSync(path.join(dir, "snapshot.json"), JSON.stringify({ books, controlsRev }));
+        // The controls as they are now (the panel draws them so).
+        fs.writeFileSync(path.join(dir, "controls.json"), JSON.stringify(controlsState()));
         return books.length;
+    }
+
+
+    // ------------------------------------------------------------------------ controls
+
+    // The controls of the sheets (ActiveX and form controls) as the workbook file has them, read
+    // by the `ras_book` addon, with their state kept while the program runs: their values (in
+    // their linked cells when they have one), captions, items, whether they are enabled and
+    // visible. What the program sets raises their events as Excel does (`Change`, `Click`); the
+    // editor's sheet panel draws them as they are now (`controlsState`). `controlsRev` counts
+    // the changes.
+    let controlsRev = 0;
+    const ON_OFF = ["CheckBox", "OptionButton", "ToggleButton"];
+    const LISTS = ["ListBox", "ComboBox"];
+    const PROG_IDS = { CommandButton: "Forms.CommandButton.1", CheckBox: "Forms.CheckBox.1", OptionButton: "Forms.OptionButton.1", ToggleButton: "Forms.ToggleButton.1", TextBox: "Forms.TextBox.1", ListBox: "Forms.ListBox.1", ComboBox: "Forms.ComboBox.1", Label: "Forms.Label.1", SpinButton: "Forms.SpinButton.1", ScrollBar: "Forms.ScrollBar.1", Image: "Forms.Image.1" };
+    // XlFormControl, and the values of a form check box.
+    const FORM_TYPES = { Button: 0, CheckBox: 1, Drop: 2, EditBox: 3, GBox: 4, Label: 5, List: 6, Radio: 7, Scroll: 8, Spin: 9 };
+    const XL_ON = 1;
+    const XL_OFF = -4146;
+    const XL_MIXED = 2;
+
+    function loadControls(sheet) {
+        const wb = sheet.$wb;
+        const file = wb.$controlFile || wb.$file;
+        if (!wb.$project || !file || typeof Book.controls !== "function") return [];
+        if (wb.$controlData === undefined) {
+            try {
+                wb.$controlData = Book.controls(file, wb.$sheets.map((s) => s.Name));
+            } catch {
+                wb.$controlData = {};
+            }
+        }
+        // (A sheet keeps the controls it was read with, by its name then.)
+        const list = (wb.$controlData && wb.$controlData[sheet.Name]) || [];
+        return list.filter((d) => d.name).map((d) => (d.activex ? new SheetControl(sheet, d) : new FormControl(sheet, d)));
+    }
+    /** A cell a control is linked to (`$A$1`, `Sheet2!$B$2`), or a range it takes its items from. */
+    function linkedRange(sheet, text) {
+        const t = rt.cstr(text).trim();
+        return t === "" ? null : sheet.$range(t.replace(/^=/, ""));
+    }
+    function linkedValue(sheet, text) {
+        const r = linkedRange(sheet, text);
+        return r === null ? undefined : r.Value;
+    }
+    /** Writes a linked cell as Excel does: no `Change` of the sheet, its formulas calculated. */
+    function writeLinked(sheet, text, v) {
+        const r = linkedRange(sheet, text);
+        if (r === null) return;
+        const data = toBook(v);
+        r.$each((a, b, i) => b.setValues(i, ...a.$bounds(), data));
+        calculated(r.$sheet.$wb, false);
+    }
+    function itemsOf(sheet, text) {
+        const r = linkedRange(sheet, text);
+        if (r === null) return [];
+        return r.$get("Text").map((row) => rt.cstr(row[0]));
+    }
+    /**
+     * An event of a control: the `@on("<name>.<event>")` handlers of the sheet's file, then those
+     * attached with `on`. (`Application.EnableEvents` does not stop them, as in Excel.)
+     */
+    const runningControls = new Set();
+    function controlEvent(control, event, args) {
+        const cells = (args || []).map((v) => ({ v }));
+        const sheet = control.$sheet;
+        if (!sheet.$wb.$project || control.$enabled === false) return cells;
+        const all = typeof options.controlHandlers === "function" ? options.controlHandlers(sheet.CodeName) : [];
+        for (const h of all) {
+            if (!sameName(h.target, control.$name) || !sameName(h.event, event)) continue;
+            if (!h.reentrant && runningControls.has(h)) continue;
+            runningControls.add(h);
+            try {
+                h.fn(cells);
+            } catch (err) {
+                failed(err, h);
+            } finally {
+                runningControls.delete(h);
+            }
+        }
+        rt.fireListeners(control, event, cells, failed);
+        return cells;
+    }
+    const clampTo = (v, a, b) => Math.min(Math.max(v, Math.min(a, b)), Math.max(a, b));
+
+    /** An ActiveX control (Microsoft Forms 2.0) on a sheet, with the members Excel adds to it (`LinkedCell`, `Visible`, ...). */
+    class SheetControl {
+        constructor(sheet, d) {
+            this.$sheet = sheet;
+            this.$type = d.type || "";
+            this.$name = d.name;
+            this.$caption = d.caption === null || d.caption === undefined ? "" : String(d.caption);
+            this.$enabled = d.enabled !== false;
+            this.$visible = d.visible !== false;
+            this.$min = Number(d.min) || 0;
+            this.$max = d.max === undefined ? 100 : Number(d.max);
+            this.$small = Number(d.smallChange) || 1;
+            this.$large = Number(d.largeChange) || 1;
+            this.$link = d.linkedCell || "";
+            this.$fill = d.listFillRange || "";
+            this.$group = d.groupName || "";
+            // The items added by the program (`AddItem`); null: those of `ListFillRange`.
+            this.$items = null;
+            this.$props = new Map();
+            const raw = d.value === null || d.value === undefined ? null : String(d.value);
+            if (ON_OFF.includes(this.$type)) this.$own = raw !== null && ["1", "-1", "true"].includes(raw.toLowerCase());
+            else if (this.$type === "SpinButton" || this.$type === "ScrollBar") this.$own = Number(d.position) || 0;
+            else if (this.$type === "ListBox") this.$own = raw === null || raw === "" ? null : raw;
+            else this.$own = raw === null ? "" : raw;
+        }
+        get $typeName() {
+            return this.$type || "Object";
+        }
+        $changed() {
+            controlsRev++;
+        }
+        get Name() {
+            return this.$name;
+        }
+        get Object() {
+            return this;
+        }
+        get Parent() {
+            return this.$sheet;
+        }
+        get ProgId() {
+            return PROG_IDS[this.$type] || "";
+        }
+        get progID() {
+            return this.ProgId;
+        }
+        // ---- the value
+        get Value() {
+            if (this.$link) {
+                const v = linkedValue(this.$sheet, this.$link);
+                if (ON_OFF.includes(this.$type)) return v === undefined || v === null || v === "" ? false : typeof v === "boolean" ? v : rt.cbool(v);
+                if (this.$type === "SpinButton" || this.$type === "ScrollBar") return Number(v) || 0;
+                if (this.$type === "ListBox") return v === undefined || v === null || v === "" ? null : rt.cstr(v);
+                return v === undefined || v === null ? "" : rt.cstr(v);
+            }
+            return this.$own;
+        }
+        set Value(v) {
+            const t = this.$type;
+            let next;
+            if (ON_OFF.includes(t)) next = v === null ? false : rt.cbool(v);
+            else if (t === "SpinButton" || t === "ScrollBar") next = clampTo(Math.round(rt.cnum(v)), this.$min, this.$max);
+            else if (t === "ListBox") next = v === null || v === undefined || rt.cstr(v) === "" ? null : rt.cstr(v);
+            else if (t === "CommandButton" || t === "Label" || t === "Image" || t === "") rt.raise(438, "Value");
+            else next = v === null || v === undefined ? "" : rt.cstr(v);
+            const before = this.Value;
+            if (before === next) return;
+            const before_index = LISTS.includes(t) ? this.ListIndex : -1;
+            if (this.$link) writeLinked(this.$sheet, this.$link, next === null ? "" : next);
+            else this.$own = next;
+            this.$changed();
+            // An option button turned on turns off the others of its group.
+            if (t === "OptionButton" && next === true) {
+                for (const o of this.$sheet.$controls) {
+                    if (o !== this && o instanceof SheetControl && o.$type === "OptionButton" && o.$group === this.$group && o.Value === true) o.Value = false;
+                }
+            }
+            controlEvent(this, "Change", []);
+            if (ON_OFF.includes(t) || (LISTS.includes(t) && this.ListIndex !== before_index)) controlEvent(this, "Click", []);
+        }
+        get Text() {
+            const v = this.Value;
+            return v === null ? "" : typeof v === "boolean" ? (v ? "True" : "False") : rt.cstr(v);
+        }
+        set Text(v) {
+            if (this.$type === "ListBox") {
+                const t = rt.cstr(v);
+                if (t !== "" && !this.$list().includes(t)) rt.raise(380, "Text");
+            }
+            this.Value = v;
+        }
+        get Caption() {
+            return this.$caption;
+        }
+        set Caption(v) {
+            const t = rt.cstr(v);
+            if (t === this.$caption) return;
+            this.$caption = t;
+            this.$changed();
+        }
+        // ---- the extender: what Excel adds to a control on a sheet
+        get Enabled() {
+            return this.$enabled;
+        }
+        set Enabled(v) {
+            this.$enabled = rt.cbool(v);
+            this.$changed();
+        }
+        get Visible() {
+            return this.$visible;
+        }
+        set Visible(v) {
+            this.$visible = rt.cbool(v);
+            this.$changed();
+        }
+        get LinkedCell() {
+            return this.$link;
+        }
+        set LinkedCell(v) {
+            const t = rt.cstr(v);
+            if (t) linkedRange(this.$sheet, t);
+            this.$link = t;
+            this.$changed();
+        }
+        get ListFillRange() {
+            return this.$fill;
+        }
+        set ListFillRange(v) {
+            const t = rt.cstr(v);
+            if (t) linkedRange(this.$sheet, t);
+            this.$fill = t;
+            this.$items = null;
+            this.$changed();
+        }
+        get GroupName() {
+            return this.$group;
+        }
+        set GroupName(v) {
+            this.$group = rt.cstr(v);
+        }
+        get Left() {
+            return rt.unsupported("シートのコントロールの位置と大きさ（Left）");
+        }
+        get Top() {
+            return rt.unsupported("シートのコントロールの位置と大きさ（Top）");
+        }
+        get Width() {
+            return rt.unsupported("シートのコントロールの位置と大きさ（Width）");
+        }
+        get Height() {
+            return rt.unsupported("シートのコントロールの位置と大きさ（Height）");
+        }
+        // ---- a spin button, a scroll bar
+        get Min() {
+            return this.$min;
+        }
+        set Min(v) {
+            this.$min = Math.round(rt.cnum(v));
+            this.$changed();
+        }
+        get Max() {
+            return this.$max;
+        }
+        set Max(v) {
+            this.$max = Math.round(rt.cnum(v));
+            this.$changed();
+        }
+        get SmallChange() {
+            return this.$small;
+        }
+        set SmallChange(v) {
+            this.$small = Math.round(rt.cnum(v));
+        }
+        get LargeChange() {
+            return this.$large;
+        }
+        set LargeChange(v) {
+            this.$large = Math.round(rt.cnum(v));
+        }
+        // ---- a list or combo box
+        $list() {
+            return this.$items !== null ? this.$items : this.$fill ? itemsOf(this.$sheet, this.$fill) : [];
+        }
+        $own_items(what) {
+            if (!LISTS.includes(this.$type)) rt.raise(438, what);
+            if (this.$fill) rt.raise(70, what);
+            if (this.$items === null) this.$items = [];
+            return this.$items;
+        }
+        get ListCount() {
+            return this.$list().length;
+        }
+        get ListIndex() {
+            const v = this.Value;
+            return v === null || v === "" ? -1 : this.$list().indexOf(rt.cstr(v));
+        }
+        set ListIndex(v) {
+            const i = Math.round(rt.cnum(v));
+            const list = this.$list();
+            if (i < -1 || i >= list.length) rt.raise(380, "ListIndex");
+            this.Value = i < 0 ? (this.$type === "ListBox" ? null : "") : list[i];
+        }
+        List(index, column) {
+            const list = this.$list();
+            if (opt(index) === undefined) return list.map((x) => x);
+            const i = Math.round(rt.cnum(index));
+            if (i < 0 || i >= list.length) rt.raise(381, "List");
+            if (opt(column) !== undefined && rt.cnum(column) !== 0) return null;
+            return list[i];
+        }
+        AddItem(item, index) {
+            const items = this.$own_items("AddItem");
+            const t = opt(item) === undefined ? "" : rt.cstr(item);
+            if (opt(index) === undefined) items.push(t);
+            else {
+                const i = Math.round(rt.cnum(index));
+                if (i < 0 || i > items.length) rt.raise(380, "AddItem");
+                items.splice(i, 0, t);
+            }
+            this.$changed();
+        }
+        RemoveItem(index) {
+            const items = this.$own_items("RemoveItem");
+            const i = Math.round(rt.cnum(index));
+            if (i < 0 || i >= items.length) rt.raise(380, "RemoveItem");
+            items.splice(i, 1);
+            this.$changed();
+        }
+        Clear() {
+            this.$own_items("Clear").length = 0;
+            this.$own = this.$type === "ListBox" ? null : "";
+            this.$changed();
+        }
+        // ---- what the user does (the run mode of the editor's sheet panel)
+        /** A click as the user's: what it changes, and its events (true when `Click` was raised). */
+        $click(action) {
+            const t = this.$type;
+            const a = action || {};
+            if (t === "CheckBox" || t === "ToggleButton") {
+                this.Value = !this.Value;
+                return true;
+            }
+            if (t === "OptionButton") {
+                if (this.Value !== true) this.Value = true;
+                return true;
+            }
+            if (LISTS.includes(t) && typeof a.index === "number") {
+                this.ListIndex = a.index;
+                return true;
+            }
+            if (t === "SpinButton" && (a.part === "more" || a.part === "less")) {
+                controlEvent(this, a.part === "more" ? "SpinUp" : "SpinDown", []);
+                this.Value = this.Value + (a.part === "more" ? this.$small : -this.$small);
+                return true;
+            }
+            if (t === "ScrollBar" && typeof a.part === "string") {
+                const by = { more: this.$small, less: -this.$small, pageMore: this.$large, pageLess: -this.$large }[a.part] || 0;
+                this.Value = this.Value + (this.$max >= this.$min ? by : -by);
+                return true;
+            }
+            // (A text box has no `Click`.)
+            return t === "TextBox" || t === "SpinButton" || t === "ScrollBar" || LISTS.includes(t);
+        }
+        $state() {
+            const v = this.Value;
+            const j = { name: this.$name, visible: this.$visible, enabled: this.$enabled, caption: this.$caption, min: this.$min, max: this.$max };
+            if (ON_OFF.includes(this.$type)) j.value = v ? "1" : "0";
+            else if (this.$type === "SpinButton" || this.$type === "ScrollBar") j.position = v;
+            else if (this.$type === "TextBox" || LISTS.includes(this.$type)) j.value = v === null ? "" : rt.cstr(v);
+            if (LISTS.includes(this.$type)) j.list = this.$list();
+            return j;
+        }
+    }
+    // The members Excel's controls have that change nothing here: remembered.
+    for (const [prop, initial] of [
+        ["BackColor", 0x8000000f], ["ForeColor", 0x80000012], ["BackStyle", 1], ["BorderStyle", 0], ["BorderColor", 0x80000006], ["SpecialEffect", 0],
+        ["Locked", true], ["AutoSize", false], ["WordWrap", false], ["MultiLine", false], ["TextAlign", 1], ["MaxLength", 0], ["PasswordChar", ""],
+        ["Style", 0], ["MatchEntry", 1], ["MatchRequired", false], ["ColumnCount", 1], ["BoundColumn", 1], ["TextColumn", -1], ["ListRows", 8],
+        ["TripleState", false], ["Accelerator", ""], ["ControlTipText", ""], ["MousePointer", 0], ["TakeFocusOnClick", true], ["Orientation", -1],
+        ["Delay", 50], ["PrintObject", true], ["Placement", 2], ["Shadow", false], ["AutoLoad", false], ["SelStart", 0], ["SelLength", 0], ["MultiSelect", 0],
+    ]) {
+        Object.defineProperty(SheetControl.prototype, prop, {
+            get() {
+                return this.$props.has(prop) ? this.$props.get(prop) : initial;
+            },
+            set(v) {
+                this.$props.set(prop, v);
+            },
+            configurable: true,
+        });
+    }
+
+    /** `OLEObjects`: the ActiveX controls of a sheet. */
+    class OLEObjects {
+        constructor(sheet) {
+            this.$sheet = sheet;
+        }
+        get $typeName() {
+            return "OLEObjects";
+        }
+        get $all() {
+            return this.$sheet.$controls.filter((c) => c instanceof SheetControl);
+        }
+        get Count() {
+            return this.$all.length;
+        }
+        Item(index) {
+            const all = this.$all;
+            if (typeof index === "string") {
+                const hit = all.find((c) => sameName(c.$name, index));
+                if (hit === undefined) fail(`OLEObjects("${index}")`);
+                return new OLEObject(hit);
+            }
+            const i = Math.floor(rt.cnum(index));
+            if (!(i >= 1 && i <= all.length)) fail(`OLEObjects(${index})`);
+            return new OLEObject(all[i - 1]);
+        }
+        *[Symbol.iterator]() {
+            for (const c of this.$all) yield new OLEObject(c);
+        }
+    }
+    /** An `OLEObject`: the control on the sheet (`Object` is the control itself). */
+    class OLEObject {
+        constructor(control) {
+            this.$c = control;
+        }
+        get $typeName() {
+            return "OLEObject";
+        }
+        get Object() {
+            return this.$c;
+        }
+        get Name() {
+            return this.$c.$name;
+        }
+        get progID() {
+            return this.$c.ProgId;
+        }
+        get Parent() {
+            return this.$c.$sheet;
+        }
+        get Visible() {
+            return this.$c.Visible;
+        }
+        set Visible(v) {
+            this.$c.Visible = v;
+        }
+        get Enabled() {
+            return this.$c.Enabled;
+        }
+        set Enabled(v) {
+            this.$c.Enabled = v;
+        }
+        get LinkedCell() {
+            return this.$c.LinkedCell;
+        }
+        set LinkedCell(v) {
+            this.$c.LinkedCell = v;
+        }
+        get ListFillRange() {
+            return this.$c.ListFillRange;
+        }
+        set ListFillRange(v) {
+            this.$c.ListFillRange = v;
+        }
+        get Left() {
+            return this.$c.Left;
+        }
+        get Top() {
+            return this.$c.Top;
+        }
+        get Width() {
+            return this.$c.Width;
+        }
+        get Height() {
+            return this.$c.Height;
+        }
+    }
+
+    /** A form control (ボタン, チェック ボックス, ...) on a sheet: its shape, with `ControlFormat`. */
+    class FormControl {
+        constructor(sheet, d) {
+            this.$sheet = sheet;
+            this.$kind = d.type || "";
+            this.$name = d.name;
+            this.$text = d.text === null || d.text === undefined ? "" : String(d.text);
+            this.$visible = d.visible !== false;
+            this.$enabled = d.enabled !== false;
+            this.$macro = d.macro || "";
+            this.$link = d.linkedCell || "";
+            this.$fill = d.listFillRange || "";
+            this.$min = Number(d.min) || 0;
+            this.$max = d.max === undefined ? 100 : Number(d.max);
+            this.$small = Number(d.smallChange) || 1;
+            this.$large = Number(d.largeChange) || 10;
+            this.$items = null;
+            this.$own =
+                this.$kind === "CheckBox" || this.$kind === "Radio"
+                    ? [XL_OFF, XL_ON, XL_MIXED][Number(d.checked) || 0]
+                    : this.$kind === "List" || this.$kind === "Drop"
+                      ? Number(d.sel) || 0
+                      : Number(d.value) || 0;
+        }
+        get $typeName() {
+            return "Shape";
+        }
+        $changed() {
+            controlsRev++;
+        }
+        // The option buttons of the sheet are one group (Excel groups them by the group box they are in).
+        $radios() {
+            return this.$sheet.$controls.filter((c) => c instanceof FormControl && c.$kind === "Radio");
+        }
+        get $value() {
+            if (this.$kind === "Radio") {
+                const link = this.$link || (this.$radios().find((r) => r.$link) || {}).$link;
+                if (link) {
+                    const v = Number(linkedValue(this.$sheet, link)) || 0;
+                    return this.$radios().indexOf(this) + 1 === v ? XL_ON : XL_OFF;
+                }
+                return this.$own;
+            }
+            if (this.$link) {
+                const v = linkedValue(this.$sheet, this.$link);
+                if (this.$kind === "CheckBox") return v === true || (typeof v !== "boolean" && rt.cstr(v).toUpperCase() === "TRUE") ? XL_ON : v === false || v === null || v === "" || v === undefined || rt.cstr(v).toUpperCase() === "FALSE" ? XL_OFF : XL_MIXED;
+                return Number(v) || 0;
+            }
+            return this.$own;
+        }
+        set $value(v) {
+            let next = Math.round(rt.cnum(v));
+            if (this.$kind === "CheckBox" || this.$kind === "Radio") next = next === XL_ON || next === -1 ? XL_ON : next === XL_MIXED ? XL_MIXED : XL_OFF;
+            else if (this.$kind === "Spin" || this.$kind === "Scroll") next = clampTo(next, this.$min, this.$max);
+            if (next === this.$value) return;
+            if (this.$kind === "Radio") {
+                const group = this.$radios();
+                const link = this.$link || (group.find((r) => r.$link) || {}).$link;
+                if (next === XL_ON) for (const r of group) r.$own = r === this ? XL_ON : XL_OFF;
+                else this.$own = next;
+                if (link && next === XL_ON) writeLinked(this.$sheet, link, group.indexOf(this) + 1);
+            } else if (this.$link) {
+                writeLinked(this.$sheet, this.$link, this.$kind === "CheckBox" ? (next === XL_ON ? true : next === XL_OFF ? false : new CVErr(2042)) : next);
+            } else this.$own = next;
+            this.$changed();
+        }
+        $list() {
+            return this.$items !== null ? this.$items : this.$fill ? itemsOf(this.$sheet, this.$fill) : [];
+        }
+        get Name() {
+            return this.$name;
+        }
+        set Name(v) {
+            this.$name = rt.cstr(v);
+            this.$changed();
+        }
+        get Type() {
+            // msoFormControl
+            return 8;
+        }
+        get FormControlType() {
+            return FORM_TYPES[this.$kind] ?? -1;
+        }
+        get Visible() {
+            return this.$visible;
+        }
+        set Visible(v) {
+            this.$visible = rt.cbool(v);
+            this.$changed();
+        }
+        get OnAction() {
+            return this.$macro;
+        }
+        set OnAction(v) {
+            this.$macro = rt.cstr(v);
+        }
+        get ControlFormat() {
+            return new ControlFormat(this);
+        }
+        get Parent() {
+            return this.$sheet;
+        }
+        get TextFrame() {
+            const c = this;
+            return { $typeName: "TextFrame", Characters: () => ({ $typeName: "Characters", get Text() { return c.$text; }, set Text(v) { c.$text = rt.cstr(v); c.$changed(); } }) };
+        }
+        $click(action) {
+            const a = action || {};
+            const k = this.$kind;
+            if (!this.$enabled) return;
+            if (k === "CheckBox") this.$value = this.$value === XL_ON ? XL_OFF : XL_ON;
+            else if (k === "Radio") this.$value = XL_ON;
+            else if ((k === "List" || k === "Drop") && typeof a.index === "number") this.$value = a.index + 1;
+            else if (k === "Spin" || k === "Scroll") {
+                const by = { more: this.$small, less: -this.$small, pageMore: this.$large, pageLess: -this.$large }[a.part] || 0;
+                if (by) this.$value = this.$value + by;
+            }
+        }
+        $state() {
+            const v = this.$value;
+            const j = { name: this.$name, visible: this.$visible, text: this.$text, min: this.$min, max: this.$max };
+            if (this.$kind === "CheckBox" || this.$kind === "Radio") j.checked = v === XL_ON ? 1 : v === XL_MIXED ? 2 : 0;
+            else if (this.$kind === "List" || this.$kind === "Drop") j.sel = v;
+            else j.value = v;
+            return j;
+        }
+    }
+    /** `Shape.ControlFormat`: a form control's value, linked cell and items. */
+    class ControlFormat {
+        constructor(control) {
+            this.$c = control;
+        }
+        get $typeName() {
+            return "ControlFormat";
+        }
+        get Value() {
+            return this.$c.$value;
+        }
+        set Value(v) {
+            this.$c.$value = v;
+        }
+        get LinkedCell() {
+            return this.$c.$link;
+        }
+        set LinkedCell(v) {
+            const t = rt.cstr(v);
+            if (t) linkedRange(this.$c.$sheet, t);
+            this.$c.$link = t;
+            this.$c.$changed();
+        }
+        get ListFillRange() {
+            return this.$c.$fill;
+        }
+        set ListFillRange(v) {
+            const t = rt.cstr(v);
+            if (t) linkedRange(this.$c.$sheet, t);
+            this.$c.$fill = t;
+            this.$c.$items = null;
+            this.$c.$changed();
+        }
+        get ListCount() {
+            return this.$c.$list().length;
+        }
+        get ListIndex() {
+            return this.$c.$value;
+        }
+        set ListIndex(v) {
+            this.$c.$value = v;
+        }
+        List(index) {
+            const list = this.$c.$list();
+            if (opt(index) === undefined) return list.map((x) => x);
+            const i = Math.round(rt.cnum(index));
+            if (i < 1 || i > list.length) fail(`List(${index})`);
+            return list[i - 1];
+        }
+        AddItem(text, index) {
+            const c = this.$c;
+            if (c.$fill) fail("ListFillRange のあるコントロールへの AddItem");
+            if (c.$items === null) c.$items = [];
+            const t = rt.cstr(text);
+            if (opt(index) === undefined) c.$items.push(t);
+            else c.$items.splice(Math.max(0, Math.round(rt.cnum(index)) - 1), 0, t);
+            c.$changed();
+        }
+        RemoveItem(index, count) {
+            const c = this.$c;
+            if (c.$items === null) c.$items = c.$list().slice();
+            c.$items.splice(Math.round(rt.cnum(index)) - 1, opt(count) === undefined ? 1 : Math.round(rt.cnum(count)));
+            c.$changed();
+        }
+        RemoveAllItems() {
+            this.$c.$items = [];
+            this.$c.$fill = "";
+            this.$c.$changed();
+        }
+        get Min() {
+            return this.$c.$min;
+        }
+        set Min(v) {
+            this.$c.$min = Math.round(rt.cnum(v));
+            this.$c.$changed();
+        }
+        get Max() {
+            return this.$c.$max;
+        }
+        set Max(v) {
+            this.$c.$max = Math.round(rt.cnum(v));
+            this.$c.$changed();
+        }
+        get SmallChange() {
+            return this.$c.$small;
+        }
+        set SmallChange(v) {
+            this.$c.$small = Math.round(rt.cnum(v));
+        }
+        get LargeChange() {
+            return this.$c.$large;
+        }
+        set LargeChange(v) {
+            this.$c.$large = Math.round(rt.cnum(v));
+        }
+        get Enabled() {
+            return this.$c.$enabled;
+        }
+        set Enabled(v) {
+            this.$c.$enabled = rt.cbool(v);
+        }
+    }
+    /** An ActiveX control as a shape (`Shapes("CommandButton1")`): its `OLEFormat`. */
+    class ControlShape {
+        constructor(control) {
+            this.$c = control;
+        }
+        get $typeName() {
+            return "Shape";
+        }
+        get Name() {
+            return this.$c.$name;
+        }
+        get Type() {
+            // msoOLEControlObject
+            return 12;
+        }
+        get Visible() {
+            return this.$c.Visible;
+        }
+        set Visible(v) {
+            this.$c.Visible = v;
+        }
+        get OLEFormat() {
+            const c = this.$c;
+            return { $typeName: "OLEFormat", get Object() { return new OLEObject(c); }, get progID() { return c.ProgId; } };
+        }
+    }
+    /** `Shapes`: the controls of a sheet (its other shapes are not read here). */
+    class Shapes {
+        constructor(sheet) {
+            this.$sheet = sheet;
+        }
+        get $typeName() {
+            return "Shapes";
+        }
+        get $all() {
+            return this.$sheet.$controls.map((c) => (c instanceof SheetControl ? new ControlShape(c) : c));
+        }
+        get Count() {
+            return this.$all.length;
+        }
+        Item(index) {
+            const all = this.$all;
+            if (typeof index === "string") {
+                const hit = all.find((c) => sameName(c.Name, index));
+                if (hit === undefined) fail(`Shapes("${index}")（Excel のないデバッグ実行で読めるのはコントロールだけです）`);
+                return hit;
+            }
+            const i = Math.floor(rt.cnum(index));
+            if (!(i >= 1 && i <= all.length)) fail(`Shapes(${index})`);
+            return all[i - 1];
+        }
+        *[Symbol.iterator]() {
+            yield* this.$all;
+        }
+    }
+    /** The state of the controls of the project's workbook, by sheet name, for the editor's panel to draw. */
+    function controlsState() {
+        const out = {};
+        if (project === null) return out;
+        for (const sheet of project.$sheets) {
+            const list = sheet.$controls;
+            if (list.length) out[sheet.Name] = list.map((c) => c.$state());
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------------ the user (the sheet panel's run mode)
@@ -2699,6 +3486,33 @@ module.exports = function createExcel(rt, addon, options) {
             const selection = app.$selection instanceof Range && app.$selection.$sheet === sheet ? app.$selection.Address(false, false) : null;
             return { sheet: sheet ? sheet.Name : null, cell, selection };
         },
+        /**
+         * An ActiveX control clicked: `events` ([{ event, args }]: `GotFocus`, `MouseDown`,
+         * `MouseUp`, `Click`, `LostFocus`), what the click changes at its `Click` (`action`: an
+         * item chosen `{ index }`, the part of a spin button or scroll bar `{ part }`), and the
+         * text typed into it (`text`). True when the sheet has the control.
+         */
+        control(name, object, events, action, text) {
+            const sheet = userSheet(name);
+            const c = sheet.$member(object);
+            if (c === undefined) return false;
+            if (!c.$enabled) return true;
+            for (const ev of events || []) {
+                if (sameName(ev.event, "Click")) {
+                    if (!c.$click(action)) controlEvent(c, "Click", []);
+                } else controlEvent(c, ev.event, ev.args || []);
+            }
+            if (typeof text === "string") c.Text = text;
+            return true;
+        },
+        /** A form control clicked: what it changes (`action` as `control`'s). True when the sheet has it. */
+        formControl(name, object, action) {
+            const sheet = userSheet(name);
+            const c = sheet.$controls.find((x) => x instanceof FormControl && sameName(x.$name, object));
+            if (c === undefined) return false;
+            c.$click(action);
+            return true;
+        },
         /** `Workbook.Open`: the workbook opened with its macros (run mode started). */
         open() {
             bookEvent(projectBook(), "Open", []);
@@ -2712,6 +3526,6 @@ module.exports = function createExcel(rt, addon, options) {
     }
 
     // The objects of the stand-in by the name of their Excel class (what `tools/standin/members.js` lists).
-    const classes = { Application, Workbooks, Workbook, Sheets, Worksheet, Range, Names, Name, Sort: SortState, Hyperlinks, Hyperlink };
-    return { application, global, runMacro, finish, snapshot, restore, useWorkbook, saveAll, saveSnapshot, user, classes, Range, Worksheet, Workbook };
+    const classes = { Application, Workbooks, Workbook, Sheets, Worksheet, Range, Names, Name, Sort: SortState, Hyperlinks, Hyperlink, OLEObjects, OLEObject, Shapes, Shape: FormControl, ControlFormat };
+    return { application, global, runMacro, finish, snapshot, restore, useWorkbook, saveAll, saveSnapshot, user, controlsRev: () => controlsRev, classes, Range, Worksheet, Workbook };
 };

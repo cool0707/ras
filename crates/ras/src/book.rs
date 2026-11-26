@@ -83,6 +83,9 @@ pub enum BookCommand {
         /// --editable のページを実行モード（操作でプログラムのイベントを起こす）で開く
         #[arg(long, hide = true, requires = "editable")]
         run: bool,
+        /// コントロールの状態（実行モードでプログラムが変えたもの。シート名ごとの JSON のファイル）
+        #[arg(long, hide = true, value_name = "FILE")]
+        controls: Option<PathBuf>,
     },
     /// ブックのセルを Excel と同じように編集して、ファイルに書き込む（入力・クリア・コピーと移動・セルと行と列の挿入と削除）
     Edit {
@@ -298,6 +301,7 @@ pub fn view_page(
     sheet: Option<&str>,
     editable: bool,
     run: bool,
+    controls: Option<&Path>,
 ) -> Result<String, String> {
     // The page that edits the workbook shows its volatile formulas (RAND, NOW) as the file has
     // them: they change when cells are edited (the edit calculates them, as Excel does), not
@@ -338,12 +342,23 @@ pub fn view_page(
     let source = drawings
         .and_then(|d| std::fs::read(d).ok())
         .or_else(|| std::fs::read(file).ok());
-    let mut data = view::data(
+    let controls: Option<serde_json::Value> = match controls {
+        Some(f) => Some(
+            std::fs::read_to_string(f)
+                .map_err(|e| format!("{}: {e}", f.display()))
+                .and_then(|t| {
+                    serde_json::from_str(&t).map_err(|e| format!("{}: {e}", f.display()))
+                })?,
+        ),
+        None => None,
+    };
+    let mut data = view::data_with(
         &mut book,
         &name,
         source.as_deref(),
         limits,
         changes.as_ref().map(|(n, d)| (n.as_str(), d)),
+        controls.as_ref(),
     )?;
     if let Some(focus) = focus {
         data["active"] = focus.into();
@@ -390,7 +405,7 @@ pub fn write_view(
     drawings: Option<&Path>,
     sheet: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let page = view_page(file, before, all, None, drawings, sheet, false, false)?;
+    let page = view_page(file, before, all, None, drawings, sheet, false, false, None)?;
     let target = match output {
         Some(o) => o.to_path_buf(),
         None => dir.join(format!(

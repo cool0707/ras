@@ -367,12 +367,14 @@ pub(crate) struct Ctx<'a> {
 const OBJECTS: [&str; 5] = ["sp", "cxnSp", "grpSp", "pic", "graphicFrame"];
 
 /// The objects of a sheet's drawing in drawing order (later ones on top), with its controls.
+/// `state`: the state of the controls as the stand-in for Excel has them (`Controls::apply`).
 pub fn sheet_objects(
     parts: &Parts,
     sheet: &str,
     env: &Env,
     ids: &Cell<usize>,
     images: &RefCell<Images>,
+    state: Option<&serde_json::Value>,
 ) -> Vec<Obj> {
     let mut out = Vec::new();
     let Some(sheet_part) = parts.sheet_part(sheet) else {
@@ -381,6 +383,9 @@ pub fn sheet_objects(
     let theme = parts.theme_colors();
     let font = env.font.clone();
     let mut controls = Controls::read(parts, &sheet_part, &font);
+    if let Some(state) = state {
+        controls.apply(state);
+    }
     let mut drawings: Vec<String> = parts
         .rels(&sheet_part)
         .into_values()
