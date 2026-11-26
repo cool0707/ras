@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Book, compile, diffText, explain, format, generateTest, initSync } from "../pkg/ras_wasm.js";
-import { type RunResult, runJob, type WasmBookClass } from "../src/runtime/run";
+import { type RunResult, runJob, ServeSession, type WasmBookClass } from "../src/runtime/run";
 
 const web = join(fileURLToPath(import.meta.url), "..", "..");
 initSync({ module: readFileSync(join(web, "pkg", "ras_wasm_bg.wasm")) });
@@ -227,4 +227,37 @@ test("reads the ActiveX controls of the sheets for @on(\"<control>.<event>\")", 
     const other = [{ path: "objects/Sheet1.ras", text: '@on("CommandButton1.MouseDown")\nfunction c() {\n}\n' }];
     const missing = JSON.parse(compile(JSON.stringify({ files: other, toml, sheets: ["Sheet1"], sheetControls: [] })));
     assert.ok(missing.diagnostics.some((d: { code: string }) => d.code === "E0613"), JSON.stringify(missing.diagnostics));
+});
+
+test("the run mode of the book tab: the program serves what is done on the sheet", () => {
+    const toml = '[project]\nname = "Serve"\nworkbook = "Serve.xlsx"\n';
+    const files = [
+        {
+            path: "objects/Sheet1.ras",
+            text: '@on("Worksheet.Change")\nfunction changed(target: Excel.Range) {\n    Sheet1.range("B1").value = `changed ${target.address}`;\n    console.log("changed");\n}\n@on("Worksheet.SelectionChange")\nfunction selected(target: Excel.Range) {\n    Sheet1.range("C1").value = target.address;\n}\n',
+        },
+    ];
+    const out = JSON.parse(compile(JSON.stringify({ files, toml, sheets: ["Sheet1"], js: true })));
+    assert.deepEqual(out.diagnostics.filter((d: { severity: string }) => d.severity === "error"), []);
+    const printed: string[] = [];
+    const session = new ServeSession(Book as unknown as WasmBookClass, { kind: "serve", js: out.js, files: [...files.map((f) => ({ path: f.path, data: f.text })), { path: "Serve.xlsx", data: book() }], target: "" }, (_s, t) => printed.push(t));
+    const start = session.request({ op: "start" });
+    assert.equal(start.reply.ok, true, JSON.stringify(start.reply));
+    assert.equal(start.reply.where?.sheet, "Sheet1");
+    assert.ok(start.snapshot, "the first answer has the workbook");
+    const entered = session.request({ op: "enter", sheet: "Sheet1", ranges: ["A1"], text: "1" });
+    assert.equal(entered.reply.ok, true, JSON.stringify(entered.reply));
+    assert.deepEqual(entered.reply.errors, []);
+    assert.ok(entered.snapshot, "the workbook changed");
+    assert.match(diffText(start.snapshot!.bytes, entered.snapshot!.bytes, 20), /changed \$A\$1/);
+    assert.ok(printed.join("").includes("changed"), printed.join(""));
+    // (The answers are not printed.)
+    assert.ok(!printed.join("").includes("\u001eRAS"), printed.join(""));
+    const selected = session.request({ op: "select", sheet: "Sheet1", range: "D4", active: "D4" });
+    assert.equal(selected.reply.ok, true, JSON.stringify(selected.reply));
+    assert.match(diffText(entered.snapshot!.bytes, selected.snapshot!.bytes, 20), /\$D\$4/);
+    // Nothing changed: no workbook.
+    const again = session.request({ op: "activate", sheet: "Sheet1" });
+    assert.equal(again.snapshot, null);
+    assert.equal(session.exited, null);
 });
