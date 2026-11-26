@@ -936,8 +936,10 @@ async function run(kind: "run" | "test") {
             head.className = "result ng";
             continue;
         }
-        if (kind === "run") showRunResult(result.result, result.ms, head, before);
-        else {
+        if (kind === "run") {
+            showRunResult(result.result, result.ms, head, before);
+            if (!crossOriginIsolated && out.textContent?.includes("ユーザーフォームを表示できません")) out.prepend(notIsolatedHint());
+        } else {
             const r = showTestResult(result.result, tests, head);
             failures += r.failed;
             passed += r.passed;
@@ -949,6 +951,18 @@ async function run(kind: "run" | "test") {
         const sum = el("div", `result ${failures ? "ng" : "ok"}`, `${failures ? "失敗あり" : "すべて成功"}: 成功 ${passed}、失敗 ${failures}（${((performance.now() - startedAll) / 1000).toFixed(2)} 秒）`);
         out.prepend(sum);
     }
+}
+
+/**
+ * Why a run could not show its user forms in this page: it is not cross-origin isolated (sw.js
+ * did not serve it, as after a hard reload or with the DevTools' "Disable cache"), and how to be.
+ */
+function notIsolatedHint(): HTMLElement {
+    const box = el("div", "result ng", "このページはいまクロスオリジン分離されていないため、ユーザーフォームを表示できません（MsgBox / InputBox も既定の応答になります）。スーパーリロードや開発者ツールの「キャッシュを無効にする」の後に起こります。");
+    const reload = el("button", undefined, "再読み込み");
+    reload.onclick = () => location.reload();
+    box.append(" ", reload);
+    return box;
 }
 
 function rasLink(file: string | null, line: number): HTMLElement | string {
@@ -1591,14 +1605,21 @@ function setUpExplorerPane() {
     });
 }
 
-/** The page is cross-origin isolated through sw.js (for the dialogs); reloads once to be. */
+/**
+ * The page is cross-origin isolated through sw.js (for the dialogs and the user forms); reloads
+ * once to be. A hard reload (Ctrl+Shift+R) bypasses the service worker, so the page has to reload
+ * again then. What keeps the reload from looping (when the service worker does not make the page
+ * isolated) is the time of the last one, in localStorage: the isolated page is in another
+ * browsing context group (COOP), whose sessionStorage the page before it does not see.
+ */
 async function isolate() {
     if (crossOriginIsolated || !("serviceWorker" in navigator) || !window.isSecureContext) return;
     try {
         const reg = await navigator.serviceWorker.register("sw.js");
         if (navigator.serviceWorker.controller) return;
-        if (sessionStorage.getItem("ras-isolate")) return;
-        sessionStorage.setItem("ras-isolate", "1");
+        const last = Number(localStorage.getItem("ras-isolate"));
+        if (last && Math.abs(Date.now() - last) < 10_000) return;
+        localStorage.setItem("ras-isolate", String(Date.now()));
         await navigator.serviceWorker.ready;
         if (reg.active) location.reload();
     } catch {
