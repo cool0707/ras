@@ -75,6 +75,118 @@ mod tests {
     }
 
     #[test]
+    fn column_literals() {
+        let m = ok("const a = [0cA, 0cZ, 0cAA, 0cAZ, 0cBA, 0cXFD, 0cxfd];\n");
+        let Item::Var(v) = &m.items[0] else { panic!() };
+        let ExprKind::Array(items) = &v.init.as_ref().unwrap().kind else {
+            panic!()
+        };
+        let values: Vec<i128> = items
+            .iter()
+            .map(|e| match e.kind {
+                ExprKind::Int { value, .. } => value,
+                _ => panic!(),
+            })
+            .collect();
+        assert_eq!(values, vec![1, 26, 27, 52, 53, 16384, 16384]);
+        for src in [
+            "const a = 0cXFE;",
+            "const a = 0c;",
+            "const a = 0c1;",
+            "const a = 0cA_B;",
+        ] {
+            assert!(
+                !parse(src).errors.is_empty(),
+                "expected an error for {src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ranges_and_from_end() {
+        let m = ok("const a = xs[^1];\nconst b = xs[1..^1];\nconst c = xs[..n - 1];\nconst d = xs[c ? 1 : 2..];\nconst e = xs[..];\nconst f = xs[^(i + 1)];\nfor (const i of 0..n) {}\n");
+        let index = |i: usize| match &m.items[i] {
+            Item::Var(v) => match &v.init.as_ref().unwrap().kind {
+                ExprKind::Index { index, .. } => index.kind.clone(),
+                other => panic!("{other:?}"),
+            },
+            _ => panic!(),
+        };
+        assert!(matches!(index(0), ExprKind::FromEnd(_)));
+        let ExprKind::Range {
+            start: Some(s),
+            end: Some(e),
+        } = index(1)
+        else {
+            panic!()
+        };
+        assert!(matches!(s.kind, ExprKind::Int { value: 1, .. }));
+        assert!(matches!(e.kind, ExprKind::FromEnd(_)));
+        // `..` binds more loosely than every operator, `?:` included.
+        let ExprKind::Range {
+            start: None,
+            end: Some(e),
+        } = index(2)
+        else {
+            panic!()
+        };
+        assert!(matches!(
+            e.kind,
+            ExprKind::Binary {
+                op: BinaryOp::Sub,
+                ..
+            }
+        ));
+        let ExprKind::Range {
+            start: Some(s),
+            end: None,
+        } = index(3)
+        else {
+            panic!()
+        };
+        assert!(matches!(s.kind, ExprKind::Ternary { .. }));
+        assert!(matches!(
+            index(4),
+            ExprKind::Range {
+                start: None,
+                end: None
+            }
+        ));
+        let ExprKind::FromEnd(x) = index(5) else {
+            panic!()
+        };
+        assert!(matches!(x.kind, ExprKind::Paren(_)));
+        let Item::Stmt(s) = &m.items[6] else { panic!() };
+        assert!(matches!(
+            &s.kind,
+            StmtKind::ForOf {
+                iter: Expr {
+                    kind: ExprKind::Range { .. },
+                    ..
+                },
+                ..
+            }
+        ));
+        // `^` is a unary operator: `^1 - i` is `(^1) - i`; `a ^ b` stays XOR.
+        let m = ok("const g = xs[^1 - i];\nconst h = a ^ b;\n");
+        let Item::Var(v) = &m.items[0] else { panic!() };
+        let ExprKind::Index { index, .. } = &v.init.as_ref().unwrap().kind else {
+            panic!()
+        };
+        assert!(
+            matches!(&index.kind, ExprKind::Binary { lhs, .. } if matches!(lhs.kind, ExprKind::FromEnd(_)))
+        );
+        let Item::Var(v) = &m.items[1] else { panic!() };
+        assert!(matches!(
+            &v.init.as_ref().unwrap().kind,
+            ExprKind::Binary {
+                op: BinaryOp::BitXor,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn class_members() {
         let m = ok("class Stack<T> {\n private items: T[] = [];\n push(x: T): void { this.items.push(x); }\n pop(): T { return this.items.pop(); }\n get size(): int { return this.items.length; }\n constructor(n: int) {}\n}");
         let Item::Class(c) = &m.items[0] else {

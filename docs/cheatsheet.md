@@ -9,6 +9,7 @@ RAS は TypeScript に似た構文で書き、VBA（`.bas` / `.cls`）に変換�
 - 条件は `boolean` だけです。`if (count)`・`if (name)`・`if (obj)` は書けません（`count != 0`、`name != ""`、`obj != null`）。
 - `struct`・タプル・配列は値型です（代入でコピーされます）。`class` のインスタンスと Excel のオブジェクトは参照です。
 - アロー関数の中から、外側の変数を書き換えられません（`forEach` の中で合計を足すなど）。`for...of` か `reduce` を使います。
+- 負の添字は末尾から数えません（`xs[-1]` は範囲外のエラー）。末尾からは C# と同じく `xs[^1]`、一部の取り出しは範囲 `xs[1..^1]`・`s[..3]`（終わりは含まない）、数の列挙は `for (const i of 0..n)` です。範囲・`slice`・`step(n)`・`toReversed()` は新しい配列を返し、`reverse()`・`sort()` は配列そのものを並べ替えます。
 - `undefined`・`?.`・スプレッド（`...`）・`async` / `await`・クラスの継承（`extends` / `super`）・関数の中の `function` はありません。
 - Excel / VBA のメンバーとグローバルは camelCase で書きます（`ws.cells(1, 1).value`、`msgBox(...)`、`xlUp`）。VBA の綴り（`Cells`）は警告になり、`ras check --fix` で直せます。
 - 名前は大文字小文字だけの違いでは区別できません（VBA が区別しないため。`Shape` という型と `shape` という変数は同時に使えません）。
@@ -20,7 +21,7 @@ RAS は TypeScript に似た構文で書き、VBA（`.bas` / `.cls`）に変換�
 
 | RAS | VBA | 備考 |
 |---|---|---|
-| `int` / `long` / `short` / `byte` | `Long` / `LongLong` / `Integer` / `Byte` | 整数リテラルは `int`。`long` は 64bit Office だけ |
+| `int` / `long` / `short` / `byte` | `Long` / `LongLong` / `Integer` / `Byte` | 整数リテラルは `int`（`0xFF`、列番号 `0cAA` = 27 も）。`long` は 64bit Office だけ |
 | `double` / `float` | `Double` / `Single` | 小数リテラルは `double` |
 | `currency` / `decimal` | `Currency` / `Variant`（`CDec`） | `1.5m` は `decimal` |
 | `string` / `boolean` / `date` | `String` / `Boolean` / `Date` | |
@@ -50,6 +51,9 @@ export function basics(): string {
     }
     for (const n of names) {
         name += n.toUpperCase();
+    }
+    for (const i of 0..names.length) {   // i = 0, 1, ..., length - 1
+        name += names[^(i + 1)][..1];     // 末尾から 1 つずつ、その先頭の 1 文字
     }
     while (total > 100) {
         total = total / 2;            // 整数の割り算
@@ -176,6 +180,7 @@ export function fill() {
         // セルのエラー値（#N/A など）は計算・比較すると実行時エラーになるので、null にしてから使う
         ws.cells(r, 3).value = (Excel.errorToNull(ws.cells(r, 2).value) ?? 0) * 2;
     }
+    ws.cells(1, 0cAA).value = "AA 列";            // 0cAA は列番号 27（A = 1。0x のような列の文字のリテラル）
     ws.range("C1").value = "2 倍";
     ws.range("C1").font.bold = true;
     ws.range("C2:C" + last).numberFormat = "#,##0";

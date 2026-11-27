@@ -19,6 +19,8 @@ pub enum SyntaxKind {
     #[regex(r"[0-9][0-9_]*[lL]?")]
     #[regex(r"0[xX][0-9a-fA-F_]+[lL]?")]
     #[regex(r"0[bB][01_]+[lL]?")]
+    // `0cAA` — an Excel column number in letters (A = 1, spec §2.2). No suffix: `L` is a letter.
+    #[regex(r"0[cC][A-Za-z0-9_]*")]
     INT_LIT,
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9]+)?[fFdDmM]?")]
     #[regex(r"[0-9][0-9_]*[eE][+-]?[0-9]+[fFdDmM]?")]
@@ -141,6 +143,8 @@ pub enum SyntaxKind {
     DOT,
     #[token("...")]
     DOT3,
+    #[token("..")]
+    DOT2,
     #[token("?.")]
     QUESTION_DOT,
     #[token(":")]
@@ -307,6 +311,10 @@ pub enum SyntaxKind {
     NEW_EXPR,
     MEMBER_EXPR,
     INDEX_EXPR,
+    /// `a..b` / `..b` / `a..` — only as an index (`xs[1..^1]`) or the source of `for...of`.
+    RANGE_EXPR,
+    /// `^n` — the n-th position from the end, inside an index (`xs[^1]`, `xs[..^1]`).
+    FROM_END_EXPR,
     /// `` fx`SUM(A1:A3)` `` — a tag followed by a template literal (spec §2.7).
     TAGGED_TEMPLATE,
     AS_EXPR,
@@ -358,6 +366,8 @@ impl SyntaxKind {
                 | NEW_EXPR
                 | MEMBER_EXPR
                 | INDEX_EXPR
+                | RANGE_EXPR
+                | FROM_END_EXPR
                 | TAGGED_TEMPLATE
                 | AS_EXPR
                 | NAMED_ARG
@@ -491,8 +501,11 @@ mod tests {
     #[test]
     fn numbers() {
         assert_eq!(
-            kinds("123 123L 0xFF 1.5 1e3 2d 1.5f 1.5m"),
-            vec![INT_LIT, INT_LIT, INT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT]
+            kinds("123 123L 0xFF 0cA 0cXFD 1.5 1e3 2d 1.5f 1.5m"),
+            vec![
+                INT_LIT, INT_LIT, INT_LIT, INT_LIT, INT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT,
+                FLOAT_LIT, FLOAT_LIT
+            ]
         );
     }
 
@@ -513,6 +526,17 @@ mod tests {
             .map(|t| &src[t.start as usize..t.end as usize])
             .collect();
         assert_eq!(joined, src);
+    }
+
+    #[test]
+    fn range_dots() {
+        assert_eq!(
+            kinds("1..3 a...b x..^1 1.5..2"),
+            vec![
+                INT_LIT, DOT2, INT_LIT, IDENT, DOT3, IDENT, IDENT, DOT2, CARET, INT_LIT, FLOAT_LIT,
+                DOT2, INT_LIT
+            ]
+        );
     }
 
     #[test]

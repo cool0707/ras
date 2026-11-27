@@ -177,7 +177,9 @@ impl<'p> Gen<'p> {
 
     pub(crate) fn expr(&mut self, e: &Expr) -> String {
         match &e.kind {
-            ExprKind::Error => "undefined".into(),
+            // Ranges and `^n` are lowered by the index that holds them (rejected elsewhere).
+            ExprKind::Error | ExprKind::Range { .. } => "undefined".into(),
+            ExprKind::FromEnd(x) => self.expr(x),
             ExprKind::Super => "super".into(),
             ExprKind::Object(props) => match self.ty(e) {
                 Type::Struct(sid) => {
@@ -514,7 +516,32 @@ impl<'p> Gen<'p> {
         if let (Type::Struct(_), ExprKind::Int { value, .. }) = (&ot, &index.peel().kind) {
             return format!("{o}.item{value}");
         }
+        if let ExprKind::Range { start, end } = &index.kind {
+            // `$rt.range(xs, start, startFromEnd, end, endFromEnd)` (spec §4.5)
+            let mut argv = vec![o];
+            for b in [start, end] {
+                match b.as_deref() {
+                    None => argv.extend(["undefined".to_string(), "false".to_string()]),
+                    Some(Expr {
+                        kind: ExprKind::FromEnd(k),
+                        ..
+                    }) => argv.extend([self.expr(k), "true".to_string()]),
+                    Some(x) => argv.extend([self.expr(x), "false".to_string()]),
+                }
+            }
+            let r = format!("$rt.range({})", argv.join(", "));
+            return match ot.elem() {
+                Some(Type::Struct(_)) => format!("{r}.map($rt.clone)"),
+                _ => r,
+            };
+        }
         let i = self.expr(index);
+        if matches!(index.kind, ExprKind::FromEnd(_)) {
+            return match &ot {
+                Type::Str => format!("$rt.charEnd({o}, {i})"),
+                _ => format!("{o}[$rt.ixEnd({o}, {i})]"),
+            };
+        }
         match &ot {
             // An index outside the array is a run-time error in VBA, not `undefined`.
             Type::Array(_) => format!("{o}[$rt.ix({o}, {i})]"),
@@ -537,6 +564,9 @@ impl<'p> Gen<'p> {
                     return Place::Native(format!("{o}.item{value}"));
                 }
                 let i = self.expr(index);
+                if matches!(index.kind, ExprKind::FromEnd(_)) {
+                    return Place::Native(format!("{o}[$rt.ixEnd({o}, {i})]"));
+                }
                 match &ot {
                     Type::Array(_) => Place::Native(format!("{o}[$rt.ix({o}, {i})]")),
                     Type::Map(..) => Place::MapItem { map: o, key: i },
@@ -1019,7 +1049,11 @@ impl<'p> Gen<'p> {
                     "Error" => return format!("$rt.makeError({})", self.plain_args(args)),
                     "Map" if matches!(self.ty(e), Type::Map(..)) => return "new Map()".into(),
                     "Array" => {
-                        let elem = self.ty(e).elem_of();
+                        // `new Array<int>(rows, cols)` is `int[][]`: each cell starts as an `int`.
+                        let elem = match args.len() {
+                            2 => self.ty(e).elem_of().elem_of(),
+                            _ => self.ty(e).elem_of(),
+                        };
                         let z = self.zero(&elem);
                         let sizes = self.plain_args(args);
                         return format!("$rt.newArray(() => {z}, [{sizes}])");
@@ -1217,6 +1251,19 @@ impl<'p> Gen<'p> {
             ArrIncludes => format!("{r}.includes({argv})"),
             ArrJoin => format!("$rt.join({r}, {})", arg(0, "\",\"")),
             ArrSlice => format!("{r}.slice({argv})"),
+            // Struct elements are values: the new array holds copies (as the VBA build does).
+            ArrStep | ArrToReversed => {
+                let v = if intr == ArrStep {
+                    format!("$rt.step({r}, {argv})")
+                } else {
+                    format!("{r}.slice().reverse()")
+                };
+                if matches!(elem, Type::Struct(_)) {
+                    format!("{v}.map($rt.clone)")
+                } else {
+                    v
+                }
+            }
             ArrSort => format!(
                 "$rt.sort({r}{}{argv})",
                 if a.is_empty() { "" } else { ", " }

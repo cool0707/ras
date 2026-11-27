@@ -153,7 +153,8 @@ function replacePrimitiveTypes(grammar) {
 }
 
 /**
- * Numeric literals with C#-style type suffixes (spec §2.2): `123L`, `1.5f`, `2d`, `1.5m`.
+ * Numeric literals with C#-style type suffixes (spec §2.2): `123L`, `1.5f`, `2d`, `1.5m`,
+ * and the column numbers `0cAA`.
  * The bigint suffix `n` does not exist in RAS and is dropped.
  */
 function replaceNumericLiterals(grammar) {
@@ -197,6 +198,12 @@ function replaceNumericLiterals(grammar) {
 		11: period, 12: suffix,
 		13: suffix,
 	};
+
+	// `0cAA` — an Excel column number in letters (spec §2.2). No suffix: `L` is a column letter.
+	numeric.patterns.unshift({
+		name: "constant.numeric.column.ts",
+		match: "\\b(?<!\\$)0(?:c|C)[A-Za-z]+\\b(?!\\$)",
+	});
 }
 
 /**

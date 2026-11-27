@@ -1314,8 +1314,12 @@ impl Checker<'_> {
             } => {
                 self.loop_decorators(decorators);
                 self.fx.has_loops = true;
-                let it = self.value(iter, None);
+                let it = match &iter.kind {
+                    ExprKind::Range { .. } => Type::Error,
+                    _ => self.value(iter, None),
+                };
                 let elem = match &it {
+                    _ if matches!(iter.kind, ExprKind::Range { .. }) => self.range_iter(iter),
                     Type::Array(_) if it.dims() == 2 => {
                         self.err(iter.span, "E0304", "2次元配列は `for...of` で列挙できません。添字の `for` を使ってください");
                         Type::Error
@@ -1837,6 +1841,23 @@ impl Checker<'_> {
     fn expr_inner(&mut self, e: &Expr, expect: Option<&Type>) -> Type {
         match &e.kind {
             ExprKind::Error => Type::Error,
+            // Only reachable where the parser allows them but the context does not (spec §4.5).
+            ExprKind::FromEnd(x) => {
+                self.err(e.span, "E0386", "`^`（末尾からの位置）は、配列・文字列の添字か範囲の端にそのまま書いてください（`xs[^1]`、`xs[..^1]`。式は `xs[^(i + 1)]` のように括弧で囲みます）");
+                self.value(x, None);
+                Type::Error
+            }
+            ExprKind::Range { start, end } => {
+                self.err(
+                    e.span,
+                    "E0386",
+                    "範囲（`..`）は配列・文字列の添字と `for...of` でだけ使えます",
+                );
+                for x in [start, end].into_iter().flatten() {
+                    self.value(x, None);
+                }
+                Type::Error
+            }
             ExprKind::Int { value, suffix, .. } => {
                 if *suffix == ast::NumSuffix::L {
                     if i64::try_from(*value).is_err() {
@@ -2215,6 +2236,9 @@ impl Checker<'_> {
             }
             ExprKind::Index { object, index } => {
                 let ot = self.value(object, None);
+                if matches!(index.kind, ExprKind::Range { .. } | ExprKind::FromEnd(_)) {
+                    return self.range_index(e, object, &ot, index);
+                }
                 match &ot {
                     Type::Array(el) => {
                         let it = self.value(index, Some(&Type::Int));
@@ -3665,9 +3689,15 @@ impl Checker<'_> {
                     _ => {}
                 }
             }
-            ExprKind::Index { object, .. } => {
+            ExprKind::Index { object, index } => {
                 let ot = self.info().ty(object.id);
-                if ot == Type::Str {
+                if matches!(index.kind, ExprKind::Range { .. }) && !ot.is_error() {
+                    self.err(
+                        target.span,
+                        "E0386",
+                        "範囲（`a[1..3]`）には代入できません。要素ごとに代入してください",
+                    );
+                } else if ot == Type::Str {
                     self.err(
                         target.span,
                         "E0325",
@@ -5169,6 +5199,127 @@ impl Checker<'_> {
     }
 
     /// Checks `args[i]` (when present) against `want`.
+    /// An end of a range, or the operand of `^`: an integer.
+    fn range_bound(&mut self, x: &Expr) -> Type {
+        let it = self.value(x, Some(&Type::Int));
+        self.warn_cell_value(x, &it, "添字に使う");
+        if !(it.is_integer()
+            || matches!(
+                it,
+                Type::Any | Type::CellValue | Type::Error | Type::Enum(_)
+            ))
+        {
+            self.err(
+                x.span,
+                "E0389",
+                format!(
+                    "範囲の端・`^` の位置は整数である必要があります（`{}` です）",
+                    self.show(&it)
+                ),
+            );
+        }
+        it
+    }
+
+    /// The index `^n` or `a..b` of `object` (spec §4.5).
+    fn range_index(&mut self, e: &Expr, object: &Expr, ot: &Type, index: &Expr) -> Type {
+        let is_range = matches!(index.kind, ExprKind::Range { .. });
+        let ok = match ot {
+            Type::Array(el) if is_range && matches!(**el, Type::Array(_)) => {
+                self.err(
+                    index.span,
+                    "E0386",
+                    "2次元配列は範囲（`..`）で切り出せません",
+                );
+                false
+            }
+            Type::Array(_) | Type::Str => true,
+            Type::Error => false,
+            other => {
+                let shown = self.show(other);
+                self.err(
+                    index.span,
+                    "E0386",
+                    format!("`{shown}` は範囲（`..`）・末尾からの位置（`^`）で参照できません（配列と文字列だけです）"),
+                );
+                false
+            }
+        };
+        let bounds: Vec<&Expr> = match &index.kind {
+            ExprKind::Range { start, end } => {
+                [start, end].into_iter().flatten().map(|b| &**b).collect()
+            }
+            _ => vec![index],
+        };
+        for b in bounds {
+            match &b.kind {
+                // Only the first problem is reported when the indexed value is wrong.
+                ExprKind::FromEnd(x) if !ok => {
+                    self.value(x, None);
+                }
+                _ if !ok => {
+                    self.value(b, None);
+                }
+                ExprKind::FromEnd(x) => {
+                    self.range_bound(x);
+                    if let Some(t) = self.info().expr_types.get_mut(b.id as usize) {
+                        *t = Type::Int;
+                    }
+                }
+                _ => {
+                    self.range_bound(b);
+                }
+            }
+        }
+        if !ok {
+            return Type::Error;
+        }
+        match ot {
+            Type::Array(el) if !is_range => {
+                if matches!(**el, Type::Array(_)) {
+                    // `a[^1]` of a 2-D array is only valid as the object of another index.
+                    self.fx.row_views.insert(e.id, e.span);
+                }
+                self.fx.row_views.remove(&object.peel().id);
+                (**el).clone()
+            }
+            _ => ot.clone(),
+        }
+    }
+
+    /// `for (const i of a..b)`: the type of the loop variable (spec §4.5).
+    fn range_iter(&mut self, iter: &Expr) -> Type {
+        let ExprKind::Range { start, end } = &iter.kind else {
+            return Type::Error;
+        };
+        let mut ty = Type::Int;
+        for b in [start, end].into_iter().flatten() {
+            if let ExprKind::FromEnd(x) = &b.kind {
+                self.err(
+                    b.span,
+                    "E0386",
+                    "`for...of` の範囲に `^`（末尾からの位置）は使えません",
+                );
+                self.value(x, None);
+                continue;
+            }
+            if self.range_bound(b) == Type::Long {
+                ty = Type::Long;
+            }
+        }
+        if end.is_none() {
+            self.err(
+                iter.span,
+                "E0386",
+                "`for...of` の範囲には終わりを書いてください（`0..n`）",
+            );
+        }
+        if let Some(t) = self.info().expr_types.get_mut(iter.id as usize) {
+            *t = ty.clone();
+        }
+        ty
+    }
+
     fn arg(&mut self, args: &[Expr], i: usize, want: &Type) -> Type {
         match args.get(i) {
             Some(a) => {
@@ -5768,6 +5919,25 @@ impl Checker<'_> {
                     self.arg(args, 0, &Type::Int);
                     self.arg(args, 1, &Type::Int);
                 }
+                arr()
+            }
+            ArrStep => {
+                if self.arg_count(call, args, 1, 1) {
+                    self.arg(args, 0, &Type::Int);
+                    if let ExprKind::Int { value, .. } = &args[0].peel().kind {
+                        if *value < 1 {
+                            self.err(
+                                args[0].span,
+                                "E0386",
+                                "`step` の間隔は 1 以上にしてください（逆順は `toReversed()`）",
+                            );
+                        }
+                    }
+                }
+                arr()
+            }
+            ArrToReversed => {
+                self.arg_count(call, args, 0, 0);
                 arr()
             }
             ArrSort => {

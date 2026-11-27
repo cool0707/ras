@@ -747,6 +747,58 @@ impl<'p> Lowerer<'p> {
         let var_ty = self.local_ty(local);
         let iter_ty = self.ty(iter);
         let caps = self.push_plan(s);
+        // `for (const i of a..b)` → `For i = a To b - 1` (spec §4.5).
+        if let ExprKind::Range { start, end } = &iter.kind {
+            let Some(end) = end.as_deref() else {
+                return;
+            };
+            let (from, to) = match start.as_deref() {
+                Some(start) => {
+                    let ops = self.operands(&[start, end]);
+                    let mut it = ops.into_iter();
+                    (it.next().unwrap(), it.next().unwrap())
+                }
+                None => (long(0), self.expr(end)),
+            };
+            let to = to.plus(-1);
+            // The loop variable is the counter itself unless the body assigns to it.
+            let reassigned = self
+                .frame()
+                .fn_id
+                .and_then(|f| self.prog.fns[f].locals.get(local))
+                .is_none_or(|d| d.reassigned || d.captured);
+            let n = self.local_name(&var_name.text, &var_ty);
+            self.bind(local, Binding::Var(n.clone()));
+            self.enter_loop(LoopKind::For, label);
+            let var = if reassigned || var_ty != iter_ty {
+                let vt = self.vtype(&iter_ty).0;
+                let idx = self.declare_raw("ras_i", &vt, false);
+                let (pre, _) = self.capture(|lw| {
+                    lw.store(
+                        &VExpr::Name(n.clone()),
+                        &var_ty,
+                        name(idx.clone()),
+                        &iter_ty,
+                    )
+                });
+                (idx, pre)
+            } else {
+                (n, Vec::new())
+            };
+            let (var, mut b) = var;
+            b.extend(self.loop_body(body));
+            b.extend(self.yield_point(s));
+            self.emit(VStmt::For {
+                var,
+                from,
+                to,
+                step: None,
+                body: b,
+            });
+            self.leave_loop();
+            self.finish_push_plan(caps);
+            return;
+        }
         // `for (const k of map.keys())` enumerates the dictionary directly.
         let map_iter = match (
             &iter.peel().kind,

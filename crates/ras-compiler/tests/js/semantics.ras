@@ -154,4 +154,21 @@ export function run() {
         mismatch = e.code;
     }
     console.log("errval", ue, ve == "x", ve == 1, ve == cvErr(2042), ve == cvErr(2007), cleaned[1] == null, cleaned[2], mismatch);
+    // Ranges and positions from the end (spec §4.5): ends are kept within the array, negative ends are 0.
+    const rg = [10, 20, 30, 40, 50];
+    let rb = [1, 2, 3, 4];
+    rb[^1] = 99;
+    rb[^2] += 5;
+    rb = rb[1..];
+    const rs = "abcdef";
+    let rsum = 0;
+    for (const i of 1..rg.length) rsum += i;
+    for (let i of 0..3) { i = i * 10; rsum += i; }
+    const rm = new Array<int>(2, 3);
+    rm[^1][^1] = 7;
+    const rps: Pt[] = [mkPt(1, 2), mkPt(3, 4), mkPt(5, 6)];
+    const rq = rps[1..];
+    rq[0].x = 100;
+    console.log("range", rg[^1], rg[1..^1].join(), rg[..2].join(), rg[-3..2].join(), rg[3..1].length, rg[^9..^3].join(), rb.join(), rs[^1], rs[1..3], rs[..^2], rs[4..99], rs[5..2], rsum, rm[1][2], rm[^2][0], rps[1].x, rq[0].x);
+    console.log("step", rg.step(2).join(), rg[1..].step(2).join(), rg.toReversed().join(), rg.join(), rps.toReversed()[0].x, rps.step(2).length);
 }

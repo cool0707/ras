@@ -72,6 +72,8 @@ const nFloat = 1.5f;
 const nDecimal = 1.5m;
 const nHex = 0xFF;
 const nHexLong = 0xFFL;
+const nColumn = 0cAA;
+const nColumnL = 0cAL;
 const nSum = 300 * 200 + 0.25f;
 
 // §10.3 / §12.2 decorators on functions

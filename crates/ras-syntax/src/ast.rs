@@ -527,6 +527,13 @@ pub enum ExprKind {
         object: Box<Expr>,
         index: Box<Expr>,
     },
+    /// `^n` — the n-th position from the end; only directly inside an index or a range.
+    FromEnd(Box<Expr>),
+    /// `a..b`, `..b`, `a..`, `..` — only as an index (`xs[1..^1]`) or the source of `for...of`.
+    Range {
+        start: Option<Box<Expr>>,
+        end: Option<Box<Expr>>,
+    },
     As {
         expr: Box<Expr>,
         ty: TypeRef,

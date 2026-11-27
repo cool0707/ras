@@ -3,6 +3,8 @@
 > v0.8 からの変更
 > * Excel / VBA / Office のメンバーとグローバルは、JavaScript の命名規則（camelCase）で参照する（`ws.cells(r, 1).value`、`msgBox(...)`）。生成する VBA にはタイプ ライブラリの綴りを出力する（§15.3.1）
 > * `worksheets` などのホストのコレクションで、配列と同じ `filter` / `map` / `forEach` 等を使える（§4.4）
+> * Excel の列番号を列の文字で書くリテラル `0cAA`（= 27）を追加（§2.2）
+> * C# と同じ範囲 `xs[1..^1]`・末尾からの位置 `xs[^1]` と、`for (const i of 0..n)` を追加。配列のメソッドに `step(n)`・`toReversed()` を追加（§4.5）
 > * `ras check --fix` とエディタのクイックフィックスで、VBA の綴りで書かれた名前を書き換える（§7.3、§16.2）
 > * 名前付き引数 `f(a: 123, c: "あいう")` を追加（§3.3）。エディタで引数名を補完する（§16.2.1）
 > * VBA の `[A1]`・`[SUM(A1:A10)]`（`Evaluate` の省略形）に当たる `` fx`SUM(A1:A10)` `` を追加（§2.7）。数式の中は Excel の数式として色分けし、ワークシート関数を補完する
@@ -120,7 +122,9 @@ TypeScript の `number` 型は存在しない（`number` と書いた場合は�
 | `1.5f` | `float` | `1.5!` |
 | `1.5m` | `decimal` | `CDec("1.5")` |
 | `0xFF` | `int` | `&HFF&` |
+| `0cA`, `0cAA`, `0cXFD` | `int`（列番号。`A` = 1） | `1&`, `27&`, `16384&` |
 
+* **列番号のリテラル（`0c`）:** `0c` の後ろに Excel の列の文字を書くと、その列番号（1 始まり）の `int` になる（`ws.cells(r, 0cAA)` は `ws.Cells(r, 27&)`）。大文字・小文字は区別しない。`0cXFD`（16384、Excel 2007 以降の最後の列）を超える値、列の文字以外（`0c1`、`_` の区切り）は構文エラー。型サフィックスは付けられない（`L` も列の文字になる）。範囲にも使える（`for (const c of 0cB..0cE)` は B〜D 列）。
 * VBA の整数リテラルは値が小さいと `Integer` 型になり、`300 * 200` が `Integer` 演算で溢れる。RAS は**数値リテラルに常に型サフィックスを付けて出力**し、この罠を回避する。
 * `short` / `byte` 型の変数への代入は、定数がその型の範囲内であれば暗黙に許可する（C# と同じ）。
 
@@ -624,7 +628,7 @@ MsgBox "完了しました",, "集計"
 
 ## 4. 無名関数（ラムダ式）と配列操作
 
-無名関数の用途は配列・コレクションの操作（`map`, `filter`, `forEach`, `reduce`, `some`, `every`, `find`, `findIndex`, `sort` 等）に特化する。
+無名関数の用途は配列・コレクションの操作（`map`, `filter`, `forEach`, `reduce`, `some`, `every`, `find`, `findIndex`, `sort` 等）に特化する。配列・文字列の一部の取り出し（範囲 `xs[1..^1]`）は §4.5。
 
 * **構文:** アロー関数 `(x) => x * 2` または `(x: double) => { return x * 2; }`。
 * **キャプチャ制約（重要）:**
@@ -737,6 +741,75 @@ If ras_n = 0& Then
 ElseIf ras_n <= UBound(names_) Then
     ReDim Preserve names_(0 To ras_n - 1&)
 End If
+```
+
+### 4.5 範囲と末尾からの位置（`..` / `^`）（v0.9で追加）
+
+C# と同じ書き方で、配列・文字列の一部を取り出し、末尾から数えた位置を参照する。
+
+```typescript
+const last = xs[^1];          // 末尾の要素（xs[xs.length - 1]）
+const body = xs[1..^1];       // 先頭と末尾を除いた写し
+const head = s[..3];          // 先頭の 3 文字（s.slice(0, 3)）
+for (const i of 0..n) { }     // i = 0, 1, ..., n - 1
+const odd = xs[1..].step(2);  // 1, 3, 5, ... 番目の要素
+const rev = xs.toReversed();  // 逆順の写し（xs は変えない）
+```
+
+* **`^n`（末尾からの位置）:** `xs[^n]` は `xs[xs.length - n]`。`^1` が末尾の要素、`^0` は末尾の次（範囲の終わりにだけ意味がある）。配列・文字列の添字と範囲の端に書ける。代入（`xs[^1] = v`、`xs[^1] += 1`）もできる。2 次元配列では行・列のどちらにも書ける（`a[^1][0]`、`a[r][^1]`）。配列の外を指すと、ほかの添字と同じく実行時エラー 9（文字列は `Mid$` と同じくエラー 5）。
+* **負の添字は末尾から数えない:** `xs[-1]` は従来どおり配列の外（実行時エラー 9）。末尾からは `^` で書く。
+* **`a..b`（範囲）:** `a` から `b` の手前まで（`b` は含まない）。どちらの端も省略できる（`..b` は先頭から、`a..` は末尾まで、`..` は全体）。端には `^n` を書ける。
+  * **添字の範囲:** `xs[a..b]` は新しい配列、`s[a..b]` は文字列を返す。元の配列は変わらない（値型の写し。構造体の要素もコピーする）。範囲は配列の中に収める（JavaScript の `slice`・VBA の `Left$` と同じく、はみ出した分は無視し、`a >= b` なら空）。`a` / `b` の負の値は 0 として扱う（`slice` と違い、末尾からは数えない）。1 次元の配列と文字列だけに使え、2 次元配列の行の切り出し、`Map`・タプル・ホストのコレクションには使えない（`E0386`）。範囲には代入できない。
+  * **`for...of` の範囲:** `for (const i of a..b)` は `For i = a To b - 1` になる。`a` を省略すると 0。終わりは省略できず、`^` は使えない。`b` は最初に一度だけ評価する。ループ変数の型は `int`（端が `long` なら `long`）。本体でループ変数に代入すると（`let`）、変数は隠れたカウンターの写しになり、代入は次の繰り返しに影響しない（JavaScript と同じ）。
+  * **書ける場所:** 範囲は添字の中と `for...of` の列挙対象にだけ書ける。変数に入れる・引数に渡すことはできない（`E0386`）。
+  * **優先順位:** `..` はすべての演算子より弱い。`xs[0..n - 1]` は `0..(n - 1)`、`xs[c ? 1 : 2..]` は `(c ? 1 : 2)..` になる。`^` は C# と同じく単項演算子の強さで結び付くので、式には括弧が要る（`xs[^(i + 1)]`。`xs[^i + 1]` は `(^i) + 1` でエラー）。
+* **`step(n)`:** 先頭から `n` 個おきの要素を集めた新しい配列（Python の `xs[::n]`）。`n` は 1 以上（定数で 0 以下なら `E0386`、実行時は エラー 5）。範囲と組み合わせて `xs[1..].step(2)`、逆順は `xs.toReversed().step(2)`（Python の `xs[::-2]`）。
+* **`toReversed()`:** 逆順の新しい配列。`reverse()` は JavaScript と同じく配列そのものを並べ替える（戻り値は `void`）。範囲・`step`・`slice`・`toReversed` はどれも新しい配列を返し、元の配列を変えない。
+* **トランスパイル仕様:** 範囲・`step`・`toReversed` は、`slice` と同じく `ReDim` と `For` の写しに展開する（関数呼び出しにしない。構造体の配列にも使える）。変数の初期化・代入では、変数に直接作る。端は `RAS_ClampRange`（0〜長さに収める）で求める。文字列の範囲はランタイムの `RAS_StrRange`、`xs[^n]` は `xs(RAS_Len(xs) - n)`、`s[^n]` は `Mid$(s, Len(s) - n + 1, 1)` になる。
+
+**RASコード:**
+```typescript
+function report(xs: int[], s: string) {
+    const last = xs[^1];
+    const body = xs[1..^1];
+    for (const i of 0..body.length) {
+        console.log(i, body[i]);
+    }
+    console.log(last, s[..^1]);
+}
+```
+
+**出力VBAコード:**
+```vba
+Private Sub report(ByRef xs() As Long, ByVal s As String)
+    Dim last As Long
+    Dim body() As Long
+    Dim ras_t1 As Long
+    Dim ras_t2 As Long
+    Dim ras_t3 As Long
+    Dim ras_i As Long
+    Dim i As Long
+    Dim ras_y1 As Long
+
+    last = xs(RAS_Len(xs) - 1&)
+    ras_t1 = RAS_Len(xs)
+    ras_t2 = RAS_ClampRange(1&, ras_t1)
+    ras_t3 = RAS_ClampRange(ras_t1 - 1&, ras_t1) - ras_t2
+    If ras_t3 > 0& Then
+        ReDim body(0 To ras_t3 - 1&)
+        For ras_i = 0 To ras_t3 - 1&
+            body(ras_i) = xs(ras_t2 + ras_i)
+        Next ras_i
+    Else
+        Erase body
+    End If
+    For i = 0 To RAS_Len(body) - 1&
+        Debug.Print CStr(i) & " " & CStr(body(i))
+        ras_y1 = ras_y1 + 1&
+        If (ras_y1 And ras_yieldMask) = 0& Then RAS_Yield
+    Next i
+    Debug.Print CStr(last) & " " & RAS_StrRange(s, 0&, Len(s) - 1&)
+End Sub
 ```
 
 ---

@@ -305,6 +305,26 @@ Public Function RAS_StrSlice(ByVal s As String, ByVal startIndex As Long, Option
     End If
     If b > a Then RAS_StrSlice = Mid$(s, a + 1&, b - a)
 End Function
+'@@ proc RAS_ClampRange
+' An end of a range (`xs[a..b]`, spec 4.5): within 0..n. Negative values do not count from the end.
+Public Function RAS_ClampRange(ByVal i As Long, ByVal n As Long) As Long
+    If i < 0& Then i = 0&
+    If i > n Then i = n
+    RAS_ClampRange = i
+End Function
+'@@ proc RAS_StrRange
+' `s[a..b]` with both ends counted from the start (spec 4.5).
+Public Function RAS_StrRange(ByVal s As String, ByVal a As Long, ByVal b As Long) As String
+    a = RAS_ClampRange(a, Len(s))
+    b = RAS_ClampRange(b, Len(s))
+    If b > a Then RAS_StrRange = Mid$(s, a + 1&, b - a)
+End Function
+'@@ proc RAS_StepCount
+' Number of elements of `xs.step(k)` (every k-th element from the first, spec 4.5).
+Public Function RAS_StepCount(ByVal n As Long, ByVal k As Long) As Long
+    If k < 1& Then Err.Raise 5
+    RAS_StepCount = (n + k - 1&) \ k
+End Function
 '@@ proc RAS_IndexOf
 Public Function RAS_IndexOf(ByRef arr As Variant, ByRef x As Variant, Optional ByVal fromIndex As Long = 0&) As Long
     Dim i As Long

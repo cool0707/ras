@@ -6,6 +6,9 @@ use crate::ast::*;
 use crate::kind::{SyntaxKind, SyntaxKind::*, SyntaxNode, SyntaxToken};
 use crate::parser::{Parser, SyntaxError};
 
+/// The last column of a worksheet (`XFD`, Excel 2007 and later).
+const MAX_COLUMN: i128 = 16384;
+
 pub(crate) struct Lower {
     next_id: u32,
     /// Offset added to every span (non-zero while lowering a template fragment).
@@ -1406,6 +1409,31 @@ impl Lower {
                     index: self.boxed(&subs, 1, span),
                 }
             }
+            FROM_END_EXPR => {
+                let subs = self.sub_exprs(n);
+                ExprKind::FromEnd(self.boxed(&subs, 0, span))
+            }
+            RANGE_EXPR => {
+                // The ends are the expressions before and after the `..` token.
+                let mut start = None;
+                let mut end = None;
+                let mut seen_dots = false;
+                for c in n.children_with_tokens() {
+                    match c {
+                        rowan::NodeOrToken::Token(t) if t.kind() == DOT2 => seen_dots = true,
+                        rowan::NodeOrToken::Node(c) if c.kind().is_expr() => {
+                            let e = Box::new(self.expr(&c));
+                            if seen_dots {
+                                end = Some(e);
+                            } else {
+                                start = Some(e);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                ExprKind::Range { start, end }
+            }
             AS_EXPR => {
                 let subs = self.sub_exprs(n);
                 ExprKind::As {
@@ -1418,6 +1446,9 @@ impl Lower {
     }
 
     fn int_literal(&mut self, text: &str, span: Span) -> ExprKind {
+        if let Some(letters) = text.strip_prefix("0c").or_else(|| text.strip_prefix("0C")) {
+            return self.column_literal(letters, span);
+        }
         let mut digits: String = text.chars().filter(|c| *c != '_').collect();
         let mut suffix = NumSuffix::None;
         let is_hex = digits.starts_with("0x") || digits.starts_with("0X");
@@ -1447,6 +1478,37 @@ impl Lower {
                     hex: is_hex,
                 }
             }
+        }
+    }
+
+    /// `0cAA` → 27: the column letters of Excel read as a number (A = 1 … XFD = 16384, spec §2.2).
+    fn column_literal(&mut self, letters: &str, span: Span) -> ExprKind {
+        if letters.is_empty() || !letters.chars().all(|c| c.is_ascii_alphabetic()) {
+            self.err(
+                span,
+                "列番号のリテラルは `0c` の後ろに列の文字だけを書いてください（`0cA`、`0cAA`）",
+            );
+            return ExprKind::Int {
+                value: 0,
+                suffix: NumSuffix::None,
+                hex: false,
+            };
+        }
+        let mut value: i128 = 0;
+        for c in letters.chars() {
+            value = value * 26 + i128::from(c.to_ascii_uppercase() as u8 - b'A' + 1);
+            if value > MAX_COLUMN {
+                break;
+            }
+        }
+        if value > MAX_COLUMN {
+            self.err(span, "列番号のリテラルは `0cXFD`（16384）までです");
+            value = 0;
+        }
+        ExprKind::Int {
+            value,
+            suffix: NumSuffix::None,
+            hex: false,
         }
     }
 
