@@ -12,7 +12,7 @@ macro_rules! intrinsics {
 
 intrinsics! {
     // arrays
-    ArrLength, ArrRows, ArrCols, ArrPush, ArrPop, ArrMap, ArrFilter, ArrForEach, ArrReduce, ArrSome, ArrEvery,
+    ArrLength, ArrRows, ArrCols, ArrTranspose, ArrPush, ArrPop, ArrMap, ArrFilter, ArrForEach, ArrReduce, ArrSome, ArrEvery,
     ArrFind, ArrFindIndex, ArrIndexOf, ArrIncludes, ArrJoin, ArrSlice, ArrStep, ArrToReversed, ArrSort, ArrReverse, ArrConcat, ArrClear,
     // host collections (spec §4.4)
     CollToArray,
@@ -51,6 +51,7 @@ pub fn array_member(name: &str, dims: usize) -> Option<Intr> {
         return Some(match name {
             "length" | "rows" => ArrRows,
             "cols" => ArrCols,
+            "transpose" => ArrTranspose,
             _ => return None,
         });
     }

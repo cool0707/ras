@@ -1223,6 +1223,7 @@ impl<'p> Gen<'p> {
             | FileSeek | FileLock | FileUnlock | FileWidth | FileRename => unreachable!(),
             ArrLength | ArrRows | StrLength => format!("{r}.length"),
             ArrCols => format!("$rt.cols({r})"),
+            ArrTranspose => format!("$rt.transpose({r})"),
             MapSize => format!("{r}.size"),
             ArrPush => {
                 let v = match args.first() {

@@ -702,6 +702,11 @@ impl<'p> Lowerer<'p> {
                 self.copy_mapped(src, ty, dest, n, move |i| bin("-", last.clone(), i));
                 true
             }
+            Intr::ArrTranspose => {
+                let src = self.stable_array(recv);
+                self.transpose_into(src, ty, dest);
+                true
+            }
             Intr::ArrConcat => {
                 let a = self.stable_array(recv);
                 let Some(other) = args.first() else {
@@ -906,6 +911,62 @@ impl<'p> Lowerer<'p> {
                     to: count.plus(-1),
                     step: None,
                     body: copy,
+                },
+            ],
+            clear,
+        ));
+        if aliased {
+            self.emit(assign(dest.clone(), out));
+        }
+    }
+
+    /// `m.transpose()`: `dest(c, r) = src(r, c)` into a new 2-D array (empty when `src` has no columns).
+    fn transpose_into(&mut self, src: VExpr, ty: &Type, dest: &VExpr) {
+        let elem_ty = ty.elem().cloned().unwrap_or(Type::Any);
+        let aliased = mentions(&src, &dest.print());
+        let out = if aliased {
+            VExpr::Name(self.temp(ty))
+        } else {
+            dest.clone()
+        };
+        let rows = VExpr::Name(self.temp(&Type::Int));
+        let cols = VExpr::Name(self.temp(&Type::Int));
+        self.emit(assign(rows.clone(), call("RAS_Len", vec![src.clone()])));
+        self.emit(assign(cols.clone(), call("RAS_Len2", vec![src.clone()])));
+        let r = self.declare_raw("ras_i", "Long", false);
+        let c = self.declare_raw("ras_j", "Long", false);
+        let (copy, _) = self.capture(|lw| {
+            lw.store(
+                &out.clone().index(vec![name(c.clone()), name(r.clone())]),
+                &elem_ty,
+                src.index(vec![name(r.clone()), name(c.clone())]),
+                &elem_ty,
+            )
+        });
+        let (clear, _) = self.capture(|lw| lw.clear_array(&out, ty));
+        self.emit(if_else(
+            bin(">", cols.clone(), long(0)),
+            vec![
+                VStmt::ReDim {
+                    preserve: false,
+                    target: out.clone(),
+                    dims: vec![
+                        (long(0), cols.clone().plus(-1)),
+                        (long(0), rows.clone().plus(-1)),
+                    ],
+                },
+                VStmt::For {
+                    var: r,
+                    from: long(0),
+                    to: rows.plus(-1),
+                    step: None,
+                    body: vec![VStmt::For {
+                        var: c,
+                        from: long(0),
+                        to: cols.plus(-1),
+                        step: None,
+                        body: copy,
+                    }],
                 },
             ],
             clear,

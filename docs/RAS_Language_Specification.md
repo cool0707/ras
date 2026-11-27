@@ -754,6 +754,7 @@ const head = s[..3];          // 先頭の 3 文字（s.slice(0, 3)）
 for (const i of 0..n) { }     // i = 0, 1, ..., n - 1
 const odd = xs[1..].step(2);  // 1, 3, 5, ... 番目の要素
 const rev = xs.toReversed();  // 逆順の写し（xs は変えない）
+const t = m.transpose();      // 2 次元配列の行と列を入れ替えた写し（t[c][r] は m[r][c]）
 ```
 
 * **`^n`（末尾からの位置）:** `xs[^n]` は `xs[xs.length - n]`。`^1` が末尾の要素、`^0` は末尾の次（範囲の終わりにだけ意味がある）。配列・文字列の添字と範囲の端に書ける。代入（`xs[^1] = v`、`xs[^1] += 1`）もできる。2 次元配列では行・列のどちらにも書ける（`a[^1][0]`、`a[r][^1]`）。配列の外を指すと、ほかの添字と同じく実行時エラー 9（文字列は `Mid$` と同じくエラー 5）。
@@ -765,7 +766,8 @@ const rev = xs.toReversed();  // 逆順の写し（xs は変えない）
   * **優先順位:** `..` はすべての演算子より弱い。`xs[0..n - 1]` は `0..(n - 1)`、`xs[c ? 1 : 2..]` は `(c ? 1 : 2)..` になる。`^` は C# と同じく単項演算子の強さで結び付くので、式には括弧が要る（`xs[^(i + 1)]`。`xs[^i + 1]` は `(^i) + 1` でエラー）。
 * **`step(n)`:** 先頭から `n` 個おきの要素を集めた新しい配列（Python の `xs[::n]`）。`n` は 1 以上（定数で 0 以下なら `E0386`、実行時は エラー 5）。範囲と組み合わせて `xs[1..].step(2)`、逆順は `xs.toReversed().step(2)`（Python の `xs[::-2]`）。
 * **`toReversed()`:** 逆順の新しい配列。`reverse()` は JavaScript と同じく配列そのものを並べ替える（戻り値は `void`）。範囲・`step`・`slice`・`toReversed` はどれも新しい配列を返し、元の配列を変えない。
-* **トランスパイル仕様:** 範囲・`step`・`toReversed` は、`slice` と同じく `ReDim` と `For` の写しに展開する（関数呼び出しにしない。構造体の配列にも使える）。変数の初期化・代入では、変数に直接作る。端は `RAS_ClampRange`（0〜長さに収める）で求める。文字列の範囲はランタイムの `RAS_StrRange`、`xs[^n]` は `xs(RAS_Len(xs) - n)`、`s[^n]` は `Mid$(s, Len(s) - n + 1, 1)` になる。
+* **`transpose()`（2 次元配列）:** 行と列を入れ替えた新しい 2 次元配列を返す（`m` が `r` 行 `c` 列なら `c` 行 `r` 列で、`t[j][i]` は `m[i][j]`。Excel の `TRANSPOSE` と同じ）。元の配列は変えない。型は元と同じ `T[][]`（`toArray()` の `cellValue[][]` も `cellValue[][]`）。空の配列（列が 0）なら空の配列。`Application.Transpose`（`WorksheetFunction.Transpose`）と違い、要素数の上限（65,536）や 1 次元への変換、`Variant` の配列への変換は起きない。
+* **トランスパイル仕様:** 範囲・`step`・`toReversed` は、`slice` と同じく `ReDim` と `For` の写しに展開する（関数呼び出しにしない。構造体の配列にも使える）。`transpose()` は `ReDim t(0 To 列数 - 1, 0 To 行数 - 1)` と二重の `For` の写し（`t(j, i) = m(i, j)`）に展開する（行数は `RAS_Len`、列数は `RAS_Len2`。列数が 0 なら `Erase`）。変数の初期化・代入では、変数に直接作る。端は `RAS_ClampRange`（0〜長さに収める）で求める。文字列の範囲はランタイムの `RAS_StrRange`、`xs[^n]` は `xs(RAS_Len(xs) - n)`、`s[^n]` は `Mid$(s, Len(s) - n + 1, 1)` になる。
 
 **RASコード:**
 ```typescript

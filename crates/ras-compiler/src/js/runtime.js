@@ -615,6 +615,12 @@ function step(a, k) {
 function cols(a) {
     return a.length ? a[0].length : 0;
 }
+/** `m.transpose()`: a new 2-D array with the rows and columns swapped; empty when either is 0. */
+function transpose(a) {
+    const n = a.length, m = cols(a);
+    if (!m) return [];
+    return Array.from({ length: m }, (_, c) => Array.from({ length: n }, (_, r) => a[r][c]));
+}
 function pop(a, zero) {
     return a.length ? a.pop() : zero;
 }
@@ -2114,7 +2120,7 @@ module.exports = {
     raise, makeError, unsupported, caught,
     date, clone, i32, i64, idiv, imod, div, fmod, pow, sqrt, log, post, round, bankersRound, numStr, toFixed, val,
     cnum, cint, clng, toInt, toLong, cbool, cdate, cstr, str, dyn, cmp, eq, unionEq, errorToNull,
-    trim, repeat, replace, split, charCode, ix, ixEnd, charEnd, range, step, cols, pop, find, join, sort, newArray, mapGet, mapSet,
+    trim, repeat, replace, split, charCode, ix, ixEnd, charEnd, range, step, cols, transpose, pop, find, join, sort, newArray, mapGet, mapSet,
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, pause, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
     fileOpen, fileClose, fileReset, filePrint, fileWrite, fileInput, fileLineInput, fileInputString, fileGet, filePut, fileSeek, fileLock, fileUnlock, fileWidth, fileRename,
