@@ -703,6 +703,37 @@ export function f(r: Excel.Range, n: int): Excel.Range {
 }
 
 #[test]
+fn spec_9_4_2_sheet_range_by_numbers() {
+    let src = r#"
+export function f(n: int): Excel.Range {
+    const a = Sheet1.range(2, 4, 8, 9);
+    const b = thisWorkbook.worksheets("x").range(1, 1, n, 3);
+    const c = Sheet1.range("A1", "B2");
+    return Sheet1.range(1, 1, n, 2).extend(up: 0);
+}
+"#;
+    let (_, out) = compile(&[("m", src)]);
+    let m = code(&out, "M");
+    assert_contains(
+        &m,
+        "Set a = Sheet1.Range(Sheet1.Cells(2, 4), Sheet1.Cells(8, 9))\n",
+    );
+    assert_contains(&m, ".Range(ras_t1.Cells(1, 1), ras_t1.Cells(n, 3))\n");
+    assert_contains(&m, "Set c = Sheet1.Range(\"A1\", \"B2\")\n");
+    assert_contains(
+        &m,
+        "RAS_RangeExtend(Sheet1.Range(Sheet1.Cells(1, 1), Sheet1.Cells(n, 2)), 0&, 0, 0, 0)",
+    );
+    assert_eq!(
+        error_codes(&[(
+            "m",
+            "function g() { const x = Sheet1.range(1, 2, \"3\", 4); const y = Sheet1.range(1, 2, 3); }\n"
+        )]),
+        vec!["E0301", "E0402"]
+    );
+}
+
+#[test]
 fn spec_10_3_fast_macro_entry() {
     let (_, out) = compile(&[(
         "report",

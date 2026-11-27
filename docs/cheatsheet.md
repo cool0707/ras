@@ -186,6 +186,7 @@ export function fill() {
     ws.range("C2:C" + last).numberFormat = "#,##0";
     // 上・下・左・右に行・列を足した範囲（extend(up, down, left, right)。名前付きでも、負の数で縮める）
     ws.range("A2:C2").extend(up: 1, down: last - 2).borders.lineStyle = xlContinuous;
+    ws.range(2, 1, last, 3).font.italic = true;   // 行・列の番号で範囲（上の行, 左の列, 下の行, 右の列）= A2:C{last}
 }
 
 export function readAll(): double {

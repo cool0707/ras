@@ -35,7 +35,7 @@ intrinsics! {
     // platform
     PlatformIs64, PlatformIsVba7,
     // Range helpers (spec §9.4)
-    FormShowModal, FormClose, RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, RangeExtend, SheetUsedTable, ExcelMatch,
+    FormShowModal, FormClose, RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, RangeExtend, SheetRange, SheetUsedTable, ExcelMatch,
     ExcelErrorToNull,
     // event handlers attached at run time (spec §12.2.3)
     EventOn,

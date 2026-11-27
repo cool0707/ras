@@ -1401,6 +1401,7 @@ impl<'p> Gen<'p> {
             SheetUsedTable => format!("$rt.read2D($rt.get({r}, \"UsedRange\"))"),
             RangeToColumn => format!("$rt.toColumn({r})"),
             RangeToRow => format!("$rt.toRow({r})"),
+            SheetRange => format!("$rt.sheetRange({r}, {argv})"),
             RangeExtend => {
                 let side = |i: usize| match args.get(i) {
                     Some(x) if !matches!(x.kind, ExprKind::Undefined) => a[i].clone(),

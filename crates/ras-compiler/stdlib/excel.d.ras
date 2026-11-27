@@ -974,7 +974,8 @@ declare namespace Excel {
         Cells(row?: any, col?: any): Range;
 
         /**
-         * セルまたはセル範囲を返す。
+         * セルまたはセル範囲を返す。RAS では行・列の番号 4 つでも指定できる
+         * （`range(上の行, 左の列, 下の行, 右の列)`。`Range(Cells(上, 左), Cells(下, 右))` と同じ）。
          * @see https://learn.microsoft.com/office/vba/api/excel.worksheet.range
          */
         Range(cell1: any, cell2?: any): Range;

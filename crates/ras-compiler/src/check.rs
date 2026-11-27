@@ -4247,6 +4247,21 @@ impl Checker<'_> {
                 };
                 self.intrinsic_call(e, i, robj, rty.as_ref(), args, expect)
             }
+            // `ws.range(top, left, bottom, right)`: the cells from (top, left) to (bottom, right)
+            // (spec §9.4.2).
+            Access::Func { f, .. } if args.len() == 4 && self.is_sheet_range(f) => {
+                self.info().calls.insert(
+                    e.id,
+                    CallInfo {
+                        target: CallTarget::Intrinsic(Intr::SheetRange),
+                        type_args: Vec::new(),
+                    },
+                );
+                for a in args {
+                    self.arg(std::slice::from_ref(a), 0, &Type::Int);
+                }
+                self.prog.fns[f].ret.clone().unwrap_or(Type::Error)
+            }
             Access::Func { f, env, recv: rk } => {
                 let def_kind = self.prog.fns[f].kind.clone();
                 let target = match (&def_kind, rk) {
@@ -4728,6 +4743,18 @@ impl Checker<'_> {
                 Type::Error
             }
         }
+    }
+
+    /// `Excel.Worksheet.Range` (spec §9.4.2).
+    fn is_sheet_range(&self, f: FnId) -> bool {
+        let def = &self.prog.fns[f];
+        let FnKind::Host { class: Some(c) } = def.kind else {
+            return false;
+        };
+        let c = &self.prog.classes[c];
+        def.vba_name() == "Range"
+            && c.name == "Worksheet"
+            && c.namespace.as_deref() == Some("Excel")
     }
 
     /// Puts the arguments of a call with named arguments into parameter order (spec §3.3).
@@ -6321,6 +6348,7 @@ impl Checker<'_> {
             }
             // `range.extend(up, down, left, right)`: the rows and columns added on each side
             // (spec §9.4). Omitted (`undefined`) arguments are 0.
+            SheetRange => recv.cloned().unwrap_or(Type::Error),
             RangeExtend => {
                 if self.arg_count(call, args, 0, 4) {
                     for a in args {

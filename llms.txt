@@ -20,7 +20,7 @@ RAS のコードを書く・直すときは、まず早見表を読む。エラ�
 - §6 リンター: 検証ルールの一覧
 - §7 ツール: CLI のコマンド一覧、VS Code 拡張の責務、出力の構成
 - §8 最適化: `inline`、ループ内の自動展開
-- §9 Range ⇔ 配列の一括転送: セルを 1 つずつ読み書きするループの変換と条件、`@bulk`、`toArray` / `fromArray`、上下左右に行・列を足した範囲 `range.extend(up, down, left, right)`（§9.4）
+- §9 Range ⇔ 配列の一括転送: セルを 1 つずつ読み書きするループの変換と条件、`@bulk`、`toArray` / `fromArray`、上下左右に行・列を足した範囲 `range.extend(up, down, left, right)`、番号で指定する範囲 `ws.range(上, 左, 下, 右)`（§9.4）
 - §10 アプリケーション状態: `fastMode()`、`@fast`、`suspend*`、`status`、`DoEvents` の自動挿入
 - §11 `declare`: DLL 関数の 32bit / 64bit 両対応
 - §12 ボイラープレート: `@on` のイベントハンドラ、実行時に付けるイベントハンドラ（`on` / `addEventListener`、§12.2.3）、`@init`、マクロ入口のラップ

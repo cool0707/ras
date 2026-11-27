@@ -2618,6 +2618,18 @@ impl<'p> Lowerer<'p> {
             SheetUsedTable => call("RAS_Read2D", vec![self.expr(recv?).member("UsedRange")]),
             RangeToColumn => call("RAS_ToColumn", vec![self.expr(recv?)]),
             RangeToRow => call("RAS_ToRow", vec![self.expr(recv?)]),
+            // `ws.range(top, left, bottom, right)` (spec §9.4.2): the sheet is evaluated once.
+            SheetRange => {
+                let ws = self.expr(recv?);
+                let ws = self.spill_object(ws, &recv_ty);
+                let a: Vec<VExpr> = args.iter().map(|a| self.expr(a)).collect();
+                let cell = |r: &VExpr, c: &VExpr| {
+                    ws.clone().member("Cells").index(vec![r.clone(), c.clone()])
+                };
+                ws.clone()
+                    .member("Range")
+                    .index(vec![cell(&a[0], &a[1]), cell(&a[2], &a[3])])
+            }
             // `range.extend(up, down, left, right)` (spec §9.4): omitted sides are 0.
             RangeExtend => {
                 let mut argv = vec![self.expr(recv?)];
