@@ -9,7 +9,7 @@ RAS は TypeScript に似た構文で書き、VBA（`.bas` / `.cls`）に変換�
 - 条件は `boolean` だけです。`if (count)`・`if (name)`・`if (obj)` は書けません（`count != 0`、`name != ""`、`obj != null`）。
 - `struct`・タプル・配列は値型です（代入でコピーされます）。`class` のインスタンスと Excel のオブジェクトは参照です。
 - アロー関数の中から、外側の変数を書き換えられません（`forEach` の中で合計を足すなど）。`for...of` か `reduce` を使います。
-- 負の添字は末尾から数えません（`xs[-1]` は範囲外のエラー）。末尾からは C# と同じく `xs[^1]`、一部の取り出しは範囲 `xs[1..^1]`・`s[..3]`（終わりは含まない）、数の列挙は `for (const i of 0..n)` です。範囲・`slice`・`step(n)`・`toReversed()` は新しい配列を返し、`reverse()`・`sort()` は配列そのものを並べ替えます。
+- 負の添字は末尾から数えません（`xs[-1]` は範囲外のエラー）。末尾からは C# と同じく `xs[^1]`、一部の取り出しは範囲 `xs[1..^1]`・`s[..3]`（終わりは含まない）、数の列挙は `for (const i of 0..n)` です。範囲・`slice`・`step(n)`・`toReversed()`・2 次元配列の `transpose()`（行と列の入れ替え）は新しい配列を返し、`reverse()`・`sort()` は配列そのものを並べ替えます。
 - `undefined`・`?.`・スプレッド（`...`）・`async` / `await`・クラスの継承（`extends` / `super`）・関数の中の `function` はありません。
 - Excel / VBA のメンバーとグローバルは camelCase で書きます（`ws.cells(1, 1).value`、`msgBox(...)`、`xlUp`）。VBA の綴り（`Cells`）は警告になり、`ras check --fix` で直せます。
 - 名前は大文字小文字だけの違いでは区別できません（VBA が区別しないため。`Shape` という型と `shape` という変数は同時に使えません）。

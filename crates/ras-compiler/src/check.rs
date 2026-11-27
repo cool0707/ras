@@ -5940,6 +5940,11 @@ impl Checker<'_> {
                 self.arg_count(call, args, 0, 0);
                 arr()
             }
+            // Rows and columns swapped: the same type as the receiver (`T[][]`).
+            ArrTranspose => {
+                self.arg_count(call, args, 0, 0);
+                Type::array(arr())
+            }
             ArrSort => {
                 if self.arg_count(call, args, 0, 1) && !args.is_empty() {
                     self.lambda_arg(

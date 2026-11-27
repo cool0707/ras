@@ -2118,6 +2118,7 @@ impl<'p> Lowerer<'p> {
                 | ArrSlice
                 | ArrStep
                 | ArrToReversed
+                | ArrTranspose
                 | ArrConcat
                 | MapKeys
                 | MapValues
@@ -2674,8 +2675,8 @@ impl<'p> Lowerer<'p> {
             }
             ExcelErrorToNull => call("RAS_ErrorToNull", self.operands(&[&args[0]])),
             ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind
-            | ArrFindIndex | ArrSlice | ArrStep | ArrToReversed | ArrConcat | MapKeys
-            | MapValues | CollToArray => {
+            | ArrFindIndex | ArrSlice | ArrStep | ArrToReversed | ArrTranspose | ArrConcat
+            | MapKeys | MapValues | CollToArray => {
                 unreachable!()
             }
         };

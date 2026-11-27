@@ -644,7 +644,9 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
                 }
             }
         }
-        Type::Array(_) if ty.dims() == 2 => builtin(&["length", "rows", "cols"], &mut out),
+        Type::Array(_) if ty.dims() == 2 => {
+            builtin(&["length", "rows", "cols", "transpose"], &mut out)
+        }
         Type::Array(_) => builtin(intrinsics::ARRAY_MEMBERS, &mut out),
         Type::Str => builtin(intrinsics::STRING_MEMBERS, &mut out),
         Type::Map(..) => builtin(intrinsics::MAP_MEMBERS, &mut out),

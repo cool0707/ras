@@ -393,6 +393,24 @@ fn spec_4_5_ranges_and_from_end() {
     assert_contains(&c, "    For ras_i_2 = 2 To 4\n        i = ras_i_2\n");
     assert_contains(&c, "RAS_StepCount(");
     assert_contains(&c, "ras_t6(ras_i_3) = xs(ras_t7 - 1& - ras_i_3)\n");
+    // `transpose()` of a 2-D array: a new array with the rows and columns swapped; a variable
+    // that is also the source goes through a temporary.
+    let src2 = "function g(m: int[][], ws: Excel.Worksheet): int {\n    const t = m.transpose();\n    let v = ws.range(\"A1:C2\").toArray();\n    v = v.transpose();\n    return t.rows + t[0][1] + v.cols;\n}\n";
+    let (_, out2) = compile(&[("g", src2)]);
+    let g = code(&out2, "G");
+    assert_contains(&g, "    ras_t1 = RAS_Len(m)\n    ras_t2 = RAS_Len2(m)\n    If ras_t2 > 0& Then\n        ReDim t(0 To ras_t2 - 1&, 0 To ras_t1 - 1&)\n        For ras_i = 0 To ras_t1 - 1&\n            For ras_j = 0 To ras_t2 - 1&\n                t(ras_j, ras_i) = m(ras_i, ras_j)\n            Next ras_j\n        Next ras_i\n    Else\n        Erase t\n    End If\n");
+    assert_contains(
+        &g,
+        "RAS_Assign ras_t3(ras_j_2, ras_i_2), v(ras_i_2, ras_j_2)\n",
+    );
+    assert_contains(&g, "    v = ras_t3\n");
+    assert_eq!(
+        error_codes(&[(
+            "g",
+            "function g(): int { const a = [1, 2]; return a.transpose().length; }\n"
+        )]),
+        vec!["E0202"]
+    );
     let rt = code(&out, "RAS_Runtime");
     assert!(
         rt.contains("Public Function RAS_ClampRange(")
