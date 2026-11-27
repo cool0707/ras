@@ -627,8 +627,30 @@ pub(super) fn object(
             max: change.max,
             step: change.step,
             page: change.page,
+            // An ActiveX control's (its sheet's settings and its data).
+            placement: change.placement.clone(),
+            print: change.print,
+            locked: change.locked,
+            alt_text: change.alt_text.clone(),
+            control_format: change.control_format.clone(),
+            lock_text: change.lock_text,
+            text_align: change.text_align.clone(),
+            text_valign: change.text_valign.clone(),
+            inset: change.inset,
+            inset_auto: change.inset_auto,
             ..Default::default()
         };
+        // Its format and settings (a form button's font, 配置, 余白; 保護, プロパティ, 代替テキスト).
+        let formatted = change.placement.is_some()
+            || change.print.is_some()
+            || change.locked.is_some()
+            || change.lock_text.is_some()
+            || change.alt_text.is_some()
+            || change.control_format.is_some()
+            || change.text_align.is_some()
+            || change.text_valign.is_some()
+            || change.inset.is_some()
+            || change.inset_auto.is_some();
         if *change != mine {
             return Err(format!(
                 "`{}` はコントロールのため、塗りつぶし・線・回転・重なり順は変えられません",
@@ -643,7 +665,7 @@ pub(super) fn object(
         if change.place.is_some() || change.delete {
             out = super::controls::change(&out, sheet, id, change.place.as_ref(), change.delete)?;
         }
-        if !change.delete && (change.text.is_some() || control_only) {
+        if !change.delete && (change.text.is_some() || control_only || formatted) {
             let (file, cell) = super::controls::configure(&out, sheet, id, change)?;
             out = file;
             // The linked cell gets the state or the value, as when the control is used.
@@ -658,6 +680,16 @@ pub(super) fn object(
     if control_only {
         return Err(format!(
             "`{name}` はフォーム コントロールではないため、リンクするセル・値などはありません"
+        ));
+    }
+    if change.control_format.is_some()
+        || change.alt_text.is_some()
+        || change.text_align.is_some()
+        || change.text_valign.is_some()
+        || change.inset_auto.is_some()
+    {
+        return Err(format!(
+            "`{name}` はコントロールではないため、ここではフォント・文字の色・背景の色・配置・代替テキストなどは変えられません"
         ));
     }
     if name.is_empty() {
@@ -1063,7 +1095,7 @@ fn style(
 }
 
 /// The start tag of an element with attributes set, or (None) taken away.
-fn tag_with(doc: &str, el: &El, attrs: &[(&str, Option<String>)]) -> String {
+pub(super) fn tag_with(doc: &str, el: &El, attrs: &[(&str, Option<String>)]) -> String {
     let tag = open_tag(doc, el);
     let close = format!("</{}>", el.name);
     let done = with_attrs(&format!("{tag}{close}"), attrs);

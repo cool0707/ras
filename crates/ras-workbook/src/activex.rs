@@ -498,6 +498,139 @@ impl Stream {
     }
 }
 
+/// The mask bits of a class's pictures (`Picture`, `MouseIcon`): its `StreamData` has them
+/// before its font.
+fn picture_bits(class: &str) -> &'static [u8] {
+    match class {
+        "CommandButton" => &[7, 10],
+        "Label" => &[10, 12],
+        "MorphData" => &[27, 28],
+        _ => &[],
+    }
+}
+
+/// `VariousPropertyBits` (MS-OFORMS): 有効 (`Enabled`), 背景が不透明 (`BackStyle`), 折り返し
+/// (`WordWrap`), 自動サイズ (`AutoSize`).
+pub(crate) const ENABLED: i64 = 1 << 1;
+pub(crate) const BACK_STYLE: i64 = 1 << 3;
+pub(crate) const WORD_WRAP: i64 = 1 << 23;
+pub(crate) const AUTO_SIZE: i64 = 1 << 28;
+
+/// `FontEffects` of a font (MS-OFORMS `TextProps`): 太字, 斜体, 下線, 取り消し線.
+pub(crate) const BOLD: i64 = 1;
+pub(crate) const ITALIC: i64 = 2;
+pub(crate) const UNDERLINE: i64 = 4;
+pub(crate) const STRIKE: i64 = 8;
+
+/// The `VariousPropertyBits` a class has when its record leaves them out (MS-OFORMS).
+fn default_bits(class: &str) -> i64 {
+    match class {
+        "Label" => 0x0080_001b,
+        "MorphData" => 0x2c80_481b,
+        _ => 0x1b,
+    }
+}
+
+/// The colors (OLE_COLOR) a Microsoft Forms type has as Excel puts it on a sheet: (ForeColor,
+/// BackColor). A text, list or combo box: the window's; the others: the button face's.
+pub(crate) fn default_colors(forms: &str) -> (u32, u32) {
+    match forms {
+        "TextBox" | "ListBox" | "ComboBox" => (0x8000_0008, 0x8000_0005),
+        _ => (0x8000_0012, 0x8000_000F),
+    }
+}
+
+/// An OLE_COLOR of `#RRGGBB` (`0x00BBGGRR`).
+pub(crate) fn ole_of(hex: &str) -> Option<u32> {
+    let h = hex.trim().trim_start_matches('#');
+    if h.len() != 6 {
+        return None;
+    }
+    let v = u32::from_str_radix(h, 16).ok()?;
+    Some(((v & 0xff) << 16) | (v & 0xff00) | ((v >> 16) & 0xff))
+}
+
+impl Stream {
+    /// Where the font starts in what follows the record (after its pictures).
+    fn font_at(&self) -> Option<usize> {
+        let mut pos = 0usize;
+        for bit in picture_bits(self.class) {
+            if self.mask & (1 << bit) == 0 {
+                continue;
+            }
+            let size = u32_at(&self.rest, pos + 20)? as usize;
+            pos = pos.checked_add(24 + size)?;
+            if pos > self.rest.len() {
+                return None;
+            }
+        }
+        Some(pos)
+    }
+
+    /// The font (`TextProps`) of a control that has one.
+    pub(crate) fn font(&self) -> Option<Stream> {
+        Stream::read("TextProps", &self.rest[self.font_at()?..])
+    }
+
+    /// The font changed by `f` (one made as a new control's when it has none). False for a
+    /// class without a font or one whose font is not read.
+    pub(crate) fn change_font(&mut self, f: impl FnOnce(&mut Stream)) -> bool {
+        if !matches!(self.class, "CommandButton" | "Label" | "MorphData") {
+            return false;
+        }
+        let Some(at) = self.font_at() else {
+            return false;
+        };
+        let tail = &self.rest[at..];
+        let (mut font, after) = if tail.is_empty() {
+            let mut font = Stream {
+                class: "TextProps",
+                head: Vec::new(),
+                mask: 0,
+                values: HashMap::new(),
+                strings: HashMap::new(),
+                size: None,
+                rest: Vec::new(),
+            };
+            let (name, height, charset, pitch) = FRESH_FONT;
+            font.set_string("FontName", name);
+            font.set_number("FontHeight", height);
+            font.set_number("FontCharSet", charset);
+            font.set_number("FontPitchAndFamily", pitch);
+            (font, Vec::new())
+        } else {
+            let Some(mut font) = Stream::read("TextProps", tail) else {
+                return false;
+            };
+            let after = std::mem::take(&mut font.rest);
+            (font, after)
+        };
+        f(&mut font);
+        let mut rest = self.rest[..at].to_vec();
+        rest.extend(font.write());
+        rest.extend(after);
+        self.rest = rest;
+        true
+    }
+
+    /// `VariousPropertyBits` (the class's default when the record leaves them out).
+    pub(crate) fn bits(&self) -> i64 {
+        self.number("VariousPropertyBits")
+            .map_or_else(|| default_bits(self.class), |b| b & 0xffff_ffff)
+    }
+
+    /// A bit of `VariousPropertyBits` set or cleared.
+    pub(crate) fn set_bit(&mut self, bit: i64, on: bool) {
+        let b = self.bits();
+        self.set_number("VariousPropertyBits", if on { b | bit } else { b & !bit });
+    }
+
+    /// A number stored as it is (unsigned: a color).
+    pub(crate) fn set_raw(&mut self, name: &str, v: u32) {
+        self.set_number(name, i64::from(v as i32));
+    }
+}
+
 fn spec_class(class: &str) -> Option<&'static str> {
     [
         "CommandButton",
