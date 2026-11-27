@@ -179,6 +179,83 @@ fn param_text(prog: &Program, d: &FnDef, p: &ParamDef) -> String {
     t
 }
 
+/// The signature of a member the compiler adds (spec §9.4), for hover and parameter information.
+pub struct BuiltinSig {
+    pub name: &'static str,
+    /// Per parameter: its text in the label, its name, its description.
+    pub params: &'static [(&'static str, &'static str, &'static str)],
+    pub ret: &'static str,
+    pub doc: &'static str,
+    /// Whether the parameters can be given by name (spec §3.3).
+    pub named: bool,
+}
+
+impl BuiltinSig {
+    pub fn label(&self) -> String {
+        let ps: Vec<&str> = self.params.iter().map(|p| p.0).collect();
+        format!("{}({}): {}", self.name, ps.join(", "), self.ret)
+    }
+}
+
+/// `range.extend(up, down, left, right)` (spec §9.4.1).
+pub const RANGE_EXTEND_SIG: BuiltinSig = BuiltinSig {
+    name: "extend",
+    params: &[
+        ("up?: int", "up", "上に足す行数（負の数で縮める。省略は 0）"),
+        ("down?: int", "down", "下に足す行数（負の数で縮める。省略は 0）"),
+        ("left?: int", "left", "左に足す列数（負の数で縮める。省略は 0）"),
+        ("right?: int", "right", "右に足す列数（負の数で縮める。省略は 0）"),
+    ],
+    ret: "Excel.Range",
+    doc: "範囲の上・下・左・右に行・列を足した範囲を返す（元の範囲は変えない）。名前付き引数でも書ける。シートの端を越える・大きさが 0 以下になると実行時エラー 1004。\n\n例: `range(\"B3:C3\").extend(down: 2)` → B3:C5、`extend(1, 1, 1, 1)` → A2:D4",
+    named: true,
+};
+
+/// `ws.range(top, left, bottom, right)` (spec §9.4.2).
+pub const SHEET_RANGE_SIG: BuiltinSig = BuiltinSig {
+    name: "range",
+    params: &[
+        ("top: int", "top", "上の行の番号"),
+        ("left: int", "left", "左の列の番号"),
+        ("bottom: int", "bottom", "下の行の番号"),
+        ("right: int", "right", "右の列の番号"),
+    ],
+    ret: "Excel.Range",
+    doc: "(top, left) のセルから (bottom, right) のセルまでの範囲を返す（RAS の拡張。VBA では `Range(Cells(top, left), Cells(bottom, right))`）。\n\n例: `Sheet1.range(2, 4, 8, 9)` → D2:I8",
+    named: false,
+};
+
+/// The signature of an intrinsic member, when it has one to show.
+fn intrinsic_sig(i: intrinsics::Intr) -> Option<&'static BuiltinSig> {
+    match i {
+        intrinsics::Intr::RangeExtend => Some(&RANGE_EXTEND_SIG),
+        _ => None,
+    }
+}
+
+/// The signatures RAS adds to host function `f` (overloads; spec §9.4.2).
+fn extra_sigs(prog: &Program, f: FnId) -> &'static [BuiltinSig] {
+    if prog.is_sheet_range(f) {
+        std::slice::from_ref(&SHEET_RANGE_SIG)
+    } else {
+        &[]
+    }
+}
+
+/// A hover of `sig`: its label, then its description and parameters.
+fn builtin_hover(sig: &BuiltinSig, vba: Option<&str>) -> String {
+    let mut code = format!("(組み込み) {}", sig.label());
+    if let Some(v) = vba {
+        code.push_str("\n// VBA: ");
+        code.push_str(v);
+    }
+    let mut doc = sig.doc.to_string();
+    for (_, n, d) in sig.params {
+        doc.push_str(&format!("\n\n*@param* `{n}` — {d}"));
+    }
+    code_block(&code, Some(&doc))
+}
+
 pub struct Hover {
     pub span: Span,
     pub markdown: String,
@@ -239,14 +316,20 @@ fn describe_res(prog: &Program, m: ModuleId, offset: u32, res: &Res, ty: &Type) 
         Res::Fn(f) | Res::Method(f) => {
             let d = &prog.fns[*f];
             match (&d.host_name, d.kind.clone()) {
-                (Some(host), FnKind::Host { class: Some(c) }) => code_block(
-                    &format!(
-                        "{}\n// VBA: {}.{host}",
-                        signature(prog, *f),
-                        prog.classes[c].name
-                    ),
-                    d.doc.as_deref(),
-                ),
+                (Some(host), FnKind::Host { class: Some(c) }) => {
+                    let mut code = signature(prog, *f);
+                    let mut doc = d.doc.clone().unwrap_or_default();
+                    // The forms RAS adds (spec §9.4.2), as overloads.
+                    for x in extra_sigs(prog, *f) {
+                        code.push('\n');
+                        code.push_str(&x.label());
+                        doc.push_str(&format!("\n\n`{}`: {}", x.label(), x.doc));
+                    }
+                    code_block(
+                        &format!("{code}\n// VBA: {}.{host}", prog.classes[c].name),
+                        Some(doc.trim()).filter(|d| !d.is_empty()),
+                    )
+                }
                 (Some(host), _) => code_block(
                     &format!("{}\n// VBA: {host}", signature(prog, *f)),
                     d.doc.as_deref(),
@@ -326,7 +409,10 @@ fn describe_res(prog: &Program, m: ModuleId, offset: u32, res: &Res, ty: &Type) 
         ),
         Res::Namespace(n) => code_block(&format!("namespace {n}"), None),
         Res::Builtin(n) => code_block(&format!("(組み込み) {n}"), None),
-        Res::Intrinsic(_) => code_block(&format!("(組み込み): {}", prog.show(ty)), None),
+        Res::Intrinsic(i) => match intrinsic_sig(*i) {
+            Some(sig) => builtin_hover(sig, Some("RAS_RangeExtend(…)")),
+            None => code_block(&format!("(組み込み): {}", prog.show(ty)), None),
+        },
         Res::Dynamic => code_block(
             "(遅延バインディング): any",
             Some("静的な型が無いため、実行時に解決されます。"),
@@ -567,7 +653,12 @@ fn class_members(prog: &Program, c: ClassId, statics: bool, out: &mut Vec<Comple
         } else {
             kind::METHOD
         };
-        out.push(item(&fd.name, k, signature(prog, m), fd.doc.as_ref(), 0));
+        let mut detail = signature(prog, m);
+        let extra = extra_sigs(prog, m);
+        if !extra.is_empty() {
+            detail.push_str(&format!("（+{} 個のオーバーロード）", extra.len()));
+        }
+        out.push(item(&fd.name, k, detail, fd.doc.as_ref(), 0));
     }
     for base in &d.extends {
         if let Type::Class(b, _) = base {
@@ -582,6 +673,10 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
         for n in names {
             out.push(item(n, kind::METHOD, "(組み込み)", None, 0));
         }
+    };
+    let builtin_sig = |sig: &BuiltinSig, out: &mut Vec<Completion>| {
+        let doc = sig.doc.to_string();
+        out.push(item(sig.name, kind::METHOD, sig.label(), Some(&doc), 0));
     };
     match ty {
         // The members every member type of the union has.
@@ -599,10 +694,10 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
             let d = &prog.classes[*c];
             if d.kind == ClassKind::Host && d.namespace.as_deref() == Some("Excel") {
                 match d.name.as_str() {
-                    "Range" => builtin(
-                        &["toArray", "fromArray", "toColumn", "toRow", "extend"],
-                        &mut out,
-                    ),
+                    "Range" => {
+                        builtin(&["toArray", "fromArray", "toColumn", "toRow"], &mut out);
+                        builtin_sig(&RANGE_EXTEND_SIG, &mut out);
+                    }
                     "Worksheet" => builtin(&["usedTable"], &mut out),
                     _ => {}
                 }
@@ -1013,7 +1108,14 @@ fn generic_callee(text: &str, callee: Span, paren: u32) -> bool {
 
 /// Function (and the leading parameters not written in the argument list) whose argument
 /// list opens at `paren`.
-fn callee_at(prog: &Program, m: ModuleId, paren: u32) -> Option<(FnId, usize)> {
+/// What a call calls, for the editor: a function (with the number of leading parameters not
+/// written in the argument list), or a member the compiler adds.
+enum Callee {
+    Fn(FnId, usize),
+    Builtin(&'static BuiltinSig),
+}
+
+fn callee_at(prog: &Program, m: ModuleId, paren: u32) -> Option<Callee> {
     let md = &prog.modules[m];
     let mut callee: Option<&Expr> = None;
     let mut fallback: Option<&Expr> = None;
@@ -1041,15 +1143,16 @@ fn callee_at(prog: &Program, m: ModuleId, paren: u32) -> Option<(FnId, usize)> {
         _ => {}
     });
     if let Some(f) = ctor {
-        return Some((f, 0));
+        return Some(Callee::Fn(f, 0));
     }
     let e = callee.or(fallback)?;
     match md.info.res.get(&e.id) {
-        Some(Res::Fn(f) | Res::Method(f)) => Some((*f, 0)),
-        Some(Res::ExtMethod(f)) => Some((*f, 1)),
+        Some(Res::Fn(f) | Res::Method(f)) => Some(Callee::Fn(*f, 0)),
+        Some(Res::ExtMethod(f)) => Some(Callee::Fn(*f, 1)),
+        Some(Res::Intrinsic(i)) => intrinsic_sig(*i).map(Callee::Builtin),
         // A call of a value: the default member of its class.
         _ => match md.info.ty(e.id) {
-            Type::Class(c, _) => prog.classes[c].call_sig.map(|f| (f, 0)),
+            Type::Class(c, _) => prog.classes[c].call_sig.map(|f| Callee::Fn(f, 0)),
             _ => None,
         },
     }
@@ -1061,11 +1164,35 @@ fn callee_at(prog: &Program, m: ModuleId, paren: u32) -> Option<(FnId, usize)> {
 fn named_arg_items(prog: &Program, m: ModuleId, p: usize) -> Option<(Vec<Completion>, bool)> {
     let text: &str = &prog.modules[m].text;
     let (paren, args) = arg_list_at(text, p)?;
-    let (f, skip) = callee_at(prog, m, paren as u32)?;
-    let d = &prog.fns[f];
     let names: Vec<&str> = args.iter().filter_map(|a| arg_name(a)).collect();
     let positional = args.iter().take_while(|a| arg_name(a).is_none()).count();
     let mut out = Vec::new();
+    let (f, skip) = match callee_at(prog, m, paren as u32)? {
+        Callee::Fn(f, skip) => (f, skip),
+        Callee::Builtin(sig) if sig.named => {
+            for (i, (text, n, _)) in sig.params.iter().enumerate() {
+                if i < positional || names.contains(n) {
+                    continue;
+                }
+                let ty = text.split_once(": ").map(|x| x.1).unwrap_or("");
+                out.push(Completion {
+                    label: format!("{n}:"),
+                    kind: kind::VARIABLE,
+                    detail: format!("{ty}（省略可）"),
+                    doc: Some(code_block(&sig.label(), None)),
+                    sort: 0,
+                    insert: Some(format!("{n}: ")),
+                    filter: Some(n.to_string()),
+                    import: None,
+                    range: None,
+                    parameter_hints: false,
+                });
+            }
+            return Some((out, !names.is_empty()));
+        }
+        Callee::Builtin(_) => return None,
+    };
+    let d = &prog.fns[f];
     for (i, pd) in d.params.iter().enumerate().skip(skip) {
         let is_this = d
             .locals
@@ -1149,8 +1276,15 @@ pub fn split_doc(doc: &str) -> (String, Vec<(String, String)>) {
     (body.join("\n").trim().to_string(), params)
 }
 
-/// Parameter information for a call (`textDocument/signatureHelp`).
+/// Parameter information for a call (`textDocument/signatureHelp`): its signatures (more than
+/// one for the overloads RAS adds, spec §9.4.2) and the one that fits the arguments.
 pub struct SignatureHelp {
+    pub signatures: Vec<Signature>,
+    pub active_signature: u32,
+}
+
+/// One signature of [`SignatureHelp`].
+pub struct Signature {
     /// `name(a: int, b?: string): boolean`
     pub label: String,
     pub doc: Option<String>,
@@ -1168,19 +1302,83 @@ pub fn signature_help(prog: &Program, m: ModuleId, offset: u32) -> Option<Signat
     if let Some(sig) = formula::signature_at(text, (offset as usize).min(text.len())) {
         let (f, params, active) = sig?;
         return Some(SignatureHelp {
-            label: f.signature.clone(),
-            doc: Some(f.description.clone()).filter(|d| !d.is_empty()),
-            params: params
-                .into_iter()
-                .map(|(a, b)| ((a as u32, b as u32), None))
-                .collect(),
-            active: active.map(|a| a as u32),
+            signatures: vec![Signature {
+                label: f.signature.clone(),
+                doc: Some(f.description.clone()).filter(|d| !d.is_empty()),
+                params: params
+                    .into_iter()
+                    .map(|(a, b)| ((a as u32, b as u32), None))
+                    .collect(),
+                active: active.map(|a| a as u32),
+            }],
+            active_signature: 0,
         });
     }
     let (paren, args) = enclosing_args(text, (offset as usize).min(text.len()))?;
-    let (f, skip) = callee_at(prog, m, paren as u32)?;
-    let d = &prog.fns[f];
     let (current, before) = args.split_last()?;
+    let (f, skip) = match callee_at(prog, m, paren as u32)? {
+        Callee::Fn(f, skip) => (f, skip),
+        Callee::Builtin(sig) => {
+            return Some(SignatureHelp {
+                signatures: vec![builtin_signature(sig, current, before)],
+                active_signature: 0,
+            })
+        }
+    };
+    let mut signatures = vec![fn_signature(prog, f, skip, current, before)];
+    let extra = extra_sigs(prog, f);
+    signatures.extend(extra.iter().map(|x| builtin_signature(x, current, before)));
+    // `ws.range(2, 4, …`: the form with numbers once there are more arguments than the host
+    // member takes, or the first is a number.
+    let host_max = prog.fns[f].params.len() - skip;
+    let numeric = args
+        .first()
+        .is_some_and(|a| a.trim_start().starts_with(|c: char| c.is_ascii_digit()));
+    let active_signature = if !extra.is_empty() && (args.len() > host_max || numeric) {
+        1
+    } else {
+        0
+    };
+    Some(SignatureHelp {
+        signatures,
+        active_signature,
+    })
+}
+
+/// The [`Signature`] of `sig` with the argument being written.
+fn builtin_signature(sig: &BuiltinSig, current: &str, before: &[&str]) -> Signature {
+    let utf16 = |s: &str| s.encode_utf16().count() as u32;
+    let mut label = format!("{}(", sig.name);
+    let mut params = Vec::new();
+    for (i, (text, _, doc)) in sig.params.iter().enumerate() {
+        if i > 0 {
+            label.push_str(", ");
+        }
+        let start = utf16(&label);
+        label.push_str(text);
+        params.push(((start, utf16(&label)), Some(doc.to_string())));
+    }
+    label.push_str("): ");
+    label.push_str(sig.ret);
+    let active = match arg_name(current) {
+        Some(n) if sig.named => sig.params.iter().position(|p| p.1 == n),
+        Some(_) => None,
+        None if before.iter().any(|a| arg_name(a).is_some()) => None,
+        None if before.len() < sig.params.len() => Some(before.len()),
+        None => None,
+    };
+    Signature {
+        label,
+        doc: Some(sig.doc.to_string()),
+        params,
+        active: active.map(|a| a as u32),
+    }
+}
+
+/// The [`Signature`] of function `f` (`skip` leading parameters not written) with the argument
+/// being written.
+fn fn_signature(prog: &Program, f: FnId, skip: usize, current: &str, before: &[&str]) -> Signature {
+    let d = &prog.fns[f];
     let utf16 = |s: &str| s.encode_utf16().count() as u32;
     let mut label = String::new();
     match d.kind {
@@ -1246,12 +1444,12 @@ pub fn signature_help(prog: &Program, m: ModuleId, offset: u32) -> Option<Signat
         .trim_end()
         .to_string();
     }
-    Some(SignatureHelp {
+    Signature {
         label,
         doc: (!doc.is_empty()).then_some(doc),
         params,
         active: active.map(|a| a as u32),
-    })
+    }
 }
 
 /// The declaration of the type of what is named at `offset` (`textDocument/typeDefinition`).

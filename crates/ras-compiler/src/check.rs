@@ -4249,7 +4249,7 @@ impl Checker<'_> {
             }
             // `ws.range(top, left, bottom, right)`: the cells from (top, left) to (bottom, right)
             // (spec §9.4.2).
-            Access::Func { f, .. } if args.len() == 4 && self.is_sheet_range(f) => {
+            Access::Func { f, .. } if args.len() == 4 && self.prog.is_sheet_range(f) => {
                 self.info().calls.insert(
                     e.id,
                     CallInfo {
@@ -4743,18 +4743,6 @@ impl Checker<'_> {
                 Type::Error
             }
         }
-    }
-
-    /// `Excel.Worksheet.Range` (spec §9.4.2).
-    fn is_sheet_range(&self, f: FnId) -> bool {
-        let def = &self.prog.fns[f];
-        let FnKind::Host { class: Some(c) } = def.kind else {
-            return false;
-        };
-        let c = &self.prog.classes[c];
-        def.vba_name() == "Range"
-            && c.name == "Worksheet"
-            && c.namespace.as_deref() == Some("Excel")
     }
 
     /// Puts the arguments of a call with named arguments into parameter order (spec §3.3).
