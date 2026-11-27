@@ -379,7 +379,8 @@ function demo(arr: double[]): double[] {
 fn spec_4_5_ranges_and_from_end() {
     let src = "function report(xs: int[], s: string) {\n    const last = xs[^1];\n    const body = xs[1..^1];\n    for (const i of 0..body.length) {\n        console.log(i, body[i]);\n    }\n    console.log(last, s[..^1]);\n}\n";
     let (_, out) = compile(&[("report", src)]);
-    let doc = include_str!("../../../docs/RAS_Language_Specification.md");
+    // The checkout may have CRLF line endings (Windows).
+    let doc = include_str!("../../../docs/RAS_Language_Specification.md").replace("\r\n", "\n");
     let start = doc.find("Private Sub report(").expect("§4.5 example");
     let end = start + doc[start..].find("End Sub\n").unwrap() + "End Sub\n".len();
     assert_contains(&code(&out, "Report"), &doc[start..end]);
