@@ -45,12 +45,60 @@ import {
   placementRect,
   worldGeometry,
   orderedChildren,
+  parentOrigin,
   selectionPath,
   stableDelta,
 } from "../../src/userForm/geometry";
-import type { Geometry, ResizeHandle, DropTarget } from "../../src/userForm/geometry";
+import type { Bounds, Geometry, Point, ResizeHandle, DropTarget } from "../../src/userForm/geometry";
+import { describeGuides, snapToGuides } from "../../src/userForm/guides";
+import type { Guide } from "../../src/userForm/guides";
 import { appearanceStyle, borderClass, colorStyle } from "./propertyEditors/appearance";
 const px = (points: number) => `${pointsToPixels(points)}px`;
+
+/** The rectangle around controls (siblings: in their container's coordinates). */
+function groupBox(controls: DesignerControl[]): Geometry {
+  const left = Math.min(...controls.map((c) => c.left));
+  const top = Math.min(...controls.map((c) => c.top));
+  return {
+    left,
+    top,
+    width: Math.max(...controls.map((c) => c.left + c.width)) - left,
+    height: Math.max(...controls.map((c) => c.top + c.height)) - top,
+  };
+}
+
+/** The lines a moving control lines up with and the gaps it matches; one screen pixel wide. */
+function SmartGuides({ origin, items, zoom }: { origin: Point; items: Guide[]; zoom: number }) {
+  const thin = `${1 / zoom}px`;
+  // On whole screen pixels, so that a line is not blurred over two.
+  const px = (points: number) => `${Math.round(pointsToPixels(points) * zoom) / zoom}px`;
+  return (
+    <div class="smart-guides" aria-hidden="true">
+      {items.map((guide) => {
+        const horizontal = guide.kind === "line" ? guide.axis === "y" : guide.axis === "x";
+        const along = horizontal ? origin.left : origin.top;
+        const across = horizontal ? origin.top : origin.left;
+        const start = along + guide.from;
+        const length = guide.to - guide.from;
+        const style = horizontal
+          ? { left: px(start), top: px(across + guide.at), width: px(length), height: thin }
+          : { left: px(across + guide.at), top: px(start), width: thin, height: px(length) };
+        return (
+          <div
+            class={`smart-guide ${guide.kind} ${horizontal ? "horizontal" : "vertical"}`}
+            style={style}
+          >
+            {guide.kind === "gap" && (
+              <span class="smart-guide-label" style={{ transform: `translate(-50%, -50%) scale(${1 / zoom})` }}>
+                {guide.label}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 /** The picture of an Image, or a placeholder when there is none that can be drawn. */
 function ControlPicture({ control }: { control: DesignerControl }) {
@@ -393,6 +441,7 @@ export function DesignerCanvas({
   zoom = 1,
   showGrid = true,
   snapping = false,
+  smartGuides = false,
   productivityEditable = false,
   cannotMove = "This control is larger than its parent. Resize it to fit before moving.",
   selectedId: externalSelected,
@@ -430,6 +479,8 @@ export function DesignerCanvas({
   zoom?: number;
   showGrid?: boolean;
   snapping?: boolean;
+  /** Moving a control snaps it to its siblings and shows the guides (Alt: not this time). */
+  smartGuides?: boolean;
   productivityEditable?: boolean;
   cannotMove?: string;
   selectedId?: string;
@@ -497,6 +548,10 @@ export function DesignerCanvas({
   const [marqueeBox, setMarqueeBox] = useState<SelectionRect>();
   const [destination, setDestination] = useState<{ target?: DropTarget; valid: boolean }>();
   const [notice, setNotice] = useState<string>();
+  // The guides of a move, in the coordinates of the container that `origin` is the content of.
+  const [guides, setGuides] = useState<{ origin: Point; items: Guide[] }>();
+  // Alt held while dragging: the control goes where the pointer is, without the guides.
+  const guidesOff = useRef(false);
   // A control being drawn with the Toolbox: a click makes it with the default size, a drag
   // with the dragged rectangle (as in the VBA editor). Points, in the container's coordinates.
   const placement = useRef<{
@@ -553,6 +608,7 @@ export function DesignerCanvas({
     setGroupPreview(undefined);
     setMarqueeBox(undefined);
     setDestination(undefined);
+    setGuides(undefined);
   };
   const cancelPointer = (event: JSX.TargetedPointerEvent<HTMLDivElement>) => {
     if (
@@ -568,6 +624,7 @@ export function DesignerCanvas({
     gesture.current = undefined;
     if (!current) return;
     setDestination(undefined);
+    setGuides(undefined);
     if (current.group) {
       const operation = current.groupMoves;
       const changed = operation?.moves.some((move) => {
@@ -654,6 +711,43 @@ export function DesignerCanvas({
     window.addEventListener("blur", blur);
     return () => window.removeEventListener("blur", blur);
   }, [editable, onCommit]);
+  /**
+   * A move to `raw` (where the pointer puts it) that is `end` with the grid: on each axis
+   * where a smart guide is near, the guide's position instead; and the guides that it shows.
+   */
+  const guided = (
+    raw: Geometry,
+    end: Geometry,
+    parentId: string,
+    bounds: Bounds,
+    moving: Set<string>,
+  ): Geometry => {
+    if (!smartGuides || guidesOff.current) {
+      setGuides(undefined);
+      return end;
+    }
+    const others = document.controls.filter(
+      (c) =>
+        (c.parentId ?? "") === parentId &&
+        !moving.has(c.id) &&
+        c.type.toLowerCase() !== "page" &&
+        isControlVisible(document, c.id),
+    );
+    const within = {
+      ...raw,
+      left: Math.max(0, Math.min(bounds.width - raw.width, raw.left)),
+      top: Math.max(0, Math.min(bounds.height - raw.height, raw.top)),
+    };
+    const snap = snapToGuides(within, others, bounds, pixelsToPoints(6, zoom));
+    const result = {
+      ...end,
+      left: snap.snappedX ? snap.left : end.left,
+      top: snap.snappedY ? snap.top : end.top,
+    };
+    const items = describeGuides(result, others, bounds);
+    setGuides(items.length ? { origin: parentOrigin(document, parentId || undefined), items } : undefined);
+    return result;
+  };
   const startGesture = (
     control: DesignerControl,
     x: number,
@@ -771,16 +865,38 @@ export function DesignerCanvas({
   const updateGroupGesture = (dx: number, dy: number) => {
     const current = gesture.current;
     if (!current?.group) return;
-    const operation = moveSiblingGroup(
-      document,
-      current.group.map((control) => control.id),
-      dx,
-      dy,
-      snapping,
-    );
+    const ids = current.group.map((control) => control.id);
+    let moveX = dx;
+    let moveY = dy;
+    let gridded = snapping;
+    if (smartGuides && !current.keys && (dx !== 0 || dy !== 0)) {
+      // The guides of the selection as a whole; an axis without one keeps to the grid.
+      const box = groupBox(current.group);
+      const primary = current.control;
+      const raw = { ...box, left: box.left + dx, top: box.top + dy };
+      const grid = (position: number, delta: number) =>
+        snapping && delta !== 0 ? Math.round((position + delta) / gridSize) * gridSize - position : delta;
+      const end = {
+        ...raw,
+        left: box.left + grid(primary.left, dx),
+        top: box.top + grid(primary.top, dy),
+      };
+      const result = guided(
+        raw,
+        end,
+        primary.parentId ?? "",
+        parentBounds(document, primary),
+        new Set(current.group.flatMap((control) => [...subtreeIds(document.controls, control.id)])),
+      );
+      moveX = result.left - box.left;
+      moveY = result.top - box.top;
+      gridded = false;
+    } else setGuides(undefined);
+    const operation = moveSiblingGroup(document, ids, moveX, moveY, gridded);
     if (!operation || operation.type !== "moveControls") {
       current.groupMoves = undefined;
       setGroupPreview(undefined);
+      setGuides(undefined);
       setNotice(cannotMove);
       return;
     }
@@ -825,19 +941,28 @@ export function DesignerCanvas({
       );
       const startWorld = worldGeometry(document, current.control);
       const world = { ...startWorld, left: startWorld.left + dx, top: startWorld.top + dy };
-      const end =
+      const local = target && {
+        ...world,
+        left: world.left - target.origin.left,
+        top: world.top - target.origin.top,
+      };
+      const gridEnd =
         target &&
+        local &&
         (target.parentId === (current.control.parentId ?? "")
           ? moveGeometry(current.start, dx, dy, target.bounds, snapping)
-          : placeGeometry(
-              {
-                ...world,
-                left: world.left - target.origin.left,
-                top: world.top - target.origin.top,
-              },
+          : placeGeometry(local, target.bounds, snapping));
+      const end =
+        gridEnd && target && local
+          ? guided(
+              local,
+              gridEnd,
+              target.parentId,
               target.bounds,
-              snapping,
-            ));
+              subtreeIds(document.controls, current.control.id),
+            )
+          : gridEnd;
+      if (!end) setGuides(undefined);
       current.parenting = true;
       current.target = target;
       current.valid = !!end;
@@ -858,7 +983,7 @@ export function DesignerCanvas({
     current.target = undefined;
     current.valid = undefined;
     setDestination(undefined);
-    const end =
+    let end =
       dx === 0 && dy === 0
         ? current.start
         : current.handle
@@ -873,9 +998,19 @@ export function DesignerCanvas({
             )
           : moveGeometry(current.start, dx, dy, bounds, current.keys ? false : snapping);
     if (!end) {
+      setGuides(undefined);
       setNotice(cannotMove);
       return;
     }
+    if (current.handle || current.keys || (dx === 0 && dy === 0)) setGuides(undefined);
+    else
+      end = guided(
+        { ...current.start, left: current.start.left + dx, top: current.start.top + dy },
+        end,
+        current.control.parentId ?? "",
+        bounds,
+        subtreeIds(document.controls, current.control.id),
+      );
     current.end = end;
     setPreview({ id: current.control.id, geometry: end });
   };
@@ -1464,6 +1599,7 @@ export function DesignerCanvas({
               bottom: Math.max(activeMarquee.startY, activeMarquee.endY),
             });
           }
+          guidesOff.current = event.altKey;
           if (current?.pointerId === event.pointerId)
             updateGesture(
               pixelsToPoints(event.clientX - current.x, zoom),
@@ -1505,6 +1641,7 @@ export function DesignerCanvas({
             return;
           }
           const current = gesture.current;
+          guidesOff.current = event.altKey;
           if (current?.pointerId === event.pointerId) {
             updateGesture(
               pixelsToPoints(event.clientX - current.x, zoom),
@@ -1648,6 +1785,7 @@ export function DesignerCanvas({
                   )}
                 </div>
               )}
+              {guides && <SmartGuides origin={guides.origin} items={guides.items} zoom={zoom} />}
             </div>
             {formResizable && !busy && !placing && selectionIds.length === 0 && (
               <>
