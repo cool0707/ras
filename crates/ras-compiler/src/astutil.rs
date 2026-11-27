@@ -156,6 +156,12 @@ pub fn walk_expr<'a>(
             walk_expr(object, fs, fe);
             walk_expr(index, fs, fe);
         }
+        ExprKind::FromEnd(x) => walk_expr(x, fs, fe),
+        ExprKind::Range { start, end } => {
+            for x in [start, end].into_iter().flatten() {
+                walk_expr(x, fs, fe);
+            }
+        }
         ExprKind::As { expr, .. } | ExprKind::InstanceOf { expr, .. } => walk_expr(expr, fs, fe),
         ExprKind::Int { .. }
         | ExprKind::Float { .. }
@@ -544,6 +550,12 @@ fn visit_expr<'a>(e: &'a Expr, v: &mut dyn Visit<'a>, tps: &mut Vec<&'a str>) {
         ExprKind::Index { object, index } => {
             visit_expr(object, v, tps);
             visit_expr(index, v, tps);
+        }
+        ExprKind::FromEnd(x) => visit_expr(x, v, tps),
+        ExprKind::Range { start, end } => {
+            for x in [start, end].into_iter().flatten() {
+                visit_expr(x, v, tps);
+            }
         }
         ExprKind::As { expr, ty } | ExprKind::InstanceOf { expr, ty } => {
             visit_expr(expr, v, tps);

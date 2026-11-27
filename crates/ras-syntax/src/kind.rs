@@ -141,6 +141,8 @@ pub enum SyntaxKind {
     DOT,
     #[token("...")]
     DOT3,
+    #[token("..")]
+    DOT2,
     #[token("?.")]
     QUESTION_DOT,
     #[token(":")]
@@ -307,6 +309,10 @@ pub enum SyntaxKind {
     NEW_EXPR,
     MEMBER_EXPR,
     INDEX_EXPR,
+    /// `a..b` / `..b` / `a..` — only as an index (`xs[1..^1]`) or the source of `for...of`.
+    RANGE_EXPR,
+    /// `^n` — the n-th position from the end, inside an index (`xs[^1]`, `xs[..^1]`).
+    FROM_END_EXPR,
     /// `` fx`SUM(A1:A3)` `` — a tag followed by a template literal (spec §2.7).
     TAGGED_TEMPLATE,
     AS_EXPR,
@@ -358,6 +364,8 @@ impl SyntaxKind {
                 | NEW_EXPR
                 | MEMBER_EXPR
                 | INDEX_EXPR
+                | RANGE_EXPR
+                | FROM_END_EXPR
                 | TAGGED_TEMPLATE
                 | AS_EXPR
                 | NAMED_ARG
@@ -513,6 +521,17 @@ mod tests {
             .map(|t| &src[t.start as usize..t.end as usize])
             .collect();
         assert_eq!(joined, src);
+    }
+
+    #[test]
+    fn range_dots() {
+        assert_eq!(
+            kinds("1..3 a...b x..^1 1.5..2"),
+            vec![
+                INT_LIT, DOT2, INT_LIT, IDENT, DOT3, IDENT, IDENT, DOT2, CARET, INT_LIT, FLOAT_LIT,
+                DOT2, INT_LIT
+            ]
+        );
     }
 
     #[test]

@@ -1337,7 +1337,7 @@ impl<'a> Parser<'a> {
                 self.error("`for...in` には対応していません。`for...of` を使ってください");
             }
             self.bump(); // of / in
-            self.expr();
+            self.range_or_expr();
             self.expect(R_PAREN, "`)`");
             self.stmt();
             self.finish();
@@ -1414,6 +1414,12 @@ impl<'a> Parser<'a> {
     // ------------------------------------------------------------------
 
     fn expr(&mut self) {
+        self.expr_ex(true);
+    }
+
+    /// `range`: a `..` after the expression makes it the start of a range. Not inside the
+    /// branches of `?:`, so that `xs[c ? 1 : 2..]` is the range `(c ? 1 : 2)..`.
+    fn expr_ex(&mut self, range: bool) {
         if self.at_arrow_start() {
             return self.arrow();
         }
@@ -1425,9 +1431,25 @@ impl<'a> Parser<'a> {
             for _ in 0..n {
                 self.bump();
             }
-            self.expr();
+            self.expr_ex(range);
             self.finish();
+        } else if range && self.at(DOT2) {
+            // Kept as a range wherever it is written; the checker tells where ranges are allowed.
+            self.start_at(cp, RANGE_EXPR);
+            self.range_end();
         }
+    }
+
+    /// The `..` and the end of a range whose node is open (spec §4.5).
+    fn range_end(&mut self) {
+        self.bump(); // ..
+        if !matches!(
+            self.nth(0),
+            R_BRACK | R_PAREN | R_BRACE | SEMI | COMMA | EOF
+        ) {
+            self.expr_ternary();
+        }
+        self.finish();
     }
 
     fn assign_op_len(&self) -> usize {
@@ -1484,15 +1506,27 @@ impl<'a> Parser<'a> {
         self.finish();
     }
 
+    /// An index or the source of `for...of`: an expression, or a range `a..b` whose ends may be
+    /// left out and may count from the end (`^n`). `..` binds more loosely than every operator
+    /// (`xs[0..n - 1]`, `xs[c ? 1 : 2..]`).
+    fn range_or_expr(&mut self) {
+        if self.at(DOT2) {
+            self.start(RANGE_EXPR);
+            self.range_end();
+        } else {
+            self.expr();
+        }
+    }
+
     fn expr_ternary(&mut self) {
         let cp = self.checkpoint();
         self.expr_bp(1);
         if self.at(QUESTION) {
             self.start_at(cp, TERNARY_EXPR);
             self.bump();
-            self.expr();
+            self.expr_ex(false);
             self.expect(COLON, "`:`");
-            self.expr();
+            self.expr_ex(false);
             self.finish();
         }
     }
@@ -1567,6 +1601,13 @@ impl<'a> Parser<'a> {
                 self.expr_unary();
                 self.finish();
             }
+            // `^n` binds like a unary operator, as in C#: `xs[^(i + 1)]`, not `xs[^i + 1]`.
+            CARET => {
+                self.start(FROM_END_EXPR);
+                self.bump();
+                self.expr_unary();
+                self.finish();
+            }
             _ => self.expr_postfix(),
         }
     }
@@ -1589,7 +1630,7 @@ impl<'a> Parser<'a> {
                 L_BRACK => {
                     self.start_at(cp, INDEX_EXPR);
                     self.bump();
-                    self.expr();
+                    self.range_or_expr();
                     self.expect(R_BRACK, "`]`");
                     self.finish();
                 }

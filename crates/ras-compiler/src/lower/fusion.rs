@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use ras_syntax::ast::{self, ArrowBody, Expr, ExprKind};
 
-use super::expr::mentions;
+use super::expr::{mentions, simple};
 use super::stmt::needs_handler;
 use super::{Binding, Frame, Lowerer, RetMode};
 use crate::astutil::any_expr_in;
@@ -14,6 +14,18 @@ use crate::intrinsics::Intr;
 use crate::model::*;
 use crate::names;
 use crate::vba::*;
+
+/// How an end of a copied range is given (spec §4.5).
+pub(crate) enum RangeEnd {
+    /// `slice(i)`: a negative value counts from the end.
+    Js(VExpr),
+    /// `xs[i..]`: counted from the start, kept within the array.
+    Abs(VExpr),
+    /// `xs[^k..]`.
+    FromEnd(VExpr),
+    /// Left out at the end: the length.
+    Len,
+}
 
 /// A callback: either an arrow function literal (expanded in place) or a closure object.
 enum Callback<'a> {
@@ -658,64 +670,36 @@ impl<'p> Lowerer<'p> {
             }
             Intr::ArrSlice => {
                 let src = self.stable_array(recv);
-                let aliased = mentions(&src, &dest_name);
-                let out = if aliased {
-                    VExpr::Name(self.temp(ty))
-                } else {
-                    dest.clone()
+                let start = match args.first() {
+                    Some(x) => RangeEnd::Js(self.expr(x)),
+                    None => RangeEnd::Abs(long(0)),
                 };
+                let end = match args.get(1) {
+                    Some(x) => RangeEnd::Js(self.expr(x)),
+                    None => RangeEnd::Len,
+                };
+                self.copy_range(src, ty, start, end, dest);
+                true
+            }
+            Intr::ArrStep => {
+                let src = self.stable_array(recv);
+                let Some(k) = args.first() else {
+                    return false;
+                };
+                let k = self.expr(k);
+                let k = self.spill(k, &Type::Int);
+                let len = self.len_of(src.clone(), ty);
+                let count = call("RAS_StepCount", vec![len, k.clone()]);
+                self.copy_mapped(src, ty, dest, count, move |i| bin("*", i, k.clone()));
+                true
+            }
+            Intr::ArrToReversed => {
+                let src = self.stable_array(recv);
                 let n = VExpr::Name(self.temp(&Type::Int));
                 let len = self.len_of(src.clone(), ty);
                 self.emit(assign(n.clone(), len));
-                let start = VExpr::Name(self.temp(&Type::Int));
-                let count = VExpr::Name(self.temp(&Type::Int));
-                let a = match args.first() {
-                    Some(x) => self.expr(x),
-                    None => long(0),
-                };
-                self.emit(assign(
-                    start.clone(),
-                    call("RAS_ClampIndex", vec![a, n.clone()]),
-                ));
-                let end = match args.get(1) {
-                    Some(x) => {
-                        let b = self.expr(x);
-                        call("RAS_ClampIndex", vec![b, n])
-                    }
-                    None => n,
-                };
-                self.emit(assign(count.clone(), bin("-", end, start.clone())));
-                let idx = self.declare_raw("ras_i", "Long", false);
-                let (copy, _) = self.capture(|lw| {
-                    lw.store(
-                        &out.clone().index(vec![name(idx.clone())]),
-                        &elem_ty,
-                        src.index(vec![bin("+", start, name(idx.clone()))]),
-                        &elem_ty,
-                    )
-                });
-                let (clear, _) = self.capture(|lw| lw.clear_array(&out, ty));
-                self.emit(if_else(
-                    bin(">", count.clone(), long(0)),
-                    vec![
-                        VStmt::ReDim {
-                            preserve: false,
-                            target: out.clone(),
-                            dims: vec![(long(0), count.clone().plus(-1))],
-                        },
-                        VStmt::For {
-                            var: idx,
-                            from: long(0),
-                            to: count.plus(-1),
-                            step: None,
-                            body: copy,
-                        },
-                    ],
-                    clear,
-                ));
-                if aliased {
-                    self.emit(assign(dest.clone(), out));
-                }
+                let last = n.clone().plus(-1);
+                self.copy_mapped(src, ty, dest, n, move |i| bin("-", last.clone(), i));
                 true
             }
             Intr::ArrConcat => {
@@ -829,6 +813,108 @@ impl<'p> Lowerer<'p> {
     }
 
     /// `forEach` / `reduce` / `some` / `every` / `find` / `findIndex`, fused with preceding `map` / `filter` stages.
+    /// Copies `src[start..end]` (spec §4.5) into `dest`.
+    pub(crate) fn copy_range(
+        &mut self,
+        src: VExpr,
+        ty: &Type,
+        start: RangeEnd,
+        end: RangeEnd,
+        dest: &VExpr,
+    ) {
+        let n = VExpr::Name(self.temp(&Type::Int));
+        let len = self.len_of(src.clone(), ty);
+        self.emit(assign(n.clone(), len));
+        let bound = |e: RangeEnd, n: &VExpr| match e {
+            RangeEnd::Js(v) => call("RAS_ClampIndex", vec![v, n.clone()]),
+            RangeEnd::Abs(v) => match v.as_long() {
+                Some(0) => long(0),
+                _ => call("RAS_ClampRange", vec![v, n.clone()]),
+            },
+            RangeEnd::FromEnd(k) => match k.as_long() {
+                Some(0) => n.clone(),
+                _ => call("RAS_ClampRange", vec![bin("-", n.clone(), k), n.clone()]),
+            },
+            RangeEnd::Len => n.clone(),
+        };
+        let first = bound(start, &n);
+        let first = if simple(&first) {
+            first
+        } else {
+            let t = VExpr::Name(self.temp(&Type::Int));
+            self.emit(assign(t.clone(), first));
+            t
+        };
+        let count = VExpr::Name(self.temp(&Type::Int));
+        let last = bound(end, &n);
+        let count_v = match first.as_long() {
+            Some(0) => last,
+            _ => bin("-", last, first.clone()),
+        };
+        self.emit(assign(count.clone(), count_v));
+        let offset = first;
+        self.copy_mapped(src, ty, dest, count, move |i| match offset.as_long() {
+            Some(0) => i,
+            _ => bin("+", offset.clone(), i),
+        });
+    }
+
+    /// `dest(i) = src(at(i))` for `i` in `0..count` (`dest` is left empty when `count <= 0`).
+    pub(crate) fn copy_mapped(
+        &mut self,
+        src: VExpr,
+        ty: &Type,
+        dest: &VExpr,
+        count: VExpr,
+        at: impl Fn(VExpr) -> VExpr,
+    ) {
+        let elem_ty = ty.elem().cloned().unwrap_or(Type::Any);
+        let aliased = mentions(&src, &dest.print());
+        let out = if aliased {
+            VExpr::Name(self.temp(ty))
+        } else {
+            dest.clone()
+        };
+        let count = if simple(&count) {
+            count
+        } else {
+            let t = VExpr::Name(self.temp(&Type::Int));
+            self.emit(assign(t.clone(), count));
+            t
+        };
+        let idx = self.declare_raw("ras_i", "Long", false);
+        let (copy, _) = self.capture(|lw| {
+            lw.store(
+                &out.clone().index(vec![name(idx.clone())]),
+                &elem_ty,
+                src.index(vec![at(name(idx.clone()))]),
+                &elem_ty,
+            )
+        });
+        let (clear, _) = self.capture(|lw| lw.clear_array(&out, ty));
+        self.emit(if_else(
+            bin(">", count.clone(), long(0)),
+            vec![
+                VStmt::ReDim {
+                    preserve: false,
+                    target: out.clone(),
+                    dims: vec![(long(0), count.clone().plus(-1))],
+                },
+                VStmt::For {
+                    var: idx,
+                    from: long(0),
+                    to: count.plus(-1),
+                    step: None,
+                    body: copy,
+                },
+            ],
+            clear,
+        ));
+        if aliased {
+            self.emit(assign(dest.clone(), out));
+        }
+    }
+
     pub(crate) fn scalar_fusion(
         &mut self,
         e: &Expr,

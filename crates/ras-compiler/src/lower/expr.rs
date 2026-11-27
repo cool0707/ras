@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use ras_syntax::ast::{self, BinaryOp, Expr, ExprKind, InlineMode, NumSuffix, PassMode, UnaryOp};
 
+use super::fusion::RangeEnd;
 use super::stmt::{flatten_if, needs_handler};
 use super::{Binding, Frame, Lowerer, RetMode};
 use crate::diag::Severity;
@@ -148,7 +149,7 @@ const DOLLAR_FUNCS: &[&str] = &[
     "ChrW", "Hex", "Oct", "Str", "Format", "Environ", "Dir", "CurDir",
 ];
 
-fn simple(v: &VExpr) -> bool {
+pub(crate) fn simple(v: &VExpr) -> bool {
     match v {
         VExpr::Lit(_) | VExpr::Name(_) => true,
         VExpr::Neg(x) => simple(x),
@@ -419,7 +420,8 @@ impl<'p> Lowerer<'p> {
             _ => false,
         };
         let v = self.expr(e);
-        if is_place {
+        // A temporary that holds a new array (`xs[1..]`, `xs.filter(...)`) is not copied again.
+        if is_place || matches!(&v, VExpr::Name(n) if n.starts_with("ras_t")) {
             v
         } else {
             let t = VExpr::Name(self.temp(&ty));
@@ -499,7 +501,9 @@ impl<'p> Lowerer<'p> {
             return slot;
         }
         match &e.kind {
-            ExprKind::Error | ExprKind::Super => lit("Empty"),
+            // Ranges and `^n` are lowered by the index that holds them (rejected elsewhere).
+            ExprKind::Error | ExprKind::Super | ExprKind::Range { .. } => lit("Empty"),
+            ExprKind::FromEnd(x) => self.expr(x),
             ExprKind::Object(_) => match self.ty(e) {
                 ty @ Type::Struct(_) => {
                     let t = VExpr::Name(self.temp(&ty));
@@ -788,6 +792,9 @@ impl<'p> Lowerer<'p> {
 
     fn index_expr(&mut self, e: &Expr, object: &Expr, index: &Expr) -> VExpr {
         let ot = self.ty(object);
+        if matches!(index.kind, ExprKind::Range { .. }) {
+            return self.range_expr(e, object, index);
+        }
         match &ot {
             Type::Array(_) => {
                 // `a[r][c]` on a 2-D array is one access `a(r, c)`.
@@ -797,10 +804,22 @@ impl<'p> Lowerer<'p> {
                 } = &object.peel().kind
                 {
                     if self.ty(base).dims() == 2 {
-                        let b = self.expr(base);
+                        let from_end = has_from_end(row) || has_from_end(index);
+                        let b = if from_end {
+                            self.stable_array(base)
+                        } else {
+                            self.expr(base)
+                        };
                         let ix = self.operands(&[row, index]);
+                        let ix = self.from_end_2d(&b, row, index, ix);
                         return b.index(ix);
                     }
+                }
+                if has_from_end(index) {
+                    let b = self.stable_array(object);
+                    let k = self.expr(index);
+                    let len = self.len_of(b.clone(), &ot);
+                    return b.index(vec![bin("-", len, k)]);
                 }
                 let b = self.expr(object);
                 let i = self.expr(index);
@@ -810,6 +829,12 @@ impl<'p> Lowerer<'p> {
                 let ops = self.operands(&[object, index]);
                 let mut it = ops.into_iter();
                 let (s, i) = (it.next().unwrap(), it.next().unwrap());
+                if has_from_end(index) {
+                    // `s[^k]` → `Mid$(s, Len(s) - k + 1, 1)`
+                    let s = self.spill(s, &Type::Str);
+                    let at = bin("-", call("Len", vec![s.clone()]), i).plus(1);
+                    return call("Mid$", vec![s, at, long(1)]);
+                }
                 call("Mid$", vec![s, i.plus(1), long(1)])
             }
             Type::Struct(_) => {
@@ -830,6 +855,67 @@ impl<'p> Lowerer<'p> {
                 o.index(vec![i])
             }
         }
+    }
+
+    /// The indices `[r, c]` of a 2-D access whose row or column counts from the end (`a[^1][0]`).
+    fn from_end_2d(&mut self, b: &VExpr, row: &Expr, col: &Expr, ix: Vec<VExpr>) -> Vec<VExpr> {
+        let mut it = ix.into_iter();
+        let (r, c) = (it.next().unwrap(), it.next().unwrap());
+        let r = if has_from_end(row) {
+            bin("-", call("RAS_Len", vec![b.clone()]), r)
+        } else {
+            r
+        };
+        let c = if has_from_end(col) {
+            bin("-", call("RAS_Len2", vec![b.clone()]), c)
+        } else {
+            c
+        };
+        vec![r, c]
+    }
+
+    /// The ends of the range `index` (spec §4.5).
+    fn range_ends(&mut self, index: &Expr) -> (RangeEnd, RangeEnd) {
+        let ExprKind::Range { start, end } = &index.kind else {
+            return (RangeEnd::Abs(long(0)), RangeEnd::Len);
+        };
+        let one = |lw: &mut Self, b: &Option<Box<Expr>>, missing: RangeEnd| match b.as_deref() {
+            None => missing,
+            Some(x) => match &x.kind {
+                ExprKind::FromEnd(k) => RangeEnd::FromEnd(lw.expr(k)),
+                _ => RangeEnd::Abs(lw.expr(x)),
+            },
+        };
+        let s = one(self, start, RangeEnd::Abs(long(0)));
+        let e = one(self, end, RangeEnd::Len);
+        (s, e)
+    }
+
+    /// `xs[a..b]` / `s[a..b]` (spec §4.5).
+    fn range_expr(&mut self, e: &Expr, object: &Expr, index: &Expr) -> VExpr {
+        let ty = self.ty(e);
+        if ty == Type::Str {
+            let s = self.expr(object);
+            let s = self.spill(s, &Type::Str);
+            let (a, b) = self.range_ends(index);
+            let len = || call("Len", vec![s.clone()]);
+            let end = |r: RangeEnd| match r {
+                RangeEnd::Abs(v) | RangeEnd::Js(v) => v,
+                RangeEnd::FromEnd(k) => bin("-", len(), k),
+                RangeEnd::Len => len(),
+            };
+            let (a, b) = (end(a), end(b));
+            return call("RAS_StrRange", vec![s.clone(), a, b]);
+        }
+        let t = VExpr::Name(self.temp(&ty));
+        self.range_into(object, index, &t, &ty);
+        t
+    }
+
+    fn range_into(&mut self, object: &Expr, index: &Expr, dest: &VExpr, ty: &Type) {
+        let src = self.stable_array(object);
+        let (a, b) = self.range_ends(index);
+        self.copy_range(src, ty, a, b, dest);
     }
 
     fn map_get(&mut self, d: VExpr, k: VExpr, vty: &Type) -> VExpr {
@@ -885,12 +971,17 @@ impl<'p> Lowerer<'p> {
                             let r = if stable { self.spill(r, &Type::Int) } else { r };
                             let c = self.expr(index);
                             let c = if stable { self.spill(c, &Type::Int) } else { c };
-                            return (b.index(vec![r, c]), ty);
+                            let ix = self.from_end_2d(&b, row, index, vec![r, c]);
+                            return (b.index(ix), ty);
                         }
                     }
                     let (b, _) = self.lvalue_ex(object, stable);
                     let i = self.expr(index);
                     let i = if stable { self.spill(i, &Type::Int) } else { i };
+                    if has_from_end(index) {
+                        let len = self.len_of(b.clone(), &ot);
+                        return (b.clone().index(vec![bin("-", len, i)]), ty);
+                    }
                     b.index(vec![i])
                 } else if matches!(ot, Type::Struct(_)) {
                     let (b, _) = self.lvalue_ex(object, stable);
@@ -1183,7 +1274,10 @@ impl<'p> Lowerer<'p> {
                 self.emit(call_stmt("RAS_ErrorToNullInPlace", vec![target.clone()]));
             }
             // (`f(i) = x` inside function `f` would be a recursive call, so the return variable is excluded)
-            ExprKind::Array(_) | ExprKind::New { .. } | ExprKind::Call { .. }
+            ExprKind::Array(_)
+            | ExprKind::New { .. }
+            | ExprKind::Call { .. }
+            | ExprKind::Index { .. }
                 if self.ty(inner).is_array()
                     && matches!(target, VExpr::Name(n) if *n != self.pc.proc_name || self.pc.rets.len() > 1) =>
             {
@@ -1376,6 +1470,10 @@ impl<'p> Lowerer<'p> {
                     let (clear, _) = self.capture(|lw| lw.clear_array(dest, ty));
                     self.emit(if_else(cond.unwrap(), vec![redim], clear));
                 }
+                true
+            }
+            ExprKind::Index { object, index } if matches!(index.kind, ExprKind::Range { .. }) => {
+                self.range_into(object, index, dest, ty);
                 true
             }
             ExprKind::Call { callee, args, .. } => {
@@ -2018,6 +2116,8 @@ impl<'p> Lowerer<'p> {
                 | ArrFind
                 | ArrFindIndex
                 | ArrSlice
+                | ArrStep
+                | ArrToReversed
                 | ArrConcat
                 | MapKeys
                 | MapValues
@@ -2574,7 +2674,8 @@ impl<'p> Lowerer<'p> {
             }
             ExcelErrorToNull => call("RAS_ErrorToNull", self.operands(&[&args[0]])),
             ArrMap | ArrFilter | ArrForEach | ArrReduce | ArrSome | ArrEvery | ArrFind
-            | ArrFindIndex | ArrSlice | ArrConcat | MapKeys | MapValues | CollToArray => {
+            | ArrFindIndex | ArrSlice | ArrStep | ArrToReversed | ArrConcat | MapKeys
+            | MapValues | CollToArray => {
                 unreachable!()
             }
         };
@@ -2585,6 +2686,11 @@ impl<'p> Lowerer<'p> {
             None
         }
     }
+}
+
+/// `^n` as an index (spec §4.5).
+fn has_from_end(index: &Expr) -> bool {
+    matches!(index.kind, ExprKind::FromEnd(_))
 }
 
 /// VBA field name of a tuple element (`t[1]` → `item1`).

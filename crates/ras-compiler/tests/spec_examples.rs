@@ -376,6 +376,51 @@ function demo(arr: double[]): double[] {
 }
 
 #[test]
+fn spec_4_5_ranges_and_from_end() {
+    let src = "function report(xs: int[], s: string) {\n    const last = xs[^1];\n    const body = xs[1..^1];\n    for (const i of 0..body.length) {\n        console.log(i, body[i]);\n    }\n    console.log(last, s[..^1]);\n}\n";
+    let (_, out) = compile(&[("report", src)]);
+    let doc = include_str!("../../../docs/RAS_Language_Specification.md");
+    let start = doc.find("Private Sub report(").expect("§4.5 example");
+    let end = start + doc[start..].find("End Sub\n").unwrap() + "End Sub\n".len();
+    assert_contains(&code(&out, "Report"), &doc[start..end]);
+    // `step` / `toReversed` / ranges copy; a variable that is also the source goes through a temporary.
+    let src = "function f(xs: string[], m: int[][]): string {\n    let ys = xs;\n    ys = ys[1..];\n    m[^1][^2] = 1;\n    for (let i of 2..5) { i = i * 2; }\n    return xs.toReversed().step(2).join() + ys[^1];\n}\n";
+    let (_, out) = compile(&[("f", src)]);
+    let c = code(&out, "F");
+    assert_contains(&c, "    m(RAS_Len(m) - 1&, RAS_Len2(m) - 2&) = 1&\n");
+    assert_contains(&c, "    ys = ras_t4\n");
+    assert_contains(&c, "    For ras_i_2 = 2 To 4\n        i = ras_i_2\n");
+    assert_contains(&c, "RAS_StepCount(");
+    assert_contains(&c, "ras_t6(ras_i_3) = xs(ras_t7 - 1& - ras_i_3)\n");
+    let rt = code(&out, "RAS_Runtime");
+    assert!(
+        rt.contains("Public Function RAS_ClampRange(")
+            && rt.contains("Public Function RAS_StepCount(")
+    );
+    for (body, codes) in [
+        (
+            "const m = new Map<string, int>(); return m[\"a\"..\"b\"];",
+            vec!["E0386"],
+        ),
+        ("const t: [int, int] = [1, 2]; return t[^1];", vec!["E0386"]),
+        (
+            "const g = new Array<int>(2, 2); return g[0..1][0][0];",
+            vec!["E0386"],
+        ),
+        ("const a = [1]; a[0..1] = [2]; return 0;", vec!["E0386"]),
+        ("for (const i of 0..) {} return 0;", vec!["E0386"]),
+        ("for (const i of ^1..3) {} return 0;", vec!["E0386"]),
+        ("const r = 0..3; return 0;", vec!["E0386"]),
+        ("const a = [1]; return a[^1 - 1];", vec!["E0386"]),
+        ("const a = [1]; return a.step(0)[0];", vec!["E0386"]),
+        ("const a = [1]; return a[1.5..][0];", vec!["E0389"]),
+    ] {
+        let src = format!("function f(): int {{ {body} }}\n");
+        assert_eq!(error_codes(&[("f", &src)]), codes, "{body}");
+    }
+}
+
+#[test]
 fn spec_5_2_resume_block() {
     let src = "function ignore() {\n    try {\n        let ws = worksheets(\"NonExistent\");\n        ws.activate();\n    } catch {\n        resume;\n    }\n}\n";
     let (_, out) = compile(&[("m", src)]);

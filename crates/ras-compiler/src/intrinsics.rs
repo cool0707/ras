@@ -13,7 +13,7 @@ macro_rules! intrinsics {
 intrinsics! {
     // arrays
     ArrLength, ArrRows, ArrCols, ArrPush, ArrPop, ArrMap, ArrFilter, ArrForEach, ArrReduce, ArrSome, ArrEvery,
-    ArrFind, ArrFindIndex, ArrIndexOf, ArrIncludes, ArrJoin, ArrSlice, ArrSort, ArrReverse, ArrConcat, ArrClear,
+    ArrFind, ArrFindIndex, ArrIndexOf, ArrIncludes, ArrJoin, ArrSlice, ArrStep, ArrToReversed, ArrSort, ArrReverse, ArrConcat, ArrClear,
     // host collections (spec §4.4)
     CollToArray,
     // strings
@@ -70,6 +70,8 @@ pub fn array_member(name: &str, dims: usize) -> Option<Intr> {
         "includes" => ArrIncludes,
         "join" => ArrJoin,
         "slice" => ArrSlice,
+        "step" => ArrStep,
+        "toReversed" => ArrToReversed,
         "sort" => ArrSort,
         "reverse" => ArrReverse,
         "concat" => ArrConcat,
@@ -94,6 +96,8 @@ pub const ARRAY_MEMBERS: &[&str] = &[
     "includes",
     "join",
     "slice",
+    "step",
+    "toReversed",
     "sort",
     "reverse",
     "concat",

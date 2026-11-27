@@ -1406,6 +1406,31 @@ impl Lower {
                     index: self.boxed(&subs, 1, span),
                 }
             }
+            FROM_END_EXPR => {
+                let subs = self.sub_exprs(n);
+                ExprKind::FromEnd(self.boxed(&subs, 0, span))
+            }
+            RANGE_EXPR => {
+                // The ends are the expressions before and after the `..` token.
+                let mut start = None;
+                let mut end = None;
+                let mut seen_dots = false;
+                for c in n.children_with_tokens() {
+                    match c {
+                        rowan::NodeOrToken::Token(t) if t.kind() == DOT2 => seen_dots = true,
+                        rowan::NodeOrToken::Node(c) if c.kind().is_expr() => {
+                            let e = Box::new(self.expr(&c));
+                            if seen_dots {
+                                end = Some(e);
+                            } else {
+                                start = Some(e);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                ExprKind::Range { start, end }
+            }
             AS_EXPR => {
                 let subs = self.sub_exprs(n);
                 ExprKind::As {

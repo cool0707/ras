@@ -583,6 +583,35 @@ function ix(a, i) {
     if (a == null || !(i >= 0 && i < a.length)) raise(9, `${i}`);
     return i;
 }
+/** `a[^k]`: the k-th element from the end; outside the array is error 9 (spec §4.5). */
+function ixEnd(a, k) {
+    return ix(a, a == null ? -1 : a.length - k);
+}
+/** `s[^k]`: VBA's `Mid$(s, Len(s) - k + 1, 1)`, error 5 before the first character. */
+function charEnd(s, k) {
+    const i = s.length - k;
+    if (i < 0) raise(5);
+    return s.charAt(i);
+}
+/**
+ * `xs[a..b]` / `s[a..b]` (spec §4.5): an end left out is the start / the length, an end marked
+ * `fromEnd` counts from the end, and both are kept within 0..length.
+ */
+function range(a, s, sFromEnd, e, eFromEnd) {
+    const n = a == null ? 0 : a.length;
+    const at = (i, fromEnd) => Math.min(Math.max(fromEnd ? n - i : i, 0), n);
+    const lo = s === undefined ? 0 : at(s, sFromEnd);
+    const hi = e === undefined ? n : at(e, eFromEnd);
+    if (typeof a === "string") return hi > lo ? a.slice(lo, hi) : "";
+    return hi > lo ? a.slice(lo, hi) : [];
+}
+/** `xs.step(k)`: every k-th element from the first; `k < 1` is error 5 (spec §4.5). */
+function step(a, k) {
+    if (!(k >= 1)) raise(5);
+    const out = [];
+    for (let i = 0; i < a.length; i += k) out.push(a[i]);
+    return out;
+}
 function cols(a) {
     return a.length ? a[0].length : 0;
 }
@@ -2085,7 +2114,7 @@ module.exports = {
     raise, makeError, unsupported, caught,
     date, clone, i32, i64, idiv, imod, div, fmod, pow, sqrt, log, post, round, bankersRound, numStr, toFixed, val,
     cnum, cint, clng, toInt, toLong, cbool, cdate, cstr, str, dyn, cmp, eq, unionEq, errorToNull,
-    trim, repeat, replace, split, charCode, ix, cols, pop, find, join, sort, newArray, mapGet, mapSet,
+    trim, repeat, replace, split, charCode, ix, ixEnd, charEnd, range, step, cols, pop, find, join, sort, newArray, mapGet, mapSet,
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, pause, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
     fileOpen, fileClose, fileReset, filePrint, fileWrite, fileInput, fileLineInput, fileInputString, fileGet, filePut, fileSeek, fileLock, fileUnlock, fileWidth, fileRename,

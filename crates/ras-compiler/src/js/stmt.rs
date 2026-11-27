@@ -287,6 +287,26 @@ impl<'p> Gen<'p> {
         } else {
             "const"
         };
+        // `for (const i of a..b)` (spec §4.5): the end is evaluated once.
+        if let ExprKind::Range { start, end } = &iter.kind {
+            let a = match start.as_deref() {
+                Some(x) => self.expr(x),
+                None => "0".into(),
+            };
+            let b = match end.as_deref() {
+                Some(x) => self.expr(x),
+                None => "0".into(),
+            };
+            let converted = self.coerce("$i".into(), &iter_ty, &var_ty);
+            self.wm(
+                s.span,
+                format!("{label}for (let $i = {a}, $n = {b}; $i < $n; $i++) {{"),
+            );
+            self.w(format!("    {kw} {var} = {converted};"));
+            self.body(body);
+            self.w("}");
+            return;
+        }
         let is_map_iter = matches!(
             info.calls.get(&iter.peel().id).map(|c| &c.target),
             Some(CallTarget::Intrinsic(Intr::MapKeys | Intr::MapValues))
