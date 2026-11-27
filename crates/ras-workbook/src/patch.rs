@@ -1579,8 +1579,8 @@ fn hex_color(v: &Json, key: &str) -> Result<String> {
 /// `barOnly` / `solid` / `barBorder` / `direction` / `negativeFill` / `negativeFillSame` /
 /// `negativeBorder` / `negativeBorderSame` / `axis` / `axisColor`, `icons` / `reverse` /
 /// `iconOnly`, `thresholds`), the
-/// `format` it gives (`color`, `fill`, `bold`,
-/// `italic`, `underline`, `strike`, `border`) and `stop`.
+/// `format` it gives (`numberFormat`, `color`, `bold`, `italic`, `underline`, `strike`, `fill`,
+/// `pattern`, `patternColor`, `border`, `borders`) and `stop`.
 fn cond_rule_of(o: &Json) -> Result<CondRule> {
     let text = |key: &str| o.get(key).and_then(Json::as_str).map(str::to_string);
     let flag = |key: &str| o.get(key).and_then(Json::as_bool).unwrap_or(false);
@@ -1609,20 +1609,97 @@ fn cond_rule_of(o: &Json) -> Result<CondRule> {
                     Some(v) => hex_color(v, key).map(Some),
                 }
             };
-            let on = |key: &str| f.get(key).and_then(Json::as_bool).unwrap_or(false);
+            // (Not given, null: the cell's own; `false`: taken off it.)
+            let tri = |key: &str| -> Result<Option<bool>> {
+                match f.get(key) {
+                    None | Some(Json::Null) => Ok(None),
+                    Some(Json::Bool(b)) => Ok(Some(*b)),
+                    Some(_) => Err(format!(
+                        "`format` の `{key}` は true か false で指定してください"
+                    )),
+                }
+            };
+            let one_of = |key: &str, list: &[&str]| -> Result<Option<String>> {
+                match f.get(key) {
+                    None | Some(Json::Null) => Ok(None),
+                    Some(Json::String(v)) if list.contains(&v.as_str()) => Ok(Some(v.clone())),
+                    Some(_) => Err(format!(
+                        "`format` の `{key}` は {} のどれかで指定してください",
+                        list.join("・")
+                    )),
+                }
+            };
+            let underline = match f.get("underline") {
+                Some(Json::Bool(true)) => Some("single".to_string()),
+                Some(Json::Bool(false)) => Some("none".to_string()),
+                _ => one_of("underline", conditional::COND_UNDERLINES)?,
+            };
+            let pattern = match f.get("pattern").and_then(Json::as_str) {
+                Some("solid" | "none") => None,
+                _ => one_of("pattern", conditional::COND_PATTERNS)?,
+            };
+            let number_format = match f.get("numberFormat") {
+                None | Some(Json::Null) => None,
+                Some(Json::String(c)) if !c.trim().is_empty() => Some(c.clone()),
+                Some(_) => {
+                    return Err(
+                        "`format` の `numberFormat` は表示形式のコードで指定してください".into(),
+                    );
+                }
+            };
+            // `border`: a thin line of a color around the cells; `borders`: each side's.
+            let mut sides: [Option<(String, Option<String>)>; 4] = Default::default();
+            if let Some(c) = color("border")? {
+                sides = std::array::from_fn(|_| Some(("thin".to_string(), Some(c.clone()))));
+            }
+            match f.get("borders") {
+                None | Some(Json::Null) => {}
+                Some(Json::Object(by)) => {
+                    for (key, line) in by {
+                        let i = conditional::COND_SIDES
+                            .iter()
+                            .position(|s| s == key)
+                            .ok_or_else(|| format!("`borders` の `{key}` は left・right・top・bottom のどれかにしてください"))?;
+                        sides[i] = match line {
+                            Json::Null | Json::Bool(false) => None,
+                            Json::String(style) => Some((style.clone(), None)),
+                            Json::Object(o) => Some((
+                                o.get("style").and_then(Json::as_str).unwrap_or("thin").to_string(),
+                                match o.get("color") {
+                                    None | Some(Json::Null) => None,
+                                    Some(c) => Some(hex_color(c, "borders")?),
+                                },
+                            )),
+                            _ => return Err("`borders` の各辺は { \"style\": \"thin\", \"color\": \"#RRGGBB\" } で指定してください".into()),
+                        };
+                        if let Some((style, _)) = &sides[i]
+                            && !conditional::COND_LINES.contains(&style.as_str())
+                        {
+                            return Err(format!(
+                                "`borders` の線のスタイルは {} のどれかで指定してください",
+                                conditional::COND_LINES.join("・")
+                            ));
+                        }
+                    }
+                }
+                Some(_) => return Err("`borders` は { \"left\": { \"style\": \"thin\", \"color\": \"#RRGGBB\" }, ... } で指定してください".into()),
+            }
             let format = CondFormat {
+                number_format,
                 color: color("color")?,
+                bold: tri("bold")?,
+                italic: tri("italic")?,
+                underline,
+                strike: tri("strike")?,
                 fill: color("fill")?,
-                bold: on("bold"),
-                italic: on("italic"),
-                underline: on("underline"),
-                strike: on("strike"),
-                border: color("border")?,
+                pattern,
+                pattern_color: color("patternColor")?,
+                sides,
             };
             if format == CondFormat::default() {
-                return Err("`format` に書式（color・fill・bold・italic・underline・strike・border）を指定してください".into());
+                return Err("`format` に書式（numberFormat・color・bold・italic・underline・strike・fill・pattern・patternColor・border・borders）を指定してください".into());
             }
-            Some(format)
+            Some(Box::new(format))
         }
     };
     let colors = match o.get("colors") {

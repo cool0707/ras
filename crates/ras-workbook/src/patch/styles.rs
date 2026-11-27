@@ -37,6 +37,11 @@ const BUILT_IN: &[(u32, &str)] = &[
     (49, "@"),
 ];
 
+/// The id of a built-in number format of the code `code`.
+pub(super) fn built_in_id(code: &str) -> Option<u32> {
+    BUILT_IN.iter().find(|(_, c)| *c == code).map(|(id, _)| *id)
+}
+
 /// The styles with the cell style ハイパーリンク (built-in 8) Excel gives the cells of a new
 /// link, added as Excel adds it where they have none (the standard font underlined, in the
 /// theme's colour of links), and the number of its format among the styles' (`xfId`).
