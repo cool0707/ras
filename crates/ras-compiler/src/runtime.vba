@@ -863,6 +863,12 @@ Public Function RAS_ToRow(ByVal rng As Object) As Variant
     Next i
     RAS_ToRow = out
 End Function
+'@@ proc RAS_RangeExtend
+' The Range with up/down rows and left/right columns added on each side (spec 9.4).
+' Negative counts shrink it. Past the edge of the sheet or down to no cells: error 1004.
+Public Function RAS_RangeExtend(ByVal rng As Object, ByVal up As Long, ByVal down As Long, ByVal toLeft As Long, ByVal toRight As Long) As Object
+    Set RAS_RangeExtend = rng.Offset(-up, -toLeft).Resize(rng.Rows.Count + up + down, rng.Columns.Count + toLeft + toRight)
+End Function
 '@@ proc RAS_FromArray
 ' Writes an array to a Range in one transfer, resizing the Range to the array (spec 9.4).
 ' A 1-D array is written as one column.

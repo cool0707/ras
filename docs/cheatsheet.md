@@ -184,6 +184,8 @@ export function fill() {
     ws.range("C1").value = "2 倍";
     ws.range("C1").font.bold = true;
     ws.range("C2:C" + last).numberFormat = "#,##0";
+    // 上・下・左・右に行・列を足した範囲（extend(up, down, left, right)。名前付きでも、負の数で縮める）
+    ws.range("A2:C2").extend(up: 1, down: last - 2).borders.lineStyle = xlContinuous;
 }
 
 export function readAll(): double {

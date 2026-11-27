@@ -35,7 +35,7 @@ intrinsics! {
     // platform
     PlatformIs64, PlatformIsVba7,
     // Range helpers (spec §9.4)
-    FormShowModal, FormClose, RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, SheetUsedTable, ExcelMatch,
+    FormShowModal, FormClose, RangeToArray, RangeFromArray, RangeToColumn, RangeToRow, RangeExtend, SheetUsedTable, ExcelMatch,
     ExcelErrorToNull,
     // event handlers attached at run time (spec §12.2.3)
     EventOn,
@@ -360,6 +360,9 @@ pub fn builtin_ns_member(ns: &str, name: &str) -> Option<Intr> {
 /// `on` and its DOM spelling: they attach an event handler at run time (spec §12.2.3).
 pub const EVENT_MEMBERS: &[&str] = &["on", "addEventListener"];
 
+/// The parameters of `Excel.Range.extend(up, down, left, right)` (spec §9.4): all optional.
+pub const RANGE_EXTEND_PARAMS: &[&str] = &["up", "down", "left", "right"];
+
 /// Members the compiler adds to host types (`Excel.Range.toArray()` …).
 pub fn host_member(prog: &Program, recv: &Type, name: &str) -> Option<Intr> {
     let Type::Class(id, _) = recv else {
@@ -390,6 +393,7 @@ pub fn host_member(prog: &Program, recv: &Type, name: &str) -> Option<Intr> {
         ("Range", "fromArray") => Some(Intr::RangeFromArray),
         ("Range", "toColumn") => Some(Intr::RangeToColumn),
         ("Range", "toRow") => Some(Intr::RangeToRow),
+        ("Range", "extend") => Some(Intr::RangeExtend),
         ("Worksheet", "usedTable") => Some(Intr::SheetUsedTable),
         _ => None,
     }

@@ -665,6 +665,44 @@ export function conditional(last: int) {
 }
 
 #[test]
+fn spec_9_4_range_extend() {
+    let src = r#"
+export function f(r: Excel.Range, n: int): Excel.Range {
+    const all = r.extend(1, 2, 3, 4);
+    const below = r.extend(down: n);
+    const h = Sheet1.range("A2:C9").extend(up: 1, right: -1);
+    return r.extend(undefined, 1).extend();
+}
+"#;
+    let (_, out) = compile(&[("m", src)]);
+    let m = code(&out, "M");
+    assert_contains(&m, "Set all = RAS_RangeExtend(r, 1&, 2&, 3&, 4&)\n");
+    assert_contains(&m, "Set below = RAS_RangeExtend(r, 0, n, 0, 0)\n");
+    assert_contains(
+        &m,
+        "Set h = RAS_RangeExtend(Sheet1.Range(\"A2:C9\"), 1&, 0, 0, -1&)\n",
+    );
+    assert_contains(
+        &m,
+        "RAS_RangeExtend(RAS_RangeExtend(r, 0, 1&, 0, 0), 0, 0, 0, 0)",
+    );
+    assert_contains(
+        &code(&out, "RAS_Runtime"),
+        "    Set RAS_RangeExtend = rng.Offset(-up, -toLeft).Resize(rng.Rows.Count + up + down, rng.Columns.Count + toLeft + toRight)\n",
+    );
+    let bad = |body: &str| {
+        error_codes(&[(
+            "m",
+            &format!("function g(r: Excel.Range) {{ const x = {body}; }}\n"),
+        )])
+    };
+    assert_eq!(bad("r.extend(top: 1)"), vec!["E0412"]);
+    assert_eq!(bad("r.extend(1, up: 2)"), vec!["E0413"]);
+    assert_eq!(bad("r.extend(1, 2, 3, 4, 5)"), vec!["E0402"]);
+    assert_eq!(bad("r.extend(\"1\")"), vec!["E0301"]);
+}
+
+#[test]
 fn spec_10_3_fast_macro_entry() {
     let (_, out) = compile(&[(
         "report",

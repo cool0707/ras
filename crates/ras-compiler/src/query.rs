@@ -599,7 +599,10 @@ fn members_of(prog: &Program, m: ModuleId, ty: &Type) -> Vec<Completion> {
             let d = &prog.classes[*c];
             if d.kind == ClassKind::Host && d.namespace.as_deref() == Some("Excel") {
                 match d.name.as_str() {
-                    "Range" => builtin(&["toArray", "fromArray", "toColumn", "toRow"], &mut out),
+                    "Range" => builtin(
+                        &["toArray", "fromArray", "toColumn", "toRow", "extend"],
+                        &mut out,
+                    ),
                     "Worksheet" => builtin(&["usedTable"], &mut out),
                     _ => {}
                 }

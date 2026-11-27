@@ -1101,3 +1101,37 @@ fn hyperlinks_are_followed_with_their_event() {
         ("A2".to_string(), "https://example.com/b", "ヒント")
     );
 }
+
+const EXTEND: &str = r#"
+export function extend() {
+    const ws = Sheet1;
+    const r = ws.range("B3:C3");
+    console.log(`${r.extend(1, 1, 1, 1).address(false, false)} ${r.extend(down: 2).address(false, false)} ${r.extend(1).address(false, false)} ${r.extend(left: 1, right: 2).address(false, false)}`);
+    // Negative counts shrink it; `undefined` skips a side.
+    console.log(`${ws.range("A1:D4").extend(-1, -1, -1, -1).address(false, false)} ${r.extend(undefined, 1).address(false, false)} ${r.extend().address(false, false)}`);
+    // The headings above the data, with the cells read back.
+    console.log(`${dump(ws.range("A2:B2").extend(up: 1))}`);
+    try {
+        console.log(ws.range("A1").extend(1).address(false, false));
+    } catch (e) {
+        console.log(`error ${e.code}`);
+    }
+}
+"#;
+
+#[test]
+fn ranges_are_extended_on_each_side() {
+    if !has_node() {
+        return;
+    }
+    let (_p, out) = run_with("extend", EXTEND, "Main.extend");
+    assert_eq!(
+        out,
+        vec![
+            "A2:D4 B3:C5 B2:C3 A3:E3",
+            "B2:C3 B3:C4 B3:C3",
+            "顧客|担当 / A社|佐藤",
+            "error 1004",
+        ]
+    );
+}

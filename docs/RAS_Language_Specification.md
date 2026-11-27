@@ -7,6 +7,7 @@
 > * C# と同じ範囲 `xs[1..^1]`・末尾からの位置 `xs[^1]` と、`for (const i of 0..n)` を追加。配列のメソッドに `step(n)`・`toReversed()` を追加（§4.5）
 > * `ras check --fix` とエディタのクイックフィックスで、VBA の綴りで書かれた名前を書き換える（§7.3、§16.2）
 > * 名前付き引数 `f(a: 123, c: "あいう")` を追加（§3.3）。エディタで引数名を補完する（§16.2.1）
+> * 上下左右に行・列を足した範囲を返す `range.extend(up, down, left, right)` を追加（§9.4.1）
 > * VBA の `[A1]`・`[SUM(A1:A10)]`（`Evaluate` の省略形）に当たる `` fx`SUM(A1:A10)` `` を追加（§2.7）。数式の中は Excel の数式として色分けし、ワークシート関数を補完する
 > * ユーザーフォームのデバッグ実行（§14.10.7）と Excel での実行（§14.11.8）を追加
 > * 参照の検索・名前の変更の対象と拒否する名前、セマンティックトークンの種類、未インポートの候補の挿入位置を規定（§16.2.5〜§16.2.7）
@@ -1114,6 +1115,24 @@ for (let r = 2; r <= last; r++) {
   * `range.toArray(): any[][]` — 常に 0 始まりの2次元配列（§9.2.1）
   * `range.fromArray(arr)` — 配列サイズに合わせて Range をリサイズして一括代入（配列の下限は問わない）
   * `sheet.usedTable(): any[][]` — 使用範囲を一括取得
+
+#### 9.4.1 上下左右に広げた範囲（`extend`）
+
+`range.extend(up?: int, down?: int, left?: int, right?: int): Excel.Range` は、範囲の上に `up` 行・下に `down` 行・左に `left` 列・右に `right` 列を足した範囲を返す（`Offset` と `Resize` を組み合わせる手間を省く）。
+
+```typescript
+const r = Sheet1.range("B3:C3");
+r.extend(1, 1, 1, 1);          // A2:D4
+r.extend(down: 2);             // B3:C5（名前付き引数。§3.3）
+r.extend(left: 1, right: 2);   // A3:E3
+r.extend(undefined, 1);        // B3:C4（undefined はその辺を指定しない）
+Sheet1.range("A1:D4").extend(-1, -1, -1, -1);   // B2:C3（負の数で縮める）
+```
+
+* **引数:** すべて省略でき、省略した辺は 0（広げない）。`int` を受け取り、名前付き引数（`up` / `down` / `left` / `right`）でも位置でも渡せる。存在しない引数名は `E0412`、5 個以上の引数は `E0402`。
+* **元の範囲:** 変えない（新しい `Range` を返す）。行数・列数は 1 つ目の領域で数える（`Resize` と同じ）。
+* **範囲外:** シートの端を越える・行数か列数が 0 以下になる場合は、実行時エラー 1004（Excel の `Offset` / `Resize` と同じ）。端で止める（切り詰める）ことはしない。
+* **トランスパイル仕様:** ランタイムの `RAS_RangeExtend(rng, up, down, left, right)`（`rng.Offset(-up, -left).Resize(rng.Rows.Count + up + down, rng.Columns.Count + left + right)`）を呼ぶ。範囲の式は 1 回だけ評価する。
 
 ---
 
