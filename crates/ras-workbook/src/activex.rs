@@ -209,13 +209,14 @@ const FRESH_FONT: (&str, i64, i64, i64) = ("MS UI Gothic", 180, 128, 2);
 /// The data (a `.bin` part: the CLSID and the stream) of a new control of a Microsoft Forms
 /// type (`CommandButton`, `TextBox`, ...), as a control just put on a sheet: the
 /// `VariousPropertyBits`, colors and list settings of a new control of its kind, its caption
-/// and value, its size (HIMETRIC), and the font of the classes that have one. None for a type
-/// that is not one of these.
+/// and value, its size (HIMETRIC), and the font of the classes that have one (`font`, else
+/// MS UI Gothic 9pt). None for a type that is not one of these.
 pub(crate) fn fresh(
     forms: &str,
     caption: Option<&str>,
     value: Option<&str>,
     size: (i32, i32),
+    font: Option<&crate::patch::NewFont>,
 ) -> Option<Vec<u8>> {
     let clsid = clsid_of(forms)?;
     let (class, display) = class_of(clsid);
@@ -270,8 +271,18 @@ pub(crate) fn fresh(
     s.set_size(size.0, size.1);
     // The font (TextProps), right after the record (there are no pictures).
     if matches!(class, "CommandButton" | "Label" | "MorphData") {
+        let given = font;
         let mut font = empty("TextProps", Vec::new());
-        let (name, height, charset, pitch) = FRESH_FONT;
+        let (name, height, charset, pitch) = match given {
+            // (Its size in twips; its character set as given, else Shift_JIS as the editor's.)
+            Some(f) => (
+                f.name.as_str(),
+                (f.size * 20.0).round() as i64,
+                f.charset.map_or(FRESH_FONT.2, i64::from),
+                FRESH_FONT.3,
+            ),
+            None => FRESH_FONT,
+        };
         font.set_string("FontName", name);
         font.set_number("FontHeight", height);
         font.set_number("FontCharSet", charset);
@@ -667,7 +678,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_data_of_a_new_control_is_read_back() {
-        let data = fresh("CommandButton", Some("実行"), None, (2540, 847)).unwrap();
+        let data = fresh("CommandButton", Some("実行"), None, (2540, 847), None).unwrap();
         // The CLSID as it is stored.
         assert_eq!(
             data[..16],
@@ -691,7 +702,7 @@ pub(crate) mod tests {
         // A combo box: its display style and settings; a scroll bar: no font.
         let s = Stream::read(
             "MorphData",
-            &fresh("ComboBox", None, Some("A"), (1, 1)).unwrap(),
+            &fresh("ComboBox", None, Some("A"), (1, 1), None).unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -701,11 +712,11 @@ pub(crate) mod tests {
         assert_eq!(s.string("Value").as_deref(), Some("A"));
         let s = Stream::read(
             "ScrollBar",
-            &fresh("ScrollBar", None, None, (1, 1)).unwrap(),
+            &fresh("ScrollBar", None, None, (1, 1), None).unwrap(),
         )
         .unwrap();
         assert!(s.rest.is_empty());
-        assert!(fresh("Image", None, None, (1, 1)).is_none());
+        assert!(fresh("Image", None, None, (1, 1), None).is_none());
     }
 
     #[test]

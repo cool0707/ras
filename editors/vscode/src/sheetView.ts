@@ -38,6 +38,7 @@ import { sheetOfRasFile } from "./sheetFile";
 import { findServerExecutable } from "./serverPath";
 import { isShapeMacro, macrosOf, moduleName, newMacroName, shapeHandlerText, shapeMacro, sheetControlEvents } from "./sheetEvents";
 import { bodyIndent, findHandler, handlerText, rasParams } from "./userForm/events";
+import { systemUiFont } from "./userForm/systemFont";
 import type { EventDescriptor } from "./userForm/events";
 
 let panel: vscode.WebviewPanel | undefined;
@@ -142,6 +143,10 @@ function show(html: string, title: string, reveal: boolean, what?: Shown): void 
 			shown = undefined;
 		});
 		panel.webview.onDidReceiveMessage((message: unknown) => receive(message));
+		// (The font of the controls put on the sheet, looked up before one is.)
+		if (what?.editable === true) {
+			void systemUiFont();
+		}
 	} else if (reveal) {
 		panel.reveal(undefined, true);
 	}
@@ -224,7 +229,28 @@ function executable(what: Shown): string {
 }
 
 /** Applies what the page posted to the workbook file and gives the page made from it. */
+/**
+ * The edits with the font of the controls they put on the sheet: the system UI font at 10pt, as
+ * the form designer makes forms and controls (not ＭＳ Ｐゴシック 11pt or MS UI Gothic 9pt).
+ */
+async function withControlFont(ops: unknown): Promise<unknown> {
+	const list = Array.isArray(ops) ? ops : [ops];
+	const puts = (o: unknown): o is Record<string, unknown> =>
+		typeof o === "object" && o !== null && ((o as { op?: unknown }).op === "control" || (o as { op?: unknown }).op === "activeX") && (o as { font?: unknown }).font === undefined;
+	if (!list.some(puts)) {
+		return ops;
+	}
+	const ui = await systemUiFont();
+	const font: Record<string, unknown> = { name: ui.name, size: ui.size };
+	if (typeof ui.charset === "number") {
+		font.charset = ui.charset;
+	}
+	const out = list.map((o) => (puts(o) ? { ...o, font } : o));
+	return Array.isArray(ops) ? out : out[0];
+}
+
 async function edit(what: Shown, ops: unknown): Promise<string> {
+	ops = await withControlFont(ops);
 	const history = historyOf(what.file);
 	const before = fs.readFileSync(what.file);
 	const args = ["book", "edit", what.file, "--ops-file", "-", "--view", "--editable"];
