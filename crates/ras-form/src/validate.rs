@@ -1,4 +1,4 @@
-//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV026`).
+//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV027`).
 //!
 //! Port of the validation in xlflow's `internal/vba/userforms/spec`
 //! (`spec.go`, `appearance.go`; Copyright (c) 2026 harumiWeb, MIT License;
@@ -247,7 +247,14 @@ pub(crate) fn validate_raw(root: &Value) -> Vec<Issue> {
                 "form.observed",
             ));
         }
-        for key in ["width", "height"] {
+        for key in [
+            "width",
+            "height",
+            "minimumWidth",
+            "minimumHeight",
+            "maximumWidth",
+            "maximumHeight",
+        ] {
             if let Some(n) = lookup_raw(form, key).and_then(Value::as_f64) {
                 if !valid_dimension(n) {
                     issues.push(dimension_issue(&format!("form.{key}")));
@@ -933,6 +940,42 @@ fn validate_font(font: Option<&FormSpecFont>, path: &str) -> Vec<Issue> {
     issues
 }
 
+/// `UFV027`: the least size of the form is above the greatest, or the form's size is outside
+/// them (spec §14.11.17).
+fn size_limit_issues(form: &FormSpecForm) -> Vec<Issue> {
+    let limits = crate::sizing::limits(form);
+    let mut issues = Vec::new();
+    for (axis, size, min, max) in [
+        ("Width", form.width, limits.min_width, limits.max_width),
+        ("Height", form.height, limits.min_height, limits.max_height),
+    ] {
+        if min > 0.0 && max > 0.0 && min > max {
+            issues.push(error(
+                "UFV027",
+                format!("form.minimum{axis} は form.maximum{axis} 以下にしてください。"),
+                &format!("form.minimum{axis}"),
+            ));
+            continue;
+        }
+        let field = axis.to_lowercase();
+        let size = size.unwrap_or(if axis == "Width" { 240.0 } else { 180.0 });
+        if min > 0.0 && size < min {
+            issues.push(error(
+                "UFV027",
+                format!("form.{field} {size} が form.minimum{axis} {min} より小さくなっています。"),
+                &format!("form.{field}"),
+            ));
+        } else if max > 0.0 && size > max {
+            issues.push(error(
+                "UFV027",
+                format!("form.{field} {size} が form.maximum{axis} {max} より大きくなっています。"),
+                &format!("form.{field}"),
+            ));
+        }
+    }
+    issues
+}
+
 fn validate_typed_form(form: &FormSpecForm) -> Vec<Issue> {
     let mut issues = validate_font(form.font.as_ref(), "form.font");
     for (name, color) in [
@@ -1439,6 +1482,7 @@ pub(crate) fn validate_strict(spec: &FormSpec) -> Vec<Issue> {
         }
     }
     issues.extend(validate_typed_form(&spec.form));
+    issues.extend(size_limit_issues(&spec.form));
     issues.extend(edge_issue(
         spec.form.border_style,
         spec.form.scalar("specialEffect"),

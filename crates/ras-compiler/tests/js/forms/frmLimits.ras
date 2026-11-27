@@ -1,0 +1,16 @@
+function show(label: string) {
+    console.log(`${label}: ${this.insideWidth}x${this.insideHeight} ok=${this.btnOK.left},${this.btnOK.top}`);
+}
+@on("UserForm.Resize")
+function resized() {
+    console.log(`resize ${this.insideWidth}x${this.insideHeight}`);
+}
+function constructor() {
+    show("start");
+    this.width = 100;
+    show("narrow");
+    this.width = 500;
+    this.height = 100;
+    show("wide");
+    this.width = 400;
+}

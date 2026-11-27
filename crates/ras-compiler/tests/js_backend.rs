@@ -1293,6 +1293,71 @@ back: ok=150,140 fra=200x100 in=100 fix=8 mid=80,116 fp=96/104
     );
 }
 
+/// The least and greatest size of a form (spec §14.11.17) hold in the debug run: a size outside
+/// them is put back before the anchored controls move.
+#[test]
+fn form_sizes_keep_within_their_limits() {
+    let spec = include_str!("js/forms/frmLimits.form.json");
+    let code = include_str!("js/forms/frmLimits.ras");
+    let main = "export function main() {\n    new frmLimits();\n}\n";
+    let mut cfg = Config::default();
+    cfg.forms = vec![FormDecl::from_form_json(spec).unwrap()];
+    let sources = vec![
+        SourceInput {
+            path: PathBuf::from("src/main.ras"),
+            rel_path: "src/main.ras".into(),
+            key: "main".into(),
+            kind: ModuleKind::User,
+            text: main.into(),
+        },
+        form_source(
+            PathBuf::from("forms/frmLimits.ras"),
+            "frmLimits",
+            code.to_string(),
+        ),
+    ];
+    let prog = analyze(sources, cfg);
+    let errors: Vec<String> = prog
+        .diagnostics
+        .iter()
+        .filter(|d| d.is_error())
+        .map(|d| format!("{}: {}", d.code, d.message))
+        .collect();
+    assert!(errors.is_empty(), "unexpected errors: {errors:#?}");
+    let out = build_js(&prog, "../../");
+    if !has_node() {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("ras-js-{}-limits", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let write = |rel: &str, text: &str| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write("src/main.ras", main);
+    write("forms/frmLimits.ras", code);
+    write("forms/frmLimits.form.json", spec);
+    for f in &out.files {
+        write(&format!("build/debug/{}", f.rel_path), &f.text);
+    }
+    let p = Project(root);
+    let (stdout, stderr, ok) = p.run("Main.main", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout,
+        "\
+start: 240x180 ok=150,140
+resize 200x180
+narrow: 200x180 ok=110,140
+resize 400x180
+resize 400x150
+wide: 400x150 ok=310,110
+",
+        "{stderr}"
+    );
+}
+
 /// `rule(..., errorLabel: label)` (spec §14.11.12): the error moves to the label passed, the one
 /// shown before is cleared, and calling `rule` again without a label keeps the last one.
 #[test]

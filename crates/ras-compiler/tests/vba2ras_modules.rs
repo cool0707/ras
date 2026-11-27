@@ -18,6 +18,7 @@ fn compile(src: &[(&str, &str)]) -> (Vec<String>, Vec<ras_compiler::OutputFile>)
     config.sheet_controls = vec![ras_compiler::FormDecl {
         name: "Sheet2".into(),
         controls: controls(),
+        resizable: false,
     }];
     let sources: Vec<SourceInput> = src
         .iter()

@@ -292,8 +292,8 @@ fn is_list_control(control_type: &str) -> bool {
 ///
 /// Existing files are only replaced with `force`. What the designer
 /// storage does not hold — the `list` / `selectedIndex` of ComboBox and
-/// ListBox controls, the `anchor` of controls — is kept from an existing
-/// `.form.json`. `codepage` is
+/// ListBox controls, the `anchor` of controls, `resizable` and the size
+/// limits of the form — is kept from an existing `.form.json`. `codepage` is
 /// the code page of the project the form comes from.
 pub fn pull(
     root: &Path,
@@ -371,6 +371,15 @@ pub fn pull_with(
         {
             control.list = old.list.clone();
             control.selected_index = old.selected_index;
+        }
+    }
+
+    // Nor is the size of the form at run time (spec §14.11.17).
+    if let Some(old) = previous.as_ref().map(|p| &p.form) {
+        for field in crate::sizing::FIELDS {
+            if let Some(value) = old.scalar(field) {
+                spec.form.scalars.insert(field.into(), value.clone());
+            }
         }
     }
 
@@ -489,6 +498,7 @@ pub fn pull_with(
                 control_type: c.control_type.trim().to_string(),
             })
             .collect(),
+        resizable: crate::sizing::resizable(&spec.form),
     };
     // A form written from `forms/` was compiled from the `.ras` file: that file is the source
     // of its code, the VBA in the workbook only what it compiled to.

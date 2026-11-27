@@ -154,6 +154,7 @@ export function previewDocument(spec: ParsedSpec): PreviewDocument {
 			pictureAlignment: pick<number>(form.pictureAlignment, num),
 			pictureSizeMode: pick<number>(form.pictureSizeMode, num),
 			pictureTiling: pick<boolean>(form.pictureTiling, (v) => typeof v === "boolean"),
+			sizeLimits: formSizeLimits(form),
 		},
 		controls: spec.records.map(({ control }) => {
 			const copy = { ...control };
@@ -305,6 +306,38 @@ function validateObject(root: JsonObject, properties: Record<string, PropertyCon
 	return issues;
 }
 
+/**
+ * UFV027: the least size of the form is above the greatest, or the form's size is outside them
+ * (crates/ras-form/src/validate.rs, spec §14.11.17).
+ */
+function validateSizeLimits(form: JsonObject): ValidationIssue[] {
+	const issues: ValidationIssue[] = [];
+	const limits = formSizeLimits(form);
+	for (const [axis, size, min, max] of [
+		["Width", form.width, limits.minWidth, limits.maxWidth],
+		["Height", form.height, limits.minHeight, limits.maxHeight],
+	] as const) {
+		if (min > 0 && max > 0 && min > max) {
+			issues.push(issue("UFV027", "error", `form.minimum${axis} は form.maximum${axis} 以下にしてください。`, `form.minimum${axis}`));
+			continue;
+		}
+		const field = axis.toLowerCase();
+		const value = typeof size === "number" ? size : axis === "Width" ? 240 : 180;
+		if (min > 0 && value < min) issues.push(issue("UFV027", "error", `form.${field} ${value} が form.minimum${axis} ${min} より小さくなっています。`, `form.${field}`));
+		else if (max > 0 && value > max) issues.push(issue("UFV027", "error", `form.${field} ${value} が form.maximum${axis} ${max} より大きくなっています。`, `form.${field}`));
+	}
+	return issues;
+}
+
+/** The least and greatest inside size of a form in points (spec §14.11.17); 0 is no limit. */
+export function formSizeLimits(form: Record<string, unknown>): { minWidth: number; minHeight: number; maxWidth: number; maxHeight: number } {
+	const limit = (key: string) => {
+		const [value] = lookupRaw(form as JsonObject, key);
+		return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+	};
+	return { minWidth: limit("minimumWidth"), minHeight: limit("minimumHeight"), maxWidth: limit("maximumWidth"), maxHeight: limit("maximumHeight") };
+}
+
 function validFormDimension(value: number): boolean {
 	return Number.isFinite(value) && value >= 0 && Math.round((value * 2540) / 72) <= 2 ** 31 - 1;
 }
@@ -316,8 +349,7 @@ function validateFormDimensions(form: JsonObject): ValidationIssue[] {
 		if (present && isNumber(value) && !validFormDimension(value as number))
 			issues.push(issue("UFV016", "error", `${path} は 0 以上の有限の値で、HIMETRIC に変換できる範囲でなければなりません。`, path));
 	};
-	check(form, "width", "form.width");
-	check(form, "height", "form.height");
+	for (const key of ["width", "height", "minimumWidth", "minimumHeight", "maximumWidth", "maximumHeight"]) check(form, key, `form.${key}`);
 	const [observed] = lookupRaw(form, "observed");
 	if (isObject(observed))
 		for (const key of ["width", "height", "insideWidth", "insideHeight", "clientWidth", "clientHeight"]) check(observed, key, `form.observed.${key}`);
@@ -802,6 +834,7 @@ export function validateSpec(root: JsonObject): ValidationIssue[] {
 		issues.push(...validateObject(form, formProperties, "form"));
 		if (isObject(form.observed)) issues.push(...validateObject(form.observed, formObservedProperties, "form.observed"));
 		issues.push(...validateFormDimensions(form));
+		issues.push(...validateSizeLimits(form));
 		issues.push(...validateTyped(form, "form", formProperties));
 		issues.push(...edgeIssues(form, "form"));
 		for (const field of ["picture", "mouseIcon"]) {

@@ -91,6 +91,12 @@ export const formProperties: Record<string, PropertyContract> = {
 	foreColor: color,
 	backColor: color,
 	borderStyle,
+	// RAS: the size of the form at run time (crates/ras-form/src/sizing.rs, spec §14.11.17).
+	resizable: p("boolean", false, "supported", "The user can resize the form by its border (omitted: False).", true),
+	minimumWidth: p("number", false, "supported", "Least inside width in points the form can be resized to; 0 for no limit.", true),
+	minimumHeight: p("number", false, "supported", "Least inside height in points the form can be resized to; 0 for no limit.", true),
+	maximumWidth: p("number", false, "supported", "Greatest inside width in points the form can be resized to; 0 for no limit.", true),
+	maximumHeight: p("number", false, "supported", "Greatest inside height in points the form can be resized to; 0 for no limit.", true),
 };
 
 export const formObservedProperties: Record<string, PropertyContract> = Object.fromEntries(

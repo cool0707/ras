@@ -1536,6 +1536,7 @@ mod tests {
                 name: "btnOK".into(),
                 control_type: "CommandButton".into(),
             }],
+            resizable: false,
         });
         let form = "export function entered(): string {\n    return this.btnOK.caption;\n}\n";
         let main = "export function run() {\n    msgBox(frmInput.entered());\n}\n";

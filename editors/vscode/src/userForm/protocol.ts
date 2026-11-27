@@ -167,6 +167,15 @@ export interface FormDimensions extends AppearanceProperties {
   caption?: string | null;
   width?: number | null;
   height?: number | null;
+  /** The least and greatest size of the form in points (spec §14.11.17); 0 is no limit. */
+  sizeLimits?: FormSizeLimits;
+}
+
+export interface FormSizeLimits {
+  minWidth: number;
+  minHeight: number;
+  maxWidth: number;
+  maxHeight: number;
 }
 
 export interface ObservedFormDimensions {
@@ -238,6 +247,7 @@ export interface DesignerDocument extends AppearanceProperties {
   caption: string;
   width: number;
   height: number;
+  sizeLimits?: FormSizeLimits;
   approximate: boolean;
   eventEditable: boolean;
   /** The font of controls made with the Toolbox when the form has none (the system UI font). */

@@ -26,7 +26,7 @@ import type { AnchorItem } from "./anchor";
 import { gridSize } from "./geometry";
 import type { ClipboardSnapshot, DesignerError, SemanticOperation, SpecTab } from "./protocol";
 import type { ControlRecord, JsonObject, ParsedSpec } from "./spec";
-import { errorKeys, flattenControls, isObject, parseSpec, validateSpec } from "./spec";
+import { errorKeys, flattenControls, formSizeLimits, isObject, parseSpec, validateSpec } from "./spec";
 
 export class EditError extends Error {
 	constructor(
@@ -228,6 +228,21 @@ function insideSize(model: Model, id: string): [number, number] {
 }
 
 /**
+ * Keeps the size of the form within MinimumWidth … MaximumHeight (spec §14.11.17), as Visual
+ * Studio does: a size, or a limit that leaves the size outside it, moves the size to the limit.
+ * Returns the size.
+ */
+function fitFormSize(model: Model): [number, number] {
+	const limits = formSizeLimits(model.form);
+	const within = (size: number, min: number, max: number) => Math.max(min, max > 0 ? Math.min(max, size) : size);
+	const [width, height] = insideSize(model, "");
+	const fitted: [number, number] = [within(width, limits.minWidth, limits.maxWidth), within(height, limits.minHeight, limits.maxHeight)];
+	if (fitted[0] !== width) model.form.width = fitted[0];
+	if (fitted[1] !== height) model.form.height = fitted[1];
+	return fitted;
+}
+
+/**
  * The controls anchored in the container `id` (`""` for the form) follow its new size, as in
  * the designer of Windows Forms: `before` is its inside size before the edit.
  */
@@ -415,6 +430,7 @@ function applyOne(model: Model, op: SemanticOperation) {
 				const before = insideSize(model, "");
 				if (op.width !== undefined) model.form.width = op.width;
 				if (op.height !== undefined) model.form.height = op.height;
+				fitFormSize(model);
 				followAnchors(model, "", before);
 				return;
 			}
@@ -439,7 +455,8 @@ function applyOne(model: Model, op: SemanticOperation) {
 			if (!contract) fail("UFE005", `${op.field} はデザイナーで編集できるプロパティではありません。`);
 			const before = insideSize(model, "");
 			setProperty(model.form, op.field, contract!, op.value as JsonValue);
-			if (op.field === "width" || op.field === "height") followAnchors(model, "", before);
+			const [width, height] = fitFormSize(model);
+			if (width !== before[0] || height !== before[1]) followAnchors(model, "", before);
 			return;
 		}
 		case "setControlProperty": {

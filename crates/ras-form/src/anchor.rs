@@ -159,8 +159,9 @@ fn axis_lines(how: Follow, start: &str, size: &str, delta: &str, out: &mut Vec<S
     }
 }
 
-/// The generated procedure that moves the anchored controls of `spec`, or
-/// `None` when no control follows the size of the form.
+/// The generated procedure that moves the anchored controls of `spec` and
+/// keeps the size of the form within its limits ([`crate::sizing`]), or `None`
+/// when no control follows the size of the form and the size has no limits.
 pub fn resize_procedure(spec: &FormSpec) -> Option<String> {
     let mut body = String::new();
     // Controls in the order of the list; a container passes the change on to its
@@ -229,16 +230,24 @@ pub fn resize_procedure(spec: &FormSpec) -> Option<String> {
         }
     }
     visit(spec, "", true, true, &mut body, 0);
-    if body.is_empty() {
+    // The least and greatest size of the form (spec §14.11.17) are kept first.
+    let clamp = crate::sizing::clamp_lines(&crate::sizing::limits(&spec.form));
+    if body.is_empty() && clamp.is_empty() {
         return None;
     }
+    let busy = if clamp.is_empty() {
+        ""
+    } else {
+        ", busy As Boolean"
+    };
     Some(format!(
         "Private Sub {RESIZE_PROCEDURE}(Optional ByVal mode As Long)\n\
-         \x20   Static w As Single, h As Single, ready As Boolean\n\
+         \x20   Static w As Single, h As Single, ready As Boolean{busy}\n\
          \x20   Dim dw As Single, dh As Single\n\
          \x20   If mode = 1 Then ready = False: Exit Sub\n\
          \x20   If mode = 2 Then w = Me.InsideWidth: h = Me.InsideHeight: ready = True: Exit Sub\n\
          \x20   If Not ready Then Exit Sub\n\
+         {clamp}\
          \x20   dw = Me.InsideWidth - w: dh = Me.InsideHeight - h\n\
          \x20   If dw = 0 And dh = 0 Then Exit Sub\n\
          \x20   w = Me.InsideWidth: h = Me.InsideHeight\n\
