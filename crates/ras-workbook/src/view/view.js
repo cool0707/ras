@@ -9314,61 +9314,212 @@
         const b = td.getBoundingClientRect();
         return b.right - e.clientX <= 20 ? { r: td.r, c: td.c, td } : null;
     }
+    // The icons of the filter's menu (as Excel's).
+    const FILTER_ICONS = {
+        asc: '<text x="1" y="7" font-size="7.5" font-weight="bold" fill="#1f5fbf" stroke="none">A</text><text x="1" y="15" font-size="7.5" font-weight="bold" fill="#333" stroke="none">Z</text><path d="M12 2v11.5M9.5 11 12 13.5 14.5 11"/>',
+        desc: '<text x="1" y="7" font-size="7.5" font-weight="bold" fill="#333" stroke="none">Z</text><text x="1" y="15" font-size="7.5" font-weight="bold" fill="#1f5fbf" stroke="none">A</text><path d="M12 2v11.5M9.5 11 12 13.5 14.5 11"/>',
+        clear: '<path d="M1.5 2.5h10L8 7v5.5l-2.5-1.5V7z"/><path d="m10 9.5 4 4M14 9.5l-4 4" stroke="#d13438"/>',
+    };
+    const filterIcon = (name) => {
+        const i = el("i", "fico");
+        if (name) i.innerHTML = `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.1" font-family="Segoe UI, Arial, sans-serif">${FILTER_ICONS[name]}</svg>`;
+        return i;
+    };
+    // An item of the filter's menu: its icon, its label and the key (`(S)`) that chooses it.
+    const filterItem = (pop, icon, label, key, act) => {
+        const b = act ? popItem(pop, label, act) : pop.appendChild(el("button"));
+        if (!act) {
+            b.type = "button";
+            b.disabled = true;
+            b.appendChild(el("span", null, label));
+        }
+        b.insertBefore(filterIcon(icon), b.firstChild);
+        if (key) {
+            b.querySelector("span").append("(", el("u", null, key), ")");
+            b.dataset.key = key.toLowerCase();
+        }
+        return b;
+    };
+    // An item that opens a submenu (`fill`), or one shown disabled (without `fill`).
+    const filterSub = (pop, label, key, fill) => {
+        let b;
+        if (fill) b = subMenu(pop, label, fill);
+        else {
+            b = pop.appendChild(el("button", "hassub"));
+            b.type = "button";
+            b.disabled = true;
+            b.appendChild(el("span", null, label));
+            b.appendChild(el("i", "subarrow"));
+        }
+        b.insertBefore(filterIcon(null), b.firstChild);
+        if (key) {
+            const span = b.querySelector("span");
+            span.append("(", el("u", null, key), ")");
+            b.dataset.key = key.toLowerCase();
+        }
+        return b;
+    };
     function openFilter(at) {
         const v = view;
         const sheet = v.sheet;
         const [[r1, c1], [r2]] = v.filter;
         const column = colName(at.c);
         const now = (sheet.filterColumns || {})[at.c - c1] || null;
-        // The texts the column shows, each once; empty cells last.
+        // The texts the column shows, each once; empty cells last. Dates go by year, month, day.
         const texts = new Set();
+        const days = new Map(); // "yyyy-mm-dd" → { y, m, d, texts }
+        // (With a comparison or a top ten, the values checked are the ones of the rows shown.)
+        const seen = new Set();
         let blanks = false;
-        for (let r = r1 + 1; r <= r2; r++) {
-            const cell = v.cells.get(r * KEY + at.c);
-            if (cell && cell.t) texts.add(cell.t);
-            else blanks = true;
-        }
-        const list = [...texts].sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
-        const pop = openPop(at.td, "filterpop");
-        const sort = (desc) => postEdit([{ op: "sort", sheet: sheet.name, range: sheet.filter, by: column, desc, header: true }]);
-        popItem(pop, "昇順", () => sort(false)).dataset.sort = "asc";
-        popItem(pop, "降順", () => sort(true)).dataset.sort = "desc";
-        if (now) popItem(pop, "フィルターをクリア", () => postEdit([{ op: "filterBy", sheet: sheet.name, column, clear: true }])).dataset.clear = "1";
-        // Numbers (dates) for the most part: the number filters, else the text filters.
+        let seenBlanks = false;
         let numbers = 0;
         for (let r = r1 + 1; r <= r2; r++) {
             const cell = v.cells.get(r * KEY + at.c);
             if (cell && (cell.k === "number" || cell.k === "date")) numbers++;
+            if (!cell || !cell.t) {
+                blanks = true;
+                if (height(sheet, r) > 0) seenBlanks = true;
+                continue;
+            }
+            if (height(sheet, r) > 0) seen.add(cell.t);
+            if (cell.k === "date" && typeof cell.x === "number" && cell.x >= 1) {
+                const d = new Date(Date.UTC(1899, 11, 30) + Math.floor(cell.x) * 864e5);
+                const key = d.toISOString().slice(0, 10);
+                if (!days.has(key)) days.set(key, { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), texts: new Set() });
+                days.get(key).texts.add(cell.t);
+            } else texts.add(cell.t);
         }
-        const numeric = numbers * 2 > texts.size && numbers > 0;
-        popItem(pop, numeric ? "数値フィルター…" : "テキスト フィルター…", () => askCustomFilter(column, now, list)).dataset.custom = "1";
-        if (numeric) popItem(pop, "トップテン…", () => askTop10(column, now)).dataset.top = "1";
+        const list = [...texts].sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
+        const dated = days.size > 0 && days.size * 2 >= texts.size + days.size;
+        const numeric = !dated && numbers * 2 > texts.size && numbers > 0;
+        const allTexts = list.concat([...days.values()].flatMap((x) => [...x.texts]));
+        const pop = openPop(at.td, "filterpop");
+        const sort = (desc) => postEdit([{ op: "sort", sheet: sheet.name, range: sheet.filter, by: column, desc, header: true }]);
+        filterItem(pop, "asc", "昇順", "S", () => sort(false)).dataset.sort = "asc";
+        filterItem(pop, "desc", "降順", "O", () => sort(true)).dataset.sort = "desc";
+        filterSub(pop, "色で並べ替え", "T");
         pop.appendChild(el("hr"));
+        filterSub(pop, "シート ビュー", "V");
+        pop.appendChild(el("hr"));
+        const head = v.cells.get(r1 * KEY + at.c);
+        const name = head && head.t ? `"${head.t}"` : `"(列 ${column})"`;
+        const clear = filterItem(pop, "clear", `${name} からフィルターをクリア`, "C", now ? () => postEdit([{ op: "filterBy", sheet: sheet.name, column, clear: true }]) : null);
+        if (now) clear.dataset.clear = "1";
+        filterSub(pop, "色フィルター", "I");
+        // The filters of the column's kind, as Excel's submenu: each opens the comparisons
+        // ("オートフィルター オプション") with its comparison chosen.
+        const custom = (preset) => () => askCustomFilter(column, now, allTexts, preset);
+        const kinds = dated
+            ? [
+                  ["指定の値に等しい…", ["eq"]],
+                  ["指定の値より前…", ["lt"]],
+                  ["指定の値より後…", ["gt"]],
+                  ["指定の範囲内…", ["ge", "le"]],
+              ]
+            : numeric
+              ? [
+                    ["指定の値に等しい…", ["eq"]],
+                    ["指定の値に等しくない…", ["ne"]],
+                    ["指定の値より大きい…", ["gt"]],
+                    ["指定の値以上…", ["ge"]],
+                    ["指定の値より小さい…", ["lt"]],
+                    ["指定の値以下…", ["le"]],
+                    ["指定の範囲内…", ["ge", "le"]],
+                ]
+              : [
+                    ["指定の値に等しい…", ["eq"]],
+                    ["指定の値に等しくない…", ["ne"]],
+                    ["指定の値で始まる…", ["begins"]],
+                    ["指定の値で終わる…", ["ends"]],
+                    ["指定の値を含む…", ["contains"]],
+                    ["指定の値を含まない…", ["notContains"]],
+                ];
+        const kindMenu = filterSub(pop, dated ? "日付フィルター" : numeric ? "数値フィルター" : "テキスト フィルター", "F", (sub) => {
+            for (const [label, preset] of kinds) popItem(sub, label, custom(preset));
+            if (numeric) {
+                sub.appendChild(el("hr"));
+                popItem(sub, "トップテン…", () => askTop10(column, now)).dataset.top = "1";
+            }
+            sub.appendChild(el("hr"));
+            popItem(sub, "ユーザー設定フィルター…", custom(null)).dataset.custom = "1";
+        });
+        kindMenu.dataset.kinds = dated ? "date" : numeric ? "number" : "text";
+        if (now && (now.custom || now.top)) kindMenu.classList.add("set");
+        // The search and the values: a tree, (すべて選択) first, the dates under their year and month.
         const form = pop.appendChild(el("form"));
-        const checks = [];
-        const check = (label, on, value) => {
-            const line = form.appendChild(el("label"));
-            const box = line.appendChild(el("input"));
-            box.type = "checkbox";
-            box.checked = on;
-            box.value = value === undefined ? "" : value;
-            line.appendChild(document.createTextNode(label));
-            return box;
+        const search = form.appendChild(el("input", "search"));
+        search.type = "search";
+        search.placeholder = "(すべて) の検索";
+        search.setAttribute("aria-label", "検索");
+        const box = form.appendChild(el("div", "values"));
+        box.setAttribute("role", "tree");
+        const leaves = [];
+        const parents = [];
+        const shown = (text) => (!now ? true : now.values ? now.values.some((x) => x.toLowerCase() === text.toLowerCase()) : seen.has(text));
+        const row = (parent, label, depth, node) => {
+            const line = parent.appendChild(el("div", "node"));
+            line.style.paddingLeft = `${2 + depth * 14}px`;
+            const twist = line.appendChild(el("span", "twist"));
+            const lab = line.appendChild(el("label"));
+            const cb = lab.appendChild(el("input"));
+            cb.type = "checkbox";
+            lab.appendChild(document.createTextNode(label));
+            Object.assign(node, { line, box: cb, label });
+            if (!node.kids) twist.classList.add("none");
+            else {
+                const kids = parent.appendChild(el("div", "kids"));
+                node.group = kids;
+                twist.classList.add("open");
+                // `open`: as the user left it; a search shows every parent open for the time.
+                const toggle = (open) => {
+                    node.open = open;
+                    show(open);
+                };
+                const show = (open) => {
+                    twist.classList.toggle("open", open);
+                    kids.hidden = !open;
+                };
+                Object.assign(node, { open: true, toggle, show });
+                twist.addEventListener("click", () => toggle(kids.hidden));
+                parents.push(node);
+            }
+            return node;
         };
-        const all = check("(すべて選択)", false);
-        all.className = "all";
-        const items = form.appendChild(el("div", "values"));
-        const shown = (text) => !now || !now.values || now.values.some((x) => x.toLowerCase() === text.toLowerCase());
-        const add = (label, on, value) => {
-            const line = items.appendChild(el("label"));
-            const box = line.appendChild(el("input"));
-            box.type = "checkbox";
-            box.checked = on;
-            line.appendChild(document.createTextNode(label));
-            checks.push([box, value]);
+        const leaf = (parent, label, depth, values, blank) => {
+            const node = row(parent, label, depth, { values, blank, search: values.join("\n") || label });
+            node.box.checked = blank ? (!now ? true : now.values ? !!now.blanks : seenBlanks) : values.some(shown);
+            leaves.push(node);
+            return node;
         };
-        for (const text of list) add(text, shown(text), text);
-        if (blanks) add(BLANK, !now || !now.values || !!now.blanks, null);
+        const all = row(box, "(すべて選択)", 0, { kids: [] });
+        all.line.classList.add("all");
+        all.group.className = "top";
+        all.toggle = all.show = () => {};
+        all.line.querySelector(".twist").className = "twist none";
+        const walk = (node, f) => {
+            f(node);
+            for (const k of node.kids || []) walk(k, f);
+        };
+        // The dates: years, months, days (Excel's grouping of dates).
+        const years = new Map();
+        for (const day of [...days.values()].sort((a, b) => a.y - b.y || a.m - b.m || a.d - b.d)) {
+            if (!years.has(day.y)) years.set(day.y, new Map());
+            const months = years.get(day.y);
+            if (!months.has(day.m)) months.set(day.m, []);
+            months.get(day.m).push(day);
+        }
+        for (const text of list) all.kids.push(leaf(all.group, text, 0, [text]));
+        for (const [y, months] of years) {
+            const year = row(all.group, `${y}年`, 0, { kids: [] });
+            all.kids.push(year);
+            for (const [m, list] of months) {
+                const month = row(year.group, `${m}月`, 1, { kids: [] });
+                year.kids.push(month);
+                month.toggle(false);
+                for (const day of list) month.kids.push(leaf(month.group, String(day.d).padStart(2, "0"), 2, [...day.texts]));
+            }
+        }
+        if (blanks) all.kids.push(leaf(all.group, BLANK, 0, [], true));
         const buttons = form.appendChild(el("div", "buttons"));
         const ok = buttons.appendChild(el("button", "ok", "OK"));
         ok.type = "submit";
@@ -9378,32 +9529,69 @@
             closeMenu();
             focusGrid();
         });
+        const visible = (n) => !n.line.hidden;
         const sync = () => {
-            const n = checks.filter(([b]) => b.checked).length;
-            all.checked = n === checks.length;
-            all.indeterminate = n > 0 && n < checks.length;
-            ok.disabled = n === 0;
+            // Each parent from its children, the deepest first.
+            for (const p of [...parents].reverse()) {
+                const kids = p.kids.filter(visible);
+                const on = kids.filter((k) => k.box.checked && !k.box.indeterminate).length;
+                const some = kids.some((k) => k.box.checked || k.box.indeterminate);
+                p.box.checked = kids.length > 0 && on === kids.length;
+                p.box.indeterminate = some && on < kids.length;
+            }
+            ok.disabled = !leaves.some((l) => visible(l) && l.box.checked);
         };
-        all.addEventListener("change", () => {
-            for (const [b] of checks) b.checked = all.checked;
+        box.addEventListener("change", (e) => {
+            const node = [...parents, ...leaves].find((n) => n.box === e.target);
+            if (node && node.kids) walk(node, (n) => {
+                if (n.line.hidden) return;
+                n.box.checked = node.box.checked;
+                n.box.indeterminate = false;
+            });
             sync();
         });
-        items.addEventListener("change", sync);
+        // The search: only the values with the text are listed, all of them checked (Excel's
+        // search); an empty search gives the list back as it was.
+        const before = new Map(leaves.map((l) => [l, l.box.checked]));
+        search.addEventListener("input", () => {
+            const q = search.value.trim().toLowerCase();
+            for (const l of leaves) {
+                const hit = !q || l.search.toLowerCase().includes(q) || l.label.toLowerCase().includes(q);
+                l.line.hidden = !hit;
+                l.box.checked = q ? hit : before.get(l);
+            }
+            for (const p of [...parents].reverse()) {
+                if (p === all) continue;
+                p.line.hidden = !p.kids.some(visible);
+                p.show(!!q || p.open);
+            }
+            all.line.querySelector("label").lastChild.textContent = q ? "(検索結果をすべて選択)" : "(すべて選択)";
+            sync();
+        });
         sync();
+        // The keys of the items: (S), (O), …
+        pop.addEventListener("keydown", (e) => {
+            if (e.target === search || e.ctrlKey || e.altKey || e.metaKey) return;
+            const b = pop.querySelector(`:scope > button[data-key="${CSS.escape(e.key.toLowerCase())}"]:not(:disabled)`);
+            if (!b) return;
+            e.preventDefault();
+            b.click();
+        });
         form.addEventListener("submit", (e) => {
             e.preventDefault();
-            const on = checks.filter(([b]) => b.checked);
+            const on = leaves.filter((l) => visible(l) && l.box.checked);
             closeMenu();
             focusGrid();
             if (!on.length) return;
-            if (on.length === checks.length) {
+            if (on.length === leaves.length) {
                 if (now) postEdit([{ op: "filterBy", sheet: sheet.name, column, clear: true }]);
                 return;
             }
-            const op = { op: "filterBy", sheet: sheet.name, column, values: on.filter(([, value]) => value !== null).map(([, value]) => value) };
-            if (on.some(([, value]) => value === null)) op.blanks = true;
+            const op = { op: "filterBy", sheet: sheet.name, column, values: on.filter((l) => !l.blank).flatMap((l) => l.values) };
+            if (on.some((l) => l.blank)) op.blanks = true;
             postEdit([op]);
         });
+        requestAnimationFrame(() => search.focus());
     }
 
     // Excel's "オートフィルター オプション": one or two comparisons, by what they are called.
@@ -9439,7 +9627,8 @@
         if (wild && value.length > 0 && value.startsWith("*")) return [not + cap("ends"), value.slice(1)];
         return [{ "=": "eq", "<>": "ne", ">": "gt", ">=": "ge", "<": "lt", "<=": "le" }[op] || "eq", value];
     }
-    function askCustomFilter(column, now, values) {
+    // `preset`: the comparisons chosen first (Excel's 数値フィルター > 指定の値より大きい…).
+    function askCustomFilter(column, now, values, preset) {
         const sheet = view.sheet.name;
         closeDialog();
         dialog = document.body.appendChild(el("div", "dlgback"));
@@ -9450,7 +9639,7 @@
         const list = form.appendChild(el("datalist"));
         list.id = "filtervalues";
         for (const v of values.slice(0, 500)) list.appendChild(el("option")).value = v;
-        const had = now && now.custom ? [now.custom.a, now.custom.b].filter(Boolean).map(kindOf) : [];
+        const had = preset ? preset.map((k) => [k, ""]) : now && now.custom ? [now.custom.a, now.custom.b].filter(Boolean).map(kindOf) : [];
         const line = (i) => {
             const row = form.appendChild(el("div", "cond"));
             const input = row.appendChild(el("input"));

@@ -64,7 +64,9 @@ table.nogrid td.nogr { background-image: none; }
 /* A changed cell keeps its own fill: a line around it and a corner mark. */
 td.chg { position: relative; outline: 1px solid var(--changed-line); outline-offset: -1px; }
 td.chg::before { content: ""; position: absolute; top: 0; right: 0; border: 4px solid; border-color: var(--changed-line) var(--changed-line) transparent transparent; }
-td.filter::after, td.tfilter::after { content: "▾"; float: right; color: #555; font-size: 10px; border: 1px solid #aaa; background: #fff; padding: 0 2px; margin-left: 2px; }
+/* The button of a heading of the filter: Excel's square with ▼ at the cell's bottom right (a funnel with it when the column is filtered). */
+td.filter:not(.frz), td.tfilter:not(.frz) { position: relative; }
+td.filter::after, td.tfilter::after { content: ""; position: absolute; right: 1px; bottom: 1px; width: 16px; height: 16px; border: 1px solid #b4b4b4; border-radius: 1px; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M3.5 5.5h7L7 9.5z' fill='%23444'/%3E%3C/svg%3E") center / 14px 14px no-repeat; pointer-events: none; }
 /* Where rows (columns) are hidden: a double line in the headers, as Excel (the sizes stay). */
 tr.gap th { border-bottom-color: var(--line); box-shadow: inset 0 -1px 0 var(--head), inset 0 -2px 0 var(--line); }
 th.gap { border-right-color: var(--line); box-shadow: inset -1px 0 0 var(--head), inset -2px 0 0 var(--line); }
@@ -369,13 +371,32 @@ body.busy #ribbon .rbody { opacity: .6; }
 .menu form.hex { display: flex; gap: 4px; padding: 4px 10px; }
 .menu form.hex input { width: 90px; font: inherit; }
 .menu form.hex button, .menu .buttons button { display: inline-block; width: auto; padding: 1px 10px; border: 1px solid #adadad; background: #e1e1e1; }
-.menu.filterpop { min-width: 210px; }
-.menu.filterpop label { display: flex; align-items: center; gap: 6px; padding: 1px 12px; white-space: nowrap; }
-.menu.filterpop .values { max-height: 220px; overflow: auto; margin: 2px 8px; border: 1px solid var(--line); }
-.menu.filterpop .values label { padding: 1px 6px; }
-.menu.filterpop .buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 6px 10px 2px; }
+/* The menu of a heading of the filter, as Excel's: icons on the left, the search, the tree of the values. */
+.menu.filterpop { width: 280px; padding: 4px 0 8px; }
+.menu.filterpop > button { gap: 6px; align-items: center; padding: 4px 14px 4px 6px; }
+.menu.filterpop > button .fico { flex: none; display: inline-flex; width: 16px; height: 16px; margin-right: 6px; color: #444; }
+.menu.filterpop > button:disabled .fico { opacity: .45; }
+.menu.filterpop > button.set .fico::before { content: "✓"; margin: auto; }
+.menu.filterpop u { text-decoration: underline; }
+.menu.filterpop form { padding: 0 8px 0 34px; }
+.menu.filterpop input.search { display: block; width: 100%; margin: 4px 0 6px; padding: 3px 6px; border: 1px solid #8a8a8a; border-radius: 2px; font: inherit; }
+.menu.filterpop input.search::placeholder { color: #767676; }
+.menu.filterpop .values { height: 180px; overflow: auto; padding: 2px 0; border: 1px solid #ababab; background: #fff; }
+.menu.filterpop .node { display: flex; align-items: center; white-space: nowrap; }
+.menu.filterpop .node[hidden] { display: none; }
+.menu.filterpop .node label { display: flex; align-items: center; gap: 3px; padding: 0 4px 0 0; cursor: default; }
+.menu.filterpop .node input { margin: 2px 3px 2px 0; }
+.menu.filterpop .twist { flex: none; position: relative; width: 9px; height: 9px; margin: 0 4px 0 2px; border: 1px solid #919191; background: #fff; cursor: pointer; }
+.menu.filterpop .twist::before, .menu.filterpop .twist::after { content: ""; position: absolute; left: 1px; right: 1px; top: 3px; height: 1px; background: #333; }
+.menu.filterpop .twist::after { left: 3px; right: auto; top: 1px; width: 1px; height: 5px; }
+.menu.filterpop .twist.open::after { display: none; }
+.menu.filterpop .twist.none { visibility: hidden; }
+.menu.filterpop .buttons { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 0 0; }
+.menu.filterpop .buttons button { min-width: 72px; padding: 2px 10px; border: 1px solid #adadad; border-radius: 2px; background: #fdfdfd; }
+.menu.filterpop .buttons button.ok { border: 2px solid #1a1a1a; }
+.menu.filterpop .buttons button:hover:not(:disabled) { background: #e5f1fb; border-color: #0078d4; }
 .menu.filterpop .buttons button:disabled { color: #999; }
-td.filter.filtered::after, td.tfilter.filtered::after { content: "▼"; color: var(--accent); border-color: var(--accent); }
+td.filter.filtered::after, td.tfilter.filtered::after { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Cpath d='M1.5 2.5h6L5.2 6v4.5L3.8 9.6V6z' fill='none' stroke='%23444'/%3E%3Cpath d='M8.5 7h4.5l-2.25 3z' fill='%23444'/%3E%3C/svg%3E"); }
 .dlg label input[type="number"] { width: 80px; margin-left: auto; font: inherit; }
 /* The edges of the headers: the widths of columns, the heights of rows. */
 table.ew th { cursor: col-resize; }
