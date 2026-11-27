@@ -1234,10 +1234,6 @@ header {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.smart-guide-label {
-  left: 50%;
-  top: 50%;
-}
 /* The size of a control while it is resized, under it. */
 .resize-size {
   z-index: 100003;
