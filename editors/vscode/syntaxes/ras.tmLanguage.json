@@ -3632,6 +3632,10 @@
 		"numeric-literal": {
 			"patterns": [
 				{
+					"name": "constant.numeric.column.ras",
+					"match": "\\b(?<!\\$)0(?:c|C)[A-Za-z]+\\b(?!\\$)"
+				},
+				{
 					"name": "constant.numeric.hex.ras",
 					"match": "\\b(?<!\\$)0(?:x|X)[0-9a-fA-F][0-9a-fA-F_]*([Ll])?\\b(?!\\$)",
 					"captures": {

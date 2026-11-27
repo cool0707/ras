@@ -21,7 +21,7 @@ RAS は TypeScript に似た構文で書き、VBA（`.bas` / `.cls`）に変換�
 
 | RAS | VBA | 備考 |
 |---|---|---|
-| `int` / `long` / `short` / `byte` | `Long` / `LongLong` / `Integer` / `Byte` | 整数リテラルは `int`。`long` は 64bit Office だけ |
+| `int` / `long` / `short` / `byte` | `Long` / `LongLong` / `Integer` / `Byte` | 整数リテラルは `int`（`0xFF`、列番号 `0cAA` = 27 も）。`long` は 64bit Office だけ |
 | `double` / `float` | `Double` / `Single` | 小数リテラルは `double` |
 | `currency` / `decimal` | `Currency` / `Variant`（`CDec`） | `1.5m` は `decimal` |
 | `string` / `boolean` / `date` | `String` / `Boolean` / `Date` | |
@@ -180,6 +180,7 @@ export function fill() {
         // セルのエラー値（#N/A など）は計算・比較すると実行時エラーになるので、null にしてから使う
         ws.cells(r, 3).value = (Excel.errorToNull(ws.cells(r, 2).value) ?? 0) * 2;
     }
+    ws.cells(1, 0cAA).value = "AA 列";            // 0cAA は列番号 27（A = 1。0x のような列の文字のリテラル）
     ws.range("C1").value = "2 倍";
     ws.range("C1").font.bold = true;
     ws.range("C2:C" + last).numberFormat = "#,##0";

@@ -19,6 +19,8 @@ pub enum SyntaxKind {
     #[regex(r"[0-9][0-9_]*[lL]?")]
     #[regex(r"0[xX][0-9a-fA-F_]+[lL]?")]
     #[regex(r"0[bB][01_]+[lL]?")]
+    // `0cAA` — an Excel column number in letters (A = 1, spec §2.2). No suffix: `L` is a letter.
+    #[regex(r"0[cC][A-Za-z0-9_]*")]
     INT_LIT,
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9]+)?[fFdDmM]?")]
     #[regex(r"[0-9][0-9_]*[eE][+-]?[0-9]+[fFdDmM]?")]
@@ -499,8 +501,11 @@ mod tests {
     #[test]
     fn numbers() {
         assert_eq!(
-            kinds("123 123L 0xFF 1.5 1e3 2d 1.5f 1.5m"),
-            vec![INT_LIT, INT_LIT, INT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT]
+            kinds("123 123L 0xFF 0cA 0cXFD 1.5 1e3 2d 1.5f 1.5m"),
+            vec![
+                INT_LIT, INT_LIT, INT_LIT, INT_LIT, INT_LIT, FLOAT_LIT, FLOAT_LIT, FLOAT_LIT,
+                FLOAT_LIT, FLOAT_LIT
+            ]
         );
     }
 

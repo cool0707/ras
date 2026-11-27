@@ -75,6 +75,34 @@ mod tests {
     }
 
     #[test]
+    fn column_literals() {
+        let m = ok("const a = [0cA, 0cZ, 0cAA, 0cAZ, 0cBA, 0cXFD, 0cxfd];\n");
+        let Item::Var(v) = &m.items[0] else { panic!() };
+        let ExprKind::Array(items) = &v.init.as_ref().unwrap().kind else {
+            panic!()
+        };
+        let values: Vec<i128> = items
+            .iter()
+            .map(|e| match e.kind {
+                ExprKind::Int { value, .. } => value,
+                _ => panic!(),
+            })
+            .collect();
+        assert_eq!(values, vec![1, 26, 27, 52, 53, 16384, 16384]);
+        for src in [
+            "const a = 0cXFE;",
+            "const a = 0c;",
+            "const a = 0c1;",
+            "const a = 0cA_B;",
+        ] {
+            assert!(
+                !parse(src).errors.is_empty(),
+                "expected an error for {src:?}"
+            );
+        }
+    }
+
+    #[test]
     fn ranges_and_from_end() {
         let m = ok("const a = xs[^1];\nconst b = xs[1..^1];\nconst c = xs[..n - 1];\nconst d = xs[c ? 1 : 2..];\nconst e = xs[..];\nconst f = xs[^(i + 1)];\nfor (const i of 0..n) {}\n");
         let index = |i: usize| match &m.items[i] {
