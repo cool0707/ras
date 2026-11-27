@@ -283,6 +283,12 @@ impl Book {
                 cells.entry(at).or_default().style = Some(style);
             }
         }
+        // The characters' formats go with the text, when the formats are pasted with it.
+        let rich = if content && p.what.styles() && p.op == PasteOp::None {
+            self.rich_in(si, from)
+        } else {
+            Vec::new()
+        };
         let merges = if p.what.styles() {
             self.merges_in(si, from)
         } else {
@@ -393,6 +399,7 @@ impl Book {
                         }
                     }
                 }
+                self.clear_rich(ti, RangeRef::cell(t));
                 self.touch(ti, t);
             }
             if formats && !(p.skip_blanks && blank && src.style.is_none()) {
@@ -427,6 +434,9 @@ impl Book {
                     _ => {}
                 }
             }
+        }
+        for (at, rt) in rich {
+            self.put_rich(ti, place(at), rt);
         }
         for m in merges {
             let (a, z) = (place(m.start), place(m.end));
@@ -596,7 +606,10 @@ impl Book {
             .map(|sh| sh.take_cells(from))
             .unwrap_or_default();
         let styles = self.styles_in(si, from);
+        let rich = self.rich_in(si, from);
         let merges = self.merges_in(si, from);
+        self.clear_rich(si, from);
+        self.clear_rich(ti, target);
         self.reset_styles(si, from);
         self.unmerge(si, from);
         self.reset_styles(ti, target);
@@ -648,6 +661,11 @@ impl Book {
                 if let Some(t) = at.offset(dr, dc) {
                     ws.cell_mut(coord(t)).set_style(style);
                 }
+            }
+        }
+        for (at, rt) in rich {
+            if let Some(t) = at.offset(dr, dc) {
+                self.put_rich(ti, t, rt);
             }
         }
         for m in merges {

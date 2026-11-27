@@ -4620,3 +4620,88 @@ fn new_controls_get_the_font_given() {
         assert!(parse_ops(&bad, Some("Data")).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn characters_of_a_cell_get_formats_of_their_own() {
+    let runs = r##"[{"t":"赤い"},{"t":"文字","f":{"name":"游ゴシック","size":14,"b":true,"s":true,"color":"#FF0000","u":"single"}},{"t":"²","f":{"va":"superscript"}}]"##;
+    let out = edit(&format!(
+        r#"{{"op":"set","range":"A12","text":"赤い文字²","runs":{runs}}}"#
+    ));
+    let sheet = part(&out, SHEET1);
+    assert!(
+        sheet.contains(r#"<c r="A12" t="inlineStr"><is><r><t xml:space="preserve">赤い</t></r><r><rPr><rFont val="游ゴシック"/><charset val="128"/><b/><strike/><color rgb="FFFF0000"/><sz val="14"/><u/></rPr><t xml:space="preserve">文字</t></r><r><rPr><vertAlign val="superscript"/></rPr><t xml:space="preserve">²</t></r></is></c>"#),
+        "{sheet}"
+    );
+    assert_eq!(cell(&out, "Data", "A12", Read::Value), "赤い文字²");
+    // The grid is told the runs.
+    let mut book = Book::open_bytes(&out).unwrap();
+    let view = book.sheet_view(0, 50, 20, None).unwrap();
+    let a12 = view["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["r"] == 11 && c["c"] == 0)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        a12["rt"],
+        json!([
+            { "t": "赤い" },
+            { "t": "文字", "f": { "name": "游ゴシック", "size": 14.0, "b": true, "s": true, "color": "#FF0000", "u": "single" } },
+            { "t": "²", "f": { "va": "superscript" } }
+        ])
+    );
+    // Another cell edited: the cell stays as it is.
+    let again = apply(&out, &ops(r#"{"op":"set","range":"B12","text":"x"}"#)).unwrap();
+    assert!(part(&again, SHEET1).contains("<rFont val=\"游ゴシック\"/>"));
+    // Copied, moved, rows inserted above it: the runs go with the text.
+    let copied = apply(&out, &ops(r#"{"op":"copy","from":"A12","to":"C20"}"#)).unwrap();
+    assert!(part(&copied, SHEET1).contains(
+        r#"<c r="C20" t="inlineStr"><is><r><t xml:space="preserve">赤い</t></r><r><rPr>"#
+    ));
+    let moved = apply(&out, &ops(r#"{"op":"move","from":"A12","to":"D21"}"#)).unwrap();
+    let m = part(&moved, SHEET1);
+    assert!(
+        m.contains(r#"<c r="D21" s="1" t="inlineStr"><is><r>"#),
+        "{m}"
+    );
+    let below = apply(&out, &ops(r#"{"op":"insert","range":"1:2"}"#)).unwrap();
+    let sheet = part(&below, SHEET1);
+    assert!(
+        sheet.contains(r#"<c r="A14" t="inlineStr"><is><r>"#),
+        "{sheet}"
+    );
+    // Typed over (without runs), it is plain text; runs of the cell's font alone are too.
+    let plain = apply(
+        &out,
+        &ops(r#"{"op":"set","range":"A12","text":"赤い文字²"}"#),
+    )
+    .unwrap();
+    assert!(part(&plain, SHEET1).contains(
+        r#"<c r="A12" t="inlineStr"><is><t xml:space="preserve">赤い文字²</t></is></c>"#
+    ));
+    let one = apply(
+        &out,
+        &ops(r#"{"op":"set","range":"A12","text":"ab","runs":[{"t":"a"},{"t":"b"}]}"#),
+    )
+    .unwrap();
+    assert!(
+        part(&one, SHEET1)
+            .contains(r#"<c r="A12" t="inlineStr"><is><t xml:space="preserve">ab</t></is></c>"#)
+    );
+    // Only the formats changed: the cell is written again. A formula or a number has none.
+    let bold = apply(&out, &ops(r#"{"op":"set","range":"A12","text":"赤い文字²","runs":[{"t":"赤い文字²","f":{"b":true}}]}"#)).unwrap();
+    assert!(part(&bold, SHEET1).contains(r#"<c r="A12" t="inlineStr"><is><r><rPr><b/></rPr><t xml:space="preserve">赤い文字²</t></r></is></c>"#));
+    let number = edit(
+        r#"{"op":"set","range":"A12","text":"12","runs":[{"t":"1","f":{"b":true}},{"t":"2"}]}"#,
+    );
+    assert!(part(&number, SHEET1).contains(r#"<c r="A12"><v>12</v></c>"#));
+    // `'` before the text is not of it.
+    let quoted = edit(
+        r#"{"op":"set","range":"A12","text":"'12","runs":[{"t":"'1","f":{"b":true}},{"t":"2"}]}"#,
+    );
+    assert!(part(&quoted, SHEET1).contains(
+        r#"<r><rPr><b/></rPr><t xml:space="preserve">1</t></r><r><t xml:space="preserve">2</t></r>"#
+    ));
+    assert!(parse_ops(&json!({ "op": "set", "sheet": "Data", "range": "A1", "text": "a", "runs": [{ "t": "a", "f": { "color": "red" } }] }), None).unwrap_err().contains("color"));
+}

@@ -329,7 +329,12 @@ fn set_plain(c: &mut Cell, v: &Value) {
             cv.set_error(error_to(*e).to_string());
         }
         Value::Text(s) => {
-            cv.set_value_string(s.to_string());
+            // Rich text of the same text is kept (its characters' formats are the cell's).
+            let same =
+                matches!(cv.raw_value(), CellRawValue::RichText(rt) if rt.text() == s.as_ref());
+            if !same {
+                cv.set_value_string(s.to_string());
+            }
         }
         Value::Array(_) => set_plain(c, &v.scalar()),
     }
@@ -2489,6 +2494,7 @@ pub(crate) use format::width_of_px;
 mod inspect;
 mod links;
 mod paste;
+pub mod rich;
 mod sheet_view;
 pub mod snapshot;
 mod sort;

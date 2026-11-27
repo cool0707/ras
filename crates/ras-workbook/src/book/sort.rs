@@ -357,6 +357,7 @@ impl Book {
         // Read first: lines are sources and targets.
         let mut cells: HashMap<u32, Vec<(CellRef, gm::Cell)>> = HashMap::new();
         let mut styles: HashMap<u32, Vec<(CellRef, Style)>> = HashMap::new();
+        let mut rich: HashMap<u32, Vec<(CellRef, umya_spreadsheet::RichText)>> = HashMap::new();
         for (_, s) in &order {
             let Some(s) = *s else { continue };
             if cells.contains_key(&s) {
@@ -375,6 +376,7 @@ impl Book {
                     .unwrap_or_default(),
             );
             styles.insert(s, self.styles_in(si, line(s)));
+            rich.insert(s, self.rich_in(si, line(s)));
         }
         for (t, s) in order {
             let gone = self
@@ -386,6 +388,7 @@ impl Book {
                 self.touch(si, at);
             }
             self.reset_styles(si, line(t));
+            self.clear_rich(si, line(t));
             let Some(s) = s else { continue };
             let d = t as i64 - s as i64;
             let (dr, dc) = if across { (0, d) } else { (d, 0) };
@@ -416,6 +419,11 @@ impl Book {
                     if let Some(to) = at.offset(dr, dc) {
                         ws.cell_mut(coord(to)).set_style(style.clone());
                     }
+                }
+            }
+            for (at, rt) in rich.get(&s).into_iter().flatten() {
+                if let Some(to) = at.offset(dr, dc) {
+                    self.put_rich(si, to, rt.clone());
                 }
             }
         }

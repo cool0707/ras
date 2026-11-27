@@ -952,6 +952,16 @@ impl Book {
                         cell["x"] = json!(x);
                     }
                     cell["k"] = json!(kind);
+                    // Text whose characters have formats of their own: its runs.
+                    if c.formula.is_none()
+                        && let Some(umya_spreadsheet::CellRawValue::RichText(rt)) =
+                            ws.cell((col + 1, row + 1)).map(|x| x.raw_value())
+                    {
+                        let runs = super::rich::runs_of(rt, &theme);
+                        if super::rich::is_rich(&runs) && super::rich::text_of(&runs) == c.text {
+                            cell["rt"] = super::rich::runs_json(&runs);
+                        }
+                    }
                 }
                 out_cells.push(cell);
             }
