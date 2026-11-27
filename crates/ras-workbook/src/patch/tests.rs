@@ -4103,3 +4103,47 @@ fn names_defined_changed_and_deleted() {
             .contains(r#"<definedName name="Items" localSheetId="0">Data!$B$2</definedName>"#)
     );
 }
+
+#[test]
+fn a_dynamic_array_formula_typed_is_marked_as_one() {
+    // (The workbook has no metadata: it is added, as Excel writes it.)
+    assert!(parts(BOOK).keys().all(|n| !n.contains("metadata")));
+    let out = edit(r#"[{ "op": "set", "range": "H2", "text": "=SEQUENCE(3)" }]"#);
+    let sheet = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(
+        sheet.contains(r#"<c r="H2" cm="1"><f t="array" ref="H2:H4">"#),
+        "{sheet}"
+    );
+    assert!(part(&out, "xl/metadata.xml").contains(r#"fDynamic="1""#));
+    assert!(
+        part(&out, "xl/_rels/workbook.xml.rels")
+            .contains(r#"/sheetMetadata" Target="metadata.xml""#)
+    );
+    assert!(part(&out, "[Content_Types].xml").contains(r#"<Override PartName="/xl/metadata.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"/>"#));
+    // Read back, it spills (not a legacy array, `{=...}`).
+    assert_eq!(cell(&out, "Data", "H2", Read::Formula2), "=SEQUENCE(3)");
+    let mut book = Book::open_bytes(&out).unwrap();
+    let data = crate::view::data(&mut book, "x.xlsm", Some(&out), None, None).unwrap();
+    assert!(
+        data["sheets"][0]["spills"]
+            .as_array()
+            .unwrap()
+            .contains(&json!([1, 7, 3, 7]))
+    );
+    // A second one uses the metadata added.
+    let again = apply(
+        &out,
+        &ops(r#"[{ "op": "set", "range": "J2", "text": "=SEQUENCE(2)" }]"#),
+    )
+    .unwrap();
+    assert!(part(&again, "xl/worksheets/sheet1.xml").contains(r#"<c r="J2" cm="1">"#));
+    assert_eq!(
+        part(&again, "xl/_rels/workbook.xml.rels")
+            .matches("sheetMetadata")
+            .count(),
+        1
+    );
+    // A formula of one value is not an array.
+    let one = edit(r#"[{ "op": "set", "range": "H2", "text": "=1+1" }]"#);
+    assert!(parts(&one).keys().all(|n| !n.contains("metadata")));
+}
