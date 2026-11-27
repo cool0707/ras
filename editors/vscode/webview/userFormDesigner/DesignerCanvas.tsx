@@ -72,30 +72,43 @@ function SmartGuides({ origin, items, zoom }: { origin: Point; items: Guide[]; z
   const thin = `${1 / zoom}px`;
   // On whole screen pixels, so that a line is not blurred over two.
   const px = (points: number) => `${Math.round(pointsToPixels(points) * zoom) / zoom}px`;
+  const shapes = items.map((guide) => {
+    const horizontal = guide.kind === "line" ? guide.axis === "y" : guide.axis === "x";
+    const along = (horizontal ? origin.left : origin.top) + guide.from;
+    const across = (horizontal ? origin.top : origin.left) + guide.at;
+    const length = guide.to - guide.from;
+    const middle = along + length / 2;
+    return {
+      guide,
+      horizontal,
+      bar: horizontal
+        ? { left: px(along), top: px(across), width: px(length), height: thin }
+        : { left: px(across), top: px(along), width: thin, height: px(length) },
+      center: horizontal
+        ? { left: px(middle), top: px(across) }
+        : { left: px(across), top: px(middle) },
+    };
+  });
+  // Every line first and the numbers over them, so that no line crosses a number.
   return (
     <div class="smart-guides" aria-hidden="true">
-      {items.map((guide) => {
-        const horizontal = guide.kind === "line" ? guide.axis === "y" : guide.axis === "x";
-        const along = horizontal ? origin.left : origin.top;
-        const across = horizontal ? origin.top : origin.left;
-        const start = along + guide.from;
-        const length = guide.to - guide.from;
-        const style = horizontal
-          ? { left: px(start), top: px(across + guide.at), width: px(length), height: thin }
-          : { left: px(across + guide.at), top: px(start), width: thin, height: px(length) };
-        return (
-          <div
-            class={`smart-guide ${guide.kind} ${horizontal ? "horizontal" : "vertical"}`}
-            style={style}
-          >
-            {guide.kind === "gap" && (
-              <span class="smart-guide-label" style={{ transform: `translate(-50%, -50%) scale(${1 / zoom})` }}>
-                {guide.label}
-              </span>
-            )}
-          </div>
-        );
-      })}
+      {shapes.map(({ guide, horizontal, bar }) => (
+        <div
+          class={`smart-guide ${guide.kind} ${horizontal ? "horizontal" : "vertical"}`}
+          style={bar}
+        />
+      ))}
+      {shapes.map(
+        ({ guide, center }) =>
+          guide.kind === "gap" && (
+            <span
+              class="smart-guide-label"
+              style={{ ...center, transform: `translate(-50%, -50%) scale(${1 / zoom})` }}
+            >
+              {guide.label}
+            </span>
+          ),
+      )}
     </div>
   );
 }
