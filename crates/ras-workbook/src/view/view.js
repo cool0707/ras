@@ -1619,7 +1619,12 @@
         t.setAttribute("autocomplete", "off");
     }
     ed.setAttribute("aria-label", "セル");
+    // The dialog open (Excel's), and a dialog over it (the format of a conditional format's rule).
+    let dialog = null;
+    let subDialog = null;
+    // (Not while a dialog is open: it keeps the focus.)
     const focusGrid = () => {
+        if (dialog) return;
         if (!entry || entry.where === "cell") ed.focus({ preventScroll: true });
     };
     const onGrid = () => {
@@ -2482,9 +2487,6 @@
     }
 
     // Excel's dialog: which way the cells move.
-    let dialog = null;
-    // A dialog over the dialog (the format of a conditional format's rule).
-    let subDialog = null;
     function closeDialog() {
         closeSubDialog();
         if (dialog) dialog.remove();
@@ -4411,6 +4413,19 @@
             pick.addEventListener("change", () => take(pick.value));
             return pick;
         };
+        // A block of a label over what it has (サンプル, 種類), and a box of a number with its
+        // spin buttons.
+        const block = (sec, label) => {
+            const b = sec.appendChild(el("div", "pblock"));
+            if (label) b.appendChild(el("div", "plabel", label));
+            return b;
+        };
+        const spin = (sec, label, field, now, take, unit) => {
+            const b = sizeBox(line(sec, label), label, take, unit);
+            b.input.dataset.field = field;
+            b.setCm(now);
+            return b;
+        };
         // The tabs of the pages it has (`order`: [key, label], `icons` by key): the one shown
         // last (`savedKey` in the page's state), or that of the field asked for.
         const finish = (order, icons, savedKey, focus) => {
@@ -4444,7 +4459,7 @@
                 show(now);
             }
         };
-        return { tabs, pages, page, section, line, box, choices, colorRow, checkRow, selectRow, finish };
+        return { tabs, pages, page, section, line, box, choices, colorRow, checkRow, selectRow, block, spin, finish };
     }
     function formatPane(body, obj, focus) {
         const ax = isActiveX(obj);
@@ -4977,42 +4992,28 @@
             color.title = `線の色（${borderPen.color || "自動"}）`;
         }
     }
-    function openCellPane(page) {
-        if (!editable || !view || !sel) return;
-        if (entry) commit(null);
-        openPane("cells", page);
-    }
-    function cellPane(body, focus) {
-        const kit = paneKit(body);
-        const { section, line, colorRow, checkRow, selectRow } = kit;
-        const fm = formatAt(sel.ar, sel.ac);
-        const range = allAreas()
-            .map((a) => areaText(a))
-            .join(",");
-        body.appendChild(el("div", "pname", range));
-        // (A list of the pane is chosen from by a click: the grid then has the focus.)
-        const set = (change) => format(change);
-        const block = (sec, label) => {
-            const b = sec.appendChild(el("div", "pblock"));
-            if (label) b.appendChild(el("div", "plabel", label));
-            return b;
-        };
-        const spin = (sec, label, field, now, take, unit) => {
-            const b = sizeBox(line(sec, label), label, take, unit);
-            b.input.dataset.field = field;
-            b.setCm(now);
-            return b;
-        };
-
-        // The list of 種類 (drawn again as a format is chosen in it): where it was scrolled to.
+    // 表示形式 of "セルの書式設定" in the section `sec` of a pane's kit: 分類, サンプル, and what
+    // the kind has (as the dialog's page). `o.now`: the format (as the dialog shows it; null:
+    // none, with `o.unset`), `o.cell` what サンプル shows, `o.at` where it is (the kind chosen
+    // last there is kept); `o.put(code)` sets a format (as in the file), `o.redraw(field)` draws
+    // it all again. Gives the list of 種類 ({ list, where }) when it has one.
+    function numberSection(kit, sec, o) {
+        const { block, spin, selectRow, checkRow } = kit;
+        const { cell, at } = o;
         let numberList = null;
-        // 表示形式: 分類, サンプル, and what the kind has (as the dialog's page).
+        if (o.now === null) {
+            const pick = selectRow(sec, "分類", [["", "（設定なし）"]].concat(FORMAT_KINDS.map((k) => [k.key, k.label])), "", "numberKind", (key) => {
+                const next = FORMAT_KINDS.find((k) => k.key === key);
+                if (!next) return;
+                const code = next.code ? next.code({ places: 2, comma: false, symbol: "¥", negative: "minus" }) : next.custom ? "G/標準" : next.list[0];
+                remember({ numKind: { at, code, kind: key } });
+                o.put(fileCode(code));
+            });
+            pick.options[0].hidden = true;
+            return null;
+        }
         {
-            const sec = section("number", "表示形式");
-            const cell = cellOf(sel.ar, sel.ac) || {};
-            const [n, sn] = numberCodeAt(sel.ar, sel.ac);
-            const now = localCode(/^\[\$-F[48]00\]/i.test(n || "") ? n : sn || n || "General");
-            const at = `${view.sheet.name}!${sel.ar}:${sel.ac}`;
+            const now = o.now;
             // The kind chosen last for this cell, while its format is what it made (ユーザー定義
             // stays so, as the format is one of another kind too).
             const was = saved.numKind;
@@ -5023,8 +5024,8 @@
                 code = code.trim();
                 remember({ numKind: { at, code, kind: kindKey || kind.key } });
                 if (!code) return;
-                if (fileCode(code) !== fileCode(now)) set({ numberFormat: fileCode(code) });
-                else renderPane("numberKind");
+                if (fileCode(code) !== fileCode(now)) o.put(fileCode(code));
+                else o.redraw("numberKind");
             };
             selectRow(sec, "分類", FORMAT_KINDS.map((k) => [k.key, k.label]), kind.key, "numberKind", (key) => {
                 const next = FORMAT_KINDS.find((k) => k.key === key);
@@ -5045,9 +5046,9 @@
                 list.size = NEGATIVES.length;
                 list.dataset.field = "negative";
                 for (const [v, l] of NEGATIVES) {
-                    const o = list.appendChild(el("option", null, kind.key === "currency" ? l.replace(/1,234/, `${state.symbol}1,234`) : l));
-                    o.value = v;
-                    if (v.includes("red")) o.className = "red";
+                    const opt = list.appendChild(el("option", null, kind.key === "currency" ? l.replace(/1,234/, `${state.symbol}1,234`) : l));
+                    opt.value = v;
+                    if (v.includes("red")) opt.className = "red";
                 }
                 list.value = state.negative;
                 list.addEventListener("change", () => apply(kind.code({ ...state, negative: list.value })));
@@ -5070,9 +5071,9 @@
                 codes.forEach((c, i) => {
                     const file = fileCode(c);
                     const shown = kind.custom ? c : kind.names ? kind.names[i] : (SYSTEM_CODES.includes(c) ? "*" : "") + (formatNumber(/\[[hms]+\]/i.test(file) ? 1 + (x % 1) : x, file === "m/d/yyyy" ? "yyyy/m/d" : file === "m/d/yyyy h:mm" ? "yyyy/m/d h:mm" : file) ?? c);
-                    const o = list.appendChild(el("option", null, shown));
-                    o.value = c;
-                    o.title = c;
+                    const opt = list.appendChild(el("option", null, shown));
+                    opt.value = c;
+                    opt.title = c;
                 });
                 list.value = codes.includes(now) ? now : "";
                 const where = `${at}:${kind.key}`;
@@ -5085,6 +5086,38 @@
                 });
             }
             if (kind.note) sec.appendChild(el("div", "pnote", kind.note));
+        }
+        return numberList;
+    }
+    function openCellPane(page) {
+        if (!editable || !view || !sel) return;
+        if (entry) commit(null);
+        openPane("cells", page);
+    }
+    function cellPane(body, focus) {
+        const kit = paneKit(body);
+        const { section, line, colorRow, checkRow, selectRow, block, spin } = kit;
+        const fm = formatAt(sel.ar, sel.ac);
+        const range = allAreas()
+            .map((a) => areaText(a))
+            .join(",");
+        body.appendChild(el("div", "pname", range));
+        // (A list of the pane is chosen from by a click: the grid then has the focus.)
+        const set = (change) => format(change);
+
+        // The list of 種類 (drawn again as a format is chosen in it): where it was scrolled to.
+        let numberList = null;
+        // 表示形式: 分類, サンプル, and what the kind has (as the dialog's page).
+        {
+            const [n, sn] = numberCodeAt(sel.ar, sel.ac);
+            const now = localCode(/^\[\$-F[48]00\]/i.test(n || "") ? n : sn || n || "General");
+            numberList = numberSection(kit, section("number", "表示形式"), {
+                now,
+                cell: cellOf(sel.ar, sel.ac) || {},
+                at: `${view.sheet.name}!${sel.ar}:${sel.ac}`,
+                put: (code) => set({ numberFormat: code }),
+                redraw: renderPane,
+            });
         }
 
         // 配置: 文字の配置, 文字の制御, 方向, 右から左
@@ -6203,20 +6236,26 @@
         input.reportValidity();
         return false;
     }
-    // What the format of a rule `f` draws, on the element `t`.
+    // What the format of a rule `f` draws, on the element `t`: what it sets, over what the
+    // element has.
     function condStyle(t, f) {
         t.style.color = f.color || "";
-        t.style.background = f.fill || "";
-        t.style.fontWeight = f.bold ? "bold" : "";
-        t.style.fontStyle = f.italic ? "italic" : "";
-        t.style.textDecoration = [f.underline && "underline", f.strike && "line-through"].filter(Boolean).join(" ");
+        t.style.background = "";
+        if (f.pattern) t.style.cssText += fillCss(f.pattern, f.patternColor || "#000000", f.fill || "#FFFFFF");
+        else t.style.background = f.fill || "";
+        t.style.fontWeight = f.bold === true ? "bold" : f.bold === false ? "normal" : "";
+        t.style.fontStyle = f.italic === true ? "italic" : f.italic === false ? "normal" : "";
+        const under = f.underline === true || (typeof f.underline === "string" && f.underline !== "none");
+        t.style.textDecoration = [under && "underline", f.strike === true && "line-through"].filter(Boolean).join(" ") || (f.underline === "none" || f.underline === false || f.strike === false ? "none" : "");
+        t.style.textDecorationStyle = /double/i.test(typeof f.underline === "string" ? f.underline : "") ? "double" : "";
         t.style.outline = f.border ? `1px solid ${f.border}` : "";
+        for (const side of ["left", "right", "top", "bottom"]) {
+            const line = f.borders && f.borders[side];
+            const css = side[0].toUpperCase() + side.slice(1);
+            t.style[`border${css}`] = line ? `1px ${{ hair: "dotted", dotted: "dotted", dashDotDot: "dotted", dashDot: "dashed", dashed: "dashed" }[line.style] || "solid"} ${line.color || "#000000"}` : "";
+        }
     }
 
-    // "セルの書式設定" of a rule's format, over the rule's dialog: フォント (スタイル・下線・色・
-    // 取り消し線), 罫線 (外枠とその色), 塗りつぶし (背景色), and クリア. (Excel's has also
-    // 表示形式, and more of each; a rule's font and size are not set there either.)
-    // `done(f)`: the format set (null: none); `cancelled()`: closed without it.
     function closeSubDialog() {
         if (subDialog) subDialog.remove();
         subDialog = null;
@@ -6238,124 +6277,273 @@
         });
         return form;
     }
+    // "セルの書式設定" of a rule's format, over the rule's dialog, as the pane's of the cells has
+    // it: 表示形式; フォント (スタイル・下線・色), 文字飾り (取り消し線) and 塗りつぶし (背景色・
+    // パターン); 罫線 (each side, of a line and its color). Each item is 設定なし (the cell's own
+    // shows) until it is set, and taken back to it by the button at the end of its row; クリア
+    // takes all back. (As Excel's: a rule's font and size are not set; nor 上付き・下付き.)
+    // `done(f)`: the format set (null: none); `cancelled()`: closed without it.
+    const COND_FMT_PAGES = [
+        ["number", "表示形式"],
+        ["font", "フォントと塗りつぶし"],
+        ["border", "罫線"],
+    ];
+    // The lines a rule's border can have (as Excel's dialog of a rule lists them).
+    const COND_LINES = ["thin", "hair", "dotted", "dashDotDot", "dashDot", "dashed"];
+    const RESET_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5A5 5 0 1 1 3 9.5"/><path d="M3.2 3v3.6h3.6"/></svg>';
     function askCondFormat(f0, done, cancelled) {
-        const f = Object.assign({}, f0 || {});
-        const form = openSubDialog("セルの書式設定", "condfmtdlg", cancelled);
-        const tabs = form.appendChild(el("div", "fmttabs"));
-        const pages = {};
-        const showTab = (key) => {
-            for (const t of tabs.children) t.classList.toggle("on", t.dataset.tab === key);
-            for (const [k, p] of Object.entries(pages)) p.hidden = k !== key;
-        };
-        for (const [key, label] of [["font", "フォント"], ["border", "罫線"], ["fill", "塗りつぶし"]]) {
-            const t = tabs.appendChild(el("button", null, label));
-            t.type = "button";
-            t.dataset.tab = key;
-            t.addEventListener("click", () => showTab(key));
-            pages[key] = form.appendChild(el("div", "condfmtpage"));
+        const f = JSON.parse(JSON.stringify(f0 || {}));
+        // (A border of each side's, as the outline of Excel 2007's is.)
+        if (f.border) {
+            f.borders = f.borders || {};
+            for (const k of ["left", "right", "top", "bottom"]) if (!f.borders[k]) f.borders[k] = { style: "thin", color: f.border };
+            delete f.border;
         }
+        const form = openSubDialog("セルの書式設定", "condfmtdlg", cancelled);
+        const holder = form.appendChild(el("div", "pfmt"));
         const sampleBox = form.appendChild(el("fieldset", "condfmtsample"));
-        sampleBox.appendChild(el("legend", null, "サンプル"));
+        sampleBox.appendChild(el("legend", null, "プレビュー"));
         const sample = sampleBox.appendChild(el("span", null, "Aaあぁアァ亜宇"));
-        const set = (key, value) => {
-            if (value) f[key] = value;
-            else delete f[key];
+        // What the borders are drawn with (as the pane's 線のスタイル and 線の色).
+        const pen = { line: "thin", color: null };
+        const has = (k) => f[k] !== undefined && f[k] !== null;
+        // Items set (null: back to 設定なし), and all drawn again (`focus`: the field focused then).
+        const put = (change, focus) => {
+            for (const [k, v] of Object.entries(change)) {
+                if (v === undefined || v === null) delete f[k];
+                else f[k] = v;
+            }
+            if (f.borders && !Object.keys(f.borders).length) delete f.borders;
+            draw(focus);
+        };
+        const sideNames = { top: "上罫線", bottom: "下罫線", left: "左罫線", right: "右罫線" };
+        const putSide = (k, line) => {
+            const b = Object.assign({}, f.borders || {});
+            if (line) b[k] = line;
+            else delete b[k];
+            put({ borders: b }, k);
+        };
+        let scrollTop = 0;
+        const draw = (focus) => {
+            const a = document.activeElement;
+            if (!focus && a && holder.contains(a)) focus = a.dataset.field || (a.dataset.side && `side:${a.dataset.side}`);
+            const old = holder.querySelector(".pbody");
+            if (old) scrollTop = old.scrollTop;
+            holder.textContent = "";
+            const body = holder.appendChild(el("div", "pbody"));
+            const kit = paneKit(body);
+            const { section, line, colorRow, checkRow, selectRow } = kit;
+            // The button at the end of an item's row that takes it back to 設定なし (shown when
+            // the item is set).
+            const reset = (control, on, label, change) => {
+                const row = control.closest(".prow") || control.parentNode;
+                const b = row.appendChild(el("button", "preset"));
+                b.type = "button";
+                b.title = `${label}を設定なしに戻す`;
+                b.setAttribute("aria-label", b.title);
+                b.dataset.reset = control.dataset.field;
+                b.innerHTML = RESET_ICON;
+                b.disabled = !on;
+                b.addEventListener("click", () => put(change, control.dataset.field));
+                return b;
+            };
+
+            // 表示形式
+            {
+                const sec = section("number", "表示形式");
+                const now = has("numberFormat") ? localCode(f.numberFormat) : null;
+                const list = numberSection(kit, sec, {
+                    now,
+                    cell: (sel && cellOf(sel.ar, sel.ac)) || {},
+                    at: "condFormat",
+                    put: (code) => put({ numberFormat: code }),
+                    redraw: (field) => draw(field),
+                });
+                reset(sec.querySelector('[data-field="numberKind"]'), now !== null, "表示形式", { numberFormat: null });
+                if (now === null) sec.appendChild(el("div", "pnote", "表示形式は設定されていません（セルの表示形式のまま表示します）。分類を選ぶと設定します。"));
+                const top = saved.numberListTop;
+                if (list && top && top.where === list.where) requestAnimationFrame(() => (list.list.scrollTop = top.top));
+            }
+
+            // フォント: スタイル, 下線, 色
+            {
+                const sec = section("font", "フォント");
+                const style = !has("bold") && !has("italic") ? "" : f.bold && f.italic ? "boldItalic" : f.bold ? "bold" : f.italic ? "italic" : "normal";
+                const st = selectRow(sec, "スタイル", [["", "（設定なし）"], ["normal", "標準"], ["italic", "斜体"], ["bold", "太字"], ["boldItalic", "太字 斜体"]], style, "fontStyle", (v) =>
+                    put(v ? { bold: v.startsWith("bold"), italic: /italic/i.test(v) } : { bold: null, italic: null }),
+                );
+                st.options[0].hidden = true;
+                reset(st, style !== "", "スタイル", { bold: null, italic: null });
+                const u = f.underline === true ? "single" : f.underline === false ? "none" : f.underline || "";
+                const us = selectRow(sec, "下線", [["", "（設定なし）"]].concat(UNDERLINES), u, "underline", (v) => put({ underline: v || null }));
+                us.options[0].hidden = true;
+                reset(us, u !== "", "下線", { underline: null });
+                const fc = colorRow(sec, "色", f.color || null, "設定なし", (c) => put({ color: c }, "fontColor"), "fontColor");
+                reset(fc, has("color"), "色", { color: null });
+                const deco = section("font", "文字飾り");
+                const strike = checkRow(deco, "取り消し線", f.strike === true, "strike", (on) => put({ strike: on }));
+                strike.indeterminate = !has("strike");
+                reset(strike, has("strike"), "取り消し線", { strike: null });
+            }
+
+            // 塗りつぶし: 背景色, パターンの色, パターンの種類
+            {
+                const sec = section("font", "塗りつぶし");
+                const pattern = f.pattern || null;
+                const bg = colorRow(sec, "背景色", f.fill || null, "設定なし", (c) => put({ fill: c }, "fillColor"), "fillColor");
+                reset(bg, has("fill"), "背景色", { fill: null });
+                const pc = colorRow(sec, "パターンの色", f.patternColor || null, "設定なし", (c) => put({ patternColor: c }, "patternColor"), "patternColor");
+                reset(pc, has("patternColor"), "パターンの色", { patternColor: null });
+                const row = line(sec, "パターンの種類");
+                const kind = row.appendChild(el("button", "pcolor"));
+                kind.type = "button";
+                kind.dataset.field = "pattern";
+                const name = pattern ? (FILL_PATTERNS.find((p) => p[0] === pattern) || [, pattern])[1] : "設定なし";
+                kind.title = `パターンの種類（${name}）`;
+                const sw = kind.appendChild(el("span", "sw ptile"));
+                if (!pattern) {
+                    sw.classList.add("none");
+                    kind.appendChild(el("span", "pctext", "設定なし"));
+                } else sw.style.cssText = fillCss(pattern, f.patternColor || "#000000", f.fill || "#FFFFFF");
+                kind.appendChild(el("span", "pdrop", "▾"));
+                kind.addEventListener("click", () => {
+                    const pop = openPop(kind, "patterns");
+                    const tiles = pop.appendChild(el("div", "swatches"));
+                    for (const [key, label] of FILL_PATTERNS) {
+                        const b = tiles.appendChild(el("button", "swatch"));
+                        b.type = "button";
+                        // (単色: no pattern, the background color alone.)
+                        b.title = key === "solid" ? "なし（背景色のみ）" : label;
+                        b.dataset.pattern = key;
+                        b.style.cssText = key === "solid" ? "background:#FFFFFF" : fillCss(key, "#000000", "#FFFFFF");
+                        b.classList.toggle("on", key === pattern || (key === "solid" && !pattern));
+                        b.addEventListener("click", () => {
+                            closeMenu();
+                            put({ pattern: key === "solid" ? null : key }, "pattern");
+                        });
+                    }
+                });
+                reset(kind, !!pattern, "パターンの種類", { pattern: null });
+                if (has("patternColor") && !pattern) sec.appendChild(el("div", "pnote", "パターンの色は、パターンの種類を選ぶと使われます。"));
+            }
+
+            // 罫線: the line and its color (what the sides are drawn with), then where: by a
+            // preset, by the buttons around the picture of the cell, or by the picture clicked.
+            {
+                const sides = f.borders || {};
+                const box = section("border", "罫線");
+                const row = line(box, "スタイル");
+                const pick = row.appendChild(el("button", "pcolor pline"));
+                pick.type = "button";
+                pick.dataset.field = "borderLine";
+                pick.title = `線のスタイル（${(BORDER_LINES.find((l) => l[0] === pen.line) || BORDER_LINES[0])[1]}）`;
+                pick.appendChild(el("span", "sample")).innerHTML = lineSample(pen.line, 56);
+                pick.appendChild(el("span", "pdrop", "▾"));
+                pick.addEventListener("click", () => {
+                    const pop = openPop(pick, "linestyles");
+                    for (const [key, label] of BORDER_LINES.filter((l) => COND_LINES.includes(l[0]))) {
+                        const b = pop.appendChild(el("button"));
+                        b.type = "button";
+                        b.appendChild(el("span")).innerHTML = lineSample(key, 96);
+                        b.title = label;
+                        b.classList.toggle("on", pen.line === key);
+                        b.addEventListener("click", () => {
+                            closeMenu();
+                            pen.line = key;
+                            draw("borderLine");
+                        });
+                    }
+                });
+                colorRow(box, "色", pen.color, "自動", (c) => {
+                    pen.color = c;
+                    draw("borderColor");
+                }, "borderColor");
+                const now = () => (pen.color ? { style: pen.line, color: pen.color } : { style: pen.line });
+                const presets = box.appendChild(el("div", "prow pborderpresets"));
+                presets.appendChild(el("span", "plabel", "プリセット"));
+                const preset = (label, icon, act) => {
+                    const b = presets.appendChild(el("button", "pside"));
+                    b.type = "button";
+                    b.title = label;
+                    b.setAttribute("aria-label", label);
+                    b.dataset.field = `preset:${label}`;
+                    b.appendChild(borderIcon(icon));
+                    b.addEventListener("click", act);
+                };
+                preset("なし（設定なし）", {}, () => put({ borders: null }, "preset:なし（設定なし）"));
+                preset("外枠", { t: "s", b: "s", l: "s", r: "s" }, () => put({ borders: { left: now(), right: now(), top: now(), bottom: now() } }, "preset:外枠"));
+                // A side clicked: drawn with the pen, or back to 設定なし when it is drawn so already.
+                const toggle = (k) => {
+                    const s = sides[k];
+                    const same = s && s.style === pen.line && (s.color || "").toUpperCase() === (pen.color || "").toUpperCase();
+                    putSide(k, same ? null : now());
+                };
+                const grid = box.appendChild(el("div", "pborders"));
+                const sideButton = (into, k, icon) => {
+                    const b = into.appendChild(el("button", "pside"));
+                    b.type = "button";
+                    b.title = sideNames[k];
+                    b.setAttribute("aria-label", sideNames[k]);
+                    b.setAttribute("aria-pressed", String(!!sides[k]));
+                    b.dataset.side = k;
+                    b.dataset.field = `side:${k}`;
+                    b.classList.toggle("on", !!sides[k]);
+                    b.appendChild(borderIcon(icon));
+                    b.addEventListener("click", () => toggle(k));
+                };
+                const left = grid.appendChild(el("div", "pbcol"));
+                sideButton(left, "top", { t: "s" });
+                sideButton(left, "bottom", { b: "s" });
+                const [W, H, M] = [128, 96, 14];
+                const [x1, y1, x2, y2] = [M, M, W - M, H - M];
+                const stroke = (k, x, y, X, Y) => {
+                    const b = sides[k];
+                    if (!b) return "";
+                    const [w, dash] = (BORDER_LINES.find((l) => l[0] === b.style) || BORDER_LINES[0])[2];
+                    return `<path d="M${x} ${y}L${X} ${Y}" stroke="${b.color || "#000000"}" stroke-width="${w}"${dash ? ` stroke-dasharray="${dash}"` : ""}/>`;
+                };
+                let svg = "";
+                for (const [x, y] of [[x1, y1], [x2, y1], [x1, y2], [x2, y2]]) svg += `<path d="M${x - 6} ${y}h-4M${x + 6} ${y}h4M${x} ${y - 6}v-4M${x} ${y + 6}v4" stroke="#9a9a9a" stroke-width="1"/>`;
+                svg += `<text x="${W / 2}" y="${H / 2 + 4}" text-anchor="middle" font-size="11" fill="#777">文字列</text>`;
+                svg += stroke("top", x1, y1, x2, y1) + stroke("bottom", x1, y2, x2, y2) + stroke("left", x1, y1, x1, y2) + stroke("right", x2, y1, x2, y2);
+                const pic = grid.appendChild(el("div", "pbpic"));
+                pic.title = "クリックすると、その罫線を引きます（引いてある罫線は設定なしに戻します）";
+                pic.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" fill="none" aria-hidden="true">${svg}</svg>`;
+                pic.addEventListener("click", (e) => {
+                    const r = pic.firstChild.getBoundingClientRect();
+                    const [x, y] = [((e.clientX - r.left) * W) / r.width, ((e.clientY - r.top) * H) / r.height];
+                    const near = [["top", Math.abs(y - y1)], ["bottom", Math.abs(y - y2)], ["left", Math.abs(x - x1)], ["right", Math.abs(x - x2)]].sort((a, b) => a[1] - b[1]);
+                    if (near[0][1] <= 10) toggle(near[0][0]);
+                });
+                grid.appendChild(el("div", "pbcorner"));
+                const bottom = grid.appendChild(el("div", "pbrow"));
+                sideButton(bottom, "left", { l: "s" });
+                sideButton(bottom, "right", { r: "s" });
+                box.appendChild(el("div", "pnote", "選んだスタイルと色で、プリセットや周りのボタン、図のクリックで罫線を引きます（同じ罫線をもう一度クリックすると設定なしに戻ります）。"));
+            }
+
+            kit.finish(COND_FMT_PAGES, CELL_ICONS, "condFmtPage", focus);
+            body.scrollTop = scrollTop;
             condStyle(sample, f);
+            const target = focus && holder.querySelector(`[data-field="${focus}"]`);
+            if (target) target.focus({ preventScroll: true });
         };
-        // What shows the format's settings, again after クリア.
-        const loads = [];
-        const line = (page, label) => {
-            const l = page.appendChild(el("div", "condfmtline"));
-            l.appendChild(el("span", "lbl", label));
-            return l;
-        };
-        // A color, or none (自動 / 色なし).
-        const colorChoice = (page, label, none, key, fallback) => {
-            const l = line(page, label);
-            const off = check(l, none, false);
-            off.dataset.field = `${key}None`;
-            const pick = l.appendChild(el("input"));
-            pick.type = "color";
-            pick.dataset.field = key;
-            off.addEventListener("change", () => set(key, off.checked ? null : pick.value.toUpperCase()));
-            pick.addEventListener("input", () => {
-                off.checked = false;
-                set(key, pick.value.toUpperCase());
-            });
-            loads.push(() => {
-                off.checked = !f[key];
-                pick.value = (f[key] || fallback).toLowerCase();
-            });
-        };
-
-        const style = condSelect(line(pages.font, "スタイル:"), [["", "標準"], ["i", "斜体"], ["b", "太字"], ["bi", "太字 斜体"]], "", "fontStyle");
-        style.addEventListener("change", () => {
-            set("bold", style.value.includes("b"));
-            set("italic", style.value.includes("i"));
-        });
-        loads.push(() => (style.value = `${f.bold ? "b" : ""}${f.italic ? "i" : ""}`));
-        const under = condSelect(line(pages.font, "下線:"), [["", "なし"], ["u", "下線"]], "", "underline");
-        under.addEventListener("change", () => set("underline", !!under.value));
-        loads.push(() => (under.value = f.underline ? "u" : ""));
-        colorChoice(pages.font, "色:", "自動", "color", "#000000");
-        const strike = check(line(pages.font, "文字飾り:"), "取り消し線", false);
-        strike.dataset.field = "strike";
-        strike.addEventListener("change", () => set("strike", strike.checked));
-        loads.push(() => (strike.checked = !!f.strike));
-
-        // 罫線: none, or the outline of each cell (a thin line of a color).
-        const presets = line(pages.border, "プリセット:");
-        let borderColor = "#000000";
-        const presetButton = (label, on) => {
-            const b = presets.appendChild(el("button", "condpreset", label));
-            b.type = "button";
-            b.dataset.act = on ? "outline" : "noBorder";
-            b.addEventListener("click", () => {
-                set("border", on ? borderColor : null);
-                loads.forEach((l) => l());
-            });
-            return b;
-        };
-        const noBorder = presetButton("なし", false);
-        const outline = presetButton("外枠", true);
-        const bl = line(pages.border, "色:");
-        const bpick = bl.appendChild(el("input"));
-        bpick.type = "color";
-        bpick.dataset.field = "borderColor";
-        bpick.addEventListener("input", () => {
-            borderColor = bpick.value.toUpperCase();
-            set("border", borderColor);
-            loads.forEach((l) => l());
-        });
-        loads.push(() => {
-            if (f.border) borderColor = f.border;
-            bpick.value = borderColor.toLowerCase();
-            noBorder.classList.toggle("on", !f.border);
-            outline.classList.toggle("on", !!f.border);
-        });
-        pages.border.appendChild(el("div", "hint", "罫線は、セルの四辺に細線で引きます。"));
-
-        colorChoice(pages.fill, "背景色:", "色なし", "fill", "#FFC7CE");
-
-        const load = () => {
-            loads.forEach((l) => l());
-            condStyle(sample, f);
-        };
-        load();
-        showTab("font");
+        draw();
         const buttons = dialogButtons(form);
         const clear = buttons.insertBefore(el("button", "clear", "クリア"), buttons.firstChild);
         clear.type = "button";
+        clear.title = "すべての項目を設定なしに戻します";
         clear.addEventListener("click", () => {
             for (const k of Object.keys(f)) delete f[k];
-            load();
+            draw();
         });
         form.addEventListener("submit", (e) => {
             e.preventDefault();
             closeSubDialog();
-            done(Object.keys(f).length ? Object.assign({}, f) : null);
+            done(Object.keys(f).length ? JSON.parse(JSON.stringify(f)) : null);
         });
-        tabs.firstChild.focus();
+        const first = holder.querySelector(".ptab.on") || holder.querySelector(".ptab");
+        if (first) first.focus();
     }
 
     // "負の値と軸の設定" of a data bar, over the rule's dialog, as Excel's: the negative values'
@@ -11779,8 +11967,12 @@
 
     document.addEventListener("keydown", (e) => {
         if (dialog) {
-            // (As キャンセル: a dialog opened from another goes back to it.)
-            if (e.key === "Escape") {
+            // (As キャンセル: a dialog opened from another goes back to it; a menu over it
+            // closes alone.)
+            if (e.key === "Escape" && menu) {
+                e.preventDefault();
+                closeMenu();
+            } else if (e.key === "Escape") {
                 e.preventDefault();
                 const form = subDialog ? subDialog.querySelector("form") : dialog.querySelector("form");
                 ((form && form.cancel) || closeDialog)();

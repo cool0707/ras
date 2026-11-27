@@ -79,7 +79,7 @@ pub struct CondRule {
     /// the 50th percentile, percents in equal steps).
     pub thresholds: Vec<Threshold>,
     /// What the rule gives the cells (not for bars, scales and icons).
-    pub format: Option<CondFormat>,
+    pub format: Option<Box<CondFormat>>,
     /// "条件を満たす場合は停止".
     pub stop: bool,
 }
@@ -199,18 +199,59 @@ const XM_NS: &str = "http://schemas.microsoft.com/office/excel/2006/main";
 const EXT_RULE: &str = "{B025F937-C7B1-47D3-B67F-A62EFF666E3E}";
 const EXT_CFS: &str = "{78C0D931-6437-407d-A8EE-F0AAD7539E65}";
 
-/// The format a rule gives: font color, fill, bold, italic, underline, strike-through, a border
-/// around the cells (`RRGGBB`).
+/// The format a rule gives, as Excel's "セルの書式設定" of a rule: each None where the rule
+/// leaves the cell's own (`false` / `"none"`: taken off it). Colors `RRGGBB`.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CondFormat {
+    /// The number format's code (as in the file).
+    pub number_format: Option<String>,
     pub color: Option<String>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    /// `single`, `double`, `singleAccounting`, `doubleAccounting`, or `none`.
+    pub underline: Option<String>,
+    pub strike: Option<bool>,
+    /// The background color (with no pattern, the cell's color).
     pub fill: Option<String>,
-    pub bold: bool,
-    pub italic: bool,
-    pub underline: bool,
-    pub strike: bool,
-    pub border: Option<String>,
+    /// A pattern (`darkGray`, ... as Excel names them) and its color.
+    pub pattern: Option<String>,
+    pub pattern_color: Option<String>,
+    /// The lines of the left, right, top and bottom sides: style (`thin`, ...) and color (None:
+    /// automatic).
+    pub sides: [Option<(String, Option<String>)>; 4],
 }
+
+/// The styles of the lines a rule's border can have (as Excel's dialog of a rule lists them).
+pub const COND_LINES: &[&str] = &["thin", "hair", "dotted", "dashDotDot", "dashDot", "dashed"];
+/// The patterns of a rule's fill.
+pub const COND_PATTERNS: &[&str] = &[
+    "darkGray",
+    "mediumGray",
+    "lightGray",
+    "gray125",
+    "gray0625",
+    "darkHorizontal",
+    "darkVertical",
+    "darkDown",
+    "darkUp",
+    "darkGrid",
+    "darkTrellis",
+    "lightHorizontal",
+    "lightVertical",
+    "lightDown",
+    "lightUp",
+    "lightGrid",
+    "lightTrellis",
+];
+pub const COND_UNDERLINES: &[&str] = &[
+    "none",
+    "single",
+    "double",
+    "singleAccounting",
+    "doubleAccounting",
+];
+/// The sides of a rule's border, in the order of `CondFormat::sides`.
+pub const COND_SIDES: [&str; 4] = ["left", "right", "top", "bottom"];
 
 pub(super) const KINDS: &[&str] = &[
     "cellIs",
@@ -819,18 +860,21 @@ fn put_x14(doc: &str, root: &El, p: &str, els: &str, edits: &mut Edits) -> Resul
     Ok(())
 }
 
-/// The format of a rule as a `dxf` of the styles.
-fn dxf_xml(f: &CondFormat) -> String {
+/// The format of a rule as a `dxf` of the styles `styles` (a number format of its own: with an
+/// id not taken there).
+fn dxf_xml(f: &CondFormat, styles: &str) -> String {
     let mut font = String::new();
-    for (on, tag) in [
-        (f.bold, "<b/>"),
-        (f.italic, "<i/>"),
-        (f.strike, "<strike/>"),
-        (f.underline, "<u/>"),
-    ] {
-        if on {
-            font.push_str(tag);
+    for (on, tag) in [(f.bold, "b"), (f.italic, "i"), (f.strike, "strike")] {
+        match on {
+            Some(true) => font.push_str(&format!("<{tag}/>")),
+            Some(false) => font.push_str(&format!("<{tag} val=\"0\"/>")),
+            None => {}
         }
+    }
+    match f.underline.as_deref() {
+        None => {}
+        Some("single") => font.push_str("<u/>"),
+        Some(u) => font.push_str(&format!("<u val=\"{u}\"/>")),
     }
     if let Some(c) = &f.color {
         font.push_str(&format!("<color rgb=\"FF{c}\"/>"));
@@ -839,23 +883,72 @@ fn dxf_xml(f: &CondFormat) -> String {
     if !font.is_empty() {
         out.push_str(&format!("<font>{font}</font>"));
     }
-    if let Some(c) = &f.fill {
+    if let Some(code) = &f.number_format {
         out.push_str(&format!(
-            "<fill><patternFill><bgColor rgb=\"FF{c}\"/></patternFill></fill>"
+            "<numFmt numFmtId=\"{}\" formatCode=\"{}\"/>",
+            dxf_format_id(styles, code),
+            scan::escape(code)
         ));
     }
-    if let Some(c) = &f.border {
-        let side = |s: &str| format!("<{s} style=\"thin\"><color rgb=\"FF{c}\"/></{s}>");
-        out.push_str(&format!(
-            "<border>{}{}{}{}</border>",
-            side("left"),
-            side("right"),
-            side("top"),
-            side("bottom")
-        ));
+    match &f.pattern {
+        Some(p) => {
+            let fg = f
+                .pattern_color
+                .as_ref()
+                .map(|c| format!("<fgColor rgb=\"FF{c}\"/>"))
+                .unwrap_or_default();
+            let bg = f
+                .fill
+                .as_ref()
+                .map(|c| format!("<bgColor rgb=\"FF{c}\"/>"))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "<fill><patternFill patternType=\"{p}\">{fg}{bg}</patternFill></fill>"
+            ));
+        }
+        None => {
+            if let Some(c) = &f.fill {
+                out.push_str(&format!(
+                    "<fill><patternFill><bgColor rgb=\"FF{c}\"/></patternFill></fill>"
+                ));
+            }
+        }
+    }
+    if f.sides.iter().any(Option::is_some) {
+        out.push_str("<border>");
+        for (name, side) in COND_SIDES.iter().zip(&f.sides) {
+            match side {
+                Some((style, Some(c))) => out.push_str(&format!(
+                    "<{name} style=\"{style}\"><color rgb=\"FF{c}\"/></{name}>"
+                )),
+                Some((style, None)) => out.push_str(&format!("<{name} style=\"{style}\"/>")),
+                None => {}
+            }
+        }
+        out.push_str("</border>");
     }
     out.push_str("</dxf>");
     out
+}
+
+/// The id of a rule's number format `code`: a built-in one's, else one after those the styles
+/// have (theirs and their formats of rules').
+fn dxf_format_id(styles: &str, code: &str) -> u32 {
+    if let Some(id) = super::styles::built_in_id(code) {
+        return id;
+    }
+    let mut most = 163;
+    for t in scan::tags(styles, 0).filter(|t| !t.is_close() && t.local() == "numFmt") {
+        if let Some(id) =
+            scan::attr(styles, t.start..t.end, "numFmtId").and_then(|v| v.parse::<u32>().ok())
+        {
+            if scan::attr(styles, t.start..t.end, "formatCode").as_deref() == Some(code) {
+                return id;
+            }
+            most = most.max(id);
+        }
+    }
+    most + 1
 }
 
 /// The children of a style sheet, in the order the schema has them.
@@ -957,7 +1050,7 @@ pub(super) fn conditional(
             let styles = s
                 .text("xl/styles.xml")?
                 .ok_or("ブックに xl/styles.xml がありません")?;
-            let (styles, id) = with_dxf(&styles, &dxf_xml(f))?;
+            let (styles, id) = with_dxf(&styles, &dxf_xml(f, &styles))?;
             s.put("xl/styles.xml", styles);
             Some(id)
         }
@@ -1222,37 +1315,56 @@ fn dxfs_of(styles: &str) -> Vec<Json> {
         .map(|d| {
             let mut f = serde_json::Map::new();
             if let Some(font) = d.child("font") {
-                for (tag, key) in [
-                    ("b", "bold"),
-                    ("i", "italic"),
-                    ("u", "underline"),
-                    ("strike", "strike"),
-                ] {
-                    if let Some(t) = font.child(tag)
-                        && !matches!(
-                            t.attr(styles, "val").as_deref(),
-                            Some("0" | "false" | "none")
-                        )
-                    {
-                        f.insert(key.into(), json!(true));
+                for (tag, key) in [("b", "bold"), ("i", "italic"), ("strike", "strike")] {
+                    if let Some(t) = font.child(tag) {
+                        let off = matches!(t.attr(styles, "val").as_deref(), Some("0" | "false"));
+                        f.insert(key.into(), json!(!off));
                     }
+                }
+                if let Some(u) = font.child("u") {
+                    let u = u.attr(styles, "val").unwrap_or_else(|| "single".into());
+                    f.insert("underline".into(), json!(u));
                 }
                 if let Some(c) = rgb_of(styles, font.child("color")) {
                     f.insert("color".into(), json!(c));
                 }
             }
-            if let Some(p) = d.child("fill").and_then(|x| x.child("patternFill"))
-                && let Some(c) = rgb_of(styles, p.child("bgColor"))
-                    .or_else(|| rgb_of(styles, p.child("fgColor")))
-            {
-                f.insert("fill".into(), json!(c));
+            if let Some(code) = d.child("numFmt").and_then(|n| n.attr(styles, "formatCode")) {
+                f.insert("numberFormat".into(), json!(code));
             }
-            if let Some(b) = d.child("border")
-                && let Some(c) = ["left", "right", "top", "bottom"]
-                    .iter()
-                    .find_map(|s| rgb_of(styles, b.child(s).and_then(|x| x.child("color"))))
-            {
-                f.insert("border".into(), json!(c));
+            if let Some(p) = d.child("fill").and_then(|x| x.child("patternFill")) {
+                let kind = p.attr(styles, "patternType").unwrap_or_default();
+                if COND_PATTERNS.contains(&kind.as_str()) {
+                    f.insert("pattern".into(), json!(kind));
+                    if let Some(c) = rgb_of(styles, p.child("fgColor")) {
+                        f.insert("patternColor".into(), json!(c));
+                    }
+                    if let Some(c) = rgb_of(styles, p.child("bgColor")) {
+                        f.insert("fill".into(), json!(c));
+                    }
+                } else if let Some(c) = rgb_of(styles, p.child("bgColor"))
+                    .or_else(|| rgb_of(styles, p.child("fgColor")))
+                {
+                    f.insert("fill".into(), json!(c));
+                }
+            }
+            if let Some(b) = d.child("border") {
+                let mut sides = serde_json::Map::new();
+                for name in COND_SIDES {
+                    if let Some(side) = b.child(name)
+                        && let Some(style) = side.attr(styles, "style")
+                        && style != "none"
+                    {
+                        let mut line = json!({ "style": style });
+                        if let Some(c) = rgb_of(styles, side.child("color")) {
+                            line["color"] = json!(c);
+                        }
+                        sides.insert(name.into(), line);
+                    }
+                }
+                if !sides.is_empty() {
+                    f.insert("borders".into(), Json::Object(sides));
+                }
             }
             Json::Object(f)
         })
@@ -1595,7 +1707,7 @@ pub(super) fn manage(bytes: &[u8], sheet: &str, rules: &[Managed]) -> Result<Vec
                             .text("xl/styles.xml")?
                             .ok_or("ブックに xl/styles.xml がありません")?,
                     };
-                    let (doc, id) = with_dxf(&doc, &dxf_xml(fmt))?;
+                    let (doc, id) = with_dxf(&doc, &dxf_xml(fmt, &doc))?;
                     styles = Some(doc);
                     Some(id)
                 }

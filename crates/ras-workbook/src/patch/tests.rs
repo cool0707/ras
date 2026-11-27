@@ -3560,6 +3560,55 @@ fn sheets_added_copied_renamed_and_removed_from_their_tabs() {
 }
 
 #[test]
+fn conditional_formats_give_each_item_of_the_cells_format() {
+    // セルの書式設定 of a rule: 表示形式, a style taken off, a double underline, a pattern and its
+    // color, a line of each side of its own (the number format by an id the styles have not
+    // taken: 164 is the book's); and back as the dialog reads it.
+    let out = edit(
+        r##"{"op":"conditional","range":"D2:D5","type":"cellIs","operator":"lessThan","values":["1000"],"format":{"numberFormat":"#,##0.0","bold":false,"underline":"double","strike":true,"fill":"#FFFF00","pattern":"lightGrid","patternColor":"#FF0000","borders":{"left":{"style":"dashed","color":"#0000FF"},"bottom":"thin"}}}"##,
+    );
+    let styles = part(&out, "xl/styles.xml");
+    assert!(
+        styles.contains(r##"<dxf><font><b val="0"/><strike/><u val="double"/></font><numFmt numFmtId="165" formatCode="#,##0.0"/><fill><patternFill patternType="lightGrid"><fgColor rgb="FFFF0000"/><bgColor rgb="FFFFFF00"/></patternFill></fill><border><left style="dashed"><color rgb="FF0000FF"/></left><bottom style="thin"/></border></dxf></dxfs>"##),
+        "{styles}"
+    );
+    let data = view(&out);
+    let sheet = &data["sheets"][0];
+    let rule = sheet["condRules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["operator"] == json!("lessThan"))
+        .unwrap();
+    assert_eq!(
+        rule["format"],
+        json!({ "numberFormat": "#,##0.0", "bold": false, "underline": "double", "strike": true, "fill": "#FFFF00", "pattern": "lightGrid", "patternColor": "#FF0000", "borders": { "left": { "style": "dashed", "color": "#0000FF" }, "bottom": { "style": "thin" } } })
+    );
+    let cell = sheet["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["r"] == json!(2) && x["c"] == json!(3))
+        .unwrap();
+    let css = sheet["styles"][cell["s"].as_u64().unwrap_or(0) as usize]
+        .as_str()
+        .unwrap();
+    assert!(
+        css.contains("font-weight:normal;")
+            && css.contains("text-decoration:underline line-through;")
+            && css.contains("repeat #FFFF00;")
+            && css.contains("border-left:1px dashed #0000FF;"),
+        "{css}"
+    );
+
+    // Each item is checked.
+    let wrong = |op: &str| parse_ops(&serde_json::from_str(op).unwrap(), Some("Data")).unwrap_err();
+    assert!(wrong(r#"{"op":"conditional","range":"A1","type":"cellIs","operator":"equal","values":["1"],"format":{"pattern":"stripes"}}"#).contains("pattern"));
+    assert!(wrong(r#"{"op":"conditional","range":"A1","type":"cellIs","operator":"equal","values":["1"],"format":{"borders":{"top":"thick"}}}"#).contains("線のスタイル"));
+    assert!(wrong(r#"{"op":"conditional","range":"A1","type":"cellIs","operator":"equal","values":["1"],"format":{"bold":"yes"}}"#).contains("bold"));
+}
+
+#[test]
 fn conditional_formats_put_on_cells_and_cleared() {
     const SHEET1: &str = "xl/worksheets/sheet1.xml";
     // 指定の値より小さい: the format in the styles' dxfs, the rule first in priority.

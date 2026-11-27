@@ -41,6 +41,9 @@ pub struct Line {
 pub struct CondFx {
     /// A fill (a color scale's or a format's), #RRGGBB.
     pub fill: Option<String>,
+    /// A format's pattern fill: its pattern (`darkGray`, ...), and the pattern's color and the
+    /// color under it (None: black, white).
+    pub pattern: Option<(String, Option<String>, Option<String>)>,
     pub color: Option<String>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
@@ -99,6 +102,8 @@ struct IconDef {
 #[derive(Debug, Clone, Default)]
 struct Dxf {
     fill: Option<Color>,
+    /// A pattern (not solid): its name, its color, the color under it.
+    pattern: Option<(String, Option<Color>, Option<Color>)>,
     color: Option<Color>,
     bold: Option<bool>,
     italic: Option<bool>,
@@ -156,19 +161,31 @@ fn cfvo(v: &ConditionalFormatValueObject) -> Cfvo {
 fn style_dxf(st: &Style) -> Dxf {
     let mut d = Dxf::default();
     if let Some(f) = st.font() {
-        d.bold = f.bold().then_some(true);
-        d.italic = f.italic().then_some(true);
-        d.strike = f.strikethrough().then_some(true);
-        d.underline = (f.font_underline().val().value_string() != "none").then_some(true);
+        // (Each as given: turned off on purpose too, as `<b val="0"/>` takes it off the cell.)
+        d.bold = (*f.font_bold() != umya_spreadsheet::Bold::default()).then(|| f.bold());
+        d.italic = (*f.font_italic() != umya_spreadsheet::Italic::default()).then(|| f.italic());
+        d.strike =
+            (*f.font_strike() != umya_spreadsheet::Strike::default()).then(|| f.strikethrough());
+        d.underline = (*f.font_underline() != umya_spreadsheet::Underline::default())
+            .then(|| f.font_underline().val().value_string() != "none");
         d.color = given(f.color());
     }
     d.num_fmt = st.numbering_format().map(|n| n.format_code().to_string());
     // A dxf's solid fill is its background color (and its pattern type is not given).
     if let Some(p) = st.fill().and_then(|f| f.pattern_fill()) {
-        d.fill = p
-            .background_color()
-            .and_then(given)
-            .or_else(|| p.foreground_color().and_then(given));
+        let t = p.pattern_type().value_string();
+        if !matches!(t, "" | "none" | "solid") {
+            d.pattern = Some((
+                t.to_string(),
+                p.foreground_color().and_then(given),
+                p.background_color().and_then(given),
+            ));
+        } else {
+            d.fill = p
+                .background_color()
+                .and_then(given)
+                .or_else(|| p.foreground_color().and_then(given));
+        }
     }
     if let Some(b) = st.borders() {
         for (i, s) in [b.left(), b.right(), b.top(), b.bottom()]
@@ -504,7 +521,7 @@ impl Book {
                         }
                     }
                     Eff::Fill(c) => {
-                        if fx.fill.is_none() {
+                        if fx.fill.is_none() && fx.pattern.is_none() {
                             fx.fill = Some(c);
                         }
                     }
@@ -894,8 +911,15 @@ impl Book {
 }
 
 fn add_dxf(fx: &mut CondFx, d: &Dxf, css: &dyn Fn(&Color) -> Option<String>) {
-    if fx.fill.is_none() {
+    if fx.fill.is_none() && fx.pattern.is_none() {
         fx.fill = d.fill.as_ref().and_then(css);
+        if let Some((t, fg, bg)) = &d.pattern {
+            fx.pattern = Some((
+                t.clone(),
+                fg.as_ref().and_then(css),
+                bg.as_ref().and_then(css),
+            ));
+        }
     }
     if fx.color.is_none() {
         fx.color = d.color.as_ref().and_then(css);

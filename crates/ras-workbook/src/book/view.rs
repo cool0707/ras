@@ -188,6 +188,16 @@ fn cond_css(fx: &super::cond::CondFx, own: &Style) -> String {
         css.push_str(&format!(
             "background:{c};box-shadow:-1px 0 {c},0 -1px {c},-1px -1px {c};--fill:none;"
         ));
+    } else if let Some((t, fg, bg)) = &fx.pattern
+        && let Some(tile) = pattern_tile(t)
+    {
+        // As a cell's pattern: in its color (black) over its color under it (white).
+        let fg = fg.clone().unwrap_or_else(|| "#000000".into());
+        let bg = bg.clone().unwrap_or_else(|| "#FFFFFF".into());
+        css.push_str(&format!(
+            "background:{bg};box-shadow:none;--fill:{} {bg};",
+            pattern_layer(tile, &fg)
+        ));
     }
     if let Some(c) = &fx.color {
         css.push_str(&format!("color:{c};"));
