@@ -2678,6 +2678,187 @@ fn activex_controls_changed_moved_and_deleted() {
     );
 }
 
+#[test]
+fn activex_controls_formatted() {
+    use crate::activex::{AUTO_SIZE, BACK_STYLE, ENABLED, Stream, WORD_WRAP};
+    let sample = crate::view::tests::sample();
+    let ed = |bytes: &[u8], json: &str| {
+        apply(
+            bytes,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+    };
+    let shown = |bytes: &[u8]| -> Json {
+        view(bytes)["sheets"][0]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["name"] == json!("CommandButton1"))
+            .cloned()
+            .unwrap()
+    };
+    let bin = |bytes: &[u8]| {
+        Stream::read("CommandButton", &parts(bytes)["xl/activeX/activeX1.bin"]).unwrap()
+    };
+    // What it has at first.
+    let first = shown(&sample);
+    assert_eq!(first["form"]["enabled"], json!(true), "{first}");
+    assert!(first["props"]["placement"].as_str().is_some());
+
+    // Its font, colors and properties: in its data.
+    let out = ed(
+        &sample,
+        r##"{"op":"object","name":"CommandButton1","font":{"name":"Arial","size":12,"bold":true,"italic":true,"strike":true},"foreColor":"#FF0000","backColor":"#00FF00","backStyle":"transparent","enabled":false,"wordWrap":true,"autoSize":true}"##,
+    )
+    .unwrap();
+    assert_eq!(changed(&sample, &out), ["xl/activeX/activeX1.bin"]);
+    let st = bin(&out);
+    assert_eq!(st.string("Caption"), bin(&sample).string("Caption"));
+    assert_eq!(
+        (st.number("ForeColor"), st.number("BackColor")),
+        (Some(0x0000_00FF), Some(0x0000_FF00))
+    );
+    let bits = st.bits();
+    assert_eq!(
+        (
+            bits & BACK_STYLE,
+            bits & ENABLED,
+            bits & WORD_WRAP != 0,
+            bits & AUTO_SIZE != 0
+        ),
+        (0, 0, true, true)
+    );
+    let font = st.font().unwrap();
+    assert_eq!(font.string("FontName").as_deref(), Some("Arial"));
+    assert_eq!(font.number("FontHeight"), Some(240));
+    assert_eq!(font.number("FontEffects").unwrap() & 0b1011, 0b1011);
+    let b = shown(&out);
+    let f = &b["form"];
+    assert_eq!(
+        (
+            f["font"]["name"].clone(),
+            f["font"]["size"].clone(),
+            f["font"]["bold"].clone(),
+            f["font"]["strike"].clone()
+        ),
+        (json!("Arial"), json!(12.0), json!(true), json!(true)),
+        "{f}"
+    );
+    assert_eq!(
+        (
+            f["enabled"].clone(),
+            f["wordWrap"].clone(),
+            f["autoSize"].clone(),
+            f["opaque"].clone()
+        ),
+        (json!(false), json!(true), json!(true), json!(false))
+    );
+    assert_eq!(
+        f["backColor"].as_str().map(str::to_ascii_uppercase),
+        Some("#00FF00".to_string())
+    );
+    let html = b["html"].as_str().unwrap();
+    assert!(
+        html.contains("line-through")
+            && html.contains("color:#a0a0a0")
+            && html.contains("background:transparent"),
+        "{html}"
+    );
+
+    // The colors of its type again; its font kept.
+    let back = ed(
+        &out,
+        r#"{"op":"object","name":"CommandButton1","foreColor":null,"backColor":null,"backStyle":"opaque","font":{"bold":false}}"#,
+    )
+    .unwrap();
+    let st = bin(&back);
+    assert_eq!(
+        (st.number("ForeColor"), st.number("BackColor")),
+        (
+            Some(0x8000_0012u32 as i32 as i64),
+            Some(0x8000_000Fu32 as i32 as i64)
+        )
+    );
+    assert_eq!(
+        st.font().unwrap().string("FontName").as_deref(),
+        Some("Arial")
+    );
+    assert_eq!(st.font().unwrap().number("FontEffects").unwrap() & 1, 0);
+    assert!(st.bits() & BACK_STYLE != 0);
+
+    // Its settings in the sheet: placement, print, lock, alt text (the sheet, its VML, its
+    // mirror).
+    let placed = ed(
+        &sample,
+        r#"{"op":"object","name":"CommandButton1","placement":"absolute","print":false,"locked":false,"altText":"送信ボタン"}"#,
+    )
+    .unwrap();
+    let doc = part(&placed, "xl/worksheets/sheet1.xml");
+    assert!(
+        doc.contains(r#"print="0""#)
+            && doc.contains(r#"locked="0""#)
+            && doc.contains(r#"altText="送信ボタン""#),
+        "{doc}"
+    );
+    let vml = part(&placed, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains("<x:MoveWithCells/><x:SizeWithCells/>")
+            && vml.contains("<x:PrintObject>False</x:PrintObject>")
+            && vml.contains("<x:Locked>False</x:Locked>"),
+        "{vml}"
+    );
+    let p = shown(&placed);
+    assert_eq!(
+        (
+            p["props"]["placement"].clone(),
+            p["props"]["print"].clone(),
+            p["props"]["locked"].clone(),
+            p["form"]["altText"].clone()
+        ),
+        (
+            json!("absolute"),
+            json!(false),
+            json!(false),
+            json!("送信ボタン")
+        )
+    );
+    let again = ed(
+        &placed,
+        r#"{"op":"object","name":"CommandButton1","placement":"twoCell","print":true,"locked":true,"altText":""}"#,
+    )
+    .unwrap();
+    let doc = part(&again, "xl/worksheets/sheet1.xml");
+    assert!(
+        !doc.contains(r#"print="0""#) && !doc.contains(r#"locked="0""#) && !doc.contains("altText"),
+        "{doc}"
+    );
+    let vml = part(&again, "xl/drawings/vmlDrawing1.vml");
+    let at = vml.find("id=\"CommandButton1\"").unwrap();
+    let vml = &vml[at..at + vml[at..].find("</v:shape>").unwrap()];
+    assert!(
+        !vml.contains("MoveWithCells")
+            && !vml.contains("SizeWithCells")
+            && !vml.contains("PrintObject"),
+        "{vml}"
+    );
+    assert_eq!(shown(&again)["props"]["placement"], json!("twoCell"));
+
+    // What it is not given.
+    let err = |json: &str| {
+        parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1"))
+            .and_then(|ops| apply(&sample, &ops))
+            .unwrap_err()
+    };
+    assert!(
+        err(r#"{"op":"object","name":"CommandButton1","backStyle":"clear"}"#).contains("backStyle")
+    );
+    assert!(err(r#"{"op":"object","name":"CommandButton1","font":{"size":0}}"#).contains("size"));
+    assert!(
+        err(r##"{"op":"object","name":"Check Box 3","foreColor":"#FF0000"}"##)
+            .contains("フォーム コントロール")
+    );
+}
+
 /// The ActiveX controls the grid draws on a sheet: (name, Microsoft Forms type).
 fn activex_of(bytes: &[u8], sheet: usize) -> Vec<(String, String)> {
     view(bytes)["sheets"][sheet]["objects"]

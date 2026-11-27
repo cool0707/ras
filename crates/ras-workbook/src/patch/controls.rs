@@ -614,6 +614,14 @@ pub(super) fn configure(
         let part = r.2.clone();
         return configure_activex(s, id, &part, change);
     }
+    if change.control_format.is_some()
+        || change.alt_text.is_some()
+        || change.placement.is_some()
+        || change.print.is_some()
+        || change.locked.is_some()
+    {
+        return Err("フォーム コントロールのフォント・色・プロパティ（位置関係・印刷・ロック）・代替テキストは、ここでは変えられません（ActiveX コントロールで変えられます。Excel で行ってください）".into());
+    }
     let props_part = rel.filter(|r| r.1.ends_with("/ctrlProp")).map(|r| r.2);
     let props_doc = match &props_part {
         Some(p) => s.text(p)?,
@@ -945,6 +953,32 @@ fn configure_activex(
             "ActiveX の {forms} では、選択する項目を `text`（値）で指定してください"
         ));
     }
+    let fmt = change.control_format.clone().unwrap_or_default();
+    let font_asked = fmt.font_name.is_some()
+        || fmt.font_size.is_some()
+        || fmt.bold.is_some()
+        || fmt.italic.is_some()
+        || fmt.underline.is_some()
+        || fmt.strike.is_some();
+    let bar = matches!(forms, "SpinButton" | "ScrollBar");
+    for (on, without, label) in [
+        (font_asked, bar, "フォント（Font）"),
+        (fmt.opaque.is_some(), bar, "背景のスタイル（BackStyle）"),
+        (
+            fmt.word_wrap.is_some(),
+            bar || matches!(forms, "ListBox" | "ComboBox"),
+            "折り返し（WordWrap）",
+        ),
+        (
+            fmt.auto_size.is_some(),
+            bar || forms == "ListBox",
+            "自動サイズ（AutoSize）",
+        ),
+    ] {
+        if on && without {
+            return Err(format!("{forms} には{label}がありません"));
+        }
+    }
 
     // The properties kept in its data: (name, value).
     let mut props: Vec<(&str, String)> = Vec::new();
@@ -1023,7 +1057,74 @@ fn configure_activex(
         }
     }
 
-    if !props.is_empty() {
+    if change.control_format.is_some() {
+        let Some(st) = &mut stream else {
+            return Err(format!(
+                "この ActiveX コントロールの保存データ（{persistence}）のフォント・色・プロパティは、ここでは変更できません（Excel で行ってください）"
+            ));
+        };
+        use crate::activex::{
+            AUTO_SIZE, BACK_STYLE, BOLD, ENABLED, ITALIC, STRIKE, UNDERLINE, WORD_WRAP,
+            default_colors, ole_of,
+        };
+        let (fore, back) = default_colors(forms);
+        if let Some(c) = &fmt.fore_color {
+            st.set_raw("ForeColor", c.as_deref().and_then(ole_of).unwrap_or(fore));
+        }
+        if let Some(c) = &fmt.back_color {
+            st.set_raw("BackColor", c.as_deref().and_then(ole_of).unwrap_or(back));
+        }
+        for (on, bit) in [
+            (fmt.opaque, BACK_STYLE),
+            (fmt.enabled, ENABLED),
+            (fmt.word_wrap, WORD_WRAP),
+            (fmt.auto_size, AUTO_SIZE),
+        ] {
+            if let Some(on) = on {
+                st.set_bit(bit, on);
+            }
+        }
+        if font_asked
+            && !st.change_font(|f| {
+                if let Some(n) = &fmt.font_name {
+                    f.set_string("FontName", n);
+                }
+                if let Some(pt) = fmt.font_size {
+                    f.set_number("FontHeight", (pt * 20.0).round() as i64);
+                }
+                let effects = [
+                    (fmt.bold, BOLD),
+                    (fmt.italic, ITALIC),
+                    (fmt.underline, UNDERLINE),
+                    (fmt.strike, STRIKE),
+                ];
+                if effects.iter().any(|e| e.0.is_some()) {
+                    let mut e = f.number("FontEffects").unwrap_or(0);
+                    for (on, bit) in effects {
+                        match on {
+                            Some(true) => e |= bit,
+                            Some(false) => e &= !bit,
+                            None => {}
+                        }
+                    }
+                    f.set_number("FontEffects", e);
+                }
+                // (The weight, when it has one, says whether it is bold.)
+                if let Some(b) = fmt.bold
+                    && f.number("FontWeight").is_some()
+                {
+                    f.set_number("FontWeight", if b { 700 } else { 400 });
+                }
+            })
+        {
+            return Err(
+                "この ActiveX コントロールのフォントを読み取れません（Excel で行ってください）"
+                    .into(),
+            );
+        }
+    }
+
+    if !props.is_empty() || change.control_format.is_some() {
         match (&mut stream, persistence.as_str()) {
             (Some(st), _) => {
                 for (name, v) in &props {
@@ -1085,28 +1186,59 @@ fn configure_activex(
             .find(|e| shape_id(&sdoc, e.el) == Some(id))
             .and_then(|e| first(e.el, "controlPr"))
     });
+    // (Off: "0"; on, as Excel writes it: none.)
+    let off = |on: Option<bool>| on.map(|on| (!on).then(|| "0".to_string()));
     for (attr, value) in [
-        ("linkedCell", &change.link),
-        ("listFillRange", &change.items),
+        ("linkedCell", change.link.clone()),
+        ("listFillRange", change.items.clone()),
+        ("print", off(change.print)),
+        ("locked", off(change.locked)),
+        (
+            "altText",
+            change
+                .alt_text
+                .clone()
+                .map(|t| Some(t).filter(|t| !t.is_empty())),
+        ),
     ] {
         let Some(value) = value else { continue };
         let Some(pr) = pr else {
+            if matches!(attr, "print" | "locked") {
+                // (Its VML shape has them too.)
+                continue;
+            }
             return Err("この ActiveX コントロールの設定（controlPr）がありません（Excel で行ってください）".into());
         };
-        match value {
-            Some(v) => scan::set_attr(&sdoc, pr.open.clone(), attr, v, &mut sheet_edits),
-            None => {
-                // ` name="value"`: from the space before it to the quote after it.
-                if let Some(v) = scan::attr_span(&sdoc, pr.open.clone(), attr) {
-                    let head = &sdoc[pr.open.start..v.start - 1];
-                    if let Some(eq) = head.rfind('=') {
-                        let start = pr.open.start + head[..eq].trim_end().len() - attr.len();
-                        let start = sdoc[..start].trim_end().len();
-                        sheet_edits.replace(start..v.end + 1, "");
-                    }
-                }
-            }
-        }
+        put_attr(
+            &sdoc,
+            pr.open.clone(),
+            attr,
+            value.as_deref(),
+            &mut sheet_edits,
+        );
+    }
+    // オブジェクトの位置関係: its anchor's `moveWithCells` and `sizeWithCells`.
+    if let Some(p) = &change.placement
+        && let Some(a) = pr.and_then(|p| p.child("anchor"))
+    {
+        let one = |on: bool| on.then_some("1");
+        put_attr(
+            &sdoc,
+            a.open.clone(),
+            "moveWithCells",
+            one(p != "absolute"),
+            &mut sheet_edits,
+        );
+        put_attr(
+            &sdoc,
+            a.open.clone(),
+            "sizeWithCells",
+            one(p == "twoCell"),
+            &mut sheet_edits,
+        );
+    }
+    if change.placement.is_some() || change.print.is_some() || change.locked.is_some() {
+        placed(&mut s, &root, &sdoc, id, change)?;
     }
     // The linked cell gets the state, the text or the value.
     let link = change
@@ -1133,6 +1265,131 @@ fn configure_activex(
     });
     let doc = (!sheet_edits.is_empty()).then(|| sheet_edits.apply(&sdoc));
     Ok((s.finish(doc)?, cell))
+}
+
+/// An attribute of the start tag at `open` set, or (None) taken away.
+fn put_attr(
+    doc: &str,
+    open: std::ops::Range<usize>,
+    attr: &str,
+    value: Option<&str>,
+    edits: &mut Edits,
+) {
+    match value {
+        Some(v) => scan::set_attr(doc, open, attr, v, edits),
+        None => {
+            // ` name="value"`: from the space before it to the quote after it.
+            if let Some(v) = scan::attr_span(doc, open.clone(), attr) {
+                let head = &doc[open.start..v.start - 1];
+                if let Some(eq) = head.rfind('=') {
+                    let start = open.start + head[..eq].trim_end().len() - attr.len();
+                    let start = doc[..start].trim_end().len();
+                    edits.replace(start..v.end + 1, "");
+                }
+            }
+        }
+    }
+}
+
+/// An ActiveX control's オブジェクトの位置関係, オブジェクトを印刷する and ロック where its VML
+/// shape keeps them (`x:ClientData`: `x:MoveWithCells` and `x:SizeWithCells` there when it does
+/// not move or size with the cells, `x:PrintObject` and `x:Locked` False when off) and its
+/// mirror in the drawing (its anchor's `editAs`).
+fn placed(
+    s: &mut Sheet,
+    root: &El,
+    sdoc: &str,
+    id: u32,
+    change: &super::ObjectChange,
+) -> Result<()> {
+    if let Some(part) = vml_part(s, root, sdoc)?
+        && let Some(doc) = s.text(&part)?
+    {
+        let vroot =
+            scan::tree(&doc, &[]).ok_or("VML の描画を読み取れません（Excel で行ってください）")?;
+        let mut all = Vec::new();
+        vml_shapes(&vroot, &mut all);
+        if let Some(data) = all
+            .into_iter()
+            .find(|x| spid_of(&doc, x) == Some(id))
+            .and_then(|sh| sh.child("ClientData"))
+        {
+            let x = scan::prefix(data.name);
+            let mut edits = Edits::default();
+            let mut drop = |names: &[&str]| {
+                for c in &data.children {
+                    if names.contains(&c.local()) {
+                        edits.replace(c.span(), "");
+                    }
+                }
+            };
+            if change.placement.is_some() {
+                drop(&["MoveWithCells", "SizeWithCells"]);
+            }
+            if change.print.is_some() {
+                drop(&["PrintObject"]);
+            }
+            if change.locked.is_some() {
+                drop(&["Locked"]);
+            }
+            let at = data.open.end;
+            if data.open.end == data.end {
+                return Err(
+                    "この ActiveX コントロールの VML を読み取れません（Excel で行ってください）"
+                        .into(),
+                );
+            }
+            let mut head = String::new();
+            match change.placement.as_deref() {
+                Some("oneCell") => head.push_str(&format!("<{x}SizeWithCells/>")),
+                Some("absolute") => {
+                    head.push_str(&format!("<{x}MoveWithCells/><{x}SizeWithCells/>"));
+                }
+                _ => {}
+            }
+            if change.locked == Some(false) {
+                head.push_str(&format!("<{x}Locked>False</{x}Locked>"));
+            }
+            if change.print == Some(false) {
+                head.push_str(&format!("<{x}PrintObject>False</{x}PrintObject>"));
+            }
+            if !head.is_empty() {
+                edits.insert(at, head);
+            }
+            if !edits.is_empty() {
+                s.put(&part, edits.apply(&doc));
+            }
+        }
+    }
+    // Its mirror in the drawing.
+    if let Some(p) = &change.placement
+        && let Some(d) = drawing_of(s, false)?
+    {
+        let droot = scan::tree(&d.doc, &[]).ok_or("描画のパートを読み取れません")?;
+        let spid = format!("_x0000_s{id}");
+        let mut edits = Edits::default();
+        for u in units(&droot) {
+            for a in &u.anchors {
+                let mine = first(a, "compatExt")
+                    .and_then(|c| c.attr(&d.doc, "spid"))
+                    .is_some_and(|v| v == spid);
+                if mine && a.local() == "twoCellAnchor" {
+                    edits.replace(
+                        a.open.clone(),
+                        super::drawing::tag_with(
+                            &d.doc,
+                            a,
+                            &[("editAs", (p != "twoCell").then(|| p.clone()))],
+                        ),
+                    );
+                }
+            }
+        }
+        if !edits.is_empty() {
+            s.put(&d.part, edits.apply(&d.doc));
+        }
+    }
+    Ok(())
 }
 
 /// A linked cell (`$B$2`, `Sheet2!$B$2`, `'売上 4月'!$B$2`): its sheet (`sheet` when it names

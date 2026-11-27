@@ -4164,7 +4164,9 @@
         if (obj.props) {
             m.Placement = { twoCell: enumOf("xlMoveAndSize", 1), oneCell: enumOf("xlMove", 2), absolute: enumOf("xlFreeFloating", 3) }[pr.placement];
             m.Locked = !!pr.locked;
+            if (ax) m.PrintObject = !!pr.print;
         }
+        if (ax && f.altText !== undefined) m.AlternativeText = f.altText || "";
         m.TopLeftCell = cell(obj.from);
         m.BottomRightCell = cell(obj.to);
         if (obj.onAction) m.OnAction = obj.macro || "";
@@ -4214,6 +4216,15 @@
                 if (t === "Scroll" || t === "ScrollBar") c.LargeChange = f.page || 1;
             }
             if (obj.text !== undefined) c[ax ? (["TextBox", "ListBox", "ComboBox"].includes(t) ? "Text" : "Caption") : "Caption"] = obj.text;
+            if (ax && f.enabled !== undefined) {
+                if (f.font) c.Font = { Name: f.font.name, Size: f.font.size, Bold: !!f.font.bold, Italic: !!f.font.italic, Underline: !!f.font.underline, Strikethrough: !!f.font.strike };
+                c.ForeColor = rgb(f.foreColor);
+                c.BackColor = rgb(f.backColor);
+                if (!["SpinButton", "ScrollBar"].includes(t)) c.BackStyle = f.opaque ? enumOf("fmBackStyleOpaque", 1) : enumOf("fmBackStyleTransparent", 0);
+                c.Enabled = !!f.enabled;
+                if (!["ListBox", "ComboBox", "SpinButton", "ScrollBar"].includes(t)) c.WordWrap = !!f.wordWrap;
+                if (!["ListBox", "SpinButton", "ScrollBar"].includes(t)) c.AutoSize = !!f.autoSize;
+            }
             if (ax) m.OLEFormat = { ProgId: `Forms.${obj.activex || t}.1`, Object: c };
             else m.ControlFormat = c;
         }
@@ -4458,6 +4469,14 @@
             choices(sec, [["none", "塗りつぶしなし"], ["solid", "塗りつぶし (単色)"]], fill ? "solid" : "none", (v) => edit({ fill: v === "none" ? null : fill || lastShape.fill }));
             if (fill) colorRow(sec, "fill", fill, "塗りつぶしなし", (c) => edit({ fill: c }));
         }
+        // An ActiveX control's 背景 (BackStyle, BackColor): 透明 or 不透明 in its color.
+        if (ax && f.backColor !== undefined && t !== "SpinButton" && t !== "ScrollBar") {
+            const sec = section("fill", "背景（BackStyle・BackColor）");
+            choices(sec, [["transparent", "透明（fmBackStyleTransparent）"], ["opaque", "不透明（fmBackStyleOpaque）"]], f.opaque ? "opaque" : "transparent", (v) => edit({ backStyle: v }));
+            if (f.opaque) kit.colorRow(sec, "色", f.backColor || null, "既定の色", (c) => edit({ backColor: c }), "backColor");
+        } else if (ax && f.backColor !== undefined) {
+            kit.colorRow(section("fill", "背景（BackColor）"), "色", f.backColor || null, "既定の色", (c) => edit({ backColor: c }), "backColor");
+        }
         if (canLine(obj)) {
             const sec = section("fill", "線");
             const color = paint.line || null;
@@ -4592,9 +4611,10 @@
         }
 
         // プロパティ: オブジェクトの位置関係, オブジェクトを印刷する, ロック, テキストをロックする
-        const props = !isControl(obj) && obj.props;
+        const props = (!isControl(obj) || ax) && obj.props;
         if (props) {
-            const sec = section("size", "プロパティ");
+            // (An ActiveX control's own プロパティ follow: these are Excel's 保護 and プロパティ.)
+            const sec = section("size", ax ? "保護とプロパティ" : "プロパティ");
             choices(
                 sec,
                 [
@@ -4617,6 +4637,27 @@
             check("オブジェクトを印刷する", "print", "print");
             check("ロック", "locked", "locked");
             if (props.lockText !== null && props.lockText !== undefined) check("テキストをロックする", "lockText", "lockText");
+        }
+        // 代替テキスト (an ActiveX control's)
+        if (ax && f.altText !== undefined) {
+            const sec = section("size", "代替テキスト");
+            const alt = sec.appendChild(el("textarea", "ptext"));
+            alt.rows = 3;
+            alt.value = f.altText || "";
+            alt.dataset.field = "altText";
+            alt.title = "Ctrl+Enter で確定";
+            alt.addEventListener("change", () => alt.value !== (f.altText || "") && edit({ altText: alt.value }));
+            alt.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    alt.blur();
+                    focusGrid();
+                } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    alt.value = f.altText || "";
+                    focusGrid();
+                }
+            });
         }
 
         // コントロール: what its kind has (the linked cell, the items, the state, the values)
@@ -4655,6 +4696,12 @@
                     : [["現在値", "val", "value"], ["最小値", "min", "min"], ["最大値", "max", "max"], ["変化の増分", "inc", "step"]];
                 if (t === "Scroll" || t === "ScrollBar") numbers.push([ax ? "LargeChange" : "ページ単位の変化", "page", "page"]);
                 for (const [label, key, op] of numbers) number(label, key, op, !ax);
+            }
+            // An ActiveX control's Enabled, WordWrap, AutoSize.
+            if (ax && f.enabled !== undefined) {
+                kit.checkRow(sec, "有効（Enabled）", f.enabled, "enabled", (on) => edit({ enabled: on }));
+                if (!["ListBox", "ComboBox", "SpinButton", "ScrollBar"].includes(t)) kit.checkRow(sec, "折り返し（WordWrap）", f.wordWrap, "wordWrap", (on) => edit({ wordWrap: on }));
+                if (!["ListBox", "SpinButton", "ScrollBar"].includes(t)) kit.checkRow(sec, "自動サイズ（AutoSize）", f.autoSize, "autoSize", (on) => edit({ autoSize: on }));
             }
             if (!sec.querySelector(".prow")) sec.parentNode.remove();
         }
@@ -4710,6 +4757,50 @@
             on.dataset.field = "textWrap";
             wrap.appendChild(el("span", null, "図形内でテキストを折り返す"));
             on.addEventListener("change", () => edit({ textWrap: on.checked }));
+        }
+
+        // 文字 > フォント: an ActiveX control's font (Font) and its color (ForeColor)
+        if (ax && f.font) {
+            const fn = f.font;
+            const font = (v) => edit({ font: v });
+            const sec = section("text", "フォント");
+            const row = line(sec, "フォント名");
+            const combo = row.appendChild(el("span", "pcombo"));
+            const input = combo.appendChild(el("input"));
+            input.type = "text";
+            input.value = fn.name;
+            input.dataset.field = "fontName";
+            input.spellcheck = false;
+            input.autocomplete = "off";
+            const take = (v) => {
+                v = v.trim();
+                if (v && v !== fn.name) font({ name: v });
+            };
+            input.addEventListener("change", () => take(input.value));
+            input.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    input.blur();
+                    focusGrid();
+                } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    input.value = fn.name;
+                    focusGrid();
+                }
+            });
+            const drop = combo.appendChild(el("button", "pdrop", "▾"));
+            drop.type = "button";
+            drop.title = "フォントの一覧";
+            drop.addEventListener("click", () => openFontList(combo, take, fn.name));
+            const style = fn.bold && fn.italic ? "boldItalic" : fn.bold ? "bold" : fn.italic ? "italic" : "normal";
+            kit.selectRow(sec, "スタイル", [["normal", "標準"], ["italic", "斜体"], ["bold", "太字"], ["boldItalic", "太字 斜体"]], style, "fontStyle", (v) => font({ bold: v.startsWith("bold"), italic: /italic/i.test(v) }));
+            const size = sizeBox(line(sec, "サイズ"), "フォント サイズ", (n) => n > 0 && n !== fn.size && font({ size: n }), { name: "pt", step: 1, min: 1, max: 409 });
+            size.input.dataset.field = "fontSize";
+            size.setCm(fn.size);
+            kit.checkRow(sec, "下線", fn.underline, "underline", (on) => font({ underline: on }));
+            kit.checkRow(sec, "取り消し線", fn.strike, "strike", (on) => font({ strike: on }));
+            kit.colorRow(sec, "文字の色", f.foreColor || null, "既定の色", (c) => edit({ foreColor: c }), "foreColor");
         }
 
         // 文字: the text of a control (its caption or value)

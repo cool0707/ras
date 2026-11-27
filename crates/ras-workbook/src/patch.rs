@@ -398,6 +398,30 @@ pub struct ObjectChange {
     pub print: Option<bool>,
     pub locked: Option<bool>,
     pub lock_text: Option<bool>,
+    /// An ActiveX control's 代替テキスト (its `controlPr`'s `altText`; empty: none).
+    pub alt_text: Option<String>,
+    /// An ActiveX control's own properties (Microsoft Forms): its font, colors, ...
+    pub control_format: Option<ControlFormat>,
+}
+
+/// What an ActiveX control's properties (Microsoft Forms 2.0, kept in its data) an `object`
+/// edit changes (None: what it has stays): its font (名前, サイズ in points, 太字, 斜体, 下線,
+/// 取り消し線), ForeColor and BackColor (`RRGGBB`; None in them: the default of its type),
+/// BackStyle (true: 不透明), Enabled, WordWrap, AutoSize.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ControlFormat {
+    pub font_name: Option<String>,
+    pub font_size: Option<f64>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub underline: Option<bool>,
+    pub strike: Option<bool>,
+    pub fore_color: Option<Option<String>>,
+    pub back_color: Option<Option<String>>,
+    pub opaque: Option<bool>,
+    pub enabled: Option<bool>,
+    pub word_wrap: Option<bool>,
+    pub auto_size: Option<bool>,
 }
 
 /// An effect of a shape as 図形の書式設定 > 効果 sets it (None: what it has stays): 色
@@ -1117,8 +1141,55 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     Some(p @ ("twoCell" | "oneCell" | "absolute")) => Some(p.to_string()),
                     Some(other) => return Err(format!("`placement` `{other}` は指定できません（twoCell / oneCell / absolute）")),
                 };
+                // An ActiveX control's font and properties.
+                let font = match o.get("font") {
+                    None | Some(Json::Null) => None,
+                    Some(Json::Object(m)) => Some(m),
+                    Some(_) => return Err("`font` は {\"name\": \"游ゴシック\", \"size\": 11, \"bold\": true} のように指定してください".into()),
+                };
+                let mut format = ControlFormat::default();
+                if let Some(m) = font {
+                    for (k, v) in m {
+                        match k.as_str() {
+                            "name" => {
+                                let n = v.as_str().map(str::trim).filter(|n| !n.is_empty() && n.chars().count() <= 31);
+                                format.font_name = Some(n.ok_or("`font` の `name` はフォントの名前（31 文字まで）で指定してください")?.to_string());
+                            }
+                            "size" => {
+                                let x = v.as_f64().filter(|x| x.is_finite() && (1.0..=409.0).contains(x));
+                                format.font_size = Some(x.ok_or("`font` の `size` は 1〜409（ポイント）で指定してください")?);
+                            }
+                            "bold" | "italic" | "underline" | "strike" => {
+                                let on = v.as_bool().ok_or_else(|| format!("`font` の `{k}` は true か false で指定してください"))?;
+                                *match k.as_str() {
+                                    "bold" => &mut format.bold,
+                                    "italic" => &mut format.italic,
+                                    "underline" => &mut format.underline,
+                                    _ => &mut format.strike,
+                                } = Some(on);
+                            }
+                            _ => return Err(format!("`font` の `{k}` は指定できません（name / size / bold / italic / underline / strike）")),
+                        }
+                    }
+                }
+                format.fore_color = color("foreColor")?;
+                format.back_color = color("backColor")?;
+                format.opaque = match text("backStyle").as_deref() {
+                    None => None,
+                    Some("opaque") => Some(true),
+                    Some("transparent") => Some(false),
+                    Some(other) => return Err(format!("`backStyle` `{other}` は指定できません（opaque / transparent）")),
+                };
+                format.enabled = o.get("enabled").and_then(Json::as_bool);
+                format.word_wrap = o.get("wordWrap").and_then(Json::as_bool);
+                format.auto_size = o.get("autoSize").and_then(Json::as_bool);
                 let change = ObjectChange {
                     shape,
+                    alt_text: match o.get("altText") {
+                        None => None,
+                        Some(v) => Some(v.as_str().map(str::to_string).ok_or("`altText` は文字列で指定してください")?),
+                    },
+                    control_format: (format != ControlFormat::default()).then_some(format),
                     placement,
                     print: o.get("print").and_then(Json::as_bool),
                     locked: o.get("locked").and_then(Json::as_bool),
@@ -1160,7 +1231,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     page: int_of(o, "page")?,
                 };
                 if change == (ObjectChange { shape, ..Default::default() }) {
-                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`textAnchor`・`textWrap`・`inset`、`fill`、`line`、`lineWidth`、`shadow`・`glow`・`reflection`、`placement`・`print`・`locked`・`lockText`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page` のどれかを指定してください".into());
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`textAnchor`・`textWrap`・`inset`、`fill`、`line`、`lineWidth`、`shadow`・`glow`・`reflection`、`placement`・`print`・`locked`・`lockText`、`altText`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page`、ActiveX コントロールの `font`・`foreColor`・`backColor`・`backStyle`・`enabled`・`wordWrap`・`autoSize` のどれかを指定してください".into());
                 }
                 Op::Object { sheet, name, change: Box::new(change) }
             }

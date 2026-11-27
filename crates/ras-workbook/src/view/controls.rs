@@ -40,6 +40,14 @@ struct AxSettings {
     /// `VariousPropertyBits` (MS-OFORMS): bit 1 is `Enabled`.
     bits: Option<i64>,
     group: Option<String>,
+    /// Its font struck through (`FontEffects`).
+    strike: bool,
+    /// The sheet's settings of it (`controlPr`, its `anchor`): オブジェクトを印刷する, ロック,
+    /// 代替テキスト, whether it moves and sizes with the cells (None: not said there).
+    print: Option<bool>,
+    locked: Option<bool>,
+    alt: String,
+    moves: Option<(bool, bool)>,
 }
 
 impl Controls {
@@ -71,9 +79,27 @@ impl Controls {
                     crate::activex::Stream::read(class, Parts::bytes(parts, &bin)?)
                 });
                 let n = |k: &str| stream.as_ref().and_then(|st| st.number(k));
+                let flag = |k: &str| {
+                    pr.and_then(|p| p.attr(k))
+                        .map(|v| !matches!(v, "0" | "false"))
+                };
+                let anchor = pr.and_then(|p| p.find("anchor"));
+                let moves = anchor.map(|a| {
+                    let on = |k: &str| matches!(a.attr(k), Some("1" | "true"));
+                    (on("moveWithCells"), on("sizeWithCells"))
+                });
                 activex.insert(
                     id,
                     AxSettings {
+                        strike: stream
+                            .as_ref()
+                            .and_then(crate::activex::Stream::font)
+                            .and_then(|f| f.number("FontEffects"))
+                            .is_some_and(|e| e & crate::activex::STRIKE != 0),
+                        print: flag("print"),
+                        locked: flag("locked"),
+                        alt: attr("altText"),
+                        moves,
                         link: attr("linkedCell"),
                         items: attr("listFillRange"),
                         small: n("SmallChange"),
@@ -287,10 +313,13 @@ impl Controls {
                 .unwrap_or_default()
         });
         let items = items.as_slice();
+        let settings = self.activex.get(&c.shape_id).cloned().unwrap_or_default();
         let html = match &c.activex {
             // An ActiveX control the grid draws itself; another one: its preview.
-            Some(ax) if !ax.class.is_empty() => activex_html(c, ax, &self.font, items),
-            Some(ax) => picture().unwrap_or_else(|| activex_html(c, ax, &self.font, items)),
+            Some(ax) if !ax.class.is_empty() => activex_html(c, ax, &settings, &self.font, items),
+            Some(ax) => {
+                picture().unwrap_or_else(|| activex_html(c, ax, &settings, &self.font, items))
+            }
             // An embedded object: its picture.
             None if c.kind == "Pict" => picture()?,
             None => form_html(c, env, &self.font, items)?,
@@ -331,8 +360,12 @@ impl Controls {
                     items: fill,
                     small: inc,
                     large: page,
+                    bits,
+                    strike,
+                    alt,
                     ..
-                } = self.activex.get(&c.shape_id).cloned().unwrap_or_default();
+                } = settings.clone();
+                let bit = |b: i64, d: bool| bits.map_or(d, |v| v & b != 0);
                 let value_text = matches!(forms, "TextBox" | "ListBox" | "ComboBox");
                 let text = if value_text {
                     ax.value.clone()
@@ -354,6 +387,22 @@ impl Controls {
                             "inc": inc.unwrap_or(1),
                             "page": page.unwrap_or(1),
                             "list": items,
+                            // Its properties (Microsoft Forms): its font, colors, ...
+                            "font": (!matches!(forms, "SpinButton" | "ScrollBar")).then(|| serde_json::json!({
+                                "name": ax.font.clone().unwrap_or_else(|| self.font.0.clone()),
+                                "size": ax.size.unwrap_or(9.0),
+                                "bold": ax.bold,
+                                "italic": ax.italic,
+                                "underline": ax.underline,
+                                "strike": strike,
+                            })),
+                            "foreColor": ax.fore,
+                            "backColor": ax.back,
+                            "opaque": ax.opaque,
+                            "enabled": bit(crate::activex::ENABLED, true),
+                            "wordWrap": bit(crate::activex::WORD_WRAP, ax.class == "Label"),
+                            "autoSize": bit(crate::activex::AUTO_SIZE, false),
+                            "altText": alt,
                         })
                     }),
                     (shows && !forms.is_empty()).then(|| text.unwrap_or_default()),
@@ -384,7 +433,28 @@ impl Controls {
             adjust: None,
             paint: None,
             text_box: None,
-            props: None,
+            // An ActiveX control's プロパティ: as the sheet says them, else its VML shape.
+            props: c.activex.as_ref().map(|_| {
+                let vml = |k: &str| {
+                    c.client
+                        .get(k)
+                        .map(|v| !v.trim().eq_ignore_ascii_case("false"))
+                };
+                let (moves, sizes) = settings.moves.unwrap_or((
+                    !c.client.contains_key("MoveWithCells"),
+                    !c.client.contains_key("SizeWithCells"),
+                ));
+                serde_json::json!({
+                    "placement": match (moves, sizes) {
+                        (true, true) => "twoCell",
+                        (true, false) => "oneCell",
+                        _ => "absolute",
+                    },
+                    "print": settings.print.or_else(|| vml("PrintObject")).unwrap_or(true),
+                    "locked": settings.locked.or_else(|| vml("Locked")).unwrap_or(true),
+                    "lockText": null,
+                })
+            }),
         })
     }
 }
@@ -602,21 +672,48 @@ fn form_html(c: &Control, env: &Env, font: &(String, f64), items: &[String]) -> 
 }
 
 /// The HTML of an ActiveX control.
-fn activex_html(c: &Control, ax: &Ax, default: &(String, f64), items: &[String]) -> String {
+fn activex_html(
+    c: &Control,
+    ax: &Ax,
+    s: &AxSettings,
+    default: &(String, f64),
+    items: &[String],
+) -> String {
     // The default font of MSForms controls in Excel.
     let fallback = (default.0.clone(), 9.0);
+    let enabled = s.bits.is_none_or(|b| b & crate::activex::ENABLED != 0);
     let font = Text {
         font: ax.font.clone(),
         size: ax.size,
-        color: ax.fore.clone(),
+        // (Disabled: its text grayed.)
+        color: if enabled {
+            ax.fore.clone()
+        } else {
+            Some("#a0a0a0".into())
+        },
         bold: ax.bold,
         italic: ax.italic,
         underline: ax.underline,
+        strike: s.strike,
         ..Default::default()
     };
-    let css = text_css(&font, &fallback);
+    let mut css = text_css(&font, &fallback);
+    // WordWrap off: its text on one line (a label's is on unless said otherwise).
+    let wraps = s
+        .bits
+        .map_or(ax.class == "Label", |b| b & crate::activex::WORD_WRAP != 0);
+    if !wraps {
+        css.push_str("white-space:pre;");
+    }
     let caption = esc(ax.caption.as_deref().unwrap_or(&c.name));
-    let back = |d: &str| format!("background:{};", ax.back.as_deref().unwrap_or(d));
+    // (BackStyle transparent: no back.)
+    let back = |d: &str| {
+        if ax.opaque {
+            format!("background:{};", ax.back.as_deref().unwrap_or(d))
+        } else {
+            "background:transparent;".to_string()
+        }
+    };
     let value = esc(ax.value.as_deref().unwrap_or(""));
     let on = ax.is_on();
     match (ax.class, ax.display) {
