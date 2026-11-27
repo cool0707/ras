@@ -6,6 +6,15 @@
 <title>RAS フォーム</title>
 <link rel="stylesheet" href="frame.css">
 <link rel="stylesheet" href="designer/formRunner.css">
+<style>
+/* In the playground the frame is the form's window itself: no space or note around it, and
+   messages float over the form. */
+html, body { background: transparent; overflow: hidden; }
+#app { padding: 0; gap: 0; min-height: 0; position: relative; }
+.form-window { box-shadow: none; }
+.note { display: none; }
+.banners { position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 20; }
+</style>
 <script>
 // The VS Code extension's webview in a frame of the playground: what it posts to VS Code goes
 // to the page (designer.ts / forms.ts), which answers with postMessage as VS Code does.

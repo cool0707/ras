@@ -761,8 +761,7 @@ body.splitting iframe {
     max-width: calc(100vw - 32px);
     max-height: calc(100vh - 32px);
     background: transparent;
-    border-radius: 8px;
-    box-shadow: var(--shadow);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
 .dialog {

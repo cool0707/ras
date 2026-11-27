@@ -130,12 +130,12 @@ export class FormPanels {
         this.layout(p);
     }
 
-    /** The frame fits the form: its size (points) with the title bar and the panel's margins. */
+    /** The frame is the form's window: its size (points) with the border and the title bar. */
     private layout(p: Panel): void {
         const w = parseFloat(px(p.state.form.Width)) || 300;
         const h = parseFloat(px(p.state.form.Height)) || 200;
-        p.frame.style.width = `${Math.max(Math.ceil(w) + 40, 380)}px`;
-        p.frame.style.height = `${Math.ceil(h) + 130}px`;
+        p.frame.style.width = `${Math.ceil(w) + 2}px`;
+        p.frame.style.height = `${Math.ceil(h) + 32}px`;
         this.layer.classList.toggle("modal", [...this.panels.values()].some((x) => x.state.modal));
     }
 
