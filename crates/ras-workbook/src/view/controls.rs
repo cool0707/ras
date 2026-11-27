@@ -28,6 +28,33 @@ pub(crate) struct Controls {
     /// The items of the list and combo boxes, by name, as the stand-in for Excel has them
     /// (`state`): drawn in place of those of the file.
     lists: std::collections::HashMap<String, Vec<String>>,
+    /// The text boxes of the form controls (by their shapes): 余白 自動, the insets (points).
+    boxes: std::collections::HashMap<u32, (bool, [f64; 4])>,
+}
+
+/// The insets of a VML text box (`inset`: left, top, right, bottom) in points; those it does
+/// not give: VML's (0.1in, 0.05in).
+fn vml_insets(inset: Option<&str>) -> [f64; 4] {
+    let mut out = [7.2, 3.6, 7.2, 3.6];
+    for (i, v) in inset.unwrap_or("").split(',').take(4).enumerate() {
+        let v = v.trim();
+        let (num, unit) = v
+            .find(|c: char| c.is_ascii_alphabetic())
+            .map_or((v, ""), |k| (&v[..k], &v[k..]));
+        let Ok(n) = num.trim().parse::<f64>() else {
+            continue;
+        };
+        out[i] = match unit {
+            "pt" => n,
+            "in" => n * 72.0,
+            "mm" => n * 72.0 / 25.4,
+            "cm" => n * 72.0 / 2.54,
+            "px" => n * 0.75,
+            // (A number alone: EMU.)
+            _ => n / 12700.0,
+        };
+    }
+    out
 }
 
 /// What an ActiveX control keeps besides what umya-spreadsheet reads.
@@ -67,13 +94,15 @@ impl Controls {
                 ) else {
                     continue;
                 };
-                if !kind.ends_with("/control") || activex.contains_key(&id) {
+                if activex.contains_key(&id) {
                     continue;
                 }
                 let pr = c.find("controlPr");
                 let attr = |k: &str| pr.and_then(|p| p.attr(k)).unwrap_or("").to_string();
-                // Its small and large change, from its data.
-                let stream = parts.xml(part).and_then(|ocx| {
+                // An ActiveX control's small and large change, ..., from its data (a form
+                // control: its sheet's settings only).
+                let ax = kind.ends_with("/control");
+                let stream = parts.xml(part).filter(|_| ax).and_then(|ocx| {
                     let (class, _) = crate::activex::class_of(ocx.attr("classid").unwrap_or(""));
                     let bin = ocx.attr("id").and_then(|r| parts.rels(part).remove(r))?.1;
                     crate::activex::Stream::read(class, Parts::bytes(parts, &bin)?)
@@ -113,7 +142,36 @@ impl Controls {
                 );
             }
         }
+        // The text boxes of the form controls' VML shapes: 余白 自動 (`o:insetmode`), and their
+        // insets (points).
+        let mut boxes = std::collections::HashMap::new();
+        let mut vml: Vec<&String> = rels
+            .values()
+            .filter(|(t, _)| t.ends_with("/vmlDrawing"))
+            .map(|(_, p)| p)
+            .collect();
+        vml.sort();
+        for part in vml {
+            let Some(root) = parts.xml(part) else {
+                continue;
+            };
+            let mut shapes = Vec::new();
+            root.find_all("shape", &mut shapes);
+            for sh in shapes {
+                let (Some(id), Some(tb)) = (
+                    sh.attr("spid")
+                        .or_else(|| sh.attr("id"))
+                        .and_then(spid_number),
+                    sh.child("textbox"),
+                ) else {
+                    continue;
+                };
+                let auto = sh.attr("insetmode") != Some("custom");
+                boxes.insert(id, (auto, vml_insets(tb.attr("inset"))));
+            }
+        }
         Controls {
+            boxes,
             done: vec![false; list.len()],
             list,
             font: font.clone(),
@@ -344,7 +402,42 @@ impl Controls {
                 "inc": num("inc", "Inc", 1),
                 "page": num("page", "Page", 10),
                 "list": items,
+                "altText": settings.alt,
             })
+        });
+        // A button's font, 配置 and 余白 (as Excel's コントロールの書式設定 has them).
+        let form = form.map(|mut j| {
+            if c.kind == "Button" {
+                let t = c.text.clone().unwrap_or_default();
+                let raw = |k: &str, d: Option<&str>| {
+                    c.client
+                        .get(k)
+                        .map(|v| v.trim().to_ascii_lowercase())
+                        .filter(|v| !v.is_empty())
+                        .or_else(|| d.map(str::to_string))
+                };
+                let (auto, inset) = self
+                    .boxes
+                    .get(&c.shape_id)
+                    .copied()
+                    .unwrap_or((true, [7.2, 3.6, 7.2, 3.6]));
+                j["font"] = serde_json::json!({
+                    "name": t.font.clone().unwrap_or_else(|| self.font.0.clone()),
+                    "size": t.size.unwrap_or(self.font.1),
+                    "bold": t.bold,
+                    "italic": t.italic,
+                    "underline": t.underline,
+                    "strike": t.strike,
+                });
+                j["foreColor"] = serde_json::json!(t.color);
+                j["textAlign"] =
+                    serde_json::json!(raw("TextHAlign", t.align).unwrap_or_else(|| "left".into()));
+                j["textVAlign"] =
+                    serde_json::json!(raw("TextVAlign", t.valign).unwrap_or_else(|| "top".into()));
+                j["insetAuto"] = serde_json::json!(auto);
+                j["inset"] = serde_json::json!(inset.map(|v| (v * 100.0).round() / 100.0));
+            }
+            j
         });
         let shows_text = matches!(
             c.kind.as_str(),
@@ -434,7 +527,7 @@ impl Controls {
             paint: None,
             text_box: None,
             // An ActiveX control's プロパティ: as the sheet says them, else its VML shape.
-            props: c.activex.as_ref().map(|_| {
+            props: (c.kind != "Pict").then(|| {
                 let vml = |k: &str| {
                     c.client
                         .get(k)
@@ -452,7 +545,15 @@ impl Controls {
                     },
                     "print": settings.print.or_else(|| vml("PrintObject")).unwrap_or(true),
                     "locked": settings.locked.or_else(|| vml("Locked")).unwrap_or(true),
-                    "lockText": null,
+                    // 文字列のロック: a form control with a text (VML's `LockText`, its
+                    // properties' `lockText`).
+                    "lockText": (c.activex.is_none() && shows_text).then(|| {
+                        c.client
+                            .get("LockText")
+                            .map(|v| !v.trim().eq_ignore_ascii_case("false"))
+                            .or_else(|| c.props.get("lockText").map(|v| matches!(v.as_str(), "1" | "true")))
+                            .unwrap_or(true)
+                    }),
                 })
             }),
         })

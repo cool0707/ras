@@ -2854,8 +2854,163 @@ fn activex_controls_formatted() {
     );
     assert!(err(r#"{"op":"object","name":"CommandButton1","font":{"size":0}}"#).contains("size"));
     assert!(
-        err(r##"{"op":"object","name":"Check Box 3","foreColor":"#FF0000"}"##)
-            .contains("フォーム コントロール")
+        err(r##"{"op":"object","name":"Check Box 3","foreColor":"#FF0000"}"##).contains("フォント")
+    );
+}
+
+#[test]
+fn form_controls_formatted() {
+    let sample = crate::view::tests::sample();
+    let ed = |bytes: &[u8], json: &str| {
+        parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1"))
+            .and_then(|ops| apply(bytes, &ops))
+    };
+    let shown = |bytes: &[u8], name: &str| -> Json {
+        view(bytes)["sheets"][0]["objects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|o| o["name"] == json!(name))
+            .cloned()
+            .unwrap()
+    };
+    let first = shown(&sample, "Button 1");
+    assert_eq!(
+        (
+            first["form"]["textAlign"].clone(),
+            first["form"]["textVAlign"].clone(),
+            first["props"]["lockText"].clone()
+        ),
+        (json!("center"), json!("center"), json!(true)),
+        "{first}"
+    );
+
+    // A button's font, 配置 and 余白: its VML text box and client data, its properties, its
+    // mirror.
+    let out = ed(
+        &sample,
+        r##"{"op":"object","name":"Button 1","font":{"name":"Arial","size":14,"bold":true,"strike":true},"foreColor":"#C00000","textAlign":"right","textVAlign":"bottom","inset":{"left":2,"top":1,"right":3,"bottom":4}}"##,
+    )
+    .unwrap();
+    let vml = part(&out, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains(r##"<div style='text-align:right'><font face="Arial" size="280" color="#C00000"><b><s>ボタン 1</s></b></font></div>"##)
+            && vml.contains("<x:TextHAlign>Right</x:TextHAlign>")
+            && vml.contains("<x:TextVAlign>Bottom</x:TextVAlign>")
+            && vml.contains(r#"o:insetmode="custom""#)
+            && vml.contains(r#"inset="2pt,1pt,3pt,4pt""#),
+        "{vml}"
+    );
+    let props = part(&out, "xl/ctrlProps/ctrlProp1.xml");
+    assert!(
+        props.contains(r#"textHAlign="right""#) && props.contains(r#"textVAlign="bottom""#),
+        "{props}"
+    );
+    let drawing = part(&out, "xl/drawings/drawing1.xml");
+    assert!(
+        drawing.contains(r#"<a:pPr algn="r" rtl="0">"#)
+            && drawing.contains(r#"sz="1400" b="1" i="0" u="none" strike="sngStrike""#)
+            && drawing.contains(r#"<a:solidFill><a:srgbClr val="C00000"/></a:solidFill><a:latin typeface="Arial"/><a:ea typeface="Arial"/></a:rPr>"#)
+            && drawing.contains(r#"lIns="25400" tIns="12700" rIns="38100" bIns="50800" anchor="b""#),
+        "{drawing}"
+    );
+    let b = shown(&out, "Button 1");
+    let f = &b["form"];
+    assert_eq!(
+        (
+            f["font"]["name"].clone(),
+            f["font"]["size"].clone(),
+            f["font"]["bold"].clone(),
+            f["font"]["strike"].clone(),
+            f["textAlign"].clone(),
+            f["textVAlign"].clone(),
+            f["insetAuto"].clone(),
+            f["inset"].clone()
+        ),
+        (
+            json!("Arial"),
+            json!(14.0),
+            json!(true),
+            json!(true),
+            json!("right"),
+            json!("bottom"),
+            json!(false),
+            json!([2.0, 1.0, 3.0, 4.0])
+        ),
+        "{f}"
+    );
+    assert!(b["html"].as_str().unwrap().contains("line-through"));
+    // 余白 自動 again.
+    let auto = ed(
+        &out,
+        r#"{"op":"object","name":"Button 1","insetAuto":true}"#,
+    )
+    .unwrap();
+    let vml = part(&auto, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains(r#"o:insetmode="auto""#) && !vml.contains("inset=\"2pt"),
+        "{vml}"
+    );
+    assert_eq!(shown(&auto, "Button 1")["form"]["insetAuto"], json!(true));
+
+    // 保護, プロパティ, 代替テキスト: the sheet, VML, the properties, the mirror.
+    let out = ed(
+        &sample,
+        r#"{"op":"object","name":"Check Box 3","placement":"absolute","print":false,"locked":false,"lockText":false,"altText":"確認"}"#,
+    )
+    .unwrap();
+    let doc = part(&out, "xl/worksheets/sheet1.xml");
+    assert!(
+        doc.contains(r#"<control shapeId="1027" r:id="rId6" name="Check Box 3"><controlPr defaultSize="0" autoLine="0" print="0" locked="0" altText="確認"><anchor>"#),
+        "{doc}"
+    );
+    let vml = part(&out, "xl/drawings/vmlDrawing1.vml");
+    assert!(
+        vml.contains("<x:ClientData ObjectType=\"Checkbox\"><x:MoveWithCells/><x:SizeWithCells/><x:Locked>False</x:Locked><x:PrintObject>False</x:PrintObject><x:LockText>False</x:LockText>"),
+        "{vml}"
+    );
+    assert!(!part(&out, "xl/ctrlProps/ctrlProp2.xml").contains("lockText"));
+    let c = shown(&out, "Check Box 3");
+    assert_eq!(
+        (c["props"].clone(), c["form"]["altText"].clone()),
+        (
+            json!({"placement": "absolute", "print": false, "locked": false, "lockText": false}),
+            json!("確認")
+        )
+    );
+
+    // What a kind does not have.
+    assert!(
+        ed(
+            &sample,
+            r#"{"op":"object","name":"Check Box 3","font":{"bold":true}}"#
+        )
+        .unwrap_err()
+        .contains("フォント")
+    );
+    assert!(
+        ed(
+            &sample,
+            r#"{"op":"object","name":"List Box 4","lockText":false}"#
+        )
+        .unwrap_err()
+        .contains("文字列のロック")
+    );
+    assert!(
+        ed(
+            &sample,
+            r##"{"op":"object","name":"Button 1","backColor":"#FF0000"}"##
+        )
+        .unwrap_err()
+        .contains("背景")
+    );
+    assert!(
+        ed(
+            &sample,
+            r#"{"op":"object","name":"CommandButton1","textAlign":"left"}"#
+        )
+        .unwrap_err()
+        .contains("配置")
     );
 }
 

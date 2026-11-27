@@ -614,14 +614,6 @@ pub(super) fn configure(
         let part = r.2.clone();
         return configure_activex(s, id, &part, change);
     }
-    if change.control_format.is_some()
-        || change.alt_text.is_some()
-        || change.placement.is_some()
-        || change.print.is_some()
-        || change.locked.is_some()
-    {
-        return Err("フォーム コントロールのフォント・色・プロパティ（位置関係・印刷・ロック）・代替テキストは、ここでは変えられません（ActiveX コントロールで変えられます。Excel で行ってください）".into());
-    }
     let props_part = rel.filter(|r| r.1.ends_with("/ctrlProp")).map(|r| r.2);
     let props_doc = match &props_part {
         Some(p) => s.text(p)?,
@@ -711,6 +703,48 @@ pub(super) fn configure(
             return Err(format!("{kind}には{label}がありません"));
         }
     }
+    // Its format: a button's font, 配置 and 余白 (Excel's コントロールの書式設定 has them for a
+    // button only); 文字列のロック, of those with a text. What an ActiveX control has besides.
+    let fmt = change.control_format.clone().unwrap_or_default();
+    let font_asked = fmt.font_name.is_some()
+        || fmt.font_size.is_some()
+        || fmt.bold.is_some()
+        || fmt.italic.is_some()
+        || fmt.underline.is_some()
+        || fmt.strike.is_some()
+        || fmt.fore_color.is_some();
+    let button = object == "Button";
+    for (on, ok, label) in [
+        (font_asked, button, "フォント"),
+        (
+            change.text_align.is_some() || change.text_valign.is_some(),
+            button,
+            "文字の配置",
+        ),
+        (
+            change.inset.is_some() || change.inset_auto.is_some(),
+            button,
+            "余白",
+        ),
+        (
+            change.lock_text.is_some(),
+            has(&object, "text"),
+            "文字列のロック",
+        ),
+        (
+            fmt.back_color.is_some()
+                || fmt.opaque.is_some()
+                || fmt.enabled.is_some()
+                || fmt.word_wrap.is_some()
+                || fmt.auto_size.is_some(),
+            false,
+            "背景の色・BackStyle・Enabled・WordWrap・AutoSize（ActiveX コントロールのプロパティ）",
+        ),
+    ] {
+        if on && !ok {
+            return Err(format!("{kind}には{label}がありません"));
+        }
+    }
 
     // The value in its range (Excel's: the least, the greatest, the value between them).
     let now = |p: &str, c: &str, d: i64| -> i64 {
@@ -791,6 +825,37 @@ pub(super) fn configure(
     for (p, c, v) in &numbers {
         set.push((p, c, Some(v.to_string())));
     }
+    // 配置: VML's `Left`, `Center`, ...; the properties' `left`, `center`, ...
+    let capital = |v: &str| {
+        let mut c = v.chars();
+        c.next()
+            .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+            .unwrap_or_default()
+    };
+    let mut props_extra: Vec<(&str, Option<String>)> = Vec::new();
+    if let Some(a) = &change.text_align {
+        set.push(("", "TextHAlign", Some(capital(a))));
+        props_extra.push(("textHAlign", Some(a.clone())));
+    }
+    if let Some(a) = &change.text_valign {
+        set.push(("", "TextVAlign", Some(capital(a))));
+        props_extra.push(("textVAlign", Some(a.clone())));
+    }
+    // 文字列のロック: the properties' `lockText` "1" when on.
+    // (VML's below, with the other protections.)
+    if let Some(on) = change.lock_text {
+        props_extra.push(("lockText", on.then(|| "1".to_string())));
+    }
+    let styled = BoxStyle {
+        face: fmt.font_name.clone(),
+        size: fmt.font_size,
+        color: fmt.fore_color.clone(),
+        bold: fmt.bold,
+        italic: fmt.italic,
+        underline: fmt.underline,
+        strike: fmt.strike,
+        align: change.text_align.clone(),
+    };
 
     // VML: `x:ClientData`'s elements and the text box.
     if let (Some(sh), Some(doc), Some(part)) = (shape, vml_doc.as_deref(), &vml) {
@@ -810,14 +875,57 @@ pub(super) fn configure(
                 }
             }
         }
-        if let Some(text) = &change.text {
+        if change.text.is_some() || styled.any() {
             match sh.child("textbox") {
-                Some(tb) => edits.replace(tb.inner.clone(), vml_box_text(doc, tb, text)),
+                Some(tb) if styled.any() => edits.replace(
+                    tb.inner.clone(),
+                    vml_box_styled(doc, tb, change.text.as_deref(), &styled),
+                ),
+                Some(tb) => edits.replace(
+                    tb.inner.clone(),
+                    vml_box_text(doc, tb, change.text.as_deref().unwrap_or_default()),
+                ),
                 None => {
                     let at = sh
                         .child("ClientData")
                         .map_or(sh.inner.end, |d| d.open.start);
-                    edits.insert(at, vml_textbox(text, "left"));
+                    let text = change.text.clone().unwrap_or_default();
+                    let new = vml_textbox(&text, "left");
+                    // (Styled as it is asked.)
+                    let new = match scan::tree(&new, &[]) {
+                        Some(tb) if styled.any() => {
+                            let inner = vml_box_styled(&new, &tb, Some(&text), &styled);
+                            format!("{}{inner}</v:textbox>", &new[tb.open.clone()])
+                        }
+                        _ => new,
+                    };
+                    edits.insert(at, new);
+                }
+            }
+        }
+        // 余白: the text box's `inset` (points), its shape's `o:insetmode` (`auto`, `custom`).
+        if change.inset.is_some() || change.inset_auto.is_some() {
+            let auto = change.inset_auto.unwrap_or(false) && change.inset.is_none();
+            scan::set_attr(
+                doc,
+                sh.open.clone(),
+                "o:insetmode",
+                if auto { "auto" } else { "custom" },
+                &mut edits,
+            );
+            if let Some(tb) = sh.child("textbox") {
+                if auto {
+                    put_attr(doc, tb.open.clone(), "inset", None, &mut edits);
+                } else {
+                    let now = vml_insets(tb.attr(doc, "inset").as_deref());
+                    let four = change.inset.unwrap_or([None; 4]);
+                    // (VML's order: left, top, right, bottom, as `inset`'s.)
+                    let v: Vec<String> = (0..4)
+                        .map(|i| {
+                            format!("{}pt", (four[i].unwrap_or(now[i]) * 100.0).round() / 100.0)
+                        })
+                        .collect();
+                    scan::set_attr(doc, tb.open.clone(), "inset", &v.join(","), &mut edits);
                 }
             }
         }
@@ -838,6 +946,11 @@ pub(super) fn configure(
                 };
                 (*p, v)
             })
+            .collect();
+        let attrs: Vec<(&str, Option<String>)> = attrs
+            .into_iter()
+            .filter(|a| !a.0.is_empty())
+            .chain(props_extra.iter().cloned())
             .collect();
         if !attrs.is_empty() {
             s.put(part, super::drawing::with_attrs(doc, &attrs));
@@ -887,7 +1000,451 @@ pub(super) fn configure(
             s.put(&d.part, edits.apply(&d.doc));
         }
     }
-    Ok((s.finish(None)?, cell))
+    // Its mirror's text formatted, its 配置 and 余白.
+    if (styled.any()
+        || change.text_valign.is_some()
+        || change.inset.is_some()
+        || change.inset_auto.is_some())
+        && let Some(d) = drawing_of(&mut s, false)?
+    {
+        let droot = scan::tree(&d.doc, &[]).ok_or("描画のパートを読み取れません")?;
+        let mut edits = Edits::default();
+        for u in units(&droot) {
+            for a in &u.anchors {
+                let mine = first(a, "compatExt")
+                    .and_then(|c| c.attr(&d.doc, "spid"))
+                    .as_deref()
+                    == Some(spid.as_str());
+                if let Some(sp) = super::drawing::object_of(a).filter(|o| mine && o.local() == "sp")
+                {
+                    mirror_format(&d.doc, sp, &styled, change, &mut edits);
+                }
+            }
+        }
+        if !edits.is_empty() {
+            s.put(&d.part, edits.apply(&d.doc));
+        }
+    }
+    // 保護, プロパティ, 代替テキスト: the sheet's `controlPr`, VML, the mirror.
+    let mut sheet_edits = Edits::default();
+    let pr = sheet_controls(&root).and_then(|(_, _, list)| {
+        list.into_iter()
+            .find(|e| shape_id(&sdoc, e.el) == Some(id))
+            .and_then(|e| first(e.el, "controlPr"))
+    });
+    sheet_settings(&sdoc, pr, change, &mut sheet_edits)?;
+    if change.placement.is_some()
+        || change.print.is_some()
+        || change.locked.is_some()
+        || change.lock_text.is_some()
+    {
+        placed(&mut s, &root, &sdoc, id, change)?;
+    }
+    let doc = (!sheet_edits.is_empty()).then(|| sheet_edits.apply(&sdoc));
+    Ok((s.finish(doc)?, cell))
+}
+
+/// The sheet's settings of a control (its `controlPr`): オブジェクトを印刷する, ロック (`print`,
+/// `locked`: "0" when off), 代替テキスト (`altText`), オブジェクトの位置関係 (its `anchor`'s
+/// `moveWithCells`, `sizeWithCells`).
+fn sheet_settings(
+    sdoc: &str,
+    pr: Option<&El>,
+    change: &super::ObjectChange,
+    edits: &mut Edits,
+) -> Result<()> {
+    let off = |on: Option<bool>| on.map(|on| (!on).then(|| "0".to_string()));
+    for (attr, value) in [
+        ("print", off(change.print)),
+        ("locked", off(change.locked)),
+        (
+            "altText",
+            change
+                .alt_text
+                .clone()
+                .map(|t| Some(t).filter(|t| !t.is_empty())),
+        ),
+    ] {
+        let Some(value) = value else { continue };
+        let Some(pr) = pr else {
+            if matches!(attr, "print" | "locked") {
+                // (Its VML shape has them too.)
+                continue;
+            }
+            return Err(
+                "このコントロールの設定（controlPr）がありません（Excel で行ってください）".into(),
+            );
+        };
+        put_attr(sdoc, pr.open.clone(), attr, value.as_deref(), edits);
+    }
+    if let Some(p) = &change.placement
+        && let Some(a) = pr.and_then(|p| p.child("anchor"))
+    {
+        let one = |on: bool| on.then_some("1");
+        put_attr(
+            sdoc,
+            a.open.clone(),
+            "moveWithCells",
+            one(p != "absolute"),
+            edits,
+        );
+        put_attr(
+            sdoc,
+            a.open.clone(),
+            "sizeWithCells",
+            one(p == "twoCell"),
+            edits,
+        );
+    }
+    Ok(())
+}
+
+/// The font and the alignment a form button's text is given (None: what it has stays). `color`
+/// None in it: 自動 (black).
+#[derive(Default)]
+struct BoxStyle {
+    face: Option<String>,
+    size: Option<f64>,
+    color: Option<Option<String>>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    strike: Option<bool>,
+    align: Option<String>,
+}
+
+impl BoxStyle {
+    fn any(&self) -> bool {
+        self.face.is_some()
+            || self.size.is_some()
+            || self.color.is_some()
+            || self.bold.is_some()
+            || self.italic.is_some()
+            || self.underline.is_some()
+            || self.strike.is_some()
+            || self.align.is_some()
+    }
+}
+
+/// The text of an element (its tags left out; `<br>` a new line).
+fn plain(doc: &str, el: &El) -> String {
+    let mut out = String::new();
+    let mut rest = &doc[el.inner.clone()];
+    while let Some(i) = rest.find('<') {
+        out.push_str(&rest[..i]);
+        let Some(j) = rest[i..].find('>') else {
+            break;
+        };
+        let tag = rest[i + 1..i + j]
+            .trim_start_matches('/')
+            .to_ascii_lowercase();
+        if tag.starts_with("br") {
+            out.push('\n');
+        }
+        rest = &rest[i + j + 1..];
+    }
+    out.push_str(rest);
+    scan::unescape(&out)
+}
+
+/// The insets of a VML text box (`inset`: left, top, right, bottom) in points; those it does
+/// not give: VML's (0.1in, 0.05in).
+fn vml_insets(inset: Option<&str>) -> [f64; 4] {
+    let mut out = [7.2, 3.6, 7.2, 3.6];
+    for (i, v) in inset.unwrap_or("").split(',').take(4).enumerate() {
+        let v = v.trim();
+        if v.is_empty() {
+            continue;
+        }
+        let (num, unit) = v
+            .find(|c: char| c.is_ascii_alphabetic())
+            .map_or((v, ""), |k| (&v[..k], &v[k..]));
+        let Ok(n) = num.trim().parse::<f64>() else {
+            continue;
+        };
+        out[i] = match unit {
+            "pt" => n,
+            "in" => n * 72.0,
+            "mm" => n * 72.0 / 25.4,
+            "cm" => n * 72.0 / 2.54,
+            "px" => n * 0.75,
+            // (A number alone: EMU.)
+            _ => n / 12700.0,
+        };
+    }
+    out
+}
+
+/// A form button's VML text box with its text (`text`, else the one it has) in the font and the
+/// alignment asked for, the others as it has them: a `div` a line.
+fn vml_box_styled(doc: &str, tb: &El, text: Option<&str>, st: &BoxStyle) -> String {
+    let divs: Vec<&El> = tb.children.iter().filter(|c| c.local() == "div").collect();
+    let lines: Vec<String> = match text {
+        Some(t) => t
+            .replace("\r\n", "\n")
+            .split('\n')
+            .map(str::to_string)
+            .collect(),
+        None if divs.is_empty() => vec![plain(doc, tb).trim().to_string()],
+        None => divs.iter().map(|d| plain(doc, d)).collect(),
+    };
+    let font = divs.first().and_then(|d| first(d, "font"));
+    let attr = |k: &str| font.and_then(|f| f.attr(doc, k));
+    let has = |t: &str| font.is_some_and(|f| first(f, t).is_some());
+    let face = st
+        .face
+        .clone()
+        .or_else(|| attr("face"))
+        .unwrap_or_else(|| FONT.to_string());
+    let size = st
+        .size
+        .map(|p| (p * 20.0).round() as i64)
+        .or_else(|| attr("size").and_then(|v| v.parse().ok()))
+        .unwrap_or(220);
+    let color = match &st.color {
+        Some(Some(c)) => format!("#{c}"),
+        Some(None) => "#000000".to_string(),
+        None => attr("color").unwrap_or_else(|| "#000000".to_string()),
+    };
+    let align = st.align.clone().unwrap_or_else(|| {
+        divs.first()
+            .and_then(|d| d.attr(doc, "style"))
+            .and_then(|s| {
+                s.split(';').find_map(|p| {
+                    p.trim()
+                        .strip_prefix("text-align:")
+                        .map(|a| a.trim().to_string())
+                })
+            })
+            .unwrap_or_else(|| "left".to_string())
+    });
+    let tags: Vec<&str> = [
+        (st.bold.unwrap_or_else(|| has("b")), "b"),
+        (st.italic.unwrap_or_else(|| has("i")), "i"),
+        (st.underline.unwrap_or_else(|| has("u")), "u"),
+        (st.strike.unwrap_or_else(|| has("s")), "s"),
+    ]
+    .into_iter()
+    .filter(|t| t.0)
+    .map(|t| t.1)
+    .collect();
+    let open: String = tags.iter().map(|t| format!("<{t}>")).collect();
+    let close: String = tags.iter().rev().map(|t| format!("</{t}>")).collect();
+    lines
+        .iter()
+        .map(|line| {
+            format!(
+                "<div style='text-align:{align}'><font face=\"{}\" size=\"{size}\" color=\"{color}\">{open}{}{close}</font></div>",
+                scan::escape(&face),
+                scan::escape(line)
+            )
+        })
+        .collect()
+}
+
+/// An element's text with attributes set or taken away, the children named in `drop` taken
+/// away, and children put in: `early` after the last of the names given it has (else at its
+/// start), `late` before the first of the names given it has (else at its end).
+fn reshaped(
+    text: &str,
+    attrs: &[(&str, Option<String>)],
+    drop: &[&str],
+    early: (&[&str], String),
+    late: (&[&str], String),
+) -> String {
+    let mut text = super::drawing::with_attrs(text, attrs);
+    if early.1.is_empty() && late.1.is_empty() && drop.is_empty() {
+        return text;
+    }
+    // (A tag closed in itself opened.)
+    if let Some(el) = scan::tree(&text, &[])
+        && el.open.end == el.end
+    {
+        let head = text[..el.open.end]
+            .trim_end_matches("/>")
+            .trim_end()
+            .to_string();
+        text = format!("{head}></{}>", el.name);
+    }
+    let Some(el) = scan::tree(&text, &[]) else {
+        return text;
+    };
+    let mut edits = Edits::default();
+    for c in &el.children {
+        if drop.contains(&c.local()) {
+            edits.replace(c.span(), "");
+        }
+    }
+    let kept: Vec<&El> = el
+        .children
+        .iter()
+        .filter(|c| !drop.contains(&c.local()))
+        .collect();
+    if !early.1.is_empty() {
+        let at = kept
+            .iter()
+            .rev()
+            .find(|c| early.0.contains(&c.local()))
+            .map_or(el.inner.start, |c| c.end);
+        edits.insert(at, early.1);
+    }
+    if !late.1.is_empty() {
+        let at = kept
+            .iter()
+            .find(|c| late.0.contains(&c.local()))
+            .map_or(el.inner.end, |c| c.span().start);
+        edits.insert(at, late.1);
+    }
+    edits.apply(&text)
+}
+
+/// A form button's mirror (`sp`) formatted as its VML text box: its runs' font (`rPr`), its
+/// paragraphs' alignment (`algn`), its body's vertical anchor and insets.
+fn mirror_format(
+    doc: &str,
+    sp: &El,
+    st: &BoxStyle,
+    change: &super::ObjectChange,
+    edits: &mut Edits,
+) {
+    let Some(body) = sp.child("txBody") else {
+        return;
+    };
+    let a = body
+        .children
+        .iter()
+        .find(|c| c.local() == "p")
+        .map_or("a:", |p| scan::prefix(p.name))
+        .to_string();
+    if let Some(bp) = body.child("bodyPr") {
+        let mut attrs: Vec<(&str, Option<String>)> = Vec::new();
+        if let Some(v) = &change.text_valign {
+            let anchor = match v.as_str() {
+                "top" => "t",
+                "bottom" => "b",
+                "justify" => "just",
+                "distributed" => "dist",
+                _ => "ctr",
+            };
+            attrs.push(("anchor", Some(anchor.to_string())));
+        }
+        if change.inset.is_some() || change.inset_auto.is_some() {
+            let auto = change.inset_auto.unwrap_or(false) && change.inset.is_none();
+            let four = change.inset.unwrap_or([None; 4]);
+            for (i, k) in ["lIns", "tIns", "rIns", "bIns"].into_iter().enumerate() {
+                let v = if auto {
+                    Some(27432)
+                } else {
+                    four[i].map(|pt| (pt * 12700.0).round() as i64)
+                };
+                if let Some(v) = v {
+                    attrs.push((k, Some(v.to_string())));
+                }
+            }
+        }
+        if !attrs.is_empty() {
+            edits.replace(
+                bp.span(),
+                super::drawing::with_attrs(&doc[bp.span()], &attrs),
+            );
+        }
+    }
+    let algn = st.align.as_deref().map(|v| {
+        match v {
+            "center" => "ctr",
+            "right" => "r",
+            "justify" => "just",
+            "distributed" => "dist",
+            _ => "l",
+        }
+        .to_string()
+    });
+    let flag = |on: Option<bool>| on.map(|b| if b { "1" } else { "0" }.to_string());
+    let rattrs: Vec<(&str, Option<String>)> = [
+        (
+            "sz",
+            st.size.map(|p| ((p * 100.0).round() as i64).to_string()),
+        ),
+        ("b", flag(st.bold)),
+        ("i", flag(st.italic)),
+        (
+            "u",
+            st.underline
+                .map(|u| if u { "sng" } else { "none" }.to_string()),
+        ),
+        (
+            "strike",
+            st.strike
+                .map(|u| if u { "sngStrike" } else { "noStrike" }.to_string()),
+        ),
+    ]
+    .into_iter()
+    .filter(|v| v.1.is_some())
+    .collect();
+    let fill = st.color.as_ref().map(|c| {
+        format!(
+            "<{a}solidFill><{a}srgbClr val=\"{}\"/></{a}solidFill>",
+            c.clone().unwrap_or_else(|| "000000".to_string())
+        )
+    });
+    let faces = st.face.as_ref().map(|f| {
+        let f = scan::escape(f);
+        format!("<{a}latin typeface=\"{f}\"/><{a}ea typeface=\"{f}\"/>")
+    });
+    const FILLS: &[&str] = &[
+        "noFill",
+        "solidFill",
+        "gradFill",
+        "blipFill",
+        "pattFill",
+        "grpFill",
+    ];
+    let mut drop: Vec<&str> = Vec::new();
+    if fill.is_some() {
+        drop.extend(FILLS);
+    }
+    if faces.is_some() {
+        drop.extend(["latin", "ea", "cs"]);
+    }
+    let fonted = !rattrs.is_empty() || fill.is_some() || faces.is_some();
+    let run_props = |text: &str| {
+        reshaped(
+            text,
+            &rattrs,
+            &drop,
+            (&["ln"], fill.clone().unwrap_or_default()),
+            (
+                &["sym", "hlinkClick", "hlinkMouseOver", "rtl", "extLst"],
+                faces.clone().unwrap_or_default(),
+            ),
+        )
+    };
+    for p in body.children.iter().filter(|c| c.local() == "p") {
+        if let Some(al) = &algn {
+            match p.child("pPr") {
+                Some(ppr) => edits.replace(
+                    ppr.span(),
+                    super::drawing::with_attrs(&doc[ppr.span()], &[("algn", Some(al.clone()))]),
+                ),
+                None => edits.insert(p.inner.start, format!("<{a}pPr algn=\"{al}\"/>")),
+            }
+        }
+        if !fonted {
+            continue;
+        }
+        for r in p.children.iter().filter(|c| c.local() == "r") {
+            match r.child("rPr") {
+                Some(rpr) => edits.replace(rpr.span(), run_props(&doc[rpr.span()])),
+                None => edits.insert(
+                    r.inner.start,
+                    run_props(&format!("<{a}rPr lang=\"ja-JP\" altLang=\"en-US\"/>")),
+                ),
+            }
+        }
+        if let Some(end) = p.child("endParaRPr") {
+            edits.replace(end.span(), run_props(&doc[end.span()]));
+        }
+    }
 }
 
 /// What an ActiveX control (its Microsoft Forms type) has of what an edit changes, and the
@@ -951,6 +1508,16 @@ fn configure_activex(
     if change.selected.is_some() {
         return Err(format!(
             "ActiveX の {forms} では、選択する項目を `text`（値）で指定してください"
+        ));
+    }
+    if change.lock_text.is_some()
+        || change.text_align.is_some()
+        || change.text_valign.is_some()
+        || change.inset.is_some()
+        || change.inset_auto.is_some()
+    {
+        return Err(format!(
+            "ActiveX の {forms} の文字列のロック・文字の配置・余白は、ここでは変えられません（フォーム コントロールのボタンにあります）"
         ));
     }
     let fmt = change.control_format.clone().unwrap_or_default();
@@ -1186,27 +1753,12 @@ fn configure_activex(
             .find(|e| shape_id(&sdoc, e.el) == Some(id))
             .and_then(|e| first(e.el, "controlPr"))
     });
-    // (Off: "0"; on, as Excel writes it: none.)
-    let off = |on: Option<bool>| on.map(|on| (!on).then(|| "0".to_string()));
     for (attr, value) in [
         ("linkedCell", change.link.clone()),
         ("listFillRange", change.items.clone()),
-        ("print", off(change.print)),
-        ("locked", off(change.locked)),
-        (
-            "altText",
-            change
-                .alt_text
-                .clone()
-                .map(|t| Some(t).filter(|t| !t.is_empty())),
-        ),
     ] {
         let Some(value) = value else { continue };
         let Some(pr) = pr else {
-            if matches!(attr, "print" | "locked") {
-                // (Its VML shape has them too.)
-                continue;
-            }
             return Err("この ActiveX コントロールの設定（controlPr）がありません（Excel で行ってください）".into());
         };
         put_attr(
@@ -1217,26 +1769,8 @@ fn configure_activex(
             &mut sheet_edits,
         );
     }
-    // オブジェクトの位置関係: its anchor's `moveWithCells` and `sizeWithCells`.
-    if let Some(p) = &change.placement
-        && let Some(a) = pr.and_then(|p| p.child("anchor"))
-    {
-        let one = |on: bool| on.then_some("1");
-        put_attr(
-            &sdoc,
-            a.open.clone(),
-            "moveWithCells",
-            one(p != "absolute"),
-            &mut sheet_edits,
-        );
-        put_attr(
-            &sdoc,
-            a.open.clone(),
-            "sizeWithCells",
-            one(p == "twoCell"),
-            &mut sheet_edits,
-        );
-    }
+    // 保護, プロパティ, 代替テキスト.
+    sheet_settings(&sdoc, pr, change, &mut sheet_edits)?;
     if change.placement.is_some() || change.print.is_some() || change.locked.is_some() {
         placed(&mut s, &root, &sdoc, id, change)?;
     }
@@ -1332,6 +1866,9 @@ fn placed(
             if change.locked.is_some() {
                 drop(&["Locked"]);
             }
+            if change.lock_text.is_some() {
+                drop(&["LockText"]);
+            }
             let at = data.open.end;
             if data.open.end == data.end {
                 return Err(
@@ -1353,6 +1890,9 @@ fn placed(
             if change.print == Some(false) {
                 head.push_str(&format!("<{x}PrintObject>False</{x}PrintObject>"));
             }
+            if change.lock_text == Some(false) {
+                head.push_str(&format!("<{x}LockText>False</{x}LockText>"));
+            }
             if !head.is_empty() {
                 edits.insert(at, head);
             }
@@ -1361,19 +1901,24 @@ fn placed(
             }
         }
     }
-    // Its mirror in the drawing.
-    if let Some(p) = &change.placement
-        && let Some(d) = drawing_of(s, false)?
-    {
+    // Its mirror in the drawing: its anchor's `editAs`, its `clientData`'s `fPrintsWithSheet`
+    // and `fLocksWithSheet`, its `fLocksText` ("0" when off).
+    if let Some(d) = drawing_of(s, false)? {
         let droot = scan::tree(&d.doc, &[]).ok_or("描画のパートを読み取れません")?;
         let spid = format!("_x0000_s{id}");
         let mut edits = Edits::default();
+        let off = |on: bool| (!on).then(|| "0".to_string());
         for u in units(&droot) {
             for a in &u.anchors {
                 let mine = first(a, "compatExt")
                     .and_then(|c| c.attr(&d.doc, "spid"))
                     .is_some_and(|v| v == spid);
-                if mine && a.local() == "twoCellAnchor" {
+                if !mine {
+                    continue;
+                }
+                if let Some(p) = &change.placement
+                    && a.local() == "twoCellAnchor"
+                {
                     edits.replace(
                         a.open.clone(),
                         super::drawing::tag_with(
@@ -1381,6 +1926,36 @@ fn placed(
                             a,
                             &[("editAs", (p != "twoCell").then(|| p.clone()))],
                         ),
+                    );
+                }
+                let mut data: Vec<(&str, Option<String>)> = Vec::new();
+                if let Some(on) = change.print {
+                    data.push(("fPrintsWithSheet", off(on)));
+                }
+                if let Some(on) = change.locked {
+                    data.push(("fLocksWithSheet", off(on)));
+                }
+                if !data.is_empty() {
+                    match a.child("clientData") {
+                        Some(c) => edits.replace(
+                            c.span(),
+                            super::drawing::with_attrs(&d.doc[c.span()], &data),
+                        ),
+                        None => edits.insert(
+                            a.inner.end,
+                            super::drawing::with_attrs(
+                                &format!("<{}clientData/>", scan::prefix(a.name)),
+                                &data,
+                            ),
+                        ),
+                    }
+                }
+                if let Some(on) = change.lock_text
+                    && let Some(sp) = super::drawing::object_of(a).filter(|o| o.local() == "sp")
+                {
+                    edits.replace(
+                        sp.open.clone(),
+                        super::drawing::tag_with(&d.doc, sp, &[("fLocksText", off(on))]),
                     );
                 }
             }

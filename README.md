@@ -354,6 +354,7 @@ ras book edit Book.xlsm --op '{"op":"activeX","sheet":"Sheet1","control":"comman
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","shape":1025,"at":"D2"}'   # フォームコントロールの移動（"delete":true で削除。名前でも指定できる）
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"チェック 2","text":"確認済み","link":"$C$2","checked":true}'   # 文字・リンクするセル・状態（"items"、"selected"、"value"・"min"・"max"・"step"・"page" も。リンクするセルにも入力する。ActiveX コントロールも同じ）
 ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"CommandButton1","font":{"name":"游ゴシック","size":11,"bold":true},"foreColor":"#C00000","backColor":"#FFF2CC"}'   # ActiveX コントロールのプロパティ（"backStyle": opaque / transparent、"enabled"、"wordWrap"、"autoSize"、"placement"・"print"・"locked"・"altText" も。色の null は既定の色）
+ras book edit Book.xlsm --op '{"op":"object","sheet":"Sheet1","name":"Button 1","font":{"size":12,"bold":true},"foreColor":"#0070C0","textAlign":"center","textVAlign":"center","inset":{"left":3.6}}'   # フォームコントロールのボタンのフォント・配置・余白（"insetAuto": true で自動。"lockText"・"placement"・"print"・"locked"・"altText" はすべてのフォームコントロールで）
 ras book edit Book.xlsm --op '{"op":"sort","sheet":"Sheet1","range":"A1","keys":[{"by":"C"},{"by":"D","desc":true}]}'    # 複数の列で並べ替える
 ras book edit Book.xlsm --op '{"op":"filterBy","sheet":"Sheet1","column":"D","criteria":[[">=","100"],["<","500"]]}'   # 数値フィルター（"top":10 でトップテン）
 ras book edit Book.xlsm --op '{"op":"pasteSpecial","sheet":"Sheet1","from":"A1:B5","to":"D1","paste":"values","transpose":true}'   # 形式を選択して貼り付け

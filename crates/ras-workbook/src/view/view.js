@@ -4164,9 +4164,9 @@
         if (obj.props) {
             m.Placement = { twoCell: enumOf("xlMoveAndSize", 1), oneCell: enumOf("xlMove", 2), absolute: enumOf("xlFreeFloating", 3) }[pr.placement];
             m.Locked = !!pr.locked;
-            if (ax) m.PrintObject = !!pr.print;
+            if (isControl(obj)) m.PrintObject = !!pr.print;
         }
-        if (ax && f.altText !== undefined) m.AlternativeText = f.altText || "";
+        if (isControl(obj) && f.altText !== undefined) m.AlternativeText = f.altText || "";
         m.TopLeftCell = cell(obj.from);
         m.BottomRightCell = cell(obj.to);
         if (obj.onAction) m.OnAction = obj.macro || "";
@@ -4611,10 +4611,10 @@
         }
 
         // プロパティ: オブジェクトの位置関係, オブジェクトを印刷する, ロック, テキストをロックする
-        const props = (!isControl(obj) || ax) && obj.props;
+        const props = obj.props;
         if (props) {
-            // (An ActiveX control's own プロパティ follow: these are Excel's 保護 and プロパティ.)
-            const sec = section("size", ax ? "保護とプロパティ" : "プロパティ");
+            // (A control's own settings follow: these are Excel's 保護 and プロパティ.)
+            const sec = section("size", isControl(obj) ? "保護とプロパティ" : "プロパティ");
             choices(
                 sec,
                 [
@@ -4636,10 +4636,10 @@
             };
             check("オブジェクトを印刷する", "print", "print");
             check("ロック", "locked", "locked");
-            if (props.lockText !== null && props.lockText !== undefined) check("テキストをロックする", "lockText", "lockText");
+            if (props.lockText !== null && props.lockText !== undefined) check(isControl(obj) ? "文字列のロック" : "テキストをロックする", "lockText", "lockText");
         }
-        // 代替テキスト (an ActiveX control's)
-        if (ax && f.altText !== undefined) {
+        // 代替テキスト (a control's)
+        if (isControl(obj) && f.altText !== undefined) {
             const sec = section("size", "代替テキスト");
             const alt = sec.appendChild(el("textarea", "ptext"));
             alt.rows = 3;
@@ -4759,8 +4759,9 @@
             on.addEventListener("change", () => edit({ textWrap: on.checked }));
         }
 
-        // 文字 > フォント: an ActiveX control's font (Font) and its color (ForeColor)
-        if (ax && f.font) {
+        // 文字 > フォント: a control's font (an ActiveX control's Font, a form button's) and its
+        // color (ForeColor)
+        if (isControl(obj) && f.font) {
             const fn = f.font;
             const font = (v) => edit({ font: v });
             const sec = section("text", "フォント");
@@ -4800,7 +4801,24 @@
             size.setCm(fn.size);
             kit.checkRow(sec, "下線", fn.underline, "underline", (on) => font({ underline: on }));
             kit.checkRow(sec, "取り消し線", fn.strike, "strike", (on) => font({ strike: on }));
-            kit.colorRow(sec, "文字の色", f.foreColor || null, "既定の色", (c) => edit({ foreColor: c }), "foreColor");
+            kit.colorRow(sec, "文字の色", f.foreColor || null, ax ? "既定の色" : "自動", (c) => edit({ foreColor: c }), "foreColor");
+        }
+        // 文字 > 配置, 余白: a form button's (横位置, 縦位置; 余白 自動 or 左・右・上・下)
+        if (isControl(obj) && !ax && f.textAlign !== undefined) {
+            const sec = section("text", "文字の配置");
+            const ends = [["justify", "両端揃え"], ["distributed", "均等割り付け"]];
+            kit.selectRow(sec, "横位置", [["left", "左揃え"], ["center", "中央揃え"], ["right", "右揃え"], ...ends], f.textAlign, "textAlign", (v) => edit({ textAlign: v }));
+            kit.selectRow(sec, "縦位置", [["top", "上揃え"], ["center", "中央揃え"], ["bottom", "下揃え"], ...ends], f.textVAlign, "textVAlign", (v) => edit({ textVAlign: v }));
+            const margin = section("text", "余白");
+            kit.checkRow(margin, "自動", f.insetAuto, "insetAuto", (on) => edit(on ? { insetAuto: true } : { inset: { left: f.inset[0], top: f.inset[1], right: f.inset[2], bottom: f.inset[3] } }));
+            if (!f.insetAuto) {
+                const cm = (pt) => Math.round(((pt * 2.54) / 72) * 100) / 100;
+                [["left", "左", 0], ["right", "右", 2], ["top", "上", 1], ["bottom", "下", 3]].forEach(([key, label, i]) => {
+                    const m = sizeBox(line(margin, label), `${label}余白`, (v) => edit({ inset: { [key]: Math.round(((v * 72) / 2.54) * 100) / 100 } }), { step: 0.05, max: 50 });
+                    m.input.dataset.field = `inset-${key}`;
+                    m.setCm(cm(f.inset[i]));
+                });
+            }
         }
 
         // 文字: the text of a control (its caption or value)

@@ -386,6 +386,12 @@ pub struct ObjectChange {
     pub text_anchor: Option<String>,
     pub text_wrap: Option<bool>,
     pub inset: Option<[Option<f64>; 4]>,
+    /// A form button's 配置 (横位置: `left`, `center`, `right`, `justify`, `distributed`; 縦位置:
+    /// `top`, `center`, `bottom`, `justify`, `distributed`) and its 余白 自動 (true) or given
+    /// (`inset`).
+    pub text_align: Option<String>,
+    pub text_valign: Option<String>,
+    pub inset_auto: Option<bool>,
     /// 効果 (its `effectLst`): 影 (外側), 光彩, 反射 (None in them: none; the values not given
     /// stay as it has them, or as Excel's first preset).
     pub shadow: Option<Option<Effect>>,
@@ -1198,6 +1204,17 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     glow: effect("glow", &["color", "transparency", "size"])?,
                     reflection: effect("reflection", &["transparency", "size", "blur", "distance"])?,
                     text_anchor,
+                    text_align: match text("textAlign").as_deref() {
+                        None => None,
+                        Some(a @ ("left" | "center" | "right" | "justify" | "distributed")) => Some(a.to_string()),
+                        Some(other) => return Err(format!("`textAlign` `{other}` は指定できません（left / center / right / justify / distributed）")),
+                    },
+                    text_valign: match text("textVAlign").as_deref() {
+                        None => None,
+                        Some(a @ ("top" | "center" | "bottom" | "justify" | "distributed")) => Some(a.to_string()),
+                        Some(other) => return Err(format!("`textVAlign` `{other}` は指定できません（top / center / bottom / justify / distributed）")),
+                    },
+                    inset_auto: o.get("insetAuto").and_then(Json::as_bool),
                     text_wrap: o.get("textWrap").and_then(Json::as_bool),
                     inset,
                     place: place_of(o)?,
@@ -1231,7 +1248,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     page: int_of(o, "page")?,
                 };
                 if change == (ObjectChange { shape, ..Default::default() }) {
-                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`textAnchor`・`textWrap`・`inset`、`fill`、`line`、`lineWidth`、`shadow`・`glow`・`reflection`、`placement`・`print`・`locked`・`lockText`、`altText`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page`、ActiveX コントロールの `font`・`foreColor`・`backColor`・`backStyle`・`enabled`・`wordWrap`・`autoSize` のどれかを指定してください".into());
+                    return Err("`at`・`range`（移動・サイズの変更）、`text`、`textAnchor`・`textWrap`・`inset`、`textAlign`・`textVAlign`・`insetAuto`、`fill`、`line`、`lineWidth`、`shadow`・`glow`・`reflection`、`placement`・`print`・`locked`・`lockText`、`altText`、`rotation`、`flipH`・`flipV`、`adjust`、`order`、`delete`、コントロールの `link`・`items`・`checked`・`selected`・`value`・`min`・`max`・`step`・`page`、ActiveX コントロールの `font`・`foreColor`・`backColor`・`backStyle`・`enabled`・`wordWrap`・`autoSize` のどれかを指定してください".into());
                 }
                 Op::Object { sheet, name, change: Box::new(change) }
             }
