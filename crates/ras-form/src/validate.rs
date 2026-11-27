@@ -1,4 +1,4 @@
-//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV027`).
+//! FormSpec validation (diagnostic codes `UFY001`, `UFV001`–`UFV028`).
 //!
 //! Port of the validation in xlflow's `internal/vba/userforms/spec`
 //! (`spec.go`, `appearance.go`; Copyright (c) 2026 harumiWeb, MIT License;
@@ -1572,6 +1572,33 @@ pub(crate) fn validate_strict(spec: &FormSpec) -> Vec<Issue> {
     issues.extend(cycle_issues(&parent_by_id, &field_by_id));
     issues.extend(progress_issues(spec));
     issues.extend(picker_issues(spec));
+    issues.extend(placeholder_issues(spec));
+    issues
+}
+
+/// `UFV028`: the label of a TextBox's placeholder (`placeholder.rs`) would have the name of
+/// another control.
+fn placeholder_issues(spec: &FormSpec) -> Vec<Issue> {
+    use crate::placeholder;
+    let mut issues = Vec::new();
+    for control in spec.controls.iter() {
+        if placeholder::of(control).is_none() {
+            continue;
+        }
+        let label = format!("{}{}", control.name, placeholder::SUFFIX);
+        if let Some((j, _)) = spec
+            .controls
+            .iter()
+            .enumerate()
+            .find(|(_, c)| c.name.eq_ignore_ascii_case(&label))
+        {
+            issues.push(error(
+                "UFV028",
+                format!("controls[{j}].name {label:?} は、{} のプレースホルダーを表示するラベルの名前と同じです。別の名前にしてください。", control.name),
+                &format!("controls[{j}].name"),
+            ));
+        }
+    }
     issues
 }
 

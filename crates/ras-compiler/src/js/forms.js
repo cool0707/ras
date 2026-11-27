@@ -57,7 +57,7 @@ module.exports = function install(rt) {
     const TOGGLES = new Set(["CheckBox", "OptionButton", "ToggleButton"]);
     const LISTS = new Set(["ComboBox", "ListBox"]);
     /** FormSpec fields that are not plain properties of the control, or are read on their own. */
-    const SPEC_FIELDS = new Set(["id", "name", "type", "progId", "parentId", "zIndex", "left", "top", "width", "height", "tabIndex", "list", "selectedIndex", "tabs", "picture", "controls", "properties", "observed", "unsupported", "font", "foreColor", "backColor", "caption", "text", "value", "anchor", "$anchorPart"]);
+    const SPEC_FIELDS = new Set(["id", "name", "type", "progId", "parentId", "zIndex", "left", "top", "width", "height", "tabIndex", "list", "selectedIndex", "tabs", "picture", "controls", "properties", "observed", "unsupported", "font", "foreColor", "backColor", "caption", "text", "value", "anchor", "$anchorPart", "placeholder"]);
 
     /** Controls whose value can be bound to a cell (`ControlSource`). */
     const BOUND = new Set(["TextBox", "ComboBox", "ListBox", "CheckBox", "OptionButton", "ToggleButton", "SpinButton", "ScrollBar"]);
@@ -255,6 +255,8 @@ module.exports = function install(rt) {
             // parts say which they are (the box stretches, the button moves).
             this.$anchor = parseAnchor(kind === "Page" ? undefined : spec.anchor);
             this.$anchorPart = spec.$anchorPart;
+            // The gray hint of an empty TextBox (spec §14.11.18); the panel draws it.
+            this.$placeholder = kind === "TextBox" && typeof spec.placeholder === "string" ? spec.placeholder : "";
             this.$init(spec);
         }
 
@@ -693,6 +695,7 @@ module.exports = function install(rt) {
             if (this.$kind === "TabStrip") out.tabs = this.$tabs.map((t) => ({ ...t.$s }));
             if (this.$picture !== null) out.picture = this.$picture;
             if (this.$mouseIcon !== null) out.mouseIcon = this.$mouseIcon;
+            if (this.$placeholder) out.placeholder = this.$placeholder;
             return out;
         }
     }

@@ -295,7 +295,11 @@ const control = (type: string, canContainChildren: boolean, properties: Record<s
 function buildControls(): Record<string, ControlContract> {
 	const controls: Record<string, ControlContract> = {
 		label: control("Label", false, typed("caption", "Text displayed by the label.")),
-		textbox: control("TextBox", false, typed("text", "TextBox text.", "value", "TextBox value.")),
+		textbox: control("TextBox", false, {
+			...typed("text", "TextBox text.", "value", "TextBox value."),
+			// RAS: written as a label over the box (crates/ras-form/src/placeholder.rs, spec §14.11.18).
+			placeholder: p("string", false, "supported", "Gray hint shown while the box is empty and has no focus; releasing a mouse button over it gives the box the focus.", true),
+		}),
 		combobox: control("ComboBox", false, listControl()),
 		listbox: control("ListBox", false, listControl()),
 		commandbutton: control("CommandButton", false, typed("caption", "Button caption.")),

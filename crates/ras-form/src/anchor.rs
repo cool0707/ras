@@ -201,6 +201,15 @@ pub fn resize_procedure(spec: &FormSpec) -> Option<String> {
                     (format!("{}_Text", control.name), text),
                     (format!("{}_Button", control.name), button),
                 ]
+            } else if crate::placeholder::of(control).is_some() {
+                // The hint over a TextBox (`placeholder.rs`) keeps its place on the box.
+                vec![
+                    (control.name.clone(), horizontal),
+                    (
+                        format!("{}{}", control.name, crate::placeholder::SUFFIX),
+                        horizontal,
+                    ),
+                ]
             } else {
                 vec![(control.name.clone(), horizontal)]
             };

@@ -423,6 +423,8 @@ interface RawRef {
 	type: string;
 	progId: string;
 	selectedIndex?: number;
+	/** A TextBox's placeholder that is not empty (written as a label `<name>_Placeholder`). */
+	placeholder?: boolean;
 	childrenKnown: boolean;
 }
 
@@ -460,6 +462,8 @@ function validateControl(control: JsonObject, path: string, inherited: string): 
 	};
 	const [selected, hasSelected] = lookupRaw(control, "selectedIndex");
 	if (hasSelected && isInteger(selected)) ref.selectedIndex = selected as number;
+	const [placeholder] = lookupRaw(control, "placeholder");
+	if (type.toLowerCase() === "textbox" && typeof placeholder === "string" && placeholder !== "") ref.placeholder = true;
 	const refs = [ref];
 	if (isObject(control.observed)) issues.push(...validateObservedControl(control.observed, type, progId, `${path}.observed`));
 	if (control.controls !== undefined) {
@@ -690,6 +694,8 @@ function progressIssues(control: JsonObject, path: string): ValidationIssue[] {
 
 /** The controls a file picker is written as, by the suffix of their names (ras-form picker.rs). */
 export const PICKER_PARTS = ["_Text", "_Button"];
+/** The suffix of the label a TextBox's placeholder is written as. */
+export const PLACEHOLDER_SUFFIX = "_Placeholder";
 
 /** A file picker's dialog settings (ras-form validate.rs `picker_issues`). */
 function pickerIssues(control: JsonObject, path: string): ValidationIssue[] {
@@ -723,6 +729,12 @@ function validateStructure(controls: RawRef[]): ValidationIssue[] {
 			for (const other of controls.filter((c) => c.name.toLowerCase() === part))
 				issues.push(issue("UFV025", "error", `${other.path}.name "${other.name}" は、ファイルの選択欄 ${picker.name} を書き込むコントロールの名前と同じです。別の名前にしてください。`, `${other.path}.name`));
 		}
+	// The label of a TextBox's placeholder (crates/ras-form/src/placeholder.rs).
+	for (const box of controls.filter((c) => c.placeholder && c.name)) {
+		const label = `${box.name}${PLACEHOLDER_SUFFIX}`.toLowerCase();
+		for (const other of controls.filter((c) => c.name.toLowerCase() === label))
+			issues.push(issue("UFV028", "error", `${other.path}.name "${other.name}" は、${box.name} のプレースホルダーを表示するラベルの名前と同じです。別の名前にしてください。`, `${other.path}.name`));
+	}
 	// The names of the labels of a progress bar belong to it.
 	for (const bar of controls.filter((c) => c.type.trim().toLowerCase() === "progressbar" && c.name))
 		for (const suffix of PROGRESS_PARTS) {

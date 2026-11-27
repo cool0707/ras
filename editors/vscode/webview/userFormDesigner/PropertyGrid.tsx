@@ -34,6 +34,7 @@ const categories = {
   appearance: [
     "caption",
     "text",
+    "placeholder",
     "value",
     "list",
     "font",

@@ -36,6 +36,8 @@ pub const INIT_PROCEDURE: &str = "RAS_FormInit";
 const INIT_CALL: &str = "RAS_FormInit '--- RAS ---";
 /// The call added to a hand-written `UserForm_Resize` when controls are anchored.
 const RESIZE_CALL: &str = "RAS_FormResize '--- RAS ---";
+/// The comment after a call RAS adds to a hand-written event procedure.
+const MANAGED_CALL: &str = "'--- RAS ---";
 /// Longest statement written on one line (the VBE accepts 1023 characters).
 const MAX_LINE: usize = 1000;
 
@@ -338,6 +340,50 @@ pub fn compose(
             )),
         }
     }
+    // The hints of the TextBoxes with a placeholder (`placeholder.rs`).
+    if let Some((procedures, placeholder_hooks)) = crate::placeholder::handlers(spec) {
+        for reserved in [
+            crate::placeholder::PROCEDURE,
+            crate::placeholder::CLICK_PROCEDURE,
+        ] {
+            if names.iter().any(|n| n.eq_ignore_ascii_case(reserved)) {
+                return Err(format!(
+                    "コードビハインドに `{reserved}` があります。この名前はテキスト ボックスのプレースホルダー（placeholder）を表示するために RAS が生成するプロシージャが使います"
+                ));
+            }
+        }
+        generated.push('\n');
+        generated.push_str(&procedures);
+        // The lines of each event procedure, in the order they first come.
+        let mut handlers: Vec<(String, &str, Vec<String>)> = Vec::new();
+        for hook in placeholder_hooks {
+            match handlers
+                .iter_mut()
+                .find(|(h, _, _)| h.eq_ignore_ascii_case(&hook.handler))
+            {
+                Some((_, _, calls)) => calls.push(hook.line),
+                None => handlers.push((hook.handler, hook.params, vec![hook.line])),
+            }
+        }
+        for (handler, params, calls) in handlers {
+            let borrowed: Vec<&str> = lines.iter().map(String::as_str).collect();
+            match sub_declaration_end(&borrowed, &handler) {
+                // The hand-written handler shows or hides the hint first.
+                Some(end) => {
+                    for (i, call) in calls.iter().enumerate() {
+                        lines.insert(end + 1 + i, format!("    {call} {MANAGED_CALL}"));
+                    }
+                }
+                None => {
+                    generated.push_str(&format!("\nPrivate Sub {handler}({params})\n"));
+                    for call in calls {
+                        generated.push_str(&format!("    {call}\n"));
+                    }
+                    generated.push_str("End Sub\n");
+                }
+            }
+        }
+    }
     let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
     // A module without code-behind would otherwise get CR LF line ends.
     let code = ras_ovba::merge_managed_region(&body, &generated).replace("\r\n", "\n");
@@ -365,7 +411,9 @@ pub fn code_behind(source: &str) -> String {
         .lines()
         .filter(|l| {
             let line = l.trim();
-            !line.eq_ignore_ascii_case(INIT_CALL) && !line.eq_ignore_ascii_case(RESIZE_CALL)
+            !line.eq_ignore_ascii_case(INIT_CALL)
+                && !line.eq_ignore_ascii_case(RESIZE_CALL)
+                && !(line.starts_with("RAS_") && line.ends_with(MANAGED_CALL))
         })
         .map(|l| format!("{l}\n"))
         .collect();
@@ -609,6 +657,56 @@ mod tests {
         let code = compose_for(&crate::parse(border).spec.unwrap(), "");
         assert!(code.contains("    RAS_FormSizable Me\n"), "{code}");
         assert!(!code.contains("UserForm_Resize"), "{code}");
+    }
+
+    #[test]
+    fn a_placeholder_is_shown_and_hidden_by_the_events_of_the_box() {
+        let spec = spec(
+            r#"{"id":"f","name":"fraIn","type":"Frame","left":8,"top":8,"width":200,"height":100,"anchor":"top,left,right"},
+               {"id":"t","parentId":"f","name":"txtName","type":"TextBox","left":8,"top":8,"width":120,"placeholder":"名前","anchor":"top,left,right"}"#,
+        );
+        let call = "RAS_Placeholder Me.txtName, Me.txtName_Placeholder";
+        let code = compose_for(&spec, "");
+        for expected in [
+            "Private Sub RAS_Placeholder(ByVal box As Object, ByVal mark As Object, ByVal mode As Long)\n",
+            "Private Sub RAS_PlaceholderClick(ByVal box As Object, ByVal mark As Object)\n",
+            &format!("\nPrivate Sub UserForm_Activate()\n    {call}, 2\nEnd Sub\n"),
+            &format!("\nPrivate Sub txtName_Enter()\n    {call}, 1\nEnd Sub\n"),
+            &format!("\nPrivate Sub txtName_Exit(ByVal Cancel As MSForms.ReturnBoolean)\n    {call}, 0\nEnd Sub\n"),
+            &format!("\nPrivate Sub txtName_Change()\n    {call}, 2\nEnd Sub\n"),
+            "\nPrivate Sub txtName_Placeholder_MouseUp(ByVal Button As Integer, ByVal Shift As Integer, ByVal X As Single, ByVal Y As Single)\n    RAS_PlaceholderClick Me.txtName, Me.txtName_Placeholder\nEnd Sub\n",
+            &format!("\nPrivate Sub fraIn_Exit(ByVal Cancel As MSForms.ReturnBoolean)\n    {call}, 0\nEnd Sub\n"),
+            // The hint follows the anchored box.
+            "    With Me.txtName_Placeholder\n        If .Width + dw > 0 Then .Width = .Width + dw Else .Width = 0\n    End With\n",
+        ] {
+            assert!(code.contains(expected), "{expected}\n---\n{code}");
+        }
+
+        // A hand-written handler shows or hides the hint first, and gets back its own code.
+        let hand = "Private Sub txtName_Change()\n    Me.Caption = Me.txtName.Text\nEnd Sub\n";
+        let code = compose_for(&spec, hand);
+        assert!(
+            code.contains(&format!(
+                "Private Sub txtName_Change()\n    {call}, 2 '--- RAS ---\n    Me.Caption"
+            )),
+            "{code}"
+        );
+        assert_eq!(code.matches("Sub txtName_Change").count(), 1);
+        assert_eq!(code_behind(&code), hand);
+
+        // The names are RAS's.
+        let designer = crate::compile(&spec, 932).unwrap();
+        let own = "Private Sub RAS_Placeholder()\nEnd Sub\n";
+        assert!(compose("forms/F.form.json", &designer, &spec, own, 932).is_err());
+
+        // A control cannot have the name of the label.
+        let text = r#"{"schemaVersion":1,"kind":"ras.userform","basis":"designer","form":{"name":"F"},"controls":[{"id":"t","name":"txt","type":"TextBox","placeholder":"x"},{"id":"l","name":"txt_Placeholder","type":"Label"}]}"#;
+        let parsed = crate::parse(text);
+        assert!(
+            parsed.issues.iter().any(|i| i.code == "UFV028"),
+            "{:?}",
+            parsed.issues
+        );
     }
 
     #[test]
