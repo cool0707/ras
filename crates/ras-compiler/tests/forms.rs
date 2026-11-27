@@ -1662,5 +1662,15 @@ fn resizable_forms_get_the_sizing_procedure() {
             .unwrap_or_default()
     };
     assert!(runtime(true).contains("Public Sub RAS_FormSizable(ByVal form As Object)"));
-    assert!(!runtime(false).contains("RAS_FormSizable"));
+    // Without a resizable form, none of the Windows API is declared.
+    let plain = runtime(false);
+    for name in [
+        "RAS_FormSizable",
+        "shlwapi",
+        "GetWindowLongW",
+        "SetWindowLongW",
+        "SetWindowPos",
+    ] {
+        assert!(!plain.contains(name), "{name}: {plain}");
+    }
 }
