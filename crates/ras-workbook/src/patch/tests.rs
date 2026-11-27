@@ -4483,3 +4483,91 @@ fn a_dynamic_array_formula_typed_is_marked_as_one() {
     let one = edit(r#"[{ "op": "set", "range": "H2", "text": "=1+1" }]"#);
     assert!(parts(&one).keys().all(|n| !n.contains("metadata")));
 }
+
+#[test]
+fn new_controls_get_the_font_given() {
+    use crate::activex::Stream;
+    // A form control: its VML text and its mirror in the drawing in the font (1/20 pt, 1/100 pt).
+    let sample = crate::view::tests::sample();
+    let ed = |json: &str| {
+        apply(
+            &sample,
+            &parse_ops(&serde_json::from_str(json).unwrap(), Some("Sheet1")).unwrap(),
+        )
+        .unwrap()
+    };
+    let out = ed(
+        r#"{"op":"control","control":"button","at":"B20","font":{"name":"Yu Gothic UI","size":10}}"#,
+    );
+    let all = parts(&out);
+    let vml = all
+        .iter()
+        .filter(|(n, _)| n.ends_with(".vml"))
+        .map(|(_, d)| String::from_utf8_lossy(d).into_owned())
+        .find(|d| d.contains(">ボタン "))
+        .unwrap();
+    assert!(
+        vml.contains(r##"<font face="Yu Gothic UI" size="200" color="#000000">ボタン "##),
+        "{vml}"
+    );
+    let drawing = all
+        .iter()
+        .filter(|(n, _)| n.starts_with("xl/drawings/drawing"))
+        .map(|(_, d)| String::from_utf8_lossy(d).into_owned())
+        .find(|d| d.contains("ボタン "))
+        .unwrap();
+    assert!(
+        drawing.contains(r#"sz="1000" b="0""#)
+            && drawing
+                .contains(r#"<a:latin typeface="Yu Gothic UI"/><a:ea typeface="Yu Gothic UI"/>"#),
+        "{drawing}"
+    );
+    // (The grid draws it so.)
+    let objects = view(&out)["sheets"][0]["objects"].clone();
+    let button = objects
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["form"]["font"]["name"] == json!("Yu Gothic UI"))
+        .unwrap_or_else(|| panic!("{objects}"));
+    assert_eq!(button["form"]["font"]["size"], json!(10.0));
+    // Without one: ＭＳ Ｐゴシック 11pt, as before.
+    let plain = ed(r#"{"op":"control","control":"checkBox","at":"B20"}"#);
+    assert!(parts(&plain).values().any(|d| {
+        String::from_utf8_lossy(d)
+            .contains("<font face=\"ＭＳ Ｐゴシック\" size=\"220\" color=\"#000000\">チェック ")
+    }));
+
+    // An ActiveX control: its `TextProps` (twips, the character set given or Shift_JIS).
+    let out = edit(
+        r#"{"op":"activeX","control":"label","at":"H18","font":{"name":"Segoe UI","size":10,"charset":1}}"#,
+    );
+    let st = Stream::read("Label", &parts(&out)["xl/activeX/activeX1.bin"]).unwrap();
+    let font = st.font().unwrap();
+    assert_eq!(font.string("FontName").as_deref(), Some("Segoe UI"));
+    assert_eq!(
+        (font.number("FontHeight"), font.number("FontCharSet")),
+        (Some(200), Some(1))
+    );
+    let out = edit(r#"{"op":"activeX","at":"H18","font":{"name":"Yu Gothic UI","size":10}}"#);
+    let st = Stream::read("CommandButton", &parts(&out)["xl/activeX/activeX1.bin"]).unwrap();
+    let font = st.font().unwrap();
+    assert_eq!(font.string("FontName").as_deref(), Some("Yu Gothic UI"));
+    assert_eq!(
+        (font.number("FontHeight"), font.number("FontCharSet")),
+        (Some(200), Some(128))
+    );
+    // (A spin button has no font: it is made as before.)
+    edit(
+        r#"{"op":"activeX","control":"spinButton","at":"H18","font":{"name":"Yu Gothic UI","size":10}}"#,
+    );
+
+    for bad in [
+        json!({"op":"control","at":"A1","font":"Arial"}),
+        json!({"op":"control","at":"A1","font":{"name":"Arial"}}),
+        json!({"op":"activeX","at":"A1","font":{"name":"Arial","size":10,"bold":true}}),
+        json!({"op":"activeX","at":"A1","font":{"name":"Arial","size":10,"charset":300}}),
+    ] {
+        assert!(parse_ops(&bad, Some("Data")).is_err(), "{bad}");
+    }
+}

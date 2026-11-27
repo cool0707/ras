@@ -19,7 +19,7 @@ use super::drawing::{
 };
 use super::insert::{Sheet, idmap, place, prefixed_attr, relative, rid_attr, tree};
 use super::scan::{self, Edits, El};
-use super::{FormControl, Place, Result};
+use super::{FormControl, NewFont, Place, Result};
 use crate::book::view::Sizes;
 
 const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
@@ -890,7 +890,7 @@ pub(super) fn configure(
                         .child("ClientData")
                         .map_or(sh.inner.end, |d| d.open.start);
                     let text = change.text.clone().unwrap_or_default();
-                    let new = vml_textbox(&text, "left");
+                    let new = vml_textbox(&text, "left", None);
                     // (Styled as it is asked.)
                     let new = match scan::tree(&new, &[]) {
                         Some(tb) if styled.any() => {
@@ -2093,14 +2093,21 @@ fn finish(
 
 // ---------------------------------------------------------------------------- put on a sheet
 
-/// The text of a control as VML writes it in its text box.
-fn vml_textbox(text: &str, align: &str) -> String {
+/// The face and the size (points) of a new control's text: `font`, else ＭＳ Ｐゴシック 11pt.
+fn face_of(font: Option<&NewFont>) -> (&str, f64) {
+    font.map_or((FONT, 11.0), |f| (f.name.as_str(), f.size))
+}
+
+/// The text of a control as VML writes it in its text box, in `font` (None: ＭＳ Ｐゴシック 11pt).
+fn vml_textbox(text: &str, align: &str, font: Option<&NewFont>) -> String {
+    let (face, pt) = face_of(font);
+    let (face, size) = (scan::escape(face), (pt * 20.0).round() as i64);
     let lines: String = text
         .replace("\r\n", "\n")
         .split('\n')
         .map(|l| {
             format!(
-                "<div style=\"text-align:{align}\"><font face=\"{FONT}\" size=\"220\" color=\"#000000\">{}</font></div>",
+                "<div style=\"text-align:{align}\"><font face=\"{face}\" size=\"{size}\" color=\"#000000\">{}</font></div>",
                 scan::escape(l)
             )
         })
@@ -2129,7 +2136,7 @@ fn vml_shape(k: &Kind, id: u32, style: &str, anchor: &str, c: &FormControl, text
             "o:button=\"t\" fillcolor=\"buttonFace [67]\" strokecolor=\"windowText [64]\" o:insetmode=\"auto\"",
             format!(
                 "<v:fill color2=\"buttonFace [67]\" o:detectmouseclick=\"t\"/><o:lock v:ext=\"edit\" rotation=\"t\"/>{}",
-                vml_textbox(text, "center")
+                vml_textbox(text, "center", c.font.as_ref())
             ),
             format!(
                 "<x:PrintObject>False</x:PrintObject><x:AutoFill>False</x:AutoFill>{macro_}<x:TextHAlign>Center</x:TextHAlign><x:TextVAlign>Center</x:TextVAlign>"
@@ -2139,7 +2146,7 @@ fn vml_shape(k: &Kind, id: u32, style: &str, anchor: &str, c: &FormControl, text
             "filled=\"f\" fillcolor=\"window [65]\" stroked=\"f\" strokecolor=\"windowText [64]\" o:insetmode=\"auto\"",
             format!(
                 "<v:path shadowok=\"t\" strokeok=\"t\" fillok=\"t\"/><o:lock v:ext=\"edit\" rotation=\"t\"/>{}",
-                vml_textbox(text, "left")
+                vml_textbox(text, "left", c.font.as_ref())
             ),
             format!(
                 "<x:AutoFill>False</x:AutoFill><x:AutoLine>False</x:AutoLine>{macro_}<x:TextVAlign>Center</x:TextVAlign>{link}{}<x:NoThreeD/>",
@@ -2154,7 +2161,7 @@ fn vml_shape(k: &Kind, id: u32, style: &str, anchor: &str, c: &FormControl, text
             "filled=\"f\" fillcolor=\"window [65]\" stroked=\"f\" strokecolor=\"windowText [64]\" o:insetmode=\"auto\"",
             format!(
                 "<o:lock v:ext=\"edit\" rotation=\"t\"/>{}",
-                vml_textbox(text, "left")
+                vml_textbox(text, "left", c.font.as_ref())
             ),
             format!("<x:AutoFill>False</x:AutoFill><x:AutoLine>False</x:AutoLine>{macro_}"),
         ),
@@ -2162,7 +2169,7 @@ fn vml_shape(k: &Kind, id: u32, style: &str, anchor: &str, c: &FormControl, text
             "filled=\"f\" fillcolor=\"window [65]\" stroked=\"f\" strokecolor=\"windowText [64]\" o:insetmode=\"auto\"",
             format!(
                 "<o:lock v:ext=\"edit\" rotation=\"t\"/>{}",
-                vml_textbox(text, "left")
+                vml_textbox(text, "left", c.font.as_ref())
             ),
             format!(
                 "<x:AutoFill>False</x:AutoFill><x:AutoLine>False</x:AutoLine>{macro_}<x:NoThreeD/>"
@@ -2260,11 +2267,14 @@ fn mirror_xml(
     from: &str,
     to: &str,
     b: (f64, f64, f64, f64),
+    font: Option<&NewFont>,
 ) -> String {
     let body = if k.text {
         let algn = if k.key == "button" { "ctr" } else { "l" };
+        let (face, pt) = face_of(font);
+        let (face, sz) = (scan::escape(face), (pt * 100.0).round() as i64);
         format!(
-            "<{x}txBody><a:bodyPr vertOverflow=\"clip\" wrap=\"square\" lIns=\"27432\" tIns=\"27432\" rIns=\"27432\" bIns=\"27432\" anchor=\"ctr\" upright=\"1\"/><a:lstStyle/><a:p><a:pPr algn=\"{algn}\" rtl=\"0\"><a:defRPr sz=\"1000\"/></a:pPr><a:r><a:rPr lang=\"ja-JP\" altLang=\"en-US\" sz=\"1100\" b=\"0\" i=\"0\" u=\"none\" strike=\"noStrike\" baseline=\"0\"><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill><a:latin typeface=\"{FONT}\"/><a:ea typeface=\"{FONT}\"/></a:rPr><a:t>{}</a:t></a:r></a:p></{x}txBody>",
+            "<{x}txBody><a:bodyPr vertOverflow=\"clip\" wrap=\"square\" lIns=\"27432\" tIns=\"27432\" rIns=\"27432\" bIns=\"27432\" anchor=\"ctr\" upright=\"1\"/><a:lstStyle/><a:p><a:pPr algn=\"{algn}\" rtl=\"0\"><a:defRPr sz=\"1000\"/></a:pPr><a:r><a:rPr lang=\"ja-JP\" altLang=\"en-US\" sz=\"{sz}\" b=\"0\" i=\"0\" u=\"none\" strike=\"noStrike\" baseline=\"0\"><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill><a:latin typeface=\"{face}\"/><a:ea typeface=\"{face}\"/></a:rPr><a:t>{}</a:t></a:r></a:p></{x}txBody>",
             scan::escape(text)
         )
     } else {
@@ -2338,6 +2348,7 @@ pub(super) fn add(bytes: &[u8], sheet: &str, c: &FormControl) -> Result<Vec<u8>>
             &marker("from", b.0, b.1),
             &marker("to", b.2, b.3),
             b,
+            c.font.as_ref(),
         );
         let mut dedits = Edits::default();
         append(&d.doc, &droot, &mirror, &mut dedits);
@@ -2702,6 +2713,7 @@ pub(super) fn add_activex(
     place: &Place,
     name: Option<&str>,
     text: Option<&str>,
+    font: Option<&NewFont>,
 ) -> Result<Vec<u8>> {
     let k = ACTIVEX_KINDS
         .iter()
@@ -2768,6 +2780,7 @@ pub(super) fn add_activex(
         caption,
         value,
         (himetric(b.2 - b.0), himetric(b.3 - b.1)),
+        font,
     )
     .ok_or("ActiveX コントロールのデータを作れません")?;
     s.put_bytes(&bin, data);

@@ -239,6 +239,8 @@ pub enum Op {
         place: Place,
         name: Option<String>,
         text: Option<String>,
+        /// Its font (None: MS UI Gothic 9pt, as the VBA editor makes a control).
+        font: Option<NewFont>,
     },
     /// The sheets changed from their tabs: one added, copied, removed or renamed (and its file
     /// in `objects/` left to the editor).
@@ -341,6 +343,17 @@ pub struct FormControl {
     pub page: Option<i64>,
     /// A scroll bar across.
     pub horizontal: bool,
+    /// The font of its text (None: ＭＳ Ｐゴシック 11pt).
+    pub font: Option<NewFont>,
+}
+
+/// The font a new control is made with (`font` of `control` and `activeX`): its name, its size
+/// in points and (an ActiveX control) its character set.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewFont {
+    pub name: String,
+    pub size: f64,
+    pub charset: Option<u8>,
 }
 
 /// What an `object` edit changes of an object of the drawing (None: what it has stays).
@@ -664,6 +677,59 @@ fn int_of(o: &Json, key: &str) -> Result<Option<i64>> {
             .map(Some)
             .ok_or_else(|| format!("`{key}` は整数で指定してください")),
     }
+}
+
+/// The font of a new control (`"font": {"name": "Yu Gothic UI", "size": 10, "charset": 128}`;
+/// `charset` may be left out); None when it is not given.
+fn new_font_of(o: &Json) -> Result<Option<NewFont>> {
+    let m = match o.get("font") {
+        None | Some(Json::Null) => return Ok(None),
+        Some(Json::Object(m)) => m,
+        Some(_) => {
+            return Err(
+                "`font` は {\"name\": \"Yu Gothic UI\", \"size\": 10} のように指定してください"
+                    .into(),
+            );
+        }
+    };
+    let mut font = NewFont {
+        name: String::new(),
+        size: 0.0,
+        charset: None,
+    };
+    for (k, v) in m {
+        match k.as_str() {
+            "name" => {
+                let n = v
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty() && n.chars().count() <= 31);
+                font.name = n
+                    .ok_or("`font` の `name` はフォントの名前（31 文字まで）で指定してください")?
+                    .to_string();
+            }
+            "size" => {
+                let x = v
+                    .as_f64()
+                    .filter(|x| x.is_finite() && (1.0..=409.0).contains(x));
+                font.size = x.ok_or("`font` の `size` は 1〜409（ポイント）で指定してください")?;
+            }
+            "charset" => {
+                let c = v.as_u64().and_then(|c| u8::try_from(c).ok());
+                font.charset =
+                    Some(c.ok_or("`font` の `charset` は 0〜255 の整数で指定してください")?);
+            }
+            _ => {
+                return Err(format!(
+                    "`font` の `{k}` は指定できません（name / size / charset）"
+                ));
+            }
+        }
+    }
+    if font.name.is_empty() || font.size == 0.0 {
+        return Err("`font` には `name` と `size` を指定してください".into());
+    }
+    Ok(Some(font))
 }
 
 /// The edits of a JSON value: one object, or an array of them. `sheet`: the sheet of those that
@@ -1286,6 +1352,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     step: int("step")?,
                     page: int("page")?,
                     horizontal: o.get("horizontal").and_then(Json::as_bool).unwrap_or(false),
+                    font: new_font_of(o)?,
                 };
                 if let (Some(a), Some(b)) = (control.min, control.max)
                     && a > b
@@ -1319,6 +1386,7 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
                     place: place_of(o)?.ok_or("コントロールの位置 `at`（セル）か `range` がありません")?,
                     name,
                     text,
+                    font: new_font_of(o)?,
                 }
             }
             "sheet" => {
@@ -1741,6 +1809,7 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 place,
                 name,
                 text,
+                font,
             } => controls::add_activex(
                 &bytes,
                 sheet,
@@ -1748,6 +1817,7 @@ pub fn apply(bytes: &[u8], ops: &[Op]) -> Result<Vec<u8>> {
                 place,
                 name.as_deref(),
                 text.as_deref(),
+                font.as_ref(),
             )?,
             Op::Table {
                 sheet,
