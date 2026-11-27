@@ -543,7 +543,13 @@ export function DesignerCanvas({
     else if (onSelectionChange) onSelectionChange(ids.at(-1));
     else setLocalSelection(ids);
   };
-  const [preview, setPreview] = useState<{ id: string; geometry: Geometry; floating?: boolean }>();
+  const [preview, setPreview] = useState<{
+    id: string;
+    geometry: Geometry;
+    floating?: boolean;
+    /** Being resized with a handle: its size is shown under it. */
+    resizing?: boolean;
+  }>();
   const [groupPreview, setGroupPreview] = useState<{ id: string; left: number; top: number }[]>();
   const [marqueeBox, setMarqueeBox] = useState<SelectionRect>();
   const [destination, setDestination] = useState<{ target?: DropTarget; valid: boolean }>();
@@ -635,6 +641,8 @@ export function DesignerCanvas({
       else setGroupPreview(undefined);
       return;
     }
+    // The new size stays drawn until the document has it; its label goes with the pointer.
+    setPreview((shown) => shown && { ...shown, resizing: false });
     if (current.parenting && !current.valid) {
       setPreview(undefined);
       return;
@@ -1012,7 +1020,7 @@ export function DesignerCanvas({
         subtreeIds(document.controls, current.control.id),
       );
     current.end = end;
-    setPreview({ id: current.control.id, geometry: end });
+    setPreview({ id: current.control.id, geometry: end, resizing: !!current.handle });
   };
   /** Follows the pointer while a control is drawn; a move of a few pixels is still a click. */
   const updatePlacement = (clientX: number, clientY: number) => {
@@ -1786,6 +1794,27 @@ export function DesignerCanvas({
                 </div>
               )}
               {guides && <SmartGuides origin={guides.origin} items={guides.items} zoom={zoom} />}
+              {preview?.resizing &&
+                (() => {
+                  const control = document.controls.find((c) => c.id === preview.id);
+                  if (!control) return null;
+                  const origin = parentOrigin(document, control.parentId);
+                  const { left, top, width, height } = preview.geometry;
+                  const size = (value: number) => String(Math.round(value * 100) / 100);
+                  return (
+                    <div
+                      class="resize-size"
+                      aria-hidden="true"
+                      style={{
+                        left: px(origin.left + left + width / 2),
+                        top: px(origin.top + top + height),
+                        transform: `translate(-50%, ${6 / zoom}px) scale(${1 / zoom})`,
+                      }}
+                    >
+                      {size(width)} × {size(height)}
+                    </div>
+                  );
+                })()}
             </div>
             {formResizable && !busy && !placing && selectionIds.length === 0 && (
               <>

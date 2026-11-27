@@ -1217,10 +1217,9 @@ header {
   position: absolute;
   background: #f24822;
 }
-.smart-guide-label {
+.smart-guide-label,
+.resize-size {
   position: absolute;
-  left: 50%;
-  top: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1234,6 +1233,18 @@ header {
   font: 10px/1 var(--vscode-font-family, sans-serif);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+.smart-guide-label {
+  left: 50%;
+  top: 50%;
+}
+/* The size of a control while it is resized, under it. */
+.resize-size {
+  z-index: 100003;
+  height: 18px;
+  padding: 0 6px;
+  transform-origin: top center;
+  pointer-events: none;
 }
 button:disabled {
   cursor: default;
