@@ -11,6 +11,7 @@ body { display: flex; flex-direction: column; background: #fff; color: #000; fon
 #fx { position: relative; flex: 1; padding: 3px 8px; white-space: pre; overflow: hidden; text-overflow: ellipsis; font-family: Consolas, "MS Gothic", monospace; }
 #fx .was { color: #8a6d00; margin-left: 16px; }
 #fx .ref { font-weight: bold; }
+#fx .spilled { color: #a0a0a0; }
 #fxlabel { flex: none; align-self: center; padding: 0 8px; border-right: 1px solid var(--line); color: #666; font: italic 13px/1 Georgia, "Times New Roman", serif; }
 #main { flex: 1; display: flex; min-height: 0; }
 #grid { flex: 1; overflow: auto; }
@@ -198,6 +199,8 @@ th { user-select: none; cursor: default; }
 .selshade { position: absolute; background: rgba(228, 80, 26, .08); }
 /* The areas of a selection made with Ctrl: shaded, the last one outlined thinly. */
 .selbox.multi { border-width: 1px; }
+/* The range a dynamic-array formula spilled into: a thin blue line with a soft shadow, as Excel's. */
+.spillbox { position: absolute; box-sizing: border-box; border: 1px solid #4a8bd6; box-shadow: 1px 1px 3px rgba(0, 0, 0, .35); }
 .selbox.overx { border-right-color: transparent; }
 .selbox.overy { border-bottom-color: transparent; }
 .selbox.more { border-color: rgba(228, 80, 26, .5); background: rgba(228, 80, 26, .14); }

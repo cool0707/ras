@@ -927,3 +927,32 @@ fn empty_cells_have_their_number_format() {
     assert_eq!(d3["n"], json!("m/d/yyyy"), "{d3}");
     assert_eq!(d3["sn"], json!("yyyy/m/d"), "{d3}");
 }
+
+#[test]
+fn the_ranges_formulas_spill_into() {
+    use crate::book::Val;
+    use gridcraft_core::RangeRef;
+    let mut b = Book::new_book();
+    let at = |a1: &str| RangeRef::parse(a1).unwrap();
+    b.set_formulas(0, at("D5"), &[vec![Val::Text("=SEQUENCE(8)".into())]], true)
+        .unwrap();
+    // (A legacy array formula, `{=...}`, is not a spill.)
+    b.set_formulas(
+        0,
+        at("F1:F2"),
+        &[
+            vec![Val::Text("={1;2}".into())],
+            vec![Val::Text("={1;2}".into())],
+        ],
+        false,
+    )
+    .unwrap();
+    b.set_formulas(0, at("H1"), &[vec![Val::Text("=1+1".into())]], true)
+        .unwrap();
+    let bytes = b.to_bytes().unwrap();
+    let data = view_of(&bytes);
+    assert_eq!(data["sheets"][0]["spills"], json!([[4, 3, 11, 3]]));
+    if let Ok(out) = std::env::var("RAS_VIEW_OUT") {
+        std::fs::write(out, super::page(&data)).unwrap();
+    }
+}

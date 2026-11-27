@@ -182,14 +182,24 @@
         showName(sheet, r, c);
         const fx = $("fx");
         fx.textContent = "";
+        const spill = !cell.f && spillAt(sheet, r, c);
+        const anchor = spill && view && view.cells.get(spill[0] * KEY + spill[1]);
         if (cell.f) {
             // The references in colors, the same on the grid.
             refSpans(fx, cell.f, colorRefs(sheet, cell.f, references(cell.f)), "ref");
+        } else if (anchor && anchor.f) {
+            // A cell a formula spilled into: the formula, grayed, as Excel shows it.
+            fx.appendChild(el("span", "spilled", anchor.f));
         } else {
             fx.textContent = cell.v || cell.t || "";
         }
         const was = (changes[sheet.name] || []).find((x) => x.a === address(r, c));
         if (was) fx.appendChild(el("span", "was", `変更前: ${was.before}`));
+    }
+
+    // The range a dynamic-array formula spilled into that holds the cell: [r1, c1, r2, c2].
+    function spillAt(sheet, r, c) {
+        return (sheet.spills || []).find(([r1, c1, r2, c2]) => r >= r1 && r <= r2 && c >= c1 && c <= c2) || null;
     }
 
     // A box around the cells of a reference on the grid (as far as it is drawn).
@@ -547,6 +557,8 @@
         const marks = wrap.appendChild(el("div", "refs"));
         // (The shade of the range: all of it but the active cell, which stays as it is, as Excel's.)
         const selshade = marks.appendChild(el("div", "selshade"));
+        // (The border of the range a formula spilled into, while one of its cells is active.)
+        const spillbox = marks.appendChild(el("div", "spillbox"));
         const selbox = marks.appendChild(el("div", "selbox"));
         const clipbox = marks.appendChild(el("div", "clipbox"));
         const fillbox = marks.appendChild(el("div", "fillbox"));
@@ -557,7 +569,7 @@
         // The lines under the rows and right of the columns frozen.
         const frzh = marks.appendChild(el("div", "frzline h"));
         const frzv = marks.appendChild(el("div", "frzline v"));
-        selshade.hidden = selbox.hidden = clipbox.hidden = fillbox.hidden = fillh.hidden = dropbtn.hidden = promptbox.hidden = true;
+        selshade.hidden = spillbox.hidden = selbox.hidden = clipbox.hidden = fillbox.hidden = fillh.hidden = dropbtn.hidden = promptbox.hidden = true;
         frzh.hidden = !fr;
         frzv.hidden = !fc;
         // (Under the marks: the border of the selection stays on the cell while what is typed runs over.)
@@ -574,6 +586,7 @@
             owner,
             selbox,
             selshade,
+            spillbox,
             clipbox,
             fillbox,
             fillh,
@@ -1344,6 +1357,10 @@
                 put(box, boxOf(a.r1, a.c1, a.r2, a.c2));
             }
         }
+        // The border of the range the active cell's formula spilled into (or spilled it).
+        const sp = sel && !selected && !entry && spillAt(v.sheet, sel.ar, sel.ac);
+        const sb = sp && boxOf(sp[0], sp[1], Math.min(sp[2], v.nrows - 1), Math.min(sp[3], v.ncols - 1));
+        put(v.spillbox, sb && { x: sb.x - 1, y: sb.y - 1, w: sb.w + 1, h: sb.h + 1 });
         // (Where the border of the cells is drawn when they are selected, as Excel: over it.)
         const cb = clip && clip.sheet === v.sheet.name ? boxOf(clip.r1, clip.c1, clip.r2, clip.c2) : null;
         put(v.clipbox, cb && borderOf(cb));
