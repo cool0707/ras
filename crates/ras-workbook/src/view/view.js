@@ -1360,7 +1360,7 @@
         // The border of the range the active cell's formula spilled into (or spilled it).
         const sp = sel && !selected && !entry && spillAt(v.sheet, sel.ar, sel.ac);
         const sb = sp && boxOf(sp[0], sp[1], Math.min(sp[2], v.nrows - 1), Math.min(sp[3], v.ncols - 1));
-        put(v.spillbox, sb && { x: sb.x - 1, y: sb.y - 1, w: sb.w + 1, h: sb.h + 1 });
+        put(v.spillbox, sb && { x: sb.x - 1, y: sb.y - 1, w: sb.w, h: sb.h });
         // (Where the border of the cells is drawn when they are selected, as Excel: over it.)
         const cb = clip && clip.sheet === v.sheet.name ? boxOf(clip.r1, clip.c1, clip.r2, clip.c2) : null;
         put(v.clipbox, cb && borderOf(cb));
