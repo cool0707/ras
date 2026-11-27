@@ -369,14 +369,61 @@
         const [a, d] = metricsOf(family, Math.round((pt * 96) / 72));
         return Math.min(545, a + d + 2);
     }
+    // The height Excel fits a row to for a cell with `css` whose text is in `runs` (its
+    // characters' fonts, the tallest counts).
+    function fitOfRuns(sheet, css, runs) {
+        let px = fitOfCss(sheet, css);
+        for (const r of runs || []) if (r.f && (r.f.name || r.f.size) && !r.f.va) px = Math.max(px, fitOfCss(sheet, withRunFont(css, r.f)));
+        return px;
+    }
+    // The CSS of a cell with the font name and size of a run.
+    function withRunFont(css, f) {
+        let out = css || "";
+        const put = (prop, value) => (out = new RegExp(`${prop}:[^;]*;?`).test(out) ? out.replace(new RegExp(`${prop}:[^;]*;?`), `${prop}:${value};`) : `${out}${prop}:${value};`);
+        if (f.name) put("font-family", fontFamily(f.name));
+        if (f.size) put("font-size", `${f.size}pt`);
+        return out;
+    }
+    // ---- text whose characters have formats of their own (rich text): its runs, [{ t, f }],
+    // `f` the font of the run ({ name, size, b, i, u, s, color, va }; none: the cell's)
+
+    // The CSS of a run (`deco`: the cell's text-decoration, for the runs of its font: a span
+    // cannot take off what its cell draws).
+    function runCss(f, deco) {
+        if (!f) return deco ? `text-decoration:${deco};` : "";
+        let css = "";
+        if (f.name) css += `font-family:${fontFamily(f.name)};`;
+        if (f.va) css += `vertical-align:${f.va === "subscript" ? "sub" : "super"};font-size:${f.size ? `${(f.size * 0.75).toFixed(2)}pt` : "75%"};`;
+        else if (f.size) css += `font-size:${f.size}pt;`;
+        css += `font-weight:${f.b ? "bold" : "normal"};font-style:${f.i ? "italic" : "normal"};`;
+        const lines = [f.u ? "underline" : "", f.s ? "line-through" : ""].filter(Boolean).join(" ");
+        css += `text-decoration:${lines || "none"};`;
+        if (f.u && /double/i.test(f.u)) css += "text-decoration-style:double;";
+        if (f.color) css += `color:${f.color};`;
+        return css;
+    }
+    // The text of a cell into `node`: its runs as spans (`td`: the cell, whose underline and
+    // strikethrough then go to the runs of its font), else as it is.
+    function putText(node, text, cell, td) {
+        const runs = cell && cell.rt && !formulas && !cell.hv && text === cell.t ? cell.rt : null;
+        if (!runs) {
+            node.textContent = text;
+            return node;
+        }
+        const deco = td ? td.style.textDecoration || td.style.textDecorationLine : "";
+        if (td && deco) td.style.textDecoration = "none";
+        node.textContent = "";
+        for (const r of runs) node.appendChild(el("span", null, r.t)).style.cssText = runCss(r.f, deco && deco !== "none" ? deco : "");
+        return node;
+    }
     // A row not given a height: as tall as the tallest font of its cells (merged cells left out,
     // as Excel), or the default height without cells.
     function fitHeight(sheet, r) {
         if (!sheet.fits) {
             const fits = (sheet.fits = new Map());
             const merged = new Set(sheet.merges.map(([r1, c1]) => r1 * KEY + c1));
-            const take = (row, css) => fits.set(row, Math.max(fits.get(row) || 0, fitOfCss(sheet, css)));
-            for (const cell of sheet.cells) if (!merged.has(cell.r * KEY + cell.c)) take(cell.r, cell.s ? sheet.styles[cell.s] : "");
+            const take = (row, css, runs) => fits.set(row, Math.max(fits.get(row) || 0, fitOfRuns(sheet, css, runs)));
+            for (const cell of sheet.cells) if (!merged.has(cell.r * KEY + cell.c)) take(cell.r, cell.s ? sheet.styles[cell.s] : "", cell.rt);
             for (const [row, s] of Object.entries(sheet.rowStyles || {})) take(+row, sheet.styles[s]);
         }
         return sheet.fits.get(r) || sheet.defaultHeight;
@@ -406,7 +453,7 @@
                 had.add(cell.c);
                 if (merged.has(r * KEY + cell.c)) continue;
                 const css = cell.s ? sheet.styles[cell.s] : "";
-                px = Math.max(px, fitOfCss(sheet, inside(cell.c) ? font(css) : css));
+                px = Math.max(px, fitOfRuns(sheet, inside(cell.c) ? font(css) : css, cell.rt));
             }
             // The empty cells changed: formatted now, they count.
             const empty = areaList.some((a) => r >= a.r1 && r <= a.r2 && a.c2 - a.c1 + 1 > [...had].filter((c) => c >= a.c1 && c <= a.c2).length);
@@ -490,6 +537,8 @@
     function draw(sheet) {
         // What was being typed on the sheet shown before is dropped.
         entry = null;
+        red.classList.remove("on");
+        red.textContent = "";
         ed.value = "";
         bar.remove();
         if (sheet !== current) others = [];
@@ -657,20 +706,20 @@
                     const head = (filter && filter[0] && filter[1] && r === filter[0][0] && c >= filter[0][1] && c <= filter[1][1]) || tableButtons.has(key);
                     if (text && !head && !/pre-wrap|--shrink|--rot/.test(td.style.cssText) && (!/text-align/.test(td.style.cssText) || (formulas && cell.f)) && !cells.has(r * KEY + next) && !span.has(key)) {
                         td.classList.add("ov");
-                        td.appendChild(el("div", "ovt")).appendChild(el("span", null, shown));
+                        td.appendChild(el("div", "ovt")).appendChild(putText(el("span"), shown, cell, td));
                     } else if (/pre-wrap/.test(td.style.cssText)) {
                         // Wrapped text is cut at the row's height (a table row would grow to it),
                         // from its first line, as Excel draws it.
                         let h = 0;
                         for (let x = r; x <= (span.has(key) ? span.get(key)[0] : r); x++) h += height(sheet, x);
-                        const box = td.appendChild(el("div", "wr", shown));
+                        const box = td.appendChild(putText(el("div", "wr"), shown, cell, td));
                         box.style.maxHeight = `${Math.max(0, h - 1)}px`;
                     } else {
-                        td.textContent = shown;
+                        putText(td, shown, cell, td);
                         const rot = td.style.getPropertyValue("--rot");
                         if (rot) {
                             td.textContent = "";
-                            td.appendChild(el("span", "rot", shown)).style.transform = `rotate(${-Number(rot)}deg)`;
+                            td.appendChild(putText(el("span", "rot"), shown, cell, td)).style.transform = `rotate(${-Number(rot)}deg)`;
                         } else if (td.style.getPropertyValue("--shrink")) {
                             shrinkToFit(td, cell, shown, c, span.get(key));
                         } else if (!formulas && (cell.k === "number" || cell.k === "date")) {
@@ -1478,7 +1527,7 @@
 
     $("grid").addEventListener("mousedown", (e) => {
         if (e.button !== 0 && e.button !== 2) return;
-        if (e.target === ed) return;
+        if (e.target === ed || red.contains(e.target)) return;
         const hit = hitOf(e.target);
         if (!hit) return;
         e.preventDefault();
@@ -1619,52 +1668,583 @@
         t.setAttribute("autocomplete", "off");
     }
     ed.setAttribute("aria-label", "セル");
+    // Text whose characters are formatted (some of them red, bigger, struck through, as Excel
+    // formats the characters of a cell typed into): typed into a box that shows them, `red`, in
+    // place of `ed`. What it holds is `entry.runs` ([{ t, f }]); the box is drawn from them, and
+    // what is typed changes them (the browser's own editing is not let to change the box).
+    const red = el("div", "editor rich");
+    red.contentEditable = "true";
+    red.spellcheck = false;
+    red.setAttribute("aria-label", "セル");
+    red.setAttribute("role", "textbox");
+    const runsText = (runs) => runs.map((r) => r.t).join("");
+    const sameFont = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+    // (Runs of one font are one; runs without text go.)
+    function tidyRuns(runs) {
+        const out = [];
+        for (const r of runs) {
+            if (!r.t) continue;
+            const last = out[out.length - 1];
+            if (last && sameFont(last.f, r.f)) last.t += r.t;
+            else out.push({ t: r.t, f: r.f ? { ...r.f } : null });
+        }
+        return out;
+    }
+    // The font of the character at `pos` (past the end: the last one's).
+    function fontOfChar(runs, pos) {
+        let n = 0;
+        for (const r of runs) {
+            if (pos < n + r.t.length) return r.f;
+            n += r.t.length;
+        }
+        return runs.length ? runs[runs.length - 1].f : null;
+    }
+    // The font what is typed at `pos` gets, as in Excel: that of the character before it (the
+    // first's at the start).
+    const fontAt = (runs, pos) => fontOfChar(runs, Math.max(0, pos - 1));
+    // `text` (of the font `f`) in place of the characters start..end.
+    function spliceRuns(runs, start, end, text, f) {
+        const out = [];
+        let n = 0;
+        let placed = false;
+        const put = () => {
+            if (!placed && text) out.push({ t: text, f });
+            placed = true;
+        };
+        for (const r of runs) {
+            const a = n;
+            const b = (n += r.t.length);
+            if (b <= start && !(b === start && a === start)) {
+                out.push(r);
+                continue;
+            }
+            if (a >= end) {
+                put();
+                out.push(r);
+                continue;
+            }
+            if (a < start) out.push({ t: r.t.slice(0, start - a), f: r.f });
+            put();
+            if (b > end) out.push({ t: r.t.slice(end - a), f: r.f });
+        }
+        put();
+        return tidyRuns(out);
+    }
+    // The characters start..end changed by `change(font)` (the font of the cell for those of it).
+    function restyleRuns(runs, start, end, change, base) {
+        const out = [];
+        let n = 0;
+        for (const r of runs) {
+            const a = n;
+            const b = (n += r.t.length);
+            const from = Math.max(a, start) - a;
+            const to = Math.min(b, end) - a;
+            if (to <= from) {
+                out.push(r);
+                continue;
+            }
+            if (from > 0) out.push({ t: r.t.slice(0, from), f: r.f });
+            out.push({ t: r.t.slice(from, to), f: change({ ...(r.f || base) }) });
+            if (to < r.t.length) out.push({ t: r.t.slice(to), f: r.f });
+        }
+        return tidyRuns(out);
+    }
+    // The runs kept as the text changes from `was` to `now` (in a box that does not show them:
+    // the formula bar): what is typed gets the font of the character before it.
+    function followRuns(runs, was, now) {
+        if (was === now) return runs;
+        let a = 0;
+        while (a < was.length && a < now.length && was[a] === now[a]) a++;
+        let z = 0;
+        while (z < was.length - a && z < now.length - a && was[was.length - 1 - z] === now[now.length - 1 - z]) z++;
+        return spliceRuns(runs, a, was.length - z, now.slice(a, now.length - z), fontAt(runs, a));
+    }
+    // The font of the active cell, as a run's (what its characters have unless given another).
+    function cellFont() {
+        const fm = formatAt(sel.ar, sel.ac);
+        const book = bookFont(view.sheet);
+        const f = { name: fm.font || book.name, size: fm.size || book.size };
+        if (fm.b) f.b = true;
+        if (fm.i) f.i = true;
+        if (fm.u && fm.u !== "none") f.u = fm.u === true ? "single" : fm.u;
+        if (fm.st) f.s = true;
+        if (fm.color) f.color = fm.color;
+        if (fm.va) f.va = fm.va;
+        return f;
+    }
+    // Whether a format given now is the characters' (selected, or to be typed): while the cell
+    // itself is typed into, not a formula (whose characters Excel does not format).
+    const charTarget = () => !!entry && entry.where === "cell" && !!view && !!sel && !/^=/.test(entryInput().value);
+
+    // ---- the box: where its caret is, as characters of the text
+    function richOffset(node, offset) {
+        const r = document.createRange();
+        r.selectNodeContents(red);
+        try {
+            r.setEnd(node, offset);
+        } catch (x) {
+            return 0;
+        }
+        return r.toString().length;
+    }
+    function richSel() {
+        const s = document.getSelection();
+        if (s && s.rangeCount && red.contains(s.anchorNode) && red.contains(s.focusNode)) {
+            const a = richOffset(s.anchorNode, s.anchorOffset);
+            const b = richOffset(s.focusNode, s.focusOffset);
+            return [Math.min(a, b), Math.max(a, b)];
+        }
+        return entry && entry.sel ? entry.sel.slice() : [0, 0];
+    }
+    function richPlace(a, b) {
+        const len = runsText(entry.runs).length;
+        a = Math.max(0, Math.min(a, len));
+        b = Math.max(a, Math.min(b === undefined ? a : b, len));
+        entry.sel = [a, b];
+        const find = (pos) => {
+            const walk = document.createTreeWalker(red, NodeFilter.SHOW_TEXT);
+            let n = 0;
+            let last = null;
+            for (let t = walk.nextNode(); t; t = walk.nextNode()) {
+                if (pos <= n + t.data.length) return [t, pos - n];
+                n += t.data.length;
+                last = t;
+            }
+            return last ? [last, last.data.length] : [red, 0];
+        };
+        const s = document.getSelection();
+        if (!s) return;
+        const r = document.createRange();
+        r.setStart(...find(a));
+        r.setEnd(...find(b));
+        s.removeAllRanges();
+        s.addRange(r);
+    }
+    // The box drawn from the runs, its caret at a..b.
+    function richDraw(a, b) {
+        red.textContent = "";
+        const deco = entry.deco || "";
+        for (const r of entry.runs) {
+            const span = red.appendChild(el("span", null, r.t));
+            span.style.cssText = runCss(r.f, deco);
+        }
+        // (A line break at the end shows a line after it only with something there.)
+        if (/\n$/.test(runsText(entry.runs))) red.appendChild(document.createElement("br"));
+        if (document.activeElement === red) richPlace(a, b);
+        else entry.sel = [a, b === undefined ? a : b];
+    }
+    // What was typed (in place of start..end): the box drawn again, the rest as after typing.
+    function richReplace(start, end, text) {
+        const runs = entry.runs;
+        text = text.replace(/\r\n?/g, "\n");
+        const p = entry.pending;
+        const f = p && p.at === start && start === end ? p.f : end > start ? fontOfChar(runs, start) : fontAt(runs, start);
+        entry.undo.push({ runs, sel: richSel() });
+        entry.redo = [];
+        entry.runs = spliceRuns(runs, start, end, text, f);
+        entry.pending = null;
+        richDraw(start + text.length);
+        richTyped();
+    }
+    // After the text changed: as `ed`'s input.
+    function richTyped() {
+        const text = runsText(entry.runs);
+        // A formula: its characters are not formatted; typed on in the plain box.
+        if (/^=/.test(text)) {
+            toPlain();
+            return;
+        }
+        entry.point = null;
+        $("fx").textContent = text;
+        placeEditor();
+        entryRefs();
+        showMode();
+        updateAssist();
+    }
+    // The box `entryInput` gives while the characters are formatted (as a textarea's).
+    const richBox = {
+        get value() {
+            return entry && entry.runs ? runsText(entry.runs) : "";
+        },
+        get selectionStart() {
+            return richSel()[0];
+        },
+        get selectionEnd() {
+            return richSel()[1];
+        },
+        setSelectionRange: (a, b) => richPlace(a, b),
+        setRangeText: (text, a, b) => richReplace(a, b, text),
+        focus: () => red.focus({ preventScroll: true }),
+        select: () => richPlace(0, runsText(entry.runs).length),
+        dispatchEvent: () => true,
+        getBoundingClientRect: () => red.getBoundingClientRect(),
+    };
+    // The cell typed into in the box of formats (from the plain box, its text and its caret).
+    function toRich() {
+        const [a, b] = [ed.selectionStart, ed.selectionEnd];
+        if (!entry.runs) entry.runs = tidyRuns([{ t: ed.value, f: null }]);
+        entry.rich = true;
+        entry.undo = entry.undo || [];
+        entry.redo = entry.redo || [];
+        ed.value = "";
+        ed.classList.remove("on");
+        placeEditor();
+        red.focus({ preventScroll: true });
+        richDraw(a, b);
+        richPlace(a, b);
+    }
+    // Back to the plain box (a formula typed), the runs kept for the text that stays.
+    function toPlain() {
+        const [a, b] = richSel();
+        const text = runsText(entry.runs);
+        entry.rich = false;
+        entry.lastText = text;
+        red.classList.remove("on");
+        red.textContent = "";
+        ed.value = text;
+        placeEditor();
+        ed.focus({ preventScroll: true });
+        ed.setSelectionRange(a, b);
+        $("fx").textContent = text;
+        entryRefs();
+        showMode();
+        updateAssist();
+    }
+    // Ctrl+Z, Ctrl+Y in the box.
+    function richHistory(back) {
+        const from = back ? entry.undo : entry.redo;
+        const to = back ? entry.redo : entry.undo;
+        const step = from.pop();
+        if (!step) return;
+        to.push({ runs: entry.runs, sel: richSel() });
+        entry.runs = step.runs;
+        richDraw(step.sel[0], step.sel[1]);
+        richTyped();
+    }
+    red.addEventListener("beforeinput", (e) => {
+        if (!entry || !entry.rich) {
+            e.preventDefault();
+            return;
+        }
+        // (An input method composes in the box; what it gives is taken when it ends.)
+        if (e.inputType === "insertCompositionText" || e.isComposing) return;
+        e.preventDefault();
+        const t = e.inputType;
+        if (t === "historyUndo" || t === "historyRedo") {
+            richHistory(t === "historyUndo");
+            return;
+        }
+        let [a, b] = richSel();
+        const ranges = e.getTargetRanges ? e.getTargetRanges() : [];
+        if (ranges.length && red.contains(ranges[0].startContainer)) {
+            const x = richOffset(ranges[0].startContainer, ranges[0].startOffset);
+            const y = richOffset(ranges[0].endContainer, ranges[0].endOffset);
+            [a, b] = [Math.min(x, y), Math.max(x, y)];
+        }
+        const text = runsText(entry.runs);
+        const paste = () => (e.dataTransfer && e.dataTransfer.getData("text/plain")) || "";
+        if (t === "insertText" || t === "insertReplacementText") richReplace(a, b, e.data !== null && e.data !== undefined ? e.data : paste());
+        else if (t === "insertLineBreak" || t === "insertParagraph") richReplace(a, b, "\n");
+        else if (t === "insertFromPaste" || t === "insertFromDrop" || t === "insertFromYank") richReplace(a, b, paste());
+        else if (t.startsWith("delete")) {
+            if (a === b) {
+                // (Without the ranges: a character, a code point whole.)
+                if (/Backward/.test(t) && a > 0) a -= a > 1 && /[\uDC00-\uDFFF]/.test(text[a - 1]) ? 2 : 1;
+                else if (/Forward/.test(t) && b < text.length) b += /[\uD800-\uDBFF]/.test(text[b]) ? 2 : 1;
+            }
+            if (a !== b) richReplace(a, b, "");
+        }
+    });
+    let richComposing = null;
+    red.addEventListener("compositionstart", () => {
+        if (!entry || !entry.rich) return;
+        const [a, b] = richSel();
+        const p = entry.pending;
+        richComposing = { a, b, text: runsText(entry.runs), runs: entry.runs, f: p && p.at === a && a === b ? p.f : b > a ? fontOfChar(entry.runs, a) : fontAt(entry.runs, a) };
+    });
+    red.addEventListener("input", () => {
+        if (!entry || !entry.rich || !richComposing) return;
+        $("fx").textContent = red.textContent;
+        placeEditor();
+    });
+    red.addEventListener("compositionend", () => {
+        const c = richComposing;
+        richComposing = null;
+        if (!entry || !entry.rich || !c) return;
+        // What was composed: the box's text between what was before and after the characters
+        // it replaced.
+        const now = richOffsetText();
+        const tail = c.text.length - c.b;
+        const ok = now.length >= c.a + tail && now.slice(0, c.a) === c.text.slice(0, c.a) && now.slice(now.length - tail) === c.text.slice(c.b);
+        entry.undo.push({ runs: c.runs, sel: [c.a, c.b] });
+        entry.redo = [];
+        if (ok) {
+            const typed = now.slice(c.a, now.length - tail);
+            entry.runs = spliceRuns(c.runs, c.a, c.b, typed, c.f);
+            entry.pending = null;
+            richDraw(c.a + typed.length);
+        } else {
+            entry.runs = followRuns(c.runs, c.text, now);
+            richDraw(now.length);
+        }
+        richTyped();
+    });
+    // The box's text as it is now (an input method has typed into it).
+    function richOffsetText() {
+        const r = document.createRange();
+        r.selectNodeContents(red);
+        return r.toString();
+    }
+    // Cut: what is selected goes to the clipboard as text, and from the box.
+    red.addEventListener("cut", (e) => {
+        if (!entry || !entry.rich) return;
+        const [a, b] = richSel();
+        e.preventDefault();
+        if (a === b) return;
+        if (e.clipboardData) e.clipboardData.setData("text/plain", runsText(entry.runs).slice(a, b));
+        richReplace(a, b, "");
+    });
+    red.addEventListener("copy", (e) => {
+        if (!entry || !entry.rich) return;
+        const [a, b] = richSel();
+        e.preventDefault();
+        if (e.clipboardData && b > a) e.clipboardData.setData("text/plain", runsText(entry.runs).slice(a, b));
+    });
+    // Where the caret is, kept (a format chosen from the toolbar, which takes the focus, is the
+    // characters selected then); a caret moved away loses the format waiting for what is typed.
+    document.addEventListener("selectionchange", () => {
+        if (!entry || !entry.rich || document.activeElement !== red || richComposing) return;
+        entry.sel = richSel();
+        if (entry.pending && (entry.sel[0] !== entry.pending.at || entry.sel[1] !== entry.pending.at)) entry.pending = null;
+        // (The toolbar shows the font of the characters there.)
+        if (!richToolsSoon) {
+            richToolsSoon = true;
+            requestAnimationFrame(() => {
+                richToolsSoon = false;
+                if (entry && entry.rich) showTools();
+            });
+        }
+    });
+    let richToolsSoon = false;
+
+    // A format given to the characters selected (none selected: to those typed next), as
+    // `format(set)` gives it to the cells: false when it is not one of a character's.
+    const CHAR_FORMATS = {
+        bold: (f, v) => (v ? (f.b = true) : delete f.b),
+        italic: (f, v) => (v ? (f.i = true) : delete f.i),
+        underline: (f, v) => (v && v !== "none" ? (f.u = v === true ? "single" : v) : delete f.u),
+        strike: (f, v) => (v ? (f.s = true) : delete f.s),
+        fontName: (f, v) => v && (f.name = v),
+        fontSize: (f, v) => v && (f.size = v),
+        color: (f, v) => (v ? (f.color = v) : delete f.color),
+        superscript: (f, v) => (v ? (f.va = "superscript") : f.va === "superscript" && delete f.va),
+        subscript: (f, v) => (v ? (f.va = "subscript") : f.va === "subscript" && delete f.va),
+    };
+    function formatChars(set) {
+        const keys = Object.keys(set);
+        if (!keys.length || !keys.every((k) => CHAR_FORMATS[k]) || !charTarget()) return false;
+        if (!entry.rich) toRich();
+        const [a, b] = document.activeElement === red || !entry.sel ? richSel() : entry.sel;
+        const change = (f) => {
+            for (const k of keys) CHAR_FORMATS[k](f, set[k]);
+            return f;
+        };
+        const base = cellFont();
+        if (a === b) {
+            // What is typed here next.
+            entry.pending = { at: a, f: change({ ...(entry.pending && entry.pending.at === a ? entry.pending.f : fontAt(entry.runs, a) || base) }) };
+        } else {
+            entry.undo.push({ runs: entry.runs, sel: [a, b] });
+            entry.redo = [];
+            entry.runs = restyleRuns(entry.runs, a, b, change, base);
+        }
+        red.focus({ preventScroll: true });
+        richDraw(a, b);
+        richPlace(a, b);
+        placeEditor();
+        showTools();
+        return true;
+    }
+    // The font of the characters a format is given to (the first selected, or what is typed
+    // next), as a run's.
+    function charFont() {
+        if (!entry.rich) return fontAt(tidyRuns([{ t: entryInput().value, f: null }]), 0) || cellFont();
+        const [a, b] = document.activeElement === red || !entry.sel ? richSel() : entry.sel;
+        if (a === b && entry.pending && entry.pending.at === a) return entry.pending.f;
+        return (a === b ? fontAt(entry.runs, a) : fontOfChar(entry.runs, a)) || cellFont();
+    }
+    // Ctrl+1 while a cell is typed into: "セルの書式設定" of its characters, the フォント page
+    // only (as Excel's): for those selected, or those typed next.
+    function askCharFont() {
+        if (!entry || !charTarget()) return;
+        if (!entry.rich) toRich();
+        const kept = richSel();
+        entry.sel = kept;
+        const f = { ...cellFont(), ...charFont() };
+        const form = openDialog("セルの書式設定", "charfont");
+        form.appendChild(el("div", "tabs1", "フォント"));
+        const name = field(form, "フォント名:");
+        name.value = f.name || "";
+        name.dataset.field = "fontName";
+        const styleLine = form.appendChild(el("label"));
+        styleLine.appendChild(el("span", "lbl", "スタイル:"));
+        const style = styleLine.appendChild(el("select"));
+        for (const [v, label] of [["normal", "標準"], ["italic", "斜体"], ["bold", "太字"], ["boldItalic", "太字 斜体"]]) style.appendChild(el("option", null, label)).value = v;
+        style.value = f.b && f.i ? "boldItalic" : f.b ? "bold" : f.i ? "italic" : "normal";
+        style.dataset.field = "fontStyle";
+        const size = field(form, "サイズ:", "number");
+        size.min = "1";
+        size.max = "409";
+        size.step = "0.5";
+        size.value = String(f.size || 11);
+        size.dataset.field = "fontSize";
+        const uLine = form.appendChild(el("label"));
+        uLine.appendChild(el("span", "lbl", "下線:"));
+        const under = uLine.appendChild(el("select"));
+        for (const [v, label] of UNDERLINES) under.appendChild(el("option", null, label)).value = v;
+        under.value = f.u || "none";
+        under.dataset.field = "underline";
+        // 色: the palette's (自動: the cell's color).
+        let color = f.color || null;
+        const cLine = form.appendChild(el("div", "crow"));
+        cLine.appendChild(el("span", "lbl", "色:"));
+        const pick = cLine.appendChild(el("button", "pcolor"));
+        pick.type = "button";
+        pick.dataset.field = "fontColor";
+        const swatch = pick.appendChild(el("span", "sw"));
+        const label = pick.appendChild(el("span", null));
+        const showColor = () => {
+            swatch.style.background = color || "#000000";
+            label.textContent = color || "自動";
+        };
+        showColor();
+        pick.addEventListener("click", () =>
+            openColors(pick, "color", "自動", (c) => {
+                color = c;
+                showColor();
+            }),
+        );
+        form.appendChild(el("div", "sub", "文字飾り"));
+        const strike = check(form, "取り消し線", !!f.s);
+        const sup = check(form, "上付き", f.va === "superscript");
+        const sub = check(form, "下付き", f.va === "subscript");
+        sup.addEventListener("change", () => sup.checked && (sub.checked = false));
+        sub.addEventListener("change", () => sub.checked && (sup.checked = false));
+        const preview = form.appendChild(el("div", "charpreview"));
+        const sample = preview.appendChild(el("span", null, "Aaあぁアァ亜宇"));
+        const showSample = () => {
+            sample.style.cssText = runCss({
+                name: name.value.trim() || f.name,
+                size: Math.min(26, +size.value || 11),
+                b: /bold/.test(style.value),
+                i: /italic/i.test(style.value),
+                u: under.value === "none" ? undefined : under.value,
+                s: strike.checked,
+                color: color || undefined,
+                va: sup.checked ? "superscript" : sub.checked ? "subscript" : undefined,
+            });
+        };
+        for (const x of [name, style, size, under, strike, sup, sub]) x.addEventListener("input", showSample);
+        pick.addEventListener("click", showSample);
+        showSample();
+        dialogButtons(form);
+        form.cancel = () => {
+            closeDialog();
+            if (entry) richPlace(kept[0], kept[1]);
+        };
+        form.addEventListener("submit", (e) => {
+            e.preventDefault();
+            const pt = Number(size.value);
+            if (!(pt >= 1 && pt <= 409)) {
+                size.setCustomValidity("1 から 409 の数値を指定してください");
+                size.reportValidity();
+                return;
+            }
+            closeDialog();
+            if (!entry) return;
+            entry.sel = kept;
+            formatChars({
+                fontName: name.value.trim() || f.name,
+                fontSize: pt,
+                bold: /bold/.test(style.value),
+                italic: /italic/i.test(style.value),
+                underline: under.value,
+                color,
+                strike: strike.checked,
+                superscript: sup.checked,
+                subscript: sub.checked && !sup.checked,
+            });
+        });
+        size.addEventListener("input", () => size.setCustomValidity(""));
+        name.focus();
+        name.select();
+    }
+    // The runs a cell is entered with (none: plain text).
+    function entryRuns(e, text) {
+        if (!e.runs || /^=/.test(text)) return null;
+        const runs = tidyRuns(e.runs);
+        if (runsText(runs) !== text || !runs.some((r) => r.f)) return null;
+        return runs.map((r) => (r.f ? { t: r.t, f: r.f } : { t: r.t }));
+    }
     // The dialog open (Excel's), and a dialog over it (the format of a conditional format's rule).
     let dialog = null;
     let subDialog = null;
     // (Not while a dialog is open: it keeps the focus.)
     const focusGrid = () => {
         if (dialog) return;
-        if (!entry || entry.where === "cell") ed.focus({ preventScroll: true });
+        if (entry && entry.rich) {
+            if (document.activeElement !== red) {
+                red.focus({ preventScroll: true });
+                if (entry.sel) richPlace(entry.sel[0], entry.sel[1]);
+            }
+        } else if (!entry || entry.where === "cell") ed.focus({ preventScroll: true });
     };
     const onGrid = () => {
         const a = document.activeElement;
-        return !a || a === document.body || a === ed || a === bar || a === $("grid");
+        return !a || a === document.body || a === ed || a === red || a === bar || a === $("grid");
     };
 
     function placeEditor() {
         if (!view || !sel) return;
         if (ed.parentNode !== view.wrap) view.wrap.insertBefore(ed, view.refs);
+        if (red.parentNode !== view.wrap) view.wrap.insertBefore(red, view.refs);
         const o = ownerOf(sel.ar, sel.ac) || [sel.ar, sel.ac, sel.ar, sel.ac];
         const b = boxOf(o[0], o[1], o[2], o[3]);
         if (!b) return;
         const on = !!entry && entry.where === "cell";
-        ed.classList.toggle("on", on);
-        Object.assign(ed.style, { left: `${b.x}px`, top: `${b.y}px`, width: "", height: "", font: "", paddingTop: "" });
-        pinTo(ed, pinOf(view, b));
+        const rich = on && !!entry.rich;
+        // (The box typed into: of the characters' formats, or the plain one.)
+        const box = rich ? red : ed;
+        ed.classList.toggle("on", on && !rich);
+        red.classList.toggle("on", rich);
+        for (const t of [ed, red]) {
+            Object.assign(t.style, { left: `${b.x}px`, top: `${b.y}px`, width: "", height: "", font: "", paddingTop: "", color: "" });
+            pinTo(t, pinOf(view, b));
+        }
         view.selbox.classList.remove("overx", "overy");
         if (!on) return;
         const style = activeTd ? getComputedStyle(activeTd) : null;
-        if (style) ed.style.font = style.font;
+        if (style) box.style.font = style.font;
+        if (style && rich) box.style.color = style.color;
         // As wide and as tall as what is typed, the cell at least.
-        ed.style.width = `${b.w + 1}px`;
-        ed.style.width = `${Math.max(b.w + 1, ed.scrollWidth + 10)}px`;
+        box.style.width = `${b.w + 1}px`;
+        box.style.width = `${Math.max(b.w + 1, box.scrollWidth + 10)}px`;
         // What is typed stands where the cell shows it (at the bottom, unless the cell says
         // otherwise): it does not move when it is entered.
-        ed.style.paddingTop = "0px";
-        ed.style.height = "0px";
-        const textH = ed.scrollHeight;
+        box.style.paddingTop = "0px";
+        box.style.height = "0px";
+        const textH = box.scrollHeight;
         const valign = style ? style.verticalAlign : "bottom";
         const room = b.h - textH;
         const pad = room <= 0 || valign === "top" ? 0 : valign === "middle" ? room / 2 : room;
-        ed.style.paddingTop = `${pad}px`;
-        ed.style.height = `${pad > 0 ? b.h + 1 : Math.max(b.h + 1, textH + 2)}px`;
+        box.style.paddingTop = `${pad}px`;
+        box.style.height = `${pad > 0 ? b.h + 1 : Math.max(b.h + 1, textH + 2)}px`;
         // (Not filled from while typed into: the fill handle is not there.)
         view.fillh.hidden = true;
         // What is typed past the cell runs over the right (bottom) side of its border, as Excel
         // shows it: the border stays on the cell.
-        view.selbox.classList.toggle("overx", parseFloat(ed.style.width) > b.w + 1);
-        view.selbox.classList.toggle("overy", parseFloat(ed.style.height) > b.h + 1);
+        view.selbox.classList.toggle("overx", parseFloat(box.style.width) > b.w + 1);
+        view.selbox.classList.toggle("overy", parseFloat(box.style.height) > b.h + 1);
         placePaint();
     }
 
@@ -1677,7 +2257,7 @@
     let composing = false;
     function paintEntry(refs) {
         const input = entry && entryInput();
-        const on = !!input && !composing && refs.length > 0;
+        const on = !!input && input !== richBox && !composing && refs.length > 0;
         for (const t of [ed, bar]) t.classList.toggle("painted", on && t === input);
         const paint = input === bar ? barPaint : edPaint;
         for (const p of [edPaint, barPaint]) if (!on || p !== paint) p.remove();
@@ -1736,6 +2316,16 @@
         // `point`: the reference being pointed at (clicked, or moved to by the arrows) while a
         // formula is typed: { start, end } in the text, `anchor` and `cur` its corners [r, c].
         entry = { mode, where, original, point: null };
+        // The characters' formats of the text edited (not of a text typed over the cell).
+        if (text === null && cell.rt && !cell.f) {
+            entry.runs = tidyRuns(cell.rt.map((r) => ({ t: r.t, f: r.f || null })));
+            entry.originalRuns = JSON.stringify(entry.runs);
+            entry.lastText = runsText(entry.runs);
+        }
+        entry.undo = [];
+        entry.redo = [];
+        entry.deco = activeTd ? activeTd.style.textDecoration || "" : "";
+        if (entry.deco === "none") entry.deco = "";
         if (text === null) text = original;
         const fx = $("fx");
         fx.textContent = "";
@@ -1745,13 +2335,23 @@
             bar.focus();
             bar.setSelectionRange(text.length, text.length);
         } else {
-            // (What an input method is composing in the box stays as it is.)
-            if (ed.value !== text) ed.value = text;
             fx.textContent = text;
             reveal(sel.ar, sel.ac);
-            placeEditor();
-            ed.focus({ preventScroll: true });
-            ed.setSelectionRange(text.length, text.length);
+            if (entry.runs && entry.runs.some((r) => r.f)) {
+                ed.value = "";
+                entry.rich = true;
+                placeEditor();
+                red.focus({ preventScroll: true });
+                richDraw(text.length);
+                richPlace(text.length);
+                placeEditor();
+            } else {
+                // (What an input method is composing in the box stays as it is.)
+                if (ed.value !== text) ed.value = text;
+                placeEditor();
+                ed.focus({ preventScroll: true });
+                ed.setSelectionRange(text.length, text.length);
+            }
         }
         document.body.classList.add("typing");
         entryRefs();
@@ -1761,7 +2361,12 @@
     }
 
     function endEntry() {
+        const was = entry;
         entry = null;
+        richComposing = null;
+        red.classList.remove("on");
+        red.textContent = "";
+        if (was && was.rich && document.activeElement === red) ed.focus({ preventScroll: true });
         closeAssist();
         showMode();
         ed.value = "";
@@ -1778,7 +2383,7 @@
     function commit(how) {
         const e = entry;
         if (!e || !sel) return;
-        const box = e.where === "bar" ? bar : ed;
+        const box = entryInput();
         const text = box.value;
         // What the rule of the cell (データの入力規則) says of it, as Excel checks it: a value it
         // does not allow is asked about (再試行: typed on; キャンセル: undone); one worked out by
@@ -1804,11 +2409,26 @@
         const at = address(sel.ar, sel.ac);
         const ranges = fill ? allAreas().map(rangeText) : [at];
         const sheet = view.sheet.name;
+        // The characters' formats, and whether they changed.
+        if (e.runs && e.where === "bar") e.runs = followRuns(e.runs, e.lastText, text);
+        const runs = entryRuns(e, text);
+        const runsChanged = JSON.stringify(runs ? tidyRuns(runs.map((r) => ({ t: r.t, f: r.f || null }))) : null) !== (e.originalRuns || "null");
+        const [ar, ac] = [sel.ar, sel.ac];
         endEntry();
         if (how && how.move) move(how.move[0], how.move[1], false);
-        if (text === e.original && !fill) return;
-        const ops = ranges.map((range) => (text === "" ? { op: "clear", sheet, range } : { op: "set", sheet, range, text }));
+        if (text === e.original && !fill && !runsChanged) return;
+        const ops = ranges.map((range) => (text === "" ? { op: "clear", sheet, range } : runs ? { op: "set", sheet, range, text, runs } : { op: "set", sheet, range, text }));
         if (validate && text !== "") ops.push({ op: "validate", sheet, range: at });
+        // A row Excel fits to its fonts fits to those of the characters too.
+        if (runs && view && !(view.sheet.protection && !(view.sheet.protection.allow || {}).formatRows)) {
+            const v = view.sheet;
+            const cells = (v.cells || []).filter((c) => c.r === ar && !(c.c === ac));
+            const css = (c) => (c.s ? v.styles[c.s] : "");
+            const mine = cellOf(ar, ac);
+            let px = fitOfRuns(v, mine ? css(mine) : cssOf(v, ar, ac, null), runs);
+            for (const c of cells) px = Math.max(px, fitOfRuns(v, css(c), c.rt));
+            if (!(v.customRows || []).includes(ar) && height(v, ar) > 0 && px > height(v, ar)) ops.push({ op: "fit", sheet, rows: [[ar, px]] });
+        }
         postEdit(ops);
     }
 
@@ -1820,6 +2440,10 @@
         }
         // Typing ends the pointing.
         entry.point = null;
+        if (entry.runs) {
+            entry.runs = followRuns(entry.runs, entry.lastText || "", ed.value);
+            entry.lastText = ed.value;
+        }
         $("fx").textContent = ed.value;
         placeEditor();
         entryRefs();
@@ -1847,8 +2471,14 @@
         if (!editable || busy || !sel || e.target === bar) return;
         e.preventDefault();
         if (entry && entry.where === "cell") {
-            // Goes on in the bar.
-            const text = ed.value;
+            // Goes on in the bar (the characters' formats follow what is typed there).
+            const text = entryInput().value;
+            if (entry.rich) {
+                entry.rich = false;
+                entry.lastText = text;
+                red.classList.remove("on");
+                red.textContent = "";
+            }
             entry.where = "bar";
             entry.mode = "edit";
             ed.value = "";
@@ -1865,7 +2495,7 @@
 
     // ---- formulas typed: pointing at cells (a click, a drag, the arrows), F4, the references
 
-    const entryInput = () => (entry && entry.where === "bar" ? bar : ed);
+    const entryInput = () => (entry && entry.where === "bar" ? bar : entry && entry.rich ? richBox : ed);
     // A reference may be pointed at: in a formula, after an operator, a parenthesis or a comma.
     function pointable() {
         if (!entry || !view) return false;
@@ -2005,7 +2635,7 @@
         if (!/^[=+-]/.test(text) || input.selectionStart !== input.selectionEnd) return closeAssist();
         const caret = input.selectionStart;
         const scan = scanFormula(text.slice(0, caret));
-        const r = (entry.where === "bar" ? bar : ed).getBoundingClientRect();
+        const r = entryInput().getBoundingClientRect();
         // The functions (then the names) that begin with the word, unless it is a reference
         // or a number, or follows a sheet's name.
         const w = scan.word;
@@ -6019,6 +6649,8 @@
     };
     function format(set) {
         if (!sel || !view) return;
+        // While a cell is typed into: the characters'.
+        if (formatChars(set)) return;
         const list = allAreas();
         const ops = list.map((a) => ({ op: "format", sheet: view.sheet.name, range: areaText(a), set }));
         // A new font fits the rows to it, as Excel does (those not given a height).
@@ -6043,6 +6675,11 @@
         return rows.length ? [{ op: "fit", sheet: view.sheet.name, rows }] : [];
     }
     function toggleFormat(name) {
+        if (editable && CHAR_FORMATS[name] && charTarget()) {
+            const f = charFont();
+            formatChars({ [name]: !{ bold: f.b, italic: f.i, underline: f.u, strike: f.s }[name] });
+            return;
+        }
         if (editable) format({ [name]: !STATE[name](activeCss()) });
     }
     function clearFormats() {
@@ -7959,7 +8596,7 @@
     }
     // The font size of the active cell one step up (down): Excel's フォント サイズの拡大 (縮小).
     function stepFontSize(up) {
-        const now = view ? fontOfCss(view.sheet, activeCss()).pt : 11;
+        const now = view && charTarget() ? charFont().size || fontOfCss(view.sheet, activeCss()).pt : view ? fontOfCss(view.sheet, activeCss()).pt : 11;
         const next = up ? FONT_SIZES.find((n) => n > now) : [...FONT_SIZES].reverse().find((n) => n < now);
         if (next) format({ fontSize: next });
     }
@@ -8508,12 +9145,13 @@
             if (o.edits && !editable) b.disabled = true;
             const openMenuOf = (anchor) => {
                 if (o.edits && busy) return;
-                if (entry) commit(null);
-                if (entry) return;
+                const keep = o.chars && charTarget();
+                if (entry && !keep) commit(null);
+                if (entry && !keep) return;
                 o.menu(anchor);
             };
             if (o.menu && !o.split) b.addEventListener("click", () => openMenuOf(wrap === into ? b : wrap));
-            else b.addEventListener("click", () => run(b, o.act, o.edits, o.keepEntry));
+            else b.addEventListener("click", () => run(b, o.act, o.edits, o.keepEntry || (o.chars && charTarget())));
             if (o.split) {
                 const more = wrap.appendChild(el("button", "rbtn more", "▾"));
                 more.type = "button";
@@ -8618,7 +9256,7 @@
         fontName.addEventListener("change", applyFont);
         const openFonts = () => {
             if (busy) return;
-            if (entry) commit(null);
+            if (entry && !charTarget()) commit(null);
             openFontList(fontBox, (name) => {
                 fontName.value = name;
                 applyFont();
@@ -8640,12 +9278,12 @@
             format({ fontSize: +size.value });
             focusGrid();
         });
-        button("fontGrow", { icon: "grow", title: "フォント サイズの拡大", edits: true, act: () => stepFontSize(true) });
-        button("fontShrink", { icon: "shrink", title: "フォント サイズの縮小", edits: true, act: () => stepFontSize(false) });
+        button("fontGrow", { icon: "grow", title: "フォント サイズの拡大", edits: true, chars: true, act: () => stepFontSize(true) });
+        button("fontShrink", { icon: "shrink", title: "フォント サイズの縮小", edits: true, chars: true, act: () => stepFontSize(false) });
         row(fontRows);
-        button("bold", { text: "B", title: "太字（Ctrl+B）", cls: "b", edits: true, act: () => toggleFormat("bold") });
-        button("italic", { text: "I", title: "斜体（Ctrl+I）", cls: "i", edits: true, act: () => toggleFormat("italic") });
-        button("underline", { text: "U", title: "下線（Ctrl+U）", cls: "u", edits: true, act: () => toggleFormat("underline") });
+        button("bold", { text: "B", title: "太字（Ctrl+B）", cls: "b", edits: true, chars: true, act: () => toggleFormat("bold") });
+        button("italic", { text: "I", title: "斜体（Ctrl+I）", cls: "i", edits: true, chars: true, act: () => toggleFormat("italic") });
+        button("underline", { text: "U", title: "下線（Ctrl+U）", cls: "u", edits: true, chars: true, act: () => toggleFormat("underline") });
         sep();
         // The button shows the border used last (格子 at first) and gives it again, as Excel's.
         const showBorder = (value) => {
@@ -8725,6 +9363,7 @@
                 split: true,
                 edits: true,
                 cls: "color",
+                chars: key === "color",
                 act: () => format({ [key]: lastColor[key] }),
                 menu: (anchor) => openColors(anchor, key, none),
             });
@@ -9306,6 +9945,18 @@
         const css = activeCss();
         const cell = (activeTd && activeTd.cell) || {};
         for (const name of ["bold", "italic", "underline", "wrap"]) tools[name].classList.toggle("on", STATE[name](css));
+        // While characters are formatted: theirs.
+        if (entry && entry.rich && charTarget()) {
+            const f = charFont();
+            tools.bold.classList.toggle("on", !!f.b);
+            tools.italic.classList.toggle("on", !!f.i);
+            tools.underline.classList.toggle("on", !!f.u);
+            const size = String(f.size || fontOfCss(view.sheet, css).pt);
+            if (![...tools.fontSize.options].some((o) => o.value === size)) tools.fontSize.appendChild(el("option", null, size)).value = size;
+            tools.fontSize.value = size;
+            if (document.activeElement !== tools.fontName) tools.fontName.value = f.name || fontOfCss(view.sheet, css).name;
+            return;
+        }
         const align = (/text-align:(\w+)/.exec(css) || [])[1];
         for (const a of ["left", "center", "right"]) tools[`align-${a}`].classList.toggle("on", align === a);
         const valign = (/vertical-align:(\w+)/.exec(css) || [])[1];
@@ -11909,10 +12560,23 @@
     }
 
     function entryKey(e) {
-        const input = entry.where === "bar" ? bar : ed;
+        const input = entryInput();
         const ctrl = e.ctrlKey || e.metaKey;
         // (An input method takes its own keys.)
         if (e.isComposing || e.keyCode === 229) return;
+        // The characters' formats: Ctrl+B, I, U, 5 (取り消し線), Ctrl+1 (セルの書式設定: フォント).
+        const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+        if (ctrl && !e.altKey && !e.shiftKey && charTarget() && (["b", "i", "u", "5", "1"].includes(k) || e.code === "Digit5" || e.code === "Digit1" || e.code === "Numpad1")) {
+            e.preventDefault();
+            if (k === "1" || e.code === "Digit1" || e.code === "Numpad1") askCharFont();
+            else toggleFormat({ b: "bold", i: "italic", u: "underline" }[k] || "strike");
+            return;
+        }
+        if (entry.rich && ctrl && !e.altKey && (k === "z" || k === "y")) {
+            e.preventDefault();
+            richHistory(k === "z" && !e.shiftKey);
+            return;
+        }
         if (assistKey(e)) {
             e.preventDefault();
             return;

@@ -298,6 +298,14 @@ pub enum Op {
     /// edit with the rule's message. (The grid checks the rules it can work out itself; it asks
     /// this for those it cannot: of a formula, of values that are formulas.)
     Validate { sheet: String, range: RangeRef },
+    /// The text typed into the cells of `range` (by the `set` before it) laid out in runs of
+    /// their own fonts (the `runs` of `set`): some of its characters red, bigger, struck
+    /// through, as Excel formats the characters of a cell being typed into.
+    Rich {
+        sheet: String,
+        range: RangeRef,
+        runs: Vec<crate::book::rich::RichRun>,
+    },
 }
 
 /// Where an object of the drawing goes.
@@ -1549,6 +1557,18 @@ pub fn parse_ops(json: &Json, sheet: Option<&str>) -> Result<Vec<Op>> {
             },
             other => return Err(format!("編集 `{other}` はありません（set / values / clear / insert / delete / copy / move / fill / autofill / pasteSpecial / format / clearFormats / size / hide / merge / unmerge / sort / filter / filterBy / macro / freeze / link / note / table / shape / picture / object / control / activeX / sheet / tabColor / conditional / conditionalRules / validation / validate）")),
         });
+        // The characters' formats of the text typed.
+        if kind == "set"
+            && let Some(runs) = o.get("runs").filter(|r| !r.is_null())
+            && let Some(Op::Set { sheet, range, .. }) = out.last()
+        {
+            let op = Op::Rich {
+                sheet: sheet.clone(),
+                range: *range,
+                runs: crate::book::rich::runs_from_json(runs)?,
+            };
+            out.push(op);
+        }
     }
     Ok(out)
 }
@@ -2550,6 +2570,18 @@ fn run(
             } else {
                 book.set_formulas(si, *range, &[vec![Val::Text(text.clone())]], true)?;
             }
+            // What is typed is plain text (unless runs follow).
+            book.clear_rich(si, *range);
+            written.push((si, *range));
+        }
+        Op::Rich {
+            sheet,
+            range,
+            runs,
+        } => {
+            let si = sheet_index(book, sheet)?;
+            limit(range.count())?;
+            book.set_rich(si, *range, runs)?;
             written.push((si, *range));
         }
         Op::Values { sheet, at, rows } => {
@@ -2575,6 +2607,7 @@ fn run(
                     book.set_formulas(si, RangeRef::cell(at), &[vec![v.clone()]], true)?;
                 }
             }
+            book.clear_rich(si, range);
             written.push((si, range));
         }
         Op::Clear { sheet, range } => {
@@ -3368,6 +3401,10 @@ fn cell_xml(p: &str, at: CellRef, s: u32, state: &CellState, cm: Option<&str>) -
                 scan::escape(t)
             ));
         }
+        Raw::Rich(runs) => {
+            open.push_str(" t=\"inlineStr\"");
+            body.push_str(&format!("<{p}is>{}</{p}is>", runs_xml(p, runs)));
+        }
         Raw::Text(t) => {
             open.push_str(" t=\"inlineStr\"");
             body.push_str(&format!(
@@ -3381,6 +3418,60 @@ fn cell_xml(p: &str, at: CellRef, s: u32, state: &CellState, cm: Option<&str>) -
     } else {
         format!("{open}>{body}</{p}c>")
     }
+}
+
+/// The runs of rich text as the file writes them (`<r><rPr>…</rPr><t>…</t></r>`, the elements
+/// of `rPr` in the schema's order).
+fn runs_xml(p: &str, runs: &[crate::book::rich::RichRun]) -> String {
+    let mut out = String::new();
+    for run in runs {
+        out.push_str(&format!("<{p}r>"));
+        if let Some(f) = &run.font {
+            let val = |name: &str, v: &str| format!("<{p}{name} val=\"{}\"/>", scan::escape(v));
+            out.push_str(&format!("<{p}rPr>"));
+            if let Some(n) = &f.name {
+                out.push_str(&val("rFont", n));
+            }
+            if let Some(c) = f.charset {
+                out.push_str(&val("charset", &c.to_string()));
+            }
+            if let Some(c) = f.family {
+                out.push_str(&val("family", &c.to_string()));
+            }
+            if f.bold {
+                out.push_str(&format!("<{p}b/>"));
+            }
+            if f.italic {
+                out.push_str(&format!("<{p}i/>"));
+            }
+            if f.strike {
+                out.push_str(&format!("<{p}strike/>"));
+            }
+            if let Some(c) = &f.color {
+                out.push_str(&format!("<{p}color rgb=\"FF{}\"/>", scan::escape(c)));
+            }
+            if let Some(s) = f.size {
+                out.push_str(&val("sz", &number(s)));
+            }
+            match f.underline.as_deref() {
+                None => {}
+                Some("single") => out.push_str(&format!("<{p}u/>")),
+                Some(u) => out.push_str(&val("u", u)),
+            }
+            if let Some(v) = &f.va {
+                out.push_str(&val("vertAlign", v));
+            }
+            if let Some(s) = &f.scheme {
+                out.push_str(&val("scheme", s));
+            }
+            out.push_str(&format!("</{p}rPr>"));
+        }
+        out.push_str(&format!(
+            "<{p}t xml:space=\"preserve\">{}</{p}t></{p}r>",
+            scan::escape(&run.text)
+        ));
+    }
+    out
 }
 
 /// A cell of the file as it is, at `at`, with the format `s` when one is given.

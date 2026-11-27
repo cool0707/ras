@@ -21,6 +21,8 @@ pub enum Raw {
     /// An error value as the file writes it (`#N/A`).
     Err(String),
     Text(String),
+    /// Text whose characters have formats of their own.
+    Rich(Vec<super::rich::RichRun>),
 }
 
 /// The formula of a cell as the file has it (no leading `=`).
@@ -252,6 +254,7 @@ impl Book {
                 .collect(),
             ..Default::default()
         };
+        let theme = self.file.theme().clone();
         for (si, ws) in self.file.sheet_collection().iter().enumerate() {
             let mut sheet = SheetState {
                 name: ws.name().to_string(),
@@ -268,6 +271,16 @@ impl Book {
                     CellRawValue::Numeric(n) => Raw::Num(*n),
                     CellRawValue::Bool(b) => Raw::Bool(*b),
                     CellRawValue::Error(e) => Raw::Err(e.to_string()),
+                    CellRawValue::RichText(rt) if formula.is_none() => {
+                        let runs = super::rich::runs_of(rt, &theme);
+                        if super::rich::is_rich(&runs) {
+                            Raw::Rich(runs)
+                        } else if runs.is_empty() {
+                            Raw::Empty
+                        } else {
+                            Raw::Text(super::rich::text_of(&runs))
+                        }
+                    }
                     other => {
                         let s = other.to_string();
                         if s.is_empty() && formula.is_none() {

@@ -220,6 +220,10 @@ th { user-select: none; cursor: default; }
 /* The box typed into: on the active cell, seen while something is typed. */
 .editor { position: absolute; z-index: 1; width: 2px; height: 2px; margin: 0; padding: 0; border: 0; outline: 0; resize: none; overflow: hidden; opacity: 0; pointer-events: none; white-space: pre; background: #fff; color: #000; font: 11pt "Yu Gothic", Meiryo, sans-serif; }
 .editor.on { opacity: 1; pointer-events: auto; padding: 0 3px; }
+/* The box of the characters' formats (rich text): there only while a cell's characters are formatted. */
+.editor.rich { display: none; cursor: text; caret-color: #000; text-decoration: none; }
+.editor.rich.on { display: block; }
+.editor.rich span { white-space: pre; }
 /* The layer of a formula typed, its references in colors, over the box typed into (whose own text
    is not seen: its caret and its selection are; the selection light, for the colors over it). */
 .paint { position: absolute; z-index: 1; margin: 0; border: 0; overflow: hidden; white-space: pre; pointer-events: none; background: transparent; color: #000; }
@@ -477,8 +481,8 @@ td .notemark { position: absolute; top: 0; right: 0; width: 0; height: 0; border
    under the rows and right of the columns. The boxes that stay with them are over them. */
 td.frz { position: sticky; z-index: 2; background-color: #fff; }
 td.fzr.fzc { z-index: 4; }
-.refs > [data-pin], .objs > [data-pin], .sheetwrap > textarea[data-pin], .sheetwrap > .paint[data-pin] { z-index: 3; }
-.refs > [data-pin="yx"], .objs > [data-pin="yx"], .sheetwrap > textarea[data-pin="yx"], .sheetwrap > .paint[data-pin="yx"] { z-index: 5; }
+.refs > [data-pin], .objs > [data-pin], .sheetwrap > textarea[data-pin], .sheetwrap > .editor[data-pin], .sheetwrap > .paint[data-pin] { z-index: 3; }
+.refs > [data-pin="yx"], .objs > [data-pin="yx"], .sheetwrap > textarea[data-pin="yx"], .sheetwrap > .editor[data-pin="yx"], .sheetwrap > .paint[data-pin="yx"] { z-index: 5; }
 .frzline { position: absolute; background: #9b9b9b; pointer-events: none; }
 .frzline.h { left: 0; height: 1px; }
 .frzline.v { top: 0; width: 1px; }
@@ -843,3 +847,14 @@ body.panesizing { cursor: col-resize; user-select: none; }
 /* 無効データのマーク */
 .invalidmark { position: absolute; box-sizing: border-box; border: 2px solid #e00000; border-radius: 50%; pointer-events: none; }
 .dlg.validdlg .condprompt { font-weight: bold; margin-top: 2px; }
+/* セルの書式設定 of the characters of a cell typed into: its フォント page. */
+.dlg.charfont { width: 320px; }
+.dlg.charfont .tabs1 { display: inline-block; margin-bottom: 8px; padding: 2px 10px; border: 1px solid #c8c8c8; border-bottom-color: #fff; font-weight: bold; }
+.dlg.charfont label .lbl, .dlg.charfont .crow .lbl { width: 72px; flex: none; }
+.dlg.charfont label input[type="text"], .dlg.charfont label select { flex: 1; min-width: 0; font: inherit; }
+.dlg.charfont label input[type="number"] { margin-left: 0; }
+.dlg.charfont .crow { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.dlg.charfont .crow .pcolor { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.dlg.charfont .crow .pcolor .sw { width: 14px; height: 14px; border: 1px solid #999; }
+.dlg.charfont .sub { margin: 8px 0 2px; color: #555; }
+.dlg.charfont .charpreview { display: flex; align-items: center; justify-content: center; height: 56px; margin-top: 8px; overflow: hidden; border: 1px solid #c8c8c8; white-space: nowrap; }
