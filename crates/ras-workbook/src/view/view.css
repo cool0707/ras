@@ -374,7 +374,7 @@ body.busy #ribbon .rbody { opacity: .6; }
 /* The menu of a heading of the filter, as Excel's: icons on the left, the search, the tree of the values. */
 .menu.filterpop { width: 280px; padding: 4px 0 8px; }
 .menu.filterpop > button { gap: 6px; align-items: center; padding: 4px 14px 4px 6px; }
-.menu.filterpop > button .fico { flex: none; display: inline-flex; width: 16px; height: 16px; margin-right: 6px; color: #444; }
+.menu.filterpop > button .fico { flex: none; display: inline-flex; width: 16px; height: 16px; margin-right: 6px; color: #000; }
 .menu.filterpop > button:disabled .fico { opacity: .45; }
 .menu.filterpop > button.set .fico::before { content: "✓"; margin: auto; }
 .menu.filterpop u { text-decoration: underline; }

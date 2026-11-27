@@ -9316,9 +9316,9 @@
     }
     // The icons of the filter's menu (as Excel's).
     const FILTER_ICONS = {
-        asc: '<text x="1" y="7" font-size="7.5" font-weight="bold" fill="#1f5fbf" stroke="none">A</text><text x="1" y="15" font-size="7.5" font-weight="bold" fill="#333" stroke="none">Z</text><path d="M12 2v11.5M9.5 11 12 13.5 14.5 11"/>',
-        desc: '<text x="1" y="7" font-size="7.5" font-weight="bold" fill="#333" stroke="none">Z</text><text x="1" y="15" font-size="7.5" font-weight="bold" fill="#1f5fbf" stroke="none">A</text><path d="M12 2v11.5M9.5 11 12 13.5 14.5 11"/>',
-        clear: '<path d="M1.5 2.5h10L8 7v5.5l-2.5-1.5V7z"/><path d="m10 9.5 4 4M14 9.5l-4 4" stroke="#d13438"/>',
+        asc: '<text x="1" y="7" font-size="7.5" font-weight="bold" fill="currentColor" stroke="none">A</text><text x="1" y="15" font-size="7.5" font-weight="bold" fill="currentColor" stroke="none">Z</text><path d="M12 2v11.5M9.5 11 12 13.5 14.5 11"/>',
+        desc: '<text x="1" y="7" font-size="7.5" font-weight="bold" fill="currentColor" stroke="none">Z</text><text x="1" y="15" font-size="7.5" font-weight="bold" fill="currentColor" stroke="none">A</text><path d="M12 2v11.5M9.5 11 12 13.5 14.5 11"/>',
+        clear: '<path d="M1.5 2.5h10L8 7v5.5l-2.5-1.5V7z"/><path d="m10 9.5 4 4M14 9.5l-4 4"/>',
     };
     const filterIcon = (name) => {
         const i = el("i", "fico");
