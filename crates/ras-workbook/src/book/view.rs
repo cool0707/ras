@@ -1084,6 +1084,25 @@ impl Book {
                 ])
             })
             .collect();
+        // The ranges dynamic-array formulas spill into (not legacy arrays, `{=...}`): Excel
+        // draws a border around them while one of their cells is selected.
+        let spills: Vec<Json> = self
+            .model
+            .sheet(si)
+            .map(|s| {
+                s.spill_ranges
+                    .iter()
+                    .filter(|(at, r)| {
+                        !r.is_single()
+                            && shown.contains(**at)
+                            && s.cell(**at)
+                                .and_then(|c| c.formula.as_ref())
+                                .is_some_and(|f| f.array.is_none())
+                    })
+                    .map(|(_, r)| json!([r.start.row, r.start.col, r.end.row, r.end.col]))
+                    .collect()
+            })
+            .unwrap_or_default();
         // The columns the filter filters by now, for the buttons of its headings.
         let filter_columns: serde_json::Map<String, Json> = self
             .model
@@ -1173,6 +1192,7 @@ impl Book {
             "icons": icons,
             "cells": out_cells,
             "merges": merges,
+            "spills": spills,
             "filter": info.filter,
             "filterColumns": filter_columns,
             "tableFilters": table_filters,
