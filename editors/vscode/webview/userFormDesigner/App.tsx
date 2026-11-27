@@ -56,6 +56,9 @@ interface ViewState {
   scrollX?: number;
   scrollY?: number;
   propertiesWidth?: number;
+  showGrid?: boolean;
+  snapping?: boolean;
+  smartGuides?: boolean;
 }
 const bridge = acquireVsCodeApi();
 const mergeViewState = (next: ViewState) => bridge.setState({ ...bridge.getState(), ...next });
@@ -101,8 +104,10 @@ export function App() {
     error: undefined as string | undefined,
   });
   const [zoom, setZoom] = useState(1);
-  const [showGrid, setShowGrid] = useState(true);
-  const [snapping, setSnapping] = useState(false);
+  // The canvas options are remembered with the view, as its scroll position is.
+  const [showGrid, setShowGrid] = useState(() => bridge.getState()?.showGrid ?? true);
+  const [snapping, setSnapping] = useState(() => bridge.getState()?.snapping ?? false);
+  const [smartGuides, setSmartGuides] = useState(() => bridge.getState()?.smartGuides ?? true);
   const [clipboardAvailable, setClipboardAvailable] = useState(false);
   const [rightTab, setRightTab] = useState<"properties" | "structure" | "tabOrder">("properties");
   const [mobilePane, setMobilePane] = useState<"properties">();
@@ -1007,6 +1012,7 @@ export function App() {
                   zoom={zoom}
                   showGrid={showGrid}
                   snapping={snapping}
+                  smartGuides={smartGuides}
                   cannotMove={strings.cannotMove}
                   hierarchy={strings.hierarchy}
                   invalidDrop={strings.invalidDrop}
@@ -1265,7 +1271,10 @@ export function App() {
                 <input
                   type="checkbox"
                   checked={showGrid}
-                  onChange={(event) => setShowGrid(event.currentTarget.checked)}
+                  onChange={(event) => {
+                    setShowGrid(event.currentTarget.checked);
+                    mergeViewState({ showGrid: event.currentTarget.checked });
+                  }}
                 />
                 {strings.grid}
               </label>
@@ -1274,9 +1283,23 @@ export function App() {
                   type="checkbox"
                   checked={snapping}
                   disabled={busy}
-                  onChange={(event) => setSnapping(event.currentTarget.checked)}
+                  onChange={(event) => {
+                    setSnapping(event.currentTarget.checked);
+                    mergeViewState({ snapping: event.currentTarget.checked });
+                  }}
                 />
                 {strings.snap}
+              </label>
+              <label class="guides-toggle" title={strings.smartGuidesHint}>
+                <input
+                  type="checkbox"
+                  checked={smartGuides}
+                  onChange={(event) => {
+                    setSmartGuides(event.currentTarget.checked);
+                    mergeViewState({ smartGuides: event.currentTarget.checked });
+                  }}
+                />
+                {strings.smartGuides}
               </label>
               <label>
                 {strings.zoom}
