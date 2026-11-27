@@ -25,6 +25,7 @@ mod controls;
 mod drawing;
 mod insert;
 mod macros;
+mod metadata;
 mod names;
 mod panes;
 mod scan;
@@ -3244,6 +3245,7 @@ fn rewrite_sheet(
     moved: Option<(&str, &Edit)>,
     formats: &mut Formats,
     plain: usize,
+    dynamic: &metadata::DynamicCm,
 ) -> Result<Option<String>> {
     let (b, a) = (&before.sheets[si], &after.sheets[si]);
     // What whole rows and columns are given, and the filter: where no cells moved (rows and
@@ -3340,7 +3342,14 @@ fn rewrite_sheet(
                     if s == 0 && state.formula.is_none() && state.value == Raw::Empty {
                         continue;
                     }
-                    cell_xml(p, *q, s, state, src.and_then(|c| c.cm.as_deref()))
+                    // (A dynamic-array formula written anew is marked as one.)
+                    let new_dynamic = state.formula.as_ref().is_some_and(|f| f.dynamic);
+                    let cm = match src.and_then(|c| c.cm.as_deref()) {
+                        Some(cm) => Some(cm),
+                        None if new_dynamic => dynamic.take(),
+                        None => None,
+                    };
+                    cell_xml(p, *q, s, state, cm)
                 }
             };
             rows.entry(q.row).or_default().insert(q.col, xml);
@@ -3579,6 +3588,7 @@ fn write(
         .text(WORKBOOK)?
         .ok_or("ブックに xl/workbook.xml がありません")?;
     let parts = sheet_parts(&mut pack, &workbook)?;
+    let dynamic = metadata::DynamicCm::of(&mut pack)?;
     let mut docs: Vec<(String, String, SheetData)> = Vec::new();
     for sheet in &after.sheets {
         let part = parts
@@ -3663,6 +3673,7 @@ fn write(
                 target,
                 &mut formats,
                 plain,
+                &dynamic,
             )? {
                 scan::tree(&new, &["sheetData"])
                     .ok_or_else(|| format!("{part} を書き換えられませんでした"))?;
@@ -3710,5 +3721,6 @@ fn write(
         &mut replace,
         &mut remove,
     )?;
+    dynamic.finish(&mut pack, &mut replace)?;
     pack.rewrite(&replace, &remove)
 }
