@@ -418,7 +418,8 @@ pub fn type_properties(name: &str) -> Option<Props> {
     let any = || p(T::Any, false, Supported);
     let mut props: Props = match t.name {
         "Label" | "CommandButton" | "Frame" => vec![("caption", s())],
-        "TextBox" => vec![("text", s()), ("value", any())],
+        // RAS: `placeholder` is written as a label over the box (`placeholder.rs`).
+        "TextBox" => vec![("text", s()), ("value", any()), ("placeholder", s())],
         "ComboBox" | "ListBox" => vec![
             ("text", s()),
             ("value", any()),

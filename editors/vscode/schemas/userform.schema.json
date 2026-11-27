@@ -948,6 +948,11 @@
             "maxLength": 1,
             "description": "入力した文字の代わりに表示する 1 文字"
           },
+          "placeholder": {
+            "type": "string",
+            "description": "TextBox: 空でフォーカスが無いあいだ、ボックスの上に灰色で表示するヒント（RAS 独自。ブックにはボックスに重ねたラベル <名前>_Placeholder として書き込む）。ラベルの上でマウスのボタンを離すと非表示になってボックスを編集できる。マウス ポインターは I ビーム",
+            "examples": ["名前を入力"]
+          },
           "dropButtonStyle": {
             "enum": [
               0,

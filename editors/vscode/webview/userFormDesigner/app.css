@@ -329,6 +329,10 @@ header {
 .textbox {
   white-space: pre;
 }
+/* The placeholder of an empty TextBox (spec §14.11.18). */
+.textbox .placeholder-text {
+  color: var(--ms-gray);
+}
 .listbox {
   padding: 2px;
 }

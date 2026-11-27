@@ -36,6 +36,8 @@ export interface ControlSnapshot {
 	mouseIcon?: string | null;
 	/** `seq` of the last `input` of the panel that the form's code has seen (TextBox / ComboBox). */
 	inputSeq?: number;
+	/** The gray hint of a TextBox, shown while it is empty and has no focus (spec §14.11.18). */
+	placeholder?: string;
 }
 
 /** From the debug process. */

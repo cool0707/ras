@@ -200,6 +200,8 @@ export function ControlGlyph({ control }: { control: DesignerControl }) {
       return <PictureCaption control={control} caption={caption} />;
     case "textbox": {
       const text = control.text ?? String(control.value ?? "");
+      // An empty box shows its placeholder in GrayText, as the form does at run time.
+      if (!text && control.placeholder) return <span class="placeholder-text">{control.placeholder}</span>;
       // PasswordChar shows in place of every character.
       return <span>{control.passwordChar ? control.passwordChar.repeat([...text].length) : text}</span>;
     }

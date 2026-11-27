@@ -574,6 +574,22 @@ describe("FormSpec editing", () => {
 		assert.deepEqual(codes({ resizable: "yes" }).map((c) => c.split(" ")[0]), ["UFV002"]);
 	});
 
+	it("edits the placeholder of a TextBox and keeps the name of its label free", () => {
+		const box = { id: "t", name: "txtName", type: "TextBox", left: 0, top: 0, width: 120, height: 18 };
+		let text = apply(form([box]), { type: "setControlProperty", controlId: "t", field: "placeholder", value: "名前を入力" });
+		assert.equal(control(text, "t").placeholder, "名前を入力");
+		const parsed = parseSpec(text);
+		assert.ok(parsed.ok);
+		assert.deepEqual(parsed.spec.issues.filter((i) => i.severity === "error"), []);
+		const clash = parseSpec(form([{ ...box, placeholder: "x" }, { id: "l", name: "txtName_Placeholder", type: "Label" }]));
+		assert.ok(clash.ok);
+		assert.deepEqual(clash.spec.issues.filter((i) => i.severity === "error").map((i) => `${i.code} ${i.field}`), ["UFV028 controls[1].name"]);
+		// Only a TextBox has one.
+		const label = parseSpec(form([{ id: "l", name: "lbl", type: "Label", placeholder: "x" }]));
+		assert.ok(label.ok);
+		assert.ok(label.spec.issues.some((i) => i.severity === "error" && i.field === "controls[0].placeholder"));
+	});
+
 	it("copies a subtree and pastes it with fresh names, IDs and an offset", () => {
 		const child = { id: "x", parentId: "f1", name: "Label1", type: "Label", left: 0, top: 0, width: 20, height: 18 };
 		const text = form([frame, child]);

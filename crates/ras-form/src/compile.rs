@@ -986,7 +986,9 @@ pub(crate) fn compile_new(
         return Err(fail(INVALID, "", &issue.field, issue.message));
     }
     // A progress bar is written as labels (`progress.rs`).
-    let promoted = crate::picker::expand(&crate::progress::expand(&promoted));
+    // A placeholder is a label over its TextBox (`placeholder.rs`).
+    let promoted =
+        crate::placeholder::expand(&crate::picker::expand(&crate::progress::expand(&promoted)));
     let spec = &promoted;
     let mut original_index = HashMap::new();
     let mut children: HashMap<&str, Vec<&FormSpecControl>> = HashMap::new();

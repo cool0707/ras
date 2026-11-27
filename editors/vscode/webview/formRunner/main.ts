@@ -225,15 +225,35 @@ function create(c: ControlSnapshot): View {
 		case "TextBox": {
 			let input: HTMLInputElement | HTMLTextAreaElement | undefined;
 			let multi: boolean | undefined;
+			// The placeholder (spec §14.11.18): a label over the box while it is empty and has no
+			// focus, as the label RAS writes into the workbook. Releasing a mouse button over it
+			// gives the box the focus.
+			const hint = el("span", "placeholder-label", root);
+			hint.addEventListener("mousedown", (e) => e.preventDefault());
+			hint.addEventListener("mouseup", () => {
+				if (!input || input.disabled) return;
+				hint.hidden = true;
+				input.focus();
+			});
+			const showHint = () => {
+				const field = input;
+				hint.hidden = !hint.textContent || !field || field.value !== "" || document.activeElement === field;
+			};
 			view.update = (s, enabled) => {
 				const isMulti = bool(s.state.MultiLine);
 				if (input === undefined || multi !== isMulti) {
 					input?.remove();
 					multi = isMulti;
 					input = el(isMulti ? "textarea" : "input", "field", root);
+					root.insertBefore(input, hint);
 					const field = input;
 					focusable(view, field, name);
-					field.addEventListener("input", () => sendInput(name, field.value, field.selectionStart ?? undefined));
+					field.addEventListener("input", () => {
+						sendInput(name, field.value, field.selectionStart ?? undefined);
+						showHint();
+					});
+					field.addEventListener("focus", showHint);
+					field.addEventListener("blur", showHint);
 				}
 				if (input instanceof HTMLInputElement) input.type = str(s.state.PasswordChar) ? "password" : "text";
 				const text = str(s.state.Text);
@@ -245,6 +265,11 @@ function create(c: ControlSnapshot): View {
 				else input.removeAttribute("maxlength");
 				input.style.textAlign = ALIGN[num(s.state.TextAlign, 1)] ?? "left";
 				colors(input, s.state, num(s.state.BackStyle, 1) === 0);
+				hint.textContent = s.placeholder ?? "";
+				hint.classList.toggle("multi", isMulti);
+				hint.style.justifyContent = ["flex-start", "flex-start", "center", "flex-end"][num(s.state.TextAlign, 1)] ?? "flex-start";
+				hint.style.textAlign = ALIGN[num(s.state.TextAlign, 1)] ?? "left";
+				showHint();
 			};
 			break;
 		}

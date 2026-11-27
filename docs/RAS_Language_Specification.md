@@ -25,6 +25,7 @@
 > * シートの追加・複製・削除・名前の変更を、ブックと `objects/` のファイルに一緒に行う `ras sheet` と VS Code のコマンドを追加（§14.16）。Excel で複製したシートは、同期がコピー元のファイルを複製する（§14.7.2）
 > * フォームのコントロールにアンカー `anchor` を追加（§14.11.16）。フォームの大きさが変わると、生成する `UserForm_Resize` のコードが指定した辺に合わせてコントロールを動かし・伸ばす。デザイナーでは Visual Studio と同じ十字の図で選び、フォームのサイズ変更にも追従する。デザイナーのツールバーに、グリッドに合わせる・サイズをグリッドに合わせる・間隔（均等・広げる・狭める・詰める）・中央に配置を追加
 > * フォームに `resizable`（ユーザーが枠をドラッグしてサイズを変えられる）と、内側のサイズの最小・最大 `minimumWidth`・`minimumHeight`・`maximumWidth`・`maximumHeight` を追加（§14.11.17）。生成するコードが Windows API で枠を付け、`UserForm_Resize` でサイズを範囲に戻す。デバッグ実行のフォームも枠をドラッグしてサイズを変えられ、デザイナーのフォームのサイズ変更も範囲に収まる
+> * `TextBox` にプレースホルダー `placeholder` を追加（§14.11.18）。ボックスに重ねたラベルとして書き込み、空でフォーカスが無いあいだ灰色で表示する。ラベルの上でマウスのボタンを離すと非表示になってボックスにフォーカスが移り、編集を終えて空なら再び表示する
 
 > v0.7 からの変更
 > * 構造体（`struct`）をデータの入れ物の基本とし、オブジェクトリテラル・無名のオブジェクト型・タプル・分割代入を追加（§2.5）
@@ -2221,7 +2222,7 @@ VS Code 拡張のシートプレビューでプロジェクトのブック（`ra
 * `controls` は平らな配列で、入れ子は `parentId` で表す。コンテナーは `Frame`・`MultiPage`（子は `Page` のみ）・`Page`（親は `MultiPage` のみ）。`TabStrip` のタブは `tabs` 配列に書く。
 * 組み込みのコントロール: `Label`・`TextBox`・`ComboBox`・`ListBox`・`CommandButton`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`・`Image`・`Frame`・`MultiPage`・`Page`・`TabStrip`。RAS 独自のものとして `ProgressBar`（ラベルを組み合わせて書き込む。§14.11.13）と `FilePicker`（テキスト ボックスとボタンの組。§14.11.14）。
 * 共通のプロパティ（`left` / `top` / `width` / `height` / `tabIndex` / `zIndex` / `enabled` / `visible`）、種類ごとのプロパティ（`caption` / `text` / `value` / `selectedIndex` / `tabs` など）、見た目（`font` / `foreColor` / `backColor` / `textAlign` / `borderStyle` / `pictureAlignment` / `pictureSizeMode`）の詳細と適用できるコントロールは xlflow の [UserForm Specification](https://harumiweb.github.io/xlflow/reference/userform-spec) に従う。色は `{ "kind": "rgb", "value": "#203040" }`、`{ "kind": "system", "value": "buttonFace" }`、`{ "kind": "ole", "value": "0x8000000F" }` の形で書く。
-* 検査結果のコードは `UFY001`（JSON の構文）と `UFV001`〜`UFV027`（`UFV024` はプログレスバー（§14.11.13）、`UFV025` はファイルの選択欄（§14.11.14）、`UFV026` はアンカー（§14.11.16）、`UFV027` はフォームのサイズの最小・最大（§14.11.17））。メッセージは日本語。`UFV022`（警告）は、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。`UFV023`（警告）は、`borderStyle` 1（Single）と 0 以外の `specialEffect` を同時に書いたことを表す。MSForms は縁を 1 つしか描かず、VBE では一方を設定するともう一方が戻る（Single にすると平面、立体にすると枠なし）。書き込みでは `borderStyle` を優先し、`specialEffect` を 0 にする。片方だけ書いたときも VBE と同じく、Single の枠のコントロールは平面で、`specialEffect` を書いた `Image`（新しいものは Single の枠を持つ）は枠なしで書き込む。
+* 検査結果のコードは `UFY001`（JSON の構文）と `UFV001`〜`UFV028`（`UFV024` はプログレスバー（§14.11.13）、`UFV025` はファイルの選択欄（§14.11.14）、`UFV026` はアンカー（§14.11.16）、`UFV027` はフォームのサイズの最小・最大（§14.11.17）、`UFV028` はプレースホルダー（§14.11.18））。メッセージは日本語。`UFV022`（警告）は、1 行の `TextBox` / `ComboBox` の `height` がフォントの 1 行分に足りないことを表す。MSForms は欄をフォントに合わせて広げないので、Excel では文字が欠け、端に線が残る。必要な高さはフォントの大きさと種類（MS UI Gothic は 1 倍、Meiryo UI は 1.33 倍、Meiryo は 1.6 倍など）から求めた 1 行の高さに、枠と余白の 4.5pt を足し、1 ピクセル（0.75pt）単位に切り上げたもの。フォントの指定が無いときは MS UI Gothic 9pt として求める。デザイナーは、編集で高さかフォントが変わった欄をこの高さまで自動で広げる。`UFV023`（警告）は、`borderStyle` 1（Single）と 0 以外の `specialEffect` を同時に書いたことを表す。MSForms は縁を 1 つしか描かず、VBE では一方を設定するともう一方が戻る（Single にすると平面、立体にすると枠なし）。書き込みでは `borderStyle` を優先し、`specialEffect` を 0 にする。片方だけ書いたときも VBE と同じく、Single の枠のコントロールは平面で、`specialEffect` を書いた `Image`（新しいものは Single の枠を持つ）は枠なしで書き込む。
 
 xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 
@@ -2230,6 +2231,7 @@ xlflow の FormSpec との違い（RAS で使える範囲が広い点）:
 | `tag` / `controlTipText` | すべてのコントロールで使える（xlflow では `Page` 以外は `properties` に書く） |
 | `anchor` | RAS 独自。親の大きさが変わったときにコントロールが距離を保つ辺（§14.11.16） |
 | `form.resizable` / `form.minimumWidth` / `form.minimumHeight` / `form.maximumWidth` / `form.maximumHeight` | RAS 独自。ユーザーによるフォームのサイズ変更と、内側のサイズの最小・最大（§14.11.17） |
+| `TextBox` の `placeholder` | RAS 独自。空のボックスに灰色で表示するヒント（§14.11.18） |
 | `ComboBox` / `ListBox` の `list` / `selectedIndex` | 書き込みの対象（§14.11.5）。xlflow では取得した値の記録にだけ使う |
 | コントロールのプロパティ | 値が 1 つのプロパティを、VBA の同名のプロパティと同じ値で書ける（名前は先頭を小文字にしたもの）。xlflow では `unsupported`。<br>・`TextBox`: `locked`・`multiLine`・`wordWrap`・`autoSize`・`passwordChar`・`scrollBars`・`maxLength`・`enterKeyBehavior`・`tabKeyBehavior`・`enterFieldBehavior`・`autoTab`・`autoWordSelect`・`hideSelection`・`selectionMargin`・`integralHeight`・`dragBehavior`・`imeMode`・`backStyle`・`specialEffect`・`borderColor`<br>・`ComboBox`: `style`（0: DropDownCombo、2: DropDownList）・`showDropButtonWhen`・`dropButtonStyle`・`listRows`・`listWidth`・`listStyle`・`matchEntry`・`matchRequired`・`locked`・`maxLength`・`autoSize` などの編集のプロパティ・`imeMode`・`backStyle`・`specialEffect`・`borderColor`<br>・`ListBox`: `multiSelect`・`listStyle`・`matchEntry`・`locked`・`integralHeight`・`imeMode`・`specialEffect`・`borderColor`<br>・`ComboBox` / `ListBox` の列: `columnCount`（-1 は項目のすべての列）・`columnWidths`（`"72 pt;;1 in"` のように ; で区切った各列の幅。単位は pt（省略時）・in・cm、空の欄と -1 は自動。MS-OFORMS の `MorphDataColumnInfo` の並びに、Excel と同じく最後の列から書き込む）・`boundColumn`・`textColumn`・`columnHeads`<br>・`CommandButton`: `default`・`cancel`・`takeFocusOnClick`・`locked`・`wordWrap`・`autoSize`・`backStyle`<br>・`CheckBox` / `OptionButton` / `ToggleButton`: `tripleState`・`locked`・`wordWrap`・`autoSize`・`backStyle`、`CheckBox` / `OptionButton` は `alignment`・`specialEffect`（0 か 2）、`OptionButton` は `groupName`<br>・`Label`: `wordWrap`・`autoSize`・`backStyle`・`specialEffect`・`borderColor`<br>・`SpinButton` / `ScrollBar`: `min`・`max`・`smallChange`・`orientation`・`delay`、`ScrollBar` は `largeChange`・`proportionalThumb`。`value` は `min` と `max` の間。無効（`enabled: false`）のものは、Excel と同じく矢印も無効（`PrevEnabled` / `NextEnabled` を 0）にして書き込む<br>・`Image`: `specialEffect`・`borderColor`<br>・`Frame`: `specialEffect`・`borderColor`・`cycle`<br>・`TabStrip` / `MultiPage`: `style`（0: Tabs、1: Buttons、2: None）・`tabOrientation`・`multiRow`・`tabFixedWidth`・`tabFixedHeight`（`MultiPage` のものは、その中の隠れた `TabStrip` に書き込む）<br>・`Image`・`Frame`・`TabStrip` と `Page` 以外のすべて: `mousePointer`。フォーカスを受け取るコントロール: `tabStop`<br>・値を持つコントロール（`TextBox`・`ComboBox`・`ListBox`・`CheckBox`・`OptionButton`・`ToggleButton`・`SpinButton`・`ScrollBar`）: `controlSource`（値を連動させるセル。`"Sheet1!B2"`）、`ComboBox` / `ListBox` は `rowSource`（項目を読むセル範囲。`"Sheet1!A2:A10"`。`list` と同時には書けない）。この 2 つはコントロールのサイト（`OleSiteConcrete`）に書き込む<br>長さ（`listWidth`・`tabFixedWidth`・`tabFixedHeight`）はポイント、`borderColor` は色、`passwordChar` は 1 文字の文字列 |
 | 書かなかったプロパティ | Excel でコントロールを作ったときと同じ値で書き込む（`ComboBox` はドロップ ボタンを常に表示・`matchEntry` 1、`ListBox` は `matchEntry` 0・スクロール バーあり、`Frame` は `specialEffect` 3、`CheckBox` / `OptionButton` / `ToggleButton` は `backColor` `buttonFace`・`foreColor` `buttonText`、`ToggleButton` は中央揃え、文字を持つコントロールのフォントは MS UI Gothic 9pt など）。xlflow は `ComboBox` と `ListBox` を MS-OFORMS の既定値（ドロップ ボタンなし・`matchEntry` 2）のまま書く。取り込み（`ras form pull`）では、これと違う値のものだけを書き出す |
@@ -2938,6 +2940,34 @@ export function rebuild() {
 * `ras form pull` は、既存の `.form.json` の `resizable` と最小・最大を引き継ぐ。
 * **デバッグ実行:** `resizable` のフォームは、パネルの右端・下端・右下の角をドラッグしてサイズを変えられる。コードで `width` / `height` を変えたときも含め、範囲に収めてからアンカーのコントロールを動かし、`UserForm.Resize` のハンドラを呼ぶ。
 * **デザイナー:** プロパティ グリッドのレイアウトに Resizable・MinimumWidth・MinimumHeight・MaximumWidth・MaximumHeight。フォームのサイズは、ドラッグでも Width / Height の入力でも範囲に収まり、範囲の外になる最小・最大を設定するとフォームのサイズもそこまで変わる（Visual Studio と同じ）。
+
+#### 14.11.18 プレースホルダー（`placeholder`）
+
+`TextBox` が空でフォーカスを持たないあいだ、ボックスの上に灰色のヒントを表示する（HTML の `placeholder` に当たる）。MSForms には無いため、書き込みでボックスに重ねたラベルを足し、生成するコードが表示・非表示を切り替える。
+
+```json
+{ "id": "name", "name": "txtName", "type": "TextBox", "left": 12, "top": 12, "width": 160, "height": 18, "placeholder": "名前を入力" }
+```
+
+* **値:** 文字列。空文字列か省略はプレースホルダーなし。`TextBox` だけに書ける。
+* **書き込み:** ボックスのすぐ後ろ（手前の z-order）にラベル `<名前>_Placeholder` を足す。ラベルは、ボックスの内側（縁から 3pt）に重ね、背景は透明、文字色は `grayText`、フォント・`textAlign` はボックスと同じ、`wordWrap` はボックスの `multiLine`、`mousePointer` は 3（`fmMousePointerIBeam`）、`Tag` は `RAS.Placeholder`。ボックスに `text` / `value` があるときは非表示で書き込む。ほかのコントロールにこの名前は付けられない（`UFV028`）。`ras form pull` は、`Tag` が `RAS.Placeholder` のラベルを、同じ親の同名のボックスの `placeholder` に戻す。
+* **生成する VBA:** 管理領域に `RAS_Placeholder`（表示・非表示）と `RAS_PlaceholderClick` を生成し、次のイベント プロシージャから呼ぶ。コードビハインドに同じイベント プロシージャがあれば、その先頭に `… '--- RAS ---` の行を挿入する（無ければ呼ぶだけのものを生成する）。
+  * ラベルの `MouseUp`: ラベルを非表示にして、ボックスに `SetFocus` する（ボックスが無効のときは何もしない）。
+  * ボックスの `Enter`: 非表示にする。`Exit`: ボックスが空なら表示する。`Change`: 空で、フォーカスが無いときに表示する（コードで `text` を変えたとき）。
+  * ボックスを含む `Frame` / `MultiPage` の `Enter` / `Exit`: MSForms は、フォーカスが `Frame` / `MultiPage` に出入りするとき中のコントロールの `Enter` / `Exit` を起こさないため、そのとき表示を決め直す。
+  * `UserForm_Activate`: 表示した時点でフォーカスを持つボックスのものを非表示にする。
+  ```vb
+  Private Sub txtName_Enter()
+      RAS_Placeholder Me.txtName, Me.txtName_Placeholder, 1
+  End Sub
+
+  Private Sub txtName_Placeholder_MouseUp(ByVal Button As Integer, ByVal Shift As Integer, ByVal X As Single, ByVal Y As Single)
+      RAS_PlaceholderClick Me.txtName, Me.txtName_Placeholder
+  End Sub
+  ```
+  ラベルは表示するときにボックスの位置に合わせ、アンカー（§14.11.16）ではボックスと一緒に動く。コードでボックスの `Visible` を変えたときは、次に表示を決め直すとき（`Change`・フォーカスの出入り）に合わせる。
+* **デバッグ実行:** ラベルは作らず、パネルがボックスの上に同じヒントを重ねて表示する（I ビームのポインター、ボタンを離すとボックスにフォーカス）。
+* **デザイナー:** プロパティ グリッドの外観に Placeholder。空のボックスは、キャンバスにもヒントを灰色で表示する。
 
 ### 14.12 テスト（`ras test`）（v0.9で追加）
 

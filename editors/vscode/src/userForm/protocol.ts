@@ -135,6 +135,8 @@ export interface SpecControl extends AppearanceProperties {
   wordWrap?: boolean | null;
   multiLine?: boolean | null;
   passwordChar?: string | null;
+  /** TextBox: the gray hint shown while it is empty and has no focus (spec §14.11.18). */
+  placeholder?: string | null;
   /** SpinButton / ScrollBar: -1 by the shape, 0 vertical, 1 horizontal. */
   orientation?: number | null;
   /** TabStrip / MultiPage tabs: 0 top, 1 bottom, 2 left, 3 right. */
