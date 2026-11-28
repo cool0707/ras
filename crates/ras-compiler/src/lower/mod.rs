@@ -126,6 +126,10 @@ pub(crate) struct ProcCtx {
     pub cur_try_id: u32,
     pub handler_arms: Vec<(u32, Vec<VStmt>)>,
     pub uses_handler: bool,
+    /// Elements written as `x(key)` whose `x` is not known to be an array (a Dictionary, a
+    /// late-bound object, what a Variant holds), as printed: they are properties, not
+    /// variables, and cannot be passed by reference.
+    pub dynamic_elements: HashSet<String>,
     pub uses_try_id: bool,
     pub exit_kw: &'static str,
     /// VBA name of the procedure (return value variable of functions).
@@ -820,7 +824,33 @@ impl<'p> Lowerer<'p> {
             let d = &prog.fns[f];
             matches!(d.kind, FnKind::Free | FnKind::Main) && (d.exported || d.attrs.macro_entry)
         });
-        self.out[mi].private_module = !has_public;
+        self.out[mi].private_module = !has_public && md.raw_vba.is_empty();
+        // VBA written as it is (spec §14.7.4): declarations go with the declarations of the
+        // module, procedures after its procedures.
+        for raw in &md.raw_vba {
+            let has_procedure = raw.lines().any(|l| {
+                let words: Vec<String> = l
+                    .split_whitespace()
+                    .take(4)
+                    .map(str::to_ascii_lowercase)
+                    .collect();
+                let skip = words
+                    .iter()
+                    .take_while(|w| ["public", "private", "friend", "static"].contains(&w.as_str()))
+                    .count();
+                matches!(
+                    words.get(skip).map(String::as_str),
+                    Some("sub" | "function" | "property")
+                )
+            });
+            if has_procedure {
+                self.out[mi].raw_procs.push(raw.clone());
+            } else {
+                self.out[mi]
+                    .decls
+                    .push(raw.trim_matches(['\r', '\n']).to_string());
+            }
+        }
         for &e in &md.enums {
             let d = &prog.enums[e];
             let vis = if d.exported { "Public" } else { "Private" };
@@ -902,6 +932,7 @@ impl<'p> Lowerer<'p> {
                 && !d.exported
                 && self.opt > 0
                 && d.inline_blockers.is_empty()
+                && !d.params.last().is_some_and(|p| p.rest)
             {
                 continue;
             }
@@ -1050,6 +1081,7 @@ impl<'p> Lowerer<'p> {
                     ty: tname,
                     is_array: true,
                     optional_default: None,
+                    param_array: false,
                 }],
                 ret: Some("Long".into()),
                 locals: vec![],
@@ -1151,6 +1183,11 @@ impl<'p> Lowerer<'p> {
                 let vis = if public { "Public" } else { "Private" };
                 let name = names::module_ident(&d.name);
                 let (ty, arr) = self.vtype(&d.ty);
+                // A form's `export let` (spec §14.11.2): VBA has no `Public` arrays and
+                // structures in an object module.
+                if d.exported && prog.modules[m].form.is_some() && (arr || d.ty.has_struct()) {
+                    self.diag(Severity::Error, m, d.name_span, "E0643", format!("フォームの変数 `{}` は `export` できません（VBA はフォームのモジュールの配列・構造体を公開できないためです）。関数を通して読み書きしてください", d.name));
+                }
                 if self.with_events.contains(&EventSource::Var(v)) {
                     // Its object's events are handled (spec §12.2.2).
                     lines.push(format!("Private WithEvents {name} As {ty}"));
@@ -1417,7 +1454,7 @@ impl<'p> Lowerer<'p> {
     pub(crate) fn var_ref(&mut self, v: VarId) -> VExpr {
         let d = &self.prog.vars[v];
         if d.declared {
-            return VExpr::Name(d.vba_name().to_string());
+            return VExpr::Name(d.emitted_name().to_string());
         }
         let name = names::module_ident(&d.name);
         let same_module =
@@ -1683,14 +1720,16 @@ impl<'p> Lowerer<'p> {
                 && (def.attrs.macro_entry
                     || (!def.attrs.on_events.is_empty() && !def.attrs.doc_member)
                     || matches!(def.kind, FnKind::Main | FnKind::ModInit)));
-        if let Some(mut p) = self.build_proc(f, env, None, name.clone(), public) {
+        if let Some(mut p) = self.build_proc(f, env.clone(), None, name.clone(), public) {
             if self.is_form_ctor(f) {
                 // Called by the factory in `RAS_Glue`; `Friend` takes structs too.
                 p.public = true;
                 p.friend = true;
             }
             self.fn_procs.entry(f).or_default().push((mi, name));
+            let twin = self.set_twin(f, &env, &p);
             self.out[mi].procs.push(p);
+            self.out[mi].procs.extend(twin);
         }
         if def.is_macro_entry() {
             self.macros.push(format!(
@@ -1699,6 +1738,21 @@ impl<'p> Lowerer<'p> {
                 def.proc_ident()
             ));
         }
+    }
+
+    /// The `Property Set` that goes with the `Property Let` of a setter whose value is a
+    /// `Variant` (`any`): such a property is assigned to with `Let` or with `Set`, whichever
+    /// the value needs (spec §2.3), and VBA wants a procedure for each.
+    fn set_twin(&self, f: FnId, env: &HashMap<String, Type>, p: &VProc) -> Option<VProc> {
+        let value = self.prog.fns[f].params.last()?;
+        if p.kind != ProcKind::PropertyLet || !value.ty.subst(env).is_dynamic() {
+            return None;
+        }
+        let mut twin = p.clone();
+        twin.kind = ProcKind::PropertySet;
+        twin.leading_comments.clear();
+        twin.attributes.clear();
+        Some(twin)
     }
 
     /// Builds the VBA procedure for function `f` instantiated with `env`.
@@ -1752,6 +1806,10 @@ impl<'p> Lowerer<'p> {
             inl: None,
         };
         let mut params = Vec::new();
+        // `...rest` (spec §3.5): the `ParamArray` and the local array it is copied into.
+        let mut rest_copy = None;
+        // A constructor is reached through its factory, which takes the `ParamArray`.
+        let is_ctor = matches!(def.kind, FnKind::Ctor { .. }) || self.is_form_ctor(f);
         for p in &def.params {
             let pty = p.ty.subst(&frame.env);
             let base = if def.locals[p.local].kind == LocalKind::This {
@@ -1760,10 +1818,26 @@ impl<'p> Lowerer<'p> {
                 self.local_ident(&p.name)
             };
             let pname = self.unique(&base);
+            if p.rest && !is_ctor {
+                let local = self.declare(&format!("ras_{base}"), &pty);
+                frame.locals.insert(p.local, Binding::Var(local.clone()));
+                rest_copy = Some((pname.clone(), local));
+                params.push(VParam {
+                    name: pname,
+                    byref: true,
+                    ty: "Variant".into(),
+                    is_array: true,
+                    optional_default: None,
+                    param_array: true,
+                });
+                continue;
+            }
             let (ty, is_array) = self.vtype(&pty);
             let byref = p.mode == PassMode::ByRef || is_array || matches!(pty, Type::Struct(_));
             // Constant defaults are also declared as `Optional` so that callers outside RAS can omit them.
-            let optional_default = if byref || matches!(def.kind, FnKind::Setter { .. }) {
+            // (The value a setter receives is never omitted.)
+            let setter_value = def.is_setter() && p.local + 1 == def.params.len();
+            let optional_default = if byref || setter_value {
                 None
             } else {
                 match &p.default {
@@ -1771,7 +1845,9 @@ impl<'p> Lowerer<'p> {
                     None if p.optional => self
                         .default_value(&pty)
                         .map(|v| v.print())
-                        .filter(|s| s != "Nothing" && !s.starts_with("CDate")),
+                        // (`= Nothing` is a default VBA accepts: code outside RAS — a
+                        // `vba` block, a macro of a button — can leave the argument out.)
+                        .filter(|s| !s.starts_with("CDate")),
                     None => None,
                 }
             };
@@ -1782,6 +1858,7 @@ impl<'p> Lowerer<'p> {
                 ty,
                 is_array,
                 optional_default,
+                param_array: false,
             });
         }
         if matches!(def.kind, FnKind::ModInit) && !def.attrs.form_member {
@@ -1792,23 +1869,25 @@ impl<'p> Lowerer<'p> {
                 ty: "Long".into(),
                 is_array: false,
                 optional_default: Some("0&".into()),
+                param_array: false,
             });
         }
-        // `Optional` parameters must be trailing in VBA.
+        // `Optional` parameters must be trailing in VBA (before the value of a `Property Let`).
         let mut seen_required = false;
-        for p in params.iter_mut().rev() {
+        let skip = usize::from(def.is_setter());
+        for p in params.iter_mut().rev().skip(skip) {
             if p.optional_default.is_none() {
                 seen_required = true;
             } else if seen_required {
                 p.optional_default = None;
             }
         }
-        let (kind, exit_kw) = match (&def.kind, &ret_ty) {
-            (FnKind::Getter { .. }, _) => (ProcKind::PropertyGet, "Property"),
-            (FnKind::Setter { .. }, _) => {
+        let (kind, exit_kw) = match (def.accessor_kind(), &ret_ty) {
+            (Some(ast::AccessorKind::Get), _) => (ProcKind::PropertyGet, "Property"),
+            (Some(ast::AccessorKind::Set), _) => {
                 let obj = def
                     .params
-                    .first()
+                    .last()
                     .is_some_and(|p| p.ty.subst(&frame.env).is_object());
                 (
                     if obj {
@@ -1872,6 +1951,9 @@ impl<'p> Lowerer<'p> {
         }
         for s in prologue {
             self.emit(s);
+        }
+        if let Some((from, to)) = rest_copy {
+            self.emit(param_array_copy(&from, &to));
         }
         let has_epilogue = !epilogue.is_empty();
         self.stmts(&body.stmts, true);
@@ -1937,7 +2019,9 @@ impl<'p> Lowerer<'p> {
 
         let (leading_comments, summary) = Self::doc_lines(&def.doc);
         let mut attributes = Vec::new();
-        if let (true, Some(s)) = (public, summary) {
+        // A property has one description: that of its getter when it has one.
+        let described = !def.is_setter() || prog.accessor_pair(f).0.is_none();
+        if let (true, true, Some(s)) = (public, described, summary) {
             // Characters outside the target code page cannot appear in an Attribute line.
             let text: String = s
                 .chars()
@@ -2062,6 +2146,7 @@ impl<'p> Lowerer<'p> {
                         ty: "Variant".into(),
                         is_array: false,
                         optional_default: None,
+                        param_array: false,
                     }],
                     ret: None,
                     locals: vec![],
@@ -2140,6 +2225,7 @@ impl<'p> Lowerer<'p> {
                         ty: "Long".into(),
                         is_array: false,
                         optional_default: Some("0&".into()),
+                        param_array: false,
                     }],
                     ret: None,
                     locals,
@@ -2179,6 +2265,32 @@ impl<'p> Lowerer<'p> {
                 self.diag(Severity::Error, d.module, d.name_span, "E0601", "クラスのジェネリックメソッドにはまだ対応していません。モジュールのジェネリック関数（拡張メソッド）を使ってください");
                 continue;
             }
+            // An event (spec §12.2.2): VBA's `Event`, and the procedure that raises it.
+            if d.attrs.event {
+                let mut p = self.signature_stub(m, &env, d.proc_ident(), true);
+                let event = names::member_ident(&d.name);
+                let list = |f: &dyn Fn(&VParam) -> String| {
+                    p.params.iter().map(f).collect::<Vec<_>>().join(", ")
+                };
+                self.out[ci].decls.push(format!(
+                    "Public Event {event}({})",
+                    list(&|x| format!(
+                        "{} {}{} As {}",
+                        if x.byref { "ByRef" } else { "ByVal" },
+                        x.name,
+                        if x.is_array { "()" } else { "" },
+                        x.ty
+                    ))
+                ));
+                let args = list(&|x| x.name.clone());
+                p.body = vec![VStmt::Raw(if args.is_empty() {
+                    format!("RaiseEvent {event}")
+                } else {
+                    format!("RaiseEvent {event}({args})")
+                })];
+                self.out[ci].procs.push(p);
+                continue;
+            }
             let is_static = matches!(
                 d.kind,
                 FnKind::Method {
@@ -2195,7 +2307,9 @@ impl<'p> Lowerer<'p> {
             let pname = self.fn_name(m, &[]);
             if is_static {
                 if let Some(p) = self.build_proc(m, env.clone(), None, pname, true) {
+                    let twin = self.set_twin(m, &env, &p);
                     self.out[mi].procs.push(p);
+                    self.out[mi].procs.extend(twin);
                 }
             } else if let Some(p) = self.build_proc(
                 m,
@@ -2204,12 +2318,17 @@ impl<'p> Lowerer<'p> {
                 pname,
                 d.vis == Visibility::Public,
             ) {
+                let twin = self.set_twin(m, &env, &p);
                 self.out[ci].procs.push(p);
+                self.out[ci].procs.extend(twin);
             }
         }
         // Constructor + factory function (`New_Foo(args)`).
         let mut factory_params = Vec::new();
         let mut factory_args = Vec::new();
+        let mut factory_locals = Vec::new();
+        let fname = format!("New_{name}");
+        let mut body = Vec::new();
         if let Some(ctor) = def.ctor {
             if let Some(p) = self.build_proc(
                 ctor,
@@ -2219,12 +2338,12 @@ impl<'p> Lowerer<'p> {
                 true,
             ) {
                 factory_params = p.params.clone();
-                factory_args = p.params.iter().map(|x| vname(x.name.clone())).collect();
+                let has_rest = prog.fns[ctor].params.last().is_some_and(|x| x.rest);
+                (factory_locals, body, factory_args) = factory_rest(&mut factory_params, has_rest);
                 self.out[ci].procs.push(p);
             }
         }
-        let fname = format!("New_{name}");
-        let mut body = vec![set(vname(fname.clone()), lit(format!("New {name}")))];
+        body.push(set(vname(fname.clone()), lit(format!("New {name}"))));
         if def.ctor.is_some() {
             body.push(VStmt::Call {
                 target: vname(fname.clone()).member("RAS_Init"),
@@ -2238,7 +2357,7 @@ impl<'p> Lowerer<'p> {
             name: fname,
             params: factory_params,
             ret: Some(name.clone()),
-            locals: vec![],
+            locals: factory_locals,
             body,
             leading_comments: vec![],
             attributes: vec![],
@@ -2314,6 +2433,7 @@ impl<'p> Lowerer<'p> {
                             ty,
                             is_array: false,
                             optional_default: None,
+                            param_array: false,
                         }],
                         ret: None,
                         locals: vec![],
@@ -2351,6 +2471,7 @@ impl<'p> Lowerer<'p> {
                 ty,
                 is_array,
                 optional_default: None,
+                param_array: false,
             });
         }
         let ret_ty = def.ret_ty().subst(env);
@@ -2737,6 +2858,7 @@ impl<'p> Lowerer<'p> {
                         ty: "Long".into(),
                         is_array: false,
                         optional_default: Some("0&".into()),
+                        param_array: false,
                     }];
                     self.out[di].procs.push(VProc {
                         kind: ProcKind::Sub,
@@ -2783,6 +2905,7 @@ impl<'p> Lowerer<'p> {
                     ty: p.1.clone(),
                     is_array: false,
                     optional_default: None,
+                    param_array: false,
                 })
                 .collect();
             let public = macros
@@ -2900,6 +3023,17 @@ impl<'p> Lowerer<'p> {
             {
                 Some(*c)
             }
+            // A class of the project that declares events (`event Changed();`).
+            Type::Class(c, args)
+                if args.is_empty()
+                    && self.prog.classes[*c].kind == ClassKind::Class
+                    && self.prog.classes[*c]
+                        .methods
+                        .iter()
+                        .any(|&m| self.prog.fns[m].attrs.event) =>
+            {
+                Some(*c)
+            }
             _ => None,
         }
     }
@@ -2947,7 +3081,7 @@ impl<'p> Lowerer<'p> {
                 };
                 let problem = match problem {
                     Some(p) => Some(p.to_string()),
-                    None if self.event_class(&ty).is_none() => Some(format!("型 `{}` のイベントは受け取れません（`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`MSForms.CommandButton` のように、イベントを持つクラスの型を 1 つだけ書きます。`object`・`any`・ユニオン型・配列・RAS のクラスは使えません）", prog.show(&ty))),
+                    None if self.event_class(&ty).is_none() => Some(format!("型 `{}` のイベントは受け取れません（`Excel.Application`・`Excel.Workbook`・`Excel.Worksheet`・`MSForms.CommandButton` のように、イベントを持つクラスの型を 1 つだけ書きます。`object`・`any`・ユニオン型・配列・`event` を宣言していないクラスは使えません）", prog.show(&ty))),
                     None => None,
                 };
                 match problem {
@@ -3004,7 +3138,26 @@ impl<'p> Lowerer<'p> {
                 let Some(class) = self.event_class(&ty) else {
                     continue;
                 };
-                let (event, params) = match host_events(prog, class) {
+                let own: Option<Vec<_>> =
+                    (prog.classes[class].kind == ClassKind::Class).then(|| {
+                        let env = HashMap::new();
+                        prog.classes[class]
+                            .methods
+                            .iter()
+                            .filter(|&&m| prog.fns[m].attrs.event)
+                            .map(|&m| {
+                                let stub = self.signature_stub(m, &env, String::new(), true);
+                                (
+                                    names::member_ident(&prog.fns[m].name),
+                                    stub.params
+                                        .into_iter()
+                                        .map(|x| (x.name, x.ty, x.byref))
+                                        .collect::<Vec<_>>(),
+                                )
+                            })
+                            .collect()
+                    });
+                let (event, params) = match own.or_else(|| host_events(prog, class)) {
                     Some(events) => match events
                         .into_iter()
                         .find(|e| e.0.eq_ignore_ascii_case(&ev.event))
@@ -3116,6 +3269,7 @@ impl<'p> Lowerer<'p> {
                     ty: p.1.clone(),
                     is_array: false,
                     optional_default: None,
+                    param_array: false,
                 })
                 .collect();
             self.out[vi].procs.push(VProc {
@@ -3194,18 +3348,24 @@ impl<'p> Lowerer<'p> {
         if self.form_factories.insert(m) {
             let gi = self.vmodule("RAS_Glue", VModuleKind::Standard);
             self.out[gi].private_module = true;
-            let mut body = vec![set(vname(fname.clone()), lit(format!("New {form}")))];
+            let mut body = Vec::new();
             let mut params = Vec::new();
+            let mut locals = Vec::new();
+            let mut construct = None;
             if let Some(ctor) = ctor {
-                let construct = self.fn_name(ctor, &[]);
                 params = self
                     .signature_stub(ctor, &HashMap::new(), fname.clone(), true)
                     .params;
-                body.push(VStmt::Call {
-                    target: vname(fname.clone()).member(construct),
-                    args: params.iter().map(|x| vname(x.name.clone())).collect(),
+                let has_rest = self.prog.fns[ctor].params.last().is_some_and(|x| x.rest);
+                let args;
+                (locals, body, args) = factory_rest(&mut params, has_rest);
+                construct = Some(VStmt::Call {
+                    target: vname(fname.clone()).member(self.fn_name(ctor, &[])),
+                    args,
                 });
             }
+            body.push(set(vname(fname.clone()), lit(format!("New {form}"))));
+            body.extend(construct);
             self.out[gi].procs.push(VProc {
                 kind: ProcKind::Function,
                 public: true,
@@ -3213,7 +3373,7 @@ impl<'p> Lowerer<'p> {
                 name: fname.clone(),
                 params,
                 ret: Some(form.clone()),
-                locals: vec![],
+                locals,
                 body,
                 leading_comments: vec![],
                 attributes: vec![],
@@ -3307,6 +3467,7 @@ impl<'p> Lowerer<'p> {
                 ty: vt.clone(),
                 is_array: false,
                 optional_default: None,
+                param_array: false,
             });
             body.push(assign_value("RAS_Result", "ras_value"));
         }
@@ -3630,6 +3791,7 @@ impl<'p> Lowerer<'p> {
                     ty: p.vba_type.clone(),
                     is_array: false,
                     optional_default: None,
+                    param_array: false,
                 })
                 .collect();
             self.out[fi].procs.push(VProc {
@@ -3684,6 +3846,7 @@ impl<'p> Lowerer<'p> {
                     ty: "Long".into(),
                     is_array: false,
                     optional_default: Some("0&".into()),
+                    param_array: false,
                 }],
                 ret: None,
                 locals: vec![],
@@ -3694,6 +3857,40 @@ impl<'p> Lowerer<'p> {
             },
         );
     }
+}
+
+/// Copies the `ParamArray` `from` into the Variant `to`, the `any[]` the function works with
+/// (spec §3.5): VBA does not let a `ParamArray` be passed on by reference, which the array
+/// operations do. With no extra argument it is the empty array VBA gives (`0 To -1`), so that
+/// `UBound` and `For Each` work on it as on the `ParamArray`.
+///
+/// ```vb
+/// ras_rest = rest
+/// ```
+pub(crate) fn param_array_copy(from: &str, to: &str) -> VStmt {
+    assign(vname(to), vname(from))
+}
+
+/// The parameters of a factory that passes its arguments on to a constructor: a `...rest`
+/// array becomes the `ParamArray`, copied into the local `ras_<name>` that is passed on
+/// (spec §3.6). Returns the locals and the statements of the copy and the arguments to pass.
+pub(crate) fn factory_rest(
+    params: &mut [VParam],
+    has_rest: bool,
+) -> (Vec<(String, String, bool)>, Vec<VStmt>, Vec<VExpr>) {
+    let mut args: Vec<VExpr> = params.iter().map(|x| vname(x.name.clone())).collect();
+    let Some(p) = params.last_mut().filter(|_| has_rest) else {
+        return (Vec::new(), Vec::new(), args);
+    };
+    p.param_array = true;
+    let local = format!("ras_{}", p.name);
+    let copy = param_array_copy(&p.name, &local);
+    *args.last_mut().unwrap() = vname(local.clone());
+    (
+        vec![(local, "Variant".to_string(), false)],
+        vec![copy],
+        args,
+    )
 }
 
 pub(crate) fn name_member(obj: &str, member: &str) -> VExpr {

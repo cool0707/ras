@@ -2,7 +2,7 @@
 
 use ras_syntax::ast::{self, BinaryOp, Expr, ExprKind, PassMode, UnaryOp};
 
-use super::{js_ident, js_str, Gen};
+use super::{accessor_js_name, fn_js_name, js_ident, js_str, Gen};
 use crate::intrinsics::Intr;
 use crate::model::*;
 
@@ -23,6 +23,12 @@ pub(crate) enum Place {
     MapItem {
         map: String,
         key: String,
+    },
+    /// A property read and written by calls (spec §3.6): `get` reads it; `set` is the call
+    /// that writes it up to the value (`$set_total(`, `$rt.putIndexed(o, "List", [0], `).
+    Accessor {
+        get: String,
+        set: String,
     },
 }
 
@@ -169,6 +175,31 @@ impl<'p> Gen<'p> {
         if (from.is_array() || matches!(from, Type::Struct(_))) && is_place(e) {
             format!("$rt.clone({v})")
         } else {
+            self.by_val(v, e, &from, to)
+        }
+    }
+
+    /// A value of type `any` read from a variable, a field or an element and stored elsewhere may
+    /// be an array (`redim`, `array(...)`): whether to copy it is decided at run time (spec §4.6).
+    fn by_val(&mut self, v: String, e: &Expr, from: &Type, to: &Type) -> String {
+        let dynamic = |t: &Type| matches!(t, Type::Any | Type::CellValue);
+        if !dynamic(from) || !(dynamic(to) || to.is_array()) {
+            return v;
+        }
+        let inner = e.peel();
+        let stored = match &inner.kind {
+            ExprKind::Name(_) | ExprKind::Index { .. } => true,
+            // (A member of a host object is a fresh value.)
+            ExprKind::Member { .. } => match self.info().res.get(&inner.id) {
+                Some(Res::Field(c, _)) => self.prog.classes[*c].kind != ClassKind::Host,
+                Some(Res::Global(_)) => true,
+                _ => false,
+            },
+            _ => false,
+        };
+        if stored {
+            format!("$rt.byVal({v})")
+        } else {
             v
         }
     }
@@ -177,8 +208,10 @@ impl<'p> Gen<'p> {
 
     pub(crate) fn expr(&mut self, e: &Expr) -> String {
         match &e.kind {
-            // Ranges and `^n` are lowered by the index that holds them (rejected elsewhere).
-            ExprKind::Error | ExprKind::Range { .. } => "undefined".into(),
+            // Ranges, `^n` and `i, j` are lowered by the index that holds them (rejected elsewhere).
+            ExprKind::Error | ExprKind::Range { .. } | ExprKind::Subscripts(_) => {
+                "undefined".into()
+            }
             ExprKind::FromEnd(x) => self.expr(x),
             ExprKind::Super => "super".into(),
             ExprKind::Object(props) => match self.ty(e) {
@@ -443,7 +476,23 @@ impl<'p> Gen<'p> {
             Some(Res::EnumMember(en, i)) => self.enum_value(en, i),
             Some(Res::Intrinsic(i)) => self.intrinsic(e, i, None, &[]),
             Some(Res::Class(c)) => self.class_ref(c),
+            // A property of the module (spec §3.6).
+            Some(Res::Property { get: Some(g), .. }) => format!("{}()", self.fn_ref(g)),
             _ => js_ident(text),
+        }
+    }
+
+    /// The function of accessor `f` of a module, of a sheet or of a form, as reached through
+    /// `object` (`None`: the module itself). A form has its accessors as members; those of a
+    /// sheet's file are the functions of its module.
+    fn accessor_ref(&mut self, f: FnId, object: Option<&Expr>) -> String {
+        let d = &self.prog.fns[f];
+        match object {
+            Some(o) if self.prog.modules[d.module].is_form() => {
+                let o = self.expr(o);
+                format!("{o}.{}", fn_js_name(d))
+            }
+            _ => self.fn_ref(f),
         }
     }
 
@@ -485,6 +534,11 @@ impl<'p> Gen<'p> {
                 }
             }
             Some(Res::Class(c)) => self.class_ref(c),
+            // A property of a module, of a sheet or of a form (spec §3.6).
+            Some(Res::Property { get: Some(g), .. }) if self.prog.fns[g].accessor.is_some() => {
+                let f = self.accessor_ref(g, (!obj_is_ns).then_some(object));
+                format!("{f}()")
+            }
             Some(Res::Property { get: Some(g), .. }) if obj_is_ns => self.fn_ref(g),
             Some(Res::Method(f)) if matches!(self.prog.fns[f].kind, FnKind::Host { .. }) => {
                 let o = self.expr(object);
@@ -507,6 +561,18 @@ impl<'p> Gen<'p> {
             format!("$rt.getOpt({obj}, {})", js_str(member))
         } else {
             format!("$rt.get({obj}, {})", js_str(member))
+        }
+    }
+
+    /// The subscripts of an index: `i`, or `i, j` for `v[i, j]` (only on late-bound values, whose
+    /// subscripts are passed as a list: spec §4.6).
+    fn subscripts(&mut self, index: &Expr) -> String {
+        match &index.kind {
+            ExprKind::Subscripts(subs) => {
+                let list: Vec<String> = subs.iter().map(|s| self.expr(s)).collect();
+                list.join(", ")
+            }
+            _ => self.expr(index),
         }
     }
 
@@ -535,7 +601,7 @@ impl<'p> Gen<'p> {
                 _ => r,
             };
         }
-        let i = self.expr(index);
+        let i = self.subscripts(index);
         if matches!(index.kind, ExprKind::FromEnd(_)) {
             return match &ot {
                 Type::Str => format!("$rt.charEnd({o}, {i})"),
@@ -556,14 +622,31 @@ impl<'p> Gen<'p> {
 
     pub(crate) fn place(&mut self, e: &Expr) -> Place {
         let inner = e.peel();
+        // `ws.cells(1, 2) = v`: the default member of the cell range (`.Value`).
+        if self
+            .prog
+            .default_member_target(self.info(), inner)
+            .is_some()
+        {
+            return Place::Host {
+                obj: self.expr(inner),
+                name: "Value".into(),
+            };
+        }
         match &inner.kind {
+            ExprKind::Name(_) => match self.info().res.get(&inner.id).cloned() {
+                // A property of the module (spec §3.6).
+                Some(Res::Property { get, set }) => self.accessor_place(get, set, None),
+                _ => Place::Native(self.expr(inner)),
+            },
+            ExprKind::Call { callee, args, .. } => self.call_place(inner, callee, args),
             ExprKind::Index { object, index } => {
                 let ot = self.ty(object);
                 let o = self.expr(object);
                 if let (Type::Struct(_), ExprKind::Int { value, .. }) = (&ot, &index.peel().kind) {
                     return Place::Native(format!("{o}.item{value}"));
                 }
-                let i = self.expr(index);
+                let i = self.subscripts(index);
                 if matches!(index.kind, ExprKind::FromEnd(_)) {
                     return Place::Native(format!("{o}[$rt.ixEnd({o}, {i})]"));
                 }
@@ -593,6 +676,19 @@ impl<'p> Gen<'p> {
                         Place::Native(format!("{}.{}", self.class_ref(c), name.text))
                     }
                     Some(Res::Global(v)) => Place::Native(self.global_ref(v)),
+                    Some(Res::Property { get, set })
+                        if get
+                            .or(set)
+                            .is_some_and(|f| self.prog.fns[f].accessor.is_some()) =>
+                    {
+                        let through = (!matches!(obj_ty, Type::Ns(_))).then_some(&**object);
+                        self.accessor_place(get, set, through)
+                    }
+                    // A host property with parameters, all omitted (`listBox.list = rows`).
+                    Some(Res::Method(f)) if self.prog.fns[f].is_host_property() => Place::Host {
+                        obj: self.expr(object),
+                        name: self.prog.fns[f].vba_name().to_string(),
+                    },
                     Some(Res::Field(..)) | Some(Res::Property { .. }) => {
                         Place::Native(format!("{}.{}", self.expr(object), name.text))
                     }
@@ -607,9 +703,115 @@ impl<'p> Gen<'p> {
         }
     }
 
+    /// A property of a module (of a sheet, of a form) without parameters, read and written
+    /// through its accessor functions.
+    fn accessor_place(
+        &mut self,
+        get: Option<FnId>,
+        set: Option<FnId>,
+        object: Option<&Expr>,
+    ) -> Place {
+        let get = match get {
+            Some(g) => format!("{}()", self.accessor_ref(g, object)),
+            None => "undefined".into(),
+        };
+        let set = match set {
+            Some(s) => format!("{}(", self.accessor_ref(s, object)),
+            None => "void (".into(),
+        };
+        Place::Accessor { get, set }
+    }
+
+    /// `obj.item(key) = v`: the target is a property with parameters (spec §3.6.2, §3.6.3).
+    fn call_place(&mut self, e: &Expr, callee: &Expr, args: &[Expr]) -> Place {
+        let args = self.info().call_args(e.id, args);
+        let c = callee.peel();
+        let recv = match &c.kind {
+            ExprKind::Member { object, .. } => Some(&**object),
+            _ => None,
+        };
+        let target = self.info().calls.get(&e.id).map(|ci| ci.target.clone());
+        match target {
+            // The accessors of a class, a module, a sheet or a form.
+            Some(CallTarget::Fn(f) | CallTarget::Method(f))
+                if self.prog.fns[f].accessor_kind().is_some() =>
+            {
+                let (get, set) = self.prog.accessor_pair(f);
+                let argv = self.ras_args(f, 0, args).join(", ");
+                let mut callee_of = |g: FnId| {
+                    let d = &self.prog.fns[g];
+                    match recv {
+                        _ if d.accessor.is_some() => {
+                            let through = recv.filter(|r| !matches!(self.ty(r), Type::Ns(_)));
+                            self.accessor_ref(g, through)
+                        }
+                        Some(r) if !matches!(self.ty(r), Type::Ns(_)) => {
+                            let o = self.expr(r);
+                            format!("{o}.{}", accessor_js_name(self.prog, g).1)
+                        }
+                        _ => self.fn_ref(g),
+                    }
+                };
+                let get = match get {
+                    Some(g) => format!("{}({argv})", callee_of(g)),
+                    None => "undefined".into(),
+                };
+                let sep = if argv.is_empty() { "" } else { ", " };
+                let set = match set {
+                    Some(s) => format!("{}({argv}{sep}", callee_of(s)),
+                    None => "void (".into(),
+                };
+                Place::Accessor { get, set }
+            }
+            // A property of a host object declared with parameters (`listBox.selected(i)`).
+            Some(CallTarget::Host(f)) => {
+                let get = self.expr(e);
+                let argv = self.plain_args(args);
+                let name = js_str(self.prog.fns[f].vba_name());
+                let is_member = matches!(self.prog.fns[f].kind, FnKind::Host { class: Some(_) });
+                let o = match recv.filter(|r| is_member && !matches!(self.ty(r), Type::Ns(_))) {
+                    Some(r) => self.expr(r),
+                    None => "$rt.global(\"Application\")".to_string(),
+                };
+                Place::Accessor {
+                    get,
+                    set: format!("$rt.putIndexed({o}, {name}, [{argv}], "),
+                }
+            }
+            // The default member (`dict("key") = v`).
+            Some(CallTarget::DefaultMember(_)) => {
+                let get = self.expr(e);
+                let o = self.expr(callee);
+                let argv = self.plain_args(args);
+                Place::Accessor {
+                    get,
+                    set: format!("$rt.setItem({o}, [{argv}], "),
+                }
+            }
+            // A late-bound object: the property is found at run time.
+            Some(CallTarget::Dynamic) => {
+                let get = self.expr(e);
+                let argv = self.plain_args(args);
+                let set = match &c.kind {
+                    ExprKind::Member { object, name, .. } => {
+                        let o = self.expr(object);
+                        format!("$rt.putIndexed({o}, {}, [{argv}], ", js_str(&name.text))
+                    }
+                    _ => {
+                        let o = self.expr(callee);
+                        format!("$rt.setItem({o}, [{argv}], ")
+                    }
+                };
+                Place::Accessor { get, set }
+            }
+            _ => Place::Native(self.expr(e)),
+        }
+    }
+
     pub(crate) fn place_get(&mut self, p: &Place) -> String {
         match p {
             Place::Native(s) => s.clone(),
+            Place::Accessor { get, .. } => get.clone(),
             Place::Host { obj, name } => format!("$rt.get({obj}, {})", js_str(name)),
             Place::Item { obj, index } => format!("$rt.item({obj}, [{index}])"),
             Place::MapItem { map, key } => format!("$rt.mapGet({map}, {key}, null)"),
@@ -622,11 +824,16 @@ impl<'p> Gen<'p> {
             Place::Host { obj, name } => format!("$rt.put({obj}, {}, {v})", js_str(name)),
             Place::Item { obj, index } => format!("$rt.setItem({obj}, [{index}], {v})"),
             Place::MapItem { map, key } => format!("$rt.mapSet({map}, {key}, {v})"),
+            Place::Accessor { set, .. } => format!("{set}{v})"),
         }
     }
 
     fn assign(&mut self, op: Option<BinaryOp>, target: &Expr, value: &Expr) -> String {
-        let tty = self.ty(target);
+        // (A cell range assigned to through its default member takes the value of a cell.)
+        let tty = self
+            .prog
+            .default_member_target(self.info(), target)
+            .unwrap_or_else(|| self.ty(target));
         let place = self.place(target);
         match op {
             None => {
@@ -635,7 +842,15 @@ impl<'p> Gen<'p> {
             }
             Some(op) => {
                 let vty = self.ty(value);
-                let cur = self.place_get(&place);
+                // The receiver and the subscripts of `v[i] += x` are evaluated once.
+                let late = match &place {
+                    Place::Item { obj, index } => Some((obj.clone(), index.clone())),
+                    _ => None,
+                };
+                let cur = match &late {
+                    Some(_) => "$c".to_string(),
+                    None => self.place_get(&place),
+                };
                 let v = self.expr(value);
                 let result = if tty == Type::Str {
                     Type::Str
@@ -643,7 +858,12 @@ impl<'p> Gen<'p> {
                     tty.clone()
                 };
                 let combined = self.arith(op, cur, &tty, v, &vty, &result);
-                self.place_set(&place, combined)
+                match late {
+                    Some((obj, index)) => {
+                        format!("$rt.updateItem({obj}, [{index}], ($c) => {combined})")
+                    }
+                    None => self.place_set(&place, combined),
+                }
             }
         }
     }
@@ -724,6 +944,10 @@ impl<'p> Gen<'p> {
             BinaryOp::And | BinaryOp::Or | BinaryOp::Coalesce => {
                 let l = self.expr(lhs);
                 let r = self.expr(rhs);
+                // A run-time typed value may be VBA's `Null` (`dbNull`): no value either.
+                if op == BinaryOp::Coalesce && is_dyn(&lt) {
+                    return format!("$rt.coalesce({l}, () => {r})");
+                }
                 format!("({l} {} {r})", op.symbol())
             }
             BinaryOp::Eq | BinaryOp::Ne => {
@@ -738,7 +962,10 @@ impl<'p> Gen<'p> {
                         (lhs, &lt)
                     };
                     let v = self.expr(other);
-                    return if oty.is_object() || is_dyn(oty) {
+                    return if is_dyn(oty) {
+                        // `Empty`, `Nothing` or VBA's `Null` (`dbNull`), as `RAS_IsNullish`.
+                        format!("{}$rt.isNullish({v})", if negate { "!" } else { "" })
+                    } else if oty.is_object() {
                         format!("({v} {} null)", if negate { "!=" } else { "==" })
                     } else {
                         // A value type is never null.
@@ -836,7 +1063,9 @@ impl<'p> Gen<'p> {
     fn ras_args(&mut self, f: FnId, skip: usize, args: &[Expr]) -> Vec<String> {
         let prog = self.prog;
         let def = &prog.fns[f];
-        let params = &def.params[skip.min(def.params.len())..];
+        // (The last parameter of a setter is the assigned value.)
+        let params = def.index_params();
+        let params = &params[skip.min(params.len())..];
         let mut out = Vec::new();
         for (i, a) in args.iter().enumerate() {
             let v = match params.get(i) {
@@ -853,7 +1082,10 @@ impl<'p> Gen<'p> {
                         }
                     } else {
                         let v = self.expr(a);
-                        self.coerce(v, &from, &p.ty)
+                        let v = self.coerce(v, &from, &p.ty);
+                        // (An `any` parameter is `ByVal … As Variant`: the array it holds is copied.)
+                        let to = p.ty.clone();
+                        self.by_val(v, a, &from, &to)
                     }
                 }
                 _ => self.expr(a),
@@ -984,7 +1216,15 @@ impl<'p> Gen<'p> {
                         js_str(&self.prog.fns[f].name)
                     );
                 }
-                format!("{o}.{}({argv})", self.prog.fns[f].name)
+                let name = match self.prog.fns[f].kind {
+                    FnKind::Getter { .. } | FnKind::Setter { .. } => {
+                        accessor_js_name(self.prog, f).1
+                    }
+                    // An accessor of a form (a member of its instances).
+                    _ if self.prog.fns[f].accessor.is_some() => fn_js_name(&self.prog.fns[f]),
+                    _ => self.prog.fns[f].name.clone(),
+                };
+                format!("{o}.{name}({argv})")
             }
             CallTarget::Host(f) => {
                 let is_member = matches!(self.prog.fns[f].kind, FnKind::Host { class: Some(_) });
@@ -1211,13 +1451,29 @@ impl<'p> Gen<'p> {
         if intr.is_file_io() {
             return self.file_io(intr, args);
         }
+        if matches!(intr, Redim | RedimPreserve | Erase) {
+            // The variable gets the new array: `a = $rt.redim(a, preserve, [lo, hi, …])` (spec §4.6).
+            let place = self.place(&args[0]);
+            let cur = self.place_get(&place);
+            let v = if intr == Erase {
+                format!("$rt.erase({cur})")
+            } else {
+                let b: Vec<String> = args[1..].iter().map(|x| self.expr(x)).collect();
+                format!(
+                    "$rt.redim({cur}, {}, [{}])",
+                    intr == RedimPreserve,
+                    b.join(", ")
+                )
+            };
+            return format!("void ({})", self.place_set(&place, v));
+        }
         let a: Vec<String> = args.iter().map(|x| self.expr(x)).collect();
         let argv = a.join(", ");
         let arg =
             |i: usize, default: &str| a.get(i).cloned().unwrap_or_else(|| default.to_string());
         let elem = recv_ty.elem_of();
         match intr {
-            EventOn => unreachable!(),
+            EventOn | Redim | RedimPreserve | Erase => unreachable!(),
             FileOpen | FileClose | FileReset | FilePrint | FilePrintLine | FileWrite
             | FileWriteLine | FileInput | FileLineInput | FileInputString | FileGet | FilePut
             | FileSeek | FileLock | FileUnlock | FileWidth | FileRename => unreachable!(),
@@ -1353,6 +1609,14 @@ impl<'p> Gen<'p> {
                 format!("$rt.print({})", parts.join(", "))
             }
             IsNullish => "false".into(),
+            DynamicArray => "new $rt.VbArray([], [], [])".into(),
+            IsAllocated => format!("$rt.isAllocated({})", self.expr(&args[0])),
+            LetValue => format!("$rt.letValue({})", self.expr(&args[0])),
+            Like => {
+                let text = self.coerce_store(&args[0], &Type::Str);
+                let pattern = self.coerce_store(&args[1], &Type::Str);
+                format!("$rt.like({text}, {pattern})")
+            }
             FastMode => crate::lower::expr::fast_mode_mask(e).to_string(),
             SuspendScreen => "$rt.suspend(1)".into(),
             ResumeScreen => "$rt.resume(1)".into(),

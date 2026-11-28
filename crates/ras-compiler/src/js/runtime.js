@@ -19,6 +19,9 @@ const MESSAGES = {
     75: "パス名が無効です。",
     28: "スタック領域が不足しています。",
     91: "オブジェクト変数または With ブロック変数が設定されていません。",
+    92: "For ループが初期化されていません。",
+    93: "パターン文字列が不正です。",
+    94: "Null の使い方が不正です。",
     361: "このオブジェクトを読み込んだりアンロードしたりすることはできません。",
     380: "プロパティの値が不正です。",
     381: "プロパティ配列のインデックスが不正です。",
@@ -252,8 +255,145 @@ class Struct {}
 /** `Nothing` passed to a host parameter (plain `null` is sent as `Empty`). */
 const Nothing = Object.freeze({ $t: "nothing" });
 
+/** VBA's `Null` (`dbNull`): a value of its own, neither `Empty` nor an object. */
+const Null = Object.freeze({ $t: "null", toString: () => "Null" });
+/** `v == null` on a run-time typed value (`RAS_IsNullish`): `Empty`, `Nothing` or `Null`. */
+const isNullish = (v) => v == null || v === Null;
+/** `a ?? b` on a run-time typed value: `b()` when `a` is `Empty`, `Nothing` or `Null`. */
+const coalesce = (a, b) => (isNullish(a) ? b() : a);
+/**
+ * A VBA array with its own bounds, made by `redim` (`ReDim a(1 To n, 0 To m)`; spec §4.6).
+ * `lo` / `hi` are the bounds of each dimension and `data` the elements in VBA's order (the first
+ * subscript varies fastest): the order `For Each` visits them in and `ReDim Preserve` keeps them in.
+ * An erased array (`Erase a`) has no dimensions. Like every array it is a value: `clone` copies it.
+ */
+class VbArray {
+    constructor(lo, hi, data) {
+        this.lo = lo;
+        this.hi = hi;
+        this.data = data;
+    }
+    /** The position in `data` of the element at `subs`: error 9 outside the bounds or with another number of subscripts. */
+    offset(subs) {
+        if (subs.length !== this.lo.length || subs.length === 0) raise(9);
+        let at = 0;
+        let stride = 1;
+        for (let d = 0; d < subs.length; d++) {
+            const i = subscript(subs[d]);
+            if (!(i >= this.lo[d] && i <= this.hi[d])) raise(9, `${i}`);
+            at += (i - this.lo[d]) * stride;
+            stride *= this.hi[d] - this.lo[d] + 1;
+        }
+        return at;
+    }
+    [Symbol.iterator]() {
+        return this.data[Symbol.iterator]();
+    }
+    /** The array as a host takes it (`range.Value = a`): a list, or rows of columns for 2 dimensions. */
+    toNested() {
+        if (this.lo.length === 1) return this.data.slice();
+        if (this.lo.length !== 2) raise(13);
+        const rows = this.hi[0] - this.lo[0] + 1;
+        const cols = this.hi[1] - this.lo[1] + 1;
+        return Array.from({ length: rows }, (_, r) => Array.from({ length: cols }, (_, c) => this.data[r + c * rows]));
+    }
+}
+/** A subscript of a VBA array: a number is rounded as VBA does. */
+function subscript(i) {
+    return Number.isInteger(i) ? i : cint(i);
+}
+/**
+ * Marks rows of columns as a VBA array of 2 dimensions whose lower bounds are `lb`: the `Value` of a
+ * range of several cells is 1-based (`v[1, 1]`, `LBound(v) = 1`). The mark is not enumerable: the
+ * rest of the run time sees the same rows.
+ */
+function based(rows, lb) {
+    if (Array.isArray(rows)) Object.defineProperty(rows, "$lb", { value: lb, writable: true, configurable: true });
+    return rows;
+}
+function lowerBound(a) {
+    return a.$lb || 0;
+}
+/** The elements of rows of columns in VBA's order (down the first column, then the next). */
+function columnMajor(rows) {
+    const out = [];
+    const n = cols(rows);
+    for (let c = 0; c < n; c++) for (const row of rows) out.push(row[c]);
+    return out;
+}
+/** `a[i, j]` on rows of columns: the row and the position in it (error 9 outside, or with more subscripts). */
+function rowAt(a, subs) {
+    if (subs.length !== 2) raise(9);
+    const lb = lowerBound(a);
+    const i = subscript(subs[0]);
+    const j = subscript(subs[1]);
+    const row = i >= lb && i - lb < a.length ? a[i - lb] : raise(9, `${i}`);
+    if (!Array.isArray(row) || !(j >= lb && j - lb < row.length)) raise(9, `${j}`);
+    return [row, j - lb];
+}
+/** Any array as a `VbArray` (for `ReDim Preserve`): a list is 0-based, marked rows of columns have 2 dimensions. */
+function toVbArray(v) {
+    if (v instanceof VbArray) return v;
+    if (!Array.isArray(v)) return raise(13);
+    if (v.$lb === undefined) return new VbArray([0], [v.length - 1], v.slice());
+    const lb = v.$lb;
+    return new VbArray([lb, lb], [lb + v.length - 1, lb + cols(v) - 1], columnMajor(v));
+}
+/**
+ * `redim(a, lo, hi, …)` / `redimPreserve(a, lo, hi, …)` (spec §4.6): the new array of the variable.
+ * `Preserve` keeps the elements in their order; only the bounds of the last dimension may change.
+ */
+function redim(cur, preserve, bounds) {
+    const lo = [];
+    const hi = [];
+    let size = 1;
+    for (let d = 0; d < bounds.length; d += 2) {
+        const a = subscript(bounds[d]);
+        const b = subscript(bounds[d + 1]);
+        if (b < a) raise(9);
+        lo.push(a);
+        hi.push(b);
+        size *= b - a + 1;
+    }
+    let data = [];
+    if (preserve) {
+        const old = toVbArray(cur);
+        if (old.lo.length !== 0) {
+            const last = lo.length - 1;
+            if (old.lo.length !== lo.length) raise(9);
+            for (let d = 0; d < last; d++) if (old.lo[d] !== lo[d] || old.hi[d] !== hi[d]) raise(9);
+            data = old.data.slice(0, size);
+        }
+    }
+    while (data.length < size) data.push(null);
+    return new VbArray(lo, hi, data);
+}
+/** `erase(a)`: the array without its elements and dimensions (`IsArray` stays true; `UBound` is error 9). */
+function erase(cur) {
+    if (!(cur instanceof VbArray || Array.isArray(cur))) raise(13);
+    return new VbArray([], [], []);
+}
+/** A value read from an `any` variable to be stored elsewhere: an array is copied (arrays are values in VBA). */
+function byVal(v) {
+    return v instanceof VbArray || Array.isArray(v) ? clone(v) : v;
+}
+/** `LBound` / `UBound`: `upper` selects the bound. */
+function bound(a, dimension, upper) {
+    const d = dimension === undefined ? 1 : subscript(dimension);
+    if (a instanceof VbArray) {
+        if (!(d >= 1 && d <= a.lo.length)) raise(9);
+        return upper ? a.hi[d - 1] : a.lo[d - 1];
+    }
+    if (!Array.isArray(a)) return raise(13);
+    if (d !== 1 && d !== 2) raise(9);
+    const lb = lowerBound(a);
+    if (!upper) return lb;
+    return lb + (d === 2 ? cols(a) : a.length) - 1;
+}
+
 function clone(v) {
-    if (Array.isArray(v)) return v.map(clone);
+    if (Array.isArray(v)) return v.$lb === undefined ? v.map(clone) : based(v.map(clone), v.$lb);
+    if (v instanceof VbArray) return new VbArray(v.lo.slice(), v.hi.slice(), v.data.map(clone));
     if (v instanceof Struct) {
         const out = new v.constructor();
         for (const k of Object.keys(v)) out[k] = clone(v[k]);
@@ -384,6 +524,7 @@ function cnum(v) {
         default:
             if (v === null) return 0;
             if (v instanceof RDate) return v.oa;
+            if (v === Null) return raise(94);
             if (isCom(v) || isValued(v)) return cnum(item(v, []));
             return raise(13);
     }
@@ -448,6 +589,7 @@ function cstr(v) {
         default:
             if (v === null) return "";
             if (v instanceof RDate || v instanceof CVErr) return v.toString();
+            if (v === Null) return raise(94);
             if (isCom(v) || isValued(v)) return cstr(item(v, []));
             return raise(13);
     }
@@ -464,7 +606,7 @@ function str(v) {
         case "undefined":
             return "";
         default:
-            if (v === null) return "";
+            if (v === null || v === Null) return "";
             if (v instanceof RDate || v instanceof CVErr) return v.toString();
             return typeName(v);
     }
@@ -515,10 +657,12 @@ function cmp(a, b) {
     return raise(13);
 }
 function isPlainValue(v) {
-    return v == null || typeof v !== "object" || v instanceof RDate;
+    return isNullish(v) || typeof v !== "object" || v instanceof RDate;
 }
 function eq(a, b) {
     if (a == null && b == null) return true;
+    // VBA's `=` with `Null` is `Null`, which a condition takes as false.
+    if (a === Null || b === Null) return false;
     // VBA's `=` on an error value (#N/A ...) is a type mismatch.
     if (a instanceof CVErr || b instanceof CVErr) return raise(13);
     if (!isPlainValue(a) || !isPlainValue(b)) return a === b || (isCom(a) && isCom(b) && a.isSame(b)) || (a != null && typeof a.$same === "function" && a.$same(b));
@@ -526,7 +670,7 @@ function eq(a, b) {
 }
 /** The kind of a value for `==` on a union (`RAS_ValueKind`): 0 number, 1 string, 2 boolean, 3 date, 4 empty, 5 error value. */
 function valueKind(v) {
-    if (v == null) return 4;
+    if (isNullish(v)) return 4;
     if (typeof v === "string") return 1;
     if (typeof v === "boolean") return 2;
     if (v instanceof RDate) return 3;
@@ -546,7 +690,8 @@ function unionEq(a, b) {
 /** `Excel.errorToNull(v)`: an error value (#N/A ...) as null, also the elements of an array. */
 function errorToNull(v) {
     if (v instanceof CVErr) return null;
-    if (Array.isArray(v)) return v.map(errorToNull);
+    if (Array.isArray(v)) return v.$lb === undefined ? v.map(errorToNull) : based(v.map(errorToNull), v.$lb);
+    if (v instanceof VbArray) return new VbArray(v.lo.slice(), v.hi.slice(), v.data.map(errorToNull));
     return v;
 }
 
@@ -561,6 +706,60 @@ function trim(s, mode) {
 }
 function repeat(s, n) {
     return n > 0 ? s.repeat(n) : "";
+}
+/** What VBA's `v = x` stores: the default member (`Value`) of an object, `x` otherwise. */
+function letValue(v) {
+    if (v === null || v === Null || typeof v !== "object") return v;
+    if (Array.isArray(v) || v instanceof VbArray || v instanceof RDate || v instanceof CVErr) return v;
+    return get(v, "Value");
+}
+const likePatterns = new Map();
+/**
+ * VBA's `text Like pattern` under `Option Compare Binary` (`like(text, pattern)`): `?` is one
+ * character, `*` any number of them, `#` a digit, `[a-cx]` one of a list and `[!a-cx]` one not of it
+ * (`[*]`, `[?]`, `[#]` and `[[]` are those characters themselves).
+ */
+function like(text, pattern) {
+    let re = likePatterns.get(pattern);
+    if (re === undefined) {
+        const esc = (c) => c.replace(/[\\^$.*+?()[\]{}|\-/]/, "\\$&");
+        let src = "";
+        for (let i = 0; i < pattern.length; i++) {
+            const c = pattern[i];
+            if (c === "?") src += "[\\s\\S]";
+            else if (c === "*") src += "[\\s\\S]*";
+            else if (c === "#") src += "[0-9]";
+            else if (c === "[") {
+                const end = pattern.indexOf("]", i + 1);
+                if (end < 0) raise(93);
+                let list = pattern.slice(i + 1, end);
+                i = end;
+                const not = list.startsWith("!");
+                if (not) list = list.slice(1);
+                // `[]` is the empty string, `[!]` an exclamation mark.
+                if (list === "") {
+                    if (not) src += "!";
+                    continue;
+                }
+                let set = "";
+                for (let j = 0; j < list.length; j++) {
+                    if (list[j + 1] === "-" && j + 2 < list.length) {
+                        if (list[j] > list[j + 2]) raise(93);
+                        set += `${esc(list[j])}-${esc(list[j + 2])}`;
+                        j += 2;
+                    } else {
+                        set += esc(list[j]);
+                    }
+                }
+                src += `[${not ? "^" : ""}${set}]`;
+            } else {
+                src += esc(c);
+            }
+        }
+        re = new RegExp(`^(?:${src})$`);
+        likePatterns.set(pattern, re);
+    }
+    return re.test(text);
 }
 function replace(s, find, rep, all) {
     if (find === "") return s;
@@ -729,6 +928,7 @@ function comTry(f) {
     }
 }
 function toCom(v) {
+    if (v instanceof VbArray) return v.toNested().map(toCom);
     if (Array.isArray(v)) return v.map(toCom);
     if (v instanceof RDate) return { $t: "date", v: v.oa };
     if (v instanceof CVErr) return { $t: "error", v: v.code };
@@ -950,7 +1150,11 @@ function jsMember(o, name) {
 /** Property read of a host or late-bound object. */
 function get(o, name) {
     if (o == null) raise(91, name);
-    if (isCom(o)) return fromCom(comTry(() => o.get(name, [])));
+    if (isCom(o)) {
+        const v = fromCom(comTry(() => o.get(name, [])));
+        // The values of a range of several cells: a 1-based array of 2 dimensions (spec §4.6).
+        return Array.isArray(v) && Array.isArray(v[0]) && /^(value2?|formula\w*)$/i.test(name) ? based(v, 1) : v;
+    }
     const v = jsMember(o, name);
     return isCallable(v) ? v.call(o) : v;
 }
@@ -978,7 +1182,17 @@ function item(o, args) {
     if (isCom(o)) return fromCom(comTry(() => o.call("", args.map(toCom))));
     if (isCallable(o)) return o(...args);
     if (o instanceof Map) return mapGet(o, args[0], null);
-    if (Array.isArray(o)) return o[ix(o, args[0])];
+    if (o instanceof VbArray) return o.data[o.offset(args)];
+    if (Array.isArray(o)) {
+        // `v[i, j]` on rows of columns; one subscript is an element of a list (spec §4.6).
+        if (args.length !== 1 || o.$lb !== undefined) {
+            const [row, j] = rowAt(o, args);
+            return row[j];
+        }
+        return o[ix(o, args[0])];
+    }
+    // A number, a text ...: not an array.
+    if (typeof o !== "object" && typeof o !== "function") raise(13);
     if (isCallable(o.Item)) return o.Item(...args);
     return raise(438);
 }
@@ -986,9 +1200,46 @@ function setItem(o, args, v) {
     if (o == null) raise(91);
     if (isCom(o)) comTry(() => o.put("", args.map(toCom), toCom(v)));
     else if (o instanceof Map) o.set(args[0], v);
-    else if (Array.isArray(o)) o[ix(o, args[0])] = v;
+    else if (o instanceof VbArray) o.data[o.offset(args)] = v;
+    else if (Array.isArray(o) && (args.length !== 1 || o.$lb !== undefined)) {
+        const [row, j] = rowAt(o, args);
+        row[j] = v;
+    } else if (Array.isArray(o)) o[ix(o, args[0])] = v;
+    else if (typeof o !== "object" && typeof o !== "function") raise(13);
     else if (isCallable(o.$setItem)) o.$setItem(args, v);
     else raise(438);
+    return v;
+}
+/** `o(args) = f(o(args))`: a compound assignment to an element (`v[i, j] += 1`). */
+function updateItem(o, args, f) {
+    return setItem(o, args, f(item(o, args)));
+}
+/**
+ * Write of a property with arguments (`listBox.Selected(i) = v`, `obj.Item(key) = v`). An
+ * object of RAS (and of the stand-ins) has the method `$set_<name>` for it; a property that
+ * returns an object takes the value through that object's default member (`ws.Cells(1, 2) = v`).
+ */
+function putIndexed(o, name, args, v) {
+    if (o == null) raise(91, name);
+    if (isCom(o)) {
+        comTry(() => o.put(name, args.map(toCom), toCom(v)));
+        return v;
+    }
+    const setter = o[memberKey(o, `$set_${name}`)];
+    if (isCallable(setter)) {
+        setter.call(o, ...args, v);
+        return v;
+    }
+    if (args.length === 0) return put(o, name, v);
+    if (String(name).toLowerCase() === "item" && isCallable(o.$setItem)) {
+        o.$setItem(args, v);
+        return v;
+    }
+    const target = call(o, name, args);
+    if (target === null || typeof target !== "object") raise(438, name);
+    if (isCom(target)) comTry(() => target.put("", [], toCom(v)));
+    else if (isCallable(target.$setItem)) target.$setItem([], v);
+    else put(target, "Value", v);
     return v;
 }
 function invoke(f, args) {
@@ -999,6 +1250,9 @@ function iter(o) {
     if (o == null) raise(91);
     if (isCom(o)) return fromCom(comTry(() => o.enumerate()));
     if (o instanceof Map) return [...o.values()];
+    // `For Each` over an array visits the elements of every dimension; an erased array is error 92.
+    if (o instanceof VbArray) return o.lo.length ? o.data.slice() : raise(92);
+    if (Array.isArray(o) && o.$lb !== undefined) return columnMajor(o);
     if (typeof o[Symbol.iterator] === "function") return o;
     if (isCallable(o.Item) && "Count" in o) return Array.from({ length: get(o, "Count") }, (_, i) => o.Item(i + 1));
     return raise(438);
@@ -1018,9 +1272,10 @@ function typeName(v, num) {
             return "Empty";
         default:
             if (v === null) return "Nothing";
+            if (v === Null) return "Null";
             if (v instanceof RDate) return "Date";
             if (v instanceof CVErr) return "Error";
-            if (Array.isArray(v)) return "Variant()";
+            if (Array.isArray(v) || v instanceof VbArray) return "Variant()";
             if (v instanceof Map) return "Dictionary";
             if (isCom(v)) return comTry(() => v.typeName());
             if (typeof v.$typeName === "string") return v.$typeName;
@@ -1212,7 +1467,8 @@ function is64() {
 
 function read2D(range) {
     const v = get(range, "Value");
-    return Array.isArray(v) ? v : [[v]];
+    // (0-based, as every RAS array: not the 1-based array `range.value` is.)
+    return Array.isArray(v) ? based(v, undefined) : [[v]];
 }
 function toColumn(range) {
     return read2D(call(range, "Columns", [1])).map((row) => row[0]);
@@ -1406,6 +1662,7 @@ const fileRename = (a, b) => files().rename(a, b);
 const vbaImpl = {
     vbCrLf: "\r\n", vbCr: "\r", vbLf: "\n", vbTab: "\t", vbNullString: "", vbNullChar: "\0", vbNewLine: "\r\n", vbBack: "\b", vbFormFeed: "\f", vbVerticalTab: "\v",
     vbObjectError: VB_OBJECT_ERROR,
+    dbNull: Null,
     Err: vbaErr,
     Debug: {
         Print: (...args) => print(...args.map(str)),
@@ -1491,22 +1748,23 @@ const vbaImpl = {
         }
     },
     IsEmpty: (v) => v == null,
-    IsNull: () => false,
-    IsObject: (v) => v !== null && typeof v === "object" && !(v instanceof RDate) && !(v instanceof CVErr) && !Array.isArray(v),
-    IsArray: (v) => Array.isArray(v),
+    IsNull: (v) => v === Null,
+    IsObject: (v) => v !== null && v !== Null && typeof v === "object" && !(v instanceof RDate) && !(v instanceof CVErr) && !Array.isArray(v) && !(v instanceof VbArray),
+    IsArray: (v) => Array.isArray(v) || v instanceof VbArray,
     IsError: (v) => v instanceof CVErr,
     IsMissing: (v) => v === undefined,
     TypeName: (v) => typeName(v),
     VarType(v) {
         if (v == null) return 0;
-        if (Array.isArray(v)) return 8192 + 12;
+        if (v === Null) return 1;
+        if (Array.isArray(v) || v instanceof VbArray) return 8192 + 12;
         if (v instanceof RDate) return 7;
         if (v instanceof CVErr) return 10;
         return { string: 8, boolean: 11, object: 9 }[typeof v] || (Number.isInteger(v) ? 3 : 5);
     },
     Array: (...args) => args,
-    LBound: () => 0,
-    UBound: (a, dimension) => (dimension === 2 ? cols(a) : a.length) - 1,
+    LBound: (a, dimension) => bound(a, dimension, false),
+    UBound: (a, dimension) => bound(a, dimension, true),
     Len: (s) => cstr(s).length,
     LenB: (s) => cstr(s).length * 2,
     Left(s, n) {
@@ -1735,9 +1993,33 @@ function controlHandlers(codeName) {
  * the object the variable holds now. The stand-in for Excel calls them when that object is
  * the project's workbook, one of its sheets or `Application`.
  */
+/** `isAllocated(a)`: whether an array has bounds (false for `dynamicArray()` and after `erase`). */
+function isAllocated(a) {
+    if (a instanceof VbArray) return a.lo.length > 0;
+    return Array.isArray(a);
+}
 const eventSources = [];
 function withEvents(list) {
     for (const e of list) eventSources.push(e);
+}
+/**
+ * Raises an event of an object of a class of the project (`event Changed();`, VBA's
+ * `RaiseEvent`): calls the handlers of the variables that hold `source`. `cells` are the
+ * arguments as `{ v }`. An error of a handler is the error of the code that raises the event.
+ */
+function raiseEvent(source, event, cells) {
+    const name = String(event).toLowerCase();
+    for (const e of eventSources.slice()) {
+        if (e.alive && !e.alive()) continue;
+        if (e.event.toLowerCase() !== name || e.source() !== source) continue;
+        if (!e.reentrant && e.busy) continue;
+        e.busy = true;
+        try {
+            e.fn(cells);
+        } finally {
+            e.busy = false;
+        }
+    }
 }
 /**
  * Event handlers attached at run time: `target.on("Click", handler)` (spec §12.2.3). The forms
@@ -2130,15 +2412,15 @@ process.on("exit", () => {
 });
 
 module.exports = {
-    RasError, RDate, CVErr, Struct, Collection, Nothing,
-    raise, makeError, unsupported, caught,
+    RasError, RDate, CVErr, Struct, Collection, Nothing, Null, isNullish, coalesce, like, letValue, VbArray,
+    raise, makeError, unsupported, caught, based, redim, erase, byVal,
     date, clone, i32, i64, idiv, imod, div, fmod, pow, sqrt, log, post, round, bankersRound, numStr, toFixed, val,
     cnum, cint, clng, toInt, toLong, cbool, cdate, cstr, str, dyn, cmp, eq, unionEq, errorToNull,
     trim, repeat, replace, split, charCode, ix, ixEnd, charEnd, range, step, cols, transpose, pop, find, join, sort, newArray, mapGet, mapSet,
-    configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
+    configure, hooks, note, standIn: stand, global, get, getOpt, put, putIndexed, call, item, setItem, updateItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
     suspend, resume, resetAppState, status, sleep, pause, waitUntil, yieldNow, is64, read2D, toColumn, toRow, extend, lastCell, sheetRange, fromArray, match, print,
     fileOpen, fileClose, fileReset, filePrint, fileWrite, fileInput, fileLineInput, fileInputString, fileGet, filePut, fileSeek, fileLock, fileUnlock, fileWidth, fileRename,
-    vba, declare, module: module_, withEvents, listen, listenAny, listenEach, fireListeners, unlistenOwner, onAction, onActionEach, ensureInit, entries, run, serve, form, newForm,
+    vba, declare, module: module_, isAllocated, withEvents, raiseEvent, listen, listenAny, listenEach, fireListeners, unlistenOwner, onAction, onActionEach, ensureInit, entries, run, serve, form, newForm,
 };
 Object.defineProperty(module.exports, "msforms", { get: () => forms().msforms, enumerable: true });
 // The API of test files (spec §14.12), there only in the build of `ras test`.

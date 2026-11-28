@@ -147,6 +147,7 @@ module.exports = function createExcel(rt, addon, options) {
                 if (v instanceof RDate) return { $t: "date", v: v.oa };
                 if (v instanceof CVErr) return { $t: "error", v: v.code };
                 if (v instanceof Range) return toBook(v.Value);
+                if (v instanceof rt.VbArray) return v.toNested().map(toBook);
                 if (Array.isArray(v)) return v.map(toBook);
                 if (v.$t === "nothing") return null;
                 return rt.raise(13);
@@ -526,7 +527,8 @@ module.exports = function createExcel(rt, addon, options) {
         }
         $read(what) {
             const rows = this.$get(what);
-            return rows.length === 1 && rows[0].length === 1 ? rows[0][0] : rows;
+            // Several cells: a 1-based array of 2 dimensions in VBA (`v[1, 1]`; spec §4.6).
+            return rows.length === 1 && rows[0].length === 1 ? rows[0][0] : rt.based(rows, 1);
         }
         /** One value when every cell has the same, else null (`NumberFormat`, `Text`). */
         $common(what) {
@@ -2134,6 +2136,7 @@ module.exports = function createExcel(rt, addon, options) {
             if (v.$sheet.$wb === wb) return `${quoteSheet(v.$sheet.Name)}!${v.Address()}`;
             return literal(v.Value, wb);
         }
+        if (v instanceof rt.VbArray) return literal(v.toNested(), wb);
         if (Array.isArray(v)) {
             if (v.length === 0) rt.raise(13);
             const rows = Array.isArray(v[0]) ? v : [v];

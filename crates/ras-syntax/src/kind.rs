@@ -29,7 +29,8 @@ pub enum SyntaxKind {
     #[regex(r#""([^"\\\n]|\\[^\n])*""#)]
     #[regex(r#"'([^'\\\n]|\\[^\n])*'"#)]
     STRING_LIT,
-    #[regex(r"`([^`\\]|\\[\s\S])*`")]
+    // A template literal; the expressions in `${…}` may hold strings and templates of their own.
+    #[token("`", lex_template)]
     TEMPLATE_LIT,
 
     #[regex(r"[\p{XID_Start}_$][\p{XID_Continue}$]*")]
@@ -452,6 +453,64 @@ pub type SyntaxNode = rowan::SyntaxNode<RasLanguage>;
 pub type SyntaxToken = rowan::SyntaxToken<RasLanguage>;
 pub type SyntaxElement = rowan::SyntaxElement<RasLanguage>;
 
+/// The rest of a template literal after its opening back-tick.
+fn lex_template(lex: &mut logos::Lexer<SyntaxKind>) -> bool {
+    match template_end(lex.remainder().as_bytes(), 0) {
+        Some(end) => {
+            lex.bump(end);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Where the template literal whose body starts at `from` ends: the offset after its closing
+/// back-tick. `None` when it is not closed.
+fn template_end(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut i = from;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'`' => return Some(i + 1),
+            b'$' if bytes.get(i + 1) == Some(&b'{') => i = template_expr_end(bytes, i + 2)?,
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Where the expression of a `${…}` that starts at `from` (after the `${`) ends: the offset
+/// after its closing `}`. Braces inside the strings and templates of the expression do not count.
+pub(crate) fn template_expr_end(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut i = from;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            quote @ (b'"' | b'\'') => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote && bytes[i] != b'\n' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            b'`' => i = template_end(bytes, i + 1)?,
+            _ => i += 1,
+        }
+    }
+    None
+}
+
 /// One lexed token: its kind and the byte range in the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Token {
@@ -496,6 +555,16 @@ mod tests {
             .map(|t| t.kind)
             .filter(|k| !k.is_trivia())
             .collect()
+    }
+
+    #[test]
+    fn nested_templates() {
+        // A template inside `${…}`, and braces and back-ticks inside its strings.
+        assert_eq!(
+            kinds("`a${f(`b${c}`, \"}`\")}d` + `e\\`` x"),
+            vec![TEMPLATE_LIT, PLUS, TEMPLATE_LIT, IDENT]
+        );
+        assert_eq!(kinds("`a${b"), vec![ERROR_TOKEN, IDENT, L_BRACE, IDENT]);
     }
 
     #[test]

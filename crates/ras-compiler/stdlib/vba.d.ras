@@ -150,6 +150,112 @@ declare namespace VBA {
     }
 
     /**
+     * キーボードのキーを表すコード（`KeyDown` / `KeyUp` イベントの `KeyCode`）。
+     * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/keycode-constants
+     */
+    enum KeyCodeConstants {
+        vbKeyLButton = 1,
+        vbKeyRButton = 2,
+        vbKeyCancel = 3,
+        vbKeyMButton = 4,
+        vbKeyBack = 8,
+        vbKeyTab = 9,
+        vbKeyClear = 12,
+        vbKeyReturn = 13,
+        vbKeyShift = 16,
+        vbKeyControl = 17,
+        vbKeyMenu = 18,
+        vbKeyPause = 19,
+        vbKeyCapital = 20,
+        vbKeyEscape = 27,
+        vbKeySpace = 32,
+        vbKeyPageUp = 33,
+        vbKeyPageDown = 34,
+        vbKeyEnd = 35,
+        vbKeyHome = 36,
+        vbKeyLeft = 37,
+        vbKeyUp = 38,
+        vbKeyRight = 39,
+        vbKeyDown = 40,
+        vbKeySelect = 41,
+        vbKeyPrint = 42,
+        vbKeyExecute = 43,
+        vbKeySnapshot = 44,
+        vbKeyInsert = 45,
+        vbKeyDelete = 46,
+        vbKeyHelp = 47,
+        vbKeyNumlock = 144,
+        vbKey0 = 48,
+        vbKey1 = 49,
+        vbKey2 = 50,
+        vbKey3 = 51,
+        vbKey4 = 52,
+        vbKey5 = 53,
+        vbKey6 = 54,
+        vbKey7 = 55,
+        vbKey8 = 56,
+        vbKey9 = 57,
+        vbKeyA = 65,
+        vbKeyB = 66,
+        vbKeyC = 67,
+        vbKeyD = 68,
+        vbKeyE = 69,
+        vbKeyF = 70,
+        vbKeyG = 71,
+        vbKeyH = 72,
+        vbKeyI = 73,
+        vbKeyJ = 74,
+        vbKeyK = 75,
+        vbKeyL = 76,
+        vbKeyM = 77,
+        vbKeyN = 78,
+        vbKeyO = 79,
+        vbKeyP = 80,
+        vbKeyQ = 81,
+        vbKeyR = 82,
+        vbKeyS = 83,
+        vbKeyT = 84,
+        vbKeyU = 85,
+        vbKeyV = 86,
+        vbKeyW = 87,
+        vbKeyX = 88,
+        vbKeyY = 89,
+        vbKeyZ = 90,
+        vbKeyNumpad0 = 96,
+        vbKeyNumpad1 = 97,
+        vbKeyNumpad2 = 98,
+        vbKeyNumpad3 = 99,
+        vbKeyNumpad4 = 100,
+        vbKeyNumpad5 = 101,
+        vbKeyNumpad6 = 102,
+        vbKeyNumpad7 = 103,
+        vbKeyNumpad8 = 104,
+        vbKeyNumpad9 = 105,
+        vbKeyMultiply = 106,
+        vbKeyAdd = 107,
+        vbKeySeparator = 108,
+        vbKeySubtract = 109,
+        vbKeyDecimal = 110,
+        vbKeyDivide = 111,
+        vbKeyF1 = 112,
+        vbKeyF2 = 113,
+        vbKeyF3 = 114,
+        vbKeyF4 = 115,
+        vbKeyF5 = 116,
+        vbKeyF6 = 117,
+        vbKeyF7 = 118,
+        vbKeyF8 = 119,
+        vbKeyF9 = 120,
+        vbKeyF10 = 121,
+        vbKeyF11 = 122,
+        vbKeyF12 = 123,
+        vbKeyF13 = 124,
+        vbKeyF14 = 125,
+        vbKeyF15 = 126,
+        vbKeyF16 = 127
+    }
+
+    /**
      * MsgBox で押されたボタンを表す。
      * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/msgbox-constants
      */
@@ -463,6 +569,17 @@ declare const vbVerticalTab: string;
  */
 declare const vbObjectError: int;
 
+/**
+ * VBA の `Null`（有効なデータがないことを表す値）。データベースのフィールドやコントロールの値に
+ * `Null` を入れるとき・`Null` を返すときに使う。`isNull(v)` で確かめる。
+ *
+ * RAS の `null` は、`any` に入れると `Empty`、オブジェクトでは `Nothing` になる（`Null` ではない）。
+ * `v == null` と `v ?? x` は、`Empty`・`Nothing`・`Null` のどれも「値なし」として扱う。
+ * @emitAs Null
+ * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/null-keyword
+ */
+declare const dbNull: any;
+
 // ---------------------------------------------------------------------
 // 対話 / 実行環境
 // ---------------------------------------------------------------------
@@ -649,7 +766,7 @@ declare function VarType(varName: cellValue): VBA.VbVarType;
  * 引数を要素とする Variant 配列を作る。
  * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/array-function
  */
-declare function Array(arg1?: any, arg2?: any, arg3?: any, arg4?: any, arg5?: any, arg6?: any, arg7?: any, arg8?: any, arg9?: any, arg10?: any): any;
+declare function Array(...args: any[]): any;
 
 /**
  * 配列の指定した次元の最小の添字を返す。

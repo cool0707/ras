@@ -32,6 +32,7 @@ const MEMBER_MODIFIERS: &[&str] = &[
     "static",
     "readonly",
     "abstract",
+    "event",
     "override",
 ];
 
@@ -363,6 +364,14 @@ impl<'a> Parser<'a> {
                 let word = self.nth_text(k);
                 if word == "abstract" && self.nth(k + 1) == CLASS_KW {
                     self.class_decl();
+                } else if matches!(word, "get" | "set")
+                    && !declared
+                    && self.nth_is_name(k + 1)
+                    && self.nth(k + 2) == L_PAREN
+                    && !self.newline_before(k + 1)
+                {
+                    // `get name(): T { ... }` / `set name(v: T) { ... }`: a property of the module.
+                    self.accessor_decl();
                 } else if word == "type"
                     && self.nth(k + 1) == IDENT
                     && matches!(self.nth(k + 2), EQ | LT)
@@ -536,6 +545,21 @@ impl<'a> Parser<'a> {
         } else {
             self.semi();
         }
+        self.finish();
+    }
+
+    /// A module-level accessor (`export get total(): int { ... }`).
+    fn accessor_decl(&mut self) {
+        self.start(ACCESSOR_DECL);
+        self.decorators();
+        self.eat(EXPORT_KW);
+        self.bump(); // get / set
+        self.name();
+        self.param_list();
+        if self.eat(COLON) {
+            self.ty();
+        }
+        self.block_or_semi();
         self.finish();
     }
 
@@ -1631,6 +1655,11 @@ impl<'a> Parser<'a> {
                     self.start_at(cp, INDEX_EXPR);
                     self.bump();
                     self.range_or_expr();
+                    // `v[i, j]`: the subscripts of a VBA array of several dimensions (spec §4.6).
+                    while self.at(COMMA) {
+                        self.bump();
+                        self.expr();
+                    }
                     self.expect(R_BRACK, "`]`");
                     self.finish();
                 }

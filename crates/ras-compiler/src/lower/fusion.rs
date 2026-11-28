@@ -1195,6 +1195,7 @@ impl<'p> Lowerer<'p> {
                 ty: "Variant".into(),
                 is_array: false,
                 optional_default: None,
+                param_array: false,
             });
         }
         self.pc.frames.push(frame);

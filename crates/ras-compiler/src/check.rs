@@ -51,6 +51,9 @@ struct FnCtx {
     row_views: HashMap<ExprId, Span>,
     /// `Main` / module initializer: top-level `let` are module variables.
     is_toplevel: bool,
+    /// The target of the assignment being checked (peeled) and whether it is read too
+    /// (`+=`, `++`): a property with parameters is assigned to through its setter.
+    write_target: Option<(ExprId, bool)>,
     captures: Vec<(LocalId, Span)>,
     /// Inside the arguments of `ws.Range(...)`: unqualified `Cells` / `Range` are auto-qualified.
     qualify_depth: usize,
@@ -90,6 +93,8 @@ pub(crate) struct Checker<'a> {
     module: ModuleId,
     fx: FnCtx,
     in_progress: HashSet<FnId>,
+    /// Type of the condition checked last (`Self::cond`).
+    cond_type: Type,
 }
 
 /// How a name or member can be used.
@@ -120,10 +125,28 @@ pub fn check(prog: &mut Program) {
         module: 0,
         fx: FnCtx::default(),
         in_progress: HashSet::new(),
+        cond_type: Type::Error,
     };
     for f in 0..ck.prog.fns.len() {
         if matches!(ck.prog.fns[f].kind, FnKind::Main | FnKind::ModInit) {
             ck.ensure_fn(f);
+        }
+    }
+    // A form's `export let` is a field of the form's type (spec §14.11.2): with its type, now
+    // that the initializers are checked.
+    for c in 0..ck.prog.classes.len() {
+        let Some(m) = ck.prog.form_module_of(c) else {
+            continue;
+        };
+        for i in 0..ck.prog.classes[c].fields.len() {
+            if ck.prog.classes[c].fields[i].ty != Type::Void {
+                continue;
+            }
+            let name = &ck.prog.classes[c].fields[i].name;
+            let vars = &ck.prog.modules[m].vars;
+            if let Some(&v) = vars.iter().find(|&&v| ck.prog.vars[v].name == *name) {
+                ck.prog.classes[c].fields[i].ty = ck.prog.vars[v].ty.clone();
+            }
         }
     }
     for c in 0..ck.prog.classes.len() {
@@ -136,6 +159,7 @@ pub fn check(prog: &mut Program) {
         ck.check_implements(c);
         ck.check_struct_members(c);
     }
+    ck.check_accessor_pairs();
     ck.lints();
 }
 
@@ -195,12 +219,176 @@ impl Checker<'_> {
         self.diag(Severity::Warning, span, code, message);
     }
 
+    /// Records how the error `code` at `span` is corrected in code converted from VBA, so that
+    /// it does what the VBA did (`Program::repairs`).
+    fn repair(&mut self, span: Span, code: &'static str, replacement: impl Into<String>) {
+        self.prog.repairs.push(crate::diag::Fix {
+            module: self.module,
+            span,
+            replacement: replacement.into(),
+            code,
+        });
+    }
+
+    /// The source text of `span`.
+    fn source(&self, span: Span) -> String {
+        let text = &self.prog.modules[self.module].text;
+        text.get(u32::from(span.start()) as usize..u32::from(span.end()) as usize)
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// The source of `e`, in parentheses unless a member, a cast or an operator can follow it as it is.
+    fn source_operand(&self, e: &Expr) -> String {
+        let text = self.source(e.span);
+        match e.kind {
+            ExprKind::Name(_)
+            | ExprKind::This
+            | ExprKind::Paren(_)
+            | ExprKind::Call { .. }
+            | ExprKind::Member { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::Str(_)
+            | ExprKind::Template(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Int { .. }
+            | ExprKind::Float { .. } => text,
+            _ => format!("({text})"),
+        }
+    }
+
+    /// The member VBA reads when an object of type `t` is used as a value (`Range` → `value`).
+    fn default_value_member(&self, t: &Type) -> Option<&'static str> {
+        match t {
+            Type::Class(c, _)
+                if self.prog.classes[*c].kind == ClassKind::Host
+                    && self.prog.classes[*c].name == "Range" =>
+            {
+                Some("value")
+            }
+            _ => None,
+        }
+    }
+
+    /// Repairs `e` of type `from` used where `to` is wanted, as VBA's implicit conversions do:
+    /// the default member of a `Range`, `CLng` and the like between numbers, strings, dates and
+    /// booleans.
+    fn repair_conversion(&mut self, e: &Expr, from: &Type, to: &Type) {
+        // (Not twice: a cast that does not help stays an error.)
+        if matches!(e.peel().kind, ExprKind::As { .. }) {
+            return;
+        }
+        if let Some(member) = self.default_value_member(from) {
+            if !to.is_object() {
+                self.repair(
+                    e.span,
+                    "E0301",
+                    format!("{}.{member}", self.source_operand(e)),
+                );
+            }
+            return;
+        }
+        let scalar = |t: &Type| {
+            t.is_numeric() || matches!(t, Type::Str | Type::Bool | Type::Date | Type::Enum(_))
+        };
+        if !scalar(from) || !scalar(to) {
+            return;
+        }
+        // `true` stored in a number is -1.
+        if let (ExprKind::Bool(b), true) = (&e.peel().kind, to.is_numeric()) {
+            self.repair(e.span, "E0301", if *b { "-1" } else { "0" });
+            return;
+        }
+        // A Boolean stored in a number: True is -1 in VBA (`as int` gives 1).
+        if *from == Type::Bool && (to.is_numeric() || matches!(to, Type::Enum(_))) {
+            if matches!(e.peel().kind, ExprKind::Ternary { .. }) {
+                return;
+            }
+            let fixed = format!("({} ? -1 : 0)", self.source_operand(e));
+            self.repair(e.span, "E0301", fixed);
+            return;
+        }
+        // A number stored in a Boolean: true unless 0.
+        if *to == Type::Bool && (from.is_numeric() || matches!(from, Type::Enum(_))) {
+            self.repair(e.span, "E0301", format!("{} != 0", self.source_operand(e)));
+            return;
+        }
+        // To and from a string: the conversion functions of VBA.
+        let function = match (from, to) {
+            (_, Type::Str) => Some("cStr"),
+            (Type::Str, Type::Int | Type::Enum(_)) => Some("cLng"),
+            (Type::Str, Type::Short) => Some("cInt"),
+            (Type::Str, Type::Byte) => Some("cByte"),
+            (Type::Str, Type::Double) => Some("cDbl"),
+            (Type::Str, Type::Float) => Some("cSng"),
+            (Type::Str, Type::Currency) => Some("cCur"),
+            (Type::Str, Type::Date) => Some("cDate"),
+            (Type::Str, Type::Bool) => Some("cBool"),
+            // (A number is the days since 1899-12-30.)
+            (n, Type::Date) if n.is_numeric() => Some("cDate"),
+            _ => None,
+        };
+        if let Some(function) = function {
+            if matches!(&e.peel().kind, ExprKind::Call { callee, .. }
+                if matches!(&callee.kind, ExprKind::Name(n) if n.text == function))
+            {
+                return;
+            }
+            self.repair(
+                e.span,
+                "E0301",
+                format!("{function}({})", self.source(e.span)),
+            );
+            return;
+        }
+        let target = self.show(to);
+        self.repair(
+            e.span,
+            "E0301",
+            format!("{} as {target}", self.source_operand(e)),
+        );
+    }
+
     fn show(&self, t: &Type) -> String {
         self.prog.show(t)
     }
 
     fn info(&mut self) -> &mut TypeInfo {
         &mut self.prog.modules[self.module].info
+    }
+
+    /// The value of a constant expression: literals, and whole-number arithmetic and string
+    /// concatenation with the constants declared before (`const first = header + 1`).
+    fn const_fold(&self, e: &Expr) -> Option<ConstVal> {
+        if let Some(v) = const_value(e) {
+            return Some(v);
+        }
+        match &e.peel().kind {
+            ExprKind::Name(_) => match self.prog.modules[self.module].info.res.get(&e.peel().id) {
+                Some(Res::Global(v)) if self.prog.vars[*v].is_const => {
+                    self.prog.vars[*v].const_value.clone()
+                }
+                _ => None,
+            },
+            ExprKind::Binary { op, lhs, rhs } => {
+                match (self.const_fold(lhs)?, self.const_fold(rhs)?) {
+                    (ConstVal::Int(a), ConstVal::Int(b)) => {
+                        let v = match op {
+                            BinaryOp::Add => a.checked_add(b)?,
+                            BinaryOp::Sub => a.checked_sub(b)?,
+                            BinaryOp::Mul => a.checked_mul(b)?,
+                            _ => return None,
+                        };
+                        i32::try_from(v).ok().map(|_| ConstVal::Int(v))
+                    }
+                    (ConstVal::Str(a), ConstVal::Str(b)) if *op == BinaryOp::Add => {
+                        Some(ConstVal::Str(a + &b))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     fn set_res(&mut self, id: ExprId, res: Res) {
@@ -430,6 +618,7 @@ impl Checker<'_> {
         } else {
             String::new()
         };
+        self.repair_conversion(e, from, to);
         self.err(
             e.span,
             "E0301",
@@ -732,6 +921,53 @@ impl Checker<'_> {
             }
         }
         self.prog.vars[v].ty.clone()
+    }
+
+    /// The getter and the setter of a property agree (spec §3.6): the same parameters before
+    /// the setter's value, whose type is the getter's. VBA rejects `Property Get` / `Let`
+    /// procedures that differ.
+    fn check_accessor_pairs(&mut self) {
+        for f in 0..self.prog.fns.len() {
+            if !self.prog.fns[f].is_getter() {
+                continue;
+            }
+            let (_, Some(s)) = self.prog.accessor_pair(f) else {
+                continue;
+            };
+            let get = self.prog.fns[f].clone();
+            let set = self.prog.fns[s].clone();
+            if self.prog.modules[set.module].kind == ModuleKind::TypeDef {
+                continue;
+            }
+            self.module = set.module;
+            let lead = set.index_params();
+            let omittable = |p: &ParamDef| p.optional || p.default.is_some();
+            let same = lead.len() == get.params.len()
+                && lead.iter().zip(&get.params).all(|(a, b)| {
+                    (a.ty == b.ty || a.ty.is_error() || b.ty.is_error())
+                        && omittable(a) == omittable(b)
+                });
+            if !same {
+                self.err(set.name_span, "E0155", format!("`{}` の getter と setter で、引数の数・型・省略できるかどうかが一致していません（setter の引数は、getter の引数の後ろに、代入された値を受け取る引数を 1 つ足したものです）", set.name));
+                continue;
+            }
+            let Some(value) = set.params.last() else {
+                continue;
+            };
+            let ret = get.ret_ty();
+            if value.ty != ret && !value.ty.is_error() && !ret.is_error() {
+                self.err(
+                    value.span,
+                    "E0155",
+                    format!(
+                        "`{}` の getter の型（`{}`）と setter の値の型（`{}`）が一致していません",
+                        set.name,
+                        self.show(&ret),
+                        self.show(&value.ty)
+                    ),
+                );
+            }
+        }
     }
 
     fn check_class_fields(&mut self, c: ClassId) {
@@ -1226,8 +1462,19 @@ impl Checker<'_> {
 
     fn cond(&mut self, e: &Expr) {
         let t = self.value(e, Some(&Type::Bool));
+        self.cond_type = t.clone();
         self.warn_cell_value(e, &t, "条件に使う");
         if !matches!(t, Type::Bool | Type::Any | Type::CellValue | Type::Error) {
+            // VBA: a number is true unless it is 0; a Range stands for its value.
+            if self.is_numeric(&t) || matches!(t, Type::Enum(_)) {
+                self.repair(e.span, "E0303", format!("{} != 0", self.source_operand(e)));
+            } else if let Some(member) = self.default_value_member(&t) {
+                self.repair(
+                    e.span,
+                    "E0303",
+                    format!("{}.{member}", self.source_operand(e)),
+                );
+            }
             self.err(e.span, "E0303", format!("条件式は `boolean` である必要があります（`{}` です）。比較演算子で明示してください", self.show(&t)));
         }
     }
@@ -1751,7 +1998,7 @@ impl Checker<'_> {
                 }
                 if let Some(init) = &v.init {
                     self.prog.vars[id].const_value = if v.kind == ast::VarKind::Const {
-                        const_value(init)
+                        self.const_fold(init)
                     } else {
                         None
                     };
@@ -1854,6 +2101,17 @@ impl Checker<'_> {
                 self.value(x, None);
                 Type::Error
             }
+            ExprKind::Subscripts(subs) => {
+                self.err(
+                    e.span,
+                    "E0417",
+                    "複数の添字（`v[i, j]`）は、`any` の値の添字にだけ書けます",
+                );
+                for x in subs {
+                    self.value(x, None);
+                }
+                Type::Error
+            }
             ExprKind::Range { start, end } => {
                 self.err(
                     e.span,
@@ -1899,6 +2157,10 @@ impl Checker<'_> {
                     if let ast::TemplatePart::Expr(x) = p {
                         let t = self.value(x, None);
                         if !self.stringifiable(&t) {
+                            if let Some(member) = self.default_value_member(&t) {
+                                let fixed = format!("{}.{member}", self.source_operand(x));
+                                self.repair(x.span, "E0381", fixed);
+                            }
                             self.err(
                                 x.span,
                                 "E0381",
@@ -1912,7 +2174,21 @@ impl Checker<'_> {
             ExprKind::Bool(_) => Type::Bool,
             ExprKind::Null | ExprKind::Undefined => Type::Null,
             ExprKind::Name(id) => match self.name_access(e, id) {
-                Access::Value(t) => t,
+                Access::Value(t) => {
+                    self.check_readable(e, &id.text);
+                    t
+                }
+                Access::Func { f, .. } if self.prog.fns[f].accessor_kind().is_some() => {
+                    self.err(
+                        e.span,
+                        "E0382",
+                        format!(
+                            "プロパティ `{}` には引数が必要です（`{}(...)` と書きます）",
+                            id.text, id.text
+                        ),
+                    );
+                    Type::Error
+                }
                 Access::Func { f, .. } => {
                     let def = &self.prog.fns[f];
                     if matches!(def.kind, FnKind::Host { .. })
@@ -2052,6 +2328,13 @@ impl Checker<'_> {
                 match op {
                     UnaryOp::Not => {
                         if !matches!(t, Type::Bool | Type::Any | Type::CellValue | Type::Error) {
+                            // VBA's `Not` of a number is bitwise.
+                            if t.is_integer() || matches!(t, Type::Enum(_)) {
+                                let not = Span::new(e.span.start(), operand.span.start());
+                                if self.source(not).trim() == "!" {
+                                    self.repair(not, "E0303", "~");
+                                }
+                            }
                             self.err(
                                 operand.span,
                                 "E0303",
@@ -2111,7 +2394,7 @@ impl Checker<'_> {
                 }
             }
             ExprKind::IncDec { operand, .. } => {
-                let t = self.lvalue(operand);
+                let t = self.lvalue(operand, true);
                 self.warn_cell_value(operand, &t, "演算に使う");
                 if !self.is_numeric(&t) {
                     self.err(
@@ -2128,11 +2411,21 @@ impl Checker<'_> {
             }
             ExprKind::Binary { op, lhs, rhs } => self.binary(e, *op, lhs, rhs),
             ExprKind::Assign { op, target, value } => {
-                let tt = self.lvalue(target);
+                let tt = self.lvalue(target, op.is_some());
                 match op {
                     None => {
                         let vt = self.value(value, Some(&tt));
-                        self.coerce(value, &vt, &tt);
+                        // `ws.cells(1, 2) = v` sets the default member (`.Value`): VBA would
+                        // need `Set` for an object, and the property cannot be `Set`.
+                        let info = &self.prog.modules[self.module].info;
+                        if vt.is_object()
+                            && vt != Type::Null
+                            && self.prog.default_member_target(info, target).is_some()
+                        {
+                            self.err(value.span, "E0325", format!("ここにオブジェクト（`{}`）は代入できません（セル範囲を返すプロパティへの代入は、その `value` への代入になります。値を代入してください）", self.show(&vt)));
+                        } else {
+                            self.coerce(value, &vt, &tt);
+                        }
                     }
                     Some(op) => {
                         let vt = self.value(value, None);
@@ -2194,7 +2487,21 @@ impl Checker<'_> {
                 }
                 let ot = self.expr(object, None);
                 match self.member_access(e, object, &ot, name) {
-                    Access::Value(t) => t,
+                    Access::Value(t) => {
+                        self.check_readable(e, &name.text);
+                        t
+                    }
+                    Access::Func { f, .. } if self.prog.fns[f].accessor_kind().is_some() => {
+                        self.err(
+                            name.span,
+                            "E0382",
+                            format!(
+                                "プロパティ `{}` には引数が必要です（`{}(...)` と書きます）",
+                                name.text, name.text
+                            ),
+                        );
+                        Type::Error
+                    }
                     Access::Func { f, env, recv } => {
                         let def = &self.prog.fns[f];
                         let host = matches!(def.kind, FnKind::Host { .. });
@@ -2245,6 +2552,9 @@ impl Checker<'_> {
                 let ot = self.value(object, None);
                 if matches!(index.kind, ExprKind::Range { .. } | ExprKind::FromEnd(_)) {
                     return self.range_index(e, object, &ot, index);
+                }
+                if let ExprKind::Subscripts(subs) = &index.kind {
+                    return self.subscripts_index(e, &ot, index, subs);
                 }
                 match &ot {
                     Type::Array(el) => {
@@ -2576,6 +2886,11 @@ impl Checker<'_> {
                 self.set_res(e.id, Res::Global(v));
                 Access::Value(ty)
             }
+            // A property of a module (`get total()` / `set total(v)`, spec §3.6).
+            Some(Sym::Fn(f)) if self.prog.fns[f].accessor.is_some() => {
+                let (get, set) = self.accessors(f);
+                self.property_access(e, get, set, HashMap::new(), Recv::None, e.span)
+            }
             Some(Sym::Fn(f)) => {
                 self.set_res(e.id, Res::Fn(f));
                 if matches!(self.prog.fns[f].kind, FnKind::Host { .. }) {
@@ -2665,6 +2980,78 @@ impl Checker<'_> {
                 }
                 Access::Error
             }
+        }
+    }
+
+    /// The accessors of the property `f` belongs to that this module can use: those of a class
+    /// (their visibility is checked by the caller), those of its own module and the exported
+    /// ones of another module.
+    fn accessors(&self, f: FnId) -> (Option<FnId>, Option<FnId>) {
+        let (get, set) = self.prog.accessor_pair(f);
+        let visible = |g: &FnId| {
+            let d = &self.prog.fns[*g];
+            d.accessor.is_none() || d.module == self.module || d.exported
+        };
+        (get.filter(visible), set.filter(visible))
+    }
+
+    /// A property made of a getter and / or a setter (spec §3.6). Without parameters it is a
+    /// value; with parameters it is called (`item("k")`) and assigned to as a call
+    /// (`item("k") = v`): `call` picks the accessor.
+    fn property_access(
+        &mut self,
+        e: &Expr,
+        get: Option<FnId>,
+        set: Option<FnId>,
+        env: HashMap<String, Type>,
+        recv: Recv,
+        span: Span,
+    ) -> Access {
+        self.set_res(e.id, Res::Property { get, set });
+        let Some(first) = get.or(set) else {
+            return Access::Error;
+        };
+        let indexed = get.is_some_and(|g| !self.prog.fns[g].params.is_empty())
+            || set.is_some_and(|s| self.prog.fns[s].params.len() > 1);
+        if indexed {
+            return Access::Func {
+                f: first,
+                env,
+                recv,
+            };
+        }
+        for f in [get, set].into_iter().flatten() {
+            if !self.fx.calls.contains(&f) {
+                self.fx.calls.push(f);
+            }
+        }
+        let ty = match (get, set) {
+            (Some(g), _) => self.fn_ret(g, span).subst(&env),
+            (None, Some(s)) => self.prog.fns[s]
+                .params
+                .last()
+                .map(|p| p.ty.subst(&env))
+                .unwrap_or(Type::Error),
+            _ => Type::Error,
+        };
+        Access::Value(ty)
+    }
+
+    /// Reading a property that only has a setter (`E0326`). Not for the target of `x = v`.
+    fn check_readable(&mut self, e: &Expr, name: &str) {
+        if matches!(self.fx.write_target, Some((id, _)) if id == e.id) {
+            return;
+        }
+        if let Some(Res::Property {
+            get: None,
+            set: Some(_),
+        }) = self.info().res.get(&e.id)
+        {
+            self.err(
+                e.span,
+                "E0326",
+                format!("`{name}` には getter がないため、値を読み取れません"),
+            );
         }
     }
 
@@ -2768,7 +3155,22 @@ impl Checker<'_> {
                 }
                 self.set_res(e.id, Res::Field(owner, idx));
                 let ty = if field.ty == Type::Void {
-                    Type::Error
+                    // A form's `export let` without a type annotation (spec §14.11.2): the type
+                    // of the variable, inferred from its initializer.
+                    let var = self.prog.form_module_of(owner).and_then(|m| {
+                        let vars = &self.prog.modules[m].vars;
+                        vars.iter()
+                            .copied()
+                            .find(|&v| self.prog.vars[v].name == field.name)
+                    });
+                    match var {
+                        Some(v) => {
+                            let ty = self.var_type(v, name.span);
+                            self.prog.classes[owner].fields[idx].ty = ty.clone();
+                            ty
+                        }
+                        None => Type::Error,
+                    }
                 } else {
                     field.ty.subst(&env)
                 };
@@ -2784,7 +3186,15 @@ impl Checker<'_> {
                 FnKind::Method { is_static, .. } => (is_static, 0),
                 FnKind::Getter { is_static, .. } => (is_static, 1),
                 FnKind::Setter { is_static, .. } => (is_static, 2),
-                _ => (false, 0),
+                // An exported function or accessor of a form's (a sheet's) file.
+                _ => (
+                    false,
+                    match def.accessor {
+                        Some(ast::AccessorKind::Get) => 1,
+                        Some(ast::AccessorKind::Set) => 2,
+                        None => 0,
+                    },
+                ),
             };
             if is_static != static_access {
                 continue;
@@ -2814,23 +3224,12 @@ impl Checker<'_> {
             }
         }
         if getter.is_some() || setter.is_some() {
-            self.set_res(
-                e.id,
-                Res::Property {
-                    get: getter,
-                    set: setter,
-                },
-            );
-            let ty = match (getter, setter) {
-                (Some(g), _) => self.fn_ret(g, name.span).subst(&env),
-                (None, Some(s)) => self.prog.fns[s]
-                    .params
-                    .first()
-                    .map(|p| p.ty.subst(&env))
-                    .unwrap_or(Type::Error),
-                _ => Type::Error,
+            let recv = if static_access {
+                Recv::None
+            } else {
+                Recv::Instance
             };
-            return Some(Access::Value(ty));
+            return Some(self.property_access(e, getter, setter, env, recv, name.span));
         }
         None
     }
@@ -2904,6 +3303,10 @@ impl Checker<'_> {
             Type::Error => Access::Error,
             Type::Ns(NsRef::Module(m)) => {
                 match self.prog.modules[*m].exports.get(&name.text).cloned() {
+                    Some(Sym::Fn(f)) if self.prog.fns[f].accessor.is_some() => {
+                        let (get, set) = self.accessors(f);
+                        self.property_access(e, get, set, HashMap::new(), Recv::None, name.span)
+                    }
                     Some(Sym::Fn(f)) => {
                         self.set_res(e.id, Res::Fn(f));
                         Access::Func {
@@ -3262,6 +3665,8 @@ impl Checker<'_> {
                 }
                 | FnKind::Getter { .. }
                 | FnKind::Setter { .. } => {}
+                _ if def.accessor == Some(ast::AccessorKind::Get) => getter = Some(m),
+                _ if def.accessor == Some(ast::AccessorKind::Set) => setter = Some(m),
                 _ => {
                     return Some(UnionMember::Method {
                         f: m,
@@ -3278,11 +3683,19 @@ impl Checker<'_> {
             (Some(g), _) => self.fn_ret(g, Span::default()).subst(&env),
             (None, Some(st)) => self.prog.fns[st]
                 .params
-                .first()
+                .last()
                 .map(|p| p.ty.subst(&env))
                 .unwrap_or(Type::Error),
             _ => Type::Error,
         };
+        // A property with parameters is not a value: not reachable through a union.
+        if [getter, setter]
+            .into_iter()
+            .flatten()
+            .any(|g| !self.prog.fns[g].index_params().is_empty())
+        {
+            return None;
+        }
         Some(UnionMember::Value {
             res: Res::Property {
                 get: getter,
@@ -3575,9 +3988,21 @@ impl Checker<'_> {
     }
 
     /// Checks an assignment target and returns its type.
-    fn lvalue(&mut self, target: &Expr) -> Type {
-        let t = self.expr(target, None);
+    /// `reads`: the target is read too (`+=`, `++`).
+    fn lvalue(&mut self, target: &Expr, reads: bool) -> Type {
         let inner = target.peel();
+        let saved = self.fx.write_target.replace((inner.id, reads));
+        let t = self.expr(target, None);
+        self.fx.write_target = saved;
+        if reads {
+            if let Some(Res::Property {
+                get: None,
+                set: Some(_),
+            }) = self.info().res.get(&inner.id)
+            {
+                self.err(target.span, "E0326", "このプロパティには getter がないため、`+=` や `++` は使えません（値を読み取れません）");
+            }
+        }
         match &inner.kind {
             ExprKind::Name(id) => {
                 let res = self.info().res.get(&inner.id).cloned();
@@ -3625,6 +4050,13 @@ impl Checker<'_> {
                         }
                         self.prog.vars[v].reassigned = true;
                     }
+                    // A property of the module (spec §3.6).
+                    Some(Res::Property { set: None, .. }) => self.err(
+                        target.span,
+                        "E0323",
+                        format!("`{}` には setter がありません", id.text),
+                    ),
+                    Some(Res::Property { .. }) => {}
                     Some(_) if !t.is_error() => {
                         self.err(target.span, "E0325", "ここには代入できません")
                     }
@@ -3690,10 +4122,56 @@ impl Checker<'_> {
                         format!("`{}` には setter がありません", name.text),
                     ),
                     Some(Res::Property { .. } | Res::Dynamic | Res::Global(_)) => {}
+                    // A host property whose parameters are all omitted (`listBox.list = rows`).
+                    Some(Res::Method(f))
+                        if self.prog.fns[f].is_host_property()
+                            && self.prog.fns[f].required_params() == 0 =>
+                    {
+                        return self.host_property_value(target, &t);
+                    }
                     Some(_) if !t.is_error() => {
                         self.err(target.span, "E0325", "ここには代入できません")
                     }
                     _ => {}
+                }
+            }
+            // `obj.item(key) = v`: a property with parameters (spec §3.6.2, §3.6.3).
+            ExprKind::Call { .. } => {
+                let call = self.info().calls.get(&inner.id).map(|c| c.target.clone());
+                match call {
+                    // Checked against the setter by `property_call`.
+                    Some(CallTarget::Fn(f) | CallTarget::Method(f))
+                        if self.prog.fns[f].accessor_kind().is_some() => {}
+                    // A late-bound member: VBA finds the property at run time.
+                    Some(CallTarget::Dynamic) => {}
+                    Some(CallTarget::Host(f) | CallTarget::DefaultMember(f))
+                        if self.prog.fns[f].is_host_property() =>
+                    {
+                        return self.host_property_value(target, &t);
+                    }
+                    Some(CallTarget::Intrinsic(Intr::SheetRange)) => {
+                        return self.host_property_value(target, &t);
+                    }
+                    Some(CallTarget::Host(f) | CallTarget::DefaultMember(f)) if !t.is_error() => {
+                        let name = self.prog.fns[f].name.clone();
+                        let shown = if name.is_empty() {
+                            "既定メンバー".to_string()
+                        } else {
+                            format!("`{name}`")
+                        };
+                        self.err(target.span, "E0325", format!("ここには代入できません（{shown} は、型定義で引数のあるプロパティ（`@property`）とされていません。メソッドの結果には代入できません）"));
+                    }
+                    _ => {
+                        if !t.is_error() {
+                            // `RangeOf(…) = v` in VBA: the default member of the Range the
+                            // function returns.
+                            if let Some(member) = self.default_value_member(&t) {
+                                let fixed = format!("{}.{member}", self.source(target.span));
+                                self.repair(target.span, "E0325", fixed);
+                            }
+                            self.err(target.span, "E0325", "ここには代入できません");
+                        }
+                    }
                 }
             }
             ExprKind::Index { object, index } => {
@@ -3738,13 +4216,31 @@ impl Checker<'_> {
         t
     }
 
+    /// The type of the value assigned through a host property with parameters (spec §3.6.3):
+    /// that of the property; for one that returns a cell range, that of the range's `value`
+    /// (VBA assigns to the default member). Another object cannot be assigned to.
+    fn host_property_value(&mut self, target: &Expr, t: &Type) -> Type {
+        if let Some(v) = self.prog.default_value_type(t) {
+            return v;
+        }
+        if t.is_object() && !t.is_error() {
+            self.err(target.span, "E0325", format!("ここには代入できません（`{}` を返すプロパティです。代入するメンバーを書いてください）", self.show(t)));
+            return Type::Error;
+        }
+        t.clone()
+    }
+
     fn binary(&mut self, e: &Expr, op: BinaryOp, lhs: &Expr, rhs: &Expr) -> Type {
         match op {
             BinaryOp::And | BinaryOp::Or => {
+                let mark = self.prog.repairs.len();
                 self.cond(lhs);
+                let lt = self.cond_type.clone();
                 let (t, f) = self.guard_facts(lhs, &Vec::new());
                 let facts = if op == BinaryOp::And { t } else { f };
                 self.with_facts(facts, &mut |n| assigns_in_expr(rhs, n), |ck| ck.cond(rhs));
+                let rt = self.cond_type.clone();
+                self.repair_bitwise(op, lhs, rhs, [&lt, &rt], mark);
                 Type::Bool
             }
             BinaryOp::Coalesce => {
@@ -3773,6 +4269,66 @@ impl Checker<'_> {
                 self.binary_types(e.span, op, &a, &b, lhs, rhs)
             }
         }
+    }
+
+    /// A comparison VBA makes after its implicit conversions: a Range stands for its value,
+    /// `True` compared with a number is -1.
+    fn repair_comparison(&mut self, a: &Type, b: &Type, lhs: &Expr, rhs: &Expr) {
+        for (t, e, other) in [(a, lhs, b), (b, rhs, a)] {
+            if let Some(member) = self.default_value_member(t) {
+                if !other.is_object() && *other != Type::Null {
+                    self.repair(
+                        e.span,
+                        "E0396",
+                        format!("{}.{member}", self.source_operand(e)),
+                    );
+                }
+            } else if let (ExprKind::Bool(v), true) = (&e.peel().kind, self.is_numeric(other)) {
+                self.repair(e.span, "E0396", if *v { "-1" } else { "0" });
+            } else if *t == Type::Str && self.is_numeric(other) {
+                // A string compared with a number is compared as a number.
+                self.repair(e.span, "E0396", format!("cDbl({})", self.source(e.span)));
+            } else if *t == Type::Bool && self.is_numeric(other) {
+                self.repair(
+                    e.span,
+                    "E0396",
+                    format!("({} ? -1 : 0)", self.source_operand(e)),
+                );
+            }
+        }
+    }
+
+    /// `a && b` between integers was VBA's bitwise `And` (`flags And mask`): `a & b`. `mark` is
+    /// where the repairs of the operands start; they give way to this one.
+    fn repair_bitwise(
+        &mut self,
+        op: BinaryOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        types: [&Type; 2],
+        mark: usize,
+    ) {
+        // (An operand of unknown type goes along with an integer: VBA's `And` is bitwise.)
+        let integer = |t: &&Type| t.is_integer() || matches!(t, Type::Enum(_));
+        if !types.iter().any(integer)
+            || !types
+                .iter()
+                .all(|t| integer(t) || matches!(t, Type::Any | Type::CellValue))
+        {
+            return;
+        }
+        let gap = Span::new(lhs.span.end(), rhs.span.start());
+        let (logical, bitwise) = if op == BinaryOp::And {
+            ("&&", "&")
+        } else {
+            ("||", "|")
+        };
+        let text = self.source(gap);
+        if text.trim() != logical {
+            return;
+        }
+        self.prog.repairs.truncate(mark);
+        self.repair(gap, "E0303", text.replace(logical, bitwise));
     }
 
     /// `typeof x == "string"`: RAS's `typeof` is VBA's `TypeName` (`"String"`, `"Long"`, `"Worksheet"` ...).
@@ -3837,6 +4393,15 @@ impl Checker<'_> {
         match op {
             BinaryOp::Add if *a == Type::Str || *b == Type::Str => {
                 let other = if *a == Type::Str { b } else { a };
+                // VBA's `+` of a number and a string adds numbers (`n + "14"` is not "…14"):
+                // in code converted from VBA the string is read as a number.
+                if self.is_numeric(other) {
+                    let text = if *a == Type::Str { lhs } else { rhs };
+                    if !matches!(text.peel().kind, ExprKind::Str(_) | ExprKind::Template(_)) {
+                        let fixed = format!("cDbl({})", self.source(text.span));
+                        self.repair(text.span, "plus", fixed);
+                    }
+                }
                 if !self.stringifiable(other) {
                     self.err(
                         span,
@@ -3892,6 +4457,7 @@ impl Checker<'_> {
             }
             BinaryOp::Eq | BinaryOp::Ne => {
                 if !self.comparable(a, b, true) {
+                    self.repair_comparison(a, b, lhs, rhs);
                     self.err(
                         span,
                         "E0396",
@@ -3902,6 +4468,7 @@ impl Checker<'_> {
             }
             BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                 if !self.comparable(a, b, false) {
+                    self.repair_comparison(a, b, lhs, rhs);
                     self.err(
                         span,
                         "E0396",
@@ -4016,6 +4583,13 @@ impl Checker<'_> {
             };
             if p.mode == PassMode::ByRef {
                 self.err(p.span, "E0399", "アロー関数の引数に `byref` は使えません");
+            }
+            if p.rest {
+                self.err(
+                    p.span,
+                    "E0152",
+                    "可変長引数（`...`）は、関数・クラスのメソッド・コンストラクタにだけ書けます",
+                );
             }
             let l = self.declare_local(&p.name, ty.clone(), LocalKind::LambdaParam);
             locals.push(l);
@@ -4186,6 +4760,8 @@ impl Checker<'_> {
                         None => return Type::Error,
                     }
                 }
+                // A late-bound call: VBA finds the parameters by name at run time.
+                (None, None) if matches!(access, Access::Dynamic) => args,
                 (None, None) => {
                     if !matches!(access, Access::Error | Access::Value(Type::Error)) {
                         self.err(e.span, "E0411", "名前付き引数は、宣言された関数・メソッド・コンストラクタの呼び出しにだけ書けます");
@@ -4209,7 +4785,7 @@ impl Checker<'_> {
             Access::Dynamic => {
                 for a in args {
                     if !matches!(a.kind, ExprKind::Undefined) {
-                        self.value(a, None);
+                        self.value(named_value(a), None);
                     }
                 }
                 self.info().calls.insert(
@@ -4277,6 +4853,10 @@ impl Checker<'_> {
                     self.arg(std::slice::from_ref(a), 0, &Type::Int);
                 }
                 self.prog.fns[f].ret.clone().unwrap_or(Type::Error)
+            }
+            // A property with parameters: `item("k")` calls the getter, `item("k") = v` the setter.
+            Access::Func { f, env, recv: rk } if self.prog.fns[f].accessor_kind().is_some() => {
+                self.property_call(e, c, env, rk, args)
             }
             Access::Func { f, env, recv: rk } => {
                 let def_kind = self.prog.fns[f].kind.clone();
@@ -4410,6 +4990,72 @@ impl Checker<'_> {
         }
     }
 
+    /// A call of a property with parameters (spec §3.6.2). The target of an assignment
+    /// (`obj.item("k") = v`) is checked against the setter, whose last parameter is the value:
+    /// the type of the call is then the type of that parameter.
+    fn property_call(
+        &mut self,
+        e: &Expr,
+        callee: &Expr,
+        env: HashMap<String, Type>,
+        rk: Recv,
+        args: &[Expr],
+    ) -> Type {
+        let (get, set) = match self.info().res.get(&callee.id) {
+            Some(Res::Property { get, set }) => (*get, *set),
+            _ => (None, None),
+        };
+        let name = match &callee.kind {
+            ExprKind::Member { name, .. } => name.text.clone(),
+            ExprKind::Name(id) => id.text.clone(),
+            _ => String::new(),
+        };
+        let (writes, reads) = match self.fx.write_target {
+            Some((id, reads)) if id == e.id => (true, reads),
+            _ => (false, true),
+        };
+        if reads && get.is_none() {
+            self.err(
+                callee.span,
+                "E0326",
+                format!("`{name}` には getter がないため、値を読み取れません"),
+            );
+        }
+        if writes && set.is_none() {
+            self.err(
+                callee.span,
+                "E0323",
+                format!("`{name}` には setter がありません"),
+            );
+        }
+        let chosen = if writes { set.or(get) } else { get.or(set) };
+        let Some(f) = chosen else {
+            for a in args {
+                self.expr(a, None);
+            }
+            return Type::Error;
+        };
+        let (ret, _) = self.check_fn_call(e, f, env, None, &[], args);
+        for g in [get, set].into_iter().flatten() {
+            if !self.fx.calls.contains(&g) {
+                self.fx.calls.push(g);
+            }
+        }
+        let target = if rk == Recv::Instance {
+            CallTarget::Method(f)
+        } else {
+            CallTarget::Fn(f)
+        };
+        self.info().calls.insert(
+            e.id,
+            CallInfo {
+                target,
+                type_args: Vec::new(),
+            },
+        );
+        ret
+    }
+
     /// Lint rule 10: `.Select` / `.Activate`.
     fn lint_member_call(&mut self, callee: &Expr) {
         if let ExprKind::Member { name, .. } = &callee.kind {
@@ -4462,7 +5108,8 @@ impl Checker<'_> {
                 env.insert(tp.name.clone(), ty);
             }
         }
-        let mut params: &[ParamDef] = &def.params;
+        // A setter is called by an assignment: its last parameter is the assigned value.
+        let mut params: &[ParamDef] = def.index_params();
         if let Some((robj, rty)) = &recv {
             let p0 = &params[0];
             self.unify(&p0.ty, rty, &mut env, &tparams);
@@ -4471,15 +5118,22 @@ impl Checker<'_> {
             }
             params = &params[1..];
         }
+        // `...rest: any[]` (spec §3.5): the arguments from its position on are its elements.
+        let rest = params.last().filter(|p| p.rest).cloned();
+        if rest.is_some() {
+            params = &params[..params.len() - 1];
+        }
         let required = params
             .iter()
             .filter(|p| !p.optional && p.default.is_none())
             .count();
-        if args.len() < required || args.len() > params.len() {
-            let want = if required == params.len() {
-                format!("{required}")
+        if args.len() < required || (args.len() > params.len() && rest.is_none()) {
+            let want = if rest.is_some() {
+                format!("{required} 個以上")
+            } else if required == params.len() {
+                format!("{required} 個")
             } else {
-                format!("{required}〜{}", params.len())
+                format!("{required}〜{} 個", params.len())
             };
             let shown = if def.name.is_empty() {
                 "既定メンバー".to_string()
@@ -4490,7 +5144,7 @@ impl Checker<'_> {
                 call.span,
                 "E0402",
                 format!(
-                    "{shown} の引数の数が合いません（{want} 個必要ですが {} 個渡されています）",
+                    "{shown} の引数の数が合いません（{want}必要ですが {} 個渡されています）",
                     args.len()
                 ),
             );
@@ -4499,7 +5153,16 @@ impl Checker<'_> {
         // pass 1: everything except lambdas, so that their parameter types can be inferred
         for (i, a) in args.iter().enumerate() {
             let Some(p) = params.get(i) else {
-                self.expr(a, None);
+                match &rest {
+                    Some(r) => {
+                        let want = r.ty.elem().cloned().unwrap_or(Type::Any).subst(&env);
+                        let at = self.value(a, Some(&want));
+                        self.coerce(a, &at, &want);
+                    }
+                    None => {
+                        self.expr(a, None);
+                    }
+                }
                 continue;
             };
             if matches!(a.kind, ExprKind::Undefined) && (p.optional || p.default.is_some()) {
@@ -4592,7 +5255,10 @@ impl Checker<'_> {
                 self.coerce(a, at, &want);
             }
         }
-        let ret = self.fn_ret(f, call.span).subst(&env);
+        let ret = match def.params.last() {
+            Some(value) if def.is_setter() => value.ty.subst(&env),
+            _ => self.fn_ret(f, call.span).subst(&env),
+        };
         // `createObject("Scripting.FileSystemObject")`: the type of what a ProgID written out creates.
         if def.host_name.as_deref() == Some("CreateObject")
             && self.prog.modules[def.module]
@@ -4671,6 +5337,11 @@ impl Checker<'_> {
             ExprKind::Error => true,
             _ => false,
         };
+        // (A `byref` parameter of type `any` also takes a value, as VBA's `ByRef … As Variant`
+        // does: a temporary is passed. It is how VBA code passes arrays without copying them.)
+        if !is_lvalue && want.is_any() {
+            return;
+        }
         if !is_lvalue {
             self.err(
                 a.span,
@@ -4697,7 +5368,7 @@ impl Checker<'_> {
                         self.fx.locals[l].kind.clone(),
                         self.lookup_local(&id.text).map(|x| x.1).unwrap_or_default(),
                     );
-                    if kind == LocalKind::Const {
+                    if kind == LocalKind::Const && !want.is_any() {
                         self.err(
                             a.span,
                             "E0323",
@@ -4710,7 +5381,7 @@ impl Checker<'_> {
                     self.fx.locals[l].reassigned = true;
                 }
                 Some(Res::Global(v)) => {
-                    if self.prog.vars[v].is_const {
+                    if self.prog.vars[v].is_const && !want.is_any() {
                         self.err(
                             a.span,
                             "E0323",
@@ -4773,7 +5444,7 @@ impl Checker<'_> {
     ) -> Option<Rc<[Expr]>> {
         let def = &self.prog.fns[f];
         let params: Vec<NamedParam> = def
-            .params
+            .index_params()
             .iter()
             .skip(skip)
             .map(|p| NamedParam {
@@ -5553,7 +6224,12 @@ impl Checker<'_> {
             _ => return None,
         };
         match access {
-            Access::Func { f, .. } if matches!(self.prog.fns[f].kind, FnKind::Free) => Some(f),
+            Access::Func { f, .. }
+                if matches!(self.prog.fns[f].kind, FnKind::Free)
+                    && self.prog.fns[f].accessor.is_none() =>
+            {
+                Some(f)
+            }
             _ => None,
         }
     }
@@ -6287,6 +6963,50 @@ impl Checker<'_> {
                 Type::Void
             }
             IsNullish => Type::Bool,
+            // `dynamicArray()`: what VBA's `Dim a()` declares — an array without elements yet
+            // (`isArray` is true, `uBound` raises error 9 until `redim`).
+            DynamicArray => {
+                self.arg_count(call, args, 0, 0);
+                Type::Any
+            }
+            // `isAllocated(a)`: whether the array has elements to index (false for what
+            // `dynamicArray()` gives and after `erase`): the `Not Not a` of VBA code.
+            IsAllocated => {
+                if self.arg_count(call, args, 1, 1) {
+                    self.value(&args[0], None);
+                }
+                Type::Bool
+            }
+            // `letValue(x)`: what VBA's `v = x` stores — the default member of an object
+            // (`v = ws.Range("A1")` is the value of the cell), `x` itself otherwise. Where the
+            // type tells which, the take-over of a workbook's VBA writes that instead.
+            LetValue => {
+                if !self.arg_count(call, args, 1, 1) {
+                    return Type::Any;
+                }
+                let arg = &args[0];
+                let t = self.value(arg, None);
+                if let Some(member) = self.default_value_member(&t) {
+                    let fixed = format!("{}.{member}", self.source_operand(arg));
+                    self.repair(call.span, "letValue", fixed);
+                    return Type::Any;
+                }
+                let object = t.is_object() || t.is_dynamic() || t.union_members().is_some();
+                if !object {
+                    let fixed = self.source(arg.span);
+                    self.repair(call.span, "letValue", fixed);
+                    return t;
+                }
+                Type::Any
+            }
+            // `like(text, pattern)`: VBA's `text Like pattern` (spec §13.3).
+            Like => {
+                if self.arg_count(call, args, 2, 2) {
+                    self.arg(args, 0, &Type::Str);
+                    self.arg(args, 1, &Type::Str);
+                }
+                Type::Bool
+            }
             FastMode => {
                 if self.arg_count(call, args, 0, 1) {
                     if let Some(a) = args.first() {
@@ -6341,6 +7061,7 @@ impl Checker<'_> {
             | FileSeek | FileLock | FileUnlock | FileWidth | FileRename => {
                 self.file_io_call(call, intr, args)
             }
+            Redim | RedimPreserve | Erase => self.redim_call(call, intr, args),
             // Cell values may be error values (spec §2.6.6).
             RangeToArray | SheetUsedTable => {
                 self.arg_count(call, args, 0, 0);
@@ -6793,6 +7514,129 @@ fn contains_break(s: &Stmt) -> bool {
 }
 
 impl Checker<'_> {
+    /// `v[i, j]`: the element of a VBA array of several dimensions held in an `any`
+    /// (spec §4.6). The subscripts are passed as written (the bounds are the array's own).
+    fn subscripts_index(&mut self, e: &Expr, ot: &Type, index: &Expr, subs: &[Expr]) -> Type {
+        for x in subs {
+            let it = self.value(x, None);
+            self.warn_cell_value(x, &it, "添字に使う");
+        }
+        if let Some(t) = self.info().expr_types.get_mut(index.id as usize) {
+            *t = Type::Any;
+        }
+        match ot {
+            Type::Any | Type::Object => Type::Any,
+            // The elements of a cell value (a 2-D array) may be error values.
+            Type::CellValue => Type::CellValue,
+            Type::Error => Type::Error,
+            other => {
+                let shown = self.show(other);
+                let hint = match other {
+                    Type::Array(el) if matches!(**el, Type::Array(_)) => {
+                        "。2 次元配列の要素は `a[r][c]` と書きます"
+                    }
+                    _ => "",
+                };
+                self.err(
+                    e.span,
+                    "E0417",
+                    format!("複数の添字（`v[i, j]`）は `any` の値（VBA の多次元配列）にだけ使えます（`{shown}` には使えません{hint}）"),
+                );
+                Type::Error
+            }
+        }
+    }
+
+    /// `redim(a, lo, hi, …)` / `redimPreserve(a, lo, hi, …)` / `erase(a)`: VBA's `ReDim` /
+    /// `ReDim Preserve` / `Erase` on an array held in an `any` variable (spec §4.6).
+    fn redim_call(&mut self, call: &Expr, intr: Intr, args: &[Expr]) -> Type {
+        let name = match intr {
+            Intr::Redim => "redim",
+            Intr::RedimPreserve => "redimPreserve",
+            _ => "erase",
+        };
+        let Some(target) = args.first() else {
+            self.err(
+                call.span,
+                "E0418",
+                format!("`{name}` の 1 番目の引数には、`any` の変数（ローカル変数・引数・モジュール変数・クラスのフィールド）を書いてください"),
+            );
+            return Type::Void;
+        };
+        let inner = target.peel();
+        // (Only a variable is checked as an assignment target: one error for anything else.)
+        let t = match &inner.kind {
+            ExprKind::Name(_) | ExprKind::Member { .. } | ExprKind::Error => {
+                self.lvalue(target, false)
+            }
+            _ => self.value(target, None),
+        };
+        let is_var = match &inner.kind {
+            ExprKind::Name(_) => matches!(
+                self.info().res.get(&inner.id),
+                Some(Res::Local(_) | Res::Global(_))
+            ),
+            ExprKind::Member { .. } => match self.info().res.get(&inner.id).cloned() {
+                Some(Res::Field(c, _)) => self.prog.classes[c].kind != ClassKind::Host,
+                Some(Res::Global(_)) => true,
+                _ => false,
+            },
+            ExprKind::Error => true,
+            _ => false,
+        };
+        // A typed array (`int[]`, `string[][]`) takes the bounds VBA code gives it too: it is
+        // VBA's `Dim a() As Long`. (Its `length`, `push` and `for...of` count from 0: an array
+        // with other bounds is read with `lBound` / `uBound`.)
+        if t.is_array() {
+            let dims = t.dims();
+            if !is_var {
+                self.err(
+                    target.span,
+                    "E0418",
+                    format!("`{name}` の 1 番目の引数には、変数（ローカル変数・引数・モジュール変数・クラスのフィールド）を書いてください"),
+                );
+            } else if intr != Intr::Erase && args.len() > 1 && (args.len() - 1) != dims * 2 {
+                self.err(
+                    call.span,
+                    "E0418",
+                    format!("`{}` は {dims} 次元の配列です。添字の範囲を {dims} 次元ぶん（下限と上限の 2 つずつ）書いてください", self.show(&t)),
+                );
+            }
+        } else if !is_var {
+            self.err(
+                target.span,
+                "E0418",
+                format!("`{name}` の 1 番目の引数には、`any` の変数（ローカル変数・引数・モジュール変数・クラスのフィールド）を書いてください"),
+            );
+        } else if !matches!(t, Type::Any | Type::Error) {
+            self.err(
+                target.span,
+                "E0418",
+                format!("`{name}` は `any` の変数（VBA の `Variant` に入れた配列）にだけ使えます（`{}` には使えません）", self.show(&t)),
+            );
+        }
+        let bounds = &args[1..];
+        if intr == Intr::Erase {
+            if !bounds.is_empty() {
+                self.arg_count(call, args, 1, 1);
+            }
+            return Type::Void;
+        }
+        for i in 0..bounds.len() {
+            self.arg(bounds, i, &Type::Int);
+        }
+        if bounds.is_empty() || bounds.len() % 2 != 0 {
+            self.err(
+                call.span,
+                "E0418",
+                format!("`{name}` の添字の範囲は、次元ごとに下限と上限の 2 つずつ書いてください（`{name}(a, 1, n)` は `ReDim a(1 To n)`、`{name}(a, 1, rows, 0, cols - 1)` は 2 次元）"),
+            );
+        } else if bounds.len() > 120 {
+            self.err(call.span, "E0418", format!("`{name}` の次元は 60 までです"));
+        }
+        Type::Void
+    }
+
     /// The statements of the files opened by number (`fileOpen`, `printLine` …; spec §15.3.2).
     fn file_io_call(&mut self, call: &Expr, intr: Intr, args: &[Expr]) -> Type {
         use Intr::*;

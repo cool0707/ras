@@ -27,6 +27,7 @@ pub fn walk_module<'a>(module: &'a ast::Module, f: &mut dyn FnMut(&'a Expr)) {
     for item in &module.items {
         match item {
             Item::Fn(d) => func(d, f),
+            Item::Accessor(a) => func(&a.func, f),
             Item::Class(c) => {
                 for m in &c.members {
                     match m {
@@ -120,8 +121,8 @@ pub fn signature(prog: &Program, f: FnId) -> String {
         s.push_str("inline ");
     }
     s.push_str(match d.kind {
-        FnKind::Getter { .. } => "get ",
-        FnKind::Setter { .. } => "set ",
+        _ if d.is_getter() => "get ",
+        _ if d.is_setter() => "set ",
         FnKind::Method { .. }
         | FnKind::Ctor { .. }
         | FnKind::Abstract { .. }
@@ -672,7 +673,7 @@ fn class_members(prog: &Program, c: ClassId, statics: bool, out: &mut Vec<Comple
         if is_static != statics || out.iter().any(|o| o.label == fd.name) {
             continue;
         }
-        let k = if matches!(fd.kind, FnKind::Getter { .. } | FnKind::Setter { .. }) {
+        let k = if fd.accessor_kind().is_some() {
             kind::PROPERTY
         } else {
             kind::METHOD
@@ -1490,9 +1491,9 @@ pub fn type_definition(prog: &Program, m: ModuleId, offset: u32) -> Option<(Modu
         Target::Local { func, local } => prog.fns[*func].locals[*local].ty.clone(),
         Target::Global(v) => prog.vars[*v].ty.clone(),
         Target::Fn(f) => match prog.fns[*f].kind {
-            FnKind::Setter { .. } => prog.fns[*f]
+            _ if prog.fns[*f].is_setter() => prog.fns[*f]
                 .params
-                .first()
+                .last()
                 .map(|p| p.ty.clone())
                 .unwrap_or(Type::Void),
             FnKind::Ctor { class } => Type::Class(class, Vec::new()),

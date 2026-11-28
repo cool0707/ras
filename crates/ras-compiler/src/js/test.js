@@ -124,6 +124,7 @@ module.exports = function createTest(rt) {
         if (v instanceof RDate) return plain ? v.toString() : `#${v.toString()}#`;
         if (v instanceof CVErr) return v.toString();
         if (Array.isArray(v)) return `[${v.map((x) => show(x)).join(", ")}]`;
+        if (v instanceof rt.VbArray) return `Array(${v.lo.map((lo, d) => `${lo} To ${v.hi[d]}`).join(", ")}) [${v.data.map((x) => show(x)).join(", ")}]`;
         if (v instanceof Map) return `Map {${[...v].map(([k, x]) => `${show(k)} => ${show(x)}`).join(", ")}}`;
         if (v instanceof Struct) return `{ ${Object.keys(v).map((k) => `${k}: ${show(v[k])}`).join(", ")} }`;
         try {
@@ -166,6 +167,10 @@ module.exports = function createTest(rt) {
         }
     }
     function deepEqual(a, b) {
+        // Arrays made by `redim`: the same bounds and elements.
+        if (a instanceof rt.VbArray || b instanceof rt.VbArray) {
+            return a instanceof rt.VbArray && b instanceof rt.VbArray && deepEqual(a.lo, b.lo) && deepEqual(a.hi, b.hi) && deepEqual(a.data, b.data);
+        }
         if (Array.isArray(a) || Array.isArray(b)) {
             return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));
         }

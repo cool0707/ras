@@ -24,6 +24,10 @@ pub struct Converted {
     pub text: String,
     /// What could not be converted: (1-based line in `text`, message).
     pub todos: Vec<(usize, String)>,
+    /// The procedures kept as VBA (`` vba`…` `` blocks, spec §14.7.4).
+    pub raw: Vec<String>,
+    /// The procedures converted to RAS: (first line, last line in `text`, 1-based; name in the VBA).
+    pub procs: Vec<(usize, usize, String)>,
 }
 
 /// Converts the code of a form (its code pane, without `Attribute` lines) to a RAS code-behind.
@@ -48,6 +52,9 @@ pub enum Target<'a> {
         workbook: bool,
         controls: &'a [crate::config::FormControl],
     },
+    /// A class of `src/<Name>.ras`, from the class module `name`: its variables are the
+    /// fields, its procedures the methods and accessors, `Class_Initialize` the constructor.
+    Class { name: &'a str },
 }
 
 /// Another module converted with this one, whose public names the converted code may use:
@@ -63,6 +70,9 @@ pub struct Peer {
     pub document: bool,
     /// Its public names: VBA name and RAS name, and whether it is a function.
     pub names: Vec<PublicName>,
+    /// A form: its public procedures are members of the form (`frmInput.Foo`), and its name
+    /// is a type (`New frmInput`).
+    pub form: bool,
 }
 
 /// A public name of a [`Peer`].
@@ -71,11 +81,30 @@ pub struct PublicName {
     pub vba: String,
     pub ras: String,
     pub is_function: bool,
+    /// The members of an enum, or the public members of a class, as they are declared.
+    pub members: Vec<String>,
+    /// A `Property`: read and assigned like a variable.
+    pub property: bool,
+    /// A class (the class module itself).
+    pub class: bool,
 }
 
 /// Converts a module of VBA (its code pane, without `Attribute` lines). Names that the
 /// `peers` make public are imported from them.
 pub fn convert(vba: &str, target: &Target, peers: &[Peer]) -> Converted {
+    convert_with(vba, target, peers, None)
+}
+
+/// [`convert`] for the take-over of a workbook's VBA (spec §14.7.4): what RAS cannot express
+/// stays VBA instead of a `// TODO(VBA):` comment — a `Declare`, a region in `#If … #End If`,
+/// and the whole procedure that holds such a statement or that is named in `keep` (one whose
+/// conversion did not compile), each as a `` vba`…` `` block with a `declare function` for
+/// the code that calls it.
+pub fn convert_keeping(vba: &str, target: &Target, peers: &[Peer], keep: &[String]) -> Converted {
+    convert_with(vba, target, peers, Some(keep))
+}
+
+fn convert_with(vba: &str, target: &Target, peers: &[Peer], keep: Option<&[String]>) -> Converted {
     if vba.trim().is_empty() {
         return Converted::default();
     }
@@ -84,6 +113,12 @@ pub fn convert(vba: &str, target: &Target, peers: &[Peer]) -> Converted {
     let mut parser = Parser::new(&lines);
     let items = parser.module();
     let mut em = Emitter::new(&host, *target, peers, &lines);
+    em.fallback = keep.is_some();
+    em.keep = keep
+        .unwrap_or_default()
+        .iter()
+        .map(|n| n.to_lowercase())
+        .collect();
     em.with_events = parser.with_events;
     em.module(&items);
     em.finish()
@@ -98,20 +133,28 @@ pub fn public_names(vba: &str, target: &Target) -> Vec<PublicName> {
     let items = parser.module();
     let mut em = Emitter::new(&host, *target, &[], &lines);
     em.with_events = parser.with_events;
-    let mut out = Vec::new();
+    let mut out: Vec<PublicName> = Vec::new();
+    let name = |vba: &str, ras: String| PublicName {
+        vba: vba.to_string(),
+        ras,
+        is_function: false,
+        members: Vec::new(),
+        property: false,
+        class: false,
+    };
     for item in &items {
         match item {
             Item::Proc(p) if em.event_of(&p.name).is_none() && !is_private(p.vis.as_deref()) => {
-                let mut ras = Emitter::user_ident(&p.name);
-                if matches!(p.kind.as_str(), "Get" | "Let" | "Set") {
-                    ras = format!("{}{ras}", p.kind.to_ascii_lowercase());
-                }
-                if !out.iter().any(|n: &PublicName| n.ras == ras) {
-                    out.push(PublicName {
-                        vba: p.name.clone(),
-                        ras,
-                        is_function: p.kind == "Function" || p.kind == "Get",
-                    });
+                let property = matches!(p.kind.as_str(), "Get" | "Let" | "Set");
+                let is_function = p.kind == "Function" || p.kind == "Get";
+                // The `Get` and the `Let` of a property are one name.
+                match out.iter_mut().find(|n| n.vba.eq_ignore_ascii_case(&p.name)) {
+                    Some(n) => n.is_function |= is_function,
+                    None => out.push(PublicName {
+                        is_function,
+                        property,
+                        ..name(&p.name, Emitter::user_ident(&p.name))
+                    }),
                 }
             }
             Item::Stmt(
@@ -121,26 +164,45 @@ pub fn public_names(vba: &str, target: &Target) -> Vec<PublicName> {
                 },
             ) if is_public_decl(&lines[s.line]) => {
                 for v in vars {
-                    out.push(PublicName {
-                        vba: v.name.clone(),
-                        ras: Emitter::user_ident(&v.name),
-                        is_function: false,
-                    });
+                    out.push(name(&v.name, Emitter::user_ident(&v.name)));
                 }
             }
             Item::Enum {
-                name, public: true, ..
+                name: enum_name,
+                public: true,
+                members,
+                ..
             } => out.push(PublicName {
-                vba: name.clone(),
-                ras: name.clone(),
-                is_function: false,
+                members: members.iter().map(|(m, _, _)| m.clone()).collect(),
+                ..name(enum_name, enum_name.clone())
             }),
             _ => {}
         }
     }
+    // A class module is one name, the class; its public enums are names of the file too.
+    if let Target::Class { name: class } = target {
+        let (enums, members): (Vec<PublicName>, Vec<PublicName>) =
+            out.into_iter().partition(|n| !n.members.is_empty());
+        // (A function is noted with `()`: read without arguments, it is still a call.)
+        let mut names = vec![PublicName {
+            members: members
+                .into_iter()
+                .map(|n| {
+                    if n.is_function && !n.property {
+                        format!("{}()", n.ras)
+                    } else {
+                        n.ras
+                    }
+                })
+                .collect(),
+            class: true,
+            ..name(class, class.to_string())
+        }];
+        names.extend(enums);
+        return names;
+    }
     out
 }
-
 fn is_private(vis: Option<&str>) -> bool {
     vis.is_some_and(|v| v.eq_ignore_ascii_case("private") || v.eq_ignore_ascii_case("friend"))
 }
@@ -164,6 +226,8 @@ struct HostIndex {
     /// Members of `Excel.Worksheet` and `Excel.Workbook`: lower-cased VBA name → (RAS name, is a method).
     worksheet: HashMap<String, (String, bool)>,
     workbook: HashMap<String, (String, bool)>,
+    /// Members of `MSForms.UserForm`.
+    userform: HashMap<String, (String, bool)>,
 }
 
 impl HostIndex {
@@ -191,9 +255,9 @@ impl HostIndex {
                 }
             }
         }
-        let members = |class: &str| {
+        let members = |namespace: &str, class: &str| {
             let mut out = HashMap::new();
-            let Some(Sym::Class(id)) = prog.namespaces.get("Excel").and_then(|ns| ns.get(class))
+            let Some(Sym::Class(id)) = prog.namespaces.get(namespace).and_then(|ns| ns.get(class))
             else {
                 return out;
             };
@@ -208,12 +272,14 @@ impl HostIndex {
             }
             out
         };
-        let (worksheet, workbook) = (members("Worksheet"), members("Workbook"));
+        let (worksheet, workbook) = (members("Excel", "Worksheet"), members("Excel", "Workbook"));
+        let userform = members("MSForms", "UserForm");
         HostIndex {
             globals,
             classes,
             worksheet,
             workbook,
+            userform,
         }
     }
 }
@@ -466,8 +532,9 @@ fn split_comment(line: &str) -> (String, Option<String>) {
         }
     }
     let trimmed = line.trim_start();
-    if trimmed.len() >= 3
-        && trimmed[..3].eq_ignore_ascii_case("rem")
+    if trimmed
+        .get(..3)
+        .is_some_and(|head| head.eq_ignore_ascii_case("rem"))
         && trimmed[3..].chars().next().is_none_or(char::is_whitespace)
     {
         return (String::new(), Some(trimmed[3..].trim_start().to_string()));
@@ -515,7 +582,10 @@ fn logical_lines(code: &str) -> Vec<Line> {
             if word.chars().all(|c| c.is_ascii_digit()) {
                 label = Some(word.clone());
                 code = after.to_string();
-            } else if after.starts_with(':') && !after.starts_with(":=") && !is_keyword(&word) {
+            } else if after.starts_with(':')
+                && !after.starts_with(":=")
+                && (!is_keyword(&word) || is_name_keyword(&word))
+            {
                 label = Some(word.clone());
                 code = after[1..].to_string();
             }
@@ -616,6 +686,15 @@ fn is_keyword(word: &str) -> bool {
     KEYWORDS.contains(&word.to_ascii_lowercase().as_str())
 }
 
+/// Keywords of statements that VBA also accepts as the name of a variable, of a function or
+/// of a label (`Step = 1`, `Error:`).
+fn is_name_keyword(word: &str) -> bool {
+    [
+        "mid", "string", "date", "error", "get", "input", "len", "step",
+    ]
+    .contains(&word.to_ascii_lowercase().as_str())
+}
+
 // ---------------------------------------------------------------------------------------------
 // Syntax tree
 
@@ -661,8 +740,9 @@ struct VarDecl {
     name: String,
     suffix: Option<char>,
     ty: Option<TypeName>,
-    /// Declared with parentheses: an array; the bounds (empty for a dynamic array).
-    dims: Option<Vec<Expr>>,
+    /// Declared with parentheses: an array; the bounds `(lower, upper)` of each dimension
+    /// (empty for a dynamic array).
+    dims: Option<Vec<(Option<Expr>, Expr)>>,
     /// `Const` value.
     value: Option<Expr>,
 }
@@ -684,6 +764,8 @@ enum StmtKind {
     Assign {
         target: Expr,
         value: Expr,
+        /// `Set target = value`: the object itself, not its default member.
+        set: bool,
     },
     Call(Expr),
     If {
@@ -718,6 +800,13 @@ enum StmtKind {
         body: Vec<Stmt>,
     },
     Exit(String),
+    GoTo(String),
+    /// `ReDim [Preserve] a(1 To n), b(m)`: each array and its bounds.
+    ReDim {
+        preserve: bool,
+        vars: Vec<(Expr, Vec<(Option<Expr>, Expr)>)>,
+    },
+    Erase(Vec<Expr>),
     OnErrorResumeNext,
     OnErrorGoTo0,
     OnErrorGoTo(String),
@@ -780,6 +869,8 @@ struct Proc {
     ret_array: bool,
     body: Vec<Stmt>,
     line: usize,
+    /// Index of its last line (`End Sub`).
+    end: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -792,6 +883,13 @@ enum Item {
         members: Vec<(String, Option<Expr>, Option<String>)>,
         line: usize,
     },
+    /// A `Declare` statement, and its signature when it could be read.
+    Declare {
+        line: usize,
+        signature: Option<Proc>,
+    },
+    /// `Public Event Changed(ByVal Index As Long)` of a class.
+    Event(Proc),
     /// Lines kept as a TODO (from, to inclusive), with the reason.
     Todo {
         from: usize,
@@ -992,16 +1090,40 @@ impl<'a> Parser<'a> {
                 self.next_line();
                 continue;
             }
-            if kw("Declare") {
-                items.push(Item::Todo { from: start, to: start, reason: "Declare には対応していません。src/ のモジュールに `declare module` で宣言してください".into() });
+            // `Attribute x.VB_VarHelpID = -1`: what the VBE keeps with a `WithEvents` variable.
+            if kw("Attribute") {
                 self.next_line();
                 continue;
             }
-            if kw("Implements") || kw("Event") {
+            if kw("Declare") {
+                let signature = self.declare_signature().ok();
+                self.li = start;
+                self.next_line();
+                items.push(Item::Declare {
+                    line: start,
+                    signature,
+                });
+                continue;
+            }
+            if kw("Event") {
+                let signature = self.event_signature();
+                self.li = start;
+                self.next_line();
+                items.push(match signature {
+                    Ok(p) => Item::Event(p),
+                    Err(reason) => Item::Todo {
+                        from: start,
+                        to: start,
+                        reason,
+                    },
+                });
+                continue;
+            }
+            if kw("Implements") {
                 items.push(Item::Todo {
                     from: start,
                     to: start,
-                    reason: "Implements / Event には対応していません".into(),
+                    reason: "Implements には対応していません".into(),
                 });
                 self.next_line();
                 continue;
@@ -1137,6 +1259,7 @@ impl<'a> Parser<'a> {
         if self.at_end() {
             return Err(format!("End {end_kw} がありません"));
         }
+        let end = self.li;
         self.finish_stmt();
         Ok(Proc {
             kind,
@@ -1149,6 +1272,116 @@ impl<'a> Parser<'a> {
             ret_array,
             body,
             line,
+            end,
+        })
+    }
+
+    /// The signature of a `Declare` statement on the current line, as a procedure without a
+    /// body: `[Private] Declare [PtrSafe] Function Name Lib "x" [Alias "y"] (params) As T`.
+    fn declare_signature(&mut self) -> PResult<Proc> {
+        let line = self.li;
+        let mut vis = None;
+        while let Some(Tok::Word(w, None)) = self.peek() {
+            if w.eq_ignore_ascii_case("Declare") {
+                break;
+            }
+            vis = Some(w.clone());
+            self.ti += 1;
+        }
+        if !self.eat_kw("Declare") {
+            return Err("Declare を読めません".into());
+        }
+        self.eat_kw("PtrSafe");
+        let kind = if self.eat_kw("Function") {
+            "Function"
+        } else if self.eat_kw("Sub") {
+            "Sub"
+        } else {
+            return Err("Declare を読めません".into());
+        };
+        let (name, suffix) = self.ident()?;
+        if !self.eat_kw("Lib") {
+            return Err("Declare の Lib がありません".into());
+        }
+        self.bump();
+        if self.eat_kw("Alias") {
+            self.bump();
+        }
+        let mut params = Vec::new();
+        if self.eat_op("(") && !self.eat_op(")") {
+            loop {
+                params.push(self.param()?);
+                if self.eat_op(")") {
+                    break;
+                }
+                self.expect_op(",")?;
+            }
+        }
+        let mut ret = None;
+        let mut ret_array = false;
+        if self.eat_kw("As") {
+            ret = Some(self.type_name()?);
+            if self.eat_op("(") {
+                self.expect_op(")")?;
+                ret_array = true;
+            }
+        }
+        if !self.at_stmt_end() {
+            return Err("Declare を読めません".into());
+        }
+        Ok(Proc {
+            kind: kind.into(),
+            vis,
+            is_static: false,
+            name,
+            suffix,
+            params,
+            ret,
+            ret_array,
+            body: Vec::new(),
+            line,
+            end: line,
+        })
+    }
+
+    /// `[Public] Event Name(parameters)`.
+    fn event_signature(&mut self) -> PResult<Proc> {
+        let line = self.li;
+        while let Some(Tok::Word(w, None)) = self.peek() {
+            if w.eq_ignore_ascii_case("Event") {
+                break;
+            }
+            self.ti += 1;
+        }
+        if !self.eat_kw("Event") {
+            return Err("Event を読めません".into());
+        }
+        let (name, suffix) = self.ident()?;
+        let mut params = Vec::new();
+        if self.eat_op("(") && !self.eat_op(")") {
+            loop {
+                params.push(self.param()?);
+                if self.eat_op(")") {
+                    break;
+                }
+                self.expect_op(",")?;
+            }
+        }
+        if !self.at_stmt_end() {
+            return Err("Event を読めません".into());
+        }
+        Ok(Proc {
+            kind: "Sub".into(),
+            vis: None,
+            is_static: false,
+            name,
+            suffix,
+            params,
+            ret: None,
+            ret_array: false,
+            body: Vec::new(),
+            line,
+            end: line,
         })
     }
 
@@ -1348,23 +1581,7 @@ impl<'a> Parser<'a> {
                     value: None,
                 };
                 if self.eat_op("(") {
-                    let mut dims = Vec::new();
-                    if !self.eat_op(")") {
-                        loop {
-                            let lo = self.expr()?;
-                            if self.eat_kw("To") {
-                                dims.push(self.expr()?);
-                                let _ = lo;
-                            } else {
-                                dims.push(lo);
-                            }
-                            if self.eat_op(")") {
-                                break;
-                            }
-                            self.expect_op(",")?;
-                        }
-                    }
-                    v.dims = Some(dims);
+                    v.dims = Some(self.bounds()?);
                 }
                 if self.eat_kw("As") {
                     v.ty = Some(self.type_name()?);
@@ -1464,31 +1681,76 @@ impl<'a> Parser<'a> {
             }
             return Err("On … GoTo / GoSub には対応していません".into());
         }
+        if kw("GoTo") {
+            if let Some(Tok::Word(label, _)) = self.peek_at(1).cloned() {
+                self.ti += 2;
+                self.end_of_stmt()?;
+                return Ok(StmtKind::GoTo(label));
+            }
+        }
         if kw("GoTo") || kw("GoSub") || kw("Return") || kw("Resume") {
             return Err(format!("{} には対応していません", head_word(&head)));
         }
-        if kw("ReDim") || kw("Erase") {
-            return Err(format!(
-                "{} には対応していません（RAS の配列は push などで伸ばします）",
-                head_word(&head)
-            ));
+        if kw("ReDim") {
+            self.ti += 1;
+            let preserve = self.eat_kw("Preserve");
+            let mut vars = Vec::new();
+            loop {
+                let (name, suffix) = self.ident()?;
+                let mut target = Expr::Ident(name, suffix);
+                while self.eat_op(".") {
+                    let (member, _) = self.ident()?;
+                    target = Expr::Member(Some(Box::new(target)), member);
+                }
+                self.expect_op("(")?;
+                let bounds = self.bounds()?;
+                if self.eat_kw("As") {
+                    self.type_name()?;
+                }
+                vars.push((target, bounds));
+                if !self.eat_op(",") {
+                    break;
+                }
+            }
+            self.end_of_stmt()?;
+            return Ok(StmtKind::ReDim { preserve, vars });
+        }
+        if kw("Erase") {
+            self.ti += 1;
+            let mut vars = Vec::new();
+            loop {
+                vars.push(self.postfix()?);
+                if !self.eat_op(",") {
+                    break;
+                }
+            }
+            self.end_of_stmt()?;
+            return Ok(StmtKind::Erase(vars));
         }
         if kw("Stop") || kw("End") && self.peek_at(1).is_none_or(|t| *t == Tok::Colon) {
             return Err(format!("{} には対応していません", head_word(&head)));
         }
-        if kw("RaiseEvent") || kw("LSet") || kw("RSet") {
+        // `RaiseEvent Changed(1)`: a call of the class's `event Changed(index: int);`.
+        if kw("RaiseEvent") {
+            self.ti += 1;
+            let e = self.postfix()?;
+            self.end_of_stmt()?;
+            return Ok(StmtKind::Call(e));
+        }
+        if kw("LSet") || kw("RSet") {
             return Err(format!("{} には対応していません", head_word(&head)));
         }
         if let Some(k) = self.file_statement()? {
             return Ok(k);
         }
         if kw("Set") || kw("Let") {
+            let set = kw("Set");
             self.ti += 1;
             let target = self.postfix()?;
             self.expect_op("=")?;
             let value = self.expr()?;
             self.end_of_stmt()?;
-            return Ok(StmtKind::Assign { target, value });
+            return Ok(StmtKind::Assign { target, value, set });
         }
         if kw("Call") {
             self.ti += 1;
@@ -1501,7 +1763,11 @@ impl<'a> Parser<'a> {
         if self.eat_op("=") {
             let value = self.expr()?;
             self.end_of_stmt()?;
-            return Ok(StmtKind::Assign { target, value });
+            return Ok(StmtKind::Assign {
+                target,
+                value,
+                set: false,
+            });
         }
         if self.at_stmt_end() || self.peek().is_some_and(|t| t.is_kw("Else")) {
             self.end_of_stmt()?;
@@ -1551,6 +1817,27 @@ impl<'a> Parser<'a> {
         }
         self.end_of_stmt()?;
         Ok(StmtKind::Call(Expr::Call(Box::new(callee), args)))
+    }
+
+    /// The bounds of an array after `(`, up to and including `)`: `(lower, upper)` for each
+    /// dimension (`1 To n`, or `n` alone). Empty for `()`.
+    fn bounds(&mut self) -> PResult<Vec<(Option<Expr>, Expr)>> {
+        let mut dims = Vec::new();
+        if self.eat_op(")") {
+            return Ok(dims);
+        }
+        loop {
+            let first = self.expr()?;
+            if self.eat_kw("To") {
+                dims.push((Some(first), self.expr()?));
+            } else {
+                dims.push((None, first));
+            }
+            if self.eat_op(")") {
+                return Ok(dims);
+            }
+            self.expect_op(",")?;
+        }
     }
 
     /// The statements of the files opened by number; `None` when the statement is not one.
@@ -2280,10 +2567,7 @@ impl<'a> Parser<'a> {
                     Expr::TypeOf
                 }
                 "addressof" => return Err("AddressOf には対応していません".into()),
-                _ if is_keyword(&w)
-                    && !["mid", "string", "date", "error", "get", "input", "len"]
-                        .contains(&w.to_ascii_lowercase().as_str()) =>
-                {
+                _ if is_keyword(&w) && !is_name_keyword(&w) => {
                     return Err(format!("`{w}` を式として読めません"));
                 }
                 _ => Expr::Ident(w, s),
@@ -2295,6 +2579,44 @@ impl<'a> Parser<'a> {
         })
     }
 }
+
+/// Members of Excel's objects that take arguments and return a `Range`: assigned to, or used
+/// as a value, VBA means the `Value` of the range.
+const RANGE_MEMBERS: &[&str] = &["cells", "range", "offset", "resize"];
+
+/// Members that are a number or a string whatever the object: no default member to take.
+const SCALAR_MEMBERS: &[&str] = &[
+    "value",
+    "value2",
+    "text",
+    "name",
+    "count",
+    "row",
+    "column",
+    "address",
+    "formula",
+    "caption",
+    "path",
+    "fullname",
+    "codename",
+    "exists",
+    "number",
+    "description",
+];
+
+/// The libraries of VBA whose members are globals (`VBA.Left`, `Math.Round`).
+const VBA_LIBRARIES: &[&str] = &[
+    "vba",
+    "math",
+    "strings",
+    "interaction",
+    "information",
+    "conversion",
+    "datetime",
+    "filesystem",
+    "financial",
+    "constants",
+];
 
 fn head_word(t: &Tok) -> String {
     match t {
@@ -2339,6 +2661,12 @@ struct ProcInfo {
     name: String,
     is_function: bool,
     exported: bool,
+    /// A `Property`: read and assigned like a variable.
+    property: bool,
+    /// Number of parameters (of a property: without the value of `Let` / `Set`).
+    params: usize,
+    /// The RAS types of the parameters.
+    param_types: Vec<String>,
 }
 
 /// Precedence of an emitted RAS expression (higher binds tighter).
@@ -2380,6 +2708,8 @@ struct Emitter<'a> {
     locals: HashMap<String, VarInfo>,
     /// Lower-cased name of the function being emitted and its result variable.
     result: Option<(String, String)>,
+    /// The RAS type the function being emitted returns.
+    result_type: Option<String>,
     result_used: bool,
     with_stack: Vec<String>,
     with_n: usize,
@@ -2397,6 +2727,33 @@ struct Emitter<'a> {
     inits: HashMap<String, String>,
     /// Names imported from peers: module key → RAS names.
     imports: BTreeMap<String, BTreeSet<String>>,
+    /// `Static` variables of the procedure being emitted (lower-cased), declared at module level.
+    statics: HashSet<String>,
+    /// Indentation of the declarations of the module: 1 inside the `class { … }` of a class module.
+    base_indent: usize,
+    /// The variables of a class module (lower-cased): fields, referred to with `this.`.
+    fields: HashSet<String>,
+    /// Labels (lower-cased) of the blocks being emitted that a `GoTo` leaves (`forward_jumps`).
+    jump_labels: Vec<String>,
+    /// For each `For` / `For Each` being emitted: the variable set when `Exit For` leaves it.
+    loop_flags: Vec<Option<String>>,
+    /// What RAS cannot express stays VBA (`` vba`…` `` blocks) instead of a TODO comment.
+    fallback: bool,
+    /// Procedures (lower-cased) to keep as VBA whatever their conversion gives.
+    keep: HashSet<String>,
+    /// Arrays (lower-cased) with more than one dimension, from their `Dim` / `ReDim`.
+    array_dims: HashMap<String, usize>,
+    /// Variables declared as arrays (`Dim a() As Long`).
+    array_vars: HashSet<String>,
+    /// Names (lower-cased) of the `Declare`d functions of the module: a procedure that calls
+    /// one stays VBA (the types of its arguments are the API's business).
+    api: HashSet<String>,
+    /// The procedures kept as VBA.
+    raw: Vec<String>,
+    /// The names (lower-cased) a `declare function` was written for.
+    declared: HashSet<String>,
+    /// The procedures converted: (first line, last line in `out`, 1-based; name in the VBA).
+    spans: Vec<(usize, usize, String)>,
 }
 
 impl<'a> Emitter<'a> {
@@ -2434,6 +2791,7 @@ impl<'a> Emitter<'a> {
             enums: HashMap::new(),
             locals: HashMap::new(),
             result: None,
+            result_type: None,
             result_used: false,
             with_stack: Vec::new(),
             with_n: 0,
@@ -2444,6 +2802,19 @@ impl<'a> Emitter<'a> {
             glue: HashSet::new(),
             inits: HashMap::new(),
             imports: BTreeMap::new(),
+            statics: HashSet::new(),
+            base_indent: 0,
+            fields: HashSet::new(),
+            jump_labels: Vec::new(),
+            loop_flags: Vec::new(),
+            fallback: false,
+            keep: HashSet::new(),
+            array_dims: HashMap::new(),
+            array_vars: HashSet::new(),
+            api: HashSet::new(),
+            raw: Vec::new(),
+            declared: HashSet::new(),
+            spans: Vec::new(),
         }
     }
 
@@ -2476,13 +2847,23 @@ impl<'a> Emitter<'a> {
             .into_iter()
             .map(|(line, message)| (line + shift, message))
             .collect();
-        Converted { text, todos }
+        let procs = self
+            .spans
+            .into_iter()
+            .map(|(from, to, name)| (from + shift, to + shift, name))
+            .collect();
+        Converted {
+            text,
+            todos,
+            raw: self.raw,
+            procs,
+        }
     }
 
     /// What `Me` is: the form, the sheet, or the workbook.
     fn self_ref(&self) -> Option<String> {
         match self.target {
-            Target::Form(_) | Target::Document { .. } => Some("this".into()),
+            Target::Form(_) | Target::Document { .. } | Target::Class { .. } => Some("this".into()),
             Target::Standard => None,
         }
     }
@@ -2492,34 +2873,58 @@ impl<'a> Emitter<'a> {
         match self.target {
             Target::Document { workbook: true, .. } => Some(&self.host.workbook),
             Target::Document { .. } => Some(&self.host.worksheet),
+            // (What VBA's own functions also name — `Left`, `Width` — stays the function.)
+            Target::Form(_) => Some(&self.host.userform),
             _ => None,
-        }
-    }
-
-    /// Where the converted code ends up, for messages.
-    fn place(&self) -> &'static str {
-        match self.target {
-            Target::Form(_) => "フォームのコードビハインド",
-            Target::Document { workbook: true, .. } => "`ThisWorkbook` のファイル",
-            Target::Document { .. } => "シートのファイル",
-            _ => "RAS のモジュール",
         }
     }
 
     /// A public name of a peer used without a qualifier: imported by name.
     fn peer_name(&mut self, lower: &str) -> Option<PublicName> {
         let peers = self.peers;
-        let (peer, name) = peers.iter().filter(|p| !p.document).find_map(|p| {
-            p.names
-                .iter()
-                .find(|n| n.vba.to_lowercase() == lower)
-                .map(|n| (p, n))
-        })?;
+        let (peer, name) = peers
+            .iter()
+            .filter(|p| !p.document && !p.form)
+            .find_map(|p| {
+                p.names
+                    .iter()
+                    .find(|n| n.vba.to_lowercase() == lower)
+                    .map(|n| (p, n))
+            })?;
         self.imports
             .entry(peer.key.clone())
             .or_default()
             .insert(name.ras.clone());
         Some(name.clone())
+    }
+
+    /// A member of a public enum of a peer (`lvHigh`, or `Level.lvHigh` with `of`): the enum
+    /// is imported and the member written with it (`Level.lvHigh`).
+    fn peer_enum_member(&mut self, of: Option<&str>, lower: &str) -> Option<String> {
+        let peers = self.peers;
+        let (peer, name, member) =
+            peers
+                .iter()
+                .filter(|p| !p.document && !p.form)
+                .find_map(|p| {
+                    p.names
+                        .iter()
+                        // (The members of a class need an object.)
+                        .filter(|n| !n.class && of.is_none_or(|e| n.vba.to_lowercase() == e))
+                        .find_map(|n| {
+                            n.members
+                                .iter()
+                                .find(|m| m.to_lowercase() == lower)
+                                .map(|m| (p, n, m))
+                        })
+                })?;
+        if !self.taken.contains(&name.ras.to_lowercase()) {
+            self.imports
+                .entry(peer.key.clone())
+                .or_default()
+                .insert(name.ras.clone());
+        }
+        Some(format!("{}.{member}", name.ras))
     }
 
     /// `Module1.Foo`: a public name of a peer used with its module's name.
@@ -2529,8 +2934,8 @@ impl<'a> Emitter<'a> {
             .iter()
             .find(|p| p.vba_name.eq_ignore_ascii_case(module))?;
         let name = peer.names.iter().find(|n| n.vba.to_lowercase() == lower)?;
-        if peer.document {
-            // A member of the sheet (of the workbook): `Sheet1.foo`, `thisWorkbook.foo`.
+        if peer.document || peer.form {
+            // A member of the sheet (of the workbook, of the form): `Sheet1.foo`, `thisWorkbook.foo`.
             let object = if peer.vba_name.eq_ignore_ascii_case("ThisWorkbook") {
                 "thisWorkbook".to_string()
             } else {
@@ -2608,7 +3013,17 @@ impl<'a> Emitter<'a> {
     }
 
     fn ras_type(&mut self, t: Option<&TypeName>, suffix: Option<char>, array: bool) -> String {
-        let base = match t {
+        // (The elements of an array keep their exact type: an `Integer()` cannot be assigned
+        // to a `Long()`.)
+        let exact = self.exact_integer;
+        self.exact_integer = exact || array;
+        let base = self.scalar_type(t, suffix);
+        self.exact_integer = exact;
+        self.array_type(base, array)
+    }
+
+    fn scalar_type(&mut self, t: Option<&TypeName>, suffix: Option<char>) -> String {
+        match t {
             Some(t) => self.type_of(&t.name),
             None => match suffix {
                 Some('$') => "string".into(),
@@ -2620,11 +3035,36 @@ impl<'a> Emitter<'a> {
                 Some('@') => "currency".into(),
                 _ => "any".into(),
             },
-        };
+        }
+    }
+
+    fn array_type(&mut self, base: String, array: bool) -> String {
+        // An array of VBA has the bounds its code gives it (`ReDim a(1 To n)`). An array of
+        // numbers or strings stays a typed array (its elements are converted as they are
+        // stored: `Dim a() As Long`); any other is kept in a Variant.
         if array {
-            format!("{base}[]")
+            match base.as_str() {
+                "int" | "short" | "byte" | "long" | "float" | "double" | "currency" | "string"
+                | "boolean" | "date" => format!("{base}[]"),
+                _ => "any".into(),
+            }
         } else {
             base
+        }
+    }
+
+    /// The type of the array `name`, with the number of dimensions its `Dim` / `ReDim` give it
+    /// (`int[]` → `int[][]`).
+    fn dimensioned(&self, ty: String, name: &str) -> String {
+        let dims = self
+            .array_dims
+            .get(&name.to_lowercase())
+            .copied()
+            .unwrap_or(1);
+        if ty.ends_with("[]") && dims > 1 {
+            format!("{ty}{}", "[]".repeat(dims - 1))
+        } else {
+            ty
         }
     }
 
@@ -2653,6 +3093,46 @@ impl<'a> Emitter<'a> {
                 let short = lower.rsplit('.').next().unwrap_or(&lower).to_string();
                 if let Some(e) = self.enums.get(&short) {
                     return e.clone();
+                }
+                // The class of this file, a class or a form of the project.
+                if matches!(self.target, Target::Class { name } if name.to_lowercase() == short) {
+                    return name.rsplit('.').next().unwrap_or(name).to_string();
+                }
+                let peers = self.peers;
+                if let Some(form) = peers
+                    .iter()
+                    .find(|p| p.form && p.vba_name.to_lowercase() == short)
+                {
+                    return form.vba_name.clone();
+                }
+                if let Some((peer, class)) = peers.iter().find_map(|p| {
+                    p.names
+                        .iter()
+                        .find(|n| n.class && n.vba.to_lowercase() == short)
+                        .map(|n| (p, n))
+                }) {
+                    self.imports
+                        .entry(peer.key.clone())
+                        .or_default()
+                        .insert(class.ras.clone());
+                    return class.ras.clone();
+                }
+                // A public enum of another module that is converted too.
+                if let Some((peer, name)) = peers
+                    .iter()
+                    .filter(|p| !p.document && !p.form)
+                    .find_map(|p| {
+                        p.names
+                            .iter()
+                            .find(|n| !n.members.is_empty() && n.vba.to_lowercase() == short)
+                            .map(|n| (p, n))
+                    })
+                {
+                    self.imports
+                        .entry(peer.key.clone())
+                        .or_default()
+                        .insert(name.ras.clone());
+                    return name.ras.clone();
                 }
                 if let Target::Form(form) = self.target {
                     if short == form.name.to_ascii_lowercase() || short == "userform" {
@@ -2689,10 +3169,37 @@ impl<'a> Emitter<'a> {
     // ----------------------------------------------------------------------------- module
 
     fn module(&mut self, items: &[Item]) {
+        // The dimensions of the arrays, from every `Dim a(…)` and `ReDim a(…)`.
+        let mut dims: HashMap<String, usize> = HashMap::new();
+        let mut note = |s: &Stmt| match &s.kind {
+            StmtKind::Dim { vars, .. } => {
+                for v in vars {
+                    if let Some(d) = v.dims.as_ref().filter(|d| !d.is_empty()) {
+                        dims.insert(v.name.to_lowercase(), d.len());
+                    }
+                }
+            }
+            StmtKind::ReDim { vars, .. } => {
+                for (target, bounds) in vars {
+                    if let Expr::Ident(name, _) | Expr::Member(_, name) = target {
+                        dims.insert(name.to_lowercase(), bounds.len());
+                    }
+                }
+            }
+            _ => {}
+        };
+        for item in items {
+            match item {
+                Item::Stmt(s) => note(s),
+                Item::Proc(p) => each_stmt(&p.body, &mut note),
+                _ => {}
+            }
+        }
+        self.array_dims = dims;
         // Names first: procedures, module variables, enums.
         for item in items {
             match item {
-                Item::Proc(p) => {
+                Item::Proc(p) | Item::Event(p) => {
                     if self.event_of(&p.name).is_none() {
                         let form = matches!(self.target, Target::Form(_));
                         // What RAS generated for `constructor` and `this.close(value)`
@@ -2705,27 +3212,68 @@ impl<'a> Emitter<'a> {
                         self.taken.insert(name.to_lowercase());
                         let exported =
                             !is_private(p.vis.as_deref()) && !(form && name == "constructor");
-                        self.procs.insert(
-                            p.name.to_lowercase(),
-                            ProcInfo {
-                                name,
-                                is_function: p.kind == "Function" || p.kind == "Get",
-                                exported,
-                            },
-                        );
+                        let property = matches!(p.kind.as_str(), "Get" | "Let" | "Set");
+                        let is_function = p.kind == "Function" || p.kind == "Get";
+                        let params = match p.kind.as_str() {
+                            "Let" | "Set" => p.params.len().saturating_sub(1),
+                            _ => p.params.len(),
+                        };
+                        let param_types: Vec<String> = p
+                            .params
+                            .iter()
+                            .map(|prm| self.ras_type(prm.ty.as_ref(), prm.suffix, prm.array))
+                            .collect();
+                        // The `Get` and the `Let` of a property are one name.
+                        match self.procs.get_mut(&p.name.to_lowercase()) {
+                            Some(info) if property => {
+                                info.is_function |= is_function;
+                                info.exported |= exported;
+                            }
+                            _ => {
+                                self.procs.insert(
+                                    p.name.to_lowercase(),
+                                    ProcInfo {
+                                        name,
+                                        is_function,
+                                        exported,
+                                        property,
+                                        params,
+                                        param_types,
+                                    },
+                                );
+                            }
+                        }
                     }
                 }
                 Item::Stmt(Stmt {
                     kind: StmtKind::Dim { vars, .. } | StmtKind::Const(vars),
                     ..
                 }) => {
+                    let field = matches!(self.target, Target::Class { .. })
+                        && matches!(item, Item::Stmt(s) if matches!(s.kind, StmtKind::Dim { .. }));
                     for v in vars {
                         let ty = self.ras_type(v.ty.as_ref(), v.suffix, v.dims.is_some());
+                        if v.dims.is_some() {
+                            self.array_vars.insert(v.name.to_lowercase());
+                        }
+                        if v.dims.is_some() {
+                            self.array_vars.insert(v.name.to_lowercase());
+                        }
+                        let ty = self.dimensioned(ty, &v.name);
                         let name = Self::user_ident(&v.name);
                         self.taken.insert(name.to_lowercase());
+                        if field {
+                            self.fields.insert(v.name.to_lowercase());
+                        }
                         self.module_vars
                             .insert(v.name.to_lowercase(), VarInfo { name, ty });
                     }
+                }
+                Item::Declare {
+                    signature: Some(p), ..
+                } => {
+                    self.api.insert(p.name.to_lowercase());
+                    self.taken.insert(p.name.to_lowercase());
                 }
                 Item::Enum { name, members, .. } => {
                     self.enums.insert(name.to_lowercase(), name.clone());
@@ -2738,9 +3286,137 @@ impl<'a> Emitter<'a> {
                 _ => {}
             }
         }
-        self.find_glue(items);
-        let mut first = true;
+        // The handlers of events get their names now: an event procedure can be called by
+        // its name (`Worksheet_Activate`), which is then a call of the handler.
         for item in items {
+            let Item::Proc(p) = item else { continue };
+            let Some((object, event)) = self.event_of(&p.name) else {
+                continue;
+            };
+            let base = format!(
+                "{}{event}",
+                if object == "Workbook" || object == "Worksheet" {
+                    "on".to_string()
+                } else {
+                    names::js_name(&object)
+                }
+            );
+            let name = self.fresh(&base);
+            let param_types: Vec<String> = p
+                .params
+                .iter()
+                .map(|prm| self.ras_type(prm.ty.as_ref(), prm.suffix, prm.array))
+                .collect();
+            self.procs.insert(
+                p.name.to_lowercase(),
+                ProcInfo {
+                    name,
+                    is_function: false,
+                    exported: false,
+                    property: false,
+                    params: p.params.len(),
+                    param_types,
+                },
+            );
+        }
+        self.find_glue(items);
+        // A class module: its constants and enums come before the class, the rest is the
+        // body of the class.
+        let class = match self.target {
+            Target::Class { name } => Some(name),
+            _ => None,
+        };
+        let before_class = |item: &Item| {
+            matches!(
+                item,
+                Item::Enum { .. }
+                    | Item::Stmt(Stmt {
+                        kind: StmtKind::Const(_),
+                        ..
+                    })
+            )
+        };
+        // `#If … #End If` around declarations and procedures (a standard module): the whole
+        // region stays VBA. First item of a region → (its last item, first line, last line).
+        let mut regions: HashMap<usize, (usize, usize, usize)> = HashMap::new();
+        let mut in_region: HashSet<usize> = HashSet::new();
+        if self.fallback && !matches!(self.target, Target::Class { .. }) {
+            let lines = self.lines;
+            let directive = |item: &Item| match item {
+                Item::Todo { from, .. } => {
+                    let text = lines[*from].src.trim_start().to_ascii_lowercase();
+                    text.starts_with('#').then_some(text)
+                }
+                _ => None,
+            };
+            let mut i = 0;
+            while i < items.len() {
+                if directive(&items[i]).is_some_and(|d| d.starts_with("#if")) {
+                    let mut depth = 1;
+                    let mut j = i + 1;
+                    while j < items.len() && depth > 0 {
+                        match directive(&items[j]) {
+                            Some(d) if d.starts_with("#if") => depth += 1,
+                            Some(d) if d.starts_with("#end if") => depth -= 1,
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    if let (0, Item::Todo { from, .. }, Item::Todo { to, .. }) =
+                        (depth, &items[i], &items[j - 1])
+                    {
+                        if self.raw_text(*from, *to).is_some() {
+                            regions.insert(i, (j - 1, *from, *to));
+                            in_region.extend(i..j);
+                            i = j;
+                            continue;
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+        let mut first = true;
+        for (in_class, index, item) in [false, true].into_iter().flat_map(|in_class| {
+            items
+                .iter()
+                .enumerate()
+                .map(move |(index, item)| (in_class, index, item))
+        }) {
+            match class {
+                Some(_) if before_class(item) == in_class => continue,
+                None if in_class => continue,
+                _ => {}
+            }
+            if in_region.contains(&index) {
+                if let Some(&(last, from, to)) = regions.get(&index) {
+                    if !first {
+                        self.blank();
+                    }
+                    let text = self.raw_text(from, to).unwrap_or_default();
+                    self.raw_block(&text);
+                    for inner in &items[index..=last] {
+                        match inner {
+                            Item::Proc(p) if !matches!(p.kind.as_str(), "Get" | "Let" | "Set") => {
+                                self.declare_line(p)
+                            }
+                            Item::Declare {
+                                signature: Some(p), ..
+                            } => self.declare_line(p),
+                            _ => {}
+                        }
+                    }
+                    first = false;
+                }
+                continue;
+            }
+            if let (Some(name), true, 0) = (class, in_class, self.base_indent) {
+                self.blank();
+                self.line(format!("export class {name} {{"));
+                self.indent = 1;
+                self.base_indent = 1;
+                first = true;
+            }
             if let Item::Proc(p) = item {
                 if self.glue.contains(&p.name.to_lowercase()) {
                     continue;
@@ -2773,7 +3449,73 @@ impl<'a> Emitter<'a> {
                     if !first {
                         self.blank();
                     }
+                    // A procedure of a standard module with something that RAS cannot
+                    // express stays VBA, with a declaration for the code that calls it.
+                    let mark = (self.out.len(), self.todos.len());
+                    let saved = (self.imports.clone(), self.taken.clone());
                     self.procedure(p);
+                    let lines = self.lines;
+                    let calls_api = !self.api.is_empty()
+                        && lines[p.line..=p.end].iter().any(|l| {
+                            l.toks.iter().any(
+                                |t| matches!(t, Tok::Word(w, _) if self.api.contains(&w.to_lowercase())),
+                            )
+                        });
+                    let keep = self.todos.len() > mark.1
+                        || calls_api
+                        || self.keep.contains(&p.name.to_lowercase());
+                    let raw = (keep
+                        && self.fallback
+                        && !matches!(self.target, Target::Class { .. })
+                        && !matches!(p.kind.as_str(), "Get" | "Let" | "Set")
+                        // (`Workbook_Open` is generated: it starts the project, spec §12.3.)
+                        && !(matches!(self.target, Target::Document { workbook: true, .. })
+                            && p.name.eq_ignore_ascii_case("Workbook_Open")))
+                    .then(|| self.raw_text(p.line, p.end))
+                    .flatten();
+                    if let Some(text) = raw {
+                        self.out.truncate(mark.0);
+                        self.todos.truncate(mark.1);
+                        (self.imports, self.taken) = saved;
+                        self.raw_block(&text);
+                        // (An event procedure is called by Excel only.)
+                        if self.event_of(&p.name).is_none() {
+                            self.declare_line(p);
+                        }
+                        self.raw.push(p.name.clone());
+                    } else {
+                        self.spans
+                            .push((mark.0 + 1, self.out.len(), p.name.clone()));
+                    }
+                }
+                Item::Event(p) => {
+                    if !first {
+                        self.blank();
+                    }
+                    if matches!(self.target, Target::Class { .. }) {
+                        let params = self.declared_params(p);
+                        let name = Self::user_ident(&p.name);
+                        self.line(format!("event {name}({});", params.join(", ")));
+                    } else {
+                        self.todo(p.line, p.line, "Event はクラス モジュールにだけ書けます");
+                    }
+                }
+                Item::Declare { line, signature } => {
+                    if !first {
+                        self.blank();
+                    }
+                    match self
+                        .raw_text(*line, *line)
+                        .filter(|_| self.fallback && !matches!(self.target, Target::Class { .. }))
+                    {
+                        Some(text) => {
+                            self.raw_block(&text);
+                            if let Some(p) = signature {
+                                self.declare_line(p);
+                            }
+                        }
+                        None => self.todo(*line, *line, "Declare には対応していません。src/ のモジュールに `declare module` で宣言してください"),
+                    }
                 }
                 Item::Enum {
                     name,
@@ -2827,21 +3569,255 @@ impl<'a> Emitter<'a> {
             }
             first = false;
         }
+        if let Some(name) = class {
+            if self.base_indent == 0 {
+                self.blank();
+                self.line(format!("export class {name} {{"));
+            }
+            while self.out.last().is_some_and(|l| l.is_empty()) {
+                self.out.pop();
+            }
+            self.indent = 0;
+            self.base_indent = 0;
+            self.line("}");
+        }
+    }
+
+    /// The lines `from..=to` of the VBA as they are, for a `` vba`…` `` block; `None` when
+    /// they hold what such a block cannot (a back-tick, `${`).
+    fn raw_text(&self, from: usize, to: usize) -> Option<String> {
+        let mut text = String::new();
+        for (i, line) in self.lines[from..=to.min(self.lines.len() - 1)]
+            .iter()
+            .enumerate()
+        {
+            if i > 0 && line.blank_before {
+                text.push('\n');
+            }
+            text.push_str(&line.src);
+            text.push('\n');
+        }
+        (!text.contains('`') && !text.contains("${")).then_some(text)
+    }
+
+    /// Writes a block of VBA that goes into the module as it is (spec §14.7.4).
+    fn raw_block(&mut self, text: &str) {
+        self.out.push("vba`".into());
+        let lines: Vec<String> = text.lines().map(|l| self.generated_names(l)).collect();
+        self.out.extend(lines);
+        self.out.push("`;".into());
+    }
+
+    /// A line of VBA with the names of the project as the generated VBA spells them: the
+    /// members of an enum (`Level.lvHigh`, `lvHigh` → `Level_lvHigh`) and the procedures that
+    /// have the name of a function of VBA (`Trim` → `Trim_`).
+    fn generated_names(&self, line: &str) -> String {
+        let (code, comment) = split_comment(line);
+        if comment.is_some() && code.trim().is_empty() {
+            return line.to_string();
+        }
+        // Enum (lower-cased) → its members (lower-cased → as declared).
+        let mut enums: HashMap<String, HashMap<String, String>> = HashMap::new();
+        for (member, qualified) in &self.enum_members {
+            if let Some((e, m)) = qualified.split_once('.') {
+                enums
+                    .entry(e.to_string())
+                    .or_default()
+                    .insert(member.clone(), m.to_string());
+            }
+        }
+        let mut renamed: HashMap<String, String> = HashMap::new();
+        let mut modules: HashSet<String> = HashSet::new();
+        for peer in self.peers.iter().filter(|p| !p.document && !p.form) {
+            modules.insert(peer.vba_name.to_lowercase());
+            for n in &peer.names {
+                if !n.members.is_empty() && !n.class {
+                    let members = enums.entry(n.ras.clone()).or_default();
+                    for m in &n.members {
+                        members.insert(m.to_lowercase(), m.clone());
+                    }
+                } else if !n.class && names::module_ident(&n.ras) != n.ras {
+                    renamed.insert(n.vba.to_lowercase(), names::module_ident(&n.ras));
+                }
+            }
+        }
+        if matches!(self.target, Target::Standard) {
+            for (lower, p) in &self.procs {
+                if names::module_ident(&p.name) != p.name {
+                    renamed.insert(lower.clone(), names::module_ident(&p.name));
+                }
+            }
+        }
+        // What is kept as VBA keeps its name.
+        for kept in self.raw.iter().chain(self.keep.iter()) {
+            renamed.remove(&kept.to_lowercase());
+        }
+        let enum_of = |name: &str| {
+            enums
+                .iter()
+                .find(|(e, _)| e.eq_ignore_ascii_case(name))
+                .map(|(e, members)| (names::member_ident(e), members))
+        };
+        let chars: Vec<char> = code.chars().collect();
+        let mut out = String::new();
+        // The identifier before the current one, and whether a `.` joins them.
+        let mut previous: Option<String> = None;
+        let mut dotted = false;
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if c == '"' {
+                // A string literal, as it is.
+                out.push(c);
+                i += 1;
+                while i < chars.len() {
+                    out.push(chars[i]);
+                    i += 1;
+                    if chars[i - 1] == '"' {
+                        if chars.get(i) == Some(&'"') {
+                            out.push('"');
+                            i += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                previous = None;
+                dotted = false;
+                continue;
+            }
+            if c.is_alphabetic() || c == '_' {
+                let start = i;
+                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+                let word: String = chars[start..i].iter().collect();
+                let lower = word.to_lowercase();
+                // (`dotted` without a name before it: a member inside `With`.)
+                let qualifier = previous.take().filter(|_| dotted);
+                let replaced = match &qualifier {
+                    // `Level.lvHigh`: the enum goes, the member takes its generated name.
+                    Some(q) => match enum_of(q) {
+                        Some((e, members)) => members.get(&lower).map(|m| {
+                            out.truncate(out.trim_end().len() - 1 - q.len());
+                            format!("{e}_{m}")
+                        }),
+                        None if modules.contains(&q.to_lowercase()) => renamed.get(&lower).cloned(),
+                        None => None,
+                    },
+                    None if dotted => None,
+                    // (A keyword is no member without its enum: `On Error`.)
+                    None if is_keyword(&word) || names::is_reserved(&word) => {
+                        renamed.get(&lower).cloned()
+                    }
+                    None => renamed.get(&lower).cloned().or_else(|| {
+                        let found: Vec<String> = enums
+                            .iter()
+                            .filter_map(|(e, members)| {
+                                members
+                                    .get(&lower)
+                                    .map(|m| format!("{}_{m}", names::member_ident(e)))
+                            })
+                            .collect();
+                        (found.len() == 1).then(|| found[0].clone())
+                    }),
+                };
+                out.push_str(replaced.as_deref().unwrap_or(&word));
+                previous = Some(word);
+                dotted = false;
+                continue;
+            }
+            if c == '.' {
+                dotted = true;
+            } else if !c.is_whitespace() {
+                previous = None;
+                dotted = false;
+            }
+            out.push(c);
+            i += 1;
+        }
+        match comment {
+            Some(comment) => format!("{out}'{comment}"),
+            None => out,
+        }
+    }
+
+    /// The declaration of a procedure that stays VBA, for the RAS code that calls it.
+    /// The parameters of a declaration without a body (`declare function`, `event`).
+    fn declared_params(&mut self, p: &Proc) -> Vec<String> {
+        let mut params = Vec::new();
+        for prm in &p.params {
+            let name = Self::user_ident(&prm.name);
+            if prm.paramarray {
+                params.push(format!("...{name}: any[]"));
+                continue;
+            }
+            let ty = self.ras_type(prm.ty.as_ref(), prm.suffix, prm.array);
+            let optional = if prm.optional || prm.default.is_some() {
+                "?"
+            } else {
+                ""
+            };
+            let byref = if prm.byval != Some(true) && ty == "any" && optional.is_empty() {
+                "byref "
+            } else {
+                ""
+            };
+            params.push(format!("{byref}{name}{optional}: {ty}"));
+        }
+        params
+    }
+
+    fn declare_line(&mut self, p: &Proc) {
+        let params = self.declared_params(p);
+        let ret = if p.kind == "Function" {
+            self.ras_type(p.ret.as_ref(), p.suffix, p.ret_array)
+        } else {
+            "void".to_string()
+        };
+        let export = if is_private(p.vis.as_deref()) {
+            ""
+        } else {
+            "export "
+        };
+        let name = Self::user_ident(&p.name);
+        // (Declared in both branches of an `#If`: one declaration.)
+        if !self.declared.insert(name.to_lowercase()) {
+            return;
+        }
+        self.line(format!(
+            "{export}declare function {name}({}): {ret};",
+            params.join(", ")
+        ));
     }
 
     fn module_stmt(&mut self, s: &Stmt) {
         match &s.kind {
             StmtKind::Dim { vars, is_static: _ } => {
                 let public = is_public_decl(&self.lines[s.line]);
+                // The fields of a class.
+                if matches!(self.target, Target::Class { .. }) {
+                    let start = self.out.len();
+                    self.var_decls(vars, s);
+                    for line in &mut self.out[start..] {
+                        let indent = line.len() - line.trim_start().len();
+                        if line[indent..].starts_with("let ") {
+                            line.replace_range(
+                                indent..indent + 4,
+                                if public { "" } else { "private " },
+                            );
+                        }
+                    }
+                    return;
+                }
                 let form = !matches!(self.target, Target::Standard);
                 if public && matches!(self.target, Target::Document { .. }) {
                     self.todo(s.line, s.line, "Public 変数はシート・ThisWorkbook のファイルで公開できません（このファイルの中だけの変数にしました。外から使うときは export した関数で受け渡してください）");
-                } else if public && form {
-                    self.todo(s.line, s.line, "Public 変数はフォームのコードビハインドで公開できません（フォームの中だけの変数にしました。外から使うときは export した関数で受け渡してください）");
                 }
                 let start = self.out.len();
                 self.var_decls(vars, s);
-                if public && !form {
+                // (A public variable of a form is a member of the form.)
+                if public && (!form || matches!(self.target, Target::Form(_))) {
                     self.export_lines(start);
                 }
             }
@@ -2889,13 +3865,19 @@ impl<'a> Emitter<'a> {
     fn var_decls(&mut self, vars: &[VarDecl], s: &Stmt) {
         for (i, v) in vars.iter().enumerate() {
             let ty = self.ras_type(v.ty.as_ref(), v.suffix, v.dims.is_some());
+            if v.dims.is_some() {
+                self.array_vars.insert(v.name.to_lowercase());
+            }
+            let ty = self.dimensioned(ty, &v.name);
+            // (A typed array without elements yet is VBA's `Dim a() As Long` itself.)
+            let empty = if ty.ends_with("[]") { " = []" } else { "" };
             let name = Self::user_ident(&v.name);
             let comment = if i + 1 == vars.len() {
                 self.trailing(s)
             } else {
                 String::new()
             };
-            if self.result.is_some() || self.indent > 0 {
+            if self.result.is_some() || self.indent > self.base_indent {
                 self.locals.insert(
                     v.name.to_lowercase(),
                     VarInfo {
@@ -2905,16 +3887,32 @@ impl<'a> Emitter<'a> {
                 );
             }
             if v.ty.as_ref().is_some_and(|t| t.new) {
-                self.line(format!("let {name} = new {ty}();{comment}"));
-            } else if v.dims.as_ref().is_some_and(|d| !d.is_empty()) {
-                self.todo(s.line, s.line, "大きさを指定した配列には対応していません（空の配列にしました。push で要素を追加してください）");
-                self.line(format!("let {name}: {ty} = [];{comment}"));
+                self.line(format!("let {name}: {ty} = new {ty}();{comment}"));
+            } else if let Some(dims) = v.dims.as_ref().filter(|d| !d.is_empty()) {
+                if self.indent == self.base_indent {
+                    self.todo(s.line, s.line, "モジュールレベルの大きさを指定した配列には対応していません（使う前に redim で大きさを決めてください）");
+                    self.line(format!("let {name}: {ty}{empty};{comment}"));
+                } else {
+                    match self.bounds(dims) {
+                        Ok(bounds) => {
+                            self.line(format!("let {name}: {ty}{empty};{comment}"));
+                            self.line(format!("redim({name}, {bounds});"));
+                        }
+                        Err(reason) => {
+                            self.todo(s.line, s.line, &reason);
+                            self.line(format!("let {name}: {ty}{empty};{comment}"));
+                        }
+                    }
+                }
+            } else if v.dims.is_some() && !empty.is_empty() {
+                self.line(format!("let {name}: {ty}{empty};{comment}"));
             } else if v.dims.is_some() {
-                self.line(format!("let {name}: {ty} = [];{comment}"));
+                // `Dim a()`: an array without elements yet (not the `Empty` of a Variant).
+                self.line(format!("let {name}: {ty} = dynamicArray();{comment}"));
             } else if let Some(init) = self
                 .inits
                 .get(&v.name.to_lowercase())
-                .filter(|_| self.indent == 0)
+                .filter(|_| self.indent == self.base_indent)
                 .cloned()
             {
                 self.line(format!("let {name}: {ty} = {init};{comment}"));
@@ -2922,6 +3920,19 @@ impl<'a> Emitter<'a> {
                 self.line(format!("let {name}: {ty};{comment}"));
             }
         }
+    }
+
+    /// The bounds of an array as the arguments of `redim`: `lower, upper` for each dimension.
+    fn bounds(&mut self, dims: &[(Option<Expr>, Expr)]) -> Result<String, String> {
+        let mut parts = Vec::new();
+        for (lower, upper) in dims {
+            parts.push(match lower {
+                Some(lower) => self.value_expr(lower)?.0,
+                None => "0".to_string(),
+            });
+            parts.push(self.value_expr(upper)?.0);
+        }
+        Ok(parts.join(", "))
     }
 
     fn const_decls(&mut self, vars: &[VarDecl], s: &Stmt) {
@@ -2937,7 +3948,7 @@ impl<'a> Emitter<'a> {
             } else {
                 String::new()
             };
-            if self.indent > 0 {
+            if self.indent > self.base_indent {
                 let ty = self.ras_type(v.ty.as_ref(), v.suffix, false);
                 self.locals.insert(
                     v.name.to_lowercase(),
@@ -2996,6 +4007,7 @@ impl<'a> Emitter<'a> {
                     StmtKind::Assign {
                         target: Expr::Ident(n, _),
                         value,
+                        ..
                     } if self.module_vars.contains_key(&n.to_lowercase()) => {
                         inits.push((n.to_lowercase(), value.clone()));
                         true
@@ -3076,7 +4088,8 @@ impl<'a> Emitter<'a> {
     /// or of the sheet or workbook of a document module (`Sheet1`, `Change`; `Workbook`, `Open`).
     fn event_of(&self, name: &str) -> Option<(String, String)> {
         // `app_SheetChange` of `Private WithEvents app As Application` (spec §12.2.2): where
-        // VBA allows such a variable, in the module of a form, of a sheet or of the workbook.
+        // VBA allows such a variable, in the module of a form, of a sheet or of the workbook,
+        // and in a class.
         if !matches!(self.target, Target::Standard) {
             for (i, _) in name.match_indices('_') {
                 let (object, event) = (&name[..i], &name[i + 1..]);
@@ -3109,7 +4122,7 @@ impl<'a> Emitter<'a> {
                 }
                 None
             }
-            Target::Standard => None,
+            Target::Standard | Target::Class { .. } => None,
             Target::Document {
                 workbook, controls, ..
             } => {
@@ -3174,17 +4187,44 @@ impl<'a> Emitter<'a> {
         self.with_stack.clear();
         self.with_n = 0;
         self.result = None;
+        self.result_type = None;
         self.result_used = false;
         let event = self.event_of(&p.name);
         if self.unsupported_event(&p.name) {
             self.todo(p.line, p.line, "RAS が対応していないイベントのプロシージャです（ふつうの関数にしました。イベントでは呼ばれません）");
         }
-        if p.is_static {
-            self.todo(
-                p.line,
-                p.line,
-                "Static プロシージャには対応していません（変数は呼び出しごとに初期化されます）",
-            );
+        // `Static` variables keep their values between calls: variables of the module, named
+        // after the procedure.
+        self.statics.clear();
+        let mut statics = Vec::new();
+        each_stmt(&p.body, &mut |s| {
+            if let StmtKind::Dim { vars, is_static } = &s.kind {
+                if *is_static || p.is_static {
+                    statics.extend(vars.iter().cloned());
+                }
+            }
+        });
+        for v in &statics {
+            let ty = self.ras_type(v.ty.as_ref(), v.suffix, v.dims.is_some());
+            if v.dims.is_some() {
+                self.array_vars.insert(v.name.to_lowercase());
+            }
+            let prefix = match p.kind.as_str() {
+                "Get" | "Let" | "Set" => format!("{}{}", p.kind.to_ascii_lowercase(), p.name),
+                _ => p.name.clone(),
+            };
+            let name = self.fresh(&format!("{prefix}_{}", v.name));
+            let init = if v.ty.as_ref().is_some_and(|t| t.new) {
+                format!(" = new {ty}()")
+            } else if v.dims.is_some() {
+                " = dynamicArray()".to_string()
+            } else {
+                String::new()
+            };
+            self.line(format!("let {name}: {ty}{init};"));
+            self.statics.insert(v.name.to_lowercase());
+            self.locals
+                .insert(v.name.to_lowercase(), VarInfo { name, ty });
         }
         let assigned = assigned_names(&p.body);
         let mut params = Vec::new();
@@ -3192,6 +4232,7 @@ impl<'a> Emitter<'a> {
             let name = Self::user_ident(&prm.name);
             self.exact_integer = event.is_some() && !matches!(self.target, Target::Standard);
             let ty = self.ras_type(prm.ty.as_ref(), prm.suffix, prm.array || prm.paramarray);
+            let ty = self.dimensioned(ty, &prm.name);
             self.exact_integer = false;
             self.locals.insert(
                 prm.name.to_lowercase(),
@@ -3200,17 +4241,27 @@ impl<'a> Emitter<'a> {
                     ty: ty.clone(),
                 },
             );
+            // `ParamArray xs()`: a rest parameter (an array that starts at 0, as in VBA).
             if prm.paramarray {
-                self.todo(
-                    p.line,
-                    p.line,
-                    "ParamArray には対応していません（配列の引数にしました）",
-                );
+                let info = VarInfo {
+                    name: name.clone(),
+                    ty: "any[]".into(),
+                };
+                self.locals.insert(prm.name.to_lowercase(), info);
+                params.push(format!("...{name}: any[]"));
+                continue;
             }
             // VBA passes by reference unless ByVal: kept only when the procedure assigns to it.
+            // (An array is always passed by reference; its elements count as the array.)
+            let lower = prm.name.to_lowercase();
+            // A Variant (an array) stays by reference as VBA passes it: no copy of the array.
+            // (An array of RAS is always passed by reference.)
             let byref = prm.byval != Some(true)
-                && !prm.array
-                && assigned.contains(&prm.name.to_lowercase());
+                && !prm.paramarray
+                && !ty.ends_with("[]")
+                && ((ty == "any" && event.is_none() && !prm.optional && prm.default.is_none())
+                    || assigned.contains(&lower)
+                    || (!Self::is_object_type(&ty) && assigned.contains(&format!("(){lower}"))));
             let mut s = format!("{}{name}", if byref { "byref " } else { "" });
             match (&prm.default, prm.optional) {
                 (Some(d), _) => match self.expr(d) {
@@ -3232,9 +4283,16 @@ impl<'a> Emitter<'a> {
                         names::js_name(object)
                     }
                 );
-                let name = self.fresh(&base);
+                let name = match self.procs.get(&p.name.to_lowercase()) {
+                    Some(info) => info.name.clone(),
+                    None => self.fresh(&base),
+                };
                 self.line(format!("@on(\"{object}.{event}\")"));
-                format!("function {name}({})", params.join(", "))
+                if matches!(self.target, Target::Class { .. }) {
+                    format!("private {name}({})", params.join(", "))
+                } else {
+                    format!("function {name}({})", params.join(", "))
+                }
             }
             None => {
                 for (event, reentrant) in self
@@ -3257,38 +4315,110 @@ impl<'a> Emitter<'a> {
                         name: p.name.clone(),
                         is_function: false,
                         exported: false,
+                        property: false,
+                        params: 0,
+                        param_types: Vec::new(),
                     });
-                let export = if info.exported { "export " } else { "" };
-                let mut name = info.name.clone();
-                if matches!(p.kind.as_str(), "Get" | "Let" | "Set") {
-                    let place = self.place();
-                    self.todo(
-                        p.line,
-                        p.line,
-                        &format!("Property プロシージャは{place}では関数にしました"),
-                    );
-                    name = format!("{}{}", p.kind.to_ascii_lowercase(), name);
+                // A class: methods and accessors, each `private` or public; `Class_Initialize`
+                // is the constructor. Elsewhere: functions and accessors of the file.
+                let class = matches!(self.target, Target::Class { .. });
+                let export = match (class, is_private(p.vis.as_deref())) {
+                    (true, true) => "private ",
+                    (true, false) => "",
+                    (false, _) if info.exported => "export ",
+                    (false, _) => "",
+                };
+                let name = info.name.clone();
+                let keyword = match p.kind.as_str() {
+                    "Get" => "get ",
+                    "Let" | "Set" => "set ",
+                    _ if class => "",
+                    _ => "function ",
+                };
+                let constructor = class && p.name.eq_ignore_ascii_case("Class_Initialize");
+                if class && p.name.eq_ignore_ascii_case("Class_Terminate") {
+                    self.todo(p.line, p.line, "Class_Terminate には対応していません（ふつうのメソッドにしました。オブジェクトが破棄されるときには呼ばれません）");
                 }
                 let ret = if p.kind == "Function" || p.kind == "Get" {
                     let t = self.ras_type(p.ret.as_ref(), p.suffix, p.ret_array);
-                    let result = if self.locals.contains_key("result") {
+                    let t = self.dimensioned(t, &p.name);
+                    // (VBA does not tell `Result` from `result`: a variable of that name
+                    // declared in the body counts.)
+                    let mut declared = self.locals.contains_key("result");
+                    each_stmt(&p.body, &mut |s| {
+                        if let StmtKind::Dim { vars, .. } | StmtKind::Const(vars) = &s.kind {
+                            declared |= vars.iter().any(|v| v.name.eq_ignore_ascii_case("result"));
+                        }
+                    });
+                    let result = if declared {
                         "ras_result".to_string()
                     } else {
                         "result".to_string()
                     };
                     self.result = Some((p.name.to_lowercase(), result));
+                    self.result_type = Some(t.clone());
                     format!(": {t}")
                 } else {
-                    String::new()
+                    // A Sub that calls itself needs its return type written (E0330).
+                    let lower = p.name.to_lowercase();
+                    let lines = self.lines;
+                    let mut recursive = false;
+                    each_stmt(&p.body, &mut |s| {
+                        recursive |= lines[s.line]
+                            .toks
+                            .iter()
+                            .any(|t| matches!(t, Tok::Word(w, _) if w.to_lowercase() == lower));
+                    });
+                    if recursive && keyword != "set " && !constructor {
+                        ": void".to_string()
+                    } else {
+                        String::new()
+                    }
                 };
-                format!("{export}function {name}({}){ret}", params.join(", "))
+                if constructor {
+                    "constructor()".to_string()
+                } else {
+                    format!("{export}{keyword}{name}({}){ret}", params.join(", "))
+                }
             }
         };
         let ret_ty = header.rsplit_once("): ").map(|(_, t)| t.to_string());
         self.line(format!("{header} {{"));
         self.indent += 1;
         let start = self.out.len();
-        let body = restructure(&p.body);
+        let body = forward_jumps(restructure(&p.body));
+        // A variable of VBA belongs to the whole procedure wherever its `Dim` stands; one
+        // declared inside a block (an `If`, a loop, what became a `try`) is declared here.
+        let top: HashSet<String> = body
+            .iter()
+            .filter_map(|s| match &s.kind {
+                StmtKind::Dim { vars, .. } => Some(vars.iter().map(|v| v.name.to_lowercase())),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let mut nested: Vec<VarDecl> = Vec::new();
+        each_stmt(&body, &mut |s| {
+            if let StmtKind::Dim { vars, .. } = &s.kind {
+                nested.extend(
+                    vars.iter()
+                        .filter(|v| !top.contains(&v.name.to_lowercase()))
+                        .cloned(),
+                );
+            }
+        });
+        nested.retain(|v| !self.statics.contains(&v.name.to_lowercase()));
+        if !nested.is_empty() {
+            let at = Stmt {
+                kind: StmtKind::Nothing,
+                line: p.line,
+                comment: None,
+                blank_before: false,
+            };
+            self.var_decls(&nested, &at);
+            self.statics
+                .extend(nested.iter().map(|v| v.name.to_lowercase()));
+        }
         self.block(&body);
         if let (Some((_, result)), Some(t)) = (self.result.clone(), ret_ty) {
             if self.result_used {
@@ -3298,6 +4428,7 @@ impl<'a> Emitter<'a> {
                     "string" => " = \"\"",
                     "boolean" => " = false",
                     t if t.ends_with("[]") => " = []",
+                    _ if p.ret_array => " = dynamicArray()",
                     _ => "",
                 };
                 self.out.insert(
@@ -3333,15 +4464,17 @@ impl<'a> Emitter<'a> {
                 StmtKind::Assign {
                     target: Expr::Ident(n, _),
                     value,
+                    set,
                 },
             ) = (self.result.clone(), &s.kind)
             {
                 if n.to_lowercase() == fname && !self.locals.contains_key(&fname) {
                     let next_exit = stmts.get(i + 1).is_some_and(|n| matches!(&n.kind, StmtKind::Exit(w) if w == "function" || w == "property"));
-                    let last = i + 1 == stmts.len() && self.indent == 1;
+                    let last = i + 1 == stmts.len() && self.indent == self.base_indent + 1;
                     if next_exit || last {
-                        match self.expr(value) {
-                            Ok((v, _)) => self.line(format!("return {v};{}", self.trailing(s))),
+                        match self.assigned_value(value, *set, self.result_type.clone().as_deref())
+                        {
+                            Ok(v) => self.line(format!("return {v};{}", self.trailing(s))),
                             Err(reason) => self.todo(s.line, s.line, &reason),
                         }
                         i += if next_exit { 2 } else { 1 };
@@ -3366,20 +4499,56 @@ impl<'a> Emitter<'a> {
                 }
             }
             StmtKind::Todo(reason) => self.todo(s.line, s.line, reason),
+            StmtKind::GoTo(label) => {
+                if self.jump_labels.contains(&label.to_lowercase()) {
+                    self.line(format!("break to{};{tail}", Self::user_ident(label)));
+                } else {
+                    self.todo(s.line, s.line, "GoTo には対応していません");
+                }
+            }
             StmtKind::File { func, args, result } => {
                 match self.file_stmt(func, args, result.as_ref()) {
                     Ok(text) => self.line(format!("{text};{tail}")),
                     Err(reason) => self.todo(s.line, s.line, &reason),
                 }
             }
-            StmtKind::Dim { vars, is_static } => {
-                if *is_static {
-                    self.todo(s.line, s.line, "Static 変数には対応していません（呼び出しごとに初期化されます。値を残すにはモジュールの変数にしてください）");
+            StmtKind::Dim { vars, .. } => {
+                // `Static` variables are declared at module level (see `procedure`).
+                let vars: Vec<VarDecl> = vars
+                    .iter()
+                    .filter(|v| !self.statics.contains(&v.name.to_lowercase()))
+                    .cloned()
+                    .collect();
+                if vars.is_empty() {
+                    if let Some(c) = &s.comment {
+                        self.comment(c);
+                    }
+                } else {
+                    self.var_decls(&vars, s);
                 }
-                self.var_decls(vars, s);
             }
             StmtKind::Const(vars) => self.const_decls(vars, s),
-            StmtKind::Assign { target, value } => match self.assign(target, value) {
+            StmtKind::ReDim { preserve, vars } => {
+                let func = if *preserve { "redimPreserve" } else { "redim" };
+                for (target, dims) in vars {
+                    let text = self
+                        .lvalue(target)
+                        .and_then(|t| Ok(format!("{func}({t}, {});", self.bounds(dims)?)));
+                    match text {
+                        Ok(text) => self.line(format!("{text}{tail}")),
+                        Err(reason) => self.todo(s.line, s.line, &reason),
+                    }
+                }
+            }
+            StmtKind::Erase(vars) => {
+                for v in vars {
+                    match self.lvalue(v) {
+                        Ok(t) => self.line(format!("erase({t});{tail}")),
+                        Err(reason) => self.todo(s.line, s.line, &reason),
+                    }
+                }
+            }
+            StmtKind::Assign { target, value, set } => match self.assign(target, value, *set) {
                 Ok(text) => self.line(format!("{text};{tail}")),
                 Err(reason) => self.todo(s.line, s.line, &reason),
             },
@@ -3447,8 +4616,10 @@ impl<'a> Emitter<'a> {
                                 (false, _) if matches!(st, Expr::Num(..)) => {
                                     format!("for ({init}; {v} <= {t}; {v} += {sv})")
                                 }
+                                // The sign of the step decides the direction at run time.
                                 _ => {
-                                    return Err("Step が定数でない For には対応していません".into())
+                                    let sv = self.operand(st, prec::REL)?;
+                                    format!("for ({init}; ({sv} >= 0 && {v} <= {t}) || ({sv} < 0 && {v} >= {t}); {v} += {sv})")
                                 }
                             }
                         }
@@ -3458,7 +4629,9 @@ impl<'a> Emitter<'a> {
                     Ok(head) => {
                         self.line(format!("{head} {{{tail}"));
                         self.indent += 1;
+                        self.loop_flags.push(None);
                         self.block(body);
+                        self.loop_flags.pop();
                         self.indent -= 1;
                         self.line("}");
                     }
@@ -3467,21 +4640,95 @@ impl<'a> Emitter<'a> {
             }
             StmtKind::ForEach { var, coll, body } => match self.expr(coll) {
                 Ok((c, _)) => {
+                    // (Over a typed array as VBA's `For Each` goes, whatever its bounds:
+                    // `for...of` on an array of RAS counts from 0.)
+                    let c = if self.var_of(coll).is_some_and(|v| v.ty.ends_with("[]")) {
+                        format!("({c} as any)")
+                    } else {
+                        c
+                    };
                     let name = Self::user_ident(var);
-                    let saved = self.locals.insert(
-                        var.to_lowercase(),
-                        VarInfo {
-                            name: name.clone(),
-                            ty: "any".into(),
-                        },
-                    );
-                    self.line(format!("for (const {name} of {c}) {{{tail}"));
-                    self.indent += 1;
-                    self.block(body);
-                    self.indent -= 1;
-                    self.line("}");
-                    if let Some(v) = saved {
-                        self.locals.insert(var.to_lowercase(), v);
+                    // The variable of the loop is a variable of the procedure (`Dim`): the
+                    // code after the loop reads it. It holds the element the loop was left
+                    // at (`Exit For`), and an object variable is Nothing after the last one.
+                    let declared = self
+                        .locals
+                        .get(&var.to_lowercase())
+                        .or_else(|| self.module_vars.get(&var.to_lowercase()))
+                        .cloned();
+                    if let Some(outer) = declared {
+                        let target = self.name_ref(var, false);
+                        let mut item = format!("{name}Item");
+                        while self.locals.contains_key(&item.to_lowercase())
+                            || self.module_vars.contains_key(&item.to_lowercase())
+                        {
+                            item.push('_');
+                        }
+                        let object = Self::is_object_type(&outer.ty);
+                        let mut leaves = false;
+                        fn exits(stmts: &[Stmt], found: &mut bool) {
+                            for s in stmts {
+                                match &s.kind {
+                                    StmtKind::Exit(w) if w == "for" => *found = true,
+                                    StmtKind::If { arms, els } => {
+                                        arms.iter().for_each(|(_, b)| exits(b, found));
+                                        if let Some(e) = els {
+                                            exits(e, found);
+                                        }
+                                    }
+                                    StmtKind::Select { cases, els, .. } => {
+                                        cases.iter().for_each(|(_, b)| exits(b, found));
+                                        if let Some(e) = els {
+                                            exits(e, found);
+                                        }
+                                    }
+                                    StmtKind::Do { body, .. } | StmtKind::With { body, .. } => {
+                                        exits(body, found)
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        exits(body, &mut leaves);
+                        let flag = (object && leaves).then(|| format!("{name}Left"));
+                        if let Some(flag) = &flag {
+                            self.line(format!("let {flag} = false;"));
+                        }
+                        self.line(format!("for (const {item} of {c}) {{{tail}"));
+                        self.indent += 1;
+                        self.line(format!("{target} = {item};"));
+                        self.loop_flags.push(flag.clone());
+                        self.block(body);
+                        self.loop_flags.pop();
+                        self.indent -= 1;
+                        self.line("}");
+                        match (&flag, object) {
+                            (Some(flag), _) => {
+                                self.line(format!("if (!{flag}) {{"));
+                                self.line(format!("    {target} = null;"));
+                                self.line("}");
+                            }
+                            (None, true) => self.line(format!("{target} = null;")),
+                            _ => {}
+                        }
+                    } else {
+                        let saved = self.locals.insert(
+                            var.to_lowercase(),
+                            VarInfo {
+                                name: name.clone(),
+                                ty: "any".into(),
+                            },
+                        );
+                        self.line(format!("for (const {name} of {c}) {{{tail}"));
+                        self.indent += 1;
+                        self.loop_flags.push(None);
+                        self.block(body);
+                        self.loop_flags.pop();
+                        self.indent -= 1;
+                        self.line("}");
+                        if let Some(v) = saved {
+                            self.locals.insert(var.to_lowercase(), v);
+                        }
                     }
                 }
                 Err(reason) => self.todo_block(s, &reason, body),
@@ -3546,7 +4793,15 @@ impl<'a> Emitter<'a> {
                     self.line(format!("return {r};{tail}"));
                 }
                 "sub" => self.line(format!("return;{tail}")),
-                "for" | "do" => self.line(format!("break;{tail}")),
+                "for" => {
+                    // (The loop over a collection notes that it was left: its variable
+                    // keeps the element.)
+                    if let Some(Some(flag)) = self.loop_flags.last().cloned() {
+                        self.line(format!("{flag} = true;"));
+                    }
+                    self.line(format!("break;{tail}"));
+                }
+                "do" => self.line(format!("break;{tail}")),
                 _ => self.todo(s.line, s.line, "この Exit には対応していません"),
             },
             // Line numbers (`Erl`, also what RAS writes) are dropped.
@@ -3694,30 +4949,141 @@ impl<'a> Emitter<'a> {
         Ok((name.clone(), Some(format!("const {name} = {text};"))))
     }
 
-    fn assign(&mut self, target: &Expr, value: &Expr) -> Result<String, String> {
+    fn assign(&mut self, target: &Expr, value: &Expr, set: bool) -> Result<String, String> {
         if let (Some((fname, result)), Expr::Ident(n, _)) = (self.result.clone(), target) {
             if n.to_lowercase() == fname && !self.locals.contains_key(&fname) {
                 self.result_used = true;
-                let (v, _) = self.expr(value)?;
+                let v = self.assigned_value(value, set, self.result_type.clone().as_deref())?;
                 return Ok(format!("{result} = {v}"));
             }
         }
-        // `lst.Selected(i) = True`: RAS cannot assign to a property that takes arguments.
-        if matches!(target, Expr::Call(callee, _) if matches!(**callee, Expr::Member(..))) {
-            return Err("引数を取るプロパティへの代入には対応していません（メソッドがあればそれを使ってください）".into());
+        // `Mid(s, start, length) = x`: the characters of `s` from `start` become those of `x`
+        // (as many as `length`, as `x` has and as `s` has room for).
+        if let Expr::Call(callee, args) = target {
+            let mid = matches!(&**callee, Expr::Ident(n, _)
+                if n.eq_ignore_ascii_case("Mid") && self.var_of(callee).is_none() && !self.procs.contains_key("mid"));
+            if let (true, [text, start, rest @ ..]) = (mid, args.as_slice()) {
+                if let (Some(text), Some(start), true) =
+                    (&text.value, &start.value, rest.len() <= 1)
+                {
+                    let s = self.lvalue(text)?;
+                    let start = self.operand(start, prec::MUL)?;
+                    let mut piece = self.value_expr(value)?.0;
+                    if let Some(length) = rest.first().and_then(|a| a.value.as_ref()) {
+                        piece = format!("left({piece}, {})", self.value_expr(length)?.0);
+                    }
+                    return Ok(format!("{s} = left(left({s}, {start} - 1) + {piece} + mid({s}, {start} + len({piece})), len({s}))"));
+                }
+            }
         }
-        let t = self.lvalue(target)?;
+        let mut t = self.lvalue(target)?;
+        // `ws.Cells(1, 2) = x`, `Range("A1") = x`: the default member of the Range.
+        // (`lst.Selected(i) = True` is an assignment to a property with arguments.)
+        if self.is_range_call(target) {
+            t.push_str(".value");
+        }
         // VBA's True is -1 when it is stored in a number (`Cancel = True` in QueryClose).
         if let (Some(var), Expr::Bool(b)) = (self.var_of(target), value) {
             if var.is_numeric() {
                 return Ok(format!("{t} = {}", if *b { "-1" } else { "0" }));
             }
         }
-        let (v, _) = self.value_expr(value)?;
+        // (A property takes its value as VBA's `=` gives it.)
+        let target_type = match target {
+            Expr::Member(..) => Some("string".to_string()),
+            _ => self.var_of(target).map(|v| v.ty),
+        };
+        let v = self.assigned_value(value, set, target_type.as_deref())?;
         Ok(format!("{t} = {v}"))
     }
 
+    /// `Cells(1, 2)`, `ws.Range("A1")`, `c.Offset(1, 0)`: a call that returns a Range.
+    fn is_range_call(&self, e: &Expr) -> bool {
+        let Expr::Call(callee, _) = e else {
+            return false;
+        };
+        let member = match &**callee {
+            Expr::Member(_, name) => name,
+            Expr::Ident(name, _) if self.var_of(callee).is_none() => name,
+            _ => return false,
+        };
+        let lower = member.to_lowercase();
+        RANGE_MEMBERS.contains(&lower.as_str()) && !self.procs.contains_key(&lower)
+    }
+
+    /// The value an assignment stores: without `Set`, a Range stands for its `Value`.
+    fn assigned_value(
+        &mut self,
+        value: &Expr,
+        set: bool,
+        target: Option<&str>,
+    ) -> Result<String, String> {
+        let (v, _) = self.value_expr(value)?;
+        if set {
+            return Ok(v);
+        }
+        if self.is_range_call(value) {
+            return Ok(format!("{v}.value"));
+        }
+        // What a call or a member gives may be an object: `letValue` takes its default
+        // member as `=` does (where the type is known, the take-over writes the result).
+        let variable = match value {
+            Expr::Ident(_, _) => self.var_of(value),
+            Expr::Call(callee, _) => self.var_of(callee),
+            _ => None,
+        };
+        // (Stored in a number or a string, VBA takes the default member by itself; a member
+        // like `.Value` or `.Name` is no object.)
+        let scalar_target = target.is_some_and(|t| !Self::is_object_type(t) && t != "any");
+        let member = match value {
+            Expr::Member(_, name) => name.as_str(),
+            Expr::Call(callee, _) => match &**callee {
+                Expr::Member(_, name) => name.as_str(),
+                _ => "",
+            },
+            _ => "",
+        };
+        let scalar_member = SCALAR_MEMBERS.contains(&member.to_lowercase().as_str());
+        let may_be_object = match value {
+            _ if scalar_target || scalar_member => false,
+            Expr::Call(..) | Expr::Member(..) => variable.is_none() && !self.is_control_ref(value),
+            // A variable that holds a Range, or a function called without parentheses.
+            Expr::Ident(name, _) => match &variable {
+                Some(v) => v.ty == "Excel.Range",
+                None => {
+                    let lower = name.to_lowercase();
+                    let peers = self.peers;
+                    self.procs.get(&lower).is_some_and(|p| p.is_function)
+                        || (!self.procs.contains_key(&lower)
+                            && peers.iter().any(|p| {
+                                !p.document
+                                    && !p.form
+                                    && p.names
+                                        .iter()
+                                        .any(|n| n.is_function && n.vba.to_lowercase() == lower)
+                            }))
+                }
+            },
+            _ => false,
+        };
+        Ok(if may_be_object {
+            format!("letValue({v})")
+        } else {
+            v
+        })
+    }
+
     /// The variable an expression names.
+    /// A variable declared as an array (`Dim a() As Long`).
+    fn is_array_var(&self, e: &Expr) -> bool {
+        let e = match e {
+            Expr::Paren(inner) => inner,
+            other => other,
+        };
+        matches!(e, Expr::Ident(n, _) if self.array_vars.contains(&n.to_lowercase()))
+            && self.var_of(e).is_some()
+    }
+
     fn var_of(&self, e: &Expr) -> Option<VarInfo> {
         let Expr::Ident(n, _) = e else { return None };
         let lower = n.to_lowercase();
@@ -3764,8 +5130,8 @@ impl<'a> Emitter<'a> {
             Expr::Ident(name, _) => {
                 let lower = name.to_lowercase();
                 // `Unload Me` style statements were parsed as calls with arguments.
-                if let Some(p) = self.procs.get(&lower) {
-                    return Ok(format!("{}()", p.name));
+                if self.procs.contains_key(&lower) && !self.locals.contains_key(&lower) {
+                    return Ok(format!("{}()", self.name_ref(name, true)));
                 }
                 let (t, _) = self.expr(e)?;
                 Ok(if t.ends_with(')') {
@@ -3828,6 +5194,17 @@ impl<'a> Emitter<'a> {
         Ok(if p < min { format!("({t})") } else { t })
     }
 
+    /// An operand of an arithmetic operator, of a comparison or of `&`: a Range stands for
+    /// its `Value`.
+    fn value_operand(&mut self, e: &Expr, min: u8) -> Result<String, String> {
+        let t = self.operand(e, min)?;
+        Ok(if self.is_range_call(e) {
+            format!("{t}.value")
+        } else {
+            t
+        })
+    }
+
     fn is_boolean_like(e: &Expr) -> bool {
         match e {
             Expr::Bool(_) => true,
@@ -3876,8 +5253,9 @@ impl<'a> Emitter<'a> {
             }
             Expr::Bool(b) => ((if *b { "true" } else { "false" }).into(), PRIMARY),
             Expr::Nothing => ("null".into(), PRIMARY),
-            Expr::Empty => return Err("Empty には対応していません".into()),
-            Expr::Null => return Err("Null には対応していません".into()),
+            // `null` in a Variant is `Empty` (spec §2.1).
+            Expr::Empty => ("null".into(), PRIMARY),
+            Expr::Null => ("dbNull".into(), PRIMARY),
             Expr::Me => match self.self_ref() {
                 Some(me) => (me, PRIMARY),
                 None => return Err("標準モジュールの Me には対応していません".into()),
@@ -3900,6 +5278,18 @@ impl<'a> Emitter<'a> {
             Expr::TypeOf => return Err("TypeOf … Is には対応していません".into()),
             Expr::Unary(op, inner) => match *op {
                 "-" => (format!("-{}", self.operand(inner, UNARY)?), UNARY),
+                // `Not Not a` of an array: whether it has been dimensioned.
+                _ if matches!(&**inner, Expr::Unary("not", a) if self.is_array_var(a)) => {
+                    let Expr::Unary(_, a) = &**inner else {
+                        unreachable!()
+                    };
+                    (format!("isAllocated({})", self.expr(a)?.0), PRIMARY)
+                }
+                // `Not a` of an array is -1 until it is dimensioned (`(Not a) = -1`).
+                _ if self.is_array_var(inner) => (
+                    format!("(isAllocated({}) ? 1 : -1)", self.expr(inner)?.0),
+                    PRIMARY,
+                ),
                 _ => {
                     // `Not`: logical unless applied to a number.
                     if Self::is_number(inner) {
@@ -3914,13 +5304,17 @@ impl<'a> Emitter<'a> {
                 "+" | "-" => (
                     format!(
                         "{} {op} {}",
-                        self.operand(a, ADD)?,
-                        self.operand(b, ADD + 1)?
+                        self.value_operand(a, ADD)?,
+                        self.value_operand(b, ADD + 1)?
                     ),
                     ADD,
                 ),
                 "*" => (
-                    format!("{} * {}", self.operand(a, MUL)?, self.operand(b, MUL + 1)?),
+                    format!(
+                        "{} * {}",
+                        self.value_operand(a, MUL)?,
+                        self.value_operand(b, MUL + 1)?
+                    ),
                     MUL,
                 ),
                 "/" => {
@@ -3928,15 +5322,19 @@ impl<'a> Emitter<'a> {
                     let float = self.is_float(a) || self.is_float(b);
                     if float {
                         (
-                            format!("{} / {}", self.operand(a, MUL)?, self.operand(b, MUL + 1)?),
+                            format!(
+                                "{} / {}",
+                                self.value_operand(a, MUL)?,
+                                self.value_operand(b, MUL + 1)?
+                            ),
                             MUL,
                         )
                     } else {
                         (
                             format!(
                                 "({} as double) / {}",
-                                self.operand(a, CAST)?,
-                                self.operand(b, MUL + 1)?
+                                self.value_operand(a, CAST)?,
+                                self.value_operand(b, MUL + 1)?
                             ),
                             MUL,
                         )
@@ -3945,29 +5343,63 @@ impl<'a> Emitter<'a> {
                 "\\" => (
                     format!(
                         "({} as int) / ({} as int)",
-                        self.operand(a, CAST)?,
-                        self.operand(b, CAST)?
+                        self.value_operand(a, CAST)?,
+                        self.value_operand(b, CAST)?
                     ),
                     MUL,
                 ),
                 "mod" => (
-                    format!("{} % {}", self.operand(a, MUL)?, self.operand(b, MUL + 1)?),
+                    format!(
+                        "{} % {}",
+                        self.value_operand(a, MUL)?,
+                        self.value_operand(b, MUL + 1)?
+                    ),
                     MUL,
                 ),
                 "^" => (
-                    format!("{} ** {}", self.operand(a, POW + 1)?, self.operand(b, POW)?),
+                    format!(
+                        "{} ** {}",
+                        self.value_operand(a, POW + 1)?,
+                        self.value_operand(b, POW)?
+                    ),
                     POW,
                 ),
-                "=" | "is" => (
-                    format!("{} == {}", self.operand(a, REL)?, self.operand(b, REL)?),
+                "=" => (
+                    format!(
+                        "{} == {}",
+                        self.value_operand(a, REL)?,
+                        self.value_operand(b, REL)?
+                    ),
                     EQ,
                 ),
+                // `a Is b`: the same object. What is not known to be an object (an element of
+                // an array, a Variant) is compared as one, not by its value.
+                "is" => {
+                    let nothing = matches!(**a, Expr::Nothing) || matches!(**b, Expr::Nothing);
+                    let side = |cv: &mut Self, e: &Expr| -> Result<String, String> {
+                        let known = cv.var_of(e).is_some_and(|v| Self::is_object_type(&v.ty));
+                        if nothing || known || matches!(e, Expr::Me) {
+                            cv.operand(e, REL)
+                        } else {
+                            Ok(format!("({} as object)", cv.operand(e, CAST + 1)?))
+                        }
+                    };
+                    (format!("{} == {}", side(self, a)?, side(self, b)?), EQ)
+                }
                 "<>" => (
-                    format!("{} != {}", self.operand(a, REL)?, self.operand(b, REL)?),
+                    format!(
+                        "{} != {}",
+                        self.value_operand(a, REL)?,
+                        self.value_operand(b, REL)?
+                    ),
                     EQ,
                 ),
                 "<" | ">" | "<=" | ">=" => (
-                    format!("{} {op} {}", self.operand(a, ADD)?, self.operand(b, ADD)?),
+                    format!(
+                        "{} {op} {}",
+                        self.value_operand(a, ADD)?,
+                        self.value_operand(b, ADD)?
+                    ),
                     REL,
                 ),
                 "and" | "or" | "xor" => {
@@ -4013,7 +5445,14 @@ impl<'a> Emitter<'a> {
                         ),
                     }
                 }
-                "like" => return Err("Like 演算子には対応していません".into()),
+                "like" => (
+                    format!(
+                        "like({}, {})",
+                        self.value_operand(a, 0)?,
+                        self.value_operand(b, 0)?
+                    ),
+                    PRIMARY,
+                ),
                 _ => return Err(format!("{op} 演算子には対応していません")),
             },
         })
@@ -4049,7 +5488,7 @@ impl<'a> Emitter<'a> {
                     }
                 }
                 other => {
-                    let (t, _) = self.value_expr(other)?;
+                    let t = self.value_operand(other, 0)?;
                     s.push_str(&format!("${{{t}}}"));
                 }
             }
@@ -4074,17 +5513,31 @@ impl<'a> Emitter<'a> {
             return format!("this.{c}");
         }
         if let Some(v) = self.module_vars.get(&lower) {
-            return v.name.clone();
+            return if self.fields.contains(&lower) {
+                format!("this.{}", v.name)
+            } else {
+                v.name.clone()
+            };
         }
         if let Some(p) = self.procs.get(&lower) {
-            return if called || !p.is_function {
-                p.name.clone()
+            // The members of a class are reached through `this`.
+            let name = if matches!(self.target, Target::Class { .. }) {
+                format!("this.{}", p.name)
             } else {
-                format!("{}()", p.name)
+                p.name.clone()
+            };
+            // (A property whose parameters are all optional, read without them: a call.)
+            return if called || !p.is_function || (p.property && p.params == 0) {
+                name
+            } else {
+                format!("{name}()")
             };
         }
         if let Some(m) = self.enum_members.get(&lower) {
             return m.clone();
+        }
+        if let Some(e) = self.enums.get(&lower) {
+            return e.clone();
         }
         if let Target::Form(form) = self.target {
             if lower == form.name.to_lowercase() {
@@ -4092,7 +5545,13 @@ impl<'a> Emitter<'a> {
             }
         }
         // In a document module, the members of its sheet (workbook) come before the globals.
-        if let (Some(members), Some(me)) = (self.document_members(), self.self_ref()) {
+        // (In a form, a function of VBA called with arguments stays the function: `Left(s, 2)`.)
+        let function = called
+            && matches!(self.target, Target::Form(_))
+            && self.host.globals.get(&lower).is_some_and(|g| g.1);
+        if let (Some(members), Some(me), false) =
+            (self.document_members(), self.self_ref(), function)
+        {
             if let Some((ras, is_fn)) = members.get(&lower) {
                 return if *is_fn && !called {
                     format!("{me}.{ras}()")
@@ -4105,11 +5564,14 @@ impl<'a> Emitter<'a> {
             return "\"\"".into();
         }
         if let Some(name) = self.peer_name(&lower) {
-            return if name.is_function && !called {
+            return if name.is_function && !called && !name.property {
                 format!("{}()", name.ras)
             } else {
                 name.ras
             };
+        }
+        if let Some(member) = self.peer_enum_member(None, &lower) {
+            return member;
         }
         if let Some((ras, is_fn, _)) = self.host.globals.get(&lower) {
             return if *is_fn && !called {
@@ -4132,8 +5594,26 @@ impl<'a> Emitter<'a> {
                     || self.procs.contains_key(&m)
             };
             if !shadowed {
+                // `Level.lvHigh`: a member of an enum keeps the name it is declared with.
+                let enum_lower = module.to_lowercase();
+                if self.enums.contains_key(&enum_lower) {
+                    if let Some(m) = self.enum_members.get(&lower) {
+                        if m.to_lowercase().starts_with(&format!("{enum_lower}.")) {
+                            return Ok(m.clone());
+                        }
+                    }
+                } else if let Some(m) = self.peer_enum_member(Some(&enum_lower), &lower) {
+                    return Ok(m);
+                }
+                // `VBA.Left`, `Math.Round`, `Strings.Mid`: the libraries of VBA are globals.
+                if VBA_LIBRARIES.contains(&enum_lower.as_str())
+                    && self.host.globals.contains_key(&lower)
+                    && !self.procs.contains_key(&lower)
+                {
+                    return Ok(self.name_ref(name, called));
+                }
                 if let Some((alias, n)) = self.peer_member(module, &lower) {
-                    return Ok(if n.is_function && !called {
+                    return Ok(if n.is_function && !called && !n.property {
                         format!("{alias}.{}()", n.ras)
                     } else {
                         format!("{alias}.{}", n.ras)
@@ -4149,6 +5629,38 @@ impl<'a> Emitter<'a> {
             },
         };
         let receiver = receiver.unwrap_or_default();
+        // A variable of a class, of a form or of a sheet of the project: its members keep the
+        // names they are declared with.
+        if let Some(var) = obj.and_then(|o| self.var_of(o)) {
+            let peers = self.peers;
+            let declared = peers.iter().find_map(|p| {
+                if (p.form || p.document) && p.vba_name.eq_ignore_ascii_case(&var.ty) {
+                    return p
+                        .names
+                        .iter()
+                        .find(|n| n.vba.to_lowercase() == lower)
+                        .map(|n| n.ras.clone());
+                }
+                p.names
+                    .iter()
+                    .find(|n| n.class && n.ras == var.ty)
+                    .and_then(|n| {
+                        n.members
+                            .iter()
+                            .find(|m| m.trim_end_matches("()").to_lowercase() == lower)
+                    })
+                    .cloned()
+            });
+            if let Some(member) = declared {
+                // (A function of a class read without arguments is a call.)
+                let member = if called {
+                    member.trim_end_matches("()").to_string()
+                } else {
+                    member
+                };
+                return Ok(format!("{receiver}.{member}"));
+            }
+        }
         if Some(&receiver) == self.self_ref().as_ref() {
             if let Some(c) = self.controls.get(&lower) {
                 return Ok(format!("this.{c}"));
@@ -4156,19 +5668,26 @@ impl<'a> Emitter<'a> {
             if let Some(p) = self.procs.get(&lower).cloned() {
                 // Private procedures are called directly; exported ones are members of the form.
                 let form = !matches!(self.target, Target::Standard);
-                let base = if p.exported && form {
+                let class = matches!(self.target, Target::Class { .. });
+                let base = if (p.exported && form) || class {
                     format!("this.{}", p.name)
                 } else {
                     p.name.clone()
                 };
-                return Ok(if called || !p.is_function {
-                    base
-                } else {
-                    format!("{base}()")
-                });
+                return Ok(
+                    if called || !p.is_function || (p.property && p.params == 0) {
+                        base
+                    } else {
+                        format!("{base}()")
+                    },
+                );
             }
             if let Some(v) = self.module_vars.get(&lower) {
-                return Ok(v.name.clone());
+                return Ok(if self.fields.contains(&lower) {
+                    format!("this.{}", v.name)
+                } else {
+                    v.name.clone()
+                });
             }
         }
         if self.in_catch && receiver == "err" {
@@ -4209,13 +5728,47 @@ impl<'a> Emitter<'a> {
                 .or_else(|| self.module_vars.get(&lower))
                 .cloned();
             if let Some(v) = var {
-                if v.indexable() && args.iter().all(|a| a.name.is_none() && a.value.is_some()) {
-                    let mut s = v.name.clone();
+                let subscripted = v.indexable()
+                    || v.ty == "object"
+                    || v.ty.ends_with(".Dictionary")
+                    || v.ty.ends_with(".Collection");
+                if subscripted
+                    && !args.is_empty()
+                    && args.iter().all(|a| a.name.is_none() && a.value.is_some())
+                {
+                    let mut subscripts = Vec::new();
                     for a in args {
-                        let (t, _) = self.value_expr(a.value.as_ref().unwrap())?;
-                        s.push_str(&format!("[{t}]"));
+                        subscripts.push(self.value_expr(a.value.as_ref().unwrap())?.0);
                     }
-                    return Ok(s);
+                    // An array of RAS (`xs[i][j]`); anything else — an array in a Variant, a
+                    // Dictionary, a Collection — takes its subscripts as VBA does (`v[i, j]`).
+                    let base = self.name_ref(name, false);
+                    return Ok(if v.ty.ends_with("[]") {
+                        format!("{base}[{}]", subscripts.join("]["))
+                    } else {
+                        format!("{base}[{}]", subscripts.join(", "))
+                    });
+                }
+            }
+        }
+        // `Names(1)` where `Names` takes no argument: a subscript of what it returns.
+        if let Expr::Ident(name, _) = callee {
+            let lower = name.to_lowercase();
+            let own = (!self.locals.contains_key(&lower))
+                .then(|| self.procs.get(&lower).cloned())
+                .flatten();
+            if let Some(p) = own {
+                if p.params == 0
+                    && p.is_function
+                    && !args.is_empty()
+                    && args.iter().all(|a| a.name.is_none() && a.value.is_some())
+                {
+                    let mut subscripts = Vec::new();
+                    for a in args {
+                        subscripts.push(self.value_expr(a.value.as_ref().unwrap())?.0);
+                    }
+                    let base = self.name_ref(name, false);
+                    return Ok(format!("{base}[{}]", subscripts.join(", ")));
                 }
             }
         }
@@ -4245,17 +5798,56 @@ impl<'a> Emitter<'a> {
             Expr::Member(obj, name) => self.member(obj.as_deref(), name, true)?,
             other => self.expr(other)?.0,
         };
-        let host_fn = matches!(callee, Expr::Ident(name, _) if !self.procs.contains_key(&name.to_lowercase()) && self.host.globals.contains_key(&name.to_lowercase()));
-        let user_fn =
-            matches!(callee, Expr::Ident(name, _) if self.procs.contains_key(&name.to_lowercase()));
+        // A procedure of the project: its parameters keep the names they are declared with.
+        let peers = self.peers;
+        let user_fn = match callee {
+            Expr::Ident(name, _) => {
+                let lower = name.to_lowercase();
+                self.procs.contains_key(&lower)
+                    || peers.iter().any(|p| {
+                        !p.document
+                            && !p.form
+                            && p.names.iter().any(|n| n.vba.to_lowercase() == lower)
+                    })
+            }
+            Expr::Member(Some(obj), name) => match &**obj {
+                Expr::Ident(module, _) => peers.iter().any(|p| {
+                    p.vba_name.eq_ignore_ascii_case(module)
+                        && p.names.iter().any(|n| n.vba.eq_ignore_ascii_case(name))
+                }),
+                Expr::Me => self.procs.contains_key(&name.to_lowercase()),
+                _ => false,
+            },
+            _ => false,
+        };
         // Trailing omitted arguments are dropped.
         let mut n = args.len();
         while n > 0 && args[n - 1].value.is_none() {
             n -= 1;
         }
+        // A control passed to a procedure of the project is the control itself, unless the
+        // parameter is a number or a string (then its value, as VBA's default member gives).
+        let own_types = match callee {
+            Expr::Ident(name, _) => self
+                .procs
+                .get(&name.to_lowercase())
+                .map(|p| p.param_types.clone()),
+            _ => None,
+        };
         let mut parts = Vec::new();
-        for a in &args[..n] {
+        for (i, a) in args[..n].iter().enumerate() {
             let v = match &a.value {
+                Some(v) if user_fn && a.name.is_none() && self.is_control_ref(v) => {
+                    let scalar = own_types
+                        .as_ref()
+                        .and_then(|types| types.get(i))
+                        .is_some_and(|t| !Self::is_object_type(t) && t != "any");
+                    if scalar {
+                        self.value_expr(v)?.0
+                    } else {
+                        self.expr(v)?.0
+                    }
+                }
                 Some(v) => self.value_expr(v)?.0,
                 None => "undefined".into(),
             };
@@ -4265,7 +5857,6 @@ impl<'a> Emitter<'a> {
                 None => parts.push(v),
             }
         }
-        let _ = host_fn;
         Ok(format!("{f}({})", parts.join(", ")))
     }
 }
@@ -4343,12 +5934,47 @@ fn ras_string(s: &str) -> String {
     out
 }
 
+/// Calls `f` with every statement of `stmts`, nested ones included.
+fn each_stmt(stmts: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
+    for s in stmts {
+        f(s);
+        match &s.kind {
+            StmtKind::If { arms, els } => {
+                for (_, body) in arms {
+                    each_stmt(body, f);
+                }
+                if let Some(body) = els {
+                    each_stmt(body, f);
+                }
+            }
+            StmtKind::Select { cases, els, .. } => {
+                for (_, body) in cases {
+                    each_stmt(body, f);
+                }
+                if let Some(body) = els {
+                    each_stmt(body, f);
+                }
+            }
+            StmtKind::For { body, .. }
+            | StmtKind::ForEach { body, .. }
+            | StmtKind::Do { body, .. }
+            | StmtKind::With { body, .. } => each_stmt(body, f),
+            _ => {}
+        }
+    }
+}
+
 /// Lower-cased names assigned anywhere in `stmts` (`x = …`, `Set x = …`, loop variables).
 fn assigned_names(stmts: &[Stmt]) -> HashSet<String> {
     let mut out = HashSet::new();
     fn root(e: &Expr) -> Option<String> {
         match e {
             Expr::Ident(n, _) => Some(n.to_lowercase()),
+            // An element (`a(i) = x`): `()a`. It changes the caller's array, not its Dictionary.
+            Expr::Call(callee, _) => match &**callee {
+                Expr::Ident(n, _) => Some(format!("(){}", n.to_lowercase())),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -4356,6 +5982,10 @@ fn assigned_names(stmts: &[Stmt]) -> HashSet<String> {
         for s in stmts {
             match &s.kind {
                 StmtKind::Assign { target, .. } => out.extend(root(target)),
+                StmtKind::ReDim { vars, .. } => {
+                    out.extend(vars.iter().filter_map(|(target, _)| root(target)));
+                }
+                StmtKind::Erase(vars) => out.extend(vars.iter().filter_map(root)),
                 StmtKind::File { args, result, .. } => {
                     out.extend(result.as_ref().and_then(root));
                     for a in args {
@@ -4546,6 +6176,108 @@ fn restructure(stmts: &[Stmt]) -> Vec<Stmt> {
     out
 }
 
+/// `GoTo L` that jumps forward to a label `L:` of an enclosing list of statements (the usual
+/// `GoTo Finally`): the statements before the label become a block that the jump leaves
+/// (`toL: do { … break toL; … } while (false);`), and what follows the label follows the block.
+fn forward_jumps(stmts: Vec<Stmt>) -> Vec<Stmt> {
+    fn jumps_to(stmts: &[Stmt], label: &str) -> bool {
+        let mut found = false;
+        each_stmt(stmts, &mut |s| {
+            found |= matches!(&s.kind, StmtKind::GoTo(l) if l.eq_ignore_ascii_case(label));
+        });
+        found
+    }
+    // The last label that is only jumped to from before it.
+    let at = stmts.iter().rposition(|s| match &s.kind {
+        StmtKind::Label(l) => {
+            let index = stmts
+                .iter()
+                .position(|x| std::ptr::eq(x, s))
+                .unwrap_or_default();
+            jumps_to(&stmts[..index], l) && !jumps_to(&stmts[index..], l)
+        }
+        _ => false,
+    });
+    let mut out = match at {
+        Some(at) => {
+            let StmtKind::Label(label) = stmts[at].kind.clone() else {
+                unreachable!()
+            };
+            let mut rest = stmts;
+            let after = rest.split_off(at + 1);
+            let head = rest.pop().expect("the label");
+            let mut out = vec![Stmt {
+                kind: StmtKind::With {
+                    obj: Expr::Ident(format!("{BLOCK}{label}"), None),
+                    body: forward_jumps(rest),
+                },
+                comment: None,
+                ..head
+            }];
+            out.extend(after);
+            return out;
+        }
+        None => stmts,
+    };
+    // The lists inside.
+    for s in &mut out {
+        let kind = std::mem::replace(&mut s.kind, StmtKind::Nothing);
+        s.kind = match kind {
+            StmtKind::If { arms, els } => StmtKind::If {
+                arms: arms
+                    .into_iter()
+                    .map(|(c, b)| (c, forward_jumps(b)))
+                    .collect(),
+                els: els.map(forward_jumps),
+            },
+            StmtKind::For {
+                var,
+                from,
+                to,
+                step,
+                body,
+            } => StmtKind::For {
+                var,
+                from,
+                to,
+                step,
+                body: forward_jumps(body),
+            },
+            StmtKind::ForEach { var, coll, body } => StmtKind::ForEach {
+                var,
+                coll,
+                body: forward_jumps(body),
+            },
+            StmtKind::Do { pre, post, body } => StmtKind::Do {
+                pre,
+                post,
+                body: forward_jumps(body),
+            },
+            StmtKind::With { obj, body } => StmtKind::With {
+                obj,
+                body: forward_jumps(body),
+            },
+            StmtKind::Select {
+                subject,
+                cases,
+                els,
+            } => StmtKind::Select {
+                subject,
+                cases: cases
+                    .into_iter()
+                    .map(|(c, b)| (c, forward_jumps(b)))
+                    .collect(),
+                els: els.map(forward_jumps),
+            },
+            other => other,
+        };
+    }
+    out
+}
+
+/// Marker of a block made by `forward_jumps`, followed by its label.
+const BLOCK: &str = "\u{0}block:";
+
 // Markers for the try statements made by `restructure` (reusing `With` nodes).
 const TRY_RESUME: &str = "\u{0}try_resume";
 const TRY_CATCH: &str = "\u{0}try_catch";
@@ -4561,6 +6293,17 @@ impl Emitter<'_> {
         else {
             return false;
         };
+        if let Some(label) = marker.strip_prefix(BLOCK) {
+            let name = format!("to{}", Self::user_ident(label));
+            self.line(format!("{name}: do {{"));
+            self.indent += 1;
+            self.jump_labels.push(label.to_lowercase());
+            self.block(body);
+            self.jump_labels.pop();
+            self.indent -= 1;
+            self.line("} while (false);");
+            return true;
+        }
         match marker.as_str() {
             TRY_RESUME => {
                 self.line("try {");

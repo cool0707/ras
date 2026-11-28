@@ -89,6 +89,8 @@ pub enum ImportKind {
     },
     /// A user form.
     Form,
+    /// A class module: a `class` of `src/<Name>.ras`.
+    Class,
 }
 
 /// A component converted and written into the project by [`prepare`].
@@ -106,6 +108,25 @@ pub struct Imported {
     pub todos: Vec<(usize, String)>,
     /// What the form's design could not carry over.
     pub warnings: Vec<String>,
+    /// The procedures kept as VBA (`` vba`…` `` blocks, spec §14.7.4).
+    pub kept: Vec<String>,
+}
+
+/// What [`keep_procedures`] needs to convert a module again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Reconvert {
+    /// The RAS file, relative to the project root.
+    path: String,
+    name: String,
+    kind: ImportKind,
+    code: String,
+    controls: Vec<ras_compiler::FormControl>,
+    /// The form the code is the code-behind of.
+    form: Option<ras_compiler::FormDecl>,
+    /// The procedures of the VBA to keep as they are.
+    keep: Vec<String>,
+    /// The procedures converted: (first line, last line of the file, 1-based; name in the VBA).
+    procs: Vec<(usize, usize, String)>,
 }
 
 /// A component of the workbook that has a converted file with `// TODO(VBA):` lines left:
@@ -144,6 +165,9 @@ pub struct Prepared {
     pub appended: Vec<Appended>,
     /// Files whose marker line becomes a plain comment once the workbook has the generated code.
     marked: Vec<PathBuf>,
+    /// The modules converted now, and the names they make public to each other.
+    reconvert: Vec<Reconvert>,
+    peers: Vec<Peer>,
 }
 
 impl Prepared {
@@ -161,11 +185,18 @@ impl Prepared {
                 ImportKind::Document { workbook: false } => "シートモジュール",
                 ImportKind::Document { workbook: true } => "ブックのモジュール",
                 ImportKind::Form => "ユーザーフォーム",
+                ImportKind::Class => "クラスモジュール",
             };
             out.push(format!(
                 "ブックの{what} `{}` を {} に取り込みました",
                 item.name, item.path
             ));
+            if !item.kept.is_empty() {
+                out.push(format!(
+                    "  RAS に変換できず、VBA のまま残したプロシージャ（`vba` ブロック）: {}",
+                    item.kept.join(", ")
+                ));
+            }
             for warning in &item.warnings {
                 out.push(format!("  {warning}"));
             }
@@ -453,6 +484,17 @@ pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, 
                 }
                 (ImportKind::Form, code_pane(&module.code))
             }
+            ModuleKind::Class => {
+                // RAS-generated (a `class` of the project), or nothing in it.
+                if ras_compiler::emit::has_drifted(&module.code).is_some()
+                    || module.name.starts_with("RAS_")
+                    || !has_code(&module.code)
+                {
+                    continue;
+                }
+                (ImportKind::Class, code_pane(&module.code))
+            }
+            #[allow(unreachable_patterns)]
             _ => continue,
         };
         // Converted earlier: the file decides.
@@ -473,6 +515,23 @@ pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, 
             continue;
         }
         match kind {
+            ImportKind::Class => {
+                // A file or a module of that name is the project's.
+                let key = module.name.clone();
+                if files.iter().any(|f| {
+                    f.vba_name.eq_ignore_ascii_case(&module.name)
+                        || relative(&root.join("src"), &f.path)
+                            .eq_ignore_ascii_case(&format!("{key}.ras"))
+                }) {
+                    continue;
+                }
+                candidates.push(Candidate {
+                    module,
+                    kind,
+                    code,
+                    key,
+                });
+            }
             ImportKind::Standard => {
                 // A module of the same name (or file) is the project's: the usual rules of the sync apply.
                 let key = module.name.clone();
@@ -547,7 +606,7 @@ pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, 
     // Names the converted modules make public to each other.
     let peers: Vec<Peer> = candidates
         .iter()
-        .filter_map(|c| {
+        .map(|c| {
             let target = match c.kind {
                 ImportKind::Standard => Target::Standard,
                 ImportKind::Document { workbook } => Target::Document {
@@ -555,14 +614,19 @@ pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, 
                     workbook,
                     controls: controls_of(&c.module.name),
                 },
-                ImportKind::Form => return None,
+                // (The public procedures of a form: its event procedures are private.)
+                ImportKind::Form => Target::Standard,
+                ImportKind::Class => Target::Class {
+                    name: &c.module.name,
+                },
             };
-            Some(Peer {
+            Peer {
                 vba_name: c.module.name.clone(),
                 key: c.key.clone(),
                 document: matches!(c.kind, ImportKind::Document { .. }),
                 names: vba2ras::public_names(&c.code, &target),
-            })
+                form: c.kind == ImportKind::Form,
+            }
         })
         .collect();
 
@@ -572,7 +636,7 @@ pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, 
         // The original, as `ras unpack` writes it.
         let ext = match c.kind {
             ImportKind::Standard => "bas",
-            ImportKind::Document { .. } => "cls",
+            ImportKind::Document { .. } | ImportKind::Class => "cls",
             ImportKind::Form => "frm",
         };
         std::fs::create_dir_all(&vba_dir).map_err(|e| format!("{}: {e}", vba_dir.display()))?;
@@ -605,6 +669,18 @@ pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, 
                             continue;
                         }
                     };
+                if !pulled.kept_code {
+                    prepared.reconvert.push(Reconvert {
+                        path: relative(root, &pulled.code_path),
+                        name: name.clone(),
+                        kind: c.kind,
+                        code: pulled.code.clone(),
+                        controls: Vec::new(),
+                        form: Some(pulled.decl.clone()),
+                        keep: Vec::new(),
+                        procs: pulled.procs.clone(),
+                    });
+                }
                 let mut other_files = vec![relative(root, &pulled.spec_path)];
                 other_files.extend(pulled.pictures.iter().cloned());
                 other_files.push(copy);
@@ -626,18 +702,20 @@ pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, 
                     other_files,
                     todos: pulled.todos,
                     warnings,
+                    kept: pulled.raw,
                 }
             }
-            ImportKind::Standard | ImportKind::Document { .. } => {
+            ImportKind::Standard | ImportKind::Document { .. } | ImportKind::Class => {
                 let target = match c.kind {
                     ImportKind::Document { workbook } => Target::Document {
                         code_name: name,
                         workbook,
                         controls: controls_of(name),
                     },
+                    ImportKind::Class => Target::Class { name },
                     _ => Target::Standard,
                 };
-                let converted = vba2ras::convert(&c.code, &target, &peers);
+                let converted = vba2ras::convert_keeping(&c.code, &target, &peers, &[]);
                 let shift = header.lines().count();
                 let path = match c.kind {
                     ImportKind::Document { workbook } => object_path(root, name, workbook),
@@ -654,6 +732,20 @@ pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, 
                     .into_iter()
                     .map(|(line, message)| (line + shift, message))
                     .collect();
+                prepared.reconvert.push(Reconvert {
+                    path: relative(root, &path),
+                    name: name.clone(),
+                    kind: c.kind,
+                    code: c.code.clone(),
+                    controls: controls_of(name).to_vec(),
+                    form: None,
+                    keep: Vec::new(),
+                    procs: converted
+                        .procs
+                        .iter()
+                        .map(|(from, to, name)| (from + shift, to + shift, name.clone()))
+                        .collect(),
+                });
                 Imported {
                     name: name.clone(),
                     kind: c.kind,
@@ -661,11 +753,12 @@ pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, 
                     other_files: vec![copy],
                     todos,
                     warnings: Vec::new(),
+                    kept: converted.raw,
                 }
             }
         };
         let generated = match c.kind {
-            ImportKind::Form | ImportKind::Document { .. } => name.clone(),
+            ImportKind::Form | ImportKind::Document { .. } | ImportKind::Class => name.clone(),
             ImportKind::Standard => vba_module_name(&c.key),
         };
         if imported.todos.is_empty() {
@@ -682,6 +775,7 @@ pub fn prepare(root: &Path, book: &mut Book, codepage: u16) -> Result<Prepared, 
         }
         prepared.imported.push(imported);
     }
+    prepared.peers = peers.clone();
 
     // What was added in the VBE to the modules RAS generated (spec §14.7.3).
     for module in book.modules {
@@ -867,6 +961,93 @@ pub fn finish(prepared: &Prepared) -> Result<(), String> {
             .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(())
+}
+
+/// The procedure of the VBA that the line `line` (1-based) of the converted file `path`
+/// (relative to the project root) was converted from, if it is in one.
+pub fn procedure_at(prepared: &Prepared, path: &str, line: usize) -> Option<String> {
+    let module = prepared
+        .reconvert
+        .iter()
+        .find(|r| r.path.eq_ignore_ascii_case(path))?;
+    module
+        .procs
+        .iter()
+        .find(|(from, to, _)| (*from..=*to).contains(&line))
+        .map(|(_, _, name)| name.clone())
+}
+
+/// Converts the module of the file `path` again with the procedures `names` kept as VBA
+/// (`` vba`…` `` blocks, spec §14.7.4): what the take-over does when their conversion does not
+/// compile. Returns whether the file changed (a procedure that cannot be kept — of a class, a
+/// `Property` — changes nothing).
+pub fn keep_procedures(
+    root: &Path,
+    prepared: &mut Prepared,
+    path: &str,
+    names: &[String],
+) -> Result<bool, String> {
+    let peers = prepared.peers.clone();
+    let Some(module) = prepared
+        .reconvert
+        .iter_mut()
+        .find(|r| r.path.eq_ignore_ascii_case(path))
+    else {
+        return Ok(false);
+    };
+    for name in names {
+        if !module.keep.iter().any(|k| k.eq_ignore_ascii_case(name)) {
+            module.keep.push(name.clone());
+        }
+    }
+    let target = match module.kind {
+        ImportKind::Document { workbook } => Target::Document {
+            code_name: &module.name,
+            workbook,
+            controls: &module.controls,
+        },
+        ImportKind::Class => Target::Class { name: &module.name },
+        ImportKind::Form => match &module.form {
+            Some(form) => Target::Form(form),
+            None => return Ok(false),
+        },
+        _ => Target::Standard,
+    };
+    let converted = vba2ras::convert_keeping(&module.code, &target, &peers, &module.keep);
+    let header = header(&module.name);
+    let shift = header.lines().count();
+    let file = root.join(&module.path);
+    let text = format!("{header}{}", converted.text);
+    let before = std::fs::read_to_string(&file).unwrap_or_default();
+    let changed = converted.raw.len()
+        != prepared
+            .imported
+            .iter()
+            .find(|i| i.path.eq_ignore_ascii_case(path))
+            .map_or(0, |i| i.kept.len());
+    if !changed {
+        return Ok(false);
+    }
+    let _ = before;
+    std::fs::write(&file, text).map_err(|e| format!("{}: {e}", file.display()))?;
+    module.procs = converted
+        .procs
+        .iter()
+        .map(|(from, to, name)| (from + shift, to + shift, name.clone()))
+        .collect();
+    if let Some(item) = prepared
+        .imported
+        .iter_mut()
+        .find(|i| i.path.eq_ignore_ascii_case(path))
+    {
+        item.kept = converted.raw;
+        item.todos = converted
+            .todos
+            .into_iter()
+            .map(|(line, message)| (line + shift, message))
+            .collect();
+    }
+    Ok(true)
 }
 
 /// A worksheet of the workbook, for [`sheet_files`].

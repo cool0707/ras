@@ -491,6 +491,7 @@
    "Weekday",
    "WeekdayName",
    "Year",
+   "dbNull",
    "vbBack",
    "vbCr",
    "vbCrLf",

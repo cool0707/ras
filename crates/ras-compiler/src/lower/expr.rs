@@ -109,6 +109,8 @@ pub(crate) fn literal_default(d: &Expr, ty: &Type) -> Option<String> {
             Some(format!("\"{}\"", s.replace('"', "\"\"")))
         }
         ExprKind::Bool(b) => Some(if *b { "True".into() } else { "False".into() }),
+        // `dbNull`: VBA's `Null` (`Optional ByVal headers As Variant = Null`).
+        ExprKind::Name(n) if n.text == "dbNull" && matches!(ty, Type::Any) => Some("Null".into()),
         _ => None,
     }
 }
@@ -296,19 +298,33 @@ impl<'p> Lowerer<'p> {
             self.emit(assign(target.clone(), call("CDec", vec![value])));
             return;
         }
+        // `x = letValue(e)`: VBA's `x = e` as it is — the default member of an object, and no
+        // copy of what a function returns.
+        if let VExpr::Call(f, args) = &value {
+            if matches!(&**f, VExpr::Name(n) if n == "RAS_LetValue") && args.len() == 1 {
+                self.emit(assign(target.clone(), args[0].clone()));
+                return;
+            }
+        }
         // A value stored in a union keeps the member type it is converted to (`int` into `string | double`
         // becomes a Double), so that `typeof` sees that member (spec §2.6.2).
         let value = self.to_union_member(value, vty, tty);
         let v_obj = vty.is_object();
-        let v_dyn = vty.is_dynamic();
+        // `dbNull` (VBA's `Null`) is an `any` that is never an object.
+        let v_dyn = vty.is_dynamic() && !matches!(&value, VExpr::Name(n) if n == "Null");
         let t_dyn = tty.is_dynamic();
         if v_obj || (v_dyn && tty.is_object()) {
             self.emit(set(target.clone(), value));
         } else if v_dyn && t_dyn {
             // The value may or may not be an object: decide at run time (spec §2.3).
+            // (Not an element `x(key)` of what may be a Dictionary or another object: it is
+            // a property, and passed by reference the value would go into a copy.)
             let direct = match target {
-                VExpr::Name(n) => *n != self.pc.proc_name,
-                VExpr::Call(f, _) => matches!(**f, VExpr::Name(_)),
+                VExpr::Name(n) => *n != self.pc.proc_name && !self.pc.dynamic_elements.contains(n),
+                VExpr::Call(f, _) => {
+                    matches!(**f, VExpr::Name(_))
+                        && !self.pc.dynamic_elements.contains(&target.print())
+                }
                 _ => false,
             };
             if direct {
@@ -501,8 +517,11 @@ impl<'p> Lowerer<'p> {
             return slot;
         }
         match &e.kind {
-            // Ranges and `^n` are lowered by the index that holds them (rejected elsewhere).
-            ExprKind::Error | ExprKind::Super | ExprKind::Range { .. } => lit("Empty"),
+            // Ranges, `^n` and `i, j` are lowered by the index that holds them (rejected elsewhere).
+            ExprKind::Error
+            | ExprKind::Super
+            | ExprKind::Range { .. }
+            | ExprKind::Subscripts(_) => lit("Empty"),
             ExprKind::FromEnd(x) => self.expr(x),
             ExprKind::Object(_) => match self.ty(e) {
                 ty @ Type::Struct(_) => {
@@ -707,7 +726,48 @@ impl<'p> Lowerer<'p> {
             Some(Res::Intrinsic(i)) => self
                 .intrinsic(e, *i, None, &[], true)
                 .unwrap_or_else(|| lit("Empty")),
+            // A property of the module (spec §3.6): `Property Get` is read like a variable.
+            Some(Res::Property { get: Some(g), .. }) => {
+                let g = *g;
+                self.property_ref(g, None)
+            }
             _ => VExpr::Name(names::valid_ident(text)),
+        }
+    }
+
+    /// A property made of accessors, as VBA reads or assigns it: `f` is the accessor used.
+    /// For a property of a module (of a form, a sheet), `object` is the instance it is reached
+    /// through (`frmInput.total`), `None` for the module itself (`total`, `Module1.total`).
+    fn property_ref(&mut self, f: FnId, object: Option<VExpr>) -> VExpr {
+        match object {
+            Some(o) if !o.is_lit("Me") => {
+                let name = self.fn_name(f, &[]);
+                o.member(name)
+            }
+            // The module's own property; `this.total` in the file of a form.
+            _ if self.prog.fns[f].accessor.is_some() => {
+                let callee = self.fn_callee(f, &[]);
+                // Inside `Property Get total`, `total = v` would set the result: the setter
+                // is reached through the module.
+                let own_getter = self.prog.fns[f].is_setter()
+                    && self.frame().fn_id.is_some_and(|g| {
+                        self.prog.fns[g].is_getter() && self.prog.accessor_pair(g).1 == Some(f)
+                    })
+                    && self.pc.frames.len() == 1;
+                match callee {
+                    VExpr::Name(name) if own_getter => {
+                        let md = &self.prog.modules[self.prog.fns[f].module];
+                        if md.form.is_some() {
+                            lit("Me").member(name)
+                        } else {
+                            VExpr::Name(md.vba_name.clone()).member(name)
+                        }
+                    }
+                    other => other,
+                }
+            }
+            // Private members cannot be reached through `Me.`.
+            _ => VExpr::Name(self.fn_name(f, &[])),
         }
     }
 
@@ -741,6 +801,15 @@ impl<'p> Lowerer<'p> {
                 .intrinsic(e, i, Some(object), &[], true)
                 .unwrap_or_else(|| lit("Empty")),
             Some(Res::Fn(f)) => VExpr::Name(self.prog.fns[f].vba_name().to_string()),
+            // A property of a module, of a form or of a sheet (spec §3.6).
+            Some(Res::Property { get: Some(g), .. }) if self.prog.fns[g].accessor.is_some() => {
+                let o = if obj_is_ns {
+                    None
+                } else {
+                    Some(self.expr(object))
+                };
+                self.property_ref(g, o)
+            }
             Some(Res::Property { get: Some(g), .. }) if obj_is_ns => {
                 // static getter
                 let callee = self.static_callee(g);
@@ -794,6 +863,13 @@ impl<'p> Lowerer<'p> {
         let ot = self.ty(object);
         if matches!(index.kind, ExprKind::Range { .. }) {
             return self.range_expr(e, object, index);
+        }
+        if let ExprKind::Subscripts(subs) = &index.kind {
+            // `v[i, j]` → `v(i, j)`: the subscripts as written (spec §4.6).
+            let all: Vec<&Expr> = std::iter::once(object).chain(subs.iter()).collect();
+            let mut ops = self.operands(&all).into_iter();
+            let o = ops.next().unwrap();
+            return o.index(ops.collect());
         }
         match &ot {
             Type::Array(_) => {
@@ -987,12 +1063,32 @@ impl<'p> Lowerer<'p> {
                     let (b, _) = self.lvalue_ex(object, stable);
                     b.member(tuple_field(index))
                 } else {
-                    let o = self.expr(object);
-                    let o = if stable { self.spill(o, &ot) } else { o };
-                    let it = self.ty(index);
-                    let i = self.expr(index);
-                    let i = if stable { self.spill(i, &it) } else { i };
-                    o.index(vec![i])
+                    // An element of the array a `Variant` variable holds is written in place
+                    // (a copy of the variable would take the write: arrays are values).
+                    let o = if self.is_variant_var(object) {
+                        self.lvalue_ex(object, stable).0
+                    } else {
+                        let o = self.expr(object);
+                        if stable {
+                            self.spill(o, &ot)
+                        } else {
+                            o
+                        }
+                    };
+                    // `v[i, j]` → `v(i, j)` (spec §4.6).
+                    let subs = match &index.kind {
+                        ExprKind::Subscripts(subs) => subs.iter().collect(),
+                        _ => vec![&**index],
+                    };
+                    let mut ix = Vec::with_capacity(subs.len());
+                    for s in subs {
+                        let it = self.ty(s);
+                        let i = self.expr(s);
+                        ix.push(if stable { self.spill(i, &it) } else { i });
+                    }
+                    let element = o.index(ix);
+                    self.pc.dynamic_elements.insert(element.print());
+                    element
                 }
             }
             ExprKind::Member { object, name, .. } => {
@@ -1010,12 +1106,35 @@ impl<'p> Lowerer<'p> {
                         self.field_target(c, idx, &ty, o)
                     }
                     Some(Res::Global(v)) => self.var_ref(v),
+                    // A property of a module, of a form or of a sheet (spec §3.6).
+                    Some(Res::Property { get, set })
+                        if get
+                            .or(set)
+                            .is_some_and(|f| self.prog.fns[f].accessor.is_some()) =>
+                    {
+                        let f = set.or(get).unwrap();
+                        let o = if obj_is_ns {
+                            None
+                        } else {
+                            let ot = self.ty(object);
+                            let o = self.expr(object);
+                            Some(if stable { self.spill_object(o, &ot) } else { o })
+                        };
+                        let v = self.property_ref(f, o);
+                        self.pc.dynamic_elements.insert(v.print());
+                        v
+                    }
                     _ => {
                         let ot = self.ty(object);
                         let o = self.expr(object);
                         let o = if stable { self.spill_object(o, &ot) } else { o };
                         if o.is_lit("Me") {
-                            VExpr::Name(names::member_ident(&name.text))
+                            let member = names::member_ident(&name.text);
+                            // (A property of the class is no variable to pass by reference.)
+                            if matches!(res, Some(Res::Property { .. })) {
+                                self.pc.dynamic_elements.insert(member.clone());
+                            }
+                            VExpr::Name(member)
                         } else {
                             o.member(
                                 self.late_member_name(object, &name.text)
@@ -1025,9 +1144,93 @@ impl<'p> Lowerer<'p> {
                     }
                 }
             }
+            ExprKind::Name(_) => match self.info().res.get(&inner.id).cloned() {
+                // A property of the module: assigned through `Property Let` / `Set`.
+                Some(Res::Property { get, set }) if get.or(set).is_some() => {
+                    let v = self.property_ref(set.or(get).unwrap(), None);
+                    self.pc.dynamic_elements.insert(v.print());
+                    v
+                }
+                _ => self.expr(inner),
+            },
+            // `obj.item(key) = v`: a property with parameters (spec §3.6.2, §3.6.3).
+            ExprKind::Call { args, .. } => {
+                let args = self.info().call_args(inner.id, args);
+                let v = self.expr(inner);
+                let v = match v {
+                    // Read and written (`+=`): the receiver and the arguments are evaluated once.
+                    VExpr::Call(callee, argv) if stable => {
+                        let callee = match *callee {
+                            VExpr::Member(o, name) => {
+                                let o = self.spill_object(*o, &Type::Object);
+                                o.member(name)
+                            }
+                            other => other,
+                        };
+                        let argv = argv
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, a)| {
+                                let at = args.get(i).map(|x| self.ty(x)).unwrap_or(Type::Any);
+                                match a {
+                                    VExpr::Missing => a,
+                                    _ if at == Type::Null => a,
+                                    _ => self.spill(a, &at),
+                                }
+                            })
+                            .collect();
+                        VExpr::Call(Box::new(callee), argv)
+                    }
+                    other => other,
+                };
+                // (A property: passed by reference, the value would go into a copy.)
+                self.pc.dynamic_elements.insert(v.print());
+                // A cell range is assigned to through its default member (`.Value`).
+                let info = self.info();
+                let ty = self.prog.default_member_target(info, inner).unwrap_or(ty);
+                return (v, ty);
+            }
             _ => self.expr(inner),
         };
+        // `listBox.list = rows`: a host property with parameters, all omitted.
+        if matches!(inner.kind, ExprKind::Member { .. }) {
+            let info = self.info();
+            if let Some(vt) = self.prog.default_member_target(info, inner) {
+                return (v, vt);
+            }
+        }
         (v, ty)
+    }
+
+    /// `e` is a variable or field of type `any` / `cellValue` (a VBA `Variant` variable).
+    fn is_variant_var(&self, e: &Expr) -> bool {
+        let inner = e.peel();
+        if !matches!(self.ty(inner), Type::Any | Type::CellValue) {
+            return false;
+        }
+        match (&inner.kind, self.info().res.get(&inner.id)) {
+            (ExprKind::Name(_), Some(Res::Local(_) | Res::Global(_))) => true,
+            (ExprKind::Member { .. }, Some(Res::Global(_))) => true,
+            (ExprKind::Member { .. }, Some(Res::Field(c, _))) => {
+                self.prog.classes[*c].kind != ClassKind::Host
+            }
+            _ => false,
+        }
+    }
+
+    /// `ws.cells(1, 2) = v`: VBA assigns to the default member of the cell range the property
+    /// returns (`.Value`), with `Let` whatever the value is.
+    fn default_member_assign(&mut self, target: &Expr, value: &Expr) -> Option<VExpr> {
+        let info = self.info();
+        self.prog.default_member_target(info, target)?;
+        let (t, _) = self.lvalue_ex(target, false);
+        let v = if self.ty(value) == Type::Null {
+            lit("Empty")
+        } else {
+            self.expr(value)
+        };
+        self.emit(assign(t.clone(), v));
+        Some(t)
     }
 
     /// Keeps member chains (`ws.Range("A1").Font`) as they are, but evaluates calls only once.
@@ -1225,6 +1428,13 @@ impl<'p> Lowerer<'p> {
             self.emit(assign(slot.clone(), v));
             return slot;
         }
+        if op.is_none() {
+            if let Some(t) = self.default_member_assign(target, value) {
+                return t;
+            }
+        }
+        let info = self.info();
+        let through_default = self.prog.default_member_target(info, target).is_some();
         let (t, tty) = self.lvalue_ex(target, op.is_some());
         match op {
             None => self.expr_into(value, &t, &tty),
@@ -1237,7 +1447,12 @@ impl<'p> Lowerer<'p> {
                     tty.clone()
                 };
                 let combined = self.arith(op, t.clone(), &tty, v, &vty, &result);
-                self.store(&t, &tty, combined, &result);
+                if through_default {
+                    // The value of a cell: never an object.
+                    self.emit(assign(t.clone(), combined));
+                } else {
+                    self.store(&t, &tty, combined, &result);
+                }
             }
         }
         t
@@ -1521,6 +1736,33 @@ impl<'p> Lowerer<'p> {
 
     // ------------------------------------------------------------------ calls
 
+    /// An optional `any` parameter of the function being lowered, written as an argument: when
+    /// it was omitted, it stays omitted for the Excel / VBA member it is passed on to.
+    fn is_omittable_param(&mut self, a: &Expr) -> bool {
+        let a = match &a.kind {
+            ExprKind::NamedArg { value, .. } => &**value,
+            _ => a,
+        };
+        let Some(Res::Local(l)) = self.info().res.get(&a.peel().id).cloned() else {
+            return false;
+        };
+        let Some(f) = self.frame().fn_id else {
+            return false;
+        };
+        self.prog.fns[f].params.iter().any(|p| {
+            p.local == l && p.optional && p.default.is_none() && !p.rest && p.ty == Type::Any
+        })
+    }
+
+    /// `forward_omitted`: the arguments of a host call that are such parameters.
+    fn forward_omitted(&mut self, args: &[Expr], argv: &mut [VExpr]) {
+        for (a, v) in args.iter().zip(argv.iter_mut()) {
+            if matches!(v, VExpr::Name(_)) && self.is_omittable_param(a) {
+                *v = call("RAS_Opt", vec![v.clone()]);
+            }
+        }
+    }
+
     fn finish_call(
         &mut self,
         target: VExpr,
@@ -1529,11 +1771,14 @@ impl<'p> Lowerer<'p> {
         bare_when_empty: bool,
     ) -> Option<VExpr> {
         if want {
-            Some(if args.is_empty() && bare_when_empty {
-                target
-            } else {
-                VExpr::Call(Box::new(target), args)
-            })
+            // (`Array` alone is no expression in VBA: `Array()`.)
+            Some(
+                if args.is_empty() && bare_when_empty && !target.is_name("Array") {
+                    target
+                } else {
+                    VExpr::Call(Box::new(target), args)
+                },
+            )
         } else {
             self.emit(VStmt::Call { target, args });
             None
@@ -1550,7 +1795,9 @@ impl<'p> Lowerer<'p> {
             .map(|(p, a)| (p.name.clone(), a.clone()))
             .collect();
         let host = matches!(def.kind, FnKind::Host { .. } | FnKind::Declare { .. });
-        let params = &def.params[skip.min(def.params.len())..];
+        // (A setter is the target of an assignment: its last parameter is the assigned value.)
+        let params = def.index_params();
+        let params = &params[skip.min(params.len())..];
         // By-value arguments are lowered together so that evaluation order is preserved.
         let byval: Vec<&Expr> = args
             .iter()
@@ -1565,6 +1812,24 @@ impl<'p> Lowerer<'p> {
         let mut out = Vec::new();
         for (i, p) in params.iter().enumerate() {
             let pty = p.ty.subst(&env);
+            if p.rest {
+                // `...rest` (spec §3.5): every argument from here on is an element (`ParamArray`).
+                let ety = pty.elem().cloned().unwrap_or(Type::Any);
+                for a in args.iter().skip(i) {
+                    if matches!(a.kind, ExprKind::Undefined) {
+                        out.push(VExpr::Missing);
+                        continue;
+                    }
+                    let v = vals.next().unwrap_or(VExpr::Missing);
+                    let at = self.ty(a);
+                    out.push(if at == Type::Null {
+                        self.null_for(&ety)
+                    } else {
+                        self.to_union_member(v, &at, &ety)
+                    });
+                }
+                return out;
+            }
             match args
                 .get(i)
                 .filter(|a| !matches!(a.kind, ExprKind::Undefined))
@@ -1629,7 +1894,8 @@ impl<'p> Lowerer<'p> {
         {
             return false;
         }
-        if self.pc.inline_stack.contains(&f) {
+        // A `...rest` parameter is filled by the call itself (`ParamArray`, spec §3.5).
+        if self.pc.inline_stack.contains(&f) || def.params.last().is_some_and(|p| p.rest) {
             return false;
         }
         let explicit = def.inline == InlineMode::Inline;
@@ -1963,6 +2229,19 @@ impl<'p> Lowerer<'p> {
                         }
                         o.member(fname)
                     }
+                    // A procedure a sheet's (a form's) file keeps as VBA (`declare function`
+                    // with a `vba` block, spec §14.7.4), called on the sheet.
+                    (Some(r), _)
+                        if self.prog.modules[def.module].form.is_some()
+                            && matches!(self.ty(r), Type::Class(..)) =>
+                    {
+                        let o = self.expr(r);
+                        if o.is_lit("Me") {
+                            VExpr::Name(fname)
+                        } else {
+                            o.member(fname)
+                        }
+                    }
                     _ => {
                         if def.ret_ty() == Type::Str && DOLLAR_FUNCS.contains(&fname.as_str()) {
                             fname.push('$');
@@ -1976,7 +2255,8 @@ impl<'p> Lowerer<'p> {
                         }
                     }
                 };
-                let argv = self.call_args(f, 0, args, &[]);
+                let mut argv = self.call_args(f, 0, args, &[]);
+                self.forward_omitted(args, &mut argv);
                 self.pc.qualifier = outer_qualifier;
                 let r = self.finish_call(target, argv, want, true);
                 if rebase {
@@ -2019,7 +2299,19 @@ impl<'p> Lowerer<'p> {
                         if matches!(a.kind, ExprKind::Undefined) {
                             VExpr::Missing
                         } else {
-                            vals.next().unwrap_or(VExpr::Missing)
+                            let v = vals.next().unwrap_or(VExpr::Missing);
+                            let v = if self.is_omittable_param(a) {
+                                call("RAS_Opt", vec![v])
+                            } else {
+                                v
+                            };
+                            // A named argument of a late-bound call: VBA finds the parameter.
+                            match &a.kind {
+                                ExprKind::NamedArg { name, .. } => {
+                                    VExpr::Named(name.text.clone(), Box::new(v))
+                                }
+                                _ => v,
+                            }
                         }
                     })
                     .collect();
@@ -2143,8 +2435,11 @@ impl<'p> Lowerer<'p> {
         if intr.is_file_io() {
             return self.file_io(intr, args, want);
         }
+        if matches!(intr, Redim | RedimPreserve | Erase) {
+            return self.redim(intr, args);
+        }
         let v = match intr {
-            EventOn => unreachable!(),
+            EventOn | Redim | RedimPreserve | Erase => unreachable!(),
             FileOpen | FileClose | FileReset | FilePrint | FilePrintLine | FileWrite
             | FileWriteLine | FileInput | FileLineInput | FileInputString | FileGet | FilePut
             | FileSeek | FileLock | FileUnlock | FileWidth | FileRename => unreachable!(),
@@ -2573,6 +2868,19 @@ impl<'p> Lowerer<'p> {
                 return None;
             }
             IsNullish => lit("False"),
+            DynamicArray => call("RAS_DynamicArray", vec![]),
+            IsAllocated => {
+                let v = self.operands(&[&args[0]]);
+                call("RAS_IsAllocated", v)
+            }
+            LetValue => {
+                let v = self.operands(&[&args[0]]);
+                call("RAS_LetValue", v)
+            }
+            Like => {
+                let mut v = self.operands(&[&args[0], &args[1]]).into_iter();
+                bin("Like", v.next().unwrap(), v.next().unwrap())
+            }
             FastMode => {
                 self.diag(Severity::Warning, self.src_module(), e.span, "W0630", "`fastMode()` は `using _ = fastMode();` の形で使ってください（このままでは何も行われません）");
                 long(fast_mode_mask(e))
@@ -2744,7 +3052,7 @@ pub(crate) fn mentions(v: &VExpr, name: &str) -> bool {
         VExpr::Lit(_) | VExpr::Missing => false,
         VExpr::Member(o, _) => mentions(o, name),
         VExpr::Call(f, args) => mentions(f, name) || args.iter().any(|a| mentions(a, name)),
-        VExpr::Not(x) | VExpr::Neg(x) => mentions(x, name),
+        VExpr::Not(x) | VExpr::Neg(x) | VExpr::Named(_, x) => mentions(x, name),
         VExpr::Bin(_, l, r) => mentions(l, name) || mentions(r, name),
     }
 }
@@ -2803,6 +3111,28 @@ impl<'p> Lowerer<'p> {
             set,
         });
         t
+    }
+
+    /// `redim(a, lo, hi, …)` → `ReDim a(lo To hi, …)`, `redimPreserve` → `ReDim Preserve`,
+    /// `erase(a)` → `Erase a`: the array of a `Variant` variable (spec §4.6).
+    fn redim(&mut self, intr: Intr, args: &[Expr]) -> Option<VExpr> {
+        let (target, _) = self.lvalue(&args[0]);
+        if intr == Intr::Erase {
+            self.emit(VStmt::Erase(target));
+            return None;
+        }
+        let bounds: Vec<&Expr> = args[1..].iter().collect();
+        let ops = self.operands(&bounds);
+        let dims = ops
+            .chunks_exact(2)
+            .map(|d| (d[0].clone(), d[1].clone()))
+            .collect();
+        self.emit(VStmt::ReDim {
+            preserve: intr == Intr::RedimPreserve,
+            target,
+            dims,
+        });
+        None
     }
 
     pub(crate) fn file_io(&mut self, intr: Intr, args: &[Expr], want: bool) -> Option<VExpr> {

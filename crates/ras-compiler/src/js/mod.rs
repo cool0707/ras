@@ -304,6 +304,33 @@ const JS_RESERVED: &[&str] = &[
     "Set",
 ];
 
+/// The JavaScript name of a function of a module. The accessors of a property (spec §3.6)
+/// are two functions, `$get_name` and `$set_name`: JavaScript has no accessors with
+/// parameters, and those of a module are reached as its exports.
+pub(crate) fn fn_js_name(d: &FnDef) -> String {
+    match d.accessor {
+        Some(ast::AccessorKind::Get) => format!("$get_{}", d.name),
+        Some(ast::AccessorKind::Set) => format!("$set_{}", d.name),
+        None => js_ident(&d.name),
+    }
+}
+
+/// The name of an accessor of a class: a JavaScript accessor, unless the property has
+/// parameters. Then the getter is a method and the setter the method `$set_name`.
+pub(crate) fn accessor_js_name(prog: &Program, f: FnId) -> (bool, String) {
+    let d = &prog.fns[f];
+    let (get, set) = prog.accessor_pair(f);
+    let indexed = [get, set]
+        .into_iter()
+        .flatten()
+        .any(|g| !prog.fns[g].index_params().is_empty());
+    match (indexed, d.is_setter()) {
+        (false, _) => (false, d.name.clone()),
+        (true, false) => (true, d.name.clone()),
+        (true, true) => (true, format!("$set_{}", d.name)),
+    }
+}
+
 pub(crate) fn js_ident(name: &str) -> String {
     if JS_RESERVED.contains(&name) {
         format!("{name}$")
@@ -569,13 +596,16 @@ impl<'p> Gen<'p> {
         match &d.kind {
             FnKind::Method { class, .. }
             | FnKind::Getter { class, .. }
-            | FnKind::Setter { class, .. } => format!("{}.{}", self.class_ref(*class), d.name),
+            | FnKind::Setter { class, .. } => {
+                let (_, name) = accessor_js_name(self.prog, f);
+                format!("{}.{name}", self.class_ref(*class))
+            }
             FnKind::Declare { lib, alias } => format!(
                 "$rt.declare({}, {})",
                 js_str(lib),
                 js_str(alias.as_deref().unwrap_or(&d.name))
             ),
-            _ => self.module_member(d.module, &js_ident(&d.name)),
+            _ => self.module_member(d.module, &fn_js_name(d)),
         }
     }
 
@@ -675,7 +705,7 @@ impl<'p> Gen<'p> {
             if decl.body.is_none() {
                 continue;
             }
-            self.emit_fn(f, "function ", &js_ident(&d.name));
+            self.emit_fn(f, "function ", &fn_js_name(d));
             if matches!(d.kind, FnKind::ModInit) {
                 continue;
             }
@@ -1052,7 +1082,15 @@ impl<'p> Gen<'p> {
                     && matches!(d.kind, FnKind::Free)
                     && d.decl.as_ref().is_some_and(|x| x.body.is_some())
             })
-            .map(|d| format!("{}: {}", js_str(&d.name), js_ident(&d.name)))
+            .map(|d| {
+                // (An accessor is the member `$get_name` / `$set_name`.)
+                let key = if d.accessor.is_some() {
+                    fn_js_name(d)
+                } else {
+                    d.name.clone()
+                };
+                format!("{}: {}", js_str(&key), fn_js_name(d))
+            })
             .collect();
         let dir = md
             .rel_path
@@ -1077,6 +1115,23 @@ impl<'p> Gen<'p> {
             self.w(format!("    ctor: {c},"));
         }
         self.w(format!("    members: {{ {} }},", members.join(", ")));
+        // `export let` (spec §14.11.2): properties of the form, the variables of its instance.
+        let vars: Vec<String> = md
+            .vars
+            .iter()
+            .map(|&v| &prog.vars[v])
+            .filter(|d| d.exported && !d.declared && !d.is_const)
+            .map(|d| {
+                let name = js_ident(&d.name);
+                format!(
+                    "{}: {{ get: () => {name}, set: ($v) => {{ {name} = $v; }} }}",
+                    js_str(&crate::names::module_ident(&d.name))
+                )
+            })
+            .collect();
+        if !vars.is_empty() {
+            self.w(format!("    vars: {{ {} }},", vars.join(", ")));
+        }
         self.w(format!("    events: [{}],", events.join(", ")));
         self.w("});");
     }
@@ -1101,7 +1156,7 @@ impl<'p> Gen<'p> {
             if matches!(d.kind, FnKind::Free | FnKind::Main)
                 && d.decl.as_ref().is_some_and(|x| x.body.is_some())
             {
-                let n = js_ident(&d.name);
+                let n = fn_js_name(d);
                 head.push_str(&format!("exports.{n} = {n};\n"));
             }
         }
@@ -1206,7 +1261,8 @@ impl<'p> Gen<'p> {
         );
         if ret != Type::Void
             && !ends_with_return
-            && !matches!(def.kind, FnKind::Ctor { .. } | FnKind::Setter { .. })
+            && !matches!(def.kind, FnKind::Ctor { .. })
+            && !def.is_setter()
         {
             // A VBA function that falls off its end returns the default value of its type.
             let z = self.zero(&ret);
@@ -1298,14 +1354,48 @@ impl<'p> Gen<'p> {
         for &f in &def.methods {
             let d = &prog.fns[f];
             let prefix = match d.kind {
+                // An event (spec §12.2.2): calling it runs the handlers of the variables
+                // that hold the object.
+                FnKind::Method { .. } if d.attrs.event => {
+                    let names: Vec<String> = (0..d.params.len()).map(|i| format!("${i}")).collect();
+                    let cells: Vec<String> = d
+                        .params
+                        .iter()
+                        .zip(&names)
+                        .map(|(p, n)| {
+                            if p.mode == PassMode::ByRef {
+                                n.clone()
+                            } else {
+                                format!("{{ v: {n} }}")
+                            }
+                        })
+                        .collect();
+                    self.wm(
+                        d.name_span,
+                        format!(
+                            "{}({}) {{ $rt.raiseEvent(this, {}, [{}]); }}",
+                            d.name,
+                            names.join(", "),
+                            js_str(&d.name),
+                            cells.join(", ")
+                        ),
+                    );
+                    continue;
+                }
                 FnKind::Method { is_static, .. } => {
                     if is_static { "static " } else { "" }.to_string()
                 }
-                FnKind::Getter { is_static, .. } => {
-                    format!("{}get ", if is_static { "static " } else { "" })
-                }
-                FnKind::Setter { is_static, .. } => {
-                    format!("{}set ", if is_static { "static " } else { "" })
+                FnKind::Getter { is_static, .. } | FnKind::Setter { is_static, .. } => {
+                    let (indexed, name) = accessor_js_name(prog, f);
+                    let keyword = match (indexed, d.is_setter()) {
+                        // A property with parameters: two methods.
+                        (true, _) => "",
+                        (false, false) => "get ",
+                        (false, true) => "set ",
+                    };
+                    let prefix = format!("{}{keyword}", if is_static { "static " } else { "" });
+                    self.emit_fn(f, &prefix, &name);
+                    continue;
                 }
                 _ => continue,
             };

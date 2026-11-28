@@ -248,7 +248,7 @@ fn hand_written_vba_is_taken_over() {
             ras_ovba::VbaModule {
                 name: "Module1".into(),
                 kind: ras_ovba::ModuleKind::Standard,
-                source: "Attribute VB_Name = \"Module1\"\r\nSub Hello()\r\n    MsgBox mod_Util.Twice(21)\r\n    frmHello.Show\r\nEnd Sub\r\nSub Jump()\r\n    GoTo Done\r\nDone:\r\nEnd Sub\r\n".into(),
+                source: "Attribute VB_Name = \"Module1\"\r\nPrivate Type Pt\r\n    X As Long\r\nEnd Type\r\nSub Hello()\r\n    MsgBox mod_Util.Twice(21)\r\n    frmHello.Show\r\nEnd Sub\r\n".into(),
             },
             ras_ovba::VbaModule {
                 name: "Sheet1".into(),
@@ -332,7 +332,7 @@ fn hand_written_vba_is_taken_over() {
     assert!(source_of("mod_Util").is_none(), "replaced by ModUtil");
     assert!(source_of("ModUtil").unwrap().contains("' RAS-GENERATED"));
     assert!(
-        source_of("Module1").unwrap().contains("GoTo Done"),
+        source_of("Module1").unwrap().contains("Private Type Pt"),
         "pending: kept as it was"
     );
     let sheet = source_of("Sheet1").unwrap();

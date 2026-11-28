@@ -423,9 +423,9 @@ declare namespace Scripting {
      * @see https://learn.microsoft.com/office/vba/language/reference/user-interface-help/dictionary-object
      */
     interface Dictionary {
-        /** キーの値を返す（既定メンバー）。無いキーを読むと、空の値でそのキーが追加される。`d[key] = value` で設定する。 */
+        /** キーの値を返す（既定メンバー）。無いキーを読むと、空の値でそのキーが追加される。`d[key] = value` で設定する。 @property */
         (key: any): any;
-        /** キーの値を返す。 */
+        /** キーの値を返す。 @property */
         Item(key: any): any;
         /** 組の数。 */
         readonly Count: int;

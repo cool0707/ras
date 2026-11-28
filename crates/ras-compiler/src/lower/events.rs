@@ -237,6 +237,7 @@ impl<'p> Lowerer<'p> {
             ty: ty.into(),
             is_array: false,
             optional_default: None,
+            param_array: false,
         };
         for d in dispatchers {
             let any = format!("RAS_OnAny_{}", d.event);
@@ -286,6 +287,7 @@ impl<'p> Lowerer<'p> {
                         ty: "Variant".into(),
                         is_array: false,
                         optional_default: None,
+                        param_array: false,
                     },
                     by_val("handler", "Object"),
                     by_val("argc", "Long"),
@@ -341,6 +343,7 @@ impl<'p> Lowerer<'p> {
                 ty: "Variant".into(),
                 is_array: false,
                 optional_default: None,
+                param_array: false,
             })
             .collect();
         let argv: Vec<VExpr> = params.iter().map(|p| name(p.name.clone())).collect();
@@ -412,6 +415,7 @@ impl<'p> Lowerer<'p> {
                 ty: ty.into(),
                 is_array: false,
                 optional_default: None,
+                param_array: false,
             };
             let proc = |name: &str, public: bool, params: Vec<VParam>, body: Vec<VStmt>| VProc {
                 kind: ProcKind::Sub,
@@ -515,6 +519,7 @@ impl<'p> Lowerer<'p> {
                     ty: p.1.clone(),
                     is_array: false,
                     optional_default: None,
+                    param_array: false,
                 })
                 .collect();
             self.out[ci].procs.push(proc(

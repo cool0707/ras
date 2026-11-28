@@ -193,6 +193,116 @@ pub fn settle_appended(root: &Path, prepared: &mut Prepared) -> Result<(), Strin
     ras_form::import::revert_appended(root, prepared, &failed)
 }
 
+/// After a take-over: corrects, in the files it converted from VBA, what the checker knows
+/// how to correct so that the code does what the VBA did (`Program::repairs`: a number used as
+/// a condition, the default member of a `Range`, a member written with another casing …), and
+/// applies the mechanical corrections of `ras check --fix`. The types are only known once every
+/// converted file is in the project, which is why this follows the conversion. `book` is the
+/// workbook the project is checked against (the project's own when `None`).
+pub fn repair_imported(
+    root: &Path,
+    prepared: &mut Prepared,
+    book: Option<&Path>,
+) -> Result<(), String> {
+    let converted: Vec<String> = prepared
+        .imported
+        .iter()
+        .map(|i| i.path.replace('\\', "/").to_lowercase())
+        .collect();
+    if converted.is_empty() {
+        return Ok(());
+    }
+    let analyze = || -> Option<ras_compiler::Program> {
+        let (mut config, sources) = ras_compiler::load_project(root).ok()?;
+        let book = book
+            .map(Path::to_path_buf)
+            .or_else(|| config.project.workbook.as_ref().map(|w| root.join(w)))
+            .filter(|b| b.is_file());
+        if let Some(book) = book {
+            let _ = read_workbook(&mut config, root, &book);
+        }
+        Some(ras_compiler::analyze(sources, config))
+    };
+    let is_converted =
+        |rel_path: &str| converted.contains(&rel_path.replace('\\', "/").to_lowercase());
+    // A procedure whose conversion still does not compile stays VBA (spec §14.7.4); the
+    // code that calls it is checked again.
+    for _ in 0..6 {
+        // A correction can uncover the next one (`!n` → `~n` → `~n != 0`).
+        let mut prog = None;
+        for _ in 0..8 {
+            let Some(p) = analyze() else {
+                return Ok(());
+            };
+            let mut changed = false;
+            for md in p.modules.iter().filter(|md| is_converted(&md.rel_path)) {
+                let fixes: Vec<&ras_compiler::Fix> = p
+                    .repairs
+                    .iter()
+                    .chain(p.fixes.iter())
+                    .filter(|f| f.module == md.id)
+                    .collect();
+                if fixes.is_empty() {
+                    continue;
+                }
+                let fixed = ras_compiler::apply_fixes(&md.text, &fixes);
+                if fixed != *md.text {
+                    std::fs::write(&md.path, fixed)
+                        .map_err(|e| format!("{}: {e}", md.path.display()))?;
+                    changed = true;
+                }
+            }
+            prog = Some(p);
+            if !changed {
+                break;
+            }
+        }
+        let Some(prog) = prog else {
+            return Ok(());
+        };
+        // The procedures the remaining errors are in.
+        let mut failed: Vec<(String, Vec<String>)> = Vec::new();
+        for d in prog.diagnostics.iter().filter(|d| d.is_error()) {
+            let Some(md) = d
+                .module
+                .map(|m| &prog.modules[m])
+                .filter(|md| is_converted(&md.rel_path))
+            else {
+                continue;
+            };
+            let offset = (u32::from(d.span.start()) as usize).min(md.text.len());
+            let line = md.text.as_bytes()[..offset]
+                .iter()
+                .filter(|b| **b == b'\n')
+                .count()
+                + 1;
+            let path = md.rel_path.replace('\\', "/");
+            let Some(name) = ras_form::import::procedure_at(prepared, &path, line) else {
+                continue;
+            };
+            if std::env::var_os("RAS_IMPORT_TRACE").is_some() {
+                eprintln!("[keep] {path}:{line} {name}: {} {}", d.code, d.message);
+                eprintln!(
+                    "       {}",
+                    md.text.lines().nth(line - 1).unwrap_or("").trim()
+                );
+            }
+            match failed.iter_mut().find(|(p, _)| *p == path) {
+                Some((_, names)) if !names.contains(&name) => names.push(name),
+                Some(_) => {}
+                None => failed.push((path, vec![name])),
+            }
+        }
+        let mut kept = false;
+        for (path, names) in &failed {
+            kept |= ras_form::import::keep_procedures(root, prepared, path, names)?;
+        }
+        if !kept {
+            break;
+        }
+    }
+    Ok(())
+}
 /// The file the live sync keeps the code names of the open workbook's sheets in: a sheet
 /// added in Excel is not in the workbook file until it is saved (spec §12.2).
 fn live_code_names_path(root: &Path) -> PathBuf {
@@ -420,6 +530,7 @@ impl Session {
             if let Some(busy) = failure {
                 return Err(busy);
             }
+            repair_imported(root, &mut prepared, Some(&self.book)).map_err(SyncError::Failed)?;
         }
         let sheets = book.sheets()?;
         // What the compiler takes for the sheets of the workbook until it is saved.

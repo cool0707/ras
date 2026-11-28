@@ -395,6 +395,8 @@ pub struct FnAttrs {
     pub on_error: Option<String>,
     pub ribbon: bool,
     pub fallback: Option<String>,
+    /// `event Changed(index: int);` of a class (spec §12.2.2): calling it raises the event.
+    pub event: bool,
     /// Declared in a form's code-behind: a member of the form's code module.
     pub form_member: bool,
     /// Declared in the file of a sheet or of `ThisWorkbook` (spec §12.2): a member of that
@@ -455,6 +457,10 @@ pub struct FnDef {
     pub inline: InlineMode,
     pub type_params: Vec<TypeParamDef>,
     pub params: Vec<ParamDef>,
+    /// `get` / `set` of a module-level accessor (`export get total(): int { ... }`, spec §3.6):
+    /// a `FnKind::Free` function that is a property of its module. `None` for the accessors
+    /// of a class, which have their own kinds (see `accessor_kind`).
+    pub accessor: Option<ast::AccessorKind>,
     /// True when `params[0]` is the `this` receiver of an extension method.
     pub is_extension: bool,
     /// `None` until inferred (functions without a return type annotation).
@@ -480,6 +486,43 @@ impl FnDef {
         self.ret.clone().unwrap_or(Type::Void)
     }
 
+    /// `get` / `set` when this is an accessor: of a class (`FnKind::Getter` / `Setter`) or of a
+    /// module (spec §3.6).
+    pub fn accessor_kind(&self) -> Option<ast::AccessorKind> {
+        match self.kind {
+            FnKind::Getter { .. } => Some(ast::AccessorKind::Get),
+            FnKind::Setter { .. } => Some(ast::AccessorKind::Set),
+            _ => self.accessor,
+        }
+    }
+
+    pub fn is_getter(&self) -> bool {
+        self.accessor_kind() == Some(ast::AccessorKind::Get)
+    }
+
+    pub fn is_setter(&self) -> bool {
+        self.accessor_kind() == Some(ast::AccessorKind::Set)
+    }
+
+    /// The parameters a caller passes in the parentheses: all of them, but for a setter not
+    /// the last one, which receives the assigned value.
+    pub fn index_params(&self) -> &[ParamDef] {
+        match self.params.split_last() {
+            Some((_, rest)) if self.is_setter() => rest,
+            _ => &self.params,
+        }
+    }
+
+    /// A member of a type definition whose doc comment has `@property`: a property with
+    /// parameters, not a method, so `obj.name(args) = value` assigns through it (spec §3.6.3).
+    pub fn is_host_property(&self) -> bool {
+        matches!(self.kind, FnKind::Host { .. })
+            && self.doc.as_deref().is_some_and(|d| {
+                d.split(|c: char| c.is_whitespace())
+                    .any(|w| w == "@property")
+            })
+    }
+
     /// The name to emit: the type library's spelling for host functions.
     pub fn vba_name(&self) -> &str {
         self.host_name.as_deref().unwrap_or(&self.name)
@@ -490,6 +533,8 @@ impl FnDef {
     pub fn proc_ident(&self) -> String {
         match self.kind {
             FnKind::Free => crate::names::module_ident(&self.name),
+            // The procedure that raises the event: the event itself has the name.
+            _ if self.attrs.event => format!("RAS_Raise_{}", self.name),
             _ => crate::names::member_ident(&self.name),
         }
     }
@@ -512,6 +557,7 @@ impl FnDef {
             || self.attrs.init
             || self.attrs.udf
             || self.attrs.form_member
+            || self.accessor.is_some()
         {
             return false;
         }
@@ -529,6 +575,7 @@ impl FnDef {
     /// Excel does not call by itself. Only meaningful for functions with a body.
     pub fn is_debug_entry(&self) -> bool {
         matches!(self.kind, FnKind::Free | FnKind::Main)
+            && self.accessor.is_none()
             && self.required_params() == 0
             && !self.is_extension
             && !self.is_generic()
@@ -704,6 +751,15 @@ pub const VALIDATED_CONTAINERS: [&str; 2] = ["Frame", "MultiPage"];
 impl VarDef {
     pub fn vba_name(&self) -> &str {
         self.host_name.as_deref().unwrap_or(&self.name)
+    }
+
+    /// The name written in the generated VBA. A global of a type definition whose doc comment
+    /// has `@emitAs Name` is emitted as that (`dbNull` is VBA's `Null`). Otherwise `vba_name`.
+    pub fn emitted_name(&self) -> &str {
+        self.doc
+            .as_deref()
+            .and_then(emit_as)
+            .unwrap_or_else(|| self.vba_name())
     }
 }
 
@@ -916,6 +972,8 @@ pub struct ModuleData {
     pub structs: Vec<StructId>,
     pub vars: Vec<VarId>,
     pub imports: Vec<ModuleId>,
+    /// The blocks of VBA written into the module as they are (` vba`…` `, spec §14.7.4).
+    pub raw_vba: Vec<String>,
     pub line_starts: Vec<u32>,
     /// Set for a module that is the code of an object of the workbook: a form's code-behind
     /// (`forms/<Name>.ras`, spec §14.11), or the file of a sheet or of `ThisWorkbook`
@@ -1124,6 +1182,10 @@ pub struct Program {
     pub diagnostics: Vec<Diagnostic>,
     /// Corrections that can be applied mechanically (`ras check --fix`).
     pub fixes: Vec<crate::diag::Fix>,
+    /// Corrections of errors in code converted from VBA that keep what the VBA did (a number
+    /// used as a condition, the default member of a `Range` …). Only the take-over of a
+    /// workbook's VBA applies them, to the files it converted (spec §14.7.1).
+    pub repairs: Vec<crate::diag::Fix>,
     pub opt_notes: Vec<(ModuleId, OptNote)>,
     pub config: crate::config::Config,
     /// Host namespace whose declarations are being resolved (unqualified type names look there first).
@@ -1361,6 +1423,74 @@ impl Program {
                 _ => false,
             })
             .collect()
+    }
+
+    /// The getter and the setter of the property the accessor `f` belongs to: the accessors of
+    /// that name of its class, or of its module (spec §3.6).
+    pub fn accessor_pair(&self, f: FnId) -> (Option<FnId>, Option<FnId>) {
+        let d = &self.fns[f];
+        let (candidates, is_static): (&[FnId], bool) = match d.kind {
+            FnKind::Getter { class, is_static } | FnKind::Setter { class, is_static } => {
+                (&self.classes[class].methods, is_static)
+            }
+            FnKind::Free if d.accessor.is_some() => (&self.modules[d.module].fns, false),
+            _ => return (None, None),
+        };
+        let class_accessor = d.accessor.is_none();
+        let find = |kind: ast::AccessorKind| {
+            candidates.iter().copied().find(|&g| {
+                let x = &self.fns[g];
+                x.name == d.name
+                    && x.accessor_kind() == Some(kind)
+                    && x.accessor.is_none() == class_accessor
+                    && match x.kind {
+                        FnKind::Getter { is_static: s, .. }
+                        | FnKind::Setter { is_static: s, .. } => s == is_static,
+                        _ => true,
+                    }
+            })
+        };
+        (find(ast::AccessorKind::Get), find(ast::AccessorKind::Set))
+    }
+
+    /// The type of the value that `x = v` stores when `x` is an object of type `t` VBA assigns
+    /// to through its default member: `cellValue` for an `Excel.Range` (`ws.Cells(1, 2) = v` sets
+    /// `.Value`). `None` for the other types.
+    pub fn default_value_type(&self, t: &Type) -> Option<Type> {
+        let Type::Class(c, _) = t else { return None };
+        let def = &self.classes[*c];
+        if def.kind != ClassKind::Host
+            || def.name != "Range"
+            || def.namespace.as_deref() != Some("Excel")
+        {
+            return None;
+        }
+        let (owner, idx) = self.find_field(*c, "value")?;
+        Some(self.classes[owner].fields[idx].ty.clone())
+    }
+
+    /// When the assignment target `target` is a host property that returns an object VBA
+    /// assigns to through its default member (`ws.cells(1, 2) = v`), the type of the value.
+    pub fn default_member_target(&self, info: &TypeInfo, target: &ast::Expr) -> Option<Type> {
+        let inner = target.peel();
+        let through_property = match &inner.kind {
+            ast::ExprKind::Call { .. } => matches!(
+                info.calls.get(&inner.id).map(|c| &c.target),
+                Some(
+                    CallTarget::Host(_)
+                        | CallTarget::DefaultMember(_)
+                        | CallTarget::Intrinsic(crate::intrinsics::Intr::SheetRange)
+                )
+            ),
+            ast::ExprKind::Member { .. } => {
+                matches!(info.res.get(&inner.id), Some(Res::Method(_)))
+            }
+            _ => false,
+        };
+        if !through_property {
+            return None;
+        }
+        self.default_value_type(&info.ty(inner.id))
     }
 
     pub fn find_methods(&self, class: ClassId, name: &str) -> Vec<FnId> {

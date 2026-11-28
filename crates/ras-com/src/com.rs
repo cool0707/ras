@@ -18,6 +18,7 @@
 //! | `{ $t: "date", v }`             | `Date`                                   |
 //! | `{ $t: "error", v }`            | `Error` (`CVErr`)                        |
 //! | `{ $t: "nothing" }`             | `Nothing`                                |
+//! | `{ $t: "null" }`                | `Null`                                   |
 //!
 //! Errors are thrown with a message of the form `RASCOM{"number":…,"source":…,"description":…}`.
 
@@ -49,8 +50,8 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::Variant::{
     VariantClear, VARENUM, VARIANT, VT_ARRAY, VT_BOOL, VT_BSTR, VT_BYREF, VT_CY, VT_DATE,
-    VT_DECIMAL, VT_DISPATCH, VT_ERROR, VT_I1, VT_I2, VT_I4, VT_I8, VT_INT, VT_R4, VT_R8, VT_UI1,
-    VT_UI2, VT_UI4, VT_UI8, VT_UINT, VT_USERDEFINED, VT_VARIANT,
+    VT_DECIMAL, VT_DISPATCH, VT_ERROR, VT_I1, VT_I2, VT_I4, VT_I8, VT_INT, VT_NULL, VT_R4, VT_R8,
+    VT_UI1, VT_UI2, VT_UI4, VT_UI8, VT_UINT, VT_USERDEFINED, VT_VARIANT,
 };
 
 /// Excel interprets names and values by the locale passed to `Invoke`. VBA always uses
@@ -291,6 +292,7 @@ fn to_variant(env: Env, value: JsUnknown) -> Result<Var> {
                                 (0x800A_0000_u32 | (code as u32 & 0xFFFF)) as i32
                         })
                     }
+                    "null" => Var::with(VT_NULL, |_| {}),
                     _ => Var::with(VT_DISPATCH, |v| unsafe {
                         (*v.Anonymous.Anonymous).Anonymous.pdispVal = ManuallyDrop::new(None)
                     }),

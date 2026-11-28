@@ -1000,6 +1000,7 @@ fn take_over_offline(
         written: &mut written,
     };
     let mut prepared = ras_form::import::prepare(root, &mut taken, codepage)?;
+    ras_sync::repair_imported(root, &mut prepared, Some(book))?;
     // Code added in the VBE that does not compile as RAS goes back out of the file (spec §14.7.3).
     ras_sync::settle_appended(root, &mut prepared)?;
     Ok(prepared)

@@ -103,6 +103,38 @@ mod tests {
     }
 
     #[test]
+    fn several_subscripts() {
+        let m = ok("const a = v[i, j];\nconst b = v[1, f(2, 3), k + 1][0];\nv[i, j] = 1;\n");
+        let init = |i: usize| match &m.items[i] {
+            Item::Var(v) => v.init.clone().unwrap(),
+            _ => panic!(),
+        };
+        let ExprKind::Index { index, .. } = init(0).kind else {
+            panic!()
+        };
+        let ExprKind::Subscripts(subs) = &index.kind else {
+            panic!("{:?}", index.kind)
+        };
+        assert_eq!(subs.len(), 2);
+        // `v[1, f(2, 3), k + 1][0]`: one subscript on an element with three.
+        let ExprKind::Index { object, index } = init(1).kind else {
+            panic!()
+        };
+        assert!(matches!(index.kind, ExprKind::Int { value: 0, .. }));
+        let ExprKind::Index { index, .. } = &object.kind else {
+            panic!()
+        };
+        let ExprKind::Subscripts(subs) = &index.kind else {
+            panic!()
+        };
+        assert_eq!(subs.len(), 3);
+        assert!(matches!(subs[1].kind, ExprKind::Call { .. }));
+        assert!(matches!(subs[2].kind, ExprKind::Binary { .. }));
+        // A subscript is missing after the comma.
+        assert!(!parse("const a = v[i, ];\n").errors.is_empty());
+    }
+
+    #[test]
     fn ranges_and_from_end() {
         let m = ok("const a = xs[^1];\nconst b = xs[1..^1];\nconst c = xs[..n - 1];\nconst d = xs[c ? 1 : 2..];\nconst e = xs[..];\nconst f = xs[^(i + 1)];\nfor (const i of 0..n) {}\n");
         let index = |i: usize| match &m.items[i] {
@@ -196,6 +228,42 @@ mod tests {
         assert!(matches!(&c.members[0], ClassMember::Field(f) if f.vis == Visibility::Private));
         assert!(matches!(&c.members[3], ClassMember::Accessor(a) if a.kind == AccessorKind::Get));
         assert!(matches!(&c.members[4], ClassMember::Ctor(_)));
+    }
+
+    #[test]
+    fn module_level_accessors() {
+        let m = ok("let n: int;\n/** doc */\nexport get total(): int { return n; }\nset total(v: int) { n = v; }\nget item(key: string, at?: int): any { return null; }\nexport set item(key: string, at?: int, value: any) {}\n");
+        let Item::Accessor(g) = &m.items[1] else {
+            panic!()
+        };
+        assert_eq!(g.kind, AccessorKind::Get);
+        assert_eq!(g.vis, Visibility::Public);
+        assert_eq!(g.func.name.text, "total");
+        assert!(g.func.exported && g.func.params.is_empty() && g.func.ret.is_some());
+        assert_eq!(g.func.doc.as_deref(), Some("doc"));
+        let Item::Accessor(s) = &m.items[2] else {
+            panic!()
+        };
+        assert_eq!(s.kind, AccessorKind::Set);
+        assert_eq!(s.vis, Visibility::Private);
+        assert!(!s.func.exported && s.func.params.len() == 1);
+        assert!(
+            matches!(&m.items[3], Item::Accessor(a) if a.kind == AccessorKind::Get && a.func.params.len() == 2)
+        );
+        assert!(
+            matches!(&m.items[4], Item::Accessor(a) if a.kind == AccessorKind::Set && a.func.params.len() == 3 && a.func.params[1].optional)
+        );
+        // `get` and `set` stay ordinary names: variables, functions, calls.
+        let m = ok("let get = 1;\nlet set = get;\nfunction get2() {}\nset = get + 1;\nget2();\nget\nfoo();\n");
+        assert!(m.items.iter().all(|i| !matches!(i, Item::Accessor(_))));
+        // In a class: accessors with parameters.
+        let m = ok("class C {\n get item(key: string): int { return 1; }\n set item(key: string, v: int) {}\n}");
+        let Item::Class(c) = &m.items[0] else {
+            panic!()
+        };
+        assert!(
+            matches!(&c.members[1], ClassMember::Accessor(a) if a.kind == AccessorKind::Set && a.func.params.len() == 2)
+        );
     }
 
     #[test]

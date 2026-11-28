@@ -151,11 +151,120 @@ export function selected(): string {
 #[test]
 fn errors_in_code_behind() {
     let (diags, _) = compile(
-        "class Foo {}\nconsole.log(1);\n@macro\nfunction m() {}\nexport let x = 1;\n",
+        "class Foo {}\nconsole.log(1);\n@macro\nfunction m() {}\nexport const x = 1;\n",
         &[],
     );
     let codes: Vec<&str> = diags.iter().map(|d| d.split(':').next().unwrap()).collect();
     assert_eq!(codes, ["E0630", "E0630", "E0630", "E0632"], "{diags:?}");
+}
+
+/// A form's `constructor` with a rest parameter (spec §3.5): the factory takes the `ParamArray`
+/// and passes the array on.
+#[test]
+fn constructors_take_rest_arguments() {
+    let (diags, files) = compile(
+        "function constructor(title: string, ...choices: any[]) {\n    this.caption = title;\n    for (const c of choices) this.cboKind.addItem(c);\n}\n",
+        &[(
+            "main",
+            "export function run() {\n    new frmInput(\"t\").show();\n    new frmInput(\"t\", \"a\", 2).show();\n}\n",
+        )],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = form_code(&files);
+    assert!(
+        code.contains(
+            "Friend Sub RAS_Construct(ByVal title As String, ByVal choices As Variant)\n"
+        ),
+        "{code}"
+    );
+    let glue = file(&files, "RAS_Glue");
+    assert!(
+        glue.contains("Public Function New_frmInput(ByVal title As String, ParamArray choices() As Variant) As frmInput\n    Dim ras_choices As Variant\n\n    ras_choices = choices\n    Set New_frmInput = New frmInput\n    New_frmInput.RAS_Construct title, ras_choices\nEnd Function\n"),
+        "{glue}"
+    );
+    let main = file(&files, "Main");
+    for want in [
+        "RAS_Glue.New_frmInput(\"t\").Show",
+        "RAS_Glue.New_frmInput(\"t\", \"a\", 2&).Show",
+    ] {
+        assert!(main.contains(want), "{want}\n---\n{main}");
+    }
+}
+
+/// `export let` is a `Public` variable of the form: a member of the default instance and of
+/// every instance for the other modules, initialised with the form (spec §14.11.2).
+#[test]
+fn exported_variables_are_public_members() {
+    let (diags, files) = compile(
+        r#"
+/** キャンセルされたか。 */
+export let cancelClicked: boolean = false;
+export let attempts = 3;
+export let name = "";
+let hidden = 1;
+
+@on("btnCancel.Click")
+function cancel() {
+    cancelClicked = true;
+    this.attempts += hidden;
+    this.hide();
+}
+"#,
+        &[(
+            "main",
+            r#"
+export function run(): boolean {
+    frmInput.cancelClicked = false;
+    frmInput.show();
+    const f = new frmInput();
+    f.attempts++;
+    f.name = "x";
+    const n: int = f.attempts + frmInput.attempts;
+    return frmInput.cancelClicked || f.cancelClicked;
+}
+"#,
+        )],
+    );
+    assert!(diags.is_empty(), "{diags:#?}");
+    let code = form_code(&files);
+    for want in [
+        // A variable named as a function of VBA is renamed, as in a standard module.
+        "Public cancelClicked As Boolean\nPublic attempts As Long\nPublic name_ As String\nPrivate hidden As Long\n",
+        "    attempts = 3&\n",
+        "    cancelClicked = True\n    Me.attempts = Me.attempts + hidden\n",
+    ] {
+        assert!(code.contains(want), "{want}\n---\n{code}");
+    }
+    let main = file(&files, "Main");
+    for want in [
+        "    frmInput.cancelClicked = False\n",
+        "    f.attempts = f.attempts + 1&\n",
+        "    f.name_ = \"x\"\n",
+        "    n = f.attempts + frmInput.attempts\n",
+        "    ras_t1 = frmInput.cancelClicked\n",
+        "        ras_t1 = f.cancelClicked\n",
+    ] {
+        assert!(main.contains(want), "{want}\n---\n{main}");
+    }
+
+    // Not what VBA can make `Public` in a form, not a second member of a name, and no member
+    // of the form without `export`.
+    let cases: &[(&str, &str, &str)] = &[
+        ("export let xs: int[] = [];\n", "", "E0643"),
+        ("struct P { x: int; }\n", "", "E0630"),
+        ("export let btnOK = 1;\n", "", "E0101"),
+        ("export const LIMIT = 10;\n", "", "E0630"),
+        ("let hidden = 1;\n", "frmInput.hidden = 2;", "E0202"),
+        ("export let n = 1;\n", "frmInput.n = \"a\";", "E0301"),
+    ];
+    for (form, body, want) in cases {
+        let main = format!("export function run() {{ {body} }}\n");
+        let (diags, _) = compile(form, &[("main", &main)]);
+        assert!(
+            diags.iter().any(|d| d.starts_with(want)),
+            "{form}{body}: expected {want}, got {diags:?}"
+        );
+    }
 }
 
 #[test]
@@ -356,18 +465,20 @@ fn unsupported_vba_is_kept_as_todo() {
     println!("{}", converted.text);
     println!("{:?}", converted.todos);
     let reasons: Vec<&str> = converted.todos.iter().map(|t| t.1.as_str()).collect();
-    for needle in [
-        "ユーザー定義型",
-        "Like",
-        "ReDim",
-        "GoTo",
-        "行ラベル",
-        "Property",
+    assert_eq!(reasons.len(), 1, "{reasons:?}");
+    assert!(reasons[0].contains("ユーザー定義型"), "{reasons:?}");
+    // What RAS has a counterpart for is converted: `Like`, `ReDim`, a `GoTo` that jumps
+    // forward to a label, a `Property`.
+    for want in [
+        "let names: string[] = [];",
+        "if (like(s, \"a*\")) {",
+        "redim(names, 0, 10);",
+        "toDone: do {",
+        "break toDone;",
+        "} while (false);",
+        "get Current(): Mode {",
     ] {
-        assert!(
-            reasons.iter().any(|r| r.contains(needle)),
-            "{needle} not reported: {reasons:?}"
-        );
+        assert!(converted.text.contains(want), "{want}:\n{}", converted.text);
     }
     // Every TODO line points at the comment.
     let lines: Vec<&str> = converted.text.lines().collect();
@@ -618,8 +729,15 @@ fn common_form_code_converts() {
         "{}",
         converted.text
     );
-    assert_eq!(converted.todos.len(), 1, "{:?}", converted.todos);
-    assert!(converted.todos[0].1.contains("引数を取るプロパティ"));
+    // `lst.Selected(i) = True`: an assignment to a property with arguments (spec §3.6.3).
+    assert!(converted.todos.is_empty(), "{:?}", converted.todos);
+    assert!(
+        converted
+            .text
+            .contains("this.lstItems.selected(i) = this.chkAll.value;"),
+        "{}",
+        converted.text
+    );
 }
 
 /// The example of spec §14.11.2 compiles.

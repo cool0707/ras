@@ -264,10 +264,20 @@ pub struct Pulled {
     pub todos: Vec<(usize, String)>,
     /// The existing `.ras` code-behind was kept: the form was written from it.
     pub kept_code: bool,
+    /// The procedures kept as VBA (`` vba`…` `` blocks) and those converted, as
+    /// `ras_compiler::vba2ras::Converted` gives them (lines of the `.ras` file).
+    pub raw: Vec<String>,
+    /// The procedures converted: (first line, last line of the `.ras` file; name in the VBA).
+    pub procs: Vec<(usize, usize, String)>,
+    /// The VBA that was converted.
+    pub code: String,
+    /// The form the code is the code-behind of.
+    pub decl: ras_compiler::FormDecl,
 }
 
 /// Result of [`pull`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum PullOutcome {
     /// The files were written.
     Written(Pulled),
@@ -504,20 +514,27 @@ pub fn pull_with(
     // A form written from `forms/` was compiled from the `.ras` file: that file is the source
     // of its code, the VBA in the workbook only what it compiled to.
     let keep_code = ras_ovba::is_generated_form(&form.code) && code_path.exists();
+    let code = codebehind::code_behind(&form.code);
     let mut converted = if keep_code {
         ras_compiler::vba2ras::Converted::default()
     } else {
-        ras_compiler::vba2ras::convert(
-            &codebehind::code_behind(&form.code),
-            &ras_compiler::vba2ras::Target::Form(&decl),
-            peers,
-        )
+        // (The take-over of a workbook keeps as VBA what RAS cannot express, spec §14.7.4.)
+        let target = ras_compiler::vba2ras::Target::Form(&decl);
+        if header.is_some() {
+            ras_compiler::vba2ras::convert_keeping(&code, &target, peers, &[])
+        } else {
+            ras_compiler::vba2ras::convert(&code, &target, peers)
+        }
     };
     if let Some(header) = header.filter(|_| !keep_code) {
         let shift = header.lines().count();
         converted.text = format!("{header}{}", converted.text);
         for todo in &mut converted.todos {
             todo.0 += shift;
+        }
+        for span in &mut converted.procs {
+            span.0 += shift;
+            span.1 += shift;
         }
     }
 
@@ -535,6 +552,10 @@ pub fn pull_with(
         warnings: snapshot.warnings,
         todos: converted.todos,
         kept_code: keep_code,
+        raw: converted.raw,
+        procs: converted.procs,
+        code,
+        decl,
     }))
 }
 
