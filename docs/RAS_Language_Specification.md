@@ -7,6 +7,9 @@
 > * C# と同じ範囲 `xs[1..^1]`・末尾からの位置 `xs[^1]` と、`for (const i of 0..n)` を追加。配列のメソッドに `step(n)`・`toReversed()` を追加（§4.5）
 > * `ras check --fix` とエディタのクイックフィックスで、VBA の綴りで書かれた名前を書き換える（§7.3、§16.2）
 > * 名前付き引数 `f(a: 123, c: "あいう")` を追加（§3.3）。エディタで引数名を補完する（§16.2.1）
+> * 上下左右に行・列を足した範囲を返す `range.extend(up, down, left, right)` を追加（§9.4.1）
+> * シートの `range` を行・列の番号 4 つ（`ws.range(2, 4, 8, 9)` = D2:I8）でも呼べるようにした（§9.4.2）
+> * 範囲の右下のセルを返すプロパティ `range.lastCell` を追加（`ws.usedRange.lastCell`。§9.4.3）
 > * VBA の `[A1]`・`[SUM(A1:A10)]`（`Evaluate` の省略形）に当たる `` fx`SUM(A1:A10)` `` を追加（§2.7）。数式の中は Excel の数式として色分けし、ワークシート関数を補完する
 > * ユーザーフォームのデバッグ実行（§14.10.7）と Excel での実行（§14.11.8）を追加
 > * 参照の検索・名前の変更の対象と拒否する名前、セマンティックトークンの種類、未インポートの候補の挿入位置を規定（§16.2.5〜§16.2.7）
@@ -1114,6 +1117,55 @@ for (let r = 2; r <= last; r++) {
   * `range.toArray(): any[][]` — 常に 0 始まりの2次元配列（§9.2.1）
   * `range.fromArray(arr)` — 配列サイズに合わせて Range をリサイズして一括代入（配列の下限は問わない）
   * `sheet.usedTable(): any[][]` — 使用範囲を一括取得
+
+#### 9.4.1 上下左右に広げた範囲（`extend`）
+
+`range.extend(up?: int, down?: int, left?: int, right?: int): Excel.Range` は、範囲の上に `up` 行・下に `down` 行・左に `left` 列・右に `right` 列を足した範囲を返す（`Offset` と `Resize` を組み合わせる手間を省く）。
+
+```typescript
+const r = Sheet1.range("B3:C3");
+r.extend(1, 1, 1, 1);          // A2:D4
+r.extend(down: 2);             // B3:C5（名前付き引数。§3.3）
+r.extend(left: 1, right: 2);   // A3:E3
+r.extend(undefined, 1);        // B3:C4（undefined はその辺を指定しない）
+Sheet1.range("A1:D4").extend(-1, -1, -1, -1);   // B2:C3（負の数で縮める）
+```
+
+* **引数:** すべて省略でき、省略した辺は 0（広げない）。`int` を受け取り、名前付き引数（`up` / `down` / `left` / `right`）でも位置でも渡せる。存在しない引数名は `E0412`、5 個以上の引数は `E0402`。
+* **元の範囲:** 変えない（新しい `Range` を返す）。行数・列数は 1 つ目の領域で数える（`Resize` と同じ）。
+* **範囲外:** シートの端を越える・行数か列数が 0 以下になる場合は、実行時エラー 1004（Excel の `Offset` / `Resize` と同じ）。端で止める（切り詰める）ことはしない。
+* **トランスパイル仕様:** ランタイムの `RAS_RangeExtend(rng, up, down, left, right)`（`rng.Offset(-up, -left).Resize(rng.Rows.Count + up + down, rng.Columns.Count + left + right)`）を呼ぶ。範囲の式は 1 回だけ評価する。
+* **エディタ:** 補完・ホバー・パラメーター情報にシグネチャと各引数の説明を表示し、名前付き引数の名前（`up:` など）を補完する。
+
+#### 9.4.2 行・列の番号で指定する範囲（`ws.range(上, 左, 下, 右)`）
+
+`Excel.Worksheet` の `range` は、行・列の番号 4 つでも呼べる。`ws.range(top, left, bottom, right)` は (`top`, `left`) のセルから (`bottom`, `right`) のセルまでの範囲を返す。
+
+```typescript
+Sheet1.range(2, 4, 8, 9);              // D2:I8
+Sheet1.range(1, 1, last, 0cE);         // A1:E{last}（列番号リテラル §2.2 と組み合わせられる）
+```
+
+* **引数:** 4 つとも `int`（省略できない）。1・2 個の引数は従来どおり（`range("A1")`、`range("A1", "B2")`）で、3 個はエラー（`E0402`）。
+* **範囲外:** 0 以下や、シートの行数・列数を超える番号は実行時エラー 1004（`Cells` と同じ）。上下・左右が逆でも、2 つのセルを含む範囲になる（`Range(Cell1, Cell2)` と同じ）。
+* **トランスパイル仕様:** `ws.Range(ws.Cells(top, left), ws.Cells(bottom, right))` を出力する。シートの式は 1 回だけ評価する（変数・コード名でなければ一時変数に入れる）。
+* **エディタ:** ホバーと補完の詳細に、もう 1 つの呼び方として `range(top: int, left: int, bottom: int, right: int): Excel.Range` を表示する（パラメーター情報は §16.2）。
+
+
+#### 9.4.3 範囲の右下のセル（`lastCell`）
+
+`range.lastCell: Excel.Range` は、範囲の右下のセル（最後の行・最後の列のセル）を返す読み取り専用のプロパティ。
+
+```typescript
+const last = Sheet1.usedRange.lastCell;           // 使われている範囲の右下のセル
+const lastRow = Sheet1.usedRange.lastCell.row;    // 使われている最後の行
+Sheet1.range("B3:D9").lastCell;                   // D9
+```
+
+* **複数の領域:** 1 つ目の領域の右下のセル（`Rows.Count` / `Columns.Count` と同じく 1 つ目の領域で数える）。1 つのセルなら、そのセル自身。
+* **使い方の誤り:** `()` を付けて呼ぶ（`lastCell()`）と `E0382`、代入すると `E0325`。返したセルのプロパティ（`lastCell.value = 1`）には代入できる。
+* **トランスパイル仕様:** ランタイムの `RAS_LastCell(rng)`（`rng.Cells(rng.Rows.Count, rng.Columns.Count)`）を呼ぶ。範囲の式は 1 回だけ評価する。
+* **エディタ:** 補完・ホバーにプロパティとして表示する。
 
 ---
 
@@ -3711,7 +3763,7 @@ VS Code の IntelliSense に相当する機能を、LSP の標準機能として
 |---|---|---|
 | メンバー一覧（補完） | `textDocument/completion`, `completionItem/resolve` | `.` の後に、レシーバの型のメンバー（RAS クラス、Excel 等の COM 型、配列・文字列の組み込みメンバー、コレクションの配列メソッド（§4.4））と適用できる拡張メソッドを表示する。COM 型のメンバーとグローバルは camelCase で表示する（§15.3.1）。`.` 以外の位置では、スコープ内の変数・関数・型・キーワード・スニペットを表示する。引数リストの中では名前付き引数の引数名も表示する（§16.2.1） |
 | クイック情報（ホバー） | `textDocument/hover` | RAS 構文のシグネチャ、JSDoc（要約・引数・戻り値・例）、推論された型を表示する |
-| パラメーター情報 | `textDocument/signatureHelp` | `(` と `,` で起動し、シグネチャと現在の引数をハイライトし、その引数の `@param` の説明を表示する |
+| パラメーター情報 | `textDocument/signatureHelp` | `(` と `,` で起動し、シグネチャと現在の引数をハイライトし、その引数の `@param` の説明を表示する。RAS が加えたメンバー（`extend`。§9.4.1）にも表示し、RAS が加えた呼び方のあるメンバー（シートの `range`。§9.4.2）は、それをもう 1 つのシグネチャ（オーバーロード）として表示し、引数に合うほう（引数が 3 個以上か、最初の引数が数字）を選ぶ |
 | Excel の数式 | 補完・ホバー・パラメーター情報 | `` fx`…` `` の数式の中では、Excel のワークシート関数の補完・シグネチャ・説明を表示する（§2.7） |
 | 定義へ移動 / 型定義へ移動 | `textDocument/definition`, `typeDefinition` | ジェネリクスや拡張メソッドも元の定義へ移動する |
 | 参照の検索 | `textDocument/references` | |

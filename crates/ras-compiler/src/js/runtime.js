@@ -1220,6 +1220,20 @@ function toColumn(range) {
 function toRow(range) {
     return read2D(call(range, "Rows", [1]))[0];
 }
+/** `ws.range(top, left, bottom, right)`: `ws.Range(ws.Cells(top, left), ws.Cells(bottom, right))`. */
+function sheetRange(ws, top, left, bottom, right) {
+    return call(ws, "Range", [call(ws, "Cells", [top, left]), call(ws, "Cells", [bottom, right])]);
+}
+/** `range.lastCell` (`RAS_LastCell`). */
+function lastCell(range) {
+    return call(range, "Cells", [get(get(range, "Rows"), "Count"), get(get(range, "Columns"), "Count")]);
+}
+/** `range.extend(up, down, left, right)` (`RAS_RangeExtend`). */
+function extend(range, up, down, left, right) {
+    const rows = get(get(range, "Rows"), "Count");
+    const cols = get(get(range, "Columns"), "Count");
+    return call(call(range, "Offset", [-up, -left]), "Resize", [rows + up + down, cols + left + right]);
+}
 function fromArray(range, arr) {
     if (!arr.length) return;
     const data = Array.isArray(arr[0]) ? arr : arr.map((x) => [x]);
@@ -2122,7 +2136,7 @@ module.exports = {
     cnum, cint, clng, toInt, toLong, cbool, cdate, cstr, str, dyn, cmp, eq, unionEq, errorToNull,
     trim, repeat, replace, split, charCode, ix, ixEnd, charEnd, range, step, cols, transpose, pop, find, join, sort, newArray, mapGet, mapSet,
     configure, hooks, note, standIn: stand, global, get, getOpt, put, call, item, setItem, invoke, iter, typeName, typeIs, implements: implements_, newHost, runMacro,
-    suspend, resume, resetAppState, status, sleep, pause, waitUntil, yieldNow, is64, read2D, toColumn, toRow, fromArray, match, print,
+    suspend, resume, resetAppState, status, sleep, pause, waitUntil, yieldNow, is64, read2D, toColumn, toRow, extend, lastCell, sheetRange, fromArray, match, print,
     fileOpen, fileClose, fileReset, filePrint, fileWrite, fileInput, fileLineInput, fileInputString, fileGet, filePut, fileSeek, fileLock, fileUnlock, fileWidth, fileRename,
     vba, declare, module: module_, withEvents, listen, listenAny, listenEach, fireListeners, unlistenOwner, onAction, onActionEach, ensureInit, entries, run, serve, form, newForm,
 };

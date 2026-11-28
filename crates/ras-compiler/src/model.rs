@@ -964,6 +964,19 @@ pub struct FormModule {
 }
 
 impl Program {
+    /// `Excel.Worksheet.Range`, which RAS also takes as `range(top, left, bottom, right)`
+    /// (spec §9.4.2).
+    pub fn is_sheet_range(&self, f: FnId) -> bool {
+        let def = &self.fns[f];
+        let FnKind::Host { class: Some(c) } = def.kind else {
+            return false;
+        };
+        let c = &self.classes[c];
+        def.vba_name() == "Range"
+            && c.name == "Worksheet"
+            && c.namespace.as_deref() == Some("Excel")
+    }
+
     /// The module of the form whose type is `c` (a form's code-behind, spec §14.11).
     pub fn form_module_of(&self, c: ClassId) -> Option<ModuleId> {
         let m = self.classes.get(c)?.module;

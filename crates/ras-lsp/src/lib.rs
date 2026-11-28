@@ -473,25 +473,35 @@ impl Server {
                 let Some(h) = query::signature_help(prog, m, off) else {
                     return Value::Null;
                 };
-                let params: Vec<Value> = h
-                    .params
-                    .iter()
-                    .map(|((s, e), doc)| {
-                        let mut v = json!({ "label": [s, e] });
-                        if let Some(d) = doc {
-                            v["documentation"] = json!({ "kind": "markdown", "value": d });
+                let sigs: Vec<Value> = h
+                    .signatures
+                    .into_iter()
+                    .map(|s| {
+                        let params: Vec<Value> = s
+                            .params
+                            .iter()
+                            .map(|((a, b), doc)| {
+                                let mut v = json!({ "label": [a, b] });
+                                if let Some(d) = doc {
+                                    v["documentation"] = json!({ "kind": "markdown", "value": d });
+                                }
+                                v
+                            })
+                            .collect();
+                        // Outside the parameters: none is highlighted.
+                        let active = s.active.unwrap_or(params.len() as u32);
+                        let mut sig = json!({ "label": s.label, "parameters": params, "activeParameter": active });
+                        if let Some(d) = s.doc {
+                            sig["documentation"] = json!({ "kind": "markdown", "value": d });
                         }
-                        v
+                        sig
                     })
                     .collect();
-                // Outside the parameters: none is highlighted.
-                let active = h.active.unwrap_or(params.len() as u32);
-                let mut sig =
-                    json!({ "label": h.label, "parameters": params, "activeParameter": active });
-                if let Some(d) = h.doc {
-                    sig["documentation"] = json!({ "kind": "markdown", "value": d });
-                }
-                json!({ "signatures": [sig], "activeSignature": 0, "activeParameter": active })
+                let active = sigs
+                    .get(h.active_signature as usize)
+                    .map(|s| s["activeParameter"].clone())
+                    .unwrap_or(json!(0));
+                json!({ "signatures": sigs, "activeSignature": h.active_signature, "activeParameter": active })
             }
             "workspace/symbol" => {
                 let q = p["query"].as_str().unwrap_or("");

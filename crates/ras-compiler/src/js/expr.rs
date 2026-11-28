@@ -1401,6 +1401,21 @@ impl<'p> Gen<'p> {
             SheetUsedTable => format!("$rt.read2D($rt.get({r}, \"UsedRange\"))"),
             RangeToColumn => format!("$rt.toColumn({r})"),
             RangeToRow => format!("$rt.toRow({r})"),
+            SheetRange => format!("$rt.sheetRange({r}, {argv})"),
+            RangeLastCell => format!("$rt.lastCell({r})"),
+            RangeExtend => {
+                let side = |i: usize| match args.get(i) {
+                    Some(x) if !matches!(x.kind, ExprKind::Undefined) => a[i].clone(),
+                    _ => "0".to_string(),
+                };
+                format!(
+                    "$rt.extend({r}, {}, {}, {}, {})",
+                    side(0),
+                    side(1),
+                    side(2),
+                    side(3)
+                )
+            }
             RangeFromArray => format!("$rt.fromArray({r}, {argv})"),
             ExcelMatch => format!("$rt.match({argv})"),
             ExcelErrorToNull => format!("$rt.errorToNull({argv})"),

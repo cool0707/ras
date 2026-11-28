@@ -144,6 +144,13 @@ fn has_named(args: &[Expr]) -> bool {
         .any(|a| matches!(a.kind, ExprKind::NamedArg { .. }))
 }
 
+/// A parameter as named arguments see it (spec §3.3).
+struct NamedParam {
+    name: String,
+    required: bool,
+    rest: bool,
+}
+
 /// The value of an argument, without its name.
 fn named_value(a: &Expr) -> &Expr {
     match &a.kind {
@@ -4146,15 +4153,40 @@ impl Checker<'_> {
                 }
                 _ => None,
             };
-            match sig {
-                Some((f, skip)) => match self.reorder_named(e, f, skip, args) {
+            let intr_params = match &access {
+                // `range.extend(down: 3)` (spec §9.4).
+                Access::Intrinsic(Intr::RangeExtend) => {
+                    Some(("extend", intrinsics::RANGE_EXTEND_PARAMS))
+                }
+                _ => None,
+            };
+            match (sig, intr_params) {
+                (Some((f, skip)), _) => match self.reorder_named(e, f, skip, args) {
                     Some(v) => {
                         positional = v;
                         &positional
                     }
                     None => return Type::Error,
                 },
-                None => {
+                (None, Some((member, names))) => {
+                    let params: Vec<NamedParam> = names
+                        .iter()
+                        .map(|n| NamedParam {
+                            name: (*n).to_string(),
+                            required: false,
+                            rest: false,
+                        })
+                        .collect();
+                    let shown = format!("`{member}`");
+                    match self.reorder_named_params(e, &shown, &params, args) {
+                        Some(v) => {
+                            positional = v;
+                            &positional
+                        }
+                        None => return Type::Error,
+                    }
+                }
+                (None, None) => {
                     if !matches!(access, Access::Error | Access::Value(Type::Error)) {
                         self.err(e.span, "E0411", "名前付き引数は、宣言された関数・メソッド・コンストラクタの呼び出しにだけ書けます");
                     }
@@ -4189,6 +4221,22 @@ impl Checker<'_> {
                 );
                 Type::Any
             }
+            Access::Intrinsic(i) if i.is_property() => {
+                let name = match &c.kind {
+                    ExprKind::Member { name, .. } => name.text.clone(),
+                    ExprKind::Name(id) => id.text.clone(),
+                    _ => String::new(),
+                };
+                self.err(
+                    e.span,
+                    "E0382",
+                    format!("`{name}` はプロパティです。`()` を付けずに使ってください"),
+                );
+                for a in args {
+                    self.expr(a, None);
+                }
+                Type::Error
+            }
             Access::Intrinsic(i) => {
                 self.info().calls.insert(
                     e.id,
@@ -4198,7 +4246,9 @@ impl Checker<'_> {
                     },
                 );
                 let (robj, rty) = match &recv {
-                    Some((o, t)) if i == Intr::EventOn => (Some(*o), Some(t.clone())),
+                    Some((o, t)) if matches!(i, Intr::EventOn | Intr::RangeExtend) => {
+                        (Some(*o), Some(t.clone()))
+                    }
                     // A host collection is seen as an array of its members.
                     Some((o, t)) => (
                         Some(*o),
@@ -4212,6 +4262,21 @@ impl Checker<'_> {
                     None => (None, None),
                 };
                 self.intrinsic_call(e, i, robj, rty.as_ref(), args, expect)
+            }
+            // `ws.range(top, left, bottom, right)`: the cells from (top, left) to (bottom, right)
+            // (spec §9.4.2).
+            Access::Func { f, .. } if args.len() == 4 && self.prog.is_sheet_range(f) => {
+                self.info().calls.insert(
+                    e.id,
+                    CallInfo {
+                        target: CallTarget::Intrinsic(Intr::SheetRange),
+                        type_args: Vec::new(),
+                    },
+                );
+                for a in args {
+                    self.arg(std::slice::from_ref(a), 0, &Type::Int);
+                }
+                self.prog.fns[f].ret.clone().unwrap_or(Type::Error)
             }
             Access::Func { f, env, recv: rk } => {
                 let def_kind = self.prog.fns[f].kind.clone();
@@ -4707,12 +4772,32 @@ impl Checker<'_> {
         args: &[Expr],
     ) -> Option<Rc<[Expr]>> {
         let def = &self.prog.fns[f];
-        let params: Vec<ParamDef> = def.params.iter().skip(skip).cloned().collect();
+        let params: Vec<NamedParam> = def
+            .params
+            .iter()
+            .skip(skip)
+            .map(|p| NamedParam {
+                name: p.name.clone(),
+                required: !p.optional && p.default.is_none() && !p.rest,
+                rest: p.rest,
+            })
+            .collect();
         let shown = if def.name.is_empty() {
             "既定メンバー".to_string()
         } else {
             format!("`{}`", def.name)
         };
+        self.reorder_named_params(call, &shown, &params, args)
+    }
+
+    /// [`Self::reorder_named`] for the parameters `params` of `shown`.
+    fn reorder_named_params(
+        &mut self,
+        call: &Expr,
+        shown: &str,
+        params: &[NamedParam],
+        args: &[Expr],
+    ) -> Option<Rc<[Expr]>> {
         let mut slots: Vec<Option<Expr>> = Vec::new();
         let mut hole = None;
         let mut ok = true;
@@ -4792,12 +4877,7 @@ impl Checker<'_> {
             let missing: Vec<String> = params
                 .iter()
                 .enumerate()
-                .filter(|(j, p)| {
-                    !p.optional
-                        && p.default.is_none()
-                        && !p.rest
-                        && slots.get(*j).is_none_or(|s| s.is_none())
-                })
+                .filter(|(j, p)| p.required && slots.get(*j).is_none_or(|s| s.is_none()))
                 .map(|(_, p)| format!("`{}`", p.name))
                 .collect();
             if !missing.is_empty() {
@@ -6269,6 +6349,21 @@ impl Checker<'_> {
             RangeToColumn | RangeToRow => {
                 self.arg_count(call, args, 0, 0);
                 Type::array(Type::CellValue)
+            }
+            // `range.extend(up, down, left, right)`: the rows and columns added on each side
+            // (spec §9.4). Omitted (`undefined`) arguments are 0.
+            SheetRange => recv.cloned().unwrap_or(Type::Error),
+            // `range.lastCell`: the bottom-right cell (spec §9.4.3).
+            RangeLastCell => recv.cloned().unwrap_or(Type::Error),
+            RangeExtend => {
+                if self.arg_count(call, args, 0, 4) {
+                    for a in args {
+                        if !matches!(a.kind, ExprKind::Undefined) {
+                            self.arg(std::slice::from_ref(a), 0, &Type::Int);
+                        }
+                    }
+                }
+                recv.cloned().unwrap_or(Type::Error)
             }
             RangeFromArray => {
                 if self.arg_count(call, args, 1, 1) {
