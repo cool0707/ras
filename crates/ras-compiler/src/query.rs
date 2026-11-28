@@ -1569,17 +1569,13 @@ pub fn completions(prog: &Program, m: ModuleId, offset: u32) -> Vec<Completion> 
         // The receiver is the largest expression that ends right at the dot.
         let mut recv: Option<&Expr> = None;
         walk_module(&md.ast, &mut |e| {
-            let end = match &e.kind {
-                // error recovery: `obj.` parses as a member access with an empty name
-                ExprKind::Member { object, name, .. }
-                    if name.text.is_empty() || u32::from(name.span.start()) > dot =>
-                {
-                    u32::from(object.span.end())
-                }
-                _ => u32::from(e.span.end()),
-            };
-            if end == dot
-                && !matches!(&e.kind, ExprKind::Member { name, .. } if name.text.is_empty())
+            // The member access being written is not the receiver; its object is. `obj.`
+            // parses as one with an empty name (error recovery), or with the name that
+            // follows: the word being typed, or the first word of the next line.
+            let written = matches!(&e.kind, ExprKind::Member { name, .. }
+                if name.text.is_empty() || u32::from(name.span.start()) > dot);
+            if u32::from(e.span.end()) == dot
+                && !written
                 && recv.is_none_or(|r| e.span.len() >= r.span.len())
             {
                 recv = Some(e);

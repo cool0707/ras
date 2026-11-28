@@ -12,7 +12,7 @@ import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { EditorState, type Extension } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import init, { Book, compile, diffText, editBook, encodeVba, explain, format, generateTest, newFormSpec, packBook, sheetControls, viewPage, viewRunPage } from "../pkg/ras_wasm.js";
+import init, { Analysis, Book, compile, diffText, editBook, encodeVba, explain, format, generateTest, newFormSpec, packBook, sheetControls, viewPage, viewRunPage } from "../pkg/ras_wasm.js";
 import type { EventDescriptor } from "../../editors/vscode/src/userForm/events";
 import { bodyIndent, findHandler } from "../../editors/vscode/src/userForm/events";
 import type { RuntimeMessage } from "../../editors/vscode/src/formRunner/protocol";
@@ -21,6 +21,7 @@ import "@vscode/codicons/dist/codicon.css";
 import { codeBehindPath, type DesignerHooks, FormDesigner, openHandler } from "./designer";
 import { Explorer } from "./explorer";
 import { FormPanels } from "./forms";
+import { type Item, rasCompletions } from "./complete";
 import { rasLanguage } from "./formula";
 import type { Dialog, RunJob, RunResult, ServeReply } from "./runtime/run";
 import samples from "virtual:samples";
@@ -307,8 +308,8 @@ function language(path: string): Extension {
     if (path.endsWith(".toml")) return [];
     if (path.endsWith(".json")) return javascript();
     // RAS is close enough to TypeScript for its highlighting; the formulas of `fx` templates
-    // are Excel's (spec §2.7).
-    return rasLanguage();
+    // are Excel's (spec §2.7). The completion is the compiler's.
+    return rasLanguage(rasCompletions((line, col, namedOnly) => completionsAt(active, line, col, namedOnly)));
 }
 
 function editorState(f: ProjectFile): EditorState {
@@ -621,6 +622,20 @@ function compileInput() {
         sheetControls: workbookControls() ?? undefined,
         js: true,
     };
+}
+
+/** The project as last analysed for the completion: analysed again when its text changes. */
+let analysed: { input: string; analysis: Analysis } | null = null;
+
+/** The completion at a position of the file `path` (crates/ras-wasm `Analysis.completions`). */
+function completionsAt(path: string, line: number, col: number, namedOnly: boolean): Item[] {
+    const input = JSON.stringify({ ...compileInput(), js: false });
+    if (analysed?.input !== input) {
+        analysed?.analysis.free();
+        analysed = null;
+        analysed = { input, analysis: new Analysis(input) };
+    }
+    return JSON.parse(analysed.analysis.completions(path, line, col, namedOnly)) as Item[];
 }
 
 /**

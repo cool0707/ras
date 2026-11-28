@@ -871,3 +871,23 @@ body.splitting iframe {
 .menu-item .ras-icon {
     color: var(--muted);
 }
+
+/* The description of a completion (complete.ts). */
+.cm-tooltip.cm-completionInfo {
+    max-width: 420px;
+}
+
+.cm-completionInfo .doc p {
+    margin: 0 0 6px;
+    white-space: pre-wrap;
+}
+
+.cm-completionInfo .doc :last-child {
+    margin-bottom: 0;
+}
+
+.cm-completionInfo .doc pre {
+    margin: 0 0 6px;
+    white-space: pre-wrap;
+    font-family: ui-monospace, "Cascadia Code", Consolas, "Menlo", "BIZ UDGothic", monospace;
+}
