@@ -21,7 +21,8 @@ import "@vscode/codicons/dist/codicon.css";
 import { codeBehindPath, type DesignerHooks, FormDesigner, openHandler } from "./designer";
 import { Explorer } from "./explorer";
 import { FormPanels } from "./forms";
-import { type Item, rasCompletions } from "./complete";
+import { type Ask, type Item, rasCompletions } from "./complete";
+import { type Asks, type HoverInfo, rasHints, type SignatureInfo } from "./hover";
 import { rasLanguage } from "./formula";
 import type { Dialog, RunJob, RunResult, ServeReply } from "./runtime/run";
 import samples from "virtual:samples";
@@ -308,8 +309,9 @@ function language(path: string): Extension {
     if (path.endsWith(".toml")) return [];
     if (path.endsWith(".json")) return javascript();
     // RAS is close enough to TypeScript for its highlighting; the formulas of `fx` templates
-    // are Excel's (spec §2.7). The completion is the compiler's.
-    return rasLanguage(rasCompletions((line, col, namedOnly) => completionsAt(active, line, col, namedOnly)));
+    // are Excel's (spec §2.7). The completion, the hovers and the parameter information are
+    // the compiler's.
+    return [rasLanguage(rasCompletions(asks.completions)), rasHints(asks)];
 }
 
 function editorState(f: ProjectFile): EditorState {
@@ -624,19 +626,27 @@ function compileInput() {
     };
 }
 
-/** The project as last analysed for the completion: analysed again when its text changes. */
+/** The project as last analysed for the editor: analysed again when its text changes. */
 let analysed: { input: string; analysis: Analysis } | null = null;
 
-/** The completion at a position of the file `path` (crates/ras-wasm `Analysis.completions`). */
-function completionsAt(path: string, line: number, col: number, namedOnly: boolean): Item[] {
+/** The project as it is now, analysed for the completion, the hovers and the parameter
+ * information (crates/ras-wasm `Analysis`). */
+function analysis(): Analysis {
     const input = JSON.stringify({ ...compileInput(), js: false });
     if (analysed?.input !== input) {
         analysed?.analysis.free();
         analysed = null;
         analysed = { input, analysis: new Analysis(input) };
     }
-    return JSON.parse(analysed.analysis.completions(path, line, col, namedOnly)) as Item[];
+    return analysed.analysis;
 }
+
+/** The compiler's answers about the file in the editor. */
+const asks: Asks & { completions: Ask } = {
+    completions: (line, col, namedOnly) => JSON.parse(analysis().completions(active, line, col, namedOnly)) as Item[],
+    hover: (line, col) => JSON.parse(analysis().hover(active, line, col)) as HoverInfo | null,
+    signature: (line, col) => JSON.parse(analysis().signatureHelp(active, line, col)) as SignatureInfo | null,
+};
 
 /**
  * Adds the skeleton of a test of the function `name` of the file `path` to its test file

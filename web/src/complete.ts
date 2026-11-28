@@ -54,7 +54,7 @@ const TYPES: Record<number, string> = {
 
 const WORD = /[\p{L}\p{N}_$]*$/u;
 
-function offset(doc: Text, line: number, col: number): number {
+export function offset(doc: Text, line: number, col: number): number {
     if (line + 1 > doc.lines) return doc.length;
     const l = doc.line(line + 1);
     return Math.min(l.from + col, l.to);

@@ -1,5 +1,5 @@
-// The completion of RAS in the playground's editor: the compiler's answers (web/pkg,
-// `npm run wasm`) as CodeMirror's completions (`npm test`).
+// The completion, the hovers and the parameter information of RAS in the playground's editor:
+// the compiler's answers (web/pkg, `npm run wasm`) as CodeMirror shows them (`npm test`).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import type { EditorView } from "@codemirror/view";
 import { Analysis, initSync } from "../pkg/ras_wasm.js";
 import { type Item, rasCompletions } from "../src/complete";
 import { rasLanguage } from "../src/formula";
+import { type HoverInfo, openParen, type SignatureInfo } from "../src/hover";
 
 const web = join(fileURLToPath(import.meta.url), "..", "..");
 initSync({ module: readFileSync(join(web, "pkg", "ras_wasm_bg.wasm")) });
@@ -94,4 +95,30 @@ test("in the formula of an fx template: Excel's functions", () => {
     const c = complete("export function f() {\n    const v = Sheet1.fx`1 + VLO|`;\n}\n");
     assert.ok(labels(c.result).includes("VLOOKUP") && !labels(c.result).includes("msgBox"), labels(c.result).slice(0, 5).join());
     assert.match(accept(c, "VLOOKUP"), /fx`1 \+ VLOOKUP\(`/);
+});
+
+test("the call the cursor is in is found in the text", () => {
+    const at = (text: string) => openParen(EditorState.create({ doc: text.replace("|", "") }), text.indexOf("|"));
+    assert.equal(at("f(1, |"), 1);
+    assert.equal(at("f(g(1), |"), 1);
+    assert.equal(at("f(g(1, |"), 3);
+    assert.equal(at('f(")", |'), 1);
+    assert.equal(at("f(1); // (\n|"), -1);
+    assert.equal(at("f(1)|"), -1);
+    assert.equal(at("ws.fx`SUM(A1, |`"), 9);
+});
+
+test("hovers and parameter information of a call", () => {
+    const text = "/**\n * 面積を返します。\n * @param width 幅\n */\nfunction area(width: int, height: int): int {\n    return width * height;\n}\nexport function f() {\n    area(1, \n}\n";
+    const analysis = new Analysis(JSON.stringify({ files: [{ path: "src/main.ras", text }], toml: '[project]\nname = "P"\n' }));
+    const hover = JSON.parse(analysis.hover("src/main.ras", 8, 5)) as HoverInfo;
+    assert.match(hover.markdown, /area\(width: int, height: int\): int[\s\S]*面積を返します。/);
+    assert.deepEqual([hover.line, hover.col, hover.endCol], [8, 4, 8]);
+    const help = JSON.parse(analysis.signatureHelp("src/main.ras", 8, 12)) as SignatureInfo;
+    const sig = help.signatures[help.active];
+    assert.equal(sig.active, 1);
+    assert.equal(sig.label.slice(sig.params[1].from, sig.params[1].to), "height: int");
+    assert.equal(sig.params[0].doc, "幅");
+    assert.equal(analysis.signatureHelp("src/main.ras", 7, 0), "null");
+    analysis.free();
 });

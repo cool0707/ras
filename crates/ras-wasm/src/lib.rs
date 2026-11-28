@@ -2,7 +2,8 @@
 //! the browser, without the `ras` program, Node or Excel.
 //!
 //! - [`compile`]: `ras check` / `ras build` / `ras build --target js` of a project held in memory.
-//! - [`Analysis`]: the completion of the editor (what the language server answers, spec §16.2).
+//! - [`Analysis`]: the completion, hovers and parameter information of the editor (what the
+//!   language server answers, spec §16.2).
 //! - [`format`]: `ras fmt` of one file; [`explain`]: `ras explain <code>`; [`encode_vba`]: the
 //!   bytes of a `.bas` / `.cls` as `ras build` writes them.
 //! - [`Book`]: the workbook of the stand-in for Excel, as the `ras_book` addon gives it to Node
@@ -297,8 +298,8 @@ fn compile_json(input: &str) -> Json {
     })
 }
 
-/// A project analysed for the editor (as the language server keeps one, spec §16.2): what
-/// [`Analysis::completions`] answers from.
+/// A project analysed for the editor (as the language server keeps one, spec §16.2): what the
+/// completion, the hovers and the parameter information are answered from.
 #[wasm_bindgen]
 pub struct Analysis {
     prog: ras_compiler::Program,
@@ -363,6 +364,59 @@ impl Analysis {
             })
             .collect();
         Json::Array(items).to_string()
+    }
+
+    /// What the name at a position of the file `path` is (positions as for
+    /// [`Analysis::completions`]).
+    ///
+    /// Returns JSON: `{ markdown, line, col, endLine, endCol }` (the description and the range
+    /// of the name), or `null`.
+    pub fn hover(&self, path: &str, line: u32, col: u32) -> String {
+        let prog = &self.prog;
+        let Some(m) = prog.modules.iter().position(|md| md.rel_path == path) else {
+            return "null".to_string();
+        };
+        let md = &prog.modules[m];
+        let Some(h) = ras_compiler::query::hover(prog, m, md.offset_of(line, col)) else {
+            return "null".to_string();
+        };
+        let (start_line, start_col) = md.line_col_utf16(u32::from(h.span.start()));
+        let (end_line, end_col) = md.line_col_utf16(u32::from(h.span.end()));
+        json!({ "markdown": h.markdown, "line": start_line, "col": start_col,
+            "endLine": end_line, "endCol": end_col })
+        .to_string()
+    }
+
+    /// The parameters of the call whose arguments a position of the file `path` is in
+    /// (positions as for [`Analysis::completions`]).
+    ///
+    /// Returns JSON: `{ signatures: [{ label, doc, params: [{ from, to, doc }], active }], active }`,
+    /// or `null`. A signature's `params` are ranges of its label (UTF-16 code units) with the
+    /// `@param` description, its `active` the parameter being written (or `null`); the outer
+    /// `active` is the signature that fits the arguments. The descriptions are Markdown.
+    #[wasm_bindgen(js_name = signatureHelp)]
+    pub fn signature_help(&self, path: &str, line: u32, col: u32) -> String {
+        let prog = &self.prog;
+        let Some(m) = prog.modules.iter().position(|md| md.rel_path == path) else {
+            return "null".to_string();
+        };
+        let offset = prog.modules[m].offset_of(line, col);
+        let Some(h) = ras_compiler::query::signature_help(prog, m, offset) else {
+            return "null".to_string();
+        };
+        let signatures: Vec<Json> = h
+            .signatures
+            .into_iter()
+            .map(|s| {
+                let params: Vec<Json> = s
+                    .params
+                    .iter()
+                    .map(|((from, to), doc)| json!({ "from": from, "to": to, "doc": doc }))
+                    .collect();
+                json!({ "label": s.label, "doc": s.doc, "params": params, "active": s.active })
+            })
+            .collect();
+        json!({ "signatures": signatures, "active": h.active_signature }).to_string()
     }
 }
 
@@ -1058,5 +1112,43 @@ mod tests {
         assert_eq!(named[0]["insert"], "名前: ");
         // a file that is not of the project
         assert_eq!(a.completions("src/none.ras", 0, 0, false), "[]");
+    }
+
+    #[test]
+    fn describes_names_and_calls() {
+        let input = json!({
+            "files": [
+                { "path": "src/main.ras", "text": "/**\n * 面積を返します。\n * @param width 幅\n */\nfunction area(width: int, height: int): int {\n    return width * height;\n}\nexport function f() {\n    area(1, \n}\n" },
+            ],
+            "toml": "[project]\nname = \"P\"\n",
+        })
+        .to_string();
+        let a = Analysis::new(&input).unwrap_or_else(|_| panic!("analyze"));
+        let hover: Json = serde_json::from_str(&a.hover("src/main.ras", 8, 5)).unwrap();
+        assert!(
+            hover["markdown"]
+                .as_str()
+                .unwrap()
+                .contains("area(width: int, height: int): int")
+                && hover["markdown"]
+                    .as_str()
+                    .unwrap()
+                    .contains("面積を返します。"),
+            "{hover}"
+        );
+        assert_eq!(
+            (&hover["line"], &hover["col"], &hover["endCol"]),
+            (&json!(8), &json!(4), &json!(8))
+        );
+        assert_eq!(a.hover("src/main.ras", 8, 0), "null");
+        let help: Json = serde_json::from_str(&a.signature_help("src/main.ras", 8, 12)).unwrap();
+        let sig = &help["signatures"][help["active"].as_u64().unwrap() as usize];
+        assert_eq!(sig["label"], "area(width: int, height: int): int");
+        assert_eq!(sig["active"], 1);
+        assert_eq!(
+            sig["params"][0],
+            json!({ "from": 5, "to": 15, "doc": "幅" })
+        );
+        assert_eq!(a.signature_help("src/main.ras", 7, 0), "null");
     }
 }
